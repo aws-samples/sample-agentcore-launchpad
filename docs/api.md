@@ -87,6 +87,8 @@ public `/v1` agent invocation contract.
 | `POST` | `/api/governance/gateways/{id}/policies/{policy_id}/promote` | Evidence-gated activation/cutover |
 | `POST` | `/api/governance/gateways/{id}/policies/{policy_id}/rollback` | Audited snapshot/candidate rollback |
 | `POST` | `/api/governance/gateways/{id}/mode` | Gateway `LOG_ONLY`/`ENFORCE` transition |
+| `POST` | `/api/governance/gateways/{id}/generations` | Start NL → Cedar generation for review only |
+| `GET` | `/api/governance/gateways/{id}/generations/{generation_id}` | Poll generation status and read draft assets |
 | `GET` | `/api/governance/gateways/{id}/decisions` | AWS decision projection or explicit unavailable state |
 | `GET` | `/api/governance/gateways/{id}/audit` | Immutable local change journal |
 | `GET` | `/api/governance/operations/{operation_id}` | Async operation status |
@@ -97,9 +99,15 @@ Policy and Gateway mutations return `202`:
 {"operation": {"id": "...", "status": "pending", "operation": "policy_create"}}
 ```
 
+Generation start returns
+`{"operation": …, "generation_id": …, "status": …}`; a generated asset is only
+a draft for the editor and never activates a policy.
+
 Poll the operation route until `succeeded`, `failed`, `partial`, or
-`interrupted`. Mutation requests carry the live timestamps and confirmations
-that apply to the operation:
+`interrupted`. `interrupted` means a restart could not prove the AWS effect and
+the operation must be retried explicitly — the backend never replays it.
+Mutation requests carry the live timestamps and confirmations that apply to the
+operation:
 
 ```json
 {

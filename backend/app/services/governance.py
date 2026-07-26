@@ -472,6 +472,31 @@ def unavailable_policy_decisions(
     }
 
 
+def external_tools_list_command(
+    gateway: dict[str, Any],
+    settings: Settings,
+) -> str | None:
+    """Operator-side ``tools/list`` template for external CUSTOM_JWT Gateways.
+
+    Launchpad never accepts, stores, or proxies an external bearer token, so
+    dynamic targets whose exact actions are unavailable from the control plane
+    are discovered by the operator outside the console. The template only
+    references an operator-side environment variable.
+    """
+    url = gateway.get("gatewayUrl")
+    if gateway.get("authorizerType") != "CUSTOM_JWT" or not url:
+        return None
+    if gateway.get("gatewayId") == settings.resources.get("gateway_id"):
+        return None
+    return (
+        f"curl -sS -X POST '{url}' \\\n"
+        '  -H "Authorization: Bearer $GATEWAY_ACCESS_TOKEN" \\\n'
+        "  -H 'Content-Type: application/json' \\\n"
+        "  -H 'Accept: application/json, text/event-stream' \\\n"
+        '  -d \'{"jsonrpc":"2.0","id":1,"method":"tools/list"}\''
+    )
+
+
 def gateway_detail(
     control: Any,
     iam: Any,
@@ -534,6 +559,7 @@ def gateway_detail(
         ],
         "actions": discover_actions(targets),
         "iam_preflight": preflight,
+        "external_tools_list_command": external_tools_list_command(gateway, current),
     }
 
 
@@ -1723,17 +1749,19 @@ def generation_view(
     }
 
 
-def reconcile_policy_changes() -> list[str]:
+def reconcile_policy_changes(control: Any | None = None) -> list[str]:
     """Reconcile interrupted operations without replaying AWS mutations."""
     db = SessionLocal()
     reconciled: list[str] = []
-    control = control_client()
     try:
         rows = (
             db.query(PolicyChange)
             .filter(PolicyChange.status.in_(("pending", "running")))
             .all()
         )
+        if not rows:
+            return reconciled
+        control = control or control_client()
         for change in rows:
             try:
                 if _change_matches_live(control, change):

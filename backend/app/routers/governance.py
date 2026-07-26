@@ -37,11 +37,16 @@ OPERATION_ID = Path(pattern=r"^[a-f0-9]{32}$")
 
 @router.get("/governance/gateways")
 def get_gateways(refresh: bool = False) -> dict[str, Any]:
+    settings = get_settings()
     return {
         "gateways": governance_service.list_gateway_views(
             control_client(),
+            settings=settings,
             refresh=refresh,
-        )
+        ),
+        # one console session scopes exactly one account/region
+        "account_id": settings.account_id or None,
+        "region": settings.region,
     }
 
 

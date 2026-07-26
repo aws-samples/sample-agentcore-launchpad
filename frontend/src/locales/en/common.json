@@ -137,6 +137,7 @@
       "systemPromptPlaceholder": "You are a helpful assistant for…",
       "tools": "TOOLS — BUILTIN",
       "gatewayToolsSoon": "+ gateway tools · select harness method",
+      "gatewayWholeNote": "A gateway entry attaches the WHOLE AgentCore Gateway and every tool it exposes — Registry approval is catalog visibility, not a per-tool boundary. Use Governance Cedar policies to authorize individual tool actions. Entries marked \"—\" are catalog-only because their outbound auth is not resolved.",
       "memory": "MEMORY",
       "memoryShort": "short-term · session",
       "memoryLong": "long-term · user preferences",

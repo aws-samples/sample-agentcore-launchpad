@@ -46,6 +46,22 @@ def test_governance_mutation_and_poll_responses_wrap_operation(client, monkeypat
     assert response.json() == {"operation": operation}
 
 
+def test_gateway_list_envelope_reports_the_scoped_account_and_region(
+    client, monkeypatch
+):
+    monkeypatch.setattr(governance_router, "control_client", lambda: object())
+    monkeypatch.setattr(
+        governance_router.governance_service,
+        "list_gateway_views",
+        lambda *_args, **_kwargs: [],
+    )
+
+    body = client.get("/api/governance/gateways").json()
+    assert body["gateways"] == []
+    assert set(body) == {"gateways", "account_id", "region"}
+    assert body["region"] == governance_router.get_settings().region
+
+
 def test_governance_generation_start_uses_frontend_contract(client, monkeypatch):
     operation = _operation()
     monkeypatch.setattr(governance_router, "control_client", lambda: object())

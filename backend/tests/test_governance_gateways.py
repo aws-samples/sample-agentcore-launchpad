@@ -126,6 +126,38 @@ def test_attachability_keeps_external_custom_jwt_catalog_only():
     }
 
 
+def test_external_custom_jwt_detail_offers_token_free_tools_list_template():
+    launchpad = _gateway("managed", "launchpad-gw", authorizer="CUSTOM_JWT")
+    external = _gateway("external", "partner-gw", authorizer="CUSTOM_JWT")
+    iam_gateway = _gateway("iam", "internal-gw")
+    control = _control([launchpad, external, iam_gateway])
+    settings = Settings(
+        resources={"gateway_id": "managed", "oauth_provider_arn": "arn:oauth"}
+    )
+
+    command = governance.gateway_detail(
+        control,
+        MagicMock(),
+        "external",
+        settings=settings,
+    )["external_tools_list_command"]
+    assert "tools/list" in command
+    assert "https://external.example.test/mcp" in command
+    # the template must reference an operator-side variable, never a real token
+    assert "$GATEWAY_ACCESS_TOKEN" in command
+
+    for gateway_id in ("managed", "iam"):
+        assert (
+            governance.gateway_detail(
+                control,
+                MagicMock(),
+                gateway_id,
+                settings=settings,
+            )["external_tools_list_command"]
+            is None
+        )
+
+
 def test_iam_preflight_pass_fail_and_unknown():
     iam = MagicMock()
     iam.simulate_principal_policy.return_value = {

@@ -866,6 +866,12 @@ export function CreateAgent() {
                   </span>
                 )}
               </div>
+              {method === "harness" && gatewayTargets.length > 0 && (
+                <div className="note" style={{ marginTop: 8 }}>
+                  <span className="i">[i]</span>
+                  <span>{t("create.configure.gatewayWholeNote")}</span>
+                </div>
+              )}
             </div>
             {method === "zip_runtime" && (
               <div className="field">

@@ -445,6 +445,96 @@ def test_standalone_policy_promote_can_rollback_from_audit_snapshot():
         db.close()
 
 
+def test_startup_reconciliation_classifies_interrupted_operations():
+    """A restart never replays AWS mutations — it classifies live state."""
+    control = FakeControl()
+    iam = FakeIam()
+    db = SessionLocal()
+    try:
+        attach = governance.queue_engine_attach(
+            db,
+            control,
+            "gw-1",
+            EngineRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                authorization_model="allowlist",
+            ),
+        )
+        governance.run_policy_change(attach["id"], control=control, iam=iam)
+
+        # requested state already holds live → succeeded, no AWS mutation
+        already_applied = governance.queue_gateway_mode(
+            db,
+            control,
+            iam,
+            "gw-1",
+            GatewayModeRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                mode="LOG_ONLY",
+            ),
+            evidence_count=0,
+        )
+        assert governance.reconcile_policy_changes(control) == [already_applied["id"]]
+        assert _refresh(db, already_applied["id"]).status == "succeeded"
+        assert control.update_calls == [("gateway", "LOG_ONLY")]
+
+        # nothing observable happened → interrupted, requiring explicit retry
+        never_ran = governance.queue_policy_create(
+            db,
+            control,
+            "gw-1",
+            PolicyCreateRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                name="allow_payments",
+                statement="permit(principal, action, resource);",
+                authorization_model="allowlist",
+            ),
+        )
+        assert governance.reconcile_policy_changes(control) == [never_ran["id"]]
+        assert _refresh(db, never_ran["id"]).status == "interrupted"
+        assert control.policies == {}
+
+        engine_id = _refresh(db, never_ran["id"]).engine_id
+        original = control.create_policy(
+            policyEngineId=engine_id,
+            name="original",
+            definition={"cedar": {"statement": "permit(principal, action, resource);"}},
+            enforcementMode="ACTIVE",
+        )
+        candidate = control.create_policy(
+            policyEngineId=engine_id,
+            name="candidate",
+            definition={"cedar": {"statement": "forbid(principal, action, resource);"}},
+            enforcementMode="ACTIVE",
+        )
+        interrupted_cutover = governance.queue_policy_transition(
+            db,
+            control,
+            "gw-1",
+            original["policyId"],
+            PolicyTransitionRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                expected_policy_updated_at=original["updatedAt"],
+                confirmation_name="payments-gw",
+                override_reason="approved cutover",
+            ),
+            rollback=False,
+            evidence_count=0,
+        )
+        row = db.get(PolicyChange, interrupted_cutover["id"])
+        row.candidate_policy_id = candidate["policyId"]
+        db.commit()
+
+        # both policies ACTIVE → conservative partial state, idempotent retry
+        assert governance.reconcile_policy_changes(control) == [
+            interrupted_cutover["id"]
+        ]
+        assert _refresh(db, interrupted_cutover["id"]).status == "partial"
+        assert governance.reconcile_policy_changes(control) == []
+    finally:
+        db.close()
+
+
 def test_operation_mutex_conflict_and_audit_snapshot_immutability():
     control = FakeControl()
     db = SessionLocal()

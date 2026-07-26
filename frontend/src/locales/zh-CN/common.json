@@ -137,6 +137,7 @@
       "systemPromptPlaceholder": "你是一名乐于助人的助手……",
       "tools": "工具 — 内置",
       "gatewayToolsSoon": "+ gateway 工具 · 请选择 harness 方式",
+      "gatewayWholeNote": "选择 gateway 条目会挂载整个 AgentCore Gateway 及其暴露的所有工具 —— Registry 审批只决定目录可见性，不是按工具的授权边界。请在 Governance 中用 Cedar 策略授权单个工具动作。标记为“—”的条目因出站鉴权未解析，仅存在于目录中、无法挂载。",
       "memory": "记忆",
       "memoryShort": "短期 · 会话",
       "memoryLong": "长期 · 用户偏好",
