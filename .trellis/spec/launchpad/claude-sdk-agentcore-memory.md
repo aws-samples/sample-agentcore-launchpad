@@ -9,6 +9,9 @@ environment derivation, or memory restore/persist behavior. The integration
 crosses the deploy-time `AgentSpec` boundary and the generated runtime boundary;
 it must preserve the platform's shared-memory actor isolation.
 
+The [Memory Console](./memory-console.md) reads these same partitions back
+read-only; keep both specs in sync when the actor-scoping rule changes.
+
 ### 2. Signatures
 
 ```python

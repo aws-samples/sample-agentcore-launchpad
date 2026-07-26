@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/07-26-memory-console/prd.md", "reason": "Acceptance criteria to verify against, plus the read-only scope constraint that must be greppably true."}
+{"file": ".trellis/tasks/07-26-memory-console/design.md", "reason": "Endpoint contracts and error-code mapping to check the implementation against field-by-field."}
+{"file": ".trellis/spec/launchpad/claude-sdk-agentcore-memory.md", "reason": "Verify the console reads the same agent-scoped actor partitions the runtime write path uses; no scoping drift."}
+{"file": ".trellis/spec/launchpad/evaluation-subpage-interaction.md", "reason": "Verify the ?view= sub-page and URL-selection conventions are actually followed."}

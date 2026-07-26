@@ -1,0 +1,28 @@
+{
+  "id": "memory-console",
+  "name": "memory-console",
+  "title": "Memory Console Page",
+  "description": "",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": "lab4-interactive",
+  "priority": "P2",
+  "creator": "river",
+  "assignee": "river",
+  "createdAt": "2026-07-26",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "description": "Read-only Memory console page: AgentCore Memory resource + strategies overview, short-term actor/session/event explorer, long-term namespace records + semantic retrieval, extraction-job pipeline view"
+  }
+}

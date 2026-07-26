@@ -123,3 +123,31 @@ Common conflict codes are `governance.gateway_not_managed`,
 `governance.concurrent_change`, `governance.shared_engine_changed`,
 `governance.iam_preflight_failed`, `governance.evidence_required`, and
 `governance.registry_record_not_approved`.
+
+## Console Memory API
+
+`/api/memory/*` backs the read-only Memory console (console 05) over the shared
+`launchpad_memory` singleton. Every route is a read: there is no endpoint that
+writes events, deletes records, triggers extraction, or changes the memory
+resource. See [architecture.md](architecture.md#the-memory-console-console-05).
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/memory/overview` | Resource config, long-term strategies, bounded actor count, sibling memories |
+| `GET` | `/api/memory/actors` | Actors with the compound `<agent_id>__<human>` id decoded and the agent name resolved |
+| `GET` | `/api/memory/sessions?actor_id=` | Sessions for one actor, joined to the ChatSession ledger when the console wrote them |
+| `GET` | `/api/memory/events?actor_id=&session_id=` | Short-term events; conversational payloads carry role + full text, blobs only a byte count |
+| `GET` | `/api/memory/namespaces?actor_id=` | Strategy namespace templates with `{actorId}` substituted, plus a `resolvable` flag |
+| `GET` | `/api/memory/records?actor_id=&strategy_id=` or `?namespace=` | Long-term records for the resolved namespace |
+| `POST` | `/api/memory/records/search` | Semantic retrieval (`{query, actor_id, strategy_id?, namespace?, top_k}`) with relevance scores |
+| `GET` | `/api/memory/extraction-jobs` | Extraction jobs, filterable by `actor_id`/`session_id`/`strategy_id`/`status` |
+
+Every list route accepts and returns `next_token` (AWS pages at 100 items) and
+accepts `max_results` (clamped to 100) — nothing is capped silently. Namespace
+resolution order on `/records` and `/records/search`: an explicit `namespace`
+wins, otherwise it derives from `actor_id` (+ optional `strategy_id`).
+
+Error codes: `memory.not_configured` (409, bootstrap has not run — except
+`/overview`, which instead returns `{"configured": false, …}` so the page can
+render a setup state), `memory.namespace_required` (400, no namespace could be
+derived), `memory.unavailable` (502, the underlying AWS call failed).

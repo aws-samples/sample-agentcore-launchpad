@@ -10,10 +10,11 @@ export const NAV_ENTRIES: NavEntry[] = [
   { idx: "02", to: "/create", labelKey: "nav.createAgent" },
   { idx: "03", to: "/registry", labelKey: "nav.registry" },
   { idx: "04", to: "/knowledge-bases", labelKey: "nav.knowledgeBases" },
-  { idx: "05", to: "/chat", labelKey: "nav.chat" },
-  { idx: "06", to: "/observability", labelKey: "nav.observability" },
-  { idx: "07", to: "/evaluation", labelKey: "nav.evaluation" },
-  { idx: "08", to: "/governance", labelKey: "nav.governance" },
+  { idx: "05", to: "/memory", labelKey: "nav.memory" },
+  { idx: "06", to: "/chat", labelKey: "nav.chat" },
+  { idx: "07", to: "/observability", labelKey: "nav.observability" },
+  { idx: "08", to: "/evaluation", labelKey: "nav.evaluation" },
+  { idx: "09", to: "/governance", labelKey: "nav.governance" },
 ];
 
-export const PLATFORM_COUNT = 5;
+export const PLATFORM_COUNT = 6;

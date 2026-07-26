@@ -7,8 +7,17 @@ from app.core.config import get_settings
 from app.services.agentcore.client import data_client
 
 
+def memory_id_or_none() -> str | None:
+    """The bootstrap singleton's memory id, or None before bootstrap has run.
+
+    The console's landing view needs to distinguish "not bootstrapped" from
+    "AWS call failed", so it reads the id without raising.
+    """
+    return get_settings().resources.get("memory_id") or None
+
+
 def _memory_id() -> str:
-    memory_id = get_settings().resources.get("memory_id")
+    memory_id = memory_id_or_none()
     if not memory_id:
         raise RuntimeError("memory_id missing from config — run scripts/bootstrap.py")
     return memory_id

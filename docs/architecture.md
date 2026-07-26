@@ -176,7 +176,47 @@ The default cookie works with the local HTTP stack. HTTPS deployments must set
 `LAUNCHPAD_AUTH_COOKIE_SECURE=true`. Leaving the password unset disables the
 gate, preserving the bootstrap-free local development and test flow.
 
-## The Observability module (console 05)
+## The Memory console (console 05)
+
+`/memory` is a **read-only** window onto the shared `launchpad_memory` singleton
+(`backend/app/services/memory_console.py`, endpoints under `/api/memory/*`). It
+is deliberately separate from `app/services/memory.py`, which sits on the chat
+invoke hot path and stays minimal; the console module owns control-plane reads,
+actor decoding, namespace resolution and pagination, and imports `SCOPE_SEP` /
+`memory_id_or_none` from `memory.py` so the scoping contract has one source.
+
+Read-only is structural, not a UI guard: no wrapper or handler for `CreateEvent`,
+`DeleteEvent`, `DeleteMemoryRecord`, `Batch*MemoryRecords`,
+`StartMemoryExtractionJob`, `CreateMemory`, `UpdateMemory` or `DeleteMemory`
+exists in either file, and `tests/test_memory_console.py` asserts that.
+
+| `?view=` | Shows | AgentCore operations |
+|---|---|---|
+| `overview` | resource config (id/arn/status/event expiry/KMS/execution role), each long-term strategy with its `namespaces` + `namespaceTemplates`, and the account's other memory resources with the platform singleton marked | `GetMemory`, `ListMemories`, `ListActors` |
+| `short-term` | actor → session → event drill-down; events render as a timeline of conversational role/text turns, blob payloads as a byte count only | `ListActors`, `ListSessions`, `ListEvents` |
+| `long-term` | records for a resolved namespace, plus semantic retrieval with relevance scores | `ListMemoryRecords`, `RetrieveMemoryRecords` |
+| `extraction` | extraction-job table filtered by actor/session/strategy/status — the only place where "events written but no records yet" is distinguishable from a failed extraction | `ListMemoryExtractionJobs` |
+
+Two projections carry the load. **Actor decoding:** AWS returns the compound
+`<agent_id>__<human>` that `scoped_actor` builds, so `/actors` splits on the
+first `__` and resolves agent names in one batched ledger query per page; a
+scoped actor whose agent row is gone stays `scoped: true` with a null name,
+because the memory partition outlives the agent. **Namespace resolution:**
+`ListMemoryRecords`/`RetrieveMemoryRecords` both require a concrete namespace, so
+`/namespaces` substitutes `{actorId}` into each strategy template server-side and
+flags any template with a leftover placeholder (e.g. `{sessionId}`) as
+`resolvable: false` rather than sending a broken namespace to AWS.
+
+There is no TTL cache here — unlike Observability, whose Logs Insights queries
+are billed per scan and take seconds, `GetMemory` is a single fast control-plane
+read. Every list endpoint round-trips `next_token` (AWS caps pages at 100), and
+the overview's actor count reports one page with an explicit
+`actor_count_truncated` flag instead of a silently wrong total. Before
+`make bootstrap`, `/overview` returns `configured: false` (a soft state the page
+renders once) while every other endpoint returns `memory.not_configured` (409);
+botocore failures map to `memory.unavailable` (502).
+
+## The Observability module (console 06)
 
 `/observability` is a read-only telemetry console over three data sources
 (`backend/app/services/observability.py`, endpoints under

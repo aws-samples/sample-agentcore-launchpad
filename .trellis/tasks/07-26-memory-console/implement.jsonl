@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/launchpad/claude-sdk-agentcore-memory.md", "reason": "Authoritative contract for how the platform writes/reads AgentCore Memory (MemorySessionManager, short-/long-term restore, turn persistence). The console must read the same partitions the write path creates."}
+{"file": ".trellis/spec/launchpad/evaluation-subpage-interaction.md", "reason": "Defines the shared ?view=/URL-param selection pattern the Memory page's four sub-surfaces (?view= plus ?actor=/?session=/?strategy=) must follow, including testids."}
+{"file": ".trellis/spec/launchpad/managed-kb.md", "reason": "Closest precedent for a read-heavy AWS-backed console page: router/service split, async-resource states, and pagination handling over a preview API."}
+{"file": ".trellis/tasks/07-26-memory-console/prd.md", "reason": "Requirements R1-R7, verified AgentCore API shapes, and acceptance criteria."}
+{"file": ".trellis/tasks/07-26-memory-console/design.md", "reason": "API contract for the 8 /api/memory endpoints, error model, actor-decode rule, namespace resolution, and frontend structure."}
+{"file": ".trellis/tasks/07-26-memory-console/implement.md", "reason": "Ordered 8-step execution plan with per-step validation commands and review gates."}

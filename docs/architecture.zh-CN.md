@@ -113,7 +113,44 @@ public  /v1  ──┘        │
 公开 `/v1` 接口额外加了 `X-Api-Key` 鉴权(密钥以 sha256 哈希存储);分派之后的
 一切与控制台路径完全相同。
 
-## 可观测模块(控制台 05)
+## 记忆控制台(控制台 05)
+
+`/memory` 是共享 `launchpad_memory` 单例的**只读**视图
+(`backend/app/services/memory_console.py`,接口位于 `/api/memory/*`)。它与
+`app/services/memory.py` 刻意分离:后者位于聊天调用热路径上、保持精简;控制台
+模块负责控制面读取、actor 解码、命名空间解析与分页,并从 `memory.py` 导入
+`SCOPE_SEP` / `memory_id_or_none`,使分区契约只有一个来源。
+
+只读是结构性的,而非界面层的拦截:两个文件中都不存在 `CreateEvent`、
+`DeleteEvent`、`DeleteMemoryRecord`、`Batch*MemoryRecords`、
+`StartMemoryExtractionJob`、`CreateMemory`、`UpdateMemory`、`DeleteMemory` 的
+封装或处理函数,`tests/test_memory_console.py` 会断言这一点。
+
+| `?view=` | 展示内容 | AgentCore 操作 |
+|---|---|---|
+| `overview` | 资源配置(id/arn/状态/事件过期/KMS/执行角色)、每条长期策略及其 `namespaces` + `namespaceTemplates`、以及账号内其他记忆资源(标出平台单例) | `GetMemory`、`ListMemories`、`ListActors` |
+| `short-term` | actor → session → event 三级下钻;事件以时间轴呈现对话轮次的角色/文本,blob 载荷只显示字节数 | `ListActors`、`ListSessions`、`ListEvents` |
+| `long-term` | 解析出的命名空间下的记录,以及带相关度评分的语义检索 | `ListMemoryRecords`、`RetrieveMemoryRecords` |
+| `extraction` | 按 actor/session/策略/状态过滤的抽取任务表 —— 只有这里能区分「事件已写入但记录尚未生成」与「抽取失败」 | `ListMemoryExtractionJobs` |
+
+两处投影承担了主要工作。**actor 解码:** AWS 返回的是 `scoped_actor` 构造的复合
+`<agent_id>__<human>`,因此 `/actors` 按首个 `__` 拆分,并每页一次批量查询台账
+解析 Agent 名称;若 Agent 行已删除,该 actor 仍为 `scoped: true` 但名称为
+null —— 因为记忆分区的生命周期长于 Agent。**命名空间解析:**
+`ListMemoryRecords`/`RetrieveMemoryRecords` 都要求具体命名空间,所以
+`/namespaces` 在服务端把 `{actorId}` 代入每条策略模板,并将仍残留占位符
+(如 `{sessionId}`)的模板标记为 `resolvable: false`,而不是把无效命名空间发给
+AWS。
+
+这里没有 TTL 缓存 —— 与按扫描量计费、耗时数秒的可观测 Logs Insights 查询不同,
+`GetMemory` 只是一次快速的控制面读取。所有列表接口都双向传递 `next_token`
+(AWS 每页上限 100),概览的 actor 计数只统计一页并显式给出
+`actor_count_truncated` 标志,而不是给一个静默错误的总数。在执行
+`make bootstrap` 之前,`/overview` 返回 `configured: false`(页面统一渲染的软
+状态),其余接口返回 `memory.not_configured`(409);botocore 失败映射为
+`memory.unavailable`(502)。
+
+## 可观测模块(控制台 06)
 
 `/observability` 是一个只读的遥测控制台,数据来自三个来源
 (`backend/app/services/observability.py`,接口位于 `/api/observability/*`):

@@ -644,6 +644,161 @@ export interface BrowserDemoRequest {
   save_profile: boolean;
 }
 
+/* ── memory (AgentCore Memory console — read-only) ─────────────────────── */
+
+export interface MemoryStrategy {
+  strategy_id: string | null;
+  name: string | null;
+  description: string | null;
+  /** SEMANTIC | USER_PREFERENCE | SUMMARIZATION | CUSTOM */
+  type: string | null;
+  status: string | null;
+  namespaces: string[];
+  namespace_templates: string[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface MemoryResource {
+  id: string;
+  arn: string | null;
+  name: string | null;
+  description: string | null;
+  status: string | null;
+  failure_reason: string | null;
+  event_expiry_days: number | null;
+  encryption_key_arn: string | null;
+  execution_role_arn: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface MemorySibling {
+  id: string | null;
+  arn: string | null;
+  status: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  /** true for the singleton this console manages */
+  is_platform: boolean;
+}
+
+export interface MemoryOverview {
+  /** false before `make bootstrap` has provisioned the memory resource */
+  configured: boolean;
+  memory: MemoryResource | null;
+  strategies: MemoryStrategy[];
+  actor_count: number;
+  /** the count above is one page only; true means there are more actors */
+  actor_count_truncated: boolean;
+  other_memories: MemorySibling[];
+}
+
+/** AgentCore keys memory on actorId alone, so the platform folds the agent in:
+ *  `<agent_id>__<human>`. These fields are that id decoded. */
+export interface MemoryActor {
+  actor_id: string;
+  agent_id: string | null;
+  agent_name: string | null;
+  human_actor: string;
+  scoped: boolean;
+}
+
+export interface MemorySessionLedger {
+  agent_id: string;
+  agent_name: string | null;
+  human_actor: string;
+  turns: number;
+  message_count: number;
+}
+
+export interface MemorySessionRow {
+  session_id: string;
+  actor_id: string;
+  created_at: string | null;
+  /** null for sessions the console never wrote (eval runs, /v1 callers) */
+  ledger: MemorySessionLedger | null;
+}
+
+export interface MemoryEventPayload {
+  kind: "conversational" | "blob";
+  role: string | null;
+  text: string | null;
+  /** Harness message-envelope part kinds (text / toolUse / toolResult …); empty
+   *  for plain-text turns. Lets a tool-only turn render as itself. */
+  parts: string[];
+  blob_bytes: number | null;
+}
+
+export interface MemoryEvent {
+  event_id: string | null;
+  at: string | null;
+  branch: { name: string | null; root_event_id: string | null } | null;
+  metadata: Record<string, unknown>;
+  payload: MemoryEventPayload[];
+}
+
+export interface MemoryNamespace {
+  strategy_id: string | null;
+  strategy_name: string | null;
+  strategy_type: string | null;
+  template: string;
+  namespace: string;
+  /** false when a placeholder other than {actorId} remains unresolved */
+  resolvable: boolean;
+}
+
+export interface MemoryRecord {
+  record_id: string | null;
+  text: string;
+  strategy_id: string | null;
+  namespaces: string[];
+  created_at: string | null;
+  /** populated only by semantic retrieval */
+  score: number | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface MemoryExtractionJob {
+  job_id: string | null;
+  status: string | null;
+  failure_reason: string | null;
+  strategy_id: string | null;
+  actor_id: string | null;
+  session_id: string | null;
+  messages: string[];
+}
+
+export interface MemoryPage<T> {
+  items: T[];
+  next_token: string | null;
+}
+
+export interface MemoryRecordPage extends MemoryPage<MemoryRecord> {
+  namespace: string;
+  query?: string;
+}
+
+export interface MemorySearchInput {
+  query: string;
+  actor_id?: string | null;
+  strategy_id?: string | null;
+  namespace?: string | null;
+  top_k?: number;
+}
+
+/** Drops empty/nullish params so the backend never sees `?x=` (the preview
+ *  memory API rejects empty strings inside its filter shape). */
+function memoryQuery(params: Record<string, string | number | boolean | null | undefined>) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === null || value === undefined || value === "") continue;
+    search.set(key, String(value));
+  }
+  const qs = search.toString();
+  return qs ? `?${qs}` : "";
+}
+
 /* ── observability ─────────────────────────────────────────────────────── */
 
 export interface ObsCache {
@@ -1107,6 +1262,51 @@ export const api = {
     }>(
       `/api/demos/browser/${encodeURIComponent(sessionId)}`,
       { method: "DELETE" },
+    ),
+  memoryOverview: () => request<MemoryOverview>("/api/memory/overview"),
+  memoryActors: (nextToken?: string | null) =>
+    request<MemoryPage<MemoryActor>>(
+      `/api/memory/actors${memoryQuery({ next_token: nextToken })}`,
+    ),
+  memorySessions: (actorId: string, nextToken?: string | null) =>
+    request<MemoryPage<MemorySessionRow>>(
+      `/api/memory/sessions${memoryQuery({ actor_id: actorId, next_token: nextToken })}`,
+    ),
+  memoryEvents: (actorId: string, sessionId: string, nextToken?: string | null) =>
+    request<MemoryPage<MemoryEvent>>(
+      `/api/memory/events${memoryQuery({
+        actor_id: actorId,
+        session_id: sessionId,
+        next_token: nextToken,
+      })}`,
+    ),
+  memoryNamespaces: (actorId: string) =>
+    request<{ items: MemoryNamespace[] }>(
+      `/api/memory/namespaces${memoryQuery({ actor_id: actorId })}`,
+    ),
+  memoryRecords: (
+    params: { namespace?: string; actor_id?: string; strategy_id?: string },
+    nextToken?: string | null,
+  ) =>
+    request<MemoryRecordPage>(
+      `/api/memory/records${memoryQuery({ ...params, next_token: nextToken })}`,
+    ),
+  memorySearchRecords: (input: MemorySearchInput) =>
+    request<MemoryRecordPage>("/api/memory/records/search", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  memoryExtractionJobs: (
+    filters: {
+      actor_id?: string;
+      session_id?: string;
+      strategy_id?: string;
+      status?: string;
+    },
+    nextToken?: string | null,
+  ) =>
+    request<MemoryPage<MemoryExtractionJob>>(
+      `/api/memory/extraction-jobs${memoryQuery({ ...filters, next_token: nextToken })}`,
     ),
   obsDashboard: (range: string, force = false) =>
     request<ObsDashboard>(`/api/observability/dashboard?${obsQuery(range, force)}`),
