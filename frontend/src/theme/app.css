@@ -280,7 +280,10 @@ td.pri{color:var(--ink);font-weight:600}
 .memline i{font-style:normal;color:var(--s3)}
 .caret{display:inline-block;width:8px;height:15px;background:var(--amber);vertical-align:-2px;animation:blink .9s steps(1) infinite;margin-left:2px}
 @keyframes blink{50%{opacity:0}}
-.histrow{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--grid);padding:8px 14px;cursor:pointer}
+/* `color` is required: a <button> does not inherit the page text colour, so any
+   row content that is not wrapped in .hp/.hm would render in the UA default
+   (black on the dark panel). */
+.histrow{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--grid);padding:8px 14px;cursor:pointer;color:var(--ink-2)}
 .histrow:hover{background:rgba(255,176,0,.045)}
 .histrow.on{background:rgba(255,176,0,.07);box-shadow:inset 2px 0 0 var(--amber)}
 .histrow .hp{font-size:12px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -588,6 +591,7 @@ a:focus-visible,button:focus-visible,.btn:focus-visible,.selchip:focus-visible,.
 .mem-grid-3{display:grid;grid-template-columns:1fr 1fr 1.4fr;gap:14px;margin-bottom:14px;align-items:start}
 .mem-list{max-height:560px;overflow-y:auto}
 .mem-list .histrow{gap:4px}
+.mem-list .histrow b{color:var(--ink);font-weight:600}
 .mem-strategy{border-bottom:1px solid var(--grid);padding:10px 0}
 .mem-strategy:last-child{border-bottom:0}
 .mem-strategy-head{display:flex;align-items:center;gap:8px;margin-bottom:5px}
