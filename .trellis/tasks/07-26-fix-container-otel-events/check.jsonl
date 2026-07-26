@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/launchpad/evaluation-agent-eligibility.md", "reason": "Verify the emitted instrumentation scope is still strands.telemetry.tracer after the migration."}
+{"file": "docs/issues/2026-07-26-container-otel-events-import.md", "reason": "Check every 'proposed work' item is either done or explicitly recorded as deferred."}

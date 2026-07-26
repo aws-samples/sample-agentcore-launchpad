@@ -1,5 +1,6 @@
 """Claude SDK container template: render, build context, codebuild pipeline."""
 
+import ast
 import asyncio
 import importlib.util
 import json
@@ -8,8 +9,10 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import Any, cast
 
 import pytest
+from opentelemetry._logs import SeverityNumber
 
 from app.schemas.agent import AgentSpec
 from app.services.agentcore import codebuild as cb
@@ -138,6 +141,118 @@ def test_tracing_module_compiles_and_uses_eval_scope(tmp_path: Path):
     assert 'EVAL_SCOPE = "strands.telemetry.tracer"' in text
     # cache token attr names follow the aws/spans convention the console sums
     assert "gen_ai.usage.cache_write_input_tokens" in text
+    # The experimental events API was REMOVED upstream (deprecated 1.39.0), and
+    # an unpinned distro let a fresh CodeBuild resolve a wheel without it — the
+    # container then died on `import tracing` while the deploy reported green.
+    # docs/issues/2026-07-26-container-otel-events-import.md
+    # Checked against the parsed imports, not the raw text: the module docstring
+    # names the removed API when explaining why it is gone.
+    imported: set[str] = set()
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported.add(node.module or "")
+    assert "opentelemetry._events" not in imported
+    assert "opentelemetry._logs" in imported
+
+
+def test_container_requirements_pin_drifting_deps():
+    """Open upper bounds on these two are how a green deploy turns into an agent
+    that fails every invoke — the image is built fresh by CodeBuild each time."""
+    requirements = Path("app/templates/claude_sdk_agent/requirements.txt").read_text()
+    assert "aws-opentelemetry-distro==0.19.*" in requirements
+    assert "claude-agent-sdk==0.2.*" in requirements
+    assert "bedrock-agentcore==1.17.*" in requirements
+
+
+def _in_memory_tracing(monkeypatch):
+    """The template's tracing module wired to in-memory tracer/log providers.
+
+    Module attributes are replaced rather than calling set_tracer_provider /
+    set_logger_provider: those are `Once`-guarded globals, so a test that sets
+    them is order-dependent across the session."""
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import (
+        InMemoryLogRecordExporter,
+        SimpleLogRecordProcessor,
+    )
+    from opentelemetry.sdk.trace import TracerProvider
+
+    from app.templates.claude_sdk_agent import tracing
+
+    exporter = InMemoryLogRecordExporter()
+    logger_provider = LoggerProvider()
+    logger_provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+    monkeypatch.setattr(tracing, "_event_logger", logger_provider.get_logger(tracing.EVAL_SCOPE))
+    monkeypatch.setattr(tracing, "_tracer", TracerProvider().get_tracer(tracing.EVAL_SCOPE))
+    return tracing, exporter
+
+
+def test_tracing_emits_evaluation_shaped_content_record(monkeypatch):
+    """Guards the wire shape AgentCore Evaluations parses, which the events →
+    logs API migration had to preserve byte for byte."""
+    tracing, exporter = _in_memory_tracing(monkeypatch)
+
+    with tracing.traced_invocation("shape-agent", "sess-1") as span:
+        span_ctx = span.get_span_context()
+        tracing.record_result(
+            span,
+            session_id="sess-1",
+            system_prompt="You are a test agent.",
+            prompt="hello",
+            output="hi there",
+            model="claude-sonnet-4-5",
+        )
+
+    (emitted,) = exporter.get_finished_logs()
+    record = emitted.log_record
+    attributes = dict(record.attributes or {})
+    assert isinstance(record.body, dict)
+    body = cast(dict[str, Any], record.body)
+    # 1. scope — anything else and evaluation silently skips the record
+    assert emitted.instrumentation_scope is not None
+    assert emitted.instrumentation_scope.name == "strands.telemetry.tracer"
+    # 2. event identity stays an ATTRIBUTE (what the removed events API wrote);
+    #    the LogRecord `event_name` field is deliberately left unset
+    assert attributes["event.name"] == "strands.telemetry.tracer"
+    assert attributes["session.id"] == "sess-1"
+    assert getattr(record, "event_name", None) is None
+    # 3. correlation to the enclosing span — how the console joins spans↔messages
+    assert record.trace_id == span_ctx.trace_id
+    assert record.span_id == span_ctx.span_id
+    assert record.severity_number is SeverityNumber.INFO
+    # 4. body shape: a plain {content: <str>} fails AWS-side parsing
+    assert body["input"]["messages"] == [
+        {"content": "You are a test agent.", "role": "system"},
+        {"content": {"content": '[{"text": "hello"}]'}, "role": "user"},
+    ]
+    assert body["output"]["messages"] == [
+        {"content": {"message": "hi there", "finish_reason": "end_turn"},
+         "role": "assistant"},
+    ]
+
+
+def test_tracing_tool_call_records_span_and_content(monkeypatch):
+    tracing, exporter = _in_memory_tracing(monkeypatch)
+
+    with tracing.traced_invocation("shape-agent", "sess-2"):
+        tracing.record_tool_call(
+            session_id="sess-2",
+            call_id="call-1",
+            name="Read",
+            arguments={"path": "/tmp/x"},
+            result_text="ok",
+        )
+
+    (emitted,) = exporter.get_finished_logs()
+    assert isinstance(emitted.log_record.body, dict)
+    body = cast(dict[str, Any], emitted.log_record.body)
+    assert emitted.instrumentation_scope is not None
+    assert emitted.instrumentation_scope.name == "strands.telemetry.tracer"
+    assert body["input"]["messages"][0]["content"]["id"] == "call-1"
+    assert body["input"]["messages"][0]["role"] == "tool"
+    assert body["output"]["messages"][0]["content"]["message"] == '[{"text": "ok"}]'
 
 
 def test_assemble_build_context(tmp_path: Path):

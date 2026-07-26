@@ -1,3 +1,9 @@
-claude-agent-sdk>=0.2,<1
+# Pinned to minor windows on purpose. These are resolved fresh by CodeBuild on
+# every image build, so an open upper bound lets an upstream release change the
+# API surface under a container that still deploys green and then fails every
+# invoke (docs/issues/2026-07-26-container-otel-events-import.md: the events API
+# tracing.py used was removed upstream). Bump deliberately, then rebuild one
+# container agent and invoke it before shipping.
+claude-agent-sdk==0.2.*
 bedrock-agentcore==1.17.*
-aws-opentelemetry-distro>=0.10,<1
+aws-opentelemetry-distro==0.19.*

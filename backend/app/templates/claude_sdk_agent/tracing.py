@@ -16,6 +16,18 @@ Two hard requirements, each silently breaking evaluation parsing otherwise:
    role: user}]; output.messages = [{content: {message: <str>, finish_reason:
    end_turn}, role: assistant}]. A plain {content: <str>} shape fails parsing.
 
+Content events go out through the **logs** API. They used to use the experimental
+events API (``opentelemetry._events``), which upstream deprecated in 1.39.0 and
+has since removed — an unpinned ``aws-opentelemetry-distro`` therefore made fresh
+builds crash on import while the deploy still reported green (see
+docs/issues/2026-07-26-container-otel-events-import.md). ``_emit_event`` now does
+by hand the two things the old SDK EventLogger did for us: add the ``event.name``
+attribute, and emit through a logger carrying EVAL_SCOPE. The exported record is
+byte-identical to the old one, which is why the ``event_name`` LogRecord field
+(upstream's canonical replacement for ``Event(name=…)``) is deliberately left
+unset — the old path never populated it, and AWS-side evaluation parsing has only
+ever been verified against the attribute form.
+
 Spans created here run inside the auto-instrumented request handler, so they
 parent under the ADOT ``POST /invocations`` server span — same trace, and the
 console waterfall shows invoke_agent → execute_tool/chat children. With no
@@ -31,8 +43,9 @@ from contextlib import contextmanager
 from typing import Any
 
 from opentelemetry import baggage, trace
-from opentelemetry._events import Event, get_event_logger
+from opentelemetry._logs import LogRecord, SeverityNumber, get_logger
 from opentelemetry.context import attach, detach
+from opentelemetry.trace import set_span_in_context
 
 PROVIDER = "anthropic"
 
@@ -40,7 +53,7 @@ PROVIDER = "anthropic"
 EVAL_SCOPE = "strands.telemetry.tracer"
 
 _tracer = trace.get_tracer(EVAL_SCOPE)
-_event_logger = get_event_logger(EVAL_SCOPE)
+_event_logger = get_logger(EVAL_SCOPE)
 
 
 @contextmanager
@@ -195,16 +208,22 @@ def record_result(
 
 def _emit_event(span: trace.Span, session_id: str, body: dict[str, Any]) -> None:
     """Emit a content event on the span's trace/span id (what the console's
-    span drawer and the evaluators read from the runtime log group)."""
-    ctx = span.get_span_context()
+    span drawer and the evaluators read from the runtime log group).
+
+    ``event.name`` is written as an attribute on purpose — that is exactly what
+    the removed events API did (``Event.__init__`` merged it into attributes),
+    and the record must stay identical for AWS-side parsing (see docstring).
+
+    Correlation is carried by ``context`` rather than the trace_id/span_id/
+    trace_flags kwargs: those are deprecated since 1.35.0, and passing the span
+    explicitly (instead of leaning on the ambient current span) keeps the record
+    pinned to the span the caller handed us."""
     _event_logger.emit(
-        Event(
-            name=EVAL_SCOPE,
+        LogRecord(
             timestamp=time.time_ns(),
+            context=set_span_in_context(span),
             body=body,
-            attributes={"session.id": session_id},
-            trace_id=ctx.trace_id,
-            span_id=ctx.span_id,
-            trace_flags=ctx.trace_flags,
+            severity_number=SeverityNumber.INFO,
+            attributes={"session.id": session_id, "event.name": EVAL_SCOPE},
         )
     )
