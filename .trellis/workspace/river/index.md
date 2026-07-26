@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 22
+- **Total Sessions**: 23
 - **Last Active**: 2026-07-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1474 | Active |
+| `journal-1.md` | ~1502 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 23 | 2026-07-26 | Verify the lab guide on the remote prod env, fix the KB data-source loss, default to sonnet-5 | `8fab107`, `721a77a`, `bf069a6` | `main` |
 | 22 | 2026-07-26 | Hands-on lab guide (live run) + container OTEL events-API fix | `ea0bc4e`, `914b6e7` | `main` |
 | 21 | 2026-07-26 | Existing Gateway policy management (discovery, Gateway-level Registry, Cedar lifecycle) | `7a96ef2`, `4792b3e`, `d69fb46` | `main` |
 | 20 | 2026-07-16 | Fix Claude SDK runtime read timeout | `0fb33dd` | `fix/claude-sdk-runtime-read-timeout` |

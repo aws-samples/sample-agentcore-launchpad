@@ -1472,3 +1472,31 @@ Still open and recorded in docs/issues/: no post-deploy smoke invoke (deferred b
 ### Status
 
 [OK] **Completed**
+
+
+## Session 23: Verify the lab guide on the remote prod env, fix the KB data-source loss, default to sonnet-5
+
+**Date**: 2026-07-26
+**Task**: Verify the lab guide on the remote prod env, fix the KB data-source loss, default to sonnet-5
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Updated the remote prod deployment (agentops_launchpad, us-east-1 behind CloudFront) to current main and re-ran the whole 12-chapter hands-on lab there through the console UI. All twelve chapters passed; timings were the same order of magnitude, and the optimizer independently reproduced the guide's 'fabricating precise numerical data' conclusion from its own traces, which shows chapter 09's narrative is reproducible rather than lucky. It also independently re-verified this morning's container OTEL fix: a fresh CodeBuild in a different region started clean and invoked fine.
+
+Ten findings; the load-bearing one was a real defect. A managed KB created in upload mode could end up permanently ACTIVE with zero data sources: create_kb waits 60s while creation takes 1.5-3 min, and the slow path handed the remaining data-source creation to the browser via sessionStorage. Leaving the page in that window lost it for good, with the uploaded file orphaned in S3 and nothing shown as wrong. Fixed by moving completion to a backend daemon thread, making _create_data_source idempotent (several writers can race), and adding a detail-view warning plus repair action for the one case a thread cannot cover. Client replay removed. Recorded in docs/issues/ and the managed-kb spec.
+
+Also moved the platform default model to global.anthropic.claude-sonnet-5 (verified ACTIVE in both regions) across agent specs, the create form, Studio, evaluation judges and codegen, keeping 4.6 selectable; model_prices gains a mirrored sonnet-5 entry because litellm has no Bedrock price for it yet. Applied six guide revisions from the verification run and re-captured nine screenshots plus the span waterfall from real sonnet-5 runs — the two first-deploy logs deliberately still show 4-6 because that is what that run emitted. Merged to main, pushed, and rolled the remote environment forward; confirmed through CloudFront that the new default and the new KB banner behave correctly.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8fab107` | (see git log) |
+| `721a77a` | (see git log) |
+| `bf069a6` | (see git log) |
+
+### Status
+
+[OK] **Completed**
