@@ -24,7 +24,7 @@ export const graphDag: SampleFlow = {
       data: {
         label: 'Planner',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-4-6',
+        modelId: 'global.anthropic.claude-sonnet-5',
         modelName: 'Claude Sonnet 4.6',
         systemPrompt: 'You are a planning agent. Break the user request into a research plan.',
         temperature: 0.7,
@@ -39,7 +39,7 @@ export const graphDag: SampleFlow = {
       data: {
         label: 'Researcher',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-4-6',
+        modelId: 'global.anthropic.claude-sonnet-5',
         modelName: 'Claude Sonnet 4.6',
         systemPrompt: 'You are a research agent. Execute the research plan you receive and report findings.',
         temperature: 0.7,
@@ -54,7 +54,7 @@ export const graphDag: SampleFlow = {
       data: {
         label: 'Reviewer',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-4-6',
+        modelId: 'global.anthropic.claude-sonnet-5',
         modelName: 'Claude Sonnet 4.6',
         systemPrompt: 'You are a review agent. Critically review the plan you receive and point out gaps.',
         temperature: 0.7,

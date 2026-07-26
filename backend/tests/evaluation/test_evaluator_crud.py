@@ -62,7 +62,7 @@ def test_create_full_params_payload_shape(client, monkeypatch):
     assert judge["instructions"] == "Rate the tone of {session}"
     assert judge["ratingScale"]["numerical"] == FIVE_POINT_SCALE
     assert judge["modelConfig"]["bedrockEvaluatorModelConfig"]["modelId"] == (
-        "global.anthropic.claude-sonnet-4-6"
+        "global.anthropic.claude-sonnet-5"
     )
     assert kwargs["clientToken"]
 

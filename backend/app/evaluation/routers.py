@@ -439,7 +439,7 @@ class RatingScaleItem(BaseModel):
 class JudgeCreate(BaseModel):
     name: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_]{0,47}$")
     instructions: str = Field(min_length=10, max_length=4000)
-    model_id: str = "global.anthropic.claude-sonnet-4-6"
+    model_id: str = "global.anthropic.claude-sonnet-5"
     level: str = Field(default="TRACE", pattern="^(TOOL_CALL|TRACE|SESSION)$")
     description: str = Field(default="", max_length=1000)
     rating_scale: list[RatingScaleItem] | None = Field(default=None, min_length=2)
@@ -500,7 +500,7 @@ def get_evaluator(evaluator_id: str) -> dict[str, Any]:
 
 class JudgeUpdate(BaseModel):
     instructions: str = Field(min_length=10, max_length=4000)
-    model_id: str = "global.anthropic.claude-sonnet-4-6"
+    model_id: str = "global.anthropic.claude-sonnet-5"
     level: str = Field(default="TRACE", pattern="^(TOOL_CALL|TRACE|SESSION)$")
     description: str = Field(default="", max_length=1000)
     rating_scale: list[RatingScaleItem] | None = Field(default=None, min_length=2)

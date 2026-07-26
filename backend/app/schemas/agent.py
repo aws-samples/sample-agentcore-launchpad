@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 
 # Latest Sonnet inference profile available in the target account (verified via
 # bedrock list-inference-profiles; there is no "sonnet-5" profile).
-DEFAULT_MODEL_ID = "global.anthropic.claude-sonnet-4-6"
+DEFAULT_MODEL_ID = "global.anthropic.claude-sonnet-5"
 
 Method = Literal["harness", "zip_runtime", "container", "studio"]
 

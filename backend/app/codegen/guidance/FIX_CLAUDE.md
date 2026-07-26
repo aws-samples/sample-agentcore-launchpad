@@ -45,7 +45,7 @@ temperature / max tokens, a bad MCP server URL configured on a node.
 
 - You MAY edit `generated_agent.py` as a **temporary workaround** (e.g.
   substitute a known-good model id such as
-  `global.anthropic.claude-sonnet-4-6` for AWS Bedrock).
+  `global.anthropic.claude-sonnet-5` for AWS Bedrock).
 - If you do edit the code, the `summary` MUST state clearly that this is a
   temporary bypass and that the canvas node property still holds the old
   value, naming exactly which node (by its label from `flow.json`) and which

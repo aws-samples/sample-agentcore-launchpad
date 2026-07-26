@@ -24,7 +24,7 @@ export const singleAgent: SampleFlow = {
       data: {
         label: 'Assistant Agent',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-4-6',
+        modelId: 'global.anthropic.claude-sonnet-5',
         modelName: 'Claude Sonnet 4.6',
         systemPrompt: 'You are a helpful AI assistant that answers user questions clearly and concisely.',
         temperature: 0.7,

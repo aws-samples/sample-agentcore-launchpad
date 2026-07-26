@@ -11,7 +11,7 @@
  * listings — likely requires model access enablement).
  */
 
-export const DEFAULT_MODEL_ID = 'global.anthropic.claude-sonnet-4-6';
+export const DEFAULT_MODEL_ID = 'global.anthropic.claude-sonnet-5';
 
 /** Sentinel value for the "Custom model ID" option in model dropdowns. */
 export const CUSTOM_MODEL_OPTION = '__custom__';

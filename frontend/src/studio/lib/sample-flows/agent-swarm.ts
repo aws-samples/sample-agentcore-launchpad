@@ -38,7 +38,7 @@ export const agentSwarm: SampleFlow = {
       data: {
         label: 'Researcher',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-4-6',
+        modelId: 'global.anthropic.claude-sonnet-5',
         modelName: 'Claude Sonnet 4.6',
         systemPrompt: 'You are a researcher in a swarm. Gather facts about the topic and hand off to the analyst when done.',
         temperature: 0.7,
@@ -53,7 +53,7 @@ export const agentSwarm: SampleFlow = {
       data: {
         label: 'Analyst',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-4-6',
+        modelId: 'global.anthropic.claude-sonnet-5',
         modelName: 'Claude Sonnet 4.6',
         systemPrompt: 'You are an analyst in a swarm. Analyze the gathered facts and hand off to the writer for the final summary.',
         temperature: 0.7,
@@ -68,7 +68,7 @@ export const agentSwarm: SampleFlow = {
       data: {
         label: 'Writer',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-4-6',
+        modelId: 'global.anthropic.claude-sonnet-5',
         modelName: 'Claude Sonnet 4.6',
         systemPrompt: 'You are a writer in a swarm. Produce the final, polished answer from the analysis.',
         temperature: 0.7,

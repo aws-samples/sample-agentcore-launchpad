@@ -42,8 +42,8 @@ const PLACEHOLDER_RE = /\{[a-zA-Z_][a-zA-Z0-9_]*\}/;
 // rest with ValidationException. An evaluator loaded for editing with a
 // model outside this list still renders (its id is prepended dynamically).
 const MODEL_OPTIONS = [
-  "global.anthropic.claude-sonnet-4-6",
   "global.anthropic.claude-sonnet-5",
+  "global.anthropic.claude-sonnet-4-6",
   "global.anthropic.claude-haiku-4-5-20251001-v1:0",
   "global.anthropic.claude-opus-4-8",
   "global.anthropic.claude-opus-4-6-v1",

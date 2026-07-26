@@ -16,7 +16,7 @@ import {
 import type { AgentInfo, DeploymentInfo, InspectedSkill, JobInfo } from "../lib/api";
 import { api, ApiError } from "../lib/api";
 
-const DEFAULT_MODEL = "global.anthropic.claude-sonnet-4-6";
+const DEFAULT_MODEL = "global.anthropic.claude-sonnet-5";
 const BUILTIN_TOOLS = ["code-interpreter", "browser"] as const;
 // AgentCore mount-path contract: exactly one level under /mnt
 const MOUNT_RE = /^\/mnt\/[a-zA-Z0-9._-]+$/;

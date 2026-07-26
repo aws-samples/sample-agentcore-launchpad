@@ -24,7 +24,7 @@ export const orchestratorSubAgents: SampleFlow = {
       data: {
         label: 'Coordinator',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-4-6',
+        modelId: 'global.anthropic.claude-sonnet-5',
         modelName: 'Claude Sonnet 4.6',
         systemPrompt: 'You are an orchestrator agent that coordinates specialized agents to complete complex tasks.',
         temperature: 0.7,
@@ -40,7 +40,7 @@ export const orchestratorSubAgents: SampleFlow = {
       data: {
         label: 'Research Agent',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-4-6',
+        modelId: 'global.anthropic.claude-sonnet-5',
         modelName: 'Claude Sonnet 4.6',
         systemPrompt: 'You are a research specialist. Gather relevant facts and background information for the given topic.',
         temperature: 0.7,
@@ -55,7 +55,7 @@ export const orchestratorSubAgents: SampleFlow = {
       data: {
         label: 'Writer Agent',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-4-6',
+        modelId: 'global.anthropic.claude-sonnet-5',
         modelName: 'Claude Sonnet 4.6',
         systemPrompt: 'You are a writing specialist. Turn provided facts into clear, well-structured prose.',
         temperature: 0.7,

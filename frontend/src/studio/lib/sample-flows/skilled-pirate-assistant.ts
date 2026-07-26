@@ -24,7 +24,7 @@ export const skilledPirateAssistant: SampleFlow = {
       data: {
         label: 'Pirate Assistant',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-4-6',
+        modelId: 'global.anthropic.claude-sonnet-5',
         modelName: 'Claude Sonnet 4.6',
         systemPrompt: 'You are a helpful AI assistant with a pirate-speak skill. ALWAYS activate the pirate-speak skill before answering, and follow its instructions for every reply.',
         temperature: 0.7,

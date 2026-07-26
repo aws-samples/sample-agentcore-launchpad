@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import strands
 
-from app.schemas.agent import AgentSpec
+from app.schemas.agent import DEFAULT_MODEL_ID, AgentSpec
 from app.templates.strands_agent import base_requirements, render_main_py
 
 SPEC = AgentSpec(
@@ -22,7 +22,7 @@ def test_render_replaces_all_placeholders():
     code = render_main_py(SPEC)
     assert "__LAUNCHPAD_" not in code
     assert "tmpl-test-agent" in code
-    assert "global.anthropic.claude-sonnet-4-6" in code
+    assert DEFAULT_MODEL_ID in code
     assert "You are a template test agent. Be brief." in code
     assert "get_config_bundle" in code
     assert "BedrockAgentCoreApp" in code

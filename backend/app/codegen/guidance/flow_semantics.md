@@ -31,7 +31,7 @@ Unset fields fall back to the defaults shown in parentheses.
 |---|---|
 | `label` | Display name; sanitize to derive the Python variable name |
 | `modelProvider` | `"AWS Bedrock"` (default) \| `"OpenAI"` \| `"Amazon Bedrock (Mantle)"` |
-| `modelId` | Bedrock model id (e.g. `global.anthropic.claude-sonnet-4-6`); used when provider is AWS Bedrock |
+| `modelId` | Bedrock model id (e.g. `global.anthropic.claude-sonnet-5`); used when provider is AWS Bedrock |
 | `modelName` | Model identifier used for the OpenAI and Mantle providers (e.g. `gpt-4o`) |
 | `systemPrompt` | System prompt string (`"You are a helpful AI assistant."`) |
 | `temperature` | 0–1 float (0.7) |

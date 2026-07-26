@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     # AI-fix coding backend (slice 3 consumes these; declared here so the whole
     # local-debug surface shares one settings block).
     codegen_backend: str = "claude"
-    codegen_model: str = "global.anthropic.claude-sonnet-4-6"
+    codegen_model: str = "global.anthropic.claude-sonnet-5"
     codegen_timeout_s: float = 180.0
     codegen_max_repair_rounds: int = 2
 
@@ -82,6 +82,11 @@ class Settings(BaseSettings):
     # and refreshed from litellm's public price file by
     # app.services.model_prices (manual button + periodic daemon).
     model_prices: dict[str, Any] = {
+        # sonnet-5 is not in litellm's public price file yet, so this entry
+        # mirrors Sonnet 4.6 rather than being sourced — without it the
+        # observability page reports sonnet-5 tokens with a null cost. The
+        # refresher overwrites it once upstream publishes the real numbers.
+        "sonnet-5": {"input": 3.0, "output": 15.0},
         "sonnet-4-6": {"input": 3.0, "output": 15.0},
         "opus-4-8": {"input": 5.0, "output": 25.0},
         "sonnet-4-5": {"input": 3.0, "output": 15.0},

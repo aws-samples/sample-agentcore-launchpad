@@ -3,7 +3,7 @@
 import pytest
 
 from app.deployer.harness import build_create_params
-from app.schemas.agent import AgentSpec
+from app.schemas.agent import DEFAULT_MODEL_ID, AgentSpec
 from app.services.agentcore import harness as hc
 
 MEM_ARN = "arn:aws:bedrock-agentcore:us-west-2:111:memory/launchpad_memory-x"
@@ -24,7 +24,7 @@ def test_build_params_basics():
     params = build_create_params(spec(), ROLE_ARN, MEM_ARN)
     assert params["harnessName"] == "hr_assistant_v3"  # hyphens not allowed
     assert params["executionRoleArn"] == ROLE_ARN
-    assert params["model"]["bedrockModelConfig"]["modelId"] == "global.anthropic.claude-sonnet-4-6"
+    assert params["model"]["bedrockModelConfig"]["modelId"] == DEFAULT_MODEL_ID
     assert params["systemPrompt"] == [{"text": "You are an HR assistant."}]
     assert params["memory"] == {"agentCoreMemoryConfiguration": {"arn": MEM_ARN}}
 
