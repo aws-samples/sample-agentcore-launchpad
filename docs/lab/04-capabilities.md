@@ -81,6 +81,9 @@ TEXT_INDEXED · 索引完成 07:54:07`。这一层能区分「文档没上传」
 
 > KB 创建与 ingestion 都是**异步**的，控制台不会替你阻塞等待。别在 `CREATING` 状态就去挂载——
 > 挂载列表只显示 `ACTIVE` 的 KB。
+>
+> **数据源是后端在后台补齐的**：创建请求最多等 60 秒，KB 通常要 1.5–3 分钟才 ACTIVE，所以多数情况下接口先返回、数据源随后由后端线程创建（你可以放心离开页面）。
+> 如果 KB 已是 `ACTIVE` 却**一个数据源都没有**，详情页会给出橙色告警和 `补建数据源` 按钮——点它即可（重复点不会建出两个数据源）。
 
 ## 4.3 用检索 Playground 验证质量（挂载前必做）
 
@@ -273,6 +276,7 @@ FZuhhw9jbJaK   lab-fund-assistant   A2A   PENDING_APPROVAL
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 创建 Agent 时看不到刚建的 KB | KB 还是 `CREATING`，或 ingestion 未完成 | 等到 `ACTIVE` 再刷新页面 |
+| KB 已 `ACTIVE` 但数据源为 0、ingestion 从未开始 | 后端补齐数据源的后台任务没跑成（例如期间重启过服务），或该 KB 建于此修复之前 | 详情页橙色告警里点 `补建数据源`；文件已在制品桶里，补建后 ingestion 会自动开始 |
 | ingestion `COMPLETE` 但 `Documents Failed = 1` | PDF 无文本层（扫描件），或中文 PDF 抽取问题 | 换文本型 PDF；中文 PDF 已知问题见 `docs/issues/2026-07-13-managed-kb-cjk-pdf-extraction.md` |
 | 技能不出现在挂载列表 | 状态还是 `DRAFT` / `PENDING_APPROVAL` | 必须先 `批准 · 发布` |
 | 注册中心搜索框搜不到刚建的记录 | 搜索走 AWS `SearchRegistryRecords`，索引有延迟 | 用顶部类型筛选按钮（`技能`）在列表里找 |

@@ -53,7 +53,7 @@
 | 字段 | 本实验取值 |
 |---|---|
 | AGENT 名称 | `lab-fund-assistant` |
-| 模型 · BEDROCK | `global.anthropic.claude-sonnet-4-6`（默认值） |
+| 模型 · BEDROCK | `global.anthropic.claude-sonnet-5`（默认值） |
 | 系统提示词 | `你是一名基金产品投顾助手，服务于摩根士丹利新兴市场领先企业股票基金（MS INVF Emerging Leaders Equity Fund）的销售与客服团队。回答基金的策略、团队、规模与投资流程相关问题。` |
 | 工具 | `calculator`、`current_utc_time`（模板内置，默认勾选） |
 | 服务协议 | `HTTP · 标准 invocations` |
@@ -131,6 +131,17 @@ curl -s http://127.0.0.1:8000/api/agents | python3 -m json.tool | head -30
 {"ts":"2026-07-26T07:42:53.764+00:00","stage":"deploy","msg":"runtime status: READY"}
 {"ts":"2026-07-26T07:42:56+00:00","stage":"register","msg":"a2a record created · FZuhhw9jbJaK · auto-submitted"}
 ```
+
+> 上面这份事件流录于 2026-07-26 首次创建时，当时平台默认模型是 `claude-sonnet-4-6`。
+> **默认已升级为 `claude-sonnet-5`**，你自己跑出来的 `generate` 行会是新模型。下面是同一个
+> Agent 切到 sonnet-5 的那次重新发布（`Update…` 而非 `Create…`，其余阶段一致）：
+>
+> ```
+> 13:49:35 generate strands template · 6333 bytes · model global.anthropic.claude-sonnet-5
+> 13:50:17 package pip+zip 42.0s · 37.3MB → s3://…/agents/lab-fund-assistant/deployment_package.zip
+> 13:50:18 deploy UpdateAgentRuntime accepted · runtimeId lab_fund_assistant_c8fbf6-9ZkLYO3rAB · new version 4
+> 13:50:28 deploy runtime status: READY
+> ```
 
 三个值得注意的机制：
 

@@ -49,6 +49,11 @@ lab-fund-advisor · harness   — 只有 Launchpad 托管的 HTTP runtime Agent 
 
 实验创建后，详情面板里 8 个阶段依次列出，第一个动作按钮是 `▸ 生成 AI 推荐`。
 
+> ⚠️ **八个阶段每一个都要你手动点按钮**——平台不会自动串下去（面板顶部那句提示就是这个意思）。
+> 而且顶部的 `<阶段> · RUNNING` 里的 `RUNNING` 是**这个实验整体还在进行中**，不代表该阶段
+> 正在执行：停在 `BUNDLES · RUNNING` 通常只是在等你点 `▸ 创建 CONTROL + TREATMENT BUNDLE`。
+> 真正在跑的阶段会显示 `◐ 运行中…` 加一行进度文字。
+
 ![实验阶段面板](images/09-exp-stage-recommend.png)
 *图 9-1b：实验详情。左侧是阶段卡片（当前 `RECOMMEND · RUNNING`），
 提示语明确写着「每个阶段都由你手动触发——结果即时持久化，可随时刷新或离开页面」。*

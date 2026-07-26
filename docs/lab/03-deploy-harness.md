@@ -24,7 +24,7 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
    | 字段 | 取值 |
    |---|---|
    | AGENT 名称 | `lab-fund-advisor` |
-   | 模型 | `global.anthropic.claude-sonnet-4-6`（默认） |
+   | 模型 | `global.anthropic.claude-sonnet-5`（默认） |
    | 系统提示词 | `你是摩根士丹利新兴市场领先企业股票基金（MS INVF Emerging Leaders Equity Fund）的产品知识助手。只依据挂载的基金资料回答问题；资料中没有的内容，明确说明无法确认，不要猜测数字。` |
    | 工具 / 技能 / 知识库 | **本章都不选**——第 04 章再挂载 |
    | 记忆 | 短期 + 长期都开启 |
@@ -52,6 +52,11 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
 {"stage":"deploy","msg":"harness READY · arn:aws:bedrock-agentcore:us-west-2:…:harness/lab_fund_advisor-9IoJvol1OL"}
 {"stage":"register","msg":"a2a record created · k2CPfzI7gOn1 · auto-submitted"}
 ```
+
+> 同样，这份日志录于首次创建时（当时默认 `claude-sonnet-4-6`）。切到当前默认 `claude-sonnet-5`
+> 的那次重新发布实测 **21 秒**，`deploy` 行为 `UpdateHarness accepted · … · new version 3`，
+> `generate` 行为 `harness request generated for lab_fund_advisor · model
+> global.anthropic.claude-sonnet-5`。
 
 本次实验结果：
 
@@ -89,7 +94,8 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
    |---|---|
    | AGENT 名称 | `lab-fund-packager` |
    | 系统提示词 | `你是基金材料分析助手，负责把基金产品文档整理成结构化摘要，可调用子 Agent 与技能完成多步任务。` |
-   | 技能 | 勾选 `meeting-summarizer · skill`（演示技能打包） |
+   | 技能 | 勾选**任意一个已发布（APPROVED）的技能**（本次实跑勾的是 `meeting-summarizer`；
+     你环境里可能是别的名字——第 04 章会自己登记一个，这里只是演示技能会被物理打进镜像） |
    | 文件系统 | 保持 `托管会话存储 ✓`，挂载路径 `/mnt/workspace` |
 
 ![容器配置页](images/03-container-config.png)
@@ -168,7 +174,7 @@ for a in json.load(sys.stdin)['agents']:
 - [ ] Harness 的 `打包` 阶段显示 `skipped`
 - [ ] `lab-fund-packager`（container）状态 active，ARN 里是 `:runtime/`
 - [ ] 容器日志出现 `image pushed · …/launchpad-agents:lab-fund-packager-v1`
-- [ ] 容器生成日志出现 `skills bundled: meeting-summarizer`
+- [ ] 容器生成日志出现 `skills bundled: <你勾选的技能名>`
 - [ ] 三个 Agent 各自都有 `registry_record_id`
 
 ## 常见问题

@@ -28,17 +28,18 @@
 **打开** `07 可观测` → `仪表盘`，右上角选时间范围（`1H / 6H / 24H / 7D`）。
 
 ![可观测仪表盘](images/07-obs-dashboard.png)
-*图 7-1：本次实验产生的真实数据。5 个统计卡 + 4 张图。*
+*图 7-1：真实数据。5 个统计卡 + 4 张图。注意 24H 窗口会把当天**所有** Agent 的调用都算进来——
+本次截图里就同时含实验室之外的活动，以及切换默认模型前后的两种模型。*
 
 本次实测读数（24H 范围）：
 
 | 指标 | 值 | 说明 |
 |---|---|---|
-| 追踪 | 25（25 正常 / 0 错误） | 一次 invoke = 一条 trace |
-| 会话 | 6（4 个 Agent 活跃） | 含实验室外的历史会话 |
+| 追踪 | 118（118 正常 / 0 错误） | 一次 invoke = 一条 trace |
+| 会话 | 23（6 个 Agent 活跃） | 含实验室外的历史会话 |
 | 错误率 | 0.0% | |
-| 延迟 P50 / P95 | 30ms / 13.0s | **根 span** 的分位数 |
-| Token · 预估成本 | 46K（输入 45K / 输出 1K）· ≈ $0.153 | |
+| 延迟 P50 / P95 | 28ms / 137ms | **根 span** 的分位数（大量短请求会把分位数拉低） |
+| Token · 预估成本 | 79K（输入 77K / 输出 2K）· ≈ $0.224 | 按模型拆分：sonnet-4-6 46K ≈$0.153、sonnet-5 33K ≈$0.071 |
 
 「热门工具」面板直接印证了第 04–05 章的挂载：
 
@@ -103,33 +104,35 @@ c50a8d66…  lab-fund-advisor    2 trace  5 llm  46,115 tok  $0.153   07:59
 *图 7-4：瀑布图 + 右侧 span 抽屉。左侧按 `LLM / 工具 / 记忆 / 网关 / HTTP` 分色标注，
 右侧是选中 span 的详情。*
 
-本次这条 13.0s / 39 spans 的 trace，把一次"有知识库的问答"完整摊开了：
+本次这条 17.9s / 46 spans 的 trace（跑在当前默认模型 sonnet-5 上），把一次"有知识库的问答"
+完整摊开了：
 
 ```
-POST /invocations                                     13.0s
-├─ S3.ListObjectsV2 / HeadObject / GetObject      48/18/25ms   ← 技能包从 S3 拉取
-├─ mcp tools/list                                     260ms    ← 发现挂载的工具
-├─ Bedrock AgentCore.ListEvents ×2                  55/46ms    ← 恢复短期记忆
-├─ invoke_agent Strands Agents                        11.1s
-│  ├─ RetrieveMemoryRecords ×2                    258/253ms    ← 注入长期记忆
-│  ├─ execute_event_loop_cycle                         4.3s
-│  │  └─ chat global.anthropic.claude-sonnet-4-6       2.2s    ← 第 1 次模型调用
-│  ├─ execute_tool lab-fund-kb-…___Retrieve            750ms   ← KB 检索
-│  ├─ execute_tool lab-fund-kb-…___Retrieve            899ms   ← KB 检索
-│  ├─ execute_event_loop_cycle → chat                  1.3s    ← 第 2 次模型调用
+POST /invocations                                     17.9s
+├─ S3.ListObjectsV2 / HeadObject / GetObject      51/22/44ms   ← 技能包从 S3 拉取
+├─ mcp tools/list                                     224ms    ← 发现挂载的工具
+├─ Bedrock AgentCore.ListEvents ×2                  65/49ms    ← 恢复短期记忆
+├─ invoke_agent Strands Agents                        15.8s
+│  ├─ RetrieveMemoryRecords ×2                    226/257ms    ← 注入长期记忆
+│  ├─ execute_event_loop_cycle                         4.1s
+│  │  └─ chat global.anthropic.claude-sonnet-5         2.8s    ← 第 1 次模型调用
+│  ├─ execute_tool lab-fund-kb-…___Retrieve            967ms   ← KB 检索
+│  ├─ execute_event_loop_cycle → chat                   2.9s   ← 第 2 次模型调用
+│  ├─ execute_tool lab-fund-kb-…___Retrieve            900ms   ← KB 检索
+│  ├─ execute_event_loop_cycle → chat                   2.0s   ← 第 3 次模型调用
 │  ├─ execute_tool skills                                1ms   ← 技能加载
-│  └─ execute_event_loop_cycle → chat                  4.5s    ← 第 3 次模型调用（成文）
-└─ Bedrock AgentCore.GetResourceOauth2Token            705ms   ← 网关出站鉴权
+│  └─ execute_event_loop_cycle → chat                   4.4s   ← 第 4 次模型调用（成文）
+└─ Bedrock AgentCore.GetResourceOauth2Token            743ms   ← 网关出站鉴权
 ```
 
-**这就是"可观测"的价值**：13 秒里 11.1 秒在 Agent 循环，其中三次模型调用占 8 秒、两次 KB 检索
-占 1.6 秒——想优化延迟，该动的是"减少循环轮次"，不是"换更快的向量库"。
+**这就是"可观测"的价值**：17.9 秒里 15.8 秒在 Agent 循环，其中四次模型调用占 12.1 秒、
+两次 KB 检索占 1.9 秒——想优化延迟，该动的是"减少循环轮次"，不是"换更快的向量库"。
 
 点某个 span 打开右侧抽屉：
 
 ![span 抽屉](images/07-obs-span-drawer.png)
 *图 7-5：`chat` span 抽屉：操作、模型、提供方（`strands-agents`）、耗时、状态、
-Token 用量（输入 2,333 / 输出 160 / 缓存读写 0）、预估成本 $0.009，
+Token 用量（输入 2,972 / 输出 131 / 缓存读写 0）、预估成本 $0.007，
 以及**完整的输入消息与输出消息**。*
 
 抽屉里的输入消息暴露了平台自动注入的系统提示词增量——这段是知识库挂载的产物：
