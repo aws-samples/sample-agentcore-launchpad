@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { Btn, Panel, useToast, ViewHead } from "../../components";
 import { type KBSourceBody, type KnowledgeBaseDetail } from "../KnowledgeBases";
-import { kbErrorMessage, pendingSourceKey } from "./kb-helpers";
+import { kbErrorMessage } from "./kb-helpers";
 import { SourcePicker, type SourceMode } from "./SourcePicker";
 
 interface CreateViewProps {
@@ -56,11 +56,9 @@ export function CreateView({ onBack, onCreated }: CreateViewProps) {
         return;
       }
       const kbId = body.kb_id;
-      // slow path: the KB is still CREATING and has no data source yet — stash
-      // the source so the detail view can replay it once the KB turns ACTIVE
-      if (body.source_pending) {
-        sessionStorage.setItem(pendingSourceKey(kbId), JSON.stringify(source));
-      }
+      // A `source_pending` response means the KB was still CREATING; the backend
+      // finishes the data source on its own thread, so there is nothing to
+      // replay from here (the detail view surfaces it if that ever fails).
       // upload mode: push the picked files into the KB's artifacts-bucket prefix
       // now that the KB (and its data source) exist. A file failure is surfaced
       // but the KB is already created, so we still land on its detail page.

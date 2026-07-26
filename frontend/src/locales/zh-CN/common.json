@@ -553,7 +553,9 @@
         "docStatus": "状态",
         "docIndexed": "索引时间",
         "docsEmpty": "尚无已索引文档——请先同步数据源",
-        "docsLoadMore": "加载更多"
+        "docsLoadMore": "加载更多",
+        "missingSource": "数据源还没建好。后端会在知识库变为 ACTIVE 后自动创建（通常 1–3 分钟）；若长时间没有出现，点右侧按钮补建——重复点击不会创建多个数据源。",
+        "repairSource": "补建数据源"
       },
       "playground": {
         "title": "检索 PLAYGROUND",

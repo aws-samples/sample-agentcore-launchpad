@@ -484,3 +484,89 @@ def test_query_kb_side_failure_maps_to_502(monkeypatch):
         knowledge.query("KB1", "hello")
     assert exc_info.value.status_code == 502
     assert exc_info.value.code == "kb.query_failed"
+
+
+# ── slow-path data-source completion (backend-owned, idempotent) ─────────────
+
+
+class _KBClientStub:
+    """Minimal bedrock-agent stub: a KB that turns ACTIVE after N polls."""
+
+    def __init__(self, active_after: int = 2, sources: list[dict] | None = None):
+        self._polls = 0
+        self._active_after = active_after
+        self._sources = sources or []
+        self.created: list[dict] = []
+
+    def get_knowledge_base(self, knowledgeBaseId: str):  # noqa: N803 (AWS shape)
+        self._polls += 1
+        status = "ACTIVE" if self._polls >= self._active_after else "CREATING"
+        return {"knowledgeBase": {"knowledgeBaseId": knowledgeBaseId, "status": status}}
+
+    def list_data_sources(self, **_kw):
+        return {"dataSourceSummaries": self._sources}
+
+    def get_data_source(self, knowledgeBaseId: str, dataSourceId: str):  # noqa: N803
+        detail = next(s["detail"] for s in self._sources if s["dataSourceId"] == dataSourceId)
+        return {"dataSource": detail}
+
+    def create_data_source(self, **kw):
+        self.created.append(kw)
+        return {"dataSource": {"dataSourceId": f"ds-{len(self.created)}"}}
+
+
+def _ds_detail(bucket: str, prefix: str) -> dict:
+    return {
+        "dataSourceConfiguration": {
+            "type": "MANAGED_KNOWLEDGE_BASE_CONNECTOR",
+            "managedKnowledgeBaseConnectorConfiguration": {
+                "connectorParameters": {
+                    "type": "S3",
+                    "connectionConfiguration": {"bucketName": bucket},
+                    "filterConfiguration": {"inclusionPrefixes": [prefix]},
+                }
+            },
+        }
+    }
+
+
+def test_source_completion_creates_source_once_kb_is_active(monkeypatch):
+    """The browser used to own this replay; losing the page lost the source."""
+    stub = _KBClientStub(active_after=2)
+    monkeypatch.setattr(knowledge, "agent_client", lambda: stub)
+    monkeypatch.setattr(knowledge.time, "sleep", lambda _s: None)
+
+    thread = knowledge._start_source_completion("KB123", {"mode": "upload"}, interval_s=0)
+    thread.join(timeout=5)
+
+    assert len(stub.created) == 1
+    assert stub.created[0]["knowledgeBaseId"] == "KB123"
+
+
+def test_source_completion_is_idempotent(monkeypatch):
+    """Fast path, background thread and a manual POST can all race — the guard
+    must return the existing source instead of adding a second connector."""
+    existing = [{"dataSourceId": "ds-old", "detail": _ds_detail("artifacts-bkt", "kb/KB123/")}]
+    stub = _KBClientStub(active_after=1, sources=existing)
+    monkeypatch.setattr(knowledge, "agent_client", lambda: stub)
+    monkeypatch.setattr(knowledge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        knowledge, "_resolve_source", lambda _kb, _src: ("artifacts-bkt", "kb/KB123/")
+    )
+
+    assert knowledge._create_data_source(stub, "KB123", {"mode": "upload"}) == "ds-old"
+    assert stub.created == []
+
+
+def test_source_completion_gives_up_when_kb_failed(monkeypatch):
+    stub = _KBClientStub(active_after=99)
+    stub.get_knowledge_base = lambda knowledgeBaseId: {  # noqa: N803
+        "knowledgeBase": {"status": "FAILED"}
+    }
+    monkeypatch.setattr(knowledge, "agent_client", lambda: stub)
+    monkeypatch.setattr(knowledge.time, "sleep", lambda _s: None)
+
+    thread = knowledge._start_source_completion("KB123", {"mode": "upload"}, interval_s=0)
+    thread.join(timeout=5)
+
+    assert stub.created == []

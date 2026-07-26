@@ -20,10 +20,19 @@ method. Introduced by task `07-13-managed-kb`.
   validated at create** — a bad role only fails at ingestion.
 - KB creation is async: CREATING→ACTIVE takes **1.5–3 min** (not seconds).
   `create_kb` waits ≤60 s (fast path creates the data source inline); otherwise
-  returns `source_pending` and the FRONTEND replays `POST /data-sources` when
-  the detail poll sees ACTIVE (source stashed in sessionStorage,
-  `kb-helpers.pendingSourceKey`). DetailView also auto-fires the FIRST
-  ingestion when a data source is AVAILABLE with zero jobs.
+  it starts a BACKEND daemon thread (`_start_source_completion`) that polls to
+  ACTIVE on its own client and then creates the data source, and returns
+  `source_pending` for API compatibility. **The client must not replay it** —
+  it used to (sessionStorage → DetailView), and leaving the page in that 1–3 min
+  window lost the data source permanently, with the KB looking ACTIVE and healthy
+  (`docs/issues/2026-07-26-kb-data-source-lost-on-slow-create.md`).
+  `_create_data_source` is therefore idempotent: `_find_data_source_at` returns an
+  existing source at the same bucket/prefix instead of adding a second connector,
+  since fast path / background thread / manual `POST /data-sources` can race.
+  DetailView shows a warning + `补建数据源` repair action whenever a KB is ACTIVE
+  with zero data sources (covers a backend restart mid-wait and pre-fix KBs), and
+  still auto-fires the FIRST ingestion when a data source is AVAILABLE with zero
+  jobs.
 - Data sources: `CreateDataSource(type: MANAGED_KNOWLEDGE_BASE_CONNECTOR,
   managedKnowledgeBaseConnectorConfiguration.connectorParameters = {type: S3,
   version: "1", connectionConfiguration:{bucketName, bucketOwnerAccountId},

@@ -553,7 +553,9 @@
         "docStatus": "STATUS",
         "docIndexed": "INDEXED AT",
         "docsEmpty": "no documents indexed yet — sync the data source first",
-        "docsLoadMore": "LOAD MORE"
+        "docsLoadMore": "LOAD MORE",
+        "missingSource": "No data source yet. The backend creates it once the knowledge base turns ACTIVE (usually 1–3 min); if it never appears, repair it here — clicking twice cannot create a duplicate.",
+        "repairSource": "Repair data source"
       },
       "playground": {
         "title": "RETRIEVAL PLAYGROUND",

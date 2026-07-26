@@ -9,7 +9,9 @@ wrappers, with the Agent ledger scanned for attachment relationships.
 """
 
 import json
+import logging
 import re
+import threading
 import time
 from typing import Any
 
@@ -27,6 +29,8 @@ from app.services.agentcore.client import (
 )
 
 KB_ROLE_NAME = "launchpad-kb-role"
+
+logger = logging.getLogger(__name__)
 
 
 class KBAttachedError(AppError):
@@ -317,9 +321,29 @@ def _data_source_configuration(bucket: str, prefix: str, account_id: str) -> dic
     }
 
 
+def _find_data_source_at(client: Any, kb_id: str, bucket: str, prefix: str) -> str | None:
+    """Existing data-source id pointing at the same S3 location, if any.
+
+    Creation is attempted from several places that can race — the create fast
+    path, the background completion below, a manual POST /data-sources, an old
+    client replay — so every caller must be able to no-op instead of adding a
+    second connector for the same bucket/prefix."""
+    for ds in _list_data_sources(client, kb_id):
+        detail = client.get_data_source(knowledgeBaseId=kb_id, dataSourceId=ds["dataSourceId"])[
+            "dataSource"
+        ]
+        ds_bucket, ds_prefix = _parse_ds_location(detail)
+        if ds_bucket == bucket and (ds_prefix or "") == (prefix or ""):
+            return ds["dataSourceId"]
+    return None
+
+
 def _create_data_source(client: Any, kb_id: str, source: dict[str, Any]) -> str:
     settings = get_settings()
     bucket, prefix = _resolve_source(kb_id, source)
+    existing = _find_data_source_at(client, kb_id, bucket, prefix)
+    if existing:
+        return existing
     if bucket != settings.resources.get("artifacts_bucket"):
         _sync_kb_policy(kb_id, bucket, prefix)  # dynamic S3 read grant for BYO buckets
     created = client.create_data_source(
@@ -520,11 +544,51 @@ def create_kb(name: str, description: str, source: dict[str, Any]) -> dict[str, 
     if status == "ACTIVE":  # fast path — finish the source setup in one shot
         _create_data_source(client, kb_id, source)
         return get_kb_detail(kb_id)
-    # still CREATING: return immediately; the client polls the detail and
-    # replays the echoed source via POST /data-sources once ACTIVE
+    # Still CREATING (1.5–3 min is normal). Finish the source setup on a
+    # background thread: this used to be handed to the browser, which meant
+    # navigating away in this window left the KB permanently without a data
+    # source and the uploaded file orphaned in S3, with nothing shown as wrong.
+    # `source_pending` is still echoed for API compatibility.
+    _start_source_completion(kb_id, source)
     detail = get_kb_detail(kb_id)
     detail["source_pending"] = source
     return detail
+
+
+def _start_source_completion(
+    kb_id: str, source: dict[str, Any], timeout_s: int = 900, interval_s: int = 10
+) -> threading.Thread:
+    """Wait out the KB's CREATING state off-request, then create its data source.
+
+    Owns its own client (a request's client must not outlive the request) and
+    never raises: a failure here leaves the KB ACTIVE with zero data sources,
+    which the detail view surfaces with a one-click repair."""
+
+    def run() -> None:
+        deadline = time.time() + timeout_s
+        try:
+            client = agent_client()
+            while time.time() < deadline:
+                status = client.get_knowledge_base(knowledgeBaseId=kb_id)["knowledgeBase"].get(
+                    "status"
+                )
+                if status == "ACTIVE":
+                    _create_data_source(client, kb_id, source)  # idempotent
+                    logger.info("kb %s: data source created after CREATING", kb_id)
+                    return
+                if status in {"FAILED", "DELETING"}:
+                    logger.warning("kb %s: giving up source setup, status %s", kb_id, status)
+                    return
+                time.sleep(interval_s)
+            logger.warning(
+                "kb %s: still not ACTIVE after %ss — source not created", kb_id, timeout_s
+            )
+        except Exception:  # background best-effort; the UI repair path is the backstop
+            logger.exception("kb %s: background data-source creation failed", kb_id)
+
+    thread = threading.Thread(target=run, name=f"kb-source-{kb_id}", daemon=True)
+    thread.start()
+    return thread
 
 
 def upload_files(kb_id: str, files: list[tuple[str, bytes]]) -> list[str]:

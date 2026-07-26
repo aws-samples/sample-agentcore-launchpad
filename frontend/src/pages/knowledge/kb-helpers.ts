@@ -1,9 +1,5 @@
 import type { ChipTone } from "../../components";
 
-/** sessionStorage key holding the source to replay once a slow-creating KB
- *  turns ACTIVE (the create endpoint returns before the data source exists). */
-export const pendingSourceKey = (kbId: string) => `kb-pending-source:${kbId}`;
-
 /** Tone for data-source / ingestion-job / document statuses (raw AWS enums). */
 export function resourceTone(status: string): ChipTone {
   const s = status.toUpperCase();

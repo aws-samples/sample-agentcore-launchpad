@@ -7,7 +7,6 @@ import {
   KbStatusChip,
   type DataSource,
   type IngestionJob,
-  type KBSourceBody,
   type KnowledgeBaseDetail,
   type QueryResultItem,
 } from "../KnowledgeBases";
@@ -15,7 +14,6 @@ import {
   extractConflictAgents,
   formatBytes,
   kbErrorMessage,
-  pendingSourceKey,
   resourceTone,
 } from "./kb-helpers";
 import { SourcePicker, type SourceMode } from "./SourcePicker";
@@ -219,6 +217,7 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
   const [addBucket, setAddBucket] = useState("");
   const [addPrefix, setAddPrefix] = useState("");
   const [addBusy, setAddBusy] = useState(false);
+  const [repairing, setRepairing] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
 
   // per-source sync + delete
@@ -253,36 +252,21 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
   }, [kbId]);
 
   // Create-flow automation guards (fire each step at most once per mount).
-  const replayingSource = useRef(false);
   const autoSynced = useRef<Set<string>>(new Set());
+  const sourceWaitTicks = useRef(0);
 
-  // Slow-path create left the source unset (KB was still CREATING) — replay it
-  // now that the KB is ACTIVE. The source travels via sessionStorage from CreateView.
-  const replayPendingSource = useCallback(
-    async (d: KnowledgeBaseDetail): Promise<boolean> => {
-      const raw = sessionStorage.getItem(pendingSourceKey(kbId));
-      if (!raw || replayingSource.current) return Boolean(raw);
-      if (String(d.status).toUpperCase() !== "ACTIVE" || d.data_sources.length > 0) {
-        return true; // still pending — keep polling
-      }
-      replayingSource.current = true;
-      try {
-        const res = await fetch(`/api/knowledge-bases/${kbId}/data-sources`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(JSON.parse(raw) as KBSourceBody),
-        });
-        if (res.ok) {
-          sessionStorage.removeItem(pendingSourceKey(kbId));
-          toast(t("knowledge.detail.sources.autoCreated"));
-        }
-      } finally {
-        replayingSource.current = false;
-      }
-      return true;
-    },
-    [kbId, t, toast],
-  );
+  // A slow create (KB still CREATING when the request returned) has its data
+  // source finished by a backend thread, so nothing is replayed from here.
+  // Keep polling for a bounded window so the source appears on its own; past
+  // that the banner below offers a manual repair.
+  const awaitingBackendSource = useCallback((d: KnowledgeBaseDetail): boolean => {
+    if (String(d.status).toUpperCase() !== "ACTIVE" || d.data_sources.length > 0) {
+      sourceWaitTicks.current = 0;
+      return false;
+    }
+    sourceWaitTicks.current += 1;
+    return sourceWaitTicks.current <= 40; // ~3.5 min at the 5 s poll interval
+  }, []);
 
   // PRD: the first ingestion starts automatically once a data source is
   // AVAILABLE — trigger it when a source has no jobs yet.
@@ -317,7 +301,7 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
     const tick = async () => {
       const d = await loadDetail();
       if (cancelled || !d) return;
-      const pending = await replayPendingSource(d);
+      const pending = awaitingBackendSource(d);
       const synced = await autoFirstSync(d);
       if (cancelled) return;
       if (isInFlight(d) || pending || synced) {
@@ -329,7 +313,7 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [loadDetail, refreshKey, replayPendingSource, autoFirstSync]);
+  }, [loadDetail, refreshKey, awaitingBackendSource, autoFirstSync]);
 
   const saveDesc = async () => {
     setSavingDesc(true);
@@ -376,6 +360,32 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
       toast(t("common.actionFailed", { msg: String(err) }));
     } finally {
       setDeleting(false);
+    }
+  };
+
+  // Repair for a KB that ended up ACTIVE with no data source (the backend
+  // completion thread died with the process, or the KB predates that fix).
+  // Idempotent server-side, so a stray click cannot create a second source.
+  const repairMissingSource = async () => {
+    setRepairing(true);
+    try {
+      const res = await fetch(`/api/knowledge-bases/${kbId}/data-sources`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "upload" }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { message?: string };
+      if (!res.ok) {
+        toast(t("common.actionFailed", { msg: kbErrorMessage(body, res.status) }));
+        return;
+      }
+      toast(t("knowledge.detail.sources.autoCreated"));
+      sourceWaitTicks.current = 0;
+      refresh();
+    } catch (err) {
+      toast(t("common.actionFailed", { msg: String(err) }));
+    } finally {
+      setRepairing(false);
     }
   };
 
@@ -688,6 +698,27 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
           <div className="note" style={{ marginBottom: 12 }}>
             <span className="i">[i]</span>
             <span>{t("knowledge.detail.sources.provisioning")}</span>
+          </div>
+        )}
+
+        {/* ACTIVE with no source: the backend is still finishing it, or its
+            completion was lost (process restart / KB predating that fix). Say so
+            and offer the repair rather than looking like an empty KB. */}
+        {!provisioning && detail.data_sources.length === 0 && (
+          <div
+            className="note"
+            style={{ marginBottom: 12, borderColor: "var(--warn)" }}
+            data-testid="kb-missing-source"
+          >
+            <span className="i">!</span>
+            <span>
+              {t("knowledge.detail.sources.missingSource")}{" "}
+              <Btn onClick={() => void repairMissingSource()} disabled={repairing}>
+                {repairing
+                  ? t("knowledge.detail.sources.adding")
+                  : t("knowledge.detail.sources.repairSource")}
+              </Btn>
+            </span>
           </div>
         )}
 

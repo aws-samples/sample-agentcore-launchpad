@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/launchpad/managed-kb.md", "reason": "Verify the spec still describes reality after data-source completion moved into the backend."}
+{"file": "docs/lab/README.md", "reason": "Check no claude-sonnet-4-6 remains in guide text and the provenance claim matches the re-captured evidence."}
