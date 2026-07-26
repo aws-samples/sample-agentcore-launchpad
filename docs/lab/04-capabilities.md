@@ -1,13 +1,13 @@
 # 第 04 章 · 挂载能力：Registry 资产与托管知识库
 
-> **目标**：给 `lab-fund-advisor` 装上"业务知识"和"行为规范"——把基金产品 PDF 做成托管知识库
+> **目标**：给 `lab-fund-advisor` 装上"业务知识"和"行为规范"：把基金产品 PDF 做成托管知识库
 > （AgentCore 之外的 Bedrock Managed RAG），把一份技能登记进 AgentCore Registry 并走完
 > `DRAFT → 提交 → 批准`，最后两者一起挂到 Harness 上并重新发布。
 >
 > **前置条件**：完成[第 03 章](03-deploy-harness.md)，`lab-fund-advisor` 为 active。
 > 准备好实验素材 PDF：[`assets/Morgan_Stanley_Oct_21_(EMEA).pdf`](assets/Morgan_Stanley_Oct_21_%28EMEA%29.pdf)
 > （MS INVF Emerging Leaders Equity Fund 2021 年 8 月产品资料，40+ 页，含团队、AUM、投资流程、
-> 持仓与业绩数据——第 08 章的评估基准答案就从这份材料里来）。
+> 持仓与业绩数据；第 08 章的评估基准答案就从这份材料里来）。
 >
 > **预计耗时**：约 15 分钟（本次实测：KB 创建到 ACTIVE 约 2 分钟，ingestion 2 分 15 秒，
 > 技能登记+审批 < 1 分钟，Harness 重新发布 28 秒）。
@@ -33,7 +33,7 @@
    | 数据源 | `上传文件` |
    | 文件 | `Morgan_Stanley_Oct_21_(EMEA).pdf` |
 
-   > ⚠️ **描述不是装饰**：Agent 是靠这段描述决定「什么时候该去查这个知识库」的。写清楚
+   > **注意**：描述会影响 Agent 何时查询这个知识库。写清楚
    > 「里面有什么、什么问题该查它」，检索命中率会明显不同。
 
 ![创建知识库](images/04-kb-create.png)
@@ -52,7 +52,7 @@ for k in json.load(sys.stdin)['items']: print(k['kb_id'],k['name'],k['status'],k
 # 2MBGUNVMS4 lab-fund-kb ACTIVE 1
 ```
 
-> 📌 记下 KB id，本次是 `2MBGUNVMS4`，后面记作 `<KB_ID>`。
+> **记录**：记下 KB id，本次是 `2MBGUNVMS4`，后面记作 `<KB_ID>`。
 
 ## 4.2 确认 ingestion 与文档索引状态
 
@@ -79,11 +79,13 @@ TEXT_INDEXED · 索引完成 07:54:07`。这一层能区分「文档没上传」
 | ingestion COMPLETE | 07:53:59 |
 | 文档状态 `TEXT_INDEXED` | 07:54:07 |
 
-> KB 创建与 ingestion 都是**异步**的，控制台不会替你阻塞等待。别在 `CREATING` 状态就去挂载——
+> KB 创建与 ingestion 都是**异步**的，控制台不会替你阻塞等待。不要在 `CREATING` 状态挂载，
 > 挂载列表只显示 `ACTIVE` 的 KB。
 >
-> **数据源是后端在后台补齐的**：创建请求最多等 60 秒，KB 通常要 1.5–3 分钟才 ACTIVE，所以多数情况下接口先返回、数据源随后由后端线程创建（你可以放心离开页面）。
-> 如果 KB 已是 `ACTIVE` 却**一个数据源都没有**，详情页会给出橙色告警和 `补建数据源` 按钮——点它即可（重复点不会建出两个数据源）。
+> **数据源由后端在后台补齐**：创建请求最多等 60 秒，KB 通常要 1.5–3 分钟才 ACTIVE。
+> 多数情况下接口先返回，数据源随后由后端线程创建，你可以离开页面。
+> 如果 KB 已是 `ACTIVE` 却**一个数据源都没有**，详情页会给出橙色告警和 `补建数据源` 按钮。
+> 点击即可，重复点击不会建出两个数据源。
 
 ## 4.3 用检索 Playground 验证质量（挂载前必做）
 
@@ -108,7 +110,7 @@ As of August 31, 2021 (USD) …
 ```
 
 **预期结果**：至少有一条 score 明显高于其他的 chunk，且内容与问题相关。如果检索回来的都是
-无关片段，先修文档或描述，别急着挂载——Agent 的回答质量上限就在这里。
+无关片段，先修文档或描述再挂载。Agent 的回答质量受检索结果直接限制。
 
 ## 4.4 登记一份技能到 AgentCore Registry
 
@@ -179,7 +181,7 @@ for r in json.load(sys.stdin)['records']:
 并生成了 `skillDefinition`（含 S3 路径与文件清单）。*
 
 ![已提交待审批](images/04-registry-submitted.png)
-*图 4-9：`已提交` 状态下出现 `批准 · 发布` / `驳回` 两个动作——这就是审批闸门。*
+*图 4-9：`已提交` 状态下出现 `批准 · 发布` / `驳回` 两个审批动作。*
 
 3. **点击** `批准 · 发布`。
 
@@ -191,13 +193,13 @@ for r in json.load(sys.stdin)['records']:
 # F6Qol0d8HKPD APPROVED 1.0.0
 ```
 
-> 状态机注意两点：**`DEPRECATED` 是终态**，停用后不能再改回来；而更新一条记录
+> **注意**：`DEPRECATED` 是终态，停用后不能再改回来；更新一条记录
 > （`UpdateRegistryRecord`）会把状态**重置回 DRAFT**，需要重新走审批。
 
 ## 4.6 把知识库 + 技能挂到 Harness 并重新发布
 
 1. **打开** `02 Agent 管理`，在「现有 AGENT」表里找到 `lab-fund-advisor`，点 **编辑**。
-2. 顶部会出现提示：*正在编辑 "lab-fund-advisor"。重新发布会就地更新——AgentCore 在同一资源上
+2. 顶部会出现提示：*正在编辑 "lab-fund-advisor"。重新发布会就地更新。AgentCore 在同一资源上
    发布一个新版本（ARN 不变，DEFAULT 端点自动切换到新版本），几乎无停机。*
 3. **勾选** 技能 `lab-fund-disclaimer · skill`（刚批准的那个）与知识库 `lab-fund-kb · kb`。
 
@@ -238,12 +240,12 @@ skills ['s3://launchpad-artifacts-434444145045-us-west-2/skills/lab-fund-disclai
 kbs ['lab-fund-kb']
 ```
 
-> **知识库是怎么接上去的**：平台维护一个专用网关 `launchpad-kb-gw`，为每个 KB 建一个
+> **知识库挂载路径**：平台维护一个专用网关 `launchpad-kb-gw`，为每个 KB 建一个
 > `Retrieve` target、为每个挂载的 Agent 建一个 Agentic 检索 target，Harness 通过它调用检索。
-> 这也是为什么 KB 只能挂 Harness——其他方式没有这条挂载路径。
+> KB 只能挂 Harness，其他方式没有这条挂载路径。
 >
 > 另外，`UpdateHarness` 的语义是**省略即保留**（不是清空），但 Registry 记录的
-> `UpdateRegistryRecord` 相反——省略字段会被重置。这类差异都封在后端 wrapper 里，
+> `UpdateRegistryRecord` 相反，省略字段会被重置。这类差异都封在后端 wrapper 里，
 > 但你手写脚本调 AWS 时要小心。
 
 **一个会让人困惑的副作用**：重新发布时 `register` 阶段会刷新 A2A 记录

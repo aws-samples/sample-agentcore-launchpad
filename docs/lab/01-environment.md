@@ -29,8 +29,8 @@ aws sts get-caller-identity
 ```json
 {
     "UserId": "AROAWKJXDSGK5D7ZWT4CB:i-0785d8d0b8b950448",
-    "Account": "434444145045",
-    "Arn": "arn:aws:sts::434444145045:assumed-role/admin_role_for_workshop/i-0785d8d0b8b950448"
+    "Account": "12345678900",
+    "Arn": "arn:aws:sts::12345678900:assumed-role/admin_role_for_workshop/i-0785d8d0b8b950448"
 }
 ```
 
@@ -79,7 +79,7 @@ make bootstrap        # = cd backend && uv run python ../scripts/bootstrap.py
 `resources.*`（gateway_id / registry_id / memory_id / execution_role_arn …）。这个文件
 **已被 gitignore**，其中含演示用户密码，按本地机密对待。
 
-> ⚠️ 本章的 bootstrap 步骤在撰写本指南时**未重新实跑**（实验环境早已完成引导，重跑不会
+> **注意**：本章的 bootstrap 步骤在撰写本指南时**未重新实跑**（实验环境早已完成引导，重跑不会
 > 产生新信息）。命令与产物清单依据 `docs/setup.zh-CN.md` 以及当前 `config/launchpad.yaml`
 > 中实际存在的键值校对。
 
@@ -115,7 +115,7 @@ curl -s http://127.0.0.1:8000/api/health
 ![控制台总览](images/01-overview.png)
 *图 1-1：总览页。左侧是 11 个模块，右侧「服务健康」逐项反映真实 AgentCore 资源状态。*
 
-需要认识的三块信息：
+先看三块信息：
 
 1. **左侧导航 = 实验路线图**
    `01 总览` → `02 Agent 管理`（创建/部署/重新发布） → `03 注册中心`（Registry 资产）
@@ -123,13 +123,13 @@ curl -s http://127.0.0.1:8000/api/health
    `10 支付` / `11 设置` 属第二阶段，本实验不涉及。
 2. **服务健康面板**：Runtime / Gateway / Memory / Registry / Policy / Evaluation /
    Observability 逐项显示 `就绪` 与真实资源 id（如 `launchpad_memory-hurAGN3EnF`）。
-   任何一项不是绿色，说明 bootstrap 未完成或权限不足——先解决它再往下做。
+   任何一项不是绿色，都说明 bootstrap 未完成或权限不足。先解决它再往下做。
 3. **左下角环境信息**：`区域 us-west-2`、`SDK bedrock-agentcore 1.17.0`、
    `CLI agentcore 0.21.1`、`存储 sqlite · 本地`。
 
 > 顶部四个统计卡（已部署 Agent / 活跃会话 / 注册资产 / 评估通过率）读的是**本地台账 +
-> AWS 真实状态**。如果你的账号是全新的，这些数字都是 0，属正常现象——它们会随着你完成
-> 后面的章节逐步涨上来。
+> AWS 真实状态**。如果你的账号是全新的，这些数字都是 0，属正常现象；完成后续章节后，
+> 数字会随资源和流量一起变化。
 
 ## 1.6 认识后端 API（可选但建议）
 
@@ -146,8 +146,8 @@ curl -s http://127.0.0.1:8000/api/health
 | `POST /api/eval/runs` | 批量评估与洞察 | 08 |
 | `POST /api/experiments/{id}/action` | A/B 实验分步动作 | 09 |
 
-> `/api/*` 是控制台内部接口，`/v1/*` 是给外部系统的公共接口——两者共用同一条 invoke
-> 链路，差别只在鉴权。这一点在第 06 章会亲手验证。
+> `/api/*` 是控制台内部接口，`/v1/*` 是给外部系统的公共接口。两者共用同一条 invoke
+> 链路，差别只在鉴权。第 06 章会验证这一点。
 
 ---
 

@@ -1,6 +1,6 @@
 # 第 07 章 · 可观测性（Transaction Search · 追踪 · Token 与成本）
 
-> **目标**：看懂平台的三层遥测视图——仪表盘（趋势与成本）、会话（业务视角的对话还原）、
+> **目标**：看懂平台的三层遥测视图：仪表盘（趋势与成本）、会话（业务视角的对话还原）、
 > 追踪（技术视角的 span 瀑布图），并用它定位「一次回答慢在哪、花了多少 token」。
 >
 > **前置条件**：完成第 05、06 章，已经产生真实流量。**span 有摄取延迟**，刚聊完等 1–2 分钟。
@@ -8,7 +8,7 @@
 > **预计耗时**：约 15 分钟。
 >
 > **本章将创建的 AWS 资源**：无（只读 CloudWatch Logs Insights 与 CloudWatch 指标；
-> 注意 Logs Insights **按扫描量计费**）。
+> Logs Insights **按扫描量计费**）。
 
 ---
 
@@ -28,7 +28,7 @@
 **打开** `07 可观测` → `仪表盘`，右上角选时间范围（`1H / 6H / 24H / 7D`）。
 
 ![可观测仪表盘](images/07-obs-dashboard.png)
-*图 7-1：真实数据。5 个统计卡 + 4 张图。注意 24H 窗口会把当天**所有** Agent 的调用都算进来——
+*图 7-1：真实数据。5 个统计卡 + 4 张图。24H 窗口会把当天**所有** Agent 的调用都算进来，
 本次截图里就同时含实验室之外的活动，以及切换默认模型前后的两种模型。*
 
 本次实测读数（24H 范围）：
@@ -49,7 +49,7 @@ agentic-lab-fund-advisor___AgenticRetrieveStream     2 次调用 · 100%
 skills                                               1 次调用 · 100%
 ```
 
-三个必须知道的细节：
+读取仪表盘时注意：
 
 - **60 秒 TTL 缓存**：视图按 (视图, 时间范围) 缓存 60 秒（右上角会显示 `缓存于 N 秒前`），
   因为 Logs Insights 按扫描量计费。点 `⟳ 刷新` 强制绕过缓存。
@@ -75,11 +75,11 @@ skills                                               1 次调用 · 100%
 c50a8d66…  lab-fund-advisor    2 trace  5 llm  46,115 tok  $0.153   07:59
 ```
 
-> 一眼就能看出**知识库的代价**：`lab-fund-advisor` 两轮对话用了 46K token（$0.153），
-> 而没有 KB 的 `lab-fund-assistant` 两轮只用了 2.7K（$0.018）——检索回来的 chunk 会全部进上下文。
-> 这类"效果 vs 成本"的权衡，就是第 08/09 章要用数据来做决定的原因。
+> 这组数据也反映了**知识库的成本**：`lab-fund-advisor` 两轮对话用了 46K token（$0.153），
+> 没有 KB 的 `lab-fund-assistant` 两轮只用了 2.7K（$0.018）。检索回来的 chunk 会全部进入上下文。
+> 第 08/09 章会继续用数据衡量这类"效果 vs 成本"的取舍。
 >
-> 另外注意 `45ef5086…` 与 `2dd5570a…` 这两个会话——它们是第 06 章用 `curl` 打的
+> `45ef5086…` 与 `2dd5570a…` 这两个会话来自第 06 章的 `curl` 调用
 > （跳过了那章就不会有这两行），
 > **公共 API 的流量同样进遥测**，这也再次印证两个入口共用一条链路。
 
@@ -125,8 +125,8 @@ POST /invocations                                     17.9s
 └─ Bedrock AgentCore.GetResourceOauth2Token            743ms   ← 网关出站鉴权
 ```
 
-**这就是"可观测"的价值**：17.9 秒里 15.8 秒在 Agent 循环，其中四次模型调用占 12.1 秒、
-两次 KB 检索占 1.9 秒——想优化延迟，该动的是"减少循环轮次"，不是"换更快的向量库"。
+从这条 trace 可以直接定位延迟：17.9 秒里有 15.8 秒在 Agent 循环，其中四次模型调用占 12.1 秒、
+两次 KB 检索占 1.9 秒。要优化延迟，应先减少循环轮次，而不是先换向量库。
 
 点某个 span 打开右侧抽屉：
 
@@ -135,7 +135,7 @@ POST /invocations                                     17.9s
 Token 用量（输入 2,972 / 输出 131 / 缓存读写 0）、预估成本 $0.007，
 以及**完整的输入消息与输出消息**。*
 
-抽屉里的输入消息暴露了平台自动注入的系统提示词增量——这段是知识库挂载的产物：
+抽屉里的输入消息包含平台自动注入的系统提示词增量，这段内容由知识库挂载生成：
 
 ```
 ## Knowledge bases
@@ -146,7 +146,7 @@ Mounted knowledge bases:
 - lab-fund-kb (tool `lab-fund-kb-2mbgunvms4___Retrieve`) — 摩根士丹利新兴市场领先企业股票基金…
 ```
 
-> **这就是第 04 章那句"描述会引导 Agent 何时检索"的物理实现**：你填的 KB 描述被原样拼进系统提示词。
+> 第 04 章填写的 KB 描述会被原样拼进系统提示词，用于引导 Agent 判断何时检索。
 
 ## 7.5 交叉跳转
 
@@ -167,7 +167,7 @@ Mounted knowledge bases:
 | 托管 Harness | 内部 Strands 运行时，`service.name = harness_{name}.DEFAULT`，scope 为 `strands.telemetry.tracer` |
 | Claude SDK 容器 | **手工发射**：`claude` CLI 是子进程，ADOT 自动埋点看不到它，所以模板里的 `tracing.py` 自己造 `invoke_agent` / `execute_tool` / `chat` span |
 
-> 容器方式的 scope 名必须保持 `strands.telemetry.tracer`——AgentCore 只解析受支持的
+> 容器方式的 scope 名必须保持 `strands.telemetry.tracer`，AgentCore 只解析受支持的
 > instrumentation scope 发出的 span/event。这个 `tracing.py` 也正是本次实跑撞到那个容器启动
 > 失败缺陷的位置（已修复，见[第 05 章末](05-chat-memory.md#关于容器-agent-调用失败本次实测)）：
 > 修复后它照样发出 `invoke_agent` 与 `chat` span，容器 Agent 在瀑布图里可见。

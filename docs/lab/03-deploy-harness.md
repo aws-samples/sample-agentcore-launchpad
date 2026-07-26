@@ -1,7 +1,7 @@
 # 第 03 章 · 另外两种创建方式：托管 Harness 与 Claude SDK 容器
 
-> **目标**：亲手体验另外两条创建路径——免构建的**托管 Harness**（方式B）与经 CodeBuild
-> 打包的 **Claude Agent SDK 容器**（方式A），并理解「同一条五阶段流水线、不同阶段实现」。
+> **目标**：体验另外两条创建路径：免构建的**托管 Harness**（方式B）与经 CodeBuild
+> 打包的 **Claude Agent SDK 容器**（方式A），并理解两者如何复用同一条五阶段流水线。
 >
 > **前置条件**：完成[第 02 章](02-deploy-runtime.md)。容器方式需要账号里有
 > `launchpad-agent-builder` CodeBuild 项目（`make bootstrap` 已创建）。
@@ -26,7 +26,7 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
    | AGENT 名称 | `lab-fund-advisor` |
    | 模型 | `global.anthropic.claude-sonnet-5`（默认） |
    | 系统提示词 | `你是摩根士丹利新兴市场领先企业股票基金（MS INVF Emerging Leaders Equity Fund）的产品知识助手。只依据挂载的基金资料回答问题；资料中没有的内容，明确说明无法确认，不要猜测数字。` |
-   | 工具 / 技能 / 知识库 | **本章都不选**——第 04 章再挂载 |
+   | 工具 / 技能 / 知识库 | **本章都不选**，第 04 章再挂载 |
    | 记忆 | 短期 + 长期都开启 |
 
 ![Harness 配置页](images/03-harness-config.png)
@@ -34,7 +34,7 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
 `hr-database`）与 MCP 服务器（`aws-knowledge`、`deepwiki`），技能区列出 Registry 里已审批的
 技能，知识库区列出 ACTIVE 的托管 KB。*
 
-> 注意工具区那条提示：**选择一个 gateway 条目会挂载整个 AgentCore Gateway 及其全部工具**。
+> **注意**：选择一个 gateway 条目会挂载整个 AgentCore Gateway 及其全部工具。
 > Registry 审批只决定「目录可见性」，不是按工具的授权边界；按动作授权要用第 11 章的 Cedar 策略。
 
 3. **点击** `▲ 启动 AGENT`。
@@ -71,9 +71,9 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
 }
 ```
 
-> 📌 记下这个 id，后面记作 `<ADVISOR_ID>`。
+> **记录**：记下这个 id，后面记作 `<ADVISOR_ID>`。
 
-**关于 Harness 的两个重要事实**（第 08–10 章会用到）：
+**Harness 的两个约束**（第 08–10 章会用到）：
 
 - Harness 背后确实有一个 Runtime（名字形如 `harness_lab_fund_advisor`），但它是**被托管的**：
   直接 `InvokeAgentRuntime` 会报 `ValidationException … managed by a harness`，必须走
@@ -95,14 +95,14 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
    | AGENT 名称 | `lab-fund-packager` |
    | 系统提示词 | `你是基金材料分析助手，负责把基金产品文档整理成结构化摘要，可调用子 Agent 与技能完成多步任务。` |
    | 技能 | 勾选**任意一个已发布（APPROVED）的技能**（本次实跑勾的是 `meeting-summarizer`；
-     你环境里可能是别的名字——第 04 章会自己登记一个，这里只是演示技能会被物理打进镜像） |
+     你环境里可能是别的名字。第 04 章会自己登记一个，这里只是演示技能会被物理打进镜像） |
    | 文件系统 | 保持 `托管会话存储 ✓`，挂载路径 `/mnt/workspace` |
 
 ![容器配置页](images/03-container-config.png)
 *图 3-3：容器配置页。除了技能，这里还能填自定义 MCP 服务器 JSON、挂载 S3 Files 或 EFS。
 「托管会话存储」让同一会话在停止/恢复之间保留 `/mnt` 文件（闲置 14 天过期）。*
 
-3. **点击** `▲ 启动 AGENT`，然后观察 `打包` 阶段——这次它真的在构建。
+3. **点击** `▲ 启动 AGENT`，然后观察 `打包` 阶段：这次它真的在构建。
 
 ![容器构建中](images/03-container-build.png)
 *图 3-4：`打包` 阶段逐步打印 CodeBuild 的 phase：`QUEUED → PRE_BUILD → BUILD → POST_BUILD
@@ -125,13 +125,13 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
 {"stage":"register","msg":"a2a record created · G5ccx6y2DjOR · auto-submitted"}
 ```
 
-> `tracing.py` 出现在构建上下文里是有原因的：Claude SDK 容器把 `claude` CLI 当子进程跑，
+> `tracing.py` 出现在构建上下文里，是因为 Claude SDK 容器把 `claude` CLI 当子进程跑，
 > ADOT 自动埋点看不见它，所以生成的 Agent **手工发射** gen_ai 遥测（`invoke_agent` 根 span、
-> 每次工具调用一个 `execute_tool`、一个聚合 `chat` span 带 token 用量）。这就是第 07 章
-> 容器 Agent 也能出现在追踪瀑布图里的原因。
+> 每次工具调用一个 `execute_tool`、一个聚合 `chat` span 带 token 用量）。第 07 章因此也能
+> 在追踪瀑布图中显示容器 Agent。
 
-> ⚠️ **容器方式部署完成后，务必手工调一次再往下走。** 五阶段全绿只说明镜像推上去了、
-> Runtime 到了 `READY`，**不代表容器进程能起来**——平台目前没有部署后探活。本次实跑就在这里
+> **注意**：容器方式部署完成后，务必手工调一次再往下走。五阶段全绿只说明镜像已推送、
+> Runtime 到了 `READY`，**不代表容器进程能起来**。平台目前没有部署后探活。本次实跑就在这里
 > 撞到一个真实缺陷（依赖漂移导致容器启动即崩，已修复），过程见[第 05 章末](05-chat-memory.md#关于容器-agent-调用失败本次实测)。
 
 ## 3.3 三种方式对照（实测数据）
@@ -146,10 +146,10 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
 | `deploy` | `CreateHarness` | `CreateAgentRuntime(containerConfiguration)` | `CreateAgentRuntime` |
 | `register` | A2A 记录，自动提交 | A2A 记录，自动提交 | A2A 记录，自动提交 |
 | 落在哪 | Harness 服务 | AgentCore Runtime | AgentCore Runtime |
-| 挂知识库 | ✅ | ❌ | ❌ |
-| 技能进镜像 | 声明式挂载 | ✅ `.claude/skills/` | ❌ |
-| 配置包 A/B | ❌ | ❌ | ✅ |
-| 金丝雀 | ❌ | ❌（后续支持） | ✅ |
+| 挂知识库 | 支持 | 不支持 | 不支持 |
+| 技能进镜像 | 声明式挂载 | 支持，位于 `.claude/skills/` | 不支持 |
+| 配置包 A/B | 不支持 | 不支持 | 支持 |
+| 金丝雀 | 不支持 | 暂不支持 | 支持 |
 
 **本章结束时，三个 Agent 应该都是 `运行中`**：
 

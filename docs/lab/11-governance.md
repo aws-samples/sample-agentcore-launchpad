@@ -1,6 +1,6 @@
 # 第 11 章 · 治理：Gateway 纳管、Cedar 策略与审计
 
-> **目标**：把"谁能调用哪个工具动作"变成可管理、可审计的策略。做法是：读懂 Gateway 清单 →
+> **目标**：把"谁能调用哪个工具动作"变成可管理、可审计的策略：读懂 Gateway 清单 →
 > 用**只加标签**的方式纳管一个 Gateway → 在 Cedar 策略编辑器里创建一条 `LOG_ONLY` 策略 →
 > 查看决策证据与不可变审计日志 → 理解从 `LOG_ONLY` 到 `ENFORCE` 的证据门禁。
 >
@@ -11,7 +11,7 @@
 > **本章将创建的 AWS 资源**：1 条 Cedar 策略（`LOG_ONLY`，不影响现网放行）、
 > 一个 Gateway 上的两个纳管标签（本章内会移除）。
 >
-> ⚠️ 本章操作的是**共享**资源（`launchpad-gw` 及其策略引擎）。请严格按步骤做：
+> **注意**：本章操作的是**共享**资源（`launchpad-gw` 及其策略引擎）。请严格按步骤做：
 > 新建策略一律先 `LOG_ONLY`，不要在实验环境里直接把某个 Gateway 切到 `ENFORCE`。
 
 ---
@@ -33,7 +33,7 @@
 | `TestGateway0c909b00` | 0 | 仅目录可见 | 未挂载 | 未纳管 |
 | 其余 10 个（Demo*/Semantic*/ac-*） | 1–10 | 仅目录可见 | 未挂载 | 未纳管 |
 
-> `launchpad-kb-gw` 就是第 04 章挂知识库时平台自动建的那个连接器网关——它的 4 个目标对应
+> `launchpad-kb-gw` 是第 04 章挂知识库时平台自动创建的连接器网关。它的 4 个目标对应
 > 每个 KB 的 `Retrieve` 与每个 Agent 的 Agentic 检索。
 
 ## 11.2 只读打开一个 Gateway
@@ -44,18 +44,18 @@
 *图 11-2：`launchpad-gw` 详情。四块：Gateway 身份、Registry 发布、策略引擎与模式、
 策略列表 + 目标与精确动作（底部还给出可直接跑的 `curl` MCP 调用示例）。*
 
-值得注意的信息：
+详情里可以核对：
 
 - **鉴权器 `CUSTOM_JWT`**，执行角色 `launchpad-gateway-role`
 - **Registry 发布**：`GATEWAY 记录 未入目录`，`旧记录 2`（`office-facts`、`hr-database` 都是
   APPROVED 的按目标记录）
 - **策略引擎**：`launchpad_pe` · 引擎状态 ACTIVE · **Gateway 模式 ENFORCE** · 策略数 2
 - **IAM 挂载预检 `PASS`**，并直接给出所需的 IAM 内联策略 JSON（`GetPolicyEngine`、
-  `AuthorizeAction`、`PartiallyAuthorizeActions`）——预检失败时照它修就行
+  `AuthorizeAction`、`PartiallyAuthorizeActions`）。预检失败时按这份 JSON 修正
 
 ## 11.3 纳管：只加两个标签，不动任何资源
 
-平台把"我要管理这个 Gateway"表达为**两个 durable 标签**，此外什么都不改：
+平台用**两个 durable 标签**标记纳管状态，除此之外不修改资源：
 
 ```text
 agentcore-launchpad:managed    = true
@@ -67,7 +67,7 @@ agentcore-launchpad:managed-by = agentcore-launchpad
 1. 打开它的详情。
 
 ![未纳管的 Gateway](images/11-gw-unmanaged.png)
-*图 11-3：未纳管状态。注意此时策略引擎显示 `未挂载`，并提供 `创建并以 LOG_ONLY 挂载` 按钮——
+*图 11-3：未纳管状态。此时策略引擎显示 `未挂载`，并提供 `创建并以 LOG_ONLY 挂载` 按钮。
 新建引擎、Gateway 挂载都从 LOG_ONLY 开始。*
 
 2. 点 `纳管`，在确认弹窗里确认。
@@ -99,7 +99,7 @@ aws bedrock-agentcore-control list-tags-for-resource \
 }
 ```
 
-**只移除了那两个标签**——不会解绑或删除 Gateway、引擎、策略或 Registry 记录。
+取消纳管只移除这两个标签，不会解绑或删除 Gateway、引擎、策略或 Registry 记录。
 
 > 为什么要有这个开关：Registry 导入与 Policy 变更**要求 Gateway 带这两个标签**（外加一次新鲜的
 > `updatedAt` 校验）。这样平台就不会误改账号里别人的 Gateway。
@@ -122,14 +122,14 @@ curl -s http://127.0.0.1:8000/api/governance/gateways/launchpad-gw-em0yuqmmdp/re
 
 即：导入会生成**一条**包含整个 Gateway 端点 + 完整工具目录的 MCP 记录。
 
-**两条必须记住的边界**：
+**两条边界**：
 
 1. **Registry 审批 ≠ 授权**。审批只决定"这条记录在目录里可见/可挂载"；挂载一条 Gateway 记录
    等于把**整个 Gateway 及其全部工具**给了 Harness。按动作的授权只能靠 Cedar 策略。
 2. 导入 Gateway 记录后，旧的按目标记录（`office-facts` / `hr-database`）**仍然存在**，
-   要显式点 `停用选中的旧记录` 才退休——而且 `DEPRECATED` 是**终态**，停用不可回退。
+   要显式点 `停用选中的旧记录` 才退休。`DEPRECATED` 是**终态**，停用不可回退。
 
-> ⚠️ 本次实验**只跑了预览，没有执行导入**（避免在共享演示账号里永久改动目录：Registry 记录一旦
+> **注意**：本次实验**只跑了预览，没有执行导入**（避免在共享演示账号里永久改动目录：Registry 记录一旦
 > `DEPRECATED` 不可恢复）。导入按钮的行为与上面预览返回的 `proposed` 完全一致。
 
 ## 11.5 Cedar 策略编辑器：创建一条 `LOG_ONLY` 策略
@@ -166,7 +166,7 @@ permit(
 
 ![Cedar 草稿](images/11-policy-draft.png)
 *图 11-6：CEDAR 审核区把 `AWS 实时版本` 与 `草稿` 并排对比（新策略时实时版本为空）。
-旁边还有「自然语言生成」——可以描述意图让模型生成 Cedar 草稿。*
+旁边还有「自然语言生成」，可以描述意图让模型生成 Cedar 草稿。*
 
 「策略发布」区显示三个事实：`GATEWAY 模式 ENFORCE`、`策略模式 LOG_ONLY`、`AWS 证据 0 / 24h`。
 点 `创建 LOG_ONLY 策略` → 确认弹窗。
@@ -174,7 +174,7 @@ permit(
 ![发布确认](images/11-policy-confirm.png)
 *图 11-7：发布前的确认。*
 
-创建结果（注意**两个不同维度的状态**）：
+创建结果包含**两个不同维度的状态**：
 
 ```json
 {"id": "lab_readonly_tools-be45dja2_p",
@@ -185,7 +185,7 @@ permit(
 ```
 
 > **`status` 与 `enforcement_mode` 不是一回事**：`status: ACTIVE` 只说明策略资源存在且可用，
-> 真正决定"会不会拦"的是 `enforcement_mode`。同理 Gateway 也有自己的模式
+> 决定"会不会拦"的是 `enforcement_mode`。同理 Gateway 也有自己的模式
 > （本例 `launchpad-gw` 是 `ENFORCE`）。**策略模式与 Gateway 挂载模式相互独立**。
 
 ### 生命周期与提升门禁
@@ -211,8 +211,8 @@ permit(
 
 界面如实显示 `AWS 策略遥测不可用 · policy_span_shape_not_verified`。
 
-> **这是有意的设计**：AgentCore Policy 决策 span 的字段形状在本账号尚未验证，平台**宁可报告
-> 不可用，也不猜着投影遥测**。这也是为什么切 `ENFORCE` 时会出现"零证据覆盖"这条路径——
+> AgentCore Policy 决策 span 的字段形状在本账号尚未验证，因此平台报告
+> 不可用，不猜测遥测字段。这也是切 `ENFORCE` 时需要"零证据覆盖"路径的原因：
 > 因为证据通道本身可能还拿不到数据。
 
 不过平台**本地决策台账**里有历史演示记录（`/api/governance/decisions`），可以看到一条真实的
@@ -232,8 +232,8 @@ Cedar 拦截：
  "tool": "hr-database___create_payout", "outcome": "ALLOW"}
 ```
 
-**同一个工具、不同身份、不同结果，且返回里带上了做出判定的策略名**——这就是 Cedar 在网关层
-按动作授权的效果。
+同一个工具在不同身份下得到不同结果，返回里还包含做出判定的策略名。这可以核对 Cedar
+在网关层的按动作授权结果。
 
 > 想自己复现这个 DENY：用 `hr-database` 这个演示 Harness Agent（它挂了 `launchpad-gw`）
 > 以 `hr-analyst` 身份去调 `create_payout`。本实验没有重跑它，因为它属于既有演示资产，
