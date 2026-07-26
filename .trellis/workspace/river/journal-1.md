@@ -1445,3 +1445,30 @@ deliberately kept out of the task commits.
 - Run the real-AWS E2E and 1440x900 / 390x844 browser QA before treating the console as demo-ready
 - Unblock research/policy-telemetry-shape.md with live aws/spans evidence, then replace the decision stub so ENFORCE stops always needing the zero-evidence override
 - Owner decision: retire POST /api/registry/sync-defaults (still used by backend/scripts/e2e_registry.py)
+
+
+## Session 22: Hands-on lab guide (live run) + container OTEL events-API fix
+
+**Date**: 2026-07-26
+**Task**: Hands-on lab guide (live run) + container OTEL events-API fix
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Ran the whole AgentCore Launchpad lifecycle against real AWS (us-west-2) and wrote it up as docs/lab/ — 12 chapters, 70 live screenshots, one continuous business thread (no-KB agent invents a holdings count -> 0.60 grounding score -> optimizer independently reaches the same conclusion -> canary gate blocks the ramp on insufficient data). Chapter 06 (public /v1 API) is marked optional after review; numbering left intact. Three steps labelled 未实跑 with reasons.
+
+The live run surfaced a real defect: newly built 方式A containers deployed green and then failed every invoke, because tracing.py imported opentelemetry._events (removed upstream after 1.39.0 deprecation) while requirements.txt pinned only aws-opentelemetry-distro>=0.10,<1. Fixed by migrating to the logs API — proven byte-identical to the old record by running both paths into one InMemoryLogExporter on otel 1.43.0 — plus pinning aws-opentelemetry-distro==0.19.* / claude-agent-sdk==0.2.* and adding shape-locking tests. event_name deliberately left unset and correlation moved to context=set_span_in_context, since the trace_id/span_id kwargs are themselves deprecated since 1.35.0. Verified on real AWS: re-published lab-fund-packager, clean start, 5.5s invoke, 7 spans, content event with the required scope and bodies.
+
+Still open and recorded in docs/issues/: no post-deploy smoke invoke (deferred by the user — it would change deploy semantics for every container agent), and the two strands templates still carry the same open aws-opentelemetry-distro range.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ea0bc4e` | (see git log) |
+| `914b6e7` | (see git log) |
+
+### Status
+
+[OK] **Completed**
