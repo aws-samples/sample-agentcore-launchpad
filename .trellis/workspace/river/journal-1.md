@@ -1327,3 +1327,121 @@ Converted 方式A (container) invoke from buffered to token-level SSE streaming.
 ### Next Steps
 
 - None - task complete
+
+
+## Session 21: Existing Gateway policy management (discovery, Gateway-level Registry, Cedar lifecycle)
+
+**Date**: 2026-07-26
+**Task**: Existing Gateway policy management (discovery, Gateway-level Registry, Cedar lifecycle)
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Extended Policy governance from the bootstrap-owned launchpad-gw to any pre-existing AgentCore MCP Gateway: tag-based managed onboarding, Gateway-level Registry records with server-derived Harness auth, a conservative Cedar lifecycle (LOG_ONLY creates, candidate cutover, inverse rollback) behind an operation mutex and updatedAt conflict checks, an immutable policy_changes audit journal, and a Governance console split into query-param subviews. Decision evidence is a deliberate honest stub pending live aws/spans shape. make verify PASS.
+
+### Main Changes
+
+#### Scope
+
+Brought Policy governance to **pre-existing** AgentCore MCP Gateways (previously only the
+bootstrap-owned `launchpad-gw` could be governed). AWS stays the source of truth for
+Gateway/Engine/Policy state; SQLite (`policy_changes`) holds only an immutable mutation
+journal and operation progress.
+
+#### Backend
+
+- `app/services/agentcore/policy.py` — paginated Gateway/target/engine/policy wrappers,
+  management-tag helpers, status polling, and `gateway_update_params()` which rebuilds the
+  full UpdateGateway payload from a fresh `GetGateway` so unrelated config is never reset.
+- `app/services/governance.py` (~1.8k lines) — discovery/detail projections, manage/unmanage
+  via `launchpad-*` tags, shared-Engine impact analysis, IAM `simulate_principal_policy`
+  preflight (never any IAM mutation), one-running-operation-per-Gateway mutex,
+  `updatedAt` optimistic conflict checks re-verified at execute time, Policy lifecycle
+  (all creates LOG_ONLY, LOG_ONLY in-place update, ACTIVE edit becomes a candidate Policy,
+  evidence-gated cutover with typed zero-evidence override, inverse rollback), and startup
+  reconciliation that only *classifies* interrupted operations (never replays).
+- `app/schemas/governance.py`, `PolicyChange` in `app/models/ledger.py` (identifier/before/
+  requested/operator/override_reason immutable via a `before_update` listener),
+  `routers/governance.py`, `iam_client()` added to the single boto3 factory.
+- Registry: one **Gateway-level** record aggregating all targets/tools, import
+  preview/idempotent import (never auto-approves), explicit legacy per-target retirement
+  gated on the Gateway record being APPROVED; `/api/registry/attachables` now returns live
+  identity, attachability, reason, and server-derived outbound-auth type.
+- Harness deployment resolves each selected Gateway server-side (`awsIam`, `none`, managed
+  launchpad OAuth); config-less legacy refs still fall back to `launchpad-gw`.
+
+#### Frontend
+
+`Governance.tsx` split into query-param subviews under `pages/governance/`
+(GatewayListView, GatewayDetailView, PolicyEditorView, DecisionView, AuditView, ToolsView
++ shared types). Policy editor has templates, exact-action picker, visibly-unverified manual
+entries, Cedar diff, findings, and generation review; Engine mode and Policy mode are
+separate controls; typed confirmations for destructive/irreversible transitions. Existing
+builtin demos moved into ToolsView unchanged. en + zh-CN keys added together.
+
+#### Decision evidence — deliberate stub
+
+`unavailable_policy_decisions()` returns `available=false,
+reason=policy_span_shape_not_verified`. Per the implement.md §0 research gate, no telemetry
+parser is written from guessed attribute names, and
+`research/policy-telemetry-shape.md` is still blocked on live `aws/spans` evidence.
+Consequence: `evidence_count` is 0, so every ENFORCE/promotion currently requires the typed
+zero-evidence override — the documented conservative behavior, not a bug.
+
+#### trellis-check findings (fixed this session)
+
+1. `external_tools_list_command` was rendered by two views and typed in `api.ts` but never
+   emitted by the backend — added (external CUSTOM_JWT only, references
+   `$GATEWAY_ACCESS_TOKEN`, never a real token).
+2. Startup reconciliation had zero test coverage and built a boto3 client even with no
+   pending rows — client made lazy/injectable, test added for all three classifications
+   plus idempotent re-run.
+3. Create Agent wizard did not state that selecting a Gateway record attaches the **whole**
+   Gateway (tooltip only) — added a visible note + `create.configure.gatewayWholeNote`.
+4. `GET /api/governance/gateways` declared `account_id`/`region` in its schema and the
+   inventory header rendered them, but the endpoint omitted them — fixed + test.
+5. `docs/api.md` was missing the generation endpoints and the `interrupted` status
+   semantics.
+
+#### Known gaps (owner decisions, not defects)
+
+- Live `tools/list` action enrichment (`source=live_tools_list`) not implemented; PRD marks
+  it optional.
+- `POST /api/registry/sync-defaults` retained as a compatibility facade (design.md §9.3);
+  `backend/scripts/e2e_registry.py` still calls it.
+- `PolicyEditorView` demands typed name + reason for *rollback* too, stricter than the
+  backend requires.
+- Real-AWS E2E (`backend/scripts/e2e_gateway_policy_management.py --confirm-real-aws`) and
+  browser visual QA at 1440x900 / 390x844 were **not** run.
+
+#### Unrelated tree state
+
+A Trellis framework auto-upgrade (0.6.5 → 0.6.9, 49 files under `.trellis/`, `.agents/`,
+`.codex/`, `.cursor/`, plus a new `.gitattributes`) appeared during this session and was
+deliberately kept out of the task commits.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7a96ef2` | (see git log) |
+| `4792b3e` | (see git log) |
+| `d69fb46` | (see git log) |
+
+### Testing
+
+- [OK] make verify: PASS (backend ruff + 728 pytest, infra ruff + pytest, frontend eslint + tsc + vite build, i18n 1548 keys parity OK)
+- [OK] trellis-check: pass-with-notes, 5 defects self-fixed and re-verified
+- [OK] NOT run: real-AWS e2e_gateway_policy_management.py --confirm-real-aws, browser visual QA
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Run the real-AWS E2E and 1440x900 / 390x844 browser QA before treating the console as demo-ready
+- Unblock research/policy-telemetry-shape.md with live aws/spans evidence, then replace the decision stub so ENFORCE stops always needing the zero-evidence override
+- Owner decision: retire POST /api/registry/sync-defaults (still used by backend/scripts/e2e_registry.py)
