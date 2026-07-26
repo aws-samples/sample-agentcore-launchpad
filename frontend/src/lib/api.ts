@@ -750,7 +750,14 @@ export interface MemoryNamespace {
 
 export interface MemoryRecord {
   record_id: string | null;
+  /** Human-readable line: prose for SEMANTIC records, the extracted display
+   *  field for strategies that store a structured object. */
   text: string;
+  /** Parsed payload when the strategy stores JSON (USER_PREFERENCE,
+   *  SUMMARIZATION), else null. */
+  structured: Record<string, unknown> | null;
+  /** The payload exactly as stored — never lost to the display transform. */
+  raw_text: string;
   strategy_id: string | null;
   namespaces: string[];
   created_at: string | null;

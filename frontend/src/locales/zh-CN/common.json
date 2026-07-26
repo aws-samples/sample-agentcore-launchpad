@@ -872,6 +872,7 @@
       "body": "使用“{{name}}”的客户端将立即收到 401。之后可以重新启用。"
     },
     "openInObs": "在可观测中打开",
+    "openInMemory": "在记忆中打开",
     "historyTitle": "历史会话",
     "historyEmpty": "与该 Agent 还没有历史会话。",
     "historyTurns": "{{count}} 轮"

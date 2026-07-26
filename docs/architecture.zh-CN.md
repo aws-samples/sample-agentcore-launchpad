@@ -142,6 +142,18 @@ null —— 因为记忆分区的生命周期长于 Agent。**命名空间解析
 (如 `{sessionId}`)的模板标记为 `resolvable: false`,而不是把无效命名空间发给
 AWS。
 
+记录载荷的形状取决于策略:`SEMANTIC` 在 `content.text` 里存纯文本,而
+`USER_PREFERENCE`/`SUMMARIZATION` 存的是 JSON 对象
+(`{context, preference, categories}`)。`memory.decode_record_text`(控制台与
+Chat 右栏共用)提取可读文本、以 `structured` 暴露解析后的对象、并在 `raw_text`
+中保留原始载荷,因此两个界面都不会渲染出一坨序列化对象。
+
+Chat Playground 的「会话记忆」右栏通过 `OPEN IN MEMORY ↗` 深链进入本页
+(`/memory?view=short-term&actor=…&session=…`),与它的
+`OPEN IN OBSERVABILITY ↗` 对称。`GET /api/chat/{agent_id}/memory` 会回显它实际
+读取的复合 `actor_id`,链接直接使用该值:会话记录的 actor 可能与请求 actor 不同,
+若在前端自行推导分区,链接会指向一个并不存在的分区。
+
 这里没有 TTL 缓存 —— 与按扫描量计费、耗时数秒的可观测 Logs Insights 查询不同,
 `GetMemory` 只是一次快速的控制面读取。所有列表接口都双向传递 `next_token`
 (AWS 每页上限 100),概览的 actor 计数只统计一页并显式给出

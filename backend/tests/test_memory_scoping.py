@@ -124,6 +124,33 @@ def test_session_memory_read_uses_same_scoped_actor(client, monkeypatch):
     assert captured["actor_id"] == f"{agent_id}__river"
 
 
+def test_summary_echoes_the_partition_it_read(client, monkeypatch):
+    """The rail deep-links into the Memory console, which keys on the compound
+    actor. Echo the id the read actually used instead of letting the frontend
+    re-derive it — a session may have recorded a different human actor."""
+    agent_id = make_active_agent(name="mem-link")
+    session_id = "s" * 40
+    db = SessionLocal()
+    db.add(
+        ChatSession(agent_id=agent_id, session_id=session_id, actor_id="runtime-diagnostic")
+    )
+    db.commit()
+    db.close()
+
+    monkeypatch.setattr(
+        memory_service,
+        "session_memory_summary",
+        lambda actor_id, sid: {"event_count": 0, "events": [], "records": []},
+    )
+    body = client.get(
+        f"/api/chat/{agent_id}/memory",
+        params={"session_id": session_id, "actor_id": "river"},
+    ).json()
+
+    # not `<agent>__river` — the recorded actor wins, and the link must follow it
+    assert body["actor_id"] == f"{agent_id}__runtime-diagnostic"
+
+
 def test_summary_display_label_hides_compound_actor(monkeypatch):
     """The rail chip shows the strategy (/facts, /preferences), never the
     compound actor id."""
@@ -137,3 +164,19 @@ def test_summary_display_label_hides_compound_actor(monkeypatch):
     labels = {r["namespace"] for r in out["records"]}
     assert labels <= {"/preferences", "/facts"}
     assert all("river" not in r["namespace"] for r in out["records"])
+
+
+def test_rail_renders_structured_preference_records_readably(monkeypatch):
+    """/preferences records are stored as JSON objects; the rail must show the
+    sentence, not the serialized object."""
+    stored = (
+        '{"context":"The user said so.","preference":"Wants numbered lists",'
+        '"categories":["formatting"]}'
+    )
+    monkeypatch.setattr(memory_service, "list_events", lambda *a, **k: [])
+    monkeypatch.setattr(
+        memory_service, "list_records",
+        lambda ns, max_results=10: [{"content": {"text": stored}, "memoryRecordId": "r1"}],
+    )
+    out = memory_service.session_memory_summary("agentX__river", "sess")
+    assert all(r["text"] == "Wants numbered lists" for r in out["records"])

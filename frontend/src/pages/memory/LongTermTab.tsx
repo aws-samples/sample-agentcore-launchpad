@@ -257,8 +257,25 @@ export function LongTermTab({
                 )}
               </div>
               <p className="mem-record-body">{detail.text}</p>
+              {/* Strategies that store a structured payload get their fields
+                  broken out; the raw payload stays available underneath. */}
+              {detail.structured && (
+                <div className="gov-kv-list">
+                  {Object.entries(detail.structured).map(([key, value]) => (
+                    <div className="kv" key={key}>
+                      <span className="k">{key}</span>
+                      <span className="v">
+                        {Array.isArray(value) ? value.join(", ") : String(value)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {detail.structured && (
+                <pre className="input mono mem-raw">{detail.raw_text}</pre>
+              )}
               {Object.keys(detail.metadata).length > 0 && (
-                <pre className="input mono">{JSON.stringify(detail.metadata, null, 2)}</pre>
+                <pre className="input mono mem-raw">{JSON.stringify(detail.metadata, null, 2)}</pre>
               )}
             </>
           )}

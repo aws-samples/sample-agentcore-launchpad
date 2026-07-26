@@ -108,6 +108,31 @@ explicit `namespace` → `(actor_id[, strategy_id])` → error.
   Binary agent state never reaches the browser; only its size does.
 - Unknown payload kinds are dropped (the preview SDK may add more).
 
+**Record payload normalization** (`memory.decode_record_text`, shared by the
+console and the Chat rail) — strategies do **not** agree on a payload shape:
+
+| Strategy | `content.text` holds | Result |
+|---|---|---|
+| `SEMANTIC` | prose | `text` = the prose, `structured: None` |
+| `USER_PREFERENCE` (also `SUMMARIZATION`) | a JSON object, e.g. `{"context": …, "preference": …, "categories": [...]}` | `text` = first present key of `("preference","summary","fact","context","text")`, `structured` = the parsed object |
+| JSON object with no known display key | — | `text` = raw JSON (never invent a summary), `structured` = parsed object |
+| unparsable / non-object | — | `text` = verbatim, `structured: None` |
+
+`_record` returns `text` (always human-readable), `structured`, **and**
+`raw_text` (the payload exactly as stored — the display transform must never be
+lossy). Rendering `content.text` directly puts a serialized object in the UI,
+which is what both the console table and the Chat rail did before this decode
+existed. The helper lives in `memory.py`, not `memory_console.py`, because the
+rail (`session_memory_summary`) needs it too and `memory_console` already imports
+from `memory` — putting it the other way round would be a circular import.
+
+**Chat rail ↔ console deep link.** `GET /api/chat/{agent_id}/memory` echoes
+`actor_id`: the **compound** partition the summary was read from. The rail links
+to `/memory?view=short-term&actor=<actor_id>&session=<session_id>` using that
+value verbatim. Do not re-derive `<agent>__<human>` in TypeScript — the recorded
+session actor may differ from the request actor (e.g. `runtime-diagnostic`), so a
+frontend-side derivation silently links to a partition that does not exist.
+
 **Pagination.** Every list route accepts and returns `next_token`; `max_results`
 is clamped server-side. Nothing is capped silently: `/overview` counts one
 `ListActors` page and reports `actor_count_truncated` rather than a wrong total.
@@ -175,6 +200,13 @@ switching tabs does not refetch.
   kind dropped; harness envelope decoded; tool-only envelope keeps
   `parts == ["toolUse"]` with `text == ""`; non-envelope JSON verbatim.
 - Namespaces: `{actorId}` substituted; leftover placeholder → `resolvable: false`.
+- Record decode: structured preference payload → display field extracted,
+  `structured` populated, `raw_text` preserved; prose → `structured is None`;
+  structured-without-display-key → raw JSON kept. The rail
+  (`session_memory_summary`) is asserted to show the sentence, not the object.
+- Rail deep link: `/api/chat/{id}/memory` returns `actor_id` equal to the
+  recorded-session partition (assert it is **not** `<agent>__<request actor>`
+  when the `ChatSession` row recorded a different human actor).
 - Records: namespace derived from (actor, strategy); explicit `namespace` wins;
   no derivable namespace → 400; unknown strategy → 400 (never a silent fallback
   to another strategy's namespace).

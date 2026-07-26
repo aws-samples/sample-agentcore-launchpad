@@ -207,6 +207,20 @@ because the memory partition outlives the agent. **Namespace resolution:**
 flags any template with a leftover placeholder (e.g. `{sessionId}`) as
 `resolvable: false` rather than sending a broken namespace to AWS.
 
+Record payloads are strategy-dependent: `SEMANTIC` stores prose in
+`content.text` while `USER_PREFERENCE`/`SUMMARIZATION` store a JSON object
+(`{context, preference, categories}`). `memory.decode_record_text` — shared by
+the console and the Chat rail — extracts a human-readable line, exposes the
+parsed object as `structured`, and keeps the original in `raw_text`, so neither
+surface renders a serialized object.
+
+The Chat playground's SESSION MEMORY rail links into this page
+(`OPEN IN MEMORY ↗` → `/memory?view=short-term&actor=…&session=…`), mirroring its
+`OPEN IN OBSERVABILITY ↗` chip. `GET /api/chat/{agent_id}/memory` echoes the
+compound `actor_id` it read, and the link uses that verbatim: the recorded
+session actor can differ from the request actor, so deriving the partition in the
+frontend would link somewhere that does not exist.
+
 There is no TTL cache here — unlike Observability, whose Logs Insights queries
 are billed per scan and take seconds, `GetMemory` is a single fast control-plane
 read. Every list endpoint round-trips `next_token` (AWS caps pages at 100), and

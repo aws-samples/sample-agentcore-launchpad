@@ -520,6 +520,70 @@ def test_records_resolve_namespace_from_actor_and_strategy(client, configured, m
     assert body["items"][0]["created_at"] == AT.isoformat()
 
 
+def test_structured_preference_record_is_made_readable(client, configured, monkeypatch):
+    """USER_PREFERENCE strategies store a JSON object in content.text while
+    SEMANTIC stores prose. Rendering the object verbatim is unreadable, so the
+    display field is extracted — without losing the original payload."""
+    stored = json.dumps(
+        {
+            "context": "The user explicitly stated they want numbered lists.",
+            "preference": "Always wants answers formatted as a numbered list",
+            "categories": ["formatting", "communication"],
+        }
+    )
+    wire(
+        monkeypatch,
+        StubData(
+            list_memory_records={
+                "memoryRecordSummaries": [
+                    {"memoryRecordId": "r1", "content": {"text": stored}}
+                ]
+            }
+        ),
+    )
+    item = client.get("/api/memory/records", params={"namespace": "/preferences/a"}).json()[
+        "items"
+    ][0]
+    assert item["text"] == "Always wants answers formatted as a numbered list"
+    assert item["structured"]["categories"] == ["formatting", "communication"]
+    assert item["raw_text"] == stored  # original never discarded
+
+
+def test_prose_record_passes_through_unstructured(client, configured, monkeypatch):
+    wire(
+        monkeypatch,
+        StubData(
+            list_memory_records={
+                "memoryRecordSummaries": [
+                    {"memoryRecordId": "r1", "content": {"text": "Favourite planet is Saturn."}}
+                ]
+            }
+        ),
+    )
+    item = client.get("/api/memory/records", params={"namespace": "/facts/a"}).json()["items"][0]
+    assert item["text"] == "Favourite planet is Saturn."
+    assert item["structured"] is None
+
+
+def test_structured_record_without_a_display_field_keeps_raw_json(
+    client, configured, monkeypatch
+):
+    """No known display key: show the payload rather than invent a summary, but
+    still expose the parsed fields."""
+    stored = json.dumps({"unexpected": {"nested": 1}})
+    wire(
+        monkeypatch,
+        StubData(
+            list_memory_records={
+                "memoryRecordSummaries": [{"memoryRecordId": "r", "content": {"text": stored}}]
+            }
+        ),
+    )
+    item = client.get("/api/memory/records", params={"namespace": "/x"}).json()["items"][0]
+    assert item["text"] == stored
+    assert item["structured"] == {"unexpected": {"nested": 1}}
+
+
 def test_explicit_namespace_wins_over_derivation(client, configured, monkeypatch):
     data, _ = wire(monkeypatch, StubData(list_memory_records={}))
     body = client.get("/api/memory/records", params={"namespace": "/custom/ns"}).json()

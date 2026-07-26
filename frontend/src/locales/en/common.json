@@ -872,6 +872,7 @@
       "body": "Clients using “{{name}}” will start receiving 401s immediately. You can re-enable it later."
     },
     "openInObs": "OPEN IN OBSERVABILITY",
+    "openInMemory": "OPEN IN MEMORY",
     "historyTitle": "HISTORY",
     "historyEmpty": "No previous conversations with this agent.",
     "historyTurns": "{{count}} turn(s)"

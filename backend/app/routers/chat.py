@@ -195,7 +195,14 @@ def session_memory(
         # Read back the same agent-scoped partition the chat write path uses.
         session_actor = _session_actor(db, agent_id, session_id, actor_id)
         mem_actor = memory_service.scoped_actor(agent_id, session_actor)
-        return memory_service.session_memory_summary(mem_actor, session_id)
+        # Echo the compound actor so the rail can deep-link into the Memory
+        # console at the exact partition it just summarised — the console keys
+        # on this id, and re-deriving it in the frontend would fork the scoping
+        # rule (a session may have recorded a different human actor entirely).
+        return {
+            **memory_service.session_memory_summary(mem_actor, session_id),
+            "actor_id": mem_actor,
+        }
     except Exception as exc:
         raise AppError(
             "memory.unavailable", f"memory lookup failed: {exc}", status_code=502

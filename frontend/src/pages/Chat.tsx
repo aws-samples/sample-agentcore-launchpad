@@ -17,6 +17,9 @@ interface Message {
 interface MemorySummary {
   event_count: number;
   records: { namespace: string; text: string }[];
+  /** Compound `<agent_id>__<human>` partition the summary was read from — the
+   *  id the Memory console keys on, so the deep link needs it verbatim. */
+  actor_id?: string;
 }
 
 interface SessionItem {
@@ -541,7 +544,27 @@ export function Chat() {
             )}
           </Panel>
           <div style={{ height: 14 }} />
-          <Panel title={t("chatPage.memoryTitle")} style={{ "--i": 2 } as CSSProperties}>
+          <Panel
+            title={t("chatPage.memoryTitle")}
+            style={{ "--i": 2 } as CSSProperties}
+            end={
+              sessionId &&
+              memory?.actor_id && (
+                <Link
+                  to={`/memory?view=short-term&actor=${encodeURIComponent(
+                    memory.actor_id,
+                  )}&session=${encodeURIComponent(sessionId)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="chip amber"
+                  style={{ textDecoration: "none" }}
+                  data-testid="open-in-memory"
+                >
+                  {t("chatPage.openInMemory")} ↗
+                </Link>
+              )
+            }
+          >
             <div className="kv">
               <span className="k">{t("chatPage.shortTermEvents")}</span>
               <span className="v">{memory?.event_count ?? 0}</span>

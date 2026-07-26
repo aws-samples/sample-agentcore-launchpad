@@ -20,7 +20,7 @@ from typing import Any
 
 from app.core.errors import AppError
 from app.services.agentcore.client import control_client, data_client
-from app.services.memory import SCOPE_SEP, memory_id_or_none
+from app.services.memory import SCOPE_SEP, decode_record_text, memory_id_or_none
 
 # AWS caps most memory list operations at 100 items per page — but
 # ListMemoryExtractionJobs rejects anything above 50 with a ValidationException,
@@ -356,9 +356,16 @@ def resolve_namespaces(
 
 
 def _record(raw: dict[str, Any]) -> dict[str, Any]:
+    # Strategies disagree on the payload shape (see memory.decode_record_text):
+    # `text` is always something a human can read, `structured` carries the
+    # parsed object for record detail, and `raw_text` never loses the original.
+    stored = (raw.get("content") or {}).get("text", "")
+    display, structured = decode_record_text(stored)
     return {
         "record_id": raw.get("memoryRecordId"),
-        "text": (raw.get("content") or {}).get("text", ""),
+        "text": display,
+        "structured": structured,
+        "raw_text": stored,
         "strategy_id": raw.get("memoryStrategyId"),
         "namespaces": list(raw.get("namespaces") or []),
         "created_at": _iso(raw.get("createdAt")),

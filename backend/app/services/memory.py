@@ -1,5 +1,6 @@
 """AgentCore Memory helpers — session events (short-term) + records (long-term)."""
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -24,6 +25,33 @@ def _memory_id() -> str:
 
 
 SCOPE_SEP = "__"
+
+# Strategies do not agree on a record payload shape: SEMANTIC stores prose in
+# content.text, while USER_PREFERENCE (and SUMMARIZATION) store a structured
+# JSON object there. Showing that object verbatim is unreadable, so pick the
+# first present display field — in decreasing specificity — and hand the parsed
+# object back so callers can render the rest.
+_RECORD_DISPLAY_KEYS = ("preference", "summary", "fact", "context", "text")
+
+
+def decode_record_text(raw: str) -> tuple[str, dict | None]:
+    """Return (display text, parsed object or None) for one memory record."""
+    text = (raw or "").strip()
+    if not text.startswith("{"):
+        return raw, None
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return raw, None
+    if not isinstance(parsed, dict):
+        return raw, None
+    for key in _RECORD_DISPLAY_KEYS:
+        value = parsed.get(key)
+        if isinstance(value, str) and value.strip():
+            return value, parsed
+    # a structured record with no known display field: keep the raw JSON rather
+    # than inventing a summary, but still expose the parsed fields
+    return raw, parsed
 
 
 def scoped_actor(agent_id: str, base_actor: str = "river") -> str:
@@ -94,10 +122,13 @@ def session_memory_summary(actor_id: str, session_id: str) -> dict[str, Any]:
         # keeps just the strategy — the actor/agent is implied by the session.
         for record in list_records(f"{label}/{actor_id}", max_results=10):
             content = record.get("content", {})
+            # /preferences records are structured JSON, /facts records prose —
+            # decode so the rail shows a sentence, not a serialized object.
+            display, _ = decode_record_text(content.get("text", ""))
             records.append(
                 {
                     "namespace": label,
-                    "text": content.get("text", "")[:200],
+                    "text": display[:200],
                     "record_id": record.get("memoryRecordId"),
                 }
             )
