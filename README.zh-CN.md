@@ -176,6 +176,7 @@ vendored Studio 不属于该生命周期;平台内置的 Studio 位于 `/create/
 
 | 文档 | |
 |---|---|
+| [docs/lab/README.md](docs/lab/README.md) | **动手实验指南** — 部署 → 测试 → 观测 → 评估 → 优化 → A/B → 治理 全链路逐步实操（对接真实 AWS） |
 | [docs/setup.zh-CN.md](docs/setup.zh-CN.md) | 环境搭建、引导、清理([English](docs/setup.md)) |
 | [docs/architecture.zh-CN.md](docs/architecture.zh-CN.md) | 平台 ↔ AgentCore 映射、管道、调用链([English](docs/architecture.md)) |
 | [docs/api.zh-CN.md](docs/api.zh-CN.md) | 公开 `/v1` API 参考([English](docs/api.md)) |

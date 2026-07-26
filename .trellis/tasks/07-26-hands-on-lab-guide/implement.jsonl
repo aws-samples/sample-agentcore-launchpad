@@ -1,0 +1,8 @@
+{"file": "docs/architecture.md", "reason": "Authoritative map of console feature -> AgentCore service; source for each chapter's conceptual framing"}
+{"file": ".trellis/spec/launchpad/experiment-stepwise.md", "reason": "Configuration A/B vs Runtime Canary stepwise contracts, gates and mutexes for chapters 09/10"}
+{"file": ".trellis/spec/launchpad/evaluation-agent-eligibility.md", "reason": "Which methods are eval-supported and harness telemetry preconditions for chapter 08"}
+{"file": ".trellis/spec/launchpad/evaluation-subpage-interaction.md", "reason": "?view= sub-page navigation/selection semantics used in chapters 08/09/10 steps"}
+{"file": ".trellis/spec/launchpad/managed-kb.md", "reason": "Managed KB create/ingest/attach quirks for chapter 04"}
+{"file": ".trellis/spec/launchpad/memory-console.md", "reason": "Memory console views and actor decoding for chapter 05"}
+{"file": ".trellis/spec/launchpad/gateway-policy-management.md", "reason": "Gateway onboarding tags and Cedar lifecycle for chapter 11"}
+{"file": ".trellis/spec/launchpad/registry-skill-ingestion.md", "reason": "Registry register/edit sub-pages and lifecycle for chapters 04/11"}

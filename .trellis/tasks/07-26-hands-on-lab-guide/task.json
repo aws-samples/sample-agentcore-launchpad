@@ -1,0 +1,28 @@
+{
+  "id": "hands-on-lab-guide",
+  "name": "hands-on-lab-guide",
+  "title": "Hands-on lab guide: full agent lifecycle walkthrough",
+  "description": "",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": "lab4-interactive",
+  "priority": "P2",
+  "creator": "river",
+  "assignee": "river",
+  "createdAt": "2026-07-26",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-26-fix-container-otel-events"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

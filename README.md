@@ -186,6 +186,7 @@ For terminal-attached development, use `make dev` and stop it with `Ctrl+C`.
 
 | Doc | |
 |---|---|
+| [docs/lab/README.md](docs/lab/README.md) | **Hands-on lab** — the full deploy → test → observe → evaluate → optimize → A/B → govern walkthrough against real AWS (Chinese) |
 | [docs/setup.md](docs/setup.md) | Environment setup, bootstrap, teardown ([中文](docs/setup.zh-CN.md)) |
 | [docs/architecture.md](docs/architecture.md) | Platform ↔ AgentCore mapping, pipeline, invoke chain ([中文](docs/architecture.zh-CN.md)) |
 | [docs/api.md](docs/api.md) | Public `/v1` API reference ([中文](docs/api.zh-CN.md)) |
