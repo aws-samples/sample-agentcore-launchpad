@@ -6,6 +6,7 @@ import { Link } from "react-router-dom";
 import { Chip, DataTable, MethodChip, Panel, StatTile, ViewHead } from "../components";
 import type { AgentInfo, OverviewInfo } from "../lib/api";
 import { api } from "../lib/api";
+import { LAB_GUIDE_URL } from "../lib/links";
 
 const SERVICES = [
   "runtime",
@@ -102,6 +103,21 @@ export function Overview() {
         title={t("overview.title")}
         meta={t("overview.meta")}
       />
+
+      <a
+        className="labcta"
+        href={LAB_GUIDE_URL}
+        target="_blank"
+        rel="noreferrer"
+        data-testid="lab-guide-cta"
+      >
+        <span className="ic">⧉</span>
+        <span className="tx">
+          <b>{t("overview.lab.title")}</b>
+          <span className="sub">{t("overview.lab.sub")}</span>
+        </span>
+        <span className="go">{t("overview.lab.open")} ↗</span>
+      </a>
 
       <div className="tiles">
         <StatTile

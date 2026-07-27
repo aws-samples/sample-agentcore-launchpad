@@ -2,6 +2,7 @@ import { LogOut } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../auth/auth-context";
+import { LAB_GUIDE_URL } from "../lib/links";
 import type { HealthInfo } from "./useHealth";
 import { LangSwitcher } from "./LangSwitcher";
 
@@ -32,6 +33,16 @@ export function Topbar({ crumbKey, health }: TopbarProps) {
         <div className="syschip">
           {t("topbar.acct")} {health?.account_id || "—"}
         </div>
+        <a
+          className="syschip link"
+          href={LAB_GUIDE_URL}
+          target="_blank"
+          rel="noreferrer"
+          title={t("topbar.labGuideTitle")}
+          data-testid="lab-guide-topbar"
+        >
+          ⧉ {t("topbar.labGuide")} ↗
+        </a>
         <LangSwitcher />
         <div className="avatar">
           <div className="pic">{initials}</div>

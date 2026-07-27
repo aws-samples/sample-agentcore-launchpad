@@ -2,7 +2,9 @@
   "topbar": {
     "console": "CONSOLE",
     "allSystemsGo": "ALL SYSTEMS GO",
-    "acct": "ACCT"
+    "acct": "ACCT",
+    "labGuide": "HANDS-ON LAB",
+    "labGuideTitle": "Open the hands-on lab guide on GitHub"
   },
   "auth": {
     "kicker": "// OPERATOR ACCESS",
@@ -56,6 +58,11 @@
     "kicker": "// MISSION CONTROL",
     "title": "Overview",
     "meta": "UNIFIED PIPELINE · LIVE LEDGER",
+    "lab": {
+      "title": "Hands-on lab guide · 12 chapters against real AWS",
+      "sub": "create → deploy → chat → observe → evaluate → A/B → canary → govern",
+      "open": "OPEN GUIDE"
+    },
     "tiles": {
       "deployedAgents": "DEPLOYED AGENTS",
       "activeSessions": "ACTIVE SESSIONS",
