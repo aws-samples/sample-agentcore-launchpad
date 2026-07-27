@@ -65,7 +65,10 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(160), unique=True, index=True)  # lowercased
     password_hash: Mapped[str] = mapped_column(String(256))
     role: Mapped[str] = mapped_column(String(16), default="member")  # member | admin
-    status: Mapped[str] = mapped_column(String(16), default="active")  # active | disabled
+    # pending accounts await admin approval and cannot hold a session; the
+    # validity window below only starts once they are approved
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    # pending | active | disabled
     expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )  # None = never expires (admin-granted)

@@ -169,8 +169,12 @@ Two credential sources back one session cookie:
   and its username is reserved against registration;
 - **registered accounts** in the `users` ledger table, created by self-service
   registration (`POST /api/auth/register`: username + company email + password)
-  with `role=member` and a `LAUNCHPAD_AUTH_REGISTRATION_VALID_DAYS` (default 7)
-  validity window. Passwords are stored as `pbkdf2_sha256` hashes with a
+  with `role=member`. By default they land in `status=pending` with no validity
+  window and cannot sign in (`401 auth.account_pending`); an admin approving them
+  (`PATCH /api/users/{id}` with `status=active`) starts the
+  `LAUNCHPAD_AUTH_REGISTRATION_VALID_DAYS` (default 7) window from the approval
+  moment. `LAUNCHPAD_AUTH_REGISTRATION_REQUIRE_APPROVAL=false` restores instant
+  activation at registration. Passwords are stored as `pbkdf2_sha256` hashes with a
   per-user salt — stdlib only, no passlib/bcrypt dependency. "Company email" is
   enforced as a configurable free-/disposable-mail blacklist, with an optional
   allow list that wins when set.
@@ -192,8 +196,9 @@ except `/api/health`, `/api/auth/status`, `/api/auth/login`, and
 
 Admins additionally get the **User Management** console module (`/users`) over
 `GET /api/users`, `GET /api/users/stats`, `PATCH /api/users/{id}`, and
-`DELETE /api/users/{id}` — list/search/filter, registration statistics, extend
-validity, enable/disable, role change, one-time password reset, and delete. A
+`DELETE /api/users/{id}` — the approval queue (pending filter + count, approve /
+reject), list/search/filter, registration statistics, extend validity,
+enable/disable, role change, one-time password reset, and delete. A
 member session receives `403 auth.forbidden` on all four routes and the console
 renders a forbidden state instead of the table. Data itself is **not** partitioned
 per user: every authenticated account sees the same agents, knowledge bases and
@@ -333,7 +338,7 @@ State that is cheap and local lives in a SQLite ledger at `data/launchpad.db`
 | `deployments` | One row per deploy run — the five-stage array with per-stage status/detail/timestamps |
 | `jobs` | Async work (type `deploy_agent`) — status + a JSONL `log` of stage events |
 | `chat_sessions` | Chat playground sessions — turns, actor, last-seen |
-| `users` | Console accounts created by registration — username/email, pbkdf2 password hash, role, status, `expires_at`, last sign-in + sign-in count (the built-in admin is config-only and has no row) |
+| `users` | Console accounts created by registration — username/email, pbkdf2 password hash, role, status (`pending`/`active`/`disabled`), `expires_at` (null until approval), last sign-in + sign-in count (the built-in admin is config-only and has no row) |
 | `api_keys` | Public-API keys — sha256 hash + prefix (plaintext never stored) |
 | `policy_decisions` | Governance decision log — principal, tool, ALLOW/DENY, reason |
 | `policy_changes` | Immutable Gateway/Engine/Policy mutation snapshots, operation progress, override reasons, and rollback inputs |

@@ -52,7 +52,13 @@
     "roleMember": "成员",
     "daysLeft": "剩余 {{days}} 天",
     "gateOff": "未启用登录",
-    "gateOffHint": "未配置控制台密码(LAUNCHPAD_AUTH_PASSWORD)——该控制台对所有可访问者开放,因此没有会话可退出。"
+    "gateOffHint": "未配置控制台密码(LAUNCHPAD_AUTH_PASSWORD)——该控制台对所有可访问者开放,因此没有会话可退出。",
+    "registerSubtitleApproval": "使用公司邮箱注册。新账户需管理员审批通过后才能登录。",
+    "registerPendingTitle": "等待审批",
+    "registerPendingBody": "{{username}} 已提交审核。需管理员审批通过后才能登录,{{days}} 天有效期从审批时开始计算。",
+    "accountStatus": "状态",
+    "statusPending": "待审批",
+    "accountPending": "该账户正在等待管理员审批。"
   },
   "nav": {
     "platform": "平台",
@@ -2054,13 +2060,18 @@
       "disabled": "已禁用",
       "registeredLast7d": "近 7 天注册 {{count}}",
       "activeLast7d": "近 7 天登录 {{count}}",
-      "expiringSoonFoot": "3 天内到期"
+      "expiringSoonFoot": "3 天内到期",
+      "pending": "待审批",
+      "pendingFoot": "个注册申请待处理",
+      "expiredDisabled": "已过期 / 已禁用",
+      "expiredDisabledFoot": "过期 {{expired}} · 禁用 {{disabled}}"
     },
     "filters": {
       "all": "全部",
       "active": "有效",
       "expired": "已过期",
-      "disabled": "已禁用"
+      "disabled": "已禁用",
+      "pending": "待审批"
     },
     "cols": {
       "user": "用户",
@@ -2078,7 +2089,12 @@
       "disable": "禁用",
       "enable": "启用",
       "resetPassword": "重置密码",
-      "delete": "删除"
-    }
+      "delete": "删除",
+      "approve": "通过",
+      "reject": "拒绝"
+    },
+    "startsOnApproval": "审批后开始计算",
+    "approved": "已通过 {{username}} 的申请。",
+    "rejected": "已拒绝 {{username}} 的申请。"
   }
 }

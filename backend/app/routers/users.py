@@ -80,7 +80,7 @@ def update_user(
 ) -> dict[str, Any]:
     user = users_service.get_user(db, user_id)
     sent = {key: getattr(patch, key) for key in patch.model_fields_set}
-    generated = users_service.apply_patch(db, user, sent)
+    generated = users_service.apply_patch(db, user, sent, get_settings())
     payload = users_service.serialize(user)
     if generated is not None:
         # shown once in the console; only the hash is persisted

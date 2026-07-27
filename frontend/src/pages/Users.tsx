@@ -19,10 +19,17 @@ import {
 import type { ConsoleUser, UserStats, UserStatusFilter } from "../lib/api";
 import { api } from "../lib/api";
 
-const STATUS_FILTERS: UserStatusFilter[] = ["all", "active", "expired", "disabled"];
+const STATUS_FILTERS: UserStatusFilter[] = [
+  "all",
+  "pending",
+  "active",
+  "expired",
+  "disabled",
+];
 const PAGE_SIZE = 25;
 
 const STATE_TONE: Record<ConsoleUser["state"], ChipTone> = {
+  pending: "blue",
   active: "good",
   expired: "amber",
   disabled: "muted",
@@ -185,6 +192,11 @@ export function Users() {
 
       <div className="tiles five">
         <StatTile
+          label={t("usersPage.stats.pending")}
+          value={stats?.pending ?? "—"}
+          foot={t("usersPage.stats.pendingFoot")}
+        />
+        <StatTile
           label={t("usersPage.stats.total")}
           value={stats?.total ?? "—"}
           foot={t("usersPage.stats.registeredLast7d", {
@@ -201,8 +213,16 @@ export function Users() {
           value={stats?.expiring_soon ?? "—"}
           foot={t("usersPage.stats.expiringSoonFoot")}
         />
-        <StatTile label={t("usersPage.stats.expired")} value={stats?.expired ?? "—"} />
-        <StatTile label={t("usersPage.stats.disabled")} value={stats?.disabled ?? "—"} />
+        <StatTile
+          label={t("usersPage.stats.expiredDisabled")}
+          value={
+            stats ? stats.expired + stats.disabled : "—"
+          }
+          foot={t("usersPage.stats.expiredDisabledFoot", {
+            expired: stats?.expired ?? 0,
+            disabled: stats?.disabled ?? 0,
+          })}
+        />
       </div>
 
       <Panel
@@ -296,13 +316,40 @@ export function Users() {
                     </small>
                   </>
                 ) : (
-                  t("usersPage.neverExpires")
+                  t(
+                    user.state === "pending"
+                      ? "usersPage.startsOnApproval"
+                      : "usersPage.neverExpires",
+                  )
                 )}
               </td>
               <td>{fmt(user.created_at)}</td>
               <td>{fmt(user.last_login_at)}</td>
               <td>{user.login_count}</td>
               <td className="user-actions">
+                {user.state === "pending" ? (
+                  <>
+                    <Btn
+                      primary
+                      disabled={busyId === user.id}
+                      onClick={() =>
+                        patch(user, { status: "active" }, "usersPage.approved")
+                      }
+                      data-testid={`user-approve-${user.username}`}
+                    >
+                      {t("usersPage.actions.approve")}
+                    </Btn>
+                    <Btn
+                      disabled={busyId === user.id}
+                      onClick={() =>
+                        patch(user, { status: "disabled" }, "usersPage.rejected")
+                      }
+                      data-testid={`user-reject-${user.username}`}
+                    >
+                      {t("usersPage.actions.reject")}
+                    </Btn>
+                  </>
+                ) : null}
                 <Btn
                   disabled={busyId === user.id}
                   onClick={() => patch(user, { extend_days: 7 }, "usersPage.extended")}
@@ -325,23 +372,27 @@ export function Users() {
                 >
                   {t("usersPage.actions.custom")}
                 </Btn>
-                <Btn
-                  disabled={busyId === user.id}
-                  onClick={() =>
-                    patch(
-                      user,
-                      { status: user.status === "active" ? "disabled" : "active" },
-                      user.status === "active" ? "usersPage.disabled" : "usersPage.enabled",
-                    )
-                  }
-                  data-testid={`user-toggle-${user.username}`}
-                >
-                  {t(
-                    user.status === "active"
-                      ? "usersPage.actions.disable"
-                      : "usersPage.actions.enable",
-                  )}
-                </Btn>
+                {user.state === "pending" ? null : (
+                  <Btn
+                    disabled={busyId === user.id}
+                    onClick={() =>
+                      patch(
+                        user,
+                        { status: user.status === "active" ? "disabled" : "active" },
+                        user.status === "active"
+                          ? "usersPage.disabled"
+                          : "usersPage.enabled",
+                      )
+                    }
+                    data-testid={`user-toggle-${user.username}`}
+                  >
+                    {t(
+                      user.status === "active"
+                        ? "usersPage.actions.disable"
+                        : "usersPage.actions.enable",
+                    )}
+                  </Btn>
+                )}
                 <Btn
                   disabled={busyId === user.id}
                   onClick={() => patch(user, { password: null }, "usersPage.passwordReset")}

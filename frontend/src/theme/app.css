@@ -85,6 +85,7 @@ a.syschip.link:hover{border-color:var(--amber);color:var(--amber)}
 .auth-error{min-height:36px;padding-top:9px;color:var(--crit-text);font-size:12px;line-height:1.4}
 .auth-submit{width:100%;min-height:40px;justify-content:center}
 .auth-icon.ok{color:var(--good);border-color:rgba(12,163,12,.45)}
+.auth-icon.wait{color:var(--s2, #5aa9e6);border-color:rgba(90,169,230,.42)}
 /* sign-in ⇄ register switch, sized to the panel below it */
 .auth-tabs{width:min(100%,420px);display:grid;grid-template-columns:1fr 1fr;margin-bottom:14px}
 .auth-tabs button{

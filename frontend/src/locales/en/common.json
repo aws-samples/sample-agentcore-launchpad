@@ -52,7 +52,13 @@
     "roleMember": "MEMBER",
     "daysLeft": "{{days}}d left",
     "gateOff": "Auth off",
-    "gateOffHint": "No console password configured (LAUNCHPAD_AUTH_PASSWORD) — this console is open to anyone who can reach it, so there is no session to sign out of."
+    "gateOffHint": "No console password configured (LAUNCHPAD_AUTH_PASSWORD) — this console is open to anyone who can reach it, so there is no session to sign out of.",
+    "registerSubtitleApproval": "Register with your company email. An administrator reviews new accounts before they can sign in.",
+    "registerPendingTitle": "Waiting for approval",
+    "registerPendingBody": "{{username}} was submitted for review. An administrator has to approve it before you can sign in; the {{days}}-day validity starts then.",
+    "accountStatus": "STATUS",
+    "statusPending": "PENDING APPROVAL",
+    "accountPending": "This account is waiting for administrator approval."
   },
   "nav": {
     "platform": "PLATFORM",
@@ -2054,13 +2060,18 @@
       "disabled": "DISABLED",
       "registeredLast7d": "{{count}} registered in 7d",
       "activeLast7d": "{{count}} signed in within 7d",
-      "expiringSoonFoot": "within 3 days"
+      "expiringSoonFoot": "within 3 days",
+      "pending": "AWAITING APPROVAL",
+      "pendingFoot": "new registrations to review",
+      "expiredDisabled": "EXPIRED / DISABLED",
+      "expiredDisabledFoot": "{{expired}} expired · {{disabled}} disabled"
     },
     "filters": {
       "all": "ALL",
       "active": "ACTIVE",
       "expired": "EXPIRED",
-      "disabled": "DISABLED"
+      "disabled": "DISABLED",
+      "pending": "PENDING"
     },
     "cols": {
       "user": "USER",
@@ -2078,7 +2089,12 @@
       "disable": "DISABLE",
       "enable": "ENABLE",
       "resetPassword": "RESET PW",
-      "delete": "DELETE"
-    }
+      "delete": "DELETE",
+      "approve": "APPROVE",
+      "reject": "REJECT"
+    },
+    "startsOnApproval": "Starts on approval",
+    "approved": "{{username}} was approved.",
+    "rejected": "{{username}} was rejected."
   }
 }

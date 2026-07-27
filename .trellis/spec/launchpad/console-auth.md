@@ -52,6 +52,7 @@ auth_username / LAUNCHPAD_AUTH_USERNAME                     default: "admin"
 auth_password / LAUNCHPAD_AUTH_PASSWORD                     default: unset
 auth_cookie_secure / LAUNCHPAD_AUTH_COOKIE_SECURE           default: false
 auth_registration_enabled / …_AUTH_REGISTRATION_ENABLED     default: true
+auth_registration_require_approval / …_AUTH_REGISTRATION_REQUIRE_APPROVAL  default: true
 auth_registration_valid_days / …_AUTH_REGISTRATION_VALID_DAYS  default: 7
 auth_allowed_email_domains / …_AUTH_ALLOWED_EMAIL_DOMAINS   default: [] (allow list wins when set)
 auth_blocked_email_domains / …_AUTH_BLOCKED_EMAIL_DOMAINS   default: free/disposable mail list
@@ -68,7 +69,16 @@ refused with `auth.registration_disabled`.
   deletable from the console, and its username is reserved against registration.
 - **Registered accounts** are `users` rows: `username`/`username_key` (lowercase
   mirror carrying uniqueness), lowercased unique `email`, `password_hash`,
-  `role`, `status`, `expires_at`, `last_login_at`, `login_count`, `created_by`.
+  `role`, `status` (`pending` | `active` | `disabled`), `expires_at`,
+  `last_login_at`, `login_count`, `created_by`.
+- **Approval is the default.** Self-registration creates `status=pending` with
+  `expires_at=null`: the account cannot sign in (`401 auth.account_pending`) and
+  cannot hold a session. Approval is `PATCH /api/users/{id} {"status":"active"}`,
+  which — when the row has no window yet and the same patch does not set one —
+  grants `now + auth_registration_valid_days`. The validity clock therefore
+  starts at approval, never at registration. `auth_registration_require_approval=false`
+  restores instant activation (window starts at registration). An admin-created
+  account (`created_by != "self"`) is never forced through the queue.
 - Passwords use `hashlib.pbkdf2_hmac` with a per-user salt, stored as
   `pbkdf2_sha256$<iters>$<salt_b64>$<dk_b64>`. Do not add passlib/bcrypt, and do
   not use `pydantic.EmailStr` (`email-validator` is not a dependency).
@@ -120,6 +130,9 @@ suffix** (`x.gmail.com` counts as `gmail.com`). A non-empty
   adds time and extending a lapsed one revives it from now.
 - `expires_at: null` means "never expires"; an **omitted** key leaves validity
   alone (distinguish with `model_fields_set`).
+- Approving (`pending → active`) grants the default window only when
+  `expires_at` is still null and the patch itself carries neither `expires_at`
+  nor `extend_days` — an admin who states the window explicitly wins.
 - `password: null` asks the backend to generate one; the generated value is
   returned exactly once as `generated_password` and never stored in plaintext.
   An explicit password must not be echoed back.
@@ -132,7 +145,12 @@ The API boundary dispatches `launchpad-unauthorized` for a `401` outside
 `/api/auth/*`. `AuthGate` owns that event and returns the entire console to the
 login form. Do not duplicate `401` handling in individual pages. `AuthGate` also
 owns the sign-in ⇄ register tab strip and maps backend error codes to i18n keys
-through a lookup table (no hand-written wording per code). `isAdmin` is
+through a lookup table (no hand-written wording per code). The register form and
+its success panel branch on `registration_requires_approval` /
+`requires_approval`: in approval mode the panel says "waiting for approval"
+(`data-testid="register-status"`) instead of showing a validity date, and the
+users table shows **APPROVE / REJECT** on `pending` rows while hiding the
+enable/disable toggle there. `isAdmin` is
 `!authRequired || role === "admin"` so an open console keeps full local access;
 admin nav entries live in `ADMIN_NAV_ENTRIES` and the `/users` page renders a
 forbidden state instead of fetching when `!isAdmin`.
@@ -161,8 +179,10 @@ who can reach it.
 | Username taken, or equal to the configured admin name | `409 auth.username_taken` |
 | Malformed email | `400 auth.invalid_email` |
 | Free/disposable domain (or outside a configured allow list) | `400 auth.email_domain_blocked` |
+| `status` outside `pending`/`active`/`disabled` | `400 users.invalid_status` |
 | Email already registered | `409 auth.email_taken` |
 | Password shorter than 8 characters | `400 auth.weak_password` |
+| Correct credentials, account still `pending` | `401 auth.account_pending` |
 | Missing/invalid login fields | `422 validation.invalid_request` |
 | Wrong username or password | `401 auth.invalid_credentials` |
 | Correct credentials, account disabled / expired | `401 auth.account_disabled` / `401 auth.account_expired` |
@@ -204,11 +224,14 @@ Backend tests must assert:
 - wrong credentials set no cookie; a successful login sets the required cookie
   attributes; logout, tampered/expired cookies, an authentic cookie for an
   unknown subject, password rotation, and Secure cookies all behave;
-- registration creates a `member` account with the configured validity and can
-  sign in immediately; every validation code in §4 is produced;
+- registration creates a `pending` `member` account with no window that cannot
+  sign in; approval activates it and starts the window; rejection keeps it out;
+  `auth_registration_require_approval=false` yields an immediately usable account;
+  every validation code in §4 is produced;
 - duplicate username/email detection is case-insensitive;
 - an established member session dies on expiry, disable, and delete;
 - the cookie expiry is clamped to a short account validity;
+- the `pending` filter and the `pending` stat surface the approval queue;
 - admin list/search/status-filter/pagination, stats numbers, extend (live and
   lapsed), absolute/never expiry, disable→enable, role change, generated vs
   explicit password reset, and delete;

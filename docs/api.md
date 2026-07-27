@@ -160,13 +160,13 @@ it. Neither surface touches AWS. See
 
 | Method | Path | Auth | Result |
 |---|---|---|---|
-| `GET` | `/api/auth/status` | open | `{auth_required, authenticated, registration_enabled, username, role, email, account_expires_at}` — identity fields are null until authenticated |
+| `GET` | `/api/auth/status` | open | `{auth_required, authenticated, registration_enabled, registration_requires_approval, username, role, email, account_expires_at}` — identity fields are null until authenticated |
 | `POST` | `/api/auth/login` | open | Sets the `launchpad_session` cookie (12h, clamped to the account validity) and echoes the identity |
-| `POST` | `/api/auth/register` | open | `201` — creates a `member` account valid for `auth_registration_valid_days` (default 7) |
+| `POST` | `/api/auth/register` | open | `201` — creates a `member` account; by default `status=pending` with `expires_at=null` until an admin approves it, then valid for `auth_registration_valid_days` (default 7) |
 | `POST` | `/api/auth/logout` | session | Clears the cookie |
-| `GET` | `/api/users?q=&status=all\|active\|expired\|disabled&limit=&offset=` | admin | Paged account list with derived `state` / `days_remaining` |
-| `GET` | `/api/users/stats` | admin | Totals, `expiring_soon` (≤3 days), 7-day registration/sign-in counts, a 14-day registration series, top email domains |
-| `PATCH` | `/api/users/{id}` | admin | Any of `status`, `role`, `extend_days`, `expires_at` (`null` = never expires), `password` (`null` = generate and return once) |
+| `GET` | `/api/users?q=&status=all\|pending\|active\|expired\|disabled&limit=&offset=` | admin | Paged account list with derived `state` / `days_remaining` |
+| `GET` | `/api/users/stats` | admin | Totals including the `pending` approval queue, `expiring_soon` (≤3 days), 7-day registration/sign-in counts, a 14-day registration series, top email domains |
+| `PATCH` | `/api/users/{id}` | admin | Any of `status` (`pending`\|`active`\|`disabled`; `active` on a pending account approves it and starts its window), `role`, `extend_days`, `expires_at` (`null` = never expires), `password` (`null` = generate and return once) |
 | `DELETE` | `/api/users/{id}` | admin | Removes the account |
 
 Registration error codes: `auth.registration_disabled` (400, gate off or
@@ -175,8 +175,8 @@ registration disabled), `auth.invalid_username` / `auth.invalid_email` /
 `auth.username_taken` / `auth.email_taken` (409).
 
 Sign-in error codes: `auth.invalid_credentials` (401), plus
-`auth.account_disabled` / `auth.account_expired` (401) once the submitted
-credentials themselves are correct.
+`auth.account_pending` / `auth.account_disabled` / `auth.account_expired` (401)
+once the submitted credentials themselves are correct.
 
 Session and role errors: `auth.required` (401 — missing, tampered, or expired
 cookie, and also an account that has since been disabled, expired, or deleted),

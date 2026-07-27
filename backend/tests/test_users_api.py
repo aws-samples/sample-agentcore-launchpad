@@ -45,9 +45,19 @@ def register(client: TestClient, **overrides):
     return client.post("/api/auth/register", json={**MEMBER, **overrides})
 
 
+def approve_stored(username: str = MEMBER["username"], days: int = 7) -> None:
+    """Stand in for an admin approval: activate and start the validity window."""
+    patch_stored(
+        username,
+        status="active",
+        expires_at=datetime.now(UTC) + timedelta(days=days),
+    )
+
+
 def member_session(app) -> TestClient:
     client = TestClient(app)
     assert register(client).status_code == 201
+    approve_stored()
     login = client.post(
         "/api/auth/login",
         json={"username": MEMBER["username"], "password": MEMBER["password"]},
@@ -80,26 +90,84 @@ def patch_stored(username: str = MEMBER["username"], **fields) -> None:
 
 
 class TestRegistration:
-    def test_registration_creates_a_seven_day_member_account(self, anon):
+    def test_registration_awaits_admin_approval_by_default(self, anon):
         response = register(anon)
         assert response.status_code == 201
         body = response.json()
         assert body["username"] == MEMBER["username"]
         assert body["email"] == MEMBER["email"]
+        assert body["status"] == "pending"
+        assert body["requires_approval"] is True
+        # the clock only starts at approval, so there is no window yet
+        assert body["expires_at"] is None
         assert body["valid_days"] == 7
-
-        expires_at = datetime.fromisoformat(body["expires_at"])
-        remaining = expires_at - datetime.now(UTC)
-        assert timedelta(days=6, hours=23) < remaining <= timedelta(days=7)
+        assert anon.get("/api/auth/status").json()["registration_requires_approval"] is True
 
         user = stored()
         assert user.role == "member"
-        assert user.status == "active"
+        assert user.status == "pending"
+        assert user.expires_at is None
         assert user.created_by == "self"
         assert user.password_hash.startswith("pbkdf2_sha256$")
         assert MEMBER["password"] not in user.password_hash
 
-    def test_new_account_can_sign_in_immediately(self, app):
+    def test_pending_account_cannot_sign_in(self, anon):
+        assert register(anon).status_code == 201
+        response = anon.post(
+            "/api/auth/login",
+            json={"username": MEMBER["username"], "password": MEMBER["password"]},
+        )
+        assert response.status_code == 401
+        assert response.json()["code"] == "auth.account_pending"
+        assert anon.get("/api/apikeys").status_code == 401
+
+    def test_approval_starts_the_validity_window_and_unlocks_sign_in(self, anon, admin, app):
+        assert register(anon).status_code == 201
+        user_id = stored().id
+
+        approved = admin.patch(f"/api/users/{user_id}", json={"status": "active"})
+        assert approved.status_code == 200
+        assert approved.json()["state"] == "active"
+        assert approved.json()["days_remaining"] in (6, 7)
+
+        client = TestClient(app)
+        assert client.post(
+            "/api/auth/login",
+            json={"username": MEMBER["username"], "password": MEMBER["password"]},
+        ).status_code == 200
+        assert client.get("/api/apikeys").status_code == 200
+
+    def test_rejection_keeps_the_account_out(self, anon, admin):
+        assert register(anon).status_code == 201
+        user_id = stored().id
+        rejected = admin.patch(f"/api/users/{user_id}", json={"status": "disabled"})
+        assert rejected.json()["state"] == "disabled"
+        assert rejected.json()["expires_at"] is None  # never got a window
+        login = anon.post(
+            "/api/auth/login",
+            json={"username": MEMBER["username"], "password": MEMBER["password"]},
+        )
+        assert login.status_code == 401
+        assert login.json()["code"] == "auth.account_disabled"
+
+    def test_approval_can_be_turned_off_for_instant_accounts(self, monkeypatch, anon, app):
+        monkeypatch.setenv("LAUNCHPAD_AUTH_REGISTRATION_REQUIRE_APPROVAL", "false")
+        get_settings.cache_clear()
+
+        body = register(anon).json()
+        assert body["status"] == "active"
+        assert body["requires_approval"] is False
+        remaining = datetime.fromisoformat(body["expires_at"]) - datetime.now(UTC)
+        assert timedelta(days=6, hours=23) < remaining <= timedelta(days=7)
+        assert anon.get("/api/auth/status").json()["registration_requires_approval"] is False
+
+        client = TestClient(app)
+        assert client.post(
+            "/api/auth/login",
+            json={"username": MEMBER["username"], "password": MEMBER["password"]},
+        ).status_code == 200
+
+    def test_approved_account_can_use_the_console(self, app):
         client = member_session(app)
         status = client.get("/api/auth/status").json()
         assert status["authenticated"] is True
@@ -200,7 +268,7 @@ class TestAccountLifecycle:
 
     def test_session_cookie_never_outlives_the_account(self, anon):
         assert register(anon).status_code == 201
-        patch_stored(expires_at=datetime.now(UTC) + timedelta(minutes=30))
+        patch_stored(status="active", expires_at=datetime.now(UTC) + timedelta(minutes=30))
         login = anon.post(
             "/api/auth/login",
             json={"username": MEMBER["username"], "password": MEMBER["password"]},
@@ -241,16 +309,17 @@ class TestAdminUserApi:
         assert register(
             anon, username="second", email="second@other-corp.com"
         ).status_code == 201
+        approve_stored()
         patch_stored("second", status="disabled")
 
         listing = admin.get("/api/users").json()
         assert listing["total"] == 2
         assert {row["username"] for row in listing["items"]} == {"qa-user", "second"}
         assert all("password_hash" not in row for row in listing["items"])
-        assert listing["items"][0]["days_remaining"] in (6, 7)
 
         assert admin.get("/api/users?status=disabled").json()["total"] == 1
         assert admin.get("/api/users?status=active").json()["total"] == 1
+        assert admin.get("/api/users?status=pending").json()["total"] == 0
         assert admin.get("/api/users?q=OTHER-CORP").json()["total"] == 1
         assert admin.get("/api/users?q=qa-").json()["items"][0]["username"] == "qa-user"
 
@@ -259,9 +328,18 @@ class TestAdminUserApi:
 
         assert admin.get("/api/users?status=bogus").status_code == 422
 
+    def test_pending_accounts_show_up_in_the_approval_queue(self, anon, admin):
+        assert register(anon).status_code == 201
+        queue = admin.get("/api/users?status=pending").json()
+        assert queue["total"] == 1
+        assert queue["items"][0]["state"] == "pending"
+        assert queue["items"][0]["expires_at"] is None
+        assert queue["items"][0]["days_remaining"] is None
+        assert admin.get("/api/users/stats").json()["pending"] == 1
+
     def test_expired_accounts_show_up_in_the_expired_filter(self, anon, admin):
         assert register(anon).status_code == 201
-        patch_stored(expires_at=datetime.now(UTC) - timedelta(days=1))
+        patch_stored(status="active", expires_at=datetime.now(UTC) - timedelta(days=1))
         expired = admin.get("/api/users?status=expired").json()
         assert expired["total"] == 1
         assert expired["items"][0]["state"] == "expired"
@@ -276,29 +354,35 @@ class TestAdminUserApi:
         assert register(
             anon, username="blocked-user", email="blocked@third-corp.com"
         ).status_code == 201
-        patch_stored("lapsed", expires_at=datetime.now(UTC) - timedelta(days=1))
+        assert register(
+            anon, username="waiting", email="waiting@fourth-corp.com"
+        ).status_code == 201
+        patch_stored("lapsed", status="active", expires_at=datetime.now(UTC) - timedelta(days=1))
         patch_stored("blocked-user", status="disabled")
-        patch_stored(expires_at=datetime.now(UTC) + timedelta(days=2))
+        patch_stored(status="active", expires_at=datetime.now(UTC) + timedelta(days=2))
 
         stats = admin.get("/api/users/stats").json()
-        assert stats["total"] == 3
+        assert stats["total"] == 4
+        assert stats["pending"] == 1
         assert stats["active"] == 1
         assert stats["expired"] == 1
         assert stats["disabled"] == 1
         assert stats["expiring_soon"] == 1
-        assert stats["registered_last_7d"] == 3
+        assert stats["registered_last_7d"] == 4
         assert stats["active_last_7d"] == 0
         assert stats["valid_days"] == 7
         assert len(stats["registrations"]) == 14
-        assert stats["registrations"][-1]["count"] == 3
+        assert stats["registrations"][-1]["count"] == 4
         assert {row["domain"] for row in stats["top_domains"]} == {
             "acme-corp.com",
             "other-corp.com",
             "third-corp.com",
+            "fourth-corp.com",
         }
 
     def test_extend_adds_to_the_remaining_validity(self, anon, admin):
         assert register(anon).status_code == 201
+        approve_stored()
         user_id = stored().id
         response = admin.patch(f"/api/users/{user_id}", json={"extend_days": 30})
         assert response.status_code == 200
@@ -306,7 +390,7 @@ class TestAdminUserApi:
 
     def test_extend_revives_an_expired_account_from_now(self, anon, admin):
         assert register(anon).status_code == 201
-        patch_stored(expires_at=datetime.now(UTC) - timedelta(days=10))
+        patch_stored(status="active", expires_at=datetime.now(UTC) - timedelta(days=10))
         user_id = stored().id
         body = admin.patch(f"/api/users/{user_id}", json={"extend_days": 7}).json()
         assert body["state"] == "active"
@@ -314,6 +398,7 @@ class TestAdminUserApi:
 
     def test_absolute_expiry_and_never_expires(self, anon, admin):
         assert register(anon).status_code == 201
+        approve_stored()
         user_id = stored().id
         target = (datetime.now(UTC) + timedelta(days=90)).isoformat()
         assert admin.patch(
@@ -327,6 +412,7 @@ class TestAdminUserApi:
 
     def test_disable_enable_and_role_change(self, anon, admin, app):
         assert register(anon).status_code == 201
+        approve_stored()
         user_id = stored().id
 
         disabled = admin.patch(f"/api/users/{user_id}", json={"status": "disabled"})
@@ -353,6 +439,7 @@ class TestAdminUserApi:
 
     def test_password_reset_returns_a_generated_password_once(self, anon, admin, app):
         assert register(anon).status_code == 201
+        approve_stored()
         user_id = stored().id
         before = stored().password_hash
 

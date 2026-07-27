@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     # Self-service registration for the console (only meaningful while the gate
     # is enabled — an open console has no accounts to register).
     auth_registration_enabled: bool = True
+    # Default: a new registration waits in `pending` until an admin approves it,
+    # and its validity window starts at approval. Set false for the older
+    # instant-activation behavior.
+    auth_registration_require_approval: bool = True
     auth_registration_valid_days: int = Field(default=7, gt=0, le=3650)
     # "Company email" is enforced as a free-/disposable-mail blacklist. An
     # operator can pin their own corporate domains with the allow list, which

@@ -162,11 +162,19 @@ def is_expired(user: User, now: datetime | None = None) -> bool:
     return expires_at <= (now or datetime.now(UTC))
 
 
+STATUS_PENDING = "pending"
+STATUS_ACTIVE = "active"
+STATUS_DISABLED = "disabled"
+STATUSES = (STATUS_PENDING, STATUS_ACTIVE, STATUS_DISABLED)
+
+
 def account_state(user: User, now: datetime | None = None) -> str:
-    """`disabled` | `expired` | `active` — derived, never stored."""
-    if user.status != "active":
-        return "disabled"
-    return "expired" if is_expired(user, now) else "active"
+    """`pending` | `disabled` | `expired` | `active` — derived, never stored."""
+    if user.status == STATUS_PENDING:
+        return STATUS_PENDING
+    if user.status != STATUS_ACTIVE:
+        return STATUS_DISABLED
+    return "expired" if is_expired(user, now) else STATUS_ACTIVE
 
 
 def days_remaining(user: User, now: datetime | None = None) -> int | None:
@@ -247,14 +255,17 @@ def register_user(
         raise AppError("auth.email_taken", "This email is already registered", status_code=409)
 
     days = current.auth_registration_valid_days if valid_days is None else valid_days
+    # With approval required the clock only starts once an admin approves, so the
+    # pending account carries no validity window yet.
+    pending = current.auth_registration_require_approval and created_by == "self"
     user = User(
         username=name,
         username_key=name.lower(),
         email=address,
         password_hash=hash_password(password),
         role=role,
-        status="active",
-        expires_at=datetime.now(UTC) + timedelta(days=days) if days else None,
+        status=STATUS_PENDING if pending else STATUS_ACTIVE,
+        expires_at=None if pending or not days else datetime.now(UTC) + timedelta(days=days),
         created_by=created_by,
     )
     db.add(user)
@@ -281,7 +292,13 @@ def authenticate(db: Session, username: str, password: str) -> User:
         raise AppError(
             "auth.invalid_credentials", "Invalid username or password", status_code=401
         )
-    if user.status != "active":
+    if user.status == STATUS_PENDING:
+        raise AppError(
+            "auth.account_pending",
+            "This account is waiting for administrator approval",
+            status_code=401,
+        )
+    if user.status != STATUS_ACTIVE:
         raise AppError("auth.account_disabled", "This account is disabled", status_code=401)
     if is_expired(user):
         raise AppError("auth.account_expired", "This account has expired", status_code=401)
@@ -296,7 +313,7 @@ def record_login(db: Session, user: User) -> None:
 
 # --- admin management -------------------------------------------------------
 
-STATUS_FILTERS = ("all", "active", "expired", "disabled")
+STATUS_FILTERS = ("all", "pending", "active", "expired", "disabled")
 
 
 @dataclass(frozen=True)
@@ -324,7 +341,7 @@ def list_users(
     rows = list(db.scalars(stmt.order_by(User.created_at.desc())))
     # expiry is time-derived, so status filtering happens in Python against the
     # same helper the auth path uses (one definition of "expired")
-    if status in ("active", "expired", "disabled"):
+    if status in (STATUS_PENDING, STATUS_ACTIVE, "expired", STATUS_DISABLED):
         rows = [row for row in rows if account_state(row, now) == status]
     total = len(rows)
     window = rows[offset : offset + limit] if limit > 0 else rows[offset:]
@@ -349,7 +366,11 @@ def compute_stats(db: Session, settings: Settings | None = None) -> dict[str, An
     expiring_soon = 0
     for row, state in zip(rows, states, strict=True):
         expires_at = as_utc(row.expires_at)
-        if state == "active" and expires_at is not None and expires_at - now <= timedelta(days=3):
+        if (
+            state == STATUS_ACTIVE
+            and expires_at is not None
+            and expires_at - now <= timedelta(days=3)
+        ):
             expiring_soon += 1
 
     day_keys = [(now - timedelta(days=offset)).date() for offset in range(13, -1, -1)]
@@ -368,9 +389,10 @@ def compute_stats(db: Session, settings: Settings | None = None) -> dict[str, An
 
     return {
         "total": len(rows),
-        "active": states.count("active"),
+        "pending": states.count(STATUS_PENDING),
+        "active": states.count(STATUS_ACTIVE),
         "expired": states.count("expired"),
-        "disabled": states.count("disabled"),
+        "disabled": states.count(STATUS_DISABLED),
         "expiring_soon": expiring_soon,
         "registered_last_7d": sum(1 for row in rows if _created(row) >= week_ago),
         "active_last_7d": sum(
@@ -393,18 +415,33 @@ def extend_validity(user: User, days: int) -> None:
     user.expires_at = max(base, now) + timedelta(days=days)
 
 
-def apply_patch(db: Session, user: User, patch: dict[str, Any]) -> str | None:
+def apply_patch(
+    db: Session,
+    user: User,
+    patch: dict[str, Any],
+    settings: Settings | None = None,
+) -> str | None:
     """Apply an admin patch in place. Returns a generated password, if any.
 
     `patch` only carries keys the caller actually sent, so `{"expires_at": None}`
     means "never expires" while an omitted key leaves the field alone.
     """
+    current = settings or get_settings()
     generated: str | None = None
     if "status" in patch:
         status = patch["status"]
-        if status not in ("active", "disabled"):
-            raise AppError("users.invalid_status", "Status must be active or disabled")
+        if status not in STATUSES:
+            raise AppError(
+                "users.invalid_status", f"Status must be one of {', '.join(STATUSES)}"
+            )
+        approving = user.status == STATUS_PENDING and status == STATUS_ACTIVE
         user.status = status
+        # approving a pending account starts its validity window, unless the same
+        # patch sets the expiry explicitly
+        if approving and user.expires_at is None and not {"expires_at", "extend_days"} & set(patch):
+            user.expires_at = datetime.now(UTC) + timedelta(
+                days=current.auth_registration_valid_days
+            )
     if "role" in patch:
         role = patch["role"]
         if role not in ("admin", "member"):
