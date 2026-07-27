@@ -151,3 +151,34 @@ Error codes: `memory.not_configured` (409, bootstrap has not run — except
 `/overview`, which instead returns `{"configured": false, …}` so the page can
 render a setup state), `memory.namespace_required` (400, no namespace could be
 derived), `memory.unavailable` (502, the underlying AWS call failed).
+
+## Console Accounts API
+
+`/api/auth/*` gates the console and `/api/users/*` manages the accounts behind
+it. Neither surface touches AWS. See
+[architecture.md](architecture.md#console-authentication-and-accounts).
+
+| Method | Path | Auth | Result |
+|---|---|---|---|
+| `GET` | `/api/auth/status` | open | `{auth_required, authenticated, registration_enabled, username, role, email, account_expires_at}` — identity fields are null until authenticated |
+| `POST` | `/api/auth/login` | open | Sets the `launchpad_session` cookie (12h, clamped to the account validity) and echoes the identity |
+| `POST` | `/api/auth/register` | open | `201` — creates a `member` account valid for `auth_registration_valid_days` (default 7) |
+| `POST` | `/api/auth/logout` | session | Clears the cookie |
+| `GET` | `/api/users?q=&status=all\|active\|expired\|disabled&limit=&offset=` | admin | Paged account list with derived `state` / `days_remaining` |
+| `GET` | `/api/users/stats` | admin | Totals, `expiring_soon` (≤3 days), 7-day registration/sign-in counts, a 14-day registration series, top email domains |
+| `PATCH` | `/api/users/{id}` | admin | Any of `status`, `role`, `extend_days`, `expires_at` (`null` = never expires), `password` (`null` = generate and return once) |
+| `DELETE` | `/api/users/{id}` | admin | Removes the account |
+
+Registration error codes: `auth.registration_disabled` (400, gate off or
+registration disabled), `auth.invalid_username` / `auth.invalid_email` /
+`auth.email_domain_blocked` / `auth.weak_password` (400),
+`auth.username_taken` / `auth.email_taken` (409).
+
+Sign-in error codes: `auth.invalid_credentials` (401), plus
+`auth.account_disabled` / `auth.account_expired` (401) once the submitted
+credentials themselves are correct.
+
+Session and role errors: `auth.required` (401 — missing, tampered, or expired
+cookie, and also an account that has since been disabled, expired, or deleted),
+`auth.forbidden` (403 — member session on `/api/users*`), `users.not_found`
+(404).

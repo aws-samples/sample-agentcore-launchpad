@@ -156,25 +156,54 @@ account. The scoped decision endpoint therefore returns `available=false`
 instead of projecting guessed telemetry, and zero-evidence promotion requires
 the typed Gateway name plus a recorded reason.
 
-## Console authentication
+## Console authentication and accounts
 
-The platform console has an optional local operator gate, independent from both
+The platform console has an optional local account gate, independent from both
 the Cognito users used by Gateway/Cedar demos and the `/v1` API-key surface.
-Setting `LAUNCHPAD_AUTH_PASSWORD` enables it; the username defaults to `admin`
-and can be changed with `LAUNCHPAD_AUTH_USERNAME`. No AWS call or ledger row is
-involved.
+Setting `LAUNCHPAD_AUTH_PASSWORD` enables it; no AWS call is involved.
 
-`POST /api/auth/login` verifies the configured credentials and issues a
-12-hour, HMAC-signed HttpOnly cookie. The cookie is stateless, so it survives a
-backend restart; changing the credentials and restarting invalidates all
-existing sessions. When enabled, middleware protects every `/api/*` route,
-including API docs, except `/api/health`, `/api/auth/status`, and
-`/api/auth/login`. The middleware does not guard `/v1/*`, whose existing
+Two credential sources back one session cookie:
+
+- the **built-in admin**, config-driven (`LAUNCHPAD_AUTH_USERNAME`, default
+  `admin`). It has no ledger row, so a bad row can never lock the console out,
+  and its username is reserved against registration;
+- **registered accounts** in the `users` ledger table, created by self-service
+  registration (`POST /api/auth/register`: username + company email + password)
+  with `role=member` and a `LAUNCHPAD_AUTH_REGISTRATION_VALID_DAYS` (default 7)
+  validity window. Passwords are stored as `pbkdf2_sha256` hashes with a
+  per-user salt — stdlib only, no passlib/bcrypt dependency. "Company email" is
+  enforced as a configurable free-/disposable-mail blacklist, with an optional
+  allow list that wins when set.
+
+`POST /api/auth/login` verifies either source and issues an HMAC-signed HttpOnly
+cookie whose payload is `version:subject:expiry` — 12 hours, clamped down to the
+account's own `expires_at`. The **role is deliberately not in the cookie**:
+authorization is resolved per request (configured admin → `admin`; otherwise the
+`users` row is authoritative), so disabling, demoting or expiring an account
+takes effect on the very next request instead of when the cookie lapses. The
+cookie is otherwise stateless and survives a backend restart; changing the
+configured admin credentials invalidates **all** sessions, because the signing
+key derives from them.
+
+When enabled, middleware protects every `/api/*` route, including API docs,
+except `/api/health`, `/api/auth/status`, `/api/auth/login`, and
+`/api/auth/register`. The middleware does not guard `/v1/*`, whose existing
 `X-Api-Key` contract remains authoritative.
+
+Admins additionally get the **User Management** console module (`/users`) over
+`GET /api/users`, `GET /api/users/stats`, `PATCH /api/users/{id}`, and
+`DELETE /api/users/{id}` — list/search/filter, registration statistics, extend
+validity, enable/disable, role change, one-time password reset, and delete. A
+member session receives `403 auth.forbidden` on all four routes and the console
+renders a forbidden state instead of the table. Data itself is **not** partitioned
+per user: every authenticated account sees the same agents, knowledge bases and
+traces; only this module is role-gated.
 
 The default cookie works with the local HTTP stack. HTTPS deployments must set
 `LAUNCHPAD_AUTH_COOKIE_SECURE=true`. Leaving the password unset disables the
-gate, preserving the bootstrap-free local development and test flow.
+gate entirely (console open, registration refused with
+`auth.registration_disabled`, `/api/users*` reachable as the implicit local
+admin), preserving the bootstrap-free local development and test flow.
 
 ## The Memory console (console 05)
 
@@ -304,6 +333,7 @@ State that is cheap and local lives in a SQLite ledger at `data/launchpad.db`
 | `deployments` | One row per deploy run — the five-stage array with per-stage status/detail/timestamps |
 | `jobs` | Async work (type `deploy_agent`) — status + a JSONL `log` of stage events |
 | `chat_sessions` | Chat playground sessions — turns, actor, last-seen |
+| `users` | Console accounts created by registration — username/email, pbkdf2 password hash, role, status, `expires_at`, last sign-in + sign-in count (the built-in admin is config-only and has no row) |
 | `api_keys` | Public-API keys — sha256 hash + prefix (plaintext never stored) |
 | `policy_decisions` | Governance decision log — principal, tool, ALLOW/DENY, reason |
 | `policy_changes` | Immutable Gateway/Engine/Policy mutation snapshots, operation progress, override reasons, and rollback inputs |

@@ -12,6 +12,7 @@ import { Memory } from "./pages/Memory";
 import { Observability } from "./pages/Observability";
 import { Overview } from "./pages/Overview";
 import { Registry } from "./pages/Registry";
+import { Users } from "./pages/Users";
 
 export default function App() {
   return (
@@ -29,6 +30,7 @@ export default function App() {
             <Route path="observability" element={<Observability />} />
             <Route path="evaluation" element={<Evaluation />} />
             <Route path="governance" element={<Governance />} />
+            <Route path="users" element={<Users />} />
           </Route>
         </Routes>
       </ToastProvider>

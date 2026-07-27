@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/launchpad/console-auth.md", "reason": "Authoritative existing contract for the console gate: cookie name/TTL, open-path set, /api-only boundary, settings precedence, frontend 401 handling. This task extends it and must not break its invariants."}
+{"file": ".trellis/spec/launchpad/remote-production-deployment.md", "reason": "Prod EC2/CloudFront deployment runs with the gate ENABLED behind HTTPS; registration + Secure/SameSite cookie behavior must keep working there."}
+{"file": ".trellis/spec/launchpad/evaluation-subpage-interaction.md", "reason": "Project pattern for console list pages: URL-param filters/selection, table + testid conventions the new /users page follows."}
+{"file": ".trellis/tasks/07-27-multi-user-accounts/prd.md", "reason": "Requirements R1-R6, confirmed scope decisions, acceptance criteria."}
+{"file": ".trellis/tasks/07-27-multi-user-accounts/design.md", "reason": "Data model, password KDF format, identity-cookie format, endpoint contracts, error-code matrix, email policy, frontend component map."}
+{"file": ".trellis/tasks/07-27-multi-user-accounts/implement.md", "reason": "Ordered 7-slice execution plan with per-slice validation commands and rollback points."}

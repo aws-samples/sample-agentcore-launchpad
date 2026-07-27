@@ -50,9 +50,37 @@ class Settings(BaseSettings):
 
     # Optional local operator gate for the console. This remains independent
     # from Cognito demo users and the public /v1 API-key surface.
+    # `auth_username`/`auth_password` describe the built-in admin, which is
+    # config-driven only (never a `users` row) so it can never be locked out
+    # from the console.
     auth_username: str = Field(default="admin", min_length=1, max_length=64)
     auth_password: SecretStr | None = None
     auth_cookie_secure: bool = False
+
+    # Self-service registration for the console (only meaningful while the gate
+    # is enabled — an open console has no accounts to register).
+    auth_registration_enabled: bool = True
+    auth_registration_valid_days: int = Field(default=7, gt=0, le=3650)
+    # "Company email" is enforced as a free-/disposable-mail blacklist. An
+    # operator can pin their own corporate domains with the allow list, which
+    # short-circuits the blacklist when non-empty.
+    auth_allowed_email_domains: list[str] = []
+    auth_blocked_email_domains: list[str] = [
+        # global free mail
+        "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.jp", "ymail.com",
+        "hotmail.com", "outlook.com", "live.com", "msn.com", "aol.com",
+        "icloud.com", "me.com", "mac.com", "proton.me", "protonmail.com",
+        "gmx.com", "gmx.de", "zoho.com", "mail.com", "mail.ru",
+        "yandex.com", "yandex.ru",
+        # CN free mail
+        "qq.com", "foxmail.com", "163.com", "126.com", "yeah.net",
+        "sina.com", "sina.cn", "sohu.com", "tom.com", "21cn.com",
+        "139.com", "189.cn", "aliyun.com",
+        # disposable
+        "mailinator.com", "guerrillamail.com", "10minutemail.com",
+        "tempmail.com", "temp-mail.org", "trashmail.com", "throwawaymail.com",
+        "yopmail.com", "sharklasers.com", "getnada.com", "dispostable.com",
+    ]
 
     # Populated by bootstrap (phase 2+); empty until then.
     account_id: str = ""

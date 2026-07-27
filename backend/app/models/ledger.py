@@ -45,6 +45,41 @@ class Agent(Base):
     )
 
 
+class User(Base):
+    """A console account created by self-service registration (or by an admin).
+
+    The built-in admin is **not** stored here — it stays config-driven
+    (`auth_username`/`auth_password`) so a bad row can never lock the console.
+    Registered accounts are time-boxed: `expires_at` is checked on every guarded
+    request, so expiry/disable takes effect without waiting for the session
+    cookie to lapse.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    username: Mapped[str] = mapped_column(String(64))  # as typed, for display
+    # lowercase mirror; carries the uniqueness constraint so logins and
+    # registration are case-insensitive on both username and email
+    username_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(160), unique=True, index=True)  # lowercased
+    password_hash: Mapped[str] = mapped_column(String(256))
+    role: Mapped[str] = mapped_column(String(16), default="member")  # member | admin
+    status: Mapped[str] = mapped_column(String(16), default="active")  # active | disabled
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )  # None = never expires (admin-granted)
+    created_by: Mapped[str] = mapped_column(String(64), default="self")
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    login_count: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
 class Deployment(Base):
     __tablename__ = "deployments"
 

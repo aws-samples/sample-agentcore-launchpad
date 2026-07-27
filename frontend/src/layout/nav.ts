@@ -18,3 +18,11 @@ export const NAV_ENTRIES: NavEntry[] = [
 ];
 
 export const PLATFORM_COUNT = 6;
+
+/** Admin-only entries: rendered by the sidebar only for an administrator. */
+export const ADMIN_NAV_ENTRIES: NavEntry[] = [
+  { idx: "10", to: "/users", labelKey: "nav.users" },
+];
+
+/** Every routable entry, for breadcrumb resolution. */
+export const ALL_NAV_ENTRIES: NavEntry[] = [...NAV_ENTRIES, ...ADMIN_NAV_ENTRIES];

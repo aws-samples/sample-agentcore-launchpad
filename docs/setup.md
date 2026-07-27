@@ -51,8 +51,8 @@ Use `make dev` for the foreground, terminal-attached development stack.
 
 ### Optional console login
 
-The console can use a local single-operator login without Cognito or any other
-AWS dependency. Authentication is disabled until a password is configured:
+The console can use local accounts without Cognito or any other AWS dependency.
+Authentication is disabled until a password is configured:
 
 ```bash
 export LAUNCHPAD_AUTH_USERNAME=admin
@@ -70,6 +70,31 @@ The same values may be placed in `config/launchpad.yaml` as `auth_username`,
 `auth_password`, and `auth_cookie_secure`, following the normal configuration
 precedence. Prefer the process environment for the password. Changing the
 credentials and restarting the backend invalidates existing sessions.
+
+### Self-service accounts and User Management
+
+While the gate is enabled, the login page also offers **registration**: a
+visitor supplies a username, a **company email**, and a password, and gets a
+`member` account that is valid for **7 days** and can sign in immediately. The
+built-in admin above is never stored in the database, so it cannot be locked out.
+
+Public / disposable mail domains (Gmail, QQ, 163, Outlook, mailinator, …) are
+rejected. Tune the policy with:
+
+```bash
+export LAUNCHPAD_AUTH_REGISTRATION_ENABLED=true   # false closes registration
+export LAUNCHPAD_AUTH_REGISTRATION_VALID_DAYS=7   # default account validity
+# allow list wins when non-empty; otherwise the built-in block list applies
+export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'
+export LAUNCHPAD_AUTH_BLOCKED_EMAIL_DOMAINS='["gmail.com","qq.com"]'
+```
+
+The admin sees a **User Management** module (`/users`) with registration
+statistics and per-account actions: extend validity (+7 / +30 / custom days or an
+absolute date), disable / enable, change role, reset the password (shown once),
+and delete. Expiry and disabling are enforced on every request, so an account
+loses console access immediately — it does not have to wait for the session
+cookie to lapse.
 
 ## Teardown / 资源清理
 

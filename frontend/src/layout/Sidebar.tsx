@@ -1,11 +1,13 @@
 import { useTranslation } from "react-i18next";
 import { NavLink } from "react-router-dom";
 
-import { NAV_ENTRIES, PLATFORM_COUNT, type NavEntry } from "./nav";
+import { useAuth } from "../auth/auth-context";
+import { ADMIN_NAV_ENTRIES, NAV_ENTRIES, PLATFORM_COUNT, type NavEntry } from "./nav";
 import type { HealthInfo } from "./useHealth";
 
 export function Sidebar({ health }: { health: HealthInfo | null }) {
   const { t } = useTranslation();
+  const { isAdmin } = useAuth();
 
   const renderLink = (entry: NavEntry) => (
     <NavLink
@@ -25,13 +27,19 @@ export function Sidebar({ health }: { health: HealthInfo | null }) {
       {NAV_ENTRIES.slice(0, PLATFORM_COUNT).map(renderLink)}
       <div className="label">{t("nav.operate")}</div>
       {NAV_ENTRIES.slice(PLATFORM_COUNT).map(renderLink)}
+      {isAdmin ? (
+        <>
+          <div className="label">{t("nav.administration")}</div>
+          {ADMIN_NAV_ENTRIES.map(renderLink)}
+        </>
+      ) : null}
       <div className="label">{t("nav.phase02")}</div>
       <div className="nav-item dim">
-        <span className="idx">10</span>
+        <span className="idx">11</span>
         {t("nav.payments")}
       </div>
       <div className="nav-item dim">
-        <span className="idx">11</span>
+        <span className="idx">12</span>
         {t("nav.settings")}
       </div>
       <div className="sys">

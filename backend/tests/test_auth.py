@@ -31,8 +31,24 @@ class TestAuthDisabled:
         assert client.get("/api/auth/status").json() == {
             "auth_required": False,
             "authenticated": True,
+            "registration_enabled": False,
             "username": None,
+            "role": None,
+            "email": None,
+            "account_expires_at": None,
         }
+
+    def test_registration_is_refused_while_the_gate_is_open(self, client):
+        response = client.post(
+            "/api/auth/register",
+            json={
+                "username": "newcomer",
+                "email": "newcomer@acme-corp.com",
+                "password": "sufficient-pass",
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()["code"] == "auth.registration_disabled"
 
     def test_login_is_noop_without_password(self, client):
         response = client.post(
@@ -60,7 +76,12 @@ class TestAuthEnabled:
         assert auth_client.get("/api/auth/status").json() == {
             "auth_required": True,
             "authenticated": False,
+            "registration_enabled": True,
+            # the configured identity is never disclosed before authentication
             "username": None,
+            "role": None,
+            "email": None,
+            "account_expires_at": None,
         }
         response = auth_client.post(
             "/api/auth/login",
@@ -103,6 +124,7 @@ class TestAuthEnabled:
         )
         assert response.status_code == 200
         assert response.json()["username"] == "operator"
+        assert response.json()["role"] == "admin"
         assert auth.COOKIE_NAME in response.cookies
         set_cookie = response.headers["set-cookie"].lower()
         assert "httponly" in set_cookie
@@ -118,8 +140,13 @@ class TestAuthEnabled:
         auth_client.cookies.set(auth.COOKIE_NAME, "9999999999.deadbeef")
         assert auth_client.get("/api/apikeys").status_code == 401
 
-        expired = auth._sign(int(time.time()) - 10)
+        expired = auth._issue("operator", int(time.time()) - 10)
         auth_client.cookies.set(auth.COOKIE_NAME, expired)
+        assert auth_client.get("/api/apikeys").status_code == 401
+
+        # authentic signature, but the subject is nobody the platform knows
+        stranger = auth._issue("stranger", int(time.time()) + 600)
+        auth_client.cookies.set(auth.COOKIE_NAME, stranger)
         assert auth_client.get("/api/apikeys").status_code == 401
 
     def test_password_rotation_invalidates_session(

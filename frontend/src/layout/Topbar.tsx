@@ -1,4 +1,4 @@
-import { LogOut } from "lucide-react";
+import { LogOut, ShieldOff } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../auth/auth-context";
@@ -13,9 +13,19 @@ interface TopbarProps {
 
 export function Topbar({ crumbKey, health }: TopbarProps) {
   const { t } = useTranslation();
-  const { authRequired, username, logout } = useAuth();
+  const { authRequired, username, role, accountExpiresAt, logout } = useAuth();
   const displayName = authRequired ? (username ?? "—") : "river";
   const initials = displayName.slice(0, 2).toUpperCase();
+  const roleLabel = authRequired
+    ? t(role === "member" ? "auth.roleMember" : "auth.roleAdmin")
+    : "PLATFORM-ADMIN";
+  // registered accounts are time-boxed; surface what is left of the validity
+  const daysLeft = accountExpiresAt
+    ? Math.max(
+        0,
+        Math.floor((new Date(accountExpiresAt).getTime() - Date.now()) / 86_400_000),
+      )
+    : null;
   return (
     <div className="topbar">
       <div className="brand">
@@ -47,10 +57,15 @@ export function Topbar({ crumbKey, health }: TopbarProps) {
         <div className="avatar">
           <div className="pic">{initials}</div>
           <span>
-            {displayName} ·{" "}
-            <b className="role">
-              {authRequired ? t("auth.operator") : "PLATFORM-ADMIN"}
-            </b>
+            {displayName} · <b className="role">{roleLabel}</b>
+            {daysLeft !== null ? (
+              <>
+                {" · "}
+                <em className="validity" data-testid="account-days-left">
+                  {t("auth.daysLeft", { days: daysLeft })}
+                </em>
+              </>
+            ) : null}
           </span>
           {authRequired ? (
             <button
@@ -59,10 +74,24 @@ export function Topbar({ crumbKey, health }: TopbarProps) {
               onClick={() => void logout()}
               aria-label={t("auth.logout")}
               title={t("auth.logout")}
+              data-testid="logout-button"
             >
               <LogOut size={14} aria-hidden="true" />
+              {/* label collapses under 720px, leaving the icon as the tap target */}
+              <span className="logout-label">{t("auth.logout")}</span>
             </button>
-          ) : null}
+          ) : (
+            // No gate configured ⇒ no session to end. Say so instead of leaving
+            // an empty slot that reads as a missing sign-out button.
+            <span
+              className="logout-btn auth-off"
+              title={t("auth.gateOffHint")}
+              data-testid="auth-off-badge"
+            >
+              <ShieldOff size={14} aria-hidden="true" />
+              <span className="logout-label">{t("auth.gateOff")}</span>
+            </span>
+          )}
         </div>
       </div>
     </div>
