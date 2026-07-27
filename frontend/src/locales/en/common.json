@@ -1885,8 +1885,7 @@
     "tabs": {
       "overview": "RESOURCE",
       "short-term": "SHORT-TERM",
-      "long-term": "LONG-TERM",
-      "extraction": "EXTRACTION"
+      "long-term": "LONG-TERM"
     },
     "refresh": "REFRESH",
     "loadMore": "LOAD MORE",
@@ -1971,29 +1970,11 @@
       "colStrategy": "STRATEGY",
       "colScore": "SCORE",
       "colCreated": "CREATED",
-      "pendingExtraction": "No records yet. Long-term extraction runs asynchronously after events are written — check the extraction tab.",
+      "pendingExtraction": "No records yet. AgentCore Memory runs long-term extraction asynchronously after events are written, so give it a moment.",
       "detailTitle": "Record detail",
       "pickRecord": "Select a record to inspect it.",
       "recordId": "Record ID",
       "namespaces": "Namespaces"
-    },
-    "extraction": {
-      "title": "Extraction jobs",
-      "sub": "How short-term events become long-term records",
-      "useSelection": "Filter by the selected actor and session",
-      "allActors": "all actors",
-      "allStrategies": "All strategies",
-      "allStatuses": "All statuses",
-      "statusLabel": "Job status",
-      "count": "{{count}} jobs loaded",
-      "colJob": "JOB",
-      "colStatus": "STATUS",
-      "colStrategy": "STRATEGY",
-      "colActor": "ACTOR",
-      "colSession": "SESSION",
-      "colDetail": "DETAIL",
-      "noJobs": "No extraction jobs match these filters.",
-      "statusFilterNote": "only FAILED can be filtered"
     }
   }
 }

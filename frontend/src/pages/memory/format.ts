@@ -31,7 +31,7 @@ export function shortId(value: string | null | undefined, keep = 12): string {
   return value.length <= keep * 2 + 1 ? value : `${value.slice(0, keep)}…${value.slice(-keep)}`;
 }
 
-/** Status → Chip tone. Covers memory/strategy status and extraction-job status. */
+/** Status → Chip tone. Covers memory resource and strategy status. */
 export function statusTone(
   status: string | null | undefined,
 ): "good" | "warn" | "crit" | "muted" {

@@ -1885,8 +1885,7 @@
     "tabs": {
       "overview": "资源",
       "short-term": "短期记忆",
-      "long-term": "长期记忆",
-      "extraction": "抽取任务"
+      "long-term": "长期记忆"
     },
     "refresh": "刷新",
     "loadMore": "加载更多",
@@ -1971,29 +1970,11 @@
       "colStrategy": "策略",
       "colScore": "相关度",
       "colCreated": "创建时间",
-      "pendingExtraction": "暂无记录。长期记忆抽取在事件写入后异步执行 — 可查看抽取任务页。",
+      "pendingExtraction": "暂无记录。长期记忆抽取由 AgentCore Memory 在事件写入后异步执行，需要一点时间。",
       "detailTitle": "记录详情",
       "pickRecord": "选择一条记录查看详情。",
       "recordId": "记录 ID",
       "namespaces": "命名空间"
-    },
-    "extraction": {
-      "title": "抽取任务",
-      "sub": "短期事件如何变成长期记录",
-      "useSelection": "按所选参与者与会话过滤",
-      "allActors": "全部参与者",
-      "allStrategies": "全部策略",
-      "allStatuses": "全部状态",
-      "statusLabel": "任务状态",
-      "count": "已加载 {{count}} 个任务",
-      "colJob": "任务",
-      "colStatus": "状态",
-      "colStrategy": "策略",
-      "colActor": "参与者",
-      "colSession": "会话",
-      "colDetail": "详情",
-      "noJobs": "没有符合筛选条件的抽取任务。",
-      "statusFilterNote": "仅支持按 FAILED 过滤"
     }
   }
 }

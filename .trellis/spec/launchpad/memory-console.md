@@ -163,23 +163,27 @@ switching tabs does not refetch.
 >    value less than or equal to 50`). The shared `PAGE_MAX = 100` therefore
 >    502s **every** request to that operation — hence `EXTRACTION_PAGE_MAX = 50`.
 > 2. Its `filter.status` enum accepts **only** `FAILED`
->    (`Member must satisfy enum value set: [FAILED]`). Offering `SUCCEEDED` /
->    `IN_PROGRESS` in a picker produces a guaranteed 502. Jobs of every status
->    still appear in the *unfiltered* listing — you just cannot filter *for*
->    them, and the UI must say so.
+>    (`Member must satisfy enum value set: [FAILED]`), and so does the returned
+>    `job.status`. The operation is documented as listing jobs "eligible to be
+>    started", i.e. the retry backlog `StartMemoryExtractionJob` would pick up —
+>    it is **not** a job history, so successful and in-flight extractions never
+>    appear. An account with populated long-term records legitimately returns
+>    zero jobs; treat an empty list as "nothing failed", never as "extraction
+>    never ran".
 >
-> Extraction jobs are also **transient**: an account with populated long-term
-> records can legitimately return zero jobs. Treat an empty job list as "none
-> retained", never as "extraction never ran".
+> Because of (2) the console has **no extraction view**: extraction is a job the
+> Memory service runs itself from the configured strategies, and a permanently
+> empty FAILED-only table reads to an operator as "nothing was ever extracted".
+> `GET /api/memory/extraction-jobs` stays available for debugging.
 
 ### 5. Good/Base/Bad Cases
 
 - **Good** — `/records?actor_id=<agent>__river&strategy_id=semantic_facts-…`
   resolves `/facts/<agent>__river`, lists records, and `POST /records/search`
   returns the same shape with `score` populated and ranked.
-- **Base** — a session has events but no records yet (extraction is
-  asynchronous). The long-term view must render the "extraction pending — check
-  the extraction tab" empty state, not an "empty memory" state.
+- **Base** — a session has events but no records yet (service-side extraction is
+  asynchronous). The long-term view must render the "extraction pending — give it
+  a moment" empty state, not an "empty memory" state.
 - **Bad** — `?status=SUCCEEDED` → typed 400 before any AWS call;
   `?actor_id=` (empty) → the key is omitted from the AWS `filter` dict entirely,
   because the preview API rejects empty strings inside `filter`.

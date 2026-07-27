@@ -5,12 +5,11 @@ import { useSearchParams } from "react-router-dom";
 import { Panel, useToast, ViewHead } from "../components";
 import type { MemoryOverview } from "../lib/api";
 import { api } from "../lib/api";
-import { ExtractionTab } from "./memory/ExtractionTab";
 import { LongTermTab } from "./memory/LongTermTab";
 import { OverviewTab } from "./memory/OverviewTab";
 import { ShortTermTab } from "./memory/ShortTermTab";
 
-const VIEWS = ["overview", "short-term", "long-term", "extraction"] as const;
+const VIEWS = ["overview", "short-term", "long-term"] as const;
 type ViewKey = (typeof VIEWS)[number];
 
 /**
@@ -132,7 +131,7 @@ export function Memory() {
   }
 
   // Before `make bootstrap` there is no memory resource to visualize at all —
-  // say so once instead of letting four tabs each fail their own way.
+  // say so once instead of letting all three tabs fail their own way.
   if (overview && !overview.configured) {
     return (
       <section>
@@ -183,13 +182,6 @@ export function Memory() {
           strategyId={strategy}
           onSelectActor={selectActor}
           onSelectStrategy={selectStrategy}
-        />
-      )}
-      {overview && view === "extraction" && (
-        <ExtractionTab
-          strategies={overview.strategies}
-          actorId={actor}
-          sessionId={session}
         />
       )}
     </section>

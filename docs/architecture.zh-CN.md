@@ -131,7 +131,12 @@ public  /v1  ──┘        │
 | `overview` | 资源配置(id/arn/状态/事件过期/KMS/执行角色)、每条长期策略及其 `namespaces` + `namespaceTemplates`、以及账号内其他记忆资源(标出平台单例) | `GetMemory`、`ListMemories`、`ListActors` |
 | `short-term` | actor → session → event 三级下钻;事件以时间轴呈现对话轮次的角色/文本,blob 载荷只显示字节数 | `ListActors`、`ListSessions`、`ListEvents` |
 | `long-term` | 解析出的命名空间下的记录,以及带相关度评分的语义检索 | `ListMemoryRecords`、`RetrieveMemoryRecords` |
-| `extraction` | 按 actor/session/策略/状态过滤的抽取任务表 —— 只有这里能区分「事件已写入但记录尚未生成」与「抽取失败」 | `ListMemoryExtractionJobs` |
+
+**抽取不作为控制台视图**。把短期事件变成长期记录是 AgentCore Memory 服务**自己**按资源上
+配置的策略异步跑的任务,平台从不触发。`ListMemoryExtractionJobs` 也不是任务历史:它的
+`status` 枚举只有一个值(`FAILED`),因此列出的只是 `StartMemoryExtractionJob` 会去重试的
+失败积压,健康资源返回空列表。把它做成一个标签页会被读成「什么都没抽取出来」,所以控制台
+已移除该视图;`GET /api/memory/extraction-jobs` 仍保留用于排查。
 
 两处投影承担了主要工作。**actor 解码:** AWS 返回的是 `scoped_actor` 构造的复合
 `<agent_id>__<human>`,因此 `/actors` 按首个 `__` 拆分,并每页一次批量查询台账

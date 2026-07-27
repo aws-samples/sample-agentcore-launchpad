@@ -140,7 +140,7 @@ resource. See [architecture.md](architecture.md#the-memory-console-console-05).
 | `GET` | `/api/memory/namespaces?actor_id=` | Strategy namespace templates with `{actorId}` substituted, plus a `resolvable` flag |
 | `GET` | `/api/memory/records?actor_id=&strategy_id=` or `?namespace=` | Long-term records for the resolved namespace |
 | `POST` | `/api/memory/records/search` | Semantic retrieval (`{query, actor_id, strategy_id?, namespace?, top_k}`) with relevance scores |
-| `GET` | `/api/memory/extraction-jobs` | Extraction jobs, filterable by `actor_id`/`session_id`/`strategy_id`/`status` |
+| `GET` | `/api/memory/extraction-jobs` | Failed (retry-eligible) extraction jobs, filterable by `actor_id`/`session_id`/`strategy_id`/`status` — **not surfaced in the console**; AWS's `status` enum is `FAILED` only, so a healthy resource returns an empty list |
 
 Every list route accepts and returns `next_token` (AWS pages at 100 items) and
 accepts `max_results` (clamped to 100) — nothing is capped silently. Namespace

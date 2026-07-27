@@ -195,7 +195,15 @@ exists in either file, and `tests/test_memory_console.py` asserts that.
 | `overview` | resource config (id/arn/status/event expiry/KMS/execution role), each long-term strategy with its `namespaces` + `namespaceTemplates`, and the account's other memory resources with the platform singleton marked | `GetMemory`, `ListMemories`, `ListActors` |
 | `short-term` | actor → session → event drill-down; events render as a timeline of conversational role/text turns, blob payloads as a byte count only | `ListActors`, `ListSessions`, `ListEvents` |
 | `long-term` | records for a resolved namespace, plus semantic retrieval with relevance scores | `ListMemoryRecords`, `RetrieveMemoryRecords` |
-| `extraction` | extraction-job table filtered by actor/session/strategy/status — the only place where "events written but no records yet" is distinguishable from a failed extraction | `ListMemoryExtractionJobs` |
+
+**Extraction is not a console surface.** Turning short-term events into long-term
+records is a job the AgentCore Memory service runs itself, asynchronously, from the
+strategies configured on the resource — the platform never starts one.
+`ListMemoryExtractionJobs` is not a job history either: its `status` enum has exactly
+one value (`FAILED`), so it lists only the retry-eligible backlog that
+`StartMemoryExtractionJob` would pick up, and a healthy resource answers with an empty
+list. Showing that as a tab read as "nothing was ever extracted", so the console
+dropped it; `GET /api/memory/extraction-jobs` remains available for debugging.
 
 Two projections carry the load. **Actor decoding:** AWS returns the compound
 `<agent_id>__<human>` that `scoped_actor` builds, so `/actors` splits on the

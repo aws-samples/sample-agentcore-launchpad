@@ -766,16 +766,6 @@ export interface MemoryRecord {
   metadata: Record<string, unknown>;
 }
 
-export interface MemoryExtractionJob {
-  job_id: string | null;
-  status: string | null;
-  failure_reason: string | null;
-  strategy_id: string | null;
-  actor_id: string | null;
-  session_id: string | null;
-  messages: string[];
-}
-
 export interface MemoryPage<T> {
   items: T[];
   next_token: string | null;
@@ -1303,18 +1293,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
-  memoryExtractionJobs: (
-    filters: {
-      actor_id?: string;
-      session_id?: string;
-      strategy_id?: string;
-      status?: string;
-    },
-    nextToken?: string | null,
-  ) =>
-    request<MemoryPage<MemoryExtractionJob>>(
-      `/api/memory/extraction-jobs${memoryQuery({ ...filters, next_token: nextToken })}`,
-    ),
+  // NOTE: `GET /api/memory/extraction-jobs` exists on the backend but is not
+  // surfaced in the console — the AWS list only ever returns FAILED jobs
+  // (retry backlog), which reads as "nothing extracted" to an operator.
   obsDashboard: (range: string, force = false) =>
     request<ObsDashboard>(`/api/observability/dashboard?${obsQuery(range, force)}`),
   obsTraces: (range: string, force = false) =>
