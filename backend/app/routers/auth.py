@@ -75,6 +75,10 @@ def enabled(settings: Settings | None = None) -> bool:
     return _password(settings) is not None
 
 
+def registration_requires_approval(settings: Settings | None = None) -> bool:
+    return (settings or get_settings()).auth_registration_require_approval
+
+
 def registration_enabled(settings: Settings | None = None) -> bool:
     current = settings or get_settings()
     # With the gate disabled the console is already open, so there is nothing to
@@ -252,6 +256,7 @@ def status(request: Request) -> dict[str, Any]:
         "auth_required": required,
         "authenticated": identity is not None,
         "registration_enabled": registration_enabled(settings),
+        "registration_requires_approval": registration_requires_approval(settings),
         **_identity_fields(identity if required else None),
     }
 
@@ -266,6 +271,7 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
             "auth_required": False,
             "expires_at": None,
             "registration_enabled": False,
+            "registration_requires_approval": registration_requires_approval(settings),
             **_identity_fields(None),
         }
 
@@ -318,6 +324,7 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
         "auth_required": True,
         "expires_at": expiry,
         "registration_enabled": registration_enabled(settings),
+        "registration_requires_approval": registration_requires_approval(settings),
         **_identity_fields(identity),
     }
 
@@ -340,6 +347,9 @@ def register(req: RegisterRequest) -> dict[str, Any]:
             "ok": True,
             "username": user.username,
             "email": user.email,
+            # pending ⇒ no window yet: the clock starts when an admin approves
+            "status": user.status,
+            "requires_approval": user.status == users_service.STATUS_PENDING,
             "expires_at": expires_at.isoformat() if expires_at else None,
             "valid_days": settings.auth_registration_valid_days,
         }

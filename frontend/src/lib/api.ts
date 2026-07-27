@@ -1016,6 +1016,8 @@ export interface AuthStatus {
   auth_required: boolean;
   authenticated: boolean;
   registration_enabled: boolean;
+  /** new registrations wait in `pending` until an admin approves them */
+  registration_requires_approval: boolean;
   username: string | null;
   role: ConsoleRole | null;
   email: string | null;
@@ -1033,13 +1035,16 @@ export interface RegisterResult {
   ok: boolean;
   username: string;
   email: string;
+  status: "pending" | "active";
+  requires_approval: boolean;
+  /** null while pending — the validity window starts at approval */
   expires_at: string | null;
   valid_days: number;
 }
 
 /* ── console accounts (admin user management) ──────────────────────────── */
 
-export type UserState = "active" | "expired" | "disabled";
+export type UserState = "pending" | "active" | "expired" | "disabled";
 export type UserStatusFilter = "all" | UserState;
 
 export interface ConsoleUser {
@@ -1047,7 +1052,7 @@ export interface ConsoleUser {
   username: string;
   email: string;
   role: ConsoleRole;
-  status: "active" | "disabled";
+  status: "pending" | "active" | "disabled";
   state: UserState;
   expires_at: string | null;
   days_remaining: number | null;
@@ -1068,6 +1073,7 @@ export interface UserListResult {
 
 export interface UserStats {
   total: number;
+  pending: number;
   active: number;
   expired: number;
   disabled: number;
@@ -1080,7 +1086,8 @@ export interface UserStats {
 }
 
 export interface UserPatchBody {
-  status?: "active" | "disabled";
+  /** "active" on a pending account approves it and starts its validity window */
+  status?: "pending" | "active" | "disabled";
   role?: ConsoleRole;
   extend_days?: number;
   /** ISO timestamp, or null for "never expires" */

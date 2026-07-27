@@ -16,9 +16,13 @@ identity-carrying session, a registration endpoint, and an admin-only
 
 ## Scope decisions (confirmed with the user, 2026-07-27)
 
-1. **Self-service registration, immediate login.** A successful registration can
-   log in right away; the account expires 7 days after registration. No admin
-   approval step, no email-verification link (no SES/SMTP dependency).
+1. **Self-service registration, admin approval by default** (revised
+   2026-07-27, superseding the original "immediate login" decision). A new
+   registration lands in `pending` and cannot sign in until an admin approves it;
+   the 7-day validity window starts at **approval**, not at registration. The
+   old instant-activation behavior stays available behind
+   `auth_registration_require_approval=false`. Still no email-verification link
+   (no SES/SMTP dependency).
 2. **"Company email" = free-mail blacklist.** Registration rejects public /
    disposable mail domains (gmail, qq, 163, outlook, mailinator, …); any other
    syntactically valid address is accepted. The blacklist is configurable.
@@ -51,8 +55,15 @@ identity-carrying session, a registration endpoint, and an admin-only
 - Validation: username 3–32 chars `[A-Za-z0-9._-]`, not the reserved admin name,
   not already taken; email syntactically valid, domain not in the blocked-domain
   list, not already registered; password ≥ 8 chars.
-- The created account gets `role=member`, `status=active`,
-  `expires_at = now + auth_registration_valid_days` (default **7**).
+- With approval required (**default**) the account is created as
+  `role=member`, `status=pending`, `expires_at=null`; it can neither sign in
+  (`401 auth.account_pending`) nor hold a session. An admin approving it sets
+  `status=active` and starts the clock: `expires_at = approval + auth_registration_valid_days`
+  (default **7**). With `auth_registration_require_approval=false` the account is
+  created `active` with the window starting at registration.
+- `GET /api/auth/status` reports `registration_requires_approval` so the console
+  can tell the visitor what happens after they submit, and the registration
+  response echoes the resulting `status`.
 - Registration is only available while the auth gate is enabled (a password is
   configured). With the gate disabled the console is already open, so
   registration returns `400 auth.registration_disabled`.
@@ -81,8 +92,12 @@ Admin-only (`403 auth.forbidden` for members):
 - `GET /api/users/stats` — totals (all / active / expired / disabled),
   `expiring_soon` (≤3 days), `registered_last_7d`, `active_last_7d` (logged in),
   a 14-day daily registration series, and the top email domains.
-- `PATCH /api/users/{id}` — extend validity by N days, set an absolute
-  `expires_at`, enable/disable, change role, reset password.
+- `PATCH /api/users/{id}` — approve (`status=active`, which grants the default
+  window when the account has none), reject/suspend (`status=disabled`), send
+  back to `pending`, extend validity by N days, set an absolute `expires_at`,
+  change role, reset password.
+- Statistics and the list filter both carry `pending`, so the admin can see the
+  approval queue at a glance.
 - `DELETE /api/users/{id}` — remove the account.
 - Admin actions on one's own configured-admin identity are impossible (it has no
   row); a member cannot reach any of these routes.
@@ -93,6 +108,10 @@ Admin-only (`403 auth.forbidden` for members):
   confirm) with a clear "your account is valid for 7 days" note, inline field
   errors mapped from the backend error codes, and a success state that returns to
   the sign-in form (prefilled username).
+- The register success state says whether the account is usable now or waiting
+  for approval, and the sign-in form maps `auth.account_pending` to a "waiting
+  for approval" message.
+- The users table exposes **APPROVE / REJECT** actions on `pending` rows.
 - **New `/users` page**, reachable from the nav **only for `role=admin`**
   (members and the disabled-gate case never see the entry, and the route itself
   renders a "forbidden" state instead of the table).
@@ -120,9 +139,12 @@ Admin-only (`403 auth.forbidden` for members):
 
 ## Acceptance Criteria
 
-- [x] `POST /api/auth/register` creates a 7-day `member` account that can log in
-      immediately; the username/email/password/blocked-domain/duplicate rules
-      each return their documented `4xx` code.
+- [x] `POST /api/auth/register` creates a `pending` `member` account that cannot
+      sign in (`401 auth.account_pending`) until an admin approves it, and the
+      7-day window starts at approval; with
+      `auth_registration_require_approval=false` the account is active at once.
+      The username/email/password/blocked-domain/duplicate rules each return
+      their documented `4xx` code.
 - [x] A member session is rejected with `401 auth.required` once the account's
       `expires_at` has passed or an admin disables it — without re-login.
 - [x] `GET /api/users`, `GET /api/users/stats`, `PATCH /api/users/{id}`,

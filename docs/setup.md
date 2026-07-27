@@ -74,25 +74,28 @@ credentials and restarting the backend invalidates existing sessions.
 ### Self-service accounts and User Management
 
 While the gate is enabled, the login page also offers **registration**: a
-visitor supplies a username, a **company email**, and a password, and gets a
-`member` account that is valid for **7 days** and can sign in immediately. The
-built-in admin above is never stored in the database, so it cannot be locked out.
+visitor supplies a username, a **company email**, and a password. By default the
+new account lands in **`pending`** and cannot sign in until an admin approves it;
+the **7-day** validity window starts at approval. The built-in admin above is
+never stored in the database, so it cannot be locked out.
 
 Public / disposable mail domains (Gmail, QQ, 163, Outlook, mailinator, …) are
 rejected. Tune the policy with:
 
 ```bash
-export LAUNCHPAD_AUTH_REGISTRATION_ENABLED=true   # false closes registration
-export LAUNCHPAD_AUTH_REGISTRATION_VALID_DAYS=7   # default account validity
+export LAUNCHPAD_AUTH_REGISTRATION_ENABLED=true          # false closes registration
+export LAUNCHPAD_AUTH_REGISTRATION_REQUIRE_APPROVAL=true # false = active on registration
+export LAUNCHPAD_AUTH_REGISTRATION_VALID_DAYS=7          # validity granted at approval
 # allow list wins when non-empty; otherwise the built-in block list applies
 export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'
 export LAUNCHPAD_AUTH_BLOCKED_EMAIL_DOMAINS='["gmail.com","qq.com"]'
 ```
 
-The admin sees a **User Management** module (`/users`) with registration
-statistics and per-account actions: extend validity (+7 / +30 / custom days or an
-absolute date), disable / enable, change role, reset the password (shown once),
-and delete. Expiry and disabling are enforced on every request, so an account
+The admin sees a **User Management** module (`/users`) with an approval queue
+(`AWAITING APPROVAL` tile + `PENDING` filter, **APPROVE** / **REJECT** per row),
+registration statistics, and per-account actions: extend validity (+7 / +30 /
+custom days or an absolute date), disable / enable, change role, reset the
+password (shown once), and delete. Expiry and disabling are enforced on every request, so an account
 loses console access immediately — it does not have to wait for the session
 cookie to lapse.
 

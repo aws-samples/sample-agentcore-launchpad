@@ -69,21 +69,24 @@ export LAUNCHPAD_AUTH_COOKIE_SECURE=true   # HTTPS 部署时开启
 
 ### 自助注册与用户管理
 
-登录网关开启后,登录页同时提供**注册**:填写用户名、**公司邮箱**和密码即可创建
-`member` 账户,**有效期 7 天**,注册后可立即登录。上面配置的内置 admin 不入库,
-因此永远不会被锁在控制台之外。
+登录网关开启后,登录页同时提供**注册**:填写用户名、**公司邮箱**和密码提交申请。
+默认情况下新账户处于 **`pending`(待审批)**,必须由管理员审批通过后才能登录,
+**7 天有效期从审批时开始计算**。上面配置的内置 admin 不入库,因此永远不会被锁在
+控制台之外。
 
 公共/临时邮箱域名(Gmail、QQ、163、Outlook、mailinator 等)会被拒绝。相关配置:
 
 ```bash
-export LAUNCHPAD_AUTH_REGISTRATION_ENABLED=true   # false 关闭注册
-export LAUNCHPAD_AUTH_REGISTRATION_VALID_DAYS=7   # 默认有效期天数
+export LAUNCHPAD_AUTH_REGISTRATION_ENABLED=true          # false 关闭注册
+export LAUNCHPAD_AUTH_REGISTRATION_REQUIRE_APPROVAL=true # false 则注册即生效
+export LAUNCHPAD_AUTH_REGISTRATION_VALID_DAYS=7          # 审批通过后授予的有效期
 # 白名单非空时优先生效,否则使用内置黑名单
 export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'
 export LAUNCHPAD_AUTH_BLOCKED_EMAIL_DOMAINS='["gmail.com","qq.com"]'
 ```
 
-admin 账号会看到**用户管理**模块(`/users`):注册统计 + 逐账户操作(延期 +7/+30/
+admin 账号会看到**用户管理**模块(`/users`):审批队列(「待审批」统计卡片 +
+`PENDING` 筛选 + 每行的**通过**/**拒绝**)、注册统计,以及逐账户操作(延期 +7/+30/
 自定义天数或指定到期时间、禁用/启用、修改角色、重置密码(仅显示一次)、删除)。
 到期与禁用在每次请求时校验,账户会**立即**失去控制台访问权限,无需等待会话
 Cookie 过期。

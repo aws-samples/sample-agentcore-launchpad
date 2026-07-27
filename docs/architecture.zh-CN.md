@@ -124,8 +124,11 @@ AWS 调用。
 - **内置 admin**:来自配置(`LAUNCHPAD_AUTH_USERNAME`,默认 `admin`),没有台账
   行,因此任何数据问题都无法把控制台锁死;该用户名对注册保留;
 - **注册账户**:`users` 表中的行,由自助注册创建(`POST /api/auth/register`:
-  用户名 + 公司邮箱 + 密码),`role=member`,有效期为
-  `LAUNCHPAD_AUTH_REGISTRATION_VALID_DAYS`(默认 7 天)。密码以 `pbkdf2_sha256`
+  用户名 + 公司邮箱 + 密码),`role=member`。默认落到 `status=pending`、没有有效期,
+  也无法登录(`401 auth.account_pending`);管理员审批通过(`PATCH /api/users/{id}`
+  带 `status=active`)后才开始计算 `LAUNCHPAD_AUTH_REGISTRATION_VALID_DAYS`
+  (默认 7 天)的有效期。设 `LAUNCHPAD_AUTH_REGISTRATION_REQUIRE_APPROVAL=false`
+  可恢复"注册即生效"。密码以 `pbkdf2_sha256`
   加每用户盐存储——仅用标准库,不引入 passlib/bcrypt。"公司邮箱"通过可配置的
   免费/临时邮箱黑名单强制执行,白名单非空时优先生效。
 
@@ -142,7 +145,8 @@ Cookie**:授权在每次请求时解析(配置的 admin → `admin`,其余以 `u
 
 admin 另外拥有**用户管理**模块(`/users`),对应 `GET /api/users`、
 `GET /api/users/stats`、`PATCH /api/users/{id}`、`DELETE /api/users/{id}`——
-列表/搜索/筛选、注册统计、延期、禁用/启用、修改角色、一次性重置密码、删除。member
+审批队列(待审批筛选与计数、通过/拒绝)、列表/搜索/筛选、注册统计、延期、
+禁用/启用、修改角色、一次性重置密码、删除。member
 会话在这四个路由上得到 `403 auth.forbidden`,页面渲染无权限状态而不是表格。数据本身
 **不**按用户隔离:所有已登录账户看到同一批 agent、知识库与链路,只有该模块按角色
 限制。
@@ -263,7 +267,7 @@ span。Claude Agent SDK 容器把 `claude` CLI 当子进程驱动——ADOT 自�
 | `deployments` | 每次部署一行——五阶段数组,含各阶段 status/detail/时间戳 |
 | `jobs` | 异步工作(type `deploy_agent`)——status + 阶段事件的 JSONL `log` |
 | `chat_sessions` | Chat 交互 session——轮次、actor、最近活跃时间 |
-| `users` | 注册创建的控制台账户——用户名/邮箱、pbkdf2 密码哈希、角色、状态、`expires_at`、最近登录与登录次数(内置 admin 仅来自配置,不入表) |
+| `users` | 注册创建的控制台账户——用户名/邮箱、pbkdf2 密码哈希、角色、状态(`pending`/`active`/`disabled`)、`expires_at`(审批前为空)、最近登录与登录次数(内置 admin 仅来自配置,不入表) |
 | `api_keys` | 公开 API 密钥——sha256 哈希 + 前缀(从不存明文) |
 | `policy_decisions` | 治理决策日志——principal、tool、ALLOW/DENY、原因 |
 | `eval_datasets` / `eval_runs` | 评估数据集(legacy prompt 或 devguide scenario + 描述 + 最近一次 AWS 同步信息)与运行状态(分数或 insight 树;窗口运行以 `dataset_name="window:<N>h"` 编码范围) |

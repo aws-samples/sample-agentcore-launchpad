@@ -32,6 +32,7 @@ class TestAuthDisabled:
             "auth_required": False,
             "authenticated": True,
             "registration_enabled": False,
+            "registration_requires_approval": True,
             "username": None,
             "role": None,
             "email": None,
@@ -77,6 +78,7 @@ class TestAuthEnabled:
             "auth_required": True,
             "authenticated": False,
             "registration_enabled": True,
+            "registration_requires_approval": True,
             # the configured identity is never disclosed before authentication
             "username": None,
             "role": None,

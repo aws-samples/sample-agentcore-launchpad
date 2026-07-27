@@ -1,4 +1,11 @@
-import { CircleCheck, KeyRound, LoaderCircle, LogIn, UserPlus } from "lucide-react";
+import {
+  CircleCheck,
+  Hourglass,
+  KeyRound,
+  LoaderCircle,
+  LogIn,
+  UserPlus,
+} from "lucide-react";
 import {
   type FormEvent,
   type ReactNode,
@@ -25,16 +32,18 @@ const AUTH_DISABLED: AuthStatus = {
   auth_required: false,
   authenticated: true,
   registration_enabled: false,
+  registration_requires_approval: false,
   username: null,
   role: null,
   email: null,
   account_expires_at: null,
 };
 
-const LOGGED_OUT = (registrationEnabled: boolean): AuthStatus => ({
+const LOGGED_OUT = (previous: AuthStatus | null): AuthStatus => ({
   auth_required: true,
   authenticated: false,
-  registration_enabled: registrationEnabled,
+  registration_enabled: previous?.registration_enabled ?? false,
+  registration_requires_approval: previous?.registration_requires_approval ?? true,
   username: null,
   role: null,
   email: null,
@@ -44,6 +53,7 @@ const LOGGED_OUT = (registrationEnabled: boolean): AuthStatus => ({
 /** Backend error code → i18n key, so the gate never invents its own wording. */
 const LOGIN_ERROR_KEYS: Record<string, string> = {
   "auth.invalid_credentials": "auth.invalidCredentials",
+  "auth.account_pending": "auth.accountPending",
   "auth.account_expired": "auth.accountExpired",
   "auth.account_disabled": "auth.accountDisabled",
 };
@@ -78,7 +88,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const onUnauthorized = () => {
-      setStatus((prev) => LOGGED_OUT(prev?.registration_enabled ?? false));
+      setStatus(LOGGED_OUT);
     };
     window.addEventListener(AUTH_UNAUTHORIZED_EVENT, onUnauthorized);
     return () => window.removeEventListener(AUTH_UNAUTHORIZED_EVENT, onUnauthorized);
@@ -89,6 +99,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       auth_required: result.auth_required,
       authenticated: true,
       registration_enabled: result.registration_enabled,
+      registration_requires_approval: result.registration_requires_approval,
       username: result.username,
       role: result.role,
       email: result.email,
@@ -100,7 +111,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     try {
       await api.logout();
     } finally {
-      setStatus((prev) => LOGGED_OUT(prev?.registration_enabled ?? false));
+      setStatus(LOGGED_OUT);
     }
   }, []);
 
@@ -128,7 +139,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (status === null) return <AuthLoading />;
   if (status.auth_required && !status.authenticated) {
     return (
-      <LoginPage onLogin={onLogin} registrationEnabled={status.registration_enabled} />
+      <LoginPage
+        onLogin={onLogin}
+        registrationEnabled={status.registration_enabled}
+        requiresApproval={status.registration_requires_approval}
+      />
     );
   }
   return <AuthContext.Provider value={context}>{children}</AuthContext.Provider>;
@@ -147,9 +162,11 @@ function AuthLoading() {
 function LoginPage({
   onLogin,
   registrationEnabled,
+  requiresApproval,
 }: {
   onLogin: (result: AuthLoginResult) => void;
   registrationEnabled: boolean;
+  requiresApproval: boolean;
 }) {
   const { t } = useTranslation();
   const [mode, setMode] = useState<"signin" | "register">("signin");
@@ -197,7 +214,7 @@ function LoginPage({
         {mode === "signin" ? (
           <SignInForm onLogin={onLogin} prefill={prefill} />
         ) : (
-          <RegisterForm onRegistered={onRegistered} />
+          <RegisterForm onRegistered={onRegistered} requiresApproval={requiresApproval} />
         )}
       </main>
     </div>
@@ -291,8 +308,10 @@ function SignInForm({
 
 function RegisterForm({
   onRegistered,
+  requiresApproval,
 }: {
   onRegistered: (result: RegisterResult) => void;
+  requiresApproval: boolean;
 }) {
   const { t } = useTranslation();
   const [username, setUsername] = useState("");
@@ -329,18 +348,28 @@ function RegisterForm({
   };
 
   if (done) {
+    const pending = done.requires_approval;
     return (
       <div className="auth-panel" data-testid="register-success">
-        <div className="auth-icon ok" aria-hidden="true">
-          <CircleCheck size={24} strokeWidth={1.7} />
+        <div className={`auth-icon${pending ? " wait" : " ok"}`} aria-hidden="true">
+          {pending ? (
+            <Hourglass size={24} strokeWidth={1.7} />
+          ) : (
+            <CircleCheck size={24} strokeWidth={1.7} />
+          )}
         </div>
         <div className="kicker">{t("auth.registerKicker")}</div>
-        <h1>{t("auth.registerDoneTitle")}</h1>
+        <h1>{t(pending ? "auth.registerPendingTitle" : "auth.registerDoneTitle")}</h1>
         <p className="auth-subtitle">
-          {t("auth.registerDoneBody", {
-            username: done.username,
-            days: done.valid_days,
-          })}
+          {pending
+            ? t("auth.registerPendingBody", {
+                username: done.username,
+                days: done.valid_days,
+              })
+            : t("auth.registerDoneBody", {
+                username: done.username,
+                days: done.valid_days,
+              })}
         </p>
         <div className="auth-success">
           <div>
@@ -348,9 +377,13 @@ function RegisterForm({
             <b>{done.email}</b>
           </div>
           <div>
-            <span>{t("auth.validUntil")}</span>
-            <b>
-              {done.expires_at ? new Date(done.expires_at).toLocaleString() : "—"}
+            <span>{t(pending ? "auth.accountStatus" : "auth.validUntil")}</span>
+            <b data-testid="register-status">
+              {pending
+                ? t("auth.statusPending")
+                : done.expires_at
+                  ? new Date(done.expires_at).toLocaleString()
+                  : "—"}
             </b>
           </div>
         </div>
@@ -369,7 +402,9 @@ function RegisterForm({
       </div>
       <div className="kicker">{t("auth.registerKicker")}</div>
       <h1>{t("auth.registerTitle")}</h1>
-      <p className="auth-subtitle">{t("auth.registerSubtitle")}</p>
+      <p className="auth-subtitle">
+        {t(requiresApproval ? "auth.registerSubtitleApproval" : "auth.registerSubtitle")}
+      </p>
 
       <div className="auth-fields">
         <div className="auth-field">
