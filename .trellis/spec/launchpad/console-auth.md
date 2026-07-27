@@ -137,6 +137,14 @@ through a lookup table (no hand-written wording per code). `isAdmin` is
 admin nav entries live in `ADMIN_NAV_ENTRIES` and the `/users` page renders a
 forbidden state instead of fetching when `!isAdmin`.
 
+The top bar exposes the signed-in identity, the role, the remaining validity for
+time-boxed accounts, and a **labelled sign-out control**
+(`data-testid="logout-button"`, `auth.logout`) that collapses to its icon under
+720px while keeping a ≥28px tap target. Sign-out must go through the context's
+`logout()` (which calls `POST /api/auth/logout` and then resets gate state
+in a `finally`, so a dead session still returns to the login form) — never a
+page reload or a direct `fetch`.
+
 ## 4. Validation & Error Matrix
 
 | Condition | Result |

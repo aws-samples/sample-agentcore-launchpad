@@ -74,8 +74,11 @@ export function Topbar({ crumbKey, health }: TopbarProps) {
               onClick={() => void logout()}
               aria-label={t("auth.logout")}
               title={t("auth.logout")}
+              data-testid="logout-button"
             >
               <LogOut size={14} aria-hidden="true" />
+              {/* label collapses under 720px, leaving the icon as the tap target */}
+              <span className="logout-label">{t("auth.logout")}</span>
             </button>
           ) : null}
         </div>

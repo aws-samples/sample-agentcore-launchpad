@@ -103,8 +103,11 @@ a.syschip.link:hover{border-color:var(--amber);color:var(--amber)}
 .auth-loading{min-height:100%;display:grid;place-items:center;color:var(--amber)}
 .auth-loading svg,.spin{animation:auth-spin .9s linear infinite}
 .logout-btn{
-  width:25px;height:24px;display:grid;place-items:center;background:transparent;color:var(--ink-3);
-  border:0;border-left:1px solid var(--line);margin-left:2px;padding-left:5px;cursor:pointer;
+  min-height:24px;display:flex;align-items:center;gap:5px;background:transparent;color:var(--ink-3);
+  border:0;border-left:1px solid var(--line);margin-left:2px;padding:0 2px 0 8px;cursor:pointer;
+}
+.logout-btn .logout-label{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:inherit;
 }
 .logout-btn:hover{color:var(--crit-text)}
 .sr-only{
@@ -670,7 +673,9 @@ footer .sep{color:var(--line-2)}
   .auth-panel{padding:24px 20px}
   .auth-panel h1{font-size:24px}
   .topbar{height:auto;min-height:52px;padding:8px 10px;gap:8px;flex-wrap:wrap}
+  /* the identity text and the logout label collapse; the icon stays tappable */
   .topbar .crumb,.topbar .syschip,.avatar span{display:none}
+  .logout-btn{min-width:28px;justify-content:center;padding:0 4px}
   .topbar .right{gap:6px}
   .brand{font-size:11px}
   .layout{display:block;min-height:calc(100vh - 52px)}
