@@ -1,14 +1,14 @@
 import { useTranslation } from "react-i18next";
 import { Outlet, useLocation } from "react-router-dom";
 
-import { NAV_ENTRIES } from "./nav";
+import { ALL_NAV_ENTRIES, NAV_ENTRIES } from "./nav";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { useHealth } from "./useHealth";
 
 function crumbKeyFor(pathname: string): string {
   const entry =
-    NAV_ENTRIES.find((e) => e.to !== "/" && pathname.startsWith(e.to)) ??
+    ALL_NAV_ENTRIES.find((e) => e.to !== "/" && pathname.startsWith(e.to)) ??
     NAV_ENTRIES[0];
   return entry.labelKey;
 }

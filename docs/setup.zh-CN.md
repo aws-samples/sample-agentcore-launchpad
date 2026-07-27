@@ -52,6 +52,42 @@ make bootstrap          # = cd backend && uv run python ../scripts/bootstrap.py
 
 需要绑定当前终端的前台开发栈时,使用 `make dev`。
 
+### 可选的控制台登录
+
+控制台支持本地账户登录,不依赖 Cognito 或其他 AWS 服务。未配置密码时登录网关关闭:
+
+```bash
+export LAUNCHPAD_AUTH_USERNAME=admin
+export LAUNCHPAD_AUTH_PASSWORD='replace-with-a-strong-password'
+export LAUNCHPAD_AUTH_COOKIE_SECURE=true   # HTTPS 部署时开启
+./start.py
+```
+
+会话使用 12 小时 HttpOnly Cookie。上述值也可写入 `config/launchpad.yaml` 的
+`auth_username`、`auth_password`、`auth_cookie_secure`,遵循常规配置优先级;密码
+建议放在进程环境变量中。修改凭证并重启后端会使已有会话失效。
+
+### 自助注册与用户管理
+
+登录网关开启后,登录页同时提供**注册**:填写用户名、**公司邮箱**和密码即可创建
+`member` 账户,**有效期 7 天**,注册后可立即登录。上面配置的内置 admin 不入库,
+因此永远不会被锁在控制台之外。
+
+公共/临时邮箱域名(Gmail、QQ、163、Outlook、mailinator 等)会被拒绝。相关配置:
+
+```bash
+export LAUNCHPAD_AUTH_REGISTRATION_ENABLED=true   # false 关闭注册
+export LAUNCHPAD_AUTH_REGISTRATION_VALID_DAYS=7   # 默认有效期天数
+# 白名单非空时优先生效,否则使用内置黑名单
+export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'
+export LAUNCHPAD_AUTH_BLOCKED_EMAIL_DOMAINS='["gmail.com","qq.com"]'
+```
+
+admin 账号会看到**用户管理**模块(`/users`):注册统计 + 逐账户操作(延期 +7/+30/
+自定义天数或指定到期时间、禁用/启用、修改角色、重置密码(仅显示一次)、删除)。
+到期与禁用在每次请求时校验,账户会**立即**失去控制台访问权限,无需等待会话
+Cookie 过期。
+
 ## 资源清理
 
 ```bash

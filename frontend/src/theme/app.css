@@ -59,7 +59,9 @@ a.syschip.link:hover{border-color:var(--amber);color:var(--amber)}
 }
 .auth-main{
   width:100%;max-width:none;min-height:0;margin:0;padding:40px 20px;
-  display:grid;place-items:center;
+  /* align-content keeps the tab strip glued to the panel: without it the two
+     grid rows stretch apart on a tall viewport */
+  display:grid;place-items:center;align-content:center;
 }
 .auth-panel{
   width:min(100%,420px);background:var(--panel);border:1px solid var(--line-2);
@@ -82,6 +84,22 @@ a.syschip.link:hover{border-color:var(--amber);color:var(--amber)}
 .auth-field .input{min-height:42px}
 .auth-error{min-height:36px;padding-top:9px;color:var(--crit-text);font-size:12px;line-height:1.4}
 .auth-submit{width:100%;min-height:40px;justify-content:center}
+.auth-icon.ok{color:var(--good);border-color:rgba(12,163,12,.45)}
+/* sign-in ⇄ register switch, sized to the panel below it */
+.auth-tabs{width:min(100%,420px);display:grid;grid-template-columns:1fr 1fr;margin-bottom:14px}
+.auth-tabs button{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;padding:9px 10px;cursor:pointer;
+  background:var(--panel);border:1px solid var(--line-2);color:var(--ink-3);
+}
+.auth-tabs button+button{border-left:0}
+.auth-tabs button.active{color:var(--amber);border-color:rgba(255,176,0,.45);background:var(--amber-soft)}
+.auth-tabs button:hover:not(.active){color:var(--ink)}
+.auth-hint{display:block;margin-top:6px;font-size:11px;color:var(--ink-3);line-height:1.45}
+.auth-success{margin-top:22px;display:grid;gap:9px;border:1px solid var(--line-2);padding:13px 15px}
+.auth-success div{display:flex;justify-content:space-between;gap:12px;align-items:baseline}
+.auth-success span{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;color:var(--ink-3)}
+.auth-success b{font-size:12.5px;overflow-wrap:anywhere;text-align:right}
+.avatar .validity{font-style:normal;font-family:var(--mono);font-size:9.5px;color:var(--amber)}
 .auth-loading{min-height:100%;display:grid;place-items:center;color:var(--amber)}
 .auth-loading svg,.spin{animation:auth-spin .9s linear infinite}
 .logout-btn{
@@ -623,6 +641,22 @@ a:focus-visible,button:focus-visible,.btn:focus-visible,.selchip:focus-visible,.
 /* raw record payloads are single-line JSON — wrap them or they widen the page */
 .mem-raw{white-space:pre-wrap;overflow-wrap:anywhere;max-height:200px;overflow-y:auto;margin-top:10px}
 @media(max-width:1180px){.mem-grid-3{grid-template-columns:1fr}.mem-list{max-height:340px}}
+
+/* ================= user management ================= */
+/* 14-day registration trend — pure CSS bars, no chart dependency */
+.reg-trend{display:flex;align-items:flex-end;gap:6px;height:110px}
+.reg-col{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;gap:6px}
+.reg-col span{font-family:var(--mono);font-size:8.5px;color:var(--ink-3);letter-spacing:.04em}
+.reg-bar{width:100%;min-height:2px;background:var(--amber);opacity:.72}
+.reg-col:hover .reg-bar{opacity:1}
+.domain-list{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-top:16px}
+.domain-list .dl-label{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;color:var(--ink-3)}
+.user-actions{white-space:nowrap}
+.user-actions .btn{margin:2px 4px 2px 0;padding:4px 8px;font-size:10px}
+.reset-password{
+  display:block;margin:14px 0;padding:11px 13px;background:#0E1210;border:1px solid var(--line-2);
+  font-family:var(--mono);font-size:14px;letter-spacing:.08em;color:var(--amber);overflow-wrap:anywhere;
+}
 
 /* ================= misc ================= */
 .empty{padding:26px 16px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--ink-3);letter-spacing:.08em}

@@ -13,9 +13,19 @@ interface TopbarProps {
 
 export function Topbar({ crumbKey, health }: TopbarProps) {
   const { t } = useTranslation();
-  const { authRequired, username, logout } = useAuth();
+  const { authRequired, username, role, accountExpiresAt, logout } = useAuth();
   const displayName = authRequired ? (username ?? "—") : "river";
   const initials = displayName.slice(0, 2).toUpperCase();
+  const roleLabel = authRequired
+    ? t(role === "member" ? "auth.roleMember" : "auth.roleAdmin")
+    : "PLATFORM-ADMIN";
+  // registered accounts are time-boxed; surface what is left of the validity
+  const daysLeft = accountExpiresAt
+    ? Math.max(
+        0,
+        Math.floor((new Date(accountExpiresAt).getTime() - Date.now()) / 86_400_000),
+      )
+    : null;
   return (
     <div className="topbar">
       <div className="brand">
@@ -47,10 +57,15 @@ export function Topbar({ crumbKey, health }: TopbarProps) {
         <div className="avatar">
           <div className="pic">{initials}</div>
           <span>
-            {displayName} ·{" "}
-            <b className="role">
-              {authRequired ? t("auth.operator") : "PLATFORM-ADMIN"}
-            </b>
+            {displayName} · <b className="role">{roleLabel}</b>
+            {daysLeft !== null ? (
+              <>
+                {" · "}
+                <em className="validity" data-testid="account-days-left">
+                  {t("auth.daysLeft", { days: daysLeft })}
+                </em>
+              </>
+            ) : null}
           </span>
           {authRequired ? (
             <button

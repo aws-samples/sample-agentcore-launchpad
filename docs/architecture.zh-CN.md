@@ -113,6 +113,45 @@ public  /v1  ──┘        │
 公开 `/v1` 接口额外加了 `X-Api-Key` 鉴权(密钥以 sha256 哈希存储);分派之后的
 一切与控制台路径完全相同。
 
+## 控制台认证与账户
+
+控制台有一个可选的本地账户网关,与 Gateway/Cedar 演示使用的 Cognito 用户以及
+`/v1` 的 API-Key 面完全独立;设置 `LAUNCHPAD_AUTH_PASSWORD` 即启用,不涉及任何
+AWS 调用。
+
+一个会话 Cookie 背后有两类凭证来源:
+
+- **内置 admin**:来自配置(`LAUNCHPAD_AUTH_USERNAME`,默认 `admin`),没有台账
+  行,因此任何数据问题都无法把控制台锁死;该用户名对注册保留;
+- **注册账户**:`users` 表中的行,由自助注册创建(`POST /api/auth/register`:
+  用户名 + 公司邮箱 + 密码),`role=member`,有效期为
+  `LAUNCHPAD_AUTH_REGISTRATION_VALID_DAYS`(默认 7 天)。密码以 `pbkdf2_sha256`
+  加每用户盐存储——仅用标准库,不引入 passlib/bcrypt。"公司邮箱"通过可配置的
+  免费/临时邮箱黑名单强制执行,白名单非空时优先生效。
+
+`POST /api/auth/login` 校验任一来源并签发 HMAC 签名的 HttpOnly Cookie,负载为
+`version:subject:expiry`——12 小时,且不超过账户自身的 `expires_at`。**角色不放进
+Cookie**:授权在每次请求时解析(配置的 admin → `admin`,其余以 `users` 行为准),
+因此禁用、降权或到期在下一个请求即生效,无需等 Cookie 过期。Cookie 其余部分是无
+状态的,可跨后端重启;修改内置 admin 凭证会使**所有**会话失效,因为签名密钥由其
+派生。
+
+启用后,中间件保护所有 `/api/*` 路由(含 API 文档),仅放行 `/api/health`、
+`/api/auth/status`、`/api/auth/login`、`/api/auth/register`;中间件不管 `/v1/*`,
+其 `X-Api-Key` 契约保持权威。
+
+admin 另外拥有**用户管理**模块(`/users`),对应 `GET /api/users`、
+`GET /api/users/stats`、`PATCH /api/users/{id}`、`DELETE /api/users/{id}`——
+列表/搜索/筛选、注册统计、延期、禁用/启用、修改角色、一次性重置密码、删除。member
+会话在这四个路由上得到 `403 auth.forbidden`,页面渲染无权限状态而不是表格。数据本身
+**不**按用户隔离:所有已登录账户看到同一批 agent、知识库与链路,只有该模块按角色
+限制。
+
+默认 Cookie 适用于本地 HTTP 栈;HTTPS 部署必须设置
+`LAUNCHPAD_AUTH_COOKIE_SECURE=true`。不设置密码则整体关闭网关(控制台开放、注册
+返回 `auth.registration_disabled`、`/api/users*` 以隐式本地 admin 身份可达),保持
+免引导的本地开发与测试流程。
+
 ## 记忆控制台(控制台 05)
 
 `/memory` 是共享 `launchpad_memory` 单例的**只读**视图
@@ -224,6 +263,7 @@ span。Claude Agent SDK 容器把 `claude` CLI 当子进程驱动——ADOT 自�
 | `deployments` | 每次部署一行——五阶段数组,含各阶段 status/detail/时间戳 |
 | `jobs` | 异步工作(type `deploy_agent`)——status + 阶段事件的 JSONL `log` |
 | `chat_sessions` | Chat 交互 session——轮次、actor、最近活跃时间 |
+| `users` | 注册创建的控制台账户——用户名/邮箱、pbkdf2 密码哈希、角色、状态、`expires_at`、最近登录与登录次数(内置 admin 仅来自配置,不入表) |
 | `api_keys` | 公开 API 密钥——sha256 哈希 + 前缀(从不存明文) |
 | `policy_decisions` | 治理决策日志——principal、tool、ALLOW/DENY、原因 |
 | `eval_datasets` / `eval_runs` | 评估数据集(legacy prompt 或 devguide scenario + 描述 + 最近一次 AWS 同步信息)与运行状态(分数或 insight 树;窗口运行以 `dataset_name="window:<N>h"` 编码范围) |

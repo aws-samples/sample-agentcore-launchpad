@@ -1010,15 +1010,83 @@ export interface OverviewInfo {
   service_detail: Record<string, string>;
 }
 
+export type ConsoleRole = "admin" | "member";
+
 export interface AuthStatus {
   auth_required: boolean;
   authenticated: boolean;
+  registration_enabled: boolean;
   username: string | null;
+  role: ConsoleRole | null;
+  email: string | null;
+  /** account validity (registered users); null = built-in admin / never expires */
+  account_expires_at: string | null;
 }
 
 export interface AuthLoginResult extends AuthStatus {
   ok: boolean;
+  /** session-cookie expiry (epoch seconds), clamped to the account validity */
   expires_at: number | null;
+}
+
+export interface RegisterResult {
+  ok: boolean;
+  username: string;
+  email: string;
+  expires_at: string | null;
+  valid_days: number;
+}
+
+/* ── console accounts (admin user management) ──────────────────────────── */
+
+export type UserState = "active" | "expired" | "disabled";
+export type UserStatusFilter = "all" | UserState;
+
+export interface ConsoleUser {
+  id: string;
+  username: string;
+  email: string;
+  role: ConsoleRole;
+  status: "active" | "disabled";
+  state: UserState;
+  expires_at: string | null;
+  days_remaining: number | null;
+  created_at: string;
+  last_login_at: string | null;
+  login_count: number;
+  created_by: string;
+  /** only present on a password reset the platform generated */
+  generated_password?: string;
+}
+
+export interface UserListResult {
+  items: ConsoleUser[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface UserStats {
+  total: number;
+  active: number;
+  expired: number;
+  disabled: number;
+  expiring_soon: number;
+  registered_last_7d: number;
+  active_last_7d: number;
+  registrations: { date: string; count: number }[];
+  top_domains: { domain: string; count: number }[];
+  valid_days: number;
+}
+
+export interface UserPatchBody {
+  status?: "active" | "disabled";
+  role?: ConsoleRole;
+  extend_days?: number;
+  /** ISO timestamp, or null for "never expires" */
+  expires_at?: string | null;
+  /** null asks the backend to generate one and return it once */
+  password?: string | null;
 }
 
 export const api = {
@@ -1028,7 +1096,34 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, password }),
     }),
+  register: (username: string, email: string, password: string) =>
+    request<RegisterResult>("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ username, email, password }),
+    }),
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+  listUsers: (params: {
+    q?: string;
+    status?: UserStatusFilter;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const query = new URLSearchParams();
+    if (params.q) query.set("q", params.q);
+    if (params.status && params.status !== "all") query.set("status", params.status);
+    if (params.limit !== undefined) query.set("limit", String(params.limit));
+    if (params.offset !== undefined) query.set("offset", String(params.offset));
+    const suffix = query.toString();
+    return request<UserListResult>(`/api/users${suffix ? `?${suffix}` : ""}`);
+  },
+  userStats: () => request<UserStats>("/api/users/stats"),
+  updateUser: (id: string, patch: UserPatchBody) =>
+    request<ConsoleUser>(`/api/users/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  deleteUser: (id: string) =>
+    request<{ ok: boolean }>(`/api/users/${id}`, { method: "DELETE" }),
   createAgent: (spec: AgentSpecInput) =>
     request<{ agent: AgentInfo; job_id: string; deployment_id: string }>("/api/agents", {
       method: "POST",
