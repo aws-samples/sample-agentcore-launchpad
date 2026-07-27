@@ -6,6 +6,8 @@
 /.run/
 /.cursor/
 /.codex/
+/data/
+/design/
 .playwright-cli/
 # --- python ---
 __pycache__/
@@ -22,7 +24,7 @@ node_modules/
 dist/
 *.tsbuildinfo
 .npm/
-
+prompt.md
 # --- local data & generated config ---
 data/*.db
 data/*.db-journal

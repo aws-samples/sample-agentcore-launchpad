@@ -50,7 +50,9 @@
     "errRegistrationDisabled": "该控制台未开放自助注册。",
     "roleAdmin": "管理员",
     "roleMember": "成员",
-    "daysLeft": "剩余 {{days}} 天"
+    "daysLeft": "剩余 {{days}} 天",
+    "gateOff": "未启用登录",
+    "gateOffHint": "未配置控制台密码(LAUNCHPAD_AUTH_PASSWORD)——该控制台对所有可访问者开放,因此没有会话可退出。"
   },
   "nav": {
     "platform": "平台",

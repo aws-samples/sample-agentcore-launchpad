@@ -1,4 +1,4 @@
-import { LogOut } from "lucide-react";
+import { LogOut, ShieldOff } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../auth/auth-context";
@@ -80,7 +80,18 @@ export function Topbar({ crumbKey, health }: TopbarProps) {
               {/* label collapses under 720px, leaving the icon as the tap target */}
               <span className="logout-label">{t("auth.logout")}</span>
             </button>
-          ) : null}
+          ) : (
+            // No gate configured ⇒ no session to end. Say so instead of leaving
+            // an empty slot that reads as a missing sign-out button.
+            <span
+              className="logout-btn auth-off"
+              title={t("auth.gateOffHint")}
+              data-testid="auth-off-badge"
+            >
+              <ShieldOff size={14} aria-hidden="true" />
+              <span className="logout-label">{t("auth.gateOff")}</span>
+            </span>
+          )}
         </div>
       </div>
     </div>

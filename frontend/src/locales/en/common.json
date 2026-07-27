@@ -50,7 +50,9 @@
     "errRegistrationDisabled": "Self-service registration is not available on this console.",
     "roleAdmin": "ADMIN",
     "roleMember": "MEMBER",
-    "daysLeft": "{{days}}d left"
+    "daysLeft": "{{days}}d left",
+    "gateOff": "Auth off",
+    "gateOffHint": "No console password configured (LAUNCHPAD_AUTH_PASSWORD) — this console is open to anyone who can reach it, so there is no session to sign out of."
   },
   "nav": {
     "platform": "PLATFORM",

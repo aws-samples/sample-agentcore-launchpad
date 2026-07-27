@@ -145,6 +145,12 @@ time-boxed accounts, and a **labelled sign-out control**
 in a `finally`, so a dead session still returns to the login form) — never a
 page reload or a direct `fetch`.
 
+When the gate is disabled there is no session to end, so the same slot renders a
+non-interactive **`auth.gateOff`** badge (`data-testid="auth-off-badge"`) whose
+tooltip names `LAUNCHPAD_AUTH_PASSWORD`. Keep that badge: an empty slot reads as
+a missing sign-out button and hides the fact that the console is open to anyone
+who can reach it.
+
 ## 4. Validation & Error Matrix
 
 | Condition | Result |
