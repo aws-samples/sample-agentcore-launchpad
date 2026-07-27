@@ -182,8 +182,9 @@ session cookie, and rotating `LAUNCHPAD_AUTH_PASSWORD` invalidates **all**
 sessions (the cookie signing key derives from it). The public `/v1` surface keeps
 its own `X-Api-Key` auth and is never guarded by the console cookie.
 
-For a real deployment (systemd units, nginx origin-key gate, CloudFront) see
-[docs/setup.md](docs/setup.md#self-service-accounts-and-user-management) and
+For a real deployment (systemd units, nginx origin-key gate, CloudFront, and the
+update procedure) see
+[docs/setup.md](docs/setup.md#production-deployment--生产部署) and
 `.trellis/spec/launchpad/remote-production-deployment.md`.
 
 ### Stop the stack
