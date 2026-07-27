@@ -154,6 +154,44 @@ Override UI and API bindings with `LAUNCHPAD_HOST` and
 `LAUNCHPAD_API_HOST`. The launcher fails before starting if a configured port
 is already occupied.
 
+### Console sign-in (required for anything reachable)
+
+**The login gate is off until you configure a password, and `--prod` binds to
+`0.0.0.0`** — so a production-mode stack with no password is open to everyone who
+can reach the host. The console shows an `AUTH OFF` badge in the top bar whenever
+that is the case. `start.py` itself never enables the gate; it only passes the
+environment through:
+
+```bash
+export LAUNCHPAD_AUTH_USERNAME=admin                # built-in admin (config-only, never in the DB)
+export LAUNCHPAD_AUTH_PASSWORD='replace-with-a-strong-password'
+export LAUNCHPAD_AUTH_COOKIE_SECURE=true            # only behind HTTPS (e.g. CloudFront/ALB)
+./stop.sh && ./start.py --prod
+```
+
+With the gate on, the login page also offers **registration** (username +
+company email + password). A new account lands in `pending` and **cannot sign in
+until an admin approves it**; the 7-day validity window starts at approval. The
+admin gets a **User Management** module (`/users`) with the approval queue,
+statistics, extend/disable/role/reset-password/delete actions.
+
+```bash
+export LAUNCHPAD_AUTH_REGISTRATION_ENABLED=true           # false closes registration entirely
+export LAUNCHPAD_AUTH_REGISTRATION_REQUIRE_APPROVAL=true  # false = usable at registration
+export LAUNCHPAD_AUTH_REGISTRATION_VALID_DAYS=7           # validity granted on approval
+export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # allow list wins when set
+```
+
+Public and disposable mail domains are rejected by default. Two caveats:
+`LAUNCHPAD_AUTH_COOKIE_SECURE=true` over plain HTTP makes the browser drop the
+session cookie, and rotating `LAUNCHPAD_AUTH_PASSWORD` invalidates **all**
+sessions (the cookie signing key derives from it). The public `/v1` surface keeps
+its own `X-Api-Key` auth and is never guarded by the console cookie.
+
+For a real deployment (systemd units, nginx origin-key gate, CloudFront) see
+[docs/setup.md](docs/setup.md#self-service-accounts-and-user-management) and
+`.trellis/spec/launchpad/remote-production-deployment.md`.
+
 ### Stop the stack
 
 ```bash

@@ -145,6 +145,40 @@ vendored Studio 不属于该生命周期;平台内置的 Studio 位于 `/create/
 可通过 `LAUNCHPAD_HOST` 和 `LAUNCHPAD_API_HOST` 覆盖 UI 与 API 的绑定地址。
 若任一配置端口已被占用,启动器会在创建进程前失败。
 
+### 控制台登录(对外可达时必须开启)
+
+**未配置密码时登录网关是关闭的,而 `--prod` 会绑定到 `0.0.0.0`** —— 也就是说,
+不带密码的生产模式对所有能访问到这台机器的人都是开放的。处于该状态时控制台顶栏
+会显示 `AUTH OFF` 徽标。`start.py` 本身不会开启网关,它只是把环境变量透传下去:
+
+```bash
+export LAUNCHPAD_AUTH_USERNAME=admin                # 内置 admin(仅来自配置,不入库)
+export LAUNCHPAD_AUTH_PASSWORD='replace-with-a-strong-password'
+export LAUNCHPAD_AUTH_COOKIE_SECURE=true            # 仅在 HTTPS 前置(如 CloudFront/ALB)时开启
+./stop.sh && ./start.py --prod
+```
+
+网关开启后,登录页同时提供**注册**(用户名 + 公司邮箱 + 密码)。新账户处于
+`pending`,**需管理员审批通过后才能登录**,7 天有效期从审批时开始计算。admin 会
+看到**用户管理**模块(`/users`):审批队列、统计,以及延期/禁用/改角色/重置密码/
+删除等操作。
+
+```bash
+export LAUNCHPAD_AUTH_REGISTRATION_ENABLED=true           # false 完全关闭注册
+export LAUNCHPAD_AUTH_REGISTRATION_REQUIRE_APPROVAL=true  # false 则注册即可用
+export LAUNCHPAD_AUTH_REGISTRATION_VALID_DAYS=7           # 审批通过后授予的有效期
+export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # 白名单非空时优先生效
+```
+
+公共与临时邮箱域名默认被拒绝。两个坑:`LAUNCHPAD_AUTH_COOKIE_SECURE=true` 在纯
+HTTP 下会导致浏览器丢弃会话 Cookie;修改 `LAUNCHPAD_AUTH_PASSWORD` 会使**所有**
+会话失效(Cookie 签名密钥由它派生)。公开 `/v1` 接口仍使用自己的 `X-Api-Key`
+认证,不受控制台 Cookie 管辖。
+
+真实部署(systemd 单元、nginx origin-key 校验、CloudFront)见
+[docs/setup.zh-CN.md](docs/setup.zh-CN.md) 与
+`.trellis/spec/launchpad/remote-production-deployment.md`。
+
 ### 停止服务
 
 ```bash
