@@ -35,7 +35,7 @@
 
 | 指标 | 值 | 说明 |
 |---|---|---|
-| 追踪 | 118（118 正常 / 0 错误） | 一次 invoke = 一条 trace |
+| 追踪 | 129（129 正常 / 0 错误） | 一次 invoke = 一条 trace |
 | 会话 | 23（6 个 Agent 活跃） | 含实验室外的历史会话 |
 | 错误率 | 0.0% | |
 | 延迟 P50 / P95 | 28ms / 137ms | **根 span** 的分位数（大量短请求会把分位数拉低） |
@@ -44,9 +44,10 @@
 「热门工具」面板直接印证了第 04–05 章的挂载：
 
 ```
-lab-fund-kb-2mbgunvms4___Retrieve                    4 次调用 · 100%
+lab-fund-kb-2mbgunvms4___Retrieve                    8 次调用 · 100%
+skills                                               2 次调用 · 100%
 agentic-lab-fund-advisor___AgenticRetrieveStream     2 次调用 · 100%
-skills                                               1 次调用 · 100%
+current_utc_time                                     1 次调用 · 100%
 ```
 
 读取仪表盘时注意：

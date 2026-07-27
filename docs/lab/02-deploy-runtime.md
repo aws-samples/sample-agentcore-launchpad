@@ -89,6 +89,10 @@
 ![部署完成](images/02-deploy-done.png)
 *图 2-4：五阶段全部完成。日志里可以看到 runtimeId、Runtime ARN 与 Registry 记录 id。*
 
+> 图 2-3 / 2-4 采集于切到 sonnet-5 后的那次**重新发布**（`job #6e2f2f4f`，日志见下方 2.4），
+> 所以 `deploy` 行是 `UpdateAgentRuntime`；首次创建时那一行是 `CreateAgentRuntime`，
+> 其余四个阶段完全一致。
+
 **预期结果**：五个节点全绿，右上角状态变为 `● 运行中`。
 
 ## 2.4 用 API 复核部署结果
@@ -137,11 +141,15 @@ curl -s http://127.0.0.1:8000/api/agents | python3 -m json.tool | head -30
 > Agent 切到 sonnet-5 的那次重新发布（`Update…` 而非 `Create…`，其余阶段一致）：
 >
 > ```
-> 13:49:35 generate strands template · 6333 bytes · model global.anthropic.claude-sonnet-5
-> 13:50:17 package pip+zip 42.0s · 37.3MB → s3://…/agents/lab-fund-assistant/deployment_package.zip
-> 13:50:18 deploy UpdateAgentRuntime accepted · runtimeId lab_fund_assistant_c8fbf6-9ZkLYO3rAB · new version 4
-> 13:50:28 deploy runtime status: READY
+> 15:16:02 generate strands template · 6333 bytes · model global.anthropic.claude-sonnet-5
+> 15:16:45 package pip+zip 41.8s · 37.3MB → s3://…/agents/lab-fund-assistant/deployment_package.zip
+> 15:16:45 deploy UpdateAgentRuntime accepted · runtimeId lab_fund_assistant_c8fbf6-9ZkLYO3rAB · new version 5
+> 15:16:45 deploy runtime status: UPDATING
+> 15:16:55 deploy runtime status: READY
+> 15:16:55 register a2a record refreshed · FZuhhw9jbJaK · auto-submitted
 > ```
+>
+> 重新发布走 `Update…`，不需要重建 Runtime，整条流水线 **53 秒**（其中打包 41.8 秒）。
 
 部署机制：
 

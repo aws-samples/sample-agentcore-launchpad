@@ -63,7 +63,7 @@
 | 记录 | id | 状态（本次结束时） | 清理方式 |
 |---|---|---|---|
 | `lab-fund-disclaimer`（技能） | `F6Qol0d8HKPD` | `APPROVED` | `03 注册中心` 详情 → `删除` |
-| `lab-fund-assistant`（A2A，自动登记） | `FZuhhw9jbJaK` | `PENDING_APPROVAL` | 删 Agent 时一并处理，或手动删记录 |
+| `lab-fund-assistant`（A2A，自动登记） | `FZuhhw9jbJaK` | `DRAFT`（因重新发布被重置） | 删 Agent 时一并处理，或手动删记录 |
 | `lab-fund-advisor`（A2A） | `k2CPfzI7gOn1` | `DRAFT`（因重新发布被重置） | 同上 |
 | `lab-fund-packager`（A2A） | `G5ccx6y2DjOR` | `PENDING_APPROVAL`（后续因修复复验重新发布，现为 `DRAFT`） | 同上 |
 
