@@ -137,13 +137,22 @@ servers bind to `127.0.0.1` by default.
 
 ### Local production mode
 
+Production mode builds the platform frontend, serves its optimized bundle, and
+runs the backend without auto-reload. Both the UI and API servers bind to
+`0.0.0.0`, and **the login gate stays off until you configure a password** — so
+enable it in the same step, or the stack is open to everyone who can reach the
+host (the console shows an `AUTH OFF` badge whenever that is the case):
+
 ```bash
+export LAUNCHPAD_AUTH_USERNAME=admin                # built-in admin (config-only, never in the DB)
+export LAUNCHPAD_AUTH_PASSWORD='replace-with-a-strong-password'
+export LAUNCHPAD_AUTH_COOKIE_SECURE=true            # only behind HTTPS (e.g. CloudFront/ALB)
 ./start.py --prod
 ```
 
-Production mode builds the platform frontend, serves its optimized bundle, and
-runs the backend without auto-reload. Both the UI and API servers bind to
-`0.0.0.0`.
+`start.py` never enables the gate itself; it only passes the environment
+through, so the same variables work with `make dev`, systemd units, or any other
+supervisor.
 
 | Service | Default URL | Port override |
 |---|---|---|
@@ -153,21 +162,6 @@ runs the backend without auto-reload. Both the UI and API servers bind to
 Override UI and API bindings with `LAUNCHPAD_HOST` and
 `LAUNCHPAD_API_HOST`. The launcher fails before starting if a configured port
 is already occupied.
-
-### Console sign-in (required for anything reachable)
-
-**The login gate is off until you configure a password, and `--prod` binds to
-`0.0.0.0`** — so a production-mode stack with no password is open to everyone who
-can reach the host. The console shows an `AUTH OFF` badge in the top bar whenever
-that is the case. `start.py` itself never enables the gate; it only passes the
-environment through:
-
-```bash
-export LAUNCHPAD_AUTH_USERNAME=admin                # built-in admin (config-only, never in the DB)
-export LAUNCHPAD_AUTH_PASSWORD='replace-with-a-strong-password'
-export LAUNCHPAD_AUTH_COOKIE_SECURE=true            # only behind HTTPS (e.g. CloudFront/ALB)
-./stop.sh && ./start.py --prod
-```
 
 With the gate on, the login page also offers **registration** (username +
 company email + password). A new account lands in `pending` and **cannot sign in

@@ -130,12 +130,20 @@ vendored Studio 不属于该生命周期;平台内置的 Studio 位于 `/create/
 
 ### 本地生产模式
 
+生产模式会构建平台前端、提供优化后的静态资源,并关闭后端自动重载。UI 与 API
+服务都绑定到 `0.0.0.0`,而**未配置密码时登录网关是关闭的** —— 所以要在同一步里
+把它打开,否则这套栈对所有能访问到这台机器的人都是开放的(处于该状态时控制台顶栏
+会显示 `AUTH OFF` 徽标):
+
 ```bash
+export LAUNCHPAD_AUTH_USERNAME=admin                # 内置 admin(仅来自配置,不入库)
+export LAUNCHPAD_AUTH_PASSWORD='replace-with-a-strong-password'
+export LAUNCHPAD_AUTH_COOKIE_SECURE=true            # 仅在 HTTPS 前置(如 CloudFront/ALB)时开启
 ./start.py --prod
 ```
 
-生产模式会构建平台前端、提供优化后的静态资源,并关闭后端自动重载。UI 与 API
-服务都绑定到 `0.0.0.0`。
+`start.py` 本身不会开启网关,只是把环境变量透传下去,因此同一组变量对 `make dev`、
+systemd 单元或任何其他进程管理器同样有效。
 
 | 服务 | 默认地址 | 端口覆盖变量 |
 |---|---|---|
@@ -144,19 +152,6 @@ vendored Studio 不属于该生命周期;平台内置的 Studio 位于 `/create/
 
 可通过 `LAUNCHPAD_HOST` 和 `LAUNCHPAD_API_HOST` 覆盖 UI 与 API 的绑定地址。
 若任一配置端口已被占用,启动器会在创建进程前失败。
-
-### 控制台登录(对外可达时必须开启)
-
-**未配置密码时登录网关是关闭的,而 `--prod` 会绑定到 `0.0.0.0`** —— 也就是说,
-不带密码的生产模式对所有能访问到这台机器的人都是开放的。处于该状态时控制台顶栏
-会显示 `AUTH OFF` 徽标。`start.py` 本身不会开启网关,它只是把环境变量透传下去:
-
-```bash
-export LAUNCHPAD_AUTH_USERNAME=admin                # 内置 admin(仅来自配置,不入库)
-export LAUNCHPAD_AUTH_PASSWORD='replace-with-a-strong-password'
-export LAUNCHPAD_AUTH_COOKIE_SECURE=true            # 仅在 HTTPS 前置(如 CloudFront/ALB)时开启
-./stop.sh && ./start.py --prod
-```
 
 网关开启后,登录页同时提供**注册**(用户名 + 公司邮箱 + 密码)。新账户处于
 `pending`,**需管理员审批通过后才能登录**,7 天有效期从审批时开始计算。admin 会
