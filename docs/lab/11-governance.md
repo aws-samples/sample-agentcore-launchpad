@@ -71,7 +71,7 @@ agentcore-launchpad:managed-by = agentcore-launchpad
 新建引擎、Gateway 挂载都从 LOG_ONLY 开始。*
 
 2. 点 `纳管`，在确认弹窗里确认。
-3. 到 AWS 侧核对（这一步就是本节的重点）：
+3. 到 AWS 侧核对这两个标签：
 
 ```bash
 aws bedrock-agentcore-control list-tags-for-resource \
@@ -101,8 +101,8 @@ aws bedrock-agentcore-control list-tags-for-resource \
 
 取消纳管只移除这两个标签，不会解绑或删除 Gateway、引擎、策略或 Registry 记录。
 
-> 为什么要有这个开关：Registry 导入与 Policy 变更**要求 Gateway 带这两个标签**（外加一次新鲜的
-> `updatedAt` 校验）。这样平台就不会误改账号里别人的 Gateway。
+> 这个开关用于限制平台可以修改的范围。Registry 导入与 Policy 变更**要求 Gateway 带这两个标签**
+> （外加一次新鲜的 `updatedAt` 校验），避免平台误改账号里的其他 Gateway。
 
 ## 11.4 Registry 边界：一个 Gateway = 一条 MCP 记录
 
@@ -196,7 +196,7 @@ permit(
 - **把 Gateway 切到 `ENFORCE` 需要证据**：界面要求 24 小时内有 LOG_ONLY 决策证据；
   没有证据就必须**手输 Gateway 名称 + 填写零证据覆盖原因**才能强制通过。
 
-## 11.6 决策证据：这个账号目前的真实状态
+## 11.6 当前账号的决策证据状态
 
 切到 `决策` 标签。
 

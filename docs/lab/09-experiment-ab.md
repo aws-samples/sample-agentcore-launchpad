@@ -29,7 +29,7 @@ lab-fund-advisor · harness   — 只有 Launchpad 托管的 HTTP runtime Agent 
 *图 9-1：新建实验。右侧「配置 A/B 如何执行」列出 8 个阶段：recommend → bundles → gateway
 → abtest → traffic → verdict → promote → cleanup。*
 
-原因是机制性的：
+限制来自实现方式：
 
 - **配置包要被 Agent 代码主动读取**。ZIP 通道生成的 Strands 运行时内置 `get_config_bundle()`
   契约（第 02 章配置页那条提示），会在启动时读取路由下发的系统提示词与工具描述。
@@ -85,8 +85,8 @@ Leaders Equity Fund）的销售与客服团队。回答基金的策略、团队�
 > about the fund's founding date and number of holdings, it produced a specific date and a
 > holding count…
 
-优化器读的是第 08 章评估回放产生的 trace，它独立得出了与自定义评审一致的结论：
-**编造数字**是主要失败模式。推荐结果因此有明确的 trace 依据。
+优化器读取第 08 章评估回放产生的 trace，也找出了与自定义评审相同的问题：
+**编造数字**是主要失败模式。推荐结果有对应的 trace 作为依据。
 
 > 旁边还有 `▸ 生成工具描述推荐`。本实验的 Agent 只用了模板内置工具、没有 gateway 工具，
 > 所以它是禁用状态（`tool_status: no-tools`）。有工具的 Agent 可以同时优化工具描述。
@@ -166,7 +166,7 @@ Leaders Equity Fund）的销售与客服团队。回答基金的策略、团队�
 本次结果：`sent 5 · failed 0 · 数据集 lab-fund-dataset`，产生 5 个会话 id。
 
 > 注意样本量：5 个请求按 50/50 分流后，两组各只有 2–3 个样本，**必然无法达到统计显著**。
-> 下一节会看到平台如何如实报告这一点。真实场景请用几十到几百条流量。
+> 平台会在判定中明确标出这一点。实际使用时需要几十到几百条流量。
 
 ## 9.7 VERDICT — 判定（含统计显著性）
 
@@ -197,7 +197,7 @@ last session`。在线评估器需要时间给两组打分。
 判定需要分三层读：
 
 1. **判定语义要分清**："观察值 control-wins" 只是**观察到的方向**，`significant: false` 才是结论。
-   平台不会把噪声包装成胜利。
+   平台仍会把它标成未达显著，不会将观察方向当作最终结论。
 2. **treatment 反而略低不代表推荐没用**：更严格的提示词让模型在不确定时拒答，
    `Helpfulness` 这种"用户觉得有用吗"的指标本来就可能下降。**要用与你目标一致的评估器去判定**
    （比如第 08 章那个 `fund_fact_grounding`），否则会得出"越诚实越差"的错误结论。

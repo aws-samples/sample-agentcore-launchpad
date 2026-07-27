@@ -43,7 +43,8 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
 *图 3-2：Harness 部署完成。注意 `打包` 阶段显示 `skipped · harness — no build required`。*
 
 > 这张图取自切到 sonnet-5 后的那次重新发布（列表行 `详情` 还原的 job `#5ed8ddd7`，见下方说明），
-> 所以 `deploy` 行是 `UpdateHarness`、下方还多了一块「已挂载知识库」——第 04 章挂上的 `lab-fund-kb`。
+> 所以 `deploy` 行是 `UpdateHarness`，下方还多了一块「已挂载知识库」，也就是第 04 章挂上的
+> `lab-fund-kb`。
 > 你在本章首次创建时这两处分别是 `CreateHarness`，且没有知识库。
 
 本次实测事件流（**18 秒**完成）：

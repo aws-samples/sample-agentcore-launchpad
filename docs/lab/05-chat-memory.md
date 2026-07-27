@@ -122,9 +122,9 @@ Agent 用「它」指代上一轮的基金，答出：目标持仓 25–40 只 /
 `user_preferences`（USER_PREFERENCE，命名空间 `/preferences/{actorId}`）。
 下方还列出账号里其它 memory 资源，并标注哪个属于本平台（`平台` vs `外部`）。*
 
-**为什么命名空间只有 `{actorId}`**：AgentCore 的命名空间模板里**没有 `{agentId}`**。
-平台的做法是把 Agent id 折进 actor：`scoped_actor(agent_id, human)` → `<agent_id>__<human>`。
-所以同一个人和不同 Agent 聊天，短期事件与长期记录**天然隔离**，一个 Agent 学到的偏好不会串到另一个。
+AgentCore 的命名空间模板里**没有 `{agentId}`**，只有 `{actorId}`。平台因此把 Agent id 折进
+actor：`scoped_actor(agent_id, human)` → `<agent_id>__<human>`。同一个人与不同 Agent 聊天时，
+短期事件和长期记录会落在不同分区，一个 Agent 学到的偏好不会串到另一个。
 
 ## 5.5 短期记忆：参与者 → 会话 → 事件
 
@@ -172,7 +172,7 @@ Agent 用「它」指代上一轮的基金，答出：目标持仓 25–40 只 /
 
 > 控制台**没有**抽取任务视图。AWS 的 `ListMemoryExtractionJobs` 不是任务历史：它的状态枚举
 > 只有 `FAILED` 一个值，列出的是可被 `StartMemoryExtractionJob` 重试的失败积压，健康资源查出来
-> 永远是空的——做成一个标签页只会让人误以为「什么都没抽取出来」。需要排查时用后端接口
+> 永远是空的。如果把它做成标签页，反而容易让人误以为「什么都没抽取出来」。需要排查时用后端接口
 > `GET /api/memory/extraction-jobs`。
 
 ---
@@ -224,7 +224,7 @@ ModuleNotFoundError: No module named 'opentelemetry._events'
 OpenTelemetry 里已经没有 `opentelemetry._events` 这个实验模块（上游 1.39.0 起废弃、其后移除）。
 **这是平台侧的依赖漂移问题，不是你操作错误**；已有的旧容器镜像不受影响，所以只有**新构建**会挂。
 
-**修复做了三件事**：把 `tracing.py` 迁到 OpenTelemetry 的 logs API（事件记录在链路上
+**修复包括三项改动**：把 `tracing.py` 迁到 OpenTelemetry 的 logs API（事件记录在链路上
 逐字段保持不变，否则 AgentCore 评估会静默解析失败）；把模板依赖锁到实测过的小版本区间；
 补上单测锁住事件形状。**修复后的真机复验**（重新发布 `lab-fund-packager` → Runtime v2）：
 

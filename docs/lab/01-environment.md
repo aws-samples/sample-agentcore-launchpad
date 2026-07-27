@@ -60,7 +60,7 @@ cd infra    && uv sync && cd ..
 make bootstrap        # = cd backend && uv run python ../scripts/bootstrap.py
 ```
 
-这一步是**幂等**的：CDK 栈只在缺失时部署，AgentCore 单例只创建一次，重跑会打印
+这个命令可以重复执行：CDK 栈只在缺失时部署，AgentCore 单例只创建一次，重跑会打印
 `reused`。它创建/复用下列资源，并把结果写入 `config/launchpad.yaml`：
 
 | 资源类别 | 名称（本次实验环境的实际值） |
@@ -79,7 +79,7 @@ make bootstrap        # = cd backend && uv run python ../scripts/bootstrap.py
 `resources.*`（gateway_id / registry_id / memory_id / execution_role_arn …）。这个文件
 **已被 gitignore**，其中含演示用户密码，按本地机密对待。
 
-> **注意**：本章的 bootstrap 步骤在撰写本指南时**未重新实跑**（实验环境早已完成引导，重跑不会
+> **注意**：编写本指南时**没有重跑**本章的 bootstrap（实验环境早已完成引导，重跑不会
 > 产生新信息）。命令与产物清单依据 `docs/setup.zh-CN.md` 以及当前 `config/launchpad.yaml`
 > 中实际存在的键值校对。
 
@@ -133,7 +133,7 @@ curl -s http://127.0.0.1:8000/api/health
 
 ## 1.6 认识后端 API（可选但建议）
 
-打开 http://127.0.0.1:5173/api/docs ，这是控制台自己调用的 FastAPI 文档。全实验用到的
+打开 http://127.0.0.1:5173/api/docs ，这里列出了控制台所用的 FastAPI 接口。实验中会用到的
 关键路由：
 
 | 路由 | 用途 | 对应章节 |

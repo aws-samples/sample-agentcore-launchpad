@@ -248,7 +248,7 @@ kbs ['lab-fund-kb']
 > `UpdateRegistryRecord` 相反，省略字段会被重置。这类差异都封在后端 wrapper 里，
 > 但你手写脚本调 AWS 时要小心。
 
-**一个会让人困惑的副作用**：重新发布时 `register` 阶段会刷新 A2A 记录
+**这里有一个容易误解的状态变化**：重新发布时，`register` 阶段会刷新 A2A 记录
 （`a2a record refreshed · k2CPfzI7gOn1 · auto-submitted`），而 `UpdateRegistryRecord`
 会把记录状态**重置回 `DRAFT`**。所以本次实验结束时，`lab-fund-advisor` 的 Registry 记录是
 `DRAFT`，而没有重新发布过的另两个 Agent 还是 `PENDING_APPROVAL`：
@@ -259,7 +259,7 @@ k2CPfzI7gOn1   lab-fund-advisor     A2A   DRAFT              ← 因为重新发
 FZuhhw9jbJaK   lab-fund-assistant   A2A   PENDING_APPROVAL
 ```
 
-这不是 bug，是 AWS 侧更新语义使然：**改过的记录要重新走审批**。
+这不是 bug，而是 AWS 更新语义的结果：**改过的记录要重新走审批**。
 
 ---
 
