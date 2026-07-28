@@ -88,20 +88,20 @@ memory, say so accurately.
 
 ## Acceptance criteria
 
-- [ ] `session_transcript()` returns `available: true` with ordered turns for a session
+- [x] `session_transcript()` returns `available: true` with ordered turns for a session
       that exists only under the bare `default` actor, and for one that exists only under
       `{agent_id}__api`, with no `chat_sessions` / `eval_runs` row.
-- [ ] `source` is `"experiment"` (with experiment id) when the id is in an experiment's
+- [x] `source` is `"experiment"` (with experiment id) when the id is in an experiment's
       stored traffic list, `"external"` otherwise; `actor_id` reflects the probed actor.
-- [ ] A session with no memory events anywhere still yields exactly
+- [x] A session with no memory events anywhere still yields exactly
       `{"available": False, "reason": "not_platform_session"}`.
-- [ ] A raising memory client during the probe yields an unavailable transcript, not a 500.
-- [ ] Backend tests cover: default-actor hit, scoped-actor hit, experiment labeling,
+- [x] A raising memory client during the probe yields an unavailable transcript, not a 500.
+- [x] Backend tests cover: default-actor hit, scoped-actor hit, experiment labeling,
       no-hit, and probe-error degradation.
-- [ ] Console: external/experiment sessions render their turns with an origin sub-line and
+- [x] Console: external/experiment sessions render their turns with an origin sub-line and
       **no** "OPEN IN CHAT" button; chat sessions keep the button.
-- [ ] `obs.session.noTranscript` copy no longer says "memory-off"; en ↔ zh-CN parity holds.
-- [ ] `make verify` passes.
-- [ ] Live check against the reported URL
+- [x] `obs.session.noTranscript` copy no longer says "memory-off"; en ↔ zh-CN parity holds.
+- [x] `make verify` passes.
+- [x] Live check against the reported URL
       (`?tab=sessions&session=ee760f57-2757-4761-947b-83f1ec6fa022`) shows the 5-event
       conversation instead of the empty state.
