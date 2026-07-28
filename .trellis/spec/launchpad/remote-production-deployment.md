@@ -46,8 +46,21 @@ cd infra && uv sync && cd ..
 cd frontend && npm ci && npm run build && cd ..
 make bootstrap
 bash scripts/setup_exec_env.sh
-make verify
 ```
+
+Run `make verify` in a shell **without** the `LAUNCHPAD_*` exports above:
+
+```bash
+env -u LAUNCHPAD_REGION make verify        # or a fresh shell with only PATH set
+```
+
+Config precedence is defaults < `config/launchpad.yaml` < `LAUNCHPAD_`-prefixed
+env < kwargs, so an exported `LAUNCHPAD_REGION` beats the YAML and
+`tests/test_config.py::test_yaml_source_feeds_settings` fails (it asserts the
+YAML source wins). `tests/test_a2a_demo.py` fails for the same reason. Both pass
+in a clean shell — do not chase them as real regressions (live-hit 2026-07-28).
+The `LAUNCHPAD_REGION` the *service* gets from its systemd drop-in is correct and
+unrelated; only the test shell must be clean.
 
 The execution-environment script must finish with:
 
@@ -165,6 +178,8 @@ Launchpad application login.
 | Condition | Expected result / fix |
 |---|---|
 | `/api/health` reports `us-west-2` | Fix the systemd Region drop-in, run `daemon-reload`, and restart backend |
+| `make verify` fails only `test_yaml_source_feeds_settings` + `test_a2a_demo` | The shell exports `LAUNCHPAD_REGION`, which outranks the YAML. Re-run in a clean shell; both pass |
+| An IAM change from a new revision has no effect | `make bootstrap` runs `cdk deploy` only when the stack is MISSING. This host has no CDK CLI, so deploy the east stack from a box that does: `cd infra && AWS_REGION=us-east-1 CDK_DEFAULT_REGION=us-east-1 uv run cdk diff` then `deploy` (same account, region-parameterised stack) |
 | UI still displays `us-west-2` after config edit | Backend process is stale; restart it and recheck health |
 | Direct EC2 HTTP request lacks origin header | nginx returns `403` |
 | CloudFront returns `403` from origin | Compare CloudFront header name/value with nginx without logging the value |
@@ -181,8 +196,12 @@ Launchpad application login.
 - Good: bootstrap a fresh east stack, keep loopback application listeners,
   restrict EC2 port 80 to CloudFront, require the origin header, enable Secure
   application cookies, seed through APIs, and validate a real Agent invoke.
-- Base: pull a new revision, run dependency/build checks, restart the two
-  application services, and verify health plus CloudFront login.
+- Base: back up `data/launchpad.db`, `git merge --ff-only origin/main`, deploy the
+  east CDK stack if the revision changed `infra/` (this host has no CDK CLI —
+  deploy from one that does, the stack is region-parameterised), rebuild the
+  frontend (`vite preview` serves `dist/`, so a pull alone changes nothing the
+  browser sees), restart the two application services, then verify health plus
+  CloudFront login.
 - Bad: expose Vite/Uvicorn publicly, open nginx port 80 globally, copy west
   resource IDs, commit generated config or passwords, or treat a successful
   systemd start as proof that AWS calls work.
