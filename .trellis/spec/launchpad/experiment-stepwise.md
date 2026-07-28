@@ -95,7 +95,10 @@ assert_shared_gateway_available(own_test_name=None) -> None
   `409 experiment.accept_rec_failed` unless the request carries an
   operator-authored prompt that differs from the control prompt. A row with no
   `system_prompt_status`/`system_prompt_error` (tool-only run, or a pre-status
-  legacy row) is never treated as failed.
+  legacy row) is never treated as failed. A failed row's stored
+  `recommended_prompt` is IGNORED on accept, and the UI seeds its editor from
+  the control prompt — rows written before this guard hold the old fallback
+  text, which no optimizer produced.
 - **Online evaluators are operator-chosen at `gateway`.**
   `ONLINE_EVAL_DEFAULT = ("Builtin.GoalSuccessRate", "Builtin.Helpfulness")`
   when the field is absent, so pre-existing flows are byte-identical.

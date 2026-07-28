@@ -585,17 +585,24 @@ function ConfigurationExperimentView() {
   const recToolDescs = Object.fromEntries(
     Object.entries(rec?.tool_descriptions ?? {}).filter(([k]) => k !== "_error"));
   // each generator ran iff its own keys exist — old rows wrote both at once
-  // spDone means AWS returned a recommendation; a job that failed writes a
-  // status + error and NO prompt, so it must not read as done
-  const spFailed = rec != null && rec.recommended_prompt == null
-    && (rec.system_prompt_status != null || rec.system_prompt_error != null);
-  const spDone = rec?.recommended_prompt != null;
+  // spDone means AWS returned a recommendation. A failed job writes a status +
+  // error and no prompt; rows written before that guard pair a failed status
+  // with the old generic fallback text — both must read as failed, not done
+  // (mirrors service.system_prompt_rec_failed).
+  const spFailed = rec != null
+    && (rec.system_prompt_error != null
+      || (rec.system_prompt_status != null
+        && (rec.system_prompt_status !== "COMPLETED"
+          || rec.recommended_prompt == null)));
+  const spDone = rec?.recommended_prompt != null && !spFailed;
   const tdRan = rec != null
     && (rec.tool_status != null || rec.tool_descriptions != null);
   const treatmentPrompt = acceptedPrompt ?? rec?.recommended_prompt ?? "";
-  // after a failed job the editor is seeded with the CONTROL prompt — accepting
-  // it as-is would send a failed recommendation downstream as the treatment
-  const acceptPromptValue = editedPrompt ?? rec?.recommended_prompt ?? currentPrompt;
+  // after a failed job the editor is seeded with the CONTROL prompt (never a
+  // stale fallback) — accepting it as-is would send a failed recommendation
+  // downstream as the treatment, so ACCEPT stays disabled until it is edited
+  const acceptPromptValue = editedPrompt
+    ?? (spFailed ? currentPrompt : rec?.recommended_prompt ?? currentPrompt);
   const acceptBlocked = spFailed
     && acceptPromptValue.trim() === currentPrompt.trim();
 

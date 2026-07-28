@@ -136,6 +136,20 @@ def test_accept_rejected_after_failed_system_prompt_rec(client):
     assert "accepted_prompt" not in _reload(exp.id).artifacts["recommend"]
 
 
+def test_accept_ignores_stale_fallback_prompt_of_a_failed_row(client):
+    """Rows written before the guard pair a FAILED status with the old generic
+    fallback text — that text must never become the treatment."""
+    exp = _mk_exp(artifacts={
+        "agent_meta": {"system_prompt": "cur"},
+        "recommend": {"system_prompt_status": "FAILED",
+                      "recommended_prompt": "cur\nUse the available tools…"},
+    })
+    res = client.post(f"/api/experiments/{exp.id}/action",
+                      json={"action": "accept"})
+    assert res.status_code == 409
+    assert res.json()["code"] == "experiment.accept_rec_failed"
+
+
 def test_accept_allows_operator_authored_prompt_after_failure(client):
     """The escape hatch: an operator may author the treatment prompt by hand."""
     exp = _mk_exp(artifacts={
