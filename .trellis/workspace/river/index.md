@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 27
+- **Total Sessions**: 28
 - **Last Active**: 2026-07-28
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1594 | Active |
+| `journal-1.md` | ~1617 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 28 | 2026-07-28 | kb_deep_search：给容器与 ZIP 方式补上 agentic 多步检索 | `38eb188`, `8ea87d1` | `main` |
 | 27 | 2026-07-28 | 容器与 ZIP 方式挂载托管知识库（直连 Retrieve 通道） | `5569aa2`, `13cc079`, `a9599d2`, `c8cad8e` | `main` |
 | 26 | 2026-07-28 | Support AgentCore unified observability log groups | `49dfc0f` | `main` |
 | 25 | 2026-07-28 | Observability session transcript: memory fallback for non-ledger sessions | `c8d6062`, `ff29f42` | `main` |

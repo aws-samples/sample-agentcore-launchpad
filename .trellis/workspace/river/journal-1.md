@@ -1592,3 +1592,26 @@ Updated Observability to query legacy aws/spans and unified per-runtime log grou
 ### Status
 
 [OK] **Completed**
+
+
+## Session 28: kb_deep_search：给容器与 ZIP 方式补上 agentic 多步检索
+
+**Date**: 2026-07-28
+**Task**: kb_deep_search：给容器与 ZIP 方式补上 agentic 多步检索
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+在生成的容器/ZIP Agent 里加第二个检索工具 kb_deep_search（bedrock-agent-runtime:AgenticRetrieveStream），与 kb_search 并存：快工具 ~0.9s 无 FM 调用，深工具 ~13s 每轮规划一次 FM。选两个工具名而非 deep= 开关，因为模型对不同名字的选择更可靠，且 A/B 配置包只能按工具名调描述（两条都进 DEFAULT_TOOL_DESCRIPTIONS）。写码前先探真实 API，避开三个坑：(1) AWS 博客例子是错的 —— messages[].content 是结构体不是数组、retrievers 用 configuration.knowledgeBase 而非 knowledgeBaseRetriever；(2) modeled error 从事件流内部来（九个成员），只 catch 异常会静默返回空结果，两条失败通道都要处理；(3) 步骤序列无保证 —— 探针那次只有 SpeculativeRetrieval+Planning，一个 Retrieval 步都没有。agentic 结果无 score/location，来源在 metadata._source_uri、库 id 在 sourceRetriever.identifier，另写 _format_agentic。maxAgentIteration 按实际 retriever 数派生（1→3，多→5）。容器两个工具塞进同一个 launchpad_kb SDK-MCP server，server 级 allow-list 不变。IAM：bedrock:AgenticRetrieveStream 不能按资源收敛，只能授 *，单独成一条 statement 让通配符可见（gateway role 本来就有同样授权）。真实验证：比对问题两个 Agent 都走 kb_deep_search 并发现原文口径陷阱（GEM 既是 $7,246MM 子策略又是 $10,706MM 大类），单点事实问题只走 kb_search —— 引导有效。追踪陷阱：AgenticRetrieveStream 的 boto3 span 只 160ms（只覆盖发起调用），真实耗时看外层 execute_tool span 13.4s。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `38eb188` | (see git log) |
+| `8ea87d1` | (see git log) |
+
+### Status
+
+[OK] **Completed**
