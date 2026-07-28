@@ -34,7 +34,7 @@ English: [architecture.md](architecture.md)
  │             Registry · Policy(Cedar) · Evaluation/Optimization  │
  │  Shared infra (CDK launchpad-base): S3 · ECR · CodeBuild ·      │
  │             Cognito · IAM exec role · HR Lambda · Facts API     │
- │  Observability: CloudWatch Transaction Search (aws/spans)       │
+ │  Observability: CloudWatch Logs（旧版 + 按 Agent 统一）           │
  └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -62,7 +62,7 @@ English: [architecture.md](architecture.md)
 | **Policy** | 以 `ENFORCE` 模式挂接到网关的 Cedar 策略引擎;deny 决策会带上作出判定的 policy id。支持 NL → Cedar 策略生成。 |
 | **Evaluation** | 基于 CloudWatch trace 的真实 `StartBatchEvaluation` / insights。运行范围三选一:**数据集**(回放条目——多轮 scenario 在同一 session 内顺序回放)、显式 **session id 列表**、或**时间窗口**(`lookback_hours` 1–336——被动模式:不产生新调用,用 `filterConfig.timeRange` 圈定既有流量)。13 个通用内置评估器,外加 3 个仅限真值的 `Builtin.Trajectory*Match` 匹配器(仅当数据集 scenario 定义了 `expected_trajectory` 时可选),以及支持完整 CRUD 的自定义 LLM-as-a-judge 评估器——在 `?view=evaluators` 子页创建/编辑(UpdateEvaluator 为全量配置替换)。洞察运行可在三种分析类型(失败归因/用户意图/执行摘要)中任选子集。数据集以 devguide scenario 形式存于 SQLite(`?view=datasets` 子页:scenario 编辑器、JSON/JSONL 导入),一键单向同步为不可变的 AWS Dataset 资源(`AGENTCORE_EVALUATION_PREDEFINED_V1`);scenario 真值(断言/期望回复/期望轨迹)经 `evaluationMetadata.sessionMetadata` 注入批量评估。账户单批次锁与队列语义不变。 |
 | **Optimization** | 推荐 → 配置捆绑(configuration bundles)→ 网关 A/B(config-bundle 50/50)→ target-based canary → verdict → promote → cleanup。 |
-| **Observability** | CloudWatch Transaction Search(X-Ray trace segment destination → CloudWatch Logs)。trace 从 `aws/spans` 日志组读取,并渲染为按 session 的链路面板。 |
+| **Observability** | 通过 CloudWatch Logs Insights 同时读取两种遥测布局：旧版 trace 位于 `aws/spans`，统一后的 trace、日志和 prompt 位于 `/aws/bedrock-agentcore/runtimes/<agent_id>-<endpoint>`。Span 记录按 session 渲染为链路面板。 |
 | **内置工具(Builtin Tools)** | Code Interpreter(`aws.codeinterpreter.v1`)与 Browser(`aws.browser.v1`)各有一个可运行的演示端点。 |
 
 ## 统一的五阶段部署管道
@@ -217,7 +217,7 @@ Chat Playground 的「会话记忆」右栏通过 `OPEN IN MEMORY ↗` 深链进
 
 | 来源 | 用途 | 方式 |
 |---|---|---|
-| `aws/spans` 日志组(CloudWatch Transaction Search) | 追踪/会话列表、仪表盘计数 + p50/p95 + 分时序列、热门工具、Span 树 | Logs Insights `start_query`,每个视图一组有界查询 |
+| 旧版 `aws/spans` + 统一的 `/aws/bedrock-agentcore/runtimes/*` 日志组 | 追踪/会话列表、仪表盘计数 + p50/p95 + 分时序列、热门工具、Span 树 | Logs Insights `SOURCE logGroups(namePrefix: ...)`,每个视图一组有界查询 |
 | `bedrock-agentcore` 指标命名空间 | 各模型 TOKEN 用量卡片与图表 | `ListMetrics`(发现维度)→ `GetMetricData` 对 `gen_ai.client.token.usage` 求和 |
 | AgentCore Memory `ListEvents` + ChatMessage 台账 | 会话对话转录 | 通过 ChatSession 联结(`session_id → actor_id`);优先读取 Memory,并用精确渲染消息台账修复延迟、不完整或历史 actor 分区漂移;解码 harness 消息信封并丢弃工具结果轮次 |
 
@@ -228,6 +228,9 @@ Chat Playground 的「会话记忆」右栏通过 `OPEN IN MEMORY ↗` 深链进
 插入 Logs Insights 查询字符串。TOKEN 求和只统计终端 LLM 操作
 (`chat` / `text_completion` / `generate_content`),因为 agent 级
 `invoke_agent` Span 会重复其子 Span 的 `gen_ai.usage.*` 值。
+统一日志组还包含 prompt、OTel event、结构化日志和标准输出；所有基于 Span
+的查询都要求存在 `startTimeUnixNano`，避免带 trace 关联信息的非 Span 记录
+抬高 trace、延迟、错误、token 或工具调用统计。
 
 成本为**参考估算**:token 数 × `config/launchpad.yaml` 中的 `model_prices`
 (每百万 token 的美元价,按子串匹配 `gen_ai.request.model`;未知模型只显示

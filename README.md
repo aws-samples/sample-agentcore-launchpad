@@ -29,7 +29,8 @@ infrastructure (CDK) and a vendored Strands Studio sub-app. It delivers:
   for system integration, so both entrances behave identically.
 - **Governance.** Cedar policies enforced at the AgentCore Gateway (Allow/Deny
   with the deciding policy id), a decision log, and end-to-end traces read from
-  CloudWatch Transaction Search (`aws/spans`).
+  CloudWatch Logs across the legacy `aws/spans` destination and unified
+  per-agent runtime log groups.
 - **Evaluation & optimization.** Real batch and online evaluation with 13
   built-in evaluators plus custom LLM-as-a-judge, failure-analysis insights,
   and an optimization loop that produces control/treatment **configuration

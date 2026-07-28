@@ -34,7 +34,7 @@ unified create → deploy → invoke → observe experience, not to reimplement 
  │             Registry · Policy(Cedar) · Evaluation/Optimization  │
  │  Shared infra (CDK launchpad-base): S3 · ECR · CodeBuild ·      │
  │             Cognito · IAM exec role · HR Lambda · Facts API     │
- │  Observability: CloudWatch Transaction Search (aws/spans)       │
+ │  Observability: CloudWatch Logs (legacy + per-agent unified)     │
  └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -63,7 +63,7 @@ real, runnable code in this repo.
 | **Policy** | Governance discovers existing MCP Gateways live, persists opt-in management through Launchpad-owned Gateway tags, and manages one attached Policy Engine plus Cedar policies. New Engines, Gateway attachments, and policies start in `LOG_ONLY`; ACTIVE edits create LOG_ONLY candidates, promotion and rollback use conservative ordering, and Gateway `ENFORCE` requires evidence or a typed zero-evidence override. Every mutation is journaled locally while AWS remains the source of current state. |
 | **Evaluation** | Real `StartBatchEvaluation` / insights over CloudWatch traces. A run's scope is exactly one of: a **dataset** (replay items — multi-turn scenarios replay sequentially in one session), explicit **session ids**, or a **time window** (`lookback_hours` 1–336 — passive: no new invocations, `filterConfig.timeRange` over existing traffic). 13 general built-in evaluators plus the 3 ground-truth-only `Builtin.Trajectory*Match` matchers (selectable only on dataset runs whose scenarios define `expected_trajectory`) plus custom LLM-as-a-judge evaluators with full CRUD — create/edit (UpdateEvaluator is a full-config replace) on the `?view=evaluators` sub-page. Insights runs pick a subset of the three analysis types (failure analysis / user intent / execution summary). Datasets live in SQLite as devguide scenarios (`?view=datasets` sub-page: scenario editor, JSON/JSONL import) and sync one-way to immutable AWS Dataset resources (`AGENTCORE_EVALUATION_PREDEFINED_V1`); scenario ground truth (assertions / expected responses / expected trajectory) is injected into batch runs via `evaluationMetadata.sessionMetadata`. One batch per account — queue managed, unchanged. |
 | **Optimization** | Recommendations → configuration bundles → gateway A/B (config-bundle 50/50) → target-based canary → verdict → promote → cleanup. |
-| **Observability** | CloudWatch Transaction Search (X-Ray trace segment destination → CloudWatch Logs). Traces are read from the `aws/spans` log group and rendered as a per-session rail. |
+| **Observability** | CloudWatch Logs Insights over both telemetry layouts: legacy traces in `aws/spans`, and unified traces/logs/prompts in `/aws/bedrock-agentcore/runtimes/<agent_id>-<endpoint>`. Span records are rendered as a per-session rail. |
 | **Builtin Tools** | Code Interpreter (`aws.codeinterpreter.v1`) runs operator-editable Python in an inline execution demo. Browser accepts an operator-editable navigation URL, starts a five-minute `1280x720` session, and returns a server-generated SigV4 Live View URL rendered by the official `BrowserLiveView` DCV component. The operator can use the managed browser or select an existing READY custom Browser with `browserSigning.enabled` for Web Bot Auth, restore an existing Browser Profile, and explicitly opt into saving Profile state before stop. Explicit stop and backend expiry both release retained sessions. |
 
 ## The unified five-stage deploy pipeline
@@ -280,7 +280,7 @@ botocore failures map to `memory.unavailable` (502).
 
 | Source | Used for | How |
 |---|---|---|
-| `aws/spans` log group (CloudWatch Transaction Search) | trace/session lists, dashboard counts + p50/p95 + hourly series, top tools, span trees | Logs Insights `start_query`, one bounded query set per view |
+| Legacy `aws/spans` + unified `/aws/bedrock-agentcore/runtimes/*` log groups | trace/session lists, dashboard counts + p50/p95 + hourly series, top tools, span trees | Logs Insights `SOURCE logGroups(namePrefix: ...)`, one bounded query set per view |
 | `bedrock-agentcore` metrics namespace | tokens-by-model tile + chart | `ListMetrics` (dimension discovery) → `GetMetricData` sums of `gen_ai.client.token.usage` |
 | AgentCore Memory `ListEvents` + ChatMessage ledger | session conversation transcript | ChatSession join (`session_id → actor_id`); Memory is primary, while the exact rendered-message ledger repairs lagging/incomplete or historically split actor partitions; harness envelopes are decoded and tool-result turns dropped |
 
@@ -292,7 +292,9 @@ the router **and** re-checked in the query builders before being interpolated
 into Logs Insights query strings. Token sums count only terminal LLM
 operations (`chat` / `text_completion` / `generate_content`) because
 agent-level `invoke_agent` spans repeat their children's `gen_ai.usage.*`
-values.
+values. Unified groups also contain prompts, OTel events, structured logs, and
+standard output; span-derived queries require `startTimeUnixNano` so correlated
+non-span records do not inflate trace, latency, error, token, or tool counts.
 
 Cost figures are **advisory estimates**: token counts × `model_prices` from
 `config/launchpad.yaml` (USD per 1M tokens, substring-matched against

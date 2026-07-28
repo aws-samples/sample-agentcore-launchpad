@@ -1,11 +1,11 @@
-"""Observability aggregations — Logs Insights over aws/spans + bedrock-agentcore metrics.
+"""Observability aggregations — Logs Insights over AgentCore telemetry + metrics.
 
 Design contract: design/mockup-observability.html. Every view is served from a
 60s TTL cache so the (slow, billed-per-scan) Logs Insights queries run at most
 once a minute per (view, range). Tokens-by-model comes from the
 `bedrock-agentcore` metrics namespace (gen_ai.client.token.usage, per the
-mockup); top tools and all trace/session rollups come from aws/spans, which
-covers every agent framework, not just those emitting client metrics.
+mockup); top tools and all trace/session rollups cover both the legacy shared
+aws/spans destination and unified per-runtime log groups.
 
 Cost figures are advisory estimates: token counts × config `model_prices`
 (USD per 1M tokens, substring-matched on the model id; unknown model → None).
@@ -31,6 +31,11 @@ from app.optimization.models import Experiment
 from app.services import memory
 
 SPANS_LOG_GROUP = "aws/spans"
+RUNTIME_LOG_GROUP_PREFIX = "/aws/bedrock-agentcore/runtimes/"
+SPANS_SOURCE = (
+    "SOURCE logGroups(namePrefix: "
+    f"['{SPANS_LOG_GROUP}', '{RUNTIME_LOG_GROUP_PREFIX}'])"
+)
 RANGE_HOURS = {"1h": 1, "6h": 6, "24h": 24, "7d": 168}
 BIN_BY_RANGE = {"1h": "5m", "6h": "15m", "24h": "1h", "7d": "6h"}
 # List caps: the UI paginates client-side (50/100/200 per page), so fetch a
@@ -117,9 +122,12 @@ def _start_query(
 ) -> str | None:
     """Returns the query id, or None when the target log group doesn't exist
     (fresh account before any agent traffic) — callers degrade to empty rows."""
-    target: dict[str, Any] = (
-        {"logGroupNames": log_groups} if log_groups else {"logGroupName": SPANS_LOG_GROUP}
-    )
+    if log_groups:
+        target: dict[str, Any] = {"logGroupNames": log_groups}
+    elif query.lstrip().startswith("SOURCE "):
+        target = {}
+    else:
+        target = {"logGroupName": SPANS_LOG_GROUP}
     for attempt in (0, 1):
         try:
             return logs.start_query(
@@ -223,11 +231,13 @@ _IS_LLM_FIELDS = """fields (strcontains(attributes.gen_ai.operation.name, "chat"
 def q_trace_aggregates(session_id: str | None = None, limit: int = TRACE_LIMIT) -> str:
     if session_id is not None:
         _require(SESSION_ID_RE, session_id, "session id")
-    session_filter = (
-        f'filter attributes.session.id = "{session_id}"\n| ' if session_id else ""
-    )
+    filters = ["ispresent(startTimeUnixNano)"]
+    if session_id:
+        filters.append(f'attributes.session.id = "{session_id}"')
     return f"""
-{session_filter}{_IS_LLM_FIELDS}
+{SPANS_SOURCE}
+| filter {" and ".join(filters)}
+| {_IS_LLM_FIELDS}
 | stats count(*) as span_count, sum(is_llm) as llm_count,
         sum(llm_in) as tokens_in,
         sum(llm_out) as tokens_out,
@@ -235,9 +245,9 @@ def q_trace_aggregates(session_id: str | None = None, limit: int = TRACE_LIMIT) 
         sum(llm_cache_write) as cache_write,
         sum(is_error) as error_count,
         min(startTimeUnixNano) as start_ns, max(endTimeUnixNano) as end_ns,
-        earliest(attributes.session.id) as session_id,
-        earliest(resource.attributes.service.name) as service,
-        earliest(attributes.gen_ai.request.model) as model,
+        latest(attributes.session.id) as session_id,
+        latest(resource.attributes.service.name) as service,
+        latest(attributes.gen_ai.request.model) as model,
         count_distinct(attributes.gen_ai.request.model) as model_count
   by traceId
 | sort start_ns desc
@@ -249,7 +259,8 @@ def q_root_spans(limit: int = 3 * TRACE_LIMIT) -> str:
     # No session variant: root spans don't reliably carry session.id, so session
     # views join roots by traceId against the session-filtered aggregates.
     return f"""
-filter not ispresent(parentSpanId)
+{SPANS_SOURCE}
+| filter ispresent(startTimeUnixNano) and not ispresent(parentSpanId)
 | fields name, traceId, resource.attributes.service.name as service,
          durationNano, startTimeUnixNano, status.code as status_code
 | sort startTimeUnixNano desc
@@ -259,15 +270,16 @@ filter not ispresent(parentSpanId)
 
 def q_session_aggregates(limit: int = SESSION_LIMIT) -> str:
     return f"""
-filter ispresent(attributes.session.id)
+{SPANS_SOURCE}
+| filter ispresent(startTimeUnixNano) and ispresent(attributes.session.id)
 | {_IS_LLM_FIELDS}
 | stats count_distinct(traceId) as traces, sum(is_llm) as llm_calls,
         sum(llm_in) as tokens_in,
         sum(llm_out) as tokens_out,
         sum(is_error) as errors,
         min(startTimeUnixNano) as first_ns, max(endTimeUnixNano) as last_ns,
-        earliest(resource.attributes.service.name) as service,
-        earliest(attributes.gen_ai.request.model) as model
+        latest(resource.attributes.service.name) as service,
+        latest(attributes.gen_ai.request.model) as model
   by attributes.session.id as session_id
 | sort last_ns desc
 | limit {limit}
@@ -276,7 +288,8 @@ filter ispresent(attributes.session.id)
 
 def q_dashboard_series(range_key: str) -> str:
     return f"""
-filter not ispresent(parentSpanId)
+{SPANS_SOURCE}
+| filter ispresent(startTimeUnixNano) and not ispresent(parentSpanId)
 | fields strcontains(status.code, "ERROR") as is_error
 | stats count(*) as traces, sum(is_error) as errors,
         pct(durationNano, 50) as p50_nano, pct(durationNano, 95) as p95_nano
@@ -287,8 +300,9 @@ filter not ispresent(parentSpanId)
 
 
 def q_dashboard_totals() -> str:
-    return """
-filter not ispresent(parentSpanId)
+    return f"""
+{SPANS_SOURCE}
+| filter ispresent(startTimeUnixNano) and not ispresent(parentSpanId)
 | fields strcontains(status.code, "ERROR") as is_error
 | stats count(*) as traces, sum(is_error) as errors,
         pct(durationNano, 50) as p50_nano, pct(durationNano, 95) as p95_nano
@@ -296,8 +310,9 @@ filter not ispresent(parentSpanId)
 
 
 def q_dashboard_distincts() -> str:
-    return """
-filter ispresent(attributes.session.id)
+    return f"""
+{SPANS_SOURCE}
+| filter ispresent(startTimeUnixNano) and ispresent(attributes.session.id)
 | stats count_distinct(attributes.session.id) as sessions,
         count_distinct(resource.attributes.service.name) as agents
 """
@@ -305,7 +320,8 @@ filter ispresent(attributes.session.id)
 
 def q_top_tools(limit: int = 10) -> str:
     return f"""
-filter ispresent(attributes.gen_ai.tool.name)
+{SPANS_SOURCE}
+| filter ispresent(startTimeUnixNano) and ispresent(attributes.gen_ai.tool.name)
 | fields strcontains(status.code, "ERROR") as is_error
 | stats count(*) as calls, sum(is_error) as errors
   by attributes.gen_ai.tool.name as tool
@@ -317,7 +333,8 @@ filter ispresent(attributes.gen_ai.tool.name)
 def q_trace_spans(trace_id: str) -> str:
     _require(TRACE_ID_RE, trace_id, "trace id")
     return f"""
-filter traceId = "{trace_id}"
+{SPANS_SOURCE}
+| filter traceId = "{trace_id}" and ispresent(startTimeUnixNano)
 | fields @message
 | limit {SPANS_PER_TRACE}
 """

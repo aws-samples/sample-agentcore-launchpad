@@ -24,8 +24,8 @@ vendored Strands Studio 子应用。主要能力包括：
   流式响应、多轮历史和 session 级记忆。外部系统可通过带 `X-Api-Key` 鉴权的
   `/v1` 接口调用同一条链路，因此 API 与控制台的行为一致。
 - **治理。** Cedar 策略在 AgentCore Gateway 上执行 Allow/Deny，并返回作出判定的
-  policy id。控制台还提供决策日志，以及从 CloudWatch Transaction Search
-  （`aws/spans`）读取的端到端 trace。
+  policy id。控制台还提供决策日志，以及从 CloudWatch Logs 的旧版共享
+  `aws/spans` 目标和按 Agent 统一日志组中读取的端到端 trace。
 - **评估与优化。** 直接调用 AgentCore 的 batch 和 online 评估服务，提供 13 个
   内置评估器、自定义 LLM-as-a-judge 和失败归因（insights）。优化流程会生成
   control/treatment **配置包（configuration bundles）**，通过网关运行 A/B 和

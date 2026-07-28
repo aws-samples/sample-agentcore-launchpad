@@ -176,9 +176,39 @@ def test_session_filtered_query_is_well_formed():
     # Regression: the session variant once emitted a leading "| filter" with no
     # pipe before the next stage — a Logs Insights syntax error (502 in e2e).
     query = obs.q_trace_aggregates(session_id="abc12345").strip()
-    assert query.startswith('filter attributes.session.id = "abc12345"')
+    assert query.startswith("SOURCE logGroups(")
+    assert 'attributes.session.id = "abc12345"' in query
     assert '\n| fields' in query
     assert not query.startswith("|")
+
+
+def test_global_span_queries_cover_legacy_and_unified_groups():
+    queries = [
+        obs.q_trace_aggregates(),
+        obs.q_root_spans(),
+        obs.q_session_aggregates(),
+        obs.q_dashboard_series("24h"),
+        obs.q_dashboard_totals(),
+        obs.q_dashboard_distincts(),
+        obs.q_top_tools(),
+        obs.q_trace_spans("a" * 32),
+    ]
+    for query in queries:
+        assert query.strip().startswith(obs.SPANS_SOURCE)
+        assert "ispresent(startTimeUnixNano)" in query
+    assert "aws/spans" in obs.SPANS_SOURCE
+    assert "/aws/bedrock-agentcore/runtimes/" in obs.SPANS_SOURCE
+
+
+def test_span_aggregates_preserve_string_metadata_with_latest():
+    trace_query = obs.q_trace_aggregates()
+    session_query = obs.q_session_aggregates()
+    assert "latest(attributes.session.id) as session_id" in trace_query
+    for query in (trace_query, session_query):
+        assert "latest(resource.attributes.service.name) as service" in query
+        assert "latest(attributes.gen_ai.request.model) as model" in query
+        assert "max(resource.attributes.service.name)" not in query
+        assert "max(attributes.gen_ai.request.model)" not in query
 
 
 def test_parse_message_events_from_runtime_log_record():
@@ -276,10 +306,12 @@ class FakeLogs:
     def __init__(self, rows_by_marker):
         self.rows_by_marker = rows_by_marker
         self.start_calls = 0
+        self.start_kwargs = []
         self._queries = {}
 
     def start_query(self, **kwargs):
         self.start_calls += 1
+        self.start_kwargs.append(kwargs)
         qid = f"q{self.start_calls}"
         self._queries[qid] = kwargs["queryString"]
         return {"queryId": qid}
@@ -394,6 +426,32 @@ def test_cache_second_call_hits_no_aws(monkeypatch):
     assert fake.start_calls == calls_after_first  # cache hit → no new queries
     assert first["cache"]["hit"] is False and second["cache"]["hit"] is True
     assert second["traces"] == first["traces"]
+
+
+def test_global_queries_use_source_instead_of_enumerated_log_groups():
+    fake = _fake_logs()
+    db = SessionLocal()
+    obs.list_traces("24h", db, logs=fake)
+    db.close()
+    assert len(fake.start_kwargs) == 2
+    for call in fake.start_kwargs:
+        assert call["queryString"].strip().startswith(obs.SPANS_SOURCE)
+        assert "logGroupName" not in call
+        assert "logGroupNames" not in call
+
+
+def test_explicit_runtime_group_query_keeps_log_group_names():
+    fake = _fake_logs()
+    groups = ["/aws/bedrock-agentcore/runtimes/test-DEFAULT"]
+    obs.run_insights_queries(
+        {"events": obs.q_trace_message_events("d" * 32)},
+        1,
+        logs=fake,
+        log_groups=groups,
+    )
+    call = fake.start_kwargs[0]
+    assert call["logGroupNames"] == groups
+    assert not call["queryString"].strip().startswith("SOURCE ")
 
 
 def test_cache_force_bypasses_and_ttl_expires(monkeypatch):
