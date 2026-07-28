@@ -52,7 +52,10 @@ Use `make dev` for the foreground, terminal-attached development stack.
 ### Optional console login
 
 The console can use local accounts without Cognito or any other AWS dependency.
-Authentication is disabled until a password is configured:
+Authentication is disabled until a password is configured — and the console shows
+an `AUTH OFF` badge in its top bar while that is the case. Note that
+`./start.py --prod` binds both servers to `0.0.0.0`, so anything reachable must
+have the gate on:
 
 ```bash
 export LAUNCHPAD_AUTH_USERNAME=admin
@@ -98,6 +101,78 @@ custom days or an absolute date), disable / enable, change role, reset the
 password (shown once), and delete. Expiry and disabling are enforced on every request, so an account
 loses console access immediately — it does not have to wait for the session
 cookie to lapse.
+
+## Production deployment / 生产部署
+
+`./start.py --prod` is a local preview: it builds the frontend, serves the built
+bundle, drops backend auto-reload, and binds to `0.0.0.0`. For a host that stays
+up, supervise the two processes instead and keep the console behind an edge that
+terminates TLS. The reference deployment (workshop EC2 + CloudFront) is specified
+in `.trellis/spec/launchpad/remote-production-deployment.md`; its shape is:
+
+```text
+browser → CloudFront (TLS, no caching, all methods, injects a secret origin header)
+            └─ nginx :80 on the instance — rejects any request without that header
+                 ├─ /api/, /v1/ → 127.0.0.1:8000   (backend, proxy_buffering off for SSE)
+                 └─ /,  /assets/ → 127.0.0.1:5173  (vite preview serving frontend/dist)
+```
+
+**1. Supervise the two processes.** The backend unit carries the auth
+configuration; nothing else enables the gate for you:
+
+```ini
+# /etc/systemd/system/launchpad-backend.service   (excerpt)
+[Service]
+WorkingDirectory=/home/ubuntu/workspace/agentcore_launchpad/backend
+Environment=LAUNCHPAD_RUN_MODE=prod
+Environment=LAUNCHPAD_AUTH_USERNAME=admin
+Environment=LAUNCHPAD_AUTH_PASSWORD=<strong-password>
+Environment=LAUNCHPAD_AUTH_COOKIE_SECURE=true
+ExecStart=/home/ubuntu/.local/bin/uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+```
+
+```ini
+# /etc/systemd/system/launchpad-frontend.service  (excerpt)
+[Service]
+WorkingDirectory=/home/ubuntu/workspace/agentcore_launchpad/frontend
+Requires=launchpad-backend.service
+ExecStart=/usr/bin/npm run preview -- --host 127.0.0.1 --port 5173 --strictPort
+Restart=on-failure
+```
+
+`vite preview` serves `frontend/dist`, so **every frontend change needs
+`npm run build` before the restart**. Both processes bind to `127.0.0.1`: only
+the reverse proxy is exposed.
+
+**2. Close the origin.** CloudFront adds a custom header (e.g.
+`X-Launchpad-Origin-Key`) and nginx refuses anything without it, so the public
+instance IP cannot bypass the CDN:
+
+```nginx
+if ($http_x_launchpad_origin_key != "<shared-secret>") { return 403; }
+proxy_set_header X-Forwarded-Proto https;   # TLS terminates at CloudFront
+```
+
+Because TLS terminates at the edge, keep `LAUNCHPAD_AUTH_COOKIE_SECURE=true`;
+over plain HTTP the browser would drop the session cookie.
+
+**3. Update an existing host.**
+
+```bash
+cp data/launchpad.db data/launchpad.db.bak-$(date +%Y%m%d-%H%M)
+git merge --ff-only origin/main
+cd backend && uv sync && cd ..
+cd frontend && npm run build && cd ..          # required: preview serves dist/
+sudo systemctl restart launchpad-backend launchpad-frontend
+curl -s localhost:8000/api/auth/status          # expect auth_required: true
+```
+
+New ledger tables (such as `users`) are created on startup, so no migration step
+is needed. Registration is open as soon as the gate is on — set
+`LAUNCHPAD_AUTH_REGISTRATION_ENABLED=false` or pin
+`LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS` if the deployment should not accept
+requests from anyone who has the URL.
 
 ## Teardown / 资源清理
 

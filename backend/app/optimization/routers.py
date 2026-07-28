@@ -100,6 +100,11 @@ class ActionRequest(BaseModel):
     accepted_prompt: str | None = None                        # accept
     accepted_tool_descriptions: dict[str, str] | None = None  # accept
     dataset_id: str | None = None                             # traffic
+    # gateway — evaluators the online evaluation config scores both arms with
+    # (default: service.ONLINE_EVAL_DEFAULT). AWS caps the list at 10.
+    online_evaluators: list[str] | None = Field(
+        default=None, min_length=1, max_length=service.ONLINE_EVAL_MAX
+    )
     challenger_agent_id: str | None = None                    # legacy canary
 
 
@@ -174,18 +179,21 @@ def experiment_action(
                 exp_id, progress,
                 types=req.recommend_types, tools=req.recommend_tools),
         )
-    else:  # gateway | abtest | verdict | cleanup
-        if req.action in {"gateway", "abtest"}:
-            own_test_name = (
-                f"exp_{exp.id[:8]}_bundle"
-                if req.action == "abtest"
-                else None
-            )
+    elif req.action == "gateway":
+        service.assert_shared_gateway_available()
+        # validated here, not inside the thread: a bad evaluator id shouldn't
+        # cost a gateway + runtime-target round-trip before it is caught
+        evaluators = service.normalize_online_evaluators(req.online_evaluators)
+        service.run_action(
+            exp.id, "gateway",
+            lambda progress: service.act_gateway(exp_id, progress, evaluators),
+        )
+    else:  # abtest | verdict | cleanup
+        if req.action == "abtest":
             service.assert_shared_gateway_available(
-                own_test_name=own_test_name
+                own_test_name=f"exp_{exp.id[:8]}_bundle"
             )
         fn = {
-            "gateway": service.act_gateway,
             "abtest": service.act_abtest,
             "verdict": service.act_verdict,
             "cleanup": service.act_cleanup,

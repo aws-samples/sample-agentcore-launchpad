@@ -54,7 +54,9 @@ make bootstrap          # = cd backend && uv run python ../scripts/bootstrap.py
 
 ### 可选的控制台登录
 
-控制台支持本地账户登录,不依赖 Cognito 或其他 AWS 服务。未配置密码时登录网关关闭:
+控制台支持本地账户登录,不依赖 Cognito 或其他 AWS 服务。未配置密码时登录网关关闭,
+此时控制台顶栏会显示 `AUTH OFF` 徽标。注意 `./start.py --prod` 会把两个服务都绑定到
+`0.0.0.0`,因此任何对外可达的部署都必须开启网关:
 
 ```bash
 export LAUNCHPAD_AUTH_USERNAME=admin
@@ -90,6 +92,74 @@ admin 账号会看到**用户管理**模块(`/users`):审批队列(「待审批�
 自定义天数或指定到期时间、禁用/启用、修改角色、重置密码(仅显示一次)、删除)。
 到期与禁用在每次请求时校验,账户会**立即**失去控制台访问权限,无需等待会话
 Cookie 过期。
+
+## 生产部署
+
+`./start.py --prod` 只是本地预览:构建前端、提供构建产物、关闭后端自动重载,并绑定到
+`0.0.0.0`。长期运行的主机应改用进程管理器托管这两个服务,并在前面放一层终结 TLS 的
+边缘。参考部署(workshop EC2 + CloudFront)的完整规格见
+`.trellis/spec/launchpad/remote-production-deployment.md`,其拓扑为:
+
+```text
+浏览器 → CloudFront(TLS、不缓存、放通全部方法、注入一个密钥请求头)
+           └─ 实例上的 nginx :80 —— 缺少该请求头的请求直接拒绝
+                ├─ /api/、/v1/ → 127.0.0.1:8000   (后端,SSE 需要 proxy_buffering off)
+                └─ /、/assets/ → 127.0.0.1:5173    (vite preview 提供 frontend/dist)
+```
+
+**1. 托管两个进程。** 认证配置写在后端单元里,没有别的东西会替你开启网关:
+
+```ini
+# /etc/systemd/system/launchpad-backend.service   (节选)
+[Service]
+WorkingDirectory=/home/ubuntu/workspace/agentcore_launchpad/backend
+Environment=LAUNCHPAD_RUN_MODE=prod
+Environment=LAUNCHPAD_AUTH_USERNAME=admin
+Environment=LAUNCHPAD_AUTH_PASSWORD=<strong-password>
+Environment=LAUNCHPAD_AUTH_COOKIE_SECURE=true
+ExecStart=/home/ubuntu/.local/bin/uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+```
+
+```ini
+# /etc/systemd/system/launchpad-frontend.service  (节选)
+[Service]
+WorkingDirectory=/home/ubuntu/workspace/agentcore_launchpad/frontend
+Requires=launchpad-backend.service
+ExecStart=/usr/bin/npm run preview -- --host 127.0.0.1 --port 5173 --strictPort
+Restart=on-failure
+```
+
+`vite preview` 提供的是 `frontend/dist`,所以**前端每次改动都必须先
+`npm run build` 再重启**。两个进程都绑定 `127.0.0.1`,对外只暴露反向代理。
+
+**2. 封闭 origin。** CloudFront 注入一个自定义请求头(如
+`X-Launchpad-Origin-Key`),nginx 拒绝不带该头的请求,这样直连实例公网 IP 无法绕过
+CDN:
+
+```nginx
+if ($http_x_launchpad_origin_key != "<shared-secret>") { return 403; }
+proxy_set_header X-Forwarded-Proto https;   # TLS 在 CloudFront 终结
+```
+
+由于 TLS 在边缘终结,`LAUNCHPAD_AUTH_COOKIE_SECURE=true` 必须保持开启;纯 HTTP 下
+浏览器会丢弃会话 Cookie。
+
+**3. 更新已有主机。**
+
+```bash
+cp data/launchpad.db data/launchpad.db.bak-$(date +%Y%m%d-%H%M)
+git merge --ff-only origin/main
+cd backend && uv sync && cd ..
+cd frontend && npm run build && cd ..          # 必须:preview 只吃 dist/
+sudo systemctl restart launchpad-backend launchpad-frontend
+curl -s localhost:8000/api/auth/status          # 预期 auth_required: true
+```
+
+新增的台账表(如 `users`)会在后端启动时自动创建,无需迁移步骤。网关一开启,注册
+就是开放的 —— 如果不希望任何拿到 URL 的人都能提交申请,请设置
+`LAUNCHPAD_AUTH_REGISTRATION_ENABLED=false` 或用
+`LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS` 限定公司域名。
 
 ## 资源清理
 

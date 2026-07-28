@@ -2,6 +2,7 @@
 traffic dataset resolution, runner lifecycle, old-row compatibility."""
 
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -1020,3 +1021,108 @@ def test_create_rejects_unverified_bundle_consumers(client, method, spec, code):
     res = client.post("/api/experiments", json={"agent_id": agent_id})
     assert res.status_code == 400
     assert res.json()["code"] == code
+
+
+# ─── online evaluators (gateway stage) ───────────────────────────────────────
+def _gateway_ready_exp():
+    return _mk_exp(artifacts={
+        "agent_meta": {"arn": "arn:a", "resource_id": "r-1", "runtime_name": "rt"},
+        "bundles": {"control": {}, "treatment": {}},
+    })
+
+
+def _capture_gateway(monkeypatch):
+    """Free the gateway lock and capture what act_gateway is handed."""
+    monkeypatch.setattr(svc, "assert_shared_gateway_available",
+                        lambda **kw: None)
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        svc, "run_action",
+        lambda exp_id, action, fn: seen.update(action=action, fn=fn),
+    )
+    monkeypatch.setattr(
+        svc, "act_gateway",
+        lambda exp_id, progress, evaluators=None: seen.update(
+            evaluators=list(evaluators or [])),
+    )
+    return seen
+
+
+def test_gateway_defaults_to_the_builtin_pair(client, monkeypatch):
+    exp = _gateway_ready_exp()
+    seen = _capture_gateway(monkeypatch)
+    res = client.post(f"/api/experiments/{exp.id}/action",
+                      json={"action": "gateway"})
+    assert res.status_code == 202
+    seen["fn"](svc._noop)
+    assert seen["evaluators"] == list(svc.ONLINE_EVAL_DEFAULT)
+
+
+def test_gateway_passes_chosen_evaluators_in_order(client, monkeypatch):
+    exp = _gateway_ready_exp()
+    seen = _capture_gateway(monkeypatch)
+    res = client.post(
+        f"/api/experiments/{exp.id}/action",
+        json={"action": "gateway", "online_evaluators": [
+            "Builtin.InstructionFollowing", "Builtin.Refusal",
+            "Builtin.InstructionFollowing", "  ", "fund_fact_grounding-b9y",
+        ]},
+    )
+    assert res.status_code == 202
+    seen["fn"](svc._noop)
+    # duplicates and blanks collapse, order preserved, custom ids pass through
+    assert seen["evaluators"] == [
+        "Builtin.InstructionFollowing", "Builtin.Refusal",
+        "fund_fact_grounding-b9y",
+    ]
+
+
+@pytest.mark.parametrize(
+    "evaluators",
+    [
+        ["Builtin.TrajectoryInOrderMatch"],          # needs dataset ground truth
+        ["Builtin.Helpfulness", "Builtin.Nope"],     # unknown built-in
+    ],
+)
+def test_gateway_rejects_unusable_evaluators_before_dispatch(
+    client, monkeypatch, evaluators,
+):
+    exp = _gateway_ready_exp()
+    seen = _capture_gateway(monkeypatch)
+    res = client.post(f"/api/experiments/{exp.id}/action",
+                      json={"action": "gateway", "online_evaluators": evaluators})
+    assert res.status_code == 400
+    assert res.json()["code"] == "experiment.evaluator_unsupported"
+    assert "action" not in seen  # never dispatched
+
+
+@pytest.mark.parametrize(
+    "evaluators",
+    [[], [f"Builtin.Helpfulness{i}" for i in range(svc.ONLINE_EVAL_MAX + 1)]],
+)
+def test_gateway_evaluator_list_bounds(client, evaluators):
+    exp = _gateway_ready_exp()
+    res = client.post(f"/api/experiments/{exp.id}/action",
+                      json={"action": "gateway", "online_evaluators": evaluators})
+    assert res.status_code == 422
+
+
+def test_stage_gateway_records_evaluators_on_the_artifact(monkeypatch):
+    control = MagicMock()
+    monkeypatch.setattr(svc, "control_client", lambda: control)
+    monkeypatch.setattr(svc, "ensure_experiment_gateway",
+                        lambda progress, control: {"gateway_id": "gw-1"})
+    monkeypatch.setattr(svc, "create_runtime_target_idempotent",
+                        lambda *a, **kw: "tgt-1")
+    control.create_online_evaluation_config.return_value = {
+        "onlineEvaluationConfigArn": "arn:oe", "onlineEvaluationConfigId": "oe-1",
+    }
+    result = svc.stage_gateway(
+        "exp1234567890", {"arn": "arn:a", "resource_id": "r-1", "runtime_name": "rt"},
+        evaluators=["Builtin.Refusal", "Builtin.InstructionFollowing"],
+    )
+    assert result["online_evaluators"] == [
+        "Builtin.Refusal", "Builtin.InstructionFollowing"]
+    sent = control.create_online_evaluation_config.call_args.kwargs["evaluators"]
+    assert sent == [{"evaluatorId": "Builtin.Refusal"},
+                    {"evaluatorId": "Builtin.InstructionFollowing"}]

@@ -137,13 +137,22 @@ servers bind to `127.0.0.1` by default.
 
 ### Local production mode
 
+Production mode builds the platform frontend, serves its optimized bundle, and
+runs the backend without auto-reload. Both the UI and API servers bind to
+`0.0.0.0`, and **the login gate stays off until you configure a password** — so
+enable it in the same step, or the stack is open to everyone who can reach the
+host (the console shows an `AUTH OFF` badge whenever that is the case):
+
 ```bash
+export LAUNCHPAD_AUTH_USERNAME=admin                # built-in admin (config-only, never in the DB)
+export LAUNCHPAD_AUTH_PASSWORD='replace-with-a-strong-password'
+export LAUNCHPAD_AUTH_COOKIE_SECURE=true            # only behind HTTPS (e.g. CloudFront/ALB)
 ./start.py --prod
 ```
 
-Production mode builds the platform frontend, serves its optimized bundle, and
-runs the backend without auto-reload. Both the UI and API servers bind to
-`0.0.0.0`.
+`start.py` never enables the gate itself; it only passes the environment
+through, so the same variables work with `make dev`, systemd units, or any other
+supervisor.
 
 | Service | Default URL | Port override |
 |---|---|---|
@@ -153,6 +162,30 @@ runs the backend without auto-reload. Both the UI and API servers bind to
 Override UI and API bindings with `LAUNCHPAD_HOST` and
 `LAUNCHPAD_API_HOST`. The launcher fails before starting if a configured port
 is already occupied.
+
+With the gate on, the login page also offers **registration** (username +
+company email + password). A new account lands in `pending` and **cannot sign in
+until an admin approves it**; the 7-day validity window starts at approval. The
+admin gets a **User Management** module (`/users`) with the approval queue,
+statistics, extend/disable/role/reset-password/delete actions.
+
+```bash
+export LAUNCHPAD_AUTH_REGISTRATION_ENABLED=true           # false closes registration entirely
+export LAUNCHPAD_AUTH_REGISTRATION_REQUIRE_APPROVAL=true  # false = usable at registration
+export LAUNCHPAD_AUTH_REGISTRATION_VALID_DAYS=7           # validity granted on approval
+export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # allow list wins when set
+```
+
+Public and disposable mail domains are rejected by default. Two caveats:
+`LAUNCHPAD_AUTH_COOKIE_SECURE=true` over plain HTTP makes the browser drop the
+session cookie, and rotating `LAUNCHPAD_AUTH_PASSWORD` invalidates **all**
+sessions (the cookie signing key derives from it). The public `/v1` surface keeps
+its own `X-Api-Key` auth and is never guarded by the console cookie.
+
+For a real deployment (systemd units, nginx origin-key gate, CloudFront, and the
+update procedure) see
+[docs/setup.md](docs/setup.md#production-deployment--生产部署) and
+`.trellis/spec/launchpad/remote-production-deployment.md`.
 
 ### Stop the stack
 
