@@ -1500,3 +1500,25 @@ Also moved the platform default model to global.anthropic.claude-sonnet-5 (verif
 ### Status
 
 [OK] **Completed**
+
+
+## Session 24: Selectable online evaluators + 160-prompt A/B rerun that finally reached significance
+
+**Date**: 2026-07-28
+**Task**: Selectable online evaluators + 160-prompt A/B rerun that finally reached significance
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Removed the hard-coded GoalSuccessRate+Helpfulness pair from the config-bundle A/B gateway stage: POST /api/experiments/{id}/action now takes optional online_evaluators (default unchanged), validated in the router via normalize_online_evaluators (dedupe/order-preserving; rejects Builtin.Trajectory*Match and unknown builtins; 10-item AWS cap), persisted as gateway.online_evaluators and echoed on the card; frontend adds evaluator chips (13 builtins + custom judges) with en/zh-CN keys; 7 new backend tests. Verified on a real 160-prompt run of lab-fund-assistant scored by Refusal+Faithfulness+GoalSuccessRate+InstructionFollowing+Helpfulness: Faithfulness 0.86 -> 0.97 at p=0.047 (first significant verdict in chapter 09) while GoalSuccessRate moved the other way (0.49 -> 0.36) and the agent fabricated an inception date, so the honest call was CLEANUP not PROMOTE. Key learnings recorded in docs: compute_verdict's significant flag is an OR across evaluators while verdict is the average delta direction (so 'control-wins + significant:true' meant one metric moved, not that control won); the verdict is computed once so you must wait for online scoring to catch up (it lagged the last session by 18 min); session-level GoalSuccessRate counts the 22 Bedrock ConverseStream InternalServerException failures as goal misses while trace-level evaluators do not (n 97/64 vs 84/55); online evaluation has no ground truth, so custom judges using {expected_response} degrade there. Also corrected chapter 08's claim that a custom judge is required for 'fund numbers must be grounded' (Correctness+GoalSuccessRate already cover it on ground-truth dataset runs; what custom judges add is the composite rubric and scale).
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `69f2696` | (see git log) |
+
+### Status
+
+[OK] **Completed**
