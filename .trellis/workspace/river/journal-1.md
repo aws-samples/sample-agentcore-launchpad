@@ -1615,3 +1615,26 @@ Updated Observability to query legacy aws/spans and unified per-runtime log grou
 ### Status
 
 [OK] **Completed**
+
+
+## Session 29: Surface failed system-prompt recommendation (ISSUE-007)
+
+**Date**: 2026-07-28
+**Task**: Surface failed system-prompt recommendation (ISSUE-007)
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+A system-prompt recommendation AWS finished as FAILED (safety-filter ValidationException) was presented as a successful optimization: stage_recommend wrote recommended_prompt from _fallback_treatment_prompt() regardless of job status and never read systemPromptRecommendationResult.errorCode/errorMessage, while the UI's spDone check saw the fallback text as done (no error note, no retry, ACCEPT enabled). Now: a non-COMPLETED or empty-prompt job writes system_prompt_status + system_prompt_error and NO prompt (fallback text deleted); new service.system_prompt_rec_failed() gates both sides; accept answers 409 experiment.accept_rec_failed unless an operator-authored prompt differs from control, ignoring any stale recommended_prompt on pre-guard rows; the page shows a crit note with AWS status + error, keeps the regenerate button, and disables ACCEPT with a stated reason until the prompt is edited (en+zh-CN). Verified by 127 backend tests (FAILED / COMPLETED-empty / tool-only / legacy row / regen clears error / accept 409+escape hatch) and fetch-stub browser evidence for 4 UI states; spec experiment-stepwise.md and lab ch.09 document the failure path. make verify PASS, pushed to origin/main.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `92b6a4f` | (see git log) |
+| `4323530` | (see git log) |
+
+### Status
+
+[OK] **Completed**
