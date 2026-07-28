@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 24
+- **Total Sessions**: 25
 - **Last Active**: 2026-07-28
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1524 | Active |
+| `journal-1.md` | ~1547 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 25 | 2026-07-28 | Observability session transcript: memory fallback for non-ledger sessions | `c8d6062`, `ff29f42` | `main` |
 | 24 | 2026-07-28 | Selectable online evaluators + 160-prompt A/B rerun that finally reached significance | `69f2696` | `main` |
 | 23 | 2026-07-26 | Verify the lab guide on the remote prod env, fix the KB data-source loss, default to sonnet-5 | `8fab107`, `721a77a`, `bf069a6` | `main` |
 | 22 | 2026-07-26 | Hands-on lab guide (live run) + container OTEL events-API fix | `ea0bc4e`, `914b6e7` | `main` |

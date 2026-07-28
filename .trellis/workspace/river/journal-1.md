@@ -1522,3 +1522,26 @@ Removed the hard-coded GoalSuccessRate+Helpfulness pair from the config-bundle A
 ### Status
 
 [OK] **Completed**
+
+
+## Session 25: Observability session transcript: memory fallback for non-ledger sessions
+
+**Date**: 2026-07-28
+**Task**: Observability session transcript: memory fallback for non-ledger sessions
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Diagnosed why /observability?tab=sessions&session=ee760f57-... showed 'no memory transcript' while /memory showed a transcript for the same agent: session_transcript() resolved only chat_sessions and eval_runs.session_ids, but that session was A/B experiment gateway traffic (dashed uuid4 from send_gateway_traffic) whose memory events live under the BARE 'default' actor (verified live: 5 events), and whose id had been dropped from experiments.artifacts.traffic (the stepwise traffic action overwrites it). Added a bounded memory probe: agent resolved from the session's spans (build_agent_resolver over service.name) -> ListActors filtered to {agent_id}__* -> bare 'default'; first actor with turns wins, any failure degrades to the unchanged not_platform_session empty state. Experiments only label (source=experiment) and never gate. Frontend: per-source sub-line naming the actor read, OPEN IN CHAT narrowed to chat-ledger sessions, corrected noTranscript copy (en+zh). 6 new backend tests; make verify green; verified live on the real stack for external/experiment//v1/chat sessions in both locales. New spec: .trellis/spec/launchpad/observability-session-transcript.md. Also learned backend/tests/conftest.py does not stub boto3, so unstubbed AWS branches hit real AWS.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c8d6062` | (see git log) |
+| `ff29f42` | (see git log) |
+
+### Status
+
+[OK] **Completed**
