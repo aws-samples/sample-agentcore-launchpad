@@ -1294,6 +1294,8 @@
     "toolRecLabel": "工具描述推荐",
     "toolRecNoTools": "没有可分析的工具——请在下方填入工具后重新生成。",
     "toolRecFailed": "工具描述推荐失败：{{msg}}",
+    "spRecFailed": "系统提示词推荐在 AWS 侧状态为 {{status}}，未产出任何推荐结果：{{msg}}",
+    "acceptBlockedRecFailed": "推荐失败，无法接受。请重新生成，或在上方编辑出你自己的实验组提示词后再继续。",
     "toolRecEmpty": "优化器未对所分析的工具描述给出修改建议。",
     "toolBundleUnsupported": "该转换 runtime 只支持系统提示词 Bundle。工具描述实验需要重新转换生成新版 runtime。",
     "genSp": "生成提示词推荐",

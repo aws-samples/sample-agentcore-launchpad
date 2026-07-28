@@ -45,6 +45,7 @@ act_recommend/act_gateway/act_abtest/act_traffic/act_verdict/act_promote/act_cle
 action_accept(exp, prompt, tool_descriptions)  # sync
 action_bundles(exp)  # sync
 stage_not_ready_reason(exp, action) -> str | None
+system_prompt_rec_failed(rec) -> bool  # stored recommend artifact → prompt job failed?
 resolve_traffic_prompts(dataset) -> list[str]
 normalize_online_evaluators(ids) -> list[str]   # None/empty → ONLINE_EVAL_DEFAULT
 create_bundle_idempotent(control, **kwargs)    # conflict-adopt via ListConfigurationBundles
@@ -75,11 +76,26 @@ assert_shared_gateway_available(own_test_name=None) -> None
     by `_agent_meta()` for old rows.
   - `recommend.accepted_prompt` / `recommend.accepted_tool_descriptions` —
     written by `accept`; `bundles` uses accepted → recommended fallback.
+  - `recommend.system_prompt_status` / `system_prompt_error` — the AWS job
+    status and its `errorCode: errorMessage` (mirrors `tool_status` /
+    `tool_error`).
   - `traffic.dataset_id` / `traffic.dataset_name` — when a dataset was
     replayed instead of the built-in `TRAFFIC_PROMPTS*2`.
   - `gateway.online_evaluators` — the evaluator ids the online evaluation
     config was created with (records the *request*: a name-conflict adoption
     keeps the pre-existing config's own set, which is never rewritten).
+- **A recommendation job AWS did not complete produces NOTHING.** `stage_recommend`
+  writes `recommended_prompt` only when the job is `COMPLETED` *and*
+  `recommendedSystemPrompt` is non-empty; otherwise it writes
+  `system_prompt_status` + `system_prompt_error` and no prompt (there is no
+  invented "fallback treatment prompt" — that made a `FAILED` safety-filter
+  `ValidationException` read as a successful optimization, ISSUE-007). The UI
+  then keeps the recommend card open with a crit note + the regenerate button,
+  and `system_prompt_rec_failed(rec)` gates `accept`: the router answers
+  `409 experiment.accept_rec_failed` unless the request carries an
+  operator-authored prompt that differs from the control prompt. A row with no
+  `system_prompt_status`/`system_prompt_error` (tool-only run, or a pre-status
+  legacy row) is never treated as failed.
 - **Online evaluators are operator-chosen at `gateway`.**
   `ONLINE_EVAL_DEFAULT = ("Builtin.GoalSuccessRate", "Builtin.Helpfulness")`
   when the field is absent, so pre-existing flows are byte-identical.
@@ -124,6 +140,7 @@ assert_shared_gateway_available(own_test_name=None) -> None
 | `running_action` non-null | 409 `experiment.action_in_flight` |
 | prerequisite artifact missing (see table below) | 409 `experiment.stage_not_ready` |
 | accept with no prompt anywhere | 400 `experiment.accept_invalid` |
+| accept after a failed system-prompt job, prompt == control | 409 `experiment.accept_rec_failed` |
 | traffic dataset not found | 404 `dataset.not_found` |
 | traffic dataset kind `simulated` / no usable prompts | 422 `experiment.dataset_unsupported` |
 | gateway `online_evaluators` empty list or > `ONLINE_EVAL_MAX` items | 422 (pydantic bounds) |
@@ -155,6 +172,11 @@ promote←verdict; recommend/cleanup←none.
 `backend/tests/optimization/test_stepwise_actions.py`:
 - guard matrix (every action w/o prereq → 409; in-flight → 409)
 - accept persists edit + keeps `recommended_prompt`; empty accept → 400
+- failed system-prompt job: `stage_recommend` returns status + error and NO
+  `recommended_prompt` (FAILED, and COMPLETED-with-empty-prompt alike);
+  `system_prompt_rec_failed` is False for tool-only/legacy rows; accept → 409
+  unless an operator-authored prompt differs from the control; a successful
+  re-run clears the stale `system_prompt_error`
 - `act_recommend` re-run preserves prior `accepted_*`
 - bundles consumes accepted prompt/tool-descs (capture via monkeypatched
   `stage_bundles`)
@@ -184,6 +206,9 @@ flow with synthetic experiment states plus a real handoff URL.
 threading.Thread(target=run_experiment_loop, ...).start()   # removed
 # Continue target canary work on the configuration record
 POST /api/experiments/{id}/action {"action": "canary"}
+# Paper over a failed recommendation job with invented text (ISSUE-007) —
+# the UI then shows a generic prompt as if the optimizer had produced it
+out.update(recommended_prompt=aws_prompt or _fallback_treatment_prompt(cur))
 ```
 
 #### Correct
@@ -195,6 +220,13 @@ POST /api/runtime-canaries {
     "candidate": {"system_prompt": "...", "tool_description_overrides": {}},
     "source_experiment_id": experiment_id,
 }
+
+# A job AWS did not complete has no recommendation — record why, accept nothing
+if sp_status == "COMPLETED" and sp_out:
+    out.update(system_prompt_status=sp_status, recommended_prompt=sp_out[:4000], ...)
+else:
+    out.update(system_prompt_status=sp_status or "FAILED",
+               system_prompt_error=_rec_error(sp_payload, sp_status)[:300])
 ```
 
 ## Design Decisions

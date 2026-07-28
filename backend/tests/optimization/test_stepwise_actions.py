@@ -120,6 +120,36 @@ def test_accept_falls_back_to_current_prompt_for_tool_only_rec(client):
     assert rec["accepted_tool_descriptions"] == {"shell": "better"}
 
 
+def test_accept_rejected_after_failed_system_prompt_rec(client):
+    """A failed system-prompt job produced nothing — accepting the control
+    prompt as the treatment would present the failure as an optimization."""
+    exp = _mk_exp(artifacts={
+        "agent_meta": {"system_prompt": "cur"},
+        "recommend": {"system_prompt_status": "FAILED",
+                      "system_prompt_error": "ValidationException: filtered"},
+    })
+    for payload in ({"action": "accept"},
+                    {"action": "accept", "accepted_prompt": " cur "}):
+        res = client.post(f"/api/experiments/{exp.id}/action", json=payload)
+        assert res.status_code == 409, payload
+        assert res.json()["code"] == "experiment.accept_rec_failed", payload
+    assert "accepted_prompt" not in _reload(exp.id).artifacts["recommend"]
+
+
+def test_accept_allows_operator_authored_prompt_after_failure(client):
+    """The escape hatch: an operator may author the treatment prompt by hand."""
+    exp = _mk_exp(artifacts={
+        "agent_meta": {"system_prompt": "cur"},
+        "recommend": {"system_prompt_status": "FAILED",
+                      "system_prompt_error": "ValidationException: filtered"},
+    })
+    res = client.post(f"/api/experiments/{exp.id}/action",
+                      json={"action": "accept", "accepted_prompt": "hand-written"})
+    assert res.status_code == 200
+    assert (res.json()["experiment"]["artifacts"]["recommend"]["accepted_prompt"]
+            == "hand-written")
+
+
 def test_recommend_rerun_preserves_prior_accept(monkeypatch):
     """Re-running recommend (retry path) must not drop an earlier accept."""
     exp = _mk_exp(artifacts={
@@ -297,6 +327,79 @@ def test_stage_recommend_surfaces_job_error(monkeypatch):
     assert out["tool_error"].startswith("ValidationException")
     assert "not found in the sampled agent traces" in out["tool_error"]
     assert out["tool_descriptions"] == {}
+
+
+def _sp_only(monkeypatch, poll_result):
+    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    monkeypatch.setattr(svc.ac, "start_system_prompt_recommendation",
+                        lambda *a, **k: {"recommendationId": "r1"})
+    monkeypatch.setattr(svc.ac, "poll_recommendation",
+                        lambda *a, **k: poll_result)
+    return svc.stage_recommend("e1", _rec_agent({}), types=("system_prompt",))
+
+
+def test_stage_recommend_failed_prompt_job_reports_error_and_no_prompt(monkeypatch):
+    """A FAILED job (e.g. safety filters rejecting the traces) must surface the
+    failure — never a made-up prompt that reads as an AI recommendation."""
+    out = _sp_only(monkeypatch, {
+        "status": "FAILED", "recommendationResult": {
+            "systemPromptRecommendationResult": {
+                "errorCode": "ValidationException",
+                "errorMessage": "flagged as a potential prompt attack"}}})
+    assert out["system_prompt_status"] == "FAILED"
+    assert out["system_prompt_error"] == (
+        "ValidationException: flagged as a potential prompt attack")
+    assert "recommended_prompt" not in out
+    assert svc.system_prompt_rec_failed(out) is True
+
+
+def test_stage_recommend_empty_prompt_result_counts_as_failure(monkeypatch):
+    """COMPLETED with no prompt is nothing to accept either; with no AWS error
+    text the job status becomes the operator-facing reason."""
+    out = _sp_only(monkeypatch, {
+        "status": "COMPLETED", "recommendationResult": {
+            "systemPromptRecommendationResult": {"recommendedSystemPrompt": ""}}})
+    assert out["system_prompt_status"] == "COMPLETED"
+    assert out["system_prompt_error"] == "recommendation job ended COMPLETED"
+    assert "recommended_prompt" not in out
+    assert svc.system_prompt_rec_failed(out) is True
+
+
+def test_stage_recommend_completed_prompt_has_no_error(monkeypatch):
+    out = _sp_only(monkeypatch, {
+        "status": "COMPLETED", "recommendationResult": {
+            "systemPromptRecommendationResult": {
+                "recommendedSystemPrompt": "better", "explanation": "why"}}})
+    assert out == {"system_prompt_status": "COMPLETED",
+                   "recommended_prompt": "better", "explanation": "why"}
+    assert svc.system_prompt_rec_failed(out) is False
+
+
+def test_system_prompt_rec_failed_ignores_tool_only_and_legacy_rows():
+    # tool-description-only run — the prompt stage never ran
+    assert svc.system_prompt_rec_failed(
+        {"tool_status": "COMPLETED", "tool_descriptions": {"shell": "d"}}) is False
+    # pre-status row that only stored the prompt
+    assert svc.system_prompt_rec_failed({"recommended_prompt": "rec"}) is False
+
+
+def test_recommend_rerun_clears_stale_prompt_failure(monkeypatch):
+    exp = _mk_exp(artifacts={
+        "agent_meta": {"system_prompt": "cur", "tools": {}},
+        "recommend": {"system_prompt_status": "FAILED",
+                      "system_prompt_error": "ValidationException: filtered"},
+    })
+    monkeypatch.setattr(
+        svc, "stage_recommend",
+        lambda exp_id, agent, progress=svc._noop, **kw: {
+            "system_prompt_status": "COMPLETED", "recommended_prompt": "better",
+            "explanation": ""},
+    )
+    svc.act_recommend(exp.id, svc._noop, types=["system_prompt"])
+    rec = _reload(exp.id).artifacts["recommend"]
+    assert rec["recommended_prompt"] == "better"
+    assert "system_prompt_error" not in rec
+    assert svc.system_prompt_rec_failed(rec) is False
 
 
 def test_stage_recommend_without_tools_short_circuits(monkeypatch):

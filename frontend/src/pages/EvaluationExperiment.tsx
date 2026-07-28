@@ -52,6 +52,7 @@ export interface ExperimentInfo {
       recommended_prompt?: string;
       explanation?: string;
       system_prompt_status?: string;
+      system_prompt_error?: string;
       tool_status?: string;
       tool_error?: string;
       analyzed_tools?: Record<string, string>;
@@ -584,10 +585,19 @@ function ConfigurationExperimentView() {
   const recToolDescs = Object.fromEntries(
     Object.entries(rec?.tool_descriptions ?? {}).filter(([k]) => k !== "_error"));
   // each generator ran iff its own keys exist — old rows wrote both at once
+  // spDone means AWS returned a recommendation; a job that failed writes a
+  // status + error and NO prompt, so it must not read as done
+  const spFailed = rec != null && rec.recommended_prompt == null
+    && (rec.system_prompt_status != null || rec.system_prompt_error != null);
   const spDone = rec?.recommended_prompt != null;
   const tdRan = rec != null
     && (rec.tool_status != null || rec.tool_descriptions != null);
   const treatmentPrompt = acceptedPrompt ?? rec?.recommended_prompt ?? "";
+  // after a failed job the editor is seeded with the CONTROL prompt — accepting
+  // it as-is would send a failed recommendation downstream as the treatment
+  const acceptPromptValue = editedPrompt ?? rec?.recommended_prompt ?? currentPrompt;
+  const acceptBlocked = spFailed
+    && acceptPromptValue.trim() === currentPrompt.trim();
 
   // toolName → current description handed to the tool-description optimizer;
   // discovery covers spec/code tools only, so the set stays user-editable
@@ -624,7 +634,7 @@ function ConfigurationExperimentView() {
   const recError = !recRunning && !!exp?.error?.startsWith("recommend: ");
 
   const onAccept = () => {
-    if (!exp) return;
+    if (!exp || acceptBlocked) return;
     let toolDescs: Record<string, string> | undefined;
     const raw = editedToolJson
       ?? (Object.keys(recToolDescs).length
@@ -638,7 +648,7 @@ function ConfigurationExperimentView() {
       toolDescs = parsed;
     }
     void onAction(exp.id, "accept", {
-      accepted_prompt: editedPrompt ?? rec?.recommended_prompt ?? currentPrompt,
+      accepted_prompt: acceptPromptValue,
       accepted_tool_descriptions: toolDescs,
     });
   };
@@ -690,6 +700,22 @@ function ConfigurationExperimentView() {
       />
       {label}
     </label>
+  );
+
+  // a failed system-prompt job is a hard stop: nothing was recommended, so the
+  // stage stays open and ACCEPT is blocked until a re-generation succeeds or
+  // the operator writes a treatment prompt themselves
+  const spStatusNote = spFailed && (
+    <div className="note" style={{ borderColor: "var(--crit)", marginTop: 6 }}
+         data-testid="sp-status-note">
+      <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+      <span className="mono" style={{ fontSize: 10.5 }}>
+        {t("expPage.spRecFailed", {
+          status: rec?.system_prompt_status ?? "FAILED",
+          msg: rec?.system_prompt_error ?? "",
+        })}
+      </span>
+    </div>
   );
 
   // failure/empty reasons stay visible — a silently missing section reads
@@ -763,6 +789,7 @@ function ConfigurationExperimentView() {
               )}
             </>
           )}
+          {spStatusNote}
           {Object.keys(recToolDescs).length > 0 && (
             <div style={{ marginTop: spDone ? 10 : 0 }}>
               <div className="mono dim" style={{ fontSize: 10, marginBottom: 4 }}>
@@ -832,7 +859,7 @@ function ConfigurationExperimentView() {
                 className="input"
                 rows={5}
                 data-testid="accept-prompt-input"
-                value={editedPrompt ?? rec.recommended_prompt ?? currentPrompt}
+                value={acceptPromptValue}
                 onChange={(e) => setEditedPrompt(e.target.value)}
                 style={{ width: "100%", fontFamily: "inherit", fontSize: 11 }}
               />
@@ -852,10 +879,17 @@ function ConfigurationExperimentView() {
                   />
                 </>
               )}
+              {acceptBlocked && (
+                <div className="mono" style={{ fontSize: 10, marginTop: 4,
+                                               color: "var(--crit)" }}
+                     data-testid="accept-blocked-hint">
+                  {t("expPage.acceptBlockedRecFailed")}
+                </div>
+              )}
               <div style={{ marginTop: 8 }}>
                 <Btn
                   primary
-                  disabled={busy || !!exp.running_action}
+                  disabled={busy || !!exp.running_action || acceptBlocked}
                   data-testid="action-accept"
                   onClick={onAccept}
                 >

@@ -340,7 +340,8 @@ REC_TYPES = ("system_prompt", "tool_descriptions")
 # artifact keys owned by each recommendation type — a re-generation of one
 # type replaces exactly these and leaves the other type's output in place
 _REC_KEYS: dict[str, tuple[str, ...]] = {
-    "system_prompt": ("system_prompt_status", "recommended_prompt", "explanation"),
+    "system_prompt": ("system_prompt_status", "system_prompt_error",
+                      "recommended_prompt", "explanation"),
     "tool_descriptions": ("tool_status", "tool_error", "tool_descriptions",
                           "analyzed_tools"),
 }
@@ -383,14 +384,23 @@ def stage_recommend(
         sp_payload = sp_result.get("recommendationResult", {}).get(
             "systemPromptRecommendationResult", {}
         )
-        sp_out = sp_payload.get(
-            "recommendedSystemPrompt", ""
-        ) or _fallback_treatment_prompt(current_prompt)
-        out.update(
-            system_prompt_status=sp_result.get("status"),
-            recommended_prompt=sp_out[:4000],
-            explanation=sp_payload.get("explanation", "")[:600],
-        )
+        sp_status = sp_result.get("status") or ""
+        sp_out = sp_payload.get("recommendedSystemPrompt") or ""
+        if sp_status == "COMPLETED" and sp_out:
+            out.update(
+                system_prompt_status=sp_status,
+                recommended_prompt=sp_out[:4000],
+                explanation=sp_payload.get("explanation", "")[:600],
+            )
+        else:
+            # a job AWS did not complete (safety-filter ValidationException,
+            # too few traces, …) has no recommendation — never substitute
+            # invented text for it, or the failure reads as a success
+            # downstream (bundles/A-B would run on text no optimizer produced)
+            out.update(
+                system_prompt_status=sp_status or "FAILED",
+                system_prompt_error=_rec_error(sp_payload, sp_status)[:300],
+            )
 
     if "tool_descriptions" in types:
         # the optimizer improves descriptions for the tools it is handed —
@@ -480,12 +490,26 @@ def _tools_not_in_traces(err: str) -> set[str]:
     return {p.strip().strip("'\"") for p in m.group(1).split(",") if p.strip()}
 
 
-def _fallback_treatment_prompt(current: str) -> str:
-    return (
-        current
-        + "\nUse the available tools before answering when they apply; verify "
-        "tool results, and reply in exactly the format the user requested."
-    )
+def _rec_error(payload: dict[str, Any], status: str) -> str:
+    """Operator-facing failure text for a recommendation AWS did not complete."""
+    code = payload.get("errorCode") or ""
+    msg = payload.get("errorMessage") or ""
+    if code and msg:
+        return f"{code}: {msg}"
+    return code or msg or f"recommendation job ended {status or 'unknown'}"
+
+
+def system_prompt_rec_failed(rec: dict[str, Any]) -> bool:
+    """True when the stored system-prompt recommendation is a failed one.
+
+    A row carrying neither key never ran the prompt generator (tool-only run)
+    or predates the status field — both count as not-failed, so old rows and
+    tool-description-only experiments keep accepting as before.
+    """
+    status = rec.get("system_prompt_status")
+    if status is None and not rec.get("system_prompt_error"):
+        return False
+    return status != "COMPLETED" or not rec.get("recommended_prompt")
 
 
 DEFAULT_TOOL_DESCS = {"calculator": "Evaluate a basic arithmetic expression"}

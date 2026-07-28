@@ -1294,6 +1294,8 @@
     "toolRecLabel": "TOOL DESCRIPTION RECOMMENDATIONS",
     "toolRecNoTools": "No tools were available to analyze — add tool names below and regenerate.",
     "toolRecFailed": "Tool-description recommendation failed: {{msg}}",
+    "spRecFailed": "System-prompt recommendation {{status}} on AWS — no recommendation was produced: {{msg}}",
+    "acceptBlockedRecFailed": "Cannot accept a failed recommendation. Re-generate it, or edit the prompt above into your own treatment before continuing.",
     "toolRecEmpty": "The optimizer suggested no changes for the analyzed tool descriptions.",
     "toolBundleUnsupported": "This converted runtime supports system-prompt bundles only. Tool-description experiments require a newly converted runtime.",
     "genSp": "GENERATE PROMPT RECOMMENDATION",

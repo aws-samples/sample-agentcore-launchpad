@@ -145,6 +145,18 @@ def experiment_action(
         if not prompt:
             raise AppError("experiment.accept_invalid",
                            "accepted prompt is empty", status_code=400)
+        # a failed system-prompt job produced nothing to accept — the only ways
+        # forward are a successful re-generation or an operator-authored
+        # treatment prompt that actually differs from the control
+        if (service.system_prompt_rec_failed(rec)
+                and prompt == (meta.get("system_prompt") or "").strip()):
+            raise AppError(
+                "experiment.accept_rec_failed",
+                "the system-prompt recommendation failed "
+                f"({rec.get('system_prompt_error') or rec.get('system_prompt_status')})"
+                " — re-generate it or supply an edited treatment prompt",
+                status_code=409,
+            )
         service.action_accept(exp, prompt, req.accepted_tool_descriptions)
     elif req.action == "bundles":
         service.action_bundles(exp)
