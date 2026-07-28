@@ -240,9 +240,11 @@ skills ['s3://launchpad-artifacts-434444145045-us-west-2/skills/lab-fund-disclai
 kbs ['lab-fund-kb']
 ```
 
-> **知识库挂载路径**：平台维护一个专用网关 `launchpad-kb-gw`，为每个 KB 建一个
-> `Retrieve` target、为每个挂载的 Agent 建一个 Agentic 检索 target，Harness 通过它调用检索。
-> KB 只能挂 Harness，其他方式没有这条挂载路径。
+> **Harness 的知识库挂载路径**：平台维护一个专用网关 `launchpad-kb-gw`，为每个 KB 建一个
+> `Retrieve` target、为每个挂载的 Agent 建一个 Agentic 检索 target，Harness 以
+> `agentcore_gateway` 工具（OAuth CLIENT_CREDENTIALS）连上去调用检索。这条路径**只有托管
+> Harness 能走** —— 自己写代码的 Runtime 没有这个托管挂载点。容器与 ZIP 方式走另一条通道，
+> 见下面 4.7。
 >
 > 另外，`UpdateHarness` 的语义是**省略即保留**（不是清空），但 Registry 记录的
 > `UpdateRegistryRecord` 相反，省略字段会被重置。这类差异都封在后端 wrapper 里，
@@ -260,6 +262,70 @@ FZuhhw9jbJaK   lab-fund-assistant   A2A   PENDING_APPROVAL
 ```
 
 这不是 bug，而是 AWS 更新语义的结果：**改过的记录要重新走审批**。
+
+## 4.7（可选）把同一个知识库挂到容器 / ZIP 方式的 Agent 上
+
+第 02 章的能力表里，知识库那一行三种方式都写着「支持」，但**通道不同**。这一节用同一个
+`lab-fund-kb` 各建一个一次性 Agent，把区别跑出来。不做也不影响后面章节；做完记得删掉。
+
+创建方式选 `Strands Studio`（表单路径）或 `Claude Agent SDK 容器`，在配置页勾选
+`lab-fund-kb · kb`。注意 chip 下方的说明文字会随方式变化：
+
+- Harness：*以网关检索工具的形式挂载（逐库检索 + 多步 agentic 检索）*
+- 容器 / ZIP：*生成的 Agent 代码里会内置 `kb_search` 工具，用运行时执行角色直接调用 Bedrock
+  检索 API…仅单次检索（无 agentic 多步）；改变选择需要重新发布*
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/agents -H 'content-type: application/json' -d '{
+  "name": "kb-direct-zip", "method": "zip_runtime",
+  "system_prompt": "你是一名基金产品投顾助手…",
+  "knowledge_bases": [{"kb_id": "<KB_ID>", "name": "lab-fund-kb",
+    "description": "…投资团队、各策略资产规模、投资流程、业绩与前十大持仓。"}]
+}'
+```
+
+**预期结果**：流水线和普通 ZIP / 容器部署**完全一样**，`供给` 阶段**不会**出现 KB 网关
+那两行 —— 因为这条通道不用网关。唯一的差别在 `生成` 阶段的代码体积：
+
+```
+generate  strands template · 9770 bytes · model global.anthropic.claude-sonnet-5   ← 挂了 1 个 KB
+generate  strands template · 6333 bytes · model global.anthropic.claude-sonnet-5   ← 没挂 KB（第 02 章）
+```
+
+多出来的 ~3.4KB 就是模板里那个 `kb_search` 工具：它用
+`bedrock-agent-runtime:Retrieve`（和 4.4 的检索 Playground 同一个 API）查询你勾选的 KB，
+凭据是 Runtime 的执行角色，不需要令牌。同时平台把一段「## Knowledge bases」注入生成的系统
+提示词，告诉模型有哪些库、各装什么、该调哪个工具。
+
+本次实测（部署 64 秒 / 容器 124 秒）问同一个问题：
+「这只基金所属的新兴市场股票策略团队，管理的总资产规模（AUM）大约是多少？请引用来源。」
+两个 Agent 都答出了 PDF 里的原始数字并指名来源文件：
+
+```
+Global Emerging Markets $10,706 MM（其中 Emerging Markets Leaders $2,339 MM），
+占全球股票策略总 AUM $19,217 MM 的约 55.7%
+来源：Morgan_Stanley_Oct_21_(EMEA).pdf
+```
+
+**别只看答案对不对，去第 07 章的追踪里看它到底查了没有**。这两次调用的 span 树里都有：
+
+```
+execute_tool kb_search                872.3 ms
+  Bedrock Agent Runtime.Retrieve      859.2 ms   ← 真的打到了 Bedrock 检索数据面
+```
+
+也就是说 `kb_search` 在 Observability 里就是一次普通的工具调用，和 `calculator` 同等对待。
+
+用完删掉：
+
+```bash
+curl -s -X DELETE http://127.0.0.1:8000/api/agents/<ID>
+```
+
+> **两条通道的取舍**：Harness 那条多给你一个跨库多步的 `AgenticRetrieveStream` 工具（模型
+> 可以让服务端自己迭代检索），代价是多一个网关 + 一套 OAuth；容器 / ZIP 这条只有单次
+> `Retrieve`，但没有额外资源、没有令牌生命周期，而且检索逻辑就写在你能看到、能改的生成代码
+> 里。画布（Studio）方式暂不支持，因为它的代码由 Studio 生成，平台没有注入工具的位置。
 
 ---
 
@@ -281,6 +347,7 @@ FZuhhw9jbJaK   lab-fund-assistant   A2A   PENDING_APPROVAL
 | KB 已 `ACTIVE` 但数据源为 0、ingestion 从未开始 | 后端补齐数据源的后台任务没跑成（例如期间重启过服务），或该 KB 建于此修复之前 | 详情页橙色告警里点 `补建数据源`；文件已在制品桶里，补建后 ingestion 会自动开始 |
 | ingestion `COMPLETE` 但 `Documents Failed = 1` | PDF 无文本层（扫描件），或中文 PDF 抽取问题 | 换文本型 PDF；中文 PDF 已知问题见 `docs/issues/2026-07-13-managed-kb-cjk-pdf-extraction.md` |
 | 技能不出现在挂载列表 | 状态还是 `DRAFT` / `PENDING_APPROVAL` | 必须先 `批准 · 发布` |
+| 4.7 里容器 / ZIP 的 `kb_search` 每次都回 `AccessDeniedException` | 执行角色缺 `bedrock:Retrieve`；**`make bootstrap` 只在栈不存在时才 `cdk deploy`** | `cd infra && uv run cdk deploy --require-approval never`（约 30 秒），无需重新发布 Agent |
 | 注册中心搜索框搜不到刚建的记录 | 搜索走 AWS `SearchRegistryRecords`，索引有延迟 | 用顶部类型筛选按钮（`技能`）在列表里找 |
 | 重新发布点了没反应 | 有二次确认弹窗 | 在弹窗里再点一次 `重新发布` |
 | 重新发布后旧对话还是旧行为 | AgentCore 把已有会话钉在首次服务它的版本上 | **开一个新会话**验证（第 05 章会用到） |

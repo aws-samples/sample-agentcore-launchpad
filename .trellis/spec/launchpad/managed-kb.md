@@ -1,4 +1,4 @@
-# Managed Knowledge Bases — management + harness agent attach
+# Managed Knowledge Bases — management + agent attach (two channels)
 
 ## Scenario: changing KB management, the KB gateway, or how agents mount KBs
 
@@ -7,10 +7,12 @@
 Cross-layer contract between `frontend/src/pages/KnowledgeBases.tsx` (+
 `frontend/src/pages/knowledge/`), the CreateAgent KB picker, `backend/app/
 routers/knowledge.py`, `backend/app/services/knowledge.py`, `backend/app/
-services/kb_gateway.py`, `backend/app/deployer/harness.py` and the CDK roles in
-`infra/stacks/base_stack.py`. Touch this spec when you add a data-source
-connector, change the gateway/target topology, or extend KB attach to another
-method. Introduced by task `07-13-managed-kb`.
+services/kb_gateway.py`, `backend/app/deployer/harness.py`,
+`backend/app/templates/kb_support.py` (+ the two generated templates) and the
+CDK roles in `infra/stacks/base_stack.py`. Touch this spec when you add a
+data-source connector, change the gateway/target topology, or extend KB attach
+to another method. Introduced by task `07-13-managed-kb`; the direct-Retrieve
+channel by `07-28-kb-attach-container-zip`.
 
 **Load-bearing AWS facts** (live-verified 2026-07-13, botocore 1.43.44):
 - Managed KB = Bedrock KB `type: MANAGED` (`bedrock-agent` client):
@@ -85,15 +87,52 @@ OAuth CLIENT_CREDENTIALS (provider `launchpad-gw-m2m`, scope
 `launchpad-gw/invoke`). Provision REBUILDS `create_params` after ensuring the
 gateway (generate ran before kb_gateway_* existed on first attach).
 
-**v1 is harness-only**: `AgentSpec._kb_needs_harness` rejects
-`knowledge_bases` on other methods (container has no authenticated gateway
-channel — mirrors "Gateway tools coming soon").
+### 2b. Direct-Retrieve channel for the code methods (2026-07-28)
+
+`zip_runtime` and `container` mount the SAME `AgentSpec.knowledge_bases` but do
+NOT touch kb-gw — they have no managed `agentcore_gateway` attach point, so the
+platform bakes a retrieval tool into the generated code instead:
+
+- `app/templates/kb_support.py` is the single source of the KB literal
+  (`mounted_kbs`), the tool description (`kb_tool_description`) and the
+  `## Knowledge bases` prompt section (`kb_prompt_section`) — both renderers use
+  it so 方式A and ZIP cannot drift. `harness._kb_prompt` stays separate on
+  purpose: it names gateway MCP tools, this one names `kb_search`.
+- Strands ZIP: native `@tool kb_search(query, kb_id="")` appended to `tools`
+  only when `MOUNTED_KBS`. Its description is seeded into
+  `DEFAULT_TOOL_DESCRIPTIONS` so the config-bundle A/B contract can tune it;
+  spec `tool_description_overrides` merge after and still win.
+- Container: same helper exposed via `create_sdk_mcp_server(name="launchpad_kb",
+  tools=[kb_search])` built at RUNTIME (an SDK server is a Python object, not a
+  renderable literal) and merged into `build_options()`; the renderer only adds
+  `mcp__launchpad_kb` to `ALLOWED_TOOLS`. The blocking boto3 call goes through
+  `asyncio.to_thread`. Telemetry needed no change — `tracing.record_tool_call`
+  already strips the `mcp__<server>__` prefix.
+- `kb_id=""` fans out over every mounted KB; an unknown id returns a readable
+  "not mounted" line. Every failure (AccessDenied, broken index) is folded into
+  the returned TEXT — a KB must never abort the turn.
+- Single-shot `Retrieve` only. `AgenticRetrieveStream` stays a harness-only
+  advantage and is deliberately NOT granted to the exec role.
+- Attach/detach happens at `generate` (the refs are baked into the artifact), so
+  **re-publish is the only way to change the mounted set** for these methods.
+
+**Still rejected** (`AgentSpec._kb_method_supported`, `KB_METHODS`): `studio`
+(code comes from the vendored canvas — no injection point) and `protocol=a2a`
+(separate `strands_a2a_agent` template). Two distinct error messages so the 422
+names the real constraint.
 
 ### 3. IAM
 
 - `launchpad-gateway-role` += `bedrock:GetKnowledgeBase` + `bedrock:Retrieve`
   (knowledge-base/*) + `bedrock:AgenticRetrieveStream` (`*` — not
   resource-scopable).
+- `launchpad-agent-execution-role` += sid `ManagedKbRetrieval`:
+  `bedrock:Retrieve` + `bedrock:GetKnowledgeBase` on `knowledge-base/*` — what
+  the generated `kb_search` runs on. **`make bootstrap` does NOT land this on an
+  existing account**: `scripts/bootstrap.py::deploy_cdk` only fires when the
+  stack is missing, so an IAM change needs an explicit
+  `cd infra && uv run cdk deploy` (live-hit 2026-07-28; both lab docs now carry
+  a troubleshooting row for the resulting AccessDeniedException).
 - `launchpad-kb-role` (new, trusted by bedrock.amazonaws.com): reads artifacts
   bucket `kb/*`; external buckets get per-KB inline policy
   `launchpad-kb-{kb_id}` (mirrors `launchpad-fs-{agent}`), deleted with the KB.
@@ -117,6 +156,10 @@ channel — mirrors "Gateway tools coming soon").
 - KB delete: refuse with 409 `kb.has_attached_agents` (detail.agents) unless
   force; order = data sources → retrieve target (only if kb_gateway_id already
   exists — never provision during delete) → inline policy → KB.
+- `_strip_kb_from_agents` (force-delete path) resyncs the kb-gw agentic target
+  **only for `spec.method == "harness"` rows**. Without that gate a zip/container
+  agent that keeps other KBs would have a gateway target CREATED for it that
+  nothing ever calls. Its spec is still stripped for every method.
 - Upload files land at `kb/{kb_id}/{safe-filename}` in the artifacts bucket;
   uploads allowed when the KB has an artifacts-bucket source OR zero sources
   (pending slow-path creation).
