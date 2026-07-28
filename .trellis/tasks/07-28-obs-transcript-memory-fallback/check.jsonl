@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/launchpad/memory-console.md", "reason": "Verify the new memory wrapper respects the console's read-only + pagination conventions"}
+{"file": ".trellis/spec/guides/index.md", "reason": "Repo-wide conventions to check the diff against (python/ruff, i18n parity, client construction)"}
+{"file": ".trellis/tasks/07-28-obs-transcript-memory-fallback/research/live-evidence-2026-07-28.md", "reason": "Ground truth to verify the fix against"}

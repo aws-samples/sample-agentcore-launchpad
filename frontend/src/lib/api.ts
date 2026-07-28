@@ -968,9 +968,13 @@ export interface ObsTranscript {
   actor_id?: string;
   agent_id?: string;
   agent_name?: string | null;
-  source?: "chat" | "eval";
+  // "experiment"/"external": sessions with no platform ledger row, resolved
+  // straight from memory (A/B gateway traffic, /v1 callers, direct invokes)
+  source?: "chat" | "eval" | "experiment" | "external";
   origin?: "memory" | "logs";
   run_id?: string | null;
+  experiment_id?: string | null;
+  experiment_name?: string | null;
   turns?: ObsTranscriptTurn[];
   long_term_records?: number | null;
 }

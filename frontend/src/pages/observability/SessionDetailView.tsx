@@ -112,30 +112,43 @@ export function SessionDetailView({ sessionId, range, onOpenTrace }: SessionDeta
     );
   }
   const agentLabel = (transcript.agent_name ?? summary.agent ?? "agent").toUpperCase();
+  // Where the conversation was read from — eval runs, experiment gateway traffic
+  // and external /v1 callers all live outside the chat ledger, so name the
+  // origin (and the memory actor it was read under) instead of pretending it is
+  // a console conversation.
+  const conversationSub = (): string => {
+    if (!transcript.available) return shortId(sessionId, 20);
+    const actor = transcript.actor_id ?? "—";
+    switch (transcript.source) {
+      case "eval":
+        return t(
+          transcript.origin === "logs"
+            ? "obs.session.conversationEvalLogsSub"
+            : "obs.session.conversationEvalSub",
+          { run: `run-${(transcript.run_id ?? "").slice(0, 6)}`, actor },
+        );
+      case "experiment":
+        return t("obs.session.conversationExperimentSub", {
+          exp: transcript.experiment_name ?? transcript.experiment_id ?? "—",
+          actor,
+        });
+      case "external":
+        return t("obs.session.conversationExternalSub", { actor });
+      default:
+        return t("obs.session.conversationSub", { actor });
+    }
+  };
 
   return wrap(
     <div className="grid-31" style={{ marginTop: 14 }}>
       <Panel
         brk
         title={t("obs.session.conversation")}
-        sub={
-          transcript.available
-            ? transcript.source === "eval"
-              ? t(
-                  transcript.origin === "logs"
-                    ? "obs.session.conversationEvalLogsSub"
-                    : "obs.session.conversationEvalSub",
-                  {
-                    run: `run-${(transcript.run_id ?? "").slice(0, 6)}`,
-                    actor: transcript.actor_id ?? "—",
-                  },
-                )
-              : t("obs.session.conversationSub", { actor: transcript.actor_id ?? "—" })
-            : shortId(sessionId, 20)
-        }
+        sub={conversationSub()}
         end={
-          // eval-run sessions live outside the chat ledger — nothing to resume
-          transcript.available && transcript.agent_id != null && transcript.source !== "eval" ? (
+          // only chat-ledger sessions can be resumed; eval/experiment/external
+          // sessions have no ledger row behind them
+          transcript.available && transcript.agent_id != null && transcript.source === "chat" ? (
             <Btn
               onClick={() =>
                 navigate(

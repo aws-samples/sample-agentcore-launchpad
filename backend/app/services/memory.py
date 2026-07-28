@@ -97,6 +97,34 @@ def list_events(actor_id: str, session_id: str, max_results: int = 20) -> list[d
     ).get("events", [])
 
 
+def list_actor_ids(prefix: str | None = None, max_pages: int = 5) -> list[str]:
+    """Every actor id in the memory store, optionally filtered by prefix.
+
+    ListActors has no server-side filter, so the prefix is applied client-side
+    while paging (100/page, capped at `max_pages` — the store holds tens of
+    actors, and callers only need a bounded candidate set).
+    """
+    client = data_client()
+    actor_ids: list[str] = []
+    token: str | None = None
+    for _ in range(max_pages):
+        params: dict[str, Any] = {"memoryId": _memory_id(), "maxResults": 100}
+        if token:
+            params["nextToken"] = token
+        page = client.list_actors(**params)
+        actor_ids += [
+            summary["actorId"]
+            for summary in page.get("actorSummaries", [])
+            if summary.get("actorId")
+        ]
+        token = page.get("nextToken")
+        if not token:
+            break
+    if prefix:
+        return [actor_id for actor_id in actor_ids if actor_id.startswith(prefix)]
+    return actor_ids
+
+
 def list_records(namespace_prefix: str, max_results: int = 20) -> list[dict]:
     return data_client().list_memory_records(
         memoryId=_memory_id(),

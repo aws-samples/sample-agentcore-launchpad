@@ -27,6 +27,7 @@ from app.core.config import get_settings
 from app.core.errors import AppError
 from app.evaluation.models import EvalRun
 from app.models.ledger import Agent, ChatMessage, ChatSession
+from app.optimization.models import Experiment
 from app.services import memory
 
 SPANS_LOG_GROUP = "aws/spans"
@@ -434,7 +435,13 @@ def categorize_span(name: str, attributes: dict[str, Any] | None = None,
 # ── Agent-name mapper (service.name → platform agent display name) ─────────
 
 
-def build_agent_mapper(db: Session) -> Callable[[str | None], str]:
+def build_agent_resolver(db: Session) -> Callable[[str | None], Agent | None]:
+    """service.name (from a span) → the Agent row that owns that runtime.
+
+    The transcript fallback needs the agent *id* (to build scoped memory actor
+    candidates), so the matching lives here and `build_agent_mapper` is a thin
+    display wrapper over it — one set of rules for both.
+    """
     rows = (
         db.query(Agent)
         .filter(Agent.resource_id.isnot(None))
@@ -442,21 +449,33 @@ def build_agent_mapper(db: Session) -> Callable[[str | None], str]:
         .all()
     )
     # Later (fresher) rows win; active rows win over deleted ones.
-    candidates: list[tuple[str, str]] = []
+    candidates: list[tuple[str, Agent]] = []
     for agent in sorted(rows, key=lambda a: a.status == "active"):
         base = (agent.resource_id or "").rsplit("-", 1)[0]
         if base:
-            candidates.append((base, agent.name))
+            candidates.append((base, agent))
+
+    def resolve_service(service: str | None) -> Agent | None:
+        if not service:
+            return None
+        service_base = service.split(".")[0]
+        matched = None
+        for base, agent in candidates:
+            if service_base in (base, f"harness_{base}") or service_base.endswith(base):
+                matched = agent
+        return matched
+
+    return resolve_service
+
+
+def build_agent_mapper(db: Session) -> Callable[[str | None], str]:
+    resolve = build_agent_resolver(db)
 
     def map_service(service: str | None) -> str:
         if not service:
             return "unknown"
-        service_base = service.split(".")[0]
-        matched = None
-        for base, name in candidates:
-            if service_base in (base, f"harness_{base}") or service_base.endswith(base):
-                matched = name
-        return matched or service
+        agent = resolve(service)
+        return agent.name if agent is not None else service
 
     return map_service
 
@@ -985,10 +1004,20 @@ def list_sessions(range_key: str, db: Session, force: bool = False,
     return _cached(f"sessions:{range_key}", force, build)
 
 
+def _agent_from_traces(db: Session, traces: list[dict[str, Any]]) -> Agent | None:
+    """The agent behind a session's spans — the only agent signal a session with
+    no platform ledger row has."""
+    resolve = build_agent_resolver(db)
+    for trace in traces:
+        agent = resolve(trace.get("service"))
+        if agent is not None:
+            return agent
+    return None
+
+
 def get_session(session_id: str, range_key: str, db: Session, force: bool = False,
                 logs: Any = None) -> dict[str, Any]:
     hours = RANGE_HOURS[range_key]
-    transcript = session_transcript(db, session_id)
 
     def build() -> dict[str, Any]:
         results = run_insights_queries(
@@ -1028,6 +1057,11 @@ def get_session(session_id: str, range_key: str, db: Session, force: bool = Fals
     payload = _cached(f"session:{session_id}:{range_key}", force, build)
     # Transcript is attached outside the cache: memory errors must degrade to
     # {available: false} on every request, never poison the cached span data.
+    # It runs AFTER the trace query because sessions with no ledger row carry
+    # their only agent signal in the spans (service.name → Agent).
+    transcript = session_transcript(
+        db, session_id, agent=_agent_from_traces(db, payload["traces"])
+    )
     return {**payload, "transcript": transcript}
 
 
@@ -1223,11 +1257,99 @@ def eval_turns_from_content_logs(
     return turns
 
 
-def session_transcript(db: Session, session_id: str) -> dict[str, Any]:
+def _turns_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Conversational turns from memory events, oldest first.
+
+    Tool-only turns (no text part) are dropped — see `_turn_text`.
+    """
+    turns = []
+    for event in sorted(events, key=lambda e: str(e.get("eventTimestamp", ""))):
+        for part in event.get("payload", []):
+            conv = part.get("conversational")
+            if not conv:
+                continue
+            text = _turn_text(conv.get("content", {}).get("text", ""))
+            if text is None:
+                continue  # tool-use/tool-result turn — not conversational display
+            turns.append(
+                {
+                    "role": conv.get("role"),
+                    "text": text[:4000],
+                    "at": _event_iso(event.get("eventTimestamp")),
+                }
+            )
+    return turns
+
+
+NOT_PLATFORM_SESSION = {"available": False, "reason": "not_platform_session"}
+
+
+def _experiment_for_session(db: Session, session_id: str) -> Experiment | None:
+    """The experiment whose gateway traffic minted this session id, if still
+    recorded. Stepwise re-runs OVERWRITE artifacts["traffic"], so a miss means
+    "not attributable", never "not experiment traffic" — labeling only."""
+    rows = db.query(Experiment).order_by(Experiment.created_at.desc()).limit(200).all()
+    for experiment in rows:
+        traffic = (experiment.artifacts or {}).get("traffic")
+        if isinstance(traffic, dict) and session_id in (traffic.get("session_ids") or []):
+            return experiment
+    return None
+
+
+def _external_transcript(
+    db: Session, session_id: str, agent: Agent | None
+) -> dict[str, Any]:
+    """Transcript for a session that is in NO platform ledger — experiment
+    gateway traffic, a `/v1` caller, or any other direct runtime invoke.
+
+    Memory has no "which actor owns this session" lookup, so probe a bounded
+    candidate set: the traced agent's scoped actors first (unambiguous), then
+    the bare "default" actor that the gateway→runtime hop leaves in place.
+    """
+    try:
+        candidates = (
+            memory.list_actor_ids(prefix=f"{agent.id}{memory.SCOPE_SEP}")
+            if agent is not None
+            else []
+        )
+        candidates.append("default")
+        for actor_id in candidates:
+            turns = _turns_from_events(memory.list_events(actor_id, session_id, 100))
+            if not turns:
+                continue
+            experiment = _experiment_for_session(db, session_id)
+            return {
+                "available": True,
+                "actor_id": actor_id,
+                "agent_id": agent.id if agent else None,
+                "agent_name": agent.name if agent else None,
+                "source": "experiment" if experiment else "external",
+                "origin": "memory",
+                "run_id": None,
+                "experiment_id": experiment.id if experiment else None,
+                "experiment_name": experiment.name if experiment else None,
+                "turns": turns,
+                # Long-term namespaces are keyed on the actor alone, and these
+                # actors are shared across agents/runs — the count would say
+                # nothing about this session (same reason eval skips it).
+                "long_term_records": None,
+            }
+    except Exception:
+        # Memory unreachable / not bootstrapped: this session was already
+        # unattributable, so degrade to the plain empty state.
+        return dict(NOT_PLATFORM_SESSION)
+    return dict(NOT_PLATFORM_SESSION)
+
+
+def session_transcript(
+    db: Session, session_id: str, agent: Agent | None = None
+) -> dict[str, Any]:
     row = db.query(ChatSession).filter(ChatSession.session_id == session_id).first()
     run = None if row else _eval_run_for_session(db, session_id)
     if row is None and run is None:
-        return {"available": False, "reason": "not_platform_session"}
+        # Not chat, not eval — try memory directly (`agent` comes from the
+        # session's traces, which is the only agent signal such sessions carry).
+        return _external_transcript(db, session_id, agent)
     if row is not None:
         agent = db.get(Agent, row.agent_id)
         # Memory is written under an agent-scoped actor (memory.scoped_actor);
@@ -1248,22 +1370,7 @@ def session_transcript(db: Session, session_id: str) -> dict[str, Any]:
     except Exception as exc:
         memory_error = exc
         events = []  # chat may fall back to its ledger; eval may use content logs
-    turns = []
-    for event in sorted(events, key=lambda e: str(e.get("eventTimestamp", ""))):
-        for part in event.get("payload", []):
-            conv = part.get("conversational")
-            if not conv:
-                continue
-            text = _turn_text(conv.get("content", {}).get("text", ""))
-            if text is None:
-                continue  # tool-use/tool-result turn — not conversational display
-            turns.append(
-                {
-                    "role": conv.get("role"),
-                    "text": text[:4000],
-                    "at": _event_iso(event.get("eventTimestamp")),
-                }
-            )
+    turns = _turns_from_events(events)
     origin = "memory"
     if row is not None:
         ledger_turns = _chat_ledger_turns(db, row.agent_id, session_id)

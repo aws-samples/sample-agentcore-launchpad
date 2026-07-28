@@ -436,7 +436,9 @@ def test_agent_mapper_prefers_active_over_deleted():
 # ── transcript ──────────────────────────────────────────────────────────────
 
 
-def test_transcript_no_ledger_row_is_unavailable():
+def test_transcript_no_ledger_row_and_no_memory_is_unavailable(monkeypatch):
+    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda **k: [])
+    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
     db = SessionLocal()
     result = obs.session_transcript(db, "external-session-id-123")
     db.close()
@@ -592,6 +594,125 @@ def test_transcript_falls_back_to_eval_run_session(monkeypatch):
     assert result["actor_id"] == "default" and seen["actor"] == "default"
     assert result["agent_name"] == "hr-assistant"
     assert [t["text"] for t in result["turns"]] == ["PTO balance?", "15 days"]
+
+
+# ── transcript: sessions in NO platform ledger (gateway traffic, /v1 callers) ─
+
+
+EXTERNAL_SID = "ee760f57-2757-4761-947b-83f1ec6fa022"
+
+
+def _events_for(actor_map):
+    """memory.list_events stub: {actor_id: [texts]} → conversational events."""
+    probed = []
+
+    def fake_events(actor_id, session_id, max_results=20):
+        probed.append(actor_id)
+        return [
+            {"eventTimestamp": f"2026-07-28T0{i}:00:00", "payload": [
+                {"conversational": {"role": "USER", "content": {"text": text}}}]}
+            for i, text in enumerate(actor_map.get(actor_id, []), start=1)
+        ]
+
+    return fake_events, probed
+
+
+def test_transcript_external_session_reads_bare_default_actor(monkeypatch):
+    """Experiment gateway traffic: the runtime persisted the conversation under
+    the BARE "default" actor and no ledger row exists — the transcript must
+    still resolve."""
+    agent_id = _seed_agent()
+    fake_events, probed = _events_for({"default": ["second q", "first q"]})
+    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda **k: [])
+    monkeypatch.setattr(obs.memory, "list_events", fake_events)
+    db = SessionLocal()
+    agent = db.get(Agent, agent_id)
+    result = obs.session_transcript(db, EXTERNAL_SID, agent=agent)
+    db.close()
+    assert result["available"] is True and result["source"] == "external"
+    assert result["actor_id"] == "default" and probed == ["default"]
+    assert result["agent_id"] == agent_id and result["agent_name"] == "hr-assistant"
+    assert result["origin"] == "memory" and result["long_term_records"] is None
+    # oldest event first, regardless of the order memory returned them
+    assert [t["text"] for t in result["turns"]] == ["second q", "first q"]
+
+
+def test_transcript_external_session_prefers_agent_scoped_actor(monkeypatch):
+    """`/v1` sessions write memory under scoped_actor(agent, "api") but create no
+    chat ledger row. The scoped actor is probed before the shared default."""
+    agent_id = _seed_agent()
+    scoped = f"{agent_id}__api"
+    fake_events, probed = _events_for({scoped: ["hi from api"], "default": ["nope"]})
+    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda **k: [scoped])
+    monkeypatch.setattr(obs.memory, "list_events", fake_events)
+    db = SessionLocal()
+    agent = db.get(Agent, agent_id)
+    result = obs.session_transcript(db, EXTERNAL_SID, agent=agent)
+    db.close()
+    assert result["actor_id"] == scoped and probed == [scoped]  # default not probed
+    assert [t["text"] for t in result["turns"]] == ["hi from api"]
+
+
+def test_transcript_external_session_labels_owning_experiment(monkeypatch):
+    from app.optimization.models import Experiment
+
+    agent_id = _seed_agent()
+    db = SessionLocal()
+    experiment = Experiment(
+        name="EXP-hr-assistant", agent_id=agent_id, agent_name="hr-assistant",
+        artifacts={"traffic": {"session_ids": ["other-sid", EXTERNAL_SID]}},
+    )
+    db.add(experiment)
+    db.commit()
+    exp_id, exp_name = experiment.id, experiment.name
+    fake_events, _ = _events_for({"default": ["prompt from traffic"]})
+    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda **k: [])
+    monkeypatch.setattr(obs.memory, "list_events", fake_events)
+    result = obs.session_transcript(db, EXTERNAL_SID, agent=db.get(Agent, agent_id))
+    db.close()
+    assert result["source"] == "experiment"
+    assert result["experiment_id"] == exp_id and result["experiment_name"] == exp_name
+
+
+def test_transcript_external_probe_error_degrades(monkeypatch):
+    """Neither leg of the probe may raise into the session payload — an
+    unattributable session degrades to the plain empty state."""
+    def boom(*args, **kwargs):
+        raise RuntimeError("memory down")
+
+    agent_id = _seed_agent()
+    db = SessionLocal()
+    agent = db.get(Agent, agent_id)
+
+    # ListActors fails (agent known, so the scoped-actor lookup runs)
+    monkeypatch.setattr(obs.memory, "list_actor_ids", boom)
+    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
+    assert obs.session_transcript(db, EXTERNAL_SID, agent=agent) == {
+        "available": False, "reason": "not_platform_session"}
+
+    # ListEvents fails
+    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda **k: [])
+    monkeypatch.setattr(obs.memory, "list_events", boom)
+    assert obs.session_transcript(db, EXTERNAL_SID, agent=agent) == {
+        "available": False, "reason": "not_platform_session"}
+    db.close()
+
+
+def test_get_session_hands_the_traced_agent_to_the_transcript(monkeypatch):
+    """The agent hint for a non-ledger session can only come from its spans."""
+    agent_id = _seed_agent()
+    seen: dict = {}
+
+    def fake_transcript(db, session_id, agent=None):
+        seen["agent_id"] = agent.id if agent is not None else None
+        return {"available": False, "reason": "not_platform_session"}
+
+    monkeypatch.setattr(obs, "session_transcript", fake_transcript)
+    db = SessionLocal()
+    result = obs.get_session("s" * 64, "24h", db, logs=_fake_logs())
+    db.close()
+    assert seen["agent_id"] == agent_id  # resolved from AGG_ROW's service name
+    assert result["transcript"]["available"] is False
 
 
 def _content_record(trace_id, ts_ns, body, session_id="e" * 64):
