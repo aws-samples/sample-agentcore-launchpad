@@ -20,7 +20,7 @@
 | 能力 | 托管 Harness（方式B） | Claude Agent SDK 容器（方式A） | Strands ZIP（方式C · 表单） | Strands 画布（方式C · Studio） |
 |---|---|---|---|---|
 | 部署耗时 | ~30 秒（免构建） | ~2–6 分钟（CodeBuild） | ~1–3 分钟（pip+zip） | ~1–3 分钟（pip+zip） |
-| 挂载知识库（托管 RAG） | 支持（网关工具 + agentic 多步检索） | 支持（内置 `kb_search`，单次检索） | 支持（内置 `kb_search`，单次检索） | 不支持 |
+| 挂载知识库（托管 RAG） | 支持（网关工具：单次 + agentic 多步） | 支持（内置 `kb_search` + `kb_deep_search`） | 支持（内置 `kb_search` + `kb_deep_search`） | 不支持 |
 | 挂载 Registry 技能 / MCP | 支持 | 支持 | 模板内置工具 | 画布节点 |
 | 可被评估（第 08 章） | 支持 | 支持 | 支持 | 支持 |
 | **配置包 A/B 实验**（第 09 章） | 明确不支持 | 不支持 | **支持，仅此方式** | 不支持 |
@@ -30,12 +30,20 @@
 > 不允许直接 `InvokeAgentRuntime`；而且导出的 Harness 代码里没有读取配置包的逻辑，
 > A/B 变体对它是空操作。所以第 09/10 章必须落在 ZIP 通道生成的 Agent 上。
 
-> **知识库有两条挂载通道，能力不完全等价**（第 04 章会实际跑一遍）：
-> Harness 走专用 MCP 网关 `launchpad-kb-gw`，拿到逐库 `…___Retrieve` **和**跨库多步的
+> **知识库有两条挂载通道**（第 04 章会实际跑一遍）：
+> Harness 走专用 MCP 网关 `launchpad-kb-gw`，拿到逐库 `…___Retrieve` 和跨库多步的
 > `…___AgenticRetrieveStream` 两类工具；容器与 ZIP 是自己写代码的 Runtime，没有网关的
-> OAuth 通道，平台改为在生成的代码里内置一个 `kb_search` 工具，用**运行时执行角色的 IAM
-> 权限**直接调 `bedrock-agent-runtime:Retrieve`（与知识库详情页的检索 Playground 同一个
-> API）。因此这两种方式只有单次检索，没有 agentic 多步；换取的是不依赖网关、不需要令牌。
+> OAuth 通道，平台改为在生成的代码里内置**两个**工具，用**运行时执行角色的 IAM 权限**
+> 直接调 Bedrock 检索数据面：
+>
+> - `kb_search` → `Retrieve`：一次相似度检索，约 1 秒，不消耗模型调用。
+> - `kb_deep_search` → `AgenticRetrieveStream`：由基础模型驱动的规划循环，拆子查询、
+>   跨库多轮检索（必要时整篇拉取文档），返回带引用的答案 + 支撑段落。十几秒起，每轮规划
+>   一次模型调用。
+>
+> 生成的系统提示词会告诉模型该用哪个（比对/列举/汇总走深检索，单点事实走快检索）。
+> 两条通道的**检索能力现在等价**，剩下的差别是形态：Harness 的工具由网关托管、绑定哪些库
+> 由平台在 target 上配；容器/ZIP 的检索逻辑就写在你能看到、能改的生成代码里。
 > 画布方式暂不支持：它的代码由 Studio 生成，平台没有注入检索工具的位置。
 
 因此主线 Agent 选 **Strands · ZIP 快速通道**：它由平台生成代码，**内置 config-bundle 契约**
@@ -194,7 +202,7 @@ curl -s http://127.0.0.1:8000/api/agents | python3 -m json.tool | head -30
 | 页面刷新后发射面板空了 | 前端状态不持久 | 用 `GET /api/agents/{id}` 或列表页查看真实状态，部署不受影响 |
 | 状态停在 `deploying` 很久 | Runtime 仍在 `CREATING` | `GET /api/jobs/{job_id}` 看最后一条事件；正常约 20–60 秒 |
 | 想改提示词 | 编辑后需重新发布 | 列表行「编辑」→ 重新发布；已有会话会继续用旧版本，验证时要开新会话 |
-| 容器 / ZIP Agent 挂了知识库，但 `kb_search` 每次都回 `AccessDeniedException` | 执行角色还没有 `bedrock:Retrieve` —— **`make bootstrap` 只在栈不存在时才 `cdk deploy`**，老环境不会自动更新 | `cd infra && uv run cdk deploy --require-approval never`（约 30 秒），然后重新提问，不必重新发布 Agent |
+| 容器 / ZIP Agent 挂了知识库，但 `kb_search` / `kb_deep_search` 每次都回 `AccessDeniedException` | 执行角色还没有 `bedrock:Retrieve` / `bedrock:AgenticRetrieveStream` —— **`make bootstrap` 只在栈不存在时才 `cdk deploy`**，老环境不会自动更新 | `cd infra && uv run cdk deploy --require-approval never`（约 30 秒），然后重新提问，不必重新发布 Agent |
 
 ---
 

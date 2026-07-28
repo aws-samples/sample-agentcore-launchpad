@@ -11,8 +11,8 @@ services/kb_gateway.py`, `backend/app/deployer/harness.py`,
 `backend/app/templates/kb_support.py` (+ the two generated templates) and the
 CDK roles in `infra/stacks/base_stack.py`. Touch this spec when you add a
 data-source connector, change the gateway/target topology, or extend KB attach
-to another method. Introduced by task `07-13-managed-kb`; the direct-Retrieve
-channel by `07-28-kb-attach-container-zip`.
+to another method. Introduced by task `07-13-managed-kb`; the direct channel by
+`07-28-kb-attach-container-zip`, its agentic half by `07-28-kb-deep-search`.
 
 **Load-bearing AWS facts** (live-verified 2026-07-13, botocore 1.43.44):
 - Managed KB = Bedrock KB `type: MANAGED` (`bedrock-agent` client):
@@ -87,34 +87,72 @@ OAuth CLIENT_CREDENTIALS (provider `launchpad-gw-m2m`, scope
 `launchpad-gw/invoke`). Provision REBUILDS `create_params` after ensuring the
 gateway (generate ran before kb_gateway_* existed on first attach).
 
-### 2b. Direct-Retrieve channel for the code methods (2026-07-28)
+### 2b. Direct-retrieval channel for the code methods (2026-07-28)
 
 `zip_runtime` and `container` mount the SAME `AgentSpec.knowledge_bases` but do
 NOT touch kb-gw — they have no managed `agentcore_gateway` attach point, so the
-platform bakes a retrieval tool into the generated code instead:
+platform bakes **two** retrieval tools into the generated code instead:
+
+| tool | API | shape |
+|---|---|---|
+| `kb_search` | `Retrieve` | one similarity search, ~0.9 s, no FM call |
+| `kb_deep_search` | `AgenticRetrieveStream` | FM-driven planning loop, ~13 s, one FM call per round |
 
 - `app/templates/kb_support.py` is the single source of the KB literal
-  (`mounted_kbs`), the tool description (`kb_tool_description`) and the
-  `## Knowledge bases` prompt section (`kb_prompt_section`) — both renderers use
-  it so 方式A and ZIP cannot drift. `harness._kb_prompt` stays separate on
-  purpose: it names gateway MCP tools, this one names `kb_search`.
-- Strands ZIP: native `@tool kb_search(query, kb_id="")` appended to `tools`
-  only when `MOUNTED_KBS`. Its description is seeded into
-  `DEFAULT_TOOL_DESCRIPTIONS` so the config-bundle A/B contract can tune it;
-  spec `tool_description_overrides` merge after and still win.
-- Container: same helper exposed via `create_sdk_mcp_server(name="launchpad_kb",
-  tools=[kb_search])` built at RUNTIME (an SDK server is a Python object, not a
-  renderable literal) and merged into `build_options()`; the renderer only adds
-  `mcp__launchpad_kb` to `ALLOWED_TOOLS`. The blocking boto3 call goes through
-  `asyncio.to_thread`. Telemetry needed no change — `tracing.record_tool_call`
-  already strips the `mcp__<server>__` prefix.
-- `kb_id=""` fans out over every mounted KB; an unknown id returns a readable
-  "not mounted" line. Every failure (AccessDenied, broken index) is folded into
-  the returned TEXT — a KB must never abort the turn.
-- Single-shot `Retrieve` only. `AgenticRetrieveStream` stays a harness-only
-  advantage and is deliberately NOT granted to the exec role.
+  (`mounted_kbs`), both tool descriptions (`kb_tool_description`,
+  `kb_deep_tool_description`) and the `## Knowledge bases` prompt section
+  (`kb_prompt_section(kbs)` — no `tool_name` param: it names both tools from the
+  module constants, so a caller cannot announce one tool while the template
+  registers two). Both renderers use it so 方式A and ZIP cannot drift.
+  `harness._kb_prompt` stays separate on purpose: it names gateway MCP tools.
+- Strands ZIP: native `@tool`s appended to `tools` only when `MOUNTED_KBS`. BOTH
+  descriptions are seeded into `DEFAULT_TOOL_DESCRIPTIONS` so the config-bundle
+  A/B contract can tune each independently; spec `tool_description_overrides`
+  merge after and still win.
+- Container: both tools go into ONE `create_sdk_mcp_server(name="launchpad_kb",
+  tools=[kb_search, kb_deep_search])` built at RUNTIME (an SDK server is a Python
+  object, not a renderable literal) and merged into `build_options()`. Allow-list
+  is **server-level** (`mcp__launchpad_kb`), so adding a tool needs no renderer
+  change. Blocking boto3 work goes through `asyncio.to_thread`. Telemetry needed
+  no change — `tracing.record_tool_call` already strips the `mcp__<server>__`
+  prefix, so both show up as ordinary tool calls in Observability.
+- `_kb_targets(kb_id)` is shared by both tools: `""` fans out over every mounted
+  KB, an unknown id returns a readable "not mounted" line **without issuing a
+  request**. Every failure is folded into the returned TEXT — a KB must never
+  abort the turn.
 - Attach/detach happens at `generate` (the refs are baked into the artifact), so
   **re-publish is the only way to change the mounted set** for these methods.
+- Two tools rather than one `deep=` flag (product decision, river, 2026-07-28):
+  models pick between two differently-named tools more reliably than they set a
+  boolean, and A/B can only retune descriptions per tool name.
+
+**AgenticRetrieveStream — live-verified shapes (botocore 1.43.44, 2026-07-28).**
+The AWS blog example is WRONG on two members; the service model is authoritative:
+- `messages[].content` is a **structure** `{text}`, not a list.
+- `retrievers[] = {description, configuration:{knowledgeBase:{knowledgeBaseId}}}`
+  — the same shape `kb_gateway._agentic_target_configuration` already sends (the
+  blog's `knowledgeBaseRetriever` does not exist).
+- Required input: `agenticRetrieveConfiguration`, `messages`, `retrievers`.
+  Platform sends `foundationModelType/rerankingModelType: MANAGED` +
+  `maxAgentIteration` = 3 for one retriever, 5 for several (AWS guidance).
+- `resp["stream"]` is an event stream: `traceEvent`
+  (`attributes.step/status/failures/warnings`), `responseEvent` (answer deltas —
+  ignored, `result.generatedResponse.answer` is the same text already complete),
+  `result` (`generatedResponse{answer,citations}` + deduped
+  `results[]{content,metadata,sourceRetriever}`), **plus nine modeled error
+  members that arrive INSIDE the stream** (`accessDeniedException`,
+  `validationException`, …). Both templates handle in-stream errors AND raised
+  exceptions; only handling the raise would silently return an empty result.
+- Agentic results carry **no `score` and no `location`** (unlike `Retrieve`):
+  source uri is `metadata["_source_uri"]`, KB id is `sourceRetriever.identifier`.
+  Hence a separate `_format_agentic` next to `_format_passages`.
+- **Step sequence is not guaranteed.** A probe answered with only
+  `SpeculativeRetrieval` + `Planning` and no `Retrieval` step at all — the
+  planner judged the speculative pass sufficient. Never key logic on a step.
+- **Trace-reading trap:** the auto-instrumented `Bedrock Agent
+  Runtime.AgenticRetrieveStream` span is ~160 ms — it covers the initial call,
+  not the stream consumption. Real cost is the enclosing `execute_tool
+  kb_deep_search` span (13.4 s measured).
 
 **Still rejected** (`AgentSpec._kb_method_supported`, `KB_METHODS`): `studio`
 (code comes from the vendored canvas — no injection point) and `protocol=a2a`
@@ -128,11 +166,22 @@ names the real constraint.
   resource-scopable).
 - `launchpad-agent-execution-role` += sid `ManagedKbRetrieval`:
   `bedrock:Retrieve` + `bedrock:GetKnowledgeBase` on `knowledge-base/*` — what
-  the generated `kb_search` runs on. **`make bootstrap` does NOT land this on an
-  existing account**: `scripts/bootstrap.py::deploy_cdk` only fires when the
-  stack is missing, so an IAM change needs an explicit
-  `cd infra && uv run cdk deploy` (live-hit 2026-07-28; both lab docs now carry
-  a troubleshooting row for the resulting AccessDeniedException).
+  the generated `kb_search` runs on.
+- `launchpad-agent-execution-role` += sid `ManagedKbAgenticRetrieval`:
+  `bedrock:AgenticRetrieveStream` on **`*`** — `kb_deep_search`. Kept as its own
+  statement so the wildcard is visible in isolation: this action is NOT
+  resource-scopable, so every Launchpad runtime can agentic-retrieve against any
+  KB in the account. Accepted deliberately (`launchpad-gateway-role` already
+  carries the identical grant for the harness channel). `foundationModelType:
+  MANAGED` means the service supplies the planner, so no model grant beyond the
+  account-wide `bedrock:InvokeModel` is needed — proven by the gateway role
+  working with exactly this action set.
+- **`make bootstrap` does NOT land IAM changes on an existing account**:
+  `scripts/bootstrap.py::deploy_cdk` only fires when the stack is missing, so an
+  IAM change needs an explicit `cd infra && uv run cdk deploy` (live-hit twice,
+  2026-07-28; both lab docs carry a troubleshooting row for the resulting
+  AccessDeniedException). A local backend restart is also needed after template
+  edits — templates render in-process.
 - `launchpad-kb-role` (new, trusted by bedrock.amazonaws.com): reads artifacts
   bucket `kb/*`; external buckets get per-KB inline policy
   `launchpad-kb-{kb_id}` (mirrors `launchpad-fs-{agent}`), deleted with the KB.

@@ -272,8 +272,8 @@ FZuhhw9jbJaK   lab-fund-assistant   A2A   PENDING_APPROVAL
 `lab-fund-kb · kb`。注意 chip 下方的说明文字会随方式变化：
 
 - Harness：*以网关检索工具的形式挂载（逐库检索 + 多步 agentic 检索）*
-- 容器 / ZIP：*生成的 Agent 代码里会内置 `kb_search` 工具，用运行时执行角色直接调用 Bedrock
-  检索 API…仅单次检索（无 agentic 多步）；改变选择需要重新发布*
+- 容器 / ZIP：*生成的 Agent 代码里会内置两个工具…`kb_search`（单次相似度检索，快）与
+  `kb_deep_search`（agentic 多步 —— 规划子查询并返回带引用的答案，较慢且更贵）*
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/agents -H 'content-type: application/json' -d '{
@@ -288,33 +288,62 @@ curl -s -X POST http://127.0.0.1:8000/api/agents -H 'content-type: application/j
 那两行 —— 因为这条通道不用网关。唯一的差别在 `生成` 阶段的代码体积：
 
 ```
-generate  strands template · 9770 bytes · model global.anthropic.claude-sonnet-5   ← 挂了 1 个 KB
-generate  strands template · 6333 bytes · model global.anthropic.claude-sonnet-5   ← 没挂 KB（第 02 章）
+generate  strands template ·  6333 bytes   ← 没挂 KB（第 02 章的主线 Agent）
+generate  strands template · 15672 bytes   ← 挂了 1 个 KB
 ```
 
-多出来的 ~3.4KB 就是模板里那个 `kb_search` 工具：它用
-`bedrock-agent-runtime:Retrieve`（和 4.4 的检索 Playground 同一个 API）查询你勾选的 KB，
-凭据是 Runtime 的执行角色，不需要令牌。同时平台把一段「## Knowledge bases」注入生成的系统
-提示词，告诉模型有哪些库、各装什么、该调哪个工具。
+多出来的 ~9.3KB 是模板里的**两个**检索工具，加上注入系统提示词的那段「## Knowledge
+bases」（告诉模型有哪些库、各装什么、什么时候用哪个工具）：
 
-本次实测（部署 64 秒 / 容器 124 秒）问同一个问题：
-「这只基金所属的新兴市场股票策略团队，管理的总资产规模（AUM）大约是多少？请引用来源。」
-两个 Agent 都答出了 PDF 里的原始数字并指名来源文件：
+| 工具 | 底层 API | 形态 | 实测 |
+|---|---|---|---|
+| `kb_search` | `Retrieve` | 一次相似度检索 | ~0.9 秒，不消耗模型调用 |
+| `kb_deep_search` | `AgenticRetrieveStream` | 基础模型驱动的规划循环：拆子查询 → 跨库多轮检索 →（必要时）整篇拉取文档 → 返回带引用的答案 + 支撑段落 | 13 秒左右，每轮规划一次模型调用 |
+
+两者都用 Runtime 执行角色的 IAM 凭据直连 Bedrock 检索数据面（`kb_search` 与 4.4 的检索
+Playground 同一个 API），不需要网关也不需要令牌。`maxAgentIteration` 由平台按挂载库数派生：
+单库 3 轮、多库 5 轮。
+
+### 深检索到底强在哪：一个能看出差别的问题
+
+本次实测（ZIP 部署 66 秒 / 容器 114 秒）问：
+「对比 Emerging Markets Leaders 策略与 Global Emerging Markets 策略：各自的资产规模是多少，
+投资流程/组合构建规则上有什么不同？请引用来源。」
+
+两个 Agent 都先调 `kb_deep_search`，然后用 `kb_search` 补细节，答案不只是对 —— 它们**发现了
+原文的一个口径陷阱**：
 
 ```
-Global Emerging Markets $10,706 MM（其中 Emerging Markets Leaders $2,339 MM），
-占全球股票策略总 AUM $19,217 MM 的约 55.7%
-来源：Morgan_Stanley_Oct_21_(EMEA).pdf
+"Global Emerging Markets" 在这份资料里既是一个子策略（$7,246 MM），
+也是包含四个子策略的大类（$10,706 MM = 7,246 + 333 + 2,339 + 788）。
+两处数字口径不同，需要向客户说明。
 ```
 
-**别只看答案对不对，去第 07 章的追踪里看它到底查了没有**。这两次调用的 span 树里都有：
+同时它们把散落在多页的证据拼齐了：筛选漏斗 10,000 → 300–400 → ~100 → 25–40 只
+（实际持仓 28 只）、Active Share 89.63%、换手率 17.86%、ROIC > 15% 的选股标准、卖出纪律。
+这类「证据分散在文档各处」的问题正是单次检索答不好的。
+
+**别只看答案，去第 07 章的追踪里看它到底怎么查的**：
 
 ```
-execute_tool kb_search                872.3 ms
-  Bedrock Agent Runtime.Retrieve      859.2 ms   ← 真的打到了 Bedrock 检索数据面
+invoke_agent Strands Agents                             53809.2 ms
+  execute_tool kb_deep_search                           13395.8 ms   ← 规划循环的真实耗时
+    Bedrock Agent Runtime.AgenticRetrieveStream            160.0 ms
+  execute_tool kb_search  ×2                              ~860 ms each
+    Bedrock Agent Runtime.Retrieve ×2                      ~850 ms each
+  execute_event_loop_cycle → chat …                      29601.8 ms   ← 最后组织答案
 ```
 
-也就是说 `kb_search` 在 Observability 里就是一次普通的工具调用，和 `calculator` 同等对待。
+> **看追踪时容易被骗的一点**：`Bedrock Agent Runtime.AgenticRetrieveStream` 这个 span 只有
+> 160 毫秒。它是 boto3 自动埋点，覆盖的是**发起调用**那一下，不包含之后消费事件流的时间。
+> 真实开销要看外层的 `execute_tool kb_deep_search`（13.4 秒）。
+
+### 快慢工具真的会被区分使用吗
+
+会。换一个单点事实问题：「这只基金截至 2021 年 8 月 31 日持有多少只股票？」
+容器方式**只调了 `kb_search`**（29 秒，没碰深检索），答「28 只股票」并引用
+Portfolio Characteristics 表格。也就是说提示词里的引导确实在起作用，而不是模型一律去拿最贵的
+那个工具。
 
 用完删掉：
 
@@ -322,10 +351,10 @@ execute_tool kb_search                872.3 ms
 curl -s -X DELETE http://127.0.0.1:8000/api/agents/<ID>
 ```
 
-> **两条通道的取舍**：Harness 那条多给你一个跨库多步的 `AgenticRetrieveStream` 工具（模型
-> 可以让服务端自己迭代检索），代价是多一个网关 + 一套 OAuth；容器 / ZIP 这条只有单次
-> `Retrieve`，但没有额外资源、没有令牌生命周期，而且检索逻辑就写在你能看到、能改的生成代码
-> 里。画布（Studio）方式暂不支持，因为它的代码由 Studio 生成，平台没有注入工具的位置。
+> **那两条通道现在还差什么**：检索能力已经等价（都有单次 + agentic 多步）。剩下的是形态差异
+> —— Harness 的工具由网关托管、绑定哪些库由平台在 target 上配置、Agent 调用时改不了；
+> 容器 / ZIP 的检索逻辑就写在你能看到能改的生成代码里，代价是那套代码归你维护。
+> 画布（Studio）方式暂不支持，因为它的代码由 Studio 生成，平台没有注入工具的位置。
 
 ---
 
@@ -347,7 +376,8 @@ curl -s -X DELETE http://127.0.0.1:8000/api/agents/<ID>
 | KB 已 `ACTIVE` 但数据源为 0、ingestion 从未开始 | 后端补齐数据源的后台任务没跑成（例如期间重启过服务），或该 KB 建于此修复之前 | 详情页橙色告警里点 `补建数据源`；文件已在制品桶里，补建后 ingestion 会自动开始 |
 | ingestion `COMPLETE` 但 `Documents Failed = 1` | PDF 无文本层（扫描件），或中文 PDF 抽取问题 | 换文本型 PDF；中文 PDF 已知问题见 `docs/issues/2026-07-13-managed-kb-cjk-pdf-extraction.md` |
 | 技能不出现在挂载列表 | 状态还是 `DRAFT` / `PENDING_APPROVAL` | 必须先 `批准 · 发布` |
-| 4.7 里容器 / ZIP 的 `kb_search` 每次都回 `AccessDeniedException` | 执行角色缺 `bedrock:Retrieve`；**`make bootstrap` 只在栈不存在时才 `cdk deploy`** | `cd infra && uv run cdk deploy --require-approval never`（约 30 秒），无需重新发布 Agent |
+| 4.7 里容器 / ZIP 的 `kb_search` / `kb_deep_search` 每次都回 `AccessDeniedException` | 执行角色缺 `bedrock:Retrieve` / `bedrock:AgenticRetrieveStream`；**`make bootstrap` 只在栈不存在时才 `cdk deploy`** | `cd infra && uv run cdk deploy --require-approval never`（约 30 秒），无需重新发布 Agent |
+| `kb_deep_search` 一次要十几秒到几十秒 | 正常：每轮规划都是一次基础模型调用 | 单点事实问题引导模型用 `kb_search`；深检索留给比对/列举/汇总 |
 | 注册中心搜索框搜不到刚建的记录 | 搜索走 AWS `SearchRegistryRecords`，索引有延迟 | 用顶部类型筛选按钮（`技能`）在列表里找 |
 | 重新发布点了没反应 | 有二次确认弹窗 | 在弹窗里再点一次 `重新发布` |
 | 重新发布后旧对话还是旧行为 | AgentCore 把已有会话钉在首次服务它的版本上 | **开一个新会话**验证（第 05 章会用到） |
