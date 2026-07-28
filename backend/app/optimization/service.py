@@ -44,6 +44,12 @@ TRAFFIC_PROMPTS = [
     "What is 90/9? Use the calculator tool and answer with just the number.",
 ]
 
+# Online evaluation for an experiment: the arms are scored by whatever evaluators
+# the operator picks at the GATEWAY stage. The default pair is what every
+# experiment used before the set became selectable.
+ONLINE_EVAL_DEFAULT = ("Builtin.GoalSuccessRate", "Builtin.Helpfulness")
+ONLINE_EVAL_MAX = 10  # CreateOnlineEvaluationConfig caps the list at 10
+
 _sleep = time.sleep  # injectable
 
 
@@ -584,8 +590,53 @@ def create_runtime_target_idempotent(
     raise TimeoutError(f"target {name} not READY")
 
 
+def normalize_online_evaluators(ids: Sequence[str] | None) -> list[str]:
+    """Validate an operator-chosen evaluator set for online evaluation.
+
+    ``None``/empty falls back to :data:`ONLINE_EVAL_DEFAULT`. Trajectory matchers
+    score against dataset ground truth, which online evaluation of live traces
+    never carries, so they are rejected here rather than failing halfway through
+    the stage. Custom (non-``Builtin.``) ids pass through unchecked — the UI only
+    offers ids it read back from ``/api/eval/evaluators``, and an id AWS does not
+    know still fails loudly at ``CreateOnlineEvaluationConfig``.
+    """
+    chosen: list[str] = []
+    for raw in ids or ():
+        evaluator = str(raw).strip()
+        if not evaluator or evaluator in chosen:
+            continue
+        if evaluator in ac.TRAJECTORY_EVALUATORS:
+            raise AppError(
+                "experiment.evaluator_unsupported",
+                f"{evaluator} scores against dataset ground truth, which online "
+                "evaluation does not carry — use a batch evaluation run instead",
+                {"evaluator": evaluator},
+                status_code=400,
+            )
+        if evaluator.startswith("Builtin.") and evaluator not in ac.ALL_BUILTIN_EVALUATORS:
+            raise AppError(
+                "experiment.evaluator_unsupported",
+                f"unknown built-in evaluator {evaluator}",
+                {"evaluator": evaluator},
+                status_code=400,
+            )
+        chosen.append(evaluator)
+    if not chosen:
+        return list(ONLINE_EVAL_DEFAULT)
+    if len(chosen) > ONLINE_EVAL_MAX:
+        raise AppError(
+            "experiment.evaluator_unsupported",
+            f"online evaluation accepts at most {ONLINE_EVAL_MAX} evaluators, "
+            f"got {len(chosen)}",
+            {"count": len(chosen)},
+            status_code=400,
+        )
+    return chosen
+
+
 def create_online_eval_idempotent(
-    control: Any, *, name: str, log_group: str, service_name: str, role_arn: str
+    control: Any, *, name: str, log_group: str, service_name: str, role_arn: str,
+    evaluators: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     try:
         return control.create_online_evaluation_config(
@@ -598,8 +649,8 @@ def create_online_eval_idempotent(
                 }
             },
             evaluators=[
-                {"evaluatorId": "Builtin.GoalSuccessRate"},
-                {"evaluatorId": "Builtin.Helpfulness"},
+                {"evaluatorId": e}
+                for e in (evaluators or ONLINE_EVAL_DEFAULT)
             ],
             rule={
                 "samplingConfig": {"samplingPercentage": 100.0},
@@ -734,7 +785,8 @@ def assert_shared_gateway_available(
 
 
 def stage_gateway(
-    exp_id: str, agent: dict[str, Any], progress: Progress = _noop
+    exp_id: str, agent: dict[str, Any], progress: Progress = _noop,
+    evaluators: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     settings = get_settings()
     control = control_client()
@@ -745,13 +797,15 @@ def stage_gateway(
     progress("creating v1 runtime target…")
     target_id = create_runtime_target_idempotent(control, gateway_id, target_v1, agent["arn"])
     log_group = f"/aws/bedrock-agentcore/runtimes/{agent['resource_id']}-DEFAULT"
-    progress("creating online evaluation config…")
+    chosen = normalize_online_evaluators(evaluators)
+    progress(f"creating online evaluation config ({len(chosen)} evaluators)…")
     online_eval = create_online_eval_idempotent(
         control,
         name=f"exp_{exp_id[:8]}_oe1",
         log_group=log_group,
         service_name=f"{agent['runtime_name']}.DEFAULT",
         role_arn=settings.resources["execution_role_arn"],
+        evaluators=chosen,
     )
     return {
         **gateway,
@@ -759,6 +813,9 @@ def stage_gateway(
         "target_id_v1": target_id,
         "online_eval_arn": online_eval.get("onlineEvaluationConfigArn"),
         "online_eval_id": online_eval.get("onlineEvaluationConfigId"),
+        # what the two arms are scored on — a claimed pre-existing config keeps
+        # its own set, so this records the request, not a re-read from AWS
+        "online_evaluators": chosen,
     }
 
 
@@ -940,9 +997,11 @@ def action_bundles(exp: Experiment) -> dict[str, Any]:
     return result
 
 
-def act_gateway(exp_id: str, progress: Progress) -> None:
+def act_gateway(
+    exp_id: str, progress: Progress, evaluators: Sequence[str] | None = None
+) -> None:
     exp = _get(exp_id)
-    result = stage_gateway(exp_id, _agent_meta(exp), progress)
+    result = stage_gateway(exp_id, _agent_meta(exp), progress, evaluators=evaluators)
     _update(exp_id, stage="gateway", artifact={"gateway": result})
 
 

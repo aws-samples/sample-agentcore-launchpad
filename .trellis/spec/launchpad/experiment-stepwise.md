@@ -34,6 +34,7 @@ class ActionRequest(BaseModel):
     accepted_prompt: str | None                        # accept
     accepted_tool_descriptions: dict[str, str] | None  # accept
     dataset_id: str | None                             # traffic
+    online_evaluators: list[str] | None                # gateway, 1..ONLINE_EVAL_MAX
 ```
 
 Service layer (`app/optimization/service.py`):
@@ -45,6 +46,7 @@ action_accept(exp, prompt, tool_descriptions)  # sync
 action_bundles(exp)  # sync
 stage_not_ready_reason(exp, action) -> str | None
 resolve_traffic_prompts(dataset) -> list[str]
+normalize_online_evaluators(ids) -> list[str]   # None/empty → ONLINE_EVAL_DEFAULT
 create_bundle_idempotent(control, **kwargs)    # conflict-adopt via ListConfigurationBundles
 clear_stale_running_actions() -> list[str]     # startup sweep (main.py resume block)
 assert_shared_gateway_available(own_test_name=None) -> None
@@ -75,6 +77,20 @@ assert_shared_gateway_available(own_test_name=None) -> None
     written by `accept`; `bundles` uses accepted → recommended fallback.
   - `traffic.dataset_id` / `traffic.dataset_name` — when a dataset was
     replayed instead of the built-in `TRAFFIC_PROMPTS*2`.
+  - `gateway.online_evaluators` — the evaluator ids the online evaluation
+    config was created with (records the *request*: a name-conflict adoption
+    keeps the pre-existing config's own set, which is never rewritten).
+- **Online evaluators are operator-chosen at `gateway`.**
+  `ONLINE_EVAL_DEFAULT = ("Builtin.GoalSuccessRate", "Builtin.Helpfulness")`
+  when the field is absent, so pre-existing flows are byte-identical.
+  `normalize_online_evaluators` dedupes (first occurrence wins, order kept),
+  drops blanks, and is called **in the router before dispatch** so a bad id
+  costs no AWS round-trip. Accepts the 13 `ac.ALL_BUILTIN_EVALUATORS` plus any
+  custom evaluator id; rejects `ac.TRAJECTORY_EVALUATORS` (they score against
+  dataset ground truth, absent from live traces) and unknown `Builtin.*`.
+  `ONLINE_EVAL_MAX = 10` mirrors the `CreateOnlineEvaluationConfig` cap.
+  Custom ids are NOT verified against `ListEvaluators` — the UI only offers ids
+  from `/api/eval/evaluators`, and AWS rejects an unknown one at create time.
 - `POST /api/experiments` performs **no AWS-mutating work** (A1) — only the
   row + `agent_meta` (one `get_agent_runtime` read).
 - The Gateway is the shared `EXP_GATEWAY_NAME`. `gateway` and `abtest` run a
@@ -110,6 +126,8 @@ assert_shared_gateway_available(own_test_name=None) -> None
 | accept with no prompt anywhere | 400 `experiment.accept_invalid` |
 | traffic dataset not found | 404 `dataset.not_found` |
 | traffic dataset kind `simulated` / no usable prompts | 422 `experiment.dataset_unsupported` |
+| gateway `online_evaluators` empty list or > `ONLINE_EVAL_MAX` items | 422 (pydantic bounds) |
+| gateway `online_evaluators` holds a trajectory matcher or unknown `Builtin.*` | 400 `experiment.evaluator_unsupported`, with `evaluator` |
 | foreign active A/B test on shared Gateway | 409 `experiment.gateway_busy`, with `gateway_arn` and `active_tests` |
 | legacy `canary` or `ramp` action | 410 `experiment.action_moved`, with `runtime_canaries_path` |
 | second concurrent experiment (create) | 409 `experiment.already_running` |
@@ -149,6 +167,11 @@ promote←verdict; recommend/cleanup←none.
 - old `canary`/`ramp` actions return `experiment.action_moved`
 - Gateway conflict is detected before config mutation; exact own test is
   adoptable; cleanup never calls shared-Gateway deletion
+- online evaluators: absent → `ONLINE_EVAL_DEFAULT`; explicit list reaches
+  `act_gateway` deduped/in order (custom ids pass through); trajectory matcher
+  and unknown `Builtin.*` → 400 before dispatch; `[]` / 11 ids → 422;
+  `stage_gateway` records `online_evaluators` on the artifact and forwards
+  `evaluators=[{"evaluatorId": …}]` to `create_online_evaluation_config`
 
 Frontend has NO test runner — verify via the fetch-stub browser evidence
 flow with synthetic experiment states plus a real handoff URL.

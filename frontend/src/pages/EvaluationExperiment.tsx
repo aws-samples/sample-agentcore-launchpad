@@ -63,7 +63,8 @@ export interface ExperimentInfo {
       control: { bundle_id?: string; arn: string; version?: string };
       treatment: { bundle_id?: string; arn: string; version?: string };
     };
-    gateway?: { gateway_id: string; gateway_url?: string; target_v1?: string };
+    gateway?: { gateway_id: string; gateway_url?: string; target_v1?: string;
+      online_evaluators?: string[] };
     abtest?: { ab_test_id: string };
     traffic?: { sent: number; failed: number; dataset_id?: string;
       dataset_name?: string };
@@ -106,6 +107,19 @@ interface DatasetInfo {
   kind: string;
   item_count: number;
 }
+
+interface EvaluatorInfo {
+  id: string;
+  name?: string;
+  level?: string;
+  source: string;
+  requires_ground_truth?: boolean;
+}
+
+// What the online evaluation config scores both arms with when the operator
+// doesn't touch the chips — mirrors service.ONLINE_EVAL_DEFAULT.
+const ONLINE_EVAL_DEFAULT = ["Builtin.GoalSuccessRate", "Builtin.Helpfulness"];
+const ONLINE_EVAL_MAX = 10;  // CreateOnlineEvaluationConfig caps the list at 10
 
 // Mirrors backend STAGES (app/optimization/models.py) — the sidebar renders
 // the loop even before any experiment exists, so the list is static here.
@@ -275,6 +289,8 @@ function ConfigurationExperimentView() {
   const [experiments, setExperiments] = useState<ExperimentInfo[]>([]);
   const [activeAgents, setActiveAgents] = useState<AgentInfo[]>([]);
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
+  const [evaluators, setEvaluators] = useState<EvaluatorInfo[]>([]);
+  const [onlineEvaluators, setOnlineEvaluators] = useState<string[]>(ONLINE_EVAL_DEFAULT);
   const [busy, setBusy] = useState(false);
   const [startAgentId, setStartAgentId] = useState("");
   const [startError, setStartError] = useState<string | null>(null);
@@ -316,6 +332,13 @@ function ConfigurationExperimentView() {
       .then((res) => (res.ok ? res.json() : { datasets: [] }))
       .then((body: { datasets: DatasetInfo[] }) =>
         setDatasets(body.datasets.filter((d) => d.kind !== "simulated")))
+      .catch(() => {});
+    // online evaluation scores live traces, so ground-truth-only matchers
+    // (Builtin.Trajectory*Match) can never apply here — the backend rejects them
+    fetch("/api/eval/evaluators")
+      .then((res) => (res.ok ? res.json() : { evaluators: [] }))
+      .then((body: { evaluators: EvaluatorInfo[] }) =>
+        setEvaluators(body.evaluators.filter((e) => !e.requires_ground_truth)))
       .catch(() => {});
     void refresh();
     const timer = setInterval(() => void refresh(), 8000);
@@ -885,12 +908,60 @@ function ConfigurationExperimentView() {
       id="gwab" index={3} title={t("expPage.card.gwab")}
       active={activeCard === "gwab"} done={!!a.abtest}
     >
-      {!a.gateway && actionBtn("gateway", t("expPage.createGateway"),
-                               { primary: true })}
+      {!a.gateway && (
+        <>
+          <div className="field">
+            <label>{t("expPage.onlineEvaluators")}</label>
+            <div className="note" style={{ marginBottom: 6 }}>
+              <span className="i">[i]</span>
+              <span>{t("expPage.onlineEvaluatorsHint", { max: ONLINE_EVAL_MAX })}</span>
+            </div>
+            <div className="selchips" style={{ maxHeight: 132, overflowY: "auto" }}>
+              {evaluators.map((e) => {
+                const on = onlineEvaluators.includes(e.id);
+                const full = !on && onlineEvaluators.length >= ONLINE_EVAL_MAX;
+                return (
+                  <button
+                    key={e.id}
+                    type="button"
+                    className={`selchip${on ? " on" : ""}`}
+                    data-testid={`online-eval-${e.id}`}
+                    disabled={full}
+                    style={{ opacity: full ? 0.4 : undefined }}
+                    title={e.source === "custom" ? t("expPage.customEvaluator") : e.id}
+                    onClick={() =>
+                      setOnlineEvaluators((prev) =>
+                        prev.includes(e.id)
+                          ? prev.filter((x) => x !== e.id)
+                          : [...prev, e.id])
+                    }
+                  >
+                    {e.source === "custom" ? (e.name ?? e.id) : evaluatorLabel(t, e.id)}
+                    {e.source === "custom" && (
+                      <span className="mono" style={{ fontSize: 8.5, marginLeft: 6 }}>
+                        ◆
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          {actionBtn("gateway", t("expPage.createGateway"), {
+            primary: true,
+            disabled: onlineEvaluators.length === 0,
+            extra: { online_evaluators: onlineEvaluators },
+          })}
+        </>
+      )}
       {a.gateway && (
         <div className="mono dim" style={{ fontSize: 10, marginBottom: 8 }}>
           gw {a.gateway.gateway_id}
           {a.gateway.target_v1 ? ` · target ${a.gateway.target_v1}` : ""}
+          {a.gateway.online_evaluators?.length
+            ? ` · ${a.gateway.online_evaluators
+                .map((id) => evaluatorLabel(t, id)).join(" + ")}`
+            : ""}
         </div>
       )}
       {a.gateway && !a.abtest &&
