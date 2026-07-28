@@ -76,8 +76,11 @@ Out of scope (explicitly):
       execution role.
 - [x] Deleting a KB with `force` does not create/patch a `launchpad-kb-gw` agentic target
       for a non-harness agent.
-- [x] CreateAgent lets a container/zip agent select KBs; re-opening EDIT on such an agent
-      restores the selection; i18n parity passes.
+- [x] CreateAgent lets a container/zip agent select KBs; i18n parity passes.
+      (EDIT-restore verified by code path only, not in a browser: `loadForEdit` sets
+      `selectedKbs` from `spec.knowledge_bases` unconditionally, and the
+      `method !== "harness" → setSelectedKbs([])` effect that used to wipe it on the
+      `setMethod(spec.method)` of an edit load is now gone.)
 - [x] `make verify` green.
 - [x] Real AWS: one `zip_runtime` and one `container` agent deployed with a managed KB
       mounted, each invoked with a question only answerable from the indexed document,
