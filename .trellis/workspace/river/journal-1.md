@@ -1567,3 +1567,28 @@ Updated Observability to query legacy aws/spans and unified per-runtime log grou
 ### Status
 
 [OK] **Completed**
+
+
+## Session 27: 容器与 ZIP 方式挂载托管知识库（直连 Retrieve 通道）
+
+**Date**: 2026-07-28
+**Task**: 容器与 ZIP 方式挂载托管知识库（直连 Retrieve 通道）
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+把托管知识库挂载从 harness-only 扩展到 container(方式A) 与 zip_runtime。新增第二条通道：在生成的 Agent 代码里内置 kb_search 工具，用运行时执行角色直接调 bedrock-agent-runtime:Retrieve（与 KB Playground 同 API），不经 launchpad-kb-gw、无 OAuth 令牌生命周期。共享模块 app/templates/kb_support.py 统一 KB 字面量/工具描述/提示词段，避免两套模板漂移；ZIP 用原生 @tool，容器用进程内 SDK-MCP server launchpad_kb（claude CLI 是子进程，看不到 Python 函数）。执行角色加 ManagedKbRetrieval；AgenticRetrieveStream 故意不给，保持 harness 差异化。studio 画布与 protocol=a2a 仍拒绝。真实 AWS 验证：zip 64s/container 124s 部署，挂 lab-fund-kb 后都答出 PDF 原始数字，追踪里有 execute_tool kb_search → Bedrock Agent Runtime.Retrieve span 对。关键坑：make bootstrap 只在栈缺失时才 cdk deploy，IAM 改动在已 bootstrap 的账号上需显式 cd infra && uv run cdk deploy，否则 kb_search 一律 AccessDeniedException —— 已写入 lab 02/04 排错表与 spec。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5569aa2` | (see git log) |
+| `13cc079` | (see git log) |
+| `a9599d2` | (see git log) |
+| `c8cad8e` | (see git log) |
+
+### Status
+
+[OK] **Completed**
