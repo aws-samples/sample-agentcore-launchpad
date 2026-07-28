@@ -1,6 +1,6 @@
 """Managed KB unit coverage — pure logic, no AWS:
 
-- AgentSpec.knowledge_bases validation (harness-only, KnowledgeBaseRef shape)
+- AgentSpec.knowledge_bases validation (method gating, KnowledgeBaseRef shape)
 - kb_gateway target-name sanitization
 - knowledge external-source validation (bucket/prefix → IAM policy safety)
 - filename safety, per-KB inline policy scoping
@@ -33,9 +33,28 @@ def _spec(**over):
 # ── AgentSpec.knowledge_bases validation ─────────────────────────────────────
 
 
-def test_kb_requires_harness_method():
-    with pytest.raises(ValidationError, match="harness"):
-        _spec(method="container", knowledge_bases=[{"kb_id": "ABC123", "name": "docs"}])
+@pytest.mark.parametrize("method", ["harness", "zip_runtime", "container"])
+def test_kb_allowed_on_every_code_and_harness_method(method):
+    spec = _spec(method=method, knowledge_bases=[{"kb_id": "ABC123", "name": "docs"}])
+    assert [kb.kb_id for kb in spec.knowledge_bases] == ["ABC123"]
+
+
+def test_kb_rejected_on_studio_canvas():
+    with pytest.raises(ValidationError, match="Strands Studio canvas"):
+        _spec(
+            method="studio",
+            code="print('x')",
+            knowledge_bases=[{"kb_id": "ABC123", "name": "docs"}],
+        )
+
+
+def test_kb_rejected_on_a2a_protocol():
+    with pytest.raises(ValidationError, match="protocol=a2a"):
+        _spec(
+            method="zip_runtime",
+            protocol="a2a",
+            knowledge_bases=[{"kb_id": "ABC123", "name": "docs"}],
+        )
 
 
 def test_kb_on_harness_ok():
@@ -351,7 +370,16 @@ def test_strip_kb_from_agents_updates_specs(monkeypatch):
         name="kb-free", method="harness", status="active",
         spec={"name": "kb-free", "method": "harness"},
     )
-    db.add_all([mounted, other])
+    # zip/container agents retrieve directly — they must never touch kb-gw
+    direct = Agent(
+        name="kb-direct", method="zip_runtime", status="active",
+        spec={"name": "kb-direct", "method": "zip_runtime",
+              "knowledge_bases": [
+                  {"kb_id": "KBDEAD0001", "name": "dead", "description": "d"},
+                  {"kb_id": "KBLIVE0002", "name": "live", "description": "l"},
+              ]},
+    )
+    db.add_all([mounted, other, direct])
     db.commit()
     db.close()
 
@@ -369,11 +397,13 @@ def test_strip_kb_from_agents_updates_specs(monkeypatch):
 
     stripped = knowledge._strip_kb_from_agents("KBDEAD0001")
 
-    assert stripped == ["kb-user"]
+    assert stripped == ["kb-user", "kb-direct"]
+    # only the harness agent's gateway target is resynced
     assert synced == [("kb-user", ["KBLIVE0002"])]
     db = SessionLocal()
-    row = db.query(Agent).filter(Agent.name == "kb-user").one()
-    assert [r["kb_id"] for r in row.spec["knowledge_bases"]] == ["KBLIVE0002"]
+    for name in ("kb-user", "kb-direct"):
+        row = db.query(Agent).filter(Agent.name == name).one()
+        assert [r["kb_id"] for r in row.spec["knowledge_bases"]] == ["KBLIVE0002"]
     db.close()
 
 

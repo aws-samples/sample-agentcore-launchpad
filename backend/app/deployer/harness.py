@@ -29,7 +29,12 @@ _TOOL_NAME_RE = re.compile(r"[^A-Za-z0-9_]+")
 
 
 def _kb_prompt(spec: AgentSpec) -> str:
-    """System-prompt section mapping mounted KBs to their gateway tool names."""
+    """System-prompt section mapping mounted KBs to their gateway tool names.
+
+    Deliberately not shared with ``app.templates.kb_support.kb_prompt_section``:
+    that one names the ``kb_search`` tool the zip/container templates generate,
+    this one names the kb-gw MCP tools only a harness can reach.
+    """
     agentic = kbgw.agentic_target_name(spec.name)
     lines = [
         "",

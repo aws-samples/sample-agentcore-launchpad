@@ -226,10 +226,9 @@ export function CreateAgent() {
   }, []);
   useEffect(() => reloadAgents(), [reloadAgents]);
 
-  // KBs are harness-only; drop any selection when the method changes away from it.
-  useEffect(() => {
-    if (method !== "harness") setSelectedKbs([]);
-  }, [method]);
+  // All three wizard methods can mount KBs — harness through launchpad-kb-gw,
+  // zip_runtime/container through a generated kb_search tool. Only the Studio
+  // canvas (its own page) has no retrieval contract, so no reset here.
 
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [launch, setLaunch] = useState<LaunchState | null>(null);
@@ -372,9 +371,7 @@ export function CreateAgent() {
             : {}),
         }
       : {}),
-    ...(method === "harness" && selectedKbs.length
-      ? { knowledge_bases: selectedKbs.map(kbInfo) }
-      : {}),
+    ...(selectedKbs.length ? { knowledge_bases: selectedKbs.map(kbInfo) } : {}),
     ...((method === "harness" || method === "container") && skills.length ? { skills } : {}),
     ...(method === "container" && mcpServers.trim()
       ? { env: { LAUNCHPAD_MCP_SERVERS: mcpServers.trim() } }
@@ -1103,55 +1100,49 @@ export function CreateAgent() {
             <div className="field" data-testid="kb-picker">
               <label>{t("create.configure.kbLabel")}</label>
               <div className="selchips">
-                {method === "harness" ? (
-                  <>
-                    {activeKbs.map((kb) => (
+                {activeKbs.map((kb) => (
+                  <button
+                    key={kb.kb_id}
+                    type="button"
+                    className={`selchip${selectedKbs.includes(kb.kb_id) ? " on" : ""}`}
+                    style={{ cursor: "pointer" }}
+                    title={kb.description || kb.name}
+                    onClick={() => toggleKb(kb.kb_id)}
+                  >
+                    {kb.name} · kb {selectedKbs.includes(kb.kb_id) ? "✓" : "+"}
+                  </button>
+                ))}
+                {selectedKbs
+                  .filter((id) => !activeKbs.some((k) => k.kb_id === id))
+                  .map((id) => {
+                    const info = kbInfo(id);
+                    return (
                       <button
-                        key={kb.kb_id}
+                        key={id}
                         type="button"
-                        className={`selchip${selectedKbs.includes(kb.kb_id) ? " on" : ""}`}
+                        className="selchip on"
                         style={{ cursor: "pointer" }}
-                        title={kb.description || kb.name}
-                        onClick={() => toggleKb(kb.kb_id)}
+                        title={info.description || info.name}
+                        onClick={() => toggleKb(id)}
                       >
-                        {kb.name} · kb {selectedKbs.includes(kb.kb_id) ? "✓" : "+"}
+                        {info.name} · kb ✓
                       </button>
-                    ))}
-                    {selectedKbs
-                      .filter((id) => !activeKbs.some((k) => k.kb_id === id))
-                      .map((id) => {
-                        const info = kbInfo(id);
-                        return (
-                          <button
-                            key={id}
-                            type="button"
-                            className="selchip on"
-                            style={{ cursor: "pointer" }}
-                            title={info.description || info.name}
-                            onClick={() => toggleKb(id)}
-                          >
-                            {info.name} · kb ✓
-                          </button>
-                        );
-                      })}
-                    {activeKbs.length === 0 && selectedKbs.length === 0 && (
-                      <span className="selchip" style={{ opacity: 0.5 }}>
-                        {t("create.configure.kbEmpty")}
-                      </span>
-                    )}
-                  </>
-                ) : (
+                    );
+                  })}
+                {activeKbs.length === 0 && selectedKbs.length === 0 && (
                   <span className="selchip" style={{ opacity: 0.5 }}>
-                    {t("create.configure.kbSoon")}
+                    {t("create.configure.kbEmpty")}
                   </span>
                 )}
               </div>
-              {method === "harness" && (
-                <div className="note" style={{ marginTop: 8 }}>
-                  <span className="i">[i]</span>
-                  <span>{t("create.configure.kbNote")}</span>
-                </div>
-              )}
+              <div className="note" style={{ marginTop: 8 }}>
+                <span className="i">[i]</span>
+                <span>
+                  {method === "harness"
+                    ? t("create.configure.kbNote")
+                    : t("create.configure.kbNoteDirect")}
+                </span>
+              </div>
             </div>
             {method === "container" && (
               <div className="field" data-testid="fs-config">

@@ -123,6 +123,37 @@ def test_rendered_main_compiles(tmp_path: Path):
     py_compile.compile(str(target), doraise=True)
 
 
+KB_SPEC = AgentSpec(
+    **{
+        **SPEC.model_dump(),
+        "knowledge_bases": [
+            {"kb_id": "KB111", "name": "fund-docs", "description": "fund product PDFs"},
+        ],
+    }
+)
+
+
+def test_render_without_kbs_leaves_retrieval_inert():
+    code = render_main_py(SPEC)
+    assert "MOUNTED_KBS: list[dict[str, str]] = []" in code
+    assert "KB_TOOL_DESCRIPTION = ''" in code
+    assert "mcp__launchpad_kb" not in code
+    assert "## Knowledge bases" not in code
+
+
+def test_render_mounts_kb_mcp_server_and_prompt_section(tmp_path: Path):
+    code = render_main_py(KB_SPEC)
+    assert "__LAUNCHPAD_" not in code
+    assert "'kb_id': 'KB111'" in code
+    assert 'KB_MCP_SERVER = "launchpad_kb"' in code
+    assert "ALLOWED_TOOLS: list[str] = ['Task', 'mcp__launchpad_kb']" in code
+    assert "## Knowledge bases" in code
+    assert "fund product PDFs" in code
+    target = tmp_path / "kb_main.py"
+    target.write_text(code, encoding="utf-8")
+    py_compile.compile(str(target), doraise=True)
+
+
 def test_rendered_main_emits_manual_telemetry():
     """The SDK's LLM/tool work happens in the claude CLI subprocess, invisible
     to ADOT — the generated agent must emit the gen_ai telemetry itself."""
@@ -270,8 +301,7 @@ def test_assemble_build_context(tmp_path: Path):
     assert "bedrock-agentcore==1.17.*" in requirements
 
 
-@pytest.fixture
-def rendered_memory_module(tmp_path: Path, monkeypatch):
+def _import_rendered(spec, tmp_path: Path, monkeypatch, stem: str):
     """Import a rendered runtime with tracing replaced by side-effect-free fakes."""
     tracing = ModuleType("tracing")
 
@@ -284,24 +314,89 @@ def rendered_memory_module(tmp_path: Path, monkeypatch):
     tracing.record_llm_usage = lambda **_kwargs: None
     tracing.record_result = lambda *_args, **_kwargs: None
     monkeypatch.setitem(sys.modules, "tracing", tracing)
-    monkeypatch.setenv("LAUNCHPAD_MEMORY_ID", "memory-123")
     monkeypatch.setenv("AWS_REGION", "us-west-2")
 
+    target = tmp_path / f"{stem}.py"
+    target.write_text(render_main_py(spec), encoding="utf-8")
+    module_spec = importlib.util.spec_from_file_location(stem, target)
+    module = importlib.util.module_from_spec(module_spec)
+    monkeypatch.setitem(sys.modules, module_spec.name, module)
+    module_spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def rendered_memory_module(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("LAUNCHPAD_MEMORY_ID", "memory-123")
     spec = AgentSpec(
         **{
             **SPEC.model_dump(),
             "memory": {"short_term": True, "long_term": True},
         }
     )
-    target = tmp_path / "rendered_memory_main.py"
-    target.write_text(render_main_py(spec), encoding="utf-8")
-    module_spec = importlib.util.spec_from_file_location(
-        "rendered_claude_memory_main", target
-    )
-    module = importlib.util.module_from_spec(module_spec)
-    monkeypatch.setitem(sys.modules, module_spec.name, module)
-    module_spec.loader.exec_module(module)
-    return module
+    return _import_rendered(spec, tmp_path, monkeypatch, "rendered_claude_memory_main")
+
+
+@pytest.fixture
+def rendered_kb_module(tmp_path: Path, monkeypatch):
+    return _import_rendered(KB_SPEC, tmp_path, monkeypatch, "rendered_claude_kb_main")
+
+
+def test_kb_tool_is_bridged_as_an_in_process_mcp_server(rendered_kb_module):
+    module = rendered_kb_module
+    assert list(module._kb_mcp_servers()) == ["launchpad_kb"]
+    options = module.build_options()
+    assert list(options.mcp_servers or {}) == ["launchpad_kb"]
+    assert options.allowed_tools == ["Task", "mcp__launchpad_kb"]
+    assert "## Knowledge bases" in module.SYSTEM_PROMPT
+
+
+def test_kb_search_tool_returns_formatted_passages(rendered_kb_module, monkeypatch):
+    module = rendered_kb_module
+    calls: list[dict] = []
+
+    class FakeRuntime:
+        def retrieve(self, **kwargs):
+            calls.append(kwargs)
+            return {
+                "retrievalResults": [
+                    {
+                        "content": {"text": "Fund AUM was 1.2bn."},
+                        "score": 0.4231,
+                        "location": {"s3Location": {"uri": "s3://bucket/fund.pdf"}},
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(module, "_kb_runtime", FakeRuntime)
+    result = asyncio.run(module.kb_search.handler({"query": "aum", "kb_id": ""}))
+
+    assert [c["knowledgeBaseId"] for c in calls] == ["KB111"]
+    text = result["content"][0]["text"]
+    assert "Fund AUM was 1.2bn." in text
+    assert "score=0.4231" in text and "s3://bucket/fund.pdf" in text
+
+
+def test_kb_search_degrades_readably(rendered_kb_module, monkeypatch):
+    module = rendered_kb_module
+
+    class DenyingRuntime:
+        def retrieve(self, **_kwargs):
+            raise RuntimeError("AccessDeniedException: bedrock:Retrieve")
+
+    monkeypatch.setattr(module, "_kb_runtime", DenyingRuntime)
+    text = module.kb_search_text("aum")
+    assert text.startswith("[fund-docs] search failed: RuntimeError:")
+
+    assert "not mounted" in module.kb_search_text("aum", "KB999")
+    assert "non-empty query" in module.kb_search_text("  ")
+
+
+def test_no_kb_agent_has_no_kb_server(tmp_path: Path, monkeypatch):
+    module = _import_rendered(SPEC, tmp_path, monkeypatch, "rendered_claude_nokb_main")
+    assert module._kb_mcp_servers() == {}
+    assert module.build_options().mcp_servers in (None, {})
+    assert module.kb_search_text("anything") == "no knowledge bases are mounted on this agent."
 
 
 class FakeMemorySession:

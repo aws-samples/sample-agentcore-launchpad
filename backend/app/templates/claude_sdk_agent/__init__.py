@@ -6,6 +6,14 @@ from pathlib import Path
 from typing import Any
 
 from app.schemas.agent import AgentSpec
+from app.templates.kb_support import (
+    KB_MCP_SERVER,
+    KB_RESULTS,
+    KB_TOOL_NAME,
+    kb_prompt_section,
+    kb_tool_description,
+    mounted_kbs,
+)
 
 TEMPLATE_DIR = Path(__file__).parent
 
@@ -39,15 +47,27 @@ def _mcp_servers(spec: AgentSpec) -> dict[str, Any]:
 
 def render_main_py(spec: AgentSpec) -> str:
     mcp_config = _mcp_servers(spec)
+    kbs = mounted_kbs(spec)
     allowed = list(DEFAULT_ALLOWED_TOOLS)
     if spec.skills:
         allowed.append("Skill")  # the tool Claude Code invokes agent skills through
     allowed += [f"mcp__{name}" for name in mcp_config]
+    if kbs:
+        # server-level allow, same convention as the registry MCP chips above —
+        # the in-process KB server is assembled at runtime, not in mcp_config
+        allowed.append(f"mcp__{KB_MCP_SERVER}")
     source = (TEMPLATE_DIR / "main.py.tmpl").read_text(encoding="utf-8")
     return (
         source.replace("__LAUNCHPAD_AGENT_NAME__", spec.name)
         .replace("__LAUNCHPAD_MODEL_ID__", spec.model_id)
-        .replace("__LAUNCHPAD_SYSTEM_PROMPT__", repr(spec.system_prompt))
+        .replace(
+            "__LAUNCHPAD_SYSTEM_PROMPT__",
+            repr(spec.system_prompt + kb_prompt_section(kbs, KB_TOOL_NAME)),
+        )
+        .replace("__LAUNCHPAD_MOUNTED_KBS__", repr(kbs))
+        .replace("__LAUNCHPAD_KB_MCP_SERVER__", KB_MCP_SERVER)
+        .replace("__LAUNCHPAD_KB_TOOL_DESCRIPTION__", repr(kb_tool_description(kbs)))
+        .replace("__LAUNCHPAD_KB_RESULTS__", repr(KB_RESULTS))
         .replace("__LAUNCHPAD_MAX_TURNS__", str(spec.max_iterations))
         .replace("__LAUNCHPAD_ALLOWED_TOOLS__", repr(allowed))
         .replace("__LAUNCHPAD_MCP_SERVERS__", repr(mcp_config))

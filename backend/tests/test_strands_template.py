@@ -145,6 +145,111 @@ def test_build_agent_omits_session_manager_without_memory(template_module, monke
     assert not hasattr(agent, "session_manager")
 
 
+KB_SPEC = AgentSpec(**{
+    **SPEC.model_dump(),
+    "knowledge_bases": [
+        {"kb_id": "KB111", "name": "fund-docs", "description": "fund product PDFs"},
+        {"kb_id": "KB222", "name": "faq", "description": ""},
+    ],
+})
+
+
+def _import_rendered(spec, tmp_path: Path, monkeypatch, stem: str):
+    monkeypatch.setattr(strands, "Agent", lambda **kwargs: types.SimpleNamespace(**kwargs))
+    monkeypatch.setattr(strands, "tool", _FakeTool)
+    target = tmp_path / f"{stem}.py"
+    target.write_text(render_main_py(spec), encoding="utf-8")
+    module_spec = importlib.util.spec_from_file_location(stem, target)
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def kb_module(tmp_path: Path, monkeypatch):
+    return _import_rendered(KB_SPEC, tmp_path, monkeypatch, "kb_main")
+
+
+class _FakeRuntime:
+    """Stub bedrock-agent-runtime: KB222 always blows up, KB111 returns a hit."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def retrieve(self, **kwargs):
+        self.calls.append(kwargs)
+        if kwargs["knowledgeBaseId"] == "KB222":
+            raise RuntimeError("index not ready")
+        return {
+            "retrievalResults": [
+                {
+                    "content": {"text": "Fund AUM was 1.2bn as of Aug 2021."},
+                    "score": 0.4231,
+                    "location": {"s3Location": {"uri": "s3://bucket/fund.pdf"}},
+                }
+            ]
+        }
+
+
+def test_kb_render_bakes_refs_and_prompt_section():
+    code = render_main_py(KB_SPEC)
+    assert "__LAUNCHPAD_" not in code
+    for token in ("KB111", "KB222", "fund-docs", "fund product PDFs"):
+        assert token in code
+    assert "## Knowledge bases" in code
+    assert "`kb_search`" in code
+    # description-less KB falls back to its name
+    assert "faq (kb_id `KB222`) — faq" in code
+
+
+def test_kb_tool_registered_only_when_mounted(kb_module, template_module):
+    assert kb_module.MOUNTED_KBS
+    kb_names = [t.tool_name for t in kb_module.build_agent("a", "s").tools]
+    assert "kb_search" in kb_names
+    assert kb_module.DEFAULT_TOOL_DESCRIPTIONS["kb_search"].startswith("Search the mounted")
+
+    assert template_module.MOUNTED_KBS == []
+    assert "kb_search" not in [t.tool_name for t in template_module.build_agent("a", "s").tools]
+    assert "kb_search" not in template_module.DEFAULT_TOOL_DESCRIPTIONS
+    assert template_module.resolve_system_prompt() == SPEC.system_prompt
+
+
+def test_kb_search_fans_out_over_every_mounted_kb(kb_module, monkeypatch):
+    runtime = _FakeRuntime()
+    monkeypatch.setattr(kb_module, "_kb_runtime", lambda: runtime)
+    out = kb_module.kb_search("what was the AUM?")
+    assert [c["knowledgeBaseId"] for c in runtime.calls] == ["KB111", "KB222"]
+    assert runtime.calls[0]["retrievalConfiguration"] == {
+        "managedSearchConfiguration": {"numberOfResults": kb_module.KB_RESULTS}
+    }
+    assert "Fund AUM was 1.2bn" in out
+    assert "score=0.4231" in out
+    assert "s3://bucket/fund.pdf" in out
+    # a broken KB degrades to a line, it does not raise
+    assert "[faq] search failed: RuntimeError: index not ready" in out
+
+
+def test_kb_search_targets_one_kb_and_rejects_unknown_ids(kb_module, monkeypatch):
+    runtime = _FakeRuntime()
+    monkeypatch.setattr(kb_module, "_kb_runtime", lambda: runtime)
+
+    kb_module.kb_search("aum", "KB111")
+    assert [c["knowledgeBaseId"] for c in runtime.calls] == ["KB111"]
+
+    out = kb_module.kb_search("aum", "KB999")
+    assert "not mounted" in out and "KB111, KB222" in out
+    assert len(runtime.calls) == 1  # no request issued for an unmounted id
+
+    assert "non-empty query" in kb_module.kb_search("   ")
+
+
+def test_kb_search_reports_empty_results(kb_module, monkeypatch):
+    monkeypatch.setattr(
+        kb_module, "_kb_runtime", lambda: types.SimpleNamespace(retrieve=lambda **_: {})
+    )
+    assert kb_module.kb_search("aum", "KB111") == "[fund-docs] no matching passages."
+
+
 def test_build_agent_scopes_memory_to_actor_and_session(template_module, monkeypatch):
     captured = {}
 

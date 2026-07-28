@@ -68,9 +68,15 @@ def memory_session_manager(
 AGENT_NAME = "__LAUNCHPAD_AGENT_NAME__"
 MODEL_ID = "__LAUNCHPAD_MODEL_ID__"
 DEFAULT_SYSTEM_PROMPT = __LAUNCHPAD_SYSTEM_PROMPT__
+# Managed knowledge bases mounted on this agent ([] when none). Retrieval goes
+# straight to the Bedrock data plane with the runtime execution role — no
+# gateway, no token: the platform grants bedrock:Retrieve on knowledge-base/*.
+MOUNTED_KBS: list[dict[str, str]] = __LAUNCHPAD_MOUNTED_KBS__
+KB_RESULTS = __LAUNCHPAD_KB_RESULTS__
 DEFAULT_TOOL_DESCRIPTIONS: dict[str, str] = {
     "calculator": "Evaluate a basic arithmetic expression (+ - * / ** parentheses) and return the numeric result.",
     "current_utc_time": "Return the current UTC date and time in ISO-8601 format.",
+    **__LAUNCHPAD_KB_TOOL_DESCRIPTION__,
     **__LAUNCHPAD_TOOL_DESCRIPTION_OVERRIDES__,
 }
 
@@ -135,8 +141,74 @@ def current_utc_time() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _kb_runtime():
+    return boto3.client(
+        "bedrock-agent-runtime", region_name=os.environ.get("AWS_REGION", "us-west-2")
+    )
+
+
+def _format_passages(kb_name: str, results: list[dict[str, Any]]) -> str:
+    if not results:
+        return f"[{kb_name}] no matching passages."
+    lines = [f"[{kb_name}] {len(results)} passage(s):"]
+    for index, result in enumerate(results, start=1):
+        text = (result.get("content") or {}).get("text", "").strip()
+        score = result.get("score")
+        source = ""
+        for value in (result.get("location") or {}).values():
+            if isinstance(value, dict):
+                source = value.get("uri") or value.get("url") or ""
+                if source:
+                    break
+        header = f"{index}."
+        if score is not None:
+            header += f" score={score:.4f}"
+        if source:
+            header += f" · source={source}"
+        lines.append(f"{header}\n{text}")
+    return "\n".join(lines)
+
+
+def _retrieve_one(kb: dict[str, str], query: str) -> str:
+    """One Retrieve call, failures folded into the returned text — a broken or
+    unauthorized knowledge base must never abort the turn."""
+    try:
+        response = _kb_runtime().retrieve(
+            knowledgeBaseId=kb["kb_id"],
+            retrievalQuery={"text": query},
+            retrievalConfiguration={
+                "managedSearchConfiguration": {"numberOfResults": KB_RESULTS}
+            },
+        )
+    except Exception as exc:
+        return f"[{kb['name']}] search failed: {type(exc).__name__}: {exc}"
+    return _format_passages(kb["name"], response.get("retrievalResults", []))
+
+
+@tool
+def kb_search(query: str, kb_id: str = "") -> str:
+    """Search the mounted managed knowledge bases and return matching passages.
+
+    Leave kb_id empty to search every mounted knowledge base; pass one kb_id to
+    target a single one.
+    """
+    if not MOUNTED_KBS:
+        return "no knowledge bases are mounted on this agent."
+    if not query.strip():
+        return "kb_search needs a non-empty query."
+    targets = MOUNTED_KBS
+    if kb_id:
+        targets = [kb for kb in MOUNTED_KBS if kb["kb_id"] == kb_id]
+        if not targets:
+            mounted = ", ".join(kb["kb_id"] for kb in MOUNTED_KBS)
+            return f"knowledge base '{kb_id}' is not mounted. Mounted: {mounted}."
+    return "\n\n".join(_retrieve_one(kb, query) for kb in targets)
+
+
 def build_agent(actor_id: str, session_id: str) -> Agent:
     tools = [calculator, current_utc_time]
+    if MOUNTED_KBS:
+        tools.append(kb_search)
     for t in tools:
         override = resolve_tool_description(t.tool_name)
         if override:

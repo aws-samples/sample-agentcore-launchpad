@@ -167,7 +167,11 @@ def _strip_kb_from_agents(kb_id: str) -> list[str]:
     and re-sync their per-agent agentic targets so retrieval doesn't dangle on a
     deleted KB id (and later re-publishes don't try to recreate its target).
     The deployed harness keeps its stale prompt section until the next
-    re-publish — harmless, the tool itself no longer routes to the dead KB."""
+    re-publish — harmless, the tool itself no longer routes to the dead KB.
+
+    Only harness agents have a kb-gw target: zip/container agents retrieve
+    directly through bedrock-agent-runtime, so touching the gateway for them
+    would CREATE a target nothing ever uses."""
     gateway_id = get_settings().resources.get("kb_gateway_id")
     control = control_client() if gateway_id else None
     stripped: list[str] = []
@@ -182,7 +186,7 @@ def _strip_kb_from_agents(kb_id: str) -> list[str]:
             spec["knowledge_bases"] = remaining
             agent.spec = spec
             stripped.append(agent.name)
-            if control and gateway_id:
+            if control and gateway_id and spec.get("method") == "harness":
                 try:
                     kb_gateway.sync_agentic_target(
                         control,

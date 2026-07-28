@@ -113,6 +113,36 @@ def test_execution_role_reads_skill_bundles(template: Template):
     )
 
 
+def test_execution_role_can_retrieve_managed_kbs(template: Template):
+    """zip_runtime/container agents mount KBs by calling the Bedrock data plane
+    with the exec role — without this the generated kb_search tool only ever
+    returns AccessDeniedException."""
+    template.has_resource_properties(
+        "AWS::IAM::Policy",
+        Match.object_like(
+            {
+                "PolicyDocument": Match.object_like(
+                    {
+                        "Statement": Match.array_with(
+                            [
+                                Match.object_like(
+                                    {
+                                        "Sid": "ManagedKbRetrieval",
+                                        "Action": [
+                                            "bedrock:Retrieve",
+                                            "bedrock:GetKnowledgeBase",
+                                        ],
+                                    }
+                                ),
+                            ]
+                        )
+                    }
+                )
+            }
+        ),
+    )
+
+
 def test_outputs_exported(template: Template):
     outputs = template.to_json()["Outputs"]
     for key in (
