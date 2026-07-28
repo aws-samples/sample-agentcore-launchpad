@@ -58,32 +58,32 @@ Out of scope (explicitly):
 
 ## Acceptance criteria
 
-- [ ] `POST /api/agents` with `method=zip_runtime` or `container` + `knowledge_bases` is
+- [x] `POST /api/agents` with `method=zip_runtime` or `container` + `knowledge_bases` is
       accepted (no 422); `method=studio` and `protocol=a2a` still 422 with a message that
       names the actual constraint.
-- [ ] The rendered Strands `main.py` for a spec with 2 KBs compiles, registers a
+- [x] The rendered Strands `main.py` for a spec with 2 KBs compiles, registers a
       `kb_search` tool, carries both kb ids/names/descriptions, and appends a
       「Knowledge bases」 system-prompt section naming `kb_search`. With no KBs,
       `MOUNTED_KBS == []`, no prompt section, and `kb_search` is **not** registered on the
       agent (the helper stays in the file — the template is one valid Python module with
       placeholders, not conditionally spliced text).
-- [ ] The rendered container `main.py` compiles, builds an SDK-MCP server named
+- [x] The rendered container `main.py` compiles, builds an SDK-MCP server named
       `launchpad_kb`, and `ALLOWED_TOOLS` contains `mcp__launchpad_kb`. With no KBs,
       unchanged from today.
-- [ ] `kb_search` returns formatted passages with score + source URI, and a readable
+- [x] `kb_search` returns formatted passages with score + source URI, and a readable
       message (not a traceback) when the KB is missing or access is denied.
-- [ ] The CDK synth of `launchpad-base` contains `bedrock:Retrieve` on the agent
+- [x] The CDK synth of `launchpad-base` contains `bedrock:Retrieve` on the agent
       execution role.
-- [ ] Deleting a KB with `force` does not create/patch a `launchpad-kb-gw` agentic target
+- [x] Deleting a KB with `force` does not create/patch a `launchpad-kb-gw` agentic target
       for a non-harness agent.
-- [ ] CreateAgent lets a container/zip agent select KBs; re-opening EDIT on such an agent
+- [x] CreateAgent lets a container/zip agent select KBs; re-opening EDIT on such an agent
       restores the selection; i18n parity passes.
-- [ ] `make verify` green.
-- [ ] Real AWS: one `zip_runtime` and one `container` agent deployed with a managed KB
+- [x] `make verify` green.
+- [x] Real AWS: one `zip_runtime` and one `container` agent deployed with a managed KB
       mounted, each invoked with a question only answerable from the indexed document,
       both answers grounded in retrieved content; job logs + invoke output captured under
       the task `research/` dir.
-- [ ] `docs/lab/02-deploy-runtime.md` row 23 no longer says 不支持 for 方式A / ZIP, and
+- [x] `docs/lab/02-deploy-runtime.md` row 23 no longer says 不支持 for 方式A / ZIP, and
       explains that the three methods reach KBs by different channels.
 
 ## Non-goals / risks
