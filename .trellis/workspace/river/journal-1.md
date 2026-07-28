@@ -1545,3 +1545,25 @@ Diagnosed why /observability?tab=sessions&session=ee760f57-... showed 'no memory
 ### Status
 
 [OK] **Completed**
+
+
+## Session 26: Support AgentCore unified observability log groups
+
+**Date**: 2026-07-28
+**Task**: Support AgentCore unified observability log groups
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Updated Observability to query legacy aws/spans and unified per-runtime log groups via CWLI SOURCE, filter mixed groups to span records, preserve service/session/model metadata with latest(), add regression tests and bilingual architecture/spec documentation. Live us-west-2 query and make verify passed.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `49dfc0f` | (see git log) |
+
+### Status
+
+[OK] **Completed**
