@@ -217,7 +217,7 @@
       "kbLabel": "知识库 — 托管 RAG",
       "kbEmpty": "暂无可用知识库 · 请先创建",
       "kbNote": "Harness 方式会把知识库以网关检索工具的形式挂载（逐库检索 + 多步 agentic 检索）。你为每个知识库填写的描述会引导 Agent 何时检索它。",
-      "kbNoteDirect": "生成的 Agent 代码里会内置 kb_search 工具，用运行时执行角色直接调用 Bedrock 检索 API 查询这些知识库。仅单次检索（无 agentic 多步）；改变选择需要重新发布。",
+      "kbNoteDirect": "生成的 Agent 代码里会内置两个工具，用运行时执行角色直接调用 Bedrock 检索 API 查询这些知识库：kb_search（单次相似度检索，快）与 kb_deep_search（agentic 多步 —— 规划子查询并返回带引用的答案，较慢且更贵）。改变选择需要重新发布。",
       "kbMountedTitle": "已挂载知识库",
       "protocol": "服务协议",
       "protocolHttp": "HTTP · 标准 invocations",

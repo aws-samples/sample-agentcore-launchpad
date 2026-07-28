@@ -8,8 +8,12 @@ from pathlib import Path
 
 from app.schemas.agent import AgentSpec
 from app.templates.kb_support import (
+    KB_DEEP_ITERATIONS_MULTI,
+    KB_DEEP_ITERATIONS_SINGLE,
+    KB_DEEP_TOOL_NAME,
     KB_RESULTS,
     KB_TOOL_NAME,
+    kb_deep_tool_description,
     kb_prompt_section,
     kb_tool_description,
     mounted_kbs,
@@ -21,17 +25,30 @@ TEMPLATE_DIR = Path(__file__).parent
 def render_main_py(spec: AgentSpec) -> str:
     source = (TEMPLATE_DIR / "main.py.tmpl").read_text(encoding="utf-8")
     kbs = mounted_kbs(spec)
-    # kb_search lands in DEFAULT_TOOL_DESCRIPTIONS so the config-bundle A/B
-    # contract can tune it; spec overrides still win (they merge after).
-    kb_description = {KB_TOOL_NAME: kb_tool_description(kbs)} if kbs else {}
-    system_prompt = spec.system_prompt + kb_prompt_section(kbs, KB_TOOL_NAME)
+    # Both KB tools land in DEFAULT_TOOL_DESCRIPTIONS so the config-bundle A/B
+    # contract can tune each one; spec overrides still win (they merge after).
+    kb_descriptions = (
+        {
+            KB_TOOL_NAME: kb_tool_description(kbs),
+            KB_DEEP_TOOL_NAME: kb_deep_tool_description(kbs),
+        }
+        if kbs
+        else {}
+    )
+    system_prompt = spec.system_prompt + kb_prompt_section(kbs)
     return (
         source.replace("__LAUNCHPAD_AGENT_NAME__", spec.name)
         .replace("__LAUNCHPAD_MODEL_ID__", spec.model_id)
         .replace("__LAUNCHPAD_SYSTEM_PROMPT__", repr(system_prompt))
         .replace("__LAUNCHPAD_MOUNTED_KBS__", repr(kbs))
         .replace("__LAUNCHPAD_KB_RESULTS__", repr(KB_RESULTS))
-        .replace("__LAUNCHPAD_KB_TOOL_DESCRIPTION__", repr(kb_description))
+        .replace(
+            "__LAUNCHPAD_KB_DEEP_ITERATIONS_SINGLE__", repr(KB_DEEP_ITERATIONS_SINGLE)
+        )
+        .replace(
+            "__LAUNCHPAD_KB_DEEP_ITERATIONS_MULTI__", repr(KB_DEEP_ITERATIONS_MULTI)
+        )
+        .replace("__LAUNCHPAD_KB_TOOL_DESCRIPTIONS__", repr(kb_descriptions))
         .replace(
             "__LAUNCHPAD_TOOL_DESCRIPTION_OVERRIDES__",
             repr(spec.tool_description_overrides),

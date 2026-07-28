@@ -217,7 +217,7 @@
       "kbLabel": "KNOWLEDGE BASES — MANAGED RAG",
       "kbEmpty": "no active knowledge bases · create one first",
       "kbNote": "Harness agents get the knowledge bases attached as gateway retrieval tools (per-KB search plus multi-step agentic retrieval). The description you gave each KB guides when the agent queries it.",
-      "kbNoteDirect": "The generated agent gets a kb_search tool that queries these knowledge bases through the Bedrock retrieval API with its execution role. Single-shot retrieval (no agentic multi-step); changing the selection needs a re-publish.",
+      "kbNoteDirect": "The generated agent gets two tools that query these knowledge bases through the Bedrock retrieval API with its execution role: kb_search (one similarity search, fast) and kb_deep_search (agentic multi-step — plans sub-queries and returns a cited answer, slower and more expensive). Changing the selection needs a re-publish.",
       "kbMountedTitle": "KNOWLEDGE BASES — MOUNTED",
       "protocol": "SERVICE PROTOCOL",
       "protocolHttp": "HTTP · standard invocations",

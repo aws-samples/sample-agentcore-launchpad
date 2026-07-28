@@ -171,10 +171,17 @@ def kb_module(tmp_path: Path, monkeypatch):
 
 
 class _FakeRuntime:
-    """Stub bedrock-agent-runtime: KB222 always blows up, KB111 returns a hit."""
+    """Stub bedrock-agent-runtime: KB222 always blows up, KB111 returns a hit.
+
+    ``agentic_retrieve_stream`` replays the event sequence a live call produced on
+    2026-07-28 (trace steps → result); ``deep_stream`` can be swapped to exercise
+    the in-stream error members.
+    """
 
     def __init__(self):
         self.calls: list[dict] = []
+        self.deep_calls: list[dict] = []
+        self.deep_stream: list[dict] | None = None
 
     def retrieve(self, **kwargs):
         self.calls.append(kwargs)
@@ -190,6 +197,32 @@ class _FakeRuntime:
             ]
         }
 
+    def agentic_retrieve_stream(self, **kwargs):
+        self.deep_calls.append(kwargs)
+        events = self.deep_stream
+        if events is None:
+            events = [
+                {"traceEvent": {"attributes": {
+                    "step": "SpeculativeRetrieval", "status": "SUCCEEDED"}}},
+                {"traceEvent": {"attributes": {"step": "Planning", "status": "SUCCEEDED"}}},
+                # answer deltas the tool must ignore (result carries the full text)
+                {"responseEvent": {"text": "Global "}},
+                {"responseEvent": {"text": "Emerging"}},
+                {"result": {
+                    "generatedResponse": {
+                        "answer": "Global Emerging Markets is $10,706 MM.",
+                        "citations": [{"startIndex": 0}, {"startIndex": 9}],
+                    },
+                    "results": [{
+                        "content": {"text": "TOTAL AUM: $19,217 MM"},
+                        "metadata": {"_source_uri": "s3://bucket/fund.pdf",
+                                     "_document_title": "MS Oct 21"},
+                        "sourceRetriever": {"identifier": "KB111"},
+                    }],
+                }},
+            ]
+        return {"stream": iter(events)}
+
 
 def test_kb_render_bakes_refs_and_prompt_section():
     code = render_main_py(KB_SPEC)
@@ -197,20 +230,25 @@ def test_kb_render_bakes_refs_and_prompt_section():
     for token in ("KB111", "KB222", "fund-docs", "fund product PDFs"):
         assert token in code
     assert "## Knowledge bases" in code
-    assert "`kb_search`" in code
+    # the section must steer between both tools, not just announce one
+    assert "`kb_search`" in code and "`kb_deep_search`" in code
     # description-less KB falls back to its name
     assert "faq (kb_id `KB222`) — faq" in code
 
 
-def test_kb_tool_registered_only_when_mounted(kb_module, template_module):
+def test_kb_tools_registered_only_when_mounted(kb_module, template_module):
     assert kb_module.MOUNTED_KBS
     kb_names = [t.tool_name for t in kb_module.build_agent("a", "s").tools]
-    assert "kb_search" in kb_names
+    assert "kb_search" in kb_names and "kb_deep_search" in kb_names
+    # both descriptions are A/B-tunable through the config-bundle contract
     assert kb_module.DEFAULT_TOOL_DESCRIPTIONS["kb_search"].startswith("Search the mounted")
+    assert kb_module.DEFAULT_TOOL_DESCRIPTIONS["kb_deep_search"].startswith("Deep-search")
 
     assert template_module.MOUNTED_KBS == []
-    assert "kb_search" not in [t.tool_name for t in template_module.build_agent("a", "s").tools]
+    plain = [t.tool_name for t in template_module.build_agent("a", "s").tools]
+    assert "kb_search" not in plain and "kb_deep_search" not in plain
     assert "kb_search" not in template_module.DEFAULT_TOOL_DESCRIPTIONS
+    assert "kb_deep_search" not in template_module.DEFAULT_TOOL_DESCRIPTIONS
     assert template_module.resolve_system_prompt() == SPEC.system_prompt
 
 
@@ -248,6 +286,93 @@ def test_kb_search_reports_empty_results(kb_module, monkeypatch):
         kb_module, "_kb_runtime", lambda: types.SimpleNamespace(retrieve=lambda **_: {})
     )
     assert kb_module.kb_search("aum", "KB111") == "[fund-docs] no matching passages."
+
+
+def test_kb_deep_search_returns_answer_citations_and_passages(kb_module, monkeypatch):
+    runtime = _FakeRuntime()
+    monkeypatch.setattr(kb_module, "_kb_runtime", lambda: runtime)
+
+    out = kb_module.kb_deep_search("compare the two strategies")
+
+    (call,) = runtime.deep_calls
+    # content is a STRUCT, not a list — the AWS blog example's shape is wrong
+    assert call["messages"] == [
+        {"role": "user", "content": {"text": "compare the two strategies"}}
+    ]
+    assert [r["configuration"]["knowledgeBase"]["knowledgeBaseId"] for r in call["retrievers"]] == [
+        "KB111",
+        "KB222",
+    ]
+    cfg = call["agenticRetrieveConfiguration"]
+    assert cfg["foundationModelType"] == "MANAGED"
+    assert cfg["rerankingModelType"] == "MANAGED"
+    # two retrievers → the multi-KB iteration budget
+    assert cfg["maxAgentIteration"] == kb_module.KB_DEEP_ITERATIONS_MULTI
+
+    assert "planner steps: SpeculativeRetrieval:SUCCEEDED, Planning:SUCCEEDED" in out
+    assert "answer (2 citation(s)):" in out
+    assert "Global Emerging Markets is $10,706 MM." in out
+    assert "supporting passages (1):" in out
+    # agentic results carry no score/location — kb id + metadata uri instead
+    assert "kb=KB111" in out and "source=s3://bucket/fund.pdf" in out
+    # the responseEvent deltas must not be duplicated into the output
+    assert out.count("Global Emerging") == 1
+
+
+def test_kb_deep_search_single_kb_uses_smaller_iteration_budget(kb_module, monkeypatch):
+    runtime = _FakeRuntime()
+    monkeypatch.setattr(kb_module, "_kb_runtime", lambda: runtime)
+    kb_module.kb_deep_search("aum", "KB111")
+    cfg = runtime.deep_calls[0]["agenticRetrieveConfiguration"]
+    assert cfg["maxAgentIteration"] == kb_module.KB_DEEP_ITERATIONS_SINGLE
+
+
+def test_kb_deep_search_surfaces_in_stream_error_members(kb_module, monkeypatch):
+    """Modeled errors arrive INSIDE the event stream, not only as raises."""
+    runtime = _FakeRuntime()
+    runtime.deep_stream = [
+        {"accessDeniedException": {"message": "not authorized to AgenticRetrieveStream"}}
+    ]
+    monkeypatch.setattr(kb_module, "_kb_runtime", lambda: runtime)
+    out = kb_module.kb_deep_search("aum")
+    assert out == (
+        "deep search failed: accessDeniedException: "
+        "not authorized to AgenticRetrieveStream"
+    )
+
+
+def test_kb_deep_search_reports_trace_failures_and_missing_result(kb_module, monkeypatch):
+    runtime = _FakeRuntime()
+    runtime.deep_stream = [
+        {"traceEvent": {"attributes": {
+            "step": "Retrieval", "status": "FAILED",
+            "failures": [{"message": "retriever timed out"}],
+        }}},
+    ]
+    monkeypatch.setattr(kb_module, "_kb_runtime", lambda: runtime)
+    assert kb_module.kb_deep_search("aum") == "deep search returned no result event."
+
+    runtime.deep_stream = runtime.deep_stream + [{"result": {"results": []}}]
+    out = kb_module.kb_deep_search("aum")
+    assert "note: retriever timed out" in out
+    assert "no supporting passages returned." in out
+
+
+def test_kb_deep_search_degrades_on_raise_and_bad_id(kb_module, monkeypatch):
+    def _boom():
+        raise RuntimeError("endpoint unreachable")
+
+    monkeypatch.setattr(kb_module, "_kb_runtime", _boom)
+    assert kb_module.kb_deep_search("aum") == (
+        "deep search failed: RuntimeError: endpoint unreachable"
+    )
+
+    runtime = _FakeRuntime()
+    monkeypatch.setattr(kb_module, "_kb_runtime", lambda: runtime)
+    out = kb_module.kb_deep_search("aum", "KB999")
+    assert "not mounted" in out and "KB111, KB222" in out
+    assert runtime.deep_calls == []  # no request issued for an unmounted id
+    assert "non-empty query" in kb_module.kb_deep_search("   ")
 
 
 def test_build_agent_scopes_memory_to_actor_and_session(template_module, monkeypatch):

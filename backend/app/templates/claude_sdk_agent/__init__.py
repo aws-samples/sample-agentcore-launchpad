@@ -7,9 +7,11 @@ from typing import Any
 
 from app.schemas.agent import AgentSpec
 from app.templates.kb_support import (
+    KB_DEEP_ITERATIONS_MULTI,
+    KB_DEEP_ITERATIONS_SINGLE,
     KB_MCP_SERVER,
     KB_RESULTS,
-    KB_TOOL_NAME,
+    kb_deep_tool_description,
     kb_prompt_section,
     kb_tool_description,
     mounted_kbs,
@@ -54,7 +56,9 @@ def render_main_py(spec: AgentSpec) -> str:
     allowed += [f"mcp__{name}" for name in mcp_config]
     if kbs:
         # server-level allow, same convention as the registry MCP chips above —
-        # the in-process KB server is assembled at runtime, not in mcp_config
+        # the in-process KB server is assembled at runtime, not in mcp_config.
+        # Server-level means every tool it carries (kb_search, kb_deep_search) is
+        # covered by this one entry.
         allowed.append(f"mcp__{KB_MCP_SERVER}")
     source = (TEMPLATE_DIR / "main.py.tmpl").read_text(encoding="utf-8")
     return (
@@ -62,12 +66,22 @@ def render_main_py(spec: AgentSpec) -> str:
         .replace("__LAUNCHPAD_MODEL_ID__", spec.model_id)
         .replace(
             "__LAUNCHPAD_SYSTEM_PROMPT__",
-            repr(spec.system_prompt + kb_prompt_section(kbs, KB_TOOL_NAME)),
+            repr(spec.system_prompt + kb_prompt_section(kbs)),
         )
         .replace("__LAUNCHPAD_MOUNTED_KBS__", repr(kbs))
         .replace("__LAUNCHPAD_KB_MCP_SERVER__", KB_MCP_SERVER)
+        .replace(
+            "__LAUNCHPAD_KB_DEEP_TOOL_DESCRIPTION__",
+            repr(kb_deep_tool_description(kbs)),
+        )
         .replace("__LAUNCHPAD_KB_TOOL_DESCRIPTION__", repr(kb_tool_description(kbs)))
         .replace("__LAUNCHPAD_KB_RESULTS__", repr(KB_RESULTS))
+        .replace(
+            "__LAUNCHPAD_KB_DEEP_ITERATIONS_SINGLE__", repr(KB_DEEP_ITERATIONS_SINGLE)
+        )
+        .replace(
+            "__LAUNCHPAD_KB_DEEP_ITERATIONS_MULTI__", repr(KB_DEEP_ITERATIONS_MULTI)
+        )
         .replace("__LAUNCHPAD_MAX_TURNS__", str(spec.max_iterations))
         .replace("__LAUNCHPAD_ALLOWED_TOOLS__", repr(allowed))
         .replace("__LAUNCHPAD_MCP_SERVERS__", repr(mcp_config))

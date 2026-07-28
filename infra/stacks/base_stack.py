@@ -286,10 +286,9 @@ class LaunchpadBaseStack(Stack):
             )
         )
         # Managed KB retrieval for the code-generating methods (zip_runtime /
-        # container): their generated kb_search tool calls the Bedrock data plane
-        # directly with this role instead of going through launchpad-kb-gw, which
-        # only a managed Harness can attach. AgenticRetrieveStream is deliberately
-        # NOT granted — the direct channel is single-shot Retrieve only.
+        # container): their generated kb_search / kb_deep_search tools call the
+        # Bedrock data plane directly with this role instead of going through
+        # launchpad-kb-gw, which only a managed Harness can attach.
         exec_role.add_to_policy(
             iam.PolicyStatement(
                 sid="ManagedKbRetrieval",
@@ -297,6 +296,21 @@ class LaunchpadBaseStack(Stack):
                 resources=[
                     f"arn:aws:bedrock:{self.region}:{self.account}:knowledge-base/*"
                 ],
+            )
+        )
+        # kb_deep_search (agentic multi-step retrieval). Kept as its own statement
+        # so the '*' resource is visible in isolation to anyone reading the role:
+        # AgenticRetrieveStream is NOT resource-scopable, so every Launchpad
+        # runtime can agentic-retrieve against any KB in the account. Accepted —
+        # launchpad-gateway-role already carries the same grant for the harness
+        # channel. The MANAGED foundation/reranking model types mean the service
+        # supplies the planner, so no extra model grant is needed beyond the
+        # account-wide bedrock:InvokeModel above.
+        exec_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="ManagedKbAgenticRetrieval",
+                actions=["bedrock:AgenticRetrieveStream"],
+                resources=["*"],
             )
         )
         exec_role.add_to_policy(

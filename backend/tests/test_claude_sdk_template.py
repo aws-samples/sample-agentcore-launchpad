@@ -137,7 +137,9 @@ def test_render_without_kbs_leaves_retrieval_inert():
     code = render_main_py(SPEC)
     assert "MOUNTED_KBS: list[dict[str, str]] = []" in code
     assert "KB_TOOL_DESCRIPTION = ''" in code
-    assert "mcp__launchpad_kb" not in code
+    assert "KB_DEEP_TOOL_DESCRIPTION = ''" in code
+    # not allow-listed (the name still appears in the template's own comments)
+    assert "ALLOWED_TOOLS: list[str] = ['Task']" in code
     assert "## Knowledge bases" not in code
 
 
@@ -146,9 +148,12 @@ def test_render_mounts_kb_mcp_server_and_prompt_section(tmp_path: Path):
     assert "__LAUNCHPAD_" not in code
     assert "'kb_id': 'KB111'" in code
     assert 'KB_MCP_SERVER = "launchpad_kb"' in code
+    # server-level allow covers every tool the in-process server carries, so
+    # adding kb_deep_search must NOT add an ALLOWED_TOOLS entry
     assert "ALLOWED_TOOLS: list[str] = ['Task', 'mcp__launchpad_kb']" in code
     assert "## Knowledge bases" in code
     assert "fund product PDFs" in code
+    assert "KB_DEEP_TOOL_DESCRIPTION = 'Deep-search" in code
     target = tmp_path / "kb_main.py"
     target.write_text(code, encoding="utf-8")
     py_compile.compile(str(target), doraise=True)
@@ -342,13 +347,80 @@ def rendered_kb_module(tmp_path: Path, monkeypatch):
     return _import_rendered(KB_SPEC, tmp_path, monkeypatch, "rendered_claude_kb_main")
 
 
-def test_kb_tool_is_bridged_as_an_in_process_mcp_server(rendered_kb_module):
+def test_kb_tools_are_bridged_as_one_in_process_mcp_server(rendered_kb_module):
     module = rendered_kb_module
     assert list(module._kb_mcp_servers()) == ["launchpad_kb"]
+    assert [module.kb_search.name, module.kb_deep_search.name] == [
+        "kb_search",
+        "kb_deep_search",
+    ]
     options = module.build_options()
     assert list(options.mcp_servers or {}) == ["launchpad_kb"]
     assert options.allowed_tools == ["Task", "mcp__launchpad_kb"]
     assert "## Knowledge bases" in module.SYSTEM_PROMPT
+    assert "`kb_deep_search`" in module.SYSTEM_PROMPT
+
+
+def test_kb_deep_search_tool_returns_answer_and_passages(rendered_kb_module, monkeypatch):
+    module = rendered_kb_module
+    calls: list[dict] = []
+
+    class FakeRuntime:
+        def agentic_retrieve_stream(self, **kwargs):
+            calls.append(kwargs)
+            return {"stream": iter([
+                {"traceEvent": {"attributes": {"step": "Planning", "status": "SUCCEEDED"}}},
+                {"responseEvent": {"text": "ignored delta"}},
+                {"result": {
+                    "generatedResponse": {"answer": "AUM is $10,706 MM.",
+                                          "citations": [{"startIndex": 0}]},
+                    "results": [{
+                        "content": {"text": "TOTAL AUM: $19,217 MM"},
+                        "metadata": {"_source_uri": "s3://bucket/fund.pdf"},
+                        "sourceRetriever": {"identifier": "KB111"},
+                    }],
+                }},
+            ])}
+
+    monkeypatch.setattr(module, "_kb_runtime", FakeRuntime)
+    result = asyncio.run(module.kb_deep_search.handler({"query": "aum", "kb_id": ""}))
+    text = result["content"][0]["text"]
+
+    assert calls[0]["messages"] == [{"role": "user", "content": {"text": "aum"}}]
+    # one mounted KB → the single-KB iteration budget
+    assert (
+        calls[0]["agenticRetrieveConfiguration"]["maxAgentIteration"]
+        == module.KB_DEEP_ITERATIONS_SINGLE
+    )
+    assert "planner steps: Planning:SUCCEEDED" in text
+    assert "answer (1 citation(s)):" in text and "AUM is $10,706 MM." in text
+    assert "kb=KB111" in text and "source=s3://bucket/fund.pdf" in text
+    assert "ignored delta" not in text
+
+
+def test_kb_deep_search_degrades_readably(rendered_kb_module, monkeypatch):
+    module = rendered_kb_module
+
+    class DenyingRuntime:
+        def agentic_retrieve_stream(self, **_kwargs):
+            return {"stream": iter([
+                {"accessDeniedException": {"message": "bedrock:AgenticRetrieveStream"}}
+            ])}
+
+    monkeypatch.setattr(module, "_kb_runtime", DenyingRuntime)
+    assert module.kb_deep_search_text("aum") == (
+        "deep search failed: accessDeniedException: bedrock:AgenticRetrieveStream"
+    )
+
+    def _boom():
+        raise RuntimeError("endpoint unreachable")
+
+    monkeypatch.setattr(module, "_kb_runtime", _boom)
+    assert module.kb_deep_search_text("aum").startswith(
+        "deep search failed: RuntimeError:"
+    )
+    assert "not mounted" in module.kb_deep_search_text("aum", "KB999")
+    assert "non-empty query" in module.kb_deep_search_text("  ")
 
 
 def test_kb_search_tool_returns_formatted_passages(rendered_kb_module, monkeypatch):
@@ -396,7 +468,8 @@ def test_no_kb_agent_has_no_kb_server(tmp_path: Path, monkeypatch):
     module = _import_rendered(SPEC, tmp_path, monkeypatch, "rendered_claude_nokb_main")
     assert module._kb_mcp_servers() == {}
     assert module.build_options().mcp_servers in (None, {})
-    assert module.kb_search_text("anything") == "no knowledge bases are mounted on this agent."
+    for probe in (module.kb_search_text, module.kb_deep_search_text):
+        assert probe("anything") == "no knowledge bases are mounted on this agent."
 
 
 class FakeMemorySession:

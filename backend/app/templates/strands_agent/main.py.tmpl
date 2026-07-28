@@ -70,13 +70,16 @@ MODEL_ID = "__LAUNCHPAD_MODEL_ID__"
 DEFAULT_SYSTEM_PROMPT = __LAUNCHPAD_SYSTEM_PROMPT__
 # Managed knowledge bases mounted on this agent ([] when none). Retrieval goes
 # straight to the Bedrock data plane with the runtime execution role — no
-# gateway, no token: the platform grants bedrock:Retrieve on knowledge-base/*.
+# gateway, no token: the platform grants bedrock:Retrieve (single-shot) and
+# bedrock:AgenticRetrieveStream (planning loop) to the execution role.
 MOUNTED_KBS: list[dict[str, str]] = __LAUNCHPAD_MOUNTED_KBS__
 KB_RESULTS = __LAUNCHPAD_KB_RESULTS__
+KB_DEEP_ITERATIONS_SINGLE = __LAUNCHPAD_KB_DEEP_ITERATIONS_SINGLE__
+KB_DEEP_ITERATIONS_MULTI = __LAUNCHPAD_KB_DEEP_ITERATIONS_MULTI__
 DEFAULT_TOOL_DESCRIPTIONS: dict[str, str] = {
     "calculator": "Evaluate a basic arithmetic expression (+ - * / ** parentheses) and return the numeric result.",
     "current_utc_time": "Return the current UTC date and time in ISO-8601 format.",
-    **__LAUNCHPAD_KB_TOOL_DESCRIPTION__,
+    **__LAUNCHPAD_KB_TOOL_DESCRIPTIONS__,
     **__LAUNCHPAD_TOOL_DESCRIPTION_OVERRIDES__,
 }
 
@@ -185,30 +188,144 @@ def _retrieve_one(kb: dict[str, str], query: str) -> str:
     return _format_passages(kb["name"], response.get("retrievalResults", []))
 
 
+def _kb_targets(kb_id: str) -> list[dict[str, str]] | str:
+    """Resolve which mounted KBs a call addresses, or an error string. Shared by
+    both retrieval tools so they refuse unknown ids identically."""
+    if not MOUNTED_KBS:
+        return "no knowledge bases are mounted on this agent."
+    if not kb_id:
+        return MOUNTED_KBS
+    targets = [kb for kb in MOUNTED_KBS if kb["kb_id"] == kb_id]
+    if not targets:
+        mounted = ", ".join(kb["kb_id"] for kb in MOUNTED_KBS)
+        return f"knowledge base '{kb_id}' is not mounted. Mounted: {mounted}."
+    return targets
+
+
 @tool
 def kb_search(query: str, kb_id: str = "") -> str:
     """Search the mounted managed knowledge bases and return matching passages.
 
-    Leave kb_id empty to search every mounted knowledge base; pass one kb_id to
-    target a single one.
+    One similarity search — fast and cheap. Leave kb_id empty to search every
+    mounted knowledge base; pass one kb_id to target a single one.
     """
-    if not MOUNTED_KBS:
-        return "no knowledge bases are mounted on this agent."
+    targets = _kb_targets(kb_id)
+    if isinstance(targets, str):
+        return targets
     if not query.strip():
         return "kb_search needs a non-empty query."
-    targets = MOUNTED_KBS
-    if kb_id:
-        targets = [kb for kb in MOUNTED_KBS if kb["kb_id"] == kb_id]
-        if not targets:
-            mounted = ", ".join(kb["kb_id"] for kb in MOUNTED_KBS)
-            return f"knowledge base '{kb_id}' is not mounted. Mounted: {mounted}."
     return "\n\n".join(_retrieve_one(kb, query) for kb in targets)
+
+
+_AGENTIC_ERROR_MEMBERS = (
+    "accessDeniedException",
+    "badGatewayException",
+    "conflictException",
+    "dependencyFailedException",
+    "internalServerException",
+    "resourceNotFoundException",
+    "serviceQuotaExceededException",
+    "throttlingException",
+    "validationException",
+)
+
+
+def _format_agentic(result: dict[str, Any], steps: list[str], notes: list[str]) -> str:
+    """result event → text. Agentic results carry no score/location: the source
+    uri lives in metadata['_source_uri'] and the KB id in sourceRetriever."""
+    generated = result.get("generatedResponse") or {}
+    answer = (generated.get("answer") or "").strip()
+    citations = generated.get("citations") or []
+    passages = result.get("results") or []
+    lines = []
+    if steps:
+        lines.append("planner steps: " + ", ".join(steps))
+    for note in notes:
+        lines.append(f"note: {note}")
+    if answer:
+        lines.append(f"answer ({len(citations)} citation(s)):\n{answer}")
+    if not passages:
+        lines.append("no supporting passages returned.")
+        return "\n".join(lines)
+    lines.append(f"supporting passages ({len(passages)}):")
+    for index, passage in enumerate(passages, start=1):
+        text = (passage.get("content") or {}).get("text", "").strip()
+        metadata = passage.get("metadata") or {}
+        source = metadata.get("_source_uri") or metadata.get("_document_title") or ""
+        kb = (passage.get("sourceRetriever") or {}).get("identifier", "")
+        header = f"{index}."
+        if kb:
+            header += f" kb={kb}"
+        if source:
+            header += f" · source={source}"
+        lines.append(f"{header}\n{text}")
+    return "\n".join(lines)
+
+
+@tool
+def kb_deep_search(query: str, kb_id: str = "") -> str:
+    """Deep-search the mounted knowledge bases with agentic (multi-step) retrieval.
+
+    A planning loop decomposes the question into sub-queries, searches across the
+    knowledge bases over several rounds, and returns a cited answer plus the
+    supporting passages. Slower and more expensive than kb_search — use it for
+    comparisons, exhaustive lists, summaries, or evidence spread across
+    documents. Leave kb_id empty to search every mounted knowledge base.
+    """
+    targets = _kb_targets(kb_id)
+    if isinstance(targets, str):
+        return targets
+    if not query.strip():
+        return "kb_deep_search needs a non-empty query."
+    iterations = (
+        KB_DEEP_ITERATIONS_SINGLE if len(targets) == 1 else KB_DEEP_ITERATIONS_MULTI
+    )
+    steps: list[str] = []
+    notes: list[str] = []
+    result: dict[str, Any] | None = None
+    try:
+        stream = _kb_runtime().agentic_retrieve_stream(
+            messages=[{"role": "user", "content": {"text": query}}],
+            retrievers=[
+                {
+                    "description": kb["description"][:200],
+                    "configuration": {"knowledgeBase": {"knowledgeBaseId": kb["kb_id"]}},
+                }
+                for kb in targets
+            ],
+            agenticRetrieveConfiguration={
+                "foundationModelType": "MANAGED",
+                "rerankingModelType": "MANAGED",
+                "maxAgentIteration": iterations,
+            },
+        )["stream"]
+        for event in stream:
+            if "traceEvent" in event:
+                attributes = (event["traceEvent"] or {}).get("attributes") or {}
+                steps.append(f"{attributes.get('step')}:{attributes.get('status')}")
+                for failure in attributes.get("failures") or []:
+                    notes.append(str(failure.get("message", ""))[:200])
+            elif "result" in event:
+                result = event["result"] or {}
+            else:
+                # modeled errors arrive INSIDE the stream, not only as raises
+                for member in _AGENTIC_ERROR_MEMBERS:
+                    if member in event:
+                        message = (event[member] or {}).get("message", "")
+                        return f"deep search failed: {member}: {message}"
+            # responseEvent deltas are skipped — result.generatedResponse.answer
+            # is the same text, already complete, and a tool return isn't streamed
+    except Exception as exc:
+        return f"deep search failed: {type(exc).__name__}: {exc}"
+    if result is None:
+        return "deep search returned no result event."
+    return _format_agentic(result, steps, notes)
 
 
 def build_agent(actor_id: str, session_id: str) -> Agent:
     tools = [calculator, current_utc_time]
     if MOUNTED_KBS:
-        tools.append(kb_search)
+        tools += [kb_search, kb_deep_search]
     for t in tools:
         override = resolve_tool_description(t.tool_name)
         if override:

@@ -115,8 +115,9 @@ def test_execution_role_reads_skill_bundles(template: Template):
 
 def test_execution_role_can_retrieve_managed_kbs(template: Template):
     """zip_runtime/container agents mount KBs by calling the Bedrock data plane
-    with the exec role — without this the generated kb_search tool only ever
-    returns AccessDeniedException."""
+    with the exec role — without these the generated kb_search / kb_deep_search
+    tools only ever return AccessDeniedException. AgenticRetrieveStream is not
+    resource-scopable, hence the deliberate '*'."""
     template.has_resource_properties(
         "AWS::IAM::Policy",
         Match.object_like(
@@ -132,6 +133,13 @@ def test_execution_role_can_retrieve_managed_kbs(template: Template):
                                             "bedrock:Retrieve",
                                             "bedrock:GetKnowledgeBase",
                                         ],
+                                    }
+                                ),
+                                Match.object_like(
+                                    {
+                                        "Sid": "ManagedKbAgenticRetrieval",
+                                        "Action": "bedrock:AgenticRetrieveStream",
+                                        "Resource": "*",
                                     }
                                 ),
                             ]
