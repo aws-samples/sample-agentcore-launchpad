@@ -123,6 +123,11 @@ class Settings(BaseSettings):
         "opus-4-8": {"input": 5.0, "output": 25.0},
         "sonnet-4-5": {"input": 3.0, "output": 15.0},
         "nemotron-nano": {"input": 0.2, "output": 0.6},
+        # global.amazon.nova-2-lite-v1:0 has no litellm key of its own (only the
+        # bare + us./eu./apac. ids), so a box that has not refreshed yet would
+        # report Nova 2 Lite traffic with a null cost. Numbers are litellm's
+        # bare amazon.nova-2-lite-v1:0 = the global-profile price.
+        "nova-2-lite": {"input": 0.3, "output": 2.5},
     }
     model_prices_meta: dict[str, Any] = {}  # written by the price refresher
     model_prices_source_url: str = (

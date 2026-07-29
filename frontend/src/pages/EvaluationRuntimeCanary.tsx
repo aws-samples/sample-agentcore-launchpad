@@ -14,6 +14,7 @@ import { useSearchParams } from "react-router-dom";
 import { Btn, Chip, ConfirmDialog, Panel, StageCard, useToast } from "../components";
 import type { AgentInfo, RuntimeCanaryInfo } from "../lib/api";
 import { api } from "../lib/api";
+import { fmtScore } from "../lib/format";
 
 interface DatasetInfo {
   id: string;
@@ -577,9 +578,9 @@ export function RuntimeCanaryView() {
                                 {verdict.metrics.map((metric) => {
                                   const treatment = metric.variants[0];
                                   return `${metric.label}: C ${
-                                    metric.control.mean ?? "—"} (n=${
+                                    fmtScore(metric.control.mean)} (n=${
                                     metric.control.sampleSize ?? "—"}) · T ${
-                                    treatment?.mean ?? "—"} (n=${
+                                    fmtScore(treatment?.mean)} (n=${
                                     treatment?.sampleSize ?? "—"})`;
                                 }).join("\n")}
                               </div>

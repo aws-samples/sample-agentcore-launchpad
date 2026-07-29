@@ -17,6 +17,7 @@ import {
 import type { AgentInfo } from "../lib/api";
 import { api } from "../lib/api";
 import { evaluatorLabel } from "../lib/evaluators";
+import { fmtScore } from "../lib/format";
 import { RuntimeCanaryView } from "./EvaluationRuntimeCanary";
 
 export interface ABMetric {
@@ -1092,7 +1093,7 @@ function ConfigurationExperimentView() {
                     background: "var(--s1)",
                   }} />
                 </div>
-                <span className="av">{metric.control.mean?.toFixed(2) ?? "—"}</span>
+                <span className="av">{fmtScore(metric.control.mean)}</span>
               </div>
               <div className="abbar">
                 <span className="an">TREAT</span>
@@ -1102,7 +1103,7 @@ function ConfigurationExperimentView() {
                     background: "var(--s3)",
                   }} />
                 </div>
-                <span className="av">{variant?.mean?.toFixed(2) ?? "—"}</span>
+                <span className="av">{fmtScore(variant?.mean)}</span>
               </div>
               <div
                 className="mono dim"

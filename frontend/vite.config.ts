@@ -24,6 +24,10 @@ export default defineConfig(({ mode }) => {
   const apiTarget = env.LAUNCHPAD_API ?? "http://localhost:8000";
   const proxy = {
     "/api": apiTarget,
+    // the Chat page's "equivalent API call" snippet targets window.location.origin
+    // (console and public API share an origin in prod) — without this the copied
+    // curl hits vite and 404s before the backend can check the API key
+    "/v1": apiTarget,
   };
 
   return {

@@ -86,6 +86,18 @@ def _chat_catalog(source: dict[str, Any]) -> list[tuple[str, dict[str, float], s
     return catalog
 
 
+REGION_PREFIXES = ("global.", "us.", "eu.", "apac.")
+
+
+def _bare_model_id(model: str) -> str:
+    """Lowercased model id with one leading cross-region prefix removed."""
+    lowered = model.lower()
+    for prefix in REGION_PREFIXES:
+        if lowered.startswith(prefix):
+            return lowered[len(prefix):]
+    return lowered
+
+
 def refresh_map(
     current: dict[str, Any], seen_models: list[str], source: dict[str, Any]
 ) -> tuple[dict[str, Any], list[str], list[str]]:
@@ -100,6 +112,13 @@ def refresh_map(
     # 1. exact full-id entries for models actually seen in telemetry
     for model in seen_models:
         hit = by_lower.get(model.lower())
+        if hit is None:
+            # the source prices some cross-region ids only under the bare model
+            # id — litellm carries amazon.nova-2-lite-v1:0 plus us./eu./apac.
+            # but no global.* key, so a global inference profile would go
+            # unpriced. Fall back to the bare id, stored under the full
+            # telemetry id (an exact regional hit above keeps its own premium).
+            hit = by_lower.get(_bare_model_id(model))
         if hit is None:
             continue
         entry = hit[1]

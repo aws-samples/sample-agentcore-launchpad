@@ -4,7 +4,7 @@ import pytest
 import yaml
 
 import app.core.config as config_module
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.errors import AppError
 from app.services import model_prices as mp
 
@@ -34,6 +34,16 @@ SOURCE = {
     },
     "nvidia.nemotron-nano-3-30b": {
         "input_cost_per_token": 2e-07, "output_cost_per_token": 6e-07,
+        "litellm_provider": "bedrock_converse", "mode": "chat",
+    },
+    # priced under the bare id + us. only — no global.* key (the real litellm
+    # shape for Nova 2 Lite, which left global inference profiles unpriced)
+    "amazon.nova-2-lite-v1:0": {
+        "input_cost_per_token": 3e-07, "output_cost_per_token": 2.5e-06,
+        "litellm_provider": "bedrock_converse", "mode": "chat",
+    },
+    "us.amazon.nova-2-lite-v1:0": {
+        "input_cost_per_token": 3.3e-07, "output_cost_per_token": 2.75e-06,
         "litellm_provider": "bedrock_converse", "mode": "chat",
     },
     "claude-embedding": {  # non-chat — never considered
@@ -96,6 +106,34 @@ def test_refresh_map_merge_semantics():
     assert "sonnet-4-6" in updated
     # unmatched key preserved untouched
     assert prices["mystery-model"] == {"input": 1.0, "output": 2.0}
+
+
+def test_refresh_map_prices_cross_region_ids_from_the_bare_id():
+    """A global.* inference profile the source doesn't list must still get an
+    entry, taken from the bare model id — and an exact regional hit must keep
+    its own premium rather than the bare price."""
+    prices, _, added = mp.refresh_map(
+        {},
+        ["global.amazon.nova-2-lite-v1:0", "us.amazon.nova-2-lite-v1:0"],
+        SOURCE,
+    )
+    assert prices["global.amazon.nova-2-lite-v1:0"] == {"input": 0.3, "output": 2.5}
+    assert prices["us.amazon.nova-2-lite-v1:0"] == {"input": 0.33, "output": 2.75}
+    assert set(added) == {"global.amazon.nova-2-lite-v1:0",
+                         "us.amazon.nova-2-lite-v1:0"}
+    # a model absent from the source under any prefix stays unpriced
+    prices, _, _ = mp.refresh_map({}, ["global.vendor.not-listed-v1:0"], SOURCE)
+    assert prices == {}
+
+
+def test_default_prices_cover_global_nova_2_lite():
+    """Stock config (no refresh yet) still estimates Nova 2 Lite cost."""
+    from app.services.observability import match_price
+
+    defaults = Settings.model_fields["model_prices"].default
+    assert match_price("global.amazon.nova-2-lite-v1:0", defaults) == {
+        "input": 0.3, "output": 2.5,
+    }
 
 
 def test_refresh_persists_and_applies(tmp_path, monkeypatch):
