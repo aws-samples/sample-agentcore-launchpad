@@ -1,0 +1,29 @@
+{
+  "id": "policy-span-evidence",
+  "name": "policy-span-evidence",
+  "title": "Policy decision evidence: metrics track, then span track",
+  "description": "Governance Decisions view reports policy_span_shape_not_verified. Replace the hardcoded unavailable stub with real AWS evidence: first CloudWatch policy decision metrics (default-on, data already present), then per-decision span detail after enabling gateway TRACES delivery.",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": "lab4-interactive",
+  "priority": "P2",
+  "creator": "river",
+  "assignee": "river",
+  "createdAt": "2026-07-29",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-29-policy-decision-metrics",
+    "07-29-policy-span-detail"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

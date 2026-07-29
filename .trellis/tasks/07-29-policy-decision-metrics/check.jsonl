@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/launchpad/gateway-policy-management.md", "reason": "Authoritative contract for the Governance/Policy surface: evidence gate, decision view, promotion rules"}
+{"file": ".trellis/spec/launchpad/observability-log-groups.md", "reason": "Existing telemetry-access conventions (client factories, cache envelope, aws/spans usage) that this task must follow"}
+{"file": ".trellis/tasks/07-29-policy-span-evidence/research/policy-evidence-channels.md", "reason": "Verified account facts: metric names, real dimension projections (the no-double-count test builds on these), what each channel can/cannot answer"}
+{"file": ".trellis/tasks/07-29-policy-span-evidence/prd.md", "reason": "Parent requirements, confirmed decisions, and cross-child acceptance criteria"}
