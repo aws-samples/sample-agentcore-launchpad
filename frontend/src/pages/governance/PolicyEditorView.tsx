@@ -189,20 +189,34 @@ export function PolicyEditorView({ gatewayId, policyId, onNavigate }: Props) {
     isGatewayReady(gateway) &&
     !!gateway.policy_engine &&
     sharedReady;
-  const saveReady =
-    gatewayReady &&
-    nameValid &&
-    statement.trim().length > 0 &&
-    !operationBusy &&
-    (model !== "preserve_traffic" || highRiskAcknowledged);
+  // Unmet preconditions, in the order an operator would fix them. A disabled
+  // primary button swallows the click and reads as "nothing happened"
+  // (ISSUE-010), so the reasons are rendered next to it.
+  const gatewayBlockers: string[] = [];
+  if (gateway && !gateway.managed) gatewayBlockers.push("notManaged");
+  else if (gateway && !isGatewayReady(gateway)) gatewayBlockers.push("gatewayNotReady");
+  if (gateway && !gateway.policy_engine) gatewayBlockers.push("noEngine");
+  if (!sharedReady) gatewayBlockers.push("sharedAck");
+
+  const saveBlockers = [...gatewayBlockers];
+  if (!nameValid) saveBlockers.push("nameInvalid");
+  if (statement.trim().length === 0) saveBlockers.push("noStatement");
+  if (model === "preserve_traffic" && !highRiskAcknowledged) {
+    saveBlockers.push("highRiskAck");
+  }
+  if (operationBusy) saveBlockers.push("busy");
+  const saveReady = saveBlockers.length === 0;
+
   const overrideReady =
     confirmationName === gateway?.name && overrideReason.trim().length > 0;
-  const transitionReady =
-    gatewayReady &&
-    !!existingPolicy &&
-    confirmationName === gateway?.name &&
-    (evidenceCount > 0 || overrideReady) &&
-    !operationBusy;
+  const transitionBlockers = [...gatewayBlockers];
+  if (!existingPolicy) transitionBlockers.push("noPolicy");
+  if (confirmationName !== gateway?.name) transitionBlockers.push("confirmName");
+  if (evidenceCount === 0 && !overrideReady) {
+    transitionBlockers.push("evidenceOrOverride");
+  }
+  if (operationBusy) transitionBlockers.push("busy");
+  const transitionReady = transitionBlockers.length === 0;
 
   const toggleAction = (action: GovernanceGatewayAction) => {
     setSelectedActions((current) =>
@@ -678,6 +692,12 @@ export function PolicyEditorView({ gatewayId, policyId, onNavigate }: Props) {
                 placeholder={gateway.name}
                 onChange={(event) => setConfirmationName(event.target.value)}
               />
+              {/* only the cutover actions gate on these two fields — saving a
+                  LOG_ONLY draft never has, so saying so stops the operator
+                  hunting a create-time gate that does not exist (ISSUE-010) */}
+              <div className="mono dim" style={{ fontSize: 10 }}>
+                {t("governance.policyEditor.cutoverFieldsOnly")}
+              </div>
             </div>
             {evidenceCount === 0 ? (
               <div className="field">
@@ -688,8 +708,17 @@ export function PolicyEditorView({ gatewayId, policyId, onNavigate }: Props) {
                   value={overrideReason}
                   onChange={(event) => setOverrideReason(event.target.value)}
                 />
+                <div className="mono dim" style={{ fontSize: 10 }}>
+                  {t("governance.policyEditor.overrideAudited")}
+                </div>
               </div>
             ) : null}
+            {!saveReady && (
+              <div className="gov-inline-error" data-testid="save-blockers">
+                {t("governance.policyEditor.blockedPrefix")}{" "}
+                {saveBlockers.map((key) => t(`governance.blockers.${key}`)).join(" · ")}
+              </div>
+            )}
             <div className="gov-actions">
               <Btn
                 primary
@@ -722,6 +751,14 @@ export function PolicyEditorView({ gatewayId, policyId, onNavigate }: Props) {
                 </Btn>
               ) : null}
             </div>
+            {existingPolicy && !transitionReady && (
+              <div className="gov-inline-error" data-testid="transition-blockers">
+                {t("governance.policyEditor.cutoverBlockedPrefix")}{" "}
+                {transitionBlockers
+                  .map((key) => t(`governance.blockers.${key}`))
+                  .join(" · ")}
+              </div>
+            )}
           </Panel>
 
           {gateway.external_tools_list_command ? (

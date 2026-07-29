@@ -105,6 +105,19 @@ after insertion.
   `{"operation": ..., "generation_id": ..., "status": ...}`.
 - Policy decisions return an explicit `available=false` until real Policy span
   fields have been captured. Never infer rollout evidence from demo rows.
+- **The evidence/override gate applies to cutovers only.**
+  `_assert_evidence_or_override` guards policy promote/rollback and
+  `gateway_mode → ENFORCE`. Attaching an engine, creating or updating a LOG_ONLY
+  draft, and starting a generation are NOT gated. The editor may still collect a
+  justification for those, and every `_new_change` call — all six — passes
+  `override_reason=request.override_reason` so it lands in the audit column
+  instead of only inside `requested` (it used to be dropped on create/update/
+  attach/generation, so the audit entry read `OVERRIDE REASON -`, ISSUE-010).
+- **A disabled primary action states its unmet preconditions.** The policy
+  editor derives `saveBlockers` / `transitionBlockers` lists (rendered as
+  `governance.blockers.*`) rather than a bare boolean, because a disabled button
+  swallows the click and reads as "the action did nothing". The override and
+  gateway-name fields say which actions actually require them.
 
 ### 4. Validation & Error Matrix
 
@@ -117,7 +130,8 @@ after insertion.
 | IAM simulation deny/unknown | `governance.iam_preflight_failed`/`unknown` |
 | Registry name points to another URL | `governance.registry_name_conflict` |
 | Legacy retirement before Gateway record approval | `governance.registry_record_not_approved` |
-| Promotion has no evidence and no typed override | `governance.evidence_required` |
+| Promotion/rollback/ENFORCE has no evidence and no typed override | `governance.evidence_required` |
+| LOG_ONLY draft create/update without evidence or override | accepted (no cutover gate) |
 | Confirmation name differs | `governance.confirmation_mismatch` |
 | Second mutation while one is running | `governance.operation_in_flight` |
 | Live Policy changes after the rollback preflight | `governance.concurrent_change` |

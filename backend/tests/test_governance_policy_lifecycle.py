@@ -572,3 +572,62 @@ def test_operation_mutex_conflict_and_audit_snapshot_immutability():
         assert db.get(PolicyChange, first["id"]).status == "interrupted"
     finally:
         db.close()
+
+
+def test_draft_paths_record_the_override_reason_and_need_no_evidence():
+    """A LOG_ONLY draft never gated on evidence — but the justification the
+    editor collects must still reach the audit column (it used to be dropped by
+    queue_policy_create/update, so the audit entry read "OVERRIDE REASON -")."""
+    control = FakeControl()
+    iam = FakeIam()
+    db = SessionLocal()
+    try:
+        attach = governance.queue_engine_attach(
+            db,
+            control,
+            "gw-1",
+            EngineRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                authorization_model="allowlist",
+                override_reason="engine attached during the maintenance window",
+            ),
+        )
+        assert _refresh(db, attach["id"]).override_reason == (
+            "engine attached during the maintenance window"
+        )
+        governance.run_policy_change(attach["id"], control=control, iam=iam)
+
+        # create: no evidence anywhere, no confirmation name — still accepted
+        create = governance.queue_policy_create(
+            db,
+            control,
+            "gw-1",
+            PolicyCreateRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                name="allow_payments",
+                statement="permit(principal, action, resource);",
+                override_reason="zero traffic yet, drafting from the allowlist",
+            ),
+        )
+        created = _refresh(db, create["id"])
+        assert created.override_reason == (
+            "zero traffic yet, drafting from the allowlist"
+        )
+        governance.run_policy_change(create["id"], control=control, iam=iam)
+        policy_id = _refresh(db, create["id"]).after["policy"]["id"]
+
+        update = governance.queue_policy_update(
+            db,
+            control,
+            "gw-1",
+            policy_id,
+            PolicyUpdateRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                expected_policy_updated_at=control.policies[policy_id]["updatedAt"],
+                statement="permit(principal, action, resource) when { true };",
+                override_reason="tightened after review",
+            ),
+        )
+        assert _refresh(db, update["id"]).override_reason == "tightened after review"
+    finally:
+        db.close()

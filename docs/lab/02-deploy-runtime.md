@@ -21,7 +21,7 @@
 | 能力 | 托管 Harness（方式B） | Claude Agent SDK 容器（方式A） | Strands ZIP（方式C · 表单） | Strands 画布（方式C · Studio） |
 |---|---|---|---|---|
 | 部署耗时 | ~30 秒（免构建） | ~2–6 分钟（CodeBuild） | ~1–3 分钟（pip+zip） | ~1–3 分钟（pip+zip） |
-| 挂载知识库（托管 RAG） | 支持（网关工具：单次 + agentic 多步） | 支持（内置 `kb_search` + `kb_deep_search`） | 支持（内置 `kb_search` + `kb_deep_search`） | 不支持 |
+| 挂载知识库（托管 RAG） | 支持：网关 `Retrieve` + `AgenticRetrieveStream` | 支持：`kb_search`（单次）+ `kb_deep_search`（agentic 多步） | 支持：`kb_search`（单次）+ `kb_deep_search`（agentic 多步） | 不支持 |
 | 挂载 Registry 技能 / MCP | 支持 | 支持 | 模板内置工具 | 画布节点 |
 | 可被评估（第 08 章） | 支持 | 支持 | 支持 | 支持 |
 | **配置包 A/B 实验**（第 09 章） | 明确不支持 | 不支持 | **支持，仅此方式** | 不支持 |
@@ -31,7 +31,8 @@
 > 不允许直接 `InvokeAgentRuntime`；而且导出的 Harness 代码里没有读取配置包的逻辑，
 > A/B 变体对它是空操作。所以第 09/10 章必须落在 ZIP 通道生成的 Agent 上。
 
-> **知识库有两条挂载通道**（第 04 章会实际跑一遍）：
+> **Harness、Claude SDK 容器和 Strands ZIP 都能挂载托管知识库，也都支持单次检索与多步
+> agentic 检索。**底层分为两条挂载通道（第 04 章会实际跑一遍）：
 > Harness 走专用 MCP 网关 `launchpad-kb-gw`，拿到逐库 `…___Retrieve` 和跨库多步的
 > `…___AgenticRetrieveStream` 两类工具；容器与 ZIP 是自己写代码的 Runtime，没有网关的
 > OAuth 通道，平台改为在生成的代码里内置**两个**工具，用**运行时执行角色的 IAM 权限**

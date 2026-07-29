@@ -776,7 +776,24 @@
       "policyMode": "POLICY MODE",
       "evidence": "AWS EVIDENCE",
       "externalDiscovery": "EXTERNAL TOOLS/LIST",
-      "policyNotFound": "The selected policy no longer exists in live AWS state."
+      "policyNotFound": "The selected policy no longer exists in live AWS state.",
+      "blockedPrefix": "Cannot save yet:",
+      "cutoverBlockedPrefix": "Cannot cut over yet:",
+      "cutoverFieldsOnly": "Required for PROMOTE / ROLLBACK only — saving a LOG_ONLY draft does not need it.",
+      "overrideAudited": "Optional for a draft; recorded in the audit entry either way."
+    },
+    "blockers": {
+      "notManaged": "manage this Gateway first",
+      "gatewayNotReady": "Gateway is not READY",
+      "noEngine": "attach a Policy engine",
+      "sharedAck": "acknowledge the shared Gateways",
+      "nameInvalid": "policy name must be 1-48 letters, digits or underscores, starting with a letter",
+      "noStatement": "build or paste a Cedar draft",
+      "highRiskAck": "acknowledge the preserve-traffic risk",
+      "busy": "an operation is still running",
+      "noPolicy": "select an existing policy",
+      "confirmName": "type the Gateway name to confirm",
+      "evidenceOrOverride": "needs one matching LOG_ONLY decision, or the Gateway name plus an override reason"
     },
     "tools": {
       "title": "TOOL CATALOG - GATEWAY TARGETS + BUILTINS",

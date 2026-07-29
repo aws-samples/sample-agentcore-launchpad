@@ -776,7 +776,24 @@
       "policyMode": "策略模式",
       "evidence": "AWS 证据",
       "externalDiscovery": "外部 TOOLS/LIST",
-      "policyNotFound": "AWS 实时状态中已不存在所选策略。"
+      "policyNotFound": "AWS 实时状态中已不存在所选策略。",
+      "blockedPrefix": "暂时无法保存：",
+      "cutoverBlockedPrefix": "暂时无法切换：",
+      "cutoverFieldsOnly": "仅 提升 / 回滚 需要填写——保存 LOG_ONLY 草稿不需要。",
+      "overrideAudited": "草稿阶段可不填；填了都会记入审计条目。"
+    },
+    "blockers": {
+      "notManaged": "请先纳管该 Gateway",
+      "gatewayNotReady": "Gateway 不处于 READY",
+      "noEngine": "请先挂载 Policy 引擎",
+      "sharedAck": "请确认共享 Gateway 影响范围",
+      "nameInvalid": "策略名需为 1-48 位字母/数字/下划线，且以字母开头",
+      "noStatement": "请生成或粘贴 Cedar 草稿",
+      "highRiskAck": "请确认 preserve-traffic 的高风险提示",
+      "busy": "上一个操作仍在执行",
+      "noPolicy": "请先选择一个已有策略",
+      "confirmName": "请输入 Gateway 名称确认",
+      "evidenceOrOverride": "需要至少一条匹配的 LOG_ONLY 决策，或填写 Gateway 名称 + 覆盖理由"
     },
     "tools": {
       "title": "工具目录 - GATEWAY 目标 + 内置工具",

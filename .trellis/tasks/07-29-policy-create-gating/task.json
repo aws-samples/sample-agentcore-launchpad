@@ -3,7 +3,7 @@
   "name": "policy-create-gating",
   "title": "Fix policy-create gating feedback and dropped override reason",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": "lab4-interactive",

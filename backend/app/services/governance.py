@@ -986,6 +986,7 @@ def queue_engine_attach(
             "engine": _engine_snapshot(engine) if engine else None,
         },
         requested=requested,
+        override_reason=request.override_reason,
     )
     return _change_out(change)
 
@@ -1019,6 +1020,9 @@ def queue_policy_create(
             "engine": _engine_snapshot(engine),
         },
         requested=request.model_dump(mode="json"),
+        # the editor collects a justification for a zero-evidence change; it has
+        # to reach the audit column or the audit entry reads "OVERRIDE REASON -"
+        override_reason=request.override_reason,
     )
     return _change_out(change)
 
@@ -1066,6 +1070,7 @@ def queue_policy_update(
             "policy": _policy_snapshot(detail),
         },
         requested=request.model_dump(mode="json"),
+        override_reason=request.override_reason,
     )
     return _change_out(change)
 
@@ -1676,6 +1681,7 @@ def start_generation(
             "engine": _engine_snapshot(engine),
         },
         requested=request.model_dump(mode="json"),
+        override_reason=request.override_reason,
     )
     change.status = "running"
     change.started_at = datetime.now(UTC)

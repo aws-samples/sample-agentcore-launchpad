@@ -16,7 +16,8 @@
 ## 3.1 方式B：托管 Harness（`lab-fund-advisor`）
 
 Harness 是**声明式**的：你给出模型、提示词、工具、技能、知识库、记忆开关，AgentCore 直接托管
-运行，没有任何构建产物。本实验用它承载「基金资料问答」，因为**只有 Harness 能挂载托管知识库**。
+运行，没有任何构建产物。本实验用它承载「基金资料问答」；第 04 章会通过专用知识库网关给它挂上
+托管知识库。Claude SDK 容器与 Strands ZIP 也能挂知识库，但走的是直接注入检索工具的通道。
 
 1. **打开** `02 Agent 管理`，选择第一张卡片 **托管 Harness**，点 **下一步 ▸**。
 2. **填写**：
@@ -151,10 +152,16 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
 | `deploy` | `CreateHarness` | `CreateAgentRuntime(containerConfiguration)` | `CreateAgentRuntime` |
 | `register` | A2A 记录，自动提交 | A2A 记录，自动提交 | A2A 记录，自动提交 |
 | 落在哪 | Harness 服务 | AgentCore Runtime | AgentCore Runtime |
-| 挂知识库 | 支持 | 不支持 | 不支持 |
+| 挂知识库 | 支持：网关 `Retrieve` + `AgenticRetrieveStream` | 支持：`kb_search` + `kb_deep_search` | 支持：`kb_search` + `kb_deep_search` |
 | 技能进镜像 | 声明式挂载 | 支持，位于 `.claude/skills/` | 不支持 |
 | 配置包 A/B | 不支持 | 不支持 | 支持 |
 | 金丝雀 | 不支持 | 暂不支持 | 支持 |
+
+三种方式都支持单次检索和多步 agentic 检索，只是接入路径不同。Harness 通过
+`launchpad-kb-gw` 调用逐库 `Retrieve` 与跨库 `AgenticRetrieveStream`；Claude SDK 容器和
+Strands ZIP 则在生成产物中注入 `kb_search` 与 `kb_deep_search`，后者会调用
+`AgenticRetrieveStream` 拆分子查询并执行多轮检索。具体挂载与验证步骤见
+[第 04 章 4.7](04-capabilities.md)。
 
 **本章结束时，三个 Agent 应该都是 `运行中`**：
 
