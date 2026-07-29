@@ -11,31 +11,32 @@ interface PagerProps {
   onSize: (size: number) => void;
 }
 
-/** Table footer pagination — hidden entirely while one page suffices. */
+/** Table footer pagination — hidden entirely while one page suffices.
+ *  Shared by the Observability tabs and the Evaluation module tables. */
 export function Pager({ total, page, size, onPage, onSize }: PagerProps) {
   const { t } = useTranslation();
   const pages = Math.max(1, Math.ceil(total / size));
   if (total <= PAGE_SIZES[0]) return null;
   return (
     <div className="pagerbar">
-      <span className="mono dim">{t("obs.pager.total", { count: total })}</span>
+      <span className="mono dim">{t("pager.total", { count: total })}</span>
       <span className="spacer" />
       <button className="fsel" disabled={page <= 1} onClick={() => onPage(page - 1)}>
-        ‹ {t("obs.pager.prev")}
+        ‹ {t("pager.prev")}
       </button>
-      <span className="mono">{t("obs.pager.page", { page, pages })}</span>
+      <span className="mono">{t("pager.page", { page, pages })}</span>
       <button className="fsel" disabled={page >= pages} onClick={() => onPage(page + 1)}>
-        {t("obs.pager.next")} ›
+        {t("pager.next")} ›
       </button>
       <select
         className="fsel"
         value={size}
         onChange={(e) => onSize(Number(e.target.value))}
-        aria-label={t("obs.pager.sizeLabel")}
+        aria-label={t("pager.sizeLabel")}
       >
         {PAGE_SIZES.map((s) => (
           <option key={s} value={s}>
-            {t("obs.pager.perPage", { size: s })}
+            {t("pager.perPage", { size: s })}
           </option>
         ))}
       </select>

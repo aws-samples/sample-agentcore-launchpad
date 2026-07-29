@@ -3,7 +3,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
+import {
+  Btn, Chip, ConfirmDialog, PAGE_SIZES, Pager, Panel, useToast, ViewHead,
+} from "../components";
 import type { AgentInfo } from "../lib/api";
 import { api } from "../lib/api";
 import { evaluatorLabel } from "../lib/evaluators";
@@ -199,6 +201,15 @@ export function Evaluation() {
   const [cloudGt, setCloudGt] = useState<Record<string, boolean>>({});
   const [evaluators, setEvaluators] = useState<EvaluatorInfo[]>([]);
   const [runs, setRuns] = useState<RunInfo[]>([]);
+  const [runTotal, setRunTotal] = useState(0);
+  const [runPage, setRunPage] = useState(1);
+  // 20/page like the other Evaluation tables (the hook's default); the
+  // Observability tabs keep their larger 50 because their pages come from AWS
+  const [runSize, setRunSize] = useState<number>(PAGE_SIZES[0]);
+  // The runs table is server-paged, but the insights duplicate guards must see
+  // insights runs beyond the displayed page — a missed duplicate costs a real
+  // AWS analysis. This page-independent list is what they read.
+  const [insightsRuns, setInsightsRuns] = useState<RunInfo[]>([]);
   const [selectedRun, setSelectedRun] = useState<RunInfo | null>(null);
   const [queueLocked, setQueueLocked] = useState(false);
   const [agentId, setAgentId] = useState("");
@@ -216,14 +227,18 @@ export function Evaluation() {
   const failedSeen = useRef<Set<string> | null>(null);
   const refresh = useCallback(async () => {
     try {
-      const [runsRes, queueRes] = await Promise.all([
-        fetch("/api/eval/runs"),
+      const offset = (runPage - 1) * runSize;
+      const [runsRes, insightsRes, queueRes] = await Promise.all([
+        fetch(`/api/eval/runs?limit=${runSize}&offset=${offset}`),
+        fetch("/api/eval/runs?mode=insights&limit=200"),
         fetch("/api/eval/queue"),
       ]);
       if (runsRes.ok) {
-        const body = (await runsRes.json()) as { runs: RunInfo[] };
+        const body = (await runsRes.json()) as { runs: RunInfo[]; total: number };
         const firstLoad = failedSeen.current === null;
         const seen = (failedSeen.current ??= new Set());
+        // only runs actually polled are marked seen — a failure on a page the
+        // operator is not looking at toasts late, never silently
         body.runs.forEach((run) => {
           if (run.status !== "failed" || seen.has(run.id)) return;
           seen.add(run.id);
@@ -232,15 +247,19 @@ export function Evaluation() {
           }
         });
         setRuns(body.runs);
+        setRunTotal(body.total);
         setSelectedRun(
           (prev) => body.runs.find((r) => r.id === prev?.id) ?? body.runs[0] ?? null,
         );
+      }
+      if (insightsRes.ok) {
+        setInsightsRuns(((await insightsRes.json()) as { runs: RunInfo[] }).runs);
       }
       if (queueRes.ok) setQueueLocked(((await queueRes.json()) as { locked: boolean }).locked);
     } catch {
       /* backend offline */
     }
-  }, [t, toast]);
+  }, [runPage, runSize, t, toast]);
 
   useEffect(() => {
     api
@@ -378,9 +397,8 @@ export function Evaluation() {
   // re-clicking would only enqueue a duplicate behind the account lock.
   const insightsPending = (run: RunInfo): boolean => {
     const key = [...(run.session_ids ?? [])].sort().join(",");
-    return runs.some(
+    return insightsRuns.some(
       (r) =>
-        r.mode === "insights" &&
         r.status !== "completed" &&
         r.status !== "failed" &&
         [...(r.session_ids ?? [])].sort().join(",") === key,
@@ -391,9 +409,8 @@ export function Evaluation() {
   // confirming would repeat the whole analysis (new run, new service usage).
   const insightsAlreadyRan = (run: RunInfo): boolean => {
     const key = [...(run.session_ids ?? [])].sort().join(",");
-    return runs.some(
+    return insightsRuns.some(
       (r) =>
-        r.mode === "insights" &&
         r.status === "completed" &&
         [...(r.session_ids ?? [])].sort().join(",") === key,
     );
@@ -852,6 +869,16 @@ export function Evaluation() {
             )}
           </tbody>
         </table>
+        <Pager
+          total={runTotal}
+          page={runPage}
+          size={runSize}
+          onPage={setRunPage}
+          onSize={(size) => {
+            setRunSize(size);
+            setRunPage(1);
+          }}
+        />
       </Panel>
 
       <div className="eval-grid">

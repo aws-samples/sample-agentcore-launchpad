@@ -2,10 +2,9 @@ import type { CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Chip, DataTable, Panel } from "../../components";
+import { Chip, DataTable, Panel, DEFAULT_PAGE_SIZE, Pager } from "../../components";
 import type { ObsTraceRow, ObsTraces } from "../../lib/api";
 import { fmtClock, fmtCost, fmtDuration, fmtInt, shortId } from "./format";
-import { DEFAULT_PAGE_SIZE, Pager } from "./Pager";
 
 const TIMEOUT_MS = 30_000;
 

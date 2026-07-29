@@ -3,7 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
+import {
+  Btn, Chip, ConfirmDialog, Pager, Panel, useTablePage, useToast, ViewHead,
+} from "../components";
 
 interface CloudBlob {
   dataset_id: string;
@@ -358,6 +360,23 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
   const local = selection?.kind === "local" ? selection.row : null;
   const cloud = selection?.kind === "cloud" ? selection.row : null;
   const editingId = local?.id ?? null;
+
+  // local rows then cloud-only rows are ONE list as far as the reader (and the
+  // pager) is concerned, so they page together instead of each table half
+  // paging on its own.
+  const entries = useMemo(
+    () => [
+      ...rows.map((row) => ({ kind: "local" as const, row })),
+      ...cloudOnly.map((row) => ({ kind: "cloud" as const, row })),
+    ],
+    [rows, cloudOnly],
+  );
+  const selectedEntry = entries.findIndex((entry) =>
+    entry.kind === "local"
+      ? entry.row.id === local?.id
+      : entry.row.datasetId === cloud?.datasetId,
+  );
+  const { rows: pageEntries, pagerProps } = useTablePage(entries, selectedEntry);
 
   // kind=simulated with non-actor items can only come from import — the form
   // editor cannot represent those rows, so degrade to a warning (no save).
@@ -899,7 +918,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
+            {pageEntries.filter((entry) => entry.kind === "local").map(({ row }) => (
               <tr
                 key={row.id}
                 data-testid={`dataset-row-${row.id}`}
@@ -923,7 +942,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
                 <td>{cloudChip(row)}</td>
               </tr>
             ))}
-            {cloudOnly.map((row) => (
+            {pageEntries.filter((entry) => entry.kind === "cloud").map(({ row }) => (
               <tr
                 key={row.datasetId}
                 data-testid={`dataset-row-cloud-${row.datasetId}`}
@@ -968,6 +987,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
             )}
           </tbody>
         </table>
+        <Pager {...pagerProps} />
       </Panel>
 
       <div className="eval-grid">

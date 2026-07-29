@@ -2,10 +2,9 @@ import type { CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Chip, DataTable, Panel, useToast } from "../../components";
+import { Chip, DataTable, Panel, useToast, DEFAULT_PAGE_SIZE, Pager } from "../../components";
 import type { ObsSessions } from "../../lib/api";
 import { fmtClockShort, fmtCost, fmtInt, shortId } from "./format";
-import { DEFAULT_PAGE_SIZE, Pager } from "./Pager";
 
 interface SessionsTabProps {
   data: ObsSessions;

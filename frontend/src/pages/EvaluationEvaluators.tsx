@@ -3,7 +3,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
+import {
+  Btn, Chip, ConfirmDialog, Pager, Panel, useTablePage, useToast, ViewHead,
+} from "../components";
 import { evaluatorLabel } from "../lib/evaluators";
 
 type Level = "TOOL_CALL" | "TRACE" | "SESSION";
@@ -183,6 +185,10 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
     setSearchParams(id ? { view: "evaluators", ev: id } : { view: "evaluators" });
   };
   const editingId = selected?.source === "custom" ? selected.id : null;
+  const { rows: pageRows, pagerProps } = useTablePage(
+    ordered,
+    ordered.findIndex((row) => row.id === selected?.id),
+  );
 
   // Detail + draft hydrate declaratively from the selected row; switching
   // rows must not leak the previous draft into the next form.
@@ -598,7 +604,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
             </tr>
           </thead>
           <tbody>
-            {ordered.map((row) => (
+            {pageRows.map((row) => (
               <tr
                 key={row.id}
                 data-testid={`evaluator-row-${row.id}`}
@@ -656,6 +662,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
             )}
           </tbody>
         </table>
+        <Pager {...pagerProps} />
       </Panel>
 
       <div className="eval-grid">

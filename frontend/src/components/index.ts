@@ -8,6 +8,8 @@ export { Kicker } from "./Kicker";
 export { LaunchSequence } from "./LaunchSequence";
 export { Markdown } from "./Markdown";
 export { MethodChip } from "./MethodChip";
+export { DEFAULT_PAGE_SIZE, PAGE_SIZES, Pager } from "./Pager";
+export { useTablePage } from "./useTablePage";
 export { Panel } from "./Panel";
 export { StatTile } from "./StatTile";
 export { StageCard } from "./StageCard";

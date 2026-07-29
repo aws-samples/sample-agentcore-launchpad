@@ -1602,19 +1602,19 @@
       "noTraces": "该时间范围内此会话无追踪",
       "back": "‹ 会话"
     },
-    "pager": {
-      "total": "共 {{count}} 条",
-      "prev": "上一页",
-      "next": "下一页",
-      "page": "第 {{page}} / {{pages}} 页",
-      "perPage": "每页 {{size}}",
-      "sizeLabel": "每页行数"
-    },
     "prices": {
       "update": "更新价格",
       "refreshed": "价格表已更新 — 刷新 {{updated}} 项 · 新增 {{added}} 项",
       "updatedAt": "价格更新于 {{date}}"
     }
+  },
+  "pager": {
+    "total": "共 {{count}} 条",
+    "prev": "上一页",
+    "next": "下一页",
+    "page": "第 {{page}} / {{pages}} 页",
+    "perPage": "每页 {{size}}",
+    "sizeLabel": "每页行数"
   },
   "studio": {
     "head": {

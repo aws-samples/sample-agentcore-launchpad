@@ -11,7 +11,9 @@ import {
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
-import { Btn, Chip, ConfirmDialog, Panel, StageCard, useToast } from "../components";
+import {
+  Btn, Chip, ConfirmDialog, Pager, Panel, StageCard, useTablePage, useToast,
+} from "../components";
 import type { AgentInfo, RuntimeCanaryInfo } from "../lib/api";
 import { api } from "../lib/api";
 import { fmtScore } from "../lib/format";
@@ -86,6 +88,10 @@ export function RuntimeCanaryView() {
   const canary = creatingNew
     ? null
     : (canaries.find((row) => row.id === canaryParam) ?? canaries[0] ?? null);
+  const { rows: pageCanaries, pagerProps } = useTablePage(
+    canaries,
+    canaries.findIndex((row) => row.id === canary?.id),
+  );
 
   const selectCanary = (id: string | null) => {
     setSearchParams(
@@ -385,7 +391,7 @@ export function RuntimeCanaryView() {
               </tr>
             </thead>
             <tbody>
-              {canaries.map((row) => (
+              {pageCanaries.map((row) => (
                 <tr
                   key={row.id}
                   data-testid={`runtime-canary-row-${row.id}`}
@@ -434,6 +440,7 @@ export function RuntimeCanaryView() {
             </tbody>
           </table>
         </div>
+        <Pager {...pagerProps} />
       </Panel>
 
       <div className="eval-grid">

@@ -17,6 +17,11 @@ Evaluators/Datasets adopted it in task 07-13-eval-pages-experiment-layout):
    (numbered `kv` rows + note, same shape as `evalPage.newRun.how`).
 4. No row-level action buttons — mutations (Delete / Sync / Save) live in the detail Panel
    (Delete/Sync in the Panel `end`, confirm via `ConfirmDialog`).
+5. Table footer `<Pager>` (`components/Pager.tsx`, shared with the Observability tabs —
+   it lives in `components/`, NOT under `pages/observability/`). All five Evaluation
+   tables page at **20 rows** by default (`PAGE_SIZES[0]`; Observability keeps its own
+   50 because its pages come from AWS). The bar hides itself while `total <= 20`, so
+   short lists render exactly as before.
 
 ## URL contracts
 
@@ -105,6 +110,31 @@ scenarios, predefined/legacy) vs USER SIMULATION (devguide user-simulation.html 
 Rows `evaluator-row-<id>` / `dataset-row-<id>` / `dataset-row-cloud-<datasetId>` (colon avoided
 in testids); create buttons `new-evaluator-btn` / `new-dataset-btn`; sync keeps `sync-<name>`.
 Dashboard entry buttons `datasets-btn` / `evaluators-btn` / `experiment-btn` unchanged.
+
+## Pagination (07-29)
+
+- **Client-side** for datasets / evaluators / experiments / canaries: their endpoints
+  return complete lists, so `useTablePage(items, selectedIndex)`
+  (`components/useTablePage.ts`) owns page + size state and returns the visible slice
+  plus ready-made `<Pager {...pagerProps} />` props.
+- **A URL-selected row is never stranded off-page.** `selectedIndex` is the index the
+  `?exp=` / `?canary=` / `?ev=` / `?ds=` selection resolves to; the hook jumps to that
+  row's page, so a deep link to row 30 opens page 2 with the row highlighted.
+- The datasets table pages **local rows and cloud-only rows as one combined list**
+  (`entries` = local ++ cloudOnly, one `kind` tag per entry) — each half paging on its
+  own would read as two tables.
+- **Server-side for the runs table.** `GET /api/eval/runs?limit=&offset=` returns
+  `{runs, total, limit, offset}`; defaults (`limit=50, offset=0`) reproduce the
+  pre-pagination response. The table drives limit/offset from its pager, so run history
+  past the first page is reachable — it used to be silently truncated at 50.
+- **`?mode=insights` exists for the duplicate guard.** `insightsPending` /
+  `insightsAlreadyRan` must not weaken to "whatever is on screen" (a missed duplicate
+  costs a real AWS analysis), so `Evaluation.tsx` polls
+  `/api/eval/runs?mode=insights&limit=200` alongside the displayed page and the guards
+  read *that* list.
+- The failed-run toast still scans only polled runs. Runs are newest-first, so page 1
+  covers fresh failures; on an older page a toast is **delayed until the operator
+  returns to page 1** (the seen-set only marks runs it actually saw) — never lost.
 
 ## Runs dashboard — insights re-run confirm (07-14)
 

@@ -8,7 +8,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
@@ -571,9 +571,31 @@ def _run_out(run: EvalRun) -> dict[str, Any]:
 
 
 @router.get("/runs")
-def list_runs(db: Session = Depends(get_db)) -> dict[str, Any]:
-    rows = db.query(EvalRun).order_by(EvalRun.created_at.desc()).limit(50).all()
-    return {"runs": [_run_out(r) for r in rows]}
+def list_runs(
+    db: Session = Depends(get_db),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    mode: str | None = Query(None, pattern="^(evaluators|insights)$"),
+) -> dict[str, Any]:
+    """Newest-first page of runs plus the unpaginated `total`.
+
+    Defaults reproduce the pre-pagination response (latest 50, no filter) so
+    older callers are unaffected. `mode` exists for the console's insights
+    duplicate guard, which must see insights runs beyond the displayed page.
+    """
+    query = db.query(EvalRun)
+    if mode:
+        query = query.filter(EvalRun.mode == mode)
+    total = query.count()
+    rows = (
+        query.order_by(EvalRun.created_at.desc()).offset(offset).limit(limit).all()
+    )
+    return {
+        "runs": [_run_out(r) for r in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/runs/{run_id}")

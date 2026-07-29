@@ -9,8 +9,10 @@ import {
   Btn,
   Chip,
   ConfirmDialog,
+  Pager,
   Panel,
   StageCard,
+  useTablePage,
   useToast,
   ViewHead,
 } from "../components";
@@ -412,6 +414,10 @@ function ConfigurationExperimentView() {
   // one active A/B test per shared gateway — the backend rejects a second
   // concurrent loop (409 experiment.already_running), so gate START up front.
   const hasRunning = experiments.some((e) => e.status === "running");
+  const { rows: pageExperiments, pagerProps } = useTablePage(
+    experiments,
+    experiments.findIndex((e) => e.id === exp?.id),
+  );
 
   // old auto-pipeline rows never wrote accepted_* — their bundles artifact
   // marks the recommend card done
@@ -1424,7 +1430,7 @@ function ConfigurationExperimentView() {
             </tr>
           </thead>
           <tbody>
-            {experiments.map((e) => (
+            {pageExperiments.map((e) => (
               <tr
                 key={e.id}
                 data-testid="experiment-list-row"
@@ -1465,6 +1471,7 @@ function ConfigurationExperimentView() {
             )}
           </tbody>
         </table>
+        <Pager {...pagerProps} />
       </Panel>
 
       <div className="eval-grid">
