@@ -105,7 +105,7 @@ def cached(key: str, force: bool, build: Callable[[], dict[str, Any]]) -> dict[s
     return {**value, "cache": {"hit": False, "age_seconds": 0.0}}
 
 
-def _logs_client() -> Any:
+def logs_client() -> Any:
     return boto3.client("logs", region_name=get_settings().region)
 
 
@@ -156,7 +156,7 @@ def run_insights_queries(
     log_groups: list[str] | None = None,
 ) -> dict[str, list[dict[str, str]]]:
     """Start all queries concurrently, poll each to completion, flatten rows."""
-    logs = logs or _logs_client()
+    logs = logs or logs_client()
     end = int(_now())
     start = end - hours * 3600
     query_ids = {
@@ -1214,7 +1214,7 @@ def eval_turns_from_content_logs(
     startTime (the run's creation time) is load-bearing — without it the scan
     exhausts its page budget on old log data and returns nothing.
     """
-    logs = logs or _logs_client()
+    logs = logs or logs_client()
     started = started_at or datetime.now(UTC)
     if started.tzinfo is None:
         started = started.replace(tzinfo=UTC)

@@ -32,6 +32,7 @@ from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 
+from app.core.errors import AppError
 from app.services.observability import cached, cw_client
 
 log = logging.getLogger(__name__)
@@ -299,6 +300,7 @@ def _unavailable(range_key: str, reason: str) -> dict[str, Any]:
         "policy_filter_partial": False,
         "decisions": [],
         "count": 0,
+        "spans_unavailable_reason": None,
     }
 
 
@@ -308,6 +310,50 @@ def _aws_error_code(exc: Exception) -> str:
     return type(exc).__name__
 
 
+def _with_spans(
+    result: dict[str, Any],
+    logs: Any,
+    gateway_arn: str | None,
+    range_key: str,
+    policy_id: str | None,
+) -> dict[str, Any]:
+    """Attach per-decision rows from the span channel.
+
+    Span failures degrade to metrics-only rather than failing the request: the
+    metric aggregates are what the cutover gate reads and what already shipped, so
+    a Logs Insights outage must not take the endpoint down. This is the one place
+    where swallowing that error is correct.
+
+    ``evidence_count`` is deliberately NOT recomputed from rows — spans are sampled
+    while metrics are exact counts, so spans must never redefine the number the
+    gate trusts.
+    """
+    result["decisions"] = []
+    result["count"] = 0
+    result["spans_unavailable_reason"] = None
+    if not gateway_arn:
+        return result
+
+    from app.services import governance_spans
+
+    try:
+        spans = governance_spans.gateway_decision_rows(
+            logs, gateway_arn, range_key, policy_id
+        )
+    except AppError as exc:
+        log.warning("policy decision spans unavailable for %s: %s", gateway_arn, exc.code)
+        result["spans_unavailable_reason"] = exc.code
+        return result
+
+    result["decisions"] = spans["decisions"]
+    result["count"] = len(spans["decisions"])
+    result["spans_unavailable_reason"] = spans["unavailable_reason"]
+    result["truncated"] = bool(result.get("truncated")) or spans["truncated"]
+    if spans["decisions"]:
+        result["source"] = "metrics+spans"
+    return result
+
+
 def gateway_decisions(
     control: Any,
     cw: Any,
@@ -315,8 +361,10 @@ def gateway_decisions(
     range_key: str,
     policy_id: str | None = None,
     force: bool = False,
+    logs: Any = None,
 ) -> dict[str, Any]:
-    """Aggregate policy-decision evidence for one gateway and window.
+    """Aggregate policy-decision evidence for one gateway and window, plus
+    per-decision rows when the Policy span channel is open.
 
     A gateway that does not exist still 404s exactly as before. An unreadable
     metric channel yields ``available=False`` with the AWS error code — a
@@ -325,17 +373,18 @@ def gateway_decisions(
     """
     from app.services.governance import _require_gateway
 
-    _require_gateway(control, gateway_id)
+    gateway = _require_gateway(control, gateway_id)
     if range_key not in WINDOW_SECONDS:
         range_key = "24h"
 
     def build() -> dict[str, Any]:
         try:
-            return _query(cw, gateway_id, range_key, policy_id)
+            result = _query(cw, gateway_id, range_key, policy_id)
         except (ClientError, BotoCoreError) as exc:
             code = _aws_error_code(exc)
             log.warning("policy decision metrics unavailable for %s: %s", gateway_id, code)
-            return _unavailable(range_key, code)
+            result = _unavailable(range_key, code)
+        return _with_spans(result, logs, gateway.get("gatewayArn"), range_key, policy_id)
 
     key = f"gov-decisions:{gateway_id}:{range_key}:{policy_id or ''}"
     return cached(key, force, build)

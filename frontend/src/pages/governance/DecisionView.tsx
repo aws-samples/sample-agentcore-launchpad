@@ -246,14 +246,31 @@ export function DecisionView({ gatewayId, onNavigate }: Props) {
               <tr key={`${decision.at}-${decision.policy_id ?? "none"}-${index}`}>
                 <td className="mono">
                   {formatTimestamp(decision.at, i18n.language)}
-                  <div className="gov-cell-note">AWS</div>
+                  <div className="gov-cell-note">
+                    {t(`governance.decisions.evaluation.${decision.evaluation}`)}
+                  </div>
                 </td>
                 <td>
                   <Chip tone={statusTone(decision.outcome)}>{decision.outcome}</Chip>
                 </td>
                 <td className="pri mono gov-break">{decision.action}</td>
-                <td className="mono gov-break">{decision.principal}</td>
-                <td className="mono">{decision.policy_id ?? "-"}</td>
+                <td className="mono gov-break">
+                  {decision.principal ?? (
+                    <span className="gov-absent" title={t("governance.decisions.principalAbsentWhy")}>
+                      {t("governance.decisions.principalAbsent")}
+                    </span>
+                  )}
+                </td>
+                <td className="mono">
+                  {decision.policy_id ?? "-"}
+                  {decision.log_only_matched_policies.length > 0 ? (
+                    <div className="gov-cell-note">
+                      {t("governance.decisions.logOnlyMatched", {
+                        policies: decision.log_only_matched_policies.join(", "),
+                      })}
+                    </div>
+                  ) : null}
+                </td>
                 <td>
                   <div className="gov-action-list">
                     <Chip tone={statusTone(decision.engine_mode)}>
@@ -290,6 +307,20 @@ export function DecisionView({ gatewayId, onNavigate }: Props) {
           </DataTable>
           </>
         )}
+        {data?.spans_unavailable_reason ? (
+          <div className="gov-data-foot">
+            <span>
+              {t("governance.decisions.spansUnavailable", {
+                reason: data.spans_unavailable_reason,
+              })}
+            </span>
+          </div>
+        ) : null}
+        {data?.decisions.some((d) => d.evaluation === "tool_listing") ? (
+          <div className="gov-data-foot">
+            <span>{t("governance.decisions.listingRowsNote")}</span>
+          </div>
+        ) : null}
         {data?.cache ? (
           <div className="gov-data-foot">
             <span>

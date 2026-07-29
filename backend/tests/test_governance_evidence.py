@@ -296,6 +296,81 @@ def test_evidence_count_helper_never_raises():
     assert ge.evidence_count(Broken([]), GW) == 0
 
 
+# ── merging the span channel ────────────────────────────────────────────────
+
+
+def _with_span_rows(monkeypatch, rows=None, reason=None, raises=False):
+    from app.services import governance_spans
+
+    def fake(logs, gateway_arn, range_key, policy_id=None):
+        if raises:
+            from app.core.errors import AppError
+
+            raise AppError("observability.query_failed", "boom", status_code=502)
+        return {
+            "decisions": rows if rows is not None else [],
+            "unavailable_reason": reason,
+            "truncated": False,
+        }
+
+    monkeypatch.setattr(governance_spans, "gateway_decision_rows", fake)
+
+
+def test_span_rows_are_merged_without_redefining_evidence_count(monkeypatch):
+    """Spans add detail; the gate's number stays metric-derived because spans are
+    sampled while metrics are exact."""
+    _with_span_rows(
+        monkeypatch,
+        rows=[{"action": "hr-database___list_departments", "outcome": "ALLOW"}],
+    )
+    monkeypatch.setattr(
+        "app.services.governance._require_gateway",
+        lambda control, gateway_id: {"gatewayId": gateway_id, "gatewayArn": "arn:gw"},
+    )
+    cw = FakeCW(_realistic_streams())
+    result = ge.gateway_decisions(_control(), cw, GW, "7d", logs=object())
+
+    assert result["source"] == "metrics+spans"
+    assert result["count"] == 1 == len(result["decisions"])
+    assert result["evidence_count"] == 701  # unchanged by the span merge
+    assert result["spans_unavailable_reason"] is None
+
+
+def test_span_failure_degrades_to_metrics_only(monkeypatch):
+    """A Logs Insights outage must not take the endpoint down — the aggregates are
+    what the cutover gate reads."""
+    _with_span_rows(monkeypatch, raises=True)
+    monkeypatch.setattr(
+        "app.services.governance._require_gateway",
+        lambda control, gateway_id: {"gatewayId": gateway_id, "gatewayArn": "arn:gw"},
+    )
+    cw = FakeCW(_realistic_streams())
+    result = ge.gateway_decisions(_control(), cw, GW, "7d", logs=object())
+
+    assert result["decisions"] == [] and result["count"] == 0
+    assert result["spans_unavailable_reason"] == "observability.query_failed"
+    assert result["source"] == "metrics"
+    assert result["evidence_count"] == 701  # aggregates intact
+
+
+def test_no_gateway_arn_skips_the_span_read(monkeypatch):
+    called = {"n": 0}
+    from app.services import governance_spans
+
+    def fake(*args, **kwargs):
+        called["n"] += 1
+        return {"decisions": [], "unavailable_reason": None, "truncated": False}
+
+    monkeypatch.setattr(governance_spans, "gateway_decision_rows", fake)
+    monkeypatch.setattr(
+        "app.services.governance._require_gateway",
+        lambda control, gateway_id: {"gatewayId": gateway_id},  # no gatewayArn
+    )
+    result = ge.gateway_decisions(_control(), FakeCW(_realistic_streams()), GW, "7d")
+    assert called["n"] == 0
+    assert result["decisions"] == []
+
+
 # ── the evidence / override gate ────────────────────────────────────────────
 
 

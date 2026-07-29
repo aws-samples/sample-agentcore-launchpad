@@ -176,6 +176,31 @@ Two properties of that metric channel shape the contract:
   of the same event, so selections match an exact dimension-name set — summing
   across projections would inflate counts several-fold.
 
+Per-decision rows come from that span channel, parsed by
+`app/services/governance_spans.py`. The row source is the
+`AgentCore.Gateway.InvokeTool` SERVER span, which carries `tool.name` **and**
+`aws.agentcore.policy.authorization_decision` together; the child
+`AgentCore.Policy.*` span adds the determining/mismatched policy ids and
+`aws.agentcore.policy.log_only_matched_policies` — an undocumented attribute that
+reveals what a LOG_ONLY *candidate* would have matched from an ENFORCE-mode span,
+which the metric channel cannot express. `session.id` needs a second pass joined on
+`traceId`. Three properties are load-bearing:
+
+- **`principal` is structurally unavailable.** No span in the trace carries a
+  principal, because the Harness authenticates to the Gateway with an OAuth M2M
+  client credential — the request has no human subject. The field renders as
+  explained-absent, never inferred. The local demo ledger keeps its own principal
+  and the two are not conflated.
+- **`PartiallyAuthorizeActions` denials are list-time tool-availability decisions,**
+  not blocked calls: under ENFORCE the tool is filtered out of `tools/list` so the
+  model never sees it. Rows carry an `evaluation` kind (`invocation` /
+  `tool_listing`) so the two are not presented as the same event. Under ENFORCE the
+  listing denial is the *only* DENY that can occur.
+- **Spans never redefine `evidence_count`.** Spans are sampled while metrics are
+  exact counts, so the gate's number stays metric-derived and a span-channel outage
+  degrades to metrics-only (`spans_unavailable_reason`) rather than failing the
+  request.
+
 The span channel is the opt-in half, and it is **per Gateway**: AgentCore emits
 Policy decision spans only after trace delivery is enabled on the attached
 Gateway. That is a CloudWatch vended-log delivery (source `logType=TRACES` →

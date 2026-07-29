@@ -26,7 +26,7 @@ from app.services import governance as governance_service
 from app.services import governance_evidence, mcp_client
 from app.services import traces as trace_service
 from app.services.agentcore.client import control_client, iam_client
-from app.services.observability import cw_client
+from app.services.observability import cw_client, logs_client
 
 router = APIRouter(prefix="/api", tags=["governance"])
 
@@ -291,6 +291,7 @@ def get_gateway_decisions(
         range,
         policy_id,
         force,
+        logs=logs_client(),
     )
 
 

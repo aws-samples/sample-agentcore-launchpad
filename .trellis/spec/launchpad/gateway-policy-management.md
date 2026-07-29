@@ -131,6 +131,38 @@ after insertion.
 - **`decisions[]` requires spans and is never synthesized.** Metric dimensions
   cannot express principal, decision reason, or trace id, so the array stays empty
   while `source` is `metrics`.
+- **Span-derived rows (`governance_spans.py`) come from
+  `AgentCore.Gateway.InvokeTool`, not the Policy span.** That SERVER span carries
+  `tool.name` *and* `aws.agentcore.policy.authorization_decision` together; the child
+  `AgentCore.Policy.*` span (joined on `parentSpanId`) adds
+  `determining_policies`, `mismatched_policies`, and the undocumented-but-captured
+  `aws.agentcore.policy.log_only_matched_policies` — which shows what a LOG_ONLY
+  *candidate* would have matched from an ENFORCE-mode span, and is the one thing the
+  metric channel cannot express. `session.id` lives on the runtime/mcp spans and
+  needs a second pass joined on `traceId`. Select `@message` and parse the JSON:
+  Logs Insights flattens arrays into `attributes.x.0`, which cannot express a policy
+  id list of unknown length.
+- **`principal` is structurally unavailable, not merely unimplemented.** No span in a
+  captured 31-span trace carries any principal/actor/subject attribute, because the
+  Harness authenticates to the Gateway with an OAuth M2M client credential — the
+  request has no human subject. `principal` and `policy_mode` (spans carry only the
+  Gateway attachment mode) are hardcoded `None` and rendered as explained-absent.
+  The local demo ledger keeps its own `principal`; never conflate the two.
+- **`aws.agentcore.policy.authorization_reason` is documented but UNVERIFIED** — it
+  was absent from the captured ALLOW span, and no `AuthorizeAction` DENY can be
+  captured under `ENFORCE` (see below). Do not reference it. A test asserts the
+  parser source does not mention it.
+- **Two evaluation kinds, and the listing one is the common case.**
+  `PartiallyAuthorizeActions` denials are list-time *tool availability* decisions:
+  under `ENFORCE` the denied tool is filtered out of `tools/list`, so the model never
+  sees it and **no `AuthorizeAction` DENY can ever occur**. Rows carry
+  `evaluation: invocation | tool_listing` so the two are not presented as the same
+  event. Only `denied_tools` become listing rows — expanding `allowed_tools` would
+  emit one row per tool per list call for no added information.
+- **Spans never redefine `evidence_count`.** Spans are sampled; metrics are exact. A
+  span-channel failure degrades to metrics-only with `spans_unavailable_reason` and
+  must never turn the endpoint into a 5xx, because the aggregates are what the
+  cutover gate reads.
 - **The span channel is opt-in per Gateway and bootstrap owns it.** Policy decision
   spans are emitted only after trace delivery is enabled on the attached Gateway —
   a CloudWatch vended-log delivery (`put_delivery_source(logType="TRACES")` →

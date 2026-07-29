@@ -864,7 +864,16 @@
       },
       "truncated": "Some metric streams were dropped by the per-request query cap; totals are a lower bound.",
       "policyFilterPartial": "Some operations publish no policy dimension, so their decisions cannot be attributed to this policy and are excluded.",
-      "aggregateNote": "Breakdowns are not a decomposition of the total: AWS publishes the policy dimension only for decisions that had a determining policy, and the tool dimension only for per-tool authorization. Per-decision rows (principal, reason, trace) require Policy spans."
+      "evaluation": {
+        "invocation": "call-time authorization",
+        "tool_listing": "withheld at tool listing"
+      },
+      "principalAbsent": "not in span",
+      "principalAbsentWhy": "The Harness authenticates to the Gateway with an OAuth machine-to-machine client credential, so the request carries no human principal. This is not missing data.",
+      "logOnlyMatched": "LOG_ONLY would match: {{policies}}",
+      "listingRowsNote": "Rows marked \u201cwithheld at tool listing\u201d mean the tool was never offered to the model, not that a call was blocked. Only denials are listed this way; allowed tools appear in the counts above.",
+      "spansUnavailable": "Per-decision detail unavailable ({{reason}}) \u2014 the counts above are unaffected.",
+      "aggregateNote": "Breakdowns are not a decomposition of the total: AWS publishes the policy dimension only for decisions that had a determining policy, and the tool dimension only for per-tool authorization. Per-decision rows below come from Policy spans, which are sampled, so they need not add up to these counts."
     },
     "audit": {
       "title": "POLICY CHANGE AUDIT",

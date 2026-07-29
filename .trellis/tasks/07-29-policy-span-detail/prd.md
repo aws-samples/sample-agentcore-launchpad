@@ -133,16 +133,29 @@ silently prefer one. State which number is which (exact count vs sampled detail)
 
 ## Acceptance criteria
 
-- [ ] (prerequisite, owned by `07-29-gateway-traces-delivery`) the `TRACES`
-      delivery exists for `gateway/launchpad-gw-em0yuqmmdp`.
-- [ ] `research/` holds verbatim captured spans covering ALLOW and DENY for both
-      operations, with the query used; any uncaptured case is recorded as
-      unverified rather than assumed.
-- [ ] Every attribute name in the parser appears in a captured span.
-- [ ] The Decisions view shows real per-decision rows for `launchpad-gw` with
-      principal and reason.
-- [ ] Unestablished fields render as absent, not fabricated.
-- [ ] `make verify` passes.
+- [x] (prerequisite) the `TRACES` delivery exists — delivered by
+      `07-29-gateway-traces-delivery` (`5103a93`), and the very first Policy spans in
+      this account appeared minutes later.
+- [x] `research/policy-span-corpus.md` holds verbatim spans with the queries used.
+      ALLOW (`AuthorizeAction`) and DENY (`PartiallyAuthorizeActions`) are both
+      covered under `ENFORCE`. The two uncaptured cases —
+      `AuthorizeAction`-DENY and `authorization_reason` — are recorded as
+      **unverified with the structural reason**, not assumed.
+- [x] Every attribute name in the parser appears in a captured span; a test parses
+      the module AST and asserts the code (docstring excluded) never mentions
+      `authorization_reason`. Verified it fails when the attribute is added back.
+- [x] The Decisions view shows real per-decision rows for `launchpad-gw`:
+      1 `invocation` ALLOW (`hr-database___list_departments`, with
+      `log_only_matched_policies: ["lab_readonly_tools-be45dja2_p"]`) and 2
+      `tool_listing` DENY (`hr-database___create_payout`), each with trace + session
+      links. **Not with principal** — see the amended R3 table; that field is
+      structurally unavailable.
+- [x] Unestablished fields render as absent, not fabricated: `principal` shows an
+      explained "not in span" marker, `policy_mode` a dash.
+- [x] One parsed row cross-checked field-by-field against its raw span
+      (`spanId 08b21d1592a9b9aa`): span_id, trace_id, action, outcome, mode all match.
+- [x] Rendered in a browser in `en` and `zh-CN`, 0 console errors.
+- [x] `make verify` passes (912 backend tests).
 
 ## Notes
 
@@ -154,3 +167,36 @@ before implementing R3.
 Two things must land before this child can start: the `TRACES` delivery
 (`07-29-gateway-traces-delivery`) and a working way to drive real gateway traffic
 (the credential blocker in R2).
+
+
+## Deviations and discoveries during implementation
+
+1. **`principal` turned out to be unobtainable**, which the original PRD had listed
+   as a deliverable ("real per-decision rows … with principal and reason"). The
+   capture settled it: no span carries a principal because the Harness uses an M2M
+   client credential. R3 and the acceptance criteria were amended rather than the
+   field faked.
+2. **Promoted `observability._logs_client` to `logs_client`**, mirroring the
+   `cw_client` promotion from the metrics child, so the router injects it explicitly
+   instead of a third module building its own client.
+3. **Two stale doc statements found and fixed**, both introduced by earlier work in
+   this task tree:
+   - The aggregate note still said "per-decision rows (principal, reason, trace)
+     require Policy spans" — which now sat directly above a table of rows, and was
+     wrong about principal even with spans.
+   - `docs/lab/11-governance.md` claimed `launchpad-gw` had no evidence in the 7d
+     window (true when written, false after the R2 capture generated traffic), and
+     its DENY reproduction hint was wrong twice over: the `policy-test` path is
+     blocked by rejected credentials, and under `ENFORCE` a Harness agent
+     *cannot* call `create_payout` at all because it is filtered out of `tools/list`.
+     Replaced with the verified Harness-driven procedure and an explanation of why
+     only a `tool_listing` DENY can appear.
+
+## Follow-up left open
+
+- `AuthorizeAction`-DENY shape and `aws.agentcore.policy.authorization_reason` stay
+  unverified. Capturing them needs the Gateway in `LOG_ONLY`, which the user declined
+  on 2026-07-29 for a shared demo resource. Recorded in the spec so nobody adds the
+  field speculatively.
+- `policy-test` still records auth failures as Cedar DENYs in the local ledger
+  (found by the metrics child, still unfixed, still out of scope).

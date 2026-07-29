@@ -864,7 +864,16 @@
       },
       "truncated": "部分指标流因单次查询上限被丢弃，总数为下界。",
       "policyFilterPartial": "部分操作不发布策略维度，其决策无法归属到该策略，已被排除。",
-      "aggregateNote": "各项拆分并不是总数的分解：AWS 只对存在判定策略的决策发布策略维度，只对按工具授权发布工具维度。逐条决策明细（主体、原因、trace）需要 Policy span。"
+      "evaluation": {
+        "invocation": "调用时授权",
+        "tool_listing": "列举时被扣下"
+      },
+      "principalAbsent": "span 中没有",
+      "principalAbsentWhy": "Harness 使用 OAuth 机器对机器凭据访问网关，请求里不带人类主体。这不是数据缺失。",
+      "logOnlyMatched": "LOG_ONLY 本会匹配：{{policies}}",
+      "listingRowsNote": "标为「列举时被扣下」的行表示该工具从未提供给模型，而不是某次调用被拦截。只有被拒的工具会这样列出；放行的工具体现在上方计数里。",
+      "spansUnavailable": "逐条明细不可用（{{reason}}）——上方计数不受影响。",
+      "aggregateNote": "各项拆分并不是总数的分解：AWS 只对存在判定策略的决策发布策略维度，只对按工具授权发布工具维度。下方逐条明细来自 Policy span，且经过采样，因此不必与这些计数吻合。"
     },
     "audit": {
       "title": "策略变更审计",

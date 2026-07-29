@@ -217,17 +217,33 @@ permit(
 | `available: true` + `evidence_count: 0` | 通道正常，只是这个窗口内没有决策 |
 | `available: true` + `evidence_count > 0` | 有证据，展示聚合明细 |
 
-本次环境下 `launchpad-gw` 在 7 天窗口内正好属于第二种（最近一次演示调用已经滑出窗口）：
+第二种状态最常见于安静的账号——通道正常，只是窗口内没人调过网关。它长这样
+（`decisions` 也会是空数组）：
 
 ```json
 {"available": true, "unavailable_reason": null, "source": "metrics",
  "evidence_count": 0, "log_only_count": 0, "totals": {"allow": 0, "deny": 0},
- "by_operation": [{"operation": "AuthorizeAction", "allow": 0, "deny": 0, "basis": "per_call"},
-                  {"operation": "PartiallyAuthorizeActions", "allow": 0, "deny": 0, "basis": "per_tool"}],
  "by_mode": [{"mode": "ENFORCE", "allow": 0, "deny": 0}], "decisions": []}
 ```
 
-同一时刻 `launchpad-kb-gw` 窗口内有数据，是第三种状态的真实样子：
+> 遇到这种情况不用怀疑配置：放宽时间范围到 `7d`，或调用一次网关工具产生新证据即可。
+
+本次环境下 `launchpad-gw` 有真实数据（下一节会看到它的逐条明细）：
+
+```json
+{"available": true, "source": "metrics+spans", "evidence_count": 13, "log_only_count": 0,
+ "totals": {"allow": 11, "deny": 2},
+ "by_operation": [{"operation": "PartiallyAuthorizeActions", "allow": 10, "deny": 2, "basis": "per_tool"},
+                  {"operation": "AuthorizeAction", "allow": 1, "deny": 0, "basis": "per_call"}],
+ "by_mode": [{"mode": "ENFORCE", "allow": 11, "deny": 2}],
+ "by_policy": [{"policy_id": "launchpad_baseline_allow-obafj1o9hj", "allow": 1, "deny": 0}],
+ "by_tool": [{"tool": "hr-database___create_payout", "allow": 0, "deny": 2}, "…"]}
+```
+
+> `log_only_count` 是 0,因为这个网关是 `ENFORCE`——门禁只认 `LOG_ONLY` 模式的决策,
+> 所以在它上面切换仍然需要零证据覆盖。这是正确行为,不是缺陷。
+
+`launchpad-kb-gw` 是另一种对比：它是 `LOG_ONLY`，证据能直接满足门禁：
 
 ```json
 {"available": true, "source": "metrics", "evidence_count": 17, "log_only_count": 17,
@@ -249,15 +265,47 @@ permit(
   里根本没有 `Policy` 维度（AWS 只对存在判定策略的决策发布该维度）。`by_tool` 同理只覆盖
   按工具授权的那部分。把它们加起来去凑总数是错的。
 
-> `decisions` 始终是空数组：指标维度里没有主体、判定原因和 trace id，平台不会用聚合数据
-> 编造逐条明细。**逐条决策明细需要 Policy span**，那才需要给网关开 trace 投递。
+### 逐条决策明细
+
+`decisions` 数组来自 **Policy span**（由 `make bootstrap` 建的 TRACES 投递打开）。
+本次环境的真实返回：
+
+```json
+{"source": "metrics+spans", "evidence_count": 13, "count": 3,
+ "decisions": [
+   {"evaluation": "tool_listing", "outcome": "DENY", "action": "hr-database___create_payout",
+    "principal": null, "policy_id": null, "engine_mode": "ENFORCE",
+    "trace_id": "6a6a008ba475fe77…", "session_id": "4c320a86…"},
+   {"evaluation": "invocation", "outcome": "ALLOW", "action": "hr-database___list_departments",
+    "principal": null, "policy_id": "launchpad_baseline_allow-obafj1o9hj",
+    "log_only_matched_policies": ["lab_readonly_tools-be45dja2_p"],
+    "engine_mode": "ENFORCE", "trace_id": "6a6a005492b3acc3…"}]}
+```
+
+三处**必须看懂**：
+
+- **`evaluation` 区分两类判定。** `invocation` 是调用时授权；`tool_listing` 是
+  `PartiallyAuthorizeActions` 在 `tools/list` 阶段把工具**扣下不提供给模型**——不是某次
+  调用被拦。ENFORCE 下被拒工具压根不会进入模型看到的工具列表,所以**这是唯一可能出现的
+  DENY**,而不是边缘情况。
+- **`principal` 恒为 `null`,这不是数据缺失。** Harness 用 OAuth 机器对机器凭据访问网关,
+  请求里不带人类主体,整条 trace 的 31 个 span 里都没有。界面显示「span 中没有」并给出
+  说明。上一节本地台账里的 `principal` 是另一个来源,两者不能混。
+- **`log_only_matched_policies` 是文档里没有的属性,但很有用**:它显示 LOG_ONLY *候选*
+  策略本会匹配什么——从一条 ENFORCE 模式的 span 里就能看到。上例里就是本章创建的
+  `lab_readonly_tools`。指标通道给不出这个。
+
+> `evidence_count`(13)和 `count`(3)不是一回事,也不该相等:前者来自指标、是精确计数,
+> 后者是 span 明细行、经过采样。span 通道读不到时返回 `spans_unavailable_reason`,
+> 上方计数不受影响。
 
 `log_only_count` 是切 `ENFORCE` / 提升策略时门禁真正读的那个数——门禁只认
 `LOG_ONLY` 模式下的决策，与上面文档写的规则一致。上例 kb-gw 的 17 条全在 `LOG_ONLY`，
 这种情况下切换不再需要零证据覆盖。
 
-不过平台**本地决策台账**里有历史演示记录（`/api/governance/decisions`），可以看到一条真实的
-Cedar 拦截：
+平台还有一个独立的**本地决策台账**（`/api/governance/decisions`），它**带 `principal`**——
+因为那条路径是以具体演示用户身份直接调网关的，不是 Harness 的机器凭据。两者不要混：
+上面的 AWS 明细没有主体，这里的有。台账里有一条真实的 Cedar 拦截：
 
 ```json
 {"at": "2026-07-13T23:09:23", "principal": "demo@hr-analyst",
@@ -276,9 +324,15 @@ Cedar 拦截：
 同一个工具在不同身份下得到不同结果，返回里还包含做出判定的策略名。这可以核对 Cedar
 在网关层的按动作授权结果。
 
-> 想自己复现这个 DENY：用 `hr-database` 这个演示 Harness Agent（它挂了 `launchpad-gw`）
-> 以 `hr-analyst` 身份去调 `create_payout`。本实验没有重跑它，因为它属于既有演示资产，
-> 上面这两条是账号里已有的真实记录。
+> **想自己产生 AWS 侧证据**：调用挂了 `launchpad-gw` 的 `hr-database` Harness Agent
+> 即可（`对话演练场`，或 `POST /api/chat/{agent_id}`）。问一句"列出所有部门"就会产生
+> 一条 `tools/list` 评估（含 `create_payout` 的 `tool_listing` DENY）和一条 `invocation`
+> ALLOW。
+>
+> 注意两件事：**`ENFORCE` 下你无法让模型真的去调 `create_payout`**——它在
+> `tools/list` 阶段就被扣下，模型看不到这个工具，所以不会出现"调用被拦"的
+> `AuthorizeAction` DENY，只会有 `tool_listing` DENY。上面台账里那两条历史记录来自
+> `策略测试` 那条以演示用户身份直连网关的路径,与 Harness 的机器凭据不是一回事。
 
 ## 11.7 审计：不可变变更日志
 
@@ -305,7 +359,9 @@ Cedar 拦截：
 - [ ] 取消纳管后标签为空，且 Gateway 本身未被改动
 - [ ] `lab_readonly_tools` 策略创建成功，`enforcement_mode = LOG_ONLY`
 - [ ] 生成的 Cedar 语句里**没有** `create_payout`
-- [ ] 决策视图区分「通道读不到」「窗口内无决策」「有证据」三种状态，且 `decisions` 为空
+- [ ] 决策视图区分「通道读不到」「窗口内无决策」「有证据」三种状态
+- [ ] 有 span 时能看到逐条明细：`evaluation` 区分调用授权与列举时扣下，`principal` 显示
+      为「span 中没有」并给出说明
 - [ ] 审计里有一条 `policy_create · succeeded`，且含变更前后快照
 
 ## 常见问题
@@ -317,6 +373,8 @@ Cedar 拦截：
 | 报 `updatedAt` 相关冲突 | 平台要求变更前 Gateway 状态新鲜 | 点 `刷新` 后重试 |
 | 决策一直是 0 条，但显示 `available: true` | 通道正常，只是窗口内没有决策 | 放宽时间范围到 `7d`；或调用一次网关工具产生新证据 |
 | 决策显示 `available: false` + 错误码 | 遥测通道读不到（多为后端角色缺 `cloudwatch:ListMetrics` / `GetMetricData`） | 按错误码补权限后点 `刷新` |
+| 有聚合计数但 `decisions` 是空的 | 网关的 `TRACES` 投递没开，Policy span 没有产生 | 跑一次 `make bootstrap`（会幂等创建投递），再产生一次网关流量 |
+| 逐条明细的 `主体` 一直是「span 中没有」 | Harness 用机器凭据（OAuth M2M）访问网关，请求里没有人类主体 | 属正常现象；带主体的记录看本地决策台账 |
 | 切 ENFORCE 被阻止 | 24h 内没有 LOG_ONLY 证据 | 补证据，或手输 Gateway 名 + 覆盖原因（谨慎） |
 | IAM 挂载预检 FAIL | Gateway 执行角色缺少策略引擎权限 | 照界面给出的内联策略 JSON 修 |
 

@@ -530,19 +530,35 @@ export interface GovernanceOperation {
   completed_at: string | null;
 }
 
+/** `invocation` = a tool call was authorized (or refused) at call time.
+ *  `tool_listing` = `PartiallyAuthorizeActions` withheld the tool from the model at
+ *  `tools/list` time — nothing was blocked mid-call, the tool was never offered.
+ *  Under ENFORCE this is the only DENY that can occur, so it is the common case. */
+export type GovernanceDecisionEvaluation = "invocation" | "tool_listing";
+
 export interface GovernancePolicyDecision {
-  at: string;
-  gateway_id: string;
-  gateway_arn: string;
+  at: string | null;
+  gateway_id: string | null;
+  gateway_arn: string | null;
   engine_id: string | null;
   policy_id: string | null;
-  principal: string;
-  action: string;
-  outcome: "ALLOW" | "DENY";
+  determining_policies: string[];
+  mismatched_policies: string[];
+  /** What a LOG_ONLY candidate policy would have matched — visible even from an
+   *  ENFORCE-mode span, and not expressible in the metric channel. */
+  log_only_matched_policies: string[];
+  /** Always null: the Harness authenticates to the Gateway with an OAuth M2M
+   *  client credential, so no span in the trace carries a human principal. */
+  principal: string | null;
+  action: string | null;
+  outcome: "ALLOW" | "DENY" | null;
   engine_mode: GovernanceGatewayMode | null;
+  /** Always null: spans carry only the Gateway attachment mode. */
   policy_mode: GovernancePolicyMode | null;
   trace_id: string | null;
+  span_id: string | null;
   session_id: string | null;
+  evaluation: GovernanceDecisionEvaluation;
   source: "aws";
 }
 
@@ -599,8 +615,10 @@ export interface GovernanceDecisionResponse {
   by_policy: GovernanceEvidencePolicyRow[];
   by_tool: GovernanceEvidenceToolRow[];
   mismatch: { determining: number; no_determining: number; errors: number };
-  /** Some metric streams were dropped by the per-request query cap. */
+  /** Some metric streams or span rows were dropped by a per-request cap. */
   truncated: boolean;
+  /** Set when the span channel could not be read; the aggregates are still valid. */
+  spans_unavailable_reason: string | null;
   /** A policy filter was applied but some operations publish no `Policy`
    *  dimension, so their decisions are unattributable and excluded. */
   policy_filter_partial: boolean;

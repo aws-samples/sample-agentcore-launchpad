@@ -514,6 +514,7 @@ td.pri{color:var(--ink);font-weight:600}
 .gov-evidence-row .gov-cell-note{margin-top:0;flex:0 0 auto}
 .gov-evidence-row>span:first-child{min-width:0}
 .gov-evidence-row>span:last-child{flex:0 0 auto;white-space:nowrap}
+.gov-absent{color:var(--ink-3);border-bottom:1px dotted var(--line-2);cursor:help;white-space:nowrap}
 
 /* ================= observability — ported from design/mockup-observability.html ================= */
 .obs-bar{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap}
