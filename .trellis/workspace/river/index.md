@@ -29,7 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
-| 30 | 2026-07-29 | Workshop backlog: ISSUE-001/005/010/011/014 | `9853800`, `4ee49f2`, `e18aa39`, `d64f4b7` | `main` |
+| 30 | 2026-07-29 | Workshop backlog: ISSUE-001/005/010/011/014 | `9853800`, `57882ff`, `70e94b0`, `d64f4b7` | `main` |
 | 29 | 2026-07-28 | Surface failed system-prompt recommendation (ISSUE-007) | `92b6a4f`, `4323530` | `main` |
 | 28 | 2026-07-28 | kb_deep_search：给容器与 ZIP 方式补上 agentic 多步检索 | `38eb188`, `8ea87d1` | `main` |
 | 27 | 2026-07-28 | 容器与 ZIP 方式挂载托管知识库（直连 Retrieve 通道） | `5569aa2`, `13cc079`, `a9599d2`, `c8cad8e` | `main` |
