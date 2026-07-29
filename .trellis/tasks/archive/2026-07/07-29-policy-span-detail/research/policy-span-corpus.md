@@ -216,7 +216,36 @@ Neither appears in
 is **not present** on the captured ALLOW span. Whether it appears on a DENY is
 still unverified — see the gap below.
 
-## Gap: no `AuthorizeAction` DENY, and why ENFORCE cannot produce one
+## RESOLVED 2026-07-29 (after `07-29-policy-test-honesty`)
+
+The gap below was real for *Harness-driven* traffic but not absolute. `policy-test`
+issues `tools/call` with **no preceding `tools/list`**, so the Gateway runs
+`AuthorizeAction` per call and a call-time DENY is reachable — no `LOG_ONLY` switch
+needed. Captured:
+
+```json
+{
+  "name": "AgentCore.Policy.AuthorizeAction",
+  "attributes": {
+    "aws.agentcore.policy.authorization_decision": "DENY",
+    "aws.agentcore.policy.authorization_reason": "Policy evaluation denied due to launchpad_payout_admin_only-x7gz5yjkrd",
+    "aws.agentcore.policy.determining_policies": ["launchpad_payout_admin_only-x7gz5yjkrd"],
+    "aws.agentcore.policy.mismatched_policies": [],
+    "aws.agentcore.policy.types": [["launchpad_payout_admin_only-x7gz5yjkrd", "Cedar"]],
+    "aws.agentcore.gateway.policy.mode": "ENFORCE"
+  }
+}
+```
+
+So **`authorization_reason` exists, on DENY only** — absent on ALLOW, which is why the
+ALLOW-only capture below concluded otherwise. And symmetrically
+`log_only_matched_policies` is present on the ALLOW span but **absent on this DENY**:
+both attributes are conditional and must be read defensively.
+
+The text below is kept as the original ENFORCE/Harness finding, which still holds for
+that path.
+
+## Gap: no `AuthorizeAction` DENY via a Harness, and why ENFORCE cannot produce one
 
 The DENY attempt ("Create a payout of 1 USD for EMP-1024") produced **no**
 `AuthorizeAction` DENY span. The reason is structural and worth recording:

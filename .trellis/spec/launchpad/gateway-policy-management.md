@@ -148,10 +148,16 @@ after insertion.
   request has no human subject. `principal` and `policy_mode` (spans carry only the
   Gateway attachment mode) are hardcoded `None` and rendered as explained-absent.
   The local demo ledger keeps its own `principal`; never conflate the two.
-- **`aws.agentcore.policy.authorization_reason` is documented but UNVERIFIED** — it
-  was absent from the captured ALLOW span, and no `AuthorizeAction` DENY can be
-  captured under `ENFORCE` (see below). Do not reference it. A test asserts the
-  parser source does not mention it.
+- **`aws.agentcore.policy.authorization_reason` is populated on DENY only** —
+  verified 2026-07-29 (e.g. `Policy evaluation denied due to
+  launchpad_payout_admin_only-x7gz5yjkrd`). It is **absent on ALLOW**, which is why an
+  earlier ALLOW-only capture concluded it did not exist. Symmetrically,
+  `log_only_matched_policies` appears on ALLOW but not on that DENY — both attributes
+  are conditional, so always read them with `.get()` and never require either.
+  The DENY span became reachable via `policy-test`, which issues `tools/call` with no
+  preceding `tools/list`; no `LOG_ONLY` switch was needed. **Not yet surfaced in the
+  decision-row contract** — `governance_spans.py` still omits `reason`, and the test
+  asserting it does so should be retired *when* the field is added, not before.
 - **Two evaluation kinds, and the listing one is the common case.**
   `PartiallyAuthorizeActions` denials are list-time *tool availability* decisions:
   under `ENFORCE` the denied tool is filtered out of `tools/list`, so the model never
