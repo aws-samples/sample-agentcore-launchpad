@@ -17,10 +17,15 @@ the task research note. Two consequences of that capture shape the module:
   Gateway with an OAuth M2M client credential — the request has no human subject.
   The field stays in the row shape as `None` rather than being inferred.
 
-`aws.agentcore.policy.authorization_reason` is deliberately absent from this module:
-AWS documents it, but it did not appear on the captured span, and referencing a
-documented-but-unobserved field is the exact mistake the research gate exists to
-prevent. A test asserts this file does not mention it.
+The rule that governs this module: **no attribute is read here without appearing in a
+captured span.** Two of them are conditional, and neither may be treated as required:
+
+* `aws.agentcore.policy.authorization_reason` appears on **DENY only** (verified
+  2026-07-29 — an earlier ALLOW-only capture wrongly concluded it did not exist).
+* `aws.agentcore.policy.log_only_matched_policies` is the mirror image: present on
+  ALLOW, absent on that DENY.
+
+So a `None` for either is a correct value, not a parse failure.
 """
 
 import json
@@ -135,10 +140,14 @@ def _row(
         ),
         # Undocumented but captured: what a LOG_ONLY candidate policy would have
         # matched, visible even from an ENFORCE-mode span. The metric channel
-        # cannot express this.
+        # cannot express this. Observed on ALLOW spans only.
         "log_only_matched_policies": _as_list(
             pattrs.get("aws.agentcore.policy.log_only_matched_policies")
         ),
+        # Populated on DENY only — None on an ALLOW row is correct, and
+        # PartiallyAuthorizeActions carries no reason at all (it reports
+        # allowed/denied tool lists instead), so nothing is synthesized for those.
+        "reason": pattrs.get("aws.agentcore.policy.authorization_reason"),
         # Structurally unavailable: the Harness authenticates with an M2M client
         # credential, so no span in the trace carries a human principal.
         "principal": None,
@@ -170,12 +179,22 @@ def _assemble(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for span in invokes:
         attrs = _attrs(span)
+        policy = by_parent.get(span.get("spanId") or "")
+        # Some InvokeTool spans were observed without the decision attribute while
+        # their child Policy span carried it, so fall back rather than emitting a row
+        # with a blank outcome. A row with no decision on either span is not a
+        # decision at all and is dropped.
+        outcome = attrs.get("aws.agentcore.policy.authorization_decision") or _attrs(
+            policy or {}
+        ).get("aws.agentcore.policy.authorization_decision")
+        if not outcome:
+            continue
         rows.append(
             _row(
                 span,
-                by_parent.get(span.get("spanId") or ""),
+                policy,
                 action=attrs.get("tool.name"),
-                outcome=attrs.get("aws.agentcore.policy.authorization_decision"),
+                outcome=outcome,
                 evaluation="invocation",
             )
         )

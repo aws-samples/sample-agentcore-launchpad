@@ -155,9 +155,13 @@ after insertion.
   `log_only_matched_policies` appears on ALLOW but not on that DENY — both attributes
   are conditional, so always read them with `.get()` and never require either.
   The DENY span became reachable via `policy-test`, which issues `tools/call` with no
-  preceding `tools/list`; no `LOG_ONLY` switch was needed. **Not yet surfaced in the
-  decision-row contract** — `governance_spans.py` still omits `reason`, and the test
-  asserting it does so should be retired *when* the field is added, not before.
+  preceding `tools/list`; no `LOG_ONLY` switch was needed. Surfaced as `reason` on
+  span-derived rows; `tool_listing` rows never carry one and none is synthesized.
+- **An `InvokeTool` span may omit the decision while its child Policy span has it.**
+  Observed on real data. The parser falls back to the child rather than emitting a row
+  with a blank outcome, and drops rows where neither span carries a decision — a row
+  with no decision is not a decision. The attribute allow-list is enforced by an
+  AST test, so a speculative documented-but-unobserved field fails CI.
 - **Two evaluation kinds, and the listing one is the common case.**
   `PartiallyAuthorizeActions` denials are list-time *tool availability* decisions:
   under `ENFORCE` the denied tool is filtered out of `tools/list`, so the model never

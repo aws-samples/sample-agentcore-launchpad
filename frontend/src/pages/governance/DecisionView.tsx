@@ -252,6 +252,9 @@ export function DecisionView({ gatewayId, onNavigate }: Props) {
                 </td>
                 <td>
                   <Chip tone={statusTone(decision.outcome)}>{decision.outcome}</Chip>
+                  {decision.reason ? (
+                    <div className="gov-cell-note gov-break">{decision.reason}</div>
+                  ) : null}
                 </td>
                 <td className="pri mono gov-break">{decision.action}</td>
                 <td className="mono gov-break">

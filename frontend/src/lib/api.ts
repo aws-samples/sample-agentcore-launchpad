@@ -550,6 +550,9 @@ export interface GovernancePolicyDecision {
   /** Always null: the Harness authenticates to the Gateway with an OAuth M2M
    *  client credential, so no span in the trace carries a human principal. */
   principal: string | null;
+  /** Human-readable denial reason. Present on DENY only — the span carries it just
+   *  for denials, and `tool_listing` rows never have one. */
+  reason: string | null;
   action: string | null;
   outcome: "ALLOW" | "DENY" | null;
   engine_mode: GovernanceGatewayMode | null;

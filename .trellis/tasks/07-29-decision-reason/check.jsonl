@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/archive/2026-07/07-29-policy-span-detail/research/policy-span-corpus.md", "reason": "The captured spans, incl. the RESOLVED section with the verbatim DENY span and authorization_reason value"}
+{"file": ".trellis/spec/launchpad/gateway-policy-management.md", "reason": "Governance/Policy contract: span-row fields and the conditionality of reason / log_only_matched_policies"}

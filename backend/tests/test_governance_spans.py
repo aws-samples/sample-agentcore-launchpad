@@ -93,6 +93,50 @@ PARTIAL_SPAN = {
 
 ALL_SPANS = [INVOKE_TOOL_SPAN, AUTHORIZE_SPAN, PARTIAL_SPAN]
 
+# A call-time denial, captured 2026-07-29 through the policy-test path (which issues
+# tools/call with no preceding tools/list, so the Gateway authorizes per call). This is
+# the only span shape that carries authorization_reason.
+DENY_REASON = "Policy evaluation denied due to launchpad_payout_admin_only-x7gz5yjkrd"
+DENY_POLICY = "launchpad_payout_admin_only-x7gz5yjkrd"
+
+INVOKE_TOOL_DENY_SPAN = {
+    "name": "AgentCore.Gateway.InvokeTool",
+    "kind": "SERVER",
+    "traceId": "7b7b116ca586ff882e3ee3f348dc28dd",
+    "spanId": "19c32e26a3ba0ca1",
+    "startTimeUnixNano": 1785337567566000000,
+    "attributes": {
+        "aws.agentcore.gateway.policy.mode": "ENFORCE",
+        "aws.agentcore.policy.authorization_decision": "DENY",
+        "aws.resource.arn": GW_ARN,
+        "gateway.id": GW_ID,
+        "tool.name": "hr-database___create_payout",
+    },
+}
+
+AUTHORIZE_DENY_SPAN = {
+    "name": "AgentCore.Policy.AuthorizeAction",
+    "kind": "CLIENT",
+    "traceId": "7b7b116ca586ff882e3ee3f348dc28dd",
+    "spanId": "2a4d5f6071829304",
+    "parentSpanId": "19c32e26a3ba0ca1",
+    "startTimeUnixNano": 1785337567565000000,
+    "attributes": {
+        "aws.agentcore.gateway.policy.arn": ENGINE_ARN,
+        "aws.agentcore.gateway.policy.mode": "ENFORCE",
+        "aws.agentcore.policy.authorization_decision": "DENY",
+        "aws.agentcore.policy.authorization_reason": DENY_REASON,
+        "aws.agentcore.policy.determining_policies": [DENY_POLICY],
+        "aws.agentcore.policy.mismatched_policies": [],
+        "aws.agentcore.policy.target_resource.id": GW_ID,
+        "aws.agentcore.policy.types": [[DENY_POLICY, "Cedar"]],
+        "aws.remote.operation": "AuthorizeAction",
+        "aws.resource.arn": GW_ARN,
+        # NOTE: no log_only_matched_policies here. It is present on the ALLOW span
+        # above and absent on this DENY — the mirror image of authorization_reason.
+    },
+}
+
 
 class FakeInsights:
     """Stands in for observability.run_insights_queries."""
@@ -186,22 +230,90 @@ def test_principal_and_policy_mode_are_always_absent(insights):
         assert row["policy_mode"] is None
 
 
-def test_parser_never_references_the_unverified_reason_attribute(insights):
-    """`aws.agentcore.policy.authorization_reason` is documented by AWS but was
-    absent from the captured span. Referencing it would be the documented-but-
-    unverified mistake the research gate exists to prevent. The module docstring may
-    explain that; the code may not mention it."""
-    source = open(gs.__file__).read()
-    tree = ast.parse(source)
-    # clean=False so the value matches the source text byte for byte; the cleaned
-    # form is dedented/stripped and would fail to excise.
-    docstring = ast.get_docstring(tree, clean=False) or ""
-    code_only = source.replace(docstring, "", 1)
-    assert docstring and docstring not in code_only, "docstring was not excised"
-    assert "authorization_reason" not in code_only
+def test_denial_reason_is_parsed_and_is_absent_on_allow(monkeypatch):
+    """`authorization_reason` is DENY-only, verified 2026-07-29. A None on an ALLOW row
+    is the correct value, not a parse failure — so both directions are pinned."""
+    fake = FakeInsights(spans=[*ALL_SPANS, INVOKE_TOOL_DENY_SPAN, AUTHORIZE_DENY_SPAN])
+    monkeypatch.setattr(gs, "run_insights_queries", fake)
+    rows = gs.gateway_decision_rows(object(), GW_ARN, "7d")["decisions"]
 
-    for row in _rows()["decisions"]:
-        assert "reason" not in row
+    denials = [r for r in rows if r["outcome"] == "DENY" and r["evaluation"] == "invocation"]
+    assert len(denials) == 1
+    assert denials[0]["reason"] == DENY_REASON
+    assert denials[0]["policy_id"] == DENY_POLICY
+    # mirror image of the reason: absent on this DENY, present on the ALLOW
+    assert denials[0]["log_only_matched_policies"] == []
+
+    allows = [r for r in rows if r["outcome"] == "ALLOW"]
+    assert allows and all(r["reason"] is None for r in allows)
+    assert allows[0]["log_only_matched_policies"] == [LOG_ONLY_POLICY]
+
+
+def test_decision_falls_back_to_the_policy_span_and_blank_rows_are_dropped(monkeypatch):
+    """Observed on real data: some InvokeTool spans lack the decision attribute while
+    their child Policy span has it. Falling back recovers the row; a span with no
+    decision anywhere is not a decision and must not reach the table."""
+    invoke_without_decision = {
+        **INVOKE_TOOL_SPAN,
+        "spanId": "aa11bb22cc33dd44",
+        "attributes": {
+            k: v
+            for k, v in INVOKE_TOOL_SPAN["attributes"].items()
+            if k != "aws.agentcore.policy.authorization_decision"
+        },
+    }
+    child = {**AUTHORIZE_SPAN, "spanId": "ee55ff66", "parentSpanId": "aa11bb22cc33dd44"}
+    orphan = {
+        **INVOKE_TOOL_SPAN,
+        "spanId": "9999888877776666",
+        "attributes": {
+            k: v
+            for k, v in INVOKE_TOOL_SPAN["attributes"].items()
+            if k != "aws.agentcore.policy.authorization_decision"
+        },
+    }
+
+    fake = FakeInsights(spans=[invoke_without_decision, child, orphan])
+    monkeypatch.setattr(gs, "run_insights_queries", fake)
+    rows = gs.gateway_decision_rows(object(), GW_ARN, "7d")["decisions"]
+
+    assert len(rows) == 1, "the orphan with no decision anywhere must be dropped"
+    assert rows[0]["outcome"] == "ALLOW"
+    assert all(r["outcome"] for r in rows), "no row may carry a blank outcome"
+
+
+def test_tool_listing_rows_carry_no_reason(insights):
+    """PartiallyAuthorizeActions reports allowed/denied tool lists, not a reason. None
+    is synthesized from the tool name."""
+    listing = [r for r in _rows()["decisions"] if r["evaluation"] == "tool_listing"]
+    assert listing and all(r["reason"] is None for r in listing)
+
+
+def test_parser_reads_no_attribute_outside_the_captured_set(insights):
+    """The research gate, mechanised: every `aws.agentcore.*` attribute key this module
+    reads must be one observed in a captured span. Adding a speculative
+    documented-but-unseen field fails here."""
+    captured = {
+        "aws.agentcore.policy.authorization_decision",
+        "aws.agentcore.policy.authorization_reason",
+        "aws.agentcore.policy.determining_policies",
+        "aws.agentcore.policy.mismatched_policies",
+        "aws.agentcore.policy.log_only_matched_policies",
+        "aws.agentcore.policy.allowed_tools",
+        "aws.agentcore.policy.denied_tools",
+        "aws.agentcore.policy.target_resource.id",
+        "aws.agentcore.gateway.policy.arn",
+        "aws.agentcore.gateway.policy.mode",
+    }
+    tree = ast.parse(open(gs.__file__).read())
+    referenced = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.value.startswith("aws.agentcore.")
+    }
+    assert referenced <= captured, f"unobserved attributes: {sorted(referenced - captured)}"
 
 
 def test_no_spans_means_no_session_query(monkeypatch):

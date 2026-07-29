@@ -277,9 +277,13 @@ permit(
     "principal": null, "policy_id": null, "engine_mode": "ENFORCE",
     "trace_id": "6a6a008ba475fe77…", "session_id": "4c320a86…"},
    {"evaluation": "invocation", "outcome": "ALLOW", "action": "hr-database___list_departments",
-    "principal": null, "policy_id": "launchpad_baseline_allow-obafj1o9hj",
+    "principal": null, "reason": null, "policy_id": "launchpad_baseline_allow-obafj1o9hj",
     "log_only_matched_policies": ["lab_readonly_tools-be45dja2_p"],
-    "engine_mode": "ENFORCE", "trace_id": "6a6a005492b3acc3…"}]}
+    "engine_mode": "ENFORCE", "trace_id": "6a6a005492b3acc3…"},
+   {"evaluation": "invocation", "outcome": "DENY", "action": "hr-database___create_payout",
+    "principal": null, "policy_id": "launchpad_payout_admin_only-x7gz5yjkrd",
+    "reason": "Policy evaluation denied due to launchpad_payout_admin_only-x7gz5yjkrd",
+    "log_only_matched_policies": [], "engine_mode": "ENFORCE"}]}
 ```
 
 三处**必须看懂**：
@@ -294,6 +298,10 @@ permit(
 - **`log_only_matched_policies` 是文档里没有的属性,但很有用**:它显示 LOG_ONLY *候选*
   策略本会匹配什么——从一条 ENFORCE 模式的 span 里就能看到。上例里就是本章创建的
   `lab_readonly_tools`。指标通道给不出这个。
+- **`reason` 只在 DENY 上出现**,给出人读的拒绝原因(含作出判定的策略 id);ALLOW 行是
+  `null`,这是正确值而不是解析失败。反过来 `log_only_matched_policies` 只在 ALLOW 上
+  出现——两个字段互为镜像,都不能当必填读。`tool_listing` 行没有 reason(那条 span 只报
+  放行/拒绝工具列表),平台不会替它编一个。
 
 > `evidence_count`(13)和 `count`(3)不是一回事,也不该相等:前者来自指标、是精确计数,
 > 后者是 span 明细行、经过采样。span 通道读不到时返回 `spans_unavailable_reason`,
