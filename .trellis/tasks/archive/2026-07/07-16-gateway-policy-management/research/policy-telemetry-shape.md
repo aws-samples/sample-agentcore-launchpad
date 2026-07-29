@@ -2,6 +2,25 @@
 
 ## Status
 
+**SUPERSEDED 2026-07-29** by
+`.trellis/tasks/07-29-policy-span-evidence/research/policy-evidence-channels.md`.
+Two conclusions below were wrong or incomplete:
+
+1. The span channel was empty because **no `TRACES` delivery had ever existed for
+   the launchpad gateways** — three additive `logs` API calls, not an unknowable
+   span shape. Everything else was already in place.
+2. This document examined only the span channel. A **second, default-on channel**
+   (`AWS/Bedrock-AgentCore` CloudWatch policy metrics) already held real ALLOW/DENY
+   data for both launchpad gateways and now backs the shipped decision view and
+   the evidence gate.
+
+The span-field notes below remain accurate as *documentation* evidence. The
+original text is kept for history.
+
+---
+
+## Status (as written 2026-07-16)
+
 Blocked on live span evidence as of 2026-07-16. Do not implement the production
 decision parser from this document yet.
 

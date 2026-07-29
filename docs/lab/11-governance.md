@@ -205,17 +205,56 @@ permit(
 ![决策](images/11-decisions.png)
 *图 11-8：决策视图。可按时间范围（1h/6h/24h/7d）与具体策略过滤。*
 
-本次环境返回的是：
+决策证据来自 `AWS/Bedrock-AgentCore` 命名空间的 CloudWatch 策略指标
+（`AllowDecisions` / `DenyDecisions` 等）。这些指标**默认就发布**，不需要为网关额外开启
+什么——所以这个视图开箱就有真实数据，只要窗口内确实发生过决策。
+
+界面会区分三种状态，别把它们混为一谈：
+
+| 状态 | 含义 |
+|---|---|
+| `available: false` + 错误码 | 遥测通道读不到（例如 CloudWatch 权限不足），错误码原样显示 |
+| `available: true` + `evidence_count: 0` | 通道正常，只是这个窗口内没有决策 |
+| `available: true` + `evidence_count > 0` | 有证据，展示聚合明细 |
+
+本次环境下 `launchpad-gw` 在 7 天窗口内正好属于第二种（最近一次演示调用已经滑出窗口）：
 
 ```json
-{"available": false, "count": 0, "unavailable_reason": "policy_span_shape_not_verified"}
+{"available": true, "unavailable_reason": null, "source": "metrics",
+ "evidence_count": 0, "log_only_count": 0, "totals": {"allow": 0, "deny": 0},
+ "by_operation": [{"operation": "AuthorizeAction", "allow": 0, "deny": 0, "basis": "per_call"},
+                  {"operation": "PartiallyAuthorizeActions", "allow": 0, "deny": 0, "basis": "per_tool"}],
+ "by_mode": [{"mode": "ENFORCE", "allow": 0, "deny": 0}], "decisions": []}
 ```
 
-界面如实显示 `AWS 策略遥测不可用 · policy_span_shape_not_verified`。
+同一时刻 `launchpad-kb-gw` 窗口内有数据，是第三种状态的真实样子：
 
-> AgentCore Policy 决策 span 的字段形状在本账号尚未验证，因此平台报告
-> 不可用，不猜测遥测字段。这也是切 `ENFORCE` 时需要"零证据覆盖"路径的原因：
-> 因为证据通道本身可能还拿不到数据。
+```json
+{"available": true, "source": "metrics", "evidence_count": 17, "log_only_count": 17,
+ "totals": {"allow": 0, "deny": 17},
+ "by_operation": [{"operation": "PartiallyAuthorizeActions", "allow": 0, "deny": 12, "basis": "per_tool"},
+                  {"operation": "AuthorizeAction", "allow": 0, "deny": 5, "basis": "per_call"}],
+ "by_mode": [{"mode": "LOG_ONLY", "allow": 0, "deny": 17}, {"mode": "ENFORCE", "allow": 0, "deny": 0}],
+ "by_tool": [{"tool": "agentic-aurora-support___AgenticRetrieveStream", "allow": 0, "deny": 3}, "…"],
+ "by_policy": [{"policy_id": "kb_demo_m2m_retrieve-u9ya6gh7o8", "allow": 0, "deny": 0}],
+ "decisions": []}
+```
+
+有两处**必须看懂**，否则会把数字读错：
+
+- **`basis` 说明计数单位不同。** `AuthorizeAction` 是每次调用一个决策（`per_call`）；
+  `PartiallyAuthorizeActions` 只按 (调用, 工具) 发布指标（`per_tool`），所以它的 12
+  是工具级数量，不是调用次数。
+- **各项拆分不是总数的分解。** 上面 `by_policy` 是 0 而总数是 17——因为这些 DENY 的指标流
+  里根本没有 `Policy` 维度（AWS 只对存在判定策略的决策发布该维度）。`by_tool` 同理只覆盖
+  按工具授权的那部分。把它们加起来去凑总数是错的。
+
+> `decisions` 始终是空数组：指标维度里没有主体、判定原因和 trace id，平台不会用聚合数据
+> 编造逐条明细。**逐条决策明细需要 Policy span**，那才需要给网关开 trace 投递。
+
+`log_only_count` 是切 `ENFORCE` / 提升策略时门禁真正读的那个数——门禁只认
+`LOG_ONLY` 模式下的决策，与上面文档写的规则一致。上例 kb-gw 的 17 条全在 `LOG_ONLY`，
+这种情况下切换不再需要零证据覆盖。
 
 不过平台**本地决策台账**里有历史演示记录（`/api/governance/decisions`），可以看到一条真实的
 Cedar 拦截：
@@ -266,7 +305,7 @@ Cedar 拦截：
 - [ ] 取消纳管后标签为空，且 Gateway 本身未被改动
 - [ ] `lab_readonly_tools` 策略创建成功，`enforcement_mode = LOG_ONLY`
 - [ ] 生成的 Cedar 语句里**没有** `create_payout`
-- [ ] 决策视图如实显示可用/不可用状态
+- [ ] 决策视图区分「通道读不到」「窗口内无决策」「有证据」三种状态，且 `decisions` 为空
 - [ ] 审计里有一条 `policy_create · succeeded`，且含变更前后快照
 
 ## 常见问题
@@ -276,7 +315,8 @@ Cedar 拦截：
 | 策略创建按钮点了没反应 | 按钮处于禁用态（最常见是 Cedar 草稿还是空的） | 按钮上方会用红字列出缺什么，照着补齐即可；补全后点它会先弹二次确认，再点 `确认` |
 | 报"需要纳管" | 该 Gateway 没有 launchpad 标签 | 先点 `纳管` |
 | 报 `updatedAt` 相关冲突 | 平台要求变更前 Gateway 状态新鲜 | 点 `刷新` 后重试 |
-| 决策一直是 0 条 | `policy_span_shape_not_verified`（本账号未验证 span 形状） | 属已知状态；用本地决策台账观察 |
+| 决策一直是 0 条，但显示 `available: true` | 通道正常，只是窗口内没有决策 | 放宽时间范围到 `7d`；或调用一次网关工具产生新证据 |
+| 决策显示 `available: false` + 错误码 | 遥测通道读不到（多为后端角色缺 `cloudwatch:ListMetrics` / `GetMetricData`） | 按错误码补权限后点 `刷新` |
 | 切 ENFORCE 被阻止 | 24h 内没有 LOG_ONLY 证据 | 补证据，或手输 Gateway 名 + 覆盖原因（谨慎） |
 | IAM 挂载预检 FAIL | Gateway 执行角色缺少策略引擎权限 | 照界面给出的内联策略 JSON 修 |
 

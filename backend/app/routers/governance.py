@@ -23,9 +23,10 @@ from app.schemas.governance import (
     GenerationRequest as ScopedGenerationRequest,
 )
 from app.services import governance as governance_service
-from app.services import mcp_client
+from app.services import governance_evidence, mcp_client
 from app.services import traces as trace_service
 from app.services.agentcore.client import control_client, iam_client
+from app.services.observability import cw_client
 
 router = APIRouter(prefix="/api", tags=["governance"])
 
@@ -180,7 +181,9 @@ def promote_gateway_policy(
         policy_id,
         req,
         rollback=False,
-        evidence_count=0,
+        evidence_count=governance_evidence.evidence_count(
+            cw_client(), gateway_id, req.evidence_range
+        ),
     )
     background_tasks.add_task(governance_service.run_policy_change, operation["id"])
     return {"operation": operation}
@@ -204,7 +207,9 @@ def rollback_gateway_policy(
         policy_id,
         req,
         rollback=True,
-        evidence_count=0,
+        evidence_count=governance_evidence.evidence_count(
+            cw_client(), gateway_id, req.evidence_range
+        ),
     )
     background_tasks.add_task(governance_service.run_policy_change, operation["id"])
     return {"operation": operation}
@@ -223,7 +228,9 @@ def update_gateway_mode(
         iam_client(),
         gateway_id,
         req,
-        evidence_count=0,
+        evidence_count=governance_evidence.evidence_count(
+            cw_client(), gateway_id, req.evidence_range
+        ),
     )
     background_tasks.add_task(governance_service.run_policy_change, operation["id"])
     return {"operation": operation}
@@ -277,11 +284,13 @@ def get_gateway_decisions(
     policy_id: str | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
-    del policy_id, force
-    return governance_service.unavailable_policy_decisions(
+    return governance_evidence.gateway_decisions(
         control_client(),
+        cw_client(),
         gateway_id,
         range,
+        policy_id,
+        force,
     )
 
 

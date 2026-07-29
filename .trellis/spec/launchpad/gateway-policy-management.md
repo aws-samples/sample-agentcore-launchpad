@@ -103,8 +103,38 @@ after insertion.
   same envelope.
 - Generation start response:
   `{"operation": ..., "generation_id": ..., "status": ...}`.
-- Policy decisions return an explicit `available=false` until real Policy span
-  fields have been captured. Never infer rollout evidence from demo rows.
+- **Policy decision evidence comes from CloudWatch metrics, not spans.**
+  `AWS/Bedrock-AgentCore` publishes `AllowDecisions` / `DenyDecisions` and the
+  determining/mismatch family **by default** — no per-gateway enablement. Spans
+  are a separate, opt-in channel (see below). `app/services/governance_evidence.py`
+  owns the metric read; `available=false` means the channel is unreadable and
+  carries the AWS error code, while a readable channel with a quiet window is
+  `available=true` with `evidence_count=0`. These are three distinct states and
+  must not collapse into one message. Never infer rollout evidence from demo rows.
+- **Two counting rules for the metric channel; both are load-bearing.**
+  (1) AWS publishes many *overlapping* projections of one decision event
+  (`{OperationName}`, `{TargetResource,OperationName,Mode}`,
+  `{Policy,TargetResource,OperationName,Mode}`, …), so selections must match an
+  **exact** dimension-name set — a subset match inflates counts several-fold.
+  (2) Projection availability differs per operation, so the projection is chosen
+  *per operation* from a preference chain: `AuthorizeAction` publishes a
+  gateway-level stream (one decision per call), while `PartiallyAuthorizeActions`
+  was observed publishing **only** `ToolName` projections (one decision per
+  call/tool pair). A single fixed projection silently reports zero denials on a
+  gateway whose denials all come from `PartiallyAuthorizeActions`. Each count
+  therefore carries the `basis` it was measured in (`per_call` / `per_tool`),
+  derived from the projection rather than asserted.
+- **Breakdowns are not a decomposition.** `by_policy` only covers decisions that
+  had a determining policy and `by_tool` only per-tool authorization, so they need
+  not sum to `evidence_count`. Do not add them together, and do not let the UI
+  imply they partition the total.
+- **`decisions[]` requires spans and is never synthesized.** Metric dimensions
+  cannot express principal, decision reason, or trace id, so the array stays empty
+  while `source` is `metrics`.
+- The cutover gate reads `log_only_count`, not `evidence_count` — only LOG_ONLY
+  decisions satisfy the documented promotion rule. `evidence_count()` never
+  raises: an unreadable channel yields 0 so a legitimate typed override stays
+  reachable during a CloudWatch outage.
 - **The evidence/override gate applies to cutovers only.**
   `_assert_evidence_or_override` guards policy promote/rollback and
   `gateway_mode → ENFORCE`. Attaching an engine, creating or updating a LOG_ONLY

@@ -77,7 +77,7 @@ def reset_cache() -> None:
     _KEY_LOCKS.clear()
 
 
-def _cached(key: str, force: bool, build: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+def cached(key: str, force: bool, build: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     """60s TTL cache with per-key single-flight (Logs Insights is billed per
     scan — concurrent misses must not stampede) and expired-entry eviction
     (detail keys are per trace/session id and would otherwise accumulate)."""
@@ -109,7 +109,7 @@ def _logs_client() -> Any:
     return boto3.client("logs", region_name=get_settings().region)
 
 
-def _cw_client() -> Any:
+def cw_client() -> Any:
     return boto3.client("cloudwatch", region_name=get_settings().region)
 
 
@@ -707,7 +707,7 @@ def _span_log_groups(raw_spans: list[dict[str, Any]]) -> list[str]:
 
 def query_token_usage_metrics(hours: int, cw: Any = None) -> list[dict[str, Any]]:
     """gen_ai.client.token.usage summed over the range, grouped by model."""
-    cw = cw or _cw_client()
+    cw = cw or cw_client()
     metrics: list[dict[str, Any]] = []
     for page in cw.get_paginator("list_metrics").paginate(
         Namespace="bedrock-agentcore", MetricName="gen_ai.client.token.usage"
@@ -901,7 +901,7 @@ def get_dashboard(range_key: str, force: bool = False,
             "top_tools": tools,
         }
 
-    return _cached(f"dashboard:{range_key}", force, build)
+    return cached(f"dashboard:{range_key}", force, build)
 
 
 def list_traces(range_key: str, db: Session, force: bool = False,
@@ -920,7 +920,7 @@ def list_traces(range_key: str, db: Session, force: bool = False,
         ]
         return {"range": range_key, "traces": rows, "count": len(rows), "limit": TRACE_LIMIT}
 
-    return _cached(f"traces:{range_key}", force, build)
+    return cached(f"traces:{range_key}", force, build)
 
 
 def get_trace(trace_id: str, range_key: str, db: Session, force: bool = False,
@@ -1003,7 +1003,7 @@ def get_trace(trace_id: str, range_key: str, db: Session, force: bool = False,
             "spans": spans,
         }
 
-    return _cached(f"trace:{trace_id}:{range_key}", force, build)
+    return cached(f"trace:{trace_id}:{range_key}", force, build)
 
 
 def list_sessions(range_key: str, db: Session, force: bool = False,
@@ -1018,7 +1018,7 @@ def list_sessions(range_key: str, db: Session, force: bool = False,
         return {"range": range_key, "sessions": rows, "count": len(rows),
                 "limit": SESSION_LIMIT}
 
-    return _cached(f"sessions:{range_key}", force, build)
+    return cached(f"sessions:{range_key}", force, build)
 
 
 def _agent_from_traces(db: Session, traces: list[dict[str, Any]]) -> Agent | None:
@@ -1071,7 +1071,7 @@ def get_session(session_id: str, range_key: str, db: Session, force: bool = Fals
             "traces": rows,
         }
 
-    payload = _cached(f"session:{session_id}:{range_key}", force, build)
+    payload = cached(f"session:{session_id}:{range_key}", force, build)
     # Transcript is attached outside the cache: memory errors must degrade to
     # {available: false} on every request, never poison the cached span data.
     # It runs AFTER the trace query because sessions with no ledger row carry

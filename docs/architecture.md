@@ -151,10 +151,30 @@ Launchpad-owned CUSTOM_JWT Gateway reuses its configured OAuth provider.
 External CUSTOM_JWT Gateways without a managed provider mapping remain
 catalog-only.
 
-AgentCore Policy decision span fields have not yet been verified in this
-account. The scoped decision endpoint therefore returns `available=false`
-instead of projecting guessed telemetry, and zero-evidence promotion requires
-the typed Gateway name plus a recorded reason.
+Policy decision evidence comes from the `AWS/Bedrock-AgentCore` CloudWatch
+metrics (`AllowDecisions`, `DenyDecisions`, and the determining/mismatch family),
+which AgentCore publishes by default — no per-gateway enablement is required.
+`app/services/governance_evidence.py` owns that read and feeds both the scoped
+decision endpoint and the real `evidence_count` behind the cutover gate; the gate
+counts LOG_ONLY-mode decisions only, matching the documented promotion rule.
+`available=false` is now reserved for an unreadable channel (the AWS error code is
+reported); a readable channel with a quiet window is `available=true` with
+`evidence_count=0`, and zero-evidence promotion still requires the typed Gateway
+name plus a recorded reason.
+
+Two properties of that metric channel shape the contract:
+
+- **Aggregates only.** Metric dimensions cannot carry a principal, decision
+  reason, or trace id, so `decisions[]` stays empty and is never synthesized.
+  Per-decision rows require Policy spans, which do need trace delivery enabled on
+  the attached Gateway.
+- **Counting basis differs per operation.** `AuthorizeAction` publishes a
+  gateway-level stream (one decision per call); `PartiallyAuthorizeActions` was
+  observed publishing only `ToolName` projections (one decision per call/tool
+  pair). Each operation therefore resolves its own dimension projection and
+  reports the `basis` it counted in. AWS publishes several overlapping projections
+  of the same event, so selections match an exact dimension-name set — summing
+  across projections would inflate counts several-fold.
 
 ## Console authentication and accounts
 

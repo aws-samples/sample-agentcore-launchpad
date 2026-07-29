@@ -450,28 +450,6 @@ def iam_preflight(
     }
 
 
-def unavailable_policy_decisions(
-    control: Any,
-    gateway_id: str,
-    evidence_range: str,
-) -> dict[str, Any]:
-    """Honest fallback until the live Policy span alias map is captured.
-
-    The task's research gate forbids deriving production evidence from guessed
-    preview fields. Existing local demo rows remain on the compatibility
-    endpoint and are not merged into this AWS source.
-    """
-    _require_gateway(control, gateway_id)
-    return {
-        "available": False,
-        "range": evidence_range,
-        "count": 0,
-        "unavailable_reason": "policy_span_shape_not_verified",
-        "decisions": [],
-        "cache": {"hit": False, "age_seconds": 0},
-    }
-
-
 def external_tools_list_command(
     gateway: dict[str, Any],
     settings: Settings,

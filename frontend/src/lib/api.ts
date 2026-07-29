@@ -546,12 +546,64 @@ export interface GovernancePolicyDecision {
   source: "aws";
 }
 
+/** `per_call` = one decision per gateway call (`AuthorizeAction`). `per_tool` =
+ *  one decision per (call, tool), which is the only granularity AWS publishes for
+ *  `PartiallyAuthorizeActions` — so such totals are tool-level, not call-level. */
+export type GovernanceEvidenceBasis = "per_call" | "per_tool";
+
+export interface GovernanceEvidenceOperationRow {
+  operation: string;
+  allow: number;
+  deny: number;
+  basis: GovernanceEvidenceBasis;
+}
+
+export interface GovernanceEvidenceModeRow {
+  mode: string;
+  allow: number;
+  deny: number;
+}
+
+export interface GovernanceEvidencePolicyRow {
+  policy_id: string;
+  allow: number;
+  deny: number;
+}
+
+export interface GovernanceEvidenceToolRow {
+  tool: string;
+  allow: number;
+  deny: number;
+}
+
 export interface GovernanceDecisionResponse {
   range: GovernanceEvidenceRange;
+  /** Per-decision rows require Policy spans; empty while the source is metrics only. */
   decisions: GovernancePolicyDecision[];
+  /** `decisions.length` — not the evidence total. */
   count: number;
+  /** Whether the telemetry channel could be read at all. `true` with
+   *  `evidence_count: 0` means a readable channel and a quiet window. */
   available: boolean;
   unavailable_reason: string | null;
+  source: "metrics" | "spans" | "metrics+spans";
+  evidence_count: number;
+  /** Subset of `evidence_count` in LOG_ONLY mode — what the cutover gate needs. */
+  log_only_count: number;
+  totals: { allow: number; deny: number };
+  by_operation: GovernanceEvidenceOperationRow[];
+  by_mode: GovernanceEvidenceModeRow[];
+  /** Breakdowns, not a decomposition: AWS only publishes the `Policy` dimension
+   *  for decisions that had a determining policy, so these need not sum to the
+   *  total. */
+  by_policy: GovernanceEvidencePolicyRow[];
+  by_tool: GovernanceEvidenceToolRow[];
+  mismatch: { determining: number; no_determining: number; errors: number };
+  /** Some metric streams were dropped by the per-request query cap. */
+  truncated: boolean;
+  /** A policy filter was applied but some operations publish no `Policy`
+   *  dimension, so their decisions are unattributable and excluded. */
+  policy_filter_partial: boolean;
   cache: ObsCache;
 }
 

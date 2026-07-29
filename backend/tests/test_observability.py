@@ -929,7 +929,7 @@ def mocked_aws(monkeypatch):
         values={"m0": [386_000.0], "m1": [26_000.0]},
     )
     monkeypatch.setattr(obs, "_logs_client", lambda: fake_logs)
-    monkeypatch.setattr(obs, "_cw_client", lambda: fake_cw)
+    monkeypatch.setattr(obs, "cw_client", lambda: fake_cw)
     return fake_logs
 
 

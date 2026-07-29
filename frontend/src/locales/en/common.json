@@ -846,7 +846,25 @@
       "telemetryUnavailable": "AWS POLICY TELEMETRY UNAVAILABLE",
       "noAwsEvidence": "NO MATCHING AWS POLICY DECISIONS",
       "cache": "cache age {{age}}s",
-      "count": "{{count}} decisions"
+      "count": "{{count}} decisions",
+      "noEvidenceInWindow": "NO POLICY DECISIONS IN THIS WINDOW",
+      "noEvidenceHint": "The telemetry channel is readable — there were simply no decisions in the last {{range}}. Widen the range, or call a gateway tool to generate evidence.",
+      "evidenceCount": "{{count}} decisions",
+      "logOnlyCount": "{{count}} in LOG_ONLY",
+      "totals": "{{allow}} allow / {{deny}} deny",
+      "allowDeny": "{{allow}} allow / {{deny}} deny",
+      "sourceMetrics": "source: CloudWatch policy metrics",
+      "byOperation": "BY OPERATION",
+      "byMode": "BY ENFORCEMENT MODE",
+      "byPolicy": "BY POLICY",
+      "byTool": "BY TOOL",
+      "basis": {
+        "per_call": "counted per call",
+        "per_tool": "counted per tool"
+      },
+      "truncated": "Some metric streams were dropped by the per-request query cap; totals are a lower bound.",
+      "policyFilterPartial": "Some operations publish no policy dimension, so their decisions cannot be attributed to this policy and are excluded.",
+      "aggregateNote": "Breakdowns are not a decomposition of the total: AWS publishes the policy dimension only for decisions that had a determining policy, and the tool dimension only for per-tool authorization. Per-decision rows (principal, reason, trace) require Policy spans."
     },
     "audit": {
       "title": "POLICY CHANGE AUDIT",

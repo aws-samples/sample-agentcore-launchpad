@@ -846,7 +846,25 @@
       "telemetryUnavailable": "AWS 策略遥测不可用",
       "noAwsEvidence": "没有匹配的 AWS 策略决策",
       "cache": "缓存时间 {{age}} 秒",
-      "count": "{{count}} 条决策"
+      "count": "{{count}} 条决策",
+      "noEvidenceInWindow": "该窗口内没有策略决策",
+      "noEvidenceHint": "遥测通道可读——只是最近 {{range}} 内没有决策。可以放宽时间范围，或调用一次网关工具来产生证据。",
+      "evidenceCount": "{{count}} 条决策",
+      "logOnlyCount": "其中 {{count}} 条为 LOG_ONLY",
+      "totals": "{{allow}} 条放行 / {{deny}} 条拦截",
+      "allowDeny": "{{allow}} 放行 / {{deny}} 拦截",
+      "sourceMetrics": "数据源：CloudWatch 策略指标",
+      "byOperation": "按操作",
+      "byMode": "按执行模式",
+      "byPolicy": "按策略",
+      "byTool": "按工具",
+      "basis": {
+        "per_call": "按调用计数",
+        "per_tool": "按工具计数"
+      },
+      "truncated": "部分指标流因单次查询上限被丢弃，总数为下界。",
+      "policyFilterPartial": "部分操作不发布策略维度，其决策无法归属到该策略，已被排除。",
+      "aggregateNote": "各项拆分并不是总数的分解：AWS 只对存在判定策略的决策发布策略维度，只对按工具授权发布工具维度。逐条决策明细（主体、原因、trace）需要 Policy span。"
     },
     "audit": {
       "title": "策略变更审计",

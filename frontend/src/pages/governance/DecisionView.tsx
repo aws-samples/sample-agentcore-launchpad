@@ -11,6 +11,7 @@ import {
   type GovernanceGatewayDetail,
   type GovernancePolicyListResponse,
 } from "../../lib/api";
+
 import {
   formatTimestamp,
   governanceError,
@@ -24,6 +25,87 @@ interface Props {
 }
 
 const RANGES: GovernanceEvidenceRange[] = ["1h", "6h", "24h", "7d"];
+
+/** Aggregate evidence from CloudWatch policy metrics. Metrics cannot carry a
+ *  principal, reason, or trace id, so this is a count surface — per-decision rows
+ *  come from Policy spans and stay empty until those are enabled. */
+function EvidenceAggregates({ data }: { data: GovernanceDecisionResponse | null }) {
+  const { t } = useTranslation();
+  if (!data || data.evidence_count === 0) return null;
+
+  const groups: { label: string; rows: { key: string; note?: string; allow: number; deny: number }[] }[] = [
+    {
+      label: t("governance.decisions.byOperation"),
+      rows: data.by_operation.map((row) => ({
+        key: row.operation,
+        note: t(`governance.decisions.basis.${row.basis}`),
+        allow: row.allow,
+        deny: row.deny,
+      })),
+    },
+    {
+      label: t("governance.decisions.byMode"),
+      rows: data.by_mode.map((row) => ({ key: row.mode, allow: row.allow, deny: row.deny })),
+    },
+    {
+      label: t("governance.decisions.byPolicy"),
+      rows: data.by_policy.map((row) => ({
+        key: row.policy_id,
+        allow: row.allow,
+        deny: row.deny,
+      })),
+    },
+    {
+      label: t("governance.decisions.byTool"),
+      rows: data.by_tool.map((row) => ({ key: row.tool, allow: row.allow, deny: row.deny })),
+    },
+  ];
+
+  return (
+    <div className="gov-evidence">
+      <div className="gov-evidence-head">
+        <Chip tone="good">
+          {t("governance.decisions.evidenceCount", { count: data.evidence_count })}
+        </Chip>
+        <Chip tone={data.log_only_count > 0 ? "good" : "warn"}>
+          {t("governance.decisions.logOnlyCount", { count: data.log_only_count })}
+        </Chip>
+        <span className="gov-cell-note">
+          {t("governance.decisions.totals", {
+            allow: data.totals.allow,
+            deny: data.totals.deny,
+          })}
+        </span>
+        <span className="gov-cell-note">{t("governance.decisions.sourceMetrics")}</span>
+      </div>
+      {data.truncated ? (
+        <div className="gov-cell-note">{t("governance.decisions.truncated")}</div>
+      ) : null}
+      {data.policy_filter_partial ? (
+        <div className="gov-cell-note">{t("governance.decisions.policyFilterPartial")}</div>
+      ) : null}
+      <div className="gov-evidence-groups">
+        {groups
+          .filter((group) => group.rows.length > 0)
+          .map((group) => (
+            <div className="gov-evidence-group" key={group.label}>
+              <strong>{group.label}</strong>
+              {group.rows.map((row) => (
+                <div className="gov-evidence-row" key={`${group.label}-${row.key}`}>
+                  <span className="mono gov-break">{row.key}</span>
+                  {row.note ? <span className="gov-cell-note">{row.note}</span> : null}
+                  <span className="mono">
+                    {t("governance.decisions.allowDeny", { allow: row.allow, deny: row.deny })}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ))}
+      </div>
+      <div className="gov-cell-note">{t("governance.decisions.aggregateNote")}</div>
+    </div>
+  );
+}
 
 export function DecisionView({ gatewayId, onNavigate }: Props) {
   const { t, i18n } = useTranslation();
@@ -130,8 +212,16 @@ export function DecisionView({ gatewayId, onNavigate }: Props) {
             <TriangleAlert size={20} aria-hidden="true" />
             <strong>{t("governance.decisions.telemetryUnavailable")}</strong>
             <span>{data.unavailable_reason}</span>
+            <Btn onClick={() => void load(true)}>{t("governance.actions.retry")}</Btn>
+          </div>
+        ) : data && data.evidence_count === 0 ? (
+          <div className="gov-state">
+            <strong>{t("governance.decisions.noEvidenceInWindow")}</strong>
+            <span>{t("governance.decisions.noEvidenceHint", { range: data.range })}</span>
           </div>
         ) : (
+          <>
+          <EvidenceAggregates data={data} />
           <DataTable
             columns={[
               { key: "time", label: t("governance.decisions.time") },
@@ -198,6 +288,7 @@ export function DecisionView({ gatewayId, onNavigate }: Props) {
               </tr>
             ))}
           </DataTable>
+          </>
         )}
         {data?.cache ? (
           <div className="gov-data-foot">

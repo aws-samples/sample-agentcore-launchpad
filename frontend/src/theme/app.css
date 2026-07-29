@@ -504,6 +504,16 @@ td.pri{color:var(--ink);font-weight:600}
 .gov-text-link{display:inline-flex;align-items:center;gap:5px;color:var(--s1);font-family:var(--mono);font-size:10px;text-decoration:none}
 .gov-text-link:hover{text-decoration:underline}
 .gov-audit-grid{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:14px;align-items:start}
+.gov-evidence{padding:12px 14px;border-bottom:1px solid var(--line);display:grid;gap:10px}
+.gov-evidence-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.gov-evidence-head .gov-cell-note{margin-top:0}
+.gov-evidence-groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.gov-evidence-group{display:grid;gap:4px;align-content:start}
+.gov-evidence-group>strong{color:var(--ink-3);font-family:var(--mono);font-size:9.5px;letter-spacing:.14em}
+.gov-evidence-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:10px;color:var(--ink-2)}
+.gov-evidence-row .gov-cell-note{margin-top:0;flex:0 0 auto}
+.gov-evidence-row>span:first-child{min-width:0}
+.gov-evidence-row>span:last-child{flex:0 0 auto;white-space:nowrap}
 
 /* ================= observability — ported from design/mockup-observability.html ================= */
 .obs-bar{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap}
@@ -719,6 +729,7 @@ footer .sep{color:var(--line-2)}
   .gov-command{flex-direction:column}
   .gov-command .btn{width:100%;justify-content:center}
   .gov-data-foot{flex-direction:column}
+  .gov-evidence-groups{grid-template-columns:1fr}
   .gov-alert{font-size:11px}
   .gov-operation{align-items:flex-start;flex-wrap:wrap}
   .panel:has(> table){overflow-x:auto}
