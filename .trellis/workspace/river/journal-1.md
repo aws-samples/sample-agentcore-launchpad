@@ -1638,3 +1638,28 @@ A system-prompt recommendation AWS finished as FAILED (safety-filter ValidationE
 ### Status
 
 [OK] **Completed**
+
+
+## Session 30: Workshop backlog: ISSUE-001/005/010/011/014
+
+**Date**: 2026-07-29
+**Task**: Workshop backlog: ISSUE-001/005/010/011/014
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Four child tasks under 07-29-workshop-backlog. QUICK WINS: vite now proxies /v1 so the Chat page's copyable curl reaches the backend (verified 401 auth.invalid_api_key instead of vite's empty 404); canary verdict means and experiment score bars share lib/format.fmtScore (2dp); model_prices refresh_map falls back to the bare model id when the source has no global.* key (nova-2-lite was unpriced) plus a nova-2-lite default. READINESS PANEL: SERVICES rows are classified bootstrap vs usage, so runtime/evaluation with nothing created render a neutral hollow LED + the action that lights them ('DEPLOY YOUR FIRST AGENT'), no longer AWAITING BOOTSTRAP contradicting ALL SYSTEMS GO; lab ch.01/02 updated. POLICY GATING (ISSUE-010, report attribution was wrong — the empty Cedar draft was the blocker, not the override field): the editor renders saveBlockers/transitionBlockers so a disabled action says what it wants, the override/gateway-name fields say they only gate promote/rollback/ENFORCE, and all six _new_change sites now pass override_reason (create/update/attach/generation dropped it, so audit showed 'OVERRIDE REASON -'). CANARY S3: mint_candidate_version returns a deterministic per-canary/role key, callers record it, and act_cleanup deletes the recorded zips except the live version's — ~75MB/run leak. All four verified with make verify; browser evidence stored under each archived task.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9853800` | (see git log) |
+| `4ee49f2` | (see git log) |
+| `e18aa39` | (see git log) |
+| `d64f4b7` | (see git log) |
+
+### Status
+
+[OK] **Completed**
