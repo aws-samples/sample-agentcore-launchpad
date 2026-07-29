@@ -121,6 +121,11 @@
       "title": "服务健康",
       "sub": "控制平面",
       "pending": "等待引导初始化",
+      "notCreated": "尚未创建",
+      "creates": {
+        "runtime": "部署首个 Agent 后点亮",
+        "evaluation": "运行首次评估后点亮"
+      },
       "activeCount": "运行中 · {{count}} 个 Agent",
       "runtime": "Runtime",
       "gateway": "Gateway",

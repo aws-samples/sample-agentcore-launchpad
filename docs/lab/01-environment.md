@@ -122,8 +122,12 @@ curl -s http://127.0.0.1:8000/api/health
    → `04 知识库` → `05 记忆` → `06 对话演练场` → `07 可观测` → `08 评估` → `09 治理`。
    `10 支付` / `11 设置` 属第二阶段，本实验不涉及。
 2. **服务健康面板**：Runtime / Gateway / Memory / Registry / Policy / Evaluation /
-   Observability 逐项显示 `就绪` 与真实资源 id（如 `launchpad_memory-hurAGN3EnF`）。
-   任何一项不是绿色，都说明 bootstrap 未完成或权限不足。先解决它再往下做。
+   Observability 七项。其中 Gateway / Memory / Registry / Policy / Observability 由
+   bootstrap 创建，显示 `就绪` 与真实资源 id（如 `launchpad_memory-hurAGN3EnF`）；
+   不是绿色就说明 bootstrap 未完成或权限不足，先解决它再往下做。
+   Runtime 与 Evaluation 统计的是**你自己创建的东西**（已部署 Agent、已完成评估），
+   全新账号上显示空心灯 + `尚未创建 · 部署首个 Agent 后点亮` / `运行首次评估后点亮`，
+   这是预期状态，不是故障。
 3. **左下角环境信息**：`区域 us-west-2`、`SDK bedrock-agentcore 1.17.0`、
    `CLI agentcore 0.21.1`、`存储 sqlite · 本地`。
 
@@ -157,7 +161,8 @@ curl -s http://127.0.0.1:8000/api/health
 - [ ] `config/launchpad.yaml` 存在且含 `resources.gateway_id` / `memory_id` / `registry_id`
 - [ ] `curl http://127.0.0.1:8000/api/health` 返回 `status: ok`
 - [ ] 控制台可打开，右上角显示 `● 系统运行正常`
-- [ ] 「服务健康」面板 7 项全部为绿色「就绪」
+- [ ] 「服务健康」面板中 Gateway / Memory / Registry / Policy / Observability 五项为绿色
+      「就绪」；Runtime 与 Evaluation 显示「尚未创建」（全新账号的预期状态）
 - [ ] 界面已切换到中文
 
 ## 常见问题
@@ -165,7 +170,8 @@ curl -s http://127.0.0.1:8000/api/health
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 控制台打不开，端口 5173 无监听 | Vite 端口被占用后会自动漂移到 5174 | 看 `make dev` 输出里的实际端口，或用 `PLATFORM_UI_PORT` 指定 |
-| 「服务健康」某项为红/未就绪 | bootstrap 未跑完，或该 AgentCore 预览未在账号开通 | 重跑 `make bootstrap`（幂等），仍失败查 `docs/troubleshooting.zh-CN.md` |
+| 「服务健康」中 bootstrap 类某项显示「等待引导初始化」 | bootstrap 未跑完，或该 AgentCore 预览未在账号开通 | 重跑 `make bootstrap`（幂等），仍失败查 `docs/troubleshooting.zh-CN.md` |
+| Runtime / Evaluation 显示「尚未创建」 | 这两项统计你自己创建的资源，全新账号本来就是空的 | 正常，第 02 章部署 Agent、第 08 章跑评估后自动点亮 |
 | 页面能开但所有列表为空、统计为 0 | 账号是全新的，还没有任何 Agent | 正常，继续第 02 章 |
 | `make bootstrap` 报 CDK 未 bootstrap | 账号/区域缺少 CDK 引导 | `cdk bootstrap aws://<ACCOUNT_ID>/us-west-2` 后重跑 |
 | 后端起不来，报 `config` 相关 KeyError | 缺少 `config/launchpad.yaml` | 先执行 `make bootstrap` |

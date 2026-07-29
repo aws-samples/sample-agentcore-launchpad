@@ -121,6 +121,11 @@
       "title": "SERVICE HEALTH",
       "sub": "control plane",
       "pending": "AWAITING BOOTSTRAP",
+      "notCreated": "NONE YET",
+      "creates": {
+        "runtime": "DEPLOY YOUR FIRST AGENT",
+        "evaluation": "RUN YOUR FIRST EVALUATION"
+      },
       "activeCount": "ACTIVE · {{count}} agent(s)",
       "runtime": "Runtime",
       "gateway": "Gateway",

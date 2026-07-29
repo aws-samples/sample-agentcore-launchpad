@@ -8,14 +8,22 @@ import type { AgentInfo, OverviewInfo } from "../lib/api";
 import { api } from "../lib/api";
 import { LAB_GUIDE_URL } from "../lib/links";
 
+// Two kinds of health row, and they need different empty states:
+//   "bootstrap" — the resource comes from `make bootstrap` (config ids, or the
+//     account's Transaction Search destination). Missing = something to fix.
+//   "usage"     — the row counts what the operator has created (deployed agents,
+//     completed eval runs). Missing = the expected state of a fresh, healthy
+//     account, so it must not read as a fault (ISSUE-001).
+// Adding a row here forces the choice; `usage` rows name the action that lights
+// them up via `overview.health.creates.<svc>`.
 const SERVICES = [
-  "runtime",
-  "gateway",
-  "memory",
-  "registry",
-  "policy",
-  "evaluation",
-  "observability",
+  { id: "runtime", kind: "usage" },
+  { id: "gateway", kind: "bootstrap" },
+  { id: "memory", kind: "bootstrap" },
+  { id: "registry", kind: "bootstrap" },
+  { id: "policy", kind: "bootstrap" },
+  { id: "evaluation", kind: "usage" },
+  { id: "observability", kind: "bootstrap" },
 ] as const;
 
 function useAgents(intervalMs = 5000): AgentInfo[] | null {
@@ -232,19 +240,25 @@ export function Overview() {
           style={{ "--i": 5 } as CSSProperties}
         >
           <div className="health">
-            {SERVICES.map((svc) => {
+            {SERVICES.map(({ id: svc, kind }) => {
               const ready = svc === "runtime" ? active > 0 : Boolean(info?.services[svc]);
               const detail = svc === "runtime" ? "" : (info?.service_detail[svc] ?? "");
+              // an empty usage row is "you haven't made one yet", not a fault:
+              // neutral LED + the action that creates it
+              const led = ready ? "g" : kind === "usage" ? "n" : "off";
               return (
-                <div className="row" key={svc}>
-                  <span className={`led ${ready ? "g" : "off"}`}></span>
+                <div className="row" key={svc} data-testid={`health-${svc}`}>
+                  <span className={`led ${led}`}></span>
                   <span className="nm">{t(`overview.health.${svc}`)}</span>
-                  <span className="st">
+                  <span className={`st${!ready && kind === "usage" ? " dim" : ""}`}>
                     {svc === "runtime" && active > 0
                       ? t("overview.health.activeCount", { count: active })
                       : ready
                         ? `${t("overview.health.ready")}${detail ? ` · ${detail}` : ""}`
-                        : t("overview.health.pending")}
+                        : kind === "usage"
+                          ? `${t("overview.health.notCreated")} · ${
+                            t(`overview.health.creates.${svc}`)}`
+                          : t("overview.health.pending")}
                   </span>
                 </div>
               );

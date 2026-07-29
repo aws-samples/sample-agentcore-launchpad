@@ -221,6 +221,9 @@ td.pri{color:var(--ink);font-weight:600}
 .health .led.g{background:var(--good);box-shadow:0 0 7px rgba(12,163,12,.7);animation:pulse 3s infinite}
 .health .led.w{background:var(--warn);box-shadow:0 0 7px rgba(250,178,25,.7);animation:pulse 1.4s infinite}
 .health .led.off{background:var(--ink-3)}
+/* neutral: the resource is simply not created yet (expected on a fresh account),
+   as opposed to .off = bootstrap missing */
+.health .led.n{background:transparent;border:1px solid var(--ink-3)}
 .health .nm{font-weight:600;color:var(--ink)}
 .health .st{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-3)}
 
