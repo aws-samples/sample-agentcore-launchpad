@@ -1663,3 +1663,25 @@ Four child tasks under 07-29-workshop-backlog. QUICK WINS: vite now proxies /v1 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 31: Paginate the Evaluation module tables
+
+**Date**: 2026-07-29
+**Task**: Paginate the Evaluation module tables
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+All five Evaluation tables (runs, datasets, evaluators, experiments, runtime canaries) rendered every row; /api/eval/runs also truncated at 50 with no params. Promoted pages/observability/Pager.tsx to components/Pager.tsx (keys obs.pager.* -> pager.*) and added components/useTablePage.ts for the four client-paged tables; it follows the URL selection so ?exp=/?ev=/?ds=/?canary= pointing at a later row opens that row's page (verified: ev=custom_eval_30 -> PAGE 2/3, highlighted row index 10). Datasets pages local + cloud-only rows as one list. /api/eval/runs now takes limit/offset/mode and returns {runs,total,limit,offset} with pre-pagination defaults; the runs table pages server-side (verified network GET limit=20&offset=20). Key catch: the insights duplicate guards read the run list, so page-limiting them would have allowed duplicate paid analyses — they now read a separate ?mode=insights&limit=200 poll (verified a pending insights run absent from the displayed page still disables the button). Failure toasts stay page-scoped: delayed on older pages, never lost. All tables page at 20 and hide the bar while total<=20 so short lists look unchanged. Spec evaluation-subpage-interaction.md documents the contract; make verify PASS.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bcd6e81` | (see git log) |
+
+### Status
+
+[OK] **Completed**

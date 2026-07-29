@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 30
+- **Total Sessions**: 31
 - **Last Active**: 2026-07-29
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1665 | Active |
+| `journal-1.md` | ~1687 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 31 | 2026-07-29 | Paginate the Evaluation module tables | `bcd6e81` | `main` |
 | 30 | 2026-07-29 | Workshop backlog: ISSUE-001/005/010/011/014 | `9853800`, `57882ff`, `70e94b0`, `d64f4b7` | `main` |
 | 29 | 2026-07-28 | Surface failed system-prompt recommendation (ISSUE-007) | `92b6a4f`, `4323530` | `main` |
 | 28 | 2026-07-28 | kb_deep_search：给容器与 ZIP 方式补上 agentic 多步检索 | `38eb188`, `8ea87d1` | `main` |
