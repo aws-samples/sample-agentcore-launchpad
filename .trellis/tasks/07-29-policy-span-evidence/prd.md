@@ -77,13 +77,37 @@ Marked `[x]` where the metrics child (`07-29-policy-decision-metrics`, commit
       corrected too.
 - [x] `make verify` passes.
 - [x] No `boto3.client(...)` outside the established factory locations.
-- [ ] Per-decision rows with principal, reason, and trace link — span child.
-- [ ] `make bootstrap` idempotently owns the `launchpad-gw` `TRACES` delivery —
-      span child.
+- [x] `make bootstrap` idempotently owns the `launchpad-gw` `TRACES` delivery —
+      delivered by `07-29-gateway-traces-delivery` (`5103a93`). Applied to the
+      account; the first Policy spans in this account followed within minutes.
+- [~] Per-decision rows with **trace link — yes**; with **principal and reason — no,
+      and not achievable.** Delivered by `07-29-policy-span-detail` (`f96ceb2`) with
+      an amendment the capture forced:
+      - `principal`: no span in a captured 31-span trace carries one, because the
+        Harness authenticates to the Gateway with an OAuth M2M client credential.
+        Structural, not an implementation gap. Rendered as explained-absent.
+      - `reason`: `aws.agentcore.policy.authorization_reason` is documented by AWS
+        but was absent from the capture, and no `AuthorizeAction` DENY can be
+        produced under `ENFORCE` (the denied tool is filtered out of `tools/list`),
+        so its shape is unverifiable without a `LOG_ONLY` mode switch — which the
+        user declined for a shared demo resource on 2026-07-29.
 
-**Carried into the span child:** the demo Cognito credentials are rejected, which
-blocks the documented way of generating fresh gateway traffic. See that child's
-`prd.md` R2 blocker note.
+      This criterion was written before the channel had ever been observed. Writing
+      those two fields anyway would have been exactly the failure the research gate
+      exists to prevent, so they are recorded as unavailable in the spec instead.
+
+## Outcome
+
+The original report — Governance → Decisions showing
+`policy_span_shape_not_verified` — is resolved, and the root cause the 07-16
+research had misdiagnosed is corrected in the archived note and the spec. Both
+telemetry channels now back the view: CloudWatch metrics for exact counts and the
+cutover gate, Policy spans for per-decision detail.
+
+Credential blocker: **bypassed, not fixed.** Gateway traffic is driven through the
+`hr-database` Harness agent's OAuth M2M path. The demo Cognito user credentials are
+still rejected, and `policy-test` still records such auth failures as Cedar DENYs in
+the local ledger — both found here, both left as follow-ups outside this scope.
 
 ## Notes
 
