@@ -74,6 +74,16 @@ Repro path is already documented: invoke the `hr-database` harness agent as
 `hr-analyst` against `create_payout` for DENY (`docs/lab/11-governance.md`), and
 an allowed tool for ALLOW.
 
+> **Known blocker, found 2026-07-29 in the sibling child.** That repro currently
+> fails: `POST /api/governance/policy-test` returns
+> `gateway.credentials_rejected` because the configured demo Cognito user's
+> credentials are rejected, so the gateway is never called and no decision is
+> produced. Capturing spans therefore requires first restoring those credentials
+> or finding another way to drive real gateway traffic (e.g. a Harness agent
+> invocation with working auth). **Resolve this before R2**, and note that a
+> related defect makes the failure look like a Cedar DENY: `policy-test` writes
+> any `AppError` to the decision ledger as a DENY row.
+
 Record verbatim spans — full attribute maps, not summaries — plus the exact Logs
 Insights query used. This is the artifact the 07-16 research was missing.
 

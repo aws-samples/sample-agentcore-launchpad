@@ -61,18 +61,29 @@ response-contract extension and its verified dimension-projection logic.
 
 ## Cross-child acceptance criteria
 
-- [ ] The Decisions view no longer reports `policy_span_shape_not_verified` for
-      `launchpad-gw` when evidence exists in the queried window.
-- [ ] `evidence_count` reflects real AWS data, so the ENFORCE promotion gate stops
-      forcing the zero-evidence override whenever genuine LOG_ONLY evidence exists.
-- [ ] Zero evidence in a window is still reported honestly and distinguishably
-      from "channel unavailable" — those are different states and must not collapse
-      into one message.
-- [ ] `docs/architecture.md`, `docs/lab/11-governance.md` (§11.6 and the FAQ row
-      `决策一直是 0 条`) are updated to match the shipped behavior; no doc keeps
-      describing the stub as the expected state.
-- [ ] `make verify` passes.
-- [ ] No `boto3.client(...)` outside the established factory locations.
+Marked `[x]` where the metrics child (`07-29-policy-decision-metrics`, commit
+`9bb3495`) satisfied them; the rest belong to the span child.
+
+- [x] `policy_span_shape_not_verified` is gone from the product; the Decisions
+      view reports real evidence when the window has any.
+- [x] `evidence_count` reflects real AWS data, so the cutover gate no longer
+      forces the zero-evidence override when genuine LOG_ONLY evidence exists
+      (verified: 17 LOG_ONLY decisions on kb-gw over 7d).
+- [x] Zero evidence in a window is reported distinguishably from "channel
+      unavailable" — three states, verified in the browser.
+- [x] `docs/architecture.md` and `docs/lab/11-governance.md` (§11.6, the FAQ rows,
+      and the chapter checklist) match the shipped behavior; no doc describes the
+      stub as expected. The spec clause and the archived 07-16 research note were
+      corrected too.
+- [x] `make verify` passes.
+- [x] No `boto3.client(...)` outside the established factory locations.
+- [ ] Per-decision rows with principal, reason, and trace link — span child.
+- [ ] `make bootstrap` idempotently owns the `launchpad-gw` `TRACES` delivery —
+      span child.
+
+**Carried into the span child:** the demo Cognito credentials are rejected, which
+blocks the documented way of generating fresh gateway traffic. See that child's
+`prd.md` R2 blocker note.
 
 ## Notes
 
