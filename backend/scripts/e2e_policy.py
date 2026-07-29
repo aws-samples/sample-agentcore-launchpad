@@ -23,6 +23,7 @@ def main() -> int:
          "ALLOW"),
     ]
     failures = 0
+    errors = 0
     for username, tool, arguments, expected in cases:
         res = client.post(
             "/api/governance/policy-test",
@@ -30,17 +31,33 @@ def main() -> int:
         )
         res.raise_for_status()
         body = res.json()
-        ok = body["outcome"] == expected
+        outcome = body["outcome"]
+        # ERROR means no authorization decision was reached at all (bad demo
+        # credentials, gateway unreachable, …). Counting it as a plain mismatch would
+        # make an infrastructure outage look like a policy regression, so it is
+        # reported separately.
+        if outcome == "ERROR":
+            errors += 1
+            print(f"  ! {body['principal']:<22} {tool:<36} NOT EVALUATED")
+            print(f"      {body['detail'][:160]}")
+            continue
+        ok = outcome == expected
         failures += 0 if ok else 1
         print(f"  {'✓' if ok else '✗'} {body['principal']:<22} {tool:<36} "
-              f"{body['outcome']:<6} (expected {expected})")
-        if body["outcome"] == "DENY":
+              f"{outcome:<6} (expected {expected})")
+        if outcome == "DENY":
             print(f"      reason: {body['detail'][:120]}")
 
     log = client.get("/api/governance/decisions").json()["decisions"]
     print(f"\n  decision log entries: {len(log)} (latest: "
           f"{log[0]['principal']} {log[0]['tool']} {log[0]['outcome']})")
 
+    if errors:
+        print(
+            f"E2E POLICY: FAIL ({errors} case(s) never evaluated — check the demo "
+            "Cognito credentials in config/launchpad.yaml and the gateway URL)"
+        )
+        return 1
     if failures:
         print(f"E2E POLICY: FAIL ({failures} unexpected outcomes)")
         return 1

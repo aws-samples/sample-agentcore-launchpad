@@ -304,8 +304,16 @@ permit(
 这种情况下切换不再需要零证据覆盖。
 
 平台还有一个独立的**本地决策台账**（`/api/governance/decisions`），它**带 `principal`**——
-因为那条路径是以具体演示用户身份直接调网关的，不是 Harness 的机器凭据。两者不要混：
-上面的 AWS 明细没有主体，这里的有。台账里有一条真实的 Cedar 拦截：
+因为那条路径（`策略测试`）是以具体演示用户身份直接调网关的，不是 Harness 的机器凭据。
+两者不要混：上面的 AWS 明细没有主体，这里的有。
+
+> **台账只记真正的授权判定。** `策略测试` 的结果有三种：`ALLOW`、`DENY`、以及
+> `ERROR`——后者表示**根本没拿到授权答案**（演示用户凭据不对、网关不可达、或出现无法
+> 识别的失败）。`ERROR` **不写台账**，因为错误不是决策。这一点很重要：台账是审计面，
+> 早先的实现会把任何失败都记成 `DENY`，于是一次 Cognito 故障就能伪造出一条从未发生过的
+> Cedar 拦截记录。
+
+台账里有一条真实的 Cedar 拦截：
 
 ```json
 {"at": "2026-07-13T23:09:23", "principal": "demo@hr-analyst",
@@ -331,8 +339,18 @@ permit(
 >
 > 注意两件事：**`ENFORCE` 下你无法让模型真的去调 `create_payout`**——它在
 > `tools/list` 阶段就被扣下，模型看不到这个工具，所以不会出现"调用被拦"的
-> `AuthorizeAction` DENY，只会有 `tool_listing` DENY。上面台账里那两条历史记录来自
-> `策略测试` 那条以演示用户身份直连网关的路径,与 Harness 的机器凭据不是一回事。
+> `AuthorizeAction` DENY，只会有 `tool_listing` DENY。
+>
+> 而 `策略测试` 是另一条路：它**直接发 `tools/call`，不先列举**，所以网关必须逐次跑
+> `AuthorizeAction`,于是能拿到真正的"调用被拦"。想复现上面那条 DENY 就用它:
+>
+> ```bash
+> curl -s -X POST localhost:8000/api/governance/policy-test \
+>   -H 'Content-Type: application/json' \
+>   -d '{"username":"demo","tool":"hr-database___create_payout","arguments":{"employee_id":"EMP-1024","amount":1}}'
+> ```
+>
+> 换成 `"username":"river"` 会得到 `ALLOW`——但请注意它会**真的创建一笔演示付款记录**。
 
 ## 11.7 审计：不可变变更日志
 

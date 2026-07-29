@@ -349,29 +349,96 @@ class PolicyTestRequest(BaseModel):
     username: str = Field(default="demo", pattern="^(river|demo)$")
 
 
+"""The gateway refused the call on authorization grounds — a real decision."""
+_DENY_CODES = frozenset({"gateway.unauthorized"})  # gateway answered 401/403
+
+"""No authorization answer was ever obtained. These must never be journaled: the
+decision ledger is audit-facing evidence, and a Cognito or config outage recorded as
+a Cedar denial manufactures a denial that never happened."""
+_ERROR_CODES = frozenset(
+    {
+        "gateway.credentials_rejected",
+        "gateway.identity_unavailable",
+        "gateway.no_credentials",
+        "gateway.not_bootstrapped",
+        "gateway.bad_response",
+    }
+)
+
+# JSON-RPC error code the Gateway returns for a Cedar denial, captured from a real
+# response (see the task research note). Preferred over message matching because it
+# survives wording changes.
+POLICY_DENIED_RPC_CODE = -32002
+
+
+def _is_policy_denial(exc: AppError) -> bool:
+    """`gateway.rpc_error` wraps any JSON-RPC error, so it needs discriminating.
+
+    Every signal below is lifted from the captured denial
+
+        code -32002, "Tool Execution Denied: Tool call not allowed due to policy
+        enforcement [Policy evaluation denied due to <policy-id>]"
+
+    and any one of them is enough, so a reworded message or a changed error code does
+    not silently break detection. Anything unrecognised is deliberately NOT treated as
+    a denial: it degrades to a non-decision, which is visible and leaves the ledger
+    clean, rather than inventing either an ALLOW or a DENY.
+    """
+    detail = exc.detail if isinstance(exc.detail, dict) else {}
+    if detail.get("code") == POLICY_DENIED_RPC_CODE:
+        return True
+    message = f"{detail.get('message') or ''} {exc.message}".lower()
+    if "tool execution denied" in message:
+        return True
+    return "policy" in message and ("denied" in message or "not allowed" in message)
+
+
+def _classify(exc: AppError) -> str:
+    if exc.code in _DENY_CODES:
+        return "DENY"
+    if exc.code in _ERROR_CODES:
+        return "ERROR"
+    if exc.code == "gateway.rpc_error" and _is_policy_denial(exc):
+        return "DENY"
+    return "ERROR"
+
+
 @router.post("/governance/policy-test")
 def policy_test(req: PolicyTestRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Evaluate a real tools/call as the chosen principal and record the decision."""
+    """Evaluate a real tools/call as the chosen principal and record the decision.
+
+    Only ALLOW and DENY are authorization decisions and get journaled. ERROR means
+    the evaluation never happened (bad credentials, gateway unreachable, an
+    unrecognised failure) and writes nothing — an error is not a decision.
+    """
     principal = f"{req.username}@{ROLE_BY_USER.get(req.username, 'user')}"
     outcome, reason = "ALLOW", None
     try:
         result = mcp_client.tools_call(req.tool, req.arguments, username=req.username)
+        # A tool that fails its own validation returns a successful MCP result with
+        # isError: true — the authorization question was still answered with a permit,
+        # so this stays ALLOW.
         excerpt = str(result)[:300]
     except AppError as exc:
-        outcome = "DENY"
+        outcome = _classify(exc)
         reason = str(exc.detail or exc.message)[:300]
         excerpt = reason
-    decision = PolicyDecision(
-        principal=principal, tool=req.tool, outcome=outcome, reason=reason
-    )
-    db.add(decision)
-    db.commit()
+
+    decision_id = None
+    if outcome in ("ALLOW", "DENY"):
+        decision = PolicyDecision(
+            principal=principal, tool=req.tool, outcome=outcome, reason=reason
+        )
+        db.add(decision)
+        db.commit()
+        decision_id = decision.id
     return {
         "principal": principal,
         "tool": req.tool,
         "outcome": outcome,
         "detail": excerpt,
-        "decision_id": decision.id,
+        "decision_id": decision_id,
+        "recorded": decision_id is not None,
     }
 
 

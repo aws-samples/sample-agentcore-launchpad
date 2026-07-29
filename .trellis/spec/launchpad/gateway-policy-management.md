@@ -163,6 +163,25 @@ after insertion.
   span-channel failure degrades to metrics-only with `spans_unavailable_reason` and
   must never turn the endpoint into a 5xx, because the aggregates are what the
   cutover gate reads.
+- **The local decision ledger journals authorization results only.**
+  `policy-test` returns `ALLOW` / `DENY` / `ERROR`, and **only the first two are
+  written to `policy_decisions`** — an error is not a decision, and the ledger is
+  audit-facing evidence. The original implementation recorded every `AppError` as a
+  `DENY`, so a Cognito outage manufactured a Cedar denial that never happened
+  (observed live; two false rows had to be deleted). Classification:
+  `gateway.unauthorized` → DENY; `credentials_rejected` / `identity_unavailable` /
+  `no_credentials` / `not_bootstrapped` / `bad_response` → ERROR;
+  `gateway.rpc_error` → DENY only when it carries the captured policy-denial
+  signature (JSON-RPC code `-32002`, or a `Tool Execution Denied` / policy-denied
+  message), else ERROR. **Unrecognised failures must fail safe to ERROR** — never to
+  ALLOW or DENY. A tool that fails its own validation returns a *successful* MCP
+  result with `isError: true`, which stays `ALLOW`: the authorization question was
+  answered with a permit.
+- **`policy-test` is not pre-filtered, unlike the Harness path.** It issues
+  `tools/call` with no preceding `tools/list`, so the Gateway runs `AuthorizeAction`
+  per call and a call-time DENY is reachable — the one under `ENFORCE` that a Harness
+  can never produce. Note the ALLOW path for `create_payout` really creates a demo
+  payout record.
 - **The span channel is opt-in per Gateway and bootstrap owns it.** Policy decision
   spans are emitted only after trace delivery is enabled on the attached Gateway —
   a CloudWatch vended-log delivery (`put_delivery_source(logType="TRACES")` →

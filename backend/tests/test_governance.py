@@ -285,6 +285,139 @@ def test_unexpected_client_error_in_existence_check_surfaces():
         _absent(throttled, name="x")
 
 
+# ── policy-test outcome classification ──────────────────────────────────────
+
+# Every infrastructure failure mcp_client can raise. None of these is an
+# authorization decision, so none may reach the audit-facing ledger.
+INFRA_CODES = [
+    "gateway.credentials_rejected",
+    "gateway.identity_unavailable",
+    "gateway.no_credentials",
+    "gateway.not_bootstrapped",
+    "gateway.bad_response",
+]
+
+
+def _post_policy_test(client, **overrides):
+    body = {
+        "username": "demo",
+        "tool": "hr-database___create_payout",
+        "arguments": {"employee_id": "EMP-1024", "amount": 1},
+    }
+    body.update(overrides)
+    return client.post("/api/governance/policy-test", json=body)
+
+
+def _ledger_count() -> int:
+    db = SessionLocal()
+    try:
+        return db.query(PolicyDecision).count()
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("code", INFRA_CODES)
+def test_infrastructure_failures_are_not_recorded_as_denials(client, monkeypatch, code):
+    """Regression: every AppError used to become a Cedar DENY row, so a Cognito
+    outage manufactured audit evidence for a denial that never happened."""
+    from app.core.errors import AppError
+
+    def fail(tool, args, username="demo"):
+        raise AppError(code, "infrastructure failure", {"aws_code": "NotAuthorizedException"})
+
+    monkeypatch.setattr(gov.mcp_client, "tools_call", fail)
+    before = _ledger_count()
+    res = _post_policy_test(client)
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["outcome"] == "ERROR"
+    assert body["recorded"] is False and body["decision_id"] is None
+    assert _ledger_count() == before, f"{code} wrote a ledger row"
+
+
+def test_captured_policy_denial_is_recorded(client, monkeypatch):
+    """The real denial, verbatim from research/policy-denial-response.md."""
+    from app.core.errors import AppError
+
+    detail = {
+        "code": -32002,
+        "message": (
+            "Tool Execution Denied: Tool call not allowed due to policy enforcement "
+            "[Policy evaluation denied due to launchpad_payout_admin_only-x7gz5yjkrd]"
+        ),
+    }
+
+    def deny(tool, args, username="demo"):
+        raise AppError("gateway.rpc_error", detail["message"], detail)
+
+    monkeypatch.setattr(gov.mcp_client, "tools_call", deny)
+    before = _ledger_count()
+    body = _post_policy_test(client).json()
+
+    assert body["outcome"] == "DENY"
+    assert body["recorded"] is True and body["decision_id"]
+    assert _ledger_count() == before + 1
+
+
+def test_rpc_code_alone_is_enough_to_detect_a_denial(client, monkeypatch):
+    """A reworded message must not break detection — the -32002 code carries it."""
+    from app.core.errors import AppError
+
+    def deny(tool, args, username="demo"):
+        raise AppError("gateway.rpc_error", "some future wording", {"code": -32002})
+
+    monkeypatch.setattr(gov.mcp_client, "tools_call", deny)
+    assert _post_policy_test(client).json()["outcome"] == "DENY"
+
+
+def test_gateway_401_is_a_denial(client, monkeypatch):
+    from app.core.errors import AppError
+
+    def unauthorized(tool, args, username="demo"):
+        raise AppError("gateway.unauthorized", "gateway rejected the call (403)", {})
+
+    monkeypatch.setattr(gov.mcp_client, "tools_call", unauthorized)
+    before = _ledger_count()
+    body = _post_policy_test(client).json()
+    assert body["outcome"] == "DENY"
+    assert _ledger_count() == before + 1
+
+
+def test_unrecognised_rpc_error_is_not_assumed_to_be_a_denial(client, monkeypatch):
+    """Fails safe: an unknown JSON-RPC error becomes a non-decision rather than
+    inventing an ALLOW or a DENY."""
+    from app.core.errors import AppError
+
+    def odd(tool, args, username="demo"):
+        raise AppError("gateway.rpc_error", "internal error", {"code": -32603})
+
+    monkeypatch.setattr(gov.mcp_client, "tools_call", odd)
+    before = _ledger_count()
+    body = _post_policy_test(client).json()
+    assert body["outcome"] == "ERROR"
+    assert body["recorded"] is False
+    assert _ledger_count() == before
+
+
+def test_tool_level_failure_still_counts_as_allowed(client, monkeypatch):
+    """Captured behavior: bad arguments come back as a *successful* MCP result with
+    isError true. The authorization question was answered with a permit, so the
+    decision is ALLOW even though the tool itself failed."""
+    monkeypatch.setattr(
+        gov.mcp_client,
+        "tools_call",
+        lambda tool, args, username="demo": {
+            "isError": True,
+            "content": [{"type": "text", "text": "ValidationException - ..."}],
+        },
+    )
+    before = _ledger_count()
+    body = _post_policy_test(client).json()
+    assert body["outcome"] == "ALLOW"
+    assert _ledger_count() == before + 1
+
+
 def test_policy_test_records_decision(client, monkeypatch):
     monkeypatch.setattr(
         gov.mcp_client, "tools_call",
