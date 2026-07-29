@@ -42,17 +42,28 @@ independently verifiable and, unlike R2/R3 below, not blocked by the credential
 problem. **That child is a prerequisite for R2** — without the `TRACES` delivery
 there is nothing to capture. Do not re-implement it here.
 
-### R2 — Capture a real span corpus (research gate)
+### R2 — Capture a real span corpus (research gate) — **DONE 2026-07-29**
 
-Before any parser is written, capture and record complete raw spans in this
-child's `research/`:
+Recorded verbatim in `research/policy-span-corpus.md` (commit `60938d1`). Traffic
+was driven through the `hr-database` Harness agent, whose OAuth `CLIENT_CREDENTIALS`
+path to the Gateway works and is independent of the rejected demo Cognito
+credentials. Captured under `ENFORCE`:
 
-1. ALLOW and DENY under Gateway `ENFORCE` (the current mode).
-2. ALLOW and DENY under `LOG_ONLY` — requires a mode switch on a shared demo
-   resource; treat it as a separate confirmed action and restore the original mode
-   afterwards. If restoring is risky, capture ENFORCE only and record LOG_ONLY as
-   unverified rather than guessing.
-3. Both `AuthorizeAction` and `PartiallyAuthorizeActions`.
+- `AgentCore.Policy.AuthorizeAction` — ALLOW
+- `AgentCore.Policy.PartiallyAuthorizeActions` — carrying a real DENY
+  (`denied_tools: ["hr-database___create_payout"]`)
+- `AgentCore.Gateway.InvokeTool` (SERVER) — the most useful span: `tool.name` **and**
+  `aws.agentcore.policy.authorization_decision` together
+- the full 31-span trace shape
+
+**Deliberately not captured, by the user's 2026-07-29 decision:** the `LOG_ONLY`
+corpus. An `AuthorizeAction` DENY is structurally impossible under `ENFORCE` —
+`PartiallyAuthorizeActions` filters the denied tool out of `tools/list`, so the
+model can never attempt it. Getting it would need a mode switch on a shared demo
+gateway. Consequences: the `AuthorizeAction`-DENY shape and
+`aws.agentcore.policy.authorization_reason` (documented, but absent on the captured
+ALLOW span) remain **unverified**, and R3 must not implement a branch that depends
+on either.
 
 Repro path is already documented: invoke the `hr-database` harness agent as
 `hr-analyst` against `create_payout` for DENY (`docs/lab/11-governance.md`), and
@@ -71,18 +82,33 @@ an allowed tool for ALLOW.
 Record verbatim spans — full attribute maps, not summaries — plus the exact Logs
 Insights query used. This is the artifact the 07-16 research was missing.
 
-### R3 — Only then, the parser
+### R3 — The parser, bounded by what was captured
 
-- Bounded alias map derived from the captured corpus; no attribute name enters
-  the parser without appearing in a captured span.
-- Populate `decisions[]` with the existing `GovernancePolicyDecision` fields
-  (`principal`, `action`, `outcome`, `engine_mode`, `policy_mode`, `trace_id`,
-  `session_id`, `policy_id`).
-- Any field the corpus does not establish stays `null` and is rendered as absent —
-  it is not back-filled from metrics or inferred.
-- `source` becomes `metrics+spans`; the metric aggregates stay authoritative for
-  `evidence_count` unless the corpus proves spans are complete, because sampling
-  can drop spans while metrics are exact counts.
+No attribute name may enter the parser without appearing in
+`research/policy-span-corpus.md`. Field availability is now established, not
+assumed:
+
+| Field | Source | Status |
+|---|---|---|
+| `at`, `outcome`, `action` | `AgentCore.Gateway.InvokeTool`: `startTimeUnixNano`, `aws.agentcore.policy.authorization_decision`, `tool.name` | available |
+| `policy_id`, `mismatched_policies`, `log_only_matched_policies`, engine arn | sibling `AgentCore.Policy.*` span, joined on `parentSpanId` | available |
+| `engine_mode` | `aws.agentcore.gateway.policy.mode` | available (Gateway attachment mode) |
+| `gateway_id`, `trace_id`, `span_id` | span fields / `target_resource.id` | available |
+| `session_id` | `session.id` on the root `POST /invocations` / `mcp tools/call` spans, joined on `traceId` | available via join |
+| `policy_mode` | not in any span — only the Gateway attachment mode is | **null** |
+| **`principal`** | no span in the trace carries any principal/actor/subject attribute; the Harness authenticates with an M2M client credential, so there is no human principal in the request | **null, structurally** |
+
+- `principal` and `policy_mode` render as **absent**, never back-filled or inferred.
+  The local demo ledger keeps its own `principal`; the two must not be conflated.
+- `PartiallyAuthorizeActions` denials are list-time *tool availability* decisions,
+  not blocked invocations. They must be surfaced (they are the only DENY evidence
+  under ENFORCE) but labelled as a different kind of evaluation — not presented as
+  a blocked call.
+- `aws.agentcore.policy.log_only_matched_policies` is undocumented but captured, and
+  is the one thing the metric channel cannot express: it shows what a LOG_ONLY
+  candidate *would* have matched, from an ENFORCE-mode span. Surface it.
+- `source` becomes `metrics+spans`; metric aggregates stay authoritative for
+  `evidence_count`, because spans are sampled while metrics are exact counts.
 
 ### R4 — Reconcile the two channels
 

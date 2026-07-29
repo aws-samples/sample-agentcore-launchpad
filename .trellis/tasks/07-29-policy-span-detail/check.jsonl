@@ -1,1 +1,4 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/07-29-policy-span-detail/research/policy-span-corpus.md", "reason": "THE authority for which span attribute names may appear in the parser; verbatim captured spans and the trace shape"}
+{"file": ".trellis/spec/launchpad/gateway-policy-management.md", "reason": "Governance/Policy contract incl. the metric-channel and span-channel clauses"}
+{"file": ".trellis/spec/launchpad/observability-log-groups.md", "reason": "aws/spans conventions and the Logs Insights transport this parser reuses"}
+{"file": ".trellis/tasks/07-29-policy-span-evidence/prd.md", "reason": "Parent requirements, confirmed decisions, and cross-child acceptance criteria"}
