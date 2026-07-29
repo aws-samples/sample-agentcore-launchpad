@@ -95,6 +95,8 @@ export interface RuntimeCanaryInfo {
       weights: Record<string, number>;
       v_current: string;
       v_candidate: string;
+      // zip behind v_candidate; cleanup deletes it unless it is still live
+      candidate_s3_key?: string;
       stable_endpoint: string;
       treatment_endpoint: string;
       runtime_id: string;
@@ -139,6 +141,7 @@ export interface RuntimeCanaryInfo {
     rollback?: {
       winner: string;
       restored_version?: string;
+      restored_s3_key?: string;
       ab_test_status?: string;
       rolled_back_at?: string;
     };

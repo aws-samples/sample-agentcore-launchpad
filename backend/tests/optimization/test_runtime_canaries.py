@@ -336,7 +336,9 @@ def test_setup_mints_candidate_targets_endpoints_and_own_ab_test(monkeypatch):
     )
 
     monkeypatch.setattr(
-        canary_svc.canary_infra, "mint_candidate_version", lambda **kw: ("1", "2")
+        canary_svc.canary_infra,
+        "mint_candidate_version",
+        lambda **kw: ("1", "2", f"agents/subject/canary/{kw['canary_id']}-{kw['role']}.zip"),
     )
     monkeypatch.setattr(
         canary_svc.canary_infra, "current_version", lambda control, runtime_id: "1"
@@ -424,7 +426,9 @@ def test_setup_retry_adopts_its_own_ab_test_after_conflict(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        canary_svc.canary_infra, "mint_candidate_version", lambda **kw: ("1", "2")
+        canary_svc.canary_infra,
+        "mint_candidate_version",
+        lambda **kw: ("1", "2", f"agents/subject/canary/{kw['canary_id']}-{kw['role']}.zip"),
     )
     monkeypatch.setattr(
         canary_svc.canary_infra, "current_version", lambda control, runtime_id: "1"
@@ -880,10 +884,11 @@ def test_rollback_rolls_forward_current_spec(monkeypatch):
     )
     minted: dict = {}
 
-    def fake_mint(*, agent, edited_spec, control_client, log):
+    def fake_mint(*, agent, edited_spec, control_client, log, canary_id, role):
         minted["agent_id"] = agent.id
         minted["spec"] = edited_spec
-        return ("1", "9")
+        minted["role"] = role
+        return ("1", "9", f"agents/subject/canary/{canary_id}-{role}.zip")
 
     monkeypatch.setattr(canary_svc.canary_infra, "mint_candidate_version", fake_mint)
 
@@ -937,9 +942,9 @@ def test_rollback_allowed_and_rolls_forward_on_partial_setup(monkeypatch):
     )
     minted: dict = {}
 
-    def fake_mint(*, agent, edited_spec, control_client, log):
+    def fake_mint(*, agent, edited_spec, control_client, log, canary_id, role):
         minted["spec"] = edited_spec
-        return ("1", "5")
+        return ("1", "5", f"agents/subject/canary/{canary_id}-{role}.zip")
 
     monkeypatch.setattr(canary_svc.canary_infra, "mint_candidate_version", fake_mint)
 
@@ -1030,3 +1035,85 @@ def test_clear_stale_canary_actions_is_retryable():
     assert stored.running_action is None
     assert stored.progress is None
     assert stored.error.startswith("traffic: interrupted")
+
+
+def _cleanup_stubs(monkeypatch, *, live_version: str):
+    """Silence every non-S3 teardown so a test can assert on the S3 decisions."""
+    monkeypatch.setattr(
+        canary_svc, "_owned_resources", lambda row, control, data: (None, [], [], []))
+    monkeypatch.setattr(canary_svc.ac, "cleanup_resources", lambda control, data, **kw: [])
+    monkeypatch.setattr(
+        canary_svc.canary_infra, "delete_endpoint_quiet", lambda control, **kw: None)
+    monkeypatch.setattr(
+        canary_svc.canary_infra, "current_version",
+        lambda control, runtime_id: live_version)
+    monkeypatch.setattr(canary_svc, "control_client", MagicMock)
+    monkeypatch.setattr(canary_svc, "data_client", MagicMock)
+    deleted: list[str] = []
+    monkeypatch.setattr(
+        canary_svc.canary_infra, "delete_object_quiet",
+        lambda key, **kw: deleted.append(key))
+    return deleted
+
+
+def _s3_rows(results: list[dict[str, str]]) -> dict[str, dict[str, str]]:
+    return {row["category"]: row for row in results if row["category"].startswith("s3:")}
+
+
+def test_cleanup_deletes_the_superseded_candidate_zip_after_rollback(monkeypatch):
+    """Both mints leave a ~37MB object behind (ISSUE-011). After a rollback the
+    restored version is live, so only the rejected candidate's zip may go."""
+    setup = {**_setup_artifact(), "candidate_s3_key": "agents/s/canary/c1-candidate.zip"}
+    row = _mk_canary(artifacts={
+        "setup": setup,
+        "rollback": {"restored_version": "3",
+                     "restored_s3_key": "agents/s/canary/c1-restore.zip"},
+        "rounds": [],
+    })
+    deleted = _cleanup_stubs(monkeypatch, live_version="3")
+
+    rows = _s3_rows(canary_svc.act_cleanup(row.id, lambda message: None))
+
+    assert deleted == ["agents/s/canary/c1-candidate.zip"]
+    assert rows["s3:agents/s/canary/c1-candidate.zip"]["status"] == "deleted"
+    restored = rows["s3:agents/s/canary/c1-restore.zip"]
+    assert restored["status"] == "skipped"
+    assert "live version 3" in restored["detail"]
+
+
+def test_cleanup_keeps_the_candidate_zip_when_it_is_still_live(monkeypatch):
+    """Promoted canary: production runs the candidate, so its zip stays."""
+    setup = {**_setup_artifact(), "candidate_s3_key": "agents/s/canary/c1-candidate.zip"}
+    row = _mk_canary(artifacts={"setup": setup, "rounds": []})
+    deleted = _cleanup_stubs(monkeypatch, live_version="2")  # v_candidate == "2"
+
+    rows = _s3_rows(canary_svc.act_cleanup(row.id, lambda message: None))
+
+    assert deleted == []
+    assert rows["s3:agents/s/canary/c1-candidate.zip"]["status"] == "skipped"
+
+
+def test_cleanup_of_a_row_without_recorded_keys_touches_no_s3(monkeypatch):
+    """Rows written before the keys were recorded clean up exactly as before."""
+    row = _mk_canary(artifacts={"setup": _setup_artifact(), "rounds": []})
+    deleted = _cleanup_stubs(monkeypatch, live_version="2")
+
+    results = canary_svc.act_cleanup(row.id, lambda message: None)
+
+    assert deleted == []
+    assert _s3_rows(results) == {}
+
+
+def test_cleanup_keeps_objects_when_the_live_version_is_unknown(monkeypatch):
+    setup = {**_setup_artifact(), "candidate_s3_key": "agents/s/canary/c1-candidate.zip"}
+    row = _mk_canary(artifacts={"setup": setup, "rounds": []})
+    deleted = _cleanup_stubs(monkeypatch, live_version="2")
+    monkeypatch.setattr(
+        canary_svc.canary_infra, "current_version",
+        lambda control, runtime_id: (_ for _ in ()).throw(RuntimeError("throttled")))
+
+    rows = _s3_rows(canary_svc.act_cleanup(row.id, lambda message: None))
+
+    assert deleted == []
+    assert rows["s3:agents/s/canary/c1-candidate.zip"]["status"] == "skipped"
+    assert "live version unknown" in rows["s3:agents/s/canary/c1-candidate.zip"]["detail"]

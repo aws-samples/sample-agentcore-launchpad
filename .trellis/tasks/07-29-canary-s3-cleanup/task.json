@@ -3,7 +3,7 @@
   "name": "canary-s3-cleanup",
   "title": "Delete canary candidate packages from S3 on cleanup",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": "lab4-interactive",

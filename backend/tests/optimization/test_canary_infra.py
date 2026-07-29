@@ -98,10 +98,11 @@ def test_mint_candidate_reads_version_from_update_and_leaves_ledger_untouched(
 
     db2 = SessionLocal()
     try:
-        v_current, v_candidate = infra.mint_candidate_version(
+        v_current, v_candidate, s3_key = infra.mint_candidate_version(
             agent=db2.get(Agent, agent_id),
             edited_spec=spec,
             control_client=control,
+            canary_id="can123",
             pip_runner=_fake_pip,
             uploader=lambda local, bucket, key: uploads.append((bucket, key)),
             build_root=tmp_path,
@@ -111,11 +112,10 @@ def test_mint_candidate_reads_version_from_update_and_leaves_ledger_untouched(
 
     # v_candidate comes from the UpdateAgentRuntime response, not the GET
     assert (v_current, v_candidate) == ("7", "8")
-    # candidate zip landed under a canary-scoped key in the artifacts bucket
-    assert uploads and uploads[0][0] == "bkt"
-    assert uploads[0][1].startswith("agents/mintme/canary/") and uploads[0][1].endswith(
-        ".zip"
-    )
+    # the zip landed under a deterministic per-canary/role key the caller can
+    # record — a retried mint overwrites it instead of orphaning a new object
+    assert uploads == [("bkt", "agents/mintme/canary/can123-candidate.zip")]
+    assert s3_key == "agents/mintme/canary/can123-candidate.zip"
     up_kwargs = control.update_agent_runtime.call_args.kwargs
     s3 = up_kwargs["agentRuntimeArtifact"]["codeConfiguration"]["code"]["s3"]
     assert s3 == {"bucket": "bkt", "prefix": uploads[0][1]}
@@ -140,6 +140,7 @@ def test_mint_candidate_container_is_follow_up(monkeypatch, tmp_path):
             agent=SimpleNamespace(name="c", resource_id="c-x"),
             edited_spec=spec,
             control_client=MagicMock(),
+            canary_id="can123",
             build_root=tmp_path,
         )
 

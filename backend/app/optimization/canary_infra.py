@@ -82,18 +82,46 @@ def _default_uploader(local_path: str, bucket: str, key: str) -> None:
     )
 
 
+def candidate_s3_key(agent_name: str, canary_id: str, role: str) -> str:
+    """Deterministic key for a canary's zip: one object per canary + role.
+
+    A uuid per mint orphaned a ~37MB object on every attempt (ISSUE-011); keyed
+    this way a retried mint overwrites its own object, and cleanup knows exactly
+    which keys the record owns.
+    """
+    return f"agents/{agent_name}/canary/{canary_id}-{role}.zip"
+
+
+def delete_object_quiet(key: str, *, bucket: str | None = None,
+                        s3_client: Any = None) -> None:
+    """Delete one artifacts-bucket object. Raises — the caller decides whether a
+    failure is fatal (cleanup records it as skipped)."""
+    settings = get_settings()
+    target = bucket or settings.resources.get("artifacts_bucket")
+    if not target:
+        raise RuntimeError("artifacts_bucket missing from config")
+    client = s3_client or boto3.client("s3", region_name=settings.region)
+    client.delete_object(Bucket=target, Key=key)
+
+
 def mint_candidate_version(
     *,
     agent: Any,
     edited_spec: AgentSpec,
     control_client: Any,
+    canary_id: str,
+    role: str = "candidate",
     log: Log = _noop,
     pip_runner: Callable[..., Any] = subprocess.run,
     uploader: Callable[[str, str, str], None] | None = None,
     build_root: Path | None = None,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     """Publish a candidate immutable version of ``agent``'s runtime from an
-    edited spec, returning ``(v_current, v_candidate)``.
+    edited spec, returning ``(v_current, v_candidate, s3_key)``.
+
+    ``canary_id``/``role`` key the uploaded zip (see ``candidate_s3_key``); the
+    caller records the returned key on the canary artifacts so cleanup can
+    delete it.
 
     The candidate zip is built with the same blocks as the deploy pipeline
     (``_generate_code`` / ``_method_requirements`` / ``build_zip``), uploaded to
@@ -143,7 +171,7 @@ def mint_candidate_version(
         code, requirements, build_dir, pip_runner=pip_runner,
         on_pkg_ready=_on_pkg_ready,
     )
-    s3_key = f"agents/{agent.name}/canary/{uuid.uuid4().hex}.zip"
+    s3_key = candidate_s3_key(agent.name, canary_id, role)
     (uploader or _default_uploader)(str(zip_path), bucket, s3_key)
     log(f"candidate artifact → s3://{bucket}/{s3_key} · {source}")
 
@@ -164,7 +192,7 @@ def mint_candidate_version(
         control_client, agent.resource_id,
         on_status=lambda s: log(f"candidate runtime status: {s}"),
     )
-    return v_current, v_candidate
+    return v_current, v_candidate, s3_key
 
 
 # ─── dedicated per-canary gateway ────────────────────────────────────────────

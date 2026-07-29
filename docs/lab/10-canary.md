@@ -215,6 +215,12 @@ deleted  gateway:lp-canary-21131394e8d7-k7agg5xrgd
 > 和第 09 章的差别：金丝雀**连专属 Gateway 一起删**（`gateway:lp-canary-…`），
 > 配置包 A/B 用的是共享实验网关，只删除自己创建的 target。两条路径都按资源归属清理。
 
+> **S3 部署包也归金丝雀所有**（上面这份清单录制于该行为上线前，所以看不到 `s3:` 行）。
+> 铸造候选和回滚各会上传一个约 37MB 的 zip；清理时会把这两个 key 一并删掉，并各输出一行
+> `deleted s3:agents/<agent>/canary/<canary_id>-candidate.zip`。唯一的例外是**当前生产
+> 正在运行的那个版本对应的 zip**：回滚后保留 `-restore.zip`，晋级后保留 `-candidate.zip`，
+> 输出 `skipped` 并注明原因。
+
 ## 10.6 没走完的档位（本次未实跑）
 
 `50/50` 与 `1/99` 两档**本次未实跑**，原因是第 02 档判定为 `insufficient-data`，

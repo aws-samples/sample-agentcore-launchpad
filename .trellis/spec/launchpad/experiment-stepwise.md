@@ -369,6 +369,21 @@ invoke_runtime_text(client, arn, prompt, ..., qualifier: str|None = None)
   reliable signal. Both `cleanup_resources` and `delete_canary_gateway` therefore
   **retry the delete until it is accepted** (≤300s) and treat NotFound as success;
   a single-shot delete leaks the dedicated gateway.
+- **The canary owns its S3 zips.** `mint_candidate_version` runs twice per canary
+  (candidate at setup, restore at rollback) and returns
+  `(v_current, v_candidate, s3_key)`; the key is deterministic per canary + role
+  (`agents/{agent}/canary/{canary_id}-{candidate|restore}.zip`, via
+  `candidate_s3_key`), so a retried mint overwrites its own ~37MB object instead
+  of orphaning a fresh uuid. The caller records it as
+  `setup.candidate_s3_key` / `rollback.restored_s3_key`, and `act_cleanup`
+  deletes the recorded keys with one `s3:<key>` result row each — **except the
+  object of the version that is live at cleanup time** (promoted canary → the
+  candidate's zip stays; rollback → the restored zip stays). AWS does not
+  document whether a published runtime version keeps reading its S3 artifact, so
+  deleting only superseded objects is safe under either assumption; an unknown
+  live version keeps everything. Rows written before the keys existed produce no
+  `s3:` rows (ISSUE-011: cleanup used to report eight deleted categories while
+  leaving ~75MB per run in the bucket).
 - **Verified AWS shapes.** Named-endpoint content-log group =
   `/aws/bedrock-agentcore/runtimes/{resource_id}-{endpoint}` (created at
   endpoint-create). `create_agent_runtime_endpoint` pins via `agentRuntimeVersion`;
@@ -426,7 +441,8 @@ invoke_runtime_text(client, arn, prompt, ..., qualifier: str|None = None)
   route → gateway POST; gateway error/non-200 → fail-safe to stable endpoint.
 - promote → ledger `spec==edited_spec`, `version==v_candidate`, no endpoint
   repoint. rollback → re-mints the CURRENT spec, `version` updated, allowed on
-  partial setup. cleanup → both endpoints + dedicated gateway deleted.
+  partial setup. cleanup → both endpoints + dedicated gateway deleted, plus the
+  recorded candidate/restore S3 zips except the live version's.
 - Ramp/verdict policy unchanged (treatment/tie/non-sig/control/insufficient +
   override). Browser: single-agent + candidate-edit form, live-traffic copy,
   disabled/ineligible reasons, EN/ZH.

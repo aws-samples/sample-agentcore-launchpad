@@ -401,8 +401,9 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
     # (5) Mint the candidate (DEFAULT auto-rolls to it; invoke now routes to the
     # stable endpoint = v_current until the gateway A/B goes live).
     progress("minting candidate runtime version…")
-    _, v_candidate = canary_infra.mint_candidate_version(
-        agent=agent, edited_spec=spec, control_client=control, log=progress
+    _, v_candidate, candidate_key = canary_infra.mint_candidate_version(
+        agent=agent, edited_spec=spec, control_client=control, log=progress,
+        canary_id=canary_id, role="candidate",
     )
 
     # (6) Treatment endpoint pinned to the candidate, READY.
@@ -498,6 +499,8 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
         "ramp_stage": 0,
         "weights": {variant["name"]: variant["weight"] for variant in variants},
         "v_candidate": v_candidate,
+        # the zip behind v_candidate — cleanup owns it (unless it is still live)
+        "candidate_s3_key": candidate_key,
         "treatment_endpoint": treatment,
     }
     _update(canary_id, stage="setup", artifact={"setup": result, "rounds": []})
@@ -703,8 +706,9 @@ def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
     # runtime version" helper — re-publishing v_current's unchanged spec rolls
     # DEFAULT off the rejected candidate back to current behavior.
     progress("rolling production forward off the rejected candidate…")
-    _, v_restored = canary_infra.mint_candidate_version(
-        agent=agent, edited_spec=current_spec, control_client=control, log=progress
+    _, v_restored, restored_key = canary_infra.mint_candidate_version(
+        agent=agent, edited_spec=current_spec, control_client=control, log=progress,
+        canary_id=canary_id, role="restore",
     )
     db = SessionLocal()
     try:
@@ -717,6 +721,7 @@ def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
     result = {
         "winner": "champion",
         "restored_version": v_restored,
+        "restored_s3_key": restored_key,
         "ab_test_status": stopped.get("executionStatus"),
         "rolled_back_at": _now(),
     }
@@ -776,6 +781,64 @@ def _owned_resources(
         sorted(online_eval_ids),
         sorted(ab_test_ids),
     )
+
+
+def _cleanup_candidate_objects(
+    row: RuntimeCanary,
+    control: Any,
+    progress: Progress,
+) -> list[dict[str, str]]:
+    """Delete the zips this canary uploaded, except the one behind the version
+    production is running.
+
+    Both mints (candidate at setup, restore at rollback) leave a ~37MB object in
+    the artifacts bucket; nothing used to own them (ISSUE-011). AWS does not
+    document whether a published runtime version keeps reading its S3 artifact,
+    so the live version's object is always kept — deleting only superseded
+    objects is safe either way. Rows written before the keys were recorded have
+    nothing to delete and are reported as such.
+    """
+    setup = row.artifacts.get("setup") or {}
+    rollback = row.artifacts.get("rollback") or {}
+    owned = [
+        (setup.get("candidate_s3_key"), str(setup.get("v_candidate") or "")),
+        (rollback.get("restored_s3_key"), str(rollback.get("restored_version") or "")),
+    ]
+    owned = [(key, version) for key, version in owned if key]
+    if not owned:
+        return []
+    runtime_id = setup.get("runtime_id")
+    live_version = ""
+    try:
+        if runtime_id:
+            live_version = canary_infra.current_version(control, runtime_id)
+    except Exception as exc:  # unknown live version → keep every object
+        return [{
+            "category": f"s3:{key}",
+            "status": "skipped",
+            "detail": f"live version unknown: {type(exc).__name__}: {exc}",
+        } for key, _ in owned]
+
+    results: list[dict[str, str]] = []
+    for key, version in owned:
+        if version and version == live_version:
+            results.append({
+                "category": f"s3:{key}",
+                "status": "skipped",
+                "detail": f"artifact of the live version {version}",
+            })
+            continue
+        try:
+            progress(f"deleting candidate artifact s3://…/{key}")
+            canary_infra.delete_object_quiet(key)
+            results.append({"category": f"s3:{key}", "status": "deleted", "detail": ""})
+        except Exception as exc:
+            results.append({
+                "category": f"s3:{key}",
+                "status": "skipped",
+                "detail": f"{type(exc).__name__}: {exc}",
+            })
+    return results
 
 
 def act_cleanup(
@@ -847,6 +910,7 @@ def act_cleanup(
                 "status": "skipped",
                 "detail": f"{type(exc).__name__}: {exc}",
             })
+    results.extend(_cleanup_candidate_objects(row, control, progress))
     _update(
         canary_id,
         status="cleaned",

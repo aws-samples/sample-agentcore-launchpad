@@ -76,3 +76,12 @@ two objects.
       are now canary-owned, minus the live one).
 - [ ] `make verify` passes. (Real-AWS confirmation is out of scope for the verify gate —
       note in the task what a live run should show.)
+
+## Live-run note (out of verify scope)
+
+`make verify` covers the unit level only. A real canary run should show, in the
+cleanup list: `deleted s3:agents/<agent>/canary/<canary_id>-candidate.zip` after a
+rollback, alongside `skipped s3:…-restore.zip · artifact of the live version <n>`
+(and the mirror image after a promote). Confirm afterwards with
+`aws s3 ls s3://<artifacts-bucket>/agents/<agent>/canary/` — at most one object per
+canary should remain, the live one.
