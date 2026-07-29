@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/launchpad/gateway-policy-management.md", "reason": "Governance/Policy contract, incl. the span-channel clause this task extends"}
+{"file": ".trellis/spec/launchpad/observability-log-groups.md", "reason": "Existing telemetry/log-group conventions the delivery naming must fit"}
+{"file": ".trellis/tasks/07-29-policy-span-evidence/research/policy-evidence-channels.md", "reason": "Verified account facts: the exact 3-call enablement shape, existing delivery naming convention, and proof no TRACES source exists for launchpad-gw"}
+{"file": ".trellis/tasks/07-29-policy-span-evidence/prd.md", "reason": "Parent requirements and confirmed decisions (launchpad-gw only, bootstrap-owned, no UpdateGateway)"}

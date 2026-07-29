@@ -131,6 +131,20 @@ after insertion.
 - **`decisions[]` requires spans and is never synthesized.** Metric dimensions
   cannot express principal, decision reason, or trace id, so the array stays empty
   while `source` is `metrics`.
+- **The span channel is opt-in per Gateway and bootstrap owns it.** Policy decision
+  spans are emitted only after trace delivery is enabled on the attached Gateway —
+  a CloudWatch vended-log delivery (`put_delivery_source(logType="TRACES")` →
+  `put_delivery_destination(deliveryDestinationType="XRAY")` → `create_delivery`),
+  **not** a Gateway field, so enabling it must never call `UpdateGateway`.
+  `policy_bootstrap.ensure_gateway_traces()` creates it idempotently inside
+  `make bootstrap`, named `<gateway-id>-traces-source` / `-traces-destination` per
+  the account's existing convention. Requires Transaction Search first (AWS
+  prerequisite) and skips with a reason when it is off. All three write calls can
+  raise `ConflictException`, and `describe_deliveries` has no per-name lookup, so
+  existence is checked with `get_delivery_*` plus a paginated scan, and a conflict
+  is treated as already-present. The step returns a `status`
+  (`created`/`present`/`skipped`/`failed`) rather than a bool and **never raises**:
+  telemetry must not abort bootstrap, but must not be reported as success either.
 - The cutover gate reads `log_only_count`, not `evidence_count` — only LOG_ONLY
   decisions satisfy the documented promotion rule. `evidence_count()` never
   raises: an unreadable channel yields 0 so a legitimate typed override stays

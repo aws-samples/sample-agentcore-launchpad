@@ -176,6 +176,17 @@ Two properties of that metric channel shape the contract:
   of the same event, so selections match an exact dimension-name set — summing
   across projections would inflate counts several-fold.
 
+The span channel is the opt-in half, and it is **per Gateway**: AgentCore emits
+Policy decision spans only after trace delivery is enabled on the attached
+Gateway. That is a CloudWatch vended-log delivery (source `logType=TRACES` →
+`XRAY` destination → delivery), not a Gateway setting, so enabling it never calls
+`UpdateGateway`. `policy_bootstrap.ensure_gateway_traces()` owns it and runs inside
+`make bootstrap` after Transaction Search, which AWS requires first; spans land in
+the shared `aws/spans` log group. The step is idempotent and non-fatal — a failure
+is reported in the bootstrap summary with the AWS error code rather than aborting
+the run, because the platform is usable without spans. Missing this delivery is
+the whole reason the span channel previously looked unverifiable.
+
 ## Console authentication and accounts
 
 The platform console has an optional local account gate, independent from both

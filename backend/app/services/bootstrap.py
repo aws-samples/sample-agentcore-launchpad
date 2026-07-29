@@ -267,7 +267,10 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
         from app.services.policy_bootstrap import run_policy_bootstrap
 
         policy_summary = run_policy_bootstrap(
-            control, _client("xray", region), load_config()
+            control,
+            _client("xray", region),
+            load_config(),
+            logs=_client("logs", region),
         )
         write_config(
             {

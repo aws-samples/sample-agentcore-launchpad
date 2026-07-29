@@ -35,28 +35,12 @@ product contract needs. That is what the capture step establishes.
 
 ## Requirements
 
-### R1 — Bootstrap owns the delivery (idempotent)
+### R1 — Bootstrap owns the delivery — **MOVED OUT**
 
-Extend the bootstrap path (`backend/app/services/policy_bootstrap.py` is the
-natural home — it already owns `ensure_transaction_search()`; `gateway_bootstrap.py`
-owns gateway resources, so justify the choice in `design.md`) with an
-`ensure_gateway_traces()` step:
-
-```python
-logs.put_delivery_source(name=f"{gateway_id}-traces-source", logType="TRACES", resourceArn=gateway_arn)
-logs.put_delivery_destination(name=f"{gateway_id}-traces-destination", deliveryDestinationType="XRAY")
-logs.create_delivery(deliverySourceName=..., deliveryDestinationArn=...)
-```
-
-- Idempotent: re-running `make bootstrap` must not error or duplicate. Existing
-  deliveries are detected via `describe-delivery-sources` /
-  `describe-deliveries`.
-- Must not run before Transaction Search is confirmed — AWS documents it as a
-  hard prerequisite for enabling tracing.
-- Report the outcome in the bootstrap summary like the other steps.
-- Naming must follow the account's existing convention
-  (`<resource-id>-traces-source` / `-traces-destination`), which the pre-existing
-  memory and runtime deliveries already use.
+Split into its own child, `07-29-gateway-traces-delivery`, on 2026-07-29: it is
+independently verifiable and, unlike R2/R3 below, not blocked by the credential
+problem. **That child is a prerequisite for R2** — without the `TRACES` delivery
+there is nothing to capture. Do not re-implement it here.
 
 ### R2 — Capture a real span corpus (research gate)
 
@@ -109,9 +93,6 @@ silently prefer one. State which number is which (exact count vs sampled detail)
 
 - `docs/architecture.md` — the span channel and its prerequisite.
 - `docs/lab/11-governance.md` §11.6 — real per-decision rows.
-- `docs/setup.md` / bootstrap docs — the new bootstrap step and the IAM actions it
-  needs (`logs:PutDeliverySource`, `logs:PutDeliveryDestination`,
-  `logs:CreateDelivery`, `logs:DescribeDelivery*`).
 - Correct the archived
   `07-16-gateway-policy-management/research/policy-telemetry-shape.md` status via
   `trellis-update-spec` so a future session does not re-derive the wrong root cause.
@@ -126,10 +107,8 @@ silently prefer one. State which number is which (exact count vs sampled detail)
 
 ## Acceptance criteria
 
-- [ ] `make bootstrap` creates the `launchpad-gw` `TRACES` delivery on a fresh
-      account and is a no-op on re-run.
-- [ ] `describe-delivery-sources` shows a `TRACES` source for
-      `gateway/launchpad-gw-em0yuqmmdp`.
+- [ ] (prerequisite, owned by `07-29-gateway-traces-delivery`) the `TRACES`
+      delivery exists for `gateway/launchpad-gw-em0yuqmmdp`.
 - [ ] `research/` holds verbatim captured spans covering ALLOW and DENY for both
       operations, with the query used; any uncaptured case is recorded as
       unverified rather than assumed.
@@ -144,4 +123,8 @@ silently prefer one. State which number is which (exact count vs sampled detail)
 `design.md` and `implement.md` are intentionally deferred: the parser design
 depends on the captured span shape, and writing it now would repeat the exact
 mistake the 07-16 research was created to prevent. Author them after R2 completes,
-before implementing R3. R1 is independent and may be planned and executed first.
+before implementing R3.
+
+Two things must land before this child can start: the `TRACES` delivery
+(`07-29-gateway-traces-delivery`) and a working way to drive real gateway traffic
+(the credential blocker in R2).

@@ -39,6 +39,48 @@ What it creates / 创建内容:
 Demo user passwords are generated and stored in `config/launchpad.yaml`
 (**gitignored** — treat as local secrets; a sanitized `config/launchpad.example.yaml` is committed).
 
+### Policy span channel / 策略 span 通道
+
+Bootstrap also opens the AgentCore **Policy decision span** channel for the
+Gateway. AgentCore emits those spans only once *trace delivery* is enabled on the
+attached Gateway, which is a CloudWatch vended-log delivery rather than a Gateway
+setting — so **no Gateway resource is modified**:
+
+| Delivery resource | Name |
+|---|---|
+| Delivery source (`logType=TRACES`) | `<gateway-id>-traces-source` |
+| Delivery destination (`XRAY`) | `<gateway-id>-traces-destination` |
+
+Spans then land in the shared `aws/spans` log group. This step requires
+CloudWatch Transaction Search, which bootstrap enables first; if it is somehow
+disabled the step is skipped and the summary reports
+`gateway_traces: skipped · transaction_search_disabled`.
+
+The step is idempotent (`present` on re-run) and **never fails the bootstrap** —
+a telemetry delivery is not worth aborting over. Check the `gateway_traces` entry
+in the summary: a `failed` status carries the AWS error code, which is usually a
+missing IAM action. The operator credentials need:
+
+```
+logs:GetDeliverySource      logs:PutDeliverySource
+logs:GetDeliveryDestination logs:PutDeliveryDestination
+logs:DescribeDeliveries     logs:CreateDelivery
+```
+
+Note that policy decision **counts** (the Governance → Decisions evidence view and
+the cutover gate) come from CloudWatch metrics and need none of this — they work
+without any enablement. The span channel only adds per-decision detail.
+
+`scripts/teardown.py` deliberately leaves the delivery in place, as it also leaves
+the Gateway and Policy engine. To remove it manually:
+
+```bash
+aws logs describe-deliveries --region us-west-2   # find the id
+aws logs delete-delivery --region us-west-2 --id <delivery-id>
+aws logs delete-delivery-source --region us-west-2 --name <gateway-id>-traces-source
+aws logs delete-delivery-destination --region us-west-2 --name <gateway-id>-traces-destination
+```
+
 ## Run locally / 本地运行
 
 ```bash

@@ -42,6 +42,44 @@ make bootstrap          # = cd backend && uv run python ../scripts/bootstrap.py
 演示用户密码由 bootstrap 生成并存入 `config/launchpad.yaml`(**已 gitignore**——
 视为本地机密;仓库中提交的是脱敏的 `config/launchpad.example.yaml`)。
 
+### 策略 span 通道
+
+bootstrap 还会为 Gateway 打开 AgentCore **策略决策 span** 通道。AgentCore 只在
+挂载的 Gateway 上启用了 *trace 投递* 之后才会发这些 span,而这是一个 CloudWatch
+vended-log delivery,不是 Gateway 的配置项——所以**不会修改任何 Gateway 资源**:
+
+| Delivery 资源 | 名称 |
+|---|---|
+| Delivery source(`logType=TRACES`) | `<gateway-id>-traces-source` |
+| Delivery destination(`XRAY`) | `<gateway-id>-traces-destination` |
+
+span 随后落到共享的 `aws/spans` 日志组。这一步依赖 CloudWatch Transaction Search,
+bootstrap 会先启用它;若它未启用则跳过这一步,summary 报
+`gateway_traces: skipped · transaction_search_disabled`。
+
+这一步是幂等的(重跑报 `present`),而且**永远不会让 bootstrap 失败**——不值得为一条
+遥测投递中断引导。看 summary 里的 `gateway_traces`:`failed` 会带上 AWS 错误码,
+通常是缺 IAM 动作。操作者凭据需要:
+
+```
+logs:GetDeliverySource      logs:PutDeliverySource
+logs:GetDeliveryDestination logs:PutDeliveryDestination
+logs:DescribeDeliveries     logs:CreateDelivery
+```
+
+注意:策略决策的**计数**(治理 → 决策的证据视图、以及切换门禁)来自 CloudWatch 指标,
+完全不需要这些——它们不用任何启用就能工作。span 通道只是额外提供逐条决策明细。
+
+`scripts/teardown.py` 有意不删这条 delivery,正如它也不删 Gateway 与策略引擎。
+手工清理:
+
+```bash
+aws logs describe-deliveries --region us-west-2   # 找到 id
+aws logs delete-delivery --region us-west-2 --id <delivery-id>
+aws logs delete-delivery-source --region us-west-2 --name <gateway-id>-traces-source
+aws logs delete-delivery-destination --region us-west-2 --name <gateway-id>-traces-destination
+```
+
 ## 本地运行
 
 ```bash

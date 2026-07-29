@@ -20,7 +20,8 @@
   "subtasks": [],
   "children": [
     "07-29-policy-decision-metrics",
-    "07-29-policy-span-detail"
+    "07-29-policy-span-detail",
+    "07-29-gateway-traces-delivery"
   ],
   "parent": null,
   "relatedFiles": [],
