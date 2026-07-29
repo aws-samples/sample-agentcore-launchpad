@@ -3,7 +3,7 @@
   "name": "policy-decision-metrics",
   "title": "Policy decision evidence from CloudWatch metrics",
   "description": "",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": "lab4-interactive",
@@ -11,8 +11,8 @@
   "creator": "river",
   "assignee": "river",
   "createdAt": "2026-07-29",
-  "completedAt": null,
-  "branch": null,
+  "completedAt": "2026-07-29",
+  "branch": "main",
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
@@ -22,5 +22,7 @@
   "parent": "07-29-policy-span-evidence",
   "relatedFiles": [],
   "notes": "",
-  "meta": {}
+  "meta": {
+    "commit": "9bb3495"
+  }
 }

@@ -119,20 +119,67 @@ including the fact that the evidence gate counts `LOG_ONLY`-mode decisions only.
 
 ## Acceptance criteria
 
-- [ ] `GET /api/governance/gateways/launchpad-gw-em0yuqmmdp/decisions?range=7d`
-      against real AWS returns `available: true` with a non-zero `evidence_count`
-      when the window covers known decision datapoints.
-- [ ] Requesting `range=24h` on a quiet account returns `available: true` with
-      `evidence_count: 0` — **not** `available: false`.
-- [ ] `policy_id` and `force` change the result; neither is discarded.
-- [ ] A unit test feeds overlapping/sparse dimension projections and asserts the
-      count is **not** double-counted.
-- [ ] Promote / rollback / mode routes pass a real `evidence_count`; a unit test
-      shows the gate admits a change without an override when evidence exists,
-      and still refuses without one when evidence is zero.
-- [ ] `decisions[]` is empty and no field is populated with fabricated data.
-- [ ] No `boto3.client(...)` added outside the established factory locations.
-- [ ] `policy_span_shape_not_verified` no longer appears in backend code, and
-      remaining references in docs describe history, not current behavior.
-- [ ] en ↔ zh-CN key parity holds (`python3 scripts/i18n_check.py`).
-- [ ] `make verify` passes.
+- [x] Non-zero `evidence_count` against real AWS — **verified on
+      `launchpad-kb-gw-pmyq7mchum`, not `launchpad-gw`.** launchpad-gw's newest
+      datapoint (07-16) had aged out of even the 7d window by 07-29, and fresh
+      evidence could not be generated (see Deviations). The read path is
+      gateway-generic; kb-gw over 7d returned `evidence_count: 17`, matching an
+      independent CLI baseline exactly (5 per-call `AuthorizeAction` +
+      12 per-tool `PartiallyAuthorizeActions`).
+- [x] `range=24h` on a quiet window returns `available: true` with
+      `evidence_count: 0`, not `available: false` — confirmed against real AWS on
+      launchpad-gw and rendered as the new neutral empty state.
+- [x] `policy_id` and `force` change the result; neither is discarded.
+- [x] A unit test feeds the real overlapping/sparse projections and asserts no
+      double counting. Its value was checked by loosening `_select` to a subset
+      match: 3 tests fail, as intended.
+- [x] Promote / rollback / mode routes pass a real `evidence_count` (parametrized
+      test over all three); the gate admits without an override when LOG_ONLY
+      evidence exists and still raises `governance.evidence_required` (409)
+      without it. ENFORCE-only evidence does not satisfy the gate.
+- [x] `decisions[]` is empty and no field is fabricated.
+- [x] No `boto3.client(...)` added outside the established factory locations
+      (`observability.cw_client` was promoted from private, not duplicated).
+- [x] `policy_span_shape_not_verified` is gone from backend code; remaining
+      references are Trellis history plus the SUPERSEDED archived research note.
+- [x] en ↔ zh-CN key parity holds.
+- [x] `make verify` passes (889 backend tests; all 10 stages green).
+
+Extra verification not required by the plan: the new UI surface was rendered in a
+real browser in both `en` and `zh-CN` — aggregate panel, `basis` labels, the
+breakdown caveat, and the quiet-window state, with 0 console errors.
+
+## Deviations from the plan
+
+1. **`design.md`'s chosen projection was wrong and was corrected during
+   implementation.** It specified a single fixed `{TargetResource, OperationName,
+   Mode}` projection for gateway totals. That projection does not exist for
+   `DenyDecisions` on launchpad-gw, so `evidence_count` would have counted every
+   ALLOW and silently missed every DENY. Root cause: `AuthorizeAction` counts one
+   decision per call and publishes a gateway-level stream, while
+   `PartiallyAuthorizeActions` counts one per (call, tool) and was observed
+   publishing only `ToolName` projections. The shipped code resolves a projection
+   **per operation** from a preference chain and reports the `basis` it counted
+   in, derived from the projection rather than asserted.
+2. **`evidence_count()` lives in `governance_evidence.py`,** not as a
+   `gateway_evidence_count()` wrapper in `governance.py` as `design.md` sketched.
+   Avoids a pure pass-through and guarantees the gate's number and the view's
+   number come from one code path.
+3. **The gate uses the request's `evidence_range`** instead of a hardcoded 24h —
+   `PolicyTransitionRequest` already carries that field.
+4. **Fresh evidence could not be generated, for an unrelated pre-existing
+   reason.** `implement.md` step 9 called for the documented `policy-test` repro;
+   it returns `gateway.credentials_rejected` because the configured demo Cognito
+   user's credentials are rejected, so the gateway is never called. Out of scope
+   here. Verification moved to kb-gw, which had in-window data.
+
+## Follow-ups found but not fixed (out of scope)
+
+- **`policy-test` records auth failures as policy DENYs.** Any `AppError` from
+  the gateway call is written to the decision ledger as a DENY, so a Cognito
+  outage produces fake Cedar denials. Two such rows created during verification
+  (including a `get_employee` "DENY", a tool the lab documents as allowed) were
+  deleted from `data/launchpad.db`; the historical demo rows were untouched.
+- **The demo Cognito credentials are rejected**, which blocks the documented
+  DENY repro in `docs/lab/11-governance.md` §11.6 and will block the span-capture
+  child unless another way to drive gateway traffic is used.
