@@ -3,7 +3,7 @@
   "name": "session-trace-log-groups",
   "title": "Session trace rail reads all span log groups",
   "description": "Replace traces.py's FilterLogEvents-on-aws/spans reader with the Logs Insights + SPANS_SOURCE pattern observability.py already uses, so the Chat trace rail stops silently dropping per-agent-log-group spans.",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": "lab4-interactive",
@@ -11,7 +11,7 @@
   "creator": "river",
   "assignee": "river",
   "createdAt": "2026-07-30",
-  "completedAt": null,
+  "completedAt": "2026-07-30",
   "branch": "main",
   "base_branch": "main",
   "worktree_path": null,
@@ -22,5 +22,7 @@
   "parent": null,
   "relatedFiles": [],
   "notes": "",
-  "meta": {}
+  "meta": {
+    "commit": "c773d6c"
+  }
 }
