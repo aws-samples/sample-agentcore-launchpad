@@ -38,6 +38,42 @@ Queries that deliberately target known runtime groups are different:
 Those queries do not contain `SOURCE` and must pass their exact groups through
 `logGroupNames`.
 
+## One span reader — never `FilterLogEvents`
+
+The session trace rail (`app/services/traces.py`, serving `GET /api/traces/{id}` for
+`frontend/src/pages/Chat.tsx`) is bound by the same source contract as the account-wide
+queries above. It previously had its own reader — `filter_log_events` against `aws/spans`
+alone — which violated this contract two ways and was fixed 2026-07-30:
+
+- **`FilterLogEvents` scans oldest-first from `startTime` with bounded pagination**, so
+  it silently returned **zero** spans once the lookback exceeded a few hours. Measured: 0
+  returned where 32 existed in `aws/spans`. `observability.py:1213` already documents the
+  oldest-first behavior for its transcript read. Never use that API for spans; use
+  `run_insights_queries` with `SPANS_SOURCE`.
+- It read one layout, not both.
+
+`filter_log_events` remains legitimate for **transcript/content-log** reads, which target
+known groups explicitly.
+
+## Per-agent groups mix spans with logs — filter for spans
+
+A `/aws/bedrock-agentcore/runtimes/<agent>` group holds three kinds of record: spans,
+structured application logs (`{timestamp, level, message, logger, requestId, sessionId}`),
+and OTEL **log records** (`{body, severityText, observedTimeUnixNano, spanId}` — note no
+`name`). All three can carry a session id, so a session-scoped substring filter matches
+all three.
+
+Any query that turns these records into span rows must therefore require a span:
+`filter ispresent(name) or ispresent(spanName)`, plus a client-side guard so a later
+query edit cannot readmit log records. Without it, 16 nameless rows entered one real
+session's trace rail.
+
+Related measurement worth not re-deriving: as of 2026-07-30 the per-agent groups in this
+account contain **no spans at all** (checked with
+`ispresent(name) and ispresent(traceId) and ispresent(startTimeUnixNano)`) — every span
+is still in `aws/spans`. Reading both layouts is contract compliance for the migration,
+not a fix for currently-lost data.
+
 ## Span-record discriminator
 
 A unified group mixes spans with OTel events, prompts, structured application
