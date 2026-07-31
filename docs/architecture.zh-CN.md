@@ -88,6 +88,22 @@ generate → package → provision → deploy → register
 典型耗时:harness ≈ 30 秒,zip ≈ 1–3 分钟(含 pip),container ≈ 2–4 分钟(实测:CodeBuild 1.7 分钟 + 数秒即 READY)
 (经 CodeBuild)。见 [troubleshooting.zh-CN.md](troubleshooting.zh-CN.md)。
 
+### 模型来源(方式B — harness)
+
+`AgentSpec.model_source` 决定模型的托管面:`mantle`(Bedrock Mantle)或
+`bedrock`(原生 Bedrock)。两者使用 `HarnessModelConfiguration` 联合类型中
+**同一个** `bedrockModelConfig` 分支,只有 `apiFormat` 不同 —— Mantle 用
+`responses`,Bedrock 用 `converse_stream`(`app/deployer/harness.py`)。
+**不涉及任何 API Key 或新的 bootstrap 资源**:两种托管面都由 harness 执行角色
+完成鉴权。带 Key 的联合分支(`openAiModelConfig` / `geminiModelConfig` /
+`liteLlmModelConfig`)有意不使用 —— 它们都需要一个 Launchpad 从未创建的
+AgentCore Identity API Key 凭证提供方 ARN。该字段默认为 `bedrock`,以兼容此
+字段出现之前写入的 spec;控制台的 harness 表单则默认使用 Bedrock Mantle。zip
+方式同样提供该选择器,但默认仍为 `bedrock` —— 它的模板把模型 ID 以裸字符串交给
+Strands(即 Converse 调用),此时填入 Mantle 模型会部署成功但首次调用即失败。
+控制台提供的模型清单位于 `frontend/src/lib/models.ts`;Claude Agent SDK
+(container)方式固定为 `bedrock` 且只提供 Claude 模型,因为它只能驱动 Claude。
+
 ## 调用链
 
 Chat 交互页面(`/api/chat/{id}`)与公开 API(`/v1/agents/{id}/invoke` +

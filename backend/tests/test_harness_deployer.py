@@ -29,6 +29,42 @@ def test_build_params_basics():
     assert params["memory"] == {"agentCoreMemoryConfiguration": {"arn": MEM_ARN}}
 
 
+def test_build_params_mantle_source_uses_responses_api_format():
+    """Bedrock Mantle models stay on the bedrockModelConfig union branch (no API
+    key) and are distinguished only by apiFormat=responses."""
+    s = spec(model_source="mantle", model_id="openai.gpt-5.6-sol")
+    params = build_create_params(s, ROLE_ARN, MEM_ARN)
+    assert params["model"] == {
+        "bedrockModelConfig": {"modelId": "openai.gpt-5.6-sol", "apiFormat": "responses"}
+    }
+
+
+def test_build_params_bedrock_source_uses_converse_stream():
+    s = spec(model_source="bedrock")
+    params = build_create_params(s, ROLE_ARN, MEM_ARN)
+    assert params["model"] == {
+        "bedrockModelConfig": {
+            "modelId": DEFAULT_MODEL_ID,
+            "apiFormat": "converse_stream",
+        }
+    }
+
+
+def test_spec_without_model_source_defaults_to_bedrock():
+    """Regression for every agent stored before model_source existed: absent →
+    bedrock → Converse, never Mantle."""
+    stored = {
+        "name": "hr-assistant-v3",
+        "method": "harness",
+        "system_prompt": "You are an HR assistant.",
+        "model_id": DEFAULT_MODEL_ID,
+    }
+    s = AgentSpec(**stored)
+    assert s.model_source == "bedrock"
+    params = build_create_params(s, ROLE_ARN, MEM_ARN)
+    assert params["model"]["bedrockModelConfig"]["apiFormat"] == "converse_stream"
+
+
 def test_build_params_remote_mcp():
     """mcp-type ToolRefs (registry-picked remote servers) map to remote_mcp;
     entries without a url are dropped rather than sent malformed."""
@@ -142,6 +178,17 @@ def test_wrap_params_for_update_wraps_memory():
     }
     assert update["systemPrompt"] == params["systemPrompt"]  # create shapes reused
     assert "memory" in params  # input not mutated into the wrapped shape
+
+
+def test_wrap_params_for_update_keeps_model_source():
+    """UpdateHarnessRequest.model is the same union shape as create, so the
+    adapter passes it through untouched — re-publish keeps the chosen source."""
+    params = build_create_params(
+        spec(model_source="mantle", model_id="openai.gpt-5.6-sol"), ROLE_ARN, MEM_ARN
+    )
+    update = hc.wrap_params_for_update(params)
+    assert update["model"] == params["model"]
+    assert update["model"]["bedrockModelConfig"]["apiFormat"] == "responses"
 
 
 def test_wrap_params_for_update_disables_absent_memory():

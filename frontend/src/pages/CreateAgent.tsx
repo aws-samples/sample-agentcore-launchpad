@@ -23,8 +23,16 @@ import type {
   RuntimeImportResult,
 } from "../lib/api";
 import { api, ApiError } from "../lib/api";
+import type { ModelSource } from "../lib/models";
+import {
+  CLAUDE_SDK_MODEL_SOURCE,
+  CUSTOM_MODEL_OPTION,
+  DEFAULT_MODEL_SOURCE,
+  defaultModelFor,
+  isCustomModelId,
+  modelOptionsFor,
+} from "../lib/models";
 
-const DEFAULT_MODEL = "global.anthropic.claude-sonnet-5";
 const BUILTIN_TOOLS = ["code-interpreter", "browser"] as const;
 // AgentCore mount-path contract: exactly one level under /mnt
 const MOUNT_RE = /^\/mnt\/[a-zA-Z0-9._-]+$/;
@@ -42,9 +50,24 @@ interface LaunchState {
 
 type Method = "harness" | "zip_runtime" | "container";
 
+// Which source a method starts on. Only the harness can execute a Mantle model
+// today: the zip template still hands its model id to strands as a bare string,
+// which resolves to a Converse call, so a Mantle default there would deploy
+// cleanly and then fail on first invoke. The Model source selector is still
+// offered for zip — Mantle just is not its default until the template can emit a
+// Mantle model object.
+const MODEL_SOURCE_BY_METHOD: Record<Method, ModelSource> = {
+  harness: DEFAULT_MODEL_SOURCE,
+  container: CLAUDE_SDK_MODEL_SOURCE,
+  zip_runtime: "bedrock",
+};
+
+const sourceForMethod = (m: Method): ModelSource => MODEL_SOURCE_BY_METHOD[m];
+
 // Spec fields we read back when loading an existing agent into the wizard.
 interface StoredSpec {
   model_id?: string;
+  model_source?: ModelSource;
   system_prompt?: string;
   tools?: {
     type: string;
@@ -421,7 +444,10 @@ function CreateAgentWizard() {
   const [method, setMethod] = useState<Method>("harness");
   const [skills, setSkills] = useState<string[]>(prefillSkill ? [prefillSkill] : []);
   const [name, setName] = useState("");
-  const [modelId, setModelId] = useState(DEFAULT_MODEL);
+  const [modelId, setModelId] = useState(defaultModelFor(DEFAULT_MODEL_SOURCE));
+  const [modelSource, setModelSource] = useState<ModelSource>(DEFAULT_MODEL_SOURCE);
+  // true ⇒ the model dropdown sits on "Custom model ID…" and the free-text input shows
+  const [customModel, setCustomModel] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [tools, setTools] = useState<string[]>([]);
   const [gatewayTargets, setGatewayTargets] = useState<AttachableMcp[]>([]);
@@ -555,11 +581,25 @@ function CreateAgentWizard() {
     return () => clearInterval(timer);
   }, [launch, agentStatus, poll]);
 
+
+  // Switching source re-seeds the model to that source's catalog default.
+  const applyModelSource = (source: ModelSource) => {
+    setModelSource(source);
+    setModelId(defaultModelFor(source));
+    setCustomModel(false);
+  };
+
+  const pickMethod = (next: Method) => {
+    if (next === method) return;
+    setMethod(next);
+    applyModelSource(sourceForMethod(next));
+  };
+
   const resetForm = () => {
     setEditing(null);
     setDetailsMode(false);
     setName("");
-    setModelId(DEFAULT_MODEL);
+    applyModelSource(sourceForMethod(method));
     setSystemPrompt("");
     setTools([]);
     setSelectedGateway([]);
@@ -606,7 +646,8 @@ function CreateAgentWizard() {
   const buildSpec = () => ({
     name,
     method,
-    model_id: modelId,
+    model_id: modelId.trim(), // a pasted custom id may carry stray whitespace
+    model_source: modelSource,
     system_prompt: systemPrompt,
     tools:
       method === "harness"
@@ -697,7 +738,16 @@ function CreateAgentWizard() {
     setDetailsMode(false);
     setMethod(agent.method as Method);
     setName(agent.name);
-    setModelId(spec.model_id ?? DEFAULT_MODEL);
+    // A spec stored before model_source existed is a Converse-API agent, never
+    // Mantle; an id in neither catalog rides the "Custom model ID…" branch.
+    const storedModel = spec.model_id ?? defaultModelFor("bedrock");
+    const storedSource = spec.model_source ?? "bedrock";
+    setModelId(storedModel);
+    setModelSource(storedSource);
+    // Custom unless the id is actually offered for the stored source — covers
+    // unknown ids, an id belonging to the other source, and a non-Claude id on a
+    // Claude Agent SDK agent.
+    setCustomModel(isCustomModelId(storedModel, storedSource, agent.method === "container"));
     setSystemPrompt(spec.system_prompt ?? "");
     setTools((spec.tools ?? []).filter((x) => x.type === "builtin").map((x) => x.name));
     const gatewayTools = (spec.tools ?? []).filter((x) => x.type === "gateway");
@@ -890,6 +940,8 @@ function CreateAgentWizard() {
   const configValid =
     /^[a-z][a-z0-9-]{2,47}$/.test(name) &&
     systemPrompt.trim().length > 0 &&
+    // catalog picks are always non-empty; guards a cleared "Custom model ID…" input
+    modelId.trim().length > 0 &&
     fsValid &&
     gatewaySelectionsValid;
 
@@ -912,7 +964,7 @@ function CreateAgentWizard() {
             <div
               className={`method${method === "harness" ? " sel" : ""}`}
               style={{ "--i": 0 } as CSSProperties}
-              onClick={() => setMethod("harness")}
+              onClick={() => pickMethod("harness")}
               data-method="harness"
             >
               <div className="m-badge">{t("create.methods.harness.badge")}</div>
@@ -928,7 +980,7 @@ function CreateAgentWizard() {
             <div
               className={`method${method === "container" ? " sel" : ""}`}
               style={{ "--i": 1 } as CSSProperties}
-              onClick={() => setMethod("container")}
+              onClick={() => pickMethod("container")}
               data-method="container"
             >
               <div className="m-badge">{t("create.methods.claudeSdk.badge")}</div>
@@ -944,7 +996,7 @@ function CreateAgentWizard() {
             <div
               className={`method${method === "zip_runtime" ? " sel" : ""}`}
               style={{ "--i": 2 } as CSSProperties}
-              onClick={() => setMethod("zip_runtime")}
+              onClick={() => pickMethod("zip_runtime")}
               data-method="zip_runtime"
             >
               <div className="m-badge">{t("create.methods.studio.badge")}</div>
@@ -1049,14 +1101,80 @@ function CreateAgentWizard() {
                 placeholder="hr-assistant-v3"
               />
             </div>
+            {method !== "container" && (
+              <div className="field">
+                <label>{t("create.configure.modelSource")}</label>
+                <div className="selchips">
+                  {(["mantle", "bedrock"] as const).map((source) => (
+                    <button
+                      key={source}
+                      type="button"
+                      data-testid={`model-source-${source}`}
+                      className={`selchip${modelSource === source ? " on" : ""}`}
+                      style={{ cursor: "pointer" }}
+                      onClick={() => applyModelSource(source)}
+                    >
+                      {t(
+                        source === "mantle"
+                          ? "create.configure.modelSourceMantle"
+                          : "create.configure.modelSourceBedrock",
+                      )}{" "}
+                      {modelSource === source ? "✓" : ""}
+                    </button>
+                  ))}
+                </div>
+                <div className="note" style={{ margin: "8px 0 0" }}>
+                  <span className="i">[i]</span>
+                  <span>
+                    {t(
+                      modelSource === "mantle"
+                        ? "create.configure.modelSourceMantleDesc"
+                        : "create.configure.modelSourceBedrockDesc",
+                    )}
+                  </span>
+                </div>
+              </div>
+            )}
             <div className="field">
-              <label htmlFor="agent-model">{t("create.configure.model")}</label>
-              <input
-                id="agent-model"
-                className="input mono"
-                value={modelId}
-                onChange={(e) => setModelId(e.target.value)}
-              />
+              <label htmlFor="agent-model-select">{t("create.configure.model")}</label>
+              <select
+                id="agent-model-select"
+                className="input"
+                data-testid="model-select"
+                value={customModel ? CUSTOM_MODEL_OPTION : modelId}
+                onChange={(e) => {
+                  const picked = e.target.value;
+                  if (picked === CUSTOM_MODEL_OPTION) {
+                    setCustomModel(true);
+                    return;
+                  }
+                  setCustomModel(false);
+                  setModelId(picked);
+                }}
+              >
+                {modelOptionsFor(modelSource, method === "container").map((option) => (
+                  <option
+                    key={option.model_id}
+                    value={option.model_id}
+                    style={{ background: "#141816" }}
+                  >
+                    {option.label} · {option.model_id}
+                  </option>
+                ))}
+                <option value={CUSTOM_MODEL_OPTION} style={{ background: "#141816" }}>
+                  {t("create.configure.modelCustom")}
+                </option>
+              </select>
+              {customModel && (
+                <input
+                  id="agent-model"
+                  className="input mono"
+                  style={{ marginTop: 8 }}
+                  value={modelId}
+                  onChange={(e) => setModelId(e.target.value)}
+                  placeholder={t("create.configure.modelCustomPlaceholder")}
+                />
+              )}
             </div>
             <div className="field">
               <label htmlFor="agent-prompt">{t("create.configure.systemPrompt")}</label>

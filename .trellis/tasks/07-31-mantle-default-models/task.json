@@ -1,0 +1,30 @@
+{
+  "id": "mantle-default-models",
+  "name": "mantle-default-models",
+  "title": "Default creation entrances to Bedrock Mantle GPT-5.6",
+  "description": "Parent task: switch the console's default model to Bedrock Mantle openai.gpt-5.6-sol. Children: (1) Managed Harness Model source selector Mantle/Bedrock via bedrockModelConfig.apiFormat; (2) Strands Studio zip entrance defaults to Mantle with IAM-only bedrock_mantle_config auth; (3) reorder entrances and rename the Claude Agent SDK card to Other Agent SDK with a second-level SDK option.",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": "launchpad",
+  "priority": "P2",
+  "creator": "river",
+  "assignee": "river",
+  "createdAt": "2026-07-31",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-31-harness-model-source",
+    "07-31-zip-mantle-default",
+    "07-31-other-agent-sdk"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

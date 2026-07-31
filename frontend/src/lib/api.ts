@@ -1,5 +1,7 @@
 /** Typed client for the Launchpad backend. */
 
+import type { ModelSource } from "./models";
+
 export interface StageInfo {
   name: string;
   status: "pending" | "running" | "succeeded" | "skipped" | "failed";
@@ -228,6 +230,8 @@ export interface AgentSpecInput {
   name: string;
   method: string;
   model_id?: string;
+  /** Hosting surface of model_id. Omitted ⇒ backend defaults to "bedrock". */
+  model_source?: ModelSource;
   system_prompt: string;
   tool_description_overrides?: Record<string, string>;
   tools?: { type: string; name: string; config?: Record<string, unknown> }[];

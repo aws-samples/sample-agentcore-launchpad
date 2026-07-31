@@ -91,6 +91,26 @@ stage (`resume_pending_jobs()` runs on startup).
 Typical timings: harness ≈ 30 s, zip ≈ 1–3 min (incl. pip), container ≈ 2–4 min (observed: 1.7 min CodeBuild + seconds to READY)
 (via CodeBuild). See [troubleshooting.md](troubleshooting.md).
 
+### Model source (方式B — harness)
+
+`AgentSpec.model_source` selects the model-hosting surface: `mantle` (Bedrock
+Mantle) or `bedrock` (native Bedrock). Both ride the **same**
+`bedrockModelConfig` branch of the `HarnessModelConfiguration` union and differ
+only in `apiFormat` — `responses` for Mantle, `converse_stream` for Bedrock
+(`app/deployer/harness.py`). **No API key or bootstrap resource is involved**:
+the harness execution role authenticates either surface. The keyed union
+branches (`openAiModelConfig` / `geminiModelConfig` / `liteLlmModelConfig`) are
+deliberately unused — each requires an AgentCore Identity API-key credential
+provider ARN that Launchpad never provisions. The field defaults to `bedrock`
+for backward compatibility with specs stored before it existed; the console's
+harness form defaults to Bedrock Mantle. The zip method offers the same selector
+but still defaults to `bedrock`, because its template hands the model id to
+Strands as a bare string (a Converse call) — a Mantle id there would deploy
+cleanly and fail on first invoke. The model catalog offered by the console lives
+in `frontend/src/lib/models.ts`; the Claude Agent SDK (container) method is
+pinned to `bedrock` and offered only Claude ids, since it cannot drive anything
+else.
+
 ### Existing Runtime discovery
 
 `/create?view=discover` is an onboarding path alongside the three creation
