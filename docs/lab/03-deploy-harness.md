@@ -18,7 +18,7 @@
 
 Harness 是**声明式**的：你给出模型、提示词、工具、技能、知识库、记忆开关，AgentCore 直接托管
 运行，没有任何构建产物。本实验用它承载「基金资料问答」；第 04 章会通过专用知识库网关给它挂上
-托管知识库。Claude SDK 容器与 Strands ZIP 也能挂知识库，但走的是直接注入检索工具的通道。
+托管知识库。其他 Agent SDK 容器与 Strands ZIP 也能挂知识库，但走的是直接注入检索工具的通道。
 
 1. **打开** `02 Agent 管理`，选择第一张卡片 **托管 Harness**，点 **下一步 ▸**。
 2. **填写**：
@@ -33,7 +33,8 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
    | 记忆 | 短期 + 长期都开启 |
 
 ![Harness 配置页](images/03-harness-config.png)
-*图 3-1：Harness 配置页。工具区直接列出账号里可挂载的 gateway 工具（`office-facts`、
+*图 3-1：Harness 配置页。`模型来源` 已按上表切到 `Bedrock`（Converse API），模型下拉随之
+换成 Bedrock 侧的目录。工具区直接列出账号里可挂载的 gateway 工具（`office-facts`、
 `hr-database`）与 MCP 服务器（`aws-knowledge`、`deepwiki`），技能区列出 Registry 里已审批的
 技能，知识库区列出 ACTIVE 的托管 KB。*
 
@@ -61,7 +62,8 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
 {"stage":"register","msg":"a2a record created · k2CPfzI7gOn1 · auto-submitted"}
 ```
 
-> 同样，这份日志录于首次创建时（当时默认 `claude-sonnet-4-6`）。切到当前默认 `claude-sonnet-5`
+> 同样，这份日志录于首次创建时（当时表单默认 `claude-sonnet-4-6`；Harness 表单默认现在是
+> Mantle 的 `openai.gpt-5.6-terra`）。切到本实验在 3.1 里选定的 `claude-sonnet-5`
 > 的那次重新发布实测 **21 秒**，`deploy` 行为 `UpdateHarness accepted · … · new version 3`，
 > `generate` 行为 `harness request generated for lab_fund_advisor · model
 > global.anthropic.claude-sonnet-5`。
@@ -111,8 +113,11 @@ Hooks、MCP 服务器），经 CodeBuild 打成 **ARM64** 镜像推到 ECR，再
    | 文件系统 | 保持 `托管会话存储 ✓`，挂载路径 `/mnt/workspace` |
 
 ![容器配置页](images/03-container-config.png)
-*图 3-3：容器配置页。除了技能，这里还能填自定义 MCP 服务器 JSON、挂载 S3 Files 或 EFS。
-「托管会话存储」让同一会话在停止/恢复之间保留 `/mnt` 文件（闲置 14 天过期）。*
+*图 3-3：容器配置页。顶部的 `AGENT SDK` 就是这个类别的二级选项，目前只有
+`Claude Agent SDK` 一个成员且已默认选中；正因为它只能驱动 Claude 模型，这一页没有
+`模型来源` 选择器，模型下拉也只列 Claude。除了技能，这里还能填自定义 MCP 服务器 JSON、
+挂载 S3 Files 或 EFS。「托管会话存储」让同一会话在停止/恢复之间保留 `/mnt` 文件
+（闲置 14 天过期）。*
 
 3. **点击** `▲ 启动 AGENT`，然后观察 `打包` 阶段：这次它真的在构建。
 
@@ -148,23 +153,26 @@ Hooks、MCP 服务器），经 CodeBuild 打成 **ARM64** 镜像推到 ECR，再
 
 ## 3.3 三种方式对照（实测数据）
 
-| | 方式B 托管 Harness | 方式A 其他 Agent SDK · 容器 | 方式C Strands ZIP |
+列序与 `/create` 页上的卡片顺序一致：
+
+| | 方式B 托管 Harness | 方式C Strands ZIP | 方式A 其他 Agent SDK · 容器 |
 |---|---|---|---|
-| 本实验 Agent | `lab-fund-advisor` | `lab-fund-packager` | `lab-fund-assistant` |
-| **本次实测耗时** | **18 秒** | **125 秒** | **69 秒** |
-| `generate` | 组装 `CreateHarness` 请求 | 组装 ARM64 构建上下文（7 文件） | 渲染 Strands 模板（6.3 KB） |
-| `package` | **跳过**（无产物） | zip → S3 → CodeBuild → ECR | pip(arm64) → zip(37.3MB) → S3 |
+| 本实验 Agent | `lab-fund-advisor` | `lab-fund-assistant` | `lab-fund-packager` |
+| **本次实测耗时** | **18 秒** | **69 秒** | **125 秒** |
+| `generate` | 组装 `CreateHarness` 请求 | 渲染 Strands 模板（6.3 KB） | 组装 ARM64 构建上下文（7 文件） |
+| `package` | **跳过**（无产物） | pip(arm64) → zip(37.3MB) → S3 | zip → S3 → CodeBuild → ECR |
 | `provision` | 复用共享执行角色 | 复用共享执行角色 | 复用共享执行角色 |
-| `deploy` | `CreateHarness` | `CreateAgentRuntime(containerConfiguration)` | `CreateAgentRuntime` |
+| `deploy` | `CreateHarness` | `CreateAgentRuntime` | `CreateAgentRuntime(containerConfiguration)` |
 | `register` | A2A 记录，自动提交 | A2A 记录，自动提交 | A2A 记录，自动提交 |
 | 落在哪 | Harness 服务 | AgentCore Runtime | AgentCore Runtime |
 | 挂知识库 | 支持：网关 `Retrieve` + `AgenticRetrieveStream` | 支持：`kb_search` + `kb_deep_search` | 支持：`kb_search` + `kb_deep_search` |
-| 技能进镜像 | 声明式挂载 | 支持，位于 `.claude/skills/` | 不支持 |
-| 配置包 A/B | 不支持 | 不支持 | 支持 |
-| 金丝雀 | 不支持 | 暂不支持 | 支持 |
+| 技能进镜像 | 声明式挂载 | 不支持 | 支持，位于 `.claude/skills/` |
+| 配置包 A/B | 不支持 | 支持 | 不支持 |
+| 金丝雀 | 不支持 | 支持 | 暂不支持 |
+| `模型来源` | 有（默认 Mantle） | 有（A2A 子模式固定 Bedrock） | 无 —— 由 `AGENT SDK` 决定，固定 Claude |
 
 三种方式都支持单次检索和多步 agentic 检索，只是接入路径不同。Harness 通过
-`launchpad-kb-gw` 调用逐库 `Retrieve` 与跨库 `AgenticRetrieveStream`；Claude SDK 容器和
+`launchpad-kb-gw` 调用逐库 `Retrieve` 与跨库 `AgenticRetrieveStream`；其他 Agent SDK 容器和
 Strands ZIP 则在生成产物中注入 `kb_search` 与 `kb_deep_search`，后者会调用
 `AgenticRetrieveStream` 拆分子查询并执行多轮检索。具体挂载与验证步骤见
 [第 04 章 4.7](04-capabilities.md)。
@@ -201,7 +209,7 @@ for a in json.load(sys.stdin)['agents']:
 |---|---|---|
 | 容器 `打包` 阶段停在 `QUEUED` 很久 | CodeBuild 并发排队 | 等待；本次 QUEUED→COMPLETED 共 1.8 分钟 |
 | 容器构建失败在 `BUILD` | Dockerfile 依赖拉取失败或 ECR 权限 | 去 CodeBuild 控制台看 `launchpad-agent-builder` 的完整日志 |
-| Harness 创建报模型不可用 | 该模型未在账号/区域开通 | 换成账号已开通的 Bedrock 模型 id |
+| Harness 创建报模型不可用，或创建成功但**首次调用**报 `404 … does not exist` | 该模型未在账号/区域开通；或在 us-west-2 选了只在 us-east-1 提供的 Mantle 模型（`openai.gpt-5.6-sol`、`openai.gpt-5.5`）—— Harness 只能在自己所在区域解析 Mantle 模型 | 在当前 `模型来源` 的模型下拉里换一个本区域可用的模型；下拉里没有的 id 走 `Custom model ID…` 手填 |
 | Harness 评估报 `eval.harness_no_telemetry` | 还没被调用过，日志组不存在 | 先完成第 05 章的对话，再回来评估 |
 | 想把 Harness 变成可做 A/B 的 Runtime | 列表行有「转换 ⇄ RT」 | 转换会导出代码并植入 config-bundle graft，转换后就能做 A/B（本实验不走这条路） |
 | 容器部署成功但**调用**报 `RuntimeClientError` | 修复前的依赖漂移缺陷（模板未锁 OTEL 小版本） | **已于 2026-07-26 修复并真机复验**；现象、根因与修复见[第 05 章末](05-chat-memory.md#关于容器-agent-调用失败本次实测)。若在旧检出上复现，先更新代码再重新发布 |

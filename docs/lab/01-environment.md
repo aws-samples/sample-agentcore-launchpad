@@ -113,14 +113,16 @@ curl -s http://127.0.0.1:8000/api/health
 打开控制台后先点右上角 **中文** 切换语言（本指南所有截图均为中文界面）。
 
 ![控制台总览](images/01-overview.png)
-*图 1-1：总览页。左侧是 11 个模块，右侧「服务健康」逐项反映真实 AgentCore 资源状态。*
+*图 1-1：总览页。左侧是 12 个模块，右侧「服务健康」逐项反映真实 AgentCore 资源状态。
+顶部那条「动手实验指南」横幅就是本指南的入口。列表里的 `AGENT SDK` 角标对应第 03 章的
+容器方式（原先叫 `CLAUDE SDK`）。*
 
 先看三块信息：
 
 1. **左侧导航 = 实验路线图**
    `01 总览` → `02 Agent 管理`（创建/部署/重新发布） → `03 注册中心`（Registry 资产）
    → `04 知识库` → `05 记忆` → `06 对话演练场` → `07 可观测` → `08 评估` → `09 治理`。
-   `10 支付` / `11 设置` 属第二阶段，本实验不涉及。
+   `10 用户管理` 是管理员账号维护，`11 支付` / `12 设置` 属第二阶段，三者本实验都不涉及。
 2. **服务健康面板**：Runtime / Gateway / Memory / Registry / Policy / Evaluation /
    Observability 七项。其中 Gateway / Memory / Registry / Policy / Observability 由
    bootstrap 创建，显示 `就绪` 与真实资源 id（如 `launchpad_memory-hurAGN3EnF`）；

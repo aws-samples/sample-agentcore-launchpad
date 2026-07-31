@@ -269,8 +269,11 @@ FZuhhw9jbJaK   lab-fund-assistant   A2A   PENDING_APPROVAL
 `lab-fund-kb` 各建一个一次性 Agent，把区别跑出来。不做也不影响后面章节；做完记得删掉。
 
 创建方式选 `Strands Studio`（表单路径）或 `其他 Agent SDK`（容器 · SDK 保持默认的
-`Claude Agent SDK`），在配置页勾选
-`lab-fund-kb · kb`。注意 chip 下方的说明文字会随方式变化：
+`Claude Agent SDK`），在配置页勾选 `lab-fund-kb · kb`。走 ZIP 路径时记得同
+[2.2](02-deploy-runtime.md#22-配置-agent) 把 `模型来源` 切回 `Bedrock` 并选
+`global.anthropic.claude-sonnet-5`，否则下面的耗时与答案对不上（容器路径没有 `模型来源`
+选择器，本来就是 Claude；本节末尾那条 `POST /api/agents` 的 curl 也不受影响 —— 后端 schema
+默认仍是 `claude-sonnet-5`）。注意 chip 下方的说明文字会随方式变化：
 
 - Harness：*以网关检索工具的形式挂载（逐库检索 + 多步 agentic 检索）*
 - 容器 / ZIP：*生成的 Agent 代码里会内置两个工具…`kb_search`（单次相似度检索，快）与
