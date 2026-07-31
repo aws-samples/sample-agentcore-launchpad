@@ -8,6 +8,7 @@ from botocore.exceptions import ClientError
 
 import app.routers.agents as agents_router
 import app.services.invoke as invoke_service
+from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.models.ledger import Agent, Deployment
 from app.services.agentcore.runtime import list_runtimes
@@ -112,7 +113,7 @@ def test_scan_sanitizes_details_and_projects_protocol_eligibility(client, monkey
 
     assert response.status_code == 200
     body = response.json()
-    assert body["region"] == "us-west-2"
+    assert body["region"] == get_settings().region
     rows = {row["runtime_id"]: row for row in body["runtimes"]}
     assert rows["http-abcdefghij"]["importable"] is True
     assert rows["a2a-abcdefghij"]["protocol"] == "A2A"
