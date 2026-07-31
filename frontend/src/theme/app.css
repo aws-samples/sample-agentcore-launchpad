@@ -120,7 +120,7 @@ a.syschip.link:hover{border-color:var(--amber);color:var(--amber)}
 }
 @keyframes auth-spin{to{transform:rotate(360deg)}}
 
-.layout{display:grid;grid-template-columns:216px 1fr;min-height:calc(100vh - 52px)}
+.layout{display:grid;grid-template-columns:216px minmax(0,1fr);min-height:calc(100vh - 52px)}
 
 /* sidebar */
 .side{border-right:1px solid var(--line);padding:18px 0;display:flex;flex-direction:column;gap:2px;position:sticky;top:52px;height:calc(100vh - 52px)}
@@ -138,7 +138,7 @@ a.syschip.link:hover{border-color:var(--amber);color:var(--amber)}
 .side .sys b{color:var(--ink-2);font-weight:500}
 
 /* main */
-main{padding:26px 28px 60px;max-width:1460px;width:100%;margin:0 auto}
+main{padding:26px 28px 60px;max-width:1460px;width:100%;min-width:0;margin:0 auto}
 .view{display:block}
 .view .panel,.view .tile{animation:rise .5s cubic-bezier(.22,.9,.3,1) both;animation-delay:calc(var(--i,0)*70ms)}
 @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
@@ -246,7 +246,7 @@ td.pri{color:var(--ink);font-weight:600}
 .step.done{color:var(--ink-2)} .step.done .n{border-color:var(--good);color:var(--good)}
 .step.now{color:var(--amber)} .step.now .n{border-color:var(--amber);color:var(--amber);background:var(--amber-soft)}
 .step b{font-size:11px;letter-spacing:.12em;font-weight:700}
-.methods{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px}
+.methods{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:14px}
 .method{background:var(--panel);border:1px solid var(--line);padding:18px;cursor:pointer;position:relative;transition:border-color .2s}
 .method:hover{border-color:var(--line-2)}
 .method.sel{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber),0 12px 40px -18px rgba(255,176,0,.35)}
@@ -259,6 +259,32 @@ td.pri{color:var(--ink);font-weight:600}
 .method .m-specs span::before{content:"— ";color:var(--line-2)}
 .method .studio-link{display:inline-block;margin-top:12px;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;color:var(--amber);border:1px solid var(--amber);padding:5px 10px;text-decoration:none;transition:background .2s}
 .method .studio-link:hover{background:var(--amber-soft)}
+.method.discovery-method{width:100%;text-align:left;color:inherit;font:inherit}
+.method.discovery-method .m-icon{display:flex;align-items:center;height:20px}
+.discovery-toolbar{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px;
+}
+.discovery-toolbar-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.discovery-error{margin-bottom:14px;border-color:rgba(208,59,59,.45)}
+.discovery-results{overflow-x:auto}
+.discovery-results > .discovery-table{
+  width:max(100%,980px);min-width:980px;table-layout:fixed;
+}
+.discovery-table .discovery-check{width:44px;text-align:center;padding-left:10px;padding-right:10px}
+.discovery-table th:nth-child(2){width:230px}
+.discovery-table th:nth-child(3){width:80px}
+.discovery-table th:nth-child(4){width:88px}
+.discovery-table th:nth-child(5){width:104px}
+.discovery-table th:nth-child(6){width:100px}
+.discovery-table th:nth-child(7){width:64px}
+.discovery-table input[type="checkbox"]{width:15px;height:15px;accent-color:var(--amber)}
+.runtime-name{display:flex;flex-direction:column;gap:3px;min-width:0}
+.runtime-name b{color:var(--ink);font-size:12.5px;overflow-wrap:anywhere}
+.runtime-name span,.runtime-name small{font-family:var(--mono);font-size:9.5px;color:var(--ink-3);overflow-wrap:anywhere}
+.runtime-name small{font-family:var(--sans);line-height:1.4}
+.runtime-reason{font-size:11px;line-height:1.45;overflow-wrap:anywhere}
+.discovery-ready{color:var(--good)}
+.agent-method-cell{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .cfg-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:14px}
 .field{margin-bottom:14px}
 .field label{display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.18em;color:var(--ink-3);margin-bottom:7px}
@@ -739,5 +765,8 @@ footer .sep{color:var(--line-2)}
   .toasts{left:10px;right:10px;max-width:none}
   .confirm-backdrop{padding:12px}
   .confirm-box{width:100%;max-width:440px}
+  .discovery-toolbar{align-items:stretch;flex-direction:column}
+  .discovery-toolbar-actions{justify-content:flex-start}
+  .discovery-toolbar .btn{justify-content:center}
   footer{flex-wrap:wrap}
 }

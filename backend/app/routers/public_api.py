@@ -19,6 +19,7 @@ from app.routers.apikeys import hash_key
 from app.services.chat import chat_stream, sse_encode
 from app.services.invoke import invoke_agent_text
 from app.services.memory import scoped_actor
+from app.services.runtime_discovery import invoke_capability, require_invoke_capability
 
 router = APIRouter(prefix="/v1", tags=["public-v1"])
 
@@ -44,8 +45,7 @@ def _active_agent(db: Session, agent_id: str) -> Agent:
     agent = db.get(Agent, agent_id)
     if agent is None or agent.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
-    if agent.status != "active" or not agent.arn:
-        raise AppError("agent.not_active", "agent is not active", status_code=409)
+    require_invoke_capability(agent)
     return agent
 
 
@@ -53,7 +53,11 @@ def _active_agent(db: Session, agent_id: str) -> Agent:
 def v1_list_agents(
     db: Session = Depends(get_db), _key: ApiKey = Depends(require_api_key)
 ) -> dict[str, Any]:
-    agents = db.query(Agent).filter(Agent.status == "active").all()
+    agents = [
+        agent
+        for agent in db.query(Agent).filter(Agent.status == "active").all()
+        if invoke_capability(agent)["eligible"]
+    ]
     return {
         "agents": [
             {"id": a.id, "name": a.name, "method": a.method, "version": a.version}

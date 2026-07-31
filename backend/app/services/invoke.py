@@ -16,6 +16,10 @@ from app.services.agentcore import gateway
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import data_client
+from app.services.runtime_discovery import (
+    DISCOVERED_METHOD,
+    require_invoke_capability,
+)
 
 logger = logging.getLogger(__name__)
 BUFFERED_CHUNK_CHARS = 60
@@ -99,11 +103,12 @@ def _invoke_via_canary(
 def invoke_agent_text(
     agent: Agent, prompt: str, session_id: str | None = None, actor_id: str = "default"
 ) -> dict[str, Any]:
+    require_invoke_capability(agent)
     if agent.method == "harness":
         return hc.invoke_harness_text(
             data_client(), agent.arn, prompt, session_id=session_id, actor_id=actor_id
         )
-    if agent.method in ("zip_runtime", "studio", "container"):
+    if agent.method in ("zip_runtime", "studio", "container", DISCOVERED_METHOD):
         # A2A-protocol runtimes speak JSON-RPC; the A2A server owns
         # conversation state (no actor_id/memory envelope) and can't be canaried
         if (agent.spec or {}).get("protocol") == "a2a":
@@ -132,6 +137,7 @@ def invoke_agent_events(
     actor_id: str = "default",
 ) -> Iterator[dict[str, Any]]:
     """Yield native container events, with a buffered compatibility fallback."""
+    require_invoke_capability(agent)
     is_http_container = (
         agent.method == "container" and (agent.spec or {}).get("protocol", "http") != "a2a"
     )

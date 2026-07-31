@@ -113,7 +113,9 @@ export function Chat() {
     api
       .listAgents()
       .then((res) => {
-        const active = res.agents.filter((a) => a.status === "active");
+        const active = res.agents.filter(
+          (a) => a.status === "active" && a.invoke_capability.eligible,
+        );
         setAgents(active);
         const linked = linkedAgent && active.find((a) => a.id === linkedAgent);
         if (linked) {

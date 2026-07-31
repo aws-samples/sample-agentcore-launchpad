@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.deployer import container as container_method
@@ -15,9 +16,17 @@ from app.deployer import harness as harness_method
 from app.deployer import zip_runtime as zip_method
 from app.deployer.pipeline import create_deployment, start_deploy_async
 from app.models.ledger import Agent, Deployment, Job
-from app.schemas.agent import AgentSpec, InvokeRequest, InvokeResponse
+from app.schemas.agent import AgentSpec, InvokeRequest, InvokeResponse, RuntimeImportRequest
+from app.services.agentcore.client import control_client
 from app.services.invoke import invoke_agent_text
 from app.services.memory import scoped_actor
+from app.services.runtime_discovery import (
+    DISCOVERED_METHOD,
+    import_runtimes,
+    invoke_capability,
+    require_invoke_capability,
+    scan_runtimes,
+)
 
 router = APIRouter(prefix="/api", tags=["agents"])
 
@@ -41,6 +50,7 @@ def _agent_out(agent: Agent, deployment: Deployment | None = None) -> dict[str, 
         "spec": agent.spec,
         "experiment_capability": experiment_capability(agent),
         "canary_capability": canary_capability(agent),
+        "invoke_capability": invoke_capability(agent),
         "created_at": agent.created_at.isoformat() if agent.created_at else None,
         "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
     }
@@ -70,14 +80,17 @@ def _latest_deployment(db: Session, agent_id: str) -> Deployment | None:
     )
 
 
-def _delete_agent_resources(agent: Agent) -> None:
+def _delete_agent_resources(agent: Agent) -> bool:
     """Tear down the method-specific AWS resource for an agent (idempotent)."""
+    if agent.method == DISCOVERED_METHOD:
+        return False
     if agent.method == "harness":
         harness_method.delete_agent_resources(agent)
     elif agent.method in ("zip_runtime", "studio"):
         zip_method.delete_agent_resources(agent)
     elif agent.method == "container":
         container_method.delete_agent_resources(agent)
+    return True
 
 
 @router.post("/agents", status_code=202)
@@ -124,6 +137,23 @@ def list_agents(db: Session = Depends(get_db)) -> dict[str, Any]:
     return {"agents": out}
 
 
+@router.get("/agents/discovery")
+def discover_runtimes(db: Session = Depends(get_db)) -> dict[str, Any]:
+    return {
+        "region": get_settings().region,
+        "runtimes": scan_runtimes(control_client(), db),
+    }
+
+
+@router.post("/agents/discovery/import")
+def import_discovered_runtimes(
+    req: RuntimeImportRequest, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    result = import_runtimes(control_client(), db, req.runtime_ids)
+    db.commit()
+    return result
+
+
 @router.get("/agents/{agent_id}")
 def get_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     agent = db.get(Agent, agent_id)
@@ -159,6 +189,12 @@ def redeploy_agent(
     agent = db.get(Agent, agent_id)
     if agent is None or agent.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
+    if agent.method == DISCOVERED_METHOD:
+        raise AppError(
+            "agent.redeploy_external",
+            "discovered runtimes are externally owned and cannot be re-published",
+            status_code=400,
+        )
     if agent.status == "deploying":
         raise AppError(
             "agent.deploy_in_progress",
@@ -249,13 +285,7 @@ def invoke_agent(
     agent = db.get(Agent, agent_id)
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
-    if agent.status != "active" or not agent.arn:
-        raise AppError(
-            "agent.not_active",
-            "agent is not active",
-            {"status": agent.status},
-            status_code=409,
-        )
+    require_invoke_capability(agent)
     started = time.monotonic()
     result = invoke_agent_text(
         agent, req.prompt, session_id=req.session_id,
@@ -273,11 +303,15 @@ def delete_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any]
     agent = db.get(Agent, agent_id)
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
-    _delete_agent_resources(agent)
+    aws_resource_deleted = _delete_agent_resources(agent)
     agent.status = "deleted"
     agent.updated_at = datetime.now(UTC)
     db.commit()
-    return {"deleted": True, "agent_id": agent_id}
+    return {
+        "deleted": True,
+        "agent_id": agent_id,
+        "aws_resource_deleted": aws_resource_deleted,
+    }
 
 
 @router.get("/jobs/{job_id}")

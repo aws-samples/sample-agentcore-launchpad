@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { ArrowLeft, Download, RefreshCw, Search } from "lucide-react";
 
 import {
   Btn,
@@ -13,7 +14,14 @@ import {
   useToast,
   ViewHead,
 } from "../components";
-import type { AgentInfo, DeploymentInfo, InspectedSkill, JobInfo } from "../lib/api";
+import type {
+  AgentInfo,
+  DeploymentInfo,
+  InspectedSkill,
+  JobInfo,
+  RuntimeDiscoveryCandidate,
+  RuntimeImportResult,
+} from "../lib/api";
 import { api, ApiError } from "../lib/api";
 
 const DEFAULT_MODEL = "global.anthropic.claude-sonnet-5";
@@ -67,6 +75,275 @@ interface A2aSkillRow {
   name: string;
   description: string;
   tags: string;
+}
+
+const DISCOVERY_STATUS_TONE: Record<string, "good" | "warn" | "crit" | "muted"> = {
+  READY: "good",
+  CREATING: "warn",
+  UPDATING: "warn",
+  CREATE_FAILED: "crit",
+  UPDATE_FAILED: "crit",
+};
+
+const canSelectRuntime = (runtime: RuntimeDiscoveryCandidate) =>
+  runtime.importable &&
+  (!runtime.managed_agent_id || runtime.managed_agent_method === "discovered_runtime");
+
+export function CreateAgent() {
+  const [params] = useSearchParams();
+  return params.get("view") === "discover" ? <RuntimeDiscovery /> : <CreateAgentWizard />;
+}
+
+function RuntimeDiscovery() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [region, setRegion] = useState("");
+  const [runtimes, setRuntimes] = useState<RuntimeDiscoveryCandidate[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [loading, setLoading] = useState(true);
+  const [importing, setImporting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<RuntimeImportResult | null>(null);
+  const reasonText = (code?: string | null, fallback?: string | null) =>
+    t(`create.discovery.reasons.${code ?? "unknown"}`, {
+      defaultValue: fallback ?? code ?? "",
+    });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await api.discoverRuntimes();
+      setRegion(result.region);
+      setRuntimes(result.runtimes);
+      setSelected((current) => {
+        const available = new Set(
+          result.runtimes
+            .filter(canSelectRuntime)
+            .map((runtime) => runtime.runtime_id),
+        );
+        return new Set([...current].filter((runtimeId) => available.has(runtimeId)));
+      });
+    } catch (err) {
+      setError(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [t]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const selectable = runtimes.filter(canSelectRuntime);
+  const allSelected =
+    selectable.length > 0 && selectable.every((runtime) => selected.has(runtime.runtime_id));
+
+  const toggle = (runtimeId: string) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(runtimeId)) next.delete(runtimeId);
+      else next.add(runtimeId);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    setSelected(
+      allSelected ? new Set() : new Set(selectable.map((runtime) => runtime.runtime_id)),
+    );
+  };
+
+  const importSelected = async () => {
+    if (!selected.size) return;
+    setImporting(true);
+    setError(null);
+    try {
+      const result = await api.importRuntimes([...selected]);
+      setImportResult(result);
+      toast(
+        t("create.discovery.importSummary", {
+          imported: result.imported.length,
+          updated: result.updated.length,
+          managed: result.already_managed.length,
+          failed: result.failed.length,
+        }),
+      );
+      setSelected(new Set());
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  return (
+    <section>
+      <ViewHead
+        kicker={t("create.discovery.kicker")}
+        title={t("create.discovery.title")}
+        meta={region ? t("create.discovery.region", { region }) : undefined}
+      />
+      <div className="discovery-toolbar">
+        <Btn onClick={() => navigate("/create")}>
+          <ArrowLeft size={14} aria-hidden="true" />
+          {t("create.discovery.back")}
+        </Btn>
+        <div className="discovery-toolbar-actions">
+          <Btn onClick={() => void load()} disabled={loading || importing}>
+            <RefreshCw size={14} aria-hidden="true" />
+            {t("create.discovery.refresh")}
+          </Btn>
+          <Btn onClick={toggleAll} disabled={!selectable.length || importing}>
+            {t(allSelected ? "create.discovery.clearSelection" : "create.discovery.selectEligible")}
+          </Btn>
+          <Btn primary onClick={() => void importSelected()} disabled={!selected.size || importing}>
+            <Download size={14} aria-hidden="true" />
+            {importing
+              ? t("create.discovery.importing")
+              : t("create.discovery.importSelected", { count: selected.size })}
+          </Btn>
+        </div>
+      </div>
+
+      {error && (
+        <div className="note discovery-error">
+          <span className="i">[!]</span>
+          <span>{error}</span>
+        </div>
+      )}
+      {importResult && importResult.failed.length > 0 && (
+        <div className="note discovery-error">
+          <span className="i">[!]</span>
+          <span>
+            {importResult.failed
+              .map(
+                (item) =>
+                  `${item.runtime_id}: ${reasonText(item.reason_code, item.reason)}`,
+              )
+              .join(" · ")}
+          </span>
+        </div>
+      )}
+
+      <Panel
+        title={t("create.discovery.results")}
+        sub={t("create.discovery.count", { count: runtimes.length })}
+        pad={false}
+        className="discovery-results"
+      >
+        <table className="discovery-table">
+          <thead>
+            <tr>
+              <th className="discovery-check">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  disabled={!selectable.length}
+                  onChange={toggleAll}
+                  aria-label={t("create.discovery.selectEligible")}
+                />
+              </th>
+              <th>{t("create.discovery.columns.runtime")}</th>
+              <th>{t("create.discovery.columns.protocol")}</th>
+              <th>{t("create.discovery.columns.artifact")}</th>
+              <th>{t("create.discovery.columns.status")}</th>
+              <th>{t("create.discovery.columns.auth")}</th>
+              <th>{t("create.discovery.columns.version")}</th>
+              <th>{t("create.discovery.columns.eligibility")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {runtimes.map((runtime) => {
+              const selectableRuntime = canSelectRuntime(runtime);
+              const externallyManaged =
+                runtime.managed_agent_method === "discovered_runtime";
+              return (
+                <tr key={runtime.runtime_id}>
+                  <td className="discovery-check">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(runtime.runtime_id)}
+                      disabled={!selectableRuntime || importing}
+                      onChange={() => toggle(runtime.runtime_id)}
+                      aria-label={t("create.discovery.selectRuntime", { name: runtime.name })}
+                    />
+                  </td>
+                  <td>
+                    <div className="runtime-name" title={runtime.runtime_arn}>
+                      <b>{runtime.name}</b>
+                      <span>{runtime.runtime_id}</span>
+                      {runtime.description && <small>{runtime.description}</small>}
+                    </div>
+                  </td>
+                  <td>
+                    <Chip tone={runtime.protocol === "HTTP" ? "blue" : "aqua"}>
+                      {runtime.protocol}
+                    </Chip>
+                  </td>
+                  <td>
+                    <Chip tone="muted">{runtime.artifact_type.toUpperCase()}</Chip>
+                  </td>
+                  <td>
+                    <Chip tone={DISCOVERY_STATUS_TONE[runtime.aws_status] ?? "muted"}>
+                      {runtime.aws_status}
+                    </Chip>
+                  </td>
+                  <td className="mono">
+                    {runtime.authorizer_type === "custom_jwt"
+                      ? t("create.discovery.customJwt")
+                      : runtime.authorizer_type.toUpperCase()}
+                  </td>
+                  <td className="mono">{runtime.version || "—"}</td>
+                  <td className="runtime-reason">
+                    {runtime.managed_agent_id && !externallyManaged ? (
+                      <button
+                        type="button"
+                        className="rowact"
+                        onClick={() => navigate("/create")}
+                      >
+                        {t("create.discovery.alreadyManaged", {
+                          name: runtime.managed_agent_name ?? runtime.name,
+                        })}
+                      </button>
+                    ) : !runtime.importable ? (
+                      <span>{reasonText(runtime.reason_code, runtime.reason)}</span>
+                    ) : !runtime.invoke_capability.eligible ? (
+                      <span>
+                        {t("create.discovery.inventoryOnly")}:{" "}
+                        {reasonText(
+                          runtime.invoke_capability.reason_code,
+                          runtime.invoke_capability.reason,
+                        )}
+                      </span>
+                    ) : (
+                      <span className="discovery-ready">{t("create.discovery.readyToImport")}</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {!loading && runtimes.length === 0 && (
+              <tr>
+                <td colSpan={8} className="empty">
+                  {t("create.discovery.empty")}
+                </td>
+              </tr>
+            )}
+            {loading && (
+              <tr>
+                <td colSpan={8} className="loading-line">
+                  {t("create.discovery.scanning")}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </Panel>
+    </section>
+  );
 }
 
 // the two demo tools every zip template ships — seed the skills editor
@@ -130,7 +407,7 @@ interface KbRef {
   description: string;
 }
 
-export function CreateAgent() {
+function CreateAgentWizard() {
   const { t } = useTranslation();
   const toast = useToast();
   const navigate = useNavigate();
@@ -237,7 +514,7 @@ export function CreateAgent() {
   const [agentStatus, setAgentStatus] = useState<string>("deploying");
   const [confirm, setConfirm] = useState<
     | { kind: "republish" }
-    | { kind: "delete"; id: string; name: string }
+    | { kind: "delete"; id: string; name: string; external: boolean }
     | { kind: "convert"; id: string; name: string }
     | null
   >(null);
@@ -684,6 +961,25 @@ export function CreateAgent() {
                 {t("create.methods.studio.open")}
               </Link>
             </div>
+            <button
+              type="button"
+              className="method discovery-method"
+              style={{ "--i": 3 } as CSSProperties}
+              onClick={() => navigate("/create?view=discover")}
+              data-method="discovery"
+            >
+              <div className="m-badge plain">{t("create.methods.discovery.badge")}</div>
+              <div className="m-icon">
+                <Search size={20} aria-hidden="true" />
+              </div>
+              <h3>{t("create.methods.discovery.title")}</h3>
+              <p>{t("create.methods.discovery.desc")}</p>
+              <div className="m-specs">
+                <span>ListAgentRuntimes · GetAgentRuntime</span>
+                <span>{t("create.methods.discovery.spec2")}</span>
+                <span>{t("create.methods.discovery.spec3")}</span>
+              </div>
+            </button>
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
             <Btn primary onClick={() => setStep(2)}>
@@ -698,7 +994,14 @@ export function CreateAgent() {
               a.method === "studio" ? navigate(`/create/studio?agent=${a.id}`) : startEdit(a)
             }
             onDetails={openDetails}
-            onDelete={(id, name) => setConfirm({ kind: "delete", id, name })}
+            onDelete={(a) =>
+              setConfirm({
+                kind: "delete",
+                id: a.id,
+                name: a.name,
+                external: a.method === "discovered_runtime",
+              })
+            }
             onConvert={(id, name) => setConfirm({ kind: "convert", id, name })}
           />
         </>
@@ -1404,11 +1707,24 @@ export function CreateAgent() {
       />
       <ConfirmDialog
         open={confirm?.kind === "delete"}
-        title={t("create.list.confirmDeleteTitle")}
-        body={t("create.list.confirmDelete", {
-          name: confirm?.kind === "delete" ? confirm.name : "",
-        })}
-        confirmLabel={t("create.list.delete")}
+        title={t(
+          confirm?.kind === "delete" && confirm.external
+            ? "create.list.confirmDetachTitle"
+            : "create.list.confirmDeleteTitle",
+        )}
+        body={t(
+          confirm?.kind === "delete" && confirm.external
+            ? "create.list.confirmDetach"
+            : "create.list.confirmDelete",
+          {
+            name: confirm?.kind === "delete" ? confirm.name : "",
+          },
+        )}
+        confirmLabel={t(
+          confirm?.kind === "delete" && confirm.external
+            ? "create.list.remove"
+            : "create.list.delete",
+        )}
         onConfirm={() => {
           if (confirm?.kind === "delete") void doDelete(confirm.id);
           setConfirm(null);
@@ -1435,7 +1751,7 @@ function AgentList({
   agents: AgentInfo[];
   onEdit: (a: AgentInfo) => void;
   onDetails: (a: AgentInfo) => void;
-  onDelete: (id: string, name: string) => void;
+  onDelete: (a: AgentInfo) => void;
   onConvert: (id: string, name: string) => void;
 }) {
   const { t } = useTranslation();
@@ -1457,7 +1773,14 @@ function AgentList({
             <tr key={a.id}>
               <td className="pri">{a.name}</td>
               <td>
-                <MethodChip method={a.method} />
+                <div className="agent-method-cell">
+                  <MethodChip method={a.method} />
+                  {a.method === "discovered_runtime" && (
+                    <span className="mono dim">
+                      {String(a.spec.protocol ?? "unknown").toUpperCase()}
+                    </span>
+                  )}
+                </div>
               </td>
               <td>
                 <Chip
@@ -1467,20 +1790,24 @@ function AgentList({
                   {t(`status.${a.status}`, a.status.toUpperCase())}
                 </Chip>
               </td>
-              <td className="mono">{a.revision ?? "—"}</td>
+              <td className="mono">
+                {a.method === "discovered_runtime" ? `v${a.version ?? "—"}` : (a.revision ?? "—")}
+              </td>
               <td className="mono dim">{(a.updated_at ?? "").replace("T", " ").slice(0, 16)}</td>
               <td>
                 <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                  <button
-                    type="button"
-                    className="rowact"
-                    disabled={a.status === "deploying"}
-                    style={a.status === "deploying" ? { opacity: 0.35 } : undefined}
-                    onClick={() => onEdit(a)}
-                  >
-                    {t("create.list.edit")}
-                  </button>
-                  {a.status === "active" && (
+                  {a.method !== "discovered_runtime" && (
+                    <button
+                      type="button"
+                      className="rowact"
+                      disabled={a.status === "deploying"}
+                      style={a.status === "deploying" ? { opacity: 0.35 } : undefined}
+                      onClick={() => onEdit(a)}
+                    >
+                      {t("create.list.edit")}
+                    </button>
+                  )}
+                  {a.invoke_capability.eligible && (
                     <Link className="rowact" to={`/chat?agent=${a.id}`}>
                       {t("create.list.chat")}
                     </Link>
@@ -1503,9 +1830,13 @@ function AgentList({
                   <button
                     type="button"
                     className="rowact"
-                    onClick={() => onDelete(a.id, a.name)}
+                    onClick={() => onDelete(a)}
                   >
-                    {t("create.list.delete")}
+                    {t(
+                      a.method === "discovered_runtime"
+                        ? "create.list.remove"
+                        : "create.list.delete",
+                    )}
                   </button>
                 </div>
               </td>

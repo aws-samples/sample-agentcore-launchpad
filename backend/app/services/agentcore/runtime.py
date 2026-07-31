@@ -166,6 +166,19 @@ def get_runtime(client: Any, runtime_id: str) -> dict[str, Any]:
     return client.get_agent_runtime(agentRuntimeId=runtime_id)
 
 
+def list_runtimes(client: Any) -> list[dict[str, Any]]:
+    """Return every Runtime summary across all ListAgentRuntimes pages."""
+    runtimes: list[dict[str, Any]] = []
+    kwargs: dict[str, Any] = {"maxResults": 100}
+    while True:
+        page = client.list_agent_runtimes(**kwargs)
+        runtimes.extend(page.get("agentRuntimes", []))
+        token = page.get("nextToken")
+        if not token:
+            return runtimes
+        kwargs["nextToken"] = token
+
+
 def delete_runtime(client: Any, runtime_id: str) -> None:
     client.delete_agent_runtime(agentRuntimeId=runtime_id)
 

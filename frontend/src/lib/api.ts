@@ -21,7 +21,7 @@ export interface DeploymentInfo {
 export interface AgentInfo {
   id: string;
   name: string;
-  method: "harness" | "zip_runtime" | "container" | "studio";
+  method: "harness" | "zip_runtime" | "container" | "studio" | "discovered_runtime";
   status: "draft" | "deploying" | "active" | "failed" | "deleted";
   arn: string | null;
   resource_id: string | null;
@@ -41,11 +41,55 @@ export interface AgentInfo {
     reason: string | null;
     reason_code: string | null;
   };
+  invoke_capability: {
+    eligible: boolean;
+    reason: string | null;
+    reason_code: string | null;
+  };
   created_at: string | null;
   updated_at: string | null;
   deployment?: DeploymentInfo;
   deployments?: DeploymentInfo[];
   revision?: number;
+}
+
+export interface RuntimeDiscoveryCandidate {
+  runtime_id: string;
+  runtime_arn: string;
+  name: string;
+  description: string;
+  version: string;
+  aws_status: string;
+  protocol: string;
+  artifact_type: "code" | "container" | "unknown";
+  authorizer_type: "none" | "custom_jwt" | "unknown";
+  last_updated_at: string | null;
+  managed_agent_id: string | null;
+  managed_agent_name: string | null;
+  managed_agent_method: AgentInfo["method"] | null;
+  importable: boolean;
+  reason_code: string | null;
+  reason: string | null;
+  invoke_capability: {
+    eligible: boolean;
+    reason: string | null;
+    reason_code: string | null;
+  };
+}
+
+export interface RuntimeImportItem {
+  runtime_id: string;
+  agent_id?: string;
+  agent_name?: string;
+  reason_code?: string;
+  reason?: string;
+}
+
+export interface RuntimeImportResult {
+  imported: RuntimeImportItem[];
+  updated: RuntimeImportItem[];
+  already_managed: RuntimeImportItem[];
+  failed: RuntimeImportItem[];
 }
 
 export interface RuntimeCanaryMetric {
@@ -1217,6 +1261,15 @@ export const api = {
       body: JSON.stringify(spec),
     }),
   listAgents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
+  discoverRuntimes: () =>
+    request<{ region: string; runtimes: RuntimeDiscoveryCandidate[] }>(
+      "/api/agents/discovery",
+    ),
+  importRuntimes: (runtimeIds: string[]) =>
+    request<RuntimeImportResult>("/api/agents/discovery/import", {
+      method: "POST",
+      body: JSON.stringify({ runtime_ids: runtimeIds }),
+    }),
   convertAgent: (id: string) =>
     request<{ agent: AgentInfo; job_id: string; deployment_id: string }>(
       `/api/agents/${id}/convert`,
@@ -1265,7 +1318,10 @@ export const api = {
       { method: "POST", body: JSON.stringify({ prompt, session_id: sessionId }) },
     ),
   deleteAgent: (id: string) =>
-    request<{ deleted: boolean }>(`/api/agents/${id}`, { method: "DELETE" }),
+    request<{ deleted: boolean; agent_id: string; aws_resource_deleted: boolean }>(
+      `/api/agents/${id}`,
+      { method: "DELETE" },
+    ),
   inspectSkillZip: (file: File) => {
     const form = new FormData();
     form.append("file", file);

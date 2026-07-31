@@ -14,6 +14,7 @@ from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.services import memory as memory_service
 from app.services.chat import chat_stream, sse_encode
+from app.services.runtime_discovery import require_invoke_capability
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -41,8 +42,7 @@ def _get_active_agent(db: Session, agent_id: str) -> Agent:
     agent = db.get(Agent, agent_id)
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
-    if agent.status != "active" or not agent.arn:
-        raise AppError("agent.not_active", "agent is not active", status_code=409)
+    require_invoke_capability(agent)
     return agent
 
 

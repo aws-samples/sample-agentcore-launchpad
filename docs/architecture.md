@@ -54,7 +54,7 @@ real, runnable code in this repo.
 
 | AgentCore service | How the platform uses it |
 |---|---|
-| **Runtime** | Hosts zip and container agents (`CreateAgentRuntime`); the invoke chain calls the runtime data plane. |
+| **Runtime** | Hosts zip and container agents (`CreateAgentRuntime`); the invoke chain calls the runtime data plane. Agent Management can also scan every `ListAgentRuntimes` page, inspect each resource with `GetAgentRuntime`, and explicitly import HTTP/A2A runtimes as externally owned ledger entries without changing the AWS resource. |
 | **Harness** | Hosts 方式B agents (`CreateHarness`) — a managed entrypoint with no build artifact. |
 | **Memory** | One shared `launchpad_memory` singleton: short-term session events + long-term semantic & user-preference strategies. Namespaces are keyed only on `{actorId}` (there is no `{agentId}` template), so the platform folds the agent id into the actor — `scoped_actor(agent_id, human)` → `<agent>__<human>` — which partitions **both** short-term events and long-term records (`/facts/<agent>__<human>`) per agent. Generated Strands runtimes restore short-term turns through `AgentCoreMemorySessionManager`. Claude Agent SDK containers create one request-local `MemorySessionManager`, inject bounded short-term turns plus `/facts/<actor>` and `/preferences/<actor>` records through a `UserPromptSubmit` hook, then persist the successful USER/ASSISTANT pair as one event. A2A runtimes use `<agent>__a2a__<contextId>` because direct A2A currently has no authenticated human actor envelope. One agent's learned facts never bleed into another's for the same person or A2A context; the ledger still stores the bare human actor for display. |
 | **Gateway** | `launchpad-gw` turns a REST API (office-facts) and a Lambda (hr-database) into MCP tools with Cognito-JWT auth; agent tool calls flow through it. |
@@ -91,6 +91,31 @@ stage (`resume_pending_jobs()` runs on startup).
 Typical timings: harness ≈ 30 s, zip ≈ 1–3 min (incl. pip), container ≈ 2–4 min (observed: 1.7 min CodeBuild + seconds to READY)
 (via CodeBuild). See [troubleshooting.md](troubleshooting.md).
 
+### Existing Runtime discovery
+
+`/create?view=discover` is an onboarding path alongside the three creation
+methods, not a deploy method. `GET /api/agents/discovery` follows every Runtime
+list page in the configured Region and performs one detail read per resource.
+The backend returns only an allow-listed projection: Runtime identity, name,
+description, protocol, artifact type, authorizer type, AWS status/version, and
+last-update time. Environment values, artifact locations, execution roles, and
+authorizer configuration never leave the backend.
+
+An explicit `POST /api/agents/discovery/import` re-reads each selected Runtime
+and creates or refreshes an `Agent` row with
+`method=discovered_runtime` and `owner=aws-discovery`. It creates no Deployment
+or Job, runs no pipeline stage, and performs no Registry registration. ARN then
+Runtime ID provide idempotent identity; a matching Launchpad-created row is
+reported as already managed and never rewritten. Removing an imported row is a
+local detach only and never calls an AgentCore delete or update operation.
+
+HTTP and A2A resources can be imported; MCP Runtime resources remain visible in
+the scan but are not agents and cannot be imported. Import and invoke
+capabilities are intentionally separate: imported HTTP/A2A resources are
+invokable only while AWS reports `READY` and no custom JWT authorizer is
+configured. Custom-JWT resources can be retained as inventory but are excluded
+from Chat and `/v1`.
+
 ## The invoke chain
 
 The Chat playground (`/api/chat/{id}`) and the public API
@@ -105,6 +130,7 @@ public  /v1  ──┘        │
                         ├─ method dispatch:
                         │    harness            → harness data client
                         │    zip/studio/container → runtime data client
+                        │    discovered HTTP/A2A → runtime data client
                         ▼
              AgentCore Runtime / Harness
                         │  (session isolation, streaming)
@@ -116,6 +142,10 @@ public  /v1  ──┘        │
 
 The public `/v1` surface adds `X-Api-Key` auth (keys stored sha256-hashed);
 everything downstream of the dispatch is identical to the console path.
+Every agent response carries one backend-owned `invoke_capability`; console
+invoke, Chat, and `/v1` enforce the same projection. Imported runtimes use the
+buffered compatibility path because Launchpad cannot assume an arbitrary
+external runtime emits the generated Claude SDK event contract.
 
 Harness and Claude Agent SDK container agents stream native model deltas.
 Claude containers enable SDK partial messages and yield `delta`, `tool`, and

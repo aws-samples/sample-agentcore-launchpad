@@ -6,6 +6,7 @@ const METHOD_CHIP: Record<string, { tone: ChipTone; icon: string; label: string 
   container: { tone: "blue", icon: "▣", label: "CLAUDE SDK" },
   zip_runtime: { tone: "aqua", icon: "⬡", label: "STRANDS" },
   studio: { tone: "aqua", icon: "⬡", label: "STUDIO" },
+  discovered_runtime: { tone: "muted", icon: "◎", label: "DISCOVERED RT" },
 };
 
 export function MethodChip({ method }: { method: string }) {
