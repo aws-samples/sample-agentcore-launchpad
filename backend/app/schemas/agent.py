@@ -12,6 +12,14 @@ DEFAULT_MODEL_ID = "global.anthropic.claude-sonnet-5"
 
 Method = Literal["harness", "zip_runtime", "container", "studio"]
 
+# Which agent SDK the "container" method packages. The console presents that
+# method as the "Other Agent SDK" entrance with this as a second-level choice,
+# so the category can gain members without migrating stored specs. There is
+# deliberately NO dispatch on this field yet: with one member, a dispatch table
+# would be an abstraction over nothing — app/deployer/container.py and
+# app/templates/claude_sdk_agent/ stay unconditional until a second SDK exists.
+AgentSdk = Literal["claude_agent_sdk"]
+
 # Which model-hosting surface the model_id belongs to. It selects the harness
 # bedrockModelConfig.apiFormat (mantle → responses, bedrock → converse_stream);
 # both stay on the bedrockModelConfig union branch, so no API key is involved.
@@ -147,6 +155,11 @@ class AgentSpec(BaseModel):
     # cannot be enumerated from the account, so any check would be guesswork.
     # A wrong pairing surfaces as an AWS CREATE_FAILED + failureReason.
     model_source: ModelSource = "bedrock"
+    # Consumed by the container method only. The single-valued default is what
+    # makes a future second SDK cheap: every container spec already on disk —
+    # including those written before this field existed — reads back as the
+    # Claude Agent SDK instead of being ambiguous.
+    agent_sdk: AgentSdk = "claude_agent_sdk"
     system_prompt: str = Field(min_length=1, max_length=20000)
     # Durable production defaults applied by experiment promotion. Config
     # bundles may override these per request while an A/B test is active.

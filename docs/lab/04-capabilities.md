@@ -268,7 +268,8 @@ FZuhhw9jbJaK   lab-fund-assistant   A2A   PENDING_APPROVAL
 第 02 章的能力表里，知识库那一行三种方式都写着「支持」，但**通道不同**。这一节用同一个
 `lab-fund-kb` 各建一个一次性 Agent，把区别跑出来。不做也不影响后面章节；做完记得删掉。
 
-创建方式选 `Strands Studio`（表单路径）或 `Claude Agent SDK 容器`，在配置页勾选
+创建方式选 `Strands Studio`（表单路径）或 `其他 Agent SDK`（容器 · SDK 保持默认的
+`Claude Agent SDK`），在配置页勾选
 `lab-fund-kb · kb`。注意 chip 下方的说明文字会随方式变化：
 
 - Harness：*以网关检索工具的形式挂载（逐库检索 + 多步 agentic 检索）*

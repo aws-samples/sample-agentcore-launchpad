@@ -18,7 +18,7 @@
 平台有三种创建方式，能力**不等价**。后面章节要用的高级能力对方式有硬性要求，先看下面这张表
 （这也是本实验要建两个 Agent 的原因）：
 
-| 能力 | 托管 Harness（方式B） | Claude Agent SDK 容器（方式A） | Strands ZIP（方式C · 表单） | Strands 画布（方式C · Studio） |
+| 能力 | 托管 Harness（方式B） | 其他 Agent SDK · 容器（方式A） | Strands ZIP（方式C · 表单） | Strands 画布（方式C · Studio） |
 |---|---|---|---|---|
 | 部署耗时 | ~30 秒（免构建） | ~2–6 分钟（CodeBuild） | ~1–3 分钟（pip+zip） | ~1–3 分钟（pip+zip） |
 | 挂载知识库（托管 RAG） | 支持：网关 `Retrieve` + `AgenticRetrieveStream` | 支持：`kb_search`（单次）+ `kb_deep_search`（agentic 多步） | 支持：`kb_search`（单次）+ `kb_deep_search`（agentic 多步） | 不支持 |
@@ -55,11 +55,15 @@
 
 1. **打开** 控制台 → `02 Agent 管理`（`/create`）。
 2. **观察** 页面顶部的三步导航：`01 · 选择方式` → `02 · 配置` → `03 · 发射`。
-3. **选择** 第三张卡片 **Strands Studio**（角标 `ZIP 通道已上线 · Studio 已上线`），
+3. **选择** 第二张卡片 **Strands Studio**（角标 `ZIP 通道已上线 · Studio 已上线`），
    然后点右侧 **下一步 ▸**。
 
 ![创建方式选择](images/02-create-methods.png)
-*图 2-1：三种创建方式。卡片上直接标注了各自的 AWS 调用链路与部署耗时。*
+*图 2-1：创建入口卡片。卡片上直接标注了各自的 AWS 调用链路与部署耗时。*
+
+> 这张图采集于卡片重排之前。当前入口顺序是 **托管 Harness → Strands Studio →
+> 其他 Agent SDK → 发现现有 Runtime**（第三张是原来的「Claude Agent SDK」卡片，
+> 现在是一个类别，Claude Agent SDK 作为其二级选项，见第 03 章）。
 
 > 卡片里的「打开 Strands Studio 画布」进入的是拖拽式多 Agent 编排画布（`/create/studio`），
 > 生成的也是 zip runtime。本章走表单路径，配置更直观。
@@ -71,7 +75,8 @@
 | 字段 | 本实验取值 |
 |---|---|
 | AGENT 名称 | `lab-fund-assistant` |
-| 模型 · BEDROCK | `global.anthropic.claude-sonnet-5`（默认值） |
+| 模型来源 | 点 `Bedrock`（**默认是 `Bedrock Mantle`，本实验要改成 `Bedrock`**） |
+| 模型 | `Claude Sonnet 5 (global) · global.anthropic.claude-sonnet-5` |
 | 系统提示词 | `你是一名基金产品投顾助手，服务于摩根士丹利新兴市场领先企业股票基金（MS INVF Emerging Leaders Equity Fund）的销售与客服团队。回答基金的策略、团队、规模与投资流程相关问题。` |
 | 工具 | `calculator`、`current_utc_time`（模板内置，默认勾选） |
 | 服务协议 | `HTTP · 标准 invocations` |
@@ -80,6 +85,13 @@
 ![配置表单](images/02-create-config.png)
 *图 2-2：配置页。底部提示 Config-bundle 契约与 OTEL(ADOT) 埋点已自动注入。
 第 07 章的追踪和第 09 章的 A/B 都依赖这两项能力。*
+
+> **为什么要手动切回 `Bedrock`**：`模型来源` 决定模型走哪个托管面 ——
+> `Bedrock Mantle`（Responses / Chat Completions API）或 `Bedrock`（Converse API）。
+> ZIP 与 Harness 两个入口的表单默认值现在是 Mantle 的 `openai.gpt-5.6-sol`，
+> 而本实验后面几章的 trace、评估分数与 A/B 结论都是在 `claude-sonnet-5` 上实测的，
+> 所以这里切回 `Bedrock` 才能和文档里的数字对得上。Mantle 侧无需任何 API Key
+> （用运行时执行角色的 IAM 权限换取短时 token），你也可以自己另建一个 Agent 试。
 
 > **刻意写一个"普通"的提示词**。第 09 章的优化推荐会分析它并给出改进版本，做成 A/B 对照。
 > 如果这里就写得非常完善，那一章的对比就没什么可看的了。

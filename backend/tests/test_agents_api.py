@@ -242,6 +242,39 @@ def test_create_container_agent_with_capabilities_and_fs(client):
     assert spec["network"]["subnets"] == ["subnet-a"]
 
 
+def test_container_spec_without_agent_sdk_defaults_to_claude(client):
+    """Regression for every container agent stored before agent_sdk existed: the
+    console's "Other Agent SDK" entrance has one member today, so an absent field
+    must read back as it, with the Claude default model untouched."""
+    res = client.post("/api/agents", json=CONTAINER_SPEC)
+    assert res.status_code == 202
+    spec = client.get(f"/api/agents/{res.json()['agent']['id']}").json()["spec"]
+    assert "agent_sdk" not in CONTAINER_SPEC  # the payload really omits it
+    assert spec["agent_sdk"] == "claude_agent_sdk"
+    # the Claude Agent SDK can only drive Claude models — default stays Claude
+    assert spec["model_source"] == "bedrock"
+    assert "anthropic.claude" in spec["model_id"]
+
+
+def test_container_agent_accepts_explicit_agent_sdk(client):
+    res = client.post(
+        "/api/agents",
+        json={**CONTAINER_SPEC, "name": "sdk-explicit", "agent_sdk": "claude_agent_sdk"},
+    )
+    assert res.status_code == 202
+    spec = client.get(f"/api/agents/{res.json()['agent']['id']}").json()["spec"]
+    assert spec["agent_sdk"] == "claude_agent_sdk"
+
+
+def test_container_agent_unknown_agent_sdk_422(client):
+    res = client.post(
+        "/api/agents",
+        json={**CONTAINER_SPEC, "name": "sdk-unknown", "agent_sdk": "some_future_sdk"},
+    )
+    assert res.status_code == 422
+    assert res.json()["code"] == "validation.invalid_request"
+
+
 def test_container_agent_byo_without_vpc_422(client):
     bad = {**CONTAINER_SPEC, "name": "sdk-bad-agent"}
     bad.pop("network")

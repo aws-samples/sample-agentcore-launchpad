@@ -1,7 +1,8 @@
-# 第 03 章 · 另外两种创建方式：托管 Harness 与 Claude SDK 容器
+# 第 03 章 · 另外两种创建方式：托管 Harness 与其他 Agent SDK 容器
 
 > **目标**：体验另外两条创建路径：免构建的**托管 Harness**（方式B）与经 CodeBuild
-> 打包的 **Claude Agent SDK 容器**（方式A），并理解两者如何复用同一条五阶段流水线。
+> 打包的 **其他 Agent SDK 容器**（方式A，目前唯一的 SDK 是 Claude Agent SDK），
+> 并理解两者如何复用同一条五阶段流水线。
 >
 > **前置条件**：完成[第 02 章](02-deploy-runtime.md)。容器方式需要账号里有
 > `launchpad-agent-builder` CodeBuild 项目（`make bootstrap` 已创建）。
@@ -25,7 +26,8 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
    | 字段 | 取值 |
    |---|---|
    | AGENT 名称 | `lab-fund-advisor` |
-   | 模型 | `global.anthropic.claude-sonnet-5`（默认） |
+   | 模型来源 | 点 `Bedrock`（默认是 `Bedrock Mantle`，理由同[第 02 章 2.2](02-deploy-runtime.md#22-配置-agent)） |
+   | 模型 | `Claude Sonnet 5 (global) · global.anthropic.claude-sonnet-5` |
    | 系统提示词 | `你是摩根士丹利新兴市场领先企业股票基金（MS INVF Emerging Leaders Equity Fund）的产品知识助手。只依据挂载的基金资料回答问题；资料中没有的内容，明确说明无法确认，不要猜测数字。` |
    | 工具 / 技能 / 知识库 | **本章都不选**，第 04 章再挂载 |
    | 记忆 | 短期 + 长期都开启 |
@@ -87,18 +89,22 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
 - 它的日志组只在**第一次被调用之后**才存在。所以第 08 章评估它之前，必须先在第 05 章跟它聊过一次，
   否则评估会报 `eval.harness_no_telemetry`。
 
-## 3.2 方式A：Claude Agent SDK 容器（`lab-fund-packager`）
+## 3.2 方式A：其他 Agent SDK · 容器（`lab-fund-packager`）
 
-方式A 生成一个完整的 Claude Agent SDK 应用（支持子 Agent、Hooks、MCP 服务器），经 CodeBuild
-打成 **ARM64** 镜像推到 ECR，再创建 Runtime。它是唯一能把 **Registry 技能物理打进镜像**
-（`.claude/skills/`）的方式。
+方式A 是控制台里的 **其他 Agent SDK** 入口：它是一个**类别**，具体用哪个 SDK 由配置页上的
+二级选项 `AGENT SDK` 决定（对应 `AgentSpec.agent_sdk`）。目前该类别只有一个成员
+**Claude Agent SDK**，所以本节跑出来的就是一个完整的 Claude Agent SDK 应用（支持子 Agent、
+Hooks、MCP 服务器），经 CodeBuild 打成 **ARM64** 镜像推到 ECR，再创建 Runtime。
+它是唯一能把 **Registry 技能物理打进镜像**（`.claude/skills/`）的方式。
 
-1. **打开** `02 Agent 管理`，选择 **Claude Agent SDK** 卡片，点 **下一步 ▸**。
+1. **打开** `02 Agent 管理`，选择第三张卡片 **其他 Agent SDK**，点 **下一步 ▸**。
 2. **填写**：
 
    | 字段 | 取值 |
    |---|---|
    | AGENT 名称 | `lab-fund-packager` |
+   | AGENT SDK | `Claude Agent SDK`（这个类别目前只有它，默认已选中） |
+   | 模型 | 保持默认的 Claude 模型（这条路径固定走 Bedrock Converse，没有 `模型来源` 选择器） |
    | 系统提示词 | `你是基金材料分析助手，负责把基金产品文档整理成结构化摘要，可调用子 Agent 与技能完成多步任务。` |
    | 技能 | 勾选**任意一个已发布（APPROVED）的技能**（本次实跑勾的是 `meeting-summarizer`；
      你环境里可能是别的名字。第 04 章会自己登记一个，这里只是演示技能会被物理打进镜像） |
@@ -142,7 +148,7 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
 
 ## 3.3 三种方式对照（实测数据）
 
-| | 方式B 托管 Harness | 方式A Claude SDK 容器 | 方式C Strands ZIP |
+| | 方式B 托管 Harness | 方式A 其他 Agent SDK · 容器 | 方式C Strands ZIP |
 |---|---|---|---|
 | 本实验 Agent | `lab-fund-advisor` | `lab-fund-packager` | `lab-fund-assistant` |
 | **本次实测耗时** | **18 秒** | **125 秒** | **69 秒** |

@@ -168,12 +168,6 @@
         "spec2": "tools: gateway / mcp / browser / code-interpreter",
         "spec3": "deploy ≈ 30s"
       },
-      "claudeSdk": {
-        "badge": "CONTAINER · ~6 MIN",
-        "title": "Claude Agent SDK",
-        "desc": "Full agentic loop with subagents, hooks and MCP servers. Packaged as an ARM64 container via CodeBuild, models via Bedrock.",
-        "spec3": "subagents via .claude/agents"
-      },
       "studio": {
         "badge": "ZIP PATH LIVE · STUDIO LIVE",
         "title": "Strands Studio",
@@ -181,6 +175,13 @@
         "spec2": "multi-agent topologies",
         "spec3": "config-bundle + ADOT baked in",
         "open": "Open the Strands Studio canvas"
+      },
+      "otherSdk": {
+        "badge": "CONTAINER · ~6 MIN",
+        "title": "Other Agent SDK",
+        "desc": "Bring your own agent SDK and let it run its own agentic loop. Packaged as an ARM64 container via CodeBuild, with models served by Bedrock.",
+        "spec2": "MCP servers · skills · filesystem mounts",
+        "spec3": "SDK chosen on the configure step"
       },
       "discovery": {
         "badge": "EXISTING AWS",
@@ -251,7 +252,10 @@
       "note": "Config-bundle contract baked in. Generated agents read system prompt & tool descriptions via get_config_bundle() with defaults as fallback — required for A/B experiments in the Evaluation layer. OTEL (ADOT) instrumentation is added automatically.",
       "titleZip": "CONFIGURE — STRANDS · ZIP FAST PATH",
       "templateTools": "TOOLS — STRANDS TEMPLATE",
-      "titleContainer": "CONFIGURE — CLAUDE AGENT SDK · CONTAINER",
+      "titleContainer": "CONFIGURE — OTHER AGENT SDK · CONTAINER",
+      "agentSdk": "AGENT SDK",
+      "agentSdkClaude": "Claude Agent SDK",
+      "agentSdkNote": "The Claude Agent SDK brings its own agentic loop — subagents via .claude/agents, hooks and MCP servers — and reads models from Bedrock (CLAUDE_CODE_USE_BEDROCK=1). It is the only SDK in this category today.",
       "sdkTools": "CAPABILITIES — CLAUDE SDK",
       "mcpServers": "MCP SERVERS · JSON (OPTIONAL)",
       "skills": "SKILLS — REGISTRY & CUSTOM",

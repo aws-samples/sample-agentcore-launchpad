@@ -91,7 +91,27 @@ stage (`resume_pending_jobs()` runs on startup).
 Typical timings: harness ≈ 30 s, zip ≈ 1–3 min (incl. pip), container ≈ 2–4 min (observed: 1.7 min CodeBuild + seconds to READY)
 (via CodeBuild). See [troubleshooting.md](troubleshooting.md).
 
-### Model source (方式A + 方式B)
+### Creation entrances
+
+The `/create` picker shows four cards, in this order:
+
+| # | Card | `AgentSpec.method` | What it is |
+|---|---|---|---|
+| 1 | **Managed Harness** | `harness` | 方式B — declarative, no build artifact |
+| 2 | **Strands Studio** | `zip_runtime` | 方式C — Strands template on the zip fast path; the card's nested link opens the `/create/studio` canvas, which deploys as method `studio` |
+| 3 | **Other Agent SDK** | `container` | 方式A — bring your own agent SDK, packaged as an ARM64 container via CodeBuild |
+| 4 | **Discover existing runtimes** | — | not a deploy method (see below) |
+
+The third card is a **category**, not one SDK. `AgentSpec.agent_sdk` records
+which SDK a container agent packages, and the wizard exposes it as a
+second-level choice on the configure step. It is a single-member `Literal`
+(`claude_agent_sdk`) that defaults to that member, so container specs written
+before the field existed read back unambiguously and adding a second SDK needs
+no stored-spec migration. There is deliberately **no dispatch** on the field yet:
+`app/deployer/container.py` and `app/templates/claude_sdk_agent/` stay
+unconditional until the category has a second member.
+
+### Model source (方式B + 方式C)
 
 `AgentSpec.model_source` selects the model-hosting surface: `mantle` (Bedrock
 Mantle) or `bedrock` (native Bedrock). **No API key or bootstrap resource is
@@ -109,7 +129,7 @@ of the `HarnessModelConfiguration` union and differ only in `apiFormat`:
 requires an AgentCore Identity API-key credential provider ARN that Launchpad
 never provisions.
 
-**Zip / Strands Studio (方式A)** — the model reaches Strands as an argument to
+**Zip / Strands Studio (方式C)** — the model reaches Strands as an argument to
 `Agent(model=...)`, so the source changes the *generated code*. A bare id string
 resolves to a Converse call, so `mantle` renders an explicit model object
 instead (`app/templates/strands_agent/main.py.tmpl::build_model`):
@@ -141,9 +161,10 @@ one shared emitter (`mantleModelArgs` in `frontend/src/studio/lib/models.ts`)
 serves all three canvas code generators.
 
 A2A zip agents render from a different template with no Mantle branch, so the
-wizard pins them to `bedrock` and hides the selector. The Claude Agent SDK
-(container) method is likewise pinned to `bedrock` and offered only Claude ids,
-since it cannot drive anything else.
+wizard pins them to `bedrock` and hides the selector. The Other Agent SDK
+(container) entrance is likewise pinned to `bedrock` and offered only Claude ids,
+because its one SDK today — the Claude Agent SDK — cannot drive anything else;
+the wizard shows it the SDK choice in place of the Model source control.
 
 ### Existing Runtime discovery
 

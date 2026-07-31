@@ -168,12 +168,6 @@
         "spec2": "工具:gateway / mcp / 浏览器 / 代码解释器",
         "spec3": "部署约 30 秒"
       },
-      "claudeSdk": {
-        "badge": "容器 · 约 6 分钟",
-        "title": "Claude Agent SDK",
-        "desc": "具备子 Agent、Hooks 与 MCP 服务器的完整智能体循环。经 CodeBuild 打包为 ARM64 容器,模型走 Bedrock。",
-        "spec3": "经 .claude/agents 支持子 Agent"
-      },
       "studio": {
         "badge": "ZIP 通道已上线 · Studio 已上线",
         "title": "Strands Studio",
@@ -181,6 +175,13 @@
         "spec2": "多 Agent 拓扑",
         "spec3": "内置 config-bundle 与 ADOT",
         "open": "打开 Strands Studio 画布"
+      },
+      "otherSdk": {
+        "badge": "容器 · 约 6 分钟",
+        "title": "其他 Agent SDK",
+        "desc": "自带 Agent SDK，沿用其自身的智能体循环。经 CodeBuild 打包为 ARM64 容器，模型走 Bedrock。",
+        "spec2": "MCP 服务器 · 技能 · 文件系统挂载",
+        "spec3": "SDK 在配置步骤中选择"
       },
       "discovery": {
         "badge": "已有 AWS 资源",
@@ -251,7 +252,10 @@
       "note": "已内置 Config-bundle 契约。生成的 Agent 通过 get_config_bundle() 读取系统提示词与工具描述并以默认值兜底 — 这是评估层 A/B 实验的前提。OTEL(ADOT)埋点自动注入。",
       "titleZip": "配置 — STRANDS · ZIP 快速通道",
       "templateTools": "工具 — STRANDS 模板",
-      "titleContainer": "配置 — CLAUDE AGENT SDK · 容器",
+      "titleContainer": "配置 — 其他 AGENT SDK · 容器",
+      "agentSdk": "AGENT SDK",
+      "agentSdkClaude": "Claude Agent SDK",
+      "agentSdkNote": "Claude Agent SDK 自带完整的智能体循环 —— 通过 .claude/agents 提供子 Agent，并支持 Hooks 与 MCP 服务器，模型走 Bedrock（CLAUDE_CODE_USE_BEDROCK=1）。目前该类别下仅此一个 SDK。",
       "sdkTools": "能力 — CLAUDE SDK",
       "mcpServers": "MCP 服务器 · JSON(可选)",
       "skills": "技能 — 注册表与自定义",

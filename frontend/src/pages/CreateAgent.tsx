@@ -16,6 +16,7 @@ import {
 } from "../components";
 import type {
   AgentInfo,
+  AgentSdk,
   DeploymentInfo,
   InspectedSkill,
   JobInfo,
@@ -66,12 +67,17 @@ const MODEL_SOURCE_BY_METHOD: Record<Method, ModelSource> = {
 // they stay on the Converse path regardless of the method default.
 const A2A_MODEL_SOURCE: ModelSource = "bedrock";
 
+// The single member of the "Other Agent SDK" category (the container method).
+// Selected by default and, for now, the only selectable value.
+const DEFAULT_AGENT_SDK: AgentSdk = "claude_agent_sdk";
+
 const sourceForMethod = (m: Method): ModelSource => MODEL_SOURCE_BY_METHOD[m];
 
 // Spec fields we read back when loading an existing agent into the wizard.
 interface StoredSpec {
   model_id?: string;
   model_source?: ModelSource;
+  agent_sdk?: AgentSdk;
   system_prompt?: string;
   tools?: {
     type: string;
@@ -452,6 +458,8 @@ function CreateAgentWizard() {
   const [modelSource, setModelSource] = useState<ModelSource>(DEFAULT_MODEL_SOURCE);
   // true ⇒ the model dropdown sits on "Custom model ID…" and the free-text input shows
   const [customModel, setCustomModel] = useState(false);
+  // container method only — the "Other Agent SDK" second-level choice
+  const [agentSdk, setAgentSdk] = useState<AgentSdk>(DEFAULT_AGENT_SDK);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [tools, setTools] = useState<string[]>([]);
   const [gatewayTargets, setGatewayTargets] = useState<AttachableMcp[]>([]);
@@ -612,6 +620,7 @@ function CreateAgentWizard() {
     setDetailsMode(false);
     setName("");
     applyModelSource(sourceForMethod(method));
+    setAgentSdk(DEFAULT_AGENT_SDK);
     setSystemPrompt("");
     setTools([]);
     setSelectedGateway([]);
@@ -660,6 +669,8 @@ function CreateAgentWizard() {
     method,
     model_id: modelId.trim(), // a pasted custom id may carry stray whitespace
     model_source: modelSource,
+    // container only — the other methods have no SDK choice to express
+    ...(method === "container" ? { agent_sdk: agentSdk } : {}),
     system_prompt: systemPrompt,
     tools:
       method === "harness"
@@ -760,6 +771,8 @@ function CreateAgentWizard() {
     // unknown ids, an id belonging to the other source, and a non-Claude id on a
     // Claude Agent SDK agent.
     setCustomModel(isCustomModelId(storedModel, storedSource, agent.method === "container"));
+    // absent on every container spec written before the SDK choice existed
+    setAgentSdk(spec.agent_sdk ?? DEFAULT_AGENT_SDK);
     setSystemPrompt(spec.system_prompt ?? "");
     setTools((spec.tools ?? []).filter((x) => x.type === "builtin").map((x) => x.name));
     const gatewayTools = (spec.tools ?? []).filter((x) => x.type === "gateway");
@@ -990,24 +1003,8 @@ function CreateAgentWizard() {
               </div>
             </div>
             <div
-              className={`method${method === "container" ? " sel" : ""}`}
-              style={{ "--i": 1 } as CSSProperties}
-              onClick={() => pickMethod("container")}
-              data-method="container"
-            >
-              <div className="m-badge">{t("create.methods.claudeSdk.badge")}</div>
-              <div className="m-icon">▣</div>
-              <h3>{t("create.methods.claudeSdk.title")}</h3>
-              <p>{t("create.methods.claudeSdk.desc")}</p>
-              <div className="m-specs">
-                <span>CodeBuild → ECR → Runtime</span>
-                <span>CLAUDE_CODE_USE_BEDROCK=1</span>
-                <span>{t("create.methods.claudeSdk.spec3")}</span>
-              </div>
-            </div>
-            <div
               className={`method${method === "zip_runtime" ? " sel" : ""}`}
-              style={{ "--i": 2 } as CSSProperties}
+              style={{ "--i": 1 } as CSSProperties}
               onClick={() => pickMethod("zip_runtime")}
               data-method="zip_runtime"
             >
@@ -1027,6 +1024,22 @@ function CreateAgentWizard() {
               >
                 {t("create.methods.studio.open")}
               </Link>
+            </div>
+            <div
+              className={`method${method === "container" ? " sel" : ""}`}
+              style={{ "--i": 2 } as CSSProperties}
+              onClick={() => pickMethod("container")}
+              data-method="container"
+            >
+              <div className="m-badge">{t("create.methods.otherSdk.badge")}</div>
+              <div className="m-icon">▣</div>
+              <h3>{t("create.methods.otherSdk.title")}</h3>
+              <p>{t("create.methods.otherSdk.desc")}</p>
+              <div className="m-specs">
+                <span>CodeBuild → ECR → Runtime</span>
+                <span>{t("create.methods.otherSdk.spec2")}</span>
+                <span>{t("create.methods.otherSdk.spec3")}</span>
+              </div>
             </div>
             <button
               type="button"
@@ -1113,6 +1126,32 @@ function CreateAgentWizard() {
                 placeholder="hr-assistant-v3"
               />
             </div>
+            {/* The container method is the "Other Agent SDK" entrance: it picks an
+                SDK here instead of a model source. The two blocks are one choice
+                seen from either side — the Claude Agent SDK can only drive Claude
+                models, so its source is pinned (MODEL_SOURCE_BY_METHOD) and the
+                Model source control stays hidden. */}
+            {method === "container" && (
+              <div className="field">
+                <label>{t("create.configure.agentSdk")}</label>
+                <div className="selchips">
+                  <button
+                    type="button"
+                    data-testid="agent-sdk-claude"
+                    className={`selchip${agentSdk === "claude_agent_sdk" ? " on" : ""}`}
+                    style={{ cursor: "pointer" }}
+                    onClick={() => setAgentSdk("claude_agent_sdk")}
+                  >
+                    {t("create.configure.agentSdkClaude")}{" "}
+                    {agentSdk === "claude_agent_sdk" ? "✓" : ""}
+                  </button>
+                </div>
+                <div className="note" style={{ margin: "8px 0 0" }}>
+                  <span className="i">[i]</span>
+                  <span>{t("create.configure.agentSdkNote")}</span>
+                </div>
+              </div>
+            )}
             {method !== "container" && !isA2a && (
               <div className="field">
                 <label>{t("create.configure.modelSource")}</label>

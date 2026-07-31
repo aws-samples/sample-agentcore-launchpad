@@ -88,7 +88,25 @@ generate → package → provision → deploy → register
 典型耗时:harness ≈ 30 秒,zip ≈ 1–3 分钟(含 pip),container ≈ 2–4 分钟(实测:CodeBuild 1.7 分钟 + 数秒即 READY)
 (经 CodeBuild)。见 [troubleshooting.zh-CN.md](troubleshooting.zh-CN.md)。
 
-### 模型来源(方式A + 方式B)
+### 创建入口
+
+`/create` 的入口卡片共四张,顺序如下:
+
+| # | 卡片 | `AgentSpec.method` | 说明 |
+|---|---|---|---|
+| 1 | **托管 Harness** | `harness` | 方式B —— 声明式,无构建产物 |
+| 2 | **Strands Studio** | `zip_runtime` | 方式C —— Strands 模板走 zip 快速通道;卡片内嵌链接进入 `/create/studio` 画布,画布以 `studio` 方式部署 |
+| 3 | **其他 Agent SDK** | `container` | 方式A —— 自带 Agent SDK,经 CodeBuild 打包为 ARM64 容器 |
+| 4 | **发现现有 Runtime** | — | 不是部署方式(见下文) |
+
+第三张卡片是一个**类别**,而不是某一个 SDK。`AgentSpec.agent_sdk` 记录容器
+Agent 打包的是哪个 SDK,向导把它作为配置步骤上的二级选项。它是只有一个成员的
+`Literal`(`claude_agent_sdk`)且默认取该成员,因此在该字段出现之前写入的容器
+spec 也能被无歧义地读回,将来新增第二个 SDK 无需迁移已存 spec。目前**故意不对
+该字段做分派**:在类别出现第二个成员之前,`app/deployer/container.py` 与
+`app/templates/claude_sdk_agent/` 保持无条件实现。
+
+### 模型来源(方式B + 方式C)
 
 `AgentSpec.model_source` 决定模型的托管面:`mantle`(Bedrock Mantle)或
 `bedrock`(原生 Bedrock)。**两种托管面都不涉及任何 API Key 或新的 bootstrap
@@ -104,7 +122,7 @@ generate → package → provision → deploy → register
 有意不使用 —— 它们都需要一个 Launchpad 从未创建的 AgentCore Identity API Key
 凭证提供方 ARN。
 
-**Zip / Strands Studio(方式A)** —— 模型是作为参数传给 `Agent(model=...)` 的,
+**Zip / Strands Studio(方式C)** —— 模型是作为参数传给 `Agent(model=...)` 的,
 因此来源会改变**生成的代码**。裸字符串 ID 会被解析为 Converse 调用,所以
 `mantle` 会改为渲染一个显式的模型对象
 (`app/templates/strands_agent/main.py.tmpl::build_model`):
@@ -133,8 +151,9 @@ Flow 生成的代码与之前逐字节一致。SDK 禁止两者同时出现,而�
 `mantleModelArgs`)。
 
 A2A zip Agent 使用另一个没有 Mantle 分支的模板,因此向导会将其固定为
-`bedrock` 并隐藏该选择器。Claude Agent SDK(container)方式同样固定为
-`bedrock` 且只提供 Claude 模型,因为它只能驱动 Claude。
+`bedrock` 并隐藏该选择器。其他 Agent SDK(container)入口同样固定为
+`bedrock` 且只提供 Claude 模型 —— 该类别目前唯一的成员 Claude Agent SDK 只能
+驱动 Claude;向导在此处用 SDK 选项替代模型来源控件。
 
 ## 调用链
 

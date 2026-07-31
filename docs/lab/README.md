@@ -19,7 +19,7 @@
 |---|---|---|
 | `lab-fund-assistant` | 方式C · Strands ZIP 通道 | 主线：对话 / 公共 API / 可观测 / 评估 / A/B / 金丝雀 |
 | `lab-fund-advisor` | 方式B · 托管 Harness | 挂知识库与技能，做有依据的文档问答 |
-| `lab-fund-packager` | 方式A · Claude SDK 容器 | 演示 CodeBuild → ECR → Runtime 路径 |
+| `lab-fund-packager` | 方式A · 其他 Agent SDK 容器 | 演示 CodeBuild → ECR → Runtime 路径 |
 
 **实验主线**：第 05 章会看到没有知识库的 Agent 把持仓数编成「20–35 只」
 （真实是 25–40 目标 / 28 实际）；第 08 章用带真值的数据集把它量化成分数（接地度只有 0.60）；

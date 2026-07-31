@@ -14,10 +14,11 @@ Launchpad is one console (React) over one FastAPI backend, plus shared AWS
 infrastructure (CDK) and a vendored Strands Studio sub-app. It delivers:
 
 - **Three creation methods, one deploy pipeline.** Users create agents via
-  **方式A — Claude Agent SDK** (packaged into an ARM64 container image),
   **方式B — Managed Harness** (declarative `CreateHarness` — model, prompt,
-  tools, skills, memory; no code, no build), or **方式C — Strands Studio**
-  (visual drag-and-drop canvas that generates Strands code). All three
+  tools, skills, memory; no code, no build), **方式C — Strands Studio**
+  (visual drag-and-drop canvas that generates Strands code), or
+  **方式A — Other Agent SDK** (bring your own agent SDK — the Claude Agent SDK
+  today — packaged into an ARM64 container image). All three
   converge into the same five-stage pipeline and land on AgentCore Runtime
   (方式A/C) or the managed Harness service (方式B).
 - **Registry console.** A visual front end over AgentCore Registry for

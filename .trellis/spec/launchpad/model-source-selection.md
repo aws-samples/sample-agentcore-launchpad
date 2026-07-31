@@ -82,8 +82,13 @@ source each method starts on. The invariant to preserve: **a method only default
 to `mantle` once its execution path can actually execute a Mantle model.**
 
 - `harness` → `mantle`. The payload change alone is sufficient.
-- `container` → `bedrock`, and the Model source control is hidden. The Claude
-  Agent SDK can only drive Claude models.
+- `container` → `bedrock`, and the Model source control is hidden — the console
+  renders the `AgentSpec.agent_sdk` selector in its place, because this entrance
+  ("Other Agent SDK") chooses an SDK rather than a hosting surface. Its one SDK
+  today, the Claude Agent SDK, can only drive Claude models, so the source is
+  pinned and `modelOptionsFor(source, /* claudeOnly */ true)` narrows the ids.
+  A second SDK member that can drive other models would have to re-open the
+  control rather than widen this pin.
 - `zip_runtime` → `mantle`, since the Strands template now emits a Mantle model
   object (see below). Passing a model id to `Agent(model=...)` as a bare string
   resolves to a Converse call, so a Mantle id on that path would deploy cleanly
