@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/launchpad/index.md", "reason": "Launchpad spec index — layering + doc-language conventions"}
+{"file": ".trellis/tasks/07-31-zip-mantle-default/research/strands-mantle-support.md", "reason": "Verified strands 1.47 bedrock_mantle_config API, base-url path split, packaging, IAM, and the repo's current key-based Mantle path — do not re-derive"}
+{"file": ".trellis/spec/launchpad/a2a-agents.md", "reason": "The A2A zip template also substitutes __LAUNCHPAD_MODEL_ID__ — must not break under model_source=mantle"}
+{"file": ".trellis/spec/launchpad/harness-conversion.md", "reason": "Harness->zip conversion feeds this template; model_source must produce working Mantle code"}

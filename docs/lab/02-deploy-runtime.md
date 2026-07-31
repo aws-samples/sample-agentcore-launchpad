@@ -16,22 +16,24 @@
 ## 2.0 为什么主线 Agent 用 ZIP 通道
 
 平台有三种创建方式，能力**不等价**。后面章节要用的高级能力对方式有硬性要求，先看下面这张表
-（这也是本实验要建两个 Agent 的原因）：
+（这也是本实验要建两个 Agent 的原因）。表格列序与 `/create` 页上的卡片顺序一致；页面上还有
+第四张卡片 `发现现有 Runtime`，它不是创建方式，而是把账号里已存在的 Runtime 纳管进来：
 
-| 能力 | 托管 Harness（方式B） | Claude Agent SDK 容器（方式A） | Strands ZIP（方式C · 表单） | Strands 画布（方式C · Studio） |
+| 能力 | 托管 Harness（方式B） | Strands ZIP（方式C · 表单） | Strands 画布（方式C · Studio） | 其他 Agent SDK · 容器（方式A） |
 |---|---|---|---|---|
-| 部署耗时 | ~30 秒（免构建） | ~2–6 分钟（CodeBuild） | ~1–3 分钟（pip+zip） | ~1–3 分钟（pip+zip） |
-| 挂载知识库（托管 RAG） | 支持：网关 `Retrieve` + `AgenticRetrieveStream` | 支持：`kb_search`（单次）+ `kb_deep_search`（agentic 多步） | 支持：`kb_search`（单次）+ `kb_deep_search`（agentic 多步） | 不支持 |
-| 挂载 Registry 技能 / MCP | 支持 | 支持 | 模板内置工具 | 画布节点 |
+| 部署耗时 | ~30 秒（免构建） | ~1–3 分钟（pip+zip） | ~1–3 分钟（pip+zip） | ~2–6 分钟（CodeBuild） |
+| 挂载知识库（托管 RAG） | 支持：网关 `Retrieve` + `AgenticRetrieveStream` | 支持：`kb_search`（单次）+ `kb_deep_search`（agentic 多步） | 不支持 | 支持：`kb_search`（单次）+ `kb_deep_search`（agentic 多步） |
+| 挂载 Registry 技能 / MCP | 支持 | 模板内置工具 | 画布节点 | 支持 |
 | 可被评估（第 08 章） | 支持 | 支持 | 支持 | 支持 |
-| **配置包 A/B 实验**（第 09 章） | 明确不支持 | 不支持 | **支持，仅此方式** | 不支持 |
-| **Runtime 金丝雀**（第 10 章） | 不支持 | 暂不支持 | 支持 | 支持 |
+| **配置包 A/B 实验**（第 09 章） | 明确不支持 | **支持，仅此方式** | 不支持 | 不支持 |
+| **Runtime 金丝雀**（第 10 章） | 不支持 | 支持 | 支持 | 暂不支持 |
+| `模型来源` 选择器 | 有（默认 Mantle） | 有（默认 Mantle；A2A 子模式固定 Bedrock） | 画布上按节点选 provider | 无 —— 固定 Bedrock Converse，只提供 Claude 模型 |
 
 > Harness 不能做配置包 A/B，原因有两个：它背后的 Runtime 是「被 Harness 托管」的，
 > 不允许直接 `InvokeAgentRuntime`；而且导出的 Harness 代码里没有读取配置包的逻辑，
 > A/B 变体对它是空操作。所以第 09/10 章必须落在 ZIP 通道生成的 Agent 上。
 
-> **Harness、Claude SDK 容器和 Strands ZIP 都能挂载托管知识库，也都支持单次检索与多步
+> **Harness、其他 Agent SDK 容器和 Strands ZIP 都能挂载托管知识库，也都支持单次检索与多步
 > agentic 检索。**底层分为两条挂载通道（第 04 章会实际跑一遍）：
 > Harness 走专用 MCP 网关 `launchpad-kb-gw`，拿到逐库 `…___Retrieve` 和跨库多步的
 > `…___AgenticRetrieveStream` 两类工具；容器与 ZIP 是自己写代码的 Runtime，没有网关的
@@ -55,11 +57,16 @@
 
 1. **打开** 控制台 → `02 Agent 管理`（`/create`）。
 2. **观察** 页面顶部的三步导航：`01 · 选择方式` → `02 · 配置` → `03 · 发射`。
-3. **选择** 第三张卡片 **Strands Studio**（角标 `ZIP 通道已上线 · Studio 已上线`），
+3. **选择** 第二张卡片 **Strands Studio**（角标 `ZIP 通道已上线 · Studio 已上线`），
    然后点右侧 **下一步 ▸**。
 
 ![创建方式选择](images/02-create-methods.png)
-*图 2-1：三种创建方式。卡片上直接标注了各自的 AWS 调用链路与部署耗时。*
+*图 2-1：创建入口卡片。卡片上直接标注了各自的 AWS 调用链路与部署耗时。*
+
+> 四个入口从左到右是 **托管 Harness → Strands Studio → 其他 Agent SDK →
+> 发现现有 Runtime**。第三张是原来的「Claude Agent SDK」卡片，现在它是一个**类别**，
+> Claude Agent SDK 作为其二级选项（见[第 03 章 3.2](03-deploy-harness.md#32-方式a其他-agent-sdk--容器lab-fund-packager)）；
+> 第四张不是创建方式，而是把账号里已存在的 Runtime 纳管进来。
 
 > 卡片里的「打开 Strands Studio 画布」进入的是拖拽式多 Agent 编排画布（`/create/studio`），
 > 生成的也是 zip runtime。本章走表单路径，配置更直观。
@@ -71,7 +78,8 @@
 | 字段 | 本实验取值 |
 |---|---|
 | AGENT 名称 | `lab-fund-assistant` |
-| 模型 · BEDROCK | `global.anthropic.claude-sonnet-5`（默认值） |
+| 模型来源 | 点 `Bedrock`（**默认是 `Bedrock Mantle`，本实验要改成 `Bedrock`**） |
+| 模型 | `Claude Sonnet 5 (global) · global.anthropic.claude-sonnet-5` |
 | 系统提示词 | `你是一名基金产品投顾助手，服务于摩根士丹利新兴市场领先企业股票基金（MS INVF Emerging Leaders Equity Fund）的销售与客服团队。回答基金的策略、团队、规模与投资流程相关问题。` |
 | 工具 | `calculator`、`current_utc_time`（模板内置，默认勾选） |
 | 服务协议 | `HTTP · 标准 invocations` |
@@ -80,6 +88,16 @@
 ![配置表单](images/02-create-config.png)
 *图 2-2：配置页。底部提示 Config-bundle 契约与 OTEL(ADOT) 埋点已自动注入。
 第 07 章的追踪和第 09 章的 A/B 都依赖这两项能力。*
+
+> **为什么要手动切回 `Bedrock`**：`模型来源` 决定模型走哪个托管面 ——
+> `Bedrock Mantle`（Responses / Chat Completions API）或 `Bedrock`（Converse API）。
+> ZIP 与 Harness 两个入口的表单默认值现在是 Mantle 的 `openai.gpt-5.6-terra`，
+> 而本实验后面几章的 trace、评估分数与 A/B 结论都是在 `claude-sonnet-5` 上实测的，
+> 所以这里切回 `Bedrock` 才能和文档里的数字对得上。Mantle 侧无需任何 API Key
+> （用运行时执行角色的 IAM 权限换取短时 token），你也可以自己另建一个 Agent 试。
+> 注意 Mantle 的可用模型按区域不同：`openai.gpt-5.6-sol` 与 `openai.gpt-5.5`
+> 只在 us-east-1 提供，而 Harness 只能在自己所在区域解析 Mantle 模型（请求体里
+> 没有 region 字段），所以在 us-west-2 上给 Harness 选这两个会在首次调用时报 404。
 
 > **刻意写一个"普通"的提示词**。第 09 章的优化推荐会分析它并给出改进版本，做成 A/B 对照。
 > 如果这里就写得非常完善，那一章的对比就没什么可看的了。
@@ -154,9 +172,10 @@ curl -s http://127.0.0.1:8000/api/agents | python3 -m json.tool | head -30
 {"ts":"2026-07-26T07:42:56+00:00","stage":"register","msg":"a2a record created · FZuhhw9jbJaK · auto-submitted"}
 ```
 
-> 上面这份事件流录于 2026-07-26 首次创建时，当时平台默认模型是 `claude-sonnet-4-6`。
-> **默认已升级为 `claude-sonnet-5`**，你自己跑出来的 `generate` 行会是新模型。下面是同一个
-> Agent 切到 sonnet-5 的那次重新发布（`Update…` 而非 `Create…`，其余阶段一致）：
+> 上面这份事件流录于 2026-07-26 首次创建时，当时表单默认模型是 `claude-sonnet-4-6`。
+> 表单默认现在已改成 Mantle 的 `openai.gpt-5.6-terra`，但本实验在 2.2 里把 `模型来源` 切回
+> `Bedrock` 并选了 `claude-sonnet-5`，所以你跑出来的 `generate` 行会是 `claude-sonnet-5`。
+> 下面是同一个 Agent 切到 sonnet-5 的那次重新发布（`Update…` 而非 `Create…`，其余阶段一致）：
 >
 > ```
 > 15:16:02 generate strands template · 6333 bytes · model global.anthropic.claude-sonnet-5
@@ -182,8 +201,10 @@ curl -s http://127.0.0.1:8000/api/agents | python3 -m json.tool | head -30
 回到 `02 Agent 管理` 页面底部的「现有 AGENT」表格。
 
 ![Agent 列表](images/02-agent-list.png)
-*图 2-5：`lab-fund-assistant` 已在列表首位，方式 `STRANDS`、状态 `运行中`、版本 `1`。
-每行右侧提供 编辑 / 对话 / 详情 / 删除；Harness 方式还多一个「转换 ⇄ RT」。*
+*图 2-5：表格按更新时间倒序，`lab-fund-assistant` 方式 `STRANDS`、状态 `运行中`。
+每行右侧提供 编辑 / 对话 / 详情 / 删除；Harness 方式还多一个「转换 ⇄ RT」，
+`发现现有 Runtime` 导入的行（`DISCOVERED RT`）因为不归平台所有，只有 对话 / 移除。
+方式角标 `AGENT SDK` 就是第 03 章的容器方式（原来叫 `CLAUDE SDK`）。*
 
 ---
 

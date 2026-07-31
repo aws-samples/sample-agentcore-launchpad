@@ -39,6 +39,7 @@ def render_main_py(spec: AgentSpec) -> str:
     return (
         source.replace("__LAUNCHPAD_AGENT_NAME__", spec.name)
         .replace("__LAUNCHPAD_MODEL_ID__", spec.model_id)
+        .replace("__LAUNCHPAD_MODEL_SOURCE__", spec.model_source)
         .replace("__LAUNCHPAD_SYSTEM_PROMPT__", repr(system_prompt))
         .replace("__LAUNCHPAD_MOUNTED_KBS__", repr(kbs))
         .replace("__LAUNCHPAD_KB_RESULTS__", repr(KB_RESULTS))

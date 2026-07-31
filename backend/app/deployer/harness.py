@@ -27,6 +27,19 @@ BUILTIN_TOOL_TYPES = {
 GATEWAY_SCOPE = "launchpad-gw/invoke"
 _TOOL_NAME_RE = re.compile(r"[^A-Za-z0-9_]+")
 
+# spec.model_source → HarnessBedrockModelConfig.apiFormat. Both sources ride the
+# same bedrockModelConfig union branch: Mantle-hosted models speak the Responses
+# API, native Bedrock models the Converse API, and the harness execution role
+# authenticates either — the keyed branches (openAiModelConfig / geminiModelConfig
+# / liteLlmModelConfig) would demand an AgentCore Identity API-key credential
+# provider ARN this repo never provisions. A dict, not a branch, so a third
+# source is one line.
+_API_FORMAT = {"mantle": "responses", "bedrock": "converse_stream"}
+
+
+def _api_format(spec: AgentSpec) -> str:
+    return _API_FORMAT[spec.model_source]
+
 
 def _kb_prompt(spec: AgentSpec) -> str:
     """System-prompt section mapping mounted KBs to their gateway tool names.
@@ -78,7 +91,12 @@ def build_create_params(
     params: dict[str, Any] = {
         "harnessName": spec.name.replace("-", "_"),
         "executionRoleArn": execution_role_arn,
-        "model": {"bedrockModelConfig": {"modelId": spec.model_id}},
+        "model": {
+            "bedrockModelConfig": {
+                "modelId": spec.model_id,
+                "apiFormat": _api_format(spec),
+            }
+        },
         "systemPrompt": [{"text": system_prompt}],
         "maxIterations": spec.max_iterations,
         "timeoutSeconds": spec.timeout_seconds,
@@ -226,7 +244,10 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     spec = AgentSpec(**agent.spec)
     params = _build_live_params(spec, settings.resources)
     ctx.scratch["create_params"] = params
-    ctx.log(f"harness request generated for {params['harnessName']} · model {spec.model_id}")
+    ctx.log(
+        f"harness request generated for {params['harnessName']} · "
+        f"model {spec.model_id} ({spec.model_source} · {_api_format(spec)})"
+    )
     return StageResult(detail=f"harnessName: {params['harnessName']}")
 
 

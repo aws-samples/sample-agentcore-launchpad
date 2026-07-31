@@ -88,6 +88,80 @@ generate → package → provision → deploy → register
 典型耗时:harness ≈ 30 秒,zip ≈ 1–3 分钟(含 pip),container ≈ 2–4 分钟(实测:CodeBuild 1.7 分钟 + 数秒即 READY)
 (经 CodeBuild)。见 [troubleshooting.zh-CN.md](troubleshooting.zh-CN.md)。
 
+### 创建入口
+
+`/create` 的入口卡片共四张,顺序如下:
+
+| # | 卡片 | `AgentSpec.method` | 说明 |
+|---|---|---|---|
+| 1 | **托管 Harness** | `harness` | 方式B —— 声明式,无构建产物 |
+| 2 | **Strands Studio** | `zip_runtime` | 方式C —— Strands 模板走 zip 快速通道;卡片内嵌链接进入 `/create/studio` 画布,画布以 `studio` 方式部署 |
+| 3 | **其他 Agent SDK** | `container` | 方式A —— 自带 Agent SDK,经 CodeBuild 打包为 ARM64 容器 |
+| 4 | **发现现有 Runtime** | — | 不是部署方式(见下文) |
+
+第三张卡片是一个**类别**,而不是某一个 SDK。`AgentSpec.agent_sdk` 记录容器
+Agent 打包的是哪个 SDK,向导把它作为配置步骤上的二级选项。它是只有一个成员的
+`Literal`(`claude_agent_sdk`)且默认取该成员,因此在该字段出现之前写入的容器
+spec 也能被无歧义地读回,将来新增第二个 SDK 无需迁移已存 spec。目前**故意不对
+该字段做分派**:在类别出现第二个成员之前,`app/deployer/container.py` 与
+`app/templates/claude_sdk_agent/` 保持无条件实现。
+
+### 模型来源(方式B + 方式C)
+
+`AgentSpec.model_source` 决定模型的托管面:`mantle`(Bedrock Mantle)或
+`bedrock`(原生 Bedrock)。**两种托管面都不涉及任何 API Key** —— 鉴权全部由
+Agent 自身的执行角色完成。但 Mantle 需要自己的 IAM 授权:`bedrock-mantle` 是独立
+的 IAM 服务,`bedrock:InvokeModel` **并不覆盖它**,因此
+`infra/stacks/base_stack.py` 额外授予 `bedrock-mantle:Get*`/`List*`/
+`CreateInference`、`bedrock-mantle:CallWithBearerToken`,以及以
+`aws:CalledViaLast = bedrock-mantle.amazonaws.com` 限定的 Marketplace 订阅权限
+(对齐 AWS 托管策略 `AmazonBedrockMantleInferenceAccess`)。缺了这些,Mantle
+Agent 会部署成功并进入 ACTIVE,但首次调用报 `401 access_denied`;该授权由 harness
+与 zip 共用,新增它需要执行一次 CDK 部署。该字段默认为 `bedrock`,以兼容
+此字段出现之前写入的 spec;Mantle 是**表单**默认值,按方式在控制台中分别设定
+(`frontend/src/pages/CreateAgent.tsx` 中的 `MODEL_SOURCE_BY_METHOD`)。控制台
+提供的模型清单位于 `frontend/src/lib/models.ts`。
+
+**Harness(方式B)** —— 两种来源使用 `HarnessModelConfiguration` 联合类型中
+**同一个** `bedrockModelConfig` 分支,只有 `apiFormat` 不同:Mantle 用
+`responses`,Bedrock 用 `converse_stream`(`app/deployer/harness.py`)。带 Key
+的联合分支(`openAiModelConfig` / `geminiModelConfig` / `liteLlmModelConfig`)
+有意不使用 —— 它们都需要一个 Launchpad 从未创建的 AgentCore Identity API Key
+凭证提供方 ARN。
+
+**Zip / Strands Studio(方式C)** —— 模型是作为参数传给 `Agent(model=...)` 的,
+因此来源会改变**生成的代码**。裸字符串 ID 会被解析为 Converse 调用,所以
+`mantle` 会改为渲染一个显式的模型对象
+(`app/templates/strands_agent/main.py.tmpl::build_model`):
+
+```python
+OpenAIResponsesModel(bedrock_mantle_config={"region": MANTLE_REGION}, model_id=MODEL_ID)
+```
+
+`bedrock_mantle_config` 让 Strands SDK 在**每次请求**时从环境中的 AWS 凭证链
+(即持有上述 `bedrock-mantle` 授权的 Runtime 执行角色)签发一个短期 Bearer
+令牌,并自行推导出 Endpoint。这条路径上**不存在 `BEDROCK_API_KEY`**。两个需要
+留意的推论:
+
+- Mantle spec 打包出的 `requirements.txt` 会增加 `strands-agents[openai]`
+  (`app/deployer/zip_runtime.py` 中的 `_method_requirements`);正是这个 extra
+  带来了 `openai` 与 `aws-bedrock-token-generator`。`OpenAIResponsesModel` 的
+  import 写在函数内部,因此从不安装该 extra 的 Bedrock 来源 Agent 仍能正常导入。
+- Mantle 模型托管在 **`us-east-1`**,而不是 Runtime 所在的 Region。可用
+  `LAUNCHPAD_MANTLE_REGION` 覆盖;默认值是 `us-east-1`,绝不使用 `AWS_REGION`。
+
+`/create/studio` 画布对每个节点同样输出这两种形式:节点未填 `apiKey` ⇒
+`bedrock_mantle_config`;显式填写 Key ⇒ 沿用今天的
+`client_args={"api_key": …, "base_url": …}` 覆盖形式,因此已带 Key 发布的
+Flow 生成的代码与之前逐字节一致。SDK 禁止两者同时出现,而三个画布代码生成器
+共用同一个输出函数(`frontend/src/studio/lib/models.ts` 中的
+`mantleModelArgs`)。
+
+A2A zip Agent 使用另一个没有 Mantle 分支的模板,因此向导会将其固定为
+`bedrock` 并隐藏该选择器。其他 Agent SDK(container)入口同样固定为
+`bedrock` 且只提供 Claude 模型 —— 该类别目前唯一的成员 Claude Agent SDK 只能
+驱动 Claude;向导在此处用 SDK 选项替代模型来源控件。
+
 ## 调用链
 
 Chat 交互页面(`/api/chat/{id}`)与公开 API(`/v1/agents/{id}/invoke` +

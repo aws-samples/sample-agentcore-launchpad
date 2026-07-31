@@ -91,6 +91,89 @@ stage (`resume_pending_jobs()` runs on startup).
 Typical timings: harness ≈ 30 s, zip ≈ 1–3 min (incl. pip), container ≈ 2–4 min (observed: 1.7 min CodeBuild + seconds to READY)
 (via CodeBuild). See [troubleshooting.md](troubleshooting.md).
 
+### Creation entrances
+
+The `/create` picker shows four cards, in this order:
+
+| # | Card | `AgentSpec.method` | What it is |
+|---|---|---|---|
+| 1 | **Managed Harness** | `harness` | 方式B — declarative, no build artifact |
+| 2 | **Strands Studio** | `zip_runtime` | 方式C — Strands template on the zip fast path; the card's nested link opens the `/create/studio` canvas, which deploys as method `studio` |
+| 3 | **Other Agent SDK** | `container` | 方式A — bring your own agent SDK, packaged as an ARM64 container via CodeBuild |
+| 4 | **Discover existing runtimes** | — | not a deploy method (see below) |
+
+The third card is a **category**, not one SDK. `AgentSpec.agent_sdk` records
+which SDK a container agent packages, and the wizard exposes it as a
+second-level choice on the configure step. It is a single-member `Literal`
+(`claude_agent_sdk`) that defaults to that member, so container specs written
+before the field existed read back unambiguously and adding a second SDK needs
+no stored-spec migration. There is deliberately **no dispatch** on the field yet:
+`app/deployer/container.py` and `app/templates/claude_sdk_agent/` stay
+unconditional until the category has a second member.
+
+### Model source (方式B + 方式C)
+
+`AgentSpec.model_source` selects the model-hosting surface: `mantle` (Bedrock
+Mantle) or `bedrock` (native Bedrock). **No API key is involved on either
+surface** — the agent's own execution role authenticates both. Mantle does,
+however, need its own IAM grants: `bedrock-mantle` is a separate IAM service and
+`bedrock:InvokeModel` does not cover it, so `infra/stacks/base_stack.py` grants
+`bedrock-mantle:Get*`/`List*`/`CreateInference`,
+`bedrock-mantle:CallWithBearerToken`, and Marketplace subscribe scoped to
+`aws:CalledViaLast = bedrock-mantle.amazonaws.com` (mirroring the AWS managed
+policy `AmazonBedrockMantleInferenceAccess`). Without them a Mantle agent reaches
+ACTIVE and then fails its first invoke with `401 access_denied`; the grant is
+shared by harness and zip, and adding it needs a CDK deploy.
+The field defaults to `bedrock` for backward compatibility with specs
+stored before it existed; Mantle is a *form* default, chosen per method in the
+console (`MODEL_SOURCE_BY_METHOD` in `frontend/src/pages/CreateAgent.tsx`). The
+console's model catalog lives in `frontend/src/lib/models.ts`.
+
+**Harness (方式B)** — both sources ride the **same** `bedrockModelConfig` branch
+of the `HarnessModelConfiguration` union and differ only in `apiFormat`:
+`responses` for Mantle, `converse_stream` for Bedrock
+(`app/deployer/harness.py`). The keyed union branches (`openAiModelConfig` /
+`geminiModelConfig` / `liteLlmModelConfig`) are deliberately unused — each
+requires an AgentCore Identity API-key credential provider ARN that Launchpad
+never provisions.
+
+**Zip / Strands Studio (方式C)** — the model reaches Strands as an argument to
+`Agent(model=...)`, so the source changes the *generated code*. A bare id string
+resolves to a Converse call, so `mantle` renders an explicit model object
+instead (`app/templates/strands_agent/main.py.tmpl::build_model`):
+
+```python
+OpenAIResponsesModel(bedrock_mantle_config={"region": MANTLE_REGION}, model_id=MODEL_ID)
+```
+
+`bedrock_mantle_config` makes the Strands SDK mint a short-lived bearer token
+from the ambient AWS credential chain — the Runtime execution role, which carries
+the `bedrock-mantle` grants above — on **every request**, and derive the endpoint
+itself. There is **no `BEDROCK_API_KEY`** on this path. Two consequences worth
+knowing:
+
+- The zip's `requirements.txt` gains `strands-agents[openai]` for a Mantle spec
+  (`_method_requirements` in `app/deployer/zip_runtime.py`); that extra is what
+  carries `openai` + `aws-bedrock-token-generator`. The
+  `OpenAIResponsesModel` import is function-local so a Bedrock-source agent,
+  which never installs the extra, still imports cleanly.
+- Mantle models are hosted in **`us-east-1`**, not the Region the runtime runs
+  in. `LAUNCHPAD_MANTLE_REGION` overrides it; the default is `us-east-1`, never
+  `AWS_REGION`.
+
+The `/create/studio` canvas emits the same two forms per node: no node `apiKey`
+⇒ `bedrock_mantle_config`; an explicit key ⇒ today's
+`client_args={"api_key": …, "base_url": …}` override, so flows published with a
+key keep generating byte-identical code. The SDK rejects combining the two, and
+one shared emitter (`mantleModelArgs` in `frontend/src/studio/lib/models.ts`)
+serves all three canvas code generators.
+
+A2A zip agents render from a different template with no Mantle branch, so the
+wizard pins them to `bedrock` and hides the selector. The Other Agent SDK
+(container) entrance is likewise pinned to `bedrock` and offered only Claude ids,
+because its one SDK today — the Claude Agent SDK — cannot drive anything else;
+the wizard shows it the SDK choice in place of the Model source control.
+
 ### Existing Runtime discovery
 
 `/create?view=discover` is an onboarding path alongside the three creation

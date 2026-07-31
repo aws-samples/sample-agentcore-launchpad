@@ -144,6 +144,34 @@ def test_build_conversion_spec_shape(monkeypatch):
     assert "GATEWAY_GATEWAY_X_URL" not in spec.env  # never wired in v1
 
 
+def test_build_conversion_spec_carries_model_source(monkeypatch):
+    """model_source rides along with model_id. A source harness stored before the
+    field existed converts to "bedrock" (Converse), never Mantle."""
+    monkeypatch.setattr(
+        hc, "get_settings",
+        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
+    )
+    files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT}
+    base = ["bedrock-agentcore==1.17.*"]
+
+    legacy = hc.build_conversion_spec(_source_agent(), files, base, "aurora-support-rt")
+    assert legacy.model_source == "bedrock"
+
+    mantle_source = _source_agent()
+    mantle_source.spec = {**mantle_source.spec,
+                          "model_id": "openai.gpt-5.6-sol", "model_source": "mantle"}
+    converted = hc.build_conversion_spec(mantle_source, files, base, "aurora-support-rt")
+    assert converted.model_id == "openai.gpt-5.6-sol"
+    assert converted.model_source == "mantle"
+    # The CLI export builds its own model (model/load.py), not the strands
+    # template's build_model(), so what the conversion owes a Mantle harness is
+    # the openai extra — flatten_requirements drops it as a base-pin name.
+    from app.deployer.zip_runtime import _method_requirements
+
+    assert any("[openai]" in r for r in _method_requirements(converted))
+    assert not any("[openai]" in r for r in _method_requirements(legacy))
+
+
 def test_code_bundle_validation():
     base = {"name": "x-agent", "method": "zip_runtime", "system_prompt": "p"}
     with pytest.raises(ValueError, match="main.py"):

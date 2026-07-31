@@ -168,12 +168,6 @@
         "spec2": "tools: gateway / mcp / browser / code-interpreter",
         "spec3": "deploy ≈ 30s"
       },
-      "claudeSdk": {
-        "badge": "CONTAINER · ~6 MIN",
-        "title": "Claude Agent SDK",
-        "desc": "Full agentic loop with subagents, hooks and MCP servers. Packaged as an ARM64 container via CodeBuild, models via Bedrock.",
-        "spec3": "subagents via .claude/agents"
-      },
       "studio": {
         "badge": "ZIP PATH LIVE · STUDIO LIVE",
         "title": "Strands Studio",
@@ -181,6 +175,13 @@
         "spec2": "multi-agent topologies",
         "spec3": "config-bundle + ADOT baked in",
         "open": "Open the Strands Studio canvas"
+      },
+      "otherSdk": {
+        "badge": "CONTAINER · ~6 MIN",
+        "title": "Other Agent SDK",
+        "desc": "Bring your own agent SDK and let it run its own agentic loop. Packaged as an ARM64 container via CodeBuild, with models served by Bedrock.",
+        "spec2": "MCP servers · skills · filesystem mounts",
+        "spec3": "SDK chosen on the configure step"
       },
       "discovery": {
         "badge": "EXISTING AWS",
@@ -232,7 +233,14 @@
     "configure": {
       "title": "CONFIGURE — MANAGED HARNESS",
       "name": "AGENT NAME",
-      "model": "MODEL · BEDROCK",
+      "model": "MODEL",
+      "modelSource": "MODEL SOURCE",
+      "modelSourceMantle": "Bedrock Mantle",
+      "modelSourceMantleDesc": "Offer models that use the Responses API or Chat Completions API.",
+      "modelSourceBedrock": "Bedrock",
+      "modelSourceBedrockDesc": "Offer models that use the Converse API.",
+      "modelCustom": "Custom model ID…",
+      "modelCustomPlaceholder": "e.g. global.anthropic.claude-sonnet-4-6",
       "systemPrompt": "SYSTEM PROMPT",
       "systemPromptPlaceholder": "You are a helpful assistant for…",
       "tools": "TOOLS — BUILTIN",
@@ -244,7 +252,10 @@
       "note": "Config-bundle contract baked in. Generated agents read system prompt & tool descriptions via get_config_bundle() with defaults as fallback — required for A/B experiments in the Evaluation layer. OTEL (ADOT) instrumentation is added automatically.",
       "titleZip": "CONFIGURE — STRANDS · ZIP FAST PATH",
       "templateTools": "TOOLS — STRANDS TEMPLATE",
-      "titleContainer": "CONFIGURE — CLAUDE AGENT SDK · CONTAINER",
+      "titleContainer": "CONFIGURE — OTHER AGENT SDK · CONTAINER",
+      "agentSdk": "AGENT SDK",
+      "agentSdkClaude": "Claude Agent SDK",
+      "agentSdkNote": "The Claude Agent SDK brings its own agentic loop — subagents via .claude/agents, hooks and MCP servers — and reads models from Bedrock (CLAUDE_CODE_USE_BEDROCK=1). It is the only SDK in this category today.",
       "sdkTools": "CAPABILITIES — CLAUDE SDK",
       "mcpServers": "MCP SERVERS · JSON (OPTIONAL)",
       "skills": "SKILLS — REGISTRY & CUSTOM",
@@ -1766,7 +1777,7 @@
       "none": "none",
       "memory": "Memory",
       "memoryValue": "short_term off · long_term off",
-      "missingApiKey": "An OpenAI or Mantle node has no API key. Publish is still allowed — the key can be provisioned another way — but the agent will fail at runtime without it.",
+      "missingApiKey": "An OpenAI node has no API key. Publish is still allowed — the key can be provisioned another way — but the agent will fail at runtime without it. Bedrock Mantle nodes need no key: they authenticate with the runtime execution role.",
       "errHasErrors": "Code generation has errors. Close and fix the flow.",
       "errTooLarge": "Generated code is {{size}} chars, over the {{limit}} limit.",
       "aiFixed": "Publishing AI-fixed code (not regenerated from the canvas).",
@@ -1875,9 +1886,9 @@
       "customModelPlaceholder": "e.g. us.anthropic.claude-sonnet-5",
       "mantleRegion": "Region",
       "mantleModelPlaceholder": "e.g. xai.grok-4.3",
-      "bedrockApiKey": "Bedrock API key",
-      "bedrockApiKeyPlaceholder": "Enter your Bedrock API key",
-      "bedrockApiKeyHint": "Stored as the BEDROCK_API_KEY environment variable",
+      "bedrockApiKey": "Bedrock API key (optional)",
+      "bedrockApiKeyPlaceholder": "Leave empty to authenticate with IAM",
+      "bedrockApiKeyHint": "Leave empty and Mantle authenticates with the runtime execution role — a short-lived token is minted per request. Enter a key to override; it is stored as the BEDROCK_API_KEY environment variable.",
       "apiKey": "API key",
       "apiKeyPlaceholder": "Enter your OpenAI API key",
       "apiKeyHint": "API key will be stored securely as OPENAI_API_KEY environment variable",

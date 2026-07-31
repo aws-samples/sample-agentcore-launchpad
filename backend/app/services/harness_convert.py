@@ -314,6 +314,10 @@ def build_conversion_spec(
         name=new_name,
         method="zip_runtime",
         model_id=source_spec.get("model_id") or AgentSpec.model_fields["model_id"].default,
+        model_source=(
+            source_spec.get("model_source")
+            or AgentSpec.model_fields["model_source"].default
+        ),
         system_prompt=source_spec.get("system_prompt") or "(baked into exported code)",
         tool_description_overrides=source_spec.get("tool_description_overrides") or {},
         requirements=flatten_requirements(grafted, base_requirements),

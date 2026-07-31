@@ -1,6 +1,6 @@
 import { type Node, type Edge } from '@xyflow/react';
 import { validateGraphStructure } from './graph-validator';
-import { DEFAULT_MODEL_ID, MANTLE_PROVIDER } from './models';
+import { DEFAULT_MODEL_ID, MANTLE_PROVIDER, mantleModelArgs } from './models';
 
 interface CodeGenerationResult {
   code: string;
@@ -46,7 +46,9 @@ function generateModelConfig(
   reasoningEffort?: string,
   cacheMessages?: boolean,
   cacheTools?: boolean,
-  cacheSystem?: boolean // launchpad extension: system-prompt caching
+  cacheSystem?: boolean, // launchpad extension: system-prompt caching
+  apiKey?: string,
+  region?: string
 ): string {
   // Legacy projects may still carry 'minimal' (removed from the effort scale)
   if (reasoningEffort === 'minimal') reasoningEffort = 'low';
@@ -56,11 +58,10 @@ function generateModelConfig(
 
   if (modelProvider === MANTLE_PROVIDER) {
     // Amazon Bedrock (Mantle): OpenAI-compatible endpoint via the Responses API
-    const clientArgs = [
-      `"api_key": os.environ.get("BEDROCK_API_KEY")`,
-      `"base_url": "${baseUrl}"`,
-    ];
-    const clientArgsStr = `\n    client_args={\n        ${clientArgs.join(',\n        ')}\n    },`;
+    const clientArgsStr = mantleModelArgs(
+      { apiKey, region, modelId: modelIdentifier },
+      '    ',
+    );
     const params = [`"max_output_tokens": ${maxTokens}`];
     if (thinkingEnabled && reasoningEffort) {
       params.push(`"reasoning": {"effort": "${reasoningEffort}"}`);
@@ -435,6 +436,9 @@ export function generateGraphCode(
       const temperature = data.temperature !== undefined ? data.temperature : 0.7;
       const maxTokens = data.maxTokens || 32000; // launchpad extension: default max output tokens 32000
       const baseUrl = data.baseUrl || '';
+      // Mantle auth: empty ⇒ IAM (bedrock_mantle_config); set ⇒ keyed client_args
+      const apiKey = data.apiKey || '';
+      const region = data.region || '';
       const thinkingEnabled = data.thinkingEnabled || false;
       const reasoningEffort = data.reasoningEffort || 'medium';
       const cacheMessages = (data.cacheMessages as boolean) || false;
@@ -454,7 +458,7 @@ export function generateGraphCode(
       const skillsCode = buildSkillsPluginArg(findConnectedSkills(agentNode, nodes, edges), '    ');
 
       // Generate model config
-      const modelConfig = generateModelConfig(agentVarName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages, cacheTools, cacheSystem);
+      const modelConfig = generateModelConfig(agentVarName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages, cacheTools, cacheSystem, apiKey as string, region as string);
 
       code += `# ${label} Configuration\n`;
       code += modelConfig + '\n\n';

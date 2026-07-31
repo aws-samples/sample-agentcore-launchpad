@@ -196,6 +196,48 @@ class LaunchpadBaseStack(Stack):
                 resources=["*"],
             )
         )
+        # Bedrock Mantle (model_source="mantle") is a SEPARATE IAM service from
+        # bedrock, despite having no boto3 client and no entry in botocore's
+        # endpoints.json — bedrock:InvokeModel does NOT cover it. Without these
+        # statements a Mantle agent deploys and reaches ACTIVE, then fails on its
+        # first invoke with `401 access_denied … not authorized to perform:
+        # bedrock-mantle:CreateInference on … project/default`. Mirrors the AWS
+        # managed policy AmazonBedrockMantleInferenceAccess.
+        exec_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="BedrockMantleInference",
+                actions=[
+                    "bedrock-mantle:Get*",
+                    "bedrock-mantle:List*",
+                    "bedrock-mantle:CreateInference",
+                ],
+                # Mantle models are hosted outside the stack's region, so the
+                # region segment stays wildcarded (see LAUNCHPAD_MANTLE_REGION).
+                resources=[f"arn:aws:bedrock-mantle:*:{self.account}:project/*"],
+            )
+        )
+        exec_role.add_to_policy(
+            iam.PolicyStatement(
+                # Auth is a short-lived bearer token minted from this role by
+                # aws_bedrock_token_generator, so this action is not optional.
+                sid="BedrockMantleCallWithBearerToken",
+                actions=["bedrock-mantle:CallWithBearerToken"],
+                resources=["*"],
+            )
+        )
+        exec_role.add_to_policy(
+            iam.PolicyStatement(
+                # Third-party Mantle models (the openai.* / xai.* families) are
+                # fronted by Marketplace subscriptions. Scoped by CalledViaLast so
+                # the role cannot subscribe to anything on its own initiative.
+                sid="MarketplaceOperationsFromBedrockMantleFor3pModels",
+                actions=["aws-marketplace:Subscribe", "aws-marketplace:ViewSubscriptions"],
+                resources=["*"],
+                conditions={
+                    "StringEquals": {"aws:CalledViaLast": "bedrock-mantle.amazonaws.com"}
+                },
+            )
+        )
         exec_role.add_to_policy(
             iam.PolicyStatement(
                 sid="AgentCoreDataPlane",

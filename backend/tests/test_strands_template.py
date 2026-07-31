@@ -2,6 +2,7 @@
 
 import importlib.util
 import py_compile
+import sys
 import types
 from pathlib import Path
 
@@ -15,6 +16,11 @@ SPEC = AgentSpec(
     name="tmpl-test-agent",
     method="zip_runtime",
     system_prompt="You are a template test agent. Be brief.",
+)
+
+MANTLE_MODEL_ID = "openai.gpt-5.6-sol"
+MANTLE_SPEC = SPEC.model_copy(
+    update={"model_source": "mantle", "model_id": MANTLE_MODEL_ID}
 )
 
 
@@ -34,6 +40,82 @@ def test_rendered_template_compiles(tmp_path: Path):
     target = tmp_path / "main.py"
     target.write_text(render_main_py(SPEC), encoding="utf-8")
     py_compile.compile(str(target), doraise=True)  # raises on syntax error
+
+
+def test_mantle_source_renders_a_model_object_and_no_api_key(tmp_path: Path):
+    code = render_main_py(MANTLE_SPEC)
+    assert "__LAUNCHPAD_" not in code
+    assert f'MODEL_ID = "{MANTLE_MODEL_ID}"' in code
+    assert 'MODEL_SOURCE = "mantle"' in code
+    assert "OpenAIResponsesModel" in code
+    assert "bedrock_mantle_config" in code
+    # Mantle auth is IAM-only: the SDK mints a bearer token from the execution
+    # role per request, so no key may leak into the generated agent.
+    assert "BEDROCK_API_KEY" not in code
+    assert "api_key" not in code
+    target = tmp_path / "mantle_main.py"
+    target.write_text(code, encoding="utf-8")
+    py_compile.compile(str(target), doraise=True)
+
+
+def test_bedrock_source_still_wires_a_bare_model_id_string():
+    """Regression: the default source must reach strands exactly as before."""
+    code = render_main_py(SPEC)
+    assert 'MODEL_SOURCE = "bedrock"' in code
+    assert f'MODEL_ID = "{DEFAULT_MODEL_ID}"' in code
+    # `Agent(model=<bare id>)` resolves to a Bedrock Converse call. Anything
+    # other than the plain string here silently changes every existing agent.
+    assert '"model": build_model(),' in code
+
+
+def _mantle_module(tmp_path: Path, monkeypatch, spec=MANTLE_SPEC):
+    """Import a rendered Mantle agent with a stubbed OpenAIResponsesModel.
+
+    `strands.models.openai_responses` reads the `openai` package version at
+    import time and `openai` is only present via the `openai` extra, so the real
+    module cannot be imported in this test environment — which is exactly why the
+    template's import is function-local.
+    """
+    captured: dict = {}
+
+    class FakeOpenAIResponsesModel:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    module = types.ModuleType("strands.models.openai_responses")
+    module.OpenAIResponsesModel = FakeOpenAIResponsesModel
+    monkeypatch.setitem(sys.modules, "strands.models.openai_responses", module)
+    return _import_rendered(spec, tmp_path, monkeypatch, "mantle_agent"), captured
+
+
+def test_mantle_build_model_mints_from_iam_in_the_model_region(tmp_path: Path, monkeypatch):
+    module, captured = _mantle_module(tmp_path, monkeypatch)
+    model = module.build_model()
+    assert type(model).__name__ == "FakeOpenAIResponsesModel"
+    # us-east-1, NOT AWS_REGION: the runtime lives in us-west-2, where these
+    # models are not offered.
+    assert captured == {
+        "bedrock_mantle_config": {"region": "us-east-1"},
+        "model_id": MANTLE_MODEL_ID,
+    }
+    # the Agent gets a model OBJECT, not the bare id a Converse agent gets
+    assert type(module.build_agent("a", "s").model).__name__ == "FakeOpenAIResponsesModel"
+
+
+def test_mantle_region_is_overridable(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("LAUNCHPAD_MANTLE_REGION", "eu-central-1")
+    module, captured = _mantle_module(tmp_path, monkeypatch)
+    assert module.MANTLE_REGION == "eu-central-1"
+    assert captured == {}  # build_model is lazy — nothing is constructed at import
+    module.build_model()
+    assert captured["bedrock_mantle_config"] == {"region": "eu-central-1"}
+
+
+def test_bedrock_build_model_returns_the_bare_id(template_module):
+    model = template_module.build_model()
+    assert model == DEFAULT_MODEL_ID
+    assert isinstance(model, str)  # a bare id ⇒ Bedrock Converse
+    assert template_module.build_agent("a", "s").model == DEFAULT_MODEL_ID
 
 
 def test_base_requirements_include_contract_deps():

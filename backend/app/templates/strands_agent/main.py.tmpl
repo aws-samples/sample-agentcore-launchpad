@@ -67,6 +67,12 @@ def memory_session_manager(
 
 AGENT_NAME = "__LAUNCHPAD_AGENT_NAME__"
 MODEL_ID = "__LAUNCHPAD_MODEL_ID__"
+# Which hosting surface MODEL_ID belongs to: "bedrock" (Converse API) or
+# "mantle" (Bedrock Mantle, OpenAI-compatible Responses API).
+MODEL_SOURCE = "__LAUNCHPAD_MODEL_SOURCE__"
+# Mantle models are hosted in their own region, independent of where this
+# runtime runs (AWS_REGION is us-west-2 here, where they are not offered).
+MANTLE_REGION = os.environ.get("LAUNCHPAD_MANTLE_REGION", "us-east-1")
 DEFAULT_SYSTEM_PROMPT = __LAUNCHPAD_SYSTEM_PROMPT__
 # Managed knowledge bases mounted on this agent ([] when none). Retrieval goes
 # straight to the Bedrock data plane with the runtime execution role — no
@@ -322,6 +328,29 @@ def kb_deep_search(query: str, kb_id: str = "") -> str:
     return _format_agentic(result, steps, notes)
 
 
+def build_model() -> Any:
+    """Model to hand to ``Agent(model=...)``.
+
+    Bedrock Converse accepts a bare model id string. Bedrock Mantle needs an
+    explicit model object: ``bedrock_mantle_config`` makes the Strands SDK mint a
+    short-lived bearer token from this runtime's execution role on every request,
+    so there is no API key to provision, and the SDK derives the endpoint itself.
+
+    The ``OpenAIResponsesModel`` import is function-local on purpose. That module
+    reads the ``openai`` package version at import time, so importing it at module
+    scope would make a bedrock-source agent — which never installs the ``openai``
+    extra — fail to start.
+    """
+    if MODEL_SOURCE == "mantle":
+        from strands.models.openai_responses import OpenAIResponsesModel
+
+        return OpenAIResponsesModel(
+            bedrock_mantle_config={"region": MANTLE_REGION},
+            model_id=MODEL_ID,
+        )
+    return MODEL_ID
+
+
 def build_agent(actor_id: str, session_id: str) -> Agent:
     tools = [calculator, current_utc_time]
     if MOUNTED_KBS:
@@ -334,7 +363,7 @@ def build_agent(actor_id: str, session_id: str) -> Agent:
             except Exception:
                 pass  # tool spec immutable in this strands version — default docstring stands
     kwargs: dict[str, Any] = {
-        "model": MODEL_ID,
+        "model": build_model(),
         "system_prompt": resolve_system_prompt(),
         "tools": tools,
     }

@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/launchpad/index.md", "reason": "Spec index for review conventions"}
+{"file": ".trellis/tasks/07-31-harness-model-source/research/harness-model-config.md", "reason": "Ground truth for the expected CreateHarness/UpdateHarness payload shape"}
+{"file": ".trellis/spec/launchpad/harness-conversion.md", "reason": "Conversion fidelity policy — verify model_source carry-over"}

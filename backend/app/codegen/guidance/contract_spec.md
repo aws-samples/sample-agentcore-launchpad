@@ -172,7 +172,11 @@ Never hardcode API keys or credentials. Even if the flow JSON contains an
 `apiKey` field, always read from environment variables in generated code:
 
 - OpenAI: `"api_key": os.environ.get("OPENAI_API_KEY")`
-- Amazon Bedrock (Mantle): `"api_key": os.environ.get("BEDROCK_API_KEY")`
+- Amazon Bedrock (Mantle): no key by default — emit
+  `bedrock_mantle_config={"region": <region>}` and let the SDK mint a bearer
+  token from the ambient AWS credentials. Only when the node carries a non-empty
+  `apiKey` emit `client_args={"api_key": os.environ.get("BEDROCK_API_KEY"), ...}`
+  instead. Never both — the SDK rejects that combination.
 - AWS Bedrock (`BedrockModel`): no key argument — uses ambient AWS credentials.
 
 ## 9. General code quality

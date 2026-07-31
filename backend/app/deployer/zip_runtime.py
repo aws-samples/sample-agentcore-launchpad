@@ -303,13 +303,38 @@ STUDIO_EXTRA_REQUIREMENTS = [
     "strands-agents-tools[mem0_memory]",
 ]
 
+# Carries `openai` + `aws-bedrock-token-generator`, which the template's
+# OpenAIResponsesModel(bedrock_mantle_config=...) branch needs. Emitted as its
+# own line next to the base strands-agents[otel] pin — pip intersects both specs
+# for the same project, and this is the shape the canvas publish path produces.
+#
+# The floor is NOT the base pin's >=1.0: the `openai.gpt-5.*` → /openai/v1
+# base-path split that the default Mantle model needs landed in 1.46, and
+# `bedrock_mantle_config` is a keyword argument, so an older resolution would
+# fail at first invoke instead of at package time. 1.47 is the verified SDK.
+#
+# `openai` is named again on purpose. The extra only asks for >=1.68, but
+# strands' openai_responses module imports `openai` 2.x APIs at module scope, so
+# a resolver that settles on 1.x would package cleanly and ImportError at
+# container start. Today pip picks 2.x anyway; this makes that deterministic
+# rather than a property of when the zip happened to be built.
+MANTLE_EXTRA_REQUIREMENTS = ["strands-agents[openai]>=1.47,<2", "openai>=2,<3"]
+
 
 def _method_requirements(spec: AgentSpec) -> list[str]:
     if spec.protocol == "a2a":
         from app.templates.strands_a2a_agent import a2a_base_requirements
 
         return a2a_base_requirements() + spec.requirements
-    extra = STUDIO_EXTRA_REQUIREMENTS if spec.method == "studio" else []
+    if spec.method == "studio":
+        # The canvas bakes the model into its code and knows which providers its
+        # nodes use, so it supplies its own extras via spec.requirements;
+        # spec.model_source is inert for studio specs.
+        extra = STUDIO_EXTRA_REQUIREMENTS
+    elif spec.model_source == "mantle":
+        extra = MANTLE_EXTRA_REQUIREMENTS
+    else:
+        extra = []
     return base_requirements() + extra + spec.requirements
 
 

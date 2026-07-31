@@ -25,5 +25,6 @@
 | [Observability Session Transcript](./observability-session-transcript.md) | Session-id producers (chat / `/v1` / eval / experiment gateway traffic) and where each lands in Memory; transcript resolution order chat → eval → bounded memory probe (scoped actors then bare `default`), experiment labeling is best-effort (artifacts overwritten), agent hint from `service.name`, chat-only resume button | Active |
 | [Existing Gateway Policy Management](./gateway-policy-management.md) | Live Gateway onboarding tags, Gateway-level Registry records, server-derived Harness auth, conservative Cedar lifecycle, audit, and operation contracts | Active |
 | [Existing Runtime Discovery](./runtime-discovery.md) | Paginated Runtime scan, sanitized HTTP/A2A import, external ownership, shared invoke capability, and detach-only lifecycle | Active |
+| [Model Source Selection](./model-source-selection.md) | `AgentSpec.model_source` (Bedrock Mantle vs native Bedrock): one `bedrockModelConfig` union branch differentiated by `apiFormat`, why the keyed branches are unusable, the shared frontend catalog + custom-id rules, and the per-method default invariant | Active |
 
 **Language**: All documentation should be written in **English**.
