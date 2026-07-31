@@ -163,12 +163,13 @@ function RuntimeDiscovery() {
       const result = await api.importRuntimes([...selected]);
       setImportResult(result);
       toast(
-        t(result.failed.length ? "create.discovery.importSummary" : "create.discovery.importSummarySuccess", {
+        t("create.discovery.importSummary", {
           imported: result.imported.length,
           updated: result.updated.length,
           managed: result.already_managed.length,
           failed: result.failed.length,
         }),
+        result.failed.length ? "warn" : "good",
       );
       setSelected(new Set());
       await load();
@@ -298,7 +299,9 @@ function RuntimeDiscovery() {
                   </td>
                   <td className="mono">{runtime.version || "—"}</td>
                   <td className="runtime-reason">
-                    {runtime.managed_agent_id && !externallyManaged ? (
+                    {externallyManaged ? (
+                      <Chip tone="aqua">{t("create.discovery.alreadyImported")}</Chip>
+                    ) : runtime.managed_agent_id ? (
                       <button
                         type="button"
                         className="rowact"

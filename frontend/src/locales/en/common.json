@@ -209,8 +209,8 @@
       "alreadyManaged": "MANAGED · {{name}}",
       "inventoryOnly": "INVENTORY ONLY",
       "readyToImport": "READY TO IMPORT · CHAT ENABLED",
+      "alreadyImported": "IMPORTED",
       "importSummary": "Imported {{imported}}, refreshed {{updated}}, already managed {{managed}}, failed {{failed}}.",
-      "importSummarySuccess": "Imported {{imported}}, refreshed {{updated}}, already managed {{managed}}.",
       "columns": {
         "runtime": "RUNTIME",
         "protocol": "PROTOCOL",
