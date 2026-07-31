@@ -84,13 +84,80 @@ to `mantle` once its execution path can actually execute a Mantle model.**
 - `harness` → `mantle`. The payload change alone is sufficient.
 - `container` → `bedrock`, and the Model source control is hidden. The Claude
   Agent SDK can only drive Claude models.
-- `zip_runtime` → the selector is offered, and the default follows whether the
-  Strands template can emit a Mantle model object. Passing a model id to
-  `Agent(model=...)` as a bare string resolves to a Converse call, so a Mantle id
-  on that path deploys cleanly and fails on first invoke — a break no test in
-  `make verify` can catch.
+- `zip_runtime` → `mantle`, since the Strands template now emits a Mantle model
+  object (see below). Passing a model id to `Agent(model=...)` as a bare string
+  resolves to a Converse call, so a Mantle id on that path would deploy cleanly
+  and fail on first invoke — a break no test in `make verify` can catch. That is
+  why the default and the template branch had to ship together.
+- `protocol=a2a` (a zip sub-mode) → pinned to `bedrock` with the control hidden
+  (`A2A_MODEL_SOURCE`). `templates/strands_a2a_agent/` has no Mantle branch and
+  ignores `model_source`; its wheel set is vendored into a ~46 MB zip, so adding
+  the `openai` extra there is deferred until asked for.
+
+## Zip / Studio — the Source Changes the Generated Code
+
+On the zip path the model is an *argument to generated Python*, not a request
+field, so `model_source` selects between two renderings
+(`templates/strands_agent/main.py.tmpl::build_model`):
+
+```python
+# bedrock: a bare id ⇒ Bedrock Converse (unchanged from before model_source)
+return MODEL_ID
+# mantle:
+from strands.models.openai_responses import OpenAIResponsesModel   # function-local!
+return OpenAIResponsesModel(bedrock_mantle_config={"region": MANTLE_REGION},
+                            model_id=MODEL_ID)
+```
+
+Three facts make this work, all verified against strands-agents 1.47.0:
+
+- **`bedrock_mantle_config` is IAM-only.** `resolve_bedrock_client_args`
+  (`strands/models/_openai_bedrock.py`) calls
+  `aws_bedrock_token_generator.provide_token(region=…)` on the ambient credential
+  chain — the Runtime execution role, which already holds `bedrock:InvokeModel`
+  on `*`. It is re-resolved per `AsyncOpenAI` construction, so the short-lived
+  token outlives nothing. **Never require a `BEDROCK_API_KEY` here.**
+- **`bedrock_mantle_config` and `client_args={api_key,base_url}` are mutually
+  exclusive** — `OpenAIResponsesModel.__init__` raises `ValueError`. Keep them as
+  two branches; never merge them.
+- **The import must stay function-local.** `strands/models/openai_responses.py`
+  reads the `openai` package version at *module* import, and `openai` ships only
+  in the `strands-agents[openai]` extra — which `_method_requirements`
+  (`deployer/zip_runtime.py`) adds only for a Mantle spec. A module-scope import
+  would break every Bedrock-source agent.
+- **That extra carries a version floor, unlike the base pin.**
+  `strands-agents[openai]>=1.47,<2`, not the base `>=1.0`: the
+  `openai.gpt-5.*` → `/openai/v1` base-path split the default Mantle model needs
+  landed in **1.46**, and `bedrock_mantle_config` is a keyword argument, so an
+  older resolution would package cleanly and fail at first invoke. Keep this
+  floor and `scripts/setup_exec_env.sh`'s in step. `openai>=2,<3` is pinned
+  beside it for the same reason: the extra itself only asks for `>=1.68`, while
+  `openai_responses` imports 2.x APIs at module scope, so the working
+  resolution must not be left to whenever the zip happens to be built.
+
+`MANTLE_REGION` = `LAUNCHPAD_MANTLE_REGION` or **`us-east-1`** — deliberately not
+`AWS_REGION`, which is the `us-west-2` the runtime deploys into, where these
+models are not offered. `provide_token` raises if no region resolves at all.
+
+## Canvas (`/create/studio`)
+
+The canvas bakes the model into generated Python as a literal, so `spec.model_id`
+and `spec.model_source` are **inert** for `method="studio"`; the node's
+`modelProvider` decides. `mantleModelArgs` in `studio/lib/models.ts` is the one
+emitter for both forms and is called by all three generators (agent scope,
+agent-as-tool scope, graph mode) — do not re-inline it:
+
+- node `apiKey` empty ⇒ `bedrock_mantle_config` (the default);
+- node `apiKey` set ⇒ the legacy `client_args` form, so flows published with a
+  key generate byte-identical code.
+
+Two related rules: only `openai.gpt-5.*` ids are served from `/openai/v1`, every
+other Mantle id from `/v1` (`mantleBaseUrl`, mirroring `_openai_bedrock.py`); and
+for non-Bedrock providers the generators read `modelIdentifier = modelName`, not
+`modelId`, so any Mantle default must set **both** to the same id.
 
 ## Related
 
 - [Harness → Runtime Conversion](./harness-conversion.md) — the conversion
-  carries `model_source` alongside `model_id`.
+  carries `model_source` alongside `model_id`, so a Mantle harness converts into
+  a working Mantle zip.

@@ -77,6 +77,18 @@ def test_a2a_requirements_carry_the_a2a_extra():
     assert not any("[a2a" in r for r in http_reqs)
 
 
+def test_a2a_ignores_model_source_without_breaking():
+    """A2A is Converse-only (see strands_a2a_agent/__init__.py). A mantle spec must
+    still render and compile — the wizard is what keeps A2A off Mantle."""
+    spec = _spec(protocol="a2a", model_source="mantle", model_id="openai.gpt-5.6-sol")
+    code, _ = _generate_code(spec)
+    compile(code, "main.py", "exec")
+    assert 'MODEL_ID = "openai.gpt-5.6-sol"' in code
+    assert "OpenAIResponsesModel" not in code
+    # and the openai extra is not dragged into the vendored a2a wheel set
+    assert not any("[openai]" in r for r in _method_requirements(spec))
+
+
 # ─── deploy params ───────────────────────────────────────────────────────────
 class _Stub:
     def __init__(self):

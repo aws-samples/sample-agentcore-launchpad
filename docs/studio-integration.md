@@ -91,13 +91,28 @@ generated import line always references. When any node uses the **OpenAI** or
 `strands-agents[openai]` to `spec.requirements` — both providers import
 `openai` at module top level (shipped only via that extra, which also pulls
 the Bedrock token generator Mantle auth needs). Prompt caching, adaptive
-thinking, and skills need no extra. Generated code reads `OPENAI_API_KEY` /
-`BEDROCK_API_KEY` from the runtime env; the publish body maps each node's
-`apiKey` onto `spec.env` (first non-empty per provider), which the deploy
-stage passes as `environmentVariables` (platform-injected keys like
-`LAUNCHPAD_MEMORY_ID` win over same-named user env). The key lives in
-`studio_flow` → ledger spec in plaintext, same exposure class as upstream's
-localStorage — acceptable for this demo platform.
+thinking, and skills need no extra.
+
+**Mantle auth is IAM by default — no key.** A Mantle node with no `apiKey`
+generates `OpenAIResponsesModel(bedrock_mantle_config={"region": …})`, and the
+Strands SDK mints a short-lived bearer token from the ambient AWS credential
+chain (the Runtime execution role, which already holds `bedrock:InvokeModel`) on
+every request, deriving the endpoint itself. A node that *does* carry an `apiKey`
+keeps the older override form,
+`client_args={"api_key": os.environ.get("BEDROCK_API_KEY"), "base_url": …}`, so
+flows published before this became the default generate byte-identical code. The
+SDK raises if both are given, so the emitter (`mantleModelArgs` in
+`studio/lib/models.ts`, shared by all three code generators) picks exactly one.
+OpenAI-provider nodes still genuinely need a key, and only they raise the
+"missing API key" publish warning.
+
+Generated code reads `OPENAI_API_KEY` / `BEDROCK_API_KEY` from the runtime env;
+the publish body maps each node's `apiKey` onto `spec.env` (first non-empty per
+provider), which the deploy stage passes as `environmentVariables`
+(platform-injected keys like `LAUNCHPAD_MEMORY_ID` win over same-named user env).
+When a key *is* entered it lives in `studio_flow` → ledger spec in plaintext,
+same exposure class as upstream's localStorage — acceptable for this demo
+platform, and avoidable entirely on the default IAM path.
 
 ## Skill bundling / 技能打包
 
@@ -200,7 +215,7 @@ Publish body assembled by `CreateAgentStudio.tsx`:
 | `system_prompt` | execution agent's systemPrompt (the agent/orchestrator/swarm reached from the input node), fallback `"Strands Studio generated agent"` | trimmed to 20000; doubles as the registry A2A card description |
 | `code` | `imports + '\n\n' + code` | ≤ 200000 chars (client-checked; schema max) |
 | `requirements` | `["strands-agents[openai]"]` iff any node `data.modelProvider` is `'OpenAI'` or `'Amazon Bedrock (Mantle)'`, else omitted | base reqs + mem0 extra come from the backend, never sent by the client |
-| `env` | `{OPENAI_API_KEY?, BEDROCK_API_KEY?}` — first non-empty `apiKey` per provider; omitted when empty | passed to the runtime as `environmentVariables`; platform keys win same-named conflicts |
+| `env` | `{OPENAI_API_KEY?, BEDROCK_API_KEY?}` — first non-empty `apiKey` per provider; omitted when empty (the Mantle default sets nothing — it authenticates with IAM) | passed to the runtime as `environmentVariables`; platform keys win same-named conflicts |
 | `memory` | `{short_term: false, long_term: false}` | generated code manages no launchpad memory |
 | `studio_flow` | `{nodes, edges, graphMode}` (React Flow arrays verbatim) | round-trips into edit mode; carries skill nodes for the package-stage bundler |
 
@@ -303,10 +318,20 @@ from upstream PR #31's conversation/fix subsystems; task
 `07-11-studio-local-debug-and-defaults`):
 
 - **Exec env**: `scripts/setup_exec_env.sh` provisions `data/exec-venv`
-  (strands-agents[openai] ≥1.46 + strands-agents-tools[mem0_memory] + mcp +
+  (strands-agents[openai] **≥1.47** + strands-agents-tools[mem0_memory] + mcp +
   bedrock-agentcore). Settings: `studio_exec_python` (both run and chat spawn
   THIS interpreter — upstream's `sys.executable` vs `uv run` split is
-  deliberately unified), `execute_timeout_s` (300).
+  deliberately unified), `execute_timeout_s` (300). The control-plane backend
+  venv stays lean (no strands, no openai) — debugging a flow locally requires
+  this script, not `uv sync`. The `[openai]` extra is what carries
+  `aws-bedrock-token-generator`, so the **default** Bedrock Mantle node debugs
+  against your ambient AWS profile with no `BEDROCK_API_KEY`. The ≥1.47 floor
+  tracks the verified SDK; the true minimum is **1.46**, where the
+  `openai.gpt-5.*` → `/openai/v1` base-path split the default model needs landed
+  (`bedrock_mantle_config` itself is older, but 1.45 served every Mantle id from
+  `/v1`). A venv built without the `[openai]` extra fails with `ImportError:
+  bedrock_mantle_config requires the 'aws-bedrock-token-generator' package` —
+  re-run the script (it upgrades in place).
 - **`POST /api/execute[/stream]`**: backend compatibility endpoint only (not
   exposed in the native canvas UI); subprocess in a temp workdir
   (process-group kill, `--user-input` flag, referenced registry skills bundled

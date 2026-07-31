@@ -147,11 +147,14 @@ export function CreateAgentStudio() {
   // Map the first non-empty apiKey per provider onto spec.env; flag when a node
   // needs a key but none was entered (publish is still allowed — the key may be
   // provisioned another way).
+  //
+  // Mantle nodes never count as missing a key: without one, codegen emits
+  // `bedrock_mantle_config` and the SDK mints a bearer token from the runtime
+  // execution role per request. Only OpenAI nodes genuinely need a secret.
   const { env: publishEnv, missingApiKey } = useMemo(() => {
     let openaiKey = "";
     let bedrockKey = "";
     let needsOpenaiKey = false;
-    let needsBedrockKey = false;
     for (const n of nodes) {
       const d = n.data as { modelProvider?: string; apiKey?: string };
       const key = (d?.apiKey ?? "").trim();
@@ -159,17 +162,13 @@ export function CreateAgentStudio() {
         needsOpenaiKey = true;
         if (key && !openaiKey) openaiKey = key;
       } else if (d?.modelProvider === MANTLE_PROVIDER) {
-        needsBedrockKey = true;
         if (key && !bedrockKey) bedrockKey = key;
       }
     }
     const env: Record<string, string> = {};
     if (openaiKey) env.OPENAI_API_KEY = openaiKey;
     if (bedrockKey) env.BEDROCK_API_KEY = bedrockKey;
-    return {
-      env,
-      missingApiKey: (needsOpenaiKey && !openaiKey) || (needsBedrockKey && !bedrockKey),
-    };
+    return { env, missingApiKey: needsOpenaiKey && !openaiKey };
   }, [nodes]);
 
   // Flow graph + API keys handed to the local-debug drawers (run/chat/fix).

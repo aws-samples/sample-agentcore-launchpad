@@ -50,17 +50,21 @@ interface LaunchState {
 
 type Method = "harness" | "zip_runtime" | "container";
 
-// Which source a method starts on. Only the harness can execute a Mantle model
-// today: the zip template still hands its model id to strands as a bare string,
-// which resolves to a Converse call, so a Mantle default there would deploy
-// cleanly and then fail on first invoke. The Model source selector is still
-// offered for zip — Mantle just is not its default until the template can emit a
-// Mantle model object.
+// Which source a method starts on. The invariant: a method only defaults to
+// mantle once its execution path can actually execute a Mantle model. The
+// harness needs only bedrockModelConfig.apiFormat; the zip/Strands template now
+// renders an OpenAIResponsesModel with bedrock_mantle_config (IAM auth, no API
+// key) when the source is mantle, so it joined it. The container method stays on
+// Claude — the Claude Agent SDK cannot drive anything else.
 const MODEL_SOURCE_BY_METHOD: Record<Method, ModelSource> = {
   harness: DEFAULT_MODEL_SOURCE,
   container: CLAUDE_SDK_MODEL_SOURCE,
-  zip_runtime: "bedrock",
+  zip_runtime: DEFAULT_MODEL_SOURCE,
 };
+
+// A2A zip agents render from a different template that has no Mantle branch, so
+// they stay on the Converse path regardless of the method default.
+const A2A_MODEL_SOURCE: ModelSource = "bedrock";
 
 const sourceForMethod = (m: Method): ModelSource => MODEL_SOURCE_BY_METHOD[m];
 
@@ -582,6 +586,10 @@ function CreateAgentWizard() {
   }, [launch, agentStatus, poll]);
 
 
+  // A2A zip agents render from strands_a2a_agent, which has no Mantle branch —
+  // the Model source control is hidden and pinned to A2A_MODEL_SOURCE for them.
+  const isA2a = method === "zip_runtime" && protocol === "a2a";
+
   // Switching source re-seeds the model to that source's catalog default.
   const applyModelSource = (source: ModelSource) => {
     setModelSource(source);
@@ -592,7 +600,11 @@ function CreateAgentWizard() {
   const pickMethod = (next: Method) => {
     if (next === method) return;
     setMethod(next);
-    applyModelSource(sourceForMethod(next));
+    // protocol survives a method switch, so re-entering zip_runtime with A2A
+    // still selected must land back on the pinned source, not the default.
+    applyModelSource(
+      next === "zip_runtime" && protocol === "a2a" ? A2A_MODEL_SOURCE : sourceForMethod(next),
+    );
   };
 
   const resetForm = () => {
@@ -1101,7 +1113,7 @@ function CreateAgentWizard() {
                 placeholder="hr-assistant-v3"
               />
             </div>
-            {method !== "container" && (
+            {method !== "container" && !isA2a && (
               <div className="field">
                 <label>{t("create.configure.modelSource")}</label>
                 <div className="selchips">
@@ -1303,7 +1315,11 @@ function CreateAgentWizard() {
                     data-testid="protocol-http"
                     className={`selchip${protocol === "http" ? " on" : ""}`}
                     style={{ cursor: "pointer" }}
-                    onClick={() => setProtocol("http")}
+                    onClick={() => {
+                      setProtocol("http");
+                      // leaving the A2A pin re-offers the method default
+                      if (isA2a) applyModelSource(sourceForMethod(method));
+                    }}
                   >
                     {t("create.configure.protocolHttp")} {protocol === "http" ? "✓" : ""}
                   </button>
@@ -1315,6 +1331,8 @@ function CreateAgentWizard() {
                     onClick={() => {
                       setProtocol("a2a");
                       setA2aSkills((prev) => (prev.length ? prev : A2A_SKILL_SEEDS));
+                      // The A2A template has no Mantle branch — see A2A_MODEL_SOURCE.
+                      if (modelSource !== A2A_MODEL_SOURCE) applyModelSource(A2A_MODEL_SOURCE);
                     }}
                   >
                     {t("create.configure.protocolA2a")} {protocol === "a2a" ? "✓" : ""}

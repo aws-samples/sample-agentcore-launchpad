@@ -6,8 +6,11 @@ from pathlib import Path
 import pytest
 
 from app.deployer.environment import runtime_environment
-from app.deployer.zip_runtime import build_zip, sanitize_runtime_name
+from app.deployer.zip_runtime import _method_requirements, build_zip, sanitize_runtime_name
+from app.schemas.agent import AgentSpec
 from app.services.agentcore import runtime as rt
+
+MANTLE_EXTRA = "strands-agents[openai]>=1.47,<2"
 
 
 class FakePipResult:
@@ -42,6 +45,44 @@ def test_build_zip_contains_expected_files(tmp_path: Path):
     cmd = fake_pip_ok.last_cmd
     assert "--platform" in cmd and "manylinux2014_aarch64" in cmd
     assert "--only-binary=:all:" in cmd
+
+
+def _spec(**over) -> AgentSpec:
+    return AgentSpec(
+        **{
+            "name": "req-test-agent",
+            "method": "zip_runtime",
+            "system_prompt": "be brief",
+            **over,
+        }
+    )
+
+
+def test_mantle_source_packages_the_openai_extra():
+    """The template's bedrock_mantle_config branch needs the token generator,
+    which ships in the strands openai extra — nothing else pulls it in."""
+    reqs = _method_requirements(_spec(model_source="mantle", model_id="openai.gpt-5.6-sol"))
+    assert MANTLE_EXTRA in reqs
+    # the base otel pin stays: pip installs the union of both extras
+    assert any(r.startswith("strands-agents[otel]") for r in reqs)
+    # openai is pinned again because the extra only asks for >=1.68 while
+    # strands' openai_responses module imports 2.x APIs at module scope
+    assert "openai>=2,<3" in reqs
+
+
+def test_bedrock_source_packages_no_openai_extra():
+    assert MANTLE_EXTRA not in _method_requirements(_spec())
+
+
+def test_studio_specs_bring_their_own_extras():
+    """The canvas knows which providers its nodes use and emits its own extra;
+    deriving one from the inert spec.model_source would be a guess."""
+    reqs = _method_requirements(
+        _spec(method="studio", model_source="mantle", requirements=["strands-agents[openai]"])
+    )
+    assert MANTLE_EXTRA not in reqs
+    assert "strands-agents[openai]" in reqs
+    assert "strands-agents-tools[mem0_memory]" in reqs
 
 
 def test_build_zip_raises_with_pip_stderr(tmp_path: Path):

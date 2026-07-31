@@ -2,7 +2,10 @@
  * Shared Bedrock model catalog and default model id.
  *
  * DEFAULT_MODEL_ID is the single source of truth for the fallback model used by
- * new agent nodes and all code-generation fallback paths.
+ * every code-generation fallback path — nodes that carry no explicit model id
+ * (orchestrator/swarm drops, legacy flows). It is deliberately NOT what a newly
+ * dropped agent node gets: that is DEFAULT_MANTLE_MODEL_ID (see FlowEditor).
+ * Changing these fallbacks would retroactively change existing flows.
  *
  * Claude Sonnet 5 / 4.6 / Opus 4.8 ids verified against
  * `aws bedrock list-inference-profiles` (us-west-2) on 2026-07-10.
@@ -10,6 +13,8 @@
  * us-east-1 (per user confirmation; not visible in this account's
  * listings — likely requires model access enablement).
  */
+
+import { MODEL_CATALOG } from '../../lib/models';
 
 export const DEFAULT_MODEL_ID = 'global.anthropic.claude-sonnet-5';
 
@@ -88,25 +93,80 @@ export const BEDROCK_MODELS: BedrockModelOption[] = [
  * Amazon Bedrock Mantle provider — OpenAI-compatible endpoint served via
  * `OpenAIResponsesModel` (OpenAI Responses API). Grok / GPT models are only
  * reachable through Mantle, not the native BedrockModel InvokeModel path.
- * Auth is a user-supplied `BEDROCK_API_KEY`; base URL is region-templated.
+ *
+ * Auth is IAM by default: `bedrock_mantle_config` makes the Strands SDK mint a
+ * short-lived bearer token from the ambient credential chain (the runtime
+ * execution role) on every request, so no key is provisioned. A node may still
+ * carry an explicit `BEDROCK_API_KEY`, which switches codegen to the keyed
+ * `client_args` form — the two are mutually exclusive in the SDK.
  */
 export const MANTLE_PROVIDER = 'Amazon Bedrock (Mantle)';
 
 /** Default region for the Mantle endpoint (grok/gpt are hosted in us-east-1). */
 export const DEFAULT_MANTLE_REGION = 'us-east-1';
 
-/** Build the Mantle OpenAI-compatible base URL for a region. */
-export function mantleBaseUrl(region: string): string {
-  return `https://bedrock-mantle.${region || DEFAULT_MANTLE_REGION}.api.aws/openai/v1`;
+/**
+ * Build the Mantle OpenAI-compatible base URL for a region and model.
+ *
+ * Only `openai.gpt-5.*` ids are served from `/openai/v1`; every other
+ * Mantle-routed model (grok, gpt-oss, …) lives under `/v1`. Mirrors
+ * `strands/models/_openai_bedrock.py:28-39`, which the SDK applies itself on the
+ * IAM path — so this matters only for the explicit-key `client_args` form.
+ */
+export function mantleBaseUrl(region: string, modelId?: string | null): string {
+  const path = modelId?.startsWith('openai.gpt-5.') ? '/openai/v1' : '/v1';
+  return `https://bedrock-mantle.${region || DEFAULT_MANTLE_REGION}.api.aws${path}`;
 }
 
+/**
+ * Mantle ids offered by the canvas. The GPT-5.6 family comes from the shared
+ * platform catalog so the wizard and the canvas cannot drift; the older ids stay
+ * listed so flows published against them do not fall into `isCustomMantleModel`.
+ */
 export const MANTLE_MODELS: BedrockModelOption[] = [
-  { model_id: 'xai.grok-4.3', model_name: 'Grok 4.3 (xAI)' },
+  ...MODEL_CATALOG.mantle.map((m) => ({ model_id: m.model_id, model_name: m.label })),
   { model_id: 'openai.gpt-5.5', model_name: 'GPT-5.5 (OpenAI)' },
   { model_id: 'openai.gpt-5.4', model_name: 'GPT-5.4 (OpenAI)' },
+  { model_id: 'xai.grok-4.3', model_name: 'Grok 4.3 (xAI)' },
 ];
 
 export const DEFAULT_MANTLE_MODEL_ID = MANTLE_MODELS[0].model_id;
+
+/**
+ * The `OpenAIResponsesModel` auth argument for a Mantle node, as Python source.
+ *
+ * Two mutually exclusive forms — the SDK raises if `client_args` carries
+ * `api_key`/`base_url` alongside `bedrock_mantle_config`:
+ *
+ * - **no key (the default)** → `bedrock_mantle_config`. The SDK mints a
+ *   short-lived bearer token from the ambient AWS credential chain (the runtime
+ *   execution role) on every request and derives the base URL itself.
+ * - **explicit key** → today's `client_args` form, so flows published with a
+ *   `BEDROCK_API_KEY` keep generating exactly the code they generated before.
+ *
+ * `indent` is the leading indentation of the emitted argument line; inner lines
+ * get four more. Shared by all three emitters (agent scope, agent-as-tool scope,
+ * and the graph generator) so the two forms cannot drift apart.
+ */
+export function mantleModelArgs(
+  opts: {
+    apiKey?: string | null;
+    region?: string | null;
+    modelId?: string | null;
+  },
+  indent: string,
+): string {
+  const region = opts.region || DEFAULT_MANTLE_REGION;
+  if (!opts.apiKey) {
+    return `\n${indent}bedrock_mantle_config={"region": "${region}"},`;
+  }
+  const inner = `${indent}    `;
+  const clientArgs = [
+    `"api_key": os.environ.get("BEDROCK_API_KEY")`,
+    `"base_url": "${mantleBaseUrl(region, opts.modelId)}"`,
+  ];
+  return `\n${indent}client_args={\n${inner}${clientArgs.join(`,\n${inner}`)}\n${indent}},`;
+}
 
 /** Display name marking a node as using a user-entered (custom) model id. */
 export const CUSTOM_MODEL_NAME = 'Custom model';

@@ -3,7 +3,7 @@
   "name": "zip-mantle-default",
   "title": "Strands Studio zip entrance defaults to Mantle GPT-5.6",
   "description": "Make the Strands Studio / zip entrance the second creation method and default it to Bedrock Mantle openai.gpt-5.6-sol. Extend the strands_agent zip template and the studio canvas codegen to emit OpenAIResponsesModel with bedrock_mantle_config (IAM-only auth, no BEDROCK_API_KEY), refresh MANTLE_MODELS, and fix the Mantle base-url path split.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": "launchpad",

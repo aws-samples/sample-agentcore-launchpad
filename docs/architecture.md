@@ -91,25 +91,59 @@ stage (`resume_pending_jobs()` runs on startup).
 Typical timings: harness ≈ 30 s, zip ≈ 1–3 min (incl. pip), container ≈ 2–4 min (observed: 1.7 min CodeBuild + seconds to READY)
 (via CodeBuild). See [troubleshooting.md](troubleshooting.md).
 
-### Model source (方式B — harness)
+### Model source (方式A + 方式B)
 
 `AgentSpec.model_source` selects the model-hosting surface: `mantle` (Bedrock
-Mantle) or `bedrock` (native Bedrock). Both ride the **same**
-`bedrockModelConfig` branch of the `HarnessModelConfiguration` union and differ
-only in `apiFormat` — `responses` for Mantle, `converse_stream` for Bedrock
-(`app/deployer/harness.py`). **No API key or bootstrap resource is involved**:
-the harness execution role authenticates either surface. The keyed union
-branches (`openAiModelConfig` / `geminiModelConfig` / `liteLlmModelConfig`) are
-deliberately unused — each requires an AgentCore Identity API-key credential
-provider ARN that Launchpad never provisions. The field defaults to `bedrock`
-for backward compatibility with specs stored before it existed; the console's
-harness form defaults to Bedrock Mantle. The zip method offers the same selector
-but still defaults to `bedrock`, because its template hands the model id to
-Strands as a bare string (a Converse call) — a Mantle id there would deploy
-cleanly and fail on first invoke. The model catalog offered by the console lives
-in `frontend/src/lib/models.ts`; the Claude Agent SDK (container) method is
-pinned to `bedrock` and offered only Claude ids, since it cannot drive anything
-else.
+Mantle) or `bedrock` (native Bedrock). **No API key or bootstrap resource is
+involved on either surface** — the agent's own execution role authenticates
+both. The field defaults to `bedrock` for backward compatibility with specs
+stored before it existed; Mantle is a *form* default, chosen per method in the
+console (`MODEL_SOURCE_BY_METHOD` in `frontend/src/pages/CreateAgent.tsx`). The
+console's model catalog lives in `frontend/src/lib/models.ts`.
+
+**Harness (方式B)** — both sources ride the **same** `bedrockModelConfig` branch
+of the `HarnessModelConfiguration` union and differ only in `apiFormat`:
+`responses` for Mantle, `converse_stream` for Bedrock
+(`app/deployer/harness.py`). The keyed union branches (`openAiModelConfig` /
+`geminiModelConfig` / `liteLlmModelConfig`) are deliberately unused — each
+requires an AgentCore Identity API-key credential provider ARN that Launchpad
+never provisions.
+
+**Zip / Strands Studio (方式A)** — the model reaches Strands as an argument to
+`Agent(model=...)`, so the source changes the *generated code*. A bare id string
+resolves to a Converse call, so `mantle` renders an explicit model object
+instead (`app/templates/strands_agent/main.py.tmpl::build_model`):
+
+```python
+OpenAIResponsesModel(bedrock_mantle_config={"region": MANTLE_REGION}, model_id=MODEL_ID)
+```
+
+`bedrock_mantle_config` makes the Strands SDK mint a short-lived bearer token
+from the ambient AWS credential chain — the Runtime execution role, which
+already holds `bedrock:InvokeModel` — on **every request**, and derive the
+endpoint itself. There is **no `BEDROCK_API_KEY`** on this path. Two
+consequences worth knowing:
+
+- The zip's `requirements.txt` gains `strands-agents[openai]` for a Mantle spec
+  (`_method_requirements` in `app/deployer/zip_runtime.py`); that extra is what
+  carries `openai` + `aws-bedrock-token-generator`. The
+  `OpenAIResponsesModel` import is function-local so a Bedrock-source agent,
+  which never installs the extra, still imports cleanly.
+- Mantle models are hosted in **`us-east-1`**, not the Region the runtime runs
+  in. `LAUNCHPAD_MANTLE_REGION` overrides it; the default is `us-east-1`, never
+  `AWS_REGION`.
+
+The `/create/studio` canvas emits the same two forms per node: no node `apiKey`
+⇒ `bedrock_mantle_config`; an explicit key ⇒ today's
+`client_args={"api_key": …, "base_url": …}` override, so flows published with a
+key keep generating byte-identical code. The SDK rejects combining the two, and
+one shared emitter (`mantleModelArgs` in `frontend/src/studio/lib/models.ts`)
+serves all three canvas code generators.
+
+A2A zip agents render from a different template with no Mantle branch, so the
+wizard pins them to `bedrock` and hides the selector. The Claude Agent SDK
+(container) method is likewise pinned to `bedrock` and offered only Claude ids,
+since it cannot drive anything else.
 
 ### Existing Runtime discovery
 

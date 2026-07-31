@@ -269,7 +269,7 @@ export function PropertyPanel({
         ...node.data,
         modelProvider: provider,
         region,
-        baseUrl: mantleBaseUrl(region),
+        baseUrl: mantleBaseUrl(region, DEFAULT_MANTLE_MODEL_ID),
         // Mantle model ids flow through the non-Bedrock (modelName) codegen path.
         modelId: DEFAULT_MANTLE_MODEL_ID,
         modelName: DEFAULT_MANTLE_MODEL_ID,
@@ -285,10 +285,14 @@ export function PropertyPanel({
     }
   };
 
-  // Mantle: region (drives baseUrl) + model dropdown (with custom id) + BEDROCK_API_KEY.
+  // Mantle: region + model (both drive baseUrl) + an OPTIONAL BEDROCK_API_KEY;
+  // without a key, codegen emits the IAM `bedrock_mantle_config` form instead.
   const renderMantleFields = (data: StudioNodeData) => {
     const region = data.region || DEFAULT_MANTLE_REGION;
     const custom = isCustomMantleModel(data.modelId, data.modelName);
+    // The base URL path depends on the model id, so it is recomputed whenever
+    // either input changes — a stale `/openai/v1` on a grok node would 404.
+    const modelForUrl = data.modelId || DEFAULT_MANTLE_MODEL_ID;
     return (
       <>
         <div className="field">
@@ -302,12 +306,12 @@ export function PropertyPanel({
               onUpdateNode(node.id, {
                 ...node.data,
                 region: r,
-                baseUrl: mantleBaseUrl(r),
+                baseUrl: mantleBaseUrl(r, modelForUrl),
               });
             }}
             placeholder={DEFAULT_MANTLE_REGION}
           />
-          <div className="studio-prop-hint mono">{mantleBaseUrl(region)}</div>
+          <div className="studio-prop-hint mono">{mantleBaseUrl(region, modelForUrl)}</div>
         </div>
 
         <div className="field">
@@ -328,6 +332,7 @@ export function PropertyPanel({
                 ...node.data,
                 modelId: e.target.value,
                 modelName: e.target.value,
+                baseUrl: mantleBaseUrl(region, e.target.value),
               });
             }}
           >
@@ -349,6 +354,7 @@ export function PropertyPanel({
                   ...node.data,
                   modelId: e.target.value,
                   modelName: e.target.value ? e.target.value : CUSTOM_MODEL_NAME,
+                  baseUrl: mantleBaseUrl(region, e.target.value),
                 })
               }
               placeholder={t('studio.prop.mantleModelPlaceholder')}

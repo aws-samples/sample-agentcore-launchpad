@@ -39,7 +39,12 @@ import {
   SkillNode,
 } from './nodes';
 import { isValidConnection } from './lib/connection-validator';
-import { DEFAULT_MODEL_ID } from './lib/models';
+import {
+  DEFAULT_MANTLE_MODEL_ID,
+  DEFAULT_MANTLE_REGION,
+  MANTLE_PROVIDER,
+  mantleBaseUrl,
+} from './lib/models';
 
 const initialNodes: Node[] = [];
 const initialEdges: Edge[] = [];
@@ -230,9 +235,15 @@ export function FlowEditor({
       if (type === 'agent') {
         Object.assign(defaultData, {
           label: 'Agent',
-          modelProvider: 'AWS Bedrock',
-          modelId: DEFAULT_MODEL_ID,
-          modelName: 'Claude Sonnet 4.6',
+          // Bedrock Mantle GPT-5.6 Sol is the platform default. modelName must
+          // repeat the id: for non-Bedrock providers the generators pick
+          // modelIdentifier = modelName, not modelId.
+          modelProvider: MANTLE_PROVIDER,
+          modelId: DEFAULT_MANTLE_MODEL_ID,
+          modelName: DEFAULT_MANTLE_MODEL_ID,
+          // Mantle auth is IAM-only unless an apiKey is entered on the node.
+          region: DEFAULT_MANTLE_REGION,
+          baseUrl: mantleBaseUrl(DEFAULT_MANTLE_REGION, DEFAULT_MANTLE_MODEL_ID),
           systemPrompt: 'You are a helpful AI assistant.',
           temperature: 0.7,
           // launchpad extension: new agents default to streaming ON + 32000 max output tokens

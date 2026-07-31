@@ -3,6 +3,15 @@
 Same __LAUNCHPAD_*__ marker scheme as the HTTP strands template (brace-safe
 Python; rendered output must always compile). The skills list renders as a
 Python literal via repr().
+
+`spec.model_source` is deliberately IGNORED here: this template always hands the
+bare model id to `Agent(model=...)`, i.e. Bedrock Converse. A Mantle id would
+render and deploy fine and then fail on first invoke, so the wizard pins A2A
+agents to `model_source="bedrock"` (`A2A_MODEL_SOURCE` in CreateAgent.tsx) and
+hides the Model source control for them. Teaching this template the Mantle branch
+also means adding the `openai` extra to `a2a_base_requirements()`, whose wheel set
+is vendored into a ~46 MB zip — deferred until A2A on Mantle is actually asked
+for.
 """
 
 from pathlib import Path

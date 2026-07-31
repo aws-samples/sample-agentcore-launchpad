@@ -163,6 +163,13 @@ def test_build_conversion_spec_carries_model_source(monkeypatch):
     converted = hc.build_conversion_spec(mantle_source, files, base, "aurora-support-rt")
     assert converted.model_id == "openai.gpt-5.6-sol"
     assert converted.model_source == "mantle"
+    # The CLI export builds its own model (model/load.py), not the strands
+    # template's build_model(), so what the conversion owes a Mantle harness is
+    # the openai extra — flatten_requirements drops it as a base-pin name.
+    from app.deployer.zip_runtime import _method_requirements
+
+    assert any("[openai]" in r for r in _method_requirements(converted))
+    assert not any("[openai]" in r for r in _method_requirements(legacy))
 
 
 def test_code_bundle_validation():
