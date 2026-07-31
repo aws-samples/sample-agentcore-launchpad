@@ -109,8 +109,15 @@ spec 也能被无歧义地读回,将来新增第二个 SDK 无需迁移已存 sp
 ### 模型来源(方式B + 方式C)
 
 `AgentSpec.model_source` 决定模型的托管面:`mantle`(Bedrock Mantle)或
-`bedrock`(原生 Bedrock)。**两种托管面都不涉及任何 API Key 或新的 bootstrap
-资源** —— 鉴权全部由 Agent 自身的执行角色完成。该字段默认为 `bedrock`,以兼容
+`bedrock`(原生 Bedrock)。**两种托管面都不涉及任何 API Key** —— 鉴权全部由
+Agent 自身的执行角色完成。但 Mantle 需要自己的 IAM 授权:`bedrock-mantle` 是独立
+的 IAM 服务,`bedrock:InvokeModel` **并不覆盖它**,因此
+`infra/stacks/base_stack.py` 额外授予 `bedrock-mantle:Get*`/`List*`/
+`CreateInference`、`bedrock-mantle:CallWithBearerToken`,以及以
+`aws:CalledViaLast = bedrock-mantle.amazonaws.com` 限定的 Marketplace 订阅权限
+(对齐 AWS 托管策略 `AmazonBedrockMantleInferenceAccess`)。缺了这些,Mantle
+Agent 会部署成功并进入 ACTIVE,但首次调用报 `401 access_denied`;该授权由 harness
+与 zip 共用,新增它需要执行一次 CDK 部署。该字段默认为 `bedrock`,以兼容
 此字段出现之前写入的 spec;Mantle 是**表单**默认值,按方式在控制台中分别设定
 (`frontend/src/pages/CreateAgent.tsx` 中的 `MODEL_SOURCE_BY_METHOD`)。控制台
 提供的模型清单位于 `frontend/src/lib/models.ts`。
@@ -132,7 +139,7 @@ OpenAIResponsesModel(bedrock_mantle_config={"region": MANTLE_REGION}, model_id=M
 ```
 
 `bedrock_mantle_config` 让 Strands SDK 在**每次请求**时从环境中的 AWS 凭证链
-(即已持有 `bedrock:InvokeModel` 的 Runtime 执行角色)签发一个短期 Bearer
+(即持有上述 `bedrock-mantle` 授权的 Runtime 执行角色)签发一个短期 Bearer
 令牌,并自行推导出 Endpoint。这条路径上**不存在 `BEDROCK_API_KEY`**。两个需要
 留意的推论:
 

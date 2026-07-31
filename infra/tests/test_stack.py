@@ -151,6 +151,60 @@ def test_execution_role_can_retrieve_managed_kbs(template: Template):
     )
 
 
+def test_execution_role_can_run_bedrock_mantle_inference(template: Template):
+    """Bedrock Mantle is a separate IAM service from bedrock — bedrock:InvokeModel
+    does not cover it, so a model_source="mantle" agent reaches ACTIVE and then
+    fails its first invoke with `401 access_denied … bedrock-mantle:CreateInference`.
+    CallWithBearerToken is equally required: auth is a short-lived bearer token
+    minted from this role, not SigV4 on the request itself."""
+    template.has_resource_properties(
+        "AWS::IAM::Policy",
+        Match.object_like(
+            {
+                "PolicyDocument": Match.object_like(
+                    {
+                        "Statement": Match.array_with(
+                            [
+                                Match.object_like(
+                                    {
+                                        "Sid": "BedrockMantleInference",
+                                        "Action": [
+                                            "bedrock-mantle:Get*",
+                                            "bedrock-mantle:List*",
+                                            "bedrock-mantle:CreateInference",
+                                        ],
+                                    }
+                                ),
+                                Match.object_like(
+                                    {
+                                        "Sid": "BedrockMantleCallWithBearerToken",
+                                        "Action": "bedrock-mantle:CallWithBearerToken",
+                                        "Resource": "*",
+                                    }
+                                ),
+                                Match.object_like(
+                                    {
+                                        "Sid": (
+                                            "MarketplaceOperationsFromBedrockMantleFor3pModels"
+                                        ),
+                                        "Condition": {
+                                            "StringEquals": {
+                                                "aws:CalledViaLast": (
+                                                    "bedrock-mantle.amazonaws.com"
+                                                )
+                                            }
+                                        },
+                                    }
+                                ),
+                            ]
+                        )
+                    }
+                )
+            }
+        ),
+    )
+
+
 def test_outputs_exported(template: Template):
     outputs = template.to_json()["Outputs"]
     for key in (

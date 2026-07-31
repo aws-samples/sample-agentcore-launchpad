@@ -114,9 +114,17 @@ unconditional until the category has a second member.
 ### Model source (方式B + 方式C)
 
 `AgentSpec.model_source` selects the model-hosting surface: `mantle` (Bedrock
-Mantle) or `bedrock` (native Bedrock). **No API key or bootstrap resource is
-involved on either surface** — the agent's own execution role authenticates
-both. The field defaults to `bedrock` for backward compatibility with specs
+Mantle) or `bedrock` (native Bedrock). **No API key is involved on either
+surface** — the agent's own execution role authenticates both. Mantle does,
+however, need its own IAM grants: `bedrock-mantle` is a separate IAM service and
+`bedrock:InvokeModel` does not cover it, so `infra/stacks/base_stack.py` grants
+`bedrock-mantle:Get*`/`List*`/`CreateInference`,
+`bedrock-mantle:CallWithBearerToken`, and Marketplace subscribe scoped to
+`aws:CalledViaLast = bedrock-mantle.amazonaws.com` (mirroring the AWS managed
+policy `AmazonBedrockMantleInferenceAccess`). Without them a Mantle agent reaches
+ACTIVE and then fails its first invoke with `401 access_denied`; the grant is
+shared by harness and zip, and adding it needs a CDK deploy.
+The field defaults to `bedrock` for backward compatibility with specs
 stored before it existed; Mantle is a *form* default, chosen per method in the
 console (`MODEL_SOURCE_BY_METHOD` in `frontend/src/pages/CreateAgent.tsx`). The
 console's model catalog lives in `frontend/src/lib/models.ts`.
@@ -139,10 +147,10 @@ OpenAIResponsesModel(bedrock_mantle_config={"region": MANTLE_REGION}, model_id=M
 ```
 
 `bedrock_mantle_config` makes the Strands SDK mint a short-lived bearer token
-from the ambient AWS credential chain — the Runtime execution role, which
-already holds `bedrock:InvokeModel` — on **every request**, and derive the
-endpoint itself. There is **no `BEDROCK_API_KEY`** on this path. Two
-consequences worth knowing:
+from the ambient AWS credential chain — the Runtime execution role, which carries
+the `bedrock-mantle` grants above — on **every request**, and derive the endpoint
+itself. There is **no `BEDROCK_API_KEY`** on this path. Two consequences worth
+knowing:
 
 - The zip's `requirements.txt` gains `strands-agents[openai]` for a Mantle spec
   (`_method_requirements` in `app/deployer/zip_runtime.py`); that extra is what

@@ -114,14 +114,33 @@ return OpenAIResponsesModel(bedrock_mantle_config={"region": MANTLE_REGION},
                             model_id=MODEL_ID)
 ```
 
-Three facts make this work, all verified against strands-agents 1.47.0:
+Four facts make this work, verified against strands-agents 1.47.0 and a live invoke:
 
 - **`bedrock_mantle_config` is IAM-only.** `resolve_bedrock_client_args`
   (`strands/models/_openai_bedrock.py`) calls
   `aws_bedrock_token_generator.provide_token(region=…)` on the ambient credential
-  chain — the Runtime execution role, which already holds `bedrock:InvokeModel`
-  on `*`. It is re-resolved per `AsyncOpenAI` construction, so the short-lived
-  token outlives nothing. **Never require a `BEDROCK_API_KEY` here.**
+  chain — the agent's execution role. It is re-resolved per `AsyncOpenAI`
+  construction, so the short-lived token outlives nothing. **Never require a
+  `BEDROCK_API_KEY` here.**
+- **Mantle needs its own IAM grants; `bedrock:InvokeModel` does NOT cover it.**
+  `bedrock-mantle` is a separate IAM service, which is easy to miss because it has
+  no boto3 client and no entry in botocore's `endpoints.json` — absence of a
+  service model is not absence of an action namespace. Getting this wrong costs a
+  full deploy to discover: the agent reaches ACTIVE and fails its *first invoke*
+  with `401 access_denied … not authorized to perform:
+  bedrock-mantle:CreateInference on arn:aws:bedrock-mantle:<region>:<acct>:project/default`.
+  `infra/stacks/base_stack.py` therefore grants, mirroring the AWS managed policy
+  `AmazonBedrockMantleInferenceAccess`:
+  `bedrock-mantle:Get*`/`List*`/`CreateInference` on
+  `arn:aws:bedrock-mantle:*:<acct>:project/*` (region wildcarded — Mantle models
+  live outside the stack's region), `bedrock-mantle:CallWithBearerToken` on `*`
+  (**not optional** — that is how the minted token is accepted), and
+  `aws-marketplace:Subscribe`/`ViewSubscriptions` gated on
+  `aws:CalledViaLast = bedrock-mantle.amazonaws.com` for the third-party
+  (`openai.*` / `xai.*`) families. Pinned by
+  `test_execution_role_can_run_bedrock_mantle_inference`. The **same role serves
+  harness and zip** (`resources["execution_role_arn"]`), so this is one grant for
+  both paths — and changing it requires a CDK deploy, not just a re-publish.
 - **`bedrock_mantle_config` and `client_args={api_key,base_url}` are mutually
   exclusive** — `OpenAIResponsesModel.__init__` raises `ValueError`. Keep them as
   two branches; never merge them.
