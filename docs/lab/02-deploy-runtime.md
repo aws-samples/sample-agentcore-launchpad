@@ -88,10 +88,13 @@
 
 > **为什么要手动切回 `Bedrock`**：`模型来源` 决定模型走哪个托管面 ——
 > `Bedrock Mantle`（Responses / Chat Completions API）或 `Bedrock`（Converse API）。
-> ZIP 与 Harness 两个入口的表单默认值现在是 Mantle 的 `openai.gpt-5.6-sol`，
+> ZIP 与 Harness 两个入口的表单默认值现在是 Mantle 的 `openai.gpt-5.6-terra`，
 > 而本实验后面几章的 trace、评估分数与 A/B 结论都是在 `claude-sonnet-5` 上实测的，
 > 所以这里切回 `Bedrock` 才能和文档里的数字对得上。Mantle 侧无需任何 API Key
 > （用运行时执行角色的 IAM 权限换取短时 token），你也可以自己另建一个 Agent 试。
+> 注意 Mantle 的可用模型按区域不同：`openai.gpt-5.6-sol` 与 `openai.gpt-5.5`
+> 只在 us-east-1 提供，而 Harness 只能在自己所在区域解析 Mantle 模型（请求体里
+> 没有 region 字段），所以在 us-west-2 上给 Harness 选这两个会在首次调用时报 404。
 
 > **刻意写一个"普通"的提示词**。第 09 章的优化推荐会分析它并给出改进版本，做成 A/B 对照。
 > 如果这里就写得非常完善，那一章的对比就没什么可看的了。

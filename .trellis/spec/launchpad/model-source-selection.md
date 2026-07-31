@@ -75,6 +75,41 @@ Two rules keep it honest:
 - `modelOptionsFor(source, claudeOnly)` narrows the list. The Claude Agent SDK
   (`container`) is offered Claude ids only, since it cannot drive anything else.
 
+## Mantle's Catalogue Is Per-Region, and Harness Cannot Choose a Region
+
+Mantle model availability differs by Region, and the two paths have **different
+amounts of control over which Region they hit**:
+
+- **zip / canvas** — the generated code passes an explicit region
+  (`LAUNCHPAD_MANTLE_REGION`, default `us-east-1`), so it can reach any Region.
+- **harness** — `HarnessBedrockModelConfig` has **no region field**. A harness
+  resolves Mantle in its own Region, so on a `us-west-2` deployment it can only
+  use ids that exist in `us-west-2`. A missing id surfaces at invoke time as
+  `404 … The model '<id>' does not exist` (not at CreateHarness).
+
+Measured 2026-07-31 — `us-east-1` 55 ids, `us-west-2` 47:
+
+| id | us-east-1 | us-west-2 |
+|---|---|---|
+| `openai.gpt-5.6-terra`, `openai.gpt-5.6-luna` | yes | yes |
+| `openai.gpt-5.4`, `xai.grok-4.3` | yes | yes |
+| `openai.gpt-5.6-sol`, `openai.gpt-5.5` | yes | **no** |
+
+Hence the catalogue leads with `openai.gpt-5.6-terra`: `defaultModelFor` takes
+entry `[0]`, so **order picks the default**, and the default has to work on both
+Regions. Region-restricted ids stay listed with the restriction in their label.
+
+To enumerate a Region's real catalogue — Mantle ids never appear in
+`bedrock:ListFoundationModels`, and there is no boto3 client:
+
+```
+GET https://bedrock-mantle.<region>.api.aws/v1/models
+Authorization: Bearer <aws_bedrock_token_generator.provide_token(region=…)>
+```
+
+Note `/v1/models` even for the `openai.gpt-5.*` family, whose *inference* is at
+`/openai/v1/responses`.
+
 ## Per-Method Defaults
 
 `MODEL_SOURCE_BY_METHOD` in `frontend/src/pages/CreateAgent.tsx` decides which

@@ -22,10 +22,22 @@ export interface ModelOption {
  * adding a `chat_completions` model later is a data change and nothing else.
  */
 export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
+  // `defaultModelFor` takes entry [0], so ORDER PICKS THE DEFAULT. Terra leads
+  // because Mantle's catalogue differs per region and Terra/Luna are in both
+  // us-east-1 and us-west-2 while Sol is us-east-1 only. A Sol default made the
+  // Harness entrance fail on a us-west-2 deployment with `404 … The model
+  // 'openai.gpt-5.6-sol' does not exist`: a harness resolves Mantle in its own
+  // Region and `bedrockModelConfig` has no region field, so unlike the zip path
+  // it cannot be pointed at us-east-1. Sol stays selectable — it is the right
+  // pick on a wholly us-east-1 deployment.
   mantle: [
-    { model_id: "openai.gpt-5.6-sol", label: "GPT-5.6 Sol", api_format: "responses" },
     { model_id: "openai.gpt-5.6-terra", label: "GPT-5.6 Terra", api_format: "responses" },
     { model_id: "openai.gpt-5.6-luna", label: "GPT-5.6 Luna", api_format: "responses" },
+    {
+      model_id: "openai.gpt-5.6-sol",
+      label: "GPT-5.6 Sol (us-east-1 only)",
+      api_format: "responses",
+    },
   ],
   bedrock: [
     {

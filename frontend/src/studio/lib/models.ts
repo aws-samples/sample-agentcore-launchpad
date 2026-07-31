@@ -102,7 +102,14 @@ export const BEDROCK_MODELS: BedrockModelOption[] = [
  */
 export const MANTLE_PROVIDER = 'Amazon Bedrock (Mantle)';
 
-/** Default region for the Mantle endpoint (grok/gpt are hosted in us-east-1). */
+/**
+ * Default region for the Mantle endpoint. us-east-1 carries the widest
+ * catalogue — every id below exists there, whereas us-west-2 is missing
+ * `openai.gpt-5.6-sol` and `openai.gpt-5.5`. Enumerate a region's real
+ * catalogue with `GET https://bedrock-mantle.<region>.api.aws/v1/models`
+ * (bearer token from `aws_bedrock_token_generator`); Mantle models never appear
+ * in `bedrock:ListFoundationModels`.
+ */
 export const DEFAULT_MANTLE_REGION = 'us-east-1';
 
 /**
@@ -125,7 +132,7 @@ export function mantleBaseUrl(region: string, modelId?: string | null): string {
  */
 export const MANTLE_MODELS: BedrockModelOption[] = [
   ...MODEL_CATALOG.mantle.map((m) => ({ model_id: m.model_id, model_name: m.label })),
-  { model_id: 'openai.gpt-5.5', model_name: 'GPT-5.5 (OpenAI)' },
+  { model_id: 'openai.gpt-5.5', model_name: 'GPT-5.5 (OpenAI, us-east-1 only)' },
   { model_id: 'openai.gpt-5.4', model_name: 'GPT-5.4 (OpenAI)' },
   { model_id: 'xai.grok-4.3', model_name: 'Grok 4.3 (xAI)' },
 ];
