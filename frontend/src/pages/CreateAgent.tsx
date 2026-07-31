@@ -163,7 +163,7 @@ function RuntimeDiscovery() {
       const result = await api.importRuntimes([...selected]);
       setImportResult(result);
       toast(
-        t("create.discovery.importSummary", {
+        t(result.failed.length ? "create.discovery.importSummary" : "create.discovery.importSummarySuccess", {
           imported: result.imported.length,
           updated: result.updated.length,
           managed: result.already_managed.length,

@@ -210,6 +210,7 @@
       "inventoryOnly": "仅纳入清单",
       "readyToImport": "可导入 · 对话可用",
       "importSummary": "已导入 {{imported}} 个，已刷新 {{updated}} 个，已有 {{managed}} 个，失败 {{failed}} 个。",
+      "importSummarySuccess": "已导入 {{imported}} 个，已刷新 {{updated}} 个，已有 {{managed}} 个。",
       "columns": {
         "runtime": "RUNTIME",
         "protocol": "协议",
