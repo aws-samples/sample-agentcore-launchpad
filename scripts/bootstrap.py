@@ -20,6 +20,56 @@ from botocore.exceptions import ClientError  # noqa: E402
 
 from app.services import bootstrap as bs  # noqa: E402
 
+AGENTCORE_CLI_VERSION = "0.21.1"
+AGENTCORE_CLI_PREFIX = REPO_ROOT / "data" / "agentcore-cli"
+AGENTCORE_CLI = AGENTCORE_CLI_PREFIX / "node_modules" / ".bin" / "agentcore"
+
+
+def _managed_agentcore_cli_version() -> str | None:
+    try:
+        proc = subprocess.run(
+            [str(AGENTCORE_CLI), "--version"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
+
+
+def ensure_agentcore_cli() -> str:
+    """Install and verify the repository-owned AgentCore CLI."""
+    version = _managed_agentcore_cli_version()
+    if version == AGENTCORE_CLI_VERSION:
+        return version
+
+    print(f"── installing @aws/agentcore@{AGENTCORE_CLI_VERSION}…")
+    subprocess.run(
+        [
+            "npm",
+            "install",
+            "--prefix",
+            str(AGENTCORE_CLI_PREFIX),
+            "--no-save",
+            "--package-lock=false",
+            f"@aws/agentcore@{AGENTCORE_CLI_VERSION}",
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+    version = _managed_agentcore_cli_version()
+    if version != AGENTCORE_CLI_VERSION:
+        found = version or "unavailable"
+        raise RuntimeError(
+            "managed AgentCore CLI verification failed: "
+            f"expected {AGENTCORE_CLI_VERSION}, got {found}"
+        )
+    return version
+
 
 def stack_exists(region: str) -> bool:
     try:
@@ -46,6 +96,7 @@ def main() -> int:
     parser.add_argument("--skip-cdk", action="store_true", help="never invoke cdk deploy")
     args = parser.parse_args()
 
+    agentcore_cli_version = ensure_agentcore_cli()
     region = args.region or bs.get_settings().region
     if not stack_exists(region):
         if args.skip_cdk:
@@ -58,6 +109,7 @@ def main() -> int:
     rows = [
         ("account", summary["account_id"]),
         ("region", summary["region"]),
+        ("agentcore CLI", agentcore_cli_version),
         ("registry", f"{summary['registry']['arn']}"),
         ("registry state", "created" if summary["registry"]["created"] else "reused"),
         ("memory", f"{summary['memory']['arn']}"),

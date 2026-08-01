@@ -13,7 +13,9 @@ and the new runtime's access to the identity provider is unverified. The
 exported code no-ops cleanly when the URL env is absent.
 """
 
+import ast
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -35,15 +37,17 @@ from app.templates.kb_support import (
 EXPORT_TIMEOUT_S = 120
 SCRATCH_PROJECT = "harnessexport"
 _SCRATCH_DIR = DATA_DIR / "harness-export"
+MANAGED_AGENTCORE_CLI = (
+    DATA_DIR / "agentcore-cli" / "node_modules" / ".bin" / "agentcore"
+)
 
-# deterministic codegen anchors of the pinned CLI (0.21.x)
+# deterministic codegen anchors of the pinned CLI (0.21.1)
 _PROMPT_CONST_RE = re.compile(
     r'^DEFAULT_SYSTEM_PROMPT\s*=\s*(?:"""|\'\'\')', re.MULTILINE
 )
 _PROMPT_USE = "system_prompt=DEFAULT_SYSTEM_PROMPT"
 _RESOLVED_PROMPT_USE = "system_prompt=resolve_system_prompt()"
-_AGENT_USE = "    agent = get_or_create_agent(session_id, user_id)"
-_AGENT_APPLY = "    _launchpad_apply_tool_descriptions(agent)"
+_AGENT_APPLY_CALL = "_launchpad_apply_tool_descriptions(agent)"
 _ENV_KEY_RE = re.compile(r'os\.(?:environ\.get|getenv)\(\s*["\']([A-Z0-9_]+)["\']')
 _TOOLS_COLLECTION_RE = re.compile(r"^tools = \[\]\s*$", re.MULTILINE)
 
@@ -133,14 +137,45 @@ def _run(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess:
     )
 
 
+def resolve_agentcore_cli() -> str:
+    """Return the repository-managed CLI path or the stable API error boundary."""
+    if not MANAGED_AGENTCORE_CLI.is_file() or not os.access(
+        MANAGED_AGENTCORE_CLI, os.X_OK
+    ):
+        raise AppError(
+            "agent.convert_cli_missing",
+            "the managed AgentCore CLI is missing or unusable; run `make bootstrap` "
+            f"to install it at {MANAGED_AGENTCORE_CLI}",
+            status_code=502,
+        )
+    return str(MANAGED_AGENTCORE_CLI)
+
+
+def _run_agentcore(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+    try:
+        return _run([resolve_agentcore_cli(), *args], cwd=cwd)
+    except subprocess.TimeoutExpired as exc:
+        raise ConversionError(
+            f"agentcore CLI timed out after {EXPORT_TIMEOUT_S} seconds"
+        ) from exc
+    except OSError as exc:
+        raise AppError(
+            "agent.convert_cli_missing",
+            "the managed AgentCore CLI is missing or unusable; run `make bootstrap`",
+            status_code=502,
+        ) from exc
+
+
 def _last_json(stdout: str) -> dict[str, Any]:
     """The CLI prints the result object on one line, sometimes followed by
     update notices — take the last parseable JSON line."""
     for line in reversed([ln for ln in stdout.splitlines() if ln.strip()]):
         try:
-            return json.loads(line)
+            body = json.loads(line)
         except ValueError:
             continue
+        if isinstance(body, dict):
+            return body
     raise ConversionError(f"agentcore CLI returned no JSON: {stdout[-300:]}")
 
 
@@ -152,43 +187,41 @@ def ensure_scratch_project() -> Path:
             or project.exists():
         return project
     _SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
-    try:
-        proc = _run(
-            ["agentcore", "create", "--project-name", SCRATCH_PROJECT,
-             "--no-agent", "--json"],
-            cwd=_SCRATCH_DIR,
-        )
-    except FileNotFoundError as exc:
-        raise AppError(
-            "agent.convert_cli_missing",
-            "the `agentcore` CLI is not installed on the backend host",
-            status_code=502,
-        ) from exc
+    proc = _run_agentcore(
+        ["create", "--project-name", SCRATCH_PROJECT, "--no-agent", "--json"],
+        cwd=_SCRATCH_DIR,
+    )
     body = _last_json(proc.stdout)
     if not body.get("success"):
         raise ConversionError(f"scratch project creation failed: {body.get('error')}")
-    return Path(body["projectPath"])
+    project_path = body.get("projectPath")
+    if not isinstance(project_path, str) or not project_path:
+        raise ConversionError("scratch project creation returned no projectPath")
+    return Path(project_path)
 
 
 def export_harness(harness_arn: str) -> dict[str, str]:
     """Run the CLI export; return {relpath: content} for the generated project."""
     project = ensure_scratch_project()
-    try:
-        proc = _run(
-            ["agentcore", "export", "harness", "--arn", harness_arn,
-             "--build", "CodeZip", "--json"],
-            cwd=project,
-        )
-    except FileNotFoundError as exc:
-        raise AppError(
-            "agent.convert_cli_missing",
-            "the `agentcore` CLI is not installed on the backend host",
-            status_code=502,
-        ) from exc
+    proc = _run_agentcore(
+        [
+            "export",
+            "harness",
+            "--arn",
+            harness_arn,
+            "--build",
+            "CodeZip",
+            "--json",
+        ],
+        cwd=project,
+    )
     body = _last_json(proc.stdout)
     if not body.get("success"):
         raise ConversionError(f"harness export failed: {body.get('error')}")
-    agent_path = Path(body["agentPath"])
+    exported_path = body.get("agentPath")
+    if not isinstance(exported_path, str) or not exported_path:
+        raise ConversionError("harness export returned no agentPath")
+    agent_path = Path(exported_path)
     files: dict[str, str] = {}
     for path in agent_path.rglob("*"):
         if not path.is_file():
@@ -232,6 +265,109 @@ tools.extend([kb_search, kb_deep_search])"""
     return main_py[:match.start()] + graft + main_py[match.end():]
 
 
+def _is_agent_apply(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+        return False
+    call = node.value
+    return (
+        isinstance(call.func, ast.Name)
+        and call.func.id == "_launchpad_apply_tool_descriptions"
+        and len(call.args) == 1
+        and not call.keywords
+        and isinstance(call.args[0], ast.Name)
+        and call.args[0].id == "agent"
+    )
+
+
+def _agent_assignment(main_py: str) -> tuple[ast.Assign, bool]:
+    try:
+        tree = ast.parse(main_py)
+    except SyntaxError as exc:
+        raise ConversionError(
+            f"graft anchor invalid Python: {exc.msg} at line {exc.lineno}"
+        ) from exc
+
+    matches: list[ast.Assign] = []
+    statement_locations: dict[int, tuple[list[ast.stmt], int]] = {}
+    for parent in ast.walk(tree):
+        for _, value in ast.iter_fields(parent):
+            if not isinstance(value, list):
+                continue
+            for index, child in enumerate(value):
+                if isinstance(child, ast.stmt):
+                    statement_locations[id(child)] = (value, index)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        call = node.value
+        if not (
+            isinstance(target, ast.Name)
+            and target.id == "agent"
+            and isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "get_or_create_agent"
+            and len(call.args) in (2, 3)
+            and not call.keywords
+            and isinstance(call.args[0], ast.Name)
+            and call.args[0].id == "session_id"
+            and isinstance(call.args[1], ast.Name)
+            and call.args[1].id == "user_id"
+            and (
+                len(call.args) == 2
+                or (
+                    isinstance(call.args[2], ast.Name)
+                    and call.args[2].id == "_skill_plugins"
+                )
+            )
+        ):
+            continue
+        matches.append(node)
+
+    if len(matches) != 1:
+        raise ConversionError(
+            "graft anchor missing: expected exactly one "
+            "supported agent = get_or_create_agent(session_id, user_id"
+            "[, _skill_plugins]) assignment "
+            "(agentcore CLI codegen changed?)"
+        )
+    assignment = matches[0]
+    body, index = statement_locations[id(assignment)]
+    apply_calls = [node for node in ast.walk(tree) if _is_agent_apply(node)]
+    apply_follows = index + 1 < len(body) and _is_agent_apply(body[index + 1])
+    if apply_calls and (not apply_follows or len(apply_calls) != 1):
+        raise ConversionError(
+            "graft anchor invalid: expected the tool-description apply call "
+            "exactly once, immediately after the supported agent assignment"
+        )
+    return assignment, apply_follows
+
+
+def _insert_agent_apply(main_py: str, assignment: ast.Assign) -> str:
+    lines = main_py.splitlines(keepends=True)
+    if assignment.end_lineno is None or assignment.end_col_offset is None:
+        raise ConversionError("graft anchor missing: agent assignment has no end position")
+    source_line = lines[assignment.lineno - 1]
+    end_line = lines[assignment.end_lineno - 1]
+    if (
+        source_line[: assignment.col_offset].strip()
+        or (
+            end_line[assignment.end_col_offset :].strip()
+            and not end_line[assignment.end_col_offset :].lstrip().startswith("#")
+        )
+    ):
+        raise ConversionError(
+            "graft anchor invalid: supported agent assignment must occupy "
+            "its own statement line"
+        )
+    indent = source_line[: len(source_line) - len(source_line.lstrip())]
+    before = "".join(lines[: assignment.end_lineno])
+    after = "".join(lines[assignment.end_lineno :])
+    separator = "" if before.endswith(("\n", "\r")) else "\n"
+    return f"{before}{separator}{indent}{_AGENT_APPLY_CALL}\n{after}"
+
+
 def graft_config_bundle(
     main_py: str,
     *,
@@ -239,6 +375,12 @@ def graft_config_bundle(
     tool_description_overrides: dict[str, str] | None = None,
 ) -> str:
     """Insert or upgrade the owned config-bundle contract idempotently."""
+    try:
+        ast.parse(main_py)
+    except SyntaxError as exc:
+        raise ConversionError(
+            f"graft anchor invalid Python: {exc.msg} at line {exc.lineno}"
+        ) from exc
     match = _PROMPT_CONST_RE.search(main_py)
     if match is None:
         raise ConversionError(
@@ -264,14 +406,9 @@ def graft_config_bundle(
         grafted = main_py[:const_end] + graft + main_py[const_end:]
 
     grafted = grafted.replace(_PROMPT_USE, _RESOLVED_PROMPT_USE)
-    apply_line = f"{_AGENT_USE}\n{_AGENT_APPLY}"
-    if _AGENT_APPLY not in grafted:
-        if _AGENT_USE not in grafted:
-            raise ConversionError(
-                "graft anchor missing: constructed agent lookup not found "
-                "(agentcore CLI codegen changed?)"
-            )
-        grafted = grafted.replace(_AGENT_USE, apply_line, 1)
+    assignment, apply_follows = _agent_assignment(grafted)
+    if not apply_follows:
+        grafted = _insert_agent_apply(grafted, assignment)
     return grafted
 
 

@@ -24,6 +24,15 @@ when missing, and the AgentCore registry (`launchpad-registry`) / memory
 (`launchpad_memory`) are created **once** and reused on every later run.
 再次运行只会打印 `reused`,不会产生重复资源。
 
+Bootstrap also owns the CLI used to convert managed Harness agents into Runtime
+agents. It installs exactly `@aws/agentcore@0.21.1` at
+`data/agentcore-cli/node_modules/.bin/agentcore` without a global npm install,
+verifies the version, and reuses it on later runs. Conversion never uses an
+`agentcore` executable from `PATH`; if the managed installation is deleted or
+unusable, rerun `make bootstrap`. This CLI version supports both Harness exports
+without Skills and Skill-bearing exports whose generated code calls
+`get_or_create_agent(session_id, user_id, _skill_plugins)`.
+
 What it creates / 创建内容:
 
 | Resource | Name |
@@ -35,6 +44,7 @@ What it creates / 创建内容:
 | IAM execution role | `launchpad-agent-execution-role` |
 | AgentCore Registry | `launchpad-registry` |
 | AgentCore Memory | `launchpad_memory` (short-term events + semantic & user-preference long-term strategies) |
+| Managed AgentCore CLI | `data/agentcore-cli/` (`@aws/agentcore@0.21.1`) |
 
 Demo user passwords are generated and stored in `config/launchpad.yaml`
 (**gitignored** — treat as local secrets; a sanitized `config/launchpad.example.yaml` is committed).

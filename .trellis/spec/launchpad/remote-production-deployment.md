@@ -164,6 +164,10 @@ Launchpad application login.
 ### Data and AWS resource contract
 
 - `data/launchpad.db` is the EC2-local ledger.
+- `data/agentcore-cli/node_modules/.bin/agentcore` is a gitignored, host-local
+  bootstrap prerequisite. `make bootstrap` installs and verifies exactly
+  `@aws/agentcore@0.21.1`; Harness conversion never uses a global CLI from
+  `PATH`.
 - `config/launchpad.yaml` is generated, Region-specific, and gitignored.
 - AWS remains the source of truth for Runtime, Harness, Memory, Gateway,
   Registry, Policy, Evaluation, and Knowledge Base state.
@@ -187,6 +191,7 @@ Launchpad application login.
 | Port 80 is reachable from arbitrary Internet clients | Replace `0.0.0.0/0` with the CloudFront managed prefix list |
 | Agent row contains a west-region ARN | Delete/recreate through east APIs; do not patch the ledger ARN |
 | `uv` is not found over non-interactive SSH | Prefix PATH with `$HOME/.local/bin` or call `/home/ubuntu/.local/bin/uv` |
+| Harness conversion reports `agent.convert_cli_missing` | Run `make bootstrap`, then verify `data/agentcore-cli/node_modules/.bin/agentcore --version` prints `0.21.1` |
 | Studio/local execution cannot import Strands tools | Run `bash scripts/setup_exec_env.sh` and verify `data/exec-venv/bin/python` |
 | Agent or dataset appears only in SQLite | Recreate through Launchpad API so AWS and ledger state converge |
 | Service exits after SSH disconnect | Run it under systemd, not an interactive shell |
@@ -196,11 +201,12 @@ Launchpad application login.
 - Good: bootstrap a fresh east stack, keep loopback application listeners,
   restrict EC2 port 80 to CloudFront, require the origin header, enable Secure
   application cookies, seed through APIs, and validate a real Agent invoke.
-- Base: back up `data/launchpad.db`, `git merge --ff-only origin/main`, deploy the
-  east CDK stack if the revision changed `infra/` (this host has no CDK CLI —
-  deploy from one that does, the stack is region-parameterised), rebuild the
-  frontend (`vite preview` serves `dist/`, so a pull alone changes nothing the
-  browser sees), restart the two application services, then verify health plus
+- Base: back up `data/launchpad.db`, `git merge --ff-only origin/main`, rerun
+  `make bootstrap` to refresh host-local prerequisites, deploy the east CDK
+  stack if the revision changed `infra/` (this host has no CDK CLI — deploy from
+  one that does, the stack is region-parameterised), rebuild the frontend
+  (`vite preview` serves `dist/`, so a pull alone changes nothing the browser
+  sees), restart the two application services, then verify health plus
   CloudFront login.
 - Bad: expose Vite/Uvicorn publicly, open nginx port 80 globally, copy west
   resource IDs, commit generated config or passwords, or treat a successful
@@ -225,6 +231,9 @@ make verify
 # Execution environment
 data/exec-venv/bin/python -c \
   'import strands, strands_tools, mcp; print("exec environment imports ok")'
+
+# Harness conversion prerequisite
+data/agentcore-cli/node_modules/.bin/agentcore --version
 ```
 
 Assertion points:
@@ -237,6 +246,7 @@ Assertion points:
 - At least one deployed agent can be invoked through the Launchpad API.
 - Registry auto-registration and any seeded Evaluation/KB rows are visible in
   the console.
+- The repository-managed AgentCore CLI reports exactly `0.21.1`.
 - Browser console and page error logs are empty after login and navigation.
 
 ## 7. Wrong vs Correct

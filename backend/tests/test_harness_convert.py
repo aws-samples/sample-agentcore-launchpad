@@ -10,6 +10,7 @@ import pytest
 import app.routers.agents as agents_router
 import app.services.harness_convert as hc
 from app.core.db import SessionLocal
+from app.core.errors import AppError
 from app.deployer.zip_runtime import write_bundle_files
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
@@ -35,6 +36,18 @@ def test_graft_inserts_bundle_contract_on_real_export():
         "system_prompt=resolve_system_prompt()"
     )
     assert grafted.count("def resolve_system_prompt") == 1
+
+
+def test_graft_supports_skill_plugin_agent_factory_call():
+    skill_export = MAIN_PY.replace(
+        "agent = get_or_create_agent(session_id, user_id)",
+        "agent = get_or_create_agent(session_id, user_id, _skill_plugins)",
+    )
+
+    grafted = hc.graft_config_bundle(skill_export)
+
+    assignment = "agent = get_or_create_agent(session_id, user_id, _skill_plugins)"
+    assert f"{assignment}\n    _launchpad_apply_tool_descriptions(agent)" in grafted
 
 
 def test_graft_is_idempotent_and_upgrades_promoted_defaults():
@@ -79,6 +92,73 @@ def test_graft_fails_without_anchors():
     partial = 'DEFAULT_SYSTEM_PROMPT = """x"""\nagent = Agent()'
     with pytest.raises(hc.ConversionError, match="construction site"):
         hc.graft_config_bundle(partial)
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "other = get_or_create_agent(session_id, user_id)",
+        "agent = get_or_create_agent(other_session, user_id)",
+        "agent = make_agent(session_id, user_id)",
+        "agent = get_or_create_agent(session_id, user_id, other_plugins)",
+        "agent = get_or_create_agent(session_id, user_id, _skill_plugins, extra)",
+        "agent = get_or_create_agent(session_id=session_id, user_id=user_id)",
+    ],
+)
+def test_graft_rejects_unrelated_agent_assignments(replacement):
+    source = MAIN_PY.replace(
+        "agent = get_or_create_agent(session_id, user_id)", replacement
+    )
+
+    with pytest.raises(hc.ConversionError, match="expected exactly one"):
+        hc.graft_config_bundle(source)
+
+
+def test_graft_rejects_malformed_generated_python():
+    with pytest.raises(hc.ConversionError, match="invalid Python"):
+        hc.graft_config_bundle(MAIN_PY + "\ndef broken(:\n")
+
+
+def test_graft_rejects_ambiguous_agent_assignments():
+    source = MAIN_PY + "\nagent = get_or_create_agent(session_id, user_id)\n"
+
+    with pytest.raises(hc.ConversionError, match="expected exactly one"):
+        hc.graft_config_bundle(source)
+
+
+def test_graft_rejects_misplaced_or_duplicate_apply_calls():
+    misplaced = MAIN_PY.replace(
+        "    prompt = _extract_prompt(payload)",
+        "    prompt = _extract_prompt(payload)\n"
+        "    _launchpad_apply_tool_descriptions(agent)",
+    )
+    with pytest.raises(hc.ConversionError, match="immediately after"):
+        hc.graft_config_bundle(misplaced)
+
+    grafted = hc.graft_config_bundle(MAIN_PY)
+    duplicate = grafted.replace(
+        "    prompt = _extract_prompt(payload)",
+        "    prompt = _extract_prompt(payload)\n"
+        "    _launchpad_apply_tool_descriptions(agent)",
+    )
+    with pytest.raises(hc.ConversionError, match="exactly once"):
+        hc.graft_config_bundle(duplicate)
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "if True: agent = get_or_create_agent(session_id, user_id)",
+        "agent = get_or_create_agent(session_id, user_id); agent.cancel()",
+    ],
+)
+def test_graft_rejects_agent_assignment_with_other_statements_on_line(replacement):
+    source = MAIN_PY.replace(
+        "agent = get_or_create_agent(session_id, user_id)", replacement
+    )
+
+    with pytest.raises(hc.ConversionError, match="own statement line"):
+        hc.graft_config_bundle(source)
 
 
 def test_direct_kb_graft_registers_both_tools_idempotently():
@@ -386,6 +466,24 @@ def test_convert_graft_failure_is_clean(client, monkeypatch):
     assert leftovers == []  # no half-registered row (A2)
 
 
+def test_convert_missing_managed_cli_uses_app_error_without_row(
+    client, tmp_path, monkeypatch
+):
+    source = _mk_agent(name="h-cli-missing")
+    monkeypatch.setattr(hc, "MANAGED_AGENTCORE_CLI", tmp_path / "missing")
+    monkeypatch.setattr(hc, "_SCRATCH_DIR", tmp_path / "harness-export")
+
+    res = client.post(f"/api/agents/{source.id}/convert")
+
+    assert res.status_code == 502
+    assert res.json()["code"] == "agent.convert_cli_missing"
+    assert "make bootstrap" in res.json()["message"]
+    db = SessionLocal()
+    leftovers = db.query(Agent).filter(Agent.name.like("h-cli-missing-rt%")).all()
+    db.close()
+    assert leftovers == []
+
+
 def test_convert_direct_kb_anchor_failure_is_clean(client, monkeypatch):
     source = _mk_agent(
         name="h-kb-graftless",
@@ -428,3 +526,111 @@ def test_last_json_skips_update_notice():
         "\n\nUpdate available: 0.21.1 → 0.24.0\n"
     # update notice AFTER the json — reversed scan still finds the object
     assert hc._last_json(out)["success"] is True
+
+
+def test_last_json_rejects_non_object_json():
+    with pytest.raises(hc.ConversionError, match="returned no JSON"):
+        hc._last_json('["not", "a", "result"]\n')
+
+
+# ─── managed CLI ────────────────────────────────────────────────────────────
+def _managed_cli(tmp_path: Path) -> Path:
+    cli = tmp_path / "agentcore-cli" / "node_modules" / ".bin" / "agentcore"
+    cli.parent.mkdir(parents=True)
+    cli.write_text("#!/bin/sh\n")
+    cli.chmod(0o755)
+    return cli
+
+
+def test_managed_cli_missing_uses_existing_error_boundary(tmp_path, monkeypatch):
+    monkeypatch.setattr(hc, "MANAGED_AGENTCORE_CLI", tmp_path / "missing")
+
+    with pytest.raises(AppError) as exc_info:
+        hc.resolve_agentcore_cli()
+
+    assert exc_info.value.code == "agent.convert_cli_missing"
+    assert exc_info.value.status_code == 502
+    assert "make bootstrap" in exc_info.value.message
+
+
+def test_managed_cli_timeout_uses_conversion_error(tmp_path, monkeypatch):
+    cli = _managed_cli(tmp_path)
+    monkeypatch.setattr(hc, "MANAGED_AGENTCORE_CLI", cli)
+
+    def timed_out(cmd, cwd):
+        raise hc.subprocess.TimeoutExpired(cmd=cmd, timeout=hc.EXPORT_TIMEOUT_S)
+
+    monkeypatch.setattr(hc, "_run", timed_out)
+
+    with pytest.raises(hc.ConversionError, match="timed out after 120 seconds"):
+        hc._run_agentcore(["export"], cwd=tmp_path)
+
+
+def test_scratch_create_uses_managed_cli_path(tmp_path, monkeypatch):
+    cli = _managed_cli(tmp_path)
+    scratch = tmp_path / "harness-export"
+    project = scratch / hc.SCRATCH_PROJECT
+    calls = []
+    monkeypatch.setattr(hc, "MANAGED_AGENTCORE_CLI", cli)
+    monkeypatch.setattr(hc, "_SCRATCH_DIR", scratch)
+
+    def fake_run(cmd, cwd):
+        calls.append((cmd, cwd))
+        return SimpleNamespace(
+            stdout=json.dumps({"success": True, "projectPath": str(project)})
+        )
+
+    monkeypatch.setattr(hc, "_run", fake_run)
+
+    assert hc.ensure_scratch_project() == project
+    assert calls == [
+        (
+            [
+                str(cli),
+                "create",
+                "--project-name",
+                hc.SCRATCH_PROJECT,
+                "--no-agent",
+                "--json",
+            ],
+            scratch,
+        )
+    ]
+
+
+def test_harness_export_uses_managed_cli_path(tmp_path, monkeypatch):
+    cli = _managed_cli(tmp_path)
+    scratch = tmp_path / "harness-export"
+    project = scratch / hc.SCRATCH_PROJECT
+    project.mkdir(parents=True)
+    exported = tmp_path / "exported"
+    exported.mkdir()
+    (exported / "main.py").write_text("print('exported')\n")
+    calls = []
+    monkeypatch.setattr(hc, "MANAGED_AGENTCORE_CLI", cli)
+    monkeypatch.setattr(hc, "_SCRATCH_DIR", scratch)
+
+    def fake_run(cmd, cwd):
+        calls.append((cmd, cwd))
+        return SimpleNamespace(
+            stdout=json.dumps({"success": True, "agentPath": str(exported)})
+        )
+
+    monkeypatch.setattr(hc, "_run", fake_run)
+
+    assert hc.export_harness("arn:harness") == {"main.py": "print('exported')\n"}
+    assert calls == [
+        (
+            [
+                str(cli),
+                "export",
+                "harness",
+                "--arn",
+                "arn:harness",
+                "--build",
+                "CodeZip",
+                "--json",
+            ],
+            project,
+        )
+    ]

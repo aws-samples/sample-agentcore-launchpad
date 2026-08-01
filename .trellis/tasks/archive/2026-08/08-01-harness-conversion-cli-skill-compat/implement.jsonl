@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/launchpad/harness-conversion.md", "reason": "Defines conversion graft, CLI, and failure contracts"}
+{"file": ".trellis/spec/launchpad/remote-production-deployment.md", "reason": "Defines fresh-host bootstrap and deployment constraints"}
