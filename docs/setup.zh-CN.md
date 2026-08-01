@@ -27,6 +27,14 @@ make bootstrap          # = cd backend && uv run python ../scripts/bootstrap.py
 (`launchpad-registry`)/ memory(`launchpad_memory`)只创建**一次**,后续每次运行
 都复用。再次运行只会打印 `reused`,不会产生重复资源。
 
+bootstrap 还负责安装 Harness 转 Runtime 时使用的 CLI。它会把固定版本
+`@aws/agentcore@0.21.1` 安装到
+`data/agentcore-cli/node_modules/.bin/agentcore`,不需要全局 npm 安装;安装后会校验
+版本,后续运行直接复用。转换过程不会使用 `PATH` 中的 `agentcore`;如果这份托管安装
+被删除或不可用,重新运行 `make bootstrap`。该版本同时支持不带 Skill 的 Harness
+导出,以及生成代码调用
+`get_or_create_agent(session_id, user_id, _skill_plugins)` 的 Skill 导出。
+
 创建内容:
 
 | 资源 | 名称 |
@@ -38,6 +46,7 @@ make bootstrap          # = cd backend && uv run python ../scripts/bootstrap.py
 | IAM 执行角色 | `launchpad-agent-execution-role` |
 | AgentCore Registry | `launchpad-registry` |
 | AgentCore Memory | `launchpad_memory`(短期事件 + 语义与用户偏好的长期策略) |
+| 托管 AgentCore CLI | `data/agentcore-cli/` (`@aws/agentcore@0.21.1`) |
 
 演示用户密码由 bootstrap 生成并存入 `config/launchpad.yaml`(**已 gitignore**——
 视为本地机密;仓库中提交的是脱敏的 `config/launchpad.example.yaml`)。

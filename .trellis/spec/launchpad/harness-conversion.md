@@ -21,7 +21,8 @@ POST /api/agents/{agent_id}/convert            → 202 {"agent", "job_id", "depl
 
 ```python
 # app/services/harness_convert.py
-export_harness(harness_arn) -> dict[str, str]        # agentcore CLI, scratch project
+resolve_agentcore_cli() -> str                       # managed 0.21.1 path or AppError
+export_harness(harness_arn) -> dict[str, str]        # managed CLI, scratch project
 graft_config_bundle(main_py) -> str                   # raises ConversionError on anchor miss
 graft_direct_kb_tools(main_py) -> str                 # tools=[] import/register graft
 discover_env(files) -> dict[str, str | None]          # wired value | None (degrades)
@@ -43,12 +44,27 @@ conversion_notes: dict[str, str] | None # per-capability wiring outcome (UI rend
   bundle is **materialized into the spec** and deployed by the untouched
   async zip pipeline. Deploy resume never re-runs the CLI (spec carries all
   files).
+- `make bootstrap` owns the conversion CLI. It installs exactly
+  `@aws/agentcore@0.21.1` beneath `data/agentcore-cli/`, verifies
+  `node_modules/.bin/agentcore --version`, and skips npm when the managed
+  binary already reports `0.21.1`. Conversion always invokes that absolute
+  managed path; it never falls back to an `agentcore` executable on `PATH`.
+  A missing or non-executable managed binary raises
+  `agent.convert_cli_missing` with a `make bootstrap` instruction.
 - **The graft is mandatory**: exported code bakes `DEFAULT_SYSTEM_PROMPT`
   and never reads `get_config_bundle()` — without the graft, experiment
   A/B variants no-op exactly as on the harness. Anchors (CLI 0.21.x):
   the `DEFAULT_SYSTEM_PROMPT = """…"""` constant and the
   `system_prompt=DEFAULT_SYSTEM_PROMPT` construction site. Anchor miss →
   conversion FAILS (no agent row).
+- Tool-description grafting parses exported `main.py` as Python and requires
+  exactly one assignment whose value is
+  `get_or_create_agent(session_id, user_id, ...)`. CLI 0.21.1 emits the
+  two-argument form without Skills and the three-argument
+  `get_or_create_agent(session_id, user_id, _skill_plugins)` form when Agent
+  Skills are attached. Both are supported; malformed Python, unrelated
+  assignments, ambiguous construction sites, inline/semicolon statement
+  sharing, or misplaced owned apply calls fail before persistence.
 - Fidelity: prompt (bundle-overridable) + inline tools + memory
   (`MEMORY_MEMORY_*_ID` env wired from `settings.resources.memory_id`).
   A source Harness's `knowledge_bases` are also copied into the new spec and
@@ -77,7 +93,7 @@ conversion_notes: dict[str, str] | None # per-capability wiring outcome (UI rend
 | source not found / deleted | 404 `agent.not_found` |
 | source not (harness ∧ active) | 400 `agent.convert_unsupported` |
 | conversion of same source still deploying | 409 `agent.convert_in_flight` |
-| `agentcore` CLI absent | 502 `agent.convert_cli_missing` |
+| managed AgentCore CLI absent or unusable | 502 `agent.convert_cli_missing`; run `make bootstrap` |
 | export/config or direct-KB graft failure (anchor miss, CLI error) | 502 `agent.convert_failed`, no row |
 | bundle w/o main.py, unsafe path, >64 files/1MB, code+code_bundle | 422 (pydantic) |
 
@@ -95,13 +111,18 @@ conversion_notes: dict[str, str] | None # per-capability wiring outcome (UI rend
 
 ### 6. Tests Required
 
-`backend/tests/test_harness_convert.py`: config and direct-KB grafts on the REAL
-export fixture (`tests/fixtures/harness_export_main.py`), idempotence and
-anchor-miss failures; KB prompt/default/env/spec shape; KB-less bundle
-compatibility; env discovery (memory wired, gateway None, AWS_REGION skipped);
-requirements flattening; code_bundle staging; endpoint guards and clean
-failures with no leftover rows. `test_strands_template.py` proves generated
-ZIP `main.py` inlines the same standalone-compilable direct source.
+`backend/tests/test_bootstrap_script.py`: exact-version skip, absent probe,
+pinned npm install, post-install verification, and npm failure propagation with
+all subprocesses mocked. `backend/tests/test_harness_convert.py`: managed-path
+command construction; config and direct-KB grafts on the REAL export fixture
+(`tests/fixtures/harness_export_main.py`); two-argument and Skill-bearing
+three-argument agent construction; idempotence, malformed-Python,
+unrelated/ambiguous assignments, misplaced apply calls, and anchor-miss
+failures; CLI timeout and malformed-result boundaries; KB prompt/default/env/spec
+shape; KB-less bundle compatibility; env discovery (memory wired, gateway None,
+AWS_REGION skipped); requirements flattening; code_bundle staging; endpoint
+guards and clean failures with no leftover rows. `test_strands_template.py` proves
+generated ZIP `main.py` inlines the same standalone-compilable direct source.
 
 ### 7. Wrong vs Correct
 
@@ -123,5 +144,7 @@ env = discover_env(grafted)          # memory wired, gateway stays None + noted
 ```
 
 > **Warning**: the exported code's model id is baked (whatever the harness
-> used); the exec role must be able to invoke it. The scratch export dir
-> under `data/harness-export/` is a cache — safe to delete anytime.
+> used); the exec role must be able to invoke it. The scratch export dir under
+> `data/harness-export/` is a cache — safe to delete anytime. Deleting
+> `data/agentcore-cli/` removes a bootstrap-owned prerequisite; rerun
+> `make bootstrap` before the next conversion.
