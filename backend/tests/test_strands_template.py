@@ -10,6 +10,7 @@ import pytest
 import strands
 
 from app.schemas.agent import DEFAULT_MODEL_ID, AgentSpec
+from app.templates.kb_support import mounted_kbs, render_direct_kb_source
 from app.templates.strands_agent import base_requirements, render_main_py
 
 SPEC = AgentSpec(
@@ -318,8 +319,31 @@ def test_kb_render_bakes_refs_and_prompt_section():
     assert "faq (kb_id `KB222`) — faq" in code
 
 
+def test_kb_render_inlines_the_reusable_direct_source(tmp_path: Path):
+    direct_source = render_direct_kb_source(mounted_kbs(KB_SPEC))
+    assert direct_source in render_main_py(KB_SPEC)
+    assert "__LAUNCHPAD_" not in direct_source
+    assert "def kb_search(" in direct_source
+    assert "def kb_deep_search(" in direct_source
+    assert "One similarity search — fast and cheap." in direct_source
+    assert "agentic (multi-step) retrieval" in direct_source
+    assert "Slower and more expensive than kb_search" in direct_source
+    target = tmp_path / "launchpad_kb_tools.py"
+    target.write_text(direct_source, encoding="utf-8")
+    py_compile.compile(str(target), doraise=True)
+
+
 def test_kb_tools_registered_only_when_mounted(kb_module, template_module):
     assert kb_module.MOUNTED_KBS
+    assert "One similarity search — fast and cheap." in kb_module.kb_search.tool_spec[
+        "description"
+    ]
+    assert "agentic (multi-step) retrieval" in kb_module.kb_deep_search.tool_spec[
+        "description"
+    ]
+    assert "Slower and more expensive than kb_search" in (
+        kb_module.kb_deep_search.tool_spec["description"]
+    )
     kb_names = [t.tool_name for t in kb_module.build_agent("a", "s").tools]
     assert "kb_search" in kb_names and "kb_deep_search" in kb_names
     # both descriptions are A/B-tunable through the config-bundle contract

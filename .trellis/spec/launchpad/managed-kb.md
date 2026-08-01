@@ -105,10 +105,21 @@ platform bakes **two** retrieval tools into the generated code instead:
   module constants, so a caller cannot announce one tool while the template
   registers two). Both renderers use it so 方式A and ZIP cannot drift.
   `harness._kb_prompt` stays separate on purpose: it names gateway MCP tools.
-- Strands ZIP: native `@tool`s appended to `tools` only when `MOUNTED_KBS`. BOTH
-  descriptions are seeded into `DEFAULT_TOOL_DESCRIPTIONS` so the config-bundle
-  A/B contract can tune each independently; spec `tool_description_overrides`
-  merge after and still win.
+- `app/templates/direct_kb_tools.py.tmpl` is the one source for the Strands
+  direct request shapes, result formatting, and failure folding.
+  `render_direct_kb_source()` inlines it into a standard generated ZIP
+  `main.py`; a Harness conversion with KBs materializes the identical rendered
+  source as `launchpad_kb_tools.py`.
+- Strands ZIP: native `@tool`s appended to `tools` only when `MOUNTED_KBS`.
+  Converted Harness bundles import those same tools and append them to the
+  exported `tools = []` collection. BOTH descriptions are seeded into the
+  config-bundle defaults so A/B can tune each independently; explicit source
+  `tool_description_overrides` merge after and still win.
+- Harness conversion changes channels: it copies the source
+  `AgentSpec.knowledge_bases`, replaces the exported gateway-oriented fallback
+  prompt with `kb_prompt_section(kbs)`, and leaves every `GATEWAY_*_URL` unset.
+  The old exported MCP files may remain in the bundle but are inert. A missing
+  `tools = []` export anchor fails conversion before an Agent row is created.
 - Container: both tools go into ONE `create_sdk_mcp_server(name="launchpad_kb",
   tools=[kb_search, kb_deep_search])` built at RUNTIME (an SDK server is a Python
   object, not a renderable literal) and merged into `build_options()`. Allow-list

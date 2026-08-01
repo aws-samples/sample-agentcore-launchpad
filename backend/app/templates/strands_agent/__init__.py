@@ -8,15 +8,13 @@ from pathlib import Path
 
 from app.schemas.agent import AgentSpec
 from app.templates.kb_support import (
-    KB_DEEP_ITERATIONS_MULTI,
-    KB_DEEP_ITERATIONS_SINGLE,
     KB_DEEP_TOOL_NAME,
-    KB_RESULTS,
     KB_TOOL_NAME,
     kb_deep_tool_description,
     kb_prompt_section,
     kb_tool_description,
     mounted_kbs,
+    render_direct_kb_source,
 )
 
 TEMPLATE_DIR = Path(__file__).parent
@@ -41,14 +39,7 @@ def render_main_py(spec: AgentSpec) -> str:
         .replace("__LAUNCHPAD_MODEL_ID__", spec.model_id)
         .replace("__LAUNCHPAD_MODEL_SOURCE__", spec.model_source)
         .replace("__LAUNCHPAD_SYSTEM_PROMPT__", repr(system_prompt))
-        .replace("__LAUNCHPAD_MOUNTED_KBS__", repr(kbs))
-        .replace("__LAUNCHPAD_KB_RESULTS__", repr(KB_RESULTS))
-        .replace(
-            "__LAUNCHPAD_KB_DEEP_ITERATIONS_SINGLE__", repr(KB_DEEP_ITERATIONS_SINGLE)
-        )
-        .replace(
-            "__LAUNCHPAD_KB_DEEP_ITERATIONS_MULTI__", repr(KB_DEEP_ITERATIONS_MULTI)
-        )
+        .replace("__LAUNCHPAD_DIRECT_KB_SOURCE__", render_direct_kb_source(kbs))
         .replace("__LAUNCHPAD_KB_TOOL_DESCRIPTIONS__", repr(kb_descriptions))
         .replace(
             "__LAUNCHPAD_TOOL_DESCRIPTION_OVERRIDES__",

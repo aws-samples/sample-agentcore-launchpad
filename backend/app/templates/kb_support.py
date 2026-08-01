@@ -20,7 +20,9 @@ builder in ``app/deployer/harness.py::_kb_prompt`` naming the gateway tools
 (``…___Retrieve`` / ``…___AgenticRetrieveStream``).
 """
 
-from app.schemas.agent import AgentSpec
+from pathlib import Path
+
+from app.schemas.agent import AgentSpec, KnowledgeBaseRef
 
 # Tool names are part of two live contracts: the config-bundle A/B experiment
 # reads tool descriptions by name, and the container exposes them namespaced as
@@ -33,10 +35,11 @@ KB_RESULTS = 8
 # and 4–5 across several (more retrievers → more sub-queries worth planning).
 KB_DEEP_ITERATIONS_SINGLE = 3
 KB_DEEP_ITERATIONS_MULTI = 5
+DIRECT_KB_TEMPLATE = Path(__file__).with_name("direct_kb_tools.py.tmpl")
 
 
-def mounted_kbs(spec: AgentSpec) -> list[dict[str, str]]:
-    """AgentSpec.knowledge_bases → the literal baked into the template.
+def mounted_kb_refs(refs: list[KnowledgeBaseRef]) -> list[dict[str, str]]:
+    """KnowledgeBaseRef values -> the literal baked into runtime source.
 
     Description falls back to the name so the generated tool description and
     prompt section always say something about each KB.
@@ -47,8 +50,30 @@ def mounted_kbs(spec: AgentSpec) -> list[dict[str, str]]:
             "name": kb.name or kb.kb_id,
             "description": kb.description or kb.name or kb.kb_id,
         }
-        for kb in spec.knowledge_bases
+        for kb in refs
     ]
+
+
+def mounted_kbs(spec: AgentSpec) -> list[dict[str, str]]:
+    """AgentSpec.knowledge_bases -> the literal baked into the template."""
+    return mounted_kb_refs(spec.knowledge_bases)
+
+
+def render_direct_kb_source(kbs: list[dict[str, str]]) -> str:
+    """Render the standalone source also inlined by generated ZIP agents."""
+    return (
+        DIRECT_KB_TEMPLATE.read_text(encoding="utf-8")
+        .replace("__LAUNCHPAD_MOUNTED_KBS__", repr(kbs))
+        .replace("__LAUNCHPAD_KB_RESULTS__", repr(KB_RESULTS))
+        .replace(
+            "__LAUNCHPAD_KB_DEEP_ITERATIONS_SINGLE__",
+            repr(KB_DEEP_ITERATIONS_SINGLE),
+        )
+        .replace(
+            "__LAUNCHPAD_KB_DEEP_ITERATIONS_MULTI__",
+            repr(KB_DEEP_ITERATIONS_MULTI),
+        )
+    )
 
 
 def _kb_names(kbs: list[dict[str, str]]) -> str:

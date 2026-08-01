@@ -350,7 +350,7 @@
       "confirmDetach": "这只会从 Launchpad 台账中移除“{{name}}”，不会修改或删除 AWS Runtime。",
       "convert": "转换 ⇄ RT",
       "convertConfirmTitle": "转换为 Runtime Agent",
-      "convertConfirm": "将导出 {{name}} 的 harness 代码、嫁接实验（config-bundle）契约，并部署为一个新的 runtime agent（约 5–15 分钟）。v1 不携带 KB 网关工具；记忆会保留。原 harness 不受影响。",
+      "convertConfirm": "将导出 {{name}} 的 harness 代码、嫁接实验（config-bundle）契约，并部署为一个新的 runtime agent（约 5–15 分钟）。已挂载知识库会转换为直连的 kb_search 与 kb_deep_search 工具；记忆会保留。原 harness 不受影响。",
       "convertStarted": "转换中 → {{name}}（部署中）",
       "convertedTitle": "转换而来的 AGENT",
       "convertedFrom": "由 harness {{name}} 转换而来"
