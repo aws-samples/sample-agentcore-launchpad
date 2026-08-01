@@ -81,6 +81,21 @@ def test_graft_fails_without_anchors():
         hc.graft_config_bundle(partial)
 
 
+def test_direct_kb_graft_registers_both_tools_idempotently():
+    grafted = hc.graft_direct_kb_tools(MAIN_PY)
+    assert "from launchpad_kb_tools import kb_deep_search, kb_search" in grafted
+    assert "tools.extend([kb_search, kb_deep_search])" in grafted
+    assert grafted.index("tools = []") < grafted.index(
+        "tools.extend([kb_search, kb_deep_search])"
+    )
+    assert hc.graft_direct_kb_tools(grafted) == grafted
+
+
+def test_direct_kb_graft_fails_without_tools_collection_anchor():
+    with pytest.raises(hc.ConversionError, match=r"tools = \[\] collection"):
+        hc.graft_direct_kb_tools(MAIN_PY.replace("tools = []", "tools = [shell]"))
+
+
 # ─── env discovery ───────────────────────────────────────────────────────────
 def test_discover_env_wires_memory_not_gateway(monkeypatch):
     monkeypatch.setattr(
@@ -142,6 +157,72 @@ def test_build_conversion_spec_shape(monkeypatch):
     assert spec.conversion_notes["system_prompt"].startswith("wired")
     assert spec.conversion_notes["kb_gateway"].startswith("not wired")
     assert "GATEWAY_GATEWAY_X_URL" not in spec.env  # never wired in v1
+
+
+def test_build_conversion_spec_materializes_direct_kb_support(monkeypatch):
+    monkeypatch.setattr(
+        hc, "get_settings",
+        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
+    )
+    source = _source_agent()
+    source.spec = {
+        **source.spec,
+        "knowledge_bases": [
+            {
+                "kb_id": "KB111",
+                "name": "fund-docs",
+                "description": "fund product PDFs",
+            },
+            {"kb_id": "KB222", "name": "faq", "description": ""},
+        ],
+        "tool_description_overrides": {"kb_search": "promoted fast search"},
+    }
+    files = {
+        "main.py": MAIN_PY,
+        "pyproject.toml": PYPROJECT,
+        "mcp_client/client.py": 'url = os.environ.get("GATEWAY_GATEWAY_X_URL")',
+    }
+
+    spec = hc.build_conversion_spec(
+        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt"
+    )
+
+    assert [kb.kb_id for kb in spec.knowledge_bases] == ["KB111", "KB222"]
+    assert spec.code_bundle and "launchpad_kb_tools.py" in spec.code_bundle
+    kb_source = spec.code_bundle["launchpad_kb_tools.py"]
+    assert "def kb_search(" in kb_source and "def kb_deep_search(" in kb_source
+    assert "MOUNTED_KBS" in kb_source and "KB111" in kb_source
+    main_py = spec.code_bundle["main.py"]
+    assert "from launchpad_kb_tools import kb_deep_search, kb_search" in main_py
+    assert "tools.extend([kb_search, kb_deep_search])" in main_py
+    assert "`kb_search`" in spec.system_prompt
+    assert "`kb_deep_search`" in spec.system_prompt
+    assert "___Retrieve" not in spec.system_prompt
+    assert spec.tool_description_overrides["kb_search"] == "promoted fast search"
+    assert spec.tool_description_overrides["kb_deep_search"].startswith("Deep-search")
+    assert "_LAUNCHPAD_DEFAULT_SYSTEM_PROMPT" in main_py
+    assert "promoted fast search" in main_py
+    assert "GATEWAY_GATEWAY_X_URL" not in spec.env
+    assert spec.conversion_notes["knowledge_bases"].startswith("wired (direct")
+
+
+def test_build_conversion_spec_without_kbs_keeps_existing_bundle_shape(monkeypatch):
+    monkeypatch.setattr(
+        hc, "get_settings",
+        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
+    )
+    files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT}
+    spec = hc.build_conversion_spec(
+        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt"
+    )
+    expected = hc.graft_config_bundle(
+        MAIN_PY,
+        default_system_prompt=_source_agent().spec["system_prompt"],
+        tool_description_overrides=None,
+    )
+    assert spec.code_bundle == {"main.py": expected}
+    assert spec.knowledge_bases == []
+    assert hc.KB_GRAFT_START not in spec.code_bundle["main.py"]
 
 
 def test_build_conversion_spec_carries_model_source(monkeypatch):
@@ -250,6 +331,37 @@ def test_convert_happy_path_and_in_flight_guard(client, monkeypatch):
     assert res.json()["code"] == "agent.convert_in_flight"
 
 
+def test_convert_happy_path_persists_direct_kb_bundle(client, monkeypatch):
+    source = _mk_agent(
+        name="kb-support",
+        spec={
+            "system_prompt": "Use the product corpus.",
+            "knowledge_bases": [
+                {"kb_id": "KB111", "name": "Product Docs", "description": "features"}
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        hc,
+        "export_harness",
+        lambda arn: {
+            "main.py": MAIN_PY,
+            "mcp_client/client.py": 'url = os.environ.get("GATEWAY_GATEWAY_X_URL")',
+        },
+    )
+    monkeypatch.setattr(agents_router, "start_deploy_async", lambda job_id: None)
+
+    res = client.post(f"/api/agents/{source.id}/convert")
+
+    assert res.status_code == 202
+    spec = res.json()["agent"]["spec"]
+    assert spec["knowledge_bases"][0]["kb_id"] == "KB111"
+    assert "launchpad_kb_tools.py" in spec["code_bundle"]
+    assert "kb_search" in spec["code_bundle"]["main.py"]
+    assert "`kb_deep_search`" in spec["system_prompt"]
+    assert "GATEWAY_GATEWAY_X_URL" not in spec["env"]
+
+
 def test_convert_name_dedupe(client, monkeypatch):
     source = _mk_agent(name="hr-assistant")
     _mk_agent(name="hr-assistant-rt", method="zip_runtime")  # name taken (active)
@@ -272,6 +384,28 @@ def test_convert_graft_failure_is_clean(client, monkeypatch):
     leftovers = db.query(Agent).filter(Agent.name.like("h-graftless-rt%")).all()
     db.close()
     assert leftovers == []  # no half-registered row (A2)
+
+
+def test_convert_direct_kb_anchor_failure_is_clean(client, monkeypatch):
+    source = _mk_agent(
+        name="h-kb-graftless",
+        spec={
+            "system_prompt": "Use the corpus.",
+            "knowledge_bases": [{"kb_id": "KB111", "name": "Docs"}],
+        },
+    )
+    monkeypatch.setattr(
+        hc,
+        "export_harness",
+        lambda arn: {"main.py": MAIN_PY.replace("tools = []", "tools = [shell]")},
+    )
+    res = client.post(f"/api/agents/{source.id}/convert")
+    assert res.status_code == 502
+    assert "direct KB graft anchor missing" in res.json()["message"]
+    db = SessionLocal()
+    leftovers = db.query(Agent).filter(Agent.name.like("h-kb-graftless-rt%")).all()
+    db.close()
+    assert leftovers == []
 
 
 def test_flatten_sse_text_joins_deltas_and_raises_on_error():

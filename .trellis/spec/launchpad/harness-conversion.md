@@ -23,6 +23,7 @@ POST /api/agents/{agent_id}/convert            → 202 {"agent", "job_id", "depl
 # app/services/harness_convert.py
 export_harness(harness_arn) -> dict[str, str]        # agentcore CLI, scratch project
 graft_config_bundle(main_py) -> str                   # raises ConversionError on anchor miss
+graft_direct_kb_tools(main_py) -> str                 # tools=[] import/register graft
 discover_env(files) -> dict[str, str | None]          # wired value | None (degrades)
 flatten_requirements(files, base) -> list[str]        # pyproject deps minus base pins
 build_conversion_spec(source, files, base, name) -> AgentSpec
@@ -48,9 +49,19 @@ conversion_notes: dict[str, str] | None # per-capability wiring outcome (UI rend
   the `DEFAULT_SYSTEM_PROMPT = """…"""` constant and the
   `system_prompt=DEFAULT_SYSTEM_PROMPT` construction site. Anchor miss →
   conversion FAILS (no agent row).
-- Fidelity v1: prompt (bundle-overridable) + inline tools + memory
+- Fidelity: prompt (bundle-overridable) + inline tools + memory
   (`MEMORY_MEMORY_*_ID` env wired from `settings.resources.memory_id`).
-  **`GATEWAY_*_URL` is never wired**: the exported MCP client no-ops when
+  A source Harness's `knowledge_bases` are also copied into the new spec and
+  remounted through the Runtime's direct retrieval channel: the reusable
+  `direct_kb_tools.py.tmpl` is materialized as `launchpad_kb_tools.py`, and
+  `kb_search` + `kb_deep_search` are appended to the exported `tools = []`.
+  That collection is a mandatory KB-only anchor; if it disappears, conversion
+  fails before persistence.
+- A KB-bearing conversion's fallback prompt is the original source prompt plus
+  the direct-tool `## Knowledge bases` section, never the exported
+  `...___Retrieve` Gateway prompt. Generated KB descriptions seed both
+  config-bundle defaults beneath explicit source overrides.
+- **`GATEWAY_*_URL` is never wired**: the exported MCP client no-ops when
   the URL is absent but crashes at import when the URL is set and the M2M
   token fetch fails — wiring it needs verified AgentCore Identity access
   for the NEW runtime's workload identity (future work). Every outcome is
@@ -67,14 +78,16 @@ conversion_notes: dict[str, str] | None # per-capability wiring outcome (UI rend
 | source not (harness ∧ active) | 400 `agent.convert_unsupported` |
 | conversion of same source still deploying | 409 `agent.convert_in_flight` |
 | `agentcore` CLI absent | 502 `agent.convert_cli_missing` |
-| export/graft failure (anchor miss, CLI error) | 502 `agent.convert_failed`, no row |
+| export/config or direct-KB graft failure (anchor miss, CLI error) | 502 `agent.convert_failed`, no row |
 | bundle w/o main.py, unsafe path, >64 files/1MB, code+code_bundle | 422 (pydantic) |
 
 ### 5. Good/Base/Bad Cases
 
 - **Good**: convert `aurora-support` → `aurora-support-rt` deploying in ~15s
   request time; notes = prompt wired / tools carried / memory wired /
-  kb_gateway not wired; agent experiment-selectable when active.
+  kb_gateway not wired. If the source has KBs, the new spec retains them,
+  carries `launchpad_kb_tools.py`, and records the direct-channel replacement;
+  the agent is experiment-selectable when active.
 - **Base**: converting again while the first deploys → 409; after it lands,
   a re-convert yields `-rt-2`.
 - **Bad**: CLI codegen drift removes anchors → 502 with "graft anchor
@@ -82,12 +95,13 @@ conversion_notes: dict[str, str] | None # per-capability wiring outcome (UI rend
 
 ### 6. Tests Required
 
-`backend/tests/test_harness_convert.py` (12): graft on the REAL export
-fixture (`tests/fixtures/harness_export_main.py`) + anchor-miss failures;
-env discovery (memory wired, gateway None, AWS_REGION skipped);
-requirements flattening vs base pins; code_bundle validators; bundle file
-staging; endpoint guards (400/409/502) + happy path (202, spec shape,
-deploy kicked) + name dedupe + clean failure (no leftover rows).
+`backend/tests/test_harness_convert.py`: config and direct-KB grafts on the REAL
+export fixture (`tests/fixtures/harness_export_main.py`), idempotence and
+anchor-miss failures; KB prompt/default/env/spec shape; KB-less bundle
+compatibility; env discovery (memory wired, gateway None, AWS_REGION skipped);
+requirements flattening; code_bundle staging; endpoint guards and clean
+failures with no leftover rows. `test_strands_template.py` proves generated
+ZIP `main.py` inlines the same standalone-compilable direct source.
 
 ### 7. Wrong vs Correct
 
@@ -101,7 +115,10 @@ env["GATEWAY_GATEWAY_X_URL"] = url   # M2M failure now crashes at import
 
 #### Correct
 ```python
-grafted["main.py"] = graft_config_bundle(files["main.py"])  # A/B-able or fail
+if source_kbs:
+    grafted["launchpad_kb_tools.py"] = render_direct_kb_source(source_kbs)
+    grafted["main.py"] = graft_direct_kb_tools(files["main.py"])
+grafted["main.py"] = graft_config_bundle(grafted["main.py"])  # A/B-able or fail
 env = discover_env(grafted)          # memory wired, gateway stays None + noted
 ```
 

@@ -21,7 +21,16 @@ from typing import Any
 
 from app.core.config import DATA_DIR, get_settings
 from app.core.errors import AppError
-from app.schemas.agent import AgentSpec, MemoryConfig
+from app.schemas.agent import AgentSpec, KnowledgeBaseRef, MemoryConfig
+from app.templates.kb_support import (
+    KB_DEEP_TOOL_NAME,
+    KB_TOOL_NAME,
+    kb_deep_tool_description,
+    kb_prompt_section,
+    kb_tool_description,
+    mounted_kb_refs,
+    render_direct_kb_source,
+)
 
 EXPORT_TIMEOUT_S = 120
 SCRATCH_PROJECT = "harnessexport"
@@ -36,9 +45,12 @@ _RESOLVED_PROMPT_USE = "system_prompt=resolve_system_prompt()"
 _AGENT_USE = "    agent = get_or_create_agent(session_id, user_id)"
 _AGENT_APPLY = "    _launchpad_apply_tool_descriptions(agent)"
 _ENV_KEY_RE = re.compile(r'os\.(?:environ\.get|getenv)\(\s*["\']([A-Z0-9_]+)["\']')
+_TOOLS_COLLECTION_RE = re.compile(r"^tools = \[\]\s*$", re.MULTILINE)
 
 GRAFT_START = "# <launchpad-config-bundle:v2>"
 GRAFT_END = "# </launchpad-config-bundle:v2>"
+KB_GRAFT_START = "# <launchpad-direct-kb:v1>"
+KB_GRAFT_END = "# </launchpad-direct-kb:v1>"
 _LEGACY_GRAFT_RE = re.compile(
     r"\n# ─── Launchpad platform contract: config bundles \(A/B experiments\)"
     r"[\s\S]*?# ─{10,}\n"
@@ -201,6 +213,25 @@ def has_config_bundle_graft(main_py: str) -> bool:
     )
 
 
+def graft_direct_kb_tools(main_py: str) -> str:
+    """Register the materialized direct KB tools on an exported Harness."""
+    if KB_GRAFT_START in main_py and KB_GRAFT_END in main_py:
+        return main_py
+    match = _TOOLS_COLLECTION_RE.search(main_py)
+    if match is None:
+        raise ConversionError(
+            "direct KB graft anchor missing: tools = [] collection not found "
+            "(agentcore CLI codegen changed?)"
+        )
+    graft = f"""{KB_GRAFT_START}
+from launchpad_kb_tools import kb_deep_search, kb_search
+{KB_GRAFT_END}
+
+{match.group(0)}
+tools.extend([kb_search, kb_deep_search])"""
+    return main_py[:match.start()] + graft + main_py[match.end():]
+
+
 def graft_config_bundle(
     main_py: str,
     *,
@@ -294,15 +325,37 @@ def build_conversion_spec(
 ) -> AgentSpec:
     grafted = dict(files)
     source_spec = source_agent.spec or {}
+    kb_refs = [
+        KnowledgeBaseRef(**ref)
+        for ref in (source_spec.get("knowledge_bases") or [])
+    ]
+    kbs = mounted_kb_refs(kb_refs)
+    source_prompt = source_spec.get("system_prompt")
+    prompt_default = source_prompt
+    source_tool_defaults = dict(source_spec.get("tool_description_overrides") or {})
+    tool_defaults = source_tool_defaults
+    if kbs:
+        prompt_default = str(source_prompt or "") + kb_prompt_section(kbs)
+        tool_defaults = {
+            KB_TOOL_NAME: kb_tool_description(kbs),
+            KB_DEEP_TOOL_NAME: kb_deep_tool_description(kbs),
+            **source_tool_defaults,
+        }
+        grafted["launchpad_kb_tools.py"] = render_direct_kb_source(kbs)
+        grafted["main.py"] = graft_direct_kb_tools(files["main.py"])
     grafted["main.py"] = graft_config_bundle(
-        files["main.py"],
-        default_system_prompt=source_spec.get("system_prompt"),
-        tool_description_overrides=source_spec.get("tool_description_overrides"),
+        grafted["main.py"],
+        default_system_prompt=prompt_default,
+        tool_description_overrides=tool_defaults,
     )
     env_contract = discover_env(grafted)
     wired = {k: v for k, v in env_contract.items() if v is not None}
     notes = {"system_prompt": "wired (config-bundle override grafted)",
              "inline_tools": "carried verbatim"}
+    if kbs:
+        notes["knowledge_bases"] = (
+            "wired (direct kb_search + kb_deep_search; Harness KB Gateway replaced)"
+        )
     for key, value in env_contract.items():
         label = "memory" if key.startswith("MEMORY_") else (
             "kb_gateway" if key.startswith("GATEWAY_") else key.lower())
@@ -318,8 +371,8 @@ def build_conversion_spec(
             source_spec.get("model_source")
             or AgentSpec.model_fields["model_source"].default
         ),
-        system_prompt=source_spec.get("system_prompt") or "(baked into exported code)",
-        tool_description_overrides=source_spec.get("tool_description_overrides") or {},
+        system_prompt=prompt_default or "(baked into exported code)",
+        tool_description_overrides=tool_defaults,
         requirements=flatten_requirements(grafted, base_requirements),
         code_bundle={k: v for k, v in grafted.items() if k != "pyproject.toml"},
         source_harness={
@@ -330,4 +383,5 @@ def build_conversion_spec(
         conversion_notes=notes,
         env=wired,
         memory=MemoryConfig(**(source_spec.get("memory") or {})),
+        knowledge_bases=kb_refs,
     )
