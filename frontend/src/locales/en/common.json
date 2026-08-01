@@ -350,7 +350,7 @@
       "confirmDetach": "This removes “{{name}}” from the Launchpad ledger only. The AWS Runtime is not changed or deleted.",
       "convert": "CONVERT ⇄ RT",
       "convertConfirmTitle": "Convert to runtime agent",
-      "convertConfirm": "Exports {{name}}'s harness code, grafts the experiment (config-bundle) contract, and deploys it as a NEW runtime agent (~5–15 min). KB gateway tools are not carried in v1; memory is. The harness itself is untouched.",
+      "convertConfirm": "Exports {{name}}'s harness code, grafts the experiment (config-bundle) contract, and deploys it as a NEW runtime agent (~5–15 min). Mounted knowledge bases become direct kb_search and kb_deep_search tools; memory is retained. The harness itself is untouched.",
       "convertStarted": "converting → {{name}} (deploying)",
       "convertedTitle": "CONVERTED AGENT",
       "convertedFrom": "converted from harness {{name}}"
