@@ -158,7 +158,7 @@
     "steps": {
       "1": "01 · 选择方式",
       "2": "02 · 配置",
-      "3": "03 · 发射"
+      "3": "03 · 部署"
     },
     "methods": {
       "harness": {
@@ -292,7 +292,7 @@
       "a2aSkillAdd": "添加技能"
     },
     "launchPanel": {
-      "title": "发射计划",
+      "title": "部署计划",
       "sub": "boto3 快速通道",
       "sharedInfra": "共享基础设施",
       "agentResources": "Agent 资源",
@@ -301,7 +301,7 @@
       "onSuccessV": "自动注册 → Registry(第 7 阶段)"
     },
     "sequence": {
-      "title": "发射序列",
+      "title": "部署序列",
       "logTitle": "任务日志",
       "waiting": "等待任务事件……",
       "newAgent": "再建一个",
