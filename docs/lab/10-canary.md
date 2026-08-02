@@ -7,8 +7,6 @@
 > **前置条件**：第 09 章的实验已 `CLEANUP`。对象必须是 `zip_runtime` / `studio` 方式的
 > active Agent（见 10.0）。
 >
-> **预计耗时**：约 25 分钟（setup 约 1 分钟，每档判定最多等 15 分钟）。
->
 > **本章将创建的 AWS 资源**：1 个候选 Runtime 版本（v2）、1 个稳定端点、1 个**专属**金丝雀
 > Gateway + 2 个 target、1 个 A/B 测试、2 个在线评估配置。**均在 `清理` 时删除。**
 
@@ -31,10 +29,10 @@ Agent 下拉同样把不合格原因直接写出来：
 
 ```
 lab-fund-assistant · zip_runtime        ← 可选
-math-agent · studio                     ← 可选
+<STUDIO_AGENT> · studio                 ← 可选
 lab-fund-packager · container — 容器 Agent 的候选版本铸造需通过 CodeBuild，属于后续工作。
 lab-fund-advisor · harness   — 基于目标的金丝雀需要 AgentCore Runtime Agent。
-aurora-faq-a2a · zip_runtime — A2A Agent 不兼容 HTTP target-canary 流量。
+<A2A_AGENT> · zip_runtime     — A2A Agent 不兼容 HTTP target-canary 流量。
 ```
 
 ## 10.1 创建金丝雀：编辑候选版本的 spec
@@ -73,35 +71,20 @@ FINISH，并明确门禁规则：**候选版本显著获胜可直接继续；平
 ## 10.2 SETUP — 铸造候选版本 + 专属网关
 
 点 `设置 90/10`。SETUP 会创建本章所需的大部分资源，进度会显示
-`endpoint stable211313 status: CREATING`。
+`endpoint <STABLE_ENDPOINT> status: CREATING`。
 
 ![Setup 完成](images/10-canary-setup.png)
 *图 10-3：Setup 完成。顶部显示 `当前版本 v1 → 候选版本 v2`，90/10 权重条已就位，
 第 02 档解锁。*
-
-本次实测产物：
-
-```json
-{"runtime_id": "lab_fund_assistant_c8fbf6-9ZkLYO3rAB",
- "stable_endpoint": "stable211313",
- "v_current": "1",
- "gateway_id": "lp-canary-21131394e8d7-k7agg5xrgd",
- "test_name": "can_21131394_target",
- "ab_test_id": "can_21131394_target-1b2df1aaac",
- "champion":   {"target_name": "can211313c", "target_id": "ANSATBE7RU",
-                "online_eval_id": "can_21131394_oec-qVPfTfAXmU"},
- "challenger": {"target_name": "can211313t", "target_id": "GD2HEBWGC6",
-                "online_eval_id": "can_21131394_oet-pS0OjJEbpE"}}
-```
 
 SETUP 创建的资源如下：
 
 | 产物 | 作用 |
 |---|---|
 | 候选版本 **v2** | 用你编辑的 spec 在**同一个 Runtime 资源**上发布的新版本 |
-| 稳定端点 `stable211313` | 把"当前版本"钉在 v1 上，这样放量前生产行为不变 |
+| 稳定端点 | 把"当前版本"钉在 v1 上，这样放量前生产行为不变 |
 | 专属网关 `lp-canary-…` | 每个金丝雀独立一个，避免和别的实验互相干扰 |
-| 两个 target `can211313c` / `can211313t` | 分别指向当前版本与候选版本 |
+| 两个 target | 分别指向当前版本与候选版本 |
 | 两个在线评估 `…_oec` / `…_oet` | **各自独立打分**，判定就靠它们的样本 |
 
 > 与配置包 A/B 的关键差别是，这里的候选是**真实的 Runtime 版本**。
@@ -119,57 +102,35 @@ SETUP 创建的资源如下：
 ![金丝雀流量](images/10-canary-traffic.png)
 *图 10-4：本档流量已发送，出现 `追加测试流量` 与 `记录判定` 两个动作。*
 
-本次实测：
+核对卡片中的 `ramp_stage`、90/10 权重、`sent`、`failed`、数据集名称和 `baseline_n`。
 
-```json
-{"ramp_stage": 0, "weights": {"C": 90, "T1": 10},
- "traffic_attempts": [{"sent": 5, "failed": 0,
-                       "dataset_name": "lab-fund-dataset", "baseline_n": 0,
-                       "completed_at": "2026-07-26T08:56:47Z"}]}
-```
+然后点 `记录判定`。进度会显示
+`aggregating current-stage evidence · status RUNNING`，并列出当前样本数与基线。
 
-然后点 `记录判定`，进度显示 `aggregating current-stage evidence · n 0/1 · status RUNNING`。
-
-> **`n 0/1` 的含义**：`baseline_n` 是本档之前已有的样本数，判定循环会一直等到
+> **样本数与基线的含义**：`baseline_n` 是本档之前已有的样本数，判定循环会一直等到
 > **样本数严格大于 baseline** 才算"本档有了新证据"（最多等 15 分钟）。这样就不会把上一档的
 > 旧样本当成新档的证据。
 
-本次实测判定（等满 15 分钟后落地）：
-
-```json
-{"verdict": "insufficient-data",
- "reason": "no new evaluator samples arrived after current-stage traffic",
- "n": 0, "baseline_n": 0, "metrics": [],
- "recorded_at": "2026-07-26T09:12:15Z"}
-```
-
 ![90/10 判定](images/10-canary-verdict.png)
-*图 10-5：第 02 档显示 `1 次测试流量种子 · 成功 5 · 失败 0 · 基线 n=0`，判定
-`! INSUFFICIENT-DATA · n=0`，并明确提示 **「insufficient-data 阻止继续放量。请追加流量或回滚。」**
+*图 10-5：如果没有新评估样本，第 02 档显示 `INSUFFICIENT-DATA`，提示追加流量或回滚，
 第 03/04 档保持锁定。*
 
-门禁因此阻断后续放量：5 条流量按 90/10 分流后，进入候选版本的期望只有 0.5 个请求，
-在线评估器在 15 分钟内没有产出任何新样本，所以本档没有证据 → 不允许放量到 50/50。
+5 条流量按 90/10 分流后，候选版本期望只收到 0.5 个请求，很可能无法形成新评估样本。
+如果判定为 `insufficient-data`，门禁会阻断 50/50。此时追加流量积累样本，或者回滚。
 
-> 这是预期行为。灰度放量的前提是"这一档有证据说明候选没变差"；
-> 拿不到证据就不能往前走。要继续，只有两条路：`追加测试流量` 攒够样本，或者 `回滚`。
->
 > 实践建议：金丝雀档位靠的是**真实生产流量**，10% 权重需要足够的总量才能形成样本。
-> 演示环境里用 5 条种子流量必然不够。要走到 50/50，请把种子流量增加到几十条以上。
+> 演示环境里的 5 条种子流量通常不够。要走到 50/50，请把种子流量增加到几十条以上。
 
-## 10.4 回滚：把生产切回当前版本
+## 10.4 根据判定继续或回滚
 
-因为拿不到证据，本次实验选择 `回滚`（另一条路是继续 `追加测试流量`）。
+如果候选版本显著获胜，可以继续放量；平局或未达显著时需要显式覆盖。
+当前版本获胜或证据不足时，继续追加流量，或选择 `回滚` 把生产切回当前版本。
 
 ![回滚确认](images/10-canary-rollback-confirm.png)
 *图 10-6：回滚前的二次确认。它会改变生产所服务的版本，所以必须显式确认。*
 
-进度会显示 `current production version 2`，完成后：
-
-```json
-{"winner": "champion", "restored_version": "3",
- "ab_test_status": "STOPPED", "rolled_back_at": "2026-07-26T09:13:58Z"}
-```
+回滚进度会显示当前生产版本。完成后确认 `winner` 为 `champion`、A/B 状态为 `STOPPED`，
+并记录新发布的恢复版本号。
 
 ![回滚完成](images/10-canary-rollback.png)
 *图 10-7：状态变为 `ROLLBACK · ROLLED_BACK`，只剩 `清理` 一个动作。*
@@ -179,18 +140,17 @@ SETUP 创建的资源如下：
 ```bash
 curl -s http://127.0.0.1:8000/api/agents/<ASSISTANT_ID> | python3 -c "
 import sys,json;d=json.load(sys.stdin);print('version',d['version'],d['status']);print(d['spec']['system_prompt'][:60])"
-# version 3 active
-# 你是一名基金产品投顾助手，服务于摩根士丹利新兴市场领先企业股票基金（MS INVF Emerging Leaders E…
 ```
+
+确认状态为 `active`，系统提示词已恢复为创建金丝雀前的版本。
 
 > **版本口径**：`02 Agent 管理` 列表里的 `版本` 列显示的是**平台修订号**
 > （走过几次五阶段流水线），而这里说的 v1/v2/v3 是 **AgentCore Runtime 版本**。金丝雀铸造候选
-> 版本与回滚只增加 Runtime 版本、不增加平台修订，所以回滚后 API 报 `version: 3`、列表里却可能
-> 仍显示 `1`。两个值都正确，只是口径不同。
+> 版本与回滚只增加 Runtime 版本、不增加平台修订，所以 API 和列表里的版本号可能不同。
+> 两个值都正确，只是口径不同。
 
-> `restored_version: "3"` 表示回滚不是"删掉 v2"，而是**再发布一个版本**，把生产行为恢复成
-> 当前版本的配置并停掉 A/B。Agent 的系统提示词回到了没有"回答规则"的原始版本，
-> **生产没有继续使用这次未验证的候选**。
+> `restored_version` 表示回滚不是删除候选版本，而是**再发布一个版本**，恢复当前配置并停掉 A/B。
+> 生产不会继续使用未通过门禁的候选。
 
 ## 10.5 清理：删掉金丝雀拥有的一切
 
@@ -199,32 +159,31 @@ import sys,json;d=json.load(sys.stdin);print('version',d['version'],d['status'])
 ![清理](images/10-canary-cleanup.png)
 *图 10-8：清理完成，逐项列出删除结果。*
 
-本次清理清单：
+清理结果应覆盖以下资源类型：
 
 ```
-deleted  abtest:can_21131394_target-1b2df1aaac
-deleted  online-eval:can_21131394_oec-qVPfTfAXmU
-deleted  online-eval:can_21131394_oet-pS0OjJEbpE
-deleted  gateway-target:ANSATBE7RU
-deleted  gateway-target:GD2HEBWGC6
-deleted  endpoint:stable211313
-deleted  endpoint:treat211313
-deleted  gateway:lp-canary-21131394e8d7-k7agg5xrgd
+deleted  abtest:<AB_TEST_ID>
+deleted  online-eval:<CONTROL_ONLINE_EVAL_ID>
+deleted  online-eval:<TREATMENT_ONLINE_EVAL_ID>
+deleted  gateway-target:<CONTROL_TARGET_ID>
+deleted  gateway-target:<TREATMENT_TARGET_ID>
+deleted  endpoint:<STABLE_ENDPOINT>
+deleted  endpoint:<TREATMENT_ENDPOINT>
+deleted  gateway:<CANARY_GATEWAY_ID>
 ```
 
 > 和第 09 章的差别：金丝雀**连专属 Gateway 一起删**（`gateway:lp-canary-…`），
 > 配置包 A/B 用的是共享实验网关，只删除自己创建的 target。两条路径都按资源归属清理。
 
-> **S3 部署包也归金丝雀所有**（上面这份清单录制于该行为上线前，所以看不到 `s3:` 行）。
+> **S3 部署包也归金丝雀所有**。
 > 铸造候选和回滚各会上传一个约 37MB 的 zip；清理时会把这两个 key 一并删掉，并各输出一行
 > `deleted s3:agents/<agent>/canary/<canary_id>-candidate.zip`。唯一的例外是**当前生产
 > 正在运行的那个版本对应的 zip**：回滚后保留 `-restore.zip`，晋级后保留 `-candidate.zip`，
 > 输出 `skipped` 并注明原因。
 
-## 10.6 没走完的档位（本次未实跑）
+## 10.6 完成后续档位
 
-`50/50` 与 `1/99` 两档**本次未实跑**，原因是第 02 档判定为 `insufficient-data`，
-门禁按设计阻断了放量。要走完全程，需要：
+要走完 `50/50` 与 `1/99` 两档：
 
 1. 在 90/10 档反复 `追加测试流量`（几十条以上）直到判定不再是 insufficient-data；
 2. 若判定为候选显著获胜，可直接进入 50/50；平局或未达显著则需要**显式覆盖**；

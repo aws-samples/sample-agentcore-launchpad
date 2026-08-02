@@ -9,9 +9,6 @@
 > （MS INVF Emerging Leaders Equity Fund 2021 年 8 月产品资料，40+ 页，含团队、AUM、投资流程、
 > 持仓与业绩数据；第 08 章的评估基准答案就从这份材料里来）。
 >
-> **预计耗时**：约 15 分钟（本次实测：KB 创建到 ACTIVE 约 2 分钟，ingestion 2 分 15 秒，
-> 技能登记+审批 < 1 分钟，Harness 重新发布 28 秒）。
->
 > **本章将创建的 AWS 资源**：1 个 Bedrock 托管知识库（含向量库）、1 个 S3 数据源 + 上传的 PDF、
 > 1 条 AgentCore Registry AGENT_SKILLS 记录、`launchpad-kb-gw` 上的 KB 连接器 target。
 
@@ -49,10 +46,10 @@
 curl -s http://127.0.0.1:8000/api/knowledge-bases | python3 -c "
 import sys,json
 for k in json.load(sys.stdin)['items']: print(k['kb_id'],k['name'],k['status'],k['data_source_count'])"
-# 2MBGUNVMS4 lab-fund-kb ACTIVE 1
+# <KB_ID> lab-fund-kb ACTIVE 1
 ```
 
-> **记录**：记下 KB id，本次是 `2MBGUNVMS4`，后面记作 `<KB_ID>`。
+> **记录**：记下返回的 KB id，后面记作 `<KB_ID>`。
 
 ## 4.2 确认 ingestion 与文档索引状态
 
@@ -66,24 +63,14 @@ Indexed 1 / Documents Failed 0`。*
 点数据源那行的 `▤ 文档 ▸` 可以展开**逐文档**的索引状态：
 
 ![文档级索引状态](images/04-kb-documents.png)
-*图 4-4：逐文档视图。`Morgan_Stanley_Oct_21_(EMEA).pdf · 957.8 KB · 上传 07:51:08 ·
-TEXT_INDEXED · 索引完成 07:54:07`。这一层能区分「文档没上传」和「上传了但没索引成功」。*
-
-本次实测时间线：
-
-| 事件 | 时间 |
-|---|---|
-| KB 创建请求 | 07:50:05 |
-| 文件上传完成 | 07:51:08 |
-| ingestion 开始 | 07:51:44 |
-| ingestion COMPLETE | 07:53:59 |
-| 文档状态 `TEXT_INDEXED` | 07:54:07 |
+*图 4-4：逐文档视图。状态为 `TEXT_INDEXED` 时，文档已经完成索引。这一层能区分
+「文档没上传」和「上传了但没索引成功」。*
 
 > KB 创建与 ingestion 都是**异步**的，控制台不会替你阻塞等待。不要在 `CREATING` 状态挂载，
 > 挂载列表只显示 `ACTIVE` 的 KB。
 >
-> **数据源由后端在后台补齐**：创建请求最多等 60 秒，KB 通常要 1.5–3 分钟才 ACTIVE。
-> 多数情况下接口先返回，数据源随后由后端线程创建，你可以离开页面。
+> **数据源由后端在后台补齐**：创建请求最多等待 60 秒，KB 变为 `ACTIVE` 通常还要几分钟。
+> 接口可能先返回，数据源随后由后端线程创建，你可以离开页面。
 > 如果 KB 已是 `ACTIVE` 却**一个数据源都没有**，详情页会给出橙色告警和 `补建数据源` 按钮。
 > 点击即可，重复点击不会建出两个数据源。
 
@@ -98,19 +85,11 @@ TEXT_INDEXED · 索引完成 07:54:07`。这一层能区分「文档没上传」
 点 `检索`。
 
 ![检索 Playground](images/04-kb-playground.png)
-*图 4-5：检索结果。返回 chunk 带 `score`（本次 0.688）与完整元数据：`_document_title`、
+*图 4-5：检索结果。返回 chunk 带 `score` 与完整元数据：`_document_title`、
 `_excerpt_page_number`、`_chunk_id`、`_source_uri`、`_data_source_id`。*
 
-本次返回的首条 chunk（截取）确实包含基准事实：
-
-```
-Multi-Year Growth Consistent Execution 19 7,000 12,000 … Aug-12 … Aug-21
-MS INVF Emerging Leaders Fund Inception Date is August 17, 2012
-As of August 31, 2021 (USD) …
-```
-
-**预期结果**：至少有一条 score 明显高于其他的 chunk，且内容与问题相关。如果检索回来的都是
-无关片段，先修文档或描述再挂载。Agent 的回答质量受检索结果直接限制。
+**预期结果**：至少有一条 score 明显高于其他结果，且 chunk 包含基金成立日期等相关事实。
+如果检索回来的都是无关片段，先修文档或描述再挂载。Agent 的回答质量受检索结果直接限制。
 
 ## 4.4 登记一份技能到 AgentCore Registry
 
@@ -161,7 +140,7 @@ curl -s http://127.0.0.1:8000/api/registry/records | python3 -c "
 import sys,json
 for r in json.load(sys.stdin)['records']:
   if r['name']=='lab-fund-disclaimer': print(r['record_id'],r['status'],r['version'])"
-# F6Qol0d8HKPD DRAFT 1.0.0
+# <RECORD_ID> DRAFT 1.0.0
 ```
 
 ## 4.5 走完审批：提交 → 批准
@@ -189,8 +168,8 @@ for r in json.load(sys.stdin)['records']:
 *图 4-10：记录状态变为 `● 已发布`（APPROVED），从这一刻起它才会出现在创建/编辑 Agent 的
 技能选择列表里。*
 
-```bash
-# F6Qol0d8HKPD APPROVED 1.0.0
+```text
+<RECORD_ID> APPROVED 1.0.0
 ```
 
 > **注意**：`DEPRECATED` 是终态，停用后不能再改回来；更新一条记录
@@ -218,9 +197,9 @@ DEFAULT 自动切换。*
 ```json
 {"stage":"provision","msg":"kb gateway ready · 1 knowledge base(s) mounted"}
 {"stage":"provision","msg":"iam role reused · kb targets ready (1)"}
-{"stage":"deploy","msg":"UpdateHarness accepted · harnessId lab_fund_advisor-9IoJvol1OL · new version 2"}
+{"stage":"deploy","msg":"UpdateHarness accepted · harnessId <HARNESS_ID> · new version 2"}
 {"stage":"deploy","msg":"harness READY · …"}
-{"stage":"register","msg":"a2a record refreshed · k2CPfzI7gOn1 · auto-submitted"}
+{"stage":"register","msg":"a2a record refreshed · <RECORD_ID> · auto-submitted"}
 ```
 
 ![重新发布完成](images/04-harness-republish.png)
@@ -236,32 +215,32 @@ print('version',d['version'],d['status']);print('skills',s['skills']);print('kbs
 
 ```
 version 2 active
-skills ['s3://launchpad-artifacts-434444145045-us-west-2/skills/lab-fund-disclaimer/']
+skills ['s3://launchpad-artifacts-<ACCT>-us-west-2/skills/lab-fund-disclaimer/']
 kbs ['lab-fund-kb']
 ```
 
 > **Harness 的知识库挂载路径**：平台维护一个专用网关 `launchpad-kb-gw`，为每个 KB 建一个
 > `Retrieve` target、为每个挂载的 Agent 建一个 Agentic 检索 target，Harness 以
 > `agentcore_gateway` 工具（OAuth CLIENT_CREDENTIALS）连上去调用检索。这条路径**只有托管
-> Harness 能走** —— 自己写代码的 Runtime 没有这个托管挂载点。容器与 ZIP 方式走另一条通道，
+> Harness 能走**，自己写代码的 Runtime 没有这个托管挂载点。容器与 ZIP 方式走另一条通道，
 > 见下面 4.7。
 >
 > 另外，`UpdateHarness` 的语义是**省略即保留**（不是清空），但 Registry 记录的
 > `UpdateRegistryRecord` 相反，省略字段会被重置。这类差异都封在后端 wrapper 里，
 > 但你手写脚本调 AWS 时要小心。
 
-**这里有一个容易误解的状态变化**：重新发布时，`register` 阶段会刷新 A2A 记录
-（`a2a record refreshed · k2CPfzI7gOn1 · auto-submitted`），而 `UpdateRegistryRecord`
-会把记录状态**重置回 `DRAFT`**。所以本次实验结束时，`lab-fund-advisor` 的 Registry 记录是
-`DRAFT`，而没有重新发布过的另两个 Agent 还是 `PENDING_APPROVAL`：
+**这里有一个容易误解的状态变化**：重新发布时，`register` 阶段会刷新 A2A 记录，而
+`UpdateRegistryRecord` 会把记录状态**重置回 `DRAFT`**。因此重新发布后，
+`lab-fund-advisor` 的 Registry 记录会变为 `DRAFT`，没有重新发布的 Agent 仍为
+`PENDING_APPROVAL`：
 
-```
-G5ccx6y2DjOR   lab-fund-packager    A2A   PENDING_APPROVAL
-k2CPfzI7gOn1   lab-fund-advisor     A2A   DRAFT              ← 因为重新发布过
-FZuhhw9jbJaK   lab-fund-assistant   A2A   PENDING_APPROVAL
+```text
+lab-fund-packager    A2A   PENDING_APPROVAL
+lab-fund-advisor     A2A   DRAFT              ← 因为重新发布过
+lab-fund-assistant   A2A   PENDING_APPROVAL
 ```
 
-这不是 bug，而是 AWS 更新语义的结果：**改过的记录要重新走审批**。
+这是 AWS 更新语义带来的状态变化：**改过的记录要重新走审批**。
 
 ## 4.7（可选）把同一个知识库挂到容器 / ZIP 方式的 Agent 上
 
@@ -271,13 +250,13 @@ FZuhhw9jbJaK   lab-fund-assistant   A2A   PENDING_APPROVAL
 创建方式选 `Strands Studio`（表单路径）或 `其他 Agent SDK`（容器 · SDK 保持默认的
 `Claude Agent SDK`），在配置页勾选 `lab-fund-kb · kb`。走 ZIP 路径时记得同
 [2.2](02-deploy-runtime.md#22-配置-agent) 把 `模型来源` 切回 `Bedrock` 并选
-`global.anthropic.claude-sonnet-5`，否则下面的耗时与答案对不上（容器路径没有 `模型来源`
-选择器，本来就是 Claude；本节末尾那条 `POST /api/agents` 的 curl 也不受影响 —— 后端 schema
+`global.anthropic.claude-sonnet-5`，以便和主线 Agent 使用同一模型（容器路径没有 `模型来源`
+选择器，本来就是 Claude；本节末尾那条 `POST /api/agents` 的 curl 也不受影响，后端 schema
 默认仍是 `claude-sonnet-5`）。注意 chip 下方的说明文字会随方式变化：
 
 - Harness：*以网关检索工具的形式挂载（逐库检索 + 多步 agentic 检索）*
 - 容器 / ZIP：*生成的 Agent 代码里会内置两个工具…`kb_search`（单次相似度检索，快）与
-  `kb_deep_search`（agentic 多步 —— 规划子查询并返回带引用的答案，较慢且更贵）*
+  `kb_deep_search`（agentic 多步，规划子查询并返回带引用的答案，较慢且更贵）*
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/agents -H 'content-type: application/json' -d '{
@@ -289,65 +268,49 @@ curl -s -X POST http://127.0.0.1:8000/api/agents -H 'content-type: application/j
 ```
 
 **预期结果**：流水线和普通 ZIP / 容器部署**完全一样**，`供给` 阶段**不会**出现 KB 网关
-那两行 —— 因为这条通道不用网关。唯一的差别在 `生成` 阶段的代码体积：
+相关日志，因为这条通道不用网关。`生成` 日志中的模板体积会增加，生成代码里包含
+**两个**检索工具，并在系统提示词中注入「## Knowledge bases」，告诉模型有哪些库、
+各自包含什么内容，以及何时使用哪个工具。
 
-```
-generate  strands template ·  6333 bytes   ← 没挂 KB（第 02 章的主线 Agent）
-generate  strands template · 15672 bytes   ← 挂了 1 个 KB
-```
-
-多出来的 ~9.3KB 是模板里的**两个**检索工具，加上注入系统提示词的那段「## Knowledge
-bases」（告诉模型有哪些库、各装什么、什么时候用哪个工具）：
-
-| 工具 | 底层 API | 形态 | 实测 |
+| 工具 | 底层 API | 形态 | 适用场景 |
 |---|---|---|---|
-| `kb_search` | `Retrieve` | 一次相似度检索 | ~0.9 秒，不消耗模型调用 |
-| `kb_deep_search` | `AgenticRetrieveStream` | 基础模型驱动的规划循环：拆子查询 → 跨库多轮检索 →（必要时）整篇拉取文档 → 返回带引用的答案 + 支撑段落 | 13 秒左右，每轮规划一次模型调用 |
+| `kb_search` | `Retrieve` | 一次相似度检索，不消耗模型调用 | 单点事实 |
+| `kb_deep_search` | `AgenticRetrieveStream` | 基础模型驱动的规划循环：拆子查询 → 跨库多轮检索 →（必要时）整篇拉取文档 → 返回带引用的答案 + 支撑段落 | 比对、列举、汇总 |
 
-两者都用 Runtime 执行角色的 IAM 凭据直连 Bedrock 检索数据面（`kb_search` 与 4.4 的检索
+两者都用 Runtime 执行角色的 IAM 凭据直连 Bedrock 检索数据面（`kb_search` 与 4.3 的检索
 Playground 同一个 API），不需要网关也不需要令牌。`maxAgentIteration` 由平台按挂载库数派生：
 单库 3 轮、多库 5 轮。
 
-### 深检索到底强在哪：一个能看出差别的问题
+### 用一个问题观察深检索
 
-本次实测（ZIP 部署 66 秒 / 容器 114 秒）问：
+向挂载知识库的 Agent 提问：
 「对比 Emerging Markets Leaders 策略与 Global Emerging Markets 策略：各自的资产规模是多少，
 投资流程/组合构建规则上有什么不同？请引用来源。」
 
-两个 Agent 都先调 `kb_deep_search`，然后用 `kb_search` 补细节，答案不只是对 —— 它们**发现了
-原文的一个口径陷阱**：
+检查回答是否区分文档中的两个口径：`Global Emerging Markets` 既指一个子策略，也指包含多个
+子策略的大类。还应核对回答是否把分散在多页的资产规模、筛选漏斗、持仓数量、Active Share、
+换手率、ROIC 标准和卖出纪律组合起来，并给出引用。
+
+不要只看最终答案。到第 07 章的追踪中确认它使用了深检索，span 层级应类似：
 
 ```
-"Global Emerging Markets" 在这份资料里既是一个子策略（$7,246 MM），
-也是包含四个子策略的大类（$10,706 MM = 7,246 + 333 + 2,339 + 788）。
-两处数字口径不同，需要向客户说明。
+invoke_agent Strands Agents
+  execute_tool kb_deep_search               ← 规划循环的完整耗时
+    Bedrock Agent Runtime.AgenticRetrieveStream
+  execute_tool kb_search
+    Bedrock Agent Runtime.Retrieve
+  execute_event_loop_cycle → chat           ← 组织最终答案
 ```
 
-同时它们把散落在多页的证据拼齐了：筛选漏斗 10,000 → 300–400 → ~100 → 25–40 只
-（实际持仓 28 只）、Active Share 89.63%、换手率 17.86%、ROIC > 15% 的选股标准、卖出纪律。
-这类「证据分散在文档各处」的问题正是单次检索答不好的。
+> **看追踪时容易误判的一点**：`Bedrock Agent Runtime.AgenticRetrieveStream` 这个 span
+> 只覆盖发起调用的过程，不包含之后消费事件流的时间。判断深检索开销时，应看外层的
+> `execute_tool kb_deep_search`。
 
-**别只看答案，去第 07 章的追踪里看它到底怎么查的**：
+### 验证工具选择
 
-```
-invoke_agent Strands Agents                             53809.2 ms
-  execute_tool kb_deep_search                           13395.8 ms   ← 规划循环的真实耗时
-    Bedrock Agent Runtime.AgenticRetrieveStream            160.0 ms
-  execute_tool kb_search  ×2                              ~860 ms each
-    Bedrock Agent Runtime.Retrieve ×2                      ~850 ms each
-  execute_event_loop_cycle → chat …                      29601.8 ms   ← 最后组织答案
-```
-
-> **看追踪时容易被骗的一点**：`Bedrock Agent Runtime.AgenticRetrieveStream` 这个 span 只有
-> 160 毫秒。它是 boto3 自动埋点，覆盖的是**发起调用**那一下，不包含之后消费事件流的时间。
-> 真实开销要看外层的 `execute_tool kb_deep_search`（13.4 秒）。
-
-### 快慢工具真的会被区分使用吗
-
-会。换一个单点事实问题：「这只基金截至 2021 年 8 月 31 日持有多少只股票？」
-容器方式**只调了 `kb_search`**（29 秒，没碰深检索），答「28 只股票」并引用
-Portfolio Characteristics 表格。也就是说提示词里的引导确实在起作用，而不是模型一律去拿最贵的
-那个工具。
+再问一个单点事实问题：「这只基金截至 2021 年 8 月 31 日持有多少只股票？」
+预期只调用 `kb_search`，不调用深检索，并回答「28 只股票」，引用 Portfolio Characteristics
+表格。由此可以确认提示词会按问题复杂度选择工具。
 
 用完删掉：
 
@@ -355,8 +318,8 @@ Portfolio Characteristics 表格。也就是说提示词里的引导确实在起
 curl -s -X DELETE http://127.0.0.1:8000/api/agents/<ID>
 ```
 
-> **那两条通道现在还差什么**：检索能力已经等价（都有单次 + agentic 多步）。剩下的是形态差异
-> —— Harness 的工具由网关托管、绑定哪些库由平台在 target 上配置、Agent 调用时改不了；
+> **那两条通道现在还差什么**：检索能力已经等价（都有单次 + agentic 多步），差别在接入形态。
+> Harness 的工具由网关托管，绑定哪些库由平台在 target 上配置，Agent 调用时改不了；
 > 容器 / ZIP 的检索逻辑就写在你能看到能改的生成代码里，代价是那套代码归你维护。
 > 画布（Studio）方式暂不支持，因为它的代码由 Studio 生成，平台没有注入工具的位置。
 
@@ -380,7 +343,7 @@ curl -s -X DELETE http://127.0.0.1:8000/api/agents/<ID>
 | KB 已 `ACTIVE` 但数据源为 0、ingestion 从未开始 | 后端补齐数据源的后台任务没跑成（例如期间重启过服务），或该 KB 建于此修复之前 | 详情页橙色告警里点 `补建数据源`；文件已在制品桶里，补建后 ingestion 会自动开始 |
 | ingestion `COMPLETE` 但 `Documents Failed = 1` | PDF 无文本层（扫描件），或中文 PDF 抽取问题 | 换文本型 PDF；中文 PDF 已知问题见 `docs/issues/2026-07-13-managed-kb-cjk-pdf-extraction.md` |
 | 技能不出现在挂载列表 | 状态还是 `DRAFT` / `PENDING_APPROVAL` | 必须先 `批准 · 发布` |
-| 4.7 里容器 / ZIP 的 `kb_search` / `kb_deep_search` 每次都回 `AccessDeniedException` | 执行角色缺 `bedrock:Retrieve` / `bedrock:AgenticRetrieveStream`；**`make bootstrap` 只在栈不存在时才 `cdk deploy`** | `cd infra && uv run cdk deploy --require-approval never`（约 30 秒），无需重新发布 Agent |
+| 4.7 里容器 / ZIP 的 `kb_search` / `kb_deep_search` 每次都回 `AccessDeniedException` | 执行角色缺 `bedrock:Retrieve` / `bedrock:AgenticRetrieveStream`；**`make bootstrap` 只在栈不存在时才 `cdk deploy`** | `cd infra && uv run cdk deploy --require-approval never`，无需重新发布 Agent |
 | `kb_deep_search` 一次要十几秒到几十秒 | 正常：每轮规划都是一次基础模型调用 | 单点事实问题引导模型用 `kb_search`；深检索留给比对/列举/汇总 |
 | 注册中心搜索框搜不到刚建的记录 | 搜索走 AWS `SearchRegistryRecords`，索引有延迟 | 用顶部类型筛选按钮（`技能`）在列表里找 |
 | 重新发布点了没反应 | 有二次确认弹窗 | 在弹窗里再点一次 `重新发布` |

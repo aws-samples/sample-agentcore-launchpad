@@ -4,15 +4,13 @@
 > 新环节。跳过它不影响后续章节，第 07 章起用到的 trace、数据集、实验对象都来自
 > 第 02–05 章。时间紧张的场次可以直接从第 05 章跳到第 07 章。
 >
-> 跳过后的区别只有一个：第 06 章那两个 `curl` 会话不会出现在第 07 章的会话列表里，
-> 那一节的截图里会少两行（不影响该章任何结论）。
+> 跳过后的区别只有一个：第 06 章的两个 `curl` 会话不会出现在第 07 章的会话列表里，
+> 不影响该章操作。
 >
 > **目标**：签发一枚 API Key，用 `curl` 走公共 `/v1` 接口同步调用与流式调用同一个 Agent，
 > 验证「控制台入口」与「系统集成入口」共用同一条 invoke 链路。
 >
 > **前置条件**：完成[第 05 章](05-chat-memory.md)，`lab-fund-assistant` 可正常对话。
->
-> **预计耗时**：约 10 分钟。
 >
 > **本章将创建的 AWS 资源**：无（API Key 只存在本地台账，且只存 sha256 摘要）。
 
@@ -36,7 +34,7 @@ Runtime 数据面）、记忆读写、工具调用、遥测都是同一份代码
 2. **立即复制**弹出的明文密钥。界面会提示 *「立即复制 — 仅显示一次」*。
 
 ![API 密钥列表](images/06-api-keys.png)
-*图 6-1：密钥列表只保留前缀（`lp_live_2381…`）与备注名，并可 `已启用 / 已停用` 切换。
+*图 6-1：密钥列表只保留前缀（`lp_live_…`）与备注名，并可 `已启用 / 已停用` 切换。
 台账里存的是 sha256 摘要，明文不落库，丢失后只能重新签发。*
 
 > 上图是**刷新页面后**的样子（只剩前缀）。截图/录屏演示时请注意：新建那一刻的明文
@@ -46,7 +44,7 @@ Runtime 数据面）、记忆读写、工具调用、遥测都是同一份代码
 
 ```bash
 export LP_KEY='lp_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
-export AGENT_ID='600f1e6695e64d408e2778b74209f7db'   # <ASSISTANT_ID>
+export AGENT_ID='<ASSISTANT_ID>'
 ```
 
 ## 6.3 同步调用 `/v1/agents/{id}/invoke`
@@ -57,14 +55,14 @@ curl -s -X POST "http://127.0.0.1:8000/v1/agents/$AGENT_ID/invoke" \
   -d '{"prompt":"用一句话说明这只基金的投资理念。","session_id":null}' | python3 -m json.tool
 ```
 
-本次实际返回（`text` 已转成中文显示，原始响应里是 `\uXXXX` 转义）：
+响应字段如下。`text` 的内容和 `latency_ms` 会随调用变化：
 
 ```json
 {
     "agent": "lab-fund-assistant",
-    "text": "本基金的核心投资理念是：**在新兴市场中精选具有持续竞争优势、由优秀管理层驱动、能够实现长期复利增长的\"领先企业\"，以集中持股、长期持有的方式为投资者创造超额回报。**\n",
-    "session_id": "45ef508626a94cbeb4ad526d1c5c369b143bedfe18d14e7186e2ecee0bf07ca4",
-    "latency_ms": 9147
+    "text": "<模型返回的文本>",
+    "session_id": "<SESSION_ID>",
+    "latency_ms": "<NUMBER>"
 }
 ```
 
@@ -72,7 +70,7 @@ curl -s -X POST "http://127.0.0.1:8000/v1/agents/$AGENT_ID/invoke" \
 
 - `session_id: null` 表示**新建会话**，响应会回填服务端生成的 session id。
 - 想做多轮，把上一次返回的 `session_id` 原样带回来即可（记忆按会话隔离）。
-- `latency_ms` 是端到端耗时，本次 9.1 秒（含模型生成）。
+- `latency_ms` 是包含模型生成在内的端到端耗时。
 
 ## 6.4 流式调用 `/v1/agents/{id}/invoke-stream`
 
@@ -82,17 +80,17 @@ curl -sN -X POST "http://127.0.0.1:8000/v1/agents/$AGENT_ID/invoke-stream" \
   -d '{"prompt":"这只基金的持仓集中度有什么特点？两句话。","session_id":null}'
 ```
 
-本次实际输出（SSE，截取前几帧）：
+SSE 输出应先出现 `meta`，随后出现若干 `delta`。例如：
 
 ```
 event: meta
-data: {"session_id": "2dd5570a…9451", "agent": "lab-fund-assistant", "mode": "buffered"}
+data: {"session_id": "<SESSION_ID>", "agent": "lab-fund-assistant", "mode": "buffered"}
 
 event: delta
-data: {"text": "摩根士丹利新兴市场领先企业股票基金（MS INVF Emerging Leaders Equity Fund）采用**高"}
+data: {"text": "<第一段增量文本>"}
 
 event: delta
-data: {"text": "度集中的投资组合**策略，通常持有约**25–40只**精选个股，远低于基准指数的成分股数量。…"}
+data: {"text": "<下一段增量文本>"}
 ```
 
 事件类型：
@@ -101,15 +99,15 @@ data: {"text": "度集中的投资组合**策略，通常持有约**25–40只**
 |---|---|
 | `meta` | 会话与 Agent 元信息，含 `mode` |
 | `delta` | 增量文本 |
-| `tool` | 工具调用（本次没触发） |
+| `tool` | 工具调用；是否出现取决于当前问题 |
 | `complete` | 结束 |
 
 > `"mode": "buffered"` 是个有用的细节：**zip/studio runtime 走缓冲兼容路径**（先取回再切帧），
 > 而 Harness 与 Claude SDK 容器能吐**原生**模型增量。所以同一个 SSE 契约下，
 > 不同创建方式的"逐字"体感不同，这是数据面能力差异。
 >
-> 这次它答"约 25–40 只"，和第 05 章那次的"20–35 只"不一样。无知识库接地时，
-> 同一事实的回答**并不稳定**。第 08 章的评估就是要把这种不稳定量化出来。
+> `lab-fund-assistant` 没有挂知识库，同一事实的回答可能不稳定。不要把这一节的回答当作
+> 资料依据；第 08 章会用带真值的数据集量化这种差异。
 
 ## 6.5 鉴权失败长什么样
 

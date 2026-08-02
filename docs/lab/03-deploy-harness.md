@@ -7,8 +7,6 @@
 > **前置条件**：完成[第 02 章](02-deploy-runtime.md)。容器方式需要账号里有
 > `launchpad-agent-builder` CodeBuild 项目（`make bootstrap` 已创建）。
 >
-> **预计耗时**：约 10 分钟（本次实测 Harness **18 秒**、容器 **125 秒**）。
->
 > **本章将创建的 AWS 资源**：1 个 AgentCore Harness、1 个 AgentCore Runtime（容器）、
 > 1 个 ECR 镜像 tag、1 次 CodeBuild 构建、2 条 Registry A2A 记录。
 
@@ -46,38 +44,30 @@ Harness 是**声明式**的：你给出模型、提示词、工具、技能、�
 ![Harness 部署完成](images/03-harness-deploy.png)
 *图 3-2：Harness 部署完成。注意 `打包` 阶段显示 `skipped · harness — no build required`。*
 
-> 这张图取自切到 sonnet-5 后的那次重新发布（列表行 `详情` 还原的 job `#5ed8ddd7`，见下方说明），
-> 所以 `deploy` 行是 `UpdateHarness`，下方还多了一块「已挂载知识库」，也就是第 04 章挂上的
-> `lab-fund-kb`。
-> 你在本章首次创建时这两处分别是 `CreateHarness`，且没有知识库。
+> 图中展示的是重新发布后的状态，所以 `deploy` 行为 `UpdateHarness`，下方还显示第 04 章
+> 挂载的 `lab-fund-kb`。你在本章首次创建时会看到 `CreateHarness`，且没有知识库。
 
-本次实测事件流（**18 秒**完成）：
+首次创建时，事件流应包含以下内容：
 
 ```json
-{"stage":"generate","msg":"harness request generated for lab_fund_advisor · model global.anthropic.claude-sonnet-4-6"}
+{"stage":"generate","msg":"harness request generated for lab_fund_advisor · model global.anthropic.claude-sonnet-5"}
 {"stage":"package","msg":"skipped · harness — no build required"}
 {"stage":"provision","msg":"reusing shared execution role arn:aws:iam::…:role/launchpad-agent-execution-role"}
-{"stage":"deploy","msg":"CreateHarness accepted · harnessId lab_fund_advisor-9IoJvol1OL"}
-{"stage":"deploy","msg":"harness READY · arn:aws:bedrock-agentcore:us-west-2:…:harness/lab_fund_advisor-9IoJvol1OL"}
-{"stage":"register","msg":"a2a record created · k2CPfzI7gOn1 · auto-submitted"}
+{"stage":"deploy","msg":"CreateHarness accepted · harnessId <HARNESS_ID>"}
+{"stage":"deploy","msg":"harness READY · arn:aws:bedrock-agentcore:us-west-2:<ACCT>:harness/<HARNESS_ID>"}
+{"stage":"register","msg":"a2a record created · <RECORD_ID> · auto-submitted"}
 ```
 
-> 同样，这份日志录于首次创建时（当时表单默认 `claude-sonnet-4-6`；Harness 表单默认现在是
-> Mantle 的 `openai.gpt-5.6-terra`）。切到本实验在 3.1 里选定的 `claude-sonnet-5`
-> 的那次重新发布实测 **21 秒**，`deploy` 行为 `UpdateHarness accepted · … · new version 3`，
-> `generate` 行为 `harness request generated for lab_fund_advisor · model
-> global.anthropic.claude-sonnet-5`。
-
-本次实验结果：
+在 Agent 列表或 API 返回中确认以下字段：
 
 ```json
 {
-  "id": "26f7707c0d964f988360e6a5b4f161e1",
+  "id": "<ADVISOR_ID>",
   "name": "lab-fund-advisor",
   "method": "harness",
   "status": "active",
-  "arn": "arn:aws:bedrock-agentcore:us-west-2:434444145045:harness/lab_fund_advisor-9IoJvol1OL",
-  "registry_record_id": "k2CPfzI7gOn1"
+  "arn": "arn:aws:bedrock-agentcore:us-west-2:<ACCT>:harness/<HARNESS_ID>",
+  "registry_record_id": "<RECORD_ID>"
 }
 ```
 
@@ -108,8 +98,7 @@ Hooks、MCP 服务器），经 CodeBuild 打成 **ARM64** 镜像推到 ECR，再
    | AGENT SDK | `Claude Agent SDK`（这个类别目前只有它，默认已选中） |
    | 模型 | 保持默认的 Claude 模型（这条路径固定走 Bedrock Converse，没有 `模型来源` 选择器） |
    | 系统提示词 | `你是基金材料分析助手，负责把基金产品文档整理成结构化摘要，可调用子 Agent 与技能完成多步任务。` |
-   | 技能 | 勾选**任意一个已发布（APPROVED）的技能**（本次实跑勾的是 `meeting-summarizer`；
-     你环境里可能是别的名字。第 04 章会自己登记一个，这里只是演示技能会被物理打进镜像） |
+   | 技能 | 勾选**任意一个已发布（APPROVED）的技能**。第 04 章会登记一个新技能，这里只验证技能会被物理打进镜像 |
    | 文件系统 | 保持 `托管会话存储 ✓`，挂载路径 `/mnt/workspace` |
 
 ![容器配置页](images/03-container-config.png)
@@ -119,27 +108,27 @@ Hooks、MCP 服务器），经 CodeBuild 打成 **ARM64** 镜像推到 ECR，再
 挂载 S3 Files 或 EFS。「托管会话存储」让同一会话在停止/恢复之间保留 `/mnt` 文件
 （闲置 14 天过期）。*
 
-3. **点击** `▲ 启动 AGENT`，然后观察 `打包` 阶段：这次它真的在构建。
+3. **点击** `▲ 启动 AGENT`，然后观察 `打包` 阶段的构建过程。
 
 ![容器构建中](images/03-container-build.png)
 *图 3-4：`打包` 阶段逐步打印 CodeBuild 的 phase：`QUEUED → PRE_BUILD → BUILD → POST_BUILD
-→ COMPLETED`。生成阶段的日志显示技能已被打进 `.claude/skills/meeting-summarizer/SKILL.md`。*
+→ COMPLETED`。生成阶段的日志显示所选技能已被打进 `.claude/skills/<SKILL_NAME>/SKILL.md`。*
 
 ![容器部署完成](images/03-container-done.png)
 *图 3-5：容器方式五阶段完成，镜像 tag 为 `launchpad-agents:lab-fund-packager-v1`。*
 
-本次实测事件流（**125 秒**完成，其中 CodeBuild 1.8 分钟）：
+事件流应体现构建上下文、CodeBuild 阶段、ECR 镜像和 Runtime 创建：
 
 ```json
-{"stage":"generate","msg":"skills bundled: meeting-summarizer (1 files, 0.3 KB)"}
-{"stage":"generate","msg":"build context assembled: .claude/skills/meeting-summarizer/SKILL.md, Dockerfile, README.md, buildspec.yml, main.py, requirements.txt, tracing.py"}
+{"stage":"generate","msg":"skills bundled: <SKILL_NAME> (<FILE_COUNT> files, <SIZE>)"}
+{"stage":"generate","msg":"build context assembled: .claude/skills/<SKILL_NAME>/SKILL.md, Dockerfile, README.md, buildspec.yml, main.py, requirements.txt, tracing.py"}
 {"stage":"package","msg":"source zip uploaded → s3://launchpad-artifacts-…/builds/lab-fund-packager/source.zip"}
-{"stage":"package","msg":"codebuild started · launchpad-agent-builder:bde5f0a3-…"}
+{"stage":"package","msg":"codebuild started · launchpad-agent-builder:<BUILD_ID>"}
 {"stage":"package","msg":"codebuild phase: QUEUED → PRE_BUILD → BUILD → POST_BUILD → COMPLETED"}
 {"stage":"package","msg":"image pushed · …dkr.ecr.us-west-2.amazonaws.com/launchpad-agents:lab-fund-packager-v1"}
-{"stage":"package","msg":"codebuild · arm64 · 1.8m → :lab-fund-packager-v1"}
-{"stage":"deploy","msg":"CreateAgentRuntime accepted · runtimeId lab_fund_packager_88c7cd-fMOWwcBt9f"}
-{"stage":"register","msg":"a2a record created · G5ccx6y2DjOR · auto-submitted"}
+{"stage":"package","msg":"codebuild · arm64 · <DURATION> → :lab-fund-packager-v1"}
+{"stage":"deploy","msg":"CreateAgentRuntime accepted · runtimeId <RUNTIME_ID>"}
+{"stage":"register","msg":"a2a record created · <RECORD_ID> · auto-submitted"}
 ```
 
 > `tracing.py` 出现在构建上下文里，是因为 Claude SDK 容器把 `claude` CLI 当子进程跑，
@@ -148,19 +137,18 @@ Hooks、MCP 服务器），经 CodeBuild 打成 **ARM64** 镜像推到 ECR，再
 > 在追踪瀑布图中显示容器 Agent。
 
 > **注意**：容器方式部署完成后，务必手工调一次再往下走。五阶段全绿只说明镜像已推送、
-> Runtime 到了 `READY`，**不代表容器进程能起来**。平台目前没有部署后探活。本次实跑就在这里
-> 撞到一个真实缺陷（依赖漂移导致容器启动即崩，已修复），过程见[第 05 章末](05-chat-memory.md#关于容器-agent-调用失败本次实测)。
+> Runtime 到了 `READY`，**不代表容器进程能起来**。平台目前没有部署后探活。验证方法见
+> [第 05 章末](05-chat-memory.md#容器-agent-部署后的探活)。
 
-## 3.3 三种方式对照（实测数据）
+## 3.3 三种方式对照
 
 列序与 `/create` 页上的卡片顺序一致：
 
 | | 方式B 托管 Harness | 方式C Strands ZIP | 方式A 其他 Agent SDK · 容器 |
 |---|---|---|---|
 | 本实验 Agent | `lab-fund-advisor` | `lab-fund-assistant` | `lab-fund-packager` |
-| **本次实测耗时** | **18 秒** | **69 秒** | **125 秒** |
-| `generate` | 组装 `CreateHarness` 请求 | 渲染 Strands 模板（6.3 KB） | 组装 ARM64 构建上下文（7 文件） |
-| `package` | **跳过**（无产物） | pip(arm64) → zip(37.3MB) → S3 | zip → S3 → CodeBuild → ECR |
+| `generate` | 组装 `CreateHarness` 请求 | 渲染 Strands 模板 | 组装 ARM64 构建上下文 |
+| `package` | **跳过**（无产物） | pip(arm64) → zip → S3 | zip → S3 → CodeBuild → ECR |
 | `provision` | 复用共享执行角色 | 复用共享执行角色 | 复用共享执行角色 |
 | `deploy` | `CreateHarness` | `CreateAgentRuntime` | `CreateAgentRuntime(containerConfiguration)` |
 | `register` | A2A 记录，自动提交 | A2A 记录，自动提交 | A2A 记录，自动提交 |
@@ -169,7 +157,7 @@ Hooks、MCP 服务器），经 CodeBuild 打成 **ARM64** 镜像推到 ECR，再
 | 技能进镜像 | 声明式挂载 | 不支持 | 支持，位于 `.claude/skills/` |
 | 配置包 A/B | 不支持 | 支持 | 不支持 |
 | 金丝雀 | 不支持 | 支持 | 暂不支持 |
-| `模型来源` | 有（默认 Mantle） | 有（A2A 子模式固定 Bedrock） | 无 —— 由 `AGENT SDK` 决定，固定 Claude |
+| `模型来源` | 有（默认 Mantle） | 有（A2A 子模式固定 Bedrock） | 无，由 `AGENT SDK` 决定，固定 Claude |
 
 三种方式都支持单次检索和多步 agentic 检索，只是接入路径不同。Harness 通过
 `launchpad-kb-gw` 调用逐库 `Retrieve` 与跨库 `AgenticRetrieveStream`；其他 Agent SDK 容器和
@@ -186,10 +174,10 @@ for a in json.load(sys.stdin)['agents']:
   if a['name'].startswith('lab-'): print(a['id'],a['name'],a['method'],a['status'])"
 ```
 
-```
-3ca0341b0d354f63a64f6ae81598c9ba lab-fund-packager  container    active
-26f7707c0d964f988360e6a5b4f161e1 lab-fund-advisor   harness      active
-600f1e6695e64d408e2778b74209f7db lab-fund-assistant zip_runtime  active
+```text
+<PACKAGER_ID>  lab-fund-packager   container    active
+<ADVISOR_ID>   lab-fund-advisor    harness      active
+<ASSISTANT_ID> lab-fund-assistant  zip_runtime  active
 ```
 
 ---
@@ -207,12 +195,12 @@ for a in json.load(sys.stdin)['agents']:
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| 容器 `打包` 阶段停在 `QUEUED` 很久 | CodeBuild 并发排队 | 等待；本次 QUEUED→COMPLETED 共 1.8 分钟 |
+| 容器 `打包` 阶段停在 `QUEUED` 很久 | CodeBuild 并发排队 | 继续观察日志；进入 `PRE_BUILD` 后说明已开始执行 |
 | 容器构建失败在 `BUILD` | Dockerfile 依赖拉取失败或 ECR 权限 | 去 CodeBuild 控制台看 `launchpad-agent-builder` 的完整日志 |
-| Harness 创建报模型不可用，或创建成功但**首次调用**报 `404 … does not exist` | 该模型未在账号/区域开通；或在 us-west-2 选了只在 us-east-1 提供的 Mantle 模型（`openai.gpt-5.6-sol`、`openai.gpt-5.5`）—— Harness 只能在自己所在区域解析 Mantle 模型 | 在当前 `模型来源` 的模型下拉里换一个本区域可用的模型；下拉里没有的 id 走 `Custom model ID…` 手填 |
+| Harness 创建报模型不可用，或创建成功但**首次调用**报 `404 … does not exist` | 该模型未在账号/区域开通；或在 us-west-2 选了只在 us-east-1 提供的 Mantle 模型（`openai.gpt-5.6-sol`、`openai.gpt-5.5`）。Harness 只能在自己所在区域解析 Mantle 模型 | 在当前 `模型来源` 的模型下拉里换一个本区域可用的模型；下拉里没有的 id 走 `Custom model ID…` 手填 |
 | Harness 评估报 `eval.harness_no_telemetry` | 还没被调用过，日志组不存在 | 先完成第 05 章的对话，再回来评估 |
 | 想把 Harness 变成可做 A/B 的 Runtime | 列表行有「转换 ⇄ RT」 | 转换会导出代码并植入 config-bundle graft，转换后就能做 A/B（本实验不走这条路） |
-| 容器部署成功但**调用**报 `RuntimeClientError` | 修复前的依赖漂移缺陷（模板未锁 OTEL 小版本） | **已于 2026-07-26 修复并真机复验**；现象、根因与修复见[第 05 章末](05-chat-memory.md#关于容器-agent-调用失败本次实测)。若在旧检出上复现，先更新代码再重新发布 |
+| 容器部署成功但**调用**报 `RuntimeClientError` | 容器进程未正常启动，旧检出还可能包含已修复的 OTEL 依赖问题 | 先查 Runtime 日志；旧检出请更新代码后重新发布，说明见[第 05 章末](05-chat-memory.md#容器-agent-部署后的探活) |
 
 ---
 

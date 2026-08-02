@@ -6,8 +6,6 @@
 > **前置条件**：一个开启了 Bedrock AgentCore 预览的 AWS 账号（`us-west-2`）、管理员级凭证、
 > `uv ≥ 0.8`、`Node.js ≥ 20`、AWS CDK CLI v2、Docker（仅方式A 容器路径需要）。
 >
-> **预计耗时**：首次约 15–20 分钟（其中 `make bootstrap` 约 8–12 分钟）；已引导过的环境约 2 分钟。
->
 > **本章将创建的 AWS 资源**：`make bootstrap` 创建的共享基础设施（S3 产物桶、ECR 仓库、
 > CodeBuild 项目、Cognito 用户池、IAM 执行角色、AgentCore Registry / Memory / Gateway /
 > Policy Engine 单例）。**本章不创建任何 Agent。**
@@ -28,9 +26,9 @@ aws sts get-caller-identity
 
 ```json
 {
-    "UserId": "AROAWKJXDSGK5D7ZWT4CB:i-0785d8d0b8b950448",
-    "Account": "12345678900",
-    "Arn": "arn:aws:sts::12345678900:assumed-role/admin_role_for_workshop/i-0785d8d0b8b950448"
+    "UserId": "<USER_ID>",
+    "Account": "<ACCOUNT_ID>",
+    "Arn": "arn:aws:sts::<ACCOUNT_ID>:assumed-role/<ROLE_NAME>/<SESSION_NAME>"
 }
 ```
 
@@ -60,10 +58,13 @@ cd infra    && uv sync && cd ..
 make bootstrap        # = cd backend && uv run python ../scripts/bootstrap.py
 ```
 
+首次执行会部署 CDK 栈并创建 AgentCore 单例，可能持续数分钟。以终端里的阶段输出为准，
+不要因为短时间没有新日志就中断命令。
+
 这个命令可以重复执行：CDK 栈只在缺失时部署，AgentCore 单例只创建一次，重跑会打印
 `reused`。它创建/复用下列资源，并把结果写入 `config/launchpad.yaml`：
 
-| 资源类别 | 名称（本次实验环境的实际值） |
+| 资源类别 | 资源名称 |
 |---|---|
 | S3 产物桶 | `launchpad-artifacts-<ACCOUNT_ID>-us-west-2` |
 | ECR 仓库 | `launchpad-agents` |
@@ -78,10 +79,6 @@ make bootstrap        # = cd backend && uv run python ../scripts/bootstrap.py
 **预期结果**：命令结束后 `config/launchpad.yaml` 存在，且包含 `region`、`account_id`、
 `resources.*`（gateway_id / registry_id / memory_id / execution_role_arn …）。这个文件
 **已被 gitignore**，其中含演示用户密码，按本地机密对待。
-
-> **注意**：编写本指南时**没有重跑**本章的 bootstrap（实验环境早已完成引导，重跑不会
-> 产生新信息）。命令与产物清单依据 `docs/setup.zh-CN.md` 以及当前 `config/launchpad.yaml`
-> 中实际存在的键值校对。
 
 ## 1.4 启动本地栈
 
@@ -125,7 +122,7 @@ curl -s http://127.0.0.1:8000/api/health
    `10 用户管理` 是管理员账号维护，`11 支付` / `12 设置` 属第二阶段，三者本实验都不涉及。
 2. **服务健康面板**：Runtime / Gateway / Memory / Registry / Policy / Evaluation /
    Observability 七项。其中 Gateway / Memory / Registry / Policy / Observability 由
-   bootstrap 创建，显示 `就绪` 与真实资源 id（如 `launchpad_memory-hurAGN3EnF`）；
+   bootstrap 创建，显示 `就绪` 与对应的真实资源 id；
    不是绿色就说明 bootstrap 未完成或权限不足，先解决它再往下做。
    Runtime 与 Evaluation 统计的是**你自己创建的东西**（已部署 Agent、已完成评估），
    全新账号上显示空心灯 + `尚未创建 · 部署首个 Agent 后点亮` / `运行首次评估后点亮`，

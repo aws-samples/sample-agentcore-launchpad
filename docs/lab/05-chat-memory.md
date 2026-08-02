@@ -5,8 +5,6 @@
 >
 > **前置条件**：完成[第 04 章](04-capabilities.md)。`lab-fund-advisor` 版本 2（已挂 KB + 技能）。
 >
-> **预计耗时**：约 15 分钟。
->
 > **本章将创建的 AWS 资源**：AgentCore Memory 中的短期事件与长期记录（写入共享
 > `launchpad_memory`，按 Agent 分区）；不创建新的计算资源。
 
@@ -22,10 +20,10 @@
 ```
 
 ![与 advisor 对话](images/05-chat-advisor.png)
-*图 5-1：流式回答。中间的工具调用轨迹显示 `lab-fund-kb-2mbgunvms4___Retrieve` 被调用两次、
+*图 5-1：流式回答。中间的工具调用轨迹显示 `lab-fund-kb-…___Retrieve` 被调用、
 `skills` 被调用一次，可以确认知识库检索与技能都已生效。*
 
-**本次实际回答**（摘录）：
+**预期回答**应包含以下信息：
 
 > 📅 基金成立日期：**2012 年 8 月 17 日**
 > 📊 截至 2021 年 8 月 31 日的持股数量：**28 只股票**
@@ -68,25 +66,24 @@ Agent 用「它」指代上一轮的基金，答出：目标持仓 25–40 只 /
 ![与 assistant 对话](images/05-chat-assistant.png)
 *图 5-2：assistant 遵守了上一轮的格式偏好（中文 + 表格），但具体数字没有任何资料支撑。*
 
-**本次观察**：它回答「组合通常持有约 **20–35 只**股票」，而资料中的数据是
-**目标 25–40 只、实际 28 只**。没有知识库接地，模型给出的是听起来专业但**没有出处**的数字。
+观察它是否给出听起来专业却**没有出处**的数字。资料中的持仓数据是
+**目标 25–40 只、实际 28 只**；没有知识库接地时，模型可能给出其他看似合理的范围。
 
-> **这个现象不是每次都会出现**。同一个提示词，模型有时会蒙对（在另一次实跑里它答的
-> 「约 25–40 只」恰好是对的）。如果你这次没看到明显错误，追问一个资料里**根本不存在**的
-> 事实，效果更稳定：
+> **这个现象不是每次都会出现**。同一个提示词下，模型也可能碰巧答对。如果没有看到明显错误，
+> 追问一个资料里**根本不存在**的事实，效果更稳定：
 >
 > ```
 > 这只基金 2024 年第三季度的净值涨幅是多少？请给出具体数字。
 > ```
 >
 > 有 KB 的 `lab-fund-advisor` 会明确说资料截至 2021 年 8 月、无法确认；无 KB 的
-> `lab-fund-assistant` 通常会给出一个编造的数字或含糊回避。**无论它这次蒙对与否，都不影响
+> `lab-fund-assistant` 可能给出一个编造的数字或含糊回避。**无论它是否碰巧答对，都不影响
 > 第 08 章。评估器比对的是真值，接地程度仍能被量化成分数。
 
 | | `lab-fund-advisor`（有 KB + 技能） | `lab-fund-assistant`（无 KB） |
 |---|---|---|
 | 成立日期 | 2012 年 8 月 17 日（正确） | 未提及 |
-| 持仓数量 | 28 只，目标 25–40（正确） | 「约 20–35 只」（错误，本次实跑；也可能蒙对） |
+| 持仓数量 | 28 只，目标 25–40（正确） | 可能给出无出处的范围，也可能碰巧答对 |
 | 数据出处 | 标注资料与截止日期 | 无 |
 | 合规声明 | 有（技能强制） | 无 |
 
@@ -105,8 +102,7 @@ Agent 用「它」指代上一轮的基金，答出：目标持仓 25–40 只 /
 - 面板底部还给出**等价 API 调用**（`curl -N … /v1/agents/<id>/invoke-stream`），第 06 章会执行它。
 
 ![会话记忆轨道](images/05-chat-memory-rail.png)
-*图 5-3：两轮对话后，短期事件 20 条、长期记录 1 条，并直接显示抽取出的偏好
-`/preferences · "对基金基本信息（成立日期、持仓数量等）感兴趣"`。*
+*图 5-3：完成多轮对话后，面板显示短期事件与长期记录数量，并直接展示抽取出的偏好。*
 
 > 每轮回答下方那行 `◈ memory.create_event — 本轮已存入短期记忆` 说明这一轮的 USER/ASSISTANT
 > 对已经**恰好一次**写入 Memory。
@@ -117,7 +113,7 @@ Agent 用「它」指代上一轮的基金，答出：目标持仓 25–40 只 /
 `资源` / `短期记忆` / `长期记忆`。
 
 ![记忆资源概览](images/05-memory-overview.png)
-*图 5-4：平台共享的 `launchpad_memory-hurAGN3EnF`：事件过期 30 天、AWS 托管密钥、执行角色，
+*图 5-4：平台共享的 `launchpad_memory-…`：事件过期 30 天、AWS 托管密钥、执行角色，
 以及两个长期策略：`semantic_facts`（SEMANTIC，命名空间 `/facts/{actorId}`）与
 `user_preferences`（USER_PREFERENCE，命名空间 `/preferences/{actorId}`）。
 下方还列出账号里其它 memory 资源，并标注哪个属于本平台（`平台` vs `外部`）。*
@@ -129,17 +125,17 @@ actor：`scoped_actor(agent_id, human)` → `<agent_id>__<human>`。同一个人
 ## 5.5 短期记忆：参与者 → 会话 → 事件
 
 切到 `短期记忆` 标签。左列「参与者」就是上面说的复合 actor，控制台把它解码成
-`Agent 名 · 用户名` 显示（原始值形如 `26f7707c0d…1e1__river`）。
+`Agent 名 · 用户名` 显示（原始值形如 `<ADVISOR_ID>__river`）。
 
 1. **点击** `lab-fund-advisor · river`
-2. **点击** 出现的会话（`c50a8d665f… · 9 条控制台消息`）
+2. **点击** 出现的会话
 3. 右侧「事件」按轮次展开原始短期记忆
 
 ![短期记忆钻取](images/05-memory-shortterm.png)
-*图 5-5：事件时间线。可以看到 `ASSISTANT` 轮的完整原文，以及一条 `二进制 850 B` 的事件。
-非会话型 payload 只显示字节数，不做解码。*
+*图 5-5：事件时间线。可以看到 `ASSISTANT` 轮的完整原文。非会话型 payload
+只显示字节数，不做解码。*
 
-> 那些 `xxx 非智能体分区`（`api`、`default`、`river`…）是历史上直接以裸 actor 写入的分区，
+> 那些 `xxx 非智能体分区`（`api`、`default`、`river`…）来自直接以裸 actor 写入的数据，
 > 或来自 `/v1` 调用等非控制台入口。控制台按第一个 `__` 分隔符解码，解不出 Agent 的就标为非智能体分区。
 
 ## 5.6 长期记忆：策略、命名空间与记录详情
@@ -147,20 +143,18 @@ actor：`scoped_actor(agent_id, human)` → `<agent_id>__<human>`。同一个人
 切到 `长期记忆` 标签，选 参与者 `lab-fund-advisor · river`，策略选 `user_preferences`。
 
 ![长期记忆记录](images/05-memory-longterm.png)
-*图 5-6：命名空间被服务端解析成具体值 `/preferences/26f7707c0d964f988360e6a5b4f161e1__river`，
-两条偏好记录都是服务端从与这个 Agent 的对话里抽取出来的。右侧记录详情展开了结构化内容。*
+*图 5-6：命名空间被服务端解析成具体值 `/preferences/<ADVISOR_ID>__river`，
+偏好记录由服务端从与这个 Agent 的对话里抽取。右侧记录详情展开了结构化内容。*
 
-本次实际抽取到的一条记录：
+记录内容因对话而异，`USER_PREFERENCE` 记录的结构如下：
 
 ```json
 {
-  "context": "用户请求将基金的组合构建规则整理成要点，涵盖持仓数量区间、前十大占比、换手率、ROIC门槛等维度，显示用户偏好以简洁要点形式呈现结构化的基金投资规则信息。",
-  "preference": "偏好将基金组合构建规则整理成结构化要点形式呈现",
-  "categories": ["finance", "investment", "funds", "information presentation"]
+  "context": "<从对话中识别出的上下文>",
+  "preference": "<抽取出的用户偏好>",
+  "categories": ["<分类>"]
 }
 ```
-
-记录 ID `mem-791000a7-…`，策略 `user_preferences-QjgQrn4j6R`。
 
 > 两种策略的 payload 形状不同：`SEMANTIC` 存散文（`content.text`），
 > `USER_PREFERENCE` / `SUMMARIZATION` 存上面这种 JSON 对象。控制台与对话页共用同一个解码函数，
@@ -195,53 +189,17 @@ actor：`scoped_actor(agent_id, human)` → `<agent_id>__<human>`。同一个人
 | 长期记录一直是 0 | 服务侧抽取是异步的，且需要足够语义信息 | 多聊 1–2 轮，等一会儿再刷新 `长期记忆` 标签 |
 | 追踪面板长时间「暂无 SPAN」 | Transaction Search 摄取延迟约 1 分钟起 | 等一会点 `⟳ 加载链路`；第 07 章统一看 |
 | 重新发布后行为没变 | 已有会话被钉在旧版本 | 点 `新会话` 再验证 |
-| 容器 Agent 调用报 `RuntimeClientError` | 修复前的依赖漂移缺陷，见下 | **已修复**；若仍出现请确认代码是最新的 |
+| 容器 Agent 调用报 `RuntimeClientError` | 容器进程未正常启动，旧检出还可能包含已修复的依赖问题 | 查看下方探活与排障说明 |
 
-### 关于容器 Agent 调用失败（本次实测）
+### 容器 Agent 部署后的探活
 
-> **已修复（2026-07-26）**。下面保留本次实跑遇到的现象与根因，用来说明
-> 「部署成功 ≠ 能用」。**当前代码库已修好**，你按本指南跑不会再遇到；
-> 只有在修复前的旧检出上才会复现。
+五阶段流水线全绿只证明资源已经创建，不能证明容器进程能够正常启动。平台目前没有部署后探活，
+因此新部署 `lab-fund-packager` 后，请在对话演练场手工调用一次。
 
-本次实验中 `lab-fund-packager`（方式A 容器）**部署成功但调用失败**：
-
-```
-RuntimeClientError: An error occurred when starting the runtime.
-```
-
-CloudWatch 日志（`/aws/bedrock-agentcore/runtimes/lab_fund_packager_…-DEFAULT`）里的根因是
-容器启动时导入遥测模块失败：
-
-```
-File "/app/main.py", line 27, in <module>
-    import tracing
-File "/app/tracing.py", line 34, in <module>
-    from opentelemetry._events import Event, get_event_logger
-ModuleNotFoundError: No module named 'opentelemetry._events'
-```
-
-原因是容器模板的依赖 `aws-opentelemetry-distro>=0.10,<1` 未锁小版本，新构建拉到的
-OpenTelemetry 里已经没有 `opentelemetry._events` 这个实验模块（上游 1.39.0 起废弃、其后移除）。
-**这是平台侧的依赖漂移问题，不是你操作错误**；已有的旧容器镜像不受影响，所以只有**新构建**会挂。
-
-**修复包括三项改动**：把 `tracing.py` 迁到 OpenTelemetry 的 logs API（事件记录在链路上
-逐字段保持不变，否则 AgentCore 评估会静默解析失败）；把模板依赖锁到实测过的小版本区间；
-补上单测锁住事件形状。**修复后的真机复验**（重新发布 `lab-fund-packager` → Runtime v2）：
-
-```
-10:18:09 UTC  修复前调用  → 容器启动崩溃（上面那段 traceback）
-10:21:24 UTC  重建后启动  → 干净启动，无 traceback
-10:21:30 UTC  真实调用    → 5.5 秒返回正确回答
-              追踪        → 7 个 span，含手工发射的 invoke_agent 与 chat（3 in / 58 out tokens）
-              内容事件    → scope=strands.telemetry.tracer，input/output 消息形状正确
-```
-
-完整根因与验证记录见
+如果调用返回 `RuntimeClientError: An error occurred when starting the runtime.`，打开
+`/aws/bedrock-agentcore/runtimes/lab_fund_packager_…-DEFAULT` 日志组查看启动错误。旧检出可能包含
+已修复的 OpenTelemetry 依赖漂移问题；更新代码并重新发布后再验证。根因说明见
 [docs/issues/2026-07-26-container-otel-events-import.md](../issues/2026-07-26-container-otel-events-import.md)。
-
-> 五阶段流水线全绿只证明「资源建出来了」，不证明「容器能起来」。
-> 平台目前**没有**部署后的探活调用，所以一个启动即崩的容器仍会显示为 `运行中`。
-> 这个上报缺口是已知的、尚未关闭的问题。新部署一个容器 Agent 后，**先手工调一次**再交付。
 
 ---
 

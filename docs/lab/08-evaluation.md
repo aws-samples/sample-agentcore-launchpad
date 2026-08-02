@@ -6,7 +6,7 @@
 >
 > **前置条件**：完成第 05–07 章（被评估的 Agent 必须已经被调用过，否则没有遥测）。
 >
-> **预计耗时**：约 25 分钟（数据集 + 评估器约 10 分钟；一次批量评估本次实测 4 分 38 秒）。
+> 批量评估通常需要等待数分钟，请以页面阶段状态为准。
 >
 > **本章将创建的 AWS 资源**：1 个 AgentCore Dataset（同步产物）、1 个自定义 Evaluator、
 > 1 次 BatchEvaluation 任务，以及回放数据集时产生的 Runtime 会话与遥测。
@@ -76,13 +76,13 @@ curl -s http://127.0.0.1:8000/api/eval/datasets | python3 -c "
 import sys,json
 for x in json.load(sys.stdin)['datasets']:
   if 'lab' in x['name']: print(x['id'],x['name'],x['kind'],x['item_count'])"
-# 6521039e898d lab-fund-dataset predefined 5
+# <DATASET_ID> lab-fund-dataset predefined 5
 ```
 
 > **5 条只够看趋势**。本章只要回答"能不能量出问题"，5 条够用，但它撑不起统计显著的对比。
 > 第 09 章的[大样本版](09-experiment-ab.md#99-可选把样本量做到能下结论160-条流量)附了一份 160 条的
 > `lab-fund-dataset-160`（`docs/lab/assets/lab-fund-dataset-160.json`，同样带真值，按事实数字、
-> 流程理念、越界拒答、格式遵循四类配比）。想把下面这四个分数放到更大的样本上，导入它再跑一次运行就行。
+> 流程理念、越界拒答、格式遵循四类配比）。如需更稳定的比较，可以导入后再运行一次评估。
 
 **真值的三种形态**，对应不同评估器：
 
@@ -92,7 +92,7 @@ for x in json.load(sys.stdin)['datasets']:
 | `assertions` | 内置 `目标达成率 GoalSuccessRate` |
 | `expected_trajectory` | 三个 `轨迹匹配 Trajectory*Match`（**仅**数据集运行且场景带该字段时才可选） |
 
-平台通过 `StartBatchEvaluation` 的 `evaluationMetadata.sessionMetadata` 把它们注入本次评估。
+平台通过 `StartBatchEvaluation` 的 `evaluationMetadata.sessionMetadata` 把它们注入当前评估。
 
 ### 同步为 AWS 数据集（可选）
 
@@ -102,13 +102,7 @@ for x in json.load(sys.stdin)['datasets']:
 ![数据集详情与同步](images/08-dataset-detail.png)
 *图 8-2：数据集详情（scenario 编辑器）。同步后云端列显示 `ACTIVE`。*
 
-本次同步结果：
-
-```json
-{"dataset_id": "lab_fund_dataset-71Ch45EX26",
- "arn": "arn:aws:bedrock-agentcore:us-west-2:434444145045:dataset/lab_fund_dataset-71Ch45EX26",
- "status": "ACTIVE", "synced_at": "2026-07-26T08:14:22Z"}
-```
+同步完成后，核对详情中的云端数据集 ID、ARN、状态和同步时间。状态应为 `ACTIVE`。
 
 > 同步后运行列表里会多出一个 `☁ lab_fund_dataset` 选项。云端数据集用
 > `ListDatasetExamples` 回放；本地数据集直接读 SQLite。两者都能当运行范围，但**云端副本不可编辑**。
@@ -121,7 +115,7 @@ for x in json.load(sys.stdin)['datasets']:
 "基金数字必须有资料依据"这条规则，**有一半内置项就能测**：在带真值的数据集运行里，`正确性`
 会拿 `expected_response` 对答案，`目标达成率` 会拿 `assertions` 逐条判定，而上面那份数据集的
 assertion 里就写了"没有编造资料中不存在的数字"。（`忠实性` 不行，它测的是回答与自己给出的
-上下文是否自洽，而不是与资料是否一致，8.5 的 0.95 对 0.60 就是证据。）
+上下文是否自洽，而不是与资料是否一致。）
 
 需要自定义评审的是**内置项表达不出来的那部分**：
 
@@ -175,10 +169,8 @@ assertion 里就写了"没有编造资料中不存在的数字"。（`忠实性`
 ![创建自定义评估器](images/08-evaluator-create.png)
 *图 8-3：自定义 LLM 评审。占位符按钮会插入到光标处；量表可以按需增删档位。*
 
-```bash
-# {"id": "fund_fact_grounding-b9ygS38Zq3", "name": "fund_fact_grounding",
-#  "level": "TRACE", "status": "ACTIVE", "source": "custom"}
-```
+创建后确认名称为 `fund_fact_grounding`、级别为 `TRACE`、状态为 `ACTIVE`，
+来源为 `custom`。
 
 > 编辑自定义评估器时注意：AWS 的 `UpdateEvaluator` 是**整体替换**语义，平台会把完整配置重新提交。
 
@@ -198,17 +190,16 @@ assertion 里就写了"没有编造资料中不存在的数字"。（`忠实性`
 *图 8-4：新建运行页。右侧说明了四个阶段：INVOKING → WAITING → EVALUATING → COMPLETED。
 底部提示所有已激活 Agent 都可评估，包括托管 harness。*
 
-> **注意**：评估器 chip 是切换按钮，且默认已勾选若干项（本次默认选中了 `有用性` 与 `正确性`）。
+> **注意**：评估器 chip 是切换按钮，且默认已勾选若干项。
 > 点击已选中的项会**取消**它，启动前请核对绿色高亮的项目。
-> 本次实验最终选中的是上表那四个（`正确性` 被取消了），所以下面的评分表里没有 Correctness 列；
-> 想让内置正确性也用上 `expected_response`，记得把 `正确性` 保留为选中。
+> 按上表保留四个评估器；如需让内置正确性使用 `expected_response`，再选中 `正确性`。
 
 这里选择 `lab-fund-assistant`，因为它没有知识库，正是第 05 章暴露问题的那个；
 同时，它也是第 09 章 A/B 实验唯一符合条件的对象。先量出基线，再做优化。
 
 点 `▸ 启动运行`。
 
-## 8.5 四个阶段与结果
+## 8.5 四个阶段与结果判读
 
 ![运行进行中](images/08-run-progress.png)
 *图 8-5：运行进行中。数据集里每个场景对应一个 runtime 会话，逐个真实调用。*
@@ -220,50 +211,39 @@ assertion 里就写了"没有编造资料中不存在的数字"。（`忠实性`
 | `INVOKING` | 逐条回放数据集，真实调用 Agent，记录每条对应的 session id |
 | `WAITING` | 等 span 落进 CloudWatch `aws/spans`（默认等 90 秒） |
 | `EVALUATING` | `StartBatchEvaluation` 精确圈定这些 session（不会误评别的流量） |
-| `COMPLETED` | 各评估器均分（或洞察树） |
+| `COMPLETED` | 显示各评估器均分（或洞察树） |
 
-本次实测时间线（总 **4 分 38 秒**）：
-
-| 时刻 | 阶段 |
-|---|---|
-| 08:16:31 | 运行创建，进入 `INVOKING`（5 个场景逐条调用） |
-| 08:18 前后 | 进入 `WAITING`（等 span，90 秒） |
-| 08:19 前后 | 进入 `EVALUATING`，批次 id `run_c8a37e77-61a5f2b6ea` |
-| 08:21:09 | `COMPLETED` |
+`WAITING` 默认等待 90 秒，让 span 落进 CloudWatch。进入 `EVALUATING` 后继续等页面刷新，
+不要因为短时间没有分数就重复创建运行。
 
 ![评估得分](images/08-run-scores.png)
 *图 8-6：完成后的评分面板。点运行列表里的任意已完成运行即可查看。*
 
-本次实际得分：
+按下面的口径读取你自己的分数：
 
-| 评估器 | 得分 | 怎么读 |
-|---|---|---|
-| 忠实性 Faithfulness | **0.95** | 回答与它自己给出的上下文自洽，它"说得很圆" |
-| 有用性 Helpfulness | **0.67** | 从用户视角看有用性中等 |
-| 拒答 Refusal | **0.00** | 这是**行为检测器**（检测"回避或直接拒答"），不是越高越好；0.00 = 没检测到回避 |
-| `fund_fact_grounding`（自定义） | **0.60** | 本实验重点指标：数字接地程度只有六成 |
+| 评估器 | 怎么读 |
+|---|---|
+| 忠实性 Faithfulness | 衡量回答与其上下文是否自洽，不等同于事实正确 |
+| 有用性 Helpfulness | 从用户视角衡量回答是否有帮助 |
+| 拒答 Refusal | 检测是否出现回避或直接拒答，不是越高越好 |
+| `fund_fact_grounding`（自定义） | 检查数字是否与真值一致，以及缺失数据时是否如实说明 |
 
-这组数字与第 05 章的观察一致：
+把忠实性与 `fund_fact_grounding` 放在一起看。如果忠实性较高而接地度较低，说明回答可能很自洽，
+但数字仍然缺少依据。再打开越界问题的会话，检查 Agent 是否明确说明资料截至时间和数据缺口，
+而不是只给出笼统的能力声明。
 
-- 忠实性 0.95、接地度 0.60，说明**"自洽"不等于"正确"**。没有知识库的 Agent 会自信地编造，
-  只看忠实性无法发现这类问题，需要**带真值的自定义评审**。
-- 拒答检测 0.00 还反映出另一个问题：对于"2024 年第三季度净值涨幅"这个越界问题，它的实际回答是
-  *"我目前没有访问实时市场数据或历史净值数据库的能力，因此无法直接提供…"* 然后给了官网等查询渠道。
-  它没有依据资料说"资料截至 2021 年 8 月，未提供"，也没被检测器判为回避。这条行为需要在提示词中约束。
-
-> **记录**：记下这四个基线分数。第 09 章会用提示词优化 + A/B 实验尝试改善它们，并用同样的口径对比。
+记下这组基线分数。第 09 章会用提示词优化和 A/B 实验比较改动前后的表现。
 
 > **可能出现的第三种状态：部分结果。** 除了「已完成」和「失败」，评分面板还可能带一条告警
 > `N of M sessions failed during batch evaluation`。平台照常给出**已成功那部分会话**的分数，
-> 而不是整批判失败。此时分数仍然可读，但**样本量比你以为的小**：在另一环境的实跑里出现过
-> `1 of 5 sessions failed`，四个评估器的分数是按 4 条会话算出来的。看到这条告警时，要么按
-> 更小的样本量解读，要么重跑一次补齐。
+> 而不是整批判失败。此时分数仍然可读，但样本量小于数据集条目数。请按成功会话数解读，
+> 或重新运行以补齐样本。
 
 ### 可选：跑一次洞察（失败归因）
 
 评分面板下方有「洞察 — 失败归因」区域和 `↻ 洞察 · 这些会话` 按钮，可以对**同一批会话**再跑一次
-洞察分析（失败分析 / 用户意图 / 执行摘要，可选子集）。洞察运行通常要 15–25 分钟，
-本实验为控制时长**未实跑**（本章的结论不依赖它）。
+洞察分析（失败分析 / 用户意图 / 执行摘要，可选子集）。洞察运行通常要 15–25 分钟；
+本章的验证清单不要求完成这一步。
 
 ---
 

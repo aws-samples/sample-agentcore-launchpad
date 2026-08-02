@@ -6,8 +6,6 @@
 >
 > **前置条件**：完成第 04 章（Registry 生命周期已经走过一遍）。账号里至少有一个 MCP Gateway。
 >
-> **预计耗时**：约 25 分钟。
->
 > **本章将创建的 AWS 资源**：1 条 Cedar 策略（`LOG_ONLY`，不影响现网放行）、
 > 一个 Gateway 上的两个纳管标签（本章内会移除）。
 >
@@ -24,17 +22,12 @@
 *图 11-1：每行是一个真实 Gateway，列出状态、鉴权器、目标数、Registry/Harness 可用性、
 策略引擎与模式、纳管状态。*
 
-本次环境里的关键几行：
+先找到 `launchpad-gw` 与 `launchpad-kb-gw`，再对照各列判断：
 
-| Gateway | 目标 | Registry | 策略引擎 | 纳管状态 |
-|---|---|---|---|---|
-| `launchpad-gw` | 2 | 未入目录 / HARNESS 可挂载 | `launchpad_pe` · **ENFORCE** | 已纳管 |
-| `launchpad-kb-gw` | 4 | 未入目录 / 仅目录可见 | `launchpad_kb_gw_policy` · LOG_ONLY | 已纳管 |
-| `TestGateway0c909b00` | 0 | 仅目录可见 | 未挂载 | 未纳管 |
-| 其余 10 个（Demo*/Semantic*/ac-*） | 1–10 | 仅目录可见 | 未挂载 | 未纳管 |
-
-> `launchpad-kb-gw` 是第 04 章挂知识库时平台自动创建的连接器网关。它的 4 个目标对应
-> 每个 KB 的 `Retrieve` 与每个 Agent 的 Agentic 检索。
+- `launchpad-gw` 应已挂载策略引擎，并显示 Registry 与 Harness 可用性。
+- `launchpad-kb-gw` 是第 04 章挂知识库时平台自动创建的连接器网关。它的目标来自各 KB 的
+  `Retrieve` 与各 Agent 的 Agentic 检索，数量会随实验资源变化。
+- 其他 Gateway 的目标数、策略引擎和纳管状态取决于当前账号，不必与截图完全一致。
 
 ## 11.2 只读打开一个 Gateway
 
@@ -47,9 +40,8 @@
 详情里可以核对：
 
 - **鉴权器 `CUSTOM_JWT`**，执行角色 `launchpad-gateway-role`
-- **Registry 发布**：`GATEWAY 记录 未入目录`，`旧记录 2`（`office-facts`、`hr-database` 都是
-  APPROVED 的按目标记录）
-- **策略引擎**：`launchpad_pe` · 引擎状态 ACTIVE · **Gateway 模式 ENFORCE** · 策略数 2
+- **Registry 发布**：分别显示 Gateway 记录与旧的按目标记录状态
+- **策略引擎**：核对引擎名称、生命周期状态、Gateway 模式与策略数量
 - **IAM 挂载预检 `PASS`**，并直接给出所需的 IAM 内联策略 JSON（`GetPolicyEngine`、
   `AuthorizeAction`、`PartiallyAuthorizeActions`）。预检失败时按这份 JSON 修正
 
@@ -62,7 +54,8 @@ agentcore-launchpad:managed    = true
 agentcore-launchpad:managed-by = agentcore-launchpad
 ```
 
-本次实验用一个空的、与演示无关的 Gateway 来验证（`TestGateway0c909b00`，0 个目标）：
+请选择一个未纳管、且不承载现有业务流量的 Gateway 来验证。共享实验环境中，先与主持人确认
+可操作的 Gateway：
 
 1. 打开它的详情。
 
@@ -75,7 +68,7 @@ agentcore-launchpad:managed-by = agentcore-launchpad
 
 ```bash
 aws bedrock-agentcore-control list-tags-for-resource \
-  --resource-arn "arn:aws:bedrock-agentcore:us-west-2:<ACCT>:gateway/testgateway0c909b00-vgn1rmb2yx" \
+  --resource-arn "arn:aws:bedrock-agentcore:us-west-2:<ACCOUNT_ID>:gateway/<GATEWAY_ID>" \
   --region us-west-2
 ```
 
@@ -109,13 +102,13 @@ aws bedrock-agentcore-control list-tags-for-resource \
 Gateway 详情的「REGISTRY 发布」区有 `预览` 与 `导入 GATEWAY`。预览是只读的：
 
 ```bash
-curl -s http://127.0.0.1:8000/api/governance/gateways/launchpad-gw-em0yuqmmdp/registry-preview
+curl -s http://127.0.0.1:8000/api/governance/gateways/<GATEWAY_ID>/registry-preview
 ```
 
 ```json
-{"gateway_name": "launchpad-gw",
- "proposed": {"name": "launchpad-gw",
-   "description": "AgentCore Gateway launchpad-gw · 2 target(s) · 6 MCP tool(s)",
+{"gateway_name": "<GATEWAY_NAME>",
+ "proposed": {"name": "<GATEWAY_NAME>",
+   "description": "AgentCore Gateway <GATEWAY_NAME> · <N> target(s) · <M> MCP tool(s)",
    "descriptors": {"mcp": {"server": {"...": "streamable-http endpoint"},
                            "tools": {"tools": [{"name": "hr-database___check_calendar", …}]}}}}}
 ```
@@ -129,8 +122,8 @@ curl -s http://127.0.0.1:8000/api/governance/gateways/launchpad-gw-em0yuqmmdp/re
 2. 导入 Gateway 记录后，旧的按目标记录（`office-facts` / `hr-database`）**仍然存在**，
    要显式点 `停用选中的旧记录` 才退休。`DEPRECATED` 是**终态**，停用不可回退。
 
-> **注意**：本次实验**只跑了预览，没有执行导入**（避免在共享演示账号里永久改动目录：Registry 记录一旦
-> `DEPRECATED` 不可恢复）。导入按钮的行为与上面预览返回的 `proposed` 完全一致。
+> **注意**：本实验只执行预览，不执行导入。Registry 记录一旦变为 `DEPRECATED` 就无法恢复，
+> 不要在共享实验账号里留下永久目录变更。导入按钮会按预览中的 `proposed` 内容创建记录。
 
 ## 11.5 Cedar 策略编辑器：创建一条 `LOG_ONLY` 策略
 
@@ -140,7 +133,7 @@ curl -s http://127.0.0.1:8000/api/governance/gateways/launchpad-gw-em0yuqmmdp/re
 *图 11-5：策略编辑器。三种授权模型（白名单 / 保持流量 / 自定义 CEDAR），
 中间是从 Gateway **实时发现**的精确动作列表（每个都标 `已验证`），右侧是 CEDAR 审核与发布区。*
 
-本次实验创建的策略：
+按以下字段创建策略：
 
 | 字段 | 取值 |
 |---|---|
@@ -160,7 +153,7 @@ permit(
              AgentCore::Action::"hr-database___list_departments",
              AgentCore::Action::"office-facts___get_office_fact",
              AgentCore::Action::"office-facts___list_office_topics"],
-  resource == AgentCore::Gateway::"arn:aws:bedrock-agentcore:us-west-2:<ACCT>:gateway/launchpad-gw-em0yuqmmdp"
+  resource == AgentCore::Gateway::"arn:aws:bedrock-agentcore:us-west-2:<ACCOUNT_ID>:gateway/<GATEWAY_ID>"
 );
 ```
 
@@ -168,7 +161,7 @@ permit(
 *图 11-6：CEDAR 审核区把 `AWS 实时版本` 与 `草稿` 并排对比（新策略时实时版本为空）。
 旁边还有「自然语言生成」，可以描述意图让模型生成 Cedar 草稿。*
 
-「策略发布」区显示三个事实：`GATEWAY 模式 ENFORCE`、`策略模式 LOG_ONLY`、`AWS 证据 0 / 24h`。
+「策略发布」区会列出 Gateway 模式、策略模式与过去 24 小时的 AWS 证据数。
 下面的 `输入 GATEWAY 名称` 与 `零证据覆盖原因` **只有提升 / 回滚才必填**，创建 LOG_ONLY
 草稿不需要（填了会记进审计条目）；字段下方的小字也这么写。
 点 `创建 LOG_ONLY 策略` → 确认弹窗。按钮若是灰的，它上方会用红字列出还缺什么。
@@ -179,7 +172,7 @@ permit(
 创建结果包含**两个不同维度的状态**：
 
 ```json
-{"id": "lab_readonly_tools-be45dja2_p",
+{"id": "<POLICY_ID>",
  "name": "lab_readonly_tools",
  "status": "ACTIVE",              // 资源生命周期：策略资源本身可用
  "enforcement_mode": "LOG_ONLY",  // 执行模式：只记录，不拦截
@@ -188,7 +181,7 @@ permit(
 
 > **`status` 与 `enforcement_mode` 不是一回事**：`status: ACTIVE` 只说明策略资源存在且可用，
 > 决定"会不会拦"的是 `enforcement_mode`。同理 Gateway 也有自己的模式
-> （本例 `launchpad-gw` 是 `ENFORCE`）。**策略模式与 Gateway 挂载模式相互独立**。
+> （以界面显示为准）。**策略模式与 Gateway 挂载模式相互独立**。
 
 ### 生命周期与提升门禁
 
@@ -198,7 +191,7 @@ permit(
 - **把 Gateway 切到 `ENFORCE` 需要证据**：界面要求 24 小时内有 LOG_ONLY 决策证据；
   没有证据就必须**手输 Gateway 名称 + 填写零证据覆盖原因**才能强制通过。
 
-## 11.6 当前账号的决策证据状态
+## 11.6 读取决策证据
 
 切到 `决策` 标签。
 
@@ -207,7 +200,7 @@ permit(
 
 决策证据来自 `AWS/Bedrock-AgentCore` 命名空间的 CloudWatch 策略指标
 （`AllowDecisions` / `DenyDecisions` 等）。这些指标**默认就发布**，不需要为网关额外开启
-什么——所以这个视图开箱就有真实数据，只要窗口内确实发生过决策。
+其他配置。只要窗口内发生过决策，这个视图就会显示数据。
 
 界面会区分三种状态，别把它们混为一谈：
 
@@ -217,7 +210,7 @@ permit(
 | `available: true` + `evidence_count: 0` | 通道正常，只是这个窗口内没有决策 |
 | `available: true` + `evidence_count > 0` | 有证据，展示聚合明细 |
 
-第二种状态最常见于安静的账号——通道正常，只是窗口内没人调过网关。它长这样
+第二种状态最常见于安静的账号，表示通道正常，只是窗口内没人调过网关。响应形态如下
 （`decisions` 也会是空数组）：
 
 ```json
@@ -228,129 +221,84 @@ permit(
 
 > 遇到这种情况不用怀疑配置：放宽时间范围到 `7d`，或调用一次网关工具产生新证据即可。
 
-本次环境下 `launchpad-gw` 有真实数据（下一节会看到它的逐条明细）：
-
-```json
-{"available": true, "source": "metrics+spans", "evidence_count": 13, "log_only_count": 0,
- "totals": {"allow": 11, "deny": 2},
- "by_operation": [{"operation": "PartiallyAuthorizeActions", "allow": 10, "deny": 2, "basis": "per_tool"},
-                  {"operation": "AuthorizeAction", "allow": 1, "deny": 0, "basis": "per_call"}],
- "by_mode": [{"mode": "ENFORCE", "allow": 11, "deny": 2}],
- "by_policy": [{"policy_id": "launchpad_baseline_allow-obafj1o9hj", "allow": 1, "deny": 0}],
- "by_tool": [{"tool": "hr-database___create_payout", "allow": 0, "deny": 2}, "…"]}
-```
-
-> `log_only_count` 是 0,因为这个网关是 `ENFORCE`——门禁只认 `LOG_ONLY` 模式的决策,
-> 所以在它上面切换仍然需要零证据覆盖。这是正确行为,不是缺陷。
-
-`launchpad-kb-gw` 是另一种对比：它是 `LOG_ONLY`，证据能直接满足门禁：
-
-```json
-{"available": true, "source": "metrics", "evidence_count": 17, "log_only_count": 17,
- "totals": {"allow": 0, "deny": 17},
- "by_operation": [{"operation": "PartiallyAuthorizeActions", "allow": 0, "deny": 12, "basis": "per_tool"},
-                  {"operation": "AuthorizeAction", "allow": 0, "deny": 5, "basis": "per_call"}],
- "by_mode": [{"mode": "LOG_ONLY", "allow": 0, "deny": 17}, {"mode": "ENFORCE", "allow": 0, "deny": 0}],
- "by_tool": [{"tool": "agentic-aurora-support___AgenticRetrieveStream", "allow": 0, "deny": 3}, "…"],
- "by_policy": [{"policy_id": "kb_demo_m2m_retrieve-u9ya6gh7o8", "allow": 0, "deny": 0}],
- "decisions": []}
-```
+有证据时，重点查看 `source`、`evidence_count`、`log_only_count`、`totals`、
+`by_operation`、`by_mode`、`by_policy` 与 `by_tool`。其中 `log_only_count` 是切换
+`ENFORCE` 或提升策略时门禁真正读取的数量；如果它为 0，即使 `evidence_count` 大于 0，
+也仍需补充 `LOG_ONLY` 证据或填写零证据覆盖原因。
 
 有两处**必须看懂**，否则会把数字读错：
 
 - **`basis` 说明计数单位不同。** `AuthorizeAction` 是每次调用一个决策（`per_call`）；
-  `PartiallyAuthorizeActions` 只按 (调用, 工具) 发布指标（`per_tool`），所以它的 12
-  是工具级数量，不是调用次数。
-- **各项拆分不是总数的分解。** 上面 `by_policy` 是 0 而总数是 17——因为这些 DENY 的指标流
-  里根本没有 `Policy` 维度（AWS 只对存在判定策略的决策发布该维度）。`by_tool` 同理只覆盖
-  按工具授权的那部分。把它们加起来去凑总数是错的。
+  `PartiallyAuthorizeActions` 按（调用，工具）发布指标（`per_tool`），所以显示的是工具级
+  数量，不是调用次数。
+- **各项拆分不是总数的分解。** 部分 DENY 指标没有 `Policy` 维度，`by_tool` 也只覆盖按工具
+  授权的部分，因此不能把这些分组相加来核对总数。
 
 ### 逐条决策明细
 
 `decisions` 数组来自 **Policy span**（由 `make bootstrap` 建的 TRACES 投递打开）。
-本次环境的真实返回：
+有明细时，每行会包含如下字段：
 
 ```json
-{"source": "metrics+spans", "evidence_count": 13, "count": 3,
+{"source": "metrics+spans", "evidence_count": "<METRIC_COUNT>", "count": "<SAMPLED_SPAN_COUNT>",
  "decisions": [
    {"evaluation": "tool_listing", "outcome": "DENY", "action": "hr-database___create_payout",
     "principal": null, "policy_id": null, "engine_mode": "ENFORCE",
-    "trace_id": "6a6a008ba475fe77…", "session_id": "4c320a86…"},
+    "trace_id": "<TRACE_ID>", "session_id": "<SESSION_ID>"},
    {"evaluation": "invocation", "outcome": "ALLOW", "action": "hr-database___list_departments",
-    "principal": null, "reason": null, "policy_id": "launchpad_baseline_allow-obafj1o9hj",
-    "log_only_matched_policies": ["lab_readonly_tools-be45dja2_p"],
-    "engine_mode": "ENFORCE", "trace_id": "6a6a005492b3acc3…"},
+    "principal": null, "reason": null, "policy_id": "<POLICY_ID>",
+    "log_only_matched_policies": ["<LOG_ONLY_POLICY_ID>"],
+    "engine_mode": "ENFORCE", "trace_id": "<TRACE_ID>"},
    {"evaluation": "invocation", "outcome": "DENY", "action": "hr-database___create_payout",
-    "principal": null, "policy_id": "launchpad_payout_admin_only-x7gz5yjkrd",
-    "reason": "Policy evaluation denied due to launchpad_payout_admin_only-x7gz5yjkrd",
+    "principal": null, "policy_id": "<POLICY_ID>",
+    "reason": "Policy evaluation denied due to <POLICY_ID>",
     "log_only_matched_policies": [], "engine_mode": "ENFORCE"}]}
 ```
 
-三处**必须看懂**：
+四处**必须看懂**：
 
 - **`evaluation` 区分两类判定。** `invocation` 是调用时授权；`tool_listing` 是
-  `PartiallyAuthorizeActions` 在 `tools/list` 阶段把工具**扣下不提供给模型**——不是某次
-  调用被拦。ENFORCE 下被拒工具压根不会进入模型看到的工具列表,所以**这是唯一可能出现的
-  DENY**,而不是边缘情况。
-- **`principal` 恒为 `null`,这不是数据缺失。** Harness 用 OAuth 机器对机器凭据访问网关,
-  请求里不带人类主体,整条 trace 的 31 个 span 里都没有。界面显示「span 中没有」并给出
-  说明。上一节本地台账里的 `principal` 是另一个来源,两者不能混。
-- **`log_only_matched_policies` 是文档里没有的属性,但很有用**:它显示 LOG_ONLY *候选*
-  策略本会匹配什么——从一条 ENFORCE 模式的 span 里就能看到。上例里就是本章创建的
-  `lab_readonly_tools`。指标通道给不出这个。
-- **`reason` 只在 DENY 上出现**,给出人读的拒绝原因(含作出判定的策略 id);ALLOW 行是
-  `null`,这是正确值而不是解析失败。反过来 `log_only_matched_policies` 只在 ALLOW 上
-  出现——两个字段互为镜像,都不能当必填读。`tool_listing` 行没有 reason(那条 span 只报
-  放行/拒绝工具列表),平台不会替它编一个。
+  `PartiallyAuthorizeActions` 在 `tools/list` 阶段把工具**扣下，不提供给模型**，不是某次
+  调用被拦。`ENFORCE` 下被拒工具不会进入模型看到的工具列表，因此这类拒绝会显示为
+  `tool_listing` DENY。
+- **`principal` 为 `null` 不是数据缺失。** Harness 用 OAuth 机器对机器凭据访问网关，
+  请求里没有人类主体。界面显示「span 中没有」并给出说明。上一节本地台账里的
+  `principal` 来自另一条路径，两者不能混用。
+- **`log_only_matched_policies` 显示 LOG_ONLY 候选策略本会匹配什么。** 从一条
+  `ENFORCE` 模式的 span 里也能看到。候选列表中应出现本章创建的
+  `lab_readonly_tools`；指标通道不提供这个字段。
+- **`reason` 只在 DENY 上出现**，给出可读的拒绝原因（含作出判定的策略 id）；ALLOW 行是
+  `null`，这是正确值而不是解析失败。反过来，`log_only_matched_policies` 只在 ALLOW 上
+  出现。两个字段都不能当成必填项。`tool_listing` 行没有 `reason`，因为对应 span 只报告
+  工具列表的放行或拒绝，平台不会补造原因。
 
-> `evidence_count`(13)和 `count`(3)不是一回事,也不该相等:前者来自指标、是精确计数,
-> 后者是 span 明细行、经过采样。span 通道读不到时返回 `spans_unavailable_reason`,
+> `evidence_count` 和 `count` 不是一回事，也不应相等：前者来自指标，是精确计数；
+> 后者是经过采样的 span 明细行数。span 通道读不到时返回 `spans_unavailable_reason`，
 > 上方计数不受影响。
 
-`log_only_count` 是切 `ENFORCE` / 提升策略时门禁真正读的那个数——门禁只认
-`LOG_ONLY` 模式下的决策，与上面文档写的规则一致。上例 kb-gw 的 17 条全在 `LOG_ONLY`，
-这种情况下切换不再需要零证据覆盖。
+`log_only_count` 是切 `ENFORCE` 或提升策略时门禁真正读取的数量。门禁只认
+`LOG_ONLY` 模式下的决策；数量大于 0 时，切换不再需要零证据覆盖。
 
-平台还有一个独立的**本地决策台账**（`/api/governance/decisions`），它**带 `principal`**——
+平台还有一个独立的**本地决策台账**（`/api/governance/decisions`），它**带 `principal`**。
 因为那条路径（`策略测试`）是以具体演示用户身份直接调网关的，不是 Harness 的机器凭据。
 两者不要混：上面的 AWS 明细没有主体，这里的有。
 
-> **台账只记真正的授权判定。** `策略测试` 的结果有三种：`ALLOW`、`DENY`、以及
-> `ERROR`——后者表示**根本没拿到授权答案**（演示用户凭据不对、网关不可达、或出现无法
-> 识别的失败）。`ERROR` **不写台账**，因为错误不是决策。这一点很重要：台账是审计面，
-> 早先的实现会把任何失败都记成 `DENY`，于是一次 Cognito 故障就能伪造出一条从未发生过的
-> Cedar 拦截记录。
-
-台账里有一条真实的 Cedar 拦截：
-
-```json
-{"at": "2026-07-13T23:09:23", "principal": "demo@hr-analyst",
- "tool": "hr-database___create_payout", "outcome": "DENY",
- "reason": "Tool Execution Denied: Tool call not allowed due to policy enforcement
-            [Policy evaluation denied due to launchpad_payout_admin_only…]", "source": "demo"}
-```
-
-对比同一个动作在管理员身份下的记录：
-
-```json
-{"at": "2026-07-09T12:56:00", "principal": "river@platform-admin",
- "tool": "hr-database___create_payout", "outcome": "ALLOW"}
-```
-
-同一个工具在不同身份下得到不同结果，返回里还包含做出判定的策略名。这可以核对 Cedar
-在网关层的按动作授权结果。
+> **台账只记真正的授权判定。** `策略测试` 的结果有 `ALLOW`、`DENY` 和 `ERROR` 三种。
+> `ERROR` 表示没有拿到授权答案，例如演示用户凭据错误或网关不可达，因此不会写入台账。
+> 检查台账时，应确认同一个敏感动作在普通用户与管理员身份下得到不同结果，并能看到作出
+> 判定的策略名。
 
 > **想自己产生 AWS 侧证据**：调用挂了 `launchpad-gw` 的 `hr-database` Harness Agent
 > 即可（`对话演练场`，或 `POST /api/chat/{agent_id}`）。问一句"列出所有部门"就会产生
 > 一条 `tools/list` 评估（含 `create_payout` 的 `tool_listing` DENY）和一条 `invocation`
 > ALLOW。
 >
-> 注意两件事：**`ENFORCE` 下你无法让模型真的去调 `create_payout`**——它在
+> 注意两件事：**`ENFORCE` 下你无法让模型真的去调 `create_payout`**。它在
 > `tools/list` 阶段就被扣下，模型看不到这个工具，所以不会出现"调用被拦"的
 > `AuthorizeAction` DENY，只会有 `tool_listing` DENY。
 >
 > 而 `策略测试` 是另一条路：它**直接发 `tools/call`，不先列举**，所以网关必须逐次跑
-> `AuthorizeAction`,于是能拿到真正的"调用被拦"。想复现上面那条 DENY 就用它:
+> `AuthorizeAction`，于是能拿到真正的"调用被拦"。想复现上面那条 DENY，就用它：
 >
 > ```bash
 > curl -s -X POST localhost:8000/api/governance/policy-test \
@@ -358,7 +306,7 @@ permit(
 >   -d '{"username":"demo","tool":"hr-database___create_payout","arguments":{"employee_id":"EMP-1024","amount":1}}'
 > ```
 >
-> 换成 `"username":"river"` 会得到 `ALLOW`——但请注意它会**真的创建一笔演示付款记录**。
+> 换成 `"username":"river"` 会得到 `ALLOW`，但请注意，它会**真的创建一笔演示付款记录**。
 
 ## 11.7 审计：不可变变更日志
 
@@ -367,14 +315,9 @@ permit(
 ![审计日志](images/11-audit.png)
 *图 11-9：策略变更审计。每次变更一条不可变快照，含操作人、状态、变更前/后完整 JSON。*
 
-本章那次策略创建留下的记录：
-
-```
-2026/7/26 08:37:57 | policy_create | launchpad_pe-rwtcceczvs | local-operator | succeeded
-```
-
-展开后能看到 `变更前` 的完整 Gateway + 引擎快照（含 `policy_engine_configuration.mode: ENFORCE`）、
-`变更后`、覆盖原因、以及回滚所需的输入。**AWS 实时状态始终是权威来源，审计只是本地的变更史。**
+找到本章创建策略时生成的 `policy_create · succeeded` 记录。展开后应能看到 `变更前` 的完整
+Gateway 与引擎快照、`变更后`、覆盖原因以及回滚所需的输入。**AWS 实时状态始终是权威来源，
+审计只保存本地变更历史。**
 
 ---
 
