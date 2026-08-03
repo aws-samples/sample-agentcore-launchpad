@@ -396,6 +396,8 @@
       "descriptor": "DESCRIPTOR",
       "source": "SOURCE",
       "sourceUrl": "SOURCE URL",
+      "sourceCommit": "COMMIT",
+      "commitUnknown": "not recorded (imported before commits were pinned — re-import to capture it)",
       "files": "BUNDLE FILES · {{n}}",
       "useInNewAgent": "USE IN NEW AGENT",
       "submit": "SUBMIT",

@@ -396,6 +396,8 @@
       "descriptor": "描述符",
       "source": "来源",
       "sourceUrl": "来源 URL",
+      "sourceCommit": "提交",
+      "commitUnknown": "未记录(导入时尚未固定提交——重新导入即可捕获)",
       "files": "文件束 · {{n}} 个文件",
       "useInNewAgent": "在新 AGENT 中使用",
       "submit": "提交",

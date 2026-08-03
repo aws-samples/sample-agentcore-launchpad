@@ -76,6 +76,57 @@ def test_git_clone_multi_skill_discovery(tmp_path, monkeypatch):
             b.close()
 
 
+def test_git_clone_records_the_resolved_commit(tmp_path, monkeypatch):
+    """A record has to say which revision it carries. `ref` is what was asked for
+    and may be a branch; `commit` is what was actually cloned. Read inside
+    _git_clone because .git is deleted right after."""
+    _allow_file_scheme(monkeypatch)
+    repo = tmp_path / "repo"
+    _make_repo(repo, {"SKILL.md": _md("committed")})
+    head = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+    bundles = si.bundles_from_git(f"file://{repo}")
+    try:
+        assert bundles[0].source.commit == head
+        assert len(bundles[0].source.commit) == 40
+    finally:
+        bundles[0].close()
+
+
+def test_git_clone_commit_differs_between_revisions(tmp_path, monkeypatch):
+    """Re-importing after an upstream change has to surface a different commit —
+    that is the whole point of recording it."""
+    _allow_file_scheme(monkeypatch)
+    repo = tmp_path / "repo"
+    _make_repo(repo, {"SKILL.md": _md("moving", version="1.0.0")})
+    first = si.bundles_from_git(f"file://{repo}")
+    try:
+        commit_one = first[0].source.commit
+    finally:
+        first[0].close()
+
+    (repo / "SKILL.md").write_text(_md("moving", version="2.0.0"))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "bump")
+
+    second = si.bundles_from_git(f"file://{repo}")
+    try:
+        assert second[0].source.commit != commit_one
+        assert second[0].version == "2.0.0"
+    finally:
+        second[0].close()
+
+
+def test_a_source_dict_without_a_commit_still_loads(tmp_path, monkeypatch):
+    """Records imported before commits were recorded must keep working."""
+    legacy = {"kind": "git", "url": "https://github.com/o/r", "ref": "main"}
+    source = si.SkillSource(**legacy)
+    assert source.commit is None
+
+
 def test_git_clone_ref_checkout(tmp_path, monkeypatch):
     _allow_file_scheme(monkeypatch)
     repo = tmp_path / "repo"
@@ -192,12 +243,17 @@ def test_git_missing_archive_fallback_known_host(monkeypatch):
         return zip_bytes
 
     monkeypatch.setattr(si, "_download_archive", fake_download)
-    bundles = si.bundles_from_git("https://github.com/org/repo", token="tkn")
+    # The archive path can only be immutable when the caller names a commit, so a
+    # SHA ref is now required here (a branch archive can move under the record).
+    bundles = si.bundles_from_git(
+        "https://github.com/org/repo", ref="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", token="tkn"
+    )
     try:
         assert bundles[0].name == "archived"
         assert bundles[0].files == ["SKILL.md", "scripts/x.py"]  # wrapper dir stripped
         assert bundles[0].source.kind == "git"
-        assert captured["url"] == "https://github.com/org/repo/archive/HEAD.zip"
+        assert bundles[0].source.commit == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        assert captured["url"] == "https://github.com/org/repo/archive/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip"
         assert captured["headers"]["Authorization"] == "Bearer tkn"
     finally:
         bundles[0].close()
@@ -212,25 +268,40 @@ def test_git_missing_archive_fallback_gitlab_ref(monkeypatch):
         return _archive_zip({"SKILL.md": _md("x-skill")}, wrapper="repo-v1")
 
     monkeypatch.setattr(si, "_download_archive", fake_download)
-    bundles = si.bundles_from_git("https://gitlab.com/org/repo", ref="v1")
+    bundles = si.bundles_from_git(
+        "https://gitlab.com/org/repo", ref="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    )
     try:
         assert bundles[0].name == "x-skill"
-        assert captured["url"] == "https://gitlab.com/org/repo/-/archive/v1/repo-v1.zip"
+        assert captured["url"] == (
+            "https://gitlab.com/org/repo/-/archive/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/repo-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip"
+        )
     finally:
         bundles[0].close()
 
 
-def test_git_missing_archive_gitlab_no_ref_hint(monkeypatch):
-    """HEAD.zip resolves the default branch reliably only on github; a failed
-    download for a non-github host with no ref gets a clear 'specify a ref' hint."""
+def test_git_missing_archive_requires_a_commit_ref(monkeypatch):
+    """A skill becomes deployable code, so its source must be immutable. The
+    archive endpoint can only serve a named ref, so without the git CLI the caller
+    has to supply a commit SHA — and is told both ways forward."""
     monkeypatch.setattr(si, "git_available", lambda refresh=False: (False, None))
 
-    def boom(url, headers, max_bytes=si.SKILL_BUNDLE_MAX_BYTES):
-        raise si.SkillValidationError("failed to download archive: 404 Not Found")
+    def boom(url, headers, max_bytes=si.SKILL_BUNDLE_MAX_BYTES):  # pragma: no cover
+        raise AssertionError("must not download before the commit check")
 
     monkeypatch.setattr(si, "_download_archive", boom)
-    with pytest.raises(si.SkillValidationError, match="branch or tag"):
+    with pytest.raises(si.SkillValidationError) as exc:
         si.bundles_from_git("https://gitlab.com/org/repo")
+    assert "immutable commit" in exc.value.message
+    assert "git-install" in exc.value.message
+    assert "40-character" in exc.value.message
+
+
+def test_git_missing_archive_refuses_a_branch_ref(monkeypatch):
+    """A branch moves, so it cannot pin what a deployed agent carries."""
+    monkeypatch.setattr(si, "git_available", lambda refresh=False: (False, None))
+    with pytest.raises(si.SkillValidationError, match="immutable commit"):
+        si.bundles_from_git("https://github.com/org/repo", ref="main")
 
 
 def test_git_missing_archive_fallback_large_repo(monkeypatch):
@@ -245,7 +316,11 @@ def test_git_missing_archive_fallback_large_repo(monkeypatch):
         si, "_download_archive",
         lambda url, headers, max_bytes=si.SKILL_BUNDLE_MAX_BYTES: zip_bytes,
     )
-    bundles = si.bundles_from_git("https://github.com/org/repo", subdir="skills/tiny")
+    bundles = si.bundles_from_git(
+        "https://github.com/org/repo",
+        ref="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        subdir="skills/tiny",
+    )
     try:
         assert len(bundles) == 1
         assert bundles[0].name == "tiny"

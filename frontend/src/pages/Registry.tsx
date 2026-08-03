@@ -28,6 +28,8 @@ interface SkillSourceMeta {
   kind: string;
   url?: string;
   ref?: string;
+  /** Full commit SHA the files came from; absent on pre-pinning records. */
+  commit?: string;
   subdir?: string;
   imported_at?: string;
 }
@@ -602,6 +604,18 @@ export function Registry() {
                       <div className="kv">
                         <span className="k">{t("registry.drawer.sourceUrl")}</span>
                         <span className="v">{skillMeta.source.url}</span>
+                      </div>
+                    )}
+                    {skillMeta.source?.kind === "git" && (
+                      <div className="kv">
+                        <span className="k">{t("registry.drawer.sourceCommit")}</span>
+                        {/* `ref` is what was asked for and may be a branch; the
+                            commit is the revision this record actually carries.
+                            Records imported before commits were recorded show a
+                            hint instead of a blank. */}
+                        <span className="v" data-testid="skill-source-commit">
+                          {skillMeta.source.commit ?? t("registry.drawer.commitUnknown")}
+                        </span>
                       </div>
                     )}
                     {skillMeta.files.length > 0 && (
