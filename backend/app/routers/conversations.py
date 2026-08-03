@@ -47,6 +47,11 @@ def _require_interpreter() -> None:
             local_exec.missing_interpreter_message(),
             status_code=503,
         )
+    user_problem = local_exec.exec_user_error()
+    if user_problem:
+        raise AppError(
+            "studio.exec.user_unavailable", user_problem, status_code=503
+        )
 
 
 def _not_found(exc: ValueError) -> NotFoundError:

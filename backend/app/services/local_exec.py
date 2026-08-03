@@ -30,7 +30,12 @@ class ExecInterpreterUnavailable(RuntimeError):
 
 
 class ExecUserUnavailable(RuntimeError):
-    """`studio_exec_user` is configured but no such account exists."""
+    """`studio_exec_user` is configured but cannot be used on this host.
+
+    Either the account does not exist, or the backend is not privileged enough to
+    become it. Both are configuration problems, and both must surface as one
+    legible message instead of a `PermissionError` from deep inside a spawn.
+    """
 
 
 def local_exec_enabled(settings: Any = None) -> bool:
@@ -161,7 +166,33 @@ def _exec_user_ids(settings: Any = None) -> tuple[int, int] | None:
             "scripts/setup_exec_env.sh --hardened to create it, or clear the "
             "setting to run the subprocess as the backend user."
         ) from None
+    if os.geteuid() != 0:
+        # Becoming another user needs privilege: `subprocess(user=…)` fails with
+        # EPERM, and so does chowning the workdir to it. `make dev` and start.py
+        # run the backend as the operator's own account, so this is the *common*
+        # case — it has to be a stated precondition rather than a spawn-time
+        # PermissionError with no explanation.
+        raise ExecUserUnavailable(
+            f"studio_exec_user {name!r} is configured, but this backend runs as "
+            f"uid {os.geteuid()} and only root can switch to another user. Run the "
+            "backend as root to use the dedicated execution user, or clear "
+            "studio_exec_user — the subprocess then keeps the backend's uid, "
+            "which leaves the instance metadata service reachable from it."
+        )
     return record.pw_uid, record.pw_gid
+
+
+def exec_user_error(settings: Any = None) -> str | None:
+    """The reason `studio_exec_user` cannot be honored, or None if it can.
+
+    Lets the execution endpoints refuse up front with an actionable message
+    instead of spawning and failing halfway through a run.
+    """
+    try:
+        _exec_user_ids(settings)
+    except ExecUserUnavailable as exc:
+        return str(exc)
+    return None
 
 
 def build_spawn_kwargs(settings: Any = None) -> dict[str, Any]:

@@ -225,6 +225,34 @@ def test_a_missing_exec_user_is_reported_clearly():
         )
 
 
+def test_a_non_root_backend_cannot_use_the_exec_user(monkeypatch):
+    """Verified on a real host: `subprocess(user=…)` and chowning the workdir both
+    raise EPERM for a non-root parent, and `make dev` runs the backend as the
+    operator. The precondition has to be stated, not discovered mid-spawn."""
+    from app.core.config import Settings
+
+    monkeypatch.setattr(local_exec.os, "geteuid", lambda: 1000)
+    settings = Settings(studio_exec_user="root")  # exists on every host
+    with pytest.raises(local_exec.ExecUserUnavailable, match="only root can switch"):
+        local_exec._exec_user_ids(settings)
+
+
+def test_exec_user_error_reports_instead_of_raising(monkeypatch):
+    from app.core.config import Settings
+
+    monkeypatch.setattr(local_exec.os, "geteuid", lambda: 1000)
+    message = local_exec.exec_user_error(Settings(studio_exec_user="root"))
+    assert message and "only root can switch" in message
+    assert local_exec.exec_user_error(Settings(studio_exec_user="")) is None
+
+
+def test_exec_user_is_accepted_when_running_as_root(monkeypatch):
+    from app.core.config import Settings
+
+    monkeypatch.setattr(local_exec.os, "geteuid", lambda: 0)
+    assert local_exec._exec_user_ids(Settings(studio_exec_user="root")) == (0, 0)
+
+
 def test_grant_workdir_is_a_noop_without_a_configured_user(tmp_path):
     from app.core.config import Settings
 
