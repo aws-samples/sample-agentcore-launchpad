@@ -229,6 +229,13 @@ cd backend && uv run python scripts/migrate_pin_requirements.py --apply
 > `us-west-2` **和** `us-east-1` 主机上各跑一次。在此之前,那台主机上的闸门会报告
 > 无法读取扫描结果。
 
+> **默认阈值第一天就会拦住部署。** 对现役 demo 镜像实测扫描得到 **4 个 CRITICAL**,
+> 全部是 Debian 基础镜像里未修补的 OS 包(`glibc`、`perl`),而不是本项目安装的任何东西
+> —— 也就是说在 `["CRITICAL"]` 默认值下,一旦开启扫描,容器部署会一直被拦到基础镜像
+> 发布修复为止。拦截消息会点名 CVE 与包名,便于判断责任方。请在三者之间明确取舍:换用
+> 更新的基础镜像重建、把 `image_scan_block_severities` 放宽为 `[]`(仅报告:每次部署都
+> 记录 finding,但不拦截)、或接受被拦截。
+
 未实现:SBOM 生成、构建 provenance/attestation、镜像签名、受信镜像源强制,以及 skill
 **内容**审查。固定版本让来源不可变,并不等于可信。
 
@@ -242,16 +249,28 @@ Studio 本地调试端点(`/api/execute`、`/api/execute/stream`,以及
 开发模式下子进程会拿到一份清洗过的环境(白名单,因此账本 URL、`LAUNCHPAD_*` 配置
 以及你 shell 里的密钥都不会进去),外加内存 / CPU / 进程数 / 文件大小上限。
 
-但它默认仍以后端用户身份运行,并且**仍能拿到你的 AWS 凭证** —— 在 EC2 上凭证来自
-实例元数据服务、走网络而非环境变量,所以清洗环境并不能移除它们。要封住这一点:
+但它默认仍以后端用户身份运行,并且**仍能拿到你的 AWS 凭证**。把
+`studio_exec_forward_aws_credentials` 设为 `false` 会让凭证不进入子进程环境,并设置
+`AWS_EC2_METADATA_DISABLED=true` —— 这足以让 AWS SDK 与 CLI 不再取用实例角色,但该
+变量只是 SDK 约定,不是边界。在 EC2 上凭证走网络,所以**自己去访问
+`169.254.169.254` 的代码依然能拿到**。在 EC2 上实测:环境已清洗的情况下,约 20 行
+`urllib` 仍取回了有效的实例角色密钥。要封住这一点:
 
 ```bash
 sudo scripts/setup_exec_env.sh --hardened   # 仅 Linux
 ```
 
-该命令会创建一个专用的非特权账户,并加一条防火墙规则禁止它访问元数据端点,然后打印
-需要补上的两个配置项。注意它同时说明的权衡:默认的 Bedrock Mantle 路径依赖 ambient
-凭证来签发 bearer token,因此一个无凭证的子进程要求每次本地调试请求显式带上
+该命令会创建一个专用的非特权账户,并加一条**按该 uid 限定**的防火墙规则禁止它访问
+元数据端点,然后打印需要补上的两个配置项。同一段探测代码在该账户下会超时失败。
+
+**前置条件:**把子进程切换到另一个账户需要特权,因此 `studio_exec_user` 只在**后端
+自身以 root 运行**时才生效。`make dev` 和 `start.py` 都以你自己的账户运行后端,此时
+降权会失败 —— 所以执行端点会直接返回 `studio.exec.user_unavailable`(503)而不是执行
+到一半才报错;你要么让后端以 root 运行,要么把 `studio_exec_user` 留空(即 tier 1:
+只有资源上限与环境清洗)。
+
+注意脚本同时说明的权衡:默认的 Bedrock Mantle 路径依赖 ambient 凭证来签发 bearer
+token,因此一个无凭证的子进程要求每次本地调试请求显式带上
 `bedrock_api_key` / `openai_api_key`。
 
 完整沙箱(非 root 容器、seccomp、受限出网)**尚未**实现;在生产环境,禁用该端点就是

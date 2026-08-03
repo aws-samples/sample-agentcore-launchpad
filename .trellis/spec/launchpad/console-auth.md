@@ -125,9 +125,14 @@ guarded `/api` path from a **non-loopback transport peer** is refused with
   `--host`, so a startup-only check is bypassed by running uvicorn directly —
   which is how the EC2 host and any container start it.
 - Use `request.client.host` and **never** `X-Forwarded-For`: a spoofable header
-  would make the check decorative. The accepted consequence is that a same-host
-  reverse proxy is trusted. This branch never runs in real production, where the
-  gate is enabled.
+  would make the check decorative. Verified over real sockets: forged
+  `X-Forwarded-For` / `X-Real-IP` / `Forwarded` / `Host` from a non-loopback peer
+  are all refused. The accepted consequence is narrower than "localhost is
+  trusted" — uvicorn's proxy-header middleware (default
+  `forwarded_allow_ips=127.0.0.1`) rewrites the peer from `X-Forwarded-For` when
+  the peer *is* loopback, so a same-host proxy that sets it has its real client
+  evaluated and refused; only one that omits forwarded headers still reads as
+  local. This branch never runs in real production, where the gate is enabled.
 - A non-IP peer (e.g. a test transport) counts as non-loopback, i.e. fails closed.
   `TestClient`'s peer is the literal `"testclient"`, so `backend/tests/conftest.py`
   sets `LAUNCHPAD_ALLOW_OPEN_CONSOLE=true` for the suite. **Do not special-case

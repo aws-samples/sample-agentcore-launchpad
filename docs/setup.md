@@ -252,6 +252,15 @@ same tag twice and an immutable-tag policy would fail that push.
 > has to be run in `us-west-2` **and** on the `us-east-1` host. Until it is, the
 > gate on that host will report that it could not read a scan.
 
+> **Expect the default to block on day one.** A scan of a current demo image found
+> **4 CRITICAL** findings, all unpatched OS packages in the Debian base image
+> (`glibc`, `perl`) rather than anything this project installs — so with the
+> `["CRITICAL"]` default, enabling scanning stops container deploys until the base
+> image ships fixes. The block message names the CVEs and packages so you can tell
+> whose problem it is. Decide deliberately between rebuilding on a newer base,
+> relaxing `image_scan_block_severities` to `[]` (report-only: findings are logged
+> on every deploy, nothing is blocked), and accepting the block.
+
 Not implemented: SBOM generation, build provenance/attestation, image signing,
 approved-mirror enforcement, and skill *content* review. Pinning makes a source
 immutable, not trustworthy.
@@ -269,18 +278,33 @@ ledger URL, `LAUNCHPAD_*` settings and your shell's secrets do not reach it) plu
 memory/CPU/process/file-size ceilings.
 
 It still runs as the backend user by default, and **still reaches your AWS
-credentials** — on EC2 those arrive from the instance metadata service over the
-network, so scrubbing the environment does not remove them. To close that:
+credentials**. Setting `studio_exec_forward_aws_credentials: false` keeps them
+out of the child's environment and sets `AWS_EC2_METADATA_DISABLED=true`, which
+is enough to stop the AWS SDKs and CLI from picking up the instance role — but
+that variable is an SDK convention, not a boundary. On EC2 credentials arrive
+over the network, so code that talks to `169.254.169.254` itself still gets them.
+Measured on an EC2 host: with the environment scrubbed, ~20 lines of `urllib`
+still returned live instance-role keys. To close that:
 
 ```bash
 sudo scripts/setup_exec_env.sh --hardened   # Linux only
 ```
 
-That creates a dedicated unprivileged account and a firewall rule denying it
-egress to the metadata endpoint, then prints the two settings to add. Note the
-trade-off it describes: the default Bedrock Mantle path mints its bearer token
-from the ambient credentials, so a credential-less subprocess requires an
-explicit `bedrock_api_key` / `openai_api_key` with each local-debug request.
+That creates a dedicated unprivileged account and a firewall rule denying **that
+uid** egress to the metadata endpoint, then prints the two settings to add. The
+same probe under it times out.
+
+**Precondition:** switching the subprocess to another account needs privilege, so
+`studio_exec_user` only works when **the backend itself runs as root**. `make dev`
+and `start.py` run it as your own account, where the drop would fail — the
+execution endpoints therefore refuse with `studio.exec.user_unavailable` (503)
+rather than failing mid-run, and you must either run the backend as root or leave
+`studio_exec_user` empty (tier 1: limits and environment scrubbing only).
+
+Note the trade-off the script describes: the default Bedrock Mantle path mints
+its bearer token from the ambient credentials, so a credential-less subprocess
+requires an explicit `bedrock_api_key` / `openai_api_key` with each local-debug
+request.
 
 A full sandbox (non-root container, seccomp, constrained egress) is **not**
 implemented; production-disabled is the mitigation there.

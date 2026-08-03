@@ -468,9 +468,15 @@ checked per request rather than at startup because the request is the only place
 the caller's address is known — `create_app()` cannot see uvicorn's `--host`, so a
 startup-only check would be bypassed by launching uvicorn directly, which is how
 the EC2 host and any container start it. The check uses the transport peer and
-never `X-Forwarded-For` (spoofable); consequently a same-host reverse proxy stays
-trusted, which is the pre-existing trust in localhost and never applies to the
-real production path, where authentication is on and this branch does not run.
+never `X-Forwarded-For` (spoofable). Measured over real sockets, forged
+`X-Forwarded-For`, `X-Real-IP`, `Forwarded` and `Host` headers from a non-loopback
+peer are all refused. The residual is narrower than "localhost is trusted": since
+uvicorn's proxy-header middleware (default `forwarded_allow_ips=127.0.0.1`)
+rewrites the peer from `X-Forwarded-For` when the peer *is* loopback, a same-host
+proxy that sets that header gets its real client evaluated and refused. Only a
+local proxy that forwards remote traffic **without** forwarded headers still looks
+local. Either way the branch never runs on the real production path, where
+authentication is on.
 `LAUNCHPAD_ALLOW_OPEN_CONSOLE=true` accepts the risk; `create_app()` and
 `start.py` additionally fail fast so a misconfiguration surfaces at boot.
 

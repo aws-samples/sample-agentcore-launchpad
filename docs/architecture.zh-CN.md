@@ -303,9 +303,12 @@ Cookie**:授权在每次请求时解析(配置的 admin → `admin`,其余以 `u
 `403 auth.open_console_refused`。它按**每个请求**检查而不是在启动时检查,因为请求是
 唯一能知道调用方地址的地方——`create_app()` 看不到 uvicorn 的 `--host`,所以仅靠启动
 检查会被"直接跑 uvicorn"绕过,而 EC2 主机和容器恰恰就是这么启动的。该检查使用传输层
-对端地址,绝不读 `X-Forwarded-For`(可伪造);其代价是同主机上的反向代理仍被信任——
-这与控制台原本对 localhost 的信任一致,且在真实生产路径上根本不会触发,因为那里认证
-是开启的。`LAUNCHPAD_ALLOW_OPEN_CONSOLE=true` 表示接受该风险;`create_app()` 与
+对端地址,绝不读 `X-Forwarded-For`(可伪造)。在真实 socket 上实测:来自非环回对端的
+伪造 `X-Forwarded-For`、`X-Real-IP`、`Forwarded`、`Host` 头全部被拒。残留风险比"信任
+localhost"更窄:uvicorn 的 proxy-header 中间件(默认 `forwarded_allow_ips=127.0.0.1`)
+会在对端**确实是环回**时用 `X-Forwarded-For` 改写对端地址,因此同主机代理只要设置了该
+头,被评估的就是真实客户端并会被拒;只有**不设置**转发头、却在转发远端流量的本机代理
+才仍显得像本地。无论哪种情况,该分支在真实生产路径上都不会触发,因为那里认证是开启的。`LAUNCHPAD_ALLOW_OPEN_CONSOLE=true` 表示接受该风险;`create_app()` 与
 `start.py` 另外会快速失败,让配置错误在启动时就暴露。
 
 **这个调用方是否允许访问这个路由?** 网关启用后,中间件要求所有 `/api/*` 路由都有活跃
