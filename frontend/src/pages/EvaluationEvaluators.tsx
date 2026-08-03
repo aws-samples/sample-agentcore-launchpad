@@ -287,7 +287,10 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
         setFormError(env.message ?? `HTTP ${res.status}`);
         return;
       }
-      toast(editingId ? t("evalPage.evaluators.updated") : t("evalPage.evaluators.created"));
+      toast(
+        editingId ? t("evalPage.evaluators.updated") : t("evalPage.evaluators.created"),
+        "good",
+      );
       if (editingId) {
         await load(); // selection stays on the row we just saved
       } else {
