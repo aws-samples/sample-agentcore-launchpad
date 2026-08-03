@@ -73,6 +73,23 @@ def context_from_settings(settings: Any) -> RoleContext:
     )
 
 
+def live_runtime_role_arn(runtime_detail: dict[str, Any] | None, settings: Any) -> str:
+    """The role the running runtime is already using, else the shared role.
+
+    Used by the paths that mint a candidate *version of an existing runtime* (canary,
+    A/B): a candidate stands in for production, so it must carry production's role
+    rather than a wider shared one — otherwise the candidate is measured with
+    permissions production does not have, and a promotion inherits them.
+
+    Read from the live resource rather than derived from the agent name, because
+    deriving it would guess wrong for any agent deployed before per-agent roles
+    existed: the name would resolve to a role that does not exist and
+    UpdateAgentRuntime would fail. The live value needs no migration state.
+    """
+    live = (runtime_detail or {}).get("roleArn") or ""
+    return live or shared_role_arn(settings)
+
+
 def shared_role_arn(settings: Any) -> str:
     """The pre-existing shared role, still used by candidate versions and as the
     fallback when per-agent roles are turned off."""
