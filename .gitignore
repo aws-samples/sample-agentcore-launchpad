@@ -1,6 +1,7 @@
 # --- session / tool artifacts (repo root only) ---
 /.claude/
 /.codegraph/
+/.trellis/
 /.supergoal/
 /.mcp.json
 /.run/
