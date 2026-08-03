@@ -105,6 +105,16 @@ class Settings(BaseSettings):
     account_id: str = ""
     resources: dict[str, Any] = {}
 
+    # Each agent gets its own least-privilege execution role derived from its spec
+    # (app/services/agent_iam.py) instead of every agent assuming one shared role.
+    # The escape hatch exists because an over-tight policy fails at *invoke* time,
+    # not deploy time: an operator hitting that needs a way back without a code
+    # change. Turning it off reverts to the shared role.
+    per_agent_execution_roles: bool = True
+    # Warn on the Overview surface once this many Launchpad-managed roles exist.
+    # The IAM default quota is 1000 roles per account, consumed one per agent.
+    agent_role_count_warn_threshold: int = Field(default=800, gt=0)
+
     # Container image supply chain (T10). The gate runs after the push, before the
     # image can back a runtime. The threshold and the off switch are configurable
     # on purpose: an un-overridable gate strands every agent the first time a base

@@ -30,6 +30,7 @@ from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
+from app.services import agent_iam
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
 from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES
@@ -453,12 +454,13 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     return StageResult(detail=detail)
 
 
-def _stage_provision(ctx: StageContext, agent: Agent) -> StageResult:
-    role_arn = get_settings().resources.get("execution_role_arn")
-    if not role_arn:
-        raise RuntimeError("execution_role_arn missing from config — run scripts/bootstrap.py")
+def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) -> StageResult:
+    spec = AgentSpec(**agent.spec)
+    role_arn, detail = agent_iam.provision_execution_role(
+        agent, spec, get_settings(), ctx.log, iam=iam_client
+    )
     ctx.scratch["execution_role_arn"] = role_arn
-    return StageResult(detail="iam role reused · launchpad-base")
+    return StageResult(detail=detail)
 
 
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:

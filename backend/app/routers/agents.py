@@ -1,6 +1,7 @@
 """Agents API — create/deploy, list, invoke, delete; jobs polling."""
 
 import json
+import logging
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -17,6 +18,7 @@ from app.deployer import zip_runtime as zip_method
 from app.deployer.pipeline import create_deployment, start_deploy_async
 from app.models.ledger import Agent, Deployment, Job
 from app.schemas.agent import AgentSpec, InvokeRequest, InvokeResponse, RuntimeImportRequest
+from app.services import agent_iam
 from app.services.agentcore.client import control_client
 from app.services.invoke import invoke_agent_text
 from app.services.memory import scoped_actor
@@ -27,6 +29,8 @@ from app.services.runtime_discovery import (
     require_invoke_capability,
     scan_runtimes,
 )
+
+logger = logging.getLogger("launchpad.agents")
 
 router = APIRouter(prefix="/api", tags=["agents"])
 
@@ -90,6 +94,13 @@ def _delete_agent_resources(agent: Agent) -> bool:
         zip_method.delete_agent_resources(agent)
     elif agent.method == "container":
         container_method.delete_agent_resources(agent)
+    # After the resource, never before: deleting the execution role while the
+    # runtime still references it can wedge the runtime's own deletion. A failed
+    # role delete must not block deleting the agent, so this returns rather than
+    # raises and logs the role name for a later sweep.
+    agent_iam.delete_execution_role(
+        agent, get_settings(), lambda msg: logger.info("agent %s: %s", agent.id, msg)
+    )
     return True
 
 

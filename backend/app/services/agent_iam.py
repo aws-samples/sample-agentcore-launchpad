@@ -58,6 +58,27 @@ class RoleContext:
     memory_id: str = ""
 
 
+def context_from_settings(settings: Any) -> RoleContext:
+    """Build a `RoleContext` from the resolved settings."""
+    resources = settings.resources or {}
+    repo = resources.get("ecr_repo", "launchpad-agents")
+    return RoleContext(
+        account_id=settings.account_id,
+        region=settings.region,
+        artifacts_bucket=resources.get("artifacts_bucket", ""),
+        ecr_repo_arn=(
+            f"arn:aws:ecr:{settings.region}:{settings.account_id}:repository/{repo}"
+        ),
+        memory_id=resources.get("memory_id", ""),
+    )
+
+
+def shared_role_arn(settings: Any) -> str:
+    """The pre-existing shared role, still used by candidate versions and as the
+    fallback when per-agent roles are turned off."""
+    return (settings.resources or {}).get("execution_role_arn", "")
+
+
 # ---------------------------------------------------------------------------
 # naming
 # ---------------------------------------------------------------------------
@@ -523,6 +544,55 @@ def _sync_fs_policy(
         log(f"inline policy {name} removed (no BYO mounts)")
     except Exception:  # noqa: BLE001 — absent on most agents, nothing to clean
         pass
+
+
+def provision_execution_role(
+    agent: Agent,
+    spec: AgentSpec,
+    settings: Any,
+    log: Callable[[str], None] = lambda _m: None,
+    iam: Any = None,
+) -> tuple[str, str]:
+    """The provision-stage entry point shared by all three deployers.
+
+    Returns `(role_arn, detail)`. Falls back to the shared role when per-agent roles
+    are switched off, so the two paths differ in one place rather than three.
+    """
+    if not settings.per_agent_execution_roles:
+        arn = shared_role_arn(settings)
+        if not arn:
+            raise RuntimeError(
+                "execution_role_arn missing from config/launchpad.yaml — run "
+                "scripts/bootstrap.py"
+            )
+        log(f"per-agent roles disabled — reusing shared execution role {arn}")
+        return arn, "iam role reused · launchpad-base (shared)"
+
+    if iam is None:
+        import boto3
+
+        iam = boto3.client("iam", region_name=settings.region)
+    ctx = context_from_settings(settings)
+    arn = ensure_role(iam, agent, spec, ctx, log)
+    name = role_name_for(agent.name, agent.id)
+    detail = f"iam role · {name}"
+    if fs_policy_document(spec):
+        detail += f" (+ {fs_policy_name(agent.name)})"
+    return arn, detail
+
+
+def delete_execution_role(
+    agent: Agent, settings: Any, log: Callable[[str], None] = lambda _m: None,
+    iam: Any = None,
+) -> bool:
+    """Delete the agent's role, if it has one. Never raises."""
+    if not settings.per_agent_execution_roles:
+        return True  # the shared role is not ours to delete
+    if iam is None:
+        import boto3
+
+        iam = boto3.client("iam", region_name=settings.region)
+    return delete_role(iam, agent, log)
 
 
 def delete_role(
