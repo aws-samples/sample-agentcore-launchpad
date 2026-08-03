@@ -150,6 +150,50 @@ Cedar 策略写入,以及浏览器 / 代码解释器 demo。权威清单是
 没有任何开关可以关闭角色授权:能关掉授权的开关本身就是漏洞。要修正误分类的路由,
 请直接改 `route_policy.py`。
 
+### 依赖与镜像供应链
+
+**依赖必须固定版本。** `spec.requirements` 的每一项都必须指向唯一且不可变的产物——
+`name==version`、带 `#sha256=` 的直链 URL,或
+`pkg @ git+https://…@<40 位 commit>`。范围写法会在校验阶段被拒,错误信息里会给出
+要求的形式。平台自带的依赖清单刻意保留范围;可复现性来自下面的 lockfile,而不是把
+它们手工 pin 死。
+
+已有 agent 可能早于该规则。在它们下一次部署之前不会有任何影响,可用下面的命令检查:
+
+```bash
+cd backend && uv run python scripts/migrate_pin_requirements.py
+cd backend && uv run python scripts/migrate_pin_requirements.py --apply
+```
+
+同一脚本还会列出没有记录 commit 的 git skill 记录;这些需要从注册表**重新导入**,
+因为拿到 commit SHA 必须发起一次拉取。
+
+**每次 zip 构建都会锁定。** package 阶段用 `uv pip compile --generate-hashes` 针对
+部署目标(aarch64、Python 3.13)解析依赖,再以 `--require-hashes` 安装,因此被替换或
+重新上传过的发行包会让构建失败而不是被打包进去。lock 文件以 `requirements.lock` 随
+部署 zip 一起下发。**因此后端在部署时需要 PATH 上有 `uv` CLI 且能访问包索引**;解析
+失败就是部署失败——不会退回到未校验的安装路径。
+
+**容器镜像会被扫描,并按 digest 部署。** ECR 在推送时扫描,package 阶段在镜像存在
+达到或超过 `image_scan_block_severities` 的漏洞时拒绝继续:
+
+| 配置项 | 默认值 | 作用 |
+|---|---|---|
+| `image_scan_enabled` | `true` | 设为 false 可跳过该闸门(任务日志会写明镜像未被扫描)。 |
+| `image_scan_block_severities` | `["CRITICAL"]` | 会阻断部署的严重级别。 |
+| `image_scan_timeout_s` | `300` | 等待扫描的时长;超时会被记录,不会当作"干净"。 |
+
+部署引用的是不可变的镜像 digest,而不是 `{agent}-v{version}` 标签,并且 digest 会记录
+在该次部署上。镜像标签刻意保持**可变**:打包发生在版本号递增之前,因此重新发布会把
+同一个标签推送两次,不可变标签策略会让第二次推送失败。
+
+> **两套环境都要应用。** scan-on-push 是 CDK 改动,所以 `make bootstrap` 需要在
+> `us-west-2` **和** `us-east-1` 主机上各跑一次。在此之前,那台主机上的闸门会报告
+> 无法读取扫描结果。
+
+未实现:SBOM 生成、构建 provenance/attestation、镜像签名、受信镜像源强制,以及 skill
+**内容**审查。固定版本让来源不可变,并不等于可信。
+
 ### 本地代码执行
 
 Studio 本地调试端点(`/api/execute`、`/api/execute/stream`,以及

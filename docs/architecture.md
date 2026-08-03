@@ -83,13 +83,58 @@ stage (`resume_pending_jobs()` runs on startup).
 | Stage | 方式B — harness | zip_runtime / 方式C — studio | 方式A — container |
 |---|---|---|---|
 | **generate** | Build `CreateHarness` request from the AgentSpec | Render the Strands template (studio: adapt user code verbatim) | Assemble ARM64 build context (Dockerfile + `main.py` + `.claude` scaffold) |
-| **package** | *skipped* (no artifact) | `pip install` ARM64 wheels → zip → S3 | zip context → S3 → CodeBuild (docker build+push) → ECR |
+| **package** | *skipped* (no artifact) | resolve → hashed lock → `--require-hashes` install of ARM64 wheels → zip → S3 | zip context → S3 → CodeBuild (docker build+push) → ECR → resolve digest → scan gate |
 | **provision** | Reuse the shared execution role | Reuse the shared execution role | Reuse the shared execution role |
 | **deploy** | `CreateHarness` + poll READY | `CreateAgentRuntime` + poll READY | `CreateAgentRuntime(containerConfiguration)` + poll READY |
 | **register** | A2A registry record, auto-submitted | A2A registry record, auto-submitted | A2A registry record, auto-submitted |
 
 Typical timings: harness ≈ 30 s, zip ≈ 1–3 min (incl. pip), container ≈ 2–4 min (observed: 1.7 min CodeBuild + seconds to READY)
 (via CodeBuild). See [troubleshooting.md](troubleshooting.md).
+
+### Supply chain of a build
+
+Two things about a deployed artifact have to be answerable: what went into it, and
+whether what runs is still what was built. Both live in the `package` stage.
+
+**Dependencies are resolved, then locked, then verified.** A single `pip install`
+over the declared list — which is what this used to be — installs whatever the
+index serves at that moment, including for the platform's own ranged pins, and
+leaves no record. The stage now runs `uv pip compile --generate-hashes` for the
+deploy target (aarch64, Python 3.13, named once in `zip_runtime.py` so the resolve
+and the install cannot disagree), then installs with `--require-hashes`. A
+substituted or re-uploaded distribution fails the build. The lock ships inside the
+zip as `requirements.lock`, so the artifact carries its own bill of materials.
+There is deliberately no fallback: a resolve failure fails the stage.
+
+Caller-supplied `spec.requirements` must additionally be pinned at *schema*
+validation (`app/schemas/requirements.py`), so the console rejects a range before a
+build starts. The platform's own lists keep their ranges — the
+`MANTLE_EXTRA_REQUIREMENTS` comment explains that pip is meant to intersect two
+specs for the same project — and the lock is what makes the resolved set
+reproducible. Harness conversion is the one place the platform derives
+requirements from somewhere else (the source Harness's `pyproject.toml`), so it
+resolves those ranges to pins rather than being exempted from the rule.
+
+**Container images are scanned, and deployed by digest.** ECR scans on push. After
+the build, `_stage_package` resolves the pushed tag to its immutable digest,
+records it on the `Deployment` row, and runs the gate before the image can back a
+runtime; `_stage_deploy` sends `repo@sha256:…` as `containerUri`. Deploying by the
+`{agent}-v{version}` tag would mean what a runtime executes can change with no
+record of it.
+
+The gate's threshold and off switch are configurable, because an un-overridable
+gate strands every agent the first time a base image picks up a CVE. A scan that
+could not be read — scanning not enabled, an API error, a timeout — is logged as
+exactly that and the deploy proceeds unscanned; it is never folded into "clean",
+because an absent gate must not read as a passed one.
+
+Image tags stay **mutable**: packaging runs before `_stage_deploy` bumps the
+version, so a re-publish pushes the same tag twice and an immutable-tag policy
+would fail that push. Digest pinning is the control, and an infra test asserts the
+tag policy so this cannot drift into a broken re-publish.
+
+Not covered: SBOM generation, provenance/attestation, signing, approved-mirror
+enforcement, and skill *content* review. Immutable is not the same as trusted.
 
 ### Creation entrances
 

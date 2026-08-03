@@ -163,6 +163,57 @@ There is no switch that disables role authorization: a flag that turns
 authorization off is the vulnerability. Correcting a misclassified route means
 editing `route_policy.py`.
 
+### Dependency and image supply chain / 依赖与镜像供应链
+
+**Requirements must be pinned.** `spec.requirements` entries have to name one
+immutable artifact — `name==version`, a direct URL with `#sha256=`, or
+`pkg @ git+https://…@<40-char commit>`. A range is refused at validation with the
+required form in the message. The platform's own requirement lists keep ranges
+deliberately; reproducibility comes from the lockfile below, not from hand-pinning
+them.
+
+Existing agents may predate this. Nothing breaks until their next deploy — check
+with:
+
+```bash
+cd backend && uv run python scripts/migrate_pin_requirements.py
+cd backend && uv run python scripts/migrate_pin_requirements.py --apply
+```
+
+The same script lists git skill records with no recorded commit; those need a
+**re-import** from the Registry, because a commit SHA needs a fetch.
+
+**Every zip build is locked.** The package stage resolves the declared
+requirements with `uv pip compile --generate-hashes` for the deploy target
+(aarch64, Python 3.13) and installs with `--require-hashes`, so a substituted or
+re-uploaded distribution fails the build instead of shipping. The lock travels
+inside the deployment zip as `requirements.lock`. **The backend therefore needs the
+`uv` CLI on PATH and access to the package index at deploy time**; if the resolve
+fails, the deploy fails — there is no fall back to an unverified install.
+
+**Container images are scanned and deployed by digest.** ECR scans on push, and
+the package stage refuses to continue when the image carries findings at or above
+`image_scan_block_severities`:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `image_scan_enabled` | `true` | Set false to skip the gate (the job log then says the image was not scanned). |
+| `image_scan_block_severities` | `["CRITICAL"]` | Severities that block a deploy. |
+| `image_scan_timeout_s` | `300` | How long to wait for the scan; a timeout is logged, not treated as clean. |
+
+Deployment references the image by immutable digest, not by its `{agent}-v{version}`
+tag, and the digest is recorded on the deployment. Image tags stay **mutable** on
+purpose: packaging runs before the version is bumped, so a re-publish pushes the
+same tag twice and an immutable-tag policy would fail that push.
+
+> **Applies to both stacks.** Scan-on-push is a CDK change, so `make bootstrap`
+> has to be run in `us-west-2` **and** on the `us-east-1` host. Until it is, the
+> gate on that host will report that it could not read a scan.
+
+Not implemented: SBOM generation, build provenance/attestation, image signing,
+approved-mirror enforcement, and skill *content* review. Pinning makes a source
+immutable, not trustworthy.
+
 ### Local code execution / 本地代码执行
 
 The Studio local-debug endpoints (`/api/execute`, `/api/execute/stream`, and the

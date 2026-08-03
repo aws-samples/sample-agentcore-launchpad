@@ -80,13 +80,48 @@ generate → package → provision → deploy → register
 | 阶段 | 方式B — harness | zip_runtime / 方式C — studio | 方式A — container |
 |---|---|---|---|
 | **generate** | 从 AgentSpec 构建 `CreateHarness` 请求 | 渲染 Strands 模板(studio:原样适配用户代码) | 组装 ARM64 构建上下文(Dockerfile + `main.py` + `.claude` 脚手架) |
-| **package** | *跳过*(无产物) | `pip install` ARM64 wheels → zip → S3 | zip 上下文 → S3 → CodeBuild(docker build+push)→ ECR |
+| **package** | *跳过*(无产物) | 解析 → 带 hash 的 lock → `--require-hashes` 安装 ARM64 wheels → zip → S3 | zip 上下文 → S3 → CodeBuild(docker build+push)→ ECR → 解析 digest → 扫描闸门 |
 | **provision** | 复用共享执行角色 | 复用共享执行角色 | 复用共享执行角色 |
 | **deploy** | `CreateHarness` + 轮询 READY | `CreateAgentRuntime` + 轮询 READY | `CreateAgentRuntime(containerConfiguration)` + 轮询 READY |
 | **register** | A2A 注册记录,自动提交 | A2A 注册记录,自动提交 | A2A 注册记录,自动提交 |
 
 典型耗时:harness ≈ 30 秒,zip ≈ 1–3 分钟(含 pip),container ≈ 2–4 分钟(实测:CodeBuild 1.7 分钟 + 数秒即 READY)
 (经 CodeBuild)。见 [troubleshooting.zh-CN.md](troubleshooting.zh-CN.md)。
+
+### 构建的供应链
+
+一个已部署产物必须能回答两个问题:里面装了什么,以及正在运行的是否仍是当初构建出来的。
+两者都落在 `package` 阶段。
+
+**依赖先解析、再锁定、再校验安装。** 过去这里只有一次针对声明列表的 `pip install`,它
+装的是那一刻索引提供的任何版本(平台自带的范围写法也一样),而且不留任何记录。现在该
+阶段先用 `uv pip compile --generate-hashes` 针对部署目标解析(aarch64、Python 3.13,在
+`zip_runtime.py` 里只写一次,以保证解析与安装不会各说各话),再用 `--require-hashes`
+安装。被替换或重新上传过的发行包会让构建失败。lock 以 `requirements.lock` 随 zip 下发,
+产物自带物料清单。这里刻意没有回退路径:解析失败就是阶段失败。
+
+调用方提供的 `spec.requirements` 还会在 **schema** 校验阶段被要求固定版本
+(`app/schemas/requirements.py`),因此控制台会在构建启动前就拒掉范围写法。平台自带的
+清单保留范围——`MANTLE_EXTRA_REQUIREMENTS` 的注释解释了 pip 本就应当对同一个项目的两条
+规格求交集——可复现性由 lock 提供。Harness 转换是平台唯一一处从别处派生依赖的地方(源
+Harness 的 `pyproject.toml`),所以它把那些范围解析成固定版本,而不是被豁免于该规则。
+
+**容器镜像会被扫描,并按 digest 部署。** ECR 在推送时扫描。构建完成后
+`_stage_package` 把推送出的标签解析为不可变 digest、记录到 `Deployment` 行上,并在镜像
+能够支撑 runtime 之前运行闸门;`_stage_deploy` 以 `repo@sha256:…` 作为 `containerUri`
+下发。若按 `{agent}-v{version}` 标签部署,runtime 执行的内容就可能在无任何记录的情况下
+发生变化。
+
+闸门的阈值和开关都可配置,因为一个无法绕过的闸门会在基础镜像第一次出现 CVE 时把所有
+agent 全部卡死。而读不到的扫描——未启用扫描、API 报错、超时——会被如实记录并让部署以
+"未扫描"状态继续;它绝不会被并入"干净",因为缺失的闸门不能被读成通过的闸门。
+
+镜像标签保持**可变**:打包发生在 `_stage_deploy` 递增版本号之前,因此重新发布会把同一
+标签推送两次,不可变标签策略会让第二次推送失败。digest 固定才是真正的控制点,并且有一
+条 infra 测试断言该标签策略,以防它悄悄漂移成一个坏掉的重新发布。
+
+未覆盖:SBOM 生成、provenance/attestation、签名、受信镜像源强制,以及 skill **内容**
+审查。不可变不等于可信。
 
 ### 创建入口
 
