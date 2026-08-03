@@ -1,6 +1,6 @@
 # AgentCore Launchpad
 
-AgentCore Launchpad 是一套基于 Amazon Bedrock AgentCore 的**生产级企业 Agent 平台**。
+AgentCore Launchpad 是一套基于 Amazon Bedrock AgentCore 的**企业 Agent Ops平台**。
 它是一套可以交付给客户的样板项目，不是一次性演示。平台直接调用 AgentCore API，
 在你的 AWS 账号中创建和管理真实资源，并用一个控制台串起 Agent 的**创建、部署、
 聊天和 HTTP 调用**。

@@ -1,6 +1,6 @@
 # AgentCore Launchpad
 
-A production-grade **enterprise agent platform** built on Amazon Bedrock
+A production-grade **agent ops platform** built on Amazon Bedrock
 AgentCore. It is a customer-deliverable sample asset — not a throwaway demo —
 that wires the core AgentCore components to real APIs and real resources in
 your own AWS account, and gives users a single place to **create an agent,
