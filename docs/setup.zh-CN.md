@@ -99,22 +99,81 @@ aws logs delete-delivery-destination --region us-west-2 --name <gateway-id>-trac
 
 需要绑定当前终端的前台开发栈时,使用 `make dev`。
 
-### 可选的控制台登录
+### 控制台登录
 
 控制台支持本地账户登录,不依赖 Cognito 或其他 AWS 服务。未配置密码时登录网关关闭,
-此时控制台顶栏会显示 `AUTH OFF` 徽标。注意 `./start.py --prod` 会把两个服务都绑定到
-`0.0.0.0`,因此任何对外可达的部署都必须开启网关:
+此时控制台顶栏会显示 `AUTH OFF` 徽标。
+
+**未认证的控制台只响应 loopback 调用方。** `./start.py --prod` 会把两个服务都绑定到
+`0.0.0.0`,因此对外可达的部署必须配置密码;未配置时,来自任何非 loopback 地址的
+`/api` 请求都会被拒绝(`auth.open_console_refused`),并且 `./start.py` 会在启动前
+检查失败而不是继续拉起服务。`/api/health` 与登录端点保持可达,以便被挡在外面的
+运维仍能看到登录门禁。
 
 ```bash
 export LAUNCHPAD_AUTH_USERNAME=admin
 export LAUNCHPAD_AUTH_PASSWORD='replace-with-a-strong-password'
-export LAUNCHPAD_AUTH_COOKIE_SECURE=true   # HTTPS 部署时开启
 ./start.py
 ```
 
-会话使用 12 小时 HttpOnly Cookie。上述值也可写入 `config/launchpad.yaml` 的
-`auth_username`、`auth_password`、`auth_cookie_secure`,遵循常规配置优先级;密码
-建议放在进程环境变量中。修改凭证并重启后端会使已有会话失效。
+会话使用 12 小时 HttpOnly Cookie。生产模式(`run_mode: prod`,`./start.py --prod`
+会设置)下自动带上 `Secure` 并发送 HSTS 响应头;`LAUNCHPAD_AUTH_COOKIE_SECURE=true`
+可在开发模式下强制开启。**两者都要求全链路 HTTPS** —— `Secure` Cookie 不会经明文
+HTTP 回传,所以若 TLS 在某处终止后再以 HTTP 转发,登录会静默失败。
+
+上述值也可写入 `config/launchpad.yaml` 的 `auth_username`、`auth_password`、
+`auth_cookie_secure`,遵循常规配置优先级;密码建议放在进程环境变量中。修改凭证并
+重启后端会使已有会话失效。
+
+### 角色:成员能做什么
+
+只有两个角色。`admin` 拥有整个控制台。`member` **实际上是只读的**:浏览智能体、
+注册表记录与知识库,与智能体对话、调用,使用检索 playground,以及查看可观测性、
+记忆、评估与治理。
+
+所有会执行代码、改变已部署或云端状态、签发凭证、或改变治理策略的操作都仅限管理员
+—— 创建与部署智能体、Studio 画布、注册表的注册/编辑/导入、知识库变更、API Key、
+Cedar 策略写入,以及浏览器 / 代码解释器 demo。权威清单是
+`backend/app/core/route_policy.py` 里的表;未登记的路由会被拒绝而不是放行。
+
+这个限制是刻意的:控制台尚无按用户的数据隔离,因此一个能部署的成员同时也能看到并
+修改其他所有成员的资源。
+
+### 应急开关
+
+| 变量 | 效果 |
+|---|---|
+| `LAUNCHPAD_ALLOW_OPEN_CONSOLE=true` | 在可达网络接口上提供未认证的控制台。恢复硬化前的行为,仅可用于可信网络。 |
+| `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true` | 在生产模式下重新启用本地代码执行(见下)。 |
+| `LAUNCHPAD_AUTH_COOKIE_SECURE=false` | 当控制台前面实际未终止 TLS 时,去掉 `Secure`。 |
+
+没有任何开关可以关闭角色授权:能关掉授权的开关本身就是漏洞。要修正误分类的路由,
+请直接改 `route_policy.py`。
+
+### 本地代码执行
+
+Studio 本地调试端点(`/api/execute`、`/api/execute/stream`,以及
+`/api/conversations` 多轮对话面)会在**服务器上运行调用方提供的 Python**。因此它们
+在**生产模式下默认禁用**,Studio 本地调试与 AI Fix 在生产环境不可用。设置
+`LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true` 表示接受该风险。
+
+开发模式下子进程会拿到一份清洗过的环境(白名单,因此账本 URL、`LAUNCHPAD_*` 配置
+以及你 shell 里的密钥都不会进去),外加内存 / CPU / 进程数 / 文件大小上限。
+
+但它默认仍以后端用户身份运行,并且**仍能拿到你的 AWS 凭证** —— 在 EC2 上凭证来自
+实例元数据服务、走网络而非环境变量,所以清洗环境并不能移除它们。要封住这一点:
+
+```bash
+sudo scripts/setup_exec_env.sh --hardened   # 仅 Linux
+```
+
+该命令会创建一个专用的非特权账户,并加一条防火墙规则禁止它访问元数据端点,然后打印
+需要补上的两个配置项。注意它同时说明的权衡:默认的 Bedrock Mantle 路径依赖 ambient
+凭证来签发 bearer token,因此一个无凭证的子进程要求每次本地调试请求显式带上
+`bedrock_api_key` / `openai_api_key`。
+
+完整沙箱(非 root 容器、seccomp、受限出网)**尚未**实现;在生产环境,禁用该端点就是
+对应的缓解措施。
 
 ### 自助注册与用户管理
 

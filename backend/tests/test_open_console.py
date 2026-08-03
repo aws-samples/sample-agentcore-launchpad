@@ -124,3 +124,64 @@ class TestProductionStartupAssertion:
 
     def test_dev_without_auth_builds(self, open_console):
         _assert_production_is_authenticated(get_settings())
+
+
+class TestTransportSecurity:
+    """Secure cookies and HSTS follow run_mode (T9)."""
+
+    def _client(self, monkeypatch, mode: str) -> TestClient:
+        monkeypatch.setenv("LAUNCHPAD_RUN_MODE", mode)
+        monkeypatch.setenv("LAUNCHPAD_AUTH_PASSWORD", "s3cret-pass")
+        monkeypatch.setenv("LAUNCHPAD_AUTH_USERNAME", "operator")
+        get_settings.cache_clear()
+        return TestClient(create_app(), client=("127.0.0.1", 4321))
+
+    def test_prod_marks_the_session_cookie_secure(self, monkeypatch):
+        try:
+            with self._client(monkeypatch, "prod") as client:
+                response = client.post(
+                    "/api/auth/login",
+                    json={"username": "operator", "password": "s3cret-pass"},
+                )
+                assert response.status_code == 200
+                assert "Secure" in response.headers["set-cookie"]
+        finally:
+            get_settings.cache_clear()
+
+    def test_dev_does_not(self, monkeypatch):
+        """A Secure cookie over a plain-HTTP dev origin is never sent back, which
+        would silently break local sign-in."""
+        try:
+            with self._client(monkeypatch, "dev") as client:
+                response = client.post(
+                    "/api/auth/login",
+                    json={"username": "operator", "password": "s3cret-pass"},
+                )
+                assert response.status_code == 200
+                assert "Secure" not in response.headers["set-cookie"]
+        finally:
+            get_settings.cache_clear()
+
+    def test_auth_cookie_secure_still_forces_it_on_in_dev(self, monkeypatch):
+        monkeypatch.setenv("LAUNCHPAD_AUTH_COOKIE_SECURE", "true")
+        try:
+            with self._client(monkeypatch, "dev") as client:
+                response = client.post(
+                    "/api/auth/login",
+                    json={"username": "operator", "password": "s3cret-pass"},
+                )
+                assert "Secure" in response.headers["set-cookie"]
+        finally:
+            get_settings.cache_clear()
+
+    def test_hsts_is_emitted_in_prod_only(self, monkeypatch):
+        try:
+            with self._client(monkeypatch, "prod") as client:
+                assert "Strict-Transport-Security" in client.get("/api/health").headers
+        finally:
+            get_settings.cache_clear()
+        try:
+            with self._client(monkeypatch, "dev") as client:
+                assert "Strict-Transport-Security" not in client.get("/api/health").headers
+        finally:
+            get_settings.cache_clear()

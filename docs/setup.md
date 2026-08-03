@@ -101,13 +101,18 @@ aws logs delete-delivery-destination --region us-west-2 --name <gateway-id>-trac
 
 Use `make dev` for the foreground, terminal-attached development stack.
 
-### Optional console login
+### Console login / 控制台登录
 
 The console can use local accounts without Cognito or any other AWS dependency.
-Authentication is disabled until a password is configured — and the console shows
-an `AUTH OFF` badge in its top bar while that is the case. Note that
-`./start.py --prod` binds both servers to `0.0.0.0`, so anything reachable must
-have the gate on:
+Authentication is disabled until a password is configured, and the console shows
+an `AUTH OFF` badge in its top bar while that is the case.
+
+**An unauthenticated console only answers loopback callers.** `./start.py --prod`
+binds both servers to `0.0.0.0`, so a reachable deployment must configure a
+password; without one, requests to `/api` from any non-loopback address are
+refused with `auth.open_console_refused`, and `./start.py` fails its pre-flight
+rather than starting. `/api/health` and the sign-in endpoints stay reachable so a
+locked-out operator can still see the gate.
 
 ```bash
 export LAUNCHPAD_AUTH_USERNAME=admin
@@ -115,16 +120,77 @@ export LAUNCHPAD_AUTH_PASSWORD='replace-with-a-strong-password'
 ./start.py
 ```
 
-Sessions use a 12-hour HttpOnly cookie. For an HTTPS deployment, also set:
-
-```bash
-export LAUNCHPAD_AUTH_COOKIE_SECURE=true
-```
+Sessions use a 12-hour HttpOnly cookie. `Secure` is set automatically in
+production mode (`run_mode: prod`, which `./start.py --prod` sets), together with
+an HSTS response header; `LAUNCHPAD_AUTH_COOKIE_SECURE=true` forces it on in
+development too. **Both require HTTPS end to end** — a `Secure` cookie is never
+sent back over plain HTTP, so sign-in silently fails if TLS terminates somewhere
+that then forwards over HTTP without the console knowing.
 
 The same values may be placed in `config/launchpad.yaml` as `auth_username`,
 `auth_password`, and `auth_cookie_secure`, following the normal configuration
 precedence. Prefer the process environment for the password. Changing the
 credentials and restarting the backend invalidates existing sessions.
+
+### Roles: what a member can do / 成员权限
+
+There are two roles. `admin` has the whole console. `member` is **effectively
+read-only**: browse agents, registry records and knowledge bases, chat with and
+invoke agents, run the retrieval playground, and read observability, memory,
+evaluation and governance.
+
+Everything that executes code, changes deployed or cloud state, mints
+credentials, or changes governance posture is administrator-only — creating and
+deploying agents, the Studio canvas, registry register/edit/import, knowledge-base
+mutations, API keys, Cedar policy writes, and the browser / code-interpreter
+demos. The authoritative list is the table in
+`backend/app/core/route_policy.py`; a route missing from it is refused rather
+than served.
+
+This is deliberately restrictive: the console has no per-user data partitioning
+yet, so a member who could deploy could also see and mutate every other member's
+resources.
+
+### Escape hatches / 应急开关
+
+| Variable | Effect |
+|---|---|
+| `LAUNCHPAD_ALLOW_OPEN_CONSOLE=true` | Serve an unauthenticated console on a reachable interface. Restores the pre-hardening behavior; use only on a trusted network. |
+| `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true` | Re-enable local code execution in production (see below). |
+| `LAUNCHPAD_AUTH_COOKIE_SECURE=false` | Drop `Secure` when TLS is not actually terminated in front of the console. |
+
+There is no switch that disables role authorization: a flag that turns
+authorization off is the vulnerability. Correcting a misclassified route means
+editing `route_policy.py`.
+
+### Local code execution / 本地代码执行
+
+The Studio local-debug endpoints (`/api/execute`, `/api/execute/stream`, and the
+`/api/conversations` multi-turn surface) run **caller-supplied Python on the
+server**. They are therefore **disabled in production mode**, and Studio local
+debug plus AI Fix stop working there. Set
+`LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true` to accept the risk.
+
+In development the subprocess gets a scrubbed environment (an allowlist, so the
+ledger URL, `LAUNCHPAD_*` settings and your shell's secrets do not reach it) plus
+memory/CPU/process/file-size ceilings.
+
+It still runs as the backend user by default, and **still reaches your AWS
+credentials** — on EC2 those arrive from the instance metadata service over the
+network, so scrubbing the environment does not remove them. To close that:
+
+```bash
+sudo scripts/setup_exec_env.sh --hardened   # Linux only
+```
+
+That creates a dedicated unprivileged account and a firewall rule denying it
+egress to the metadata endpoint, then prints the two settings to add. Note the
+trade-off it describes: the default Bedrock Mantle path mints its bearer token
+from the ambient credentials, so a credential-less subprocess requires an
+explicit `bedrock_api_key` / `openai_api_key` with each local-debug request.
+
+A full sandbox (non-root container, seccomp, constrained egress) is **not**
+implemented; production-disabled is the mitigation there.
 
 ### Self-service accounts and User Management
 

@@ -358,26 +358,62 @@ cookie is otherwise stateless and survives a backend restart; changing the
 configured admin credentials invalidates **all** sessions, because the signing
 key derives from them.
 
-When enabled, middleware protects every `/api/*` route, including API docs,
-except `/api/health`, `/api/auth/status`, `/api/auth/login`, and
-`/api/auth/register`. The middleware does not guard `/v1/*`, whose existing
-`X-Api-Key` contract remains authoritative.
+Two guards run in order, and they answer different questions.
 
-Admins additionally get the **User Management** console module (`/users`) over
-`GET /api/users`, `GET /api/users/stats`, `PATCH /api/users/{id}`, and
-`DELETE /api/users/{id}` — the approval queue (pending filter + count, approve /
-reject), list/search/filter, registration statistics, extend validity,
-enable/disable, role change, one-time password reset, and delete. A
-member session receives `403 auth.forbidden` on all four routes and the console
-renders a forbidden state instead of the table. Data itself is **not** partitioned
-per user: every authenticated account sees the same agents, knowledge bases and
-traces; only this module is role-gated.
+**Is the console allowed to be open at all?** An unauthenticated console serves
+only loopback callers; anything else gets `403 auth.open_console_refused`. This is
+checked per request rather than at startup because the request is the only place
+the caller's address is known — `create_app()` cannot see uvicorn's `--host`, so a
+startup-only check would be bypassed by launching uvicorn directly, which is how
+the EC2 host and any container start it. The check uses the transport peer and
+never `X-Forwarded-For` (spoofable); consequently a same-host reverse proxy stays
+trusted, which is the pre-existing trust in localhost and never applies to the
+real production path, where authentication is on and this branch does not run.
+`LAUNCHPAD_ALLOW_OPEN_CONSOLE=true` accepts the risk; `create_app()` and
+`start.py` additionally fail fast so a misconfiguration surfaces at boot.
 
-The default cookie works with the local HTTP stack. HTTPS deployments must set
-`LAUNCHPAD_AUTH_COOKIE_SECURE=true`. Leaving the password unset disables the
-gate entirely (console open, registration refused with
-`auth.registration_disabled`, `/api/users*` reachable as the implicit local
-admin), preserving the bootstrap-free local development and test flow.
+**Is this caller allowed on this route?** When the gate is enabled, middleware
+requires a live session on every `/api/*` route except `/api/health`,
+`/api/auth/status`, `/api/auth/login`, and `/api/auth/register`; `/v1/*` is not
+guarded, its `X-Api-Key` contract remaining authoritative. Role authorization then
+comes from **one declarative table**, `backend/app/core/route_policy.py`, enforced
+by a single app-level dependency:
+
+- a dependency, not middleware, because `scope["route"]` is only populated once
+  the router has matched — so the check reads the exact `path_format` instead of
+  re-implementing path matching (this holds under FastAPI 0.139's
+  `_IncludedRouter` wrapping, which also means route enumeration must recurse);
+- **default-deny**: an `/api` route with no entry raises `auth.route_unclassified`
+  instead of serving, so a new endpoint cannot ship unauthorized;
+- `tests/test_route_policy.py` enumerates the live routes and fails on drift in
+  either direction, which is what keeps the table honest rather than decorative.
+
+The classification principle: **admin** for routes that execute code, change
+deployed or cloud state, mint credentials, or change governance posture;
+**member** for reads and for a member's own interaction with an agent. Invoking an
+agent (`/api/agents/{id}/invoke`, `/api/registry/a2a-demo`) is deliberately member-
+reachable — it is the same capability Chat already gives every member, so gating it
+while Chat stays open would protect nothing.
+
+The practical effect is that `member` is close to read-only. That is intended
+while data is **not** partitioned per user: every authenticated account sees the
+same agents, knowledge bases and traces, so a member who could deploy could also
+mutate everyone else's resources. Admin-only console modules (`/users`, `/create`,
+the Studio canvas, Registry register/edit) render an administrator-required panel
+instead of firing a request, and `auth.forbidden` is mapped in the `apiErrors`
+i18n block so any surface that missed a gate still shows the localized reason.
+
+There is deliberately no setting that disables this table — a flag that turns
+authorization off is the vulnerability.
+
+`Secure` on the session cookie and an HSTS response header follow
+`run_mode == "prod"`; `LAUNCHPAD_AUTH_COOKIE_SECURE=true` forces `Secure` on in
+development. Neither is hardcoded on, because a `Secure` cookie over a plain-HTTP
+dev origin is never sent back and an HSTS header there pins `localhost` to HTTPS
+in the developer's browser. Leaving the password unset keeps the gate off for
+loopback (console open, registration refused with `auth.registration_disabled`,
+`/api/users*` reachable as the implicit local admin), preserving the
+bootstrap-free local development and test flow.
 
 ## The Memory console (console 05)
 

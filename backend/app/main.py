@@ -83,6 +83,18 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         dependencies=[Depends(enforce_route_policy)],
     )
 
+    if settings.run_mode == "prod":
+        # Only in production: an HSTS header served over a dev HTTP origin pins
+        # localhost to HTTPS in the developer's browser, and that cache is sticky
+        # and awkward to clear.
+        @app.middleware("http")
+        async def hsts(request, call_next):
+            response = await call_next(request)
+            response.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+            )
+            return response
+
     app.middleware("http")(auth_middleware)
     app.add_middleware(
         CORSMiddleware,

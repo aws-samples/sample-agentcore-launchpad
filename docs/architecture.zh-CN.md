@@ -213,22 +213,49 @@ Cookie**:授权在每次请求时解析(配置的 admin → `admin`,其余以 `u
 状态的,可跨后端重启;修改内置 admin 凭证会使**所有**会话失效,因为签名密钥由其
 派生。
 
-启用后,中间件保护所有 `/api/*` 路由(含 API 文档),仅放行 `/api/health`、
-`/api/auth/status`、`/api/auth/login`、`/api/auth/register`;中间件不管 `/v1/*`,
-其 `X-Api-Key` 契约保持权威。
+有两道守卫按顺序执行,回答的是不同的问题。
 
-admin 另外拥有**用户管理**模块(`/users`),对应 `GET /api/users`、
-`GET /api/users/stats`、`PATCH /api/users/{id}`、`DELETE /api/users/{id}`——
-审批队列(待审批筛选与计数、通过/拒绝)、列表/搜索/筛选、注册统计、延期、
-禁用/启用、修改角色、一次性重置密码、删除。member
-会话在这四个路由上得到 `403 auth.forbidden`,页面渲染无权限状态而不是表格。数据本身
-**不**按用户隔离:所有已登录账户看到同一批 agent、知识库与链路,只有该模块按角色
-限制。
+**这个控制台是否允许处于开放状态?** 未认证的控制台只服务 loopback 调用方,其余一律
+`403 auth.open_console_refused`。它按**每个请求**检查而不是在启动时检查,因为请求是
+唯一能知道调用方地址的地方——`create_app()` 看不到 uvicorn 的 `--host`,所以仅靠启动
+检查会被"直接跑 uvicorn"绕过,而 EC2 主机和容器恰恰就是这么启动的。该检查使用传输层
+对端地址,绝不读 `X-Forwarded-For`(可伪造);其代价是同主机上的反向代理仍被信任——
+这与控制台原本对 localhost 的信任一致,且在真实生产路径上根本不会触发,因为那里认证
+是开启的。`LAUNCHPAD_ALLOW_OPEN_CONSOLE=true` 表示接受该风险;`create_app()` 与
+`start.py` 另外会快速失败,让配置错误在启动时就暴露。
 
-默认 Cookie 适用于本地 HTTP 栈;HTTPS 部署必须设置
-`LAUNCHPAD_AUTH_COOKIE_SECURE=true`。不设置密码则整体关闭网关(控制台开放、注册
-返回 `auth.registration_disabled`、`/api/users*` 以隐式本地 admin 身份可达),保持
-免引导的本地开发与测试流程。
+**这个调用方是否允许访问这个路由?** 网关启用后,中间件要求所有 `/api/*` 路由都有活跃
+会话,仅放行 `/api/health`、`/api/auth/status`、`/api/auth/login`、
+`/api/auth/register`;中间件不管 `/v1/*`,其 `X-Api-Key` 契约保持权威。角色授权则来自
+**一张声明式表** `backend/app/core/route_policy.py`,由单个 app 级依赖强制执行:
+
+- 用依赖而非中间件,因为 `scope["route"]` 只有在路由匹配后才写入——这样检查读到的是
+  准确的 `path_format`,而不必重新实现路径匹配(在 FastAPI 0.139 的 `_IncludedRouter`
+  包装下同样成立,这也意味着枚举路由时必须递归);
+- **默认拒绝**:没有登记项的 `/api` 路由会抛 `auth.route_unclassified` 而不是放行,
+  因此新端点不可能在未授权的状态下上线;
+- `tests/test_route_policy.py` 枚举实际路由并在两个方向上检测漂移,这才是让这张表真正
+  可信而非流于形式的原因。
+
+分类原则:**admin** 用于会执行代码、改变已部署或云端状态、签发凭证、或改变治理策略的
+路由;**member** 用于读取,以及成员与智能体自身的交互。调用智能体
+(`/api/agents/{id}/invoke`、`/api/registry/a2a-demo`)刻意保持 member 可达——这与 Chat
+已经给每个成员的能力完全相同,Chat 开着却锁 invoke 保护不了任何东西。
+
+实际效果是 `member` 接近只读。在数据**尚未**按用户隔离的前提下这是有意为之:所有已登录
+账户看到同一批 agent、知识库与链路,因此一个能部署的成员同时也能修改其他人的资源。
+仅管理员可用的模块(`/users`、`/create`、Studio 画布、注册表的注册/编辑)会渲染"需要
+管理员权限"面板而不是发出请求;`auth.forbidden` 也映射进了 `apiErrors` i18n 块,因此
+任何漏加门禁的界面仍会显示本地化的原因。
+
+这里刻意没有提供关闭这张表的开关——能关掉授权的开关本身就是漏洞。
+
+会话 Cookie 的 `Secure` 与 HSTS 响应头都跟随 `run_mode == "prod"`;
+`LAUNCHPAD_AUTH_COOKIE_SECURE=true` 可在开发模式下强制开启 `Secure`。两者都没有硬编码
+为开启,因为明文 HTTP 开发源上的 `Secure` Cookie 不会回传,而那里的 HSTS 头会把
+`localhost` 粘死到 HTTPS。不设置密码则对 loopback 保持网关关闭(控制台开放、注册返回
+`auth.registration_disabled`、`/api/users*` 以隐式本地 admin 身份可达),保持免引导的
+本地开发与测试流程。
 
 ## 记忆控制台(控制台 05)
 

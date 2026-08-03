@@ -371,7 +371,7 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
         _issue(identity.username, expiry, settings),
         max_age=max_age,
         httponly=True,
-        secure=settings.auth_cookie_secure,
+        secure=cookie_secure(settings),
         samesite="lax",
         path="/",
     )
@@ -419,7 +419,7 @@ def logout(response: Response) -> dict[str, bool]:
     response.delete_cookie(
         COOKIE_NAME,
         path="/",
-        secure=settings.auth_cookie_secure,
+        secure=cookie_secure(settings),
         httponly=True,
         samesite="lax",
     )
