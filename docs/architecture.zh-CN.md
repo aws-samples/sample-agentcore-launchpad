@@ -88,6 +88,55 @@ generate → package → provision → deploy → register
 典型耗时:harness ≈ 30 秒,zip ≈ 1–3 分钟(含 pip),container ≈ 2–4 分钟(实测:CodeBuild 1.7 分钟 + 数秒即 READY)
 (经 CodeBuild)。见 [troubleshooting.zh-CN.md](troubleshooting.zh-CN.md)。
 
+### 按 Agent 的执行角色
+
+过去所有 agent 共用一个 `launchpad-agent-execution-role`,其上有 14 条语句、多数是账号级
+的。真正的暴露面不在于抽象意义上的通配符,而在于**任何一个 agent 都拥有其他所有 agent 的
+触达范围**:挂载其他 agent 的文件系统、读取所有 agent 的 skill 包、检索账号内任意知识库、
+改写 gateway 路由。
+
+`app/services/agent_iam.py` 按 spec 为每个 agent 派生角色。Sid 与 CDK 角色保持一致,以便
+逐条对比。
+
+| 授权 | 何时产生 | 范围 |
+|---|---|---|
+| `BedrockModels` | 总是 | 配置的 `model_id` |
+| `BedrockMantle*`、Marketplace | `model_source == "mantle"` | project/`*`;Marketplace 由 `CalledViaLast` 约束 |
+| `AgentCoreMemory` | 启用记忆 | 记忆单例 |
+| `AgentCoreWorkloadIdentity`、`IdentityVaultSecrets` | 有 gateway/MCP 工具或知识库 | — |
+| `AgentCoreCodeInterpreter` / `AgentCoreBrowser` | 挂载了对应内置工具 | — |
+| `EcrPull` / `EcrAuth` | `method == "container"` | 该仓库 |
+| `SkillBundle*` | 挂载了 skill | **本 agent 的**前缀 |
+| `ManagedKbRetrieval` | 挂载了知识库 | **已挂载的** KB ARN |
+| `A2AInvokePeerRuntimes` | `protocol == "a2a"` | 账号内 runtime |
+| `Telemetry` | 总是 | runtime 日志组 |
+| BYO 挂载策略 | 配置了挂载 | **本 agent 的**接入点 |
+
+**刻意保留 `*` 的部分及原因**:`bedrock:AgenticRetrieveStream`、
+`bedrock-mantle:CallWithBearerToken`、`ecr:GetAuthorizationToken` 都不支持资源级收窄,
+X-Ray 上报与 `cloudwatch:PutMetricData` 同理。这些在语句处就地注明,而不是悄悄收窄。
+
+**移除了两项授权**——值得知道,因为"移除"才是会以运行时失败形式暴露出来的那一类:
+`ABTestOrchestration`(16 个动作,含 `CreateGatewayRule`、`UpdateGateway`、
+`InvokeAgentRuntime`)本是**平台**用自己凭证做的事;CloudWatch Logs 的**读**动作是控制台
+路径,泄漏到了工作负载角色上。`InvokeAgentRuntime` 对 A2A agent 保留,它确实要调用同伴。
+
+**按 agent 的角色并不带来按 agent 的记忆隔离。** 记忆只有一个共享实例,靠把 agent id 折进
+actor id 来分区(`services/memory.py::scoped_actor`),不是靠 IAM。按 agent 建记忆是另一
+件事。
+
+生命周期:在 `provision` 创建,重新发布时对齐(被去掉的能力会让策略收缩),随 agent 删除
+——且必须在 runtime **之后**,因为先删角色可能卡住 runtime 自身的删除。删除失败绝不阻塞
+agent 的删除;角色带 `launchpad:agent-id` 标签,便于找到孤儿。`ensure_role` 会接管同名的
+已有角色,因此一次半失败的删除不会卡住用同名重建 agent。
+
+Canary 与 A/B 候选版本沿用**生产当前所在的角色**,取自 `GetAgentRuntime.roleArn`。候选版本
+是替生产站位的,给它共享角色会让它以生产并不具备的权限被评测;而读取实时值(而非按名字
+推导)也让早于本改动部署的 agent 继续可用。
+
+共享角色仍然存在、也仍带宽泛授权:它支撑尚未重新发布的 agent。在所有 agent 迁移完成前
+缩减它会抽掉仍在使用它的 agent 的授权,因此该缩减**尚未**执行。
+
 ### 构建的供应链
 
 一个已部署产物必须能回答两个问题:里面装了什么,以及正在运行的是否仍是当初构建出来的。

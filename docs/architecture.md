@@ -91,6 +91,63 @@ stage (`resume_pending_jobs()` runs on startup).
 Typical timings: harness ≈ 30 s, zip ≈ 1–3 min (incl. pip), container ≈ 2–4 min (observed: 1.7 min CodeBuild + seconds to READY)
 (via CodeBuild). See [troubleshooting.md](troubleshooting.md).
 
+### Per-agent execution roles
+
+Every agent used to assume one shared `launchpad-agent-execution-role` carrying 14
+statements, most account-wide. The exposure that mattered was not the wildcards in
+the abstract but that **any agent had every other agent's reach**: mount any other
+agent's file systems, read every agent's skill bundles, retrieve from every knowledge
+base, and rewrite gateway routing.
+
+`app/services/agent_iam.py` derives a role per agent from its spec. Sids are kept
+identical to the CDK role so the two can be diffed statement by statement.
+
+| Grant | Emitted when | Scope |
+|---|---|---|
+| `BedrockModels` | always | the configured `model_id` |
+| `BedrockMantle*`, Marketplace | `model_source == "mantle"` | project/`*`; Marketplace guarded by `CalledViaLast` |
+| `AgentCoreMemory` | memory enabled | the memory singleton |
+| `AgentCoreWorkloadIdentity`, `IdentityVaultSecrets` | a gateway/MCP tool or KBs | — |
+| `AgentCoreCodeInterpreter` / `AgentCoreBrowser` | that builtin is attached | — |
+| `EcrPull` / `EcrAuth` | `method == "container"` | the repo |
+| `SkillBundle*` | skills attached | **this agent's** prefixes |
+| `ManagedKbRetrieval` | KBs attached | **the attached** KB ARNs |
+| `A2AInvokePeerRuntimes` | `protocol == "a2a"` | account runtimes |
+| `Telemetry` | always | the runtime log groups |
+| BYO-mount policy | mounts configured | **this agent's** access points |
+
+**Deliberately still `*`, and why**: `bedrock:AgenticRetrieveStream` and
+`bedrock-mantle:CallWithBearerToken` and `ecr:GetAuthorizationToken` do not support
+resource scoping, and neither do X-Ray ingestion or `cloudwatch:PutMetricData`.
+Recorded at the statement rather than quietly narrowed.
+
+**Two grants were removed**, which is worth knowing because a removal is what shows
+up as a runtime failure: `ABTestOrchestration` (16 actions including
+`CreateGatewayRule`, `UpdateGateway`, `InvokeAgentRuntime`) is what the *platform*
+does from its own credentials, and the CloudWatch Logs **read** actions were console
+paths that had leaked onto the workload role. `InvokeAgentRuntime` is kept for A2A
+agents, which legitimately call peers.
+
+**Per-agent roles do not give per-agent memory isolation.** There is one shared
+memory, partitioned by folding the agent id into the actor id
+(`services/memory.py::scoped_actor`), not by IAM. A per-agent memory is separate work.
+
+Lifecycle: created in `provision`, reconciled on re-publish so a dropped capability
+shrinks the policy, deleted with the agent — **after** the runtime, since removing the
+role first can wedge the runtime's own deletion. A failed delete never blocks deleting
+the agent; the role is tagged `launchpad:agent-id` so an orphan is findable.
+`ensure_role` adopts an existing role of the same name, so a half-failed delete does
+not wedge re-creating an agent under a reused name.
+
+Canary and A/B candidates keep whatever role **production is already on**, read from
+`GetAgentRuntime.roleArn`. A candidate stands in for production, so giving it the
+shared role would measure it with permissions production lacks — and reading the live
+value rather than deriving the name means agents predating this still work.
+
+The shared role remains and still carries broad grants: it backs agents that have not
+been re-published. Reducing it before every agent has migrated would strip grants from
+agents still using it, so that reduction is **not** done yet.
+
 ### Supply chain of a build
 
 Two things about a deployed artifact have to be answerable: what went into it, and

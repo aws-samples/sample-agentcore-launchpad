@@ -150,6 +150,44 @@ Cedar 策略写入,以及浏览器 / 代码解释器 demo。权威清单是
 没有任何开关可以关闭角色授权:能关掉授权的开关本身就是漏洞。要修正误分类的路由,
 请直接改 `route_policy.py`。
 
+### 按 Agent 的执行角色
+
+每个已部署的 agent 都获得一个由其 spec 派生的独立 IAM 执行角色,而不是所有 agent 共用
+一个 `launchpad-agent-execution-role`。目的在于隔离:在共享角色下,任何 agent 都能挂载
+其他任意 agent 的文件系统、读取所有 agent 的 skill 包、检索账号内任意知识库,并改写
+gateway 路由。
+
+角色命名为 `launchpad-agent-{name}-{agent-id 前缀}`,并打上 `launchpad:agent-id` 标签。
+它们在 `provision` 阶段创建,在重新发布时对齐(被去掉的能力会让策略收缩),并随 agent
+一起删除。
+
+| 配置项 | 默认值 | 作用 |
+|---|---|---|
+| `per_agent_execution_roles` | `true` | 设为 false 可回退到共享角色。 |
+| `agent_role_count_warn_threshold` | `800` | 达到该数量后开始告警。 |
+
+**IAM 默认配额是每账号 1000 个角色**,本特性按 agent 线性消耗。demo 规模下不成问题,
+但真撞上配额时,表现会是一次莫名其妙的部署失败。
+
+**已有 agent 仍在共享角色上正常运行。** 迁移方式是**重新发布**,而不是手写
+`UpdateAgentRuntime`——后者会重置未传的字段,从而静默清掉文件系统挂载、protocol 配置或
+环境变量。用下面的命令查看还有哪些未迁移:
+
+```bash
+cd backend && uv run python scripts/migrate_agent_roles.py
+```
+
+请**先**运行 `scripts/migrate_pin_requirements.py --apply`:重新发布会重新校验 spec,
+未固定版本的依赖现在会被拒。
+
+> **为什么共享角色仍然存在、且仍带着宽泛授权。** 它支撑那些尚未重新发布的 agent。在所有
+> agent 迁移完成前缩减它,会直接抽掉仍在使用它的 agent 的授权。这项缩减刻意尚未执行——
+> T3 还有哪些未完成,见 `docs/threat-model-summary.md`。
+
+**部署成功并不能证明策略正确。** 这些策略是按 spec 收窄的,而过紧的语句会在**调用**时
+失败,而不是部署时。迁移之后,请逐个调用 agent 并检查 CloudTrail 是否出现
+`AccessDenied`。
+
 ### 依赖与镜像供应链
 
 **依赖必须固定版本。** `spec.requirements` 的每一项都必须指向唯一且不可变的产物——

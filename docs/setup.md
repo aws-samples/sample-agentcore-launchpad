@@ -163,6 +163,48 @@ There is no switch that disables role authorization: a flag that turns
 authorization off is the vulnerability. Correcting a misclassified route means
 editing `route_policy.py`.
 
+### Per-agent execution roles / 按 Agent 的执行角色
+
+Each deployed agent gets its own IAM execution role, derived from its spec, instead of
+every agent assuming one shared `launchpad-agent-execution-role`. The point is
+isolation: on the shared role, any agent could mount any other agent's file systems,
+read every agent's skill bundles, retrieve from every knowledge base, and rewrite
+gateway routing.
+
+Roles are named `launchpad-agent-{name}-{agent-id-prefix}` and tagged
+`launchpad:agent-id`. They are created in the `provision` stage, reconciled on
+re-publish (a dropped capability shrinks the policy), and deleted with the agent.
+
+| Setting | Default | Effect |
+|---|---|---|
+| `per_agent_execution_roles` | `true` | Set false to fall back to the shared role. |
+| `agent_role_count_warn_threshold` | `800` | Warn once this many roles exist. |
+
+**The IAM default quota is 1000 roles per account**, and this consumes one per agent.
+At demo scale that is not a concern, but hitting it would surface as an
+otherwise-mysterious deploy failure.
+
+**Existing agents keep working on the shared role.** Migration is a **re-publish** —
+not a hand-rolled `UpdateAgentRuntime`, which resets omitted fields and would silently
+clear file-system mounts, protocol config or the environment. Check what is
+outstanding with:
+
+```bash
+cd backend && uv run python scripts/migrate_agent_roles.py
+```
+
+Run `scripts/migrate_pin_requirements.py --apply` **first**: a re-publish re-validates
+the spec, so an unpinned requirement is now refused.
+
+> **Why the shared role still exists and still carries broad grants.** It backs
+> agents that have not been re-published yet. Reducing it before every agent has moved
+> would strip grants from agents still using it. That reduction is deliberately not
+> done yet — see `docs/threat-model-summary.md` for what remains open on T3.
+
+**A green deploy does not prove a policy is correct.** These policies are scoped per
+spec, and an over-tight statement fails at **invoke** time, not deploy time. After
+migrating, invoke each agent and check CloudTrail for `AccessDenied`.
+
 ### Dependency and image supply chain / 依赖与镜像供应链
 
 **Requirements must be pinned.** `spec.requirements` entries have to name one
