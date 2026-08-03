@@ -75,6 +75,17 @@ def enabled(settings: Settings | None = None) -> bool:
     return _password(settings) is not None
 
 
+def cookie_secure(settings: Settings | None = None) -> bool:
+    """Whether the session cookie carries `Secure`.
+
+    Production is secure by default; `auth_cookie_secure` can still force it on
+    in dev. Deliberately not a hardcoded True: local prod-mode smoke tests serve
+    plain HTTP, and a `Secure` cookie there is silently never sent back.
+    """
+    current = settings or get_settings()
+    return current.auth_cookie_secure or current.run_mode == "prod"
+
+
 def registration_requires_approval(settings: Settings | None = None) -> bool:
     return (settings or get_settings()).auth_registration_require_approval
 

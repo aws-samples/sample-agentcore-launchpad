@@ -16,6 +16,7 @@ import os
 import shutil
 import signal
 import tempfile
+from typing import Any
 
 from app.core.config import get_settings
 
@@ -24,6 +25,27 @@ logger = logging.getLogger("launchpad.local_exec")
 
 class ExecInterpreterUnavailable(RuntimeError):
     """The configured studio_exec_python does not exist on disk."""
+
+
+def local_exec_enabled(settings: Any = None) -> bool:
+    """Whether the local-debug execution endpoints are served at all.
+
+    Unset (`None`) derives from the run mode: this surface runs caller-supplied
+    Python, so production refuses it unless an operator opts back in.
+    """
+    current = settings or get_settings()
+    if current.studio_local_exec_enabled is None:
+        return current.run_mode != "prod"
+    return current.studio_local_exec_enabled
+
+
+def disabled_message() -> str:
+    return (
+        "Local code execution is disabled in this deployment. It runs "
+        "caller-supplied Python on the server, so it is off by default in "
+        "production mode; set LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true to "
+        "accept that risk and re-enable it."
+    )
 
 
 def interpreter_path() -> str:
