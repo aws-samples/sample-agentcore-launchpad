@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
+import { useAuth } from "../auth/auth-context";
+import { AdminRequired, Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
 import type { ChipTone } from "../components";
 import { A2ADemoView } from "./registry/A2ADemoView";
 import { EditView } from "./registry/EditView";
@@ -126,6 +127,7 @@ function descriptorExcerpt(record: RegistryRecord): string {
 
 export function Registry() {
   const { t } = useTranslation();
+  const { isAdmin } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
   // "?view=register" renders a standalone sub-page instead of the list — it is
@@ -302,6 +304,12 @@ export function Registry() {
       navigate(`/create?skill=${encodeURIComponent(path)}`);
     }
   };
+
+  // Registering and editing records both publish deployable code, so the two
+  // write sub-pages are administrator-only. Browsing and the A2A demo are not.
+  if ((view === "register" || view === "edit") && !isAdmin) {
+    return <AdminRequired kicker={t("registry.kicker")} title={t("registry.title")} />;
+  }
 
   // ── Register sub-page (?view=register) ────────────────────────────────────
   if (view === "register") {

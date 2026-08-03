@@ -1,3 +1,4 @@
+export { AdminRequired } from "./AdminRequired";
 export { Btn } from "./Btn";
 export { Chip, type ChipTone } from "./Chip";
 export { ConfirmDialog } from "./ConfirmDialog";

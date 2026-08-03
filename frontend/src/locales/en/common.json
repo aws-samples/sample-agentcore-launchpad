@@ -58,7 +58,13 @@
     "registerPendingBody": "{{username}} was submitted for review. An administrator has to approve it before you can sign in; the {{days}}-day validity starts then.",
     "accountStatus": "STATUS",
     "statusPending": "PENDING APPROVAL",
-    "accountPending": "This account is waiting for administrator approval."
+    "accountPending": "This account is waiting for administrator approval.",
+    "adminRequired": {
+      "meta": "administrator only",
+      "title": "Administrator access required",
+      "body": "This action changes deployed state, credentials, or governance posture, so it is limited to administrators.",
+      "toast": "Administrator access is required for this action."
+    }
   },
   "nav": {
     "platform": "PLATFORM",
@@ -998,6 +1004,10 @@
     "runtime.discovery_failed": "AgentCore Runtime discovery failed",
     "job.not_found": "Job not found",
     "validation.invalid_request": "Request validation failed",
+    "auth.forbidden": "Administrator access is required for this action.",
+    "auth.open_console_refused": "This console has no authentication configured and refuses non-local requests. Set an operator password to enable the sign-in gate.",
+    "studio.exec.disabled": "Local code execution is disabled in this deployment.",
+    "auth.route_unclassified": "This route has no authorization entry — it is refused until one is added.",
     "http.404": "Resource not found",
     "http.500": "Internal server error",
     "agent.redeploy_immutable": "Name and method cannot change on re-publish — clone to a new agent instead.",

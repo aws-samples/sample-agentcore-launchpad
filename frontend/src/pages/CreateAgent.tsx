@@ -4,7 +4,9 @@ import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Download, RefreshCw, Search } from "lucide-react";
 
+import { useAuth } from "../auth/auth-context";
 import {
+  AdminRequired,
   Btn,
   Chip,
   ConfirmDialog,
@@ -124,6 +126,14 @@ const canSelectRuntime = (runtime: RuntimeDiscoveryCandidate) =>
 
 export function CreateAgent() {
   const [params] = useSearchParams();
+  const { t } = useTranslation();
+  const { isAdmin } = useAuth();
+  // Creating, importing and deploying agents are all administrator-only, so the
+  // whole module is gated rather than letting a member fill in a wizard whose
+  // submit would answer 403.
+  if (!isAdmin) {
+    return <AdminRequired kicker={t("create.kicker")} title={t("create.title")} />;
+  }
   return params.get("view") === "discover" ? <RuntimeDiscovery /> : <CreateAgentWizard />;
 }
 

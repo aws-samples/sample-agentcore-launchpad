@@ -1,10 +1,11 @@
-import { LoaderCircle, RefreshCw, ShieldAlert } from "lucide-react";
+import { LoaderCircle, RefreshCw } from "lucide-react";
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/auth-context";
 import {
+  AdminRequired,
   Btn,
   Chip,
   type ChipTone,
@@ -156,18 +157,12 @@ export function Users() {
 
   if (!isAdmin) {
     return (
-      <>
-        <ViewHead
-          kicker={t("usersPage.kicker")}
-          title={t("usersPage.title")}
-          meta={t("usersPage.forbiddenMeta")}
-        />
-        <Panel brk title={t("usersPage.forbiddenTitle")}>
-          <div className="empty" data-testid="users-forbidden-body">
-            <ShieldAlert size={18} aria-hidden="true" /> {t("usersPage.forbiddenBody")}
-          </div>
-        </Panel>
-      </>
+      <AdminRequired
+        kicker={t("usersPage.kicker")}
+        title={t("usersPage.title")}
+        body={t("usersPage.forbiddenBody")}
+        testId="users-forbidden-body"
+      />
     );
   }
 

@@ -3,7 +3,17 @@ import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import type { Edge, Node } from "@xyflow/react";
 
-import { Btn, Chip, ConfirmDialog, LaunchSequence, Panel, useToast, ViewHead } from "../components";
+import { useAuth } from "../auth/auth-context";
+import {
+  AdminRequired,
+  Btn,
+  Chip,
+  ConfirmDialog,
+  LaunchSequence,
+  Panel,
+  useToast,
+  ViewHead,
+} from "../components";
 import type { AgentInfo, AgentSpecInput, DeploymentInfo, JobInfo } from "../lib/api";
 import { api, ApiError } from "../lib/api";
 import { ChatDrawer } from "../studio/ChatDrawer";
@@ -56,6 +66,7 @@ function executionAgent(nodes: Node[], edges: Edge[]): Node | null {
 
 export function CreateAgentStudio() {
   const { t } = useTranslation();
+  const { isAdmin } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
   const [params] = useSearchParams();
@@ -429,6 +440,14 @@ export function CreateAgentStudio() {
           </>
         )}
       </section>
+    );
+  }
+
+  // The canvas exists to publish agents, and local debug is administrator-only
+  // too (it runs generated code on the server), so gate the whole surface.
+  if (!isAdmin) {
+    return (
+      <AdminRequired kicker={t("studio.head.kicker")} title={t("studio.head.title")} />
     );
   }
 
