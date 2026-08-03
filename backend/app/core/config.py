@@ -126,6 +126,12 @@ class Settings(BaseSettings):
     # then keeps the backend's own uid, and IMDS stays reachable to code that
     # asks for it directly — Linux-only hardening).
     studio_exec_user: str = ""
+    # The default Mantle path mints its bearer token from the ambient AWS
+    # credentials, so local debug works off the operator's profile with no API key
+    # (scripts/setup_exec_env.sh). Forwarding them is therefore on by default;
+    # turning it off is the hardened posture and obliges the caller to supply
+    # bedrock_api_key / openai_api_key with the request.
+    studio_exec_forward_aws_credentials: bool = True
     # Resource ceilings for that subprocess, alongside the existing timeout.
     studio_exec_memory_mb: int = Field(default=2048, gt=0)
     studio_exec_cpu_seconds: int = Field(default=300, gt=0)

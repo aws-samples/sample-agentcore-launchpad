@@ -32,7 +32,19 @@ class ExecutionRequest(BaseModel):
     bedrock_api_key: str | None = None
 
 
-def _require_interpreter() -> None:
+def _require_local_execution() -> None:
+    """Gate the surface before anything is written to disk or spawned.
+
+    Two refusals, most restrictive first: the deployment may not offer local
+    execution at all (production default — this runs caller-supplied Python), and
+    the dedicated interpreter may not be provisioned.
+    """
+    if not local_exec.local_exec_enabled():
+        raise AppError(
+            "studio.exec.disabled",
+            local_exec.disabled_message(),
+            status_code=403,
+        )
     if not local_exec.interpreter_available():
         raise AppError(
             "studio.exec.interpreter_unavailable",
@@ -44,7 +56,7 @@ def _require_interpreter() -> None:
 @router.post("/execute")
 async def execute_code(request: ExecutionRequest) -> dict:
     """One-shot execution: run the code and return its captured stdout."""
-    _require_interpreter()
+    _require_local_execution()
     start = time.monotonic()
     try:
         output = await local_exec.execute_strands_code(
@@ -69,7 +81,7 @@ async def execute_code_stream(request: ExecutionRequest) -> StreamingResponse:
     """Streaming execution: forward subprocess stdout as SSE, ending with a
     `[STREAM_COMPLETE:<seconds>]` sentinel. Uses the multiline framing so
     newlines survive `data:` splitting (an empty `data: ` line = newline)."""
-    _require_interpreter()
+    _require_local_execution()
     timeout = get_settings().execute_timeout_s
 
     async def generate_stream():
