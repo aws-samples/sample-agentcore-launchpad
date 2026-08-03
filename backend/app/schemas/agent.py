@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.requirements import assert_all_pinned
+
 # Latest Sonnet inference profile available in the target account (verified via
 # bedrock list-inference-profiles; there is no "sonnet-5" profile).
 DEFAULT_MODEL_ID = "global.anthropic.claude-sonnet-5"
@@ -220,6 +222,15 @@ class AgentSpec(BaseModel):
             ids = [s.id for s in self.a2a_skills]
             if len(ids) != len(set(ids)):
                 raise ValueError("a2a_skills ids must be unique")
+        return self
+
+    @model_validator(mode="after")
+    def _requirements_are_pinned(self) -> "AgentSpec":
+        # Refused here rather than mid-deploy so the console shows the problem
+        # before a build starts. Only the caller-supplied list is checked; the
+        # platform's own lists keep their ranges by design and the package
+        # stage's hashed lockfile is what makes the resolved set reproducible.
+        assert_all_pinned(self.requirements)
         return self
 
     @model_validator(mode="after")

@@ -20,6 +20,28 @@ MAIN_PY = (FIXTURES / "harness_export_main.py").read_text()
 PYPROJECT = (FIXTURES / "harness_export_pyproject.toml").read_text()
 
 
+@pytest.fixture(autouse=True)
+def stub_pin_resolution(monkeypatch):
+    """Conversion resolves the source Harness's dependency ranges to pins, which
+    shells out to `uv pip compile` and therefore needs the network (or a warm uv
+    cache). Stub it so this suite stays hermetic — `resolve_pins` itself is
+    covered against a stub runner in test_requirements_pinning.py.
+    """
+
+    def fake_resolve(entries):
+        out = []
+        for entry in entries:
+            if "==" in entry and "*" not in entry:
+                out.append(entry)
+                continue
+            name, _, _ = entry.partition(" ")
+            name = name.split(">")[0].split("<")[0].split("~")[0].split("=")[0].strip()
+            out.append(f"{name}==9.9.9")
+        return out
+
+    monkeypatch.setattr(hc, "resolve_pins", fake_resolve)
+
+
 # ─── graft ───────────────────────────────────────────────────────────────────
 def test_graft_inserts_bundle_contract_on_real_export():
     grafted = hc.graft_config_bundle(MAIN_PY)

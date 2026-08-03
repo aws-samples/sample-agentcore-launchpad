@@ -78,10 +78,14 @@ def test_studio_specs_bring_their_own_extras():
     """The canvas knows which providers its nodes use and emits its own extra;
     deriving one from the inert spec.model_source would be a guess."""
     reqs = _method_requirements(
-        _spec(method="studio", model_source="mantle", requirements=["strands-agents[openai]"])
+        _spec(
+            method="studio",
+            model_source="mantle",
+            requirements=["strands-agents[openai]==1.47.0"],
+        )
     )
     assert MANTLE_EXTRA not in reqs
-    assert "strands-agents[openai]" in reqs
+    assert "strands-agents[openai]==1.47.0" in reqs
     assert "strands-agents-tools[mem0_memory]" in reqs
 
 

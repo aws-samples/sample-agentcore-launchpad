@@ -70,9 +70,9 @@ def test_http_template_untouched_by_protocol_field():
 
 
 def test_a2a_requirements_carry_the_a2a_extra():
-    reqs = _method_requirements(_spec(protocol="a2a", requirements=["httpx"]))
+    reqs = _method_requirements(_spec(protocol="a2a", requirements=["httpx==0.28.1"]))
     assert any(r.startswith("strands-agents[a2a") for r in reqs)
-    assert "httpx" in reqs
+    assert "httpx==0.28.1" in reqs
     http_reqs = _method_requirements(_spec())
     assert not any("[a2a" in r for r in http_reqs)
 
