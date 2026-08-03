@@ -81,7 +81,7 @@ def main() -> int:
     run = client.post("/api/eval/runs", json={
         "agent_id": agent["id"], "dataset_id": dataset["id"],
         "evaluators": ["Builtin.Correctness", "Builtin.Helpfulness"],
-        "wait_seconds": 120,
+        "wait_seconds": 180,
     }).json()
     result = wait_run(client, run["id"])
     if result["status"] != "completed":

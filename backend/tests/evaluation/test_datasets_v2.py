@@ -288,6 +288,14 @@ def test_run_on_cloud_dataset(client, monkeypatch):
     assert body["dataset_id"] == "cloudds-7"
     assert body["dataset_name"] == "cloud:remote_scenarios"
     stub.list_dataset_examples.assert_called_once_with(datasetId="cloudds-7")
+    import time
+
+    for _ in range(50):
+        run = client.get(f"/api/eval/runs/{body['id']}").json()
+        if run["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.1)
+    assert run["status"] == "completed", run.get("error")
 
 
 def test_run_on_simulated_dataset_requires_actor_model(client, monkeypatch):
@@ -450,6 +458,14 @@ def test_trajectory_evaluator_accepted_with_ground_truth(client, monkeypatch):
         "wait_seconds": 0,
     })
     assert res.status_code == 201, res.text
+    import time
+
+    for _ in range(50):
+        run = client.get(f"/api/eval/runs/{res.json()['id']}").json()
+        if run["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.1)
+    assert run["status"] == "completed", run.get("error")
 
 
 # ─── migration guard ─────────────────────────────────────────────────────────

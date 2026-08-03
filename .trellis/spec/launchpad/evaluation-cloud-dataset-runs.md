@@ -35,6 +35,19 @@ personas added the same day via the SDK dataset runner pattern).
   what StartBatchEvaluation must be scoped to).
 - The executor swallows exceptions into `result.status == "FAILED"` — the
   adapter re-raises RuntimeError so execute_run fails the run honestly.
+- Fresh dataset replay does not blindly sleep before `StartBatchEvaluation`.
+  The final session is the sequential-replay ingestion watermark:
+  `evaluation.telemetry.wait_for_evaluation_telemetry` polls `aws/spans` for
+  its latest `invoke_agent Strands Agents` root span, pairs that span id with a
+  structured `body.input`/`body.output` event in the resolved Runtime/Harness
+  content-log group, and requires the content event's CloudWatch ingestion age
+  to reach `wait_seconds` (default/UI: 180 seconds). AgentCore Evaluation has
+  no direct index-readiness API, so ingestion age is the conservative
+  readiness proxy. Both CloudWatch queries use the current replay's start time
+  minus a 60-second clock-skew allowance as `startTime`; omitting the bound
+  makes `aws/spans` scan the full account history. Polling is bounded to that
+  age plus 120 seconds; timeout fails the run before creating a paid batch.
+  Existing-session and time-window scopes skip this fresh-telemetry gate.
 
 ### 2. Signatures
 

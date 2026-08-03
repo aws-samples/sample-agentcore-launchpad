@@ -25,7 +25,7 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.evaluation import agentcore_eval as ac
-from app.evaluation import simulation
+from app.evaluation import simulation, telemetry
 from app.evaluation.models import EvalRun
 from app.evaluation.queue import account_lock
 from app.evaluation.scenarios import (
@@ -38,9 +38,9 @@ from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
 
-_sleep = time.sleep  # injectable for tests
-
 EVAL_SUPPORTED_METHODS = {"zip_runtime", "studio", "container", "harness"}
+TELEMETRY_READY_GRACE_SECONDS = 120
+TELEMETRY_QUERY_LOOKBACK_MS = 60_000
 
 
 def _harness_telemetry(agent: Agent, logs_client: Any = None) -> tuple[str, str]:
@@ -96,6 +96,24 @@ def _update(run_id: str, **fields: Any) -> None:
         db.close()
 
 
+def _wait_for_fresh_telemetry(
+    *,
+    session_id: str,
+    content_log_group: str,
+    start_time_ms: int,
+    stability_seconds: int,
+) -> None:
+    logs = boto3.client("logs", region_name=get_settings().region)
+    telemetry.wait_for_evaluation_telemetry(
+        logs,
+        session_id=session_id,
+        content_log_group=content_log_group,
+        start_time_ms=start_time_ms,
+        stability_seconds=stability_seconds,
+        timeout_seconds=stability_seconds + TELEMETRY_READY_GRACE_SECONDS,
+    )
+
+
 def execute_run(
     run_id: str,
     *,
@@ -119,6 +137,7 @@ def execute_run(
     Scope is one of: dataset ``items`` (invoke fresh sessions), explicit
     ``existing_session_ids``, or a passive ``time_range`` window over the
     agent's past traffic — the window path skips invoke/wait entirely."""
+    telemetry_start_ms = int(time.time() * 1000) - TELEMETRY_QUERY_LOOKBACK_MS
     try:
         data = data_client()
         session_ids = list(existing_session_ids or [])
@@ -155,7 +174,12 @@ def execute_run(
             if session_metadata is None:
                 session_metadata = ground_truth_metadata(scenarios, session_ids) or None
             _update(run_id, status="waiting")
-            _sleep(wait_seconds)
+            _wait_for_fresh_telemetry(
+                session_id=session_ids[-1],
+                content_log_group=log_group,
+                start_time_ms=telemetry_start_ms,
+                stability_seconds=wait_seconds,
+            )
 
         _update(run_id, status="evaluating", session_ids=session_ids)
         if mode == "insights":
@@ -262,7 +286,7 @@ def submit_run(
     dataset_name: str | None,
     evaluators: list[str],
     mode: str = "evaluators",
-    wait_seconds: int = 90,
+    wait_seconds: int = 180,
     session_ids: list[str] | None = None,
     time_range: dict[str, Any] | None = None,
     insights: list[str] | None = None,

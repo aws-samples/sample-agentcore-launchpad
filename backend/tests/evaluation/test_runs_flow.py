@@ -4,7 +4,7 @@ Stubbed clients drive the full pipeline: invoking → waiting → evaluating →
 completed with parsed scores.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 import app.evaluation.service as svc
 from app.core.db import SessionLocal
@@ -38,7 +38,8 @@ def stub_environment(monkeypatch, batch_status="COMPLETED"):
     )
     monkeypatch.setattr(svc, "control_client", lambda: MagicMock())
     monkeypatch.setattr(svc, "data_client", lambda: data)
-    monkeypatch.setattr(svc, "_sleep", lambda s: None)
+    telemetry_wait = MagicMock()
+    monkeypatch.setattr(svc, "_wait_for_fresh_telemetry", telemetry_wait)
     data.start_batch_evaluation.return_value = {"batchEvaluationId": "be-123"}
     data.get_batch_evaluation.return_value = {
         "status": batch_status,
@@ -66,6 +67,7 @@ def test_active_run_completes_with_scores(client, monkeypatch):
     db.add(dataset)
     db.commit()
     data, calls = stub_environment(monkeypatch)
+    telemetry_wait = svc._wait_for_fresh_telemetry
 
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "dataset_id": dataset.id,
@@ -84,6 +86,12 @@ def test_active_run_completes_with_scores(client, monkeypatch):
     assert run["status"] == "completed", run.get("error")
     assert calls["n"] == 3  # one session per dataset item
     assert len(run["session_ids"]) == 3
+    telemetry_wait.assert_called_once_with(
+        session_id=run["session_ids"][-1],
+        content_log_group="/aws/bedrock-agentcore/runtimes/rt-1-DEFAULT",
+        start_time_ms=ANY,
+        stability_seconds=0,
+    )
     assert run["batch_eval_id"] == "be-123"
     assert {s["evaluatorId"]: s["score"] for s in run["scores"]} == {
         "Builtin.Correctness": 0.91, "Builtin.Helpfulness": 0.83,
@@ -122,6 +130,36 @@ def test_run_failure_recorded(client, monkeypatch):
     db.close()
 
 
+def test_telemetry_timeout_fails_without_starting_batch(client, monkeypatch):
+    db = SessionLocal()
+    agent = make_agent(db, name="eval-agent-telemetry-timeout")
+    dataset = EvalDataset(name="telemetry-timeout", items=[{"prompt": "x"}])
+    db.add(dataset)
+    db.commit()
+    data, _ = stub_environment(monkeypatch)
+    telemetry_wait = svc._wait_for_fresh_telemetry
+    telemetry_wait.side_effect = svc.telemetry.TelemetryReadinessTimeout(
+        "evaluation telemetry did not become ready"
+    )
+
+    res = client.post(
+        "/api/eval/runs",
+        json={"agent_id": agent.id, "dataset_id": dataset.id, "wait_seconds": 0},
+    )
+    run_id = res.json()["id"]
+    import time
+
+    for _ in range(50):
+        run = client.get(f"/api/eval/runs/{run_id}").json()
+        if run["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.1)
+    assert run["status"] == "failed"
+    assert "telemetry did not become ready" in run["error"]
+    data.start_batch_evaluation.assert_not_called()
+    db.close()
+
+
 class StubLogs:
     """describe_log_groups stub — harness backing-runtime group discovery."""
 
@@ -153,6 +191,7 @@ def test_harness_run_completes(client, monkeypatch):
     db.add(dataset)
     db.commit()
     data, calls = stub_environment(monkeypatch)
+    telemetry_wait = svc._wait_for_fresh_telemetry
     logs = _stub_harness_logs(monkeypatch, [
         {"logGroupName": "/aws/bedrock-agentcore/runtimes/harness_harness_agent-OLD111-DEFAULT",
          "creationTime": 1},
@@ -181,6 +220,15 @@ def test_harness_run_completes(client, monkeypatch):
         time.sleep(0.1)
     assert run["status"] == "completed", run.get("error")
     assert harness_calls["n"] == 2 and calls["n"] == 0  # InvokeHarness, not runtime
+    telemetry_wait.assert_called_once_with(
+        session_id=run["session_ids"][-1],
+        content_log_group=(
+            "/aws/bedrock-agentcore/runtimes/"
+            "harness_harness_agent-GIRksPB4NZ-DEFAULT"
+        ),
+        start_time_ms=ANY,
+        stability_seconds=0,
+    )
     assert logs.prefixes == ["/aws/bedrock-agentcore/runtimes/harness_harness_agent-"]
     cw = data.start_batch_evaluation.call_args.kwargs["dataSourceConfig"]["cloudWatchLogs"]
     assert cw["serviceNames"] == ["harness_harness_agent.DEFAULT"]
@@ -206,4 +254,34 @@ def test_harness_without_telemetry_group_rejected(client, monkeypatch):
     })
     assert res.status_code == 400
     assert res.json()["code"] == "eval.harness_no_telemetry"
+    db.close()
+
+
+def test_existing_sessions_skip_fresh_telemetry_wait(client, monkeypatch):
+    db = SessionLocal()
+    agent = make_agent(db, name="existing-session-agent")
+    stub_environment(monkeypatch)
+    telemetry_wait = svc._wait_for_fresh_telemetry
+    session_id = "existing-session-" + "x" * 24
+
+    res = client.post(
+        "/api/eval/runs",
+        json={
+            "agent_id": agent.id,
+            "session_ids": [session_id],
+            "evaluators": ["Builtin.Correctness"],
+            "wait_seconds": 180,
+        },
+    )
+    assert res.status_code == 201
+    run_id = res.json()["id"]
+    import time
+
+    for _ in range(50):
+        run = client.get(f"/api/eval/runs/{run_id}").json()
+        if run["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.1)
+    assert run["status"] == "completed", run.get("error")
+    telemetry_wait.assert_not_called()
     db.close()

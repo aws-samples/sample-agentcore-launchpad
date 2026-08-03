@@ -341,7 +341,7 @@ export function Evaluation() {
       agent_id: agentId,
       mode,
       // window runs are passive (no invoke) — nothing to wait for
-      wait_seconds: scope === "window" ? 0 : 120,
+      wait_seconds: scope === "window" ? 0 : 180,
       ...(scope === "window"
         ? { lookback_hours: lookbackHours }
         : selectedCloudId

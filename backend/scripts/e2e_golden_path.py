@@ -167,7 +167,7 @@ def main() -> int:
                 "dataset_id": dataset["id"],
                 "evaluators": ["Builtin.Helpfulness"],
                 "mode": "evaluators",
-                "wait_seconds": 90,
+                "wait_seconds": 180,
             },
         )
         run_res.raise_for_status()

@@ -209,11 +209,13 @@ assertion 里就写了"没有编造资料中不存在的数字"。（`忠实性`
 | 阶段 | 平台在做什么 |
 |---|---|
 | `INVOKING` | 逐条回放数据集，真实调用 Agent，记录每条对应的 session id |
-| `WAITING` | 等 span 落进 CloudWatch `aws/spans`（默认等 90 秒） |
+| `WAITING` | 主动确认最新 span 与输入/输出日志配对，并跨过索引稳定窗口 |
 | `EVALUATING` | `StartBatchEvaluation` 精确圈定这些 session（不会误评别的流量） |
 | `COMPLETED` | 显示各评估器均分（或洞察树） |
 
-`WAITING` 默认等待 90 秒，让 span 落进 CloudWatch。进入 `EVALUATING` 后继续等页面刷新，
+`WAITING` 不是固定倒计时。平台会主动确认最新会话的根 span 与输入/输出日志已经配对，
+并且日志已跨过评估服务的索引稳定窗口（默认 180 秒），之后才进入 `EVALUATING`。
+如果遥测在限定时间内仍不完整，本次运行会在创建 AWS 批评估前明确失败。继续等页面刷新，
 不要因为短时间没有分数就重复创建运行。
 
 ![评估得分](images/08-run-scores.png)

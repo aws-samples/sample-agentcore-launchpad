@@ -206,7 +206,7 @@ def main() -> int:
         "agent_id": agent["id"], "dataset_id": ds["id"],
         "evaluators": ["Builtin.Correctness", "Builtin.GoalSuccessRate",
                        "Builtin.TrajectoryInOrderMatch"],
-        "wait_seconds": 120,
+        "wait_seconds": 180,
     })
     run.raise_for_status()
     gt_run = wait_run(client, run.json()["id"])

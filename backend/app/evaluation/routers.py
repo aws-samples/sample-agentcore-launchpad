@@ -544,7 +544,9 @@ class RunCreate(BaseModel):
     actor_model_id: str | None = Field(default=None, min_length=1, max_length=120)
     evaluators: list[str] = Field(default_factory=lambda: list(ac.BUILTIN_EVALUATORS))
     mode: str = Field(default="evaluators", pattern="^(evaluators|insights)$")
-    wait_seconds: int = Field(default=90, ge=0, le=600)
+    # Minimum ingestion age for the newest paired span/content log. This is an
+    # active readiness threshold, not an unconditional sleep.
+    wait_seconds: int = Field(default=180, ge=0, le=600)
     session_ids: list[str] | None = None  # insights/passive over past sessions
     lookback_hours: int | None = Field(default=None, ge=1, le=336)  # time window
     insights: list[str] | None = None  # insight-type subset (insights mode)
