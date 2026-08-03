@@ -153,11 +153,13 @@ def _run_scan_gate(
     ctx.log(f"image scan findings · {ecr.format_counts(counts)}")
     blocking = ecr.blocking_findings(counts, severities)
     if blocking:
+        packages = ecr.blocking_packages(ecr_client, repo, digest, severities)
+        listed = f" — {'; '.join(packages)}" if packages else ""
         raise RuntimeError(
             f"image {repo}@{digest} has blocking vulnerabilities "
-            f"({ecr.format_counts(blocking)}) at or above {', '.join(severities)}. "
-            "Rebuild on a patched base image, or set image_scan_block_severities / "
-            "image_scan_enabled=false to deploy anyway."
+            f"({ecr.format_counts(blocking)}) at or above {', '.join(severities)}"
+            f"{listed}. Rebuild on a patched base image, or set "
+            "image_scan_block_severities / image_scan_enabled=false to deploy anyway."
         )
 
 

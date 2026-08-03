@@ -117,6 +117,51 @@ def blocking_findings(
     }
 
 
+def blocking_packages(
+    client: Any,
+    repository: str,
+    digest: str,
+    severities: list[str],
+    limit: int = 8,
+) -> list[str]:
+    """`CVE-… (package version)` for the findings that blocked, heaviest first.
+
+    A count alone ("CRITICAL 4") does not tell an operator whether the problem is
+    their own dependency or an unpatched OS package in the base image — which in
+    practice it usually is, and which decides whether rebuilding can even help.
+    Read separately from `wait_for_scan` so its contract stays "counts only", and
+    best-effort: a failure here must not replace a real blocking error.
+    """
+    wanted = {severity.upper() for severity in severities}
+    order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATIONAL", "UNDEFINED"]
+    try:
+        response = client.describe_image_scan_findings(
+            repositoryName=repository, imageId={"imageDigest": digest}
+        )
+        findings = (response.get("imageScanFindings") or {}).get("findings") or []
+    except Exception:  # noqa: BLE001 — advisory detail only
+        return []
+
+    def rank(finding: dict) -> int:
+        severity = (finding.get("severity") or "").upper()
+        return order.index(severity) if severity in order else 99
+
+    out = []
+    for finding in sorted(findings, key=rank):
+        if (finding.get("severity") or "").upper() not in wanted:
+            continue
+        attributes = {
+            attribute.get("key"): attribute.get("value")
+            for attribute in finding.get("attributes") or []
+        }
+        package = attributes.get("package_name") or "?"
+        version = attributes.get("package_version") or "?"
+        out.append(f"{finding.get('name', '?')} ({package} {version})")
+        if len(out) >= limit:
+            break
+    return out
+
+
 def format_counts(counts: dict[str, int]) -> str:
     """Severity counts for a job-log line, heaviest first."""
     order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATIONAL", "UNDEFINED"]

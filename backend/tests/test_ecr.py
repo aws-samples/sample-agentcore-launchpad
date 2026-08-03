@@ -139,3 +139,62 @@ class TestFormatCounts:
 
     def test_an_unranked_severity_still_appears(self):
         assert "WEIRD 1" in ecr.format_counts({"WEIRD": 1})
+
+
+def _finding(name, severity, package, version):
+    return {
+        "name": name,
+        "severity": severity,
+        "attributes": [
+            {"key": "package_name", "value": package},
+            {"key": "package_version", "value": version},
+        ],
+    }
+
+
+class TestBlockingPackages:
+    """Counts alone cannot tell an operator whether the CVEs are theirs or the base
+    image's. Shapes here mirror a real basic-scan response (glibc/perl in Debian)."""
+
+    def _client(self, findings):
+        return StubEcr([{
+            "imageScanStatus": {"status": "COMPLETE"},
+            "imageScanFindings": {"findings": findings},
+        }])
+
+    def test_names_the_cve_and_package(self):
+        client = self._client([_finding("CVE-1", "CRITICAL", "glibc", "2.41-12")])
+        assert ecr.blocking_packages(client, REPO, DIGEST, ["CRITICAL"]) == [
+            "CVE-1 (glibc 2.41-12)"
+        ]
+
+    def test_skips_severities_that_did_not_block(self):
+        client = self._client([
+            _finding("CVE-crit", "CRITICAL", "glibc", "2.41"),
+            _finding("CVE-med", "MEDIUM", "curl", "8.0"),
+        ])
+        out = ecr.blocking_packages(client, REPO, DIGEST, ["CRITICAL"])
+        assert out == ["CVE-crit (glibc 2.41)"]
+
+    def test_heaviest_first_across_blocking_severities(self):
+        client = self._client([
+            _finding("CVE-high", "HIGH", "perl", "5.40"),
+            _finding("CVE-crit", "CRITICAL", "glibc", "2.41"),
+        ])
+        out = ecr.blocking_packages(client, REPO, DIGEST, ["CRITICAL", "HIGH"])
+        assert out == ["CVE-crit (glibc 2.41)", "CVE-high (perl 5.40)"]
+
+    def test_caps_the_list(self):
+        client = self._client(
+            [_finding(f"CVE-{i}", "CRITICAL", "pkg", "1") for i in range(20)]
+        )
+        assert len(ecr.blocking_packages(client, REPO, DIGEST, ["CRITICAL"], limit=3)) == 3
+
+    def test_missing_attributes_do_not_crash(self):
+        client = self._client([{"name": "CVE-x", "severity": "CRITICAL"}])
+        assert ecr.blocking_packages(client, REPO, DIGEST, ["CRITICAL"]) == ["CVE-x (? ?)"]
+
+    def test_a_read_failure_is_advisory_only(self):
+        """The caller is already raising a blocking error; this must not replace it."""
+        client = StubEcr([], raises=RuntimeError("boom"))
+        assert ecr.blocking_packages(client, REPO, DIGEST, ["CRITICAL"]) == []
