@@ -21,6 +21,7 @@ from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
+from app.services import ecr
 from app.services.agentcore import codebuild as cb
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
@@ -87,10 +88,77 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     ctx.log(f"codebuild started · {build_id}")
     cb.wait_build(codebuild, build_id, on_phase=lambda p: ctx.log(f"codebuild phase: {p}"))
     mins = (time.monotonic() - t0) / 60
-    image_uri = f"{registry}/{repo}:{tag}"
-    ctx.scratch["image_uri"] = image_uri
-    ctx.log(f"image pushed · {image_uri}")
-    return StageResult(detail=f"codebuild · arm64 · {mins:.1f}m → :{tag}")
+
+    # Pin the deployment to the image that was just pushed, not to the tag: the tag
+    # is mutable, so deploying by it means what the runtime executes can change
+    # with no record of it.
+    ecr_client = boto3.client("ecr", region_name=settings.region)
+    digest = ecr.resolve_digest(ecr_client, repo, tag)
+    _record_image_digest(ctx, digest)
+    ctx.scratch["image_digest"] = digest
+    ctx.scratch["image_uri"] = f"{registry}/{repo}@{digest}"
+    ctx.log(f"image pushed · {registry}/{repo}:{tag} · {digest}")
+
+    _run_scan_gate(ctx, ecr_client, repo, digest, settings)
+    return StageResult(detail=f"codebuild · arm64 · {mins:.1f}m → :{tag} @ {digest[:19]}…")
+
+
+def _record_image_digest(ctx: StageContext, digest: str) -> None:
+    """Persist the digest on the Deployment row so the console can report exactly
+    what is deployed and a resumed job re-uses the same image."""
+    from app.models.ledger import Deployment
+
+    db = ctx.session()
+    try:
+        row = db.get(Deployment, ctx.deployment_id) if ctx.deployment_id else None
+        if row is not None:
+            row.image_digest = digest
+            db.commit()
+    finally:
+        db.close()
+
+
+def _run_scan_gate(
+    ctx: StageContext, ecr_client: Any, repo: str, digest: str, settings: Any
+) -> None:
+    """Refuse to deploy an image whose push scan reports blocking findings.
+
+    Runs here rather than in the deploy stage so a blocked image never reaches
+    CreateAgentRuntime. Naturally idempotent on resume: reading a scan result does
+    not change anything.
+
+    A scan that could not be read (not enabled, API error) or did not finish is
+    reported as exactly that — never folded into "clean", which would let an
+    absent gate read as a passed one.
+    """
+    if not settings.image_scan_enabled:
+        ctx.log("image scan gate disabled (image_scan_enabled=false) — image NOT scanned")
+        return
+    severities = settings.image_scan_block_severities
+    try:
+        counts = ecr.wait_for_scan(
+            ecr_client,
+            repo,
+            digest,
+            timeout_s=settings.image_scan_timeout_s,
+            on_status=lambda s: ctx.log(f"image scan: {s}"),
+        )
+    except (ecr.ScanTimeout, ecr.ScanUnavailable) as exc:
+        # Deliberately not fatal: an unreadable scan is an infrastructure gap, not
+        # evidence of a vulnerable image, and failing every deploy on it would make
+        # the platform unusable the moment scanning misbehaves. Loud instead.
+        ctx.log(f"image scan gate did NOT complete — {exc}. Deploying unscanned.")
+        return
+
+    ctx.log(f"image scan findings · {ecr.format_counts(counts)}")
+    blocking = ecr.blocking_findings(counts, severities)
+    if blocking:
+        raise RuntimeError(
+            f"image {repo}@{digest} has blocking vulnerabilities "
+            f"({ecr.format_counts(blocking)}) at or above {', '.join(severities)}. "
+            "Rebuild on a patched base image, or set image_scan_block_severities / "
+            "image_scan_enabled=false to deploy anyway."
+        )
 
 
 def _filesystem_configurations(spec: AgentSpec) -> list[dict]:
@@ -219,6 +287,20 @@ def _retry_iam_propagation(fn, log, attempts: int = 6, delay_s: int = 10,
             sleeper(delay_s)
 
 
+def _recorded_digest_uri(ctx: StageContext, registry: str, repo: str) -> str | None:
+    """`registry/repo@sha256:…` from the Deployment row, for a resumed job whose
+    package stage already ran and left nothing in scratch."""
+    from app.models.ledger import Deployment
+
+    db = ctx.session()
+    try:
+        row = db.get(Deployment, ctx.deployment_id) if ctx.deployment_id else None
+        digest = row.image_digest if row is not None else None
+    finally:
+        db.close()
+    return f"{registry}/{repo}@{digest}" if digest else None
+
+
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
     settings = get_settings()
     client = control_client()
@@ -231,7 +313,12 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             registry, repo, tag = _image_ref(settings, row)
             spec = AgentSpec(**row.spec)
             return {
-                "container_uri": ctx.scratch.get("image_uri") or f"{registry}/{repo}:{tag}",
+                "container_uri": ctx.scratch.get("image_uri")
+                or _recorded_digest_uri(ctx, registry, repo)
+                # Only reached for a deployment created before digests were
+                # recorded; the tag is mutable, so this is a fallback, not a path
+                # to rely on.
+                or f"{registry}/{repo}:{tag}",
                 "role_arn": ctx.scratch.get("execution_role_arn")
                 or settings.resources.get("execution_role_arn", ""),
                 "environment": runtime_environment(spec, settings.resources),

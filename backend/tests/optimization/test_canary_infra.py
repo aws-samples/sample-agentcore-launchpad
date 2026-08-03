@@ -2,6 +2,7 @@
 minting, dedicated gateway, and named endpoints — all with stubbed clients and
 injected build/upload seams (no real pip / S3 / AWS)."""
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -40,6 +41,13 @@ def _patch_settings(monkeypatch, **resources):
 
 
 def _fake_pip(_cmd, **_kwargs):
+    """Stands in for both subprocesses build_zip drives — the uv resolve, which
+    must leave a lockfile at `-o`, and the pip install."""
+    if "compile" in _cmd:
+        Path(_cmd[_cmd.index("-o") + 1]).write_text(
+            "probe-pkg==1.0.0 \\\n    --hash=sha256:" + "e" * 64 + "\n",
+            encoding="utf-8",
+        )
     return SimpleNamespace(returncode=0, stderr="")
 
 

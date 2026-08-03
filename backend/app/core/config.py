@@ -105,6 +105,14 @@ class Settings(BaseSettings):
     account_id: str = ""
     resources: dict[str, Any] = {}
 
+    # Container image supply chain (T10). The gate runs after the push, before the
+    # image can back a runtime. The threshold and the off switch are configurable
+    # on purpose: an un-overridable gate strands every agent the first time a base
+    # image picks up a CVE, and an operator needs a way to ship anyway knowingly.
+    image_scan_enabled: bool = True
+    image_scan_block_severities: list[str] = ["CRITICAL"]
+    image_scan_timeout_s: int = Field(default=300, gt=0)
+
     # AgentCore synchronous runtime requests may run for up to 15 minutes.
     # Keep the SDK read timeout above that service limit so buffered agents can
     # return their final response.
