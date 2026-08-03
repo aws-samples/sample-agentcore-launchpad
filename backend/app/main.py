@@ -23,7 +23,8 @@ from app.optimization.service import clear_stale_running_actions
 from app.routers.agent_skills import router as agent_skills_router
 from app.routers.agents import router as agents_router
 from app.routers.apikeys import router as apikeys_router
-from app.routers.auth import auth_middleware
+from app.routers.auth import OPEN_CONSOLE_REMEDY, auth_middleware
+from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
 from app.routers.codegen import router as codegen_router
@@ -49,8 +50,26 @@ the same invoke chain, so behavior is identical across both entrances.
 """
 
 
+def _assert_production_is_authenticated(settings) -> None:
+    """Refuse to build an unauthenticated app in production mode.
+
+    The per-request guard in `auth_middleware` is the real control (it is the only
+    place the caller's address is known). This assertion exists so a misconfigured
+    production launch fails at boot with one clear message instead of serving a
+    console that 403s every request.
+    """
+    if settings.run_mode != "prod" or settings.allow_open_console:
+        return
+    if not auth_enabled(settings):
+        raise RuntimeError(
+            "Refusing to start in production mode without console authentication. "
+            + OPEN_CONSOLE_REMEDY
+        )
+
+
 def create_app(resume_jobs: bool = False) -> FastAPI:
     settings = get_settings()
+    _assert_production_is_authenticated(settings)
     app = FastAPI(
         title=f"{settings.app_name} API",
         version=settings.version,

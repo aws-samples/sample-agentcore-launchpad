@@ -17,6 +17,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import ipaddress
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -182,19 +183,63 @@ def is_authenticated(request: Request, settings: Settings | None = None) -> bool
     return resolve_identity(request, settings) is not None
 
 
+OPEN_CONSOLE_REMEDY = (
+    "This console has no authentication configured and refuses non-local "
+    "requests. Set auth_password in config/launchpad.yaml (or "
+    "LAUNCHPAD_AUTH_PASSWORD) to enable the login gate, or set "
+    "LAUNCHPAD_ALLOW_OPEN_CONSOLE=true to accept an open console."
+)
+
+
+def _peer_is_loopback(request: Request) -> bool:
+    """Whether the request's *transport peer* is loopback.
+
+    Deliberately ignores `X-Forwarded-For`: a spoofable header would make this
+    check decorative. The consequence is that a reverse proxy on the same host
+    presents as 127.0.0.1 and is trusted — the same trust the console already
+    places in localhost, and it never applies to the real production path, where
+    authentication is enabled and this branch does not run.
+    """
+    client = request.client
+    if client is None or not client.host:
+        # ASGI transports without a peer (in-process calls) are local by nature.
+        return True
+    try:
+        return ipaddress.ip_address(client.host).is_loopback
+    except ValueError:
+        # Not an IP literal (e.g. a unix socket or a test transport) — treat it
+        # as non-local so the guard fails closed.
+        return False
+
+
+def _is_guarded_api_path(path: str) -> bool:
+    return (path == "/api" or path.startswith("/api/")) and path not in _OPEN_API_PATHS
+
+
 async def auth_middleware(request: Request, call_next: Any) -> Any:
-    """Require a live console session while leaving health and /v1 intact."""
+    """Require a live console session while leaving health and /v1 intact.
+
+    Two guards, in order: an unauthenticated console may only be reached from
+    loopback (T1), and an authenticated one needs a live session. The first is
+    checked per request rather than at startup because that is the only place the
+    real peer is known — `create_app()` cannot see uvicorn's `--host`, so a
+    startup-only check is bypassable by launching uvicorn directly.
+    """
     settings = get_settings()
-    if enabled(settings) and request.method != "OPTIONS":
+    if request.method != "OPTIONS":
         path = request.url.path
-        guarded = (path == "/api" or path.startswith("/api/")) and (
-            path not in _OPEN_API_PATHS
-        )
-        if guarded and resolve_identity(request, settings) is None:
-            return JSONResponse(
-                status_code=401,
-                content=envelope("auth.required", "Authentication required"),
-            )
+        if _is_guarded_api_path(path):
+            if not enabled(settings):
+                if not settings.allow_open_console and not _peer_is_loopback(request):
+                    return JSONResponse(
+                        status_code=403,
+                        content=envelope("auth.open_console_refused", OPEN_CONSOLE_REMEDY),
+                    )
+            elif resolve_identity(request, settings) is None:
+                return JSONResponse(
+                    status_code=401,
+                    content=envelope("auth.required", "Authentication required"),
+                )
     return await call_next(request)
 
 
