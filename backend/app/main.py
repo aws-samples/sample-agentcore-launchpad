@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import app.deployer.container  # noqa: F401 — registers the container (Claude SDK) method
@@ -11,6 +11,7 @@ import app.deployer.zip_runtime  # noqa: F401 — registers zip_runtime + studio
 from app.core.config import get_settings
 from app.core.db import init_db
 from app.core.errors import register_error_handlers
+from app.core.route_policy import enforce_route_policy
 from app.deployer.pipeline import resume_pending_jobs
 from app.evaluation.routers import router as evaluation_router
 from app.evaluation.service import resume_interrupted_runs
@@ -77,6 +78,9 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         docs_url="/api/docs",
         redoc_url=None,
         openapi_url="/api/openapi.json",
+        # Console authorization for every /api route lives in one auditable,
+        # default-deny table instead of per-route Depends(require_admin).
+        dependencies=[Depends(enforce_route_policy)],
     )
 
     app.middleware("http")(auth_middleware)
