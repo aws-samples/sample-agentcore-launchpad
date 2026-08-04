@@ -1072,6 +1072,7 @@
       "score": "得分",
       "status": "状态",
       "empty": "还没有运行——点击 + 新建运行",
+      "newEvaluation": "新建评估",
       "createExperiment": "创建 BUNDLE A/B 实验"
     },
     "status": {

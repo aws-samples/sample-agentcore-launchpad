@@ -1072,6 +1072,7 @@
       "score": "SCORE",
       "status": "STATUS",
       "empty": "NO RUNS YET — PRESS + NEW RUN",
+      "newEvaluation": "NEW Evaluation",
       "createExperiment": "CREATE BUNDLE A/B EXPERIMENT"
     },
     "status": {

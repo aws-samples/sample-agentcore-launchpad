@@ -800,7 +800,7 @@ export function Evaluation() {
               onClick={() => setSearchParams({ view: "new" })}
               data-testid="new-run-btn"
             >
-              + {t("evalPage.newRun.title")}
+              + {t("evalPage.runs.newEvaluation")}
             </Btn>
           </>
         }
