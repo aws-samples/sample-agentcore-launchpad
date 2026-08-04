@@ -614,3 +614,137 @@ def test_container_deploy_stage_injects_platform_memory(monkeypatch, mode):
         "CUSTOM": "value",
         "LAUNCHPAD_MEMORY_ID": "platform-mem-id",
     }
+
+
+# --- IAM propagation on the zip deploy path ---------------------------------
+# Regression: the provision stage creates a brand-new role and the deploy stage
+# uses it moments later. The retry existed but was only wired into the container
+# deployer, so a live zip deploy failed on the first attempt (2026-08-04).
+
+ROLE_NOT_VISIBLE = (
+    "An error occurred (ValidationException) when calling the CreateAgentRuntime "
+    "operation: Role validation failed for 'arn:aws:iam::1:role/launchpad-agent-x'. "
+    "Please verify that the role exists and its trust policy allows assumption by "
+    "this service"
+)
+
+
+class FlakyRuntimeControl(StubRuntimeControl):
+    """Fails `fail_times` role validations before behaving normally."""
+
+    def __init__(self, statuses, fail_times=1):
+        super().__init__(statuses)
+        self.remaining_failures = fail_times
+        self.create_calls = 0
+        self.update_calls = 0
+
+    def _maybe_fail(self):
+        if self.remaining_failures:
+            self.remaining_failures -= 1
+            raise RuntimeError(ROLE_NOT_VISIBLE)
+
+    def create_agent_runtime(self, **kwargs):
+        self.create_calls += 1
+        self._maybe_fail()
+        return super().create_agent_runtime(**kwargs)
+
+    def update_agent_runtime(self, **kwargs):
+        self.update_calls += 1
+        self._maybe_fail()
+        return super().update_agent_runtime(**kwargs)
+
+
+def _no_sleep_retry(monkeypatch):
+    """Keep the real retry logic, drop the 10s waits."""
+    from app.services import agent_iam
+
+    real = agent_iam.retry_iam_propagation
+    monkeypatch.setattr(
+        agent_iam,
+        "retry_iam_propagation",
+        lambda fn, log, **kw: real(fn, log, sleeper=lambda _s: None, **kw),
+    )
+
+
+def _persist(name, **columns):
+    from app.core.db import SessionLocal
+    from app.models.ledger import Agent
+
+    spec = AgentSpec(
+        name=name, method="zip_runtime", system_prompt="s", code="print('x')",
+        memory={"short_term": False, "long_term": False},
+    )
+    db = SessionLocal()
+    agent = Agent(name=name, method="zip_runtime", spec=spec.model_dump(), **columns)
+    db.add(agent)
+    db.commit()
+    agent_id = agent.id
+    db.close()
+    db = SessionLocal()
+    row = db.get(Agent, agent_id)
+    db.close()
+    return row
+
+
+def test_deploy_retries_while_a_new_role_is_not_visible_yet(monkeypatch):
+    from app.deployer import zip_runtime as zr
+    from app.deployer.pipeline import StageContext
+
+    _no_sleep_retry(monkeypatch)
+    stub = FlakyRuntimeControl(["READY"], fail_times=2)
+    monkeypatch.setattr(zr, "control_client", lambda: stub)
+    monkeypatch.setattr(zr, "get_settings", _fake_settings)
+
+    agent = _persist("zip-prop-create", status="deploying")
+    zr._stage_deploy(StageContext(agent_id=agent.id, deployment_id="d", job_id="j"), agent)
+
+    assert stub.create_calls == 3  # two refusals, then accepted
+    assert stub.created_with is not None
+
+
+def test_update_mode_retries_too(monkeypatch):
+    from app.deployer import zip_runtime as zr
+    from app.deployer.pipeline import StageContext
+
+    _no_sleep_retry(monkeypatch)
+    stub = FlakyRuntimeControl(["READY"], fail_times=1)
+    monkeypatch.setattr(zr, "control_client", lambda: stub)
+    monkeypatch.setattr(zr, "get_settings", _fake_settings)
+
+    agent = _persist(
+        "zip-prop-update", status="active", resource_id="rt-1", arn="arn:rt-1", version="1"
+    )
+    ctx = StageContext(agent_id=agent.id, deployment_id="d", job_id="j")
+    ctx.scratch["mode"] = "update"
+    zr._stage_deploy(ctx, agent)
+
+    assert stub.update_calls == 2
+    assert stub.updated_with is not None
+
+
+def test_a_real_validation_error_is_not_retried(monkeypatch):
+    """The retry must not mask a genuine bad request."""
+    from app.deployer import zip_runtime as zr
+    from app.deployer.pipeline import StageContext
+
+    _no_sleep_retry(monkeypatch)
+
+    class Broken(StubRuntimeControl):
+        def __init__(self):
+            super().__init__(["READY"])
+            self.calls = 0
+
+        def create_agent_runtime(self, **kwargs):
+            self.calls += 1
+            raise RuntimeError("ValidationException: s3 key does not exist")
+
+    stub = Broken()
+    monkeypatch.setattr(zr, "control_client", lambda: stub)
+    monkeypatch.setattr(zr, "get_settings", _fake_settings)
+
+    agent = _persist("zip-prop-nonretry", status="deploying")
+    with pytest.raises(RuntimeError, match="s3 key does not exist"):
+        zr._stage_deploy(
+            StageContext(agent_id=agent.id, deployment_id="d", job_id="j"), agent
+        )
+    assert stub.calls == 1

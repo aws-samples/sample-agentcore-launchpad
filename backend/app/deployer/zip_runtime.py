@@ -489,7 +489,10 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
 
         if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)
             runtime_id = row.resource_id
-            updated = rt.update_code_runtime(client, runtime_id=runtime_id, **_kwargs())
+            updated = agent_iam.retry_iam_propagation(
+                lambda: rt.update_code_runtime(client, runtime_id=runtime_id, **_kwargs()),
+                ctx.log,
+            )
             row.version = str(updated.get("agentRuntimeVersion", row.version or "1"))
             db.commit()
             ctx.log(
@@ -500,8 +503,11 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             runtime_id = row.resource_id
             ctx.log(f"resuming — runtime {runtime_id} already created, polling status")
         else:
-            created = rt.create_code_runtime(
-                client, runtime_name=sanitize_runtime_name(row.name), **_kwargs()
+            created = agent_iam.retry_iam_propagation(
+                lambda: rt.create_code_runtime(
+                    client, runtime_name=sanitize_runtime_name(row.name), **_kwargs()
+                ),
+                ctx.log,
             )
             runtime_id = created["agentRuntimeId"]
             row.resource_id = runtime_id

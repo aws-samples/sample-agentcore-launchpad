@@ -314,7 +314,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             harness_id = row.resource_id
             update_params = hc.wrap_params_for_update(_params())
             update_params["harnessId"] = harness_id
-            harness = hc.update_harness(client, update_params)
+            harness = agent_iam.retry_iam_propagation(
+                lambda: hc.update_harness(client, update_params), ctx.log
+            )
             row.version = str(harness.get("harnessVersion", row.version or "1"))
             db.commit()
             ctx.log(
@@ -324,7 +326,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             harness_id = row.resource_id
             ctx.log(f"resuming — harness {harness_id} already created, polling status")
         else:  # first create
-            harness = hc.create_harness(client, _params())
+            harness = agent_iam.retry_iam_propagation(
+                lambda: hc.create_harness(client, _params()), ctx.log
+            )
             harness_id = harness["harnessId"]
             row.resource_id = harness_id
             row.arn = harness.get("arn")

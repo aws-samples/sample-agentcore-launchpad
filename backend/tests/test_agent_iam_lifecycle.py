@@ -235,6 +235,13 @@ class TestIamPropagationRetry:
         "AccessDeniedException: User is not authorized to perform: sts:AssumeRole",
         "unable to assume the provided execution role",
         "AccessDenied",
+        # The wording a real brand-new role produced on a live zip deploy
+        # (2026-08-04). It matched none of the guesses above, so the first deploy
+        # of every agent failed instead of retrying.
+        "ValidationException: An error occurred (ValidationException) when calling "
+        "the CreateAgentRuntime operation: Role validation failed for "
+        "'arn:aws:iam::434444145045:role/launchpad-agent-x-0125b090'. Please verify "
+        "that the role exists and its trust policy allows assumption by this service",
     ])
     def test_recognises_each_observed_wording(self, message):
         """A brand-new role is a longer consistency window than a rewritten policy,
