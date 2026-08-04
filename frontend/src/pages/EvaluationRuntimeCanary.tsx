@@ -122,7 +122,6 @@ export function RuntimeCanaryView() {
       setAgentId(handoffChampionId);
       setSourceExperimentId(handoffSourceExperimentId);
     }
-    setTrafficDatasetId("");
     setCreateError(null);
     setConfirm(null);
   }, [
@@ -144,8 +143,14 @@ export function RuntimeCanaryView() {
       .catch(() => {});
     fetch("/api/eval/datasets")
       .then((response) => (response.ok ? response.json() : { datasets: [] }))
-      .then((body: { datasets: DatasetInfo[] }) =>
-        setDatasets(body.datasets.filter((dataset) => dataset.kind !== "simulated")))
+      .then((body: { datasets: DatasetInfo[] }) => {
+        const runnable = body.datasets.filter((dataset) => dataset.kind !== "simulated");
+        setDatasets(runnable);
+        setTrafficDatasetId((current) =>
+          runnable.some((dataset) => dataset.id === current)
+            ? current
+            : (runnable[0]?.id ?? ""));
+      })
       .catch(() => {});
     void refresh();
     const timer = setInterval(() => void refresh(), 8000);
@@ -653,7 +658,9 @@ export function RuntimeCanaryView() {
                               data-testid="canary-traffic-dataset"
                               onChange={(event) => setTrafficDatasetId(event.target.value)}
                             >
-                              <option value="">{t("canaryPage.builtinPrompts")}</option>
+                              {datasets.length === 0 && (
+                                <option value="">{t("canaryPage.noTrafficDataset")}</option>
+                              )}
                               {datasets.map((dataset) => (
                                 <option key={dataset.id} value={dataset.id}>
                                   {dataset.name} ({dataset.item_count})
@@ -667,9 +674,8 @@ export function RuntimeCanaryView() {
                                 : t("canaryPage.sendTraffic"),
                               {
                                 primary: attempts.length === 0,
-                                extra: trafficDatasetId
-                                  ? { dataset_id: trafficDatasetId }
-                                  : undefined,
+                                disabled: !trafficDatasetId,
+                                extra: { dataset_id: trafficDatasetId },
                                 icon: "play",
                               },
                             )}

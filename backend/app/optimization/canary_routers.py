@@ -219,11 +219,15 @@ def runtime_canary_action(
     if reason:
         raise AppError("canary.stage_not_ready", reason, status_code=409)
 
-    prompts = None
-    dataset_info = None
     if req.action == "setup":
         canary_service.assert_setup_available(row.id)
-    elif req.action == "traffic" and req.dataset_id:
+    elif req.action == "traffic":
+        if not req.dataset_id:
+            raise AppError(
+                "canary.dataset_required",
+                "traffic requires a replay dataset",
+                status_code=422,
+            )
         dataset = db.get(EvalDataset, req.dataset_id)
         if dataset is None:
             raise NotFoundError("dataset.not_found", "dataset not found")

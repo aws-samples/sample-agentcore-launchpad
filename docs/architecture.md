@@ -122,7 +122,7 @@ resource scoping, and neither do X-Ray ingestion or `cloudwatch:PutMetricData`.
 Recorded at the statement rather than quietly narrowed.
 
 **Two grants were removed**, which is worth knowing because a removal is what shows
-up as a runtime failure: `ABTestOrchestration` (16 actions including
+up as a runtime failure: `ABTestOrchestration` (18 actions including
 `CreateGatewayRule`, `UpdateGateway`, `InvokeAgentRuntime`) is what the *platform*
 does from its own credentials, and the CloudWatch Logs **read** actions were console
 paths that had leaked onto the workload role. `InvokeAgentRuntime` is kept for A2A

@@ -630,22 +630,13 @@ def test_traffic_action_uses_dataset_prompts(client, monkeypatch):
     assert row.artifacts["traffic"]["dataset_id"] == ds_id
 
 
-def test_traffic_action_defaults_to_builtin_prompts(client, monkeypatch):
-    _inline(monkeypatch)
-    sent: dict = {}
-
-    def fake_send(gateway_url, target, prompts, poster=None, signer=None,
-                  progress=svc._noop):
-        sent.update(prompts=list(prompts))
-        return {"session_ids": [], "sent": len(prompts), "failed": 0}
-
-    monkeypatch.setattr(svc, "send_gateway_traffic", fake_send)
+def test_traffic_action_requires_dataset(client):
     exp = _mk_exp(artifacts=_traffic_ready_artifacts())
     res = client.post(f"/api/experiments/{exp.id}/action",
                       json={"action": "traffic"})
-    assert res.status_code == 202
-    assert sent["prompts"] == svc.TRAFFIC_PROMPTS * 2
-    assert "dataset_id" not in _reload(exp.id).artifacts["traffic"]
+    assert res.status_code == 422
+    assert res.json()["code"] == "experiment.dataset_required"
+    assert "traffic" not in _reload(exp.id).artifacts
 
 
 def test_traffic_rejects_simulated_and_missing_datasets(client):

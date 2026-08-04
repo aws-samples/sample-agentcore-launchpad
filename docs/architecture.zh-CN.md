@@ -117,7 +117,7 @@ generate → package → provision → deploy → register
 X-Ray 上报与 `cloudwatch:PutMetricData` 同理。这些在语句处就地注明,而不是悄悄收窄。
 
 **移除了两项授权**——值得知道,因为"移除"才是会以运行时失败形式暴露出来的那一类:
-`ABTestOrchestration`(16 个动作,含 `CreateGatewayRule`、`UpdateGateway`、
+`ABTestOrchestration`(18 个动作,含 `CreateGatewayRule`、`UpdateGateway`、
 `InvokeAgentRuntime`)本是**平台**用自己凭证做的事;CloudWatch Logs 的**读**动作是控制台
 路径,泄漏到了工作负载角色上。`InvokeAgentRuntime` 对 A2A agent 保留,它确实要调用同伴。
 

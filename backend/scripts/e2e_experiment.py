@@ -150,10 +150,11 @@ def main() -> int:
     datasets = client.get("/api/eval/datasets").json()["datasets"]
     usable = next((d for d in datasets if d["kind"] in ("legacy", "predefined")
                    and d["item_count"] > 0), None)
-    fields = {"dataset_id": usable["id"]} if usable else {}
-    if usable:
-        print(f"── traffic dataset: {usable['name']} ({usable['item_count']} items)")
-    ensure("traffic", lambda a: "traffic" in a, **fields)
+    if usable is None:
+        raise RuntimeError("traffic requires a non-empty legacy or predefined dataset")
+    traffic_fields = {"dataset_id": usable["id"]}
+    print(f"── traffic dataset: {usable['name']} ({usable['item_count']} items)")
+    ensure("traffic", lambda a: "traffic" in a, **traffic_fields)
     print("  traffic:", {k: v for k, v in exp["artifacts"]["traffic"].items()
                          if k != "session_ids"})
 
@@ -222,7 +223,7 @@ def main() -> int:
             None,
         )
         if current is None or not current.get("traffic_attempts"):
-            canary_action("traffic", **fields)
+            canary_action("traffic", **traffic_fields)
             rounds = canary["artifacts"].get("rounds", [])
             current = next(
                 row for row in rounds if row["ramp_stage"] == ramp_stage

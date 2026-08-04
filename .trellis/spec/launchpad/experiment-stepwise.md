@@ -77,7 +77,7 @@ class ActionRequest(BaseModel):
                  # |promote|cleanup
     accepted_prompt: str | None                        # accept
     accepted_tool_descriptions: dict[str, str] | None  # accept
-    dataset_id: str | None                             # traffic
+    dataset_id: str | None                             # required for traffic
     online_evaluators: list[str] | None                # gateway, 1..ONLINE_EVAL_MAX
 ```
 
@@ -123,8 +123,8 @@ assert_shared_gateway_available(own_test_name=None) -> None
   - `recommend.system_prompt_status` / `system_prompt_error` — the AWS job
     status and its `errorCode: errorMessage` (mirrors `tool_status` /
     `tool_error`).
-  - `traffic.dataset_id` / `traffic.dataset_name` — when a dataset was
-    replayed instead of the built-in `TRAFFIC_PROMPTS*2`.
+  - `traffic.dataset_id` / `traffic.dataset_name` — the replay dataset used
+    to generate traffic. There is no built-in prompt fallback.
   - `gateway.online_evaluators` — the evaluator ids the online evaluation
     config was created with (records the *request*: a name-conflict adoption
     keeps the pre-existing config's own set, which is never rewritten).
@@ -222,6 +222,7 @@ assert_shared_gateway_available(own_test_name=None) -> None
 | prerequisite artifact missing (see table below) | 409 `experiment.stage_not_ready` |
 | accept with no prompt anywhere | 400 `experiment.accept_invalid` |
 | accept after a failed system-prompt job, prompt == control | 409 `experiment.accept_rec_failed` |
+| traffic without `dataset_id` | 422 `experiment.dataset_required` |
 | traffic dataset not found | 404 `dataset.not_found` |
 | traffic dataset kind `simulated` / no usable prompts | 422 `experiment.dataset_unsupported` |
 | gateway `online_evaluators` empty list or > `ONLINE_EVAL_MAX` items | 422 (pydantic bounds) |
@@ -266,6 +267,7 @@ promote←verdict; recommend/cleanup←none.
   `stage_bundles`)
 - `resolve_traffic_prompts`: legacy prompt, predefined first-turn (incl.
   dict `input` via `scenario_prompts` reuse), simulated → ValueError
+- traffic requires `dataset_id`; there is no built-in prompt fallback
 - runner lifecycle: failure keeps stage + `"<action>: "` error prefix;
   success clears error/progress (monkeypatch `svc._spawn` to run inline)
 - `clear_stale_running_actions` clears only stuck rows, writes retryable error
@@ -390,6 +392,7 @@ POST /api/runtime-canaries
       source_experiment_id?}                              -> 201 canary
 POST /api/runtime-canaries/{id}/action
      {action, dataset_id?, allow_non_significant?}        -> 202 {"canary": canary}
+     # dataset_id is required when action=traffic
 ```
 
 ```python
@@ -502,6 +505,7 @@ invoke_runtime_text(client, arn, prompt, ..., qualifier: str|None = None)
 | source experiment Agent is not this agent | 400 `canary.source_champion_mismatch` |
 | action already running | 409 `canary.action_in_flight` |
 | setup/traffic/verdict/advance prerequisite missing | 409 `canary.stage_not_ready` (NOT rollback — always allowed) |
+| traffic without `dataset_id` | 422 `canary.dataset_required` |
 | simulated or unusable traffic dataset | 422 `canary.dataset_unsupported` |
 | tie/non-significant without explicit override | 409 `canary.override_required` |
 | control win or insufficient evidence | 409 `canary.verdict_blocked` |

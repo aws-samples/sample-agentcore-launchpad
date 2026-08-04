@@ -680,6 +680,24 @@ def test_complete_requires_final_stage(client):
 
 
 # ─── traffic / verdict / advance mechanics ───────────────────────────────────
+def test_traffic_action_requires_dataset(client):
+    row = _mk_canary(
+        artifacts={
+            "setup": _setup_artifact(),
+            "rounds": [],
+        }
+    )
+
+    res = client.post(
+        f"/api/runtime-canaries/{row.id}/action",
+        json={"action": "traffic"},
+    )
+
+    assert res.status_code == 422
+    assert res.json()["code"] == "canary.dataset_required"
+    assert _reload(row.id).artifacts["rounds"] == []
+
+
 def test_traffic_records_metric_baseline_and_clears_prior_verdict(monkeypatch):
     row = _mk_canary(
         artifacts={

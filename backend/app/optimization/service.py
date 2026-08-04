@@ -35,14 +35,6 @@ from app.services.agentcore.gateway import sigv4_post
 from app.services.harness_convert import graft_config_bundle
 
 EXP_GATEWAY_NAME = "launchpad-exp-gw"
-TRAFFIC_PROMPTS = [
-    "What is 12*9? Use the calculator tool and answer with just the number.",
-    "What is 45+55? Use the calculator tool and answer with just the number.",
-    "What is 144/12? Use the calculator tool and answer with just the number.",
-    "What is 7*8-6? Use the calculator tool and answer with just the number.",
-    "What is 15*4? Use the calculator tool and answer with just the number.",
-    "What is 90/9? Use the calculator tool and answer with just the number.",
-]
 
 # Online evaluation for an experiment: the arms are scored by whatever evaluators
 # the operator picks at the GATEWAY stage. The default pair is what every
@@ -1124,18 +1116,17 @@ def resolve_traffic_prompts(dataset: Any) -> list[str]:
 
 
 def act_traffic(
-    exp_id: str, prompts: list[str] | None, dataset_info: dict[str, str] | None,
+    exp_id: str, prompts: list[str], dataset_info: dict[str, str],
     progress: Progress,
 ) -> None:
     exp = _get(exp_id)
     gateway = exp.artifacts["gateway"]
     result = send_gateway_traffic(
         gateway["gateway_url"], gateway["target_v1"],
-        prompts if prompts is not None else TRAFFIC_PROMPTS * 2,
+        prompts,
         progress=progress,
     )
-    if dataset_info:
-        result.update(dataset_info)
+    result.update(dataset_info)
     _update(exp_id, stage="traffic", artifact={"traffic": result})
 
 

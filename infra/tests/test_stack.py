@@ -101,6 +101,36 @@ def test_non_legacy_region_uses_isolated_role_names(east_template: Template):
         east_template.has_resource_properties("AWS::IAM::Role", {"RoleName": role_name})
 
 
+def test_execution_role_can_read_custom_evaluators_for_ab_tests(template: Template):
+    """AgentCore assumes this role to resolve customer-owned evaluators."""
+    template.has_resource_properties(
+        "AWS::IAM::Policy",
+        Match.object_like(
+            {
+                "PolicyDocument": Match.object_like(
+                    {
+                        "Statement": Match.array_with(
+                            [
+                                Match.object_like(
+                                    {
+                                        "Sid": "ABTestOrchestration",
+                                        "Action": Match.array_with(
+                                            [
+                                                "bedrock-agentcore:ListConfigurationBundleVersions",
+                                                "bedrock-agentcore:GetEvaluator",
+                                            ]
+                                        ),
+                                    }
+                                )
+                            ]
+                        )
+                    }
+                )
+            }
+        ),
+    )
+
+
 def test_execution_role_reads_skill_bundles(template: Template):
     """Harness runtimes fetch attached S3 skill bundles with the exec role —
     without skills/-scoped GetObject + ListBucket, invoke dies on AccessDenied."""

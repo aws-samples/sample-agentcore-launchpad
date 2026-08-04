@@ -427,6 +427,10 @@ function ConfigurationExperimentView() {
           runnable.some((dataset) => dataset.id === previous)
             ? previous
             : (runnable[0]?.id ?? ""));
+        setTrafficDatasetId((previous) =>
+          runnable.some((dataset) => dataset.id === previous)
+            ? previous
+            : (runnable[0]?.id ?? ""));
       })
       .catch(() => {});
     // online evaluation scores live traces, so ground-truth-only matchers
@@ -1504,7 +1508,9 @@ function ConfigurationExperimentView() {
             data-testid="traffic-dataset-select"
             onChange={(e) => setTrafficDatasetId(e.target.value)}
           >
-            <option value="">{t("expPage.builtinPrompts")}</option>
+            {datasets.length === 0 && (
+              <option value="">{t("expPage.noTrafficDataset")}</option>
+            )}
             {datasets.map((d) => (
               <option key={d.id} value={d.id} style={{ background: "#141816" }}>
                 {d.name} ({d.item_count})
@@ -1513,7 +1519,8 @@ function ConfigurationExperimentView() {
           </select>
           {actionBtn("traffic", t("expPage.sendTraffic"), {
             primary: true,
-            extra: trafficDatasetId ? { dataset_id: trafficDatasetId } : undefined,
+            disabled: !trafficDatasetId,
+            extra: { dataset_id: trafficDatasetId },
           })}
         </div>
       )}
@@ -1522,7 +1529,7 @@ function ConfigurationExperimentView() {
           sent {a.traffic.sent} · failed {a.traffic.failed}
           {a.traffic.dataset_name
             ? ` · ${t("expPage.datasetTag")} ${a.traffic.dataset_name}`
-            : ` · ${t("expPage.builtinPrompts")}`}
+            : ""}
         </div>
       )}
     </StageCard>

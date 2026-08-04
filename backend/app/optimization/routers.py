@@ -214,18 +214,21 @@ def experiment_action(
             lambda progress: service.act_promote(exp_id, progress),
         )
     elif req.action == "traffic":
-        prompts = None
-        dataset_info = None
-        if req.dataset_id:
-            dataset = db.get(EvalDataset, req.dataset_id)
-            if dataset is None:
-                raise NotFoundError("dataset.not_found", "dataset not found")
-            try:
-                prompts = service.resolve_traffic_prompts(dataset)
-            except ValueError as exc:
-                raise AppError("experiment.dataset_unsupported", str(exc),
-                               status_code=422) from exc
-            dataset_info = {"dataset_id": dataset.id, "dataset_name": dataset.name}
+        if not req.dataset_id:
+            raise AppError(
+                "experiment.dataset_required",
+                "traffic requires a replay dataset",
+                status_code=422,
+            )
+        dataset = db.get(EvalDataset, req.dataset_id)
+        if dataset is None:
+            raise NotFoundError("dataset.not_found", "dataset not found")
+        try:
+            prompts = service.resolve_traffic_prompts(dataset)
+        except ValueError as exc:
+            raise AppError("experiment.dataset_unsupported", str(exc),
+                           status_code=422) from exc
+        dataset_info = {"dataset_id": dataset.id, "dataset_name": dataset.name}
         service.run_action(
             exp.id, "traffic",
             lambda progress: service.act_traffic(exp_id, prompts, dataset_info,

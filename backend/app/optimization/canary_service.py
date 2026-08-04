@@ -509,8 +509,8 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
 
 def act_traffic(
     canary_id: str,
-    prompts: list[str] | None,
-    dataset_info: dict[str, str] | None,
+    prompts: list[str],
+    dataset_info: dict[str, str],
     progress: Progress,
 ) -> dict[str, Any]:
     row = _get(canary_id)
@@ -522,12 +522,12 @@ def act_traffic(
     result = experiment_service.send_gateway_traffic(
         setup["gateway_url"],
         setup["champion"]["target_name"],
-        prompts if prompts is not None else experiment_service.TRAFFIC_PROMPTS * 2,
+        prompts,
         progress=progress,
     )
     attempt = {
         **result,
-        **(dataset_info or {}),
+        **dataset_info,
         "baseline_n": baseline_n,
         "completed_at": _now(),
     }
