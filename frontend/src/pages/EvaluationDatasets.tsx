@@ -6,6 +6,7 @@ import { useSearchParams } from "react-router-dom";
 import {
   Btn, Chip, ConfirmDialog, Pager, Panel, useTablePage, useToast, ViewHead,
 } from "../components";
+import { EvaluationNav } from "../components/EvaluationNav";
 
 interface CloudBlob {
   dataset_id: string;
@@ -891,6 +892,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
         title={t("evalPage.datasets.title")}
         meta={t("evalPage.datasets.meta")}
       />
+      <EvaluationNav />
       <div style={{ marginBottom: 14 }}>
         <Btn onClick={onBack}>◂ {t("evalPage.backToRuns")}</Btn>
       </div>

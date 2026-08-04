@@ -21,6 +21,11 @@ def test_experiment_create_and_persisted_stages(client, monkeypatch):
         opt_router.service, "start_experiment",
         lambda a: _make_exp(a),
     )
+    monkeypatch.setattr(
+        opt_router.readiness,
+        "project_readiness",
+        lambda *_args, **_kwargs: {"state": "ready"},
+    )
     res = client.post("/api/experiments", json={"agent_id": agent.id})
     assert res.status_code == 201
     exp_id = res.json()["id"]

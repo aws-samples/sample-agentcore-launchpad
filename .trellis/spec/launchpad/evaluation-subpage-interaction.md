@@ -10,6 +10,9 @@
 All three Evaluation sub-pages share one interaction shape (Experiment introduced it;
 Evaluators/Datasets adopted it in task 07-13-eval-pages-experiment-layout):
 
+0. A compact shared navigation strip keeps Runs, Experiments, Datasets, and
+   Evaluators visible. `view=new` belongs to Runs and Canary mode belongs to
+   Experiments.
 1. Full-width table `Panel` (brk, `pad={false}`) on top — row click selects, selected row
    background `rgba(255,176,0,.045)`, `+ NEW …` primary `Btn` in the Panel `end`.
 2. Selection lives in URL search params (linkable, back-button steps through selections).
@@ -33,6 +36,16 @@ Evaluators/Datasets adopted it in task 07-13-eval-pages-experiment-layout):
 | `?view=datasets` | `ds` | `<localId>` \| `cloud:<datasetId>` \| `new` | `rows[0]` (local), else create form |
 
 - `setSearchParams` must always carry `view=…` — dropping it falls back to the runs dashboard.
+- New Run accepts `agent=<agentId>&return=experiment`. A valid Agent is
+  preselected; after a successful POST, the returned run id navigates to
+  `?view=experiment&exp=new&agent=<agentId>&baselineRun=<runId>`.
+- A selected run with generated sessions and a backend-owned
+  `experiment_capability.eligible=true` Agent exposes
+  `?view=experiment&exp=new&agent=<agentId>&sourceRun=<runId>`.
+  `sourceRun` is display context only and never readiness proof.
+- The experiment create form keeps `agent`, `baselineRun`, and `sourceRun` in
+  search parameters. Changing Agent drops stale run handoffs, so browser
+  back/forward restores the selected preparation context.
 - Experiment mode is URL-owned: no `mode` means Configuration A/B;
   `mode=canary` means Runtime Canary. Switching modes drops the other mode's
   selection and handoff params instead of retaining hidden state.
@@ -147,3 +160,24 @@ Dashboard entry buttons `datasets-btn` / `evaluators-btn` / `experiment-btn` unc
   itself): `evalPage.insights.confirmRun.bodyRepeat` warns the same analysis will run
   **one more time** (new run row, evaluation service re-invoked, extra usage); otherwise
   the original `confirmRun.body` (new run + queue note). Keys exist in zh-CN and en.
+
+## Configuration experiment data preparation (08-04)
+
+- Agent selection immediately fetches
+  `GET /api/experiments/readiness?agent_id=<id>&lookback_hours=<hours>` and
+  renders trace/session counts, recency, tool coverage, and newest EvalRun
+  context before create. The default is 24 hours; the operator can extend the
+  window to 3, 7, or 30 days. The selected window is preserved through the
+  full New Run handoff and is sent again in the create request.
+- `missing` disables create and offers a local non-simulated dataset baseline.
+  The baseline is an ordinary run using shared `DEFAULT_EVALUATORS`; poll while
+  `queued|invoking|waiting|evaluating`.
+- Baseline status transitions call readiness with `force=true`. `evaluating`
+  is enough to refresh because the run service's fresh telemetry ingestion gate
+  has already passed.
+- `sparse` and `unavailable` each require a visible acknowledgement.
+  `unavailable` keeps a manual retry. Baseline failure stays inline and never
+  creates an Experiment row.
+- `OPEN FULL NEW RUN` owns cloud datasets, simulated personas, custom
+  evaluators, and advanced scopes through the return handoff above.
+- Runtime Canary mode is unchanged and has no configuration-readiness gate.

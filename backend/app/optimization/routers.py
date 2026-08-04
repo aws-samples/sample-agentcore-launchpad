@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -10,7 +10,7 @@ from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.evaluation.models import EvalDataset
 from app.models.ledger import Agent
-from app.optimization import service
+from app.optimization import readiness, service
 from app.optimization.models import STAGES, Experiment
 
 router = APIRouter(prefix="/api/experiments", tags=["experiments"])
@@ -40,6 +40,46 @@ def list_experiments(db: Session = Depends(get_db)) -> dict[str, Any]:
     return {"experiments": [_out(e) for e in rows]}
 
 
+def _eligible_agent(agent_id: str, db: Session) -> Agent:
+    agent = db.get(Agent, agent_id)
+    if agent is None or agent.status != "active":
+        raise AppError("agent.not_active", "agent must be active", status_code=400)
+    capability = service.experiment_capability(agent)
+    if not capability["eligible"]:
+        code = "experiment.agent_unsupported"
+        if agent.method == "harness":
+            code = "experiment.method_unsupported"
+        elif (agent.spec or {}).get("protocol") == "a2a":
+            code = "experiment.protocol_unsupported"
+        raise AppError(
+            code,
+            capability["reason"],
+            {"experiment_capability": capability},
+            status_code=400,
+        )
+    return agent
+
+
+@router.get("/readiness")
+def experiment_readiness(
+    agent_id: str = Query(min_length=1, max_length=32),
+    lookback_hours: int = Query(
+        default=readiness.DEFAULT_LOOKBACK_HOURS,
+        ge=readiness.MIN_LOOKBACK_HOURS,
+        le=readiness.MAX_LOOKBACK_HOURS,
+    ),
+    force: bool = False,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    agent = _eligible_agent(agent_id, db)
+    return readiness.project_readiness(
+        agent,
+        db,
+        lookback_hours=lookback_hours,
+        force=force,
+    )
+
+
 @router.get("/{exp_id}")
 def get_experiment(exp_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     exp = db.get(Experiment, exp_id)
@@ -50,6 +90,11 @@ def get_experiment(exp_id: str, db: Session = Depends(get_db)) -> dict[str, Any]
 
 class ExperimentCreate(BaseModel):
     agent_id: str
+    lookback_hours: int = Field(
+        default=readiness.DEFAULT_LOOKBACK_HOURS,
+        ge=readiness.MIN_LOOKBACK_HOURS,
+        le=readiness.MAX_LOOKBACK_HOURS,
+    )
 
 
 @router.post("", status_code=201)
@@ -65,21 +110,18 @@ def create_experiment(req: ExperimentCreate, db: Session = Depends(get_db)) -> d
             "wait for its verdict or clean it up first",
             status_code=409,
         )
-    agent = db.get(Agent, req.agent_id)
-    if agent is None or agent.status != "active":
-        raise AppError("agent.not_active", "agent must be active", status_code=400)
-    capability = service.experiment_capability(agent)
-    if not capability["eligible"]:
-        code = "experiment.agent_unsupported"
-        if agent.method == "harness":
-            code = "experiment.method_unsupported"
-        elif (agent.spec or {}).get("protocol") == "a2a":
-            code = "experiment.protocol_unsupported"
+    agent = _eligible_agent(req.agent_id, db)
+    trace_readiness = readiness.project_readiness(
+        agent,
+        db,
+        lookback_hours=req.lookback_hours,
+    )
+    if trace_readiness["state"] == "missing":
         raise AppError(
-            code,
-            capability["reason"],
-            {"experiment_capability": capability},
-            status_code=400,
+            "experiment.trace_required",
+            "CloudWatch traces are required within the selected lookback window",
+            {"readiness": trace_readiness},
+            status_code=409,
         )
     exp = service.start_experiment(agent)
     return _out(exp)

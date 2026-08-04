@@ -176,6 +176,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/eval/runs"): ADMIN,
     ("GET", "/api/eval/runs/{run_id}"): MEMBER,
     ("GET", "/api/experiments"): MEMBER,
+    ("GET", "/api/experiments/readiness"): MEMBER,
     ("POST", "/api/experiments"): ADMIN,
     ("GET", "/api/experiments/{exp_id}"): MEMBER,
     ("POST", "/api/experiments/{exp_id}/action"): ADMIN,

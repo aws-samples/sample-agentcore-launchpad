@@ -5,6 +5,48 @@
 > per-record progress, and artifact-driven UI, but they have different tables,
 > APIs, state machines, and cleanup ownership.
 
+## Scenario: preparing trace evidence before configuration A/B
+
+Configuration recommendations consume recent CloudWatch traces, so data
+readiness is checked before an Experiment row exists.
+
+```text
+GET  /api/experiments/readiness?agent_id=<id>&lookback_hours=<24..720>&force=<bool>
+POST /api/experiments                 {agent_id, lookback_hours?}
+```
+
+- Readiness returns `{agent_id, lookback_hours, state, trace_count,
+  session_count, latest_trace_at, observed_tools, expected_tools,
+  missing_tools, latest_run, message}` where `state` is
+  `missing|sparse|ready|unavailable`.
+- The projection defaults to a 24-hour prompt window. Operators can extend it
+  to 72, 168, or 720 hours; the API accepts any integer from 24 through 720.
+  Create carries the selected window and applies the missing-trace guard to
+  that same window, so traces older than 24 hours can satisfy the prerequisite.
+- The projection reuses `evaluation.service.resolve_telemetry`, then runs a
+  service-filtered trace/session summary and tool aggregation over
+  `observability.SPANS_SOURCE`. The server-derived service name is encoded as a
+  string literal; no client value enters the Logs Insights query.
+- `missing` means CloudWatch successfully confirmed zero distinct trace ids.
+  `sparse` means traces exist but there are fewer than three distinct sessions,
+  or an expected Agent tool was not observed. Query/transport failure is
+  `unavailable`, never `missing`. Missing log groups are confirmed zero.
+- A 30-second per-Agent-and-window cache bounds scans; `force=true` bypasses it. The newest
+  `EvalRun` is joined on every request as context only. A local run row never
+  proves telemetry readiness.
+- The endpoint applies the same active-Agent and `experiment_capability`
+  validation as create and is member-readable.
+- Create checks readiness after capability validation and before
+  `start_experiment`: `missing` returns `409 experiment.trace_required`
+  without writing a row; `sparse` and `ready` proceed; `unavailable`
+  deliberately fails open. The UI requires a separate acknowledgement for
+  sparse and unavailable states.
+- The short baseline action creates an ordinary local dataset evaluator run
+  with the shared default evaluators and `wait_seconds=180`. The UI polls the
+  run every 2.5 seconds and force-refreshes readiness on status transitions.
+  Advanced run setup remains in the full New Run form.
+- Runtime Canary creation is independent and has no readiness gate.
+
 ## Scenario: driving one configuration A/B stage
 
 ### 1. Scope / Trigger
@@ -21,7 +63,9 @@
 ### 2. Signatures
 
 ```text
-POST /api/experiments                     {agent_id}            → 201 experiment
+POST /api/experiments                     {agent_id, lookback_hours?}       → 201 experiment
+GET  /api/experiments/readiness?agent_id=<id>&lookback_hours=<24..720>&force=<bool>
+                                                                        → readiness
 GET  /api/experiments                                            → {experiments: [...]}
 GET  /api/experiments/{id}                                       → experiment
 POST /api/experiments/{id}/action         ActionRequest          → 200 | 202 {"experiment": ...}
@@ -151,6 +195,7 @@ assert_shared_gateway_available(own_test_name=None) -> None
 | foreign active A/B test on shared Gateway | 409 `experiment.gateway_busy`, with `gateway_arn` and `active_tests` |
 | legacy `canary` or `ramp` action | 410 `experiment.action_moved`, with `runtime_canaries_path` |
 | second concurrent experiment (create) | 409 `experiment.already_running` |
+| confirmed zero recent traces (create) | 409 `experiment.trace_required` |
 
 Prerequisites (`stage_not_ready_reason`): accept←recommend artifact;
 bundles←`recommend.accepted_prompt` OR existing bundles artifact (old-row
@@ -199,7 +244,13 @@ promote←verdict; recommend/cleanup←none.
   `evaluators=[{"evaluatorId": …}]` to `create_online_evaluation_config`
 
 Frontend has NO test runner — verify via the fetch-stub browser evidence
-flow with synthetic experiment states plus a real handoff URL.
+flow with synthetic readiness/run states plus both handoff URL directions.
+
+`backend/tests/optimization/test_experiment_readiness.py` covers the four
+states, dual-read query shape, distinct counts, tool coverage, newest EvalRun
+context, sanitized failure, per-window caching, cache bypass, custom lookback
+validation, static route resolution, the
+confirmed-zero guard, and unavailable fail-open.
 
 ### 7. Wrong vs Correct
 

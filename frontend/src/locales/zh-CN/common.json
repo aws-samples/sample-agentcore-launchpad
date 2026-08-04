@@ -1055,6 +1055,13 @@
     "metaLive": "批量 + 洞察 · LLM 评审 · 每账户 1 个批任务 — 队列托管",
     "acctLock": "批任务运行中 · 账户锁",
     "queueIdle": "队列空闲",
+    "nav": {
+      "label": "评估模块导航",
+      "runs": "运行",
+      "experiments": "实验",
+      "datasets": "数据集",
+      "evaluators": "评估器"
+    },
     "runs": {
       "title": "评估运行",
       "sub": "批量评估历史",
@@ -1064,7 +1071,8 @@
       "evaluators": "评估器",
       "score": "得分",
       "status": "状态",
-      "empty": "还没有运行——点击 + 新建运行"
+      "empty": "还没有运行——点击 + 新建运行",
+      "createExperiment": "创建 BUNDLE A/B 实验"
     },
     "status": {
       "completed": "已完成",
@@ -1142,6 +1150,7 @@
     },
     "runFailedToast": "评估运行失败 — {{agent}}:{{msg}}",
     "backToRuns": "运行列表",
+    "backToExperiment": "返回实验",
     "evaluators": {
       "title": "评估器",
       "meta": "内置目录 · 自定义 LLM 评审 — 创建 / 编辑 / 删除",
@@ -1382,6 +1391,49 @@
     "sub": "config-bundle A/B · 经 gateway 路由",
     "startHint": "AI 建议 → 配置包 → A/B 50/50 → 判定",
     "start": "启动实验",
+    "readiness": {
+      "title": "数据就绪度",
+      "window": "TRACE 时间范围",
+      "windowOption": {
+        "h24": "24 小时",
+        "h72": "3 天",
+        "h168": "7 天",
+        "h720": "30 天"
+      },
+      "loading": "正在检查 CLOUDWATCH TRACE…",
+      "retry": "刷新",
+      "state": {
+        "missing": "缺少数据",
+        "sparse": "数据稀疏",
+        "ready": "已就绪",
+        "unavailable": "暂不可用"
+      },
+      "traces": "去重 TRACE 数",
+      "sessions": "去重会话数",
+      "latest": "最新 TRACE",
+      "latestRun": "最近评估运行",
+      "observedTools": "已观察到的工具",
+      "missingTools": "尚未观察到的工具",
+      "missingHint": "当前时间范围内没有找到该 Agent 的 trace。请扩大时间范围，或先生成基线流量再创建实验。",
+      "sparseAck": "我了解当前证据较少，推荐服务仍可能拒绝本次请求。",
+      "unavailableAck": "在无法验证的情况下继续。CloudWatch 就绪查询暂不可用，后端会在写入前再次检查。",
+      "baselineDataset": "本地基线数据集",
+      "noBaselineDataset": "没有可回放的本地数据集",
+      "generateBaseline": "生成基线 TRACE",
+      "startingBaseline": "正在启动…",
+      "openFullRun": "打开完整的新建运行",
+      "sourceRun": "从 run-{{id}} 打开。其会话仅作为上下文，是否就绪仍以 CloudWatch 为准。",
+      "baselineRun": "基线 run-{{id}} 正在生成新的 trace 证据。",
+      "runSessions": "{{count}} 个会话",
+      "runStatus": {
+        "queued": "排队中",
+        "invoking": "调用中",
+        "waiting": "等待遥测",
+        "evaluating": "评估中",
+        "completed": "已完成",
+        "failed": "失败"
+      }
+    },
     "promote": "晋级",
     "promoted": "已晋级",
     "legacyShift": "历史流量切换",

@@ -1095,6 +1095,10 @@ def test_create_defers_all_stage_work(client, monkeypatch):
 
     monkeypatch.setattr(svc, "control_client", lambda: MagicMock())
     monkeypatch.setattr(svc, "rt_name", lambda control, rid: "RTName")
+    monkeypatch.setattr(
+        "app.optimization.routers.readiness.project_readiness",
+        lambda *_args, **_kwargs: {"state": "ready"},
+    )
     res = client.post("/api/experiments", json={"agent_id": agent_id})
     assert res.status_code == 201
     body = res.json()

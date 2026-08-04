@@ -6,6 +6,7 @@ import { useSearchParams } from "react-router-dom";
 import {
   Btn, Chip, ConfirmDialog, Pager, Panel, useTablePage, useToast, ViewHead,
 } from "../components";
+import { EvaluationNav } from "../components/EvaluationNav";
 import { evaluatorLabel } from "../lib/evaluators";
 
 type Level = "TOOL_CALL" | "TRACE" | "SESSION";
@@ -580,6 +581,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
         title={t("evalPage.evaluators.title")}
         meta={t("evalPage.evaluators.meta")}
       />
+      <EvaluationNav />
       <div style={{ marginBottom: 14 }}>
         <Btn onClick={onBack}>◂ {t("evalPage.backToRuns")}</Btn>
       </div>

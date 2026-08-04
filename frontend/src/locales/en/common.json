@@ -1055,6 +1055,13 @@
     "metaLive": "BATCH + INSIGHTS · LLM-AS-A-JUDGE · 1 BATCH / ACCOUNT — QUEUE MANAGED",
     "acctLock": "BATCH RUNNING · acct lock",
     "queueIdle": "QUEUE IDLE",
+    "nav": {
+      "label": "Evaluation sections",
+      "runs": "RUNS",
+      "experiments": "EXPERIMENTS",
+      "datasets": "DATASETS",
+      "evaluators": "EVALUATORS"
+    },
     "runs": {
       "title": "RUNS",
       "sub": "batch evaluation history",
@@ -1064,7 +1071,8 @@
       "evaluators": "EVALUATORS",
       "score": "SCORE",
       "status": "STATUS",
-      "empty": "NO RUNS YET — PRESS + NEW RUN"
+      "empty": "NO RUNS YET — PRESS + NEW RUN",
+      "createExperiment": "CREATE BUNDLE A/B EXPERIMENT"
     },
     "status": {
       "completed": "COMPLETE",
@@ -1142,6 +1150,7 @@
     },
     "runFailedToast": "Eval run failed — {{agent}}: {{msg}}",
     "backToRuns": "RUNS",
+    "backToExperiment": "BACK TO EXPERIMENT",
     "evaluators": {
       "title": "EVALUATORS",
       "meta": "BUILTIN CATALOG · CUSTOM LLM-AS-A-JUDGE — CREATE / EDIT / DELETE",
@@ -1382,6 +1391,49 @@
     "sub": "config-bundle A/B · gateway routed",
     "startHint": "AI recommendations → bundles → A/B 50/50 → verdict",
     "start": "START EXPERIMENT",
+    "readiness": {
+      "title": "DATA READINESS",
+      "window": "TRACE WINDOW",
+      "windowOption": {
+        "h24": "24 HOURS",
+        "h72": "3 DAYS",
+        "h168": "7 DAYS",
+        "h720": "30 DAYS"
+      },
+      "loading": "CHECKING CLOUDWATCH TRACES…",
+      "retry": "REFRESH",
+      "state": {
+        "missing": "MISSING",
+        "sparse": "SPARSE",
+        "ready": "READY",
+        "unavailable": "UNAVAILABLE"
+      },
+      "traces": "DISTINCT TRACES",
+      "sessions": "DISTINCT SESSIONS",
+      "latest": "LATEST TRACE",
+      "latestRun": "LATEST EVAL RUN",
+      "observedTools": "OBSERVED TOOLS",
+      "missingTools": "TOOLS NOT OBSERVED",
+      "missingHint": "No trace evidence was found in this window. Expand the window or generate baseline traffic before creating the experiment.",
+      "sparseAck": "I understand this evidence is sparse and the recommendation service may still reject it.",
+      "unavailableAck": "Continue without verification. CloudWatch readiness is temporarily unavailable, but the backend will re-check before writing.",
+      "baselineDataset": "LOCAL BASELINE DATASET",
+      "noBaselineDataset": "no local replay dataset available",
+      "generateBaseline": "GENERATE BASELINE TRACES",
+      "startingBaseline": "STARTING…",
+      "openFullRun": "OPEN FULL NEW RUN",
+      "sourceRun": "Opened from run-{{id}}. Its sessions are context only; CloudWatch remains the readiness proof.",
+      "baselineRun": "Baseline run-{{id}} is generating fresh trace evidence.",
+      "runSessions": "{{count}} session(s)",
+      "runStatus": {
+        "queued": "QUEUED",
+        "invoking": "INVOKING",
+        "waiting": "WAITING FOR TELEMETRY",
+        "evaluating": "EVALUATING",
+        "completed": "COMPLETED",
+        "failed": "FAILED"
+      }
+    },
     "promote": "PROMOTE",
     "promoted": "PROMOTED",
     "legacyShift": "LEGACY TRAFFIC SHIFT",

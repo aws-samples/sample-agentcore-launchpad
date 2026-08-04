@@ -6,45 +6,25 @@ import { useSearchParams } from "react-router-dom";
 import {
   Btn, Chip, ConfirmDialog, PAGE_SIZES, Pager, Panel, useToast, ViewHead,
 } from "../components";
+import { EvaluationNav } from "../components/EvaluationNav";
 import type { AgentInfo } from "../lib/api";
 import { api } from "../lib/api";
+import {
+  ACTOR_MODELS,
+  CLOUD_VALUE_PREFIX,
+  DEFAULT_EVALUATORS,
+  SIMULATED_SCHEMA,
+  type CloudDatasetInfo as CloudDataset,
+  type EvaluationDatasetInfo as Dataset,
+  type EvaluationRunInfo as RunInfo,
+  type InsightCluster,
+} from "../lib/evaluation";
 import { evaluatorLabel } from "../lib/evaluators";
 import { DatasetsView } from "./EvaluationDatasets";
 import { EvaluatorsView } from "./EvaluationEvaluators";
 import { ExperimentView } from "./EvaluationExperiment";
 
-interface Dataset {
-  id: string;
-  name: string;
-  kind?: string;
-  locale: string;
-  item_count: number;
-  has_ground_truth?: boolean;
-}
-
-// /api/eval/datasets/cloud row — datasets living only in AWS. Predefined
-// (scenario) datasets replay their turns; simulated persona datasets run the
-// SDK's LLM-actor loop, which needs an actor model picked on the run.
-interface CloudDataset {
-  datasetId: string;
-  name: string;
-  status: string;
-  schemaType: string;
-  exampleCount: number | null;
-}
-
-const CLOUD_VALUE_PREFIX = "cloud:";
-const SIMULATED_SCHEMA = "AGENTCORE_EVALUATION_SIMULATED_V1";
-
 const cloudRunnable = (d: CloudDataset) => d.status === "ACTIVE";
-
-// Bedrock models offered as the simulated-persona actor (us-west-2 verified).
-const ACTOR_MODELS = [
-  "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-  "global.anthropic.claude-sonnet-5",
-  "global.anthropic.claude-sonnet-4-6",
-  "global.amazon.nova-2-lite-v1:0",
-];
 
 interface EvaluatorInfo {
   id: string;
@@ -53,54 +33,6 @@ interface EvaluatorInfo {
   source: "builtin" | "custom";
   requires_ground_truth?: boolean;
 }
-
-interface Score {
-  evaluatorId: string;
-  score: number;
-}
-
-// One cluster of any of the three insight trees (fields verified against a
-// live get_batch_evaluation result — names/messages nest under
-// affectedSessions, NOT at the top level).
-interface InsightCluster {
-  clusterId?: number;
-  name?: string;
-  category?: string; // legacy fallback for failures
-  description?: string;
-  percentage?: number;
-  affectedSessionCount?: number;
-  affectedSessions?: {
-    sessionId?: string;
-    userMessages?: string[];
-    approachTaken?: string;
-    finalOutcome?: string;
-  }[];
-  subCategories?: {
-    name?: string;
-    rootCauses?: { name?: string; recommendation?: string }[];
-  }[];
-}
-
-interface RunInfo {
-  id: string;
-  agent_id: string;
-  agent_name: string;
-  dataset_name: string | null;
-  mode: string;
-  evaluators: string[];
-  status: string;
-  queue_position: number | null;
-  scores: Score[];
-  insights: {
-    failures?: InsightCluster[];
-    userIntents?: InsightCluster[];
-    executionSummaries?: InsightCluster[];
-  };
-  session_ids: string[];
-  error: string | null;
-}
-
-const DEFAULT_EVALUATORS = ["Builtin.Correctness", "Builtin.Helpfulness"];
 
 const INSIGHT_TYPES = [
   "Builtin.Insight.FailureAnalysis",
@@ -194,6 +126,9 @@ export function Evaluation() {
   const [searchParams, setSearchParams] = useSearchParams();
   const view = searchParams.get("view");
   const creating = view === "new";
+  const requestedAgentId = searchParams.get("agent");
+  const returnToExperiment = searchParams.get("return") === "experiment";
+  const returnLookback = searchParams.get("lookback");
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [cloudDatasets, setCloudDatasets] = useState<CloudDataset[]>([]);
@@ -271,7 +206,12 @@ export function Evaluation() {
           (a) => a.status === "active" && a.method !== "discovered_runtime",
         );
         setAgents(eligible);
-        if (eligible.length) setAgentId(eligible[0].id);
+        setAgentId((previous) => {
+          const requested = eligible.find((agent) => agent.id === requestedAgentId);
+          if (requested) return requested.id;
+          if (eligible.some((agent) => agent.id === previous)) return previous;
+          return eligible[0]?.id ?? "";
+        });
       })
       .catch(() => {});
     fetch("/api/eval/datasets")
@@ -299,7 +239,7 @@ export function Evaluation() {
     void refresh();
     const timer = setInterval(() => void refresh(), 8000);
     return () => clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, requestedAgentId]);
 
   // Trajectory matchers score against expected_trajectory ground truth — only
   // dataset runs whose selected dataset carries it can use them. Cloud
@@ -363,9 +303,32 @@ export function Evaluation() {
       setSubmitError(body.message ?? `http ${res.status}`);
       return;
     }
+    const created = (await res.json()) as RunInfo;
     toast(t("evalPage.newRun.submitted"));
-    setSearchParams({}, { replace: true }); // back to the runs list
+    if (returnToExperiment) {
+      setSearchParams({
+        view: "experiment",
+        exp: "new",
+        agent: agentId,
+        ...(returnLookback ? { lookback: returnLookback } : {}),
+        baselineRun: created.id,
+      });
+    } else {
+      setSearchParams({}, { replace: true }); // back to the runs list
+    }
     void refresh();
+  };
+
+  const selectRunAgent = (nextAgentId: string) => {
+    setAgentId(nextAgentId);
+    if (returnToExperiment) {
+      setSearchParams({
+        view: "new",
+        agent: nextAgentId,
+        return: "experiment",
+        ...(returnLookback ? { lookback: returnLookback } : {}),
+      });
+    }
   };
 
   // Contextual re-run from the dashboard: insights over the sessions a
@@ -458,9 +421,23 @@ export function Evaluation() {
           title={t("evalPage.newRun.title")}
           meta={t("evalPage.newRun.sub")}
         />
+        <EvaluationNav />
         <div style={{ marginBottom: 14 }}>
-          <Btn onClick={() => setSearchParams({}, { replace: true })}>
-            ◂ {t("evalPage.backToRuns")}
+          <Btn
+            onClick={() =>
+              returnToExperiment
+                ? setSearchParams({
+                    view: "experiment",
+                    exp: "new",
+                    ...(agentId ? { agent: agentId } : {}),
+                    ...(returnLookback ? { lookback: returnLookback } : {}),
+                  })
+                : setSearchParams({}, { replace: true })
+            }
+          >
+            ◂ {t(returnToExperiment
+              ? "evalPage.backToExperiment"
+              : "evalPage.backToRuns")}
           </Btn>
         </div>
         <div className="eval-grid">
@@ -496,7 +473,8 @@ export function Evaluation() {
               <select
                 className="input"
                 value={agentId}
-                onChange={(e) => setAgentId(e.target.value)}
+                data-testid="run-agent-select"
+                onChange={(e) => selectRunAgent(e.target.value)}
               >
                 {agents.length === 0 && (
                   <option value="">{t("evalPage.newRun.noAgents")}</option>
@@ -741,6 +719,7 @@ export function Evaluation() {
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
               <Btn
                 primary
+                data-testid="start-run-submit"
                 disabled={
                   !agentId ||
                   (scope === "dataset" && !datasetId) ||
@@ -785,6 +764,7 @@ export function Evaluation() {
         title={t("evaluation.title")}
         meta={t("evalPage.metaLive")}
       />
+      <EvaluationNav />
 
       <Panel
         brk
@@ -887,6 +867,26 @@ export function Evaluation() {
         <Panel
           title={t("evalPage.scores.title")}
           sub={selectedRun ? `run-${selectedRun.id.slice(0, 6)} · ${selectedRun.agent_name}` : "—"}
+          end={
+            selectedRun &&
+            selectedRun.session_ids.length > 0 &&
+            agents.find((agent) => agent.id === selectedRun.agent_id)
+              ?.experiment_capability.eligible ? (
+                <Btn
+                  data-testid="run-to-experiment"
+                  onClick={() =>
+                    setSearchParams({
+                      view: "experiment",
+                      exp: "new",
+                      agent: selectedRun.agent_id,
+                      sourceRun: selectedRun.id,
+                    })
+                  }
+                >
+                  {t("evalPage.runs.createExperiment")}
+                </Btn>
+              ) : undefined
+          }
           style={{ "--i": 1 } as CSSProperties}
         >
           {selectedRun?.scores.length ? (

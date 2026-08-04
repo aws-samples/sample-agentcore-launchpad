@@ -1,8 +1,8 @@
 import type { TFunction } from "i18next";
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { FlaskConical, Gauge } from "lucide-react";
+import { ExternalLink, FlaskConical, Gauge, RefreshCw } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 import {
@@ -16,11 +16,31 @@ import {
   useToast,
   ViewHead,
 } from "../components";
+import { EvaluationNav } from "../components/EvaluationNav";
 import type { AgentInfo } from "../lib/api";
 import { api } from "../lib/api";
+import {
+  ACTIVE_RUN_STATUSES,
+  DEFAULT_EVALUATORS,
+  type EvaluationDatasetInfo as DatasetInfo,
+  type EvaluationRunInfo,
+  type ExperimentReadiness,
+} from "../lib/evaluation";
 import { evaluatorLabel } from "../lib/evaluators";
 import { fmtScore } from "../lib/format";
 import { RuntimeCanaryView } from "./EvaluationRuntimeCanary";
+
+const DEFAULT_TRACE_LOOKBACK_HOURS = 24;
+const TRACE_LOOKBACK_OPTIONS = [24, 72, 168, 720] as const;
+
+function traceLookbackFromParam(value: string | null): number {
+  const hours = Number(value);
+  return TRACE_LOOKBACK_OPTIONS.includes(
+    hours as (typeof TRACE_LOOKBACK_OPTIONS)[number],
+  )
+    ? hours
+    : DEFAULT_TRACE_LOOKBACK_HOURS;
+}
 
 export interface ABMetric {
   label: string;
@@ -103,13 +123,6 @@ export interface ExperimentInfo {
     };
     cleanup?: { category: string; status: string }[];
   };
-}
-
-interface DatasetInfo {
-  id: string;
-  name: string;
-  kind: string;
-  item_count: number;
 }
 
 interface EvaluatorInfo {
@@ -224,6 +237,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
         title={t("evalPage.experiment.title")}
         meta={canaryMode ? t("canaryPage.meta") : t("evalPage.experiment.meta")}
       />
+      <EvaluationNav />
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12,
                     alignItems: "center", flexWrap: "wrap", marginBottom: 14 }}>
         <Btn onClick={onBack}>◂ {t("evalPage.backToRuns")}</Btn>
@@ -290,6 +304,13 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
 function ConfigurationExperimentView() {
   const { t } = useTranslation();
   const toast = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const expParam = searchParams.get("exp");
+  const requestedAgentId = searchParams.get("agent");
+  const requestedLookbackHours = traceLookbackFromParam(searchParams.get("lookback"));
+  const baselineRunId = searchParams.get("baselineRun");
+  const sourceRunId = searchParams.get("sourceRun");
+  const creatingNew = expParam === "new";
   const [experiments, setExperiments] = useState<ExperimentInfo[]>([]);
   const [activeAgents, setActiveAgents] = useState<AgentInfo[]>([]);
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
@@ -298,6 +319,18 @@ function ConfigurationExperimentView() {
   const [busy, setBusy] = useState(false);
   const [startAgentId, setStartAgentId] = useState("");
   const [startError, setStartError] = useState<string | null>(null);
+  const [readiness, setReadiness] = useState<ExperimentReadiness | null>(null);
+  const [readinessLoading, setReadinessLoading] = useState(false);
+  const [readinessLookbackHours, setReadinessLookbackHours] = useState(
+    requestedLookbackHours,
+  );
+  const [sparseAcknowledged, setSparseAcknowledged] = useState(false);
+  const [unavailableAcknowledged, setUnavailableAcknowledged] = useState(false);
+  const [baselineDatasetId, setBaselineDatasetId] = useState("");
+  const [baselineBusy, setBaselineBusy] = useState(false);
+  const [trackedRun, setTrackedRun] = useState<EvaluationRunInfo | null>(null);
+  const [trackedRunError, setTrackedRunError] = useState<string | null>(null);
+  const readinessRequest = useRef(0);
   const [trafficDatasetId, setTrafficDatasetId] = useState("");
   const [editedPrompt, setEditedPrompt] = useState<string | null>(null);
   const [editedToolJson, setEditedToolJson] = useState<string | null>(null);
@@ -320,6 +353,51 @@ function ConfigurationExperimentView() {
     }
   }, []);
 
+  const loadReadiness = useCallback(async (force = false) => {
+    if (!startAgentId) {
+      setReadiness(null);
+      return;
+    }
+    const request = ++readinessRequest.current;
+    setReadinessLoading(true);
+    try {
+      const params = new URLSearchParams({
+        agent_id: startAgentId,
+        lookback_hours: String(readinessLookbackHours),
+        ...(force ? { force: "true" } : {}),
+      });
+      const res = await fetch(`/api/experiments/readiness?${params}`);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { message?: string };
+        throw new Error(body.message ?? `HTTP ${res.status}`);
+      }
+      const body = (await res.json()) as ExperimentReadiness;
+      if (request === readinessRequest.current) setReadiness(body);
+    } catch {
+      if (request === readinessRequest.current) {
+        setReadiness({
+          agent_id: startAgentId,
+          lookback_hours: readinessLookbackHours,
+          state: "unavailable",
+          trace_count: 0,
+          session_count: 0,
+          latest_trace_at: null,
+          observed_tools: [],
+          expected_tools: [],
+          missing_tools: [],
+          latest_run: null,
+          message: null,
+        });
+      }
+    } finally {
+      if (request === readinessRequest.current) setReadinessLoading(false);
+    }
+  }, [readinessLookbackHours, startAgentId]);
+
+  useEffect(() => {
+    setReadinessLookbackHours(requestedLookbackHours);
+  }, [requestedLookbackHours]);
+
   useEffect(() => {
     api
       .listAgents()
@@ -327,15 +405,26 @@ function ConfigurationExperimentView() {
         const active = res.agents.filter((a) => a.status === "active");
         const eligible = active.filter((a) => a.experiment_capability.eligible);
         setActiveAgents(active);
-        setStartAgentId((prev) => prev || (eligible[0]?.id ?? ""));
+        setStartAgentId((previous) => {
+          const requested = eligible.find((agent) => agent.id === requestedAgentId);
+          if (requested) return requested.id;
+          if (eligible.some((agent) => agent.id === previous)) return previous;
+          return eligible[0]?.id ?? "";
+        });
       })
       .catch(() => {});
     // simulated datasets need an actor loop — the traffic stage only replays
     // plain prompt sets (legacy / predefined)
     fetch("/api/eval/datasets")
       .then((res) => (res.ok ? res.json() : { datasets: [] }))
-      .then((body: { datasets: DatasetInfo[] }) =>
-        setDatasets(body.datasets.filter((d) => d.kind !== "simulated")))
+      .then((body: { datasets: DatasetInfo[] }) => {
+        const runnable = body.datasets.filter((d) => d.kind !== "simulated");
+        setDatasets(runnable);
+        setBaselineDatasetId((previous) =>
+          runnable.some((dataset) => dataset.id === previous)
+            ? previous
+            : (runnable[0]?.id ?? ""));
+      })
       .catch(() => {});
     // online evaluation scores live traces, so ground-truth-only matchers
     // (Builtin.Trajectory*Match) can never apply here — the backend rejects them
@@ -347,7 +436,55 @@ function ConfigurationExperimentView() {
     void refresh();
     const timer = setInterval(() => void refresh(), 8000);
     return () => clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, requestedAgentId]);
+
+  useEffect(() => {
+    setSparseAcknowledged(false);
+    setUnavailableAcknowledged(false);
+    setStartError(null);
+    void loadReadiness();
+  }, [loadReadiness]);
+
+  const trackedRunId = baselineRunId ?? sourceRunId;
+  useEffect(() => {
+    if (!trackedRunId) {
+      setTrackedRun(null);
+      setTrackedRunError(null);
+      return;
+    }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let priorStatus: string | null = null;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/eval/runs/${trackedRunId}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const run = (await res.json()) as EvaluationRunInfo;
+        if (cancelled) return;
+        setTrackedRun(run);
+        setTrackedRunError(null);
+        if (baselineRunId && run.status !== priorStatus) {
+          priorStatus = run.status;
+          void loadReadiness(true);
+        }
+        if (baselineRunId && ACTIVE_RUN_STATUSES.has(run.status)) {
+          timer = setTimeout(() => void poll(), 2500);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setTrackedRunError(String(error));
+          if (baselineRunId) {
+            timer = setTimeout(() => void poll(), 2500);
+          }
+        }
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [baselineRunId, loadReadiness, trackedRunId]);
 
   const agents = activeAgents.filter((a) => a.experiment_capability.eligible);
   const unsupportedAgents = activeAgents.filter(
@@ -356,14 +493,50 @@ function ConfigurationExperimentView() {
 
   // "?exp=<id>" selects a row from the list (linkable, back-button friendly);
   // "?exp=new" opens the start form even while other experiments exist.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const expParam = searchParams.get("exp");
-  const creatingNew = expParam === "new";
   const exp = creatingNew
     ? null
     : (experiments.find((e) => e.id === expParam) ?? experiments[0] ?? null);
   const selectExp = (id: string | null) => {
-    setSearchParams(id ? { view: "experiment", exp: id } : { view: "experiment" });
+    setSearchParams(
+      id
+        ? {
+            view: "experiment",
+            exp: id,
+            ...(id === "new" && startAgentId ? { agent: startAgentId } : {}),
+            ...(id === "new" && readinessLookbackHours !== DEFAULT_TRACE_LOOKBACK_HOURS
+              ? { lookback: String(readinessLookbackHours) }
+              : {}),
+          }
+        : { view: "experiment" },
+    );
+  };
+  const selectStartAgent = (agentId: string) => {
+    readinessRequest.current += 1;
+    setReadiness(null);
+    setReadinessLoading(!!agentId);
+    setStartAgentId(agentId);
+    if (creatingNew) {
+      setSearchParams({
+        view: "experiment",
+        exp: "new",
+        agent: agentId,
+        ...(readinessLookbackHours !== DEFAULT_TRACE_LOOKBACK_HOURS
+          ? { lookback: String(readinessLookbackHours) }
+          : {}),
+      });
+    }
+  };
+  const selectReadinessLookback = (hours: number) => {
+    readinessRequest.current += 1;
+    setReadiness(null);
+    setReadinessLoading(!!startAgentId);
+    setReadinessLookbackHours(hours);
+    if (creatingNew) {
+      const next = new URLSearchParams(searchParams);
+      if (hours === DEFAULT_TRACE_LOOKBACK_HOURS) next.delete("lookback");
+      else next.set("lookback", String(hours));
+      setSearchParams(next);
+    }
   };
   // per-experiment control state must not leak across row switches
   useEffect(() => {
@@ -418,6 +591,12 @@ function ConfigurationExperimentView() {
     experiments,
     experiments.findIndex((e) => e.id === exp?.id),
   );
+  const readinessMatchesAgent = readiness?.agent_id === startAgentId;
+  const readinessAllowsCreate = readinessMatchesAgent && (
+    readiness.state === "ready"
+    || (readiness.state === "sparse" && sparseAcknowledged)
+    || (readiness.state === "unavailable" && unavailableAcknowledged)
+  );
 
   // old auto-pipeline rows never wrote accepted_* — their bundles artifact
   // marks the recommend card done
@@ -437,7 +616,10 @@ function ConfigurationExperimentView() {
       const res = await fetch("/api/experiments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_id: startAgentId }),
+        body: JSON.stringify({
+          agent_id: startAgentId,
+          lookback_hours: readinessLookbackHours,
+        }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { message?: string };
@@ -450,6 +632,45 @@ function ConfigurationExperimentView() {
       setStartError(String(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const startBaseline = async () => {
+    if (!startAgentId || !baselineDatasetId) return;
+    setBaselineBusy(true);
+    setTrackedRunError(null);
+    try {
+      const res = await fetch("/api/eval/runs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agent_id: startAgentId,
+          dataset_id: baselineDatasetId,
+          mode: "evaluators",
+          evaluators: DEFAULT_EVALUATORS,
+          wait_seconds: 180,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { message?: string };
+        setTrackedRunError(body.message ?? `HTTP ${res.status}`);
+        return;
+      }
+      const run = (await res.json()) as EvaluationRunInfo;
+      setTrackedRun(run);
+      setSearchParams({
+        view: "experiment",
+        exp: "new",
+        agent: startAgentId,
+        ...(readinessLookbackHours !== DEFAULT_TRACE_LOOKBACK_HOURS
+          ? { lookback: String(readinessLookbackHours) }
+          : {}),
+        baselineRun: run.id,
+      });
+    } catch (error) {
+      setTrackedRunError(String(error));
+    } finally {
+      setBaselineBusy(false);
     }
   };
 
@@ -526,6 +747,10 @@ function ConfigurationExperimentView() {
     );
   };
 
+  const readinessTone = readiness?.state === "ready" ? "good"
+    : readiness?.state === "missing" ? "crit"
+      : readiness?.state === "sparse" ? "warn" : "muted";
+
   const startForm = (label: string) => (
     <>
       <div className="field">
@@ -534,7 +759,7 @@ function ConfigurationExperimentView() {
           className="input"
           value={startAgentId}
           data-testid="exp-agent-select"
-          onChange={(e) => setStartAgentId(e.target.value)}
+          onChange={(e) => selectStartAgent(e.target.value)}
         >
           {agents.length === 0 && (
             <option value="">{t("evalPage.newRun.noAgents")}</option>
@@ -561,6 +786,242 @@ function ConfigurationExperimentView() {
           <span>{t("expPage.unsupportedHint")}</span>
         </div>
       )}
+
+      <div
+        data-testid="trace-readiness"
+        style={{
+          border: "1px solid var(--line-2)",
+          borderLeft: `3px solid ${
+            readiness?.state === "ready" ? "var(--good)"
+              : readiness?.state === "missing" ? "var(--crit)"
+                : "var(--warn)"}`,
+          padding: "11px 12px",
+          marginBottom: 10,
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10,
+                      alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+          <div className="mono" style={{ fontSize: 10.5, color: "var(--ink-2)" }}>
+            {t("expPage.readiness.title")}
+          </div>
+          <div style={{ display: "flex", gap: 7, alignItems: "center", flexWrap: "wrap" }}>
+            <label
+              className="mono"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 9.5,
+                color: "var(--ink-2)",
+              }}
+            >
+              {t("expPage.readiness.window")}
+              <select
+                className="input"
+                value={readinessLookbackHours}
+                data-testid="readiness-lookback"
+                aria-label={t("expPage.readiness.window")}
+                onChange={(event) => selectReadinessLookback(Number(event.target.value))}
+                style={{ width: "auto", minWidth: 92, height: 30, padding: "3px 26px 3px 8px" }}
+              >
+                {TRACE_LOOKBACK_OPTIONS.map((hours) => (
+                  <option key={hours} value={hours} style={{ background: "#141816" }}>
+                    {t(`expPage.readiness.windowOption.h${hours}`)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {readiness && (
+              <Chip tone={readinessTone} icon={readiness.state === "ready" ? "●" : "◐"}>
+                {t(`expPage.readiness.state.${readiness.state}`)}
+              </Chip>
+            )}
+            <Btn
+              disabled={readinessLoading || !startAgentId}
+              data-testid="readiness-retry"
+              title={t("expPage.readiness.retry")}
+              onClick={() => void loadReadiness(true)}
+            >
+              <RefreshCw size={13} />
+              {t("expPage.readiness.retry")}
+            </Btn>
+          </div>
+        </div>
+
+        {readinessLoading && !readiness ? (
+          <div className="mono dim" style={{ fontSize: 10 }}>
+            {t("expPage.readiness.loading")}
+          </div>
+        ) : readiness ? (
+          <>
+            <div className="kv">
+              <span className="k mono">{t("expPage.readiness.traces")}</span>
+              <span className="v mono">{readiness.trace_count}</span>
+            </div>
+            <div className="kv">
+              <span className="k mono">{t("expPage.readiness.sessions")}</span>
+              <span className="v mono">{readiness.session_count}</span>
+            </div>
+            <div className="kv">
+              <span className="k mono">{t("expPage.readiness.latest")}</span>
+              <span className="v mono">
+                {readiness.latest_trace_at
+                  ? new Date(readiness.latest_trace_at).toLocaleString()
+                  : "—"}
+              </span>
+            </div>
+            {readiness.latest_run && !trackedRunId && (
+              <div className="kv">
+                <span className="k mono">{t("expPage.readiness.latestRun")}</span>
+                <span className="v mono">
+                  run-{readiness.latest_run.id.slice(0, 6)}
+                  {" · "}
+                  {t(`expPage.readiness.runStatus.${readiness.latest_run.status}`)}
+                  {" · "}
+                  {t("expPage.readiness.runSessions", {
+                    count: readiness.latest_run.session_count,
+                  })}
+                </span>
+              </div>
+            )}
+            {readiness.expected_tools.length > 0 && (
+              <>
+                <div className="kv">
+                  <span className="k mono">{t("expPage.readiness.observedTools")}</span>
+                  <span className="v mono">
+                    {readiness.observed_tools.join(", ") || "—"}
+                  </span>
+                </div>
+                <div className="kv">
+                  <span className="k mono">{t("expPage.readiness.missingTools")}</span>
+                  <span className="v mono">
+                    {readiness.missing_tools.join(", ") || "—"}
+                  </span>
+                </div>
+              </>
+            )}
+
+            {readiness.state === "missing" && (
+              <div className="note" style={{ borderColor: "var(--crit)", marginTop: 10 }}
+                   data-testid="readiness-missing">
+                <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+                <span>{t("expPage.readiness.missingHint")}</span>
+              </div>
+            )}
+            {readiness.state === "sparse" && (
+              <label className="note" style={{ marginTop: 10, cursor: "pointer" }}
+                     data-testid="readiness-sparse">
+                <input
+                  type="checkbox"
+                  checked={sparseAcknowledged}
+                  onChange={(event) => setSparseAcknowledged(event.target.checked)}
+                />
+                <span>{t("expPage.readiness.sparseAck")}</span>
+              </label>
+            )}
+            {readiness.state === "unavailable" && (
+              <label className="note" style={{ marginTop: 10, cursor: "pointer" }}
+                     data-testid="readiness-unavailable">
+                <input
+                  type="checkbox"
+                  checked={unavailableAcknowledged}
+                  onChange={(event) => setUnavailableAcknowledged(event.target.checked)}
+                />
+                <span>{t("expPage.readiness.unavailableAck")}</span>
+              </label>
+            )}
+          </>
+        ) : null}
+
+        {(sourceRunId || baselineRunId) && (
+          <div className="note" style={{ marginTop: 10 }} data-testid="handoff-run">
+            <span className="i">[i]</span>
+            <span>
+              {sourceRunId
+                ? t("expPage.readiness.sourceRun", { id: sourceRunId.slice(0, 6) })
+                : t("expPage.readiness.baselineRun", {
+                    id: baselineRunId?.slice(0, 6) ?? "",
+                  })}
+              {trackedRun && (
+                <>
+                  {" · "}
+                  <span className="mono">
+                    {t(`expPage.readiness.runStatus.${trackedRun.status}`)}
+                    {" · "}
+                    {t("expPage.readiness.runSessions", {
+                      count: trackedRun.session_ids.length,
+                    })}
+                  </span>
+                </>
+              )}
+            </span>
+          </div>
+        )}
+        {trackedRun?.error && (
+          <div className="note" style={{ borderColor: "var(--crit)", marginTop: 8 }}>
+            <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+            <span>{trackedRun.error}</span>
+          </div>
+        )}
+        {trackedRunError && (
+          <div className="note" style={{ borderColor: "var(--crit)", marginTop: 8 }}>
+            <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+            <span>{trackedRunError}</span>
+          </div>
+        )}
+
+        {readiness?.state === "missing" && (
+          <div style={{ marginTop: 12 }}>
+            <label>{t("expPage.readiness.baselineDataset")}</label>
+            <select
+              className="input"
+              value={baselineDatasetId}
+              data-testid="baseline-dataset"
+              onChange={(event) => setBaselineDatasetId(event.target.value)}
+            >
+              {datasets.length === 0 && (
+                <option value="">{t("expPage.readiness.noBaselineDataset")}</option>
+              )}
+              {datasets.map((dataset) => (
+                <option key={dataset.id} value={dataset.id}
+                        style={{ background: "#141816" }}>
+                  {dataset.name} · {dataset.item_count}
+                </option>
+              ))}
+            </select>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8,
+                          flexWrap: "wrap", marginTop: 8 }}>
+              <Btn
+                disabled={baselineBusy || !baselineDatasetId || !!(
+                  trackedRun && ACTIVE_RUN_STATUSES.has(trackedRun.status)
+                )}
+                data-testid="generate-baseline"
+                onClick={() => void startBaseline()}
+              >
+                {baselineBusy ? t("expPage.readiness.startingBaseline")
+                  : t("expPage.readiness.generateBaseline")}
+              </Btn>
+              <Btn
+                data-testid="open-full-run"
+                onClick={() =>
+                  setSearchParams({
+                    view: "new",
+                    agent: startAgentId,
+                    return: "experiment",
+                    ...(readinessLookbackHours !== DEFAULT_TRACE_LOOKBACK_HOURS
+                      ? { lookback: String(readinessLookbackHours) }
+                      : {}),
+                  })
+                }
+              >
+                <ExternalLink size={13} />
+                {t("expPage.readiness.openFullRun")}
+              </Btn>
+            </div>
+          </div>
+        )}
+      </div>
+
       {hasRunning && (
         <div className="note" style={{ marginBottom: 10 }} data-testid="running-guard">
           <span className="i">[i]</span>
@@ -576,7 +1037,10 @@ function ConfigurationExperimentView() {
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
         <Btn
           primary
-          disabled={busy || !startAgentId || hasRunning}
+          disabled={
+            busy || readinessLoading || !startAgentId || hasRunning
+            || !readinessAllowsCreate
+          }
           data-testid="exp-start-btn"
           onClick={() => void onStart()}
         >
