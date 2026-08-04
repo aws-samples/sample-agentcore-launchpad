@@ -26,6 +26,7 @@ export_harness(harness_arn) -> dict[str, str]        # managed CLI, scratch proj
 graft_config_bundle(main_py) -> str                   # raises ConversionError on anchor miss
 graft_direct_kb_tools(main_py) -> str                 # tools=[] import/register graft
 discover_env(files) -> dict[str, str | None]          # wired value | None (degrades)
+discover_skills(files) -> (s3_uris, other_uris)       # *_skill_sources literals in the export
 flatten_requirements(files, platform) -> list[str]    # pyproject deps minus platform names
 conversion_platform_inputs(source) -> (method, model_source, protocol)
 build_conversion_spec(source, files, platform, name) -> AgentSpec
@@ -83,6 +84,17 @@ conversion_notes: dict[str, str] | None # per-capability wiring outcome (UI rend
   token fetch fails — wiring it needs verified AgentCore Identity access
   for the NEW runtime's workload identity (future work). Every outcome is
   recorded in `conversion_notes` and rendered in agent detail.
+- **Skill bundles are carried into `spec.skills`** — union of the source row's
+  `skills` and every `s3://` URI the *exported code* names in a
+  `*_skill_sources` list. `agent_iam` gates the skill S3 read statement on
+  `spec.skills`, and the exported `skills/fetcher.py` fetches those prefixes at
+  request time, so dropping the field produced a deploy that reported success and
+  a runtime that failed at INVOKE with `Failed to resolve S3 skill … AccessDenied`.
+  Derived from the code, not only the ledger row, because the code is what
+  performs the fetch. On the zip path `spec.skills` has exactly one consumer —
+  the IAM grant (`bundle_skills` no-ops for non-studio methods) — so carrying it
+  changes no packaging behaviour. Non-S3 sources get a `skills_non_s3` note
+  instead of a silent claim.
 - Naming: `{source}-rt`, then `-2`, `-3`… against non-deleted names.
 - pyproject deps are flattened into `spec.requirements` minus the package
   names the **platform** already contributes (platform wins; export set
@@ -117,6 +129,7 @@ conversion_notes: dict[str, str] | None # per-capability wiring outcome (UI rend
 | conversion of same source still deploying | 409 `agent.convert_in_flight` |
 | managed AgentCore CLI absent or unusable | 502 `agent.convert_cli_missing`; run `make bootstrap` |
 | export/config or direct-KB graft failure (anchor miss, CLI error) | 502 `agent.convert_failed`, no row |
+| source harness has skill bundles | carried to `spec.skills`; absence is an INVOKE-time AccessDenied, not a deploy failure |
 | bundle w/o main.py, unsafe path, >64 files/1MB, code+code_bundle | 422 (pydantic) |
 
 ### 5. Good/Base/Bad Cases
@@ -148,8 +161,9 @@ platform's *extras* lists, not only the base list); that the platform list hande
 to `resolve_pins` carries the Mantle extras for a Mantle source, and equals what
 the package stage prepends to the spec actually built (drift guard); that two
 consecutive exports of one harness use different `--target-agent-name`s and leave
-no tree behind; code_bundle staging; endpoint guards and clean failures with no
-leftover rows. `backend/tests/test_requirements_pinning.py` proves the platform
+no tree behind; skill carry-over (from the ledger row, from the exported code
+alone, non-S3 flagged, and a skill-free harness claiming nothing); code_bundle
+staging; endpoint guards and clean failures with no leftover rows. `backend/tests/test_requirements_pinning.py` proves the platform
 entries reach the compile input, `--no-deps` is absent, the transitive closure is
 not returned, `platform` is required, and the `mcp==2.0.0` over-pin cannot recur.
 `backend/tests/test_zip_runtime_deployer.py` pins the package stage to exactly
