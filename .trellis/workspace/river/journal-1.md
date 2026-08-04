@@ -1742,3 +1742,25 @@ Added Registry/custom Skill selection and deployment snapshots for generated HTT
 ### Status
 
 [OK] **Completed**
+
+
+## Session 34: Fix evaluation verdict polarity and online judge placeholder validation
+
+**Date**: 2026-08-04
+**Task**: Fix evaluation verdict polarity and online judge placeholder validation
+**Package**: lab4-interactive
+**Branch**: `fix/eval-verdict-polarity`
+
+### Summary
+
+compute_verdict averaged raw t_mean - c_mean across evaluators of opposite polarity: Refusal/Harmfulness/Stereotyping score a penalty (verified against the AWS prompt-templates-builtin rubrics), so a real safety improvement (Refusal 0.2 -> 0.0) contributed -0.2 and read as control-wins -- which also blocked a genuinely improved Runtime Canary at assert_verdict_allows (the gate 409s on control-wins; it is NOT a fully automatic promote/rollback, as first assumed). Added ac.evaluator_polarity() next to the evaluator registry, normalize_ab_results now stamps polarity on every metric, and compute_verdict orients each delta before averaging it, weighted by min(control n, variant n) so a 2-sample evaluator cannot outvote a 40-sample one; avg_delta is now polarity-normalized (positive always favours treatment) with keys/insufficient-* branches unchanged and historical artifacts left as-is. Console renders the raw delta but colours it by polarity and marks lower-is-better evaluators (en+zh-CN), falling back to its own polarity map for pre-change artifacts. Second fix: normalize_online_evaluators passed custom judges through unchecked -- AWS docs say the service itself refuses ground-truth judges (expected_response / expected_tool_trajectory / assertions) in an online eval config, so this was NOT silent empty-ground-truth scoring but a LATE failure at CreateOnlineEvaluationConfig, after stage_gateway had already created the gateway + v1 target; custom ids are now inspected with one GetEvaluator after dedup and the cap (built-in-only selections make zero AWS calls), rejected with 400 experiment.evaluator_unsupported naming the placeholder, not-found -> 400, other errors fail open. 24 new backend tests (1574 total green), spec experiment-stepwise.md updated, fetch-stub browser evidence for en, zh-CN and the polarity-less legacy artifact. make verify PASS; committed as ab7e94c on branch fix/eval-verdict-polarity (not pushed).
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ab7e94c` | (see git log) |
+
+### Status
+
+[OK] **Completed**
