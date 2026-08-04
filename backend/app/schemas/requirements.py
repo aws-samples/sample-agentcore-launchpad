@@ -139,19 +139,39 @@ def _split_name_extras(entry: str) -> tuple[str, str | None]:
 
 def resolve_pins(
     entries: list[str],
+    platform: list[str],
     runner: Callable[..., Any] = subprocess.run,
 ) -> list[str]:
     """Resolve each entry to `name[extras]==version`, preserving input order.
 
     Already-pinned entries and URL/VCS entries pass through untouched. The rest go
-    through `uv pip compile --no-deps`, resolved for the deploy target rather than
-    this host.
+    through `uv pip compile`, resolved for the deploy target rather than this host.
 
-    `--no-deps` keeps the result to the direct requirements — the transitive
-    closure belongs in the build's lockfile, not in a spec. It also **drops
-    extras** from its output (`botocore[crt]` resolves to `botocore==…`), which
-    would silently change what gets installed, so extras are re-attached here from
-    the input.
+    `platform` is every requirement the deploy will install alongside `entries`
+    (`zip_runtime.platform_requirements(...)`), and it goes into the compile input
+    with `entries`. Without it, each entry resolves to the newest release
+    satisfying *that entry alone*, and the package stage — which compiles the two
+    together into a hashed lockfile — can then find the result unsatisfiable, so
+    the agent never produces an artifact at all. Measured instance: `mcp>=1.19.0`
+    alone resolves to `mcp==2.0.0`, but every published `strands-agents` caps
+    `mcp<2.0.0`, so the lock fails.
+
+    There is deliberately **no `--no-deps`**, and no default for `platform`:
+
+    * The caps that matter are usually transitive (nothing names `mcp` directly;
+      `strands-agents` does), so the dependency walk is what makes them visible.
+      Passing `platform` as `--constraint` while keeping `--no-deps` was measured
+      and does *not* work — constraints only bound projects that appear in the
+      resolve, and `--no-deps` never pulls in the edges that carry the cap.
+    * A defaulted `platform` would let a new call site silently reintroduce the
+      isolated resolve. Callers with genuinely no platform contribution pass `[]`.
+
+    The return value stays limited to `entries`: the compile output now carries the
+    whole transitive closure, but only the callers' own names are read out of it
+    (the closure belongs in the build's lockfile, not in a spec). The compile also
+    **drops extras** from its output (`botocore[crt]` resolves to `botocore==…`),
+    which would silently change what gets installed, so extras are re-attached here
+    from the input.
     """
     loose = [entry for entry in entries if not is_pinned(entry) and _strip_marker(entry)]
     if not loose:
@@ -160,10 +180,10 @@ def resolve_pins(
     with tempfile.TemporaryDirectory(prefix="pin-resolve-") as tmp:
         src = Path(tmp) / "requirements.in"
         out = Path(tmp) / "resolved.txt"
-        src.write_text("\n".join(loose) + "\n", encoding="utf-8")
+        src.write_text("\n".join([*platform, *loose]) + "\n", encoding="utf-8")
         proc = runner(
             [
-                "uv", "pip", "compile", str(src), "--no-deps", "--quiet",
+                "uv", "pip", "compile", str(src), "--quiet",
                 "--python-version", _TARGET_PYTHON,
                 "--python-platform", _TARGET_PLATFORM,
                 "-o", str(out),
@@ -173,7 +193,11 @@ def resolve_pins(
         )
         if proc.returncode != 0:
             detail = (proc.stderr or proc.stdout or "").strip()[-1000:]
-            raise ValueError(f"could not resolve requirements to pinned versions: {detail}")
+            raise ValueError(
+                "could not resolve requirements to pinned versions — the input "
+                "includes the platform's own requirement lists, so the conflict "
+                f"may be between those and the requested entries: {detail}"
+            )
         resolved_text = out.read_text(encoding="utf-8")
 
     # name -> "name==version", from the compile output

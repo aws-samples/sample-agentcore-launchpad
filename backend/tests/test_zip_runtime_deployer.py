@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 
 from app.deployer.environment import runtime_environment
-from app.deployer.zip_runtime import _method_requirements, build_zip, sanitize_runtime_name
+from app.deployer.zip_runtime import (
+    _method_requirements,
+    build_zip,
+    platform_requirements,
+    sanitize_runtime_name,
+)
 from app.schemas.agent import AgentSpec
 from app.services.agentcore import runtime as rt
 
@@ -141,6 +146,25 @@ def test_mantle_source_packages_the_openai_extra():
 
 def test_bedrock_source_packages_no_openai_extra():
     assert MANTLE_EXTRA not in _method_requirements(_spec())
+
+
+def test_the_package_stage_is_exactly_platform_plus_spec_requirements():
+    """`platform_requirements` is shared with `resolve_pins` so a pin is resolved
+    against the same graph the lockfile uses. That only holds while the package
+    stage installs precisely `platform + spec.requirements` — if this composition
+    drifts, pins resolve against something the deploy no longer installs.
+    """
+    cases = [
+        _spec(requirements=["httpx==0.28.1"]),
+        _spec(model_source="mantle", model_id="openai.gpt-5.6-sol"),
+        _spec(method="studio", requirements=["strands-agents[openai]==1.47.0"]),
+        _spec(protocol="a2a", requirements=["httpx==0.28.1"]),
+    ]
+    for spec in cases:
+        assert _method_requirements(spec) == (
+            platform_requirements(spec.method, spec.model_source, spec.protocol)
+            + spec.requirements
+        )
 
 
 def test_studio_specs_bring_their_own_extras():

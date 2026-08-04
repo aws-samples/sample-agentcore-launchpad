@@ -11,7 +11,11 @@ import app.routers.agents as agents_router
 import app.services.harness_convert as hc
 from app.core.db import SessionLocal
 from app.core.errors import AppError
-from app.deployer.zip_runtime import write_bundle_files
+from app.deployer.zip_runtime import (
+    _method_requirements,
+    platform_requirements,
+    write_bundle_files,
+)
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
 
@@ -26,9 +30,15 @@ def stub_pin_resolution(monkeypatch):
     shells out to `uv pip compile` and therefore needs the network (or a warm uv
     cache). Stub it so this suite stays hermetic — `resolve_pins` itself is
     covered against a stub runner in test_requirements_pinning.py.
-    """
 
-    def fake_resolve(entries):
+    Records the `platform` argument in `RESOLVED_AGAINST`: the pins are only
+    lockable if the conversion hands over the deploy's full platform contribution,
+    so that argument is part of the contract and needs asserting.
+    """
+    RESOLVED_AGAINST.clear()
+
+    def fake_resolve(entries, platform):
+        RESOLVED_AGAINST.append(list(platform))
         out = []
         for entry in entries:
             if "==" in entry and "*" not in entry:
@@ -40,6 +50,9 @@ def stub_pin_resolution(monkeypatch):
         return out
 
     monkeypatch.setattr(hc, "resolve_pins", fake_resolve)
+
+
+RESOLVED_AGAINST: list[list[str]] = []
 
 
 # ─── graft ───────────────────────────────────────────────────────────────────
@@ -230,6 +243,23 @@ def test_flatten_requirements_dedupes_against_base_pins():
     assert "aws-opentelemetry-distro" in names
 
 
+def test_flatten_requirements_dedupes_against_extras_lists_too():
+    """The platform names `openai` only in MANTLE_EXTRA_REQUIREMENTS, never in the
+    template base list. Handing over only the base list left the Harness's own
+    `openai` in the spec, so the package stage received the project twice —
+    the tell that the conversion was working from a partial platform view."""
+    files = {"pyproject.toml": PYPROJECT.replace(
+        '    "mcp >= 1.19.0",', '    "mcp >= 1.19.0",\n    "openai >= 1.0",'
+    )}
+    platform = platform_requirements("zip_runtime", "mantle")
+    assert any(p.startswith("openai") for p in platform)  # guards the premise
+
+    extras = hc.flatten_requirements(files, platform)
+    names = {e.split(">=")[0].split("[")[0].strip().lower() for e in extras}
+    assert "openai" not in names
+    assert "mcp" in names  # not named by any platform list — must survive
+
+
 # ─── spec + packaging ────────────────────────────────────────────────────────
 def _source_agent():
     return SimpleNamespace(
@@ -353,6 +383,150 @@ def test_build_conversion_spec_carries_model_source(monkeypatch):
 
     assert any("[openai]" in r for r in _method_requirements(converted))
     assert not any("[openai]" in r for r in _method_requirements(legacy))
+
+
+SKILL_URI = "s3://launchpad-artifacts-1-us-west-2/skills/lab-quota-answering/"
+
+
+def test_discover_skills_reads_the_exported_source_lists():
+    files = {
+        "main.py": (
+            "skill_paths = []\n"
+            f's3_skill_sources = ["{SKILL_URI}"]\n'
+            'git_skill_sources = ["https://example.invalid/repo.git"]\n'
+        ),
+        "notes.md": f's3_skill_sources = ["{SKILL_URI}"]',  # not python — ignored
+    }
+    s3_uris, other = hc.discover_skills(files)
+    assert s3_uris == [SKILL_URI]
+    assert other == ["https://example.invalid/repo.git"]
+
+
+def test_conversion_carries_skills_so_the_exec_role_grants_s3_read(monkeypatch):
+    """`agent_iam` gates the skill S3 statement on `spec.skills`. Dropping the
+    field made the deploy report success and the runtime fail at INVOKE with
+    `Failed to resolve S3 skill … AccessDenied`, because the exported code fetches
+    the prefixes it baked in."""
+    monkeypatch.setattr(
+        hc, "get_settings",
+        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
+    )
+    source = _source_agent()
+    source.spec = {**source.spec, "skills": [SKILL_URI]}
+    files = {
+        "main.py": MAIN_PY + f'\ns3_skill_sources = ["{SKILL_URI}"]\n',
+        "pyproject.toml": PYPROJECT,
+    }
+
+    spec = hc.build_conversion_spec(
+        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt"
+    )
+
+    assert spec.skills == [SKILL_URI]
+    assert spec.conversion_notes["skills"].startswith("wired")
+
+
+def test_skills_only_the_exported_code_names_are_still_granted(monkeypatch):
+    """The grant must cover what the CODE fetches. A source row that never
+    recorded the bundle (or recorded it before the export changed) would
+    otherwise authorize the role for the wrong thing."""
+    monkeypatch.setattr(
+        hc, "get_settings",
+        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
+    )
+    source = _source_agent()  # ledger row has NO skills
+    files = {
+        "main.py": MAIN_PY + f'\ns3_skill_sources = ["{SKILL_URI}"]\n',
+        "pyproject.toml": PYPROJECT,
+    }
+
+    spec = hc.build_conversion_spec(
+        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt"
+    )
+
+    assert spec.skills == [SKILL_URI]
+
+
+def test_non_s3_skill_sources_are_flagged_not_silently_claimed(monkeypatch):
+    monkeypatch.setattr(
+        hc, "get_settings",
+        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
+    )
+    files = {
+        "main.py": MAIN_PY
+        + '\ngit_skill_sources = ["https://example.invalid/repo.git"]\n',
+        "pyproject.toml": PYPROJECT,
+    }
+
+    spec = hc.build_conversion_spec(
+        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt"
+    )
+
+    assert spec.skills == []  # no S3 prefix to grant
+    assert spec.conversion_notes["skills_non_s3"].startswith("not verified")
+
+
+def test_a_skill_free_harness_claims_nothing_about_skills(monkeypatch):
+    monkeypatch.setattr(
+        hc, "get_settings",
+        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
+    )
+    spec = hc.build_conversion_spec(
+        _source_agent(),
+        {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT},
+        ["bedrock-agentcore==1.17.*"],
+        "aurora-support-rt",
+    )
+    assert spec.skills == []
+    assert "skills" not in spec.conversion_notes
+    assert "skills_non_s3" not in spec.conversion_notes
+
+
+def test_pins_are_resolved_against_the_specs_own_platform_list(monkeypatch):
+    """A Mantle harness (the lab-quota-advisor shape) must resolve its pins against
+    the Mantle extras too. Resolving against the base list alone is what produced
+    `mcp==2.0.0` — un-lockable, because strands-agents caps `mcp<2.0.0`."""
+    monkeypatch.setattr(
+        hc, "get_settings",
+        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
+    )
+    files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT}
+    mantle_source = _source_agent()
+    mantle_source.spec = {**mantle_source.spec, "model_source": "mantle"}
+
+    platform = platform_requirements(*hc.conversion_platform_inputs(mantle_source))
+    hc.build_conversion_spec(mantle_source, files, platform, "aurora-support-rt")
+
+    assert RESOLVED_AGAINST, "resolve_pins was never called"
+    resolved_against = RESOLVED_AGAINST[-1]
+    assert "strands-agents[openai]>=1.47,<2" in resolved_against
+    assert "openai>=2,<3" in resolved_against
+    assert any(r.startswith("strands-agents[otel]") for r in resolved_against)
+
+
+def test_the_pin_platform_matches_what_the_package_stage_will_prepend(monkeypatch):
+    """Drift guard. The router derives the platform list *before* the spec exists;
+    if that derivation disagrees with the spec actually built, pins are resolved
+    against a graph the deploy never uses — silently reintroducing this whole bug.
+    """
+    monkeypatch.setattr(
+        hc, "get_settings",
+        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
+    )
+    files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT}
+    for model_source in ("bedrock", "mantle"):
+        source = _source_agent()
+        source.spec = {**source.spec, "model_source": model_source}
+
+        # what the router computes up front …
+        platform = platform_requirements(*hc.conversion_platform_inputs(source))
+        spec = hc.build_conversion_spec(source, files, platform, "aurora-support-rt")
+
+        # … must equal what the package stage prepends to the resulting spec
+        assert platform == platform_requirements(
+            spec.method, spec.model_source, spec.protocol
+        )
+        assert _method_requirements(spec) == platform + spec.requirements
 
 
 def test_code_bundle_validation():
@@ -641,18 +815,52 @@ def test_harness_export_uses_managed_cli_path(tmp_path, monkeypatch):
     monkeypatch.setattr(hc, "_run", fake_run)
 
     assert hc.export_harness("arn:harness") == {"main.py": "print('exported')\n"}
-    assert calls == [
-        (
-            [
-                str(cli),
-                "export",
-                "harness",
-                "--arn",
-                "arn:harness",
-                "--build",
-                "CodeZip",
-                "--json",
-            ],
-            project,
-        )
+    assert len(calls) == 1
+    cmd, cwd = calls[0]
+    assert cwd == project
+    target = cmd[cmd.index("--target-agent-name") + 1]
+    assert cmd == [
+        str(cli),
+        "export",
+        "harness",
+        "--arn",
+        "arn:harness",
+        "--target-agent-name",
+        target,
+        "--build",
+        "CodeZip",
+        "--json",
     ]
+
+
+def test_harness_export_never_reuses_a_target_agent_name(tmp_path, monkeypatch):
+    """The CLI derives `<harnessName>Agent` and REFUSES to overwrite it, so a
+    default-named export makes every second conversion of the same harness fail
+    with `A runtime agent named "…" already exists`. A per-call name also stops two
+    concurrent conversions from sharing an export directory.
+    """
+    cli = _managed_cli(tmp_path)
+    scratch = tmp_path / "harness-export"
+    (scratch / hc.SCRATCH_PROJECT).mkdir(parents=True)
+    monkeypatch.setattr(hc, "MANAGED_AGENTCORE_CLI", cli)
+    monkeypatch.setattr(hc, "_SCRATCH_DIR", scratch)
+    targets = []
+
+    def fake_run(cmd, cwd):
+        target = cmd[cmd.index("--target-agent-name") + 1]
+        targets.append(target)
+        exported = tmp_path / "exports" / target
+        exported.mkdir(parents=True)
+        (exported / "main.py").write_text("print('exported')\n")
+        return SimpleNamespace(
+            stdout=json.dumps({"success": True, "agentPath": str(exported)})
+        )
+
+    monkeypatch.setattr(hc, "_run", fake_run)
+
+    for _ in range(2):
+        assert hc.export_harness("arn:harness") == {"main.py": "print('exported')\n"}
+
+    assert len(set(targets)) == 2, "the same target name was reused"
+    # read into memory, then gone: the scratch tree is not an artifact of record
+    assert not [p for p in (tmp_path / "exports").iterdir()]
