@@ -13,6 +13,7 @@ protocolType, targets of type http→agentcoreRuntime so A/B routing happens
 at {gatewayUrl}/{target}/invocations.
 """
 
+import queue
 import re
 import threading
 import time
@@ -41,6 +42,26 @@ EXP_GATEWAY_NAME = "launchpad-exp-gw"
 # experiment used before the set became selectable.
 ONLINE_EVAL_DEFAULT = ("Builtin.GoalSuccessRate", "Builtin.Helpfulness")
 ONLINE_EVAL_MAX = 10  # CreateOnlineEvaluationConfig caps the list at 10
+
+# Ceiling on in-flight gateway posts per traffic send, independent of what
+# `settings.traffic_concurrency` (or a caller) asks for. Every prompt opens its
+# own runtime session, so this is the one knob bounding how hard a replay leans
+# on the target runtime's concurrency quota — keep it a code constant so no
+# yaml/env value can raise it.
+TRAFFIC_MAX_CONCURRENCY = 10
+# Per-request ceiling for a replay post, above sigv4_post's 120s default. A
+# replay is a background stage, so waiting longer is nearly free — whereas the
+# same helper's default guards the *interactive* canary route in
+# services.invoke, where a long wait is paid by a chat caller before the stable
+# endpoint fallback kicks in. Raising it there and here are different decisions,
+# so this one is explicit. Well under the 15min AgentCore sync limit either way:
+# a prompt slower than this fails the stage rather than the sample (see the
+# exception contract below).
+TRAFFIC_REQUEST_TIMEOUT_S = 180.0
+# Outcome for a prompt that was never sent because an earlier one failed
+# fatally. Never surfaces to a caller: its presence implies a stored exception,
+# which send_gateway_traffic raises before it builds a result.
+_TRAFFIC_SKIPPED = object()
 
 _sleep = time.sleep  # injectable
 
@@ -924,26 +945,132 @@ def stage_abtest(exp_id: str, gateway_art: dict, bundle_art: dict) -> dict[str, 
 def send_gateway_traffic(
     gateway_url: str, target: str, prompts: list[str],
     poster: Any = None, signer: Any = None, progress: Progress = _noop,
+    concurrency: int | None = None,
 ) -> dict[str, Any]:
-    """SigV4 POST each prompt through the experiment gateway (A/B routes them)."""
+    """SigV4 POST each prompt through the experiment gateway (A/B routes them).
+
+    Prompts go out **concurrently**, at most ``TRAFFIC_MAX_CONCURRENCY`` in
+    flight, because each prompt is an independent session: its ``uuid4`` session
+    id is pinned into the sticky runtime-session header, so one prompt is one
+    session is one arm and the 50/50 split happens *across* prompts. Nothing is
+    shared between two sends, so the only thing concurrency changes is how long
+    the stage takes (``ceil(N / workers)`` round trips instead of ``N``).
+
+    Three properties the callers depend on:
+
+    * ``progress`` is only ever called on **this** thread. It ends in a ledger
+      write (``_update``), and ten worker threads writing the same SQLite row
+      would contend for the writer lock; the workers therefore do HTTP and
+      nothing else, while completions are consumed here.
+    * ``session_ids`` is ordered by **input prompt order**, not completion order
+      — the ids are minted before submission — so replaying one dataset twice
+      yields comparable artifacts.
+    * An *exception* (expired credentials, DNS, a request slower than
+      ``TRAFFIC_REQUEST_TIMEOUT_S``) still propagates and fails the stage, as it
+      did when this loop was serial: a fatal error must not be laundered into
+      the ``failed`` count — note that this makes one too-slow prompt fail the
+      whole send rather than costing one sample. The workers
+      stop picking up new prompts as soon as one of them fails, so a bad
+      credential does not fire N more doomed requests; requests already in
+      flight finish and are joined first. Which error surfaces is decided by
+      input order, not by which failure came back first.
+
+    Non-200 responses keep counting into ``failed`` (the stage still succeeds).
+    ``status_counts`` breaks those down by status code so a throttled run
+    (``{"200": 47, "429": 3}``) is distinguishable from an agent error — keys are
+    strings because the artifact round-trips through a JSON column, which would
+    stringify int keys anyway.
+    """
     url = f"{gateway_url.rstrip('/')}/{target}/invocations"
-    session_ids: list[str] = []
-    failed = 0
-    for prompt in prompts:
-        session_id = str(uuid.uuid4())
+    # (prompt, session_id) fixed up front: this is what makes the result order
+    # independent of which request happens to come back first
+    seeds = [(prompt, str(uuid.uuid4())) for prompt in prompts]
+    if not seeds:
+        return {"session_ids": [], "sent": 0, "failed": 0, "status_counts": {}}
+
+    limit = get_settings().traffic_concurrency if concurrency is None else concurrency
+    workers = max(1, min(int(limit), TRAFFIC_MAX_CONCURRENCY, len(seeds)))
+
+    def send_one(prompt: str, session_id: str) -> int:
         response = sigv4_post(
             url,
             {"prompt": prompt, "sessionId": session_id},
             session_id=session_id,
             poster=poster,
             signer=signer,
+            timeout=TRAFFIC_REQUEST_TIMEOUT_S,
         )
-        if response.status_code == 200:
+        return int(response.status_code)
+
+    # Hand-rolled daemon workers rather than ThreadPoolExecutor: the executor's
+    # threads are non-daemon and joined by an atexit hook, so a SIGTERM during a
+    # send would hold the process open for a full request timeout. This
+    # whole surface is deliberately daemon-threaded (see _spawn and
+    # clear_stale_running_actions) — a restart kills in-flight work and the
+    # startup sweep turns the stuck row into a retryable error.
+    pending: queue.SimpleQueue[int] = queue.SimpleQueue()   # indices still to send
+    finished: queue.SimpleQueue[int] = queue.SimpleQueue()  # indices reported back
+    for index in range(len(seeds)):
+        pending.put(index)
+    # outcomes[i] is a status code, an exception, or _TRAFFIC_SKIPPED; only ever
+    # written by the one worker that owns index i, so no lock is needed
+    outcomes: list[Any] = [None] * len(seeds)
+    abort = threading.Event()
+
+    def worker() -> None:
+        while True:
+            try:
+                index = pending.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                if abort.is_set():
+                    outcomes[index] = _TRAFFIC_SKIPPED
+                else:
+                    outcomes[index] = send_one(*seeds[index])
+            except BaseException as exc:  # re-raised by the caller, in order
+                outcomes[index] = exc
+                abort.set()  # one fatal error stops the prompts not yet started
+            finally:
+                # unconditional: the caller waits for exactly one report per
+                # index, so a swallowed report would hang the stage
+                finished.put(index)
+
+    threads = [
+        threading.Thread(target=worker, daemon=True, name=f"exp-traffic-{i}")
+        for i in range(workers)
+    ]
+    for thread in threads:
+        thread.start()
+    sent_ok = live_failed = 0
+    for _ in range(len(seeds)):
+        if outcomes[finished.get()] == 200:
+            sent_ok += 1
+        else:
+            live_failed += 1
+        progress(f"sent {sent_ok}/{len(seeds)} ({live_failed} failed)")
+    for thread in threads:
+        thread.join()
+
+    for outcome in outcomes:
+        # first failure in INPUT order, so the surfaced error does not depend on
+        # which request happened to come back first
+        if isinstance(outcome, BaseException):
+            raise outcome
+
+    session_ids: list[str] = []
+    failed = 0
+    status_counts: dict[str, int] = {}
+    for (_, session_id), status in zip(seeds, outcomes, strict=True):
+        status_counts[str(status)] = status_counts.get(str(status), 0) + 1
+        if status == 200:
             session_ids.append(session_id)
         else:
             failed += 1
-        progress(f"sent {len(session_ids)}/{len(prompts)} ({failed} failed)")
-    return {"session_ids": session_ids, "sent": len(session_ids), "failed": failed}
+    return {
+        "session_ids": session_ids, "sent": len(session_ids), "failed": failed,
+        "status_counts": status_counts,
+    }
 
 
 def compute_verdict(metrics: list[dict[str, Any]], min_n: int = 3) -> dict[str, Any]:

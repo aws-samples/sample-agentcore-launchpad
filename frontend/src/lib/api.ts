@@ -173,6 +173,9 @@ export interface RuntimeCanaryInfo {
         dataset_id?: string;
         dataset_name?: string;
         completed_at?: string;
+        // diagnostic breakdown of the send (e.g. {"200": 47, "429": 3});
+        // absent on attempts recorded before the concurrent send landed
+        status_counts?: Record<string, number>;
       }[];
       verdict?: {
         verdict: string;

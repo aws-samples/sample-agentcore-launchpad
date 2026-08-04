@@ -128,6 +128,16 @@ class Settings(BaseSettings):
     # return their final response.
     agentcore_read_timeout_s: int = Field(default=1000, gt=0)
 
+    # How many experiment/canary replay prompts are posted through the A/B gateway
+    # at once (optimization.service.send_gateway_traffic). Each prompt is an
+    # independent session, so this only trades wall clock against how hard the
+    # target runtime is pushed; the effective value is clamped to
+    # TRAFFIC_MAX_CONCURRENCY, never raised by it. Only the lower direction is
+    # interesting in practice: an operator hitting AgentCore throttling needs to
+    # dial this to 3 from yaml/env, and a too-large value must clamp rather than
+    # refuse to boot the app — hence no upper bound here.
+    traffic_concurrency: int = Field(default=10, ge=1)
+
     # Studio local-debug (un-deployed flow execution + AI fix). The control-plane
     # backend env has no strands/openai; generated code runs in the dedicated
     # interpreter provisioned by scripts/setup_exec_env.sh. Endpoints return a
