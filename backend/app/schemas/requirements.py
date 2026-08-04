@@ -186,6 +186,9 @@ def resolve_pins(
                 "uv", "pip", "compile", str(src), "--quiet",
                 "--python-version", _TARGET_PYTHON,
                 "--python-platform", _TARGET_PLATFORM,
+                # Keep conversion-time pins inside the same wheel-only artifact
+                # set the package stage can install for AgentCore Runtime.
+                "--only-binary=:all:",
                 "-o", str(out),
             ],
             capture_output=True,

@@ -91,10 +91,12 @@ conversion_notes: dict[str, str] | None # per-capability wiring outcome (UI rend
   request time, so dropping the field produced a deploy that reported success and
   a runtime that failed at INVOKE with `Failed to resolve S3 skill … AccessDenied`.
   Derived from the code, not only the ledger row, because the code is what
-  performs the fetch. On the zip path `spec.skills` has exactly one consumer —
-  the IAM grant (`bundle_skills` no-ops for non-studio methods) — so carrying it
-  changes no packaging behaviour. Non-S3 sources get a `skills_non_s3` note
-  instead of a silent claim.
+  performs the fetch. Generated platform zip runtimes now snapshot
+  `spec.skills` during packaging, but the `code_bundle` guard in
+  `zip_runtime.bundle_skills` explicitly excludes conversions. For converted
+  agents the field therefore still changes only the IAM grant; the exported
+  `skills/fetcher.py` remains the sole content loader and no duplicate snapshot
+  is added. Non-S3 sources get a `skills_non_s3` note instead of a silent claim.
 - Naming: `{source}-rt`, then `-2`, `-3`… against non-deleted names.
 - pyproject deps are flattened into `spec.requirements` minus the package
   names the **platform** already contributes (platform wins; export set
@@ -113,7 +115,10 @@ conversion_notes: dict[str, str] | None # per-capability wiring outcome (UI rend
   but every published `strands-agents` caps `mcp<2.0.0`. Passing the platform
   list as `--constraint` while keeping `--no-deps` was measured and does NOT
   help (the cap is transitive). `platform` has no default, so a new call site
-  cannot silently reintroduce the isolated resolve.
+  cannot silently reintroduce the isolated resolve. This pre-pin compile uses
+  the same Python 3.13, ARM64 manylinux2014, and `--only-binary=:all:` target as
+  the package lock, so conversion cannot persist a direct sdist-only pin that
+  the package stage is guaranteed to reject.
 - **Each export uses a unique `--target-agent-name`, discarded once read.** The
   CLI derives `<harnessName>Agent` and refuses to overwrite it, so a default-named
   export makes every *second* conversion of the same harness fail with

@@ -56,7 +56,7 @@ real, runnable code in this repo.
 |---|---|
 | **Runtime** | Hosts zip and container agents (`CreateAgentRuntime`); the invoke chain calls the runtime data plane. Agent Management can also scan every `ListAgentRuntimes` page, inspect each resource with `GetAgentRuntime`, and explicitly import HTTP/A2A runtimes as externally owned ledger entries without changing the AWS resource. |
 | **Harness** | Hosts 方式B agents (`CreateHarness`) — a managed entrypoint with no build artifact. |
-| **Memory** | One shared `launchpad_memory` singleton: short-term session events + long-term semantic & user-preference strategies. Namespaces are keyed only on `{actorId}` (there is no `{agentId}` template), so the platform folds the agent id into the actor — `scoped_actor(agent_id, human)` → `<agent>__<human>` — which partitions **both** short-term events and long-term records (`/facts/<agent>__<human>`) per agent. Generated Strands runtimes restore short-term turns through `AgentCoreMemorySessionManager`. Claude Agent SDK containers create one request-local `MemorySessionManager`, inject bounded short-term turns plus `/facts/<actor>` and `/preferences/<actor>` records through a `UserPromptSubmit` hook, then persist the successful USER/ASSISTANT pair as one event. A2A runtimes use `<agent>__a2a__<contextId>` because direct A2A currently has no authenticated human actor envelope. One agent's learned facts never bleed into another's for the same person or A2A context; the ledger still stores the bare human actor for display. |
+| **Memory** | One shared `launchpad_memory` singleton: short-term session events + long-term semantic & user-preference strategies. Namespaces are keyed only on `{actorId}` (there is no `{agentId}` template), so the platform folds the agent id into the actor — `scoped_actor(agent_id, human)` → `<agent>__<human>` — which partitions **both** short-term events and long-term records (`/facts/<agent>__<human>`) per agent. Generated Strands runtimes restore short-term turns through `AgentCoreMemorySessionManager`. Claude Agent SDK containers create one request-local `MemorySessionManager`, inject bounded short-term turns plus `/facts/<actor>` and `/preferences/<actor>` records through a `UserPromptSubmit` hook, then persist the successful USER/ASSISTANT pair as one event. A2A runtimes use `<agent>__a2a__<contextId>` because direct A2A currently has no authenticated human actor envelope; the internal `__agent_card__` factory context is deliberately stateless because it is not a valid Memory session id. One agent's learned facts never bleed into another's for the same person or A2A context; the ledger still stores the bare human actor for display. |
 | **Gateway** | `launchpad-gw` turns a REST API (office-facts) and a Lambda (hr-database) into MCP tools with Cognito-JWT auth; agent tool calls flow through it. |
 | **Identity** | Token vault backing the gateway — an OAuth2 provider (agent outbound auth) and an API-key provider. |
 | **Registry** | `launchpad-registry` catalogues A2A agents, MCP servers, and AGENT_SKILLS. Every deploy auto-creates and submits an A2A record. Governance can import one existing AgentCore Gateway as one MCP record containing the Gateway endpoint and its complete discovered tool catalog; legacy per-target records remain until an explicit retirement after the Gateway record is APPROVED. Registry approval controls catalog visibility, not Gateway authorization. `GET /api/registry/attachables` reports catalog status separately from Harness attachability and resolves Gateway auth server-side. |
@@ -158,10 +158,13 @@ over the declared list — which is what this used to be — installs whatever t
 index serves at that moment, including for the platform's own ranged pins, and
 leaves no record. The stage now runs `uv pip compile --generate-hashes` for the
 deploy target (aarch64, Python 3.13, named once in `zip_runtime.py` so the resolve
-and the install cannot disagree), then installs with `--require-hashes`. A
-substituted or re-uploaded distribution fails the build. The lock ships inside the
-zip as `requirements.lock`, so the artifact carries its own bill of materials.
-There is deliberately no fallback: a resolve failure fails the stage.
+and the install cannot disagree) with `--only-binary=:all:`, then installs those
+same wheel-only candidates with `--require-hashes`. Without the matching binary
+constraint, the resolver can lock an sdist-only release that the Runtime's
+ARM64/manylinux2014 binary-only install rejects. A substituted or re-uploaded
+distribution fails the build. The lock ships inside the zip as
+`requirements.lock`, so the artifact carries its own bill of materials. There
+is deliberately no fallback: a resolve failure fails the stage.
 
 Caller-supplied `spec.requirements` must additionally be pinned at *schema*
 validation (`app/schemas/requirements.py`), so the console rejects a range before a
@@ -212,6 +215,28 @@ before the field existed read back unambiguously and adding a second SDK needs
 no stored-spec migration. There is deliberately **no dispatch** on the field yet:
 `app/deployer/container.py` and `app/templates/claude_sdk_agent/` stay
 unconditional until the category has a second member.
+
+### Registry Skills and deployment snapshots
+
+The Create Agent wizard reads only APPROVED `AGENT_SKILLS` records from
+`GET /api/registry/attachables`. A selection stores the bundle's S3 prefix in
+`AgentSpec.skills`; invocation never searches Registry. The selected prefixes
+also drive the owning agent's `SkillBundle*` IAM statements.
+
+Each method consumes that shared field according to its artifact model:
+
+| Agent shape | Skill materialization | Runtime activation |
+|---|---|---|
+| Harness | Native Harness S3 Skill source | Harness progressive disclosure |
+| Generated zip, HTTP or A2A | Package-time snapshot under `skills/<name>/` | Strands `AgentSkills` plugin, enabled only when at least one packaged `SKILL.md` exists |
+| Container | Image-build snapshot under `.claude/skills/<name>/` | Claude Agent SDK project `Skill` tool |
+| Studio | Generated-code references resolve APPROVED bundles into `skills/<name>/` | Studio-generated `AgentSkills` plugin |
+| Harness-converted `code_bundle` | No platform snapshot; exported fetcher remains authoritative | Exported runtime fetcher |
+
+Registry edits and reimports do not hot-update zip, container, or Studio
+artifacts. Re-publish the agent to capture a new snapshot. A2A has two separate
+Skill concepts: `AgentSpec.skills` mounts instruction/resource bundles, while
+`AgentSpec.a2a_skills` publishes AgentCard routing metadata.
 
 ### Model source (方式B + 方式C)
 

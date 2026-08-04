@@ -85,6 +85,7 @@ def test_build_zip_resolves_a_hashed_lock_for_the_deploy_target(tmp_path: Path):
     assert "--generate-hashes" in cmd
     assert "aarch64-manylinux2014" in cmd
     assert "3.13" in cmd
+    assert "--only-binary=:all:" in cmd
 
 
 def test_build_zip_reports_the_locked_package_count(tmp_path: Path):
@@ -448,13 +449,116 @@ def test_bundle_skills_enforces_size_cap(tmp_path):
     assert any("exceeds 50MB cap" in m for m in logs)
 
 
-def test_bundle_skills_noop_for_non_studio_method(tmp_path):
-    """Non-studio agents never touch the registry or S3 (no injection given)."""
-    code = 'os.path.join(_skills_dir, "pirate-speak")'
+@pytest.mark.parametrize("protocol", ["http", "a2a"])
+def test_bundle_skills_uses_explicit_paths_for_generated_zip_runtimes(
+    tmp_path, protocol
+):
+    spec = AgentSpec(
+        name=f"tmpl-{protocol}",
+        method="zip_runtime",
+        protocol=protocol,
+        system_prompt="s",
+        skills=["s3://bkt/skills/pirate-speak/"],
+    )
+    stub_s3 = StubS3(
+        {
+            ("bkt", "skills/pirate-speak/"): [
+                {"Key": "skills/pirate-speak/SKILL.md", "Size": 12},
+                {"Key": "skills/pirate-speak/refs/voice.txt", "Size": 5},
+            ],
+        },
+        {
+            "skills/pirate-speak/SKILL.md": b"pirate skill",
+            "skills/pirate-speak/refs/voice.txt": b"arrrr",
+        },
+    )
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    result = bundle_skills(spec, "generated template", pkg, lambda _m: None, s3_client=stub_s3)
+
+    assert result == {"bundled": ["pirate-speak"], "files": 2, "bytes": 17}
+    assert (pkg / "skills" / "pirate-speak" / "SKILL.md").read_bytes() == b"pirate skill"
+    assert (pkg / "skills" / "pirate-speak" / "refs" / "voice.txt").read_bytes() == b"arrrr"
+
+
+def test_bundle_skills_noop_for_generated_zip_without_selected_skills(tmp_path):
     spec = AgentSpec(name="tmpl-x", method="zip_runtime", system_prompt="s")
     pkg = tmp_path / "pkg"
     pkg.mkdir()
+    result = bundle_skills(spec, "generated template", pkg, lambda _m: None)
+
+    assert result == {"bundled": [], "files": 0, "bytes": 0}
+    assert not (pkg / "skills").exists()
+
+
+def test_bundle_skills_skips_failed_explicit_path_without_failing(tmp_path):
+    spec = AgentSpec(
+        name="tmpl-skip",
+        method="zip_runtime",
+        system_prompt="s",
+        skills=["s3://bkt/skills/broken-skill/"],
+    )
+    stub_s3 = StubS3(
+        {
+            ("bkt", "skills/broken-skill/"): [
+                {"Key": "skills/broken-skill/SKILL.md", "Size": 10},
+                {"Key": "skills/broken-skill/refs/missing.txt", "Size": 4},
+            ],
+        },
+        {
+            "skills/broken-skill/SKILL.md": b"skill body",
+        },  # the second download raises after SKILL.md has landed
+    )
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    logs: list[str] = []
+
+    result = bundle_skills(spec, "generated template", pkg, logs.append, s3_client=stub_s3)
+
+    assert result == {"bundled": [], "files": 0, "bytes": 0}
+    assert stub_s3.downloaded == ["skills/broken-skill/SKILL.md"]
+    assert not (pkg / "skills" / "broken-skill").exists()
+    assert any("broken-skill' download failed (KeyError)" in message for message in logs)
+
+
+def test_bundle_skills_skips_invalid_explicit_path_name(tmp_path):
+    spec = AgentSpec(
+        name="tmpl-invalid-path",
+        method="zip_runtime",
+        system_prompt="s",
+        skills=["s3://bkt/skills/.."],
+    )
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    logs: list[str] = []
+
+    result = bundle_skills(spec, "generated template", pkg, logs.append)
+
+    assert result == {"bundled": [], "files": 0, "bytes": 0}
+    assert not (pkg / "skills").exists()
+    assert logs == ["skill path has invalid name '..' — skipped"]
+
+
+def test_bundle_skills_noop_for_converted_code_bundle(tmp_path):
+    """Converted exports fetch their own Skills at request time.
+
+    ``spec.skills`` is retained only so the per-agent role can read those
+    prefixes; package-time snapshotting would duplicate and change that runtime
+    contract.
+    """
+    code = 'os.path.join(_skills_dir, "exported-skill")'
+    spec = AgentSpec(
+        name="converted-x",
+        method="zip_runtime",
+        system_prompt="s",
+        code_bundle={"main.py": code, "skills/fetcher.py": "# exported fetcher"},
+        skills=["s3://bkt/skills/exported-skill/"],
+    )
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+
     result = bundle_skills(spec, code, pkg, lambda _m: None)
+
     assert result == {"bundled": [], "files": 0, "bytes": 0}
     assert not (pkg / "skills").exists()
 

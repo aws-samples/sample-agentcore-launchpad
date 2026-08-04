@@ -35,7 +35,8 @@ def render_main_py(spec: AgentSpec) -> str:
     )
     system_prompt = spec.system_prompt + kb_prompt_section(kbs)
     return (
-        source.replace("__LAUNCHPAD_AGENT_NAME__", spec.name)
+        source.replace("__LAUNCHPAD_SKILLS_ENABLED__", repr(bool(spec.skills)))
+        .replace("__LAUNCHPAD_AGENT_NAME__", spec.name)
         .replace("__LAUNCHPAD_MODEL_ID__", spec.model_id)
         .replace("__LAUNCHPAD_MODEL_SOURCE__", spec.model_source)
         .replace("__LAUNCHPAD_SYSTEM_PROMPT__", repr(system_prompt))

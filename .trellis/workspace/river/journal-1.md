@@ -1720,3 +1720,25 @@ Verified merged PR #11, recorded merge metadata, and archived the completed trac
 ### Next Steps
 
 - None; task is archived.
+
+
+## Session 33: Zip runtime Registry Skills
+
+**Date**: 2026-08-04
+**Task**: Zip runtime Registry Skills
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Added Registry/custom Skill selection and deployment snapshots for generated HTTP/A2A zip runtimes; preserved Studio and Harness-conversion semantics; aligned wheel-only resolution; fixed A2A internal card Memory context; verified make verify plus real Portal/AWS HTTP, A2A, and Skill-bearing Harness conversion flows; cleaned temporary resources.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6ec46da` | (see git log) |
+
+### Status
+
+[OK] **Completed**

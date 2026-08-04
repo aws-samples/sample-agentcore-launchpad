@@ -206,7 +206,7 @@ class TestResolvePins:
                 ["wanted>=1"], [], runner=self._runner("something-else==1.0.0\n")
             )
 
-    def test_the_resolve_targets_the_deploy_platform_not_this_host(self):
+    def test_the_resolve_matches_the_deploy_target_and_artifact_type(self):
         seen = {}
 
         def capture(cmd, capture_output=True, text=True):
@@ -217,6 +217,7 @@ class TestResolvePins:
         resolve_pins(["x>=1"], [], runner=capture)
         assert "aarch64-manylinux2014" in seen["cmd"]
         assert "3.13" in seen["cmd"]
+        assert "--only-binary=:all:" in seen["cmd"]
 
     def test_the_dependency_walk_is_not_disabled(self):
         """`--no-deps` would hide the transitive caps that make a pin lockable —

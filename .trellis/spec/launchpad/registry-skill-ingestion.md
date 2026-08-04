@@ -24,9 +24,11 @@ or alter validation caps. Introduced by task `07-11-registry-skill-multi-source`
   `07-12-skill-desc-1024-prevalidation`: `SKILL_DESCRIPTION_MAX_CHARS = 1024`
   checked in `bundle_errors` — fails at inspect (422 / invalid row) with zero
   S3 churn.
-- Multi-file bundle bytes live at `s3://{artifacts_bucket}/skills/{name}/`;
-  the deploy-time consumer (`deployer/zip_runtime.py:bundle_skills_into`)
-  downloads the whole prefix, so producer-side changes need no consumer edits.
+- Multi-file bundle bytes live at `s3://{artifacts_bucket}/skills/{name}/`.
+  The deploy-time consumers (`bundle_skills_into` for Studio and
+  `bundle_skill_paths_into` for generated zip/container artifacts) converge on
+  the same whole-prefix downloader, so producer-side changes need no consumer
+  edits.
 
 > Extended by task `07-12-registry-subpage-register-edit` (commits 67d7348 /
 > a2d6be2): register/edit are standalone `?view=` sub-pages and records are

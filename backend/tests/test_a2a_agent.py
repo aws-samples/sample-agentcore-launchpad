@@ -1,9 +1,16 @@
 """A2A-protocol agents — spec validation, template, deploy params, invoke,
 card enrichment, experiment gating."""
 
+import importlib.util
 import json
+import sys
+import types
+from pathlib import Path
 
 import pytest
+import strands
+import strands.multiagent as strands_multiagent
+from fastapi import FastAPI
 from pydantic import ValidationError
 
 from app.core.db import SessionLocal
@@ -20,6 +27,53 @@ SKILL = {"id": "faq", "name": "Product FAQ",
 def _spec(**kw) -> AgentSpec:
     base = {"name": "a2a-check", "method": "zip_runtime", "system_prompt": "You help."}
     return AgentSpec(**{**base, **kw})
+
+
+class _FakeA2AServer:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.strands_agent = kwargs["agent_factory"]("__agent_card__")
+
+    def to_fastapi_app(self):
+        return FastAPI()
+
+
+class _FakeAgentSkill:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+def _import_a2a_rendered(
+    spec: AgentSpec,
+    tmp_path: Path,
+    monkeypatch,
+    stem: str,
+    *,
+    disable_memory: bool = True,
+):
+    code, _ = _generate_code(spec)
+    monkeypatch.setattr(strands, "Agent", lambda **kwargs: types.SimpleNamespace(**kwargs))
+    monkeypatch.setattr(strands, "tool", lambda fn: fn)
+    a2a_package = types.ModuleType("a2a")
+    a2a_package.__path__ = []
+    a2a_types = types.ModuleType("a2a.types")
+    a2a_types.AgentSkill = _FakeAgentSkill
+    a2a_package.types = a2a_types
+    strands_a2a = types.ModuleType("strands.multiagent.a2a")
+    strands_a2a.A2AServer = _FakeA2AServer
+    monkeypatch.setitem(sys.modules, "a2a", a2a_package)
+    monkeypatch.setitem(sys.modules, "a2a.types", a2a_types)
+    monkeypatch.setitem(sys.modules, "strands.multiagent.a2a", strands_a2a)
+    monkeypatch.setattr(strands_multiagent, "a2a", strands_a2a, raising=False)
+    if disable_memory:
+        monkeypatch.delenv("LAUNCHPAD_MEMORY_ID", raising=False)
+    target = tmp_path / f"{stem}.py"
+    target.write_text(code, encoding="utf-8")
+    module_spec = importlib.util.spec_from_file_location(stem, target)
+    assert module_spec is not None and module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    return module
 
 
 # ─── spec validation ─────────────────────────────────────────────────────────
@@ -51,7 +105,11 @@ def test_a2a_skills_need_a2a_protocol_and_unique_ids():
 
 # ─── template + generate dispatch ────────────────────────────────────────────
 def test_a2a_template_renders_compiles_and_carries_skills():
-    spec = _spec(protocol="a2a", a2a_skills=[A2ASkill(**SKILL)])
+    spec = _spec(
+        protocol="a2a",
+        skills=["s3://launchpad-artifacts/skills/pirate-speak/"],
+        a2a_skills=[A2ASkill(**SKILL)],
+    )
     code, source = _generate_code(spec)
     assert source == "strands A2A template"
     compile(code, "main.py", "exec")  # brace-safe contract
@@ -61,6 +119,95 @@ def test_a2a_template_renders_compiles_and_carries_skills():
     assert "AGENTCORE_RUNTIME_URL" in code
     assert "AgentCoreMemorySessionManager" in code
     assert 'actor_id=f"{AGENT_NAME}__a2a__{context_id}"' in code
+    assert "SKILLS_ENABLED = True" in code
+    assert "AgentSkills(skills=str(SKILLS_ROOT))" in code
+    assert 'kwargs["plugins"] = plugins' in code
+
+
+def test_a2a_template_without_mounted_skills_disables_plugin():
+    code, _ = _generate_code(_spec(protocol="a2a", a2a_skills=[A2ASkill(**SKILL)]))
+
+    compile(code, "main.py", "exec")
+    assert "SKILLS_ENABLED = False" in code
+    assert "'id': 'faq'" in code  # AgentCard metadata remains independent
+
+
+def test_a2a_skill_plugin_lifecycle_and_card_independence(tmp_path: Path, monkeypatch):
+    class FakeAgentSkills:
+        def __init__(self, *, skills):
+            self.skills = skills
+
+    monkeypatch.delattr(strands, "AgentSkills", raising=False)
+    module = _import_a2a_rendered(
+        _spec(
+            protocol="a2a",
+            skills=["s3://launchpad-artifacts/skills/pirate-speak/"],
+            a2a_skills=[A2ASkill(**SKILL)],
+        ),
+        tmp_path,
+        monkeypatch,
+        "a2a_skill_main",
+    )
+
+    assert module.SKILLS_ENABLED is True
+    assert not hasattr(module.agent_factory("missing-content"), "plugins")
+    assert module.server.kwargs["skills"][0].id == "faq"
+
+    skill_dir = tmp_path / "skills" / "pirate-speak"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Pirate speech", encoding="utf-8")
+    monkeypatch.setattr(strands, "AgentSkills", FakeAgentSkills, raising=False)
+
+    mounted = module.agent_factory("mounted-content")
+    assert mounted.plugins[0].skills == str(tmp_path / "skills")
+
+    disabled = _import_a2a_rendered(
+        _spec(protocol="a2a"),
+        tmp_path,
+        monkeypatch,
+        "a2a_no_skill_main",
+    )
+    assert disabled.SKILLS_ENABLED is False
+    assert not hasattr(disabled.agent_factory("disabled"), "plugins")
+
+
+def test_a2a_card_context_skips_memory_but_real_context_keeps_it(tmp_path: Path, monkeypatch):
+    import bedrock_agentcore.memory.integrations.strands.session_manager as memory_module
+
+    class FakeSessionManager:
+        def __init__(self, config, *, region_name):
+            self.config = config
+            self.region_name = region_name
+
+    monkeypatch.setattr(memory_module, "AgentCoreMemorySessionManager", FakeSessionManager)
+    monkeypatch.setenv("LAUNCHPAD_MEMORY_ID", "memory-id")
+
+    module = _import_a2a_rendered(
+        _spec(protocol="a2a"),
+        tmp_path,
+        monkeypatch,
+        "a2a_memory_card_main",
+        disable_memory=False,
+    )
+
+    assert not hasattr(module.server.strands_agent, "session_manager")
+    for invalid_context in ("", "_internal", "bad/context"):
+        assert not hasattr(module.agent_factory(invalid_context), "session_manager")
+    actual = module.agent_factory("context-123")
+    assert actual.session_manager.config.session_id == "context-123"
+    assert actual.session_manager.config.actor_id == "a2a-check__a2a__context-123"
+
+
+def test_a2a_render_preserves_skills_placeholder_literal_in_prompt():
+    code, _ = _generate_code(
+        _spec(
+            protocol="a2a",
+            system_prompt="Keep __LAUNCHPAD_SKILLS_ENABLED__ literal.",
+        )
+    )
+
+    assert "SYSTEM_PROMPT = 'Keep __LAUNCHPAD_SKILLS_ENABLED__ literal.'" in code
+    assert "SKILLS_ENABLED = False" in code
 
 
 def test_http_template_untouched_by_protocol_field():
