@@ -93,8 +93,10 @@ export interface ExperimentInfo {
     gateway?: { gateway_id: string; gateway_url?: string; target_v1?: string;
       online_evaluators?: string[] };
     abtest?: { ab_test_id: string };
+    // status_counts is diagnostic only (throttling shows up as a "429" bucket);
+    // absent on artifacts written before the concurrent send landed
     traffic?: { sent: number; failed: number; dataset_id?: string;
-      dataset_name?: string };
+      dataset_name?: string; status_counts?: Record<string, number> };
     verdict?: { verdict: string; avg_delta?: number; n?: number;
       significant?: boolean; metrics: ABMetric[] };
     promotion_attempt?: {

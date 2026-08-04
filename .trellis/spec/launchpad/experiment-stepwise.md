@@ -91,6 +91,9 @@ action_bundles(exp)  # sync
 stage_not_ready_reason(exp, action) -> str | None
 system_prompt_rec_failed(rec) -> bool  # stored recommend artifact → prompt job failed?
 resolve_traffic_prompts(dataset) -> list[str]
+send_gateway_traffic(gateway_url, target, prompts, poster=None, signer=None,
+                     progress=_noop, concurrency=None)
+    -> {session_ids, sent, failed, status_counts}   # bounded-concurrent send
 normalize_online_evaluators(ids, control=None) -> list[str]  # None/empty → ONLINE_EVAL_DEFAULT
 create_bundle_idempotent(control, **kwargs)    # conflict-adopt via ListConfigurationBundles
 clear_stale_running_actions() -> list[str]     # startup sweep (main.py resume block)
@@ -125,6 +128,13 @@ assert_shared_gateway_available(own_test_name=None) -> None
     `tool_error`).
   - `traffic.dataset_id` / `traffic.dataset_name` — the replay dataset used
     to generate traffic. There is no built-in prompt fallback.
+  - `traffic.status_counts` — `{"<http status>": count}` for the send
+    (`{"200": 47, "429": 3}`), so a throttled replay is distinguishable from an
+    agent error; both only ever showed up as `failed` before. Keys are strings
+    because the artifact round-trips through a JSON column. Additive: artifacts
+    written before it exists simply lack the key, and the console still renders
+    only `sent`/`failed`. The canary equivalent carries it inside each
+    `rounds[].traffic_attempts[]` entry.
   - `gateway.online_evaluators` — the evaluator ids the online evaluation
     config was created with (records the *request*: a name-conflict adoption
     keeps the pre-existing config's own set, which is never rewritten).
@@ -354,6 +364,45 @@ The traffic stage accepts any legacy/predefined `EvalDataset`; prompt
 extraction reuses `app.evaluation.scenarios.scenario_prompts` so dict turn
 inputs unwrap exactly as in eval replay. Simulated datasets are rejected —
 they need an actor loop, not a fire-and-forget prompt replay.
+
+### Bounded-concurrent traffic send
+
+`send_gateway_traffic` posts prompts **concurrently**, shared by configuration
+A/B and Runtime Canary. Every prompt mints its own `uuid4` session id, pinned
+into the sticky runtime-session header, so one prompt is one session is one arm
+and the 50/50 (or 90/10) split happens *across* prompts — concurrency compresses
+the send window without touching arm assignment.
+
+Five properties any change here must keep:
+
+- **Hard cap.** `TRAFFIC_MAX_CONCURRENCY = 10` bounds in-flight posts. Effective
+  width is `min(requested, cap, len(prompts))`, floor 1. `settings.traffic_concurrency`
+  (`LAUNCHPAD_TRAFFIC_CONCURRENCY`, default 10, `ge=1`) is the dial-down knob for
+  an operator hitting AgentCore throttling; an oversized value **clamps** rather
+  than failing app startup, so no yaml/env value can raise the cap.
+- **No ledger writes off the calling thread.** `progress` ends in `_update`
+  (SQLite), so the workers do HTTP and nothing else while the caller consumes
+  completions and emits `sent x/N (y failed)`. Ten workers writing one row would
+  contend for the writer lock.
+- **Input-order results.** `session_ids` follows prompt order, not completion
+  order (ids are minted before dispatch), and the exception that surfaces is the
+  first in input order — neither depends on which request returned first.
+- **Failures keep their old meanings.** Non-200 → `failed`, stage succeeds.
+  An exception → propagates, stage fails; workers stop taking new prompts once
+  one fails, so a bad credential does not fire N more doomed requests. A request
+  slower than `TRAFFIC_REQUEST_TIMEOUT_S` (180s, passed explicitly — `sigv4_post`
+  keeps its 120s default for the *interactive* canary route in `services.invoke`,
+  where the wait precedes the stable-endpoint fallback) raises, so one too-slow
+  prompt fails the send rather than costing one sample.
+- **Daemon workers, not `ThreadPoolExecutor`.** The executor's threads are
+  non-daemon and joined by an atexit hook, which would hold a SIGTERM'd process
+  open for the full 120s request timeout. This surface is deliberately
+  daemon-threaded (`_spawn`), with `clear_stale_running_actions()` turning the
+  killed row into a retryable error.
+
+Tests must prove concurrency by *observed overlap* (a `threading.Barrier` that
+only trips when N requests are in flight together), not by counting calls — a
+call-count assertion passes against a serial loop too.
 
 > **Warning**: AgentCore permits only one active A/B test per Gateway.
 > **Configuration A/B** uses the single shared `EXP_GATEWAY_NAME`, so its
