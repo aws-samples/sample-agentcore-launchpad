@@ -199,7 +199,10 @@ the spec, so an unpinned requirement is now refused.
 > **Why the shared role still exists and still carries broad grants.** It backs
 > agents that have not been re-published yet. Reducing it before every agent has moved
 > would strip grants from agents still using it. That reduction is deliberately not
-> done yet — see `docs/threat-model-summary.md` for what remains open on T3.
+> done yet, and neither is the trust-policy `aws:SourceArn` condition (off pending a
+> probe of whether AgentCore sends that key). Note also what per-agent roles do **not**
+> give you: memory stays a single shared instance partitioned by actor id, not by IAM,
+> and the account's 1000-role quota is now consumed one role per agent.
 
 **A green deploy does not prove a policy is correct.** These policies are scoped per
 spec, and an over-tight statement fails at **invoke** time, not deploy time. After

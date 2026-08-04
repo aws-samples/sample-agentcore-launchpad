@@ -181,8 +181,10 @@ cd backend && uv run python scripts/migrate_agent_roles.py
 未固定版本的依赖现在会被拒。
 
 > **为什么共享角色仍然存在、且仍带着宽泛授权。** 它支撑那些尚未重新发布的 agent。在所有
-> agent 迁移完成前缩减它,会直接抽掉仍在使用它的 agent 的授权。这项缩减刻意尚未执行——
-> T3 还有哪些未完成,见 `docs/threat-model-summary.md`。
+> agent 迁移完成前缩减它,会直接抽掉仍在使用它的 agent 的授权。这项缩减刻意尚未执行;
+> 信任策略里的 `aws:SourceArn` 条件同样尚未启用(需先探明 AgentCore 是否会发送该 key)。
+> 另外注意 per-agent 角色**不**提供什么:记忆仍是单一共享实例、按 actor id 分区而非按
+> IAM 隔离,而账号的 1000 个角色配额现在按每个 agent 一个的速度消耗。
 
 **部署成功并不能证明策略正确。** 这些策略是按 spec 收窄的,而过紧的语句会在**调用**时
 失败,而不是部署时。迁移之后,请逐个调用 agent 并检查 CloudTrail 是否出现
