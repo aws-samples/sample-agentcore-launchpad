@@ -1764,3 +1764,25 @@ compute_verdict averaged raw t_mean - c_mean across evaluators of opposite polar
 ### Status
 
 [OK] **Completed**
+
+
+## Session 35: Remediate ProbeScan security audit findings
+
+**Date**: 2026-08-04
+**Task**: Remediate ProbeScan security audit findings
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Reconciled all 94 ProbeScan findings, upgraded vulnerable Studio dependencies, hardened Docker/WebSocket/DOM behavior, documented audited false positives, and passed make verify plus Studio browser validation.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b4c92f8` | (see git log) |
+
+### Status
+
+[OK] **Completed**
