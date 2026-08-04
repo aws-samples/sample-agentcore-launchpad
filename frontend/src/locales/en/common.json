@@ -1538,6 +1538,7 @@
     "eligibilityHint": "Only active HTTP AgentCore Runtime agents can be canaried. Disabled reasons come from the backend capability contract.",
     "experimentalOnly": "The weights below split REAL production traffic for this agent through a dedicated canary gateway. Promote and roll back really change what production serves.",
     "setup": "SET UP 90/10",
+    "setupIncomplete": "Setup did not finish. The dedicated gateway and stable endpoint exist, but the candidate A/B test does not — production still serves the current version. Setup cannot be retried on this canary: roll back, clean up, then create a new one.",
     "running": "RUNNING…",
     "retry": "RETRY",
     "builtinPrompts": "test seed · built-in prompts (12)",

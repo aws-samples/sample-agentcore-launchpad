@@ -1538,6 +1538,7 @@
     "eligibilityHint": "只有活跃的 HTTP AgentCore Runtime Agent 可做金丝雀；禁用原因由后端能力合同统一提供。",
     "experimentalOnly": "下方权重会通过一个专属金丝雀网关，把该 Agent 的真实生产流量按比例分流。推广与回滚都会真正改变生产所服务的版本。",
     "setup": "设置 90/10",
+    "setupIncomplete": "Setup 未完成：专属网关与 stable 端点已创建，但候选版本的 A/B 测试尚未建立——生产仍服务当前版本。该金丝雀无法重试 Setup：请先回滚并清理，然后重新创建。",
     "running": "运行中…",
     "retry": "重试",
     "builtinPrompts": "测试种子 · 内置提示词（12 条）",

@@ -52,6 +52,22 @@ function verdictTone(verdict: string): "good" | "warn" | "crit" | "muted" {
   return "muted";
 }
 
+type CanarySetup = RuntimeCanaryInfo["artifacts"]["setup"];
+
+/** ``v<current> → v<candidate>``, with "…" for whatever the artifact has not
+ * reached yet (mid-setup) or never carried (pre-version-framing rows). */
+function versionsLabel(setup: CanarySetup): string {
+  if (!setup) return "—";
+  const version = (value?: string) => (value ? `v${value}` : "…");
+  return `${version(setup.v_current)} → ${version(setup.v_candidate)}`;
+}
+
+function weightsLabel(setup: CanarySetup): string {
+  const weights = setup?.weights;
+  if (!weights) return "—";
+  return `${weights.C ?? "—"}/${weights.T1 ?? "—"}`;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -263,9 +279,15 @@ export function RuntimeCanaryView() {
   const unsupportedAgents = agents.filter((agent) => !agent.canary_capability.eligible);
   const capReason = (cap: AgentInfo["canary_capability"]) =>
     cap.reason_code ? t(`canaryPage.reason.${cap.reason_code}`) : cap.reason;
+  // The backend persists a PARTIAL setup artifact (gateway + stable endpoint) the
+  // moment provisioning starts, so `setup` alone does NOT mean the setup stage is
+  // done: weights / v_candidate / champion / challenger only land once the A/B test
+  // exists. Render every post-mint field off `liveSetup`.
   const setup = canary?.artifacts.setup;
+  const liveSetup = setup?.ab_test_id ? setup : undefined;
+  const provisioning = !!setup && !liveSetup;
   const rounds = canary?.artifacts.rounds ?? [];
-  const currentStage = setup?.ramp_stage ?? 0;
+  const currentStage = liveSetup?.ramp_stage ?? 0;
   const terminal = canary?.status !== "running";
 
   const createForm = (
@@ -405,18 +427,8 @@ export function RuntimeCanaryView() {
                 >
                   <td className="pri">{row.name}</td>
                   <td>{row.champion_agent_name}</td>
-                  <td className="mono dim">
-                    {row.artifacts.setup
-                      ? `v${row.artifacts.setup.v_current} → v${
-                        row.artifacts.setup.v_candidate}`
-                      : "—"}
-                  </td>
-                  <td className="mono dim">
-                    {row.artifacts.setup
-                      ? `${row.artifacts.setup.weights.C}/${
-                        row.artifacts.setup.weights.T1}`
-                      : "—"}
-                  </td>
+                  <td className="mono dim">{versionsLabel(row.artifacts.setup)}</td>
+                  <td className="mono dim">{weightsLabel(row.artifacts.setup)}</td>
                   <td className="mono dim">
                     {row.created_at ? new Date(row.created_at).toLocaleString() : "—"}
                   </td>
@@ -464,13 +476,13 @@ export function RuntimeCanaryView() {
                 <span className="i">[i]</span>
                 <span>{t("canaryPage.experimentalOnly")}</span>
               </div>
-              {setup && (
+              {liveSetup?.v_current && liveSetup.v_candidate && (
                 <div className="note" style={{ marginBottom: 10 }}
                      data-testid="canary-version-framing">
                   <span className="i">[⇄]</span>
                   <span>{t("canaryPage.versionFraming", {
-                    current: setup.v_current,
-                    candidate: setup.v_candidate,
+                    current: liveSetup.v_current,
+                    candidate: liveSetup.v_candidate,
                   })}</span>
                 </div>
               )}
@@ -489,28 +501,65 @@ export function RuntimeCanaryView() {
                 id="canary-setup"
                 index={1}
                 title={t("canaryPage.stage.setup")}
-                active={!setup && !terminal}
-                done={!!setup}
+                active={!liveSetup && !terminal}
+                done={!!liveSetup}
               >
                 {!setup && !terminal &&
                   actionBtn("setup", t("canaryPage.setup"), {
                     primary: true,
                     icon: "play",
                   })}
-                {setup && (
+                {provisioning && (
+                  <div data-testid="canary-setup-provisioning">
+                    <div className="mono dim" style={{ fontSize: 10 }}>
+                      {versionsLabel(setup)}
+                      <br />
+                      gw {setup.gateway_id}
+                    </div>
+                    {canary.running_action === "setup" ? (
+                      <div className="mono dim" data-testid="canary-progress"
+                           style={{ fontSize: 10, marginTop: 4,
+                                    display: "inline-flex", alignItems: "center",
+                                    gap: 6 }}>
+                        <Activity size={12} />
+                        {canary.progress ?? t("canaryPage.running")}
+                      </div>
+                    ) : (
+                      // Setup cannot be retried once a partial artifact exists (the
+                      // backend rejects a second setup) — the exit is rollback +
+                      // cleanup, so say that instead of offering a doomed RETRY.
+                      <div className="note" style={{ borderColor: "var(--crit)",
+                                                     marginTop: 6 }}>
+                        <span className="i" style={{ color: "var(--crit)" }}>[!]</span>
+                        <span>
+                          {t("canaryPage.setupIncomplete")}
+                          {canary.error && (
+                            <>
+                              <br />
+                              <span className="mono" style={{ fontSize: 10.5 }}>
+                                {canary.error}
+                              </span>
+                            </>
+                          )}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {liveSetup && (
                   <div className="mono dim" style={{ fontSize: 10 }}>
-                    v{setup.v_current} → v{setup.v_candidate}
+                    {versionsLabel(liveSetup)}
                     <br />
-                    gw {setup.gateway_id} · ab {setup.ab_test_id}
+                    gw {liveSetup.gateway_id} · ab {liveSetup.ab_test_id}
                     <br />
-                    {setup.champion.target_name} ↔ {setup.challenger.target_name}
+                    {liveSetup.champion?.target_name} ↔ {liveSetup.challenger?.target_name}
                   </div>
                 )}
               </StageCard>
 
               {RAMP_STAGES.map((ramp, index) => {
-                const reached = !!setup && index <= currentStage;
-                const current = !!setup && index === currentStage;
+                const reached = !!liveSetup && index <= currentStage;
+                const current = !!liveSetup && index === currentStage;
                 const round = rounds.find((item) => item.ramp_stage === index);
                 const attempts = round?.traffic_attempts ?? [];
                 const verdict = round?.verdict;

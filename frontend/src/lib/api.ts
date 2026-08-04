@@ -131,27 +131,32 @@ export interface RuntimeCanaryInfo {
       runtime_name: string;
     };
     edited_spec?: Record<string, unknown>;
+    // ``setup`` is persisted as a PARTIAL artifact (the block below) as soon as the
+    // gateway + stable endpoint are up, so invoke keeps serving v_current during
+    // provisioning. Everything after it only exists once the A/B test is live —
+    // treat an absent ab_test_id as "still provisioning", never as a complete setup.
     setup?: {
       gateway_id: string;
       gateway_arn: string;
       gateway_url: string;
-      test_name: string;
-      ab_test_id: string;
-      ramp_stage: number;
-      weights: Record<string, number>;
-      v_current: string;
-      v_candidate: string;
+      // absent on pre-version-framing canary rows
+      v_current?: string;
+      stable_endpoint?: string;
+      runtime_id?: string;
+      test_name?: string;
+      ab_test_id?: string;
+      ramp_stage?: number;
+      weights?: Record<string, number>;
+      v_candidate?: string;
       // zip behind v_candidate; cleanup deletes it unless it is still live
       candidate_s3_key?: string;
-      stable_endpoint: string;
-      treatment_endpoint: string;
-      runtime_id: string;
-      champion: {
+      treatment_endpoint?: string;
+      champion?: {
         target_name: string;
         target_id: string;
         online_eval_id: string;
       };
-      challenger: {
+      challenger?: {
         target_name: string;
         target_id: string;
         online_eval_id: string;
