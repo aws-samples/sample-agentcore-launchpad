@@ -109,7 +109,8 @@ def main() -> int:
                    or "prefer" in r["text"].lower()]
         if records:
             break
-        time.sleep(20)
+        # Real-AWS memory extraction is eventually consistent and deadline-bounded.
+        time.sleep(20)  # nosemgrep: arbitrary-sleep
     if not records:
         print(f"  no preference record after {args.extract_timeout}s "
               f"(records: {json.dumps(mem['records'])[:400]})")

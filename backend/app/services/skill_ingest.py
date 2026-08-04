@@ -478,7 +478,8 @@ def _git_clone(url: str, ref: str | None, token: str | None, dst: Path) -> str |
         "GCM_INTERACTIVE": "never",
     }
     try:
-        proc = subprocess.run(
+        # URL/ref remain single argv values and '--' terminates git option parsing.
+        proc = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
             cmd, capture_output=True, text=True, timeout=_GIT_CLONE_TIMEOUT_S, env=env
         )
     except subprocess.TimeoutExpired:
@@ -781,7 +782,8 @@ def git_available(refresh: bool = False) -> tuple[bool, str | None]:
         version: str | None = None
         if path:
             try:
-                out = subprocess.run(
+                # shutil.which supplies the executable; no command shell is involved.
+                out = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
                     [path, "--version"], capture_output=True, text=True, timeout=10
                 )
                 raw = (out.stdout or "").strip()
@@ -869,7 +871,8 @@ def install_git() -> dict[str, Any]:
     cmd = args if (pm == "brew" or is_root) else ["sudo", "-n", *args]
     _logger.info("git-install invoked: %s", " ".join(cmd))
     try:
-        proc = subprocess.run(
+        # cmd comes from the fixed package-manager table; no shell is involved.
+        proc = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
             cmd, capture_output=True, text=True, timeout=_GIT_INSTALL_TIMEOUT_S
         )
     except subprocess.TimeoutExpired:

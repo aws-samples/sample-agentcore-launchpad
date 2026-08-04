@@ -314,13 +314,16 @@ async def spawn_execution_subprocess(
     if input_data is not None:
         cmd.extend(["--user-input", input_data])
 
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        cwd=workdir,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=build_execution_env(openai_api_key, bedrock_api_key, settings),
-        **build_spawn_kwargs(settings),
+    # Code path and input are distinct argv values; create_subprocess_exec has no shell.
+    process = await (
+        asyncio.create_subprocess_exec(  # nosemgrep: dangerous-asyncio-create-exec-audit
+            *cmd,
+            cwd=workdir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=build_execution_env(openai_api_key, bedrock_api_key, settings),
+            **build_spawn_kwargs(settings),
+        )
     )
     return process, workdir
 

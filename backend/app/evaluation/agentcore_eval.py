@@ -265,7 +265,8 @@ def poll_batch_evaluation(
             progress(f"batch eval status: {status}")
         if status in EVAL_TERMINAL:
             return result
-        time.sleep(interval)
+        # Deliberate polling interval; the surrounding loop owns the attempt bound.
+        time.sleep(interval)  # nosemgrep: arbitrary-sleep
     return client.get_batch_evaluation(batchEvaluationId=batch_id)
 
 
@@ -532,7 +533,8 @@ def poll_recommendation(
             progress(f"recommendation status: {status}")
         if status in REC_TERMINAL:
             return result
-        time.sleep(interval)
+        # Deliberate polling interval; the surrounding loop owns the attempt bound.
+        time.sleep(interval)  # nosemgrep: arbitrary-sleep
     return client.get_recommendation(recommendationId=recommendation_id)
 
 

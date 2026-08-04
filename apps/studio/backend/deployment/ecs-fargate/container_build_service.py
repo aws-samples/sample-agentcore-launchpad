@@ -236,7 +236,8 @@ class ContainerBuildService:
 
             try:
                 # Use asyncio subprocess for non-blocking execution
-                process = await asyncio.create_subprocess_exec(
+                # Build options are argv values; create_subprocess_exec has no shell.
+                process = await asyncio.create_subprocess_exec(  # nosemgrep: dangerous-asyncio-create-exec-audit
                     *build_cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,  # Combine stdout and stderr
@@ -385,7 +386,8 @@ class ContainerBuildService:
             await notify("Running Docker build with caching...")
 
             # Use async subprocess for consistent behavior
-            process = await asyncio.create_subprocess_exec(
+            # Build options are argv values; create_subprocess_exec has no shell.
+            process = await asyncio.create_subprocess_exec(  # nosemgrep: dangerous-asyncio-create-exec-audit
                 *build_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
@@ -455,7 +457,8 @@ class ContainerBuildService:
             logger.info(f"Pushing image with command: {' '.join(push_cmd)}")
 
             # Use async subprocess for push as well
-            push_process = await asyncio.create_subprocess_exec(
+            # The image tag is one argv value; create_subprocess_exec has no shell.
+            push_process = await asyncio.create_subprocess_exec(  # nosemgrep: dangerous-asyncio-create-exec-audit
                 *push_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT
@@ -506,15 +509,24 @@ class ContainerBuildService:
         try:
             # Check if buildx is available
             check_cmd = ["docker", "buildx", "version"]
-            subprocess.run(check_cmd, capture_output=True, check=True)
+            # Fixed Docker argv; no shell is involved.
+            subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
+                check_cmd, capture_output=True, check=True
+            )
 
             # Create/use buildx instance
             create_cmd = ["docker", "buildx", "create", "--name", "strands-builder", "--use"]
-            subprocess.run(create_cmd, capture_output=True, check=False)  # Don't fail if exists
+            # Fixed Docker argv; no shell is involved.
+            subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
+                create_cmd, capture_output=True, check=False
+            )  # Don't fail if exists
 
             # Bootstrap the builder
             bootstrap_cmd = ["docker", "buildx", "inspect", "--bootstrap"]
-            subprocess.run(bootstrap_cmd, capture_output=True, check=True)
+            # Fixed Docker argv; no shell is involved.
+            subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
+                bootstrap_cmd, capture_output=True, check=True
+            )
 
             logger.info("Docker Buildx setup completed")
 
@@ -544,7 +556,8 @@ class ContainerBuildService:
                 registry
             ]
 
-            process = subprocess.run(
+            # Credentials and registry are distinct argv/stdin values; no shell is involved.
+            process = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
                 login_cmd,
                 input=password,
                 text=True,
@@ -570,17 +583,26 @@ class ContainerBuildService:
         try:
             # Check Docker
             docker_cmd = ["docker", "version", "--format", "json"]
-            process = subprocess.run(docker_cmd, capture_output=True, text=True, check=True)
+            # Fixed Docker argv; no shell is involved.
+            process = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
+                docker_cmd, capture_output=True, text=True, check=True
+            )
             status["docker_available"] = True
 
             # Check Buildx
             buildx_cmd = ["docker", "buildx", "ls"]
-            process = subprocess.run(buildx_cmd, capture_output=True, text=True, check=True)
+            # Fixed Docker argv; no shell is involved.
+            process = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
+                buildx_cmd, capture_output=True, text=True, check=True
+            )
             status["buildx_available"] = True
 
             # Check supported platforms
             inspect_cmd = ["docker", "buildx", "inspect"]
-            process = subprocess.run(inspect_cmd, capture_output=True, text=True, check=True)
+            # Fixed Docker argv; no shell is involved.
+            process = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
+                inspect_cmd, capture_output=True, text=True, check=True
+            )
 
             # Parse platforms from output
             for line in process.stdout.split('\n'):

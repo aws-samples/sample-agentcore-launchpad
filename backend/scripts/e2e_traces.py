@@ -45,7 +45,8 @@ def main() -> int:
         trace = client.get(f"/api/traces/{session_id}").json()
         if trace["span_count"] >= 3:
             break
-        time.sleep(15)
+        # CloudWatch trace polling is intentionally paced and attempt-bounded.
+        time.sleep(15)  # nosemgrep: arbitrary-sleep
 
     print(f"  spans found: {trace['span_count']} in {trace['log_group']}")
     categories = {}

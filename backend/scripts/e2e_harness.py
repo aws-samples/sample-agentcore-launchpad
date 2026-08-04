@@ -60,7 +60,8 @@ def main() -> int:
                 print(f"  stage {stage['name']:<10} {stage['status']:<10} {stage['detail']}")
         if status in ("active", "failed"):
             break
-        time.sleep(5)
+        # Real-AWS deployment polling is intentionally paced and attempt-bounded.
+        time.sleep(5)  # nosemgrep: arbitrary-sleep
 
     if status != "active":
         job = client.get(f"/api/jobs/{job_id}").json()

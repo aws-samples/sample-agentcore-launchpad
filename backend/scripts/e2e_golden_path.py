@@ -49,7 +49,8 @@ def wait_active(client: httpx.Client, agent_id: str, timeout: int = 300) -> dict
         agent = client.get(f"/api/agents/{agent_id}").json()
         if agent["status"] in ("active", "failed"):
             return agent
-        time.sleep(5)
+        # Real-AWS deployment polling is intentionally paced and attempt-bounded.
+        time.sleep(5)  # nosemgrep: arbitrary-sleep
     return {"status": "timeout"}
 
 
@@ -177,7 +178,8 @@ def main() -> int:
             run = client.get(f"/api/eval/runs/{run['id']}").json()
             if run["status"] in ("completed", "failed"):
                 break
-            time.sleep(15)
+            # Real-AWS evaluation polling is intentionally paced and attempt-bounded.
+            time.sleep(15)  # nosemgrep: arbitrary-sleep
         scores = ", ".join(
             f"{s['evaluatorId'].replace('Builtin.', '')}={s['score']:.2f}"
             for s in run.get("scores", [])

@@ -377,7 +377,8 @@ class LambdaDeploymentService:
         for pip_cmd in pip_commands:
             try:
                 logger.info(f"Trying installation with: {' '.join(pip_cmd)}")
-                result = subprocess.run(
+                # Installer candidates are fixed argv lists; no shell is involved.
+                result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
                     pip_cmd,
                     capture_output=True,
                     text=True,
@@ -672,7 +673,8 @@ image_repositories = []
             f"Architecture={architecture}"]
             logs.append(f"Running: {' '.join(build_cmd)}")
 
-            result = subprocess.run(
+            # Architecture is one SAM argv value and never enters a command shell.
+            result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
                 build_cmd,
                 cwd=temp_path,
                 capture_output=True,
@@ -705,7 +707,8 @@ image_repositories = []
                 f"Architecture={architecture}"]
                 logs.append(f"Fallback running: {' '.join(build_cmd)}")
 
-                result = subprocess.run(
+                # Architecture is one SAM argv value and never enters a command shell.
+                result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
                     build_cmd,
                     cwd=temp_path,
                     capture_output=True,
@@ -772,7 +775,8 @@ image_repositories = []
                 logs.append("Added --resolve-image-repos flag for container-based streaming function")
                 logger.info("Using --resolve-image-repos for container function deployment")
 
-            result = subprocess.run(
+            # Deployment values occupy argv slots and never enter a command shell.
+            result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
                 deploy_cmd,
                 cwd=temp_path,
                 capture_output=True,

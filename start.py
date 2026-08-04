@@ -176,7 +176,8 @@ def _wait_for_exit(records: list[dict[str, Any]], timeout: float) -> list[dict[s
     deadline = time.monotonic() + timeout
     alive = [record for record in records if _record_is_alive(record)]
     while alive and time.monotonic() < deadline:
-        time.sleep(0.2)
+        # Deliberate shutdown polling interval; timeout_s bounds the wait.
+        time.sleep(0.2)  # nosemgrep: arbitrary-sleep
         alive = [record for record in alive if _record_is_alive(record)]
     return alive
 
@@ -339,7 +340,8 @@ def _wait_until_ready(service: Service, process: subprocess.Popen[bytes]) -> Non
             )
         if _http_ready(service.health_url):
             return
-        time.sleep(0.5)
+        # Deliberate readiness polling interval; service.timeout_s bounds the wait.
+        time.sleep(0.5)  # nosemgrep: arbitrary-sleep
     raise LaunchError(
         f"{service.name} did not become healthy at {service.health_url}\n"
         f"{_tail_log(service.log_file)}"
@@ -401,7 +403,8 @@ def start(prod: bool) -> int:
                 log.write(
                     f"\n[{datetime.now(UTC).isoformat()}] starting {mode}\n".encode()
                 )
-                process = subprocess.Popen(
+                # Service commands are internal argv tuples; no shell is involved.
+                process = subprocess.Popen(  # nosemgrep: dangerous-subprocess-use-audit
                     service.command,
                     cwd=service.cwd,
                     env=child_env,

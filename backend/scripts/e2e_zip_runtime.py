@@ -65,7 +65,8 @@ def main() -> int:
                 )
         if status in ("active", "failed"):
             break
-        time.sleep(10)
+        # Real-AWS deployment polling is intentionally paced and deadline-bounded.
+        time.sleep(10)  # nosemgrep: arbitrary-sleep
 
     if status != "active":
         job = client.get(f"/api/jobs/{job_id}").json()

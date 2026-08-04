@@ -71,7 +71,8 @@ def main() -> int:
         session_traces = body["traces"]
         if session_traces and session_traces[0]["llm_count"] >= 1:
             break
-        time.sleep(15)
+        # CloudWatch trace polling is intentionally paced and attempt-bounded.
+        time.sleep(15)  # nosemgrep: arbitrary-sleep
     assert session_traces, "expected the fresh chat trace to appear in aws/spans"
 
     print(f"\n── GET /api/observability/dashboard?range={RANGE}")

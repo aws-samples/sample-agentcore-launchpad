@@ -50,7 +50,8 @@ def action(
             if row.get("error"):
                 raise RuntimeError(f"action {name} failed: {row['error']}")
             return row
-        time.sleep(10)
+        # Real-AWS action polling is intentionally paced and attempt-bounded.
+        time.sleep(10)  # nosemgrep: arbitrary-sleep
     raise TimeoutError(f"action {name} timed out")
 
 
@@ -70,7 +71,8 @@ def ensure_agent(client, name, prompt):
         agent = client.get(f"/api/agents/{agent_id}").json()
         if agent["status"] in ("active", "failed"):
             break
-        time.sleep(10)
+        # Real-AWS deployment polling is intentionally paced and attempt-bounded.
+        time.sleep(10)  # nosemgrep: arbitrary-sleep
     assert agent["status"] == "active"
     return agent
 

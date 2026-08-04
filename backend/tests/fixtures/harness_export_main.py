@@ -45,7 +45,8 @@ def shell(command: str, timeout: int = 300) -> dict:
     Returns:
         Dict with stdout, stderr, and exit_code
     """
-    result = subprocess.run(
+    # Verbatim exported-agent fixture loaded as text; platform code never executes it.
+    result = subprocess.run(  # nosec B602
         command, shell=True, capture_output=True, text=True, timeout=timeout
     )
     return {"stdout": result.stdout, "stderr": result.stderr, "exit_code": result.returncode}

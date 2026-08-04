@@ -27,9 +27,15 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install -U pip && \
     python -m pip install --prefer-binary --no-compile -r requirements.txt
 
+# Run the generated agent with an unprivileged, predictable identity.
+RUN groupadd --gid 10001 studio && \
+    useradd --uid 10001 --gid studio --home-dir /app --no-create-home \
+        --shell /usr/sbin/nologin studio && \
+    chown studio:studio /app
+
 # Copy application files
-COPY generated_agent.py .
-COPY agent_server.py .
+COPY --chown=studio:studio generated_agent.py .
+COPY --chown=studio:studio agent_server.py .
 
 # Create health check endpoint script
 RUN echo '#!/bin/sh\ncurl -fsS http://localhost:8000/health || exit 1' > /health_check.sh && \
@@ -47,4 +53,5 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
 # Run the application
+USER studio
 CMD ["python", "agent_server.py"]

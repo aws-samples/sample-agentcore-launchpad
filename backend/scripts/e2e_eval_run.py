@@ -37,7 +37,8 @@ def wait_run(client: httpx.Client, run_id: str, timeout_s: int = 1800) -> dict:
             last = state
         if run["status"] in ("completed", "failed"):
             return run
-        time.sleep(15)
+        # Real-AWS evaluation polling is intentionally paced and attempt-bounded.
+        time.sleep(15)  # nosemgrep: arbitrary-sleep
     raise TimeoutError("run did not finish")
 
 
@@ -64,7 +65,8 @@ def main() -> int:
             agent = client.get(f"/api/agents/{agent_id}").json()
             if agent["status"] in ("active", "failed"):
                 break
-            time.sleep(10)
+            # Real-AWS deployment polling is intentionally paced and attempt-bounded.
+            time.sleep(10)  # nosemgrep: arbitrary-sleep
         assert agent["status"] == "active", "eval-target failed to deploy"
     print(f"agent: {AGENT_NAME} · {agent['arn'][-45:]}")
 

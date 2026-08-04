@@ -847,7 +847,9 @@ document.querySelectorAll('.nav-item[data-view]').forEach(it=>{
     it.classList.add('active');
     document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
     document.getElementById('view-'+it.dataset.view).classList.add('active');
-    crumb.innerHTML = 'CONSOLE / <b>'+it.textContent.replace(/^\d+/,'').trim().toUpperCase()+'</b>';
+    const viewName = document.createElement('b');
+    viewName.textContent = it.textContent.replace(/^\d+/,'').trim().toUpperCase();
+    crumb.replaceChildren(document.createTextNode('CONSOLE / '), viewName);
   });
 });
 if(location.hash){
@@ -865,13 +867,22 @@ document.querySelectorAll('.tab').forEach(t=>{
   });
 });
 
+const SVG_NS='http://www.w3.org/2000/svg';
+const svgElement=(tag,attrs={},text=null)=>{
+  const node=document.createElementNS(SVG_NS,tag);
+  Object.entries(attrs).forEach(([name,value])=>node.setAttribute(name,String(value)));
+  if(text!==null) node.textContent=String(text);
+  return node;
+};
+
 /* ---------- sparkline ---------- */
 (function(){
   const d=[4,5,5,6,7,7,8,9,9,10,11,12], w=110,h=34,max=13;
   const pts=d.map((v,i)=>`${(i/(d.length-1))*w},${h-3-(v/max)*(h-8)}`).join(' ');
-  document.getElementById('spark1').innerHTML =
-    `<polyline points="${pts}" fill="none" stroke="var(--s1)" stroke-width="1.5" stroke-linejoin="round"/>`+
-    `<circle cx="${w}" cy="${h-3-(12/max)*(h-8)}" r="2.6" fill="var(--s1)"/>`;
+  document.getElementById('spark1').replaceChildren(
+    svgElement('polyline',{points:pts,fill:'none',stroke:'var(--s1)','stroke-width':1.5,'stroke-linejoin':'round'}),
+    svgElement('circle',{cx:w,cy:h-3-(12/max)*(h-8),r:2.6,fill:'var(--s1)'})
+  );
 })();
 
 /* ---------- line chart: invocations 24h ---------- */
@@ -881,24 +892,30 @@ document.querySelectorAll('.tab').forEach(t=>{
   const L=46,R=706,T=14,B=196,YMAX=140;
   const x=i=>L+i*(R-L)/23, y=v=>B-(v/YMAX)*(B-T);
   const svg=document.getElementById('lineChart');
-  let g='';
+  const append=(tag,attrs={},text='')=>svg.appendChild(svgElement(tag,attrs,text));
   for(let t=0;t<=YMAX;t+=35){
-    g+=`<line x1="${L}" y1="${y(t)}" x2="${R}" y2="${y(t)}" stroke="${t===0?'#383835':'var(--grid)'}" stroke-width="1"/>`;
-    g+=`<text x="${L-8}" y="${y(t)+3.5}" text-anchor="end" font-family="IBM Plex Mono" font-size="10" fill="#69736C">${t}</text>`;
+    append('line',{x1:L,y1:y(t),x2:R,y2:y(t),stroke:t===0?'#383835':'var(--grid)','stroke-width':1});
+    append('text',{x:L-8,y:y(t)+3.5,'text-anchor':'end','font-family':'IBM Plex Mono','font-size':10,fill:'#69736C'},t);
   }
   [0,4,8,12,16,20,23].forEach(i=>{
-    g+=`<text x="${x(i)}" y="${B+18}" text-anchor="middle" font-family="IBM Plex Mono" font-size="10" fill="#69736C">${i===23?'now':String(i).padStart(2,'0')+':00'}</text>`;
+    append('text',{x:x(i),y:B+18,'text-anchor':'middle','font-family':'IBM Plex Mono','font-size':10,fill:'#69736C'},i===23?'now':String(i).padStart(2,'0')+':00');
   });
-  const line=(d,c)=>`<polyline points="${d.map((v,i)=>`${x(i)},${y(v)}`).join(' ')}" fill="none" stroke="${c}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
-  g+=line(api,'var(--s2)')+line(chat,'var(--s1)');
-  g+=`<circle cx="${x(23)}" cy="${y(chat[23])}" r="3.5" fill="var(--s1)" stroke="var(--panel)" stroke-width="2"/>`;
-  g+=`<circle cx="${x(23)}" cy="${y(api[23])}" r="3.5" fill="var(--s2)" stroke="var(--panel)" stroke-width="2"/>`;
-  g+=`<text x="${R+8}" y="${y(chat[23])+3}" font-family="IBM Plex Mono" font-size="10" fill="#A3ACA6">${chat[23]}</text>`;
-  g+=`<text x="${R+8}" y="${y(api[23])+3}" font-family="IBM Plex Mono" font-size="10" fill="#A3ACA6">${api[23]}</text>`;
-  g+=`<line id="xh" x1="0" y1="${T}" x2="0" y2="${B}" stroke="#3A453F" stroke-width="1" stroke-dasharray="3 3" visibility="hidden"/>`;
-  g+=`<rect id="hover" x="${L}" y="${T}" width="${R-L}" height="${B-T}" fill="transparent"/>`;
-  svg.innerHTML=g;
+  const line=(d,c)=>append('polyline',{points:d.map((v,i)=>`${x(i)},${y(v)}`).join(' '),fill:'none',stroke:c,'stroke-width':2,'stroke-linejoin':'round','stroke-linecap':'round'});
+  line(api,'var(--s2)');line(chat,'var(--s1)');
+  append('circle',{cx:x(23),cy:y(chat[23]),r:3.5,fill:'var(--s1)',stroke:'var(--panel)','stroke-width':2});
+  append('circle',{cx:x(23),cy:y(api[23]),r:3.5,fill:'var(--s2)',stroke:'var(--panel)','stroke-width':2});
+  append('text',{x:R+8,y:y(chat[23])+3,'font-family':'IBM Plex Mono','font-size':10,fill:'#A3ACA6'},chat[23]);
+  append('text',{x:R+8,y:y(api[23])+3,'font-family':'IBM Plex Mono','font-size':10,fill:'#A3ACA6'},api[23]);
+  append('line',{id:'xh',x1:0,y1:T,x2:0,y2:B,stroke:'#3A453F','stroke-width':1,'stroke-dasharray':'3 3',visibility:'hidden'});
+  append('rect',{id:'hover',x:L,y:T,width:R-L,height:B-T,fill:'transparent'});
   const tip=document.getElementById('lineTip'), wrap=document.getElementById('lineWrap'), xh=svg.querySelector('#xh');
+  const tipRow=(label,value,color)=>{
+    const row=document.createElement('div');row.className='tt-r';
+    const dot=document.createElement('span');dot.className='dot';dot.style.background=color;
+    const val=document.createElement('span');val.className='v';val.textContent=String(value);
+    row.append(dot,document.createTextNode(label),val);
+    return row;
+  };
   svg.querySelector('#hover').addEventListener('mousemove',e=>{
     const r=svg.getBoundingClientRect(), sx=780/r.width;
     const px=(e.clientX-r.left)*sx;
@@ -908,9 +925,9 @@ document.querySelectorAll('.tab').forEach(t=>{
     const wr=wrap.getBoundingClientRect();
     tip.style.left=Math.min(e.clientX-wr.left+14,wr.width-160)+'px';
     tip.style.top=(e.clientY-wr.top-14)+'px';
-    tip.innerHTML=`<div class="tt-h">${i===23?'now':String(i).padStart(2,'0')+':00'}</div>
-      <div class="tt-r"><span class="dot" style="background:var(--s1)"></span>Chat UI<span class="v">${chat[i]}</span></div>
-      <div class="tt-r"><span class="dot" style="background:var(--s2)"></span>API<span class="v">${api[i]}</span></div>`;
+    const heading=document.createElement('div');heading.className='tt-h';
+    heading.textContent=i===23?'now':String(i).padStart(2,'0')+':00';
+    tip.replaceChildren(heading,tipRow('Chat UI',chat[i],'var(--s1)'),tipRow('API',api[i],'var(--s2)'));
   });
   svg.querySelector('#hover').addEventListener('mouseleave',()=>{tip.style.display='none';xh.setAttribute('visibility','hidden')});
 })();
@@ -927,9 +944,17 @@ document.querySelectorAll('.tab').forEach(t=>{
     ['model.invoke',2300,880,'var(--s1)'],
     ['memory.create_event',3186,54,'var(--s3)'],
   ];
-  document.getElementById('traceRows').innerHTML=spans.map(([n,o,d,c])=>
-    `<div class="trow"><span class="tn">${n}</span><div class="track"><div class="span" style="left:${o/total*100}%;width:${Math.max(d/total*100,.8)}%;background:${c}"></div></div><span class="ms">${d}ms</span></div>`
-  ).join('');
+  const rows=spans.map(([n,o,d,c])=>{
+    const row=document.createElement('div');row.className='trow';
+    const name=document.createElement('span');name.className='tn';name.textContent=n;
+    const track=document.createElement('div');track.className='track';
+    const span=document.createElement('div');span.className='span';
+    span.style.left=o/total*100+'%';span.style.width=Math.max(d/total*100,.8)+'%';span.style.background=c;
+    const duration=document.createElement('span');duration.className='ms';duration.textContent=d+'ms';
+    track.append(span);row.append(name,track,duration);
+    return row;
+  });
+  document.getElementById('traceRows').replaceChildren(...rows);
 })();
 </script>
 </body>

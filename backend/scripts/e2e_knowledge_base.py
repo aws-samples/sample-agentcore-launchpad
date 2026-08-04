@@ -49,7 +49,8 @@ def main() -> int:
         detail = knowledge.get_kb_detail(kb_id)
         if not detail["data_sources"]:
             log(f"kb status={detail['status']} · waiting for data source setup")
-            time.sleep(10)
+            # Real-AWS data-source polling is intentionally paced and attempt-bounded.
+            time.sleep(10)  # nosemgrep: arbitrary-sleep
             continue
         ds = detail["data_sources"][0]
         ds_id = ds["ds_id"]
@@ -59,7 +60,8 @@ def main() -> int:
         if ds["status"] in ("DELETE_UNSUCCESSFUL", "FAILED"):
             log(f"FAIL: data source status {ds['status']} · {ds['failure_reasons']}")
             return 1
-        time.sleep(15)
+        # Real-AWS data-source polling is intentionally paced and attempt-bounded.
+        time.sleep(15)  # nosemgrep: arbitrary-sleep
     else:
         log("FAIL: data source never became AVAILABLE")
         return 1
@@ -78,7 +80,8 @@ def main() -> int:
         if top.get("status") in ("FAILED", "STOPPED"):
             log(f"FAIL: ingestion {top.get('status')} · {top.get('failure_reasons')}")
             return 1
-        time.sleep(20)
+        # Real-AWS ingestion polling is intentionally paced and attempt-bounded.
+        time.sleep(20)  # nosemgrep: arbitrary-sleep
     else:
         log("FAIL: ingestion did not complete in time")
         return 1

@@ -135,7 +135,8 @@ class ConversionError(Exception):
 
 
 def _run(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    # Callers assemble argv from fixed CLI verbs; values never enter a shell.
+    return subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
         cmd, cwd=cwd, capture_output=True, text=True, timeout=EXPORT_TIMEOUT_S
     )
 

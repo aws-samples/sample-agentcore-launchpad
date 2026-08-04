@@ -71,7 +71,8 @@ def main() -> int:
         status = client.get(f"/api/agents/{agent_id}").json()["status"]
         if status in ("active", "failed"):
             break
-        time.sleep(10)
+        # Real-AWS deployment polling is intentionally paced and attempt-bounded.
+        time.sleep(10)  # nosemgrep: arbitrary-sleep
 
     if status != "active":
         print(f"FAILED: agent status={status} error={job.get('error')}")

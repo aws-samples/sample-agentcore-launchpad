@@ -125,7 +125,8 @@ def _wait_memory_active(control: Any, memory_id: str, timeout_s: int = 300) -> N
             return
         if status == "FAILED":
             raise RuntimeError(f"memory {memory_id} entered FAILED state")
-        time.sleep(10)
+        # Deliberate polling interval; the surrounding loop owns the deadline.
+        time.sleep(10)  # nosemgrep: arbitrary-sleep
     raise TimeoutError(f"memory {memory_id} not ACTIVE after {timeout_s}s")
 
 

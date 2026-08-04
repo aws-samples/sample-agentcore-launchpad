@@ -494,7 +494,8 @@ async def execute_code_stream(request: ExecutionRequest):
             logger.info(f"Found async main function, starting streaming execution - ID: {execution_id}")
             
             # Create a custom async generator that captures the streaming
-            async def stream_main():
+            async def stream_main():  # nosemgrep: useless-inner-function
+                # The response generator below iterates this local callback.
                 # Set up the execution context for the main function
                 try:
                     # Check if the main function is a generator (has yield statements)

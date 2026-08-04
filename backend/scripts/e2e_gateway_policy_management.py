@@ -54,7 +54,8 @@ def wait_operation(
     while current.get("status") not in TERMINAL_OPERATION_STATES:
         if time.monotonic() >= deadline:
             raise TimeoutError(f"operation {current.get('id')} did not settle")
-        time.sleep(3)
+        # Real-AWS operation polling is intentionally paced and deadline-bounded.
+        time.sleep(3)  # nosemgrep: arbitrary-sleep
         current = request(
             client,
             "GET",

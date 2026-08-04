@@ -149,7 +149,8 @@ def main() -> int:
             gateways = control.list_gateways(maxResults=100).get("items", [])
             if not any(g.get("name") == gw_name for g in gateways):
                 break
-            time.sleep(4)
+            # Real-AWS cleanup polling is intentionally paced and attempt-bounded.
+            time.sleep(4)  # nosemgrep: arbitrary-sleep
         else:
             raise AssertionError("dedicated canary gateway still present after cleanup")
         eps = control.list_agent_runtime_endpoints(

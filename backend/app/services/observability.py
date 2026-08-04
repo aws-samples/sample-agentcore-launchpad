@@ -141,7 +141,8 @@ def _start_query(
             if code == "ResourceNotFoundException":
                 return None
             if attempt == 0 and code in ("ThrottlingException", "LimitExceededException"):
-                time.sleep(1.5)
+                # One bounded backoff prevents an immediate repeat throttle.
+                time.sleep(1.5)  # nosemgrep: arbitrary-sleep
                 continue
             raise AppError(
                 "observability.query_failed",
@@ -203,7 +204,8 @@ def run_insights_queries(
                     f"{QUERY_DEADLINE_SECONDS}s",
                     status_code=502,
                 )
-            time.sleep(0.8)
+            # Deliberate query polling interval; max attempts bound the wait.
+            time.sleep(0.8)  # nosemgrep: arbitrary-sleep
     return results
 
 

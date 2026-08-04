@@ -43,23 +43,30 @@ def envelope(code: str, message: str, detail: Any = None) -> dict[str, Any]:
 
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
-    async def app_error_handler(_: Request, exc: AppError) -> JSONResponse:
+    async def app_error_handler(  # nosemgrep: useless-inner-function
+        _: Request, exc: AppError
+    ) -> JSONResponse:
+        # FastAPI registers this local callback through the decorator.
         return JSONResponse(
             status_code=exc.status_code,
             content=envelope(exc.code, exc.message, exc.detail),
         )
 
     @app.exception_handler(StarletteHTTPException)
-    async def http_error_handler(_: Request, exc: StarletteHTTPException) -> JSONResponse:
+    async def http_error_handler(  # nosemgrep: useless-inner-function
+        _: Request, exc: StarletteHTTPException
+    ) -> JSONResponse:
+        # FastAPI registers this local callback through the decorator.
         return JSONResponse(
             status_code=exc.status_code,
             content=envelope(f"http.{exc.status_code}", str(exc.detail), None),
         )
 
     @app.exception_handler(RequestValidationError)
-    async def validation_error_handler(
+    async def validation_error_handler(  # nosemgrep: useless-inner-function
         _: Request, exc: RequestValidationError
     ) -> JSONResponse:
+        # FastAPI registers this local callback through the decorator.
         return JSONResponse(
             status_code=422,
             content=envelope(

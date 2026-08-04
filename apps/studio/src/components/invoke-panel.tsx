@@ -1396,9 +1396,7 @@ export function InvokePanel({ className = '' }: InvokePanelProps) {
                 ? isStreamingCapable
                   ? 'Invoke ECS Service (Stream)'
                   : 'Invoke ECS Service (Sync)'
-                : isStreamingCapable
-                  ? 'Invoke AgentCore Agent'
-                  : 'Invoke AgentCore Agent'
+                : 'Invoke AgentCore Agent'
             }
           </button>
         </div>

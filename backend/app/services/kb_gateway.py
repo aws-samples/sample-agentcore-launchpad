@@ -242,7 +242,8 @@ def _wait_target_gone(
             return None
         if target.get("status") != "DELETING":
             return target
-        time.sleep(3)
+        # Deliberate polling interval; the surrounding loop owns the retry bound.
+        time.sleep(3)  # nosemgrep: arbitrary-sleep
     return _find_target_by_name(control, gateway_id, name)
 
 

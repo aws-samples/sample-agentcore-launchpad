@@ -87,7 +87,8 @@ def _wait_gateway_ready(control: Any, gateway_id: str, timeout_s: int = 300) -> 
             return
         if status == "FAILED":
             raise RuntimeError(f"gateway {gateway_id} FAILED")
-        time.sleep(5)
+        # Deliberate polling interval; the surrounding loop owns the deadline.
+        time.sleep(5)  # nosemgrep: arbitrary-sleep
     raise TimeoutError(f"gateway {gateway_id} not READY after {timeout_s}s")
 
 
@@ -104,8 +105,8 @@ def ensure_api_key_provider(
     created = control.create_api_key_credential_provider(name=name, apiKey=api_key)
     return created["credentialProviderArn"], True
 
-
-OAUTH_PROVIDER_NAME = "launchpad-gw-m2m"
+# Stable public AWS resource name, not a credential.
+OAUTH_PROVIDER_NAME = "launchpad-gw-m2m"  # nosemgrep: generic-api-key
 GATEWAY_SCOPE = "launchpad-gw/invoke"
 
 
@@ -243,7 +244,8 @@ def _wait_target_ready(
             raise RuntimeError(
                 f"target {target_id} {status}: {detail.get('statusReasons')}"
             )
-        time.sleep(5)
+        # Deliberate polling interval; the surrounding loop owns the deadline.
+        time.sleep(5)  # nosemgrep: arbitrary-sleep
     raise TimeoutError(f"target {target_id} not READY after {timeout_s}s")
 
 

@@ -4,6 +4,7 @@
  */
 
 import { validatePathComponents, validateProjectOnly, validateProjectAndVersion, ValidationError } from './validation';
+import { buildWebSocketUrl } from './websocket-url';
 import type {
   ConversationSession,
   ChatMessage,
@@ -366,13 +367,8 @@ class ApiClient {
       this.wsConnection.close();
     }
 
-    // Use relative WebSocket URL to leverage Vite proxy
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = this.baseUrl ?
-      this.baseUrl.replace('http://', 'ws://').replace('https://', 'wss://') :
-      `${protocol}//${window.location.host}`;
-
-    this.wsConnection = new WebSocket(`${wsUrl}/ws`);
+    const wsUrl = buildWebSocketUrl(this.baseUrl, window.location.origin);
+    this.wsConnection = new WebSocket(wsUrl);
 
     this.wsConnection.onopen = () => {
       console.log('WebSocket connected');

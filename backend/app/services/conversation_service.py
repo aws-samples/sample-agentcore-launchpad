@@ -170,7 +170,8 @@ class ConversationService:
         messages_json = json.dumps(self._construct_messages_list(session_id))
 
         try:
-            result = subprocess.run(
+            # Prompt history is one JSON argv value and never enters a command shell.
+            result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
                 [get_settings().studio_exec_python, str(agent_file),
                  "--messages", messages_json],
                 capture_output=True,

@@ -46,7 +46,8 @@ def ensure_transaction_search(xray: Any) -> dict[str, Any]:
         state = xray.get_trace_segment_destination()
         if state.get("Status") == "ACTIVE":
             break
-        time.sleep(5)
+        # Deliberate status polling interval; the loop has a fixed attempt cap.
+        time.sleep(5)  # nosemgrep: arbitrary-sleep
     return {"enabled": state.get("Status") == "ACTIVE", "changed": True,
             "status": state.get("Status")}
 
@@ -202,7 +203,8 @@ def _wait_engine_active(control: Any, engine_id: str, timeout_s: int = 120) -> N
             return
         if "FAILED" in status:
             raise RuntimeError(f"policy engine {engine_id} entered {status}")
-        time.sleep(3)
+        # Deliberate polling interval; the surrounding loop owns the deadline.
+        time.sleep(3)  # nosemgrep: arbitrary-sleep
     raise TimeoutError(f"policy engine {engine_id} not ACTIVE after {timeout_s}s")
 
 
@@ -251,7 +253,8 @@ def _wait_policy_settled(
             raise RuntimeError(
                 f"policy {policy_id} entered {status}: {detail.get('statusReasons')}"
             )
-        time.sleep(3)
+        # Deliberate polling interval; the surrounding loop owns the deadline.
+        time.sleep(3)  # nosemgrep: arbitrary-sleep
     raise TimeoutError(f"policy {policy_id} not ACTIVE after {timeout_s}s")
 
 
@@ -276,7 +279,8 @@ def attach_engine_to_gateway(
     while time.time() < deadline:
         if control.get_gateway(gatewayIdentifier=gateway_id)["status"] == "READY":
             return True
-        time.sleep(5)
+        # Deliberate polling interval; the surrounding loop owns the deadline.
+        time.sleep(5)  # nosemgrep: arbitrary-sleep
     raise TimeoutError("gateway not READY after policy engine attach")
 
 

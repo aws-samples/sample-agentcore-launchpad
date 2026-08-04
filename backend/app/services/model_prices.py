@@ -235,7 +235,8 @@ def start_auto_refresh() -> threading.Thread | None:
         return None
 
     def loop() -> None:
-        time.sleep(90)  # let the server settle before the first check
+        # Background refresh intentionally waits for startup to settle.
+        time.sleep(90)  # nosemgrep: arbitrary-sleep
         while True:
             try:
                 if _due(hours):
@@ -246,7 +247,8 @@ def start_auto_refresh() -> threading.Thread | None:
                     )
             except Exception as exc:
                 _logger.warning("model_prices auto-refresh failed: %s", exc)
-            time.sleep(3600)
+            # Hourly refresh cadence avoids a tight retry loop after failures.
+            time.sleep(3600)  # nosemgrep: arbitrary-sleep
 
     thread = threading.Thread(target=loop, daemon=True, name="model-prices-refresh")
     thread.start()

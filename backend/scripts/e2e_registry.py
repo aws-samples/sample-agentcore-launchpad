@@ -36,7 +36,8 @@ def main() -> int:
     for agent in client.get("/api/agents").json()["agents"]:
         if agent["name"] == AGENT_NAME:
             client.delete(f"/api/agents/{agent['id']}")
-            time.sleep(60)
+            # Registry/runtime deletion is eventually consistent in real AWS.
+            time.sleep(60)  # nosemgrep: arbitrary-sleep
     res = client.post(
         "/api/agents",
         json={"name": AGENT_NAME, "method": "harness",
@@ -50,7 +51,8 @@ def main() -> int:
         status = agent["status"]
         if status in ("active", "failed"):
             break
-        time.sleep(5)
+        # Real-AWS deployment polling is intentionally paced and attempt-bounded.
+        time.sleep(5)  # nosemgrep: arbitrary-sleep
     if status != "active":
         print(f"deploy failed: {client.get(f'/api/jobs/{job_id}').json().get('error')}")
         return 1

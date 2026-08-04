@@ -62,7 +62,8 @@ def wait_run(client: httpx.Client, run_id: str, timeout_s: int = 2400) -> dict:
             last = state
         if run["status"] in ("completed", "failed"):
             return run
-        time.sleep(15)
+        # Real-AWS evaluation polling is intentionally paced and deadline-bounded.
+        time.sleep(15)  # nosemgrep: arbitrary-sleep
     raise TimeoutError(f"run {run_id} did not finish in {timeout_s}s")
 
 
@@ -126,7 +127,8 @@ def main() -> int:
         res.raise_for_status()
         print(f"  invoke {i}: {res.json()['text'][:40]!r}", flush=True)
     print("  waiting 120s for traces to land in CloudWatch …", flush=True)
-    time.sleep(120)
+    # CloudWatch trace delivery is asynchronous; this fixed wait is test setup.
+    time.sleep(120)  # nosemgrep: arbitrary-sleep
 
     print(f"── [2] window run: lookback {LOOKBACK_HOURS}h · "
           f"[Builtin.Helpfulness, {judge_id}] …", flush=True)

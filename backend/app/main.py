@@ -88,7 +88,8 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         # localhost to HTTPS in the developer's browser, and that cache is sticky
         # and awkward to clear.
         @app.middleware("http")
-        async def hsts(request, call_next):
+        async def hsts(request, call_next):  # nosemgrep: useless-inner-function
+            # FastAPI registers this local callback through the decorator.
             response = await call_next(request)
             response.headers.setdefault(
                 "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
@@ -158,7 +159,8 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         start_auto_refresh()  # periodic model-price refresh (real server only)
 
     @app.get("/api/health")
-    async def health() -> dict[str, str]:
+    async def health() -> dict[str, str]:  # nosemgrep: useless-inner-function
+        # FastAPI registers this local callback through the decorator.
         return {
             "status": "ok",
             "version": settings.version,

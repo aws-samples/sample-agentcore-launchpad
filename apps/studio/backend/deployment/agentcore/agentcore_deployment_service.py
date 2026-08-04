@@ -213,7 +213,8 @@ class AgentCoreDeploymentService:
             os.chmod(script_path, 0o755)
 
             # Run the script with 'create' command
-            result = subprocess.run(
+            # Repository script and fixed verb are direct argv; no shell is involved.
+            result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
                 [str(script_path), "create"],
                 capture_output=True,
                 text=True,
@@ -749,7 +750,8 @@ CMD ["opentelemetry-instrument", "python", "-m", "{agent_name}"]
             for cmd, prefix in commands_to_try:
                 try:
                     logger.info(f"Trying command: {' '.join(cmd)}")
-                    result = subprocess.run(
+                    # Candidate commands are fixed argv lists; no shell is involved.
+                    result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
                         cmd,
                         capture_output=True,
                         text=True,
@@ -836,7 +838,8 @@ CMD ["opentelemetry-instrument", "python", "-m", "{agent_name}"]
             logger.info(f"Environment variables: {list(env.keys())}")
 
             try:
-                result = subprocess.run(
+                # Deployment values occupy argv slots and never enter a command shell.
+                result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
                     deploy_cmd,
                     cwd=project_dir,
                     capture_output=True,

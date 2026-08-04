@@ -27,7 +27,8 @@ AGENTCORE_CLI = AGENTCORE_CLI_PREFIX / "node_modules" / ".bin" / "agentcore"
 
 def _managed_agentcore_cli_version() -> str | None:
     try:
-        proc = subprocess.run(
+        # The repository-owned executable is invoked directly without a shell.
+        proc = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
             [str(AGENTCORE_CLI), "--version"],
             cwd=REPO_ROOT,
             capture_output=True,

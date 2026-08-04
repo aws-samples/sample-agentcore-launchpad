@@ -313,7 +313,8 @@ async def fix_code_events(
     emitter = _EventEmitter()
     timeout_s = config.get_timeout_s()
 
-    async def worker() -> None:
+    async def worker() -> None:  # nosemgrep: useless-inner-function
+        # The task group below schedules this local coroutine explicitly.
         try:
             await asyncio.wait_for(
                 _run_fix(

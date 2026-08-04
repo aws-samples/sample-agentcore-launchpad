@@ -106,7 +106,8 @@ def main() -> None:
     agent_id = res.json()["agent"]["id"]
     print(f"{action} agent {agent_id} …")
     for _ in range(90):
-        time.sleep(10)
+        # Real-AWS deployment polling is intentionally paced and attempt-bounded.
+        time.sleep(10)  # nosemgrep: arbitrary-sleep
         agent = httpx.get(f"{args.api}/api/agents/{agent_id}", timeout=30).json()
         status = agent.get("status")
         print("status:", status)

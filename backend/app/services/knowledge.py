@@ -523,7 +523,8 @@ def _wait_kb_active(client: Any, kb_id: str, timeout_s: int = 60, interval_s: in
             )
         if status != "CREATING" or time.time() >= deadline:
             return status
-        time.sleep(interval_s)
+        # Deliberate polling interval; the surrounding loop owns the deadline.
+        time.sleep(interval_s)  # nosemgrep: arbitrary-sleep
 
 
 def create_kb(name: str, description: str, source: dict[str, Any]) -> dict[str, Any]:
@@ -583,7 +584,8 @@ def _start_source_completion(
                 if status in {"FAILED", "DELETING"}:
                     logger.warning("kb %s: giving up source setup, status %s", kb_id, status)
                     return
-                time.sleep(interval_s)
+                # Deliberate polling interval; the surrounding loop owns the deadline.
+                time.sleep(interval_s)  # nosemgrep: arbitrary-sleep
             logger.warning(
                 "kb %s: still not ACTIVE after %ss — source not created", kb_id, timeout_s
             )
