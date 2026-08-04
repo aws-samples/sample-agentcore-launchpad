@@ -1786,3 +1786,47 @@ Reconciled all 94 ProbeScan findings, upgraded vulnerable Studio dependencies, h
 ### Status
 
 [OK] **Completed**
+
+
+## Session 36: Parallelize experiment gateway traffic with bounded concurrency
+
+**Date**: 2026-08-04
+**Task**: Parallelize experiment gateway traffic with bounded concurrency
+**Package**: lab4-interactive
+**Branch**: `perf/parallel-gateway-traffic`
+
+### Summary
+
+Traffic stage (04 · 发送流量) posted replay prompts serially; now concurrent with a hard cap of 10. Shared by configuration A/B and Runtime Canary. PR #19 merged.
+
+### Main Changes
+
+- send_gateway_traffic: serial for-loop → bounded daemon workers, min(requested, TRAFFIC_MAX_CONCURRENCY=10, len(prompts)). Safe because each prompt is its own uuid4 session pinned via the sticky runtime-session header — one prompt = one session = one arm, split happens across prompts.
+- Chose hand-rolled daemon threads over ThreadPoolExecutor: executor threads are non-daemon and joined by an atexit hook, so a SIGTERM mid-send would hold the process open for a full request timeout, contradicting this surface's deliberate daemon design (_spawn + clear_stale_running_actions). Bonus: worker-side abort flag makes 'no further prompts after a fatal error' deterministic, and the surfaced exception is the first in INPUT order.
+- progress() deliberately kept on the calling thread — it ends in _update() (SQLite write); N workers on one row would contend for the writer lock. Workers do HTTP only; caller consumes completions via a finished-index queue.
+- New settings.traffic_concurrency (LAUNCHPAD_TRAFFIC_CONCURRENCY, default 10, ge=1, no upper bound) — dial-DOWN knob for throttling; oversized values clamp in code rather than failing app startup.
+- New traffic.status_counts artifact key ({"200": 47, "429": 3}), string keys because the artifact round-trips a JSON column. Concurrency amplifies 429 risk and both throttles and agent errors previously showed only as 'failed'. Retry/backoff explicitly out of scope (user decision: observe first).
+- Replay posts pass an explicit 180s timeout (TRAFFIC_REQUEST_TIMEOUT_S); sigv4_post keeps its 120s default because the same helper serves the interactive canary route in services.invoke, where the wait precedes the stable-endpoint fallback.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4516f77` | (see git log) |
+| `860b9c2` | (see git log) |
+
+### Testing
+
+- [OK] make verify PASS twice (backend ruff + 1588 pytest, infra, eslint + tsc + vite build, i18n parity); 13 new tests in tests/optimization/test_gateway_traffic_concurrency.py, run 5x with no flake.
+- [OK] Concurrency proven by OBSERVED OVERLAP (threading.Barrier that only trips when N are in flight together), not call counts — and verified the assertion discriminates: forcing width 1 gives peak==1 and breaks the barrier. A call-count assertion would have passed against the serial loop.
+- [OK] First draft used ThreadPoolExecutor + cancel_futures; the 'no prompts sent after a fatal error' test failed honestly — cancellation is best-effort there because a worker grabs its next task before the caller observes the exception. That real finding drove the daemon-worker rewrite, which makes the guarantee deterministic.
+- [OK] NOT verified: whether 10 concurrent sessions trip real AgentCore throttling — needs scripts/e2e_experiment.py + real AWS, outside the verify gate. status_counts exists to make that diagnosable.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- If a per-prompt timeout should cost one sample instead of failing the whole send, that is a semantic change to the preserved exception contract (R5) — would add a 'timeout' bucket to status_counts.
+- Deferred: credential/connection reuse in sigv4_post (new boto3.Session + httpx.Client per call → N IMDS lookups and TLS handshakes per send). Touches the live invoke.py path, so it wants its own task.

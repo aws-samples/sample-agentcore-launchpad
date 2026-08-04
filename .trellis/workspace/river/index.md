@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 35
+- **Total Sessions**: 36
 - **Last Active**: 2026-08-04
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1788 | Active |
+| `journal-1.md` | ~1832 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 36 | 2026-08-04 | Parallelize experiment gateway traffic with bounded concurrency | `4516f77`, `860b9c2` | `perf/parallel-gateway-traffic` |
 | 35 | 2026-08-04 | Remediate ProbeScan security audit findings | `b4c92f8` | `main` |
 | 34 | 2026-08-04 | Fix evaluation verdict polarity and online judge placeholder validation | `ab7e94c` | `fix/eval-verdict-polarity` |
 | 33 | 2026-08-04 | Zip runtime Registry Skills | `6ec46da` | `main` |
