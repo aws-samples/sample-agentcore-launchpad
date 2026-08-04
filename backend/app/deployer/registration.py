@@ -13,7 +13,15 @@ def register_stage(ctx: StageContext, agent: Agent) -> StageResult:
         row.registry_record_id = result["record_id"]
         db.commit()
         verb = "created" if result["created"] else "refreshed"
-        ctx.log(f"a2a record {verb} · {result['record_id']} · auto-submitted")
+        # Only NEW records are auto-submitted; UpdateRegistryRecord resets an
+        # existing record to DRAFT and re-entering the approval flow is a human
+        # decision (scripts/refresh_a2a_cards.py restores prior approvals). Saying
+        # "auto-submitted" on the refresh path sent a later reader hunting a
+        # broken state machine when the DRAFT was expected.
+        submitted = (
+            "auto-submitted" if result["created"] else "DRAFT — needs re-approval"
+        )
+        ctx.log(f"a2a record {verb} · {result['record_id']} · {submitted}")
         return StageResult(detail=f"registry (A2A) {verb} · {result['record_id']}")
     finally:
         db.close()

@@ -125,3 +125,32 @@ def test_harness_skills_round_trip():
     )
     params = build_create_params(spec, "arn:role", None)
     assert params["skills"] == [{"s3": {"uri": "s3://bkt/skills/expense-report-writer/"}}]
+
+
+def test_register_stage_log_does_not_claim_a_submit_it_never_made(monkeypatch):
+    """Only NEW records are auto-submitted. UpdateRegistryRecord resets an
+    existing record to DRAFT and re-approval is a human step, so the refresh
+    path must not log "auto-submitted" — that mismatch (log says submitted, AWS
+    says DRAFT) reads as a broken status machine to whoever debugs next.
+    """
+    from types import SimpleNamespace
+
+    import app.deployer.registration as registration
+
+    logs: list[str] = []
+    row = SimpleNamespace(id="a1", registry_record_id=None)
+    session = MagicMock()
+    session.get.return_value = row
+    ctx = SimpleNamespace(session=lambda: session, log=logs.append)
+
+    for created, expected in ((True, "auto-submitted"), (False, "DRAFT")):
+        logs.clear()
+        monkeypatch.setattr(
+            registration, "register_agent_record",
+            lambda _row, created=created: {"record_id": "rec-1", "created": created},
+        )
+        result = registration.register_stage(ctx, row)
+        assert expected in logs[0], logs
+        assert ("created" if created else "refreshed") in result.detail
+    # the misleading combination must be impossible
+    assert "auto-submitted" not in logs[0]
