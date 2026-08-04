@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/launchpad/registry-skill-ingestion.md", "reason": "Verify approval, bundle storage, and snapshot semantics do not regress"}
+{"file": ".trellis/spec/launchpad/harness-conversion.md", "reason": "Regression-check converted Harness Skill behavior"}
+{"file": ".trellis/spec/launchpad/a2a-agents.md", "reason": "Verify mounted Skills remain independent from AgentCard metadata"}
+{"file": ".trellis/spec/launchpad/container-capabilities-filesystem.md", "reason": "Verify shared explicit-path bundler and container behavior remain stable"}
+{"file": ".trellis/tasks/08-04-zip-runtime-registry-skills/research/agent-skills-contract.md", "reason": "Recheck AgentSkills API, dependency, and artifact layout assumptions"}
