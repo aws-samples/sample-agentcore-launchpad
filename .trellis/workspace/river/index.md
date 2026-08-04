@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 31
-- **Last Active**: 2026-07-29
+- **Total Sessions**: 32
+- **Last Active**: 2026-08-04
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1687 | Active |
+| `journal-1.md` | ~1722 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 32 | 2026-08-04 | Finish evaluation experiment trace readiness | `47dbe09e9bdad2a11d89a56958245b76158d7c2d` | `main` |
 | 31 | 2026-07-29 | Paginate the Evaluation module tables | `bcd6e81` | `main` |
 | 30 | 2026-07-29 | Workshop backlog: ISSUE-001/005/010/011/014 | `9853800`, `57882ff`, `70e94b0`, `d64f4b7` | `main` |
 | 29 | 2026-07-28 | Surface failed system-prompt recommendation (ISSUE-007) | `92b6a4f`, `4323530` | `main` |

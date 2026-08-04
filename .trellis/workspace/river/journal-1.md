@@ -1685,3 +1685,38 @@ All five Evaluation tables (runs, datasets, evaluators, experiments, runtime can
 ### Status
 
 [OK] **Completed**
+
+
+## Session 32: Finish evaluation experiment trace readiness
+
+**Date**: 2026-08-04
+**Task**: Finish evaluation experiment trace readiness
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Verified merged PR #11, recorded merge metadata, and archived the completed trace-readiness task.
+
+### Main Changes
+
+- Confirmed all PRD acceptance criteria and implementation checklist items were complete.
+- Recorded PR #11 and merge commit 47dbe09 in the archived task metadata.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `47dbe09e9bdad2a11d89a56958245b76158d7c2d` | (see git log) |
+
+### Testing
+
+- [OK] make verify: PASS (backend 1521 passed; infra 11 passed; frontend lint, typecheck, build; i18n parity).
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None; task is archived.
