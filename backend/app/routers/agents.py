@@ -239,8 +239,8 @@ def convert_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any
     export alone would no-op, same as the harness), and deploys the result
     through the standard zip pipeline. The source harness is untouched.
     """
+    from app.deployer.zip_runtime import platform_requirements
     from app.services import harness_convert as hc
-    from app.templates.strands_agent import base_requirements
 
     source = db.get(Agent, agent_id)
     if source is None or source.status == "deleted":
@@ -272,9 +272,14 @@ def convert_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any
         new_name = f"{source.name}-rt-{counter}"[:48]
         counter += 1
 
+    # The FULL platform contribution for the spec about to be built, not just the
+    # template base list: it is both the dedupe set and the graph resolve_pins
+    # resolves against, so an omission here produces pins the package stage
+    # cannot lock (mcp==2.0.0 vs strands-agents' mcp<2.0.0).
+    platform = platform_requirements(*hc.conversion_platform_inputs(source))
     try:
         files = hc.export_harness(source.arn)
-        spec = hc.build_conversion_spec(source, files, base_requirements(), new_name)
+        spec = hc.build_conversion_spec(source, files, platform, new_name)
     except hc.ConversionError as exc:
         raise AppError("agent.convert_failed", str(exc), status_code=502) from exc
 

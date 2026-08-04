@@ -17,9 +17,11 @@ import ast
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from app.core.config import DATA_DIR, get_settings
 from app.core.errors import AppError
@@ -202,14 +204,29 @@ def ensure_scratch_project() -> Path:
 
 
 def export_harness(harness_arn: str) -> dict[str, str]:
-    """Run the CLI export; return {relpath: content} for the generated project."""
+    """Run the CLI export; return {relpath: content} for the generated project.
+
+    Exports into a **unique, immediately-discarded** target agent name. The CLI
+    derives `<harnessName>Agent` by default and refuses to overwrite it, so with
+    the default name the shared scratch project accumulates one directory per
+    harness and every *second* conversion of the same harness dies with
+    `A runtime agent named "…" already exists`. A per-call name also keeps two
+    concurrent conversions of different harnesses from tripping over each other's
+    export directory.
+
+    The generated tree is read into memory and is not an artifact of record — the
+    spec's `code_bundle` is — so it is removed once read.
+    """
     project = ensure_scratch_project()
+    target = f"lpexport{uuid4().hex[:10]}Agent"
     proc = _run_agentcore(
         [
             "export",
             "harness",
             "--arn",
             harness_arn,
+            "--target-agent-name",
+            target,
             "--build",
             "CodeZip",
             "--json",
@@ -224,13 +241,16 @@ def export_harness(harness_arn: str) -> dict[str, str]:
         raise ConversionError("harness export returned no agentPath")
     agent_path = Path(exported_path)
     files: dict[str, str] = {}
-    for path in agent_path.rglob("*"):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(agent_path).as_posix()
-        if rel.startswith(".") or rel.endswith((".md", ".gitignore")):
-            continue  # docs/git housekeeping — not runtime source
-        files[rel] = path.read_text(encoding="utf-8")
+    try:
+        for path in agent_path.rglob("*"):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(agent_path).as_posix()
+            if rel.startswith(".") or rel.endswith((".md", ".gitignore")):
+                continue  # docs/git housekeeping — not runtime source
+            files[rel] = path.read_text(encoding="utf-8")
+    finally:
+        shutil.rmtree(agent_path, ignore_errors=True)
     if "main.py" not in files:
         raise ConversionError("export produced no main.py")
     return files
@@ -435,9 +455,19 @@ def discover_env(files: dict[str, str]) -> dict[str, str | None]:
     return env
 
 
-def flatten_requirements(files: dict[str, str], base: list[str]) -> list[str]:
+def flatten_requirements(files: dict[str, str], platform: list[str]) -> list[str]:
     """pyproject [project].dependencies → extras not already satisfied by the
-    template base pins (base wins on package-name conflicts)."""
+    platform's own requirement lists (the platform wins on package-name conflicts).
+
+    `platform` must be the FULL platform contribution for the spec being built
+    (`zip_runtime.platform_requirements(...)`), not just the template base list —
+    otherwise a project the platform names in an extras list (Mantle's `openai`)
+    survives here and is emitted a second time into the spec.
+
+    Consequence of "the platform wins": a source Harness whose own floor is higher
+    than the platform's range loses that floor. That is the safe direction — the
+    platform's range is what the runtime template's code was verified against.
+    """
     pyproject = files.get("pyproject.toml", "")
     deps: list[str] = []
     in_deps = False
@@ -452,13 +482,31 @@ def flatten_requirements(files: dict[str, str], base: list[str]) -> list[str]:
             entry = stripped.strip('",').strip("',")
             if entry:
                 deps.append(entry)
-    base_names = {re.split(r"[<>=!\[ ]", req, maxsplit=1)[0].lower() for req in base}
+    taken = {re.split(r"[<>=!\[ ]", req, maxsplit=1)[0].lower() for req in platform}
     return [d for d in deps
-            if re.split(r"[<>=!\[ ]", d, maxsplit=1)[0].lower() not in base_names]
+            if re.split(r"[<>=!\[ ]", d, maxsplit=1)[0].lower() not in taken]
+
+
+def conversion_platform_inputs(source_agent: Any) -> tuple[str, str, str]:
+    """`(method, model_source, protocol)` the converted spec will carry.
+
+    The caller needs these *before* the spec exists, to look up the platform
+    requirement list to resolve pins against. Shared with `build_conversion_spec`
+    below so the two cannot derive a different `model_source` — a disagreement
+    there would resolve pins against a platform list the deploy never uses, which
+    is the whole failure this indirection exists to prevent.
+    """
+    source_spec = source_agent.spec or {}
+    return (
+        "zip_runtime",  # conversion always targets the zip runtime
+        source_spec.get("model_source")
+        or AgentSpec.model_fields["model_source"].default,
+        "http",  # conversion never emits an A2A runtime
+    )
 
 
 def build_conversion_spec(
-    source_agent: Any, files: dict[str, str], base_requirements: list[str],
+    source_agent: Any, files: dict[str, str], platform: list[str],
     new_name: str,
 ) -> AgentSpec:
     grafted = dict(files)
@@ -505,17 +553,17 @@ def build_conversion_spec(
         name=new_name,
         method="zip_runtime",
         model_id=source_spec.get("model_id") or AgentSpec.model_fields["model_id"].default,
-        model_source=(
-            source_spec.get("model_source")
-            or AgentSpec.model_fields["model_source"].default
-        ),
+        model_source=conversion_platform_inputs(source_agent)[1],
         system_prompt=prompt_default or "(baked into exported code)",
         tool_description_overrides=tool_defaults,
         # The source Harness declares ranges in its own pyproject.toml. A spec
         # must name immutable artifacts (app/schemas/requirements.py), so resolve
         # them here rather than either refusing the conversion or storing a spec
-        # that installs something different on every rebuild.
-        requirements=resolve_pins(flatten_requirements(grafted, base_requirements)),
+        # that installs something different on every rebuild. `platform` is what
+        # keeps the resolved pins lockable by the package stage — see resolve_pins.
+        requirements=resolve_pins(
+            flatten_requirements(grafted, platform), platform
+        ),
         code_bundle={k: v for k, v in grafted.items() if k != "pyproject.toml"},
         source_harness={
             "agent_id": source_agent.id,

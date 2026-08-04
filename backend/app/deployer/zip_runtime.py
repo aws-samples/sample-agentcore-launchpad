@@ -386,21 +386,47 @@ STUDIO_EXTRA_REQUIREMENTS = [
 MANTLE_EXTRA_REQUIREMENTS = ["strands-agents[openai]>=1.47,<2", "openai>=2,<3"]
 
 
-def _method_requirements(spec: AgentSpec) -> list[str]:
-    if spec.protocol == "a2a":
+def platform_requirements(
+    method: str, model_source: str, protocol: str = "http"
+) -> list[str]:
+    """Every requirement the package stage adds on top of `spec.requirements`.
+
+    The one source of truth for the platform's own half of the install set, shared
+    by two consumers that MUST agree:
+
+    * `_method_requirements` below, which feeds the hashed lockfile, and
+    * `resolve_pins` (`app/schemas/requirements.py`), which needs these entries in
+      its compile input so a pin it produces is one this lockfile can satisfy.
+
+    Resolving a spec requirement without them pins it against a different
+    dependency graph than the build uses — see the docstring there for the
+    `mcp==2.0.0` failure that motivates the sharing.
+
+    Takes the three fields it reads as scalars rather than an `AgentSpec`, because
+    every caller that needs pinning is holding *unpinned* requirements and so
+    cannot construct one (`AgentSpec` validates `requirements` are pinned).
+    """
+    if protocol == "a2a":
         from app.templates.strands_a2a_agent import a2a_base_requirements
 
-        return a2a_base_requirements() + spec.requirements
-    if spec.method == "studio":
+        return a2a_base_requirements()
+    if method == "studio":
         # The canvas bakes the model into its code and knows which providers its
         # nodes use, so it supplies its own extras via spec.requirements;
         # spec.model_source is inert for studio specs.
         extra = STUDIO_EXTRA_REQUIREMENTS
-    elif spec.model_source == "mantle":
+    elif model_source == "mantle":
         extra = MANTLE_EXTRA_REQUIREMENTS
     else:
         extra = []
-    return base_requirements() + extra + spec.requirements
+    return base_requirements() + extra
+
+
+def _method_requirements(spec: AgentSpec) -> list[str]:
+    return (
+        platform_requirements(spec.method, spec.model_source, spec.protocol)
+        + spec.requirements
+    )
 
 
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:

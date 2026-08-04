@@ -29,6 +29,7 @@ import sys
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
+from app.deployer.zip_runtime import platform_requirements
 from app.models.ledger import Agent
 from app.schemas.requirements import resolve_pins, unpinned
 
@@ -99,9 +100,19 @@ def _apply(db, found: list[tuple[Agent, list[str]]]) -> int:
     """Pin the listed agents. Returns the number that failed."""
     failures = 0
     for agent, _loose in found:
-        requirements = (agent.spec or {}).get("requirements") or []
+        spec = agent.spec or {}
+        requirements = spec.get("requirements") or []
+        # Per-agent, inside the loop: the platform's contribution depends on this
+        # agent's own method/model_source/protocol. Pinning without it resolves
+        # against a different dependency graph than the agent's next deploy uses,
+        # which is how this migration previously left agents un-republishable.
+        platform = platform_requirements(
+            spec.get("method") or agent.method,
+            spec.get("model_source") or "bedrock",
+            spec.get("protocol") or "http",
+        )
         try:
-            pinned = resolve_pins(requirements)
+            pinned = resolve_pins(requirements, platform)
         except ValueError as exc:
             print(f"  {agent.name}: FAILED — {exc}")
             failures += 1

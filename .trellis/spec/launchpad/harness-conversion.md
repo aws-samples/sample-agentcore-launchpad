@@ -26,8 +26,9 @@ export_harness(harness_arn) -> dict[str, str]        # managed CLI, scratch proj
 graft_config_bundle(main_py) -> str                   # raises ConversionError on anchor miss
 graft_direct_kb_tools(main_py) -> str                 # tools=[] import/register graft
 discover_env(files) -> dict[str, str | None]          # wired value | None (degrades)
-flatten_requirements(files, base) -> list[str]        # pyproject deps minus base pins
-build_conversion_spec(source, files, base, name) -> AgentSpec
+flatten_requirements(files, platform) -> list[str]    # pyproject deps minus platform names
+conversion_platform_inputs(source) -> (method, model_source, protocol)
+build_conversion_spec(source, files, platform, name) -> AgentSpec
 # AgentSpec additions (schemas/agent.py):
 code_bundle: dict[str, str] | None      # relpath→content, main.py required, ≤64 files/1MB,
                                         # safe relpaths only, XOR with code
@@ -83,8 +84,29 @@ conversion_notes: dict[str, str] | None # per-capability wiring outcome (UI rend
   for the NEW runtime's workload identity (future work). Every outcome is
   recorded in `conversion_notes` and rendered in agent detail.
 - Naming: `{source}-rt`, then `-2`, `-3`… against non-deleted names.
-- pyproject deps are flattened into `spec.requirements` minus base-pin
-  package names (base wins; export set verified pure-python/aarch64).
+- pyproject deps are flattened into `spec.requirements` minus the package
+  names the **platform** already contributes (platform wins; export set
+  verified pure-python/aarch64). The list is
+  `zip_runtime.platform_requirements(*conversion_platform_inputs(source))` —
+  the FULL contribution including the Mantle/studio/a2a extras, not just the
+  template base list. Handing over only the base list let Mantle's `openai`
+  through into the spec, emitting the project twice.
+- **Pins are resolved against the platform's own ranges.**
+  `resolve_pins(entries, platform)` puts the platform entries in the same
+  `uv pip compile` input as the Harness's ranges, with the dependency walk
+  enabled (no `--no-deps`). Resolving in isolation picks the newest release
+  satisfying each entry alone, which the package stage — compiling spec +
+  platform into one hashed lockfile — can find unsatisfiable, leaving an agent
+  that never produces an artifact. Measured: `mcp >= 1.19.0` alone → `mcp==2.0.0`,
+  but every published `strands-agents` caps `mcp<2.0.0`. Passing the platform
+  list as `--constraint` while keeping `--no-deps` was measured and does NOT
+  help (the cap is transitive). `platform` has no default, so a new call site
+  cannot silently reintroduce the isolated resolve.
+- **Each export uses a unique `--target-agent-name`, discarded once read.** The
+  CLI derives `<harnessName>Agent` and refuses to overwrite it, so a default-named
+  export makes every *second* conversion of the same harness fail with
+  `A runtime agent named "…" already exists`; a per-call name also keeps
+  concurrent conversions off each other's directory.
 
 ### 4. Validation & Error Matrix
 
@@ -105,7 +127,8 @@ conversion_notes: dict[str, str] | None # per-capability wiring outcome (UI rend
   carries `launchpad_kb_tools.py`, and records the direct-channel replacement;
   the agent is experiment-selectable when active.
 - **Base**: converting again while the first deploys → 409; after it lands,
-  a re-convert yields `-rt-2`.
+  a re-convert yields `-rt-2` — and the re-export succeeds, because the target
+  agent name is unique per call.
 - **Bad**: CLI codegen drift removes anchors → 502 with "graft anchor
   missing", zero side effects.
 
@@ -120,8 +143,18 @@ three-argument agent construction; idempotence, malformed-Python,
 unrelated/ambiguous assignments, misplaced apply calls, and anchor-miss
 failures; CLI timeout and malformed-result boundaries; KB prompt/default/env/spec
 shape; KB-less bundle compatibility; env discovery (memory wired, gateway None,
-AWS_REGION skipped); requirements flattening; code_bundle staging; endpoint
-guards and clean failures with no leftover rows. `test_strands_template.py` proves
+AWS_REGION skipped); requirements flattening (including dedupe against the
+platform's *extras* lists, not only the base list); that the platform list handed
+to `resolve_pins` carries the Mantle extras for a Mantle source, and equals what
+the package stage prepends to the spec actually built (drift guard); that two
+consecutive exports of one harness use different `--target-agent-name`s and leave
+no tree behind; code_bundle staging; endpoint guards and clean failures with no
+leftover rows. `backend/tests/test_requirements_pinning.py` proves the platform
+entries reach the compile input, `--no-deps` is absent, the transitive closure is
+not returned, `platform` is required, and the `mcp==2.0.0` over-pin cannot recur.
+`backend/tests/test_zip_runtime_deployer.py` pins the package stage to exactly
+`platform_requirements(...) + spec.requirements` across all four platform branches,
+which is what makes sharing that list with the resolver sound. `test_strands_template.py` proves
 generated ZIP `main.py` inlines the same standalone-compilable direct source.
 
 ### 7. Wrong vs Correct
@@ -145,6 +178,7 @@ env = discover_env(grafted)          # memory wired, gateway stays None + noted
 
 > **Warning**: the exported code's model id is baked (whatever the harness
 > used); the exec role must be able to invoke it. The scratch export dir under
-> `data/harness-export/` is a cache — safe to delete anytime. Deleting
+> `data/harness-export/` holds only the reusable scratch *project* (each
+> export's own tree is removed once read) — safe to delete anytime. Deleting
 > `data/agentcore-cli/` removes a bootstrap-owned prerequisite; rerun
 > `make bootstrap` before the next conversion.
