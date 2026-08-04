@@ -385,6 +385,103 @@ def test_build_conversion_spec_carries_model_source(monkeypatch):
     assert not any("[openai]" in r for r in _method_requirements(legacy))
 
 
+SKILL_URI = "s3://launchpad-artifacts-1-us-west-2/skills/lab-quota-answering/"
+
+
+def test_discover_skills_reads_the_exported_source_lists():
+    files = {
+        "main.py": (
+            "skill_paths = []\n"
+            f's3_skill_sources = ["{SKILL_URI}"]\n'
+            'git_skill_sources = ["https://example.invalid/repo.git"]\n'
+        ),
+        "notes.md": f's3_skill_sources = ["{SKILL_URI}"]',  # not python — ignored
+    }
+    s3_uris, other = hc.discover_skills(files)
+    assert s3_uris == [SKILL_URI]
+    assert other == ["https://example.invalid/repo.git"]
+
+
+def test_conversion_carries_skills_so_the_exec_role_grants_s3_read(monkeypatch):
+    """`agent_iam` gates the skill S3 statement on `spec.skills`. Dropping the
+    field made the deploy report success and the runtime fail at INVOKE with
+    `Failed to resolve S3 skill … AccessDenied`, because the exported code fetches
+    the prefixes it baked in."""
+    monkeypatch.setattr(
+        hc, "get_settings",
+        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
+    )
+    source = _source_agent()
+    source.spec = {**source.spec, "skills": [SKILL_URI]}
+    files = {
+        "main.py": MAIN_PY + f'\ns3_skill_sources = ["{SKILL_URI}"]\n',
+        "pyproject.toml": PYPROJECT,
+    }
+
+    spec = hc.build_conversion_spec(
+        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt"
+    )
+
+    assert spec.skills == [SKILL_URI]
+    assert spec.conversion_notes["skills"].startswith("wired")
+
+
+def test_skills_only_the_exported_code_names_are_still_granted(monkeypatch):
+    """The grant must cover what the CODE fetches. A source row that never
+    recorded the bundle (or recorded it before the export changed) would
+    otherwise authorize the role for the wrong thing."""
+    monkeypatch.setattr(
+        hc, "get_settings",
+        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
+    )
+    source = _source_agent()  # ledger row has NO skills
+    files = {
+        "main.py": MAIN_PY + f'\ns3_skill_sources = ["{SKILL_URI}"]\n',
+        "pyproject.toml": PYPROJECT,
+    }
+
+    spec = hc.build_conversion_spec(
+        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt"
+    )
+
+    assert spec.skills == [SKILL_URI]
+
+
+def test_non_s3_skill_sources_are_flagged_not_silently_claimed(monkeypatch):
+    monkeypatch.setattr(
+        hc, "get_settings",
+        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
+    )
+    files = {
+        "main.py": MAIN_PY
+        + '\ngit_skill_sources = ["https://example.invalid/repo.git"]\n',
+        "pyproject.toml": PYPROJECT,
+    }
+
+    spec = hc.build_conversion_spec(
+        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt"
+    )
+
+    assert spec.skills == []  # no S3 prefix to grant
+    assert spec.conversion_notes["skills_non_s3"].startswith("not verified")
+
+
+def test_a_skill_free_harness_claims_nothing_about_skills(monkeypatch):
+    monkeypatch.setattr(
+        hc, "get_settings",
+        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
+    )
+    spec = hc.build_conversion_spec(
+        _source_agent(),
+        {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT},
+        ["bedrock-agentcore==1.17.*"],
+        "aurora-support-rt",
+    )
+    assert spec.skills == []
+    assert "skills" not in spec.conversion_notes
+    assert "skills_non_s3" not in spec.conversion_notes
+
+
 def test_pins_are_resolved_against_the_specs_own_platform_list(monkeypatch):
     """A Mantle harness (the lab-quota-advisor shape) must resolve its pins against
     the Mantle extras too. Resolving against the base list alone is what produced

@@ -487,6 +487,45 @@ def flatten_requirements(files: dict[str, str], platform: list[str]) -> list[str
             if re.split(r"[<>=!\[ ]", d, maxsplit=1)[0].lower() not in taken]
 
 
+def discover_skills(files: dict[str, str]) -> tuple[list[str], list[str]]:
+    """Skill sources the exported code will fetch → `(s3_uris, other_uris)`.
+
+    The export bakes the harness's skill bundles into module-level list literals
+    (`s3_skill_sources = ["s3://…/skills/<name>/"]`, and a git equivalent), and
+    resolves them at request time via its own `skills/fetcher.py`. Read from the
+    code rather than only the source agent's ledger row because the code is what
+    actually performs the fetch — the exec role has to allow exactly that, and a
+    grant derived from a stale ledger row would be authorized for the wrong thing.
+    """
+    s3_uris: list[str] = []
+    other: list[str] = []
+    for name, content in files.items():
+        if not name.endswith(".py"):
+            continue
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            continue  # a graft anchor check elsewhere owns malformed exports
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.List):
+                continue
+            if not any(
+                isinstance(t, ast.Name) and t.id.endswith("_skill_sources")
+                for t in node.targets
+            ):
+                continue
+            for element in node.value.elts:
+                if not isinstance(element, ast.Constant) or not isinstance(
+                    element.value, str
+                ):
+                    continue
+                uri = element.value.strip()
+                if not uri:
+                    continue
+                (s3_uris if uri.startswith("s3://") else other).append(uri)
+    return sorted(set(s3_uris)), sorted(set(other))
+
+
 def conversion_platform_inputs(source_agent: Any) -> tuple[str, str, str]:
     """`(method, model_source, protocol)` the converted spec will carry.
 
@@ -542,6 +581,24 @@ def build_conversion_spec(
         notes["knowledge_bases"] = (
             "wired (direct kb_search + kb_deep_search; Harness KB Gateway replaced)"
         )
+    # Skill bundles must land in spec.skills or the exec role is never granted S3
+    # read for them (agent_iam gates that statement on spec.skills), and the
+    # exported code — which fetches the prefixes it baked in at request time —
+    # fails with AccessDenied at INVOKE while the deploy itself reports success.
+    code_s3_skills, code_other_skills = discover_skills(grafted)
+    skills = sorted({*(source_spec.get("skills") or []), *code_s3_skills})
+    if skills:
+        notes["skills"] = (
+            f"wired ({len(skills)} bundle(s) fetched from S3 at request time; "
+            "exec role granted read on those prefixes)"
+        )
+    if code_other_skills:
+        # Non-S3 sources (e.g. git) need no S3 grant, but the runtime must be able
+        # to reach them — say so rather than implying the whole capability is wired.
+        notes["skills_non_s3"] = (
+            f"not verified — exported code fetches {len(code_other_skills)} "
+            "non-S3 skill source(s); network egress for those is unverified"
+        )
     for key, value in env_contract.items():
         label = "memory" if key.startswith("MEMORY_") else (
             "kb_gateway" if key.startswith("GATEWAY_") else key.lower())
@@ -556,6 +613,7 @@ def build_conversion_spec(
         model_source=conversion_platform_inputs(source_agent)[1],
         system_prompt=prompt_default or "(baked into exported code)",
         tool_description_overrides=tool_defaults,
+        skills=skills,
         # The source Harness declares ranges in its own pyproject.toml. A spec
         # must name immutable artifacts (app/schemas/requirements.py), so resolve
         # them here rather than either refusing the conversion or storing a spec
