@@ -46,6 +46,26 @@ def test_codebuild_is_arm64(template: Template):
     )
 
 
+def test_ecr_scans_images_on_push(template: Template):
+    """A deploy can only be blocked on findings if the push produced them (T10)."""
+    template.has_resource_properties(
+        "AWS::ECR::Repository",
+        {
+            "RepositoryName": "launchpad-agents",
+            "ImageScanningConfiguration": Match.object_like({"ScanOnPush": True}),
+        },
+    )
+
+
+def test_ecr_tags_stay_mutable(template: Template):
+    """IMMUTABLE would break re-publish: the container path pushes the same
+    `{agent}-v{version}` tag twice because packaging runs before the version is
+    bumped. Deployment pins the image by digest instead, so the tag is cosmetic."""
+    repos = template.find_resources("AWS::ECR::Repository")
+    for repo in repos.values():
+        assert repo["Properties"].get("ImageTagMutability") in (None, "MUTABLE")
+
+
 def test_execution_role_trusts_agentcore(template: Template):
     template.has_resource_properties(
         "AWS::IAM::Role",

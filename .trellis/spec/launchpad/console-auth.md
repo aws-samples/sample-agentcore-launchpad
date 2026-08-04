@@ -4,9 +4,14 @@
 
 Use this contract when changing Launchpad console authentication, console
 accounts (registration, validity, roles, the admin User Management module), the
-`/api` route boundary, local credential settings, or frontend handling of
-expired sessions. This gate is deliberately independent from Cognito demo users
-and the public `/v1` API-key surface.
+`/api` route boundary, **per-route authorization (`ROUTE_POLICY`)**, local
+credential settings, the **local code-execution gate**, transport security
+(`Secure` cookie / HSTS), or frontend handling of expired sessions. This gate is
+deliberately independent from Cognito demo users and the public `/v1` API-key
+surface.
+
+**Adding any `/api` route puts you in scope**: an unclassified route is refused at
+runtime (§3.4c).
 
 ## 2. Signatures
 
@@ -48,9 +53,11 @@ clamped down to the account's `expires_at`.
 ### 3.1 Configuration
 
 ```text
+run_mode / LAUNCHPAD_RUN_MODE                               default: "dev" ("dev"|"prod")
 auth_username / LAUNCHPAD_AUTH_USERNAME                     default: "admin"
 auth_password / LAUNCHPAD_AUTH_PASSWORD                     default: unset
 auth_cookie_secure / LAUNCHPAD_AUTH_COOKIE_SECURE           default: false
+allow_open_console / LAUNCHPAD_ALLOW_OPEN_CONSOLE           default: false
 auth_registration_enabled / …_AUTH_REGISTRATION_ENABLED     default: true
 auth_registration_require_approval / …_AUTH_REGISTRATION_REQUIRE_APPROVAL  default: true
 auth_registration_valid_days / …_AUTH_REGISTRATION_VALID_DAYS  default: 7
@@ -58,9 +65,15 @@ auth_allowed_email_domains / …_AUTH_ALLOWED_EMAIL_DOMAINS   default: [] (allow
 auth_blocked_email_domains / …_AUTH_BLOCKED_EMAIL_DOMAINS   default: free/disposable mail list
 ```
 
-An unset or empty password disables the whole gate: the console stays open,
-`/api/users*` is reachable as the implicit local admin, and registration is
-refused with `auth.registration_disabled`.
+An unset or empty password disables the login gate: the console stays open **to
+loopback callers**, `/api/users*` is reachable as the implicit local admin, and
+registration is refused with `auth.registration_disabled`. Non-loopback callers
+are refused — see §3.4.
+
+`run_mode` is the single production signal. `start.py` has always exported
+`LAUNCHPAD_RUN_MODE` into its children; do **not** introduce a second mode
+setting. It drives the effective cookie/HSTS posture (§3.4) and whether local code
+execution is served at all (§3.7).
 
 ### 3.2 Two credential sources, one cookie
 
@@ -102,20 +115,68 @@ derives from it) — that is intended, not a bug.
 
 ### 3.4 Route boundary
 
-When the gate is enabled, middleware protects all `/api/*` paths except:
+Three checks, in this order. They answer different questions; do not merge them.
 
-- `/api/health`
-- `/api/auth/status`
-- `/api/auth/login`
-- `/api/auth/register`
-- CORS `OPTIONS` requests
+**(a) May the console be open at all?** With the gate disabled, a request to a
+guarded `/api` path from a **non-loopback transport peer** is refused with
+`403 auth.open_console_refused` unless `allow_open_console` is set.
 
-The middleware never guards `/v1/*`; those routes continue to require
-`X-Api-Key`. A successful login sets an HMAC-signed HttpOnly, SameSite=Lax,
-Path=/ cookie. Set `auth_cookie_secure=true` when HTTPS is used.
+- This must stay a **per-request** check. `create_app()` cannot see uvicorn's
+  `--host`, so a startup-only check is bypassed by running uvicorn directly —
+  which is how the EC2 host and any container start it.
+- Use `request.client.host` and **never** `X-Forwarded-For`: a spoofable header
+  would make the check decorative. Verified over real sockets: forged
+  `X-Forwarded-For` / `X-Real-IP` / `Forwarded` / `Host` from a non-loopback peer
+  are all refused. The accepted consequence is narrower than "localhost is
+  trusted" — uvicorn's proxy-header middleware (default
+  `forwarded_allow_ips=127.0.0.1`) rewrites the peer from `X-Forwarded-For` when
+  the peer *is* loopback, so a same-host proxy that sets it has its real client
+  evaluated and refused; only one that omits forwarded headers still reads as
+  local. This branch never runs in real production, where the gate is enabled.
+- A non-IP peer (e.g. a test transport) counts as non-loopback, i.e. fails closed.
+  `TestClient`'s peer is the literal `"testclient"`, so `backend/tests/conftest.py`
+  sets `LAUNCHPAD_ALLOW_OPEN_CONSOLE=true` for the suite. **Do not special-case
+  that string in production code.**
+- `create_app()` additionally refuses to build when `run_mode=prod` and the gate
+  is off, and `start.py` pre-flights the effective bind host. Both are fast
+  failure, not the boundary.
 
-`/api/users*` requires `require_admin`, which returns the implicit admin when
-the gate is disabled and otherwise demands `role == "admin"`.
+**(b) Is there a live session?** When the gate is enabled, middleware requires one
+on all `/api/*` paths except `/api/health`, `/api/auth/status`,
+`/api/auth/login`, `/api/auth/register`, and CORS `OPTIONS`. The middleware never
+guards `/v1/*`; those routes continue to require `X-Api-Key`.
+
+**(c) Does this caller's role allow this route?** Every `/api` route is classified
+in `ROUTE_POLICY` (`backend/app/core/route_policy.py`), enforced by one app-level
+dependency registered as `FastAPI(dependencies=[Depends(enforce_route_policy)])`.
+
+- A **dependency, not middleware**: `scope["route"]` is only populated after the
+  router matches, so the check reads the exact `path_format` rather than
+  re-implementing path matching. This holds under FastAPI 0.139's
+  `_IncludedRouter` wrapping — which also means any code enumerating routes must
+  **recurse** through `route.original_router.routes`, since `app.routes` is not
+  flattened.
+- **Default-deny**: an unclassified `/api` route raises
+  `500 auth.route_unclassified`. Adding a route therefore requires adding an
+  entry; `tests/test_route_policy.py` fails on drift in either direction.
+- Classification principle: `ADMIN` for routes that execute code, change deployed
+  or cloud state, mint credentials, or change governance posture; `MEMBER` for
+  reads and for a member's own interaction with an agent; `PUBLIC` for the four
+  open paths above (which must agree with `_OPEN_API_PATHS`).
+- Invoking an agent (`/api/agents/{id}/invoke`, `/api/registry/a2a-demo`) is
+  **MEMBER on purpose** — the same capability Chat gives every member.
+- **Never add a setting that disables this table.** A flag that turns
+  authorization off is the vulnerability; fix a misclassification by editing the
+  entry.
+- `require_admin` remains the enforcement primitive, so the 403 envelope
+  (`auth.forbidden`) is unchanged and the frontend keeps working.
+
+A successful login sets an HMAC-signed HttpOnly, SameSite=Lax, Path=/ cookie.
+`Secure` comes from `cookie_secure(settings)` = `auth_cookie_secure or run_mode ==
+"prod"`, and an HSTS response header is emitted in `prod` only. **Do not hardcode
+either on**: a `Secure` cookie over a plain-HTTP dev origin is never sent back
+(local sign-in breaks silently), and an HSTS header there pins `localhost` to
+HTTPS in the developer's browser.
 
 ### 3.5 Email policy
 
@@ -137,7 +198,44 @@ suffix** (`x.gmail.com` counts as `gmail.com`). A non-empty
   returned exactly once as `generated_password` and never stored in plaintext.
   An explicit password must not be echoed back.
 - Data is **not** partitioned per user. Do not add owner filtering to resource
-  endpoints as part of an auth change.
+  endpoints as part of an auth change. This is why `member` is classified as
+  near read-only in §3.4: a member who could deploy could also mutate every other
+  member's resources.
+
+### 3.7 Local code execution
+
+`/api/execute`, `/api/execute/stream` and the `/api/conversations` surface run
+caller-supplied Python on the server. They are gated by
+`local_exec_enabled(settings)` = `studio_local_exec_enabled` when set, otherwise
+`run_mode != "prod"` — so **production refuses them** with
+`403 studio.exec.disabled`. Studio local debug and AI Fix consequently do not work
+in production; that is the mitigation, not a bug.
+
+- There are **three** spawn sites: `local_exec.spawn_execution_subprocess` and two
+  in `conversation_service`. Any isolation change must cover all three, and any new
+  entrance must call the same gate — closing one and not the others only moves the
+  door.
+- The child environment is an **allowlist** (`local_exec._ENV_ALLOWLIST`), never
+  `os.environ.copy()`. AWS credential variables are a separate group, forwarded
+  only while `studio_exec_forward_aws_credentials` is true.
+- **Keep that forward on by default.** The default Bedrock Mantle path builds
+  `OpenAIResponsesModel(bedrock_mantle_config=…)` and the SDK mints a bearer token
+  from the ambient credentials, so a credential-less child breaks local debug
+  unless the caller supplies `bedrock_api_key`/`openai_api_key`.
+- Scrubbing the environment does **not** remove AWS access: on EC2 credentials
+  arrive from IMDS over the network. Verified 2026-08-03 that
+  `sts:GetCallerIdentity` still succeeds from inside the child with the allowlist
+  applied. Only the uid-keyed firewall rule installed by
+  `scripts/setup_exec_env.sh --hardened` closes it, so treat
+  `AWS_EC2_METADATA_DISABLED` as belt-and-braces rather than the control.
+- Isolation arguments come from one place, `local_exec.build_spawn_kwargs()`. The
+  uid drop uses subprocess's `user`/`group` arguments, **not** `preexec_fn`:
+  `preexec_fn` runs arbitrary Python after a fork and is deadlock-prone in a
+  threaded process, and this backend runs deploy jobs on threads. Only `setrlimit`
+  stays in `preexec_fn`, with its values computed before the fork.
+- When a uid is configured, the run's workdir must be handed to it
+  (`grant_workdir_to_exec_user`) — `mkdtemp` is 0700 and owned by the backend
+  user, so the child could not otherwise read its own code or bundled skills.
 
 ### 3.7 Frontend
 
@@ -236,7 +334,30 @@ Backend tests must assert:
   lapsed), absolute/never expiry, disable→enable, role change, generated vs
   explicit password reset, and delete;
 - a member gets `403` on all four `/api/users` routes, an anonymous caller
-  `401`, and the gate-disabled console reaches them as implicit admin.
+  `401`, and the gate-disabled console reaches them as implicit admin;
+- **the open-console guard**: a non-loopback peer is refused with
+  `auth.open_console_refused` while `/api/health` and the auth bootstrap routes
+  stay reachable and `/v1` is untouched; a loopback peer keeps full access;
+  `allow_open_console` restores access; an enabled gate yields the ordinary `401`
+  instead of the refusal; `create_app()` raises under `run_mode=prod` + no auth;
+- **the route table**: every live `/api` route is classified and every entry
+  matches a live route (both directions — this is what stops the table rotting);
+  for every `ADMIN` route, anonymous → `401` and member → `403`; removing an entry
+  makes the route answer `auth.route_unclassified`;
+- **cookie/HSTS posture** per `run_mode`, including that `auth_cookie_secure`
+  still forces `Secure` on in dev;
+- **local execution**: production refuses `/api/execute`, `/api/execute/stream`
+  **and** `/api/conversations`; the opt-in restores them; the child environment
+  contains no unrelated host variables; AWS credentials are forwarded by default
+  and withheld under `studio_exec_forward_aws_credentials=false`; the resource
+  ceilings are actually applied (read them back from a real child); the uid drop
+  does not go through `preexec_fn`.
+
+Do **not** drive the `MEMBER` route sweep over HTTP: that executes the real
+handlers, which call live AWS. Assert the authorization decision by calling
+`enforce_route_policy` with a request whose `scope["route"]` is set. (An earlier
+version of this sweep made real `GetRegistryRecord` calls from the hermetic
+suite.)
 
 Frontend validation must assert:
 
@@ -276,6 +397,41 @@ user = find_by_username(db, subject)           # the row is authoritative
 if user is None or user.status != "active" or is_expired(user):
     return None                                # → 401 auth.required
 return Identity(user.username, user.role, ...)
+```
+
+### Wrong — authorization the reviewer cannot see
+
+```python
+# Per-route Depends: invisible to review across 19 routers, and a route added
+# later defaults to *open* — the failure mode this contract exists to remove.
+@router.post("/agents")
+def create_agent(_: Identity = Depends(require_admin)): ...
+```
+
+### Correct
+
+```python
+# One auditable, default-deny table; an unclassified route refuses to serve.
+ROUTE_POLICY = {("POST", "/api/agents"): ADMIN, ...}
+app = FastAPI(dependencies=[Depends(enforce_route_policy)])
+```
+
+### Wrong — a startup-only host check
+
+```python
+# Bypassed by `uvicorn --host 0.0.0.0`, which is how the EC2 host and containers
+# start the app. create_app() cannot see uvicorn's bind address at all.
+if bind_host != "127.0.0.1" and not auth_enabled():
+    raise SystemExit("refusing to start")
+```
+
+### Correct
+
+```python
+# Checked per request, where the caller's address is actually known.
+if not enabled(settings) and not settings.allow_open_console:
+    if _is_guarded_api_path(path) and not _peer_is_loopback(request):
+        return JSONResponse(status_code=403, content=envelope(...))
 ```
 
 The local account gate owns only the console `/api` surface. Cognito remains a

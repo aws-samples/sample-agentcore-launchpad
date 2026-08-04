@@ -24,6 +24,7 @@ from typing import Any
 from app.core.config import DATA_DIR, get_settings
 from app.core.errors import AppError
 from app.schemas.agent import AgentSpec, KnowledgeBaseRef, MemoryConfig
+from app.schemas.requirements import resolve_pins
 from app.templates.kb_support import (
     KB_DEEP_TOOL_NAME,
     KB_TOOL_NAME,
@@ -510,7 +511,11 @@ def build_conversion_spec(
         ),
         system_prompt=prompt_default or "(baked into exported code)",
         tool_description_overrides=tool_defaults,
-        requirements=flatten_requirements(grafted, base_requirements),
+        # The source Harness declares ranges in its own pyproject.toml. A spec
+        # must name immutable artifacts (app/schemas/requirements.py), so resolve
+        # them here rather than either refusing the conversion or storing a spec
+        # that installs something different on every rebuild.
+        requirements=resolve_pins(flatten_requirements(grafted, base_requirements)),
         code_bundle={k: v for k, v in grafted.items() if k != "pyproject.toml"},
         source_harness={
             "agent_id": source_agent.id,

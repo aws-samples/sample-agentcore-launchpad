@@ -12,6 +12,10 @@ from app.models.ledger import User
 from app.services import users as users_service
 
 ADMIN = {"username": "operator", "password": "s3cret-pass"}
+# A member-reachable route, used here purely as a "is this session live"
+# probe. Not /api/apikeys: credential minting is admin-only (see
+# app/core/route_policy.py), so a member gets 403 there by design.
+MEMBER_PROBE = "/api/agents"
 MEMBER = {
     "username": "qa-user",
     "email": "qa-user@acme-corp.com",
@@ -119,7 +123,7 @@ class TestRegistration:
         )
         assert response.status_code == 401
         assert response.json()["code"] == "auth.account_pending"
-        assert anon.get("/api/apikeys").status_code == 401
+        assert anon.get(MEMBER_PROBE).status_code == 401
 
     def test_approval_starts_the_validity_window_and_unlocks_sign_in(self, anon, admin, app):
         assert register(anon).status_code == 201
@@ -135,7 +139,7 @@ class TestRegistration:
             "/api/auth/login",
             json={"username": MEMBER["username"], "password": MEMBER["password"]},
         ).status_code == 200
-        assert client.get("/api/apikeys").status_code == 200
+        assert client.get(MEMBER_PROBE).status_code == 200
 
     def test_rejection_keeps_the_account_out(self, anon, admin):
         assert register(anon).status_code == 201
@@ -175,7 +179,11 @@ class TestRegistration:
         assert status["role"] == "member"
         assert status["email"] == MEMBER["email"]
         assert status["account_expires_at"] is not None
-        assert client.get("/api/apikeys").status_code == 200
+        assert client.get(MEMBER_PROBE).status_code == 200
+        # ...but the console a member sees is read-only: admin-only routes answer
+        # 403, not 200. See app/core/route_policy.py.
+        assert client.get("/api/apikeys").status_code == 403
+        assert client.post("/api/agents", json={}).status_code == 403
         assert stored().login_count == 1
 
     @pytest.mark.parametrize(
@@ -226,11 +234,11 @@ class TestRegistration:
 class TestAccountLifecycle:
     def test_expired_account_loses_an_established_session(self, app):
         client = member_session(app)
-        assert client.get("/api/apikeys").status_code == 200
+        assert client.get(MEMBER_PROBE).status_code == 200
 
         patch_stored(expires_at=datetime.now(UTC) - timedelta(minutes=1))
-        assert client.get("/api/apikeys").status_code == 401
-        assert client.get("/api/apikeys").json()["code"] == "auth.required"
+        assert client.get(MEMBER_PROBE).status_code == 401
+        assert client.get(MEMBER_PROBE).json()["code"] == "auth.required"
 
         relogin = client.post(
             "/api/auth/login",
@@ -242,7 +250,7 @@ class TestAccountLifecycle:
     def test_disabled_account_loses_an_established_session(self, app):
         client = member_session(app)
         patch_stored(status="disabled")
-        assert client.get("/api/apikeys").status_code == 401
+        assert client.get(MEMBER_PROBE).status_code == 401
 
         relogin = client.post(
             "/api/auth/login",
@@ -255,7 +263,7 @@ class TestAccountLifecycle:
         client = member_session(app)
         user_id = stored().id
         assert admin.delete(f"/api/users/{user_id}").status_code == 200
-        assert client.get("/api/apikeys").status_code == 401
+        assert client.get(MEMBER_PROBE).status_code == 401
 
     def test_wrong_password_reports_generic_credentials_error(self, anon):
         assert register(anon).status_code == 201

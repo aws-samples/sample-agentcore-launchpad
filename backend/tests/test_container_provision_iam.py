@@ -1,6 +1,5 @@
 """BYO-mount IAM inline policy — document shape + provision/delete lifecycle."""
 
-import json
 
 from app.deployer import container as c
 from app.schemas.agent import AgentSpec
@@ -27,147 +26,21 @@ def _spec(**over) -> AgentSpec:
     return AgentSpec(name="fs-agent", method="container", system_prompt="hi", **over)
 
 
-def test_policy_document_none_without_byo():
-    assert c._fs_policy_document(_spec()) is None
-
-
-def test_policy_document_s3_files():
-    spec = _spec(
-        filesystem={
-            "s3_files": [
-                {"access_point_arn": S3_AP, "mount_path": "/mnt/d1"},
-                {"access_point_arn": S3_AP2, "mount_path": "/mnt/d2"},
-            ]
-        },
-        network=VPC,
-    )
-    doc = c._fs_policy_document(spec)
-    mount_stmt, get_stmt, list_stmt = doc["Statement"]
-    assert mount_stmt["Action"] == ["s3files:ClientMount", "s3files:ClientWrite"]
-    # both APs share one file system → deduped resource, both ARNs in the condition
-    assert mount_stmt["Resource"] == [
-        "arn:aws:s3files:us-west-2:111122223333:file-system/fs-abc"
-    ]
-    assert mount_stmt["Condition"]["ArnEquals"]["s3files:AccessPointArn"] == [S3_AP, S3_AP2]
-    # GetAccessPoint authorizes on the AP arn and has NO AccessPointArn condition
-    # key — a combined conditioned statement implicitly denies it (live 2026-07-13)
-    assert get_stmt["Action"] == ["s3files:GetAccessPoint"]
-    assert get_stmt["Resource"] == [S3_AP, S3_AP2]
-    assert "Condition" not in get_stmt
-    # AgentCore's runtime validation also demands ListMountTargets (undocumented,
-    # discovered via UpdateAgentRuntime probes 2026-07-13)
-    assert list_stmt["Action"] == ["s3files:ListMountTargets"]
-    assert list_stmt["Resource"] == [
-        "arn:aws:s3files:us-west-2:111122223333:file-system/fs-abc"
-    ]
-    assert "Condition" not in list_stmt
-
-
-def test_policy_document_efs():
-    spec = _spec(
-        filesystem={"efs": [{"access_point_arn": EFS_AP, "mount_path": "/mnt/tools"}]},
-        network=VPC,
-    )
-    doc = c._fs_policy_document(spec)
-    (stmt,) = doc["Statement"]
-    assert stmt["Action"] == [
-        "elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite",
-    ]
-    assert stmt["Resource"] == "*"  # FS ARN not derivable from an EFS AP ARN
-    assert stmt["Condition"]["ArnEquals"]["elasticfilesystem:AccessPointArn"] == [EFS_AP]
-
-
 class AgentRow:
+    id = "agent-1"
     name = "fs-agent"
-    resource_id = "rt-1"
+    method = "container"
+    resource_id = "fs_agent-abc123"
+    spec = {"name": "fs-agent", "method": "container", "system_prompt": "hi"}
 
 
-def test_sync_attaches_policy_for_byo():
-    iam = StubIam()
-    spec = _spec(
-        filesystem={"s3_files": [{"access_point_arn": S3_AP, "mount_path": "/mnt/d"}]},
-        network=VPC,
-    )
-    logs: list[str] = []
-    detail = c._sync_fs_policy(
-        iam, "arn:aws:iam::111122223333:role/launchpad-base", AgentRow(), spec, logs.append
-    )
-    (call,) = iam.put_calls
-    assert call["RoleName"] == "launchpad-base"
-    assert call["PolicyName"] == "launchpad-fs-fs-agent"
-    doc = json.loads(call["PolicyDocument"])
-    assert doc["Version"] == "2012-10-17"
-    assert iam.delete_calls == []
-    assert "launchpad-fs-fs-agent" in detail
+# The policy-document, fs-sync and IAM-propagation-retry tests moved to
+# tests/test_agent_iam_policy.py and tests/test_agent_iam_lifecycle.py along with the
+# code itself (app/services/agent_iam.py). What stays here is the container path's own
+# integration with it.
 
 
-def test_sync_removes_policy_when_mounts_removed():
-    iam = StubIam()
-    detail = c._sync_fs_policy(
-        iam, "arn:aws:iam::111122223333:role/launchpad-base", AgentRow(), _spec(), lambda m: None
-    )
-    assert iam.put_calls == []
-    (call,) = iam.delete_calls
-    assert call == {"RoleName": "launchpad-base", "PolicyName": "launchpad-fs-fs-agent"}
-    assert detail == ""
-
-
-def test_sync_tolerates_missing_policy_on_delete():
-    class Grumpy(StubIam):
-        def delete_role_policy(self, **kw):
-            raise RuntimeError("NoSuchEntity")
-
-    # must not raise
-    c._sync_fs_policy(
-        Grumpy(), "arn:aws:iam::1:role/launchpad-base", AgentRow(), _spec(), lambda m: None
-    )
-
-
-def test_retry_iam_propagation_retries_then_succeeds():
-    calls = {"n": 0}
-    slept: list[int] = []
-
-    def flaky():
-        calls["n"] += 1
-        if calls["n"] < 3:
-            raise RuntimeError(
-                "ValidationException: Execution role is missing required permissions. "
-                "Ensure the role has s3files:GetAccessPoint"
-            )
-        return {"agentRuntimeVersion": "4"}
-
-    out = c._retry_iam_propagation(flaky, lambda m: None, delay_s=10, sleeper=slept.append)
-    assert out == {"agentRuntimeVersion": "4"}
-    assert calls["n"] == 3 and slept == [10, 10]
-
-
-def test_retry_iam_propagation_other_errors_raise_immediately():
-    def boom():
-        raise RuntimeError("ValidationException: mountPath is invalid")
-
-    slept: list[int] = []
-    try:
-        c._retry_iam_propagation(boom, lambda m: None, sleeper=slept.append)
-        raise AssertionError("expected RuntimeError")
-    except RuntimeError:
-        pass
-    assert slept == []  # no retry for non-propagation errors
-
-
-def test_retry_iam_propagation_gives_up_after_attempts():
-    def always():
-        raise RuntimeError("Execution role is missing required permissions. X")
-
-    slept: list[int] = []
-    try:
-        c._retry_iam_propagation(always, lambda m: None, attempts=3, sleeper=slept.append)
-        raise AssertionError("expected RuntimeError")
-    except RuntimeError:
-        pass
-    assert len(slept) == 2  # attempts-1 sleeps, final failure raises
-
-
-def test_delete_agent_resources_drops_policy(monkeypatch):
+def test_delete_agent_resources_drops_the_stale_shared_role_policy(monkeypatch):
     class StubControlClient:
         class exceptions:
             class ResourceNotFoundException(Exception):
@@ -181,6 +54,9 @@ def test_delete_agent_resources_drops_policy(monkeypatch):
 
     class Settings:
         region = "us-west-2"
+        # The shared-role fallback: with per-agent roles on, the whole role is
+        # deleted by routers/agents.py and this cleanup is unnecessary.
+        per_agent_execution_roles = False
         resources = {"execution_role_arn": "arn:aws:iam::1:role/launchpad-base"}
 
     monkeypatch.setattr(c, "get_settings", lambda: Settings())

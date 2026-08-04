@@ -39,10 +39,55 @@ def get_db() -> Generator[Session, None, None]:
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _migrate(engine)
+    assert_no_schema_drift(engine)
+
+
+def schema_drift(bind) -> dict[str, list[str]]:
+    """Model columns missing from the live database, per table.
+
+    `create_all` only creates tables that do not exist yet, so a column added to a
+    model is invisible to an **existing** ledger until `_migrate` adds it. Forgetting
+    that entry is silent in the hermetic suite (every test DB is freshly created) and
+    surfaces in production as a 500 on whichever request first selects the column.
+    This turns that class of mistake into one legible failure.
+    """
+    from sqlalchemy import inspect
+
+    inspector = inspect(bind)
+    live_tables = set(inspector.get_table_names())
+    drift: dict[str, list[str]] = {}
+    for name, table in Base.metadata.tables.items():
+        if name not in live_tables:
+            continue  # create_all handles a table that does not exist at all
+        live_columns = {c["name"] for c in inspector.get_columns(name)}
+        missing = [c.name for c in table.columns if c.name not in live_columns]
+        if missing:
+            drift[name] = missing
+    return drift
+
+
+def assert_no_schema_drift(bind) -> None:
+    drift = schema_drift(bind)
+    if not drift:
+        return
+    lines = [
+        f"  ALTER TABLE {table} ADD COLUMN {column} ...;"
+        for table, columns in sorted(drift.items())
+        for column in columns
+    ]
+    raise RuntimeError(
+        "ledger schema is behind the models — add the column(s) to `_migrate()` in "
+        "app/core/db.py so existing databases are upgraded on startup:\n"
+        + "\n".join(lines)
+    )
 
 
 def _migrate(bind) -> None:
-    """Additive column migrations for the local SQLite ledger (no Alembic)."""
+    """Additive column migrations for the local SQLite ledger (no Alembic).
+
+    Every column added to a model after its table shipped needs an entry here, or
+    `assert_no_schema_drift` fails startup. Keep the statements idempotent.
+    """
     from sqlalchemy import inspect, text
 
     inspector = inspect(bind)
@@ -52,6 +97,13 @@ def _migrate(bind) -> None:
             with bind.begin() as conn:
                 conn.execute(
                     text("ALTER TABLE agents ADD COLUMN registry_record_id VARCHAR(64)")
+                )
+    if "deployments" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("deployments")}
+        if "image_digest" not in existing:
+            with bind.begin() as conn:
+                conn.execute(
+                    text("ALTER TABLE deployments ADD COLUMN image_digest VARCHAR(80)")
                 )
     if "eval_datasets" in inspector.get_table_names():
         existing = {c["name"] for c in inspector.get_columns("eval_datasets")}

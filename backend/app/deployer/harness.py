@@ -15,8 +15,8 @@ from app.core.config import get_settings
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
+from app.services import agent_iam, registry_console
 from app.services import kb_gateway as kbgw
-from app.services import registry_console
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import control_client
 
@@ -255,16 +255,13 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     return StageResult(skipped=True, detail="skipped · harness — no build required")
 
 
-def _stage_provision(ctx: StageContext, agent: Agent) -> StageResult:
-    role_arn = get_settings().resources.get("execution_role_arn")
-    if not role_arn:
-        raise RuntimeError(
-            "execution_role_arn missing from config/launchpad.yaml — run scripts/bootstrap.py"
-        )
-    ctx.scratch["execution_role_arn"] = role_arn
-    ctx.log(f"reusing shared execution role {role_arn}")
-
+def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) -> StageResult:
     spec = AgentSpec(**agent.spec)
+    role_arn, role_detail = agent_iam.provision_execution_role(
+        agent, spec, get_settings(), ctx.log, iam=iam_client
+    )
+    ctx.scratch["execution_role_arn"] = role_arn
+
     if spec.knowledge_bases:
         control = control_client()
         gw = kbgw.ensure_kb_gateway_persisted(control)
@@ -287,7 +284,7 @@ def _stage_provision(ctx: StageContext, agent: Agent) -> StageResult:
         ctx.scratch["create_params"] = _build_live_params(spec, settings.resources)
         ctx.log(f"kb gateway ready · {len(spec.knowledge_bases)} knowledge base(s) mounted")
         return StageResult(
-            detail=f"iam role reused · kb targets ready ({len(spec.knowledge_bases)})"
+            detail=f"{role_detail} · kb targets ready ({len(spec.knowledge_bases)})"
         )
 
     # re-publish with every KB unselected → drop the stale per-agent target
@@ -296,7 +293,7 @@ def _stage_provision(ctx: StageContext, agent: Agent) -> StageResult:
         kbgw.sync_agentic_target(
             control_client(), resources["kb_gateway_id"], spec.name, []
         )
-    return StageResult(detail="iam role reused · launchpad-base")
+    return StageResult(detail=role_detail)
 
 
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:

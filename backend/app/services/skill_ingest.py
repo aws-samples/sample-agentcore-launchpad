@@ -97,6 +97,8 @@ GIT_ARCHIVE_HOSTS = ("github.com", "gitlab.com", "gitee.com", "bitbucket.org")
 # this to include file:// so a local repo fixture can exercise the clone path.
 _ALLOWED_GIT_SCHEMES = ("https://",)
 
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+
 _GIT_CLONE_TIMEOUT_S = 60
 _GIT_INSTALL_TIMEOUT_S = 120
 _STDERR_TAIL_CHARS = 2000
@@ -111,6 +113,11 @@ class SkillSource:
     ref: str | None = None
     subdir: str | None = None
     imported_at: str = ""  # ISO8601 UTC, stamped at registration time
+    # Full commit SHA the files actually came from. ``ref`` is what the operator
+    # asked for and may be a branch, which moves; this is what they got. Skills
+    # become deployable code, so without it there is no way to say which revision
+    # a deployed agent is carrying. None on records imported before this existed.
+    commit: str | None = None
 
 
 @dataclass
@@ -212,11 +219,12 @@ def bundles_from_git(
     try:
         available, _ = git_available()
         if available:
-            _git_clone(url, ref, token, Path(tmp.name))
+            commit = _git_clone(url, ref, token, Path(tmp.name))
             base = Path(tmp.name)
         else:
             base = _archive_fallback(url, ref, token, Path(tmp.name))
-        return _scan_git_bundles(base, tmp, url, ref, subdir)
+            commit = ref  # guaranteed to be a SHA by _archive_fallback
+        return _scan_git_bundles(base, tmp, url, ref, subdir, commit)
     except BaseException:
         tmp.cleanup()
         raise
@@ -447,8 +455,11 @@ def _dir_size(root: Path) -> int:
 
 # ---------- git acquirer internals ----------
 
-def _git_clone(url: str, ref: str | None, token: str | None, dst: Path) -> None:
+def _git_clone(url: str, ref: str | None, token: str | None, dst: Path) -> str | None:
     """Shallow-clone into ``dst`` (already an empty dir) and drop ``.git``.
+
+    Returns the resolved commit SHA. It has to be read here: ``.git`` is removed at
+    the end of this function, and that is the only place the SHA exists.
 
     Never prompts (``GIT_TERMINAL_PROMPT=0``); a non-zero exit or timeout raises
     SkillValidationError with the token redacted from the message."""
@@ -477,7 +488,27 @@ def _git_clone(url: str, ref: str | None, token: str | None, dst: Path) -> None:
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip()
         raise SkillValidationError(f"git clone failed: {_redact(detail, token)}")
+    commit = _git_head_sha(dst)
     shutil.rmtree(dst / ".git", ignore_errors=True)
+    return commit
+
+
+def _git_head_sha(repo: Path) -> str | None:
+    """`git rev-parse HEAD` in a freshly cloned tree.
+
+    Best-effort: a missing SHA degrades the record to ref-only provenance rather
+    than failing an otherwise good import. Callers that need immutability check the
+    result.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    sha = (proc.stdout or "").strip()
+    return sha if proc.returncode == 0 and _COMMIT_SHA_RE.match(sha) else None
 
 
 def _archive_fallback(url: str, ref: str | None, token: str | None, dst: Path) -> Path:
@@ -487,6 +518,19 @@ def _archive_fallback(url: str, ref: str | None, token: str | None, dst: Path) -
     host, owner, repo = _parse_repo(url)
     if host not in GIT_ARCHIVE_HOSTS:
         raise GitUnavailableError(host)
+    # A skill becomes deployable code, so its source has to be immutable. This
+    # endpoint serves `…/zip/<ref>` and the only place a SHA could surface is the
+    # wrapper directory name, which is `repo-<branch>` for a branch — so it can
+    # only be immutable when the caller already named a commit. Checked after the
+    # host check so an unsupported host still reports the more fundamental problem.
+    if not (ref and _COMMIT_SHA_RE.match(ref)):
+        raise SkillValidationError(
+            "a git import must resolve to an immutable commit. Without the git CLI "
+            "this host can only download an archive of a named ref "
+            f"({ref or 'the default branch'}), which can move. Install git on the "
+            "server (POST /api/registry/skills/capabilities/git-install), or pass a "
+            "full 40-character commit SHA as the ref."
+        )
     archive_url, headers = _archive_request(host, owner, repo, ref, token)
     # The archive is a WHOLE repo, so cap the download at repo scale too — using
     # the per-skill 50MB cap here would reject large monorepos before extraction
@@ -512,6 +556,7 @@ def _scan_git_bundles(
     url: str,
     ref: str | None,
     subdir: str | None,
+    commit: str | None = None,
 ) -> list[SkillBundle]:
     """Find every SKILL.md under ``base`` (after applying ``subdir``) and build a
     bundle per hit. Only the first bundle owns ``tmp`` so the shared staging dir
@@ -538,6 +583,7 @@ def _scan_git_bundles(
             url=redacted_url,
             ref=ref,
             subdir=None if rel == "." else rel,
+            commit=commit,
         )
         bundles.append(_bundle_from_dir(root, source, tmp if i == 0 else None))
     return bundles

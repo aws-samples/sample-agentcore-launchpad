@@ -96,8 +96,25 @@ identity are keyed by name).
 
 `skillDefinition.inlineContent` JSON (stored on the AWS record):
 `{name, description, version, path: "s3://…/skills/{name}/", files: [real
-list], source: {kind, url, ref, subdir, imported_at}}`. Old records may lack
-`files`/`source` — readers must treat both as optional.
+list], source: {kind, url, ref, commit, subdir, imported_at}}`. Old records may
+lack `files`/`source`/`source.commit` — readers must treat all three as optional.
+
+**Git sources must resolve to a commit (T10).** A skill becomes deployable code,
+so `ref` alone is not enough — it is usually a branch, which moves, and a record
+then cannot say which revision a deployed agent carries. `source.commit` is the
+full 40-hex SHA the files actually came from:
+
+- clone path: read with `git rev-parse HEAD` **inside `_git_clone`**, which is the
+  only place it exists — that function deletes `.git` on its way out;
+- archive fallback (git CLI missing): **rejected** unless the caller passed a full
+  commit SHA as `ref`. The endpoint serves `…/zip/<ref>` and the only place a SHA
+  could surface is the wrapper directory name, which is `repo-<branch>` for a
+  branch. The refusal names both remedies (install git via the `git-install`
+  capability, or pass a SHA), and sits **after** the host check so an unsupported
+  host still reports the more fundamental problem.
+
+This deliberately narrows the documented git-missing fallback: that path cannot
+produce an immutable source, which is the point of recording one.
 
 Shared caps (single source of truth in `skill_ingest.py`; consumer imports
 them): `SKILL_MD_MAX_BYTES=102_400`, `SKILL_BUNDLE_MAX_BYTES=50MB`,
@@ -114,6 +131,7 @@ them): `SKILL_MD_MAX_BYTES=102_400`, `SKILL_BUNDLE_MAX_BYTES=50MB`,
 | unknown/expired staging_id | 410 `registry.staging_expired` |
 | name already registered | per-item `registry.name_exists` (409-origin) |
 | git missing + host not in fallback list | 503 `registry.git_unavailable` (+ `detail.install.hint`) |
+| git missing + ref is absent or not a 40-hex commit SHA | 422 `registry.skill_invalid` ("must resolve to an immutable commit") |
 | reimport on inline/zip source or DEPRECATED record | 400 `registry.not_reimportable` |
 | non-https or non-public host (SSRF guard) | 422 `registry.skill_invalid` |
 
@@ -142,10 +160,19 @@ SSRF host rejection), `test_skill_ingest_url.py` (zip-vs-md detection, public
 Assertion points: S3 keys uploaded/deleted, descriptor JSON contents,
 staging survival semantics, error codes.
 
+Commit pinning must also be asserted: a clone records the real `rev-parse HEAD`
+(40 chars); two imports across an upstream commit record different SHAs; the
+archive fallback accepts a SHA ref and **refuses** an absent or branch ref with a
+message naming both remedies; and a stored `source` dict with no `commit` key still
+constructs (old records must keep loading).
+
 ### 7. Wrong vs Correct
 
 #### Wrong
 ```python
+# reading the commit after the clone helper returns — .git is already gone:
+_git_clone(url, ref, token, dst)
+commit = _git_head_sha(dst)                     # always None
 # per-skill caps applied to a whole-repo archive (live bug, fixed):
 _extract_zip_safely(repo_archive, dst)          # 200-file cap kills monorepos
 # rollback deleting fresh files under a live record on reimport failure:

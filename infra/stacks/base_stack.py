@@ -69,10 +69,19 @@ class LaunchpadBaseStack(Stack):
         )
 
         # ---- ECR repo for Claude-SDK container images ----
+        # image_tag_mutability is deliberately left MUTABLE. The container path
+        # tags images `{agent}-v{version}`, and _stage_package runs BEFORE
+        # _stage_deploy bumps the version — so a re-publish pushes the same tag
+        # twice and IMMUTABLE would fail that second push. What matters is that
+        # deployment references the image by *digest* (deployer/container.py), so
+        # the mutable tag is cosmetic.
         repo = ecr.Repository(
             self,
             "AgentsRepo",
             repository_name="launchpad-agents",
+            # Scan on push so a deploy can be blocked on findings before the image
+            # ever backs a runtime.
+            image_scan_on_push=True,
             removal_policy=RemovalPolicy.DESTROY,
             empty_on_delete=True,
         )

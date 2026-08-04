@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import shutil
@@ -45,6 +46,66 @@ class Service:
     @property
     def health_url(self) -> str:
         return f"http://{CHECK_HOST}:{self.port}{self.health_path}"
+
+
+def _yaml_setting(key: str) -> Any:
+    """Read one key from config/launchpad.yaml, or None when unavailable.
+
+    Best-effort on purpose: this only feeds the pre-flight message below. The
+    binding control is the per-request guard in `app.routers.auth`, so a wrong
+    guess here changes when the operator learns about it, not whether the console
+    is protected.
+    """
+    config_file = ROOT / "config" / "launchpad.yaml"
+    if not config_file.is_file():
+        return None
+    try:
+        import yaml
+
+        data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — pre-flight must never be the thing that breaks a launch
+        return None
+    return data.get(key) if isinstance(data, dict) else None
+
+
+def _truthy(raw: str | None) -> bool:
+    return (raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        # A hostname we cannot classify, or an empty host (which servers read as
+        # "all interfaces") — treat it as reachable so the check fails closed.
+        return False
+
+
+def _check_console_is_protected(hosts: list[str]) -> None:
+    """Refuse to launch an unauthenticated console on a reachable interface.
+
+    Mirrors the request-time guard so the operator gets one clear message up
+    front instead of a console that refuses every call.
+    """
+    if _truthy(os.environ.get("LAUNCHPAD_ALLOW_OPEN_CONSOLE")) or _yaml_setting(
+        "allow_open_console"
+    ):
+        return
+    if os.environ.get("LAUNCHPAD_AUTH_PASSWORD") or _yaml_setting("auth_password"):
+        return
+    reachable = sorted({host for host in hosts if not _is_loopback_host(host)})
+    if not reachable:
+        return
+    raise LaunchError(
+        "refusing to serve an unauthenticated console on "
+        + ", ".join(reachable)
+        + ".\n"
+        "  Set auth_password in config/launchpad.yaml (or LAUNCHPAD_AUTH_PASSWORD)\n"
+        "  to enable the login gate, or LAUNCHPAD_ALLOW_OPEN_CONSOLE=true to accept\n"
+        "  an open console on a reachable interface."
+    )
 
 
 def _env_port(name: str, default: int) -> int:
@@ -190,6 +251,7 @@ def _service_definitions(prod: bool) -> tuple[list[Service], dict[str, str]]:
         "LAUNCHPAD_API_HOST",
         "0.0.0.0" if prod else CHECK_HOST,
     )
+    _check_console_is_protected([public_host, api_host])
     ports = {
         "platform_api": _env_port("PLATFORM_API_PORT", 8000),
         "platform_ui": _env_port("PLATFORM_UI_PORT", 5173),

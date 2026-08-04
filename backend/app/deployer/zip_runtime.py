@@ -30,6 +30,7 @@ from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
+from app.services import agent_iam
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
 from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES
@@ -42,32 +43,93 @@ def sanitize_runtime_name(name: str) -> str:
     return f"{base}_{uuid.uuid4().hex[:6]}"
 
 
+# The deploy target: AgentCore Runtime zips run ARM64 on Python 3.13. Named once
+# because the resolve and the install must agree — resolving for this host and
+# installing for aarch64 would produce a lock that does not match the artifact.
+TARGET_PYTHON = "3.13"
+TARGET_PIP_PLATFORM = "manylinux2014_aarch64"
+TARGET_UV_PLATFORM = "aarch64-manylinux2014"
+
+LOCK_FILENAME = "requirements.lock"
+
+
+def _compile_lock(
+    requirements: list[str],
+    build_dir: Path,
+    compile_runner: Callable[..., Any],
+) -> Path:
+    """Resolve the declared requirements into a fully hashed lockfile.
+
+    Without this, a build installs whatever the index serves at the moment it runs
+    — including for the platform's own ranged pins — so nothing about an artifact
+    is reproducible and there is no record of what went into it.
+
+    Deliberately no fallback: if the resolve fails, the stage fails. A supply-chain
+    control that silently reverts to the unchecked install is decoration.
+    """
+    declared = build_dir / "requirements.in"
+    lock = build_dir / LOCK_FILENAME
+    declared.write_text("\n".join(requirements) + "\n", encoding="utf-8")
+    proc = compile_runner(
+        [
+            "uv", "pip", "compile", str(declared),
+            "--generate-hashes", "--quiet",
+            "--python-version", TARGET_PYTHON,
+            "--python-platform", TARGET_UV_PLATFORM,
+            "-o", str(lock),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()[-2000:]
+        raise RuntimeError(
+            f"could not resolve {requirements} into a hashed lockfile: {detail} "
+            "(the backend needs the `uv` CLI on PATH and access to the package index)"
+        )
+    return lock
+
+
 def build_zip(
     code: str,
     requirements: list[str],
     build_dir: Path,
     pip_runner: Callable[..., Any] = subprocess.run,
     on_pkg_ready: Callable[[Path], None] | None = None,
+    compile_runner: Callable[..., Any] | None = None,
+    on_lock_ready: Callable[[int], None] | None = None,
 ) -> Path:
-    """pip-install ARM64 wheels + template code into a deployment zip.
+    """Resolve → lock → hash-verified install → zip.
 
     ``on_pkg_ready`` is invoked with the assembled package directory after the
     entrypoint is written but before zipping — the hook studio uses to drop
     skill bundles under ``pkg/skills/`` (the recursive walk below picks them up).
+    ``on_lock_ready`` receives the number of locked packages, for the job log.
     """
     if build_dir.exists():
         shutil.rmtree(build_dir)
     pkg_dir = build_dir / "pkg"
     pkg_dir.mkdir(parents=True)
 
+    lock = _compile_lock(requirements, build_dir, compile_runner or pip_runner)
+    locked_lines = [
+        line for line in lock.read_text(encoding="utf-8").splitlines()
+        if "==" in line and not line.lstrip().startswith("#")
+    ]
+    if on_lock_ready is not None:
+        on_lock_ready(len(locked_lines))
+
     proc = pip_runner(
         [
             sys.executable, "-m", "pip", "install",
-            *requirements,
+            # --require-hashes: every artifact must match the lock, so a
+            # compromised or re-uploaded distribution fails the build instead of
+            # shipping.
+            "--require-hashes", "-r", str(lock),
             "-t", str(pkg_dir),
-            "--platform", "manylinux2014_aarch64",
+            "--platform", TARGET_PIP_PLATFORM,
             "--only-binary=:all:",
-            "--python-version", "3.13",
+            "--python-version", TARGET_PYTHON,
             "--quiet",
         ],
         capture_output=True,
@@ -79,6 +141,9 @@ def build_zip(
 
     (pkg_dir / "main.py").write_text(code, encoding="utf-8")
     (pkg_dir / "requirements.txt").write_text("\n".join(requirements) + "\n", encoding="utf-8")
+    # The lock ships inside the artifact: what is deployed carries the exact
+    # record of what it was built from.
+    (pkg_dir / LOCK_FILENAME).write_text(lock.read_text(encoding="utf-8"), encoding="utf-8")
 
     if on_pkg_ready is not None:
         on_pkg_ready(pkg_dir)
@@ -367,7 +432,15 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
             ctx.log(f"bundle files staged: {count} (+ main.py)")
         bundled.update(bundle_skills(spec, code, pkg_dir, ctx.log))
 
-    zip_path = build_zip(code, requirements, build_dir, on_pkg_ready=_on_pkg_ready)
+    zip_path = build_zip(
+        code,
+        requirements,
+        build_dir,
+        on_pkg_ready=_on_pkg_ready,
+        on_lock_ready=lambda count: ctx.log(
+            f"requirements locked · {count} packages pinned with hashes"
+        ),
+    )
     pip_secs = time.monotonic() - t0
     size_mb = zip_path.stat().st_size / 1e6
 
@@ -381,12 +454,13 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     return StageResult(detail=detail)
 
 
-def _stage_provision(ctx: StageContext, agent: Agent) -> StageResult:
-    role_arn = get_settings().resources.get("execution_role_arn")
-    if not role_arn:
-        raise RuntimeError("execution_role_arn missing from config — run scripts/bootstrap.py")
+def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) -> StageResult:
+    spec = AgentSpec(**agent.spec)
+    role_arn, detail = agent_iam.provision_execution_role(
+        agent, spec, get_settings(), ctx.log, iam=iam_client
+    )
     ctx.scratch["execution_role_arn"] = role_arn
-    return StageResult(detail="iam role reused · launchpad-base")
+    return StageResult(detail=detail)
 
 
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:

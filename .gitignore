@@ -41,3 +41,11 @@ config/launchpad.yaml
 cdk.out/
 vendor-src/
 data/harness-export/
+
+# --- security review artifacts (kept local) ---
+# The threat model names still-unmitigated issues with file:line detail, and this
+# repository is public. Kept on the working machine, out of git deliberately.
+docs/.threatmodel/
+docs/threat-model-summary.md
+# Scanner exports (Bandit/SAST) name every finding with file:line.
+docs/*_findings.json

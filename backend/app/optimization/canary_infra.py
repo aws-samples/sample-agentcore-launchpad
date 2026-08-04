@@ -35,6 +35,7 @@ from app.deployer.zip_runtime import (
     write_bundle_files,
 )
 from app.schemas.agent import AgentSpec
+from app.services import agent_iam
 from app.services.agentcore import runtime as rt
 
 _sleep = time.sleep  # injectable
@@ -148,13 +149,20 @@ def mint_candidate_version(
         raise RuntimeError(
             "artifacts_bucket missing from config — run scripts/bootstrap.py"
         )
-    role_arn = settings.resources.get("execution_role_arn")
+    # A candidate is a new *version of the same runtime*, so it keeps whatever role
+    # production is already on. Swapping in the shared role would measure the
+    # candidate with permissions production does not have, and a promotion would
+    # inherit them. Read from the live resource rather than derived from the agent
+    # name, so an agent deployed before per-agent roles existed still works.
+    live = rt.get_runtime(control_client, agent.resource_id)
+    role_arn = agent_iam.live_runtime_role_arn(live, settings)
     if not role_arn:
         raise RuntimeError(
-            "execution_role_arn missing from config — run scripts/bootstrap.py"
+            "the runtime reports no execution role and execution_role_arn is missing "
+            "from config — run scripts/bootstrap.py"
         )
 
-    v_current = current_version(control_client, agent.resource_id)
+    v_current = str(live["agentRuntimeVersion"])
     log(f"current production version {v_current}")
 
     code, source = _generate_code(edited_spec)

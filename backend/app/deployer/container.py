@@ -21,6 +21,7 @@ from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
+from app.services import agent_iam, ecr
 from app.services.agentcore import codebuild as cb
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
@@ -87,10 +88,79 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     ctx.log(f"codebuild started · {build_id}")
     cb.wait_build(codebuild, build_id, on_phase=lambda p: ctx.log(f"codebuild phase: {p}"))
     mins = (time.monotonic() - t0) / 60
-    image_uri = f"{registry}/{repo}:{tag}"
-    ctx.scratch["image_uri"] = image_uri
-    ctx.log(f"image pushed · {image_uri}")
-    return StageResult(detail=f"codebuild · arm64 · {mins:.1f}m → :{tag}")
+
+    # Pin the deployment to the image that was just pushed, not to the tag: the tag
+    # is mutable, so deploying by it means what the runtime executes can change
+    # with no record of it.
+    ecr_client = boto3.client("ecr", region_name=settings.region)
+    digest = ecr.resolve_digest(ecr_client, repo, tag)
+    _record_image_digest(ctx, digest)
+    ctx.scratch["image_digest"] = digest
+    ctx.scratch["image_uri"] = f"{registry}/{repo}@{digest}"
+    ctx.log(f"image pushed · {registry}/{repo}:{tag} · {digest}")
+
+    _run_scan_gate(ctx, ecr_client, repo, digest, settings)
+    return StageResult(detail=f"codebuild · arm64 · {mins:.1f}m → :{tag} @ {digest[:19]}…")
+
+
+def _record_image_digest(ctx: StageContext, digest: str) -> None:
+    """Persist the digest on the Deployment row so the console can report exactly
+    what is deployed and a resumed job re-uses the same image."""
+    from app.models.ledger import Deployment
+
+    db = ctx.session()
+    try:
+        row = db.get(Deployment, ctx.deployment_id) if ctx.deployment_id else None
+        if row is not None:
+            row.image_digest = digest
+            db.commit()
+    finally:
+        db.close()
+
+
+def _run_scan_gate(
+    ctx: StageContext, ecr_client: Any, repo: str, digest: str, settings: Any
+) -> None:
+    """Refuse to deploy an image whose push scan reports blocking findings.
+
+    Runs here rather than in the deploy stage so a blocked image never reaches
+    CreateAgentRuntime. Naturally idempotent on resume: reading a scan result does
+    not change anything.
+
+    A scan that could not be read (not enabled, API error) or did not finish is
+    reported as exactly that — never folded into "clean", which would let an
+    absent gate read as a passed one.
+    """
+    if not settings.image_scan_enabled:
+        ctx.log("image scan gate disabled (image_scan_enabled=false) — image NOT scanned")
+        return
+    severities = settings.image_scan_block_severities
+    try:
+        counts = ecr.wait_for_scan(
+            ecr_client,
+            repo,
+            digest,
+            timeout_s=settings.image_scan_timeout_s,
+            on_status=lambda s: ctx.log(f"image scan: {s}"),
+        )
+    except (ecr.ScanTimeout, ecr.ScanUnavailable) as exc:
+        # Deliberately not fatal: an unreadable scan is an infrastructure gap, not
+        # evidence of a vulnerable image, and failing every deploy on it would make
+        # the platform unusable the moment scanning misbehaves. Loud instead.
+        ctx.log(f"image scan gate did NOT complete — {exc}. Deploying unscanned.")
+        return
+
+    ctx.log(f"image scan findings · {ecr.format_counts(counts)}")
+    blocking = ecr.blocking_findings(counts, severities)
+    if blocking:
+        packages = ecr.blocking_packages(ecr_client, repo, digest, severities)
+        listed = f" — {'; '.join(packages)}" if packages else ""
+        raise RuntimeError(
+            f"image {repo}@{digest} has blocking vulnerabilities "
+            f"({ecr.format_counts(blocking)}) at or above {', '.join(severities)}"
+            f"{listed}. Rebuild on a patched base image, or set "
+            "image_scan_block_severities / image_scan_enabled=false to deploy anyway."
+        )
 
 
 def _filesystem_configurations(spec: AgentSpec) -> list[dict]:
@@ -117,106 +187,27 @@ def _vpc(spec: AgentSpec) -> dict | None:
     return {"subnets": spec.network.subnets, "security_groups": spec.network.security_groups}
 
 
-def _fs_policy_document(spec: AgentSpec) -> dict | None:
-    """Execution-role inline policy granting mount access to the BYO access
-    points. S3 Files APs embed the file-system ARN (strip '/access-point/…');
-    EFS APs don't — Resource '*' scoped by the AccessPointArn condition.
-
-    The devguide's example policy (one combined conditioned statement with
-    ClientMount/ClientWrite/GetAccessPoint) is WRONG and incomplete — live-hit
-    2026-07-13, proven via IAM simulator + UpdateAgentRuntime probes:
-    - GetAccessPoint authorizes on the access-point ARN and doesn't carry the
-      s3files:AccessPointArn condition key → own unconditioned statement;
-    - AgentCore's create/update validation ALSO requires ListMountTargets on
-      the file system (undocumented)."""
-    statements: list[dict] = []
-    if spec.filesystem.s3_files:
-        arns = [m.access_point_arn for m in spec.filesystem.s3_files]
-        fs_arns = sorted({a.split("/access-point/")[0] for a in arns})
-        statements.append({
-            "Effect": "Allow",
-            "Action": ["s3files:ClientMount", "s3files:ClientWrite"],
-            "Resource": fs_arns,
-            "Condition": {"ArnEquals": {"s3files:AccessPointArn": arns}},
-        })
-        statements.append({
-            "Effect": "Allow",
-            "Action": ["s3files:GetAccessPoint"],
-            "Resource": arns,
-        })
-        statements.append({
-            "Effect": "Allow",
-            "Action": ["s3files:ListMountTargets"],
-            "Resource": fs_arns,
-        })
-    if spec.filesystem.efs:
-        arns = [m.access_point_arn for m in spec.filesystem.efs]
-        statements.append({
-            "Effect": "Allow",
-            "Action": ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite"],
-            "Resource": "*",
-            "Condition": {"ArnEquals": {"elasticfilesystem:AccessPointArn": arns}},
-        })
-    if not statements:
-        return None
-    return {"Version": "2012-10-17", "Statement": statements}
-
-
-def _fs_policy_name(agent_name: str) -> str:
-    return f"launchpad-fs-{agent_name}"
-
-
-def _sync_fs_policy(iam: Any, role_arn: str, agent: Agent, spec: AgentSpec, log) -> str:
-    """Attach the BYO-mount inline policy (or drop a stale one when the mounts
-    were removed on re-publish). Returns a short detail string."""
-    import json as _json
-
-    role_name = role_arn.rsplit("/", 1)[-1]
-    policy = _fs_policy_document(spec)
-    name = _fs_policy_name(agent.name)
-    if policy:
-        iam.put_role_policy(
-            RoleName=role_name, PolicyName=name, PolicyDocument=_json.dumps(policy)
-        )
-        log(f"inline policy {name} attached to {role_name} (BYO file-system mounts)")
-        return f" · fs policy {name}"
-    try:
-        iam.delete_role_policy(RoleName=role_name, PolicyName=name)
-        log(f"inline policy {name} removed (no BYO mounts)")
-    except Exception:  # absent on most agents — nothing to clean
-        pass
-    return ""
-
-
 def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) -> StageResult:
-    role_arn = get_settings().resources.get("execution_role_arn")
-    if not role_arn:
-        raise RuntimeError("execution_role_arn missing — run scripts/bootstrap.py")
-    ctx.scratch["execution_role_arn"] = role_arn
     spec = AgentSpec(**agent.spec)
-    iam = iam_client or boto3.client("iam", region_name=get_settings().region)
-    detail = _sync_fs_policy(iam, role_arn, agent, spec, ctx.log)
-    return StageResult(detail=f"iam role reused · launchpad-base{detail}")
+    role_arn, detail = agent_iam.provision_execution_role(
+        agent, spec, get_settings(), ctx.log, iam=iam_client
+    )
+    ctx.scratch["execution_role_arn"] = role_arn
+    return StageResult(detail=detail)
 
 
-def _retry_iam_propagation(fn, log, attempts: int = 6, delay_s: int = 10,
-                           sleeper: Any = time.sleep):
-    """Create/UpdateAgentRuntime validates execution-role permissions server-side;
-    a BYO-mount policy the provision stage just (re)wrote can still be invisible
-    inside AWS's IAM propagation window and gets rejected with 'missing required
-    permissions' (live-hit 2026-07-13 on an access-point ARN change). Retry only
-    that specific rejection — anything else raises immediately."""
-    for attempt in range(attempts):
-        try:
-            return fn()
-        except Exception as exc:
-            if "missing required permissions" not in str(exc) or attempt == attempts - 1:
-                raise
-            log(
-                "execution-role permissions not yet visible (IAM propagation) — "
-                f"retry {attempt + 1}/{attempts - 1} in {delay_s}s"
-            )
-            sleeper(delay_s)
+def _recorded_digest_uri(ctx: StageContext, registry: str, repo: str) -> str | None:
+    """`registry/repo@sha256:…` from the Deployment row, for a resumed job whose
+    package stage already ran and left nothing in scratch."""
+    from app.models.ledger import Deployment
+
+    db = ctx.session()
+    try:
+        row = db.get(Deployment, ctx.deployment_id) if ctx.deployment_id else None
+        digest = row.image_digest if row is not None else None
+    finally:
+        db.close()
+    return f"{registry}/{repo}@{digest}" if digest else None
 
 
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
@@ -231,7 +222,12 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             registry, repo, tag = _image_ref(settings, row)
             spec = AgentSpec(**row.spec)
             return {
-                "container_uri": ctx.scratch.get("image_uri") or f"{registry}/{repo}:{tag}",
+                "container_uri": ctx.scratch.get("image_uri")
+                or _recorded_digest_uri(ctx, registry, repo)
+                # Only reached for a deployment created before digests were
+                # recorded; the tag is mutable, so this is a fallback, not a path
+                # to rely on.
+                or f"{registry}/{repo}:{tag}",
                 "role_arn": ctx.scratch.get("execution_role_arn")
                 or settings.resources.get("execution_role_arn", ""),
                 "environment": runtime_environment(spec, settings.resources),
@@ -241,7 +237,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
 
         if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)
             runtime_id = row.resource_id
-            updated = _retry_iam_propagation(
+            updated = agent_iam.retry_iam_propagation(
                 lambda: rt.update_container_runtime(client, runtime_id=runtime_id, **_kwargs()),
                 ctx.log,
             )
@@ -255,7 +251,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             runtime_id = row.resource_id
             ctx.log(f"resuming — runtime {runtime_id} already created, polling status")
         else:
-            created = _retry_iam_propagation(
+            created = agent_iam.retry_iam_propagation(
                 lambda: rt.create_container_runtime(
                     client, runtime_name=sanitize_runtime_name(row.name), **_kwargs()
                 ),
@@ -303,15 +299,20 @@ def delete_agent_resources(agent: Agent, iam_client: Any = None) -> None:
         rt.delete_runtime(client, agent.resource_id)
     except client.exceptions.ResourceNotFoundException:
         pass
-    # BYO-mount inline policy is per-agent — best-effort cleanup
+    # With per-agent roles the whole role goes away (routers/agents.py), which takes
+    # its inline policies with it. This cleanup is only still needed for the
+    # shared-role fallback, where a stale launchpad-fs-<agent> policy would otherwise
+    # accumulate on a principal every agent assumes — the exact problem T3 is about.
     settings = get_settings()
-    role_arn = settings.resources.get("execution_role_arn", "")
+    if settings.per_agent_execution_roles:
+        return
+    role_arn = agent_iam.shared_role_arn(settings)
     if role_arn:
         try:
             iam = iam_client or boto3.client("iam", region_name=settings.region)
             iam.delete_role_policy(
                 RoleName=role_arn.rsplit("/", 1)[-1],
-                PolicyName=_fs_policy_name(agent.name),
+                PolicyName=agent_iam.fs_policy_name(agent.name),
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 — absent on most agents
             pass

@@ -93,6 +93,11 @@ class Deployment(Base):
     # running | succeeded | failed
     stages: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     # [{name, status: pending|running|succeeded|skipped|failed, detail, started_at, ended_at}]
+    # Immutable ECR digest of the container image this deployment runs. Recorded so
+    # the console can say exactly what is deployed and a resumed job re-uses the
+    # same image rather than whatever the mutable tag points at by then. None for
+    # zip/harness methods and for container deployments predating digest pinning.
+    image_digest: Mapped[str | None] = mapped_column(String(80), default=None)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 

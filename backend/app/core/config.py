@@ -8,7 +8,7 @@ runnable locally.
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import Field, SecretStr
@@ -48,6 +48,13 @@ class Settings(BaseSettings):
     database_url: str = f"sqlite:///{DATA_DIR / 'launchpad.db'}"
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
+    # `start.py` already exports LAUNCHPAD_RUN_MODE for its children; this field
+    # is what finally consumes it. The security posture keys off this single
+    # value instead of each control guessing at production-ness on its own:
+    # secure cookies + HSTS (see routers.auth.cookie_secure), local execution
+    # (see local_exec_enabled), and the create_app() open-console assertion.
+    run_mode: Literal["dev", "prod"] = "dev"
+
     # Optional local operator gate for the console. This remains independent
     # from Cognito demo users and the public /v1 API-key surface.
     # `auth_username`/`auth_password` describe the built-in admin, which is
@@ -55,7 +62,15 @@ class Settings(BaseSettings):
     # from the console.
     auth_username: str = Field(default="admin", min_length=1, max_length=64)
     auth_password: SecretStr | None = None
+    # Effective value is `auth_cookie_secure or run_mode == "prod"` — read it
+    # through `routers.auth.cookie_secure()`, never directly, so prod is secure
+    # by default while yaml can still force it on in dev.
     auth_cookie_secure: bool = False
+
+    # An unauthenticated console refuses non-loopback callers (T1). This is the
+    # explicit "I accept an open console on a reachable interface" override; the
+    # hermetic test suite sets it because it runs without a password on purpose.
+    allow_open_console: bool = False
 
     # Self-service registration for the console (only meaningful while the gate
     # is enabled — an open console has no accounts to register).
@@ -90,6 +105,24 @@ class Settings(BaseSettings):
     account_id: str = ""
     resources: dict[str, Any] = {}
 
+    # Each agent gets its own least-privilege execution role derived from its spec
+    # (app/services/agent_iam.py) instead of every agent assuming one shared role.
+    # The escape hatch exists because an over-tight policy fails at *invoke* time,
+    # not deploy time: an operator hitting that needs a way back without a code
+    # change. Turning it off reverts to the shared role.
+    per_agent_execution_roles: bool = True
+    # Warn on the Overview surface once this many Launchpad-managed roles exist.
+    # The IAM default quota is 1000 roles per account, consumed one per agent.
+    agent_role_count_warn_threshold: int = Field(default=800, gt=0)
+
+    # Container image supply chain (T10). The gate runs after the push, before the
+    # image can back a runtime. The threshold and the off switch are configurable
+    # on purpose: an un-overridable gate strands every agent the first time a base
+    # image picks up a CVE, and an operator needs a way to ship anyway knowingly.
+    image_scan_enabled: bool = True
+    image_scan_block_severities: list[str] = ["CRITICAL"]
+    image_scan_timeout_s: int = Field(default=300, gt=0)
+
     # AgentCore synchronous runtime requests may run for up to 15 minutes.
     # Keep the SDK read timeout above that service limit so buffered agents can
     # return their final response.
@@ -101,6 +134,27 @@ class Settings(BaseSettings):
     # friendly 503 pointing at that script when the interpreter is missing.
     studio_exec_python: str = str(DATA_DIR / "exec-venv" / "bin" / "python")
     execute_timeout_s: float = 300.0
+    # Running caller-supplied Python is the platform's sharpest edge (T2), so it
+    # is off in prod unless an operator explicitly accepts the risk. None = derive
+    # from run_mode; read it through `services.local_exec.local_exec_enabled()`.
+    studio_local_exec_enabled: bool | None = None
+    # Dedicated OS user the execution subprocess drops to, created by
+    # scripts/setup_exec_env.sh together with a firewall rule denying that uid
+    # egress to the instance metadata service. Empty = no uid drop (the child
+    # then keeps the backend's own uid, and IMDS stays reachable to code that
+    # asks for it directly — Linux-only hardening).
+    studio_exec_user: str = ""
+    # The default Mantle path mints its bearer token from the ambient AWS
+    # credentials, so local debug works off the operator's profile with no API key
+    # (scripts/setup_exec_env.sh). Forwarding them is therefore on by default;
+    # turning it off is the hardened posture and obliges the caller to supply
+    # bedrock_api_key / openai_api_key with the request.
+    studio_exec_forward_aws_credentials: bool = True
+    # Resource ceilings for that subprocess, alongside the existing timeout.
+    studio_exec_memory_mb: int = Field(default=2048, gt=0)
+    studio_exec_cpu_seconds: int = Field(default=300, gt=0)
+    studio_exec_max_processes: int = Field(default=64, gt=0)
+    studio_exec_max_file_mb: int = Field(default=256, gt=0)
     # AI-fix coding backend (slice 3 consumes these; declared here so the whole
     # local-debug surface shares one settings block).
     codegen_backend: str = "claude"

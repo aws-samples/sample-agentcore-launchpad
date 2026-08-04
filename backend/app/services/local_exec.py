@@ -13,9 +13,12 @@ resolves for local runs the same way the deploy-time packager arranges them.
 import asyncio
 import logging
 import os
+import resource
 import shutil
 import signal
+import stat
 import tempfile
+from typing import Any
 
 from app.core.config import get_settings
 
@@ -24,6 +27,36 @@ logger = logging.getLogger("launchpad.local_exec")
 
 class ExecInterpreterUnavailable(RuntimeError):
     """The configured studio_exec_python does not exist on disk."""
+
+
+class ExecUserUnavailable(RuntimeError):
+    """`studio_exec_user` is configured but cannot be used on this host.
+
+    Either the account does not exist, or the backend is not privileged enough to
+    become it. Both are configuration problems, and both must surface as one
+    legible message instead of a `PermissionError` from deep inside a spawn.
+    """
+
+
+def local_exec_enabled(settings: Any = None) -> bool:
+    """Whether the local-debug execution endpoints are served at all.
+
+    Unset (`None`) derives from the run mode: this surface runs caller-supplied
+    Python, so production refuses it unless an operator opts back in.
+    """
+    current = settings or get_settings()
+    if current.studio_local_exec_enabled is None:
+        return current.run_mode != "prod"
+    return current.studio_local_exec_enabled
+
+
+def disabled_message() -> str:
+    return (
+        "Local code execution is disabled in this deployment. It runs "
+        "caller-supplied Python on the server, so it is off by default in "
+        "production mode; set LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true to "
+        "accept that risk and re-enable it."
+    )
 
 
 def interpreter_path() -> str:
@@ -43,30 +76,169 @@ def missing_interpreter_message() -> str:
     )
 
 
+# Host environment the execution subprocess may see. Everything else is dropped:
+# the backend's own environment carries the ledger URL, LAUNCHPAD_* settings and
+# whatever else the operator's shell holds (tokens, keys, CI secrets), none of
+# which caller-supplied code has any business reading.
+_ENV_ALLOWLIST = frozenset({
+    "PATH", "HOME", "TMPDIR", "TZ", "LANG", "LC_ALL", "LC_CTYPE",
+    # TLS trust stores — omitting these breaks HTTPS on some hosts.
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    # Where the deploy-time packager arranges bundled skills.
+    "STUDIO_SKILLS_DIR",
+})
+
+# Forwarded only when `studio_exec_forward_aws_credentials` is on. The default
+# Mantle path genuinely needs these: generated code builds
+# OpenAIResponsesModel(bedrock_mantle_config=...) and the SDK mints a bearer token
+# from the ambient credentials, which is why local debug works off the operator's
+# AWS profile with no BEDROCK_API_KEY (see scripts/setup_exec_env.sh). Turning the
+# forward off is the hardened posture and requires the caller to supply a key.
+_AWS_CREDENTIAL_ENV = frozenset({
+    "AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+    "AWS_SHARED_CREDENTIALS_FILE", "AWS_CONFIG_FILE", "AWS_ROLE_ARN",
+    "AWS_ROLE_SESSION_NAME", "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+})
+
+
 def build_execution_env(
-    openai_api_key: str | None = None, bedrock_api_key: str | None = None
+    openai_api_key: str | None = None,
+    bedrock_api_key: str | None = None,
+    settings: Any = None,
 ) -> dict[str, str]:
-    """Environment for the execution subprocess: inherit the backend env, skip
-    strands tool-consent prompts (they would hang a headless run), make sure a
-    Bedrock region is present, and inject request-scoped API keys."""
-    env = os.environ.copy()
+    """Environment for the execution subprocess.
+
+    Built from an allowlist rather than `os.environ.copy()` — this process runs
+    caller-supplied Python, so it starts from nothing and is handed only what the
+    generated code needs.
+    """
+    current = settings or get_settings()
+    forward_aws = current.studio_exec_forward_aws_credentials
+    allowed = _ENV_ALLOWLIST | (_AWS_CREDENTIAL_ENV if forward_aws else frozenset())
+    env = {
+        name: value for name, value in os.environ.items()
+        if name in allowed and value
+    }
     # Skip strands tool consent prompts (would hang headless subprocess runs)
     env["BYPASS_TOOL_CONSENT"] = "true"
     env["STRANDS_NON_INTERACTIVE"] = "true"
     # Generated BedrockModel calls need a region; fall back to the platform
     # default when the ambient env has none.
-    region = env.get("AWS_REGION") or env.get("AWS_DEFAULT_REGION") or get_settings().region
+    region = (
+        os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+        or current.region
+    )
     env["AWS_REGION"] = region
     env["AWS_DEFAULT_REGION"] = region
-    # Skill library location for generated code (explicit, in case the copy()
-    # above is ever replaced by an allowlist during a refactor)
-    if os.environ.get("STUDIO_SKILLS_DIR"):
-        env["STUDIO_SKILLS_DIR"] = os.environ["STUDIO_SKILLS_DIR"]
+    if not forward_aws:
+        # Belt to the firewall rule's braces: botocore honors this, though code
+        # that reaches for the metadata endpoint itself does not — which is why
+        # the uid egress rule, not this flag, is what actually blocks IMDS.
+        env["AWS_EC2_METADATA_DISABLED"] = "true"
     if openai_api_key:
         env["OPENAI_API_KEY"] = openai_api_key
     if bedrock_api_key:
         env["BEDROCK_API_KEY"] = bedrock_api_key
     return env
+
+
+def _exec_user_ids(settings: Any = None) -> tuple[int, int] | None:
+    """`(uid, gid)` of the configured dedicated execution user, or None.
+
+    Empty configuration means "keep the backend's uid" — the tier-1 posture, where
+    resource limits and the environment allowlist apply but the child still shares
+    the backend's identity and can reach the instance metadata service.
+    """
+    current = settings or get_settings()
+    name = (current.studio_exec_user or "").strip()
+    if not name:
+        return None
+    import pwd
+
+    try:
+        record = pwd.getpwnam(name)
+    except KeyError:
+        raise ExecUserUnavailable(
+            f"studio_exec_user {name!r} does not exist on this host. Run "
+            "scripts/setup_exec_env.sh --hardened to create it, or clear the "
+            "setting to run the subprocess as the backend user."
+        ) from None
+    if os.geteuid() != 0:
+        # Becoming another user needs privilege: `subprocess(user=…)` fails with
+        # EPERM, and so does chowning the workdir to it. `make dev` and start.py
+        # run the backend as the operator's own account, so this is the *common*
+        # case — it has to be a stated precondition rather than a spawn-time
+        # PermissionError with no explanation.
+        raise ExecUserUnavailable(
+            f"studio_exec_user {name!r} is configured, but this backend runs as "
+            f"uid {os.geteuid()} and only root can switch to another user. Run the "
+            "backend as root to use the dedicated execution user, or clear "
+            "studio_exec_user — the subprocess then keeps the backend's uid, "
+            "which leaves the instance metadata service reachable from it."
+        )
+    return record.pw_uid, record.pw_gid
+
+
+def exec_user_error(settings: Any = None) -> str | None:
+    """The reason `studio_exec_user` cannot be honored, or None if it can.
+
+    Lets the execution endpoints refuse up front with an actionable message
+    instead of spawning and failing halfway through a run.
+    """
+    try:
+        _exec_user_ids(settings)
+    except ExecUserUnavailable as exc:
+        return str(exc)
+    return None
+
+
+def build_spawn_kwargs(settings: Any = None) -> dict[str, Any]:
+    """Isolation arguments shared by every place the platform spawns
+    caller-supplied code: its own session, resource ceilings, and a drop to the
+    dedicated execution user when one is configured.
+
+    The uid/gid drop uses subprocess's `user`/`group` arguments rather than doing
+    it inside `preexec_fn`: those run in CPython's C child helper, whereas
+    `preexec_fn` executes arbitrary Python after a fork and is documented as
+    deadlock-prone in a process that has threads — and this backend runs deploy
+    jobs on background threads. Only the `setrlimit` calls remain in `preexec_fn`
+    (there is no keyword for them); their values are computed here, before the
+    fork, so the child does nothing but issue syscalls.
+
+    CPython applies `user`/`group` before `preexec_fn`, so the limits are lowered
+    as the unprivileged user. That is fine — lowering a soft limit never needs
+    privilege.
+    """
+    current = settings or get_settings()
+    limits = [
+        (resource.RLIMIT_AS, current.studio_exec_memory_mb * 1024 * 1024),
+        (resource.RLIMIT_CPU, current.studio_exec_cpu_seconds),
+        (resource.RLIMIT_NPROC, current.studio_exec_max_processes),
+        (resource.RLIMIT_FSIZE, current.studio_exec_max_file_mb * 1024 * 1024),
+    ]
+
+    def apply_limits() -> None:  # pragma: no cover - runs in the forked child
+        for which, value in limits:
+            try:
+                resource.setrlimit(which, (value, value))
+            except (ValueError, OSError):
+                # Below an existing hard cap, or unsupported on this platform —
+                # the timeout and process-group kill still bound the run.
+                pass
+
+    kwargs: dict[str, Any] = {
+        "start_new_session": True,  # own process group, so kill_process_group works
+        "preexec_fn": apply_limits,
+    }
+    ids = _exec_user_ids(current)
+    if ids is not None:
+        uid, gid = ids
+        kwargs["user"] = uid
+        kwargs["group"] = gid
+    return kwargs
 
 
 def kill_process_group(process: "asyncio.subprocess.Process") -> None:
@@ -129,12 +301,14 @@ async def spawn_execution_subprocess(
     if not interpreter_available():
         raise ExecInterpreterUnavailable(missing_interpreter_message())
 
+    settings = get_settings()
     workdir = tempfile.mkdtemp(prefix="strands_exec_")
     code_file = os.path.join(workdir, "generated_agent.py")
     with open(code_file, "w", encoding="utf-8") as f:
         f.write(code)
 
     bundle_skills_for_workdir(code, workdir)
+    grant_workdir_to_exec_user(workdir, settings)
 
     cmd = [interpreter_path(), "-u", code_file]
     if input_data is not None:
@@ -145,10 +319,28 @@ async def spawn_execution_subprocess(
         cwd=workdir,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env=build_execution_env(openai_api_key, bedrock_api_key),
-        start_new_session=True,
+        env=build_execution_env(openai_api_key, bedrock_api_key, settings),
+        **build_spawn_kwargs(settings),
     )
     return process, workdir
+
+
+def grant_workdir_to_exec_user(workdir: str, settings: Any = None) -> None:
+    """Let the dedicated execution user read the run's workspace.
+
+    `mkdtemp` is 0700 and owned by the backend user, so after the uid drop the
+    child could not read its own code. Hands the tree to that user rather than
+    widening the mode for everyone on the host.
+    """
+    ids = _exec_user_ids(settings)
+    if ids is None:
+        return
+    uid, gid = ids
+    for root, dirs, files in os.walk(workdir):
+        for name in (*dirs, *files):
+            os.chown(os.path.join(root, name), uid, gid)
+    os.chown(workdir, uid, gid)
+    os.chmod(workdir, stat.S_IRWXU)
 
 
 async def execute_strands_code(

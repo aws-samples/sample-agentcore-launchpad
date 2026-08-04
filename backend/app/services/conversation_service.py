@@ -70,6 +70,7 @@ class ConversationService:
         agent_file = session_dir / "agent.py"
         agent_file.write_text(generated_code, encoding="utf-8")
         local_exec.bundle_skills_for_workdir(generated_code, str(session_dir))
+        local_exec.grant_workdir_to_exec_user(str(session_dir))
         self.agent_processes[session_id] = {
             "session_dir": session_dir,
             "agent_file": agent_file,
@@ -90,6 +91,9 @@ class ConversationService:
         local_exec.bundle_skills_for_workdir(
             generated_code, str(agent_info["session_dir"])
         )
+        # The rewritten file and any newly bundled skills are owned by the backend
+        # user again, so re-hand them over.
+        local_exec.grant_workdir_to_exec_user(str(agent_info["session_dir"]))
         session = self.sessions[session_id]
         session.updated_at = datetime.now()
         return session
@@ -174,6 +178,7 @@ class ConversationService:
                 timeout=NONSTREAM_TIMEOUT_S,
                 cwd=agent_file.parent,
                 env=self._build_env(session),
+                **local_exec.build_spawn_kwargs(),
             )
             if result.returncode == 0:
                 return True, result.stdout.strip()
@@ -253,6 +258,9 @@ class ConversationService:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=agent_file.parent,
                 env=self._build_env(session),
+                # Same isolation as local_exec.spawn_execution_subprocess: this is
+                # the second place the platform runs caller-supplied code.
+                **local_exec.build_spawn_kwargs(),
             )
 
             while True:

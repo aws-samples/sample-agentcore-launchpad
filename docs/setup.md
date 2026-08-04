@@ -101,13 +101,18 @@ aws logs delete-delivery-destination --region us-west-2 --name <gateway-id>-trac
 
 Use `make dev` for the foreground, terminal-attached development stack.
 
-### Optional console login
+### Console login / 控制台登录
 
 The console can use local accounts without Cognito or any other AWS dependency.
-Authentication is disabled until a password is configured — and the console shows
-an `AUTH OFF` badge in its top bar while that is the case. Note that
-`./start.py --prod` binds both servers to `0.0.0.0`, so anything reachable must
-have the gate on:
+Authentication is disabled until a password is configured, and the console shows
+an `AUTH OFF` badge in its top bar while that is the case.
+
+**An unauthenticated console only answers loopback callers.** `./start.py --prod`
+binds both servers to `0.0.0.0`, so a reachable deployment must configure a
+password; without one, requests to `/api` from any non-loopback address are
+refused with `auth.open_console_refused`, and `./start.py` fails its pre-flight
+rather than starting. `/api/health` and the sign-in endpoints stay reachable so a
+locked-out operator can still see the gate.
 
 ```bash
 export LAUNCHPAD_AUTH_USERNAME=admin
@@ -115,16 +120,197 @@ export LAUNCHPAD_AUTH_PASSWORD='replace-with-a-strong-password'
 ./start.py
 ```
 
-Sessions use a 12-hour HttpOnly cookie. For an HTTPS deployment, also set:
-
-```bash
-export LAUNCHPAD_AUTH_COOKIE_SECURE=true
-```
+Sessions use a 12-hour HttpOnly cookie. `Secure` is set automatically in
+production mode (`run_mode: prod`, which `./start.py --prod` sets), together with
+an HSTS response header; `LAUNCHPAD_AUTH_COOKIE_SECURE=true` forces it on in
+development too. **Both require HTTPS end to end** — a `Secure` cookie is never
+sent back over plain HTTP, so sign-in silently fails if TLS terminates somewhere
+that then forwards over HTTP without the console knowing.
 
 The same values may be placed in `config/launchpad.yaml` as `auth_username`,
 `auth_password`, and `auth_cookie_secure`, following the normal configuration
 precedence. Prefer the process environment for the password. Changing the
 credentials and restarting the backend invalidates existing sessions.
+
+### Roles: what a member can do / 成员权限
+
+There are two roles. `admin` has the whole console. `member` is **effectively
+read-only**: browse agents, registry records and knowledge bases, chat with and
+invoke agents, run the retrieval playground, and read observability, memory,
+evaluation and governance.
+
+Everything that executes code, changes deployed or cloud state, mints
+credentials, or changes governance posture is administrator-only — creating and
+deploying agents, the Studio canvas, registry register/edit/import, knowledge-base
+mutations, API keys, Cedar policy writes, and the browser / code-interpreter
+demos. The authoritative list is the table in
+`backend/app/core/route_policy.py`; a route missing from it is refused rather
+than served.
+
+This is deliberately restrictive: the console has no per-user data partitioning
+yet, so a member who could deploy could also see and mutate every other member's
+resources.
+
+### Escape hatches / 应急开关
+
+| Variable | Effect |
+|---|---|
+| `LAUNCHPAD_ALLOW_OPEN_CONSOLE=true` | Serve an unauthenticated console on a reachable interface. Restores the pre-hardening behavior; use only on a trusted network. |
+| `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true` | Re-enable local code execution in production (see below). |
+| `LAUNCHPAD_AUTH_COOKIE_SECURE=false` | Drop `Secure` when TLS is not actually terminated in front of the console. |
+
+There is no switch that disables role authorization: a flag that turns
+authorization off is the vulnerability. Correcting a misclassified route means
+editing `route_policy.py`.
+
+### Per-agent execution roles / 按 Agent 的执行角色
+
+Each deployed agent gets its own IAM execution role, derived from its spec, instead of
+every agent assuming one shared `launchpad-agent-execution-role`. The point is
+isolation: on the shared role, any agent could mount any other agent's file systems,
+read every agent's skill bundles, retrieve from every knowledge base, and rewrite
+gateway routing.
+
+Roles are named `launchpad-agent-{name}-{agent-id-prefix}` and tagged
+`launchpad:agent-id`. They are created in the `provision` stage, reconciled on
+re-publish (a dropped capability shrinks the policy), and deleted with the agent.
+
+| Setting | Default | Effect |
+|---|---|---|
+| `per_agent_execution_roles` | `true` | Set false to fall back to the shared role. |
+| `agent_role_count_warn_threshold` | `800` | Warn once this many roles exist. |
+
+**The IAM default quota is 1000 roles per account**, and this consumes one per agent.
+At demo scale that is not a concern, but hitting it would surface as an
+otherwise-mysterious deploy failure.
+
+**Existing agents keep working on the shared role.** Migration is a **re-publish** —
+not a hand-rolled `UpdateAgentRuntime`, which resets omitted fields and would silently
+clear file-system mounts, protocol config or the environment. Check what is
+outstanding with:
+
+```bash
+cd backend && uv run python scripts/migrate_agent_roles.py
+```
+
+Run `scripts/migrate_pin_requirements.py --apply` **first**: a re-publish re-validates
+the spec, so an unpinned requirement is now refused.
+
+> **Why the shared role still exists and still carries broad grants.** It backs
+> agents that have not been re-published yet. Reducing it before every agent has moved
+> would strip grants from agents still using it. That reduction is deliberately not
+> done yet, and neither is the trust-policy `aws:SourceArn` condition (off pending a
+> probe of whether AgentCore sends that key). Note also what per-agent roles do **not**
+> give you: memory stays a single shared instance partitioned by actor id, not by IAM,
+> and the account's 1000-role quota is now consumed one role per agent.
+
+**A green deploy does not prove a policy is correct.** These policies are scoped per
+spec, and an over-tight statement fails at **invoke** time, not deploy time. After
+migrating, invoke each agent and check CloudTrail for `AccessDenied`.
+
+### Dependency and image supply chain / 依赖与镜像供应链
+
+**Requirements must be pinned.** `spec.requirements` entries have to name one
+immutable artifact — `name==version`, a direct URL with `#sha256=`, or
+`pkg @ git+https://…@<40-char commit>`. A range is refused at validation with the
+required form in the message. The platform's own requirement lists keep ranges
+deliberately; reproducibility comes from the lockfile below, not from hand-pinning
+them.
+
+Existing agents may predate this. Nothing breaks until their next deploy — check
+with:
+
+```bash
+cd backend && uv run python scripts/migrate_pin_requirements.py
+cd backend && uv run python scripts/migrate_pin_requirements.py --apply
+```
+
+The same script lists git skill records with no recorded commit; those need a
+**re-import** from the Registry, because a commit SHA needs a fetch.
+
+**Every zip build is locked.** The package stage resolves the declared
+requirements with `uv pip compile --generate-hashes` for the deploy target
+(aarch64, Python 3.13) and installs with `--require-hashes`, so a substituted or
+re-uploaded distribution fails the build instead of shipping. The lock travels
+inside the deployment zip as `requirements.lock`. **The backend therefore needs the
+`uv` CLI on PATH and access to the package index at deploy time**; if the resolve
+fails, the deploy fails — there is no fall back to an unverified install.
+
+**Container images are scanned and deployed by digest.** ECR scans on push, and
+the package stage refuses to continue when the image carries findings at or above
+`image_scan_block_severities`:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `image_scan_enabled` | `true` | Set false to skip the gate (the job log then says the image was not scanned). |
+| `image_scan_block_severities` | `["CRITICAL"]` | Severities that block a deploy. |
+| `image_scan_timeout_s` | `300` | How long to wait for the scan; a timeout is logged, not treated as clean. |
+
+Deployment references the image by immutable digest, not by its `{agent}-v{version}`
+tag, and the digest is recorded on the deployment. Image tags stay **mutable** on
+purpose: packaging runs before the version is bumped, so a re-publish pushes the
+same tag twice and an immutable-tag policy would fail that push.
+
+> **Applies to both stacks.** Scan-on-push is a CDK change, so `make bootstrap`
+> has to be run in `us-west-2` **and** on the `us-east-1` host. Until it is, the
+> gate on that host will report that it could not read a scan.
+
+> **Expect the default to block on day one.** A scan of a current demo image found
+> **4 CRITICAL** findings, all unpatched OS packages in the Debian base image
+> (`glibc`, `perl`) rather than anything this project installs — so with the
+> `["CRITICAL"]` default, enabling scanning stops container deploys until the base
+> image ships fixes. The block message names the CVEs and packages so you can tell
+> whose problem it is. Decide deliberately between rebuilding on a newer base,
+> relaxing `image_scan_block_severities` to `[]` (report-only: findings are logged
+> on every deploy, nothing is blocked), and accepting the block.
+
+Not implemented: SBOM generation, build provenance/attestation, image signing,
+approved-mirror enforcement, and skill *content* review. Pinning makes a source
+immutable, not trustworthy.
+
+### Local code execution / 本地代码执行
+
+The Studio local-debug endpoints (`/api/execute`, `/api/execute/stream`, and the
+`/api/conversations` multi-turn surface) run **caller-supplied Python on the
+server**. They are therefore **disabled in production mode**, and Studio local
+debug plus AI Fix stop working there. Set
+`LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true` to accept the risk.
+
+In development the subprocess gets a scrubbed environment (an allowlist, so the
+ledger URL, `LAUNCHPAD_*` settings and your shell's secrets do not reach it) plus
+memory/CPU/process/file-size ceilings.
+
+It still runs as the backend user by default, and **still reaches your AWS
+credentials**. Setting `studio_exec_forward_aws_credentials: false` keeps them
+out of the child's environment and sets `AWS_EC2_METADATA_DISABLED=true`, which
+is enough to stop the AWS SDKs and CLI from picking up the instance role — but
+that variable is an SDK convention, not a boundary. On EC2 credentials arrive
+over the network, so code that talks to `169.254.169.254` itself still gets them.
+Measured on an EC2 host: with the environment scrubbed, ~20 lines of `urllib`
+still returned live instance-role keys. To close that:
+
+```bash
+sudo scripts/setup_exec_env.sh --hardened   # Linux only
+```
+
+That creates a dedicated unprivileged account and a firewall rule denying **that
+uid** egress to the metadata endpoint, then prints the two settings to add. The
+same probe under it times out.
+
+**Precondition:** switching the subprocess to another account needs privilege, so
+`studio_exec_user` only works when **the backend itself runs as root**. `make dev`
+and `start.py` run it as your own account, where the drop would fail — the
+execution endpoints therefore refuse with `studio.exec.user_unavailable` (503)
+rather than failing mid-run, and you must either run the backend as root or leave
+`studio_exec_user` empty (tier 1: limits and environment scrubbing only).
+
+Note the trade-off the script describes: the default Bedrock Mantle path mints
+its bearer token from the ambient credentials, so a credential-less subprocess
+requires an explicit `bedrock_api_key` / `openai_api_key` with each local-debug
+request.
+
+A full sandbox (non-root container, seccomp, constrained egress) is **not**
+implemented; production-disabled is the mitigation there.
 
 ### Self-service accounts and User Management
 

@@ -5,6 +5,12 @@ import tempfile
 _TEST_DB = os.path.join(tempfile.mkdtemp(prefix="launchpad-test-"), "test.db")
 os.environ["LAUNCHPAD_DATABASE_URL"] = f"sqlite:///{_TEST_DB}"
 
+# Most tests exercise the console with no password configured, and TestClient's
+# peer address is the literal "testclient" rather than a loopback IP — so the
+# open-console guard would refuse them all. The suite accepts an open console on
+# purpose; test_open_console.py clears this to assert the guard itself.
+os.environ["LAUNCHPAD_ALLOW_OPEN_CONSOLE"] = "true"
+
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 

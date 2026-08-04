@@ -9,17 +9,25 @@ export function Sidebar({ health }: { health: HealthInfo | null }) {
   const { t } = useTranslation();
   const { isAdmin } = useAuth();
 
-  const renderLink = (entry: NavEntry) => (
-    <NavLink
-      key={entry.to}
-      to={entry.to}
-      end={entry.end}
-      className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
-    >
-      <span className="idx">{entry.idx}</span>
-      {t(entry.labelKey)}
-    </NavLink>
-  );
+  const renderLink = (entry: NavEntry) =>
+    entry.adminOnly && !isAdmin ? (
+      // Keep the slot so the numbered flow does not shift for members, but do not
+      // offer a page whose every action would answer 403.
+      <div className="nav-item dim" key={entry.to} title={t("auth.adminRequired.meta")}>
+        <span className="idx">{entry.idx}</span>
+        {t(entry.labelKey)}
+      </div>
+    ) : (
+      <NavLink
+        key={entry.to}
+        to={entry.to}
+        end={entry.end}
+        className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
+      >
+        <span className="idx">{entry.idx}</span>
+        {t(entry.labelKey)}
+      </NavLink>
+    );
 
   return (
     <nav className="side">

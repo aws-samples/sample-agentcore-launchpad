@@ -58,7 +58,13 @@
     "registerPendingBody": "{{username}} 已提交审核。需管理员审批通过后才能登录,{{days}} 天有效期从审批时开始计算。",
     "accountStatus": "状态",
     "statusPending": "待审批",
-    "accountPending": "该账户正在等待管理员审批。"
+    "accountPending": "该账户正在等待管理员审批。",
+    "adminRequired": {
+      "meta": "仅管理员",
+      "title": "需要管理员权限",
+      "body": "该操作会改变已部署状态、凭证或治理策略，因此仅限管理员使用。",
+      "toast": "该操作需要管理员权限。"
+    }
   },
   "nav": {
     "platform": "平台",
@@ -390,6 +396,8 @@
       "descriptor": "描述符",
       "source": "来源",
       "sourceUrl": "来源 URL",
+      "sourceCommit": "提交",
+      "commitUnknown": "未记录(导入时尚未固定提交——重新导入即可捕获)",
       "files": "文件束 · {{n}} 个文件",
       "useInNewAgent": "在新 AGENT 中使用",
       "submit": "提交",
@@ -998,6 +1006,10 @@
     "runtime.discovery_failed": "AgentCore Runtime 扫描失败",
     "job.not_found": "未找到该任务",
     "validation.invalid_request": "请求校验失败",
+    "auth.forbidden": "该操作需要管理员权限。",
+    "auth.open_console_refused": "该控制台未配置认证，因此拒绝非本机请求。设置操作员密码以启用登录门禁。",
+    "studio.exec.disabled": "本部署已禁用本地代码执行。",
+    "auth.route_unclassified": "该路由没有授权登记项——在补上之前一律拒绝。",
     "http.404": "资源不存在",
     "http.500": "服务器内部错误",
     "agent.redeploy_immutable": "重新发布时名称和方式不能变——如需变更请克隆为新 Agent。",

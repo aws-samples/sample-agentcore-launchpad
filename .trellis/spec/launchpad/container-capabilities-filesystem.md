@@ -70,16 +70,23 @@ AgentSpec.network: VpcNetwork | None  # REQUIRED when filesystem.byo (model_vali
 # deployer/container.py (pure, unit-tested)
 _filesystem_configurations(spec) -> list[dict]  # AWS union shapes
 _vpc(spec) -> dict | None                       # only when byo AND network set
-_fs_policy_document(spec) -> dict | None
+_build_context(spec, agent, log) -> Path        # assemble + bundle spec.skills into .claude/skills/
+
+# services/agent_iam.py — MOVED here 2026-08-03 with per-agent roles (T3)
+fs_policy_document(spec) -> dict | None
 #   s3_files → THREE statements (live-verified 2026-07-13):
 #     ClientMount+ClientWrite  · Resource=FS-arns · Condition ArnEquals AccessPointArn
 #     GetAccessPoint           · Resource=AP-arns · NO condition (key unsupported)
 #     ListMountTargets         · Resource=FS-arns (undocumented AgentCore requirement)
 #   efs → ClientMount+ClientWrite · Resource "*" + AP condition (unverified live)
-_sync_fs_policy(iam, role_arn, agent, spec, log)  # put/delete launchpad-fs-{agent.name}
-_retry_iam_propagation(fn, log, attempts=6, delay_s=10, sleeper)  # deploy-stage guard:
-#   retries ONLY "missing required permissions" (fresh inline policy not yet visible)
-_build_context(spec, agent, log) -> Path        # assemble + bundle spec.skills into .claude/skills/
+# DO NOT re-derive these shapes. The AWS devguide example is wrong and incomplete;
+# this shape came from IAM simulator + live UpdateAgentRuntime probes. A
+# characterisation test in tests/test_agent_iam_policy.py pins it byte-for-byte.
+provision_execution_role(agent, spec, settings, log, iam=None) -> (arn, detail)
+delete_execution_role(agent, settings, log, iam=None) -> bool   # never raises
+retry_iam_propagation(fn, log, attempts=6, delay_s=10, sleeper)  # deploy-stage guard;
+#   predicate covers assume-role / AccessDenied wording too — a brand-new role is a
+#   longer consistency window than a rewritten inline policy
 
 # deployer/zip_runtime.py
 bundle_skill_paths_into(paths, dest_parent, log, *, s3_client=None)  # explicit s3 prefixes
@@ -116,8 +123,14 @@ its picks in ONE call — per-item calls would drop staging after the first).
   network flips PUBLIC→VPC exactly when BYO mounts exist. Old specs (no
   `filesystem` key) default to session-ON — safe because the version bump resets
   session storage anyway.
-- IAM: inline policy `launchpad-fs-{agent.name}` on the shared execution role;
-  attached when BYO, deleted when mounts removed or agent deleted (best-effort).
+- IAM: inline policy `launchpad-fs-{agent.name}` on **the agent's own execution
+  role** (`launchpad-agent-{name}-{id8}`), not the shared one — accumulating
+  per-agent mount grants on a principal every agent assumes is the T3 problem this
+  moved away from. Attached when BYO, deleted when mounts are removed on re-publish,
+  and removed wholesale with the role when the agent is deleted. The role must be
+  deleted **after** the runtime; the reverse order can wedge the runtime's own
+  deletion. On the `per_agent_execution_roles=false` fallback the old shared-role
+  cleanup still runs, or a stale policy would pile up on the shared principal.
 - Frontend `buildSpec()` sends `filesystem`/`network` for container only;
   harness payload unchanged. Edit reload derives custom-chip names from the
   path tail (`/agent-skills/` marker).

@@ -32,19 +32,37 @@ class ExecutionRequest(BaseModel):
     bedrock_api_key: str | None = None
 
 
-def _require_interpreter() -> None:
+def _require_local_execution() -> None:
+    """Gate the surface before anything is written to disk or spawned.
+
+    Three refusals, most restrictive first: the deployment may not offer local
+    execution at all (production default — this runs caller-supplied Python), the
+    dedicated interpreter may not be provisioned, and a configured dedicated
+    execution user may not be usable by this process.
+    """
+    if not local_exec.local_exec_enabled():
+        raise AppError(
+            "studio.exec.disabled",
+            local_exec.disabled_message(),
+            status_code=403,
+        )
     if not local_exec.interpreter_available():
         raise AppError(
             "studio.exec.interpreter_unavailable",
             local_exec.missing_interpreter_message(),
             status_code=503,
         )
+    user_problem = local_exec.exec_user_error()
+    if user_problem:
+        raise AppError(
+            "studio.exec.user_unavailable", user_problem, status_code=503
+        )
 
 
 @router.post("/execute")
 async def execute_code(request: ExecutionRequest) -> dict:
     """One-shot execution: run the code and return its captured stdout."""
-    _require_interpreter()
+    _require_local_execution()
     start = time.monotonic()
     try:
         output = await local_exec.execute_strands_code(
@@ -69,7 +87,7 @@ async def execute_code_stream(request: ExecutionRequest) -> StreamingResponse:
     """Streaming execution: forward subprocess stdout as SSE, ending with a
     `[STREAM_COMPLETE:<seconds>]` sentinel. Uses the multiline framing so
     newlines survive `data:` splitting (an empty `data: ` line = newline)."""
-    _require_interpreter()
+    _require_local_execution()
     timeout = get_settings().execute_timeout_s
 
     async def generate_stream():

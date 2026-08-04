@@ -32,11 +32,25 @@ router = APIRouter(prefix="/api", tags=["studio-local-debug"])
 
 
 def _require_interpreter() -> None:
+    """Same gate as `/api/execute` — this surface spawns the same interpreter on
+    the same caller-supplied code, so disabling one entrance and not the other
+    would only move the door."""
+    if not local_exec.local_exec_enabled():
+        raise AppError(
+            "studio.exec.disabled",
+            local_exec.disabled_message(),
+            status_code=403,
+        )
     if not local_exec.interpreter_available():
         raise AppError(
             "studio.exec.interpreter_unavailable",
             local_exec.missing_interpreter_message(),
             status_code=503,
+        )
+    user_problem = local_exec.exec_user_error()
+    if user_problem:
+        raise AppError(
+            "studio.exec.user_unavailable", user_problem, status_code=503
         )
 
 

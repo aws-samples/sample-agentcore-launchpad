@@ -80,13 +80,97 @@ generate → package → provision → deploy → register
 | 阶段 | 方式B — harness | zip_runtime / 方式C — studio | 方式A — container |
 |---|---|---|---|
 | **generate** | 从 AgentSpec 构建 `CreateHarness` 请求 | 渲染 Strands 模板(studio:原样适配用户代码) | 组装 ARM64 构建上下文(Dockerfile + `main.py` + `.claude` 脚手架) |
-| **package** | *跳过*(无产物) | `pip install` ARM64 wheels → zip → S3 | zip 上下文 → S3 → CodeBuild(docker build+push)→ ECR |
+| **package** | *跳过*(无产物) | 解析 → 带 hash 的 lock → `--require-hashes` 安装 ARM64 wheels → zip → S3 | zip 上下文 → S3 → CodeBuild(docker build+push)→ ECR → 解析 digest → 扫描闸门 |
 | **provision** | 复用共享执行角色 | 复用共享执行角色 | 复用共享执行角色 |
 | **deploy** | `CreateHarness` + 轮询 READY | `CreateAgentRuntime` + 轮询 READY | `CreateAgentRuntime(containerConfiguration)` + 轮询 READY |
 | **register** | A2A 注册记录,自动提交 | A2A 注册记录,自动提交 | A2A 注册记录,自动提交 |
 
 典型耗时:harness ≈ 30 秒,zip ≈ 1–3 分钟(含 pip),container ≈ 2–4 分钟(实测:CodeBuild 1.7 分钟 + 数秒即 READY)
 (经 CodeBuild)。见 [troubleshooting.zh-CN.md](troubleshooting.zh-CN.md)。
+
+### 按 Agent 的执行角色
+
+过去所有 agent 共用一个 `launchpad-agent-execution-role`,其上有 14 条语句、多数是账号级
+的。真正的暴露面不在于抽象意义上的通配符,而在于**任何一个 agent 都拥有其他所有 agent 的
+触达范围**:挂载其他 agent 的文件系统、读取所有 agent 的 skill 包、检索账号内任意知识库、
+改写 gateway 路由。
+
+`app/services/agent_iam.py` 按 spec 为每个 agent 派生角色。Sid 与 CDK 角色保持一致,以便
+逐条对比。
+
+| 授权 | 何时产生 | 范围 |
+|---|---|---|
+| `BedrockModels` | 总是 | 配置的 `model_id` |
+| `BedrockMantle*`、Marketplace | `model_source == "mantle"` | project/`*`;Marketplace 由 `CalledViaLast` 约束 |
+| `AgentCoreMemory` | 启用记忆 | 记忆单例 |
+| `AgentCoreWorkloadIdentity`、`IdentityVaultSecrets` | 有 gateway/MCP 工具或知识库 | — |
+| `AgentCoreCodeInterpreter` / `AgentCoreBrowser` | 挂载了对应内置工具 | — |
+| `EcrPull` / `EcrAuth` | `method == "container"` | 该仓库 |
+| `SkillBundle*` | 挂载了 skill | **本 agent 的**前缀 |
+| `ManagedKbRetrieval` | 挂载了知识库 | **已挂载的** KB ARN |
+| `A2AInvokePeerRuntimes` | `protocol == "a2a"` | 账号内 runtime |
+| `Telemetry` | 总是 | runtime 日志组 |
+| BYO 挂载策略 | 配置了挂载 | **本 agent 的**接入点 |
+
+**刻意保留 `*` 的部分及原因**:`bedrock:AgenticRetrieveStream`、
+`bedrock-mantle:CallWithBearerToken`、`ecr:GetAuthorizationToken` 都不支持资源级收窄,
+X-Ray 上报与 `cloudwatch:PutMetricData` 同理。这些在语句处就地注明,而不是悄悄收窄。
+
+**移除了两项授权**——值得知道,因为"移除"才是会以运行时失败形式暴露出来的那一类:
+`ABTestOrchestration`(16 个动作,含 `CreateGatewayRule`、`UpdateGateway`、
+`InvokeAgentRuntime`)本是**平台**用自己凭证做的事;CloudWatch Logs 的**读**动作是控制台
+路径,泄漏到了工作负载角色上。`InvokeAgentRuntime` 对 A2A agent 保留,它确实要调用同伴。
+
+**按 agent 的角色并不带来按 agent 的记忆隔离。** 记忆只有一个共享实例,靠把 agent id 折进
+actor id 来分区(`services/memory.py::scoped_actor`),不是靠 IAM。按 agent 建记忆是另一
+件事。
+
+生命周期:在 `provision` 创建,重新发布时对齐(被去掉的能力会让策略收缩),随 agent 删除
+——且必须在 runtime **之后**,因为先删角色可能卡住 runtime 自身的删除。删除失败绝不阻塞
+agent 的删除;角色带 `launchpad:agent-id` 标签,便于找到孤儿。`ensure_role` 会接管同名的
+已有角色,因此一次半失败的删除不会卡住用同名重建 agent。
+
+Canary 与 A/B 候选版本沿用**生产当前所在的角色**,取自 `GetAgentRuntime.roleArn`。候选版本
+是替生产站位的,给它共享角色会让它以生产并不具备的权限被评测;而读取实时值(而非按名字
+推导)也让早于本改动部署的 agent 继续可用。
+
+共享角色仍然存在、也仍带宽泛授权:它支撑尚未重新发布的 agent。在所有 agent 迁移完成前
+缩减它会抽掉仍在使用它的 agent 的授权,因此该缩减**尚未**执行。
+
+### 构建的供应链
+
+一个已部署产物必须能回答两个问题:里面装了什么,以及正在运行的是否仍是当初构建出来的。
+两者都落在 `package` 阶段。
+
+**依赖先解析、再锁定、再校验安装。** 过去这里只有一次针对声明列表的 `pip install`,它
+装的是那一刻索引提供的任何版本(平台自带的范围写法也一样),而且不留任何记录。现在该
+阶段先用 `uv pip compile --generate-hashes` 针对部署目标解析(aarch64、Python 3.13,在
+`zip_runtime.py` 里只写一次,以保证解析与安装不会各说各话),再用 `--require-hashes`
+安装。被替换或重新上传过的发行包会让构建失败。lock 以 `requirements.lock` 随 zip 下发,
+产物自带物料清单。这里刻意没有回退路径:解析失败就是阶段失败。
+
+调用方提供的 `spec.requirements` 还会在 **schema** 校验阶段被要求固定版本
+(`app/schemas/requirements.py`),因此控制台会在构建启动前就拒掉范围写法。平台自带的
+清单保留范围——`MANTLE_EXTRA_REQUIREMENTS` 的注释解释了 pip 本就应当对同一个项目的两条
+规格求交集——可复现性由 lock 提供。Harness 转换是平台唯一一处从别处派生依赖的地方(源
+Harness 的 `pyproject.toml`),所以它把那些范围解析成固定版本,而不是被豁免于该规则。
+
+**容器镜像会被扫描,并按 digest 部署。** ECR 在推送时扫描。构建完成后
+`_stage_package` 把推送出的标签解析为不可变 digest、记录到 `Deployment` 行上,并在镜像
+能够支撑 runtime 之前运行闸门;`_stage_deploy` 以 `repo@sha256:…` 作为 `containerUri`
+下发。若按 `{agent}-v{version}` 标签部署,runtime 执行的内容就可能在无任何记录的情况下
+发生变化。
+
+闸门的阈值和开关都可配置,因为一个无法绕过的闸门会在基础镜像第一次出现 CVE 时把所有
+agent 全部卡死。而读不到的扫描——未启用扫描、API 报错、超时——会被如实记录并让部署以
+"未扫描"状态继续;它绝不会被并入"干净",因为缺失的闸门不能被读成通过的闸门。
+
+镜像标签保持**可变**:打包发生在 `_stage_deploy` 递增版本号之前,因此重新发布会把同一
+标签推送两次,不可变标签策略会让第二次推送失败。digest 固定才是真正的控制点,并且有一
+条 infra 测试断言该标签策略,以防它悄悄漂移成一个坏掉的重新发布。
+
+未覆盖:SBOM 生成、provenance/attestation、签名、受信镜像源强制,以及 skill **内容**
+审查。不可变不等于可信。
 
 ### 创建入口
 
@@ -213,22 +297,52 @@ Cookie**:授权在每次请求时解析(配置的 admin → `admin`,其余以 `u
 状态的,可跨后端重启;修改内置 admin 凭证会使**所有**会话失效,因为签名密钥由其
 派生。
 
-启用后,中间件保护所有 `/api/*` 路由(含 API 文档),仅放行 `/api/health`、
-`/api/auth/status`、`/api/auth/login`、`/api/auth/register`;中间件不管 `/v1/*`,
-其 `X-Api-Key` 契约保持权威。
+有两道守卫按顺序执行,回答的是不同的问题。
 
-admin 另外拥有**用户管理**模块(`/users`),对应 `GET /api/users`、
-`GET /api/users/stats`、`PATCH /api/users/{id}`、`DELETE /api/users/{id}`——
-审批队列(待审批筛选与计数、通过/拒绝)、列表/搜索/筛选、注册统计、延期、
-禁用/启用、修改角色、一次性重置密码、删除。member
-会话在这四个路由上得到 `403 auth.forbidden`,页面渲染无权限状态而不是表格。数据本身
-**不**按用户隔离:所有已登录账户看到同一批 agent、知识库与链路,只有该模块按角色
-限制。
+**这个控制台是否允许处于开放状态?** 未认证的控制台只服务 loopback 调用方,其余一律
+`403 auth.open_console_refused`。它按**每个请求**检查而不是在启动时检查,因为请求是
+唯一能知道调用方地址的地方——`create_app()` 看不到 uvicorn 的 `--host`,所以仅靠启动
+检查会被"直接跑 uvicorn"绕过,而 EC2 主机和容器恰恰就是这么启动的。该检查使用传输层
+对端地址,绝不读 `X-Forwarded-For`(可伪造)。在真实 socket 上实测:来自非环回对端的
+伪造 `X-Forwarded-For`、`X-Real-IP`、`Forwarded`、`Host` 头全部被拒。残留风险比"信任
+localhost"更窄:uvicorn 的 proxy-header 中间件(默认 `forwarded_allow_ips=127.0.0.1`)
+会在对端**确实是环回**时用 `X-Forwarded-For` 改写对端地址,因此同主机代理只要设置了该
+头,被评估的就是真实客户端并会被拒;只有**不设置**转发头、却在转发远端流量的本机代理
+才仍显得像本地。无论哪种情况,该分支在真实生产路径上都不会触发,因为那里认证是开启的。`LAUNCHPAD_ALLOW_OPEN_CONSOLE=true` 表示接受该风险;`create_app()` 与
+`start.py` 另外会快速失败,让配置错误在启动时就暴露。
 
-默认 Cookie 适用于本地 HTTP 栈;HTTPS 部署必须设置
-`LAUNCHPAD_AUTH_COOKIE_SECURE=true`。不设置密码则整体关闭网关(控制台开放、注册
-返回 `auth.registration_disabled`、`/api/users*` 以隐式本地 admin 身份可达),保持
-免引导的本地开发与测试流程。
+**这个调用方是否允许访问这个路由?** 网关启用后,中间件要求所有 `/api/*` 路由都有活跃
+会话,仅放行 `/api/health`、`/api/auth/status`、`/api/auth/login`、
+`/api/auth/register`;中间件不管 `/v1/*`,其 `X-Api-Key` 契约保持权威。角色授权则来自
+**一张声明式表** `backend/app/core/route_policy.py`,由单个 app 级依赖强制执行:
+
+- 用依赖而非中间件,因为 `scope["route"]` 只有在路由匹配后才写入——这样检查读到的是
+  准确的 `path_format`,而不必重新实现路径匹配(在 FastAPI 0.139 的 `_IncludedRouter`
+  包装下同样成立,这也意味着枚举路由时必须递归);
+- **默认拒绝**:没有登记项的 `/api` 路由会抛 `auth.route_unclassified` 而不是放行,
+  因此新端点不可能在未授权的状态下上线;
+- `tests/test_route_policy.py` 枚举实际路由并在两个方向上检测漂移,这才是让这张表真正
+  可信而非流于形式的原因。
+
+分类原则:**admin** 用于会执行代码、改变已部署或云端状态、签发凭证、或改变治理策略的
+路由;**member** 用于读取,以及成员与智能体自身的交互。调用智能体
+(`/api/agents/{id}/invoke`、`/api/registry/a2a-demo`)刻意保持 member 可达——这与 Chat
+已经给每个成员的能力完全相同,Chat 开着却锁 invoke 保护不了任何东西。
+
+实际效果是 `member` 接近只读。在数据**尚未**按用户隔离的前提下这是有意为之:所有已登录
+账户看到同一批 agent、知识库与链路,因此一个能部署的成员同时也能修改其他人的资源。
+仅管理员可用的模块(`/users`、`/create`、Studio 画布、注册表的注册/编辑)会渲染"需要
+管理员权限"面板而不是发出请求;`auth.forbidden` 也映射进了 `apiErrors` i18n 块,因此
+任何漏加门禁的界面仍会显示本地化的原因。
+
+这里刻意没有提供关闭这张表的开关——能关掉授权的开关本身就是漏洞。
+
+会话 Cookie 的 `Secure` 与 HSTS 响应头都跟随 `run_mode == "prod"`;
+`LAUNCHPAD_AUTH_COOKIE_SECURE=true` 可在开发模式下强制开启 `Secure`。两者都没有硬编码
+为开启,因为明文 HTTP 开发源上的 `Secure` Cookie 不会回传,而那里的 HSTS 头会把
+`localhost` 粘死到 HTTPS。不设置密码则对 loopback 保持网关关闭(控制台开放、注册返回
+`auth.registration_disabled`、`/api/users*` 以隐式本地 admin 身份可达),保持免引导的
+本地开发与测试流程。
 
 ## 记忆控制台(控制台 05)
 

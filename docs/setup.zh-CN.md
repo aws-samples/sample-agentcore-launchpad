@@ -99,22 +99,184 @@ aws logs delete-delivery-destination --region us-west-2 --name <gateway-id>-trac
 
 需要绑定当前终端的前台开发栈时,使用 `make dev`。
 
-### 可选的控制台登录
+### 控制台登录
 
 控制台支持本地账户登录,不依赖 Cognito 或其他 AWS 服务。未配置密码时登录网关关闭,
-此时控制台顶栏会显示 `AUTH OFF` 徽标。注意 `./start.py --prod` 会把两个服务都绑定到
-`0.0.0.0`,因此任何对外可达的部署都必须开启网关:
+此时控制台顶栏会显示 `AUTH OFF` 徽标。
+
+**未认证的控制台只响应 loopback 调用方。** `./start.py --prod` 会把两个服务都绑定到
+`0.0.0.0`,因此对外可达的部署必须配置密码;未配置时,来自任何非 loopback 地址的
+`/api` 请求都会被拒绝(`auth.open_console_refused`),并且 `./start.py` 会在启动前
+检查失败而不是继续拉起服务。`/api/health` 与登录端点保持可达,以便被挡在外面的
+运维仍能看到登录门禁。
 
 ```bash
 export LAUNCHPAD_AUTH_USERNAME=admin
 export LAUNCHPAD_AUTH_PASSWORD='replace-with-a-strong-password'
-export LAUNCHPAD_AUTH_COOKIE_SECURE=true   # HTTPS 部署时开启
 ./start.py
 ```
 
-会话使用 12 小时 HttpOnly Cookie。上述值也可写入 `config/launchpad.yaml` 的
-`auth_username`、`auth_password`、`auth_cookie_secure`,遵循常规配置优先级;密码
-建议放在进程环境变量中。修改凭证并重启后端会使已有会话失效。
+会话使用 12 小时 HttpOnly Cookie。生产模式(`run_mode: prod`,`./start.py --prod`
+会设置)下自动带上 `Secure` 并发送 HSTS 响应头;`LAUNCHPAD_AUTH_COOKIE_SECURE=true`
+可在开发模式下强制开启。**两者都要求全链路 HTTPS** —— `Secure` Cookie 不会经明文
+HTTP 回传,所以若 TLS 在某处终止后再以 HTTP 转发,登录会静默失败。
+
+上述值也可写入 `config/launchpad.yaml` 的 `auth_username`、`auth_password`、
+`auth_cookie_secure`,遵循常规配置优先级;密码建议放在进程环境变量中。修改凭证并
+重启后端会使已有会话失效。
+
+### 角色:成员能做什么
+
+只有两个角色。`admin` 拥有整个控制台。`member` **实际上是只读的**:浏览智能体、
+注册表记录与知识库,与智能体对话、调用,使用检索 playground,以及查看可观测性、
+记忆、评估与治理。
+
+所有会执行代码、改变已部署或云端状态、签发凭证、或改变治理策略的操作都仅限管理员
+—— 创建与部署智能体、Studio 画布、注册表的注册/编辑/导入、知识库变更、API Key、
+Cedar 策略写入,以及浏览器 / 代码解释器 demo。权威清单是
+`backend/app/core/route_policy.py` 里的表;未登记的路由会被拒绝而不是放行。
+
+这个限制是刻意的:控制台尚无按用户的数据隔离,因此一个能部署的成员同时也能看到并
+修改其他所有成员的资源。
+
+### 应急开关
+
+| 变量 | 效果 |
+|---|---|
+| `LAUNCHPAD_ALLOW_OPEN_CONSOLE=true` | 在可达网络接口上提供未认证的控制台。恢复硬化前的行为,仅可用于可信网络。 |
+| `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true` | 在生产模式下重新启用本地代码执行(见下)。 |
+| `LAUNCHPAD_AUTH_COOKIE_SECURE=false` | 当控制台前面实际未终止 TLS 时,去掉 `Secure`。 |
+
+没有任何开关可以关闭角色授权:能关掉授权的开关本身就是漏洞。要修正误分类的路由,
+请直接改 `route_policy.py`。
+
+### 按 Agent 的执行角色
+
+每个已部署的 agent 都获得一个由其 spec 派生的独立 IAM 执行角色,而不是所有 agent 共用
+一个 `launchpad-agent-execution-role`。目的在于隔离:在共享角色下,任何 agent 都能挂载
+其他任意 agent 的文件系统、读取所有 agent 的 skill 包、检索账号内任意知识库,并改写
+gateway 路由。
+
+角色命名为 `launchpad-agent-{name}-{agent-id 前缀}`,并打上 `launchpad:agent-id` 标签。
+它们在 `provision` 阶段创建,在重新发布时对齐(被去掉的能力会让策略收缩),并随 agent
+一起删除。
+
+| 配置项 | 默认值 | 作用 |
+|---|---|---|
+| `per_agent_execution_roles` | `true` | 设为 false 可回退到共享角色。 |
+| `agent_role_count_warn_threshold` | `800` | 达到该数量后开始告警。 |
+
+**IAM 默认配额是每账号 1000 个角色**,本特性按 agent 线性消耗。demo 规模下不成问题,
+但真撞上配额时,表现会是一次莫名其妙的部署失败。
+
+**已有 agent 仍在共享角色上正常运行。** 迁移方式是**重新发布**,而不是手写
+`UpdateAgentRuntime`——后者会重置未传的字段,从而静默清掉文件系统挂载、protocol 配置或
+环境变量。用下面的命令查看还有哪些未迁移:
+
+```bash
+cd backend && uv run python scripts/migrate_agent_roles.py
+```
+
+请**先**运行 `scripts/migrate_pin_requirements.py --apply`:重新发布会重新校验 spec,
+未固定版本的依赖现在会被拒。
+
+> **为什么共享角色仍然存在、且仍带着宽泛授权。** 它支撑那些尚未重新发布的 agent。在所有
+> agent 迁移完成前缩减它,会直接抽掉仍在使用它的 agent 的授权。这项缩减刻意尚未执行;
+> 信任策略里的 `aws:SourceArn` 条件同样尚未启用(需先探明 AgentCore 是否会发送该 key)。
+> 另外注意 per-agent 角色**不**提供什么:记忆仍是单一共享实例、按 actor id 分区而非按
+> IAM 隔离,而账号的 1000 个角色配额现在按每个 agent 一个的速度消耗。
+
+**部署成功并不能证明策略正确。** 这些策略是按 spec 收窄的,而过紧的语句会在**调用**时
+失败,而不是部署时。迁移之后,请逐个调用 agent 并检查 CloudTrail 是否出现
+`AccessDenied`。
+
+### 依赖与镜像供应链
+
+**依赖必须固定版本。** `spec.requirements` 的每一项都必须指向唯一且不可变的产物——
+`name==version`、带 `#sha256=` 的直链 URL,或
+`pkg @ git+https://…@<40 位 commit>`。范围写法会在校验阶段被拒,错误信息里会给出
+要求的形式。平台自带的依赖清单刻意保留范围;可复现性来自下面的 lockfile,而不是把
+它们手工 pin 死。
+
+已有 agent 可能早于该规则。在它们下一次部署之前不会有任何影响,可用下面的命令检查:
+
+```bash
+cd backend && uv run python scripts/migrate_pin_requirements.py
+cd backend && uv run python scripts/migrate_pin_requirements.py --apply
+```
+
+同一脚本还会列出没有记录 commit 的 git skill 记录;这些需要从注册表**重新导入**,
+因为拿到 commit SHA 必须发起一次拉取。
+
+**每次 zip 构建都会锁定。** package 阶段用 `uv pip compile --generate-hashes` 针对
+部署目标(aarch64、Python 3.13)解析依赖,再以 `--require-hashes` 安装,因此被替换或
+重新上传过的发行包会让构建失败而不是被打包进去。lock 文件以 `requirements.lock` 随
+部署 zip 一起下发。**因此后端在部署时需要 PATH 上有 `uv` CLI 且能访问包索引**;解析
+失败就是部署失败——不会退回到未校验的安装路径。
+
+**容器镜像会被扫描,并按 digest 部署。** ECR 在推送时扫描,package 阶段在镜像存在
+达到或超过 `image_scan_block_severities` 的漏洞时拒绝继续:
+
+| 配置项 | 默认值 | 作用 |
+|---|---|---|
+| `image_scan_enabled` | `true` | 设为 false 可跳过该闸门(任务日志会写明镜像未被扫描)。 |
+| `image_scan_block_severities` | `["CRITICAL"]` | 会阻断部署的严重级别。 |
+| `image_scan_timeout_s` | `300` | 等待扫描的时长;超时会被记录,不会当作"干净"。 |
+
+部署引用的是不可变的镜像 digest,而不是 `{agent}-v{version}` 标签,并且 digest 会记录
+在该次部署上。镜像标签刻意保持**可变**:打包发生在版本号递增之前,因此重新发布会把
+同一个标签推送两次,不可变标签策略会让第二次推送失败。
+
+> **两套环境都要应用。** scan-on-push 是 CDK 改动,所以 `make bootstrap` 需要在
+> `us-west-2` **和** `us-east-1` 主机上各跑一次。在此之前,那台主机上的闸门会报告
+> 无法读取扫描结果。
+
+> **默认阈值第一天就会拦住部署。** 对现役 demo 镜像实测扫描得到 **4 个 CRITICAL**,
+> 全部是 Debian 基础镜像里未修补的 OS 包(`glibc`、`perl`),而不是本项目安装的任何东西
+> —— 也就是说在 `["CRITICAL"]` 默认值下,一旦开启扫描,容器部署会一直被拦到基础镜像
+> 发布修复为止。拦截消息会点名 CVE 与包名,便于判断责任方。请在三者之间明确取舍:换用
+> 更新的基础镜像重建、把 `image_scan_block_severities` 放宽为 `[]`(仅报告:每次部署都
+> 记录 finding,但不拦截)、或接受被拦截。
+
+未实现:SBOM 生成、构建 provenance/attestation、镜像签名、受信镜像源强制,以及 skill
+**内容**审查。固定版本让来源不可变,并不等于可信。
+
+### 本地代码执行
+
+Studio 本地调试端点(`/api/execute`、`/api/execute/stream`,以及
+`/api/conversations` 多轮对话面)会在**服务器上运行调用方提供的 Python**。因此它们
+在**生产模式下默认禁用**,Studio 本地调试与 AI Fix 在生产环境不可用。设置
+`LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true` 表示接受该风险。
+
+开发模式下子进程会拿到一份清洗过的环境(白名单,因此账本 URL、`LAUNCHPAD_*` 配置
+以及你 shell 里的密钥都不会进去),外加内存 / CPU / 进程数 / 文件大小上限。
+
+但它默认仍以后端用户身份运行,并且**仍能拿到你的 AWS 凭证**。把
+`studio_exec_forward_aws_credentials` 设为 `false` 会让凭证不进入子进程环境,并设置
+`AWS_EC2_METADATA_DISABLED=true` —— 这足以让 AWS SDK 与 CLI 不再取用实例角色,但该
+变量只是 SDK 约定,不是边界。在 EC2 上凭证走网络,所以**自己去访问
+`169.254.169.254` 的代码依然能拿到**。在 EC2 上实测:环境已清洗的情况下,约 20 行
+`urllib` 仍取回了有效的实例角色密钥。要封住这一点:
+
+```bash
+sudo scripts/setup_exec_env.sh --hardened   # 仅 Linux
+```
+
+该命令会创建一个专用的非特权账户,并加一条**按该 uid 限定**的防火墙规则禁止它访问
+元数据端点,然后打印需要补上的两个配置项。同一段探测代码在该账户下会超时失败。
+
+**前置条件:**把子进程切换到另一个账户需要特权,因此 `studio_exec_user` 只在**后端
+自身以 root 运行**时才生效。`make dev` 和 `start.py` 都以你自己的账户运行后端,此时
+降权会失败 —— 所以执行端点会直接返回 `studio.exec.user_unavailable`(503)而不是执行
+到一半才报错;你要么让后端以 root 运行,要么把 `studio_exec_user` 留空(即 tier 1:
+只有资源上限与环境清洗)。
+
+注意脚本同时说明的权衡:默认的 Bedrock Mantle 路径依赖 ambient 凭证来签发 bearer
+token,因此一个无凭证的子进程要求每次本地调试请求显式带上
+`bedrock_api_key` / `openai_api_key`。
+
+完整沙箱(非 root 容器、seccomp、受限出网)**尚未**实现;在生产环境,禁用该端点就是
+对应的缓解措施。
 
 ### 自助注册与用户管理
 

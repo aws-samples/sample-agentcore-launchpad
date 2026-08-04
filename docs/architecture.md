@@ -83,13 +83,115 @@ stage (`resume_pending_jobs()` runs on startup).
 | Stage | 方式B — harness | zip_runtime / 方式C — studio | 方式A — container |
 |---|---|---|---|
 | **generate** | Build `CreateHarness` request from the AgentSpec | Render the Strands template (studio: adapt user code verbatim) | Assemble ARM64 build context (Dockerfile + `main.py` + `.claude` scaffold) |
-| **package** | *skipped* (no artifact) | `pip install` ARM64 wheels → zip → S3 | zip context → S3 → CodeBuild (docker build+push) → ECR |
+| **package** | *skipped* (no artifact) | resolve → hashed lock → `--require-hashes` install of ARM64 wheels → zip → S3 | zip context → S3 → CodeBuild (docker build+push) → ECR → resolve digest → scan gate |
 | **provision** | Reuse the shared execution role | Reuse the shared execution role | Reuse the shared execution role |
 | **deploy** | `CreateHarness` + poll READY | `CreateAgentRuntime` + poll READY | `CreateAgentRuntime(containerConfiguration)` + poll READY |
 | **register** | A2A registry record, auto-submitted | A2A registry record, auto-submitted | A2A registry record, auto-submitted |
 
 Typical timings: harness ≈ 30 s, zip ≈ 1–3 min (incl. pip), container ≈ 2–4 min (observed: 1.7 min CodeBuild + seconds to READY)
 (via CodeBuild). See [troubleshooting.md](troubleshooting.md).
+
+### Per-agent execution roles
+
+Every agent used to assume one shared `launchpad-agent-execution-role` carrying 14
+statements, most account-wide. The exposure that mattered was not the wildcards in
+the abstract but that **any agent had every other agent's reach**: mount any other
+agent's file systems, read every agent's skill bundles, retrieve from every knowledge
+base, and rewrite gateway routing.
+
+`app/services/agent_iam.py` derives a role per agent from its spec. Sids are kept
+identical to the CDK role so the two can be diffed statement by statement.
+
+| Grant | Emitted when | Scope |
+|---|---|---|
+| `BedrockModels` | always | the configured `model_id` |
+| `BedrockMantle*`, Marketplace | `model_source == "mantle"` | project/`*`; Marketplace guarded by `CalledViaLast` |
+| `AgentCoreMemory` | memory enabled | the memory singleton |
+| `AgentCoreWorkloadIdentity`, `IdentityVaultSecrets` | a gateway/MCP tool or KBs | — |
+| `AgentCoreCodeInterpreter` / `AgentCoreBrowser` | that builtin is attached | — |
+| `EcrPull` / `EcrAuth` | `method == "container"` | the repo |
+| `SkillBundle*` | skills attached | **this agent's** prefixes |
+| `ManagedKbRetrieval` | KBs attached | **the attached** KB ARNs |
+| `A2AInvokePeerRuntimes` | `protocol == "a2a"` | account runtimes |
+| `Telemetry` | always | the runtime log groups |
+| BYO-mount policy | mounts configured | **this agent's** access points |
+
+**Deliberately still `*`, and why**: `bedrock:AgenticRetrieveStream` and
+`bedrock-mantle:CallWithBearerToken` and `ecr:GetAuthorizationToken` do not support
+resource scoping, and neither do X-Ray ingestion or `cloudwatch:PutMetricData`.
+Recorded at the statement rather than quietly narrowed.
+
+**Two grants were removed**, which is worth knowing because a removal is what shows
+up as a runtime failure: `ABTestOrchestration` (16 actions including
+`CreateGatewayRule`, `UpdateGateway`, `InvokeAgentRuntime`) is what the *platform*
+does from its own credentials, and the CloudWatch Logs **read** actions were console
+paths that had leaked onto the workload role. `InvokeAgentRuntime` is kept for A2A
+agents, which legitimately call peers.
+
+**Per-agent roles do not give per-agent memory isolation.** There is one shared
+memory, partitioned by folding the agent id into the actor id
+(`services/memory.py::scoped_actor`), not by IAM. A per-agent memory is separate work.
+
+Lifecycle: created in `provision`, reconciled on re-publish so a dropped capability
+shrinks the policy, deleted with the agent — **after** the runtime, since removing the
+role first can wedge the runtime's own deletion. A failed delete never blocks deleting
+the agent; the role is tagged `launchpad:agent-id` so an orphan is findable.
+`ensure_role` adopts an existing role of the same name, so a half-failed delete does
+not wedge re-creating an agent under a reused name.
+
+Canary and A/B candidates keep whatever role **production is already on**, read from
+`GetAgentRuntime.roleArn`. A candidate stands in for production, so giving it the
+shared role would measure it with permissions production lacks — and reading the live
+value rather than deriving the name means agents predating this still work.
+
+The shared role remains and still carries broad grants: it backs agents that have not
+been re-published. Reducing it before every agent has migrated would strip grants from
+agents still using it, so that reduction is **not** done yet.
+
+### Supply chain of a build
+
+Two things about a deployed artifact have to be answerable: what went into it, and
+whether what runs is still what was built. Both live in the `package` stage.
+
+**Dependencies are resolved, then locked, then verified.** A single `pip install`
+over the declared list — which is what this used to be — installs whatever the
+index serves at that moment, including for the platform's own ranged pins, and
+leaves no record. The stage now runs `uv pip compile --generate-hashes` for the
+deploy target (aarch64, Python 3.13, named once in `zip_runtime.py` so the resolve
+and the install cannot disagree), then installs with `--require-hashes`. A
+substituted or re-uploaded distribution fails the build. The lock ships inside the
+zip as `requirements.lock`, so the artifact carries its own bill of materials.
+There is deliberately no fallback: a resolve failure fails the stage.
+
+Caller-supplied `spec.requirements` must additionally be pinned at *schema*
+validation (`app/schemas/requirements.py`), so the console rejects a range before a
+build starts. The platform's own lists keep their ranges — the
+`MANTLE_EXTRA_REQUIREMENTS` comment explains that pip is meant to intersect two
+specs for the same project — and the lock is what makes the resolved set
+reproducible. Harness conversion is the one place the platform derives
+requirements from somewhere else (the source Harness's `pyproject.toml`), so it
+resolves those ranges to pins rather than being exempted from the rule.
+
+**Container images are scanned, and deployed by digest.** ECR scans on push. After
+the build, `_stage_package` resolves the pushed tag to its immutable digest,
+records it on the `Deployment` row, and runs the gate before the image can back a
+runtime; `_stage_deploy` sends `repo@sha256:…` as `containerUri`. Deploying by the
+`{agent}-v{version}` tag would mean what a runtime executes can change with no
+record of it.
+
+The gate's threshold and off switch are configurable, because an un-overridable
+gate strands every agent the first time a base image picks up a CVE. A scan that
+could not be read — scanning not enabled, an API error, a timeout — is logged as
+exactly that and the deploy proceeds unscanned; it is never folded into "clean",
+because an absent gate must not read as a passed one.
+
+Image tags stay **mutable**: packaging runs before `_stage_deploy` bumps the
+version, so a re-publish pushes the same tag twice and an immutable-tag policy
+would fail that push. Digest pinning is the control, and an infra test asserts the
+tag policy so this cannot drift into a broken re-publish.
+
+Not covered: SBOM generation, provenance/attestation, signing, approved-mirror
+enforcement, and skill *content* review. Immutable is not the same as trusted.
 
 ### Creation entrances
 
@@ -358,26 +460,68 @@ cookie is otherwise stateless and survives a backend restart; changing the
 configured admin credentials invalidates **all** sessions, because the signing
 key derives from them.
 
-When enabled, middleware protects every `/api/*` route, including API docs,
-except `/api/health`, `/api/auth/status`, `/api/auth/login`, and
-`/api/auth/register`. The middleware does not guard `/v1/*`, whose existing
-`X-Api-Key` contract remains authoritative.
+Two guards run in order, and they answer different questions.
 
-Admins additionally get the **User Management** console module (`/users`) over
-`GET /api/users`, `GET /api/users/stats`, `PATCH /api/users/{id}`, and
-`DELETE /api/users/{id}` — the approval queue (pending filter + count, approve /
-reject), list/search/filter, registration statistics, extend validity,
-enable/disable, role change, one-time password reset, and delete. A
-member session receives `403 auth.forbidden` on all four routes and the console
-renders a forbidden state instead of the table. Data itself is **not** partitioned
-per user: every authenticated account sees the same agents, knowledge bases and
-traces; only this module is role-gated.
+**Is the console allowed to be open at all?** An unauthenticated console serves
+only loopback callers; anything else gets `403 auth.open_console_refused`. This is
+checked per request rather than at startup because the request is the only place
+the caller's address is known — `create_app()` cannot see uvicorn's `--host`, so a
+startup-only check would be bypassed by launching uvicorn directly, which is how
+the EC2 host and any container start it. The check uses the transport peer and
+never `X-Forwarded-For` (spoofable). Measured over real sockets, forged
+`X-Forwarded-For`, `X-Real-IP`, `Forwarded` and `Host` headers from a non-loopback
+peer are all refused. The residual is narrower than "localhost is trusted": since
+uvicorn's proxy-header middleware (default `forwarded_allow_ips=127.0.0.1`)
+rewrites the peer from `X-Forwarded-For` when the peer *is* loopback, a same-host
+proxy that sets that header gets its real client evaluated and refused. Only a
+local proxy that forwards remote traffic **without** forwarded headers still looks
+local. Either way the branch never runs on the real production path, where
+authentication is on.
+`LAUNCHPAD_ALLOW_OPEN_CONSOLE=true` accepts the risk; `create_app()` and
+`start.py` additionally fail fast so a misconfiguration surfaces at boot.
 
-The default cookie works with the local HTTP stack. HTTPS deployments must set
-`LAUNCHPAD_AUTH_COOKIE_SECURE=true`. Leaving the password unset disables the
-gate entirely (console open, registration refused with
-`auth.registration_disabled`, `/api/users*` reachable as the implicit local
-admin), preserving the bootstrap-free local development and test flow.
+**Is this caller allowed on this route?** When the gate is enabled, middleware
+requires a live session on every `/api/*` route except `/api/health`,
+`/api/auth/status`, `/api/auth/login`, and `/api/auth/register`; `/v1/*` is not
+guarded, its `X-Api-Key` contract remaining authoritative. Role authorization then
+comes from **one declarative table**, `backend/app/core/route_policy.py`, enforced
+by a single app-level dependency:
+
+- a dependency, not middleware, because `scope["route"]` is only populated once
+  the router has matched — so the check reads the exact `path_format` instead of
+  re-implementing path matching (this holds under FastAPI 0.139's
+  `_IncludedRouter` wrapping, which also means route enumeration must recurse);
+- **default-deny**: an `/api` route with no entry raises `auth.route_unclassified`
+  instead of serving, so a new endpoint cannot ship unauthorized;
+- `tests/test_route_policy.py` enumerates the live routes and fails on drift in
+  either direction, which is what keeps the table honest rather than decorative.
+
+The classification principle: **admin** for routes that execute code, change
+deployed or cloud state, mint credentials, or change governance posture;
+**member** for reads and for a member's own interaction with an agent. Invoking an
+agent (`/api/agents/{id}/invoke`, `/api/registry/a2a-demo`) is deliberately member-
+reachable — it is the same capability Chat already gives every member, so gating it
+while Chat stays open would protect nothing.
+
+The practical effect is that `member` is close to read-only. That is intended
+while data is **not** partitioned per user: every authenticated account sees the
+same agents, knowledge bases and traces, so a member who could deploy could also
+mutate everyone else's resources. Admin-only console modules (`/users`, `/create`,
+the Studio canvas, Registry register/edit) render an administrator-required panel
+instead of firing a request, and `auth.forbidden` is mapped in the `apiErrors`
+i18n block so any surface that missed a gate still shows the localized reason.
+
+There is deliberately no setting that disables this table — a flag that turns
+authorization off is the vulnerability.
+
+`Secure` on the session cookie and an HSTS response header follow
+`run_mode == "prod"`; `LAUNCHPAD_AUTH_COOKIE_SECURE=true` forces `Secure` on in
+development. Neither is hardcoded on, because a `Secure` cookie over a plain-HTTP
+dev origin is never sent back and an HSTS header there pins `localhost` to HTTPS
+in the developer's browser. Leaving the password unset keeps the gate off for
+loopback (console open, registration refused with `auth.registration_disabled`,
+`/api/users*` reachable as the implicit local admin), preserving the
+bootstrap-free local development and test flow.
 
 ## The Memory console (console 05)
 
