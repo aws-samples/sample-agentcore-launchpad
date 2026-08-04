@@ -18,9 +18,9 @@ that execute code, change deployed or cloud state, mint credentials, or change
 governance posture; member for reads and for the member's own interaction with an
 agent.** Two consequences worth knowing before editing this table:
 
-* `member` is close to read-only. That is intended while T19 (no per-user data
-  partitioning) is open — a member who could deploy could also see and mutate
-  every other member's resources.
+* `member` is close to read-only. That is intended for as long as the platform has
+  no per-user data partitioning — a member who could deploy could also see and
+  mutate every other member's resources.
 * Invoking an agent is deliberately `MEMBER` (`/api/agents/{id}/invoke`,
   `/api/registry/a2a-demo`): it is the same capability the Chat console gives
   every member, so gating it while Chat stays open would protect nothing.
@@ -211,7 +211,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
 # Routers whose classification was extrapolated from the signed-off principle
 # rather than reviewed route by route (evaluation, experiments, canaries,
 # conversations, observability writes). Reads are MEMBER, state changes ADMIN.
-# Carried as a known gap in the task's release notes; revisit alongside T19.
+# Carried as a known gap in the release notes; revisit alongside per-user
+# data partitioning.
 UNREVIEWED_PREFIXES = (
     "/api/eval/",
     "/api/experiments",
