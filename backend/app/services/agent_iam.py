@@ -666,6 +666,17 @@ def _is_no_such_entity(exc: Exception) -> bool:
 # inline policy (live hit 2026-07-13 on an access-point ARN change); a **brand-new
 # role** is a longer window and can surface as an assume-role or AccessDenied
 # wording instead, so the predicate covers all of them.
+#
+# The wording a brand-new role actually produces was only learned from a live zip
+# deploy (2026-08-04), and it matched none of the guesses above:
+#
+#   ValidationException: Role validation failed for 'arn:aws:iam::…:role/…'. Please
+#   verify that the role exists and its trust policy allows assumption by this service
+#
+# The trust policy was byte-identical to the shared role's, which works — so this
+# phrasing means "not visible yet", not "misconfigured". It is kept in the list even
+# though a genuinely broken trust policy produces it too: retrying costs a minute and
+# the error still surfaces afterwards, whereas not retrying fails every first deploy.
 _PROPAGATION_MARKERS = (
     "missing required permissions",
     "is not authorized to perform: sts:assumerole",
@@ -673,6 +684,8 @@ _PROPAGATION_MARKERS = (
     "cannot be assumed",
     "accessdenied",
     "access denied",
+    "role validation failed",
+    "trust policy allows assumption",
 )
 
 
