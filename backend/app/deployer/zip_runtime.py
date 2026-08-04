@@ -33,7 +33,7 @@ from app.schemas.agent import AgentSpec
 from app.services import agent_iam
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
-from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES
+from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES, SKILL_NAME_RE
 from app.templates.strands_agent import base_requirements, render_main_py
 
 
@@ -76,6 +76,10 @@ def _compile_lock(
             "--generate-hashes", "--quiet",
             "--python-version", TARGET_PYTHON,
             "--python-platform", TARGET_UV_PLATFORM,
+            # The install below is binary-only. Resolve from that same artifact
+            # set, or uv can lock an sdist-only release that pip then cannot
+            # install for the Runtime's ARM64 manylinux2014 target.
+            "--only-binary=:all:",
             "-o", str(lock),
         ],
         capture_output=True,
@@ -102,8 +106,8 @@ def build_zip(
     """Resolve → lock → hash-verified install → zip.
 
     ``on_pkg_ready`` is invoked with the assembled package directory after the
-    entrypoint is written but before zipping — the hook studio uses to drop
-    skill bundles under ``pkg/skills/`` (the recursive walk below picks them up).
+    entrypoint is written but before zipping — the hook used to stage bundle
+    files and Skill snapshots (the recursive walk below picks them up).
     ``on_lock_ready`` receives the number of locked packages, for the job log.
     """
     if build_dir.exists():
@@ -238,15 +242,20 @@ def bundle_skills(
     skill_records: dict[str, str] | None = None,
     s3_client: Any = None,
 ) -> dict[str, Any]:
-    """Download every APPROVED skill the studio-generated code references into
-    ``pkg_dir/skills/{name}/`` so the runtime's ``Path(__file__).parent/"skills"``
-    fallback resolves them. Non-studio agents are a no-op. Any skill issue
-    (missing record, oversize, download error) logs + skips — never raises."""
-    if spec.method != "studio":
-        return {"bundled": [], "files": 0, "bytes": 0}
-    return bundle_skills_into(
-        code, pkg_dir, log, skill_records=skill_records, s3_client=s3_client
-    )
+    """Bundle the Skills owned by this artifact into ``pkg_dir/skills/{name}/``.
+
+    Studio remains code-reference-driven. Platform-generated zip runtimes use
+    the explicit ``spec.skills`` prefixes selected in the wizard. Converted
+    Harness bundles keep their exported request-time fetcher and therefore do
+    not receive a second package-time snapshot. Any Skill issue logs + skips.
+    """
+    if spec.method == "studio":
+        return bundle_skills_into(
+            code, pkg_dir, log, skill_records=skill_records, s3_client=s3_client
+        )
+    if spec.method == "zip_runtime" and spec.code_bundle is None:
+        return bundle_skill_paths_into(spec.skills, pkg_dir, log, s3_client=s3_client)
+    return {"bundled": [], "files": 0, "bytes": 0}
 
 
 def bundle_skills_into(
@@ -285,11 +294,21 @@ def bundle_skill_paths_into(
     *,
     s3_client: Any = None,
 ) -> dict[str, Any]:
-    """``spec.skills`` consumer (container path): download each explicit
+    """``spec.skills`` consumer: download each explicit
     ``s3://bucket/…/{name}/`` prefix into ``dest_parent/skills/{name}/`` — the
-    name is the prefix tail. No registry lookup, no code parsing; same
-    log-and-skip posture as ``bundle_skills_into``."""
-    pairs = [(p.rstrip("/").rsplit("/", 1)[-1], p) for p in paths if p and p.strip()]
+    name is the prefix tail. Used by generated zip and container artifacts; no
+    registry lookup, no code parsing, and the same log-and-skip posture as
+    ``bundle_skills_into``."""
+    pairs: list[tuple[str, str]] = []
+    for raw_path in paths:
+        path = raw_path.strip()
+        if not path:
+            continue
+        name = path.rstrip("/").rsplit("/", 1)[-1]
+        if SKILL_NAME_RE.fullmatch(name) is None:
+            log(f"skill path has invalid name '{name}' — skipped")
+            continue
+        pairs.append((name, path))
     return _download_named_skills(pairs, dest_parent, log, s3_client=s3_client)
 
 

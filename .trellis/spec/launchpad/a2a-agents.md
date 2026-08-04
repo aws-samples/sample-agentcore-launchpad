@@ -19,7 +19,8 @@
 ```python
 # schemas/agent.py
 AgentSpec.protocol: Literal["http", "a2a"] = "http"   # zip_runtime only for a2a
-AgentSpec.a2a_skills: list[A2ASkill]                  # {id,name,description,tags}; a2a only
+AgentSpec.skills: list[str]                           # mounted Registry/custom bundles
+AgentSpec.a2a_skills: list[A2ASkill]                  # advertised AgentCard metadata only
 # a2a is incompatible with code/code_bundle (always the platform template)
 
 # services/agentcore/runtime.py
@@ -38,7 +39,8 @@ build_a2a_card(..., url=None, skills=None, transport="agentcore-http")
 render_a2a_main_py(spec) -> str           # A2AServer(agent_factory=..., serve_at_root=True, skills=...)
 a2a_base_requirements() -> list[str]      # strands-agents[a2a,otel] + fastapi/uvicorn
 # agent_factory(context_id) attaches AgentCoreMemorySessionManager when
-# LAUNCHPAD_MEMORY_ID is present
+# LAUNCHPAD_MEMORY_ID is present and context_id is valid; AgentSkills is
+# independently attached when packaged bundles exist
 ```
 
 ### 3. Load-bearing facts (all probed live 2026-07-13)
@@ -46,8 +48,11 @@ a2a_base_requirements() -> list[str]      # strands-agents[a2a,otel] + fastapi/u
 - **zip + A2A works**: `codeConfiguration` zip artifact + `protocolConfiguration
   {serverProtocol: A2A}` → READY. The managed PYTHON_3_13 runtime does NOT
   install requirements.txt — wheels must be vendored (production `build_zip`
-  does; `strands-agents[a2a,otel]` fully resolves to aarch64/pure wheels,
-  ≈46 MB package).
+  does; `strands-agents[a2a,otel]` resolves against the wheel-only ARM64 target,
+  ≈46 MB package). Keep `uv pip compile --only-binary=:all:` aligned with the
+  binary-only install: live validation on 2026-08-04 otherwise locked the
+  sdist-only `greenlet==3.5.4`, which pip could not install for manylinux2014;
+  wheel-only resolution selected the compatible `greenlet==3.2.5`.
 - **`AGENTCORE_RUNTIME_URL` is auto-injected** by the runtime — the served
   card carries the correct data-plane invocations URL with no env wiring.
 - **UpdateAgentRuntime protocolConfiguration is omit=RESET** (opposite of
@@ -83,10 +88,22 @@ a2a_base_requirements() -> list[str]      # strands-agents[a2a,otel] + fastapi/u
 - The A2A template deliberately drops the config-bundle contract. It uses the
   platform-injected `LAUNCHPAD_MEMORY_ID`: `agent_factory(context_id)` creates
   an `AgentCoreMemorySessionManager` so the context survives A2AServer LRU
-  eviction and Runtime restart. Because config bundles remain unsupported,
+  eviction and Runtime restart. `A2AServer` also calls the factory once with
+  its internal `__agent_card__` context while building the card; that value is
+  not a valid AgentCore Memory session id, so the template deliberately skips
+  the session manager for invalid/internal context ids while retaining it for
+  real platform context ids. Because config bundles remain unsupported,
   **experiments reject A2A agents** (400
   `experiment.protocol_unsupported`; UI picker disables with a reason —
   mirrors the harness pattern).
+- **Mounted Skills and AgentCard skills are independent.** `spec.skills`
+  contains APPROVED Registry or custom S3 prefixes. The package stage snapshots
+  them under `skills/<name>/`, and each context's Strands agent receives
+  `AgentSkills` only when a packaged child contains `SKILL.md`.
+  `spec.a2a_skills` is passed separately to `A2AServer(skills=...)` and
+  published as routing metadata; it neither selects nor mounts runtime Skill
+  content. Registry Skill edits require an agent re-publish to refresh the
+  snapshot.
 - `invoke_a2a_text` and the front-desk's `a2a-jsonrpc` branch put the stable
   session in both `runtimeSessionId` and `message.contextId`. New direct A2A
   callers must do the same.
@@ -152,6 +169,7 @@ a2a_base_requirements() -> list[str]      # strands-agents[a2a,otel] + fastapi/u
 | Same platform `session_id` on later call | Same `runtimeSessionId` and `message.contextId`; prior turns restore |
 | Different platform `session_id` | Different A2A context and Memory partition |
 | Missing `LAUNCHPAD_MEMORY_ID` | A2AServer remains usable with in-process context only |
+| Internal `__agent_card__` factory context | No Memory session manager; card construction succeeds |
 | Memory API/session-manager failure | Invocation fails; do not claim the turn was persisted |
 | Caller knows another context id | Transport can attach to it; authenticated isolation must be enforced above A2A |
 

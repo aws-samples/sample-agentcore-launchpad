@@ -23,6 +23,9 @@ MANTLE_MODEL_ID = "openai.gpt-5.6-sol"
 MANTLE_SPEC = SPEC.model_copy(
     update={"model_source": "mantle", "model_id": MANTLE_MODEL_ID}
 )
+SKILL_SPEC = SPEC.model_copy(
+    update={"skills": ["s3://launchpad-artifacts/skills/pirate-speak/"]}
+)
 
 
 def test_render_replaces_all_placeholders():
@@ -35,6 +38,18 @@ def test_render_replaces_all_placeholders():
     assert "BedrockAgentCoreApp" in code
     assert "AgentCoreMemorySessionManager" in code
     assert "create_event(" not in code
+    assert "SKILLS_ENABLED = False" in code
+
+
+def test_render_preserves_skills_placeholder_literal_in_prompt():
+    spec = SPEC.model_copy(
+        update={"system_prompt": "Keep __LAUNCHPAD_SKILLS_ENABLED__ literal."}
+    )
+
+    code = render_main_py(spec)
+
+    assert "DEFAULT_SYSTEM_PROMPT = 'Keep __LAUNCHPAD_SKILLS_ENABLED__ literal.'" in code
+    assert "SKILLS_ENABLED = False" in code
 
 
 def test_rendered_template_compiles(tmp_path: Path):
@@ -246,6 +261,28 @@ def _import_rendered(spec, tmp_path: Path, monkeypatch, stem: str):
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     return module
+
+
+def test_skill_plugin_requires_enabled_spec_and_packaged_skill(tmp_path: Path, monkeypatch):
+    class FakeAgentSkills:
+        def __init__(self, *, skills):
+            self.skills = skills
+
+    monkeypatch.setattr(strands, "AgentSkills", FakeAgentSkills)
+    module = _import_rendered(SKILL_SPEC, tmp_path, monkeypatch, "skill_main")
+
+    assert module.SKILLS_ENABLED is True
+    assert module.skill_plugins() == []
+    assert not hasattr(module.build_agent("a", "s"), "plugins")
+
+    skill_dir = tmp_path / "skills" / "pirate-speak"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Pirate speech", encoding="utf-8")
+
+    plugins = module.skill_plugins()
+    assert len(plugins) == 1
+    assert plugins[0].skills == str(tmp_path / "skills")
+    assert module.build_agent("a", "s").plugins[0].skills == str(tmp_path / "skills")
 
 
 @pytest.fixture

@@ -726,7 +726,10 @@ function CreateAgentWizard() {
         }
       : {}),
     ...(selectedKbs.length ? { knowledge_bases: selectedKbs.map(kbInfo) } : {}),
-    ...((method === "harness" || method === "container") && skills.length ? { skills } : {}),
+    ...((method === "harness" || method === "container" || method === "zip_runtime") &&
+    skills.length
+      ? { skills }
+      : {}),
     ...(method === "container" && mcpServers.trim()
       ? { env: { LAUNCHPAD_MCP_SERVERS: mcpServers.trim() } }
       : {}),
@@ -1459,7 +1462,7 @@ function CreateAgentWizard() {
                 />
               </div>
             )}
-            {(method === "harness" || method === "container") && (
+            {(method === "harness" || method === "container" || method === "zip_runtime") && (
               <div className="field">
                 <label>{t("create.configure.skills")}</label>
                 <div className="selchips">

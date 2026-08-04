@@ -15,6 +15,7 @@ import ast
 import operator
 import os
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import boto3
@@ -74,6 +75,8 @@ MODEL_SOURCE = "__LAUNCHPAD_MODEL_SOURCE__"
 # runtime runs (AWS_REGION is us-west-2 here, where they are not offered).
 MANTLE_REGION = os.environ.get("LAUNCHPAD_MANTLE_REGION", "us-east-1")
 DEFAULT_SYSTEM_PROMPT = __LAUNCHPAD_SYSTEM_PROMPT__
+SKILLS_ENABLED = __LAUNCHPAD_SKILLS_ENABLED__
+SKILLS_ROOT = Path(__file__).parent / "skills"
 DEFAULT_TOOL_DESCRIPTIONS: dict[str, str] = {
     "calculator": "Evaluate a basic arithmetic expression (+ - * / ** parentheses) and return the numeric result.",
     "current_utc_time": "Return the current UTC date and time in ISO-8601 format.",
@@ -168,6 +171,20 @@ def build_model() -> Any:
     return MODEL_ID
 
 
+def skill_plugins() -> list:
+    """Enable progressive Skill loading only when packaging produced a bundle."""
+    if not SKILLS_ENABLED or not SKILLS_ROOT.is_dir():
+        return []
+    if not any(
+        child.is_dir() and (child / "SKILL.md").is_file()
+        for child in SKILLS_ROOT.iterdir()
+    ):
+        return []
+    from strands import AgentSkills
+
+    return [AgentSkills(skills=str(SKILLS_ROOT))]
+
+
 def build_agent(actor_id: str, session_id: str) -> Agent:
     tools = [calculator, current_utc_time]
     if MOUNTED_KBS:
@@ -187,6 +204,9 @@ def build_agent(actor_id: str, session_id: str) -> Agent:
     session_manager = memory_session_manager(actor_id, session_id)
     if session_manager is not None:
         kwargs["session_manager"] = session_manager
+    plugins = skill_plugins()
+    if plugins:
+        kwargs["plugins"] = plugins
     return Agent(**kwargs)
 
 

@@ -25,7 +25,8 @@ def render_a2a_main_py(spec: AgentSpec) -> str:
     skills = [s.model_dump() for s in spec.a2a_skills]
     source = (TEMPLATE_DIR / "main.py.tmpl").read_text(encoding="utf-8")
     return (
-        source.replace("__LAUNCHPAD_AGENT_NAME__", spec.name)
+        source.replace("__LAUNCHPAD_SKILLS_ENABLED__", repr(bool(spec.skills)))
+        .replace("__LAUNCHPAD_AGENT_NAME__", spec.name)
         .replace("__LAUNCHPAD_MODEL_ID__", spec.model_id)
         .replace("__LAUNCHPAD_SYSTEM_PROMPT__", repr(spec.system_prompt))
         .replace("__LAUNCHPAD_AGENT_DESCRIPTION__", repr(spec.system_prompt[:180]))

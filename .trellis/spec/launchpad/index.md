@@ -8,6 +8,7 @@
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Registry Skill Ingestion](./registry-skill-ingestion.md) | Multi-source skill pipeline: SkillBundle, inspect→import staging, git/url acquirers, reimport, record update (PUT) + register/edit sub-pages | Active |
+| [Zip Runtime Skills](./zip-runtime-skills.md) | APPROVED/custom `AgentSpec.skills` snapshot packaging for generated HTTP/A2A zip runtimes, conditional Strands AgentSkills wiring, Studio and converted-Harness boundaries | Active |
 | [Container Capabilities + Filesystem](./container-capabilities-filesystem.md) | Claude Agent SDK (container) method: registry MCP/skill wiring, attach-without-record skill sources (/api/agent-skills), filesystemConfigurations (session/S3 Files/EFS) + VPC + IAM inline policy | Active |
 | [Claude SDK AgentCore Memory](./claude-sdk-agentcore-memory.md) | Request-local MemorySessionManager, automatic short-/long-term restore hook, exactly-once turn persistence, and shared runtime environment injection | Active |
 | [Memory Console](./memory-console.md) | Read-only `/api/memory` projections: structural read-only guarantee, first-separator actor decode + batched name join, server-side `{actorId}` namespace resolution, harness message-envelope decoding (tool turns kept), and the two live-only preview bounds (`ListMemoryExtractionJobs` maxResults ≤ 50, status enum = `FAILED` only — why extraction has no console view) | Active |
