@@ -96,6 +96,7 @@ export interface RuntimeImportResult {
 
 export interface RuntimeCanaryMetric {
   label: string;
+  polarity?: number;  // +1 = higher mean wins, -1 = lower mean wins
   control: { mean: number | null; sampleSize: number | null };
   variants: {
     name: string;

@@ -26,7 +26,7 @@ import {
   type EvaluationRunInfo,
   type ExperimentReadiness,
 } from "../lib/evaluation";
-import { evaluatorLabel } from "../lib/evaluators";
+import { evaluatorLabel, evaluatorPolarity } from "../lib/evaluators";
 import { fmtScore } from "../lib/format";
 import { RuntimeCanaryView } from "./EvaluationRuntimeCanary";
 
@@ -44,6 +44,9 @@ function traceLookbackFromParam(value: string | null): number {
 
 export interface ABMetric {
   label: string;
+  // +1 = higher mean wins, -1 = lower mean wins. Absent on verdicts stored
+  // before the backend started annotating it — evaluatorPolarity() covers those.
+  polarity?: number;
   control: { mean: number | null; sampleSize: number | null };
   variants: { name: string; mean: number | null; sampleSize: number | null;
     pValue?: number | null; percentChange?: number | null; isSignificant?: boolean }[];
@@ -1547,12 +1550,39 @@ function ConfigurationExperimentView() {
             metric.control.mean != null && variant?.mean != null
               ? variant.mean - metric.control.mean
               : null;
+          // the raw delta is what operators want to read, but its SIGN only means
+          // "better" once oriented: dropping Refusal from 0.2 to 0.0 shows as
+          // -0.20 and is an improvement, so polarity drives the colour + marker
+          const polarity = metric.polarity ?? evaluatorPolarity(metric.label);
+          const oriented = delta == null ? null : delta * polarity;
           return (
             <div className="ab-metric" key={metric.label}>
               <div className="am-h">
-                <span>{evaluatorLabel(t, metric.label)}</span>
+                <span>
+                  {evaluatorLabel(t, metric.label)}
+                  {polarity < 0 && (
+                    <span
+                      className="mono dim"
+                      style={{ fontSize: 8.5, marginLeft: 5 }}
+                      title={t("expPage.lowerIsBetterHint")}
+                    >
+                      ↓ {t("expPage.lowerIsBetter")}
+                    </span>
+                  )}
+                </span>
                 {delta != null && (
-                  <span className="d">{delta >= 0 ? "+" : ""}{delta.toFixed(2)}</span>
+                  <span
+                    className="d"
+                    data-testid={`ab-delta-${metric.label}`}
+                    style={oriented === 0 ? undefined : {
+                      color: (oriented ?? 0) > 0 ? "var(--good)" : "var(--warn)",
+                    }}
+                    title={t(
+                      polarity < 0 ? "expPage.deltaLowerBetter" : "expPage.deltaHigherBetter",
+                    )}
+                  >
+                    {delta >= 0 ? "+" : ""}{delta.toFixed(2)}
+                  </span>
                 )}
               </div>
               <div className="abbar">
@@ -1619,7 +1649,9 @@ function ConfigurationExperimentView() {
               ◎ {verdictHeadline}
             </span>
             <span className="vm">
-              {verdict.avg_delta != null && `Δ ${verdict.avg_delta}`} · n={verdict.n ?? 0}
+              {verdict.avg_delta != null && (
+                <span title={t("expPage.avgDeltaHint")}>Δ {verdict.avg_delta}</span>
+              )} · n={verdict.n ?? 0}
               {verdict.significant === true && (
                 <span
                   data-testid="verdict-significance"

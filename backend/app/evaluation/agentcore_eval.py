@@ -54,6 +54,27 @@ TRAJECTORY_EVALUATORS: dict[str, str] = {
     "Builtin.TrajectoryAnyOrderMatch": "SESSION",
 }
 
+# Built-in evaluators whose score is a *penalty*: the judge answers "Yes" /
+# "Harmful" / "Stereotyping" when the response is BAD, so the lower-mean arm is
+# the better arm. Verified against the AWS built-in prompt templates
+# (AgentCore docs: prompt-templates-builtin). Every other evaluator scores a
+# desirable property, where a higher mean wins.
+LOWER_IS_BETTER_EVALUATORS = frozenset(
+    {"Builtin.Refusal", "Builtin.Harmfulness", "Builtin.Stereotyping"}
+)
+
+
+def evaluator_polarity(evaluator: str) -> int:
+    """+1 when a higher mean is the better arm, -1 when a lower mean is.
+
+    Accepts a bare id (``Builtin.Refusal``) or an evaluator ARN
+    (``arn:aws:bedrock-agentcore:::evaluator/Builtin.Refusal``). Custom judges
+    are +1: AWS exposes no direction on ``ratingScale``, and the launchpad's own
+    default scale is pass=1.0 / fail=0.0.
+    """
+    return -1 if (evaluator or "").rsplit("/", 1)[-1] in LOWER_IS_BETTER_EVALUATORS else 1
+
+
 EVAL_TERMINAL = {"COMPLETED", "FAILED", "STOPPED", "COMPLETED_WITH_ERRORS"}
 REC_TERMINAL = {"COMPLETED", "FAILED"}
 
@@ -314,6 +335,34 @@ def parse_insights(result: dict[str, Any]) -> dict[str, Any]:
 
 
 # ─── Custom evaluators (control plane) ──────────────────────────────────────
+# Judge placeholders fed from ``evaluationReferenceInputs`` rather than from the
+# trace itself. Per the AgentCore docs (create-evaluator): "Custom evaluators
+# that use ground truth placeholders cannot be used in online evaluation
+# configurations" — live traffic carries no ground truth. ``{context}``,
+# ``{assistant_turn}``, ``{available_tools}``, ``{tool_turn}`` and
+# ``{actual_tool_trajectory}`` are all trace-derived and stay valid online.
+GROUND_TRUTH_PLACEHOLDERS = (
+    "expected_response",
+    "expected_tool_trajectory",
+    "assertions",
+)
+
+
+def ground_truth_placeholders(instructions: str) -> list[str]:
+    """Ground-truth placeholders a custom judge's instructions reference."""
+    text = instructions or ""
+    return [p for p in GROUND_TRUTH_PLACEHOLDERS if f"{{{p}}}" in text]
+
+
+def judge_instructions(detail: dict[str, Any]) -> str:
+    """The LLM-judge prompt on a GetEvaluator/ListEvaluators record.
+
+    Empty for a code-based (Lambda) evaluator, which carries no instructions.
+    """
+    judge = (detail.get("evaluatorConfig") or {}).get("llmAsAJudge") or {}
+    return judge.get("instructions") or ""
+
+
 def create_llm_judge_evaluator(
     client: Any,
     *,
@@ -558,7 +607,12 @@ def update_ab_test_weights(
 
 def normalize_ab_results(result: dict[str, Any]) -> list[dict[str, Any]]:
     """Map a get_ab_test result into the frontend ABComparisonChart shape:
-    [{evaluatorId, label, control:{name,mean,sampleSize}, variants:[{...}]}]."""
+    [{evaluatorId, label, polarity, control:{name,mean,sampleSize}, variants:[{...}]}].
+
+    ``polarity`` travels with the metric so every consumer (verdict maths, the
+    console, a stored artifact read back later) reads the same direction instead
+    of re-deriving it from the id.
+    """
     metrics_out: list[dict[str, Any]] = []
     results = result.get("results", {}) or {}
     for m in results.get("evaluatorMetrics", []):
@@ -581,6 +635,7 @@ def normalize_ab_results(result: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "evaluatorId": arn or label,
                 "label": label,
+                "polarity": evaluator_polarity(arn or label),
                 "control": {
                     "name": cs.get("name", "C"),
                     "mean": cs.get("mean"),

@@ -57,6 +57,10 @@ def _is_conflict(exc: Exception) -> bool:
     return type(exc).__name__ == "ConflictException"
 
 
+def _is_not_found(exc: Exception) -> bool:
+    return type(exc).__name__ in {"ResourceNotFoundException", "NotFoundException"}
+
+
 def _update(exp_id: str, **fields: Any) -> None:
     db = SessionLocal()
     try:
@@ -614,15 +618,23 @@ def create_runtime_target_idempotent(
     raise TimeoutError(f"target {name} not READY")
 
 
-def normalize_online_evaluators(ids: Sequence[str] | None) -> list[str]:
+def normalize_online_evaluators(
+    ids: Sequence[str] | None, control: Any | None = None
+) -> list[str]:
     """Validate an operator-chosen evaluator set for online evaluation.
 
-    ``None``/empty falls back to :data:`ONLINE_EVAL_DEFAULT`. Trajectory matchers
-    score against dataset ground truth, which online evaluation of live traces
-    never carries, so they are rejected here rather than failing halfway through
-    the stage. Custom (non-``Builtin.``) ids pass through unchecked — the UI only
-    offers ids it read back from ``/api/eval/evaluators``, and an id AWS does not
-    know still fails loudly at ``CreateOnlineEvaluationConfig``.
+    ``None``/empty falls back to :data:`ONLINE_EVAL_DEFAULT`. Online evaluation
+    scores live traces, which carry no ground truth, so two families are rejected
+    here rather than halfway through the gateway stage: the built-in trajectory
+    matchers, and custom judges whose instructions reference a ground-truth
+    placeholder (``{expected_response}`` & friends — AWS refuses those in an
+    online evaluation config too, but only at ``CreateOnlineEvaluationConfig``,
+    after :func:`stage_gateway` has already created the gateway and the runtime
+    target).
+
+    Inspecting a custom judge costs one ``GetEvaluator``, so it happens after
+    dedup and the count cap and only for non-``Builtin.`` ids — a built-in-only
+    selection, the common case, makes no AWS call at all.
     """
     chosen: list[str] = []
     for raw in ids or ():
@@ -655,7 +667,39 @@ def normalize_online_evaluators(ids: Sequence[str] | None) -> list[str]:
             {"count": len(chosen)},
             status_code=400,
         )
+    custom = [e for e in chosen if not e.startswith("Builtin.")]
+    if custom:
+        client = control or control_client()
+        for evaluator in custom:
+            _assert_no_ground_truth(client, evaluator)
     return chosen
+
+
+def _assert_no_ground_truth(control: Any, evaluator: str) -> None:
+    """Reject a custom judge that needs ground truth it will never get online."""
+    try:
+        detail = ac.get_evaluator(control, evaluator_id=evaluator)
+    except Exception as exc:
+        if _is_not_found(exc):
+            raise AppError(
+                "experiment.evaluator_unsupported",
+                f"unknown evaluator {evaluator}",
+                {"evaluator": evaluator},
+                status_code=400,
+            ) from exc
+        # a control-plane blip must not block gateway creation: AWS enforces the
+        # same constraint server-side, so fail open and let it have the last word
+        return
+    placeholders = ac.ground_truth_placeholders(ac.judge_instructions(detail))
+    if placeholders:
+        rendered = ", ".join(f"{{{p}}}" for p in placeholders)
+        raise AppError(
+            "experiment.evaluator_unsupported",
+            f"{evaluator} references {rendered}, which is ground truth online "
+            "evaluation does not carry — use a batch evaluation run instead",
+            {"evaluator": evaluator, "placeholders": placeholders},
+            status_code=400,
+        )
 
 
 def create_online_eval_idempotent(
@@ -821,7 +865,7 @@ def stage_gateway(
     progress("creating v1 runtime target…")
     target_id = create_runtime_target_idempotent(control, gateway_id, target_v1, agent["arn"])
     log_group = f"/aws/bedrock-agentcore/runtimes/{agent['resource_id']}-DEFAULT"
-    chosen = normalize_online_evaluators(evaluators)
+    chosen = normalize_online_evaluators(evaluators, control)
     progress(f"creating online evaluation config ({len(chosen)} evaluators)…")
     online_eval = create_online_eval_idempotent(
         control,
@@ -911,25 +955,46 @@ def send_gateway_traffic(
 
 
 def compute_verdict(metrics: list[dict[str, Any]], min_n: int = 3) -> dict[str, Any]:
-    """Honest small-n verdict from normalized A/B metrics."""
+    """Honest small-n verdict from normalized A/B metrics.
+
+    Evaluators do not all point the same way: ``Builtin.Refusal`` and the other
+    penalty scores are better *lower*, so each raw ``t_mean - c_mean`` is
+    oriented by :func:`ac.evaluator_polarity` before it is averaged. ``avg_delta``
+    is therefore polarity-normalized — positive always favours treatment,
+    whatever the evaluator measures — and custom judges count as higher-is-better
+    (AWS exposes no direction for them).
+
+    The average is weighted by ``min`` of the two arms' sample sizes: a delta is
+    only as trustworthy as its smaller arm, so an evaluator that produced two
+    scores no longer outvotes one that produced forty.
+    """
     if not metrics:
         return {"verdict": "insufficient-data", "reason": "no evaluator metrics yet"}
-    deltas = []
+    weighted_delta = 0.0
+    weight_total = 0.0
     total_n = 0
     significant = False
     for metric in metrics:
+        polarity = ac.evaluator_polarity(
+            metric.get("evaluatorId") or metric.get("label") or ""
+        )
         control = metric.get("control", {})
         for variant in metric.get("variants", []):
             c_mean, t_mean = control.get("mean"), variant.get("mean")
-            n = (control.get("sampleSize") or 0) + (variant.get("sampleSize") or 0)
-            total_n += n
+            c_n = control.get("sampleSize") or 0
+            v_n = variant.get("sampleSize") or 0
+            total_n += c_n + v_n
             if c_mean is not None and t_mean is not None:
-                deltas.append(t_mean - c_mean)
+                # means with no reported sample size still carry evidence — keep
+                # them in the average at unit weight rather than dropping them
+                weight = float(min(c_n, v_n)) or 1.0
+                weighted_delta += polarity * (t_mean - c_mean) * weight
+                weight_total += weight
             if variant.get("isSignificant"):
                 significant = True
-    if not deltas:
+    if not weight_total:
         return {"verdict": "insufficient-data", "reason": "arms have no means yet"}
-    avg_delta = sum(deltas) / len(deltas)
+    avg_delta = weighted_delta / weight_total
     if total_n < min_n * 2:
         return {"verdict": "insufficient-n", "avg_delta": round(avg_delta, 4),
                 "n": total_n}

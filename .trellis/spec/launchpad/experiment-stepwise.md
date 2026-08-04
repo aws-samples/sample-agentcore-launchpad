@@ -91,7 +91,7 @@ action_bundles(exp)  # sync
 stage_not_ready_reason(exp, action) -> str | None
 system_prompt_rec_failed(rec) -> bool  # stored recommend artifact → prompt job failed?
 resolve_traffic_prompts(dataset) -> list[str]
-normalize_online_evaluators(ids) -> list[str]   # None/empty → ONLINE_EVAL_DEFAULT
+normalize_online_evaluators(ids, control=None) -> list[str]  # None/empty → ONLINE_EVAL_DEFAULT
 create_bundle_idempotent(control, **kwargs)    # conflict-adopt via ListConfigurationBundles
 clear_stale_running_actions() -> list[str]     # startup sweep (main.py resume block)
 assert_shared_gateway_available(own_test_name=None) -> None
@@ -128,6 +128,26 @@ assert_shared_gateway_available(own_test_name=None) -> None
   - `gateway.online_evaluators` — the evaluator ids the online evaluation
     config was created with (records the *request*: a name-conflict adoption
     keeps the pre-existing config's own set, which is never rewritten).
+- **Evaluators do not all point the same way — orient, then weight.**
+  `ac.LOWER_IS_BETTER_EVALUATORS = {Builtin.Refusal, Builtin.Harmfulness,
+  Builtin.Stereotyping}` score a *penalty* ("Yes" = the response IS a refusal),
+  so their lower-mean arm is the better arm (verified against the AWS
+  `prompt-templates-builtin` rubrics). `ac.evaluator_polarity(id_or_arn)` returns
+  `-1` for those and `+1` for everything else — including custom judges, because
+  AWS exposes no direction on `ratingScale` and the launchpad's own default scale
+  is pass=1.0/fail=0.0. `ac.normalize_ab_results` stamps `polarity` on every
+  metric so no consumer re-derives it.
+  `compute_verdict` multiplies each `t_mean - c_mean` by that polarity **before**
+  averaging, and weights each pair by `min(control n, variant n) or 1.0` (a delta
+  is only as precise as its smaller arm). `avg_delta` is therefore
+  polarity-normalized: **positive always favours treatment**, whatever the
+  evaluator measures. Averaging raw deltas instead let a real safety improvement
+  (Refusal 0.2 → 0.0) read as `control-wins`, which also blocked a genuinely
+  improved Runtime Canary at `assert_verdict_allows`. Verdict keys
+  (`verdict`, `avg_delta`, `n`, `significant`) and the `insufficient-*` branches
+  are unchanged; historical verdict artifacts are NOT recomputed, and the console
+  falls back to its own polarity map (`frontend/src/lib/evaluators.ts`) for
+  metrics stored before `polarity` existed.
 - **A recommendation job AWS did not complete produces NOTHING.** `stage_recommend`
   writes `recommended_prompt` only when the job is `COMPLETED` *and*
   `recommendedSystemPrompt` is non-empty; otherwise it writes
@@ -152,8 +172,22 @@ assert_shared_gateway_available(own_test_name=None) -> None
   custom evaluator id; rejects `ac.TRAJECTORY_EVALUATORS` (they score against
   dataset ground truth, absent from live traces) and unknown `Builtin.*`.
   `ONLINE_EVAL_MAX = 10` mirrors the `CreateOnlineEvaluationConfig` cap.
-  Custom ids are NOT verified against `ListEvaluators` — the UI only offers ids
-  from `/api/eval/evaluators`, and AWS rejects an unknown one at create time.
+- **A custom judge that needs ground truth cannot run online.** AWS: "Custom
+  evaluators that use ground truth placeholders cannot be used in online
+  evaluation configurations" — the placeholders are
+  `ac.GROUND_TRUTH_PLACEHOLDERS = (expected_response, expected_tool_trajectory,
+  assertions)`; `{context}`, `{assistant_turn}`, `{available_tools}`,
+  `{tool_turn}` and `{actual_tool_trajectory}` are trace-derived and stay valid.
+  AWS enforces this itself, but only at `CreateOnlineEvaluationConfig`, i.e.
+  after `stage_gateway` created the gateway + runtime target — so
+  `normalize_online_evaluators` inspects each **custom** id with one
+  `GetEvaluator` (`ac.judge_instructions` → `ac.ground_truth_placeholders`) and
+  raises `400 experiment.evaluator_unsupported` with
+  `{evaluator, placeholders}`. The lookup runs **after** dedup and the count cap,
+  and only for non-`Builtin.` ids, so a built-in-only selection (the common case)
+  makes no AWS call. `ResourceNotFoundException` → the same 400; any other
+  lookup error **fails open** (AWS still enforces it server-side). A code-based
+  (Lambda) evaluator has no instructions and passes.
 - `POST /api/experiments` performs **no AWS-mutating work** (A1) — only the
   row + `agent_meta` (one `get_agent_runtime` read).
 - The Gateway is the shared `EXP_GATEWAY_NAME`. `gateway` and `abtest` run a
@@ -192,6 +226,8 @@ assert_shared_gateway_available(own_test_name=None) -> None
 | traffic dataset kind `simulated` / no usable prompts | 422 `experiment.dataset_unsupported` |
 | gateway `online_evaluators` empty list or > `ONLINE_EVAL_MAX` items | 422 (pydantic bounds) |
 | gateway `online_evaluators` holds a trajectory matcher or unknown `Builtin.*` | 400 `experiment.evaluator_unsupported`, with `evaluator` |
+| gateway `online_evaluators` holds a custom judge referencing `{expected_response}` / `{expected_tool_trajectory}` / `{assertions}` | 400 `experiment.evaluator_unsupported`, with `evaluator` + `placeholders` |
+| gateway `online_evaluators` holds a custom id AWS does not know (`GetEvaluator` not-found) | 400 `experiment.evaluator_unsupported`, with `evaluator` |
 | foreign active A/B test on shared Gateway | 409 `experiment.gateway_busy`, with `gateway_arn` and `active_tests` |
 | legacy `canary` or `ramp` action | 410 `experiment.action_moved`, with `runtime_canaries_path` |
 | second concurrent experiment (create) | 409 `experiment.already_running` |
@@ -238,10 +274,19 @@ promote←verdict; recommend/cleanup←none.
 - Gateway conflict is detected before config mutation; exact own test is
   adoptable; cleanup never calls shared-Gateway deletion
 - online evaluators: absent → `ONLINE_EVAL_DEFAULT`; explicit list reaches
-  `act_gateway` deduped/in order (custom ids pass through); trajectory matcher
-  and unknown `Builtin.*` → 400 before dispatch; `[]` / 11 ids → 422;
-  `stage_gateway` records `online_evaluators` on the artifact and forwards
+  `act_gateway` deduped/in order; trajectory matcher and unknown `Builtin.*` →
+  400 before dispatch; `[]` / 11 ids → 422; `stage_gateway` records
+  `online_evaluators` on the artifact and forwards
   `evaluators=[{"evaluatorId": …}]` to `create_online_evaluation_config`
+- custom-judge ground truth (`test_online_evaluator_validation.py`): each of the
+  three placeholders → 400 with `placeholders`; trace-only placeholders and a
+  code-based evaluator pass; built-in-only and default-fallback selections record
+  ZERO `get_evaluator` calls; not-found → 400; other errors fail open; dedup and
+  the cap both happen before any lookup
+- verdict polarity (`test_verdict_polarity.py`): penalty-evaluator improvement is
+  a `treatment-wins`; mixed-polarity improvements no longer cancel out; a
+  2-sample metric does not outvote a 40-sample one; ARN-form `evaluatorId`
+  resolves; custom id → higher-is-better; the four verdict keys stay stable
 
 Frontend has NO test runner — verify via the fetch-stub browser evidence
 flow with synthetic readiness/run states plus both handoff URL directions.
