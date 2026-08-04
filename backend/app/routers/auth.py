@@ -235,11 +235,17 @@ async def auth_middleware(request: Request, call_next: Any) -> Any:
                         status_code=403,
                         content=envelope("auth.open_console_refused", OPEN_CONSOLE_REMEDY),
                     )
-            elif resolve_identity(request, settings) is None:
-                return JSONResponse(
-                    status_code=401,
-                    content=envelope("auth.required", "Authentication required"),
-                )
+            else:
+                identity = resolve_identity(request, settings)
+                if identity is None:
+                    return JSONResponse(
+                        status_code=401,
+                        content=envelope("auth.required", "Authentication required"),
+                    )
+                # Route-policy dependencies run after this middleware and need
+                # the same live identity. Reuse it instead of opening a second
+                # ledger session for every authenticated request.
+                request.state.identity = identity
     return await call_next(request)
 
 
@@ -250,6 +256,9 @@ def require_identity(request: Request, settings: Settings | None = None) -> Iden
         # Gate disabled: the whole console is open, so the local operator is
         # treated as the built-in admin (matches pre-multi-user behavior).
         return Identity(username=current.auth_username, role=ROLE_ADMIN)
+    cached = getattr(request.state, "identity", None)
+    if isinstance(cached, Identity):
+        return cached
     identity = resolve_identity(request, current)
     if identity is None:
         raise AppError("auth.required", "Authentication required", status_code=401)

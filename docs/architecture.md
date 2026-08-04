@@ -685,6 +685,14 @@ State that is cheap and local lives in a SQLite ledger at `data/launchpad.db`
 | `eval_datasets` / `eval_runs` | Evaluation datasets (legacy prompts or devguide scenarios + description + last AWS-sync blob) and run state (scores or insight trees; window runs encode their scope as `dataset_name="window:<N>h"`) |
 | `experiments` | Optimization loop — stage + per-stage artifacts, resumable |
 
+File-based SQLite uses SQLAlchemy `NullPool`. Every request-owned session
+already closes deterministically, so retaining the SQLAlchemy 2 default
+`QueuePool(5+10)` adds an artificial concurrency ceiling: a burst of sync
+console requests can otherwise park every worker waiting up to 30 seconds for a
+connection and make even health checks appear dead. The auth middleware also
+caches its resolved identity on the request so route-policy enforcement does
+not open a second ledger session for the same request.
+
 **Job/event model.** Creating an agent returns `202` with a `job_id`. The
 deploy job runs on a background thread, appending one JSONL event per stage
 transition to `Job.log`; `GET /api/jobs/{id}` returns those events and

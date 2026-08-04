@@ -182,6 +182,7 @@ Launchpad application login.
 | Condition | Expected result / fix |
 |---|---|
 | `/api/health` reports `us-west-2` | Fix the systemd Region drop-in, run `daemon-reload`, and restart backend |
+| `/api/health` hangs and logs show `QueuePool limit of size 5 overflow 10` | File SQLite must use `NullPool`; verify the deployed `app/core/db.py`, restart the backend to release old checked-out connections, then repeat a concurrent authenticated `/api/agents` probe |
 | `make verify` fails only `test_yaml_source_feeds_settings` + `test_a2a_demo` | The shell exports `LAUNCHPAD_REGION`, which outranks the YAML. Re-run in a clean shell; both pass |
 | An IAM change from a new revision has no effect | `make bootstrap` runs `cdk deploy` only when the stack is MISSING. This host has no CDK CLI, so deploy the east stack from a box that does: `cd infra && AWS_REGION=us-east-1 CDK_DEFAULT_REGION=us-east-1 uv run cdk diff` then `deploy` (same account, region-parameterised stack) |
 | UI still displays `us-west-2` after config edit | Backend process is stale; restart it and recheck health |

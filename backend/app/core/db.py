@@ -3,7 +3,9 @@
 from collections.abc import Generator
 
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.core.config import DATA_DIR, get_settings
 
@@ -14,14 +16,28 @@ class Base(DeclarativeBase):
 
 def _make_engine():
     settings = get_settings()
-    if settings.database_url.startswith("sqlite"):
+    url = make_url(settings.database_url)
+    is_sqlite = url.get_backend_name() == "sqlite"
+    is_file_sqlite = is_sqlite and url.database not in (None, "", ":memory:")
+    if is_sqlite:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-    return create_engine(
-        settings.database_url,
-        connect_args=(
-            {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-        ),
-    )
+    if is_file_sqlite:
+        return create_engine(
+            settings.database_url,
+            connect_args={"check_same_thread": False},
+            # SQLAlchemy 2 defaults file SQLite databases to QueuePool(5+10). A
+            # burst of sync FastAPI requests can consume that fixed pool and
+            # block every worker for 30 seconds. SQLite connections are cheap
+            # and request sessions already close deterministically, so avoid
+            # the artificial cap and close each DBAPI connection per session.
+            poolclass=NullPool,
+        )
+    if is_sqlite:
+        return create_engine(
+            settings.database_url,
+            connect_args={"check_same_thread": False},
+        )
+    return create_engine(settings.database_url)
 
 
 engine = _make_engine()

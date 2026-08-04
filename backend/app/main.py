@@ -158,7 +158,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         start_auto_refresh()  # periodic model-price refresh (real server only)
 
     @app.get("/api/health")
-    def health() -> dict[str, str]:
+    async def health() -> dict[str, str]:
         return {
             "status": "ok",
             "version": settings.version,

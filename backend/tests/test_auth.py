@@ -138,6 +138,27 @@ class TestAuthEnabled:
         assert logout.status_code == 200
         assert auth_client.get("/api/apikeys").status_code == 401
 
+    def test_identity_is_resolved_once_per_request(
+        self, auth_client, monkeypatch
+    ):
+        response = auth_client.post(
+            "/api/auth/login",
+            json={"username": "operator", "password": "s3cret-pass"},
+        )
+        assert response.status_code == 200
+
+        original = auth.resolve_identity
+        calls = 0
+
+        def counted(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(auth, "resolve_identity", counted)
+        assert auth_client.get("/api/apikeys").status_code == 200
+        assert calls == 1
+
     def test_tampered_and_expired_cookies_are_rejected(self, auth_client):
         auth_client.cookies.set(auth.COOKIE_NAME, "9999999999.deadbeef")
         assert auth_client.get("/api/apikeys").status_code == 401
