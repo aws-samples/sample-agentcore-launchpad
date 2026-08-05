@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 37
+- **Total Sessions**: 38
 - **Last Active**: 2026-08-05
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1879 | Active |
+| `journal-1.md` | ~1915 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 38 | 2026-08-05 | Close ProbeScan rescan findings | `6d25e04` | `main` |
 | 37 | 2026-08-05 | Release smoke-test runbook: make the e2e suite prod-runnable, then execute Core on prod | `7f4129d`, `8e4164a`, `840561d`, `6878ce4` | `test/e2e-prod-auth-and-smoke-runbook` |
 | 36 | 2026-08-04 | Parallelize experiment gateway traffic with bounded concurrency | `4516f77`, `860b9c2` | `perf/parallel-gateway-traffic` |
 | 35 | 2026-08-04 | Remediate ProbeScan security audit findings | `b4c92f8` | `main` |

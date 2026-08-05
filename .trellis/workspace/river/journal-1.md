@@ -1877,3 +1877,39 @@ Turned 18 existing e2e_* scripts into a repeatable release gate: shared auth hel
 - e2e_knowledge_base.py never cleans up (no --keep, no delete) and leaves a KB owning an OpenSearch collection that keeps billing — worth giving it cleanup rather than documenting it.
 - The ledger inventory probe cannot see registry records or KBs (AWS-side, no SQLite table), which is how a leak hides behind a clean diff. Runbook now snapshots both over the API; a committed probe script would be better than copy-paste.
 - prod carries two generations of defaults-sync records (hr-db/pirate-speak vs hr-database/office-facts/expense-report-writer) because the default catalog was renamed and sync is not idempotent across renames.
+
+
+## Session 38: Close ProbeScan rescan findings
+
+**Date**: 2026-08-05
+**Task**: Close ProbeScan rescan findings
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Resolved all 10 post-remediation ProbeScan findings without changing runtime contracts; focused tests and the canonical verification gate pass.
+
+### Main Changes
+
+- Moved FastAPI callbacks to module scope and registered them explicitly.
+- Corrected async-exec suppressions, public provider naming, and Docker USER placement.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6d25e04` | (see git log) |
+
+### Testing
+
+- [OK] Focused Ruff and 89 backend tests passed.
+- [OK] make verify passed: 1,588 backend tests, 12 infra tests, frontend build, and i18n parity.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Rerun the external ProbeScan service against commit 6d25e04 when available.
