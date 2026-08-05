@@ -12,6 +12,7 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "backend"))
@@ -91,6 +92,14 @@ def deploy_cdk() -> None:
     )
 
 
+def _gateway_traces_summary(policy: dict[str, Any]) -> tuple[str, str]:
+    traces = policy["gateway_traces"]
+    value = str(traces["status"])
+    if traces.get("reason"):
+        value += f" · {traces['reason']}"
+    return "gateway traces", value
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bootstrap AgentCore Launchpad shared infra")
     parser.add_argument("--region", default=None, help="AWS region (default: settings)")
@@ -130,6 +139,7 @@ def main() -> int:
              + f" · {pol['policy_engine']['id']}"),
             ("gateway policy", "attached · ENFORCE" if pol["gateway_attached"]
              else "already attached"),
+            _gateway_traces_summary(pol),
         ] + [
             (f"policy {p['name'][:20]}", "created" if p["created"] else "reused")
             for p in pol["policies"]

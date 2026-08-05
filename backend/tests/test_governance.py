@@ -16,6 +16,7 @@ from app.services.policy_bootstrap import (
     ensure_gateway_traces,
     ensure_policy_engine,
     ensure_transaction_search,
+    gateway_trace_delivery_status,
     render_policy_statement,
 )
 
@@ -108,13 +109,25 @@ class FakeLogs:
         self.calls.append("get_delivery_source")
         if not self.has_source:
             raise _not_found("GetDeliverySource")
-        return {"deliverySource": {"name": name, "logType": "TRACES"}}
+        return {
+            "deliverySource": {
+                "name": name,
+                "logType": "TRACES",
+                "resourceArns": [GW_ARN],
+            }
+        }
 
     def get_delivery_destination(self, name: str) -> dict[str, Any]:
         self.calls.append("get_delivery_destination")
         if not self.has_destination:
             raise _not_found("GetDeliveryDestination")
-        return {"deliveryDestination": {"name": name, "arn": DEST_ARN}}
+        return {
+            "deliveryDestination": {
+                "name": name,
+                "arn": DEST_ARN,
+                "deliveryDestinationType": "XRAY",
+            }
+        }
 
     def put_delivery_source(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append("put_delivery_source")
@@ -135,7 +148,15 @@ class FakeLogs:
         self.calls.append("describe_deliveries")
         if not self.has_delivery:
             return {"deliveries": []}
-        return {"deliveries": [{"id": "dlv-1", "deliverySourceName": SOURCE}]}
+        return {
+            "deliveries": [
+                {
+                    "id": "dlv-1",
+                    "deliverySourceName": SOURCE,
+                    "deliveryDestinationArn": DEST_ARN,
+                }
+            ]
+        }
 
     def create_delivery(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append("create_delivery")
@@ -212,6 +233,81 @@ def test_gateway_traces_failure_is_reported_not_raised():
     result = _traces(Denied())
     assert result["status"] == "failed"
     assert result["reason"] == "AccessDeniedException"
+
+
+@pytest.mark.parametrize(
+    ("logs", "status", "reason"),
+    [
+        (FakeLogs(), "missing", "delivery_source_missing"),
+        (
+            FakeLogs(has_source=True),
+            "missing",
+            "delivery_destination_missing",
+        ),
+        (
+            FakeLogs(has_source=True, has_destination=True),
+            "missing",
+            "delivery_missing",
+        ),
+        (
+            FakeLogs(has_source=True, has_destination=True, has_delivery=True),
+            "ready",
+            None,
+        ),
+    ],
+)
+def test_gateway_trace_delivery_status(logs, status, reason):
+    result = gateway_trace_delivery_status(logs, GW_ARN, GW_ID)
+    assert result == {"status": status, "reason": reason}
+
+
+def test_gateway_trace_delivery_status_reports_unknown():
+    class Denied(FakeLogs):
+        def get_delivery_source(self, name: str) -> dict[str, Any]:
+            raise ClientError(
+                {"Error": {"Code": "AccessDeniedException", "Message": "no"}},
+                "GetDeliverySource",
+            )
+
+    assert gateway_trace_delivery_status(Denied(), GW_ARN, GW_ID) == {
+        "status": "unknown",
+        "reason": "AccessDeniedException",
+    }
+
+
+@pytest.mark.parametrize(
+    ("method", "reason"),
+    [
+        ("get_delivery_source", "delivery_source_invalid"),
+        ("get_delivery_destination", "delivery_destination_invalid"),
+    ],
+)
+def test_gateway_trace_delivery_status_rejects_invalid_components(method, reason):
+    class Invalid(FakeLogs):
+        pass
+
+    if method == "get_delivery_source":
+        Invalid.get_delivery_source = lambda self, name: {
+            "deliverySource": {
+                "name": name,
+                "logType": "APPLICATION_LOGS",
+                "resourceArns": [GW_ARN],
+            }
+        }
+    else:
+        Invalid.get_delivery_destination = lambda self, name: {
+            "deliveryDestination": {
+                "name": name,
+                "arn": DEST_ARN,
+                "deliveryDestinationType": "CWL",
+            }
+        }
+
+    logs = Invalid(has_source=True, has_destination=True, has_delivery=True)
+    assert gateway_trace_delivery_status(logs, GW_ARN, GW_ID) == {
+        "status": "missing",
+        "reason": reason,
+    }
 
 
 def test_gateway_traces_never_touches_the_gateway_resource():

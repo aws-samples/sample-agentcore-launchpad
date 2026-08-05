@@ -319,6 +319,24 @@ export function DecisionView({ gatewayId, onNavigate }: Props) {
             </span>
           </div>
         ) : null}
+        {data?.span_channel_status === "missing" ? (
+          <div className="gov-data-foot">
+            <span>
+              {t("governance.decisions.spanChannelMissing", {
+                reason: data.span_channel_reason,
+              })}
+            </span>
+          </div>
+        ) : null}
+        {data?.span_channel_status === "unknown" ? (
+          <div className="gov-data-foot">
+            <span>
+              {t("governance.decisions.spanChannelUnknown", {
+                reason: data.span_channel_reason,
+              })}
+            </span>
+          </div>
+        ) : null}
         {data?.decisions.some((d) => d.evaluation === "tool_listing") ? (
           <div className="gov-data-foot">
             <span>{t("governance.decisions.listingRowsNote")}</span>

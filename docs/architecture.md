@@ -441,6 +441,13 @@ which the metric channel cannot express. `session.id` needs a second pass joined
   degrades to metrics-only (`spans_unavailable_reason`) rather than failing the
   request.
 
+The decisions response also reports the live delivery configuration independently
+as `span_channel_status` (`ready`, `missing`, or `unknown`) plus
+`span_channel_reason`. A successful Logs Insights query with zero rows is not proof
+that Gateway tracing is configured: `ready` requires the expected TRACES source,
+XRAY destination, and connecting delivery. This probe is read-only; the GET route
+never repairs AWS resources.
+
 The span channel is the opt-in half, and it is **per Gateway**: AgentCore emits
 Policy decision spans only after trace delivery is enabled on the attached
 Gateway. That is a CloudWatch vended-log delivery (source `logType=TRACES` →

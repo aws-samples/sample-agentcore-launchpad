@@ -301,6 +301,8 @@ def _unavailable(range_key: str, reason: str) -> dict[str, Any]:
         "decisions": [],
         "count": 0,
         "spans_unavailable_reason": None,
+        "span_channel_status": "unknown",
+        "span_channel_reason": "not_checked",
     }
 
 
@@ -314,6 +316,7 @@ def _with_spans(
     result: dict[str, Any],
     logs: Any,
     gateway_arn: str | None,
+    gateway_id: str,
     range_key: str,
     policy_id: str | None,
 ) -> dict[str, Any]:
@@ -331,10 +334,20 @@ def _with_spans(
     result["decisions"] = []
     result["count"] = 0
     result["spans_unavailable_reason"] = None
+    result["span_channel_status"] = "unknown"
+    result["span_channel_reason"] = "not_checked"
     if not gateway_arn:
+        result["span_channel_reason"] = "gateway_arn_missing"
         return result
 
-    from app.services import governance_spans
+    from app.services import governance_spans, policy_bootstrap
+
+    if logs is not None:
+        channel = policy_bootstrap.gateway_trace_delivery_status(
+            logs, gateway_arn, gateway_id
+        )
+        result["span_channel_status"] = channel["status"]
+        result["span_channel_reason"] = channel["reason"]
 
     try:
         spans = governance_spans.gateway_decision_rows(
@@ -384,7 +397,14 @@ def gateway_decisions(
             code = _aws_error_code(exc)
             log.warning("policy decision metrics unavailable for %s: %s", gateway_id, code)
             result = _unavailable(range_key, code)
-        return _with_spans(result, logs, gateway.get("gatewayArn"), range_key, policy_id)
+        return _with_spans(
+            result,
+            logs,
+            gateway.get("gatewayArn"),
+            gateway_id,
+            range_key,
+            policy_id,
+        )
 
     key = f"gov-decisions:{gateway_id}:{range_key}:{policy_id or ''}"
     return cached(key, force, build)

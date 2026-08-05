@@ -688,6 +688,10 @@ export interface GovernanceDecisionResponse {
   truncated: boolean;
   /** Set when the span channel could not be read; the aggregates are still valid. */
   spans_unavailable_reason: string | null;
+  /** Live configuration state for the selected Gateway's TRACES delivery. */
+  span_channel_status: "ready" | "missing" | "unknown";
+  /** Missing component or AWS error code explaining a non-ready channel. */
+  span_channel_reason: string | null;
   /** A policy filter was applied but some operations publish no `Policy`
    *  dimension, so their decisions are unattributable and excluded. */
   policy_filter_partial: boolean;

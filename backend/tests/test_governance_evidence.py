@@ -300,7 +300,7 @@ def test_evidence_count_helper_never_raises():
 
 
 def _with_span_rows(monkeypatch, rows=None, reason=None, raises=False):
-    from app.services import governance_spans
+    from app.services import governance_spans, policy_bootstrap
 
     def fake(logs, gateway_arn, range_key, policy_id=None):
         if raises:
@@ -314,6 +314,11 @@ def _with_span_rows(monkeypatch, rows=None, reason=None, raises=False):
         }
 
     monkeypatch.setattr(governance_spans, "gateway_decision_rows", fake)
+    monkeypatch.setattr(
+        policy_bootstrap,
+        "gateway_trace_delivery_status",
+        lambda logs, gateway_arn, gateway_id: {"status": "ready", "reason": None},
+    )
 
 
 def test_span_rows_are_merged_without_redefining_evidence_count(monkeypatch):
@@ -334,6 +339,8 @@ def test_span_rows_are_merged_without_redefining_evidence_count(monkeypatch):
     assert result["count"] == 1 == len(result["decisions"])
     assert result["evidence_count"] == 701  # unchanged by the span merge
     assert result["spans_unavailable_reason"] is None
+    assert result["span_channel_status"] == "ready"
+    assert result["span_channel_reason"] is None
 
 
 def test_span_failure_degrades_to_metrics_only(monkeypatch):
@@ -351,6 +358,31 @@ def test_span_failure_degrades_to_metrics_only(monkeypatch):
     assert result["spans_unavailable_reason"] == "observability.query_failed"
     assert result["source"] == "metrics"
     assert result["evidence_count"] == 701  # aggregates intact
+    assert result["span_channel_status"] == "ready"
+
+
+def test_missing_span_delivery_is_reported_without_changing_metrics(monkeypatch):
+    _with_span_rows(monkeypatch)
+    monkeypatch.setattr(
+        "app.services.policy_bootstrap.gateway_trace_delivery_status",
+        lambda logs, gateway_arn, gateway_id: {
+            "status": "missing",
+            "reason": "delivery_missing",
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.governance._require_gateway",
+        lambda control, gateway_id: {"gatewayId": gateway_id, "gatewayArn": "arn:gw"},
+    )
+
+    result = ge.gateway_decisions(
+        _control(), FakeCW(_realistic_streams()), GW, "7d", logs=object()
+    )
+
+    assert result["span_channel_status"] == "missing"
+    assert result["span_channel_reason"] == "delivery_missing"
+    assert result["decisions"] == []
+    assert result["evidence_count"] == 701
 
 
 def test_no_gateway_arn_skips_the_span_read(monkeypatch):

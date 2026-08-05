@@ -941,6 +941,8 @@
       "logOnlyMatched": "LOG_ONLY 本会匹配：{{policies}}",
       "listingRowsNote": "标为「列举时被扣下」的行表示该工具从未提供给模型，而不是某次调用被拦截。只有被拒的工具会这样列出；放行的工具体现在上方计数里。",
       "spansUnavailable": "逐条明细不可用（{{reason}}）——上方计数不受影响。",
+      "spanChannelMissing": "Gateway tracing 尚未配置（{{reason}}）。请运行 make bootstrap，再重新产生 Gateway 调用；启用 tracing 不会补写旧调用。",
+      "spanChannelUnknown": "无法确认 Gateway tracing 配置（{{reason}}）。请检查 make bootstrap 显示的 CloudWatch Logs delivery 权限。",
       "aggregateNote": "各项拆分并不是总数的分解：AWS 只对存在判定策略的决策发布策略维度，只对按工具授权发布工具维度。下方逐条明细来自 Policy span，且经过采样，因此不必与这些计数吻合。"
     },
     "audit": {

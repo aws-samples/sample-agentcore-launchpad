@@ -14,6 +14,8 @@ weight: 110
 > 再从决策视图与审计日志里把证据读出来。
 >
 > **前置条件**：完成第 04 章（Registry 生命周期已经走过一遍）。账号里至少有一个 MCP Gateway。
+> 第 01 章 bootstrap summary 中 `gateway traces` 应为 `created` 或 `present`；否则策略指标仍能
+> 工作，但逐条 Policy span 明细不可用。
 >
 > **预计耗时**：约 25 分钟（含决策证据的摄取等待）。
 >
@@ -307,6 +309,20 @@ Registry 审批做不到这件事。
 Gateway」）。证据有摄取延迟：CloudWatch 策略指标约 2–5 分钟，逐条明细走 Policy span，更慢些。
 等不到就点 `刷新`。
 
+逐条明细还有一个独立前置条件：当前 Gateway 必须启用 tracing。平台会实时检查对应的 CloudWatch
+`TRACES` source、`XRAY` destination 和 delivery：
+
+- 没有警告：通道为 `ready`，继续等待本节刚产生的 span。
+- 显示「Gateway tracing 尚未配置」：回到终端运行 `make bootstrap`，确认 summary 为
+  `gateway traces created/present`，然后**重新执行**上面的 `policy-test`。Tracing 不会补写启用前
+  的调用。
+- 显示「无法确认 Gateway tracing 配置」：按提示检查 bootstrap 身份是否具备第 01 章列出的六个
+  CloudWatch Logs delivery 权限。
+
+`spans_unavailable_reason` 只表示 Logs Insights 查询本身是否报错；查询成功但返回零行时它本来就是
+`null`，不能据此判断 tracing 已配置。Policy/Gateway span 写入共享的 `aws/spans`，没有
+Policy 专属日志组。
+
 ![决策](../static/images/11-decisions.png)
 *图 11-8：决策视图。上半是 CloudWatch 策略指标的汇总与三种拆分，下半是来自 Policy span 的逐条
 明细。可按时间范围（1h/6h/24h/7d）与具体策略过滤，策略下拉里会出现你刚创建的
@@ -399,8 +415,9 @@ Gateway」）。证据有摄取延迟：CloudWatch 策略指标约 2–5 分钟�
 - [ ] `policy-test` 以 `demo` 调 `create_payout` 得到 `DENY`，理由里带
       `launchpad_payout_admin_only`
 - [ ] 同一个工具换成 `river` 得到 `ALLOW`
-- [ ] 决策视图能看到这几条判定：汇总有放行/拦截计数，明细能看到 DENY 的理由
-- [ ] 明细里的 ALLOW 行标注了 `LOG_ONLY 本会匹配：lab_readonly_tools-…`
+- [ ] 决策视图的汇总有放行/拦截计数；若出现 tracing 警告，已按 11.6 修复并重新调用
+- [ ] 当 span 通道为 `ready` 时，明细能看到 DENY 理由，且 ALLOW 行标注
+      `LOG_ONLY 本会匹配：lab_readonly_tools-…`
 - [ ] 审计里有一条 `policy_create · succeeded`，且含变更前快照与请求内容
 
 ## 常见问题
@@ -412,7 +429,8 @@ Gateway」）。证据有摄取延迟：CloudWatch 策略指标约 2–5 分钟�
 | `TestGateway0c909b00` 之类的网关找不到 | 那是截图中其它账号的资源 | 只操作当前账号中第 11.1 节列出的 Launchpad 网关 |
 | 清单里看不到实验/金丝雀网关 | 治理清单会过滤平台自管的 `launchpad-exp-gw` / `lp-canary-*` | 属预期；用 `aws bedrock-agentcore-control list-gateways` 看全量 |
 | 报 `updatedAt` 相关冲突 | 平台要求变更前 Gateway 状态新鲜 | 点 `刷新` 后重试 |
-| 决策一直是 0 条 | 账号里还没有任何 Gateway 工具调用 | 按 11.6 用 `policy-test` 打几次；证据有摄取延迟（指标 2–5 分钟，明细更慢），再点 `刷新` |
+| 汇总有计数、明细一直为空 | 当前 Gateway tracing 未配置，或启用后还没有新调用 | 先看页面的 span 通道警告；运行 `make bootstrap` 至 `gateway traces created/present`，再重新执行 `policy-test` |
+| 汇总和明细都是 0 条 | 账号里还没有任何 Gateway 工具调用 | 按 11.6 用 `policy-test` 打几次；证据有摄取延迟（指标 2–5 分钟，明细更慢），再点 `刷新` |
 | 汇总说 3 条、明细却有 4 行 | 两个数据源不同：汇总来自 CloudWatch 策略指标，明细是采样的 Policy span | 属预期，界面上也写了；对账看汇总，看单次细节看明细 |
 | `policy-test` 返回 `ERROR`、`recorded: false` | 评估根本没发生（凭证问题、Gateway 不可达等） | 错误不是判定，所以不入账；先确认 Gateway 是 `READY`，再重试 |
 | 明细里「主体」显示 `span 中没有` | Policy span 不带判定主体字段 | 属预期，平台不猜；要看是谁调的，用 `policy-test` 返回的 `principal` 或顺 trace id 去第 07 章 |

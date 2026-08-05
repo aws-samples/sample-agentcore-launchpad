@@ -104,6 +104,28 @@ Bootstrap 还会尝试启用 CloudWatch Transaction Search，供第 07 章读取
 `config/launchpad.yaml` 应包含 `region`、`account_id` 和 `resources.*`。该文件包含账号相关配置，
 不要提交。
 
+同时检查 summary 里的 Gateway trace 投递：
+
+```text
+tx search       enabled=True
+gateway traces  created
+```
+
+重复执行时 `gateway traces` 显示 `present`，也表示配置正确。这个投递为第 11 章的逐条策略
+决策明细提供 Policy span；它是每个 Gateway 独立的 CloudWatch Logs delivery，最终写入共享的
+`aws/spans`，不会创建策略专属日志组。
+
+若显示 `failed · AccessDeniedException`，为当前 bootstrap 身份补齐下面的 CloudWatch Logs
+权限后重跑 `make bootstrap`：
+
+```text
+logs:GetDeliverySource       logs:PutDeliverySource
+logs:GetDeliveryDestination  logs:PutDeliveryDestination
+logs:DescribeDeliveries      logs:CreateDelivery
+```
+
+若显示 `skipped · transaction_search_disabled`，先确认 Transaction Search 变为 `ACTIVE`，再重跑。
+
 ## 1.5 启动本地栈
 
 可以在后台启动，也可以留在前台查看日志：
@@ -150,6 +172,7 @@ Registry、Policy 和 Observability 五项为「就绪」。Runtime 与 Evaluati
 - [ ] `AWS_REGION` 和 `AWS_DEFAULT_REGION` 均为 `us-east-1`
 - [ ] `uv`、Node.js、CDK、AWS CLI 和 Git 均可用
 - [ ] `config/launchpad.yaml` 包含所需的 `resources.*` 标识符
+- [ ] Bootstrap summary 中 `gateway traces` 为 `created` 或 `present`
 - [ ] 本地浏览器可以打开控制台，右上角显示 `● 系统运行正常`
 - [ ] Gateway / Memory / Registry / Policy / Observability 五项为「就绪」
 - [ ] Runtime 与 Evaluation 显示「尚未创建」
@@ -163,6 +186,7 @@ Registry、Policy 和 Observability 五项为「就绪」。Runtime 与 Evaluati
 | 服务健康某项为红或未就绪 | Bootstrap 未完成、区域错误或权限不足 | 核对身份和区域后重跑 `make bootstrap`；仍失败时查[排障文档](https://github.com/aws-samples/sample-agentcore-launchpad/blob/main/docs/troubleshooting.zh-CN.md) |
 | `make bootstrap` 报 CDK 未 bootstrap | 当前账号和区域缺少 CDK 引导 | 执行本章的 `cdk bootstrap` 命令后重跑 |
 | 后端启动时报 `config` 相关 KeyError | 缺少 `config/launchpad.yaml` | 先执行 `make bootstrap` |
+| `gateway traces` 显示 `failed` | 当前身份缺少 CloudWatch Logs delivery 权限 | 按 1.4 补齐六个 `logs:*Delivery*` 权限后重跑 `make bootstrap` |
 | 页面能打开但列表为空、统计为 0 | 当前账号还没有本实验的 Agent | 正常，继续第 02 章 |
 | 首次调用提示模型无权访问 | 模型来源仍是默认值，或所选模型对当前账号不可用 | 先改为 `Bedrock`；必要时让两个 Agent 一起改用当前账号可用的同一模型 |
 

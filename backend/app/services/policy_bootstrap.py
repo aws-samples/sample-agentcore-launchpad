@@ -70,18 +70,71 @@ def _absent(fn: Any, **kwargs: Any) -> bool:
     return False
 
 
-def _delivery_exists(logs: Any, source_name: str) -> bool:
+def _delivery_exists(
+    logs: Any,
+    source_name: str,
+    destination_arn: str | None = None,
+) -> bool:
     """DescribeDeliveries has no per-name lookup, so paginate and match."""
     token: str | None = None
     while True:
         kwargs = {"nextToken": token} if token else {}
         page = logs.describe_deliveries(**kwargs)
         for delivery in page.get("deliveries") or []:
-            if delivery.get("deliverySourceName") == source_name:
-                return True
+            if delivery.get("deliverySourceName") != source_name:
+                continue
+            if (
+                destination_arn is not None
+                and delivery.get("deliveryDestinationArn") != destination_arn
+            ):
+                continue
+            return True
         token = page.get("nextToken")
         if not token:
             return False
+
+
+def gateway_trace_delivery_status(
+    logs: Any,
+    gateway_arn: str,
+    gateway_id: str,
+) -> dict[str, Any]:
+    """Read the configured Gateway trace-delivery state without mutating AWS."""
+    source_name = f"{gateway_id}{TRACES_SOURCE_SUFFIX}"
+    dest_name = f"{gateway_id}{TRACES_DEST_SUFFIX}"
+    try:
+        try:
+            source = logs.get_delivery_source(name=source_name)["deliverySource"]
+        except ClientError as exc:
+            if _error_code(exc) == "ResourceNotFoundException":
+                return {"status": "missing", "reason": "delivery_source_missing"}
+            raise
+        if (
+            source.get("logType") != "TRACES"
+            or gateway_arn not in (source.get("resourceArns") or [])
+        ):
+            return {"status": "missing", "reason": "delivery_source_invalid"}
+
+        try:
+            destination = logs.get_delivery_destination(name=dest_name)[
+                "deliveryDestination"
+            ]
+        except ClientError as exc:
+            if _error_code(exc) == "ResourceNotFoundException":
+                return {"status": "missing", "reason": "delivery_destination_missing"}
+            raise
+        if (
+            destination.get("deliveryDestinationType") != "XRAY"
+            or not destination.get("arn")
+        ):
+            return {"status": "missing", "reason": "delivery_destination_invalid"}
+
+        if not _delivery_exists(logs, source_name, destination.get("arn")):
+            return {"status": "missing", "reason": "delivery_missing"}
+    except (ClientError, BotoCoreError) as exc:
+        return {"status": "unknown", "reason": _error_code(exc)}
+
+    return {"status": "ready", "reason": None}
 
 
 def ensure_gateway_traces(
@@ -138,7 +191,7 @@ def ensure_gateway_traces(
             ]["arn"]
 
         delivery_id = None
-        if not _delivery_exists(logs, source_name):
+        if not _delivery_exists(logs, source_name, dest_arn):
             delivery = logs.create_delivery(
                 deliverySourceName=source_name, deliveryDestinationArn=dest_arn
             )

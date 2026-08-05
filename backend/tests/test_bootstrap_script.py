@@ -127,3 +127,23 @@ def test_managed_cli_npm_failure_is_not_suppressed(monkeypatch):
 
     with pytest.raises(subprocess.CalledProcessError):
         bootstrap_script.ensure_agentcore_cli()
+
+
+@pytest.mark.parametrize(
+    ("traces", "expected"),
+    [
+        ({"status": "created"}, ("gateway traces", "created")),
+        (
+            {"status": "failed", "reason": "AccessDeniedException"},
+            ("gateway traces", "failed · AccessDeniedException"),
+        ),
+        (
+            {"status": "skipped", "reason": "transaction_search_disabled"},
+            ("gateway traces", "skipped · transaction_search_disabled"),
+        ),
+    ],
+)
+def test_gateway_trace_status_is_rendered_in_bootstrap_summary(traces, expected):
+    assert bootstrap_script._gateway_traces_summary(
+        {"gateway_traces": traces}
+    ) == expected
