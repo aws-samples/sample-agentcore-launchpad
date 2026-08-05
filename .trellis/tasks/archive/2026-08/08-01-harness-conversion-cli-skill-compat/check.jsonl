@@ -1,2 +1,0 @@
-{"file": ".trellis/spec/launchpad/harness-conversion.md", "reason": "Verify conversion behavior and required regression coverage"}
-{"file": ".trellis/spec/launchpad/remote-production-deployment.md", "reason": "Verify fresh-host bootstrap behavior"}

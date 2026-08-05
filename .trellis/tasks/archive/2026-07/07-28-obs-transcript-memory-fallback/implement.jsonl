@@ -1,4 +1,0 @@
-{"file": ".trellis/spec/launchpad/memory-console.md", "reason": "How memory actors are decoded/scoped and which ListActors/ListEvents bounds the console already relies on"}
-{"file": ".trellis/spec/launchpad/claude-sdk-agentcore-memory.md", "reason": "scoped_actor semantics: why memory is keyed on {actorId} only and how runtimes persist turns"}
-{"file": ".trellis/spec/launchpad/experiment-stepwise.md", "reason": "Where experiment traffic session ids are stored (artifacts.traffic) and that the traffic action overwrites them"}
-{"file": ".trellis/tasks/07-28-obs-transcript-memory-fallback/research/live-evidence-2026-07-28.md", "reason": "Verified live facts: which actor holds the session, ledger misses, event count"}

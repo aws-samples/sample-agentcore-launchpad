@@ -1,4 +1,0 @@
-{"file": ".trellis/spec/launchpad/claude-sdk-runtime-invocation.md", "reason": "The exact contract being changed: buffered container invoke, data-client read timeout, 15-min sync boundary. Streaming must extend this spec."}
-{"file": ".trellis/spec/launchpad/claude-sdk-agentcore-memory.md", "reason": "Exactly-once turn persistence + short/long-term restore hook must be preserved inside the new streaming entrypoint."}
-{"file": ".trellis/spec/launchpad/harness-conversion.md", "reason": "Documents the SSE flattening (flatten_sse_text) for streaming runtimes — the buffered-consumer fallback the container frame shape must stay compatible with."}
-{"file": ".trellis/spec/launchpad/evaluation-agent-eligibility.md", "reason": "Container (方式A) is eval-supported; confirms eval invokes via rt.invoke_runtime_text (SSE-safe) so the streamed frames must not break eval."}

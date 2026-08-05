@@ -1,2 +1,0 @@
-{"file": ".trellis/spec/launchpad/observability-log-groups.md", "reason": "Dual-read source, span discrimination, and metadata aggregation contract"}
-{"file": ".trellis/tasks/07-28-unified-observability-log-groups/research/live-evidence-2026-07-28.md", "reason": "Verified mixed log-group topology, record shapes, and CWLI metadata behavior"}

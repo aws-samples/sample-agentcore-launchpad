@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/launchpad/claude-sdk-runtime-invocation.md", "reason": "Check the streaming change against the documented invoke contract (read timeout, sync boundary, shared data client)."}
-{"file": ".trellis/spec/launchpad/claude-sdk-agentcore-memory.md", "reason": "Verify exactly-once memory turn persistence still holds in the async-generator entrypoint."}
-{"file": ".trellis/spec/launchpad/harness-conversion.md", "reason": "Verify buffered consumers (/v1, eval, canary) still flatten the container's SSE frames via flatten_sse_text unchanged."}

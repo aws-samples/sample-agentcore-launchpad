@@ -1,3 +1,0 @@
-{"file": ".trellis/tasks/07-13-a2a-agent-create/prd.md", "reason": "Acceptance criteria checklist — every box needs live or test evidence, incl. HTTP-path regression guard"}
-{"file": ".trellis/tasks/07-13-a2a-e2e/prd.md", "reason": "Cross-child acceptance criteria this child partially satisfies (resolvable card, chat parity, experiment exclusion)"}
-{"file": ".trellis/spec/guides/index.md", "reason": "Project-wide code/i18n conventions gate (bilingual keys, test placement)"}

@@ -1,1 +1,0 @@
-{"file": ".trellis/tasks/07-11-registry-skill-multi-source/research/aws-registry-api-and-current-code.md", "reason": "AWS Registry API 约束(inline-only/100KB/sync不支持skills)+现有代码地图(改造点与可复用模式 file:line) — 实现前必读"}

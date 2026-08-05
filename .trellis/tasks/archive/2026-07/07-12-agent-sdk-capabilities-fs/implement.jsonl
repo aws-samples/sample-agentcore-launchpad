@@ -1,2 +1,0 @@
-{"file": ".trellis/tasks/07-12-agent-sdk-capabilities-fs/research/agentcore-filesystem-facts.md", "reason": "Verified AWS filesystemConfigurations API shape, limits, IAM/VPC prerequisites, lifecycle — the contract Steps 1/4 implement"}
-{"file": ".trellis/spec/launchpad/registry-skill-ingestion.md", "reason": "SkillBundle pipeline contracts (inspect/import staging, caps, error matrix, S3 funnel) reused by the custom skill-source attach endpoint — do not change its semantics"}

@@ -1,2 +1,0 @@
-{"file": ".trellis/spec/launchpad/harness-conversion.md", "reason": "Defines conversion fidelity, failure, and code-bundle contracts."}
-{"file": ".trellis/spec/launchpad/managed-kb.md", "reason": "Defines direct KB tools, AWS request shapes, IAM, and method boundaries."}

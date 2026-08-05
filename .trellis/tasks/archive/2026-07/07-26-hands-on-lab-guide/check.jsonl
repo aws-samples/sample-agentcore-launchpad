@@ -1,3 +1,0 @@
-{"file": ".trellis/tasks/07-26-hands-on-lab-guide/prd.md", "reason": "Acceptance criteria to verify the guide against (coverage, screenshots, truthfulness labels)"}
-{"file": ".trellis/tasks/07-26-hands-on-lab-guide/design.md", "reason": "Chapter/file layout, screenshot naming contract, method-eligibility constraints"}
-{"file": "docs/architecture.md", "reason": "Cross-check that documented behavior in the guide matches the architecture of record"}

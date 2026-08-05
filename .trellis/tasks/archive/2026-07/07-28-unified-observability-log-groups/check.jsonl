@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/guides/index.md", "reason": "Repository-wide implementation and verification conventions"}
-{"file": ".trellis/spec/launchpad/observability-log-groups.md", "reason": "Verify source routing and mixed-record query invariants"}
-{"file": ".trellis/tasks/07-28-unified-observability-log-groups/research/live-evidence-2026-07-28.md", "reason": "Ground truth for source selection and mixed-record regressions"}

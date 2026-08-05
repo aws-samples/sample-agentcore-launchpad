@@ -1,2 +1,0 @@
-{"file": ".trellis/spec/launchpad/container-capabilities-filesystem.md", "reason": "Container (Claude SDK) MCP wiring + per-agent IAM inline policy pattern to mirror for KB gateway injection and launchpad-kb-{kbId} policies"}
-{"file": ".trellis/spec/launchpad/registry-skill-ingestion.md", "reason": "?view= sub-page UX pattern (register/edit) that the Knowledge Bases create/detail pages must follow"}

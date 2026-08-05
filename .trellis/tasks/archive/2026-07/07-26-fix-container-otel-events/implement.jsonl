@@ -1,4 +1,0 @@
-{"file": ".trellis/spec/launchpad/evaluation-agent-eligibility.md", "reason": "Documents strands.telemetry.tracer as the only evaluation-parseable scope — the invariant the events-to-logs migration must preserve."}
-{"file": ".trellis/spec/launchpad/claude-sdk-runtime-invocation.md", "reason": "The 方式A container's invoke/stream contract; the crash surfaced as InvokeAgentRuntime failing on a runtime that never started."}
-{"file": ".trellis/spec/launchpad/container-capabilities-filesystem.md", "reason": "Describes what the container build context carries; tracing.py and requirements.txt ship through assemble_build_context."}
-{"file": "docs/issues/2026-07-26-container-otel-events-import.md", "reason": "The defect report this task closes: symptom, CloudWatch traceback, root cause and proposed work."}

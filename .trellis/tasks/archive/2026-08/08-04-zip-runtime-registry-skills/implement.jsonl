@@ -1,6 +1,0 @@
-{"file": ".trellis/spec/launchpad/registry-skill-ingestion.md", "reason": "Registry descriptor, approval, S3 bundle, and snapshot contracts"}
-{"file": ".trellis/spec/launchpad/container-capabilities-filesystem.md", "reason": "Existing explicit spec.skills S3 path bundler and custom Skill behavior"}
-{"file": ".trellis/spec/launchpad/harness-conversion.md", "reason": "Preserve code_bundle exported Skill fetcher and IAM-only compatibility boundary"}
-{"file": ".trellis/spec/launchpad/a2a-agents.md", "reason": "A2A template, per-context agent factory, and AgentCard skills contract"}
-{"file": ".trellis/tasks/08-04-zip-runtime-registry-skills/research/agent-skills-contract.md", "reason": "Verified AgentSkills import, dependency, and zip layout research"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Trace frontend payload through packaging and generated runtime boundaries"}

@@ -1,4 +1,0 @@
-{"file": ".trellis/tasks/07-13-a2a-e2e/research/a2a-registry-findings.md", "reason": "Verified A2A facts: protocolConfiguration enum, runtime A2A contract (port 9000, JSON-RPC passthrough, well-known card URL, SigV4), current card builder gaps, all platform extension points with file:line refs"}
-{"file": ".trellis/tasks/07-13-a2a-agent-create/design.md", "reason": "Decision log, AgentSpec fields, per-stage pipeline changes, invoke branch parsing shapes, gating and rollout"}
-{"file": ".trellis/spec/launchpad/evaluation-agent-eligibility.md", "reason": "Harness exclusion pattern that A2A experiment gating must mirror (reasoned disabled picker state)"}
-{"file": ".trellis/spec/launchpad/harness-conversion.md", "reason": "Precedent for zip-pipeline code injection + spec-materialized code_bundle + streaming invoke adaptation (flatten_sse_text) — closest prior art for a protocol-variant deploy"}

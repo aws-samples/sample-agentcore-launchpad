@@ -1,3 +1,0 @@
-{"file": ".trellis/tasks/07-13-harness-to-runtime/research/real-export-findings.md", "reason": "Ground truth for graft anchors, env wiring policy (gateway URL must NOT be wired in v1 — import-time crash risk), fidelity table"}
-{"file": ".trellis/tasks/07-13-harness-to-runtime/research/launchpad-deploy-surface.md", "reason": "Pipeline invariants that must not regress: single-main.py template path, skills on_pkg_ready composition, flat requirements contract"}
-{"file": ".trellis/spec/launchpad/evaluation-agent-eligibility.md", "reason": "The harness exclusion gate must remain unchanged; only the conversion path is added"}

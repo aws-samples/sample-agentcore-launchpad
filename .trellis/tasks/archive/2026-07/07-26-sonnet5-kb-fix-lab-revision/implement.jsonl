@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/launchpad/managed-kb.md", "reason": "The managed-KB contract this fix changes the ownership of: who creates the S3 data source after CreateKnowledgeBase returns."}
-{"file": ".trellis/spec/launchpad/evaluation-agent-eligibility.md", "reason": "Evaluation judge defaults move to sonnet-5; this spec covers eval telemetry/model resolution."}
-{"file": "docs/lab/README.md", "reason": "The guide being revised; its data provenance note must stay truthful after re-capture."}

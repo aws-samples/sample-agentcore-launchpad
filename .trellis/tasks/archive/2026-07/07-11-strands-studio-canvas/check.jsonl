@@ -1,3 +1,0 @@
-{"file": ".trellis/tasks/07-11-strands-studio-canvas/research/strands-studio-architecture.md", "reason": "Check that every Handle id, node data key, and destructuring fallback in ported components matches the §4 inventory; generators break silently on drift."}
-{"file": ".trellis/tasks/07-11-strands-studio-canvas/research/launchpad-agent-lifecycle.md", "reason": "Check publish body against AgentSpec schema (name regex, code≤200000, requirements), edit routing against redeploy immutability rules, and i18n en/zh-CN parity rule."}
-{"file": "docs/studio-integration.md", "reason": "Verify the native canvas output still satisfies the adapt_studio_code CLI contract (main(), argparse tail, stdout result)."}

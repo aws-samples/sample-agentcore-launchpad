@@ -1,2 +1,0 @@
-{"file": ".trellis/spec/launchpad/evaluation-cloud-dataset-runs.md", "reason": "Defines fresh dataset replay, runtime session identity, and evaluation log sources."}
-{"file": ".trellis/tasks/08-03-eval-telemetry-readiness/research/prod-evidence.md", "reason": "Provides the exact production failure and timing this change must prevent."}

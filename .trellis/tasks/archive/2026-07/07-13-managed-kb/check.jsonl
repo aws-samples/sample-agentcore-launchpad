@@ -1,2 +1,0 @@
-{"file": ".trellis/spec/launchpad/container-capabilities-filesystem.md", "reason": "Verify container KB wiring follows the established MCP/IAM patterns"}
-{"file": ".trellis/spec/launchpad/evaluation-agent-eligibility.md", "reason": "Ensure KB attach does not break method eligibility assumptions (harness/container dispatch)"}

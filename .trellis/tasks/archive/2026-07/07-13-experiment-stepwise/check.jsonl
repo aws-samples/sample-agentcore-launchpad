@@ -1,3 +1,0 @@
-{"file": ".trellis/tasks/07-13-experiment-stepwise/research/launchpad-experiment-current.md", "reason": "Baseline behavior + existing test assertions that must keep passing (or be intentionally updated); backward-compat artifact shapes for A8"}
-{"file": ".trellis/tasks/07-13-experiment-stepwise/research/agentxray-live-reference.md", "reason": "Reference semantics to check parity against: stage gating, editable accept, advisory verdict, progress feedback"}
-{"file": ".trellis/spec/launchpad/evaluation-agent-eligibility.md", "reason": "Method gating rules to verify the create/action guards against"}

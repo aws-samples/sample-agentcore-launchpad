@@ -1,4 +1,0 @@
-{"file": ".trellis/tasks/07-13-harness-to-runtime/research/launchpad-deploy-surface.md", "reason": "Deploy pipeline map with file:line refs: build_zip single-main.py flow, on_pkg_ready hook, AgentSpec.code limits, requirements flattening, exec-role perms, frontend entry points"}
-{"file": ".trellis/tasks/07-13-harness-to-runtime/research/real-export-findings.md", "reason": "First-hand agentcore export facts: CLI mechanics, project shape/deps, {prompt} entrypoint, env contract (memory/gateway), graft necessity (baked prompt, no get_config_bundle)"}
-{"file": ".trellis/spec/launchpad/evaluation-agent-eligibility.md", "reason": "Verified harness gating facts (invoke-lock, no bundle consumption) this feature works around; must stay consistent"}
-{"file": ".trellis/spec/launchpad/experiment-stepwise.md", "reason": "Experiment action contract the converted agent must satisfy (gateway {prompt} payload, config-bundle A/B semantics)"}

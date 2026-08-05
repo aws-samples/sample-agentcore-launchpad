@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/launchpad/experiment-stepwise.md", "reason": "stage/action contract for the experiment pipeline that compute_verdict + normalize_online_evaluators sit in"}
-{"file": ".trellis/spec/launchpad/index.md", "reason": "launchpad spec index + English-only docs convention"}
-{"file": ".trellis/spec/launchpad/evaluation-subpage-interaction.md", "reason": "console evaluation sub-page UX conventions the verdict card follows"}

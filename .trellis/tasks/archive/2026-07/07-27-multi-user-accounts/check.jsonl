@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/launchpad/console-auth.md", "reason": "Check the new auth surface against the console-gate contract: compare_digest usage, open paths, no identity disclosure pre-auth, /v1 untouched."}
-{"file": ".trellis/tasks/07-27-multi-user-accounts/prd.md", "reason": "Acceptance criteria to verify."}
-{"file": ".trellis/tasks/07-27-multi-user-accounts/design.md", "reason": "Error-code matrix, RBAC rules, and security invariants to check the implementation against."}

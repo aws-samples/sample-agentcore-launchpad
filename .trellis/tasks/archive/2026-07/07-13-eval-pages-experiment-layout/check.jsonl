@@ -1,2 +1,0 @@
-{"file": ".trellis/spec/launchpad/experiment-stepwise.md", "reason": "Verify the refactored pages match the experiment sub-page interaction contract"}
-{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Two pages copy the same table+selection pattern — check for extractable shared pieces"}

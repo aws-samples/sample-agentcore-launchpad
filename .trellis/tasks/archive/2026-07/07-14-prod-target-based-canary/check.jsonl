@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/launchpad/experiment-stepwise.md", "reason": "Verify the rewritten canary state machine still honors resource-ownership, evidence-gate, and progress-polling contracts, and that promote/rollback/cleanup own exactly the right per-canary resources."}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "This is a cross-layer change (invoke hot path + canary service + API + frontend) — check layer boundaries, the new invoke-routing payload/contract, and fail-safe behavior across layers."}
-{"file": ".trellis/spec/launchpad/evaluation-agent-eligibility.md", "reason": "Verify per-named-endpoint telemetry/online-eval log-group + service.name wiring so each variant's verdict reads the correct stream."}

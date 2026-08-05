@@ -1,2 +1,0 @@
-{"file": ".trellis/tasks/07-12-agent-sdk-capabilities-fs/research/agentcore-filesystem-facts.md", "reason": "Check AWS param shapes (union members, mount-path rules, counts, VPC gating) against this verified contract"}
-{"file": ".trellis/spec/launchpad/registry-skill-ingestion.md", "reason": "Regression surface: registry ingest suites must stay green after upload_bundle_files refactor; error matrix must be inherited unchanged by the attach endpoint"}

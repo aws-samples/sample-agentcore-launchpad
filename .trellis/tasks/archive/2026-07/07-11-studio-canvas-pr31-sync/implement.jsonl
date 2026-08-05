@@ -1,4 +1,0 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
-{"file": ".trellis/tasks/07-11-studio-canvas-pr31-sync/research/pr31-canvas-delta.md", "reason": "The 456a042→origin/main feature-delta contract: lib inventories, skill node/bundling spec, data-key diff table, exact generated Python, port plan"}
-{"file": ".trellis/tasks/archive/2026-07/07-11-strands-studio-canvas/research/strands-studio-architecture.md", "reason": "Original port contract (Handle ids/data keys/verbatim-lib doctrine) the sync must preserve"}
-{"file": "docs/studio-integration.md", "reason": "Authoritative studio contract incl. §Native canvas publish body + porting invariants to update"}

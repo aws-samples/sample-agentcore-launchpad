@@ -1,2 +1,0 @@
-{"file": ".trellis/spec/launchpad/observability-log-groups.md", "reason": "The span log-group conventions this task consolidates; must be updated with the one-reader rule"}
-{"file": ".trellis/spec/launchpad/observability-session-transcript.md", "reason": "Session/transcript surface contract that the trace rail sits beside"}

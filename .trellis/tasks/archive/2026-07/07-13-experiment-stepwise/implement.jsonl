@@ -1,5 +1,0 @@
-{"file": ".trellis/tasks/07-13-experiment-stepwise/research/launchpad-experiment-current.md", "reason": "Complete map of the current experiment backend/frontend being refactored: artifact shapes per stage, auto-loop, action endpoints, page anatomy, i18n keys, tests"}
-{"file": ".trellis/tasks/07-13-experiment-stepwise/research/agentxray-live-reference.md", "reason": "Reference interaction model being ported: stage machine, per-stage user actions, LiveRunButton/DiffView contracts, job-progress pattern, verdict/promote semantics"}
-{"file": ".trellis/tasks/07-13-experiment-stepwise/research/deployed-site-observations.md", "reason": "First-hand UX observations of the deployed reference incl. zh-CN wording for buttons/hints and card layout details"}
-{"file": ".trellis/spec/launchpad/evaluation-agent-eligibility.md", "reason": "Eval-supported agent methods + telemetry/service-name resolution rules the experiment flow must respect (runtime log groups, method gating)"}
-{"file": ".trellis/spec/launchpad/evaluation-cloud-dataset-runs.md", "reason": "Dataset kinds (legacy/predefined/simulated) and item shapes — the traffic stage dataset picker builds on these"}
