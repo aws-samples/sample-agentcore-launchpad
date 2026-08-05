@@ -37,7 +37,7 @@ Harness 由 AgentCore 托管运行，不需要构建部署包。本实验先创�
 *图 3-1：Harness 配置页。模型来源为 `Bedrock`，模型与第 02 章实际选择一致，
 工具、技能和知识库暂时留空。*
 
-全新活动账号中，技能区和知识库区没有可选条目属于正常现象。第 04 章创建知识库并批准技能后，
+全新账号中，技能区和知识库区没有可选条目属于正常现象。第 04 章创建知识库并批准技能后，
 编辑这个 Agent 即可看到它们。
 
 > **不要沿用默认值。** 保留 `Bedrock Mantle` 时，Harness 可能创建成功并进入 `READY`，
@@ -104,8 +104,8 @@ Harness 还有一项与后续评估有关的行为：日志组在首次调用后
 
 - [ ] `lab-quota-advisor` 的模型来源为 `Bedrock`，模型与 `lab-quota-assistant` 完全一致
 - [ ] Harness 的 `打包` 阶段显示 `skipped`
-- [ ] 任务日志给出以 `lab_quota_advisor-` 开头的 Harness ID，且已记录当前活动的实际值
-- [ ] `register` 阶段给出 Registry 记录 ID，且已记录当前活动的实际值
+- [ ] 任务日志给出以 `lab_quota_advisor-` 开头的 Harness ID，且已记录当前账号中的实际值
+- [ ] `register` 阶段给出 Registry 记录 ID，且已记录当前账号中的实际值
 - [ ] 「现有 AGENT」中能看到 `lab-quota-advisor` 和 `lab-quota-assistant`
 - [ ] 两个 Agent 都是 `运行中`，版本均为 `1`
 
@@ -115,7 +115,7 @@ Harness 还有一项与后续评估有关的行为：日志组在首次调用后
 |---|---|---|
 | Harness 配置页找不到 Nova 2 Lite | 模型来源仍是默认的 `Bedrock Mantle` | 改成 `Bedrock`，再选择第 02 章实际使用的模型 |
 | 两个 Agent 的模型不同 | 第 03 章没有沿用第 02 章的选择 | 编辑 Harness，改为与 `lab-quota-assistant` 相同的模型后重新发布 |
-| 回退模型也不可用 | 活动账号没有可用的实验模型 | 停止创建并联系讲师更换 team |
+| 回退模型也不可用 | 当前账号没有可用的实验模型 | 先为账号开通可用模型，或选择两个 Agent 都能访问的同一模型 |
 | Harness 评估提示 `eval.harness_no_telemetry` | Agent 还没有被调用，日志组尚未创建 | 先完成第 05 章的 Harness 对话，再运行评估 |
 | 想把 Harness 用于配置包 A/B | Harness 本身不读取配置包 | 第 09 章先把 `lab-quota-advisor` 转为保留知识库的 Runtime |
 

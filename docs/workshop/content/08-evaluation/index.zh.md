@@ -89,29 +89,16 @@ weight: 80
 
 平台通过 `StartBatchEvaluation` 的 `evaluationMetadata.sessionMetadata` 把它们注入当前评估。
 
-### 同步为 AWS 数据集（可选，Workshop Studio 账号跳过）
-
-> **Workshop Studio 临时账号做不了这一步。** 组织 SCP 显式拒绝
-> `bedrock-agentcore:CreateDataset`，点 `同步 AWS` 会返回 HTTP 502，界面上的原文是：
->
-> ```text
-> CreateDataset rejected: An error occurred (AccessDeniedException) when calling the
-> CreateDataset operation: User: arn:aws:sts::<ACCT>:assumed-role/WSParticipantRole/<INSTANCE_ID>
-> is not authorized to perform: bedrock-agentcore:CreateDataset on resource: ...
-> with an explicit deny in a service control policy
-> ```
->
-> 数据集停留在 `未同步`，**不影响本章主线**：8.4 的批量评估用的就是本地数据集。
-> 自有账号的读者（第 01A 章）可以实跑这一节。
+### 同步为 AWS 数据集
 
 选中数据集，点 `同步 AWS`。本地 SQLite 是唯一数据源，同步产生的是不可变的云端快照
 （`AGENTCORE_EVALUATION_PREDEFINED_V1`）。
 
 ![数据集详情与同步](../static/images/08-dataset-detail.png)
 *图 8-2：数据集详情（scenario 编辑器）。列表行显示 `5 · predefined · ◆ 真值`，云端列
-在 Workshop Studio 账号里停留在 `未同步`；自有账号同步成功后这里会变成 `ACTIVE`。*
+同步成功后变为 `ACTIVE`。*
 
-自有账号同步成功后，在详情中核对以下字段：
+同步成功后，在详情中核对以下字段：
 
 ```json
 {"dataset_id": "<DATASET_ID>",
@@ -143,9 +130,9 @@ weight: 80
 | 评审模型 | 与部署 Agent 时同一个选项（见[第 01 章](../01-environment)「确认本次可用的模型」） |
 | 描述 | `判断 AgentCore 配额回答的数值、单位、区域范围和可调整性是否符合真值` |
 
-> **评审模型下拉默认选中 `global.anthropic.claude-sonnet-5`，不要直接用默认值。** 它是否可用
-> 取决于账号，Workshop Studio 账号里通常要改成 `global.amazon.nova-2-lite-v1:0`。选错模型时
-> 创建可能成功，但运行评估时报 `Role does not have access for model ...`。
+> **评审模型下拉默认选中 `global.anthropic.claude-sonnet-5`，不要未经确认就使用默认值。**
+> 选择第 01 章已经验证可用的模型。选错模型时创建可能成功，但运行评估会报
+> `Role does not have access for model ...`。
 
 指令，也就是评审提示词，包含三个可插入的占位符 `{context}` / `{assistant_turn}` /
 `{expected_response}`。其中 `{expected_response}` 带 `◆` 标记，**仅在带真值的数据集运行中生效**：
@@ -275,7 +262,7 @@ weight: 80
 ## 本章验证清单
 
 - [ ] `lab-quota-dataset` 创建成功，真值列显示 `◆`，`kind = predefined`
-- [ ] （仅自有账号）已同步为 AWS 数据集，云端状态 `ACTIVE`。Workshop Studio 账号此项因 SCP 跳过
+- [ ] 已同步为 AWS 数据集，云端状态为 `ACTIVE`
 - [ ] `quota_fact_grounding` 评估器状态 `ACTIVE`
 - [ ] 批量运行走完 INVOKING → WAITING → EVALUATING → COMPLETED
 - [ ] 评分表里能看到每个评估器的均分
@@ -286,7 +273,7 @@ weight: 80
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| `同步 AWS` 返回 502 `CreateDataset ... explicit deny in a service control policy` | Workshop Studio 组织 SCP 禁止创建云端数据集 | 属预期，跳过同步；批量评估用本地数据集即可 |
+| `同步 AWS` 返回 502 或 `AccessDeniedException` | 当前身份缺少 `bedrock-agentcore:CreateDataset` 等数据集权限 | 为当前身份补齐数据集权限后重试；本地数据集仍可用于批量评估 |
 | 启动时报队列忙 | Launchpad 账号级队列已有批量评估在运行 | 等前一个结束，页面顶部有队列状态 |
 | harness Agent 报 `eval.harness_no_telemetry` | 它从没被调用过，日志组不存在 | 先去对话演练场聊一轮 |
 | 轨迹匹配器不可选 | 场景没写 `expected_trajectory` | 只有带该字段的数据集运行才可选 |

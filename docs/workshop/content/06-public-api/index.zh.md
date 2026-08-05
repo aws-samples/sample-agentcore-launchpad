@@ -140,17 +140,9 @@ curl -N -X POST \
   -d '{"prompt":"…","session_id":"<当前会话>"}'
 ```
 
-> **执行前把片段里的端口改为 `8000`。** Vite 只代理 `/api`，不会转发 `/v1`；在 EC2 上运行时，
-> 应将地址改为 `http://127.0.0.1:8000/v1/agents/<AGENT_ID>/invoke-stream`，API Key 照常校验。
->
-> 第 01 章的 `FrontendPortForwardCommand` 只转发前端 `5173`。想在个人电脑上调用 `/v1`，
-> 还要另开一条到后端 `8000` 的端口转发：
->
-> ```bash
-> aws ssm start-session --target <INSTANCE_ID> \
->   --document-name AWS-StartPortForwardingSession \
->   --parameters 'portNumber=["8000"],localPortNumber=["8000"]'
-> ```
+本地开发服务器会把 `/v1` 代理到后端，因此复制出的 `localhost:5173` 地址可以直接运行。
+如需绕过前端代理，也可以改用
+`http://127.0.0.1:8000/v1/agents/<AGENT_ID>/invoke-stream`，API Key 校验行为相同。
 
 ---
 
@@ -171,8 +163,8 @@ curl -N -X POST \
 | 流式没有逐字输出、短时间内集中吐出 | ZIP Runtime 使用缓冲兼容路径 | 属预期；托管 Harness 支持原生增量流式输出 |
 | 明文密钥丢了 | 只显示一次，台账只存摘要 | 重新签发，把旧的停用 |
 | `curl` 一直挂着不返回 | 忘了 `-N`，或模型生成较慢 | 加 `-N` 关闭缓冲；模型生成可能需要数秒 |
-| 在个人电脑上打 `127.0.0.1:8000` 连不上 | 第 01 章只转发了前端 `5173` | 把命令放到 EC2 上跑，或按 6.6 节另开一条到后端 `8000` 的端口转发 |
-| 通过 `localhost:5173/v1/...` 返回空的 `404`（没有错误 JSON） | Vite 只代理 `/api`，不代理 `/v1` | 改用 EC2 上的 `127.0.0.1:8000`，或把个人电脑的 `8000` 转发到 EC2 后端 |
+| `127.0.0.1:8000` 连不上 | 后端未启动，或使用了自定义端口 | 查看 `./start.py` 输出和 `.run/` 日志；设置过 `PLATFORM_API_PORT` 时改用对应端口 |
+| 通过 `localhost:5173/v1/...` 返回连接错误 | 前端开发服务器未启动，或端口不是 5173 | 查看 `./start.py` 输出中的实际前端端口，或直接调用后端 `127.0.0.1:8000` |
 
 ---
 

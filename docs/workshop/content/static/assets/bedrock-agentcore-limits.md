@@ -229,7 +229,7 @@ This section provides information about Amazon Bedrock AgentCore Gateway endpoin
 
 Amazon Bedrock AgentCore Gateway provides AWS Region-specific endpoints for management operations and runtime access.
 
-The Amazon Bedrock AgentCore Gateway control plane endpoints use the following format, where you can replace `<region>` with any of the AWS Regions listed in [Supported AWS Regions](agentcore-regions.md).
+The Amazon Bedrock AgentCore Gateway control plane endpoints use the following format, where you can replace `<region>` with any of the AWS Regions listed in [Supported AWS Regions](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-regions.html).
 
 ```
 bedrock-agentcore-control.<region>.amazonaws.com

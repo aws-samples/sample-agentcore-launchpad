@@ -35,7 +35,7 @@ weight: 110
 *图 11-1：每行是一个真实 Gateway，列出状态、鉴权器、目标数、Registry/Harness 可用性、
 策略引擎与模式、纳管状态。*
 
-Workshop Studio 临时账号里只有 bootstrap 建的两个网关，两个都是「未纳管」：
+完成前序章节后，当前账号通常至少有下面两个 Launchpad 网关，两个都应显示为「未纳管」：
 
 | Gateway | 目标 | Registry | 策略引擎 | 纳管状态 |
 |---|---|---|---|---|
@@ -48,8 +48,7 @@ Workshop Studio 临时账号里只有 bootstrap 建的两个网关，两个都�
 > **清单不含实验专属网关**。第 09 章的 `launchpad-exp-gw` 和可选第 10 章的 `lp-canary-*` 由平台
 > 自管，`list-gateways` 看得到但治理清单会过滤掉：治理面向你要纳管的资源，不是实验的中间产物。
 >
-> 长期演示账号里通常还有别的历史网关（`Demo*`、`Semantic*`、`ac-*` 之类）。本章只操作上面
-> 两行，其余不要动。
+> 自有账号里可能还有其它历史网关。本章只操作上面两行，其余不要动。
 
 ## 11.2 只读打开一个 Gateway
 
@@ -62,16 +61,14 @@ Workshop Studio 临时账号里只有 bootstrap 建的两个网关，两个都�
 详情里可以核对：
 
 - **鉴权器 `CUSTOM_JWT`**，执行角色 `launchpad-gateway-role`
-- **Registry 发布**：`GATEWAY 记录 未入目录`，`旧记录 0`。临时账号里没有预置的按目标记录；
-  长期演示账号可能显示 `旧记录 2`（`office-facts`、`hr-database` 两条 APPROVED 记录），
-  11.4 会解释它们和 Gateway 记录的关系
+- **Registry 发布**：`GATEWAY 记录 未入目录`；`旧记录` 数量取决于当前账号是否已有
+  `office-facts`、`hr-database` 等按目标记录，11.4 会解释它们和 Gateway 记录的关系
 - **策略引擎**：`launchpad_pe` · 引擎状态 ACTIVE · Gateway 模式 ENFORCE · 策略数 2
   （`launchpad_baseline_allow`、`launchpad_payout_admin_only`）
-- **IAM 挂载预检**：Workshop Studio 账号里显示 `UNKNOWN · simulation_denied / AccessDenied`，
-  属预期。预检要调 `iam:SimulatePrincipalPolicy`，`WSParticipantRole` 没这个权限，平台判不了，
-  就如实报「未知」，不影响后面创建策略。这一块仍会给出所需的 IAM 内联策略 JSON
-  （`GetPolicyEngine`、`AuthorizeAction`、`PartiallyAuthorizeActions`），真出现 `FAIL` 时照它修
-  执行角色
+- **IAM 挂载预检**：平台调用 `iam:SimulatePrincipalPolicy` 检查 Gateway 执行角色。
+  `PASS` 表示权限齐全；`FAIL` 时按界面给出的内联策略 JSON 补齐 `GetPolicyEngine`、
+  `AuthorizeAction`、`PartiallyAuthorizeActions`；若当前操作身份不能执行模拟，则显示
+  `UNKNOWN · simulation_denied`
 
 ## 11.3 纳管：只加两个标签，不动任何资源
 
@@ -159,8 +156,7 @@ Gateway 详情的「REGISTRY 发布」区有 `预览` 与 `导入 GATEWAY`。点
    等于把整个 Gateway 及其全部工具给了 Harness。按动作的授权只能靠 Cedar 策略。
 2. 如果账号里已有旧的按目标记录（`office-facts` / `hr-database` 那种），导入 Gateway 记录后它们
    仍然存在，要显式点 `停用选中的旧记录` 才退休。`DEPRECATED` 是终态，停用不可回退。
-   Workshop Studio 临时账号没有这类记录，详情页显示 `旧记录 0`，`预览` 返回的 `legacy_records`
-   也是空数组，所以这条只需理解规则。
+   如果详情页显示 `旧记录 0`，`预览` 返回的 `legacy_records` 也会是空数组，无需执行退休操作。
 
 > **注意**：本章只跑预览，不执行导入。Registry 记录一旦 `DEPRECATED` 不可恢复，而导入按钮的
 > 行为与上面预览返回的 `proposed` 完全一致，读预览就够了。
@@ -258,7 +254,7 @@ permit(
 | `demo` | `demo@hr-analyst`（普通分析师） | 被 `launchpad_payout_admin_only` 拦下 |
 | `river` | `river@platform-admin`（平台管理员） | 放行 |
 
-在 EC2 上执行（`8000` 是后端端口，参数不必填全，我们要看的是授权结果而不是业务结果）：
+在本地终端执行（`8000` 是后端端口，参数不必填全，我们要看的是授权结果而不是业务结果）：
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/governance/policy-test \
@@ -413,7 +409,7 @@ Gateway」）。证据有摄取延迟：CloudWatch 策略指标约 2–5 分钟�
 |---|---|---|
 | `创建 LOG_ONLY 策略` 不可点 | 还没有 Cedar 草稿 | 按钮上方会写明原因（`请生成或粘贴 Cedar 草稿`），先点 `生成 CEDAR 草稿`。保存草稿不需要填 Gateway 名称与覆盖原因 |
 | `新建策略` 是灰的 / 编辑器提示「未纳管，只读」 | `launchpad-gw` 没有 launchpad 标签 | 按 11.3 末尾「再纳管 `launchpad-gw`」先纳管它 |
-| `TestGateway0c909b00` 之类的网关找不到 | 那是作者演示账号里的资源 | 临时账号只有两个网关，按 11.1 的表来做 |
+| `TestGateway0c909b00` 之类的网关找不到 | 那是截图中其它账号的资源 | 只操作当前账号中第 11.1 节列出的 Launchpad 网关 |
 | 清单里看不到实验/金丝雀网关 | 治理清单会过滤平台自管的 `launchpad-exp-gw` / `lp-canary-*` | 属预期；用 `aws bedrock-agentcore-control list-gateways` 看全量 |
 | 报 `updatedAt` 相关冲突 | 平台要求变更前 Gateway 状态新鲜 | 点 `刷新` 后重试 |
 | 决策一直是 0 条 | 账号里还没有任何 Gateway 工具调用 | 按 11.6 用 `policy-test` 打几次；证据有摄取延迟（指标 2–5 分钟，明细更慢），再点 `刷新` |
@@ -421,7 +417,7 @@ Gateway」）。证据有摄取延迟：CloudWatch 策略指标约 2–5 分钟�
 | `policy-test` 返回 `ERROR`、`recorded: false` | 评估根本没发生（凭证问题、Gateway 不可达等） | 错误不是判定，所以不入账；先确认 Gateway 是 `READY`，再重试 |
 | 明细里「主体」显示 `span 中没有` | Policy span 不带判定主体字段 | 属预期，平台不猜；要看是谁调的，用 `policy-test` 返回的 `principal` 或顺 trace id 去第 07 章 |
 | 切 ENFORCE 被阻止 | 24h 内没有 LOG_ONLY 证据 | 补证据，或手输 Gateway 名 + 覆盖原因（谨慎） |
-| IAM 挂载预检显示 `UNKNOWN / simulation_denied` | `WSParticipantRole` 无 `iam:SimulatePrincipalPolicy` | 属预期，不影响后续步骤 |
+| IAM 挂载预检显示 `UNKNOWN / simulation_denied` | 当前操作身份无 `iam:SimulatePrincipalPolicy` | 可为操作身份补权限后重试；该状态不等于 Gateway 执行角色缺权限 |
 | IAM 挂载预检 FAIL | Gateway 执行角色缺少策略引擎权限 | 照界面给出的内联策略 JSON 修 |
 
 ---

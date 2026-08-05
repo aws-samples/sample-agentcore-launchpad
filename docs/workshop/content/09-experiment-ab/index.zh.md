@@ -79,9 +79,9 @@ control 有两个已观测到的缺陷，两个评估器各对应一个：
 
 打开 `08 评估` → `评估器` → `+ 新建评估器`，建两个。
 
-> **评审模型不要用下拉的默认值。** 它默认选 `global.anthropic.claude-sonnet-5`，
-> Workshop Studio 账号一般没有这个模型，创建时会报 `Role does not have access for model`。
-> 改成本账号可用的模型，通常是 `global.amazon.nova-2-lite-v1:0`。
+> **评审模型不要未经确认就使用下拉默认值。** 它默认选
+> `global.anthropic.claude-sonnet-5`；如果当前账号无权调用，运行时会报
+> `Role does not have access for model`。请选择第 01 章已经验证可用的模型。
 
 **第一个：`verdict_label_consistency`**（对应缺陷一）
 

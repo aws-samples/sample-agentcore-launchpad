@@ -8,8 +8,8 @@ weight: 0
 > 使用 AgentCore Launchpad UI，以 AgentCore 配额与容量规划助手为场景，跑通 Amazon Bedrock
 > AgentCore 的**创建 → 部署 → 测试 → 观测 → 评估 → 优化 → A/B → 治理**链路。
 >
-> Workshop Studio 会为参与者分配临时 AWS 账号，并部署一台预装实验工具和源码的
-> Ubuntu 24.04 Graviton EC2。默认主线都在这台 EC2 上操作。
+> 本实验直接使用你的 AWS 账号，并在本地开发机运行 Launchpad。所有 AWS 资源、调用费用和
+> 实验结束后的清理均由账号所有者负责。
 
 ---
 
@@ -41,8 +41,7 @@ weight: 0
 
 | # | 章节 | 内容 | 关键操作参考耗时 |
 |---|---|---|---|
-| 01 | [环境准备与控制台导览](01-environment) | 安装本机工具、连接已预热的 EC2、验证环境、端口转发、控制台导览 | 约 5–10 分钟 |
-| 01A | [可选：Self-paced 自有 AWS 账号与本地开发机](01a-own-account-local) | 不使用 Workshop Studio 账号和 EC2 时的自助环境路径 | 首次 15–20 分钟 |
+| 01 | [自有 AWS 账号环境准备](01-environment) | 安装本地依赖、配置凭证、引导 AWS 资源、启动控制台 | 首次 15–20 分钟 |
 | 02 | [部署第一个 Agent（Strands ZIP）](02-deploy-runtime) | 五阶段流水线、ZIP 打包、Runtime 与 Registry 自动登记 | 通常不到 1 分钟 |
 | 03 | [部署托管 Harness](03-deploy-harness) | 免打包创建 Harness，并核对两个 Agent | 通常不到 1 分钟 |
 | 04 | [挂载能力：Registry 与知识库](04-capabilities) | Markdown 配额文档 → 托管 KB、技能登记与审批、Harness 重新发布 | 约 15 分钟 |
@@ -55,9 +54,6 @@ weight: 0
 | 11 | [治理](11-governance)（可选） | Gateway 纳管标签、Cedar LOG_ONLY 策略、决策与审计 | 约 25 分钟 |
 | 12 | [收尾与资源清理](12-wrapup-cleanup) | 资源清单、清理顺序、成本提示 | 5–15 分钟 |
 
-环境准备只选一种：Workshop Studio 走第 01 章，使用临时账号和预置 EC2；self-paced 走第 01A 章，
-使用自有账号和本地开发机。Self-paced 第 01A 章首次准备环境约多用 10 分钟。
-
 **第 06、10、11 三章都是可选支线**，跳过不影响其它章节：后续章节依赖的对象都在第 02–05 章创建，
 第 10 章的金丝雀和第 11 章的治理链路都不被任何其它章节引用（只在第 12 章的清理清单里出现）。
 
@@ -65,11 +61,11 @@ weight: 0
 
 | 路径 | 章节 | 累计耗时 |
 |---|---|---|
-| **精简版** | 01 → 02 → 03 → 04 → 05 → 07 → 08 → 12 | **约 1 小时 25 分** |
-| 主线 | 精简版 + 09（优化与 A/B） | 约 2 小时 05 分–2 小时 20 分 |
-| 完整版 | 主线 + 06、10、11 三条可选支线 | 约 2 小时 50 分–3 小时 05 分 |
+| **精简版** | 01 → 02 → 03 → 04 → 05 → 07 → 08 → 12 | **约 1 小时 35 分** |
+| 主线 | 精简版 + 09（优化与 A/B） | 约 2 小时 15 分–2 小时 30 分 |
+| 完整版 | 主线 + 06、10、11 三条可选支线 | 约 3 小时–3 小时 15 分 |
 
-> 走完整版但只有 2 小时 45 分时，从三条支线里去掉一条：去掉第 06 章省 10 分钟，
+> 走完整版但只有 3 小时时，从三条支线里去掉一条：去掉第 06 章省 10 分钟，
 > 去掉第 11 章省 15–25 分钟。第 09 章的 12 条流量不要削减——流量是并发发送的，12 条只占
 > 2–3 分钟，削掉省不下时间；而条数越少，随机分流让某一组样本过小的概率越高，判定会退回
 > `INSUFFICIENT-N`。
@@ -89,42 +85,33 @@ weight: 0
 
 ### 前置条件检查单
 
-下面的检查项只适用于 Workshop Studio 主线。self-paced 参与者请改按
-[可选第 01A 章](01a-own-account-local)准备环境。
+- [ ] 自有 AWS 账号可在 `us-west-2` 使用实验涉及的 Bedrock AgentCore 服务
+- [ ] 当前 AWS 身份具备管理员级权限，`aws sts get-caller-identity` 返回预期账号
+- [ ] 本机已安装 `uv` ≥ 0.8、Node.js ≥ 20、AWS CLI v2、AWS CDK CLI v2 和 Git
+- [ ] 当前账号和 `us-west-2` 已完成 CDK bootstrap
+- [ ] 已了解实验资源和模型调用会计入自己的 AWS 账单
 
-- [ ] 已加入本 Workshop Studio 活动，且活动状态为可开始
-- [ ] Workshop Studio 分配的 AWS 账号和基础设施均显示部署成功
-- [ ] 本机已安装 AWS CLI 与
-      [Session Manager Plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)，
-      只用来把 EC2 的 `5173` 端口转发到浏览器
-- [ ] 可以从 Workshop Studio 获取临时 AWS CLI 凭证
-- [ ] 可以在 Stack Outputs 中看到 `InstanceId`、`SessionManagerUrl` 和
-      `FrontendPortForwardCommand`
-- [ ] 活动账号已预先开启 CloudWatch Transaction Search（第 07 章需要）
-
-`uv`、Node.js、AWS CDK CLI、项目依赖和源码都已预置在 EC2 上，共享 AgentCore
-资源也在活动部署阶段完成了预热，个人电脑上不用装。
-AWS 区域由活动创建者选择，推荐 `us-east-1`、备选 `us-west-2`，后续命令统一使用 EC2 里
-已经设好的 `AWS_REGION`。
+第 01 章会安装项目依赖、执行 `make bootstrap`，并检查 CloudWatch Transaction Search 和
+五项共享 AgentCore 资源。
 
 ### 会花多少钱
 
-Workshop Studio 临时账号不会向参与者的个人账号计费。一次完整实验约调用模型几十次，索引一份
-约 38 KB 的 Markdown 文档，并执行若干次 CloudWatch Logs Insights 查询。模型调用费用会随
-实际调用次数、输入长度和输出长度变化，不含预置 EC2 和基础设施。请在可观测页记录自己的估算值，详见
-[第 12 章 · 成本提示](12-wrapup-cleanup#125-成本提示)。
+一次完整实验约调用模型几十次，索引一份约 38 KB 的 Markdown 文档，并执行若干次 CloudWatch
+Logs Insights 查询。共享基础设施、模型调用、评估、日志摄取和存储都会在自有账号中计费。
+请在可观测页记录自己的估算值，并在实验结束后按
+[第 12 章 · 成本提示](12-wrapup-cleanup#125-成本提示)核对和清理。
 
 ### 命名约定
 
-- 实验创建的资源统一用 `lab-` 前缀，方便和 Workshop Studio 预置资源区分。
+- 实验创建的资源统一用 `lab-` 前缀，方便和 `launchpad-` 共享基础设施区分。
 - 指南里 `<ASSISTANT_ID>` / `<KB_ID>` / `<ACCT>` 这类尖括号占位符需要替换成
-  当前活动账号里的实际值。代码块里的具体 id 只用于说明字段格式，操作时以自己页面上的值为准。
+  当前 AWS 账号里的实际值。代码块里的具体 id 只用于说明字段格式，操作时以自己页面上的值为准。
 
 ## 清理
 
-跑完后**唯一必须清理**的是实验与金丝雀的中间资源，它们会占用共享网关互斥锁：
-见第 09 章的 `CLEANUP`，以及跑了可选第 10 章的话它的 `清理`。其余资源的完整清理清单见
-[第 12 章](12-wrapup-cleanup)。
+第 09 章的实验和可选第 10 章的金丝雀会占用共享网关互斥锁，完成后必须立即执行各自的
+`清理`。实验结束后还要按[第 12 章](12-wrapup-cleanup)删除其余 `lab-` 资源，并决定是否保留
+`launchpad-` 共享基础设施。
 
 ## 相关文档
 

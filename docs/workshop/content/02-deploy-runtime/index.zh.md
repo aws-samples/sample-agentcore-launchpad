@@ -7,9 +7,7 @@ weight: 20
 
 > **目标**：通过 Strands ZIP 表单部署 `lab-quota-assistant`，观察五阶段流水线。
 >
-> **前置条件**：任选一种环境路径完成准备，并确认 bootstrap 预建的 5 项服务已经就绪。
-> Workshop Studio 主线见[第 01 章](../01-environment)，自有账号路径见
-> [可选第 01A 章](../01a-own-account-local)。
+> **前置条件**：完成[第 01 章](../01-environment)，并确认 bootstrap 创建的 5 项服务已经就绪。
 >
 > **预计耗时**：约 5 分钟。部署通常在数十秒内完成，首次下载依赖时可能更久。
 >
@@ -140,8 +138,8 @@ Registry 记录 ID。
 - [ ] 模型来源为 `Bedrock`，已记录实际选择的 Sonnet 5 或 Nova 2 Lite 模型 ID
 - [ ] 「现有 AGENT」中 `lab-quota-assistant` 状态为 `运行中`，版本为 `1`
 - [ ] 五阶段面板全绿，任务日志包含 `runtime status: READY`
-- [ ] 任务日志给出以 `lab_quota_assistant_` 开头的 Runtime ID，且已记录当前活动的实际值
-- [ ] `register` 阶段给出 Registry 记录 ID，且已记录当前活动的实际值
+- [ ] 任务日志给出以 `lab_quota_assistant_` 开头的 Runtime ID，且已记录当前账号中的实际值
+- [ ] `register` 阶段给出 Registry 记录 ID，且已记录当前账号中的实际值
 
 ## 常见问题
 
@@ -153,10 +151,9 @@ Registry 记录 ID。
 | 状态长时间停在 `deploying` | Runtime 仍为 `CREATING` | 查看任务日志最后一条事件；通常 20–60 秒会进入 `READY` |
 | 模型下拉里找不到 Sonnet 5 或 Nova 2 Lite | 模型来源仍是默认的 `Bedrock Mantle` | 把模型来源改为 `Bedrock`，再选择本章列出的模型 |
 | Sonnet 5 首次调用提示订阅或访问错误 | 当前账号无法使用该模型 | 改用 `global.amazon.nova-2-lite-v1:0`；下一章的 Harness 也必须使用同一回退模型 |
-| 两个模型都不可用 | 活动账号没有可用的实验模型 | 停止创建并联系讲师更换 team |
+| 两个模型都不可用 | 当前账号没有可用的实验模型 | 先为账号开通可用模型，或选择两个 Agent 都能访问的同一模型 |
 
 ---
 
-环境准备：[第 01 章 · Workshop Studio 预置 EC2](../01-environment) /
-[可选第 01A 章 · Self-paced 自有 AWS 账号](../01a-own-account-local) ｜
+环境准备：[第 01 章 · 自有 AWS 账号环境准备](../01-environment) ｜
 下一章：[第 03 章 · 部署托管 Harness](../03-deploy-harness)

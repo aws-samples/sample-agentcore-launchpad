@@ -76,7 +76,7 @@ weight: 120
 |---|---|---|
 | 本地数据集 `lab-quota-dataset` | `<DATASET_ID>` | `?view=datasets` 选中 → `删除` |
 | 本地 A/B 数据集 `lab-quota-audit-ab`（第 09 章） | `<DATASET_ID>` | 同上；实验的 `CLEANUP` 不会删除数据集 |
-| AWS 数据集快照 | `dataset/lab_quota_dataset-<后缀>` | 云端副本不可编辑，只能删除。Workshop Studio 账号因 SCP 无法创建时，这一行不存在 |
+| AWS 数据集快照 | `dataset/lab_quota_dataset-<后缀>` | 云端副本不可编辑，只能删除 |
 | 自定义评估器 `quota_fact_grounding` | `quota_fact_grounding-<后缀>` | `?view=evaluators` 选中 → `删除` |
 | 自定义评估器 `verdict_label_consistency`、`verdict_label_vocabulary`（第 09 章） | 各自 `<名称>-<后缀>` | 同上；实验的 `CLEANUP` 不会删除评估器 |
 | 评估运行记录 | `run-<后缀>` | 本地台账记录，留着做对比即可 |
@@ -110,10 +110,8 @@ weight: 120
 
 ## 12.3 本次实验的处理方式
 
-Workshop Studio 临时账号会在活动结束后回收，活动进行期间可以保留 `lab-` 资源供后续演示。
-实验和金丝雀的中间资源会占用互斥锁，完成第 09 章（以及跑了的话第 10 章）后必须立即清理。
-
-Self-paced 使用自有账号，建议按以下顺序清理：
+自有账号不会自动回收实验资源。实验和金丝雀的中间资源会占用互斥锁，完成第 09 章
+（以及跑了的话第 10 章）后必须立即清理。完整实验建议按以下顺序收尾：
 
 ```text
 1. 实验 / 金丝雀 → 各自的「清理」按钮
@@ -173,7 +171,7 @@ uv run python ../scripts/teardown.py --yes        # 真删（memory → registry
 
 - [ ] 基础流程有 `lab-quota-assistant` 与 `lab-quota-advisor`；完成第 09 章后还应看到 `lab-quota-advisor-rt`
 - [ ] 第 09 章和可选第 10 章创建的实验、金丝雀中间资源已经清理
-- [ ] Self-paced 环境先删除转换 Runtime，再解除 Harness 的 KB 挂载，随后删除 KB、基础 Agent、Registry 与评估资源
+- [ ] 先删除转换 Runtime，再解除 Harness 的 KB 挂载，随后删除 KB、基础 Agent、Registry 与评估资源
 - [ ] 完成第 09 章时，`lab-quota-audit-ab` 与该章创建的两个无参考评估器也已删除
 - [ ] 没有误删 `launchpad-*` 共享基础设施
 - [ ] 已说明可观测页成本是估算值，实际账单以 AWS 账单为准
@@ -182,7 +180,7 @@ uv run python ../scripts/teardown.py --yes        # 真删（memory → registry
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| Workshop Studio 活动里还看得到 `lab-` 资源 | 活动进行期间账号不会自动清空 | 可以保留供后续演示；活动结束后临时账号会回收 |
+| 实验结束后仍能看到 `lab-` 资源 | 自有账号不会自动清理实验资源 | 按 12.2 和 12.3 的顺序逐项删除 |
 | 知识库删除失败 | Harness 或转换后的 Runtime 仍引用该 KB | 先删除 `lab-quota-advisor-rt`，再编辑 `lab-quota-advisor` 取消知识库并重新发布，最后删除 KB |
 | 新实验或金丝雀提示共享网关被占用 | 上一次实验的中间资源没有清理 | 回到对应记录执行 `清理`，确认逐项显示 `deleted` 或预期的 `skipped` |
 | 金丝雀清理后仍有 restore ZIP | 回滚包仍服务当前生产版本 | 不要手动删除；先重新发布不依赖该包的版本，再按第 10 章说明回收 |
