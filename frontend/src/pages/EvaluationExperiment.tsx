@@ -218,6 +218,10 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
   const canaryMode = searchParams.get("mode") === "canary";
+  const creatingExperiment = !canaryMode && searchParams.get("exp") === "new";
+  const backToExperimentList = () => {
+    setSearchParams({ view: "experiment" }, { replace: true });
+  };
   const switchMode = (mode: "configuration" | "canary") => {
     if (mode === "canary") {
       const selectedCanary = searchParams.get("canary");
@@ -239,67 +243,83 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
     <section>
       <ViewHead
         kicker={t("evaluation.kicker")}
-        title={t("evalPage.experiment.title")}
-        meta={canaryMode ? t("canaryPage.meta") : t("evalPage.experiment.meta")}
+        title={t(
+          creatingExperiment ? "expPage.start" : "evalPage.experiment.title",
+        )}
+        meta={t(
+          creatingExperiment
+            ? "expPage.startHint"
+            : canaryMode
+              ? "canaryPage.meta"
+              : "evalPage.experiment.meta",
+        )}
       />
       <EvaluationNav />
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12,
                     alignItems: "center", flexWrap: "wrap", marginBottom: 14 }}>
-        <Btn onClick={onBack}>◂ {t("evalPage.backToRuns")}</Btn>
-        <div
-          role="tablist"
-          aria-label={t("canaryPage.modeLabel")}
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-            width: "min(100%, 430px)",
-            border: "1px solid var(--line)",
-            borderRadius: 4,
-            padding: 3,
-            gap: 3,
-          }}
-        >
-          <Btn
-            role="tab"
-            aria-selected={!canaryMode}
-            data-testid="mode-configuration"
-            onClick={() => switchMode("configuration")}
+        <Btn onClick={creatingExperiment ? backToExperimentList : onBack}>
+          ◂ {t(
+            creatingExperiment
+              ? "evalPage.experiment.title"
+              : "evalPage.backToRuns",
+          )}
+        </Btn>
+        {!creatingExperiment && (
+          <div
+            role="tablist"
+            aria-label={t("canaryPage.modeLabel")}
             style={{
-              minWidth: 0,
-              minHeight: 34,
-              borderColor: !canaryMode ? "var(--warn)" : "transparent",
-              color: !canaryMode ? "var(--warn)" : undefined,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 6,
-              whiteSpace: "normal",
+              display: "grid",
+              gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+              width: "min(100%, 430px)",
+              border: "1px solid var(--line)",
+              borderRadius: 4,
+              padding: 3,
+              gap: 3,
             }}
           >
-            <FlaskConical size={14} />
-            {t("canaryPage.mode.configuration")}
-          </Btn>
-          <Btn
-            role="tab"
-            aria-selected={canaryMode}
-            data-testid="mode-canary"
-            onClick={() => switchMode("canary")}
-            style={{
-              minWidth: 0,
-              minHeight: 34,
-              borderColor: canaryMode ? "var(--warn)" : "transparent",
-              color: canaryMode ? "var(--warn)" : undefined,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 6,
-              whiteSpace: "normal",
-            }}
-          >
-            <Gauge size={14} />
-            {t("canaryPage.mode.canary")}
-          </Btn>
-        </div>
+            <Btn
+              role="tab"
+              aria-selected={!canaryMode}
+              data-testid="mode-configuration"
+              onClick={() => switchMode("configuration")}
+              style={{
+                minWidth: 0,
+                minHeight: 34,
+                borderColor: !canaryMode ? "var(--warn)" : "transparent",
+                color: !canaryMode ? "var(--warn)" : undefined,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                whiteSpace: "normal",
+              }}
+            >
+              <FlaskConical size={14} />
+              {t("canaryPage.mode.configuration")}
+            </Btn>
+            <Btn
+              role="tab"
+              aria-selected={canaryMode}
+              data-testid="mode-canary"
+              onClick={() => switchMode("canary")}
+              style={{
+                minWidth: 0,
+                minHeight: 34,
+                borderColor: canaryMode ? "var(--warn)" : "transparent",
+                color: canaryMode ? "var(--warn)" : undefined,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                whiteSpace: "normal",
+              }}
+            >
+              <Gauge size={14} />
+              {t("canaryPage.mode.canary")}
+            </Btn>
+          </div>
+        )}
       </div>
       {canaryMode ? <RuntimeCanaryView /> : <ConfigurationExperimentView />}
     </section>
@@ -1905,79 +1925,81 @@ function ConfigurationExperimentView() {
 
   return (
     <>
-      <Panel
-        brk
-        pad={false}
-        title={t("evalPage.experiment.list.title")}
-        sub={t("evalPage.experiment.list.sub")}
-        end={
-          <Btn
-            primary
-            disabled={hasRunning}
-            title={hasRunning ? t("evalPage.experiment.runningGuard") : undefined}
-            data-testid="new-experiment-btn"
-            onClick={() => selectExp("new")}
-          >
-            + {t("evalPage.experiment.list.new")}
-          </Btn>
-        }
-        style={{ "--i": 0, marginBottom: 14 } as CSSProperties}
-      >
-        <table>
-          <thead>
-            <tr>
-              <th>{t("evalPage.experiment.list.name")}</th>
-              <th>{t("evalPage.experiment.list.agent")}</th>
-              <th>{t("evalPage.experiment.list.stage")}</th>
-              <th>{t("evalPage.experiment.list.verdict")}</th>
-              <th>{t("evalPage.experiment.list.created")}</th>
-              <th>{t("evalPage.experiment.list.status")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pageExperiments.map((e) => (
-              <tr
-                key={e.id}
-                data-testid="experiment-list-row"
-                onClick={() => selectExp(e.id)}
-                style={{
-                  cursor: "pointer",
-                  background:
-                    !creatingNew && exp?.id === e.id ? "rgba(255,176,0,.045)" : undefined,
-                }}
-              >
-                <td className="pri">{e.name}</td>
-                <td>{e.agent_name}</td>
-                <td className="mono dim">
-                  {e.running_action
-                    ? `◐ ${e.running_action.toUpperCase()}`
-                    : e.stage.toUpperCase()}
-                </td>
-                <td className="mono dim">{verdictLabel(t, e.artifacts.verdict)}</td>
-                <td className="mono dim">
-                  {e.created_at ? new Date(e.created_at).toLocaleString() : "—"}
-                </td>
-                <td>
-                  <Chip
-                    tone={experimentTone(e.status)}
-                    icon={e.status === "running" ? "◐" : "●"}
-                  >
-                    {e.status.toUpperCase()}
-                  </Chip>
-                </td>
-              </tr>
-            ))}
-            {experiments.length === 0 && (
+      {!creatingNew && (
+        <Panel
+          brk
+          pad={false}
+          title={t("evalPage.experiment.list.title")}
+          sub={t("evalPage.experiment.list.sub")}
+          end={
+            <Btn
+              primary
+              disabled={hasRunning}
+              title={hasRunning ? t("evalPage.experiment.runningGuard") : undefined}
+              data-testid="new-experiment-btn"
+              onClick={() => selectExp("new")}
+            >
+              + {t("evalPage.experiment.list.new")}
+            </Btn>
+          }
+          style={{ "--i": 0, marginBottom: 14 } as CSSProperties}
+        >
+          <table>
+            <thead>
               <tr>
-                <td colSpan={6} className="dim mono" style={{ textAlign: "center" }}>
-                  {t("evalPage.experiment.list.empty")}
-                </td>
+                <th>{t("evalPage.experiment.list.name")}</th>
+                <th>{t("evalPage.experiment.list.agent")}</th>
+                <th>{t("evalPage.experiment.list.stage")}</th>
+                <th>{t("evalPage.experiment.list.verdict")}</th>
+                <th>{t("evalPage.experiment.list.created")}</th>
+                <th>{t("evalPage.experiment.list.status")}</th>
               </tr>
-            )}
-          </tbody>
-        </table>
-        <Pager {...pagerProps} />
-      </Panel>
+            </thead>
+            <tbody>
+              {pageExperiments.map((e) => (
+                <tr
+                  key={e.id}
+                  data-testid="experiment-list-row"
+                  onClick={() => selectExp(e.id)}
+                  style={{
+                    cursor: "pointer",
+                    background:
+                      exp?.id === e.id ? "rgba(255,176,0,.045)" : undefined,
+                  }}
+                >
+                  <td className="pri">{e.name}</td>
+                  <td>{e.agent_name}</td>
+                  <td className="mono dim">
+                    {e.running_action
+                      ? `◐ ${e.running_action.toUpperCase()}`
+                      : e.stage.toUpperCase()}
+                  </td>
+                  <td className="mono dim">{verdictLabel(t, e.artifacts.verdict)}</td>
+                  <td className="mono dim">
+                    {e.created_at ? new Date(e.created_at).toLocaleString() : "—"}
+                  </td>
+                  <td>
+                    <Chip
+                      tone={experimentTone(e.status)}
+                      icon={e.status === "running" ? "◐" : "●"}
+                    >
+                      {e.status.toUpperCase()}
+                    </Chip>
+                  </td>
+                </tr>
+              ))}
+              {experiments.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="dim mono" style={{ textAlign: "center" }}>
+                    {t("evalPage.experiment.list.empty")}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+          <Pager {...pagerProps} />
+        </Panel>
+      )}
 
       <div className="eval-grid">
         <Panel

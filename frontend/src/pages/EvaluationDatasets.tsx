@@ -337,6 +337,9 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
   const selectDs = (id: string | null) => {
     setSearchParams(id ? { view: "datasets", ds: id } : { view: "datasets" });
   };
+  const backToList = () => {
+    setSearchParams({ view: "datasets" }, { replace: true });
+  };
 
   // Cloud rows that are the synced copy of a local dataset render as that
   // row's CLOUD chip — only cloud-ONLY snapshots get their own table row.
@@ -889,108 +892,116 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
     <section>
       <ViewHead
         kicker={t("evaluation.kicker")}
-        title={t("evalPage.datasets.title")}
-        meta={t("evalPage.datasets.meta")}
+        title={t(
+          creatingNew ? "evalPage.datasets.formTitleCreate" : "evalPage.datasets.title",
+        )}
+        meta={t(
+          creatingNew ? "evalPage.datasets.formSub" : "evalPage.datasets.meta",
+        )}
       />
       <EvaluationNav />
       <div style={{ marginBottom: 14 }}>
-        <Btn onClick={onBack}>◂ {t("evalPage.backToRuns")}</Btn>
+        <Btn onClick={creatingNew ? backToList : onBack}>
+          ◂ {t(creatingNew ? "evalPage.datasets.title" : "evalPage.backToRuns")}
+        </Btn>
       </div>
 
-      <Panel
-        brk
-        pad={false}
-        title={t("evalPage.datasets.listTitle")}
-        sub={t("evalPage.datasets.listSub")}
-        end={
-          <Btn primary data-testid="new-dataset-btn" onClick={() => selectDs("new")}>
-            + {t("evalPage.datasets.new")}
-          </Btn>
-        }
-        style={{ "--i": 0, marginBottom: 14 } as CSSProperties}
-      >
-        <table>
-          <thead>
-            <tr>
-              <th>{t("evalPage.datasets.col.name")}</th>
-              <th>{t("evalPage.datasets.col.items")}</th>
-              <th>{t("evalPage.datasets.col.kind")}</th>
-              <th>{t("evalPage.datasets.col.gt")}</th>
-              <th>{t("evalPage.datasets.col.cloud")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pageEntries.filter((entry) => entry.kind === "local").map(({ row }) => (
-              <tr
-                key={row.id}
-                data-testid={`dataset-row-${row.id}`}
-                onClick={() => selectDs(row.id)}
-                style={{
-                  cursor: "pointer",
-                  background:
-                    local?.id === row.id ? "rgba(255,176,0,.045)" : undefined,
-                }}
-              >
-                <td className="pri">{row.name}</td>
-                <td className="mono dim">{row.item_count}</td>
-                <td className="mono dim">{row.kind}</td>
-                <td>
-                  {row.has_ground_truth ? (
-                    <Chip tone="aqua" icon="◆">{t("evalPage.datasets.gt")}</Chip>
-                  ) : (
-                    <span className="mono dim">—</span>
-                  )}
-                </td>
-                <td>{cloudChip(row)}</td>
-              </tr>
-            ))}
-            {pageEntries.filter((entry) => entry.kind === "cloud").map(({ row }) => (
-              <tr
-                key={row.datasetId}
-                data-testid={`dataset-row-cloud-${row.datasetId}`}
-                onClick={() => selectDs(CLOUD_PREFIX + row.datasetId)}
-                style={{
-                  cursor: "pointer",
-                  background:
-                    cloud?.datasetId === row.datasetId ? "rgba(255,176,0,.045)" : undefined,
-                }}
-              >
-                <td className="mono">☁ {row.name ?? row.datasetId}</td>
-                <td className="mono dim">{row.exampleCount ?? "—"}</td>
-                <td className="mono dim">
-                  {(row.schemaType ?? "").replace("AGENTCORE_EVALUATION_", "")}
-                </td>
-                <td className="mono dim">—</td>
-                <td>
-                  <Chip tone={row.status === "ACTIVE" ? "good" : "warn"}>{row.status}</Chip>
-                </td>
-              </tr>
-            ))}
-            {loading && (
+      {!creatingNew && (
+        <Panel
+          brk
+          pad={false}
+          title={t("evalPage.datasets.listTitle")}
+          sub={t("evalPage.datasets.listSub")}
+          end={
+            <Btn primary data-testid="new-dataset-btn" onClick={() => selectDs("new")}>
+              + {t("evalPage.datasets.new")}
+            </Btn>
+          }
+          style={{ "--i": 0, marginBottom: 14 } as CSSProperties}
+        >
+          <table>
+            <thead>
               <tr>
-                <td colSpan={5} className="dim mono" style={{ textAlign: "center" }}>
-                  {t("common.loading")}
-                </td>
+                <th>{t("evalPage.datasets.col.name")}</th>
+                <th>{t("evalPage.datasets.col.items")}</th>
+                <th>{t("evalPage.datasets.col.kind")}</th>
+                <th>{t("evalPage.datasets.col.gt")}</th>
+                <th>{t("evalPage.datasets.col.cloud")}</th>
               </tr>
-            )}
-            {!loading && rows.length === 0 && cloudOnly.length === 0 && !cloudError && (
-              <tr>
-                <td colSpan={5} className="dim mono" style={{ textAlign: "center" }}>
-                  {t("evalPage.datasets.empty")}
-                </td>
-              </tr>
-            )}
-            {cloudError && (
-              <tr>
-                <td colSpan={5} className="dim mono" style={{ textAlign: "center" }}>
-                  {t("evalPage.datasets.cloudUnavailable")}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-        <Pager {...pagerProps} />
-      </Panel>
+            </thead>
+            <tbody>
+              {pageEntries.filter((entry) => entry.kind === "local").map(({ row }) => (
+                <tr
+                  key={row.id}
+                  data-testid={`dataset-row-${row.id}`}
+                  onClick={() => selectDs(row.id)}
+                  style={{
+                    cursor: "pointer",
+                    background:
+                      local?.id === row.id ? "rgba(255,176,0,.045)" : undefined,
+                  }}
+                >
+                  <td className="pri">{row.name}</td>
+                  <td className="mono dim">{row.item_count}</td>
+                  <td className="mono dim">{row.kind}</td>
+                  <td>
+                    {row.has_ground_truth ? (
+                      <Chip tone="aqua" icon="◆">{t("evalPage.datasets.gt")}</Chip>
+                    ) : (
+                      <span className="mono dim">—</span>
+                    )}
+                  </td>
+                  <td>{cloudChip(row)}</td>
+                </tr>
+              ))}
+              {pageEntries.filter((entry) => entry.kind === "cloud").map(({ row }) => (
+                <tr
+                  key={row.datasetId}
+                  data-testid={`dataset-row-cloud-${row.datasetId}`}
+                  onClick={() => selectDs(CLOUD_PREFIX + row.datasetId)}
+                  style={{
+                    cursor: "pointer",
+                    background:
+                      cloud?.datasetId === row.datasetId ? "rgba(255,176,0,.045)" : undefined,
+                  }}
+                >
+                  <td className="mono">☁ {row.name ?? row.datasetId}</td>
+                  <td className="mono dim">{row.exampleCount ?? "—"}</td>
+                  <td className="mono dim">
+                    {(row.schemaType ?? "").replace("AGENTCORE_EVALUATION_", "")}
+                  </td>
+                  <td className="mono dim">—</td>
+                  <td>
+                    <Chip tone={row.status === "ACTIVE" ? "good" : "warn"}>{row.status}</Chip>
+                  </td>
+                </tr>
+              ))}
+              {loading && (
+                <tr>
+                  <td colSpan={5} className="dim mono" style={{ textAlign: "center" }}>
+                    {t("common.loading")}
+                  </td>
+                </tr>
+              )}
+              {!loading && rows.length === 0 && cloudOnly.length === 0 && !cloudError && (
+                <tr>
+                  <td colSpan={5} className="dim mono" style={{ textAlign: "center" }}>
+                    {t("evalPage.datasets.empty")}
+                  </td>
+                </tr>
+              )}
+              {cloudError && (
+                <tr>
+                  <td colSpan={5} className="dim mono" style={{ textAlign: "center" }}>
+                    {t("evalPage.datasets.cloudUnavailable")}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+          <Pager {...pagerProps} />
+        </Panel>
+      )}
 
       <div className="eval-grid">
         <Panel

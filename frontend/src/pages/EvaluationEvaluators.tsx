@@ -185,6 +185,9 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
   const selectEv = (id: string | null) => {
     setSearchParams(id ? { view: "evaluators", ev: id } : { view: "evaluators" });
   };
+  const backToList = () => {
+    setSearchParams({ view: "evaluators" }, { replace: true });
+  };
   const editingId = selected?.source === "custom" ? selected.id : null;
   const { rows: pageRows, pagerProps } = useTablePage(
     ordered,
@@ -578,97 +581,115 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
     <section>
       <ViewHead
         kicker={t("evaluation.kicker")}
-        title={t("evalPage.evaluators.title")}
-        meta={t("evalPage.evaluators.meta")}
+        title={t(
+          creatingNew
+            ? "evalPage.evaluators.formTitleCreate"
+            : "evalPage.evaluators.title",
+        )}
+        meta={t(
+          creatingNew ? "evalPage.evaluators.formSub" : "evalPage.evaluators.meta",
+        )}
       />
       <EvaluationNav />
       <div style={{ marginBottom: 14 }}>
-        <Btn onClick={onBack}>◂ {t("evalPage.backToRuns")}</Btn>
+        <Btn onClick={creatingNew ? backToList : onBack}>
+          ◂ {t(
+            creatingNew ? "evalPage.evaluators.title" : "evalPage.backToRuns",
+          )}
+        </Btn>
       </div>
 
-      <Panel
-        brk
-        pad={false}
-        title={t("evalPage.evaluators.listTitle")}
-        sub={t("evalPage.evaluators.listSub")}
-        end={
-          <Btn primary data-testid="new-evaluator-btn" onClick={() => selectEv("new")}>
-            + {t("evalPage.evaluators.new")}
-          </Btn>
-        }
-        style={{ "--i": 0, marginBottom: 14 } as CSSProperties}
-      >
-        <table>
-          <thead>
-            <tr>
-              <th>{t("evalPage.evaluators.col.name")}</th>
-              <th>{t("evalPage.evaluators.col.level")}</th>
-              <th>{t("evalPage.evaluators.col.source")}</th>
-              <th>{t("evalPage.evaluators.col.gt")}</th>
-              <th>{t("evalPage.evaluators.col.status")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pageRows.map((row) => (
-              <tr
-                key={row.id}
-                data-testid={`evaluator-row-${row.id}`}
-                onClick={() => selectEv(row.id)}
-                style={{
-                  cursor: "pointer",
-                  background:
-                    !creatingNew && selected?.id === row.id ? "rgba(255,176,0,.045)" : undefined,
-                }}
-              >
-                {row.source === "custom" ? (
-                  <td className="pri">{row.name ?? row.id}</td>
-                ) : (
-                  <td className="mono" title={row.id}>{evaluatorLabel(t, row.id)}</td>
-                )}
-                <td>{levelBadge(row.level)}</td>
-                <td className="mono dim">{row.source.toUpperCase()}</td>
-                <td
-                  className="mono dim"
-                  title={row.requires_ground_truth ? t("evalPage.newRun.trajectoryNeedsGt") : undefined}
+      {!creatingNew && (
+        <Panel
+          brk
+          pad={false}
+          title={t("evalPage.evaluators.listTitle")}
+          sub={t("evalPage.evaluators.listSub")}
+          end={
+            <Btn primary data-testid="new-evaluator-btn" onClick={() => selectEv("new")}>
+              + {t("evalPage.evaluators.new")}
+            </Btn>
+          }
+          style={{ "--i": 0, marginBottom: 14 } as CSSProperties}
+        >
+          <table>
+            <thead>
+              <tr>
+                <th>{t("evalPage.evaluators.col.name")}</th>
+                <th>{t("evalPage.evaluators.col.level")}</th>
+                <th>{t("evalPage.evaluators.col.source")}</th>
+                <th>{t("evalPage.evaluators.col.gt")}</th>
+                <th>{t("evalPage.evaluators.col.status")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pageRows.map((row) => (
+                <tr
+                  key={row.id}
+                  data-testid={`evaluator-row-${row.id}`}
+                  onClick={() => selectEv(row.id)}
+                  style={{
+                    cursor: "pointer",
+                    background:
+                      selected?.id === row.id ? "rgba(255,176,0,.045)" : undefined,
+                  }}
                 >
-                  {row.requires_ground_truth ? "◆" : "—"}
-                </td>
-                <td>
-                  {row.source === "builtin" ? (
-                    <Chip tone="muted">{t("evalPage.evaluators.readonly")}</Chip>
-                  ) : row.status ? (
-                    <Chip tone={row.status === "ACTIVE" ? "good" : "warn"}>{row.status}</Chip>
+                  {row.source === "custom" ? (
+                    <td className="pri">{row.name ?? row.id}</td>
                   ) : (
-                    <span className="mono dim">—</span>
+                    <td className="mono" title={row.id}>{evaluatorLabel(t, row.id)}</td>
                   )}
-                </td>
-              </tr>
-            ))}
-            {loading && (
-              <tr>
-                <td colSpan={5} className="dim mono" style={{ textAlign: "center" }}>
-                  {t("common.loading")}
-                </td>
-              </tr>
-            )}
-            {!loading && loadError && (
-              <tr>
-                <td colSpan={5} className="mono" style={{ textAlign: "center", color: "var(--crit)" }}>
-                  ✕ {t("evalPage.evaluators.loadFailed")}
-                </td>
-              </tr>
-            )}
-            {!loading && !loadError && rows.length === 0 && (
-              <tr>
-                <td colSpan={5} className="dim mono" style={{ textAlign: "center" }}>
-                  {t("evalPage.evaluators.empty")}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-        <Pager {...pagerProps} />
-      </Panel>
+                  <td>{levelBadge(row.level)}</td>
+                  <td className="mono dim">{row.source.toUpperCase()}</td>
+                  <td
+                    className="mono dim"
+                    title={row.requires_ground_truth
+                      ? t("evalPage.newRun.trajectoryNeedsGt")
+                      : undefined}
+                  >
+                    {row.requires_ground_truth ? "◆" : "—"}
+                  </td>
+                  <td>
+                    {row.source === "builtin" ? (
+                      <Chip tone="muted">{t("evalPage.evaluators.readonly")}</Chip>
+                    ) : row.status ? (
+                      <Chip tone={row.status === "ACTIVE" ? "good" : "warn"}>{row.status}</Chip>
+                    ) : (
+                      <span className="mono dim">—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {loading && (
+                <tr>
+                  <td colSpan={5} className="dim mono" style={{ textAlign: "center" }}>
+                    {t("common.loading")}
+                  </td>
+                </tr>
+              )}
+              {!loading && loadError && (
+                <tr>
+                  <td
+                    colSpan={5}
+                    className="mono"
+                    style={{ textAlign: "center", color: "var(--crit)" }}
+                  >
+                    ✕ {t("evalPage.evaluators.loadFailed")}
+                  </td>
+                </tr>
+              )}
+              {!loading && !loadError && rows.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="dim mono" style={{ textAlign: "center" }}>
+                    {t("evalPage.evaluators.empty")}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+          <Pager {...pagerProps} />
+        </Panel>
+      )}
 
       <div className="eval-grid">
         <Panel
