@@ -14,6 +14,7 @@ import sys
 import time
 
 import httpx
+from _e2e_client import e2e_client
 
 AGENT_NAME = "eval-target"
 DATASET = [
@@ -47,7 +48,7 @@ def main() -> int:
     parser.add_argument("--base", default="http://localhost:8000")
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
-    client = httpx.Client(base_url=args.base, timeout=300)
+    client = e2e_client(args.base, timeout=300)
 
     agents = client.get("/api/agents").json()["agents"]
     agent = next((a for a in agents if a["name"] == AGENT_NAME and a["status"] == "active"), None)

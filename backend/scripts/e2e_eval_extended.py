@@ -13,12 +13,14 @@ terminal state before the next starts.
 Run:  cd backend && uv run python scripts/e2e_eval_extended.py
 """
 
+import argparse
 import json
 import sys
 import time
 import uuid
 
 import httpx
+from _e2e_client import e2e_client
 
 AGENT_NAME = "eval-target"
 LOOKBACK_HOURS = 24
@@ -68,7 +70,14 @@ def wait_run(client: httpx.Client, run_id: str, timeout_s: int = 2400) -> dict:
 
 
 def main() -> int:
-    client = httpx.Client(base_url="http://localhost:8000", timeout=300)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--base", default="http://localhost:8000")
+    args = parser.parse_args()
+
+    client = e2e_client(args.base, timeout=300)
     suffix = uuid.uuid4().hex[:6]
 
     agents = client.get("/api/agents").json()["agents"]

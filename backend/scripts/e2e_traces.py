@@ -6,17 +6,25 @@ Asserts the normalized span tree contains model + tool activity.
 Run:  cd backend && uv run python scripts/e2e_traces.py
 """
 
+import argparse
 import json
 import sys
 import time
 
-import httpx
+from _e2e_client import e2e_client
 
 AGENT_NAME = "hr-assistant"
 
 
 def main() -> int:
-    client = httpx.Client(base_url="http://localhost:8000", timeout=300)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--base", default="http://localhost:8000")
+    args = parser.parse_args()
+
+    client = e2e_client(args.base, timeout=300)
     agents = client.get("/api/agents").json()["agents"]
     agent = next((a for a in agents if a["name"] == AGENT_NAME and a["status"] == "active"), None)
     if not agent:

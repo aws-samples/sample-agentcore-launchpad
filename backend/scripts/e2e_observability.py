@@ -9,11 +9,13 @@ cache (2nd identical call <300ms).
 Run:  cd backend && uv run python scripts/e2e_observability.py
 """
 
+import argparse
 import json
 import sys
 import time
 
 import httpx
+from _e2e_client import e2e_client
 
 AGENT_NAME = "hr-assistant"
 RANGE = "24h"
@@ -37,7 +39,14 @@ def print_tree(node: dict, indent: int = 0) -> int:
 
 
 def main() -> int:
-    client = httpx.Client(base_url="http://localhost:8000", timeout=300)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--base", default="http://localhost:8000")
+    args = parser.parse_args()
+
+    client = e2e_client(args.base, timeout=300)
 
     print("── fresh spans: one chat turn with hr-assistant…")
     agents = client.get("/api/agents").json()["agents"]

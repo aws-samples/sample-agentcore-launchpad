@@ -6,6 +6,7 @@ cleanup of the probe agentic target.
 Run: cd backend && PYTHONPATH=. python scripts/e2e_kb_gateway.py <KB_ID>
 """
 
+import argparse
 import json
 import sys
 import time
@@ -86,4 +87,11 @@ def main(kb_id: str) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else "BL6ZKAVWFB"))
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "kb_id", nargs="?", default="BL6ZKAVWFB",
+        help="managed KB id to verify the gateway chain against",
+    )
+    sys.exit(main(parser.parse_args().kb_id))

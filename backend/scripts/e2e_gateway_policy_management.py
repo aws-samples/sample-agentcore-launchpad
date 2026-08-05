@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from _e2e_client import e2e_client
 
 TERMINAL_OPERATION_STATES = {"succeeded", "failed", "partial", "interrupted"}
 
@@ -149,7 +150,7 @@ def main() -> int:
     )
     if not statement:
         raise ValueError("statement file is empty")
-    client = httpx.Client(base_url=args.base, timeout=300)
+    client = e2e_client(args.base, timeout=300)
     gateway = gateway_detail(client, args.gateway_id)
     was_managed = gateway["managed"]
     print(f"-- target: {gateway['name']} ({gateway['id']})")

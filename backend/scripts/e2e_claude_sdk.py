@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-import httpx
+from _e2e_client import e2e_client
 
 AGENT_NAME = "e2e-claude-sdk"
 SYSTEM_PROMPT = (
@@ -42,7 +42,7 @@ def main() -> int:
             print(f"local smoke failed:\n{smoke.stderr[-1500:]}")
             return 1
 
-    client = httpx.Client(base_url=args.base, timeout=180)
+    client = e2e_client(args.base, timeout=180)
     for agent in client.get("/api/agents").json()["agents"]:
         if agent["name"] == AGENT_NAME:
             print(f"cleaning leftover agent {agent['id']}")
