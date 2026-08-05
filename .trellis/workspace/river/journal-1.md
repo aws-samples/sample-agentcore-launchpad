@@ -1830,3 +1830,50 @@ Traffic stage (04 · 发送流量) posted replay prompts serially; now concurren
 
 - If a per-prompt timeout should cost one sample instead of failing the whole send, that is a semantic change to the preserved exception contract (R5) — would add a 'timeout' bucket to status_counts.
 - Deferred: credential/connection reuse in sigv4_post (new boto3.Session + httpx.Client per call → N IMDS lookups and TLS handshakes per send). Touches the live invoke.py path, so it wants its own task.
+
+
+## Session 37: Release smoke-test runbook: make the e2e suite prod-runnable, then execute Core on prod
+
+**Date**: 2026-08-05
+**Task**: Release smoke-test runbook: make the e2e suite prod-runnable, then execute Core on prod
+**Package**: lab4-interactive
+**Branch**: `test/e2e-prod-auth-and-smoke-runbook`
+
+### Summary
+
+Turned 18 existing e2e_* scripts into a repeatable release gate: shared auth helper so they work against run_mode=prod, argparse on every script, a two-tier runbook (docs/release-smoke-test.md), and a real Core-tier run against the prod box on v0.0.3. PR #20 merged.
+
+### Main Changes
+
+- NEW backend/scripts/_e2e_client.py — probes /api/auth/status, logs in when required (LAUNCHPAD_E2E_* then LAUNCHPAD_AUTH_* env), no-ops on dev. All 14 HTTP e2e scripts adopt it; no direct httpx.Client( left.
+- Credentials resolved BEFORE the first mutating call — a 401 mid-deploy would leave a half-built agent on real AWS.
+- Session carried as an explicit Cookie header, NOT the jar: prod's cookie is Secure (cookie_secure = auth_cookie_secure or run_mode=='prod') and an RFC 6265 jar never sends a Secure cookie over http://, so a jar client logs in 200 then 401s on every later call — exactly the loopback base used on the box. Proved both ways against a throwaway prod-mode backend on :8012.
+- argparse added to all 7 scripts that lacked it (5 read no argv; e2e_kb_gateway/e2e_runtime_canary took a defaulted sys.argv[1]). Side effect: the 5 formerly-hardcoded-localhost scripts now accept --base.
+- e2e_registry.py search step: assert the endpoint contract (200/list/well-formed), poll ~20s, report 'fresh record indexed: True|False' without failing on False. SearchRegistryRecords is AWS-side semantic search whose index lagged >12h (record created 08-04 16:04 UTC still unfindable the next day).
+- NEW docs/release-smoke-test.md (307 lines): two tiers, per-step purpose/command/signal/time/cost/cleanup, collision preflight (one eval batch per ACCOUNT shared with the us-west-2 box, one A/B per gateway, 409 while any experiment row is running, hr-assistant dependency), SSH traps, honest coverage gaps. Spec: console-auth.md §3.8 records the script-client contract.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7f4129d` | (see git log) |
+| `8e4164a` | (see git log) |
+| `840561d` | (see git log) |
+| `6878ce4` | (see git log) |
+
+### Testing
+
+- [OK] Core tier executed on the prod box (us-east-1) at v0.0.3: 8/8 PASS after the step-4 fix (1s/58s/63s/44s/195s/189s/104s/233s/406s). Long-term memory influenced a NEW session; trace tree showed a real MCP tool call; observability cache 4528ms->2ms; batch eval Correctness 1.0 / Helpfulness 0.83.
+- [OK] Before/after ledger diff: no leaked agents/datasets/experiments/canaries; only append-only growth (eval_runs 7->9, chat_sessions 36->40). Harness was staged out-of-band (scp) so the tested product was byte-for-byte the deployed v0.0.3 — verified app/ unchanged, no restart.
+- [OK] MISTAKE + recovery: ran '--help' on 3 argparse-less scripts to read their flags; they executed for real on the LOCAL dev box and drove experiment cf8c17ad9f4c to promote (A/B stopped, treatment prompt + 2 tool overrides applied to lab-quota-advisor-rt, runtime v2 deployed). Rolled back via redeploy with agent_meta's original prompt + cleared overrides (originals were platform defaults, verified against kb_tool_description) -> version 3, invoke returns KB-cited answer. 'head' does not abort these: Python block-buffers stdout to a pipe.
+- [OK] NOT verified: Extended tier entirely (container/CodeBuild, full eval, configuration A/B, canary, policy) — so whether 10 concurrent gateway posts trip AgentCore throttling (the v0.0.3 change itself) is still unproven on real AWS. 方式C studio has no e2e script.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- e2e_knowledge_base.py never cleans up (no --keep, no delete) and leaves a KB owning an OpenSearch collection that keeps billing — worth giving it cleanup rather than documenting it.
+- The ledger inventory probe cannot see registry records or KBs (AWS-side, no SQLite table), which is how a leak hides behind a clean diff. Runbook now snapshots both over the API; a committed probe script would be better than copy-paste.
+- prod carries two generations of defaults-sync records (hr-db/pirate-speak vs hr-database/office-facts/expense-report-writer) because the default catalog was renamed and sync is not idempotent across renames.
