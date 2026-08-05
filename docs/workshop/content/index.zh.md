@@ -115,8 +115,8 @@ Logs Insights 查询。共享基础设施、模型调用、评估、日志摄取
 
 ## 相关文档
 
-- [docs/architecture.zh-CN.md](https://github.com/xiehust/agentcore_launchpad/blob/main/docs/architecture.zh-CN.md) — 控制台功能 ↔ AgentCore 服务的权威映射
-- [docs/setup.zh-CN.md](https://github.com/xiehust/agentcore_launchpad/blob/main/docs/setup.zh-CN.md) — 环境搭建细节
-- [docs/api.zh-CN.md](https://github.com/xiehust/agentcore_launchpad/blob/main/docs/api.zh-CN.md) — API 参考
-- [docs/troubleshooting.zh-CN.md](https://github.com/xiehust/agentcore_launchpad/blob/main/docs/troubleshooting.zh-CN.md) — 排障
-- [docs/teardown.zh-CN.md](https://github.com/xiehust/agentcore_launchpad/blob/main/docs/teardown.zh-CN.md) — 整体环境拆除
+- [docs/architecture.zh-CN.md](https://github.com/aws-samples/sample-agentcore-launchpad/blob/main/docs/architecture.zh-CN.md) — 控制台功能 ↔ AgentCore 服务的权威映射
+- [docs/setup.zh-CN.md](https://github.com/aws-samples/sample-agentcore-launchpad/blob/main/docs/setup.zh-CN.md) — 环境搭建细节
+- [docs/api.zh-CN.md](https://github.com/aws-samples/sample-agentcore-launchpad/blob/main/docs/api.zh-CN.md) — API 参考
+- [docs/troubleshooting.zh-CN.md](https://github.com/aws-samples/sample-agentcore-launchpad/blob/main/docs/troubleshooting.zh-CN.md) — 排障
+- [docs/teardown.zh-CN.md](https://github.com/aws-samples/sample-agentcore-launchpad/blob/main/docs/teardown.zh-CN.md) — 整体环境拆除

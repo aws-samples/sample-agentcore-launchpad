@@ -140,7 +140,7 @@ uv run python ../scripts/teardown.py --yes        # 真删（memory → registry
 ```
 
 删除是尽力而为、依赖方优先；S3 桶会被自动清空。更细的说明见
-[docs/teardown.zh-CN.md](https://github.com/xiehust/agentcore_launchpad/blob/main/docs/teardown.zh-CN.md)。
+[docs/teardown.zh-CN.md](https://github.com/aws-samples/sample-agentcore-launchpad/blob/main/docs/teardown.zh-CN.md)。
 
 ## 12.5 成本提示
 
@@ -161,9 +161,9 @@ uv run python ../scripts/teardown.py --yes        # 真删（memory → registry
 ## 12.6 继续往下走
 
 - 想改这套实验做自己的 demo：替换第 04 章的知识文档，并同步重写第 08 章的数据集真值和评估规则。
-- 想深入某个模块：[docs/architecture.zh-CN.md](https://github.com/xiehust/agentcore_launchpad/blob/main/docs/architecture.zh-CN.md) 是权威的
+- 想深入某个模块：[docs/architecture.zh-CN.md](https://github.com/aws-samples/sample-agentcore-launchpad/blob/main/docs/architecture.zh-CN.md) 是权威的
   「控制台功能 ↔ AgentCore 服务」映射表。
-- 遇到问题：[docs/troubleshooting.zh-CN.md](https://github.com/xiehust/agentcore_launchpad/blob/main/docs/troubleshooting.zh-CN.md)。
+- 遇到问题：[docs/troubleshooting.zh-CN.md](https://github.com/aws-samples/sample-agentcore-launchpad/blob/main/docs/troubleshooting.zh-CN.md)。
 
 ---
 

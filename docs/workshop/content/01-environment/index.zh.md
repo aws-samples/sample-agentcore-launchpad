@@ -40,7 +40,7 @@ npm install -g aws-cdk
 如果本机还没有源码：
 
 ```bash
-git clone https://github.com/xiehust/agentcore_launchpad.git
+git clone https://github.com/aws-samples/sample-agentcore-launchpad.git
 cd agentcore_launchpad
 ```
 
@@ -160,7 +160,7 @@ Registry、Policy 和 Observability 五项为「就绪」。Runtime 与 Evaluati
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 控制台打不开，端口 5173 无监听 | Vite 端口被占用后可能自动使用其它端口 | 查看启动输出中的实际端口，或用 `PLATFORM_UI_PORT` 指定 |
-| 服务健康某项为红或未就绪 | Bootstrap 未完成、区域错误或权限不足 | 核对身份和区域后重跑 `make bootstrap`；仍失败时查[排障文档](https://github.com/xiehust/agentcore_launchpad/blob/main/docs/troubleshooting.zh-CN.md) |
+| 服务健康某项为红或未就绪 | Bootstrap 未完成、区域错误或权限不足 | 核对身份和区域后重跑 `make bootstrap`；仍失败时查[排障文档](https://github.com/aws-samples/sample-agentcore-launchpad/blob/main/docs/troubleshooting.zh-CN.md) |
 | `make bootstrap` 报 CDK 未 bootstrap | 当前账号和区域缺少 CDK 引导 | 执行本章的 `cdk bootstrap` 命令后重跑 |
 | 后端启动时报 `config` 相关 KeyError | 缺少 `config/launchpad.yaml` | 先执行 `make bootstrap` |
 | 页面能打开但列表为空、统计为 0 | 当前账号还没有本实验的 Agent | 正常，继续第 02 章 |
