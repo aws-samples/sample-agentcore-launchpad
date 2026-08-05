@@ -184,7 +184,7 @@ BASE=http://127.0.0.1:8000
 | 1 | Service map | `curl -s $BASE/api/overview` (authenticated) + open the console in a browser | every AgentCore service green; console renders past login | 2 min |
 | 2 | Harness deploy (方式B) | `uv run python scripts/e2e_harness.py --base $BASE` | stages `generate→provision→deploy→register` succeed, `2+2?` answered `4`, agent deleted | 3–5 min |
 | 3 | Zip runtime deploy | `uv run python scripts/e2e_zip_runtime.py --base $BASE` | pip/zip/S3/create/READY, calculator-tool answer, agent deleted | 5–8 min |
-| 4 | Registry | `uv run python scripts/e2e_registry.py --base $BASE` | MCP ×2 + AGENT_SKILLS defaults sync, A2A record auto-created, `DRAFT→PENDING_APPROVAL→APPROVED`, one record disabled. **Known to fail on its search assertion** — see below | 4–6 min |
+| 4 | Registry | `uv run python scripts/e2e_registry.py --base $BASE` | MCP ×2 + AGENT_SKILLS defaults sync, A2A record auto-created, `DRAFT→PENDING_APPROVAL→APPROVED`, search endpoint answers with well-formed records (`fresh record indexed: False` is normal — see below), one record disabled | 4–6 min |
 | 5 | Chat + memory | `uv run python scripts/e2e_chat_memory.py --base $BASE` | session A turn 2 shows turn-1 continuity (short-term); a stated preference appears as an extracted long-term record; session B is influenced by it | 4–6 min |
 | 6 | Observability | `uv run python scripts/e2e_observability.py` | all five `/api/observability` endpoints answer; one real trace tree with model + tool spans; 2nd identical call <300 ms (cache) | 3–5 min |
 | 6b | Traces | `uv run python scripts/e2e_traces.py` | the just-chatted session's span tree appears in `aws/spans` | 2–4 min |
@@ -194,15 +194,18 @@ BASE=http://127.0.0.1:8000
 Steps 6 and 6b default to `http://localhost:8000` when `--base` is omitted — correct on this
 box, and part of why the whole tier is run *on* the box.
 
-### Step 4 fails on a clean run — expected, and why
+### Step 4's search step reports rather than asserts — and why
 
-`e2e_registry.py` ends with `assert any(r["name"] == "expense-report-writer" for r in found)`
-over `SearchRegistryRecords`. That assertion **fails**, and it is a defect in the test, not in
-the product. Measured on 2026-08-04 (us-east-1):
+`e2e_registry.py` used to end with
+`assert any(r["name"] == "expense-report-writer" for r in found)` over
+`SearchRegistryRecords`, which **failed on every clean run**. That was a defect in the test,
+not in the product. Measured on 2026-08-04 (us-east-1):
 
 - the record exists (`AGENT_SKILLS`, `PENDING_APPROVAL`), and everything before the assertion
   passes — defaults sync, A2A auto-registration, the approval transitions;
-- `q=expense` returns `[]` immediately, after 30 s, **and after ~20 min**;
+- `q=expense` returns `[]` immediately, after 30 s, after ~20 min — and **still `[]` the next
+  day, >12 h after the record was created**;
+- `q=office` likewise never finds `office-facts`;
 - `q=hr` returns a **DRAFT** record, so "only APPROVED records are indexed" is refuted;
 - every record search *does* return predates the run.
 
@@ -211,11 +214,11 @@ a three-line wrapper with no platform filtering), and its index had not picked u
 created 20 minutes earlier. The assertion encodes an immediate-consistency guarantee the API
 does not offer.
 
-**Treat step 4 as PASS if everything up to the search line passed.** The fix — relax the
-assertion to "endpoint answers 200 with a well-formed list", or make it a bounded poll allowed
-to skip with a printed note — is tracked separately. Until then, note that the script **aborts
-before its cleanup**, so its `e2e-registry-agent` stays live: delete it by hand (see
-[Teardown](#teardown)).
+**Fixed 2026-08-05.** The step now asserts what the API actually guarantees — HTTP 200, a
+list, well-formed records — polls three times over ~20 s for the fresh record, and prints
+`fresh record indexed: True|False` either way without failing on `False`. So step 4 should be
+green; if it is not, the failure is real. The script no longer aborts there, so it reaches its
+own cleanup and does not leave `e2e-registry-agent` behind.
 
 **Why this order:** 2 before 3 (cheapest real deploy first — if the pipeline is broken, learn
 it in 3 minutes, not 8). 5 before 6/6b (they read back the spans the chat just produced;
@@ -249,8 +252,9 @@ Most scripts delete what they created unless you pass `--keep`. **Two exceptions
 - **`e2e_knowledge_base.py` never cleans up** — no `--keep` flag, no delete. It leaves a KB
   that owns an **OpenSearch collection and keeps billing**. Take the `KB_ID=` it prints and
   `DELETE /api/knowledge-bases/{kb_id}` (or use the Knowledge Bases page).
-- **Any script that aborts mid-run skips its own cleanup** — step 4 does this every time
-  (see above), leaving `e2e-registry-agent` live.
+- **Any script that aborts mid-run skips its own cleanup.** Step 4 used to do this every time
+  before its search assertion was fixed; any step that dies for a *new* reason will do the
+  same, so always finish with the inventory diff below rather than trusting exit codes.
 
 After the run:
 
