@@ -46,6 +46,11 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
       api_format: "converse_stream",
     },
     {
+      model_id: "global.anthropic.claude-sonnet-4-6",
+      label: "Claude Sonnet 4.6 (global)",
+      api_format: "converse_stream",
+    },
+    {
       model_id: "global.anthropic.claude-opus-5",
       label: "Claude Opus 5 (global)",
       api_format: "converse_stream",

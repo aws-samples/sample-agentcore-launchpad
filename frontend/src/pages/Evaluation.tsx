@@ -239,7 +239,10 @@ export function Evaluation() {
     void refresh();
     const timer = setInterval(() => void refresh(), 8000);
     return () => clearInterval(timer);
-  }, [refresh, requestedAgentId]);
+  // Query-param sub-pages keep this component mounted. Reload the form options
+  // when the view changes so datasets created in DatasetsView are immediately
+  // available when the operator opens New Run.
+  }, [refresh, requestedAgentId, view]);
 
   // Trajectory matchers score against expected_trajectory ground truth — only
   // dataset runs whose selected dataset carries it can use them. Cloud
