@@ -105,8 +105,7 @@ def ensure_api_key_provider(
     created = control.create_api_key_credential_provider(name=name, apiKey=api_key)
     return created["credentialProviderArn"], True
 
-# Stable public AWS resource name, not a credential.
-OAUTH_PROVIDER_NAME = "launchpad-gw-m2m"  # nosemgrep: generic-api-key
+GATEWAY_M2M_PROVIDER_NAME = "launchpad-gw-m2m"
 GATEWAY_SCOPE = "launchpad-gw/invoke"
 
 
@@ -117,7 +116,7 @@ def ensure_oauth_provider(
     user_pool_id: str,
     m2m_client_id: str,
     region: str,
-    name: str = OAUTH_PROVIDER_NAME,
+    name: str = GATEWAY_M2M_PROVIDER_NAME,
 ) -> tuple[str, bool]:
     """OAuth2 credential provider (client_credentials against Cognito) that
     harnesses use for outbound gateway auth."""

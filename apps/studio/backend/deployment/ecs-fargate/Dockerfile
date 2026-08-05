@@ -41,6 +41,9 @@ COPY --chown=studio:studio agent_server.py .
 RUN echo '#!/bin/sh\ncurl -fsS http://localhost:8000/health || exit 1' > /health_check.sh && \
     chmod +x /health_check.sh
 
+# Health checks and the generated agent run as the unprivileged user.
+USER studio
+
 # Expose the application port
 EXPOSE 8000
 
@@ -53,5 +56,4 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
 # Run the application
-USER studio
 CMD ["python", "agent_server.py"]

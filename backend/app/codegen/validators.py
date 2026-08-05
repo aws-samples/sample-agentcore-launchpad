@@ -325,14 +325,13 @@ async def run_import_smoke(workspace: Path) -> list[ValidationIssue]:
     cmd = [exec_python, "-c", IMPORT_SMOKE_SNIPPET]
     try:
         # create_subprocess_exec executes argv directly; it has no shell parser.
-        proc = await (
-            asyncio.create_subprocess_exec(  # nosemgrep: dangerous-asyncio-create-exec-audit
-                *cmd,
-                cwd=str(workspace),
-                env=_stripped_env(),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+        # nosemgrep: dangerous-asyncio-create-exec-audit
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(workspace),
+            env=_stripped_env(),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await asyncio.wait_for(
             proc.communicate(), timeout=config.IMPORT_SMOKE_TIMEOUT_S
