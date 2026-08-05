@@ -11,7 +11,7 @@ import argparse
 import sys
 import time
 
-import httpx
+from _e2e_client import e2e_client
 
 AGENT_NAME = "e2e-zip-smoke"
 SYSTEM_PROMPT = (
@@ -27,7 +27,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=1200)
     args = parser.parse_args()
 
-    client = httpx.Client(base_url=args.base, timeout=180)
+    client = e2e_client(args.base, timeout=180)
 
     for agent in client.get("/api/agents").json()["agents"]:
         if agent["name"] == AGENT_NAME:

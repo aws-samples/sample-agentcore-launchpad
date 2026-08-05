@@ -21,6 +21,7 @@ import sys
 import time
 
 import httpx
+from _e2e_client import e2e_client
 
 AGENT_NAME = "hr-assistant"
 
@@ -55,7 +56,7 @@ def main() -> int:
     parser.add_argument("--actor", default="river")
     parser.add_argument("--extract-timeout", type=int, default=420)
     args = parser.parse_args()
-    client = httpx.Client(base_url=args.base, timeout=300)
+    client = e2e_client(args.base, timeout=300)
 
     agents = client.get("/api/agents").json()["agents"]
     agent = next((a for a in agents if a["name"] == AGENT_NAME and a["status"] == "active"), None)

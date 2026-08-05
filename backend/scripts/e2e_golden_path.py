@@ -18,6 +18,7 @@ import time
 import uuid
 
 import httpx
+from _e2e_client import e2e_client
 
 # unique per run — harness deletion is async, so a fixed name races re-runs
 AGENT_NAME = f"golden-path-{uuid.uuid4().hex[:6]}"
@@ -59,7 +60,7 @@ def main() -> int:
     parser.add_argument("--base", default="http://localhost:8000")
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
-    client = httpx.Client(base_url=args.base, timeout=360)
+    client = e2e_client(args.base, timeout=360)
 
     # 1 — bootstrap-verify
     health = client.get("/api/health").json()

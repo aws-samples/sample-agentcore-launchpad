@@ -11,7 +11,7 @@ import argparse
 import sys
 import time
 
-import httpx
+from _e2e_client import e2e_client
 
 AGENT_NAME = "e2e-harness-smoke"
 SYSTEM_PROMPT = "You are a concise math assistant. Answer with just the result."
@@ -24,7 +24,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=300)
     args = parser.parse_args()
 
-    client = httpx.Client(base_url=args.base, timeout=120)
+    client = e2e_client(args.base, timeout=120)
 
     # clean any leftover from a previous run
     for agent in client.get("/api/agents").json()["agents"]:

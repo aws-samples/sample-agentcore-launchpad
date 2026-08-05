@@ -12,11 +12,12 @@ page's poll loop does.
 Run:  cd backend && uv run python scripts/e2e_experiment.py
 """
 
+import argparse
 import json
 import sys
 import time
 
-import httpx
+from _e2e_client import e2e_client
 
 AGENT = "eval-target"
 CHALLENGER = "eval-target-v2"
@@ -78,7 +79,14 @@ def ensure_agent(client, name, prompt):
 
 
 def main() -> int:
-    client = httpx.Client(base_url="http://localhost:8000", timeout=300)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--base", default="http://localhost:8000")
+    args = parser.parse_args()
+
+    client = e2e_client(args.base, timeout=300)
     agent = ensure_agent(
         client, AGENT,
         "You are a precise math assistant. Use the calculator tool for arithmetic "

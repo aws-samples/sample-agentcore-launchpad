@@ -13,7 +13,7 @@ import json
 import sys
 import time
 
-import httpx
+from _e2e_client import e2e_client
 
 AGENT_NAME = "e2e-registry-agent"
 
@@ -23,7 +23,7 @@ def main() -> int:
     parser.add_argument("--base", default="http://localhost:8000")
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
-    client = httpx.Client(base_url=args.base, timeout=300)
+    client = e2e_client(args.base, timeout=300)
 
     print("── sync-defaults (MCP + AGENT_SKILLS records)…")
     res = client.post("/api/registry/sync-defaults")

@@ -22,7 +22,7 @@ the (deleted) dedicated resources are created.
 Run:  cd backend && uv run python scripts/e2e_runtime_canary.py [agent-name]
 """
 
-import sys
+import argparse
 import time
 
 from app.core.db import SessionLocal
@@ -33,7 +33,24 @@ from app.optimization.models import RuntimeCanary
 from app.services.agentcore.client import control_client
 from app.services.invoke import invoke_agent_text
 
-AGENT_NAME = sys.argv[1] if len(sys.argv) > 1 else "eval-target"
+
+def _parse_agent_name() -> str:
+    """Parsed at import time because the module-level flow below reads it.
+
+    Going through argparse (rather than `sys.argv[1]`) is what makes `--help`
+    print usage instead of silently canary-ing the default agent on real AWS.
+    """
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "agent_name", nargs="?", default="eval-target",
+        help="active zip_runtime agent to canary (default: eval-target)",
+    )
+    return parser.parse_args().agent_name
+
+
+AGENT_NAME = _parse_agent_name()
 
 
 def log(msg: str) -> None:

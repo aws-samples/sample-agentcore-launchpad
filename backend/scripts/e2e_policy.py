@@ -7,13 +7,21 @@ decision log the Governance UI renders.
 Run:  cd backend && uv run python scripts/e2e_policy.py
 """
 
+import argparse
 import sys
 
-import httpx
+from _e2e_client import e2e_client
 
 
 def main() -> int:
-    client = httpx.Client(base_url="http://localhost:8000", timeout=120)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--base", default="http://localhost:8000")
+    args = parser.parse_args()
+
+    client = e2e_client(args.base, timeout=120)
 
     cases = [
         ("demo", "hr-database___get_employee", {"employee_id": "EMP-1024"}, "ALLOW"),

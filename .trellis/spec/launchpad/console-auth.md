@@ -267,6 +267,35 @@ tooltip names `LAUNCHPAD_AUTH_PASSWORD`. Keep that badge: an empty slot reads as
 a missing sign-out button and hides the fact that the console is open to anyone
 who can reach it.
 
+### 3.8 Script clients (`backend/scripts/e2e_*.py`)
+
+The `e2e_*` scripts hit a live deployment, so they must survive both postures. Two
+rules, both load-bearing:
+
+- **Get the client from `scripts/_e2e_client.py`, never `httpx.Client(...)` directly.**
+  `e2e_client(base, timeout=…)` probes `/api/auth/status`, returns as-is when
+  `auth_required` is false (dev keeps behaving exactly as before), and otherwise logs
+  in with `LAUNCHPAD_E2E_USERNAME`/`LAUNCHPAD_E2E_PASSWORD` (falling back to the
+  `LAUNCHPAD_AUTH_*` pair). Missing credentials abort **before the first mutating
+  call** — a 401 discovered mid-deploy leaves a half-built agent on real AWS.
+- **The session is carried as an explicit `Cookie` header, not in the jar.** Against a
+  prod deployment the cookie is `Secure` (§3.4), and an RFC 6265 jar never attaches a
+  `Secure` cookie to an `http://` request — so a jar-based client logs in fine and then
+  401s on every following call, which is exactly the loopback base
+  (`http://127.0.0.1:8000`) these scripts use on the box. `e2e_client` reads the token
+  out of the login response, clears the jar, and pins `Cookie: launchpad_session=…`.
+  That relaxation is **client-side only**; `Secure` is a hint to the client and the
+  server neither sees nor cares, so the product's cookie posture is untouched.
+  The helper re-probes `status` afterwards and fails loudly if `authenticated` is not
+  true, which is the guard against the next variant of this trap.
+
+Related convention (not auth-specific but discovered with it): **every `e2e_*` script
+must parse its arguments through `argparse`.** Five of them once read no argv at all, so
+`--help` was not a safe probe — it executed the test. One such invocation resumed a live
+experiment and drove it to `promote` on a real deployment. Piping to `head` does not
+save you either: Python block-buffers stdout to a pipe, so the script never hits `EPIPE`
+and runs to completion.
+
 ## 4. Validation & Error Matrix
 
 | Condition | Result |
