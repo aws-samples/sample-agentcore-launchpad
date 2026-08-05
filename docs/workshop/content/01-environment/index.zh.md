@@ -8,7 +8,7 @@ weight: 10
 > **目标**：在本地开发机准备 AgentCore Launchpad，使用自己的 AWS 账号部署共享基础设施，
 > 启动中文控制台。
 >
-> **前置条件**：AWS 账号可在 `us-west-2` 使用 Bedrock AgentCore Runtime、Harness、
+> **前置条件**：AWS 账号可在 `us-east-1` 使用 Bedrock AgentCore Runtime、Harness、
 > Registry、Gateway、Policy 和 Evaluation；当前身份具备管理员级权限。
 >
 > **预计耗时**：首次约 15–20 分钟，其中 `make bootstrap` 通常需要 8–12 分钟；
@@ -48,10 +48,10 @@ cd agentcore_launchpad
 
 ## 1.2 配置区域、凭证与模型访问
 
-先在本地终端配置自有账号的 AWS 凭证，再将区域设为 `us-west-2` 并核对身份：
+先在本地终端配置自有账号的 AWS 凭证，再将区域设为 `us-east-1` 并核对身份：
 
 ```bash
-export AWS_REGION=us-west-2
+export AWS_REGION=us-east-1
 export AWS_DEFAULT_REGION="$AWS_REGION"
 aws sts get-caller-identity
 ```
@@ -59,7 +59,7 @@ aws sts get-caller-identity
 继续前请确认输出中的账号和角色正确。后续创建的资源和费用都会归到这个账号。
 
 本实验的两个 Agent 必须使用同一个模型。首选
-`global.anthropic.claude-sonnet-5`；如果当前账号无法使用，则两个 Agent 一起回退到
+`Bedrock Mantle` - `openai.gpt-5.6-sol`；如果当前账号无法使用，则两个 Agent 一起回退到
 `global.amazon.nova-2-lite-v1:0`。创建 Agent 时还要把模型来源从默认的
 `Bedrock Mantle` 改为 `Bedrock`。
 
@@ -92,7 +92,7 @@ make bootstrap
 
 | 资源类别 | 名称 |
 |---|---|
-| S3 产物桶 | `launchpad-artifacts-<ACCOUNT_ID>-us-west-2` |
+| S3 产物桶 | `launchpad-artifacts-<ACCOUNT_ID>-us-east-1` |
 | IAM 执行角色 | `launchpad-agent-execution-role` |
 | Cognito 用户池 | `launchpad-users` |
 | AgentCore Registry | `launchpad-registry` |
@@ -124,7 +124,7 @@ make dev              # 前台模式，占用当前终端
 ![控制台总览](../static/images/01-overview.png)
 *图 1-1：全新账号的控制台总览。Runtime 和 Evaluation 尚未创建属于正常状态。*
 
-确认右上角显示 `● 系统运行正常`、区域为 `us-west-2`，服务健康面板里的 Gateway、Memory、
+确认右上角显示 `● 系统运行正常`、区域为 `us-east-1`，服务健康面板里的 Gateway、Memory、
 Registry、Policy 和 Observability 五项为「就绪」。Runtime 与 Evaluation 显示「尚未创建」
 是正常的，它们会在后续部署 Agent 和运行评估后点亮。
 
@@ -147,7 +147,7 @@ Registry、Policy 和 Observability 五项为「就绪」。Runtime 与 Evaluati
 ## 本章验证清单
 
 - [ ] `aws sts get-caller-identity` 返回预期的自有账号
-- [ ] `AWS_REGION` 和 `AWS_DEFAULT_REGION` 均为 `us-west-2`
+- [ ] `AWS_REGION` 和 `AWS_DEFAULT_REGION` 均为 `us-east-1`
 - [ ] `uv`、Node.js、CDK、AWS CLI 和 Git 均可用
 - [ ] `config/launchpad.yaml` 包含所需的 `resources.*` 标识符
 - [ ] 本地浏览器可以打开控制台，右上角显示 `● 系统运行正常`
