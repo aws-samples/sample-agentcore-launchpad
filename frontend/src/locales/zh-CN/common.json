@@ -232,6 +232,7 @@
         "unsupported-protocol": "暂不支持该 Runtime 协议。",
         "inspection-failed": "无法读取 Runtime 详情。",
         "external-authorizer": "使用外部自定义 JWT，无法对话。",
+        "harness-managed": "这是托管 Harness 的底层 Runtime，请使用对应的 Harness Agent。",
         "runtime-not-ready": "Runtime 尚未就绪，无法对话。",
         "unknown": "无法判断该能力。"
       }

@@ -378,6 +378,15 @@ invokable only while AWS reports `READY` and no custom JWT authorizer is
 configured. Custom-JWT resources can be retained as inventory but are excluded
 from Chat and `/v1`.
 
+The managed Harness service materializes each harness as a backing Runtime it
+owns (named `harness_<harnessName>`, running the service's own
+`public.ecr.aws/…/harness-<region>` image) that rejects `InvokeAgentRuntime`.
+The scan joins `ListHarnesses` to flag these rows as artifact type `harness`:
+they are never importable (reason `harness-managed`), never invokable, and when
+the owning harness is a Launchpad agent the row links to it as already managed.
+If `ListHarnesses` fails, the image heuristic still flags them — only the owner
+linkage is lost.
+
 ## The invoke chain
 
 The Chat playground (`/api/chat/{id}`) and the public API

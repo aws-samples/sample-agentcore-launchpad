@@ -1,5 +1,6 @@
 """Read-only Runtime discovery and explicit externally-owned ledger imports."""
 
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -8,11 +9,28 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
 from app.models.ledger import Agent
+from app.services.agentcore import harness as harness_api
 from app.services.agentcore import runtime as runtime_api
 
 DISCOVERED_METHOD = "discovered_runtime"
 AGENT_PROTOCOLS = {"http", "a2a"}
 FAILURE_STATUSES = {"CREATE_FAILED", "UPDATE_FAILED", "DELETING", "DELETE_FAILED"}
+
+# The managed Harness service materializes each harness as a backing Runtime it
+# owns: named ``harness_<harnessName>`` and running the service's public image
+# ``public.ecr.aws/<alias>/harness-<region>``. Such runtimes reject
+# InvokeAgentRuntime (only InvokeHarness works), so they must never be imported
+# or invoked as plain runtimes.
+_HARNESS_RUNTIME_PREFIX = "harness_"
+_HARNESS_IMAGE = re.compile(r"^public\.ecr\.aws/[^/]+/harness-[a-z0-9-]+([:@]|$)")
+_HARNESS_MANAGED_CAPABILITY = {
+    "eligible": False,
+    "reason_code": "harness-managed",
+    "reason": (
+        "This runtime is the backing runtime of a managed Harness; it cannot be "
+        "imported or invoked directly."
+    ),
+}
 
 
 def _iso(value: Any) -> str | None:
@@ -45,6 +63,40 @@ def _artifact_type(detail: dict[str, Any]) -> str:
     return "unknown"
 
 
+def _harness_index(control: Any) -> dict[str, dict[str, Any]]:
+    """Backing-runtime name → owning harness summary (fail-soft to {}).
+
+    On ListHarnesses failure the image heuristic in ``_backing_harness`` still
+    flags harness-managed runtimes, just without the owner linkage.
+    """
+    try:
+        summaries = harness_api.list_harnesses(control)
+    except Exception:
+        return {}
+    return {
+        f"{_HARNESS_RUNTIME_PREFIX}{summary['harnessName']}": summary
+        for summary in summaries
+        if summary.get("harnessName")
+    }
+
+
+def _backing_harness(
+    detail: dict[str, Any],
+    summary: dict[str, Any],
+    harness_index: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """The harness owning this runtime; {} when harness-managed but unmatched."""
+    name = str(detail.get("agentRuntimeName") or summary.get("agentRuntimeName") or "")
+    owner = harness_index.get(name)
+    if owner is not None:
+        return owner
+    artifact = detail.get("agentRuntimeArtifact") or {}
+    image = str((artifact.get("containerConfiguration") or {}).get("containerUri") or "")
+    if _HARNESS_IMAGE.match(image):
+        return {}
+    return None
+
+
 def _authorizer_type(detail: dict[str, Any]) -> str:
     authorizer = detail.get("authorizerConfiguration")
     if authorizer is None or authorizer == {}:
@@ -71,8 +123,10 @@ def _import_capability(protocol: str) -> dict[str, Any]:
 
 
 def _runtime_invoke_capability(
-    protocol: str, aws_status: str, authorizer_type: str
+    protocol: str, aws_status: str, authorizer_type: str, artifact_type: str = "unknown"
 ) -> dict[str, Any]:
+    if artifact_type == "harness":
+        return dict(_HARNESS_MANAGED_CAPABILITY)
     if protocol == "mcp":
         return {
             "eligible": False,
@@ -117,6 +171,7 @@ def invoke_capability(agent: Agent) -> dict[str, Any]:
         str(spec.get("protocol") or "unknown").lower(),
         str(discovery.get("aws_status") or "UNKNOWN").upper(),
         str(discovery.get("authorizer_type") or "unknown").lower(),
+        str(discovery.get("artifact_type") or "unknown").lower(),
     )
 
 
@@ -134,13 +189,26 @@ def require_invoke_capability(agent: Agent) -> None:
     )
 
 
-def _managed_match(db: Session, runtime_arn: str | None, runtime_id: str) -> Agent | None:
+def _managed_match(
+    db: Session,
+    runtime_arn: str | None,
+    runtime_id: str,
+    harness: dict[str, Any] | None = None,
+) -> Agent | None:
+    """Ledger row owning this runtime — directly, or via its owning harness.
+
+    Prefers a launchpad-managed row over a stale discovered import of the same
+    resource, so a harness backing runtime surfaces its real harness agent.
+    """
+    arns = {value for value in (runtime_arn, (harness or {}).get("arn")) if value}
+    ids = {value for value in (runtime_id, (harness or {}).get("harnessId")) if value}
     rows = db.query(Agent).filter(Agent.status != "deleted").all()
-    if runtime_arn:
-        match = next((row for row in rows if row.arn == runtime_arn), None)
-        if match is not None:
-            return match
-    return next((row for row in rows if row.resource_id == runtime_id), None)
+    matches = [row for row in rows if row.arn in arns] or [
+        row for row in rows if row.resource_id in ids
+    ]
+    if not matches:
+        return None
+    return min(matches, key=lambda row: row.method == DISCOVERED_METHOD)
 
 
 def _candidate(
@@ -148,6 +216,7 @@ def _candidate(
     db: Session,
     *,
     summary: dict[str, Any] | None = None,
+    harness_index: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     summary = summary or {}
     runtime_id = str(detail.get("agentRuntimeId") or summary.get("agentRuntimeId") or "")
@@ -155,8 +224,14 @@ def _candidate(
     protocol = _protocol(detail)
     aws_status = str(detail.get("status") or summary.get("status") or "UNKNOWN").upper()
     authorizer_type = _authorizer_type(detail)
-    import_capability = _import_capability(protocol)
-    managed = _managed_match(db, runtime_arn or None, runtime_id)
+    harness = _backing_harness(detail, summary, harness_index or {})
+    artifact_type = "harness" if harness is not None else _artifact_type(detail)
+    import_capability = (
+        dict(_HARNESS_MANAGED_CAPABILITY)
+        if harness is not None
+        else _import_capability(protocol)
+    )
+    managed = _managed_match(db, runtime_arn or None, runtime_id, harness=harness)
     return {
         "runtime_id": runtime_id,
         "runtime_arn": runtime_arn,
@@ -169,7 +244,7 @@ def _candidate(
         ),
         "aws_status": aws_status,
         "protocol": protocol.upper(),
-        "artifact_type": _artifact_type(detail),
+        "artifact_type": artifact_type,
         "authorizer_type": authorizer_type,
         "last_updated_at": _iso(
             detail.get("lastUpdatedAt") or summary.get("lastUpdatedAt")
@@ -181,7 +256,7 @@ def _candidate(
         "reason_code": import_capability["reason_code"],
         "reason": import_capability["reason"],
         "invoke_capability": _runtime_invoke_capability(
-            protocol, aws_status, authorizer_type
+            protocol, aws_status, authorizer_type, artifact_type
         ),
     }
 
@@ -228,11 +303,14 @@ def scan_runtimes(control: Any, db: Session) -> list[dict[str, Any]]:
             status_code=502,
         ) from exc
 
+    harness_index = _harness_index(control)
     candidates: list[dict[str, Any]] = []
     for summary in summaries:
         try:
             detail = runtime_api.get_runtime(control, str(summary["agentRuntimeId"]))
-            candidates.append(_candidate(detail, db, summary=summary))
+            candidates.append(
+                _candidate(detail, db, summary=summary, harness_index=harness_index)
+            )
         except Exception as exc:
             candidates.append(_inspection_failure(summary, db, exc))
     return candidates
@@ -283,16 +361,32 @@ def import_runtimes(
         "already_managed": [],
         "failed": [],
     }
+    harness_index = _harness_index(control)
     for runtime_id in runtime_ids:
         try:
             detail = runtime_api.get_runtime(control, runtime_id)
-            candidate = _candidate(detail, db)
+            candidate = _candidate(detail, db, harness_index=harness_index)
         except Exception as exc:
             result["failed"].append(
                 {
                     "runtime_id": runtime_id,
                     "reason_code": "inspection-failed",
                     "reason": f"Runtime detail inspection failed ({_aws_error(exc)}).",
+                }
+            )
+            continue
+
+        # Ownership first: a launchpad-managed resource (including the harness
+        # owning a backing runtime) must never be duplicated as a new import.
+        if (
+            candidate["managed_agent_id"] is not None
+            and candidate["managed_agent_method"] != DISCOVERED_METHOD
+        ):
+            result["already_managed"].append(
+                {
+                    "runtime_id": runtime_id,
+                    "agent_id": candidate["managed_agent_id"],
+                    "agent_name": candidate["managed_agent_name"],
                 }
             )
             continue
@@ -307,16 +401,11 @@ def import_runtimes(
             )
             continue
 
-        existing = _managed_match(db, candidate["runtime_arn"], runtime_id)
-        if existing is not None and existing.method != DISCOVERED_METHOD:
-            result["already_managed"].append(
-                {
-                    "runtime_id": runtime_id,
-                    "agent_id": existing.id,
-                    "agent_name": existing.name,
-                }
-            )
-            continue
+        existing = (
+            db.get(Agent, candidate["managed_agent_id"])
+            if candidate["managed_agent_id"] is not None
+            else None
+        )
 
         now = datetime.now(UTC)
         created = existing is None

@@ -232,6 +232,7 @@
         "unsupported-protocol": "This Runtime protocol is not supported.",
         "inspection-failed": "Runtime details could not be inspected.",
         "external-authorizer": "External custom JWT authorizer; Chat is unavailable.",
+        "harness-managed": "Backing runtime of a managed Harness; use its Harness agent instead.",
         "runtime-not-ready": "Runtime is not READY; Chat is unavailable.",
         "unknown": "Capability could not be determined."
       }
