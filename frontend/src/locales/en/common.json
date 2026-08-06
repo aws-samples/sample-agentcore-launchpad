@@ -258,14 +258,14 @@
       "note": "Config-bundle contract baked in. Generated agents read system prompt & tool descriptions via get_config_bundle() with defaults as fallback — required for A/B experiments in the Evaluation layer. OTEL (ADOT) instrumentation is added automatically.",
       "titleZip": "CONFIGURE — STRANDS · ZIP FAST PATH",
       "templateTools": "TOOLS — STRANDS TEMPLATE",
-      "toolkits": "TOOL SET — PLATFORM TOOLKIT",
+      "toolkits": "TOOL SET — DEMO TOOLKIT",
       "toolkitName": {
         "hr_assistant": "hr_assistant"
       },
       "toolkitDesc": {
-        "hr_assistant": "Five HR tools over deterministic mock data: PTO balance and requests, HR policy lookup, benefits summary, pay stub."
+        "hr_assistant": "Five HR tools over deterministic mock data for demonstrating agent evaluation and config-bundle A/B optimization: PTO balance and requests, HR policy lookup, benefits summary, and pay stub."
       },
-      "toolkitNote": "A toolkit compiles local tool functions into the generated agent — no gateway, no IAM grant, no extra dependency. Selecting one REPLACES the template's own calculator / current_utc_time, so the deployed tool surface is exactly the toolkit's, and its tools stay eligible for config-bundle A/B on system prompt and tool descriptions. Mock data is deterministic: the same prompt returns the same tool result.",
+      "toolkitNote": "This demo toolkit compiles local tool functions into the generated agent for demonstrating evaluation and config-bundle A/B optimization. It uses deterministic mock data and is not intended for production use. Selecting it REPLACES the template's own calculator / current_utc_time; no gateway, IAM grant, or extra dependency is required.",
       "titleContainer": "CONFIGURE — OTHER AGENT SDK · CONTAINER",
       "agentSdk": "AGENT SDK",
       "agentSdkClaude": "Claude Agent SDK",
