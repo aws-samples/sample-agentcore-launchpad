@@ -106,9 +106,12 @@ class TestModelResources:
 # ─── what a plain agent gets, and what it does not ───────────────────────────
 
 class TestBaselineAgent:
-    def test_gets_only_model_and_telemetry(self):
+    def test_gets_only_model_telemetry_and_config_bundle_reads(self):
+        # ConfigurationBundleRead is unconditional for a generated agent: its code
+        # always reads get_config_bundle(), so the role always needs to resolve one.
         assert _sids(_spec(memory={"short_term": False, "long_term": False})) == {
             "BedrockModels",
+            "ConfigurationBundleRead",
             "Telemetry",
             "TelemetryTracing",
         }
@@ -362,3 +365,61 @@ class TestFsPolicyCharacterisation:
 
     def test_the_policy_name_is_unchanged_so_a_migration_can_find_the_old_one(self):
         assert agent_iam.fs_policy_name("my-agent") == "launchpad-fs-my-agent"
+
+
+def test_zip_runtime_gateway_role_matches_the_harness_one_exactly():
+    """Requirement B's first acceptance criterion: a zip_runtime agent with a
+    gateway ToolRef must get the role it already got — this feature adds transport,
+    not authorization. _uses_gateway() never reads spec.method, so the two policies
+    must be identical apart from the model statement neither side changes."""
+    tools = [{"type": "gateway", "name": "launchpad-gw"}]
+    zip_spec = _spec(tools=tools)
+    harness_spec = _spec(method="harness", tools=tools)
+
+    def without_bundle_reads(doc):
+        # The only legitimate difference: a Harness never resolves a routed bundle
+        # with its own role (the service does it), a generated runtime always does.
+        return [s for s in doc["Statement"] if s["Sid"] != "ConfigurationBundleRead"]
+
+    zip_doc = agent_iam.policy_document(zip_spec, CTX)
+    harness_doc = agent_iam.policy_document(harness_spec, CTX)
+    assert without_bundle_reads(zip_doc) == without_bundle_reads(harness_doc)
+    assert "AgentCoreWorkloadIdentity" in _sids(zip_spec)
+    assert "IdentityVaultSecrets" in _sids(zip_spec)
+
+
+def test_gateway_workload_statement_covers_both_token_mechanisms():
+    """The generated client tries the injected workload token first and mints one
+    with the execution role second. Both actions must already be granted, or the
+    fallback silently cannot work."""
+    statement = _statement(_spec(tools=[{"type": "gateway", "name": "launchpad-gw"}]),
+                           "AgentCoreWorkloadIdentity")
+    assert "bedrock-agentcore:GetWorkloadAccessToken" in statement["Action"]
+    assert "bedrock-agentcore:GetResourceOauth2Token" in statement["Action"]
+
+
+def test_no_gateway_tool_still_grants_no_workload_identity():
+    assert "AgentCoreWorkloadIdentity" not in _sids(_spec())
+
+
+def test_generated_agents_can_read_a_routed_configuration_bundle():
+    """Measured live: without this the SDK's bundle resolution fails with
+    AccessDenied *inside* the runtime and the whole invocation 500s. The shared CDK
+    role has the grant (base_stack ABTestOrchestration); a per-agent role did not,
+    so every config-bundle experiment on a per-agent-role agent was broken."""
+    statement = _statement(_spec(), "ConfigurationBundleRead")
+    assert statement["Action"] == [
+        "bedrock-agentcore:GetConfigurationBundle",
+        "bedrock-agentcore:GetConfigurationBundleVersion",
+    ]
+    # read-only, and scoped to this account+region rather than "*"
+    assert statement["Resource"] == [
+        "arn:aws:bedrock-agentcore:us-west-2:123456789012:configuration-bundle/*"
+    ]
+    for method in ("zip_runtime", "studio", "container"):
+        assert "ConfigurationBundleRead" in _sids(_spec(method=method))
+
+
+def test_harness_agents_get_no_configuration_bundle_grant():
+    """A Harness never reads a bundle with its own role — the service routes it."""
+    assert "ConfigurationBundleRead" not in _sids(_spec(method="harness"))

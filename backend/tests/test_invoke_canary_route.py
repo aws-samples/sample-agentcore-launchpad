@@ -88,7 +88,10 @@ def test_no_canary_uses_direct_invoke_no_qualifier(monkeypatch):
     )
     captured: dict = {}
 
-    def fake_invoke(client, arn, prompt, *, session_id=None, actor_id="default", qualifier=None):
+    def fake_invoke(
+        client, arn, prompt, *, session_id=None, actor_id="default",
+        qualifier=None, runtime_user_id=None,
+    ):
         captured.update(
             arn=arn, prompt=prompt, session_id=session_id,
             actor_id=actor_id, qualifier=qualifier,
@@ -124,7 +127,10 @@ def test_gateway_error_falls_back_to_stable_endpoint(monkeypatch):
     monkeypatch.setattr(invoke_mod.gateway, "sigv4_post", boom_sigv4)
     captured: dict = {}
 
-    def fake_invoke(client, arn, prompt, *, session_id=None, actor_id="default", qualifier=None):
+    def fake_invoke(
+        client, arn, prompt, *, session_id=None, actor_id="default",
+        qualifier=None, runtime_user_id=None,
+    ):
         captured.update(arn=arn, qualifier=qualifier, session_id=session_id)
         return {"text": "control reply", "session_id": session_id or "s"}
 
@@ -154,7 +160,10 @@ def test_provisioning_route_invokes_stable_endpoint_directly(monkeypatch):
     )
     captured: dict = {}
 
-    def fake_invoke(client, arn, prompt, *, session_id=None, actor_id="default", qualifier=None):
+    def fake_invoke(
+        client, arn, prompt, *, session_id=None, actor_id="default",
+        qualifier=None, runtime_user_id=None,
+    ):
         captured.update(
             arn=arn, qualifier=qualifier, session_id=session_id, actor_id=actor_id
         )
@@ -188,7 +197,10 @@ def test_gateway_non_200_falls_back_to_stable_endpoint(monkeypatch):
     )
     captured: dict = {}
 
-    def fake_invoke(client, arn, prompt, *, session_id=None, actor_id="default", qualifier=None):
+    def fake_invoke(
+        client, arn, prompt, *, session_id=None, actor_id="default",
+        qualifier=None, runtime_user_id=None,
+    ):
         captured.update(qualifier=qualifier)
         return {"text": "control reply", "session_id": "s"}
 

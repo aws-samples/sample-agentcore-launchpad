@@ -37,6 +37,7 @@ from app.models.ledger import Agent
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
+from app.templates import gateway_support
 
 EVAL_SUPPORTED_METHODS = {"zip_runtime", "studio", "container", "harness"}
 TELEMETRY_READY_GRACE_SECONDS = 120
@@ -131,6 +132,7 @@ def execute_run(
     insights: list[str] | None = None,
     session_metadata: list[dict[str, Any]] | None = None,
     actor_model_id: str | None = None,
+    runtime_user_id: str | None = None,
 ) -> None:
     """Drive one evaluation run to completion (runs inside the account lock).
 
@@ -159,6 +161,7 @@ def execute_run(
                         scenario=scenario,
                         actor_model_id=actor_model_id or "",
                         protocol=protocol,
+                        runtime_user_id=runtime_user_id,
                     )
                 else:
                     for prompt in scenario_prompts(scenario):
@@ -167,7 +170,13 @@ def execute_run(
                         elif protocol == "a2a":  # JSON-RPC runtimes reject {prompt}
                             result = rt.invoke_a2a_text(data, agent_arn, prompt, session_id=sid)
                         else:
-                            result = rt.invoke_runtime_text(data, agent_arn, prompt, session_id=sid)
+                            result = rt.invoke_runtime_text(
+                                data,
+                                agent_arn,
+                                prompt,
+                                session_id=sid,
+                                runtime_user_id=runtime_user_id,
+                            )
                         sid = result["session_id"]
                 session_ids.append(sid)
                 _update(run_id, session_ids=list(session_ids))
@@ -317,6 +326,9 @@ def submit_run(
         agent_arn = agent.arn
         agent_method = agent.method
         agent_protocol = (agent.spec or {}).get("protocol") or "http"
+        # Gateway-tool agents need a runtimeUserId or the Runtime injects no
+        # workload token and the eval run measures a tool-less agent.
+        agent_runtime_user = gateway_support.runtime_user_id(agent.spec)
     finally:
         db.close()
 
@@ -338,6 +350,7 @@ def submit_run(
             insights=insights,
             session_metadata=session_metadata,
             actor_model_id=actor_model_id,
+            runtime_user_id=agent_runtime_user,
         ),
     )
     _update(run_id, queue_position=position)

@@ -304,3 +304,68 @@ def test_container_redeploy_preserves_fs_fields(client, no_real_deploy):
     spec = client.get(f"/api/agents/{agent_id}").json()["spec"]
     assert spec["filesystem"]["session_storage"] is None  # user disabled it
     assert spec["filesystem"]["s3_files"]  # BYO mount kept
+
+
+# --- platform toolkits (AgentSpec.toolkits) ---------------------------------
+
+TOOLKIT_SPEC = {
+    "name": "hr-toolkit-agent",
+    "method": "zip_runtime",
+    "system_prompt": "You are a helpful HR Assistant for Acme Corp.",
+    "toolkits": ["hr_assistant"],
+}
+
+
+def test_toolkit_agent_is_accepted_and_stays_experiment_eligible(client):
+    """The load-bearing invariant: a toolkit is a spec FIELD, so the generated
+    source is never written to spec.code/code_bundle and eligibility survives."""
+    body = client.post("/api/agents", json=TOOLKIT_SPEC).json()["agent"]
+    assert body["experiment_capability"] == {
+        "eligible": True,
+        "system_prompt": True,
+        "tool_descriptions": True,
+        "reason": None,
+        "reason_code": None,
+    }
+    spec = client.get(f"/api/agents/{body['id']}").json()["spec"]
+    assert spec["toolkits"] == ["hr_assistant"]
+    assert spec.get("code") is None
+    assert spec.get("code_bundle") is None
+
+
+def test_toolkit_survives_redeploy(client, no_real_deploy):
+    agent_id = client.post("/api/agents", json=TOOLKIT_SPEC).json()["agent"]["id"]
+    _activate(agent_id)
+    res = client.post(f"/api/agents/{agent_id}/redeploy", json=TOOLKIT_SPEC)
+    assert res.status_code == 202
+    detail = client.get(f"/api/agents/{agent_id}").json()
+    assert detail["spec"]["toolkits"] == ["hr_assistant"]
+    assert detail["experiment_capability"]["eligible"] is True
+
+
+def test_zip_spec_without_toolkits_reads_back_empty(client):
+    body = client.post(
+        "/api/agents",
+        json={"name": "no-toolkit", "method": "zip_runtime", "system_prompt": "Hi."},
+    ).json()["agent"]
+    assert client.get(f"/api/agents/{body['id']}").json()["spec"]["toolkits"] == []
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"method": "harness"}, id="harness"),
+        pytest.param({"method": "container"}, id="container"),
+        pytest.param({"method": "studio", "code": "print('x')"}, id="studio"),
+        pytest.param({"protocol": "a2a"}, id="a2a"),
+        pytest.param({"code_bundle": {"main.py": "print('x')"}}, id="code-bundle"),
+        pytest.param({"toolkits": ["hr_assistant", "hr_assistant"]}, id="duplicate"),
+        pytest.param({"toolkits": ["not_a_toolkit"]}, id="unknown"),
+    ],
+)
+def test_toolkits_rejected_where_the_template_never_renders(client, overrides):
+    res = client.post(
+        "/api/agents", json={**TOOLKIT_SPEC, "name": "toolkit-bad", **overrides}
+    )
+    assert res.status_code == 422
+    assert res.json()["code"] == "validation.invalid_request"

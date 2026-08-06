@@ -4,12 +4,14 @@ import importlib.util
 import py_compile
 import sys
 import types
+from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
 import strands
 
-from app.schemas.agent import DEFAULT_MODEL_ID, AgentSpec
+from app.schemas.agent import DEFAULT_MODEL_ID, AgentSpec, ToolRef
+from app.templates.gateway_support import render_gateway_source
 from app.templates.kb_support import mounted_kbs, render_direct_kb_source
 from app.templates.strands_agent import base_requirements, render_main_py
 
@@ -537,3 +539,335 @@ def test_build_agent_scopes_memory_to_actor_and_session(template_module, monkeyp
     assert captured["config"].actor_id == "agent__river"
     assert captured["config"].session_id == "session-one"
     assert captured["region_name"] == "us-west-2"
+
+
+# --- platform toolkits ------------------------------------------------------
+
+TOOLKIT_SPEC = SPEC.model_copy(update={"toolkits": ["hr_assistant"]})
+TOOLKIT_KB_SPEC = KB_SPEC.model_copy(update={"toolkits": ["hr_assistant"]})
+HR_TOOL_NAMES = [
+    "get_pto_balance",
+    "submit_pto_request",
+    "lookup_hr_policy",
+    "get_benefits_summary",
+    "get_pay_stub",
+]
+
+
+@pytest.fixture
+def toolkit_module(tmp_path: Path, monkeypatch):
+    return _import_rendered(TOOLKIT_SPEC, tmp_path, monkeypatch, "toolkit_main")
+
+
+def test_no_toolkit_leaves_the_tool_list_and_source_untouched(template_module):
+    """The additions must be inert for every spec written before toolkits existed."""
+    code = render_main_py(SPEC)
+    assert "__LAUNCHPAD_" not in code
+    assert "TOOLKIT_TOOLS = []" in code
+    assert "toolkit: hr_assistant" not in code
+    assert template_module.TOOLKIT_TOOLS == []
+    names = [t.tool_name for t in template_module.build_agent("a", "s").tools]
+    assert names == ["calculator", "current_utc_time"]
+
+
+def test_toolkit_renders_its_source_and_compiles(tmp_path: Path):
+    code = render_main_py(TOOLKIT_SPEC)
+    assert "__LAUNCHPAD_" not in code
+    for name in HR_TOOL_NAMES:
+        assert f"def {name}(" in code
+    # seed data travels with the functions
+    assert '"EMP-001": {"total_days": 15, "used_days": 5, "remaining_days": 10}' in code
+    target = tmp_path / "toolkit_main.py"
+    target.write_text(code, encoding="utf-8")
+    py_compile.compile(str(target), doraise=True)
+
+
+def test_toolkit_brings_no_model_of_its_own(toolkit_module):
+    """The upstream sample hardcodes BedrockModel("us.amazon.nova-lite-v1:0").
+
+    Asserted against the imported module rather than the source text, because the
+    toolkit's provenance comment legitimately names what was dropped.
+    """
+    assert toolkit_module.MODEL_ID == DEFAULT_MODEL_ID
+    assert not hasattr(toolkit_module, "BedrockModel")
+    assert not hasattr(toolkit_module, "_MODEL")
+
+
+def test_toolkit_replaces_the_template_tools(toolkit_module):
+    names = [t.tool_name for t in toolkit_module.build_agent("a", "s").tools]
+    assert names == HR_TOOL_NAMES
+    # still defined, just unregistered — same shape as an unmounted kb_search
+    assert callable(toolkit_module.calculator)
+    assert callable(toolkit_module.current_utc_time)
+
+
+def test_toolkit_tools_are_config_bundle_tunable(toolkit_module, monkeypatch):
+    for name in HR_TOOL_NAMES:
+        assert toolkit_module.DEFAULT_TOOL_DESCRIPTIONS[name]
+    monkeypatch.setattr(
+        toolkit_module.BedrockAgentCoreContext,
+        "get_config_bundle",
+        staticmethod(lambda: {"tool_descriptions": {"get_pay_stub": "TREATMENT DESC"}}),
+    )
+    assert toolkit_module.resolve_tool_description("get_pay_stub") == "TREATMENT DESC"
+    # untouched tools keep their rendered default
+    assert toolkit_module.resolve_tool_description("get_pto_balance").startswith(
+        "Return the current PTO balance"
+    )
+    specs = {t.tool_name: t.tool_spec["description"] for t in
+             toolkit_module.build_agent("a", "s").tools}
+    assert specs["get_pay_stub"] == "TREATMENT DESC"
+
+
+def test_promoted_overrides_beat_the_toolkit_default(tmp_path: Path, monkeypatch):
+    spec = TOOLKIT_SPEC.model_copy(
+        update={"tool_description_overrides": {"get_pay_stub": "PROMOTED"}}
+    )
+    module = _import_rendered(spec, tmp_path, monkeypatch, "promoted_toolkit_main")
+    assert module.DEFAULT_TOOL_DESCRIPTIONS["get_pay_stub"] == "PROMOTED"
+
+
+def test_toolkit_keeps_kb_tools_when_kbs_are_mounted(tmp_path: Path, monkeypatch):
+    module = _import_rendered(TOOLKIT_KB_SPEC, tmp_path, monkeypatch, "toolkit_kb_main")
+    names = [t.tool_name for t in module.build_agent("a", "s").tools]
+    assert names == [*HR_TOOL_NAMES, "kb_search", "kb_deep_search"]
+
+
+def test_toolkit_seed_data_is_deterministic(toolkit_module):
+    assert toolkit_module.get_pto_balance("EMP-001")["remaining_days"] == 10
+    assert toolkit_module.get_pto_balance("EMP-001") == toolkit_module.get_pto_balance("EMP-001")
+    first = toolkit_module.submit_pto_request("EMP-001", "2026-06-01", "2026-06-05")
+    second = toolkit_module.submit_pto_request("EMP-001", "2026-06-01", "2026-06-05")
+    assert first == second
+    assert first["request_id"].startswith("PTO-2026-")
+    other = toolkit_module.submit_pto_request("EMP-001", "2026-07-01", "2026-07-05")
+    assert other["request_id"] != first["request_id"]
+
+
+def test_toolkit_errors_survive_for_the_failure_modes(toolkit_module):
+    """The prompt-fixable defects need tools that ERROR — keep that surface."""
+    assert "error" in toolkit_module.get_pto_balance("EMP-999")
+    assert "error" in toolkit_module.lookup_hr_policy("dress_code")
+    assert "error" in toolkit_module.get_benefits_summary("pet_insurance")
+    assert "error" in toolkit_module.get_pay_stub("EMP-002", "2026-01")
+    # and tools that succeed must still succeed
+    assert "401(k) Plan" in toolkit_module.get_benefits_summary("401k")["summary"]
+    assert toolkit_module.get_pay_stub("EMP-001", "2026-01")["net_pay"] == 5362.50
+
+
+# --- gateway MCP tools ------------------------------------------------------
+
+GATEWAY_SPEC = SPEC.model_copy(
+    update={"tools": [ToolRef(type="gateway", name="launchpad-gw")]}
+)
+
+
+@pytest.fixture
+def gateway_module(tmp_path: Path, monkeypatch):
+    return _import_rendered(GATEWAY_SPEC, tmp_path, monkeypatch, "gateway_main")
+
+
+def test_no_gateway_tool_renders_a_no_op_loader(template_module):
+    code = render_main_py(SPEC)
+    assert "__LAUNCHPAD_" not in code
+    assert "GATEWAY_TOOLS = lambda _stack: []" in code
+    assert "launchpad-gateway-mcp" not in code
+    assert template_module.GATEWAY_TOOLS(ExitStack()) == []
+
+
+def test_gateway_spec_renders_the_client_and_compiles(tmp_path: Path):
+    code = render_main_py(GATEWAY_SPEC)
+    assert "__LAUNCHPAD_" not in code
+    assert "GATEWAY_TOOLS = gateway_tools" in code
+    assert "# <launchpad-gateway-mcp:v1>" in code
+    target = tmp_path / "gateway_main.py"
+    target.write_text(code, encoding="utf-8")
+    py_compile.compile(str(target), doraise=True)
+
+
+def test_gateway_block_has_no_module_scope_imports(tmp_path: Path):
+    """The documented v1 conversion blocker was an import-time crash. The client
+    is fail-soft BY CONSTRUCTION: every risky import is function-local, so no
+    module-scope statement in the block can raise."""
+    import ast as _ast
+
+    source = render_gateway_source(GATEWAY_SPEC)
+    assert source
+    tree = _ast.parse(source)
+    for node in tree.body:
+        assert not isinstance(node, (_ast.Import, _ast.ImportFrom)), _ast.dump(node)
+        assert isinstance(node, (_ast.FunctionDef, _ast.Assign, _ast.AnnAssign)), (
+            _ast.dump(node)
+        )
+
+
+def test_gateway_env_absent_means_no_tools_and_no_aws_call(gateway_module, monkeypatch):
+    """Missing env is the ordinary case for a gateway agent whose bootstrap
+    config has no gateway — it must degrade, not raise."""
+    def explode(*_args, **_kwargs):
+        raise AssertionError("no AWS call may be attempted without gateway env")
+
+    monkeypatch.setattr(gateway_module, "_identity_client", explode)
+    monkeypatch.setattr(gateway_module, "GATEWAY_URL", "")
+    assert gateway_module.gateway_bearer_token() is None
+    assert gateway_module.gateway_client() is None
+    assert gateway_module.gateway_tools(ExitStack()) == []
+
+
+def test_gateway_token_prefers_the_injected_workload_token(gateway_module, monkeypatch):
+    monkeypatch.setattr(
+        gateway_module.BedrockAgentCoreContext,
+        "get_workload_access_token",
+        staticmethod(lambda: "injected-token"),
+    )
+    monkeypatch.setattr(gateway_module, "WORKLOAD_NAME", "should-not-be-used")
+    assert gateway_module.workload_identity_token() == "injected-token"
+
+
+def test_gateway_token_falls_back_to_the_execution_role(gateway_module, monkeypatch):
+    calls: list[str] = []
+
+    class FakeIdentity:
+        def get_workload_access_token(self, name):
+            calls.append(name)
+            return {"workloadAccessToken": "minted-token"}
+
+    monkeypatch.setattr(
+        gateway_module.BedrockAgentCoreContext,
+        "get_workload_access_token",
+        staticmethod(lambda: None),
+    )
+    monkeypatch.setattr(gateway_module, "WORKLOAD_NAME", "wl-runtime")
+    monkeypatch.setattr(gateway_module, "_identity_client", lambda: FakeIdentity())
+    assert gateway_module.workload_identity_token() == "minted-token"
+    assert calls == ["wl-runtime"]
+
+
+def test_gateway_token_without_either_mechanism_degrades(gateway_module, monkeypatch):
+    monkeypatch.setattr(
+        gateway_module.BedrockAgentCoreContext,
+        "get_workload_access_token",
+        staticmethod(lambda: None),
+    )
+    monkeypatch.setattr(gateway_module, "WORKLOAD_NAME", "")
+    assert gateway_module.workload_identity_token() is None
+
+
+def test_gateway_exchange_uses_m2m_and_degrades_on_failure(gateway_module, monkeypatch):
+    captured: dict = {}
+
+    class FakeDp:
+        def get_resource_oauth2_token(self, **kwargs):
+            captured.update(kwargs)
+            return {"accessToken": "bearer-abc"}
+
+    class FakeIdentity:
+        dp_client = FakeDp()
+
+    monkeypatch.setattr(gateway_module, "GATEWAY_URL", "https://gw.example/mcp")
+    monkeypatch.setattr(gateway_module, "GATEWAY_PROVIDER", "launchpad-gw-m2m")
+    monkeypatch.setattr(gateway_module, "GATEWAY_SCOPES", ["launchpad-gw/invoke"])
+    monkeypatch.setattr(gateway_module, "workload_identity_token", lambda: "wit")
+    monkeypatch.setattr(gateway_module, "_identity_client", lambda: FakeIdentity())
+
+    assert gateway_module.gateway_bearer_token() == "bearer-abc"
+    assert captured == {
+        "workloadIdentityToken": "wit",
+        "resourceCredentialProviderName": "launchpad-gw-m2m",
+        "scopes": ["launchpad-gw/invoke"],
+        "oauth2Flow": "M2M",
+    }
+
+    class Boom:
+        dp_client = property(lambda self: (_ for _ in ()).throw(RuntimeError("denied")))
+
+    monkeypatch.setattr(gateway_module, "_identity_client", lambda: Boom())
+    assert gateway_module.gateway_bearer_token() is None
+
+
+def test_gateway_session_start_failure_leaves_the_agent_usable(gateway_module, monkeypatch):
+    stopped: list[str] = []
+
+    class FailingClient:
+        def start(self):
+            raise RuntimeError("gateway unreachable")
+
+        def stop(self, *_exc):
+            stopped.append("stop")
+
+    monkeypatch.setattr(gateway_module, "gateway_client", lambda: FailingClient())
+    with ExitStack() as stack:
+        assert gateway_module.gateway_tools(stack) == []
+    # start() can fail partway through init, so it is torn down anyway
+    assert stopped == ["stop"]
+    # and the agent still builds with its own tools
+    names = [t.tool_name for t in gateway_module.build_agent("a", "s").tools]
+    assert names == ["calculator", "current_utc_time"]
+
+
+def test_gateway_teardown_failure_cannot_fail_the_request(gateway_module, monkeypatch):
+    """MCPClient re-raises its background task group's errors from __exit__, so
+    handing the raw client to ExitStack.enter_context turns a *handled* mid-request
+    failure into an unhandled one at unwind. Observed live: a tools/list 400 was
+    logged and skipped, then httpx.HTTPStatusError escaped and 500'd the invoke."""
+    class LateFailingClient:
+        def start(self):
+            return self
+
+        def list_tools_sync(self):
+            raise RuntimeError("400 Bad Request")
+
+        def stop(self, *_exc):
+            raise RuntimeError("unhandled errors in a TaskGroup")
+
+    monkeypatch.setattr(gateway_module, "gateway_client", lambda: LateFailingClient())
+    with ExitStack() as stack:                       # must NOT raise on unwind
+        assert gateway_module.gateway_tools(stack) == []
+
+
+def test_gateway_session_is_torn_down_after_a_successful_turn(gateway_module, monkeypatch):
+    stopped: list[str] = []
+
+    class OkClient:
+        def start(self):
+            return self
+
+        def list_tools_sync(self):
+            return []
+
+        def stop(self, *_exc):
+            stopped.append("stop")
+
+    monkeypatch.setattr(gateway_module, "gateway_client", lambda: OkClient())
+    with ExitStack() as stack:
+        assert gateway_module.gateway_tools(stack) == []
+        assert stopped == []          # still open while the agent may call a tool
+    assert stopped == ["stop"]        # closed when the turn ends
+
+
+def test_gateway_tools_are_appended_and_description_tunable(gateway_module, monkeypatch):
+    class FakeMcpTool:
+        def __init__(self, name):
+            self.name = name
+            self.description = "gateway default"
+
+    class FakeGatewayTool:
+        def __init__(self, name):
+            self.mcp_tool = FakeMcpTool(name)
+            self.tool_name = name
+
+    tool_a = FakeGatewayTool("hr-database___get_employee")
+    monkeypatch.setattr(
+        gateway_module.BedrockAgentCoreContext,
+        "get_config_bundle",
+        staticmethod(lambda: {
+            "tool_descriptions": {"hr-database___get_employee": "TREATMENT"}
+        }),
+    )
+    agent = gateway_module.build_agent("a", "s", [tool_a])
+    assert [t.tool_name for t in agent.tools] == [
+        "calculator", "current_utc_time", "hr-database___get_employee",
+    ]
+    # An MCP tool's tool_spec is a property rebuilt on every access, so the
+    # override has to land on mcp_tool.description or it is silently discarded.
+    assert tool_a.mcp_tool.description == "TREATMENT"

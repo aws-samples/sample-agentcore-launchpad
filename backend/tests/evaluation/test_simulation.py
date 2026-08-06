@@ -43,7 +43,9 @@ def test_adapter_threads_runtime_session_and_maps_fields(monkeypatch):
     stub_executor(monkeypatch, turns=3, captured=captured)
     calls: list[tuple[str | None, str]] = []
 
-    def invoke(client, arn, prompt, session_id=None, actor_id="default"):
+    def invoke(
+        client, arn, prompt, session_id=None, actor_id="default", runtime_user_id=None
+    ):
         calls.append((session_id, prompt))
         return {"text": "ok", "session_id": "runtime-sess-" + "x" * 30}
 

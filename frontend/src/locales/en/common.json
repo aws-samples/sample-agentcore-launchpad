@@ -250,7 +250,7 @@
       "systemPrompt": "SYSTEM PROMPT",
       "systemPromptPlaceholder": "You are a helpful assistant for…",
       "tools": "TOOLS — BUILTIN",
-      "gatewayToolsSoon": "+ gateway tools · select harness method",
+      "gatewayToolsSoon": "+ gateway tools · harness or Strands ZIP (HTTP) only",
       "gatewayWholeNote": "A gateway entry attaches the WHOLE AgentCore Gateway and every tool it exposes — Registry approval is catalog visibility, not a per-tool boundary. Use Governance Cedar policies to authorize individual tool actions. Entries marked \"—\" are catalog-only because their outbound auth is not resolved.",
       "memory": "MEMORY",
       "memoryShort": "short-term · session",
@@ -258,6 +258,14 @@
       "note": "Config-bundle contract baked in. Generated agents read system prompt & tool descriptions via get_config_bundle() with defaults as fallback — required for A/B experiments in the Evaluation layer. OTEL (ADOT) instrumentation is added automatically.",
       "titleZip": "CONFIGURE — STRANDS · ZIP FAST PATH",
       "templateTools": "TOOLS — STRANDS TEMPLATE",
+      "toolkits": "TOOL SET — PLATFORM TOOLKIT",
+      "toolkitName": {
+        "hr_assistant": "hr_assistant"
+      },
+      "toolkitDesc": {
+        "hr_assistant": "Five HR tools over deterministic mock data: PTO balance and requests, HR policy lookup, benefits summary, pay stub."
+      },
+      "toolkitNote": "A toolkit compiles local tool functions into the generated agent — no gateway, no IAM grant, no extra dependency. Selecting one REPLACES the template's own calculator / current_utc_time, so the deployed tool surface is exactly the toolkit's, and its tools stay eligible for config-bundle A/B on system prompt and tool descriptions. Mock data is deterministic: the same prompt returns the same tool result.",
       "titleContainer": "CONFIGURE — OTHER AGENT SDK · CONTAINER",
       "agentSdk": "AGENT SDK",
       "agentSdkClaude": "Claude Agent SDK",

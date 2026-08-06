@@ -216,6 +216,38 @@ no stored-spec migration. There is deliberately **no dispatch** on the field yet
 `app/deployer/container.py` and `app/templates/claude_sdk_agent/` stay
 unconditional until the category has a second member.
 
+### Platform toolkits (`AgentSpec.toolkits`)
+
+A **toolkit** is a named, platform-owned bundle of local `@tool` functions over
+embedded seed data that the Strands ZIP template inlines into the generated
+`main.py`. `zip_runtime` + `protocol=http` only; one member today,
+`hr_assistant` (five HR tools: PTO balance/request, policy lookup, benefits
+summary, pay stub).
+
+It is deliberately **not** a `ToolRef.type` member: every existing member denotes
+an external resource that drives IAM and deployer behaviour, while a toolkit
+drives neither — no ARN, no grant, no gateway, no network call, no extra pip
+requirement.
+
+Two properties make it worth its own field:
+
+- **It is rendered at generation time, so `spec.code` / `spec.code_bundle` stay
+  `None`** and the agent keeps its config-bundle experiment eligibility. Writing
+  generated source into either field returns `custom-source-unverified` from
+  `experiment_capability` — which is why this is a spec *selection*, not
+  materialized code.
+- **A toolkit replaces the template's own `calculator` / `current_utc_time`**
+  rather than adding to them, so the deployed tool surface is exactly the
+  toolkit's. That matters for trace readiness: `missing_tools` being non-empty
+  forces `state="sparse"`, so a tool that is expected but never exercised pins an
+  agent below `ready` permanently.
+
+Tool names and descriptions are derived from the toolkit source with `ast`, using
+Strands' own docstring rule (docstring minus the `Args:` section), so
+`discover_agent_tools` — and therefore `expected_tools`, readiness, and the
+recommend UI's "current description" — reports exactly what the model sees. Full
+contract: [`.trellis/spec/launchpad/agent-toolkits.md`](../.trellis/spec/launchpad/agent-toolkits.md).
+
 ### Registry Skills and deployment snapshots
 
 The Create Agent wizard reads only APPROVED `AGENT_SKILLS` records from
@@ -349,6 +381,45 @@ public  /v1  ──┘        │
                         ├─ Policy        (Cedar ENFORCE at the gateway)
                         └─ Observability (spans → CloudWatch Transaction Search)
 ```
+
+### Gateway (MCP) tools reach both a Harness and a zip runtime
+
+A gateway `ToolRef` used to be a harness-only capability, which split the lab
+along a line no participant would expect: chapter 11 governed tool calls only a
+Harness could make, while chapters 09/10 experimented on runtimes that could make
+none. Both methods now reach `launchpad-gw`; only *who performs the token
+exchange* differs.
+
+| | Managed Harness | Generated zip runtime |
+|---|---|---|
+| Tool wiring | declarative `agentcore_gateway` tool with an `outboundAuth` OAuth block | generated MCP client in the emitted `main.py` |
+| Token exchange | the Harness service does it | the agent does it: workload identity token → `GetResourceOauth2Token(oauth2Flow="M2M")` |
+| Execution role | `agent_iam._uses_gateway()` | **the same** — it keys off `tool.type`, never `spec.method` |
+| Cedar | at the Gateway | at the Gateway, identically |
+
+Three pieces make the runtime side work, and all three are required:
+
+1. **A workload identity token must exist.** The Runtime injects one
+   (`WorkloadAccessToken`) only when the caller supplies `runtimeUserId` on
+   `InvokeAgentRuntime`. The invoke chain sends it **only** for agents whose spec
+   carries a gateway ToolRef, so every other agent's call is unchanged. Verified
+   live: without it the client logs `NOT injected` and runs tool-less.
+2. **Env from `settings.resources`** — `LAUNCHPAD_GATEWAY_URL` / `_PROVIDER` /
+   `_SCOPE`, injected by `runtime_environment()` only for a gateway spec, and only
+   when all of them resolve (a half-set env would look configured and fail auth
+   confusingly).
+3. **Fail-soft by construction.** Every risky import in the generated client is
+   function-local and every failure path logs and returns a neutral value, so no
+   module-scope statement can raise. An import-time crash would be worse than
+   missing tools: the deploy pipeline's health signal still reports the agent
+   `active`, and every invoke then fails.
+
+Harness→runtime conversion keeps its gateway tools for the same three reasons —
+see [harness-conversion.md](../.trellis/spec/launchpad/harness-conversion.md); the
+v1 "gateway MCP not wired" caveat is gone, not reworded.
+
+Still harness-only: remote (`type: "mcp"`) servers on a zip runtime, and Gateway
+tools on the container method.
 
 The public `/v1` surface adds `X-Api-Key` auth (keys stored sha256-hashed);
 everything downstream of the dispatch is identical to the console path.

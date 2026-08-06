@@ -18,7 +18,7 @@ def clear_readiness_cache():
     readiness.reset_cache()
 
 
-def _agent(*, tools: list[dict] | None = None) -> Agent:
+def _agent(*, tools: list[dict] | None = None, toolkits: list[str] | None = None) -> Agent:
     db = SessionLocal()
     row = Agent(
         name="readiness-agent",
@@ -26,7 +26,11 @@ def _agent(*, tools: list[dict] | None = None) -> Agent:
         status="active",
         arn="arn:aws:bedrock-agentcore:us-west-2:123:runtime/readiness",
         resource_id="rt-readiness",
-        spec={"system_prompt": "help", "tools": tools or []},
+        spec={
+            "system_prompt": "help",
+            "tools": tools or [],
+            "toolkits": toolkits or [],
+        },
     )
     db.add(row)
     db.commit()
@@ -355,3 +359,49 @@ def test_create_fails_open_when_readiness_is_unavailable(client, monkeypatch):
     response = client.post("/api/experiments", json={"agent_id": agent.id})
 
     assert response.status_code == 201
+
+
+HR_TOOL_NAMES = [
+    "get_benefits_summary",
+    "get_pay_stub",
+    "get_pto_balance",
+    "lookup_hr_policy",
+    "submit_pto_request",
+]
+
+
+def test_toolkit_agent_expects_exactly_its_toolkit_tools(monkeypatch):
+    """A toolkit agent's spec.code is None, so expected_tools cannot come from the
+    docstring regex — it comes from the toolkit registry. And the template's own
+    calculator/current_utc_time must NOT be expected: an unexercised expected tool
+    pins state at "sparse" forever, which is the trap the converted Runtime hit
+    with file_operations/shell."""
+    agent = _agent(toolkits=["hr_assistant"])
+    result, _ = _project(
+        agent,
+        monkeypatch,
+        {
+            "summary": [{"trace_count": "9", "session_count": "5"}],
+            "tools": [{"tool": name} for name in HR_TOOL_NAMES],
+        },
+    )
+    assert result["expected_tools"] == HR_TOOL_NAMES
+    assert "calculator" not in result["expected_tools"]
+    assert "current_utc_time" not in result["expected_tools"]
+    assert result["missing_tools"] == []
+    assert result["state"] == "ready"
+
+
+def test_toolkit_agent_is_sparse_until_every_toolkit_tool_is_observed(monkeypatch):
+    agent = _agent(toolkits=["hr_assistant"])
+    result, _ = _project(
+        agent,
+        monkeypatch,
+        {
+            "summary": [{"trace_count": "9", "session_count": "5"}],
+            "tools": [{"tool": "get_pto_balance"}, {"tool": "calculator"}],
+        },
+    )
+    # an *observed* tool that is not expected is fine; the four unobserved ones are not
+    assert result["missing_tools"] == [n for n in HR_TOOL_NAMES if n != "get_pto_balance"]
+    assert result["state"] == "sparse"

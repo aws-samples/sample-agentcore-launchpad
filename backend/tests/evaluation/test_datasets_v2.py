@@ -322,7 +322,7 @@ def test_run_on_simulated_cloud_dataset_with_actor_model(client, monkeypatch):
     sim_calls: list[dict] = []
 
     def fake_sim(data_client, *, agent_arn, method, scenario, actor_model_id,
-                 protocol="http"):
+                 protocol="http", runtime_user_id=None):
         sim_calls.append({"scenario": scenario, "model": actor_model_id,
                           "method": method})
         return f"sim-sess-{len(sim_calls):03d}" + "x" * 30
@@ -385,7 +385,9 @@ def test_multi_turn_scenarios_replay_in_one_session(monkeypatch):
     data, _ = stub_environment(monkeypatch)
     calls: list[tuple[str, str]] = []
 
-    def invoke(client, arn, prompt, session_id=None, actor_id="default"):
+    def invoke(
+        client, arn, prompt, session_id=None, actor_id="default", runtime_user_id=None
+    ):
         sid = session_id or f"gen-{len(calls):02d}" + "x" * 30
         calls.append((sid, prompt))
         return {"text": "ok", "session_id": sid}

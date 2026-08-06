@@ -242,6 +242,13 @@ export interface VpcNetworkInput {
  */
 export type AgentSdk = "claude_agent_sdk";
 
+/**
+ * A named, platform-owned bundle of local `@tool` functions the Strands zip
+ * template inlines into the generated agent. Mirrors the backend `Toolkit`
+ * literal (`backend/app/schemas/agent.py`).
+ */
+export type Toolkit = "hr_assistant";
+
 export interface AgentSpecInput {
   name: string;
   method: string;
@@ -253,6 +260,11 @@ export interface AgentSpecInput {
   system_prompt: string;
   tool_description_overrides?: Record<string, string>;
   tools?: { type: string; name: string; config?: Record<string, unknown> }[];
+  /**
+   * Platform-owned local tool sets inlined into the generated agent (zip_runtime
+   * only). Not a `tools` entry: a toolkit is source, not an external resource.
+   */
+  toolkits?: Toolkit[];
   skills?: string[];
   // Managed KB references mounted onto the agent (harness method only).
   knowledge_bases?: { kb_id: string; name: string; description: string }[];

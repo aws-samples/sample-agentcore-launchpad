@@ -1238,3 +1238,101 @@ def test_stage_gateway_records_evaluators_on_the_artifact(monkeypatch):
     sent = control.create_online_evaluation_config.call_args.kwargs["evaluators"]
     assert sent == [{"evaluatorId": "Builtin.Refusal"},
                     {"evaluatorId": "Builtin.InstructionFollowing"}]
+
+
+def test_discover_agent_tools_reads_platform_toolkits():
+    """A toolkit agent's spec.code is None by design, so the docstring regex can
+    never see its tools — they come from the toolkit registry instead."""
+    tools = svc.discover_agent_tools({"toolkits": ["hr_assistant"]})
+    assert sorted(tools) == [
+        "get_benefits_summary",
+        "get_pay_stub",
+        "get_pto_balance",
+        "lookup_hr_policy",
+        "submit_pto_request",
+    ]
+    assert tools["get_pto_balance"].startswith("Return the current PTO balance")
+    # the template's always-emitted tools are NOT expected for a toolkit agent
+    assert "calculator" not in tools and "current_utc_time" not in tools
+    # promoted overrides still win over the toolkit default
+    promoted = svc.discover_agent_tools({
+        "toolkits": ["hr_assistant"],
+        "tool_description_overrides": {"get_pay_stub": "promoted"},
+    })
+    assert promoted["get_pay_stub"] == "promoted"
+
+
+def test_toolkit_agent_eligibility_survives_promotion():
+    """Promotion only rewrites code_bundle for converted harnesses. A toolkit
+    agent has no source_harness, so nothing is written into spec.code_bundle and
+    experiment_capability cannot flip to custom-source-unverified."""
+    spec = {"protocol": "http", "toolkits": ["hr_assistant"]}
+    row = SimpleNamespace(method="zip_runtime", spec=spec)
+    assert svc.experiment_capability(row) == {
+        "eligible": True,
+        "system_prompt": True,
+        "tool_descriptions": True,
+        "reason": None,
+        "reason_code": None,
+    }
+    # Mirror act_promote's spec rewrite (service.py: update name/method/prompt/
+    # overrides → AgentSpec(**spec_data) → the `if spec.source_harness` bundle
+    # graft → agent.spec = spec.model_dump()) and assert the graft is skipped.
+    from app.schemas.agent import AgentSpec
+
+    promoted = AgentSpec(**{
+        **spec,
+        "name": "hr-toolkit-agent",
+        "method": "zip_runtime",
+        "system_prompt": "treatment prompt",
+        "tool_description_overrides": {"get_pay_stub": "treatment description"},
+    })
+    assert promoted.source_harness is None  # → the code_bundle branch is not entered
+    stored = promoted.model_dump()
+    assert stored["code"] is None and stored["code_bundle"] is None
+    promoted_row = SimpleNamespace(method="zip_runtime", spec=stored)
+    assert svc.experiment_capability(promoted_row)["eligible"] is True
+    assert svc.discover_agent_tools(stored)["get_pay_stub"] == "treatment description"
+    assert stored["toolkits"] == ["hr_assistant"]  # a second experiment can run
+
+
+def test_gateway_tools_keep_a_zip_runtime_experiment_eligible():
+    """Requirement B: gateway tools must not push an agent into a non-eligible
+    branch. They are spec.tools entries, which experiment_capability never reads."""
+    row = SimpleNamespace(
+        method="zip_runtime",
+        spec={"protocol": "http", "tools": [{"type": "gateway", "name": "launchpad-gw"}]},
+    )
+    assert svc.experiment_capability(row) == {
+        "eligible": True,
+        "system_prompt": True,
+        "tool_descriptions": True,
+        "reason": None,
+        "reason_code": None,
+    }
+    # A gateway ToolRef names a SERVER, not a tool: its tools arrive namespaced
+    # (hr-database___get_employee) and only at runtime, so the bare name can never
+    # be observed in telemetry. Leaving it in expected_tools pinned readiness at
+    # "sparse" forever — measured live.
+    assert "launchpad-gw" not in svc.discover_agent_tools(row.spec)
+    assert svc.discover_agent_tools(row.spec) == {}
+
+
+def test_discover_agent_tools_skips_gateway_servers_but_keeps_builtins():
+    spec = {
+        "tools": [
+            {"type": "gateway", "name": "hr-database"},
+            {"type": "mcp", "name": "deepwiki"},
+            {"type": "builtin", "name": "code-interpreter"},
+            {"name": "legacy-attachment", "description": "no type field"},
+        ],
+        "toolkits": ["hr_assistant"],
+    }
+    tools = svc.discover_agent_tools(spec)
+    # server names would never be observed -> would pin readiness at "sparse"
+    assert "hr-database" not in tools and "deepwiki" not in tools
+    # a builtin's name IS what the model calls
+    assert "code-interpreter" in tools
+    # an untyped entry keeps its old behaviour
+    assert tools["legacy-attachment"] == "no type field"
+    assert "get_pto_balance" in tools

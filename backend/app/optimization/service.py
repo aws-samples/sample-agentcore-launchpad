@@ -34,6 +34,7 @@ from app.schemas.agent import AgentSpec
 from app.services.agentcore.client import control_client, data_client
 from app.services.agentcore.gateway import sigv4_post
 from app.services.harness_convert import graft_config_bundle
+from app.templates.toolkits import toolkit_tool_descriptions
 
 EXP_GATEWAY_NAME = "launchpad-exp-gw"
 
@@ -181,17 +182,40 @@ _TOOL_DEF_RE = re.compile(
 def discover_agent_tools(spec: dict[str, Any]) -> dict[str, str]:
     """toolName → current description, from the agent's own spec.
 
-    Sources: registry tool attachments (spec.tools) and `@tool` docstrings in
-    the agent's code / code bundle. Gateway-served tools (KB targets, MCP)
-    only exist at runtime and can't be discovered here — the recommend UI
-    lets the user add those by hand.
+    Sources: registry tool attachments (spec.tools), platform toolkits
+    (spec.toolkits) and `@tool` docstrings in the agent's code / code bundle.
+    Gateway-served tools (KB targets, MCP) only exist at runtime and can't be
+    discovered here — the recommend UI lets the user add those by hand.
+
+    Toolkits are read from the registry, NOT from the emitted source: a template
+    agent's `spec.code`/`code_bundle` are `None` by design (writing generated code
+    into either flips experiment_capability to "custom-source-unverified"), so the
+    docstring regex below can never see them. The registry derives the same
+    names + descriptions the template renders from, so the two cannot drift.
+    Consequence for readiness: expected_tools for a toolkit agent is exactly the
+    toolkit's tools — the template's own calculator/current_utc_time are neither
+    emitted nor expected, so they cannot pin `state` at "sparse" forever.
+
+    A gateway/mcp ToolRef names a **server, not a tool**, and is skipped for the
+    same reason. Its tools arrive namespaced (`hr-database___get_employee`) and only
+    at runtime, so the bare server name can never appear in observed telemetry —
+    leaving it in `expected_tools` made `missing_tools` permanently non-empty, which
+    `readiness` turns into `state="sparse"` forever (measured live on an agent
+    carrying both a toolkit and a gateway attachment). Builtin ToolRefs stay: their
+    names ARE what the model calls.
     """
     tools: dict[str, str] = {}
     for entry in spec.get("tools") or []:
-        if isinstance(entry, dict) and entry.get("name"):
-            tools[str(entry["name"])] = str(
-                entry.get("description") or entry.get("desc") or ""
-            )
+        if not isinstance(entry, dict) or not entry.get("name"):
+            continue
+        if entry.get("type") in ("gateway", "mcp"):
+            continue
+        tools[str(entry["name"])] = str(
+            entry.get("description") or entry.get("desc") or ""
+        )
+    # update, not setdefault: a toolkit owns its description more authoritatively
+    # than a same-named registry attachment would.
+    tools.update(toolkit_tool_descriptions(list(spec.get("toolkits") or [])))
     sources = [spec.get("code")] if isinstance(spec.get("code"), str) else []
     bundle = spec.get("code_bundle")
     if isinstance(bundle, dict):

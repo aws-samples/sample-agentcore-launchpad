@@ -405,6 +405,7 @@ def _runtime_invoke_params(
     session_id: str,
     actor_id: str,
     qualifier: str | None,
+    runtime_user_id: str | None = None,
 ) -> dict[str, Any]:
     params: dict[str, Any] = {
         "agentRuntimeArn": runtime_arn,
@@ -413,6 +414,13 @@ def _runtime_invoke_params(
     }
     if qualifier:
         params["qualifier"] = qualifier
+    if runtime_user_id:
+        # What makes the Runtime inject a WorkloadAccessToken into the container
+        # request — without it, an agent that wants an outbound M2M token has no
+        # workload identity token to exchange (measured: see the zip-gateway task's
+        # research/r1-m2m-token-path.md). Passed ONLY for agents whose spec needs
+        # it, so every other agent's invoke call is unchanged.
+        params["runtimeUserId"] = runtime_user_id[:1024]
     return params
 
 
@@ -423,11 +431,14 @@ def stream_runtime_events(
     session_id: str | None = None,
     actor_id: str = "default",
     qualifier: str | None = None,
+    runtime_user_id: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Invoke a runtime and yield normalized tool/text events as bytes arrive."""
     session_id = session_id or new_session_id()
     response = client.invoke_agent_runtime(
-        **_runtime_invoke_params(runtime_arn, prompt, session_id, actor_id, qualifier)
+        **_runtime_invoke_params(
+            runtime_arn, prompt, session_id, actor_id, qualifier, runtime_user_id
+        )
     )
     body = response["response"]
     content_type = str(response.get("contentType", "")).lower()
@@ -460,6 +471,7 @@ def invoke_runtime_text(
     session_id: str | None = None,
     actor_id: str = "default",
     qualifier: str | None = None,
+    runtime_user_id: str | None = None,
 ) -> dict[str, Any]:
     """Synchronous InvokeAgentRuntime, joining native streaming responses."""
     session_id = session_id or new_session_id()
@@ -472,6 +484,7 @@ def invoke_runtime_text(
             session_id=session_id,
             actor_id=actor_id,
             qualifier=qualifier,
+            runtime_user_id=runtime_user_id,
         )
         if event["event"] == "delta"
     ]

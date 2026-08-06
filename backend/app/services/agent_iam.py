@@ -380,6 +380,31 @@ def policy_document(spec: AgentSpec, ctx: RoleContext) -> dict:
             "Resource": "*",
         })
 
+    # ---- routed configuration bundles (config-bundle A/B experiments) ----
+    # The generated agent reads its system prompt and tool descriptions from
+    # BedrockAgentCoreContext.get_config_bundle(), and the SDK resolves the baggage
+    # reference by calling GetConfigurationBundleVersion **with this role**. Without
+    # this statement a routed bundle fails with AccessDenied inside the runtime and
+    # the whole invocation 500s — measured live; the shared CDK role has the grant
+    # (base_stack ABTestOrchestration) but a per-agent role did not, so every
+    # experiment on a per-agent-role agent was broken.
+    #
+    # Read-only, and scoped to this account+region: bundle names are generated per
+    # experiment, so there is no narrower resource to name.
+    if spec.method != "harness":
+        statements.append({
+            "Sid": "ConfigurationBundleRead",
+            "Effect": "Allow",
+            "Action": [
+                "bedrock-agentcore:GetConfigurationBundle",
+                "bedrock-agentcore:GetConfigurationBundleVersion",
+            ],
+            "Resource": [
+                f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}"
+                ":configuration-bundle/*"
+            ],
+        })
+
     # ---- A2A agents legitimately invoke other runtimes ----
     if spec.protocol == "a2a":
         statements.append({

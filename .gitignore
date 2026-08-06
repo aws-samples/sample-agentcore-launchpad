@@ -19,6 +19,7 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+/issues/
 design/
 # --- node ---
 node_modules/
