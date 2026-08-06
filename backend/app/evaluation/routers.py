@@ -578,16 +578,22 @@ def list_runs(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     mode: str | None = Query(None, pattern="^(evaluators|insights)$"),
+    agent_id: str | None = Query(None, min_length=1, max_length=32),
 ) -> dict[str, Any]:
     """Newest-first page of runs plus the unpaginated `total`.
 
     Defaults reproduce the pre-pagination response (latest 50, no filter) so
     older callers are unaffected. `mode` exists for the console's insights
-    duplicate guard, which must see insights runs beyond the displayed page.
+    duplicate guard, which must see insights runs beyond the displayed page;
+    `agent_id` for the experiment RECOMMEND card, which offers one agent's own
+    completed runs as a trace source and must not miss them behind other agents'
+    newer runs.
     """
     query = db.query(EvalRun)
     if mode:
         query = query.filter(EvalRun.mode == mode)
+    if agent_id:
+        query = query.filter(EvalRun.agent_id == agent_id)
     total = query.count()
     rows = (
         query.order_by(EvalRun.created_at.desc()).offset(offset).limit(limit).all()

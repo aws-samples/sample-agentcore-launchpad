@@ -216,6 +216,26 @@ no stored-spec migration. There is deliberately **no dispatch** on the field yet
 `app/deployer/container.py` and `app/templates/claude_sdk_agent/` stay
 unconditional until the category has a second member.
 
+### Recommendation trace source
+
+`RECOMMEND` reads either a rolling `RECOMMEND_LOOKBACK_DAYS` (7) CloudWatch window —
+the default — or one completed batch evaluation pinned by
+`agentTraces.batchEvaluation`. Pinning matters twice over:
+
+- **Lineage.** An Insights job and a recommendation over the same window merely
+  overlap; pinning makes the recommendation provably generated *from* that analysis.
+- **Reproducibility.** The 7-day window is *wider* than any single analysis, so the
+  default path can ingest traffic nobody looked at — including a previous
+  experiment's treatment arm — and re-running the same experiment tomorrow reads
+  different traces.
+
+The console offers the experiment agent's own completed runs
+(`GET /api/eval/runs?agent_id=…`); the backend resolves the chosen run through
+`GetBatchEvaluation`, which is also what validates it (exists, completed, same
+agent). Both generators in one RECOMMEND share the pinned source, and the resolved
+source — ARN, run id, batch id, mode — is stored on the `recommend` artifact for
+both paths, so a finished experiment stays explainable.
+
 ### Platform toolkits (`AgentSpec.toolkits`)
 
 A **toolkit** is a named, platform-owned bundle of local `@tool` functions over

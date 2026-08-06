@@ -9,7 +9,8 @@ import pytest
 
 import app.optimization.service as svc
 from app.core.db import SessionLocal
-from app.evaluation.models import EvalDataset
+from app.core.errors import AppError
+from app.evaluation.models import EvalDataset, EvalRun
 from app.models.ledger import Agent
 from app.optimization.models import Experiment
 
@@ -213,8 +214,8 @@ def test_recommend_action_passes_types_and_tools(client, monkeypatch):
     captured: dict = {}
 
     def fake_stage(exp_id, agent, progress=svc._noop, types=svc.REC_TYPES,
-                   tools=None):
-        captured.update(types=types, tools=tools)
+                   tools=None, source=None):
+        captured.update(types=types, tools=tools, source=source)
         return {"tool_status": "COMPLETED",
                 "tool_descriptions": {"shell": "better"},
                 "analyzed_tools": {"shell": "run bash"}}
@@ -385,7 +386,10 @@ def test_stage_recommend_completed_prompt_has_no_error(monkeypatch):
             "systemPromptRecommendationResult": {
                 "recommendedSystemPrompt": "better", "explanation": "why"}}})
     assert out == {"system_prompt_status": "COMPLETED",
-                   "recommended_prompt": "better", "explanation": "why"}
+                   "recommended_prompt": "better", "explanation": "why",
+                   # lineage is recorded for the DEFAULT path too — "which source
+                   # was used" is unanswerable if only the pinned case is stored
+                   "trace_source": {"kind": "cloudwatch", "lookback_days": 7}}
     assert svc.system_prompt_rec_failed(out) is False
 
 
@@ -425,7 +429,8 @@ def test_stage_recommend_without_tools_short_circuits(monkeypatch):
     monkeypatch.setattr(svc.ac, "start_tool_description_recommendation", boom)
     out = svc.stage_recommend("e1", _rec_agent({}), types=("tool_descriptions",))
     assert out == {"analyzed_tools": {}, "tool_status": "no-tools",
-                   "tool_descriptions": {}}
+                   "tool_descriptions": {},
+                   "trace_source": {"kind": "cloudwatch", "lookback_days": 7}}
 
 
 def test_discover_agent_tools_from_spec_and_code():
@@ -1336,3 +1341,181 @@ def test_discover_agent_tools_skips_gateway_servers_but_keeps_builtins():
     # an untyped entry keeps its old behaviour
     assert tools["legacy-attachment"] == "no type field"
     assert "get_pto_balance" in tools
+
+
+# ─── RECOMMEND trace source (requirement C) ──────────────────────────────────
+def _eval_run(**kw):
+    """One EvalRun row; defaults are a completed insights job on agent a1."""
+    db = SessionLocal()
+    try:
+        run = EvalRun(**{
+            "agent_id": "a1", "agent_name": "agent", "mode": "insights",
+            "status": "completed", "batch_eval_id": "be-123",
+            "session_ids": ["s1", "s2"], **kw,
+        })
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        run_id = run.id
+    finally:
+        db.close()
+    return run_id
+
+
+def test_no_source_run_id_means_the_default_window(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("the default path must cost no AWS call")
+
+    monkeypatch.setattr(svc.ac, "get_batch_evaluation", boom)
+    assert svc.resolve_recommend_source("a1", None) == {}
+    assert svc.resolve_recommend_source("a1", "") == {}
+
+
+def test_resolve_source_returns_the_arn_and_full_lineage(monkeypatch):
+    run_id = _eval_run()
+    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    monkeypatch.setattr(
+        svc.ac, "get_batch_evaluation",
+        lambda client, *, batch_id: {
+            "batchEvaluationId": batch_id,
+            "batchEvaluationArn":
+                "arn:aws:bedrock-agentcore:us-west-2:1:batch-evaluation/" + batch_id,
+            "status": "COMPLETED",
+        },
+    )
+    source = svc.resolve_recommend_source("a1", run_id)
+    assert source == {
+        "kind": "batch_evaluation",
+        "run_id": run_id,
+        "batch_eval_id": "be-123",
+        "batch_evaluation_arn":
+            "arn:aws:bedrock-agentcore:us-west-2:1:batch-evaluation/be-123",
+        "run_mode": "insights",   # an INSIGHTS job is a valid source
+        "session_count": 2,
+    }
+
+
+def test_resolve_source_rejects_bad_selections(monkeypatch):
+    """Each rejection is checked against the ledger before any AWS call, so a bad
+    pick is free — and surfaces as an API error rather than a failed stage."""
+    def boom(*a, **k):
+        raise AssertionError("must not reach AWS for a ledger-rejectable run")
+
+    monkeypatch.setattr(svc.ac, "get_batch_evaluation", boom)
+
+    with pytest.raises(AppError) as missing:
+        svc.resolve_recommend_source("a1", "nope")
+    assert missing.value.code == "experiment.recommend_source_not_found"
+
+    other = _eval_run(agent_id="a2")
+    with pytest.raises(AppError) as foreign:
+        svc.resolve_recommend_source("a1", other)
+    assert foreign.value.code == "experiment.recommend_source_foreign"
+
+    unfinished = _eval_run(status="evaluating")
+    with pytest.raises(AppError) as running:
+        svc.resolve_recommend_source("a1", unfinished)
+    assert running.value.code == "experiment.recommend_source_unfinished"
+
+    windowed = _eval_run(batch_eval_id=None)
+    with pytest.raises(AppError) as no_batch:
+        svc.resolve_recommend_source("a1", windowed)
+    assert no_batch.value.code == "experiment.recommend_source_no_batch"
+
+
+def test_resolve_source_surfaces_an_unreadable_batch(monkeypatch):
+    run_id = _eval_run()
+    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+
+    def denied(*a, **k):
+        raise RuntimeError("AccessDeniedException")
+
+    monkeypatch.setattr(svc.ac, "get_batch_evaluation", denied)
+    with pytest.raises(AppError) as exc:
+        svc.resolve_recommend_source("a1", run_id)
+    assert exc.value.code == "experiment.recommend_source_unreadable"
+
+    monkeypatch.setattr(svc.ac, "get_batch_evaluation", lambda *a, **k: {"status": "X"})
+    with pytest.raises(AppError) as no_arn:
+        svc.resolve_recommend_source("a1", run_id)
+    assert no_arn.value.code == "experiment.recommend_source_no_arn"
+
+
+def test_pinned_source_reaches_both_generators_and_is_recorded(monkeypatch):
+    """The whole point: the recommendation must read that job's sessions, and the
+    experiment must record which source produced it."""
+    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    seen: list[dict] = []
+
+    def capture(name):
+        def _start(client, **kw):
+            seen.append({"job": name, **{k: v for k, v in kw.items()
+                                        if k in ("batch_evaluation_arn",
+                                                 "log_group_arns")}})
+            return {"recommendationId": f"r-{name}"}
+        return _start
+
+    monkeypatch.setattr(svc.ac, "start_system_prompt_recommendation", capture("sp"))
+    monkeypatch.setattr(svc.ac, "start_tool_description_recommendation", capture("td"))
+    monkeypatch.setattr(
+        svc.ac, "poll_recommendation",
+        lambda *a, **k: {"status": "COMPLETED", "recommendationResult": {
+            "systemPromptRecommendationResult": {"recommendedSystemPrompt": "better"},
+            "toolDescriptionRecommendationResult": {
+                "tools": [{"toolName": "shell", "recommendedToolDescription": "d2"}]},
+        }},
+    )
+    source = {
+        "kind": "batch_evaluation", "run_id": "run1", "batch_eval_id": "be-9",
+        "batch_evaluation_arn": "arn:aws:bedrock-agentcore:us-west-2:1:batch-evaluation/be-9",
+        "run_mode": "insights", "session_count": 4,
+    }
+    out = svc.stage_recommend("e1", _rec_agent({"shell": "d"}), source=source)
+
+    assert [s["job"] for s in seen] == ["sp", "td"]
+    for call in seen:
+        assert call["batch_evaluation_arn"] == source["batch_evaluation_arn"]
+        assert "log_group_arns" not in call     # the window is fully replaced
+    assert out["trace_source"] == source        # lineage, verbatim
+
+
+def test_recommend_action_resolves_the_source_before_dispatch(client, monkeypatch):
+    """A bad pick must be an HTTP error, not a stage failure discovered later."""
+    _inline(monkeypatch)
+    monkeypatch.setattr(svc, "stage_recommend", lambda *a, **k: {})
+    exp = _mk_exp(agent_id="a1", artifacts={"agent_meta": {"system_prompt": "cur"}})
+    res = client.post(
+        f"/api/experiments/{exp.id}/action",
+        json={"action": "recommend", "recommend_types": ["system_prompt"],
+              "recommend_source_run_id": "ghost"},
+    )
+    assert res.status_code == 404
+    assert res.json()["code"] == "experiment.recommend_source_not_found"
+
+
+def test_recommend_action_threads_a_valid_source(client, monkeypatch):
+    _inline(monkeypatch)
+    run_id = _eval_run()
+    captured: dict = {}
+
+    def fake_stage(exp_id, agent, progress=svc._noop, types=svc.REC_TYPES,
+                   tools=None, source=None):
+        captured["source"] = source
+        return {"system_prompt_status": "COMPLETED", "recommended_prompt": "p"}
+
+    monkeypatch.setattr(svc, "stage_recommend", fake_stage)
+    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    monkeypatch.setattr(
+        svc.ac, "get_batch_evaluation",
+        lambda client, *, batch_id: {
+            "batchEvaluationArn": f"arn:…:batch-evaluation/{batch_id}"},
+    )
+    exp = _mk_exp(agent_id="a1", artifacts={"agent_meta": {"system_prompt": "cur"}})
+    res = client.post(
+        f"/api/experiments/{exp.id}/action",
+        json={"action": "recommend", "recommend_types": ["system_prompt"],
+              "recommend_source_run_id": run_id},
+    )
+    assert res.status_code == 202
+    assert captured["source"]["run_id"] == run_id
+    assert captured["source"]["kind"] == "batch_evaluation"

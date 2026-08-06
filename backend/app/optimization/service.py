@@ -27,6 +27,7 @@ from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.deployer.pipeline import create_deployment, execute_deploy_job
 from app.evaluation import agentcore_eval as ac
+from app.evaluation.models import EvalRun
 from app.evaluation.scenarios import scenario_prompts
 from app.models.ledger import Agent, Deployment, Job
 from app.optimization.models import Experiment
@@ -388,12 +389,91 @@ _REC_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 
+def resolve_recommend_source(agent_id: str, run_id: str | None) -> dict[str, Any]:
+    """An evaluation run id → the trace source RECOMMEND should read, validated.
+
+    ``{}`` means "use the default rolling window". Otherwise the returned dict pins
+    the recommendation to that run's batch evaluation, so the input is reproducible
+    instead of time-dependent — and, when the run is an Insights job, the
+    recommendation has actual data lineage to the analysis a user just looked at
+    rather than merely overlapping windows.
+
+    The single ``GetBatchEvaluation`` call **is** the validation: it proves the job
+    exists and is readable in this account. Everything else is checked against the
+    ledger first so a bad selection costs no AWS call.
+    """
+    if not run_id:
+        return {}
+    db = SessionLocal()
+    try:
+        run = db.get(EvalRun, run_id)
+        if run is None:
+            raise AppError(
+                "experiment.recommend_source_not_found",
+                "the selected evaluation run does not exist",
+                status_code=404,
+            )
+        if run.agent_id != agent_id:
+            # Recommending from another agent's traces cannot produce a meaningful
+            # result, and the mistake is invisible in the finished recommendation.
+            raise AppError(
+                "experiment.recommend_source_foreign",
+                "the selected evaluation run belongs to a different agent",
+                {"run_agent_id": run.agent_id, "experiment_agent_id": agent_id},
+                status_code=400,
+            )
+        if run.status != "completed":
+            raise AppError(
+                "experiment.recommend_source_unfinished",
+                "only a completed evaluation run can be a recommendation source",
+                {"status": run.status},
+                status_code=409,
+            )
+        if not run.batch_eval_id:
+            # A window-scoped run that never started a batch has no ARN to pin to.
+            raise AppError(
+                "experiment.recommend_source_no_batch",
+                "the selected evaluation run has no batch evaluation to read",
+                status_code=400,
+            )
+        batch_id, mode, sessions = run.batch_eval_id, run.mode, len(run.session_ids or [])
+    finally:
+        db.close()
+
+    try:
+        detail = ac.get_batch_evaluation(data_client(), batch_id=batch_id)
+    except Exception as exc:
+        raise AppError(
+            "experiment.recommend_source_unreadable",
+            "the selected run's batch evaluation could not be read from AWS",
+            {"batch_eval_id": batch_id, "aws_error": f"{type(exc).__name__}: {exc}"},
+            status_code=502,
+        ) from exc
+    arn = detail.get("batchEvaluationArn")
+    if not arn:
+        raise AppError(
+            "experiment.recommend_source_no_arn",
+            "the selected run's batch evaluation reported no ARN",
+            {"batch_eval_id": batch_id},
+            status_code=502,
+        )
+    return {
+        "kind": "batch_evaluation",
+        "run_id": run_id,
+        "batch_eval_id": batch_id,
+        "batch_evaluation_arn": str(arn),
+        "run_mode": mode,
+        "session_count": sessions,
+    }
+
+
 def stage_recommend(
     exp_id: str,
     agent: dict[str, Any],
     progress: Progress = _noop,
     types: tuple[str, ...] = REC_TYPES,
     tools: dict[str, str] | None = None,
+    source: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     settings = get_settings()
     data = data_client()
@@ -406,18 +486,37 @@ def stage_recommend(
     current_prompt = agent["system_prompt"]
     out: dict[str, Any] = {}
 
+    # Which traces this recommendation read. Recorded for BOTH paths — "which source
+    # was used" is unanswerable after the fact if only the non-default case is stored.
+    pinned_arn = (source or {}).get("batch_evaluation_arn") or None
+    out["trace_source"] = dict(source) if pinned_arn else {
+        "kind": "cloudwatch",
+        "lookback_days": ac.RECOMMEND_LOOKBACK_DAYS,
+    }
+    # A pinned source replaces the window for BOTH generators: they share one
+    # agentTraces builder, and a recommendation that read the pinned sessions for the
+    # prompt but a 7-day window for the tool descriptions would not be "only that
+    # job's sessions" in any useful sense.
+    trace_args: dict[str, Any] = (
+        {"batch_evaluation_arn": pinned_arn}
+        if pinned_arn
+        else {"log_group_arns": log_group_arns, "service_names": service_names}
+    )
+
     # regeneration is now a first-class flow — job names get a per-run suffix
     # so a re-run never collides with the job an earlier run created
     run_tag = uuid.uuid4().hex[:6]
 
     if "system_prompt" in types:
-        progress("generating system-prompt recommendation from recent traces…")
+        progress(
+            "generating system-prompt recommendation from "
+            + ("the selected evaluation run…" if pinned_arn else "recent traces…")
+        )
         sp = ac.start_system_prompt_recommendation(
             data,
             name=f"exp_{exp_id[:8]}_sp_{run_tag}",
             system_prompt=current_prompt,
-            log_group_arns=log_group_arns,
-            service_names=service_names,
+            **trace_args,
         )
         sp_result = ac.poll_recommendation(
             data, recommendation_id=sp["recommendationId"], max_polls=45
@@ -456,8 +555,7 @@ def stage_recommend(
             try:
                 progress("generating tool-description recommendation…")
                 suggestions, status, err = _run_tool_recommendation(
-                    data, exp_id, run_tag, analyzed,
-                    log_group_arns, service_names,
+                    data, exp_id, run_tag, analyzed, trace_args,
                 )
                 # the job rejects the WHOLE tool list when any listed tool is
                 # absent from the sampled traces (live-verified
@@ -470,8 +568,7 @@ def stage_recommend(
                              f"{sorted(missing)}…")
                     out["analyzed_tools"] = remaining
                     suggestions, status, err = _run_tool_recommendation(
-                        data, exp_id, f"{run_tag}r", remaining,
-                        log_group_arns, service_names,
+                        data, exp_id, f"{run_tag}r", remaining, trace_args,
                     )
                 if status == "COMPLETED":
                     out["tool_status"] = "COMPLETED"
@@ -491,15 +588,19 @@ def stage_recommend(
 
 def _run_tool_recommendation(
     data: Any, exp_id: str, tag: str, tools: dict[str, str],
-    log_group_arns: list[str], service_names: list[str],
+    trace_args: dict[str, Any],
 ) -> tuple[dict[str, str], str, str]:
-    """One tool-description job → (suggestions, job status, error text)."""
+    """One tool-description job → (suggestions, job status, error text).
+
+    ``trace_args`` is whatever ``recommendation_traces`` needs — either the
+    log-group/service-name pair or a pinned ``batch_evaluation_arn`` — so both
+    generators in one RECOMMEND always read the same sessions.
+    """
     td = ac.start_tool_description_recommendation(
         data,
         name=f"exp_{exp_id[:8]}_td_{tag}",
         tools=[{"toolName": k, "description": v} for k, v in tools.items()],
-        log_group_arns=log_group_arns,
-        service_names=service_names,
+        **trace_args,
     )
     result = ac.poll_recommendation(
         data, recommendation_id=td["recommendationId"], max_polls=30
@@ -1189,11 +1290,12 @@ def act_recommend(
     progress: Progress,
     types: Sequence[str] | None = None,
     tools: dict[str, str] | None = None,
+    source: dict[str, Any] | None = None,
 ) -> None:
     exp = _get(exp_id)
     sel = tuple(t for t in REC_TYPES if t in (types or REC_TYPES))
     rec = stage_recommend(exp_id, _agent_meta(exp), progress,
-                          types=sel, tools=tools)
+                          types=sel, tools=tools, source=source)
     # merge over the prior artifact: the type(s) just generated replace their
     # own keys; the other type's output and any earlier accept survive
     merged = dict(exp.artifacts.get("recommend") or {})

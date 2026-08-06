@@ -453,13 +453,45 @@ def delete_evaluator(client: Any, *, evaluator_id: str) -> dict[str, Any]:
 
 
 # ─── Recommendations (data plane) ───────────────────────────────────────────
-def _agent_traces(log_group_arns: list[str], service_names: list[str]) -> dict[str, Any]:
+# Default trace window when no batch evaluation pins the source. Named because it
+# is a real property of the recommendation input, not an incidental constant: it is
+# WIDER than any single Insights job, so the default path can ingest traces nobody
+# analysed — including a previous experiment's treatment arm.
+RECOMMEND_LOOKBACK_DAYS = 7
+
+
+def recommendation_traces(
+    *,
+    log_group_arns: list[str] | None = None,
+    service_names: list[str] | None = None,
+    batch_evaluation_arn: str | None = None,
+) -> dict[str, Any]:
+    """The `agentTraces` union for a recommendation job.
+
+    Two of the API's three branches (`sessionSpans` is unused):
+
+    - ``batchEvaluation`` — pins the input to one completed batch evaluation, so the
+      recommendation reads exactly the sessions that job analysed. Reproducible, and
+      the only way to give a recommendation data lineage to an Insights job.
+    - ``cloudwatchLogs`` — the rolling ``RECOMMEND_LOOKBACK_DAYS`` window. Default,
+      and time-dependent: the same experiment re-run tomorrow reads different traces.
+
+    Mutually exclusive; the ARN wins. Raises when neither is usable — a job with an
+    empty window fails server-side with a far less obvious message.
+    """
+    if batch_evaluation_arn:
+        return {"batchEvaluation": {"batchEvaluationArn": batch_evaluation_arn}}
+    if not (log_group_arns and service_names):
+        raise ValueError(
+            "recommendation traces need either a batch_evaluation_arn or both "
+            "log_group_arns and service_names"
+        )
     now = datetime.now(UTC)
     return {
         "cloudwatchLogs": {
             "logGroupArns": log_group_arns,
             "serviceNames": service_names,
-            "startTime": now - timedelta(days=7),
+            "startTime": now - timedelta(days=RECOMMEND_LOOKBACK_DAYS),
             "endTime": now,
         }
     }
@@ -470,8 +502,9 @@ def start_system_prompt_recommendation(
     *,
     name: str,
     system_prompt: str,
-    log_group_arns: list[str],
-    service_names: list[str],
+    log_group_arns: list[str] | None = None,
+    service_names: list[str] | None = None,
+    batch_evaluation_arn: str | None = None,
 ) -> dict[str, Any]:
     return client.start_recommendation(
         name=name,
@@ -479,7 +512,11 @@ def start_system_prompt_recommendation(
         recommendationConfig={
             "systemPromptRecommendationConfig": {
                 "systemPrompt": {"text": system_prompt},
-                "agentTraces": _agent_traces(log_group_arns, service_names),
+                "agentTraces": recommendation_traces(
+                    log_group_arns=log_group_arns,
+                    service_names=service_names,
+                    batch_evaluation_arn=batch_evaluation_arn,
+                ),
                 "evaluationConfig": {
                     "evaluators": [{"evaluatorArn": _GSR_EVALUATOR_ARN}]
                 },
@@ -494,8 +531,9 @@ def start_tool_description_recommendation(
     *,
     name: str,
     tools: list[dict[str, str]],
-    log_group_arns: list[str],
-    service_names: list[str],
+    log_group_arns: list[str] | None = None,
+    service_names: list[str] | None = None,
+    batch_evaluation_arn: str | None = None,
 ) -> dict[str, Any]:
     tools_payload = [
         {"toolName": t["toolName"], "toolDescription": {"text": t["description"]}}
@@ -507,7 +545,11 @@ def start_tool_description_recommendation(
         recommendationConfig={
             "toolDescriptionRecommendationConfig": {
                 "toolDescription": {"toolDescriptionText": {"tools": tools_payload}},
-                "agentTraces": _agent_traces(log_group_arns, service_names),
+                "agentTraces": recommendation_traces(
+                    log_group_arns=log_group_arns,
+                    service_names=service_names,
+                    batch_evaluation_arn=batch_evaluation_arn,
+                ),
             }
         },
         clientToken=str(uuid.uuid4()),
