@@ -418,6 +418,14 @@ Harness→runtime conversion keeps its gateway tools for the same three reasons 
 see [harness-conversion.md](../.trellis/spec/launchpad/harness-conversion.md); the
 v1 "gateway MCP not wired" caveat is gone, not reworded.
 
+A routed configuration bundle makes **both** the runtime and the Gateway resolve
+that bundle, each with its own role, so `GetConfigurationBundleVersion` is needed on
+the per-agent execution role *and* on `launchpad-gateway-role`. Missing it on the
+runtime side 500s the invoke from inside; missing it on the Gateway side answers the
+MCP call with `HTTP 400 "Config bundle fetch failed"` and the agent silently loses
+every Gateway tool. Both grants are in place, which is what lets a config-bundle A/B
+vary a *Gateway* tool's description.
+
 Still harness-only: remote (`type: "mcp"`) servers on a zip runtime, and Gateway
 tools on the container method.
 

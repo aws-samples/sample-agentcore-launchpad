@@ -267,3 +267,35 @@ def test_outputs_exported(template: Template):
         "AgentExecutionRoleArn",
     ):
         assert key in outputs, f"missing output {key}"
+
+
+def test_gateway_role_can_resolve_a_routed_config_bundle(template: Template):
+    """A request carrying config-bundle baggage makes the GATEWAY fetch the bundle
+    with its own role, not just the agent. Measured live: without this grant the
+    Gateway answers the MCP call with HTTP 400 'Config bundle fetch failed: … not
+    authorized to perform: bedrock-agentcore:GetConfigurationBundleVersion', so an
+    agent under a config-bundle A/B silently loses every Gateway tool."""
+    template.has_resource_properties(
+        "AWS::IAM::Policy",
+        Match.object_like(
+            {
+                "PolicyDocument": Match.object_like(
+                    {
+                        "Statement": Match.array_with(
+                            [
+                                Match.object_like(
+                                    {
+                                        "Sid": "ConfigurationBundleRead",
+                                        "Action": [
+                                            "bedrock-agentcore:GetConfigurationBundle",
+                                            "bedrock-agentcore:GetConfigurationBundleVersion",
+                                        ],
+                                    }
+                                )
+                            ]
+                        )
+                    }
+                )
+            }
+        ),
+    )

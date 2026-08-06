@@ -487,6 +487,26 @@ class LaunchpadBaseStack(Stack):
                 ],
             )
         )
+        # A request carrying config-bundle baggage makes the GATEWAY resolve the
+        # bundle itself, with this role — not just the agent. Without this grant the
+        # Gateway answers the MCP call with HTTP 400 `Config bundle fetch failed:
+        # … not authorized to perform: bedrock-agentcore:GetConfigurationBundleVersion`,
+        # so an agent under a config-bundle A/B loses every Gateway tool. Measured
+        # live 2026-08-06; read-only, and there is no narrower resource because
+        # bundle names are generated per experiment.
+        gateway_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="ConfigurationBundleRead",
+                actions=[
+                    "bedrock-agentcore:GetConfigurationBundle",
+                    "bedrock-agentcore:GetConfigurationBundleVersion",
+                ],
+                resources=[
+                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}"
+                    ":configuration-bundle/*"
+                ],
+            )
+        )
         gateway_role.add_to_policy(
             iam.PolicyStatement(
                 sid="PolicyEngineEvaluation",
