@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { useAuth } from "../auth/auth-context";
 import { Btn, Chip, ConfirmDialog, Markdown, Panel, ViewHead } from "../components";
 import type { AgentInfo } from "../lib/api";
 import { api } from "../lib/api";
@@ -89,6 +90,8 @@ async function* sseEvents(res: Response): AsyncGenerator<{ event: string; data: 
 
 export function Chat() {
   const { t } = useTranslation();
+  const { authRequired, username } = useAuth();
+  const userLabel = (authRequired ? (username ?? "—") : "river").toUpperCase();
   // Cross-link entry (from Observability session detail): preselect the agent
   // and resume the session; unknown values degrade to the defaults gracefully.
   const [searchParams, setSearchParams] = useSearchParams();
@@ -147,7 +150,7 @@ export function Chat() {
 
   const refreshMemory = async (sid: string) => {
     try {
-      const res = await fetch(`/api/chat/${agentId}/memory?session_id=${sid}&actor_id=river`);
+      const res = await fetch(`/api/chat/${agentId}/memory?session_id=${sid}`);
       if (res.ok) setMemory((await res.json()) as MemorySummary);
     } catch {
       /* memory rail is best-effort */
@@ -215,7 +218,7 @@ export function Chat() {
       const res = await fetch(`/api/chat/${agentId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, session_id: sessionId, actor_id: "river" }),
+        body: JSON.stringify({ prompt, session_id: sessionId }),
       });
       if (!res.ok || !res.body) throw new Error(`http ${res.status}`);
       let agentIdxSet = false;
@@ -383,7 +386,7 @@ export function Chat() {
             {messages.map((msg, i) =>
               msg.kind === "user" ? (
                 <div key={i} className="msg user">
-                  <div className="who">RIVER</div>
+                  <div className="who">{userLabel}</div>
                   <div className="bub">{msg.text}</div>
                 </div>
               ) : msg.kind === "agent" ? (

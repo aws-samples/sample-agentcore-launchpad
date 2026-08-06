@@ -6,9 +6,14 @@ kwargs. Payload shapes follow bedrock-agentcore-control 1.43.x.
 
 import time
 import uuid
+from collections.abc import Mapping
 from typing import Any
 
 TERMINAL_FAILURES = {"CREATE_FAILED", "UPDATE_FAILED", "DELETE_FAILED"}
+BUILTIN_TOOL_TYPES = {
+    "code-interpreter": "agentcore_code_interpreter",
+    "browser": "agentcore_browser",
+}
 
 
 def create_harness(client: Any, params: dict[str, Any]) -> dict[str, Any]:
@@ -71,6 +76,81 @@ def wait_harness_ready(
 def new_session_id() -> str:
     # Runtime session ids must be long (≥33 chars); two uuid4 hex = 64.
     return uuid.uuid4().hex + uuid.uuid4().hex
+
+
+def user_authenticated_tools(
+    spec: Mapping[str, Any],
+    resources: Mapping[str, Any],
+    access_token: str,
+) -> list[dict[str, Any]]:
+    """Harness invocation tools with launchpad-gw authenticated as one user.
+
+    ``InvokeHarness.tools`` replaces the configured tool list for that request,
+    so every non-user tool declared by the stored spec is reconstructed too.
+    The user token is accepted only for the bootstrapped shared Gateway whose
+    Cognito authorizer issued it.
+    """
+
+    result: list[dict[str, Any]] = []
+    attached_user_gateway = False
+    configured_gateway_id = str(resources.get("gateway_id") or "")
+    for raw in spec.get("tools") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        tool_type = str(raw.get("type") or "")
+        name = str(raw.get("name") or "")
+        config = raw.get("config") if isinstance(raw.get("config"), Mapping) else {}
+        if tool_type == "builtin" and name in BUILTIN_TOOL_TYPES:
+            result.append({"type": BUILTIN_TOOL_TYPES[name], "name": name})
+        elif tool_type == "mcp" and config.get("url"):
+            result.append(
+                {
+                    "type": "remote_mcp",
+                    "name": name,
+                    "config": {"remoteMcp": {"url": str(config["url"])}},
+                }
+            )
+        elif tool_type == "gateway":
+            requested_id = str(config.get("gateway_id") or configured_gateway_id)
+            if requested_id != configured_gateway_id or not resources.get("gateway_url"):
+                raise ValueError(
+                    "authenticated user policy identity is configured only for launchpad-gw"
+                )
+            if not attached_user_gateway:
+                result.append(
+                    {
+                        "type": "remote_mcp",
+                        "name": "launchpad_gw_user",
+                        "config": {
+                            "remoteMcp": {
+                                "url": str(resources["gateway_url"]),
+                                "headers": {"Authorization": f"Bearer {access_token}"},
+                            }
+                        },
+                    }
+                )
+                attached_user_gateway = True
+
+    if spec.get("knowledge_bases") and resources.get("kb_gateway_arn"):
+        result.append(
+            {
+                "type": "agentcore_gateway",
+                "name": "launchpad_kb_gw",
+                "config": {
+                    "agentCoreGateway": {
+                        "gatewayArn": str(resources["kb_gateway_arn"]),
+                        "outboundAuth": {
+                            "oauth": {
+                                "providerArn": str(resources["oauth_provider_arn"]),
+                                "grantType": "CLIENT_CREDENTIALS",
+                                "scopes": ["launchpad-gw/invoke"],
+                            }
+                        },
+                    }
+                },
+            }
+        )
+    return result
 
 
 def invoke_harness_text(

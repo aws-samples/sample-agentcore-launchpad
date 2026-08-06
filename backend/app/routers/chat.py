@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import exists
@@ -12,9 +12,13 @@ from sqlalchemy.orm import Session
 from app.core.db import SessionLocal, get_db
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, ChatMessage, ChatSession
+from app.routers.auth import enabled as auth_enabled
+from app.routers.auth import require_identity
 from app.services import memory as memory_service
+from app.services import policy_identity
 from app.services.chat import chat_stream, sse_encode
 from app.services.runtime_discovery import require_invoke_capability
+from app.templates import gateway_support
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -22,7 +26,6 @@ router = APIRouter(prefix="/api", tags=["chat"])
 class ChatRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=100000)
     session_id: str | None = None
-    actor_id: str = "river"
 
 
 def _session_actor(
@@ -77,21 +80,53 @@ def _track_session(agent_id: str, session_id: str, actor_id: str) -> None:
 
 
 @router.post("/chat/{agent_id}")
-def chat(agent_id: str, req: ChatRequest, db: Session = Depends(get_db)) -> StreamingResponse:
+def chat(
+    agent_id: str,
+    req: ChatRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
     agent = _get_active_agent(db, agent_id)
+    identity = require_identity(request)
+    human_actor = identity.username if auth_enabled() else "river"
 
     # Memory partitions per agent: the runtime writes short-term events and the
     # extractor lands long-term records under this compound actor. The ledger
-    # still records the human actor (req.actor_id) so the sessions list shows it.
-    actor_id = _session_actor(db, agent.id, req.session_id, req.actor_id)
+    # still records the bare authenticated username. A continuing session keeps
+    # its original Memory owner, while policy authorization follows the current
+    # signed-in caller.
+    actor_id = _session_actor(db, agent.id, req.session_id, human_actor)
     mem_actor = memory_service.scoped_actor(agent.id, actor_id)
+    needs_gateway_identity = (
+        gateway_support.runtime_user_id(agent.spec, identity.username) is not None
+    )
+    gateway_access_token = (
+        policy_identity.gateway_user_token(
+            identity.username,
+            identity.role,
+            identity.email,
+        )
+        if needs_gateway_identity
+        else None
+    )
 
     def generate():
         # Thread items are persisted in event order (int-pk = replay order) so
         # the playground can restore a session's history exactly as rendered.
         session_id = req.session_id
         answer_parts: list[str] = []
-        for event in chat_stream(agent, req.prompt, session_id=session_id, actor_id=mem_actor):
+        stream_kwargs: dict[str, Any] = {}
+        if needs_gateway_identity:
+            stream_kwargs["runtime_user_id"] = identity.username
+        if gateway_access_token:
+            stream_kwargs["gateway_access_token"] = gateway_access_token
+        for event in chat_stream(
+            agent,
+            req.prompt,
+            session_id=session_id,
+            actor_id=mem_actor,
+            **stream_kwargs,
+        ):
             kind, data = event["event"], event["data"]
             if kind == "meta":
                 session_id = data["session_id"]
@@ -188,12 +223,17 @@ def session_history(
 def session_memory(
     agent_id: str,
     session_id: str,
-    actor_id: str = "river",
+    request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     try:
         # Read back the same agent-scoped partition the chat write path uses.
-        session_actor = _session_actor(db, agent_id, session_id, actor_id)
+        session_actor = _session_actor(
+            db,
+            agent_id,
+            session_id,
+            require_identity(request).username if auth_enabled() else "river",
+        )
         mem_actor = memory_service.scoped_actor(agent_id, session_actor)
         # Echo the compound actor so the rail can deep-link into the Memory
         # console at the exact partition it just summarised — the console keys

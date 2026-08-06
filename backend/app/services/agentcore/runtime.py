@@ -406,11 +406,18 @@ def _runtime_invoke_params(
     actor_id: str,
     qualifier: str | None,
     runtime_user_id: str | None = None,
+    gateway_access_token: str | None = None,
 ) -> dict[str, Any]:
+    payload = {"prompt": prompt, "actor_id": actor_id}
+    if gateway_access_token:
+        # The InvokeAgentRuntime payload is marked sensitive in the service
+        # model. Generated Launchpad runtimes consume this value in memory only
+        # and never log or persist it.
+        payload["gateway_access_token"] = gateway_access_token
     params: dict[str, Any] = {
         "agentRuntimeArn": runtime_arn,
         "runtimeSessionId": session_id,
-        "payload": json.dumps({"prompt": prompt, "actor_id": actor_id}).encode("utf-8"),
+        "payload": json.dumps(payload).encode("utf-8"),
     }
     if qualifier:
         params["qualifier"] = qualifier
@@ -432,12 +439,19 @@ def stream_runtime_events(
     actor_id: str = "default",
     qualifier: str | None = None,
     runtime_user_id: str | None = None,
+    gateway_access_token: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Invoke a runtime and yield normalized tool/text events as bytes arrive."""
     session_id = session_id or new_session_id()
     response = client.invoke_agent_runtime(
         **_runtime_invoke_params(
-            runtime_arn, prompt, session_id, actor_id, qualifier, runtime_user_id
+            runtime_arn,
+            prompt,
+            session_id,
+            actor_id,
+            qualifier,
+            runtime_user_id,
+            gateway_access_token,
         )
     )
     body = response["response"]
@@ -472,6 +486,7 @@ def invoke_runtime_text(
     actor_id: str = "default",
     qualifier: str | None = None,
     runtime_user_id: str | None = None,
+    gateway_access_token: str | None = None,
 ) -> dict[str, Any]:
     """Synchronous InvokeAgentRuntime, joining native streaming responses."""
     session_id = session_id or new_session_id()
@@ -485,6 +500,7 @@ def invoke_runtime_text(
             actor_id=actor_id,
             qualifier=qualifier,
             runtime_user_id=runtime_user_id,
+            gateway_access_token=gateway_access_token,
         )
         if event["event"] == "delta"
     ]

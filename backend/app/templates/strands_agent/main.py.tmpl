@@ -260,7 +260,12 @@ def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]:
     # of its tools, so it is scoped to the whole turn. GATEWAY_TOOLS is a no-op
     # returning [] for a spec with no gateway tool.
     with ExitStack() as stack:
-        agent = build_agent(actor_id, session_id, GATEWAY_TOOLS(stack))
+        gateway_access_token = str(payload.get("gateway_access_token", "")).strip() or None
+        agent = build_agent(
+            actor_id,
+            session_id,
+            GATEWAY_TOOLS(stack, gateway_access_token),
+        )
         known = recall_context(actor_id, prompt)
         if known:
             agent.system_prompt = f"{resolve_system_prompt()}\n\nKnown user context:\n{known}"

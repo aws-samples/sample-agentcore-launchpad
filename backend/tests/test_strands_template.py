@@ -670,7 +670,7 @@ def gateway_module(tmp_path: Path, monkeypatch):
 def test_no_gateway_tool_renders_a_no_op_loader(template_module):
     code = render_main_py(SPEC)
     assert "__LAUNCHPAD_" not in code
-    assert "GATEWAY_TOOLS = lambda _stack: []" in code
+    assert "GATEWAY_TOOLS = lambda _stack, _user_token=None: []" in code
     assert "launchpad-gateway-mcp" not in code
     assert template_module.GATEWAY_TOOLS(ExitStack()) == []
 
@@ -783,6 +783,15 @@ def test_gateway_exchange_uses_m2m_and_degrades_on_failure(gateway_module, monke
 
     monkeypatch.setattr(gateway_module, "_identity_client", lambda: Boom())
     assert gateway_module.gateway_bearer_token() is None
+
+
+def test_gateway_user_token_bypasses_m2m_exchange(gateway_module, monkeypatch):
+    monkeypatch.setattr(
+        gateway_module,
+        "workload_identity_token",
+        lambda: (_ for _ in ()).throw(AssertionError("must not mint M2M identity")),
+    )
+    assert gateway_module.gateway_bearer_token("trusted-user-jwt") == "trusted-user-jwt"
 
 
 def test_gateway_session_start_failure_leaves_the_agent_usable(gateway_module, monkeypatch):

@@ -26,9 +26,13 @@ logger = logging.getLogger(__name__)
 BUFFERED_CHUNK_CHARS = 60
 
 
-def _runtime_user_id(agent: Agent, actor_id: str) -> str | None:
+def _runtime_user_id(
+    agent: Agent,
+    actor_id: str,
+    runtime_user_id: str | None = None,
+) -> str | None:
     """See ``gateway_support.runtime_user_id`` — omitted unless the spec needs it."""
-    return gateway_support.runtime_user_id(agent.spec, actor_id)
+    return gateway_support.runtime_user_id(agent.spec, runtime_user_id or actor_id)
 
 
 def _parse_gateway_text(raw_text: str, session_id: str) -> dict[str, Any]:
@@ -50,6 +54,8 @@ def _invoke_via_stable_endpoint(
     prompt: str,
     session_id: str | None,
     actor_id: str,
+    runtime_user_id: str | None = None,
+    gateway_access_token: str | None = None,
 ) -> dict[str, Any]:
     """Direct-invoke the runtime pinned to the stable endpoint (= v_current).
 
@@ -57,14 +63,15 @@ def _invoke_via_stable_endpoint(
     canary is still provisioning (stable endpoint stood up, gateway A/B not live
     yet) — either way production serves the tested control version, never DEFAULT
     (which the candidate mint already rolled to the untested candidate)."""
-    return rt.invoke_runtime_text(
-        data_client(),
-        route["arn"],
-        prompt,
-        session_id=session_id,
-        actor_id=actor_id,
-        qualifier=route["stable_endpoint"],
-    )
+    kwargs: dict[str, Any] = {
+        "session_id": session_id,
+        "actor_id": actor_id,
+        "qualifier": route["stable_endpoint"],
+        "runtime_user_id": runtime_user_id,
+    }
+    if gateway_access_token:
+        kwargs["gateway_access_token"] = gateway_access_token
+    return rt.invoke_runtime_text(data_client(), route["arn"], prompt, **kwargs)
 
 
 def _invoke_via_canary(
@@ -72,6 +79,8 @@ def _invoke_via_canary(
     prompt: str,
     session_id: str | None,
     actor_id: str,
+    runtime_user_id: str | None = None,
+    gateway_access_token: str | None = None,
 ) -> dict[str, Any]:
     """Route a real invocation for an active canary.
 
@@ -85,15 +94,24 @@ def _invoke_via_canary(
       the stable endpoint so production stays on v_current during setup.
     """
     if not (route.get("gateway_url") and route.get("control_target")):
-        return _invoke_via_stable_endpoint(route, prompt, session_id, actor_id)
+        return _invoke_via_stable_endpoint(
+            route,
+            prompt,
+            session_id,
+            actor_id,
+            runtime_user_id,
+            gateway_access_token,
+        )
     # Runtime session ids must be ≥33 chars (spike); mint one when absent/short.
     sticky = session_id if (session_id and len(session_id) >= 33) else rt.new_session_id()
     url = f"{route['gateway_url'].rstrip('/')}/{route['control_target']}/invocations"
     try:
         # Same body shape service.send_gateway_traffic posts to the gateway.
-        response = gateway.sigv4_post(
-            url, {"prompt": prompt, "sessionId": sticky}, session_id=sticky
-        )
+        body = {"prompt": prompt, "sessionId": sticky}
+        if gateway_access_token:
+            body["actor_id"] = actor_id
+            body["gateway_access_token"] = gateway_access_token
+        response = gateway.sigv4_post(url, body, session_id=sticky)
         if response.status_code != 200:
             raise RuntimeError(f"gateway route returned HTTP {response.status_code}")
         return _parse_gateway_text(response.text, sticky)
@@ -103,11 +121,23 @@ def _invoke_via_canary(
             exc,
             route.get("stable_endpoint"),
         )
-        return _invoke_via_stable_endpoint(route, prompt, session_id, actor_id)
+        return _invoke_via_stable_endpoint(
+            route,
+            prompt,
+            session_id,
+            actor_id,
+            runtime_user_id,
+            gateway_access_token,
+        )
 
 
 def invoke_agent_text(
-    agent: Agent, prompt: str, session_id: str | None = None, actor_id: str = "default"
+    agent: Agent,
+    prompt: str,
+    session_id: str | None = None,
+    actor_id: str = "default",
+    runtime_user_id: str | None = None,
+    gateway_access_token: str | None = None,
 ) -> dict[str, Any]:
     require_invoke_capability(agent)
     if agent.method == "harness":
@@ -125,15 +155,22 @@ def invoke_agent_text(
         # through the canary's gateway; otherwise the path below is unchanged.
         route = canary_service.active_canary_route(agent.id)
         if route is not None:
-            return _invoke_via_canary(route, prompt, session_id, actor_id)
-        return rt.invoke_runtime_text(
-            data_client(),
-            agent.arn,
-            prompt,
-            session_id=session_id,
-            actor_id=actor_id,
-            runtime_user_id=_runtime_user_id(agent, actor_id),
-        )
+            return _invoke_via_canary(
+                route,
+                prompt,
+                session_id,
+                actor_id,
+                runtime_user_id,
+                gateway_access_token,
+            )
+        kwargs: dict[str, Any] = {
+            "session_id": session_id,
+            "actor_id": actor_id,
+            "runtime_user_id": _runtime_user_id(agent, actor_id, runtime_user_id),
+        }
+        if gateway_access_token:
+            kwargs["gateway_access_token"] = gateway_access_token
+        return rt.invoke_runtime_text(data_client(), agent.arn, prompt, **kwargs)
     raise AppError(
         "agent.method_not_available",
         f"no invoke path for method '{agent.method}'",
@@ -146,6 +183,8 @@ def invoke_agent_events(
     prompt: str,
     session_id: str | None = None,
     actor_id: str = "default",
+    runtime_user_id: str | None = None,
+    gateway_access_token: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield native container events, with a buffered compatibility fallback."""
     require_invoke_capability(agent)
@@ -153,14 +192,14 @@ def invoke_agent_events(
         agent.method == "container" and (agent.spec or {}).get("protocol", "http") != "a2a"
     )
     if is_http_container and canary_service.active_canary_route(agent.id) is None:
-        yield from rt.stream_runtime_events(
-            data_client(),
-            agent.arn,
-            prompt,
-            session_id=session_id,
-            actor_id=actor_id,
-            runtime_user_id=_runtime_user_id(agent, actor_id),
-        )
+        kwargs: dict[str, Any] = {
+            "session_id": session_id,
+            "actor_id": actor_id,
+            "runtime_user_id": _runtime_user_id(agent, actor_id, runtime_user_id),
+        }
+        if gateway_access_token:
+            kwargs["gateway_access_token"] = gateway_access_token
+        yield from rt.stream_runtime_events(data_client(), agent.arn, prompt, **kwargs)
         return
 
     result = invoke_agent_text(
@@ -168,6 +207,8 @@ def invoke_agent_events(
         prompt,
         session_id=session_id,
         actor_id=actor_id,
+        runtime_user_id=runtime_user_id,
+        gateway_access_token=gateway_access_token,
     )
     text = result["text"]
     for index in range(0, len(text), BUFFERED_CHUNK_CHARS):

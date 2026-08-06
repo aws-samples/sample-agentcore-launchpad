@@ -55,7 +55,7 @@ def render_main_py(spec: AgentSpec) -> str:
         .replace("__LAUNCHPAD_GATEWAY_SOURCE__", render_gateway_source(spec))
         .replace(
             "__LAUNCHPAD_GATEWAY_TOOLS_FN__",
-            "gateway_tools" if uses_gateway(spec) else "lambda _stack: []",
+            "gateway_tools" if uses_gateway(spec) else "lambda _stack, _user_token=None: []",
         )
         .replace("__LAUNCHPAD_TOOLKIT_TOOLS__", toolkit_tools)
         .replace(

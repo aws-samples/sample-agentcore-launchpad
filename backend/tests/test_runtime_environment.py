@@ -110,3 +110,30 @@ def test_invoke_params_omit_runtime_user_id_unless_given():
     assert with_user["runtimeUserId"] == "river"
     # everything else is unchanged, so a non-gateway agent's call is identical
     assert {k: v for k, v in with_user.items() if k != "runtimeUserId"} == without
+
+
+def test_invoke_payload_carries_gateway_user_token_only_when_given():
+    import json
+
+    from app.services.agentcore.runtime import _runtime_invoke_params
+
+    base = _runtime_invoke_params("arn:a", "hi", "s" * 33, "agent__demo", None)
+    assert json.loads(base["payload"]) == {
+        "prompt": "hi",
+        "actor_id": "agent__demo",
+    }
+    authenticated = _runtime_invoke_params(
+        "arn:a",
+        "hi",
+        "s" * 33,
+        "agent__demo",
+        None,
+        "demo",
+        "user-jwt",
+    )
+    assert authenticated["runtimeUserId"] == "demo"
+    assert json.loads(authenticated["payload"]) == {
+        "prompt": "hi",
+        "actor_id": "agent__demo",
+        "gateway_access_token": "user-jwt",
+    }

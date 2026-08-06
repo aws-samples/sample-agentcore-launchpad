@@ -9,14 +9,21 @@ import time
 from collections.abc import Iterator
 from typing import Any
 
+from app.core.config import get_settings
 from app.models.ledger import Agent
+from app.services.agentcore import harness as hc
 from app.services.agentcore.client import data_client
 from app.services.agentcore.harness import new_session_id
 from app.services.invoke import invoke_agent_events
 
 
 def chat_stream(
-    agent: Agent, prompt: str, session_id: str | None = None, actor_id: str = "river"
+    agent: Agent,
+    prompt: str,
+    session_id: str | None = None,
+    actor_id: str = "river",
+    runtime_user_id: str | None = None,
+    gateway_access_token: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield SSE-ready events: meta → (heartbeat|tool|delta)* → done.
 
@@ -31,13 +38,26 @@ def chat_stream(
     started = time.monotonic()
     try:
         if agent.method == "harness":
-            yield from _harness_events(agent, prompt, session_id, actor_id)
+            yield from _harness_events(
+                agent,
+                prompt,
+                session_id,
+                actor_id,
+                runtime_user_id=runtime_user_id,
+                gateway_access_token=gateway_access_token,
+            )
         else:
+            invoke_kwargs: dict[str, Any] = {}
+            if runtime_user_id:
+                invoke_kwargs["runtime_user_id"] = runtime_user_id
+            if gateway_access_token:
+                invoke_kwargs["gateway_access_token"] = gateway_access_token
             yield from invoke_agent_events(
                 agent,
                 prompt,
                 session_id=session_id,
                 actor_id=actor_id,
+                **invoke_kwargs,
             )
     except Exception as exc:
         yield {"event": "error", "data": {"message": f"{type(exc).__name__}: {exc}"}}
@@ -49,13 +69,30 @@ def chat_stream(
 
 
 def _harness_events(
-    agent: Agent, prompt: str, session_id: str, actor_id: str
+    agent: Agent,
+    prompt: str,
+    session_id: str,
+    actor_id: str,
+    *,
+    runtime_user_id: str | None = None,
+    gateway_access_token: str | None = None,
 ) -> Iterator[dict[str, Any]]:
+    params: dict[str, Any] = {
+        "harnessArn": agent.arn,
+        "runtimeSessionId": session_id,
+        "actorId": actor_id,
+        "messages": [{"role": "user", "content": [{"text": prompt}]}],
+    }
+    if runtime_user_id:
+        params["runtimeUserId"] = runtime_user_id
+    if gateway_access_token:
+        params["tools"] = hc.user_authenticated_tools(
+            agent.spec or {},
+            get_settings().resources,
+            gateway_access_token,
+        )
     response = data_client().invoke_harness(
-        harnessArn=agent.arn,
-        runtimeSessionId=session_id,
-        actorId=actor_id,
-        messages=[{"role": "user", "content": [{"text": prompt}]}],
+        **params,
     )
     for event in response["stream"]:
         if "contentBlockStart" in event:

@@ -15,6 +15,7 @@ from app.routers import tools as tools_router
 from app.schemas.agent import AgentSpec
 from app.services import gateway_bootstrap as gb
 from app.services import mcp_client
+from app.services.agentcore.harness import user_authenticated_tools
 
 GW_ARN = "arn:aws:bedrock-agentcore:us-west-2:111:gateway/launchpad-gw-abc"
 OAUTH_ARN = (
@@ -152,6 +153,45 @@ def test_harness_gateway_ignored_without_config():
     )
     params = build_create_params(spec, "arn:role", None, gateway=None)
     assert "tools" not in params
+
+
+def test_harness_user_gateway_override_preserves_other_tools():
+    tools = user_authenticated_tools(
+        {
+            "tools": [
+                {"type": "builtin", "name": "browser", "config": {}},
+                {
+                    "type": "mcp",
+                    "name": "docs",
+                    "config": {"url": "https://mcp.example/docs"},
+                },
+                {
+                    "type": "gateway",
+                    "name": "hr-database",
+                    "config": {"gateway_id": "launchpad-gw-abc"},
+                },
+            ],
+            "knowledge_bases": [{"kb_id": "KB1"}],
+        },
+        {
+            "gateway_id": "launchpad-gw-abc",
+            "gateway_url": "https://gw.example/mcp",
+            "kb_gateway_arn": "arn:kb-gw",
+            "oauth_provider_arn": OAUTH_ARN,
+        },
+        "trusted-user-jwt",
+    )
+    assert [tool["type"] for tool in tools] == [
+        "agentcore_browser",
+        "remote_mcp",
+        "remote_mcp",
+        "agentcore_gateway",
+    ]
+    user_gateway = tools[2]["config"]["remoteMcp"]
+    assert user_gateway == {
+        "url": "https://gw.example/mcp",
+        "headers": {"Authorization": "Bearer trusted-user-jwt"},
+    }
 
 
 def test_mcp_client_parses_sse_and_json(monkeypatch):

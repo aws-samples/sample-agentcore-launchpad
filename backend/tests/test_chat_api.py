@@ -1,9 +1,15 @@
 """SSE chat generator, api-key auth (401/200/disabled), session persistence."""
 
+from fastapi.testclient import TestClient
+
 import app.routers.agents as agents_router  # noqa: F401 (ensures methods registered)
+import app.routers.chat as chat_router
 import app.services.chat as chat_service
+import app.services.policy_identity as policy_identity
+from app.core.config import get_settings
 from app.core.db import SessionLocal
-from app.models.ledger import Agent
+from app.main import create_app
+from app.models.ledger import Agent, ChatSession
 from app.services.chat import chat_stream, sse_encode
 
 
@@ -256,3 +262,60 @@ def test_v1_and_console_share_invoke_chain():
     v1_src = inspect.getsource(public_api)
     assert "chat_stream" in chat_src and "chat_stream" in v1_src
     assert "invoke_agent_text" in v1_src  # sync path shared with agents router
+
+
+def test_authenticated_chat_identity_cannot_be_spoofed(monkeypatch):
+    monkeypatch.setenv("LAUNCHPAD_AUTH_USERNAME", "operator")
+    monkeypatch.setenv("LAUNCHPAD_AUTH_PASSWORD", "s3cret-pass")
+    get_settings.cache_clear()
+    captured: dict = {}
+    try:
+        agent_id = make_active_agent(name="trusted-chat-user")
+        db = SessionLocal()
+        agent = db.get(Agent, agent_id)
+        agent.spec = {
+            "name": agent.name,
+            "tools": [{"type": "gateway", "name": "hr-database", "config": {}}],
+        }
+        db.commit()
+        db.close()
+        monkeypatch.setattr(
+            policy_identity,
+            "gateway_user_token",
+            lambda username, role, email=None: (
+                captured.update(policy_user=username, policy_role=role) or "trusted-jwt"
+            ),
+        )
+
+        def fake_stream(agent, prompt, **kwargs):
+            captured.update(kwargs)
+            yield {
+                "event": "meta",
+                "data": {"session_id": "s" * 40, "agent": agent.name, "mode": "buffered"},
+            }
+            yield {"event": "done", "data": {"latency_ms": 1}}
+
+        monkeypatch.setattr(chat_router, "chat_stream", fake_stream)
+        with TestClient(create_app()) as client:
+            login = client.post(
+                "/api/auth/login",
+                json={"username": "operator", "password": "s3cret-pass"},
+            )
+            assert login.status_code == 200
+            response = client.post(
+                f"/api/chat/{agent_id}",
+                json={"prompt": "hello", "actor_id": "river"},
+            )
+            assert response.status_code == 200
+
+        assert captured["policy_user"] == "operator"
+        assert captured["policy_role"] == "admin"
+        assert captured["actor_id"] == f"{agent_id}__operator"
+        assert captured["runtime_user_id"] == "operator"
+        assert captured["gateway_access_token"] == "trusted-jwt"
+        db = SessionLocal()
+        row = db.query(ChatSession).filter_by(agent_id=agent_id).one()
+        db.close()
+        assert row.actor_id == "operator"
+    finally:
+        get_settings.cache_clear()

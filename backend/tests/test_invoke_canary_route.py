@@ -82,6 +82,34 @@ def test_short_session_id_is_replaced_before_gateway_post(monkeypatch):
     assert out["session_id"] == calls["session_id"]
 
 
+def test_authenticated_canary_payload_keeps_user_policy_identity(monkeypatch):
+    monkeypatch.setattr(
+        invoke_mod.canary_service, "active_canary_route", lambda agent_id: ROUTE
+    )
+    calls: dict = {}
+
+    def fake_sigv4(url, body, *, session_id=None):
+        calls.update(body=body)
+        return _Resp(200, json.dumps({"result": "ok"}))
+
+    monkeypatch.setattr(invoke_mod.gateway, "sigv4_post", fake_sigv4)
+    monkeypatch.setattr(invoke_mod, "data_client", lambda: object())
+    invoke_mod.invoke_agent_text(
+        _agent(),
+        "hi",
+        session_id="x" * 40,
+        actor_id="agent__demo",
+        runtime_user_id="demo",
+        gateway_access_token="trusted-user-jwt",
+    )
+    assert calls["body"] == {
+        "prompt": "hi",
+        "sessionId": "x" * 40,
+        "actor_id": "agent__demo",
+        "gateway_access_token": "trusted-user-jwt",
+    }
+
+
 def test_no_canary_uses_direct_invoke_no_qualifier(monkeypatch):
     monkeypatch.setattr(
         invoke_mod.canary_service, "active_canary_route", lambda agent_id: None
