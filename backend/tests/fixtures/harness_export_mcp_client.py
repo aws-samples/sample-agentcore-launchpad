@@ -1,3 +1,6 @@
+# Verbatim agentcore CLI export (mcp_client/client.py), consumed as TEXT by the
+# harness-conversion graft tests. Gateway ids are scrubbed to synthetic values;
+# the code shape — an EAGER module-scope token fetch — is what the tests pin.
 import os
 import logging
 from mcp.client.streamable_http import streamablehttp_client
@@ -18,9 +21,9 @@ def _get_bearer_token_launchpad_gw(*, access_token: str):
 
 def get_launchpad_gw_mcp_client() -> MCPClient | None:
     """Returns an MCP Client connected to the launchpad_gw gateway."""
-    url = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_GW_EM0YUQMMDP_URL")
+    url = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL")
     if not url:
-        logger.warning("GATEWAY_GATEWAY_LAUNCHPAD_GW_EM0YUQMMDP_URL not set — launchpad_gw gateway tools unavailable")
+        logger.warning("GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL not set — launchpad_gw gateway tools unavailable")
         return None
     token = _get_bearer_token_launchpad_gw()
     headers = {"Authorization": f"Bearer {token}"} if token else {}

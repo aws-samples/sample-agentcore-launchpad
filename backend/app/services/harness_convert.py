@@ -470,8 +470,8 @@ def _gateway_url_for(key: str, resources: Any) -> str | None:
 
     The agentcore CLI bakes the gateway id into the key, upper-cased with
     hyphens turned into underscores (live export:
-    `GATEWAY_GATEWAY_LAUNCHPAD_GW_EM0YUQMMDP_URL` for
-    `launchpad-gw-em0yuqmmdp`), so the key is matched back against the ids the
+    `GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL` for
+    `launchpad-gw-a1b2c3d4e5`), so the key is matched back against the ids the
     bootstrap config knows.
 
     The KB gateway is deliberately NOT resolved here: conversion replaces the

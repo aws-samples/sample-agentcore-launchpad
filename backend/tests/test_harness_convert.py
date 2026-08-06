@@ -225,11 +225,11 @@ def test_discover_env_leaves_an_unresolvable_gateway_key_unset(monkeypatch):
             'MEMORY_ID = os.getenv("MEMORY_MEMORY_LAUNCHPAD_MEMORY_HURAGN3ENF_ID")\n'
             'REGION = os.getenv("AWS_REGION")',
         "mcp_client/client.py":
-            'url = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_PMYQ7MCHUM_URL")',
+            'url = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_F6G7H8J9K0_URL")',
     }
     env = hc.discover_env(files)
     assert env["MEMORY_MEMORY_LAUNCHPAD_MEMORY_HURAGN3ENF_ID"] == "launchpad_memory-XYZ"
-    assert env["GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_PMYQ7MCHUM_URL"] is None
+    assert env["GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_F6G7H8J9K0_URL"] is None
     assert "AWS_REGION" not in env  # runtime-provided
 
 
@@ -243,22 +243,22 @@ def test_discover_env_wires_the_shared_gateway_but_not_the_kb_gateway(monkeypatc
     monkeypatch.setattr(
         hc, "get_settings",
         lambda: SimpleNamespace(resources={
-            "gateway_id": "launchpad-gw-em0yuqmmdp",
-            "gateway_url": "https://launchpad-gw-em0yuqmmdp.gateway.example/mcp",
-            "kb_gateway_id": "launchpad-kb-gw-pmyq7mchum",
-            "kb_gateway_url": "https://launchpad-kb-gw-pmyq7mchum.gateway.example/mcp",
+            "gateway_id": "launchpad-gw-a1b2c3d4e5",
+            "gateway_url": "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp",
+            "kb_gateway_id": "launchpad-kb-gw-f6g7h8j9k0",
+            "kb_gateway_url": "https://launchpad-kb-gw-f6g7h8j9k0.gateway.example/mcp",
         }),
     )
     files = {
         "mcp_client/client.py":
-            'a = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_GW_EM0YUQMMDP_URL")\n'
-            'b = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_PMYQ7MCHUM_URL")',
+            'a = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL")\n'
+            'b = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_F6G7H8J9K0_URL")',
     }
     env = hc.discover_env(files)
-    assert env["GATEWAY_GATEWAY_LAUNCHPAD_GW_EM0YUQMMDP_URL"] == (
-        "https://launchpad-gw-em0yuqmmdp.gateway.example/mcp"
+    assert env["GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL"] == (
+        "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp"
     )
-    assert env["GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_PMYQ7MCHUM_URL"] is None
+    assert env["GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_F6G7H8J9K0_URL"] is None
 
 
 # ─── gateway soft-fail graft ─────────────────────────────────────────────────
@@ -940,8 +940,8 @@ def test_build_conversion_spec_carries_gateway_attachments(monkeypatch):
         hc, "get_settings",
         lambda: SimpleNamespace(resources={
             "memory_id": "mem-1",
-            "gateway_id": "launchpad-gw-em0yuqmmdp",
-            "gateway_url": "https://launchpad-gw-em0yuqmmdp.gateway.example/mcp",
+            "gateway_id": "launchpad-gw-a1b2c3d4e5",
+            "gateway_url": "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp",
         }),
     )
     source = _source_agent()
@@ -949,7 +949,7 @@ def test_build_conversion_spec_carries_gateway_attachments(monkeypatch):
         **source.spec,
         "tools": [
             {"type": "gateway", "name": "hr-database",
-             "config": {"gateway_id": "launchpad-gw-em0yuqmmdp"}},
+             "config": {"gateway_id": "launchpad-gw-a1b2c3d4e5"}},
             {"type": "mcp", "name": "deepwiki", "config": {"url": "https://x/mcp"}},
             {"type": "builtin", "name": "code-interpreter"},
         ],
@@ -957,7 +957,7 @@ def test_build_conversion_spec_carries_gateway_attachments(monkeypatch):
     files = {
         "main.py": MAIN_PY, "pyproject.toml": PYPROJECT,
         "mcp_client/client.py":
-            'url = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_GW_EM0YUQMMDP_URL")',
+            'url = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL")',
     }
     spec = hc.build_conversion_spec(
         source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt",
@@ -967,14 +967,14 @@ def test_build_conversion_spec_carries_gateway_attachments(monkeypatch):
     assert [(t.type, t.name) for t in spec.tools] == [
         ("gateway", "hr-database"), ("mcp", "deepwiki"),
     ]
-    assert spec.tools[0].config["gateway_id"] == "launchpad-gw-em0yuqmmdp"
+    assert spec.tools[0].config["gateway_id"] == "launchpad-gw-a1b2c3d4e5"
     from app.services.agent_iam import _uses_gateway
     assert _uses_gateway(spec) is True
     from app.templates.gateway_support import runtime_user_id
     assert runtime_user_id(spec.model_dump(), "river") == "river"
     # env wired, soft-fail graft applied, and the note says so truthfully
-    assert spec.env["GATEWAY_GATEWAY_LAUNCHPAD_GW_EM0YUQMMDP_URL"] == (
-        "https://launchpad-gw-em0yuqmmdp.gateway.example/mcp"
+    assert spec.env["GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL"] == (
+        "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp"
     )
     assert hc.GW_SOFTFAIL_START in spec.code_bundle["main.py"]
     assert spec.conversion_notes["gateway"].startswith("wired")
@@ -1037,8 +1037,8 @@ def test_conversion_applies_both_gateway_grafts(monkeypatch):
         hc, "get_settings",
         lambda: SimpleNamespace(resources={
             "memory_id": "mem-1",
-            "gateway_id": "launchpad-gw-em0yuqmmdp",
-            "gateway_url": "https://launchpad-gw-em0yuqmmdp.gateway.example/mcp",
+            "gateway_id": "launchpad-gw-a1b2c3d4e5",
+            "gateway_url": "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp",
         }),
     )
     source = _source_agent()
