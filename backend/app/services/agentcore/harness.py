@@ -47,6 +47,19 @@ def get_harness(client: Any, harness_id: str) -> dict[str, Any]:
     return client.get_harness(harnessId=harness_id)["harness"]
 
 
+def list_harnesses(client: Any) -> list[dict[str, Any]]:
+    """Return every Harness summary across all ListHarnesses pages."""
+    harnesses: list[dict[str, Any]] = []
+    kwargs: dict[str, Any] = {"maxResults": 100}
+    while True:
+        page = client.list_harnesses(**kwargs)
+        harnesses.extend(page.get("harnesses", []))
+        token = page.get("nextToken")
+        if not token:
+            return harnesses
+        kwargs["nextToken"] = token
+
+
 def delete_harness(client: Any, harness_id: str) -> None:
     client.delete_harness(harnessId=harness_id)
 

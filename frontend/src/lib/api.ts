@@ -63,7 +63,7 @@ export interface RuntimeDiscoveryCandidate {
   version: string;
   aws_status: string;
   protocol: string;
-  artifact_type: "code" | "container" | "unknown";
+  artifact_type: "code" | "container" | "harness" | "unknown";
   authorizer_type: "none" | "custom_jwt" | "unknown";
   last_updated_at: string | null;
   managed_agent_id: string | null;

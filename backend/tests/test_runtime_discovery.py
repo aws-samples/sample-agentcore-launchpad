@@ -71,11 +71,23 @@ def _summary(detail: dict) -> dict:
     }
 
 
-def _mock_control(monkeypatch, details: list[dict]) -> MagicMock:
+def _harness(name: str) -> dict:
+    return {
+        "harnessId": f"{name}-1234567890",
+        "harnessName": name,
+        "arn": f"arn:aws:bedrock-agentcore:us-west-2:111122223333:harness/{name}-1234567890",
+        "status": "READY",
+    }
+
+
+def _mock_control(
+    monkeypatch, details: list[dict], harnesses: list[dict] | None = None
+) -> MagicMock:
     control = MagicMock()
     control.list_agent_runtimes.return_value = {
         "agentRuntimes": [_summary(detail) for detail in details]
     }
+    control.list_harnesses.return_value = {"harnesses": harnesses or []}
     by_id = {detail["agentRuntimeId"]: detail for detail in details}
     control.get_agent_runtime.side_effect = lambda agentRuntimeId: by_id[agentRuntimeId]
     monkeypatch.setattr(agents_router, "control_client", lambda: control)
@@ -227,6 +239,118 @@ def test_import_is_idempotent_and_refreshes_sanitized_metadata(client, monkeypat
     assert row.spec["discovery"]["artifact_type"] == "container"
     assert db.query(Agent).filter(Agent.resource_id == "owned-abcdefghij").count() == 1
     db.close()
+
+
+def test_harness_backing_runtime_is_flagged_and_linked_to_its_harness_agent(
+    client, monkeypatch
+):
+    harness = _harness("support")
+    detail = _detail(
+        "harness_support-abcdefghij", name="harness_support", artifact="container"
+    )
+    db = SessionLocal()
+    owner = Agent(
+        name="support-agent",
+        method="harness",
+        status="active",
+        resource_id=harness["harnessId"],
+        arn=harness["arn"],
+        spec={"name": "support-agent", "method": "harness"},
+    )
+    db.add(owner)
+    db.commit()
+    owner_id = owner.id
+    db.close()
+    _mock_control(monkeypatch, [detail], harnesses=[harness])
+
+    row = client.get("/api/agents/discovery").json()["runtimes"][0]
+
+    assert row["artifact_type"] == "harness"
+    assert row["importable"] is False
+    assert row["reason_code"] == "harness-managed"
+    assert row["invoke_capability"]["reason_code"] == "harness-managed"
+    assert row["managed_agent_id"] == owner_id
+    assert row["managed_agent_method"] == "harness"
+
+    body = client.post(
+        "/api/agents/discovery/import", json={"runtime_ids": [detail["agentRuntimeId"]]}
+    ).json()
+
+    assert body["imported"] == []
+    assert body["already_managed"] == [
+        {
+            "runtime_id": detail["agentRuntimeId"],
+            "agent_id": owner_id,
+            "agent_name": "support-agent",
+        }
+    ]
+    db = SessionLocal()
+    assert (
+        db.query(Agent)
+        .filter(Agent.arn == detail["agentRuntimeArn"], Agent.status != "deleted")
+        .count()
+        == 0
+    )
+    db.close()
+
+
+def test_external_harness_backing_runtime_import_is_rejected(client, monkeypatch):
+    detail = _detail(
+        "harness_alien-abcdefghij", name="harness_alien", artifact="container"
+    )
+    _mock_control(monkeypatch, [detail], harnesses=[_harness("alien")])
+
+    body = client.post(
+        "/api/agents/discovery/import", json={"runtime_ids": [detail["agentRuntimeId"]]}
+    ).json()
+
+    assert body["imported"] == []
+    assert body["failed"][0]["reason_code"] == "harness-managed"
+
+
+def test_harness_image_heuristic_flags_backing_runtime_when_list_harnesses_fails(
+    client, monkeypatch
+):
+    detail = _detail("harness_orphan-abcdefghij", name="harness_orphan")
+    detail["agentRuntimeArtifact"] = {
+        "containerConfiguration": {
+            "containerUri": "public.ecr.aws/y5s8y8h8/harness-us-west-2:latest"
+        }
+    }
+    control = _mock_control(monkeypatch, [detail])
+    control.list_harnesses.side_effect = ClientError(
+        {"Error": {"Code": "AccessDeniedException", "Message": "denied"}},
+        "ListHarnesses",
+    )
+
+    row = client.get("/api/agents/discovery").json()["runtimes"][0]
+
+    assert row["artifact_type"] == "harness"
+    assert row["importable"] is False
+    assert row["reason_code"] == "harness-managed"
+    assert row["managed_agent_id"] is None
+
+
+def test_stale_imported_harness_backing_runtime_is_not_invokable():
+    agent = Agent(
+        name="stale-harness-import",
+        method="discovered_runtime",
+        status="active",
+        arn="arn:aws:bedrock-agentcore:us-west-2:111:runtime/harness_stale-abcdefghij",
+        spec={
+            "protocol": "http",
+            "discovery": {
+                "aws_status": "READY",
+                "authorizer_type": "none",
+                "artifact_type": "harness",
+            },
+        },
+    )
+
+    capability = invoke_capability(agent)
+
+    assert capability["eligible"] is False
+    assert capability["reason_code"] == "harness-managed"
 
 
 def test_import_never_rewrites_launchpad_managed_agent(client, monkeypatch):
