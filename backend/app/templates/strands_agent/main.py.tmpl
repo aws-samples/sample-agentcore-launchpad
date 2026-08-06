@@ -14,6 +14,7 @@ Template lineage: adapted from agentcore_eva_opt lab4 deploy pattern
 import ast
 import operator
 import os
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -81,6 +82,7 @@ DEFAULT_TOOL_DESCRIPTIONS: dict[str, str] = {
     "calculator": "Evaluate a basic arithmetic expression (+ - * / ** parentheses) and return the numeric result.",
     "current_utc_time": "Return the current UTC date and time in ISO-8601 format.",
     **__LAUNCHPAD_KB_TOOL_DESCRIPTIONS__,
+    **__LAUNCHPAD_TOOLKIT_TOOL_DESCRIPTIONS__,
     **__LAUNCHPAD_TOOL_DESCRIPTION_OVERRIDES__,
 }
 
@@ -148,6 +150,25 @@ def current_utc_time() -> str:
 __LAUNCHPAD_DIRECT_KB_SOURCE__
 
 
+__LAUNCHPAD_TOOLKIT_SOURCE__
+
+
+__LAUNCHPAD_GATEWAY_SOURCE__
+
+# Per-request Gateway MCP tool loader. Rendered as the real loader only when this
+# spec carries a `gateway` ToolRef; otherwise a no-op, so an agent without one
+# behaves exactly as it did before Gateway support existed.
+GATEWAY_TOOLS = __LAUNCHPAD_GATEWAY_TOOLS_FN__
+
+# Tools contributed by the platform toolkits this spec selected — empty when none.
+# A selected toolkit REPLACES the template's own calculator/current_utc_time (they
+# stay defined above but unregistered, the same way kb_search is defined and
+# unregistered when no knowledge base is mounted): a toolkit agent's tool surface
+# is what an experiment measures, so nothing unasked-for is registered, and nothing
+# unexercised can pin trace readiness at "sparse".
+TOOLKIT_TOOLS = __LAUNCHPAD_TOOLKIT_TOOLS__
+
+
 def build_model() -> Any:
     """Model to hand to ``Agent(model=...)``.
 
@@ -185,17 +206,31 @@ def skill_plugins() -> list:
     return [AgentSkills(skills=str(SKILLS_ROOT))]
 
 
-def build_agent(actor_id: str, session_id: str) -> Agent:
-    tools = [calculator, current_utc_time]
+def build_agent(
+    actor_id: str, session_id: str, extra_tools: list | None = None
+) -> Agent:
+    tools = list(TOOLKIT_TOOLS) or [calculator, current_utc_time]
     if MOUNTED_KBS:
         tools += [kb_search, kb_deep_search]
+    # Gateway MCP tools, discovered per request — they only exist while the MCP
+    # session the caller opened is alive, so they arrive as an argument rather
+    # than from a module global.
+    tools += list(extra_tools or [])
     for t in tools:
-        override = resolve_tool_description(t.tool_name)
-        if override:
-            try:
+        try:
+            override = resolve_tool_description(t.tool_name)
+            if not override:
+                continue
+            # An MCP-served tool derives tool_spec from its wrapped mcp_tool on
+            # every access, so writing into that dict would be thrown away —
+            # the description has to be set on the source object.
+            mcp_tool = getattr(t, "mcp_tool", None)
+            if mcp_tool is not None:
+                mcp_tool.description = override
+            else:
                 t.tool_spec["description"] = override
-            except Exception:
-                pass  # tool spec immutable in this strands version — default docstring stands
+        except Exception:
+            pass  # tool spec immutable in this strands version — default docstring stands
     kwargs: dict[str, Any] = {
         "model": build_model(),
         "system_prompt": resolve_system_prompt(),
@@ -221,12 +256,16 @@ def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]:
     actor_id = str(payload.get("actor_id", "default"))
     session_id = str(getattr(context, "session_id", "") or payload.get("session_id", "") or "adhoc")
 
-    agent = build_agent(actor_id, session_id)
-    known = recall_context(actor_id, prompt)
-    if known:
-        agent.system_prompt = f"{resolve_system_prompt()}\n\nKnown user context:\n{known}"
-    result = agent(prompt)
-    return {"result": str(result)}
+    # The Gateway MCP session must stay open for as long as the agent may call one
+    # of its tools, so it is scoped to the whole turn. GATEWAY_TOOLS is a no-op
+    # returning [] for a spec with no gateway tool.
+    with ExitStack() as stack:
+        agent = build_agent(actor_id, session_id, GATEWAY_TOOLS(stack))
+        known = recall_context(actor_id, prompt)
+        if known:
+            agent.system_prompt = f"{resolve_system_prompt()}\n\nKnown user context:\n{known}"
+        result = agent(prompt)
+        return {"result": str(result)}
 
 
 if __name__ == "__main__":

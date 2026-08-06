@@ -27,7 +27,9 @@ def stub_environment(monkeypatch, batch_status="COMPLETED"):
     data = MagicMock()
     call_count = {"n": 0}
 
-    def invoke_runtime_text(client, arn, prompt, session_id=None, actor_id="default"):
+    def invoke_runtime_text(
+        client, arn, prompt, session_id=None, actor_id="default", runtime_user_id=None
+    ):
         call_count["n"] += 1
         return {"text": "42", "session_id": f"sess-{call_count['n']:03d}" + "x" * 30}
 

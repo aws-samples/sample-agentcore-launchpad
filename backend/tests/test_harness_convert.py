@@ -22,6 +22,7 @@ from app.schemas.agent import AgentSpec
 FIXTURES = Path(__file__).parent / "fixtures"
 MAIN_PY = (FIXTURES / "harness_export_main.py").read_text()
 PYPROJECT = (FIXTURES / "harness_export_pyproject.toml").read_text()
+MCP_CLIENT_PY = (FIXTURES / "harness_export_mcp_client.py").read_text()
 
 
 @pytest.fixture(autouse=True)
@@ -212,7 +213,9 @@ def test_direct_kb_graft_fails_without_tools_collection_anchor():
 
 
 # ─── env discovery ───────────────────────────────────────────────────────────
-def test_discover_env_wires_memory_not_gateway(monkeypatch):
+def test_discover_env_leaves_an_unresolvable_gateway_key_unset(monkeypatch):
+    """No shared Gateway in the bootstrap config ⇒ the key stays unset and the
+    exported client skips the gateway with a warning."""
     monkeypatch.setattr(
         hc, "get_settings",
         lambda: SimpleNamespace(resources={"memory_id": "launchpad_memory-XYZ"}),
@@ -222,12 +225,73 @@ def test_discover_env_wires_memory_not_gateway(monkeypatch):
             'MEMORY_ID = os.getenv("MEMORY_MEMORY_LAUNCHPAD_MEMORY_HURAGN3ENF_ID")\n'
             'REGION = os.getenv("AWS_REGION")',
         "mcp_client/client.py":
-            'url = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_PMYQ7MCHUM_URL")',
+            'url = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_F6G7H8J9K0_URL")',
     }
     env = hc.discover_env(files)
     assert env["MEMORY_MEMORY_LAUNCHPAD_MEMORY_HURAGN3ENF_ID"] == "launchpad_memory-XYZ"
-    assert env["GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_PMYQ7MCHUM_URL"] is None
+    assert env["GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_F6G7H8J9K0_URL"] is None
     assert "AWS_REGION" not in env  # runtime-provided
+
+
+def test_discover_env_wires_the_shared_gateway_but_not_the_kb_gateway(monkeypatch):
+    """The v1 caveat is removed, not reworded: the shared Gateway URL is wired.
+
+    The KB gateway's own key stays unset on purpose — conversion replaces it with
+    grafted direct-retrieval tools, so wiring it too would give the runtime two
+    duplicate retrieval surfaces.
+    """
+    monkeypatch.setattr(
+        hc, "get_settings",
+        lambda: SimpleNamespace(resources={
+            "gateway_id": "launchpad-gw-a1b2c3d4e5",
+            "gateway_url": "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp",
+            "kb_gateway_id": "launchpad-kb-gw-f6g7h8j9k0",
+            "kb_gateway_url": "https://launchpad-kb-gw-f6g7h8j9k0.gateway.example/mcp",
+        }),
+    )
+    files = {
+        "mcp_client/client.py":
+            'a = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL")\n'
+            'b = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_F6G7H8J9K0_URL")',
+    }
+    env = hc.discover_env(files)
+    assert env["GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL"] == (
+        "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp"
+    )
+    assert env["GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_F6G7H8J9K0_URL"] is None
+
+
+# ─── gateway soft-fail graft ─────────────────────────────────────────────────
+def test_gateway_softfail_graft_wraps_the_module_scope_call():
+    """The documented v1 blocker: the export builds its gateway clients at import,
+    and requires_access_token raises in-container when no workload token exists. A
+    crash there is worse than missing tools — the runtime never starts while the
+    deploy pipeline still reports the agent active."""
+    grafted = hc.graft_gateway_softfail(MAIN_PY)
+    compile(grafted, "main.py", "exec")
+    assert hc.GW_SOFTFAIL_START in grafted and hc.GW_SOFTFAIL_END in grafted
+    assert "except Exception as _launchpad_gw_exc:" in grafted
+    # the call itself survives, indented into the try
+    assert "    mcp_clients += get_all_gateway_mcp_clients()" in grafted
+    # and no bare module-scope call remains
+    assert "\nmcp_clients += get_all_gateway_mcp_clients()" not in grafted
+
+
+def test_gateway_softfail_graft_is_idempotent_and_preserves_layout():
+    once = hc.graft_gateway_softfail(MAIN_PY)
+    assert hc.graft_gateway_softfail(once) == once
+    # the blank line after the call must survive (a greedy \s* tail would eat it)
+    end = once.splitlines().index(hc.GW_SOFTFAIL_END)
+    assert once.splitlines()[end + 1] == ""
+
+
+def test_gateway_softfail_graft_fails_on_a_missing_anchor():
+    """Same posture as the config-bundle graft: codegen drift FAILS the conversion
+    rather than shipping a runtime that can crash at import."""
+    with pytest.raises(hc.ConversionError, match="get_all_gateway_mcp_clients"):
+        hc.graft_gateway_softfail(
+            MAIN_PY.replace("mcp_clients += get_all_gateway_mcp_clients()", "pass")
+        )
 
 
 # ─── requirements flattening ────────────────────────────────────────────────
@@ -288,7 +352,8 @@ def test_build_conversion_spec_shape(monkeypatch):
     assert spec.source_harness["agent_name"] == "aurora-support"
     assert spec.conversion_notes["system_prompt"].startswith("wired")
     assert spec.conversion_notes["kb_gateway"].startswith("not wired")
-    assert "GATEWAY_GATEWAY_X_URL" not in spec.env  # never wired in v1
+    # unresolvable against this stubbed config, so still absent from env
+    assert "GATEWAY_GATEWAY_X_URL" not in spec.env
 
 
 def test_build_conversion_spec_materializes_direct_kb_support(monkeypatch):
@@ -864,3 +929,129 @@ def test_harness_export_never_reuses_a_target_agent_name(tmp_path, monkeypatch):
     assert len(set(targets)) == 2, "the same target name was reused"
     # read into memory, then gone: the scratch tree is not an artifact of record
     assert not [p for p in (tmp_path / "exports").iterdir()]
+
+
+def test_build_conversion_spec_carries_gateway_attachments(monkeypatch):
+    """Requirement B / R5. Dropping the gateway ToolRef is the same failure shape
+    as the dropped spec.skills once was: the deploy reports READY and the runtime
+    reaches no tools, because agent_iam gates the AgentCore Identity statements —
+    and the invoke chain gates runtimeUserId — on that field being present."""
+    monkeypatch.setattr(
+        hc, "get_settings",
+        lambda: SimpleNamespace(resources={
+            "memory_id": "mem-1",
+            "gateway_id": "launchpad-gw-a1b2c3d4e5",
+            "gateway_url": "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp",
+        }),
+    )
+    source = _source_agent()
+    source.spec = {
+        **source.spec,
+        "tools": [
+            {"type": "gateway", "name": "hr-database",
+             "config": {"gateway_id": "launchpad-gw-a1b2c3d4e5"}},
+            {"type": "mcp", "name": "deepwiki", "config": {"url": "https://x/mcp"}},
+            {"type": "builtin", "name": "code-interpreter"},
+        ],
+    }
+    files = {
+        "main.py": MAIN_PY, "pyproject.toml": PYPROJECT,
+        "mcp_client/client.py":
+            'url = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL")',
+    }
+    spec = hc.build_conversion_spec(
+        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt",
+    )
+    # gateway + mcp carried (both drive _uses_gateway); builtin is a Harness-only
+    # tool type the exported code does not reproduce
+    assert [(t.type, t.name) for t in spec.tools] == [
+        ("gateway", "hr-database"), ("mcp", "deepwiki"),
+    ]
+    assert spec.tools[0].config["gateway_id"] == "launchpad-gw-a1b2c3d4e5"
+    from app.services.agent_iam import _uses_gateway
+    assert _uses_gateway(spec) is True
+    from app.templates.gateway_support import runtime_user_id
+    assert runtime_user_id(spec.model_dump(), "river") == "river"
+    # env wired, soft-fail graft applied, and the note says so truthfully
+    assert spec.env["GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL"] == (
+        "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp"
+    )
+    assert hc.GW_SOFTFAIL_START in spec.code_bundle["main.py"]
+    assert spec.conversion_notes["gateway"].startswith("wired")
+    assert spec.conversion_notes["gateway_tools"].startswith("wired (2 attachment")
+    assert "kb_gateway" not in spec.conversion_notes
+
+
+def test_build_conversion_spec_skips_the_softfail_graft_without_a_gateway_client(
+    monkeypatch,
+):
+    """An export carrying no mcp_client/client.py has no gateway to soft-fail. That
+    is benign — it must not fail the conversion and must not graft anything."""
+    monkeypatch.setattr(
+        hc, "get_settings", lambda: SimpleNamespace(resources={"memory_id": "mem-1"})
+    )
+    files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT}
+    spec = hc.build_conversion_spec(
+        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt",
+    )
+    assert spec.tools == []
+    assert hc.GW_SOFTFAIL_START not in spec.code_bundle["main.py"]
+    assert "gateway_tools" not in spec.conversion_notes
+
+
+# ─── lazy gateway token graft ────────────────────────────────────────────────
+def test_lazy_gateway_token_graft_moves_the_fetch_into_the_transport():
+    """The measured root cause of a tool-less converted runtime: the export bakes
+    the Authorization header at MODULE scope, but the workload access token the M2M
+    exchange needs is a per-request context value. MCPClient's transport callable is
+    lazy (ToolProvider.load_tools), so moving just the fetch there is enough."""
+    grafted = hc.graft_lazy_gateway_token(MCP_CLIENT_PY)
+    compile(grafted, "client.py", "exec")
+    assert hc.GW_LAZY_TOKEN_MARK in grafted
+    # the fetch now lives inside the callable, not at return-statement level
+    fetch_at = grafted.index("_token = _get_bearer_token_launchpad_gw()")
+    def_at = grafted.index(f"def {hc.GW_LAZY_TOKEN_MARK}()")
+    return_at = grafted.index(f"return MCPClient({hc.GW_LAZY_TOKEN_MARK}")
+    assert def_at < fetch_at < return_at
+    # no eager fetch survives
+    assert "\n    token = _get_bearer_token_launchpad_gw()" not in grafted
+    assert "lambda: streamablehttp_client(url, headers=headers)" not in grafted
+    # the constructor keyword the CLI emitted is preserved
+    assert 'prefix="launchpad_gw"' in grafted
+
+
+def test_lazy_gateway_token_graft_is_idempotent():
+    once = hc.graft_lazy_gateway_token(MCP_CLIENT_PY)
+    assert hc.graft_lazy_gateway_token(once) == once
+
+
+def test_lazy_gateway_token_graft_fails_on_a_missing_anchor():
+    with pytest.raises(hc.ConversionError, match="_get_bearer_token"):
+        hc.graft_lazy_gateway_token(
+            MCP_CLIENT_PY.replace("token = _get_bearer_token_launchpad_gw()", "token = None")
+        )
+
+
+def test_conversion_applies_both_gateway_grafts(monkeypatch):
+    monkeypatch.setattr(
+        hc, "get_settings",
+        lambda: SimpleNamespace(resources={
+            "memory_id": "mem-1",
+            "gateway_id": "launchpad-gw-a1b2c3d4e5",
+            "gateway_url": "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp",
+        }),
+    )
+    source = _source_agent()
+    source.spec = {**source.spec,
+                   "tools": [{"type": "gateway", "name": "hr-database"}]}
+    files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT,
+             "mcp_client/client.py": MCP_CLIENT_PY}
+    spec = hc.build_conversion_spec(
+        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt",
+    )
+    # main.py: the import-time crash is contained
+    assert hc.GW_SOFTFAIL_START in spec.code_bundle["main.py"]
+    # client.py: the token fetch is deferred into the request
+    assert hc.GW_LAZY_TOKEN_MARK in spec.code_bundle["mcp_client/client.py"]
+    compile(spec.code_bundle["mcp_client/client.py"], "client.py", "exec")
+    compile(spec.code_bundle["main.py"], "main.py", "exec")

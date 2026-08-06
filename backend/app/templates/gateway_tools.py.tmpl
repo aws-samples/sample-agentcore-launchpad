@@ -1,0 +1,174 @@
+# <launchpad-gateway-mcp:v1>
+# Gateway MCP tools for a generated runtime whose spec carries a `gateway` ToolRef.
+#
+# FAIL-SOFT BY CONSTRUCTION, not by discipline. Nothing at module scope here can
+# raise: the only statements are os.environ.get() reads and function definitions,
+# and every import that could fail is function-local. A Gateway client that dies at
+# import would be strictly worse than one that has no tools — the deploy pipeline
+# would still see the runtime reach READY, so the agent would report `active` and
+# then fail every single invoke. Missing tools degrade an answer; an import crash
+# removes the agent.
+#
+# Token exchange, in one synchronous call. AgentCore Identity's M2M flow returns
+# the access token directly from GetResourceOauth2Token (no polling, no
+# authorizationUrl branch), so this needs no asyncio and no SDK decorator:
+#
+#   workload identity token   → GetResourceOauth2Token(oauth2Flow="M2M") → bearer
+#
+# The workload identity token itself has two sources, tried in this order:
+#   1. the token the Runtime injects into the request (`WorkloadAccessToken`
+#      header → BedrockAgentCoreContext). Present only when the caller supplied a
+#      runtime user id; a plain SigV4 InvokeAgentRuntime does not set one.
+#   2. GetWorkloadAccessToken with this runtime's own execution role, using the
+#      workload identity the Runtime auto-created (name injected as
+#      LAUNCHPAD_WORKLOAD_NAME after the first deploy).
+# Both actions are already granted by agent_iam._uses_gateway(); which one
+# actually works from a Runtime is what the log line below records.
+
+GATEWAY_URL = os.environ.get("LAUNCHPAD_GATEWAY_URL", "")
+GATEWAY_PROVIDER = os.environ.get("LAUNCHPAD_GATEWAY_PROVIDER", "")
+GATEWAY_SCOPES = [
+    scope for scope in os.environ.get("LAUNCHPAD_GATEWAY_SCOPE", "").split(",") if scope
+]
+WORKLOAD_NAME = os.environ.get("LAUNCHPAD_WORKLOAD_NAME", "")
+
+
+def _gw_log(message: str) -> None:
+    """Diagnostics land in the runtime log group; flush so a crash keeps them."""
+    print(f"[launchpad-gateway] {message}", flush=True)
+
+
+def _identity_client():
+    from bedrock_agentcore.services.identity import IdentityClient
+
+    return IdentityClient(os.environ.get("AWS_REGION", "us-west-2"))
+
+
+def workload_identity_token() -> str | None:
+    """Workload identity token for the outbound token exchange, or None.
+
+    Logs which of the two mechanisms produced it — that log line is the record of
+    how a Runtime actually reaches the Gateway.
+    """
+    try:
+        injected = BedrockAgentCoreContext.get_workload_access_token()
+    except Exception as exc:
+        injected = None
+        _gw_log(f"workload token context unavailable: {type(exc).__name__}: {exc}")
+    if injected:
+        _gw_log("workload identity token: injected by the Runtime (request context)")
+        return injected
+    if not WORKLOAD_NAME:
+        _gw_log(
+            "workload identity token: NOT injected and LAUNCHPAD_WORKLOAD_NAME is "
+            "unset — no way to mint one (re-publish the agent to have the platform "
+            "discover its workload identity)"
+        )
+        return None
+    try:
+        token = _identity_client().get_workload_access_token(WORKLOAD_NAME)[
+            "workloadAccessToken"
+        ]
+    except Exception as exc:
+        _gw_log(
+            f"workload identity token: GetWorkloadAccessToken({WORKLOAD_NAME}) failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return None
+    _gw_log(f"workload identity token: minted with the execution role ({WORKLOAD_NAME})")
+    return token
+
+
+def gateway_bearer_token() -> str | None:
+    """M2M access token for the shared Gateway, or None. Never raises."""
+    if not (GATEWAY_URL and GATEWAY_PROVIDER and GATEWAY_SCOPES):
+        return None
+    identity = workload_identity_token()
+    if not identity:
+        return None
+    try:
+        response = _identity_client().dp_client.get_resource_oauth2_token(
+            workloadIdentityToken=identity,
+            resourceCredentialProviderName=GATEWAY_PROVIDER,
+            scopes=GATEWAY_SCOPES,
+            oauth2Flow="M2M",
+        )
+    except Exception as exc:
+        _gw_log(
+            f"GetResourceOauth2Token({GATEWAY_PROVIDER}, {GATEWAY_SCOPES}) failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return None
+    token = response.get("accessToken")
+    if not token:
+        _gw_log(f"GetResourceOauth2Token returned no accessToken: {sorted(response)}")
+        return None
+    return token
+
+
+def gateway_client():
+    """An unstarted MCPClient for the shared Gateway, or None. Never raises."""
+    if not GATEWAY_URL:
+        return None
+    token = gateway_bearer_token()
+    if not token:
+        _gw_log("gateway tools unavailable — continuing without them")
+        return None
+    try:
+        from mcp.client.streamable_http import streamablehttp_client
+        from strands.tools.mcp import MCPClient
+
+        return MCPClient(
+            lambda: streamablehttp_client(
+                GATEWAY_URL, headers={"Authorization": f"Bearer {token}"}
+            )
+        )
+    except Exception as exc:
+        _gw_log(f"MCP client construction failed: {type(exc).__name__}: {exc}")
+        return None
+
+
+def _gw_stop(client) -> None:
+    """Tear an MCP client down without ever raising.
+
+    MCPClient runs its session on a background task group and re-raises that
+    group's errors from ``__exit__``. Handing the raw client to
+    ``ExitStack.enter_context`` therefore turns a *handled* mid-request failure
+    into an unhandled one at stack unwind — the request 500s even though the tool
+    loading was already caught (observed live: a `tools/list` 400 was logged and
+    skipped, then `httpx.HTTPStatusError` escaped the ExitStack and failed the
+    whole invocation). So teardown is registered as a guarded callback instead.
+    """
+    try:
+        client.stop(None, None, None)
+    except Exception as exc:
+        _gw_log(f"gateway session teardown failed (ignored): {type(exc).__name__}: {exc}")
+
+
+def gateway_tools(stack) -> list:
+    """Gateway tools for this request, with teardown registered on ``stack``.
+
+    The session must stay open for as long as the agent may call a tool, so the
+    caller owns the stack. Returns [] on any failure, and cannot raise — including
+    while the stack unwinds.
+    """
+    client = gateway_client()
+    if client is None:
+        return []
+    try:
+        client.start()
+    except Exception as exc:
+        _gw_log(f"gateway session start failed: {type(exc).__name__}: {exc}")
+        _gw_stop(client)  # start() can fail partway through initialization
+        return []
+    stack.callback(_gw_stop, client)
+    try:
+        tools = list(client.list_tools_sync())
+    except Exception as exc:
+        _gw_log(f"tools/list against {GATEWAY_URL} failed: {type(exc).__name__}: {exc}")
+        return []
+    _gw_log(f"gateway tools loaded: {[getattr(t, 'tool_name', '?') for t in tools]}")
+    return tools
+
+
+# </launchpad-gateway-mcp:v1>

@@ -56,6 +56,9 @@ export interface EvaluationRunInfo {
     executionSummaries?: InsightCluster[];
   };
   session_ids: string[];
+  /** The AWS batch evaluation behind this run; absent for window-scoped runs that
+   *  never started one. Required to pin RECOMMEND to this run's sessions. */
+  batch_eval_id?: string | null;
   error: string | null;
   created_at?: string | null;
 }

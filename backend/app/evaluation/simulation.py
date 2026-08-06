@@ -37,6 +37,7 @@ def run_simulated_scenario(
     scenario: dict[str, Any],
     actor_model_id: str,
     protocol: str = "http",
+    runtime_user_id: str | None = None,
 ) -> str:
     """Drive one persona scenario to completion; returns the runtime session id.
 
@@ -62,7 +63,11 @@ def run_simulated_scenario(
             )
         else:
             result = rt.invoke_runtime_text(
-                data_client, agent_arn, prompt, session_id=state["session_id"]
+                data_client,
+                agent_arn,
+                prompt,
+                session_id=state["session_id"],
+                runtime_user_id=runtime_user_id,
             )
         state["session_id"] = result["session_id"]
         return AgentInvokerOutput(agent_output=result["text"])

@@ -20,9 +20,15 @@ from app.services.runtime_discovery import (
     DISCOVERED_METHOD,
     require_invoke_capability,
 )
+from app.templates import gateway_support
 
 logger = logging.getLogger(__name__)
 BUFFERED_CHUNK_CHARS = 60
+
+
+def _runtime_user_id(agent: Agent, actor_id: str) -> str | None:
+    """See ``gateway_support.runtime_user_id`` — omitted unless the spec needs it."""
+    return gateway_support.runtime_user_id(agent.spec, actor_id)
 
 
 def _parse_gateway_text(raw_text: str, session_id: str) -> dict[str, Any]:
@@ -121,7 +127,12 @@ def invoke_agent_text(
         if route is not None:
             return _invoke_via_canary(route, prompt, session_id, actor_id)
         return rt.invoke_runtime_text(
-            data_client(), agent.arn, prompt, session_id=session_id, actor_id=actor_id
+            data_client(),
+            agent.arn,
+            prompt,
+            session_id=session_id,
+            actor_id=actor_id,
+            runtime_user_id=_runtime_user_id(agent, actor_id),
         )
     raise AppError(
         "agent.method_not_available",
@@ -148,6 +159,7 @@ def invoke_agent_events(
             prompt,
             session_id=session_id,
             actor_id=actor_id,
+            runtime_user_id=_runtime_user_id(agent, actor_id),
         )
         return
 

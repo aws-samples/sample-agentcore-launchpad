@@ -24,6 +24,7 @@ import type {
   JobInfo,
   RuntimeDiscoveryCandidate,
   RuntimeImportResult,
+  Toolkit,
 } from "../lib/api";
 import { api, ApiError } from "../lib/api";
 import type { ModelSource } from "../lib/models";
@@ -37,6 +38,43 @@ import {
 } from "../lib/models";
 
 const BUILTIN_TOOLS = ["code-interpreter", "browser"] as const;
+
+// Platform toolkits selectable for the Strands ZIP method. `tools` lists the tool
+// names the backend will emit — kept here only so the chips can show the resulting
+// tool surface without a round-trip; the backend registry
+// (backend/app/templates/toolkits/) stays the source of truth for what is emitted.
+// `prompt` is the wizard-offered default system prompt: deliberately generic, so an
+// agent built from it has prompt-fixable defects a config-bundle A/B can repair.
+const TOOLKITS: {
+  name: Toolkit;
+  tools: string[];
+  prompt: string;
+}[] = [
+  {
+    name: "hr_assistant",
+    tools: [
+      "get_pto_balance",
+      "submit_pto_request",
+      "lookup_hr_policy",
+      "get_benefits_summary",
+      "get_pay_stub",
+    ],
+    prompt: `You are a helpful HR Assistant for Acme Corp.
+
+You help employees with:
+- Checking PTO (paid time off) balances
+- Submitting PTO requests
+- Looking up HR policies (PTO, remote work, parental leave, code of conduct)
+- Understanding employee benefits (health, dental, vision, 401k, life insurance)
+- Retrieving pay stub information
+
+Always use the available tools to answer questions accurately. Do not make up
+policy details, benefit amounts, or pay information — look them up.
+Be concise, professional, and friendly.`,
+  },
+];
+
+const TOOLKIT_PROMPTS = TOOLKITS.map((kit) => kit.prompt);
 // AgentCore mount-path contract: exactly one level under /mnt
 const MOUNT_RE = /^\/mnt\/[a-zA-Z0-9._-]+$/;
 const DEFAULT_SESSION_MOUNT = "/mnt/workspace";
@@ -86,6 +124,7 @@ interface StoredSpec {
     name: string;
     config?: { url?: string; record_id?: string; gateway_id?: string };
   }[];
+  toolkits?: Toolkit[];
   skills?: string[];
   knowledge_bases?: KbRef[];
   memory?: { long_term?: boolean };
@@ -472,6 +511,9 @@ function CreateAgentWizard() {
   const [agentSdk, setAgentSdk] = useState<AgentSdk>(DEFAULT_AGENT_SDK);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [tools, setTools] = useState<string[]>([]);
+  // Platform toolkits (zip_runtime only) — local @tool functions the backend
+  // inlines into the generated agent, replacing the template's own two tools.
+  const [toolkits, setToolkits] = useState<Toolkit[]>([]);
   const [gatewayTargets, setGatewayTargets] = useState<AttachableMcp[]>([]);
   const [remoteMcp, setRemoteMcp] = useState<AttachableMcp[]>([]);
   const [skillCatalog, setSkillCatalog] = useState<AttachableSkill[]>([]);
@@ -633,6 +675,7 @@ function CreateAgentWizard() {
     setAgentSdk(DEFAULT_AGENT_SDK);
     setSystemPrompt("");
     setTools([]);
+    setToolkits([]);
     setSelectedGateway([]);
     setStoredGatewayConfig({});
     setSelectedMcp([]);
@@ -659,6 +702,49 @@ function CreateAgentWizard() {
 
   const byoMounts = s3Mounts.length > 0 || efsMounts.length > 0;
 
+  // Tool names the selected toolkits contribute. Non-empty ⇒ they replace the
+  // template's own calculator/current_utc_time, matching what the backend emits.
+  const toolkitToolNames = TOOLKITS.filter((kit) => toolkits.includes(kit.name)).flatMap(
+    (kit) => kit.tools,
+  );
+
+  // Shared by the harness and zip_runtime tool blocks — a gateway attachment is
+  // the same selection for both; only who performs the token exchange differs.
+  const gatewayChips = () =>
+    gatewayTargets.map((target) => (
+      <button
+        key={target.record_id}
+        type="button"
+        data-testid={`gateway-${target.name}`}
+        className={`selchip${selectedGateway.includes(target.name) ? " on" : ""}`}
+        disabled={!target.attachable}
+        style={{ cursor: target.attachable ? "pointer" : "not-allowed" }}
+        title={target.attachability_reason ?? target.description}
+        onClick={() => {
+          if (!target.attachable) return;
+          setSelectedGateway((prev) =>
+            prev.includes(target.name)
+              ? prev.filter((x) => x !== target.name)
+              : [...prev, target.name],
+          );
+        }}
+      >
+        {target.name} · gateway{" "}
+        {target.attachable ? (selectedGateway.includes(target.name) ? "✓" : "+") : "—"}
+      </button>
+    ));
+
+  const toggleToolkit = (kit: (typeof TOOLKITS)[number]) => {
+    const on = toolkits.includes(kit.name);
+    setToolkits((prev) => (on ? prev.filter((x) => x !== kit.name) : [...prev, kit.name]));
+    if (on) return;
+    // Offer the toolkit's default prompt, but never clobber the user's own text —
+    // only an empty box or another toolkit's untouched default is replaced.
+    setSystemPrompt((prev) =>
+      !prev.trim() || TOOLKIT_PROMPTS.includes(prev) ? kit.prompt : prev,
+    );
+  };
+
   // Resolve a KB id to its name/description, preferring the live catalog and
   // falling back to the loaded spec so out-of-catalog KBs keep their label.
   const kbInfo = (id: string): KbRef => {
@@ -674,6 +760,19 @@ function CreateAgentWizard() {
     (k) => k.status === "ACTIVE" && (k.type == null || k.type === "MANAGED"),
   );
 
+  // Gateway attachments as ToolRefs. Shared by the harness and zip_runtime
+  // branches below: the harness service performs the token exchange declaratively,
+  // a generated runtime does it in code, but the spec shape is the same one.
+  const gatewayToolRefs = () =>
+    selectedGateway.map((n) => {
+      const server = gatewayTargets.find((item) => item.name === n);
+      const config =
+        server?.record_id && server.gateway_id
+          ? { record_id: server.record_id, gateway_id: server.gateway_id }
+          : storedGatewayConfig[n];
+      return { type: "gateway", name: n, ...(config ? { config } : {}) };
+    });
+
   const buildSpec = () => ({
     name,
     method,
@@ -686,14 +785,7 @@ function CreateAgentWizard() {
       method === "harness"
         ? [
             ...tools.map((n) => ({ type: "builtin", name: n })),
-            ...selectedGateway.map((n) => {
-              const server = gatewayTargets.find((item) => item.name === n);
-              const config =
-                server?.record_id && server.gateway_id
-                  ? { record_id: server.record_id, gateway_id: server.gateway_id }
-                  : storedGatewayConfig[n];
-              return { type: "gateway", name: n, ...(config ? { config } : {}) };
-            }),
+            ...gatewayToolRefs(),
             ...selectedMcp.flatMap((n) => {
               const server = remoteMcp.find((m) => m.name === n);
               return server ? [{ type: "mcp", name: n, config: { url: server.url } }] : [];
@@ -704,7 +796,11 @@ function CreateAgentWizard() {
               const server = remoteMcp.find((m) => m.name === n);
               return server ? [{ type: "mcp", name: n, config: { url: server.url } }] : [];
             })
-          : [],
+          : // An HTTP zip runtime calls the shared Gateway from generated client
+            // code; the A2A template carries no MCP client.
+            method === "zip_runtime" && protocol === "http"
+            ? gatewayToolRefs()
+            : [],
     memory: { short_term: true, long_term: longTerm },
     ...(method === "zip_runtime"
       ? {
@@ -724,6 +820,10 @@ function CreateAgentWizard() {
               }
             : {}),
         }
+      : {}),
+    // zip_runtime only, and never together with A2A — the backend rejects both.
+    ...(method === "zip_runtime" && protocol === "http" && toolkits.length
+      ? { toolkits }
       : {}),
     ...(selectedKbs.length ? { knowledge_bases: selectedKbs.map(kbInfo) } : {}),
     ...((method === "harness" || method === "container" || method === "zip_runtime") &&
@@ -806,6 +906,8 @@ function CreateAgentWizard() {
       ),
     );
     setSelectedMcp((spec.tools ?? []).filter((x) => x.type === "mcp").map((x) => x.name));
+    // absent on every zip spec written before toolkits existed
+    setToolkits((spec.toolkits ?? []).filter((k) => TOOLKITS.some((x) => x.name === k)));
     setSelectedKbs((spec.knowledge_bases ?? []).map((k) => k.kb_id));
     setSpecKbs(spec.knowledge_bases ?? []);
     setSkills(spec.skills ?? []);
@@ -1273,31 +1375,7 @@ function CreateAgentWizard() {
                         {tool} · builtin {tools.includes(tool) ? "✓" : "+"}
                       </button>
                     ))}
-                    {gatewayTargets.map((target) => (
-                      <button
-                        key={target.record_id}
-                        type="button"
-                        className={`selchip${selectedGateway.includes(target.name) ? " on" : ""}`}
-                        disabled={!target.attachable}
-                        style={{ cursor: target.attachable ? "pointer" : "not-allowed" }}
-                        title={target.attachability_reason ?? target.description}
-                        onClick={() => {
-                          if (!target.attachable) return;
-                          setSelectedGateway((prev) =>
-                            prev.includes(target.name)
-                              ? prev.filter((x) => x !== target.name)
-                              : [...prev, target.name],
-                          );
-                        }}
-                      >
-                        {target.name} · gateway{" "}
-                        {target.attachable
-                          ? selectedGateway.includes(target.name)
-                            ? "✓"
-                            : "+"
-                          : "—"}
-                      </button>
-                    ))}
+                    {gatewayChips()}
                     {remoteMcp.map((server) => (
                       <button
                         key={server.name}
@@ -1339,24 +1417,61 @@ function CreateAgentWizard() {
                       </button>
                     ))}
                   </>
+                ) : toolkitToolNames.length ? (
+                  // A toolkit replaces the template's own two tools, so the chips
+                  // show the tool surface the deployed agent will actually have.
+                  toolkitToolNames.map((name) => (
+                    <span key={name} className="selchip on">
+                      {name} · toolkit ✓
+                    </span>
+                  ))
                 ) : (
                   <>
                     <span className="selchip on">calculator · template ✓</span>
                     <span className="selchip on">current_utc_time · template ✓</span>
                   </>
                 )}
-                {method !== "harness" && (
+                {/* An HTTP zip runtime reaches the shared Gateway through a
+                    generated MCP client; A2A and container still cannot. */}
+                {method === "zip_runtime" && !isA2a && gatewayChips()}
+                {(method === "container" || isA2a) && (
                   <span className="selchip" style={{ opacity: 0.5 }}>
                     {t("create.configure.gatewayToolsSoon")}
                   </span>
                 )}
               </div>
-              {method === "harness" && gatewayTargets.length > 0 && (
-                <div className="note" style={{ marginTop: 8 }}>
-                  <span className="i">[i]</span>
-                  <span>{t("create.configure.gatewayWholeNote")}</span>
-                </div>
+              {method === "zip_runtime" && !isA2a && (
+                <>
+                  <label style={{ marginTop: 12 }}>{t("create.configure.toolkits")}</label>
+                  <div className="selchips">
+                    {TOOLKITS.map((kit) => (
+                      <button
+                        key={kit.name}
+                        type="button"
+                        data-testid={`toolkit-${kit.name}`}
+                        className={`selchip${toolkits.includes(kit.name) ? " on" : ""}`}
+                        style={{ cursor: "pointer" }}
+                        title={t(`create.configure.toolkitDesc.${kit.name}`)}
+                        onClick={() => toggleToolkit(kit)}
+                      >
+                        {t(`create.configure.toolkitName.${kit.name}`)} · toolkit{" "}
+                        {toolkits.includes(kit.name) ? "✓" : "+"}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="note" style={{ marginTop: 8 }}>
+                    <span className="i">[i]</span>
+                    <span>{t("create.configure.toolkitNote")}</span>
+                  </div>
+                </>
               )}
+              {(method === "harness" || (method === "zip_runtime" && !isA2a)) &&
+                gatewayTargets.length > 0 && (
+                  <div className="note" style={{ marginTop: 8 }}>
+                    <span className="i">[i]</span>
+                    <span>{t("create.configure.gatewayWholeNote")}</span>
+                  </div>
+                )}
             </div>
             {method === "zip_runtime" && (
               <div className="field">

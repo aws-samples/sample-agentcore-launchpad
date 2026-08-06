@@ -85,6 +85,17 @@ export interface ExperimentInfo {
       tool_descriptions?: Record<string, string>;
       accepted_prompt?: string;
       accepted_tool_descriptions?: Record<string, string>;
+      /** Which traces this recommendation read — recorded for both paths so a run
+       *  stays explainable after the fact. Absent on pre-feature rows. */
+      trace_source?: {
+        kind: "cloudwatch" | "batch_evaluation";
+        lookback_days?: number;
+        run_id?: string;
+        batch_eval_id?: string;
+        batch_evaluation_arn?: string;
+        run_mode?: string;
+        session_count?: number;
+      };
     };
     bundles?: {
       control: { bundle_id?: string; arn: string; version?: string };
@@ -363,6 +374,11 @@ function ConfigurationExperimentView() {
   // descriptions come from two different AgentCore recommendation jobs
   const [genSp, setGenSp] = useState(true);
   const [genTd, setGenTd] = useState(true);
+  // RECOMMEND trace source: "" = the default rolling window; otherwise the id of one
+  // of this agent's completed runs, which pins the input to exactly the sessions
+  // that run analysed (an Insights job being the point of the feature).
+  const [recSourceRunId, setRecSourceRunId] = useState("");
+  const [recSourceRuns, setRecSourceRuns] = useState<EvaluationRunInfo[]>([]);
   const [toolInputsJson, setToolInputsJson] = useState<string | null>(null);
   const [confirmCleanup, setConfirmCleanup] = useState(false);
   const [confirmPromote, setConfirmPromote] = useState(false);
@@ -1079,6 +1095,41 @@ function ConfigurationExperimentView() {
     </>
   );
 
+  // Completed runs of the experiment's own agent that can pin RECOMMEND. Only runs
+  // with a batch_eval_id qualify — a window-scoped run never started one, so there
+  // is no batch evaluation to read.
+  const recSourceAgentId = exp?.agent_id ?? null;
+  useEffect(() => {
+    if (!recSourceAgentId) {
+      setRecSourceRuns([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/eval/runs?agent_id=${encodeURIComponent(recSourceAgentId)}&limit=200`,
+        );
+        if (!res.ok) return;
+        const body = (await res.json()) as { runs: EvaluationRunInfo[] };
+        if (cancelled) return;
+        setRecSourceRuns(
+          body.runs.filter((r) => r.status === "completed" && !!r.batch_eval_id),
+        );
+      } catch {
+        if (!cancelled) setRecSourceRuns([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [recSourceAgentId]);
+
+  // a source from another experiment's agent must not survive an experiment switch
+  useEffect(() => {
+    setRecSourceRunId("");
+  }, [recSourceAgentId]);
+
   // ── stage cards ────────────────────────────────────────────────────────────
   const currentPrompt = a.agent_meta?.system_prompt ?? "";
   const rec = a.recommend;
@@ -1256,6 +1307,47 @@ function ConfigurationExperimentView() {
             {recTypeCheckbox(t("expPage.recTypeTools"), genTd, setGenTd,
                              "rec-type-td", !toolDescriptionsSupported)}
           </div>
+          <div className="field" style={{ marginBottom: 8 }}>
+            <label htmlFor="rec-source">{t("expPage.recSource")}</label>
+            <select
+              id="rec-source"
+              data-testid="rec-source"
+              className="input mono"
+              value={recSourceRunId}
+              onChange={(e) => setRecSourceRunId(e.target.value)}
+            >
+              <option value="" style={{ background: "#141816" }}>
+                {t("expPage.recSourceWindow")}
+              </option>
+              {recSourceRuns.map((run) => (
+                <option key={run.id} value={run.id} style={{ background: "#141816" }}>
+                  {run.mode === "insights"
+                    ? t("expPage.recSourceInsights")
+                    : t("expPage.recSourceEval")}
+                  {" · "}
+                  {run.dataset_name ?? run.id}
+                  {/* A window-scoped run records no session ids, so several runs of
+                      the same shape would otherwise be indistinguishable here — the
+                      timestamp is what lets a user pick the analysis they just ran. */}
+                  {" · "}
+                  {run.created_at
+                    ? new Date(run.created_at).toLocaleString()
+                    : run.id}
+                  {run.session_ids.length > 0
+                    ? ` · ${t("expPage.recSourceSessions", { count: run.session_ids.length })}`
+                    : ""}
+                </option>
+              ))}
+            </select>
+            <div className="note" style={{ marginTop: 6 }}>
+              <span className="i">[i]</span>
+              <span>
+                {recSourceRunId
+                  ? t("expPage.recSourcePinnedNote")
+                  : t("expPage.recSourceWindowNote")}
+              </span>
+            </div>
+          </div>
           {genTd && toolDescriptionsSupported && (
             <div style={{ marginBottom: 8 }}>{toolInputsEditor}</div>
           )}
@@ -1275,12 +1367,34 @@ function ConfigurationExperimentView() {
               ],
               ...(genTd && toolDescriptionsSupported && toolInputs
                 ? { recommend_tools: toolInputs } : {}),
+              ...(recSourceRunId ? { recommend_source_run_id: recSourceRunId } : {}),
             },
           })}
         </>
       )}
       {rec && (
         <>
+          {/* Which traces produced this recommendation. Shown after the fact so a
+              finished experiment is explainable without re-deriving its input. */}
+          {rec.trace_source && (
+            <div
+              className="mono dim"
+              data-testid="rec-trace-source"
+              style={{ fontSize: 10, marginBottom: 6 }}
+            >
+              {rec.trace_source.kind === "batch_evaluation"
+                ? t("expPage.recSourceUsedPinned", {
+                    kind: rec.trace_source.run_mode === "insights"
+                      ? t("expPage.recSourceInsights")
+                      : t("expPage.recSourceEval"),
+                    id: rec.trace_source.batch_eval_id ?? rec.trace_source.run_id ?? "—",
+                    count: rec.trace_source.session_count ?? 0,
+                  })
+                : t("expPage.recSourceUsedWindow", {
+                    days: rec.trace_source.lookback_days ?? 7,
+                  })}
+            </div>
+          )}
           {spDone && (
             <>
               <DiffPanes

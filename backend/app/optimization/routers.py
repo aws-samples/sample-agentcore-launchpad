@@ -139,6 +139,10 @@ class ActionRequest(BaseModel):
         Field(default=None, min_length=1)
     )
     recommend_tools: dict[str, str] | None = None
+    # recommend — pin the trace source to one completed evaluation run (typically an
+    # Insights job) instead of the default rolling window, so the recommendation is
+    # generated from exactly the sessions that run analysed. Omitted ⇒ unchanged.
+    recommend_source_run_id: str | None = Field(default=None, min_length=1, max_length=16)
     accepted_prompt: str | None = None                        # accept
     accepted_tool_descriptions: dict[str, str] | None = None  # accept
     dataset_id: str | None = None                             # traffic
@@ -235,11 +239,18 @@ def experiment_action(
                                                  progress),
         )
     elif req.action == "recommend":
+        # resolved here, not inside the thread: a run that is missing, unfinished, or
+        # another agent's should be an immediate API error, not a failed background
+        # job the user has to go read a stage error to understand
+        source = service.resolve_recommend_source(
+            exp.agent_id, req.recommend_source_run_id
+        )
         service.run_action(
             exp.id, "recommend",
             lambda progress: service.act_recommend(
                 exp_id, progress,
-                types=req.recommend_types, tools=req.recommend_tools),
+                types=req.recommend_types, tools=req.recommend_tools,
+                source=source),
         )
     elif req.action == "gateway":
         service.assert_shared_gateway_available()

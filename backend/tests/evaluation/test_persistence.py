@@ -99,6 +99,37 @@ def test_runs_list_pagination_and_mode_filter(client):
     assert insights["total"] == len(insights["runs"])
 
 
+def test_runs_list_filters_by_agent_for_the_recommend_source_picker(client):
+    """The experiment RECOMMEND card offers ONE agent's completed runs as a trace
+    source; without this filter another agent's newer runs would hide them."""
+    db = SessionLocal()
+    mine, theirs = [], []
+    for index in range(3):
+        for agent_id, bucket in (("rec-a", mine), ("rec-b", theirs)):
+            run = EvalRun(
+                agent_id=agent_id, agent_name=agent_id, mode="insights",
+                status="completed" if index else "evaluating",
+                batch_eval_id=f"be-{agent_id}-{index}",
+            )
+            db.add(run)
+            db.commit()
+            bucket.append(run.id)
+    db.close()
+
+    listed = client.get("/api/eval/runs?agent_id=rec-a&limit=200").json()
+    assert all(r["agent_id"] == "rec-a" for r in listed["runs"])
+    assert {r["id"] for r in listed["runs"]} == set(mine)
+    assert not ({r["id"] for r in listed["runs"]} & set(theirs))
+    # the picker needs both fields to label and validate a choice client-side
+    assert all("batch_eval_id" in r and "status" in r for r in listed["runs"])
+
+    # composes with the mode filter
+    combined = client.get(
+        "/api/eval/runs?agent_id=rec-a&mode=insights&limit=200"
+    ).json()
+    assert {r["id"] for r in combined["runs"]} == set(mine)
+
+
 def test_runs_list_rejects_out_of_range_paging(client):
     assert client.get("/api/eval/runs?limit=0").status_code == 422
     assert client.get("/api/eval/runs?limit=500").status_code == 422

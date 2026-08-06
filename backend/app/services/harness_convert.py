@@ -7,10 +7,15 @@ bundle A/B experiments would no-op exactly as they do against the managed
 harness (the trap this feature exists to remove). A conversion whose graft
 anchors are missing FAILS instead of shipping a silently non-A/B-able agent.
 
-KB/gateway MCP env is deliberately NOT wired in v1: the exported client
-crashes at import when the gateway URL is set but the M2M token fetch fails,
-and the new runtime's access to the identity provider is unverified. The
-exported code no-ops cleanly when the URL env is absent.
+Shared-Gateway MCP **is** wired: the converted spec carries the source Harness's
+gateway ToolRefs (so the exec role keeps its AgentCore Identity grants and the
+invoke chain sends the `runtimeUserId` that makes a workload token exist),
+`discover_env` resolves the `GATEWAY_*_URL` the export reads, and
+`graft_gateway_softfail` wraps the export's module-scope client construction so a
+token failure degrades to "no gateway tools" instead of crashing the runtime at
+import. The KB gateway is still replaced rather than wired — conversion grafts
+direct `kb_search`/`kb_deep_search` tools, and wiring the KB gateway URL as well
+would give the runtime two duplicate retrieval surfaces.
 """
 
 import ast
@@ -25,7 +30,7 @@ from uuid import uuid4
 
 from app.core.config import DATA_DIR, get_settings
 from app.core.errors import AppError
-from app.schemas.agent import AgentSpec, KnowledgeBaseRef, MemoryConfig
+from app.schemas.agent import AgentSpec, KnowledgeBaseRef, MemoryConfig, ToolRef
 from app.schemas.requirements import resolve_pins
 from app.templates.kb_support import (
     KB_DEEP_TOOL_NAME,
@@ -58,6 +63,32 @@ GRAFT_START = "# <launchpad-config-bundle:v2>"
 GRAFT_END = "# </launchpad-config-bundle:v2>"
 KB_GRAFT_START = "# <launchpad-direct-kb:v1>"
 KB_GRAFT_END = "# </launchpad-direct-kb:v1>"
+GW_SOFTFAIL_START = "# <launchpad-gateway-softfail:v1>"
+GW_SOFTFAIL_END = "# </launchpad-gateway-softfail:v1>"
+GW_LAZY_TOKEN_MARK = "_launchpad_lazy_gateway_transport"
+
+# The export's eager token fetch, one occurrence per attached gateway. It bakes the
+# Authorization header at MODULE scope, which is the reason a converted runtime
+# could never authenticate: the workload access token only exists inside a request
+# context, and this runs at import.
+_GW_EAGER_TOKEN_RE = re.compile(
+    r"^(?P<indent>[ \t]*)token = (?P<fetch>_get_bearer_token_\w+\(\))[ \t]*\n"
+    r"(?P=indent)headers = \{\"Authorization\": f\"Bearer \{token\}\"\}"
+    r" if token else \{\}[ \t]*\n"
+    r"(?P=indent)return MCPClient\("
+    r"lambda: streamablehttp_client\(url, headers=headers\)(?P<rest>[^)]*)\)[ \t]*$",
+    re.MULTILINE,
+)
+
+# The export's module-scope gateway-client construction — the import-time crash
+# site the v1 conversion caveat was protecting against.
+# `[ \t]*`, not `\s*`: `\s` matches newlines, so a greedy tail would swallow the
+# blank line after the call and silently reflow the exported source.
+_GW_CLIENTS_CALL_RE = re.compile(
+    r"^(?P<indent>[ \t]*)"
+    r"(?P<call>mcp_clients[ \t]*\+=[ \t]*get_all_gateway_mcp_clients\(\)[ \t]*)$",
+    re.MULTILINE,
+)
 _LEGACY_GRAFT_RE = re.compile(
     r"\n# ─── Launchpad platform contract: config bundles \(A/B experiments\)"
     r"[\s\S]*?# ─{10,}\n"
@@ -434,12 +465,45 @@ def graft_config_bundle(
     return grafted
 
 
+def _gateway_url_for(key: str, resources: Any) -> str | None:
+    """The shared-Gateway URL a `GATEWAY_<id>_URL` env key is asking for.
+
+    The agentcore CLI bakes the gateway id into the key, upper-cased with
+    hyphens turned into underscores (live export:
+    `GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL` for
+    `launchpad-gw-a1b2c3d4e5`), so the key is matched back against the ids the
+    bootstrap config knows.
+
+    The KB gateway is deliberately NOT resolved here: conversion replaces the
+    Harness KB gateway with grafted direct-retrieval tools, so wiring its URL as
+    well would give the converted runtime two duplicate retrieval surfaces.
+    """
+    gateway_id = str(resources.get("gateway_id") or "")
+    gateway_url = str(resources.get("gateway_url") or "")
+    if not (gateway_id and gateway_url):
+        return None
+    return gateway_url if gateway_id.upper().replace("-", "_") in key else None
+
+
 def discover_env(files: dict[str, str]) -> dict[str, str | None]:
     """Env keys the exported code reads → wired value or None (degrades).
 
-    Only the launchpad memory id is wired in v1; GATEWAY_*_URL stays unset —
-    the exported MCP client skips the gateway with a warning when the URL is
-    absent, but crashes at import when it's set and the M2M token fails.
+    Both the launchpad memory id and the shared Gateway URL are wired. The
+    Gateway URL used to be withheld because the exported client crashes at
+    *import* when the URL is set and the M2M token fetch fails — that is real
+    (`mcp_client/client.py` calls `requires_access_token`, which raises inside a
+    container when no workload access token is present, from a module-scope
+    `mcp_clients += get_all_gateway_mcp_clients()`). Two changes make wiring it
+    safe rather than reworded:
+
+    - the converted spec now carries the source Harness's gateway ToolRefs, so the
+      exec role gets its identity grants and `runtimeUserId` is sent on invoke
+      (which is what makes a workload token exist at all); and
+    - `graft_gateway_softfail` wraps that module-scope call, so a token failure
+      degrades to "no gateway tools" instead of taking the runtime down.
+
+    The KB gateway's own `GATEWAY_*_URL` stays unset on purpose — conversion
+    replaces it with grafted direct-retrieval tools.
     """
     settings = get_settings()
     keys: set[str] = set()
@@ -451,9 +515,109 @@ def discover_env(files: dict[str, str]) -> dict[str, str | None]:
             continue  # runtime-provided
         if key.startswith("MEMORY_MEMORY_") and settings.resources.get("memory_id"):
             env[key] = settings.resources["memory_id"]
+        elif key.startswith("GATEWAY_") and key.endswith("_URL"):
+            env[key] = _gateway_url_for(key, settings.resources)
         else:
             env[key] = None
     return env
+
+
+def graft_lazy_gateway_token(client_py: str) -> str:
+    """Defer the export's outbound token fetch from import time to session-open time.
+
+    The exported ``mcp_client/client.py`` does::
+
+        token = _get_bearer_token_launchpad_gw()          # module scope!
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        return MCPClient(lambda: streamablehttp_client(url, headers=headers), ...)
+
+    and ``main.py`` calls ``get_all_gateway_mcp_clients()`` at module scope. So the
+    token is fetched before any request exists — and the workload access token the
+    M2M exchange needs is a **per-request** context value (the Runtime injects it as
+    a header). Measured on a live conversion: the SDK found no context token, fell
+    through to its *local dev* branch and died on
+    ``AccessDeniedException … CreateWorkloadIdentity``.
+
+    ``MCPClient`` is a lazy ``ToolProvider`` — its transport callable does not run
+    until ``load_tools()``, which happens inside the request — so moving just the
+    fetch into that callable is enough. The connection was already lazy; only the
+    header was eager.
+
+    Idempotent. Raises ``ConversionError`` if the anchor is gone (codegen drift),
+    same posture as the other grafts: better a failed conversion than a runtime that
+    reports active and reaches no tools.
+    """
+    if GW_LAZY_TOKEN_MARK in client_py:
+        return client_py
+    if "MCPClient(" not in client_py:
+        # Nothing is constructed, so there is no eager fetch to defer. Checked
+        # before the anchor so "no gateway client" stays benign while "a client
+        # whose shape we no longer recognise" still fails loudly below.
+        return client_py
+
+    def _replace(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        return (
+            f"{indent}def {GW_LAZY_TOKEN_MARK}():\n"
+            f"{indent}    # <launchpad-lazy-gateway-token:v1> fetched at session-open\n"
+            f"{indent}    # time, not import time: the workload access token only\n"
+            f"{indent}    # exists inside a request context.\n"
+            f"{indent}    _token = {match.group('fetch')}\n"
+            f"{indent}    return streamablehttp_client(\n"
+            f"{indent}        url,\n"
+            f'{indent}        headers={{"Authorization": f"Bearer {{_token}}"}}'
+            f" if _token else {{}},\n"
+            f"{indent}    )\n"
+            f"\n"
+            f"{indent}return MCPClient({GW_LAZY_TOKEN_MARK}{match.group('rest')})"
+        )
+
+    grafted, count = _GW_EAGER_TOKEN_RE.subn(_replace, client_py)
+    if count == 0:
+        raise ConversionError(
+            "graft anchor missing: eager 'token = _get_bearer_token_*()' + "
+            "MCPClient(lambda: streamablehttp_client(url, headers=headers)) shape not "
+            "found in mcp_client/client.py (agentcore CLI codegen changed?)"
+        )
+    return grafted
+
+
+def graft_gateway_softfail(main_py: str) -> str:
+    """Make the exported module-scope gateway-client construction fail soft.
+
+    The export ends up with, at import time:
+
+        mcp_clients += get_all_gateway_mcp_clients()
+
+    which raises when the outbound M2M token cannot be fetched. A crash there is
+    worse than missing tools: the runtime never starts, the deploy pipeline's
+    health signal still reports the agent `active`, and every invoke fails.
+
+    Idempotent — re-grafting an already-grafted bundle is a no-op.
+    """
+    if GW_SOFTFAIL_START in main_py:
+        return main_py
+    match = _GW_CLIENTS_CALL_RE.search(main_py)
+    if match is None:
+        raise ConversionError(
+            "graft anchor missing: module-scope 'mcp_clients += "
+            "get_all_gateway_mcp_clients()' not found while the export DOES carry "
+            "mcp_client/client.py (agentcore CLI codegen changed?)"
+        )
+    indent = match.group("indent")
+    replacement = (
+        f"{indent}{GW_SOFTFAIL_START}\n"
+        f"{indent}try:\n"
+        f"{indent}    {match.group('call').strip()}\n"
+        f"{indent}except Exception as _launchpad_gw_exc:\n"
+        f"{indent}    print(\n"
+        f"{indent}        '[launchpad] gateway MCP clients unavailable: '\n"
+        f"{indent}        f'{{type(_launchpad_gw_exc).__name__}}: {{_launchpad_gw_exc}}',\n"
+        f"{indent}        flush=True,\n"
+        f"{indent}    )\n"
+        f"{indent}{GW_SOFTFAIL_END}"
+    )
+    return main_py[: match.start()] + replacement + main_py[match.end():]
 
 
 def flatten_requirements(files: dict[str, str], platform: list[str]) -> list[str]:
@@ -551,6 +715,17 @@ def build_conversion_spec(
 ) -> AgentSpec:
     grafted = dict(files)
     source_spec = source_agent.spec or {}
+    # Gateway attachments must survive the conversion or the runtime reports READY
+    # and then reaches no tools: agent_iam gates the AgentCore Identity statements
+    # on a gateway/mcp ToolRef being present, and the invoke chain gates
+    # `runtimeUserId` — without which the Runtime injects no workload token — on the
+    # same field. Same failure shape as the dropped `spec.skills` (see the note
+    # below): deploy succeeds, invoke is silently tool-less.
+    gateway_tools = [
+        ToolRef(**ref)
+        for ref in (source_spec.get("tools") or [])
+        if isinstance(ref, dict) and ref.get("type") in ("gateway", "mcp")
+    ]
     kb_refs = [
         KnowledgeBaseRef(**ref)
         for ref in (source_spec.get("knowledge_bases") or [])
@@ -574,6 +749,14 @@ def build_conversion_spec(
         default_system_prompt=prompt_default,
         tool_description_overrides=tool_defaults,
     )
+    if "mcp_client/client.py" in grafted:
+        # Only when the export actually carries a gateway client. Its absence is
+        # benign (no gateway attached); the anchors missing while the client IS
+        # present means the codegen changed, which both grafts reject.
+        grafted["mcp_client/client.py"] = graft_lazy_gateway_token(
+            grafted["mcp_client/client.py"]
+        )
+        grafted["main.py"] = graft_gateway_softfail(grafted["main.py"])
     env_contract = discover_env(grafted)
     wired = {k: v for k, v in env_contract.items() if v is not None}
     notes = {"system_prompt": "wired (config-bundle override grafted)",
@@ -600,9 +783,20 @@ def build_conversion_spec(
             f"not verified — exported code fetches {len(code_other_skills)} "
             "non-S3 skill source(s); network egress for those is unverified"
         )
+    if gateway_tools:
+        notes["gateway_tools"] = (
+            f"wired ({len(gateway_tools)} attachment(s) carried; exec role keeps its "
+            "AgentCore Identity grants and invoke sends runtimeUserId so the "
+            "exported MCP client can mint its outbound token)"
+        )
     for key, value in env_contract.items():
+        # A GATEWAY_* key belongs to the shared Gateway (now wired) or to the KB
+        # gateway (deliberately replaced by grafted direct-retrieval tools); the
+        # resolved value is what distinguishes them.
         label = "memory" if key.startswith("MEMORY_") else (
-            "kb_gateway" if key.startswith("GATEWAY_") else key.lower())
+            ("gateway" if value is not None else "kb_gateway")
+            if key.startswith("GATEWAY_") else key.lower()
+        )
         notes[label] = (
             f"wired ({key})" if value is not None
             else f"not wired — {key} unset; exported code degrades gracefully"
@@ -614,6 +808,7 @@ def build_conversion_spec(
         model_source=conversion_platform_inputs(source_agent)[1],
         system_prompt=prompt_default or "(baked into exported code)",
         tool_description_overrides=tool_defaults,
+        tools=gateway_tools,
         skills=skills,
         # The source Harness declares ranges in its own pyproject.toml. A spec
         # must name immutable artifacts (app/schemas/requirements.py), so resolve
