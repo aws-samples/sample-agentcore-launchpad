@@ -25,17 +25,16 @@ weight: 20
 | Strands ZIP | `lab-earnings-assistant` | 生成代码、打包为 ZIP 并部署到 AgentCore Runtime | 无知识库基线、公共 API、可观测、评估与金丝雀 |
 | 托管 Harness | `lab-earnings-advisor` | 由 AgentCore 托管，无需构建部署包 | 第 04 章挂载财报知识库和技能；第 08 章转换为 Runtime 后参加评估对照与第 09 章 A/B |
 
-Strands ZIP 生成的代码内置 config-bundle 契约和 ADOT 埋点。`lab-earnings-assistant` 用于金丝雀；
-第 08 章会把 Harness 导出为同类 Runtime，保留知识库参加评估对照与第 09 章的配置包 A/B。
-Harness 将在第 03 章创建。
+Strands ZIP 生成的代码内置 config-bundle 契约和 ADOT 埋点，第 09 章的配置包 A/B 依赖
+这一契约。Harness 将在第 03 章创建。
 
 ## 2.1 进入创建向导
 
 1. 打开控制台的 `02 Agent 管理`。
 2. 页面顶部依次显示 `01 · 选择方式`、`02 · 配置`、`03 · 部署`。
-3. 选中 **Strands Studio** 卡片（角标 `ZIP 通道已上线`），点 **下一步 ▸** 进入
-   `配置 — STRANDS · ZIP 快速通道`。**不要点卡片里的 `打开 Strands Studio 画布`**——
-   那是拖拽画布通道，本实验走的是 ZIP 表单快速通道。
+3. 选中 **Strands Studio** 卡片（角标 `ZIP 通道已上线`），点击 **下一步 ▸** 进入
+   `配置 — STRANDS · ZIP 快速通道`。**不要点击卡片里的 `打开 Strands Studio 画布`**，
+   那是拖拽画布通道，本实验走 ZIP 表单快速通道。
 
 ![创建方式选择](../static/images/02-create-methods.png)
 *图 2-1：创建方式选择页。本实验只使用 Strands Studio 的 ZIP 快速通道与托管 Harness。*
@@ -58,17 +57,13 @@ Harness 将在第 03 章创建。
 ![配置表单](../static/images/02-create-config.png)
 *图 2-2：Strands ZIP 配置页。模型来源为 `Bedrock`，模型为 Nova 2 Lite，知识库留空。*
 
-`模型来源` 决定模型调用入口。切换到 `Bedrock` 后，模型下拉列表会刷新，选择
-`global.amazon.nova-2-lite-v1:0`。记下最终选择，下一章必须为 Harness 使用同一模型，
-避免把模型差异混入后续对照。
+记下最终选择的模型，下一章必须为 Harness 使用同一模型，避免把模型差异混入后续对照。
 
-> **不要沿用默认值。** 如果模型来源仍是 `Bedrock Mantle`，部署可能正常完成，但首次调用会因
+> **不要沿用默认值。** 模型来源仍是 `Bedrock Mantle` 时，部署可能正常完成，但首次调用会因
 > 模型访问权限失败。出现这种情况时，编辑 Agent，改成 `Bedrock` 与本章指定模型后重新发布。
 
-这里刻意使用普通提示词，且不挂任何知识库：本实验用的财报发布于 2026 年 7 月 30 日，晚于
-模型训练截止时间，这个 Agent 对具体数字**只能拒答或编造**——它就是第 05、08 章要量化的
-坏例基线。第 09 章不会直接优化这个 Agent，而是转换带知识库的 `lab-earnings-advisor` 后
-再做 A/B。
+这里刻意使用普通提示词且不挂知识库：财报发布于 2026 年 7 月 30 日，晚于模型训练截止时间，
+这个 Agent 对具体数字只能拒答或编造，它就是第 05、08 章要量化的坏例基线。
 
 **预期结果**：`▲ 启动 AGENT` 按钮从灰色变为可点击。
 
@@ -113,20 +108,14 @@ deploy    runtime status: READY
 register  a2a record created · <REGISTRY_RECORD_ID> · auto-submitted
 ```
 
-`deploy` 里那行 IAM propagation 重试属正常——新建的执行角色要等几秒才对 AgentCore 可见，
+`deploy` 里的 IAM propagation 重试属正常：新建的执行角色需要几秒才对 AgentCore 可见，
 流水线会自动重试。
 
 用 `generate` 行核对模型，确认 `deploy` 行最终变为 `READY`，再记录该任务的 Runtime ID 和
-Registry 记录 ID。
+Registry 记录 ID。部署成功后平台自动创建 A2A Registry 记录，第 04 章会在注册中心看到它。
 
 ![部署详情与任务日志](../static/images/02-agent-detail.png)
 *图 2-4b：左侧显示五阶段结果，右侧列出任务的完整日志。*
-
-这条流水线支持：
-
-- **异步可恢复**：`POST /api/agents` 返回 `202` 和 `job_id`。后端重启后会从首个未完成阶段继续。
-- **自动注册**：部署成功后自动创建 A2A Registry 记录，第 04 章会在注册中心看到它。
-- **AWS 是状态来源**：本地 SQLite 只存标识符和进度，Runtime 状态从 AWS 读取。
 
 ## 2.5 确认 Agent 出现在列表里
 
@@ -147,8 +136,7 @@ Registry 记录 ID。
 - [ ] 模型来源为 `Bedrock`，模型为 `global.amazon.nova-2-lite-v1:0`
 - [ ] 「现有 AGENT」中 `lab-earnings-assistant` 状态为 `运行中`，版本为 `1`
 - [ ] 五阶段面板全绿，任务日志包含 `runtime status: READY`
-- [ ] 任务日志给出以 `lab_earnings_assistant_` 开头的 Runtime ID，且已记录当前账号中的实际值
-- [ ] `register` 阶段给出 Registry 记录 ID，且已记录当前账号中的实际值
+- [ ] 已从任务日志记录当前账号的 Runtime ID 和 Registry 记录 ID
 
 ## 常见问题
 
@@ -156,11 +144,10 @@ Registry 记录 ID。
 |---|---|---|
 | `打包` 阶段长时间无进展 | ARM64 依赖首次下载较慢 | 继续观察日志；3 分钟仍无新事件再查网络和任务状态 |
 | `部署` 阶段反复出现 IAM propagation 重试 | 新建执行角色的可见性传播延迟 | 属正常，流水线最多自动重试 5 次；持续失败再检查当前身份的 IAM 权限 |
-| 页面刷新后部署面板为空 | 前端没有保留当前任务视图 | 在 Agent 列表点 `详情`，重新打开部署详情和任务日志 |
+| 页面刷新后部署面板为空 | 前端没有保留当前任务视图 | 在 Agent 列表点击 `详情`，重新打开部署详情和任务日志 |
 | 状态长时间停在 `deploying` | Runtime 仍为 `CREATING` | 查看任务日志最后一条事件；通常 20–60 秒会进入 `READY` |
 | 模型下拉里找不到 Nova 2 Lite | 模型来源仍是默认的 `Bedrock Mantle` | 把模型来源改为 `Bedrock`，再选择本章列出的模型 |
-| Nova 2 Lite 首次调用提示订阅或访问错误 | 当前账号无法使用该模型 | 改用账号可用的同一轻量模型；下一章的 Harness 也必须使用同一模型 |
-| 账号里没有任何可用的实验模型 | 模型访问未开通 | 先为账号开通可用模型，或选择两个 Agent 都能访问的同一模型 |
+| Nova 2 Lite 首次调用提示订阅或访问错误 | 当前账号无法使用该模型 | 两个 Agent 一起改用账号可用的同一轻量模型 |
 
 ---
 

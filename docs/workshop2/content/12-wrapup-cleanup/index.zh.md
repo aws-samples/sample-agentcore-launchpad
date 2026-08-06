@@ -152,10 +152,8 @@ uv run python ../scripts/teardown.py --yes        # 真删（memory → registry
 | 知识库（向量库 + embedding + 检索） | 1 份约 530 KB 的 PDF 财报索引与若干次检索 |
 | CloudWatch Logs Insights（可观测页每次查询按扫描量计费） | 平台已用 60 秒 TTL 缓存降低查询次数 |
 
-> 可观测页的成本是估算值，token × 本地价格表，界面标注 `≈ / EST`，不要拿它当账单。
-
-> 本实验统一使用 `global.amazon.nova-2-lite-v1:0`。价格表在 `config/launchpad.yaml` 的
-> `model_prices` 中，由 litellm 刷新；若界面显示 `≈ —`，只按 token 数讲调用量，不推算账单。
+> 可观测页的成本是估算值（token × `config/launchpad.yaml` 的 `model_prices`，界面标注
+> `≈ / EST`），不要拿它当账单；界面显示 `≈ —` 时只按 token 数讲调用量。
 
 ## 12.6 继续往下走
 
@@ -169,12 +167,10 @@ uv run python ../scripts/teardown.py --yes        # 真删（memory → registry
 
 ## 本章验证清单
 
-- [ ] 基础流程有 `lab-earnings-assistant`、`lab-earnings-advisor` 与第 08 章转换出的 `lab-earnings-advisor-rt`
-- [ ] 第 09 章和可选第 10 章创建的实验、金丝雀中间资源已经清理
-- [ ] 先删除转换 Runtime，再解除 Harness 的 KB 挂载，随后删除 KB、基础 Agent、Registry 与评估资源
-- [ ] 完成第 09 章时，`lab-earnings-audit-ab` 与该章创建的两个无参考评估器也已删除
+- [ ] 第 09 章和可选第 10 章创建的实验、金丝雀中间资源已经清理（互斥锁已释放）
+- [ ] 按 12.3 顺序删除：转换 Runtime → 解除 KB 挂载 → KB → 基础 Agent → Registry 与评估资源
+- [ ] 完成第 09 章时，`lab-earnings-audit-ab` 与该章的两个无参考评估器也已删除
 - [ ] 没有误删 `launchpad-*` 共享基础设施
-- [ ] 已说明可观测页成本是估算值，实际账单以 AWS 账单为准
 
 ## 常见问题
 

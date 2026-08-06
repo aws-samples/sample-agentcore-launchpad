@@ -70,9 +70,8 @@ register  a2a record created · <REGISTRY_RECORD_ID> · auto-submitted
 
 **预期结果**：五个节点全绿，「现有 AGENT」中的 `lab-earnings-advisor` 状态变为 `运行中`。
 
-Harness 还有一项与遥测有关的行为：日志组在首次调用后才出现，第 07 章的可观测视图也依赖
-第 05 章的对话产生 trace。另外托管 Harness 不能直接参加批量评估与配置包实验——第 08 章
-会把它转换为 Runtime 再评估。
+Harness 的日志组在首次调用后才出现，第 07 章的可观测视图依赖第 05 章的对话产生 trace。
+托管 Harness 不能直接参加批量评估与配置包实验，第 08 章会把它转换为 Runtime 再评估。
 
 ## 3.3 核对两种创建方式
 
@@ -106,10 +105,8 @@ Harness 还有一项与遥测有关的行为：日志组在首次调用后才出
 
 - [ ] `lab-earnings-advisor` 的模型来源为 `Bedrock`，模型与 `lab-earnings-assistant` 完全一致
 - [ ] Harness 的 `打包` 阶段显示 `skipped`
-- [ ] 任务日志给出以 `lab_earnings_advisor-` 开头的 Harness ID，且已记录当前账号中的实际值
-- [ ] `register` 阶段给出 Registry 记录 ID，且已记录当前账号中的实际值
-- [ ] 「现有 AGENT」中能看到 `lab-earnings-advisor` 和 `lab-earnings-assistant`
-- [ ] 两个 Agent 都是 `运行中`，版本均为 `1`
+- [ ] 已从任务日志记录 Harness ID 和 Registry 记录 ID
+- [ ] 「现有 AGENT」中两个 Agent 都是 `运行中`，版本均为 `1`
 
 ## 常见问题
 
