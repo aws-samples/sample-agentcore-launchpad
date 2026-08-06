@@ -29,9 +29,9 @@ weight: 120
    ↓
 第07章 观测          仪表盘 / 会话还原 / trace 瀑布图：核对两 Agent 的模型调用与检索
    ↓
-第08章 评估          带真值的数据集 + 自定义评审 → 无 KB 基线 vs 有 KB advisor 的对照评分表
+第08章 评估          带真值数据集 + 自定义评审；Harness 转 Runtime → 无 KB 基线 vs 有 KB 的对照评分表
    ↓
-第09章 优化          Harness 转 Runtime（保留 KB）→ 优化器读 trace → 配置包 A/B 50/50 → 判定 → 清理
+第09章 优化          优化器读 trace → 无参考评估器 → 配置包 A/B 50/50 → 判定 → 清理
 第10章 金丝雀（可选）目标金丝雀：真实生产流量分档放量 + 每档证据门禁
    ↓
 第11章 治理（可选）  Gateway 纳管（只加标签）→ Cedar LOG_ONLY 策略 → 真实 ALLOW/DENY 决策证据
@@ -46,7 +46,7 @@ weight: 120
 |---|---|---|
 | Agent `lab-earnings-assistant`（zip runtime） | `runtime/lab_earnings_assistant_<后缀>` | `02 Agent 管理` 列表行 → `删除` |
 | Agent `lab-earnings-advisor`（harness） | `harness/lab_earnings_advisor-<后缀>` | 同上 |
-| Agent `lab-earnings-advisor-rt`（第 09 章转换所得） | 以 Agent 详情中的 Runtime ARN 为准 | 同上；只在完成第 09 章后存在 |
+| Agent `lab-earnings-advisor-rt`（第 08 章转换所得） | 以 Agent 详情中的 Runtime ARN 为准 | 同上 |
 | S3 部署包 | `s3://launchpad-artifacts-<ACCT>-<REGION>/agents/lab-earnings-assistant/deployment_package.zip` | S3 手动删，也可以留着 |
 
 > 控制台的 `删除` 会一并删除 AWS 侧的 Runtime / Harness 资源与本地台账行。
@@ -55,7 +55,7 @@ weight: 120
 
 | 资源 | 标识 | 清理方式 |
 |---|---|---|
-| 托管知识库 `lab-earnings-kb` | `<KB_ID>` | 先从 `lab-earnings-advisor` 取消挂载；若完成第 09 章，还要先删除 `lab-earnings-advisor-rt`，再到 `04 知识库` 删除 |
+| 托管知识库 `lab-earnings-kb` | `<KB_ID>` | 先删除 `lab-earnings-advisor-rt`，再从 `lab-earnings-advisor` 取消挂载，最后到 `04 知识库` 删除 |
 | S3 数据源对象 | `s3://launchpad-artifacts-<ACCT>-<REGION>/kb/<KB_ID>/` | 随 KB 删除清理，S3 对象可手动确认 |
 | `launchpad-kb-gw` 上的 KB target | 平台自动管理 | 取消挂载后由平台回收。网关本身是共享资源，**不要删** |
 
@@ -66,7 +66,7 @@ weight: 120
 | `lab-earnings-answering`（技能） | `<SKILL_RECORD_ID>` | `APPROVED` | `03 注册中心` 详情 → `删除` |
 | `lab-earnings-assistant`（A2A，自动登记） | `<ASSISTANT_RECORD_ID>` | 以当前页面为准 | 删 Agent 时一并处理，或手动删记录 |
 | `lab-earnings-advisor`（A2A） | `<ADVISOR_RECORD_ID>` | 以当前页面为准 | 同上 |
-| `lab-earnings-advisor-rt`（A2A） | 以当前页面为准 | 以当前页面为准 | 只在完成第 09 章后存在；删 Agent 时一并处理 |
+| `lab-earnings-advisor-rt`（A2A） | 以当前页面为准 | 以当前页面为准 | 删 Agent 时一并处理 |
 
 > **不要用「停用 / DEPRECATED」来清理**。它是终态，之后既不能恢复也不能改。要清就直接 `删除`。
 
@@ -115,7 +115,7 @@ weight: 120
 
 ```text
 1. 实验 / 金丝雀 → 各自的「清理」按钮
-2. 若完成第 09 章，删除 lab-earnings-advisor-rt（会同时删除对应 A2A 记录）
+2. 删除 lab-earnings-advisor-rt（会同时删除对应 A2A 记录）
 3. 取消 lab-earnings-advisor 上的 KB 挂载 → 重新发布 → 删除知识库
 4. 删除两个基础 Agent：lab-earnings-assistant 与 lab-earnings-advisor
 5. 删除剩余 Registry 记录（技能 + 两条基础 Agent 的 A2A）
@@ -169,7 +169,7 @@ uv run python ../scripts/teardown.py --yes        # 真删（memory → registry
 
 ## 本章验证清单
 
-- [ ] 基础流程有 `lab-earnings-assistant` 与 `lab-earnings-advisor`；完成第 09 章后还应看到 `lab-earnings-advisor-rt`
+- [ ] 基础流程有 `lab-earnings-assistant`、`lab-earnings-advisor` 与第 08 章转换出的 `lab-earnings-advisor-rt`
 - [ ] 第 09 章和可选第 10 章创建的实验、金丝雀中间资源已经清理
 - [ ] 先删除转换 Runtime，再解除 Harness 的 KB 挂载，随后删除 KB、基础 Agent、Registry 与评估资源
 - [ ] 完成第 09 章时，`lab-earnings-audit-ab` 与该章创建的两个无参考评估器也已删除

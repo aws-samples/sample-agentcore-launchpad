@@ -146,7 +146,8 @@ make dev              # 前台模式，占用当前终端
 浏览器打开 `http://localhost:5173`，切换到中文界面。
 
 ![控制台总览](../static/images/01-overview.png)
-*图 1-1：全新账号的控制台总览。Runtime 和 Evaluation 尚未创建属于正常状态。*
+*图 1-1：控制台总览。图为完成第 02–08 章后的样子；全新账号中「已部署 AGENT」为 0，
+Runtime 与 Evaluation 显示「尚未创建」，属正常状态。*
 
 确认右上角显示 `● 系统运行正常`、区域为 `us-west-2`，服务健康面板里的 Gateway、Memory、
 Registry、Policy 和 Observability 五项为「就绪」。Runtime 与 Evaluation 显示「尚未创建」

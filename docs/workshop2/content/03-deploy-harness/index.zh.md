@@ -70,8 +70,9 @@ register  a2a record created · <REGISTRY_RECORD_ID> · auto-submitted
 
 **预期结果**：五个节点全绿，「现有 AGENT」中的 `lab-earnings-advisor` 状态变为 `运行中`。
 
-Harness 还有一项与后续评估有关的行为：日志组在首次调用后才出现。因此第 08 章评估前，必须先在
-第 05 章完成至少一次 Harness 对话，否则评估会提示 `eval.harness_no_telemetry`。
+Harness 还有一项与遥测有关的行为：日志组在首次调用后才出现，第 07 章的可观测视图也依赖
+第 05 章的对话产生 trace。另外托管 Harness 不能直接参加批量评估与配置包实验——第 08 章
+会把它转换为 Runtime 再评估。
 
 ## 3.3 核对两种创建方式
 
@@ -86,7 +87,8 @@ Harness 还有一项与后续评估有关的行为：日志组在首次调用后
 | `deploy` | `CreateHarness` | `CreateAgentRuntime` |
 | Registry 记录 | 自动创建 A2A 记录 | 自动创建 A2A 记录 |
 | 知识库 | 支持托管网关多步检索 | 可挂载，但本实验保留为无知识库基线 |
-| 配置包 A/B | Harness 本身不支持；第 09 章可转换为 Runtime | 支持 |
+| 批量评估 | 不支持（评估服务解析不了 Harness span）；第 08 章转换为 Runtime 后评估 | 支持 |
+| 配置包 A/B | Harness 本身不支持；转换后的 Runtime 支持 | 支持 |
 | Runtime 金丝雀 | 不支持 | 支持 |
 
 回到「现有 AGENT」表格，确认能看到这两行：
@@ -116,8 +118,8 @@ Harness 还有一项与后续评估有关的行为：日志组在首次调用后
 | Harness 配置页找不到 Nova 2 Lite | 模型来源仍是默认的 `Bedrock Mantle` | 改成 `Bedrock`，再选择第 02 章实际使用的模型 |
 | 两个 Agent 的模型不同 | 第 03 章没有沿用第 02 章的选择 | 编辑 Harness，改为与 `lab-earnings-assistant` 相同的模型后重新发布 |
 | Nova 2 Lite 不可用 | 当前账号没有开通该模型 | 让两个 Agent 一起改用账号可用的同一轻量模型 |
-| Harness 评估提示 `eval.harness_no_telemetry` | Agent 还没有被调用，日志组尚未创建 | 先完成第 05 章的 Harness 对话，再运行评估 |
-| 想把 Harness 用于配置包 A/B | Harness 本身不读取配置包 | 第 09 章先把 `lab-earnings-advisor` 转为保留知识库的 Runtime |
+| 可观测页看不到 Harness 的 trace | Agent 还没有被调用，日志组尚未创建 | 先完成第 05 章的 Harness 对话 |
+| 想评估 Harness 或用于配置包 A/B | Harness span 不被评估服务支持，也不读取配置包 | 第 08 章把 `lab-earnings-advisor` 转为保留知识库的 Runtime |
 
 ---
 

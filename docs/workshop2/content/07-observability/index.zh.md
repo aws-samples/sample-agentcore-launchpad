@@ -50,14 +50,14 @@ token 和预估成本：
 「热门工具」面板应能反映第 04–05 章的工具调用。工具名结构如下，调用次数以自己的页面为准：
 
 ```
-lab-earnings-kb-<kb_id 小写>___Retrieve    <N> 次调用
-skills                                     <N> 次调用
+lab-earnings-kb-<kb_id 小写>___Retrieve    <N> 次调用 · 100%
 ```
 
 > `<kb_id 小写>` 是第 04 章知识库的 id，每个账号都不同。请在自己的页面记录工具名和调用次数，
-> 并确认知识库检索工具与前面的测试操作一致。
+> 并确认知识库检索工具与前面的测试操作一致。`skills` 只有在模型主动加载技能时才会出现，
+> Nova 2 Lite 通常只调用检索工具。
 
-- **60 秒 TTL 缓存**：视图按 (视图, 时间范围) 缓存 60 秒，右上角显示 `缓存于 N 秒前`。
+- **60 秒 TTL 缓存**：视图按「视图 + 时间范围」缓存 60 秒，右上角显示 `缓存于 N 秒前`。
   Logs Insights 按扫描量计费，所以默认走缓存；点 `⟳ 刷新` 绕过。
 - **成本是估算**：token 数 × `config/launchpad.yaml` 里的 `model_prices`（USD / 1M tokens），
   界面用 `≈ / EST` 标注。`⟳ 更新价格` 会从 litellm 公共价格表拉取账号见过的每个模型的价格，
@@ -136,10 +136,10 @@ POST /invocations                                           <ROOT_DURATION>
 "harness.id":         "<HARNESS_ID>"
 "aws.genai.span_kind": "LLM"
 "gen_ai.provider.name": "strands-agents"
-"gen_ai.request.model": "<SELECTED_MODEL_ID>"
 "gen_ai.server.time_to_first_token": <MILLISECONDS>
-"gen_ai.usage.input_tokens": <INPUT_TOKENS>
+"gen_ai.usage.prompt_tokens": <INPUT_TOKENS>
 "gen_ai.usage.output_tokens": <OUTPUT_TOKENS>
+"gen_ai.usage.total_tokens": <TOTAL_TOKENS>
 ```
 
 在自己的 `chat` span 中记录模型、输入/输出 token 和首 token 延迟，并与 span 总耗时比较。

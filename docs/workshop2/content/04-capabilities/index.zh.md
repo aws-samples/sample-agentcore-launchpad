@@ -89,15 +89,16 @@ weight: 40
 *图 4-5：检索结果。每个 chunk 都带 `score` 与来源元数据，例如 `_document_title`、
 `_chunk_id`、`_source_uri` 和 `_data_source_id`。具体字段以当前文档类型和页面为准。*
 
-相关 chunk 应包含以下事实（PDF 原文是英文）：
+排名靠前的 chunk 应包含以下事实（PDF 原文是英文）：
 
 ```
-AWS segment sales increased 37% year-over-year to $42.2 billion.
-AWS segment operating income was $16.6 billion, compared with $10.2 billion
-in second quarter 2025.
+Net sales increased 20% year-over-year
+Operating income was $27.5 billion, up 43% year-over-year
+AWS net sales increased 37%—its fastest growth in 18 quarters—to a $169 billion
+annualized revenue run rate
 ```
 
-**预期结果**：结果包含 AWS 分部的收入、增速与经营利润。记录自己页面中相关 chunk 的
+**预期结果**：结果包含 AWS 分部的增速与整体业绩事实。记录自己页面中相关 chunk 的
 `score`、标题和来源 URI；截图分数只用于说明界面，不是验收值。中文提问可以跨语言检索到
 英文原文；定向追问时用财报中的英文指标名（如 `Free cash flow`、`AWS segment`、
 `Operating income`）能进一步缩小范围。如果检索结果无关，先检查上传文件和知识库描述，
@@ -199,12 +200,12 @@ DEFAULT 自动切换。*
 `部署` 阶段变成 `UpdateHarness`。以下日志仅示意关键字段；请核对自己输出中的状态、版本和 ID：
 
 ```json
-{"stage":"provision","msg":"reusing shared execution role arn:aws:iam::…:role/launchpad-agent-execution-role"}
+{"stage":"provision","msg":"reusing existing execution role launchpad-agent-lab-earnings-advisor-<HASH>"}
 {"stage":"provision","msg":"kb gateway ready · 1 knowledge base(s) mounted"}
-{"stage":"provision","msg":"iam role reused · kb targets ready (1)"}
-{"stage":"deploy","msg":"UpdateHarness accepted · harnessId <HARNESS_ID> · new version <NEW_VERSION>"}
+{"stage":"provision","msg":"iam role · launchpad-agent-lab-earnings-advisor-<HASH> · kb targets ready (1)"}
+{"stage":"deploy","msg":"UpdateHarness accepted · harnessId <HARNESS_ID> · new version 2"}
 {"stage":"deploy","msg":"harness READY · …"}
-{"stage":"register","msg":"a2a record refreshed · <A2A_RECORD_ID> · auto-submitted"}
+{"stage":"register","msg":"a2a record refreshed · <A2A_RECORD_ID> · DRAFT"}
 ```
 
 ![重新发布确认](../static/images/04-harness-republish-confirm.png)

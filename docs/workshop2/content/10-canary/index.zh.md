@@ -43,11 +43,11 @@ Agent 下拉同样把不合格原因直接写出来：
 
 ```
 lab-earnings-assistant · zip_runtime        ← 可选
-lab-earnings-advisor-rt · zip_runtime       ← 完成第 09 章转换后也会出现，本章不选
+lab-earnings-advisor-rt · zip_runtime       ← 完成第 08 章转换后也会出现，本章不选
 lab-earnings-advisor · harness   — 基于目标的金丝雀需要 AgentCore Runtime Agent。
 ```
 
-`lab-earnings-advisor` 在下拉里是灰色的，无法选中。完成第 09 章后，
+`lab-earnings-advisor` 在下拉里是灰色的，无法选中。完成第 08 章后，
 `lab-earnings-advisor-rt` 也是合格的 Runtime，但本章仍选 `lab-earnings-assistant`，避免把配置
 A/B 和版本金丝雀混在同一个对象上。A2A Agent 也会因不兼容 HTTP target-canary 流量被排除。
 
@@ -65,7 +65,7 @@ A/B 和版本金丝雀混在同一个对象上。A2A Agent 也会因不兼容 HT
 > 账号里已有金丝雀记录时，点 `基于目标的 A/B` 看到的是那条记录的详情，新建仍得走
 > `+ 新建金丝雀`。
 
-把它替换成下面这份候选提示词。本章对象是无知识库的 `lab-earnings-assistant`，与第 09 章转换后
+把它替换成下面这份候选提示词。本章对象是无知识库的 `lab-earnings-assistant`，与第 08 章转换后
 的 `lab-earnings-advisor-rt` 不同；这里验证的是 Runtime 版本灰度机制，不把第 09 章的 treatment
 直接搬到另一个 Agent 上：
 
@@ -280,7 +280,7 @@ treatment 端点。」
 ## 本章验证清单
 
 - [ ] 选择 `lab-earnings-assistant · zip_runtime`；`lab-earnings-advisor · harness` 显示不合格原因
-- [ ] 若已完成第 09 章，确认 `lab-earnings-advisor-rt · zip_runtime` 也可选，但本章没有选它
+- [ ] 确认 `lab-earnings-advisor-rt · zip_runtime` 也可选，但本章没有选它
 - [ ] 创建金丝雀记录时没有产生 AWS 资源
 - [ ] `SETUP` 后能看到 `v1 → v2`、专属网关、两个 target、两个在线评估
 - [ ] 90/10 权重条与真实生产流量说明可见

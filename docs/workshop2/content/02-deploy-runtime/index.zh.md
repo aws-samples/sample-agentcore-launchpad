@@ -23,10 +23,11 @@ weight: 20
 | 创建方式 | 本实验 Agent | 适用场景 | 后续用途 |
 |---|---|---|---|
 | Strands ZIP | `lab-earnings-assistant` | 生成代码、打包为 ZIP 并部署到 AgentCore Runtime | 无知识库基线、公共 API、可观测、评估与金丝雀 |
-| 托管 Harness | `lab-earnings-advisor` | 由 AgentCore 托管，无需构建部署包 | 第 04 章挂载财报知识库和技能；第 09 章转换为 Runtime 后参加 A/B |
+| 托管 Harness | `lab-earnings-advisor` | 由 AgentCore 托管，无需构建部署包 | 第 04 章挂载财报知识库和技能；第 08 章转换为 Runtime 后参加评估对照与第 09 章 A/B |
 
 Strands ZIP 生成的代码内置 config-bundle 契约和 ADOT 埋点。`lab-earnings-assistant` 用于金丝雀；
-第 09 章会把 Harness 导出为同类 Runtime，并保留知识库后进行配置包 A/B。Harness 将在第 03 章创建。
+第 08 章会把 Harness 导出为同类 Runtime，保留知识库参加评估对照与第 09 章的配置包 A/B。
+Harness 将在第 03 章创建。
 
 ## 2.1 进入创建向导
 
