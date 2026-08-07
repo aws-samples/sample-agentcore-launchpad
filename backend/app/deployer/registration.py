@@ -2,14 +2,19 @@
 
 from app.deployer.pipeline import StageContext, StageResult
 from app.models.ledger import Agent
-from app.services.registry_console import register_agent_record
+from app.services.registry_console import RegistryUnavailableError, register_agent_record
 
 
 def register_stage(ctx: StageContext, agent: Agent) -> StageResult:
     db = ctx.session()
     try:
         row = db.get(Agent, agent.id)
-        result = register_agent_record(row)
+        try:
+            result = register_agent_record(row)
+        except RegistryUnavailableError as exc:
+            detail = f"registry unavailable · register skipped · {exc.message}"
+            ctx.log(detail)
+            return StageResult(skipped=True, detail=detail)
         row.registry_record_id = result["record_id"]
         db.commit()
         verb = "created" if result["created"] else "refreshed"

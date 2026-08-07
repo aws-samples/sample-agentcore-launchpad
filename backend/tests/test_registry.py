@@ -154,3 +154,50 @@ def test_register_stage_log_does_not_claim_a_submit_it_never_made(monkeypatch):
         assert ("created" if created else "refreshed") in result.detail
     # the misleading combination must be impossible
     assert "auto-submitted" not in logs[0]
+
+
+def test_register_stage_skips_only_explicit_registry_unavailability(monkeypatch):
+    from types import SimpleNamespace
+
+    import app.deployer.registration as registration
+    from app.services.registry_console import RegistryUnavailableError
+
+    logs: list[str] = []
+    row = SimpleNamespace(id="a1", registry_record_id=None)
+    session = MagicMock()
+    session.get.return_value = row
+    ctx = SimpleNamespace(session=lambda: session, log=logs.append)
+    monkeypatch.setattr(
+        registration,
+        "register_agent_record",
+        lambda _row: (_ for _ in ()).throw(
+            RegistryUnavailableError("blocked by account policy")
+        ),
+    )
+
+    result = registration.register_stage(ctx, row)
+
+    assert result.skipped is True
+    assert "register skipped" in result.detail
+    session.commit.assert_not_called()
+
+
+def test_registry_endpoint_returns_unavailable_envelope(client, monkeypatch):
+    import app.services.registry_console as console
+
+    monkeypatch.setattr(
+        console,
+        "console_list",
+        lambda *_args: (_ for _ in ()).throw(
+            console.RegistryUnavailableError("blocked by account policy")
+        ),
+    )
+
+    response = client.get("/api/registry/records")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "code": "registry.unavailable",
+        "message": "blocked by account policy",
+        "detail": {"reason": "blocked by account policy"},
+    }
