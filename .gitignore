@@ -9,6 +9,7 @@
 /.codex/
 /data/
 /design/
+/docs/issues/
 .playwright-cli/
 # --- python ---
 __pycache__/
