@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core.db import SessionLocal  # noqa: E402
 from app.models.ledger import Agent  # noqa: E402
 from app.services.agentcore import registry as reg  # noqa: E402
-from app.services.agentcore.client import control_client  # noqa: E402
+from app.services.agentcore.client import registry_control_client  # noqa: E402
 from app.services.registry_console import _registry_id, register_agent_record  # noqa: E402
 
 
@@ -36,7 +36,7 @@ def main() -> None:
     finally:
         db.close()
 
-    client = control_client()
+    client = registry_control_client()
     registry_id = _registry_id()
 
     for agent_id, name, method, spec, arn, version in rows:

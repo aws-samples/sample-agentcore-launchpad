@@ -28,6 +28,16 @@ def data_client():
 
 
 @lru_cache
+def registry_control_client():
+    return boto3.client("agent-registry-control", region_name=get_settings().region)
+
+
+@lru_cache
+def registry_data_client():
+    return boto3.client("agent-registry", region_name=get_settings().region)
+
+
+@lru_cache
 def agent_client():
     return boto3.client("bedrock-agent", region_name=get_settings().region)
 

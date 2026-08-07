@@ -18,7 +18,11 @@ from app.models.ledger import Agent
 from app.services import mcp_client
 from app.services.agentcore import policy as policy_api
 from app.services.agentcore import registry as reg
-from app.services.agentcore.client import control_client, data_client
+from app.services.agentcore.client import (
+    control_client,
+    registry_control_client,
+    registry_data_client,
+)
 from app.services.skill_ingest import (
     SKILL_MD_MAX_BYTES,
     SKILL_NAME_RE,
@@ -62,7 +66,7 @@ def _registry_id() -> str:
 
 def register_agent_record(agent: Agent, auto_submit: bool = True) -> dict[str, Any]:
     """Create/refresh the A2A record for a deployed agent; auto-submit new records."""
-    client = control_client()
+    client = registry_control_client()
     registry_id = _registry_id()
     spec = agent.spec or {}
     # A2A-protocol runtimes serve real JSON-RPC at the data-plane URL — their
@@ -129,7 +133,7 @@ def upload_skill_bundle(skill_name: str = SKILL_NAME) -> dict[str, Any]:
 
 def ensure_default_records() -> list[dict[str, Any]]:
     """Register the gateway targets (MCP) + sample skill bundle (AGENT_SKILLS)."""
-    client = control_client()
+    client = registry_control_client()
     registry_id = _registry_id()
     settings = get_settings()
     results: list[dict[str, Any]] = []
@@ -194,19 +198,21 @@ def skill_attach_path(skill_name: str = SKILL_NAME) -> str:
 
 
 def console_list(descriptor_type: str | None = None, status: str | None = None) -> list[dict]:
-    return reg.list_records(control_client(), _registry_id(), descriptor_type, status)
+    return reg.list_records(
+        registry_control_client(), _registry_id(), descriptor_type, status
+    )
 
 
 def console_get(record_id: str) -> dict[str, Any]:
-    return reg.get_record(control_client(), _registry_id(), record_id)
+    return reg.get_record(registry_control_client(), _registry_id(), record_id)
 
 
 def console_search(query: str) -> list[dict[str, Any]]:
-    return reg.search_records(data_client(), [_registry_id()], query)
+    return reg.search_records(registry_data_client(), [_registry_id()], query)
 
 
 def console_action(record_id: str, action: str) -> dict[str, Any]:
-    client = control_client()
+    client = registry_control_client()
     registry_id = _registry_id()
     if action == "submit":
         return reg.submit_record(client, registry_id, record_id)
@@ -220,7 +226,7 @@ def console_action(record_id: str, action: str) -> dict[str, Any]:
 
 
 def console_delete(record_id: str) -> None:
-    reg.delete_record(control_client(), _registry_id(), record_id)
+    reg.delete_record(registry_control_client(), _registry_id(), record_id)
 
 
 def build_gateway_record(
@@ -317,7 +323,7 @@ def gateway_registry_states(
     registry_id: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Match live Gateways to their Gateway-level and legacy Registry records."""
-    client = client or control_client()
+    client = client or registry_control_client()
     registry_id = registry_id or _registry_id()
     records = _list_mcp_record_details(client, registry_id)
     by_url: dict[str, list[dict[str, Any]]] = {}
@@ -379,7 +385,7 @@ def gateway_registry_preview(
     Gateway/action projection here. Matching is based on the unique live
     Gateway URL; a record with the desired name but another URL is a conflict.
     """
-    client = client or control_client()
+    client = client or registry_control_client()
     registry_id = registry_id or _registry_id()
     desired_name = record_name or gateway_name
     proposed = build_gateway_record(
@@ -460,7 +466,7 @@ def import_gateway_record(
     This operation never approves or deprecates a record. Governance must run
     its managed-Gateway preflight before calling it.
     """
-    client = client or control_client()
+    client = client or registry_control_client()
     registry_id = registry_id or _registry_id()
     preview = gateway_registry_preview(
         gateway_id=gateway_id,
@@ -538,7 +544,7 @@ def retire_legacy_gateway_records(
     registry_id: str | None = None,
 ) -> dict[str, Any]:
     """Explicitly deprecate selected legacy target records after cutover."""
-    client = client or control_client()
+    client = client or registry_control_client()
     registry_id = registry_id or _registry_id()
     gateway_record = reg.get_record(client, registry_id, gateway_record_id)
     gateway_url = _mcp_record_url(gateway_record)
@@ -665,7 +671,8 @@ def _legacy_gateway_attachment(resources: dict[str, Any]) -> dict[str, Any] | No
 def resolve_gateway_attachments(
     tools: list[Any],
     *,
-    client: Any | None = None,
+    registry_client: Any | None = None,
+    agentcore_client: Any | None = None,
     registry_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Reread selected Registry records and Gateways for Harness deployment.
@@ -700,13 +707,14 @@ def resolve_gateway_attachments(
                 status_code=409,
             )
     if configured:
-        client = client or control_client()
+        registry_client = registry_client or registry_control_client()
+        agentcore_client = agentcore_client or control_client()
         registry_id = registry_id or _registry_id()
 
     for config in configured:
         record_id = config["record_id"]
         gateway_id = config["gateway_id"]
-        record = reg.get_record(client, registry_id, record_id)
+        record = reg.get_record(registry_client, registry_id, record_id)
         if record.get("descriptorType") != "MCP" or record.get("status") != "APPROVED":
             raise AppError(
                 "governance.registry_record_not_approved",
@@ -714,7 +722,7 @@ def resolve_gateway_attachments(
                 status_code=409,
             )
         record_url = _mcp_record_url(record)
-        gateway = policy_api.get_gateway(client, gateway_id)
+        gateway = policy_api.get_gateway(agentcore_client, gateway_id)
         if (
             gateway.get("protocolType") != "MCP"
             or not record_url
@@ -743,7 +751,8 @@ def resolve_gateway_attachments(
 
 def attachable_records(
     *,
-    client: Any | None = None,
+    registry_client: Any | None = None,
+    agentcore_client: Any | None = None,
     registry_id: str | None = None,
     gateways: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -751,21 +760,25 @@ def attachable_records(
     the registry lifecycle is the availability gate. MCP records whose URL
     matches a live AgentCore Gateway expose server-derived attachability;
     other MCP records remain unauthenticated remote_mcp entries."""
-    client = client or control_client()
+    registry_client = registry_client or registry_control_client()
     registry_id = registry_id or _registry_id()
     resources = get_settings().resources
-    gateways = gateways if gateways is not None else _list_live_mcp_gateways(client)
+    gateways = (
+        gateways
+        if gateways is not None
+        else _list_live_mcp_gateways(agentcore_client or control_client())
+    )
     gateways_by_url: dict[str, list[dict[str, Any]]] = {}
     for gateway in gateways:
         if gateway.get("protocolType") == "MCP" and gateway.get("gatewayUrl"):
             gateways_by_url.setdefault(gateway["gatewayUrl"], []).append(gateway)
     mcp_servers: list[dict[str, Any]] = []
     skills: list[dict[str, Any]] = []
-    for summary in reg.list_records(client, registry_id, None, "APPROVED"):
+    for summary in reg.list_records(registry_client, registry_id, None, "APPROVED"):
         kind = summary.get("descriptorType")
         if kind not in ("MCP", "AGENT_SKILLS"):
             continue
-        record = reg.get_record(client, registry_id, summary["recordId"])
+        record = reg.get_record(registry_client, registry_id, summary["recordId"])
         try:
             if kind == "MCP":
                 server = json.loads(
@@ -838,7 +851,7 @@ def register_mcp_server(name: str, description: str, url: str) -> dict[str, Any]
     """Register an external remote MCP server (streamable-http URL) as an MCP
     record. Starts in DRAFT — the console lifecycle (submit → approve) gates
     when it becomes attachable to agents."""
-    client = control_client()
+    client = registry_control_client()
     registry_id = _registry_id()
     _require_new_name(client, registry_id, name, "MCP")
     record, _ = reg.upsert_record(
@@ -880,7 +893,7 @@ def register_skill_bundle(
         )
     validate_bundle(bundle)
 
-    client = control_client()
+    client = registry_control_client()
     registry_id = _registry_id()
     _require_new_name(client, registry_id, name, "AGENT_SKILLS")
 
@@ -900,7 +913,7 @@ def register_skill_bundle(
         "files": bundle.files,
         "source": asdict(source),
     }
-    # skillDefinition.inlineContent has the same 102,400-byte AWS cap as skillMd;
+    # The serialized definition and SKILL.md share the 102,400-byte descriptor cap;
     # a large file list (many/long paths) could overflow it. Fail cleanly at the
     # Launchpad layer *before* uploading, so no S3 objects are created (AC4/AC5).
     definition_bytes = len(json.dumps(definition).encode("utf-8"))
@@ -973,9 +986,12 @@ def register_skill(name: str, description: str, skill_md: str) -> dict[str, Any]
 
 
 def _bump_minor(version: str) -> str:
-    """Bump the minor component of a dotted version (``1.0.0`` → ``1.1.0``). A
-    version whose major/minor don't parse resets to a clean bumped baseline
-    rather than failing the reimport."""
+    """Bump the minor component while preserving a GA type suffix.
+
+    ``1.0.0`` becomes ``1.1.0`` and ``1.0.0-skill`` becomes
+    ``1.1.0-skill``. A version whose major/minor do not parse resets to a clean
+    bumped baseline rather than failing the reimport.
+    """
     parts = (version or "").split(".")
     try:
         major = int(parts[0])
@@ -985,7 +1001,9 @@ def _bump_minor(version: str) -> str:
         minor = int(parts[1])
     except (ValueError, IndexError):
         minor = 0
-    return f"{major}.{minor + 1}.0"
+    patch = parts[2] if len(parts) > 2 else ""
+    suffix = f"-{patch.split('-', 1)[1]}" if "-" in patch else ""
+    return f"{major}.{minor + 1}.0{suffix}"
 
 
 def _delete_prefix(s3: Any, bucket: str, prefix: str) -> None:
@@ -1010,7 +1028,7 @@ def reimport_skill(record_id: str) -> dict[str, Any]:
     git repos have no persisted token, so a private reimport surfaces the (token-
     redacted) clone/download error — accepted by design.
     """
-    client = control_client()
+    client = registry_control_client()
     registry_id = _registry_id()
     record = reg.get_record(client, registry_id, record_id)
     if record.get("status") == "DEPRECATED":
@@ -1146,7 +1164,7 @@ def update_record(
     identity are keyed by it). DEPRECATED records are terminal and A2A records are
     owned by agent deploys — both refuse editing (400 ``registry.not_editable``).
     """
-    client = control_client()
+    client = registry_control_client()
     registry_id = _registry_id()
     record = reg.get_record(client, registry_id, record_id)
     if record.get("status") == "DEPRECATED":

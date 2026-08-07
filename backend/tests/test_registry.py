@@ -47,32 +47,86 @@ def test_wrap_descriptors_for_update_nesting():
         target="t", description="d", gateway_url="u", tools=[]
     )
     wrapped = reg.wrap_descriptors_for_update(create_style)
-    mcp = wrapped["optionalValue"]["mcp"]["optionalValue"]
-    assert "optionalValue" in mcp["server"]
-    assert "optionalValue" in mcp["tools"]
-    a2a_wrapped = reg.wrap_descriptors_for_update({"a2a": {"agentCard": {"x": 1}}})
-    assert a2a_wrapped["optionalValue"]["a2a"] == {"optionalValue": {"agentCard": {"x": 1}}}
+    mcp = wrapped["optionalValue"]["mcpServer"]["optionalValue"]
+    assert mcp["data"]["optionalValue"]
+    assert "tools" in mcp["additionalData"]["optionalValue"]
+    a2a_wrapped = reg.wrap_descriptors_for_update(
+        {"a2a": {"agentCard": {"inlineContent": "{}", "schemaVersion": "0.3.0"}}}
+    )
+    a2a = a2a_wrapped["optionalValue"]["a2aAgentCard"]["optionalValue"]
+    assert a2a["data"] == {"optionalValue": "{}"}
+
+
+def test_ga_descriptor_round_trip():
+    cases = [
+        (
+            "A2A",
+            reg.build_a2a_descriptors(
+                reg.build_a2a_card(
+                    name="a", description="d", arn="arn:x", version="1", method="harness"
+                )
+            ),
+        ),
+        (
+            "MCP",
+            reg.build_mcp_descriptors(
+                target="m", description="d", gateway_url="https://mcp", tools=[]
+            ),
+        ),
+        (
+            "AGENT_SKILLS",
+            reg.build_skills_descriptors(
+                skill_md="---\nname: abc\n---\n# A",
+                definition={"name": "abc", "path": "s3://bucket/abc"},
+            ),
+        ),
+    ]
+    for descriptor_type, descriptors in cases:
+        aws_type = {"A2A": "AGENT", "MCP": "MCP", "AGENT_SKILLS": "SKILL"}[
+            descriptor_type
+        ]
+        assert reg.from_ga_descriptors(
+            aws_type, reg.to_ga_descriptors(descriptor_type, descriptors)
+        ) == descriptors
 
 
 def test_upsert_creates_and_derives_record_id():
     client = MagicMock()
     client.list_registry_records.return_value = {"registryRecords": []}
     client.create_registry_record.return_value = {
-        "recordArn": f"arn:aws:bedrock-agentcore:us-west-2:1:registry/{RID}/record/abc123",
+        "recordArn": f"arn:aws:agent-registry:us-west-2:1:registry/{RID}/record/abc123",
         "status": "CREATING",
     }
     record, created = reg.upsert_record(
-        client, RID, name="x", description="d", descriptor_type="MCP", descriptors={"mcp": {}}
+        client,
+        RID,
+        name="x",
+        description="d",
+        descriptor_type="MCP",
+        descriptors=reg.build_mcp_descriptors(
+            target="x", description="d", gateway_url="https://example.test/mcp", tools=None
+        ),
     )
     assert created is True and record["recordId"] == "abc123"
+    kwargs = client.create_registry_record.call_args.kwargs
+    assert kwargs["recordType"] == "MCP"
+    assert kwargs["displayName"] == "x"
+    assert kwargs["recordVersion"] == "1.0.0-mcp"
+    assert "mcpServer" in kwargs["descriptors"]
 
 
 def test_upsert_updates_with_wrappers():
     client = MagicMock()
     client.list_registry_records.return_value = {
-        "registryRecords": [{"name": "x", "recordId": "abc123"}]
+        "registryRecords": [
+            {"name": "x", "recordId": "abc123", "recordType": "MCP"}
+        ]
     }
-    client.update_registry_record.return_value = {"recordId": "abc123", "status": "DRAFT"}
+    client.update_registry_record.return_value = {
+        "recordId": "abc123",
+        "recordType": "MCP",
+        "status": "DRAFT",
+    }
     _, created = reg.upsert_record(
         client, RID, name="x", description="d", descriptor_type="MCP",
         descriptors={"mcp": {"server": {"schemaVersion": "v", "inlineContent": "{}"}}},
@@ -80,6 +134,7 @@ def test_upsert_updates_with_wrappers():
     assert created is False
     kwargs = client.update_registry_record.call_args.kwargs
     assert kwargs["description"] == {"optionalValue": "d"}
+    assert kwargs["recordType"] == "MCP"
     assert "optionalValue" in kwargs["descriptors"]
 
 
@@ -107,10 +162,15 @@ def test_wait_record_settled():
 
 def test_search_caps_max_results():
     client = MagicMock()
-    client.search_registry_records.return_value = {"registryRecords": [{"name": "a"}]}
+    client.search_discoverable_registry_records.return_value = {
+        "registryRecords": [{"name": "a", "recordType": "AGENT"}]
+    }
     out = reg.search_records(client, [RID], "expense")
-    assert out == [{"name": "a"}]
-    assert client.search_registry_records.call_args.kwargs["maxResults"] <= 20
+    assert out[0]["descriptorType"] == "A2A"
+    assert (
+        client.search_discoverable_registry_records.call_args.kwargs["maxResults"]
+        <= 20
+    )
 
 
 def test_harness_skills_round_trip():

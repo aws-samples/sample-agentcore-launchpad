@@ -214,11 +214,12 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
     region = region or get_settings().region
     outputs = get_stack_outputs(region)
     control = _client("bedrock-agentcore-control", region)
+    registry_control = _client("agent-registry-control", region)
     cognito = _client("cognito-idp", region)
     sts = _client("sts", region)
 
     account_id = sts.get_caller_identity()["Account"]
-    registry, registry_created = ensure_registry(control)
+    registry, registry_created = ensure_registry(registry_control)
     registry_summary = {
         "available": registry is not None,
         "id": registry["id"] if registry else "",

@@ -61,7 +61,7 @@ Registry header → **⇄ A2A DEMO**. Routing agent = `front-desk`.
 
 ```bash
 cd backend
-# the front-desk router (ensures IAM: SearchRegistryRecords + InvokeHarness)
+# the front-desk router (ensures IAM: SearchDiscoverableRegistryRecords + InvokeHarness)
 .venv/bin/python scripts/deploy_frontdesk_agent.py --api http://localhost:8000
 # refresh existing cards after spec changes (restores APPROVED afterwards)
 .venv/bin/python scripts/refresh_a2a_cards.py

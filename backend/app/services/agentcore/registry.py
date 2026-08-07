@@ -18,6 +18,20 @@ MCP_SERVER_SCHEMA_VERSION = "2025-07-09"  # MCP registry server.json schema date
 MCP_PROTOCOL_VERSION = "2025-06-18"
 SKILL_SCHEMA_VERSION = "0.1.0"
 
+_PLATFORM_TO_AWS_TYPE = {
+    "A2A": "AGENT",
+    "MCP": "MCP",
+    "AGENT_SKILLS": "SKILL",
+    "CUSTOM": "CUSTOM",
+}
+_AWS_TO_PLATFORM_TYPE = {value: key for key, value in _PLATFORM_TO_AWS_TYPE.items()}
+_INITIAL_VERSION_BY_TYPE = {
+    "A2A": "1.0.0-a2a",
+    "MCP": "1.0.0-mcp",
+    "AGENT_SKILLS": "1.0.0-skill",
+    "CUSTOM": "1.0.0-custom",
+}
+
 
 # ---------- payload builders (pure) ----------
 
@@ -187,17 +201,135 @@ def build_skills_descriptors(
     }
 
 
+# ---------- GA schema adapter ----------
+
+def _required_descriptor(
+    value: dict[str, Any], field: str, descriptor_type: str
+) -> dict[str, Any]:
+    descriptor = value.get(field)
+    if not isinstance(descriptor, dict):
+        raise ValueError(f"{descriptor_type} descriptor is missing {field}")
+    return descriptor
+
+
+def _ga_leaf(value: dict[str, Any], *, version_field: str = "schemaVersion") -> dict[str, Any]:
+    out = {"data": value.get("inlineContent", "")}
+    version = value.get(version_field)
+    if version:
+        out["dataSchemaVersion"] = version
+    return out
+
+
+def to_ga_descriptors(
+    descriptor_type: str, descriptors: dict[str, Any]
+) -> dict[str, Any]:
+    """Translate Launchpad's stable descriptor contract to the GA AWS shape."""
+    if descriptor_type == "A2A":
+        container = _required_descriptor(descriptors, "a2a", descriptor_type)
+        card = _required_descriptor(container, "agentCard", descriptor_type)
+        return {"a2aAgentCard": _ga_leaf(card)}
+    if descriptor_type == "MCP":
+        container = _required_descriptor(descriptors, "mcp", descriptor_type)
+        server = _ga_leaf(_required_descriptor(container, "server", descriptor_type))
+        tools = container.get("tools")
+        if isinstance(tools, dict):
+            server["additionalData"] = {
+                "tools": _ga_leaf(tools, version_field="protocolVersion")
+            }
+        return {"mcpServer": server}
+    if descriptor_type == "AGENT_SKILLS":
+        container = _required_descriptor(descriptors, "agentSkills", descriptor_type)
+        definition = _ga_leaf(
+            _required_descriptor(container, "skillDefinition", descriptor_type)
+        )
+        skill_md = container.get("skillMd")
+        if isinstance(skill_md, dict):
+            definition["additionalData"] = {"skillMd": _ga_leaf(skill_md)}
+        return {"agentSkillsDefinition": definition}
+    if descriptor_type == "CUSTOM":
+        custom = _required_descriptor(descriptors, "custom", descriptor_type)
+        return {"custom": {"data": custom.get("inlineContent", "")}}
+    raise ValueError(f"unsupported Registry descriptor type: {descriptor_type}")
+
+
+def _platform_leaf(
+    value: dict[str, Any], *, version_field: str = "schemaVersion"
+) -> dict[str, Any]:
+    out = {"inlineContent": value.get("data", "")}
+    version = value.get("dataSchemaVersion")
+    if version:
+        out[version_field] = version
+    return out
+
+
+def from_ga_descriptors(
+    record_type: str, descriptors: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Translate a GA AWS descriptor tree to Launchpad's stable contract."""
+    descriptors = descriptors or {}
+    if record_type == "AGENT":
+        return {
+            "a2a": {
+                "agentCard": _platform_leaf(
+                    _required_descriptor(descriptors, "a2aAgentCard", record_type)
+                )
+            }
+        }
+    if record_type == "MCP":
+        server = _required_descriptor(descriptors, "mcpServer", record_type)
+        legacy: dict[str, Any] = {"server": _platform_leaf(server)}
+        tools = (server.get("additionalData") or {}).get("tools")
+        if isinstance(tools, dict):
+            legacy["tools"] = _platform_leaf(tools, version_field="protocolVersion")
+        return {"mcp": legacy}
+    if record_type == "SKILL":
+        definition = _required_descriptor(
+            descriptors, "agentSkillsDefinition", record_type
+        )
+        legacy = {"skillDefinition": _platform_leaf(definition)}
+        skill_md = (definition.get("additionalData") or {}).get("skillMd")
+        if isinstance(skill_md, dict):
+            legacy["skillMd"] = _platform_leaf(skill_md)
+        return {"agentSkills": legacy}
+    if record_type == "CUSTOM":
+        custom = _required_descriptor(descriptors, "custom", record_type)
+        return {"custom": {"inlineContent": custom.get("data", "")}}
+    raise ValueError(f"unsupported Registry record type: {record_type}")
+
+
+def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy using the preview-era Launchpad contract at the app boundary."""
+    normalized = dict(record)
+    record_type = str(record.get("recordType") or "")
+    normalized["descriptorType"] = _AWS_TO_PLATFORM_TYPE.get(record_type, record_type)
+    if "descriptors" in record:
+        normalized["descriptors"] = from_ga_descriptors(
+            record_type, record.get("descriptors")
+        )
+    return normalized
+
+
 # ---------- record operations ----------
 
 def find_record(
     client: Any, registry_id: str, name: str, descriptor_type: str | None = None
 ) -> dict[str, Any] | None:
-    kwargs: dict[str, Any] = {"registryId": registry_id, "name": name, "maxResults": 20}
+    filters = [{"name": "name", "values": [name]}]
     if descriptor_type:
-        kwargs["descriptorType"] = descriptor_type
+        filters.append(
+            {
+                "name": "recordType",
+                "values": [_PLATFORM_TO_AWS_TYPE[descriptor_type]],
+            }
+        )
+    kwargs: dict[str, Any] = {
+        "registryId": registry_id,
+        "filters": filters,
+        "maxResults": 20,
+    }
     for record in client.list_registry_records(**kwargs).get("registryRecords", []):
         if record.get("name") == name:
-            return record
+            return normalize_record(record)
     return None
 
 
@@ -217,14 +349,20 @@ def upsert_record(
     to a fresh revision, e.g. ``1.1.0``); create always starts at ``1.0.0``.
     """
     existing = find_record(client, registry_id, name, descriptor_type)
+    aws_record_type = _PLATFORM_TO_AWS_TYPE[descriptor_type]
+    ga_descriptors = to_ga_descriptors(descriptor_type, descriptors)
     if existing is None:
         created = client.create_registry_record(
             registryId=registry_id,
             name=name,
+            displayName=name,
             description=description,
-            descriptorType=descriptor_type,
-            descriptors=descriptors,
-            recordVersion="1.0.0",
+            recordType=aws_record_type,
+            descriptors=ga_descriptors,
+            # GA uniqueness is (name, recordVersion), while preview allowed the
+            # same name for A2A/MCP/Skill records. Type-qualified initial
+            # versions preserve that platform contract.
+            recordVersion=_INITIAL_VERSION_BY_TYPE[descriptor_type],
         )
         # CreateRegistryRecord returns only {recordArn, status}
         record_id = created["recordArn"].split("/")[-1]
@@ -232,34 +370,63 @@ def upsert_record(
     kwargs: dict[str, Any] = {
         "registryId": registry_id,
         "recordId": existing["recordId"],
+        "name": name,
+        "displayName": {"optionalValue": name},
         "description": {"optionalValue": description},
-        "descriptors": wrap_descriptors_for_update(descriptors),
+        "recordType": aws_record_type,
+        "descriptors": wrap_descriptors_for_update(
+            descriptors, descriptor_type=descriptor_type
+        ),
     }
     if record_version is not None:
         kwargs["recordVersion"] = record_version
     updated = client.update_registry_record(**kwargs)
-    return updated, False
+    return normalize_record(updated), False
 
 
-def wrap_descriptors_for_update(descriptors: dict[str, Any]) -> dict[str, Any]:
-    """UpdateRegistryRecord wraps every optional level in {"optionalValue": …}.
-
-    Create-style → update-style: mcp/agentSkills wrap their inner members too;
-    a2a/custom only wrap the kind itself.
-    """
+def _wrap_ga_descriptor(value: dict[str, Any]) -> dict[str, Any]:
     wrapped: dict[str, Any] = {}
-    for kind, content in descriptors.items():
-        if kind in ("mcp", "agentSkills"):
-            wrapped[kind] = {
-                "optionalValue": {k: {"optionalValue": v} for k, v in content.items()}
+    for field in ("data", "dataSchemaVersion", "source"):
+        if field in value:
+            wrapped[field] = {"optionalValue": value[field]}
+    additional = value.get("additionalData")
+    if isinstance(additional, dict):
+        wrapped["additionalData"] = {
+            "optionalValue": {
+                key: {"optionalValue": _wrap_ga_descriptor(child)}
+                for key, child in additional.items()
             }
-        else:  # a2a, custom
-            wrapped[kind] = {"optionalValue": content}
-    return {"optionalValue": wrapped}
+        }
+    return wrapped
+
+
+def wrap_descriptors_for_update(
+    descriptors: dict[str, Any], *, descriptor_type: str | None = None
+) -> dict[str, Any]:
+    """Translate create-style Launchpad descriptors to GA PATCH wrappers."""
+    if descriptor_type is None:
+        key = next(iter(descriptors), "")
+        descriptor_type = {
+            "a2a": "A2A",
+            "mcp": "MCP",
+            "agentSkills": "AGENT_SKILLS",
+            "custom": "CUSTOM",
+        }.get(key)
+    if descriptor_type is None:
+        raise ValueError("cannot infer Registry descriptor type")
+    ga_descriptors = to_ga_descriptors(descriptor_type, descriptors)
+    primary, value = next(iter(ga_descriptors.items()))
+    return {
+        "optionalValue": {
+            primary: {"optionalValue": _wrap_ga_descriptor(value)}
+        }
+    }
 
 
 def get_record(client: Any, registry_id: str, record_id: str) -> dict[str, Any]:
-    return client.get_registry_record(registryId=registry_id, recordId=record_id)
+    return normalize_record(
+        client.get_registry_record(registryId=registry_id, recordId=record_id)
+    )
 
 
 def wait_record_settled(
@@ -287,14 +454,22 @@ def list_records(
     status: str | None = None,
 ) -> list[dict[str, Any]]:
     kwargs: dict[str, Any] = {"registryId": registry_id, "maxResults": 100}
+    filters: list[dict[str, Any]] = []
     if descriptor_type:
-        kwargs["descriptorType"] = descriptor_type
+        filters.append(
+            {
+                "name": "recordType",
+                "values": [_PLATFORM_TO_AWS_TYPE[descriptor_type]],
+            }
+        )
     if status:
-        kwargs["status"] = status
+        filters.append({"name": "status", "values": [status]})
+    if filters:
+        kwargs["filters"] = filters
     records: list[dict[str, Any]] = []
     while True:
         page = client.list_registry_records(**kwargs)
-        records.extend(page.get("registryRecords", []))
+        records.extend(normalize_record(record) for record in page.get("registryRecords", []))
         token = page.get("nextToken")
         if not token:
             break
@@ -344,6 +519,7 @@ def delete_record(client: Any, registry_id: str, record_id: str) -> None:
 def search_records(
     data_client: Any, registry_ids: list[str], query: str, max_results: int = 20
 ) -> list[dict[str, Any]]:
-    return data_client.search_registry_records(
+    records = data_client.search_discoverable_registry_records(
         registryIds=registry_ids, searchQuery=query, maxResults=max_results
     ).get("registryRecords", [])
+    return [normalize_record(record) for record in records]

@@ -202,7 +202,6 @@ def list_gateway_views(
     registry_states = (
         registry_console.gateway_registry_states(
             gateways=details,
-            client=control,
             registry_id=registry_id,
         )
         if registry_id
@@ -498,7 +497,6 @@ def gateway_detail(
     registry_state = (
         registry_console.gateway_registry_states(
             gateways=[gateway],
-            client=control,
             registry_id=registry_id,
         ).get(gateway_id)
         if registry_id
@@ -578,7 +576,6 @@ def gateway_registry_preview(
     return registry_console.gateway_registry_preview(
         **_gateway_registry_input(control, gateway),
         record_name=record_name,
-        client=control,
     )
 
 
@@ -598,7 +595,6 @@ def import_gateway_registry(
         **_gateway_registry_input(control, gateway),
         record_name=request.record_name,
         apply_update=request.apply_update,
-        client=control,
     )
     invalidate_gateway_cache()
     return result
@@ -619,7 +615,6 @@ def retire_gateway_legacy_records(
     registry_id = get_settings().resources.get("registry_id")
     states = registry_console.gateway_registry_states(
         gateways=[gateway],
-        client=control,
         registry_id=registry_id,
     )
     gateway_record = states.get(gateway_id, {}).get("registry_record")
@@ -632,7 +627,6 @@ def retire_gateway_legacy_records(
     result = registry_console.retire_legacy_gateway_records(
         gateway_record_id=gateway_record["record_id"],
         legacy_record_ids=request.record_ids,
-        client=control,
         registry_id=registry_id,
     )
     invalidate_gateway_cache()

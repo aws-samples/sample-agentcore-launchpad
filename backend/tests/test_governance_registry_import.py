@@ -409,7 +409,7 @@ def test_attachables_derive_gateway_auth_server_side(monkeypatch):
     ]
 
     result = console.attachable_records(
-        client=object(),
+        registry_client=object(),
         registry_id="registry",
         gateways=gateways,
     )
@@ -470,7 +470,8 @@ def test_resolve_gateway_attachments_ignores_browser_auth_and_deduplicates(monke
     ]
     attachments = console.resolve_gateway_attachments(
         tools,
-        client=MagicMock(),
+        registry_client=MagicMock(),
+        agentcore_client=MagicMock(),
         registry_id="registry",
     )
     assert attachments == [

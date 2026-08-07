@@ -345,7 +345,7 @@ curl -s -X DELETE http://127.0.0.1:8000/api/agents/<ID>
 | 技能不出现在挂载列表 | 状态还是 `DRAFT` / `PENDING_APPROVAL` | 必须先 `批准 · 发布` |
 | 4.7 里容器 / ZIP 的 `kb_search` / `kb_deep_search` 每次都回 `AccessDeniedException` | 执行角色缺 `bedrock:Retrieve` / `bedrock:AgenticRetrieveStream`；**`make bootstrap` 只在栈不存在时才 `cdk deploy`** | `cd infra && uv run cdk deploy --require-approval never`，无需重新发布 Agent |
 | `kb_deep_search` 一次要十几秒到几十秒 | 正常：每轮规划都是一次基础模型调用 | 单点事实问题引导模型用 `kb_search`；深检索留给比对/列举/汇总 |
-| 注册中心搜索框搜不到刚建的记录 | 搜索走 AWS `SearchRegistryRecords`，索引有延迟 | 用顶部类型筛选按钮（`技能`）在列表里找 |
+| 注册中心搜索框搜不到刚建的记录 | 搜索走 AWS `SearchDiscoverableRegistryRecords`，索引有延迟 | 用顶部类型筛选按钮（`技能`）在列表里找 |
 | 重新发布点了没反应 | 有二次确认弹窗 | 在弹窗里再点一次 `重新发布` |
 | 重新发布后旧对话还是旧行为 | AgentCore 把已有会话钉在首次服务它的版本上 | **开一个新会话**验证（第 05 章会用到） |
 

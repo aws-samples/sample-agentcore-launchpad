@@ -73,7 +73,7 @@ def test_discovery_is_read_only_and_reports_shared_engine():
     governance.invalidate_gateway_cache()
     views = governance.list_gateway_views(
         control,
-        settings=Settings(resources={}),
+        settings=Settings(resources={"registry_id": ""}),
         refresh=True,
     )
 
@@ -112,6 +112,7 @@ def test_attachability_keeps_external_custom_jwt_catalog_only():
             resources={
                 "gateway_id": "managed",
                 "oauth_provider_arn": "arn:oauth",
+                "registry_id": "",
             }
         ),
         refresh=True,
@@ -132,7 +133,11 @@ def test_external_custom_jwt_detail_offers_token_free_tools_list_template():
     iam_gateway = _gateway("iam", "internal-gw")
     control = _control([launchpad, external, iam_gateway])
     settings = Settings(
-        resources={"gateway_id": "managed", "oauth_provider_arn": "arn:oauth"}
+        resources={
+            "gateway_id": "managed",
+            "oauth_provider_arn": "arn:oauth",
+            "registry_id": "",
+        }
     )
 
     command = governance.gateway_detail(

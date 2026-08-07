@@ -250,7 +250,7 @@ A2A 记录，记录 ID 以当前页面为准：
 | KB 已 `ACTIVE` 但数据源为 0、ingestion 从未开始 | 后端补齐数据源的后台任务没跑成（例如期间重启过服务），或该 KB 建于此修复之前 | 详情页橙色告警里点 `补建数据源`；文件已在制品桶里，补建后 ingestion 会自动开始 |
 | ingestion `COMPLETE` 但 `Documents Failed = 1` | 文件格式、编码或解析失败 | 确认上传的是本实验提供的 `bedrock-agentcore-limits.md`，文件可正常打开后重新创建 |
 | 技能不出现在挂载列表 | 状态还是 `DRAFT` / `PENDING_APPROVAL` | 必须先 `批准 · 发布` |
-| 注册中心搜索框搜不到刚建的记录 | 搜索走 AWS `SearchRegistryRecords`，索引有延迟 | 用顶部类型筛选按钮（`技能`）在列表里找 |
+| 注册中心搜索框搜不到刚建的记录 | 搜索走 AWS `SearchDiscoverableRegistryRecords`，索引有延迟 | 用顶部类型筛选按钮（`技能`）在列表里找 |
 | 重新发布点了没反应 | 有二次确认弹窗 | 在弹窗里再点一次 `重新发布` |
 | 重新发布后旧对话还是旧行为 | AgentCore 把已有会话钉在首次服务它的版本上 | 开一个新会话验证（第 05 章会用到） |
 

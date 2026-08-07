@@ -7,7 +7,7 @@ from botocore.exceptions import ClientError
 
 from app.services import bootstrap as bs
 
-REG_ARN = "arn:aws:bedrock-agentcore:us-west-2:111:registry/launchpad-registry-abc123"
+REG_ARN = "arn:aws:agent-registry:us-west-2:111:registry/launchpad-registry-abc123"
 MEM_ARN = "arn:aws:bedrock-agentcore:us-west-2:111:memory/launchpad_memory-xyz789"
 
 
@@ -108,6 +108,7 @@ def test_run_bootstrap_continues_and_clears_registry_ids(monkeypatch):
     sts.get_caller_identity.return_value = {"Account": "111"}
     clients = {
         "bedrock-agentcore-control": control,
+        "agent-registry-control": control,
         "cognito-idp": cognito,
         "sts": sts,
     }

@@ -3,7 +3,7 @@
 
 Flow: sync-defaults (MCP ×2 + AGENT_SKILLS) → deploy harness agent (A2A
 auto-registered by pipeline) → status transitions on the skill record
-(DRAFT→PENDING_APPROVAL→APPROVED) → SearchRegistryRecords → disable one.
+(DRAFT→PENDING_APPROVAL→APPROVED) → SearchDiscoverableRegistryRecords → disable one.
 
 The search step asserts the endpoint's contract, not that a just-created record is
 findable: the AWS-side semantic index lags creation by far longer than this script
@@ -89,14 +89,14 @@ def main() -> int:
     print(f"  after approve (published): {step['status']}")
     assert step["status"] == "APPROVED"
 
-    # SearchRegistryRecords is AWS-side SEMANTIC search over an index that lags
+    # SearchDiscoverableRegistryRecords is AWS-side semantic search over an index that lags
     # record creation badly — measured in us-east-1: a record created 2026-08-04 was
     # still unfindable by name the NEXT DAY (>12h), while unrelated older records came
-    # back as nearest neighbours. (Not a status filter: a DRAFT record is returned for
-    # other queries.) So the endpoint working is asserted; the fresh record showing up
-    # is polled for briefly and reported either way, never asserted — that would be
-    # asserting an immediate-consistency guarantee the API does not offer.
-    print("── SearchRegistryRecords('expense'):")
+    # back as nearest neighbours. The GA discoverable API returns approved records, but
+    # approval does not make its semantic index immediately consistent. So the endpoint
+    # working is asserted; the fresh record showing up is polled for briefly and reported
+    # either way, never asserted.
+    print("── SearchDiscoverableRegistryRecords('expense'):")
     indexed = False
     for attempt in range(3):
         if attempt:

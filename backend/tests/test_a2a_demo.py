@@ -120,8 +120,10 @@ def test_parse_card_and_a2a_reply_text():
             "skills": [{"name": "faq", "description": "x", "tags": ["support"]}],
             "metadata": {"launchpad.transport": "a2a-jsonrpc",
                          "launchpad.method": "zip_runtime"}}
-    rec = {"name": "aurora-faq-a2a", "descriptors": {"a2a": {"agentCard": {
-        "inlineContent": json.dumps(card)}}}}
+    rec = {
+        "name": "aurora-faq-a2a",
+        "descriptors": {"a2aAgentCard": {"data": json.dumps(card)}},
+    }
     parsed = h["parse_card"](rec)
     assert parsed["transport"] == "a2a-jsonrpc"
     assert parsed["skills"][0]["tags"] == ["support"]
