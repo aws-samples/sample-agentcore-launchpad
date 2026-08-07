@@ -325,17 +325,7 @@ def test_gateway_traces_never_touches_the_gateway_resource():
     assert not any("gateway" in call for call in logs.calls)
 
 
-def test_run_policy_bootstrap_requires_logs_and_reports_traces():
-    """`logs` is keyword-only and required, so a caller that forgets to wire it
-    fails loudly instead of silently skipping the span channel."""
-    import inspect
-
-    from app.services.policy_bootstrap import run_policy_bootstrap
-
-    param = inspect.signature(run_policy_bootstrap).parameters["logs"]
-    assert param.kind is inspect.Parameter.KEYWORD_ONLY
-    assert param.default is inspect.Parameter.empty
-
+def _existing_policy_control() -> MagicMock:
     control = MagicMock()
     control.list_policy_engines.return_value = {
         "policyEngines": [
@@ -351,6 +341,21 @@ def test_run_policy_bootstrap_requires_logs_and_reports_traces():
     control.get_gateway.return_value = {
         "policyEngineConfiguration": {"arn": "arn:pe-1", "mode": "ENFORCE"},
     }
+    return control
+
+
+def test_run_policy_bootstrap_requires_logs_and_reports_traces():
+    """`logs` is keyword-only and required, so a caller that forgets to wire it
+    fails loudly instead of silently skipping the span channel."""
+    import inspect
+
+    from app.services.policy_bootstrap import run_policy_bootstrap
+
+    param = inspect.signature(run_policy_bootstrap).parameters["logs"]
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+    assert param.default is inspect.Parameter.empty
+
+    control = _existing_policy_control()
     xray = MagicMock()
     xray.get_trace_segment_destination.return_value = {
         "Destination": "CloudWatchLogs", "Status": "ACTIVE",
@@ -364,8 +369,78 @@ def test_run_policy_bootstrap_requires_logs_and_reports_traces():
         logs=logs,
     )
     assert summary["gateway_traces"]["status"] == "created"
+    assert xray.get_trace_segment_destination.call_count == 1
+    xray.update_trace_segment_destination.assert_not_called()
     # steady state elsewhere: no Gateway mutation from the attach step either
     control.update_gateway.assert_not_called()
+
+
+def test_run_policy_bootstrap_reconciles_transaction_search_after_initial_timeout(
+    monkeypatch,
+):
+    from app.services.policy_bootstrap import run_policy_bootstrap
+
+    control = _existing_policy_control()
+    pending = {"Destination": "CloudWatchLogs", "Status": "UPDATING"}
+    active = {"Destination": "CloudWatchLogs", "Status": "ACTIVE"}
+    xray = MagicMock()
+    xray.get_trace_segment_destination.side_effect = [pending] * 31 + [active]
+    monkeypatch.setattr("app.services.policy_bootstrap.time.sleep", lambda _: None)
+    logs = FakeLogs()
+
+    summary = run_policy_bootstrap(
+        control,
+        xray,
+        {"resources": {"gateway_arn": GW_ARN, "gateway_id": GW_ID}},
+        logs=logs,
+    )
+
+    assert summary["transaction_search"] == {
+        "enabled": True,
+        "changed": True,
+        "status": "ACTIVE",
+    }
+    assert summary["gateway_traces"]["status"] == "created"
+    assert xray.get_trace_segment_destination.call_count == 32
+    xray.update_trace_segment_destination.assert_called_once_with(
+        Destination="CloudWatchLogs"
+    )
+
+
+def test_run_policy_bootstrap_bounds_reconciliation_when_transaction_search_stays_pending(
+    monkeypatch,
+):
+    from app.services.policy_bootstrap import run_policy_bootstrap
+
+    control = _existing_policy_control()
+    xray = MagicMock()
+    xray.get_trace_segment_destination.return_value = {
+        "Destination": "CloudWatchLogs",
+        "Status": "UPDATING",
+    }
+    monkeypatch.setattr("app.services.policy_bootstrap.time.sleep", lambda _: None)
+    logs = FakeLogs()
+
+    summary = run_policy_bootstrap(
+        control,
+        xray,
+        {"resources": {"gateway_arn": GW_ARN, "gateway_id": GW_ID}},
+        logs=logs,
+    )
+
+    assert summary["transaction_search"]["enabled"] is False
+    assert summary["gateway_traces"] == {
+        "status": "skipped",
+        "changed": False,
+        "reason": "transaction_search_disabled",
+        "source": SOURCE,
+        "destination": DEST,
+    }
+    assert xray.get_trace_segment_destination.call_count == 61
+    xray.update_trace_segment_destination.assert_called_once_with(
+        Destination="CloudWatchLogs"
+    )
+    assert logs.calls == []
 
 
 def test_unexpected_client_error_in_existence_check_surfaces():

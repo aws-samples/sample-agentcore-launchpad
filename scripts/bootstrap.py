@@ -97,6 +97,8 @@ def _gateway_traces_summary(policy: dict[str, Any]) -> tuple[str, str]:
     value = str(traces["status"])
     if traces.get("reason"):
         value += f" · {traces['reason']}"
+    if traces.get("reason") == "transaction_search_disabled":
+        value += " · rerun bootstrap once Transaction Search is ACTIVE"
     return "gateway traces", value
 
 

@@ -14,6 +14,8 @@ from app.core.config import REPO_ROOT
 
 POLICY_ENGINE_NAME = "launchpad_pe"
 POLICIES_DIR = REPO_ROOT / "samples" / "policies"
+TRANSACTION_SEARCH_POLL_ATTEMPTS = 30
+TRANSACTION_SEARCH_POLL_INTERVAL_S = 5
 
 # Vended-log delivery naming, matching the convention already present in the
 # account for memory/runtime resources (`<resource-id>-traces-source`).
@@ -36,18 +38,24 @@ POLICIES = [
 ]
 
 
+def _wait_transaction_search_active(xray: Any) -> dict[str, Any]:
+    state: dict[str, Any] = {}
+    for _ in range(TRANSACTION_SEARCH_POLL_ATTEMPTS):
+        state = xray.get_trace_segment_destination()
+        if state.get("Status") == "ACTIVE":
+            break
+        # Deliberate status polling interval; the loop has a fixed attempt cap.
+        time.sleep(TRANSACTION_SEARCH_POLL_INTERVAL_S)  # nosemgrep: arbitrary-sleep
+    return state
+
+
 def ensure_transaction_search(xray: Any) -> dict[str, Any]:
     """CloudWatch Transaction Search = X-Ray segments destined to CW Logs."""
     state = xray.get_trace_segment_destination()
     if state.get("Destination") == "CloudWatchLogs" and state.get("Status") == "ACTIVE":
         return {"enabled": True, "changed": False, "status": state["Status"]}
     xray.update_trace_segment_destination(Destination="CloudWatchLogs")
-    for _ in range(30):
-        state = xray.get_trace_segment_destination()
-        if state.get("Status") == "ACTIVE":
-            break
-        # Deliberate status polling interval; the loop has a fixed attempt cap.
-        time.sleep(5)  # nosemgrep: arbitrary-sleep
+    state = _wait_transaction_search_active(xray)
     return {"enabled": state.get("Status") == "ACTIVE", "changed": True,
             "status": state.get("Status")}
 
@@ -345,6 +353,16 @@ def run_policy_bootstrap(
     engine, engine_created = ensure_policy_engine(control)
     policies = ensure_policies(control, engine["id"], resources["gateway_arn"])
     attached = attach_engine_to_gateway(control, resources["gateway_id"], engine["arn"])
+    if tx.get("changed") and not tx.get("enabled"):
+        # Fresh accounts can outlast the first 150-second poll. Policy setup gives
+        # the destination more time to settle; reconcile once before deciding
+        # whether Gateway trace delivery must be skipped.
+        state = _wait_transaction_search_active(xray)
+        tx = {
+            "enabled": state.get("Status") == "ACTIVE",
+            "changed": True,
+            "status": state.get("Status"),
+        }
     # Opens the Policy span channel. Runs after Transaction Search because AWS
     # requires it, and after the engine attach because spans are only meaningful
     # once a Policy engine evaluates the Gateway's calls.

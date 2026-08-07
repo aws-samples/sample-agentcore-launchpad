@@ -139,7 +139,11 @@ def test_managed_cli_npm_failure_is_not_suppressed(monkeypatch):
         ),
         (
             {"status": "skipped", "reason": "transaction_search_disabled"},
-            ("gateway traces", "skipped · transaction_search_disabled"),
+            (
+                "gateway traces",
+                "skipped · transaction_search_disabled"
+                " · rerun bootstrap once Transaction Search is ACTIVE",
+            ),
         ),
     ],
 )
