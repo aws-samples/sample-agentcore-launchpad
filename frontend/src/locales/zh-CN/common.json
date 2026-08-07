@@ -1085,6 +1085,7 @@
       "dataset": "数据集",
       "evaluators": "评估器",
       "score": "得分",
+      "created": "创建时间",
       "status": "状态",
       "empty": "还没有运行——点击 + 新建运行",
       "newEvaluation": "新建评估",

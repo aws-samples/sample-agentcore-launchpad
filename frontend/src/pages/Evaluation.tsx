@@ -818,6 +818,7 @@ export function Evaluation() {
               <th>{t("evalPage.runs.dataset")}</th>
               <th>{t("evalPage.runs.evaluators")}</th>
               <th>{t("evalPage.runs.score")}</th>
+              <th>{t("evalPage.runs.created")}</th>
               <th>{t("evalPage.runs.status")}</th>
             </tr>
           </thead>
@@ -842,12 +843,15 @@ export function Evaluation() {
                 >
                   {average(run)}
                 </td>
+                <td className="mono dim">
+                  {run.created_at ? new Date(run.created_at).toLocaleString() : "—"}
+                </td>
                 <td>{statusChip(run)}</td>
               </tr>
             ))}
             {runs.length === 0 && (
               <tr>
-                <td colSpan={6} className="dim mono" style={{ textAlign: "center" }}>
+                <td colSpan={7} className="dim mono" style={{ textAlign: "center" }}>
                   {t("evalPage.runs.empty")}
                 </td>
               </tr>
