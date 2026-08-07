@@ -19,6 +19,7 @@ import { useTranslation } from "react-i18next";
 import { Btn } from "../components";
 import { LangSwitcher } from "../layout/LangSwitcher";
 import {
+  type AgentPermission,
   api,
   ApiError,
   AUTH_UNAUTHORIZED_EVENT,
@@ -37,6 +38,7 @@ const AUTH_DISABLED: AuthStatus = {
   role: null,
   email: null,
   account_expires_at: null,
+  permissions: [],
 };
 
 const LOGGED_OUT = (previous: AuthStatus | null): AuthStatus => ({
@@ -48,6 +50,7 @@ const LOGGED_OUT = (previous: AuthStatus | null): AuthStatus => ({
   role: null,
   email: null,
   account_expires_at: null,
+  permissions: [],
 });
 
 /** Backend error code → i18n key, so the gate never invents its own wording. */
@@ -104,6 +107,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       role: result.role,
       email: result.email,
       account_expires_at: result.account_expires_at,
+      permissions: result.permissions ?? [],
     });
   }, []);
 
@@ -115,26 +119,29 @@ export function AuthGate({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const context = useMemo(
-    () => ({
+  const context = useMemo(() => {
+    // an open console keeps the pre-multi-user behavior: full local access
+    const isAdmin = !(status?.auth_required ?? false) || status?.role === "admin";
+    const granted = new Set(status?.permissions ?? []);
+    return {
       authRequired: status?.auth_required ?? false,
       username: status?.username ?? null,
       role: status?.role ?? null,
       email: status?.email ?? null,
       accountExpiresAt: status?.account_expires_at ?? null,
-      // an open console keeps the pre-multi-user behavior: full local access
-      isAdmin: !(status?.auth_required ?? false) || status?.role === "admin",
+      isAdmin,
+      can: (permission: AgentPermission) => isAdmin || granted.has(permission),
       logout,
-    }),
-    [
-      logout,
-      status?.account_expires_at,
-      status?.auth_required,
-      status?.email,
-      status?.role,
-      status?.username,
-    ],
-  );
+    };
+  }, [
+    logout,
+    status?.account_expires_at,
+    status?.auth_required,
+    status?.email,
+    status?.permissions,
+    status?.role,
+    status?.username,
+  ]);
 
   if (status === null) return <AuthLoading />;
   if (status.auth_required && !status.authenticated) {

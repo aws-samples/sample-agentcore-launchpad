@@ -158,6 +158,7 @@
     "kicker": "// AGENT 管理",
     "title": "Agent 管理",
     "meta": "统一流水线 — 生成 → 打包 → 供给 → 部署 → 注册",
+    "permissionRequired": "当前账号没有该 Agent 管理权限，请联系管理员在用户管理中开通。",
     "next": "下一步",
     "back": "返回",
     "launch": "启动 AGENT",
@@ -2254,6 +2255,15 @@
     "enabled": "已启用 {{username}}。",
     "passwordReset": "已重置 {{username}} 的密码。",
     "deleted": "已删除 {{username}}。",
+    "permissionsUpdated": "已更新 {{username}} 的权限。",
+    "permissionsAll": "全部（管理员）",
+    "permissionsHint": "Agent 管理能力——点击切换。member 默认持有全部四项。",
+    "perm": {
+      "deploy": "部署",
+      "import": "导入",
+      "delete": "删除",
+      "convert": "转换"
+    },
     "extendTitle": "延长有效期",
     "extendBody": "为 {{username}} 增加多少天？",
     "resetTitle": "新密码",
@@ -2286,6 +2296,7 @@
     "cols": {
       "user": "用户",
       "role": "角色",
+      "permissions": "AGENT 权限",
       "state": "状态",
       "validity": "有效期至",
       "created": "注册时间",

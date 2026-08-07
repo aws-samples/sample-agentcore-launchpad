@@ -11,16 +11,23 @@ Why a table instead of per-route `Depends(require_admin)`:
 
 Roles: `ADMIN` requires an administrator identity; `MEMBER` requires only a live
 session (the `auth_middleware` 401 already covers that); `PUBLIC` is reachable
-without one (health, docs, and the login surface itself).
+without one (health, docs, and the login surface itself). A `perm:<key>` value
+requires that member permission (admins implicitly hold all; a member holds every
+key unless an admin stored an explicit denial on their account — see
+`auth.AGENT_PERMISSIONS` and the Users console).
 
 The classification principle, signed off by river 2026-08-03: **admin for routes
 that execute code, change deployed or cloud state, mint credentials, or change
 governance posture; member for reads and for the member's own interaction with an
-agent.** Two consequences worth knowing before editing this table:
+agent.** Amended by river 2026-08-07: the agent-lifecycle routes (deploy,
+discovery import, delete, convert and the deploy-flow skill helpers) are
+member-grantable via `perm:agents.*`, **default granted**, revocable per user.
+Consequences worth knowing before editing this table:
 
-* `member` is close to read-only. That is intended for as long as the platform has
-  no per-user data partitioning — a member who could deploy could also see and
-  mutate every other member's resources.
+* Outside `perm:agents.*`, `member` remains close to read-only. There is still no
+  per-user data partitioning — a member who can deploy can also see and mutate
+  every other member's agents; revoking the permissions restores the read-only
+  posture per user.
 * Invoking an agent is deliberately `MEMBER` (`/api/agents/{id}/invoke`,
   `/api/registry/a2a-demo`): it is the same capability the Chat console gives
   every member, so gating it while Chat stays open would protect nothing.
@@ -35,11 +42,19 @@ from typing import Any
 from fastapi import Request
 
 from app.core.errors import AppError
-from app.routers.auth import require_admin
+from app.routers.auth import require_admin, require_permission
 
 ADMIN = "admin"
 MEMBER = "member"
 PUBLIC = "public"
+
+# Member-grantable permissions (auth.AGENT_PERMISSIONS keys), default granted,
+# revocable per user in the Users console.
+PERM_AGENT_DEPLOY = "perm:agents.deploy"
+PERM_AGENT_IMPORT = "perm:agents.import"
+PERM_AGENT_DELETE = "perm:agents.delete"
+PERM_AGENT_CONVERT = "perm:agents.convert"
+_PERM_PREFIX = "perm:"
 
 API_PREFIX = "/api"
 
@@ -53,15 +68,16 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/auth/login"): PUBLIC,
     ("POST", "/api/auth/register"): PUBLIC,
     ("POST", "/api/auth/logout"): MEMBER,
-    # ---- agents: deploy-state changes are admin, reads and invoke are not ----
+    # ---- agents: lifecycle changes are member-grantable permissions (default
+    # granted, revocable per user); reads and invoke are plain member ----
     ("GET", "/api/agents"): MEMBER,
-    ("POST", "/api/agents"): ADMIN,
+    ("POST", "/api/agents"): PERM_AGENT_DEPLOY,
     ("GET", "/api/agents/discovery"): MEMBER,
-    ("POST", "/api/agents/discovery/import"): ADMIN,
+    ("POST", "/api/agents/discovery/import"): PERM_AGENT_IMPORT,
     ("GET", "/api/agents/{agent_id}"): MEMBER,
-    ("DELETE", "/api/agents/{agent_id}"): ADMIN,
-    ("POST", "/api/agents/{agent_id}/convert"): ADMIN,
-    ("POST", "/api/agents/{agent_id}/redeploy"): ADMIN,
+    ("DELETE", "/api/agents/{agent_id}"): PERM_AGENT_DELETE,
+    ("POST", "/api/agents/{agent_id}/convert"): PERM_AGENT_CONVERT,
+    ("POST", "/api/agents/{agent_id}/redeploy"): PERM_AGENT_DEPLOY,
     ("POST", "/api/agents/{agent_id}/invoke"): MEMBER,  # parity with Chat
     ("GET", "/api/jobs/{job_id}"): MEMBER,
     # ---- credential minting ----
@@ -88,8 +104,10 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/execute/stream"): ADMIN,
     ("POST", "/api/fix-code/stream"): ADMIN,
     ("GET", "/api/generate-code/status"): MEMBER,
-    # ---- registry skill sources become deployable code ----
-    ("POST", "/api/agent-skills/import"): ADMIN,
+    # ---- registry skill sources become deployable code; the two staging
+    # helpers ride the deploy permission because the create wizard needs them,
+    # while record-creating imports stay admin ----
+    ("POST", "/api/agent-skills/import"): PERM_AGENT_DEPLOY,
     ("GET", "/api/registry/records"): MEMBER,
     ("POST", "/api/registry/records"): ADMIN,
     ("GET", "/api/registry/records/search"): MEMBER,
@@ -102,7 +120,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # installs software on the server host
     ("POST", "/api/registry/skills/capabilities/git-install"): ADMIN,
     ("POST", "/api/registry/skills/import"): ADMIN,
-    ("POST", "/api/registry/skills/inspect"): ADMIN,  # fetches remote content
+    # fetches remote content (SSRF-guarded); staging-only, needed by deploy
+    ("POST", "/api/registry/skills/inspect"): PERM_AGENT_DEPLOY,
     ("POST", "/api/registry/sync-defaults"): ADMIN,
     ("GET", "/api/registry/attachables"): MEMBER,
     ("POST", "/api/registry/a2a-demo"): MEMBER,  # an invoke; parity with Chat
@@ -255,3 +274,5 @@ def enforce_route_policy(request: Request) -> None:
         )
     if role == ADMIN:
         require_admin(request)
+    elif role.startswith(_PERM_PREFIX):
+        require_permission(request, role.removeprefix(_PERM_PREFIX))

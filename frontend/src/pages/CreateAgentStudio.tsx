@@ -66,7 +66,8 @@ function executionAgent(nodes: Node[], edges: Edge[]): Node | null {
 
 export function CreateAgentStudio() {
   const { t } = useTranslation();
-  const { isAdmin } = useAuth();
+  const { can } = useAuth();
+  const canDeploy = can("agents.deploy");
   const toast = useToast();
   const navigate = useNavigate();
   const [params] = useSearchParams();
@@ -443,9 +444,10 @@ export function CreateAgentStudio() {
     );
   }
 
-  // The canvas exists to publish agents, and local debug is administrator-only
-  // too (it runs generated code on the server), so gate the whole surface.
-  if (!isAdmin) {
+  // The canvas exists to publish agents, so it follows the member-grantable
+  // deploy permission. (Local debug stays admin-only server-side — /api/execute
+  // is ADMIN in route_policy and refused outright in prod.)
+  if (!canDeploy) {
     return (
       <AdminRequired kicker={t("studio.head.kicker")} title={t("studio.head.title")} />
     );

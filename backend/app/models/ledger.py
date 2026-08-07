@@ -65,6 +65,11 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(160), unique=True, index=True)  # lowercased
     password_hash: Mapped[str] = mapped_column(String(256))
     role: Mapped[str] = mapped_column(String(16), default="member")  # member | admin
+    # Per-user agent-management permission overrides ({key: bool}). None and any
+    # missing key mean GRANTED — only explicit denials are stored, so new
+    # permission keys are default-on for every existing account. Inert for
+    # admins (role short-circuits in auth). Keys: auth.AGENT_PERMISSIONS.
+    permissions: Mapped[dict[str, bool] | None] = mapped_column(JSON, default=None)
     # pending accounts await admin approval and cannot hold a session; the
     # validity window below only starts once they are approved
     status: Mapped[str] = mapped_column(String(16), default="active")

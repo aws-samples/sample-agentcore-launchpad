@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 
-import type { ConsoleRole } from "../lib/api";
+import type { AgentPermission, ConsoleRole } from "../lib/api";
 
 export interface AuthContextValue {
   authRequired: boolean;
@@ -11,6 +11,8 @@ export interface AuthContextValue {
   accountExpiresAt: string | null;
   /** admin-only surfaces (an open console keeps full local-operator access) */
   isAdmin: boolean;
+  /** member-grantable agent-management capability (admins always pass) */
+  can: (permission: AgentPermission) => boolean;
   logout: () => Promise<void>;
 }
 
@@ -21,6 +23,7 @@ export const AuthContext = createContext<AuthContextValue>({
   email: null,
   accountExpiresAt: null,
   isAdmin: true,
+  can: () => true,
   logout: async () => undefined,
 });
 

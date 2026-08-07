@@ -180,10 +180,12 @@ class TestRegistration:
         assert status["email"] == MEMBER["email"]
         assert status["account_expires_at"] is not None
         assert client.get(MEMBER_PROBE).status_code == 200
-        # ...but the console a member sees is read-only: admin-only routes answer
-        # 403, not 200. See app/core/route_policy.py.
+        # ...but admin-only routes answer 403, not 200 (route_policy.py). The
+        # agent-lifecycle routes are member-grantable and default-granted, so
+        # POST /api/agents gets past authorization into body validation (422);
+        # tests/test_member_permissions.py covers the revocation side.
         assert client.get("/api/apikeys").status_code == 403
-        assert client.post("/api/agents", json={}).status_code == 403
+        assert client.post("/api/agents", json={}).status_code == 422
         assert stored().login_count == 1
 
     @pytest.mark.parametrize(
