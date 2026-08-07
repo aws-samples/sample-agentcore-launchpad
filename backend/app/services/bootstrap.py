@@ -16,11 +16,15 @@ from typing import Any
 
 import boto3
 import yaml
+from botocore.exceptions import ClientError
 
 from app.core.config import CONFIG_FILE, get_settings
 
 STACK_NAME = "launchpad-base"
 REGISTRY_NAME = "launchpad-registry"
+REGISTRY_ACCESS_DENIED_REASON = (
+    "Agent Registry access is denied by this account; Registry features are disabled"
+)
 MEMORY_NAME = "launchpad_memory"  # AgentCore memory names disallow hyphens
 MEMORY_EVENT_EXPIRY_DAYS = 30
 
@@ -41,27 +45,35 @@ def get_stack_outputs(region: str, stack_name: str = STACK_NAME) -> dict[str, st
     return {o["OutputKey"]: o["OutputValue"] for o in stacks[0].get("Outputs", [])}
 
 
-def ensure_registry(control: Any, name: str = REGISTRY_NAME) -> tuple[dict[str, str], bool]:
-    """Return ({id, arn}, created). Reuses an existing registry with the same name."""
-    paginator_items: list[dict[str, Any]] = []
-    token: str | None = None
-    while True:
-        kwargs = {"maxResults": 100} | ({"nextToken": token} if token else {})
-        page = control.list_registries(**kwargs)
-        paginator_items.extend(page.get("registries", []))
-        token = page.get("nextToken")
-        if not token:
-            break
-    for reg in paginator_items:
-        if reg.get("name") == name:
-            return {"id": reg["registryId"], "arn": reg["registryArn"]}, False
-    created = control.create_registry(
-        name=name,
-        description="AgentCore Launchpad asset catalog (agents / MCP tools / skills)",
-    )
-    # CreateRegistry returns only the ARN; the id is its final path segment.
-    arn = created["registryArn"]
-    return {"id": arn.split("/")[-1], "arn": arn}, True
+def ensure_registry(
+    control: Any, name: str = REGISTRY_NAME
+) -> tuple[dict[str, str] | None, bool]:
+    """Return ({id, arn}, created), or (None, False) when account policy denies Registry."""
+    try:
+        paginator_items: list[dict[str, Any]] = []
+        token: str | None = None
+        while True:
+            kwargs = {"maxResults": 100} | ({"nextToken": token} if token else {})
+            page = control.list_registries(**kwargs)
+            paginator_items.extend(page.get("registries", []))
+            token = page.get("nextToken")
+            if not token:
+                break
+        for reg in paginator_items:
+            if reg.get("name") == name:
+                return {"id": reg["registryId"], "arn": reg["registryArn"]}, False
+        created = control.create_registry(
+            name=name,
+            description="AgentCore Launchpad asset catalog (agents / MCP tools / skills)",
+        )
+        # CreateRegistry returns only the ARN; the id is its final path segment.
+        arn = created["registryArn"]
+        return {"id": arn.split("/")[-1], "arn": arn}, True
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        if code in {"AccessDenied", "AccessDeniedException"}:
+            return None, False
+        raise
 
 
 def ensure_memory(
@@ -207,6 +219,13 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
 
     account_id = sts.get_caller_identity()["Account"]
     registry, registry_created = ensure_registry(control)
+    registry_summary = {
+        "available": registry is not None,
+        "id": registry["id"] if registry else "",
+        "arn": registry["arn"] if registry else "",
+        "created": registry_created,
+        "reason": None if registry else REGISTRY_ACCESS_DENIED_REASON,
+    }
     memory, memory_created = ensure_memory(
         control, execution_role_arn=outputs.get("AgentExecutionRoleArn")
     )
@@ -227,8 +246,11 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
                 "user_pool_id": outputs["UserPoolId"],
                 "user_pool_client_id": outputs["UserPoolClientId"],
                 "execution_role_arn": outputs["AgentExecutionRoleArn"],
-                "registry_id": registry["id"],
-                "registry_arn": registry["arn"],
+                # Empty values deliberately replace stale identifiers after an
+                # account policy starts denying Registry.
+                "registry_id": registry_summary["id"],
+                "registry_arn": registry_summary["arn"],
+                "registry_unavailable_reason": registry_summary["reason"] or "",
                 "memory_id": memory["id"],
                 "memory_arn": memory["arn"],
                 # build-tools layer (phase 6+); absent on stacks predating it
@@ -285,7 +307,7 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
     return {
         "account_id": account_id,
         "region": region,
-        "registry": {**registry, "created": registry_created},
+        "registry": registry_summary,
         "memory": {**memory, "created": memory_created},
         "gateway": gateway_summary,
         "policy": policy_summary,

@@ -116,12 +116,23 @@ def main() -> int:
 
     summary = bs.run_bootstrap(region)
 
+    registry = summary["registry"]
     rows = [
         ("account", summary["account_id"]),
         ("region", summary["region"]),
         ("agentcore CLI", agentcore_cli_version),
-        ("registry", f"{summary['registry']['arn']}"),
-        ("registry state", "created" if summary["registry"]["created"] else "reused"),
+        (
+            "registry",
+            registry["arn"] if registry["available"] else "unavailable · skipped",
+        ),
+        (
+            "registry state",
+            (
+                "created" if registry["created"] else "reused"
+            )
+            if registry["available"]
+            else registry["reason"],
+        ),
         ("memory", f"{summary['memory']['arn']}"),
         ("memory state", "created" if summary["memory"]["created"] else "reused"),
         ("artifacts bucket", summary["stack_outputs"]["ArtifactsBucketName"]),

@@ -68,3 +68,29 @@ def test_overview_registry_failure_falls_back_to_cache(client, monkeypatch):
     res = client.get("/api/overview")
     assert res.status_code == 200
     assert res.json()["registry_assets"]["agents"] == 7
+
+
+def test_overview_exposes_registry_unavailable_reason(client, monkeypatch):
+    monkeypatch.setattr(
+        overview_mod,
+        "get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {
+                "resources": {
+                    "registry_id": "",
+                    "registry_unavailable_reason": "blocked by account policy",
+                }
+            },
+        )(),
+    )
+    monkeypatch.setattr(overview_mod, "_traces_active", lambda: False)
+    overview_mod._cache.update(assets_at=0.0, assets=None)
+
+    response = client.get("/api/overview")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["services"]["registry"] is False
+    assert body["service_detail"]["registry"] == "blocked by account policy"

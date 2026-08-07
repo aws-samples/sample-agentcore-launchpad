@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { Network } from "lucide-react";
+import { Network, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -137,6 +137,7 @@ export function Registry() {
   const [searchParams, setSearchParams] = useSearchParams();
   const view = searchParams.get("view");
   const [records, setRecords] = useState<RegistryRecord[] | null>(null);
+  const [unavailable, setUnavailable] = useState<string | null>(null);
   const [tab, setTab] = useState<RecordType>("A2A");
   const [selected, setSelected] = useState<RegistryRecord | null>(null);
   const [query, setQuery] = useState("");
@@ -151,15 +152,24 @@ export function Registry() {
     try {
       const res = await fetch("/api/registry/records");
       if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as {
+          code?: string;
+          message?: string;
+        };
+        if (res.status === 503 && body.code === "registry.unavailable") {
+          setUnavailable(body.message ?? t("registry.unavailableBody"));
+        }
         setRecords((prev) => prev ?? []);
         return;
       }
       const body = (await res.json()) as { records: RegistryRecord[] };
+      setUnavailable(null);
       setRecords(body.records);
     } catch {
+      setUnavailable(t("registry.unavailableBody"));
       setRecords((prev) => prev ?? []); // backend offline — show empty state
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void load();
@@ -306,6 +316,25 @@ export function Registry() {
       navigate(`/create?skill=${encodeURIComponent(path)}`);
     }
   };
+
+  if (unavailable) {
+    return (
+      <section>
+        <ViewHead
+          kicker={t("registry.kicker")}
+          title={t("registry.title")}
+          meta={t("registry.metaUnavailable")}
+        />
+        <Panel brk>
+          <div className="gov-state gov-state-error" data-testid="registry-unavailable">
+            <TriangleAlert size={20} aria-hidden="true" />
+            <strong>{t("registry.unavailableTitle")}</strong>
+            <span>{unavailable}</span>
+          </div>
+        </Panel>
+      </section>
+    );
+  }
 
   // Registering and editing records both publish deployable code, so the two
   // write sub-pages are administrator-only. Browsing and the A2A demo are not.

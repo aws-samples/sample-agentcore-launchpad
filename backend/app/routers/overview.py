@@ -88,7 +88,10 @@ def overview(db: Session = Depends(get_db)) -> dict[str, Any]:
     detail = {
         "gateway": resources.get("gateway_id", ""),
         "memory": resources.get("memory_id", ""),
-        "registry": resources.get("registry_id", ""),
+        "registry": (
+            resources.get("registry_id", "")
+            or resources.get("registry_unavailable_reason", "")
+        ),
         "policy": resources.get("policy_engine_id", ""),
         "evaluation": f"{len(runs)} runs" if runs else "",
         "observability": "aws/spans" if services["observability"] else "",

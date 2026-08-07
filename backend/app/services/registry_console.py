@@ -39,10 +39,24 @@ SKILL_NAME = "expense-report-writer"
 GATEWAY_SCOPE = "launchpad-gw/invoke"
 
 
+class RegistryUnavailableError(AppError):
+    """Registry is an optional capability and was disabled during bootstrap."""
+
+    def __init__(self, reason: str | None = None):
+        message = reason or "Agent Registry is not configured"
+        super().__init__(
+            "registry.unavailable",
+            message,
+            detail={"reason": message},
+            status_code=503,
+        )
+
+
 def _registry_id() -> str:
-    registry_id = get_settings().resources.get("registry_id")
+    resources = get_settings().resources
+    registry_id = resources.get("registry_id")
     if not registry_id:
-        raise RuntimeError("registry_id missing from config — run scripts/bootstrap.py")
+        raise RegistryUnavailableError(resources.get("registry_unavailable_reason"))
     return registry_id
 
 

@@ -21,6 +21,7 @@ resources:
   execution_role_arn: arn:aws:iam::123456789012:role/launchpad-agent-execution-role
   registry_id: launchpad-registry-XXXXXXXXXX
   registry_arn: arn:aws:bedrock-agentcore:us-west-2:123456789012:registry/launchpad-registry-XXXXXXXXXX
+  registry_unavailable_reason: ""
   memory_id: launchpad_memory-XXXXXXXXXX
   memory_arn: arn:aws:bedrock-agentcore:us-west-2:123456789012:memory/launchpad_memory-XXXXXXXXXX
 
