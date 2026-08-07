@@ -2,13 +2,14 @@
 converge them into one ``SkillBundle`` abstraction the registry console uploads
 to S3.
 
-AWS Registry AGENT_SKILLS records only carry inline descriptors (``skillMd`` +
-``skillDefinition``, each ≤100KB); the multi-file bundle真身 lives in
-``s3://{artifacts_bucket}/skills/{name}/`` and the deploy-time packager
-(``deployer/zip_runtime.py``) downloads the whole prefix. This module is the
-producer side: every source resolves to a staging directory + metadata,
-validated once, before ``registry_console.register_skill_bundle`` uploads the
-files and creates the record.
+AWS Agent Registry stores skill definition and SKILL.md data in the
+``agentSkillsDefinition`` descriptor; Launchpad's Registry adapter exposes the
+stable ``skillDefinition`` / ``skillMd`` inline contract to this layer. The
+multi-file bundle lives in ``s3://{artifacts_bucket}/skills/{name}/`` and the
+deploy-time packager (``deployer/zip_runtime.py``) downloads the whole prefix.
+This module is the producer side: every source resolves to a staging directory
+and metadata, validated once, before ``registry_console.register_skill_bundle``
+uploads the files and creates the record.
 
 The acquirer seam (``bundle_from_*``) is designed so later sources — git shallow
 clone, url fetch — plug in as new functions returning the same ``SkillBundle``;
@@ -41,10 +42,10 @@ _logger = logging.getLogger("launchpad.registry")
 # Shared caps — the single source of truth for skill limits. The deploy-time
 # consumer (deployer/zip_runtime.py) imports SKILL_BUNDLE_MAX_BYTES so producer
 # and consumer never drift.
-SKILL_MD_MAX_BYTES = 102_400  # AWS skillMd.inlineContent cap
+SKILL_MD_MAX_BYTES = 102_400  # Registry descriptor data cap
 SKILL_BUNDLE_MAX_BYTES = 50 * 1024 * 1024  # per-skill S3 bundle cap
 SKILL_FILE_COUNT_MAX = 200
-# AWS parses the skillMd frontmatter server-side and rejects longer descriptions
+# AWS parses the skillMd data server-side and rejects longer descriptions
 # with a post-upload ValidationException (hit live 2026-07-12 on claude-api).
 SKILL_DESCRIPTION_MAX_CHARS = 1024
 SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{2,63}$")

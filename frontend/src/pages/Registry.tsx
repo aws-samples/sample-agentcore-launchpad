@@ -401,7 +401,9 @@ export function Registry() {
                 font: "inherit",
               }}
             />
-            <span style={{ color: "var(--line-2)" }}>SearchRegistryRecords</span>
+            <span style={{ color: "var(--line-2)" }}>
+              SearchDiscoverableRegistryRecords
+            </span>
           </div>
           <div className="end flowchips">
             <Chip tone="muted" icon="○">{t("registry.states.draft")}</Chip>

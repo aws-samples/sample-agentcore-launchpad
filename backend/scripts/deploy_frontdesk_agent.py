@@ -34,10 +34,7 @@ FRONTDESK_PROMPT = (
 
 def ensure_iam(settings) -> None:
     role = settings.resources["execution_role_arn"].rsplit("/", 1)[-1]
-    registry_arn = (
-        f"arn:aws:bedrock-agentcore:{settings.region}:{settings.account_id}"
-        f":registry/{settings.resources['registry_id']}"
-    )
+    registry_arn = settings.resources["registry_arn"]
     harness_arn = (
         f"arn:aws:bedrock-agentcore:{settings.region}:{settings.account_id}:harness/*"
     )
@@ -48,10 +45,8 @@ def ensure_iam(settings) -> None:
             "Version": "2012-10-17",
             "Statement": [
                 {"Effect": "Allow",
-                 "Action": ["bedrock-agentcore:SearchRegistryRecords",
-                            "bedrock-agentcore:GetRegistryRecord",
-                            "bedrock-agentcore:ListRegistryRecords"],
-                 "Resource": [registry_arn, f"{registry_arn}/*"]},
+                 "Action": ["agent-registry:SearchDiscoverableRegistryRecords"],
+                 "Resource": [registry_arn]},
                 {"Effect": "Allow",
                  "Action": ["bedrock-agentcore:InvokeHarness"],
                  "Resource": [harness_arn]},

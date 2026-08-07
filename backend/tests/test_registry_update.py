@@ -21,6 +21,12 @@ SKILL_MD = (
 )
 
 
+def test_bump_minor_preserves_ga_type_suffix():
+    assert console_mod._bump_minor("1.0.0-skill") == "1.1.0-skill"
+    assert console_mod._bump_minor("1.0.0-mcp") == "1.1.0-mcp"
+    assert console_mod._bump_minor("1.0.0") == "1.1.0"
+
+
 def _multifile_zip() -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:

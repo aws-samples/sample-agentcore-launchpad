@@ -198,7 +198,8 @@ box, and part of why the whole tier is run *on* the box.
 
 `e2e_registry.py` used to end with
 `assert any(r["name"] == "expense-report-writer" for r in found)` over
-`SearchRegistryRecords`, which **failed on every clean run**. That was a defect in the test,
+`SearchRegistryRecords` (now `SearchDiscoverableRegistryRecords` in GA), which
+**failed on every clean run**. That was a defect in the test,
 not in the product. Measured on 2026-08-04 (us-east-1):
 
 - the record exists (`AGENT_SKILLS`, `PENDING_APPROVAL`), and everything before the assertion
@@ -206,13 +207,14 @@ not in the product. Measured on 2026-08-04 (us-east-1):
 - `q=expense` returns `[]` immediately, after 30 s, after ~20 min — and **still `[]` the next
   day, >12 h after the record was created**;
 - `q=office` likewise never finds `office-facts`;
-- `q=hr` returns a **DRAFT** record, so "only APPROVED records are indexed" is refuted;
+- under the preview API, `q=hr` returned a **DRAFT** record; the GA discoverable
+  API now returns approved records only;
 - every record search *does* return predates the run.
 
-`SearchRegistryRecords` is AWS-side semantic search (`console_search` → `reg.search_records` is
-a three-line wrapper with no platform filtering), and its index had not picked up records
-created 20 minutes earlier. The assertion encodes an immediate-consistency guarantee the API
-does not offer.
+`SearchDiscoverableRegistryRecords` is AWS-side semantic search
+(`console_search` → `reg.search_records` adds no platform filtering), and
+approval does not make its index immediately consistent. The assertion encoded
+an immediate-consistency guarantee the API does not offer.
 
 **Fixed 2026-08-05.** The step now asserts what the API actually guarantees — HTTP 200, a
 list, well-formed records — polls three times over ~20 s for the fresh record, and prints

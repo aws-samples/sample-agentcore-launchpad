@@ -28,6 +28,7 @@ from app.services import bootstrap as bs  # noqa: E402
 def collect_targets(region: str) -> list[tuple[str, str, str]]:
     """(kind, identifier, description) for every resource we would delete."""
     control = bs._client("bedrock-agentcore-control", region)
+    registry_control = bs._client("agent-registry-control", region)
     targets: list[tuple[str, str, str]] = []
 
     memories = control.list_memories(maxResults=100).get("memories", [])
@@ -35,7 +36,7 @@ def collect_targets(region: str) -> list[tuple[str, str, str]]:
         if mem["id"].startswith(f"{bs.MEMORY_NAME}-"):
             targets.append(("memory", mem["id"], mem["arn"]))
 
-    registries = control.list_registries(maxResults=100).get("registries", [])
+    registries = registry_control.list_registries(maxResults=100).get("registries", [])
     for reg in registries:
         if reg["name"] == bs.REGISTRY_NAME:
             targets.append(("registry", reg["registryId"], reg["registryArn"]))
@@ -53,14 +54,15 @@ def delete_target(kind: str, identifier: str, region: str) -> None:
     if kind == "memory":
         control.delete_memory(memoryId=identifier)
     elif kind == "registry":
-        records = control.list_registry_records(
+        registry_control = bs._client("agent-registry-control", region)
+        records = registry_control.list_registry_records(
             registryId=identifier, maxResults=100
         ).get("registryRecords", [])
         for rec in records:
-            control.delete_registry_record(
+            registry_control.delete_registry_record(
                 registryId=identifier, recordId=rec["recordId"]
             )
-        control.delete_registry(registryId=identifier)
+        registry_control.delete_registry(registryId=identifier)
     elif kind == "cdk-stack":
         subprocess.run(
             ["uv", "run", "cdk", "destroy", "--force"],

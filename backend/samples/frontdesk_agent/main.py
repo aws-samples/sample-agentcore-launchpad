@@ -99,10 +99,14 @@ def _client():
     return boto3.client("bedrock-agentcore", region_name=REGION)
 
 
+def _registry_client():
+    return boto3.client("agent-registry", region_name=REGION)
+
+
 def parse_card(record: dict[str, Any]) -> dict[str, Any] | None:
     """Registry record → routing card (pure; tested offline)."""
     try:
-        card = json.loads(record["descriptors"]["a2a"]["agentCard"]["inlineContent"])
+        card = json.loads(record["descriptors"]["a2aAgentCard"]["data"])
     except Exception:
         return None
     meta = card.get("metadata") or {}
@@ -147,12 +151,12 @@ def discover_agents(query: str) -> str:
     """Search the enterprise agent registry for APPROVED specialist agents whose
     skills match the query. Always call this first. Returns a JSON list of
     agent cards: name, description, skills, transport."""
-    resp = _client().search_registry_records(
+    resp = _registry_client().search_discoverable_registry_records(
         registryIds=[REGISTRY_ID], searchQuery=query[:900] or "specialist", maxResults=8
     )
     hits: list[dict[str, Any]] = []
     for rec in resp.get("registryRecords", []):
-        if rec.get("descriptorType") != "A2A" or rec.get("status") != "APPROVED":
+        if rec.get("recordType") != "AGENT" or rec.get("status") != "APPROVED":
             continue
         card = parse_card(rec)
         if not card or card["name"] == SELF_NAME:
