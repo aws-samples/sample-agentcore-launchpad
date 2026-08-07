@@ -115,6 +115,9 @@ def admin_session(gated_app):
 
 ADMIN_ROUTES = sorted(k for k, v in ROUTE_POLICY.items() if v == ADMIN)
 MEMBER_ROUTES = sorted(k for k, v in ROUTE_POLICY.items() if v == MEMBER)
+PERMISSION_ROUTES = sorted(
+    k for k, v in ROUTE_POLICY.items() if v.startswith("perm:")
+)
 
 
 def _concrete(path_format: str) -> str:
@@ -159,7 +162,10 @@ class TestNoDrift:
         assert not stale, f"these ROUTE_POLICY entries match no live route: {stale}"
 
     def test_every_role_is_known(self):
-        assert set(ROUTE_POLICY.values()) <= {ADMIN, MEMBER, PUBLIC}
+        permission_roles = {
+            f"perm:{key}" for key in users_service.AGENT_PERMISSIONS
+        }
+        assert set(ROUTE_POLICY.values()) <= {ADMIN, MEMBER, PUBLIC} | permission_roles
 
     def test_the_open_paths_are_public(self):
         """`auth_middleware` lets these through, so the table must agree."""
@@ -199,6 +205,32 @@ class TestMemberRoutesStayReachable:
         """Cheap over HTTP: the middleware answers 401 before any handler runs."""
         response = anon_session.request(method, _concrete(path_format))
         assert response.status_code == 401, response.text
+
+
+class TestPermissionRoutesAreEnforced:
+    """`perm:agents.*` routes: anonymous 401; a fully-revoked member 403 with
+    the dedicated code. The granted-member (default) path is covered end-to-end
+    in tests/test_member_permissions.py."""
+
+    @pytest.mark.parametrize(("method", "path_format"), PERMISSION_ROUTES)
+    def test_anonymous_gets_401(self, anon_session, method, path_format):
+        response = anon_session.request(method, _concrete(path_format))
+        assert response.status_code == 401, response.text
+        assert response.json()["code"] == "auth.required"
+
+    @pytest.mark.parametrize(("method", "path_format"), PERMISSION_ROUTES)
+    def test_fully_revoked_member_gets_403(self, member_session, method, path_format):
+        db = SessionLocal()
+        try:
+            user = users_service.find_by_username(db, MEMBER_CREDS["username"])
+            assert user is not None
+            user.permissions = dict.fromkeys(users_service.AGENT_PERMISSIONS, False)
+            db.commit()
+        finally:
+            db.close()
+        response = member_session.request(method, _concrete(path_format))
+        assert response.status_code == 403, response.text
+        assert response.json()["code"] == "auth.permission_required"
 
 
 class TestUnclassifiedRouteFailsClosed:

@@ -49,6 +49,18 @@ _OPEN_API_PATHS = {
 ROLE_ADMIN = "admin"
 ROLE_MEMBER = "member"
 
+# Member-grantable agent-management capabilities (route_policy `perm:` values).
+# A member holds every key by default; `users.permissions` stores only explicit
+# denials. Admins (and the config-driven built-in admin) implicitly hold all.
+AGENT_PERMISSIONS = users_service.AGENT_PERMISSIONS
+
+
+def granted_permissions(overrides: dict[str, bool] | None) -> frozenset[str]:
+    """The granted keys for a member row's `permissions` column value."""
+    return frozenset(
+        key for key in AGENT_PERMISSIONS if (overrides or {}).get(key) is not False
+    )
+
 
 @dataclass(frozen=True)
 class Identity:
@@ -59,10 +71,14 @@ class Identity:
     email: str | None = None
     account_expires_at: datetime | None = None
     user_id: str | None = None  # None for the config-driven admin
+    permissions: frozenset[str] = frozenset(AGENT_PERMISSIONS)
 
     @property
     def is_admin(self) -> bool:
         return self.role == ROLE_ADMIN
+
+    def can(self, permission: str) -> bool:
+        return self.is_admin or permission in self.permissions
 
 
 def _password(settings: Settings | None = None) -> str | None:
@@ -173,6 +189,7 @@ def resolve_identity(
             email=user.email,
             account_expires_at=users_service.as_utc(user.expires_at),
             user_id=user.id,
+            permissions=granted_permissions(user.permissions),
         )
     finally:
         if owned:
@@ -276,6 +293,19 @@ def require_admin(request: Request) -> Identity:
     return identity
 
 
+def require_permission(request: Request, permission: str) -> Identity:
+    """Admin always passes; a member needs the (default-granted) permission."""
+    identity = require_identity(request)
+    if not identity.can(permission):
+        raise AppError(
+            "auth.permission_required",
+            f"This action requires the '{permission}' permission",
+            {"permission": permission},
+            status_code=403,
+        )
+    return identity
+
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=256)
@@ -294,6 +324,7 @@ def _identity_fields(identity: Identity | None) -> dict[str, Any]:
             "role": None,
             "email": None,
             "account_expires_at": None,
+            "permissions": [],
         }
     return {
         "username": identity.username,
@@ -304,6 +335,7 @@ def _identity_fields(identity: Identity | None) -> dict[str, Any]:
             if identity.account_expires_at
             else None
         ),
+        "permissions": sorted(identity.permissions),
     }
 
 
@@ -366,6 +398,7 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
                 email=user.email,
                 account_expires_at=users_service.as_utc(user.expires_at),
                 user_id=user.id,
+                permissions=granted_permissions(user.permissions),
             )
         finally:
             db.close()

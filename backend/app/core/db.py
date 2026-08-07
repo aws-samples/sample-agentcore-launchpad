@@ -121,6 +121,11 @@ def _migrate(bind) -> None:
                 conn.execute(
                     text("ALTER TABLE deployments ADD COLUMN image_digest VARCHAR(80)")
                 )
+    if "users" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("users")}
+        if "permissions" not in existing:
+            with bind.begin() as conn:
+                conn.execute(text("ALTER TABLE users ADD COLUMN permissions JSON"))
     if "eval_datasets" in inspector.get_table_names():
         existing = {c["name"] for c in inspector.get_columns("eval_datasets")}
         additions = {

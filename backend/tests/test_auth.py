@@ -37,6 +37,7 @@ class TestAuthDisabled:
             "role": None,
             "email": None,
             "account_expires_at": None,
+            "permissions": [],
         }
 
     def test_registration_is_refused_while_the_gate_is_open(self, client):
@@ -84,6 +85,7 @@ class TestAuthEnabled:
             "role": None,
             "email": None,
             "account_expires_at": None,
+            "permissions": [],
         }
         response = auth_client.post(
             "/api/auth/login",

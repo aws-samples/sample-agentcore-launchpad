@@ -9,7 +9,9 @@ export interface NavEntry {
 
 export const NAV_ENTRIES: NavEntry[] = [
   { idx: "01", to: "/", labelKey: "nav.overview", end: true },
-  { idx: "02", to: "/create", labelKey: "nav.createAgent", adminOnly: true },
+  // members reach it too since 2026-08-07: reads are open, and the mutating
+  // actions are gated per user by agent-management permissions (auth `can()`)
+  { idx: "02", to: "/create", labelKey: "nav.createAgent" },
   { idx: "03", to: "/registry", labelKey: "nav.registry" },
   { idx: "04", to: "/knowledge-bases", labelKey: "nav.knowledgeBases" },
   { idx: "05", to: "/memory", labelKey: "nav.memory" },

@@ -6,7 +6,6 @@ import { ArrowLeft, Download, RefreshCw, Search } from "lucide-react";
 
 import { useAuth } from "../auth/auth-context";
 import {
-  AdminRequired,
   Btn,
   Chip,
   ConfirmDialog,
@@ -165,14 +164,10 @@ const canSelectRuntime = (runtime: RuntimeDiscoveryCandidate) =>
 
 export function CreateAgent() {
   const [params] = useSearchParams();
-  const { t } = useTranslation();
-  const { isAdmin } = useAuth();
-  // Creating, importing and deploying agents are all administrator-only, so the
-  // whole module is gated rather than letting a member fill in a wizard whose
-  // submit would answer 403.
-  if (!isAdmin) {
-    return <AdminRequired kicker={t("create.kicker")} title={t("create.title")} />;
-  }
+  // Members reach the whole module: the list, details and the discovery scan
+  // are reads. Each mutating action gates itself on the caller's granted
+  // agent-management permissions (default granted, revocable per user in the
+  // Users console — mirrors route_policy's perm:agents.*).
   return params.get("view") === "discover" ? <RuntimeDiscovery /> : <CreateAgentWizard />;
 }
 
@@ -180,6 +175,8 @@ function RuntimeDiscovery() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useToast();
+  const { can } = useAuth();
+  const canImport = can("agents.import");
   const [region, setRegion] = useState("");
   const [runtimes, setRuntimes] = useState<RuntimeDiscoveryCandidate[]>([]);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -279,15 +276,21 @@ function RuntimeDiscovery() {
             <RefreshCw size={14} aria-hidden="true" />
             {t("create.discovery.refresh")}
           </Btn>
-          <Btn onClick={toggleAll} disabled={!selectable.length || importing}>
+          <Btn onClick={toggleAll} disabled={!canImport || !selectable.length || importing}>
             {t(allSelected ? "create.discovery.clearSelection" : "create.discovery.selectEligible")}
           </Btn>
-          <Btn primary onClick={() => void importSelected()} disabled={!selected.size || importing}>
-            <Download size={14} aria-hidden="true" />
-            {importing
-              ? t("create.discovery.importing")
-              : t("create.discovery.importSelected", { count: selected.size })}
-          </Btn>
+          <span title={canImport ? undefined : t("create.permissionRequired")}>
+            <Btn
+              primary
+              onClick={() => void importSelected()}
+              disabled={!canImport || !selected.size || importing}
+            >
+              <Download size={14} aria-hidden="true" />
+              {importing
+                ? t("create.discovery.importing")
+                : t("create.discovery.importSelected", { count: selected.size })}
+            </Btn>
+          </span>
         </div>
       </div>
 
@@ -324,7 +327,7 @@ function RuntimeDiscovery() {
                 <input
                   type="checkbox"
                   checked={allSelected}
-                  disabled={!selectable.length}
+                  disabled={!canImport || !selectable.length}
                   onChange={toggleAll}
                   aria-label={t("create.discovery.selectEligible")}
                 />
@@ -349,7 +352,7 @@ function RuntimeDiscovery() {
                     <input
                       type="checkbox"
                       checked={selected.has(runtime.runtime_id)}
-                      disabled={!selectableRuntime || importing}
+                      disabled={!canImport || !selectableRuntime || importing}
                       onChange={() => toggle(runtime.runtime_id)}
                       aria-label={t("create.discovery.selectRuntime", { name: runtime.name })}
                     />
@@ -496,6 +499,8 @@ function CreateAgentWizard() {
   const { t } = useTranslation();
   const toast = useToast();
   const navigate = useNavigate();
+  const { can } = useAuth();
+  const canDeploy = can("agents.deploy");
   const [params] = useSearchParams();
   const prefillGateway = params.get("gateway");
   const prefillSkill = params.get("skill");
@@ -657,6 +662,10 @@ function CreateAgentWizard() {
     setCustomModel(false);
   };
 
+const deployLock = !canDeploy
+    ? ({ opacity: 0.45, pointerEvents: "none" } as CSSProperties)
+    : undefined;
+  
   const pickMethod = (next: Method) => {
     if (next === method) return;
     setMethod(next);
@@ -1100,10 +1109,16 @@ function CreateAgentWizard() {
 
       {step === 1 && (
         <>
+          {!canDeploy && (
+            <div className="note" style={{ marginBottom: 14 }}>
+              <span className="i">[!]</span>
+              <span>{t("create.permissionRequired")}</span>
+            </div>
+          )}
           <div className="methods">
             <div
               className={`method${method === "harness" ? " sel" : ""}`}
-              style={{ "--i": 0 } as CSSProperties}
+              style={{ "--i": 0, ...deployLock } as CSSProperties}
               onClick={() => pickMethod("harness")}
               data-method="harness"
             >
@@ -1119,7 +1134,7 @@ function CreateAgentWizard() {
             </div>
             <div
               className={`method${method === "zip_runtime" ? " sel" : ""}`}
-              style={{ "--i": 1 } as CSSProperties}
+              style={{ "--i": 1, ...deployLock } as CSSProperties}
               onClick={() => pickMethod("zip_runtime")}
               data-method="zip_runtime"
             >
@@ -1142,7 +1157,7 @@ function CreateAgentWizard() {
             </div>
             <div
               className={`method${method === "container" ? " sel" : ""}`}
-              style={{ "--i": 2 } as CSSProperties}
+              style={{ "--i": 2, ...deployLock } as CSSProperties}
               onClick={() => pickMethod("container")}
               data-method="container"
             >
@@ -1177,9 +1192,11 @@ function CreateAgentWizard() {
             </button>
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
-            <Btn primary onClick={() => setStep(2)}>
-              {t("create.next")} ▸
-            </Btn>
+            <span title={canDeploy ? undefined : t("create.permissionRequired")}>
+              <Btn primary disabled={!canDeploy} onClick={() => setStep(2)}>
+                {t("create.next")} ▸
+              </Btn>
+            </span>
           </div>
 
           <div style={{ height: 18 }} />
@@ -1927,7 +1944,7 @@ function CreateAgentWizard() {
                 </Btn>
                 <Btn
                   primary
-                  disabled={!configValid}
+                  disabled={!configValid || !canDeploy}
                   onClick={() => (editing ? setConfirm({ kind: "republish" }) : void submit())}
                 >
                   {editing ? `⟳ ${t("create.republish")}` : `▲ ${t("create.launch")}`}
@@ -2061,6 +2078,12 @@ function AgentList({
   onConvert: (id: string, name: string) => void;
 }) {
   const { t } = useTranslation();
+  const { can } = useAuth();
+  const permHint = (allowed: boolean) =>
+    allowed ? undefined : t("create.permissionRequired");
+  const canEdit = can("agents.deploy"); // editing re-publishes
+  const canDelete = can("agents.delete");
+  const canConvert = can("agents.convert");
   return (
     <Panel title={t("create.list.title")} sub={t("create.list.sub")} pad={false}>
       <table>
@@ -2106,8 +2129,11 @@ function AgentList({
                     <button
                       type="button"
                       className="rowact"
-                      disabled={a.status === "deploying"}
-                      style={a.status === "deploying" ? { opacity: 0.35 } : undefined}
+                      disabled={!canEdit || a.status === "deploying"}
+                      style={
+                        !canEdit || a.status === "deploying" ? { opacity: 0.35 } : undefined
+                      }
+                      title={permHint(canEdit)}
                       onClick={() => onEdit(a)}
                     >
                       {t("create.list.edit")}
@@ -2123,6 +2149,9 @@ function AgentList({
                       type="button"
                       className="rowact"
                       data-testid={`convert-${a.name}`}
+                      disabled={!canConvert}
+                      style={!canConvert ? { opacity: 0.35 } : undefined}
+                      title={permHint(canConvert)}
                       onClick={() => onConvert(a.id, a.name)}
                     >
                       {t("create.list.convert")}
@@ -2136,6 +2165,9 @@ function AgentList({
                   <button
                     type="button"
                     className="rowact"
+                    disabled={!canDelete}
+                    style={!canDelete ? { opacity: 0.35 } : undefined}
+                    title={permHint(canDelete)}
                     onClick={() => onDelete(a)}
                   >
                     {t(

@@ -1174,6 +1174,20 @@ export interface OverviewInfo {
 
 export type ConsoleRole = "admin" | "member";
 
+/** Member-grantable agent-management capabilities (default granted). */
+export type AgentPermission =
+  | "agents.deploy"
+  | "agents.import"
+  | "agents.delete"
+  | "agents.convert";
+
+export const AGENT_PERMISSIONS: AgentPermission[] = [
+  "agents.deploy",
+  "agents.import",
+  "agents.delete",
+  "agents.convert",
+];
+
 export interface AuthStatus {
   auth_required: boolean;
   authenticated: boolean;
@@ -1185,6 +1199,8 @@ export interface AuthStatus {
   email: string | null;
   /** account validity (registered users); null = built-in admin / never expires */
   account_expires_at: string | null;
+  /** granted agent-management permissions ([] until authenticated) */
+  permissions: AgentPermission[];
 }
 
 export interface AuthLoginResult extends AuthStatus {
@@ -1222,6 +1238,8 @@ export interface ConsoleUser {
   last_login_at: string | null;
   login_count: number;
   created_by: string;
+  /** effective agent-management permission map (admins: all true) */
+  permissions: Record<AgentPermission, boolean>;
   /** only present on a password reset the platform generated */
   generated_password?: string;
 }
@@ -1256,6 +1274,8 @@ export interface UserPatchBody {
   expires_at?: string | null;
   /** null asks the backend to generate one and return it once */
   password?: string | null;
+  /** partial map; unsent keys stay granted, null resets to all-granted */
+  permissions?: Partial<Record<AgentPermission, boolean>> | null;
 }
 
 export const api = {

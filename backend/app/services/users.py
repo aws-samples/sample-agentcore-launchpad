@@ -25,6 +25,17 @@ from app.core.config import Settings, get_settings
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import User
 
+# Member-grantable agent-management capabilities. Defined here (not in
+# routers.auth, which imports this module) so both auth and the users console
+# share one list. `users.permissions` stores only explicit False entries; a
+# missing key or a None column means granted.
+AGENT_PERMISSIONS = (
+    "agents.deploy",
+    "agents.import",
+    "agents.delete",
+    "agents.convert",
+)
+
 # --- password hashing -------------------------------------------------------
 
 _ALGO = "pbkdf2_sha256"
@@ -204,6 +215,16 @@ def serialize(user: User, now: datetime | None = None) -> dict[str, Any]:
         "last_login_at": last_login.isoformat() if last_login else None,
         "login_count": user.login_count,
         "created_by": user.created_by,
+        "permissions": effective_permissions(user),
+    }
+
+
+def effective_permissions(user: User) -> dict[str, bool]:
+    """Full permission map as it will be enforced (admins hold everything)."""
+    overrides = user.permissions or {}
+    return {
+        key: user.role == "admin" or overrides.get(key) is not False
+        for key in AGENT_PERMISSIONS
     }
 
 
@@ -463,9 +484,33 @@ def apply_patch(
         validate_password(password)
         user.password_hash = hash_password(password)
         generated = None if chosen else password
+    if "permissions" in patch:
+        user.permissions = _normalized_permissions(patch["permissions"])
     db.commit()
     db.refresh(user)
     return generated
+
+
+def _normalized_permissions(value: Any) -> dict[str, bool] | None:
+    """Validate a full/partial permission map; keep only explicit denials.
+
+    Unsent keys count as granted, so an all-granted map normalizes to None and
+    permission keys added later stay default-on for every account.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise AppError("users.invalid_permissions", "permissions must be an object")
+    unknown = sorted(set(value) - set(AGENT_PERMISSIONS))
+    if unknown:
+        raise AppError(
+            "users.invalid_permissions",
+            f"Unknown permission key(s): {', '.join(unknown)}",
+        )
+    if not all(isinstance(flag, bool) for flag in value.values()):
+        raise AppError("users.invalid_permissions", "permission values must be booleans")
+    denied = {key: False for key, flag in value.items() if flag is False}
+    return denied or None
 
 
 def delete_user(db: Session, user: User) -> None:

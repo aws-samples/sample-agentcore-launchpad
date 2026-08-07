@@ -643,13 +643,25 @@ agent (`/api/agents/{id}/invoke`, `/api/registry/a2a-demo`) is deliberately memb
 reachable — it is the same capability Chat already gives every member, so gating it
 while Chat stays open would protect nothing.
 
-The practical effect is that `member` is close to read-only. That is intended
-while data is **not** partitioned per user: every authenticated account sees the
-same agents, knowledge bases and traces, so a member who could deploy could also
-mutate everyone else's resources. Admin-only console modules (`/users`, `/create`,
-the Studio canvas, Registry register/edit) render an administrator-required panel
-instead of firing a request, and `auth.forbidden` is mapped in the `apiErrors`
-i18n block so any surface that missed a gate still shows the localized reason.
+One amendment (river, 2026-08-07): the **agent-lifecycle routes are
+member-grantable** instead of flat admin. A `perm:agents.*` table value
+(`agents.deploy` covering create/redeploy plus the wizard's skill-staging
+helpers, `agents.import`, `agents.delete`, `agents.convert`) requires that
+permission: admins implicitly hold all four, and a member holds them **by
+default** — `users.permissions` stores only explicit denials, toggled per user
+in the User Management console and enforced on the member's next request. A
+denied call answers `auth.permission_required` (403) naming the missing key.
+
+Outside `perm:agents.*`, the practical effect is that `member` remains close to
+read-only. That is intended while data is **not** partitioned per user: every
+authenticated account sees the same agents, knowledge bases and traces — which
+also means a member with the default deploy grant can mutate everyone else's
+agents; revoking the four permissions restores the read-only posture for that
+user. Admin-only console modules (`/users`, Registry register/edit) render an
+administrator-required panel instead of firing a request; Agent Management and
+the Studio canvas render for members and disable exactly the actions the account
+lacks. `auth.forbidden` is mapped in the `apiErrors` i18n block so any surface
+that missed a gate still shows the localized reason.
 
 There is deliberately no setting that disables this table — a flag that turns
 authorization off is the vulnerability.

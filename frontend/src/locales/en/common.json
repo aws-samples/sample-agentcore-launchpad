@@ -158,6 +158,7 @@
     "kicker": "// AGENT MANAGEMENT",
     "title": "Agent Management",
     "meta": "UNIFIED PIPELINE — GENERATE → PACKAGE → PROVISION → DEPLOY → REGISTER",
+    "permissionRequired": "Your account does not hold this Agent Management permission. Ask an administrator to grant it in User Management.",
     "next": "NEXT",
     "back": "BACK",
     "launch": "LAUNCH AGENT",
@@ -2254,6 +2255,15 @@
     "enabled": "{{username}} is enabled.",
     "passwordReset": "Password reset for {{username}}.",
     "deleted": "{{username}} was deleted.",
+    "permissionsUpdated": "Permissions updated for {{username}}.",
+    "permissionsAll": "ALL (ADMIN)",
+    "permissionsHint": "Agent Management capability — click to toggle. Members hold all four by default.",
+    "perm": {
+      "deploy": "DEPLOY",
+      "import": "IMPORT",
+      "delete": "DELETE",
+      "convert": "CONVERT"
+    },
     "extendTitle": "Extend validity",
     "extendBody": "Add how many days to {{username}}'s account?",
     "resetTitle": "New password",
@@ -2286,6 +2296,7 @@
     "cols": {
       "user": "USER",
       "role": "ROLE",
+      "permissions": "AGENT PERMISSIONS",
       "state": "STATE",
       "validity": "VALID UNTIL",
       "created": "REGISTERED",

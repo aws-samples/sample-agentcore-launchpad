@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StrictBool, model_validator
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -31,6 +31,9 @@ class UserPatch(BaseModel):
     extend_days: int | None = Field(default=None, ge=1, le=3650)
     expires_at: datetime | None = None
     password: str | None = Field(default=None, max_length=256)
+    # {permission_key: bool}; unsent keys stay granted, null resets to
+    # all-granted. Strict so "no"/"0" cannot coerce into a denial.
+    permissions: dict[str, StrictBool] | None = None
 
     @model_validator(mode="after")
     def _require_one_field(self) -> "UserPatch":

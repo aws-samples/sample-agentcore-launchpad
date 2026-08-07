@@ -18,7 +18,7 @@ import {
   ViewHead,
 } from "../components";
 import type { ConsoleUser, UserStats, UserStatusFilter } from "../lib/api";
-import { api } from "../lib/api";
+import { AGENT_PERMISSIONS, api } from "../lib/api";
 
 const STATUS_FILTERS: UserStatusFilter[] = [
   "all",
@@ -169,6 +169,7 @@ export function Users() {
   const columns: Column[] = [
     { key: "user", label: t("usersPage.cols.user") },
     { key: "role", label: t("usersPage.cols.role") },
+    { key: "permissions", label: t("usersPage.cols.permissions") },
     { key: "state", label: t("usersPage.cols.state") },
     { key: "validity", label: t("usersPage.cols.validity") },
     { key: "created", label: t("usersPage.cols.created") },
@@ -295,6 +296,37 @@ export function Users() {
                 <Chip tone={user.role === "admin" ? "aqua" : "muted"}>
                   {t(user.role === "admin" ? "auth.roleAdmin" : "auth.roleMember")}
                 </Chip>
+              </td>
+              <td>
+                {user.role === "admin" ? (
+                  <span className="dim mono">{t("usersPage.permissionsAll")}</span>
+                ) : (
+                  <div className="selchips" data-testid={`user-perms-${user.username}`}>
+                    {AGENT_PERMISSIONS.map((key) => {
+                      const granted = user.permissions?.[key] !== false;
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          className={`selchip${granted ? " on" : ""}`}
+                          style={{ cursor: "pointer" }}
+                          disabled={busyId === user.id}
+                          title={t("usersPage.permissionsHint")}
+                          data-testid={`user-perm-${user.username}-${key}`}
+                          onClick={() =>
+                            patch(
+                              user,
+                              { permissions: { [key]: !granted } },
+                              "usersPage.permissionsUpdated",
+                            )
+                          }
+                        >
+                          {t(`usersPage.perm.${key.split(".")[1]}`)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </td>
               <td>
                 <Chip tone={STATE_TONE[user.state]}>
