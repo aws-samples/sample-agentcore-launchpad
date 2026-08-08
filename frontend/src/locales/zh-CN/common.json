@@ -836,11 +836,20 @@
     "policyEditor": {
       "newTitle": "新建 LOG_ONLY 策略",
       "policyDefinition": "策略定义",
+      "primerTitle": "这份草稿何时会影响流量",
+      "primerBody": "授权模型只用于帮助生成 Cedar 草稿。Launchpad 会在 AWS 中以 LOG_ONLY 创建每条新策略，只评估并记录决策，不会执行拦截。只有策略提升为 ACTIVE 且 Gateway 切到 ENFORCE 后，策略决策才可能阻断流量。",
       "name": "策略",
       "description": "描述",
       "authorizationModel": "授权模型",
+      "modelHelp": {
+        "allowlist": "只为选中的动作生成 Cedar permit。这里的白名单是动作白名单，不是用户白名单。",
+        "preserve_traffic": "为该 Gateway 的全部动作生成宽泛的基线 permit，避免默认拒绝中断现有流量；显式 forbid 策略仍然可以拦截。",
+        "custom": "不套用模板，直接编写完整 Cedar 策略；最终以 Cedar 编辑器中的内容为准。"
+      },
       "exactActions": "精确 GATEWAY 动作",
       "manualAction": "手动输入精确动作标识符",
+      "manualActionPlaceholder": "target-name___tool-name",
+      "manualActionHelp": "仅用于补充自动发现列表中缺失的工具。请填写 tools/list 返回的精确名称，格式为 target___tool；不要填写 ARN 或 AgentCore::Action 包装。该动作仍标记为未验证，添加后需要重新生成草稿。",
       "noActions": "未发现已验证的动作。",
       "invalidName": "使用 1-48 个字母、数字或下划线，并以字母开头。",
       "unmanaged": "显式纳管前，此 Gateway 仅可读取。",
@@ -856,6 +865,7 @@
       "gatewayMode": "GATEWAY 模式",
       "policyMode": "策略模式",
       "evidence": "AWS 证据",
+      "rolloutHelp": "创建或保存 LOG_ONLY 草稿不需要证据。提升和回滚需要 24 小时窗口内匹配的 LOG_ONLY 决策；没有证据时，必须填写精确 Gateway 名称和覆盖原因。将 Gateway 切到 ENFORCE 也使用同一 gate。",
       "externalDiscovery": "外部 TOOLS/LIST",
       "policyNotFound": "AWS 实时状态中已不存在所选策略。",
       "blockedPrefix": "暂时无法保存：",

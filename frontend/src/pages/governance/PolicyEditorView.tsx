@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   Check,
+  CircleHelp,
   ClipboardCopy,
   Plus,
   RefreshCw,
@@ -204,8 +205,7 @@ export function PolicyEditorView({ gatewayId, policyId, onNavigate }: Props) {
   if (model === "preserve_traffic" && !highRiskAcknowledged) {
     saveBlockers.push("highRiskAck");
   }
-  if (operationBusy) saveBlockers.push("busy");
-  const saveReady = saveBlockers.length === 0;
+  const saveReady = saveBlockers.length === 0 && !operationBusy;
 
   const overrideReady =
     confirmationName === gateway?.name && overrideReason.trim().length > 0;
@@ -215,8 +215,7 @@ export function PolicyEditorView({ gatewayId, policyId, onNavigate }: Props) {
   if (evidenceCount === 0 && !overrideReady) {
     transitionBlockers.push("evidenceOrOverride");
   }
-  if (operationBusy) transitionBlockers.push("busy");
-  const transitionReady = transitionBlockers.length === 0;
+  const transitionReady = transitionBlockers.length === 0 && !operationBusy;
 
   const toggleAction = (action: GovernanceGatewayAction) => {
     setSelectedActions((current) =>
@@ -439,6 +438,16 @@ export function PolicyEditorView({ gatewayId, policyId, onNavigate }: Props) {
       <div className="gov-editor-grid">
         <div className="gov-editor-main">
           <Panel title={t("governance.policyEditor.policyDefinition")} brk>
+            {!existingPolicy ? (
+              <div className="gov-policy-primer" role="note">
+                <CircleHelp size={16} aria-hidden="true" />
+                <div>
+                  <strong>{t("governance.policyEditor.primerTitle")}</strong>
+                  <span>{t("governance.policyEditor.primerBody")}</span>
+                </div>
+              </div>
+            ) : null}
+
             <div className="gov-grid">
               <div className="field">
                 <label>{t("governance.policyEditor.name")}</label>
@@ -484,6 +493,9 @@ export function PolicyEditorView({ gatewayId, policyId, onNavigate }: Props) {
                       </button>
                     ),
                   )}
+                </div>
+                <div className="gov-field-help">
+                  {t(`governance.policyEditor.modelHelp.${model}`)}
                 </div>
               </div>
             ) : null}
@@ -536,6 +548,7 @@ export function PolicyEditorView({ gatewayId, policyId, onNavigate }: Props) {
                 <input
                   className="input mono"
                   value={manualInput}
+                  placeholder={t("governance.policyEditor.manualActionPlaceholder")}
                   onChange={(event) => setManualInput(event.target.value)}
                 />
                 <Btn
@@ -548,6 +561,9 @@ export function PolicyEditorView({ gatewayId, policyId, onNavigate }: Props) {
                   <Plus size={14} aria-hidden="true" />
                   {t("governance.actions.add")}
                 </Btn>
+              </div>
+              <div className="gov-field-help">
+                {t("governance.policyEditor.manualActionHelp")}
               </div>
               {manualActions.map((action) => (
                 <span className="selchip on" key={action}>
@@ -684,6 +700,9 @@ export function PolicyEditorView({ gatewayId, policyId, onNavigate }: Props) {
                 <span className="v">{evidenceCount} / 24h</span>
               </div>
             </div>
+            <div className="gov-field-help gov-rollout-help">
+              {t("governance.policyEditor.rolloutHelp")}
+            </div>
             <div className="field">
               <label>{t("governance.detail.confirmGatewayName")}</label>
               <input
@@ -713,12 +732,12 @@ export function PolicyEditorView({ gatewayId, policyId, onNavigate }: Props) {
                 </div>
               </div>
             ) : null}
-            {!saveReady && (
+            {saveBlockers.length > 0 ? (
               <div className="gov-inline-error" data-testid="save-blockers">
                 {t("governance.policyEditor.blockedPrefix")}{" "}
                 {saveBlockers.map((key) => t(`governance.blockers.${key}`)).join(" · ")}
               </div>
-            )}
+            ) : null}
             <div className="gov-actions">
               <Btn
                 primary
@@ -751,14 +770,14 @@ export function PolicyEditorView({ gatewayId, policyId, onNavigate }: Props) {
                 </Btn>
               ) : null}
             </div>
-            {existingPolicy && !transitionReady && (
+            {existingPolicy && transitionBlockers.length > 0 ? (
               <div className="gov-inline-error" data-testid="transition-blockers">
                 {t("governance.policyEditor.cutoverBlockedPrefix")}{" "}
                 {transitionBlockers
                   .map((key) => t(`governance.blockers.${key}`))
                   .join(" · ")}
               </div>
-            )}
+            ) : null}
           </Panel>
 
           {gateway.external_tools_list_command ? (

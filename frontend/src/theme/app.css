@@ -523,6 +523,13 @@ td.pri{color:var(--ink);font-weight:600}
 .gov-editor-grid{display:grid;grid-template-columns:minmax(0,1fr) 350px;gap:14px;align-items:start}
 .gov-editor-main,.gov-editor-side{display:grid;gap:14px;min-width:0}
 .gov-editor-side{position:sticky;top:68px}
+.gov-policy-primer{display:flex;align-items:flex-start;gap:10px;margin-bottom:14px;padding:11px 12px;border-left:2px solid var(--s1);background:#0E1210;color:var(--ink-2);font-size:11px;line-height:1.55}
+.gov-policy-primer>svg{flex:0 0 auto;margin-top:1px;color:var(--s1)}
+.gov-policy-primer>div{display:grid;gap:2px}
+.gov-policy-primer strong{color:var(--ink);font-family:var(--mono);font-size:10px;font-weight:600}
+.gov-policy-primer span{overflow-wrap:anywhere}
+.gov-field-help{margin-top:6px;color:var(--ink-3);font-size:10px;line-height:1.5;overflow-wrap:anywhere}
+.gov-rollout-help{margin:10px 0 12px;padding-left:9px;border-left:1px solid var(--line-2)}
 .gov-diff{display:grid;grid-template-columns:1fr 1fr;gap:12px;min-width:0}
 .gov-diff h4{font-family:var(--mono);font-size:9.5px;color:var(--ink-3);letter-spacing:0;margin-bottom:6px}
 .gov-action-picker{display:flex;flex-wrap:wrap;gap:7px}

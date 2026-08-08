@@ -836,11 +836,20 @@
     "policyEditor": {
       "newTitle": "NEW LOG_ONLY POLICY",
       "policyDefinition": "POLICY DEFINITION",
+      "primerTitle": "How this draft affects traffic",
+      "primerBody": "Authorization models only help build the Cedar draft. Launchpad creates every new AWS policy in LOG_ONLY, where decisions are evaluated and recorded but never enforced. Traffic can be blocked only after the policy is ACTIVE and the Gateway is ENFORCE.",
       "name": "POLICY",
       "description": "DESCRIPTION",
       "authorizationModel": "AUTHORIZATION MODEL",
+      "modelHelp": {
+        "allowlist": "Builds a Cedar permit for only the selected actions. This is an action allowlist, not a user allowlist.",
+        "preserve_traffic": "Builds a broad baseline permit for every action on this Gateway to avoid default-deny disruption. Explicit forbid policies can still block traffic.",
+        "custom": "Does not apply a template. Write the complete Cedar policy directly; the Cedar editor is the source of truth."
+      },
       "exactActions": "EXACT GATEWAY ACTIONS",
       "manualAction": "MANUAL EXACT ACTION IDENTIFIER",
+      "manualActionPlaceholder": "target-name___tool-name",
+      "manualActionHelp": "Use this only for a tool missing from the discovered list. Enter the exact tools/list name in target___tool format, not an ARN or AgentCore::Action wrapper. It remains unverified; rebuild the draft after adding it.",
       "noActions": "No verified actions were discovered.",
       "invalidName": "Use 1-48 letters, digits, or underscores and start with a letter.",
       "unmanaged": "This Gateway is read-only until it is explicitly managed.",
@@ -856,6 +865,7 @@
       "gatewayMode": "GATEWAY MODE",
       "policyMode": "POLICY MODE",
       "evidence": "AWS EVIDENCE",
+      "rolloutHelp": "Creating or saving a LOG_ONLY draft needs no evidence. Promote and rollback require a matching LOG_ONLY decision from the 24-hour window, or the exact Gateway name plus an override reason. Moving the Gateway to ENFORCE uses the same gate.",
       "externalDiscovery": "EXTERNAL TOOLS/LIST",
       "policyNotFound": "The selected policy no longer exists in live AWS state.",
       "blockedPrefix": "Cannot save yet:",
