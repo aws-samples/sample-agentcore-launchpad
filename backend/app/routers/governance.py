@@ -31,7 +31,7 @@ from app.services.observability import cw_client, logs_client
 
 router = APIRouter(prefix="/api", tags=["governance"])
 
-ROLE_BY_USER = {"river": "platform-admin", "demo": "hr-analyst"}
+ROLE_BY_USER = {"admin": "platform-admin", "demo": "hr-analyst"}
 GATEWAY_ID = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 RESOURCE_ID = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 OPERATION_ID = Path(pattern=r"^[a-f0-9]{32}$")
@@ -347,7 +347,7 @@ def get_policies() -> dict[str, Any]:
 class PolicyTestRequest(BaseModel):
     tool: str = Field(min_length=1)
     arguments: dict[str, Any] = Field(default_factory=dict)
-    username: str = Field(default="demo", pattern="^(river|demo)$")
+    username: str = Field(default="demo", pattern="^(admin|demo)$")
 
 
 """The gateway refused the call on authorization grounds — a real decision."""

@@ -29,9 +29,14 @@ MEMORY_NAME = "launchpad_memory"  # AgentCore memory names disallow hyphens
 MEMORY_EVENT_EXPIRY_DAYS = 30
 
 DEMO_USERS = [
-    {"username": "river", "group": "platform-admin"},
-    {"username": "demo", "group": "hr-analyst"},
+    {"username": "admin", "email": "admin@launchpad.local", "group": "platform-admin"},
+    {"username": "demo", "email": "demo@launchpad.local", "group": "hr-analyst"},
 ]
+
+# Demo usernames from earlier releases that bootstrap actively removes. Never
+# widen this beyond known ex-demo users: shadow-bridge users (policy_identity)
+# and operator-created users live in the same pool.
+LEGACY_DEMO_USERS = ("river",)
 
 
 def _client(service: str, region: str):
@@ -153,22 +158,76 @@ def generate_password(length: int = 16) -> str:
     return "".join(pw)
 
 
+def _user_attributes(user: dict[str, Any]) -> dict[str, str]:
+    return {
+        str(attr.get("Name")): str(attr.get("Value"))
+        for attr in (user.get("UserAttributes") or user.get("Attributes") or [])
+        if attr.get("Name") and attr.get("Value") is not None
+    }
+
+
+def _delete_legacy_demo_users(cognito: Any, user_pool_id: str) -> None:
+    """Remove ex-demo users (rename migrations) — never shadow-bridge users."""
+    from app.services.policy_identity import SHADOW_MARKER
+
+    for username in LEGACY_DEMO_USERS:
+        try:
+            user = cognito.admin_get_user(UserPoolId=user_pool_id, Username=username)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "UserNotFoundException":
+                continue
+            raise
+        if _user_attributes(user).get("preferred_username") == SHADOW_MARKER:
+            # A console-identity shadow user owns this name now; leave it alone.
+            continue
+        cognito.admin_delete_user(UserPoolId=user_pool_id, Username=username)
+
+
 def ensure_demo_user_passwords(
     cognito: Any, user_pool_id: str, existing: dict[str, Any] | None = None
 ) -> tuple[dict[str, str], bool]:
-    """Set permanent passwords for demo users still in FORCE_CHANGE_PASSWORD.
+    """Provision demo users: get-or-create, set permanent passwords, drop legacy.
+
+    Users are created when missing (the prewarmed-account path where CDK is
+    skipped), legacy demo usernames are deleted unless they carry the
+    policy-identity shadow marker, and the returned passwords map is rebuilt
+    from DEMO_USERS only so stale legacy entries drop out of the config.
 
     Returns ({username: password}, changed). Existing known passwords are kept.
     """
     existing = existing or {}
-    passwords: dict[str, str] = dict(existing)
+    passwords: dict[str, str] = {}
     changed = False
     for spec in DEMO_USERS:
         username = spec["username"]
-        user = cognito.admin_get_user(UserPoolId=user_pool_id, Username=username)
-        if user["UserStatus"] == "CONFIRMED" and username in passwords:
+        try:
+            user = cognito.admin_get_user(UserPoolId=user_pool_id, Username=username)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "UserNotFoundException":
+                raise
+            cognito.admin_create_user(
+                UserPoolId=user_pool_id,
+                Username=username,
+                MessageAction="SUPPRESS",
+                UserAttributes=[
+                    {
+                        "Name": "email",
+                        "Value": spec.get("email") or f"{username}@launchpad.local",
+                    },
+                    {"Name": "email_verified", "Value": "true"},
+                ],
+            )
+            cognito.admin_add_user_to_group(
+                UserPoolId=user_pool_id,
+                Username=username,
+                GroupName=spec["group"],
+            )
+            user = {"UserStatus": "FORCE_CHANGE_PASSWORD"}
+        known = existing.get(username)
+        if user["UserStatus"] == "CONFIRMED" and known:
+            passwords[username] = str(known)
             continue
-        password = passwords.get(username) or generate_password()
+        password = str(known) if known else generate_password()
         cognito.admin_set_user_password(
             UserPoolId=user_pool_id,
             Username=username,
@@ -177,6 +236,11 @@ def ensure_demo_user_passwords(
         )
         passwords[username] = password
         changed = True
+
+    _delete_legacy_demo_users(cognito, user_pool_id)
+
+    if set(existing) - set(passwords):
+        changed = True  # a stale legacy key drops out of config on the next write
     return passwords, changed
 
 
@@ -198,8 +262,18 @@ def merge_config(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]
     return merged
 
 
-def write_config(update: dict[str, Any]) -> dict[str, Any]:
+def write_config(
+    update: dict[str, Any], replace: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Deep-merge ``update`` into the config; ``replace`` keys are set wholesale.
+
+    ``replace`` exists for maps whose stale entries must drop out (e.g. the
+    ``demo_users.passwords`` map after a legacy demo user is deleted) — a deep
+    merge would resurrect them from the file.
+    """
     merged = merge_config(load_config(), update)
+    for key, value in (replace or {}).items():
+        merged[key] = value
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(
         "# Generated by scripts/bootstrap.py — do not commit (gitignored).\n"
@@ -263,8 +337,8 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
                 # managed KB layer; absent on stacks predating it
                 "kb_role_arn": outputs.get("KbRoleArn", ""),
             },
-            "demo_users": {"passwords": passwords},
-        }
+        },
+        replace={"demo_users": {"passwords": passwords}},
     )
 
     gateway_summary = None

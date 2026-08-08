@@ -129,7 +129,11 @@ def test_run_bootstrap_continues_and_clears_registry_ids(monkeypatch):
     monkeypatch.setattr(
         bs, "ensure_demo_user_passwords", lambda *_args: ({"demo": "known"}, False)
     )
-    monkeypatch.setattr(bs, "write_config", lambda update: written.append(update) or update)
+    monkeypatch.setattr(
+        bs,
+        "write_config",
+        lambda update, replace=None: written.append(update | (replace or {})) or update,
+    )
 
     summary = bs.run_bootstrap("us-west-2")
 
@@ -180,16 +184,150 @@ def test_merge_config_deep_merges():
     assert base["resources"] == {"a": 1, "b": 2}
 
 
-def test_demo_passwords_only_set_when_needed():
+def _user_not_found() -> ClientError:
+    return ClientError(
+        {"Error": {"Code": "UserNotFoundException", "Message": "missing"}},
+        "AdminGetUser",
+    )
+
+
+def make_cognito(users: dict[str, dict]) -> MagicMock:
+    """Cognito stub backed by a {username: AdminGetUser response} map."""
     cognito = MagicMock()
-    cognito.admin_get_user.side_effect = [
-        {"UserStatus": "CONFIRMED"},
-        {"UserStatus": "FORCE_CHANGE_PASSWORD"},
-    ]
+
+    def get_user(UserPoolId: str, Username: str) -> dict:
+        if Username not in users:
+            raise _user_not_found()
+        return users[Username]
+
+    cognito.admin_get_user.side_effect = get_user
+    return cognito
+
+
+def test_write_config_replace_drops_stale_keys(monkeypatch, tmp_path):
+    """A deep merge would resurrect a deleted demo user's password from the file."""
+    config_file = tmp_path / "launchpad.yaml"
+    config_file.write_text(
+        "demo_users:\n  passwords:\n    river: stale\n    demo: kept\nregion: us-west-2\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bs, "CONFIG_FILE", config_file)
+
+    merged = bs.write_config(
+        {"resources": {"a": "1"}},
+        replace={"demo_users": {"passwords": {"admin": "new", "demo": "kept"}}},
+    )
+
+    assert merged["demo_users"]["passwords"] == {"admin": "new", "demo": "kept"}
+    assert merged["region"] == "us-west-2"
+    assert "river" not in config_file.read_text(encoding="utf-8")
+
+
+def test_demo_passwords_only_set_when_needed():
+    cognito = make_cognito(
+        {
+            "admin": {"UserStatus": "CONFIRMED"},
+            "demo": {"UserStatus": "FORCE_CHANGE_PASSWORD"},
+        }
+    )
     passwords, changed = bs.ensure_demo_user_passwords(
-        cognito, "pool-1", existing={"river": "Known1234567890"}
+        cognito, "pool-1", existing={"admin": "Known1234567890"}
     )
     assert changed is True
-    assert passwords["river"] == "Known1234567890"
+    assert passwords["admin"] == "Known1234567890"
     assert len(passwords["demo"]) >= 12
     cognito.admin_set_user_password.assert_called_once()
+    cognito.admin_create_user.assert_not_called()
+    cognito.admin_delete_user.assert_not_called()
+
+
+def test_missing_demo_user_is_created_with_group():
+    """Prewarmed-account path: CDK is skipped, so bootstrap must create users."""
+    cognito = make_cognito({"demo": {"UserStatus": "CONFIRMED"}})
+
+    passwords, changed = bs.ensure_demo_user_passwords(
+        cognito, "pool-1", existing={"demo": "KnownDemo1234567"}
+    )
+
+    assert changed is True
+    create = cognito.admin_create_user.call_args.kwargs
+    assert create["Username"] == "admin"
+    assert create["MessageAction"] == "SUPPRESS"
+    assert {"Name": "email", "Value": "admin@launchpad.local"} in create["UserAttributes"]
+    assert {"Name": "email_verified", "Value": "true"} in create["UserAttributes"]
+    cognito.admin_add_user_to_group.assert_called_once_with(
+        UserPoolId="pool-1", Username="admin", GroupName="platform-admin"
+    )
+    set_pw = cognito.admin_set_user_password.call_args.kwargs
+    assert set_pw["Username"] == "admin" and set_pw["Permanent"] is True
+    assert len(passwords["admin"]) >= 12
+    assert passwords["demo"] == "KnownDemo1234567"
+
+
+def test_legacy_river_demo_user_is_deleted_and_dropped_from_passwords():
+    cognito = make_cognito(
+        {
+            "admin": {"UserStatus": "CONFIRMED"},
+            "demo": {"UserStatus": "CONFIRMED"},
+            "river": {
+                "UserStatus": "CONFIRMED",
+                "UserAttributes": [{"Name": "email", "Value": "river@launchpad.local"}],
+            },
+        }
+    )
+
+    passwords, changed = bs.ensure_demo_user_passwords(
+        cognito,
+        "pool-1",
+        existing={
+            "admin": "KnownAdmin123456",
+            "demo": "KnownDemo1234567",
+            "river": "StaleRiver123456",
+        },
+    )
+
+    cognito.admin_delete_user.assert_called_once_with(UserPoolId="pool-1", Username="river")
+    assert "river" not in passwords
+    assert passwords == {"admin": "KnownAdmin123456", "demo": "KnownDemo1234567"}
+    assert changed is True  # the stale key must drop out of the config
+
+
+def test_shadow_bridge_user_named_river_is_never_deleted():
+    """A console-identity shadow user owning a legacy name must survive cleanup."""
+    from app.services.policy_identity import SHADOW_MARKER
+
+    cognito = make_cognito(
+        {
+            "admin": {"UserStatus": "CONFIRMED"},
+            "demo": {"UserStatus": "CONFIRMED"},
+            "river": {
+                "UserStatus": "CONFIRMED",
+                "UserAttributes": [{"Name": "preferred_username", "Value": SHADOW_MARKER}],
+            },
+        }
+    )
+
+    passwords, changed = bs.ensure_demo_user_passwords(
+        cognito,
+        "pool-1",
+        existing={"admin": "KnownAdmin123456", "demo": "KnownDemo1234567"},
+    )
+
+    cognito.admin_delete_user.assert_not_called()
+    assert changed is False
+    assert set(passwords) == {"admin", "demo"}
+
+
+def test_legacy_cleanup_skips_absent_user():
+    cognito = make_cognito(
+        {"admin": {"UserStatus": "CONFIRMED"}, "demo": {"UserStatus": "CONFIRMED"}}
+    )
+
+    _passwords, changed = bs.ensure_demo_user_passwords(
+        cognito,
+        "pool-1",
+        existing={"admin": "KnownAdmin123456", "demo": "KnownDemo1234567"},
+    )
+
+    cognito.admin_delete_user.assert_not_called()
+    assert changed is False

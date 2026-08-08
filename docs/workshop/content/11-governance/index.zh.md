@@ -254,7 +254,7 @@ permit(
 | 身份 | 角色 | 对 `create_payout` 的预期 |
 |---|---|---|
 | `demo` | `demo@hr-analyst`（普通分析师） | 被 `launchpad_payout_admin_only` 拦下 |
-| `river` | `river@platform-admin`（平台管理员） | 放行 |
+| `admin` | `admin@platform-admin`（平台管理员） | 放行 |
 
 1. 回到「治理」，在 Gateway 列表中打开 bootstrap 创建的 `launchpad-gw`。
 2. 找到「策略测试」面板。身份选择 `demo@hr-analyst`，精确动作选择
@@ -275,11 +275,11 @@ permit(
 }
 ```
 
-把身份换成 `river@platform-admin`，保持同一个动作，再运行一次。结果应变成 `ALLOW`：
+把身份换成 `admin@platform-admin`，保持同一个动作，再运行一次。结果应变成 `ALLOW`：
 
 ```json
 {
-    "principal": "river@platform-admin",
+    "principal": "admin@platform-admin",
     "tool": "hr-database___create_payout",
     "outcome": "ALLOW",
     "detail": "{'content': [{'type': 'text', 'text': \"ValidationException - Parameter validation failed: Invalid request parameters:\\n- Missing required field(s): 'amount'\\n- Missing required field(s): 'employee_id'\"}], 'isError': True}",
@@ -294,7 +294,7 @@ Registry 审批做不到这件事。
 
 三点要留意：
 
-- **`ALLOW` 说的是授权通过，不是调用成功**。上面这条 river 的返回里工具自己报了
+- **`ALLOW` 说的是授权通过，不是调用成功**。上面这条 admin 的返回里工具自己报了
   `ValidationException`，因为我们没传 `amount` / `employee_id`，但授权环节确实放行了。
   授权与业务成败是两层。
 - **只有 `ALLOW` 和 `DENY` 会入账**。凭证错误、Gateway 连不上之类的失败返回 `ERROR`，
@@ -413,7 +413,7 @@ Policy 专属日志组。
 - [ ] 生成的 Cedar 语句里没有 `create_payout`
 - [ ] `policy-test` 以 `demo` 调 `create_payout` 得到 `DENY`，理由里带
       `launchpad_payout_admin_only`
-- [ ] 同一个工具换成 `river` 得到 `ALLOW`
+- [ ] 同一个工具换成 `admin` 得到 `ALLOW`
 - [ ] 决策视图的汇总有放行/拦截计数；若出现 tracing 警告，已按 11.6 修复并重新调用
 - [ ] 当 span 通道为 `ready` 时，明细能看到 DENY 理由，且 ALLOW 行标注
       `LOG_ONLY 本会匹配：lab_readonly_tools-…`

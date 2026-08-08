@@ -21,7 +21,7 @@ const OUTCOME_TONE: Record<GovernancePolicyTestOutcome, "good" | "crit" | "warn"
 
 const IDENTITIES: { value: GovernancePolicyTestIdentity; label: string }[] = [
   { value: "demo", label: "demo@hr-analyst" },
-  { value: "river", label: "river@platform-admin" },
+  { value: "admin", label: "admin@platform-admin" },
 ];
 
 function preferredAction(actions: GovernanceGatewayAction[]): string {

@@ -70,7 +70,7 @@ make bootstrap        # = cd backend && uv run python ../scripts/bootstrap.py
 | ECR 仓库 | `launchpad-agents` |
 | CodeBuild（ARM64） | `launchpad-agent-builder` |
 | IAM 执行角色 | `launchpad-agent-execution-role` |
-| Cognito 用户池 | `launchpad-users`（含演示用户 `river` / `demo`） |
+| Cognito 用户池 | `launchpad-users`（含演示用户 `admin` / `demo`） |
 | AgentCore Registry | `launchpad-registry` |
 | AgentCore Memory | `launchpad_memory`（短期事件 + 语义/用户偏好长期策略） |
 | AgentCore Gateway | `launchpad-gw-<suffix>`（把 REST API 与 Lambda 暴露成 MCP 工具） |

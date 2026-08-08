@@ -27,7 +27,7 @@ def main() -> int:
         ("demo", "hr-database___get_employee", {"employee_id": "EMP-1024"}, "ALLOW"),
         ("demo", "hr-database___create_payout", {"employee_id": "EMP-1024", "amount": 42},
          "DENY"),
-        ("river", "hr-database___create_payout", {"employee_id": "EMP-1024", "amount": 42},
+        ("admin", "hr-database___create_payout", {"employee_id": "EMP-1024", "amount": 42},
          "ALLOW"),
     ]
     failures = 0

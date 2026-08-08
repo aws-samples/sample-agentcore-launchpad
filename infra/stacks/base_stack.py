@@ -39,7 +39,7 @@ from constructs import Construct
 SAMPLES_DIR = Path(__file__).resolve().parents[2] / "samples"
 
 DEMO_USERS = [
-    {"username": "river", "email": "river@launchpad.local", "group": "platform-admin"},
+    {"username": "admin", "email": "admin@launchpad.local", "group": "platform-admin"},
     {"username": "demo", "email": "demo@launchpad.local", "group": "hr-analyst"},
 ]
 

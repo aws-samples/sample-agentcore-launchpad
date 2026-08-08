@@ -588,7 +588,7 @@ export interface GovernanceGeneration {
   }[];
 }
 
-export type GovernancePolicyTestIdentity = "demo" | "river";
+export type GovernancePolicyTestIdentity = "demo" | "admin";
 export type GovernancePolicyTestOutcome = "ALLOW" | "DENY" | "ERROR";
 
 export interface GovernancePolicyTestRequest {

@@ -37,6 +37,9 @@ def test_cognito_groups_and_users(template: Template):
         "AWS::Cognito::UserPoolGroup", {"GroupName": "platform-admin"}
     )
     template.has_resource_properties("AWS::Cognito::UserPoolGroup", {"GroupName": "hr-analyst"})
+    # Demo identity rename (issue #17): the platform-admin demo user is `admin`.
+    template.has_resource_properties("AWS::Cognito::UserPoolUser", {"Username": "admin"})
+    template.has_resource_properties("AWS::Cognito::UserPoolUser", {"Username": "demo"})
 
 
 def test_codebuild_is_arm64(template: Template):

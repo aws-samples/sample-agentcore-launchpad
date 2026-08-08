@@ -21,7 +21,7 @@ _rpc_id = itertools.count(1)
 _token_cache: dict[str, Any] = {}
 
 
-def get_cognito_token(username: str = "river") -> str:
+def get_cognito_token(username: str = "admin") -> str:
     """Access token for a demo user via USER_PASSWORD_AUTH (cached until expiry)."""
     cached = _token_cache.get(username)
     if cached and cached["expires_at"] > time.time() + 60:
@@ -104,7 +104,7 @@ def _parse_jsonrpc_body(response: httpx.Response) -> dict:
     return json.loads(text) if text.strip() else {}
 
 
-def tools_list(username: str = "river") -> list[dict[str, Any]]:
+def tools_list(username: str = "admin") -> list[dict[str, Any]]:
     settings = get_settings()
     url = settings.resources.get("gateway_url")
     if not url:
@@ -118,7 +118,7 @@ def tools_list(username: str = "river") -> list[dict[str, Any]]:
 
 
 def tools_call(
-    name: str, arguments: dict[str, Any], username: str = "river"
+    name: str, arguments: dict[str, Any], username: str = "admin"
 ) -> dict[str, Any]:
     settings = get_settings()
     url = settings.resources.get("gateway_url")

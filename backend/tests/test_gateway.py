@@ -241,7 +241,7 @@ def test_mcp_cognito_auth_rejection_becomes_app_error(monkeypatch):
     monkeypatch.setattr(
         mcp_client,
         "load_yaml_config",
-        lambda: {"demo_users": {"passwords": {"river": "stale-password"}}},
+        lambda: {"demo_users": {"passwords": {"admin": "stale-password"}}},
     )
     monkeypatch.setattr(mcp_client.boto3, "client", lambda *args, **kwargs: cognito)
     mcp_client._token_cache.clear()

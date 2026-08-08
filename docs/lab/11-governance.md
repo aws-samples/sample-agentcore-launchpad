@@ -306,7 +306,7 @@ permit(
 >   -d '{"username":"demo","tool":"hr-database___create_payout","arguments":{"employee_id":"EMP-1024","amount":1}}'
 > ```
 >
-> 换成 `"username":"river"` 会得到 `ALLOW`，但请注意，它会**真的创建一笔演示付款记录**。
+> 换成 `"username":"admin"` 会得到 `ALLOW`，但请注意，它会**真的创建一笔演示付款记录**。
 
 ## 11.7 审计：不可变变更日志
 

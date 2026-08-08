@@ -40,7 +40,7 @@ What it creates / 创建内容:
 | S3 artifacts bucket | `launchpad-artifacts-<acct>-<region>` |
 | ECR repo | `launchpad-agents` |
 | CodeBuild (ARM64) | `launchpad-agent-builder` |
-| Cognito user pool | `launchpad-users` (+ groups `platform-admin`, `hr-analyst`, demo users `river`/`demo`) |
+| Cognito user pool | `launchpad-users` (+ groups `platform-admin`, `hr-analyst`, demo users `admin`/`demo`) |
 | IAM execution role | `launchpad-agent-execution-role` |
 | AgentCore Registry | `launchpad-registry` |
 | AgentCore Memory | `launchpad_memory` (short-term events + semantic & user-preference long-term strategies) |
