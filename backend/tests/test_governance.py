@@ -598,12 +598,12 @@ def test_policy_test_records_decision(client, monkeypatch):
     )
     res = client.post(
         "/api/governance/policy-test",
-        json={"username": "river", "tool": "hr-database___create_payout",
+        json={"username": "admin", "tool": "hr-database___create_payout",
               "arguments": {"employee_id": "EMP-1024", "amount": 1}},
     )
     assert res.status_code == 200
     body = res.json()
-    assert body["outcome"] == "ALLOW" and body["principal"] == "river@platform-admin"
+    assert body["outcome"] == "ALLOW" and body["principal"] == "admin@platform-admin"
 
     from app.core.errors import AppError
 
@@ -625,3 +625,15 @@ def test_policy_test_records_decision(client, monkeypatch):
     db = SessionLocal()
     assert db.query(PolicyDecision).count() == 2
     db.close()
+
+
+def test_retired_demo_identity_is_rejected(client, monkeypatch):
+    """The `river` demo user no longer exists after the rename migration (issue #17),
+    so request validation must refuse it before any Gateway call is attempted."""
+    monkeypatch.setattr(
+        gov.mcp_client,
+        "tools_call",
+        lambda tool, args, username="demo": pytest.fail("must not reach the gateway"),
+    )
+    res = _post_policy_test(client, username="river")
+    assert res.status_code == 422

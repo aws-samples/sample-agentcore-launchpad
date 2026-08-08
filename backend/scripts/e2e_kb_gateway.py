@@ -37,7 +37,7 @@ def main(kb_id: str) -> int:
     )
     log(f"agentic target READY: {agentic_id}")
 
-    token = get_cognito_token("river")
+    token = get_cognito_token("admin")
     tools = _rpc(gw["url"], token, "tools/list").get("tools", [])
     names = [t["name"] for t in tools]
     log(f"tools/list → {names}")
