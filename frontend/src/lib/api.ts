@@ -402,6 +402,7 @@ export interface GovernanceGatewaySummary {
   }[];
   shared_engine: boolean;
   attachability: GovernanceAttachability;
+  policy_test_available: boolean;
   registry_record?: GovernanceRegistryRecord | null;
   legacy_record_count?: number;
   updated_at: string | null;
@@ -585,6 +586,25 @@ export interface GovernanceGeneration {
     findings: unknown;
     raw_text_fragment: string | null;
   }[];
+}
+
+export type GovernancePolicyTestIdentity = "demo" | "river";
+export type GovernancePolicyTestOutcome = "ALLOW" | "DENY" | "ERROR";
+
+export interface GovernancePolicyTestRequest {
+  tool: string;
+  arguments: Record<string, unknown>;
+  username: GovernancePolicyTestIdentity;
+}
+
+export interface GovernancePolicyTestResult {
+  principal: string;
+  tool: string;
+  outcome: GovernancePolicyTestOutcome;
+  detail: string;
+  policy_id: string | null;
+  decision_id: string | null;
+  recorded: boolean;
 }
 
 export interface GovernanceOperation {
@@ -1515,6 +1535,11 @@ export const api = {
     request<GovernanceGeneration>(
       `${governanceGatewayPath(gatewayId)}/generations/${encodeURIComponent(generationId)}`,
     ),
+  runGovernancePolicyTest: (input: GovernancePolicyTestRequest) =>
+    request<GovernancePolicyTestResult>("/api/governance/policy-test", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   governanceDecisions: (
     gatewayId: string,
     range: GovernanceEvidenceRange,

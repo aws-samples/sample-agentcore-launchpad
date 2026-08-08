@@ -873,6 +873,21 @@
       "cutoverFieldsOnly": "Required for PROMOTE / ROLLBACK only — saving a LOG_ONLY draft does not need it.",
       "overrideAudited": "Optional for a draft; recorded in the audit entry either way."
     },
+    "policyTest": {
+      "title": "POLICY TEST",
+      "source": "real tools/call through the configured Launchpad Gateway",
+      "identity": "IDENTITY",
+      "action": "EXACT ACTION",
+      "run": "RUN TEST",
+      "running": "RUNNING",
+      "noActions": "NO DISCOVERED ACTIONS",
+      "recorded": "RECORDED",
+      "notRecorded": "NOT RECORDED",
+      "exactAction": "EXACT ACTION",
+      "policy": "DETERMINING POLICY",
+      "decisionId": "DECISION ID",
+      "detail": "RAW DETAIL"
+    },
     "blockers": {
       "notManaged": "manage this Gateway first",
       "gatewayNotReady": "Gateway is not READY",

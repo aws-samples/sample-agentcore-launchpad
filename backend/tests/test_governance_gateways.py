@@ -111,6 +111,7 @@ def test_attachability_keeps_external_custom_jwt_catalog_only():
         settings=Settings(
             resources={
                 "gateway_id": "managed",
+                "gateway_url": launchpad["gatewayUrl"],
                 "oauth_provider_arn": "arn:oauth",
                 "registry_id": "",
             }
@@ -120,11 +121,52 @@ def test_attachability_keeps_external_custom_jwt_catalog_only():
     by_id = {view["id"]: view for view in views}
     assert by_id["managed"]["attachability"]["attachable"] is True
     assert by_id["managed"]["attachability"]["auth_type"] == "oauth"
+    assert by_id["managed"]["policy_test_available"] is True
     assert by_id["external"]["attachability"] == {
         "attachable": False,
         "reason": "custom_jwt_provider_unmanaged",
         "auth_type": "oauth",
     }
+    assert by_id["external"]["policy_test_available"] is False
+
+
+def test_policy_test_availability_requires_configured_gateway_id_and_url():
+    launchpad = _gateway("managed", "launchpad-gw", authorizer="CUSTOM_JWT")
+    control = _control([launchpad])
+
+    for resources, expected in [
+        (
+            {
+                "gateway_id": launchpad["gatewayId"],
+                "gateway_url": launchpad["gatewayUrl"],
+                "registry_id": "",
+            },
+            True,
+        ),
+        (
+            {
+                "gateway_id": launchpad["gatewayId"],
+                "gateway_url": "https://different.example.test/mcp",
+                "registry_id": "",
+            },
+            False,
+        ),
+        (
+            {
+                "gateway_id": "different",
+                "gateway_url": launchpad["gatewayUrl"],
+                "registry_id": "",
+            },
+            False,
+        ),
+    ]:
+        governance.invalidate_gateway_cache()
+        [view] = governance.list_gateway_views(
+            control,
+            settings=Settings(resources=resources),
+            refresh=True,
+        )
+        assert view["policy_test_available"] is expected
 
 
 def test_external_custom_jwt_detail_offers_token_free_tools_list_template():

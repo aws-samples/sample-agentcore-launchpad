@@ -530,6 +530,14 @@ td.pri{color:var(--ink);font-weight:600}
 .gov-policy-primer span{overflow-wrap:anywhere}
 .gov-field-help{margin-top:6px;color:var(--ink-3);font-size:10px;line-height:1.5;overflow-wrap:anywhere}
 .gov-rollout-help{margin:10px 0 12px;padding-left:9px;border-left:1px solid var(--line-2)}
+.gov-policy-test-controls{display:grid;grid-template-columns:minmax(180px,.45fr) minmax(280px,1fr) auto;gap:12px;align-items:end}
+.gov-policy-test-controls .field{margin-bottom:0;min-width:0}
+.gov-policy-test-run{min-height:38px;justify-content:center}
+.gov-policy-test-result{margin-top:14px;padding-top:14px;border-top:1px solid var(--grid)}
+.gov-policy-test-result-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.gov-policy-test-result-head .mono{min-width:0;color:var(--ink-2);font-size:10px;overflow-wrap:anywhere}
+.gov-policy-test-detail{margin-bottom:0}
+.gov-policy-test-detail .code{margin:0;max-height:180px}
 .gov-diff{display:grid;grid-template-columns:1fr 1fr;gap:12px;min-width:0}
 .gov-diff h4{font-family:var(--mono);font-size:9.5px;color:var(--ink-3);letter-spacing:0;margin-bottom:6px}
 .gov-action-picker{display:flex;flex-wrap:wrap;gap:7px}
@@ -770,6 +778,8 @@ footer .sep{color:var(--line-2)}
   .gov-state{min-height:140px;padding:22px 14px}
   .gov-diff{grid-template-columns:1fr}
   .gov-inline-field{flex-direction:column}
+  .gov-policy-test-controls{grid-template-columns:1fr}
+  .gov-policy-test-run{width:100%}
   .gov-filter{width:100%;align-items:flex-start;flex-direction:column}
   .gov-filter .input{width:100%}
   .gov-command{flex-direction:column}

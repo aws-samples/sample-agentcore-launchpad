@@ -1,5 +1,6 @@
 """Governance API — policy card, test-evaluate, decision log, traces, generation."""
 
+import re
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Path
@@ -369,6 +370,10 @@ _ERROR_CODES = frozenset(
 # response (see the task research note). Preferred over message matching because it
 # survives wording changes.
 POLICY_DENIED_RPC_CODE = -32002
+DETERMINING_POLICY_RE = re.compile(
+    r"Policy evaluation denied due to ([A-Za-z0-9][A-Za-z0-9_-]*)",
+    re.IGNORECASE,
+)
 
 
 def _is_policy_denial(exc: AppError) -> bool:
@@ -403,6 +408,16 @@ def _classify(exc: AppError) -> str:
     return "ERROR"
 
 
+def _determining_policy_id(exc: AppError) -> str | None:
+    detail = exc.detail if isinstance(exc.detail, dict) else {}
+    explicit = detail.get("policy")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    message = f"{detail.get('message') or ''} {exc.message}"
+    match = DETERMINING_POLICY_RE.search(message)
+    return match.group(1) if match else None
+
+
 @router.post("/governance/policy-test")
 def policy_test(req: PolicyTestRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
     """Evaluate a real tools/call as the chosen principal and record the decision.
@@ -413,6 +428,7 @@ def policy_test(req: PolicyTestRequest, db: Session = Depends(get_db)) -> dict[s
     """
     principal = f"{req.username}@{ROLE_BY_USER.get(req.username, 'user')}"
     outcome, reason = "ALLOW", None
+    policy_id = None
     try:
         result = mcp_client.tools_call(req.tool, req.arguments, username=req.username)
         # A tool that fails its own validation returns a successful MCP result with
@@ -423,6 +439,8 @@ def policy_test(req: PolicyTestRequest, db: Session = Depends(get_db)) -> dict[s
         outcome = _classify(exc)
         reason = str(exc.detail or exc.message)[:300]
         excerpt = reason
+        if outcome == "DENY":
+            policy_id = _determining_policy_id(exc)
 
     decision_id = None
     if outcome in ("ALLOW", "DENY"):
@@ -437,6 +455,7 @@ def policy_test(req: PolicyTestRequest, db: Session = Depends(get_db)) -> dict[s
         "tool": req.tool,
         "outcome": outcome,
         "detail": excerpt,
+        "policy_id": policy_id,
         "decision_id": decision_id,
         "recorded": decision_id is not None,
     }

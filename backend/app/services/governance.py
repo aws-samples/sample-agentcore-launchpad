@@ -149,6 +149,8 @@ def _gateway_summary(
     attachment = gateway.get("policyEngineConfiguration") or {}
     engine_arn = attachment.get("arn")
     affected = impact.get(engine_arn, []) if engine_arn else []
+    configured_gateway_id = settings.resources.get("gateway_id")
+    configured_gateway_url = settings.resources.get("gateway_url")
     return {
         "id": gateway["gatewayId"],
         "arn": gateway["gatewayArn"],
@@ -176,6 +178,12 @@ def _gateway_summary(
         "shared_gateways": affected,
         "shared_engine": len(affected) > 1,
         "attachability": _attachability(gateway, settings),
+        "policy_test_available": bool(
+            configured_gateway_id
+            and configured_gateway_url
+            and gateway["gatewayId"] == configured_gateway_id
+            and gateway.get("gatewayUrl") == configured_gateway_url
+        ),
     }
 
 

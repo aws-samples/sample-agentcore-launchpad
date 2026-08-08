@@ -32,6 +32,7 @@ import {
   statusTone,
   type GovernanceView,
 } from "./types";
+import { PolicyTestPanel } from "./PolicyTestPanel";
 
 interface Props {
   gatewayId: string;
@@ -697,6 +698,10 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
           ))}
         </DataTable>
       </Panel>
+
+      {gateway.policy_test_available ? (
+        <PolicyTestPanel actions={gateway.actions} />
+      ) : null}
 
       <Panel title={t("governance.detail.targets")} pad={false}>
         <DataTable

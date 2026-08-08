@@ -873,6 +873,21 @@
       "cutoverFieldsOnly": "仅 提升 / 回滚 需要填写——保存 LOG_ONLY 草稿不需要。",
       "overrideAudited": "草稿阶段可不填；填了都会记入审计条目。"
     },
+    "policyTest": {
+      "title": "策略测试",
+      "source": "通过已配置的 Launchpad Gateway 发起真实 tools/call",
+      "identity": "身份",
+      "action": "精确动作",
+      "run": "运行测试",
+      "running": "运行中",
+      "noActions": "没有已发现的动作",
+      "recorded": "已记录",
+      "notRecorded": "未记录",
+      "exactAction": "精确动作",
+      "policy": "判定策略",
+      "decisionId": "决策 ID",
+      "detail": "原始详情"
+    },
     "blockers": {
       "notManaged": "请先纳管该 Gateway",
       "gatewayNotReady": "Gateway 不处于 READY",
