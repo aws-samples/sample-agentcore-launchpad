@@ -527,6 +527,7 @@ def test_captured_policy_denial_is_recorded(client, monkeypatch):
     body = _post_policy_test(client).json()
 
     assert body["outcome"] == "DENY"
+    assert body["policy_id"] == "launchpad_payout_admin_only-x7gz5yjkrd"
     assert body["recorded"] is True and body["decision_id"]
     assert _ledger_count() == before + 1
 
@@ -586,6 +587,7 @@ def test_tool_level_failure_still_counts_as_allowed(client, monkeypatch):
     before = _ledger_count()
     body = _post_policy_test(client).json()
     assert body["outcome"] == "ALLOW"
+    assert body["policy_id"] is None
     assert _ledger_count() == before + 1
 
 

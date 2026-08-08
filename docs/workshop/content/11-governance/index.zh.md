@@ -246,7 +246,7 @@ permit(
 策略建好了，但账号里还没有任何工具调用，所以决策视图现在是空的。这一节先造几条真实判定，
 再回去读证据。
 
-### 用策略测试接口打一次真实调用
+### 用策略测试面板打一次真实调用
 
 平台提供了一个专门用来验证授权的接口。它以指定身份对 Gateway 发起一次真实的 `tools/call`，
 把 AgentCore 的判定结果记进决策台账。两个内置身份的权限不同：
@@ -256,15 +256,12 @@ permit(
 | `demo` | `demo@hr-analyst`（普通分析师） | 被 `launchpad_payout_admin_only` 拦下 |
 | `river` | `river@platform-admin`（平台管理员） | 放行 |
 
-在本地终端执行（`8000` 是后端端口，参数不必填全，我们要看的是授权结果而不是业务结果）：
+1. 回到「治理」，在 Gateway 列表中打开 bootstrap 创建的 `launchpad-gw`。
+2. 找到「策略测试」面板。身份选择 `demo@hr-analyst`，精确动作选择
+   `hr-database___create_payout`。
+3. 点击「运行测试」。页面应显示 `DENY`，并标出判定策略、`decision_id`、入账状态和原始详情。
 
-```bash
-curl -s -X POST http://127.0.0.1:8000/api/governance/policy-test \
-  -H 'content-type: application/json' \
-  -d '{"tool":"hr-database___create_payout","username":"demo"}' | python3 -m json.tool
-```
-
-命令应返回一条 `DENY`。记录自己响应中的 `decision_id` 和实际策略 ID：
+记录页面中的 `decision_id` 和实际策略 ID。结果结构如下：
 
 ```json
 {
@@ -272,12 +269,13 @@ curl -s -X POST http://127.0.0.1:8000/api/governance/policy-test \
     "tool": "hr-database___create_payout",
     "outcome": "DENY",
     "detail": "{'code': -32002, 'message': 'Tool Execution Denied: Tool call not allowed due to policy enforcement [Policy evaluation denied due to launchpad_payout_admin_only-<后缀>]'}",
+    "policy_id": "launchpad_payout_admin_only-<后缀>",
     "decision_id": "<DECISION_ID>",
     "recorded": true
 }
 ```
 
-把 `"username"` 换成 `"river"`，同一个工具就放行了：
+把身份换成 `river@platform-admin`，保持同一个动作，再运行一次。结果应变成 `ALLOW`：
 
 ```json
 {
@@ -285,6 +283,7 @@ curl -s -X POST http://127.0.0.1:8000/api/governance/policy-test \
     "tool": "hr-database___create_payout",
     "outcome": "ALLOW",
     "detail": "{'content': [{'type': 'text', 'text': \"ValidationException - Parameter validation failed: Invalid request parameters:\\n- Missing required field(s): 'amount'\\n- Missing required field(s): 'employee_id'\"}], 'isError': True}",
+    "policy_id": null,
     "decision_id": "<DECISION_ID>",
     "recorded": true
 }
@@ -300,8 +299,8 @@ Registry 审批做不到这件事。
   授权与业务成败是两层。
 - **只有 `ALLOW` 和 `DENY` 会入账**。凭证错误、Gateway 连不上之类的失败返回 `ERROR`，
   `recorded` 为 `false`。错误不是判定，不该被当成一次 Cedar 拦截来统计。
-- 想多凑几条证据，就换几个只读工具各打一次，比如 `hr-database___list_departments`、
-  `office-facts___get_office_fact`。
+- 想多凑几条证据，就在动作下拉框中换几个只读工具各打一次，比如
+  `hr-database___list_departments`、`office-facts___get_office_fact`。
 
 ### 回到决策视图读证据
 
