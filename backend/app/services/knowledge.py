@@ -506,27 +506,6 @@ def list_documents(
     }
 
 
-def _wait_kb_active(client: Any, kb_id: str, timeout_s: int = 60, interval_s: int = 3) -> str:
-    """Poll until the KB leaves CREATING (or the fast-path window closes).
-    Returns the last observed status; only FAILED raises. KB creation was
-    observed to take 1.5–3 min — callers must treat a lingering CREATING as
-    normal and let the client finish the source setup once ACTIVE."""
-    deadline = time.time() + timeout_s
-    while True:
-        detail = client.get_knowledge_base(knowledgeBaseId=kb_id)["knowledgeBase"]
-        status = detail.get("status")
-        if status == "FAILED":
-            raise AppError(
-                "kb.create_failed",
-                f"knowledge base creation FAILED: {detail.get('failureReasons')}",
-                status_code=502,
-            )
-        if status != "CREATING" or time.time() >= deadline:
-            return status
-        # Deliberate polling interval; the surrounding loop owns the deadline.
-        time.sleep(interval_s)  # nosemgrep: arbitrary-sleep
-
-
 def create_kb(name: str, description: str, source: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
     role_arn = settings.resources.get("kb_role_arn")
@@ -545,15 +524,16 @@ def create_kb(name: str, description: str, source: dict[str, Any]) -> dict[str, 
         kwargs["description"] = description
     created = client.create_knowledge_base(**kwargs)
     kb_id = created["knowledgeBase"]["knowledgeBaseId"]
-    status = _wait_kb_active(client, kb_id)
-    if status == "ACTIVE":  # fast path — finish the source setup in one shot
-        _create_data_source(client, kb_id, source)
-        return get_kb_detail(kb_id)
-    # Still CREATING (1.5–3 min is normal). Finish the source setup on a
-    # background thread: this used to be handed to the browser, which meant
-    # navigating away in this window left the KB permanently without a data
-    # source and the uploaded file orphaned in S3, with nothing shown as wrong.
-    # `source_pending` is still echoed for API compatibility.
+    # KB creation takes 1.5–3 min; never wait it out on the request. This used
+    # to poll up to 60 s for an ACTIVE fast path, which behind a proxy with a
+    # ~60 s origin timeout (CloudFront in the workshop deployment) cut the
+    # connection mid-request — the browser then never ran its follow-up file
+    # upload and the loss was silent (#19). The background thread owns the
+    # whole tail instead: it polls until ACTIVE and creates the data source
+    # idempotently (an already-ACTIVE KB is handled on its first pass, no
+    # sleep). Uploads may land before the source exists — upload_files allows
+    # that — and the detail view polls, auto-starts the first sync, and offers
+    # a manual repair if the thread ever dies.
     _start_source_completion(kb_id, source)
     detail = get_kb_detail(kb_id)
     detail["source_pending"] = source

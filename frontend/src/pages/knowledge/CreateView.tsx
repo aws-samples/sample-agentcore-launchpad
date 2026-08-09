@@ -56,12 +56,13 @@ export function CreateView({ onBack, onCreated }: CreateViewProps) {
         return;
       }
       const kbId = body.kb_id;
-      // A `source_pending` response means the KB was still CREATING; the backend
-      // finishes the data source on its own thread, so there is nothing to
-      // replay from here (the detail view surfaces it if that ever fails).
+      // 202: the KB is returned while still CREATING — the backend finishes the
+      // data source on its own thread, so there is nothing to replay from here
+      // (the detail view polls and surfaces it if that ever fails).
       // upload mode: push the picked files into the KB's artifacts-bucket prefix
-      // now that the KB (and its data source) exist. A file failure is surfaced
-      // but the KB is already created, so we still land on its detail page.
+      // right away — uploads are allowed ahead of the data source, and the first
+      // sync indexes them once it exists. A file failure is surfaced but the KB
+      // is already created, so we still land on its detail page.
       if (mode === "upload" && files.length > 0) {
         const form = new FormData();
         for (const f of files) form.append("files", f);

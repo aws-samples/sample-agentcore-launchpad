@@ -531,7 +531,14 @@ class _KBClientStub:
     def get_knowledge_base(self, knowledgeBaseId: str):  # noqa: N803 (AWS shape)
         self._polls += 1
         status = "ACTIVE" if self._polls >= self._active_after else "CREATING"
-        return {"knowledgeBase": {"knowledgeBaseId": knowledgeBaseId, "status": status}}
+        return {
+            "knowledgeBase": {
+                "knowledgeBaseId": knowledgeBaseId,
+                "name": "docs",
+                "status": status,
+                "knowledgeBaseConfiguration": {"type": "MANAGED"},
+            }
+        }
 
     def list_data_sources(self, **_kw):
         return {"dataSourceSummaries": self._sources}
@@ -586,6 +593,42 @@ def test_source_completion_is_idempotent(monkeypatch):
 
     assert knowledge._create_data_source(stub, "KB123", {"mode": "upload"}) == "ds-old"
     assert stub.created == []
+
+
+def test_create_kb_returns_while_still_creating(monkeypatch):
+    """#19: the create request must return immediately instead of polling
+    toward ACTIVE — behind CloudFront's ~60 s origin timeout that wait cut the
+    connection, the browser never ran its follow-up file upload, and the loss
+    was silent. The background thread owns the whole data-source tail."""
+    stub = _KBClientStub(active_after=99)  # never ACTIVE during the request
+    stub.create_knowledge_base = lambda **_kw: {
+        "knowledgeBase": {"knowledgeBaseId": "KB123", "status": "CREATING"}
+    }
+    monkeypatch.setattr(knowledge, "agent_client", lambda: stub)
+    monkeypatch.setattr(
+        knowledge.time,
+        "sleep",
+        lambda _s: pytest.fail("create_kb must not sleep on the request path"),
+    )
+    monkeypatch.setattr(
+        knowledge,
+        "get_settings",
+        lambda: SimpleNamespace(resources={"kb_role_arn": "arn:aws:iam::111:role/kb"}),
+    )
+    started: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        knowledge,
+        "_start_source_completion",
+        lambda kb_id, src: started.append((kb_id, src)),
+    )
+
+    detail = knowledge.create_kb("docs", "", {"mode": "upload"})
+
+    assert detail["kb_id"] == "KB123"
+    assert detail["status"] == "CREATING"
+    assert detail["source_pending"] == {"mode": "upload"}
+    assert started == [("KB123", {"mode": "upload"})]
+    assert stub.created == []  # the data source is never created on-request
 
 
 def test_source_completion_gives_up_when_kb_failed(monkeypatch):
