@@ -4,7 +4,7 @@
     "allSystemsGo": "ALL SYSTEMS GO",
     "acct": "ACCT",
     "labGuide": "HANDS-ON LAB",
-    "labGuideTitle": "Open the hands-on lab guide on GitHub"
+    "labGuideTitle": "Open the hands-on lab guide on AWS Workshop Studio"
   },
   "auth": {
     "kicker": "// OPERATOR ACCESS",
@@ -106,7 +106,7 @@
     "title": "Overview",
     "meta": "UNIFIED PIPELINE · LIVE LEDGER",
     "lab": {
-      "title": "Hands-on lab guide · 12 chapters against real AWS",
+      "title": "Hands-on lab guide · against real AWS",
       "sub": "create → deploy → chat → observe → evaluate → A/B → canary → govern",
       "open": "OPEN GUIDE"
     },

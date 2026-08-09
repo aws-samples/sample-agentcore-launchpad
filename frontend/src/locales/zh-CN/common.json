@@ -4,7 +4,7 @@
     "allSystemsGo": "系统运行正常",
     "acct": "账户",
     "labGuide": "动手实验",
-    "labGuideTitle": "在 GitHub 上打开动手实验指南"
+    "labGuideTitle": "在 AWS Workshop Studio 打开动手实验指南"
   },
   "auth": {
     "kicker": "// 操作员访问",
@@ -106,7 +106,7 @@
     "title": "总览",
     "meta": "统一流水线 · 实时台账",
     "lab": {
-      "title": "动手实验指南 · 12 章真实 AWS 实跑",
+      "title": "动手实验指南 · 真实 AWS 实跑",
       "sub": "创建 → 部署 → 对话 → 观测 → 评估 → A/B → 金丝雀 → 治理",
       "open": "打开指南"
     },
