@@ -47,7 +47,9 @@ def list_knowledge_bases(status: str | None = None) -> dict[str, Any]:
     return {"items": items}
 
 
-@router.post("", status_code=201)
+# 202: the KB is returned while still CREATING — the data source is finished by
+# a backend thread and the client polls GET /{kb_id} (see knowledge.create_kb).
+@router.post("", status_code=202)
 def create_knowledge_base(req: CreateKBRequest) -> dict[str, Any]:
     return knowledge.create_kb(req.name, req.description, req.source.model_dump())
 
