@@ -213,12 +213,20 @@ def build_spawn_kwargs(settings: Any = None) -> dict[str, Any]:
     privilege.
     """
     current = settings or get_settings()
+    ids = _exec_user_ids(current)
     limits = [
         (resource.RLIMIT_AS, current.studio_exec_memory_mb * 1024 * 1024),
         (resource.RLIMIT_CPU, current.studio_exec_cpu_seconds),
-        (resource.RLIMIT_NPROC, current.studio_exec_max_processes),
         (resource.RLIMIT_FSIZE, current.studio_exec_max_file_mb * 1024 * 1024),
     ]
+    if ids is not None:
+        # RLIMIT_NPROC counts processes AND threads per *uid*, not per process,
+        # so it is only a ceiling worth setting under the dedicated execution
+        # user, whose uid owns nothing else. Applied to the backend's own uid it
+        # counts the operator's entire session (a dev box easily runs thousands
+        # of threads), so every pthread_create in the child fails with "can't
+        # start new thread" — and strands MCP clients each need one.
+        limits.append((resource.RLIMIT_NPROC, current.studio_exec_max_processes))
 
     def apply_limits() -> None:  # pragma: no cover - runs in the forked child
         for which, value in limits:
@@ -233,7 +241,6 @@ def build_spawn_kwargs(settings: Any = None) -> dict[str, Any]:
         "start_new_session": True,  # own process group, so kill_process_group works
         "preexec_fn": apply_limits,
     }
-    ids = _exec_user_ids(current)
     if ids is not None:
         uid, gid = ids
         kwargs["user"] = uid

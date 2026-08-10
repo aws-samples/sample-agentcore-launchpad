@@ -210,6 +210,64 @@ def test_the_resource_ceilings_are_actually_applied():
     assert rlimit_cpu == [7, 7]
 
 
+def _ceilings(kwargs) -> dict:
+    """The (rlimit, value) pairs the spawn hook would apply, via its closure."""
+    for cell in kwargs["preexec_fn"].__closure__:
+        if isinstance(cell.cell_contents, list):
+            return dict(cell.cell_contents)
+    raise AssertionError("limit list not found in preexec_fn closure")
+
+
+def test_nproc_ceiling_is_skipped_without_the_uid_drop():
+    """RLIMIT_NPROC counts processes+threads per *uid*. Without the dedicated
+    execution user the child shares the backend's uid, whose existing thread
+    count dwarfs any sane ceiling — applying one made every Thread.start() in
+    generated code fail with "can't start new thread" (posthog import, strands
+    MCP client background threads)."""
+    import resource
+
+    from app.core.config import Settings
+
+    limits = _ceilings(local_exec.build_spawn_kwargs(Settings(studio_exec_user="")))
+    assert resource.RLIMIT_NPROC not in limits
+    assert resource.RLIMIT_AS in limits  # the per-process ceilings still apply
+
+
+def test_nproc_ceiling_applies_under_the_dedicated_user(monkeypatch):
+    import resource
+
+    from app.core.config import Settings
+
+    monkeypatch.setattr(local_exec.os, "geteuid", lambda: 0)
+    kwargs = local_exec.build_spawn_kwargs(
+        Settings(studio_exec_user="root", studio_exec_max_processes=64)
+    )
+    assert _ceilings(kwargs)[resource.RLIMIT_NPROC] == 64
+
+
+def test_the_child_can_start_threads_without_the_uid_drop():
+    """End-to-end regression for the "can't start new thread" failure: a child
+    spawned with the default (no dedicated user) isolation must be able to start
+    a thread, which strands MCP clients require."""
+    import subprocess as sp
+    import sys
+
+    from app.core.config import Settings
+
+    kwargs = local_exec.build_spawn_kwargs(Settings(studio_exec_user=""))
+    probe = (
+        "import threading;"
+        "t = threading.Thread(target=lambda: None); t.start(); t.join();"
+        "print('thread-ok')"
+    )
+    out = sp.run(
+        [sys.executable, "-c", probe],
+        capture_output=True, text=True, check=True,
+        preexec_fn=kwargs["preexec_fn"],
+    )
+    assert "thread-ok" in out.stdout
+
+
 def test_no_uid_drop_without_a_configured_user():
     from app.core.config import Settings
 
