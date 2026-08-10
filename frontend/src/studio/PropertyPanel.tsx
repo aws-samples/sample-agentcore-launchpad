@@ -26,7 +26,6 @@ interface StudioNodeData {
   modelId?: string;
   modelName?: string;
   systemPrompt?: string;
-  temperature?: number;
   maxTokens?: number;
   streaming?: boolean;
   apiKey?: string;
@@ -496,34 +495,6 @@ export function PropertyPanel({
     </>
   );
 
-  const renderTemperatureField = (data: StudioNodeData) => {
-    const isBedrockThinking =
-      (data.modelProvider === 'AWS Bedrock' || !data.modelProvider) && !!data.thinkingEnabled;
-    const shown = isBedrockThinking ? 1 : data.temperature || 0.7;
-    return (
-      <div className="field">
-        <label>{t('studio.prop.temperature', { value: shown })}</label>
-        <input
-          className="studio-range"
-          type="range"
-          min="0"
-          max="1"
-          step="0.1"
-          value={shown}
-          disabled={isBedrockThinking}
-          onChange={(e) => {
-            if (!isBedrockThinking) {
-              handleInputChange('temperature', parseFloat(e.target.value));
-            }
-          }}
-        />
-        {isBedrockThinking && (
-          <div className="studio-warn">{t('studio.prop.temperatureLocked')}</div>
-        )}
-      </div>
-    );
-  };
-
   const renderThinkingSection = (data: StudioNodeData) => {
     const isBedrock = data.modelProvider === 'AWS Bedrock' || !data.modelProvider;
     // legacy 'minimal' coerced to 'low' (upstream :845)
@@ -550,7 +521,7 @@ export function PropertyPanel({
 
         {data.thinkingEnabled &&
           (isBedrock ? (
-            // Bedrock/Claude uses adaptive thinking — no budget knob; temperature pinned to 1.
+            // Bedrock/Claude uses adaptive thinking — no budget knob.
             // launchpad extension: expose the reasoning-effort tier for Bedrock (output_config.effort).
             <>
               <div className="studio-note">{t('studio.prop.adaptiveThinkingNote')}</div>
@@ -691,7 +662,6 @@ export function PropertyPanel({
         />
       </div>
 
-      {renderTemperatureField(data)}
 
       <div className="field">
         <label>{t('studio.prop.maxTokens')}</label>
@@ -756,7 +726,6 @@ export function PropertyPanel({
         </div>
       </div>
 
-      {renderTemperatureField(data)}
 
       <div className="field">
         <label>{t('studio.prop.maxTokens')}</label>
@@ -817,7 +786,6 @@ export function PropertyPanel({
             <option value="http_request">Http Request</option>
             <option value="editor">Editor</option>
             <option value="retrieve">Retrieve (KB)</option>
-            <option value="mem0_memory">mem0_memory</option>
           </select>
         ) : (
           <input

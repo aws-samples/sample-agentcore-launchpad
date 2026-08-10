@@ -1847,8 +1847,8 @@
       "samples": "Samples",
       "publish": "Publish",
       "rePublish": "Re-publish",
-      "localChat": "Local chat",
-      "debugDisabled": "Fix the code generation errors to start local chat.",
+      "localChat": "Local debug",
+      "debugDisabled": "Fix the code generation errors to start local debugging.",
       "regen": "Regenerate from flow",
       "regenHint": "Discard the AI-fixed code and regenerate from the canvas."
     },
@@ -1961,7 +1961,6 @@
     "nodeCard": {
       "provider": "Provider:",
       "model": "Model:",
-      "temperature": "Temperature:",
       "type": "Type:",
       "format": "Format:",
       "to": "To:",
@@ -2016,8 +2015,6 @@
       "baseUrl": "Base URL (optional)",
       "baseUrlPlaceholder": "https://api.openai.com/v1 (default)",
       "baseUrlHint": "Leave empty to use the default OpenAI API endpoint",
-      "temperature": "Temperature: {{value}}",
-      "temperatureLocked": "Temperature is locked to 1.0 when thinking is enabled (Bedrock only)",
       "advancedSettings": "Advanced settings",
       "enableThinking": "Enable thinking",
       "thinkingHint": "Claude → adaptive thinking; GPT / Grok → reasoning effort",

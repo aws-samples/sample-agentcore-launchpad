@@ -245,7 +245,6 @@ export function FlowEditor({
           region: DEFAULT_MANTLE_REGION,
           baseUrl: mantleBaseUrl(DEFAULT_MANTLE_REGION, DEFAULT_MANTLE_MODEL_ID),
           systemPrompt: 'You are a helpful AI assistant.',
-          temperature: 0.7,
           // launchpad extension: new agents default to streaming ON + 32000 max output tokens
           maxTokens: 32000,
           streaming: true,

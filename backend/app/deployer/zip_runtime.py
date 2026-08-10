@@ -383,8 +383,8 @@ def write_bundle_files(spec: AgentSpec, pkg_dir: Path) -> int:
 
 
 STUDIO_EXTRA_REQUIREMENTS = [
-    # studio's generator imports the strands_tools catalog (incl. mem0_memory)
-    "strands-agents-tools[mem0_memory]",
+    # studio's generator imports the strands_tools catalog
+    "strands-agents-tools",
 ]
 
 # Carries `openai` + `aws-bedrock-token-generator`, which the template's

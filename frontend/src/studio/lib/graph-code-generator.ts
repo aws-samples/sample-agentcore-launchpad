@@ -39,7 +39,6 @@ function generateModelConfig(
   varName: string,
   modelProvider: string,
   modelIdentifier: string,
-  temperature: number,
   maxTokens: number,
   baseUrl: string,
   thinkingEnabled?: boolean,
@@ -52,9 +51,6 @@ function generateModelConfig(
 ): string {
   // Legacy projects may still carry 'minimal' (removed from the effort scale)
   if (reasoningEffort === 'minimal') reasoningEffort = 'low';
-  // When thinking is enabled for Bedrock, temperature must be 1
-  const isBedrock = modelProvider === 'AWS Bedrock' || modelProvider === undefined;
-  const finalTemperature = thinkingEnabled && isBedrock ? 1 : temperature;
 
   if (modelProvider === MANTLE_PROVIDER) {
     // Amazon Bedrock (Mantle): OpenAI-compatible endpoint via the Responses API
@@ -65,8 +61,6 @@ function generateModelConfig(
     const params = [`"max_output_tokens": ${maxTokens}`];
     if (thinkingEnabled && reasoningEffort) {
       params.push(`"reasoning": {"effort": "${reasoningEffort}"}`);
-    } else {
-      params.push(`"temperature": ${temperature}`);
     }
     return `${varName}_model = OpenAIResponsesModel(${clientArgsStr}
     model_id="${modelIdentifier}",
@@ -82,7 +76,7 @@ function generateModelConfig(
     }
     const clientArgsStr = `\n    client_args={\n        ${clientArgs.join(',\n        ')}\n    },`;
 
-    const params = [`"max_tokens": ${maxTokens}`, `"temperature": ${finalTemperature}`];
+    const params = [`"max_tokens": ${maxTokens}`];
     if (thinkingEnabled && reasoningEffort) {
       params.push(`"reasoning_effort": "${reasoningEffort}"`);
     }
@@ -102,7 +96,6 @@ function generateModelConfig(
 
     let bedrockCode = `${varName}_model = BedrockModel(
     model_id="${modelIdentifier}",
-    temperature=${finalTemperature},
     max_tokens=${effectiveMaxTokens}`;
 
     if (thinkingEnabled) {
@@ -173,7 +166,6 @@ function findConnectedTools(
         'file_write': 'file_write',
         'shell': 'shell',
         'current_time': 'current_time',
-        'mem0_memory': 'mem0_memory',
       };
       const mappedTool = toolMapping[toolName] || 'calculator';
       return { node: toolNode, code: mappedTool };
@@ -342,7 +334,7 @@ export function generateGraphCode(
     'from strands import Agent, tool',
     'from strands.models import BedrockModel, CacheConfig',
     'from strands.multiagent import GraphBuilder',
-    'from strands_tools import calculator, file_read, file_write, shell, current_time, mem0_memory',
+    'from strands_tools import calculator, file_read, file_write, shell, current_time',
     'import json',
     'import os',
     'import asyncio',
@@ -433,7 +425,6 @@ export function generateGraphCode(
       const modelId = data.modelId || DEFAULT_MODEL_ID;
       const modelName = data.modelName || 'Claude 3.7 Sonnet';
       const systemPrompt = data.systemPrompt || 'You are a helpful AI assistant.';
-      const temperature = data.temperature !== undefined ? data.temperature : 0.7;
       const maxTokens = data.maxTokens || 32000; // launchpad extension: default max output tokens 32000
       const baseUrl = data.baseUrl || '';
       // Mantle auth: empty ⇒ IAM (bedrock_mantle_config); set ⇒ keyed client_args
@@ -458,7 +449,7 @@ export function generateGraphCode(
       const skillsCode = buildSkillsPluginArg(findConnectedSkills(agentNode, nodes, edges), '    ');
 
       // Generate model config
-      const modelConfig = generateModelConfig(agentVarName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages, cacheTools, cacheSystem, apiKey as string, region as string);
+      const modelConfig = generateModelConfig(agentVarName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages, cacheTools, cacheSystem, apiKey as string, region as string);
 
       code += `# ${label} Configuration\n`;
       code += modelConfig + '\n\n';

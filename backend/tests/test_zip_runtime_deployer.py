@@ -180,7 +180,8 @@ def test_studio_specs_bring_their_own_extras():
     )
     assert MANTLE_EXTRA not in reqs
     assert "strands-agents[openai]==1.47.0" in reqs
-    assert "strands-agents-tools[mem0_memory]" in reqs
+    assert "strands-agents-tools" in reqs
+    assert "strands-agents-tools[mem0_memory]" not in reqs
 
 
 def test_build_zip_raises_with_pip_stderr(tmp_path: Path):

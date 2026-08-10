@@ -8,7 +8,6 @@ interface OrchestratorAgentNodeData {
   modelId?: string;
   modelName?: string;
   systemPrompt?: string;
-  temperature?: number;
   maxTokens?: number;
   streaming?: boolean;
   // Orchestrator-specific properties
@@ -30,7 +29,6 @@ export function OrchestratorAgentNode({ data, selected, id }: NodeProps) {
     label = 'Orchestrator Agent',
     modelProvider = 'AWS Bedrock',
     modelName = 'Claude 3.7 Sonnet',
-    temperature = 0.7,
   } = nodeData;
 
   const handleDelete = (event: React.MouseEvent) => {
@@ -56,7 +54,6 @@ export function OrchestratorAgentNode({ data, selected, id }: NodeProps) {
       <div className="studio-node-body">
         <div className="studio-node-row"><span className="studio-node-k">{t('studio.nodeCard.provider')}</span> {modelProvider}</div>
         <div className="studio-node-row"><span className="studio-node-k">{t('studio.nodeCard.model')}</span> {modelName}</div>
-        <div className="studio-node-row"><span className="studio-node-k">{t('studio.nodeCard.temperature')}</span> {temperature}</div>
       </div>
 
       {/* Input Handle */}

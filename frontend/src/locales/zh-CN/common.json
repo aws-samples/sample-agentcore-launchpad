@@ -1847,8 +1847,8 @@
       "samples": "示例",
       "publish": "发布",
       "rePublish": "重新发布",
-      "localChat": "本地对话",
-      "debugDisabled": "请先修复代码生成错误再开始本地对话。",
+      "localChat": "本地调试",
+      "debugDisabled": "请先修复代码生成错误再开始本地调试。",
       "regen": "从画布重新生成",
       "regenHint": "丢弃 AI 修复的代码,从画布重新生成。"
     },
@@ -1961,7 +1961,6 @@
     "nodeCard": {
       "provider": "提供方:",
       "model": "模型:",
-      "temperature": "温度:",
       "type": "类型:",
       "format": "格式:",
       "to": "去向:",
@@ -2016,8 +2015,6 @@
       "baseUrl": "Base URL(可选)",
       "baseUrlPlaceholder": "https://api.openai.com/v1(默认)",
       "baseUrlHint": "留空则使用默认的 OpenAI API 端点",
-      "temperature": "温度:{{value}}",
-      "temperatureLocked": "启用思考时温度锁定为 1.0(仅 Bedrock)",
       "advancedSettings": "高级设置",
       "enableThinking": "启用思考",
       "thinkingHint": "Claude → 自适应思考;GPT / Grok → 推理强度",

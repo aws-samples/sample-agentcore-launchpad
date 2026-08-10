@@ -48,12 +48,12 @@ echo "==> installing strands runtime deps"
 # default model needs landed (1.45 served every Mantle id from /v1).
 uv pip install --python "${PY_BIN}" \
   'strands-agents[openai]>=1.47,<2' \
-  'strands-agents-tools[mem0_memory]' \
+  'strands-agents-tools' \
   'mcp' \
   'bedrock-agentcore'
 
 echo "==> verifying imports"
-"${PY_BIN}" -c "import strands, strands_tools, mcp, aws_bedrock_token_generator; from strands_tools import mem0_memory; from strands.models.openai_responses import OpenAIResponsesModel; from importlib.metadata import version; print('strands-agents', version('strands-agents'))"
+"${PY_BIN}" -c "import strands, strands_tools, mcp, aws_bedrock_token_generator; from strands.models.openai_responses import OpenAIResponsesModel; from importlib.metadata import version; print('strands-agents', version('strands-agents'))"
 
 if [[ "${HARDENED}" -eq 1 ]]; then
   if [[ "$(uname -s)" != "Linux" ]]; then
