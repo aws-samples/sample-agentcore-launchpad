@@ -134,18 +134,19 @@ credentials and restarting the backend invalidates existing sessions.
 
 ### Roles: what a member can do / 成员权限
 
-There are two roles. `admin` has the whole console. `member` is **effectively
-read-only**: browse agents, registry records and knowledge bases, chat with and
-invoke agents, run the retrieval playground, and read observability, memory,
-evaluation and governance.
+There are two roles. `admin` has the whole console. `member` can browse agents,
+registry records and knowledge bases, chat with and invoke agents, run the
+retrieval playground, and read observability, memory, evaluation and governance.
+On top of that, a small set of capabilities is **granted to members by default
+and revocable per user** in the User Management console: the agent lifecycle
+(deploy, import, delete, convert) and starting evaluation/insights runs.
 
-Everything that executes code, changes deployed or cloud state, mints
-credentials, or changes governance posture is administrator-only — creating and
-deploying agents, the Studio canvas, registry register/edit/import, knowledge-base
-mutations, API keys, Cedar policy writes, and the browser / code-interpreter
-demos. The authoritative list is the table in
-`backend/app/core/route_policy.py`; a route missing from it is refused rather
-than served.
+Everything else that executes code, changes deployed or cloud state, mints
+credentials, or changes governance posture is administrator-only — the Studio
+canvas, registry register/edit/import, knowledge-base mutations, API keys,
+Cedar policy writes, and the browser / code-interpreter demos. The
+authoritative list is the table in `backend/app/core/route_policy.py`; a route
+missing from it is refused rather than served.
 
 This is deliberately restrictive: the console has no per-user data partitioning
 yet, so a member who could deploy could also see and mutate every other member's

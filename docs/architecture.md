@@ -643,20 +643,24 @@ agent (`/api/agents/{id}/invoke`, `/api/registry/a2a-demo`) is deliberately memb
 reachable — it is the same capability Chat already gives every member, so gating it
 while Chat stays open would protect nothing.
 
-One amendment (river, 2026-08-07): the **agent-lifecycle routes are
+Two amendments (river): 2026-08-07, the **agent-lifecycle routes are
 member-grantable** instead of flat admin. A `perm:agents.*` table value
 (`agents.deploy` covering create/redeploy plus the wizard's skill-staging
 helpers, `agents.import`, `agents.delete`, `agents.convert`) requires that
-permission: admins implicitly hold all four, and a member holds them **by
+permission: admins implicitly hold all, and a member holds them **by
 default** — `users.permissions` stores only explicit denials, toggled per user
 in the User Management console and enforced on the member's next request. A
 denied call answers `auth.permission_required` (403) naming the missing key.
+2026-08-10, starting evaluation/insights runs (`POST /api/eval/runs`) joined
+the same scheme as `perm:eval.run` — it invokes agents (member parity with
+Chat) and creates billable AWS eval jobs, which revocation can still shut off
+per user.
 
-Outside `perm:agents.*`, the practical effect is that `member` remains close to
-read-only. That is intended while data is **not** partitioned per user: every
+Outside these `perm:*` grants, the practical effect is that `member` remains
+close to read-only. That is intended while data is **not** partitioned per user: every
 authenticated account sees the same agents, knowledge bases and traces — which
 also means a member with the default deploy grant can mutate everyone else's
-agents; revoking the four permissions restores the read-only posture for that
+agents; revoking the permissions restores the read-only posture for that
 user. Admin-only console modules (`/users`, Registry register/edit) render an
 administrator-required panel instead of firing a request; Agent Management and
 the Studio canvas render for members and disable exactly the actions the account

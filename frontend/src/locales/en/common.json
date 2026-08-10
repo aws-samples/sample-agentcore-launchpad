@@ -2288,7 +2288,8 @@
       "deploy": "DEPLOY",
       "import": "IMPORT",
       "delete": "DELETE",
-      "convert": "CONVERT"
+      "convert": "CONVERT",
+      "run": "EVAL RUN"
     },
     "extendTitle": "Extend validity",
     "extendBody": "Add how many days to {{username}}'s account?",

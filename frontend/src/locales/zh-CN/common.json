@@ -2288,7 +2288,8 @@
       "deploy": "部署",
       "import": "导入",
       "delete": "删除",
-      "convert": "转换"
+      "convert": "转换",
+      "run": "评估运行"
     },
     "extendTitle": "延长有效期",
     "extendBody": "为 {{username}} 增加多少天？",

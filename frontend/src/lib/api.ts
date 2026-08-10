@@ -1199,13 +1199,15 @@ export type AgentPermission =
   | "agents.deploy"
   | "agents.import"
   | "agents.delete"
-  | "agents.convert";
+  | "agents.convert"
+  | "eval.run";
 
 export const AGENT_PERMISSIONS: AgentPermission[] = [
   "agents.deploy",
   "agents.import",
   "agents.delete",
   "agents.convert",
+  "eval.run",
 ];
 
 export interface AuthStatus {

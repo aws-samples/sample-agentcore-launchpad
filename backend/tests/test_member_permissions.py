@@ -31,6 +31,7 @@ PROBES = [
     ("agents.import", "POST", "/api/agents/discovery/import", {}, 422),
     ("agents.delete", "DELETE", "/api/agents/no-such-agent", None, 404),
     ("agents.convert", "POST", "/api/agents/no-such-agent/convert", None, 404),
+    ("eval.run", "POST", "/api/eval/runs", {}, 422),
 ]
 
 

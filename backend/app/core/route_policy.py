@@ -22,6 +22,10 @@ governance posture; member for reads and for the member's own interaction with a
 agent.** Amended by river 2026-08-07: the agent-lifecycle routes (deploy,
 discovery import, delete, convert and the deploy-flow skill helpers) are
 member-grantable via `perm:agents.*`, **default granted**, revocable per user.
+Amended by river 2026-08-10: starting evaluation/insights runs
+(`POST /api/eval/runs`) is member-grantable via `perm:eval.run` on the same
+default-granted terms — it invokes agents (member parity with Chat) and creates
+billable AWS eval jobs, which revocation can still shut off per user.
 Consequences worth knowing before editing this table:
 
 * Outside `perm:agents.*`, `member` remains close to read-only. There is still no
@@ -54,6 +58,7 @@ PERM_AGENT_DEPLOY = "perm:agents.deploy"
 PERM_AGENT_IMPORT = "perm:agents.import"
 PERM_AGENT_DELETE = "perm:agents.delete"
 PERM_AGENT_CONVERT = "perm:agents.convert"
+PERM_EVAL_RUN = "perm:eval.run"
 _PERM_PREFIX = "perm:"
 
 API_PREFIX = "/api"
@@ -192,7 +197,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("DELETE", "/api/eval/evaluators/{evaluator_id}"): ADMIN,
     ("GET", "/api/eval/queue"): MEMBER,
     ("GET", "/api/eval/runs"): MEMBER,
-    ("POST", "/api/eval/runs"): ADMIN,
+    ("POST", "/api/eval/runs"): PERM_EVAL_RUN,
     ("GET", "/api/eval/runs/{run_id}"): MEMBER,
     ("GET", "/api/experiments"): MEMBER,
     ("GET", "/api/experiments/readiness"): MEMBER,
