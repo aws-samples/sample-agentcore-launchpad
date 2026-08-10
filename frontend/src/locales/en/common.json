@@ -1092,8 +1092,8 @@
     "historyTurns": "{{count}} turn(s)"
   },
   "evalPage": {
-    "metaLive": "BATCH + INSIGHTS · LLM-AS-A-JUDGE · 1 BATCH / ACCOUNT — QUEUE MANAGED",
-    "acctLock": "BATCH RUNNING · acct lock",
+    "metaLive": "BATCH + INSIGHTS · LLM-AS-A-JUDGE · CONCURRENCY-CAPPED — QUEUE MANAGED",
+    "acctLock": "AT CAPACITY · {{max}} RUNNING",
     "queueIdle": "QUEUE IDLE",
     "nav": {
       "label": "Evaluation sections",
@@ -1119,7 +1119,7 @@
     "status": {
       "completed": "COMPLETE",
       "failed": "FAILED",
-      "queued": "QUEUED · acct lock"
+      "queued": "QUEUED · waiting for a slot"
     },
     "newRun": {
       "title": "NEW RUN",
@@ -1136,7 +1136,7 @@
       "submitted": "Run submitted — it appears in the list as it progresses.",
       "how": {
         "title": "HOW A RUN WORKS",
-        "sub": "one batch per account · queue managed",
+        "sub": "concurrency-capped per account · queue managed",
         "s1": "INVOKING — one runtime session per dataset item",
         "s2": "WAITING — traces land in CloudWatch (aws/spans)",
         "s3": "EVALUATING — StartBatchEvaluation scoped to those sessions",
@@ -1185,7 +1185,7 @@
       "pendingDup": "an identical insights run is already queued or running",
       "confirmRun": {
         "title": "Run insights on these sessions",
-        "body": "This creates a new insights run over the {{count}} sessions of {{run}}. The account processes one batch at a time, so duplicate submissions just queue up behind it.",
+        "body": "This creates a new insights run over the {{count}} sessions of {{run}}. Batch capacity is limited per account, so duplicate submissions just queue up behind running work.",
         "bodyRepeat": "These sessions already have completed insights — continuing repeats the same analysis one more time: a new insights run over the {{count}} sessions of {{run}}, re-invoking the evaluation service with additional usage.",
         "confirm": "RUN INSIGHTS"
       }

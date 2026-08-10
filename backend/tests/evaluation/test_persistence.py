@@ -32,13 +32,24 @@ def test_runs_survive_restart():
     assert match["scores"][0]["score"] == 0.9
 
 
-def test_queue_second_run_queues_not_fails(client, monkeypatch):
-    """Account lock: while run A executes, run B reports QUEUED (position ≥ 1)."""
+def _wait_until(predicate, timeout=2.5):
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return predicate()
+
+
+def test_queue_excess_run_queues_not_fails(client, monkeypatch):
+    """At capacity, the next run reports QUEUED (position ≥ 1) instead of failing."""
     import threading
 
-    from app.evaluation.queue import AccountLockQueue
+    from app.evaluation.queue import EvalRunQueue
 
-    lock_queue = AccountLockQueue()
+    run_queue = EvalRunQueue(max_concurrency=1)
     release = threading.Event()
     started = threading.Event()
 
@@ -46,20 +57,77 @@ def test_queue_second_run_queues_not_fails(client, monkeypatch):
         started.set()
         release.wait(timeout=5)
 
-    lock_queue.submit("run-A", slow_job)
+    run_queue.submit("run-A", slow_job)
     assert started.wait(timeout=2)
-    position_b = lock_queue.submit("run-B", lambda: None)
-    state = lock_queue.state()
-    assert state["running"] == "run-A"
+    position_b = run_queue.submit("run-B", lambda: None)
+    state = run_queue.state()
+    assert state["running"] == ["run-A"]
     assert "run-B" in state["queued"] and position_b >= 1
-    assert lock_queue.position("run-B") == 1  # visible queue position
+    assert run_queue.position("run-B") == 1  # visible queue position
+    assert state["locked"] is True
     release.set()
-    import time
-    for _ in range(50):
-        if lock_queue.state()["running"] is None and not lock_queue.state()["queued"]:
-            break
-        time.sleep(0.05)
-    assert lock_queue.state()["locked"] is False
+    assert _wait_until(
+        lambda: not run_queue.state()["running"] and not run_queue.state()["queued"]
+    )
+    assert run_queue.state()["locked"] is False
+
+
+def test_queue_runs_up_to_cap_concurrently(client, monkeypatch):
+    """Three runs execute at once; the fourth waits for a slot, then executes."""
+    import threading
+
+    from app.evaluation.queue import EvalRunQueue
+
+    run_queue = EvalRunQueue(max_concurrency=3)
+    release = threading.Event()
+    started: list[threading.Event] = [threading.Event() for _ in range(3)]
+
+    def slow_job(idx: int):
+        started[idx].set()
+        release.wait(timeout=5)
+
+    for idx in range(3):
+        run_queue.submit(f"run-{idx}", lambda i=idx: slow_job(i))
+    assert all(event.wait(timeout=2) for event in started)  # truly concurrent
+
+    fourth_ran = threading.Event()
+    position = run_queue.submit("run-3", fourth_ran.set)
+    assert position >= 1
+    state = run_queue.state()
+    assert state["locked"] is True and state["max_concurrency"] == 3
+    assert sorted(state["running"]) == ["run-0", "run-1", "run-2"]
+    assert "run-3" in state["queued"]
+    assert run_queue.position("run-3") == 1
+    assert not fourth_ran.is_set()  # no free slot yet
+
+    release.set()
+    assert fourth_ran.wait(timeout=2)
+    assert _wait_until(
+        lambda: not run_queue.state()["running"] and not run_queue.state()["queued"]
+    )
+    assert run_queue.state()["locked"] is False
+
+
+def test_queue_below_cap_submit_reports_position_zero(client):
+    """With free slots, a new run starts immediately (position 0, not queued)."""
+    import threading
+
+    from app.evaluation.queue import EvalRunQueue
+
+    run_queue = EvalRunQueue(max_concurrency=3)
+    release = threading.Event()
+    started = threading.Event()
+
+    def slow_job():
+        started.set()
+        release.wait(timeout=5)
+
+    assert run_queue.submit("run-A", slow_job) == 0
+    assert started.wait(timeout=2)
+    assert run_queue.state()["locked"] is False
+    assert run_queue.submit("run-B", lambda: None) == 0  # 2 of 3 slots taken
+    release.set()
+    assert _wait_until(lambda: not run_queue.state()["running"])
 
 
 def test_runs_list_pagination_and_mode_filter(client):

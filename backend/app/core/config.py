@@ -138,6 +138,13 @@ class Settings(BaseSettings):
     # refuse to boot the app — hence no upper bound here.
     traffic_concurrency: int = Field(default=10, ge=1)
 
+    # How many evaluation runs (batch evaluations / insights analyses) execute
+    # concurrently. AgentCore allows 5 active batch evaluations per account
+    # (hard quota); the default of 3 leaves headroom for other batch-eval
+    # consumers in the same account, and the upper bound refuses configs that
+    # could never fit the quota anyway.
+    eval_max_concurrent_runs: int = Field(default=3, ge=1, le=5)
+
     # Studio local-debug (un-deployed flow execution + AI fix). The control-plane
     # backend env has no strands/openai; generated code runs in the dedicated
     # interpreter provisioned by scripts/setup_exec_env.sh. Endpoints return a

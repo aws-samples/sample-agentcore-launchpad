@@ -17,7 +17,7 @@ from app.core.errors import AppError, NotFoundError
 from app.evaluation import agentcore_eval as ac
 from app.evaluation import service
 from app.evaluation.models import EvalDataset, EvalRun
-from app.evaluation.queue import account_lock
+from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import normalize_scenarios
 from app.models.ledger import Agent
 from app.services.agentcore.client import control_client
@@ -562,7 +562,7 @@ def _run_out(run: EvalRun) -> dict[str, Any]:
         "mode": run.mode,
         "evaluators": run.evaluators,
         "status": run.status,
-        "queue_position": account_lock.position(run.id),
+        "queue_position": run_queue.position(run.id),
         "session_ids": run.session_ids,
         "batch_eval_id": run.batch_eval_id,
         "scores": run.scores,
@@ -706,4 +706,4 @@ def create_run(req: RunCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @router.get("/queue")
 def queue_state() -> dict[str, Any]:
-    return account_lock.state()
+    return run_queue.state()

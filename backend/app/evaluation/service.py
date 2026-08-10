@@ -1,7 +1,7 @@
 """Evaluation run orchestration (adapted from agentcore_eva_opt routers/runs.py
 and routers/insights.py — github.com/xiehust/agentcore_eva_opt).
 
-Pipeline per run (behind the account lock):
+Pipeline per run (executed by the bounded-concurrency run queue):
     invoking   — one runtime session per dataset item
     waiting    — traces land in CloudWatch (aws/spans)
     evaluating — StartBatchEvaluation scoped to exactly those sessions
@@ -17,9 +17,11 @@ content-log group is discovered by log-group prefix instead of derived.
 """
 
 import time
+from collections.abc import Callable
 from typing import Any
 
 import boto3
+from botocore.exceptions import ClientError
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
@@ -27,7 +29,7 @@ from app.core.errors import AppError
 from app.evaluation import agentcore_eval as ac
 from app.evaluation import simulation, telemetry
 from app.evaluation.models import EvalRun
-from app.evaluation.queue import account_lock
+from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import (
     ground_truth_metadata,
     normalize_scenarios,
@@ -42,6 +44,31 @@ from app.templates import gateway_support
 EVAL_SUPPORTED_METHODS = {"zip_runtime", "studio", "container", "harness"}
 TELEMETRY_READY_GRACE_SECONDS = 120
 TELEMETRY_QUERY_LOOKBACK_MS = 60_000
+
+_sleep = time.sleep  # injectable for tests
+
+# With up to eval_max_concurrent_runs of our own batches (plus anything else in
+# the account) contending for the 5-active / 3-TPS account quotas, a start can
+# fail transiently — retry those instead of failing a run that already paid for
+# its invoke/wait phases.
+_RETRYABLE_START_CODES = {
+    "ThrottlingException",
+    "ConflictException",
+    "ServiceQuotaExceededException",
+    "TooManyRequestsException",
+}
+_START_RETRY_DELAYS_S = (20.0, 40.0, 80.0)
+
+
+def _start_with_retry(start: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    for delay in _START_RETRY_DELAYS_S:
+        try:
+            return start()
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") not in _RETRYABLE_START_CODES:
+                raise
+            _sleep(delay)
+    return start()
 
 
 def _harness_telemetry(agent: Agent, logs_client: Any = None) -> tuple[str, str]:
@@ -134,7 +161,7 @@ def execute_run(
     actor_model_id: str | None = None,
     runtime_user_id: str | None = None,
 ) -> None:
-    """Drive one evaluation run to completion (runs inside the account lock).
+    """Drive one evaluation run to completion (runs on a run-queue worker).
 
     Scope is one of: dataset ``items`` (invoke fresh sessions), explicit
     ``existing_session_ids``, or a passive ``time_range`` window over the
@@ -192,25 +219,29 @@ def execute_run(
 
         _update(run_id, status="evaluating", session_ids=session_ids)
         if mode == "insights":
-            response = ac.start_insights_evaluation(
-                data,
-                name=f"run_{run_id[:8]}",
-                service_name=service_name,
-                log_groups=["aws/spans", log_group],
-                session_ids=session_ids or None,
-                time_range=time_range,
-                insights=insights,
+            response = _start_with_retry(
+                lambda: ac.start_insights_evaluation(
+                    data,
+                    name=f"run_{run_id[:8]}",
+                    service_name=service_name,
+                    log_groups=["aws/spans", log_group],
+                    session_ids=session_ids or None,
+                    time_range=time_range,
+                    insights=insights,
+                )
             )
         else:
-            response = ac.start_batch_evaluation(
-                data,
-                name=f"run_{run_id[:8]}",
-                service_name=service_name,
-                log_groups=["aws/spans", log_group],
-                session_ids=session_ids or None,
-                time_range=time_range,
-                evaluators=evaluators,
-                session_metadata=session_metadata,
+            response = _start_with_retry(
+                lambda: ac.start_batch_evaluation(
+                    data,
+                    name=f"run_{run_id[:8]}",
+                    service_name=service_name,
+                    log_groups=["aws/spans", log_group],
+                    session_ids=session_ids or None,
+                    time_range=time_range,
+                    evaluators=evaluators,
+                    session_metadata=session_metadata,
+                )
             )
         batch_id = response["batchEvaluationId"]
         _update(run_id, batch_eval_id=batch_id)
@@ -270,7 +301,7 @@ def resume_interrupted_runs() -> list[str]:
         resumed: list[str] = []
         for run in rows:
             if run.status == "evaluating" and run.batch_eval_id:
-                account_lock.submit(
+                run_queue.submit(
                     run.id,
                     lambda rid=run.id, m=run.mode, b=run.batch_eval_id: reconcile_run(
                         rid, mode=m, batch_id=b
@@ -332,7 +363,7 @@ def submit_run(
     finally:
         db.close()
 
-    position = account_lock.submit(
+    position = run_queue.submit(
         run_id,
         lambda: execute_run(
             run_id,

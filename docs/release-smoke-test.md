@@ -157,7 +157,7 @@ These are invisible from the code and each one can waste a whole run.
 
 | Check | Why | How |
 |---|---|---|
-| No evaluation batch in flight | **One batch per AWS account** — the dev box in us-west-2 shares the quota, so an eval step queues behind it | ask, or check the Evaluation page on both consoles |
+| Evaluation batch capacity free | **5 active batch evaluations per AWS account** (Launchpad runs up to 3 concurrently) — the dev box in us-west-2 shares the quota, so a busy account can still queue an eval step | ask, or check the Evaluation page on both consoles |
 | No experiment row in `status=running` | `POST /api/experiments` returns 409 `experiment.already_running` | `experiments` line of the inventory above |
 | No active A/B test on the shared experiment gateway | AgentCore allows **one active A/B test per gateway**, and configuration A/B shares `launchpad-exp-gw` | preflight of the `gateway`/`abtest` stages returns `experiment.gateway_busy` |
 | `hr-assistant` exists and is `active` | `e2e_chat_memory.py`, `e2e_observability.py`, `e2e_traces.py` all chat with this persistent agent | `agents` line of the inventory |

@@ -147,6 +147,7 @@ export function Evaluation() {
   const [insightsRuns, setInsightsRuns] = useState<RunInfo[]>([]);
   const [selectedRun, setSelectedRun] = useState<RunInfo | null>(null);
   const [queueLocked, setQueueLocked] = useState(false);
+  const [queueMax, setQueueMax] = useState(3);
   const [agentId, setAgentId] = useState("");
   const [datasetId, setDatasetId] = useState("");
   const [actorModelId, setActorModelId] = useState(ACTOR_MODELS[0]);
@@ -190,7 +191,11 @@ export function Evaluation() {
       if (insightsRes.ok) {
         setInsightsRuns(((await insightsRes.json()) as { runs: RunInfo[] }).runs);
       }
-      if (queueRes.ok) setQueueLocked(((await queueRes.json()) as { locked: boolean }).locked);
+      if (queueRes.ok) {
+        const queue = (await queueRes.json()) as { locked: boolean; max_concurrency: number };
+        setQueueLocked(queue.locked);
+        setQueueMax(queue.max_concurrency);
+      }
     } catch {
       /* backend offline */
     }
@@ -776,7 +781,7 @@ export function Evaluation() {
         end={
           <>
             {queueLocked ? (
-              <Chip tone="warn" icon="◐">{t("evalPage.acctLock")}</Chip>
+              <Chip tone="warn" icon="◐">{t("evalPage.acctLock", { max: queueMax })}</Chip>
             ) : (
               <Chip tone="good" icon="●">{t("evalPage.queueIdle")}</Chip>
             )}

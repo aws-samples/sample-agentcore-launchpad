@@ -287,3 +287,44 @@ def test_existing_sessions_skip_fresh_telemetry_wait(client, monkeypatch):
     assert run["status"] == "completed", run.get("error")
     telemetry_wait.assert_not_called()
     db.close()
+
+
+def test_start_with_retry_retries_transient_codes(monkeypatch):
+    """Quota/throttle errors on StartBatchEvaluation retry instead of failing."""
+    from botocore.exceptions import ClientError
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(svc, "_sleep", sleeps.append)
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise ClientError(
+                {"Error": {"Code": "ThrottlingException"}}, "StartBatchEvaluation"
+            )
+        return {"batchEvaluationId": "b-1"}
+
+    assert svc._start_with_retry(flaky)["batchEvaluationId"] == "b-1"
+    assert calls["n"] == 3
+    assert sleeps == list(svc._START_RETRY_DELAYS_S[:2])
+
+
+def test_start_with_retry_raises_non_transient(monkeypatch):
+    from botocore.exceptions import ClientError
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(svc, "_sleep", sleeps.append)
+
+    def broken():
+        raise ClientError(
+            {"Error": {"Code": "ValidationException"}}, "StartBatchEvaluation"
+        )
+
+    try:
+        svc._start_with_retry(broken)
+    except ClientError as exc:
+        assert exc.response["Error"]["Code"] == "ValidationException"
+    else:
+        raise AssertionError("expected ClientError")
+    assert sleeps == []  # no pointless backoff on a permanent error

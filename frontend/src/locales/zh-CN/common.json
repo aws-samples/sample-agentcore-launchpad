@@ -1092,8 +1092,8 @@
     "historyTurns": "{{count}} 轮"
   },
   "evalPage": {
-    "metaLive": "批量 + 洞察 · LLM 评审 · 每账户 1 个批任务 — 队列托管",
-    "acctLock": "批任务运行中 · 账户锁",
+    "metaLive": "批量 + 洞察 · LLM 评审 · 并发限额 — 队列托管",
+    "acctLock": "并发已满 · {{max}} 个运行中",
     "queueIdle": "队列空闲",
     "nav": {
       "label": "评估模块导航",
@@ -1119,7 +1119,7 @@
     "status": {
       "completed": "已完成",
       "failed": "失败",
-      "queued": "排队中 · 账户锁"
+      "queued": "排队中 · 等待空闲名额"
     },
     "newRun": {
       "title": "新建运行",
@@ -1136,7 +1136,7 @@
       "submitted": "运行已提交——进度会实时出现在列表中。",
       "how": {
         "title": "运行是如何执行的",
-        "sub": "每账户同时一个批次 · 队列管理",
+        "sub": "每账户并发限额 · 队列管理",
         "s1": "INVOKING——数据集每条对应一个 runtime 会话",
         "s2": "WAITING——追踪落入 CloudWatch（aws/spans）",
         "s3": "EVALUATING——StartBatchEvaluation 精确圈定这些会话",
@@ -1185,7 +1185,7 @@
       "pendingDup": "相同会话的洞察运行已在排队或进行中",
       "confirmRun": {
         "title": "对这些会话运行洞察",
-        "body": "将基于 {{run}} 的 {{count}} 个会话新建一个洞察运行。账户同一时间只处理一个批次,重复提交只会在其后排队。",
+        "body": "将基于 {{run}} 的 {{count}} 个会话新建一个洞察运行。账户的批次并发有限额,重复提交只会在运行中的任务后排队。",
         "bodyRepeat": "这些会话已经有完成的洞察结果——继续将把同样的分析重复再运行一次：基于 {{run}} 的 {{count}} 个会话新建一条洞察运行记录，重新调用评估服务并产生额外用量。",
         "confirm": "运行洞察"
       }
