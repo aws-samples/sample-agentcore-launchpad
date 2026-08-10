@@ -84,7 +84,18 @@ export function LaunchSequence({
         <Panel title={t("create.sequence.logTitle")} pad={false}>
           <div
             className="code"
-            style={{ border: 0, maxHeight: 320, overflowY: "auto", margin: 0 }}
+            style={{
+              border: 0,
+              maxHeight: 320,
+              overflowY: "auto",
+              margin: 0,
+              // Log lines carry ARNs/ids far wider than the panel — wrap them
+              // instead of relying on .code's pre + horizontal scroll, which
+              // reads as truncation with overlay scrollbars.
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+              overflowX: "hidden",
+            }}
             data-testid="job-log"
           >
             {(job?.events ?? []).map((e, i) => (
