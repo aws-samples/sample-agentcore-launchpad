@@ -25,6 +25,11 @@ POLICY_IAM_ACTIONS = (
     "bedrock-agentcore:PartiallyAuthorizeActions",
 )
 
+DANGLING_ENGINE_REASON = (
+    "The referenced Policy Engine no longer exists. "
+    "Create and attach a new Engine to replace the stale reference."
+)
+
 _GATEWAY_CACHE_TTL_S = 30.0
 _gateway_cache: dict[str, Any] = {"key": None, "at": 0.0, "data": None}
 
@@ -113,18 +118,47 @@ def _engine_impact(
     return impact
 
 
+def _dangling_engine_view(
+    *,
+    arn: str,
+    engine_id: str,
+    mode: str | None,
+) -> dict[str, Any]:
+    """View for an attachment whose Engine was deleted out-of-band.
+
+    The Gateway keeps the reference, so the stale ARN stays visible instead of
+    reading as "not attached" — the operator has to know what to replace.
+    """
+    return {
+        "id": engine_id,
+        "arn": arn,
+        "name": None,
+        "status": "DELETED",
+        "status_reasons": [DANGLING_ENGINE_REASON],
+        "updated_at": None,
+        "mode": mode,
+        "missing": True,
+    }
+
+
 def _engine_view(
     control: Any,
     attachment: dict[str, Any],
-    cache: dict[str, dict[str, Any]],
+    cache: dict[str, dict[str, Any] | None],
 ) -> dict[str, Any] | None:
     arn = attachment.get("arn")
     engine_id = engine_id_from_arn(arn)
     if not arn or not engine_id:
         return None
     if engine_id not in cache:
-        cache[engine_id] = policy_api.get_policy_engine(control, engine_id)
+        cache[engine_id] = policy_api.find_policy_engine(control, engine_id)
     detail = cache[engine_id]
+    if detail is None:
+        return _dangling_engine_view(
+            arn=arn,
+            engine_id=engine_id,
+            mode=attachment.get("mode"),
+        )
     return {
         "id": engine_id,
         "arn": arn,
@@ -133,6 +167,7 @@ def _engine_view(
         "status_reasons": detail.get("statusReasons") or [],
         "updated_at": iso(detail.get("updatedAt")),
         "mode": attachment.get("mode"),
+        "missing": False,
     }
 
 
@@ -142,7 +177,7 @@ def _gateway_summary(
     *,
     settings: Settings,
     impact: dict[str, list[dict[str, str]]],
-    engine_cache: dict[str, dict[str, Any]],
+    engine_cache: dict[str, dict[str, Any] | None],
 ) -> dict[str, Any]:
     tags = policy_api.list_tags(control, gateway["gatewayArn"])
     targets = policy_api.list_gateway_targets(control, gateway["gatewayId"])
@@ -205,7 +240,7 @@ def list_gateway_views(
 
     details = _all_mcp_gateway_details(control)
     impact = _engine_impact(details)
-    engine_cache: dict[str, dict[str, Any]] = {}
+    engine_cache: dict[str, dict[str, Any] | None] = {}
     registry_id = current.resources.get("registry_id")
     registry_states = (
         registry_console.gateway_registry_states(
@@ -493,7 +528,7 @@ def gateway_detail(
     gateway = _require_gateway(control, gateway_id)
     all_gateways = _all_mcp_gateway_details(control)
     impact = _engine_impact(all_gateways)
-    engine_cache: dict[str, dict[str, Any]] = {}
+    engine_cache: dict[str, dict[str, Any] | None] = {}
     summary = _gateway_summary(
         control,
         gateway,
@@ -755,7 +790,14 @@ def _attached_engine(
             "Attach a Policy Engine before managing policies",
             status_code=409,
         )
-    engine = policy_api.get_policy_engine(control, engine_id)
+    engine = policy_api.find_policy_engine(control, engine_id)
+    if engine is None:
+        raise AppError(
+            "governance.policy_engine_deleted",
+            DANGLING_ENGINE_REASON,
+            {"engine_id": engine_id, "engine_arn": attachment.get("arn")},
+            status_code=409,
+        )
     if engine.get("status") != "ACTIVE":
         raise AppError(
             "governance.policy_not_settled",
@@ -895,7 +937,18 @@ def policies_view(
             "engine": None,
             "policies": [],
         }
-    engine = policy_api.get_policy_engine(control, engine_id)
+    engine = policy_api.find_policy_engine(control, engine_id)
+    if engine is None:
+        # The Engine behind the reference is gone, so there is nothing to list.
+        return {
+            "gateway": _gateway_policy_snapshot(gateway),
+            "engine": _dangling_engine_view(
+                arn=attachment["arn"],
+                engine_id=engine_id,
+                mode=attachment.get("mode"),
+            ),
+            "policies": [],
+        }
     relations: dict[str, dict[str, str]] = {}
     if db is not None:
         rows = (
@@ -927,6 +980,7 @@ def policies_view(
         "engine": {
             **_engine_snapshot(engine),
             "mode": attachment.get("mode"),
+            "missing": False,
         },
         "policies": policies,
     }
@@ -947,15 +1001,24 @@ def queue_engine_attach(
     )
     attachment = gateway.get("policyEngineConfiguration") or {}
     engine = None
+    dangling = None
     if attachment.get("arn"):
-        engine = policy_api.get_policy_engine(
-            control,
-            engine_id_from_arn(attachment["arn"]),
-        )
+        engine_id = engine_id_from_arn(attachment["arn"])
+        engine = policy_api.find_policy_engine(control, engine_id) if engine_id else None
+        if engine is None and engine_id:
+            # A reference to a deleted Engine is not an attachment: the operation
+            # creates a new Engine and replaces the stale ARN.
+            dangling = _dangling_engine_view(
+                arn=attachment["arn"],
+                engine_id=engine_id,
+                mode=attachment.get("mode"),
+            )
     requested = request.model_dump(mode="json")
     requested["engine_name"] = request.name or _resource_name(
         f"{gateway['name']}_policy"
     )
+    if dangling:
+        requested["replaced_engine_arn"] = dangling["arn"]
     change = _new_change(
         db,
         gateway=gateway,
@@ -963,7 +1026,7 @@ def queue_engine_attach(
         operation="engine_attach",
         before={
             "gateway": _gateway_policy_snapshot(gateway),
-            "engine": _engine_snapshot(engine) if engine else None,
+            "engine": _engine_snapshot(engine) if engine else dangling,
         },
         requested=requested,
         override_reason=request.override_reason,
@@ -1337,15 +1400,21 @@ def _execute_engine_attach(
     gateway: dict[str, Any],
 ) -> dict[str, Any]:
     attachment = gateway.get("policyEngineConfiguration") or {}
-    if attachment.get("arn"):
-        engine_id = engine_id_from_arn(attachment["arn"])
-        engine = policy_api.get_policy_engine(control, engine_id)
-        return {
-            "adopted": True,
-            "gateway": _gateway_policy_snapshot(gateway),
-            "engine": _engine_snapshot(engine),
-            "mode": attachment.get("mode"),
-        }
+    engine_id = engine_id_from_arn(attachment.get("arn"))
+    replaced_arn = None
+    if engine_id:
+        engine = policy_api.find_policy_engine(control, engine_id)
+        if engine is not None:
+            return {
+                "adopted": True,
+                "gateway": _gateway_policy_snapshot(gateway),
+                "engine": _engine_snapshot(engine),
+                "mode": attachment.get("mode"),
+            }
+        # Deleted out-of-band: fall through and replace the stale reference. The
+        # create call carries the operation id as clientToken, so a resumed job
+        # reuses the Engine it already created instead of orphaning one.
+        replaced_arn = attachment.get("arn")
     engine = policy_api.create_policy_engine(
         control,
         name=change.requested["engine_name"],
@@ -1381,6 +1450,7 @@ def _execute_engine_attach(
         "gateway": _gateway_policy_snapshot(settled),
         "engine": _engine_snapshot(engine),
         "mode": change.requested.get("mode") or "LOG_ONLY",
+        "replaced_engine_arn": replaced_arn,
         "iam_preflight": preflight,
     }
 

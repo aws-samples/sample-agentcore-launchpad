@@ -770,3 +770,93 @@ def test_policy_delete_guard_execution_and_idempotent_resume():
         assert resumed.after["policy"]["id"] == second_id
     finally:
         db.close()
+
+
+def _dangle(control):
+    """Point the Gateway at an Engine that no longer exists."""
+    control.gateway["policyEngineConfiguration"] = {
+        "arn": "arn:aws:bedrock-agentcore:us-west-2:123:policy-engine/pe-gone",
+        "mode": "ENFORCE",
+    }
+    control.gateway["updatedAt"] = control._tick()
+    return control.gateway["policyEngineConfiguration"]["arn"]
+
+
+def test_dangling_engine_reference_is_visible_and_blocks_policy_mutations():
+    control = FakeControl()
+    stale_arn = _dangle(control)
+    db = SessionLocal()
+    try:
+        view = governance.policies_view(control, "gw-1", db=db)
+        assert view["engine"]["missing"] is True
+        assert view["engine"]["arn"] == stale_arn
+        assert view["engine"]["status"] == "DELETED"
+        assert view["policies"] == []
+
+        with pytest.raises(AppError) as raised:
+            governance.queue_policy_create(
+                db,
+                control,
+                "gw-1",
+                PolicyCreateRequest(
+                    expected_gateway_updated_at=control.gateway["updatedAt"],
+                    name="blocked_policy",
+                    statement="permit(principal, action, resource);",
+                ),
+            )
+        assert raised.value.code == "governance.policy_engine_deleted"
+        assert raised.value.status_code == 409
+    finally:
+        db.close()
+
+
+def test_create_and_attach_replaces_a_dangling_engine_reference():
+    control = FakeControl()
+    iam = FakeIam()
+    stale_arn = _dangle(control)
+    db = SessionLocal()
+    try:
+        attach = governance.queue_engine_attach(
+            db,
+            control,
+            "gw-1",
+            EngineRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                authorization_model="allowlist",
+            ),
+        )
+        # The stale reference is preserved in the immutable audit snapshot.
+        change = _refresh(db, attach["id"])
+        assert change.requested["replaced_engine_arn"] == stale_arn
+        assert change.before["engine"]["arn"] == stale_arn
+        assert change.before["engine"]["missing"] is True
+
+        governance.run_policy_change(attach["id"], control=control, iam=iam)
+
+        change = _refresh(db, attach["id"])
+        assert change.status == "succeeded"
+        assert change.after["adopted"] is False
+        assert change.after["replaced_engine_arn"] == stale_arn
+        live = control.gateway["policyEngineConfiguration"]
+        assert live["arn"] != stale_arn
+        assert live["arn"] == change.after["engine"]["arn"]
+        assert live["arn"] in {e["policyEngineArn"] for e in control.engines.values()}
+        assert live["mode"] == "ENFORCE"
+
+        # A live attachment is still adopted, never recreated.
+        adopt = governance.queue_engine_attach(
+            db,
+            control,
+            "gw-1",
+            EngineRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                authorization_model="allowlist",
+            ),
+        )
+        governance.run_policy_change(adopt["id"], control=control, iam=iam)
+        adopted = _refresh(db, adopt["id"])
+        assert adopted.status == "succeeded"
+        assert adopted.after["adopted"] is True
+        assert control.gateway["policyEngineConfiguration"]["arn"] == live["arn"]
+    finally:
+        db.close()

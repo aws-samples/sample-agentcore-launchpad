@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from botocore.exceptions import ClientError
@@ -6,6 +7,10 @@ from botocore.exceptions import ClientError
 from app.core.config import Settings
 from app.services import governance
 from app.services.agentcore import policy
+
+
+class _NotFound(Exception):
+    """Stands in for the preview SDK's ResourceNotFoundException."""
 
 
 def _gateway(
@@ -290,3 +295,47 @@ def test_action_discovery_uses_exact_control_plane_names():
         "hr___get_employee",
     ]
     assert all(action["verified"] for action in actions)
+
+
+def test_dangling_engine_reference_degrades_views_instead_of_raising():
+    """A Gateway keeps its reference after the Engine is deleted out-of-band.
+
+    Before this was handled, one dangling reference made the whole Gateway list
+    answer 500 for every Gateway.
+    """
+    engine_arn = "arn:aws:bedrock-agentcore:us-west-2:123:policy-engine/pe-gone"
+    control = _control([_gateway("gw-1", "alpha", engine_arn=engine_arn)])
+    control.exceptions = SimpleNamespace(ResourceNotFoundException=_NotFound)
+    control.get_policy_engine.side_effect = _NotFound("deleted")
+    iam = MagicMock()
+    iam.simulate_principal_policy.return_value = {
+        "EvaluationResults": [
+            {"EvalActionName": action, "EvalDecision": "allowed"}
+            for action in governance.POLICY_IAM_ACTIONS
+        ]
+    }
+
+    governance.invalidate_gateway_cache()
+    [view] = governance.list_gateway_views(
+        control,
+        settings=Settings(resources={"registry_id": ""}),
+        refresh=True,
+    )
+    assert view["policy_engine"] == {
+        "id": "pe-gone",
+        "arn": engine_arn,
+        "name": None,
+        "status": "DELETED",
+        "status_reasons": [governance.DANGLING_ENGINE_REASON],
+        "updated_at": None,
+        "mode": "LOG_ONLY",
+        "missing": True,
+    }
+
+    detail = governance.gateway_detail(
+        control,
+        iam,
+        "gw-1",
+        settings=Settings(resources={"registry_id": ""}),
+    )
+    assert detail["policy_engine"]["missing"] is True

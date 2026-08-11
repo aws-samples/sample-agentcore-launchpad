@@ -91,6 +91,12 @@ entry below was observed during implementation — none is speculative.
   `bedrock-agentcore:GetPolicyEngine`, `AuthorizeAction`, and
   `PartiallyAuthorizeActions` scoped to the Engine/Gateway resources. Launchpad
   returns a remediation statement but never edits the external role.
+- **A deleted Engine leaves the Gateway reference behind.** AWS keeps
+  `policyEngineConfiguration.arn` after the Policy Engine itself is deleted.
+  Governance shows that as `ENGINE DELETED` with the stale ARN rather than
+  "not attached", refuses policy mutations with
+  `governance.policy_engine_deleted`, and offers the create-and-attach form —
+  confirming it creates a new Engine and overwrites the stale reference.
 - **Policy decision telemetry may report unavailable.** The production parser
   stays disabled until real ALLOW and DENY Policy spans establish the preview
   field shape. The UI does not substitute local demo decisions. Promotion with

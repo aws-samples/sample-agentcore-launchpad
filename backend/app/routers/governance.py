@@ -27,6 +27,7 @@ from app.schemas.governance import (
 from app.services import governance as governance_service
 from app.services import governance_evidence, mcp_client
 from app.services import traces as trace_service
+from app.services.agentcore import policy as policy_api
 from app.services.agentcore.client import control_client, iam_client
 from app.services.observability import cw_client, logs_client
 
@@ -335,7 +336,14 @@ def get_policies() -> dict[str, Any]:
         raise AppError("policy.not_bootstrapped", "policy engine missing — run bootstrap",
                        status_code=503)
     control = control_client()
-    engine = control.get_policy_engine(policyEngineId=engine_id)
+    engine = policy_api.find_policy_engine(control, engine_id)
+    if engine is None:
+        raise AppError(
+            "policy.engine_deleted",
+            governance_service.DANGLING_ENGINE_REASON,
+            {"engine_id": engine_id},
+            status_code=503,
+        )
     gateway = control.get_gateway(
         gatewayIdentifier=settings.resources.get("gateway_id")
     )

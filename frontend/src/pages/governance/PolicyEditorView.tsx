@@ -189,6 +189,7 @@ export function PolicyEditorView({ gatewayId, policyId, onNavigate }: Props) {
     gateway.managed &&
     isGatewayReady(gateway) &&
     !!gateway.policy_engine &&
+    !gateway.policy_engine.missing &&
     sharedReady;
   // Unmet preconditions, in the order an operator would fix them. A disabled
   // primary button swallows the click and reads as "nothing happened"
@@ -196,7 +197,11 @@ export function PolicyEditorView({ gatewayId, policyId, onNavigate }: Props) {
   const gatewayBlockers: string[] = [];
   if (gateway && !gateway.managed) gatewayBlockers.push("notManaged");
   else if (gateway && !isGatewayReady(gateway)) gatewayBlockers.push("gatewayNotReady");
-  if (gateway && !gateway.policy_engine) gatewayBlockers.push("noEngine");
+  // A dangling reference cannot back a policy either — recovery is on the
+  // Gateway detail page, so it reads as "no Engine attached" here.
+  if (gateway && (!gateway.policy_engine || gateway.policy_engine.missing)) {
+    gatewayBlockers.push("noEngine");
+  }
   if (!sharedReady) gatewayBlockers.push("sharedAck");
 
   const saveBlockers = [...gatewayBlockers];

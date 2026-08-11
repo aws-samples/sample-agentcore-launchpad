@@ -271,14 +271,28 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
   }
 
   const registryApproved = registry?.exact_record?.status === "APPROVED";
-  const confirmBody = t(`governance.confirm.${confirmAction ?? "manage"}`, {
-    name: gateway.name,
-    engine: gateway.policy_engine?.name ?? t("governance.states.newEngine"),
-    count: selectedLegacy.length,
-    gateways: gateway.shared_gateways.map((item) => item.name).join(", "),
-    policy: policyToDelete?.name ?? "",
-    mode: initialEngineMode,
-  });
+  // A Gateway keeps its Engine reference after the Engine is deleted out-of-band.
+  // That is neither an attachment nor a clean slate, so it gets its own state:
+  // the create form is offered, and it replaces the stale reference.
+  const liveEngine =
+    gateway.policy_engine && !gateway.policy_engine.missing
+      ? gateway.policy_engine
+      : null;
+  const danglingEngine = gateway.policy_engine?.missing
+    ? gateway.policy_engine
+    : null;
+  const confirmBody =
+    t(`governance.confirm.${confirmAction ?? "manage"}`, {
+      name: gateway.name,
+      engine: liveEngine?.name ?? t("governance.states.newEngine"),
+      count: selectedLegacy.length,
+      gateways: gateway.shared_gateways.map((item) => item.name).join(", "),
+      policy: policyToDelete?.name ?? "",
+      mode: initialEngineMode,
+    }) +
+    (confirmAction === "engine" && danglingEngine
+      ? ` ${t("governance.confirm.engineReplaces", { arn: danglingEngine.arn })}`
+      : "");
 
   return (
     <>
@@ -459,28 +473,28 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
         <Panel
           title={t("governance.detail.engine")}
           end={
-            gateway.policy_engine ? (
-              <Chip tone={statusTone(gateway.policy_engine.mode)}>
-                {gateway.policy_engine.mode ?? "-"}
-              </Chip>
+            liveEngine ? (
+              <Chip tone={statusTone(liveEngine.mode)}>{liveEngine.mode ?? "-"}</Chip>
+            ) : danglingEngine ? (
+              <Chip tone="crit">{t("governance.states.engineDeleted")}</Chip>
             ) : (
               <Chip tone="muted">{t("governance.states.notAttached")}</Chip>
             )
           }
         >
-          {gateway.policy_engine ? (
+          {liveEngine ? (
             <div className="gov-kv-list">
               <div className="kv">
                 <span className="k">{t("governance.detail.engineName")}</span>
-                <span className="v">{gateway.policy_engine.name}</span>
+                <span className="v">{liveEngine.name}</span>
               </div>
               <div className="kv">
                 <span className="k">{t("governance.detail.engineStatus")}</span>
-                <span className="v">{gateway.policy_engine.status}</span>
+                <span className="v">{liveEngine.status}</span>
               </div>
               <div className="kv">
                 <span className="k">{t("governance.detail.gatewayMode")}</span>
-                <span className="v">{gateway.policy_engine.mode ?? "-"}</span>
+                <span className="v">{liveEngine.mode ?? "-"}</span>
               </div>
               <div className="kv">
                 <span className="k">{t("governance.detail.policyCount")}</span>
@@ -489,6 +503,15 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
             </div>
           ) : (
             <div className="gov-form-stack">
+              {danglingEngine ? (
+                <div className="gov-alert gov-alert-error">
+                  <ShieldAlert size={15} aria-hidden="true" />
+                  <span>
+                    {t("governance.detail.danglingEngine")}
+                    <span className="mono gov-cell-note">{danglingEngine.arn}</span>
+                  </span>
+                </div>
+              ) : null}
               <div className="field">
                 <label>{t("governance.detail.initialGatewayMode")}</label>
                 <div
@@ -584,23 +607,21 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
             </div>
           ) : null}
 
-          {gateway.policy_engine ? (
+          {liveEngine ? (
             <div className="gov-rollout">
               <div className="gov-mode-control">
                 <button
                   type="button"
-                  className={`selchip${gateway.policy_engine.mode === "LOG_ONLY" ? " on" : ""}`}
-                  disabled={
-                    !commonMutationReady || gateway.policy_engine.mode === "LOG_ONLY"
-                  }
+                  className={`selchip${liveEngine.mode === "LOG_ONLY" ? " on" : ""}`}
+                  disabled={!commonMutationReady || liveEngine.mode === "LOG_ONLY"}
                   onClick={() => setConfirmAction("logOnly")}
                 >
                   LOG_ONLY
                 </button>
                 <button
                   type="button"
-                  className={`selchip${gateway.policy_engine.mode === "ENFORCE" ? " on" : ""}`}
-                  disabled={!enforceReady || gateway.policy_engine.mode === "ENFORCE"}
+                  className={`selchip${liveEngine.mode === "ENFORCE" ? " on" : ""}`}
+                  disabled={!enforceReady || liveEngine.mode === "ENFORCE"}
                   onClick={() => setConfirmAction("enforce")}
                 >
                   ENFORCE
@@ -697,7 +718,7 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
         end={
           <Btn
             primary
-            disabled={!commonMutationReady || !gateway.policy_engine || !sharedReady}
+            disabled={!commonMutationReady || !liveEngine || !sharedReady}
             onClick={() => onNavigate("policy", gateway.id)}
           >
             <Plus size={14} aria-hidden="true" />

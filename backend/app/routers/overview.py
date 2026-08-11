@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.evaluation.models import EvalRun
 from app.models.ledger import ChatSession
+from app.services.agentcore import policy as policy_api
 from app.services.agentcore.client import control_client
 from app.services.registry_console import console_list
 
@@ -77,11 +78,15 @@ def _attached_policy_engine_id() -> str:
     ):
         return str(_cache["policy"])
     try:
-        gateway = control_client().get_gateway(gatewayIdentifier=gateway_id)
+        control = control_client()
+        gateway = control.get_gateway(gatewayIdentifier=gateway_id)
         engine_arn = str(
             (gateway.get("policyEngineConfiguration") or {}).get("arn") or ""
         )
         engine_id = engine_arn.rsplit("/", 1)[-1] if engine_arn else ""
+        if engine_id and policy_api.find_policy_engine(control, engine_id) is None:
+            # The reference outlived the Engine; Policy is not usable.
+            engine_id = ""
     except Exception:
         # Keep the last confirmed state warm. A cold failure remains unconfigured
         # rather than reviving a stale identifier from generated config.

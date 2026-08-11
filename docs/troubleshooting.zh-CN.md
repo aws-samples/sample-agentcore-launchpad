@@ -66,3 +66,7 @@ English: [troubleshooting.md](troubleshooting.md)
 - **Cedar 的 deny 会带上作出判定的 policy id。** 当网关在 `ENFORCE` 模式下拦截
   一次工具调用时,决策(以及决策日志)会指明产生 DENY 的策略——用它追溯是哪条
   语句触发的。
+- **引擎被删除后,网关上的引用还在。** 策略引擎本身被删除后,AWS 仍保留
+  `policyEngineConfiguration.arn`。治理页面会把它显示为 `引擎已删除` 并保留失效
+  ARN(而不是显示"未挂载"),策略类变更返回 `governance.policy_engine_deleted`,
+  同时提供创建并挂载表单——确认时会新建引擎并覆盖该失效引用。

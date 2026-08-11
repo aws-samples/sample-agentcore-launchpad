@@ -380,11 +380,14 @@ export type GovernanceOperationStatus =
 export interface GovernancePolicyEngine {
   id: string;
   arn: string;
-  name: string;
+  /** Null when the Gateway references an Engine that no longer exists. */
+  name: string | null;
   status: string;
   status_reasons: string[];
   updated_at: string | null;
   mode: GovernanceGatewayMode | null;
+  /** The referenced Engine was deleted out-of-band; the stale ARN remains. */
+  missing: boolean;
 }
 
 export interface GovernanceRegistryRecord {

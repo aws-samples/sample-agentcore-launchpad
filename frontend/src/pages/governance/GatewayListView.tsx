@@ -116,7 +116,12 @@ export function GatewayListView({ onOpen }: Props) {
                 </div>
               </td>
               <td>
-                {gateway.policy_engine ? (
+                {gateway.policy_engine?.missing ? (
+                  <>
+                    <div className="mono">{gateway.policy_engine.id}</div>
+                    <Chip tone="crit">{t("governance.states.engineDeleted")}</Chip>
+                  </>
+                ) : gateway.policy_engine ? (
                   <>
                     <div className="mono">{gateway.policy_engine.name}</div>
                     <Chip tone={statusTone(gateway.policy_engine.mode)}>

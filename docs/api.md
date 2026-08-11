@@ -121,8 +121,16 @@ operation:
 
 Common conflict codes are `governance.gateway_not_managed`,
 `governance.concurrent_change`, `governance.shared_engine_changed`,
-`governance.iam_preflight_failed`, `governance.evidence_required`, and
+`governance.iam_preflight_failed`, `governance.evidence_required`,
+`governance.policy_engine_deleted`, and
 `governance.registry_record_not_approved`.
+
+When a Gateway still references a Policy Engine that was deleted out-of-band,
+reads report the reference with `policy_engine.missing = true` and
+`status = "DELETED"` instead of failing, policy mutations answer
+`409 governance.policy_engine_deleted`, and `POST .../engine` treats the
+reference as unattached: it creates a new Engine, attaches it in the selected
+mode, and records the replaced ARN on the operation.
 
 ## Console Memory API
 

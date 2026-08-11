@@ -125,6 +125,19 @@ def get_policy_engine(client: Any, engine_id: str) -> dict[str, Any]:
     return client.get_policy_engine(policyEngineId=engine_id)
 
 
+def find_policy_engine(client: Any, engine_id: str) -> dict[str, Any] | None:
+    """Return the Engine, or None when it no longer exists.
+
+    A Gateway keeps `policyEngineConfiguration.arn` after the Engine behind it is
+    deleted out-of-band, so callers that only reference an Engine must tolerate
+    the absence instead of propagating the SDK error.
+    """
+    try:
+        return get_policy_engine(client, engine_id)
+    except client.exceptions.ResourceNotFoundException:
+        return None
+
+
 def create_policy_engine(
     client: Any,
     *,
