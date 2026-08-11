@@ -214,6 +214,8 @@ export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # 白名单
 | [docs/troubleshooting.zh-CN.md](docs/troubleshooting.zh-CN.md) | 已验证的问题与耗时（[English](docs/troubleshooting.md)） |
 | [docs/teardown.zh-CN.md](docs/teardown.zh-CN.md) | 演示资源与共享基础设施清理（[English](docs/teardown.md)） |
 | [docs/studio-integration.md](docs/studio-integration.md) | Strands Studio（方式C）集成 |
+| [docs/agent-runbook-dev.md](docs/agent-runbook-dev.md) | 面向 Agent 的运维手册：本地 dev 模式启动与验证 |
+| [docs/agent-runbook-prod.md](docs/agent-runbook-prod.md) | 面向 Agent 的运维手册：prod 模式启动（launcher + systemd）、更新流程、沙盒姿态 |
 
 ## 成本说明
 
