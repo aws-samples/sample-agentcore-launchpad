@@ -208,13 +208,10 @@
       "clearSelection": "清除选择",
       "importSelected": "导入所选（{{count}}）",
       "importing": "正在导入",
-      "results": "区域内 RUNTIME",
+      "results": "区域内资源",
       "count": "{{count}} 个资源",
-      "scanning": "正在扫描 AGENTCORE RUNTIME……",
-      "empty": "当前区域未发现 RUNTIME",
-      "harnessResults": "区域内 HARNESS",
-      "harnessScanning": "正在扫描托管 HARNESS……",
-      "harnessEmpty": "当前区域未发现托管 HARNESS",
+      "scanning": "正在扫描 AGENTCORE RUNTIME 与 HARNESS……",
+      "empty": "当前区域未发现 RUNTIME 或 HARNESS",
       "harnessScanFailed": "托管 Harness 扫描失败：",
       "harnessReadyToImport": "可导入",
       "selectRuntime": "选择 {{name}}",
@@ -226,8 +223,8 @@
       "alreadyImported": "已导入",
       "importSummary": "已导入 {{imported}} 个，已刷新 {{updated}} 个，已有 {{managed}} 个，失败 {{failed}} 个。",
       "columns": {
-        "runtime": "RUNTIME",
-        "harness": "HARNESS",
+        "resource": "资源",
+        "type": "类型",
         "protocol": "协议",
         "artifact": "制品",
         "status": "AWS 状态",
@@ -244,7 +241,16 @@
         "harness-not-ready": "Harness 尚未就绪，无法导入或对话。",
         "runtime-not-ready": "Runtime 尚未就绪，无法对话。",
         "unknown": "无法判断该能力。"
-      }
+      },
+      "kindHarness": "HARNESS",
+      "kindRuntime": "RUNTIME",
+      "backingRuntime": "Runtime · {{id}}",
+      "filterKindAll": "全部类型",
+      "filterProtocolAll": "全部协议",
+      "filterArtifactAll": "全部制品",
+      "searchPlaceholder": "搜索名称 / ID / 描述……",
+      "noMatch": "没有匹配当前筛选条件的资源",
+      "reimportHint": "再次导入会刷新已导入的记录。"
     },
     "configure": {
       "title": "配置 — 托管 HARNESS",
@@ -377,7 +383,11 @@
       "convertConfirm": "将导出 {{name}} 的 harness 代码、嫁接实验（config-bundle）契约，并部署为一个新的 runtime agent（约 1–3 分钟）。已挂载知识库会转换为直连的 kb_search 与 kb_deep_search 工具；记忆会保留。原 harness 不受影响。",
       "convertStarted": "转换中 → {{name}}（部署中）",
       "convertedTitle": "转换而来的 AGENT",
-      "convertedFrom": "由 harness {{name}} 转换而来"
+      "convertedFrom": "由 harness {{name}} 转换而来",
+      "filterMethodAll": "全部创建方式",
+      "filterStatusAll": "全部状态",
+      "searchPlaceholder": "搜索 Agent 名称 / ID……",
+      "noMatch": "没有匹配当前筛选条件的 Agent"
     }
   },
   "registry": {

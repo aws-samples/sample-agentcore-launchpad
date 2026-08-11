@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Download, RefreshCw, Search } from "lucide-react";
@@ -9,8 +9,11 @@ import {
   Btn,
   Chip,
   ConfirmDialog,
+  DEFAULT_PAGE_SIZE,
   LaunchSequence,
   MethodChip,
+  methodLabel,
+  Pager,
   Panel,
   useToast,
   ViewHead,
@@ -169,11 +172,51 @@ const canSelectCandidate = (candidate: {
   candidate.importable &&
   (!candidate.managed_agent_id || candidate.managed_agent_method === "discovered_runtime");
 
-// One selection set spans both tables, so keys carry their kind.
+// One selection set spans both kinds, so keys carry their kind.
 const runtimeKey = (runtimeId: string) => `rt:${runtimeId}`;
 const harnessKey = (harnessId: string) => `hn:${harnessId}`;
 const idsOfKind = (keys: Set<string>, prefix: string) =>
   [...keys].filter((key) => key.startsWith(prefix)).map((key) => key.slice(prefix.length));
+
+// One merged table row. A managed Harness materializes a hidden backing Runtime
+// named `harness_<harnessName>` (artifact_type "harness" in the scan) — the two
+// are the same agent, so the pair folds into a single harness-kind row carrying
+// both ids. Runtimes flagged harness-managed but unmatched (harness scan failed)
+// stay visible as plain runtime rows; they are never importable anyway.
+type DiscoveryRow =
+  | {
+      kind: "harness";
+      key: string;
+      harness: HarnessDiscoveryCandidate;
+      backing: RuntimeDiscoveryCandidate | null;
+    }
+  | { kind: "runtime"; key: string; runtime: RuntimeDiscoveryCandidate };
+
+const rowName = (row: DiscoveryRow) =>
+  row.kind === "harness" ? row.harness.name : row.runtime.name;
+
+const mergeDiscoveryRows = (
+  runtimes: RuntimeDiscoveryCandidate[],
+  harnesses: HarnessDiscoveryCandidate[],
+): DiscoveryRow[] => {
+  const backingByName = new Map(
+    runtimes
+      .filter((runtime) => runtime.artifact_type === "harness")
+      .map((runtime) => [runtime.name, runtime]),
+  );
+  const consumed = new Set<string>();
+  const rows: DiscoveryRow[] = harnesses.map((harness) => {
+    const backing = backingByName.get(`harness_${harness.name}`) ?? null;
+    if (backing) consumed.add(backing.runtime_id);
+    return { kind: "harness", key: harnessKey(harness.harness_id), harness, backing };
+  });
+  for (const runtime of runtimes) {
+    if (!consumed.has(runtime.runtime_id)) {
+      rows.push({ kind: "runtime", key: runtimeKey(runtime.runtime_id), runtime });
+    }
+  }
+  return rows.sort((a, b) => rowName(a).localeCompare(rowName(b)));
+};
 
 export function CreateAgent() {
   const [params] = useSearchParams();
@@ -235,15 +278,76 @@ function RuntimeDiscovery() {
     void load();
   }, [load]);
 
-  const selectableRuntimeKeys = runtimes
-    .filter(canSelectCandidate)
-    .map((runtime) => runtimeKey(runtime.runtime_id));
-  const selectableHarnessKeys = harnesses
-    .filter(canSelectCandidate)
-    .map((harness) => harnessKey(harness.harness_id));
-  const selectableKeys = [...selectableRuntimeKeys, ...selectableHarnessKeys];
-  const allOf = (keys: string[]) => keys.length > 0 && keys.every((key) => selected.has(key));
-  const allSelected = allOf(selectableKeys);
+  const [kindFilter, setKindFilter] = useState<"all" | DiscoveryRow["kind"]>("all");
+  const [protocolFilter, setProtocolFilter] = useState("all");
+  const [artifactFilter, setArtifactFilter] = useState("all");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  useEffect(() => {
+    setPage(1); // filters change the result set — restart from page 1
+  }, [kindFilter, protocolFilter, artifactFilter, query]);
+
+  const allRows = useMemo(() => mergeDiscoveryRows(runtimes, harnesses), [runtimes, harnesses]);
+  // Protocol/artifact only exist on runtime rows (harness scans carry neither),
+  // so those filters implicitly narrow to runtimes when set to a concrete value.
+  const protocols = useMemo(
+    () =>
+      [
+        ...new Set(allRows.flatMap((row) => (row.kind === "runtime" ? [row.runtime.protocol] : []))),
+      ].sort(),
+    [allRows],
+  );
+  const artifacts = useMemo(
+    () =>
+      [
+        ...new Set(
+          allRows.flatMap((row) => (row.kind === "runtime" ? [row.runtime.artifact_type] : [])),
+        ),
+      ].sort(),
+    [allRows],
+  );
+  const rows = allRows.filter((row) => {
+    if (kindFilter !== "all" && row.kind !== kindFilter) return false;
+    if (
+      protocolFilter !== "all" &&
+      (row.kind !== "runtime" || row.runtime.protocol !== protocolFilter)
+    ) {
+      return false;
+    }
+    if (
+      artifactFilter !== "all" &&
+      (row.kind !== "runtime" || row.runtime.artifact_type !== artifactFilter)
+    ) {
+      return false;
+    }
+    const q = query.trim().toLowerCase();
+    if (q) {
+      const haystack =
+        row.kind === "harness"
+          ? [
+              row.harness.name,
+              row.harness.harness_id,
+              row.harness.description,
+              row.backing?.runtime_id,
+              row.backing?.description,
+            ]
+          : [row.runtime.name, row.runtime.runtime_id, row.runtime.description];
+      if (!haystack.some((value) => value?.toLowerCase().includes(q))) return false;
+    }
+    return true;
+  });
+  const currentPage = Math.min(page, Math.max(1, Math.ceil(rows.length / pageSize)));
+  const pageRows = rows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+  // Selection follows the current filters: header box and toolbar button span
+  // every eligible FILTERED row (all pages); rows hidden by a filter keep their
+  // selection so narrowing the view never silently drops picks.
+  const selectableKeys = rows
+    .filter((row) => canSelectCandidate(row.kind === "harness" ? row.harness : row.runtime))
+    .map((row) => row.key);
+  const allSelected =
+    selectableKeys.length > 0 && selectableKeys.every((key) => selected.has(key));
 
   const toggle = (key: string) => {
     setSelected((current) => {
@@ -254,21 +358,15 @@ function RuntimeDiscovery() {
     });
   };
 
-  // Each table's header box covers only its own kind; the toolbar button spans both.
-  const toggleKind = (keys: string[]) => {
-    const clear = allOf(keys);
+  const toggleAll = () => {
     setSelected((current) => {
       const next = new Set(current);
-      for (const key of keys) {
-        if (clear) next.delete(key);
+      for (const key of selectableKeys) {
+        if (allSelected) next.delete(key);
         else next.add(key);
       }
       return next;
     });
-  };
-
-  const toggleAll = () => {
-    setSelected(allSelected ? new Set() : new Set(selectableKeys));
   };
 
   const importSelected = async () => {
@@ -367,23 +465,68 @@ function RuntimeDiscovery() {
 
       <Panel
         title={t("create.discovery.results")}
-        sub={t("create.discovery.count", { count: runtimes.length })}
+        sub={t("create.discovery.count", { count: rows.length })}
         pad={false}
         className="discovery-results"
       >
+        <div className="filters">
+          <select
+            className="fsel"
+            value={kindFilter}
+            onChange={(e) => setKindFilter(e.target.value as "all" | DiscoveryRow["kind"])}
+            aria-label={t("create.discovery.columns.type")}
+          >
+            <option value="all">{t("create.discovery.filterKindAll")}</option>
+            <option value="harness">{t("create.discovery.kindHarness")}</option>
+            <option value="runtime">{t("create.discovery.kindRuntime")}</option>
+          </select>
+          <select
+            className="fsel"
+            value={protocolFilter}
+            onChange={(e) => setProtocolFilter(e.target.value)}
+            aria-label={t("create.discovery.columns.protocol")}
+          >
+            <option value="all">{t("create.discovery.filterProtocolAll")}</option>
+            {protocols.map((protocol) => (
+              <option key={protocol} value={protocol}>
+                {protocol}
+              </option>
+            ))}
+          </select>
+          <select
+            className="fsel"
+            value={artifactFilter}
+            onChange={(e) => setArtifactFilter(e.target.value)}
+            aria-label={t("create.discovery.columns.artifact")}
+          >
+            <option value="all">{t("create.discovery.filterArtifactAll")}</option>
+            {artifacts.map((artifact) => (
+              <option key={artifact} value={artifact}>
+                {artifact.toUpperCase()}
+              </option>
+            ))}
+          </select>
+          <input
+            className="fsearch"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t("create.discovery.searchPlaceholder")}
+          />
+        </div>
         <table className="discovery-table">
           <thead>
             <tr>
               <th className="discovery-check">
                 <input
                   type="checkbox"
-                  checked={allOf(selectableRuntimeKeys)}
-                  disabled={!canImport || !selectableRuntimeKeys.length}
-                  onChange={() => toggleKind(selectableRuntimeKeys)}
+                  checked={allSelected}
+                  disabled={!canImport || !selectableKeys.length}
+                  onChange={toggleAll}
                   aria-label={t("create.discovery.selectEligible")}
                 />
               </th>
-              <th>{t("create.discovery.columns.runtime")}</th>
+              <th>{t("create.discovery.columns.resource")}</th>
+              <th>{t("create.discovery.columns.type")}</th>
               <th>{t("create.discovery.columns.protocol")}</th>
               <th>{t("create.discovery.columns.artifact")}</th>
               <th>{t("create.discovery.columns.status")}</th>
@@ -393,190 +536,218 @@ function RuntimeDiscovery() {
             </tr>
           </thead>
           <tbody>
-            {runtimes.map((runtime) => {
-              const selectableRuntime = canSelectCandidate(runtime);
-              const externallyManaged =
-                runtime.managed_agent_method === "discovered_runtime";
-              return (
-                <tr key={runtime.runtime_id}>
-                  <td className="discovery-check">
-                    <input
-                      type="checkbox"
-                      checked={selected.has(runtimeKey(runtime.runtime_id))}
-                      disabled={!canImport || !selectableRuntime || importing}
-                      onChange={() => toggle(runtimeKey(runtime.runtime_id))}
-                      aria-label={t("create.discovery.selectRuntime", { name: runtime.name })}
-                    />
-                  </td>
-                  <td>
-                    <div className="runtime-name" title={runtime.runtime_arn}>
-                      <b>{runtime.name}</b>
-                      <span>{runtime.runtime_id}</span>
-                      {runtime.description && <small>{runtime.description}</small>}
-                    </div>
-                  </td>
-                  <td>
-                    <Chip tone={runtime.protocol === "HTTP" ? "blue" : "aqua"}>
-                      {runtime.protocol}
-                    </Chip>
-                  </td>
-                  <td>
-                    <Chip tone="muted">{runtime.artifact_type.toUpperCase()}</Chip>
-                  </td>
-                  <td>
-                    <Chip tone={DISCOVERY_STATUS_TONE[runtime.aws_status] ?? "muted"}>
-                      {runtime.aws_status}
-                    </Chip>
-                  </td>
-                  <td className="mono">
-                    {runtime.authorizer_type === "custom_jwt"
-                      ? t("create.discovery.customJwt")
-                      : runtime.authorizer_type.toUpperCase()}
-                  </td>
-                  <td className="mono">{runtime.version || "—"}</td>
-                  <td className="runtime-reason">
-                    {externallyManaged ? (
-                      <Chip tone="aqua">{t("create.discovery.alreadyImported")}</Chip>
-                    ) : runtime.managed_agent_id ? (
-                      <button
-                        type="button"
-                        className="rowact"
-                        onClick={() => navigate("/create")}
-                      >
-                        {t("create.discovery.alreadyManaged", {
-                          name: runtime.managed_agent_name ?? runtime.name,
-                        })}
-                      </button>
-                    ) : !runtime.importable ? (
-                      <span>{reasonText(runtime.reason_code, runtime.reason)}</span>
-                    ) : !runtime.invoke_capability.eligible ? (
-                      <span>
-                        {t("create.discovery.inventoryOnly")}:{" "}
-                        {reasonText(
-                          runtime.invoke_capability.reason_code,
-                          runtime.invoke_capability.reason,
-                        )}
-                      </span>
-                    ) : (
-                      <span className="discovery-ready">{t("create.discovery.readyToImport")}</span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-            {!loading && runtimes.length === 0 && (
+            {pageRows.map((row) =>
+              row.kind === "harness" ? (
+                <HarnessRow
+                  key={row.key}
+                  row={row}
+                  selected={selected.has(row.key)}
+                  disabled={!canImport || !canSelectCandidate(row.harness) || importing}
+                  onToggle={() => toggle(row.key)}
+                  reasonText={reasonText}
+                />
+              ) : (
+                <RuntimeRow
+                  key={row.key}
+                  runtime={row.runtime}
+                  selected={selected.has(row.key)}
+                  disabled={!canImport || !canSelectCandidate(row.runtime) || importing}
+                  onToggle={() => toggle(row.key)}
+                  reasonText={reasonText}
+                />
+              ),
+            )}
+            {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={8} className="empty">
-                  {t("create.discovery.empty")}
+                <td colSpan={9} className="empty">
+                  {t(allRows.length ? "create.discovery.noMatch" : "create.discovery.empty")}
                 </td>
               </tr>
             )}
             {loading && (
               <tr>
-                <td colSpan={8} className="loading-line">
+                <td colSpan={9} className="loading-line">
                   {t("create.discovery.scanning")}
                 </td>
               </tr>
             )}
           </tbody>
         </table>
-      </Panel>
-
-      <Panel
-        title={t("create.discovery.harnessResults")}
-        sub={t("create.discovery.count", { count: harnesses.length })}
-        pad={false}
-        className="discovery-results"
-      >
-        <table className="discovery-table">
-          <thead>
-            <tr>
-              <th className="discovery-check">
-                <input
-                  type="checkbox"
-                  checked={allOf(selectableHarnessKeys)}
-                  disabled={!canImport || !selectableHarnessKeys.length}
-                  onChange={() => toggleKind(selectableHarnessKeys)}
-                  aria-label={t("create.discovery.selectEligible")}
-                />
-              </th>
-              <th>{t("create.discovery.columns.harness")}</th>
-              <th>{t("create.discovery.columns.status")}</th>
-              <th>{t("create.discovery.columns.version")}</th>
-              <th>{t("create.discovery.columns.eligibility")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {harnesses.map((harness) => {
-              const selectableHarness = canSelectCandidate(harness);
-              const externallyManaged =
-                harness.managed_agent_method === "discovered_runtime";
-              return (
-                <tr key={harness.harness_id}>
-                  <td className="discovery-check">
-                    <input
-                      type="checkbox"
-                      checked={selected.has(harnessKey(harness.harness_id))}
-                      disabled={!canImport || !selectableHarness || importing}
-                      onChange={() => toggle(harnessKey(harness.harness_id))}
-                      aria-label={t("create.discovery.selectHarness", { name: harness.name })}
-                    />
-                  </td>
-                  <td>
-                    <div className="runtime-name" title={harness.harness_arn}>
-                      <b>{harness.name}</b>
-                      <span>{harness.harness_id}</span>
-                      {harness.description && <small>{harness.description}</small>}
-                    </div>
-                  </td>
-                  <td>
-                    <Chip tone={DISCOVERY_STATUS_TONE[harness.aws_status] ?? "muted"}>
-                      {harness.aws_status}
-                    </Chip>
-                  </td>
-                  <td className="mono">{harness.version || "—"}</td>
-                  <td className="runtime-reason">
-                    {externallyManaged ? (
-                      <Chip tone="aqua">{t("create.discovery.alreadyImported")}</Chip>
-                    ) : harness.managed_agent_id ? (
-                      <button
-                        type="button"
-                        className="rowact"
-                        onClick={() => navigate("/create")}
-                      >
-                        {t("create.discovery.alreadyManaged", {
-                          name: harness.managed_agent_name ?? harness.name,
-                        })}
-                      </button>
-                    ) : !harness.importable ? (
-                      <span>{reasonText(harness.reason_code, harness.reason)}</span>
-                    ) : (
-                      <span className="discovery-ready">
-                        {t("create.discovery.harnessReadyToImport")}
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-            {!loading && harnesses.length === 0 && (
-              <tr>
-                <td colSpan={5} className="empty">
-                  {t("create.discovery.harnessEmpty")}
-                </td>
-              </tr>
-            )}
-            {loading && (
-              <tr>
-                <td colSpan={5} className="loading-line">
-                  {t("create.discovery.harnessScanning")}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+        <Pager
+          total={rows.length}
+          page={currentPage}
+          size={pageSize}
+          onPage={setPage}
+          onSize={(size) => {
+            setPageSize(size);
+            setPage(1);
+          }}
+        />
       </Panel>
     </section>
+  );
+}
+
+// A harness with its backing runtime folded in: one agent, two AWS ids. Status,
+// version and eligibility come from the harness — it is the invokable resource;
+// the backing runtime only contributes its id (and description, which harness
+// summaries never carry).
+function HarnessRow({
+  row,
+  selected,
+  disabled,
+  onToggle,
+  reasonText,
+}: {
+  row: Extract<DiscoveryRow, { kind: "harness" }>;
+  selected: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+  reasonText: (code?: string | null, fallback?: string | null) => string;
+}) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { harness, backing } = row;
+  const externallyManaged = harness.managed_agent_method === "discovered_runtime";
+  const description = harness.description || backing?.description;
+  return (
+    <tr>
+      <td className="discovery-check">
+        <input
+          type="checkbox"
+          checked={selected}
+          disabled={disabled}
+          onChange={onToggle}
+          aria-label={t("create.discovery.selectHarness", { name: harness.name })}
+        />
+      </td>
+      <td>
+        <div className="runtime-name" title={harness.harness_arn}>
+          <b>{harness.name}</b>
+          <span>{harness.harness_id}</span>
+          {backing && (
+            <span title={backing.runtime_arn}>
+              {t("create.discovery.backingRuntime", { id: backing.runtime_id })}
+            </span>
+          )}
+          {description && <small>{description}</small>}
+        </div>
+      </td>
+      <td>
+        <Chip tone="aqua">{t("create.discovery.kindHarness")}</Chip>
+      </td>
+      <td className="mono">—</td>
+      <td className="mono">—</td>
+      <td>
+        <Chip tone={DISCOVERY_STATUS_TONE[harness.aws_status] ?? "muted"}>
+          {harness.aws_status}
+        </Chip>
+      </td>
+      <td className="mono">—</td>
+      <td className="mono">{harness.version || "—"}</td>
+      <td className="runtime-reason">
+        {externallyManaged ? (
+          <>
+            <Chip tone="aqua">{t("create.discovery.alreadyImported")}</Chip>{" "}
+            <span>{t("create.discovery.reimportHint")}</span>
+          </>
+        ) : harness.managed_agent_id ? (
+          <button type="button" className="rowact" onClick={() => navigate("/create")}>
+            {t("create.discovery.alreadyManaged", {
+              name: harness.managed_agent_name ?? harness.name,
+            })}
+          </button>
+        ) : !harness.importable ? (
+          <span>{reasonText(harness.reason_code, harness.reason)}</span>
+        ) : (
+          <span className="discovery-ready">{t("create.discovery.harnessReadyToImport")}</span>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function RuntimeRow({
+  runtime,
+  selected,
+  disabled,
+  onToggle,
+  reasonText,
+}: {
+  runtime: RuntimeDiscoveryCandidate;
+  selected: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+  reasonText: (code?: string | null, fallback?: string | null) => string;
+}) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const externallyManaged = runtime.managed_agent_method === "discovered_runtime";
+  return (
+    <tr>
+      <td className="discovery-check">
+        <input
+          type="checkbox"
+          checked={selected}
+          disabled={disabled}
+          onChange={onToggle}
+          aria-label={t("create.discovery.selectRuntime", { name: runtime.name })}
+        />
+      </td>
+      <td>
+        <div className="runtime-name" title={runtime.runtime_arn}>
+          <b>{runtime.name}</b>
+          <span>{runtime.runtime_id}</span>
+          {runtime.description && <small>{runtime.description}</small>}
+        </div>
+      </td>
+      <td>
+        <Chip tone="blue">{t("create.discovery.kindRuntime")}</Chip>
+      </td>
+      <td>
+        <Chip tone={runtime.protocol === "HTTP" ? "blue" : "aqua"}>{runtime.protocol}</Chip>
+      </td>
+      <td>
+        <Chip tone="muted">{runtime.artifact_type.toUpperCase()}</Chip>
+      </td>
+      <td>
+        <Chip tone={DISCOVERY_STATUS_TONE[runtime.aws_status] ?? "muted"}>
+          {runtime.aws_status}
+        </Chip>
+      </td>
+      <td className="mono">
+        {runtime.authorizer_type === "custom_jwt"
+          ? t("create.discovery.customJwt")
+          : runtime.authorizer_type.toUpperCase()}
+      </td>
+      <td className="mono">{runtime.version || "—"}</td>
+      <td className="runtime-reason">
+        {externallyManaged ? (
+          <>
+            <Chip tone="aqua">{t("create.discovery.alreadyImported")}</Chip>{" "}
+            <span>{t("create.discovery.reimportHint")}</span>
+          </>
+        ) : runtime.managed_agent_id ? (
+          <button type="button" className="rowact" onClick={() => navigate("/create")}>
+            {t("create.discovery.alreadyManaged", {
+              name: runtime.managed_agent_name ?? runtime.name,
+            })}
+          </button>
+        ) : !runtime.importable ? (
+          <span>{reasonText(runtime.reason_code, runtime.reason)}</span>
+        ) : !runtime.invoke_capability.eligible ? (
+          <span>
+            {t("create.discovery.inventoryOnly")}:{" "}
+            {reasonText(
+              runtime.invoke_capability.reason_code,
+              runtime.invoke_capability.reason,
+            )}
+          </span>
+        ) : (
+          <span className="discovery-ready">{t("create.discovery.readyToImport")}</span>
+        )}
+      </td>
+    </tr>
   );
 }
 
@@ -2230,8 +2401,63 @@ function AgentList({
   const canEdit = can("agents.deploy"); // editing re-publishes
   const canDelete = can("agents.delete");
   const canConvert = can("agents.convert");
+
+  const [methodFilter, setMethodFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  useEffect(() => {
+    setPage(1); // filters change the result set — restart from page 1
+  }, [methodFilter, statusFilter, query]);
+
+  const methods = useMemo(() => [...new Set(agents.map((a) => a.method))].sort(), [agents]);
+  const statuses = useMemo(() => [...new Set(agents.map((a) => a.status))].sort(), [agents]);
+  const rows = agents.filter((a) => {
+    if (methodFilter !== "all" && a.method !== methodFilter) return false;
+    if (statusFilter !== "all" && a.status !== statusFilter) return false;
+    const q = query.trim().toLowerCase();
+    return !q || a.name.toLowerCase().includes(q) || a.id.toLowerCase().includes(q);
+  });
+  const currentPage = Math.min(page, Math.max(1, Math.ceil(rows.length / pageSize)));
+  const pageRows = rows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
   return (
     <Panel title={t("create.list.title")} sub={t("create.list.sub")} pad={false}>
+      <div className="filters">
+        <select
+          className="fsel"
+          value={methodFilter}
+          onChange={(e) => setMethodFilter(e.target.value)}
+          aria-label={t("create.list.colMethod")}
+        >
+          <option value="all">{t("create.list.filterMethodAll")}</option>
+          {methods.map((method) => (
+            <option key={method} value={method}>
+              {methodLabel(method)}
+            </option>
+          ))}
+        </select>
+        <select
+          className="fsel"
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          aria-label={t("create.list.colStatus")}
+        >
+          <option value="all">{t("create.list.filterStatusAll")}</option>
+          {statuses.map((status) => (
+            <option key={status} value={status}>
+              {t(`status.${status}`, status.toUpperCase())}
+            </option>
+          ))}
+        </select>
+        <input
+          className="fsearch"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t("create.list.searchPlaceholder")}
+        />
+      </div>
       <table>
         <thead>
           <tr>
@@ -2244,7 +2470,7 @@ function AgentList({
           </tr>
         </thead>
         <tbody>
-          {agents.map((a) => (
+          {pageRows.map((a) => (
             <tr key={a.id}>
               <td className="pri">{a.name}</td>
               <td>
@@ -2326,15 +2552,25 @@ function AgentList({
               </td>
             </tr>
           ))}
-          {agents.length === 0 && (
+          {rows.length === 0 && (
             <tr>
               <td colSpan={6} className="dim mono" style={{ textAlign: "center" }}>
-                {t("create.list.empty")}
+                {t(agents.length ? "create.list.noMatch" : "create.list.empty")}
               </td>
             </tr>
           )}
         </tbody>
       </table>
+      <Pager
+        total={rows.length}
+        page={currentPage}
+        size={pageSize}
+        onPage={setPage}
+        onSize={(size) => {
+          setPageSize(size);
+          setPage(1);
+        }}
+      />
     </Panel>
   );
 }
