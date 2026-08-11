@@ -24,9 +24,11 @@ from app.services.invoke import invoke_agent_text
 from app.services.memory import scoped_actor
 from app.services.runtime_discovery import (
     DISCOVERED_METHOD,
+    import_harnesses,
     import_runtimes,
     invoke_capability,
     require_invoke_capability,
+    scan_harnesses,
     scan_runtimes,
 )
 
@@ -150,9 +152,14 @@ def list_agents(db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @router.get("/agents/discovery")
 def discover_runtimes(db: Session = Depends(get_db)) -> dict[str, Any]:
+    control = control_client()
+    runtimes = scan_runtimes(control, db)
+    harnesses, harness_scan_error = scan_harnesses(control, db)
     return {
         "region": get_settings().region,
-        "runtimes": scan_runtimes(control_client(), db),
+        "runtimes": runtimes,
+        "harnesses": harnesses,
+        "harness_scan_error": harness_scan_error,
     }
 
 
@@ -160,7 +167,11 @@ def discover_runtimes(db: Session = Depends(get_db)) -> dict[str, Any]:
 def import_discovered_runtimes(
     req: RuntimeImportRequest, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
-    result = import_runtimes(control_client(), db, req.runtime_ids)
+    """Import selected Runtimes and/or Harnesses; result rows are keyed by kind."""
+    control = control_client()
+    result = import_runtimes(control, db, req.runtime_ids)
+    for bucket, rows in import_harnesses(control, db, req.harness_ids).items():
+        result[bucket].extend(rows)
     db.commit()
     return result
 

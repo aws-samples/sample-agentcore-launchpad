@@ -205,7 +205,7 @@ The `/create` picker shows four cards, in this order:
 | 1 | **Managed Harness** | `harness` | 方式B — declarative, no build artifact |
 | 2 | **Strands Studio** | `zip_runtime` | 方式C — Strands template on the zip fast path; the card's nested link opens the `/create/studio` canvas, which deploys as method `studio` |
 | 3 | **Other Agent SDK** | `container` | 方式A — bring your own agent SDK, packaged as an ARM64 container via CodeBuild |
-| 4 | **Discover existing runtimes** | — | not a deploy method (see below) |
+| 4 | **Discover existing runtimes and harnesses** | — | not a deploy method (see below) |
 
 The third card is a **category**, not one SDK. `AgentSpec.agent_sdk` records
 which SDK a container agent packages, and the wizard exposes it as a
@@ -353,7 +353,7 @@ wizard pins them to `bedrock` and hides the selector. The Other Agent SDK
 because its one SDK today — the Claude Agent SDK — cannot drive anything else;
 the wizard shows it the SDK choice in place of the Model source control.
 
-### Existing Runtime discovery
+### Existing Runtime and Harness discovery
 
 `/create?view=discover` is an onboarding path alongside the three creation
 methods, not a deploy method. `GET /api/agents/discovery` follows every Runtime
@@ -387,6 +387,27 @@ the owning harness is a Launchpad agent the row links to it as already managed.
 If `ListHarnesses` fails, the image heuristic still flags them — only the owner
 linkage is lost.
 
+The **owning Harness** is what an operator imports instead. The same response
+carries a `harnesses` array (identity, status, version, last update, owner
+linkage) plus a fail-soft `harness_scan_error` — a `ListHarnesses` failure leaves
+the Runtime half of the scan intact rather than failing the request. `POST
+/api/agents/discovery/import` takes `harness_ids` alongside `runtime_ids` and
+creates the same externally-owned row shape, discriminated by
+`spec.discovery.resource_type = "harness"` (absent ⇒ `runtime`, so rows imported
+before this existed keep their behavior). The row stores the **harness** ARN and
+id, which is what makes the rest fall out: Chat and `/v1` dispatch to
+`InvokeHarness` exactly as a Launchpad `method=harness` agent does, the harness's
+backing runtime resolves its owner through the existing ARN join, re-publish is
+refused, and removal is a ledger detach that never calls `DeleteHarness` or
+touches IAM. A harness already deployed by Launchpad is reported as already
+managed and never duplicated. Status gates the first import only (`CREATE_FAILED`
+/`DELETING` cannot be imported); re-importing an existing row always refreshes it,
+which is how the ledger learns an external harness broke. Import reads
+`GetHarness`, so a harness fronted by a custom JWT authorizer is retained as
+inventory and excluded from Chat — the same split the Runtime path makes.
+Evaluation, experiments, and harness→zip conversion stay keyed on
+`method=harness` and therefore do not offer imported harnesses.
+
 ## The invoke chain
 
 The Chat playground (`/api/chat/{id}`) and the public API
@@ -402,6 +423,7 @@ public  /v1  ──┘        │
                         │    harness            → harness data client
                         │    zip/studio/container → runtime data client
                         │    discovered HTTP/A2A → runtime data client
+                        │    discovered harness  → harness data client
                         ▼
              AgentCore Runtime / Harness
                         │  (session isolation, streaming)

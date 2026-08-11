@@ -181,7 +181,7 @@ agent 全部卡死。而读不到的扫描——未启用扫描、API 报错、�
 | 1 | **托管 Harness** | `harness` | 方式B —— 声明式,无构建产物 |
 | 2 | **Strands Studio** | `zip_runtime` | 方式C —— Strands 模板走 zip 快速通道;卡片内嵌链接进入 `/create/studio` 画布,画布以 `studio` 方式部署 |
 | 3 | **其他 Agent SDK** | `container` | 方式A —— 自带 Agent SDK,经 CodeBuild 打包为 ARM64 容器 |
-| 4 | **发现现有 Runtime** | — | 不是部署方式(见下文) |
+| 4 | **发现现有 Runtime 与 Harness** | — | 不是部署方式(见下文) |
 
 第三张卡片是一个**类别**,而不是某一个 SDK。`AgentSpec.agent_sdk` 记录容器
 Agent 打包的是哪个 SDK,向导把它作为配置步骤上的二级选项。它是只有一个成员的
