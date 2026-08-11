@@ -151,6 +151,20 @@ class Settings(BaseSettings):
     # friendly 503 pointing at that script when the interpreter is missing.
     studio_exec_python: str = str(DATA_DIR / "exec-venv" / "bin" / "python")
     execute_timeout_s: float = 300.0
+    # Which sandbox runs the generated code. "subprocess" = the historical path
+    # (dedicated host interpreter + rlimits + optional uid drop); "docker" = a
+    # one-shot container per run from studio_exec_docker_image, provisioned by
+    # scripts/setup_exec_docker.sh. Selecting docker is itself the operator's
+    # prod opt-in: the code no longer runs on the control-plane host, so
+    # local_exec_enabled() serves the endpoints in prod without also setting
+    # LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true.
+    studio_exec_backend: Literal["subprocess", "docker"] = "subprocess"
+    studio_exec_docker_image: str = "launchpad-studio-exec:latest"
+    # Docker network the exec containers join. Empty = docker's default bridge.
+    # Set to the network created by scripts/setup_exec_docker.sh --harden-net
+    # (whose subnet a DOCKER-USER rule blocks from IMDS) when running with
+    # studio_exec_forward_aws_credentials=false.
+    studio_exec_docker_network: str = ""
     # Running caller-supplied Python is the platform's sharpest edge (T2), so it
     # is off in prod unless an operator explicitly accepts the risk. None = derive
     # from run_mode; read it through `services.local_exec.local_exec_enabled()`.

@@ -35,28 +35,15 @@ class ExecutionRequest(BaseModel):
 def _require_local_execution() -> None:
     """Gate the surface before anything is written to disk or spawned.
 
-    Three refusals, most restrictive first: the deployment may not offer local
-    execution at all (production default — this runs caller-supplied Python), the
-    dedicated interpreter may not be provisioned, and a configured dedicated
-    execution user may not be usable by this process.
+    Backend-aware refusals live in ``local_exec.preflight_error`` (shared with
+    the conversations router): surface disabled (production default), host
+    interpreter/exec-user problems on the subprocess backend, docker
+    daemon/image problems on the docker backend.
     """
-    if not local_exec.local_exec_enabled():
-        raise AppError(
-            "studio.exec.disabled",
-            local_exec.disabled_message(),
-            status_code=403,
-        )
-    if not local_exec.interpreter_available():
-        raise AppError(
-            "studio.exec.interpreter_unavailable",
-            local_exec.missing_interpreter_message(),
-            status_code=503,
-        )
-    user_problem = local_exec.exec_user_error()
-    if user_problem:
-        raise AppError(
-            "studio.exec.user_unavailable", user_problem, status_code=503
-        )
+    problem = local_exec.preflight_error()
+    if problem:
+        code, message, status = problem
+        raise AppError(code, message, status_code=status)
 
 
 @router.post("/execute")
@@ -91,16 +78,17 @@ async def execute_code_stream(request: ExecutionRequest) -> StreamingResponse:
     timeout = get_settings().execute_timeout_s
 
     async def generate_stream():
+        run: local_exec.ExecRun | None = None
         process = None
-        workdir = None
         stderr_task = None
         stderr_chunks: list[bytes] = []
         start = time.monotonic()
         try:
-            process, workdir = await local_exec.spawn_execution_subprocess(
+            run = await local_exec.spawn_execution_subprocess(
                 request.code, request.input_data,
                 request.openai_api_key, request.bedrock_api_key,
             )
+            process = run.process
             logger.info("streaming subprocess started — pid %s, timeout %ss", process.pid, timeout)
 
             # Drain stderr concurrently so a chatty subprocess cannot block on a
@@ -166,9 +154,9 @@ async def execute_code_stream(request: ExecutionRequest) -> StreamingResponse:
 
         except TimeoutError:
             elapsed = time.monotonic() - start
-            logger.error("streaming execution timed out after %ss — killing process group", timeout)
-            if process is not None:
-                local_exec.kill_process_group(process)
+            logger.error("streaming execution timed out after %ss — killing run", timeout)
+            if run is not None:
+                run.kill()
             yield f"data: Error: Code execution timed out after {timeout:g} seconds\n\n"
             yield f"data: [STREAM_COMPLETE:{elapsed}]\n\n"
         except Exception as exc:  # noqa: BLE001 — reported to the client as an Error frame
@@ -178,15 +166,16 @@ async def execute_code_stream(request: ExecutionRequest) -> StreamingResponse:
             yield f"data: [STREAM_COMPLETE:{elapsed}]\n\n"
         finally:
             if process is not None and process.returncode is None:
-                local_exec.kill_process_group(process)
+                if run is not None:
+                    run.kill()
                 try:
                     await process.wait()
                 except Exception:  # noqa: BLE001
                     pass
             if stderr_task is not None and not stderr_task.done():
                 stderr_task.cancel()
-            if workdir is not None:
-                shutil.rmtree(workdir, ignore_errors=True)
+            if run is not None and run.workdir is not None:
+                shutil.rmtree(run.workdir, ignore_errors=True)
 
     return StreamingResponse(
         generate_stream(),

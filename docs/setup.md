@@ -159,6 +159,7 @@ would let operate the environment.
 |---|---|
 | `LAUNCHPAD_ALLOW_OPEN_CONSOLE=true` | Serve an unauthenticated console on a reachable interface. Restores the pre-hardening behavior; use only on a trusted network. |
 | `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true` | Re-enable local code execution in production (see below). |
+| `LAUNCHPAD_STUDIO_EXEC_BACKEND=docker` | Run local-debug code in one-shot Docker containers instead of host subprocesses — also serves the endpoints in production (see below). |
 | `LAUNCHPAD_AUTH_COOKIE_SECURE=false` | Drop `Secure` when TLS is not actually terminated in front of the console. |
 
 There is no switch that disables role authorization: a flag that turns
@@ -311,8 +312,47 @@ its bearer token from the ambient credentials, so a credential-less subprocess
 requires an explicit `bedrock_api_key` / `openai_api_key` with each local-debug
 request.
 
-A full sandbox (non-root container, seccomp, constrained egress) is **not**
-implemented; production-disabled is the mitigation there.
+#### Docker sandbox backend
+
+Alternatively, run the generated code in a **one-shot Docker container** instead
+of a host subprocess:
+
+```bash
+scripts/setup_exec_docker.sh          # builds launchpad-studio-exec:latest
+export LAUNCHPAD_STUDIO_EXEC_BACKEND=docker   # or studio_exec_backend: docker in launchpad.yaml
+```
+
+Each run gets a fresh container with `--cap-drop ALL`, `no-new-privileges`, a
+read-only rootfs (tmpfs `/tmp`), the same environment allowlist, and the
+memory/CPU/pids/file-size ceilings mapped onto docker flags. Timeouts kill the
+container itself, and a startup janitor sweeps any `strands-exec-*` containers a
+backend crash left behind. Per-run overhead is ~0.3 s.
+
+Because the code no longer runs on the control-plane host, **selecting the
+docker backend is itself the production opt-in**: `run_mode=prod` +
+`studio_exec_backend=docker` serves the local-debug endpoints without
+`LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true` (an explicit `false` still disables
+them). Requirements: a docker daemon the backend user may talk to (`docker`
+group), and the image built by the script above.
+
+One boundary does **not** come free: on EC2 with an IMDS hop limit ≥ 2 (the
+default on these boxes), a container on the default bridge can still reach the
+instance metadata service — which is exactly what keeps the default Mantle path
+working with no API keys. For a genuinely credential-less sandbox:
+
+```bash
+sudo scripts/setup_exec_docker.sh --harden-net   # Linux only
+```
+
+creates a dedicated `launchpad-exec` bridge network plus a `DOCKER-USER`
+iptables rule denying that subnet egress to `169.254.169.254`, then prints the
+settings to add (`studio_exec_docker_network`, and
+`studio_exec_forward_aws_credentials: false` with the same Mantle trade-off as
+above). The backend refuses the hardened-credentials configuration without the
+network set, rather than pretending.
+
+A deeper sandbox (AgentCore Code Interpreter re-host) remains unimplemented;
+the docker backend is the recommended middle tier.
 
 ### Self-service accounts and User Management
 

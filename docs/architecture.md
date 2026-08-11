@@ -643,9 +643,21 @@ experiments, canaries, API keys, tools/demos and the studio local-exec scaffoldi
 included. Invoking an agent (`/api/agents/{id}/invoke`, `/api/registry/a2a-demo`)
 was member-reachable from the start — it is the same capability Chat already gives
 every member. The studio local-exec routes remain safe in production through their
-own handler guard (refused outright in prod unless
-`LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED` opts in), which — not the route table — is
-the real boundary there.
+own handler guard (refused outright in prod unless an operator opts in), which —
+not the route table — is the real boundary there.
+
+**Studio local debug runs on one of two execution backends**
+(`studio_exec_backend`, resolved in `app/services/local_exec.py` and consumed by
+all three spawn sites — one-shot/streaming `/api/execute*` and the
+`/api/conversations` per-turn replays — through the shared
+`build_exec_invocation()`):
+
+| | `subprocess` (default) | `docker` |
+|---|---|---|
+| Runs where | Host subprocess on the dedicated `data/exec-venv` interpreter (`scripts/setup_exec_env.sh`) | One-shot container from `launchpad-studio-exec:latest` (`scripts/setup_exec_docker.sh`) |
+| Isolation | env allowlist + rlimits; optional uid drop + IMDS firewall (`--hardened`, needs a root backend) | env allowlist + `--cap-drop ALL`, `no-new-privileges`, read-only rootfs, memory/cpu/pids/fsize flags; optional `--harden-net` network for IMDS denial |
+| Prod posture | Refused unless `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true` | Served — selecting the backend is the opt-in; explicit `false` still disables |
+| Termination | process-group kill | `docker kill` by container name (the CLI client's death does not stop the container), plus a startup janitor for crash leftovers |
 
 Earlier amendments introduced per-user revocation, which survives the opening:
 2026-08-07, the **agent-lifecycle routes are member-grantable** via `perm:agents.*`

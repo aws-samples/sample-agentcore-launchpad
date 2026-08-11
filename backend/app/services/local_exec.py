@@ -17,7 +17,10 @@ import resource
 import shutil
 import signal
 import stat
+import subprocess
 import tempfile
+import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from app.core.config import get_settings
@@ -38,15 +41,23 @@ class ExecUserUnavailable(RuntimeError):
     """
 
 
+def docker_backend(settings: Any = None) -> bool:
+    current = settings or get_settings()
+    return current.studio_exec_backend == "docker"
+
+
 def local_exec_enabled(settings: Any = None) -> bool:
     """Whether the local-debug execution endpoints are served at all.
 
     Unset (`None`) derives from the run mode: this surface runs caller-supplied
-    Python, so production refuses it unless an operator opts back in.
+    Python, so production refuses it unless an operator opts back in. Selecting
+    the docker backend is itself that opt-in — the code then runs in a one-shot
+    container, not on the control-plane host — so it satisfies the prod default.
+    An explicit `false` stays a kill switch for both backends.
     """
     current = settings or get_settings()
     if current.studio_local_exec_enabled is None:
-        return current.run_mode != "prod"
+        return current.run_mode != "prod" or docker_backend(current)
     return current.studio_local_exec_enabled
 
 
@@ -55,7 +66,9 @@ def disabled_message() -> str:
         "Local code execution is disabled in this deployment. It runs "
         "caller-supplied Python on the server, so it is off by default in "
         "production mode; set LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true to "
-        "accept that risk and re-enable it."
+        "accept that risk and re-enable it, or set "
+        "LAUNCHPAD_STUDIO_EXEC_BACKEND=docker to run the code in a local "
+        "container sandbox instead (see scripts/setup_exec_docker.sh)."
     )
 
 
@@ -74,6 +87,97 @@ def missing_interpreter_message() -> str:
         "(or set LAUNCHPAD_STUDIO_EXEC_PYTHON to a python that has "
         "strands-agents installed)."
     )
+
+
+def _run_docker_probe(argv: list[str]) -> tuple[bool, str]:
+    """Run a short docker CLI query; (ok, stderr-or-reason). Module-level so
+    tests can monkeypatch it and stay daemon-free."""
+    try:
+        result = subprocess.run(  # noqa: S603 — fixed argv, no shell
+            argv, capture_output=True, text=True, timeout=15
+        )
+    except FileNotFoundError:
+        return False, "the `docker` CLI is not installed"
+    except subprocess.TimeoutExpired:
+        return False, "the docker CLI did not answer within 15s"
+    if result.returncode != 0:
+        return False, (result.stderr or result.stdout).strip()
+    return True, ""
+
+
+def docker_exec_error(settings: Any = None) -> str | None:
+    """Why the docker exec backend cannot run right now, or None if it can.
+
+    Three legible refusals: daemon unreachable (or CLI missing / permission
+    denied), exec image not built, and the hardened-credentials combination
+    missing its network. Probed per request — a debug surface can afford the
+    ~30 ms, and caching would serve stale 'image missing' after a build.
+    """
+    current = settings or get_settings()
+    ok, detail = _run_docker_probe(["docker", "version", "--format", "{{.Server.Version}}"])
+    if not ok:
+        return (
+            f"Docker exec backend selected but the docker daemon is not usable: {detail}. "
+            "Install/start docker and make sure the backend user may talk to it "
+            "(docker group), or switch LAUNCHPAD_STUDIO_EXEC_BACKEND back to subprocess."
+        )
+    ok, detail = _run_docker_probe(
+        ["docker", "image", "inspect", current.studio_exec_docker_image]
+    )
+    if not ok:
+        return (
+            f"Studio exec image {current.studio_exec_docker_image!r} not found. "
+            "Build it with scripts/setup_exec_docker.sh "
+            "(or point LAUNCHPAD_STUDIO_EXEC_DOCKER_IMAGE at an existing image)."
+        )
+    if not current.studio_exec_forward_aws_credentials and not current.studio_exec_docker_network:
+        return (
+            "studio_exec_forward_aws_credentials=false needs "
+            "studio_exec_docker_network set to the hardened network created by "
+            "scripts/setup_exec_docker.sh --harden-net — without it the container "
+            "could still reach the instance metadata service (IMDS hop limit "
+            "permitting) and the credential-less posture would be an illusion."
+        )
+    return None
+
+
+def runner_error(settings: Any = None) -> str | None:
+    """Backend-aware 'can generated code run right now' check (message or None).
+
+    The docker backend replaces the host-interpreter and exec-user
+    preconditions with its own daemon/image ones.
+    """
+    current = settings or get_settings()
+    if docker_backend(current):
+        return docker_exec_error(current)
+    if not interpreter_available():
+        return missing_interpreter_message()
+    return exec_user_error(current)
+
+
+def preflight_error(settings: Any = None) -> tuple[str, str, int] | None:
+    """Full endpoint gate as ``(error_code, message, http_status)``, or None.
+
+    Shared by the execution and conversation routers so disabling one entrance
+    and not the other can't happen by drift. Returned as a tuple (not an
+    AppError) to keep this module free of the web layer.
+    """
+    current = settings or get_settings()
+    if not local_exec_enabled(current):
+        return ("studio.exec.disabled", disabled_message(), 403)
+    if docker_backend(current):
+        problem = docker_exec_error(current)
+        if problem:
+            return ("studio.exec.docker_unavailable", problem, 503)
+        return None
+    if not interpreter_available():
+        return (
+            "studio.exec.interpreter_unavailable", missing_interpreter_message(), 503
+        )
+    problem = exec_user_error(current)
+    if problem:
+        return ("studio.exec.user_unavailable", problem, 503)
+    return None
 
 
 # Host environment the execution subprocess may see. Everything else is dropped:
@@ -145,14 +249,222 @@ def build_execution_env(
     return env
 
 
+# Host-filesystem paths (and host-locale plumbing) that must not leak into a
+# container: they describe the *host* tree. AWS_* file-path variables are host
+# paths too — forwarding them into a container that doesn't mount them would
+# just break credential resolution confusingly.
+_DOCKER_HOST_ONLY_ENV = frozenset({
+    "PATH", "HOME", "TMPDIR",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    "STUDIO_SKILLS_DIR",
+    "AWS_SHARED_CREDENTIALS_FILE", "AWS_CONFIG_FILE", "AWS_WEB_IDENTITY_TOKEN_FILE",
+})
+
+# What the docker *CLI process* itself needs from the host environment (finding
+# the daemon and its config); the container never sees these.
+_DOCKER_CLI_ENV = frozenset({
+    "PATH", "HOME", "TMPDIR",
+    "DOCKER_HOST", "DOCKER_CONFIG", "DOCKER_CONTEXT",
+    "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH",
+})
+
+
+@dataclass
+class ExecInvocation:
+    """Everything one spawn of caller-supplied code needs, backend-resolved."""
+
+    argv: list[str]
+    env: dict[str, str]
+    spawn_kwargs: dict[str, Any]
+    container_name: str | None = None
+
+
+@dataclass
+class ExecRun:
+    """A started run: the child process plus what cleanup must reach.
+
+    In docker mode ``process`` is the docker *CLI* client — killing its process
+    group does not stop the container, so termination goes container-first.
+    """
+
+    process: Any
+    workdir: str | None
+    container_name: str | None = None
+
+    def kill(self) -> None:
+        kill_container(self.container_name)
+        kill_process_group(self.process)
+
+    def cleanup(self) -> None:
+        if self.process is not None and self.process.returncode is None:
+            self.kill()
+        if self.workdir is not None:
+            shutil.rmtree(self.workdir, ignore_errors=True)
+
+
+def new_container_name() -> str:
+    return f"strands-exec-{uuid.uuid4().hex[:12]}"
+
+
+def reap_orphan_containers(settings: Any = None) -> int:
+    """Startup janitor: kill `strands-exec-*` containers left by a backend
+    crash. `--rm` removes them once killed. No-op (0) on the subprocess
+    backend or when docker is unavailable; never raises."""
+    current = settings or get_settings()
+    if not docker_backend(current):
+        return 0
+    try:
+        listing = subprocess.run(  # noqa: S603 — fixed argv, no shell
+            ["docker", "ps", "-q", "--filter", "name=strands-exec-"],
+            capture_output=True, text=True, timeout=15,
+        )
+        names = listing.stdout.split()
+        if listing.returncode != 0 or not names:
+            return 0
+        subprocess.run(  # noqa: S603
+            ["docker", "kill", *names], capture_output=True, timeout=30
+        )
+        logger.info("reaped %d orphaned exec container(s)", len(names))
+        return len(names)
+    except Exception:  # noqa: BLE001 — a janitor must never block startup
+        return 0
+
+
+def kill_container(container_name: str | None) -> None:
+    """Best-effort `docker kill` — the container may already have exited
+    (`--rm` then removes it), which is fine."""
+    if not container_name:
+        return
+    try:
+        subprocess.run(  # noqa: S603 — fixed argv, no shell
+            ["docker", "kill", container_name], capture_output=True, timeout=15
+        )
+    except Exception:  # noqa: BLE001 — termination must never raise
+        pass
+
+
+def _docker_container_env(exec_env: dict[str, str]) -> dict[str, str]:
+    """Variables the *container* receives (name→value).
+
+    Derived from the subprocess allowlist result so the two backends cannot
+    drift, minus everything that names a host path. The credential posture is
+    inherited unchanged: `build_execution_env` already decided whether AWS vars
+    are present and whether AWS_EC2_METADATA_DISABLED is set.
+    """
+    return {k: v for k, v in exec_env.items() if k not in _DOCKER_HOST_ONLY_ENV}
+
+
+def _docker_run_argv(
+    code_path: str,
+    workdir: str,
+    script_args: list[str],
+    container_env: dict[str, str],
+    container_name: str,
+    settings: Any,
+) -> list[str]:
+    """`docker run` argv for one sandboxed execution.
+
+    Values for `-e` flags are deliberately *not* inlined (they would show in
+    `ps` / audit logs on the host — API keys included): bare `-e KEY` makes the
+    docker CLI read each value from its own process environment, which
+    `build_exec_invocation` populates.
+    """
+    mem = f"{settings.studio_exec_memory_mb}m"
+    cpu = settings.studio_exec_cpu_seconds
+    fsize = settings.studio_exec_max_file_mb * 1024 * 1024
+    argv = [
+        shutil.which("docker") or "docker", "run", "--rm", "-i",
+        "--name", container_name,
+        "-v", f"{workdir}:/work",
+        "-w", "/work",
+        # The backend's own ids, so the bind-mounted workdir is readable and
+        # writable on both sides and nothing root-owned is left on the host.
+        "--user", f"{os.getuid()}:{os.getgid()}",
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges",
+        "--read-only",
+        "--tmpfs", "/tmp:rw,size=256m",
+        "--memory", mem, "--memory-swap", mem,
+        "--pids-limit", str(settings.studio_exec_max_processes),
+        "--ulimit", f"cpu={cpu}:{cpu}",
+        "--ulimit", f"fsize={fsize}:{fsize}",
+    ]
+    if settings.studio_exec_docker_network:
+        argv += ["--network", settings.studio_exec_docker_network]
+    # Generated code and the SDKs want a writable HOME; /tmp is the tmpfs.
+    # Inlined (it is not a secret) rather than forwarded via a bare `-e HOME`,
+    # which would have to override the docker CLI's own HOME and break its
+    # ~/.docker config resolution.
+    argv += ["-e", "HOME=/tmp"]
+    for key in sorted(container_env):
+        argv += ["-e", key]
+    argv += [
+        settings.studio_exec_docker_image,
+        "python", "-u", f"/work/{os.path.basename(code_path)}",
+        *script_args,
+    ]
+    return argv
+
+
+def build_exec_invocation(
+    code_path: str,
+    workdir: str,
+    script_args: list[str] | None = None,
+    openai_api_key: str | None = None,
+    bedrock_api_key: str | None = None,
+    extra_env: dict[str, str] | None = None,
+    settings: Any = None,
+) -> ExecInvocation:
+    """Backend-resolved argv/env/kwargs for one run of ``code_path``.
+
+    ``code_path`` must live inside ``workdir`` (both spawn surfaces already
+    arrange that); the docker backend relies on it to address the file as
+    ``/work/<basename>`` behind the bind mount.
+    """
+    current = settings or get_settings()
+    args = list(script_args or [])
+    exec_env = build_execution_env(openai_api_key, bedrock_api_key, current)
+    if extra_env:
+        exec_env.update(extra_env)
+
+    if not docker_backend(current):
+        return ExecInvocation(
+            argv=[current.studio_exec_python, "-u", code_path, *args],
+            env=exec_env,
+            spawn_kwargs=build_spawn_kwargs(current),
+        )
+
+    name = new_container_name()
+    container_env = _docker_container_env(exec_env)
+    # The CLI process needs the host's docker plumbing plus every value the
+    # bare `-e KEY` flags forward into the container.
+    cli_env = {
+        k: v for k, v in os.environ.items() if k in _DOCKER_CLI_ENV and v
+    }
+    cli_env.update(container_env)
+    return ExecInvocation(
+        argv=_docker_run_argv(code_path, workdir, args, container_env, name, current),
+        env=cli_env,
+        # No preexec rlimits, no uid drop: --ulimit/--pids-limit/--memory and
+        # --user replace both. The docker CLI still gets its own process group
+        # so a client-side kill can't orphan our reader tasks.
+        spawn_kwargs={"start_new_session": True},
+        container_name=name,
+    )
+
+
 def _exec_user_ids(settings: Any = None) -> tuple[int, int] | None:
     """`(uid, gid)` of the configured dedicated execution user, or None.
 
     Empty configuration means "keep the backend's uid" — the tier-1 posture, where
     resource limits and the environment allowlist apply but the child still shares
-    the backend's identity and can reach the instance metadata service.
+    the backend's identity and can reach the instance metadata service. The docker
+    backend never drops uid host-side (isolation is the container's), so it is
+    always None there.
     """
     current = settings or get_settings()
+    if docker_backend(current):
+        return None
     name = (current.studio_exec_user or "").strip()
     if not name:
         return None
@@ -213,6 +525,10 @@ def build_spawn_kwargs(settings: Any = None) -> dict[str, Any]:
     privilege.
     """
     current = settings or get_settings()
+    if docker_backend(current):
+        # The child here is the docker CLI client; the container's ceilings come
+        # from --memory/--ulimit/--pids-limit flags, not host rlimits.
+        return {"start_new_session": True}
     ids = _exec_user_ids(current)
     limits = [
         (resource.RLIMIT_AS, current.studio_exec_memory_mb * 1024 * 1024),
@@ -301,14 +617,15 @@ async def spawn_execution_subprocess(
     input_data: str | None,
     openai_api_key: str | None = None,
     bedrock_api_key: str | None = None,
-) -> tuple["asyncio.subprocess.Process", str]:
-    """Write code to a temp workspace and spawn it as ``python -u code.py
-    [--user-input ...]`` with the studio exec interpreter. Returns
-    ``(process, workdir)``. Caller owns cleanup."""
-    if not interpreter_available():
+) -> ExecRun:
+    """Write code to a temp workspace and run it as ``python -u code.py
+    [--user-input ...]`` on the configured backend (host exec interpreter or a
+    one-shot docker container). Caller owns cleanup via the returned
+    :class:`ExecRun`."""
+    settings = get_settings()
+    if not docker_backend(settings) and not interpreter_available():
         raise ExecInterpreterUnavailable(missing_interpreter_message())
 
-    settings = get_settings()
     workdir = tempfile.mkdtemp(prefix="strands_exec_")
     code_file = os.path.join(workdir, "generated_agent.py")
     with open(code_file, "w", encoding="utf-8") as f:
@@ -317,21 +634,23 @@ async def spawn_execution_subprocess(
     bundle_skills_for_workdir(code, workdir)
     grant_workdir_to_exec_user(workdir, settings)
 
-    cmd = [interpreter_path(), "-u", code_file]
-    if input_data is not None:
-        cmd.extend(["--user-input", input_data])
+    script_args = ["--user-input", input_data] if input_data is not None else []
+    invocation = build_exec_invocation(
+        code_file, workdir, script_args, openai_api_key, bedrock_api_key,
+        settings=settings,
+    )
 
     # Code path and input are distinct argv values; create_subprocess_exec has no shell.
     # nosemgrep: dangerous-asyncio-create-exec-audit
     process = await asyncio.create_subprocess_exec(
-        *cmd,
+        *invocation.argv,
         cwd=workdir,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env=build_execution_env(openai_api_key, bedrock_api_key, settings),
-        **build_spawn_kwargs(settings),
+        env=invocation.env,
+        **invocation.spawn_kwargs,
     )
-    return process, workdir
+    return ExecRun(process, workdir, invocation.container_name)
 
 
 def grant_workdir_to_exec_user(workdir: str, settings: Any = None) -> None:
@@ -365,12 +684,12 @@ async def execute_strands_code(
     non-zero exit raises with stderr content; a missing strands install returns
     a friendly message (parity with upstream)."""
     timeout = get_settings().execute_timeout_s
-    process = None
-    workdir = None
+    run: ExecRun | None = None
     try:
-        process, workdir = await spawn_execution_subprocess(
+        run = await spawn_execution_subprocess(
             code, input_data, openai_api_key, bedrock_api_key
         )
+        process = run.process
         logger.info("execution subprocess started — pid %s, timeout %ss", process.pid, timeout)
 
         try:
@@ -378,8 +697,8 @@ async def execute_strands_code(
                 process.communicate(), timeout=timeout
             )
         except TimeoutError:
-            logger.error("execution timed out after %ss — killing process group", timeout)
-            kill_process_group(process)
+            logger.error("execution timed out after %ss — killing run", timeout)
+            run.kill()
             await process.wait()
             raise RuntimeError(
                 f"Code execution timed out after {timeout:g} seconds"
@@ -405,7 +724,5 @@ async def execute_strands_code(
         logger.info("execution completed, output length %s", len(stdout))
         return stdout if stdout else "Code executed successfully (no output)"
     finally:
-        if process is not None and process.returncode is None:
-            kill_process_group(process)
-        if workdir is not None:
-            shutil.rmtree(workdir, ignore_errors=True)
+        if run is not None:
+            run.cleanup()

@@ -40,6 +40,7 @@ from app.routers.public_api import router as public_router
 from app.routers.registry import router as registry_router
 from app.routers.tools import router as tools_router
 from app.routers.users import router as users_router
+from app.services import local_exec
 from app.services.governance import reconcile_policy_changes
 from app.services.model_prices import start_auto_refresh
 
@@ -165,6 +166,11 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
             logging.getLogger("launchpad").info(
                 "reconciled %d interrupted Policy operation(s)",
                 len(reconciled_policy_changes),
+            )
+        reaped = local_exec.reap_orphan_containers()
+        if reaped:
+            logging.getLogger("launchpad").info(
+                "reaped %d orphaned studio exec container(s)", reaped
             )
         start_auto_refresh()  # periodic model-price refresh (real server only)
 

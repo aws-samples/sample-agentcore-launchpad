@@ -418,3 +418,268 @@ def test_explicit_opt_in_restores_execute_in_prod(client, exec_python, monkeypat
     resp = client.post("/api/execute", json={"code": "print(1 + 1)"})
     assert resp.status_code == 200
     assert resp.json()["success"] is True
+
+
+# --- docker sandbox backend -------------------------------------------------
+
+def _docker_settings(**overrides):
+    from app.core.config import Settings
+
+    return Settings(studio_exec_backend="docker", **overrides)
+
+
+def test_local_exec_enabled_truth_table():
+    from app.core.config import Settings
+
+    cases = [
+        # (run_mode, backend, explicit, expected)
+        ("dev", "subprocess", None, True),
+        ("prod", "subprocess", None, False),
+        ("dev", "docker", None, True),
+        # Selecting the docker backend is itself the prod opt-in.
+        ("prod", "docker", None, True),
+        # An explicit false stays a kill switch for both backends.
+        ("prod", "docker", False, False),
+        ("dev", "docker", False, False),
+        ("prod", "subprocess", True, True),
+    ]
+    for run_mode, backend, explicit, expected in cases:
+        settings = Settings(
+            run_mode=run_mode,
+            studio_exec_backend=backend,
+            studio_local_exec_enabled=explicit,
+        )
+        assert local_exec.local_exec_enabled(settings) is expected, (
+            run_mode, backend, explicit
+        )
+
+
+def test_disabled_message_mentions_the_docker_alternative():
+    assert "LAUNCHPAD_STUDIO_EXEC_BACKEND=docker" in local_exec.disabled_message()
+
+
+def test_subprocess_invocation_matches_the_historical_argv():
+    from app.core.config import Settings
+
+    settings = Settings(studio_exec_python="/opt/exec/python")
+    inv = local_exec.build_exec_invocation(
+        "/tmp/wd/generated_agent.py", "/tmp/wd", ["--user-input", "hi"],
+        settings=settings,
+    )
+    assert inv.argv == [
+        "/opt/exec/python", "-u", "/tmp/wd/generated_agent.py",
+        "--user-input", "hi",
+    ]
+    assert inv.container_name is None
+    assert callable(inv.spawn_kwargs["preexec_fn"])
+    assert inv.env["PATH"]  # host-fs vars stay for a host subprocess
+
+
+def test_docker_invocation_argv_carries_the_isolation_flags():
+    inv = local_exec.build_exec_invocation(
+        "/tmp/wd/generated_agent.py", "/tmp/wd", ["--user-input", "hi"],
+        settings=_docker_settings(
+            studio_exec_memory_mb=512,
+            studio_exec_cpu_seconds=7,
+            studio_exec_max_processes=32,
+            studio_exec_max_file_mb=1,
+        ),
+    )
+    argv = inv.argv
+    assert argv[1:4] == ["run", "--rm", "-i"]
+    assert inv.container_name and inv.container_name.startswith("strands-exec-")
+    assert argv[argv.index("--name") + 1] == inv.container_name
+    assert f"{os.getuid()}:{os.getgid()}" == argv[argv.index("--user") + 1]
+    assert "/tmp/wd:/work" == argv[argv.index("-v") + 1]
+    for flag, value in [
+        ("--cap-drop", "ALL"),
+        ("--security-opt", "no-new-privileges"),
+        ("--memory", "512m"),
+        ("--memory-swap", "512m"),
+        ("--pids-limit", "32"),
+        ("-w", "/work"),
+    ]:
+        assert value == argv[argv.index(flag) + 1], flag
+    assert "--read-only" in argv
+    ulimits = [argv[i + 1] for i, a in enumerate(argv) if a == "--ulimit"]
+    assert "cpu=7:7" in ulimits
+    assert f"fsize={1024 * 1024}:{1024 * 1024}" in ulimits
+    # The command addresses the code behind the bind mount, unbuffered,
+    # with the script args at the very end.
+    image_at = argv.index("launchpad-studio-exec:latest")
+    assert argv[image_at + 1:] == [
+        "python", "-u", "/work/generated_agent.py", "--user-input", "hi",
+    ]
+    # No preexec/uid machinery on the CLI client process.
+    assert inv.spawn_kwargs == {"start_new_session": True}
+
+
+def test_docker_invocation_network_flag_only_when_configured():
+    inv = local_exec.build_exec_invocation(
+        "/t/c.py", "/t", settings=_docker_settings()
+    )
+    assert "--network" not in inv.argv
+    inv = local_exec.build_exec_invocation(
+        "/t/c.py", "/t",
+        settings=_docker_settings(studio_exec_docker_network="launchpad-exec"),
+    )
+    assert inv.argv[inv.argv.index("--network") + 1] == "launchpad-exec"
+
+
+def test_docker_invocation_never_inlines_secret_values():
+    """API keys travel via the CLI process environment (bare `-e KEY`), never
+    as `-e KEY=value` argv, which would be visible in `ps` on the host."""
+    inv = local_exec.build_exec_invocation(
+        "/t/c.py", "/t",
+        openai_api_key="sk-secret-openai",
+        bedrock_api_key="bk-secret-bedrock",
+        settings=_docker_settings(),
+    )
+    joined = " ".join(inv.argv)
+    assert "sk-secret-openai" not in joined
+    assert "bk-secret-bedrock" not in joined
+    assert "OPENAI_API_KEY" in inv.argv  # forwarded as a bare -e name
+    assert inv.env["OPENAI_API_KEY"] == "sk-secret-openai"
+    assert inv.env["BEDROCK_API_KEY"] == "bk-secret-bedrock"
+
+
+def test_docker_invocation_keeps_host_paths_out_of_the_container(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("HOME", "/home/operator")
+    monkeypatch.setenv("STUDIO_SKILLS_DIR", "/srv/skills")
+    inv = local_exec.build_exec_invocation(
+        "/t/c.py", "/t", settings=_docker_settings()
+    )
+    forwarded = {inv.argv[i + 1] for i, a in enumerate(inv.argv) if a == "-e"}
+    assert "PATH" not in forwarded
+    assert "HOME" not in forwarded
+    assert "STUDIO_SKILLS_DIR" not in forwarded
+    # The container HOME is pinned to the writable tmpfs instead.
+    assert "HOME=/tmp" in forwarded
+    # The CLI process itself still gets the host plumbing to find the daemon.
+    assert inv.env["PATH"] == "/usr/bin"
+    assert inv.env["HOME"] == "/home/operator"
+
+
+def test_docker_hardened_env_reaches_the_container(monkeypatch):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+    inv = local_exec.build_exec_invocation(
+        "/t/c.py", "/t",
+        settings=_docker_settings(
+            studio_exec_forward_aws_credentials=False,
+            studio_exec_docker_network="launchpad-exec",
+        ),
+    )
+    forwarded = {inv.argv[i + 1] for i, a in enumerate(inv.argv) if a == "-e"}
+    assert "AWS_ACCESS_KEY_ID" not in forwarded
+    assert "AWS_EC2_METADATA_DISABLED" in forwarded
+    assert inv.env["AWS_EC2_METADATA_DISABLED"] == "true"
+
+
+def test_exec_user_and_grant_are_ignored_on_the_docker_backend(tmp_path):
+    """Isolation is the container's; a configured (even broken) exec user must
+    not block the docker backend or trigger host-side chowns."""
+    settings = _docker_settings(studio_exec_user="launchpad-exec-does-not-exist")
+    assert local_exec._exec_user_ids(settings) is None
+    assert local_exec.exec_user_error(settings) is None
+    (tmp_path / "code.py").write_text("print(1)")
+    local_exec.grant_workdir_to_exec_user(str(tmp_path), settings)  # no raise
+
+
+def test_kill_container_issues_docker_kill(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        local_exec.subprocess, "run",
+        lambda argv, **kw: calls.append(argv) or type(
+            "R", (), {"returncode": 0, "stdout": "", "stderr": ""}
+        )(),
+    )
+    local_exec.kill_container("strands-exec-abc")
+    assert calls == [["docker", "kill", "strands-exec-abc"]]
+    calls.clear()
+    local_exec.kill_container(None)  # subprocess backend: nothing to do
+    assert calls == []
+
+
+def test_exec_run_kill_goes_container_first(monkeypatch):
+    order = []
+    monkeypatch.setattr(
+        local_exec, "kill_container", lambda name: order.append(("container", name))
+    )
+    monkeypatch.setattr(
+        local_exec, "kill_process_group", lambda proc: order.append(("group", proc))
+    )
+    run = local_exec.ExecRun(process="proc", workdir=None, container_name="c1")
+    run.kill()
+    assert order == [("container", "c1"), ("group", "proc")]
+
+
+def test_docker_preflight_reports_daemon_image_and_network_problems(monkeypatch):
+    settings = _docker_settings(run_mode="prod")
+
+    monkeypatch.setattr(
+        local_exec, "_run_docker_probe", lambda argv: (False, "permission denied")
+    )
+    problem = local_exec.docker_exec_error(settings)
+    assert problem and "daemon" in problem
+
+    def image_missing(argv):
+        return (True, "") if argv[1] == "version" else (False, "no such image")
+
+    monkeypatch.setattr(local_exec, "_run_docker_probe", image_missing)
+    problem = local_exec.docker_exec_error(settings)
+    assert problem and "setup_exec_docker.sh" in problem
+
+    monkeypatch.setattr(local_exec, "_run_docker_probe", lambda argv: (True, ""))
+    hardened = _docker_settings(studio_exec_forward_aws_credentials=False)
+    problem = local_exec.docker_exec_error(hardened)
+    assert problem and "--harden-net" in problem
+
+    assert local_exec.docker_exec_error(settings) is None
+
+
+def test_preflight_serves_docker_in_prod_and_skips_interpreter_checks(monkeypatch):
+    """prod + docker backend: no LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED needed, and
+    the host-interpreter / exec-user preconditions do not apply."""
+    monkeypatch.setattr(local_exec, "_run_docker_probe", lambda argv: (True, ""))
+    settings = _docker_settings(
+        run_mode="prod",
+        studio_exec_python="/no/such/python-xyz",
+        studio_exec_user="launchpad-exec-does-not-exist",
+    )
+    assert local_exec.preflight_error(settings) is None
+
+
+def test_preflight_surfaces_docker_problems_as_503(monkeypatch):
+    monkeypatch.setattr(
+        local_exec, "_run_docker_probe", lambda argv: (False, "daemon down")
+    )
+    problem = local_exec.preflight_error(_docker_settings())
+    assert problem is not None
+    code, message, status = problem
+    assert code == "studio.exec.docker_unavailable"
+    assert status == 503
+
+
+def test_reap_orphans_is_a_noop_on_the_subprocess_backend(monkeypatch):
+    from app.core.config import Settings
+
+    def boom(*a, **kw):
+        raise AssertionError("must not touch docker on the subprocess backend")
+
+    monkeypatch.setattr(local_exec.subprocess, "run", boom)
+    assert local_exec.reap_orphan_containers(Settings()) == 0
+
+
+def test_reap_orphans_kills_leftover_exec_containers(monkeypatch):
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        out = "id1\nid2\n" if argv[1] == "ps" else ""
+        return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+
+    monkeypatch.setattr(local_exec.subprocess, "run", fake_run)
+    assert local_exec.reap_orphan_containers(_docker_settings()) == 2
+    assert calls[0][:3] == ["docker", "ps", "-q"]
+    assert calls[1] == ["docker", "kill", "id1", "id2"]

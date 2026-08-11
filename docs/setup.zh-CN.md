@@ -147,6 +147,7 @@ HTTP 回传,所以若 TLS 在某处终止后再以 HTTP 转发,登录会静默�
 |---|---|
 | `LAUNCHPAD_ALLOW_OPEN_CONSOLE=true` | 在可达网络接口上提供未认证的控制台。恢复硬化前的行为,仅可用于可信网络。 |
 | `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true` | 在生产模式下重新启用本地代码执行(见下)。 |
+| `LAUNCHPAD_STUDIO_EXEC_BACKEND=docker` | 让本地调试代码在一次性 Docker 容器里运行而非宿主子进程 —— 同时也使这些端点在生产模式可用(见下)。 |
 | `LAUNCHPAD_AUTH_COOKIE_SECURE=false` | 当控制台前面实际未终止 TLS 时,去掉 `Secure`。 |
 
 没有任何开关可以关闭角色授权:能关掉授权的开关本身就是漏洞。要修正误分类的路由,
@@ -277,8 +278,41 @@ sudo scripts/setup_exec_env.sh --hardened   # 仅 Linux
 token,因此一个无凭证的子进程要求每次本地调试请求显式带上
 `bedrock_api_key` / `openai_api_key`。
 
-完整沙箱(非 root 容器、seccomp、受限出网)**尚未**实现;在生产环境,禁用该端点就是
-对应的缓解措施。
+#### Docker 沙箱后端
+
+另一种方式是让生成代码在**一次性 Docker 容器**里运行,而不是宿主子进程:
+
+```bash
+scripts/setup_exec_docker.sh          # 构建 launchpad-studio-exec:latest
+export LAUNCHPAD_STUDIO_EXEC_BACKEND=docker   # 或在 launchpad.yaml 里写 studio_exec_backend: docker
+```
+
+每次运行都是一个全新容器:`--cap-drop ALL`、`no-new-privileges`、只读根文件系统
+(tmpfs `/tmp`)、同一套环境白名单,内存 / CPU / 进程数 / 文件大小上限映射为 docker
+参数。超时会击杀容器本身,后端启动时还有一个清扫器回收崩溃遗留的
+`strands-exec-*` 容器。单次运行开销约 0.3 秒。
+
+由于代码不再运行在控制面主机上,**选择 docker 后端本身就是生产环境的 opt-in**:
+`run_mode=prod` + `studio_exec_backend=docker` 即可提供本地调试端点,不再需要
+`LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true`(显式设为 `false` 仍然是总开关)。
+前提:后端用户能访问 docker daemon(`docker` 组),且已用上面的脚本构建镜像。
+
+有一道边界**不是**白来的:EC2 上 IMDS hop limit ≥ 2 时(这些机器的默认值),默认
+bridge 网络里的容器仍能访问实例元数据服务 —— 这也正是默认 Mantle 路径无需 API key
+就能工作的原因。要得到真正无凭证的沙箱:
+
+```bash
+sudo scripts/setup_exec_docker.sh --harden-net   # 仅 Linux
+```
+
+它会创建专用的 `launchpad-exec` bridge 网络,并加一条 `DOCKER-USER` iptables 规则
+禁止该网段访问 `169.254.169.254`,然后打印需要补上的配置项
+(`studio_exec_docker_network`,以及 `studio_exec_forward_aws_credentials: false`,
+Mantle 权衡同上)。如果配置了无凭证姿态却没有配置该网络,后端会直接拒绝,而不是
+假装隔离。
+
+更深一层的沙箱(迁移到 AgentCore Code Interpreter)尚未实现;docker 后端是推荐的
+中间档。
 
 ### 自助注册与用户管理
 

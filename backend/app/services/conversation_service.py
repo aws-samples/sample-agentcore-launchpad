@@ -27,7 +27,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from app.core.config import get_settings
 from app.models.conversation import (
     ChatMessage,
     ChatResponse,
@@ -118,12 +117,20 @@ class ConversationService:
             messages_list.append({"role": role, "content": [{"text": message.content}]})
         return messages_list
 
-    def _build_env(self, session: ConversationSession) -> dict[str, str]:
-        env = local_exec.build_execution_env(
-            session.openai_api_key, session.bedrock_api_key
+    @staticmethod
+    def _build_invocation(
+        agent_file: Path, session: ConversationSession, messages_json: str
+    ) -> local_exec.ExecInvocation:
+        """Backend-resolved argv/env for one replay turn of the session's
+        agent.py (host interpreter or one-shot docker container)."""
+        return local_exec.build_exec_invocation(
+            str(agent_file),
+            str(agent_file.parent),
+            ["--messages", messages_json],
+            session.openai_api_key,
+            session.bedrock_api_key,
+            extra_env={"PYTHONUNBUFFERED": "1"},
         )
-        env["PYTHONUNBUFFERED"] = "1"
-        return env
 
     async def send_message(self, session_id: str, message: str) -> ChatResponse:
         """Non-streaming turn: append the user message, run the agent replaying
@@ -162,24 +169,25 @@ class ConversationService:
         Returns (success, stdout-or-error)."""
         if session_id not in self.agent_processes:
             raise ValueError(f"Agent not initialized for session {session_id}")
-        if not local_exec.interpreter_available():
-            return False, local_exec.missing_interpreter_message()
+        problem = local_exec.runner_error()
+        if problem:
+            return False, problem
 
         agent_file = self.agent_processes[session_id]["agent_file"]
         session = self.sessions[session_id]
         messages_json = json.dumps(self._construct_messages_list(session_id))
+        invocation = self._build_invocation(agent_file, session, messages_json)
 
         try:
             # Prompt history is one JSON argv value and never enters a command shell.
             result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-                [get_settings().studio_exec_python, str(agent_file),
-                 "--messages", messages_json],
+                invocation.argv,
                 capture_output=True,
                 text=True,
                 timeout=NONSTREAM_TIMEOUT_S,
                 cwd=agent_file.parent,
-                env=self._build_env(session),
-                **local_exec.build_spawn_kwargs(),
+                env=invocation.env,
+                **invocation.spawn_kwargs,
             )
             if result.returncode == 0:
                 return True, result.stdout.strip()
@@ -187,8 +195,12 @@ class ConversationService:
             logger.error("agent execution error for session %s: %s", session_id, error_msg)
             return False, error_msg
         except subprocess.TimeoutExpired:
+            # subprocess.run killed the child, but in docker mode that child is
+            # only the CLI client — the container must die separately.
+            local_exec.kill_container(invocation.container_name)
             return False, "Agent execution timed out"
         except Exception as exc:  # noqa: BLE001 — surfaced as a failed turn
+            local_exec.kill_container(invocation.container_name)
             logger.error("exception during agent execution for %s: %s", session_id, exc)
             return False, str(exc)
 
@@ -243,26 +255,29 @@ class ConversationService:
         ("chunk", text) / ("error", text) tuples."""
         if session_id not in self.agent_processes:
             raise ValueError(f"Agent not initialized for session {session_id}")
-        if not local_exec.interpreter_available():
-            yield ("error", local_exec.missing_interpreter_message())
+        problem = local_exec.runner_error()
+        if problem:
+            yield ("error", problem)
             return
 
         agent_file = self.agent_processes[session_id]["agent_file"]
         session = self.sessions[session_id]
         messages_json = json.dumps(self._construct_messages_list(session_id))
+        invocation = self._build_invocation(agent_file, session, messages_json)
 
+        run: local_exec.ExecRun | None = None
         try:
+            # Same isolation as local_exec.spawn_execution_subprocess: this is
+            # the second place the platform runs caller-supplied code.
             process = await asyncio.create_subprocess_exec(
-                get_settings().studio_exec_python, "-u", str(agent_file),
-                "--messages", messages_json,
+                *invocation.argv,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=agent_file.parent,
-                env=self._build_env(session),
-                # Same isolation as local_exec.spawn_execution_subprocess: this is
-                # the second place the platform runs caller-supplied code.
-                **local_exec.build_spawn_kwargs(),
+                env=invocation.env,
+                **invocation.spawn_kwargs,
             )
+            run = local_exec.ExecRun(process, None, invocation.container_name)
 
             while True:
                 chunk = await process.stdout.read(1024)
@@ -283,6 +298,12 @@ class ConversationService:
                 yield ("error", error_msg)
         except Exception as exc:  # noqa: BLE001
             yield ("error", str(exc))
+        finally:
+            # Reached normally after EOF (no-op then), but also when the client
+            # disconnects mid-stream and the generator is closed — without this
+            # the run (and in docker mode the container) would outlive the turn.
+            if run is not None:
+                run.cleanup()
 
     async def get_sessions(self) -> ConversationListResponse:
         sessions = sorted(self.sessions.values(), key=lambda s: s.updated_at, reverse=True)
