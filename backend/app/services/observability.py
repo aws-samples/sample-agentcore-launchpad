@@ -332,6 +332,57 @@ def q_top_tools(limit: int = 10) -> str:
 """
 
 
+def q_tokens_by_model(limit: int = 25) -> str:
+    """Per-model token sums from spans — the one source every agent kind feeds.
+
+    Sums provider (non-wrapper) LLM spans, but also carries the Strands wrapper
+    sums per model: non-Bedrock providers (e.g. Mantle ``openai.*`` models) emit
+    the wrapper span ONLY, so a model whose provider sums are zero falls back to
+    its wrapper sums in ``_tokens_by_model_rows`` — the group-by mirror of the
+    per-trace "prefer non-wrapper, fall back to wrapper" rollup rule.
+    """
+    return f"""
+{SPANS_SOURCE}
+| filter ispresent(startTimeUnixNano) and ispresent(attributes.gen_ai.request.model)
+| fields (strcontains(attributes.gen_ai.operation.name, "chat")
+        + strcontains(attributes.gen_ai.operation.name, "text_completion")
+        + strcontains(attributes.gen_ai.operation.name, "generate_content")) as is_call,
+       strcontains(coalesce(attributes.gen_ai.system, ""), "strands-agents") as is_wrapper
+| fields attributes.gen_ai.usage.input_tokens * is_call * (1 - is_wrapper) as llm_in,
+         attributes.gen_ai.usage.output_tokens * is_call * (1 - is_wrapper) as llm_out,
+         attributes.gen_ai.usage.input_tokens * is_call * is_wrapper as wrap_in,
+         attributes.gen_ai.usage.output_tokens * is_call * is_wrapper as wrap_out
+| stats sum(llm_in) as tokens_in, sum(llm_out) as tokens_out,
+        sum(wrap_in) as wrapper_in, sum(wrap_out) as wrapper_out
+  by attributes.gen_ai.request.model as model
+| limit {limit}
+"""
+
+
+def _tokens_by_model_rows(rows: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """Project q_tokens_by_model rows into the tokens_by_model response shape."""
+    prices = get_settings().model_prices
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        tokens_in, tokens_out = _num(row, "tokens_in"), _num(row, "tokens_out")
+        if not (tokens_in or tokens_out):  # wrapper-only provider (see builder)
+            tokens_in, tokens_out = _num(row, "wrapper_in"), _num(row, "wrapper_out")
+        if not (tokens_in or tokens_out):
+            continue
+        model = row.get("model") or "unknown"
+        out.append(
+            {
+                "model": model,
+                "input": round(tokens_in),
+                "output": round(tokens_out),
+                "total": round(tokens_in + tokens_out),
+                "est_cost_usd": estimate_cost(model, tokens_in, tokens_out, prices=prices),
+            }
+        )
+    out.sort(key=lambda r: -r["total"])
+    return out
+
+
 def q_trace_spans(trace_id: str) -> str:
     _require(TRACE_ID_RE, trace_id, "trace id")
     return f"""
@@ -708,7 +759,13 @@ def _span_log_groups(raw_spans: list[dict[str, Any]]) -> list[str]:
 
 
 def query_token_usage_metrics(hours: int, cw: Any = None) -> list[dict[str, Any]]:
-    """gen_ai.client.token.usage summed over the range, grouped by model."""
+    """gen_ai.client.token.usage summed over the range, grouped by model.
+
+    Fallback source only: verified live (us-east-1 + us-west-2, 2026-08-11)
+    that just managed-Harness runtimes publish this CloudWatch metric — zip/
+    Strands runtimes emit spans but no metric, so span aggregation
+    (q_tokens_by_model) is the primary tokens-by-model source.
+    """
     cw = cw or cw_client()
     metrics: list[dict[str, Any]] = []
     for page in cw.get_paginator("list_metrics").paginate(
@@ -839,6 +896,7 @@ def get_dashboard(range_key: str, force: bool = False,
                 "totals": q_dashboard_totals(),
                 "distincts": q_dashboard_distincts(),
                 "tools": q_top_tools(),
+                "tokens_by_model": q_tokens_by_model(),
             },
             hours,
             logs=logs,
@@ -847,12 +905,17 @@ def get_dashboard(range_key: str, force: bool = False,
         distincts = results["distincts"][0] if results["distincts"] else {}
         trace_total = int(_num(totals, "traces"))
         errors = int(_num(totals, "errors"))
-        try:
-            tokens_by_model = query_token_usage_metrics(hours, cw=cw)
-        except ClientError:
-            # Metrics are one tile/chart — a CloudWatch failure must not take
-            # down the whole dashboard when the Logs Insights data succeeded.
-            tokens_by_model = []
+        # Spans are the primary source (every agent kind emits them); the
+        # CloudWatch metric only covers managed-Harness runtimes and remains a
+        # fallback for windows where the span aggregation comes back empty.
+        tokens_by_model = _tokens_by_model_rows(results.get("tokens_by_model") or [])
+        if not tokens_by_model:
+            try:
+                tokens_by_model = query_token_usage_metrics(hours, cw=cw)
+            except ClientError:
+                # Metrics are one tile/chart — a CloudWatch failure must not
+                # take down the dashboard when the Logs Insights data succeeded.
+                tokens_by_model = []
         tokens_in = sum(r["input"] for r in tokens_by_model)
         tokens_out = sum(r["output"] for r in tokens_by_model)
         costs = [r["est_cost_usd"] for r in tokens_by_model if r["est_cost_usd"] is not None]

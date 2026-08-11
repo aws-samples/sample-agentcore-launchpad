@@ -934,6 +934,8 @@ def mocked_aws(monkeypatch):
 
 
 def test_dashboard_endpoint_shape(client, mocked_aws):
+    # _fake_logs cans no rows for the tokens-by-model span query, so this also
+    # covers the fallback: empty span aggregation → CloudWatch metric sums.
     res = client.get("/api/observability/dashboard?range=24h")
     assert res.status_code == 200
     body = res.json()
@@ -948,6 +950,40 @@ def test_dashboard_endpoint_shape(client, mocked_aws):
     assert body["tokens_by_model"][0]["model"] == "global.anthropic.claude-sonnet-4-6"
     assert body["top_tools"][0]["success_rate"] == pytest.approx(88.9)
     assert body["cache"]["hit"] is False
+
+
+def test_dashboard_tokens_prefer_span_aggregation(client, monkeypatch):
+    """Span sums win over the CloudWatch metric (which only Harness runtimes
+    emit); wrapper-only models fall back to their wrapper sums; models with no
+    tokens at all are dropped."""
+    fake_logs = _fake_logs()
+    fake_logs.rows_by_marker["by attributes.gen_ai.request.model as model"] = [
+        {"model": "global.anthropic.claude-sonnet-4-6", "tokens_in": 1000,
+         "tokens_out": 100, "wrapper_in": 1000, "wrapper_out": 100},
+        {"model": "openai.gpt-5.6-terra", "tokens_in": 0, "tokens_out": 0,
+         "wrapper_in": 500, "wrapper_out": 50},
+        {"model": "ghost", "tokens_in": 0, "tokens_out": 0,
+         "wrapper_in": 0, "wrapper_out": 0},
+    ]
+    monkeypatch.setattr(obs, "logs_client", lambda: fake_logs)
+    # CW metrics would report different numbers — they must NOT be consulted
+    monkeypatch.setattr(obs, "cw_client", lambda: FakeCW(
+        metrics=[{"Namespace": "bedrock-agentcore",
+                  "MetricName": "gen_ai.client.token.usage",
+                  "Dimensions": [
+                      {"Name": "gen_ai.request.model", "Value": "cw-only-model"},
+                      {"Name": "gen_ai.token.type", "Value": "input"},
+                  ]}],
+        values={"m0": [999_999.0]},
+    ))
+    body = client.get("/api/observability/dashboard?range=24h").json()
+    rows = body["tokens_by_model"]
+    assert [r["model"] for r in rows] == [
+        "global.anthropic.claude-sonnet-4-6", "openai.gpt-5.6-terra"]
+    assert rows[0]["input"] == 1000 and rows[0]["output"] == 100  # not wrapper-doubled
+    assert rows[1]["input"] == 500 and rows[1]["output"] == 50  # wrapper fallback
+    assert body["tiles"]["tokens"]["input"] == 1500
+    assert body["tiles"]["tokens"]["output"] == 150
 
 
 def test_traces_endpoint_rows_and_filters(client, mocked_aws):
