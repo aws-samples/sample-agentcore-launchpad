@@ -22,6 +22,7 @@ import {
   type GovernanceGatewayDetail,
   type GovernanceGatewayMode,
   type GovernanceOperation,
+  type GovernancePolicy,
   type GovernancePolicyListResponse,
   type GovernanceRegistryPreview,
 } from "../../lib/api";
@@ -39,7 +40,15 @@ interface Props {
   onNavigate: (view: GovernanceView, gatewayId?: string, policyId?: string) => void;
 }
 
-type ConfirmAction = "manage" | "unmanage" | "import" | "retire" | "engine" | "logOnly" | "enforce";
+type ConfirmAction =
+  | "manage"
+  | "unmanage"
+  | "import"
+  | "retire"
+  | "engine"
+  | "logOnly"
+  | "enforce"
+  | "deletePolicy";
 
 interface LoadErrors {
   registry?: string;
@@ -59,6 +68,7 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
+  const [policyToDelete, setPolicyToDelete] = useState<GovernancePolicy | null>(null);
   const [selectedLegacy, setSelectedLegacy] = useState<string[]>([]);
   const [sharedAcknowledged, setSharedAcknowledged] = useState(false);
   const [confirmationName, setConfirmationName] = useState("");
@@ -205,6 +215,17 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
       );
       return;
     }
+    if (confirmAction === "deletePolicy") {
+      if (!policyToDelete) return;
+      const policy = policyToDelete;
+      void finishMutation("deletePolicy", () =>
+        api.deleteGovernancePolicy(gateway.id, policy.id, {
+          ...mutationEnvelope(),
+          expected_policy_updated_at: policy.updated_at,
+        }),
+      );
+      return;
+    }
     if (confirmAction === "engine") {
       void finishMutation("engine", () =>
         api.attachGovernanceEngine(gateway.id, {
@@ -252,6 +273,7 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
     engine: gateway.policy_engine?.name ?? t("governance.states.newEngine"),
     count: selectedLegacy.length,
     gateways: gateway.shared_gateways.map((item) => item.name).join(", "),
+    policy: policyToDelete?.name ?? "",
   });
 
   return (
@@ -686,13 +708,36 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
                     : "-"}
               </td>
               <td>
-                <Btn
-                  disabled={!gateway.managed || operationBusy}
-                  onClick={() => onNavigate("policy", gateway.id, policy.id)}
-                >
-                  <Pencil size={14} aria-hidden="true" />
-                  {t("governance.actions.review")}
-                </Btn>
+                <div className="gov-action-list">
+                  <Btn
+                    disabled={!gateway.managed || operationBusy}
+                    onClick={() => onNavigate("policy", gateway.id, policy.id)}
+                  >
+                    <Pencil size={14} aria-hidden="true" />
+                    {t("governance.actions.review")}
+                  </Btn>
+                  <Btn
+                    disabled={
+                      !commonMutationReady ||
+                      !sharedReady ||
+                      (policy.enforcement_mode === "ACTIVE" &&
+                        gateway.policy_engine?.mode === "ENFORCE")
+                    }
+                    title={
+                      policy.enforcement_mode === "ACTIVE" &&
+                      gateway.policy_engine?.mode === "ENFORCE"
+                        ? t("governance.detail.deleteEnforcedHint")
+                        : undefined
+                    }
+                    onClick={() => {
+                      setPolicyToDelete(policy);
+                      setConfirmAction("deletePolicy");
+                    }}
+                  >
+                    <Trash2 size={14} aria-hidden="true" />
+                    {t("governance.actions.deletePolicy")}
+                  </Btn>
+                </div>
               </td>
             </tr>
           ))}
@@ -775,7 +820,10 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
         title={t(`governance.confirmTitles.${confirmAction ?? "manage"}`)}
         body={confirmBody}
         confirmLabel={t("governance.actions.confirm")}
-        onCancel={() => setConfirmAction(null)}
+        onCancel={() => {
+          setConfirmAction(null);
+          setPolicyToDelete(null);
+        }}
         onConfirm={runConfirmedAction}
       />
     </>

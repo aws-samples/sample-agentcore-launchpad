@@ -579,6 +579,8 @@ export interface GovernancePolicyUpdateRequest extends GovernanceMutationEnvelop
   manual_actions: string[];
 }
 
+export type GovernancePolicyDeleteRequest = GovernanceMutationEnvelope;
+
 export interface GovernancePolicyTransitionRequest extends GovernanceMutationEnvelope {
   evidence_range: GovernanceEvidenceRange;
   audit_id?: string | null;
@@ -1510,6 +1512,15 @@ export const api = {
     request<{ operation: GovernanceOperation }>(
       `${governanceGatewayPath(gatewayId)}/policies/${encodeURIComponent(policyId)}`,
       { method: "PUT", body: JSON.stringify(input) },
+    ).then((result) => result.operation),
+  deleteGovernancePolicy: (
+    gatewayId: string,
+    policyId: string,
+    input: GovernancePolicyDeleteRequest,
+  ) =>
+    request<{ operation: GovernanceOperation }>(
+      `${governanceGatewayPath(gatewayId)}/policies/${encodeURIComponent(policyId)}`,
+      { method: "DELETE", body: JSON.stringify(input) },
     ).then((result) => result.operation),
   promoteGovernancePolicy: (
     gatewayId: string,

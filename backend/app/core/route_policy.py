@@ -172,6 +172,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/governance/gateways/{gateway_id}/policies"): MEMBER,
     ("POST", "/api/governance/gateways/{gateway_id}/policies"): MEMBER,
     ("PUT", "/api/governance/gateways/{gateway_id}/policies/{policy_id}"): MEMBER,
+    ("DELETE", "/api/governance/gateways/{gateway_id}/policies/{policy_id}"): MEMBER,
     ("POST", "/api/governance/gateways/{gateway_id}/policies/{policy_id}/promote"): MEMBER,
     ("POST", "/api/governance/gateways/{gateway_id}/policies/{policy_id}/rollback"): MEMBER,
     ("POST", "/api/governance/gateways/{gateway_id}/engine"): MEMBER,

@@ -199,6 +199,10 @@ def update_policy(
     return client.update_policy(**params)
 
 
+def delete_policy(client: Any, *, engine_id: str, policy_id: str) -> dict[str, Any]:
+    return client.delete_policy(policyEngineId=engine_id, policyId=policy_id)
+
+
 def gateway_update_params(
     gateway: dict[str, Any],
     policy_engine_configuration: dict[str, str],
@@ -363,3 +367,27 @@ def wait_policy_active(
         interval_s=interval_s,
         sleeper=sleeper,
     )
+
+
+def wait_policy_deleted(
+    client: Any,
+    engine_id: str,
+    policy_id: str,
+    *,
+    timeout_s: int = 600,
+    interval_s: int = 5,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> None:
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            detail = get_policy(client, engine_id, policy_id)
+        except client.exceptions.ResourceNotFoundException:
+            return
+        status = str(detail.get("status") or "")
+        if status == "DELETE_FAILED":
+            reasons = detail.get("statusReasons") or []
+            raise RuntimeError(f"policy {policy_id} entered {status}: {reasons}")
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"policy {policy_id} still {status} after {timeout_s}s")
+        sleeper(interval_s)

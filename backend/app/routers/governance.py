@@ -15,6 +15,7 @@ from app.schemas.governance import (
     EngineRequest,
     GatewayModeRequest,
     PolicyCreateRequest,
+    PolicyDeleteRequest,
     PolicyTransitionRequest,
     PolicyUpdateRequest,
     RegistryImportRequest,
@@ -154,6 +155,28 @@ def update_gateway_policy(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     operation = governance_service.queue_policy_update(
+        db,
+        control_client(),
+        gateway_id,
+        policy_id,
+        req,
+    )
+    background_tasks.add_task(governance_service.run_policy_change, operation["id"])
+    return {"operation": operation}
+
+
+@router.delete(
+    "/governance/gateways/{gateway_id}/policies/{policy_id}",
+    status_code=202,
+)
+def delete_gateway_policy(
+    req: PolicyDeleteRequest,
+    background_tasks: BackgroundTasks,
+    gateway_id: str = GATEWAY_ID,
+    policy_id: str = RESOURCE_ID,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    operation = governance_service.queue_policy_delete(
         db,
         control_client(),
         gateway_id,

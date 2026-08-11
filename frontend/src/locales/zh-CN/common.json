@@ -762,6 +762,7 @@
       "copy": "复制",
       "createAttachEngine": "创建并以 LOG_ONLY 挂载",
       "createLogOnly": "创建 LOG_ONLY 策略",
+      "deletePolicy": "删除",
       "generate": "生成",
       "importRegistry": "导入 GATEWAY",
       "manage": "纳管",
@@ -835,6 +836,7 @@
       "iamAfterEngine": "选择或挂载引擎后会显示 IAM 修复策略。",
       "policies": "策略",
       "policyModesSeparate": "策略模式与 Gateway 挂载模式相互独立",
+      "deleteEnforcedHint": "删除前请先将该 ACTIVE 策略回滚到 LOG_ONLY（或将 Gateway 切换到 LOG_ONLY）",
       "policyMode": "策略模式",
       "relation": "候选关系",
       "candidateFor": "{{id}} 的候选",
@@ -896,6 +898,9 @@
       "source": "通过已配置的 Launchpad Gateway 发起真实 tools/call",
       "identity": "身份",
       "action": "精确动作",
+      "arguments": "参数（JSON）",
+      "argumentsInvalid": "参数必须是合法的 JSON 对象",
+      "requiredFields": "该动作必填字段：{{fields}}",
       "run": "运行测试",
       "running": "运行中",
       "noActions": "没有已发现的动作",
@@ -1033,7 +1038,8 @@
       "enforce": "启用 ENFORCE",
       "save": "保存策略",
       "promote": "提升策略",
-      "rollback": "回滚策略"
+      "rollback": "回滚策略",
+      "deletePolicy": "删除策略"
     },
     "confirm": {
       "manage": "为 {{name}} 添加 Launchpad 纳管标签，不修改 Gateway 配置。",
@@ -1047,7 +1053,8 @@
       "activeCandidate": "保持 ACTIVE 策略 {{policy}} 不变，并创建独立的 LOG_ONLY 候选。受影响 Gateway:{{gateways}}。",
       "promotePolicy": "使用 {{count}} 条匹配的 AWS 决策提升 {{policy}}。先激活候选，再将原策略切换为 LOG_ONLY。",
       "rollbackPolicy": "保守回滚 {{policy}}，不删除任何策略。",
-      "rollbackAudit": "从操作 {{operation}} 为 {{gateway}} 上的 {{policy}} 恢复审计快照。"
+      "rollbackAudit": "从操作 {{operation}} 为 {{gateway}} 上的 {{policy}} 恢复审计快照。",
+      "deletePolicy": "从挂载到 {{name}} 的引擎中永久删除策略 {{policy}}。审计记录会保留其历史，但策略本身无法恢复。受影响的 Gateway：{{gateways}}。"
     },
     "messages": {
       "copied": "已复制",

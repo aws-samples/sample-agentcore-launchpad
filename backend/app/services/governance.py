@@ -1055,6 +1055,64 @@ def queue_policy_update(
     return _change_out(change)
 
 
+def _assert_policy_deletable(
+    gateway: dict[str, Any],
+    detail: dict[str, Any],
+) -> None:
+    attachment = gateway.get("policyEngineConfiguration") or {}
+    if attachment.get("mode") == "ENFORCE" and detail.get("enforcementMode") == "ACTIVE":
+        raise AppError(
+            "governance.policy_delete_enforced",
+            "Cannot delete an ACTIVE Policy while the Gateway is in ENFORCE mode; "
+            "roll the Policy back to LOG_ONLY first",
+            status_code=409,
+        )
+
+
+def queue_policy_delete(
+    db: Session,
+    control: Any,
+    gateway_id: str,
+    policy_id: str,
+    request: Any,
+) -> dict[str, Any]:
+    gateway = _require_managed(control, gateway_id)
+    _assert_gateway_ready(gateway)
+    _assert_updated_at(
+        request.expected_gateway_updated_at,
+        gateway.get("updatedAt"),
+        "Gateway",
+    )
+    attachment, engine = _attached_engine(control, gateway)
+    detail = policy_api.get_policy(control, engine["policyEngineId"], policy_id)
+    _assert_updated_at(
+        request.expected_policy_updated_at,
+        detail.get("updatedAt"),
+        "Policy",
+    )
+    _assert_shared_for_mutation(
+        control,
+        attachment["arn"],
+        request.acknowledged_gateway_ids,
+    )
+    _assert_policy_deletable(gateway, detail)
+    change = _new_change(
+        db,
+        gateway=gateway,
+        engine=engine,
+        policy=detail,
+        operation="policy_delete",
+        before={
+            "gateway": _gateway_policy_snapshot(gateway),
+            "engine": _engine_snapshot(engine),
+            "policy": _policy_snapshot(detail),
+        },
+        requested=request.model_dump(mode="json"),
+        override_reason=request.override_reason,
+    )
+    return _change_out(change)
+
+
 def _candidate_relation(
     db: Session,
     gateway_id: str,
@@ -1396,6 +1454,40 @@ def _execute_policy_update(
     return {"policy": _policy_snapshot(settled)}
 
 
+def _execute_policy_delete(
+    control: Any,
+    change: PolicyChange,
+    gateway: dict[str, Any],
+    engine: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        current = policy_api.get_policy(
+            control,
+            engine["policyEngineId"],
+            change.policy_id,
+        )
+    except control.exceptions.ResourceNotFoundException:
+        # idempotent resume: the policy is already gone
+        return {"policy": (change.before or {}).get("policy"), "deleted": True}
+    _assert_updated_at(
+        change.requested.get("expected_policy_updated_at"),
+        current.get("updatedAt"),
+        "Policy",
+    )
+    _assert_policy_deletable(gateway, current)
+    policy_api.delete_policy(
+        control,
+        engine_id=engine["policyEngineId"],
+        policy_id=current["policyId"],
+    )
+    policy_api.wait_policy_deleted(
+        control,
+        engine["policyEngineId"],
+        current["policyId"],
+    )
+    return {"policy": _policy_snapshot(current), "deleted": True}
+
+
 def _execute_policy_promote(
     control: Any,
     change: PolicyChange,
@@ -1608,6 +1700,8 @@ def run_policy_change(
                 after = _execute_policy_create(control, change, engine)
             elif change.operation in ("policy_update", "policy_candidate_create"):
                 after = _execute_policy_update(control, change, engine)
+            elif change.operation == "policy_delete":
+                after = _execute_policy_delete(control, change, gateway, engine)
             elif change.operation == "policy_promote":
                 after = _execute_policy_promote(control, change, gateway, engine)
             elif change.operation == "policy_rollback":

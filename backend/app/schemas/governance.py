@@ -64,6 +64,11 @@ class PolicyUpdateRequest(MutationEnvelope):
     manual_actions: list[str] = Field(default_factory=list, max_length=100)
 
 
+class PolicyDeleteRequest(MutationEnvelope):
+    expected_gateway_updated_at: datetime
+    expected_policy_updated_at: datetime
+
+
 class PolicyTransitionRequest(MutationEnvelope):
     expected_gateway_updated_at: datetime
     expected_policy_updated_at: datetime

@@ -762,6 +762,7 @@
       "copy": "COPY",
       "createAttachEngine": "CREATE + ATTACH IN LOG_ONLY",
       "createLogOnly": "CREATE LOG_ONLY POLICY",
+      "deletePolicy": "DELETE",
       "generate": "GENERATE",
       "importRegistry": "IMPORT GATEWAY",
       "manage": "MANAGE",
@@ -835,6 +836,7 @@
       "iamAfterEngine": "IAM remediation is available after an Engine is selected or attached.",
       "policies": "POLICIES",
       "policyModesSeparate": "Policy mode is independent from Gateway attachment mode",
+      "deleteEnforcedHint": "Roll this ACTIVE Policy back to LOG_ONLY (or move the Gateway to LOG_ONLY) before deleting it",
       "policyMode": "POLICY MODE",
       "relation": "CANDIDATE RELATION",
       "candidateFor": "candidate for {{id}}",
@@ -896,6 +898,9 @@
       "source": "real tools/call through the configured Launchpad Gateway",
       "identity": "IDENTITY",
       "action": "EXACT ACTION",
+      "arguments": "ARGUMENTS (JSON)",
+      "argumentsInvalid": "Arguments must be a valid JSON object",
+      "requiredFields": "required by this action: {{fields}}",
       "run": "RUN TEST",
       "running": "RUNNING",
       "noActions": "NO DISCOVERED ACTIONS",
@@ -1033,7 +1038,8 @@
       "enforce": "ENABLE ENFORCE",
       "save": "SAVE POLICY",
       "promote": "PROMOTE POLICY",
-      "rollback": "ROLL BACK POLICY"
+      "rollback": "ROLL BACK POLICY",
+      "deletePolicy": "DELETE POLICY"
     },
     "confirm": {
       "manage": "Add Launchpad management tags to {{name}}. No Gateway configuration changes.",
@@ -1047,7 +1053,8 @@
       "activeCandidate": "Keep ACTIVE policy {{policy}} unchanged and create a separate LOG_ONLY candidate. Affected Gateways: {{gateways}}.",
       "promotePolicy": "Promote {{policy}} using {{count}} matching AWS decisions. Candidate activation happens before the original moves to LOG_ONLY.",
       "rollbackPolicy": "Conservatively roll back {{policy}} without deleting either policy.",
-      "rollbackAudit": "Restore the audited snapshot for {{policy}} on {{gateway}} from operation {{operation}}."
+      "rollbackAudit": "Restore the audited snapshot for {{policy}} on {{gateway}} from operation {{operation}}.",
+      "deletePolicy": "Permanently delete Policy {{policy}} from the Engine attached to {{name}}. The audit trail keeps its history, but the Policy itself cannot be recovered. Affected Gateways: {{gateways}}."
     },
     "messages": {
       "copied": "Copied",

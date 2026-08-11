@@ -4,11 +4,13 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.db import SessionLocal
+from app.core.errors import AppError
 from app.models.ledger import PolicyChange
 from app.schemas.governance import (
     EngineRequest,
     GatewayModeRequest,
     PolicyCreateRequest,
+    PolicyDeleteRequest,
     PolicyTransitionRequest,
     PolicyUpdateRequest,
 )
@@ -134,6 +136,11 @@ class FakeControl:
 
     def get_policy(self, *, policyEngineId, policyId):
         detail = self.policies[policyId]
+        assert detail["policyEngineId"] == policyEngineId
+        return dict(detail)
+
+    def delete_policy(self, *, policyEngineId, policyId):
+        detail = self.policies.pop(policyId)
         assert detail["policyEngineId"] == policyEngineId
         return dict(detail)
 
@@ -629,5 +636,101 @@ def test_draft_paths_record_the_override_reason_and_need_no_evidence():
             ),
         )
         assert _refresh(db, update["id"]).override_reason == "tightened after review"
+    finally:
+        db.close()
+
+
+def test_policy_delete_guard_execution_and_idempotent_resume():
+    control = FakeControl()
+    iam = FakeIam()
+    db = SessionLocal()
+    try:
+        attach = governance.queue_engine_attach(
+            db,
+            control,
+            "gw-1",
+            EngineRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                authorization_model="allowlist",
+            ),
+        )
+        governance.run_policy_change(attach["id"], control=control, iam=iam)
+        create = governance.queue_policy_create(
+            db,
+            control,
+            "gw-1",
+            PolicyCreateRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                name="allow_payments",
+                statement="permit(principal, action, resource);",
+                authorization_model="allowlist",
+            ),
+        )
+        governance.run_policy_change(create["id"], control=control, iam=iam)
+        policy_id = _refresh(db, create["id"]).after["policy"]["id"]
+
+        control.policies[policy_id]["enforcementMode"] = "ACTIVE"
+        control.gateway["policyEngineConfiguration"]["mode"] = "ENFORCE"
+        with pytest.raises(AppError) as excinfo:
+            governance.queue_policy_delete(
+                db,
+                control,
+                "gw-1",
+                policy_id,
+                PolicyDeleteRequest(
+                    expected_gateway_updated_at=control.gateway["updatedAt"],
+                    expected_policy_updated_at=control.policies[policy_id]["updatedAt"],
+                ),
+            )
+        assert excinfo.value.code == "governance.policy_delete_enforced"
+
+        control.policies[policy_id]["enforcementMode"] = "LOG_ONLY"
+        delete = governance.queue_policy_delete(
+            db,
+            control,
+            "gw-1",
+            policy_id,
+            PolicyDeleteRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                expected_policy_updated_at=control.policies[policy_id]["updatedAt"],
+            ),
+        )
+        governance.run_policy_change(delete["id"], control=control, iam=iam)
+        change = _refresh(db, delete["id"])
+        assert change.status == "succeeded"
+        assert change.after["deleted"] is True
+        assert change.after["policy"]["id"] == policy_id
+        assert policy_id not in control.policies
+
+        # resume after the policy is already gone stays idempotent
+        recreate = governance.queue_policy_create(
+            db,
+            control,
+            "gw-1",
+            PolicyCreateRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                name="allow_refunds",
+                statement="permit(principal, action, resource);",
+                authorization_model="allowlist",
+            ),
+        )
+        governance.run_policy_change(recreate["id"], control=control, iam=iam)
+        second_id = _refresh(db, recreate["id"]).after["policy"]["id"]
+        pending = governance.queue_policy_delete(
+            db,
+            control,
+            "gw-1",
+            second_id,
+            PolicyDeleteRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                expected_policy_updated_at=control.policies[second_id]["updatedAt"],
+            ),
+        )
+        control.policies.pop(second_id)
+        governance.run_policy_change(pending["id"], control=control, iam=iam)
+        resumed = _refresh(db, pending["id"])
+        assert resumed.status == "succeeded"
+        assert resumed.after["deleted"] is True
+        assert resumed.after["policy"]["id"] == second_id
     finally:
         db.close()

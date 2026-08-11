@@ -51,15 +51,40 @@ export function PolicyTestPanel({ actions }: Props) {
   );
   const [identity, setIdentity] = useState<GovernancePolicyTestIdentity>("demo");
   const [selectedTool, setSelectedTool] = useState(() => preferredAction(actions));
+  const [argumentsText, setArgumentsText] = useState("{}");
   const [result, setResult] = useState<GovernancePolicyTestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const effectiveTool = orderedActions.some((action) => action.name === selectedTool)
     ? selectedTool
     : preferredAction(orderedActions);
+  const selectedAction = orderedActions.find((action) => action.name === effectiveTool);
+  const requiredFields = Array.isArray(selectedAction?.input_schema?.required)
+    ? selectedAction.input_schema.required.filter(
+        (field): field is string => typeof field === "string",
+      )
+    : [];
+
+  const parseArguments = (): Record<string, unknown> | null => {
+    let value: unknown;
+    try {
+      value = JSON.parse(argumentsText.trim() || "{}");
+    } catch {
+      return null;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return value as Record<string, unknown>;
+  };
 
   const runTest = async () => {
     if (!effectiveTool || running) return;
+    const parsedArguments = parseArguments();
+    if (parsedArguments === null) {
+      const message = t("governance.policyTest.argumentsInvalid");
+      setError(message);
+      toast(message, "crit");
+      return;
+    }
     setRunning(true);
     setError(null);
     setResult(null);
@@ -68,7 +93,7 @@ export function PolicyTestPanel({ actions }: Props) {
         await api.runGovernancePolicyTest({
           username: identity,
           tool: effectiveTool,
-          arguments: {},
+          arguments: parsedArguments,
         }),
       );
     } catch (requestError) {
@@ -146,6 +171,28 @@ export function PolicyTestPanel({ actions }: Props) {
             ? t("governance.policyTest.running")
             : t("governance.policyTest.run")}
         </Btn>
+      </div>
+
+      <div className="field gov-policy-test-arguments">
+        <label htmlFor="policy-test-arguments">
+          {t("governance.policyTest.arguments")}
+        </label>
+        <textarea
+          id="policy-test-arguments"
+          className="input mono"
+          rows={3}
+          value={argumentsText}
+          disabled={running}
+          onChange={(event) => setArgumentsText(event.target.value)}
+          spellCheck={false}
+        />
+        {requiredFields.length > 0 ? (
+          <div className="gov-cell-note mono">
+            {t("governance.policyTest.requiredFields", {
+              fields: requiredFields.join(", "),
+            })}
+          </div>
+        ) : null}
       </div>
 
       {error ? <div className="gov-inline-error">{error}</div> : null}

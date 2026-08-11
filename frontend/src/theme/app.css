@@ -533,6 +533,9 @@ td.pri{color:var(--ink);font-weight:600}
 .gov-policy-test-controls{display:grid;grid-template-columns:minmax(180px,.45fr) minmax(280px,1fr) auto;gap:12px;align-items:end}
 .gov-policy-test-controls .field{margin-bottom:0;min-width:0}
 .gov-policy-test-run{min-height:38px;justify-content:center}
+.gov-policy-test-arguments{margin:12px 0 0}
+.gov-policy-test-arguments textarea{resize:vertical}
+.gov-policy-test-arguments .gov-cell-note{margin-top:4px}
 .gov-policy-test-result{margin-top:14px;padding-top:14px;border-top:1px solid var(--grid)}
 .gov-policy-test-result-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
 .gov-policy-test-result-head .mono{min-width:0;color:var(--ink-2);font-size:10px;overflow-wrap:anywhere}
