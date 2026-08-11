@@ -50,6 +50,25 @@ SOURCE = {
         "input_cost_per_token": 1e-07, "output_cost_per_token": 0.0,
         "litellm_provider": "anthropic", "mode": "embedding",
     },
+    # Mantle model: litellm prices the Bedrock id ONLY under a provider path
+    # with mode "responses"; the direct-provider ids carry different prices.
+    "bedrock_mantle/openai.gpt-5.6-terra": {
+        "input_cost_per_token": 2.2e-06, "output_cost_per_token": 1.32e-05,
+        "litellm_provider": "bedrock_mantle", "mode": "responses",
+    },
+    "gpt-5.6-terra": {
+        "input_cost_per_token": 2e-06, "output_cost_per_token": 1.2e-05,
+        "litellm_provider": "openai", "mode": "chat",
+    },
+    "azure/gpt-5.6-terra": {
+        "input_cost_per_token": 2e-06, "output_cost_per_token": 1.2e-05,
+        "litellm_provider": "azure", "mode": "chat",
+    },
+    # priced under the bare model name only — needs the vendor-prefix strip
+    "mistral-large-3": {
+        "input_cost_per_token": 2e-06, "output_cost_per_token": 6e-06,
+        "litellm_provider": "mistral", "mode": "chat",
+    },
 }
 
 
@@ -126,6 +145,57 @@ def test_refresh_map_prices_cross_region_ids_from_the_bare_id():
     assert prices == {}
 
 
+def test_refresh_map_prices_mantle_ids_from_provider_path():
+    """A Mantle id (openai.gpt-5.6-terra) is priced from the provider-path
+    entry (bedrock_mantle/..., mode "responses") — carrying the Mantle
+    premium, not the direct-OpenAI or Azure price."""
+    prices, _, added = mp.refresh_map({}, ["openai.gpt-5.6-terra"], SOURCE)
+    assert added == ["openai.gpt-5.6-terra"]
+    assert prices["openai.gpt-5.6-terra"] == {"input": 2.2, "output": 13.2}
+
+
+def test_refresh_map_strips_any_vendor_prefix():
+    """`eu.mistral.mistral-large-3` resolves via region + vendor strip to the
+    bare `mistral-large-3` source entry."""
+    prices, _, added = mp.refresh_map({}, ["eu.mistral.mistral-large-3"], SOURCE)
+    assert added == ["eu.mistral.mistral-large-3"]
+    assert prices["eu.mistral.mistral-large-3"] == {"input": 2.0, "output": 6.0}
+
+
+def test_candidate_ids_never_strip_version_dots():
+    # "gpt-5" carries a hyphen, so the leading dot-segment is not a vendor token
+    assert mp._candidate_ids("gpt-5.6-terra") == ["gpt-5.6-terra"]
+    assert mp._candidate_ids("global.anthropic.claude-sonnet-4-6") == [
+        "global.anthropic.claude-sonnet-4-6",
+        "anthropic.claude-sonnet-4-6",
+        "claude-sonnet-4-6",
+    ]
+
+
+class FakeSpanLogs:
+    """Minimal Logs Insights fake for _span_models."""
+
+    def __init__(self, models):
+        self.models = models
+
+    def start_query(self, **kwargs):
+        return {"queryId": "q1"}
+
+    def get_query_results(self, queryId):
+        return {
+            "status": "Complete",
+            "results": [
+                [{"field": "model", "value": m}, {"field": "n", "value": "3"}]
+                for m in self.models
+            ],
+        }
+
+
+def test_span_models_discovers_from_spans():
+    assert mp._span_models(logs=FakeSpanLogs(["openai.gpt-5.6-terra", "x"])) == [
+        "openai.gpt-5.6-terra", "x"]
+
+
 def test_default_prices_cover_global_nova_2_lite():
     """Stock config (no refresh yet) still estimates Nova 2 Lite cost."""
     from app.services.observability import match_price
@@ -146,6 +216,7 @@ def test_refresh_persists_and_applies(tmp_path, monkeypatch):
     get_settings.cache_clear()
     assert get_settings().model_prices["sonnet-4-6"]["input"] == 99.0
 
+    monkeypatch.setattr(mp, "_span_models", lambda logs=None, hours=0: [])
     result = mp.refresh_model_prices(
         cw=FakeCWModels(["global.anthropic.claude-sonnet-4-6"]),
         fetch=lambda url: SOURCE,
@@ -197,6 +268,7 @@ def test_prices_endpoints(client, monkeypatch, tmp_path):
     monkeypatch.setattr(config_module, "CONFIG_FILE", cfg)
     get_settings.cache_clear()
     monkeypatch.setattr(mp, "_seen_models", lambda cw=None: [])
+    monkeypatch.setattr(mp, "_span_models", lambda logs=None, hours=0: [])
     monkeypatch.setattr(mp, "_fetch_source", lambda url: SOURCE)
     res = client.post("/api/observability/prices/refresh")
     assert res.status_code == 200
