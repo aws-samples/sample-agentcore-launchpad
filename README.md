@@ -43,7 +43,7 @@ For how these map onto AgentCore services, see [docs/architecture.md](docs/archi
 ## Quickstart (~10 minutes)
 
 > [!IMPORTANT]
-> **🤖 Coding agents (Claude Code, Cursor, Copilot, …): read the runbooks first.**
+> **🤖 Coding agents (Claude Code, Codex, Kiro, Cursor, Copilot, …): read the runbooks first.**
 > Before starting, stopping, updating, or debugging this stack, load
 > **[docs/agent-runbook-dev.md](docs/agent-runbook-dev.md)** (local dev mode) or
 > **[docs/agent-runbook-prod.md](docs/agent-runbook-prod.md)** (prod mode / systemd).

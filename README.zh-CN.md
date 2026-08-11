@@ -38,7 +38,7 @@ vendored Strands Studio 子应用。主要能力包括：
 ## 快速开始（约 10 分钟）
 
 > [!IMPORTANT]
-> **🤖 Coding Agent（Claude Code、Cursor、Copilot 等）：请先阅读运维手册。**
+> **🤖 Coding Agent（Claude Code、Codex、Kiro、Cursor、Copilot 等）：请先阅读运维手册。**
 > 在启动、停止、更新或调试本平台之前，先加载
 > **[docs/agent-runbook-dev.md](docs/agent-runbook-dev.md)**（本地 dev 模式）或
 > **[docs/agent-runbook-prod.md](docs/agent-runbook-prod.md)**（prod 模式 / systemd）。
