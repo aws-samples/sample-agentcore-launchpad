@@ -864,6 +864,7 @@ export function Evaluation() {
           </tbody>
         </table>
         <Pager
+          always
           total={runTotal}
           page={runPage}
           size={runSize}

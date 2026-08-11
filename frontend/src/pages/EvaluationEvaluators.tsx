@@ -687,7 +687,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
               )}
             </tbody>
           </table>
-          <Pager {...pagerProps} />
+          <Pager {...pagerProps} always />
         </Panel>
       )}
 

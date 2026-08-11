@@ -9,14 +9,17 @@ interface PagerProps {
   size: number;
   onPage: (page: number) => void;
   onSize: (size: number) => void;
+  /** Render the bar even when one page suffices (controls disable themselves). */
+  always?: boolean;
 }
 
-/** Table footer pagination — hidden entirely while one page suffices.
+/** Table footer pagination — hidden entirely while one page suffices, unless
+ *  `always` keeps it visible for consistency across sibling tables.
  *  Shared by the Observability tabs and the Evaluation module tables. */
-export function Pager({ total, page, size, onPage, onSize }: PagerProps) {
+export function Pager({ total, page, size, onPage, onSize, always }: PagerProps) {
   const { t } = useTranslation();
   const pages = Math.max(1, Math.ceil(total / size));
-  if (total <= PAGE_SIZES[0]) return null;
+  if (!always && total <= PAGE_SIZES[0]) return null;
   return (
     <div className="pagerbar">
       <span className="mono dim">{t("pager.total", { count: total })}</span>

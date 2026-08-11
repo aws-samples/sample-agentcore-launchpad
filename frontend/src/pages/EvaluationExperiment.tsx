@@ -2148,7 +2148,7 @@ function ConfigurationExperimentView() {
               )}
             </tbody>
           </table>
-          <Pager {...pagerProps} />
+          <Pager {...pagerProps} always />
         </Panel>
       )}
 
