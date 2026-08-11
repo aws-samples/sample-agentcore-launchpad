@@ -8,7 +8,8 @@
 >
 > **本章将创建的 AWS 资源**：`make bootstrap` 创建的共享基础设施（S3 产物桶、ECR 仓库、
 > CodeBuild 项目、Cognito 用户池、IAM 执行角色、AgentCore Registry / Memory / Gateway /
-> Policy Engine 单例）。**本章不创建任何 Agent。**
+> Observability 基础配置）。Policy Engine 与 Policy 由用户后续在治理页面中按需添加。
+> **本章不创建任何 Agent。**
 
 ---
 
@@ -74,7 +75,6 @@ make bootstrap        # = cd backend && uv run python ../scripts/bootstrap.py
 | AgentCore Registry | `launchpad-registry` |
 | AgentCore Memory | `launchpad_memory`（短期事件 + 语义/用户偏好长期策略） |
 | AgentCore Gateway | `launchpad-gw-<suffix>`（把 REST API 与 Lambda 暴露成 MCP 工具） |
-| AgentCore Policy Engine | `launchpad-pe-<suffix>` |
 
 **预期结果**：命令结束后 `config/launchpad.yaml` 存在，且包含 `region`、`account_id`、
 `resources.*`（gateway_id / registry_id / memory_id / execution_role_arn …）。这个文件
@@ -121,10 +121,9 @@ curl -s http://127.0.0.1:8000/api/health
    → `04 知识库` → `05 记忆` → `06 对话演练场` → `07 可观测` → `08 评估` → `09 治理`。
    `10 用户管理` 是管理员账号维护，`11 支付` / `12 设置` 属第二阶段，三者本实验都不涉及。
 2. **服务健康面板**：Runtime / Gateway / Memory / Registry / Policy / Evaluation /
-   Observability 七项。其中 Gateway / Memory / Registry / Policy / Observability 由
-   bootstrap 创建，显示 `就绪` 与对应的真实资源 id；
-   不是绿色就说明 bootstrap 未完成或权限不足，先解决它再往下做。
-   Runtime 与 Evaluation 统计的是**你自己创建的东西**（已部署 Agent、已完成评估），
+   Observability 七项。其中 Gateway / Memory / Registry / Observability 由 bootstrap
+   初始化，显示 `就绪` 与对应的真实资源 id；Policy 只有在治理页面显式挂载 Engine 后
+   才点亮。Runtime 与 Evaluation 统计的是**你自己创建的东西**（已部署 Agent、已完成评估），
    全新账号上显示空心灯 + `尚未创建 · 部署首个 Agent 后点亮` / `运行首次评估后点亮`，
    这是预期状态，不是故障。
 3. **左下角环境信息**：`区域 us-west-2`、`SDK bedrock-agentcore 1.17.0`、
@@ -160,8 +159,8 @@ curl -s http://127.0.0.1:8000/api/health
 - [ ] `config/launchpad.yaml` 存在且含 `resources.gateway_id` / `memory_id` / `registry_id`
 - [ ] `curl http://127.0.0.1:8000/api/health` 返回 `status: ok`
 - [ ] 控制台可打开，右上角显示 `● 系统运行正常`
-- [ ] 「服务健康」面板中 Gateway / Memory / Registry / Policy / Observability 五项为绿色
-      「就绪」；Runtime 与 Evaluation 显示「尚未创建」（全新账号的预期状态）
+- [ ] 「服务健康」面板中 Gateway / Memory / Registry / Observability 四项为绿色
+      「就绪」；Runtime、Policy 与 Evaluation 显示「尚未创建」（全新账号的预期状态）
 - [ ] 界面已切换到中文
 
 ## 常见问题

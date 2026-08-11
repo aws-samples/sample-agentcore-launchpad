@@ -12,12 +12,20 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.evaluation.models import EvalRun
 from app.models.ledger import ChatSession
+from app.services.agentcore.client import control_client
 from app.services.registry_console import console_list
 
 router = APIRouter(prefix="/api", tags=["overview"])
 
 _TTL_SECONDS = 30.0
-_cache: dict[str, Any] = {"assets_at": 0.0, "assets": None, "traces_at": 0.0, "traces": None}
+_cache: dict[str, Any] = {
+    "assets_at": 0.0,
+    "assets": None,
+    "traces_at": 0.0,
+    "traces": None,
+    "policy_at": 0.0,
+    "policy": None,
+}
 
 
 def _registry_assets() -> dict[str, int]:
@@ -58,10 +66,35 @@ def _traces_active() -> bool:
     return active
 
 
+def _attached_policy_engine_id() -> str:
+    """Read the configured Gateway's live Policy attachment (30s cache)."""
+    gateway_id = get_settings().resources.get("gateway_id")
+    if not gateway_id:
+        return ""
+    if (
+        _cache["policy"] is not None
+        and time.monotonic() - _cache["policy_at"] < _TTL_SECONDS
+    ):
+        return str(_cache["policy"])
+    try:
+        gateway = control_client().get_gateway(gatewayIdentifier=gateway_id)
+        engine_arn = str(
+            (gateway.get("policyEngineConfiguration") or {}).get("arn") or ""
+        )
+        engine_id = engine_arn.rsplit("/", 1)[-1] if engine_arn else ""
+    except Exception:
+        # Keep the last confirmed state warm. A cold failure remains unconfigured
+        # rather than reviving a stale identifier from generated config.
+        return str(_cache["policy"]) if _cache["policy"] is not None else ""
+    _cache.update(policy_at=time.monotonic(), policy=engine_id)
+    return engine_id
+
+
 @router.get("/overview")
 def overview(db: Session = Depends(get_db)) -> dict[str, Any]:
     resources = get_settings().resources
     assets = _registry_assets()
+    policy_engine_id = _attached_policy_engine_id()
 
     day_ago = datetime.now(UTC) - timedelta(hours=24)
     active_sessions = (
@@ -81,7 +114,7 @@ def overview(db: Session = Depends(get_db)) -> dict[str, Any]:
         "gateway": bool(resources.get("gateway_id")),
         "memory": bool(resources.get("memory_id")),
         "registry": bool(resources.get("registry_id")),
-        "policy": bool(resources.get("policy_engine_id")),
+        "policy": bool(policy_engine_id),
         "evaluation": len(runs) > 0,
         "observability": _traces_active(),
     }
@@ -92,7 +125,7 @@ def overview(db: Session = Depends(get_db)) -> dict[str, Any]:
             resources.get("registry_id", "")
             or resources.get("registry_unavailable_reason", "")
         ),
-        "policy": resources.get("policy_engine_id", ""),
+        "policy": policy_engine_id,
         "evaluation": f"{len(runs)} runs" if runs else "",
         "observability": "aws/spans" if services["observability"] else "",
     }

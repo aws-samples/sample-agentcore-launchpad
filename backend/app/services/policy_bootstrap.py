@@ -1,8 +1,9 @@
-"""Governance bootstrap: Transaction Search + policy engine + Cedar policies.
+"""Explicit governance and Policy telemetry provisioning helpers.
 
 Same idempotent ensure_* contract as the earlier bootstrap layers.
 Cedar sources live in samples/policies/ (committed for customers);
-__GATEWAY_ARN__ is substituted at bootstrap time.
+__GATEWAY_ARN__ is substituted when an explicit provisioning tool calls these
+helpers. ``make bootstrap`` uses only ``ensure_transaction_search``.
 """
 
 import time

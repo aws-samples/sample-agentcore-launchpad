@@ -1,6 +1,7 @@
 """Overview endpoint: live tiles + service health from resources and ledger."""
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock
 
 import app.routers.overview as overview_mod
 from app.core.db import SessionLocal
@@ -40,6 +41,7 @@ def test_overview_tiles_and_health(client, monkeypatch):
     ]
     monkeypatch.setattr(overview_mod, "console_list", lambda: records)
     monkeypatch.setattr(overview_mod, "_traces_active", lambda: True)
+    monkeypatch.setattr(overview_mod, "_attached_policy_engine_id", lambda: "pe-live")
     overview_mod._cache.update(assets_at=0.0, assets=None)
 
     res = client.get("/api/overview")
@@ -50,7 +52,8 @@ def test_overview_tiles_and_health(client, monkeypatch):
     assert body["eval_pass_rate"] == 0.75
     assert body["eval_runs"] == 1
     assert body["services"]["observability"] is True
-    # gateway/memory/registry/policy reflect config resource presence (bool)
+    assert body["services"]["policy"] is True
+    assert body["service_detail"]["policy"] == "pe-live"
     assert set(body["services"]) == {
         "gateway", "memory", "registry", "policy", "evaluation", "observability",
     }
@@ -62,6 +65,7 @@ def test_overview_registry_failure_falls_back_to_cache(client, monkeypatch):
 
     monkeypatch.setattr(overview_mod, "console_list", boom)
     monkeypatch.setattr(overview_mod, "_traces_active", lambda: False)
+    monkeypatch.setattr(overview_mod, "_attached_policy_engine_id", lambda: "")
     overview_mod._cache.update(
         assets_at=0.0, assets={"agents": 7, "tools": 0, "skills": 0}
     )
@@ -86,6 +90,7 @@ def test_overview_exposes_registry_unavailable_reason(client, monkeypatch):
         )(),
     )
     monkeypatch.setattr(overview_mod, "_traces_active", lambda: False)
+    monkeypatch.setattr(overview_mod, "_attached_policy_engine_id", lambda: "")
     overview_mod._cache.update(assets_at=0.0, assets=None)
 
     response = client.get("/api/overview")
@@ -94,3 +99,31 @@ def test_overview_exposes_registry_unavailable_reason(client, monkeypatch):
     body = response.json()
     assert body["services"]["registry"] is False
     assert body["service_detail"]["registry"] == "blocked by account policy"
+
+
+def test_policy_health_reads_live_gateway_attachment(monkeypatch):
+    control = MagicMock()
+    control.get_gateway.return_value = {
+        "policyEngineConfiguration": {
+            "arn": (
+                "arn:aws:bedrock-agentcore:us-west-2:111:"
+                "policy-engine/launchpad_pe-abc"
+            )
+        }
+    }
+    monkeypatch.setattr(
+        overview_mod,
+        "get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {"resources": {"gateway_id": "launchpad-gw-1"}},
+        )(),
+    )
+    monkeypatch.setattr(overview_mod, "control_client", lambda: control)
+    overview_mod._cache.update(policy_at=0.0, policy=None)
+
+    assert overview_mod._attached_policy_engine_id() == "launchpad_pe-abc"
+    control.get_gateway.assert_called_once_with(
+        gatewayIdentifier="launchpad-gw-1"
+    )

@@ -1,12 +1,14 @@
 """Idempotent AgentCore bootstrap.
 
-Reads the CDK stack outputs, ensures the account-singleton AgentCore
-resources (registry, memory) exist exactly once, and writes the resulting
-identifiers into ``config/launchpad.yaml``.
+Reads the CDK stack outputs, ensures the shared AgentCore resources (registry,
+memory, Gateway, Transaction Search) exist, and writes the resulting
+identifiers into ``config/launchpad.yaml``. Policy resources are not part of
+this flow.
 
 Every ``ensure_*`` function is single-purpose and create-if-missing by
-name so later phases can add ``ensure_gateway()`` / ``ensure_policy_engine()``
-alongside without touching existing behaviour.
+name so later phases can add shared resources without touching existing
+behaviour. Policy resources are deliberately operator-managed through
+Governance, not part of environment bootstrap.
 """
 
 import secrets
@@ -342,6 +344,7 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
     )
 
     gateway_summary = None
+    observability_summary = None
     if outputs.get("GatewayRoleArn"):
         from app.services.gateway_bootstrap import run_gateway_bootstrap
 
@@ -359,25 +362,11 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
                 }
             }
         )
+        # Transaction Search is shared observability infrastructure. Keep it
+        # bootstrapped independently from operator-managed Policy resources.
+        from app.services.policy_bootstrap import ensure_transaction_search
 
-    policy_summary = None
-    if gateway_summary is not None:
-        from app.services.policy_bootstrap import run_policy_bootstrap
-
-        policy_summary = run_policy_bootstrap(
-            control,
-            _client("xray", region),
-            load_config(),
-            logs=_client("logs", region),
-        )
-        write_config(
-            {
-                "resources": {
-                    "policy_engine_id": policy_summary["policy_engine"]["id"],
-                    "policy_engine_arn": policy_summary["policy_engine"]["arn"],
-                }
-            }
-        )
+        observability_summary = ensure_transaction_search(_client("xray", region))
 
     return {
         "account_id": account_id,
@@ -385,7 +374,7 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
         "registry": registry_summary,
         "memory": {**memory, "created": memory_created},
         "gateway": gateway_summary,
-        "policy": policy_summary,
+        "observability": observability_summary,
         "demo_passwords_set": pw_changed,
         "stack_outputs": outputs,
     }

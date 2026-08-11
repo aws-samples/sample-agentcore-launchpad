@@ -130,6 +130,7 @@
       "notCreated": "NONE YET",
       "creates": {
         "runtime": "DEPLOY YOUR FIRST AGENT",
+        "policy": "ATTACH AN ENGINE IN GOVERNANCE",
         "evaluation": "RUN YOUR FIRST EVALUATION"
       },
       "activeCount": "ACTIVE · {{count}} agent(s)",
@@ -1002,8 +1003,8 @@
       "logOnlyMatched": "LOG_ONLY would match: {{policies}}",
       "listingRowsNote": "Rows marked \u201cwithheld at tool listing\u201d mean the tool was never offered to the model, not that a call was blocked. Only denials are listed this way; allowed tools appear in the counts above.",
       "spansUnavailable": "Per-decision detail unavailable ({{reason}}) \u2014 the counts above are unaffected.",
-      "spanChannelMissing": "Gateway tracing is not configured ({{reason}}). Run make bootstrap, then generate new Gateway traffic; tracing is not retroactive.",
-      "spanChannelUnknown": "Gateway tracing configuration could not be verified ({{reason}}). Check the CloudWatch Logs delivery permissions shown by make bootstrap.",
+      "spanChannelMissing": "Gateway tracing is not configured ({{reason}}). Configure trace delivery for this Gateway, then generate new traffic; tracing is not retroactive.",
+      "spanChannelUnknown": "Gateway tracing configuration could not be verified ({{reason}}). Check the CloudWatch Logs delivery configuration and permissions.",
       "aggregateNote": "Breakdowns are not a decomposition of the total: AWS publishes the policy dimension only for decisions that had a determining policy, and the tool dimension only for per-tool authorization. Per-decision rows below come from Policy spans, which are sampled, so they need not add up to these counts."
     },
     "audit": {

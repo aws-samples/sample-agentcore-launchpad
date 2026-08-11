@@ -582,12 +582,12 @@ The span channel is the opt-in half, and it is **per Gateway**: AgentCore emits
 Policy decision spans only after trace delivery is enabled on the attached
 Gateway. That is a CloudWatch vended-log delivery (source `logType=TRACES` →
 `XRAY` destination → delivery), not a Gateway setting, so enabling it never calls
-`UpdateGateway`. `policy_bootstrap.ensure_gateway_traces()` owns it and runs inside
-`make bootstrap` after Transaction Search, which AWS requires first; spans land in
-the shared `aws/spans` log group. The step is idempotent and non-fatal — a failure
-is reported in the bootstrap summary with the AWS error code rather than aborting
-the run, because the platform is usable without spans. Missing this delivery is
-the whole reason the span channel previously looked unverifiable.
+`UpdateGateway`. `make bootstrap` enables the shared Transaction Search
+prerequisite but deliberately does not create this Policy-specific delivery.
+`policy_bootstrap.ensure_gateway_traces()` remains an idempotent primitive for
+explicit operational tooling; normal bootstrap never calls it. The console's
+delivery-status probe is read-only, and a missing channel is an expected state
+until the operator opts into detailed Policy spans.
 
 ## Console authentication and accounts
 

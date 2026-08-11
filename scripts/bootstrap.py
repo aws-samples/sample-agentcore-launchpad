@@ -2,7 +2,8 @@
 """Launchpad bootstrap CLI.
 
 Deploys the shared CDK stack when missing, then idempotently ensures the
-AgentCore singletons (registry, memory) and writes config/launchpad.yaml.
+AgentCore shared resources (registry, memory, Gateway, Transaction Search) and
+writes config/launchpad.yaml. Policy resources remain operator-managed.
 
 Run from the backend venv so the app package resolves:
     cd backend && uv run python ../scripts/bootstrap.py [--skip-cdk]
@@ -12,7 +13,6 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "backend"))
@@ -92,16 +92,6 @@ def deploy_cdk() -> None:
     )
 
 
-def _gateway_traces_summary(policy: dict[str, Any]) -> tuple[str, str]:
-    traces = policy["gateway_traces"]
-    value = str(traces["status"])
-    if traces.get("reason"):
-        value += f" · {traces['reason']}"
-    if traces.get("reason") == "transaction_search_disabled":
-        value += " · rerun bootstrap once Transaction Search is ACTIVE"
-    return "gateway traces", value
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bootstrap AgentCore Launchpad shared infra")
     parser.add_argument("--region", default=None, help="AWS region (default: settings)")
@@ -144,19 +134,6 @@ def main() -> int:
         ("demo passwords", "set (see config/launchpad.yaml)"
          if summary["demo_passwords_set"] else "unchanged"),
     ]
-    if summary.get("policy"):
-        pol = summary["policy"]
-        rows += [
-            ("tx search", f"enabled={pol['transaction_search']['enabled']}"),
-            ("policy engine", ("created" if pol["policy_engine"]["created"] else "reused")
-             + f" · {pol['policy_engine']['id']}"),
-            ("gateway policy", "attached · ENFORCE" if pol["gateway_attached"]
-             else "already attached"),
-            _gateway_traces_summary(pol),
-        ] + [
-            (f"policy {p['name'][:20]}", "created" if p["created"] else "reused")
-            for p in pol["policies"]
-        ]
     if summary.get("gateway"):
         gw = summary["gateway"]
         rows += [
@@ -167,6 +144,14 @@ def main() -> int:
             (f"target {name}", ("created" if t["created"] else "reused") + f" · {t['id']}")
             for name, t in gw["targets"].items()
         ]
+    if summary.get("observability"):
+        obs = summary["observability"]
+        rows.append(
+            (
+                "transaction search",
+                ("enabled" if obs["enabled"] else str(obs.get("status") or "not ready")),
+            )
+        )
     width = max(len(k) for k, _ in rows)
     print("\n══ bootstrap summary ══")
     for key, value in rows:

@@ -76,8 +76,10 @@ make bootstrap          # = cd backend && uv run python ../scripts/bootstrap.py
 ```
 
 This deploys the CDK stack `launchpad-base` (only when missing), ensures the
-AgentCore registry, memory, gateway and policy engine once, and writes
+AgentCore registry, memory, and gateway once, and writes
 `config/launchpad.yaml`. It is **idempotent** — a second run prints `reused`.
+Policy is opt-in: bootstrap does not create a Policy Engine or policies and does
+not attach an Engine to the Gateway. Configure those explicitly in Governance.
 
 ### 3. Run locally
 

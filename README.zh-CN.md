@@ -70,8 +70,9 @@ make bootstrap          # = cd backend && uv run python ../scripts/bootstrap.py
 ```
 
 这个命令会在缺失时部署 CDK 栈 `launchpad-base`，创建或复用 AgentCore Registry、
-Memory、Gateway 和 Policy Engine，并生成 `config/launchpad.yaml`。命令可以重复执行；
-已有资源只会显示为 `reused`。
+Memory 和 Gateway，并生成 `config/launchpad.yaml`。命令可以重复执行；已有资源只会
+显示为 `reused`。Policy 采用显式配置：bootstrap 不创建 Policy Engine 或 Policy，
+也不把 Engine 挂载到 Gateway；请在治理页面中按需完成这些操作。
 
 ### 3. 本地运行
 

@@ -12,8 +12,9 @@ import { LAB_GUIDE_URL } from "../lib/links";
 //   "bootstrap" — the resource comes from `make bootstrap` (config ids, or the
 //     account's Transaction Search destination). Missing = something to fix.
 //   "usage"     — the row counts what the operator has created (deployed agents,
-//     completed eval runs). Missing = the expected state of a fresh, healthy
-//     account, so it must not read as a fault (ISSUE-001).
+//     completed eval runs, or an explicitly attached Policy Engine). Missing =
+//     the expected state of a fresh, healthy account, so it must not read as a
+//     fault (ISSUE-001).
 // Adding a row here forces the choice; `usage` rows name the action that lights
 // them up via `overview.health.creates.<svc>`.
 const SERVICES = [
@@ -21,7 +22,7 @@ const SERVICES = [
   { id: "gateway", kind: "bootstrap" },
   { id: "memory", kind: "bootstrap" },
   { id: "registry", kind: "bootstrap" },
-  { id: "policy", kind: "bootstrap" },
+  { id: "policy", kind: "usage" },
   { id: "evaluation", kind: "usage" },
   { id: "observability", kind: "bootstrap" },
 ] as const;

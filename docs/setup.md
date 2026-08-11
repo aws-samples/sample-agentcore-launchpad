@@ -44,52 +44,28 @@ What it creates / 创建内容:
 | IAM execution role | `launchpad-agent-execution-role` |
 | AgentCore Registry | `launchpad-registry` |
 | AgentCore Memory | `launchpad_memory` (short-term events + semantic & user-preference long-term strategies) |
+| AgentCore Gateway | `launchpad-gw-<suffix>` |
 | Managed AgentCore CLI | `data/agentcore-cli/` (`@aws/agentcore@0.21.1`) |
 
 Demo user passwords are generated and stored in `config/launchpad.yaml`
 (**gitignored** — treat as local secrets; a sanitized `config/launchpad.example.yaml` is committed).
 
-### Policy span channel / 策略 span 通道
+### Policy is operator-managed / Policy 由用户显式管理
 
-Bootstrap also opens the AgentCore **Policy decision span** channel for the
-Gateway. AgentCore emits those spans only once *trace delivery* is enabled on the
-attached Gateway, which is a CloudWatch vended-log delivery rather than a Gateway
-setting — so **no Gateway resource is modified**:
+Bootstrap creates the shared Gateway but deliberately does **not** create a
+Policy Engine, create Cedar policies, attach an Engine, or select a Gateway
+enforcement mode. Existing Policy resources and attachments are also left
+untouched when bootstrap is rerun.
 
-| Delivery resource | Name |
-|---|---|
-| Delivery source (`logType=TRACES`) | `<gateway-id>-traces-source` |
-| Delivery destination (`XRAY`) | `<gateway-id>-traces-destination` |
+Use Governance to opt in: manage the selected Gateway, create or select an
+Engine, attach it in `LOG_ONLY`, then create and review policies before any
+promotion to `ACTIVE` or Gateway switch to `ENFORCE`.
 
-Spans then land in the shared `aws/spans` log group. This step requires
-CloudWatch Transaction Search, which bootstrap enables first; if it is somehow
-disabled the step is skipped and the summary reports
-`gateway_traces: skipped · transaction_search_disabled`.
-
-The step is idempotent (`present` on re-run) and **never fails the bootstrap** —
-a telemetry delivery is not worth aborting over. Check the `gateway_traces` entry
-in the summary: a `failed` status carries the AWS error code, which is usually a
-missing IAM action. The operator credentials need:
-
-```
-logs:GetDeliverySource      logs:PutDeliverySource
-logs:GetDeliveryDestination logs:PutDeliveryDestination
-logs:DescribeDeliveries     logs:CreateDelivery
-```
-
-Note that policy decision **counts** (the Governance → Decisions evidence view and
-the cutover gate) come from CloudWatch metrics and need none of this — they work
-without any enablement. The span channel only adds per-decision detail.
-
-`scripts/teardown.py` deliberately leaves the delivery in place, as it also leaves
-the Gateway and Policy engine. To remove it manually:
-
-```bash
-aws logs describe-deliveries --region us-west-2   # find the id
-aws logs delete-delivery --region us-west-2 --id <delivery-id>
-aws logs delete-delivery-source --region us-west-2 --name <gateway-id>-traces-source
-aws logs delete-delivery-destination --region us-west-2 --name <gateway-id>-traces-destination
-```
+Bootstrap still enables CloudWatch Transaction Search for general
+observability. It does not create the per-Gateway CloudWatch Logs delivery used
+for detailed Policy decision spans. Policy decision counts come from
+CloudWatch metrics and remain available after Policy is configured; detailed
+decision rows require separately managed trace delivery.
 
 ## Run locally / 本地运行
 

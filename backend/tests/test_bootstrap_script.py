@@ -129,25 +129,52 @@ def test_managed_cli_npm_failure_is_not_suppressed(monkeypatch):
         bootstrap_script.ensure_agentcore_cli()
 
 
-@pytest.mark.parametrize(
-    ("traces", "expected"),
-    [
-        ({"status": "created"}, ("gateway traces", "created")),
-        (
-            {"status": "failed", "reason": "AccessDeniedException"},
-            ("gateway traces", "failed · AccessDeniedException"),
-        ),
-        (
-            {"status": "skipped", "reason": "transaction_search_disabled"},
-            (
-                "gateway traces",
-                "skipped · transaction_search_disabled"
-                " · rerun bootstrap once Transaction Search is ACTIVE",
-            ),
-        ),
-    ],
-)
-def test_gateway_trace_status_is_rendered_in_bootstrap_summary(traces, expected):
-    assert bootstrap_script._gateway_traces_summary(
-        {"gateway_traces": traces}
-    ) == expected
+def test_bootstrap_summary_omits_policy_resources(monkeypatch, capsys):
+    monkeypatch.setattr(bootstrap_script, "ensure_agentcore_cli", lambda: "0.21.1")
+    monkeypatch.setattr(bootstrap_script, "stack_exists", lambda _region: True)
+    monkeypatch.setattr(
+        bootstrap_script.bs,
+        "run_bootstrap",
+        lambda _region: {
+            "account_id": "111",
+            "region": "us-west-2",
+            "registry": {
+                "available": True,
+                "arn": "arn:registry",
+                "created": False,
+                "reason": None,
+            },
+            "memory": {"arn": "arn:memory", "created": False},
+            "gateway": {
+                "gateway": {"url": "https://gateway.example/mcp", "created": True},
+                "api_key_provider": {"created": True},
+                "targets": {},
+            },
+            "observability": {
+                "enabled": True,
+                "changed": False,
+                "status": "ACTIVE",
+            },
+            "demo_passwords_set": False,
+            "stack_outputs": {
+                "ArtifactsBucketName": "bucket",
+                "EcrRepoUri": "repo",
+                "CodeBuildProjectName": "build",
+                "UserPoolId": "pool",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        bootstrap_script.sys,
+        "argv",
+        ["bootstrap.py", "--region", "us-west-2"],
+    )
+
+    assert bootstrap_script.main() == 0
+
+    output = capsys.readouterr().out
+    assert "gateway state" in output
+    assert "transaction search" in output
+    assert "policy engine" not in output
+    assert "gateway policy" not in output
+    assert "gateway traces" not in output

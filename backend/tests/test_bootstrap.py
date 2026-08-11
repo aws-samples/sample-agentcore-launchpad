@@ -151,6 +151,109 @@ def test_run_bootstrap_continues_and_clears_registry_ids(monkeypatch):
     assert resources["memory_id"] == "memory-id"
 
 
+def test_run_bootstrap_gateway_does_not_provision_policy(monkeypatch):
+    from app.services import gateway_bootstrap
+
+    outputs = {
+        "ArtifactsBucketName": "bucket",
+        "EcrRepoName": "repo",
+        "EcrRepoUri": "account.dkr.ecr.us-west-2.amazonaws.com/repo",
+        "CodeBuildProjectName": "build",
+        "UserPoolId": "pool",
+        "UserPoolClientId": "client",
+        "AgentExecutionRoleArn": "arn:aws:iam::111:role/exec",
+        "GatewayRoleArn": "arn:aws:iam::111:role/gateway",
+    }
+    control = MagicMock()
+    xray = MagicMock()
+    xray.get_trace_segment_destination.return_value = {
+        "Destination": "CloudWatchLogs",
+        "Status": "ACTIVE",
+    }
+    cognito = MagicMock()
+    sts = MagicMock()
+    sts.get_caller_identity.return_value = {"Account": "111"}
+    clients = {
+        "bedrock-agentcore-control": control,
+        "agent-registry-control": control,
+        "cognito-idp": cognito,
+        "sts": sts,
+        "apigateway": MagicMock(),
+        "xray": xray,
+    }
+    requested_clients: list[str] = []
+    written: list[dict] = []
+    gateway_summary = {
+        "gateway": {
+            "id": "launchpad-gw-1",
+            "arn": "arn:aws:bedrock-agentcore:us-west-2:111:gateway/launchpad-gw-1",
+            "url": "https://gateway.example/mcp",
+        },
+        "api_key_provider": {"arn": "arn:provider/api-key"},
+        "oauth_provider": {"arn": "arn:provider/oauth"},
+        "targets": {},
+    }
+
+    def client(service: str, _region: str):
+        requested_clients.append(service)
+        if service == "logs":
+            raise AssertionError(f"bootstrap requested Policy client {service}")
+        return clients[service]
+
+    monkeypatch.setattr(bs, "get_stack_outputs", lambda _region: outputs)
+    monkeypatch.setattr(bs, "_client", client)
+    monkeypatch.setattr(
+        bs,
+        "ensure_registry",
+        lambda _control: (
+            {"id": "registry-id", "arn": "arn:aws:agent-registry:registry-id"},
+            False,
+        ),
+    )
+    monkeypatch.setattr(
+        bs,
+        "ensure_memory",
+        lambda _control, execution_role_arn=None: (
+            {"id": "memory-id", "arn": "arn:aws:bedrock-agentcore:memory"},
+            False,
+        ),
+    )
+    monkeypatch.setattr(bs, "load_config", lambda: {})
+    monkeypatch.setattr(
+        bs, "ensure_demo_user_passwords", lambda *_args: ({"demo": "known"}, False)
+    )
+    monkeypatch.setattr(
+        bs,
+        "write_config",
+        lambda update, replace=None: written.append(update | (replace or {})) or update,
+    )
+    monkeypatch.setattr(
+        gateway_bootstrap,
+        "run_gateway_bootstrap",
+        lambda *_args, **_kwargs: gateway_summary,
+    )
+
+    summary = bs.run_bootstrap("us-west-2")
+
+    assert summary["gateway"] == gateway_summary
+    assert "policy" not in summary
+    assert summary["observability"] == {
+        "enabled": True,
+        "changed": False,
+        "status": "ACTIVE",
+    }
+    assert requested_clients.count("xray") == 1
+    assert "logs" not in requested_clients
+    assert all(
+        "policy_engine_id" not in (entry.get("resources") or {})
+        and "policy_engine_arn" not in (entry.get("resources") or {})
+        for entry in written
+    )
+    control.create_policy_engine.assert_not_called()
+    control.create_policy.assert_not_called()
+    control.update_gateway.assert_not_called()
+
+
 def test_ensure_memory_creates_when_missing():
     control = make_control()
     result, created = bs.ensure_memory(control, execution_role_arn="arn:aws:iam::111:role/x")
@@ -221,6 +324,25 @@ def test_write_config_replace_drops_stale_keys(monkeypatch, tmp_path):
     assert merged["demo_users"]["passwords"] == {"admin": "new", "demo": "kept"}
     assert merged["region"] == "us-west-2"
     assert "river" not in config_file.read_text(encoding="utf-8")
+
+
+def test_write_config_preserves_legacy_policy_ids(monkeypatch, tmp_path):
+    config_file = tmp_path / "launchpad.yaml"
+    config_file.write_text(
+        "resources:\n"
+        "  policy_engine_id: pe-existing\n"
+        "  policy_engine_arn: arn:policy-engine/pe-existing\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bs, "CONFIG_FILE", config_file)
+
+    merged = bs.write_config({"resources": {"gateway_id": "gw-existing"}})
+
+    assert merged["resources"] == {
+        "gateway_id": "gw-existing",
+        "policy_engine_id": "pe-existing",
+        "policy_engine_arn": "arn:policy-engine/pe-existing",
+    }
 
 
 def test_demo_passwords_only_set_when_needed():

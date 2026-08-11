@@ -46,48 +46,25 @@ bootstrap 还负责安装 Harness 转 Runtime 时使用的 CLI。它会把固定
 | IAM 执行角色 | `launchpad-agent-execution-role` |
 | AgentCore Registry | `launchpad-registry` |
 | AgentCore Memory | `launchpad_memory`(短期事件 + 语义与用户偏好的长期策略) |
+| AgentCore Gateway | `launchpad-gw-<suffix>` |
 | 托管 AgentCore CLI | `data/agentcore-cli/` (`@aws/agentcore@0.21.1`) |
 
 演示用户密码由 bootstrap 生成并存入 `config/launchpad.yaml`(**已 gitignore**——
 视为本地机密;仓库中提交的是脱敏的 `config/launchpad.example.yaml`)。
 
-### 策略 span 通道
+### Policy 由用户显式管理
 
-bootstrap 还会为 Gateway 打开 AgentCore **策略决策 span** 通道。AgentCore 只在
-挂载的 Gateway 上启用了 *trace 投递* 之后才会发这些 span,而这是一个 CloudWatch
-vended-log delivery,不是 Gateway 的配置项——所以**不会修改任何 Gateway 资源**:
+bootstrap 会创建共享 Gateway，但不会创建 Policy Engine、创建 Cedar Policy、挂载
+Engine，也不会替用户选择 Gateway 的执行模式。重跑 bootstrap 时，已有 Policy 资源与
+挂载关系同样保持不变。
 
-| Delivery 资源 | 名称 |
-|---|---|
-| Delivery source(`logType=TRACES`) | `<gateway-id>-traces-source` |
-| Delivery destination(`XRAY`) | `<gateway-id>-traces-destination` |
+需要 Policy 时，请在治理页面中显式纳管目标 Gateway，创建或选择 Engine，以
+`LOG_ONLY` 挂载，然后创建并审核 Policy；只有完成验证后，才提升为 `ACTIVE` 或把
+Gateway 切换到 `ENFORCE`。
 
-span 随后落到共享的 `aws/spans` 日志组。这一步依赖 CloudWatch Transaction Search,
-bootstrap 会先启用它;若它未启用则跳过这一步,summary 报
-`gateway_traces: skipped · transaction_search_disabled`。
-
-这一步是幂等的(重跑报 `present`),而且**永远不会让 bootstrap 失败**——不值得为一条
-遥测投递中断引导。看 summary 里的 `gateway_traces`:`failed` 会带上 AWS 错误码,
-通常是缺 IAM 动作。操作者凭据需要:
-
-```
-logs:GetDeliverySource      logs:PutDeliverySource
-logs:GetDeliveryDestination logs:PutDeliveryDestination
-logs:DescribeDeliveries     logs:CreateDelivery
-```
-
-注意:策略决策的**计数**(治理 → 决策的证据视图、以及切换门禁)来自 CloudWatch 指标,
-完全不需要这些——它们不用任何启用就能工作。span 通道只是额外提供逐条决策明细。
-
-`scripts/teardown.py` 有意不删这条 delivery,正如它也不删 Gateway 与策略引擎。
-手工清理:
-
-```bash
-aws logs describe-deliveries --region us-west-2   # 找到 id
-aws logs delete-delivery --region us-west-2 --id <delivery-id>
-aws logs delete-delivery-source --region us-west-2 --name <gateway-id>-traces-source
-aws logs delete-delivery-destination --region us-west-2 --name <gateway-id>-traces-destination
-```
+bootstrap 仍会为通用可观测性开启 CloudWatch Transaction Search，但不创建逐条 Policy
+决策 span 所需的 per-Gateway CloudWatch Logs delivery。Policy 配置完成后，决策计数
+仍来自 CloudWatch 指标；逐条决策明细需要另行管理 trace delivery。
 
 ## 本地运行
 

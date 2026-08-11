@@ -236,7 +236,8 @@ permit(
 
 ### 逐条决策明细
 
-`decisions` 数组来自 **Policy span**（由 `make bootstrap` 建的 TRACES 投递打开）。
+`decisions` 数组来自 **Policy span**。`make bootstrap` 不创建对应的 per-Gateway
+TRACES 投递；只有另行配置 trace delivery 后才会出现逐条明细。
 有明细时，每行会包含如下字段：
 
 ```json
@@ -342,7 +343,7 @@ Gateway 与引擎快照、`变更后`、覆盖原因以及回滚所需的输入�
 | 报 `updatedAt` 相关冲突 | 平台要求变更前 Gateway 状态新鲜 | 点 `刷新` 后重试 |
 | 决策一直是 0 条，但显示 `available: true` | 通道正常，只是窗口内没有决策 | 放宽时间范围到 `7d`；或调用一次网关工具产生新证据 |
 | 决策显示 `available: false` + 错误码 | 遥测通道读不到（多为后端角色缺 `cloudwatch:ListMetrics` / `GetMetricData`） | 按错误码补权限后点 `刷新` |
-| 有聚合计数但 `decisions` 是空的 | 网关的 `TRACES` 投递没开，Policy span 没有产生 | 跑一次 `make bootstrap`（会幂等创建投递），再产生一次网关流量 |
+| 有聚合计数但 `decisions` 是空的 | 网关的 `TRACES` 投递没开，Policy span 没有产生 | 按需为该 Gateway 显式配置 trace delivery，再产生一次网关流量 |
 | 逐条明细的 `主体` 一直是「span 中没有」 | Harness 用机器凭据（OAuth M2M）访问网关，请求里没有人类主体 | 属正常现象；带主体的记录看本地决策台账 |
 | 切 ENFORCE 被阻止 | 24h 内没有 LOG_ONLY 证据 | 补证据，或手输 Gateway 名 + 覆盖原因（谨慎） |
 | IAM 挂载预检 FAIL | Gateway 执行角色缺少策略引擎权限 | 照界面给出的内联策略 JSON 修 |
