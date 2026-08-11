@@ -346,18 +346,27 @@ class InvokeResponse(BaseModel):
     latency_ms: int
 
 
+def _clean_resource_ids(ids: list[str], label: str) -> list[str]:
+    cleaned = list(dict.fromkeys(resource_id.strip() for resource_id in ids))
+    if any(not resource_id for resource_id in cleaned):
+        raise ValueError(f"{label} IDs cannot be empty")
+    if len(cleaned) > 100:
+        raise ValueError(f"cannot import more than 100 unique {label} IDs")
+    if any(len(resource_id) > 256 for resource_id in cleaned):
+        raise ValueError(f"{label} IDs cannot exceed 256 characters")
+    return cleaned
+
+
 class RuntimeImportRequest(BaseModel):
-    runtime_ids: list[str]
+    """One import call carries both discovered resource kinds; either may be empty."""
+
+    runtime_ids: list[str] = []
+    harness_ids: list[str] = []
 
     @model_validator(mode="after")
     def _unique_bounded_ids(self) -> "RuntimeImportRequest":
-        self.runtime_ids = list(
-            dict.fromkeys(runtime_id.strip() for runtime_id in self.runtime_ids)
-        )
-        if not self.runtime_ids or any(not runtime_id for runtime_id in self.runtime_ids):
-            raise ValueError("runtime_ids must contain at least one non-empty Runtime ID")
-        if len(self.runtime_ids) > 100:
-            raise ValueError("runtime_ids cannot contain more than 100 unique Runtime IDs")
-        if any(len(runtime_id) > 256 for runtime_id in self.runtime_ids):
-            raise ValueError("Runtime IDs cannot exceed 256 characters")
+        self.runtime_ids = _clean_resource_ids(self.runtime_ids, "Runtime")
+        self.harness_ids = _clean_resource_ids(self.harness_ids, "Harness")
+        if not self.runtime_ids and not self.harness_ids:
+            raise ValueError("provide at least one Runtime ID or Harness ID to import")
         return self

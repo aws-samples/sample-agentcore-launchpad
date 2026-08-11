@@ -18,6 +18,7 @@ from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import data_client
 from app.services.runtime_discovery import (
     DISCOVERED_METHOD,
+    is_discovered_harness,
     require_invoke_capability,
 )
 from app.templates import gateway_support
@@ -140,7 +141,9 @@ def invoke_agent_text(
     gateway_access_token: str | None = None,
 ) -> dict[str, Any]:
     require_invoke_capability(agent)
-    if agent.method == "harness":
+    # An imported harness carries the harness ARN, so it invokes exactly like a
+    # launchpad-deployed one — InvokeHarness, never InvokeAgentRuntime.
+    if agent.method == "harness" or is_discovered_harness(agent):
         return hc.invoke_harness_text(
             data_client(), agent.arn, prompt, session_id=session_id, actor_id=actor_id
         )

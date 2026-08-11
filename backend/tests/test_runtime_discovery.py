@@ -7,6 +7,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 import app.routers.agents as agents_router
+import app.services.chat as chat_service
 import app.services.invoke as invoke_service
 from app.core.config import get_settings
 from app.core.db import SessionLocal
@@ -71,17 +72,41 @@ def _summary(detail: dict) -> dict:
     }
 
 
-def _harness(name: str) -> dict:
+def _harness(name: str, *, status: str = "READY", version: str = "2") -> dict:
     return {
         "harnessId": f"{name}-1234567890",
         "harnessName": name,
         "arn": f"arn:aws:bedrock-agentcore:us-west-2:111122223333:harness/{name}-1234567890",
-        "status": "READY",
+        "status": status,
+        "harnessVersion": version,
+        "createdAt": datetime(2026, 6, 26, 9, 0, tzinfo=UTC),
+        "updatedAt": datetime(2026, 7, 31, 12, 30, tzinfo=UTC),
     }
 
 
+def _harness_detail(name: str, *, custom_jwt: bool = False, **kwargs) -> dict:
+    """GetHarness adds the configuration the projection must never expose."""
+    detail = _harness(name, **kwargs) | {
+        "executionRoleArn": "arn:aws:iam::111122223333:role/private-harness-role",
+        "systemPrompt": "do-not-leak-prompt",
+        "environmentVariables": {"PRIVATE_TOKEN": "do-not-leak"},
+        "model": {"bedrock": {"modelId": "anthropic.claude"}},
+    }
+    if custom_jwt:
+        detail["authorizerConfiguration"] = {
+            "customJWTAuthorizer": {
+                "discoveryUrl": "https://issuer.example/.well-known/openid-configuration",
+                "allowedClients": ["secret-client"],
+            }
+        }
+    return detail
+
+
 def _mock_control(
-    monkeypatch, details: list[dict], harnesses: list[dict] | None = None
+    monkeypatch,
+    details: list[dict],
+    harnesses: list[dict] | None = None,
+    harness_details: list[dict] | None = None,
 ) -> MagicMock:
     control = MagicMock()
     control.list_agent_runtimes.return_value = {
@@ -90,6 +115,13 @@ def _mock_control(
     control.list_harnesses.return_value = {"harnesses": harnesses or []}
     by_id = {detail["agentRuntimeId"]: detail for detail in details}
     control.get_agent_runtime.side_effect = lambda agentRuntimeId: by_id[agentRuntimeId]
+    by_harness_id = {
+        detail["harnessId"]: detail
+        for detail in (harness_details if harness_details is not None else harnesses or [])
+    }
+    control.get_harness.side_effect = lambda harnessId: {
+        "harness": by_harness_id[harnessId]
+    }
     monkeypatch.setattr(agents_router, "control_client", lambda: control)
     return control
 
@@ -602,3 +634,433 @@ def test_discovered_http_and_a2a_use_shared_runtime_dispatch(
     assert result["text"] == "ok"
     assert runtime_invoke.called is (invoke_name == "runtime")
     assert a2a_invoke.called is (invoke_name == "a2a")
+
+
+# --- managed Harness discovery / import -----------------------------------
+
+
+def _imported_harness_agent(name: str = "external-harness", **discovery) -> Agent:
+    return Agent(
+        name=name,
+        method="discovered_runtime",
+        status="active",
+        resource_id=f"{name}-1234567890",
+        arn=f"arn:aws:bedrock-agentcore:us-west-2:111122223333:harness/{name}-1234567890",
+        owner="aws-discovery",
+        spec={
+            "protocol": "harness",
+            "discovery": {
+                "resource_type": "harness",
+                "harness_name": name,
+                "aws_status": "READY",
+                "authorizer_type": "none",
+                **discovery,
+            },
+        },
+    )
+
+
+def test_scan_projects_harnesses_with_status_eligibility_and_owner_linkage(
+    client, monkeypatch
+):
+    alien = _harness("alien")
+    owned = _harness("support")
+    failed = _harness("halfbuilt", status="CREATE_FAILED")
+    deleting = _harness("goingaway", status="DELETING")
+    db = SessionLocal()
+    launchpad = Agent(
+        name="support-agent",
+        method="harness",
+        status="active",
+        resource_id=owned["harnessId"],
+        arn=owned["arn"],
+        spec={"name": "support-agent", "method": "harness"},
+    )
+    db.add(launchpad)
+    db.commit()
+    launchpad_id = launchpad.id
+    db.close()
+    _mock_control(monkeypatch, [], harnesses=[alien, owned, failed, deleting])
+
+    body = client.get("/api/agents/discovery").json()
+
+    assert body["harness_scan_error"] is None
+    rows = {row["harness_id"]: row for row in body["harnesses"]}
+    assert rows[alien["harnessId"]] == {
+        "harness_id": alien["harnessId"],
+        "harness_arn": alien["arn"],
+        "name": "alien",
+        "description": "",
+        "version": "2",
+        "aws_status": "READY",
+        "last_updated_at": "2026-07-31T12:30:00+00:00",
+        "managed_agent_id": None,
+        "managed_agent_name": None,
+        "managed_agent_method": None,
+        "importable": True,
+        "reason_code": None,
+        "reason": None,
+    }
+    assert rows[owned["harnessId"]]["managed_agent_id"] == launchpad_id
+    assert rows[owned["harnessId"]]["managed_agent_method"] == "harness"
+    for unready in (failed, deleting):
+        assert rows[unready["harnessId"]]["importable"] is False
+        assert rows[unready["harnessId"]]["reason_code"] == "harness-not-ready"
+
+
+def test_harness_scan_failure_is_soft_and_keeps_runtimes(client, monkeypatch):
+    control = _mock_control(monkeypatch, [_detail("http-abcdefghij")])
+    control.list_harnesses.side_effect = ClientError(
+        {"Error": {"Code": "AccessDeniedException", "Message": "denied"}},
+        "ListHarnesses",
+    )
+
+    body = client.get("/api/agents/discovery").json()
+
+    assert body["harnesses"] == []
+    assert "AccessDeniedException" in body["harness_scan_error"]
+    assert body["runtimes"][0]["runtime_id"] == "http-abcdefghij"
+
+
+def test_harness_import_is_idempotent_and_hides_configuration(client, monkeypatch):
+    detail = _harness_detail("myresearchagent_myresearchagent")
+    control = _mock_control(
+        monkeypatch, [], harnesses=[_harness("myresearchagent_myresearchagent")],
+        harness_details=[detail],
+    )
+
+    first = client.post(
+        "/api/agents/discovery/import",
+        json={"harness_ids": [detail["harnessId"], detail["harnessId"]]},
+    )
+
+    assert first.status_code == 200
+    assert first.json()["imported"] == [
+        {
+            "harness_id": detail["harnessId"],
+            "agent_id": first.json()["imported"][0]["agent_id"],
+            "agent_name": "myresearchagent_myresearchagent",
+        }
+    ]
+    for secret in ("do-not-leak", "private-harness-role", "secret-client"):
+        assert secret not in first.text
+    agent_id = first.json()["imported"][0]["agent_id"]
+    db = SessionLocal()
+    row = db.get(Agent, agent_id)
+    assert row.method == "discovered_runtime"
+    assert row.owner == "aws-discovery"
+    assert row.status == "active"
+    assert row.arn == detail["arn"]
+    assert row.resource_id == detail["harnessId"]
+    assert row.version == "2"
+    assert row.spec == {
+        "protocol": "harness",
+        "discovery": {
+            "resource_type": "harness",
+            "harness_name": "myresearchagent_myresearchagent",
+            "description": "",
+            "authorizer_type": "none",
+            "aws_status": "READY",
+            "last_updated_at": "2026-07-31T12:30:00+00:00",
+        },
+    }
+    assert db.query(Deployment).filter(Deployment.agent_id == agent_id).count() == 0
+    db.close()
+
+    scanned = client.get("/api/agents/discovery").json()["harnesses"][0]
+    assert scanned["managed_agent_id"] == agent_id
+    assert scanned["managed_agent_method"] == "discovered_runtime"
+
+    refreshed = _harness_detail(
+        "myresearchagent_myresearchagent", status="UPDATE_FAILED", version="3"
+    )
+    control.get_harness.side_effect = lambda harnessId: {"harness": refreshed}
+    second = client.post(
+        "/api/agents/discovery/import", json={"harness_ids": [detail["harnessId"]]}
+    ).json()
+
+    assert second["imported"] == []
+    assert second["updated"][0]["agent_id"] == agent_id
+    db = SessionLocal()
+    row = db.get(Agent, agent_id)
+    assert row.status == "failed"
+    assert row.version == "3"
+    assert row.spec["discovery"]["aws_status"] == "UPDATE_FAILED"
+    assert db.query(Agent).filter(Agent.resource_id == detail["harnessId"]).count() == 1
+    db.close()
+
+
+def test_harness_import_never_duplicates_a_launchpad_harness_agent(client, monkeypatch):
+    detail = _harness_detail("support")
+    db = SessionLocal()
+    launchpad = Agent(
+        name="support-agent",
+        method="harness",
+        status="active",
+        resource_id=detail["harnessId"],
+        arn=detail["arn"],
+        spec={"name": "support-agent", "method": "harness"},
+    )
+    db.add(launchpad)
+    db.commit()
+    launchpad_id = launchpad.id
+    db.close()
+    _mock_control(monkeypatch, [], harness_details=[detail])
+
+    body = client.post(
+        "/api/agents/discovery/import", json={"harness_ids": [detail["harnessId"]]}
+    ).json()
+
+    assert body["imported"] == []
+    assert body["already_managed"] == [
+        {
+            "harness_id": detail["harnessId"],
+            "agent_id": launchpad_id,
+            "agent_name": "support-agent",
+        }
+    ]
+    db = SessionLocal()
+    assert db.query(Agent).filter(Agent.status != "deleted").count() == 1
+    assert db.get(Agent, launchpad_id).method == "harness"
+    db.close()
+
+
+def test_harness_import_reports_detail_and_status_failures(client, monkeypatch):
+    ready = _harness_detail("healthy")
+    broken = _harness_detail("halfbuilt", status="CREATE_FAILED")
+    control = _mock_control(monkeypatch, [], harness_details=[ready, broken])
+    gone = "vanished-1234567890"
+
+    def get_harness(harnessId):
+        if harnessId == gone:
+            raise ClientError(
+                {"Error": {"Code": "ResourceNotFoundException", "Message": "gone"}},
+                "GetHarness",
+            )
+        return {"harness": ready if harnessId == ready["harnessId"] else broken}
+
+    control.get_harness.side_effect = get_harness
+
+    body = client.post(
+        "/api/agents/discovery/import",
+        json={"harness_ids": [ready["harnessId"], broken["harnessId"], gone]},
+    ).json()
+
+    assert [row["agent_name"] for row in body["imported"]] == ["healthy"]
+    failures = {row["harness_id"]: row["reason_code"] for row in body["failed"]}
+    assert failures == {
+        broken["harnessId"]: "harness-not-ready",
+        gone: "inspection-failed",
+    }
+    assert "ResourceNotFoundException" in next(
+        row["reason"] for row in body["failed"] if row["harness_id"] == gone
+    )
+
+
+def test_import_request_rejects_an_empty_selection(client):
+    response = client.post("/api/agents/discovery/import", json={})
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("status", "authorizer_type", "eligible", "reason_code"),
+    [
+        ("READY", "none", True, None),
+        ("CREATING", "none", False, "harness-not-ready"),
+        ("CREATE_FAILED", "none", False, "harness-not-ready"),
+        ("READY", "custom_jwt", False, "external-authorizer"),
+    ],
+)
+def test_discovered_harness_invoke_capability(
+    status, authorizer_type, eligible, reason_code
+):
+    agent = _imported_harness_agent(
+        aws_status=status, authorizer_type=authorizer_type
+    )
+
+    capability = invoke_capability(agent)
+
+    assert capability["eligible"] is eligible
+    assert capability["reason_code"] == reason_code
+
+
+def test_discovered_harness_invokes_through_invoke_harness(monkeypatch):
+    agent = _imported_harness_agent()
+    harness_invoke = MagicMock(return_value={"text": "ok", "session_id": "s" * 40})
+    runtime_invoke = MagicMock()
+    monkeypatch.setattr(invoke_service, "data_client", lambda: object())
+    monkeypatch.setattr(invoke_service.hc, "invoke_harness_text", harness_invoke)
+    monkeypatch.setattr(invoke_service.rt, "invoke_runtime_text", runtime_invoke)
+
+    result = invoke_service.invoke_agent_text(agent, "hello")
+
+    assert result["text"] == "ok"
+    assert runtime_invoke.called is False
+    assert harness_invoke.call_args.args[1] == agent.arn
+
+
+def test_imported_harness_invoke_endpoint_reaches_the_harness_data_plane(
+    client, monkeypatch
+):
+    db = SessionLocal()
+    row = _imported_harness_agent(name="api_harness")
+    db.add(row)
+    db.commit()
+    agent_id, harness_arn = row.id, row.arn
+    db.close()
+    data = MagicMock()
+    data.invoke_harness.return_value = {
+        "stream": [{"contentBlockDelta": {"delta": {"text": "4"}}}]
+    }
+    monkeypatch.setattr(invoke_service, "data_client", lambda: data)
+
+    body = client.post(f"/api/agents/{agent_id}/invoke", json={"prompt": "2+2?"}).json()
+
+    assert body["text"] == "4"
+    assert data.invoke_harness.call_args.kwargs["harnessArn"] == harness_arn
+    data.invoke_agent_runtime.assert_not_called()
+
+
+def test_discovered_harness_chat_streams_harness_events(monkeypatch):
+    agent = _imported_harness_agent()
+    data = MagicMock()
+    data.invoke_harness.return_value = {
+        "stream": [
+            {"contentBlockStart": {"start": {"toolUse": {"name": "search", "toolUseId": "t1"}}}},
+            {"contentBlockDelta": {"delta": {"text": "hi"}}},
+        ]
+    }
+    monkeypatch.setattr(chat_service, "data_client", lambda: data)
+
+    events = list(chat_service.chat_stream(agent, "hello", session_id="s" * 40))
+
+    assert events[0]["data"]["mode"] == "stream"
+    assert [event["event"] for event in events] == ["meta", "tool", "delta", "done"]
+    assert data.invoke_harness.call_args.kwargs["harnessArn"] == agent.arn
+
+
+def test_imported_harness_delete_is_detach_only(client, monkeypatch):
+    db = SessionLocal()
+    row = _imported_harness_agent(name="alien_harness")
+    db.add(row)
+    db.commit()
+    agent_id = row.id
+    db.close()
+    control = MagicMock()
+    monkeypatch.setattr(agents_router, "control_client", lambda: control)
+    harness_teardown = MagicMock()
+    monkeypatch.setattr(
+        agents_router.harness_method, "delete_agent_resources", harness_teardown
+    )
+    role_teardown = MagicMock()
+    monkeypatch.setattr(agents_router.agent_iam, "delete_execution_role", role_teardown)
+
+    response = client.delete(f"/api/agents/{agent_id}")
+
+    assert response.status_code == 200
+    assert response.json()["aws_resource_deleted"] is False
+    harness_teardown.assert_not_called()
+    role_teardown.assert_not_called()
+    control.delete_harness.assert_not_called()
+    db = SessionLocal()
+    assert db.get(Agent, agent_id).status == "deleted"
+    db.close()
+
+
+def test_imported_harness_owns_its_backing_runtime_in_the_runtime_scan(
+    client, monkeypatch
+):
+    summary = _harness("myresearch")
+    detail = _harness_detail("myresearch")
+    backing = _detail(
+        "harness_myresearch-abcdefghij", name="harness_myresearch", artifact="container"
+    )
+    _mock_control(
+        monkeypatch, [backing], harnesses=[summary], harness_details=[detail]
+    )
+
+    imported = client.post(
+        "/api/agents/discovery/import", json={"harness_ids": [summary["harnessId"]]}
+    ).json()["imported"][0]
+    row = client.get("/api/agents/discovery").json()["runtimes"][0]
+
+    assert row["artifact_type"] == "harness"
+    assert row["importable"] is False
+    assert row["reason_code"] == "harness-managed"
+    assert row["managed_agent_id"] == imported["agent_id"]
+    assert row["managed_agent_method"] == "discovered_runtime"
+
+
+def test_harness_import_name_collision_never_takes_over_another_agent(client, monkeypatch):
+    """A same-named launchpad agent for an UNRELATED resource keeps its row+name."""
+    detail = _harness_detail("frontdesk")
+    db = SessionLocal()
+    namesake = Agent(
+        name="frontdesk",
+        method="zip_runtime",
+        status="active",
+        resource_id="frontdesk-abcdefghij",
+        arn="arn:aws:bedrock-agentcore:us-west-2:111122223333:runtime/frontdesk-abcdefghij",
+        spec={"name": "frontdesk", "method": "zip_runtime"},
+    )
+    db.add(namesake)
+    db.commit()
+    namesake_id = namesake.id
+    db.close()
+    _mock_control(monkeypatch, [], harness_details=[detail])
+
+    imported = client.post(
+        "/api/agents/discovery/import", json={"harness_ids": [detail["harnessId"]]}
+    ).json()["imported"][0]
+
+    assert imported["agent_id"] != namesake_id
+    assert imported["agent_name"] == f"frontdesk-{detail['harnessId'][-10:]}"
+    db = SessionLocal()
+    assert db.get(Agent, namesake_id).name == "frontdesk"
+    assert db.get(Agent, namesake_id).method == "zip_runtime"
+    assert db.get(Agent, imported["agent_id"]).arn == detail["arn"]
+    db.close()
+
+
+def test_discovered_runtime_chat_keeps_the_buffered_runtime_path(monkeypatch):
+    """The harness gate must not capture a discovered RUNTIME (no resource_type)."""
+    agent = Agent(
+        name="external-http",
+        method="discovered_runtime",
+        status="active",
+        arn="arn:aws:bedrock-agentcore:us-west-2:111122223333:runtime/http-abcdefghij",
+        spec={
+            "protocol": "http",
+            "discovery": {"aws_status": "READY", "authorizer_type": "none"},
+        },
+    )
+    data = MagicMock()
+    monkeypatch.setattr(chat_service, "data_client", lambda: data)
+    monkeypatch.setattr(invoke_service, "data_client", lambda: data)
+    monkeypatch.setattr(
+        invoke_service.rt,
+        "invoke_runtime_text",
+        MagicMock(return_value={"text": "runtime answer", "session_id": "s" * 40}),
+    )
+
+    events = list(chat_service.chat_stream(agent, "hello", session_id="s" * 40))
+
+    assert events[0]["data"]["mode"] == "buffered"
+    assert "".join(
+        event["data"]["text"] for event in events if event["event"] == "delta"
+    ) == "runtime answer"
+    data.invoke_harness.assert_not_called()
+
+
+def test_imported_harness_is_offered_by_the_public_api(client):
+    db = SessionLocal()
+    db.add(_imported_harness_agent(name="public_harness"))
+    db.commit()
+    agent_id = db.query(Agent).filter(Agent.name == "public_harness").first().id
+    db.close()
+    key = client.post("/api/apikeys", json={"name": "harness-key"}).json()["key"]
+
+    listed = client.get("/v1/agents", headers={"X-Api-Key": key}).json()["agents"]
+
+    assert agent_id in {agent["id"] for agent in listed}

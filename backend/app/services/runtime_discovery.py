@@ -1,4 +1,12 @@
-"""Read-only Runtime discovery and explicit externally-owned ledger imports."""
+"""Read-only Runtime/Harness discovery and explicit externally-owned ledger imports.
+
+Two resource kinds are discovered and imported through the same ledger shape: an
+`Agent` row with ``method = DISCOVERED_METHOD`` whose ``spec.discovery.
+resource_type`` says which AWS resource it points at (absent ⇒ ``"runtime"``).
+An imported harness stores the HARNESS arn/id, so invoke goes through
+InvokeHarness and the harness's backing runtime resolves its owner by the same
+join a launchpad-created harness agent uses.
+"""
 
 import re
 from datetime import UTC, datetime
@@ -13,6 +21,7 @@ from app.services.agentcore import harness as harness_api
 from app.services.agentcore import runtime as runtime_api
 
 DISCOVERED_METHOD = "discovered_runtime"
+HARNESS_RESOURCE_TYPE = "harness"
 AGENT_PROTOCOLS = {"http", "a2a"}
 FAILURE_STATUSES = {"CREATE_FAILED", "UPDATE_FAILED", "DELETING", "DELETE_FAILED"}
 
@@ -154,6 +163,45 @@ def _runtime_invoke_capability(
     return {"eligible": True, "reason_code": None, "reason": None}
 
 
+def _harness_status_capability(aws_status: str) -> dict[str, Any]:
+    if aws_status in FAILURE_STATUSES or aws_status.endswith("_FAILED"):
+        return {
+            "eligible": False,
+            "reason_code": "harness-not-ready",
+            "reason": f"Harness status is {aws_status or 'UNKNOWN'}, not READY.",
+        }
+    return {"eligible": True, "reason_code": None, "reason": None}
+
+
+def _harness_invoke_capability(aws_status: str, authorizer_type: str) -> dict[str, Any]:
+    """An imported harness is invokable only through InvokeHarness with SigV4.
+
+    Deliberately NOT ``_runtime_invoke_capability``: its ``harness`` artifact arm
+    means "backing runtime of a harness", which is the opposite verdict.
+    """
+    if authorizer_type != "none":
+        return {
+            "eligible": False,
+            "reason_code": "external-authorizer",
+            "reason": "This Harness uses an external custom JWT authorizer.",
+        }
+    if aws_status != "READY":
+        return {
+            "eligible": False,
+            "reason_code": "harness-not-ready",
+            "reason": f"Harness status is {aws_status or 'UNKNOWN'}, not READY.",
+        }
+    return {"eligible": True, "reason_code": None, "reason": None}
+
+
+def is_discovered_harness(agent: Agent) -> bool:
+    """True for an imported (externally owned) managed Harness."""
+    if agent.method != DISCOVERED_METHOD:
+        return False
+    discovery = (agent.spec or {}).get("discovery") or {}
+    return discovery.get("resource_type") == HARNESS_RESOURCE_TYPE
+
+
 def invoke_capability(agent: Agent) -> dict[str, Any]:
     """Project the one invoke contract consumed by API and frontend surfaces."""
     if agent.status != "active" or not agent.arn:
@@ -167,6 +215,11 @@ def invoke_capability(agent: Agent) -> dict[str, Any]:
 
     spec = agent.spec or {}
     discovery = spec.get("discovery") or {}
+    if discovery.get("resource_type") == HARNESS_RESOURCE_TYPE:
+        return _harness_invoke_capability(
+            str(discovery.get("aws_status") or "UNKNOWN").upper(),
+            str(discovery.get("authorizer_type") or "none").lower(),
+        )
     return _runtime_invoke_capability(
         str(spec.get("protocol") or "unknown").lower(),
         str(discovery.get("aws_status") or "UNKNOWN").upper(),
@@ -316,6 +369,49 @@ def scan_runtimes(control: Any, db: Session) -> list[dict[str, Any]]:
     return candidates
 
 
+def _harness_candidate(record: dict[str, Any], db: Session) -> dict[str, Any]:
+    """Projection of one ListHarnesses summary / GetHarness detail.
+
+    Harness summaries carry no authorizer or artifact detail, so the scan makes
+    no invoke claim — import eligibility is the status verdict only, and the
+    invoke verdict is projected from the stored spec after import.
+    """
+    harness_id = str(record.get("harnessId") or "")
+    harness_arn = str(record.get("arn") or "")
+    aws_status = str(record.get("status") or "UNKNOWN").upper()
+    managed = _managed_match(db, harness_arn or None, harness_id)
+    capability = _harness_status_capability(aws_status)
+    return {
+        "harness_id": harness_id,
+        "harness_arn": harness_arn,
+        "name": str(record.get("harnessName") or harness_id),
+        "description": str(record.get("description") or ""),
+        "version": str(record.get("harnessVersion") or ""),
+        "aws_status": aws_status,
+        "last_updated_at": _iso(record.get("updatedAt") or record.get("createdAt")),
+        "managed_agent_id": managed.id if managed else None,
+        "managed_agent_name": managed.name if managed else None,
+        "managed_agent_method": managed.method if managed else None,
+        "importable": capability["eligible"],
+        "reason_code": capability["reason_code"],
+        "reason": capability["reason"],
+    }
+
+
+def scan_harnesses(control: Any, db: Session) -> tuple[list[dict[str, Any]], str | None]:
+    """Harness candidates plus a fail-soft error string.
+
+    Unlike the Runtime scan a ListHarnesses failure is not fatal: the Runtime
+    half of the discovery response still renders, with the error reported next
+    to it (same posture as ``_harness_index``).
+    """
+    try:
+        summaries = harness_api.list_harnesses(control)
+    except Exception as exc:
+        return [], f"AgentCore Harness discovery failed ({_aws_error(exc)})."
+    return [_harness_candidate(summary, db) for summary in summaries], None
+
+
 def _ledger_status(aws_status: str) -> str:
     if aws_status == "READY":
         return "active"
@@ -325,17 +421,17 @@ def _ledger_status(aws_status: str) -> str:
 
 
 def _display_name(
-    db: Session, runtime_name: str, runtime_id: str, existing: Agent | None
+    db: Session, resource_name: str, resource_id: str, existing: Agent | None
 ) -> str:
     conflict = (
         db.query(Agent)
-        .filter(Agent.name == runtime_name, Agent.status != "deleted")
+        .filter(Agent.name == resource_name, Agent.status != "deleted")
         .first()
     )
     if conflict is None or (existing is not None and conflict.id == existing.id):
-        return runtime_name[:64]
-    suffix = f"-{runtime_id[-10:]}"
-    return f"{runtime_name[: 64 - len(suffix)]}{suffix}"
+        return resource_name[:64]
+    suffix = f"-{resource_id[-10:]}"
+    return f"{resource_name[: 64 - len(suffix)]}{suffix}"
 
 
 def _discovery_spec(candidate: dict[str, Any]) -> dict[str, Any]:
@@ -352,15 +448,30 @@ def _discovery_spec(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _harness_discovery_spec(
+    candidate: dict[str, Any], authorizer_type: str
+) -> dict[str, Any]:
+    return {
+        "protocol": HARNESS_RESOURCE_TYPE,
+        "discovery": {
+            "resource_type": HARNESS_RESOURCE_TYPE,
+            "harness_name": candidate["name"],
+            "description": candidate["description"],
+            "authorizer_type": authorizer_type,
+            "aws_status": candidate["aws_status"],
+            "last_updated_at": candidate["last_updated_at"],
+        },
+    }
+
+
+def _empty_import_result() -> dict[str, list[dict[str, Any]]]:
+    return {"imported": [], "updated": [], "already_managed": [], "failed": []}
+
+
 def import_runtimes(
     control: Any, db: Session, runtime_ids: list[str]
 ) -> dict[str, list[dict[str, Any]]]:
-    result: dict[str, list[dict[str, Any]]] = {
-        "imported": [],
-        "updated": [],
-        "already_managed": [],
-        "failed": [],
-    }
+    result = _empty_import_result()
     harness_index = _harness_index(control)
     for runtime_id in runtime_ids:
         try:
@@ -425,6 +536,86 @@ def import_runtimes(
         result["imported" if created else "updated"].append(
             {
                 "runtime_id": runtime_id,
+                "agent_id": existing.id,
+                "agent_name": existing.name,
+            }
+        )
+    return result
+
+
+def import_harnesses(
+    control: Any, db: Session, harness_ids: list[str]
+) -> dict[str, list[dict[str, Any]]]:
+    """Import managed Harnesses as externally-owned ledger rows (idempotent).
+
+    The row carries the harness ARN/id, never the backing runtime's, so delete
+    stays ledger-only and invoke dispatches to InvokeHarness.
+    """
+    result = _empty_import_result()
+    for harness_id in harness_ids:
+        try:
+            detail = harness_api.get_harness(control, harness_id)
+        except Exception as exc:
+            result["failed"].append(
+                {
+                    "harness_id": harness_id,
+                    "reason_code": "inspection-failed",
+                    "reason": f"Harness detail inspection failed ({_aws_error(exc)}).",
+                }
+            )
+            continue
+        candidate = _harness_candidate(detail, db)
+
+        # Ownership first: a harness deployed by launchpad (method="harness")
+        # must never be duplicated as an externally-owned import.
+        if (
+            candidate["managed_agent_id"] is not None
+            and candidate["managed_agent_method"] != DISCOVERED_METHOD
+        ):
+            result["already_managed"].append(
+                {
+                    "harness_id": harness_id,
+                    "agent_id": candidate["managed_agent_id"],
+                    "agent_name": candidate["managed_agent_name"],
+                }
+            )
+            continue
+
+        existing = (
+            db.get(Agent, candidate["managed_agent_id"])
+            if candidate["managed_agent_id"] is not None
+            else None
+        )
+        # Status gates the FIRST import only. Refreshing an existing import is how
+        # the ledger learns the external harness broke — refusing would leave a
+        # stale "active" row whose invoke attempts keep reaching a dead harness.
+        if existing is None and not candidate["importable"]:
+            result["failed"].append(
+                {
+                    "harness_id": harness_id,
+                    "reason_code": candidate["reason_code"],
+                    "reason": candidate["reason"],
+                }
+            )
+            continue
+
+        created = existing is None
+        display_name = _display_name(db, candidate["name"], harness_id, existing)
+        if existing is None:
+            existing = Agent(method=DISCOVERED_METHOD, owner="aws-discovery")
+            db.add(existing)
+        existing.name = display_name
+        existing.status = _ledger_status(candidate["aws_status"])
+        existing.resource_id = harness_id
+        existing.arn = candidate["harness_arn"]
+        existing.version = candidate["version"] or None
+        existing.spec = _harness_discovery_spec(candidate, _authorizer_type(detail))
+        existing.error = None
+        existing.updated_at = datetime.now(UTC)
+        db.flush()
+        result["imported" if created else "updated"].append(
+            {
+                "harness_id": harness_id,
                 "agent_id": existing.id,
                 "agent_name": existing.name,
             }

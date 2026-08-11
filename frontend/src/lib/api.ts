@@ -79,8 +79,35 @@ export interface RuntimeDiscoveryCandidate {
   };
 }
 
+// Managed Harnesses expose no artifact/authorizer detail in ListHarnesses, so the
+// scan projects identity + status only; invoke eligibility is decided after import.
+export interface HarnessDiscoveryCandidate {
+  harness_id: string;
+  harness_arn: string;
+  name: string;
+  description: string;
+  version: string;
+  aws_status: string;
+  last_updated_at: string | null;
+  managed_agent_id: string | null;
+  managed_agent_name: string | null;
+  managed_agent_method: AgentInfo["method"] | null;
+  importable: boolean;
+  reason_code: string | null;
+  reason: string | null;
+}
+
+export interface RuntimeDiscoveryResponse {
+  region: string;
+  runtimes: RuntimeDiscoveryCandidate[];
+  harnesses: HarnessDiscoveryCandidate[];
+  harness_scan_error: string | null;
+}
+
+// One import call carries both kinds; a result row names the kind it came from.
 export interface RuntimeImportItem {
-  runtime_id: string;
+  runtime_id?: string;
+  harness_id?: string;
   agent_id?: string;
   agent_name?: string;
   reason_code?: string;
@@ -1342,13 +1369,11 @@ export const api = {
     }),
   listAgents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
   discoverRuntimes: () =>
-    request<{ region: string; runtimes: RuntimeDiscoveryCandidate[] }>(
-      "/api/agents/discovery",
-    ),
-  importRuntimes: (runtimeIds: string[]) =>
+    request<RuntimeDiscoveryResponse>("/api/agents/discovery"),
+  importRuntimes: (runtimeIds: string[], harnessIds: string[] = []) =>
     request<RuntimeImportResult>("/api/agents/discovery/import", {
       method: "POST",
-      body: JSON.stringify({ runtime_ids: runtimeIds }),
+      body: JSON.stringify({ runtime_ids: runtimeIds, harness_ids: harnessIds }),
     }),
   convertAgent: (id: string) =>
     request<{ agent: AgentInfo; job_id: string; deployment_id: string }>(

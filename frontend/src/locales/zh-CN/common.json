@@ -192,15 +192,15 @@
       },
       "discovery": {
         "badge": "已有 AWS 资源",
-        "title": "发现现有 Runtime",
-        "desc": "扫描当前区域的 AgentCore Runtime 资源，将 Agent 类型的资源纳入 Launchpad，不会重新部署。",
-        "spec2": "导入 HTTP + A2A 资源清单",
+        "title": "发现现有 Runtime 与 Harness",
+        "desc": "扫描当前区域的 AgentCore Runtime 与托管 Harness 资源，将 Agent 类型的资源纳入 Launchpad，不会重新部署。",
+        "spec2": "导入 HTTP + A2A + Harness 资源清单",
         "spec3": "外部所有 · 不修改 AWS 资源"
       }
     },
     "discovery": {
-      "kicker": "// RUNTIME 发现",
-      "title": "发现现有 Runtime",
+      "kicker": "// 资源发现",
+      "title": "发现现有 Runtime 与 Harness",
       "region": "AGENTCORE RUNTIME · {{region}}",
       "back": "AGENT 管理",
       "refresh": "刷新",
@@ -212,7 +212,13 @@
       "count": "{{count}} 个资源",
       "scanning": "正在扫描 AGENTCORE RUNTIME……",
       "empty": "当前区域未发现 RUNTIME",
+      "harnessResults": "区域内 HARNESS",
+      "harnessScanning": "正在扫描托管 HARNESS……",
+      "harnessEmpty": "当前区域未发现托管 HARNESS",
+      "harnessScanFailed": "托管 Harness 扫描失败：",
+      "harnessReadyToImport": "可导入",
       "selectRuntime": "选择 {{name}}",
+      "selectHarness": "选择 Harness {{name}}",
       "customJwt": "自定义 JWT",
       "alreadyManaged": "已管理 · {{name}}",
       "inventoryOnly": "仅纳入清单",
@@ -221,6 +227,7 @@
       "importSummary": "已导入 {{imported}} 个，已刷新 {{updated}} 个，已有 {{managed}} 个，失败 {{failed}} 个。",
       "columns": {
         "runtime": "RUNTIME",
+        "harness": "HARNESS",
         "protocol": "协议",
         "artifact": "制品",
         "status": "AWS 状态",
@@ -231,9 +238,10 @@
       "reasons": {
         "not-agent-protocol": "MCP Runtime 是工具服务器，不是 Agent。",
         "unsupported-protocol": "暂不支持该 Runtime 协议。",
-        "inspection-failed": "无法读取 Runtime 详情。",
+        "inspection-failed": "无法读取资源详情。",
         "external-authorizer": "使用外部自定义 JWT，无法对话。",
         "harness-managed": "这是托管 Harness 的底层 Runtime，请使用对应的 Harness Agent。",
+        "harness-not-ready": "Harness 尚未就绪，无法导入或对话。",
         "runtime-not-ready": "Runtime 尚未就绪，无法对话。",
         "unknown": "无法判断该能力。"
       }

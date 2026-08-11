@@ -15,6 +15,7 @@ from app.services.agentcore import harness as hc
 from app.services.agentcore.client import data_client
 from app.services.agentcore.harness import new_session_id
 from app.services.invoke import invoke_agent_events
+from app.services.runtime_discovery import is_discovered_harness
 
 
 def chat_stream(
@@ -30,14 +31,16 @@ def chat_stream(
     Never raises mid-stream; errors surface as an `error` event.
     """
     session_id = session_id or new_session_id()
-    mode = "stream" if agent.method in {"harness", "container"} else "buffered"
+    # Imported harnesses stream through the same InvokeHarness path as 方式B.
+    harness = agent.method == "harness" or is_discovered_harness(agent)
+    mode = "stream" if harness or agent.method == "container" else "buffered"
     yield {
         "event": "meta",
         "data": {"session_id": session_id, "agent": agent.name, "mode": mode},
     }
     started = time.monotonic()
     try:
-        if agent.method == "harness":
+        if harness:
             yield from _harness_events(
                 agent,
                 prompt,

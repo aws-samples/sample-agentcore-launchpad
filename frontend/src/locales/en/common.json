@@ -192,15 +192,15 @@
       },
       "discovery": {
         "badge": "EXISTING AWS",
-        "title": "Discover existing runtimes",
-        "desc": "Scan AgentCore Runtime resources in this Region and add agent-like resources to Launchpad without redeploying them.",
-        "spec2": "HTTP + A2A inventory import",
+        "title": "Discover existing runtimes and harnesses",
+        "desc": "Scan AgentCore Runtime and managed Harness resources in this Region and add agent-like resources to Launchpad without redeploying them.",
+        "spec2": "HTTP + A2A + Harness inventory import",
         "spec3": "externally owned · no AWS mutation"
       }
     },
     "discovery": {
-      "kicker": "// RUNTIME DISCOVERY",
-      "title": "Discover existing runtimes",
+      "kicker": "// RESOURCE DISCOVERY",
+      "title": "Discover existing runtimes and harnesses",
       "region": "AGENTCORE RUNTIME · {{region}}",
       "back": "AGENT MANAGEMENT",
       "refresh": "REFRESH",
@@ -212,7 +212,13 @@
       "count": "{{count}} resources",
       "scanning": "SCANNING AGENTCORE RUNTIMES…",
       "empty": "NO RUNTIMES FOUND IN THIS REGION",
+      "harnessResults": "REGION HARNESSES",
+      "harnessScanning": "SCANNING MANAGED HARNESSES…",
+      "harnessEmpty": "NO MANAGED HARNESSES FOUND IN THIS REGION",
+      "harnessScanFailed": "Managed Harness scan failed:",
+      "harnessReadyToImport": "READY TO IMPORT",
       "selectRuntime": "Select {{name}}",
+      "selectHarness": "Select harness {{name}}",
       "customJwt": "CUSTOM JWT",
       "alreadyManaged": "MANAGED · {{name}}",
       "inventoryOnly": "INVENTORY ONLY",
@@ -221,6 +227,7 @@
       "importSummary": "Imported {{imported}}, refreshed {{updated}}, already managed {{managed}}, failed {{failed}}.",
       "columns": {
         "runtime": "RUNTIME",
+        "harness": "HARNESS",
         "protocol": "PROTOCOL",
         "artifact": "ARTIFACT",
         "status": "AWS STATUS",
@@ -231,9 +238,10 @@
       "reasons": {
         "not-agent-protocol": "MCP runtimes are tool servers, not agents.",
         "unsupported-protocol": "This Runtime protocol is not supported.",
-        "inspection-failed": "Runtime details could not be inspected.",
+        "inspection-failed": "Resource details could not be inspected.",
         "external-authorizer": "External custom JWT authorizer; Chat is unavailable.",
         "harness-managed": "Backing runtime of a managed Harness; use its Harness agent instead.",
+        "harness-not-ready": "Harness is not READY; it cannot be imported or chatted with.",
         "runtime-not-ready": "Runtime is not READY; Chat is unavailable.",
         "unknown": "Capability could not be determined."
       }
