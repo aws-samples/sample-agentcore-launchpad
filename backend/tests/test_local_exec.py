@@ -683,3 +683,30 @@ def test_reap_orphans_kills_leftover_exec_containers(monkeypatch):
     assert local_exec.reap_orphan_containers(_docker_settings()) == 2
     assert calls[0][:3] == ["docker", "ps", "-q"]
     assert calls[1] == ["docker", "kill", "id1", "id2"]
+
+
+def test_docker_workdirs_live_under_data_not_private_tmp():
+    """Docker bind-mount sources are resolved by the daemon in the root mount
+    namespace — a workdir in the backend's /tmp mounts EMPTY under systemd
+    PrivateTmp=true (hit live on prod 2026-08-11). So docker-backend workdirs
+    must live under DATA_DIR; the subprocess backend keeps the tempfile
+    default."""
+    from app.core.config import DATA_DIR, Settings
+
+    base = local_exec.exec_workdir_base(_docker_settings())
+    assert base is not None
+    assert base.startswith(str(DATA_DIR))
+    assert local_exec.exec_workdir_base(Settings()) is None
+
+
+def test_reap_orphans_clears_stale_workdirs(monkeypatch, tmp_path):
+    monkeypatch.setattr(local_exec, "exec_workdir_base", lambda s=None: str(tmp_path))
+    (tmp_path / "strands_exec_dead").mkdir()
+    (tmp_path / "agent_session_dead").mkdir()
+
+    def fake_run(argv, **kw):
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(local_exec.subprocess, "run", fake_run)
+    local_exec.reap_orphan_containers(_docker_settings())
+    assert list(tmp_path.iterdir()) == []

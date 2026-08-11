@@ -65,7 +65,10 @@ class ConversationService:
     def _initialize_agent(self, session_id: str, generated_code: str) -> None:
         """Write the generated code to a persistent per-session temp dir and
         bundle any referenced skills next to it."""
-        session_dir = Path(tempfile.mkdtemp(prefix=f"agent_session_{session_id}_"))
+        session_dir = Path(tempfile.mkdtemp(
+            prefix=f"agent_session_{session_id}_",
+            dir=local_exec.exec_workdir_base(),
+        ))
         agent_file = session_dir / "agent.py"
         agent_file.write_text(generated_code, encoding="utf-8")
         local_exec.bundle_skills_for_workdir(generated_code, str(session_dir))

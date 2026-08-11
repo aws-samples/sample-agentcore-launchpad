@@ -23,7 +23,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from app.core.config import get_settings
+from app.core.config import DATA_DIR, get_settings
 
 logger = logging.getLogger("launchpad.local_exec")
 
@@ -306,13 +306,36 @@ def new_container_name() -> str:
     return f"strands-exec-{uuid.uuid4().hex[:12]}"
 
 
+def exec_workdir_base(settings: Any = None) -> str | None:
+    """Where run workspaces are created: None (tempfile default, /tmp) on the
+    subprocess backend, ``data/exec-runs`` on the docker backend.
+
+    Docker bind-mount sources are resolved by the *daemon* in the root mount
+    namespace, so a workdir in the backend's /tmp silently mounts empty under
+    systemd `PrivateTmp=true` (the prod posture — hit live 2026-08-11:
+    "can't open file '/work/generated_agent.py'"). DATA_DIR is host-visible.
+    """
+    current = settings or get_settings()
+    if not docker_backend(current):
+        return None
+    base = DATA_DIR / "exec-runs"
+    base.mkdir(parents=True, exist_ok=True)
+    return str(base)
+
+
 def reap_orphan_containers(settings: Any = None) -> int:
     """Startup janitor: kill `strands-exec-*` containers left by a backend
-    crash. `--rm` removes them once killed. No-op (0) on the subprocess
-    backend or when docker is unavailable; never raises."""
+    crash (`--rm` removes them once killed) and clear stale run workspaces
+    under data/exec-runs — every dir there is dead after a restart, since exec
+    runs are transient and conversation sessions are in-memory. No-op (0) on
+    the subprocess backend or when docker is unavailable; never raises."""
     current = settings or get_settings()
     if not docker_backend(current):
         return 0
+    base = exec_workdir_base(current)
+    if base:
+        for entry in os.listdir(base):
+            shutil.rmtree(os.path.join(base, entry), ignore_errors=True)
     try:
         listing = subprocess.run(  # noqa: S603 — fixed argv, no shell
             ["docker", "ps", "-q", "--filter", "name=strands-exec-"],
@@ -626,7 +649,7 @@ async def spawn_execution_subprocess(
     if not docker_backend(settings) and not interpreter_available():
         raise ExecInterpreterUnavailable(missing_interpreter_message())
 
-    workdir = tempfile.mkdtemp(prefix="strands_exec_")
+    workdir = tempfile.mkdtemp(prefix="strands_exec_", dir=exec_workdir_base(settings))
     code_file = os.path.join(workdir, "generated_agent.py")
     with open(code_file, "w", encoding="utf-8") as f:
         f.write(code)
