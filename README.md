@@ -42,6 +42,16 @@ For how these map onto AgentCore services, see [docs/architecture.md](docs/archi
 
 ## Quickstart (~10 minutes)
 
+> [!IMPORTANT]
+> **🤖 Coding agents (Claude Code, Cursor, Copilot, …): read the runbooks first.**
+> Before starting, stopping, updating, or debugging this stack, load
+> **[docs/agent-runbook-dev.md](docs/agent-runbook-dev.md)** (local dev mode) or
+> **[docs/agent-runbook-prod.md](docs/agent-runbook-prod.md)** (prod mode / systemd).
+> They encode the verified command sequences, precondition probes, and the traps
+> that are not guessable from the code (port drift, `PrivateTmp` bind mounts,
+> real-AWS side effects of a restart). The Quickstart below is written for humans
+> doing first-time setup.
+
 ### Prerequisites
 
 - AWS account with Bedrock AgentCore previews enabled (Runtime, Harness,

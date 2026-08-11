@@ -17,6 +17,11 @@ up-to-date map of how each console feature backs onto an AgentCore service and r
 All Python is managed by **uv** — run backend/infra commands from their own directory
 with `uv run`, never bare `python`/`pip`.
 
+**Before starting/stopping/updating the running stack**, read the agent runbooks:
+[docs/agent-runbook-dev.md](docs/agent-runbook-dev.md) (local dev) /
+[docs/agent-runbook-prod.md](docs/agent-runbook-prod.md) (prod, systemd) — they carry
+the precondition probes and restart side-effect traps the table below does not.
+
 | Task | Command |
 |---|---|
 | Full verify gate (**run before reporting done**) | `make verify` |

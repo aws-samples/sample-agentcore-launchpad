@@ -37,6 +37,15 @@ vendored Strands Studio 子应用。主要能力包括：
 
 ## 快速开始（约 10 分钟）
 
+> [!IMPORTANT]
+> **🤖 Coding Agent（Claude Code、Cursor、Copilot 等）：请先阅读运维手册。**
+> 在启动、停止、更新或调试本平台之前，先加载
+> **[docs/agent-runbook-dev.md](docs/agent-runbook-dev.md)**（本地 dev 模式）或
+> **[docs/agent-runbook-prod.md](docs/agent-runbook-prod.md)**（prod 模式 / systemd）。
+> 其中记录了经过验证的命令序列、前置条件探测，以及无法从代码中猜出的陷阱
+> （端口漂移、`PrivateTmp` bind mount、重启的真实 AWS 副作用）。
+> 下面的快速开始面向首次搭建的人类读者。
+
 ### 前置条件
 
 - AWS 账号已在 `us-west-2` 开启 Bedrock AgentCore 预览（Runtime、Harness、
