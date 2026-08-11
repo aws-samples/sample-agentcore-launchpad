@@ -58,9 +58,9 @@ bootstrap 会创建共享 Gateway，但不会创建 Policy Engine、创建 Cedar
 Engine，也不会替用户选择 Gateway 的执行模式。重跑 bootstrap 时，已有 Policy 资源与
 挂载关系同样保持不变。
 
-需要 Policy 时，请在治理页面中显式纳管目标 Gateway，创建或选择 Engine，以
-`LOG_ONLY` 挂载，然后创建并审核 Policy；只有完成验证后，才提升为 `ACTIVE` 或把
-Gateway 切换到 `ENFORCE`。
+需要 Policy 时，请在治理页面中显式纳管目标 Gateway，创建或选择 Engine，以默认
+`ENFORCE` 或可选 `LOG_ONLY` 模式挂载。`ENFORCE` 默认拒绝，因此应在依赖 Gateway
+流量前创建并审核明确放行的 Policy。
 
 bootstrap 仍会为通用可观测性开启 CloudWatch Transaction Search，但不创建逐条 Policy
 决策 span 所需的 per-Gateway CloudWatch Logs delivery。Policy 配置完成后，决策计数

@@ -60,8 +60,8 @@ agentcore-launchpad:managed-by = agentcore-launchpad
 1. 打开它的详情。
 
 ![未纳管的 Gateway](images/11-gw-unmanaged.png)
-*图 11-3：未纳管状态。此时策略引擎显示 `未挂载`，并提供 `创建并以 LOG_ONLY 挂载` 按钮。
-新建引擎、Gateway 挂载都从 LOG_ONLY 开始。*
+*图 11-3：未纳管状态。此时策略引擎显示 `未挂载`，并提供初始 Gateway 模式选择。
+默认选择 ENFORCE，也可改为 LOG_ONLY 后再创建并挂载。*
 
 2. 点 `纳管`，在确认弹窗里确认。
 3. 到 AWS 侧核对这两个标签：
@@ -185,7 +185,8 @@ permit(
 
 ### 生命周期与提升门禁
 
-- 新引擎、新 Gateway 挂载、新策略**一律从 `LOG_ONLY` 开始**。
+- 新 Engine 挂载可选择 `ENFORCE` 或 `LOG_ONLY`，默认是 `ENFORCE`；新策略仍从
+  `LOG_ONLY` 开始。
 - 编辑一条已经 `ACTIVE`（执行中）的策略，不会就地改它，而是创建一个 `LOG_ONLY` **候选**。
 - 提升（promote）与回滚（rollback）走保守顺序：先让候选生效，再退役旧的。
 - **把 Gateway 切到 `ENFORCE` 需要证据**：界面要求 24 小时内有 LOG_ONLY 决策证据；

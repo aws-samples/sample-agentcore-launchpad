@@ -75,6 +75,8 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
   const [overrideReason, setOverrideReason] = useState("");
   const [authorizationModel, setAuthorizationModel] =
     useState<GovernanceAuthorizationModel>("allowlist");
+  const [initialEngineMode, setInitialEngineMode] =
+    useState<GovernanceGatewayMode>("ENFORCE");
   const [highRiskAcknowledged, setHighRiskAcknowledged] = useState(false);
   const [operation, setOperation] = useState<GovernanceOperation | null>(null);
 
@@ -230,6 +232,7 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
       void finishMutation("engine", () =>
         api.attachGovernanceEngine(gateway.id, {
           ...mutationEnvelope(),
+          mode: initialEngineMode,
           authorization_model: authorizationModel,
           high_risk_acknowledged: highRiskAcknowledged,
         }),
@@ -274,6 +277,7 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
     count: selectedLegacy.length,
     gateways: gateway.shared_gateways.map((item) => item.name).join(", "),
     policy: policyToDelete?.name ?? "",
+    mode: initialEngineMode,
   });
 
   return (
@@ -486,6 +490,34 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
           ) : (
             <div className="gov-form-stack">
               <div className="field">
+                <label>{t("governance.detail.initialGatewayMode")}</label>
+                <div
+                  className="gov-mode-control"
+                  role="group"
+                  aria-label={t("governance.detail.initialGatewayMode")}
+                >
+                  {(["ENFORCE", "LOG_ONLY"] as GovernanceGatewayMode[]).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={`selchip${initialEngineMode === mode ? " on" : ""}`}
+                      onClick={() => setInitialEngineMode(mode)}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+                <div className="gov-cell-note">
+                  {t("governance.detail.initialGatewayModeHelp")}
+                </div>
+              </div>
+              {initialEngineMode === "ENFORCE" ? (
+                <div className="gov-alert gov-alert-warn">
+                  <TriangleAlert size={15} aria-hidden="true" />
+                  {t("governance.detail.initialEnforceWarning")}
+                </div>
+              ) : null}
+              <div className="field">
                 <label>{t("governance.policyEditor.authorizationModel")}</label>
                 <select
                   className="input"
@@ -521,7 +553,9 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
                 onClick={() => setConfirmAction("engine")}
               >
                 <Plus size={14} aria-hidden="true" />
-                {t("governance.actions.createAttachEngine")}
+                {t("governance.actions.createAttachEngine", {
+                  mode: initialEngineMode,
+                })}
               </Btn>
             </div>
           )}

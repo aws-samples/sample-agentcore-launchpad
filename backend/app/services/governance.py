@@ -1373,13 +1373,14 @@ def _execute_engine_attach(
         control,
         gateway_id=gateway["gatewayId"],
         engine_arn=engine["policyEngineArn"],
-        mode="LOG_ONLY",
+        mode=change.requested.get("mode") or "LOG_ONLY",
     )
     settled = policy_api.wait_gateway_ready(control, gateway["gatewayId"])
     return {
         "adopted": False,
         "gateway": _gateway_policy_snapshot(settled),
         "engine": _engine_snapshot(engine),
+        "mode": change.requested.get("mode") or "LOG_ONLY",
         "iam_preflight": preflight,
     }
 

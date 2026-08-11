@@ -14,11 +14,13 @@ def _operation() -> dict:
 
 def test_governance_mutation_and_poll_responses_wrap_operation(client, monkeypatch):
     operation = _operation()
+    requests = []
     monkeypatch.setattr(governance_router, "control_client", lambda: object())
     monkeypatch.setattr(
         governance_router.governance_service,
         "queue_engine_attach",
-        lambda *_args: operation,
+        lambda _db, _control, _gateway_id, request: requests.append(request)
+        or operation,
     )
     monkeypatch.setattr(
         governance_router.governance_service,
@@ -40,6 +42,7 @@ def test_governance_mutation_and_poll_responses_wrap_operation(client, monkeypat
     )
     assert response.status_code == 202
     assert response.json() == {"operation": operation}
+    assert requests[0].mode == "ENFORCE"
 
     response = client.get(f"/api/governance/operations/{operation['id']}")
     assert response.status_code == 200

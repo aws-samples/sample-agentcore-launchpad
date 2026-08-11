@@ -28,6 +28,7 @@ class MutationEnvelope(BaseModel):
 class EngineRequest(MutationEnvelope):
     expected_gateway_updated_at: datetime
     name: str | None = Field(default=None, pattern=POLICY_NAME_PATTERN)
+    mode: Literal["LOG_ONLY", "ENFORCE"] = "ENFORCE"
     authorization_model: Literal["allowlist", "preserve_traffic", "custom"] = "allowlist"
     high_risk_acknowledged: bool = False
 

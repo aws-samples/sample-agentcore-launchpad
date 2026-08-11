@@ -560,6 +560,7 @@ export interface GovernanceMutationEnvelope {
 
 export interface GovernanceEngineRequest extends GovernanceMutationEnvelope {
   name?: string | null;
+  mode: GovernanceGatewayMode;
   authorization_model: GovernanceAuthorizationModel;
   high_risk_acknowledged: boolean;
 }

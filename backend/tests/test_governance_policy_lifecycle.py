@@ -178,6 +178,35 @@ def _refresh(db, operation_id):
     return db.get(PolicyChange, operation_id)
 
 
+@pytest.mark.parametrize(
+    ("requested_mode", "expected_mode"),
+    [(None, "ENFORCE"), ("LOG_ONLY", "LOG_ONLY")],
+)
+def test_engine_attach_uses_selected_initial_mode(requested_mode, expected_mode):
+    control = FakeControl()
+    iam = FakeIam()
+    db = SessionLocal()
+    try:
+        request_data = {
+            "expected_gateway_updated_at": control.gateway["updatedAt"],
+            "authorization_model": "allowlist",
+        }
+        if requested_mode is not None:
+            request_data["mode"] = requested_mode
+        request = EngineRequest(**request_data)
+
+        attach = governance.queue_engine_attach(db, control, "gw-1", request)
+        governance.run_policy_change(attach["id"], control=control, iam=iam)
+
+        change = _refresh(db, attach["id"])
+        assert change.status == "succeeded"
+        assert change.requested["mode"] == expected_mode
+        assert change.after["mode"] == expected_mode
+        assert control.gateway["policyEngineConfiguration"]["mode"] == expected_mode
+    finally:
+        db.close()
+
+
 def test_candidate_cutover_partial_retry_and_inverse_rollback():
     control = FakeControl()
     iam = FakeIam()
@@ -189,6 +218,7 @@ def test_candidate_cutover_partial_retry_and_inverse_rollback():
             "gw-1",
             EngineRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
+                mode="LOG_ONLY",
                 authorization_model="allowlist",
             ),
         )
@@ -393,6 +423,7 @@ def test_standalone_policy_promote_can_rollback_from_audit_snapshot():
             "gw-1",
             EngineRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
+                mode="LOG_ONLY",
                 authorization_model="allowlist",
             ),
         )
@@ -464,6 +495,7 @@ def test_startup_reconciliation_classifies_interrupted_operations():
             "gw-1",
             EngineRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
+                mode="LOG_ONLY",
                 authorization_model="allowlist",
             ),
         )
@@ -552,6 +584,7 @@ def test_operation_mutex_conflict_and_audit_snapshot_immutability():
             "gw-1",
             EngineRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
+                mode="LOG_ONLY",
                 authorization_model="allowlist",
             ),
         )
@@ -562,6 +595,7 @@ def test_operation_mutex_conflict_and_audit_snapshot_immutability():
                 "gw-1",
                 EngineRequest(
                     expected_gateway_updated_at=control.gateway["updatedAt"],
+                    mode="LOG_ONLY",
                     authorization_model="allowlist",
                 ),
             )
@@ -595,6 +629,7 @@ def test_draft_paths_record_the_override_reason_and_need_no_evidence():
             "gw-1",
             EngineRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
+                mode="LOG_ONLY",
                 authorization_model="allowlist",
                 override_reason="engine attached during the maintenance window",
             ),
@@ -651,6 +686,7 @@ def test_policy_delete_guard_execution_and_idempotent_resume():
             "gw-1",
             EngineRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
+                mode="LOG_ONLY",
                 authorization_model="allowlist",
             ),
         )

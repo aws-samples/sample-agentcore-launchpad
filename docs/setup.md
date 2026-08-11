@@ -58,8 +58,9 @@ enforcement mode. Existing Policy resources and attachments are also left
 untouched when bootstrap is rerun.
 
 Use Governance to opt in: manage the selected Gateway, create or select an
-Engine, attach it in `LOG_ONLY`, then create and review policies before any
-promotion to `ACTIVE` or Gateway switch to `ENFORCE`.
+Engine, and choose its initial Gateway attachment mode (`ENFORCE` by default or
+`LOG_ONLY`). `ENFORCE` is default-deny, so create and review permitting policies
+before relying on Gateway traffic.
 
 Bootstrap still enables CloudWatch Transaction Search for general
 observability. It does not create the per-Gateway CloudWatch Logs delivery used

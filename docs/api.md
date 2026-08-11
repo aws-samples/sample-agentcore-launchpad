@@ -81,7 +81,7 @@ public `/v1` agent invocation contract.
 | `GET` | `/api/governance/gateways/{id}/registry-preview` | Gateway-level record diff and legacy matches |
 | `POST` | `/api/governance/gateways/{id}/registry-import` | Create/reuse/update and submit; never approve |
 | `POST` | `/api/governance/gateways/{id}/retire-legacy-records` | Explicit retirement after Gateway record approval |
-| `POST` | `/api/governance/gateways/{id}/engine` | Create/adopt and attach an Engine in `LOG_ONLY` |
+| `POST` | `/api/governance/gateways/{id}/engine` | Create/adopt and attach an Engine in selected mode (`ENFORCE` default) |
 | `GET/POST` | `/api/governance/gateways/{id}/policies` | List or create `LOG_ONLY` policies |
 | `PUT` | `/api/governance/gateways/{id}/policies/{policy_id}` | Update LOG_ONLY or create an ACTIVE-policy candidate |
 | `POST` | `/api/governance/gateways/{id}/policies/{policy_id}/promote` | Evidence-gated activation/cutover |
