@@ -228,6 +228,8 @@ For terminal-attached development, use `make dev` and stop it with `Ctrl+C`.
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Verified gotchas and timings ([中文](docs/troubleshooting.zh-CN.md)) |
 | [docs/teardown.md](docs/teardown.md) | Demo resources vs shared infra cleanup ([中文](docs/teardown.zh-CN.md)) |
 | [docs/studio-integration.md](docs/studio-integration.md) | Strands Studio (方式C) integration |
+| [docs/agent-runbook-dev.md](docs/agent-runbook-dev.md) | Agent-operable runbook: start/verify the stack in local dev mode |
+| [docs/agent-runbook-prod.md](docs/agent-runbook-prod.md) | Agent-operable runbook: prod-mode startup (launcher + systemd), update recipe, sandbox posture |
 
 ## Cost notes
 
