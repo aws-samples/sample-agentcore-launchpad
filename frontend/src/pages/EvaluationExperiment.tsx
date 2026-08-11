@@ -33,6 +33,31 @@ import { RuntimeCanaryView } from "./EvaluationRuntimeCanary";
 const DEFAULT_TRACE_LOOKBACK_HOURS = 24;
 const TRACE_LOOKBACK_OPTIONS = [24, 72, 168, 720] as const;
 
+// The RECOMMEND generator checkboxes exist only before the stage runs, so the
+// backend has nothing to restore them from — persist per experiment locally.
+const REC_TYPES_KEY_PREFIX = "launchpad.exp-rec-types.";
+
+function loadRecTypes(expId: string): { sp: boolean; td: boolean } {
+  try {
+    const raw = localStorage.getItem(REC_TYPES_KEY_PREFIX + expId);
+    if (raw) {
+      const parsed = JSON.parse(raw) as { sp?: boolean; td?: boolean };
+      return { sp: !!parsed.sp, td: !!parsed.td };
+    }
+  } catch {
+    /* corrupt or unavailable storage falls back to defaults */
+  }
+  return { sp: false, td: false };
+}
+
+function saveRecTypes(expId: string, sp: boolean, td: boolean) {
+  try {
+    localStorage.setItem(REC_TYPES_KEY_PREFIX + expId, JSON.stringify({ sp, td }));
+  } catch {
+    /* storage unavailable — selection simply won't survive a reload */
+  }
+}
+
 function traceLookbackFromParam(value: string | null): number {
   const hours = Number(value);
   return TRACE_LOOKBACK_OPTIONS.includes(
@@ -372,8 +397,8 @@ function ConfigurationExperimentView() {
   const [editedToolJson, setEditedToolJson] = useState<string | null>(null);
   // recommend generators are separately selectable — prompt & tool
   // descriptions come from two different AgentCore recommendation jobs
-  const [genSp, setGenSp] = useState(true);
-  const [genTd, setGenTd] = useState(true);
+  const [genSp, setGenSp] = useState(false);
+  const [genTd, setGenTd] = useState(false);
   // RECOMMEND trace source: "" = the default rolling window; otherwise the id of one
   // of this agent's completed runs, which pins the input to exactly the sessions
   // that run analysed (an Insights job being the point of the feature).
@@ -583,13 +608,16 @@ function ConfigurationExperimentView() {
       setSearchParams(next);
     }
   };
-  // per-experiment control state must not leak across row switches
+  // per-experiment control state must not leak across row switches; the
+  // generator checkboxes are restored from their per-experiment stash instead
+  // of being reset, so re-opening an in-progress experiment keeps them
   useEffect(() => {
     setTrafficDatasetId("");
     setEditedPrompt(null);
     setEditedToolJson(null);
-    setGenSp(true);
-    setGenTd(true);
+    const recTypes = exp?.id ? loadRecTypes(exp.id) : { sp: false, td: false };
+    setGenSp(recTypes.sp);
+    setGenTd(recTypes.td);
     setToolInputsJson(null);
     setConfirmCleanup(false);
     setConfirmPromote(false);
@@ -1242,6 +1270,15 @@ function ConfigurationExperimentView() {
     </>
   );
 
+  const selectGenSp = (v: boolean) => {
+    setGenSp(v);
+    if (exp) saveRecTypes(exp.id, v, genTd);
+  };
+  const selectGenTd = (v: boolean) => {
+    setGenTd(v);
+    if (exp) saveRecTypes(exp.id, genSp, v);
+  };
+
   const recTypeCheckbox = (
     label: string, checked: boolean, set: (v: boolean) => void, testid: string,
     disabled = false,
@@ -1302,9 +1339,9 @@ function ConfigurationExperimentView() {
             <span>{t("expPage.recommendHint")}</span>
           </div>
           <div style={{ display: "flex", gap: 18, marginBottom: 8 }}>
-            {recTypeCheckbox(t("expPage.recTypePrompt"), genSp, setGenSp,
+            {recTypeCheckbox(t("expPage.recTypePrompt"), genSp, selectGenSp,
                              "rec-type-sp")}
-            {recTypeCheckbox(t("expPage.recTypeTools"), genTd, setGenTd,
+            {recTypeCheckbox(t("expPage.recTypeTools"), genTd, selectGenTd,
                              "rec-type-td", !toolDescriptionsSupported)}
           </div>
           <div className="field" style={{ marginBottom: 8 }}>
