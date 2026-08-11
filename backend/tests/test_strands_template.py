@@ -538,7 +538,44 @@ def test_build_agent_scopes_memory_to_actor_and_session(template_module, monkeyp
     assert captured["config"].memory_id == "memory-123"
     assert captured["config"].actor_id == "agent__river"
     assert captured["config"].session_id == "session-one"
+    assert captured["config"].batch_size == 100  # message batching, not per-message
     assert captured["region_name"] == "us-west-2"
+
+
+def test_invoke_closes_batched_session_manager(template_module, monkeypatch):
+    """Buffered memory writes must flush even if nothing else does: invoke enters
+    the session manager as a context manager, so close() runs on the way out."""
+    events: list[str] = []
+
+    class FakeManager:
+        def __enter__(self):
+            events.append("enter")
+            return self
+
+        def __exit__(self, *exc):
+            events.append("exit")
+
+    manager = FakeManager()
+    monkeypatch.setattr(template_module, "memory_session_manager", lambda a, s: manager)
+
+    captured = {}
+
+    def fake_build_agent(actor_id, session_id, extra_tools=None, session_manager=None):
+        captured["session_manager"] = session_manager
+
+        def run(prompt):
+            events.append("invoke")
+            return "ok"
+
+        return run
+
+    monkeypatch.setattr(template_module, "build_agent", fake_build_agent)
+
+    out = template_module.invoke({"prompt": "hi"})
+
+    assert out == {"result": "ok"}
+    assert captured["session_manager"] is manager
+    assert events == ["enter", "invoke", "exit"]
 
 
 # --- platform toolkits ------------------------------------------------------

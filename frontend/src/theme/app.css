@@ -664,7 +664,9 @@ tr.rowlink{cursor:pointer}
 /* session detail (mockup screen D) */
 .turn{margin-bottom:12px}
 .turn .who{font-family:var(--mono);font-size:9px;letter-spacing:.18em;color:var(--ink-3);margin-bottom:4px}
-.turn .msg{border:1px solid var(--line-2);padding:9px 12px;font-size:12.5px;color:var(--ink-2);line-height:1.55;white-space:pre-wrap}
+/* no white-space:pre-wrap here — the transcript renders through <Markdown>,
+   and pre-wrap would turn react-markdown's inter-element newlines into blank lines */
+.turn .msg{border:1px solid var(--line-2);padding:9px 12px;font-size:12.5px;color:var(--ink-2);line-height:1.55}
 .turn.user .msg{border-left:2px solid var(--amber)}
 .turn.agent .msg{border-left:2px solid var(--s2);background:var(--panel-2)}
 .memnote{font-family:var(--mono);font-size:9.5px;color:var(--s1);margin:8px 0 4px}

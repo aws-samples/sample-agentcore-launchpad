@@ -55,6 +55,14 @@ def recall_context(actor_id: str, query: str) -> str:
     return "\n".join(x for x in lines if x)
 
 
+# Message batching: buffer messages locally and persist them in one batch call
+# per turn instead of one create_event round-trip per message. With batching on,
+# the session manager flushes after every agent invocation (AfterInvocationEvent)
+# and again when `invoke`'s ExitStack closes it, so a request never ends with
+# unflushed messages. 100 is the SDK maximum.
+MEMORY_BATCH_SIZE = 100
+
+
 def memory_session_manager(
     actor_id: str, session_id: str
 ) -> AgentCoreMemorySessionManager | None:
@@ -64,6 +72,7 @@ def memory_session_manager(
         memory_id=MEMORY_ID,
         actor_id=actor_id,
         session_id=session_id,
+        batch_size=MEMORY_BATCH_SIZE,
     )
     return AgentCoreMemorySessionManager(config, region_name=os.environ.get("AWS_REGION"))
 
@@ -207,7 +216,10 @@ def skill_plugins() -> list:
 
 
 def build_agent(
-    actor_id: str, session_id: str, extra_tools: list | None = None
+    actor_id: str,
+    session_id: str,
+    extra_tools: list | None = None,
+    session_manager: AgentCoreMemorySessionManager | None = None,
 ) -> Agent:
     tools = list(TOOLKIT_TOOLS) or [calculator, current_utc_time]
     if MOUNTED_KBS:
@@ -236,7 +248,8 @@ def build_agent(
         "system_prompt": resolve_system_prompt(),
         "tools": tools,
     }
-    session_manager = memory_session_manager(actor_id, session_id)
+    if session_manager is None:
+        session_manager = memory_session_manager(actor_id, session_id)
     if session_manager is not None:
         kwargs["session_manager"] = session_manager
     plugins = skill_plugins()
@@ -261,10 +274,17 @@ def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]:
     # returning [] for a spec with no gateway tool.
     with ExitStack() as stack:
         gateway_access_token = str(payload.get("gateway_access_token", "")).strip() or None
+        # Batched memory writes flush after the agent invocation; closing the
+        # session manager with the stack is the backstop that flushes whatever
+        # is still buffered if the turn errors out mid-way.
+        session_manager = memory_session_manager(actor_id, session_id)
+        if session_manager is not None:
+            stack.enter_context(session_manager)
         agent = build_agent(
             actor_id,
             session_id,
             GATEWAY_TOOLS(stack, gateway_access_token),
+            session_manager=session_manager,
         )
         known = recall_context(actor_id, prompt)
         if known:

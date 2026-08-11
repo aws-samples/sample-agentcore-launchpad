@@ -40,6 +40,12 @@ SKILLS_ROOT = Path(__file__).parent / "skills"
 MEMORY_ID = os.environ.get("LAUNCHPAD_MEMORY_ID", "")
 REGION = os.environ.get("AWS_REGION", "us-west-2")
 _MEMORY_SESSION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-_]*$")
+# Message batching: buffer messages locally and persist them in one batch call
+# per turn instead of one create_event round-trip per message. The A2AServer
+# owns the agent lifecycle, so there is no close() point here — flushing relies
+# on the AfterInvocationEvent hook the session manager registers whenever
+# batch_size > 1. 100 is the SDK maximum.
+MEMORY_BATCH_SIZE = 100
 
 _SAFE_OPS = {
     ast.Add: operator.add,
@@ -106,6 +112,7 @@ def agent_factory(context_id: str) -> Agent:
             memory_id=MEMORY_ID,
             actor_id=f"{AGENT_NAME}__a2a__{context_id}",
             session_id=context_id,
+            batch_size=MEMORY_BATCH_SIZE,
         )
         kwargs["session_manager"] = AgentCoreMemorySessionManager(
             config, region_name=REGION

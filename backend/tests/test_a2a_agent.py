@@ -196,6 +196,7 @@ def test_a2a_card_context_skips_memory_but_real_context_keeps_it(tmp_path: Path,
     actual = module.agent_factory("context-123")
     assert actual.session_manager.config.session_id == "context-123"
     assert actual.session_manager.config.actor_id == "a2a-check__a2a__context-123"
+    assert actual.session_manager.config.batch_size == 100  # message batching, not per-message
 
 
 def test_a2a_render_preserves_skills_placeholder_literal_in_prompt():
