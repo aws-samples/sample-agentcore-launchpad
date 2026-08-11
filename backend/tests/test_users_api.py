@@ -13,8 +13,7 @@ from app.services import users as users_service
 
 ADMIN = {"username": "operator", "password": "s3cret-pass"}
 # A member-reachable route, used here purely as a "is this session live"
-# probe. Not /api/apikeys: credential minting is admin-only (see
-# app/core/route_policy.py), so a member gets 403 there by design.
+# probe.
 MEMBER_PROBE = "/api/agents"
 MEMBER = {
     "username": "qa-user",
@@ -180,11 +179,12 @@ class TestRegistration:
         assert status["email"] == MEMBER["email"]
         assert status["account_expires_at"] is not None
         assert client.get(MEMBER_PROBE).status_code == 200
-        # ...but admin-only routes answer 403, not 200 (route_policy.py). The
-        # agent-lifecycle routes are member-grantable and default-granted, so
-        # POST /api/agents gets past authorization into body validation (422);
+        # ...but user management — the one admin-only surface left — answers
+        # 403, not 200 (route_policy.py). The agent-lifecycle routes are
+        # member-grantable and default-granted, so POST /api/agents gets past
+        # authorization into body validation (422);
         # tests/test_member_permissions.py covers the revocation side.
-        assert client.get("/api/apikeys").status_code == 403
+        assert client.get("/api/users").status_code == 403
         assert client.post("/api/agents", json={}).status_code == 422
         assert stored().login_count == 1
 

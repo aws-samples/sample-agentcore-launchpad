@@ -26,12 +26,21 @@ Amended by river 2026-08-10: starting evaluation/insights runs
 (`POST /api/eval/runs`) is member-grantable via `perm:eval.run` on the same
 default-granted terms — it invokes agents (member parity with Chat) and creates
 billable AWS eval jobs, which revocation can still shut off per user.
+Amended by river 2026-08-11: **the whole console is member-reachable except user
+management** — every route that used to demand `ADMIN` (registry writes, knowledge
+bases, governance, evaluation datasets/evaluators, experiments, canaries, API keys,
+studio local exec, tools/demos, prices refresh) is now `MEMBER`; only `/api/users*`
+still requires an administrator. The `perm:*` entries keep their revocation
+semantics unchanged.
 Consequences worth knowing before editing this table:
 
-* Outside `perm:agents.*`, `member` remains close to read-only. There is still no
-  per-user data partitioning — a member who can deploy can also see and mutate
-  every other member's agents; revoking the permissions restores the read-only
-  posture per user.
+* There is still no per-user data partitioning — every member sees and can now
+  mutate the same shared agents, records, datasets and gateways. `ADMIN` no longer
+  marks "state changes"; it marks user management only.
+* The studio local-exec surface (`/api/execute*`, conversations writes) stays safe
+  in production through its own handler guard (`local_exec`, refused outright in
+  prod unless explicitly opted in) — that guard, not this table, is the real
+  boundary there.
 * Invoking an agent is deliberately `MEMBER` (`/api/agents/{id}/invoke`,
   `/api/registry/a2a-demo`): it is the same capability the Chat console gives
   every member, so gating it while Chat stays open would protect nothing.
@@ -86,88 +95,88 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/agents/{agent_id}/invoke"): MEMBER,  # parity with Chat
     ("GET", "/api/jobs/{job_id}"): MEMBER,
     # ---- credential minting ----
-    ("GET", "/api/apikeys"): ADMIN,
-    ("POST", "/api/apikeys"): ADMIN,
-    ("POST", "/api/apikeys/{key_id}/disable"): ADMIN,
-    ("POST", "/api/apikeys/{key_id}/enable"): ADMIN,
+    ("GET", "/api/apikeys"): MEMBER,
+    ("POST", "/api/apikeys"): MEMBER,
+    ("POST", "/api/apikeys/{key_id}/disable"): MEMBER,
+    ("POST", "/api/apikeys/{key_id}/enable"): MEMBER,
     # ---- chat: the member-facing invoke surface ----
     ("POST", "/api/chat/{agent_id}"): MEMBER,
     ("GET", "/api/chat/{agent_id}/history"): MEMBER,
     ("GET", "/api/chat/{agent_id}/memory"): MEMBER,
     ("GET", "/api/chat/{agent_id}/sessions"): MEMBER,
-    # ---- studio local-debug scaffolding: shares /api/execute's admin posture ----
+    # ---- studio local-debug scaffolding: prod refuses these in the handler
+    # (local_exec guard) regardless of role ----
     ("GET", "/api/conversations"): MEMBER,
-    ("POST", "/api/conversations"): ADMIN,
+    ("POST", "/api/conversations"): MEMBER,
     ("GET", "/api/conversations/{session_id}"): MEMBER,
-    ("DELETE", "/api/conversations/{session_id}"): ADMIN,
-    ("PUT", "/api/conversations/{session_id}/code"): ADMIN,
+    ("DELETE", "/api/conversations/{session_id}"): MEMBER,
+    ("PUT", "/api/conversations/{session_id}/code"): MEMBER,
     ("GET", "/api/conversations/{session_id}/messages"): MEMBER,
-    ("POST", "/api/conversations/{session_id}/messages"): ADMIN,
-    ("POST", "/api/conversations/{session_id}/messages/stream"): ADMIN,
+    ("POST", "/api/conversations/{session_id}/messages"): MEMBER,
+    ("POST", "/api/conversations/{session_id}/messages/stream"): MEMBER,
     # ---- local code execution (also refused outright in prod; see local_exec) ----
-    ("POST", "/api/execute"): ADMIN,
-    ("POST", "/api/execute/stream"): ADMIN,
-    ("POST", "/api/fix-code/stream"): ADMIN,
+    ("POST", "/api/execute"): MEMBER,
+    ("POST", "/api/execute/stream"): MEMBER,
+    ("POST", "/api/fix-code/stream"): MEMBER,
     ("GET", "/api/generate-code/status"): MEMBER,
     # ---- registry skill sources become deployable code; the two staging
-    # helpers ride the deploy permission because the create wizard needs them,
-    # while record-creating imports stay admin ----
+    # helpers ride the deploy permission because the create wizard needs them ----
     ("POST", "/api/agent-skills/import"): PERM_AGENT_DEPLOY,
     ("GET", "/api/registry/records"): MEMBER,
-    ("POST", "/api/registry/records"): ADMIN,
+    ("POST", "/api/registry/records"): MEMBER,
     ("GET", "/api/registry/records/search"): MEMBER,
     ("GET", "/api/registry/records/{record_id}"): MEMBER,
-    ("PUT", "/api/registry/records/{record_id}"): ADMIN,
-    ("DELETE", "/api/registry/records/{record_id}"): ADMIN,
-    ("POST", "/api/registry/records/{record_id}/action"): ADMIN,
-    ("POST", "/api/registry/records/{record_id}/reimport"): ADMIN,
+    ("PUT", "/api/registry/records/{record_id}"): MEMBER,
+    ("DELETE", "/api/registry/records/{record_id}"): MEMBER,
+    ("POST", "/api/registry/records/{record_id}/action"): MEMBER,
+    ("POST", "/api/registry/records/{record_id}/reimport"): MEMBER,
     ("GET", "/api/registry/skills/capabilities"): MEMBER,
     # installs software on the server host
-    ("POST", "/api/registry/skills/capabilities/git-install"): ADMIN,
-    ("POST", "/api/registry/skills/import"): ADMIN,
+    ("POST", "/api/registry/skills/capabilities/git-install"): MEMBER,
+    ("POST", "/api/registry/skills/import"): MEMBER,
     # fetches remote content (SSRF-guarded); staging-only, needed by deploy
     ("POST", "/api/registry/skills/inspect"): PERM_AGENT_DEPLOY,
-    ("POST", "/api/registry/sync-defaults"): ADMIN,
+    ("POST", "/api/registry/sync-defaults"): MEMBER,
     ("GET", "/api/registry/attachables"): MEMBER,
     ("POST", "/api/registry/a2a-demo"): MEMBER,  # an invoke; parity with Chat
     # ---- tools + demos: /tools/call can mutate external systems through a
     # gateway target, and the demos open billable cloud sessions ----
     ("GET", "/api/tools"): MEMBER,
-    ("POST", "/api/tools/call"): ADMIN,
-    ("POST", "/api/demos/code-interpreter"): ADMIN,
+    ("POST", "/api/tools/call"): MEMBER,
+    ("POST", "/api/demos/code-interpreter"): MEMBER,
     ("GET", "/api/demos/browser/options"): MEMBER,
-    ("POST", "/api/demos/browser"): ADMIN,  # takes a caller-supplied URL
-    ("DELETE", "/api/demos/browser/{session_id}"): ADMIN,
+    ("POST", "/api/demos/browser"): MEMBER,  # takes a caller-supplied URL
+    ("DELETE", "/api/demos/browser/{session_id}"): MEMBER,
     # ---- knowledge bases: reads and the retrieval playground stay open ----
     ("GET", "/api/knowledge-bases"): MEMBER,
-    ("POST", "/api/knowledge-bases"): ADMIN,
-    ("POST", "/api/knowledge-bases/ensure-gateway"): ADMIN,
+    ("POST", "/api/knowledge-bases"): MEMBER,
+    ("POST", "/api/knowledge-bases/ensure-gateway"): MEMBER,
     ("GET", "/api/knowledge-bases/{kb_id}"): MEMBER,
-    ("PATCH", "/api/knowledge-bases/{kb_id}"): ADMIN,
-    ("DELETE", "/api/knowledge-bases/{kb_id}"): ADMIN,
-    ("POST", "/api/knowledge-bases/{kb_id}/files"): ADMIN,
-    ("POST", "/api/knowledge-bases/{kb_id}/data-sources"): ADMIN,
-    ("DELETE", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}"): ADMIN,
+    ("PATCH", "/api/knowledge-bases/{kb_id}"): MEMBER,
+    ("DELETE", "/api/knowledge-bases/{kb_id}"): MEMBER,
+    ("POST", "/api/knowledge-bases/{kb_id}/files"): MEMBER,
+    ("POST", "/api/knowledge-bases/{kb_id}/data-sources"): MEMBER,
+    ("DELETE", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}"): MEMBER,
     ("GET", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/documents"): MEMBER,
     ("GET", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/ingestion-jobs"): MEMBER,
-    ("POST", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/sync"): ADMIN,
+    ("POST", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/sync"): MEMBER,
     ("POST", "/api/knowledge-bases/{kb_id}/query"): MEMBER,  # retrieval playground
-    # ---- governance: every posture change is admin ----
+    # ---- governance ----
     ("GET", "/api/governance/gateways"): MEMBER,
     ("GET", "/api/governance/gateways/{gateway_id}"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/manage"): ADMIN,
-    ("DELETE", "/api/governance/gateways/{gateway_id}/manage"): ADMIN,
+    ("POST", "/api/governance/gateways/{gateway_id}/manage"): MEMBER,
+    ("DELETE", "/api/governance/gateways/{gateway_id}/manage"): MEMBER,
     ("GET", "/api/governance/gateways/{gateway_id}/registry-preview"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/registry-import"): ADMIN,
-    ("POST", "/api/governance/gateways/{gateway_id}/retire-legacy-records"): ADMIN,
+    ("POST", "/api/governance/gateways/{gateway_id}/registry-import"): MEMBER,
+    ("POST", "/api/governance/gateways/{gateway_id}/retire-legacy-records"): MEMBER,
     ("GET", "/api/governance/gateways/{gateway_id}/policies"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/policies"): ADMIN,
-    ("PUT", "/api/governance/gateways/{gateway_id}/policies/{policy_id}"): ADMIN,
-    ("POST", "/api/governance/gateways/{gateway_id}/policies/{policy_id}/promote"): ADMIN,
-    ("POST", "/api/governance/gateways/{gateway_id}/policies/{policy_id}/rollback"): ADMIN,
-    ("POST", "/api/governance/gateways/{gateway_id}/engine"): ADMIN,
-    ("POST", "/api/governance/gateways/{gateway_id}/mode"): ADMIN,
-    ("POST", "/api/governance/gateways/{gateway_id}/generations"): ADMIN,
+    ("POST", "/api/governance/gateways/{gateway_id}/policies"): MEMBER,
+    ("PUT", "/api/governance/gateways/{gateway_id}/policies/{policy_id}"): MEMBER,
+    ("POST", "/api/governance/gateways/{gateway_id}/policies/{policy_id}/promote"): MEMBER,
+    ("POST", "/api/governance/gateways/{gateway_id}/policies/{policy_id}/rollback"): MEMBER,
+    ("POST", "/api/governance/gateways/{gateway_id}/engine"): MEMBER,
+    ("POST", "/api/governance/gateways/{gateway_id}/mode"): MEMBER,
+    ("POST", "/api/governance/gateways/{gateway_id}/generations"): MEMBER,
     ("GET", "/api/governance/gateways/{gateway_id}/generations/{generation_id}"): MEMBER,
     ("GET", "/api/governance/gateways/{gateway_id}/audit"): MEMBER,
     ("GET", "/api/governance/gateways/{gateway_id}/decisions"): MEMBER,
@@ -176,39 +185,39 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/governance/decisions"): MEMBER,
     # Not a dry run: it performs a real tools/call as the chosen principal and
     # journals a PolicyDecision row (routers/governance.py:406).
-    ("POST", "/api/governance/policy-test"): ADMIN,
-    ("POST", "/api/governance/policy-generation"): ADMIN,
+    ("POST", "/api/governance/policy-test"): MEMBER,
+    ("POST", "/api/governance/policy-generation"): MEMBER,
     ("GET", "/api/governance/policy-generation/{generation_id}"): MEMBER,
     ("GET", "/api/traces/{session_id}"): MEMBER,
     # ---- evaluation: runs invoke agents and create AWS eval jobs ----
     ("GET", "/api/eval/datasets"): MEMBER,
-    ("POST", "/api/eval/datasets"): ADMIN,
-    ("POST", "/api/eval/datasets/upload"): ADMIN,
+    ("POST", "/api/eval/datasets"): MEMBER,
+    ("POST", "/api/eval/datasets/upload"): MEMBER,
     ("GET", "/api/eval/datasets/cloud"): MEMBER,
     ("GET", "/api/eval/datasets/cloud/{cloud_id}"): MEMBER,
-    ("DELETE", "/api/eval/datasets/cloud/{cloud_id}"): ADMIN,
-    ("PUT", "/api/eval/datasets/{dataset_id}"): ADMIN,
-    ("DELETE", "/api/eval/datasets/{dataset_id}"): ADMIN,
-    ("POST", "/api/eval/datasets/{dataset_id}/sync-to-aws"): ADMIN,
+    ("DELETE", "/api/eval/datasets/cloud/{cloud_id}"): MEMBER,
+    ("PUT", "/api/eval/datasets/{dataset_id}"): MEMBER,
+    ("DELETE", "/api/eval/datasets/{dataset_id}"): MEMBER,
+    ("POST", "/api/eval/datasets/{dataset_id}/sync-to-aws"): MEMBER,
     ("GET", "/api/eval/evaluators"): MEMBER,
-    ("POST", "/api/eval/evaluators"): ADMIN,
+    ("POST", "/api/eval/evaluators"): MEMBER,
     ("GET", "/api/eval/evaluators/{evaluator_id}"): MEMBER,
-    ("PUT", "/api/eval/evaluators/{evaluator_id}"): ADMIN,
-    ("DELETE", "/api/eval/evaluators/{evaluator_id}"): ADMIN,
+    ("PUT", "/api/eval/evaluators/{evaluator_id}"): MEMBER,
+    ("DELETE", "/api/eval/evaluators/{evaluator_id}"): MEMBER,
     ("GET", "/api/eval/queue"): MEMBER,
     ("GET", "/api/eval/runs"): MEMBER,
     ("POST", "/api/eval/runs"): PERM_EVAL_RUN,
     ("GET", "/api/eval/runs/{run_id}"): MEMBER,
     ("GET", "/api/experiments"): MEMBER,
     ("GET", "/api/experiments/readiness"): MEMBER,
-    ("POST", "/api/experiments"): ADMIN,
+    ("POST", "/api/experiments"): MEMBER,
     ("GET", "/api/experiments/{exp_id}"): MEMBER,
-    ("POST", "/api/experiments/{exp_id}/action"): ADMIN,
+    ("POST", "/api/experiments/{exp_id}/action"): MEMBER,
     # canaries provision real AgentCore runtimes
     ("GET", "/api/runtime-canaries"): MEMBER,
-    ("POST", "/api/runtime-canaries"): ADMIN,
+    ("POST", "/api/runtime-canaries"): MEMBER,
     ("GET", "/api/runtime-canaries/{canary_id}"): MEMBER,
-    ("POST", "/api/runtime-canaries/{canary_id}/action"): ADMIN,
+    ("POST", "/api/runtime-canaries/{canary_id}/action"): MEMBER,
     # ---- read-only consoles ----
     ("GET", "/api/overview"): MEMBER,
     ("GET", "/api/memory/overview"): MEMBER,
@@ -225,8 +234,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/observability/traces"): MEMBER,
     ("GET", "/api/observability/traces/{trace_id}"): MEMBER,
     ("GET", "/api/observability/prices"): MEMBER,
-    ("POST", "/api/observability/prices/refresh"): ADMIN,  # rewrites shared config
-    # ---- console account management ----
+    ("POST", "/api/observability/prices/refresh"): MEMBER,  # rewrites shared config
+    # ---- console account management: the one surface that stays admin ----
     ("GET", "/api/users"): ADMIN,
     ("GET", "/api/users/stats"): ADMIN,
     ("PATCH", "/api/users/{user_id}"): ADMIN,
@@ -234,10 +243,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
 }
 
 # Routers whose classification was extrapolated from the signed-off principle
-# rather than reviewed route by route (evaluation, experiments, canaries,
-# conversations, observability writes). Reads are MEMBER, state changes ADMIN.
-# Carried as a known gap in the release notes; revisit alongside per-user
-# data partitioning.
+# rather than reviewed route by route. Since the 2026-08-11 amendment they are
+# all plain MEMBER anyway; the list survives as a pointer to what to re-examine
+# if per-user data partitioning ever tightens the posture again.
 UNREVIEWED_PREFIXES = (
     "/api/eval/",
     "/api/experiments",

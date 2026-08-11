@@ -636,36 +636,35 @@ by a single app-level dependency:
 - `tests/test_route_policy.py` enumerates the live routes and fails on drift in
   either direction, which is what keeps the table honest rather than decorative.
 
-The classification principle: **admin** for routes that execute code, change
-deployed or cloud state, mint credentials, or change governance posture;
-**member** for reads and for a member's own interaction with an agent. Invoking an
-agent (`/api/agents/{id}/invoke`, `/api/registry/a2a-demo`) is deliberately member-
-reachable — it is the same capability Chat already gives every member, so gating it
-while Chat stays open would protect nothing.
+The classification principle (as amended 2026-08-11): **admin is user management
+only** (`/api/users*`); **every other console surface is member-reachable** —
+registry writes, knowledge bases, governance, evaluation datasets/evaluators,
+experiments, canaries, API keys, tools/demos and the studio local-exec scaffolding
+included. Invoking an agent (`/api/agents/{id}/invoke`, `/api/registry/a2a-demo`)
+was member-reachable from the start — it is the same capability Chat already gives
+every member. The studio local-exec routes remain safe in production through their
+own handler guard (refused outright in prod unless
+`LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED` opts in), which — not the route table — is
+the real boundary there.
 
-Two amendments (river): 2026-08-07, the **agent-lifecycle routes are
-member-grantable** instead of flat admin. A `perm:agents.*` table value
-(`agents.deploy` covering create/redeploy plus the wizard's skill-staging
-helpers, `agents.import`, `agents.delete`, `agents.convert`) requires that
-permission: admins implicitly hold all, and a member holds them **by
-default** — `users.permissions` stores only explicit denials, toggled per user
-in the User Management console and enforced on the member's next request. A
-denied call answers `auth.permission_required` (403) naming the missing key.
-2026-08-10, starting evaluation/insights runs (`POST /api/eval/runs`) joined
-the same scheme as `perm:eval.run` — it invokes agents (member parity with
-Chat) and creates billable AWS eval jobs, which revocation can still shut off
-per user.
+Earlier amendments introduced per-user revocation, which survives the opening:
+2026-08-07, the **agent-lifecycle routes are member-grantable** via `perm:agents.*`
+(`agents.deploy` covering create/redeploy plus the wizard's skill-staging helpers,
+`agents.import`, `agents.delete`, `agents.convert`); 2026-08-10,
+`POST /api/eval/runs` joined as `perm:eval.run`. Admins implicitly hold all keys,
+and a member holds them **by default** — `users.permissions` stores only explicit
+denials, toggled per user in the User Management console and enforced on the
+member's next request. A denied call answers `auth.permission_required` (403)
+naming the missing key.
 
-Outside these `perm:*` grants, the practical effect is that `member` remains
-close to read-only. That is intended while data is **not** partitioned per user: every
-authenticated account sees the same agents, knowledge bases and traces — which
-also means a member with the default deploy grant can mutate everyone else's
-agents; revoking the permissions restores the read-only posture for that
-user. Admin-only console modules (`/users`, Registry register/edit) render an
-administrator-required panel instead of firing a request; Agent Management and
-the Studio canvas render for members and disable exactly the actions the account
-lacks. `auth.forbidden` is mapped in the `apiErrors` i18n block so any surface
-that missed a gate still shows the localized reason.
+Data is **not** partitioned per user: every authenticated account sees — and,
+since the opening, can mutate — the same agents, records, datasets, knowledge
+bases and gateways. Revoking the `perm:*` keys restores a partial guardrail for
+one user (no deploys, no eval runs), but the rest of the console remains writable
+for any member; treat member accounts accordingly. The `/users` console module
+renders an administrator-required panel instead of firing a request.
+`auth.forbidden` is mapped in the `apiErrors` i18n block so any surface that
+missed a gate still shows the localized reason.
 
 There is deliberately no setting that disables this table — a flag that turns
 authorization off is the vulnerability.

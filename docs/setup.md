@@ -134,23 +134,24 @@ credentials and restarting the backend invalidates existing sessions.
 
 ### Roles: what a member can do / 成员权限
 
-There are two roles. `admin` has the whole console. `member` can browse agents,
-registry records and knowledge bases, chat with and invoke agents, run the
-retrieval playground, and read observability, memory, evaluation and governance.
-On top of that, a small set of capabilities is **granted to members by default
-and revocable per user** in the User Management console: the agent lifecycle
-(deploy, import, delete, convert) and starting evaluation/insights runs.
+There are two roles, and since 2026-08-11 they differ in exactly one place:
+**user management** (`/users`) is administrator-only; **everything else in the
+console is open to members** — registry register/edit/import, knowledge-base
+mutations, evaluation datasets/evaluators/runs, AB experiments and canaries,
+Cedar policy writes, API keys, the Studio canvas, and the browser /
+code-interpreter demos. The authoritative list is the table in
+`backend/app/core/route_policy.py`; a route missing from it is refused rather
+than served. (Local code execution additionally stays disabled in production
+for every role unless `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED` opts in.)
 
-Everything else that executes code, changes deployed or cloud state, mints
-credentials, or changes governance posture is administrator-only — the Studio
-canvas, registry register/edit/import, knowledge-base mutations, API keys,
-Cedar policy writes, and the browser / code-interpreter demos. The
-authoritative list is the table in `backend/app/core/route_policy.py`; a route
-missing from it is refused rather than served.
+A small set of capabilities remains **revocable per user** in the User
+Management console: the agent lifecycle (deploy, import, delete, convert) and
+starting evaluation/insights runs. Members hold them by default; revoking them
+shuts off deploys and billable eval jobs for that account.
 
-This is deliberately restrictive: the console has no per-user data partitioning
-yet, so a member who could deploy could also see and mutate every other member's
-resources.
+Note the console has no per-user data partitioning: every member sees and can
+mutate the same shared resources, so hand member accounts only to people you
+would let operate the environment.
 
 ### Escape hatches / 应急开关
 
