@@ -74,11 +74,11 @@ def _send(prompts, poster, **kwargs):
 @pytest.fixture(autouse=True)
 def _stub_credentials(monkeypatch):
     """No AWS: sigv4_post still resolves credentials before calling the poster."""
-    import app.services.agentcore.gateway as gw
+    from app.services import aws_clients
 
     monkeypatch.setattr(
-        gw.boto3, "Session",
-        lambda region_name=None: type(
+        aws_clients, "get_session",
+        lambda *a, **k: type(
             "S", (), {"get_credentials": lambda self: type(
                 "C", (), {"get_frozen_credentials": lambda self: "frozen"})()}
         )(),

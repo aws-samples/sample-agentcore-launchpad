@@ -8,6 +8,7 @@ import types
 import zipfile
 
 import app.routers.agent_skills as attach_router
+from app.services import aws_clients
 
 SKILL_MD = (
     "---\nname: meeting-summarizer\ndescription: Summarize meetings\n"
@@ -43,7 +44,7 @@ def _patch_aws(monkeypatch, fake_s3):
         attach_router, "get_settings",
         lambda: types.SimpleNamespace(resources={"artifacts_bucket": "bkt"}, region="us-west-2"),
     )
-    monkeypatch.setattr(attach_router.boto3, "client", lambda *a, **k: fake_s3)
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: fake_s3)
 
 
 def _inspect(client, name: str = "meeting-summarizer") -> str:

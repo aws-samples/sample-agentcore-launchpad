@@ -13,8 +13,8 @@ from app.core.errors import AppError
 from app.deployer.harness import build_create_params
 from app.routers import tools as tools_router
 from app.schemas.agent import AgentSpec
+from app.services import aws_clients, mcp_client
 from app.services import gateway_bootstrap as gb
-from app.services import mcp_client
 from app.services.agentcore.harness import user_authenticated_tools
 
 GW_ARN = "arn:aws:bedrock-agentcore:us-west-2:111:gateway/launchpad-gw-abc"
@@ -243,7 +243,7 @@ def test_mcp_cognito_auth_rejection_becomes_app_error(monkeypatch):
         "load_yaml_config",
         lambda: {"demo_users": {"passwords": {"admin": "stale-password"}}},
     )
-    monkeypatch.setattr(mcp_client.boto3, "client", lambda *args, **kwargs: cognito)
+    monkeypatch.setattr(aws_clients, "client", lambda *args, **kwargs: cognito)
     mcp_client._token_cache.clear()
 
     with pytest.raises(AppError) as err:

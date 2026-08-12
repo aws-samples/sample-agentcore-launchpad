@@ -10,6 +10,7 @@ import app.evaluation.service as svc
 from app.core.db import SessionLocal
 from app.evaluation.models import EvalDataset
 from app.models.ledger import Agent
+from app.services import aws_clients
 
 
 def make_agent(db, name="eval-agent", method="zip_runtime") -> Agent:
@@ -177,7 +178,7 @@ class StubLogs:
 
 def _stub_harness_logs(monkeypatch, groups):
     logs = StubLogs(groups)
-    monkeypatch.setattr(svc.boto3, "client", lambda *a, **k: logs)
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: logs)
     return logs
 
 

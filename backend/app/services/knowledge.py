@@ -15,8 +15,6 @@ import threading
 import time
 from typing import Any
 
-import boto3
-
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
@@ -27,6 +25,7 @@ from app.services.agentcore.client import (
     agent_runtime_client,
     control_client,
 )
+from app.services.workspace import default_workspace_context
 
 KB_ROLE_NAME = "launchpad-kb-role"
 
@@ -239,7 +238,7 @@ def _kb_policy_document(bucket: str, prefix: str) -> dict[str, Any]:
 
 
 def _sync_kb_policy(kb_id: str, bucket: str, prefix: str) -> None:
-    iam = boto3.client("iam", region_name=get_settings().region)
+    iam = default_workspace_context().client("iam")
     iam.put_role_policy(
         RoleName=_kb_role_name(),
         PolicyName=_kb_policy_name(kb_id),
@@ -248,7 +247,7 @@ def _sync_kb_policy(kb_id: str, bucket: str, prefix: str) -> None:
 
 
 def _delete_kb_policy(kb_id: str) -> None:
-    iam = boto3.client("iam", region_name=get_settings().region)
+    iam = default_workspace_context().client("iam")
     try:
         iam.delete_role_policy(RoleName=_kb_role_name(), PolicyName=_kb_policy_name(kb_id))
     except Exception:  # NoSuchEntity / role absent — nothing to clean
@@ -441,7 +440,7 @@ def _s3_object_meta(bucket: str, prefix: str | None) -> dict[str, tuple[int, str
     """key → (size, last_modified ISO) over the source location. Best-effort
     upload-time/size enrichment — external buckets may deny the backend, and
     huge buckets are capped (enrichment, not the source of truth)."""
-    s3 = boto3.client("s3", region_name=get_settings().region)
+    s3 = default_workspace_context().client("s3")
     out: dict[str, tuple[int, str | None]] = {}
     kwargs: dict[str, Any] = {"Bucket": bucket}
     if prefix:
@@ -595,7 +594,7 @@ def upload_files(kb_id: str, files: list[tuple[str, bytes]]) -> list[str]:
             "available for KBs created in upload mode",
             status_code=409,
         )
-    s3 = boto3.client("s3", region_name=settings.region)
+    s3 = default_workspace_context().client("s3")
     keys: list[str] = []
     for filename, data in files:
         key = f"kb/{kb_id}/{_safe_filename(filename)}"

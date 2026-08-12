@@ -11,7 +11,7 @@ from botocore.exceptions import ClientError
 from pydantic import SecretStr
 
 from app.core.errors import AppError
-from app.services import policy_identity
+from app.services import aws_clients, policy_identity
 
 
 def _jwt(username: str, groups: list[str], exp: int | None = None) -> str:
@@ -46,7 +46,7 @@ def _clear_cache():
 def test_open_console_keeps_m2m_without_cognito(monkeypatch):
     monkeypatch.setattr(policy_identity, "get_settings", lambda: _settings(None))
     monkeypatch.setattr(
-        policy_identity.boto3,
+        aws_clients,
         "client",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no AWS call")),
     )
@@ -72,7 +72,7 @@ def test_demo_user_uses_bootstrap_password_and_reconciles_group(monkeypatch):
         "load_yaml_config",
         lambda: {"demo_users": {"passwords": {"demo": "bootstrap-password"}}},
     )
-    monkeypatch.setattr(policy_identity.boto3, "client", lambda *a, **k: cognito)
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: cognito)
 
     assert policy_identity.gateway_user_token("demo", "member") == token
     assert cognito.initiate_auth.call_args.kwargs["AuthParameters"] == {
@@ -107,7 +107,7 @@ def test_new_console_user_creates_marked_shadow_identity(monkeypatch):
     }
     monkeypatch.setattr(policy_identity, "get_settings", _settings)
     monkeypatch.setattr(policy_identity, "load_yaml_config", lambda: {})
-    monkeypatch.setattr(policy_identity.boto3, "client", lambda *a, **k: cognito)
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: cognito)
 
     assert (
         policy_identity.gateway_user_token("clare", "admin", "clare@example.com")
@@ -127,7 +127,7 @@ def test_unmarked_existing_cognito_user_is_not_adopted(monkeypatch):
     }
     monkeypatch.setattr(policy_identity, "get_settings", _settings)
     monkeypatch.setattr(policy_identity, "load_yaml_config", lambda: {})
-    monkeypatch.setattr(policy_identity.boto3, "client", lambda *a, **k: cognito)
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: cognito)
 
     with pytest.raises(AppError) as error:
         policy_identity.gateway_user_token("clare", "member")
@@ -156,7 +156,7 @@ def test_mismatched_jwt_claims_are_rejected(monkeypatch):
         "load_yaml_config",
         lambda: {"demo_users": {"passwords": {"demo": "pw"}}},
     )
-    monkeypatch.setattr(policy_identity.boto3, "client", lambda *a, **k: cognito)
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: cognito)
 
     with pytest.raises(AppError) as error:
         policy_identity.gateway_user_token("demo", "member")

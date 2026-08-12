@@ -11,7 +11,6 @@ record is created; the registry catalog is untouched.
 import uuid
 from typing import Any
 
-import boto3
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -31,6 +30,7 @@ from app.services.skill_ingest import (
     SkillValidationError,
     validate_bundle,
 )
+from app.services.workspace import default_workspace_context
 
 router = APIRouter(prefix="/api/agent-skills", tags=["agent-skills"])
 
@@ -58,7 +58,7 @@ def import_for_agent(req: AttachRequest) -> dict[str, Any]:
     bucket = settings.resources.get("artifacts_bucket")
     if not bucket:
         raise RuntimeError("artifacts_bucket missing — run scripts/bootstrap.py")
-    s3 = boto3.client("s3", region_name=settings.region)
+    s3 = default_workspace_context().client("s3")
 
     bundles: list[SkillBundle] = entry["bundles"]
     uid = uuid.uuid4().hex[:8]

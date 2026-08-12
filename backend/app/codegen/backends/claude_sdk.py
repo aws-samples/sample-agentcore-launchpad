@@ -106,7 +106,9 @@ class ClaudeSdkBackend(CodingAgentBackend):
                 "Install it with: npm install -g @anthropic-ai/claude-code"
             )
 
-        # 3. Bedrock (AWS) credentials resolvable
+        # 3. Bedrock (AWS) credentials resolvable. Ambient hub credentials on
+        # purpose — this probes what the local Claude Code CLI will pick up, not
+        # a workspace's target account (hence no services.aws_clients here).
         try:
             import boto3
 

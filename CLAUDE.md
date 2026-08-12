@@ -83,8 +83,11 @@ under `.trellis/spec/launchpad/`.
   state (runtime status, registry record status, traces, eval results) is always read
   back from AWS.
 
-- **All boto3 clients are built in exactly one place.** `app/services/agentcore/client.py`
-  is the only module that constructs AgentCore clients; preview-API drift is contained
+- **All boto3 clients are built in exactly one place.** `app/services/aws_clients.py`
+  constructs every AWS client/session, keyed by a `WorkspaceContext` (account, region,
+  future assume-role) from `app/services/workspace.py`; a hermetic guard test
+  (`tests/test_client_funnel.py`) fails on construction anywhere else. AgentCore client
+  *names* stay in `app/services/agentcore/client.py`, and preview-API drift is contained
   there and in the sibling wrapper modules (`runtime.py`, `harness.py`, `registry.py`,
   `codebuild.py`). Everything else receives clients explicitly so tests can inject stubs
   — follow this; do not call `boto3.client(...)` elsewhere.

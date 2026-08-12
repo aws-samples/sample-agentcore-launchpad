@@ -1,52 +1,49 @@
-"""boto3 client factories — the only place AgentCore clients are constructed.
+"""AgentCore client factories — the only place these clients are named.
 
 Preview API drift is contained here and in the sibling wrapper modules;
-everything else passes clients explicitly so tests can inject stubs.
+everything else passes clients explicitly so tests can inject stubs. Construction
+goes through ``services.aws_clients`` via the workspace context, so a client
+belongs to a workspace's account/region rather than to a process-wide region.
 """
 
-from functools import lru_cache
+from typing import Any
 
-import boto3
 from botocore.config import Config
 
 from app.core.config import get_settings
+from app.services.workspace import default_workspace_context
 
 
-@lru_cache
-def control_client():
-    return boto3.client("bedrock-agentcore-control", region_name=get_settings().region)
+def control_client() -> Any:
+    return default_workspace_context().client("bedrock-agentcore-control")
 
 
-@lru_cache
-def data_client():
-    settings = get_settings()
-    return boto3.client(
+def data_client() -> Any:
+    # Called on every invoke/chat turn — cache_token keeps it on the factory's
+    # cached path despite the per-settings Config.
+    timeout = get_settings().agentcore_read_timeout_s
+    return default_workspace_context().client(
         "bedrock-agentcore",
-        region_name=settings.region,
-        config=Config(read_timeout=settings.agentcore_read_timeout_s),
+        cache_token=f"read_timeout={timeout}",
+        config=Config(read_timeout=timeout),
     )
 
 
-@lru_cache
-def registry_control_client():
-    return boto3.client("agent-registry-control", region_name=get_settings().region)
+def registry_control_client() -> Any:
+    return default_workspace_context().client("agent-registry-control")
 
 
-@lru_cache
-def registry_data_client():
-    return boto3.client("agent-registry", region_name=get_settings().region)
+def registry_data_client() -> Any:
+    return default_workspace_context().client("agent-registry")
 
 
-@lru_cache
-def agent_client():
-    return boto3.client("bedrock-agent", region_name=get_settings().region)
+def agent_client() -> Any:
+    return default_workspace_context().client("bedrock-agent")
 
 
-@lru_cache
-def agent_runtime_client():
-    return boto3.client("bedrock-agent-runtime", region_name=get_settings().region)
+def agent_runtime_client() -> Any:
+    return default_workspace_context().client("bedrock-agent-runtime")
 
 
-@lru_cache
-def iam_client():
-    return boto3.client("iam", region_name=get_settings().region)
+def iam_client() -> Any:
+    return default_workspace_context().client("iam")

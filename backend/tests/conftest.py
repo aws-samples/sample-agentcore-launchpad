@@ -29,3 +29,13 @@ def clean_tables():
     with engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
             conn.execute(table.delete())
+
+
+@pytest.fixture(autouse=True)
+def reset_aws_client_cache():
+    # Tests that stub aws_clients.get_session still populate the module-level
+    # client cache; a fake cached under a real key must not leak across tests.
+    from app.services import aws_clients
+
+    yield
+    aws_clients.reset_cache()

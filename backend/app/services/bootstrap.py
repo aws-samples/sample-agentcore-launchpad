@@ -16,11 +16,11 @@ import string
 import time
 from typing import Any
 
-import boto3
 import yaml
 from botocore.exceptions import ClientError
 
 from app.core.config import CONFIG_FILE, get_settings
+from app.services.workspace import WorkspaceContext
 
 STACK_NAME = "launchpad-base"
 REGISTRY_NAME = "launchpad-registry"
@@ -42,7 +42,10 @@ LEGACY_DEMO_USERS = ("river",)
 
 
 def _client(service: str, region: str):
-    return boto3.client(service, region_name=region)
+    # Hub bootstrap targets an explicit region because it *writes* the resource
+    # map a workspace context later reads — it cannot resolve one from settings.
+    # Account is unknown here, hence "" — ambient credentials decide it.
+    return WorkspaceContext(account_id="", region=region).client(service)
 
 
 def get_stack_outputs(region: str, stack_name: str = STACK_NAME) -> dict[str, str]:

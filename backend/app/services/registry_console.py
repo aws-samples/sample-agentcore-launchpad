@@ -10,8 +10,6 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from typing import Any
 
-import boto3
-
 from app.core.config import REPO_ROOT, get_settings
 from app.core.errors import AppError
 from app.models.ledger import Agent
@@ -33,6 +31,7 @@ from app.services.skill_ingest import (
     parse_frontmatter,
     validate_bundle,
 )
+from app.services.workspace import default_workspace_context
 
 # Shared frontmatter parser lives in skill_ingest now; kept as a module-level
 # name for the existing callers (upload_skill_bundle) and tests.
@@ -110,7 +109,7 @@ def upload_skill_bundle(skill_name: str = SKILL_NAME) -> dict[str, Any]:
     if not bucket:
         raise RuntimeError("artifacts_bucket missing — run scripts/bootstrap.py")
     skill_dir = SKILLS_DIR / skill_name
-    s3 = boto3.client("s3", region_name=settings.region)
+    s3 = default_workspace_context().client("s3")
     files: list[str] = []
     for path in sorted(skill_dir.rglob("*")):
         if path.is_file():
@@ -923,7 +922,7 @@ def register_skill_bundle(
             f"{SKILL_MD_MAX_BYTES} byte limit (too many files or paths too long)"
         )
 
-    s3 = boto3.client("s3", region_name=settings.region)
+    s3 = default_workspace_context().client("s3")
     uploaded: list[str] = []
     try:
         upload_bundle_files(bundle, bucket, prefix, s3, uploaded=uploaded)
@@ -1110,7 +1109,7 @@ def _reupload_and_update(
             f"{SKILL_MD_MAX_BYTES} byte limit (too many files or paths too long)"
         )
 
-    s3 = boto3.client("s3", region_name=settings.region)
+    s3 = default_workspace_context().client("s3")
     # Clear the old prefix FIRST so files dropped at the source don't linger, then
     # upload the fresh set. Unlike the create path we deliberately do NOT roll back
     # the upload if the record update later fails: the record already exists and
@@ -1283,7 +1282,7 @@ def _update_skill_md(
             f"{SKILL_MD_MAX_BYTES} byte limit (too many files or paths too long)"
         )
 
-    s3 = boto3.client("s3", region_name=settings.region)
+    s3 = default_workspace_context().client("s3")
     # Only SKILL.md changed — overwrite exactly that object; do NOT clear the
     # prefix (that would strand the supporting files the deploy-time consumer
     # downloads alongside it).

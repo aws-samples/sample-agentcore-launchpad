@@ -17,11 +17,11 @@ import threading
 import time
 from typing import Any
 
-import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import get_settings, load_yaml_config
 from app.core.errors import AppError
+from app.services.workspace import default_workspace_context
 
 ROLE_GROUP = {"admin": "platform-admin", "member": "hr-analyst"}
 POLICY_GROUPS = frozenset(ROLE_GROUP.values())
@@ -184,7 +184,7 @@ def gateway_user_token(username: str, role: str, email: str | None = None) -> st
             return str(cached["token"])
         demo_password = _demo_password(username)
         password = demo_password or _shadow_password(username)
-        cognito = boto3.client("cognito-idp", region_name=settings.region)
+        cognito = default_workspace_context().client("cognito-idp")
         try:
             _ensure_user(
                 cognito,

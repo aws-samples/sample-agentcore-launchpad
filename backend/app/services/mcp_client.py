@@ -10,12 +10,12 @@ import json
 import time
 from typing import Any
 
-import boto3
 import httpx
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import get_settings, load_yaml_config
 from app.core.errors import AppError
+from app.services.workspace import default_workspace_context
 
 _rpc_id = itertools.count(1)
 _token_cache: dict[str, Any] = {}
@@ -36,7 +36,7 @@ def get_cognito_token(username: str = "admin") -> str:
             "demo user password missing — run scripts/bootstrap.py",
             status_code=503,
         )
-    client = boto3.client("cognito-idp", region_name=settings.region)
+    client = default_workspace_context().client("cognito-idp")
     try:
         resp = client.initiate_auth(
             ClientId=settings.resources["user_pool_client_id"],

@@ -20,10 +20,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-import boto3
 from botocore.exceptions import ClientError
 
-from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.evaluation import agentcore_eval as ac
@@ -39,6 +37,7 @@ from app.models.ledger import Agent
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
+from app.services.workspace import default_workspace_context
 from app.templates import gateway_support
 
 EVAL_SUPPORTED_METHODS = {"zip_runtime", "studio", "container", "harness"}
@@ -78,7 +77,7 @@ def _harness_telemetry(agent: Agent, logs_client: Any = None) -> tuple[str, str]
     prefix; a re-created harness leaves stale groups behind, so newest wins."""
     base = agent.resource_id.rsplit("-", 1)[0]
     prefix = f"/aws/bedrock-agentcore/runtimes/harness_{base}-"
-    logs = logs_client or boto3.client("logs", region_name=get_settings().region)
+    logs = logs_client or default_workspace_context().client("logs")
     groups = [
         g for g in logs.describe_log_groups(logGroupNamePrefix=prefix).get("logGroups", [])
         if g["logGroupName"].endswith("-DEFAULT")
@@ -131,7 +130,7 @@ def _wait_for_fresh_telemetry(
     start_time_ms: int,
     stability_seconds: int,
 ) -> None:
-    logs = boto3.client("logs", region_name=get_settings().region)
+    logs = default_workspace_context().client("logs")
     telemetry.wait_for_evaluation_telemetry(
         logs,
         session_id=session_id,
