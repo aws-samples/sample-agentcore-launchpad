@@ -84,6 +84,23 @@ class _StubSession:
         return object()
 
 
+@pytest.mark.parametrize(
+    "kwarg", ["region_name", "aws_access_key_id", "aws_secret_access_key", "aws_session_token"]
+)
+def test_cfg_cannot_override_the_workspace_target(monkeypatch, kwarg):
+    """`cfg` is forwarded to botocore verbatim, so a region/credential kwarg would
+    silently point a 'workspace' client somewhere else — and the cache key would
+    not reflect it."""
+    monkeypatch.setattr(aws_clients, "get_session", lambda *a, **k: _StubSession())
+    ctx = ws.WorkspaceContext(account_id="111122223333", region="us-west-2")
+
+    with pytest.raises(ValueError) as exc:
+        ctx.client("s3", **{kwarg: "value"})
+    assert kwarg in str(exc.value)
+    # endpoint_url stays legal — it retargets the host, not the account/region
+    assert ctx.client("s3", endpoint_url="http://localhost:4566") is not None
+
+
 def test_cross_account_roles_are_not_supported_yet():
     with pytest.raises(NotImplementedError):
         aws_clients.get_session("111122223333", "us-west-2", role_arn="arn:aws:iam::1:role/x")

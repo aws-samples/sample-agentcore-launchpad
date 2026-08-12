@@ -39,7 +39,7 @@ def sigv4_post(
     injection seams — no real AWS or network when both are supplied.
     """
     workspace = default_workspace_context()
-    credentials = workspace.session().get_credentials().get_frozen_credentials()
+    credentials = workspace.credentials()
     signer = signer or _default_signer
 
     body = json.dumps(json_body)

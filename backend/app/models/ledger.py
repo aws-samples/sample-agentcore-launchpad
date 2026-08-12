@@ -8,7 +8,16 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, event, inspect
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    String,
+    Text,
+    UniqueConstraint,
+    event,
+    inspect,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -22,10 +31,57 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+class Workspace(Base):
+    """One (account, region) environment with its own AgentCore resource map.
+
+    The row — not ``Settings`` — is authoritative for where work lands. The
+    ``default`` row is seeded from settings at startup (see
+    ``app.core.db._seed_default_workspace``) and its id is reserved.
+    """
+
+    __tablename__ = "workspaces"
+    # One workspace per (account, region): every region-scoped resource name
+    # Launchpad provisions (launchpad-gw, launchpad_memory, ...) stays
+    # collision-free without a per-workspace name discriminator.
+    __table_args__ = (
+        UniqueConstraint("account_id", "region", name="uq_workspaces_account_region"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)  # slug
+    name: Mapped[str] = mapped_column(String(64))
+    account_id: Mapped[str] = mapped_column(String(16))
+    region: Mapped[str] = mapped_column(String(32))
+    # NULL means the hub's own ambient credentials (same-account workspace).
+    role_arn: Mapped[str | None] = mapped_column(String(256), default=None)
+    external_id: Mapped[str | None] = mapped_column(String(128), default=None)
+    bootstrap_status: Mapped[str] = mapped_column(String(16), default="registered")
+    # registered | bootstrapping | ready | failed
+    resources: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class UserWorkspace(Base):
+    """Binary grant: a member may operate in this workspace.
+
+    Admins bypass grants entirely — the built-in admin is config-driven and has
+    no ``users`` row, so it can never own one of these.
+    """
+
+    __tablename__ = "user_workspaces"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Agent(Base):
     __tablename__ = "agents"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     # uniqueness among non-deleted rows is enforced in the API layer, so a
     # deleted agent's name can be reused
     name: Mapped[str] = mapped_column(String(64), index=True)
@@ -92,6 +148,7 @@ class Deployment(Base):
     __tablename__ = "deployments"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
     job_id: Mapped[str | None] = mapped_column(String(32), default=None)
     status: Mapped[str] = mapped_column(String(24), default="running")
@@ -111,6 +168,7 @@ class ChatSession(Base):
     __tablename__ = "chat_sessions"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
     session_id: Mapped[str] = mapped_column(String(80), index=True)
     actor_id: Mapped[str] = mapped_column(String(64), default="river")
@@ -129,6 +187,9 @@ class ChatMessage(Base):
     __tablename__ = "chat_messages"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # carried on the row itself, not only via the agent: two queries match on a
+    # bare session_id (routers/chat.py, services/observability.py)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
     session_id: Mapped[str] = mapped_column(String(80), index=True)
     role: Mapped[str] = mapped_column(String(16))  # user | agent | tool | error
@@ -141,6 +202,7 @@ class ApiKey(Base):
     __tablename__ = "api_keys"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     name: Mapped[str] = mapped_column(String(64))
     prefix: Mapped[str] = mapped_column(String(16))  # display only, e.g. lp_live_ab12
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # sha256
@@ -152,6 +214,7 @@ class PolicyDecision(Base):
     __tablename__ = "policy_decisions"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     principal: Mapped[str] = mapped_column(String(96))  # e.g. demo@hr-analyst
     tool: Mapped[str] = mapped_column(String(128))
     outcome: Mapped[str] = mapped_column(String(8))  # ALLOW | DENY
@@ -165,6 +228,9 @@ class PolicyChange(Base):
     __tablename__ = "policy_changes"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    # deliberately NOT in _POLICY_CHANGE_IMMUTABLE: the startup backfill must
+    # stay legal on rows whose audit snapshot is otherwise frozen
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     gateway_id: Mapped[str] = mapped_column(String(128), index=True)
     gateway_arn: Mapped[str] = mapped_column(String(512))
     gateway_name: Mapped[str] = mapped_column(String(100))
@@ -221,6 +287,8 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    # the environment a resumed job re-runs against; never re-derived from settings
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     type: Mapped[str] = mapped_column(String(32))  # deploy_agent | delete_agent | ...
     status: Mapped[str] = mapped_column(String(16), default="queued")
     # queued | running | succeeded | failed

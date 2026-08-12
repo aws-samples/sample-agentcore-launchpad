@@ -31,6 +31,7 @@ class Experiment(Base):
     __tablename__ = "experiments"
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     name: Mapped[str] = mapped_column(String(64))
     agent_id: Mapped[str] = mapped_column(String(32), index=True)
     agent_name: Mapped[str] = mapped_column(String(64))
@@ -55,6 +56,7 @@ class RuntimeCanary(Base):
     __tablename__ = "runtime_canaries"
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     name: Mapped[str] = mapped_column(String(96))
     champion_agent_id: Mapped[str] = mapped_column(String(32), index=True)
     champion_agent_name: Mapped[str] = mapped_column(String(64))

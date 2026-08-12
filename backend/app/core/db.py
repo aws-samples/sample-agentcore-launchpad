@@ -1,6 +1,8 @@
 """SQLAlchemy engine / session for the local ledger database."""
 
+import json
 from collections.abc import Generator
+from datetime import UTC, datetime
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
@@ -12,6 +14,26 @@ from app.core.config import DATA_DIR, get_settings
 
 class Base(DeclarativeBase):
     pass
+
+
+DEFAULT_WORKSPACE_ID = "default"
+
+# Every table whose rows belong to one (account, region) environment. `users`,
+# `workspaces` and `user_workspaces` are hub-global and stay off this list.
+WORKSPACE_SCOPED_TABLES = (
+    "agents",
+    "deployments",
+    "chat_sessions",
+    "chat_messages",
+    "api_keys",
+    "policy_decisions",
+    "policy_changes",
+    "jobs",
+    "eval_datasets",
+    "eval_runs",
+    "experiments",
+    "runtime_canaries",
+)
 
 
 def _make_engine():
@@ -52,10 +74,19 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
-def init_db() -> None:
-    Base.metadata.create_all(bind=engine)
-    _migrate(engine)
-    assert_no_schema_drift(engine)
+def init_db(bind=None) -> None:
+    """Bring the ledger up to the models and seed the default workspace.
+
+    ``bind`` defaults to the process engine; tests pass an upgrade candidate so
+    they exercise this exact sequence rather than a copy of it.
+    """
+    bind = bind if bind is not None else engine
+    Base.metadata.create_all(bind=bind)
+    _migrate(bind)
+    # Seeding after the drift check so a database that is behind the models is
+    # never left half-migrated *and* half-seeded.
+    assert_no_schema_drift(bind)
+    _seed_default_workspace(bind)
 
 
 def schema_drift(bind) -> dict[str, list[str]]:
@@ -146,3 +177,130 @@ def _migrate(bind) -> None:
             if column not in existing:
                 with bind.begin() as conn:
                     conn.execute(text(ddl))
+    _migrate_workspace_columns(bind)
+
+
+def _migrate_workspace_columns(bind) -> None:
+    """Add `workspace_id` (+ its index) to every per-environment table.
+
+    The DDL is spelled out per table rather than generated, because
+    `tests/test_ledger_migration.py` reads the (table, column) pairs a migration
+    handles off the source of every `_migrate*` function.
+    """
+    from sqlalchemy import inspect, text
+
+    additions = {
+        "agents": "ALTER TABLE agents ADD COLUMN workspace_id VARCHAR(32)",
+        "deployments": "ALTER TABLE deployments ADD COLUMN workspace_id VARCHAR(32)",
+        "chat_sessions": "ALTER TABLE chat_sessions ADD COLUMN workspace_id VARCHAR(32)",
+        "chat_messages": "ALTER TABLE chat_messages ADD COLUMN workspace_id VARCHAR(32)",
+        "api_keys": "ALTER TABLE api_keys ADD COLUMN workspace_id VARCHAR(32)",
+        "policy_decisions": "ALTER TABLE policy_decisions ADD COLUMN workspace_id VARCHAR(32)",
+        "policy_changes": "ALTER TABLE policy_changes ADD COLUMN workspace_id VARCHAR(32)",
+        "jobs": "ALTER TABLE jobs ADD COLUMN workspace_id VARCHAR(32)",
+        "eval_datasets": "ALTER TABLE eval_datasets ADD COLUMN workspace_id VARCHAR(32)",
+        "eval_runs": "ALTER TABLE eval_runs ADD COLUMN workspace_id VARCHAR(32)",
+        "experiments": "ALTER TABLE experiments ADD COLUMN workspace_id VARCHAR(32)",
+        "runtime_canaries": "ALTER TABLE runtime_canaries ADD COLUMN workspace_id VARCHAR(32)",
+    }
+    inspector = inspect(bind)
+    live_tables = set(inspector.get_table_names())
+    for table, ddl in additions.items():
+        if table not in live_tables:
+            continue
+        if "workspace_id" not in {c["name"] for c in inspector.get_columns(table)}:
+            with bind.begin() as conn:
+                conn.execute(text(ddl))
+        # `create_all` only builds indexes for tables it creates, so an upgraded
+        # table needs its index here; IF NOT EXISTS keeps the fresh-database case
+        # (where the model's index=True already applied) a no-op. Note that
+        # `schema_drift` compares column names only and cannot catch a missing
+        # index — `tests/test_workspaces.py` does.
+        with bind.begin() as conn:
+            conn.execute(
+                text(
+                    f"CREATE INDEX IF NOT EXISTS ix_{table}_workspace_id "
+                    f"ON {table} (workspace_id)"
+                )
+            )
+
+
+def _seed_default_workspace(bind) -> None:
+    """Mirror settings onto the `default` workspace and adopt pre-P2 rows into it.
+
+    The row is refreshed on every startup rather than seeded once: `make
+    bootstrap` and kb_gateway rewrite `launchpad.yaml` *after* the first seed, so
+    a frozen snapshot would keep serving a stale identity — a fresh clone would
+    pin `account_id=""` forever and the real account would later arrive as a
+    *second* workspace beside the bogus default. Settings therefore stays
+    authoritative for `default` (and only `default`) until the console owns the
+    row; non-default workspaces are row-authoritative from birth.
+
+    Raw SQL on purpose, for two reasons: this module cannot import the models
+    (they import `Base` from here), and `PolicyChange`'s `before_update` listener
+    rejects ORM updates of frozen audit rows. Idempotent — the mirror converges
+    on settings and the backfill only touches NULLs.
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    live_tables = set(inspector.get_table_names())
+    if "workspaces" not in live_tables:
+        # `create_all` built nothing, which means `Base.metadata` was empty —
+        # i.e. the model modules were never imported (the trap that makes an
+        # out-of-process migration rehearsal silently skip the whole upgrade).
+        raise RuntimeError(
+            "`workspaces` is missing after create_all — import app.models.ledger "
+            "(as app.main does) before calling init_db"
+        )
+
+    settings = get_settings()
+    resources = settings.resources or {}
+    # An empty resource map means bootstrap has not run (or its output was lost),
+    # so the environment is registered but not usable — never claim "ready" for it.
+    values = {
+        "id": DEFAULT_WORKSPACE_ID,
+        "name": "Default",
+        "account_id": settings.account_id,
+        "region": settings.region,
+        "resources": json.dumps(resources),
+        "bootstrap_status": "ready" if resources else "registered",
+        # SQLAlchemy's SQLite DATETIME format, written directly because there is
+        # no type coercion on a raw statement.
+        "now": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f"),
+    }
+    with bind.begin() as conn:
+        exists = conn.execute(
+            text("SELECT 1 FROM workspaces WHERE id = :id"), {"id": DEFAULT_WORKSPACE_ID}
+        ).first()
+        if exists is None:
+            conn.execute(
+                text(
+                    "INSERT INTO workspaces (id, name, account_id, region, role_arn,"
+                    " external_id, bootstrap_status, resources, created_at, updated_at)"
+                    " VALUES (:id, :name, :account_id, :region, NULL, NULL,"
+                    " :bootstrap_status, :resources, :now, :now)"
+                ),
+                values,
+            )
+        else:
+            # name/role_arn/external_id are operator-owned, so the mirror leaves
+            # them alone. If a second workspace already claimed this (account,
+            # region) while default held a bogus identity, UNIQUE(account_id,
+            # region) raises here and startup fails loudly — that conflict needs
+            # an operator decision, not a silent winner.
+            conn.execute(
+                text(
+                    "UPDATE workspaces SET account_id = :account_id, region = :region,"
+                    " resources = :resources, bootstrap_status = :bootstrap_status,"
+                    " updated_at = :now WHERE id = :id"
+                ),
+                values,
+            )
+        for table in WORKSPACE_SCOPED_TABLES:
+            if table not in live_tables:
+                continue
+            conn.execute(
+                text(f"UPDATE {table} SET workspace_id = :id WHERE workspace_id IS NULL"),
+                {"id": DEFAULT_WORKSPACE_ID},
+            )
