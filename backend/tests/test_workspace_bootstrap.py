@@ -1119,6 +1119,24 @@ class TestBootstrapRoute:
         assert polled.json()["type"] == wb.JOB_TYPE
         assert [s["name"] for s in polled.json()["payload"]["stages"]] == wb.STAGE_ORDER
 
+    def test_the_latest_run_is_discoverable_without_its_job_id(self, client, no_thread):
+        """A browser that did not start the run finds it via GET .../bootstrap."""
+        _register()
+        assert client.get(f"/api/workspaces/{WS_ID}/bootstrap").json()["job"] is None
+
+        job_id = client.post(f"/api/workspaces/{WS_ID}/bootstrap").json()["job_id"]
+        status = client.get(f"/api/workspaces/{WS_ID}/bootstrap")
+
+        assert status.status_code == 200, status.text
+        body = status.json()
+        assert body["workspace_id"] == WS_ID
+        assert body["bootstrap_status"] == "bootstrapping"
+        assert body["job"]["id"] == job_id
+        assert [s["name"] for s in body["job"]["stages"]] == wb.STAGE_ORDER
+
+    def test_the_latest_run_route_404s_an_unknown_workspace(self, client, no_thread):
+        assert client.get("/api/workspaces/nope/bootstrap").status_code == 404
+
     @pytest.mark.parametrize("status", ["bootstrapping", "ready"])
     def test_it_refuses_a_workspace_that_is_running_or_done(
         self, client, no_thread, status

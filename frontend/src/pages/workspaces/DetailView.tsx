@@ -137,6 +137,26 @@ export function WorkspaceDetailView({
     void load();
   }, [load]);
 
+  // A run started in another browser (or by another admin) is not in
+  // localStorage — ask the backend which job is the latest one.
+  useEffect(() => {
+    if (jobId || workspaceId === "default") return;
+    let alive = true;
+    void api
+      .getWorkspaceBootstrap(workspaceId)
+      .then((status) => {
+        if (!alive || !status.job) return;
+        rememberJobId(workspaceId, status.job.id);
+        setJobId(status.job.id);
+      })
+      .catch(() => {
+        /* the panel just shows "no run" */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [jobId, workspaceId]);
+
   const reload = useCallback(async () => {
     await load();
     await onChanged();

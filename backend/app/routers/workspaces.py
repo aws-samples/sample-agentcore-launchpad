@@ -429,6 +429,34 @@ def bootstrap_workspace(
     }
 
 
+@router.get("/{workspace_id}/bootstrap")
+def bootstrap_status(
+    workspace_id: str,
+    db: Session = Depends(get_db),
+    _: Identity = Depends(require_admin),
+) -> dict[str, Any]:
+    """The latest bootstrap run for this workspace, if any.
+
+    Exists so a browser (or admin) that did not start the run can still find and
+    watch it — live polling stays on `GET /api/jobs/{job_id}`, this only answers
+    "which job is it".
+    """
+    row = _requested_row(db, workspace_id)
+    job = workspace_bootstrap.latest_job(db, workspace_id)
+    payload: dict[str, Any] = {
+        "workspace_id": row.id,
+        "bootstrap_status": row.bootstrap_status,
+        "job": None,
+    }
+    if job is not None:
+        payload["job"] = {
+            "id": job.id,
+            "status": job.status,
+            "stages": workspace_bootstrap.job_stages(job),
+        }
+    return payload
+
+
 @router.get("/{workspace_id}/grants")
 def list_grants(
     workspace_id: str,

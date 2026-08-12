@@ -1456,6 +1456,13 @@ export const api = {
     request<WorkspaceGrants>(`/api/workspaces/${id}/grants`),
   bootstrapWorkspace: (id: string) =>
     request<WorkspaceBootstrapAck>(`/api/workspaces/${id}/bootstrap`, { method: "POST" }),
+  /** The latest bootstrap run, so a browser that did not start it can watch. */
+  getWorkspaceBootstrap: (id: string) =>
+    request<{
+      workspace_id: string;
+      bootstrap_status: string;
+      job: { id: string; status: string; stages: StageInfo[] } | null;
+    }>(`/api/workspaces/${id}/bootstrap`),
   /**
    * A job of a workspace other than the current selection.
    *
