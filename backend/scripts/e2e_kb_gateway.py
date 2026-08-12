@@ -14,6 +14,7 @@ import time
 from app.services import kb_gateway
 from app.services.agentcore.client import control_client
 from app.services.mcp_client import _rpc, get_cognito_token
+from app.services.workspace import default_workspace_context
 
 
 def log(msg: str) -> None:
@@ -21,8 +22,9 @@ def log(msg: str) -> None:
 
 
 def main(kb_id: str) -> int:
-    control = control_client()
-    gw = kb_gateway.ensure_kb_gateway_persisted(control)
+    workspace = default_workspace_context()
+    control = control_client(workspace)
+    gw = kb_gateway.ensure_kb_gateway_persisted(control, workspace)
     log(f"kb gateway: {gw['id']} · {gw['url']}")
 
     target_id = kb_gateway.ensure_retrieve_target(
@@ -37,7 +39,7 @@ def main(kb_id: str) -> int:
     )
     log(f"agentic target READY: {agentic_id}")
 
-    token = get_cognito_token("admin")
+    token = get_cognito_token(workspace, "admin")
     tools = _rpc(gw["url"], token, "tools/list").get("tools", [])
     names = [t["name"] for t in tools]
     log(f"tools/list → {names}")

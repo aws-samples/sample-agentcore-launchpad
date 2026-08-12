@@ -28,9 +28,6 @@ RESOURCES_ALLOWED = {
 DEFAULT_CONTEXT_ALLOWED = {
     # defines it
     "services/workspace.py",
-    # the seven AgentCore factories accept `ctx=None` for call sites that have no
-    # workspace yet; keeping the fallback in exactly one module stops it spreading
-    "services/agentcore/client.py",
     # model prices are hub-global config and so is their discovery (parent design
     # D10 defers multi-region price discovery)
     "services/model_prices.py",

@@ -20,13 +20,18 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal, get_db
+from app.core.db import (
+    DEFAULT_WORKSPACE_ID,
+    WORKSPACE_SCOPED_TABLES,
+    SessionLocal,
+    get_db,
+)
 from app.core.errors import AppError, NotFoundError
-from app.models.ledger import Agent, User, UserWorkspace, Workspace
+from app.models.ledger import User, UserWorkspace, Workspace
 from app.routers.auth import Identity, require_admin, require_identity
 from app.services.workspace import (
     WorkspaceContext,
@@ -317,6 +322,27 @@ def update_workspace(
     return _out(row)
 
 
+def _referencing_rows(db: Session, workspace_id: str) -> dict[str, int]:
+    """Rows that would dangle if this workspace row disappeared, per table.
+
+    Counted straight off `WORKSPACE_SCOPED_TABLES` rather than per model, so a
+    table added to that list is covered without touching this function. A
+    soft-deleted agent counts as much as a live one: its row still names the
+    workspace, and `context_for_workspace` raises on an id it cannot resolve —
+    the no-NULL startup invariant sees nothing wrong with a reference that
+    points nowhere.
+    """
+    counts: dict[str, int] = {}
+    for table in WORKSPACE_SCOPED_TABLES:
+        found = db.execute(
+            text(f"SELECT COUNT(*) FROM {table} WHERE workspace_id = :id"),  # noqa: S608
+            {"id": workspace_id},
+        ).scalar_one()
+        if found:
+            counts[table] = int(found)
+    return counts
+
+
 @router.delete("/{workspace_id}")
 def delete_workspace(
     workspace_id: str,
@@ -325,8 +351,10 @@ def delete_workspace(
 ) -> dict[str, Any]:
     """Detach-only decommission: the AWS resources it provisioned stay put.
 
-    Refused while agents still live in it — deleting the row would orphan them
-    (their ledger rows would name a workspace nobody can resolve).
+    Refused while ANY per-environment row still names it — agents, but also the
+    deploy jobs, chat history, api keys, audit trail and evaluation rows that
+    would otherwise reference a workspace nobody can resolve. The 409 names what
+    remains so the operator knows what to clear.
     """
     row = _requested_row(db, workspace_id)
     if row.id == DEFAULT_WORKSPACE_ID:
@@ -335,18 +363,16 @@ def delete_workspace(
             "the default workspace describes the hub itself and cannot be deleted",
             status_code=400,
         )
-    agents = (
-        db.query(Agent)
-        .filter(Agent.workspace_id == row.id, Agent.status != "deleted")
-        .count()
-    )
-    if agents:
+    remaining = _referencing_rows(db, row.id)
+    if remaining:
+        listed = ", ".join(f"{table}: {count}" for table, count in remaining.items())
         raise AppError(
             "workspace.in_use",
-            f"{agents} agent(s) still live in '{row.id}' — delete them first",
-            {"agents": agents},
+            f"'{row.id}' still owns ledger rows ({listed}) — clear them first",
+            {"rows": remaining},
             status_code=409,
         )
+    # Grants go with it: a re-registered id would otherwise inherit them.
     db.query(UserWorkspace).filter(UserWorkspace.workspace_id == row.id).delete()
     db.delete(row)
     db.commit()

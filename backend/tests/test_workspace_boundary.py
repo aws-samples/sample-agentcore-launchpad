@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.routers.agents as agents_router
+import app.routers.public_api as public_api
 from app.core.config import get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.evaluation.models import EvalDataset, EvalRun
@@ -98,6 +99,24 @@ def _workspace(workspace_id: str = OTHER, region: str = "us-west-1", **columns) 
     finally:
         db.close()
     return workspace_id
+
+
+def _eval_run(workspace_id: str, agent_name: str = "queue-owner") -> str:
+    db = SessionLocal()
+    try:
+        run = EvalRun(
+            workspace_id=workspace_id,
+            agent_id=_agent(workspace_id, name=f"{agent_name}-{workspace_id}"),
+            agent_name=agent_name,
+            mode="evaluators",
+            evaluators=[],
+            status="queued",
+        )
+        db.add(run)
+        db.commit()
+        return run.id
+    finally:
+        db.close()
 
 
 def _agent(workspace_id: str, name: str = "boundary-agent") -> str:
@@ -280,6 +299,33 @@ class TestForeignIdsAreInvisible:
         assert admin.get("/api/experiments").json()["experiments"] == []
         assert admin.get("/api/runtime-canaries").json()["canaries"] == []
 
+    def test_the_eval_queue_names_only_this_workspaces_runs(self, admin, monkeypatch):
+        """One process serves every workspace, so the queue itself is global — its
+        depth and cap are honest numbers to report. The run ids are not: naming a
+        foreign run discloses that it exists."""
+        from app.evaluation import routers as eval_routers
+
+        _workspace()
+        mine = _eval_run(DEFAULT_WORKSPACE_ID)
+        foreign = _eval_run(OTHER)
+        monkeypatch.setattr(
+            eval_routers.run_queue,
+            "state",
+            lambda: {
+                "running": [foreign, mine],
+                "queued": [foreign],
+                "locked": True,
+                "max_concurrency": 3,
+            },
+        )
+
+        state = admin.get("/api/eval/queue").json()
+
+        assert state["running"] == [mine]
+        assert state["queued"] == []
+        # the capacity signal survives: it is what the console renders "QUEUED" from
+        assert (state["locked"], state["max_concurrency"]) == (True, 3)
+
     def test_policy_decisions_are_per_workspace(self, admin):
         _workspace()
         db = SessionLocal()
@@ -377,6 +423,108 @@ class TestForeignIdsAreInvisible:
         assert taken.status_code == 409 and taken.json()["code"] == "agent.name_exists"
         assert free.status_code == 202, free.text
         assert free.json()["agent"]["name"] == "shared-name"
+
+
+class TestPublicApiScope:
+    """`/v1` carries no `X-Workspace` header: the API key names the environment.
+
+    The hash lookup therefore has to stay global — it is the only way to learn
+    which workspace the caller is in — while everything it authorizes is scoped
+    to `api_keys.workspace_id`.
+    """
+
+    @staticmethod
+    def _mint(admin, workspace_id: str) -> str:
+        created = admin.post(
+            "/api/apikeys",
+            headers={WORKSPACE_HEADER: workspace_id},
+            json={"name": f"key-{workspace_id}"},
+        )
+        assert created.status_code == 201, created.text
+        return created.json()["key"]
+
+    def test_a_key_lists_only_its_own_workspaces_agents(self, admin):
+        _workspace()
+        hub_agent = _agent(DEFAULT_WORKSPACE_ID, name="hub-v1")
+        foreign_agent = _agent(OTHER, name="foreign-v1")
+        hub_key = self._mint(admin, DEFAULT_WORKSPACE_ID)
+        foreign_key = self._mint(admin, OTHER)
+
+        hub = admin.get("/v1/agents", headers={"X-Api-Key": hub_key})
+        foreign = admin.get("/v1/agents", headers={"X-Api-Key": foreign_key})
+
+        # both keys authenticate — the hash lookup is global by design
+        assert (hub.status_code, foreign.status_code) == (200, 200)
+        assert [row["id"] for row in hub.json()["agents"]] == [hub_agent]
+        assert [row["id"] for row in foreign.json()["agents"]] == [foreign_agent]
+
+    def test_a_key_cannot_invoke_another_workspaces_agent(self, admin, monkeypatch):
+        _workspace()
+        foreign_agent = _agent(OTHER, name="foreign-invoke")
+        hub_key = self._mint(admin, DEFAULT_WORKSPACE_ID)
+        foreign_key = self._mint(admin, OTHER)
+        monkeypatch.setattr(
+            public_api,
+            "invoke_agent_text",
+            lambda *a, **k: {"text": "hi", "session_id": "s-1"},
+        )
+        body = {"prompt": "hello"}
+
+        refused = admin.post(
+            f"/v1/agents/{foreign_agent}/invoke", headers={"X-Api-Key": hub_key}, json=body
+        )
+        allowed = admin.post(
+            f"/v1/agents/{foreign_agent}/invoke", headers={"X-Api-Key": foreign_key}, json=body
+        )
+
+        # identical to a missing agent: the key's scope must not be probeable
+        assert refused.status_code == 404 and refused.json()["code"] == "agent.not_found"
+        assert allowed.status_code == 200, allowed.text
+        assert allowed.json()["text"] == "hi"
+
+    def test_the_stream_route_is_scoped_too(self, admin):
+        _workspace()
+        foreign_agent = _agent(OTHER, name="foreign-stream")
+        hub_key = self._mint(admin, DEFAULT_WORKSPACE_ID)
+
+        refused = admin.post(
+            f"/v1/agents/{foreign_agent}/invoke-stream",
+            headers={"X-Api-Key": hub_key},
+            json={"prompt": "hello"},
+        )
+
+        assert refused.status_code == 404 and refused.json()["code"] == "agent.not_found"
+
+    def test_a_disabled_key_is_still_401(self, admin):
+        """Unchanged by scoping: disabling is checked before the workspace is."""
+        raw = self._mint(admin, DEFAULT_WORKSPACE_ID)
+        key_id = admin.get("/api/apikeys").json()["keys"][0]["id"]
+        assert admin.post(f"/api/apikeys/{key_id}/disable").status_code == 200
+
+        response = admin.get("/v1/agents", headers={"X-Api-Key": raw})
+
+        assert response.status_code == 401
+        assert response.json()["code"] == "auth.invalid_api_key"
+
+    def test_a_key_whose_workspace_is_gone_is_401(self, admin):
+        """A dangling key authenticates nothing: it names no agents, and resolving
+        an invoke target from a missing workspace row would fail mid-request."""
+        _workspace()
+        _agent(OTHER, name="orphan-owner")
+        raw = self._mint(admin, OTHER)
+        db = SessionLocal()
+        try:
+            # the DELETE route refuses this now, so the row is dropped directly —
+            # what matters is that /v1 survives a workspace that went missing
+            db.delete(db.get(Workspace, OTHER))
+            db.commit()
+        finally:
+            db.close()
+
+        response = admin.get("/v1/agents", headers={"X-Api-Key": raw})
+
+        assert response.status_code == 401
+        assert response.json()["code"] == "auth.invalid_api_key"
 
 
 class TestReadinessGate:

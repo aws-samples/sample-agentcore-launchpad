@@ -10,8 +10,10 @@ from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
+from app.evaluation.models import EvalDataset
 from app.main import create_app
 from app.models.ledger import Agent, UserWorkspace, Workspace
+from app.routers.workspaces import _referencing_rows
 from app.services import users as users_service
 
 ADMIN_CREDS = {"username": "operator", "password": "s3cret-pass"}
@@ -152,7 +154,9 @@ class TestRenameAndDelete:
         assert response.status_code == 400
         assert response.json()["code"] == "workspace.reserved_id"
 
-    def test_delete_is_blocked_while_agents_live_in_it(self, admin, member_id):
+    def test_delete_is_blocked_while_any_row_still_names_it(self, admin, member_id):
+        """Including a soft-deleted agent: the row still references the workspace,
+        and after the workspace row goes nothing can resolve it."""
         assert admin.post("/api/workspaces", json=NEW).status_code == 201
         admin.patch(f"/api/users/{member_id}", json={"workspaces": [NEW["id"]]})
         db = SessionLocal()
@@ -169,10 +173,22 @@ class TestRenameAndDelete:
         blocked = admin.delete(f"/api/workspaces/{NEW['id']}")
         assert blocked.status_code == 409
         assert blocked.json()["code"] == "workspace.in_use"
+        assert blocked.json()["detail"]["rows"] == {"agents": 1}
 
         db = SessionLocal()
         try:
             db.get(Agent, agent_id).status = "deleted"
+            db.commit()
+        finally:
+            db.close()
+
+        still_blocked = admin.delete(f"/api/workspaces/{NEW['id']}")
+        assert still_blocked.status_code == 409
+        assert still_blocked.json()["detail"]["rows"] == {"agents": 1}
+
+        db = SessionLocal()
+        try:
+            db.delete(db.get(Agent, agent_id))
             db.commit()
         finally:
             db.close()
@@ -186,6 +202,47 @@ class TestRenameAndDelete:
                 db.query(UserWorkspace).filter(UserWorkspace.workspace_id == NEW["id"]).count()
                 == 0
             )
+        finally:
+            db.close()
+
+    def test_delete_is_blocked_by_a_row_in_any_scoped_table(self, admin):
+        """Not just agents: an evaluation dataset (no agent, no AWS resource) is
+        enough, and the 409 names the table so the operator knows what to clear."""
+        assert admin.post("/api/workspaces", json=NEW).status_code == 201
+        db = SessionLocal()
+        try:
+            dataset = EvalDataset(
+                workspace_id=NEW["id"], name="leftover", items=[{"prompt": "p"}]
+            )
+            db.add(dataset)
+            db.commit()
+            dataset_id = dataset.id
+        finally:
+            db.close()
+
+        blocked = admin.delete(f"/api/workspaces/{NEW['id']}")
+        assert blocked.status_code == 409
+        assert blocked.json()["code"] == "workspace.in_use"
+        assert blocked.json()["detail"]["rows"] == {"eval_datasets": 1}
+
+        db = SessionLocal()
+        try:
+            db.delete(db.get(EvalDataset, dataset_id))
+            db.commit()
+        finally:
+            db.close()
+
+        assert admin.delete(f"/api/workspaces/{NEW['id']}").status_code == 200
+
+    def test_the_guard_queries_every_scoped_table(self, admin):
+        """The guard is only as wide as the table list it walks, and every table on
+        that list has to be queryable — a name or column that drifted raises here
+        rather than silently skipping a table's rows."""
+        assert admin.post("/api/workspaces", json=NEW).status_code == 201
+        db = SessionLocal()
+        try:
+            assert _referencing_rows(db, NEW["id"]) == {}
+            assert _referencing_rows(db, DEFAULT_WORKSPACE_ID) == {}
         finally:
             db.close()
 

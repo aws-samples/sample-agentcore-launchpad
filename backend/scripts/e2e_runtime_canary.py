@@ -25,13 +25,14 @@ Run:  cd backend && uv run python scripts/e2e_runtime_canary.py [agent-name]
 import argparse
 import time
 
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent
 from app.optimization import canary_service as cs
 from app.optimization.canary_routers import CandidateEdit, _resolve_edited_spec
 from app.optimization.models import RuntimeCanary
 from app.services.agentcore.client import control_client
 from app.services.invoke import invoke_agent_text
+from app.services.workspace import default_workspace_context
 
 
 def _parse_agent_name() -> str:
@@ -60,9 +61,15 @@ def log(msg: str) -> None:
 def _get_agent(name: str) -> Agent:
     db = SessionLocal()
     try:
+        # Hub workspace only: names are unique per workspace, and the leak check
+        # at the end lists gateways in the hub region.
         agent = (
             db.query(Agent)
-            .filter(Agent.name == name, Agent.status == "active")
+            .filter(
+                Agent.workspace_id == DEFAULT_WORKSPACE_ID,
+                Agent.name == name,
+                Agent.status == "active",
+            )
             .first()
         )
         if agent is None:
@@ -85,6 +92,7 @@ def _delete_canary_row(canary_id: str) -> None:
 
 
 def main() -> int:
+    workspace = default_workspace_context()
     agent = _get_agent(AGENT_NAME)
     print(f"── E2E target: {agent.name} ({agent.resource_id})", flush=True)
 
@@ -95,7 +103,7 @@ def main() -> int:
         )
     )
     edited_spec = _resolve_edited_spec(agent, candidate)
-    canary = cs.start_canary(agent, edited_spec)
+    canary = cs.start_canary(agent, edited_spec, workspace)
     canary_id = canary.id
     print(f"── created canary row {canary_id}", flush=True)
 
@@ -160,7 +168,7 @@ def main() -> int:
 
         # ── verify no leaks: dedicated gateway + named endpoints gone ────────
         # DeleteGateway is accepted async; poll until it drops from the list.
-        control = control_client()
+        control = control_client(workspace)
         gw_name = f"lp-canary-{canary_id}"
         for _ in range(30):
             gateways = control.list_gateways(maxResults=100).get("items", [])

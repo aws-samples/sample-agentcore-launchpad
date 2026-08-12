@@ -40,7 +40,7 @@ def test_data_client_uses_configured_read_timeout(monkeypatch):
         lambda: SimpleNamespace(agentcore_read_timeout_s=1200),
     )
 
-    created = client_mod.data_client()
+    created = client_mod.data_client(ws.default_workspace_context())
 
     assert created.service_name == "bedrock-agentcore"
     assert created.config.read_timeout == 1200
@@ -50,7 +50,8 @@ def test_data_client_uses_configured_read_timeout(monkeypatch):
 def test_clients_are_built_in_the_workspace_region(monkeypatch):
     session, lookups = _stub_workspace(monkeypatch, region="eu-central-1")
 
-    assert client_mod.control_client().service_name == "bedrock-agentcore-control"
-    assert client_mod.registry_control_client().service_name == "agent-registry-control"
-    assert client_mod.iam_client().service_name == "iam"
+    ctx = ws.default_workspace_context()
+    assert client_mod.control_client(ctx).service_name == "bedrock-agentcore-control"
+    assert client_mod.registry_control_client(ctx).service_name == "agent-registry-control"
+    assert client_mod.iam_client(ctx).service_name == "iam"
     assert {region for _account, region, _role, _ext in lookups} == {"eu-central-1"}

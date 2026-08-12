@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from app.services import knowledge
+from app.services.workspace import default_workspace_context
 
 KB_NAME = "aurora-deck-docs"
 SAMPLES = Path(__file__).resolve().parents[2] / "samples" / "kb_docs"
@@ -20,17 +21,20 @@ def log(msg: str) -> None:
 
 
 def main() -> int:
-    existing = [kb for kb in knowledge.list_kbs() if kb["name"] == KB_NAME]
+    # Hub workspace: this gate verifies the deployment's own KB chain.
+    ws = default_workspace_context()
+    existing = [kb for kb in knowledge.list_kbs(ws) if kb["name"] == KB_NAME]
     if existing:
         kb_id = existing[0]["kb_id"]
         log(f"reusing existing KB {kb_id}")
-        detail = knowledge.get_kb_detail(kb_id)
+        detail = knowledge.get_kb_detail(ws, kb_id)
         if not detail["data_sources"]:
             log("no data source yet — replaying upload-mode source (client flow)")
-            detail = knowledge.add_data_source(kb_id, {"mode": "upload"})
+            detail = knowledge.add_data_source(ws, kb_id, {"mode": "upload"})
     else:
         log("creating KB (upload mode)…")
         detail = knowledge.create_kb(
+            ws,
             KB_NAME,
             "Aurora Deck product documentation and support runbook. Use for questions "
             "about Aurora Deck features, versions, pricing, refunds, and escalations.",
@@ -40,13 +44,13 @@ def main() -> int:
         log(f"created KB {kb_id} status={detail['status']}")
 
     files = [(p.name, p.read_bytes()) for p in sorted(SAMPLES.glob("*.md"))]
-    keys = knowledge.upload_files(kb_id, files)
+    keys = knowledge.upload_files(ws, kb_id, files)
     log(f"uploaded {len(keys)} files: {keys}")
 
     ds_id = None
     deadline = time.time() + 480
     while time.time() < deadline:
-        detail = knowledge.get_kb_detail(kb_id)
+        detail = knowledge.get_kb_detail(ws, kb_id)
         if not detail["data_sources"]:
             log(f"kb status={detail['status']} · waiting for data source setup")
             # Real-AWS data-source polling is intentionally paced and attempt-bounded.
@@ -67,12 +71,12 @@ def main() -> int:
         return 1
 
     log("starting ingestion…")
-    job = knowledge.start_sync(kb_id, ds_id)
+    job = knowledge.start_sync(ws, kb_id, ds_id)
     log(f"job {job['job_id']} status={job['status']}")
 
     deadline = time.time() + 900
     while time.time() < deadline:
-        jobs = knowledge.list_ingestion_jobs(kb_id, ds_id)
+        jobs = knowledge.list_ingestion_jobs(ws, kb_id, ds_id)
         top = jobs[0] if jobs else {}
         log(f"ingestion status={top.get('status')} stats={top.get('statistics')}")
         if top.get("status") == "COMPLETE":
@@ -92,7 +96,7 @@ def main() -> int:
     ]
     failures = 0
     for text, needle in checks:
-        results = knowledge.query(kb_id, text, number_of_results=4)
+        results = knowledge.query(ws, kb_id, text, number_of_results=4)
         hit = any(needle.lower() in r["text"].lower() for r in results)
         log(f"query {text!r} → {len(results)} results · top score "
             f"{results[0]['score'] if results else None} · contains {needle!r}: {hit}")

@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -774,5 +775,28 @@ def create_run(
 
 
 @router.get("/queue")
-def queue_state() -> dict[str, Any]:
-    return run_queue.state()
+def queue_state(
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Queue depth and the concurrency cap stay global numbers — the AgentCore
+    batch quota they exist for is per account, and one process serves every
+    workspace. The run ids are not global: naming another environment's runs
+    would disclose that they exist.
+    """
+    state = run_queue.state()
+    named = set(state["running"]) | set(state["queued"])
+    mine: set[str] = set()
+    if named:
+        mine = set(
+            db.scalars(
+                select(EvalRun.id).where(
+                    EvalRun.id.in_(named), EvalRun.workspace_id == ws.id
+                )
+            )
+        )
+    return {
+        **state,
+        "running": [run_id for run_id in state["running"] if run_id in mine],
+        "queued": [run_id for run_id in state["queued"] if run_id in mine],
+    }
