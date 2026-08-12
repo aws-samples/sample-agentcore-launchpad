@@ -33,6 +33,7 @@ export const PLATFORM_COUNT = 6;
  */
 export const ADMIN_NAV_ENTRIES: NavEntry[] = [
   { idx: "10", to: "/users", labelKey: "nav.users" },
+  { idx: "11", to: "/workspaces", labelKey: "nav.workspaces" },
 ];
 
 /** Every routable entry, for breadcrumb resolution. */

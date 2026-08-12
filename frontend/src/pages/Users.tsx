@@ -19,6 +19,10 @@ import {
 } from "../components";
 import type { ConsoleUser, UserStats, UserStatusFilter } from "../lib/api";
 import { AGENT_PERMISSIONS, api } from "../lib/api";
+import { useWorkspace } from "../workspace/workspace-context";
+
+/** Grant every approved account the hub workspace unless the admin says otherwise. */
+const DEFAULT_GRANT = "default";
 
 const STATUS_FILTERS: UserStatusFilter[] = [
   "all",
@@ -51,6 +55,7 @@ export function Users() {
   const { t } = useTranslation();
   const toast = useToast();
   const { isAdmin } = useAuth();
+  const { workspaces } = useWorkspace();
   const [params, setParams] = useSearchParams();
 
   const statusParam = params.get("status") as UserStatusFilter | null;
@@ -68,6 +73,8 @@ export function Users() {
   const [pendingDelete, setPendingDelete] = useState<ConsoleUser | null>(null);
   const [extendTarget, setExtendTarget] = useState<ConsoleUser | null>(null);
   const [extendDays, setExtendDays] = useState("14");
+  const [approveTarget, setApproveTarget] = useState<ConsoleUser | null>(null);
+  const [approveGrants, setApproveGrants] = useState<string[]>([]);
   const [reset, setReset] = useState<{ username: string; password: string } | null>(null);
   const seq = useRef(0);
 
@@ -170,6 +177,7 @@ export function Users() {
     { key: "user", label: t("usersPage.cols.user") },
     { key: "role", label: t("usersPage.cols.role") },
     { key: "permissions", label: t("usersPage.cols.permissions") },
+    { key: "workspaces", label: t("usersPage.cols.workspaces") },
     { key: "state", label: t("usersPage.cols.state") },
     { key: "validity", label: t("usersPage.cols.validity") },
     { key: "created", label: t("usersPage.cols.created") },
@@ -297,7 +305,7 @@ export function Users() {
                   {t(user.role === "admin" ? "auth.roleAdmin" : "auth.roleMember")}
                 </Chip>
               </td>
-              <td>
+              <td className="chipcell">
                 {user.role === "admin" ? (
                   <span className="dim mono">{t("usersPage.permissionsAll")}</span>
                 ) : (
@@ -325,6 +333,46 @@ export function Users() {
                         </button>
                       );
                     })}
+                  </div>
+                )}
+              </td>
+              <td className="chipcell">
+                {user.role === "admin" ? (
+                  // Admins reach every workspace by role; a grant row for them
+                  // would suggest access that could be revoked.
+                  <span className="dim mono">{t("usersPage.workspacesAll")}</span>
+                ) : (
+                  <div className="selchips" data-testid={`user-workspaces-${user.username}`}>
+                    {workspaces.map((workspace) => {
+                      const granted = user.workspaces.includes(workspace.id);
+                      return (
+                        <button
+                          key={workspace.id}
+                          type="button"
+                          className={`selchip${granted ? " on" : ""}`}
+                          style={{ cursor: "pointer" }}
+                          disabled={busyId === user.id}
+                          title={t("usersPage.workspacesHint")}
+                          data-testid={`user-workspace-${user.username}-${workspace.id}`}
+                          onClick={() =>
+                            patch(
+                              user,
+                              {
+                                workspaces: granted
+                                  ? user.workspaces.filter((id) => id !== workspace.id)
+                                  : [...user.workspaces, workspace.id],
+                              },
+                              "usersPage.workspacesUpdated",
+                            )
+                          }
+                        >
+                          {workspace.id}
+                        </button>
+                      );
+                    })}
+                    {workspaces.length === 0 ? (
+                      <span className="dim mono">—</span>
+                    ) : null}
                   </div>
                 )}
               </td>
@@ -359,9 +407,14 @@ export function Users() {
                     <Btn
                       primary
                       disabled={busyId === user.id}
-                      onClick={() =>
-                        patch(user, { status: "active" }, "usersPage.approved")
-                      }
+                      onClick={() => {
+                        // Approval decides the account's environments too, so it
+                        // asks instead of granting the hub silently.
+                        setApproveGrants(
+                          user.workspaces.length > 0 ? user.workspaces : [DEFAULT_GRANT],
+                        );
+                        setApproveTarget(user);
+                      }}
                       data-testid={`user-approve-${user.username}`}
                     >
                       {t("usersPage.actions.approve")}
@@ -494,6 +547,67 @@ export function Users() {
                 data-testid="extend-confirm"
               >
                 {t("usersPage.actions.extend")}
+              </Btn>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {approveTarget ? (
+        <div className="confirm-backdrop" onClick={() => setApproveTarget(null)}>
+          <div
+            className="confirm-box"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("usersPage.approveTitle")}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="confirm-title">▲ {t("usersPage.approveTitle")}</div>
+            <p className="confirm-body">
+              {t("usersPage.approveBody", { username: approveTarget.username })}
+            </p>
+            <div className="selchips" data-testid="approve-workspaces">
+              {workspaces.map((workspace) => {
+                const on = approveGrants.includes(workspace.id);
+                return (
+                  <button
+                    key={workspace.id}
+                    type="button"
+                    className={`selchip${on ? " on" : ""}`}
+                    style={{ cursor: "pointer" }}
+                    aria-pressed={on}
+                    onClick={() =>
+                      setApproveGrants((prev) =>
+                        on
+                          ? prev.filter((id) => id !== workspace.id)
+                          : [...prev, workspace.id],
+                      )
+                    }
+                    data-testid={`approve-workspace-${workspace.id}`}
+                  >
+                    {on ? "✓ " : ""}
+                    {workspace.id}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="confirm-actions">
+              <Btn onClick={() => setApproveTarget(null)}>{t("common.cancel")}</Btn>
+              <Btn
+                primary
+                onClick={() => {
+                  const target = approveTarget;
+                  const grants = approveGrants;
+                  setApproveTarget(null);
+                  void patch(
+                    target,
+                    { status: "active", workspaces: grants },
+                    "usersPage.approved",
+                  );
+                }}
+                data-testid="approve-confirm"
+              >
+                {t("usersPage.actions.approve")}
               </Btn>
             </div>
           </div>

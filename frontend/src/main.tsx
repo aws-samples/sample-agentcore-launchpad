@@ -11,6 +11,11 @@ import { createRoot } from "react-dom/client";
 
 import App from "./App";
 import { AuthGate } from "./auth/AuthGate";
+import { installWorkspaceHeader } from "./lib/workspace-header";
+
+// Before the first render, so no mount effect can reach the backend without
+// naming the workspace it means.
+installWorkspaceHeader();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
