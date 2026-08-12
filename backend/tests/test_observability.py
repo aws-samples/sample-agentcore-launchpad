@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.services import observability as obs
 
@@ -403,7 +403,8 @@ def _fake_logs():
 def _seed_agent(name="hr-assistant", resource_id="hr_assistant-Flr7ibmASq",
                 status="active", method="harness"):
     db = SessionLocal()
-    agent = Agent(name=name, method=method, status=status, resource_id=resource_id,
+    agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name=name, method=method,
+                  status=status, resource_id=resource_id,
                   arn=f"arn:aws:bedrock-agentcore:us-west-2:1:harness/{resource_id}")
     db.add(agent)
     db.commit()
@@ -506,7 +507,8 @@ def test_transcript_no_ledger_row_and_no_memory_is_unavailable(monkeypatch):
 def test_transcript_memory_error_degrades(monkeypatch):
     agent_id = _seed_agent()
     db = SessionLocal()
-    db.add(ChatSession(agent_id=agent_id, session_id="s" * 64, actor_id="river"))
+    db.add(ChatSession(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                       session_id="s" * 64, actor_id="river"))
     db.commit()
 
     def boom(*args, **kwargs):
@@ -522,7 +524,8 @@ def test_transcript_memory_error_degrades(monkeypatch):
 def test_transcript_orders_turns(monkeypatch):
     agent_id = _seed_agent()
     db = SessionLocal()
-    db.add(ChatSession(agent_id=agent_id, session_id="s" * 64, actor_id="river"))
+    db.add(ChatSession(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                       session_id="s" * 64, actor_id="river"))
     db.commit()
     events = [
         {"eventTimestamp": "2026-07-10T02:00:00", "payload": [
@@ -546,6 +549,7 @@ def test_transcript_reconciles_incomplete_memory_from_chat_ledger(monkeypatch):
     db = SessionLocal()
     db.add(
         ChatSession(
+            workspace_id=DEFAULT_WORKSPACE_ID,
             agent_id=agent_id,
             session_id=session_id,
             actor_id="runtime-diagnostic",
@@ -554,24 +558,28 @@ def test_transcript_reconciles_incomplete_memory_from_chat_ledger(monkeypatch):
     db.add_all(
         [
             ChatMessage(
+                workspace_id=DEFAULT_WORKSPACE_ID,
                 agent_id=agent_id,
                 session_id=session_id,
                 role="user",
                 text="first question",
             ),
             ChatMessage(
+                workspace_id=DEFAULT_WORKSPACE_ID,
                 agent_id=agent_id,
                 session_id=session_id,
                 role="agent",
                 text="first answer",
             ),
             ChatMessage(
+                workspace_id=DEFAULT_WORKSPACE_ID,
                 agent_id=agent_id,
                 session_id=session_id,
                 role="user",
                 text="latest question",
             ),
             ChatMessage(
+                workspace_id=DEFAULT_WORKSPACE_ID,
                 agent_id=agent_id,
                 session_id=session_id,
                 role="agent",
@@ -886,7 +894,8 @@ def test_transcript_eval_falls_back_to_content_logs(monkeypatch):
 def test_transcript_decodes_harness_envelopes(monkeypatch):
     agent_id = _seed_agent()
     db = SessionLocal()
-    db.add(ChatSession(agent_id=agent_id, session_id="s" * 64, actor_id="river"))
+    db.add(ChatSession(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                       session_id="s" * 64, actor_id="river"))
     db.commit()
     envelope = json.dumps(
         {"message": {"role": "user", "content": [{"text": "How many vacation days?"}]}}
@@ -1018,7 +1027,8 @@ def test_trace_detail_endpoint_tree(client, mocked_aws):
 def test_sessions_endpoints(client, mocked_aws, monkeypatch):
     agent_id = _seed_agent()
     db = SessionLocal()
-    db.add(ChatSession(agent_id=agent_id, session_id="s" * 64, actor_id="river"))
+    db.add(ChatSession(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                       session_id="s" * 64, actor_id="river"))
     db.commit()
     db.close()
     monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])

@@ -1072,18 +1072,27 @@ def get_trace(trace_id: str, range_key: str, db: Session, force: bool = False,
 
 
 def list_sessions(range_key: str, db: Session, force: bool = False,
-                  logs: Any = None) -> dict[str, Any]:
+                  logs: Any = None, *, workspace_id: str) -> dict[str, Any]:
     hours = RANGE_HOURS[range_key]
 
     def build() -> dict[str, Any]:
         results = run_insights_queries({"sessions": q_session_aggregates()}, hours, logs=logs)
         map_agent = build_agent_mapper(db)
-        platform_ids = {row.session_id for row in db.query(ChatSession.session_id).all()}
+        # "Is this one of our chat sessions" is answered per workspace: a bare
+        # session_id match would claim another environment's session as ours.
+        # Required rather than defaulted — a caller that forgets it would get the
+        # unfiltered answer, which is the wrong direction to fail in.
+        platform_ids = {
+            row.session_id
+            for row in db.query(ChatSession.session_id)
+            .filter(ChatSession.workspace_id == workspace_id)
+            .all()
+        }
         rows = [_session_row(r, map_agent, platform_ids) for r in results["sessions"]]
         return {"range": range_key, "sessions": rows, "count": len(rows),
                 "limit": SESSION_LIMIT}
 
-    return cached(f"sessions:{range_key}", force, build)
+    return cached(f"sessions:{workspace_id}:{range_key}", force, build)
 
 
 def _agent_from_traces(db: Session, traces: list[dict[str, Any]]) -> Agent | None:

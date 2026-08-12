@@ -226,7 +226,7 @@ def _migrate_workspace_columns(bind) -> None:
 
 
 def _seed_default_workspace(bind) -> None:
-    """Mirror settings onto the `default` workspace and adopt pre-P2 rows into it.
+    """Mirror settings onto the `default` workspace and adopt pre-P2 rows + users.
 
     The row is refreshed on every startup rather than seeded once: `make
     bootstrap` and kb_gateway rewrite `launchpad.yaml` *after* the first seed, so
@@ -280,6 +280,17 @@ def _seed_default_workspace(bind) -> None:
                     " external_id, bootstrap_status, resources, created_at, updated_at)"
                     " VALUES (:id, :name, :account_id, :region, NULL, NULL,"
                     " :bootstrap_status, :resources, :now, :now)"
+                ),
+                values,
+            )
+            # Accounts that predate workspaces already reach this environment, so
+            # the upgrade grants it to them rather than locking the console.
+            # Deliberately only on the insert (the migration moment): repeating it
+            # every startup would make a revoked grant come back.
+            conn.execute(
+                text(
+                    "INSERT INTO user_workspaces (user_id, workspace_id, created_at)"
+                    " SELECT id, :id, :now FROM users"
                 ),
                 values,
             )

@@ -4,7 +4,7 @@ import json
 from contextvars import ContextVar
 from pathlib import Path
 
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent
 
 SAMPLE = Path(__file__).resolve().parents[1] / "samples" / "frontdesk_agent" / "main.py"
@@ -13,6 +13,7 @@ SAMPLE = Path(__file__).resolve().parents[1] / "samples" / "frontdesk_agent" / "
 def _mk_agent(**kw) -> str:
     db = SessionLocal()
     agent = Agent(**{
+        "workspace_id": DEFAULT_WORKSPACE_ID,
         "name": "front-desk", "method": "zip_runtime", "status": "active",
         "arn": "arn:aws:bedrock-agentcore:us-west-2:1:runtime/fd-1",
         "spec": {"system_prompt": "s"}, **kw,
@@ -70,6 +71,16 @@ def test_a2a_demo_rejects_missing_or_harness_agents(client):
                       json={"agent_id": harness_id, "question": "q"})
     assert res.status_code == 400
     assert res.json()["code"] == "registry.a2a_demo_unsupported"
+
+
+def test_a2a_demo_refuses_an_agent_from_another_workspace(client):
+    """This is the second invoke entrance, so it owes the same workspace boundary
+    as /api/agents/{id}/invoke: a foreign id reads as missing."""
+    foreign = _mk_agent(name="foreign-desk", workspace_id="acct-usw1")
+    res = client.post("/api/registry/a2a-demo",
+                      json={"agent_id": foreign, "question": "q"})
+    assert res.status_code == 404
+    assert res.json()["code"] == "registry.a2a_demo_agent"
 
 
 # ─── sample pure helpers (imported without strands/bedrock deps) ─────────────

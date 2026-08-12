@@ -469,8 +469,18 @@ def _empty_import_result() -> dict[str, list[dict[str, Any]]]:
 
 
 def import_runtimes(
-    control: Any, db: Session, runtime_ids: list[str]
+    control: Any, db: Session, runtime_ids: list[str], *, workspace_id: str
 ) -> dict[str, list[dict[str, Any]]]:
+    """Import selected Runtimes as externally-owned ledger rows (idempotent).
+
+    `workspace_id` is the environment the scan ran against; it stamps rows this
+    call creates. The scan/match queries themselves stay ledger-wide until the
+    AgentCore clients are workspace-targeted (phase 2 slice 3) — every workspace
+    still reads the same region today, so narrowing them now would only hide
+    duplicate imports of the same resource. Consequence while that holds: a
+    re-import of a runtime already owned by ANOTHER workspace refreshes that row
+    in place and leaves it there, rather than adopting it into this one.
+    """
     result = _empty_import_result()
     harness_index = _harness_index(control)
     for runtime_id in runtime_ids:
@@ -522,7 +532,9 @@ def import_runtimes(
         created = existing is None
         display_name = _display_name(db, candidate["name"], runtime_id, existing)
         if existing is None:
-            existing = Agent(method=DISCOVERED_METHOD, owner="aws-discovery")
+            existing = Agent(
+                workspace_id=workspace_id, method=DISCOVERED_METHOD, owner="aws-discovery"
+            )
             db.add(existing)
         existing.name = display_name
         existing.status = _ledger_status(candidate["aws_status"])
@@ -544,12 +556,14 @@ def import_runtimes(
 
 
 def import_harnesses(
-    control: Any, db: Session, harness_ids: list[str]
+    control: Any, db: Session, harness_ids: list[str], *, workspace_id: str
 ) -> dict[str, list[dict[str, Any]]]:
     """Import managed Harnesses as externally-owned ledger rows (idempotent).
 
     The row carries the harness ARN/id, never the backing runtime's, so delete
-    stays ledger-only and invoke dispatches to InvokeHarness.
+    stays ledger-only and invoke dispatches to InvokeHarness. `workspace_id`
+    stamps the rows this call creates — see `import_runtimes` for why the match
+    queries stay ledger-wide in phase 2.
     """
     result = _empty_import_result()
     for harness_id in harness_ids:
@@ -602,7 +616,9 @@ def import_harnesses(
         created = existing is None
         display_name = _display_name(db, candidate["name"], harness_id, existing)
         if existing is None:
-            existing = Agent(method=DISCOVERED_METHOD, owner="aws-discovery")
+            existing = Agent(
+                workspace_id=workspace_id, method=DISCOVERED_METHOD, owner="aws-discovery"
+            )
             db.add(existing)
         existing.name = display_name
         existing.status = _ledger_status(candidate["aws_status"])

@@ -9,7 +9,7 @@ import pytest
 
 import app.routers.agents as agents_router
 import app.services.harness_convert as hc
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError
 from app.deployer.zip_runtime import (
     _method_requirements,
@@ -622,7 +622,8 @@ def test_write_bundle_files_stages_subpackages(tmp_path):
 # ─── endpoint contract ──────────────────────────────────────────────────────
 def _mk_agent(**kw):
     db = SessionLocal()
-    agent = Agent(**{"name": "h-src", "method": "harness", "status": "active",
+    agent = Agent(**{"workspace_id": DEFAULT_WORKSPACE_ID, "name": "h-src",
+                     "method": "harness", "status": "active",
                      "arn": "arn:h", "spec": {"system_prompt": "sp"}, **kw})
     db.add(agent)
     db.commit()

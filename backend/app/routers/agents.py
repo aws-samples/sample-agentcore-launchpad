@@ -17,6 +17,7 @@ from app.deployer import harness as harness_method
 from app.deployer import zip_runtime as zip_method
 from app.deployer.pipeline import create_deployment, start_deploy_async
 from app.models.ledger import Agent, Deployment, Job
+from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec, InvokeRequest, InvokeResponse, RuntimeImportRequest
 from app.services import agent_iam
 from app.services.agentcore.client import control_client
@@ -77,6 +78,16 @@ def _deployment_out(dep: Deployment) -> dict[str, Any]:
     }
 
 
+def _agent_in(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent | None:
+    """The agent, but only if it lives in this workspace.
+
+    A foreign id is indistinguishable from a missing one on purpose: the caller
+    learns nothing about other workspaces' agents.
+    """
+    agent = db.get(Agent, agent_id)
+    return agent if agent is not None and agent.workspace_id == ws.id else None
+
+
 def _latest_deployment(db: Session, agent_id: str) -> Deployment | None:
     return (
         db.query(Deployment)
@@ -107,7 +118,11 @@ def _delete_agent_resources(agent: Agent) -> bool:
 
 
 @router.post("/agents", status_code=202)
-def create_agent(spec: AgentSpec, db: Session = Depends(get_db)) -> dict[str, Any]:
+def create_agent(
+    spec: AgentSpec,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     if spec.method not in SUPPORTED_METHODS:
         raise AppError(
             "agent.method_not_available",
@@ -115,7 +130,17 @@ def create_agent(spec: AgentSpec, db: Session = Depends(get_db)) -> dict[str, An
             {"supported": sorted(SUPPORTED_METHODS)},
             status_code=400,
         )
-    existing = db.query(Agent).filter(Agent.name == spec.name, Agent.status != "deleted").first()
+    # Names are unique per workspace, not per ledger: two environments own their
+    # own AgentCore resource namespaces.
+    existing = (
+        db.query(Agent)
+        .filter(
+            Agent.workspace_id == ws.id,
+            Agent.name == spec.name,
+            Agent.status != "deleted",
+        )
+        .first()
+    )
     if existing:
         raise AppError(
             "agent.name_exists",
@@ -123,7 +148,13 @@ def create_agent(spec: AgentSpec, db: Session = Depends(get_db)) -> dict[str, An
             {"agent_id": existing.id},
             status_code=409,
         )
-    agent = Agent(name=spec.name, method=spec.method, status="deploying", spec=spec.model_dump())
+    agent = Agent(
+        workspace_id=ws.id,
+        name=spec.name,
+        method=spec.method,
+        status="deploying",
+        spec=spec.model_dump(),
+    )
     db.add(agent)
     db.flush()
     deployment, job = create_deployment(db, agent)
@@ -132,10 +163,13 @@ def create_agent(spec: AgentSpec, db: Session = Depends(get_db)) -> dict[str, An
 
 
 @router.get("/agents")
-def list_agents(db: Session = Depends(get_db)) -> dict[str, Any]:
+def list_agents(
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     agents = (
         db.query(Agent)
-        .filter(Agent.status != "deleted")
+        .filter(Agent.workspace_id == ws.id, Agent.status != "deleted")
         .order_by(Agent.created_at.desc())
         .all()
     )
@@ -165,20 +199,28 @@ def discover_runtimes(db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @router.post("/agents/discovery/import")
 def import_discovered_runtimes(
-    req: RuntimeImportRequest, db: Session = Depends(get_db)
+    req: RuntimeImportRequest,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Import selected Runtimes and/or Harnesses; result rows are keyed by kind."""
     control = control_client()
-    result = import_runtimes(control, db, req.runtime_ids)
-    for bucket, rows in import_harnesses(control, db, req.harness_ids).items():
+    result = import_runtimes(control, db, req.runtime_ids, workspace_id=ws.id)
+    for bucket, rows in import_harnesses(
+        control, db, req.harness_ids, workspace_id=ws.id
+    ).items():
         result[bucket].extend(rows)
     db.commit()
     return result
 
 
 @router.get("/agents/{agent_id}")
-def get_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    agent = db.get(Agent, agent_id)
+def get_agent(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    agent = _agent_in(db, ws, agent_id)
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
     deployments = (
@@ -194,7 +236,10 @@ def get_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @router.post("/agents/{agent_id}/redeploy", status_code=202)
 def redeploy_agent(
-    agent_id: str, spec: AgentSpec, db: Session = Depends(get_db)
+    agent_id: str,
+    spec: AgentSpec,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Re-publish an agent in place with an edited spec.
 
@@ -208,7 +253,7 @@ def redeploy_agent(
 
     Name and method are immutable — changing either would be a different agent.
     """
-    agent = db.get(Agent, agent_id)
+    agent = _agent_in(db, ws, agent_id)
     if agent is None or agent.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
     if agent.method == DISCOVERED_METHOD:
@@ -242,7 +287,11 @@ def redeploy_agent(
 
 
 @router.post("/agents/{agent_id}/convert", status_code=202)
-def convert_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def convert_agent(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     """Convert a managed-harness agent into a NEW runtime-backed agent.
 
     Exports the harness code (agentcore CLI), grafts the launchpad config-
@@ -253,7 +302,7 @@ def convert_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any
     from app.deployer.zip_runtime import platform_requirements
     from app.services import harness_convert as hc
 
-    source = db.get(Agent, agent_id)
+    source = _agent_in(db, ws, agent_id)
     if source is None or source.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
     if source.method != "harness" or source.status != "active":
@@ -263,7 +312,9 @@ def convert_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any
             status_code=400,
         )
     in_flight = [
-        a for a in db.query(Agent).filter(Agent.status == "deploying").all()
+        a for a in db.query(Agent)
+        .filter(Agent.workspace_id == ws.id, Agent.status == "deploying")
+        .all()
         if (a.spec or {}).get("source_harness", {}).get("agent_id") == agent_id
     ]
     if in_flight:
@@ -275,7 +326,10 @@ def convert_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any
 
     # {name}-rt, suffixed -2/-3… until free (never overwrite, R5)
     taken = {
-        a.name for a in db.query(Agent).filter(Agent.status != "deleted").all()
+        a.name
+        for a in db.query(Agent)
+        .filter(Agent.workspace_id == ws.id, Agent.status != "deleted")
+        .all()
     }
     new_name = f"{source.name}-rt"[:48]
     counter = 2
@@ -295,7 +349,7 @@ def convert_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any
         raise AppError("agent.convert_failed", str(exc), status_code=502) from exc
 
     agent = Agent(
-        name=spec.name, method=spec.method, status="deploying",
+        workspace_id=ws.id, name=spec.name, method=spec.method, status="deploying",
         spec=spec.model_dump(),
     )
     db.add(agent)
@@ -307,9 +361,12 @@ def convert_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any
 
 @router.post("/agents/{agent_id}/invoke", response_model=InvokeResponse)
 def invoke_agent(
-    agent_id: str, req: InvokeRequest, db: Session = Depends(get_db)
+    agent_id: str,
+    req: InvokeRequest,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> InvokeResponse:
-    agent = db.get(Agent, agent_id)
+    agent = _agent_in(db, ws, agent_id)
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
     require_invoke_capability(agent)
@@ -326,8 +383,12 @@ def invoke_agent(
 
 
 @router.delete("/agents/{agent_id}")
-def delete_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    agent = db.get(Agent, agent_id)
+def delete_agent(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    agent = _agent_in(db, ws, agent_id)
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
     aws_resource_deleted = _delete_agent_resources(agent)
@@ -342,9 +403,13 @@ def delete_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any]
 
 
 @router.get("/jobs/{job_id}")
-def get_job(job_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def get_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     job = db.get(Job, job_id)
-    if job is None:
+    if job is None or job.workspace_id != ws.id:
         raise NotFoundError("job.not_found", "job not found")
     events = [json.loads(line) for line in job.log.splitlines() if line.strip()]
     return {

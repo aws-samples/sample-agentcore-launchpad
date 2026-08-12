@@ -34,6 +34,9 @@ class UserPatch(BaseModel):
     # {permission_key: bool}; unsent keys stay granted, null resets to
     # all-granted. Strict so "no"/"0" cannot coerce into a denial.
     permissions: dict[str, StrictBool] | None = None
+    # Full replacement of the account's workspace grants (null clears them) —
+    # the one write path for grants; the workspaces router only reads them.
+    workspaces: list[str] | None = None
 
     @model_validator(mode="after")
     def _require_one_field(self) -> "UserPatch":
@@ -84,7 +87,9 @@ def update_user(
     user = users_service.get_user(db, user_id)
     sent = {key: getattr(patch, key) for key in patch.model_fields_set}
     generated = users_service.apply_patch(db, user, sent, get_settings())
-    payload = users_service.serialize(user)
+    payload = users_service.serialize(
+        user, workspaces=users_service.workspace_grants(db, [user.id]).get(user.id, [])
+    )
     if generated is not None:
         # shown once in the console; only the hash is persisted
         payload["generated_password"] = generated

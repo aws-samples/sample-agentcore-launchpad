@@ -110,13 +110,17 @@ def create_deployment(
     re-publish; the deploy stage reads it to choose Create* vs Update* APIs.
     Promotion updates may skip registry publication because identity is
     unchanged and registry failure must not obscure a successful rollout."""
+    # The workspace comes off the agent, not the request: a promotion or resumed
+    # job must land in the same environment as the agent it deploys.
     deployment = Deployment(
+        workspace_id=agent.workspace_id,
         agent_id=agent.id,
         stages=[{"name": s, "status": "pending", "detail": ""} for s in STAGE_ORDER],
     )
     db.add(deployment)
     db.flush()
     job = Job(
+        workspace_id=agent.workspace_id,
         type="deploy_agent",
         payload={
             "agent_id": agent.id,

@@ -7,7 +7,7 @@ import app.routers.chat as chat_router
 import app.services.chat as chat_service
 import app.services.policy_identity as policy_identity
 from app.core.config import get_settings
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.main import create_app
 from app.models.ledger import Agent, ChatSession
 from app.services.chat import chat_stream, sse_encode
@@ -26,6 +26,7 @@ def delta_events(text: str):
 def make_active_agent(method="zip_runtime", name="chat-agent") -> str:
     db = SessionLocal()
     agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name=name, method=method, status="active",
         arn="arn:aws:bedrock-agentcore:us-west-2:1:runtime/x",
         spec={"name": name},
@@ -218,7 +219,8 @@ def test_sessions_without_transcript_hidden(client, monkeypatch):
 
     agent_id = make_active_agent(name="chat-legacy-agent")
     db = SessionLocal()
-    db.add(ChatSession(agent_id=agent_id, session_id="legacy" + "x" * 40, turns=3))
+    db.add(ChatSession(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                       session_id="legacy" + "x" * 40, turns=3))
     db.commit()
     db.close()
     assert client.get(f"/api/chat/{agent_id}/sessions").json()["sessions"] == []

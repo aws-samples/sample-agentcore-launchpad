@@ -14,7 +14,7 @@ os.environ["LAUNCHPAD_ALLOW_OPEN_CONSOLE"] = "true"
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.core.db import Base, engine  # noqa: E402
+from app.core.db import Base, _seed_default_workspace, engine  # noqa: E402
 from app.main import create_app  # noqa: E402
 
 
@@ -29,6 +29,11 @@ def clean_tables():
     with engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
             conn.execute(table.delete())
+    # The wipe takes the `default` workspace with it, and the request boundary
+    # resolves every workspace-scoped route against it. Tests that build no app
+    # (so never run init_db) would otherwise see a ledger with no workspace at
+    # all, which a real process cannot have.
+    _seed_default_workspace(engine)
 
 
 @pytest.fixture(autouse=True)

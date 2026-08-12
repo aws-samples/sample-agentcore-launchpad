@@ -6,11 +6,12 @@ import time
 from dataclasses import asdict
 from typing import Any, Literal
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from starlette.datastructures import UploadFile
 
 from app.core.errors import AppError
+from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import registry_console as console
 from app.services import skill_ingest as si
 from app.services.skill_ingest import (
@@ -31,7 +32,9 @@ class A2ADemoRequest(BaseModel):
 
 
 @router.post("/a2a-demo")
-def a2a_demo(req: A2ADemoRequest) -> dict[str, Any]:
+def a2a_demo(
+    req: A2ADemoRequest, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
     """Invoke a front-desk-style agent and return {answer, trace}.
 
     Deliberately bypasses invoke_agent_text: the demo needs the agent's extra
@@ -48,6 +51,10 @@ def a2a_demo(req: A2ADemoRequest) -> dict[str, Any]:
     db = SessionLocal()
     try:
         agent = db.get(Agent, req.agent_id)
+        # An agent from another workspace is as good as absent: this route is the
+        # second invoke entrance, so it owes the same boundary as /agents/{id}/invoke.
+        if agent is not None and agent.workspace_id != ws.id:
+            agent = None
         if agent is None or agent.status != "active":
             raise AppError("registry.a2a_demo_agent", "agent not found or not active",
                            status_code=404)

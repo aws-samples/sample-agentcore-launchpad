@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.main import create_app
 from app.models.ledger import User
 from app.services import users as users_service
@@ -49,12 +49,26 @@ def register(client: TestClient, **overrides):
 
 
 def approve_stored(username: str = MEMBER["username"], days: int = 7) -> None:
-    """Stand in for an admin approval: activate and start the validity window."""
+    """Stand in for an admin approval: activate, start the validity window, and
+    grant the default workspace (an approval assigns workspaces — without one the
+    account reaches no workspace-scoped route)."""
     patch_stored(
         username,
         status="active",
         expires_at=datetime.now(UTC) + timedelta(days=days),
     )
+    grant_default_workspace(username)
+
+
+def grant_default_workspace(username: str = MEMBER["username"]) -> None:
+    db = SessionLocal()
+    try:
+        user = users_service.find_by_username(db, username)
+        assert user is not None
+        users_service.set_workspace_grants(db, user, [DEFAULT_WORKSPACE_ID])
+        db.commit()
+    finally:
+        db.close()
 
 
 def member_session(app) -> TestClient:
@@ -128,10 +142,16 @@ class TestRegistration:
         assert register(anon).status_code == 201
         user_id = stored().id
 
-        approved = admin.patch(f"/api/users/{user_id}", json={"status": "active"})
+        # one approval carries both decisions: the account is active, and these
+        # are the workspaces it may work in
+        approved = admin.patch(
+            f"/api/users/{user_id}",
+            json={"status": "active", "workspaces": [DEFAULT_WORKSPACE_ID]},
+        )
         assert approved.status_code == 200
         assert approved.json()["state"] == "active"
         assert approved.json()["days_remaining"] in (6, 7)
+        assert approved.json()["workspaces"] == [DEFAULT_WORKSPACE_ID]
 
         client = TestClient(app)
         assert client.post(

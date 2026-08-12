@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.main import create_app
 from app.services import users as users_service
 
@@ -59,6 +59,9 @@ def sessions(gated_app):
             assert user is not None
             user.status = users_service.STATUS_ACTIVE
             user.expires_at = datetime.now(UTC) + timedelta(days=7)
+            # an approval also assigns workspaces; without one every
+            # workspace-scoped probe below would stop at the request boundary
+            users_service.set_workspace_grants(db, user, [DEFAULT_WORKSPACE_ID])
             db.commit()
             user_id = user.id
         finally:

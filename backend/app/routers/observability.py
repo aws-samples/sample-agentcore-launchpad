@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.db import get_db
+from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import model_prices, observability
 
 router = APIRouter(prefix="/api/observability", tags=["observability"])
@@ -87,8 +88,9 @@ def sessions(
     range: RangeParam = "24h",
     force: bool = False,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return observability.list_sessions(range, db, force=force)
+    return observability.list_sessions(range, db, force=force, workspace_id=ws.id)
 
 
 @router.get("/sessions/{session_id}")

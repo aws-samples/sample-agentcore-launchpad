@@ -11,7 +11,7 @@ lever is applied consistently on every write and read boundary.
 
 import app.routers.chat as chat_router
 import app.services.memory as memory_service
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent, ChatSession
 from app.services.memory import scoped_actor
 
@@ -19,6 +19,7 @@ from app.services.memory import scoped_actor
 def make_active_agent(name="mem-agent") -> str:
     db = SessionLocal()
     agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name=name, method="zip_runtime", status="active",
         arn="arn:aws:bedrock-agentcore:us-west-2:1:runtime/x", spec={"name": name},
     )
@@ -67,6 +68,7 @@ def test_existing_session_keeps_original_actor_partition(client, monkeypatch):
     db = SessionLocal()
     db.add(
         ChatSession(
+            workspace_id=DEFAULT_WORKSPACE_ID,
             agent_id=agent_id,
             session_id=session_id,
             actor_id="runtime-diagnostic",
@@ -132,7 +134,8 @@ def test_summary_echoes_the_partition_it_read(client, monkeypatch):
     session_id = "s" * 40
     db = SessionLocal()
     db.add(
-        ChatSession(agent_id=agent_id, session_id=session_id, actor_id="runtime-diagnostic")
+        ChatSession(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                    session_id=session_id, actor_id="runtime-diagnostic")
     )
     db.commit()
     db.close()
