@@ -10,7 +10,7 @@ def register_stage(ctx: StageContext, agent: Agent) -> StageResult:
     try:
         row = db.get(Agent, agent.id)
         try:
-            result = register_agent_record(row)
+            result = register_agent_record(row, ctx.workspace)
         except RegistryUnavailableError as exc:
             detail = f"registry unavailable · register skipped · {exc.message}"
             ctx.log(detail)

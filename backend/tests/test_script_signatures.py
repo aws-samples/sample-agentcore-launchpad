@@ -131,6 +131,25 @@ def test_every_script_call_matches_the_live_app_signature():
     )
 
 
+DEPLOYER_DIR = Path(__file__).resolve().parents[1] / "app" / "deployer"
+
+
+def test_every_deployer_call_matches_the_live_service_signature():
+    """The deploy stages run on background threads, and their unit tests stub
+    the service functions they call — so a stale call arity there survives the
+    suite and only fails on a live deploy (the us-east-2 register stage did
+    exactly that, 2026-08-12). Bind the deployer's cross-package calls the same
+    way the scripts are bound."""
+    mismatches = [
+        line for path in sorted(DEPLOYER_DIR.glob("*.py")) for line in _mismatches(path)
+    ]
+    assert not mismatches, (
+        "app/deployer calls a service with a signature that no longer exists; "
+        "stage unit tests stub these calls, so only a live deploy catches it:\n"
+        + "\n".join(mismatches)
+    )
+
+
 def test_the_scanner_still_resolves_app_calls():
     """Guards the guard: if the resolution logic silently stopped matching
     anything, the assertion above would pass vacuously forever."""

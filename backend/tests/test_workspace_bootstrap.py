@@ -388,6 +388,25 @@ class FakeXray:
         return {}
 
 
+class FakeLogs:
+    """A fresh region has no CloudWatch Logs resource policies at all."""
+
+    def __init__(self) -> None:
+        self.policies: dict[str, str] = {}
+
+    def describe_resource_policies(self):
+        return {
+            "resourcePolicies": [
+                {"policyName": name, "policyDocument": doc}
+                for name, doc in self.policies.items()
+            ]
+        }
+
+    def put_resource_policy(self, policyName, policyDocument):  # noqa: N803
+        self.policies[policyName] = policyDocument
+        return {}
+
+
 class FakeAws:
     def __init__(self) -> None:
         self.sts = FakeSts()
@@ -399,6 +418,7 @@ class FakeAws:
         self.control = FakeControl()
         self.registry = FakeRegistry()
         self.xray = FakeXray()
+        self.logs = FakeLogs()
         self.expect_region = REGION
         self.services = {
             "sts": self.sts,
@@ -410,6 +430,7 @@ class FakeAws:
             "bedrock-agentcore-control": self.control,
             "agent-registry-control": self.registry,
             "xray": self.xray,
+            "logs": self.logs,
         }
 
     def client(self, service, ctx, cache_token=None, **cfg):
@@ -607,9 +628,15 @@ class TestStages:
 
         assert aws.xray.updates == ["CloudWatchLogs"]
         assert "active" in detail
-        # already-on is a no-op, not a second update
+        # X-Ray cannot write aws/spans without a Logs RESOURCE policy — the
+        # missing piece the live us-east-2 bootstrap diagnosed (2026-08-12).
+        assert "TransactionSearchXRayAccess" in aws.logs.policies
+        doc = aws.logs.policies["TransactionSearchXRayAccess"]
+        assert f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:aws/spans:*" in doc
+        # already-on is a no-op, not a second update and not a second policy put
         assert "already" in wb.STAGES["observability"](_ctx())
         assert aws.xray.updates == ["CloudWatchLogs"]
+        assert len(aws.logs.policies) == 1
 
     def test_observability_degrades_instead_of_failing_the_workspace(
         self, aws, monkeypatch
