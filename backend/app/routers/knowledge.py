@@ -4,11 +4,12 @@ handling mirrors routers/registry.py (domain AppErrors surface as envelopes)."""
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 from starlette.datastructures import UploadFile
 
 from app.core.errors import AppError
+from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import kb_gateway, knowledge
 from app.services.agentcore.client import control_client
 
@@ -40,8 +41,11 @@ class QueryRequest(BaseModel):
 
 
 @router.get("")
-def list_knowledge_bases(status: str | None = None) -> dict[str, Any]:
-    items = knowledge.list_kbs()
+def list_knowledge_bases(
+    status: str | None = None,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    items = knowledge.list_kbs(ws.context)
     if status:  # e.g. the Create-Agent picker requests ?status=ACTIVE
         items = [i for i in items if i.get("status") == status]
     return {"items": items}
@@ -50,27 +54,46 @@ def list_knowledge_bases(status: str | None = None) -> dict[str, Any]:
 # 202: the KB is returned while still CREATING — the data source is finished by
 # a backend thread and the client polls GET /{kb_id} (see knowledge.create_kb).
 @router.post("", status_code=202)
-def create_knowledge_base(req: CreateKBRequest) -> dict[str, Any]:
-    return knowledge.create_kb(req.name, req.description, req.source.model_dump())
+def create_knowledge_base(
+    req: CreateKBRequest,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return knowledge.create_kb(
+        ws.context, req.name, req.description, req.source.model_dump()
+    )
 
 
 @router.get("/{kb_id}")
-def get_knowledge_base(kb_id: str) -> dict[str, Any]:
-    return knowledge.get_kb_detail(kb_id)
+def get_knowledge_base(
+    kb_id: str, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    return knowledge.get_kb_detail(ws.context, kb_id)
 
 
 @router.patch("/{kb_id}")
-def patch_knowledge_base(kb_id: str, req: PatchKBRequest) -> dict[str, Any]:
-    return knowledge.update_description(kb_id, req.description)
+def patch_knowledge_base(
+    kb_id: str,
+    req: PatchKBRequest,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return knowledge.update_description(ws.context, kb_id, req.description)
 
 
 @router.delete("/{kb_id}")
-def delete_knowledge_base(kb_id: str, force: bool = False) -> dict[str, Any]:
-    return knowledge.delete_kb(kb_id, force=force)
+def delete_knowledge_base(
+    kb_id: str,
+    force: bool = False,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return knowledge.delete_kb(ws.context, kb_id, force=force)
 
 
 @router.post("/{kb_id}/files")
-async def upload_knowledge_base_files(kb_id: str, request: Request) -> dict[str, Any]:
+async def upload_knowledge_base_files(
+    kb_id: str,
+    request: Request,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     form = await request.form()
     uploads = [
         f
@@ -82,27 +105,37 @@ async def upload_knowledge_base_files(kb_id: str, request: Request) -> dict[str,
             "kb.no_files", "expected one or more files under 'files'", status_code=400
         )
     files = [((u.filename or "file"), await u.read()) for u in uploads]
-    return {"keys": knowledge.upload_files(kb_id, files)}
+    return {"keys": knowledge.upload_files(ws.context, kb_id, files)}
 
 
 @router.post("/{kb_id}/data-sources", status_code=201)
-def add_data_source(kb_id: str, req: SourceSpec) -> dict[str, Any]:
-    return knowledge.add_data_source(kb_id, req.model_dump())
+def add_data_source(
+    kb_id: str,
+    req: SourceSpec,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return knowledge.add_data_source(ws.context, kb_id, req.model_dump())
 
 
 @router.delete("/{kb_id}/data-sources/{ds_id}")
-def delete_data_source(kb_id: str, ds_id: str) -> dict[str, Any]:
-    return knowledge.delete_data_source(kb_id, ds_id)
+def delete_data_source(
+    kb_id: str, ds_id: str, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    return knowledge.delete_data_source(ws.context, kb_id, ds_id)
 
 
 @router.post("/{kb_id}/data-sources/{ds_id}/sync")
-def sync_data_source(kb_id: str, ds_id: str) -> dict[str, Any]:
-    return knowledge.start_sync(kb_id, ds_id)
+def sync_data_source(
+    kb_id: str, ds_id: str, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    return knowledge.start_sync(ws.context, kb_id, ds_id)
 
 
 @router.get("/{kb_id}/data-sources/{ds_id}/ingestion-jobs")
-def list_ingestion_jobs(kb_id: str, ds_id: str) -> dict[str, Any]:
-    return {"items": knowledge.list_ingestion_jobs(kb_id, ds_id)}
+def list_ingestion_jobs(
+    kb_id: str, ds_id: str, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    return {"items": knowledge.list_ingestion_jobs(ws.context, kb_id, ds_id)}
 
 
 @router.get("/{kb_id}/data-sources/{ds_id}/documents")
@@ -111,15 +144,24 @@ def list_documents(
     ds_id: str,
     page_size: int = Query(default=50, ge=1, le=100),
     token: str | None = None,
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return knowledge.list_documents(kb_id, ds_id, page_size=page_size, token=token)
+    return knowledge.list_documents(
+        ws.context, kb_id, ds_id, page_size=page_size, token=token
+    )
 
 
 @router.post("/{kb_id}/query")
-def query_knowledge_base(kb_id: str, req: QueryRequest) -> dict[str, Any]:
-    return {"results": knowledge.query(kb_id, req.text, req.number_of_results)}
+def query_knowledge_base(
+    kb_id: str,
+    req: QueryRequest,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return {
+        "results": knowledge.query(ws.context, kb_id, req.text, req.number_of_results)
+    }
 
 
 @router.post("/ensure-gateway")
-def ensure_gateway() -> dict[str, Any]:
-    return kb_gateway.ensure_kb_gateway_persisted(control_client())
+def ensure_gateway(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
+    return kb_gateway.ensure_kb_gateway_persisted(control_client(ws.context), ws.context)

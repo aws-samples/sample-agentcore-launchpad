@@ -122,7 +122,7 @@ def _mock_control(
     control.get_harness.side_effect = lambda harnessId: {
         "harness": by_harness_id[harnessId]
     }
-    monkeypatch.setattr(agents_router, "control_client", lambda: control)
+    monkeypatch.setattr(agents_router, "control_client", lambda _ws=None: control)
     return control
 
 
@@ -205,7 +205,7 @@ def test_list_failure_is_typed(client, monkeypatch):
         {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
         "ListAgentRuntimes",
     )
-    monkeypatch.setattr(agents_router, "control_client", lambda: control)
+    monkeypatch.setattr(agents_router, "control_client", lambda _ws=None: control)
 
     response = client.get("/api/agents/discovery")
 
@@ -634,7 +634,7 @@ def test_discovered_http_and_a2a_use_shared_runtime_dispatch(
     )
     runtime_invoke = MagicMock(return_value={"text": "ok", "session_id": "s" * 40})
     a2a_invoke = MagicMock(return_value={"text": "ok", "session_id": "s" * 40})
-    monkeypatch.setattr(invoke_service, "data_client", lambda: object())
+    monkeypatch.setattr(invoke_service, "data_client", lambda _ws=None: object())
     monkeypatch.setattr(invoke_service.rt, "invoke_runtime_text", runtime_invoke)
     monkeypatch.setattr(invoke_service.rt, "invoke_a2a_text", a2a_invoke)
 
@@ -901,7 +901,7 @@ def test_discovered_harness_invokes_through_invoke_harness(monkeypatch):
     agent = _imported_harness_agent()
     harness_invoke = MagicMock(return_value={"text": "ok", "session_id": "s" * 40})
     runtime_invoke = MagicMock()
-    monkeypatch.setattr(invoke_service, "data_client", lambda: object())
+    monkeypatch.setattr(invoke_service, "data_client", lambda _ws=None: object())
     monkeypatch.setattr(invoke_service.hc, "invoke_harness_text", harness_invoke)
     monkeypatch.setattr(invoke_service.rt, "invoke_runtime_text", runtime_invoke)
 
@@ -925,7 +925,7 @@ def test_imported_harness_invoke_endpoint_reaches_the_harness_data_plane(
     data.invoke_harness.return_value = {
         "stream": [{"contentBlockDelta": {"delta": {"text": "4"}}}]
     }
-    monkeypatch.setattr(invoke_service, "data_client", lambda: data)
+    monkeypatch.setattr(invoke_service, "data_client", lambda _ws=None: data)
 
     body = client.post(f"/api/agents/{agent_id}/invoke", json={"prompt": "2+2?"}).json()
 
@@ -943,7 +943,7 @@ def test_discovered_harness_chat_streams_harness_events(monkeypatch):
             {"contentBlockDelta": {"delta": {"text": "hi"}}},
         ]
     }
-    monkeypatch.setattr(chat_service, "data_client", lambda: data)
+    monkeypatch.setattr(chat_service, "data_client", lambda _ws=None: data)
 
     events = list(chat_service.chat_stream(agent, "hello", session_id="s" * 40))
 
@@ -960,7 +960,7 @@ def test_imported_harness_delete_is_detach_only(client, monkeypatch):
     agent_id = row.id
     db.close()
     control = MagicMock()
-    monkeypatch.setattr(agents_router, "control_client", lambda: control)
+    monkeypatch.setattr(agents_router, "control_client", lambda _ws=None: control)
     harness_teardown = MagicMock()
     monkeypatch.setattr(
         agents_router.harness_method, "delete_agent_resources", harness_teardown
@@ -1050,8 +1050,8 @@ def test_discovered_runtime_chat_keeps_the_buffered_runtime_path(monkeypatch):
         },
     )
     data = MagicMock()
-    monkeypatch.setattr(chat_service, "data_client", lambda: data)
-    monkeypatch.setattr(invoke_service, "data_client", lambda: data)
+    monkeypatch.setattr(chat_service, "data_client", lambda _ws=None: data)
+    monkeypatch.setattr(invoke_service, "data_client", lambda _ws=None: data)
     monkeypatch.setattr(
         invoke_service.rt,
         "invoke_runtime_text",

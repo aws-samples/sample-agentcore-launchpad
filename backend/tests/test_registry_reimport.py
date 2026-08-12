@@ -4,7 +4,6 @@ refreshed imported_at. AWS + S3 are mocked; no live calls."""
 
 import io
 import json
-import types
 import zipfile
 
 import pytest
@@ -14,6 +13,9 @@ import app.services.registry_console as console_mod
 from app.core.errors import AppError
 from app.services import aws_clients
 from app.services import skill_ingest as si
+from tests.conftest import ws_ctx
+
+WS = ws_ctx({"artifacts_bucket": "bkt"})
 
 SKILL_MD = (
     "---\nname: meeting-summarizer\ndescription: Summarize meetings\n"
@@ -82,12 +84,8 @@ def _record(source, *, status="DRAFT", version="1.0.0", name="meeting-summarizer
 
 
 def _patch_reimport_aws(monkeypatch, fake_s3, record) -> dict:
-    monkeypatch.setattr(console_mod, "control_client", lambda: object())
-    monkeypatch.setattr(console_mod, "_registry_id", lambda: "reg")
-    monkeypatch.setattr(
-        console_mod, "get_settings",
-        lambda: types.SimpleNamespace(resources={"artifacts_bucket": "bkt"}, region="us-west-2"),
-    )
+    monkeypatch.setattr(console_mod, "control_client", lambda _ws=None: object())
+    monkeypatch.setattr(console_mod, "_registry_id", lambda _ws: "reg")
     monkeypatch.setattr(aws_clients, "client", lambda *a, **k: fake_s3)
     monkeypatch.setattr(console_mod.reg, "get_record", lambda c, r, rid: record)
     captured: dict = {}
@@ -135,7 +133,7 @@ def test_reimport_git_source_replaces_prefix_and_bumps(monkeypatch):
 
     monkeypatch.setattr(si, "bundles_from_git", fake_bundles_from_git)
 
-    out = console_mod.reimport_skill("r1")
+    out = console_mod.reimport_skill(WS, "r1")
     assert out["status"] == "DRAFT"
 
     delete_idx = [i for i, (op, _) in enumerate(fake.ops) if op == "delete"]
@@ -166,7 +164,7 @@ def test_reimport_git_keeps_name_when_frontmatter_renamed(monkeypatch):
         return [b]
 
     monkeypatch.setattr(si, "bundles_from_git", fake_bundles_from_git)
-    console_mod.reimport_skill("r1")
+    console_mod.reimport_skill(WS, "r1")
     assert captured["name"] == "registered-name"
     assert ("upload", "skills/registered-name/SKILL.md") in fake.ops
     assert _definition_from(captured)["name"] == "registered-name"
@@ -183,7 +181,7 @@ def test_reimport_url_source_happy_path(monkeypatch):
         return b
 
     monkeypatch.setattr(si, "bundle_from_url", fake_bundle_from_url)
-    out = console_mod.reimport_skill("r1")
+    out = console_mod.reimport_skill(WS, "r1")
     assert out["status"] == "DRAFT"
     assert captured["record_version"] == "2.5.0"  # minor bump off 2.4.0
     assert _definition_from(captured)["source"]["kind"] == "url"
@@ -197,7 +195,7 @@ def test_reimport_non_retrievable_source_400(monkeypatch, kind):
     fake = FakeS3()
     _patch_reimport_aws(monkeypatch, fake, record)
     with pytest.raises(AppError) as exc:
-        console_mod.reimport_skill("r1")
+        console_mod.reimport_skill(WS, "r1")
     assert exc.value.status_code == 400
     assert exc.value.code == "registry.not_reimportable"
     assert fake.ops == []  # nothing touched in S3
@@ -208,7 +206,7 @@ def test_reimport_deprecated_record_400(monkeypatch):
     fake = FakeS3()
     _patch_reimport_aws(monkeypatch, fake, record)
     with pytest.raises(AppError) as exc:
-        console_mod.reimport_skill("r1")
+        console_mod.reimport_skill(WS, "r1")
     assert exc.value.status_code == 400
     assert exc.value.code == "registry.not_reimportable"
     assert fake.ops == []
@@ -220,7 +218,7 @@ def test_reimport_zero_bundle_git_4xx(monkeypatch):
     _patch_reimport_aws(monkeypatch, fake, record)
     monkeypatch.setattr(si, "bundles_from_git", lambda url, ref=None, subdir=None, token=None: [])
     with pytest.raises(AppError) as exc:
-        console_mod.reimport_skill("r1")
+        console_mod.reimport_skill(WS, "r1")
     assert 400 <= exc.value.status_code < 500
     assert fake.ops == []  # a failed re-acquire never touches S3
 
@@ -230,7 +228,7 @@ def test_reimport_zero_bundle_git_4xx(monkeypatch):
 def test_reimport_endpoint_returns_record(client, monkeypatch):
     monkeypatch.setattr(
         registry_router.console, "reimport_skill",
-        lambda rid: {"recordId": rid, "name": "s", "descriptorType": "AGENT_SKILLS",
+        lambda _ws, rid: {"recordId": rid, "name": "s", "descriptorType": "AGENT_SKILLS",
                      "status": "DRAFT", "recordVersion": "1.1.0"},
     )
     res = client.post("/api/registry/records/r1/reimport")
@@ -242,7 +240,7 @@ def test_reimport_endpoint_returns_record(client, monkeypatch):
 
 
 def test_reimport_endpoint_surfaces_not_reimportable(client, monkeypatch):
-    def boom(rid):
+    def boom(_ws, rid):
         raise AppError("registry.not_reimportable", "inline record", status_code=400)
 
     monkeypatch.setattr(registry_router.console, "reimport_skill", boom)

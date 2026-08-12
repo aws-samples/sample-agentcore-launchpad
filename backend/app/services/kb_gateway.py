@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.db import DEFAULT_WORKSPACE_ID
 from app.services.bootstrap import write_config
 from app.services.gateway_bootstrap import (
     _list_targets,
@@ -19,6 +20,7 @@ from app.services.gateway_bootstrap import (
     _wait_target_ready,
     ensure_gateway_allows_client,
 )
+from app.services.workspace import WorkspaceContext, merge_workspace_resources
 
 KB_GATEWAY_NAME = "launchpad-kb-gw"
 _CONNECTOR_ID = "bedrock-knowledge-bases"
@@ -266,27 +268,32 @@ def delete_agentic_target(control: Any, gateway_id: str, agent_name: str) -> Non
         _delete_target(control, gateway_id, target["targetId"])
 
 
-def ensure_kb_gateway_persisted(control: Any) -> dict[str, str]:
-    """Lazily ensure the KB gateway and persist its id/arn/url to launchpad.yaml
-    (same channel as launchpad-gw), refreshing the settings cache so callers see
-    the new resources without a restart."""
-    settings = get_settings()
-    resources = settings.resources
+def ensure_kb_gateway_persisted(
+    control: Any, workspace: WorkspaceContext
+) -> dict[str, str]:
+    """Lazily ensure the KB gateway and persist its id/arn/url onto the workspace.
+
+    The workspace row is the resource map of record, so the ids land there (and on
+    the in-memory context, so the rest of *this* request sees them). For the
+    `default` workspace the same keys are mirrored into `launchpad.yaml`, which
+    `make bootstrap` and the settings-seeded default row still read — without the
+    mirror the next startup's settings mirror would overwrite the row's copy.
+    """
+    resources = workspace.resources
     if resources.get("kb_gateway_id") and resources.get("kb_gateway_url"):
         return {
             "id": resources["kb_gateway_id"],
             "arn": resources.get("kb_gateway_arn", ""),
             "url": resources["kb_gateway_url"],
         }
-    gateway = ensure_kb_gateway(control, resources, settings.region)
-    write_config(
-        {
-            "resources": {
-                "kb_gateway_id": gateway["id"],
-                "kb_gateway_arn": gateway["arn"],
-                "kb_gateway_url": gateway["url"],
-            }
-        }
-    )
-    get_settings.cache_clear()
+    gateway = ensure_kb_gateway(control, resources, workspace.region)
+    provisioned = {
+        "kb_gateway_id": gateway["id"],
+        "kb_gateway_arn": gateway["arn"],
+        "kb_gateway_url": gateway["url"],
+    }
+    merge_workspace_resources(workspace, provisioned)
+    if workspace.id == DEFAULT_WORKSPACE_ID:
+        write_config({"resources": provisioned})
+        get_settings.cache_clear()
     return gateway

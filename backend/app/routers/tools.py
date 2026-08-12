@@ -5,13 +5,14 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app.core.config import get_settings
 from app.core.errors import AppError
+from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import mcp_client
 from app.services.agentcore.client import control_client
+from app.services.workspace import WorkspaceContext
 
 router = APIRouter(prefix="/api", tags=["tools"])
 
@@ -40,7 +41,8 @@ BUILTIN_TOOLS = [
     },
 ]
 
-_cache: dict[str, Any] = {"tools": None, "at": 0.0}
+# Per workspace: the gateway tool catalog belongs to one environment's gateway.
+_cache: dict[str, dict[str, Any]] = {}
 
 BROWSER_DEMO_SESSION_SECONDS = 300
 BROWSER_DEMO_VIEWPORT = {"width": 1280, "height": 720}
@@ -61,14 +63,18 @@ _browser_demo_sessions: dict[str, _BrowserDemoSession] = {}
 
 
 @router.get("/tools")
-def list_tools(refresh: bool = False) -> dict[str, Any]:
+def list_tools(
+    refresh: bool = False,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    slot = _cache.setdefault(ws.id, {"tools": None, "at": 0.0})
     gateway_tools: list[dict[str, Any]] = []
     gateway_error: str | None = None
-    if not refresh and _cache["tools"] is not None and time.time() - _cache["at"] < 60:
-        gateway_tools = _cache["tools"]
+    if not refresh and slot["tools"] is not None and time.time() - slot["at"] < 60:
+        gateway_tools = slot["tools"]
     else:
         try:
-            raw = mcp_client.tools_list()
+            raw = mcp_client.tools_list(ws.context)
             gateway_tools = [
                 {
                     "name": t["name"],
@@ -80,11 +86,11 @@ def list_tools(refresh: bool = False) -> dict[str, Any]:
                 }
                 for t in raw
             ]
-            _cache["tools"], _cache["at"] = gateway_tools, time.time()
+            slot["tools"], slot["at"] = gateway_tools, time.time()
         except AppError as exc:
             gateway_error = exc.code
     return {
-        "gateway_url": get_settings().resources.get("gateway_url"),
+        "gateway_url": ws.context.resources.get("gateway_url"),
         "gateway_error": gateway_error,
         "tools": gateway_tools + BUILTIN_TOOLS,
     }
@@ -96,8 +102,11 @@ class ToolCallRequest(BaseModel):
 
 
 @router.post("/tools/call")
-def call_tool(req: ToolCallRequest) -> dict[str, Any]:
-    return mcp_client.tools_call(req.name, req.arguments)
+def call_tool(
+    req: ToolCallRequest,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return mcp_client.tools_call(ws.context, req.name, req.arguments)
 
 
 class CodeDemoRequest(BaseModel):
@@ -108,11 +117,13 @@ class CodeDemoRequest(BaseModel):
 
 
 @router.post("/demos/code-interpreter")
-def demo_code_interpreter(req: CodeDemoRequest) -> dict[str, Any]:
+def demo_code_interpreter(
+    req: CodeDemoRequest,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     from bedrock_agentcore.tools import CodeInterpreter
 
-    settings = get_settings()
-    interpreter = CodeInterpreter(region=settings.region)
+    interpreter = CodeInterpreter(region=ws.context.region)
     started = time.monotonic()
     try:
         interpreter.start(session_timeout_seconds=300)
@@ -186,8 +197,10 @@ def _validate_demo_url(url: str) -> None:
         raise AppError("tools.url_blocked", f"url not allowed for the browser demo: {url}")
 
 
-def _list_control_resources(operation: str, result_key: str) -> list[dict[str, Any]]:
-    client = control_client()
+def _list_control_resources(
+    workspace: WorkspaceContext, operation: str, result_key: str
+) -> list[dict[str, Any]]:
+    client = control_client(workspace)
     paginator = client.get_paginator(operation)
     return [
         item
@@ -197,11 +210,15 @@ def _list_control_resources(operation: str, result_key: str) -> list[dict[str, A
 
 
 @router.get("/demos/browser/options")
-def browser_demo_options() -> dict[str, Any]:
+def browser_demo_options(
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     try:
         custom_browsers = []
-        client = control_client()
-        for summary in _list_control_resources("list_browsers", "browserSummaries"):
+        client = control_client(ws.context)
+        for summary in _list_control_resources(
+            ws.context, "list_browsers", "browserSummaries"
+        ):
             detail = client.get_browser(browserId=summary["browserId"])
             custom_browsers.append(
                 {
@@ -228,6 +245,7 @@ def browser_demo_options() -> dict[str, Any]:
                 "last_saved_browser_identifier": summary.get("lastSavedBrowserId"),
             }
             for summary in _list_control_resources(
+                ws.context,
                 "list_browser_profiles",
                 "profileSummaries",
             )
@@ -246,6 +264,7 @@ def browser_demo_options() -> dict[str, Any]:
 
 def _resolve_browser_demo_configuration(
     req: BrowserDemoRequest,
+    workspace: WorkspaceContext,
 ) -> tuple[str, str | None]:
     if req.save_profile and not req.profile_identifier:
         raise AppError(
@@ -256,7 +275,7 @@ def _resolve_browser_demo_configuration(
 
     browser_identifier = BROWSER_DEMO_DEFAULT_IDENTIFIER
     try:
-        client = control_client()
+        client = control_client(workspace)
         if req.web_bot_auth:
             if not req.browser_identifier:
                 raise AppError(
@@ -354,14 +373,18 @@ def _retain_browser_demo_session(
 
 
 @router.post("/demos/browser")
-def demo_browser(req: BrowserDemoRequest) -> dict[str, Any]:
+def demo_browser(
+    req: BrowserDemoRequest,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     from bedrock_agentcore.tools import BrowserClient
     from playwright.sync_api import sync_playwright
 
     _validate_demo_url(req.url)
-    browser_identifier, profile_identifier = _resolve_browser_demo_configuration(req)
-    settings = get_settings()
-    client = BrowserClient(region=settings.region)
+    browser_identifier, profile_identifier = _resolve_browser_demo_configuration(
+        req, ws.context
+    )
+    client = BrowserClient(region=ws.context.region)
     started = time.monotonic()
     retained = False
     try:

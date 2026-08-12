@@ -28,10 +28,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from app.core.config import DATA_DIR, get_settings
+from app.core.config import DATA_DIR
 from app.core.errors import AppError
 from app.schemas.agent import AgentSpec, KnowledgeBaseRef, MemoryConfig, ToolRef
 from app.schemas.requirements import resolve_pins
+from app.services.workspace import WorkspaceContext
 from app.templates.kb_support import (
     KB_DEEP_TOOL_NAME,
     KB_TOOL_NAME,
@@ -485,7 +486,9 @@ def _gateway_url_for(key: str, resources: Any) -> str | None:
     return gateway_url if gateway_id.upper().replace("-", "_") in key else None
 
 
-def discover_env(files: dict[str, str]) -> dict[str, str | None]:
+def discover_env(
+    files: dict[str, str], workspace: WorkspaceContext
+) -> dict[str, str | None]:
     """Env keys the exported code reads → wired value or None (degrades).
 
     Both the launchpad memory id and the shared Gateway URL are wired. The
@@ -505,7 +508,7 @@ def discover_env(files: dict[str, str]) -> dict[str, str | None]:
     The KB gateway's own `GATEWAY_*_URL` stays unset on purpose — conversion
     replaces it with grafted direct-retrieval tools.
     """
-    settings = get_settings()
+    resources = workspace.resources
     keys: set[str] = set()
     for content in files.values():
         keys.update(_ENV_KEY_RE.findall(content))
@@ -513,10 +516,10 @@ def discover_env(files: dict[str, str]) -> dict[str, str | None]:
     for key in sorted(keys):
         if key in ("AWS_REGION", "AWS_DEFAULT_REGION"):
             continue  # runtime-provided
-        if key.startswith("MEMORY_MEMORY_") and settings.resources.get("memory_id"):
-            env[key] = settings.resources["memory_id"]
+        if key.startswith("MEMORY_MEMORY_") and resources.get("memory_id"):
+            env[key] = resources["memory_id"]
         elif key.startswith("GATEWAY_") and key.endswith("_URL"):
-            env[key] = _gateway_url_for(key, settings.resources)
+            env[key] = _gateway_url_for(key, resources)
         else:
             env[key] = None
     return env
@@ -711,7 +714,7 @@ def conversion_platform_inputs(source_agent: Any) -> tuple[str, str, str]:
 
 def build_conversion_spec(
     source_agent: Any, files: dict[str, str], platform: list[str],
-    new_name: str,
+    new_name: str, workspace: WorkspaceContext,
 ) -> AgentSpec:
     grafted = dict(files)
     source_spec = source_agent.spec or {}
@@ -757,7 +760,7 @@ def build_conversion_spec(
             grafted["mcp_client/client.py"]
         )
         grafted["main.py"] = graft_gateway_softfail(grafted["main.py"])
-    env_contract = discover_env(grafted)
+    env_contract = discover_env(grafted, workspace)
     wired = {k: v for k, v in env_contract.items() if v is not None}
     notes = {"system_prompt": "wired (config-bundle override grafted)",
              "inline_tools": "carried verbatim"}

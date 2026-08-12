@@ -87,6 +87,7 @@ def init_db(bind=None) -> None:
     # never left half-migrated *and* half-seeded.
     assert_no_schema_drift(bind)
     _seed_default_workspace(bind)
+    assert_every_row_has_a_workspace(bind)
 
 
 def schema_drift(bind) -> dict[str, list[str]]:
@@ -225,6 +226,45 @@ def _migrate_workspace_columns(bind) -> None:
             )
 
 
+def unscoped_row_counts(bind) -> dict[str, int]:
+    """Rows in per-environment tables that name no workspace, per table."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    live_tables = set(inspector.get_table_names())
+    counts: dict[str, int] = {}
+    for table in WORKSPACE_SCOPED_TABLES:
+        if table not in live_tables:
+            continue
+        with bind.begin() as conn:
+            found = conn.execute(
+                text(f"SELECT COUNT(*) FROM {table} WHERE workspace_id IS NULL")  # noqa: S608
+            ).scalar_one()
+        if found:
+            counts[table] = int(found)
+    return counts
+
+
+def assert_every_row_has_a_workspace(bind) -> None:
+    """Fail startup on any row that belongs to no environment.
+
+    The upgrade adopts pre-workspace rows once (see `_seed_default_workspace`);
+    after that a NULL means a write path forgot to stamp `workspace_id`, and such a
+    row is invisible to every scoped query — it would silently disappear from the
+    console instead of erroring. Repeating the adopting UPDATE on every startup
+    would paper over exactly that bug, so this refuses to boot instead.
+    """
+    counts = unscoped_row_counts(bind)
+    if not counts:
+        return
+    listed = ", ".join(f"{table}={count}" for table, count in sorted(counts.items()))
+    raise RuntimeError(
+        "ledger rows with no workspace_id: "
+        f"{listed}. A write path is not stamping the workspace — find the insert "
+        "for that table and give it the request's (or the parent row's) workspace."
+    )
+
+
 def _seed_default_workspace(bind) -> None:
     """Mirror settings onto the `default` workspace and adopt pre-P2 rows + users.
 
@@ -238,8 +278,8 @@ def _seed_default_workspace(bind) -> None:
 
     Raw SQL on purpose, for two reasons: this module cannot import the models
     (they import `Base` from here), and `PolicyChange`'s `before_update` listener
-    rejects ORM updates of frozen audit rows. Idempotent — the mirror converges
-    on settings and the backfill only touches NULLs.
+    rejects ORM updates of frozen audit rows. Idempotent — the mirror converges on
+    settings, and the row adoption runs only on the insert (see below).
     """
     from sqlalchemy import inspect, text
 
@@ -294,6 +334,20 @@ def _seed_default_workspace(bind) -> None:
                 ),
                 values,
             )
+            # Adopt every pre-workspace row, once. Only on the insert branch: this
+            # is the migration moment, and repeating it on every startup would
+            # silently absorb rows a *new* write path failed to stamp — the exact
+            # bug `assert_every_row_has_a_workspace` exists to surface.
+            for table in WORKSPACE_SCOPED_TABLES:
+                if table not in live_tables:
+                    continue
+                conn.execute(
+                    text(
+                        f"UPDATE {table} SET workspace_id = :id "  # noqa: S608
+                        "WHERE workspace_id IS NULL"
+                    ),
+                    {"id": DEFAULT_WORKSPACE_ID},
+                )
         else:
             # name/role_arn/external_id are operator-owned, so the mirror leaves
             # them alone. If a second workspace already claimed this (account,
@@ -307,11 +361,4 @@ def _seed_default_workspace(bind) -> None:
                     " updated_at = :now WHERE id = :id"
                 ),
                 values,
-            )
-        for table in WORKSPACE_SCOPED_TABLES:
-            if table not in live_tables:
-                continue
-            conn.execute(
-                text(f"UPDATE {table} SET workspace_id = :id WHERE workspace_id IS NULL"),
-                {"id": DEFAULT_WORKSPACE_ID},
             )

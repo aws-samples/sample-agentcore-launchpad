@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import UserWorkspace, Workspace
 from app.services import aws_clients
 
@@ -30,6 +31,11 @@ class WorkspaceContext:
     resources: dict[str, Any] = field(default_factory=dict)
     role_arn: str | None = None
     external_id: str | None = None
+    # The ledger handle for this environment, so a service that scopes both AWS
+    # calls and ledger queries needs one argument rather than two. Both builders
+    # below set it from the row they read; the default only serves contexts built
+    # by hand (tests, the hub bootstrap probe), which target the default row.
+    id: str = DEFAULT_WORKSPACE_ID
 
     def client(self, service: str, cache_token: str | None = None, **cfg: Any) -> Any:
         return aws_clients.client(service, self, cache_token=cache_token, **cfg)
@@ -55,6 +61,7 @@ def workspace_context(row: Workspace) -> WorkspaceContext:
     settings resource map only seeds it at migration time.
     """
     return WorkspaceContext(
+        id=row.id,
         account_id=row.account_id,
         region=row.region,
         resources=row.resources or {},
@@ -65,6 +72,53 @@ def workspace_context(row: Workspace) -> WorkspaceContext:
 
 def get_workspace_row(db: Session, workspace_id: str) -> Workspace | None:
     return db.get(Workspace, workspace_id)
+
+
+def context_for_workspace(workspace_id: str | None) -> WorkspaceContext:
+    """The context a background worker rebuilds from a persisted `workspace_id`.
+
+    Reads the row through its own short-lived session on purpose: worker threads
+    receive ids, not ORM objects — a request's `WorkspaceScope.row` is detached by
+    the time a thread runs, and refreshing it from another session's identity map
+    is how stale-object bugs get in.
+
+    A row that has gone missing raises rather than falling back to `default`:
+    silently retargeting persisted work at another account is worse than the job
+    failing with the id it could not resolve.
+    """
+    resolved = workspace_id or DEFAULT_WORKSPACE_ID
+    db = SessionLocal()
+    try:
+        row = get_workspace_row(db, resolved)
+        if row is None:
+            raise LookupError(f"workspace '{resolved}' no longer exists")
+        return workspace_context(row)
+    finally:
+        db.close()
+
+
+def merge_workspace_resources(
+    workspace: WorkspaceContext, values: dict[str, Any]
+) -> None:
+    """Record newly provisioned resource identifiers on the workspace row.
+
+    For resources provisioned lazily mid-request (the KB gateway), so the row —
+    the resource map of record — learns about them. The in-memory context's map is
+    updated in place as well: the caller holds that context for the rest of the
+    request and would otherwise keep reading a map without the ids it just made.
+    """
+    db = SessionLocal()
+    try:
+        row = get_workspace_row(db, workspace.id)
+        if row is None:
+            raise LookupError(f"workspace '{workspace.id}' no longer exists")
+        # Reassigned, not mutated: SQLAlchemy does not track in-place edits of a
+        # JSON column.
+        row.resources = {**(row.resources or {}), **values}
+        db.commit()
+    finally:
+        db.close()
+    workspace.resources.update(values)
 
 
 def granted_workspace_ids(db: Session, user_id: str) -> list[str]:
@@ -88,6 +142,7 @@ def default_workspace_context() -> WorkspaceContext:
     """
     settings = get_settings()
     return WorkspaceContext(
+        id=DEFAULT_WORKSPACE_ID,
         account_id=settings.account_id,
         region=settings.region,
         resources=settings.resources,

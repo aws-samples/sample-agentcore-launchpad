@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
 from app.models.ledger import Agent, Deployment, Job
+from app.services.workspace import WorkspaceContext, context_for_workspace
 
 STAGE_ORDER = ["generate", "package", "provision", "deploy", "register"]
 
@@ -34,11 +35,19 @@ class StageResult:
 
 @dataclass
 class StageContext:
-    """Mutable bag handed to every stage of one deployment run."""
+    """Mutable bag handed to every stage of one deployment run.
+
+    ``workspace`` is the environment this deploy targets, rehydrated from the Job
+    row rather than read from ambient settings — a job resumed after a restart
+    must land in the same account/region it started in. Note the two unrelated
+    senses of "session" here: ``session()`` opens a ledger session, while AWS
+    clients come from ``workspace.client(...)``.
+    """
 
     agent_id: str
     deployment_id: str
     job_id: str
+    workspace: WorkspaceContext
     scratch: dict[str, Any] = field(default_factory=dict)
     log: Callable[[str], None] = lambda msg: None
 
@@ -154,7 +163,12 @@ def execute_deploy_job(job_id: str) -> None:
             raise RuntimeError("ledger rows missing for job")
 
         stages = get_method(agent.method)
-        ctx = StageContext(agent_id=agent_id, deployment_id=deployment_id, job_id=job_id)
+        ctx = StageContext(
+            agent_id=agent_id,
+            deployment_id=deployment_id,
+            job_id=job_id,
+            workspace=context_for_workspace(job.workspace_id),
+        )
         ctx.scratch["mode"] = job.payload.get("mode", "create")
 
         done = {s["name"] for s in deployment.stages if s["status"] in ("succeeded", "skipped")}

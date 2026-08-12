@@ -13,12 +13,13 @@ import strands.multiagent as strands_multiagent
 from fastapi import FastAPI
 from pydantic import ValidationError
 
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.deployer.zip_runtime import _generate_code, _method_requirements
 from app.models.ledger import Agent
 from app.schemas.agent import A2ASkill, AgentSpec
 from app.services.agentcore import registry as reg
 from app.services.agentcore import runtime as rt
+from tests.conftest import ws_ctx
 
 SKILL = {"id": "faq", "name": "Product FAQ",
          "description": "Answers product questions", "tags": ["support"]}
@@ -329,14 +330,18 @@ def test_invoke_agent_text_dispatches_on_protocol(monkeypatch):
     from app.services import invoke as inv
 
     calls = []
-    monkeypatch.setattr(inv, "data_client", lambda: object())
+    monkeypatch.setattr(inv, "data_client", lambda _ws=None: object())
     monkeypatch.setattr(inv.rt, "invoke_a2a_text",
                         lambda *a, **k: calls.append("a2a") or {"text": "", "session_id": "s"})
     monkeypatch.setattr(inv.rt, "invoke_runtime_text",
                         lambda *a, **k: calls.append("http") or {"text": "", "session_id": "s"})
-    a2a_agent = Agent(name="x", method="zip_runtime", status="active",
+    a2a_agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="x", method="zip_runtime", status="active",
                       arn="arn:rt", spec={"protocol": "a2a"})
-    http_agent = Agent(name="y", method="zip_runtime", status="active",
+    http_agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="y", method="zip_runtime", status="active",
                        arn="arn:rt", spec={})
     inv.invoke_agent_text(a2a_agent, "hi")
     inv.invoke_agent_text(http_agent, "hi")
@@ -423,7 +428,9 @@ def test_execute_run_uses_a2a_invoke_for_a2a_protocol(monkeypatch):
         lambda *a, **k: http_calls.append("x") or {"text": "ok", "session_id": "s" * 33})
 
     db = SessionLocal()
-    run = EvalRun(agent_id="a2a-x", agent_name="a2a-x", mode="evaluators",
+    run = EvalRun(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        agent_id="a2a-x", agent_name="a2a-x", mode="evaluators",
                   evaluators=["Builtin.Correctness"], status="queued")
     db.add(run)
     db.commit()
@@ -431,7 +438,7 @@ def test_execute_run_uses_a2a_invoke_for_a2a_protocol(monkeypatch):
     db.close()
 
     svc.execute_run(
-        rid, agent_arn="arn:rt", method="zip_runtime", protocol="a2a",
+        rid, workspace=ws_ctx(), agent_arn="arn:rt", method="zip_runtime", protocol="a2a",
         service_name="svc.DEFAULT", log_group="/lg",
         items=[{"prompt": "hello"}], evaluators=["Builtin.Correctness"],
         mode="evaluators", wait_seconds=0,
@@ -443,7 +450,9 @@ def test_execute_run_uses_a2a_invoke_for_a2a_protocol(monkeypatch):
 # ─── experiment gating ───────────────────────────────────────────────────────
 def test_experiment_create_rejects_a2a_agents(client):
     db = SessionLocal()
-    agent = Agent(name="a2a-agent", method="zip_runtime", status="active",
+    agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="a2a-agent", method="zip_runtime", status="active",
                   arn="arn:rt", resource_id="rt-9",
                   spec={"system_prompt": "s", "protocol": "a2a"})
     db.add(agent)

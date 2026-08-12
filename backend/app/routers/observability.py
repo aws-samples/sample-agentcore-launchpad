@@ -27,8 +27,12 @@ SessionSearchParam = Annotated[str | None, Query(max_length=128, pattern="^[A-Za
 
 
 @router.get("/dashboard")
-def dashboard(range: RangeParam = "24h", force: bool = False) -> dict[str, Any]:
-    return observability.get_dashboard(range, force=force)
+def dashboard(
+    range: RangeParam = "24h",
+    force: bool = False,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return observability.get_dashboard(range, ws.context, force=force)
 
 
 @router.get("/prices")
@@ -58,8 +62,9 @@ def traces(
     session: SessionSearchParam = None,
     force: bool = False,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    payload = observability.list_traces(range, db, force=force)
+    payload = observability.list_traces(range, db, ws.context, force=force)
     rows = payload["traces"]
     if agent:
         rows = [r for r in rows if r["agent"] == agent or r["service"] == agent]
@@ -79,8 +84,9 @@ def trace_detail(
     range: RangeParam = "24h",
     force: bool = False,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return observability.get_trace(trace_id, range, db, force=force)
+    return observability.get_trace(trace_id, range, db, ws.context, force=force)
 
 
 @router.get("/sessions")
@@ -90,7 +96,7 @@ def sessions(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return observability.list_sessions(range, db, force=force, workspace_id=ws.id)
+    return observability.list_sessions(range, db, ws.context, force=force)
 
 
 @router.get("/sessions/{session_id}")
@@ -99,5 +105,6 @@ def session_detail(
     range: RangeParam = "24h",
     force: bool = False,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return observability.get_session(session_id, range, db, force=force)
+    return observability.get_session(session_id, range, db, ws.context, force=force)

@@ -325,6 +325,8 @@ from types import SimpleNamespace  # noqa: E402
 from app.deployer.zip_runtime import bundle_skills, extract_skill_names  # noqa: E402
 from app.schemas.agent import AgentSpec  # noqa: E402
 
+from .conftest import ws_ctx  # noqa: E402
+
 STUDIO_CODE_TWO_SKILLS = '''
 import os
 from pathlib import Path
@@ -403,7 +405,7 @@ def test_bundle_skills_puts_referenced_skills_in_zip(tmp_path):
         tmp_path / "build",
         pip_runner=fake_pip_ok,
         on_pkg_ready=lambda pkg: bundle_skills(
-            spec, STUDIO_CODE_TWO_SKILLS, pkg, logs.append,
+            spec, STUDIO_CODE_TWO_SKILLS, pkg, logs.append, ws_ctx(),
             skill_records=records, s3_client=stub_s3,
         ),
     )
@@ -421,7 +423,8 @@ def test_bundle_skills_skips_missing_record_without_failing(tmp_path):
     pkg.mkdir()
     logs: list[str] = []
     result = bundle_skills(
-        spec, code, pkg, logs.append, skill_records={}, s3_client=StubS3({}, {})
+        spec, code, pkg, logs.append, ws_ctx(),
+        skill_records={}, s3_client=StubS3({}, {}),
     )
     assert result["bundled"] == []
     assert any("ghost-skill' not found in registry" in m for m in logs)
@@ -441,7 +444,7 @@ def test_bundle_skills_enforces_size_cap(tmp_path):
     )
     logs: list[str] = []
     result = bundle_skills(
-        spec, code, pkg, logs.append,
+        spec, code, pkg, logs.append, ws_ctx(),
         skill_records={"huge-skill": "s3://bkt/skills/huge-skill/"},
         s3_client=stub_s3,
     )
@@ -475,7 +478,9 @@ def test_bundle_skills_uses_explicit_paths_for_generated_zip_runtimes(
     )
     pkg = tmp_path / "pkg"
     pkg.mkdir()
-    result = bundle_skills(spec, "generated template", pkg, lambda _m: None, s3_client=stub_s3)
+    result = bundle_skills(
+        spec, "generated template", pkg, lambda _m: None, ws_ctx(), s3_client=stub_s3
+    )
 
     assert result == {"bundled": ["pirate-speak"], "files": 2, "bytes": 17}
     assert (pkg / "skills" / "pirate-speak" / "SKILL.md").read_bytes() == b"pirate skill"
@@ -486,7 +491,7 @@ def test_bundle_skills_noop_for_generated_zip_without_selected_skills(tmp_path):
     spec = AgentSpec(name="tmpl-x", method="zip_runtime", system_prompt="s")
     pkg = tmp_path / "pkg"
     pkg.mkdir()
-    result = bundle_skills(spec, "generated template", pkg, lambda _m: None)
+    result = bundle_skills(spec, "generated template", pkg, lambda _m: None, ws_ctx())
 
     assert result == {"bundled": [], "files": 0, "bytes": 0}
     assert not (pkg / "skills").exists()
@@ -514,7 +519,9 @@ def test_bundle_skills_skips_failed_explicit_path_without_failing(tmp_path):
     pkg.mkdir()
     logs: list[str] = []
 
-    result = bundle_skills(spec, "generated template", pkg, logs.append, s3_client=stub_s3)
+    result = bundle_skills(
+        spec, "generated template", pkg, logs.append, ws_ctx(), s3_client=stub_s3
+    )
 
     assert result == {"bundled": [], "files": 0, "bytes": 0}
     assert stub_s3.downloaded == ["skills/broken-skill/SKILL.md"]
@@ -533,7 +540,7 @@ def test_bundle_skills_skips_invalid_explicit_path_name(tmp_path):
     pkg.mkdir()
     logs: list[str] = []
 
-    result = bundle_skills(spec, "generated template", pkg, logs.append)
+    result = bundle_skills(spec, "generated template", pkg, logs.append, ws_ctx())
 
     assert result == {"bundled": [], "files": 0, "bytes": 0}
     assert not (pkg / "skills").exists()
@@ -558,13 +565,18 @@ def test_bundle_skills_noop_for_converted_code_bundle(tmp_path):
     pkg = tmp_path / "pkg"
     pkg.mkdir()
 
-    result = bundle_skills(spec, code, pkg, lambda _m: None)
+    result = bundle_skills(spec, code, pkg, lambda _m: None, ws_ctx())
 
     assert result == {"bundled": [], "files": 0, "bytes": 0}
     assert not (pkg / "skills").exists()
 
 
 # --- spec.env → runtime environment passthrough ---------------------------
+
+def _fake_ws():
+    """The deploy stages read the environment off the StageContext now."""
+    return ws_ctx(_fake_settings().resources)
+
 
 def _fake_settings():
     return SimpleNamespace(
@@ -579,7 +591,7 @@ def _fake_settings():
 
 
 def test_deploy_stage_passes_spec_env_platform_key_wins(monkeypatch):
-    from app.core.db import SessionLocal
+    from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
     from app.deployer import zip_runtime as zr
     from app.deployer.pipeline import StageContext
     from app.models.ledger import Agent
@@ -590,7 +602,9 @@ def test_deploy_stage_passes_spec_env_platform_key_wins(monkeypatch):
         memory={"short_term": True, "long_term": False},
     )
     db = SessionLocal()
-    agent = Agent(name="studio-env-x", method="studio", status="deploying",
+    agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="studio-env-x", method="studio", status="deploying",
                   spec=spec.model_dump())
     db.add(agent)
     db.commit()
@@ -598,10 +612,10 @@ def test_deploy_stage_passes_spec_env_platform_key_wins(monkeypatch):
     db.close()
 
     stub = StubRuntimeControl(["READY"])
-    monkeypatch.setattr(zr, "control_client", lambda: stub)
+    monkeypatch.setattr(zr, "control_client", lambda _ws=None: stub)
     monkeypatch.setattr(zr, "get_settings", _fake_settings)
 
-    ctx = StageContext(agent_id=agent_id, deployment_id="d1", job_id="j1")
+    ctx = StageContext(agent_id=agent_id, deployment_id="d1", job_id="j1", workspace=_fake_ws())
     db = SessionLocal()
     agent = db.get(Agent, agent_id)
     db.close()
@@ -613,7 +627,7 @@ def test_deploy_stage_passes_spec_env_platform_key_wins(monkeypatch):
 
 
 def test_deploy_stage_update_mode_passes_spec_env(monkeypatch):
-    from app.core.db import SessionLocal
+    from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
     from app.deployer import zip_runtime as zr
     from app.deployer.pipeline import StageContext
     from app.models.ledger import Agent
@@ -624,7 +638,9 @@ def test_deploy_stage_update_mode_passes_spec_env(monkeypatch):
         memory={"short_term": False, "long_term": False},
     )
     db = SessionLocal()
-    agent = Agent(name="studio-env-upd", method="studio", status="active",
+    agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="studio-env-upd", method="studio", status="active",
                   resource_id="rt-1", arn="arn:rt-1", version="1", spec=spec.model_dump())
     db.add(agent)
     db.commit()
@@ -632,10 +648,10 @@ def test_deploy_stage_update_mode_passes_spec_env(monkeypatch):
     db.close()
 
     stub = StubRuntimeControl(["READY"])
-    monkeypatch.setattr(zr, "control_client", lambda: stub)
+    monkeypatch.setattr(zr, "control_client", lambda _ws=None: stub)
     monkeypatch.setattr(zr, "get_settings", _fake_settings)
 
-    ctx = StageContext(agent_id=agent_id, deployment_id="d2", job_id="j2")
+    ctx = StageContext(agent_id=agent_id, deployment_id="d2", job_id="j2", workspace=_fake_ws())
     ctx.scratch["mode"] = "update"
     db = SessionLocal()
     agent = db.get(Agent, agent_id)
@@ -658,7 +674,7 @@ def test_runtime_environment_skips_platform_memory_when_disabled():
 
 
 def test_container_update_clears_runtime_environment_when_memory_disabled(monkeypatch):
-    from app.core.db import SessionLocal
+    from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
     from app.deployer import container
     from app.deployer.pipeline import StageContext
     from app.models.ledger import Agent
@@ -671,7 +687,7 @@ def test_container_update_clears_runtime_environment_when_memory_disabled(monkey
     )
     db = SessionLocal()
     agent = Agent(
-        name=spec.name,
+        workspace_id=DEFAULT_WORKSPACE_ID, name=spec.name,
         method="container",
         status="active",
         resource_id="rt-1",
@@ -685,10 +701,13 @@ def test_container_update_clears_runtime_environment_when_memory_disabled(monkey
     db.close()
 
     stub = StubRuntimeControl(["READY"])
-    monkeypatch.setattr(container, "control_client", lambda: stub)
+    monkeypatch.setattr(container, "control_client", lambda _ws=None: stub)
     monkeypatch.setattr(container, "get_settings", _fake_settings)
 
-    ctx = StageContext(agent_id=agent_id, deployment_id="d-disabled", job_id="j-disabled")
+    ctx = StageContext(
+        agent_id=agent_id, deployment_id="d-disabled", job_id="j-disabled",
+        workspace=_fake_ws(),
+    )
     ctx.scratch["mode"] = "update"
     db = SessionLocal()
     agent = db.get(Agent, agent_id)
@@ -700,7 +719,7 @@ def test_container_update_clears_runtime_environment_when_memory_disabled(monkey
 
 @pytest.mark.parametrize("mode", ["create", "update"])
 def test_container_deploy_stage_injects_platform_memory(monkeypatch, mode):
-    from app.core.db import SessionLocal
+    from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
     from app.deployer import container
     from app.deployer.pipeline import StageContext
     from app.models.ledger import Agent
@@ -714,7 +733,7 @@ def test_container_deploy_stage_injects_platform_memory(monkeypatch, mode):
     )
     db = SessionLocal()
     agent = Agent(
-        name=spec.name,
+        workspace_id=DEFAULT_WORKSPACE_ID, name=spec.name,
         method="container",
         status="active" if mode == "update" else "deploying",
         resource_id="rt-1" if mode == "update" else None,
@@ -728,10 +747,13 @@ def test_container_deploy_stage_injects_platform_memory(monkeypatch, mode):
     db.close()
 
     stub = StubRuntimeControl(["READY"])
-    monkeypatch.setattr(container, "control_client", lambda: stub)
+    monkeypatch.setattr(container, "control_client", lambda _ws=None: stub)
     monkeypatch.setattr(container, "get_settings", _fake_settings)
 
-    ctx = StageContext(agent_id=agent_id, deployment_id="d-container", job_id="j-container")
+    ctx = StageContext(
+        agent_id=agent_id, deployment_id="d-container", job_id="j-container",
+        workspace=_fake_ws(),
+    )
     ctx.scratch["mode"] = mode
     db = SessionLocal()
     agent = db.get(Agent, agent_id)
@@ -796,7 +818,7 @@ def _no_sleep_retry(monkeypatch):
 
 
 def _persist(name, **columns):
-    from app.core.db import SessionLocal
+    from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
     from app.models.ledger import Agent
 
     spec = AgentSpec(
@@ -804,7 +826,9 @@ def _persist(name, **columns):
         memory={"short_term": False, "long_term": False},
     )
     db = SessionLocal()
-    agent = Agent(name=name, method="zip_runtime", spec=spec.model_dump(), **columns)
+    agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name=name, method="zip_runtime", spec=spec.model_dump(), **columns)
     db.add(agent)
     db.commit()
     agent_id = agent.id
@@ -821,11 +845,16 @@ def test_deploy_retries_while_a_new_role_is_not_visible_yet(monkeypatch):
 
     _no_sleep_retry(monkeypatch)
     stub = FlakyRuntimeControl(["READY"], fail_times=2)
-    monkeypatch.setattr(zr, "control_client", lambda: stub)
+    monkeypatch.setattr(zr, "control_client", lambda _ws=None: stub)
     monkeypatch.setattr(zr, "get_settings", _fake_settings)
 
     agent = _persist("zip-prop-create", status="deploying")
-    zr._stage_deploy(StageContext(agent_id=agent.id, deployment_id="d", job_id="j"), agent)
+    zr._stage_deploy(
+        StageContext(
+            agent_id=agent.id, deployment_id="d", job_id="j", workspace=_fake_ws()
+        ),
+        agent,
+    )
 
     assert stub.create_calls == 3  # two refusals, then accepted
     assert stub.created_with is not None
@@ -837,13 +866,13 @@ def test_update_mode_retries_too(monkeypatch):
 
     _no_sleep_retry(monkeypatch)
     stub = FlakyRuntimeControl(["READY"], fail_times=1)
-    monkeypatch.setattr(zr, "control_client", lambda: stub)
+    monkeypatch.setattr(zr, "control_client", lambda _ws=None: stub)
     monkeypatch.setattr(zr, "get_settings", _fake_settings)
 
     agent = _persist(
         "zip-prop-update", status="active", resource_id="rt-1", arn="arn:rt-1", version="1"
     )
-    ctx = StageContext(agent_id=agent.id, deployment_id="d", job_id="j")
+    ctx = StageContext(agent_id=agent.id, deployment_id="d", job_id="j", workspace=_fake_ws())
     ctx.scratch["mode"] = "update"
     zr._stage_deploy(ctx, agent)
 
@@ -868,12 +897,15 @@ def test_a_real_validation_error_is_not_retried(monkeypatch):
             raise RuntimeError("ValidationException: s3 key does not exist")
 
     stub = Broken()
-    monkeypatch.setattr(zr, "control_client", lambda: stub)
+    monkeypatch.setattr(zr, "control_client", lambda _ws=None: stub)
     monkeypatch.setattr(zr, "get_settings", _fake_settings)
 
     agent = _persist("zip-prop-nonretry", status="deploying")
     with pytest.raises(RuntimeError, match="s3 key does not exist"):
         zr._stage_deploy(
-            StageContext(agent_id=agent.id, deployment_id="d", job_id="j"), agent
+            StageContext(
+                agent_id=agent.id, deployment_id="d", job_id="j", workspace=_fake_ws()
+            ),
+            agent,
         )
     assert stub.calls == 1

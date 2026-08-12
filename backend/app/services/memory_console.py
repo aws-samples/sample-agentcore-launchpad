@@ -21,6 +21,7 @@ from typing import Any
 from app.core.errors import AppError
 from app.services.agentcore.client import control_client, data_client
 from app.services.memory import SCOPE_SEP, decode_record_text, memory_id_or_none
+from app.services.workspace import WorkspaceContext
 
 # AWS caps most memory list operations at 100 items per page — but
 # ListMemoryExtractionJobs rejects anything above 50 with a ValidationException,
@@ -53,9 +54,9 @@ def _token(token: str | None) -> dict[str, str]:
     return {"nextToken": token} if token else {}
 
 
-def require_memory_id() -> str:
+def require_memory_id(workspace: WorkspaceContext) -> str:
     """Memory id or a typed 409 — every endpoint except /overview needs a real id."""
-    mem_id = memory_id_or_none()
+    mem_id = memory_id_or_none(workspace)
     if not mem_id:
         raise AppError(
             "memory.not_configured",
@@ -84,14 +85,14 @@ def _strategy(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def memory_overview() -> dict[str, Any]:
+def memory_overview(workspace: WorkspaceContext) -> dict[str, Any]:
     """Resource config + strategies + a bounded actor count + sibling memories.
 
     Returns ``configured: False`` (instead of raising) when bootstrap has not run
     — the landing view needs to render a "run make bootstrap" state, while every
     other endpoint treats a missing memory id as an error.
     """
-    mem_id = memory_id_or_none()
+    mem_id = memory_id_or_none(workspace)
     if not mem_id:
         return {
             "configured": False,
@@ -102,12 +103,12 @@ def memory_overview() -> dict[str, Any]:
             "other_memories": [],
         }
 
-    control = control_client()
+    control = control_client(workspace)
     raw = control.get_memory(memoryId=mem_id).get("memory", {})
 
     # One page only: a bounded cost with the bound made visible below, rather
     # than paginating an unbounded actor list to fill a stat tile.
-    actors = data_client().list_actors(memoryId=mem_id, maxResults=PAGE_MAX)
+    actors = data_client(workspace).list_actors(memoryId=mem_id, maxResults=PAGE_MAX)
 
     others: list[dict[str, Any]] = []
     for mem in control.list_memories(maxResults=PAGE_MAX).get("memories", []):
@@ -145,9 +146,13 @@ def memory_overview() -> dict[str, Any]:
     }
 
 
-def get_strategies() -> list[dict[str, Any]]:
+def get_strategies(workspace: WorkspaceContext) -> list[dict[str, Any]]:
     """Strategies alone — used by namespace resolution without a full overview."""
-    raw = control_client().get_memory(memoryId=require_memory_id()).get("memory", {})
+    raw = (
+        control_client(workspace)
+        .get_memory(memoryId=require_memory_id(workspace))
+        .get("memory", {})
+    )
     return [_strategy(s) for s in raw.get("strategies") or []]
 
 
@@ -180,9 +185,13 @@ def decode_actor(actor_id: str) -> dict[str, Any]:
     }
 
 
-def list_actors(next_token: str | None = None, max_results: int | None = None) -> dict[str, Any]:
-    mem_id = require_memory_id()
-    page = data_client().list_actors(
+def list_actors(
+    workspace: WorkspaceContext,
+    next_token: str | None = None,
+    max_results: int | None = None,
+) -> dict[str, Any]:
+    mem_id = require_memory_id(workspace)
+    page = data_client(workspace).list_actors(
         memoryId=mem_id, maxResults=_page_size(max_results), **_token(next_token)
     )
     return {
@@ -194,10 +203,13 @@ def list_actors(next_token: str | None = None, max_results: int | None = None) -
 
 
 def list_sessions(
-    actor_id: str, next_token: str | None = None, max_results: int | None = None
+    workspace: WorkspaceContext,
+    actor_id: str,
+    next_token: str | None = None,
+    max_results: int | None = None,
 ) -> dict[str, Any]:
-    mem_id = require_memory_id()
-    page = data_client().list_sessions(
+    mem_id = require_memory_id(workspace)
+    page = data_client(workspace).list_sessions(
         memoryId=mem_id,
         actorId=actor_id,
         maxResults=_page_size(max_results),
@@ -283,14 +295,15 @@ def _payload_entry(raw: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def list_events(
+    workspace: WorkspaceContext,
     actor_id: str,
     session_id: str,
     include_payloads: bool = True,
     next_token: str | None = None,
     max_results: int | None = None,
 ) -> dict[str, Any]:
-    mem_id = require_memory_id()
-    page = data_client().list_events(
+    mem_id = require_memory_id(workspace)
+    page = data_client(workspace).list_events(
         memoryId=mem_id,
         actorId=actor_id,
         sessionId=session_id,
@@ -328,7 +341,9 @@ def list_events(
 
 
 def resolve_namespaces(
-    actor_id: str, strategies: list[dict[str, Any]] | None = None
+    workspace: WorkspaceContext,
+    actor_id: str,
+    strategies: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Turn each strategy's namespace template into a concrete namespace.
 
@@ -338,7 +353,7 @@ def resolve_namespaces(
     can disable them rather than sending a broken namespace to AWS.
     """
     resolved: list[dict[str, Any]] = []
-    for strategy in strategies if strategies is not None else get_strategies():
+    for strategy in strategies if strategies is not None else get_strategies(workspace):
         templates = strategy["namespace_templates"] or strategy["namespaces"]
         for template in templates:
             namespace = template.replace("{actorId}", actor_id)
@@ -375,12 +390,13 @@ def _record(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def list_records(
+    workspace: WorkspaceContext,
     namespace: str,
     strategy_id: str | None = None,
     next_token: str | None = None,
     max_results: int | None = None,
 ) -> dict[str, Any]:
-    mem_id = require_memory_id()
+    mem_id = require_memory_id(workspace)
     kwargs: dict[str, Any] = {
         "memoryId": mem_id,
         "namespacePath": namespace,
@@ -389,7 +405,7 @@ def list_records(
     }
     if strategy_id:
         kwargs["memoryStrategyId"] = strategy_id
-    page = data_client().list_memory_records(**kwargs)
+    page = data_client(workspace).list_memory_records(**kwargs)
     return {
         "namespace": namespace,
         "items": [_record(r) for r in page.get("memoryRecordSummaries") or []],
@@ -398,16 +414,17 @@ def list_records(
 
 
 def search_records(
+    workspace: WorkspaceContext,
     namespace: str,
     query: str,
     top_k: int = 5,
     strategy_id: str | None = None,
 ) -> dict[str, Any]:
-    mem_id = require_memory_id()
+    mem_id = require_memory_id(workspace)
     criteria: dict[str, Any] = {"searchQuery": query, "topK": top_k}
     if strategy_id:
         criteria["memoryStrategyId"] = strategy_id
-    page = data_client().retrieve_memory_records(
+    page = data_client(workspace).retrieve_memory_records(
         memoryId=mem_id, namespace=namespace, searchCriteria=criteria
     )
     return {
@@ -434,6 +451,7 @@ def _job_messages(raw: Any) -> list[str]:
 
 
 def list_extraction_jobs(
+    workspace: WorkspaceContext,
     actor_id: str | None = None,
     session_id: str | None = None,
     strategy_id: str | None = None,
@@ -441,7 +459,7 @@ def list_extraction_jobs(
     next_token: str | None = None,
     max_results: int | None = None,
 ) -> dict[str, Any]:
-    mem_id = require_memory_id()
+    mem_id = require_memory_id(workspace)
     if status and status not in EXTRACTION_STATUS_FILTERS:
         # Fail as a typed 400 rather than letting AWS answer with a 502-shaped
         # ValidationException the caller cannot act on.
@@ -470,7 +488,7 @@ def list_extraction_jobs(
     }
     if job_filter:
         kwargs["filter"] = job_filter
-    page = data_client().list_memory_extraction_jobs(**kwargs)
+    page = data_client(workspace).list_memory_extraction_jobs(**kwargs)
     return {
         "items": [
             {

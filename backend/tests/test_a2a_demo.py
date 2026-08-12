@@ -48,7 +48,7 @@ def test_a2a_demo_passes_trace_through(client, monkeypatch):
 
     trace = [{"stage": "discover", "query": "refunds", "hits": []}]
     stub = _DataStub({"result": "[via aurora-faq-a2a] 30 days.", "a2a_trace": trace})
-    monkeypatch.setattr(ac_client, "data_client", lambda: stub)
+    monkeypatch.setattr(ac_client, "data_client", lambda _ws=None: stub)
     # the router imports data_client inside the handler → patch the source module
     agent_id = _mk_agent()
     res = client.post("/api/registry/a2a-demo",

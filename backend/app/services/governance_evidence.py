@@ -372,6 +372,7 @@ def gateway_decisions(
     cw: Any,
     gateway_id: str,
     range_key: str,
+    workspace_id: str,
     policy_id: str | None = None,
     force: bool = False,
     logs: Any = None,
@@ -406,7 +407,7 @@ def gateway_decisions(
             policy_id,
         )
 
-    key = f"gov-decisions:{gateway_id}:{range_key}:{policy_id or ''}"
+    key = f"gov-decisions:{workspace_id}:{gateway_id}:{range_key}:{policy_id or ''}"
     return cached(key, force, build)
 
 

@@ -21,6 +21,7 @@ from app.services.runtime_discovery import (
     is_discovered_harness,
     require_invoke_capability,
 )
+from app.services.workspace import WorkspaceContext, context_for_workspace
 from app.templates import gateway_support
 
 logger = logging.getLogger(__name__)
@@ -50,11 +51,25 @@ def _parse_gateway_text(raw_text: str, session_id: str) -> dict[str, Any]:
     return {"text": str(text), "session_id": session_id}
 
 
+def _agent_workspace(
+    agent: Agent, workspace: WorkspaceContext | None
+) -> WorkspaceContext:
+    """Where this agent's runtime lives.
+
+    The agent row is authoritative, not the caller: both entrances (console chat
+    and `/v1`) must reach the same account/region for the same agent. Callers that
+    already resolved the workspace pass it, which also keeps the hot path free of
+    an extra ledger read per turn.
+    """
+    return workspace if workspace is not None else context_for_workspace(agent.workspace_id)
+
+
 def _invoke_via_stable_endpoint(
     route: dict[str, Any],
     prompt: str,
     session_id: str | None,
     actor_id: str,
+    workspace: WorkspaceContext,
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
 ) -> dict[str, Any]:
@@ -72,7 +87,7 @@ def _invoke_via_stable_endpoint(
     }
     if gateway_access_token:
         kwargs["gateway_access_token"] = gateway_access_token
-    return rt.invoke_runtime_text(data_client(), route["arn"], prompt, **kwargs)
+    return rt.invoke_runtime_text(data_client(workspace), route["arn"], prompt, **kwargs)
 
 
 def _invoke_via_canary(
@@ -80,6 +95,7 @@ def _invoke_via_canary(
     prompt: str,
     session_id: str | None,
     actor_id: str,
+    workspace: WorkspaceContext,
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
 ) -> dict[str, Any]:
@@ -100,6 +116,7 @@ def _invoke_via_canary(
             prompt,
             session_id,
             actor_id,
+            workspace,
             runtime_user_id,
             gateway_access_token,
         )
@@ -112,7 +129,7 @@ def _invoke_via_canary(
         if gateway_access_token:
             body["actor_id"] = actor_id
             body["gateway_access_token"] = gateway_access_token
-        response = gateway.sigv4_post(url, body, session_id=sticky)
+        response = gateway.sigv4_post(url, body, workspace, session_id=sticky)
         if response.status_code != 200:
             raise RuntimeError(f"gateway route returned HTTP {response.status_code}")
         return _parse_gateway_text(response.text, sticky)
@@ -127,6 +144,7 @@ def _invoke_via_canary(
             prompt,
             session_id,
             actor_id,
+            workspace,
             runtime_user_id,
             gateway_access_token,
         )
@@ -139,20 +157,26 @@ def invoke_agent_text(
     actor_id: str = "default",
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
+    workspace: WorkspaceContext | None = None,
 ) -> dict[str, Any]:
     require_invoke_capability(agent)
+    workspace = _agent_workspace(agent, workspace)
     # An imported harness carries the harness ARN, so it invokes exactly like a
     # launchpad-deployed one — InvokeHarness, never InvokeAgentRuntime.
     if agent.method == "harness" or is_discovered_harness(agent):
         return hc.invoke_harness_text(
-            data_client(), agent.arn, prompt, session_id=session_id, actor_id=actor_id
+            data_client(workspace),
+            agent.arn,
+            prompt,
+            session_id=session_id,
+            actor_id=actor_id,
         )
     if agent.method in ("zip_runtime", "studio", "container", DISCOVERED_METHOD):
         # A2A-protocol runtimes speak JSON-RPC; the A2A server owns
         # conversation state (no actor_id/memory envelope) and can't be canaried
         if (agent.spec or {}).get("protocol") == "a2a":
             return rt.invoke_a2a_text(
-                data_client(), agent.arn, prompt, session_id=session_id
+                data_client(workspace), agent.arn, prompt, session_id=session_id
             )
         # During an active canary, real production traffic for this agent flows
         # through the canary's gateway; otherwise the path below is unchanged.
@@ -163,6 +187,7 @@ def invoke_agent_text(
                 prompt,
                 session_id,
                 actor_id,
+                workspace,
                 runtime_user_id,
                 gateway_access_token,
             )
@@ -173,7 +198,9 @@ def invoke_agent_text(
         }
         if gateway_access_token:
             kwargs["gateway_access_token"] = gateway_access_token
-        return rt.invoke_runtime_text(data_client(), agent.arn, prompt, **kwargs)
+        return rt.invoke_runtime_text(
+            data_client(workspace), agent.arn, prompt, **kwargs
+        )
     raise AppError(
         "agent.method_not_available",
         f"no invoke path for method '{agent.method}'",
@@ -188,9 +215,11 @@ def invoke_agent_events(
     actor_id: str = "default",
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
+    workspace: WorkspaceContext | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield native container events, with a buffered compatibility fallback."""
     require_invoke_capability(agent)
+    workspace = _agent_workspace(agent, workspace)
     is_http_container = (
         agent.method == "container" and (agent.spec or {}).get("protocol", "http") != "a2a"
     )
@@ -202,7 +231,9 @@ def invoke_agent_events(
         }
         if gateway_access_token:
             kwargs["gateway_access_token"] = gateway_access_token
-        yield from rt.stream_runtime_events(data_client(), agent.arn, prompt, **kwargs)
+        yield from rt.stream_runtime_events(
+            data_client(workspace), agent.arn, prompt, **kwargs
+        )
         return
 
     result = invoke_agent_text(
@@ -212,6 +243,7 @@ def invoke_agent_events(
         actor_id=actor_id,
         runtime_user_id=runtime_user_id,
         gateway_access_token=gateway_access_token,
+        workspace=workspace,
     )
     text = result["text"]
     for index in range(0, len(text), BUFFERED_CHUNK_CHARS):

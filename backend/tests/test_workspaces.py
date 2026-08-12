@@ -419,3 +419,68 @@ def test_grant_helpers():
         assert ws.granted_workspace_ids(db, "u-none") == []
     finally:
         db.close()
+
+
+# ── the no-NULL invariant (replaces the every-startup backfill) ──────────────
+
+
+def _insert_unscoped_agent(engine, agent_id: str = "a-null") -> None:
+    """An agent row a write path forgot to stamp."""
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO agents (id, name, method, status, spec, owner,"
+                " workspace_id, created_at, updated_at)"
+                f" VALUES ('{agent_id}', '{agent_id}', 'harness', 'active', '{{}}',"
+                " 'river', NULL, :now, :now)"
+            ),
+            {"now": NOW},
+        )
+
+
+def test_a_row_with_no_workspace_fails_startup_and_names_its_table(tmp_path, hub_settings):
+    """After the migration a NULL means a *new* write path is not stamping. Such a
+    row is invisible to every scoped query, so refusing to boot beats hiding it."""
+    engine = _pre_p2_database(tmp_path)
+    db_module.init_db(engine)  # the upgrade adopts the pre-workspace rows
+
+    _insert_unscoped_agent(engine)
+
+    with pytest.raises(RuntimeError) as error:
+        db_module.init_db(engine)
+    assert "agents=1" in str(error.value)
+    assert "workspace_id" in str(error.value)
+
+
+def test_the_row_adoption_runs_only_on_the_migration(tmp_path, hub_settings):
+    """The adopting UPDATE is one-shot: repeating it every startup would absorb the
+    unstamped row above instead of surfacing it."""
+    engine = _pre_p2_database(tmp_path)
+    db_module.init_db(engine)
+    _insert_unscoped_agent(engine)
+
+    with pytest.raises(RuntimeError):
+        db_module.init_db(engine)
+
+    with engine.begin() as conn:
+        adopted = conn.execute(
+            sa.text("SELECT workspace_id FROM agents WHERE id = 'a-null'")
+        ).scalar_one()
+    assert adopted is None  # NOT quietly moved into `default`
+
+
+def test_the_invariant_reports_every_offending_table(tmp_path, hub_settings):
+    engine = _pre_p2_database(tmp_path)
+    db_module.init_db(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO api_keys (id, name, prefix, key_hash, enabled,"
+                " workspace_id, created_at)"
+                " VALUES ('k1', 'k', 'lp…', 'hash', 1, NULL, :now)"
+            ),
+            {"now": NOW},
+        )
+    _insert_unscoped_agent(engine)
+
+    assert db_module.unscoped_row_counts(engine) == {"agents": 1, "api_keys": 1}

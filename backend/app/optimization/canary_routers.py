@@ -13,6 +13,7 @@ from app.evaluation.models import EvalDataset
 from app.models.ledger import Agent
 from app.optimization import canary_service, service
 from app.optimization.models import RUNTIME_CANARY_STAGES, Experiment, RuntimeCanary
+from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
 from app.services.harness_convert import graft_config_bundle
 
@@ -42,9 +43,11 @@ def _out(row: RuntimeCanary) -> dict[str, Any]:
 @router.get("")
 def list_runtime_canaries(
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     rows = (
         db.query(RuntimeCanary)
+        .filter(RuntimeCanary.workspace_id == ws.id)
         .order_by(RuntimeCanary.created_at.desc())
         .limit(20)
         .all()
@@ -52,15 +55,21 @@ def list_runtime_canaries(
     return {"canaries": [_out(row) for row in rows]}
 
 
+def _canary_in(db: Session, ws: WorkspaceScope, canary_id: str) -> RuntimeCanary:
+    """The canary, or 404 — another workspace's row is not visible here."""
+    row = db.get(RuntimeCanary, canary_id)
+    if row is None or row.workspace_id != ws.id:
+        raise NotFoundError("canary.not_found", "runtime canary not found")
+    return row
+
+
 @router.get("/{canary_id}")
 def get_runtime_canary(
     canary_id: str,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    row = db.get(RuntimeCanary, canary_id)
-    if row is None:
-        raise NotFoundError("canary.not_found", "runtime canary not found")
-    return _out(row)
+    return _out(_canary_in(db, ws, canary_id))
 
 
 class CandidateEdit(BaseModel):
@@ -77,8 +86,10 @@ class RuntimeCanaryCreate(BaseModel):
     source_experiment_id: str | None = None
 
 
-def _eligible_agent(db: Session, agent_id: str) -> Agent:
+def _eligible_agent(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent:
     agent = db.get(Agent, agent_id)
+    if agent is not None and agent.workspace_id != ws.id:
+        agent = None
     if agent is None or agent.status != "active":
         raise AppError(
             "canary.agent_not_active",
@@ -99,6 +110,7 @@ def _eligible_agent(db: Session, agent_id: str) -> Agent:
     existing = (
         db.query(RuntimeCanary)
         .filter(
+            RuntimeCanary.workspace_id == ws.id,
             RuntimeCanary.champion_agent_id == agent_id,
             RuntimeCanary.status == "running",
         )
@@ -157,8 +169,9 @@ def _resolve_edited_spec(agent: Agent, candidate: CandidateEdit) -> AgentSpec:
 def create_runtime_canary(
     req: RuntimeCanaryCreate,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    agent = _eligible_agent(db, req.agent_id)
+    agent = _eligible_agent(db, ws, req.agent_id)
     candidate = req.candidate
     if not (
         (candidate.system_prompt or "").strip()
@@ -172,6 +185,8 @@ def create_runtime_canary(
         )
     if req.source_experiment_id:
         source = db.get(Experiment, req.source_experiment_id)
+        if source is not None and source.workspace_id != ws.id:
+            source = None
         if source is None or not service.promotion_complete(source.artifacts):
             raise AppError(
                 "canary.source_experiment_invalid",
@@ -187,7 +202,9 @@ def create_runtime_canary(
                 status_code=400,
             )
     edited_spec = _resolve_edited_spec(agent, candidate)
-    row = canary_service.start_canary(agent, edited_spec, req.source_experiment_id)
+    row = canary_service.start_canary(
+        agent, edited_spec, ws.context, req.source_experiment_id
+    )
     return _out(row)
 
 
@@ -205,10 +222,9 @@ def runtime_canary_action(
     req: RuntimeCanaryAction,
     response: Response,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    row = db.get(RuntimeCanary, canary_id)
-    if row is None:
-        raise NotFoundError("canary.not_found", "runtime canary not found")
+    row = _canary_in(db, ws, canary_id)
     if row.running_action:
         raise AppError(
             "canary.action_in_flight",
@@ -229,7 +245,7 @@ def runtime_canary_action(
                 status_code=422,
             )
         dataset = db.get(EvalDataset, req.dataset_id)
-        if dataset is None:
+        if dataset is None or dataset.workspace_id != ws.id:
             raise NotFoundError("dataset.not_found", "dataset not found")
         try:
             prompts = service.resolve_traffic_prompts(dataset)

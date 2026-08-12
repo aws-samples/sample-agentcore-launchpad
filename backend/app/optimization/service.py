@@ -35,6 +35,7 @@ from app.schemas.agent import AgentSpec
 from app.services.agentcore.client import control_client, data_client
 from app.services.agentcore.gateway import sigv4_post
 from app.services.harness_convert import graft_config_bundle
+from app.services.workspace import WorkspaceContext, context_for_workspace
 from app.templates.toolkits import toolkit_tool_descriptions
 
 EXP_GATEWAY_NAME = "launchpad-exp-gw"
@@ -334,7 +335,7 @@ def canary_capability(agent_row: Any) -> dict[str, Any]:
     return {**base, "eligible": True}
 
 
-def _agent_meta(exp: Experiment) -> dict[str, Any]:
+def _agent_meta(exp: Experiment, workspace: WorkspaceContext) -> dict[str, Any]:
     """Runtime facts captured at create time; rebuilt lazily for old rows."""
     meta = exp.artifacts.get("agent_meta")
     if meta and "tools" in meta and "experiment_capability" in meta:
@@ -357,7 +358,7 @@ def _agent_meta(exp: Experiment) -> dict[str, Any]:
         return meta
     if agent_row is None:
         raise RuntimeError("agent behind this experiment no longer exists")
-    control = control_client()
+    control = control_client(workspace)
     meta = {
         "id": agent_row.id,
         "name": agent_row.name,
@@ -389,7 +390,9 @@ _REC_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 
-def resolve_recommend_source(agent_id: str, run_id: str | None) -> dict[str, Any]:
+def resolve_recommend_source(
+    agent_id: str, run_id: str | None, workspace: WorkspaceContext
+) -> dict[str, Any]:
     """An evaluation run id → the trace source RECOMMEND should read, validated.
 
     ``{}`` means "use the default rolling window". Otherwise the returned dict pins
@@ -441,7 +444,7 @@ def resolve_recommend_source(agent_id: str, run_id: str | None) -> dict[str, Any
         db.close()
 
     try:
-        detail = ac.get_batch_evaluation(data_client(), batch_id=batch_id)
+        detail = ac.get_batch_evaluation(data_client(workspace), batch_id=batch_id)
     except Exception as exc:
         raise AppError(
             "experiment.recommend_source_unreadable",
@@ -470,17 +473,17 @@ def resolve_recommend_source(agent_id: str, run_id: str | None) -> dict[str, Any
 def stage_recommend(
     exp_id: str,
     agent: dict[str, Any],
+    workspace: WorkspaceContext,
     progress: Progress = _noop,
     types: tuple[str, ...] = REC_TYPES,
     tools: dict[str, str] | None = None,
     source: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    settings = get_settings()
-    data = data_client()
+    data = data_client(workspace)
     log_group = f"/aws/bedrock-agentcore/runtimes/{agent['resource_id']}-DEFAULT"
     log_group_arns = [
-        ac.to_log_group_arn(log_group, settings.region, settings.account_id),
-        ac.to_log_group_arn("aws/spans", settings.region, settings.account_id),
+        ac.to_log_group_arn(log_group, workspace.region, workspace.account_id),
+        ac.to_log_group_arn("aws/spans", workspace.region, workspace.account_id),
     ]
     service_names = [f"{agent['runtime_name']}.DEFAULT"]
     current_prompt = agent["system_prompt"]
@@ -685,9 +688,10 @@ def create_bundle_idempotent(control: Any, **kwargs: Any) -> dict[str, Any]:
 
 def stage_bundles(
     exp_id: str, agent: dict[str, Any], treatment_prompt: str,
+    workspace: WorkspaceContext,
     treatment_tool_descs: dict[str, str] | None = None,
 ) -> dict:
-    control = control_client()
+    control = control_client(workspace)
     current_prompt = agent["system_prompt"]
     # control mirrors production: the agent's own tool descriptions; treatment
     # overlays the accepted edits on that same base
@@ -757,7 +761,7 @@ def create_runtime_target_idempotent(
 
 
 def normalize_online_evaluators(
-    ids: Sequence[str] | None, control: Any | None = None
+    ids: Sequence[str] | None, control: Any
 ) -> list[str]:
     """Validate an operator-chosen evaluator set for online evaluation.
 
@@ -807,7 +811,7 @@ def normalize_online_evaluators(
         )
     custom = [e for e in chosen if not e.startswith("Builtin.")]
     if custom:
-        client = control or control_client()
+        client = control
         for evaluator in custom:
             _assert_no_ground_truth(client, evaluator)
     return chosen
@@ -875,9 +879,8 @@ def create_online_eval_idempotent(
         )
 
 
-def find_experiment_gateway(control: Any | None = None) -> dict[str, Any] | None:
+def find_experiment_gateway(control: Any) -> dict[str, Any] | None:
     """Return the live shared experiment Gateway detail without creating it."""
-    control = control or control_client()
     items = control.list_gateways(maxResults=100).get("items", [])
     summary = next((g for g in items if g.get("name") == EXP_GATEWAY_NAME), None)
     if summary is None:
@@ -886,19 +889,18 @@ def find_experiment_gateway(control: Any | None = None) -> dict[str, Any] | None
 
 
 def ensure_experiment_gateway(
+    control: Any,
+    workspace: WorkspaceContext,
     progress: Progress = _noop,
-    control: Any | None = None,
 ) -> dict[str, Any]:
     """Create or adopt the shared experiment Gateway and wait until READY."""
-    settings = get_settings()
-    control = control or control_client()
     progress("creating experiment gateway…")
     try:
         gateway = control.create_gateway(
             name=EXP_GATEWAY_NAME,
             description="Launchpad experiment gateway (A/B routing)",
             authorizerType="AWS_IAM",
-            roleArn=settings.resources["gateway_role_arn"],
+            roleArn=workspace.resources["gateway_role_arn"],
             clientToken=str(uuid.uuid4()),
         )
         gateway_id = gateway["gatewayId"]
@@ -923,9 +925,8 @@ def ensure_experiment_gateway(
     raise TimeoutError(f"gateway {gateway_id} not READY")
 
 
-def list_ab_tests(data: Any | None = None) -> list[dict[str, Any]]:
+def list_ab_tests(data: Any) -> list[dict[str, Any]]:
     """List every A/B test, following the preview API's nextToken pagination."""
-    data = data or data_client()
     tests: list[dict[str, Any]] = []
     token: str | None = None
     while True:
@@ -942,9 +943,9 @@ def list_ab_tests(data: Any | None = None) -> list[dict[str, Any]]:
 
 def assert_gateway_available(
     gateway_arn: str,
+    data: Any,
     *,
     own_test_name: str | None = None,
-    data: Any | None = None,
 ) -> None:
     """Reject a foreign active A/B test on the shared Gateway."""
     active = [
@@ -977,26 +978,29 @@ def assert_gateway_available(
 
 
 def assert_shared_gateway_available(
+    workspace: WorkspaceContext,
     *,
     own_test_name: str | None = None,
     control: Any | None = None,
     data: Any | None = None,
 ) -> None:
     """Read-only preflight used before an action starts AWS mutation."""
-    gateway = find_experiment_gateway(control)
+    gateway = find_experiment_gateway(control or control_client(workspace))
     if gateway is not None:
         assert_gateway_available(
-            gateway["gatewayArn"], own_test_name=own_test_name, data=data
+            gateway["gatewayArn"],
+            data or data_client(workspace),
+            own_test_name=own_test_name,
         )
 
 
 def stage_gateway(
-    exp_id: str, agent: dict[str, Any], progress: Progress = _noop,
+    exp_id: str, agent: dict[str, Any], workspace: WorkspaceContext,
+    progress: Progress = _noop,
     evaluators: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    settings = get_settings()
-    control = control_client()
-    gateway = ensure_experiment_gateway(progress, control)
+    control = control_client(workspace)
+    gateway = ensure_experiment_gateway(control, workspace, progress)
     gateway_id = gateway["gateway_id"]
 
     target_v1 = f"exp{exp_id[:6]}v1"
@@ -1010,7 +1014,7 @@ def stage_gateway(
         name=f"exp_{exp_id[:8]}_oe1",
         log_group=log_group,
         service_name=f"{agent['runtime_name']}.DEFAULT",
-        role_arn=settings.resources["execution_role_arn"],
+        role_arn=workspace.resources["execution_role_arn"],
         evaluators=chosen,
     )
     return {
@@ -1025,12 +1029,13 @@ def stage_gateway(
     }
 
 
-def stage_abtest(exp_id: str, gateway_art: dict, bundle_art: dict) -> dict[str, Any]:
-    settings = get_settings()
-    data = data_client()
+def stage_abtest(
+    exp_id: str, gateway_art: dict, bundle_art: dict, workspace: WorkspaceContext
+) -> dict[str, Any]:
+    data = data_client(workspace)
     test_name = f"exp_{exp_id[:8]}_bundle"
     assert_gateway_available(
-        gateway_art["gateway_arn"], own_test_name=test_name, data=data
+        gateway_art["gateway_arn"], data, own_test_name=test_name
     )
     variants = ac.config_bundle_variants(
         bundle_art["control"]["arn"],
@@ -1043,7 +1048,7 @@ def stage_abtest(exp_id: str, gateway_art: dict, bundle_art: dict) -> dict[str, 
             data,
             name=test_name,
             gatewayArn=gateway_art["gateway_arn"],
-            roleArn=settings.resources["execution_role_arn"],
+            roleArn=workspace.resources["execution_role_arn"],
             enableOnCreate=True,
             evaluationConfig={"onlineEvaluationConfigArn": gateway_art["online_eval_arn"]},
             variants=variants,
@@ -1061,7 +1066,7 @@ def stage_abtest(exp_id: str, gateway_art: dict, bundle_art: dict) -> dict[str, 
         )
         if response is None:
             assert_gateway_available(
-                gateway_art["gateway_arn"], own_test_name=test_name, data=data
+                gateway_art["gateway_arn"], data, own_test_name=test_name
             )
             raise
     return {"ab_test_id": response.get("abTestId"), "variants": variants}
@@ -1069,6 +1074,7 @@ def stage_abtest(exp_id: str, gateway_art: dict, bundle_art: dict) -> dict[str, 
 
 def send_gateway_traffic(
     gateway_url: str, target: str, prompts: list[str],
+    workspace: WorkspaceContext,
     poster: Any = None, signer: Any = None, progress: Progress = _noop,
     concurrency: int | None = None,
 ) -> dict[str, Any]:
@@ -1120,6 +1126,7 @@ def send_gateway_traffic(
         response = sigv4_post(
             url,
             {"prompt": prompt, "sessionId": session_id},
+            workspace,
             session_id=session_id,
             poster=poster,
             signer=signer,
@@ -1293,9 +1300,17 @@ def act_recommend(
     source: dict[str, Any] | None = None,
 ) -> None:
     exp = _get(exp_id)
+    workspace = context_for_workspace(exp.workspace_id)
     sel = tuple(t for t in REC_TYPES if t in (types or REC_TYPES))
-    rec = stage_recommend(exp_id, _agent_meta(exp), progress,
-                          types=sel, tools=tools, source=source)
+    rec = stage_recommend(
+        exp_id,
+        _agent_meta(exp, workspace),
+        workspace,
+        progress,
+        types=sel,
+        tools=tools,
+        source=source,
+    )
     # merge over the prior artifact: the type(s) just generated replace their
     # own keys; the other type's output and any earlier accept survive
     merged = dict(exp.artifacts.get("recommend") or {})
@@ -1323,8 +1338,9 @@ def action_accept(
 def action_bundles(exp: Experiment) -> dict[str, Any]:
     rec = exp.artifacts.get("recommend") or {}
     treatment_prompt = rec.get("accepted_prompt") or rec.get("recommended_prompt") or ""
+    workspace = context_for_workspace(exp.workspace_id)
     result = stage_bundles(
-        exp.id, _agent_meta(exp), treatment_prompt,
+        exp.id, _agent_meta(exp, workspace), treatment_prompt, workspace,
         rec.get("accepted_tool_descriptions"),
     )
     _update(exp.id, stage="bundles", artifact={"bundles": result})
@@ -1335,14 +1351,23 @@ def act_gateway(
     exp_id: str, progress: Progress, evaluators: Sequence[str] | None = None
 ) -> None:
     exp = _get(exp_id)
-    result = stage_gateway(exp_id, _agent_meta(exp), progress, evaluators=evaluators)
+    workspace = context_for_workspace(exp.workspace_id)
+    result = stage_gateway(
+        exp_id, _agent_meta(exp, workspace), workspace, progress,
+        evaluators=evaluators,
+    )
     _update(exp_id, stage="gateway", artifact={"gateway": result})
 
 
 def act_abtest(exp_id: str, progress: Progress) -> None:
     exp = _get(exp_id)
     progress("creating config-bundle A/B test (50/50)…")
-    result = stage_abtest(exp_id, exp.artifacts["gateway"], exp.artifacts["bundles"])
+    result = stage_abtest(
+        exp_id,
+        exp.artifacts["gateway"],
+        exp.artifacts["bundles"],
+        context_for_workspace(exp.workspace_id),
+    )
     _update(exp_id, stage="abtest", artifact={"abtest": result})
 
 
@@ -1377,6 +1402,7 @@ def act_traffic(
     result = send_gateway_traffic(
         gateway["gateway_url"], gateway["target_v1"],
         prompts,
+        context_for_workspace(exp.workspace_id),
         progress=progress,
     )
     result.update(dataset_info)
@@ -1386,7 +1412,7 @@ def act_traffic(
 def act_verdict(exp_id: str, progress: Progress) -> None:
     exp = _get(exp_id)
     ab_test_id = exp.artifacts["abtest"]["ab_test_id"]
-    data = data_client()
+    data = data_client(context_for_workspace(exp.workspace_id))
     deadline = time.time() + 900
     metrics: list[dict[str, Any]] = []
     while True:
@@ -1404,9 +1430,9 @@ def act_verdict(exp_id: str, progress: Progress) -> None:
             artifact={"verdict": {"metrics": metrics, **verdict}})
 
 
-def start_experiment(agent_row: Any) -> Experiment:
+def start_experiment(agent_row: Any, workspace: WorkspaceContext) -> Experiment:
     """Create the experiment row only — every stage waits for its action."""
-    control = control_client()
+    control = control_client(workspace)
     agent_meta = {
         "id": agent_row.id,
         "name": agent_row.name,
@@ -1420,6 +1446,7 @@ def start_experiment(agent_row: Any) -> Experiment:
     db = SessionLocal()
     try:
         exp = Experiment(
+            workspace_id=agent_row.workspace_id,
             name=f"EXP-{agent_row.name[:20]}", agent_id=agent_row.id,
             agent_name=agent_row.name, artifacts={"agent_meta": agent_meta},
         )
@@ -1481,7 +1508,7 @@ def act_promote(exp_id: str, progress: Progress) -> dict[str, Any]:
     """Stop the A/B test, apply treatment defaults, and deploy in place."""
     _update(exp_id, status="ready")
     exp = _get(exp_id)
-    data = data_client()
+    data = data_client(context_for_workspace(exp.workspace_id))
     ab_test_id = exp.artifacts["abtest"]["ab_test_id"]
     stopped = _stop_ab_test(data, ab_test_id, progress)
     prior = exp.artifacts.get("promote") or {}
@@ -1596,8 +1623,9 @@ def act_promote(exp_id: str, progress: Progress) -> dict[str, Any]:
 def act_cleanup(exp_id: str, progress: Progress = _noop) -> list[dict[str, str]]:
     """Tear down record-owned resources; keep the shared experiment Gateway."""
     exp = _get(exp_id)
-    control = control_client()
-    data = data_client()
+    workspace = context_for_workspace(exp.workspace_id)
+    control = control_client(workspace)
+    data = data_client(workspace)
     artifacts = exp.artifacts
     progress("tearing down A/B tests, online evals, bundles, gateway targets…")
     ab_ids = [a for a in [

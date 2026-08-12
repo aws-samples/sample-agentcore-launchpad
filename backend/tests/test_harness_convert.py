@@ -19,6 +19,8 @@ from app.deployer.zip_runtime import (
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
 
+from .conftest import ws_ctx
+
 FIXTURES = Path(__file__).parent / "fixtures"
 MAIN_PY = (FIXTURES / "harness_export_main.py").read_text()
 PYPROJECT = (FIXTURES / "harness_export_pyproject.toml").read_text()
@@ -216,10 +218,7 @@ def test_direct_kb_graft_fails_without_tools_collection_anchor():
 def test_discover_env_leaves_an_unresolvable_gateway_key_unset(monkeypatch):
     """No shared Gateway in the bootstrap config ⇒ the key stays unset and the
     exported client skips the gateway with a warning."""
-    monkeypatch.setattr(
-        hc, "get_settings",
-        lambda: SimpleNamespace(resources={"memory_id": "launchpad_memory-XYZ"}),
-    )
+    workspace = ws_ctx({"memory_id": "launchpad_memory-XYZ"})
     files = {
         "memory/session.py":
             'MEMORY_ID = os.getenv("MEMORY_MEMORY_LAUNCHPAD_MEMORY_HURAGN3ENF_ID")\n'
@@ -227,7 +226,7 @@ def test_discover_env_leaves_an_unresolvable_gateway_key_unset(monkeypatch):
         "mcp_client/client.py":
             'url = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_F6G7H8J9K0_URL")',
     }
-    env = hc.discover_env(files)
+    env = hc.discover_env(files, workspace)
     assert env["MEMORY_MEMORY_LAUNCHPAD_MEMORY_HURAGN3ENF_ID"] == "launchpad_memory-XYZ"
     assert env["GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_F6G7H8J9K0_URL"] is None
     assert "AWS_REGION" not in env  # runtime-provided
@@ -240,21 +239,18 @@ def test_discover_env_wires_the_shared_gateway_but_not_the_kb_gateway(monkeypatc
     grafted direct-retrieval tools, so wiring it too would give the runtime two
     duplicate retrieval surfaces.
     """
-    monkeypatch.setattr(
-        hc, "get_settings",
-        lambda: SimpleNamespace(resources={
+    workspace = ws_ctx({
             "gateway_id": "launchpad-gw-a1b2c3d4e5",
             "gateway_url": "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp",
             "kb_gateway_id": "launchpad-kb-gw-f6g7h8j9k0",
             "kb_gateway_url": "https://launchpad-kb-gw-f6g7h8j9k0.gateway.example/mcp",
-        }),
-    )
+        })
     files = {
         "mcp_client/client.py":
             'a = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL")\n'
             'b = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_KB_GW_F6G7H8J9K0_URL")',
     }
-    env = hc.discover_env(files)
+    env = hc.discover_env(files, workspace)
     assert env["GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL"] == (
         "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp"
     )
@@ -335,15 +331,12 @@ def _source_agent():
 
 
 def test_build_conversion_spec_shape(monkeypatch):
-    monkeypatch.setattr(
-        hc, "get_settings",
-        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
-    )
+    workspace = ws_ctx({"memory_id": "mem-1"})
     files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT,
              "mcp_client/client.py":
                  'url = os.environ.get("GATEWAY_GATEWAY_X_URL")'}
     spec = hc.build_conversion_spec(
-        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt",
+        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", workspace,
     )
     assert spec.method == "zip_runtime"
     assert spec.code_bundle and "main.py" in spec.code_bundle
@@ -357,10 +350,7 @@ def test_build_conversion_spec_shape(monkeypatch):
 
 
 def test_build_conversion_spec_materializes_direct_kb_support(monkeypatch):
-    monkeypatch.setattr(
-        hc, "get_settings",
-        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
-    )
+    workspace = ws_ctx({"memory_id": "mem-1"})
     source = _source_agent()
     source.spec = {
         **source.spec,
@@ -381,7 +371,7 @@ def test_build_conversion_spec_materializes_direct_kb_support(monkeypatch):
     }
 
     spec = hc.build_conversion_spec(
-        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt"
+        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", workspace
     )
 
     assert [kb.kb_id for kb in spec.knowledge_bases] == ["KB111", "KB222"]
@@ -404,13 +394,11 @@ def test_build_conversion_spec_materializes_direct_kb_support(monkeypatch):
 
 
 def test_build_conversion_spec_without_kbs_keeps_existing_bundle_shape(monkeypatch):
-    monkeypatch.setattr(
-        hc, "get_settings",
-        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
-    )
+    workspace = ws_ctx({"memory_id": "mem-1"})
     files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT}
     spec = hc.build_conversion_spec(
-        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt"
+        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt",
+        workspace,
     )
     expected = hc.graft_config_bundle(
         MAIN_PY,
@@ -425,20 +413,21 @@ def test_build_conversion_spec_without_kbs_keeps_existing_bundle_shape(monkeypat
 def test_build_conversion_spec_carries_model_source(monkeypatch):
     """model_source rides along with model_id. A source harness stored before the
     field existed converts to "bedrock" (Converse), never Mantle."""
-    monkeypatch.setattr(
-        hc, "get_settings",
-        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
-    )
+    workspace = ws_ctx({"memory_id": "mem-1"})
     files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT}
     base = ["bedrock-agentcore==1.17.*"]
 
-    legacy = hc.build_conversion_spec(_source_agent(), files, base, "aurora-support-rt")
+    legacy = hc.build_conversion_spec(
+        _source_agent(), files, base, "aurora-support-rt", workspace
+    )
     assert legacy.model_source == "bedrock"
 
     mantle_source = _source_agent()
     mantle_source.spec = {**mantle_source.spec,
                           "model_id": "openai.gpt-5.6-sol", "model_source": "mantle"}
-    converted = hc.build_conversion_spec(mantle_source, files, base, "aurora-support-rt")
+    converted = hc.build_conversion_spec(
+        mantle_source, files, base, "aurora-support-rt", workspace
+    )
     assert converted.model_id == "openai.gpt-5.6-sol"
     assert converted.model_source == "mantle"
     # The CLI export builds its own model (model/load.py), not the strands
@@ -472,10 +461,7 @@ def test_conversion_carries_skills_so_the_exec_role_grants_s3_read(monkeypatch):
     field made the deploy report success and the runtime fail at INVOKE with
     `Failed to resolve S3 skill … AccessDenied`, because the exported code fetches
     the prefixes it baked in."""
-    monkeypatch.setattr(
-        hc, "get_settings",
-        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
-    )
+    workspace = ws_ctx({"memory_id": "mem-1"})
     source = _source_agent()
     source.spec = {**source.spec, "skills": [SKILL_URI]}
     files = {
@@ -484,7 +470,7 @@ def test_conversion_carries_skills_so_the_exec_role_grants_s3_read(monkeypatch):
     }
 
     spec = hc.build_conversion_spec(
-        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt"
+        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", workspace
     )
 
     assert spec.skills == [SKILL_URI]
@@ -495,10 +481,7 @@ def test_skills_only_the_exported_code_names_are_still_granted(monkeypatch):
     """The grant must cover what the CODE fetches. A source row that never
     recorded the bundle (or recorded it before the export changed) would
     otherwise authorize the role for the wrong thing."""
-    monkeypatch.setattr(
-        hc, "get_settings",
-        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
-    )
+    workspace = ws_ctx({"memory_id": "mem-1"})
     source = _source_agent()  # ledger row has NO skills
     files = {
         "main.py": MAIN_PY + f'\ns3_skill_sources = ["{SKILL_URI}"]\n',
@@ -506,17 +489,14 @@ def test_skills_only_the_exported_code_names_are_still_granted(monkeypatch):
     }
 
     spec = hc.build_conversion_spec(
-        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt"
+        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", workspace
     )
 
     assert spec.skills == [SKILL_URI]
 
 
 def test_non_s3_skill_sources_are_flagged_not_silently_claimed(monkeypatch):
-    monkeypatch.setattr(
-        hc, "get_settings",
-        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
-    )
+    workspace = ws_ctx({"memory_id": "mem-1"})
     files = {
         "main.py": MAIN_PY
         + '\ngit_skill_sources = ["https://example.invalid/repo.git"]\n',
@@ -524,7 +504,8 @@ def test_non_s3_skill_sources_are_flagged_not_silently_claimed(monkeypatch):
     }
 
     spec = hc.build_conversion_spec(
-        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt"
+        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt",
+        workspace,
     )
 
     assert spec.skills == []  # no S3 prefix to grant
@@ -532,15 +513,13 @@ def test_non_s3_skill_sources_are_flagged_not_silently_claimed(monkeypatch):
 
 
 def test_a_skill_free_harness_claims_nothing_about_skills(monkeypatch):
-    monkeypatch.setattr(
-        hc, "get_settings",
-        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
-    )
+    workspace = ws_ctx({"memory_id": "mem-1"})
     spec = hc.build_conversion_spec(
         _source_agent(),
         {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT},
         ["bedrock-agentcore==1.17.*"],
         "aurora-support-rt",
+        workspace,
     )
     assert spec.skills == []
     assert "skills" not in spec.conversion_notes
@@ -551,16 +530,15 @@ def test_pins_are_resolved_against_the_specs_own_platform_list(monkeypatch):
     """A Mantle harness (the lab-quota-advisor shape) must resolve its pins against
     the Mantle extras too. Resolving against the base list alone is what produced
     `mcp==2.0.0` — un-lockable, because strands-agents caps `mcp<2.0.0`."""
-    monkeypatch.setattr(
-        hc, "get_settings",
-        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
-    )
+    workspace = ws_ctx({"memory_id": "mem-1"})
     files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT}
     mantle_source = _source_agent()
     mantle_source.spec = {**mantle_source.spec, "model_source": "mantle"}
 
     platform = platform_requirements(*hc.conversion_platform_inputs(mantle_source))
-    hc.build_conversion_spec(mantle_source, files, platform, "aurora-support-rt")
+    hc.build_conversion_spec(
+        mantle_source, files, platform, "aurora-support-rt", workspace
+    )
 
     assert RESOLVED_AGAINST, "resolve_pins was never called"
     resolved_against = RESOLVED_AGAINST[-1]
@@ -574,10 +552,6 @@ def test_the_pin_platform_matches_what_the_package_stage_will_prepend(monkeypatc
     if that derivation disagrees with the spec actually built, pins are resolved
     against a graph the deploy never uses — silently reintroducing this whole bug.
     """
-    monkeypatch.setattr(
-        hc, "get_settings",
-        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
-    )
     files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT}
     for model_source in ("bedrock", "mantle"):
         source = _source_agent()
@@ -585,7 +559,9 @@ def test_the_pin_platform_matches_what_the_package_stage_will_prepend(monkeypatc
 
         # what the router computes up front …
         platform = platform_requirements(*hc.conversion_platform_inputs(source))
-        spec = hc.build_conversion_spec(source, files, platform, "aurora-support-rt")
+        spec = hc.build_conversion_spec(
+            source, files, platform, "aurora-support-rt", ws_ctx()
+        )
 
         # … must equal what the package stage prepends to the resulting spec
         assert platform == platform_requirements(
@@ -648,10 +624,6 @@ def test_convert_happy_path_and_in_flight_guard(client, monkeypatch):
     monkeypatch.setattr(
         hc, "export_harness",
         lambda arn: {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT},
-    )
-    monkeypatch.setattr(
-        hc, "get_settings",
-        lambda: SimpleNamespace(resources={"memory_id": "mem-1"}),
     )
     started: list[str] = []
     monkeypatch.setattr(agents_router, "start_deploy_async",
@@ -937,14 +909,11 @@ def test_build_conversion_spec_carries_gateway_attachments(monkeypatch):
     as the dropped spec.skills once was: the deploy reports READY and the runtime
     reaches no tools, because agent_iam gates the AgentCore Identity statements —
     and the invoke chain gates runtimeUserId — on that field being present."""
-    monkeypatch.setattr(
-        hc, "get_settings",
-        lambda: SimpleNamespace(resources={
+    workspace = ws_ctx({
             "memory_id": "mem-1",
             "gateway_id": "launchpad-gw-a1b2c3d4e5",
             "gateway_url": "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp",
-        }),
-    )
+        })
     source = _source_agent()
     source.spec = {
         **source.spec,
@@ -961,7 +930,7 @@ def test_build_conversion_spec_carries_gateway_attachments(monkeypatch):
             'url = os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL")',
     }
     spec = hc.build_conversion_spec(
-        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt",
+        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", workspace,
     )
     # gateway + mcp carried (both drive _uses_gateway); builtin is a Harness-only
     # tool type the exported code does not reproduce
@@ -988,12 +957,10 @@ def test_build_conversion_spec_skips_the_softfail_graft_without_a_gateway_client
 ):
     """An export carrying no mcp_client/client.py has no gateway to soft-fail. That
     is benign — it must not fail the conversion and must not graft anything."""
-    monkeypatch.setattr(
-        hc, "get_settings", lambda: SimpleNamespace(resources={"memory_id": "mem-1"})
-    )
+    workspace = ws_ctx({"memory_id": "mem-1"})
     files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT}
     spec = hc.build_conversion_spec(
-        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt",
+        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", workspace,
     )
     assert spec.tools == []
     assert hc.GW_SOFTFAIL_START not in spec.code_bundle["main.py"]
@@ -1034,21 +1001,18 @@ def test_lazy_gateway_token_graft_fails_on_a_missing_anchor():
 
 
 def test_conversion_applies_both_gateway_grafts(monkeypatch):
-    monkeypatch.setattr(
-        hc, "get_settings",
-        lambda: SimpleNamespace(resources={
+    workspace = ws_ctx({
             "memory_id": "mem-1",
             "gateway_id": "launchpad-gw-a1b2c3d4e5",
             "gateway_url": "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp",
-        }),
-    )
+        })
     source = _source_agent()
     source.spec = {**source.spec,
                    "tools": [{"type": "gateway", "name": "hr-database"}]}
     files = {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT,
              "mcp_client/client.py": MCP_CLIENT_PY}
     spec = hc.build_conversion_spec(
-        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt",
+        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", workspace,
     )
     # main.py: the import-time crash is contained
     assert hc.GW_SOFTFAIL_START in spec.code_bundle["main.py"]

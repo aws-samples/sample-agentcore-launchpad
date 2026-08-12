@@ -8,10 +8,12 @@ deploy time, and reused when a job resumes.
 
 import pytest
 
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.deployer import container
 from app.deployer.pipeline import StageContext
 from app.models.ledger import Agent, Deployment
+
+from .conftest import ws_ctx
 
 DIGEST = "sha256:" + "c" * 64
 OTHER_DIGEST = "sha256:" + "d" * 64
@@ -25,7 +27,7 @@ def rows():
     db = SessionLocal()
     try:
         agent = Agent(
-            name="digest-probe",
+            workspace_id=DEFAULT_WORKSPACE_ID, name="digest-probe",
             method="container",
             spec={
                 "name": "digest-probe",
@@ -36,7 +38,7 @@ def rows():
         )
         db.add(agent)
         db.flush()
-        deployment = Deployment(agent_id=agent.id)
+        deployment = Deployment(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent.id)
         db.add(deployment)
         db.commit()
         return agent.id, deployment.id
@@ -49,6 +51,7 @@ def _ctx(agent_id: str, deployment_id: str, **scratch) -> StageContext:
         agent_id=agent_id,
         deployment_id=deployment_id,
         job_id="job-digest-probe",
+        workspace=ws_ctx(),
         scratch=dict(scratch),
         log=lambda msg: None,
     )
@@ -120,7 +123,8 @@ class TestScanGate:
 
     def _logging_ctx(self, logs):
         return StageContext(
-            agent_id="a", deployment_id="d", job_id="j", log=logs.append
+            agent_id="a", deployment_id="d", job_id="j",
+            workspace=ws_ctx(), log=logs.append,
         )
 
     def test_a_clean_scan_passes(self, rows):

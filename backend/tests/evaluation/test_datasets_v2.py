@@ -8,10 +8,11 @@ from unittest.mock import MagicMock
 
 from sqlalchemy import create_engine, inspect, text
 
-from app.core.db import SessionLocal, _migrate
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal, _migrate
 from app.evaluation import service as svc
 from app.evaluation.models import EvalDataset, EvalRun
 from app.evaluation.scenarios import ground_truth_metadata, normalize_scenarios
+from tests.conftest import ws_ctx
 from tests.evaluation.test_runs_flow import make_agent, stub_environment
 
 SCENARIO = {
@@ -153,7 +154,7 @@ def stub_cloud(monkeypatch, *, get_status="ACTIVE", failure_reason=None):
     if failure_reason:
         detail["failureReason"] = failure_reason
     stub.get_dataset.return_value = detail
-    monkeypatch.setattr("app.evaluation.routers.control_client", lambda: stub)
+    monkeypatch.setattr("app.evaluation.routers.control_client", lambda _ws=None: stub)
     return stub
 
 
@@ -247,7 +248,7 @@ def stub_cloud_run(monkeypatch, *, schema_type="AGENTCORE_EVALUATION_PREDEFINED_
         base = PERSONA if schema_type == "AGENTCORE_EVALUATION_SIMULATED_V1" else SCENARIO
         examples = [{"exampleId": "ex-1", **base}]
     stub.list_dataset_examples.return_value = {"examples": examples}
-    monkeypatch.setattr("app.evaluation.routers.control_client", lambda: stub)
+    monkeypatch.setattr("app.evaluation.routers.control_client", lambda _ws=None: stub)
     return stub
 
 
@@ -357,7 +358,7 @@ def test_run_on_simulated_cloud_dataset_with_actor_model(client, monkeypatch):
 def test_run_rejects_local_plus_cloud_dataset(client, monkeypatch):
     db = SessionLocal()
     agent = make_agent(db, name="cloud-xor-agent")
-    ds = EvalDataset(name="local", items=[{"prompt": "x"}])
+    ds = EvalDataset(workspace_id=DEFAULT_WORKSPACE_ID, name="local", items=[{"prompt": "x"}])
     db.add(ds)
     db.commit()
     ds_id = ds.id
@@ -375,7 +376,9 @@ def test_run_rejects_local_plus_cloud_dataset(client, monkeypatch):
 def test_multi_turn_scenarios_replay_in_one_session(monkeypatch):
     db = SessionLocal()
     agent = make_agent(db, name="scenario-agent")
-    run = EvalRun(agent_id=agent.id, agent_name=agent.name, mode="evaluators",
+    run = EvalRun(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        agent_id=agent.id, agent_name=agent.name, mode="evaluators",
                   evaluators=["Builtin.Correctness"], status="queued")
     db.add(run)
     db.commit()
@@ -396,7 +399,9 @@ def test_multi_turn_scenarios_replay_in_one_session(monkeypatch):
 
     items = [SCENARIO, {"prompt": "standalone question"}]
     svc.execute_run(
-        run_id, agent_arn=agent.arn, method="zip_runtime", service_name="svc.DEFAULT",
+        run_id,
+        workspace=ws_ctx(),
+        agent_arn=agent.arn, method="zip_runtime", service_name="svc.DEFAULT",
         log_group="/lg",
         items=items, evaluators=["Builtin.Correctness"], mode="evaluators",
         wait_seconds=0,
@@ -421,7 +426,7 @@ def test_multi_turn_scenarios_replay_in_one_session(monkeypatch):
 def test_trajectory_evaluator_needs_ground_truth(client, monkeypatch):
     db = SessionLocal()
     agent = make_agent(db, name="traj-agent")
-    plain = EvalDataset(name="no-gt", items=[{"prompt": "x"}])
+    plain = EvalDataset(workspace_id=DEFAULT_WORKSPACE_ID, name="no-gt", items=[{"prompt": "x"}])
     db.add(plain)
     db.commit()
     plain_id = plain.id
@@ -447,7 +452,9 @@ def test_trajectory_evaluator_needs_ground_truth(client, monkeypatch):
 def test_trajectory_evaluator_accepted_with_ground_truth(client, monkeypatch):
     db = SessionLocal()
     agent = make_agent(db, name="traj-ok-agent")
-    ds = EvalDataset(name="with-gt", kind="predefined", items=[SCENARIO])
+    ds = EvalDataset(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="with-gt", kind="predefined", items=[SCENARIO])
     db.add(ds)
     db.commit()
     ds_id = ds.id

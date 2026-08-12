@@ -493,7 +493,7 @@ def test_infrastructure_failures_are_not_recorded_as_denials(client, monkeypatch
     outage manufactured audit evidence for a denial that never happened."""
     from app.core.errors import AppError
 
-    def fail(tool, args, username="demo"):
+    def fail(_ws, tool, args, username="demo"):
         raise AppError(code, "infrastructure failure", {"aws_code": "NotAuthorizedException"})
 
     monkeypatch.setattr(gov.mcp_client, "tools_call", fail)
@@ -519,7 +519,7 @@ def test_captured_policy_denial_is_recorded(client, monkeypatch):
         ),
     }
 
-    def deny(tool, args, username="demo"):
+    def deny(_ws, tool, args, username="demo"):
         raise AppError("gateway.rpc_error", detail["message"], detail)
 
     monkeypatch.setattr(gov.mcp_client, "tools_call", deny)
@@ -536,7 +536,7 @@ def test_rpc_code_alone_is_enough_to_detect_a_denial(client, monkeypatch):
     """A reworded message must not break detection — the -32002 code carries it."""
     from app.core.errors import AppError
 
-    def deny(tool, args, username="demo"):
+    def deny(_ws, tool, args, username="demo"):
         raise AppError("gateway.rpc_error", "some future wording", {"code": -32002})
 
     monkeypatch.setattr(gov.mcp_client, "tools_call", deny)
@@ -546,7 +546,7 @@ def test_rpc_code_alone_is_enough_to_detect_a_denial(client, monkeypatch):
 def test_gateway_401_is_a_denial(client, monkeypatch):
     from app.core.errors import AppError
 
-    def unauthorized(tool, args, username="demo"):
+    def unauthorized(_ws, tool, args, username="demo"):
         raise AppError("gateway.unauthorized", "gateway rejected the call (403)", {})
 
     monkeypatch.setattr(gov.mcp_client, "tools_call", unauthorized)
@@ -561,7 +561,7 @@ def test_unrecognised_rpc_error_is_not_assumed_to_be_a_denial(client, monkeypatc
     inventing an ALLOW or a DENY."""
     from app.core.errors import AppError
 
-    def odd(tool, args, username="demo"):
+    def odd(_ws, tool, args, username="demo"):
         raise AppError("gateway.rpc_error", "internal error", {"code": -32603})
 
     monkeypatch.setattr(gov.mcp_client, "tools_call", odd)
@@ -579,7 +579,7 @@ def test_tool_level_failure_still_counts_as_allowed(client, monkeypatch):
     monkeypatch.setattr(
         gov.mcp_client,
         "tools_call",
-        lambda tool, args, username="demo": {
+        lambda _ws, tool, args, username="demo": {
             "isError": True,
             "content": [{"type": "text", "text": "ValidationException - ..."}],
         },
@@ -594,7 +594,7 @@ def test_tool_level_failure_still_counts_as_allowed(client, monkeypatch):
 def test_policy_test_records_decision(client, monkeypatch):
     monkeypatch.setattr(
         gov.mcp_client, "tools_call",
-        lambda tool, args, username="demo": {"content": [{"text": "ok"}]},
+        lambda _ws, tool, args, username="demo": {"content": [{"text": "ok"}]},
     )
     res = client.post(
         "/api/governance/policy-test",
@@ -607,7 +607,7 @@ def test_policy_test_records_decision(client, monkeypatch):
 
     from app.core.errors import AppError
 
-    def deny(tool, args, username="demo"):
+    def deny(_ws, tool, args, username="demo"):
         raise AppError("gateway.rpc_error", "Tool Execution Denied", {"policy": "R-02"})
 
     monkeypatch.setattr(gov.mcp_client, "tools_call", deny)
@@ -633,7 +633,7 @@ def test_retired_demo_identity_is_rejected(client, monkeypatch):
     monkeypatch.setattr(
         gov.mcp_client,
         "tools_call",
-        lambda tool, args, username="demo": pytest.fail("must not reach the gateway"),
+        lambda _ws, tool, args, username="demo": pytest.fail("must not reach the gateway"),
     )
     res = _post_policy_test(client, username="river")
     assert res.status_code == 422

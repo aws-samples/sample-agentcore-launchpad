@@ -12,6 +12,7 @@ from app.evaluation.models import EvalRun
 from app.evaluation.service import resolve_telemetry
 from app.optimization.service import discover_agent_tools
 from app.services.observability import SPANS_SOURCE, run_insights_queries
+from app.services.workspace import WorkspaceContext
 
 DEFAULT_LOOKBACK_HOURS = 24
 MIN_LOOKBACK_HOURS = 24
@@ -88,10 +89,12 @@ def _service_filter(service_name: str) -> str:
     return f"resource.attributes.service.name = {json.dumps(service_name)}"
 
 
-def _query_snapshot(agent: Any, lookback_hours: int) -> _TelemetrySnapshot:
+def _query_snapshot(
+    agent: Any, lookback_hours: int, workspace: WorkspaceContext
+) -> _TelemetrySnapshot:
     expected_tools = sorted(discover_agent_tools(agent.spec or {}))
     try:
-        service_name, _ = resolve_telemetry(agent)
+        service_name, _ = resolve_telemetry(agent, workspace)
         service_filter = _service_filter(service_name)
         rows = run_insights_queries(
             {
@@ -114,6 +117,7 @@ def _query_snapshot(agent: Any, lookback_hours: int) -> _TelemetrySnapshot:
 """,
             },
             lookback_hours,
+            workspace=workspace,
         )
     except Exception:
         return {
@@ -156,8 +160,12 @@ def _query_snapshot(agent: Any, lookback_hours: int) -> _TelemetrySnapshot:
     }
 
 
-def _snapshot(agent: Any, lookback_hours: int, *, force: bool) -> _TelemetrySnapshot:
-    cache_key = (agent.id, lookback_hours)
+def _snapshot(
+    agent: Any, lookback_hours: int, workspace: WorkspaceContext, *, force: bool
+) -> _TelemetrySnapshot:
+    # The workspace is in the key: the same agent id in two environments reads
+    # two different regions' telemetry.
+    cache_key = (workspace.id, agent.id, lookback_hours)
     now = time.monotonic()
     with _CACHE_LOCK:
         cached = _CACHE.get(cache_key)
@@ -171,16 +179,16 @@ def _snapshot(agent: Any, lookback_hours: int, *, force: bool) -> _TelemetrySnap
             cached = _CACHE.get(cache_key)
             if cached and not force and now - cached[0] < CACHE_TTL_SECONDS:
                 return cached[1]
-        value = _query_snapshot(agent, lookback_hours)
+        value = _query_snapshot(agent, lookback_hours, workspace)
         with _CACHE_LOCK:
             _CACHE[cache_key] = (time.monotonic(), value)
         return value
 
 
-def _latest_run(db: Session, agent_id: str) -> LatestRun | None:
+def _latest_run(db: Session, agent_id: str, workspace_id: str) -> LatestRun | None:
     run = (
         db.query(EvalRun)
-        .filter(EvalRun.agent_id == agent_id)
+        .filter(EvalRun.workspace_id == workspace_id, EvalRun.agent_id == agent_id)
         .order_by(EvalRun.created_at.desc())
         .first()
     )
@@ -197,15 +205,16 @@ def _latest_run(db: Session, agent_id: str) -> LatestRun | None:
 def project_readiness(
     agent: Any,
     db: Session,
+    workspace: WorkspaceContext,
     *,
     lookback_hours: int = DEFAULT_LOOKBACK_HOURS,
     force: bool = False,
 ) -> ReadinessResult:
     """Project telemetry evidence plus the newest local run for one Agent."""
-    snapshot = _snapshot(agent, lookback_hours, force=force)
+    snapshot = _snapshot(agent, lookback_hours, workspace, force=force)
     return {
         "agent_id": agent.id,
         "lookback_hours": lookback_hours,
         **snapshot,
-        "latest_run": _latest_run(db, agent.id),
+        "latest_run": _latest_run(db, agent.id, workspace.id),
     }

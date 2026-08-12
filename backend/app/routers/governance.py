@@ -7,10 +7,10 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Path
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import AppError
 from app.models.ledger import PolicyDecision
+from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.governance import (
     EngineRequest,
     GatewayModeRequest,
@@ -40,53 +40,72 @@ OPERATION_ID = Path(pattern=r"^[a-f0-9]{32}$")
 
 
 @router.get("/governance/gateways")
-def get_gateways(refresh: bool = False) -> dict[str, Any]:
-    settings = get_settings()
+def get_gateways(
+    refresh: bool = False,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     return {
         "gateways": governance_service.list_gateway_views(
-            control_client(),
-            settings=settings,
+            control_client(ws.context),
+            ws.context,
             refresh=refresh,
         ),
         # one console session scopes exactly one account/region
-        "account_id": settings.account_id or None,
-        "region": settings.region,
+        "account_id": ws.context.account_id or None,
+        "region": ws.context.region,
     }
 
 
 @router.get("/governance/gateways/{gateway_id}")
-def get_gateway_detail(gateway_id: str = GATEWAY_ID) -> dict[str, Any]:
+def get_gateway_detail(
+    gateway_id: str = GATEWAY_ID,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     return governance_service.gateway_detail(
-        control_client(),
-        iam_client(),
+        control_client(ws.context),
+        iam_client(ws.context),
         gateway_id,
+        ws.context,
     )
 
 
 @router.post("/governance/gateways/{gateway_id}/manage")
-def manage_gateway(gateway_id: str = GATEWAY_ID) -> dict[str, Any]:
-    return governance_service.manage_gateway(control_client(), gateway_id)
+def manage_gateway(
+    gateway_id: str = GATEWAY_ID,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return governance_service.manage_gateway(control_client(ws.context), gateway_id)
 
 
 @router.delete("/governance/gateways/{gateway_id}/manage")
-def unmanage_gateway(gateway_id: str = GATEWAY_ID) -> dict[str, Any]:
-    return governance_service.unmanage_gateway(control_client(), gateway_id)
+def unmanage_gateway(
+    gateway_id: str = GATEWAY_ID,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return governance_service.unmanage_gateway(control_client(ws.context), gateway_id)
 
 
 @router.get("/governance/gateways/{gateway_id}/registry-preview")
-def get_gateway_registry_preview(gateway_id: str = GATEWAY_ID) -> dict[str, Any]:
-    return governance_service.gateway_registry_preview(control_client(), gateway_id)
+def get_gateway_registry_preview(
+    gateway_id: str = GATEWAY_ID,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return governance_service.gateway_registry_preview(
+        control_client(ws.context), gateway_id, ws.context
+    )
 
 
 @router.post("/governance/gateways/{gateway_id}/registry-import")
 def import_gateway_registry(
     req: RegistryImportRequest,
     gateway_id: str = GATEWAY_ID,
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     return governance_service.import_gateway_registry(
-        control_client(),
+        control_client(ws.context),
         gateway_id,
         req,
+        ws.context,
     )
 
 
@@ -94,11 +113,13 @@ def import_gateway_registry(
 def retire_gateway_legacy_records(
     req: RetireLegacyRequest,
     gateway_id: str = GATEWAY_ID,
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     return governance_service.retire_gateway_legacy_records(
-        control_client(),
+        control_client(ws.context),
         gateway_id,
         req,
+        ws.context,
     )
 
 
@@ -106,8 +127,11 @@ def retire_gateway_legacy_records(
 def get_gateway_policies(
     gateway_id: str = GATEWAY_ID,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return governance_service.policies_view(control_client(), gateway_id, db=db)
+    return governance_service.policies_view(
+        control_client(ws.context), gateway_id, db=db
+    )
 
 
 @router.post("/governance/gateways/{gateway_id}/engine", status_code=202)
@@ -116,10 +140,12 @@ def attach_policy_engine(
     background_tasks: BackgroundTasks,
     gateway_id: str = GATEWAY_ID,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     operation = governance_service.queue_engine_attach(
         db,
-        control_client(),
+        control_client(ws.context),
+        ws.context,
         gateway_id,
         req,
     )
@@ -133,10 +159,12 @@ def create_gateway_policy(
     background_tasks: BackgroundTasks,
     gateway_id: str = GATEWAY_ID,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     operation = governance_service.queue_policy_create(
         db,
-        control_client(),
+        control_client(ws.context),
+        ws.context,
         gateway_id,
         req,
     )
@@ -154,10 +182,12 @@ def update_gateway_policy(
     gateway_id: str = GATEWAY_ID,
     policy_id: str = RESOURCE_ID,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     operation = governance_service.queue_policy_update(
         db,
-        control_client(),
+        control_client(ws.context),
+        ws.context,
         gateway_id,
         policy_id,
         req,
@@ -176,10 +206,12 @@ def delete_gateway_policy(
     gateway_id: str = GATEWAY_ID,
     policy_id: str = RESOURCE_ID,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     operation = governance_service.queue_policy_delete(
         db,
-        control_client(),
+        control_client(ws.context),
+        ws.context,
         gateway_id,
         policy_id,
         req,
@@ -198,16 +230,18 @@ def promote_gateway_policy(
     gateway_id: str = GATEWAY_ID,
     policy_id: str = RESOURCE_ID,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     operation = governance_service.queue_policy_transition(
         db,
-        control_client(),
+        control_client(ws.context),
+        ws.context,
         gateway_id,
         policy_id,
         req,
         rollback=False,
         evidence_count=governance_evidence.evidence_count(
-            cw_client(), gateway_id, req.evidence_range
+            cw_client(ws.context), gateway_id, req.evidence_range
         ),
     )
     background_tasks.add_task(governance_service.run_policy_change, operation["id"])
@@ -224,16 +258,18 @@ def rollback_gateway_policy(
     gateway_id: str = GATEWAY_ID,
     policy_id: str = RESOURCE_ID,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     operation = governance_service.queue_policy_transition(
         db,
-        control_client(),
+        control_client(ws.context),
+        ws.context,
         gateway_id,
         policy_id,
         req,
         rollback=True,
         evidence_count=governance_evidence.evidence_count(
-            cw_client(), gateway_id, req.evidence_range
+            cw_client(ws.context), gateway_id, req.evidence_range
         ),
     )
     background_tasks.add_task(governance_service.run_policy_change, operation["id"])
@@ -246,15 +282,17 @@ def update_gateway_mode(
     background_tasks: BackgroundTasks,
     gateway_id: str = GATEWAY_ID,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     operation = governance_service.queue_gateway_mode(
         db,
-        control_client(),
-        iam_client(),
+        control_client(ws.context),
+        ws.context,
+        iam_client(ws.context),
         gateway_id,
         req,
         evidence_count=governance_evidence.evidence_count(
-            cw_client(), gateway_id, req.evidence_range
+            cw_client(ws.context), gateway_id, req.evidence_range
         ),
     )
     background_tasks.add_task(governance_service.run_policy_change, operation["id"])
@@ -266,10 +304,12 @@ def start_gateway_generation(
     req: ScopedGenerationRequest,
     gateway_id: str = GATEWAY_ID,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     result = governance_service.start_generation(
         db,
-        control_client(),
+        control_client(ws.context),
+        ws.context,
         gateway_id,
         req,
     )
@@ -286,9 +326,10 @@ def start_gateway_generation(
 def get_gateway_generation(
     gateway_id: str = GATEWAY_ID,
     generation_id: str = RESOURCE_ID,
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     return governance_service.generation_view(
-        control_client(),
+        control_client(ws.context),
         gateway_id,
         generation_id,
     )
@@ -298,8 +339,9 @@ def get_gateway_generation(
 def get_gateway_audit(
     gateway_id: str = GATEWAY_ID,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return {"changes": governance_service.list_audit(db, gateway_id)}
+    return {"changes": governance_service.list_audit(db, ws.id, gateway_id)}
 
 
 @router.get("/governance/gateways/{gateway_id}/decisions")
@@ -308,15 +350,17 @@ def get_gateway_decisions(
     range: Literal["1h", "6h", "24h", "7d"] = "24h",
     policy_id: str | None = None,
     force: bool = False,
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     return governance_evidence.gateway_decisions(
-        control_client(),
-        cw_client(),
+        control_client(ws.context),
+        cw_client(ws.context),
         gateway_id,
         range,
+        ws.id,
         policy_id,
         force,
-        logs=logs_client(),
+        logs=logs_client(ws.context),
     )
 
 
@@ -324,18 +368,15 @@ def get_gateway_decisions(
 def get_governance_operation(
     operation_id: str = OPERATION_ID,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return {"operation": governance_service.get_operation(db, operation_id)}
+    return {"operation": governance_service.get_operation(db, ws.id, operation_id)}
 
 
 @router.get("/governance/policies")
-def get_policies() -> dict[str, Any]:
-    settings = get_settings()
-    engine_id = settings.resources.get("policy_engine_id")
-    if not engine_id:
-        raise AppError("policy.not_bootstrapped", "policy engine missing — run bootstrap",
-                       status_code=503)
-    control = control_client()
+def get_policies(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
+    control = control_client(ws.context)
+    engine_id = governance_service.require_attached_policy_engine_id(control, ws.context)
     engine = policy_api.find_policy_engine(control, engine_id)
     if engine is None:
         raise AppError(
@@ -345,7 +386,7 @@ def get_policies() -> dict[str, Any]:
             status_code=503,
         )
     gateway = control.get_gateway(
-        gatewayIdentifier=settings.resources.get("gateway_id")
+        gatewayIdentifier=ws.context.resources.get("gateway_id")
     )
     policies = []
     for summary in control.list_policies(policyEngineId=engine_id, maxResults=20).get(
@@ -450,7 +491,11 @@ def _determining_policy_id(exc: AppError) -> str | None:
 
 
 @router.post("/governance/policy-test")
-def policy_test(req: PolicyTestRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+def policy_test(
+    req: PolicyTestRequest,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     """Evaluate a real tools/call as the chosen principal and record the decision.
 
     Only ALLOW and DENY are authorization decisions and get journaled. ERROR means
@@ -461,7 +506,9 @@ def policy_test(req: PolicyTestRequest, db: Session = Depends(get_db)) -> dict[s
     outcome, reason = "ALLOW", None
     policy_id = None
     try:
-        result = mcp_client.tools_call(req.tool, req.arguments, username=req.username)
+        result = mcp_client.tools_call(
+            ws.context, req.tool, req.arguments, username=req.username
+        )
         # A tool that fails its own validation returns a successful MCP result with
         # isError: true — the authorization question was still answered with a permit,
         # so this stays ALLOW.
@@ -476,7 +523,11 @@ def policy_test(req: PolicyTestRequest, db: Session = Depends(get_db)) -> dict[s
     decision_id = None
     if outcome in ("ALLOW", "DENY"):
         decision = PolicyDecision(
-            principal=principal, tool=req.tool, outcome=outcome, reason=reason
+            workspace_id=ws.id,
+            principal=principal,
+            tool=req.tool,
+            outcome=outcome,
+            reason=reason,
         )
         db.add(decision)
         db.commit()
@@ -493,9 +544,16 @@ def policy_test(req: PolicyTestRequest, db: Session = Depends(get_db)) -> dict[s
 
 
 @router.get("/governance/decisions")
-def decision_log(db: Session = Depends(get_db)) -> dict[str, Any]:
+def decision_log(
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     rows = (
-        db.query(PolicyDecision).order_by(PolicyDecision.created_at.desc()).limit(30).all()
+        db.query(PolicyDecision)
+        .filter(PolicyDecision.workspace_id == ws.id)
+        .order_by(PolicyDecision.created_at.desc())
+        .limit(30)
+        .all()
     )
     return {
         "decisions": [
@@ -514,8 +572,14 @@ def decision_log(db: Session = Depends(get_db)) -> dict[str, Any]:
 
 
 @router.get("/traces/{session_id}")
-def get_trace(session_id: str, lookback_hours: int = 3) -> dict[str, Any]:
-    return trace_service.session_trace(session_id, lookback_hours=lookback_hours)
+def get_trace(
+    session_id: str,
+    lookback_hours: int = 3,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return trace_service.session_trace(
+        session_id, ws.context, lookback_hours=lookback_hours
+    )
 
 
 class GenerationRequest(BaseModel):
@@ -524,14 +588,20 @@ class GenerationRequest(BaseModel):
 
 
 @router.post("/governance/policy-generation")
-def start_generation(req: GenerationRequest) -> dict[str, Any]:
+def start_generation(
+    req: GenerationRequest,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     """AI policy generation from natural language (preview API — surfaced honestly)."""
-    settings = get_settings()
-    engine_id = settings.resources.get("policy_engine_id")
-    gateway_arn = settings.resources.get("gateway_arn")
-    if not engine_id or not gateway_arn:
-        raise AppError("policy.not_bootstrapped", "run bootstrap first", status_code=503)
-    control = control_client()
+    gateway_arn = ws.context.resources.get("gateway_arn")
+    control = control_client(ws.context)
+    engine_id = governance_service.require_attached_policy_engine_id(control, ws.context)
+    if not gateway_arn:
+        raise AppError(
+            "policy.not_bootstrapped",
+            "this workspace has no gateway — run its bootstrap first",
+            status_code=503,
+        )
     try:
         generation = control.start_policy_generation(
             policyEngineId=engine_id,
@@ -549,10 +619,12 @@ def start_generation(req: GenerationRequest) -> dict[str, Any]:
 
 
 @router.get("/governance/policy-generation/{generation_id}")
-def get_generation(generation_id: str) -> dict[str, Any]:
-    settings = get_settings()
-    engine_id = settings.resources.get("policy_engine_id")
-    control = control_client()
+def get_generation(
+    generation_id: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    control = control_client(ws.context)
+    engine_id = governance_service.require_attached_policy_engine_id(control, ws.context)
     generation = control.get_policy_generation(
         policyEngineId=engine_id, policyGenerationId=generation_id
     )

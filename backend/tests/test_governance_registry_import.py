@@ -2,7 +2,6 @@
 
 import json
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -14,6 +13,8 @@ from app.services import governance
 from app.services import registry_console as console
 from app.services.agentcore import policy
 from app.services.agentcore import registry as reg
+
+from .conftest import ws_ctx
 
 
 def _mcp_record(
@@ -92,6 +93,7 @@ def test_gateway_preview_detects_legacy_and_name_conflict(monkeypatch):
     )
 
     preview = console.gateway_registry_preview(
+        ws_ctx(),
         gateway_id="gw-1",
         gateway_name="launchpad-gw",
         gateway_url=gateway_url,
@@ -128,6 +130,7 @@ def test_gateway_registry_states_match_gateway_record_and_legacy(monkeypatch):
     )
 
     states = console.gateway_registry_states(
+        ws_ctx(),
         gateways=[
             {
                 "gatewayId": "gw-1",
@@ -161,7 +164,7 @@ def test_governance_registry_import_requires_managed_and_fresh_gateway(monkeypat
     request = RegistryImportRequest(expected_gateway_updated_at=updated_at)
 
     with pytest.raises(AppError) as unmanaged:
-        governance.import_gateway_registry(control, "gw-1", request)
+        governance.import_gateway_registry(control, "gw-1", request, ws_ctx())
     assert unmanaged.value.code == "governance.gateway_not_managed"
 
     control.list_tags_for_resource.return_value = {"tags": policy.MANAGED_TAGS}
@@ -169,15 +172,15 @@ def test_governance_registry_import_requires_managed_and_fresh_gateway(monkeypat
         expected_gateway_updated_at=updated_at - timedelta(seconds=1)
     )
     with pytest.raises(AppError) as stale:
-        governance.import_gateway_registry(control, "gw-1", stale_request)
+        governance.import_gateway_registry(control, "gw-1", stale_request, ws_ctx())
     assert stale.value.code == "governance.concurrent_change"
 
     monkeypatch.setattr(
         governance.registry_console,
         "import_gateway_record",
-        lambda **kwargs: {"outcome": "created", "gateway_id": kwargs["gateway_id"]},
+        lambda _ws, **kwargs: {"outcome": "created", "gateway_id": kwargs["gateway_id"]},
     )
-    result = governance.import_gateway_registry(control, "gw-1", request)
+    result = governance.import_gateway_registry(control, "gw-1", request, ws_ctx())
     assert result == {"outcome": "created", "gateway_id": "gw-1"}
 
 
@@ -199,7 +202,9 @@ def test_gateway_import_reuses_without_update_and_submits_draft(monkeypatch):
         },
         "legacy_records": [],
     }
-    monkeypatch.setattr(console, "gateway_registry_preview", lambda **_kwargs: preview)
+    monkeypatch.setattr(
+        console, "gateway_registry_preview", lambda _ws, **_kwargs: preview
+    )
     monkeypatch.setattr(
         console.reg,
         "upsert_record",
@@ -215,6 +220,7 @@ def test_gateway_import_reuses_without_update_and_submits_draft(monkeypatch):
     )
 
     result = console.import_gateway_record(
+        ws_ctx(),
         gateway_id="gw-1",
         gateway_name="launchpad-gw",
         gateway_url="https://gw.example/mcp",
@@ -247,7 +253,9 @@ def test_gateway_import_requires_apply_update_for_changed_record(monkeypatch):
         },
         "legacy_records": [],
     }
-    monkeypatch.setattr(console, "gateway_registry_preview", lambda **_kwargs: preview)
+    monkeypatch.setattr(
+        console, "gateway_registry_preview", lambda _ws, **_kwargs: preview
+    )
     monkeypatch.setattr(
         console.reg,
         "upsert_record",
@@ -261,6 +269,7 @@ def test_gateway_import_requires_apply_update_for_changed_record(monkeypatch):
     )
 
     result = console.import_gateway_record(
+        ws_ctx(),
         gateway_id="gw-1",
         gateway_name="launchpad-gw",
         gateway_url="https://gw.example/mcp",
@@ -291,7 +300,9 @@ def test_gateway_import_updates_after_explicit_confirmation(monkeypatch):
         },
         "legacy_records": [],
     }
-    monkeypatch.setattr(console, "gateway_registry_preview", lambda **_kwargs: preview)
+    monkeypatch.setattr(
+        console, "gateway_registry_preview", lambda _ws, **_kwargs: preview
+    )
     updated = {**exact, "description": "new metadata", "status": "APPROVED"}
     monkeypatch.setattr(
         console.reg,
@@ -301,6 +312,7 @@ def test_gateway_import_updates_after_explicit_confirmation(monkeypatch):
     monkeypatch.setattr(console.reg, "wait_record_settled", lambda *_args: updated)
 
     result = console.import_gateway_record(
+        ws_ctx(),
         gateway_id="gw-1",
         gateway_name="launchpad-gw",
         gateway_url="https://gw.example/mcp",
@@ -325,6 +337,7 @@ def test_legacy_retirement_requires_approved_gateway_record(monkeypatch):
     monkeypatch.setattr(console.reg, "get_record", lambda *_args: gateway)
     with pytest.raises(AppError) as error:
         console.retire_legacy_gateway_records(
+            ws_ctx(),
             gateway_record_id="gateway-record",
             legacy_record_ids=["legacy"],
             client=object(),
@@ -352,6 +365,7 @@ def test_legacy_retirement_only_deprecates_selected_matching_records(monkeypatch
         lambda _client, _registry_id, record_id: disabled.append(record_id),
     )
     result = console.retire_legacy_gateway_records(
+            ws_ctx(),
         gateway_record_id="gateway",
         legacy_record_ids=["legacy-b"],
         client=object(),
@@ -366,7 +380,7 @@ def test_attachables_derive_gateway_auth_server_side(monkeypatch):
         "gateway_id": "managed",
         "oauth_provider_arn": "arn:provider:managed",
     }
-    monkeypatch.setattr(console, "get_settings", lambda: SimpleNamespace(resources=resources))
+    workspace = ws_ctx(resources)
     urls = {
         "iam": "https://iam.example/mcp",
         "none": "https://none.example/mcp",
@@ -409,6 +423,7 @@ def test_attachables_derive_gateway_auth_server_side(monkeypatch):
     ]
 
     result = console.attachable_records(
+        workspace,
         registry_client=object(),
         registry_id="registry",
         gateways=gateways,
@@ -442,15 +457,7 @@ def test_resolve_gateway_attachments_ignores_browser_auth_and_deduplicates(monke
             "authorizerType": "AWS_IAM",
         },
     )
-    monkeypatch.setattr(
-        console,
-        "get_settings",
-        lambda: SimpleNamespace(
-            resources={
-                "oauth_provider_arn": "arn:provider:real",
-            }
-        ),
-    )
+    workspace = ws_ctx({"oauth_provider_arn": "arn:provider:real"})
     tools = [
         ToolRef(
             type="gateway",
@@ -470,6 +477,7 @@ def test_resolve_gateway_attachments_ignores_browser_auth_and_deduplicates(monke
     ]
     attachments = console.resolve_gateway_attachments(
         tools,
+        workspace,
         registry_client=MagicMock(),
         agentcore_client=MagicMock(),
         registry_id="registry",
@@ -488,19 +496,13 @@ def test_resolve_gateway_attachments_ignores_browser_auth_and_deduplicates(monke
 
 
 def test_resolve_configless_gateway_ref_keeps_legacy_fallback(monkeypatch):
-    monkeypatch.setattr(
-        console,
-        "get_settings",
-        lambda: SimpleNamespace(
-            resources={
-                "gateway_id": "launchpad-id",
-                "gateway_arn": "arn:gateway:launchpad",
-                "oauth_provider_arn": "arn:provider:launchpad",
-            }
-        ),
-    )
     attachments = console.resolve_gateway_attachments(
-        [ToolRef(type="gateway", name="hr-database")]
+        [ToolRef(type="gateway", name="hr-database")],
+        ws_ctx({
+            "gateway_id": "launchpad-id",
+            "gateway_arn": "arn:gateway:launchpad",
+            "oauth_provider_arn": "arn:provider:launchpad",
+        }),
     )
     assert attachments[0]["gateway_arn"] == "arn:gateway:launchpad"
     assert attachments[0]["outbound_auth"]["oauth"]["providerArn"] == (

@@ -2,7 +2,7 @@
 
 import json
 
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.deployer.pipeline import (
     STAGE_ORDER,
     StageResult,
@@ -15,7 +15,9 @@ from app.models.ledger import Agent, Deployment, Job
 
 
 def make_agent(db, method: str, name: str = "test-agent") -> Agent:
-    agent = Agent(name=name, method=method, status="deploying", spec={"name": name})
+    agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name=name, method=method, status="deploying", spec={"name": name})
     db.add(agent)
     db.commit()
     return agent

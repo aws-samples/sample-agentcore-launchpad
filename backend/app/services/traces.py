@@ -20,9 +20,9 @@ fetch is shared.
 import json
 from typing import Any
 
-from app.core.config import get_settings
 from app.core.errors import AppError
 from app.services.observability import SPANS_SOURCE, run_insights_queries
+from app.services.workspace import WorkspaceContext
 
 # Only used for the fallback console deep link when nothing was found.
 SPANS_LOG_GROUP = "aws/spans"
@@ -68,6 +68,7 @@ def _is_span(obj: Any) -> bool:
 
 def find_session_spans(
     session_id: str,
+    workspace: WorkspaceContext,
     lookback_hours: int = 3,
     logs: Any = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
@@ -77,7 +78,10 @@ def find_session_spans(
     to degrade rather than error out a side panel on the Chat page.
     """
     rows = run_insights_queries(
-        {"spans": session_span_query(session_id)}, lookback_hours, logs=logs
+        {"spans": session_span_query(session_id)},
+        lookback_hours,
+        logs=logs,
+        workspace=workspace,
     ).get("spans") or []
     spans: list[dict[str, Any]] = []
     per_group: dict[str, int] = {}
@@ -152,12 +156,17 @@ def normalize_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def session_trace(
-    session_id: str, lookback_hours: int = 3, logs: Any = None
+    session_id: str,
+    workspace: WorkspaceContext,
+    lookback_hours: int = 3,
+    logs: Any = None,
 ) -> dict[str, Any]:
-    region = get_settings().region
+    region = workspace.region
     unavailable_reason = None
     try:
-        raw, per_group = find_session_spans(session_id, lookback_hours, logs=logs)
+        raw, per_group = find_session_spans(
+            session_id, workspace, lookback_hours, logs=logs
+        )
     except AppError as exc:
         # The rail is a side panel on the Chat page: a Logs Insights hiccup must not
         # turn chatting into an error state.

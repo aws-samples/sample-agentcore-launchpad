@@ -30,7 +30,7 @@ from app.core import config as config_module
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.services import observability as obs
-from app.services.workspace import default_workspace_context
+from app.services.workspace import WorkspaceContext, default_workspace_context
 
 MAX_SOURCE_BYTES = 30 * 1024 * 1024
 PREFERRED_PROVIDERS = ("bedrock_converse", "bedrock", "bedrock_mantle", "anthropic")
@@ -191,7 +191,7 @@ def refresh_map(
     return prices, updated, added
 
 
-def _seen_models(cw: Any = None) -> list[str]:
+def _seen_models(workspace: WorkspaceContext, cw: Any = None) -> list[str]:
     """Model ids with recent token-usage metrics; empty on any AWS failure.
 
     Metric coverage alone is not enough: only Bedrock botocore calls publish
@@ -200,7 +200,7 @@ def _seen_models(cw: Any = None) -> list[str]:
     (_span_models) is merged in by the caller.
     """
     try:
-        cw = cw or default_workspace_context().client("cloudwatch")
+        cw = cw or workspace.client("cloudwatch")
         models: set[str] = set()
         paginator = cw.get_paginator("list_metrics")
         for page in paginator.paginate(
@@ -215,7 +215,9 @@ def _seen_models(cw: Any = None) -> list[str]:
         return []
 
 
-def _span_models(logs: Any = None, hours: int = 14 * 24) -> list[str]:
+def _span_models(
+    workspace: WorkspaceContext, logs: Any = None, hours: int = 14 * 24
+) -> list[str]:
     """Model ids seen in aws/spans recently; empty on any failure.
 
     Covers every agent kind that traces (zip/Strands, Harness, Mantle
@@ -234,6 +236,7 @@ def _span_models(logs: Any = None, hours: int = 14 * 24) -> list[str]:
             },
             hours,
             logs=logs,
+            workspace=workspace,
         )["models"]
         return sorted({row["model"] for row in rows if row.get("model")})
     except Exception:
@@ -272,7 +275,12 @@ def refresh_model_prices(
                 "prices.fetch_failed", f"{type(exc).__name__}: {exc}"[:200],
                 status_code=502,
             ) from exc
-        seen = sorted({*_seen_models(cw), *_span_models(logs)})
+        # Prices are hub-global config, and so is their discovery: the daemon
+        # reads the hub's own region only. Multi-region discovery is deferred
+        # (parent design D10), so a model first seen in another workspace's
+        # region is priced on its next appearance here.
+        workspace = default_workspace_context()
+        seen = sorted({*_seen_models(workspace, cw), *_span_models(workspace, logs)})
         prices, updated, added = refresh_map(settings.model_prices, seen, source)
         meta = {
             "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),

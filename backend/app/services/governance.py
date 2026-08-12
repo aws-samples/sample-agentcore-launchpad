@@ -11,13 +11,14 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import PolicyChange
 from app.routers.auth import enabled as auth_enabled
 from app.services import registry_console
 from app.services.agentcore import policy as policy_api
 from app.services.agentcore.client import control_client, iam_client
+from app.services.workspace import WorkspaceContext, context_for_workspace
 
 POLICY_IAM_ACTIONS = (
     "bedrock-agentcore:GetPolicyEngine",
@@ -32,6 +33,53 @@ DANGLING_ENGINE_REASON = (
 
 _GATEWAY_CACHE_TTL_S = 30.0
 _gateway_cache: dict[str, Any] = {"key": None, "at": 0.0, "data": None}
+
+_ENGINE_CACHE_TTL_S = 30.0
+# Per workspace: the attachment is a fact about one gateway in one region.
+_engine_cache: dict[str, tuple[float, str]] = {}
+
+
+def attached_policy_engine_id(control: Any, workspace: WorkspaceContext) -> str:
+    """The Policy Engine id the workspace's configured Gateway is attached to.
+
+    Read from the live attachment rather than from a generated config key: nothing
+    has written `resources["policy_engine_id"]` since policy setup became opt-in
+    (d071afa), so a fresh workspace has no such key at all and every reader of it
+    would 503 forever. `""` means "no usable engine" — including the case where the
+    attachment outlived the Engine.
+
+    A read failure keeps the last confirmed value warm; a cold failure reports
+    unconfigured instead of reviving a stale identifier.
+    """
+    gateway_id = workspace.resources.get("gateway_id")
+    if not gateway_id:
+        return ""
+    cached = _engine_cache.get(workspace.id)
+    if cached and time.monotonic() - cached[0] < _ENGINE_CACHE_TTL_S:
+        return cached[1]
+    try:
+        gateway = control.get_gateway(gatewayIdentifier=gateway_id)
+        engine_arn = str((gateway.get("policyEngineConfiguration") or {}).get("arn") or "")
+        engine_id = engine_id_from_arn(engine_arn) or ""
+        if engine_id and policy_api.find_policy_engine(control, engine_id) is None:
+            engine_id = ""  # the reference outlived the Engine; Policy is unusable
+    except Exception:
+        return cached[1] if cached else ""
+    _engine_cache[workspace.id] = (time.monotonic(), engine_id)
+    return engine_id
+
+
+def require_attached_policy_engine_id(control: Any, workspace: WorkspaceContext) -> str:
+    """`attached_policy_engine_id`, as a precondition for the policy surfaces."""
+    engine_id = attached_policy_engine_id(control, workspace)
+    if not engine_id:
+        raise AppError(
+            "policy.not_bootstrapped",
+            "no Policy Engine is attached to this workspace's gateway — attach one "
+            "from Governance first",
+            status_code=503,
+        )
+    return engine_id
 
 
 def operator_identity(settings: Settings | None = None) -> str:
@@ -60,15 +108,21 @@ def engine_id_from_arn(arn: str | None) -> str | None:
 
 def invalidate_gateway_cache() -> None:
     _gateway_cache.update(key=None, at=0.0, data=None)
+    # The engine attachment is a property of the gateway, so it goes stale with
+    # it: an operator who has just attached an Engine must not keep being told
+    # to attach one for the rest of the TTL.
+    _engine_cache.clear()
 
 
-def _attachability(gateway: dict[str, Any], settings: Settings) -> dict[str, Any]:
+def _attachability(
+    gateway: dict[str, Any], workspace: WorkspaceContext
+) -> dict[str, Any]:
     authorizer = gateway.get("authorizerType")
     if authorizer == "AWS_IAM":
         return {"attachable": True, "reason": None, "auth_type": "aws_iam"}
     if authorizer == "NONE":
         return {"attachable": True, "reason": None, "auth_type": "none"}
-    resources = settings.resources
+    resources = workspace.resources
     if (
         gateway.get("gatewayId") == resources.get("gateway_id")
         and resources.get("oauth_provider_arn")
@@ -174,8 +228,8 @@ def _engine_view(
 def _gateway_summary(
     control: Any,
     gateway: dict[str, Any],
+    workspace: WorkspaceContext,
     *,
-    settings: Settings,
     impact: dict[str, list[dict[str, str]]],
     engine_cache: dict[str, dict[str, Any] | None],
 ) -> dict[str, Any]:
@@ -184,8 +238,8 @@ def _gateway_summary(
     attachment = gateway.get("policyEngineConfiguration") or {}
     engine_arn = attachment.get("arn")
     affected = impact.get(engine_arn, []) if engine_arn else []
-    configured_gateway_id = settings.resources.get("gateway_id")
-    configured_gateway_url = settings.resources.get("gateway_url")
+    configured_gateway_id = workspace.resources.get("gateway_id")
+    configured_gateway_url = workspace.resources.get("gateway_url")
     return {
         "id": gateway["gatewayId"],
         "arn": gateway["gatewayArn"],
@@ -212,7 +266,7 @@ def _gateway_summary(
         "policy_engine": _engine_view(control, attachment, engine_cache),
         "shared_gateways": affected,
         "shared_engine": len(affected) > 1,
-        "attachability": _attachability(gateway, settings),
+        "attachability": _attachability(gateway, workspace),
         "policy_test_available": bool(
             configured_gateway_id
             and configured_gateway_url
@@ -224,12 +278,11 @@ def _gateway_summary(
 
 def list_gateway_views(
     control: Any,
+    workspace: WorkspaceContext,
     *,
-    settings: Settings | None = None,
     refresh: bool = False,
 ) -> list[dict[str, Any]]:
-    current = settings or get_settings()
-    cache_key = (id(control), current.region, current.account_id)
+    cache_key = (id(control), workspace.id, workspace.region, workspace.account_id)
     if (
         not refresh
         and _gateway_cache["data"] is not None
@@ -241,9 +294,10 @@ def list_gateway_views(
     details = _all_mcp_gateway_details(control)
     impact = _engine_impact(details)
     engine_cache: dict[str, dict[str, Any] | None] = {}
-    registry_id = current.resources.get("registry_id")
+    registry_id = workspace.resources.get("registry_id")
     registry_states = (
         registry_console.gateway_registry_states(
+            workspace,
             gateways=details,
             registry_id=registry_id,
         )
@@ -255,7 +309,7 @@ def list_gateway_views(
             **_gateway_summary(
                 control,
                 detail,
-                settings=current,
+                workspace,
                 impact=impact,
                 engine_cache=engine_cache,
             ),
@@ -494,7 +548,7 @@ def iam_preflight(
 
 def external_tools_list_command(
     gateway: dict[str, Any],
-    settings: Settings,
+    workspace: WorkspaceContext,
 ) -> str | None:
     """Operator-side ``tools/list`` template for external CUSTOM_JWT Gateways.
 
@@ -506,7 +560,7 @@ def external_tools_list_command(
     url = gateway.get("gatewayUrl")
     if gateway.get("authorizerType") != "CUSTOM_JWT" or not url:
         return None
-    if gateway.get("gatewayId") == settings.resources.get("gateway_id"):
+    if gateway.get("gatewayId") == workspace.resources.get("gateway_id"):
         return None
     return (
         f"curl -sS -X POST '{url}' \\\n"
@@ -521,10 +575,8 @@ def gateway_detail(
     control: Any,
     iam: Any,
     gateway_id: str,
-    *,
-    settings: Settings | None = None,
+    workspace: WorkspaceContext,
 ) -> dict[str, Any]:
-    current = settings or get_settings()
     gateway = _require_gateway(control, gateway_id)
     all_gateways = _all_mcp_gateway_details(control)
     impact = _engine_impact(all_gateways)
@@ -532,13 +584,14 @@ def gateway_detail(
     summary = _gateway_summary(
         control,
         gateway,
-        settings=current,
+        workspace,
         impact=impact,
         engine_cache=engine_cache,
     )
-    registry_id = current.resources.get("registry_id")
+    registry_id = workspace.resources.get("registry_id")
     registry_state = (
         registry_console.gateway_registry_states(
+            workspace,
             gateways=[gateway],
             registry_id=registry_id,
         ).get(gateway_id)
@@ -578,7 +631,7 @@ def gateway_detail(
         ],
         "actions": discover_actions(targets),
         "iam_preflight": preflight,
-        "external_tools_list_command": external_tools_list_command(gateway, current),
+        "external_tools_list_command": external_tools_list_command(gateway, workspace),
     }
 
 
@@ -612,11 +665,13 @@ def _gateway_registry_input(
 def gateway_registry_preview(
     control: Any,
     gateway_id: str,
+    workspace: WorkspaceContext,
     *,
     record_name: str | None = None,
 ) -> dict[str, Any]:
     gateway = _require_gateway(control, gateway_id)
     return registry_console.gateway_registry_preview(
+        workspace,
         **_gateway_registry_input(control, gateway),
         record_name=record_name,
     )
@@ -626,6 +681,7 @@ def import_gateway_registry(
     control: Any,
     gateway_id: str,
     request: Any,
+    workspace: WorkspaceContext,
 ) -> dict[str, Any]:
     gateway = _require_managed(control, gateway_id)
     _assert_gateway_ready(gateway)
@@ -635,6 +691,7 @@ def import_gateway_registry(
         "Gateway",
     )
     result = registry_console.import_gateway_record(
+        workspace,
         **_gateway_registry_input(control, gateway),
         record_name=request.record_name,
         apply_update=request.apply_update,
@@ -647,6 +704,7 @@ def retire_gateway_legacy_records(
     control: Any,
     gateway_id: str,
     request: Any,
+    workspace: WorkspaceContext,
 ) -> dict[str, Any]:
     gateway = _require_managed(control, gateway_id)
     _assert_gateway_ready(gateway)
@@ -655,8 +713,9 @@ def retire_gateway_legacy_records(
         gateway.get("updatedAt"),
         "Gateway",
     )
-    registry_id = get_settings().resources.get("registry_id")
+    registry_id = workspace.resources.get("registry_id")
     states = registry_console.gateway_registry_states(
+        workspace,
         gateways=[gateway],
         registry_id=registry_id,
     )
@@ -668,6 +727,7 @@ def retire_gateway_legacy_records(
             status_code=409,
         )
     result = registry_console.retire_legacy_gateway_records(
+        workspace,
         gateway_record_id=gateway_record["record_id"],
         legacy_record_ids=request.record_ids,
         registry_id=registry_id,
@@ -853,6 +913,7 @@ def _change_out(change: PolicyChange) -> dict[str, Any]:
 def _new_change(
     db: Session,
     *,
+    workspace_id: str,
     gateway: dict[str, Any],
     operation: str,
     before: dict[str, Any],
@@ -877,6 +938,7 @@ def _new_change(
             status_code=409,
         )
     change = PolicyChange(
+        workspace_id=workspace_id,
         gateway_id=gateway["gatewayId"],
         gateway_arn=gateway["gatewayArn"],
         gateway_name=gateway["name"],
@@ -899,9 +961,11 @@ def _new_change(
     return change
 
 
-def get_operation(db: Session, operation_id: str) -> dict[str, Any]:
+def get_operation(db: Session, workspace_id: str, operation_id: str) -> dict[str, Any]:
     change = db.get(PolicyChange, operation_id)
-    if change is None:
+    # Another workspace's operation reads as absent: its snapshots carry that
+    # environment's gateway, engine and policy content.
+    if change is None or change.workspace_id != workspace_id:
         raise NotFoundError(
             "governance.operation_not_found",
             f"Operation {operation_id} was not found",
@@ -909,12 +973,23 @@ def get_operation(db: Session, operation_id: str) -> dict[str, Any]:
     return _change_out(change)
 
 
-def list_audit(db: Session, gateway_id: str) -> list[dict[str, Any]]:
+def list_audit(
+    db: Session, workspace_id: str, gateway_id: str
+) -> list[dict[str, Any]]:
+    """This workspace's change history for a gateway.
+
+    `gateway_id` is caller-supplied, so the workspace predicate is what keeps a
+    member from reading another environment's policy history by naming its
+    gateway.
+    """
     return [
         _change_out(change)
         for change in (
             db.query(PolicyChange)
-            .filter(PolicyChange.gateway_id == gateway_id)
+            .filter(
+                PolicyChange.workspace_id == workspace_id,
+                PolicyChange.gateway_id == gateway_id,
+            )
             .order_by(PolicyChange.created_at.desc())
             .limit(100)
             .all()
@@ -989,6 +1064,7 @@ def policies_view(
 def queue_engine_attach(
     db: Session,
     control: Any,
+    workspace: WorkspaceContext,
     gateway_id: str,
     request: Any,
 ) -> dict[str, Any]:
@@ -1021,6 +1097,7 @@ def queue_engine_attach(
         requested["replaced_engine_arn"] = dangling["arn"]
     change = _new_change(
         db,
+        workspace_id=workspace.id,
         gateway=gateway,
         engine=engine,
         operation="engine_attach",
@@ -1037,6 +1114,7 @@ def queue_engine_attach(
 def queue_policy_create(
     db: Session,
     control: Any,
+    workspace: WorkspaceContext,
     gateway_id: str,
     request: Any,
 ) -> dict[str, Any]:
@@ -1055,6 +1133,7 @@ def queue_policy_create(
     )
     change = _new_change(
         db,
+        workspace_id=workspace.id,
         gateway=gateway,
         engine=engine,
         operation="policy_create",
@@ -1073,6 +1152,7 @@ def queue_policy_create(
 def queue_policy_update(
     db: Session,
     control: Any,
+    workspace: WorkspaceContext,
     gateway_id: str,
     policy_id: str,
     request: Any,
@@ -1103,6 +1183,7 @@ def queue_policy_update(
     )
     change = _new_change(
         db,
+        workspace_id=workspace.id,
         gateway=gateway,
         engine=engine,
         policy=detail,
@@ -1135,6 +1216,7 @@ def _assert_policy_deletable(
 def queue_policy_delete(
     db: Session,
     control: Any,
+    workspace: WorkspaceContext,
     gateway_id: str,
     policy_id: str,
     request: Any,
@@ -1161,6 +1243,7 @@ def queue_policy_delete(
     _assert_policy_deletable(gateway, detail)
     change = _new_change(
         db,
+        workspace_id=workspace.id,
         gateway=gateway,
         engine=engine,
         policy=detail,
@@ -1198,6 +1281,7 @@ def _candidate_relation(
 def queue_policy_transition(
     db: Session,
     control: Any,
+    workspace: WorkspaceContext,
     gateway_id: str,
     policy_id: str,
     request: Any,
@@ -1274,6 +1358,7 @@ def queue_policy_transition(
         _assert_evidence_or_override(gateway, requested)
     change = _new_change(
         db,
+        workspace_id=workspace.id,
         gateway=gateway,
         engine=engine,
         policy=selected,
@@ -1292,6 +1377,7 @@ def queue_policy_transition(
 def queue_gateway_mode(
     db: Session,
     control: Any,
+    workspace: WorkspaceContext,
     iam: Any,
     gateway_id: str,
     request: Any,
@@ -1336,6 +1422,7 @@ def queue_gateway_mode(
         _assert_evidence_or_override(gateway, requested)
     change = _new_change(
         db,
+        workspace_id=workspace.id,
         gateway=gateway,
         engine=engine,
         operation="gateway_mode",
@@ -1753,13 +1840,17 @@ def run_policy_change(
     control: Any | None = None,
     iam: Any | None = None,
 ) -> None:
-    control = control or control_client()
-    iam = iam or iam_client()
     db = SessionLocal()
     try:
         change = db.get(PolicyChange, change_id)
         if change is None or change.status not in ("pending", "running"):
             return
+        # Clients come from the workspace the operation was queued in, rebuilt
+        # from the row: the FastAPI background task outlives the request, and a
+        # process restart replays this through reconcile_policy_changes.
+        workspace = context_for_workspace(change.workspace_id)
+        control = control or control_client(workspace)
+        iam = iam or iam_client(workspace)
         change.status = "running"
         change.started_at = change.started_at or datetime.now(UTC)
         db.commit()
@@ -1800,6 +1891,7 @@ def run_policy_change(
 def start_generation(
     db: Session,
     control: Any,
+    workspace: WorkspaceContext,
     gateway_id: str,
     request: Any,
 ) -> dict[str, Any]:
@@ -1818,6 +1910,7 @@ def start_generation(
     )
     change = _new_change(
         db,
+        workspace_id=workspace.id,
         gateway=gateway,
         engine=engine,
         operation="policy_generation",
@@ -1901,7 +1994,13 @@ def generation_view(
 
 
 def reconcile_policy_changes(control: Any | None = None) -> list[str]:
-    """Reconcile interrupted operations without replaying AWS mutations."""
+    """Reconcile interrupted operations without replaying AWS mutations.
+
+    Rows are grouped by workspace so each group is reconciled against its own
+    account/region — one ambient client would check every operation against the
+    hub's environment and mark foreign ones interrupted. ``control``, when given,
+    overrides that for tests.
+    """
     db = SessionLocal()
     reconciled: list[str] = []
     try:
@@ -1912,12 +2011,19 @@ def reconcile_policy_changes(control: Any | None = None) -> list[str]:
         )
         if not rows:
             return reconciled
-        control = control or control_client()
+        clients: dict[str, Any] = {}
         for change in rows:
             try:
-                if _change_matches_live(control, change):
+                if control is not None:
+                    change_control = control
+                else:
+                    ws_id = change.workspace_id or DEFAULT_WORKSPACE_ID
+                    if ws_id not in clients:
+                        clients[ws_id] = control_client(context_for_workspace(ws_id))
+                    change_control = clients[ws_id]
+                if _change_matches_live(change_control, change):
                     change.status = "succeeded"
-                elif _change_is_conservative_partial(control, change):
+                elif _change_is_conservative_partial(change_control, change):
                     change.status = "partial"
                 else:
                     change.status = "interrupted"

@@ -8,17 +8,22 @@ from unittest.mock import MagicMock
 import pytest
 
 import app.optimization.service as svc
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError
 from app.evaluation.models import EvalDataset, EvalRun
 from app.models.ledger import Agent
 from app.optimization.models import Experiment
+from tests.conftest import ws_ctx
+
+WS = ws_ctx()
 
 
 def _mk_exp(**kw):
     db = SessionLocal()
     exp = Experiment(
-        name="EXP-t", agent_id=kw.pop("agent_id", "a1"), agent_name="agent", **kw
+
+            workspace_id=DEFAULT_WORKSPACE_ID,
+            name="EXP-t", agent_id=kw.pop("agent_id", "a1"), agent_name="agent", **kw
     )
     db.add(exp)
     db.commit()
@@ -175,7 +180,7 @@ def test_recommend_rerun_preserves_prior_accept(monkeypatch):
     })
     monkeypatch.setattr(
         svc, "stage_recommend",
-        lambda exp_id, agent, progress=svc._noop, **kw: {
+        lambda exp_id, agent, workspace, progress=svc._noop, **kw: {
             "recommended_prompt": "new-rec"},
     )
     svc.act_recommend(exp.id, svc._noop)
@@ -197,7 +202,7 @@ def test_recommend_partial_rerun_keeps_other_type(monkeypatch):
     })
     monkeypatch.setattr(
         svc, "stage_recommend",
-        lambda exp_id, agent, progress=svc._noop, **kw: {
+        lambda exp_id, agent, workspace, progress=svc._noop, **kw: {
             "tool_status": "COMPLETED",
             "tool_descriptions": {"shell": "better"},
             "analyzed_tools": {"shell": "d"}},
@@ -213,7 +218,7 @@ def test_recommend_action_passes_types_and_tools(client, monkeypatch):
     _inline(monkeypatch)
     captured: dict = {}
 
-    def fake_stage(exp_id, agent, progress=svc._noop, types=svc.REC_TYPES,
+    def fake_stage(exp_id, agent, workspace, progress=svc._noop, types=svc.REC_TYPES,
                    tools=None, source=None):
         captured.update(types=types, tools=tools, source=source)
         return {"tool_status": "COMPLETED",
@@ -251,7 +256,7 @@ def _rec_agent(tools):
 
 
 def test_stage_recommend_runs_only_selected_types(monkeypatch):
-    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
     calls: list[str] = []
     monkeypatch.setattr(
         svc.ac, "start_system_prompt_recommendation",
@@ -269,14 +274,14 @@ def test_stage_recommend_runs_only_selected_types(monkeypatch):
                 {"toolName": "noop", "recommendedToolDescription": ""}]},
         }})
 
-    out = svc.stage_recommend("e1", _rec_agent({"shell": "old"}),
+    out = svc.stage_recommend("e1", _rec_agent({"shell": "old"}), WS,
                               types=("system_prompt",))
     assert calls == ["sp"]
     assert out["recommended_prompt"] == "better"
     assert "tool_status" not in out and "tool_descriptions" not in out
 
     calls.clear()
-    out = svc.stage_recommend("e1", _rec_agent({"shell": "old"}),
+    out = svc.stage_recommend("e1", _rec_agent({"shell": "old"}), WS,
                               types=("tool_descriptions",))
     assert calls == ["td"]
     assert out["tool_descriptions"] == {"shell": "improved"}  # empty rec dropped
@@ -293,7 +298,7 @@ _NOT_TRACED_MSG = ("The following requested tools were not found in the "
 def test_stage_recommend_retries_without_untraced_tools(monkeypatch):
     """The TD job rejects the whole list when any tool is absent from the
     traces — one retry with only the traced tools must follow."""
-    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
     started: list[list[str]] = []
 
     def fake_start(client, *, name, tools, **kw):
@@ -316,7 +321,7 @@ def test_stage_recommend_retries_without_untraced_tools(monkeypatch):
     monkeypatch.setattr(svc.ac, "poll_recommendation", fake_poll)
     agent = _rec_agent({"kb___Retrieve": "old", "shell": "s",
                         "file_operations": "f"})
-    out = svc.stage_recommend("e1", agent, types=("tool_descriptions",))
+    out = svc.stage_recommend("e1", agent, WS, types=("tool_descriptions",))
     assert started == [["kb___Retrieve", "shell", "file_operations"],
                        ["kb___Retrieve"]]
     assert out["tool_status"] == "COMPLETED"
@@ -327,7 +332,7 @@ def test_stage_recommend_retries_without_untraced_tools(monkeypatch):
 def test_stage_recommend_surfaces_job_error(monkeypatch):
     """Every listed tool untraced → nothing to retry with; the job's own
     error message must land in tool_error (the old code dropped it)."""
-    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
     monkeypatch.setattr(
         svc.ac, "start_tool_description_recommendation",
         lambda *a, **k: {"recommendationId": "r1"})
@@ -337,7 +342,7 @@ def test_stage_recommend_surfaces_job_error(monkeypatch):
                 "errorCode": "ValidationException",
                 "errorMessage": _NOT_TRACED_MSG}}})
     agent = _rec_agent({"shell": "s", "file_operations": "f"})
-    out = svc.stage_recommend("e1", agent, types=("tool_descriptions",))
+    out = svc.stage_recommend("e1", agent, WS, types=("tool_descriptions",))
     assert out["tool_status"] == "error"
     assert out["tool_error"].startswith("ValidationException")
     assert "not found in the sampled agent traces" in out["tool_error"]
@@ -345,12 +350,12 @@ def test_stage_recommend_surfaces_job_error(monkeypatch):
 
 
 def _sp_only(monkeypatch, poll_result):
-    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
     monkeypatch.setattr(svc.ac, "start_system_prompt_recommendation",
                         lambda *a, **k: {"recommendationId": "r1"})
     monkeypatch.setattr(svc.ac, "poll_recommendation",
                         lambda *a, **k: poll_result)
-    return svc.stage_recommend("e1", _rec_agent({}), types=("system_prompt",))
+    return svc.stage_recommend("e1", _rec_agent({}), WS, types=("system_prompt",))
 
 
 def test_stage_recommend_failed_prompt_job_reports_error_and_no_prompt(monkeypatch):
@@ -409,7 +414,7 @@ def test_recommend_rerun_clears_stale_prompt_failure(monkeypatch):
     })
     monkeypatch.setattr(
         svc, "stage_recommend",
-        lambda exp_id, agent, progress=svc._noop, **kw: {
+        lambda exp_id, agent, workspace, progress=svc._noop, **kw: {
             "system_prompt_status": "COMPLETED", "recommended_prompt": "better",
             "explanation": ""},
     )
@@ -421,13 +426,13 @@ def test_recommend_rerun_clears_stale_prompt_failure(monkeypatch):
 
 
 def test_stage_recommend_without_tools_short_circuits(monkeypatch):
-    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
 
     def boom(*a, **k):
         raise AssertionError("no tools → the TD API must not be called")
 
     monkeypatch.setattr(svc.ac, "start_tool_description_recommendation", boom)
-    out = svc.stage_recommend("e1", _rec_agent({}), types=("tool_descriptions",))
+    out = svc.stage_recommend("e1", _rec_agent({}), WS, types=("tool_descriptions",))
     assert out == {"analyzed_tools": {}, "tool_status": "no-tools",
                    "tool_descriptions": {},
                    "trace_source": {"kind": "cloudwatch", "lookback_days": 7}}
@@ -546,7 +551,7 @@ def test_canary_capability_is_independent_from_bundle_consumption():
 def test_bundles_consume_accepted_config(client, monkeypatch):
     captured: dict = {}
 
-    def fake_stage_bundles(exp_id, agent, treatment_prompt, treatment_tds=None):
+    def fake_stage_bundles(exp_id, agent, treatment_prompt, _ws, treatment_tds=None):
         captured.update(prompt=treatment_prompt, tds=treatment_tds, agent=agent)
         return {"control": {"bundle_id": "b1", "arn": "arn:c", "version": "1"},
                 "treatment": {"bundle_id": "b2", "arn": "arn:t", "version": "1"}}
@@ -617,7 +622,9 @@ def test_traffic_action_uses_dataset_prompts(client, monkeypatch):
 
     monkeypatch.setattr(svc, "send_gateway_traffic", fake_send)
     db = SessionLocal()
-    ds = EvalDataset(name="traffic-ds", kind="legacy", items=[{"prompt": "p1"}])
+    ds = EvalDataset(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="traffic-ds", kind="legacy", items=[{"prompt": "p1"}])
     db.add(ds)
     db.commit()
     ds_id = ds.id
@@ -646,7 +653,7 @@ def test_traffic_action_requires_dataset(client):
 
 def test_traffic_rejects_simulated_and_missing_datasets(client):
     db = SessionLocal()
-    ds = EvalDataset(name="sim-ds", kind="simulated",
+    ds = EvalDataset(workspace_id=DEFAULT_WORKSPACE_ID, name="sim-ds", kind="simulated",
                      items=[{"actor_profile": {}}])
     db.add(ds)
     db.commit()
@@ -830,7 +837,7 @@ class _ABData:
 def _promotion_fixture(*, legacy=False):
     db = SessionLocal()
     agent = Agent(
-        name="promotion-target",
+        workspace_id=DEFAULT_WORKSPACE_ID, name="promotion-target",
         method="zip_runtime",
         status="active",
         arn="arn:rt",
@@ -862,7 +869,7 @@ def _promotion_fixture(*, legacy=False):
             "after_weights": {"C": 1, "T1": 99},
         }
     exp = Experiment(
-        name="EXP-promotion",
+        workspace_id=DEFAULT_WORKSPACE_ID, name="EXP-promotion",
         agent_id=agent.id,
         agent_name=agent.name,
         status="promoted" if legacy else "ready",
@@ -900,7 +907,7 @@ def _complete_deploy(job_id: str, *, failed=False):
 def test_official_promotion_stops_applies_deploys_then_marks_promoted(monkeypatch):
     agent_id, exp_id = _promotion_fixture()
     data = _ABData()
-    monkeypatch.setattr(svc, "data_client", lambda: data)
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: data)
 
     def complete(job_id):
         assert _reload(exp_id).status == "ready"
@@ -933,7 +940,7 @@ def test_official_promotion_stops_applies_deploys_then_marks_promoted(monkeypatc
 def test_promotion_retry_skips_already_stopped_test(monkeypatch):
     _, exp_id = _promotion_fixture()
     data = _ABData(status="STOPPED")
-    monkeypatch.setattr(svc, "data_client", lambda: data)
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: data)
     monkeypatch.setattr(svc, "execute_deploy_job", _complete_deploy)
     svc.act_promote(exp_id, svc._noop)
     assert data.updates == []
@@ -942,7 +949,7 @@ def test_promotion_retry_skips_already_stopped_test(monkeypatch):
 def test_promotion_stop_failure_does_not_deploy_or_mark_success(monkeypatch):
     _, exp_id = _promotion_fixture()
     data = _ABData(fail_stop=True)
-    monkeypatch.setattr(svc, "data_client", lambda: data)
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: data)
     monkeypatch.setattr(
         svc, "create_deployment",
         lambda *a, **k: pytest.fail("deployment must not start"),
@@ -956,7 +963,7 @@ def test_promotion_stop_failure_does_not_deploy_or_mark_success(monkeypatch):
 
 def test_promotion_deployment_failure_keeps_retryable_ready_state(monkeypatch):
     _, exp_id = _promotion_fixture()
-    monkeypatch.setattr(svc, "data_client", lambda: _ABData())
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: _ABData())
     monkeypatch.setattr(
         svc, "execute_deploy_job",
         lambda job_id: _complete_deploy(job_id, failed=True),
@@ -971,7 +978,7 @@ def test_promotion_deployment_failure_keeps_retryable_ready_state(monkeypatch):
 
 def test_legacy_completion_preserves_prior_shift(monkeypatch):
     _, exp_id = _promotion_fixture(legacy=True)
-    monkeypatch.setattr(svc, "data_client", lambda: _ABData(status="STOPPED"))
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: _ABData(status="STOPPED"))
     monkeypatch.setattr(svc, "execute_deploy_job", _complete_deploy)
     result = svc.act_promote(exp_id, svc._noop)
     assert result["prior_shift"] == {"C": 1, "T1": 99}
@@ -1013,8 +1020,8 @@ def test_configuration_gateway_rejects_active_canary_before_dispatch(
             }
         ]
     }
-    monkeypatch.setattr(svc, "control_client", lambda: control)
-    monkeypatch.setattr(svc, "data_client", lambda: data)
+    monkeypatch.setattr(svc, "control_client", lambda _ws=None: control)
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: data)
     dispatched: list[str] = []
     monkeypatch.setattr(
         svc,
@@ -1060,7 +1067,7 @@ def test_configuration_cleanup_keeps_legacy_canary_resources(monkeypatch):
         ]
     }
     captured: dict = {}
-    monkeypatch.setattr(svc, "control_client", lambda: control)
+    monkeypatch.setattr(svc, "control_client", lambda _ws=None: control)
     monkeypatch.setattr(svc, "data_client", MagicMock)
     monkeypatch.setattr(
         svc.ac,
@@ -1081,7 +1088,9 @@ def test_configuration_cleanup_keeps_legacy_canary_resources(monkeypatch):
 # ─── create defers all stage work ────────────────────────────────────────────
 def test_create_defers_all_stage_work(client, monkeypatch):
     db = SessionLocal()
-    agent = Agent(name="step-agent", method="zip_runtime", status="active",
+    agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="step-agent", method="zip_runtime", status="active",
                   arn="arn:rt", resource_id="rt-9",
                   spec={"system_prompt": "sys"})
     db.add(agent)
@@ -1089,7 +1098,7 @@ def test_create_defers_all_stage_work(client, monkeypatch):
     agent_id = agent.id
     db.close()
 
-    monkeypatch.setattr(svc, "control_client", lambda: MagicMock())
+    monkeypatch.setattr(svc, "control_client", lambda _ws=None: MagicMock())
     monkeypatch.setattr(svc, "rt_name", lambda control, rid: "RTName")
     monkeypatch.setattr(
         "app.optimization.routers.readiness.project_readiness",
@@ -1124,7 +1133,7 @@ def test_create_defers_all_stage_work(client, monkeypatch):
 def test_create_rejects_unverified_bundle_consumers(client, method, spec, code):
     db = SessionLocal()
     agent = Agent(
-        name=f"unsupported-{method}",
+        workspace_id=DEFAULT_WORKSPACE_ID, name=f"unsupported-{method}",
         method=method,
         status="active",
         arn="arn:rt",
@@ -1151,7 +1160,7 @@ def _gateway_ready_exp():
 def _capture_gateway(monkeypatch):
     """Free the gateway lock and capture what act_gateway is handed."""
     monkeypatch.setattr(svc, "assert_shared_gateway_available",
-                        lambda **kw: None)
+                        lambda *a, **kw: None)
     seen: dict[str, Any] = {}
     monkeypatch.setattr(
         svc, "run_action",
@@ -1226,9 +1235,9 @@ def test_gateway_evaluator_list_bounds(client, evaluators):
 
 def test_stage_gateway_records_evaluators_on_the_artifact(monkeypatch):
     control = MagicMock()
-    monkeypatch.setattr(svc, "control_client", lambda: control)
+    monkeypatch.setattr(svc, "control_client", lambda _ws=None: control)
     monkeypatch.setattr(svc, "ensure_experiment_gateway",
-                        lambda progress, control: {"gateway_id": "gw-1"})
+                        lambda control, workspace, progress: {"gateway_id": "gw-1"})
     monkeypatch.setattr(svc, "create_runtime_target_idempotent",
                         lambda *a, **kw: "tgt-1")
     control.create_online_evaluation_config.return_value = {
@@ -1236,6 +1245,7 @@ def test_stage_gateway_records_evaluators_on_the_artifact(monkeypatch):
     }
     result = svc.stage_gateway(
         "exp1234567890", {"arn": "arn:a", "resource_id": "r-1", "runtime_name": "rt"},
+        ws_ctx({"execution_role_arn": "arn:role"}),
         evaluators=["Builtin.Refusal", "Builtin.InstructionFollowing"],
     )
     assert result["online_evaluators"] == [
@@ -1367,13 +1377,13 @@ def test_no_source_run_id_means_the_default_window(monkeypatch):
         raise AssertionError("the default path must cost no AWS call")
 
     monkeypatch.setattr(svc.ac, "get_batch_evaluation", boom)
-    assert svc.resolve_recommend_source("a1", None) == {}
-    assert svc.resolve_recommend_source("a1", "") == {}
+    assert svc.resolve_recommend_source("a1", None, WS) == {}
+    assert svc.resolve_recommend_source("a1", "", WS) == {}
 
 
 def test_resolve_source_returns_the_arn_and_full_lineage(monkeypatch):
     run_id = _eval_run()
-    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
     monkeypatch.setattr(
         svc.ac, "get_batch_evaluation",
         lambda client, *, batch_id: {
@@ -1383,7 +1393,7 @@ def test_resolve_source_returns_the_arn_and_full_lineage(monkeypatch):
             "status": "COMPLETED",
         },
     )
-    source = svc.resolve_recommend_source("a1", run_id)
+    source = svc.resolve_recommend_source("a1", run_id, WS)
     assert source == {
         "kind": "batch_evaluation",
         "run_id": run_id,
@@ -1404,47 +1414,47 @@ def test_resolve_source_rejects_bad_selections(monkeypatch):
     monkeypatch.setattr(svc.ac, "get_batch_evaluation", boom)
 
     with pytest.raises(AppError) as missing:
-        svc.resolve_recommend_source("a1", "nope")
+        svc.resolve_recommend_source("a1", "nope", WS)
     assert missing.value.code == "experiment.recommend_source_not_found"
 
     other = _eval_run(agent_id="a2")
     with pytest.raises(AppError) as foreign:
-        svc.resolve_recommend_source("a1", other)
+        svc.resolve_recommend_source("a1", other, WS)
     assert foreign.value.code == "experiment.recommend_source_foreign"
 
     unfinished = _eval_run(status="evaluating")
     with pytest.raises(AppError) as running:
-        svc.resolve_recommend_source("a1", unfinished)
+        svc.resolve_recommend_source("a1", unfinished, WS)
     assert running.value.code == "experiment.recommend_source_unfinished"
 
     windowed = _eval_run(batch_eval_id=None)
     with pytest.raises(AppError) as no_batch:
-        svc.resolve_recommend_source("a1", windowed)
+        svc.resolve_recommend_source("a1", windowed, WS)
     assert no_batch.value.code == "experiment.recommend_source_no_batch"
 
 
 def test_resolve_source_surfaces_an_unreadable_batch(monkeypatch):
     run_id = _eval_run()
-    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
 
     def denied(*a, **k):
         raise RuntimeError("AccessDeniedException")
 
     monkeypatch.setattr(svc.ac, "get_batch_evaluation", denied)
     with pytest.raises(AppError) as exc:
-        svc.resolve_recommend_source("a1", run_id)
+        svc.resolve_recommend_source("a1", run_id, WS)
     assert exc.value.code == "experiment.recommend_source_unreadable"
 
     monkeypatch.setattr(svc.ac, "get_batch_evaluation", lambda *a, **k: {"status": "X"})
     with pytest.raises(AppError) as no_arn:
-        svc.resolve_recommend_source("a1", run_id)
+        svc.resolve_recommend_source("a1", run_id, WS)
     assert no_arn.value.code == "experiment.recommend_source_no_arn"
 
 
 def test_pinned_source_reaches_both_generators_and_is_recorded(monkeypatch):
     """The whole point: the recommendation must read that job's sessions, and the
     experiment must record which source produced it."""
-    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
     seen: list[dict] = []
 
     def capture(name):
@@ -1470,7 +1480,7 @@ def test_pinned_source_reaches_both_generators_and_is_recorded(monkeypatch):
         "batch_evaluation_arn": "arn:aws:bedrock-agentcore:us-west-2:1:batch-evaluation/be-9",
         "run_mode": "insights", "session_count": 4,
     }
-    out = svc.stage_recommend("e1", _rec_agent({"shell": "d"}), source=source)
+    out = svc.stage_recommend("e1", _rec_agent({"shell": "d"}), WS, source=source)
 
     assert [s["job"] for s in seen] == ["sp", "td"]
     for call in seen:
@@ -1498,13 +1508,13 @@ def test_recommend_action_threads_a_valid_source(client, monkeypatch):
     run_id = _eval_run()
     captured: dict = {}
 
-    def fake_stage(exp_id, agent, progress=svc._noop, types=svc.REC_TYPES,
+    def fake_stage(exp_id, agent, workspace, progress=svc._noop, types=svc.REC_TYPES,
                    tools=None, source=None):
         captured["source"] = source
         return {"system_prompt_status": "COMPLETED", "recommended_prompt": "p"}
 
     monkeypatch.setattr(svc, "stage_recommend", fake_stage)
-    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
     monkeypatch.setattr(
         svc.ac, "get_batch_evaluation",
         lambda client, *, batch_id: {

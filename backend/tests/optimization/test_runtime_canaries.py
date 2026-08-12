@@ -7,7 +7,7 @@ import pytest
 
 import app.optimization.canary_service as canary_svc
 import app.optimization.service as exp_svc
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError
 from app.models.ledger import Agent
 from app.optimization.models import Experiment, RuntimeCanary
@@ -28,7 +28,7 @@ def _agent(
     arn: str | None = RUNTIME_ARN,
 ) -> Agent:
     return Agent(
-        name=name,
+        workspace_id=DEFAULT_WORKSPACE_ID, name=name,
         method=method,
         status=status,
         arn=arn,
@@ -57,7 +57,7 @@ def _mk_canary(
     db = SessionLocal()
     try:
         row = RuntimeCanary(
-            name="CANARY-subject",
+            workspace_id=DEFAULT_WORKSPACE_ID, name="CANARY-subject",
             champion_agent_id=agent_id,
             champion_agent_name="subject",
             challenger_agent_id=agent_id,
@@ -148,7 +148,7 @@ def test_create_runtime_canary_persists_single_agent_record(client, monkeypatch)
     control.get_agent_runtime.side_effect = lambda agentRuntimeId: {
         "agentRuntimeName": f"runtime-{agentRuntimeId}"
     }
-    monkeypatch.setattr(canary_svc, "control_client", lambda: control)
+    monkeypatch.setattr(canary_svc, "control_client", lambda _ws=None: control)
 
     res = client.post(
         "/api/runtime-canaries",
@@ -219,7 +219,7 @@ def test_studio_agent_is_canary_eligible(client, monkeypatch):
     control.get_agent_runtime.side_effect = lambda agentRuntimeId: {
         "agentRuntimeName": f"runtime-{agentRuntimeId}"
     }
-    monkeypatch.setattr(canary_svc, "control_client", lambda: control)
+    monkeypatch.setattr(canary_svc, "control_client", lambda _ws=None: control)
 
     res = client.post(
         "/api/runtime-canaries",
@@ -234,7 +234,7 @@ def test_source_experiment_must_match_promoted_agent(client, monkeypatch):
     db = SessionLocal()
     try:
         source = Experiment(
-            name="EXP-source",
+            workspace_id=DEFAULT_WORKSPACE_ID, name="EXP-source",
             agent_id="someone-else",
             agent_name="other",
             status="promoted",
@@ -265,7 +265,7 @@ def test_promoted_experiment_can_handoff_to_separate_canary(client, monkeypatch)
     db = SessionLocal()
     try:
         source = Experiment(
-            name="EXP-source",
+            workspace_id=DEFAULT_WORKSPACE_ID, name="EXP-source",
             agent_id=agent_id,
             agent_name="subject",
             status="promoted",
@@ -281,7 +281,7 @@ def test_promoted_experiment_can_handoff_to_separate_canary(client, monkeypatch)
     control.get_agent_runtime.side_effect = lambda agentRuntimeId: {
         "agentRuntimeName": f"runtime-{agentRuntimeId}"
     }
-    monkeypatch.setattr(canary_svc, "control_client", lambda: control)
+    monkeypatch.setattr(canary_svc, "control_client", lambda _ws=None: control)
 
     res = client.post(
         "/api/runtime-canaries",
@@ -378,7 +378,7 @@ def test_setup_mints_candidate_targets_endpoints_and_own_ab_test(monkeypatch):
     )
     data = MagicMock()
     data.create_ab_test.return_value = {"abTestId": "ab-canary"}
-    monkeypatch.setattr(canary_svc, "data_client", lambda: data)
+    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: data)
     monkeypatch.setattr(canary_svc, "control_client", MagicMock)
 
     result = canary_svc.act_setup(row.id, lambda message: None)
@@ -478,7 +478,7 @@ def test_setup_retry_adopts_its_own_ab_test_after_conflict(monkeypatch):
             }
         ]
     }
-    monkeypatch.setattr(canary_svc, "data_client", lambda: data)
+    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: data)
     monkeypatch.setattr(canary_svc, "control_client", MagicMock)
 
     result = canary_svc.act_setup(row.id, lambda message: None)
@@ -724,7 +724,7 @@ def test_traffic_records_metric_baseline_and_clears_prior_verdict(monkeypatch):
             ]
         }
     }
-    monkeypatch.setattr(canary_svc, "data_client", lambda: data)
+    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: data)
     monkeypatch.setattr(
         exp_svc,
         "send_gateway_traffic",
@@ -772,7 +772,7 @@ def test_verdict_waits_for_sample_growth_and_persists_current_round(monkeypatch)
             ]
         },
     }
-    monkeypatch.setattr(canary_svc, "data_client", lambda: data)
+    monkeypatch.setattr(canary_svc, "data_client", lambda _ws=None: data)
 
     verdict = canary_svc.act_verdict(row.id, lambda message: None)
 
@@ -902,7 +902,7 @@ def test_rollback_rolls_forward_current_spec(monkeypatch):
     )
     minted: dict = {}
 
-    def fake_mint(*, agent, edited_spec, control_client, log, canary_id, role):
+    def fake_mint(*, agent, edited_spec, control_client, workspace, log, canary_id, role):
         minted["agent_id"] = agent.id
         minted["spec"] = edited_spec
         minted["role"] = role
@@ -960,7 +960,7 @@ def test_rollback_allowed_and_rolls_forward_on_partial_setup(monkeypatch):
     )
     minted: dict = {}
 
-    def fake_mint(*, agent, edited_spec, control_client, log, canary_id, role):
+    def fake_mint(*, agent, edited_spec, control_client, workspace, log, canary_id, role):
         minted["spec"] = edited_spec
         return ("1", "5", f"agents/subject/canary/{canary_id}-{role}.zip")
 
@@ -1070,7 +1070,7 @@ def _cleanup_stubs(monkeypatch, *, live_version: str):
     deleted: list[str] = []
     monkeypatch.setattr(
         canary_svc.canary_infra, "delete_object_quiet",
-        lambda key, **kw: deleted.append(key))
+        lambda key, _ws, **kw: deleted.append(key))
     return deleted
 
 

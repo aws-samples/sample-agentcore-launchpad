@@ -15,11 +15,11 @@ def _operation() -> dict:
 def test_governance_mutation_and_poll_responses_wrap_operation(client, monkeypatch):
     operation = _operation()
     requests = []
-    monkeypatch.setattr(governance_router, "control_client", lambda: object())
+    monkeypatch.setattr(governance_router, "control_client", lambda _ws=None: object())
     monkeypatch.setattr(
         governance_router.governance_service,
         "queue_engine_attach",
-        lambda _db, _control, _gateway_id, request: requests.append(request)
+        lambda _db, _control, _ws, _gateway_id, request: requests.append(request)
         or operation,
     )
     monkeypatch.setattr(
@@ -52,7 +52,7 @@ def test_governance_mutation_and_poll_responses_wrap_operation(client, monkeypat
 def test_gateway_list_envelope_reports_the_scoped_account_and_region(
     client, monkeypatch
 ):
-    monkeypatch.setattr(governance_router, "control_client", lambda: object())
+    monkeypatch.setattr(governance_router, "control_client", lambda _ws=None: object())
     monkeypatch.setattr(
         governance_router.governance_service,
         "list_gateway_views",
@@ -62,12 +62,12 @@ def test_gateway_list_envelope_reports_the_scoped_account_and_region(
     body = client.get("/api/governance/gateways").json()
     assert body["gateways"] == []
     assert set(body) == {"gateways", "account_id", "region"}
-    assert body["region"] == governance_router.get_settings().region
+    assert body["region"] == "us-west-2"  # the default workspace's region
 
 
 def test_governance_generation_start_uses_frontend_contract(client, monkeypatch):
     operation = _operation()
-    monkeypatch.setattr(governance_router, "control_client", lambda: object())
+    monkeypatch.setattr(governance_router, "control_client", lambda _ws=None: object())
     monkeypatch.setattr(
         governance_router.governance_service,
         "start_generation",
@@ -109,18 +109,18 @@ def test_governance_registry_routes_delegate_typed_requests(client, monkeypatch)
     imported = {"outcome": "created"}
     retired = {"retired": ["legacy-1"], "skipped": []}
     seen: dict[str, object] = {}
-    monkeypatch.setattr(governance_router, "control_client", lambda: object())
+    monkeypatch.setattr(governance_router, "control_client", lambda _ws=None: object())
     monkeypatch.setattr(
         governance_router.governance_service,
         "gateway_registry_preview",
-        lambda *_args: preview,
+        lambda *_args, **_kwargs: preview,
     )
 
-    def import_record(_control, _gateway_id, request):
+    def import_record(_control, _gateway_id, request, _ws):
         seen["import"] = request
         return imported
 
-    def retire_records(_control, _gateway_id, request):
+    def retire_records(_control, _gateway_id, request, _ws):
         seen["retire"] = request
         return retired
 

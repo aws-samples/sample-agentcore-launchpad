@@ -16,6 +16,46 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.core.db import Base, _seed_default_workspace, engine  # noqa: E402
 from app.main import create_app  # noqa: E402
+from app.services.workspace import WorkspaceContext  # noqa: E402
+
+
+def ws_ctx(resources: dict | None = None, **fields) -> WorkspaceContext:
+    """A workspace context for tests that call a service directly.
+
+    Services take the environment as an argument now, so a test supplies the
+    resource map here instead of monkeypatching `get_settings` on the module.
+    """
+    return WorkspaceContext(
+        account_id=fields.pop("account_id", "111122223333"),
+        region=fields.pop("region", "us-west-2"),
+        resources=dict(resources or {}),
+        **fields,
+    )
+
+
+@pytest.fixture
+def workspace() -> WorkspaceContext:
+    return ws_ctx()
+
+
+def set_default_resources(resources: dict) -> None:
+    """Put a resource map on the `default` workspace row.
+
+    The row — not settings — is what a request's context reads, so an API test
+    that needs a bootstrapped environment writes it here. Call this AFTER the app
+    exists: `init_db` mirrors settings onto the row at startup and would overwrite
+    it. The autouse table wipe re-seeds the row, so nothing leaks between tests.
+    """
+    from app.core.db import SessionLocal
+    from app.models.ledger import Workspace
+
+    db = SessionLocal()
+    try:
+        row = db.get(Workspace, "default")
+        row.resources = dict(resources)
+        db.commit()
+    finally:
+        db.close()
 
 
 @pytest.fixture

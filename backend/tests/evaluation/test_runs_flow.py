@@ -7,7 +7,7 @@ completed with parsed scores.
 from unittest.mock import ANY, MagicMock
 
 import app.evaluation.service as svc
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.evaluation.models import EvalDataset
 from app.models.ledger import Agent
 from app.services import aws_clients
@@ -15,7 +15,7 @@ from app.services import aws_clients
 
 def make_agent(db, name="eval-agent", method="zip_runtime") -> Agent:
     agent = Agent(
-        name=name, method=method, status="active",
+        workspace_id=DEFAULT_WORKSPACE_ID, name=name, method=method, status="active",
         arn="arn:aws:bedrock-agentcore:us-west-2:1:runtime/rt-1",
         resource_id="rt-1", spec={"name": name},
     )
@@ -39,8 +39,8 @@ def stub_environment(monkeypatch, batch_status="COMPLETED"):
         svc.rt, "get_runtime",
         lambda client, rid: {"agentRuntimeName": "eval_agent_abc123"},
     )
-    monkeypatch.setattr(svc, "control_client", lambda: MagicMock())
-    monkeypatch.setattr(svc, "data_client", lambda: data)
+    monkeypatch.setattr(svc, "control_client", lambda _ws=None: MagicMock())
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: data)
     telemetry_wait = MagicMock()
     monkeypatch.setattr(svc, "_wait_for_fresh_telemetry", telemetry_wait)
     data.start_batch_evaluation.return_value = {"batchEvaluationId": "be-123"}
@@ -65,7 +65,9 @@ def stub_environment(monkeypatch, batch_status="COMPLETED"):
 def test_active_run_completes_with_scores(client, monkeypatch):
     db = SessionLocal()
     agent = make_agent(db)
-    dataset = EvalDataset(name="mini", items=[{"prompt": "2+2?"}, {"prompt": "3+3?"},
+    dataset = EvalDataset(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="mini", items=[{"prompt": "2+2?"}, {"prompt": "3+3?"},
                                               {"prompt": "4+4?"}])
     db.add(dataset)
     db.commit()
@@ -90,6 +92,7 @@ def test_active_run_completes_with_scores(client, monkeypatch):
     assert calls["n"] == 3  # one session per dataset item
     assert len(run["session_ids"]) == 3
     telemetry_wait.assert_called_once_with(
+        workspace=ANY,
         session_id=run["session_ids"][-1],
         content_log_group="/aws/bedrock-agentcore/runtimes/rt-1-DEFAULT",
         start_time_ms=ANY,
@@ -113,7 +116,7 @@ def test_active_run_completes_with_scores(client, monkeypatch):
 def test_run_failure_recorded(client, monkeypatch):
     db = SessionLocal()
     agent = make_agent(db, name="eval-agent-fail")
-    dataset = EvalDataset(name="mini2", items=[{"prompt": "x"}])
+    dataset = EvalDataset(workspace_id=DEFAULT_WORKSPACE_ID, name="mini2", items=[{"prompt": "x"}])
     db.add(dataset)
     db.commit()
     stub_environment(monkeypatch, batch_status="FAILED")
@@ -136,7 +139,9 @@ def test_run_failure_recorded(client, monkeypatch):
 def test_telemetry_timeout_fails_without_starting_batch(client, monkeypatch):
     db = SessionLocal()
     agent = make_agent(db, name="eval-agent-telemetry-timeout")
-    dataset = EvalDataset(name="telemetry-timeout", items=[{"prompt": "x"}])
+    dataset = EvalDataset(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="telemetry-timeout", items=[{"prompt": "x"}])
     db.add(dataset)
     db.commit()
     data, _ = stub_environment(monkeypatch)
@@ -190,7 +195,9 @@ def test_harness_run_completes(client, monkeypatch):
     agent = make_agent(db, name="harness-agent", method="harness")
     agent.resource_id = "harness_agent-Flr7ibmASq"
     agent.arn = "arn:aws:bedrock-agentcore:us-west-2:1:harness/harness_agent-Flr7ibmASq"
-    dataset = EvalDataset(name="mini3", items=[{"prompt": "x"}, {"prompt": "y"}])
+    dataset = EvalDataset(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="mini3", items=[{"prompt": "x"}, {"prompt": "y"}])
     db.add(dataset)
     db.commit()
     data, calls = stub_environment(monkeypatch)
@@ -224,6 +231,7 @@ def test_harness_run_completes(client, monkeypatch):
     assert run["status"] == "completed", run.get("error")
     assert harness_calls["n"] == 2 and calls["n"] == 0  # InvokeHarness, not runtime
     telemetry_wait.assert_called_once_with(
+        workspace=ANY,
         session_id=run["session_ids"][-1],
         content_log_group=(
             "/aws/bedrock-agentcore/runtimes/"
@@ -248,7 +256,7 @@ def test_harness_without_telemetry_group_rejected(client, monkeypatch):
     agent = make_agent(db, name="harness-cold", method="harness")
     agent.resource_id = "harness_cold-Abc123XYZ0"
     db.commit()
-    dataset = EvalDataset(name="mini4", items=[{"prompt": "x"}])
+    dataset = EvalDataset(workspace_id=DEFAULT_WORKSPACE_ID, name="mini4", items=[{"prompt": "x"}])
     db.add(dataset)
     db.commit()
     _stub_harness_logs(monkeypatch, [])

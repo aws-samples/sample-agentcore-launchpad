@@ -10,9 +10,10 @@ import pytest
 
 import app.optimization.canary_infra as infra
 import app.optimization.service as exp_svc
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
+from tests.conftest import ws_ctx
 
 RUNTIME_ARN = (
     "arn:aws:bedrock-agentcore:us-west-2:111122223333:runtime/runtime_x-abcdefghij"
@@ -27,17 +28,14 @@ class ResourceNotFoundException(Exception):
     pass
 
 
-def _patch_settings(monkeypatch, **resources):
+def _workspace(monkeypatch, **resources):
     res = {
         "artifacts_bucket": "bkt",
         "execution_role_arn": "arn:role/exec",
         "gateway_role_arn": "arn:role/gw",
     }
     res.update(resources)
-    monkeypatch.setattr(
-        infra, "get_settings",
-        lambda: SimpleNamespace(resources=res, region="us-west-2"),
-    )
+    return ws_ctx(res)
 
 
 def _fake_pip(_cmd, **_kwargs):
@@ -71,11 +69,11 @@ def test_current_version_stringifies():
 def test_mint_candidate_reads_version_from_update_and_leaves_ledger_untouched(
     monkeypatch, tmp_path
 ):
-    _patch_settings(monkeypatch)
+    workspace = _workspace(monkeypatch)
     db = SessionLocal()
     try:
         agent = Agent(
-            name="mintme",
+            workspace_id=DEFAULT_WORKSPACE_ID, name="mintme",
             method="zip_runtime",
             status="active",
             arn=RUNTIME_ARN,
@@ -110,6 +108,7 @@ def test_mint_candidate_reads_version_from_update_and_leaves_ledger_untouched(
             agent=db2.get(Agent, agent_id),
             edited_spec=spec,
             control_client=control,
+            workspace=workspace,
             canary_id="can123",
             pip_runner=_fake_pip,
             uploader=lambda local, bucket, key: uploads.append((bucket, key)),
@@ -141,13 +140,14 @@ def test_mint_candidate_reads_version_from_update_and_leaves_ledger_untouched(
 
 
 def test_mint_candidate_container_is_follow_up(monkeypatch, tmp_path):
-    _patch_settings(monkeypatch)
+    workspace = _workspace(monkeypatch)
     spec = AgentSpec(name="containeragent", method="container", system_prompt="p")
     with pytest.raises(NotImplementedError, match="container"):
         infra.mint_candidate_version(
             agent=SimpleNamespace(name="c", resource_id="c-x"),
             edited_spec=spec,
             control_client=MagicMock(),
+            workspace=workspace,
             canary_id="can123",
             build_root=tmp_path,
         )
@@ -155,7 +155,6 @@ def test_mint_candidate_container_is_follow_up(monkeypatch, tmp_path):
 
 # ─── dedicated per-canary gateway ────────────────────────────────────────────
 def test_create_canary_gateway_is_unique_and_iam(monkeypatch):
-    _patch_settings(monkeypatch)
     control = MagicMock()
     control.create_gateway.return_value = {"gatewayId": "gw-can"}
     control.get_gateway.return_value = {
@@ -163,7 +162,9 @@ def test_create_canary_gateway_is_unique_and_iam(monkeypatch):
         "gatewayArn": "arn:gw",
         "gatewayUrl": "https://gw",
     }
-    out = infra.create_canary_gateway(control_client=control, canary_id="abc123def456")
+    out = infra.create_canary_gateway(
+        control_client=control, workspace=_workspace(monkeypatch), canary_id="abc123def456"
+    )
     assert out == {
         "gateway_id": "gw-can",
         "gateway_arn": "arn:gw",
@@ -176,7 +177,6 @@ def test_create_canary_gateway_is_unique_and_iam(monkeypatch):
 
 
 def test_create_canary_gateway_adopts_on_conflict(monkeypatch):
-    _patch_settings(monkeypatch)
     control = MagicMock()
     control.create_gateway.side_effect = ConflictException("already exists")
     control.list_gateways.return_value = {
@@ -190,7 +190,9 @@ def test_create_canary_gateway_adopts_on_conflict(monkeypatch):
         "gatewayArn": "arn:gw",
         "gatewayUrl": "https://gw",
     }
-    out = infra.create_canary_gateway(control_client=control, canary_id="dupe123456")
+    out = infra.create_canary_gateway(
+        control_client=control, workspace=_workspace(monkeypatch), canary_id="dupe123456"
+    )
     # a prior attempt's gateway is adopted by name rather than re-created
     assert out == {
         "gateway_id": "gw-existing",

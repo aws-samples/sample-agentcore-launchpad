@@ -13,7 +13,7 @@ import httpx
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 
-from app.services.workspace import default_workspace_context
+from app.services.workspace import WorkspaceContext
 
 SESSION_HEADER = "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"
 
@@ -25,6 +25,7 @@ def _default_signer(creds: Any, region: str, aws_request: AWSRequest) -> None:
 def sigv4_post(
     url: str,
     json_body: dict[str, Any],
+    workspace: WorkspaceContext,
     *,
     session_id: str | None = None,
     poster: Any = None,
@@ -38,7 +39,6 @@ def sigv4_post(
     header pins the A/B variant for that session. ``poster``/``signer`` are test
     injection seams — no real AWS or network when both are supplied.
     """
-    workspace = default_workspace_context()
     credentials = workspace.credentials()
     signer = signer or _default_signer
 

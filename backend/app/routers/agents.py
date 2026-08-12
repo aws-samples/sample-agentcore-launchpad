@@ -32,6 +32,7 @@ from app.services.runtime_discovery import (
     scan_harnesses,
     scan_runtimes,
 )
+from app.services.workspace import WorkspaceContext
 
 logger = logging.getLogger("launchpad.agents")
 
@@ -97,22 +98,25 @@ def _latest_deployment(db: Session, agent_id: str) -> Deployment | None:
     )
 
 
-def _delete_agent_resources(agent: Agent) -> bool:
+def _delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> bool:
     """Tear down the method-specific AWS resource for an agent (idempotent)."""
     if agent.method == DISCOVERED_METHOD:
         return False
     if agent.method == "harness":
-        harness_method.delete_agent_resources(agent)
+        harness_method.delete_agent_resources(agent, workspace)
     elif agent.method in ("zip_runtime", "studio"):
-        zip_method.delete_agent_resources(agent)
+        zip_method.delete_agent_resources(agent, workspace)
     elif agent.method == "container":
-        container_method.delete_agent_resources(agent)
+        container_method.delete_agent_resources(agent, workspace)
     # After the resource, never before: deleting the execution role while the
     # runtime still references it can wedge the runtime's own deletion. A failed
     # role delete must not block deleting the agent, so this returns rather than
     # raises and logs the role name for a later sweep.
     agent_iam.delete_execution_role(
-        agent, get_settings(), lambda msg: logger.info("agent %s: %s", agent.id, msg)
+        agent,
+        get_settings(),
+        workspace,
+        lambda msg: logger.info("agent %s: %s", agent.id, msg),
     )
     return True
 
@@ -185,12 +189,15 @@ def list_agents(
 
 
 @router.get("/agents/discovery")
-def discover_runtimes(db: Session = Depends(get_db)) -> dict[str, Any]:
-    control = control_client()
-    runtimes = scan_runtimes(control, db)
-    harnesses, harness_scan_error = scan_harnesses(control, db)
+def discover_runtimes(
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    control = control_client(ws.context)
+    runtimes = scan_runtimes(control, db, workspace_id=ws.id)
+    harnesses, harness_scan_error = scan_harnesses(control, db, workspace_id=ws.id)
     return {
-        "region": get_settings().region,
+        "region": ws.context.region,
         "runtimes": runtimes,
         "harnesses": harnesses,
         "harness_scan_error": harness_scan_error,
@@ -204,7 +211,7 @@ def import_discovered_runtimes(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Import selected Runtimes and/or Harnesses; result rows are keyed by kind."""
-    control = control_client()
+    control = control_client(ws.context)
     result = import_runtimes(control, db, req.runtime_ids, workspace_id=ws.id)
     for bucket, rows in import_harnesses(
         control, db, req.harness_ids, workspace_id=ws.id
@@ -344,7 +351,9 @@ def convert_agent(
     platform = platform_requirements(*hc.conversion_platform_inputs(source))
     try:
         files = hc.export_harness(source.arn)
-        spec = hc.build_conversion_spec(source, files, platform, new_name)
+        spec = hc.build_conversion_spec(
+            source, files, platform, new_name, ws.context
+        )
     except hc.ConversionError as exc:
         raise AppError("agent.convert_failed", str(exc), status_code=502) from exc
 
@@ -374,6 +383,7 @@ def invoke_agent(
     result = invoke_agent_text(
         agent, req.prompt, session_id=req.session_id,
         actor_id=scoped_actor(agent.id, req.actor_id),
+        workspace=ws.context,
     )
     return InvokeResponse(
         text=result["text"],
@@ -391,7 +401,7 @@ def delete_agent(
     agent = _agent_in(db, ws, agent_id)
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
-    aws_resource_deleted = _delete_agent_resources(agent)
+    aws_resource_deleted = _delete_agent_resources(agent, ws.context)
     agent.status = "deleted"
     agent.updated_at = datetime.now(UTC)
     db.commit()

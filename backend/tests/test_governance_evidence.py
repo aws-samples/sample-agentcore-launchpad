@@ -166,7 +166,7 @@ def _realistic_streams(mode: str = "ENFORCE") -> list[tuple[dict[str, Any], floa
 
 def test_overlapping_projections_are_not_double_counted():
     cw = FakeCW(_realistic_streams())
-    result = ge.gateway_decisions(_control(), cw, GW, "7d")
+    result = ge.gateway_decisions(_control(), cw, GW, "7d", "default")
 
     assert result["available"] is True
     # AuthorizeAction 57 (per call) + PartiallyAuthorizeActions 5x116 (per tool)
@@ -187,14 +187,14 @@ def test_deny_only_published_per_tool_is_still_counted():
     """Regression: a fixed {TargetResource,OperationName,Mode} projection finds no
     DenyDecisions stream on this gateway and would report zero denials."""
     cw = FakeCW(_realistic_streams())
-    result = ge.gateway_decisions(_control(), cw, GW, "7d")
+    result = ge.gateway_decisions(_control(), cw, GW, "7d", "default")
     assert result["totals"]["deny"] == 64
     assert {r["tool"] for r in result["by_tool"]} >= {"hr-database___create_payout"}
 
 
 def test_other_gateway_streams_are_excluded():
     cw = FakeCW(_realistic_streams())
-    result = ge.gateway_decisions(_control(), cw, GW, "7d")
+    result = ge.gateway_decisions(_control(), cw, GW, "7d", "default")
     assert 999 not in (result["totals"]["allow"], result["totals"]["deny"])
     assert result["evidence_count"] == 701
 
@@ -203,7 +203,7 @@ def test_breakdowns_are_not_required_to_partition_the_total():
     """by_policy covers only decisions that had a determining policy — it is a
     breakdown, not a decomposition, and must not be asserted to sum to the total."""
     cw = FakeCW(_realistic_streams())
-    result = ge.gateway_decisions(_control(), cw, GW, "7d")
+    result = ge.gateway_decisions(_control(), cw, GW, "7d", "default")
     by_policy_total = sum(r["allow"] + r["deny"] for r in result["by_policy"])
     assert by_policy_total == 57
     assert by_policy_total < result["evidence_count"]
@@ -215,7 +215,7 @@ def test_zero_evidence_in_window_is_available_not_unavailable():
     streams = [(m, None) for m, _ in _realistic_streams()]
     cw = FakeCW([(m, 0.0) for m, _ in streams])
     cw.totals = {}  # every stream returns an empty Values list
-    result = ge.gateway_decisions(_control(), cw, GW, "24h")
+    result = ge.gateway_decisions(_control(), cw, GW, "24h", "default")
 
     assert result["available"] is True
     assert result["unavailable_reason"] is None
@@ -230,7 +230,7 @@ def test_unreadable_channel_reports_the_aws_error_code():
                 "GetMetricData",
             )
 
-    result = ge.gateway_decisions(_control(), Denied(_realistic_streams()), GW, "24h")
+    result = ge.gateway_decisions(_control(), Denied(_realistic_streams()), GW, "24h", "default")
     assert result["available"] is False
     assert result["unavailable_reason"] == "AccessDeniedException"
     assert result["evidence_count"] == 0
@@ -239,20 +239,20 @@ def test_unreadable_channel_reports_the_aws_error_code():
 
 def test_policy_filter_narrows_and_flags_unattributable_operations():
     cw = FakeCW(_realistic_streams())
-    result = ge.gateway_decisions(_control(), cw, GW, "7d", policy_id=POLICY)
+    result = ge.gateway_decisions(_control(), cw, GW, "7d", "default", policy_id=POLICY)
 
     assert result["evidence_count"] == 57
     # PartiallyAuthorizeActions publishes no Policy dimension here, so its
     # decisions cannot be attributed — the response must say so.
     assert result["policy_filter_partial"] is True
 
-    unknown = ge.gateway_decisions(_control(), cw, GW, "7d", policy_id="not-a-policy")
+    unknown = ge.gateway_decisions(_control(), cw, GW, "7d", "default", policy_id="not-a-policy")
     assert unknown["evidence_count"] == 0
 
 
 def test_decisions_stay_empty_and_are_never_synthesized():
     cw = FakeCW(_realistic_streams())
-    result = ge.gateway_decisions(_control(), cw, GW, "7d")
+    result = ge.gateway_decisions(_control(), cw, GW, "7d", "default")
     assert result["decisions"] == []
     assert result["count"] == 0
     assert result["source"] == "metrics"
@@ -260,22 +260,22 @@ def test_decisions_stay_empty_and_are_never_synthesized():
 
 def test_cache_hit_then_force_bypass():
     cw = FakeCW(_realistic_streams())
-    first = ge.gateway_decisions(_control(), cw, GW, "7d")
+    first = ge.gateway_decisions(_control(), cw, GW, "7d", "default")
     calls_after_first = cw.get_metric_data_calls
     assert first["cache"]["hit"] is False
 
-    second = ge.gateway_decisions(_control(), cw, GW, "7d")
+    second = ge.gateway_decisions(_control(), cw, GW, "7d", "default")
     assert second["cache"]["hit"] is True
     assert cw.get_metric_data_calls == calls_after_first
 
-    third = ge.gateway_decisions(_control(), cw, GW, "7d", force=True)
+    third = ge.gateway_decisions(_control(), cw, GW, "7d", "default", force=True)
     assert third["cache"]["hit"] is False
     assert cw.get_metric_data_calls > calls_after_first
 
 
 def test_unknown_range_falls_back_to_24h():
     cw = FakeCW(_realistic_streams())
-    result = ge.gateway_decisions(_control(), cw, GW, "nonsense")
+    result = ge.gateway_decisions(_control(), cw, GW, "nonsense", "default")
     assert result["range"] == "24h"
 
 
@@ -333,7 +333,7 @@ def test_span_rows_are_merged_without_redefining_evidence_count(monkeypatch):
         lambda control, gateway_id: {"gatewayId": gateway_id, "gatewayArn": "arn:gw"},
     )
     cw = FakeCW(_realistic_streams())
-    result = ge.gateway_decisions(_control(), cw, GW, "7d", logs=object())
+    result = ge.gateway_decisions(_control(), cw, GW, "7d", "default", logs=object())
 
     assert result["source"] == "metrics+spans"
     assert result["count"] == 1 == len(result["decisions"])
@@ -352,7 +352,7 @@ def test_span_failure_degrades_to_metrics_only(monkeypatch):
         lambda control, gateway_id: {"gatewayId": gateway_id, "gatewayArn": "arn:gw"},
     )
     cw = FakeCW(_realistic_streams())
-    result = ge.gateway_decisions(_control(), cw, GW, "7d", logs=object())
+    result = ge.gateway_decisions(_control(), cw, GW, "7d", "default", logs=object())
 
     assert result["decisions"] == [] and result["count"] == 0
     assert result["spans_unavailable_reason"] == "observability.query_failed"
@@ -376,7 +376,7 @@ def test_missing_span_delivery_is_reported_without_changing_metrics(monkeypatch)
     )
 
     result = ge.gateway_decisions(
-        _control(), FakeCW(_realistic_streams()), GW, "7d", logs=object()
+        _control(), FakeCW(_realistic_streams()), GW, "7d", "default", logs=object()
     )
 
     assert result["span_channel_status"] == "missing"
@@ -398,7 +398,7 @@ def test_no_gateway_arn_skips_the_span_read(monkeypatch):
         "app.services.governance._require_gateway",
         lambda control, gateway_id: {"gatewayId": gateway_id},  # no gatewayArn
     )
-    result = ge.gateway_decisions(_control(), FakeCW(_realistic_streams()), GW, "7d")
+    result = ge.gateway_decisions(_control(), FakeCW(_realistic_streams()), GW, "7d", "default")
     assert called["n"] == 0
     assert result["decisions"] == []
 
@@ -452,9 +452,11 @@ def test_mutation_routes_pass_a_real_evidence_count(client, monkeypatch, path, q
 
     monkeypatch.setattr(gov.governance_service, queue_fn, fake_queue)
     monkeypatch.setattr(gov.governance_service, "run_policy_change", lambda _id: None)
-    monkeypatch.setattr(gov, "control_client", lambda: _control())
-    monkeypatch.setattr(gov, "iam_client", lambda: _control())
-    monkeypatch.setattr(gov, "cw_client", lambda: FakeCW(_realistic_streams(mode="LOG_ONLY")))
+    monkeypatch.setattr(gov, "control_client", lambda _ws=None: _control())
+    monkeypatch.setattr(gov, "iam_client", lambda _ws=None: _control())
+    monkeypatch.setattr(
+        gov, "cw_client", lambda _ws=None: FakeCW(_realistic_streams(mode="LOG_ONLY"))
+    )
 
     body: dict[str, Any] = {
         "expected_gateway_updated_at": "2026-07-09T12:48:59Z",

@@ -11,6 +11,7 @@ from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.main import create_app
 from app.models.ledger import Agent, ChatSession
 from app.services.chat import chat_stream, sse_encode
+from tests.conftest import ws_ctx
 
 
 def delta_events(text: str):
@@ -45,9 +46,9 @@ def test_chat_stream_buffered_chunks(monkeypatch):
     monkeypatch.setattr(
         chat_service,
         "invoke_agent_events",
-        lambda a, p, session_id=None, actor_id="river": delta_events("x" * 150),
+        lambda a, p, session_id=None, actor_id="river", **_kw: delta_events("x" * 150),
     )
-    events = list(chat_stream(agent, "hello"))
+    events = list(chat_stream(agent, "hello", workspace=ws_ctx()))
     kinds = [e["event"] for e in events]
     assert kinds[0] == "meta" and kinds[-1] == "done"
     assert events[0]["data"]["mode"] == "buffered"
@@ -72,7 +73,7 @@ def test_chat_stream_container_forwards_native_events(monkeypatch):
         lambda *args, **kwargs: iter(native),
     )
 
-    events = list(chat_stream(agent, "hello"))
+    events = list(chat_stream(agent, "hello", workspace=ws_ctx()))
 
     assert events[0]["data"]["mode"] == "stream"
     assert events[1:-1] == native
@@ -88,7 +89,7 @@ def test_chat_stream_error_event(monkeypatch):
         raise RuntimeError("runtime unavailable")
 
     monkeypatch.setattr(chat_service, "invoke_agent_events", boom)
-    events = list(chat_stream(agent, "hello"))
+    events = list(chat_stream(agent, "hello", workspace=ws_ctx()))
     assert events[-1]["event"] == "error"
     assert "runtime unavailable" in events[-1]["data"]["message"]
 
@@ -145,7 +146,7 @@ def test_chat_endpoint_tracks_session(client, monkeypatch):
     monkeypatch.setattr(
         chat_service,
         "invoke_agent_events",
-        lambda a, p, session_id=None, actor_id="river": delta_events("ok"),
+        lambda a, p, session_id=None, actor_id="river", **_kw: delta_events("ok"),
     )
     res = client.post(f"/api/chat/{agent_id}", json={"prompt": "hi"})
     assert res.status_code == 200
@@ -192,7 +193,7 @@ def test_chat_history_persists_and_replays(client, monkeypatch):
     monkeypatch.setattr(
         chat_service,
         "invoke_agent_events",
-        lambda a, p, session_id=None, actor_id="river": delta_events(f"echo: {p}"),
+        lambda a, p, session_id=None, actor_id="river", **_kw: delta_events(f"echo: {p}"),
     )
     client.post(f"/api/chat/{agent_id}", json={"prompt": "first question"})
     sid = client.get(f"/api/chat/{agent_id}/sessions").json()["sessions"][0]["session_id"]
@@ -228,7 +229,7 @@ def test_sessions_without_transcript_hidden(client, monkeypatch):
     monkeypatch.setattr(
         chat_service,
         "invoke_agent_events",
-        lambda a, p, session_id=None, actor_id="river": delta_events("ok"),
+        lambda a, p, session_id=None, actor_id="river", **_kw: delta_events("ok"),
     )
     client.post(f"/api/chat/{agent_id}", json={"prompt": "hi"})
     sessions = client.get(f"/api/chat/{agent_id}/sessions").json()["sessions"]
@@ -284,7 +285,7 @@ def test_authenticated_chat_identity_cannot_be_spoofed(monkeypatch):
         monkeypatch.setattr(
             policy_identity,
             "gateway_user_token",
-            lambda username, role, email=None: (
+            lambda _ws, username, role, email=None: (
                 captured.update(policy_user=username, policy_role=role) or "trusted-jwt"
             ),
         )

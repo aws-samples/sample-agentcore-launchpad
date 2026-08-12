@@ -7,6 +7,7 @@ import app.core.config as config_module
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError
 from app.services import model_prices as mp
+from tests.conftest import ws_ctx
 
 SOURCE = {
     "sample_spec": {"mode": "chat"},  # doc entry, no costs — skipped
@@ -192,7 +193,7 @@ class FakeSpanLogs:
 
 
 def test_span_models_discovers_from_spans():
-    assert mp._span_models(logs=FakeSpanLogs(["openai.gpt-5.6-terra", "x"])) == [
+    assert mp._span_models(ws_ctx(), logs=FakeSpanLogs(["openai.gpt-5.6-terra", "x"])) == [
         "openai.gpt-5.6-terra", "x"]
 
 
@@ -216,7 +217,7 @@ def test_refresh_persists_and_applies(tmp_path, monkeypatch):
     get_settings.cache_clear()
     assert get_settings().model_prices["sonnet-4-6"]["input"] == 99.0
 
-    monkeypatch.setattr(mp, "_span_models", lambda logs=None, hours=0: [])
+    monkeypatch.setattr(mp, "_span_models", lambda _ws, logs=None, hours=0: [])
     result = mp.refresh_model_prices(
         cw=FakeCWModels(["global.anthropic.claude-sonnet-4-6"]),
         fetch=lambda url: SOURCE,
@@ -267,8 +268,8 @@ def test_prices_endpoints(client, monkeypatch, tmp_path):
         "input": 99.0, "output": 99.0}}}), encoding="utf-8")
     monkeypatch.setattr(config_module, "CONFIG_FILE", cfg)
     get_settings.cache_clear()
-    monkeypatch.setattr(mp, "_seen_models", lambda cw=None: [])
-    monkeypatch.setattr(mp, "_span_models", lambda logs=None, hours=0: [])
+    monkeypatch.setattr(mp, "_seen_models", lambda _ws, cw=None: [])
+    monkeypatch.setattr(mp, "_span_models", lambda _ws, logs=None, hours=0: [])
     monkeypatch.setattr(mp, "_fetch_source", lambda url: SOURCE)
     res = client.post("/api/observability/prices/refresh")
     assert res.status_code == 200

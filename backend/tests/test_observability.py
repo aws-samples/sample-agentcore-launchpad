@@ -8,6 +8,8 @@ from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.services import observability as obs
 
+from .conftest import ws_ctx
+
 BASE_NS = 1_700_000_000_000_000_000
 PRICES = {"sonnet-4-6": {"input": 3.0, "output": 15.0},
           "nemotron-nano": {"input": 0.2, "output": 0.6}}
@@ -419,9 +421,9 @@ def _seed_agent(name="hr-assistant", resource_id="hr_assistant-Flr7ibmASq",
 def test_cache_second_call_hits_no_aws(monkeypatch):
     fake = _fake_logs()
     db = SessionLocal()
-    first = obs.list_traces("24h", db, logs=fake)
+    first = obs.list_traces("24h", db, ws_ctx(), logs=fake)
     calls_after_first = fake.start_calls
-    second = obs.list_traces("24h", db, logs=fake)
+    second = obs.list_traces("24h", db, ws_ctx(), logs=fake)
     db.close()
     assert calls_after_first == 2  # aggregates + roots
     assert fake.start_calls == calls_after_first  # cache hit → no new queries
@@ -432,7 +434,7 @@ def test_cache_second_call_hits_no_aws(monkeypatch):
 def test_global_queries_use_source_instead_of_enumerated_log_groups():
     fake = _fake_logs()
     db = SessionLocal()
-    obs.list_traces("24h", db, logs=fake)
+    obs.list_traces("24h", db, ws_ctx(), logs=fake)
     db.close()
     assert len(fake.start_kwargs) == 2
     for call in fake.start_kwargs:
@@ -458,12 +460,12 @@ def test_explicit_runtime_group_query_keeps_log_group_names():
 def test_cache_force_bypasses_and_ttl_expires(monkeypatch):
     fake = _fake_logs()
     db = SessionLocal()
-    obs.list_traces("24h", db, logs=fake)
-    obs.list_traces("24h", db, force=True, logs=fake)
+    obs.list_traces("24h", db, ws_ctx(), logs=fake)
+    obs.list_traces("24h", db, ws_ctx(), force=True, logs=fake)
     assert fake.start_calls == 4  # force re-ran both queries
     base = obs._now()
     monkeypatch.setattr(obs, "_now", lambda: base + obs.CACHE_TTL_SECONDS + 1)
-    obs.list_traces("24h", db, logs=fake)
+    obs.list_traces("24h", db, ws_ctx(), logs=fake)
     db.close()
     assert fake.start_calls == 6  # TTL expired → re-queried
 
@@ -475,7 +477,7 @@ def test_agent_mapper_ledger_and_fallback():
     _seed_agent()
     _seed_agent(name="eval-target", resource_id="eval_target_e02c0f-RNlJ17DBlt")
     db = SessionLocal()
-    mapper = obs.build_agent_mapper(db)
+    mapper = obs.build_agent_mapper(db, "default")
     db.close()
     assert mapper("harness_hr_assistant.DEFAULT") == "hr-assistant"
     assert mapper("eval_target_e02c0f.DEFAULT") == "eval-target"
@@ -487,7 +489,7 @@ def test_agent_mapper_prefers_active_over_deleted():
     _seed_agent(name="old-name", resource_id="hr_assistant-AAAA", status="deleted")
     _seed_agent(name="hr-assistant", resource_id="hr_assistant-Flr7ibmASq")
     db = SessionLocal()
-    mapper = obs.build_agent_mapper(db)
+    mapper = obs.build_agent_mapper(db, "default")
     db.close()
     assert mapper("harness_hr_assistant.DEFAULT") == "hr-assistant"
 
@@ -496,10 +498,10 @@ def test_agent_mapper_prefers_active_over_deleted():
 
 
 def test_transcript_no_ledger_row_and_no_memory_is_unavailable(monkeypatch):
-    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda **k: [])
+    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda *a, **k: [])
     monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
     db = SessionLocal()
-    result = obs.session_transcript(db, "external-session-id-123")
+    result = obs.session_transcript(db, "external-session-id-123", ws_ctx())
     db.close()
     assert result == {"available": False, "reason": "not_platform_session"}
 
@@ -515,7 +517,7 @@ def test_transcript_memory_error_degrades(monkeypatch):
         raise RuntimeError("memory down")
 
     monkeypatch.setattr(obs.memory, "list_events", boom)
-    result = obs.session_transcript(db, "s" * 64)
+    result = obs.session_transcript(db, "s" * 64, ws_ctx())
     db.close()
     assert result["available"] is False and result["reason"] == "memory_unavailable"
     assert "memory down" in result["detail"]
@@ -536,7 +538,7 @@ def test_transcript_orders_turns(monkeypatch):
     ]
     monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: events)
     monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [{"id": 1}])
-    result = obs.session_transcript(db, "s" * 64)
+    result = obs.session_transcript(db, "s" * 64, ws_ctx())
     db.close()
     assert result["available"] is True and result["agent_name"] == "hr-assistant"
     assert [t["text"] for t in result["turns"]] == ["first q", "first a", "second q"]
@@ -613,7 +615,7 @@ def test_transcript_reconciles_incomplete_memory_from_chat_ledger(monkeypatch):
     )
     monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [])
 
-    result = obs.session_transcript(db, session_id)
+    result = obs.session_transcript(db, session_id, ws_ctx())
     db.close()
 
     assert result["origin"] == "ledger"
@@ -633,7 +635,8 @@ def test_transcript_falls_back_to_eval_run_session(monkeypatch):
     agent_id = _seed_agent()
     sid = "e" * 64
     db = SessionLocal()
-    run = EvalRun(agent_id=agent_id, agent_name="hr-assistant", mode="evaluators",
+    run = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                  agent_name="hr-assistant", mode="evaluators",
                   evaluators=[], status="completed", session_ids=[sid])
     db.add(run)
     db.commit()
@@ -641,7 +644,7 @@ def test_transcript_falls_back_to_eval_run_session(monkeypatch):
 
     seen: dict = {}
 
-    def fake_events(actor_id, session_id, max_results=20):
+    def fake_events(_ws, actor_id, session_id, max_results=20):
         seen["actor"] = actor_id
         envelope = json.dumps(
             {"message": {"role": "user", "content": [{"text": "PTO balance?"}]}}
@@ -653,7 +656,7 @@ def test_transcript_falls_back_to_eval_run_session(monkeypatch):
 
     monkeypatch.setattr(obs.memory, "list_events", fake_events)
     monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [])
-    result = obs.session_transcript(db, sid)
+    result = obs.session_transcript(db, sid, ws_ctx())
     db.close()
     assert result["available"] is True
     assert result["source"] == "eval" and result["run_id"] == run_id
@@ -672,7 +675,7 @@ def _events_for(actor_map):
     """memory.list_events stub: {actor_id: [texts]} → conversational events."""
     probed = []
 
-    def fake_events(actor_id, session_id, max_results=20):
+    def fake_events(_ws, actor_id, session_id, max_results=20):
         probed.append(actor_id)
         return [
             {"eventTimestamp": f"2026-07-28T0{i}:00:00", "payload": [
@@ -689,11 +692,11 @@ def test_transcript_external_session_reads_bare_default_actor(monkeypatch):
     still resolve."""
     agent_id = _seed_agent()
     fake_events, probed = _events_for({"default": ["second q", "first q"]})
-    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda **k: [])
+    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda *a, **k: [])
     monkeypatch.setattr(obs.memory, "list_events", fake_events)
     db = SessionLocal()
     agent = db.get(Agent, agent_id)
-    result = obs.session_transcript(db, EXTERNAL_SID, agent=agent)
+    result = obs.session_transcript(db, EXTERNAL_SID, ws_ctx(), agent=agent)
     db.close()
     assert result["available"] is True and result["source"] == "external"
     assert result["actor_id"] == "default" and probed == ["default"]
@@ -709,11 +712,11 @@ def test_transcript_external_session_prefers_agent_scoped_actor(monkeypatch):
     agent_id = _seed_agent()
     scoped = f"{agent_id}__api"
     fake_events, probed = _events_for({scoped: ["hi from api"], "default": ["nope"]})
-    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda **k: [scoped])
+    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda *a, **k: [scoped])
     monkeypatch.setattr(obs.memory, "list_events", fake_events)
     db = SessionLocal()
     agent = db.get(Agent, agent_id)
-    result = obs.session_transcript(db, EXTERNAL_SID, agent=agent)
+    result = obs.session_transcript(db, EXTERNAL_SID, ws_ctx(), agent=agent)
     db.close()
     assert result["actor_id"] == scoped and probed == [scoped]  # default not probed
     assert [t["text"] for t in result["turns"]] == ["hi from api"]
@@ -725,6 +728,7 @@ def test_transcript_external_session_labels_owning_experiment(monkeypatch):
     agent_id = _seed_agent()
     db = SessionLocal()
     experiment = Experiment(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name="EXP-hr-assistant", agent_id=agent_id, agent_name="hr-assistant",
         artifacts={"traffic": {"session_ids": ["other-sid", EXTERNAL_SID]}},
     )
@@ -732,9 +736,11 @@ def test_transcript_external_session_labels_owning_experiment(monkeypatch):
     db.commit()
     exp_id, exp_name = experiment.id, experiment.name
     fake_events, _ = _events_for({"default": ["prompt from traffic"]})
-    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda **k: [])
+    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda *a, **k: [])
     monkeypatch.setattr(obs.memory, "list_events", fake_events)
-    result = obs.session_transcript(db, EXTERNAL_SID, agent=db.get(Agent, agent_id))
+    result = obs.session_transcript(
+        db, EXTERNAL_SID, ws_ctx(), agent=db.get(Agent, agent_id)
+    )
     db.close()
     assert result["source"] == "experiment"
     assert result["experiment_id"] == exp_id and result["experiment_name"] == exp_name
@@ -753,13 +759,13 @@ def test_transcript_external_probe_error_degrades(monkeypatch):
     # ListActors fails (agent known, so the scoped-actor lookup runs)
     monkeypatch.setattr(obs.memory, "list_actor_ids", boom)
     monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
-    assert obs.session_transcript(db, EXTERNAL_SID, agent=agent) == {
+    assert obs.session_transcript(db, EXTERNAL_SID, ws_ctx(), agent=agent) == {
         "available": False, "reason": "not_platform_session"}
 
     # ListEvents fails
-    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda **k: [])
+    monkeypatch.setattr(obs.memory, "list_actor_ids", lambda *a, **k: [])
     monkeypatch.setattr(obs.memory, "list_events", boom)
-    assert obs.session_transcript(db, EXTERNAL_SID, agent=agent) == {
+    assert obs.session_transcript(db, EXTERNAL_SID, ws_ctx(), agent=agent) == {
         "available": False, "reason": "not_platform_session"}
     db.close()
 
@@ -769,13 +775,13 @@ def test_get_session_hands_the_traced_agent_to_the_transcript(monkeypatch):
     agent_id = _seed_agent()
     seen: dict = {}
 
-    def fake_transcript(db, session_id, agent=None):
+    def fake_transcript(db, session_id, workspace, agent=None):
         seen["agent_id"] = agent.id if agent is not None else None
         return {"available": False, "reason": "not_platform_session"}
 
     monkeypatch.setattr(obs, "session_transcript", fake_transcript)
     db = SessionLocal()
-    result = obs.get_session("s" * 64, "24h", db, logs=_fake_logs())
+    result = obs.get_session("s" * 64, "24h", db, ws_ctx(), logs=_fake_logs())
     db.close()
     assert seen["agent_id"] == agent_id  # resolved from AGG_ROW's service name
     assert result["transcript"]["available"] is False
@@ -843,7 +849,7 @@ def test_eval_turns_from_content_logs_groups_by_trace():
         "not json at all",  # skipped
     ]
     logs = FakeLogsClient([page1, page2])
-    turns = obs.eval_turns_from_content_logs("/lg", sid, None, logs=logs)
+    turns = obs.eval_turns_from_content_logs("/lg", sid, None, ws_ctx(), logs=logs)
     assert [(t["role"], t["text"]) for t in turns] == [
         ("USER", "Q1?"), ("ASSISTANT", "A1"),
         ("USER", "Q2?"), ("ASSISTANT", "A2"),
@@ -863,10 +869,12 @@ def test_transcript_eval_falls_back_to_content_logs(monkeypatch):
     agent_id = _seed_agent(method="zip_runtime")
     sid = "f" * 64
     db = SessionLocal()
-    creator = EvalRun(agent_id=agent_id, agent_name="hr-assistant", mode="evaluators",
+    creator = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                      agent_name="hr-assistant", mode="evaluators",
                       evaluators=[], status="completed", session_ids=[sid],
                       created_at=datetime(2026, 7, 11, 1, 0, 0))
-    insights = EvalRun(agent_id=agent_id, agent_name="hr-assistant", mode="insights",
+    insights = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                       agent_name="hr-assistant", mode="insights",
                        evaluators=[], status="completed", session_ids=[sid],
                        created_at=datetime(2026, 7, 11, 3, 0, 0))
     db.add_all([creator, insights])
@@ -882,7 +890,7 @@ def test_transcript_eval_falls_back_to_content_logs(monkeypatch):
         return [{"role": "USER", "text": "hi", "at": "t"}]
 
     monkeypatch.setattr(obs, "eval_turns_from_content_logs", fake_logs_turns)
-    result = obs.session_transcript(db, sid)
+    result = obs.session_transcript(db, sid, ws_ctx())
     db.close()
     assert result["available"] is True and result["origin"] == "logs"
     assert result["run_id"] == creator_id  # not the insights re-run
@@ -913,7 +921,7 @@ def test_transcript_decodes_harness_envelopes(monkeypatch):
     ]
     monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: events)
     monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [])
-    result = obs.session_transcript(db, "s" * 64)
+    result = obs.session_transcript(db, "s" * 64, ws_ctx())
     db.close()
     assert [t["text"] for t in result["turns"]] == [
         "How many vacation days?", "plain text"]  # tool-result turn dropped
@@ -937,8 +945,8 @@ def mocked_aws(monkeypatch):
         ],
         values={"m0": [386_000.0], "m1": [26_000.0]},
     )
-    monkeypatch.setattr(obs, "logs_client", lambda: fake_logs)
-    monkeypatch.setattr(obs, "cw_client", lambda: fake_cw)
+    monkeypatch.setattr(obs, "logs_client", lambda _ws=None: fake_logs)
+    monkeypatch.setattr(obs, "cw_client", lambda _ws=None: fake_cw)
     return fake_logs
 
 
@@ -974,9 +982,9 @@ def test_dashboard_tokens_prefer_span_aggregation(client, monkeypatch):
         {"model": "ghost", "tokens_in": 0, "tokens_out": 0,
          "wrapper_in": 0, "wrapper_out": 0},
     ]
-    monkeypatch.setattr(obs, "logs_client", lambda: fake_logs)
+    monkeypatch.setattr(obs, "logs_client", lambda _ws=None: fake_logs)
     # CW metrics would report different numbers — they must NOT be consulted
-    monkeypatch.setattr(obs, "cw_client", lambda: FakeCW(
+    monkeypatch.setattr(obs, "cw_client", lambda _ws=None: FakeCW(
         metrics=[{"Namespace": "bedrock-agentcore",
                   "MetricName": "gen_ai.client.token.usage",
                   "Dimensions": [

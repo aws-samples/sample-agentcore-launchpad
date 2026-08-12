@@ -21,13 +21,13 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import get_settings, load_yaml_config
 from app.core.errors import AppError
-from app.services.workspace import default_workspace_context
+from app.services.workspace import WorkspaceContext
 
 ROLE_GROUP = {"admin": "platform-admin", "member": "hr-analyst"}
 POLICY_GROUPS = frozenset(ROLE_GROUP.values())
 SHADOW_MARKER = "launchpad-policy-shadow-v1"
 
-_token_cache: dict[tuple[str, str], dict[str, Any]] = {}
+_token_cache: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 _lock = threading.Lock()
 
 
@@ -153,7 +153,9 @@ def _jwt_claims(token: str) -> dict[str, Any]:
     return claims
 
 
-def gateway_user_token(username: str, role: str, email: str | None = None) -> str | None:
+def gateway_user_token(
+    workspace: WorkspaceContext, username: str, role: str, email: str | None = None
+) -> str | None:
     """Return a verified Cognito user JWT for an authenticated Chat caller.
 
     ``None`` is deliberate only while the console auth gate is disabled, where
@@ -164,8 +166,8 @@ def gateway_user_token(username: str, role: str, email: str | None = None) -> st
     settings = get_settings()
     if not settings.auth_password or not settings.auth_password.get_secret_value():
         return None
-    pool_id = str(settings.resources.get("user_pool_id") or "")
-    client_id = str(settings.resources.get("user_pool_client_id") or "")
+    pool_id = str(workspace.resources.get("user_pool_id") or "")
+    client_id = str(workspace.resources.get("user_pool_client_id") or "")
     if not (pool_id and client_id):
         raise AppError(
             "policy.identity_unavailable",
@@ -173,7 +175,9 @@ def gateway_user_token(username: str, role: str, email: str | None = None) -> st
             status_code=503,
         )
 
-    key = (username, role)
+    # Keyed on the workspace too: each environment has its own user pool, so a
+    # token minted against one is rejected by another's gateway.
+    key = (workspace.account_id, workspace.region, username, role)
     cached = _token_cache.get(key)
     if cached and float(cached["expires_at"]) > time.time() + 60:
         return str(cached["token"])
@@ -184,7 +188,7 @@ def gateway_user_token(username: str, role: str, email: str | None = None) -> st
             return str(cached["token"])
         demo_password = _demo_password(username)
         password = demo_password or _shadow_password(username)
-        cognito = default_workspace_context().client("cognito-idp")
+        cognito = workspace.client("cognito-idp")
         try:
             _ensure_user(
                 cognito,

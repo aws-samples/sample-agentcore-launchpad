@@ -17,6 +17,8 @@ from app.schemas.governance import (
 from app.services import governance
 from app.services.agentcore import policy as policy_api
 
+from .conftest import ws_ctx
+
 
 class FakeControl:
     exceptions = SimpleNamespace(ResourceNotFoundException=KeyError)
@@ -195,7 +197,7 @@ def test_engine_attach_uses_selected_initial_mode(requested_mode, expected_mode)
             request_data["mode"] = requested_mode
         request = EngineRequest(**request_data)
 
-        attach = governance.queue_engine_attach(db, control, "gw-1", request)
+        attach = governance.queue_engine_attach(db, control, ws_ctx(), "gw-1", request)
         governance.run_policy_change(attach["id"], control=control, iam=iam)
 
         change = _refresh(db, attach["id"])
@@ -215,6 +217,7 @@ def test_candidate_cutover_partial_retry_and_inverse_rollback():
         attach = governance.queue_engine_attach(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             EngineRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
@@ -229,6 +232,7 @@ def test_candidate_cutover_partial_retry_and_inverse_rollback():
         create = governance.queue_policy_create(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             PolicyCreateRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
@@ -246,6 +250,7 @@ def test_candidate_cutover_partial_retry_and_inverse_rollback():
         update = governance.queue_policy_update(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             original_id,
             PolicyUpdateRequest(
@@ -261,6 +266,7 @@ def test_candidate_cutover_partial_retry_and_inverse_rollback():
         governance.queue_policy_transition(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             original_id,
             PolicyTransitionRequest(
@@ -285,6 +291,7 @@ def test_candidate_cutover_partial_retry_and_inverse_rollback():
         candidate_change = governance.queue_policy_update(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             original_id,
             PolicyUpdateRequest(
@@ -309,6 +316,7 @@ def test_candidate_cutover_partial_retry_and_inverse_rollback():
         promote = governance.queue_policy_transition(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             candidate_id,
             promote_req,
@@ -326,6 +334,7 @@ def test_candidate_cutover_partial_retry_and_inverse_rollback():
         retry = governance.queue_policy_transition(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             candidate_id,
             PolicyTransitionRequest(
@@ -345,6 +354,7 @@ def test_candidate_cutover_partial_retry_and_inverse_rollback():
         rollback = governance.queue_policy_transition(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             candidate_id,
             PolicyTransitionRequest(
@@ -378,6 +388,7 @@ def test_gateway_enforce_requires_evidence_or_audited_override():
             governance.queue_gateway_mode(
                 db,
                 control,
+                ws_ctx(),
                 iam,
                 "gw-1",
                 GatewayModeRequest(
@@ -392,6 +403,7 @@ def test_gateway_enforce_requires_evidence_or_audited_override():
         queued = governance.queue_gateway_mode(
             db,
             control,
+            ws_ctx(),
             iam,
             "gw-1",
             GatewayModeRequest(
@@ -420,6 +432,7 @@ def test_standalone_policy_promote_can_rollback_from_audit_snapshot():
         attach = governance.queue_engine_attach(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             EngineRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
@@ -432,6 +445,7 @@ def test_standalone_policy_promote_can_rollback_from_audit_snapshot():
         create = governance.queue_policy_create(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             PolicyCreateRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
@@ -446,6 +460,7 @@ def test_standalone_policy_promote_can_rollback_from_audit_snapshot():
         promote = governance.queue_policy_transition(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             policy_id,
             PolicyTransitionRequest(
@@ -463,6 +478,7 @@ def test_standalone_policy_promote_can_rollback_from_audit_snapshot():
         rollback = governance.queue_policy_transition(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             policy_id,
             PolicyTransitionRequest(
@@ -492,6 +508,7 @@ def test_startup_reconciliation_classifies_interrupted_operations():
         attach = governance.queue_engine_attach(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             EngineRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
@@ -505,6 +522,7 @@ def test_startup_reconciliation_classifies_interrupted_operations():
         already_applied = governance.queue_gateway_mode(
             db,
             control,
+            ws_ctx(),
             iam,
             "gw-1",
             GatewayModeRequest(
@@ -521,6 +539,7 @@ def test_startup_reconciliation_classifies_interrupted_operations():
         never_ran = governance.queue_policy_create(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             PolicyCreateRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
@@ -549,6 +568,7 @@ def test_startup_reconciliation_classifies_interrupted_operations():
         interrupted_cutover = governance.queue_policy_transition(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             original["policyId"],
             PolicyTransitionRequest(
@@ -581,6 +601,7 @@ def test_operation_mutex_conflict_and_audit_snapshot_immutability():
         first = governance.queue_engine_attach(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             EngineRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
@@ -592,6 +613,7 @@ def test_operation_mutex_conflict_and_audit_snapshot_immutability():
             governance.queue_engine_attach(
                 db,
                 control,
+                ws_ctx(),
                 "gw-1",
                 EngineRequest(
                     expected_gateway_updated_at=control.gateway["updatedAt"],
@@ -626,6 +648,7 @@ def test_draft_paths_record_the_override_reason_and_need_no_evidence():
         attach = governance.queue_engine_attach(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             EngineRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
@@ -643,6 +666,7 @@ def test_draft_paths_record_the_override_reason_and_need_no_evidence():
         create = governance.queue_policy_create(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             PolicyCreateRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
@@ -661,6 +685,7 @@ def test_draft_paths_record_the_override_reason_and_need_no_evidence():
         update = governance.queue_policy_update(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             policy_id,
             PolicyUpdateRequest(
@@ -683,6 +708,7 @@ def test_policy_delete_guard_execution_and_idempotent_resume():
         attach = governance.queue_engine_attach(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             EngineRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
@@ -694,6 +720,7 @@ def test_policy_delete_guard_execution_and_idempotent_resume():
         create = governance.queue_policy_create(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             PolicyCreateRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
@@ -711,6 +738,7 @@ def test_policy_delete_guard_execution_and_idempotent_resume():
             governance.queue_policy_delete(
                 db,
                 control,
+                ws_ctx(),
                 "gw-1",
                 policy_id,
                 PolicyDeleteRequest(
@@ -724,6 +752,7 @@ def test_policy_delete_guard_execution_and_idempotent_resume():
         delete = governance.queue_policy_delete(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             policy_id,
             PolicyDeleteRequest(
@@ -742,6 +771,7 @@ def test_policy_delete_guard_execution_and_idempotent_resume():
         recreate = governance.queue_policy_create(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             PolicyCreateRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
@@ -755,6 +785,7 @@ def test_policy_delete_guard_execution_and_idempotent_resume():
         pending = governance.queue_policy_delete(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             second_id,
             PolicyDeleteRequest(
@@ -797,6 +828,7 @@ def test_dangling_engine_reference_is_visible_and_blocks_policy_mutations():
             governance.queue_policy_create(
                 db,
                 control,
+                ws_ctx(),
                 "gw-1",
                 PolicyCreateRequest(
                     expected_gateway_updated_at=control.gateway["updatedAt"],
@@ -819,6 +851,7 @@ def test_create_and_attach_replaces_a_dangling_engine_reference():
         attach = governance.queue_engine_attach(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             EngineRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],
@@ -847,6 +880,7 @@ def test_create_and_attach_replaces_a_dangling_engine_reference():
         adopt = governance.queue_engine_attach(
             db,
             control,
+            ws_ctx(),
             "gw-1",
             EngineRequest(
                 expected_gateway_updated_at=control.gateway["updatedAt"],

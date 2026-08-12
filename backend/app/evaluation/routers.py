@@ -20,6 +20,7 @@ from app.evaluation.models import EvalDataset, EvalRun
 from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import normalize_scenarios
 from app.models.ledger import Agent
+from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services.agentcore.client import control_client
 
 router = APIRouter(prefix="/api/eval", tags=["evaluation"])
@@ -142,16 +143,37 @@ def _dataset_out(dataset: EvalDataset) -> dict[str, Any]:
     }
 
 
+def _dataset_in(db: Session, ws: WorkspaceScope, dataset_id: str) -> EvalDataset:
+    """The dataset, or 404 — another workspace's dataset is not visible here."""
+    dataset = db.get(EvalDataset, dataset_id)
+    if dataset is None or dataset.workspace_id != ws.id:
+        raise NotFoundError("dataset.not_found", "dataset not found")
+    return dataset
+
+
 @router.get("/datasets")
-def list_datasets(db: Session = Depends(get_db)) -> dict[str, Any]:
-    rows = db.query(EvalDataset).order_by(EvalDataset.created_at.desc()).all()
+def list_datasets(
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    rows = (
+        db.query(EvalDataset)
+        .filter(EvalDataset.workspace_id == ws.id)
+        .order_by(EvalDataset.created_at.desc())
+        .all()
+    )
     return {"datasets": [_dataset_out(d) for d in rows]}
 
 
 @router.post("/datasets", status_code=201)
-def create_dataset(req: DatasetCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
+def create_dataset(
+    req: DatasetCreate,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     _validate_items(req.items)
     dataset = EvalDataset(
+        workspace_id=ws.id,
         name=req.name,
         locale=req.locale,
         description=req.description,
@@ -171,7 +193,11 @@ class DatasetUpload(BaseModel):
 
 
 @router.post("/datasets/upload", status_code=201)
-def upload_dataset(req: DatasetUpload, db: Session = Depends(get_db)) -> dict[str, Any]:
+def upload_dataset(
+    req: DatasetUpload,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     for line_no, line in enumerate(req.jsonl.splitlines(), 1):
         if not line.strip():
@@ -192,6 +218,7 @@ def upload_dataset(req: DatasetUpload, db: Session = Depends(get_db)) -> dict[st
         raise AppError("dataset.empty", "no items in upload", status_code=422)
     _validate_items(items)
     dataset = EvalDataset(
+        workspace_id=ws.id,
         name=req.name,
         locale=req.locale,
         description=req.description,
@@ -213,11 +240,12 @@ class DatasetUpdate(BaseModel):
 
 @router.put("/datasets/{dataset_id}")
 def update_dataset(
-    dataset_id: str, req: DatasetUpdate, db: Session = Depends(get_db)
+    dataset_id: str,
+    req: DatasetUpdate,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    dataset = db.get(EvalDataset, dataset_id)
-    if dataset is None:
-        raise NotFoundError("dataset.not_found", "dataset not found")
+    dataset = _dataset_in(db, ws, dataset_id)
     if req.items is not None:
         _validate_items(req.items)
         if _infer_kind(req.items) != dataset.kind:
@@ -237,10 +265,12 @@ def update_dataset(
 
 
 @router.delete("/datasets/{dataset_id}")
-def delete_dataset(dataset_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    dataset = db.get(EvalDataset, dataset_id)
-    if dataset is None:
-        raise NotFoundError("dataset.not_found", "dataset not found")
+def delete_dataset(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    dataset = _dataset_in(db, ws, dataset_id)
     db.delete(dataset)
     db.commit()
     return {"deleted": True}
@@ -248,17 +278,19 @@ def delete_dataset(dataset_id: str, db: Session = Depends(get_db)) -> dict[str, 
 
 # ─── AWS cloud datasets (one-way sync) ───────────────────────────────────────
 @router.post("/datasets/{dataset_id}/sync-to-aws")
-def sync_dataset_to_aws(dataset_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def sync_dataset_to_aws(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     """Create an AWS Dataset resource from the local dataset (inline examples,
     devguide predefined schema), wait for ACTIVE, and record the cloud copy on
     the row. Cloud datasets are immutable — re-syncing creates a NEW cloud
     dataset and overwrites the recorded copy (the old one stays listed)."""
-    dataset = db.get(EvalDataset, dataset_id)
-    if dataset is None:
-        raise NotFoundError("dataset.not_found", "dataset not found")
+    dataset = _dataset_in(db, ws, dataset_id)
     examples = normalize_scenarios(dataset.items)
     name = ac.sanitize_dataset_name(dataset.name)
-    client = control_client()
+    client = control_client(ws.context)
     synced_at = datetime.now(UTC).isoformat()
     try:
         created = ac.create_dataset(
@@ -311,9 +343,11 @@ RUNNABLE_CLOUD_SCHEMAS = {
 }
 
 
-def _cloud_dataset_items(cloud_id: str) -> tuple[str, list[dict[str, Any]]]:
+def _cloud_dataset_items(
+    cloud_id: str, ws: WorkspaceScope
+) -> tuple[str, list[dict[str, Any]]]:
     """(display name, run items) for an ACTIVE AWS cloud dataset."""
-    client = control_client()
+    client = control_client(ws.context)
     detail = ac.get_dataset(client, dataset_id=cloud_id)
     if detail.get("status") != "ACTIVE":
         raise AppError(
@@ -338,9 +372,11 @@ def _cloud_dataset_items(cloud_id: str) -> tuple[str, list[dict[str, Any]]]:
 
 
 @router.get("/datasets/cloud")
-def list_cloud_datasets() -> dict[str, Any]:
+def list_cloud_datasets(
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     out = []
-    for ds in ac.list_datasets(control_client()):
+    for ds in ac.list_datasets(control_client(ws.context)):
         out.append(
             {
                 "datasetId": ds.get("datasetId"),
@@ -355,10 +391,12 @@ def list_cloud_datasets() -> dict[str, Any]:
 
 
 @router.get("/datasets/cloud/{cloud_id}")
-def get_cloud_dataset(cloud_id: str) -> dict[str, Any]:
+def get_cloud_dataset(
+    cloud_id: str, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
     """Cloud dataset detail for the run form — whether it can drive a run and
     whether its scenarios carry ground truth (gates Trajectory* evaluators)."""
-    client = control_client()
+    client = control_client(ws.context)
     detail = ac.get_dataset(client, dataset_id=cloud_id)
     runnable = (
         detail.get("status") == "ACTIVE"
@@ -383,10 +421,18 @@ def get_cloud_dataset(cloud_id: str) -> dict[str, Any]:
 
 
 @router.delete("/datasets/cloud/{cloud_id}")
-def delete_cloud_dataset(cloud_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    ac.delete_dataset(control_client(), dataset_id=cloud_id)
+def delete_cloud_dataset(
+    cloud_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    ac.delete_dataset(control_client(ws.context), dataset_id=cloud_id)
     # A local row pointing at this cloud dataset loses its live copy.
-    for row in db.query(EvalDataset).filter(EvalDataset.cloud.isnot(None)).all():
+    for row in (
+        db.query(EvalDataset)
+        .filter(EvalDataset.workspace_id == ws.id, EvalDataset.cloud.isnot(None))
+        .all()
+    ):
         if (row.cloud or {}).get("dataset_id") == cloud_id:
             row.cloud = {**row.cloud, "status": "deleted"}
     db.commit()
@@ -395,7 +441,7 @@ def delete_cloud_dataset(cloud_id: str, db: Session = Depends(get_db)) -> dict[s
 
 # ─── evaluators ──────────────────────────────────────────────────────────────
 @router.get("/evaluators")
-def list_evaluators() -> dict[str, Any]:
+def list_evaluators(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
     builtin = [
         {"id": name, "level": level, "source": "builtin"}
         for name, level in ac.ALL_BUILTIN_EVALUATORS.items()
@@ -405,7 +451,7 @@ def list_evaluators() -> dict[str, Any]:
     ]
     custom: list[dict[str, Any]] = []
     try:
-        for ev in ac.list_evaluators(control_client()):
+        for ev in ac.list_evaluators(control_client(ws.context)):
             evaluator_id = ev.get("evaluatorId", "")
             if not evaluator_id.startswith("Builtin."):
                 custom.append(
@@ -479,10 +525,12 @@ def _evaluator_out(detail: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.post("/evaluators", status_code=201)
-def create_judge(req: JudgeCreate) -> dict[str, Any]:
+def create_judge(
+    req: JudgeCreate, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
     _require_placeholder(req.instructions)
     created = ac.create_llm_judge_evaluator(
-        control_client(),
+        control_client(ws.context),
         name=req.name,
         instructions=req.instructions,
         rating_scale=_rating_scale_payload(req.rating_scale),
@@ -494,8 +542,12 @@ def create_judge(req: JudgeCreate) -> dict[str, Any]:
 
 
 @router.get("/evaluators/{evaluator_id}")
-def get_evaluator(evaluator_id: str) -> dict[str, Any]:
-    return _evaluator_out(ac.get_evaluator(control_client(), evaluator_id=evaluator_id))
+def get_evaluator(
+    evaluator_id: str, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    return _evaluator_out(
+        ac.get_evaluator(control_client(ws.context), evaluator_id=evaluator_id)
+    )
 
 
 class JudgeUpdate(BaseModel):
@@ -507,7 +559,11 @@ class JudgeUpdate(BaseModel):
 
 
 @router.put("/evaluators/{evaluator_id}")
-def update_evaluator(evaluator_id: str, req: JudgeUpdate) -> dict[str, Any]:
+def update_evaluator(
+    evaluator_id: str,
+    req: JudgeUpdate,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     if evaluator_id.startswith("Builtin."):
         raise AppError(
             "evaluator.builtin_immutable",
@@ -515,7 +571,7 @@ def update_evaluator(evaluator_id: str, req: JudgeUpdate) -> dict[str, Any]:
             status_code=400,
         )
     _require_placeholder(req.instructions)
-    client = control_client()
+    client = control_client(ws.context)
     ac.update_evaluator(
         client,
         evaluator_id=evaluator_id,
@@ -529,8 +585,10 @@ def update_evaluator(evaluator_id: str, req: JudgeUpdate) -> dict[str, Any]:
 
 
 @router.delete("/evaluators/{evaluator_id}")
-def delete_evaluator(evaluator_id: str) -> dict[str, Any]:
-    ac.delete_evaluator(control_client(), evaluator_id=evaluator_id)
+def delete_evaluator(
+    evaluator_id: str, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    ac.delete_evaluator(control_client(ws.context), evaluator_id=evaluator_id)
     return {"deleted": True}
 
 
@@ -579,6 +637,7 @@ def list_runs(
     offset: int = Query(0, ge=0),
     mode: str | None = Query(None, pattern="^(evaluators|insights)$"),
     agent_id: str | None = Query(None, min_length=1, max_length=32),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Newest-first page of runs plus the unpaginated `total`.
 
@@ -589,7 +648,7 @@ def list_runs(
     completed runs as a trace source and must not miss them behind other agents'
     newer runs.
     """
-    query = db.query(EvalRun)
+    query = db.query(EvalRun).filter(EvalRun.workspace_id == ws.id)
     if mode:
         query = query.filter(EvalRun.mode == mode)
     if agent_id:
@@ -607,16 +666,27 @@ def list_runs(
 
 
 @router.get("/runs/{run_id}")
-def get_run(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def get_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     run = db.get(EvalRun, run_id)
-    if run is None:
+    # A run of another workspace reads as absent, like every other foreign id.
+    if run is None or run.workspace_id != ws.id:
         raise NotFoundError("run.not_found", "run not found")
     return _run_out(run)
 
 
 @router.post("/runs", status_code=201)
-def create_run(req: RunCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
+def create_run(
+    req: RunCreate,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     agent = db.get(Agent, req.agent_id)
+    if agent is not None and agent.workspace_id != ws.id:
+        agent = None
     if agent is None or agent.status != "active":
         raise AppError("agent.not_active", "agent must be active", status_code=400)
 
@@ -642,13 +712,11 @@ def create_run(req: RunCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
     dataset_name = None
     time_range = None
     if req.dataset_id:
-        dataset = db.get(EvalDataset, req.dataset_id)
-        if dataset is None:
-            raise NotFoundError("dataset.not_found", "dataset not found")
+        dataset = _dataset_in(db, ws, req.dataset_id)
         items = dataset.items
         dataset_name = dataset.name
     elif req.cloud_dataset_id:
-        cloud_name, items = _cloud_dataset_items(req.cloud_dataset_id)
+        cloud_name, items = _cloud_dataset_items(req.cloud_dataset_id, ws)
         # "cloud:" prefix marks the scope in the runs list (like "window:Nh")
         dataset_name = f"cloud:{cloud_name}"
 
@@ -689,6 +757,7 @@ def create_run(req: RunCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
 
     run = service.submit_run(
         agent=agent,
+        workspace=ws.context,
         dataset_items=items,
         dataset_id=req.dataset_id or req.cloud_dataset_id,
         dataset_name=dataset_name,

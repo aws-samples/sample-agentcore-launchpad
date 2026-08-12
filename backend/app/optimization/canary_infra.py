@@ -23,7 +23,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from app.core.config import get_settings
 from app.deployer.environment import runtime_environment
 from app.deployer.zip_runtime import (
     _generate_code,
@@ -35,7 +34,7 @@ from app.deployer.zip_runtime import (
 from app.schemas.agent import AgentSpec
 from app.services import agent_iam
 from app.services.agentcore import runtime as rt
-from app.services.workspace import default_workspace_context
+from app.services.workspace import WorkspaceContext
 
 _sleep = time.sleep  # injectable
 _NOT_FOUND = {"ResourceNotFoundException", "NotFoundException"}
@@ -76,8 +75,11 @@ def current_version(control_client: Any, runtime_id: str) -> str:
     return str(rt.get_runtime(control_client, runtime_id)["agentRuntimeVersion"])
 
 
-def _default_uploader(local_path: str, bucket: str, key: str) -> None:
-    default_workspace_context().client("s3").upload_file(local_path, bucket, key)
+def _uploader_for(workspace: WorkspaceContext) -> Callable[[str, str, str], None]:
+    def upload(local_path: str, bucket: str, key: str) -> None:
+        workspace.client("s3").upload_file(local_path, bucket, key)
+
+    return upload
 
 
 def candidate_s3_key(agent_name: str, canary_id: str, role: str) -> str:
@@ -90,15 +92,15 @@ def candidate_s3_key(agent_name: str, canary_id: str, role: str) -> str:
     return f"agents/{agent_name}/canary/{canary_id}-{role}.zip"
 
 
-def delete_object_quiet(key: str, *, bucket: str | None = None,
+def delete_object_quiet(key: str, workspace: WorkspaceContext, *,
+                        bucket: str | None = None,
                         s3_client: Any = None) -> None:
     """Delete one artifacts-bucket object. Raises — the caller decides whether a
     failure is fatal (cleanup records it as skipped)."""
-    settings = get_settings()
-    target = bucket or settings.resources.get("artifacts_bucket")
+    target = bucket or workspace.resources.get("artifacts_bucket")
     if not target:
-        raise RuntimeError("artifacts_bucket missing from config")
-    client = s3_client or default_workspace_context().client("s3")
+        raise RuntimeError("artifacts_bucket missing from this workspace's resource map")
+    client = s3_client or workspace.client("s3")
     client.delete_object(Bucket=target, Key=key)
 
 
@@ -107,6 +109,7 @@ def mint_candidate_version(
     agent: Any,
     edited_spec: AgentSpec,
     control_client: Any,
+    workspace: WorkspaceContext,
     canary_id: str,
     role: str = "candidate",
     log: Log = _noop,
@@ -140,11 +143,10 @@ def mint_candidate_version(
             "container candidate minting via CodeBuild is a follow-up"
         )
 
-    settings = get_settings()
-    bucket = settings.resources.get("artifacts_bucket")
+    bucket = workspace.resources.get("artifacts_bucket")
     if not bucket:
         raise RuntimeError(
-            "artifacts_bucket missing from config — run scripts/bootstrap.py"
+            "artifacts_bucket missing from this workspace's resource map — run its bootstrap"
         )
     # A candidate is a new *version of the same runtime*, so it keeps whatever role
     # production is already on. Swapping in the shared role would measure the
@@ -152,11 +154,11 @@ def mint_candidate_version(
     # inherit them. Read from the live resource rather than derived from the agent
     # name, so an agent deployed before per-agent roles existed still works.
     live = rt.get_runtime(control_client, agent.resource_id)
-    role_arn = agent_iam.live_runtime_role_arn(live, settings)
+    role_arn = agent_iam.live_runtime_role_arn(live, workspace)
     if not role_arn:
         raise RuntimeError(
             "the runtime reports no execution role and execution_role_arn is missing "
-            "from config — run scripts/bootstrap.py"
+            "from this workspace's resource map — run its bootstrap"
         )
 
     v_current = str(live["agentRuntimeVersion"])
@@ -170,17 +172,17 @@ def mint_candidate_version(
     def _on_pkg_ready(pkg_dir: Path) -> None:
         if edited_spec.code_bundle:
             write_bundle_files(edited_spec, pkg_dir)
-        bundle_skills(edited_spec, code, pkg_dir, log)
+        bundle_skills(edited_spec, code, pkg_dir, log, workspace)
 
     zip_path = build_zip(
         code, requirements, build_dir, pip_runner=pip_runner,
         on_pkg_ready=_on_pkg_ready,
     )
     s3_key = candidate_s3_key(agent.name, canary_id, role)
-    (uploader or _default_uploader)(str(zip_path), bucket, s3_key)
+    (uploader or _uploader_for(workspace))(str(zip_path), bucket, s3_key)
     log(f"candidate artifact → s3://{bucket}/{s3_key} · {source}")
 
-    environment = runtime_environment(edited_spec, settings.resources)
+    environment = runtime_environment(edited_spec, workspace.resources)
 
     resp = rt.update_code_runtime(
         control_client,
@@ -204,6 +206,7 @@ def mint_candidate_version(
 def create_canary_gateway(
     *,
     control_client: Any,
+    workspace: WorkspaceContext,
     canary_id: str,
     log: Log = _noop,
 ) -> dict[str, Any]:
@@ -214,7 +217,6 @@ def create_canary_gateway(
     can run concurrently across agents and the gateway is the front door only
     for this canary's lifetime. AWS_IAM authorizer + the shared gateway role.
     """
-    settings = get_settings()
     name = f"lp-canary-{canary_id}"
     log(f"creating dedicated canary gateway {name}…")
     try:
@@ -222,7 +224,7 @@ def create_canary_gateway(
             name=name,
             description=f"Launchpad canary gateway ({canary_id})",
             authorizerType="AWS_IAM",
-            roleArn=settings.resources["gateway_role_arn"],
+            roleArn=workspace.resources["gateway_role_arn"],
             clientToken=str(uuid.uuid4()),
         )
         gateway_id = gateway["gatewayId"]

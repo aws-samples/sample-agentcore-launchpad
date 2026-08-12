@@ -15,7 +15,8 @@ import threading
 import time
 from typing import Any
 
-from app.core.config import get_settings
+from sqlalchemy.orm import Session
+
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent
@@ -25,9 +26,14 @@ from app.services.agentcore.client import (
     agent_runtime_client,
     control_client,
 )
-from app.services.workspace import default_workspace_context
+from app.services.workspace import WorkspaceContext
 
+# Fallback only: the real name comes from the workspace's resolved kb_role_arn
+# (a non-legacy region suffixes it — see infra regional_role_name).
 KB_ROLE_NAME = "launchpad-kb-role"
+_MISSING_ARTIFACTS = (
+    "artifacts_bucket missing from this workspace's resource map — run its bootstrap"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -143,12 +149,12 @@ def _recent_ingestion_jobs(
 # ── attachment (Agent ledger) ────────────────────────────────────────────────
 
 
-def _attached_map() -> dict[str, list[str]]:
-    """kb_id → [agent name] over non-deleted agents' spec['knowledge_bases']."""
+def _attached_map(workspace: WorkspaceContext) -> dict[str, list[str]]:
+    """kb_id → [agent name] over this workspace's non-deleted agents."""
     db = SessionLocal()
     try:
         out: dict[str, list[str]] = {}
-        for agent in db.query(Agent).filter(Agent.status != "deleted").all():
+        for agent in _workspace_agents(db, workspace):
             for ref in (agent.spec or {}).get("knowledge_bases") or []:
                 if isinstance(ref, dict) and ref.get("kb_id"):
                     out.setdefault(ref["kb_id"], []).append(agent.name)
@@ -157,11 +163,19 @@ def _attached_map() -> dict[str, list[str]]:
         db.close()
 
 
-def attached_agents(kb_id: str) -> list[str]:
-    return _attached_map().get(kb_id, [])
+def attached_agents(workspace: WorkspaceContext, kb_id: str) -> list[str]:
+    return _attached_map(workspace).get(kb_id, [])
 
 
-def _strip_kb_from_agents(kb_id: str) -> list[str]:
+def _workspace_agents(db: Session, workspace: WorkspaceContext) -> list[Agent]:
+    return (
+        db.query(Agent)
+        .filter(Agent.workspace_id == workspace.id, Agent.status != "deleted")
+        .all()
+    )
+
+
+def _strip_kb_from_agents(workspace: WorkspaceContext, kb_id: str) -> list[str]:
     """Force-delete follow-through: drop the KB from every mounted agent's spec
     and re-sync their per-agent agentic targets so retrieval doesn't dangle on a
     deleted KB id (and later re-publishes don't try to recreate its target).
@@ -171,12 +185,12 @@ def _strip_kb_from_agents(kb_id: str) -> list[str]:
     Only harness agents have a kb-gw target: zip/container agents retrieve
     directly through bedrock-agent-runtime, so touching the gateway for them
     would CREATE a target nothing ever uses."""
-    gateway_id = get_settings().resources.get("kb_gateway_id")
-    control = control_client() if gateway_id else None
+    gateway_id = workspace.resources.get("kb_gateway_id")
+    control = control_client(workspace) if gateway_id else None
     stripped: list[str] = []
     db = SessionLocal()
     try:
-        for agent in db.query(Agent).filter(Agent.status != "deleted").all():
+        for agent in _workspace_agents(db, workspace):
             refs = (agent.spec or {}).get("knowledge_bases") or []
             remaining = [r for r in refs if isinstance(r, dict) and r.get("kb_id") != kb_id]
             if len(remaining) == len(refs):
@@ -211,8 +225,8 @@ def _kb_policy_name(kb_id: str) -> str:
     return f"launchpad-kb-{kb_id}"
 
 
-def _kb_role_name() -> str:
-    role_arn = str(get_settings().resources.get("kb_role_arn") or "")
+def _kb_role_name(workspace: WorkspaceContext) -> str:
+    role_arn = str(workspace.resources.get("kb_role_arn") or "")
     return role_arn.rsplit("/", 1)[-1] or KB_ROLE_NAME
 
 
@@ -237,19 +251,23 @@ def _kb_policy_document(bucket: str, prefix: str) -> dict[str, Any]:
     }
 
 
-def _sync_kb_policy(kb_id: str, bucket: str, prefix: str) -> None:
-    iam = default_workspace_context().client("iam")
+def _sync_kb_policy(
+    workspace: WorkspaceContext, kb_id: str, bucket: str, prefix: str
+) -> None:
+    iam = workspace.client("iam")
     iam.put_role_policy(
-        RoleName=_kb_role_name(),
+        RoleName=_kb_role_name(workspace),
         PolicyName=_kb_policy_name(kb_id),
         PolicyDocument=json.dumps(_kb_policy_document(bucket, prefix)),
     )
 
 
-def _delete_kb_policy(kb_id: str) -> None:
-    iam = default_workspace_context().client("iam")
+def _delete_kb_policy(workspace: WorkspaceContext, kb_id: str) -> None:
+    iam = workspace.client("iam")
     try:
-        iam.delete_role_policy(RoleName=_kb_role_name(), PolicyName=_kb_policy_name(kb_id))
+        iam.delete_role_policy(
+            RoleName=_kb_role_name(workspace), PolicyName=_kb_policy_name(kb_id)
+        )
     except Exception:  # NoSuchEntity / role absent — nothing to clean
         pass
 
@@ -278,15 +296,16 @@ def _validate_external_source(bucket: str, prefix: str) -> None:
         )
 
 
-def _resolve_source(kb_id: str, source: dict[str, Any]) -> tuple[str, str]:
+def _resolve_source(
+    workspace: WorkspaceContext, kb_id: str, source: dict[str, Any]
+) -> tuple[str, str]:
     """(bucket, prefix) for a source descriptor. ``upload`` targets the artifacts
     bucket under ``kb/{kb_id}/``; ``existing`` uses the caller's bucket/prefix."""
-    settings = get_settings()
-    artifacts = settings.resources.get("artifacts_bucket")
+    artifacts = workspace.resources.get("artifacts_bucket")
     mode = (source or {}).get("mode") or "upload"
     if mode == "upload":
         if not artifacts:
-            raise RuntimeError("artifacts_bucket missing — run scripts/bootstrap.py")
+            raise RuntimeError(_MISSING_ARTIFACTS)
         return artifacts, f"kb/{kb_id}/"
     if mode == "existing":
         bucket = (source.get("bucket") or "").strip()
@@ -341,18 +360,22 @@ def _find_data_source_at(client: Any, kb_id: str, bucket: str, prefix: str) -> s
     return None
 
 
-def _create_data_source(client: Any, kb_id: str, source: dict[str, Any]) -> str:
-    settings = get_settings()
-    bucket, prefix = _resolve_source(kb_id, source)
+def _create_data_source(
+    client: Any, workspace: WorkspaceContext, kb_id: str, source: dict[str, Any]
+) -> str:
+    bucket, prefix = _resolve_source(workspace, kb_id, source)
     existing = _find_data_source_at(client, kb_id, bucket, prefix)
     if existing:
         return existing
-    if bucket != settings.resources.get("artifacts_bucket"):
-        _sync_kb_policy(kb_id, bucket, prefix)  # dynamic S3 read grant for BYO buckets
+    if bucket != workspace.resources.get("artifacts_bucket"):
+        # dynamic S3 read grant for BYO buckets
+        _sync_kb_policy(workspace, kb_id, bucket, prefix)
     created = client.create_data_source(
         knowledgeBaseId=kb_id,
         name=_ds_name(bucket, prefix),
-        dataSourceConfiguration=_data_source_configuration(bucket, prefix, settings.account_id),
+        dataSourceConfiguration=_data_source_configuration(
+            bucket, prefix, workspace.account_id
+        ),
         vectorIngestionConfiguration={"parsingConfiguration": {"parsingStrategy": "SMART_PARSING"}},
     )
     return created["dataSource"]["dataSourceId"]
@@ -378,9 +401,9 @@ def _safe_filename(filename: str) -> str:
 # ── public API ────────────────────────────────────────────────────────────────
 
 
-def list_kbs() -> list[dict[str, Any]]:
-    client = agent_client()
-    attached = _attached_map()
+def list_kbs(workspace: WorkspaceContext) -> list[dict[str, Any]]:
+    client = agent_client(workspace)
+    attached = _attached_map(workspace)
     items: list[dict[str, Any]] = []
     for summary in _paginate(
         client.list_knowledge_bases, "knowledgeBaseSummaries", maxResults=100
@@ -403,8 +426,8 @@ def list_kbs() -> list[dict[str, Any]]:
     return items
 
 
-def get_kb_detail(kb_id: str) -> dict[str, Any]:
-    client = agent_client()
+def get_kb_detail(workspace: WorkspaceContext, kb_id: str) -> dict[str, Any]:
+    client = agent_client(workspace)
     detail = _require_managed(_get_kb(client, kb_id))
     data_sources: list[dict[str, Any]] = []
     for ds in _list_data_sources(client, kb_id):
@@ -432,15 +455,17 @@ def get_kb_detail(kb_id: str) -> dict[str, Any]:
         "updated_at": _iso(detail.get("updatedAt")),
         "failure_reasons": detail.get("failureReasons") or [],
         "data_sources": data_sources,
-        "attached_agents": attached_agents(kb_id),
+        "attached_agents": attached_agents(workspace, kb_id),
     }
 
 
-def _s3_object_meta(bucket: str, prefix: str | None) -> dict[str, tuple[int, str | None]]:
+def _s3_object_meta(
+    workspace: WorkspaceContext, bucket: str, prefix: str | None
+) -> dict[str, tuple[int, str | None]]:
     """key → (size, last_modified ISO) over the source location. Best-effort
     upload-time/size enrichment — external buckets may deny the backend, and
     huge buckets are capped (enrichment, not the source of truth)."""
-    s3 = default_workspace_context().client("s3")
+    s3 = workspace.client("s3")
     out: dict[str, tuple[int, str | None]] = {}
     kwargs: dict[str, Any] = {"Bucket": bucket}
     if prefix:
@@ -456,12 +481,17 @@ def _s3_object_meta(bucket: str, prefix: str | None) -> dict[str, tuple[int, str
 
 
 def list_documents(
-    kb_id: str, ds_id: str, *, page_size: int = 50, token: str | None = None
+    workspace: WorkspaceContext,
+    kb_id: str,
+    ds_id: str,
+    *,
+    page_size: int = 50,
+    token: str | None = None,
 ) -> dict[str, Any]:
     """One page of a data source's documents (ListKnowledgeBaseDocuments,
     token-paginated) with the KB-side index status plus S3-side size and
     upload time joined in by object key."""
-    client = agent_client()
+    client = agent_client(workspace)
     _require_managed(_get_kb(client, kb_id))
     kwargs: dict[str, Any] = {
         "knowledgeBaseId": kb_id,
@@ -479,7 +509,7 @@ def list_documents(
     meta: dict[str, tuple[int, str | None]] = {}
     if bucket:
         try:
-            meta = _s3_object_meta(bucket, prefix)
+            meta = _s3_object_meta(workspace, bucket, prefix)
         except Exception:
             meta = {}
     documents: list[dict[str, Any]] = []
@@ -505,12 +535,15 @@ def list_documents(
     }
 
 
-def create_kb(name: str, description: str, source: dict[str, Any]) -> dict[str, Any]:
-    settings = get_settings()
-    role_arn = settings.resources.get("kb_role_arn")
+def create_kb(
+    workspace: WorkspaceContext, name: str, description: str, source: dict[str, Any]
+) -> dict[str, Any]:
+    role_arn = workspace.resources.get("kb_role_arn")
     if not role_arn:
-        raise RuntimeError("kb_role_arn missing — run scripts/bootstrap.py")
-    client = agent_client()
+        raise RuntimeError(
+            "kb_role_arn missing from this workspace's resource map — run its bootstrap"
+        )
+    client = agent_client(workspace)
     kwargs: dict[str, Any] = {
         "name": name,
         "roleArn": role_arn,
@@ -533,31 +566,39 @@ def create_kb(name: str, description: str, source: dict[str, Any]) -> dict[str, 
     # sleep). Uploads may land before the source exists — upload_files allows
     # that — and the detail view polls, auto-starts the first sync, and offers
     # a manual repair if the thread ever dies.
-    _start_source_completion(kb_id, source)
-    detail = get_kb_detail(kb_id)
+    _start_source_completion(workspace, kb_id, source)
+    detail = get_kb_detail(workspace, kb_id)
     detail["source_pending"] = source
     return detail
 
 
 def _start_source_completion(
-    kb_id: str, source: dict[str, Any], timeout_s: int = 900, interval_s: int = 10
+    workspace: WorkspaceContext,
+    kb_id: str,
+    source: dict[str, Any],
+    timeout_s: int = 900,
+    interval_s: int = 10,
 ) -> threading.Thread:
     """Wait out the KB's CREATING state off-request, then create its data source.
 
     Owns its own client (a request's client must not outlive the request) and
     never raises: a failure here leaves the KB ACTIVE with zero data sources,
-    which the detail view surfaces with a one-click repair."""
+    which the detail view surfaces with a one-click repair.
+
+    The workspace is captured in the closure: there is no KB ledger row to
+    rehydrate it from, so the environment has to travel with the thread.
+    """
 
     def run() -> None:
         deadline = time.time() + timeout_s
         try:
-            client = agent_client()
+            client = agent_client(workspace)
             while time.time() < deadline:
                 status = client.get_knowledge_base(knowledgeBaseId=kb_id)["knowledgeBase"].get(
                     "status"
                 )
                 if status == "ACTIVE":
-                    _create_data_source(client, kb_id, source)  # idempotent
+                    _create_data_source(client, workspace, kb_id, source)  # idempotent
                     logger.info("kb %s: data source created after CREATING", kb_id)
                     return
                 if status in {"FAILED", "DELETING"}:
@@ -576,12 +617,13 @@ def _start_source_completion(
     return thread
 
 
-def upload_files(kb_id: str, files: list[tuple[str, bytes]]) -> list[str]:
-    settings = get_settings()
-    artifacts = settings.resources.get("artifacts_bucket")
+def upload_files(
+    workspace: WorkspaceContext, kb_id: str, files: list[tuple[str, bytes]]
+) -> list[str]:
+    artifacts = workspace.resources.get("artifacts_bucket")
     if not artifacts:
-        raise RuntimeError("artifacts_bucket missing — run scripts/bootstrap.py")
-    client = agent_client()
+        raise RuntimeError(_MISSING_ARTIFACTS)
+    client = agent_client(workspace)
     _require_managed(_get_kb(client, kb_id))
     # zero data sources = an upload-mode KB whose source setup is still pending
     # (client replays it once the KB is ACTIVE) — files may land ahead of it
@@ -594,7 +636,7 @@ def upload_files(kb_id: str, files: list[tuple[str, bytes]]) -> list[str]:
             "available for KBs created in upload mode",
             status_code=409,
         )
-    s3 = default_workspace_context().client("s3")
+    s3 = workspace.client("s3")
     keys: list[str] = []
     for filename, data in files:
         key = f"kb/{kb_id}/{_safe_filename(filename)}"
@@ -603,22 +645,26 @@ def upload_files(kb_id: str, files: list[tuple[str, bytes]]) -> list[str]:
     return keys
 
 
-def add_data_source(kb_id: str, source: dict[str, Any]) -> dict[str, Any]:
-    client = agent_client()
+def add_data_source(
+    workspace: WorkspaceContext, kb_id: str, source: dict[str, Any]
+) -> dict[str, Any]:
+    client = agent_client(workspace)
     _require_managed(_get_kb(client, kb_id))
-    _create_data_source(client, kb_id, source)
-    return get_kb_detail(kb_id)
+    _create_data_source(client, workspace, kb_id, source)
+    return get_kb_detail(workspace, kb_id)
 
 
-def delete_data_source(kb_id: str, ds_id: str) -> dict[str, Any]:
-    client = agent_client()
+def delete_data_source(
+    workspace: WorkspaceContext, kb_id: str, ds_id: str
+) -> dict[str, Any]:
+    client = agent_client(workspace)
     _require_managed(_get_kb(client, kb_id))
     client.delete_data_source(knowledgeBaseId=kb_id, dataSourceId=ds_id)
     return {"deleted": True, "ds_id": ds_id}
 
 
-def start_sync(kb_id: str, ds_id: str) -> dict[str, Any]:
-    client = agent_client()
+def start_sync(workspace: WorkspaceContext, kb_id: str, ds_id: str) -> dict[str, Any]:
+    client = agent_client(workspace)
     try:
         job = client.start_ingestion_job(knowledgeBaseId=kb_id, dataSourceId=ds_id)
     except (
@@ -634,12 +680,16 @@ def start_sync(kb_id: str, ds_id: str) -> dict[str, Any]:
     return _job_out(job["ingestionJob"])
 
 
-def list_ingestion_jobs(kb_id: str, ds_id: str) -> list[dict[str, Any]]:
-    return _recent_ingestion_jobs(agent_client(), kb_id, ds_id, cap=50)
+def list_ingestion_jobs(
+    workspace: WorkspaceContext, kb_id: str, ds_id: str
+) -> list[dict[str, Any]]:
+    return _recent_ingestion_jobs(agent_client(workspace), kb_id, ds_id, cap=50)
 
 
-def update_description(kb_id: str, description: str) -> dict[str, Any]:
-    client = agent_client()
+def update_description(
+    workspace: WorkspaceContext, kb_id: str, description: str
+) -> dict[str, Any]:
+    client = agent_client(workspace)
     detail = _require_managed(_get_kb(client, kb_id))
     client.update_knowledge_base(
         knowledgeBaseId=kb_id,
@@ -648,7 +698,7 @@ def update_description(kb_id: str, description: str) -> dict[str, Any]:
         roleArn=detail["roleArn"],
         knowledgeBaseConfiguration=detail["knowledgeBaseConfiguration"],
     )
-    return get_kb_detail(kb_id)
+    return get_kb_detail(workspace, kb_id)
 
 
 def _location_uri(location: dict[str, Any]) -> str | None:
@@ -669,8 +719,10 @@ def _result_out(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def query(kb_id: str, text: str, number_of_results: int = 8) -> list[dict[str, Any]]:
-    runtime = agent_runtime_client()
+def query(
+    workspace: WorkspaceContext, kb_id: str, text: str, number_of_results: int = 8
+) -> list[dict[str, Any]]:
+    runtime = agent_runtime_client(workspace)
     try:
         resp = runtime.retrieve(
             knowledgeBaseId=kb_id,
@@ -693,14 +745,16 @@ def query(kb_id: str, text: str, number_of_results: int = 8) -> list[dict[str, A
     return [_result_out(r) for r in resp.get("retrievalResults", [])]
 
 
-def delete_kb(kb_id: str, force: bool = False) -> dict[str, Any]:
-    client = agent_client()
+def delete_kb(
+    workspace: WorkspaceContext, kb_id: str, force: bool = False
+) -> dict[str, Any]:
+    client = agent_client(workspace)
     _require_managed(_get_kb(client, kb_id))
-    agents = attached_agents(kb_id)
+    agents = attached_agents(workspace, kb_id)
     if agents and not force:
         raise KBAttachedError(kb_id, agents)
     if agents:  # force path — unmount from every agent before tearing down
-        _strip_kb_from_agents(kb_id)
+        _strip_kb_from_agents(workspace, kb_id)
 
     for ds in _list_data_sources(client, kb_id):
         try:  # async deletion — best-effort; DeleteKnowledgeBase cascades the rest
@@ -710,11 +764,11 @@ def delete_kb(kb_id: str, force: bool = False) -> dict[str, Any]:
 
     # only touch the gateway target if the gateway already exists — never
     # provision the KB gateway during a delete
-    gateway_id = get_settings().resources.get("kb_gateway_id")
+    gateway_id = workspace.resources.get("kb_gateway_id")
     if gateway_id:
-        kb_gateway.delete_retrieve_target(control_client(), gateway_id, kb_id)
+        kb_gateway.delete_retrieve_target(control_client(workspace), gateway_id, kb_id)
 
-    _delete_kb_policy(kb_id)
+    _delete_kb_policy(workspace, kb_id)
 
     try:
         client.delete_knowledge_base(knowledgeBaseId=kb_id)

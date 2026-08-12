@@ -32,7 +32,7 @@ from app.services import agent_iam
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
 from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES, SKILL_NAME_RE
-from app.services.workspace import default_workspace_context
+from app.services.workspace import WorkspaceContext
 from app.templates.strands_agent import base_requirements, render_main_py
 
 
@@ -185,12 +185,15 @@ def _parse_s3_uri(uri: str) -> tuple[str, str]:
     return bucket, prefix
 
 
-def _approved_skill_paths(log: Callable[[str], None]) -> dict[str, str]:
+def _approved_skill_paths(
+    workspace: WorkspaceContext, log: Callable[[str], None]
+) -> dict[str, str]:
     """{skill name → s3 prefix uri} for every APPROVED AGENT_SKILLS record."""
     try:
         from app.services.registry_console import attachable_records
 
-        return {s["name"]: s["path"] for s in attachable_records().get("skills", [])}
+        records = attachable_records(workspace).get("skills", [])
+        return {s["name"]: s["path"] for s in records}
     except Exception as exc:  # registry lookup must never break a deploy
         log(f"skill registry lookup failed ({type(exc).__name__}) — skills skipped")
         return {}
@@ -237,6 +240,7 @@ def bundle_skills(
     code: str,
     pkg_dir: Path,
     log: Callable[[str], None],
+    workspace: WorkspaceContext,
     *,
     skill_records: dict[str, str] | None = None,
     s3_client: Any = None,
@@ -250,10 +254,12 @@ def bundle_skills(
     """
     if spec.method == "studio":
         return bundle_skills_into(
-            code, pkg_dir, log, skill_records=skill_records, s3_client=s3_client
+            code, pkg_dir, log, workspace, skill_records=skill_records, s3_client=s3_client
         )
     if spec.method == "zip_runtime" and spec.code_bundle is None:
-        return bundle_skill_paths_into(spec.skills, pkg_dir, log, s3_client=s3_client)
+        return bundle_skill_paths_into(
+            spec.skills, pkg_dir, log, workspace, s3_client=s3_client
+        )
     return {"bundled": [], "files": 0, "bytes": 0}
 
 
@@ -261,6 +267,7 @@ def bundle_skills_into(
     code: str,
     dest_parent: Path,
     log: Callable[[str], None],
+    workspace: WorkspaceContext,
     *,
     skill_records: dict[str, str] | None = None,
     s3_client: Any = None,
@@ -275,7 +282,7 @@ def bundle_skills_into(
     if not names:
         return {"bundled": [], "files": 0, "bytes": 0}
     if skill_records is None:
-        skill_records = _approved_skill_paths(log)
+        skill_records = _approved_skill_paths(workspace, log)
     pairs: list[tuple[str, str]] = []
     for name in names:
         path = skill_records.get(name)
@@ -283,13 +290,14 @@ def bundle_skills_into(
             log(f"skill '{name}' not found in registry — skipped")
             continue
         pairs.append((name, path))
-    return _download_named_skills(pairs, dest_parent, log, s3_client=s3_client)
+    return _download_named_skills(pairs, dest_parent, log, workspace, s3_client=s3_client)
 
 
 def bundle_skill_paths_into(
     paths: list[str],
     dest_parent: Path,
     log: Callable[[str], None],
+    workspace: WorkspaceContext,
     *,
     s3_client: Any = None,
 ) -> dict[str, Any]:
@@ -308,13 +316,14 @@ def bundle_skill_paths_into(
             log(f"skill path has invalid name '{name}' — skipped")
             continue
         pairs.append((name, path))
-    return _download_named_skills(pairs, dest_parent, log, s3_client=s3_client)
+    return _download_named_skills(pairs, dest_parent, log, workspace, s3_client=s3_client)
 
 
 def _download_named_skills(
     pairs: list[tuple[str, str]],
     dest_parent: Path,
     log: Callable[[str], None],
+    workspace: WorkspaceContext,
     *,
     s3_client: Any = None,
 ) -> dict[str, Any]:
@@ -322,7 +331,7 @@ def _download_named_skills(
     if not pairs:
         return {"bundled": [], "files": 0, "bytes": 0}
     if s3_client is None:
-        s3_client = default_workspace_context().client("s3")
+        s3_client = workspace.client("s3")
 
     bundled: list[str] = []
     total_files = 0
@@ -458,10 +467,11 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
 
 
 def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
-    settings = get_settings()
-    bucket = settings.resources.get("artifacts_bucket")
+    bucket = ctx.workspace.resources.get("artifacts_bucket")
     if not bucket:
-        raise RuntimeError("artifacts_bucket missing from config — run scripts/bootstrap.py")
+        raise RuntimeError(
+            "artifacts_bucket missing from this workspace's resource map — run its bootstrap"
+        )
     spec = AgentSpec(**agent.spec)
     code = ctx.scratch.get("code") or _generate_code(spec)[0]
     requirements = ctx.scratch.get("requirements") or _method_requirements(spec)
@@ -474,7 +484,7 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
         if spec.code_bundle:
             count = write_bundle_files(spec, pkg_dir)
             ctx.log(f"bundle files staged: {count} (+ main.py)")
-        bundled.update(bundle_skills(spec, code, pkg_dir, ctx.log))
+        bundled.update(bundle_skills(spec, code, pkg_dir, ctx.log, ctx.workspace))
 
     zip_path = build_zip(
         code,
@@ -489,7 +499,7 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     size_mb = zip_path.stat().st_size / 1e6
 
     s3_key = f"agents/{agent.name}/deployment_package.zip"
-    default_workspace_context().client("s3").upload_file(str(zip_path), bucket, s3_key)
+    ctx.workspace.client("s3").upload_file(str(zip_path), bucket, s3_key)
     ctx.scratch["s3_bucket"], ctx.scratch["s3_key"] = bucket, s3_key
     ctx.log(f"pip+zip {pip_secs:.1f}s · {size_mb:.1f}MB → s3://{bucket}/{s3_key}")
     detail = f"pip+zip {pip_secs:.1f}s · {size_mb:.1f}MB · s3 ✓"
@@ -501,15 +511,15 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
 def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) -> StageResult:
     spec = AgentSpec(**agent.spec)
     role_arn, detail = agent_iam.provision_execution_role(
-        agent, spec, get_settings(), ctx.log, iam=iam_client
+        agent, spec, get_settings(), ctx.workspace, ctx.log, iam=iam_client
     )
     ctx.scratch["execution_role_arn"] = role_arn
     return StageResult(detail=detail)
 
 
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
-    settings = get_settings()
-    client = control_client()
+    resources = ctx.workspace.resources
+    client = control_client(ctx.workspace)
     mode = ctx.scratch.get("mode", "create")
     db = ctx.session()
     try:
@@ -517,14 +527,14 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
 
         def _kwargs() -> dict:
             spec = AgentSpec(**row.spec)
-            environment = runtime_environment(spec, settings.resources)
+            environment = runtime_environment(spec, resources)
             return {
                 "s3_bucket": ctx.scratch.get("s3_bucket")
-                or settings.resources.get("artifacts_bucket", ""),
+                or resources.get("artifacts_bucket", ""),
                 "s3_key": ctx.scratch.get("s3_key")
                 or f"agents/{row.name}/deployment_package.zip",
                 "role_arn": ctx.scratch.get("execution_role_arn")
-                or settings.resources.get("execution_role_arn", ""),
+                or resources.get("execution_role_arn", ""),
                 "environment": environment,
                 # A2A runtimes must echo the protocol on update too —
                 # UpdateAgentRuntime resets an omitted protocolConfiguration
@@ -589,10 +599,10 @@ register_method("zip_runtime", STAGES)
 register_method("studio", STAGES)  # studio agents ride the same zip fast path
 
 
-def delete_agent_resources(agent: Agent) -> None:
+def delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> None:
     if not agent.resource_id:
         return
-    client = control_client()
+    client = control_client(workspace)
     try:
         rt.delete_runtime(client, agent.resource_id)
     except client.exceptions.ResourceNotFoundException:

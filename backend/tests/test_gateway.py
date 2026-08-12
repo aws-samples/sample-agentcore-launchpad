@@ -16,6 +16,7 @@ from app.schemas.agent import AgentSpec
 from app.services import aws_clients, mcp_client
 from app.services import gateway_bootstrap as gb
 from app.services.agentcore.harness import user_authenticated_tools
+from tests.conftest import set_default_resources, ws_ctx
 
 GW_ARN = "arn:aws:bedrock-agentcore:us-west-2:111:gateway/launchpad-gw-abc"
 OAUTH_ARN = (
@@ -230,13 +231,8 @@ def test_mcp_cognito_auth_rejection_becomes_app_error(monkeypatch):
         },
         "InitiateAuth",
     )
-    monkeypatch.setattr(
-        mcp_client,
-        "get_settings",
-        lambda: SimpleNamespace(
-            region="us-west-2",
-            resources={"user_pool_client_id": "client-id"},
-        ),
+    set_default_resources(
+        {"user_pool_client_id": "client-id", "gateway_url": "https://gw.example/mcp"}
     )
     monkeypatch.setattr(
         mcp_client,
@@ -247,7 +243,7 @@ def test_mcp_cognito_auth_rejection_becomes_app_error(monkeypatch):
     mcp_client._token_cache.clear()
 
     with pytest.raises(AppError) as err:
-        mcp_client.get_cognito_token()
+        mcp_client.get_cognito_token(ws_ctx({"user_pool_client_id": "client-id"}))
 
     assert err.value.code == "gateway.credentials_rejected"
     assert err.value.status_code == 503
@@ -255,7 +251,7 @@ def test_mcp_cognito_auth_rejection_becomes_app_error(monkeypatch):
 
 
 def test_tool_catalog_degrades_when_gateway_credentials_are_rejected(client, monkeypatch):
-    def rejected():
+    def rejected(_ws):
         raise AppError(
             "gateway.credentials_rejected",
             "demo user credentials were rejected",
@@ -263,7 +259,7 @@ def test_tool_catalog_degrades_when_gateway_credentials_are_rejected(client, mon
         )
 
     monkeypatch.setattr(mcp_client, "tools_list", rejected)
-    tools_router._cache.update(tools=None, at=0.0)
+    tools_router._cache.clear()
 
     response = client.get("/api/tools?refresh=true")
 
@@ -386,7 +382,7 @@ def test_browser_demo_options_lists_web_bot_auth_browsers_and_profiles(
             assert browserId == "signed-browser-123"
             return {"status": "READY", "browserSigning": {"enabled": True}}
 
-    monkeypatch.setattr(tools_router, "control_client", lambda: FakeControlClient())
+    monkeypatch.setattr(tools_router, "control_client", lambda _ws=None: FakeControlClient())
 
     response = client.get("/api/demos/browser/options")
 
@@ -467,7 +463,7 @@ def test_browser_demo_uses_web_bot_auth_browser_and_saves_profile(
     chromium.connect_over_cdp.return_value = remote_browser
     playwright = SimpleNamespace(chromium=chromium)
 
-    monkeypatch.setattr(tools_router, "control_client", lambda: FakeControlClient())
+    monkeypatch.setattr(tools_router, "control_client", lambda _ws=None: FakeControlClient())
     monkeypatch.setattr("bedrock_agentcore.tools.BrowserClient", FakeBrowserClient)
     monkeypatch.setattr(
         "playwright.sync_api.sync_playwright",

@@ -6,6 +6,7 @@ import json
 
 import app.routers.registry as registry_router
 from app.services.agentcore import registry as reg
+from tests.conftest import ws_ctx
 
 RECORD = {
     "recordId": "r-new1", "name": "external-search", "descriptorType": "MCP",
@@ -16,7 +17,7 @@ RECORD = {
 def test_register_mcp_record(client, monkeypatch):
     calls = {}
 
-    def fake_register(name, description, url):
+    def fake_register(_ws, name, description, url):
         calls.update(name=name, url=url)
         return RECORD
 
@@ -54,7 +55,7 @@ def test_register_skill_routes_to_console(client, monkeypatch):
     seen = {}
     monkeypatch.setattr(
         registry_router.console, "register_skill",
-        lambda name, description, skill_md: seen.update(name=name, md=skill_md)
+        lambda _ws, name, description, skill_md: seen.update(name=name, md=skill_md)
         or {**RECORD, "descriptorType": "AGENT_SKILLS", "name": name},
     )
     res = client.post("/api/registry/records", json={
@@ -67,7 +68,10 @@ def test_register_skill_routes_to_console(client, monkeypatch):
 
 def test_delete_record_endpoint(client, monkeypatch):
     deleted = []
-    monkeypatch.setattr(registry_router.console, "console_delete", deleted.append)
+    monkeypatch.setattr(
+        registry_router.console, "console_delete",
+        lambda _ws, rid: deleted.append(rid),
+    )
     res = client.delete("/api/registry/records/r-gone")
     assert res.status_code == 200 and res.json()["deleted"] is True
     assert deleted == ["r-gone"]
@@ -77,9 +81,11 @@ def test_reject_action_routes(client, monkeypatch):
     actions = []
     monkeypatch.setattr(
         registry_router.console, "console_action",
-        lambda rid, act: actions.append((rid, act)),
+        lambda _ws, rid, act: actions.append((rid, act)),
     )
-    monkeypatch.setattr(registry_router.console, "console_get", lambda rid: RECORD)
+    monkeypatch.setattr(
+        registry_router.console, "console_get", lambda _ws, rid: RECORD
+    )
     res = client.post("/api/registry/records/r-1/action", json={"action": "reject"})
     assert res.status_code == 200
     assert actions == [("r-1", "reject")]
@@ -88,7 +94,7 @@ def test_reject_action_routes(client, monkeypatch):
 def test_attachables_endpoint_caches_and_returns(client, monkeypatch):
     calls = []
 
-    def fake_attachables():
+    def fake_attachables(_ws):
         calls.append(1)
         return {"mcp_servers": [{"name": "deepwiki", "url": "https://mcp.deepwiki.com/mcp",
                                  "gateway": False, "description": "", "record_id": "r1"}],
@@ -96,14 +102,14 @@ def test_attachables_endpoint_caches_and_returns(client, monkeypatch):
                             "description": "", "record_id": "r2"}]}
 
     monkeypatch.setattr(registry_router.console, "attachable_records", fake_attachables)
-    registry_router._attachables_cache.update(data=None, at=0.0)
+    registry_router._attachables_cache.clear()
     first = client.get("/api/registry/attachables").json()
     second = client.get("/api/registry/attachables").json()
     assert first == second
     assert first["mcp_servers"][0]["gateway"] is False
     assert first["skills"][0]["path"].startswith("s3://")
     assert calls == [1]  # second hit served from the 60s cache
-    registry_router._attachables_cache.update(data=None, at=0.0)
+    registry_router._attachables_cache.clear()
 
 
 def test_attachables_parsing_splits_gateway_and_remote(monkeypatch):
@@ -128,18 +134,15 @@ def test_attachables_parsing_splits_gateway_and_remote(monkeypatch):
         {"recordId": rid, "descriptorType": "AGENT_SKILLS" if rid == "s1" else "MCP"}
         for rid in records
     ]
-    monkeypatch.setattr(console_mod, "control_client", lambda: object())
-    monkeypatch.setattr(console_mod, "_registry_id", lambda: "reg")
-    monkeypatch.setattr(
-        console_mod, "get_settings",
-        lambda: type("S", (), {"resources": {"gateway_url": gw_url}})(),
-    )
+    monkeypatch.setattr(console_mod, "control_client", lambda _ws=None: object())
+    monkeypatch.setattr(console_mod, "_registry_id", lambda _ws: "reg")
     monkeypatch.setattr(console_mod.reg, "list_records",
                         lambda c, r, t, s: summaries if s == "APPROVED" else [])
     monkeypatch.setattr(console_mod.reg, "get_record",
                         lambda c, r, rid: records[rid])
 
     out = console_mod.attachable_records(
+        ws_ctx({"gateway_url": gw_url}),
         gateways=[
             {
                 "gatewayId": "gw-1",

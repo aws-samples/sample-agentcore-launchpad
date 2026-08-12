@@ -11,10 +11,9 @@ record is created; the registry catalog is untouched.
 import uuid
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app.core.config import get_settings
 from app.core.errors import AppError
 from app.routers.registry import (
     ImportSelection,
@@ -23,6 +22,7 @@ from app.routers.registry import (
     _staging,
     _sweep_staging,
 )
+from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services.registry_console import _delete_keys, upload_bundle_files
 from app.services.skill_ingest import (
     SKILL_NAME_RE,
@@ -30,7 +30,6 @@ from app.services.skill_ingest import (
     SkillValidationError,
     validate_bundle,
 )
-from app.services.workspace import default_workspace_context
 
 router = APIRouter(prefix="/api/agent-skills", tags=["agent-skills"])
 
@@ -41,7 +40,10 @@ class AttachRequest(BaseModel):
 
 
 @router.post("/import")
-def import_for_agent(req: AttachRequest) -> dict[str, Any]:
+def import_for_agent(
+    req: AttachRequest,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     """Upload each selected staged bundle to a per-request S3 prefix and return
     attachable ``{name, path}`` entries. Mirrors the registry import semantics:
     per-item failures never abort the batch; staging survives any failure so
@@ -54,11 +56,12 @@ def import_for_agent(req: AttachRequest) -> dict[str, Any]:
             "staging session expired or unknown — re-inspect the source",
             status_code=410,
         )
-    settings = get_settings()
-    bucket = settings.resources.get("artifacts_bucket")
+    bucket = ws.context.resources.get("artifacts_bucket")
     if not bucket:
-        raise RuntimeError("artifacts_bucket missing — run scripts/bootstrap.py")
-    s3 = default_workspace_context().client("s3")
+        raise RuntimeError(
+            "artifacts_bucket missing from this workspace's resource map — run its bootstrap"
+        )
+    s3 = ws.context.client("s3")
 
     bundles: list[SkillBundle] = entry["bundles"]
     uid = uuid.uuid4().hex[:8]

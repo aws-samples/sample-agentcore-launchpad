@@ -6,6 +6,8 @@ from app.deployer.harness import build_create_params
 from app.schemas.agent import DEFAULT_MODEL_ID, AgentSpec
 from app.services.agentcore import harness as hc
 
+from .conftest import ws_ctx
+
 MEM_ARN = "arn:aws:bedrock-agentcore:us-west-2:111:memory/launchpad_memory-x"
 ROLE_ARN = "arn:aws:iam::111:role/launchpad-agent-execution-role"
 
@@ -235,13 +237,15 @@ class StubControl:
 def test_deploy_stage_update_mode_uses_update_harness(monkeypatch):
     """Re-publish (mode=update) with a live resource must call UpdateHarness
     (new version, same harnessId) — never CreateHarness."""
-    from app.core.db import SessionLocal
+    from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
     from app.deployer import harness as harness_deploy
     from app.deployer.pipeline import StageContext
     from app.models.ledger import Agent
 
     db = SessionLocal()
-    agent = Agent(name="hr-assistant-v3", method="harness", status="active",
+    agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="hr-assistant-v3", method="harness", status="active",
                   resource_id="h-123", arn="arn:h-123", version="1",
                   spec=spec().model_dump())
     db.add(agent)
@@ -250,9 +254,9 @@ def test_deploy_stage_update_mode_uses_update_harness(monkeypatch):
     db.close()
 
     stub = StubControl(["READY"])
-    monkeypatch.setattr(harness_deploy, "control_client", lambda: stub)
+    monkeypatch.setattr(harness_deploy, "control_client", lambda _ws=None: stub)
 
-    ctx = StageContext(agent_id=agent_id, deployment_id="d1", job_id="j1")
+    ctx = StageContext(agent_id=agent_id, deployment_id="d1", job_id="j1", workspace=ws_ctx())
     ctx.scratch["mode"] = "update"  # no create_params → stage regenerates them
     db = SessionLocal()
     agent = db.get(Agent, agent_id)

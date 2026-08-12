@@ -132,6 +132,7 @@ def chat(
     )
     gateway_access_token = (
         policy_identity.gateway_user_token(
+            ws.context,
             identity.username,
             identity.role,
             identity.email,
@@ -140,9 +141,10 @@ def chat(
         else None
     )
 
-    # The stream outlives the request scope, so it carries the plain id rather
-    # than reaching back for the resolved scope.
+    # The stream outlives the request scope, so it carries the plain id and the
+    # already-built context rather than reaching back for the resolved scope.
     workspace_id = ws.id
+    workspace = ws.context
 
     def generate():
         # Thread items are persisted in event order (int-pk = replay order) so
@@ -159,6 +161,7 @@ def chat(
             req.prompt,
             session_id=session_id,
             actor_id=mem_actor,
+            workspace=workspace,
             **stream_kwargs,
         ):
             kind, data = event["event"], event["data"]
@@ -305,7 +308,9 @@ def session_memory(
         # on this id, and re-deriving it in the frontend would fork the scoping
         # rule (a session may have recorded a different human actor entirely).
         return {
-            **memory_service.session_memory_summary(mem_actor, session_id),
+            **memory_service.session_memory_summary(
+                ws.context, mem_actor, session_id
+            ),
             "actor_id": mem_actor,
         }
     except Exception as exc:
