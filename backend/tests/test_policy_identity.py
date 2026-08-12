@@ -87,6 +87,44 @@ def test_demo_user_uses_bootstrap_password_and_reconciles_group(monkeypatch):
     )
 
 
+def test_a_non_default_workspace_ignores_the_hubs_demo_passwords(monkeypatch):
+    """`demo_users.passwords` names users only `make bootstrap` creates, in the
+    hub's pool. A console-registered workspace has the groups but no lab users, so
+    the same caller must get a shadow identity in that pool instead of a 503."""
+    token = _jwt("admin", ["platform-admin"])
+    cognito = MagicMock()
+    cognito.admin_get_user.side_effect = ClientError(
+        {"Error": {"Code": "UserNotFoundException", "Message": "missing"}},
+        "AdminGetUser",
+    )
+    cognito.admin_create_user.return_value = {
+        "User": {
+            "Attributes": [
+                {"Name": "preferred_username", "Value": policy_identity.SHADOW_MARKER}
+            ]
+        }
+    }
+    cognito.admin_list_groups_for_user.return_value = {"Groups": []}
+    cognito.initiate_auth.return_value = {
+        "AuthenticationResult": {"AccessToken": token, "ExpiresIn": 3600}
+    }
+    monkeypatch.setattr(policy_identity, "get_settings", _settings)
+    monkeypatch.setattr(
+        policy_identity,
+        "load_yaml_config",
+        lambda: {"demo_users": {"passwords": {"admin": "hub-pool-password"}}},
+    )
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: cognito)
+    other = ws_ctx({"user_pool_id": "pool", "user_pool_client_id": "client"}, id="acct2")
+
+    assert policy_identity.gateway_user_token(other, "admin", "admin") == token
+    assert (
+        cognito.initiate_auth.call_args.kwargs["AuthParameters"]["PASSWORD"]
+        != "hub-pool-password"
+    )
+    cognito.admin_create_user.assert_called_once()
+
+
 def test_new_console_user_creates_marked_shadow_identity(monkeypatch):
     token = _jwt("clare", ["platform-admin"])
     cognito = MagicMock()

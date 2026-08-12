@@ -91,6 +91,7 @@ def ensure_memory(
     name: str = MEMORY_NAME,
     execution_role_arn: str | None = None,
     wait: bool = True,
+    timeout_s: int = 300,
 ) -> tuple[dict[str, str], bool]:
     """Return ({id, arn}, created).
 
@@ -135,7 +136,7 @@ def ensure_memory(
     created = control.create_memory(**params)["memory"]
     mem_id, arn = created["id"], created["arn"]
     if wait:
-        _wait_memory_active(control, mem_id)
+        _wait_memory_active(control, mem_id, timeout_s=timeout_s)
     return {"id": mem_id, "arn": arn}, True
 
 

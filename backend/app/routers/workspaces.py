@@ -33,12 +33,14 @@ from app.core.db import (
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import User, UserWorkspace, Workspace
 from app.routers.auth import Identity, require_admin, require_identity
+from app.services import workspace_bootstrap
 from app.services.workspace import (
     WorkspaceContext,
     get_workspace_row,
     granted_workspace_ids,
     workspace_context,
 )
+from app.services.workspace_bootstrap import STATUS_BOOTSTRAPPING
 
 router = APIRouter(prefix="/api/workspaces", tags=["workspaces"])
 
@@ -377,6 +379,54 @@ def delete_workspace(
     db.delete(row)
     db.commit()
     return {"deleted": True, "workspace_id": workspace_id}
+
+
+def _bootstrap_conflict(row: Workspace) -> AppError:
+    return AppError(
+        "workspace.bootstrap_conflict",
+        f"workspace '{row.id}' is {row.bootstrap_status}",
+        {"workspace_id": row.id, "bootstrap_status": row.bootstrap_status},
+        status_code=409,
+    )
+
+
+@router.post("/{workspace_id}/bootstrap", status_code=202)
+def bootstrap_workspace(
+    workspace_id: str,
+    db: Session = Depends(get_db),
+    _: Identity = Depends(require_admin),
+) -> dict[str, Any]:
+    """Queue the staged bootstrap job for a registered workspace.
+
+    Workspace-exempt on purpose (the whole `/api/workspaces` prefix is): it
+    operates *on* an environment that is not usable yet, and the target comes from
+    the path rather than the `X-Workspace` header. Progress is polled through
+    `GET /api/jobs/{job_id}` — its `payload.stages` carry the per-stage records.
+    """
+    row = _requested_row(db, workspace_id)
+    if row.id == DEFAULT_WORKSPACE_ID:
+        raise AppError(
+            "workspace.default_not_bootstrappable",
+            "the default workspace describes the hub, which is provisioned by "
+            "`make bootstrap` (CDK) — its resource map mirrors config/launchpad.yaml "
+            "on every startup and would overwrite whatever this job wrote",
+            status_code=400,
+        )
+    if row.bootstrap_status in (STATUS_BOOTSTRAPPING, READY):
+        raise _bootstrap_conflict(row)
+    try:
+        job = workspace_bootstrap.create_bootstrap_job(db, row)
+    except workspace_bootstrap.BootstrapConflict as exc:
+        # The check above lost a race with a concurrent request; the service's
+        # conditional claim is what actually decides, so report its verdict.
+        raise _bootstrap_conflict(_requested_row(db, workspace_id)) from exc
+    workspace_bootstrap.start_bootstrap_async(job.id)
+    return {
+        "job_id": job.id,
+        "workspace_id": row.id,
+        "bootstrap_status": row.bootstrap_status,
+        "stages": workspace_bootstrap.job_stages(job),
+    }
 
 
 @router.get("/{workspace_id}/grants")

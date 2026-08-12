@@ -257,6 +257,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/workspaces"): ADMIN,
     ("PATCH", "/api/workspaces/{workspace_id}"): ADMIN,
     ("DELETE", "/api/workspaces/{workspace_id}"): ADMIN,
+    ("POST", "/api/workspaces/{workspace_id}/bootstrap"): ADMIN,
     ("GET", "/api/workspaces/{workspace_id}/grants"): ADMIN,
 }
 
@@ -297,6 +298,9 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/workspaces"),
         ("PATCH", "/api/workspaces/{workspace_id}"),
         ("DELETE", "/api/workspaces/{workspace_id}"),
+        # Operates ON a workspace that is not usable yet; the target is the path
+        # parameter, not the caller's X-Workspace header.
+        ("POST", "/api/workspaces/{workspace_id}/bootstrap"),
         ("GET", "/api/workspaces/{workspace_id}/grants"),
     }
 )

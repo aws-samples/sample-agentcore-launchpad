@@ -20,6 +20,7 @@ from typing import Any
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import get_settings, load_yaml_config
+from app.core.db import DEFAULT_WORKSPACE_ID
 from app.core.errors import AppError
 from app.services.workspace import WorkspaceContext
 
@@ -31,7 +32,19 @@ _token_cache: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 _lock = threading.Lock()
 
 
-def _demo_password(username: str) -> str | None:
+def _demo_password(workspace: WorkspaceContext, username: str) -> str | None:
+    """The bootstrap-owned password for a demo user, or None.
+
+    `demo_users.passwords` in `config/launchpad.yaml` belongs to the **hub's**
+    user pool: only `make bootstrap` provisions those users, and a
+    console-registered workspace deliberately has none (see
+    `workspace_bootstrap`, which creates the groups but no lab users). Taking the
+    demo path against another pool would look up a user that cannot exist there
+    and answer 503; that caller gets a Launchpad-owned shadow user instead, like
+    every other console account.
+    """
+    if workspace.id != DEFAULT_WORKSPACE_ID:
+        return None
     passwords = (load_yaml_config().get("demo_users") or {}).get("passwords") or {}
     value = passwords.get(username)
     return str(value) if value else None
@@ -186,7 +199,7 @@ def gateway_user_token(
         cached = _token_cache.get(key)
         if cached and float(cached["expires_at"]) > time.time() + 60:
             return str(cached["token"])
-        demo_password = _demo_password(username)
+        demo_password = _demo_password(workspace, username)
         password = demo_password or _shadow_password(username)
         cognito = workspace.client("cognito-idp")
         try:

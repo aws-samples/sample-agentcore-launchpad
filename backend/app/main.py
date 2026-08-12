@@ -143,7 +143,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         resumed = resume_pending_jobs()
         if resumed:
             logging.getLogger("launchpad").info(
-                "resumed %d interrupted deploy job(s)", len(resumed)
+                "resumed %d interrupted deploy/bootstrap job(s)", len(resumed)
             )
         resumed_evals = resume_interrupted_runs()
         if resumed_evals:

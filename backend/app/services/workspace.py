@@ -9,6 +9,7 @@ so a fresh context shares cached clients with every other context naming the sam
 target.
 """
 
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -97,28 +98,40 @@ def context_for_workspace(workspace_id: str | None) -> WorkspaceContext:
         db.close()
 
 
+_MERGE_LOCK = threading.Lock()
+
+
 def merge_workspace_resources(
     workspace: WorkspaceContext, values: dict[str, Any]
 ) -> None:
     """Record newly provisioned resource identifiers on the workspace row.
 
-    For resources provisioned lazily mid-request (the KB gateway), so the row —
-    the resource map of record — learns about them. The in-memory context's map is
-    updated in place as well: the caller holds that context for the rest of the
-    request and would otherwise keep reading a map without the ids it just made.
+    For resources provisioned outside a bootstrap pass (the lazy KB gateway) and
+    for each stage of the bootstrap job, so the row — the resource map of record —
+    learns about them as they are made. The in-memory context's map is updated in
+    place as well: the caller holds that context for the rest of the request (or
+    the rest of the job) and would otherwise keep reading a map without the ids it
+    just created.
+
+    Serialised because it is a read-modify-write of one JSON column and there are
+    now concurrent writers: the bootstrap job writes it per stage on its own
+    thread while a request can lazily provision the KB gateway. Two unlocked
+    merges would interleave and the later commit would drop the earlier stage's
+    identifiers.
     """
-    db = SessionLocal()
-    try:
-        row = get_workspace_row(db, workspace.id)
-        if row is None:
-            raise LookupError(f"workspace '{workspace.id}' no longer exists")
-        # Reassigned, not mutated: SQLAlchemy does not track in-place edits of a
-        # JSON column.
-        row.resources = {**(row.resources or {}), **values}
-        db.commit()
-    finally:
-        db.close()
-    workspace.resources.update(values)
+    with _MERGE_LOCK:
+        db = SessionLocal()
+        try:
+            row = get_workspace_row(db, workspace.id)
+            if row is None:
+                raise LookupError(f"workspace '{workspace.id}' no longer exists")
+            # Reassigned, not mutated: SQLAlchemy does not track in-place edits of a
+            # JSON column.
+            row.resources = {**(row.resources or {}), **values}
+            db.commit()
+        finally:
+            db.close()
+        workspace.resources.update(values)
 
 
 def granted_workspace_ids(db: Session, user_id: str) -> list[str]:

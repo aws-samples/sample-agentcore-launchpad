@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
 from app.models.ledger import Agent, Deployment, Job
+from app.services import workspace_bootstrap
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
 STAGE_ORDER = ["generate", "package", "provision", "deploy", "register"]
@@ -247,17 +248,29 @@ def start_deploy_async(job_id: str) -> threading.Thread:
 
 
 def resume_pending_jobs() -> list[str]:
-    """Called on startup: re-run deploy jobs interrupted by a restart."""
+    """Called on startup: re-run the staged jobs a restart interrupted.
+
+    Every resumable job type registers its starter here. Both kinds rehydrate
+    their workspace from `jobs.workspace_id` inside the worker, so this only has
+    to hand over the id.
+    """
+    starters: dict[str, Callable[[str], threading.Thread]] = {
+        "deploy_agent": start_deploy_async,
+        workspace_bootstrap.JOB_TYPE: workspace_bootstrap.start_bootstrap_async,
+    }
     db = SessionLocal()
     try:
         pending = (
             db.query(Job)
-            .filter(Job.type == "deploy_agent", Job.status.in_(["queued", "running"]))
+            .filter(
+                Job.type.in_(list(starters)),
+                Job.status.in_(["queued", "running"]),
+            )
             .all()
         )
-        ids = [j.id for j in pending]
+        found = [(j.id, j.type) for j in pending]
     finally:
         db.close()
-    for job_id in ids:
-        start_deploy_async(job_id)
-    return ids
+    for job_id, job_type in found:
+        starters[job_type](job_id)
+    return [job_id for job_id, _ in found]
