@@ -23,8 +23,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import boto3
-
 from app.core.config import get_settings
 from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
@@ -34,6 +32,7 @@ from app.services import agent_iam
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
 from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES, SKILL_NAME_RE
+from app.services.workspace import default_workspace_context
 from app.templates.strands_agent import base_requirements, render_main_py
 
 
@@ -323,7 +322,7 @@ def _download_named_skills(
     if not pairs:
         return {"bundled": [], "files": 0, "bytes": 0}
     if s3_client is None:
-        s3_client = boto3.client("s3", region_name=get_settings().region)
+        s3_client = default_workspace_context().client("s3")
 
     bundled: list[str] = []
     total_files = 0
@@ -490,7 +489,7 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     size_mb = zip_path.stat().st_size / 1e6
 
     s3_key = f"agents/{agent.name}/deployment_package.zip"
-    boto3.client("s3", region_name=settings.region).upload_file(str(zip_path), bucket, s3_key)
+    default_workspace_context().client("s3").upload_file(str(zip_path), bucket, s3_key)
     ctx.scratch["s3_bucket"], ctx.scratch["s3_key"] = bucket, s3_key
     ctx.log(f"pip+zip {pip_secs:.1f}s · {size_mb:.1f}MB → s3://{bucket}/{s3_key}")
     detail = f"pip+zip {pip_secs:.1f}s · {size_mb:.1f}MB · s3 ✓"

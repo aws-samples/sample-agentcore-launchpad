@@ -19,7 +19,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import boto3
 from botocore.exceptions import ClientError
 from sqlalchemy.orm import Session
 
@@ -29,6 +28,7 @@ from app.evaluation.models import EvalRun
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.optimization.models import Experiment
 from app.services import memory
+from app.services.workspace import default_workspace_context
 
 SPANS_LOG_GROUP = "aws/spans"
 RUNTIME_LOG_GROUP_PREFIX = "/aws/bedrock-agentcore/runtimes/"
@@ -106,11 +106,11 @@ def cached(key: str, force: bool, build: Callable[[], dict[str, Any]]) -> dict[s
 
 
 def logs_client() -> Any:
-    return boto3.client("logs", region_name=get_settings().region)
+    return default_workspace_context().client("logs")
 
 
 def cw_client() -> Any:
-    return boto3.client("cloudwatch", region_name=get_settings().region)
+    return default_workspace_context().client("cloudwatch")
 
 
 # ── Logs Insights runner ────────────────────────────────────────────────────

@@ -14,8 +14,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import boto3
-
 from app.core.config import get_settings
 from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
@@ -25,6 +23,7 @@ from app.services import agent_iam, ecr
 from app.services.agentcore import codebuild as cb
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
+from app.services.workspace import default_workspace_context
 from app.templates.claude_sdk_agent import assemble_build_context
 
 from .zip_runtime import bundle_skill_paths_into, sanitize_runtime_name
@@ -69,11 +68,12 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     )
     archive = shutil.make_archive(str(context_dir) + "_src", "zip", context_dir)
     s3_key = f"builds/{agent.name}/source.zip"
-    boto3.client("s3", region_name=settings.region).upload_file(archive, bucket, s3_key)
+    workspace = default_workspace_context()
+    workspace.client("s3").upload_file(archive, bucket, s3_key)
     ctx.log(f"source zip uploaded → s3://{bucket}/{s3_key}")
 
     registry, repo, tag = _image_ref(settings, agent)
-    codebuild = boto3.client("codebuild", region_name=settings.region)
+    codebuild = workspace.client("codebuild")
     t0 = time.monotonic()
     build_id = cb.start_image_build(
         codebuild,
@@ -92,7 +92,7 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     # Pin the deployment to the image that was just pushed, not to the tag: the tag
     # is mutable, so deploying by it means what the runtime executes can change
     # with no record of it.
-    ecr_client = boto3.client("ecr", region_name=settings.region)
+    ecr_client = workspace.client("ecr")
     digest = ecr.resolve_digest(ecr_client, repo, tag)
     _record_image_digest(ctx, digest)
     ctx.scratch["image_digest"] = digest
@@ -309,7 +309,7 @@ def delete_agent_resources(agent: Agent, iam_client: Any = None) -> None:
     role_arn = agent_iam.shared_role_arn(settings)
     if role_arn:
         try:
-            iam = iam_client or boto3.client("iam", region_name=settings.region)
+            iam = iam_client or default_workspace_context().client("iam")
             iam.delete_role_policy(
                 RoleName=role_arn.rsplit("/", 1)[-1],
                 PolicyName=agent_iam.fs_policy_name(agent.name),

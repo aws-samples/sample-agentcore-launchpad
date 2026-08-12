@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.services import aws_clients
 from app.services.agentcore import gateway as gw
 from app.services.agentcore import runtime as rt
 
@@ -174,8 +175,8 @@ def test_invoke_runtime_text_joins_native_sse_without_final_duplication():
 # ─── sigv4_post ──────────────────────────────────────────────────────────────
 def _stub_creds(monkeypatch):
     monkeypatch.setattr(
-        gw.boto3, "Session",
-        lambda region_name=None: SimpleNamespace(
+        aws_clients, "get_session",
+        lambda *a, **k: SimpleNamespace(
             get_credentials=lambda: SimpleNamespace(
                 get_frozen_credentials=lambda: "frozen"
             )

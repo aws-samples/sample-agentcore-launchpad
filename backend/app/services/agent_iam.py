@@ -28,6 +28,7 @@ from typing import Any
 
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
+from app.services.workspace import default_workspace_context
 
 # Inference-profile prefixes: an id like `global.anthropic.claude-sonnet-5` is a
 # profile, and invoking it authorizes against the profile ARN *and* the underlying
@@ -611,9 +612,7 @@ def provision_execution_role(
         return arn, "iam role reused · launchpad-base (shared)"
 
     if iam is None:
-        import boto3
-
-        iam = boto3.client("iam", region_name=settings.region)
+        iam = default_workspace_context().client("iam")
     ctx = context_from_settings(settings)
     arn = ensure_role(iam, agent, spec, ctx, log)
     name = role_name_for(agent.name, agent.id)
@@ -631,9 +630,7 @@ def delete_execution_role(
     if not settings.per_agent_execution_roles:
         return True  # the shared role is not ours to delete
     if iam is None:
-        import boto3
-
-        iam = boto3.client("iam", region_name=settings.region)
+        iam = default_workspace_context().client("iam")
     return delete_role(iam, agent, log)
 
 

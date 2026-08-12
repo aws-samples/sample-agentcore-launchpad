@@ -23,8 +23,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import boto3
-
 from app.core.config import get_settings
 from app.deployer.environment import runtime_environment
 from app.deployer.zip_runtime import (
@@ -37,6 +35,7 @@ from app.deployer.zip_runtime import (
 from app.schemas.agent import AgentSpec
 from app.services import agent_iam
 from app.services.agentcore import runtime as rt
+from app.services.workspace import default_workspace_context
 
 _sleep = time.sleep  # injectable
 _NOT_FOUND = {"ResourceNotFoundException", "NotFoundException"}
@@ -78,9 +77,7 @@ def current_version(control_client: Any, runtime_id: str) -> str:
 
 
 def _default_uploader(local_path: str, bucket: str, key: str) -> None:
-    boto3.client("s3", region_name=get_settings().region).upload_file(
-        local_path, bucket, key
-    )
+    default_workspace_context().client("s3").upload_file(local_path, bucket, key)
 
 
 def candidate_s3_key(agent_name: str, canary_id: str, role: str) -> str:
@@ -101,7 +98,7 @@ def delete_object_quiet(key: str, *, bucket: str | None = None,
     target = bucket or settings.resources.get("artifacts_bucket")
     if not target:
         raise RuntimeError("artifacts_bucket missing from config")
-    client = s3_client or boto3.client("s3", region_name=settings.region)
+    client = s3_client or default_workspace_context().client("s3")
     client.delete_object(Bucket=target, Key=key)
 
 

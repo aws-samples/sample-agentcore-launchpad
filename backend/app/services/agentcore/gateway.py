@@ -9,12 +9,11 @@ traffic seed (``optimization.service``) and the canary invoke route.
 import json
 from typing import Any
 
-import boto3
 import httpx
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 
-from app.core.config import get_settings
+from app.services.workspace import default_workspace_context
 
 SESSION_HEADER = "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"
 
@@ -39,9 +38,8 @@ def sigv4_post(
     header pins the A/B variant for that session. ``poster``/``signer`` are test
     injection seams — no real AWS or network when both are supplied.
     """
-    settings = get_settings()
-    session = boto3.Session(region_name=settings.region)
-    credentials = session.get_credentials().get_frozen_credentials()
+    workspace = default_workspace_context()
+    credentials = workspace.session().get_credentials().get_frozen_credentials()
     signer = signer or _default_signer
 
     body = json.dumps(json_body)
@@ -49,7 +47,7 @@ def sigv4_post(
     if session_id:
         headers[SESSION_HEADER] = session_id
     aws_request = AWSRequest(method="POST", url=url, data=body, headers=headers)
-    signer(credentials, settings.region, aws_request)
+    signer(credentials, workspace.region, aws_request)
 
     signed_headers = dict(aws_request.headers)
     if poster:

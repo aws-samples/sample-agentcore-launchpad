@@ -4,7 +4,6 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import boto3
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -15,6 +14,7 @@ from app.models.ledger import ChatSession
 from app.services.agentcore import policy as policy_api
 from app.services.agentcore.client import control_client
 from app.services.registry_console import console_list
+from app.services.workspace import default_workspace_context
 
 router = APIRouter(prefix="/api", tags=["overview"])
 
@@ -55,7 +55,7 @@ def _traces_active() -> bool:
     if _cache["traces"] is not None and time.monotonic() - _cache["traces_at"] < _TTL_SECONDS:
         return _cache["traces"]
     try:
-        dest = boto3.client("xray", region_name=get_settings().region)
+        dest = default_workspace_context().client("xray")
         response = dest.get_trace_segment_destination()
         active = response.get("Destination") == "CloudWatchLogs" and response.get(
             "Status"

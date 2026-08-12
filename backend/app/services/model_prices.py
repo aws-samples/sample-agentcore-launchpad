@@ -24,13 +24,13 @@ import urllib.request
 from datetime import UTC, datetime
 from typing import Any
 
-import boto3
 import yaml
 
 from app.core import config as config_module
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.services import observability as obs
+from app.services.workspace import default_workspace_context
 
 MAX_SOURCE_BYTES = 30 * 1024 * 1024
 PREFERRED_PROVIDERS = ("bedrock_converse", "bedrock", "bedrock_mantle", "anthropic")
@@ -200,7 +200,7 @@ def _seen_models(cw: Any = None) -> list[str]:
     (_span_models) is merged in by the caller.
     """
     try:
-        cw = cw or boto3.client("cloudwatch", region_name=get_settings().region)
+        cw = cw or default_workspace_context().client("cloudwatch")
         models: set[str] = set()
         paginator = cw.get_paginator("list_metrics")
         for page in paginator.paginate(

@@ -12,6 +12,7 @@ import pytest
 import app.routers.registry as registry_router
 import app.services.registry_console as console_mod
 from app.core.errors import AppError
+from app.services import aws_clients
 from app.services import skill_ingest as si
 
 SKILL_MD = (
@@ -87,7 +88,7 @@ def _patch_reimport_aws(monkeypatch, fake_s3, record) -> dict:
         console_mod, "get_settings",
         lambda: types.SimpleNamespace(resources={"artifacts_bucket": "bkt"}, region="us-west-2"),
     )
-    monkeypatch.setattr(console_mod.boto3, "client", lambda *a, **k: fake_s3)
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: fake_s3)
     monkeypatch.setattr(console_mod.reg, "get_record", lambda c, r, rid: record)
     captured: dict = {}
 
