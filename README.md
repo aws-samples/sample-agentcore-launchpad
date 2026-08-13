@@ -37,6 +37,17 @@ infrastructure (CDK) and a vendored Strands Studio sub-app. It delivers:
   and an optimization loop that produces control/treatment **configuration
   bundles**, runs A/B and canary traffic through the gateway, and promotes the
   winner.
+- **Workspaces (multi-account / multi-region).** One console manages several
+  AWS environments: a **workspace** is one `(account, region)` pair with its
+  own AgentCore resource set, provisioned by a resumable ten-stage bootstrap
+  job from the admin console — no CDK, no shell. Admins switch freely between
+  workspaces (top-bar switcher); members see only the workspaces they were
+  granted, and every API answer is scoped to the selected workspace. Another
+  account in your organization joins by deploying one CloudFormation stack
+  ([the spoke role](infra/spoke/launchpad-workspace-role.yaml)) — access is
+  short-lived `sts:AssumeRole` credentials (no stored keys), revoked by
+  deleting that stack. See
+  [docs/cross-account-workspaces.md](docs/cross-account-workspaces.md).
 
 For how these map onto AgentCore services, see [docs/architecture.md](docs/architecture.md).
 

@@ -178,3 +178,29 @@ means a workdir escaped that base.
 
 Never write real credentials into docs, commits, or logs; they live in the
 systemd unit environment / operator secret storage.
+
+## 7. Workspaces in prod — operational notes
+
+The workspace model ([architecture.md](architecture.md#workspaces--multi-accountmulti-region-environments),
+[cross-account-workspaces.md](cross-account-workspaces.md)) applies to a prod
+box the same way as dev, with these prod-specific readings:
+
+- **This box's `default` workspace is its own region** (us-east-1 on the
+  reference box) — each deployment is an independent hub with its own ledger
+  and workspaces. Do not register another Launchpad deployment's home region
+  as a workspace here; the bootstrap's validate-access stage refuses regions
+  that already host foreign Launchpad resources.
+- **A service restart resumes interrupted `bootstrap_workspace` jobs**
+  (real AWS provisioning in the target account/region) in addition to deploy
+  jobs — check `GET /api/workspaces` for a workspace stuck in `bootstrapping`
+  before restarting, and expect the resumed job to continue after.
+- **Startup refuses to boot on any NULL `workspace_id` ledger row** (the
+  journal names the table). That indicates a write-path bug introduced by an
+  update; roll back the update rather than hand-patching rows.
+- **Member sessions are workspace-gated**: a member with no grants sees an
+  empty console by design; grants are edited on the Users page or at
+  registration approval. Admin accounts bypass grants.
+- **Cross-account access is revoked in the SPOKE account** — delete its
+  `launchpad-workspace-role` CloudFormation stack; nothing on this box needs
+  to change. The workspace row then fails with an actionable 502
+  (`workspace.assume_role_failed`) until detached.
