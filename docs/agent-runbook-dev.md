@@ -152,4 +152,7 @@ regions with foreign Launchpad resources, so it fails fast, but don't try.
 (same-account us-east-2) and `spoke-use1` (cross-account 936038267572 through
 `LaunchpadWorkspaceRole`; deleting that account's `launchpad-workspace-role`
 CFN stack revokes hub access entirely). A workspace with ANY rows (even one
-failed job) cannot be detached — known limitation, purge decision pending.
+failed job) cannot be detached; a `registered`/`failed`, agent-free one can be
+removed outright with PURGE on its detail view (`POST
+/api/workspaces/{id}/purge`), which deletes its scoped rows and frees the
+`(account, region)` slot. A READY workspace still has no teardown path.

@@ -850,7 +850,11 @@ and every call for the workspace — bootstrap, CodeBuild build, invoke,
 CloudWatch read — signs with it. The spoke role ships as plain CloudFormation
 (`infra/spoke/launchpad-workspace-role.yaml`); see
 [cross-account-workspaces.md](cross-account-workspaces.md) for the setup flow
-and the trust-boundary trade-off.
+and the trust-boundary trade-off. `POST /api/workspaces/preflight` (the
+registration form's TEST ACCESS button) probes that pair with one AssumeRole +
+`GetCallerIdentity` before anything is recorded — a refusal comes back as
+`ok: false` with the same diagnostic a bootstrap stage would print, so a wrong
+ExternalId is caught in a second instead of by a failed provisioning run.
 
 **Request boundary.** Console requests name their workspace with an
 `X-Workspace` header (a frontend `window.fetch` wrapper stamps it globally;
@@ -869,8 +873,24 @@ exactly its home workspace.
 reconciliation) rehydrates its `WorkspaceContext` from the persisted row it
 belongs to, never from ambient settings, and startup refuses to boot if any
 scoped row is missing its `workspace_id`. Users and console auth stay
-hub-global; per-user workspace grants are edited on the Users page (approval
-assigns them) or the admin Workspaces page.
+hub-global. Grants are edited from either side: per account on the Users page
+(approval assigns them, `PATCH /api/users/{id}` replacing that account's whole
+list) or per workspace on the Workspaces detail view, whose members table pages,
+searches and filters server-side (`GET /api/workspaces/{id}/grants`) and grants
+or revokes a selection in one call (`PUT` on the same path). Both write only
+`user_workspaces`; administrators are never rows there, because they reach every
+workspace by role.
+
+**Removal.** `DELETE /api/workspaces/{id}` is a detach — the row and its grants
+go, AWS is untouched — and it is refused while any scoped row still names the
+workspace. That guard also traps a *failed* registration: the one job row its
+bootstrap left behind blocks the detach and keeps the `(account, region)` slot,
+so the environment cannot be re-registered. `POST /api/workspaces/{id}/purge`
+(admin; `?dry_run=true` previews the row counts) deletes the scoped rows, the
+grants and the row in one transaction, and is admissible only for a workspace
+that never became usable: `registered` or `failed`, agent-free, never `default`.
+Whatever a failed run had already provisioned stays in the target account — the
+response's `resource_keys` says which resource kinds that is.
 
 ## The SQLite ledger and job/event model
 

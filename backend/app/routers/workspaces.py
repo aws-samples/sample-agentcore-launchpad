@@ -7,9 +7,12 @@ Two things live here, the way `routers/auth.py` owns both the login surface and
   route (from `enforce_route_policy`, so a handler cannot forget it), authorizes
   the caller against the workspace, and caches the result on
   `request.state.workspace`; handlers read it back with `require_workspace`;
-* **the admin CRUD surface** — register / rename / delete a workspace and read
-  its grants. Grants are *written* through `PATCH /api/users/{id}`
-  (`UserPatch.workspaces`) so there is one write path for them, not two.
+* **the admin CRUD surface** — register / rename / detach (or purge) a workspace,
+  and read or edit its grants. Grants have two shapes for two consoles: the
+  per-user full replacement `PATCH /api/users/{id}` (`UserPatch.workspaces`) and
+  the workspace-side bulk `PUT /api/workspaces/{id}/grants` here. Both write
+  nothing but `user_workspaces`, so there is still one source of truth (see
+  `replace_grants` for why the second shape is not a convenience).
 
 A workspace in another account carries the `role_arn` the hub assumes and the
 `external_id` the spoke's trust policy requires; both are validated here, and the
@@ -18,11 +21,13 @@ bootstrap job's `validate-access` stage is what proves they actually work.
 
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select, text
+from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -33,9 +38,10 @@ from app.core.db import (
     get_db,
 )
 from app.core.errors import AppError, NotFoundError
-from app.models.ledger import User, UserWorkspace, Workspace
-from app.routers.auth import Identity, require_admin, require_identity
-from app.services import workspace_bootstrap
+from app.models.ledger import Agent, User, UserWorkspace, Workspace
+from app.routers.auth import ROLE_MEMBER, Identity, require_admin, require_identity
+from app.services import aws_clients, workspace_bootstrap
+from app.services import users as users_service
 from app.services.workspace import (
     WorkspaceContext,
     default_workspace_context,
@@ -243,9 +249,39 @@ def _out(row: Workspace, *, reveal_role: bool = True) -> dict[str, Any]:
     return payload
 
 
-def _cross_account_fields(req: WorkspaceCreate) -> tuple[str | None, str | None]:
+def _validated_account(account_id: str) -> str:
+    value = account_id.strip()
+    if not _ACCOUNT.match(value):
+        raise AppError(
+            "workspace.invalid_account",
+            "account_id must be a 12-digit AWS account id",
+            {"account_id": account_id},
+            status_code=400,
+        )
+    return value
+
+
+def _validated_region(region: str) -> str:
+    value = region.strip()
+    if not _REGION.match(value):
+        raise AppError(
+            "workspace.invalid_region",
+            "region must be an AWS region name (e.g. us-west-2)",
+            {"region": value},
+            status_code=400,
+        )
+    return value
+
+
+def _cross_account_fields(
+    role_arn_in: str | None, external_id_in: str | None, account_id: str
+) -> tuple[str | None, str | None]:
     """The validated `(role_arn, external_id)` a registration carries, or `(None,
     None)` for a workspace in the hub's own account.
+
+    Takes plain values rather than the request model so the access probe
+    (`POST /preflight`) validates its input through exactly this function — the
+    two must agree, or a preflight would pass values registration then rejects.
 
     Validated at registration rather than left to the bootstrap job: an operator
     who mistypes the role can be told so immediately, while a job would only fail
@@ -253,8 +289,8 @@ def _cross_account_fields(req: WorkspaceCreate) -> tuple[str | None, str | None]
     The pair is inseparable because the spoke's trust policy requires an
     ExternalId, so a role without one can never be assumed.
     """
-    role_arn = (req.role_arn or "").strip() or None
-    external_id = (req.external_id or "").strip() or None
+    role_arn = (role_arn_in or "").strip() or None
+    external_id = (external_id_in or "").strip() or None
     if role_arn is None and external_id is None:
         return None, None
     if role_arn is None or external_id is None:
@@ -272,7 +308,6 @@ def _cross_account_fields(req: WorkspaceCreate) -> tuple[str | None, str | None]
             {"role_arn": role_arn},
             status_code=400,
         )
-    account_id = req.account_id.strip()
     if match.group(1) != account_id:
         raise AppError(
             "workspace.role_account_mismatch",
@@ -366,6 +401,62 @@ def hub_identity(_: Identity = Depends(require_admin)) -> dict[str, Any]:
     return _HUB_IDENTITY
 
 
+class WorkspacePreflight(BaseModel):
+    """The cross-account pair to probe, before any of it is recorded."""
+
+    account_id: str = Field(min_length=1, max_length=16)
+    region: str = Field(min_length=1, max_length=32)
+    role_arn: str | None = None
+    external_id: str | None = None
+
+
+@router.post("/preflight")
+def preflight_workspace(
+    req: WorkspacePreflight,
+    _: Identity = Depends(require_admin),
+) -> dict[str, Any]:
+    """Can this hub actually assume that role? Answered before registration.
+
+    The trap this closes: a wrong ExternalId (or a trust policy naming a
+    different hub) is invisible until the bootstrap job's first signed request,
+    which is minutes later and leaves a failed registration behind — the state
+    `purge` now exists to clean up. One AssumeRole + `GetCallerIdentity` says the
+    same thing in a second.
+
+    A refusal is a **result, not an error**: `ok: false` with the diagnostic comes
+    back as 200, because the operator asked a question and got its answer. Only
+    an AssumeRole failure is caught that way; any other `ClientError` propagates
+    to the central handlers as it would anywhere else.
+
+    Writes nothing and probes nothing else — no ledger row, no resource
+    discovery. Input is validated through the very functions registration uses,
+    so a preflight can never pass values `POST /api/workspaces` would reject.
+    """
+    account_id = _validated_account(req.account_id)
+    region = _validated_region(req.region)
+    role_arn, external_id = _cross_account_fields(req.role_arn, req.external_id, account_id)
+    if role_arn is None:
+        raise AppError(
+            "workspace.role_and_external_id_required",
+            "preflight tests an assumed role, so it needs both role_arn and "
+            "external_id — a workspace in the hub's own account has nothing to assume",
+            status_code=400,
+        )
+    try:
+        caller_account = aws_clients.probe_caller_identity(
+            account_id, region, role_arn, external_id
+        )
+    except ClientError as exc:
+        if not aws_clients.is_assume_role_failure(exc):
+            raise
+        return {
+            "ok": False,
+            "caller_account": None,
+            "diagnostic": aws_clients.assume_role_diagnostic(exc),
+        }
+    return {"ok": True, "caller_account": caller_account, "diagnostic": None}
+
+
 @router.post("", status_code=201)
 def create_workspace(
     req: WorkspaceCreate,
@@ -390,22 +481,9 @@ def create_workspace(
             {"id": req.id},
             status_code=400,
         )
-    if not _ACCOUNT.match(req.account_id.strip()):
-        raise AppError(
-            "workspace.invalid_account",
-            "account_id must be a 12-digit AWS account id",
-            {"account_id": req.account_id},
-            status_code=400,
-        )
-    region = req.region.strip()
-    if not _REGION.match(region):
-        raise AppError(
-            "workspace.invalid_region",
-            "region must be an AWS region name (e.g. us-west-2)",
-            {"region": region},
-            status_code=400,
-        )
-    role_arn, external_id = _cross_account_fields(req)
+    account_id = _validated_account(req.account_id)
+    region = _validated_region(req.region)
+    role_arn, external_id = _cross_account_fields(req.role_arn, req.external_id, account_id)
     if get_workspace_row(db, workspace_id) is not None:
         raise AppError(
             "workspace.exists",
@@ -416,7 +494,7 @@ def create_workspace(
     row = Workspace(
         id=workspace_id,
         name=req.name.strip(),
-        account_id=req.account_id.strip(),
+        account_id=account_id,
         region=region,
         role_arn=role_arn,
         external_id=external_id,
@@ -432,8 +510,8 @@ def create_workspace(
         db.rollback()
         raise AppError(
             "workspace.environment_taken",
-            f"a workspace already covers {req.account_id.strip()} / {region}",
-            {"account_id": req.account_id.strip(), "region": region},
+            f"a workspace already covers {account_id} / {region}",
+            {"account_id": account_id, "region": region},
             status_code=409,
         ) from exc
     return _out(row)
@@ -509,6 +587,141 @@ def delete_workspace(
     db.delete(row)
     db.commit()
     return {"deleted": True, "workspace_id": workspace_id}
+
+
+# The two states a purge accepts: a registration that never became a usable
+# environment. `ready` is deliberately absent — retiring a working environment
+# means deleting its AWS resources too, which this endpoint does not do.
+PURGEABLE_STATUSES = frozenset({"registered", "failed"})
+
+
+def _purge_refused(row: Workspace, reason: str, message: str, status_code: int) -> AppError:
+    """One code for every refusal, with `reason` naming which rule stopped it —
+    the console has copy per reason, and the reason values for a state conflict
+    are the bootstrap statuses themselves."""
+    return AppError(
+        "workspace.purge_refused",
+        message,
+        {"workspace_id": row.id, "reason": reason, "bootstrap_status": row.bootstrap_status},
+        status_code=status_code,
+    )
+
+
+def _assert_purgeable(db: Session, row: Workspace) -> tuple[dict[str, int], list[str]]:
+    """Refuse anything that is not registration residue, then report what a purge
+    would take with it: the referencing rows per table, and which resource keys
+    the row carries.
+
+    The resource keys are names only (`gateway_id`, `memory_id`), never their
+    values: they tell the operator that a failed run had already provisioned
+    something in AWS which purging the ledger row will not remove.
+    """
+    if row.id == DEFAULT_WORKSPACE_ID:
+        raise _purge_refused(
+            row,
+            "default",
+            "the default workspace describes the hub itself and cannot be purged",
+            400,
+        )
+    if row.bootstrap_status not in PURGEABLE_STATUSES:
+        raise _purge_refused(
+            row,
+            row.bootstrap_status,
+            f"workspace '{row.id}' is {row.bootstrap_status} — purge only removes a "
+            "registration that never became a usable environment",
+            409,
+        )
+    live_agents = (
+        db.query(Agent)
+        .filter(Agent.workspace_id == row.id, Agent.status != "deleted")
+        .count()
+    )
+    if live_agents:
+        raise _purge_refused(
+            row,
+            "agents",
+            f"workspace '{row.id}' still owns {live_agents} agent(s) — purging would "
+            "orphan their AgentCore runtimes with nothing left to name them",
+            409,
+        )
+    return _referencing_rows(db, row.id), sorted((row.resources or {}).keys())
+
+
+@router.post("/{workspace_id}/purge")
+def purge_workspace(
+    workspace_id: str,
+    dry_run: bool = False,
+    db: Session = Depends(get_db),
+    _: Identity = Depends(require_admin),
+) -> dict[str, Any]:
+    """Delete a failed or abandoned registration outright, rows and all.
+
+    The escape hatch from `DELETE`'s guard: a bootstrap that failed after thirty
+    seconds leaves one FAILED job row behind, which is enough to make the
+    workspace undetachable *and* to keep its `UNIQUE(account_id, region)` slot
+    occupied — so the operator cannot re-register the environment they were
+    trying to fix without editing the ledger by hand. Purge is admissible
+    exactly because those rows describe an environment that never worked; see
+    `_assert_purgeable` for what disqualifies one.
+
+    `?dry_run=true` runs the guardrails and reports what would go, deleting
+    nothing: the console's confirm dialog calls it on open, so the operator reads
+    the row counts (and any provisioned resource keys) before committing rather
+    than after.
+
+    AWS is untouched either way. What a failed run provisioned stays in the
+    account, and `resource_keys` is what says so.
+    """
+    row = _requested_row(db, workspace_id)
+    # Captured up front: after the rollback below, reading `row.id` would re-query
+    # for an object this request may just have deleted.
+    target = row.id
+    rows, resource_keys = _assert_purgeable(db, row)
+    payload = {
+        "purged": not dry_run,
+        "dry_run": dry_run,
+        "workspace_id": target,
+        "rows": rows,
+        "resource_keys": resource_keys,
+    }
+    if dry_run:
+        return payload
+    # Raw per-table DELETEs, in reverse table order so a child row goes before its
+    # parent: the ORM path would load every row (and `PolicyChange`'s immutability
+    # listener refuses to delete an audit row at all), which is the same reason the
+    # workspace_id backfill is raw SQL. One transaction — a half-purged workspace
+    # would be worse than the residue this removes.
+    for table in reversed(WORKSPACE_SCOPED_TABLES):
+        db.execute(
+            text(f"DELETE FROM {table} WHERE workspace_id = :id"),  # noqa: S608
+            {"id": target},
+        )
+    db.query(UserWorkspace).filter(UserWorkspace.workspace_id == target).delete()
+    # The workspace row goes with a **conditional** DELETE, the mirror image of
+    # `create_bootstrap_job`'s conditional claim: the guardrails above are a read,
+    # and sync handlers run on a threadpool, so a bootstrap POST can claim this
+    # very row between them and the deletes. Only one of the two statements can
+    # match — if this one does not, the run owns the workspace and everything above
+    # rolls back, rather than a job provisioning AWS resources into a workspace
+    # whose rows (the only record of what it created) have just been deleted.
+    claimed = db.execute(
+        delete(Workspace).where(
+            Workspace.id == target,
+            Workspace.bootstrap_status.in_(sorted(PURGEABLE_STATUSES)),
+        )
+    ).rowcount
+    if not claimed:
+        db.rollback()
+        current = db.scalar(select(Workspace.bootstrap_status).where(Workspace.id == target))
+        raise AppError(
+            "workspace.purge_refused",
+            f"workspace '{target}' changed while this purge was preparing "
+            f"(now {current or 'gone'}) — nothing was deleted; re-read it and retry",
+            {"workspace_id": target, "reason": current or "gone", "bootstrap_status": current},
+            status_code=409,
+        )
+    db.commit()
+    return payload
 
 
 def _bootstrap_conflict(row: Workspace) -> AppError:
@@ -587,26 +800,216 @@ def bootstrap_status(
     return payload
 
 
+GRANT_FILTERS = ("all", "granted", "ungranted")
+_GRANTS_LIMIT_DEFAULT = 20
+# Matches the console's largest page size (`PAGE_SIZES` in components/Pager.tsx)
+# and `/api/users`' own ceiling: a cap *below* what the page-size selector offers
+# would silently drop rows, since the pager computes its offsets from the size it
+# asked for, not from the `limit` reported back.
+_GRANTS_LIMIT_MAX = 200
+
+
+def _granted_total(db: Session, workspace_id: str) -> int:
+    """How many member accounts hold this workspace, ignoring search and filter.
+
+    Joined to `users` and restricted to members rather than counting
+    `user_workspaces` rows: promoting a member to admin leaves its grant rows
+    behind (admins reach every workspace by role, so nothing clears them), and a
+    total that counted those would not match the table below it.
+    """
+    return int(
+        db.scalar(
+            select(func.count())
+            .select_from(UserWorkspace)
+            .join(User, User.id == UserWorkspace.user_id)
+            .where(UserWorkspace.workspace_id == workspace_id, User.role == ROLE_MEMBER)
+        )
+        or 0
+    )
+
+
 @router.get("/{workspace_id}/grants")
 def list_grants(
     workspace_id: str,
+    q: str | None = None,
+    granted: str = "all",
+    limit: int = _GRANTS_LIMIT_DEFAULT,
+    offset: int = 0,
     db: Session = Depends(get_db),
     _: Identity = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Members granted this workspace. Admins are absent on purpose: they reach
-    every workspace by role, so listing them here would suggest a grant exists
-    that could be revoked."""
+    """The member accounts this workspace can be granted to, and which hold it.
+
+    Admins are absent on purpose: they reach every workspace by role, so listing
+    them here would suggest a grant exists that could be revoked.
+
+    Search and filter run in SQL over a LEFT JOIN on `user_workspaces` rather
+    than in Python over every account, because the console pages this table and
+    a deployment's account list is unbounded. `total` follows the current search
+    and filter (it drives the pager); `granted_total` deliberately does not — it
+    is a property of the workspace, so it must not move while the operator types.
+    """
     row = _requested_row(db, workspace_id)
-    rows = db.scalars(
-        select(User)
-        .join(UserWorkspace, UserWorkspace.user_id == User.id)
-        .where(UserWorkspace.workspace_id == row.id)
-        .order_by(User.username_key)
+    if granted not in GRANT_FILTERS:
+        raise AppError(
+            "workspace.invalid_grant_filter",
+            f"granted must be one of {', '.join(GRANT_FILTERS)}",
+            {"granted": granted},
+            status_code=400,
+        )
+    limit = max(1, min(limit, _GRANTS_LIMIT_MAX))
+    offset = max(0, offset)
+    # The workspace predicate belongs in the JOIN, not in WHERE: as a WHERE it
+    # would drop every account that holds some *other* workspace's grant.
+    grant_of_this_workspace = and_(
+        UserWorkspace.user_id == User.id, UserWorkspace.workspace_id == row.id
     )
+    base = (
+        select(User, UserWorkspace.workspace_id)
+        .outerjoin(UserWorkspace, grant_of_this_workspace)
+        .where(User.role == ROLE_MEMBER)
+    )
+    needle = (q or "").strip().lower()
+    if needle:
+        # `username_key` is the stored lowercase form; email has no lowered column,
+        # so it is lowered per query. `autoescape` matters because `_` is legal in
+        # both a username and an email: unescaped it is a LIKE wildcard, and a
+        # search for `ada_b` would quietly match `adaXb`.
+        base = base.where(
+            or_(
+                User.username_key.contains(needle, autoescape=True),
+                func.lower(User.email).contains(needle, autoescape=True),
+            )
+        )
+    if granted == "granted":
+        base = base.where(UserWorkspace.workspace_id.is_not(None))
+    elif granted == "ungranted":
+        base = base.where(UserWorkspace.workspace_id.is_(None))
+    total = int(
+        db.scalar(select(func.count()).select_from(base.order_by(None).subquery())) or 0
+    )
+    window = db.execute(
+        base.order_by(User.username_key).limit(limit).offset(offset)
+    ).all()
+    now = datetime.now(UTC)
     return {
         "workspace_id": row.id,
         "users": [
-            {"id": user.id, "username": user.username, "email": user.email, "role": user.role}
-            for user in rows
+            {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "role": user.role,
+                "status": users_service.account_state(user, now),
+                "granted": held is not None,
+            }
+            for user, held in window
         ],
+        "total": total,
+        "granted_total": _granted_total(db, row.id),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+class GrantsPatch(BaseModel):
+    """A batch of grants to add and remove, from the workspace's side."""
+
+    grant: list[str] = Field(default_factory=list)
+    revoke: list[str] = Field(default_factory=list)
+
+
+@router.put("/{workspace_id}/grants")
+def replace_grants(
+    workspace_id: str,
+    req: GrantsPatch,
+    db: Session = Depends(get_db),
+    _: Identity = Depends(require_admin),
+) -> dict[str, Any]:
+    """Grant and revoke this workspace for several accounts at once.
+
+    The workspace-side BULK complement to `PATCH /api/users/{id}`
+    (`UserPatch.workspaces`, a per-user full replacement). Both write nothing but
+    `user_workspaces`, so P2's "one write path for grants" rule holds in
+    substance — what this adds is the shape the Workspaces console needs, where
+    the workspace is fixed and the accounts vary. A per-user full replacement
+    cannot express that without the console first reading every selected
+    account's whole grant list and risking a lost update between two admins.
+
+    Deliberately additive/subtractive rather than a replacement of the whole
+    member set: an operator acts on the rows they selected, and accounts on other
+    pages (or matching a different search) must not be revoked as a side effect.
+
+    Allowed at any `bootstrap_status` — granting access before an environment is
+    ready is how an operator hands it over, and the readiness gate on mutating
+    traffic is enforced per request anyway.
+    """
+    row = _requested_row(db, workspace_id)
+    # No falsy-filtering: a blank id is as much "not something this workspace can
+    # be granted to" as an unknown one, and silently dropping it would make the
+    # same garbage input succeed here and 400 one line below (live-found).
+    grant = {value.strip() for value in req.grant}
+    revoke = {value.strip() for value in req.revoke}
+    both = sorted(grant & revoke)
+    if both:
+        raise AppError(
+            "workspace.grant_conflict",
+            f"the same account cannot be granted and revoked in one call: {', '.join(both)}",
+            {"user_ids": both},
+            status_code=400,
+        )
+    requested = grant | revoke
+    if requested:
+        members = set(
+            db.scalars(
+                select(User.id).where(
+                    User.id.in_(sorted(requested)), User.role == ROLE_MEMBER
+                )
+            )
+        )
+        offenders = sorted(requested - members)
+        if offenders:
+            # Unknown ids and administrators land on the same code: an admin
+            # cannot hold a grant it does not need, and both are "not something
+            # this workspace can be granted to".
+            raise AppError(
+                "workspace.invalid_grant_targets",
+                "these accounts cannot hold a workspace grant (unknown, or an "
+                f"administrator, which reaches every workspace by role): {', '.join(offenders)}",
+                {"user_ids": offenders},
+                status_code=400,
+            )
+    added = 0
+    if grant:
+        # Idempotent: re-granting is a no-op rather than an IntegrityError on the
+        # composite primary key.
+        held = set(
+            db.scalars(
+                select(UserWorkspace.user_id).where(
+                    UserWorkspace.workspace_id == row.id,
+                    UserWorkspace.user_id.in_(sorted(grant)),
+                )
+            )
+        )
+        for user_id in sorted(grant - held):
+            db.add(UserWorkspace(user_id=user_id, workspace_id=row.id))
+        added = len(grant - held)
+    removed = 0
+    if revoke:
+        removed = (
+            db.query(UserWorkspace)
+            .filter(
+                UserWorkspace.workspace_id == row.id,
+                UserWorkspace.user_id.in_(sorted(revoke)),
+            )
+            .delete(synchronize_session=False)
+        )
+    db.commit()
+    return {
+        "workspace_id": row.id,
+        # What actually changed, which a re-grant of an already-granted account
+        # reports as 0 — the console counts what the operator selected.
+        "added": added,
+        "removed": int(removed),
+        "granted_total": _granted_total(db, row.id),
     }

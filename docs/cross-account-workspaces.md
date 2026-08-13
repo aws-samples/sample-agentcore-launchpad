@@ -24,8 +24,9 @@ work can never accidentally sign with the hub's own credentials.
 
 ## Setup
 
-Three steps, in this order. Registering first is deliberate: the console tells
-you the two values the stack needs.
+Three steps, in this order, plus an optional access check between the last two.
+Registering first is deliberate: the console tells you the two values the stack
+needs.
 
 ### 1. Register the workspace in the console
 
@@ -36,7 +37,13 @@ you the two values the stack needs.
 | AWS account | the spoke's 12-digit account id |
 | Region | the region to provision in that account |
 | Role ARN | `arn:aws:iam::<spoke>:role/LaunchpadWorkspaceRole` (the default name; the account in the ARN must match the account field) |
-| External ID | any 2–128 characters of `A-Za-z0-9+=,.@:/_-`. Use the *suggest* button, or your own convention. **Keep it** — step 2 needs the same value. |
+| External ID | any 2–128 characters of `A-Za-z0-9+=,.@:/_-`. **Keep it** — step 2 needs the same value. |
+
+About SUGGEST: it generates a value for a stack you have **not deployed yet**.
+If the spoke role already exists, do not click it — read the existing value out
+of the role's trust policy (the `sts:ExternalId` condition) and type that,
+because a fresh value cannot match a deployed stack and STS reports the
+mismatch as a plain AccessDenied.
 
 The form also shows the **hub role ARN** (read live from
 `sts:GetCallerIdentity` and normalized to the `iam:` role form). That is the
@@ -66,6 +73,15 @@ IAM is global, so the region of this deployment does not matter — the role
 covers every region you register for that account.
 
 The stack outputs `RoleArn`; it must equal what you registered in step 1.
+
+### 2b. Check the pair before you provision (optional, one second)
+
+Back in the registration form — or in a fresh one for the same values — click
+**TEST ACCESS**. It performs one `sts:AssumeRole` plus `GetCallerIdentity` and
+reports either the account it reached or the same diagnostic a failed bootstrap
+would print, without recording or provisioning anything. It is the cheapest way
+to catch a wrong ExternalId or a trust policy that names the wrong hub, which
+otherwise stay invisible until step 3 fails and leaves a registration to purge.
 
 ### 3. Run the bootstrap
 
@@ -150,6 +166,7 @@ least-privilege hub needs one statement:
 | `validate-access` refuses the region | That region already hosts another Launchpad deployment (its gateway/memory/registry/user pool/CodeBuild project are not in this workspace's resource map). Pick another region or detach the other install. |
 | A later stage fails with a named action | A permission gap in the spoke stack. Add the action, update the stack, resume the bootstrap. |
 | A long job dies with an AssumeRole error | The session's refresh failed with under ten minutes of validity left, which propagates rather than being swallowed. Fix the cause and resume; the sessions themselves recover automatically. |
+| The workspace whose ExternalId was wrong cannot be detached, and its account/region cannot be re-registered | The failed bootstrap left a job row, and the detach guard refuses while any scoped row names the workspace. Use PURGE on its detail view (`POST /api/workspaces/{id}/purge`) — it removes those rows with the registration and frees the slot. Refused for a READY workspace or one that owns agents. |
 | `workspace.cross_account_tool_unavailable` (409) | The **browser** tool demo. Its SDK client cannot be given a session, so it can only run under the hub's own credentials. The code-interpreter demo has no such limit. |
 
 Known, deliberate limits:

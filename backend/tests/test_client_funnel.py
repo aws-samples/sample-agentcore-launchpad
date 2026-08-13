@@ -9,6 +9,7 @@ import inspect
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import botocore.session
 import pytest
@@ -285,6 +286,61 @@ def test_assume_role_failures_are_recognised_and_explained():
     # failure would send the operator after the wrong permission
     assert not aws_clients.is_assume_role_failure(
         ClientError({"Error": {"Code": "AccessDenied"}}, "CreateGateway")
+    )
+
+
+class _ProbeSession:
+    """A session whose only job is to hand out one stub STS client."""
+
+    def __init__(self, account: str = "444455556666") -> None:
+        self.account = account
+        self.services: list[str] = []
+
+    def client(self, service_name, **kwargs):
+        self.services.append(service_name)
+        return SimpleNamespace(get_caller_identity=lambda: {"Account": self.account})
+
+
+def test_the_access_probe_reaches_sts_through_a_session_it_does_not_cache(monkeypatch):
+    """The registration form probes operator input, so the ExternalId it carries is
+    frequently wrong (that is the point). Caching a session per attempt would park
+    a dead entry under every typo — and a probe's credentials must not become the
+    object in-flight work later shares a refresh lock with."""
+    probe = _ProbeSession()
+    built: list[tuple] = []
+
+    def fake_session(account_id, region, role_arn, external_id):
+        built.append((account_id, region, role_arn, external_id))
+        return probe
+
+    monkeypatch.setattr(aws_clients, "_assumed_role_session", fake_session)
+    aws_clients.reset_cache()
+
+    account = aws_clients.probe_caller_identity(
+        "444455556666", "us-east-2", ROLE_ARN, "launchpad-abc"
+    )
+
+    assert account == "444455556666"
+    assert built == [("444455556666", "us-east-2", ROLE_ARN, "launchpad-abc")]
+    assert probe.services == ["sts"]
+    assert aws_clients._SESSIONS == {} and aws_clients._CLIENTS == {}
+
+
+def test_a_probe_leaves_a_real_session_for_the_same_target_alone(stub_sts, monkeypatch):
+    """The credentials object of a workspace already in use must survive an
+    operator probing the same values — a probe is a question, not a reset."""
+    live = aws_clients.get_session(
+        "444455556666", "us-east-2", role_arn=ROLE_ARN, external_id="launchpad-abc"
+    )
+    monkeypatch.setattr(aws_clients, "_assumed_role_session", lambda *a: _ProbeSession())
+
+    aws_clients.probe_caller_identity("444455556666", "us-east-2", ROLE_ARN, "launchpad-abc")
+
+    assert (
+        aws_clients.get_session(
+            "444455556666", "us-east-2", role_arn=ROLE_ARN, external_id="launchpad-abc"
+        )
+        is live
     )
 
 

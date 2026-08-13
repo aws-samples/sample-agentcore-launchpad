@@ -2,7 +2,8 @@ import { type CSSProperties, type FormEvent, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Btn, Panel, ViewHead } from "../../components";
-import { api, type Workspace } from "../../lib/api";
+import { api, type Workspace, type WorkspacePreflightResult } from "../../lib/api";
+import { CROSS_ACCOUNT_GUIDE_URL, SPOKE_TEMPLATE_URL } from "../../lib/links";
 
 /**
  * Regions AgentCore serves. The list is a convenience, not the authority: the
@@ -56,6 +57,9 @@ export function CreateWorkspaceView({
   const [hubRoleArn, setHubRoleArn] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  /** the last access probe's verdict, or a string when the probe itself failed */
+  const [probe, setProbe] = useState<WorkspacePreflightResult | string | null>(null);
+  const [probing, setProbing] = useState(false);
 
   const region = (choice === OTHER ? freeRegion : choice).trim();
   // Only the hub's own account can collide on a region here; a spoke account has
@@ -75,6 +79,40 @@ export function CreateWorkspaceView({
       alive = false;
     };
   }, [external, hubRoleArn]);
+
+  // A verdict belongs to the values it was measured on: any edit (including
+  // SUGGEST replacing the ExternalId) drops it rather than leaving a green tick
+  // next to a pair nobody tested.
+  useEffect(() => {
+    setProbe(null);
+  }, [accountId, roleArn, externalId, external, region]);
+
+  // The region is part of it, not a detail to default: STS is called through the
+  // target region's own endpoint, so a probe that quietly tested a different
+  // region could pass where the one being registered would fail (opt-in regions).
+  const canProbe =
+    external &&
+    Boolean(accountId.trim() && roleArn.trim() && externalId.trim() && region) &&
+    !probing &&
+    !submitting;
+
+  const testAccess = async () => {
+    setProbing(true);
+    try {
+      setProbe(
+        await api.preflightWorkspace({
+          account_id: accountId.trim(),
+          region,
+          role_arn: roleArn.trim(),
+          external_id: externalId.trim(),
+        }),
+      );
+    } catch (err) {
+      setProbe(err instanceof Error ? err.message : String(err));
+    } finally {
+      setProbing(false);
+    }
+  };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -220,6 +258,7 @@ export function CreateWorkspaceView({
                     <Btn
                       type="button"
                       disabled={submitting}
+                      title={t("workspacesPage.create.externalIdSuggestTitle")}
                       onClick={() => setExternalId(suggestExternalId())}
                       data-testid="ws-external-id-suggest"
                     >
@@ -227,6 +266,12 @@ export function CreateWorkspaceView({
                     </Btn>
                   </div>
                   <span className="fhint">{t("workspacesPage.create.externalIdHint")}</span>
+                  {/* The trap this closes: SUGGEST reads like "fill this in for
+                      me", so an operator joining a stack that already exists
+                      clicks it and only learns of the mismatch at bootstrap. */}
+                  <span className="fhint" data-testid="ws-external-id-suggest-note">
+                    {t("workspacesPage.create.externalIdSuggestNote")}
+                  </span>
                 </div>
                 <div className="note" data-testid="ws-hub-role">
                   <span className="i">[i]</span>
@@ -282,6 +327,56 @@ export function CreateWorkspaceView({
                 {t("workspacesPage.create.regionTakenNote", { region })}
               </div>
             ) : null}
+            {/* Below the region on purpose: the probe assumes the role through the
+                target region's own STS endpoint, so every value it needs is
+                filled in above it rather than after it. */}
+            {external ? (
+              <div className="field">
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <Btn
+                    type="button"
+                    disabled={!canProbe}
+                    onClick={() => void testAccess()}
+                    data-testid="workspace-preflight-btn"
+                  >
+                    {t(
+                      probing
+                        ? "workspacesPage.create.testAccessRunning"
+                        : "workspacesPage.create.testAccess",
+                    )}
+                  </Btn>
+                  <span className="fhint">{t("workspacesPage.create.testAccessHint")}</span>
+                </div>
+                {probe === null ? null : typeof probe === "string" || !probe.ok ? (
+                  <div
+                    className="note"
+                    style={{ borderColor: "var(--crit)" }}
+                    role="alert"
+                    data-testid="workspace-preflight-fail"
+                  >
+                    <span className="i" style={{ color: "var(--crit)" }}>
+                      [✕]
+                    </span>
+                    <span className="mono">
+                      {typeof probe === "string" ? probe : probe.diagnostic}
+                    </span>
+                  </div>
+                ) : (
+                  <div
+                    className="note"
+                    style={{ borderColor: "var(--good)" }}
+                    data-testid="workspace-preflight-ok"
+                  >
+                    <span className="i" style={{ color: "var(--good)" }}>
+                      [✓]
+                    </span>
+                    {t("workspacesPage.create.testAccessOk", {
+                      account: probe.caller_account ?? accountId.trim(),
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : null}
             {error ? (
               <div
                 className="note"
@@ -319,13 +414,52 @@ export function CreateWorkspaceView({
             <span className="i">[i]</span>
             {t("workspacesPage.create.howNote")}
           </div>
-          {external ? (
-            <div className="note" data-testid="ws-external-how">
-              <span className="i">[!]</span>
-              {t("workspacesPage.create.externalHowNote")}
-            </div>
-          ) : null}
         </Panel>
+
+        {/* The cross-account flow spans two accounts and one file this console
+            cannot hand over, so it is explained here rather than only in the
+            repo: the person who deploys the spoke stack is often not the person
+            filling in this form. Superseded the one-line note that used to sit
+            in the panel above. */}
+        {external ? (
+          <Panel
+            brk
+            title={t("workspacesPage.create.xaTitle")}
+            sub={t("workspacesPage.create.xaSub")}
+            style={{ "--i": 2 } as CSSProperties}
+          >
+            {[1, 2, 3].map((step) => (
+              <div className="kv" key={step}>
+                <span className="k">{step}</span>
+                <span className="v">{t(`workspacesPage.create.xaStep${step}`)}</span>
+              </div>
+            ))}
+            <div className="note" data-testid="ws-xa-revoke">
+              <span className="i">[!]</span>
+              {t("workspacesPage.create.xaRevoke")}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+              <a
+                className="syschip link"
+                href={CROSS_ACCOUNT_GUIDE_URL}
+                target="_blank"
+                rel="noreferrer"
+                data-testid="ws-xa-guide-link"
+              >
+                ⧉ {t("workspacesPage.create.xaGuideLink")} ↗
+              </a>
+              <a
+                className="syschip link"
+                href={SPOKE_TEMPLATE_URL}
+                target="_blank"
+                rel="noreferrer"
+                data-testid="ws-xa-template-link"
+              >
+                ⧉ {t("workspacesPage.create.xaTemplateLink")} ↗
+              </a>
+            </div>
+          </Panel>
+        ) : null}
       </div>
     </>
   );

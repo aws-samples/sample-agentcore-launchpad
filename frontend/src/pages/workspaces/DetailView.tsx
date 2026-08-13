@@ -1,10 +1,14 @@
-import { type CSSProperties, useCallback, useEffect, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 
 import {
   Btn,
   Chip,
   ConfirmDialog,
+  DataTable,
+  Pager,
+  PAGE_SIZES,
   Panel,
   useToast,
   ViewHead,
@@ -12,12 +16,17 @@ import {
 import {
   api,
   ApiError,
-  type ConsoleUser,
   type StageInfo,
   type Workspace,
   type WorkspaceBootstrapJob,
+  type WorkspaceGrantFilter,
+  type WorkspaceGrants,
+  type WorkspacePurgeResult,
 } from "../../lib/api";
 import { STATUS_TONE } from "./status";
+
+/** Grant-state filters, in the order the toolbar renders them. */
+const GRANT_FILTERS: WorkspaceGrantFilter[] = ["all", "granted", "ungranted"];
 
 /** The bootstrap job's stages, in order (`services/workspace_bootstrap.py`). */
 const STAGE_ORDER = [
@@ -98,34 +107,37 @@ export function WorkspaceDetailView({
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const [params, setParams] = useSearchParams();
   const [row, setRow] = useState<Workspace | null>(null);
-  const [users, setUsers] = useState<ConsoleUser[]>([]);
-  /** how many accounts exist, so a truncated chip list says so */
-  const [userTotal, setUserTotal] = useState(0);
-  const [grantedCount, setGrantedCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [busyUser, setBusyUser] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmPurge, setConfirmPurge] = useState(false);
+  /** the dry run behind the purge dialog: what a purge would take with it */
+  const [purgePreview, setPurgePreview] = useState<WorkspacePurgeResult | null>(null);
   const [jobId, setJobId] = useState<string | null>(() => readJobIds()[workspaceId] ?? null);
   const [job, setJob] = useState<WorkspaceBootstrapJob | null>(null);
+
+  // Grants table state. Search / filter / page live in the URL (the console's
+  // sub-page convention) so a view of this table is linkable and survives a
+  // reload; `ws` and `view` are carried along by `setGrantParam`.
+  const query = params.get("gq") ?? "";
+  const filterParam = params.get("granted");
+  const filter: WorkspaceGrantFilter =
+    filterParam === "granted" || filterParam === "ungranted" ? filterParam : "all";
+  const pageNo = Math.max(1, Number(params.get("gpage") ?? "1") || 1);
+  const [size, setSize] = useState<number>(PAGE_SIZES[0]);
+  const [grants, setGrants] = useState<WorkspaceGrants | null>(null);
+  const [grantsLoading, setGrantsLoading] = useState(true);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [grantBusy, setGrantBusy] = useState(false);
+  const grantsSeq = useRef(0);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [list, accounts] = await Promise.all([
-        api.listWorkspaces(),
-        api.listUsers({ limit: 200 }),
-      ]);
+      const list = await api.listWorkspaces();
       setRow(list.workspaces.find((entry) => entry.id === workspaceId) ?? null);
-      setUsers(accounts.items);
-      setUserTotal(accounts.total);
-      try {
-        const grants = await api.listWorkspaceGrants(workspaceId);
-        setGrantedCount(grants.users.length);
-      } catch {
-        setGrantedCount(null); // the workspace is gone; the empty state says so
-      }
     } catch (err) {
       toast(t("workspacesPage.loadFailed", { msg: String(err) }), "crit");
     } finally {
@@ -136,6 +148,42 @@ export function WorkspaceDetailView({
   useEffect(() => {
     void load();
   }, [load]);
+
+  const loadGrants = useCallback(async () => {
+    const id = ++grantsSeq.current;
+    setGrantsLoading(true);
+    try {
+      const page = await api.listWorkspaceGrants(workspaceId, {
+        q: query || undefined,
+        granted: filter,
+        limit: size,
+        offset: (pageNo - 1) * size,
+      });
+      if (id !== grantsSeq.current) return; // ignore out-of-order responses
+      setGrants(page);
+    } catch (err) {
+      if (id !== grantsSeq.current) return;
+      // A gone workspace is the expected case (detached or purged elsewhere);
+      // the panel's empty state says so rather than a toast on every poll.
+      setGrants(null);
+      if (!(err instanceof ApiError && err.code === "workspace.not_found")) {
+        toast(err instanceof Error ? err.message : String(err), "crit");
+      }
+    } finally {
+      if (id === grantsSeq.current) setGrantsLoading(false);
+    }
+  }, [filter, pageNo, query, size, toast, workspaceId]);
+
+  useEffect(() => {
+    void loadGrants();
+  }, [loadGrants]);
+
+  // Selection is page-local: the checkboxes act on rows the operator can see, so
+  // a page, search or filter change starts a fresh selection rather than
+  // carrying invisible ids into the next batch.
+  useEffect(() => {
+    setSelected(new Set());
+  }, [filter, pageNo, query, size]);
 
   // A run started in another browser (or by another admin) is not in
   // localStorage — ask the backend which job is the latest one.
@@ -224,27 +272,109 @@ export function WorkspaceDetailView({
     }
   };
 
-  const toggleGrant = async (user: ConsoleUser) => {
-    const granted = user.workspaces.includes(workspaceId);
-    const next = granted
-      ? user.workspaces.filter((id) => id !== workspaceId)
-      : [...user.workspaces, workspaceId];
-    setBusyUser(user.id);
-    try {
-      // The backend replaces the whole grant list, so the unchanged ids travel
-      // along rather than being inferred from a diff.
-      await api.updateUser(user.id, { workspaces: next });
+  /** A refusal names the rule that stopped it, and the console has copy per reason. */
+  const purgeFailed = (err: unknown) => {
+    if (err instanceof ApiError && err.code === "workspace.purge_refused") {
+      const reason = (err.detail as { reason?: string } | null)?.reason ?? "";
       toast(
-        t(granted ? "workspacesPage.grantRevoked" : "workspacesPage.grantAdded", {
-          username: user.username,
+        t("workspacesPage.detail.purgeRefused", {
+          reason: t(`workspacesPage.detail.purgeReason.${reason}`, err.message),
         }),
+        "crit",
+      );
+    } else {
+      toast(err instanceof Error ? err.message : String(err), "crit");
+    }
+  };
+
+  const openPurge = async () => {
+    if (!row) return;
+    setPurgePreview(null);
+    setConfirmPurge(true);
+    try {
+      setPurgePreview(await api.purgeWorkspace(row.id, { dryRun: true }));
+    } catch (err) {
+      // The dry run runs the same guardrails, so a refusal here means the button
+      // was stale (a bootstrap started, an agent appeared): say so and re-read
+      // rather than showing a dialog whose confirm would be refused too.
+      setConfirmPurge(false);
+      purgeFailed(err);
+      await reload();
+    }
+  };
+
+  const purge = async () => {
+    if (!row) return;
+    setBusy(true);
+    try {
+      await api.purgeWorkspace(row.id);
+      toast(t("workspacesPage.purged", { name: row.name }), "good");
+      await onChanged();
+      onBack();
+    } catch (err) {
+      purgeFailed(err);
+      await reload();
+    } finally {
+      setBusy(false);
+      setConfirmPurge(false);
+    }
+  };
+
+  /** Set one grants-table param, keeping `view`/`ws` and restarting paging. */
+  const setGrantParam = (key: string, value: string | null) => {
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (value) next.set(key, value);
+        else next.delete(key);
+        if (key !== "gpage") next.delete("gpage");
+        return next;
+      },
+      { replace: true },
+    );
+  };
+
+  const rows = grants?.users ?? [];
+  const pageIds = rows.map((user) => user.id);
+  const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+
+  const toggleOne = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const togglePage = () => {
+    setSelected(() => (allOnPageSelected ? new Set() : new Set(pageIds)));
+  };
+
+  const applyGrants = async (action: "grant" | "revoke") => {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    setGrantBusy(true);
+    try {
+      const result = await api.updateWorkspaceGrants(workspaceId, { [action]: ids });
+      // The count reported is the selection, not `added`/`removed`: re-granting
+      // an account that already held it changes no row but is not a failure, and
+      // "granted 3 accounts" is what the operator just asked for.
+      toast(
+        t(
+          action === "grant"
+            ? "workspacesPage.detail.grantsGranted"
+            : "workspacesPage.detail.grantsRevoked",
+          { count: ids.length, total: result.granted_total },
+        ),
         "good",
       );
-      await load();
+      setSelected(new Set());
+      await loadGrants();
     } catch (err) {
       toast(err instanceof Error ? err.message : String(err), "crit");
     } finally {
-      setBusyUser(null);
+      setGrantBusy(false);
     }
   };
 
@@ -275,6 +405,27 @@ export function WorkspaceDetailView({
     !bootstrapping &&
     row.bootstrap_status !== "ready" &&
     !busy;
+  // Only registration residue is purgeable: a READY environment is in use, and
+  // retiring one means deleting its AWS resources, which purge does not do.
+  const canPurge =
+    row !== null &&
+    !row.is_default &&
+    (row.bootstrap_status === "registered" || row.bootstrap_status === "failed") &&
+    !busy;
+
+  const purgeBody = (): string => {
+    const name = row?.name ?? workspaceId;
+    if (!purgePreview) return t("workspacesPage.detail.purgeChecking");
+    const rows = Object.entries(purgePreview.rows)
+      .map(([table, count]) => `${table}: ${count}`)
+      .join(" · ");
+    const body = rows
+      ? t("workspacesPage.detail.purgeBody", { name, rows })
+      : t("workspacesPage.detail.purgeBodyEmpty", { name });
+    if (!purgePreview.resource_keys.length) return body;
+    const keys = purgePreview.resource_keys.join(", ");
+    return `${body} ${t("workspacesPage.detail.purgeAwsNote", { keys })}`;
+  };
 
   return (
     <>
@@ -330,7 +481,7 @@ export function WorkspaceDetailView({
             </div>
             <div className="kv">
               <span className="k">{t("workspacesPage.detail.grantedMembers")}</span>
-              <span className="v">{grantedCount ?? "—"}</span>
+              <span className="v">{grants?.granted_total ?? "—"}</span>
             </div>
           </div>
           <div
@@ -344,6 +495,15 @@ export function WorkspaceDetailView({
             >
               {t("workspacesPage.detail.delete")}
             </Btn>
+            {canPurge ? (
+              <Btn
+                style={{ color: "var(--crit)", borderColor: "var(--crit)" }}
+                onClick={() => void openPurge()}
+                data-testid="workspace-purge-btn"
+              >
+                {t("workspacesPage.detail.purge")}
+              </Btn>
+            ) : null}
             <Btn
               primary
               disabled={!canBootstrap}
@@ -439,45 +599,129 @@ export function WorkspaceDetailView({
 
       <Panel
         brk
+        pad={false}
         title={t("workspacesPage.detail.grantsTitle")}
-        sub={t("workspacesPage.detail.grantsSub")}
+        sub={t("workspacesPage.detail.grantsSub", {
+          granted: grants?.granted_total ?? 0,
+        })}
         style={{ "--i": 3 } as CSSProperties}
       >
-        {users.length === 0 ? (
-          <div className="empty">{t("workspacesPage.detail.noAccounts")}</div>
-        ) : (
-          <div className="selchips" data-testid="workspace-grants">
-            {users.map((user) =>
-              user.role === "admin" ? (
-                <span className="selchip" key={user.id} title={t("workspacesPage.detail.adminHint")}>
-                  {user.username} · {t("workspacesPage.detail.adminAll")}
-                </span>
-              ) : (
-                <button
-                  key={user.id}
-                  type="button"
-                  className={`selchip${user.workspaces.includes(workspaceId) ? " on" : ""}`}
-                  style={{ cursor: "pointer" }}
-                  disabled={busyUser === user.id}
-                  title={t("workspacesPage.detail.grantHint")}
-                  onClick={() => void toggleGrant(user)}
-                  data-testid={`workspace-grant-${user.username}`}
-                >
-                  {user.username}
-                </button>
-              ),
-            )}
-          </div>
-        )}
-        {userTotal > users.length ? (
-          <div className="note" data-testid="workspace-grants-truncated">
+        <div className="filters">
+          {GRANT_FILTERS.map((option) => (
+            <button
+              key={option}
+              className={`fsel${filter === option ? " on-ok" : ""}`}
+              onClick={() => setGrantParam("granted", option === "all" ? null : option)}
+              data-testid={`workspace-grants-filter-${option}`}
+            >
+              {t(`workspacesPage.detail.grantFilters.${option}`)}
+            </button>
+          ))}
+          <input
+            className="fsearch"
+            value={query}
+            onChange={(event) => setGrantParam("gq", event.target.value || null)}
+            placeholder={t("workspacesPage.detail.grantsSearch")}
+            aria-label={t("workspacesPage.detail.grantsSearch")}
+            data-testid="workspace-grants-search"
+          />
+          <span className="spacer" />
+          <Btn
+            disabled={selected.size === 0 || grantBusy}
+            onClick={() => void applyGrants("grant")}
+            data-testid="workspace-grants-grant"
+          >
+            {t("workspacesPage.detail.grantSelected", { count: selected.size })}
+          </Btn>
+          <Btn
+            disabled={selected.size === 0 || grantBusy}
+            style={{ color: "var(--crit)", borderColor: "var(--crit)" }}
+            onClick={() => void applyGrants("revoke")}
+            data-testid="workspace-grants-revoke"
+          >
+            {t("workspacesPage.detail.revokeSelected", { count: selected.size })}
+          </Btn>
+        </div>
+        <div className="pbody" style={{ paddingBottom: 0 }}>
+          <div className="note" data-testid="workspace-grants-hint">
             <span className="i">[i]</span>
-            {t("workspacesPage.detail.grantsTruncated", {
-              shown: users.length,
-              total: userTotal,
-            })}
+            {t("workspacesPage.detail.adminHint")}
           </div>
-        ) : null}
+        </div>
+        <DataTable
+          columns={[
+            {
+              key: "sel",
+              label: (
+                <input
+                  type="checkbox"
+                  checked={allOnPageSelected}
+                  disabled={pageIds.length === 0}
+                  onChange={togglePage}
+                  aria-label={t("workspacesPage.detail.selectPage")}
+                  data-testid="workspace-grants-select-page"
+                />
+              ),
+            },
+            { key: "username", label: t("workspacesPage.detail.grantCols.account") },
+            { key: "email", label: t("workspacesPage.detail.grantCols.email") },
+            { key: "role", label: t("workspacesPage.detail.grantCols.role") },
+            { key: "status", label: t("workspacesPage.detail.grantCols.status") },
+            { key: "granted", label: t("workspacesPage.detail.grantCols.granted") },
+          ]}
+          isEmpty={!grantsLoading && rows.length === 0}
+          empty={
+            query || filter !== "all"
+              ? t("workspacesPage.detail.noMatchingAccounts")
+              : t("workspacesPage.detail.noAccounts")
+          }
+        >
+          {rows.map((user) => (
+            <tr key={user.id} data-testid={`workspace-grant-row-${user.username}`}>
+              <td>
+                <input
+                  type="checkbox"
+                  checked={selected.has(user.id)}
+                  onChange={() => toggleOne(user.id)}
+                  aria-label={user.username}
+                  data-testid={`workspace-grant-select-${user.username}`}
+                />
+              </td>
+              <td>
+                <b>{user.username}</b>
+              </td>
+              <td>
+                <small className="dim">{user.email}</small>
+              </td>
+              <td>
+                <Chip tone="muted">{t("auth.roleMember")}</Chip>
+              </td>
+              <td>
+                <Chip tone={user.status === "active" ? "good" : "muted"}>
+                  {t(`usersPage.filters.${user.status}`)}
+                </Chip>
+              </td>
+              <td>
+                {user.granted ? (
+                  <Chip tone="good">{t("workspacesPage.detail.grantYes")}</Chip>
+                ) : (
+                  <span className="dim mono">—</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </DataTable>
+        <Pager
+          total={grants?.total ?? 0}
+          page={pageNo}
+          size={size}
+          onPage={(next) => setGrantParam("gpage", next > 1 ? String(next) : null)}
+          onSize={(next) => {
+            setSize(next);
+            setGrantParam("gpage", null);
+          }}
+          always
+        />
       </Panel>
 
       <ConfirmDialog
@@ -487,6 +731,15 @@ export function WorkspaceDetailView({
         confirmLabel={t("workspacesPage.detail.delete")}
         onConfirm={() => void remove()}
         onCancel={() => setConfirmDelete(false)}
+      />
+
+      <ConfirmDialog
+        open={confirmPurge}
+        title={t("workspacesPage.detail.purgeTitle")}
+        body={purgeBody()}
+        confirmLabel={t("workspacesPage.detail.purge")}
+        onConfirm={() => void purge()}
+        onCancel={() => setConfirmPurge(false)}
       />
     </>
   );
