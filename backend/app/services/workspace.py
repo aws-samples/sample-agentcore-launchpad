@@ -54,6 +54,16 @@ class WorkspaceContext:
         )
         return session.get_credentials().get_frozen_credentials()
 
+    def sdk_session(self) -> Any:
+        """Session-shaped handle for an AWS SDK class that insists on building its
+        own clients (`aws_clients.FunnelSession`).
+
+        Not a boto3 session: it routes every `client()` back through the factory,
+        so an SDK's internal clients target this workspace and stay inside the
+        lock and cache.
+        """
+        return aws_clients.sdk_session(self)
+
 
 def workspace_context(row: Workspace) -> WorkspaceContext:
     """The context a ``Workspace`` ledger row describes.

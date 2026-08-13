@@ -11,7 +11,9 @@ Two things live here, the way `routers/auth.py` owns both the login surface and
   its grants. Grants are *written* through `PATCH /api/users/{id}`
   (`UserPatch.workspaces`) so there is one write path for them, not two.
 
-Cross-account workspaces (`role_arn`) are refused here until phase 3.
+A workspace in another account carries the `role_arn` the hub assumes and the
+`external_id` the spoke's trust policy requires; both are validated here, and the
+bootstrap job's `validate-access` stage is what proves they actually work.
 """
 
 import re
@@ -36,6 +38,7 @@ from app.routers.auth import Identity, require_admin, require_identity
 from app.services import workspace_bootstrap
 from app.services.workspace import (
     WorkspaceContext,
+    default_workspace_context,
     get_workspace_row,
     granted_workspace_ids,
     workspace_context,
@@ -51,6 +54,14 @@ _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
 # service-availability check is the bootstrap job's validate-access stage.
 _REGION = re.compile(r"^[a-z]{2}(-[a-z]+)+-\d$")
 _ACCOUNT = re.compile(r"^\d{12}$")
+# The role the hub assumes in the spoke account. The account is read back out of
+# the ARN and checked against `account_id`, so the two cannot disagree.
+_ROLE_ARN = re.compile(r"^arn:aws[a-z-]*:iam::(\d{12}):role/.+$")
+_ROLE_ARN_MAX = 256  # the ledger column's width — reject rather than truncate
+# STS's own ExternalId pattern, capped at the ledger column's width (STS allows
+# 1224) so a longer one is rejected rather than silently truncated on insert.
+# ASCII because `\w` would otherwise accept letters STS itself rejects.
+_EXTERNAL_ID = re.compile(r"^[\w+=,.@:/-]{2,128}$", re.ASCII)
 _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
@@ -196,8 +207,8 @@ class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     account_id: str = Field(min_length=1, max_length=16)
     region: str = Field(min_length=1, max_length=32)
-    # Present so the refusal below is explicit rather than a silently ignored
-    # field; phase 3 turns it into the cross-account path.
+    # Absent for a workspace in the hub's own account (ambient credentials);
+    # both together for a cross-account one.
     role_arn: str | None = None
     external_id: str | None = None
 
@@ -206,19 +217,79 @@ class WorkspacePatch(BaseModel):
     name: str = Field(min_length=1, max_length=64)
 
 
-def _out(row: Workspace) -> dict[str, Any]:
+def _out(row: Workspace, *, reveal_role: bool = True) -> dict[str, Any]:
     """Console shape. `resources` is deliberately absent: it carries ARNs and
-    identity-provider ids, and no console surface needs them."""
-    return {
+    identity-provider ids, and no console surface needs them.
+
+    Every caller sees `cross_account`; only an admin sees which role
+    (`reveal_role=False` for the member-reachable list), because the admin
+    Workspaces page reads the row it manages out of that same list and has to be
+    able to show what the spoke stack must be deployed as. `external_id` is a
+    shared secret and never leaves the ledger either way.
+    """
+    payload = {
         "id": row.id,
         "name": row.name,
         "account_id": row.account_id,
         "region": row.region,
+        "cross_account": row.role_arn is not None,
         "bootstrap_status": row.bootstrap_status,
         "is_default": row.id == DEFAULT_WORKSPACE_ID,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
+    if reveal_role:
+        payload["role_arn"] = row.role_arn
+    return payload
+
+
+def _cross_account_fields(req: WorkspaceCreate) -> tuple[str | None, str | None]:
+    """The validated `(role_arn, external_id)` a registration carries, or `(None,
+    None)` for a workspace in the hub's own account.
+
+    Validated at registration rather than left to the bootstrap job: an operator
+    who mistypes the role can be told so immediately, while a job would only fail
+    on its first signed request — and by then the workspace looks half-broken.
+    The pair is inseparable because the spoke's trust policy requires an
+    ExternalId, so a role without one can never be assumed.
+    """
+    role_arn = (req.role_arn or "").strip() or None
+    external_id = (req.external_id or "").strip() or None
+    if role_arn is None and external_id is None:
+        return None, None
+    if role_arn is None or external_id is None:
+        raise AppError(
+            "workspace.role_and_external_id_required",
+            "a cross-account workspace needs both role_arn and external_id — the "
+            "spoke role's trust policy requires the ExternalId to be presented",
+            status_code=400,
+        )
+    match = _ROLE_ARN.match(role_arn)
+    if match is None or len(role_arn) > _ROLE_ARN_MAX:
+        raise AppError(
+            "workspace.invalid_role_arn",
+            "role_arn must be an IAM role ARN (arn:aws:iam::<account>:role/<name>)",
+            {"role_arn": role_arn},
+            status_code=400,
+        )
+    account_id = req.account_id.strip()
+    if match.group(1) != account_id:
+        raise AppError(
+            "workspace.role_account_mismatch",
+            f"the role lives in account {match.group(1)} but the workspace names "
+            f"{account_id} — one of the two is a typo",
+            {"role_account_id": match.group(1), "account_id": account_id},
+            status_code=400,
+        )
+    if not _EXTERNAL_ID.match(external_id):
+        raise AppError(
+            "workspace.invalid_external_id",
+            "external_id must be 2-128 characters of letters, digits or "
+            "+=,.@:/-_ (it must match the ExternalId the spoke's stack was "
+            "deployed with)",
+            status_code=400,
+        )
+    return role_arn, external_id
 
 
 @router.get("")
@@ -229,7 +300,70 @@ def list_workspaces(request: Request, db: Session = Depends(get_db)) -> dict[str
     if not identity.is_admin:
         granted = set(granted_workspace_ids(db, identity.user_id or ""))
         rows = [row for row in rows if row.id in granted]
-    return {"workspaces": [_out(row) for row in rows], "all_workspaces": identity.is_admin}
+    return {
+        "workspaces": [_out(row, reveal_role=identity.is_admin) for row in rows],
+        "all_workspaces": identity.is_admin,
+    }
+
+
+_ASSUMED_ROLE_ARN = re.compile(
+    r"^arn:(?P<partition>aws[a-z-]*):sts::(?P<account>\d{12}):assumed-role/(?P<role>[^/]+)/"
+)
+# The hub's own principal cannot change while the process runs, and the console
+# reads it on every visit to the registration form. Two concurrent first requests
+# would each call STS once, which is why this needs no lock.
+_HUB_IDENTITY: dict[str, Any] | None = None
+
+
+def hub_role_arn(caller_arn: str) -> str:
+    """The IAM role ARN a spoke's trust policy must name, from a caller ARN.
+
+    `sts:GetCallerIdentity` reports an assumed role as
+    `arn:aws:sts::<account>:assumed-role/<role>/<session>`, which is not a valid
+    trust-policy principal — the role's own `arn:aws:iam::<account>:role/<role>`
+    is. Anything already in `iam:` form (an IAM user hub, a role read some other
+    way) is returned untouched.
+
+    Caveat worth knowing when it disagrees with reality: the assumed-role form
+    omits the role's *path*, so a hub role at `/team/launchpad-hub` reconstructs
+    as `role/launchpad-hub`. Roles at the default path — every deployment this
+    ships with — are exact.
+    """
+    match = _ASSUMED_ROLE_ARN.match(caller_arn)
+    if match is None:
+        return caller_arn
+    return (
+        f"arn:{match.group('partition')}:iam::{match.group('account')}"
+        f":role/{match.group('role')}"
+    )
+
+
+@router.get("/hub-identity")
+def hub_identity(_: Identity = Depends(require_admin)) -> dict[str, Any]:
+    """The hub's own account and role — the two values a spoke stack is deployed with.
+
+    Declared before the `/{workspace_id}` routes so the literal path wins, and
+    workspace-exempt like the rest of this router: it describes the hub, not an
+    environment.
+    """
+    global _HUB_IDENTITY
+    if _HUB_IDENTITY is None:
+        try:
+            identity = default_workspace_context().client("sts").get_caller_identity()
+        except Exception as exc:
+            raise AppError(
+                "workspace.hub_identity_unavailable",
+                "this backend could not read its own AWS identity, so it cannot "
+                "say which principal a spoke role should trust",
+                status_code=502,
+            ) from exc
+        caller_arn = str(identity.get("Arn") or "")
+        _HUB_IDENTITY = {
+            "account_id": str(identity.get("Account") or ""),
+            "caller_arn": caller_arn,
+            "role_arn": hub_role_arn(caller_arn),
+        }
+    return _HUB_IDENTITY
 
 
 @router.post("", status_code=201)
@@ -238,13 +372,6 @@ def create_workspace(
     db: Session = Depends(get_db),
     _: Identity = Depends(require_admin),
 ) -> dict[str, Any]:
-    if req.role_arn or req.external_id:
-        raise AppError(
-            "workspace.cross_account_unsupported",
-            "cross-account workspaces (role_arn) ship in phase 3; register an "
-            "environment in this account for now",
-            status_code=400,
-        )
     # Validated as sent rather than normalized: the id travels back in every
     # `X-Workspace` header and in URLs, and a silently rewritten one turns into a
     # 404 for a client that kept what it typed.
@@ -278,6 +405,7 @@ def create_workspace(
             {"region": region},
             status_code=400,
         )
+    role_arn, external_id = _cross_account_fields(req)
     if get_workspace_row(db, workspace_id) is not None:
         raise AppError(
             "workspace.exists",
@@ -290,6 +418,8 @@ def create_workspace(
         name=req.name.strip(),
         account_id=req.account_id.strip(),
         region=region,
+        role_arn=role_arn,
+        external_id=external_id,
         bootstrap_status="registered",
         resources={},
     )

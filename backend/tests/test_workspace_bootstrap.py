@@ -792,6 +792,38 @@ class TestValidateAccess:
         message = str(exc.value)
         assert "999988887777" in message and ACCOUNT in message
 
+    def test_a_role_that_cannot_be_assumed_names_the_trust_policy(self, aws, monkeypatch):
+        """`GetCallerIdentity` is the run's first signed call, so a cross-account
+        workspace whose trust policy or ExternalId is wrong fails here — with the
+        fix, not with a raw AssumeRole traceback."""
+        _register()
+        monkeypatch.setattr(
+            aws.sts,
+            "get_caller_identity",
+            lambda: (_ for _ in ()).throw(_client_error("AccessDenied", "AssumeRole")),
+        )
+        with pytest.raises(wb.BootstrapError) as exc:
+            wb.STAGES["validate-access"](_ctx())
+        message = str(exc.value)
+        assert "cannot assume this workspace's role" in message
+        assert "trust policy" in message and "ExternalId" in message
+
+    def test_a_credential_denial_during_a_probe_is_not_blamed_on_the_service(
+        self, aws, monkeypatch
+    ):
+        """Credentials refresh lazily, so an AssumeRole denial can land inside any
+        probe; reporting it as `ListGateways failed` would send the operator after
+        an AgentCore permission that is fine."""
+        _register()
+        monkeypatch.setattr(
+            aws.control,
+            "list_gateways",
+            lambda **_kw: (_ for _ in ()).throw(_client_error("AccessDenied", "AssumeRole")),
+        )
+        with pytest.raises(wb.BootstrapError) as exc:
+            wb.STAGES["validate-access"](_ctx())
+        assert "cannot assume this workspace's role" in str(exc.value)
+
     def test_a_region_without_the_service_is_named_as_unsupported(self, aws, monkeypatch):
         _register()
         monkeypatch.setattr(
@@ -863,6 +895,28 @@ class TestValidateAccess:
         _register()
         aws.registry.denied = True
         assert "usable" in wb.STAGES["validate-access"](_ctx())
+
+    def test_a_credential_denial_is_not_read_as_a_tolerated_registry_denial(
+        self, aws, monkeypatch
+    ):
+        """The refusal check tolerates AccessDenied from the registry, and a failed
+        credential refresh says AccessDenied too — swallowing that would skip the
+        registry marker instead of reporting a role that cannot be assumed."""
+        _register()
+        calls = {"n": 0}
+
+        def list_registries(**_kw):
+            # the probe calls this first and has its own guard; the second call is
+            # the one inside the foreign-deployment check
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise _client_error("AccessDenied", "AssumeRole")
+            return {"registries": []}
+
+        monkeypatch.setattr(aws.registry, "list_registries", list_registries)
+        with pytest.raises(wb.BootstrapError) as exc:
+            wb.STAGES["validate-access"](_ctx())
+        assert "cannot assume this workspace's role" in str(exc.value)
 
 
 class TestIamAdoption:

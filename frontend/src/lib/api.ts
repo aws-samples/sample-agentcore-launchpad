@@ -1305,6 +1305,10 @@ export interface Workspace {
   name: string;
   account_id: string;
   region: string;
+  /** reached through an assumed role in another account */
+  cross_account: boolean;
+  /** the assumed role, for admins only — absent from a member's list */
+  role_arn?: string | null;
   bootstrap_status: WorkspaceBootstrapStatus;
   /** the hub's own environment: cannot be deleted or bootstrapped from here */
   is_default: boolean;
@@ -1436,11 +1440,19 @@ export const api = {
   },
   userStats: () => request<UserStats>("/api/users/stats"),
   listWorkspaces: () => request<WorkspaceListResult>("/api/workspaces"),
+  /** The hub's own account and role — what a spoke's trust policy must name. */
+  getHubIdentity: () =>
+    request<{ account_id: string; caller_arn: string; role_arn: string }>(
+      "/api/workspaces/hub-identity",
+    ),
   createWorkspace: (body: {
     id: string;
     name: string;
     account_id: string;
     region: string;
+    /** both together, or neither: a cross-account workspace */
+    role_arn?: string;
+    external_id?: string;
   }) =>
     request<Workspace>("/api/workspaces", { method: "POST", body: JSON.stringify(body) }),
   patchWorkspace: (id: string, body: { name: string }) =>

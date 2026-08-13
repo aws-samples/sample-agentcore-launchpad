@@ -31,6 +31,10 @@ DEFAULT_CONTEXT_ALLOWED = {
     # model prices are hub-global config and so is their discovery (parent design
     # D10 defers multi-region price discovery)
     "services/model_prices.py",
+    # `GET /api/workspaces/hub-identity` reports the HUB's own principal — the one
+    # a spoke's trust policy must name. The default context is the subject here,
+    # not a fallback for a missing one.
+    "routers/workspaces.py",
 }
 
 

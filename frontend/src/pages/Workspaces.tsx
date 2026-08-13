@@ -175,7 +175,15 @@ export function Workspaces() {
                 ) : null}
               </td>
               <td>{row.name}</td>
-              <td className="mono">{row.account_id}</td>
+              <td className="mono">
+                {row.account_id}
+                {row.cross_account ? (
+                  <>
+                    {" "}
+                    <Chip tone="blue">{t("workspacesPage.external")}</Chip>
+                  </>
+                ) : null}
+              </td>
               <td className="mono">{row.region}</td>
               <td>
                 <Chip tone={STATUS_TONE[row.bootstrap_status]}>

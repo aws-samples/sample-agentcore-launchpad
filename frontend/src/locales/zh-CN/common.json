@@ -1107,8 +1107,14 @@
     "workspace.invalid_id": "id 需为 2-32 个小写字母、数字或 '-'。",
     "workspace.invalid_account": "账户 id 需为 12 位数字。",
     "workspace.invalid_region": "这不是合法的 AWS 区域名称。",
-    "workspace.cross_account_unsupported": "跨账户工作区将在下一阶段提供——当前请在本账户内注册环境。",
-    "users.invalid_workspaces": "工作区列表必须是已存在的工作区 id。"
+    "workspace.role_and_external_id_required": "跨账户工作区需要同时提供角色 ARN 与 external id。",
+    "workspace.invalid_role_arn": "这不是合法的 IAM 角色 ARN（arn:aws:iam::<账户>:role/<名称>）。",
+    "workspace.role_account_mismatch": "该角色所在账户与本工作区声明的账户不一致。",
+    "workspace.invalid_external_id": "external id 需为 2-128 个字母、数字或 +=,.@:/-_ 字符，并与 spoke 账户中该堆栈部署时使用的值一致。",
+    "workspace.assume_role_failed": "无法扮演该工作区的角色——请检查 spoke 角色的信任策略与 external id。",
+    "users.invalid_workspaces": "工作区列表必须是已存在的工作区 id。",
+    "workspace.cross_account_tool_unavailable": "该工具演示只能使用本部署自身的凭证运行，因此无法指向其他账户的工作区。",
+    "workspace.hub_identity_unavailable": "后端无法读取自身的 AWS 身份，因此无法给出 spoke 角色应当信任的主体。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",
@@ -2453,14 +2459,14 @@
     },
     "create": {
       "title": "注册工作区",
-      "meta": "当前阶段仅支持同账户环境",
+      "meta": "可以是本账户，也可以通过 assume role 指向另一个账户",
       "formTitle": "工作区",
       "idLabel": "工作区 ID",
       "idHint": "2-32 个小写字母、数字或 '-'。它会随每个请求发送，且之后不可修改。",
       "nameLabel": "显示名称",
       "namePlaceholder": "第二套环境",
       "accountLabel": "AWS 账户",
-      "accountHint": "固定为本部署所在账户——跨账户工作区需要 assume role，将在下一阶段提供。",
+      "accountHint": "固定为本部署所在账户。若要注册其他账户的环境，请开启「跨 AWS 账户」。",
       "regionLabel": "区域",
       "regionHint": "每个区域只允许一个工作区，这样 Launchpad 预置的区域级资源名称不会冲突。",
       "regionOther": "其他区域…",
@@ -2474,7 +2480,22 @@
       "how2": "随后的 bootstrap 任务会在目标区域预置 IAM、存储、CodeBuild、Cognito、Gateway、Memory 与 Registry。",
       "how3": "在任务报告就绪之前，该工作区只接受读请求，因此进度可见，但不会向半个环境部署。",
       "how4": "可以在工作区详情页或用户管理中把它授予 member。",
-      "howNote": "区域列表只是便捷选项：bootstrap 的校验访问阶段会真实探测目标区域，因此也可以手动输入列表之外的区域。"
+      "howNote": "区域列表只是便捷选项：bootstrap 的校验访问阶段会真实探测目标区域，因此也可以手动输入列表之外的区域。",
+      "missingCrossAccount": "跨账户环境需要同时填写 spoke 角色 ARN 和 external id。",
+      "badRoleArn": "角色 ARN 需形如 arn:aws:iam::123456789012:role/LaunchpadWorkspaceRole。",
+      "roleAccountMismatch": "角色 ARN 中的账户与上面填写的账户不一致。",
+      "externalLabel": "跨 AWS 账户",
+      "externalHint": "关闭：本部署所在账户，直接使用后端自身凭证。开启：另一个账户，通过在该账户中 assume role 访问。",
+      "accountHintExternal": "要纳管账户的 12 位 id，必须与下面角色 ARN 中的账户一致。",
+      "roleArnLabel": "SPOKE 角色 ARN",
+      "roleArnHint": "本 hub 将要 assume 的角色，由该账户中的 infra/spoke/launchpad-workspace-role.yaml 创建（默认名称 LaunchpadWorkspaceRole）。",
+      "externalIdLabel": "EXTERNAL ID",
+      "externalIdSuggest": "生成建议值",
+      "externalIdHint": "2-128 个字母、数字或 +=,.@:/-_ 。spoke 侧的堆栈必须使用完全相同的值部署；它只保存在账本中，不会再次显示。",
+      "hubRoleNote": "部署堆栈时把下面这个 hub 角色填入 HubRoleArn——它是 spoke 唯一信任的主体:",
+      "hubRoleLoading": "正在读取本部署的身份…",
+      "hubRoleUnknown": "不可用——后端无法读取自身的 AWS 身份",
+      "externalHowNote": "顺序很重要:先在此注册，再用相同的 external id 在目标账户部署 infra/spoke/launchpad-workspace-role.yaml，最后运行 bootstrap。详见 docs/cross-account-workspaces.md。"
     },
     "detail": {
       "meta": "工作区 {{id}}",
@@ -2503,7 +2524,9 @@
       "how2": "进度通过任务轮询获取，离开此页面不会中断运行。",
       "how3": "就绪之后才允许写请求——即在该环境中创建、部署、评估与治理。",
       "how4": "只要还有账本记录（Agent、任务、会话历史、审计记录）引用该工作区，解除注册都会被拒绝。",
-      "howNote": "阶段明细只针对本浏览器启动的运行渲染；无论如何，上方的工作区状态才是权威。"
-    }
+      "howNote": "阶段明细只针对本浏览器启动的运行渲染；无论如何，上方的工作区状态才是权威。",
+      "roleArn": "ASSUME 的角色"
+    },
+    "external": "跨账户"
   }
 }

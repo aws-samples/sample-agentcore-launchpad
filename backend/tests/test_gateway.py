@@ -392,6 +392,71 @@ def test_a_browser_demo_session_is_only_stoppable_by_the_workspace_that_started_
         tools_router._browser_demo_sessions.pop(session_id, None)
 
 
+def test_the_browser_demo_refuses_a_cross_account_workspace(client, monkeypatch):
+    """`BrowserClient` builds its clients off ambient credentials, so a spoke
+    workspace's demo would silently run in the hub account. Refused up front —
+    before the SDK is even imported — rather than mislabelled."""
+    constructed: list[str] = []
+    monkeypatch.setattr(
+        "bedrock_agentcore.tools.BrowserClient",
+        lambda **kwargs: constructed.append(kwargs) or SimpleNamespace(),
+    )
+    spoke = "spoke-usw1"
+    db = SessionLocal()
+    try:
+        db.add(
+            Workspace(
+                id=spoke, name=spoke, account_id="444455556666", region="us-west-1",
+                role_arn="arn:aws:iam::444455556666:role/LaunchpadWorkspaceRole",
+                external_id="launchpad-spoke", bootstrap_status="ready", resources={},
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        "/api/demos/browser",
+        json={"url": "https://example.com"},
+        headers={WORKSPACE_HEADER: spoke},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "workspace.cross_account_tool_unavailable"
+    assert constructed == []
+
+
+def test_the_code_interpreter_demo_targets_the_workspace_it_runs_in(client, monkeypatch):
+    """The SDK takes a session, so this demo needs no gate — but it only lands in
+    the right account if that session is passed."""
+    seen: dict = {}
+
+    class FakeInterpreter:
+        def __init__(self, region, session=None):
+            seen["region"], seen["session"] = region, session
+            self.session_id = "ci-1"
+
+        def start(self, **kwargs):
+            seen["timeout"] = kwargs["session_timeout_seconds"]
+
+        def invoke(self, method, params):
+            seen["code"] = params["code"]
+            return {"stream": [{"result": {"content": [{"type": "text", "text": "42"}]}}]}
+
+        def stop(self):
+            seen["stopped"] = True
+
+    monkeypatch.setattr("bedrock_agentcore.tools.CodeInterpreter", FakeInterpreter)
+
+    response = client.post("/api/demos/code-interpreter", json={"code": "print(42)"})
+
+    assert response.status_code == 200
+    assert response.json()["stdout"] == "42"
+    assert seen["region"] == "us-west-2"
+    assert isinstance(seen["session"], aws_clients.FunnelSession)
+    assert seen["stopped"] is True
+
+
 def test_browser_demo_options_lists_web_bot_auth_browsers_and_profiles(
     client,
     monkeypatch,

@@ -6,6 +6,7 @@ them into the active locale. Envelope shape: {code, message, detail}.
 
 from typing import Any
 
+from botocore.exceptions import ClientError
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -67,7 +68,34 @@ async def validation_error_handler(_: Request, exc: RequestValidationError) -> J
     )
 
 
+async def assume_role_error_handler(_: Request, exc: ClientError) -> JSONResponse:
+    """Turn a failed cross-account role assumption into an actionable answer.
+
+    A workspace's credentials are refreshed lazily, so a broken trust policy or a
+    wrong ExternalId detonates at whichever call site was signing a request — any
+    route touching AWS, not one place worth try/excepting. Handled here so the
+    console gets a code it can translate instead of a bare 500.
+
+    Every other `ClientError` is re-raised, which leaves it exactly where it was
+    before this handler existed: an unhandled 500 with the AWS error in the log.
+    """
+    # Imported here: `core` must not take a startup dependency on `services`.
+    from app.services.aws_clients import assume_role_diagnostic, is_assume_role_failure
+
+    if not is_assume_role_failure(exc):
+        raise exc
+    return JSONResponse(
+        status_code=502,
+        content=envelope(
+            "workspace.assume_role_failed",
+            assume_role_diagnostic(exc),
+            {"aws_error_code": str(exc.response.get("Error", {}).get("Code") or "")},
+        ),
+    )
+
+
 def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AppError, app_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_error_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
+    app.add_exception_handler(ClientError, assume_role_error_handler)

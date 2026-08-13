@@ -126,7 +126,12 @@ def demo_code_interpreter(
 ) -> dict[str, Any]:
     from bedrock_agentcore.tools import CodeInterpreter
 
-    interpreter = CodeInterpreter(region=ws.context.region)
+    # `session=` is what keeps this in the workspace's account: the SDK builds its
+    # own control/data-plane clients, and without a session it builds them off
+    # ambient credentials — a spoke workspace's demo would then run in the hub.
+    interpreter = CodeInterpreter(
+        region=ws.context.region, session=ws.context.sdk_session()
+    )
     started = time.monotonic()
     try:
         interpreter.start(session_timeout_seconds=300)
@@ -265,6 +270,28 @@ def browser_demo_options(
     }
 
 
+def _assert_browser_demo_available(workspace: WorkspaceContext) -> None:
+    """Refuse the browser demo in a cross-account workspace.
+
+    `BrowserClient` takes a region and nothing else: it builds its boto3 clients
+    off ambient credentials with no way to pass a session (unlike
+    `CodeInterpreter`, which accepts one). In a spoke workspace it would start a
+    browser session in the HUB account while the console said otherwise, so this
+    fails loudly instead. `tests/test_client_funnel.py` asserts the SDK still has
+    no `session` parameter — the day it grows one, that test fails and this gate
+    comes out.
+    """
+    if workspace.role_arn is None:
+        return
+    raise AppError(
+        "workspace.cross_account_tool_unavailable",
+        "the browser demo can only run under the hub's own credentials, so it "
+        "cannot target a workspace reached through an assumed role",
+        {"workspace_id": workspace.id},
+        status_code=409,
+    )
+
+
 def _resolve_browser_demo_configuration(
     req: BrowserDemoRequest,
     workspace: WorkspaceContext,
@@ -396,6 +423,8 @@ def demo_browser(
     req: BrowserDemoRequest,
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
+    _assert_browser_demo_available(ws.context)
+
     from bedrock_agentcore.tools import BrowserClient
     from playwright.sync_api import sync_playwright
 

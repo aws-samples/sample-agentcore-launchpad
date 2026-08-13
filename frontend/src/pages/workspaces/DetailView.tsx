@@ -304,8 +304,22 @@ export function WorkspaceDetailView({
             </div>
             <div className="kv">
               <span className="k">{t("workspacesPage.cols.account")}</span>
-              <span className="v">{row?.account_id ?? "—"}</span>
+              <span className="v">
+                {row?.account_id ?? "—"}
+                {row?.cross_account ? (
+                  <>
+                    {" "}
+                    <Chip tone="blue">{t("workspacesPage.external")}</Chip>
+                  </>
+                ) : null}
+              </span>
             </div>
+            {row?.cross_account ? (
+              <div className="kv" data-testid="workspace-role-arn">
+                <span className="k">{t("workspacesPage.detail.roleArn")}</span>
+                <span className="v mono">{row.role_arn ?? "—"}</span>
+              </div>
+            ) : null}
             <div className="kv">
               <span className="k">{t("workspacesPage.cols.region")}</span>
               <span className="v">{row?.region ?? "—"}</span>
