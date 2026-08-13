@@ -1305,6 +1305,8 @@ export interface Workspace {
   name: string;
   account_id: string;
   region: string;
+  /** reached through an assumed role in another account (never exposes which) */
+  cross_account: boolean;
   bootstrap_status: WorkspaceBootstrapStatus;
   /** the hub's own environment: cannot be deleted or bootstrapped from here */
   is_default: boolean;

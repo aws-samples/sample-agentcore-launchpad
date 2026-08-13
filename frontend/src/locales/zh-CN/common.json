@@ -1107,7 +1107,11 @@
     "workspace.invalid_id": "id 需为 2-32 个小写字母、数字或 '-'。",
     "workspace.invalid_account": "账户 id 需为 12 位数字。",
     "workspace.invalid_region": "这不是合法的 AWS 区域名称。",
-    "workspace.cross_account_unsupported": "跨账户工作区将在下一阶段提供——当前请在本账户内注册环境。",
+    "workspace.role_and_external_id_required": "跨账户工作区需要同时提供角色 ARN 与 external id。",
+    "workspace.invalid_role_arn": "这不是合法的 IAM 角色 ARN（arn:aws:iam::<账户>:role/<名称>）。",
+    "workspace.role_account_mismatch": "该角色所在账户与本工作区声明的账户不一致。",
+    "workspace.invalid_external_id": "external id 需为 2-128 个字母、数字或 +=,.@:/-_ 字符，并与 spoke 账户中该堆栈部署时使用的值一致。",
+    "workspace.assume_role_failed": "无法扮演该工作区的角色——请检查 spoke 角色的信任策略与 external id。",
     "users.invalid_workspaces": "工作区列表必须是已存在的工作区 id。"
   },
   "chatPage": {

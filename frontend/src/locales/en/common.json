@@ -1107,7 +1107,11 @@
     "workspace.invalid_id": "The id must be 2-32 characters of lowercase letters, digits or '-'.",
     "workspace.invalid_account": "The account id must be 12 digits.",
     "workspace.invalid_region": "That is not an AWS region name.",
-    "workspace.cross_account_unsupported": "Cross-account workspaces ship in the next phase — register an environment in this account.",
+    "workspace.role_and_external_id_required": "A cross-account workspace needs both a role ARN and an external id.",
+    "workspace.invalid_role_arn": "That is not an IAM role ARN (arn:aws:iam::<account>:role/<name>).",
+    "workspace.role_account_mismatch": "The role lives in a different account than the one this workspace declares.",
+    "workspace.invalid_external_id": "The external id must be 2-128 characters of letters, digits or +=,.@:/-_ and match the one the spoke's stack was deployed with.",
+    "workspace.assume_role_failed": "This workspace's role could not be assumed — check the spoke role's trust policy and the external id.",
     "users.invalid_workspaces": "The workspace list must name existing workspaces."
   },
   "chatPage": {

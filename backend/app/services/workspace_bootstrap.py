@@ -25,10 +25,12 @@ What this deliberately does not provision, and why:
   CDK-shipped sample *code*, so a workspace's gateway simply has no demo targets.
 * **demo Cognito users** — a workspace is an operator environment, not a lab.
 
-Cross-account is phase 3: in this phase the job runs with the hub's own
-credentials, pointed at another region by the workspace context. Nothing here
-changes when `role_arn` starts resolving — the context is the only thing that
-knows.
+The job is credential-agnostic: it runs with the hub's own credentials for a
+workspace in this account and through an assumed spoke role for one in another,
+and the only stage that knows the difference is `validate-access`, which reports
+a role that cannot be assumed. Everything else goes through
+`ctx.workspace.client(...)`, and the context is the one thing that knows where
+those clients point.
 """
 
 import json
@@ -46,8 +48,8 @@ from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
 from app.models.ledger import Job, Workspace
+from app.services import aws_clients, gateway_bootstrap, policy_bootstrap, workspace_iam
 from app.services import bootstrap as hub_bootstrap
-from app.services import gateway_bootstrap, policy_bootstrap, workspace_iam
 from app.services.agent_iam import retry_iam_propagation
 from app.services.policy_identity import POLICY_GROUPS
 from app.services.workspace import (
@@ -347,6 +349,11 @@ def _probe(ctx: BootstrapContext, service: str, operation: str, call: Callable[[
         # BotoCoreError covers the failures that are not an API answer at all —
         # no endpoint for this service in this region, or no such service in the
         # installed botocore (UnknownServiceError). Those are region verdicts.
+        if aws_clients.is_assume_role_failure(exc):
+            # A credential refresh failed mid-probe: the denial is STS's, not this
+            # service's, so reporting it as `<service> <operation> failed` would
+            # send the operator after the wrong permission.
+            raise BootstrapError(aws_clients.assume_role_diagnostic(exc)) from exc
         code = _error_code(exc)
         if code in _ACCESS_DENIED_CODES and service in _DENIAL_TOLERATED:
             ctx.log(f"{service} denied by account policy — the feature degrades")
@@ -446,6 +453,11 @@ def _refuse_foreign_resources(ctx: BootstrapContext) -> None:
                 ctx.workspace.client("agent-registry-control"), hub_bootstrap.REGISTRY_NAME
             )
         except ClientError as exc:
+            # A lazy credential refresh denies with AccessDenied too, and tolerating
+            # *that* would skip the registry marker instead of reporting a role that
+            # cannot be assumed — the check would pass for the wrong reason.
+            if aws_clients.is_assume_role_failure(exc):
+                raise BootstrapError(aws_clients.assume_role_diagnostic(exc)) from exc
             if _error_code(exc) not in _ACCESS_DENIED_CODES:
                 raise
             registry = None
@@ -467,14 +479,34 @@ def _refuse_foreign_resources(ctx: BootstrapContext) -> None:
         )
 
 
+def _caller_identity(ctx: BootstrapContext) -> dict[str, Any]:
+    """Who this workspace's credentials actually are.
+
+    The first signed call of the run, so for a cross-account workspace this is
+    where a broken trust policy or a wrong ExternalId detonates — the session is
+    built without contacting STS. Caught here so the stage fails with the fix
+    rather than with a raw AssumeRole traceback.
+    """
+    try:
+        return dict(ctx.workspace.client("sts").get_caller_identity())
+    except ClientError as exc:
+        if aws_clients.is_assume_role_failure(exc):
+            raise BootstrapError(aws_clients.assume_role_diagnostic(exc)) from exc
+        raise
+
+
 def _stage_validate_access(ctx: BootstrapContext) -> str:
-    identity = ctx.workspace.client("sts").get_caller_identity()
+    identity = _caller_identity(ctx)
     account = str(identity.get("Account") or "")
     if account != ctx.account_id:
+        # Same-account workspace: this is the hub's own identity, so a mismatch
+        # means the operator registered someone else's account number. Cross-
+        # account: the assumed role answers with the spoke's account, so a
+        # mismatch means role_arn points into a third account.
         raise BootstrapError(
-            f"this backend runs as account {account}, but the workspace names "
-            f"{ctx.account_id}. Same-account workspaces only in this phase — "
-            "cross-account roles ship with phase 3."
+            f"these credentials belong to account {account}, but the workspace "
+            f"declares {ctx.account_id} — check the workspace's account id and, "
+            "for a cross-account workspace, that role_arn names a role in it"
         )
     probed = []
     for service, operation, call in _PROBES:

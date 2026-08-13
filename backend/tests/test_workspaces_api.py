@@ -23,6 +23,10 @@ MEMBER_CREDS = {
     "password": "sufficient-pass",
 }
 NEW = {"id": "acct-usw1", "name": "West 1", "account_id": "444455556666", "region": "us-west-1"}
+CROSS_ACCOUNT = {
+    "role_arn": f"arn:aws:iam::{NEW['account_id']}:role/LaunchpadWorkspaceRole",
+    "external_id": "launchpad-acct-usw1",
+}
 
 
 @pytest.fixture
@@ -97,12 +101,85 @@ class TestRegistration:
         assert response.status_code == 400
         assert response.json()["code"] == "workspace.invalid_account"
 
-    def test_cross_account_is_refused_until_phase_3(self, admin):
+    def test_register_a_cross_account_workspace(self, admin):
+        response = admin.post("/api/workspaces", json={**NEW, **CROSS_ACCOUNT})
+        assert response.status_code == 201, response.text
+        body = response.json()
+        assert body["cross_account"] is True
+        # the external id is a shared secret with the spoke's trust policy: it goes
+        # into the ledger and never comes back out
+        assert "external_id" not in body and "role_arn" not in body
+        db = SessionLocal()
+        try:
+            row = db.get(Workspace, NEW["id"])
+            assert row.role_arn == CROSS_ACCOUNT["role_arn"]
+            assert row.external_id == CROSS_ACCOUNT["external_id"]
+        finally:
+            db.close()
+
+    def test_a_same_account_workspace_is_not_cross_account(self, admin):
+        assert admin.post("/api/workspaces", json=NEW).json()["cross_account"] is False
+
+    @pytest.mark.parametrize("field", ["role_arn", "external_id"])
+    def test_the_role_and_its_external_id_are_inseparable(self, admin, field):
+        """A role without an ExternalId can never satisfy the spoke's trust policy,
+        and an ExternalId without a role would be silently unused."""
+        response = admin.post("/api/workspaces", json={**NEW, field: CROSS_ACCOUNT[field]})
+        assert response.status_code == 400
+        assert response.json()["code"] == "workspace.role_and_external_id_required"
+
+    @pytest.mark.parametrize(
+        "bad_arn",
+        [
+            "LaunchpadWorkspaceRole",
+            "arn:aws:iam::444455556666:user/river",
+            "arn:aws:iam::4444:role/x",
+            "arn:aws:iam::444455556666:role/",
+            # longer than the ledger column, which would truncate it on insert
+            "arn:aws:iam::444455556666:role/" + "x" * 300,
+        ],
+    )
+    def test_role_arn_shape_is_validated(self, admin, bad_arn):
         response = admin.post(
-            "/api/workspaces", json={**NEW, "role_arn": "arn:aws:iam::4444:role/x"}
+            "/api/workspaces", json={**NEW, **CROSS_ACCOUNT, "role_arn": bad_arn}
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["code"] == "workspace.invalid_role_arn"
+
+    def test_the_role_must_live_in_the_declared_account(self, admin):
+        """The operator's most likely typo, and the one that would otherwise only
+        surface as an account-mismatch failure halfway into a bootstrap run."""
+        response = admin.post(
+            "/api/workspaces",
+            json={**NEW, **CROSS_ACCOUNT, "role_arn": "arn:aws:iam::999988887777:role/Ws"},
         )
         assert response.status_code == 400
-        assert response.json()["code"] == "workspace.cross_account_unsupported"
+        body = response.json()
+        assert body["code"] == "workspace.role_account_mismatch"
+        assert body["detail"] == {
+            "role_account_id": "999988887777",
+            "account_id": NEW["account_id"],
+        }
+
+    # STS's ExternalId pattern is ASCII, so a non-ASCII one is refused here rather
+    # than at the first AssumeRole.
+    @pytest.mark.parametrize(
+        "bad_external_id", ["x", "y" * 129, "has space", "quote'd", "跨账户"]
+    )
+    def test_external_id_shape_is_validated(self, admin, bad_external_id):
+        response = admin.post(
+            "/api/workspaces",
+            json={**NEW, **CROSS_ACCOUNT, "external_id": bad_external_id},
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["code"] == "workspace.invalid_external_id"
+
+    def test_the_default_id_stays_reserved_even_with_a_role(self, admin):
+        response = admin.post(
+            "/api/workspaces", json={**NEW, **CROSS_ACCOUNT, "id": DEFAULT_WORKSPACE_ID}
+        )
+        assert response.status_code == 400
+        assert response.json()["code"] == "workspace.reserved_id"
 
     def test_a_duplicate_id_is_409(self, admin):
         assert admin.post("/api/workspaces", json=NEW).status_code == 201

@@ -11,7 +11,9 @@ Two things live here, the way `routers/auth.py` owns both the login surface and
   its grants. Grants are *written* through `PATCH /api/users/{id}`
   (`UserPatch.workspaces`) so there is one write path for them, not two.
 
-Cross-account workspaces (`role_arn`) are refused here until phase 3.
+A workspace in another account carries the `role_arn` the hub assumes and the
+`external_id` the spoke's trust policy requires; both are validated here, and the
+bootstrap job's `validate-access` stage is what proves they actually work.
 """
 
 import re
@@ -51,6 +53,14 @@ _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
 # service-availability check is the bootstrap job's validate-access stage.
 _REGION = re.compile(r"^[a-z]{2}(-[a-z]+)+-\d$")
 _ACCOUNT = re.compile(r"^\d{12}$")
+# The role the hub assumes in the spoke account. The account is read back out of
+# the ARN and checked against `account_id`, so the two cannot disagree.
+_ROLE_ARN = re.compile(r"^arn:aws[a-z-]*:iam::(\d{12}):role/.+$")
+_ROLE_ARN_MAX = 256  # the ledger column's width — reject rather than truncate
+# STS's own ExternalId pattern, capped at the ledger column's width (STS allows
+# 1224) so a longer one is rejected rather than silently truncated on insert.
+# ASCII because `\w` would otherwise accept letters STS itself rejects.
+_EXTERNAL_ID = re.compile(r"^[\w+=,.@:/-]{2,128}$", re.ASCII)
 _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
@@ -196,8 +206,8 @@ class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     account_id: str = Field(min_length=1, max_length=16)
     region: str = Field(min_length=1, max_length=32)
-    # Present so the refusal below is explicit rather than a silently ignored
-    # field; phase 3 turns it into the cross-account path.
+    # Absent for a workspace in the hub's own account (ambient credentials);
+    # both together for a cross-account one.
     role_arn: str | None = None
     external_id: str | None = None
 
@@ -208,17 +218,72 @@ class WorkspacePatch(BaseModel):
 
 def _out(row: Workspace) -> dict[str, Any]:
     """Console shape. `resources` is deliberately absent: it carries ARNs and
-    identity-provider ids, and no console surface needs them."""
+    identity-provider ids, and no console surface needs them.
+
+    `cross_account` rather than `role_arn`: this one serializer answers both the
+    member-reachable list and the admin writes, so it can only carry what a member
+    may see. `external_id` is a shared secret and never leaves the ledger.
+    """
     return {
         "id": row.id,
         "name": row.name,
         "account_id": row.account_id,
         "region": row.region,
+        "cross_account": row.role_arn is not None,
         "bootstrap_status": row.bootstrap_status,
         "is_default": row.id == DEFAULT_WORKSPACE_ID,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
+
+
+def _cross_account_fields(req: WorkspaceCreate) -> tuple[str | None, str | None]:
+    """The validated `(role_arn, external_id)` a registration carries, or `(None,
+    None)` for a workspace in the hub's own account.
+
+    Validated at registration rather than left to the bootstrap job: an operator
+    who mistypes the role can be told so immediately, while a job would only fail
+    on its first signed request — and by then the workspace looks half-broken.
+    The pair is inseparable because the spoke's trust policy requires an
+    ExternalId, so a role without one can never be assumed.
+    """
+    role_arn = (req.role_arn or "").strip() or None
+    external_id = (req.external_id or "").strip() or None
+    if role_arn is None and external_id is None:
+        return None, None
+    if role_arn is None or external_id is None:
+        raise AppError(
+            "workspace.role_and_external_id_required",
+            "a cross-account workspace needs both role_arn and external_id — the "
+            "spoke role's trust policy requires the ExternalId to be presented",
+            status_code=400,
+        )
+    match = _ROLE_ARN.match(role_arn)
+    if match is None or len(role_arn) > _ROLE_ARN_MAX:
+        raise AppError(
+            "workspace.invalid_role_arn",
+            "role_arn must be an IAM role ARN (arn:aws:iam::<account>:role/<name>)",
+            {"role_arn": role_arn},
+            status_code=400,
+        )
+    account_id = req.account_id.strip()
+    if match.group(1) != account_id:
+        raise AppError(
+            "workspace.role_account_mismatch",
+            f"the role lives in account {match.group(1)} but the workspace names "
+            f"{account_id} — one of the two is a typo",
+            {"role_account_id": match.group(1), "account_id": account_id},
+            status_code=400,
+        )
+    if not _EXTERNAL_ID.match(external_id):
+        raise AppError(
+            "workspace.invalid_external_id",
+            "external_id must be 2-128 characters of letters, digits or "
+            "+=,.@:/-_ (it must match the ExternalId the spoke's stack was "
+            "deployed with)",
+            status_code=400,
+        )
+    return role_arn, external_id
 
 
 @router.get("")
@@ -238,13 +303,6 @@ def create_workspace(
     db: Session = Depends(get_db),
     _: Identity = Depends(require_admin),
 ) -> dict[str, Any]:
-    if req.role_arn or req.external_id:
-        raise AppError(
-            "workspace.cross_account_unsupported",
-            "cross-account workspaces (role_arn) ship in phase 3; register an "
-            "environment in this account for now",
-            status_code=400,
-        )
     # Validated as sent rather than normalized: the id travels back in every
     # `X-Workspace` header and in URLs, and a silently rewritten one turns into a
     # 404 for a client that kept what it typed.
@@ -278,6 +336,7 @@ def create_workspace(
             {"region": region},
             status_code=400,
         )
+    role_arn, external_id = _cross_account_fields(req)
     if get_workspace_row(db, workspace_id) is not None:
         raise AppError(
             "workspace.exists",
@@ -290,6 +349,8 @@ def create_workspace(
         name=req.name.strip(),
         account_id=req.account_id.strip(),
         region=region,
+        role_arn=role_arn,
+        external_id=external_id,
         bootstrap_status="registered",
         resources={},
     )
