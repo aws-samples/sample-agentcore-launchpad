@@ -1,0 +1,419 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+# LaunchpadWorkspaceRole — the role an AgentCore Launchpad hub assumes to manage
+# THIS account as a workspace (docs/cross-account-workspaces.md).
+#
+# Deliberately plain CloudFormation rather than CDK: an Organization admin has to
+# be able to deploy it by console upload, `aws cloudformation deploy`, or a
+# StackSet targeting an OU — none of which want a CDK app or a bootstrapped
+# environment. It creates one IAM role and nothing else, and deleting the stack
+# revokes the hub's access.
+#
+# The permission set is DERIVED from the hub's code: every AWS call Launchpad
+# makes through its workspace client funnel (`backend/app/services/aws_clients.py`)
+# plus the roles it creates and passes on. Two statements are not derivable that
+# way and are marked where they appear (service-linked roles, KMS).
+#
+# This is a powerful role — it creates IAM roles, because Launchpad provisions a
+# per-agent execution role for every agent it deploys. The boundary is therefore
+# NOT the permission set: it is the trust policy (one named hub role), the
+# ExternalId, the `launchpad-*` name scoping below, and the spoke's own
+# CloudTrail. That trade-off is documented rather than hidden.
+
+Description: >-
+  Cross-account role for an Amazon Bedrock AgentCore Launchpad hub to provision
+  and operate this account as a Launchpad workspace.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Hub trust
+        Parameters:
+          - HubRoleArn
+          - ExternalId
+      - Label:
+          default: Naming
+        Parameters:
+          - RoleName
+    ParameterLabels:
+      HubRoleArn:
+        default: Hub role ARN (shown by the Launchpad console)
+      ExternalId:
+        default: ExternalId (must match the workspace registration)
+      RoleName:
+        default: Role name
+
+Parameters:
+  HubRoleArn:
+    Type: String
+    Description: >-
+      The IAM role the Launchpad hub runs as (EC2 instance role, ECS task role,
+      ...). The console displays it on the workspace registration form. Must be
+      the iam: role ARN, not an sts: assumed-role ARN.
+    AllowedPattern: "^arn:aws[a-z-]*:iam::\\d{12}:role/.+$"
+    ConstraintDescription: >-
+      must be an IAM role ARN, e.g. arn:aws:iam::111122223333:role/launchpad-hub
+
+  ExternalId:
+    Type: String
+    Description: >-
+      Shared secret the hub must present on sts:AssumeRole. Use the same value
+      the workspace was registered with in the console; one value per workspace.
+    MinLength: 2
+    MaxLength: 128
+    NoEcho: true
+    # STS's own ExternalId character class (it allows up to 1224 characters; the
+    # hub's ledger column caps it at 128, so this template caps it there too).
+    AllowedPattern: "^[A-Za-z0-9+=,.@:/_-]{2,128}$"
+    ConstraintDescription: >-
+      2-128 characters of letters, digits or + = , . @ : / _ -
+
+  RoleName:
+    Type: String
+    Description: Name of the role this stack creates in this account.
+    Default: LaunchpadWorkspaceRole
+    AllowedPattern: "^[\\w+=,.@-]{1,64}$"
+
+Resources:
+  WorkspaceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Ref: RoleName
+      Description: >-
+        Assumed by an AgentCore Launchpad hub to manage this account as a workspace.
+      # Role chaining caps a chained session at one hour whatever this says, and
+      # the hub asks for 3600 s and refreshes; a longer maximum buys nothing.
+      MaxSessionDuration: 3600
+      # Exactly two conditions of trust: one named hub role, and the ExternalId.
+      #
+      # Note the Principal.AWS role-ARN form is stored as the role's *unique id*
+      # once the stack is created — deleting and recreating the hub role (same
+      # name, new id) silently invalidates this trust, and AssumeRole then fails
+      # with AccessDenied. Update the stack after any hub role replacement.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: HubMayAssumeWithExternalId
+            Effect: Allow
+            Principal:
+              AWS:
+                Ref: HubRoleArn
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId:
+                  Ref: ExternalId
+      Tags:
+        - Key: launchpad:role
+          Value: workspace
+      Policies:
+        - PolicyName: launchpad-workspace
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # ── IAM ────────────────────────────────────────────────────────
+              # Launchpad creates four shared roles per region
+              # (launchpad-agent-execution-role, launchpad-gateway-role,
+              # launchpad-kb-role, launchpad-codebuild-role, each optionally
+              # `-{region}` suffixed) and one launchpad-agent-<name>-<id> role
+              # per agent, with inline policies named launchpad-*. Every name it
+              # writes starts with `launchpad-`, which is what makes this
+              # statement scopable. CreateRole is called with Tags=, so IAM
+              # evaluates TagRole on it as well — granting only CreateRole makes
+              # role creation fail on the tagging check.
+              - Sid: IamOnLaunchpadRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:GetRole
+                  - iam:ListRolePolicies
+                  - iam:ListRoleTags
+                  - iam:PutRolePolicy
+                  - iam:SimulatePrincipalPolicy
+                  - iam:TagRole
+                  - iam:UpdateAssumeRolePolicy
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/launchpad-*"
+
+              # The bootstrap job's validate-access stage probes iam:ListRoles to
+              # fail early on a missing role rather than mid-provisioning.
+              # ListRoles takes no resource, so it cannot be scoped.
+              - Sid: IamListRolesForAccessProbe
+                Effect: Allow
+                Action:
+                  - iam:ListRoles
+                Resource: "*"
+
+              # PassRole is never *called* by the hub: it is the implicit check
+              # AWS performs when a role ARN is handed to a service. Launchpad
+              # passes launchpad-* roles to AgentCore (CreateAgentRuntime,
+              # CreateHarness, CreateGateway, CreateMemory,
+              # CreateOnlineEvaluationConfig), to CodeBuild (CreateProject
+              # serviceRole) and to Bedrock (CreateKnowledgeBase). The condition
+              # is what stops this from being "pass any launchpad role anywhere".
+              - Sid: PassLaunchpadRoles
+                Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/launchpad-*"
+                Condition:
+                  StringEquals:
+                    iam:PassedToService:
+                      - bedrock.amazonaws.com
+                      - bedrock-agentcore.amazonaws.com
+                      - codebuild.amazonaws.com
+
+              # NOT derivable from the hub's call sites: a virgin account has no
+              # AgentCore service-linked roles yet and the first control-plane
+              # call creates them. This list is carried over from a
+              # least-privilege policy that was validated live against the same
+              # console (workshop participant policy), so treat it as observed
+              # rather than inferred, and as the statement most likely to need an
+              # addition on a future AgentCore feature.
+              - Sid: CreateServiceLinkedRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateServiceLinkedRole
+                Resource: "*"
+                Condition:
+                  StringLike:
+                    iam:AWSServiceName:
+                      - agent-registry.amazonaws.com
+                      - application-signals.cloudwatch.amazonaws.com
+                      - bedrock-agentcore.amazonaws.com
+                      - identity-network.bedrock-agentcore.amazonaws.com
+                      - network.bedrock-agentcore.amazonaws.com
+                      - runtime-identity.bedrock-agentcore.amazonaws.com
+
+              # ── S3 ─────────────────────────────────────────────────────────
+              # The artifacts bucket is launchpad-artifacts-<account>-<region>:
+              # agent source zips, skill bundles, canary payloads. Bucket- and
+              # object-level actions share one statement (the bucket ARN and the
+              # /* ARN); an action that does not apply to one of the two is
+              # simply never authorized against it.
+              - Sid: S3Launchpad
+                Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:CreateBucket
+                  - s3:DeleteObject
+                  - s3:GetBucketLocation
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:ListMultipartUploadParts
+                  - s3:PutBucketPolicy
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:PutBucketVersioning
+                  - s3:PutEncryptionConfiguration
+                  - s3:PutObject
+                Resource:
+                  - Fn::Sub: "arn:${AWS::Partition}:s3:::launchpad-*"
+                  - Fn::Sub: "arn:${AWS::Partition}:s3:::launchpad-*/*"
+
+              # validate-access probes s3:ListBuckets, which is account-wide by
+              # definition. It reveals bucket names and nothing else.
+              - Sid: S3ListAllMyBucketsForAccessProbe
+                Effect: Allow
+                Action:
+                  - s3:ListAllMyBuckets
+                Resource: "*"
+
+              # ── ECR ────────────────────────────────────────────────────────
+              # No push, no GetAuthorizationToken: the hub never builds or pushes
+              # an image. CodeBuild does, inside this account, under the
+              # launchpad-codebuild-role this stack lets the hub create — and
+              # that role carries its own pull/push grants. The hub only creates
+              # the repository and reads back the image digest and scan findings.
+              - Sid: EcrLaunchpad
+                Effect: Allow
+                Action:
+                  - ecr:CreateRepository
+                  - ecr:DescribeImageScanFindings
+                  - ecr:DescribeImages
+                  - ecr:DescribeRepositories
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/launchpad-agents"
+
+              # validate-access calls DescribeRepositories without naming one,
+              # which IAM evaluates against every repository in the account.
+              - Sid: EcrDescribeRepositoriesForAccessProbe
+                Effect: Allow
+                Action:
+                  - ecr:DescribeRepositories
+                Resource: "*"
+
+              # ── CodeBuild ──────────────────────────────────────────────────
+              - Sid: CodeBuildLaunchpad
+                Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:BatchGetProjects
+                  - codebuild:CreateProject
+                  - codebuild:StartBuild
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:codebuild:*:${AWS::AccountId}:project/launchpad-agent-builder"
+
+              # ListProjects takes no resource (the validate-access probe).
+              - Sid: CodeBuildListProjectsForAccessProbe
+                Effect: Allow
+                Action:
+                  - codebuild:ListProjects
+                Resource: "*"
+
+              # ── AgentCore + Agent Registry ─────────────────────────────────
+              # Wildcarded on purpose. These are preview services: the console
+              # spans runtimes, harnesses, gateways and their targets, memories,
+              # policy engines and policies, evaluators, datasets, batch
+              # evaluations, configuration bundles, A/B tests, online evaluation
+              # configs, credential providers, registries and registry records —
+              # control plane and data plane — and every List*/Create* call in
+              # that set is account-scoped rather than resource-scoped, so an ARN
+              # list would grant nothing while breaking on the next API. The
+              # boundary here is that this role only reaches THIS account.
+              - Sid: AgentCoreAndRegistry
+                Effect: Allow
+                Action:
+                  - agent-registry:*
+                  - bedrock-agentcore:*
+                Resource: "*"
+
+              # ── Bedrock (Managed Knowledge Bases) ──────────────────────────
+              # `bedrock:` is the IAM prefix of the bedrock-agent control plane
+              # and bedrock-agent-runtime data plane, which is how Launchpad
+              # manages Managed KBs. `Retrieve` is the console's own retrieval
+              # preview. Agentic retrieval is deliberately absent: agents reach it
+              # through the gateway under their own execution role, and
+              # AgenticRetrieveStream cannot be resource-scoped at all, so it does
+              # not belong in a knowledge-base-scoped statement.
+              - Sid: BedrockKnowledgeBases
+                Effect: Allow
+                Action:
+                  - bedrock:CreateDataSource
+                  - bedrock:DeleteDataSource
+                  - bedrock:DeleteKnowledgeBase
+                  - bedrock:GetDataSource
+                  - bedrock:GetKnowledgeBase
+                  - bedrock:ListIngestionJobs
+                  - bedrock:ListKnowledgeBaseDocuments
+                  - bedrock:Retrieve
+                  - bedrock:StartIngestionJob
+                  - bedrock:UpdateKnowledgeBase
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:knowledge-base/*"
+
+              # A knowledge base has no ARN before it exists.
+              - Sid: BedrockCreateKnowledgeBase
+                Effect: Allow
+                Action:
+                  - bedrock:CreateKnowledgeBase
+                Resource: "*"
+
+              # ── Cognito ────────────────────────────────────────────────────
+              # The RESOURCE cannot be scoped: a user pool's ARN contains the pool
+              # id AWS assigns at creation, so the pool Launchpad is about to
+              # create cannot be named in advance, and ListUserPools (how the
+              # bootstrap finds an existing pool) is account-wide regardless.
+              # Scoping it would take a two-pass rollout: deploy, then re-deploy
+              # with the pool id. The ACTIONS are enumerated even so — a spoke
+              # account may hold user pools that have nothing to do with
+              # Launchpad, and `cognito-idp:*` on `*` would let the hub delete
+              # them. Pool + resource server + app clients + domain + groups come
+              # from the bootstrap's cognito stage; the Admin* calls and
+              # InitiateAuth are the console's per-user Gateway policy identity.
+              - Sid: CognitoIdp
+                Effect: Allow
+                Action:
+                  - cognito-idp:AdminAddUserToGroup
+                  - cognito-idp:AdminCreateUser
+                  - cognito-idp:AdminDeleteUser
+                  - cognito-idp:AdminGetUser
+                  - cognito-idp:AdminListGroupsForUser
+                  - cognito-idp:AdminRemoveUserFromGroup
+                  - cognito-idp:AdminSetUserPassword
+                  - cognito-idp:CreateGroup
+                  - cognito-idp:CreateResourceServer
+                  - cognito-idp:CreateUserPool
+                  - cognito-idp:CreateUserPoolClient
+                  - cognito-idp:CreateUserPoolDomain
+                  - cognito-idp:DescribeResourceServer
+                  - cognito-idp:DescribeUserPoolClient
+                  - cognito-idp:DescribeUserPoolDomain
+                  - cognito-idp:InitiateAuth
+                  - cognito-idp:ListUserPoolClients
+                  - cognito-idp:ListUserPools
+                Resource: "*"
+
+              # ── Observability ──────────────────────────────────────────────
+              # Logs Insights queries over aws/spans and
+              # /aws/bedrock-agentcore/runtimes/*, the CloudWatch token-usage
+              # metrics, the account-level X-Ray span destination, and the log
+              # delivery pipeline the policy engine's decision log needs. None of
+              # StartQuery's siblings (GetQueryResults, StopQuery,
+              # DescribeLogGroups) accept a resource, and the account-level X-Ray
+              # setting has no ARN at all.
+              - Sid: Observability
+                Effect: Allow
+                Action:
+                  - cloudwatch:GetMetricData
+                  - cloudwatch:ListMetrics
+                  - logs:CreateDelivery
+                  - logs:DescribeDeliveries
+                  - logs:DescribeLogGroups
+                  - logs:DescribeResourcePolicies
+                  - logs:FilterLogEvents
+                  - logs:GetDeliveryDestination
+                  - logs:GetDeliverySource
+                  - logs:GetQueryResults
+                  - logs:PutDeliveryDestination
+                  - logs:PutDeliverySource
+                  - logs:PutResourcePolicy
+                  - logs:StartQuery
+                  - logs:StopQuery
+                  - xray:GetTraceSegmentDestination
+                  - xray:UpdateTraceSegmentDestination
+                Resource: "*"
+
+              # ── KMS ────────────────────────────────────────────────────────
+              # Also NOT derivable from call sites (same provenance as
+              # CreateServiceLinkedRoles): AgentCore encrypts memory and session
+              # state with service-managed keys and the caller is evaluated on
+              # them.
+              - Sid: KmsForAgentCore
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:GenerateDataKey
+                  - kms:ListAliases
+                  - kms:ListKeys
+                Resource: "*"
+
+              # ── STS ────────────────────────────────────────────────────────
+              # The first call of every bootstrap run: validate-access asserts the
+              # assumed identity really lives in the account the workspace
+              # declares. GetCallerIdentity needs no permission (not even an
+              # explicit Deny stops it), so this statement grants nothing — it is
+              # here to state that the hub reads its own identity in this account,
+              # which a CloudTrail reader will see.
+              - Sid: Sts
+                Effect: Allow
+                Action:
+                  - sts:GetCallerIdentity
+                Resource: "*"
+
+Outputs:
+  RoleArn:
+    Description: >-
+      Register this ARN as the workspace's role ARN in the Launchpad console.
+    Value:
+      Fn::GetAtt:
+        - WorkspaceRole
+        - Arn
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}-RoleArn"

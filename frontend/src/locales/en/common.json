@@ -1112,7 +1112,9 @@
     "workspace.role_account_mismatch": "The role lives in a different account than the one this workspace declares.",
     "workspace.invalid_external_id": "The external id must be 2-128 characters of letters, digits or +=,.@:/-_ and match the one the spoke's stack was deployed with.",
     "workspace.assume_role_failed": "This workspace's role could not be assumed — check the spoke role's trust policy and the external id.",
-    "users.invalid_workspaces": "The workspace list must name existing workspaces."
+    "users.invalid_workspaces": "The workspace list must name existing workspaces.",
+    "workspace.cross_account_tool_unavailable": "This tool demo only runs under this deployment's own credentials, so it cannot target a workspace in another account.",
+    "workspace.hub_identity_unavailable": "This backend could not read its own AWS identity, so it cannot say which principal a spoke role should trust."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",
@@ -2457,14 +2459,14 @@
     },
     "create": {
       "title": "Register a workspace",
-      "meta": "same-account environments only in this phase",
+      "meta": "in this account, or in another account through an assumed role",
       "formTitle": "Workspace",
       "idLabel": "WORKSPACE ID",
       "idHint": "2-32 characters of lowercase letters, digits or '-'. It travels in every request and cannot be changed later.",
       "nameLabel": "DISPLAY NAME",
       "namePlaceholder": "Second environment",
       "accountLabel": "AWS ACCOUNT",
-      "accountHint": "Fixed to this deployment's account — a workspace in another account needs an assumed role, which ships in the next phase.",
+      "accountHint": "Fixed to this deployment's account. Turn on 'external AWS account' to register an environment elsewhere.",
       "regionLabel": "REGION",
       "regionHint": "One workspace per region, so the region-scoped resource names Launchpad provisions stay collision-free.",
       "regionOther": "OTHER REGION…",
@@ -2478,7 +2480,22 @@
       "how2": "Its bootstrap job then provisions IAM, storage, CodeBuild, Cognito, Gateway, Memory and Registry in the target region.",
       "how3": "Until the job reports READY the workspace serves reads only, so progress is visible but nothing deploys into half an environment.",
       "how4": "Grant it to members from the workspace's detail view or from User Management.",
-      "howNote": "The region list is a convenience: the bootstrap's validate-access stage probes the target for real, so a region this build does not list can be typed in."
+      "howNote": "The region list is a convenience: the bootstrap's validate-access stage probes the target for real, so a region this build does not list can be typed in.",
+      "missingCrossAccount": "An external account needs both the spoke role ARN and the external id.",
+      "badRoleArn": "The role ARN must look like arn:aws:iam::123456789012:role/LaunchpadWorkspaceRole.",
+      "roleAccountMismatch": "The role ARN names a different account than the one above.",
+      "externalLabel": "EXTERNAL AWS ACCOUNT",
+      "externalHint": "Off: this deployment's own account, reached with the backend's own credentials. On: another account, reached by assuming a role there.",
+      "accountHintExternal": "The 12-digit id of the account to manage. It must match the account inside the role ARN below.",
+      "roleArnLabel": "SPOKE ROLE ARN",
+      "roleArnHint": "The role this hub will assume, created by infra/spoke/launchpad-workspace-role.yaml in that account (default name LaunchpadWorkspaceRole).",
+      "externalIdLabel": "EXTERNAL ID",
+      "externalIdSuggest": "SUGGEST",
+      "externalIdHint": "2-128 characters of letters, digits or +=,.@:/-_ . The spoke's stack must be deployed with this exact value; it is stored and never shown again.",
+      "hubRoleNote": "Deploy the stack with this hub role as HubRoleArn — it is the only principal the spoke will trust:",
+      "hubRoleLoading": "reading this deployment's identity…",
+      "hubRoleUnknown": "unavailable — this backend could not read its own AWS identity",
+      "externalHowNote": "Order matters: register here, deploy infra/spoke/launchpad-workspace-role.yaml in the target account with the same external id, then run the bootstrap. See docs/cross-account-workspaces.md."
     },
     "detail": {
       "meta": "workspace {{id}}",
@@ -2507,7 +2524,9 @@
       "how2": "Progress is polled from the job, so leaving this page does not stop the run.",
       "how3": "READY unlocks mutating traffic — create, deploy, evaluate and govern in this environment.",
       "how4": "Detaching is refused while any ledger row (agents, jobs, chat history, audit trail) still names the workspace.",
-      "howNote": "Stage detail is rendered for runs this browser started; the workspace status above is authoritative either way."
-    }
+      "howNote": "Stage detail is rendered for runs this browser started; the workspace status above is authoritative either way.",
+      "roleArn": "ASSUMED ROLE"
+    },
+    "external": "EXTERNAL"
   }
 }

@@ -38,6 +38,7 @@ from app.routers.auth import Identity, require_admin, require_identity
 from app.services import workspace_bootstrap
 from app.services.workspace import (
     WorkspaceContext,
+    default_workspace_context,
     get_workspace_row,
     granted_workspace_ids,
     workspace_context,
@@ -216,15 +217,17 @@ class WorkspacePatch(BaseModel):
     name: str = Field(min_length=1, max_length=64)
 
 
-def _out(row: Workspace) -> dict[str, Any]:
+def _out(row: Workspace, *, reveal_role: bool = True) -> dict[str, Any]:
     """Console shape. `resources` is deliberately absent: it carries ARNs and
     identity-provider ids, and no console surface needs them.
 
-    `cross_account` rather than `role_arn`: this one serializer answers both the
-    member-reachable list and the admin writes, so it can only carry what a member
-    may see. `external_id` is a shared secret and never leaves the ledger.
+    Every caller sees `cross_account`; only an admin sees which role
+    (`reveal_role=False` for the member-reachable list), because the admin
+    Workspaces page reads the row it manages out of that same list and has to be
+    able to show what the spoke stack must be deployed as. `external_id` is a
+    shared secret and never leaves the ledger either way.
     """
-    return {
+    payload = {
         "id": row.id,
         "name": row.name,
         "account_id": row.account_id,
@@ -235,6 +238,9 @@ def _out(row: Workspace) -> dict[str, Any]:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
+    if reveal_role:
+        payload["role_arn"] = row.role_arn
+    return payload
 
 
 def _cross_account_fields(req: WorkspaceCreate) -> tuple[str | None, str | None]:
@@ -294,7 +300,70 @@ def list_workspaces(request: Request, db: Session = Depends(get_db)) -> dict[str
     if not identity.is_admin:
         granted = set(granted_workspace_ids(db, identity.user_id or ""))
         rows = [row for row in rows if row.id in granted]
-    return {"workspaces": [_out(row) for row in rows], "all_workspaces": identity.is_admin}
+    return {
+        "workspaces": [_out(row, reveal_role=identity.is_admin) for row in rows],
+        "all_workspaces": identity.is_admin,
+    }
+
+
+_ASSUMED_ROLE_ARN = re.compile(
+    r"^arn:(?P<partition>aws[a-z-]*):sts::(?P<account>\d{12}):assumed-role/(?P<role>[^/]+)/"
+)
+# The hub's own principal cannot change while the process runs, and the console
+# reads it on every visit to the registration form. Two concurrent first requests
+# would each call STS once, which is why this needs no lock.
+_HUB_IDENTITY: dict[str, Any] | None = None
+
+
+def hub_role_arn(caller_arn: str) -> str:
+    """The IAM role ARN a spoke's trust policy must name, from a caller ARN.
+
+    `sts:GetCallerIdentity` reports an assumed role as
+    `arn:aws:sts::<account>:assumed-role/<role>/<session>`, which is not a valid
+    trust-policy principal — the role's own `arn:aws:iam::<account>:role/<role>`
+    is. Anything already in `iam:` form (an IAM user hub, a role read some other
+    way) is returned untouched.
+
+    Caveat worth knowing when it disagrees with reality: the assumed-role form
+    omits the role's *path*, so a hub role at `/team/launchpad-hub` reconstructs
+    as `role/launchpad-hub`. Roles at the default path — every deployment this
+    ships with — are exact.
+    """
+    match = _ASSUMED_ROLE_ARN.match(caller_arn)
+    if match is None:
+        return caller_arn
+    return (
+        f"arn:{match.group('partition')}:iam::{match.group('account')}"
+        f":role/{match.group('role')}"
+    )
+
+
+@router.get("/hub-identity")
+def hub_identity(_: Identity = Depends(require_admin)) -> dict[str, Any]:
+    """The hub's own account and role — the two values a spoke stack is deployed with.
+
+    Declared before the `/{workspace_id}` routes so the literal path wins, and
+    workspace-exempt like the rest of this router: it describes the hub, not an
+    environment.
+    """
+    global _HUB_IDENTITY
+    if _HUB_IDENTITY is None:
+        try:
+            identity = default_workspace_context().client("sts").get_caller_identity()
+        except Exception as exc:
+            raise AppError(
+                "workspace.hub_identity_unavailable",
+                "this backend could not read its own AWS identity, so it cannot "
+                "say which principal a spoke role should trust",
+                status_code=502,
+            ) from exc
+        caller_arn = str(identity.get("Arn") or "")
+        _HUB_IDENTITY = {
+            "account_id": str(identity.get("Account") or ""),
+            "caller_arn": caller_arn,
+            "role_arn": hub_role_arn(caller_arn),
+        }
+    return _HUB_IDENTITY
 
 
 @router.post("", status_code=201)

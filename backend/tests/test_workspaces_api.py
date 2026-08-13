@@ -4,10 +4,12 @@ so there is exactly one write path for them.
 """
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
+import app.routers.workspaces as workspaces_router
 from app.core.config import get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.evaluation.models import EvalDataset
@@ -106,9 +108,11 @@ class TestRegistration:
         assert response.status_code == 201, response.text
         body = response.json()
         assert body["cross_account"] is True
-        # the external id is a shared secret with the spoke's trust policy: it goes
-        # into the ledger and never comes back out
-        assert "external_id" not in body and "role_arn" not in body
+        # an admin sees the role, because the spoke's stack has to be deployed as
+        # it; the external id is a shared secret with that stack's trust policy and
+        # never comes back out of the ledger
+        assert body["role_arn"] == CROSS_ACCOUNT["role_arn"]
+        assert "external_id" not in body
         db = SessionLocal()
         try:
             row = db.get(Workspace, NEW["id"])
@@ -375,6 +379,91 @@ class TestGrants:
             assert db.query(UserWorkspace).count() == 0
         finally:
             db.close()
+
+
+class TestHubIdentity:
+    """`GET /api/workspaces/hub-identity` — what the operator pastes into the
+    spoke stack's `HubRoleArn` parameter."""
+
+    @pytest.fixture(autouse=True)
+    def _uncached(self, monkeypatch):
+        monkeypatch.setattr(workspaces_router, "_HUB_IDENTITY", None)
+
+    @staticmethod
+    def _stub_sts(monkeypatch, arn: str, calls: list[int] | None = None):
+        class Sts:
+            def get_caller_identity(self):
+                if calls is not None:
+                    calls.append(1)
+                return {"Account": "434444145045", "Arn": arn}
+
+        monkeypatch.setattr(
+            workspaces_router,
+            "default_workspace_context",
+            lambda: SimpleNamespace(client=lambda service: Sts()),
+        )
+
+    def test_an_assumed_role_is_reported_as_the_role_a_trust_policy_can_name(
+        self, admin, monkeypatch
+    ):
+        """A hub on EC2 reports `sts:...:assumed-role/<role>/<instance id>`, which
+        is not a legal trust-policy principal — the console must show the role."""
+        self._stub_sts(
+            monkeypatch,
+            "arn:aws:sts::434444145045:assumed-role/admin_role_for_workshop/i-07",
+        )
+
+        body = admin.get("/api/workspaces/hub-identity").json()
+
+        assert body["account_id"] == "434444145045"
+        assert body["role_arn"] == "arn:aws:iam::434444145045:role/admin_role_for_workshop"
+        assert body["caller_arn"].startswith("arn:aws:sts::")
+
+    def test_the_identity_is_read_once(self, admin, monkeypatch):
+        calls: list[int] = []
+        self._stub_sts(monkeypatch, "arn:aws:iam::434444145045:role/hub", calls)
+
+        admin.get("/api/workspaces/hub-identity")
+        admin.get("/api/workspaces/hub-identity")
+
+        assert len(calls) == 1
+
+    def test_a_hub_without_credentials_says_so(self, admin, monkeypatch):
+        """Rather than a 500 the operator cannot act on: a cross-account workspace
+        is unregisterable until the hub has an identity of its own."""
+
+        def broken():
+            raise RuntimeError("no credentials")
+
+        monkeypatch.setattr(
+            workspaces_router,
+            "default_workspace_context",
+            lambda: SimpleNamespace(client=lambda service: broken()),
+        )
+
+        response = admin.get("/api/workspaces/hub-identity")
+
+        assert response.status_code == 502
+        assert response.json()["code"] == "workspace.hub_identity_unavailable"
+
+    @pytest.mark.parametrize(
+        ("caller", "expected"),
+        [
+            (
+                "arn:aws:sts::111122223333:assumed-role/launchpad-hub/session",
+                "arn:aws:iam::111122223333:role/launchpad-hub",
+            ),
+            (
+                "arn:aws-cn:sts::111122223333:assumed-role/hub/i-1",
+                "arn:aws-cn:iam::111122223333:role/hub",
+            ),
+            # already a principal a trust policy accepts — left alone
+            ("arn:aws:iam::111122223333:role/hub", "arn:aws:iam::111122223333:role/hub"),
+            ("arn:aws:iam::111122223333:user/river", "arn:aws:iam::111122223333:user/river"),
+        ],
+    )
+    def test_normalization(self, caller, expected):
+        assert workspaces_router.hub_role_arn(caller) == expected
 
 
 def test_pre_workspace_accounts_keep_their_access_after_the_upgrade(tmp_path):

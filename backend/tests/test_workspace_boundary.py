@@ -189,6 +189,22 @@ class TestHeaderResolution:
             "all_workspaces": False,
         }
 
+    def test_a_member_is_not_told_which_role_reaches_a_workspace(self, gated_app):
+        """The switcher needs to know a workspace is cross-account (it is a
+        different account's data), not what the hub assumes to get there — that is
+        the admin's registration detail."""
+        _workspace(
+            role_arn="arn:aws:iam::444455556666:role/LaunchpadWorkspaceRole",
+            external_id="launchpad-other",
+        )
+        member = _member_client(gated_app, [OTHER])
+
+        listed = member.get("/api/workspaces").json()["workspaces"]
+
+        assert [row["id"] for row in listed] == [OTHER]
+        assert listed[0]["cross_account"] is True
+        assert "role_arn" not in listed[0] and "external_id" not in listed[0]
+
     def test_a_member_is_refused_a_workspace_it_was_not_granted(self, gated_app):
         _workspace()
         member = _member_client(gated_app, [DEFAULT_WORKSPACE_ID])

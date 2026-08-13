@@ -843,9 +843,14 @@ row-authoritative and are provisioned by a console-driven, resumable
 stages: validate-access → iam → storage → codebuild → cognito → gateway →
 memory → registry → observability → finalize). `validate-access` refuses a
 region that already hosts a foreign Launchpad deployment, and IAM roles are
-adopted only when they carry the `launchpad:workspace` tag. Cross-account
-workspaces (`role_arn` + STS AssumeRole) are the plan's phase 3; in phase 2
-`role_arn` must be NULL.
+adopted only when they carry the `launchpad:workspace` tag. A workspace in
+**another account** carries a `role_arn` + `external_id`: the hub assumes that
+role (auto-refreshing one-hour sessions, cached per `(account, region, role)`)
+and every call for the workspace — bootstrap, CodeBuild build, invoke,
+CloudWatch read — signs with it. The spoke role ships as plain CloudFormation
+(`infra/spoke/launchpad-workspace-role.yaml`); see
+[cross-account-workspaces.md](cross-account-workspaces.md) for the setup flow
+and the trust-boundary trade-off.
 
 **Request boundary.** Console requests name their workspace with an
 `X-Workspace` header (a frontend `window.fetch` wrapper stamps it globally;

@@ -5,6 +5,7 @@ in the hub's ambient credentials or region, so construction outside
 `app/services/aws_clients.py` is a regression, not a style choice.
 """
 
+import inspect
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -28,6 +29,11 @@ FACTORY = "services/aws_clients.py"
 # a Bedrock credential *availability* probe for the local Claude Code CLI.
 EXEMPT = {"codegen/backends/claude_sdk.py"}
 
+# SDK classes that construct boto3 clients internally: the regex above cannot see
+# them, so their construction sites are allowlisted by hand.
+SDK_CONSTRUCTOR_RE = re.compile(r"\b(CodeInterpreter|BrowserClient)\(")
+SDK_CONSTRUCTION_ALLOWED = {"routers/tools.py"}
+
 
 def test_no_boto3_construction_outside_the_factory():
     offenders: list[str] = []
@@ -48,6 +54,57 @@ def test_exemptions_still_exist():
     for rel in EXEMPT:
         text = (APP_DIR / rel).read_text(encoding="utf-8")
         assert CONSTRUCTOR_RE.search(text), f"{rel} no longer constructs a client — drop it"
+
+
+def test_sdk_classes_that_build_their_own_clients_are_allowlisted():
+    """`CodeInterpreter`/`BrowserClient` (bedrock_agentcore) construct boto3
+    clients inside themselves, so a plain construction targets the region it was
+    given with the HUB's credentials. Neither the grep above nor a review of the
+    call site would notice; a new one has to be a deliberate addition here."""
+    offenders: list[str] = []
+    for path in sorted(APP_DIR.rglob("*.py")):
+        rel = path.relative_to(APP_DIR).as_posix()
+        if rel in SDK_CONSTRUCTION_ALLOWED:
+            continue
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if SDK_CONSTRUCTOR_RE.search(line):
+                offenders.append(f"{rel}:{lineno}: {line.strip()}")
+    assert not offenders, (
+        "these AWS SDK classes build their own clients — pass a workspace session "
+        "(CodeInterpreter) or refuse cross-account workspaces (BrowserClient), and "
+        "add the file to SDK_CONSTRUCTION_ALLOWED:\n" + "\n".join(offenders)
+    )
+
+
+def test_the_browser_sdk_still_cannot_be_given_a_session():
+    """Why `demos/browser` refuses cross-account workspaces at all.
+
+    `CodeInterpreter` accepts `session=`; `BrowserClient` does not, and builds its
+    clients off ambient credentials. When a preview-SDK bump changes that, this
+    fails — and the 409 in `routers/tools.py` can come out.
+    """
+    from bedrock_agentcore.tools import BrowserClient, CodeInterpreter
+
+    assert "session" in inspect.signature(CodeInterpreter.__init__).parameters
+    assert "session" not in inspect.signature(BrowserClient.__init__).parameters
+
+
+def test_an_sdk_session_routes_client_construction_back_through_the_funnel(monkeypatch):
+    """The point of the adapter: an SDK's internal clients stay cached, locked and
+    aimed at the workspace, rather than being built off a real session it could
+    use freely."""
+    aws_clients.reset_cache()
+    monkeypatch.setattr(aws_clients, "get_session", lambda *a, **k: _StubSession())
+    ctx = ws.WorkspaceContext(account_id="111122223333", region="us-west-2")
+    session = ctx.sdk_session()
+
+    # the SDK passes region_name explicitly; agreeing with the context is fine
+    assert session.client("bedrock-agentcore", region_name="us-west-2") is ctx.client(
+        "bedrock-agentcore"
+    )
+    with pytest.raises(ValueError, match="us-east-1"):
+        session.client("bedrock-agentcore", region_name="us-east-1")
+    aws_clients.reset_cache()
 
 
 def test_sessions_are_cached_per_target(monkeypatch):

@@ -255,6 +255,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # ---- workspace administration (hub-global, see WORKSPACE_EXEMPT) ----
     ("GET", "/api/workspaces"): MEMBER,  # returns only the caller's workspaces
     ("POST", "/api/workspaces"): ADMIN,
+    # The hub's own account/role, for a spoke stack's parameters.
+    ("GET", "/api/workspaces/hub-identity"): ADMIN,
     ("PATCH", "/api/workspaces/{workspace_id}"): ADMIN,
     ("DELETE", "/api/workspaces/{workspace_id}"): ADMIN,
     ("POST", "/api/workspaces/{workspace_id}/bootstrap"): ADMIN,
@@ -297,6 +299,7 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("DELETE", "/api/users/{user_id}"),
         ("GET", "/api/workspaces"),
         ("POST", "/api/workspaces"),
+        ("GET", "/api/workspaces/hub-identity"),
         ("PATCH", "/api/workspaces/{workspace_id}"),
         ("DELETE", "/api/workspaces/{workspace_id}"),
         # Operates ON a workspace that is not usable yet; the target is the path

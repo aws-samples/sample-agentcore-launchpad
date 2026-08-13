@@ -210,6 +210,46 @@ def client(
         return cached
 
 
+class FunnelSession:
+    """A stand-in for ``boto3.Session`` for SDK classes that build their own clients.
+
+    The `bedrock_agentcore` tool clients (``CodeInterpreter``) take an optional
+    session and construct their control/data-plane clients off it. A real session
+    would let them build clients outside this module's lock and cache, which is
+    the reason `WorkspaceContext` hands out credentials rather than sessions — so
+    they get this instead: a duck-typed session whose ``client()`` is the funnel.
+
+    The SDK passes ``region_name`` explicitly, which `client()` rejects on
+    purpose; it is accepted here only when it already agrees with the context,
+    and dropped. It also passes a per-instance ``config``, so these clients are
+    built fresh (under the lock) rather than served from the cache — right for a
+    demo route, and not somewhere to add a `cache_token`. Anything else the SDK
+    might reach for (``resource``, ``region_name`` as an attribute) is
+    deliberately absent: an AttributeError from a future SDK version is a loud
+    failure, whereas silently falling back to ambient credentials in a spoke
+    account would not be.
+    """
+
+    __slots__ = ("_ctx",)
+
+    def __init__(self, ctx: "WorkspaceContext") -> None:
+        self._ctx = ctx
+
+    def client(self, service_name: str, **kwargs: Any) -> Any:
+        region = kwargs.pop("region_name", None)
+        if region is not None and region != self._ctx.region:
+            raise ValueError(
+                f"{service_name} was asked for in {region} but this workspace is "
+                f"{self._ctx.region}"
+            )
+        return client(service_name, self._ctx, **kwargs)
+
+
+def sdk_session(ctx: "WorkspaceContext") -> FunnelSession:
+    """Session-shaped funnel handle for an AWS SDK class (see `FunnelSession`)."""
+    return FunnelSession(ctx)
+
+
 def reset_cache() -> None:
     """Drop cached sessions/clients (config reload, tests).
 
