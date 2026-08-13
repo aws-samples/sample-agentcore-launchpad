@@ -257,11 +257,17 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/workspaces"): ADMIN,
     # The hub's own account/role, for a spoke stack's parameters.
     ("GET", "/api/workspaces/hub-identity"): ADMIN,
+    # Probes an AssumeRole before anything is recorded; writes nothing.
+    ("POST", "/api/workspaces/preflight"): ADMIN,
     ("PATCH", "/api/workspaces/{workspace_id}"): ADMIN,
     ("DELETE", "/api/workspaces/{workspace_id}"): ADMIN,
+    ("POST", "/api/workspaces/{workspace_id}/purge"): ADMIN,
     ("POST", "/api/workspaces/{workspace_id}/bootstrap"): ADMIN,
     ("GET", "/api/workspaces/{workspace_id}/bootstrap"): ADMIN,
     ("GET", "/api/workspaces/{workspace_id}/grants"): ADMIN,
+    # Bulk grant/revoke from the workspace's side (per-user replacement stays on
+    # PATCH /api/users/{id}); both write only `user_workspaces`.
+    ("PUT", "/api/workspaces/{workspace_id}/grants"): ADMIN,
 }
 
 # Hub-global route prefixes: nothing under them operates inside a workspace.
@@ -300,13 +306,20 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/workspaces"),
         ("POST", "/api/workspaces"),
         ("GET", "/api/workspaces/hub-identity"),
+        # Tests credentials for a workspace that does not exist yet, so there is
+        # no workspace to resolve — the candidate comes from the body.
+        ("POST", "/api/workspaces/preflight"),
         ("PATCH", "/api/workspaces/{workspace_id}"),
         ("DELETE", "/api/workspaces/{workspace_id}"),
+        # Deletes the target's own scoped rows; the target is the path parameter,
+        # and the caller's own selection is irrelevant to it.
+        ("POST", "/api/workspaces/{workspace_id}/purge"),
         # Operates ON a workspace that is not usable yet; the target is the path
         # parameter, not the caller's X-Workspace header.
         ("POST", "/api/workspaces/{workspace_id}/bootstrap"),
         ("GET", "/api/workspaces/{workspace_id}/bootstrap"),
         ("GET", "/api/workspaces/{workspace_id}/grants"),
+        ("PUT", "/api/workspaces/{workspace_id}/grants"),
     }
 )
 

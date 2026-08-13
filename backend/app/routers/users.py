@@ -35,7 +35,8 @@ class UserPatch(BaseModel):
     # all-granted. Strict so "no"/"0" cannot coerce into a denial.
     permissions: dict[str, StrictBool] | None = None
     # Full replacement of the account's workspace grants (null clears them) —
-    # the one write path for grants; the workspaces router only reads them.
+    # the per-user shape. `PUT /api/workspaces/{id}/grants` is the workspace-side
+    # bulk one; both write only `user_workspaces`.
     workspaces: list[str] | None = None
 
     @model_validator(mode="after")

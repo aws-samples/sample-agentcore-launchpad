@@ -1327,13 +1327,37 @@ export interface WorkspaceGrantUser {
   username: string;
   email: string;
   role: ConsoleRole;
+  /** derived account state, as on the Users page */
+  status: UserState;
+  /** whether this account holds the workspace being listed */
+  granted: boolean;
 }
 
-/** Members granted a workspace. Admins reach every workspace by role and are
- * deliberately absent. */
+export type WorkspaceGrantFilter = "all" | "granted" | "ungranted";
+
+/**
+ * One page of the member accounts a workspace can be granted to.
+ *
+ * Admins are deliberately absent: they reach every workspace by role, so a row
+ * offering to revoke would be a lie. `total` follows the search and filter (it
+ * drives the pager); `granted_total` is a property of the workspace and does
+ * not, so it stays put while the operator types.
+ */
 export interface WorkspaceGrants {
   workspace_id: string;
   users: WorkspaceGrantUser[];
+  total: number;
+  granted_total: number;
+  limit: number;
+  offset: number;
+}
+
+/** What a batch grant/revoke actually changed. */
+export interface WorkspaceGrantsResult {
+  workspace_id: string;
+  added: number;
+  removed: number;
+  granted_total: number;
 }
 
 export interface WorkspaceBootstrapAck {
@@ -1347,6 +1371,36 @@ export interface WorkspaceBootstrapAck {
  * Deployment row (there is no agent involved). */
 export interface WorkspaceBootstrapJob extends JobInfo {
   payload?: { workspace_id?: string; stages?: StageInfo[] } | null;
+}
+
+/**
+ * The verdict of an access probe on a cross-account pair.
+ *
+ * `ok: false` arrives as a 200 — a refused AssumeRole is the answer to the
+ * question, not a failure of the request — so the diagnostic renders inline
+ * instead of as a thrown error.
+ */
+export interface WorkspacePreflightResult {
+  ok: boolean;
+  /** the account the assumed role actually reached, when ok */
+  caller_account: string | null;
+  /** operator-actionable text when the role could not be assumed */
+  diagnostic: string | null;
+}
+
+/**
+ * What a purge removed, or — with `dry_run` — would remove.
+ *
+ * `rows` is keyed by ledger table; `resource_keys` names the resource kinds a
+ * failed bootstrap had already provisioned in AWS, which a purge does NOT
+ * delete. Values are never disclosed, only which kinds exist.
+ */
+export interface WorkspacePurgeResult {
+  purged: boolean;
+  dry_run: boolean;
+  workspace_id: string;
+  rows: Record<string, number>;
+  resource_keys: string[];
 }
 
 /* ── console accounts (admin user management) ──────────────────────────── */
@@ -1455,6 +1509,17 @@ export const api = {
     external_id?: string;
   }) =>
     request<Workspace>("/api/workspaces", { method: "POST", body: JSON.stringify(body) }),
+  /** Probe an AssumeRole before registering anything; writes nothing. */
+  preflightWorkspace: (body: {
+    account_id: string;
+    region: string;
+    role_arn: string;
+    external_id: string;
+  }) =>
+    request<WorkspacePreflightResult>("/api/workspaces/preflight", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   patchWorkspace: (id: string, body: { name: string }) =>
     request<Workspace>(`/api/workspaces/${id}`, {
       method: "PATCH",
@@ -1464,8 +1529,49 @@ export const api = {
     request<{ deleted: boolean; workspace_id: string }>(`/api/workspaces/${id}`, {
       method: "DELETE",
     }),
-  listWorkspaceGrants: (id: string) =>
-    request<WorkspaceGrants>(`/api/workspaces/${id}/grants`),
+  /**
+   * Delete a failed or never-bootstrapped registration, ledger rows and all.
+   *
+   * `dryRun` runs the same guardrails and reports what would go without
+   * deleting anything — the confirm dialog calls it on open, so a purge that
+   * would be refused (the workspace turned READY, an agent appeared) says so
+   * before the operator confirms rather than after.
+   */
+  purgeWorkspace: (id: string, opts: { dryRun?: boolean } = {}) =>
+    request<WorkspacePurgeResult>(
+      `/api/workspaces/${id}/purge${opts.dryRun ? "?dry_run=true" : ""}`,
+      { method: "POST" },
+    ),
+  listWorkspaceGrants: (
+    id: string,
+    params: {
+      q?: string;
+      granted?: WorkspaceGrantFilter;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) => {
+    const search = new URLSearchParams();
+    if (params.q) search.set("q", params.q);
+    if (params.granted && params.granted !== "all") search.set("granted", params.granted);
+    if (params.limit != null) search.set("limit", String(params.limit));
+    if (params.offset) search.set("offset", String(params.offset));
+    const query = search.toString();
+    return request<WorkspaceGrants>(
+      `/api/workspaces/${id}/grants${query ? `?${query}` : ""}`,
+    );
+  },
+  /**
+   * Grant or revoke a workspace for several accounts at once.
+   *
+   * The workspace-side bulk shape; `updateUser({workspaces})` remains the
+   * per-user full replacement. Both write only the grant table.
+   */
+  updateWorkspaceGrants: (id: string, body: { grant?: string[]; revoke?: string[] }) =>
+    request<WorkspaceGrantsResult>(`/api/workspaces/${id}/grants`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   bootstrapWorkspace: (id: string) =>
     request<WorkspaceBootstrapAck>(`/api/workspaces/${id}/bootstrap`, { method: "POST" }),
   /** The latest bootstrap run, so a browser that did not start it can watch. */

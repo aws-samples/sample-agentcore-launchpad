@@ -143,6 +143,36 @@ def _assumed_role_session(
     return boto3.Session(botocore_session=inner)
 
 
+def probe_caller_identity(
+    account_id: str, region: str, role_arn: str, external_id: str | None
+) -> str:
+    """The account reached by assuming ``role_arn`` — a one-shot access probe.
+
+    Deliberately **not** `get_session`: the arguments are unverified operator
+    input from the registration form, and the cache key includes the ExternalId,
+    so probing a mistyped one would park a session in the module cache under a key
+    nothing will ever ask for again. A probe's credentials also have no business
+    becoming the object that later in-flight work shares a refresh lock with.
+
+    Reuse would nonetheless be *correct*, which is worth recording so nobody
+    re-derives it from botocore: a `DeferredRefreshableCredentials` whose first
+    fetch raises leaves `_frozen_credentials` None, so `refresh_needed()` stays
+    True and the next access re-attempts the AssumeRole for real (the fetcher
+    caches successes only). A failed probe cannot poison a key the operator then
+    fixes and retries.
+
+    Raises the STS `ClientError` verbatim — `is_assume_role_failure` +
+    `assume_role_diagnostic` are what turn it into operator-facing text.
+    """
+    session = _assumed_role_session(account_id, region, role_arn, external_id)
+    with _LOCK:
+        # This session is private to the probe, but client construction in this
+        # module always happens under the lock; a probe is not the place to make
+        # that rule conditional.
+        sts = session.client("sts")
+    return str(sts.get_caller_identity().get("Account") or "")
+
+
 def is_assume_role_failure(exc: BaseException) -> bool:
     """True for the ClientError STS raises when the hub cannot assume a spoke role.
 
