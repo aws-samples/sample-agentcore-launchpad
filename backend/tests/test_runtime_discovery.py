@@ -10,7 +10,7 @@ import app.routers.agents as agents_router
 import app.services.chat as chat_service
 import app.services.invoke as invoke_service
 from app.core.config import get_settings
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent, Deployment
 from app.services.agentcore.runtime import list_runtimes
 from app.services.runtime_discovery import invoke_capability
@@ -122,7 +122,7 @@ def _mock_control(
     control.get_harness.side_effect = lambda harnessId: {
         "harness": by_harness_id[harnessId]
     }
-    monkeypatch.setattr(agents_router, "control_client", lambda: control)
+    monkeypatch.setattr(agents_router, "control_client", lambda _ws=None: control)
     return control
 
 
@@ -205,7 +205,7 @@ def test_list_failure_is_typed(client, monkeypatch):
         {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
         "ListAgentRuntimes",
     )
-    monkeypatch.setattr(agents_router, "control_client", lambda: control)
+    monkeypatch.setattr(agents_router, "control_client", lambda _ws=None: control)
 
     response = client.get("/api/agents/discovery")
 
@@ -282,6 +282,7 @@ def test_harness_backing_runtime_is_flagged_and_linked_to_its_harness_agent(
     )
     db = SessionLocal()
     owner = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name="support-agent",
         method="harness",
         status="active",
@@ -365,6 +366,7 @@ def test_harness_image_heuristic_flags_backing_runtime_when_list_harnesses_fails
 
 def test_stale_imported_harness_backing_runtime_is_not_invokable():
     agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name="stale-harness-import",
         method="discovered_runtime",
         status="active",
@@ -389,6 +391,7 @@ def test_import_never_rewrites_launchpad_managed_agent(client, monkeypatch):
     detail = _detail("managed-abcdefghij", name="managed-runtime")
     db = SessionLocal()
     managed = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name="launchpad-agent",
         method="zip_runtime",
         status="active",
@@ -444,7 +447,8 @@ def test_mcp_import_rejected_without_hiding_valid_import(client, monkeypatch):
 def test_name_conflict_gets_runtime_id_suffix(client, monkeypatch):
     detail = _detail("shared-abcdefghij", name="shared")
     db = SessionLocal()
-    db.add(Agent(name="shared", method="harness", status="active", spec={}))
+    db.add(Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="shared", method="harness",
+                 status="active", spec={}))
     db.commit()
     db.close()
     _mock_control(monkeypatch, [detail])
@@ -459,6 +463,7 @@ def test_name_conflict_gets_runtime_id_suffix(client, monkeypatch):
 def test_discovered_delete_is_detach_only_and_republish_is_rejected(client, monkeypatch):
     db = SessionLocal()
     row = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name="external",
         method="discovered_runtime",
         status="active",
@@ -528,6 +533,7 @@ def test_ineligible_discovered_runtime_is_hidden_and_rejected_by_all_invoke_surf
 ):
     db = SessionLocal()
     eligible = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name="external-http",
         method="discovered_runtime",
         status="active",
@@ -538,6 +544,7 @@ def test_ineligible_discovered_runtime_is_hidden_and_rejected_by_all_invoke_surf
         },
     )
     protected = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name="external-jwt",
         method="discovered_runtime",
         status="active",
@@ -590,6 +597,7 @@ def test_discovered_invoke_capability(
         status=status,
     )
     agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name="capability",
         method="discovered_runtime",
         status="active",
@@ -614,6 +622,7 @@ def test_discovered_http_and_a2a_use_shared_runtime_dispatch(
     monkeypatch, protocol, invoke_name
 ):
     agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name=f"external-{protocol}",
         method="discovered_runtime",
         status="active",
@@ -625,7 +634,7 @@ def test_discovered_http_and_a2a_use_shared_runtime_dispatch(
     )
     runtime_invoke = MagicMock(return_value={"text": "ok", "session_id": "s" * 40})
     a2a_invoke = MagicMock(return_value={"text": "ok", "session_id": "s" * 40})
-    monkeypatch.setattr(invoke_service, "data_client", lambda: object())
+    monkeypatch.setattr(invoke_service, "data_client", lambda _ws=None: object())
     monkeypatch.setattr(invoke_service.rt, "invoke_runtime_text", runtime_invoke)
     monkeypatch.setattr(invoke_service.rt, "invoke_a2a_text", a2a_invoke)
 
@@ -641,6 +650,7 @@ def test_discovered_http_and_a2a_use_shared_runtime_dispatch(
 
 def _imported_harness_agent(name: str = "external-harness", **discovery) -> Agent:
     return Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name=name,
         method="discovered_runtime",
         status="active",
@@ -669,6 +679,7 @@ def test_scan_projects_harnesses_with_status_eligibility_and_owner_linkage(
     deleting = _harness("goingaway", status="DELETING")
     db = SessionLocal()
     launchpad = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name="support-agent",
         method="harness",
         status="active",
@@ -794,6 +805,7 @@ def test_harness_import_never_duplicates_a_launchpad_harness_agent(client, monke
     detail = _harness_detail("support")
     db = SessionLocal()
     launchpad = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name="support-agent",
         method="harness",
         status="active",
@@ -889,7 +901,7 @@ def test_discovered_harness_invokes_through_invoke_harness(monkeypatch):
     agent = _imported_harness_agent()
     harness_invoke = MagicMock(return_value={"text": "ok", "session_id": "s" * 40})
     runtime_invoke = MagicMock()
-    monkeypatch.setattr(invoke_service, "data_client", lambda: object())
+    monkeypatch.setattr(invoke_service, "data_client", lambda _ws=None: object())
     monkeypatch.setattr(invoke_service.hc, "invoke_harness_text", harness_invoke)
     monkeypatch.setattr(invoke_service.rt, "invoke_runtime_text", runtime_invoke)
 
@@ -913,7 +925,7 @@ def test_imported_harness_invoke_endpoint_reaches_the_harness_data_plane(
     data.invoke_harness.return_value = {
         "stream": [{"contentBlockDelta": {"delta": {"text": "4"}}}]
     }
-    monkeypatch.setattr(invoke_service, "data_client", lambda: data)
+    monkeypatch.setattr(invoke_service, "data_client", lambda _ws=None: data)
 
     body = client.post(f"/api/agents/{agent_id}/invoke", json={"prompt": "2+2?"}).json()
 
@@ -931,7 +943,7 @@ def test_discovered_harness_chat_streams_harness_events(monkeypatch):
             {"contentBlockDelta": {"delta": {"text": "hi"}}},
         ]
     }
-    monkeypatch.setattr(chat_service, "data_client", lambda: data)
+    monkeypatch.setattr(chat_service, "data_client", lambda _ws=None: data)
 
     events = list(chat_service.chat_stream(agent, "hello", session_id="s" * 40))
 
@@ -948,7 +960,7 @@ def test_imported_harness_delete_is_detach_only(client, monkeypatch):
     agent_id = row.id
     db.close()
     control = MagicMock()
-    monkeypatch.setattr(agents_router, "control_client", lambda: control)
+    monkeypatch.setattr(agents_router, "control_client", lambda _ws=None: control)
     harness_teardown = MagicMock()
     monkeypatch.setattr(
         agents_router.harness_method, "delete_agent_resources", harness_teardown
@@ -997,6 +1009,7 @@ def test_harness_import_name_collision_never_takes_over_another_agent(client, mo
     detail = _harness_detail("frontdesk")
     db = SessionLocal()
     namesake = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name="frontdesk",
         method="zip_runtime",
         status="active",
@@ -1026,6 +1039,7 @@ def test_harness_import_name_collision_never_takes_over_another_agent(client, mo
 def test_discovered_runtime_chat_keeps_the_buffered_runtime_path(monkeypatch):
     """The harness gate must not capture a discovered RUNTIME (no resource_type)."""
     agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name="external-http",
         method="discovered_runtime",
         status="active",
@@ -1036,8 +1050,8 @@ def test_discovered_runtime_chat_keeps_the_buffered_runtime_path(monkeypatch):
         },
     )
     data = MagicMock()
-    monkeypatch.setattr(chat_service, "data_client", lambda: data)
-    monkeypatch.setattr(invoke_service, "data_client", lambda: data)
+    monkeypatch.setattr(chat_service, "data_client", lambda _ws=None: data)
+    monkeypatch.setattr(invoke_service, "data_client", lambda _ws=None: data)
     monkeypatch.setattr(
         invoke_service.rt,
         "invoke_runtime_text",

@@ -14,6 +14,7 @@ from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import require_identity
+from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import memory as memory_service
 from app.services import policy_identity
 from app.services.chat import chat_stream, sse_encode
@@ -29,48 +30,76 @@ class ChatRequest(BaseModel):
 
 
 def _session_actor(
-    db: Session, agent_id: str, session_id: str | None, requested_actor: str
+    db: Session,
+    workspace_id: str,
+    agent_id: str,
+    session_id: str | None,
+    requested_actor: str,
 ) -> str:
     if not session_id:
         return requested_actor
     existing = (
         db.query(ChatSession.actor_id)
-        .filter(ChatSession.agent_id == agent_id, ChatSession.session_id == session_id)
+        .filter(
+            ChatSession.workspace_id == workspace_id,
+            ChatSession.agent_id == agent_id,
+            ChatSession.session_id == session_id,
+        )
         .first()
     )
     return existing[0] if existing and existing[0] else requested_actor
 
 
-def _get_active_agent(db: Session, agent_id: str) -> Agent:
+def _agent_in(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent:
+    """The agent, or 404 — including when it belongs to another workspace, which
+    the caller must not be able to tell apart from a missing one."""
     agent = db.get(Agent, agent_id)
-    if agent is None:
+    if agent is None or agent.workspace_id != ws.id:
         raise NotFoundError("agent.not_found", "agent not found")
+    return agent
+
+
+def _get_active_agent(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent:
+    agent = _agent_in(db, ws, agent_id)
     require_invoke_capability(agent)
     return agent
 
 
 def _save_message(
-    agent_id: str, session_id: str, role: str, text: str, name: str | None = None
+    workspace_id: str,
+    agent_id: str,
+    session_id: str,
+    role: str,
+    text: str,
+    name: str | None = None,
 ) -> None:
     db = SessionLocal()
     try:
-        db.add(ChatMessage(agent_id=agent_id, session_id=session_id,
+        db.add(ChatMessage(workspace_id=workspace_id, agent_id=agent_id,
+                           session_id=session_id,
                            role=role, text=text[:100000], name=name))
         db.commit()
     finally:
         db.close()
 
 
-def _track_session(agent_id: str, session_id: str, actor_id: str) -> None:
+def _track_session(
+    workspace_id: str, agent_id: str, session_id: str, actor_id: str
+) -> None:
     db = SessionLocal()
     try:
         row = (
             db.query(ChatSession)
-            .filter(ChatSession.agent_id == agent_id, ChatSession.session_id == session_id)
+            .filter(
+                ChatSession.workspace_id == workspace_id,
+                ChatSession.agent_id == agent_id,
+                ChatSession.session_id == session_id,
+            )
             .first()
         )
         if row is None:
-            row = ChatSession(agent_id=agent_id, session_id=session_id, actor_id=actor_id)
+            row = ChatSession(workspace_id=workspace_id, agent_id=agent_id,
+                              session_id=session_id, actor_id=actor_id)
             db.add(row)
         row.turns = (row.turns or 0) + 1
         row.last_at = datetime.now(UTC)
@@ -85,8 +114,9 @@ def chat(
     req: ChatRequest,
     request: Request,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> StreamingResponse:
-    agent = _get_active_agent(db, agent_id)
+    agent = _get_active_agent(db, ws, agent_id)
     identity = require_identity(request)
     human_actor = identity.username if auth_enabled() else "river"
 
@@ -95,13 +125,14 @@ def chat(
     # still records the bare authenticated username. A continuing session keeps
     # its original Memory owner, while policy authorization follows the current
     # signed-in caller.
-    actor_id = _session_actor(db, agent.id, req.session_id, human_actor)
+    actor_id = _session_actor(db, ws.id, agent.id, req.session_id, human_actor)
     mem_actor = memory_service.scoped_actor(agent.id, actor_id)
     needs_gateway_identity = (
         gateway_support.runtime_user_id(agent.spec, identity.username) is not None
     )
     gateway_access_token = (
         policy_identity.gateway_user_token(
+            ws.context,
             identity.username,
             identity.role,
             identity.email,
@@ -109,6 +140,11 @@ def chat(
         if needs_gateway_identity
         else None
     )
+
+    # The stream outlives the request scope, so it carries the plain id and the
+    # already-built context rather than reaching back for the resolved scope.
+    workspace_id = ws.id
+    workspace = ws.context
 
     def generate():
         # Thread items are persisted in event order (int-pk = replay order) so
@@ -125,27 +161,33 @@ def chat(
             req.prompt,
             session_id=session_id,
             actor_id=mem_actor,
+            workspace=workspace,
             **stream_kwargs,
         ):
             kind, data = event["event"], event["data"]
             if kind == "meta":
                 session_id = data["session_id"]
-                _track_session(agent.id, session_id, actor_id)
-                _save_message(agent.id, session_id, "user", req.prompt)
+                _track_session(workspace_id, agent.id, session_id, actor_id)
+                _save_message(workspace_id, agent.id, session_id, "user", req.prompt)
             elif kind == "tool" and session_id:
                 if answer_parts:  # a tool call splits the answer bubble live — mirror it
-                    _save_message(agent.id, session_id, "agent", "".join(answer_parts))
+                    _save_message(workspace_id, agent.id, session_id, "agent",
+                                  "".join(answer_parts))
                     answer_parts.clear()
-                _save_message(agent.id, session_id, "tool", "", name=data.get("name"))
+                _save_message(workspace_id, agent.id, session_id, "tool", "",
+                              name=data.get("name"))
             elif kind == "delta":
                 answer_parts.append(data.get("text", ""))
             elif kind == "error" and session_id:
                 if answer_parts:  # keep the partial answer the user saw
-                    _save_message(agent.id, session_id, "agent", "".join(answer_parts))
+                    _save_message(workspace_id, agent.id, session_id, "agent",
+                                  "".join(answer_parts))
                     answer_parts.clear()
-                _save_message(agent.id, session_id, "error", data.get("message", ""))
+                _save_message(workspace_id, agent.id, session_id, "error",
+                              data.get("message", ""))
             elif kind == "done" and session_id and answer_parts:
-                _save_message(agent.id, session_id, "agent", "".join(answer_parts))
+                _save_message(workspace_id, agent.id, session_id, "agent",
+                              "".join(answer_parts))
             yield sse_encode(event)
 
     return StreamingResponse(
@@ -156,15 +198,26 @@ def chat(
 
 
 @router.get("/chat/{agent_id}/sessions")
-def list_sessions(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def list_sessions(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    _agent_in(db, ws, agent_id)
     # Only sessions with a replayable transcript: rows that predate the
     # ChatMessage ledger have nothing to open (clicking them showed an empty
     # thread with an id-only preview), so they are filtered out here.
+    # The correlated exists matches on session_id alone, so it carries the
+    # workspace predicate itself — a bare id match can cross environments.
     rows = (
         db.query(ChatSession)
         .filter(
+            ChatSession.workspace_id == ws.id,
             ChatSession.agent_id == agent_id,
-            exists().where(ChatMessage.session_id == ChatSession.session_id),
+            exists().where(
+                ChatMessage.session_id == ChatSession.session_id,
+                ChatMessage.workspace_id == ws.id,
+            ),
         )
         .order_by(ChatSession.last_at.desc())
         .limit(50)
@@ -174,7 +227,11 @@ def list_sessions(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any
     def preview(session_id: str) -> str:
         first = (
             db.query(ChatMessage.text)
-            .filter(ChatMessage.session_id == session_id, ChatMessage.role == "user")
+            .filter(
+                ChatMessage.workspace_id == ws.id,
+                ChatMessage.session_id == session_id,
+                ChatMessage.role == "user",
+            )
             .order_by(ChatMessage.id.asc())
             .first()
         )
@@ -196,12 +253,20 @@ def list_sessions(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any
 
 @router.get("/chat/{agent_id}/history")
 def session_history(
-    agent_id: str, session_id: str, db: Session = Depends(get_db)
+    agent_id: str,
+    session_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Replay a session's thread exactly as it was rendered (int pk = order)."""
+    _agent_in(db, ws, agent_id)
     rows = (
         db.query(ChatMessage)
-        .filter(ChatMessage.agent_id == agent_id, ChatMessage.session_id == session_id)
+        .filter(
+            ChatMessage.workspace_id == ws.id,
+            ChatMessage.agent_id == agent_id,
+            ChatMessage.session_id == session_id,
+        )
         .order_by(ChatMessage.id.asc())
         .limit(500)
         .all()
@@ -225,11 +290,14 @@ def session_memory(
     session_id: str,
     request: Request,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
+    _agent_in(db, ws, agent_id)
     try:
         # Read back the same agent-scoped partition the chat write path uses.
         session_actor = _session_actor(
             db,
+            ws.id,
             agent_id,
             session_id,
             require_identity(request).username if auth_enabled() else "river",
@@ -240,7 +308,9 @@ def session_memory(
         # on this id, and re-deriving it in the frontend would fork the scoping
         # rule (a session may have recorded a different human actor entirely).
         return {
-            **memory_service.session_memory_summary(mem_actor, session_id),
+            **memory_service.session_memory_summary(
+                ws.context, mem_actor, session_id
+            ),
             "actor_id": mem_actor,
         }
     except Exception as exc:

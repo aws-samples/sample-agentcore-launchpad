@@ -28,7 +28,7 @@ from typing import Any
 
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
-from app.services.workspace import default_workspace_context
+from app.services.workspace import WorkspaceContext
 
 # Inference-profile prefixes: an id like `global.anthropic.claude-sonnet-5` is a
 # profile, and invoking it authorizes against the profile ARN *and* the underlying
@@ -59,22 +59,24 @@ class RoleContext:
     memory_id: str = ""
 
 
-def context_from_settings(settings: Any) -> RoleContext:
-    """Build a `RoleContext` from the resolved settings."""
-    resources = settings.resources or {}
+def role_context(workspace: WorkspaceContext) -> RoleContext:
+    """Build a `RoleContext` from the workspace the agent is deployed into."""
+    resources = workspace.resources or {}
     repo = resources.get("ecr_repo", "launchpad-agents")
     return RoleContext(
-        account_id=settings.account_id,
-        region=settings.region,
+        account_id=workspace.account_id,
+        region=workspace.region,
         artifacts_bucket=resources.get("artifacts_bucket", ""),
         ecr_repo_arn=(
-            f"arn:aws:ecr:{settings.region}:{settings.account_id}:repository/{repo}"
+            f"arn:aws:ecr:{workspace.region}:{workspace.account_id}:repository/{repo}"
         ),
         memory_id=resources.get("memory_id", ""),
     )
 
 
-def live_runtime_role_arn(runtime_detail: dict[str, Any] | None, settings: Any) -> str:
+def live_runtime_role_arn(
+    runtime_detail: dict[str, Any] | None, workspace: WorkspaceContext
+) -> str:
     """The role the running runtime is already using, else the shared role.
 
     Used by the paths that mint a candidate *version of an existing runtime* (canary,
@@ -88,13 +90,13 @@ def live_runtime_role_arn(runtime_detail: dict[str, Any] | None, settings: Any) 
     UpdateAgentRuntime would fail. The live value needs no migration state.
     """
     live = (runtime_detail or {}).get("roleArn") or ""
-    return live or shared_role_arn(settings)
+    return live or shared_role_arn(workspace)
 
 
-def shared_role_arn(settings: Any) -> str:
+def shared_role_arn(workspace: WorkspaceContext) -> str:
     """The pre-existing shared role, still used by candidate versions and as the
     fallback when per-agent roles are turned off."""
-    return (settings.resources or {}).get("execution_role_arn", "")
+    return (workspace.resources or {}).get("execution_role_arn", "")
 
 
 # ---------------------------------------------------------------------------
@@ -593,6 +595,7 @@ def provision_execution_role(
     agent: Agent,
     spec: AgentSpec,
     settings: Any,
+    workspace: WorkspaceContext,
     log: Callable[[str], None] = lambda _m: None,
     iam: Any = None,
 ) -> tuple[str, str]:
@@ -600,20 +603,22 @@ def provision_execution_role(
 
     Returns `(role_arn, detail)`. Falls back to the shared role when per-agent roles
     are switched off, so the two paths differ in one place rather than three.
+    `settings` carries the hub-global toggle; `workspace` carries the environment
+    the role is created in.
     """
     if not settings.per_agent_execution_roles:
-        arn = shared_role_arn(settings)
+        arn = shared_role_arn(workspace)
         if not arn:
             raise RuntimeError(
-                "execution_role_arn missing from config/launchpad.yaml — run "
-                "scripts/bootstrap.py"
+                "execution_role_arn missing from this workspace's resource map — "
+                "run its bootstrap"
             )
         log(f"per-agent roles disabled — reusing shared execution role {arn}")
         return arn, "iam role reused · launchpad-base (shared)"
 
     if iam is None:
-        iam = default_workspace_context().client("iam")
-    ctx = context_from_settings(settings)
+        iam = workspace.client("iam")
+    ctx = role_context(workspace)
     arn = ensure_role(iam, agent, spec, ctx, log)
     name = role_name_for(agent.name, agent.id)
     detail = f"iam role · {name}"
@@ -623,14 +628,17 @@ def provision_execution_role(
 
 
 def delete_execution_role(
-    agent: Agent, settings: Any, log: Callable[[str], None] = lambda _m: None,
+    agent: Agent,
+    settings: Any,
+    workspace: WorkspaceContext,
+    log: Callable[[str], None] = lambda _m: None,
     iam: Any = None,
 ) -> bool:
     """Delete the agent's role, if it has one. Never raises."""
     if not settings.per_agent_execution_roles:
         return True  # the shared role is not ours to delete
     if iam is None:
-        iam = default_workspace_context().client("iam")
+        iam = workspace.client("iam")
     return delete_role(iam, agent, log)
 
 

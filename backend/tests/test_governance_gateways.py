@@ -8,6 +8,8 @@ from app.core.config import Settings
 from app.services import governance
 from app.services.agentcore import policy
 
+from .conftest import ws_ctx
+
 
 class _NotFound(Exception):
     """Stands in for the preview SDK's ResourceNotFoundException."""
@@ -78,7 +80,7 @@ def test_discovery_is_read_only_and_reports_shared_engine():
     governance.invalidate_gateway_cache()
     views = governance.list_gateway_views(
         control,
-        settings=Settings(resources={"registry_id": ""}),
+        ws_ctx({"registry_id": ""}),
         refresh=True,
     )
 
@@ -113,14 +115,12 @@ def test_attachability_keeps_external_custom_jwt_catalog_only():
     governance.invalidate_gateway_cache()
     views = governance.list_gateway_views(
         control,
-        settings=Settings(
-            resources={
+        ws_ctx({
                 "gateway_id": "managed",
                 "gateway_url": launchpad["gatewayUrl"],
                 "oauth_provider_arn": "arn:oauth",
                 "registry_id": "",
-            }
-        ),
+            }),
         refresh=True,
     )
     by_id = {view["id"]: view for view in views}
@@ -168,7 +168,7 @@ def test_policy_test_availability_requires_configured_gateway_id_and_url():
         governance.invalidate_gateway_cache()
         [view] = governance.list_gateway_views(
             control,
-            settings=Settings(resources=resources),
+            ws_ctx(resources),
             refresh=True,
         )
         assert view["policy_test_available"] is expected
@@ -191,7 +191,7 @@ def test_external_custom_jwt_detail_offers_token_free_tools_list_template():
         control,
         MagicMock(),
         "external",
-        settings=settings,
+        ws_ctx(settings.resources),
     )["external_tools_list_command"]
     assert "tools/list" in command
     assert "https://external.example.test/mcp" in command
@@ -204,7 +204,7 @@ def test_external_custom_jwt_detail_offers_token_free_tools_list_template():
                 control,
                 MagicMock(),
                 gateway_id,
-                settings=settings,
+                ws_ctx(settings.resources),
             )["external_tools_list_command"]
             is None
         )
@@ -318,7 +318,7 @@ def test_dangling_engine_reference_degrades_views_instead_of_raising():
     governance.invalidate_gateway_cache()
     [view] = governance.list_gateway_views(
         control,
-        settings=Settings(resources={"registry_id": ""}),
+        ws_ctx({"registry_id": ""}),
         refresh=True,
     )
     assert view["policy_engine"] == {
@@ -336,6 +336,6 @@ def test_dangling_engine_reference_degrades_views_instead_of_raising():
         control,
         iam,
         "gw-1",
-        settings=Settings(resources={"registry_id": ""}),
+        ws_ctx({"registry_id": ""}),
     )
     assert detail["policy_engine"]["missing"] is True

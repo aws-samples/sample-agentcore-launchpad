@@ -22,6 +22,8 @@ class EvalDataset(Base):
     __tablename__ = "eval_datasets"
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
+    # the `cloud` sync below targets one region, so the row belongs to one workspace
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     name: Mapped[str] = mapped_column(String(64))
     kind: Mapped[str] = mapped_column(String(16), default="legacy")  # legacy|predefined
     locale: Mapped[str] = mapped_column(String(8), default="en")
@@ -40,6 +42,7 @@ class EvalRun(Base):
     __tablename__ = "eval_runs"
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     agent_id: Mapped[str] = mapped_column(String(32), index=True)
     agent_name: Mapped[str] = mapped_column(String(64))
     dataset_id: Mapped[str | None] = mapped_column(String(16), default=None)

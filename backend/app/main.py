@@ -40,6 +40,7 @@ from app.routers.public_api import router as public_router
 from app.routers.registry import router as registry_router
 from app.routers.tools import router as tools_router
 from app.routers.users import router as users_router
+from app.routers.workspaces import router as workspaces_router
 from app.services import local_exec
 from app.services.governance import reconcile_policy_changes
 from app.services.model_prices import start_auto_refresh
@@ -135,13 +136,14 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(experiments_router)
     app.include_router(runtime_canaries_router)
     app.include_router(users_router)  # admin-only console account management
+    app.include_router(workspaces_router)  # environments + the request-boundary grants
     app.include_router(apikeys_router)
     app.include_router(public_router)
     if resume_jobs:
         resumed = resume_pending_jobs()
         if resumed:
             logging.getLogger("launchpad").info(
-                "resumed %d interrupted deploy job(s)", len(resumed)
+                "resumed %d interrupted deploy/bootstrap job(s)", len(resumed)
             )
         resumed_evals = resume_interrupted_runs()
         if resumed_evals:

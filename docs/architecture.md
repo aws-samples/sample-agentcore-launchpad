@@ -831,6 +831,42 @@ detail links back (`OPEN IN CHAT ↗`); `service.name` values are mapped to
 platform agent names via the ledger (`resource_id` base-name match, raw name
 fallback).
 
+## Workspaces — multi-account/multi-region environments
+
+Every environment the console manages is a **workspace**: one
+`(account_id, region)` pair (UNIQUE-constrained) carrying its own AgentCore
+resource map on a ledger row (`workspaces` table). The hub's original
+environment survives as the reserved `default` workspace, whose row mirrors
+`config/launchpad.yaml` on every startup; all other workspaces are
+row-authoritative and are provisioned by a console-driven, resumable
+**bootstrap job** (`POST /api/workspaces/{id}/bootstrap`, ten idempotent
+stages: validate-access → iam → storage → codebuild → cognito → gateway →
+memory → registry → observability → finalize). `validate-access` refuses a
+region that already hosts a foreign Launchpad deployment, and IAM roles are
+adopted only when they carry the `launchpad:workspace` tag. Cross-account
+workspaces (`role_arn` + STS AssumeRole) are the plan's phase 3; in phase 2
+`role_arn` must be NULL.
+
+**Request boundary.** Console requests name their workspace with an
+`X-Workspace` header (a frontend `window.fetch` wrapper stamps it globally;
+admins fall back to `default`, members to their single grant). Resolution
+runs inside the app-level route-policy dependency — grant check (members need
+a `user_workspaces` row; admins bypass), readiness gate for mutating methods,
+and `request.state.workspace` for handlers. Routes are workspace-scoped by
+default; only the hub-global prefixes (`/api/auth`, `/api/users`,
+`/api/workspaces`) are exempt, and drift tests enforce the classification in
+both directions. All per-environment ledger tables carry a `workspace_id`
+column; queries filter by it, so a foreign resource id answers 404. The
+public `/v1` surface ignores the header entirely: an API key authorizes
+exactly its home workspace.
+
+**Background work** (deploy stages, eval runs, experiments, canaries, policy
+reconciliation) rehydrates its `WorkspaceContext` from the persisted row it
+belongs to, never from ambient settings, and startup refuses to boot if any
+scoped row is missing its `workspace_id`. Users and console auth stay
+hub-global; per-user workspace grants are edited on the Users page (approval
+assigns them) or the admin Workspaces page.
+
 ## The SQLite ledger and job/event model
 
 State that is cheap and local lives in a SQLite ledger at `data/launchpad.db`

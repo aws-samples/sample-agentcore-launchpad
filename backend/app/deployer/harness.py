@@ -19,6 +19,7 @@ from app.services import agent_iam, registry_console
 from app.services import kb_gateway as kbgw
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import control_client
+from app.services.workspace import WorkspaceContext
 
 BUILTIN_TOOL_TYPES = {
     "code-interpreter": "agentcore_code_interpreter",
@@ -229,20 +230,22 @@ def _kb_gateway_config(resources: dict[str, Any]) -> dict[str, str] | None:
     return None
 
 
-def _build_live_params(spec: AgentSpec, resources: dict[str, Any]) -> dict[str, Any]:
+def _build_live_params(spec: AgentSpec, workspace: WorkspaceContext) -> dict[str, Any]:
+    resources = workspace.resources
     return build_create_params(
         spec,
         resources.get("execution_role_arn", ""),
         resources.get("memory_arn"),
         kb_gateway=_kb_gateway_config(resources),
-        gateway_attachments=registry_console.resolve_gateway_attachments(spec.tools),
+        gateway_attachments=registry_console.resolve_gateway_attachments(
+            spec.tools, workspace
+        ),
     )
 
 
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
-    settings = get_settings()
     spec = AgentSpec(**agent.spec)
-    params = _build_live_params(spec, settings.resources)
+    params = _build_live_params(spec, ctx.workspace)
     ctx.scratch["create_params"] = params
     ctx.log(
         f"harness request generated for {params['harnessName']} · "
@@ -258,13 +261,13 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
 def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) -> StageResult:
     spec = AgentSpec(**agent.spec)
     role_arn, role_detail = agent_iam.provision_execution_role(
-        agent, spec, get_settings(), ctx.log, iam=iam_client
+        agent, spec, get_settings(), ctx.workspace, ctx.log, iam=iam_client
     )
     ctx.scratch["execution_role_arn"] = role_arn
 
     if spec.knowledge_bases:
-        control = control_client()
-        gw = kbgw.ensure_kb_gateway_persisted(control)
+        control = control_client(ctx.workspace)
+        gw = kbgw.ensure_kb_gateway_persisted(control, ctx.workspace)
         for kb in spec.knowledge_bases:
             kbgw.ensure_retrieve_target(
                 control, gw["id"], kb.kb_id, kb.name or kb.kb_id, kb.description
@@ -280,24 +283,23 @@ def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) ->
         )
         # generate ran before the KB gateway existed on first attach — rebuild
         # the request now that kb_gateway_* resources are persisted
-        settings = get_settings()
-        ctx.scratch["create_params"] = _build_live_params(spec, settings.resources)
+        ctx.scratch["create_params"] = _build_live_params(spec, ctx.workspace)
         ctx.log(f"kb gateway ready · {len(spec.knowledge_bases)} knowledge base(s) mounted")
         return StageResult(
             detail=f"{role_detail} · kb targets ready ({len(spec.knowledge_bases)})"
         )
 
     # re-publish with every KB unselected → drop the stale per-agent target
-    resources = get_settings().resources
+    resources = ctx.workspace.resources
     if resources.get("kb_gateway_id"):
         kbgw.sync_agentic_target(
-            control_client(), resources["kb_gateway_id"], spec.name, []
+            control_client(ctx.workspace), resources["kb_gateway_id"], spec.name, []
         )
     return StageResult(detail=role_detail)
 
 
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
-    client = control_client()
+    client = control_client(ctx.workspace)
     mode = ctx.scratch.get("mode", "create")
     db = ctx.session()
     try:
@@ -306,8 +308,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         def _params() -> dict[str, Any]:
             params = ctx.scratch.get("create_params")
             if params is None:  # resume/update path without scratch — regenerate
-                settings = get_settings()
-                params = _build_live_params(AgentSpec(**row.spec), settings.resources)
+                params = _build_live_params(AgentSpec(**row.spec), ctx.workspace)
             return params
 
         if mode == "update" and row.resource_id:  # in-place re-publish → UpdateHarness
@@ -363,10 +364,10 @@ STAGES = {
 register_method("harness", STAGES)
 
 
-def delete_agent_resources(agent: Agent) -> None:
+def delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> None:
     """Remove the AWS-side harness + per-agent KB target for a ledger row (idempotent)."""
-    client = control_client()
-    resources = get_settings().resources
+    client = control_client(workspace)
+    resources = workspace.resources
     if resources.get("kb_gateway_id"):
         spec_name = (agent.spec or {}).get("name") or agent.name
         try:

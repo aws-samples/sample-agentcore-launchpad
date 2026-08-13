@@ -24,14 +24,15 @@ an operator's decision to schedule, not a script's to trigger silently.
 import sys
 
 from app.core.config import get_settings
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent
 from app.services import agent_iam
 from app.services.agentcore.client import control_client
 from app.services.runtime_discovery import DISCOVERED_METHOD
+from app.services.workspace import WorkspaceContext, default_workspace_context
 
 
-def _live_role(agent: Agent) -> str | None:
+def _live_role(agent: Agent, workspace: WorkspaceContext) -> str | None:
     """The role the runtime is actually using, or None when it cannot be read."""
     if not agent.resource_id:
         return None
@@ -41,26 +42,34 @@ def _live_role(agent: Agent) -> str | None:
         if agent.method == "harness":
             from app.services.agentcore import harness as hc
 
-            return hc.get_harness(control_client(), agent.resource_id).get(
+            return hc.get_harness(control_client(workspace), agent.resource_id).get(
                 "executionRoleArn"
             )
-        return rt.get_runtime(control_client(), agent.resource_id).get("roleArn")
+        return rt.get_runtime(control_client(workspace), agent.resource_id).get("roleArn")
     except Exception:  # noqa: BLE001 — reporting must not hard-fail on one agent
         return None
 
 
 def main() -> int:
     settings = get_settings()
-    shared = agent_iam.shared_role_arn(settings)
+    workspace = default_workspace_context()
+    shared = agent_iam.shared_role_arn(workspace)
     if not settings.per_agent_execution_roles:
         print("per_agent_execution_roles is off — nothing to migrate to.")
         return 0
 
     db = SessionLocal()
     try:
+        # Hub workspace only: the live-role read below goes through one context,
+        # so an agent in another account/region would be probed with the wrong
+        # client and report as unreadable. Run it per workspace when that matters.
         agents = (
             db.query(Agent)
-            .filter(Agent.status != "deleted", Agent.method != DISCOVERED_METHOD)
+            .filter(
+                Agent.workspace_id == DEFAULT_WORKSPACE_ID,
+                Agent.status != "deleted",
+                Agent.method != DISCOVERED_METHOD,
+            )
             .order_by(Agent.created_at)
             .all()
         )
@@ -71,7 +80,7 @@ def main() -> int:
     unknown: list[Agent] = []
     migrated: list[Agent] = []
     for agent in agents:
-        role = _live_role(agent)
+        role = _live_role(agent, workspace)
         if role is None:
             unknown.append(agent)
         elif shared and role == shared:

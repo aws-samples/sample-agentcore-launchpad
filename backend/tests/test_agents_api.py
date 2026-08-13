@@ -115,7 +115,7 @@ def test_invoke_active_agent(client, monkeypatch):
     monkeypatch.setattr(
         agents_router,
         "invoke_agent_text",
-        lambda agent, prompt, session_id=None, actor_id="default": {
+        lambda agent, prompt, session_id=None, actor_id="default", **_kw: {
             "text": "4",
             "session_id": "s" * 40,
         },
@@ -131,7 +131,7 @@ def test_delete_marks_ledger(client, monkeypatch):
     monkeypatch.setattr(
         agents_router.harness_method,
         "delete_agent_resources",
-        lambda agent: deleted.append(agent.name),
+        lambda agent, _ws: deleted.append(agent.name),
     )
     agent_id = client.post("/api/agents", json=SPEC).json()["agent"]["id"]
     res = client.delete(f"/api/agents/{agent_id}")

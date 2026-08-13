@@ -10,7 +10,7 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from typing import Any
 
-from app.core.config import REPO_ROOT, get_settings
+from app.core.config import REPO_ROOT
 from app.core.errors import AppError
 from app.models.ledger import Agent
 from app.services import mcp_client
@@ -31,7 +31,7 @@ from app.services.skill_ingest import (
     parse_frontmatter,
     validate_bundle,
 )
-from app.services.workspace import default_workspace_context
+from app.services.workspace import WorkspaceContext
 
 # Shared frontmatter parser lives in skill_ingest now; kept as a module-level
 # name for the existing callers (upload_skill_bundle) and tests.
@@ -55,18 +55,29 @@ class RegistryUnavailableError(AppError):
         )
 
 
-def _registry_id() -> str:
-    resources = get_settings().resources
+def _registry_id(workspace: WorkspaceContext) -> str:
+    resources = workspace.resources
     registry_id = resources.get("registry_id")
     if not registry_id:
         raise RegistryUnavailableError(resources.get("registry_unavailable_reason"))
     return registry_id
 
 
-def register_agent_record(agent: Agent, auto_submit: bool = True) -> dict[str, Any]:
+def _artifacts_bucket(workspace: WorkspaceContext) -> str:
+    bucket = workspace.resources.get("artifacts_bucket")
+    if not bucket:
+        raise RuntimeError(
+            "artifacts_bucket missing from this workspace's resource map — run its bootstrap"
+        )
+    return str(bucket)
+
+
+def register_agent_record(
+    agent: Agent, workspace: WorkspaceContext, auto_submit: bool = True
+) -> dict[str, Any]:
     """Create/refresh the A2A record for a deployed agent; auto-submit new records."""
-    client = registry_control_client()
-    registry_id = _registry_id()
+    client = registry_control_client(workspace)
+    registry_id = _registry_id(workspace)
     spec = agent.spec or {}
     # A2A-protocol runtimes serve real JSON-RPC at the data-plane URL — their
     # card is directly consumable. HTTP runtime agents get the same URL as an
@@ -81,7 +92,7 @@ def register_agent_record(agent: Agent, auto_submit: bool = True) -> dict[str, A
         version=agent.version or "1",
         method=agent.method,
         url=(
-            reg.data_plane_invocations_url(arn, get_settings().region)
+            reg.data_plane_invocations_url(arn, workspace.region)
             if ":runtime/" in arn else None
         ),
         skills=reg.derive_card_skills(spec) or None,
@@ -102,14 +113,13 @@ def register_agent_record(agent: Agent, auto_submit: bool = True) -> dict[str, A
     return {"record_id": record_id, "created": created}
 
 
-def upload_skill_bundle(skill_name: str = SKILL_NAME) -> dict[str, Any]:
+def upload_skill_bundle(
+    workspace: WorkspaceContext, skill_name: str = SKILL_NAME
+) -> dict[str, Any]:
     """Upload the sample skill bundle to S3; return definition metadata."""
-    settings = get_settings()
-    bucket = settings.resources.get("artifacts_bucket")
-    if not bucket:
-        raise RuntimeError("artifacts_bucket missing — run scripts/bootstrap.py")
+    bucket = _artifacts_bucket(workspace)
     skill_dir = SKILLS_DIR / skill_name
-    s3 = default_workspace_context().client("s3")
+    s3 = workspace.client("s3")
     files: list[str] = []
     for path in sorted(skill_dir.rglob("*")):
         if path.is_file():
@@ -130,15 +140,14 @@ def upload_skill_bundle(skill_name: str = SKILL_NAME) -> dict[str, Any]:
     }
 
 
-def ensure_default_records() -> list[dict[str, Any]]:
+def ensure_default_records(workspace: WorkspaceContext) -> list[dict[str, Any]]:
     """Register the gateway targets (MCP) + sample skill bundle (AGENT_SKILLS)."""
-    client = registry_control_client()
-    registry_id = _registry_id()
-    settings = get_settings()
+    client = registry_control_client(workspace)
+    registry_id = _registry_id(workspace)
     results: list[dict[str, Any]] = []
 
-    gateway_url = settings.resources.get("gateway_url", "")
-    tools = mcp_client.tools_list()
+    gateway_url = workspace.resources.get("gateway_url", "")
+    tools = mcp_client.tools_list(workspace)
     by_target: dict[str, list[dict[str, Any]]] = {}
     for tool in tools:
         if "___" in tool["name"]:
@@ -171,7 +180,7 @@ def ensure_default_records() -> list[dict[str, Any]]:
         results.append({"name": target, "type": "MCP", "record_id": record["recordId"],
                         "created": created})
 
-    bundle = upload_skill_bundle()
+    bundle = upload_skill_bundle(workspace)
     record, created = reg.upsert_record(
         client,
         registry_id,
@@ -190,29 +199,39 @@ def ensure_default_records() -> list[dict[str, Any]]:
     return results
 
 
-def skill_attach_path(skill_name: str = SKILL_NAME) -> str:
+def skill_attach_path(workspace: WorkspaceContext, skill_name: str = SKILL_NAME) -> str:
     """The skills[{path}] value a harness spec uses to attach the bundle."""
-    bucket = get_settings().resources.get("artifacts_bucket", "")
+    bucket = workspace.resources.get("artifacts_bucket", "")
     return f"s3://{bucket}/skills/{skill_name}/"
 
 
-def console_list(descriptor_type: str | None = None, status: str | None = None) -> list[dict]:
+def console_list(
+    workspace: WorkspaceContext,
+    descriptor_type: str | None = None,
+    status: str | None = None,
+) -> list[dict]:
     return reg.list_records(
-        registry_control_client(), _registry_id(), descriptor_type, status
+        registry_control_client(workspace), _registry_id(workspace), descriptor_type, status
     )
 
 
-def console_get(record_id: str) -> dict[str, Any]:
-    return reg.get_record(registry_control_client(), _registry_id(), record_id)
+def console_get(workspace: WorkspaceContext, record_id: str) -> dict[str, Any]:
+    return reg.get_record(
+        registry_control_client(workspace), _registry_id(workspace), record_id
+    )
 
 
-def console_search(query: str) -> list[dict[str, Any]]:
-    return reg.search_records(registry_data_client(), [_registry_id()], query)
+def console_search(workspace: WorkspaceContext, query: str) -> list[dict[str, Any]]:
+    return reg.search_records(
+        registry_data_client(workspace), [_registry_id(workspace)], query
+    )
 
 
-def console_action(record_id: str, action: str) -> dict[str, Any]:
-    client = registry_control_client()
-    registry_id = _registry_id()
+def console_action(
+    workspace: WorkspaceContext, record_id: str, action: str
+) -> dict[str, Any]:
+    client = registry_control_client(workspace)
+    registry_id = _registry_id(workspace)
     if action == "submit":
         return reg.submit_record(client, registry_id, record_id)
     if action in ("approve", "publish"):
@@ -224,8 +243,10 @@ def console_action(record_id: str, action: str) -> dict[str, Any]:
     raise ValueError(f"unknown action '{action}'")
 
 
-def console_delete(record_id: str) -> None:
-    reg.delete_record(registry_control_client(), _registry_id(), record_id)
+def console_delete(workspace: WorkspaceContext, record_id: str) -> None:
+    reg.delete_record(
+        registry_control_client(workspace), _registry_id(workspace), record_id
+    )
 
 
 def build_gateway_record(
@@ -316,14 +337,15 @@ def _list_mcp_record_details(client: Any, registry_id: str) -> list[dict[str, An
 
 
 def gateway_registry_states(
+    workspace: WorkspaceContext,
     *,
     gateways: list[dict[str, Any]],
     client: Any | None = None,
     registry_id: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Match live Gateways to their Gateway-level and legacy Registry records."""
-    client = client or registry_control_client()
-    registry_id = registry_id or _registry_id()
+    client = client or registry_control_client(workspace)
+    registry_id = registry_id or _registry_id(workspace)
     records = _list_mcp_record_details(client, registry_id)
     by_url: dict[str, list[dict[str, Any]]] = {}
     for record in records:
@@ -368,6 +390,7 @@ def gateway_registry_states(
 
 
 def gateway_registry_preview(
+    workspace: WorkspaceContext,
     *,
     gateway_id: str,
     gateway_name: str,
@@ -384,8 +407,8 @@ def gateway_registry_preview(
     Gateway/action projection here. Matching is based on the unique live
     Gateway URL; a record with the desired name but another URL is a conflict.
     """
-    client = client or registry_control_client()
-    registry_id = registry_id or _registry_id()
+    client = client or registry_control_client(workspace)
+    registry_id = registry_id or _registry_id(workspace)
     desired_name = record_name or gateway_name
     proposed = build_gateway_record(
         gateway_name=desired_name,
@@ -449,6 +472,7 @@ def gateway_registry_preview(
 
 
 def import_gateway_record(
+    workspace: WorkspaceContext,
     *,
     gateway_id: str,
     gateway_name: str,
@@ -465,9 +489,10 @@ def import_gateway_record(
     This operation never approves or deprecates a record. Governance must run
     its managed-Gateway preflight before calling it.
     """
-    client = client or registry_control_client()
-    registry_id = registry_id or _registry_id()
+    client = client or registry_control_client(workspace)
+    registry_id = registry_id or _registry_id(workspace)
     preview = gateway_registry_preview(
+        workspace,
         gateway_id=gateway_id,
         gateway_name=gateway_name,
         gateway_url=gateway_url,
@@ -536,6 +561,7 @@ def import_gateway_record(
 
 
 def retire_legacy_gateway_records(
+    workspace: WorkspaceContext,
     *,
     gateway_record_id: str,
     legacy_record_ids: list[str],
@@ -543,8 +569,8 @@ def retire_legacy_gateway_records(
     registry_id: str | None = None,
 ) -> dict[str, Any]:
     """Explicitly deprecate selected legacy target records after cutover."""
-    client = client or registry_control_client()
-    registry_id = registry_id or _registry_id()
+    client = client or registry_control_client(workspace)
+    registry_id = registry_id or _registry_id(workspace)
     gateway_record = reg.get_record(client, registry_id, gateway_record_id)
     gateway_url = _mcp_record_url(gateway_record)
     if (
@@ -669,6 +695,7 @@ def _legacy_gateway_attachment(resources: dict[str, Any]) -> dict[str, Any] | No
 
 def resolve_gateway_attachments(
     tools: list[Any],
+    workspace: WorkspaceContext,
     *,
     registry_client: Any | None = None,
     agentcore_client: Any | None = None,
@@ -683,7 +710,7 @@ def resolve_gateway_attachments(
     gateway_tools = [tool for tool in tools if getattr(tool, "type", None) == "gateway"]
     if not gateway_tools:
         return []
-    resources = get_settings().resources
+    resources = workspace.resources
     attachments: list[dict[str, Any]] = []
 
     if any(not getattr(tool, "config", None) for tool in gateway_tools):
@@ -706,9 +733,9 @@ def resolve_gateway_attachments(
                 status_code=409,
             )
     if configured:
-        registry_client = registry_client or registry_control_client()
-        agentcore_client = agentcore_client or control_client()
-        registry_id = registry_id or _registry_id()
+        registry_client = registry_client or registry_control_client(workspace)
+        agentcore_client = agentcore_client or control_client(workspace)
+        registry_id = registry_id or _registry_id(workspace)
 
     for config in configured:
         record_id = config["record_id"]
@@ -749,6 +776,7 @@ def resolve_gateway_attachments(
 
 
 def attachable_records(
+    workspace: WorkspaceContext,
     *,
     registry_client: Any | None = None,
     agentcore_client: Any | None = None,
@@ -759,13 +787,13 @@ def attachable_records(
     the registry lifecycle is the availability gate. MCP records whose URL
     matches a live AgentCore Gateway expose server-derived attachability;
     other MCP records remain unauthenticated remote_mcp entries."""
-    registry_client = registry_client or registry_control_client()
-    registry_id = registry_id or _registry_id()
-    resources = get_settings().resources
+    registry_client = registry_client or registry_control_client(workspace)
+    registry_id = registry_id or _registry_id(workspace)
+    resources = workspace.resources
     gateways = (
         gateways
         if gateways is not None
-        else _list_live_mcp_gateways(agentcore_client or control_client())
+        else _list_live_mcp_gateways(agentcore_client or control_client(workspace))
     )
     gateways_by_url: dict[str, list[dict[str, Any]]] = {}
     for gateway in gateways:
@@ -846,12 +874,14 @@ def _require_new_name(client: Any, registry_id: str, name: str, kind: str) -> No
         )
 
 
-def register_mcp_server(name: str, description: str, url: str) -> dict[str, Any]:
+def register_mcp_server(
+    workspace: WorkspaceContext, name: str, description: str, url: str
+) -> dict[str, Any]:
     """Register an external remote MCP server (streamable-http URL) as an MCP
     record. Starts in DRAFT — the console lifecycle (submit → approve) gates
     when it becomes attachable to agents."""
-    client = registry_control_client()
-    registry_id = _registry_id()
+    client = registry_control_client(workspace)
+    registry_id = _registry_id(workspace)
     _require_new_name(client, registry_id, name, "MCP")
     record, _ = reg.upsert_record(
         client,
@@ -872,6 +902,7 @@ def _utcnow_iso() -> str:
 
 def register_skill_bundle(
     bundle: SkillBundle,
+    workspace: WorkspaceContext,
     *,
     name_override: str | None = None,
     description_override: str | None = None,
@@ -892,14 +923,11 @@ def register_skill_bundle(
         )
     validate_bundle(bundle)
 
-    client = registry_control_client()
-    registry_id = _registry_id()
+    client = registry_control_client(workspace)
+    registry_id = _registry_id(workspace)
     _require_new_name(client, registry_id, name, "AGENT_SKILLS")
 
-    settings = get_settings()
-    bucket = settings.resources.get("artifacts_bucket")
-    if not bucket:
-        raise RuntimeError("artifacts_bucket missing — run scripts/bootstrap.py")
+    bucket = _artifacts_bucket(workspace)
 
     prefix = f"skills/{name}/"
     description = (description_override or bundle.description or "").strip()
@@ -922,7 +950,7 @@ def register_skill_bundle(
             f"{SKILL_MD_MAX_BYTES} byte limit (too many files or paths too long)"
         )
 
-    s3 = default_workspace_context().client("s3")
+    s3 = workspace.client("s3")
     uploaded: list[str] = []
     try:
         upload_bundle_files(bundle, bucket, prefix, s3, uploaded=uploaded)
@@ -971,14 +999,16 @@ def _delete_keys(s3: Any, bucket: str, keys: list[str]) -> None:
             pass
 
 
-def register_skill(name: str, description: str, skill_md: str) -> dict[str, Any]:
+def register_skill(
+    workspace: WorkspaceContext, name: str, description: str, skill_md: str
+) -> dict[str, Any]:
     """Register a skill from raw SKILL.md content (the console paste path). Thin
     wrapper over ``register_skill_bundle`` via the inline acquirer — behaviour is
     unchanged bar the additive ``source`` field in the descriptor."""
     bundle = bundle_from_inline(skill_md)
     try:
         return register_skill_bundle(
-            bundle, name_override=name, description_override=description or None
+            bundle, workspace, name_override=name, description_override=description or None
         )
     finally:
         bundle.close()
@@ -1015,7 +1045,7 @@ def _delete_prefix(s3: Any, bucket: str, prefix: str) -> None:
     _delete_keys(s3, bucket, keys)
 
 
-def reimport_skill(record_id: str) -> dict[str, Any]:
+def reimport_skill(workspace: WorkspaceContext, record_id: str) -> dict[str, Any]:
     """Re-run the ingestion pipeline for a git/url-sourced skill record: re-acquire
     from the stored provenance, replace the whole S3 prefix, and update the record
     with a bumped ``recordVersion`` and a refreshed ``imported_at``.
@@ -1027,8 +1057,8 @@ def reimport_skill(record_id: str) -> dict[str, Any]:
     git repos have no persisted token, so a private reimport surfaces the (token-
     redacted) clone/download error — accepted by design.
     """
-    client = registry_control_client()
-    registry_id = _registry_id()
+    client = registry_control_client(workspace)
+    registry_id = _registry_id(workspace)
     record = reg.get_record(client, registry_id, record_id)
     if record.get("status") == "DEPRECATED":
         raise AppError(
@@ -1058,7 +1088,7 @@ def reimport_skill(record_id: str) -> dict[str, Any]:
 
     bundle = bundle_from_source(source)
     try:
-        return _reupload_and_update(client, registry_id, record, name, bundle)
+        return _reupload_and_update(client, registry_id, record, name, bundle, workspace)
     finally:
         bundle.close()
 
@@ -1069,6 +1099,7 @@ def _reupload_and_update(
     record: dict[str, Any],
     name: str,
     bundle: SkillBundle,
+    workspace: WorkspaceContext,
     *,
     description: str | None = None,
 ) -> dict[str, Any]:
@@ -1083,10 +1114,7 @@ def _reupload_and_update(
         raise SkillValidationError(f"record name '{name}' is not a valid skill name")
     validate_bundle(bundle)
 
-    settings = get_settings()
-    bucket = settings.resources.get("artifacts_bucket")
-    if not bucket:
-        raise RuntimeError("artifacts_bucket missing — run scripts/bootstrap.py")
+    bucket = _artifacts_bucket(workspace)
 
     prefix = f"skills/{name}/"
     if description is None:
@@ -1109,7 +1137,7 @@ def _reupload_and_update(
             f"{SKILL_MD_MAX_BYTES} byte limit (too many files or paths too long)"
         )
 
-    s3 = default_workspace_context().client("s3")
+    s3 = workspace.client("s3")
     # Clear the old prefix FIRST so files dropped at the source don't linger, then
     # upload the fresh set. Unlike the create path we deliberately do NOT roll back
     # the upload if the record update later fails: the record already exists and
@@ -1138,6 +1166,7 @@ def _reupload_and_update(
 
 def update_record(
     record_id: str,
+    workspace: WorkspaceContext,
     *,
     description: str | None = None,
     url: str | None = None,
@@ -1163,8 +1192,8 @@ def update_record(
     identity are keyed by it). DEPRECATED records are terminal and A2A records are
     owned by agent deploys — both refuse editing (400 ``registry.not_editable``).
     """
-    client = registry_control_client()
-    registry_id = _registry_id()
+    client = registry_control_client(workspace)
+    registry_id = _registry_id(workspace)
     record = reg.get_record(client, registry_id, record_id)
     if record.get("status") == "DEPRECATED":
         raise AppError(
@@ -1186,10 +1215,12 @@ def update_record(
     if url is not None:
         return _update_mcp_url(client, registry_id, record, name, url, new_desc)
     if skill_md is not None:
-        return _update_skill_md(client, registry_id, record, name, skill_md, new_desc)
+        return _update_skill_md(
+            client, registry_id, record, name, skill_md, new_desc, workspace
+        )
     if bundle is not None:
         return _reupload_and_update(
-            client, registry_id, record, name, bundle, description=description
+            client, registry_id, record, name, bundle, workspace, description=description
         )
     # description-only: resend the current descriptors unchanged (AWS update
     # always requires descriptors) with the new description, no version bump.
@@ -1236,6 +1267,7 @@ def _update_skill_md(
     name: str,
     skill_md: str,
     description: str,
+    workspace: WorkspaceContext,
 ) -> dict[str, Any]:
     """Overwrite ONLY ``skills/{name}/SKILL.md`` and refresh the descriptor,
     leaving every supporting file in the prefix untouched (no prefix clear). The
@@ -1248,10 +1280,7 @@ def _update_skill_md(
             f"SKILL.md is {md_bytes} bytes — exceeds the {SKILL_MD_MAX_BYTES} byte limit"
         )
 
-    settings = get_settings()
-    bucket = settings.resources.get("artifacts_bucket")
-    if not bucket:
-        raise RuntimeError("artifacts_bucket missing — run scripts/bootstrap.py")
+    bucket = _artifacts_bucket(workspace)
 
     try:
         old = json.loads(
@@ -1282,7 +1311,7 @@ def _update_skill_md(
             f"{SKILL_MD_MAX_BYTES} byte limit (too many files or paths too long)"
         )
 
-    s3 = default_workspace_context().client("s3")
+    s3 = workspace.client("s3")
     # Only SKILL.md changed — overwrite exactly that object; do NOT clear the
     # prefix (that would strand the supporting files the deploy-time consumer
     # downloads alongside it).

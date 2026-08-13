@@ -29,6 +29,7 @@ def ensure_gateway(
     client_id: str,
     region: str,
     name: str = GATEWAY_NAME,
+    timeout_s: int = 300,
 ) -> tuple[dict[str, str], bool]:
     """Create (or reuse) the shared MCP gateway with Cognito-JWT inbound auth."""
     items: list[dict[str, Any]] = []
@@ -71,7 +72,7 @@ def ensure_gateway(
         exceptionLevel="DEBUG",
     )
     gateway_id = created["gatewayId"]
-    _wait_gateway_ready(control, gateway_id)
+    _wait_gateway_ready(control, gateway_id, timeout_s=timeout_s)
     detail = control.get_gateway(gatewayIdentifier=gateway_id)
     return (
         {"id": gateway_id, "arn": detail["gatewayArn"], "url": detail["gatewayUrl"]},
@@ -147,7 +148,9 @@ def ensure_oauth_provider(
     return created["credentialProviderArn"], True
 
 
-def ensure_gateway_allows_client(control: Any, gateway_id: str, client_id: str) -> bool:
+def ensure_gateway_allows_client(
+    control: Any, gateway_id: str, client_id: str, timeout_s: int = 300
+) -> bool:
     """Append client_id to the gateway's allowedClients if missing. Returns changed."""
     gateway = control.get_gateway(gatewayIdentifier=gateway_id)
     auth = gateway["authorizerConfiguration"]
@@ -163,7 +166,7 @@ def ensure_gateway_allows_client(control: Any, gateway_id: str, client_id: str) 
         authorizerType=gateway["authorizerType"],
         authorizerConfiguration=auth,
     )
-    _wait_gateway_ready(control, gateway_id)
+    _wait_gateway_ready(control, gateway_id, timeout_s=timeout_s)
     return True
 
 
@@ -251,13 +254,23 @@ def _wait_target_ready(
 def run_gateway_bootstrap(
     control: Any, apigw_client: Any, config: dict[str, Any], cognito_client: Any = None
 ) -> dict:
-    """Idempotently ensure gateway + both targets + M2M outbound auth."""
+    """Idempotently ensure gateway + the demo targets + M2M outbound auth.
+
+    The Build-Tools demo layer (hr-database Lambda, office-facts REST API) is
+    CDK-shipped sample code, so it only exists where the stack is deployed. Its
+    identifiers are read defensively: a gateway with no demo targets is a valid
+    environment, and `workspace_bootstrap` provisions exactly that.
+    """
     resources = config.get("resources", {})
     region = config.get("region", "us-west-2")
-    api_key_value = apigw_client.get_api_key(
-        apiKey=resources["office_facts_api_key_id"], includeValue=True
-    )["value"]
-    provider_arn, provider_created = ensure_api_key_provider(control, api_key_value)
+    api_key_id = resources.get("office_facts_api_key_id") or ""
+    hr_lambda_arn = resources.get("hr_lambda_arn") or ""
+    facts_api_url = resources.get("office_facts_api_url") or ""
+
+    provider_arn, provider_created = "", False
+    if api_key_id:
+        api_key_value = apigw_client.get_api_key(apiKey=api_key_id, includeValue=True)["value"]
+        provider_arn, provider_created = ensure_api_key_provider(control, api_key_value)
     gateway, gateway_created = ensure_gateway(
         control,
         role_arn=resources["gateway_role_arn"],
@@ -265,10 +278,14 @@ def run_gateway_bootstrap(
         client_id=resources["user_pool_client_id"],
         region=region,
     )
-    hr_target, hr_created = ensure_lambda_target(control, gateway["id"], resources["hr_lambda_arn"])
-    facts_target, facts_created = ensure_openapi_target(
-        control, gateway["id"], resources["office_facts_api_url"], provider_arn
-    )
+    hr_target, hr_created = "", False
+    if hr_lambda_arn:
+        hr_target, hr_created = ensure_lambda_target(control, gateway["id"], hr_lambda_arn)
+    facts_target, facts_created = "", False
+    if facts_api_url and provider_arn:
+        facts_target, facts_created = ensure_openapi_target(
+            control, gateway["id"], facts_api_url, provider_arn
+        )
 
     oauth_arn, oauth_created, m2m_allowed = "", False, False
     m2m_client_id = resources.get("m2m_client_id", "")

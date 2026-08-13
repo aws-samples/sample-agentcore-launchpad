@@ -21,6 +21,15 @@ _SESSIONS: dict[SessionKey, boto3.Session] = {}
 _CLIENTS: dict[tuple[SessionKey, str, str | None], Any] = {}
 _LOCK = threading.Lock()
 
+# Passing any of these to botocore would silently override the workspace the
+# client claims to target — and the cache key would not reflect it either.
+FORBIDDEN_CFG = (
+    "region_name",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+)
+
 
 def get_session(
     account_id: str,
@@ -64,6 +73,12 @@ def client(
     Construction always happens under the lock: building clients off a shared
     session is not thread-safe in boto3.
     """
+    overrides = [name for name in FORBIDDEN_CFG if name in cfg]
+    if overrides:
+        raise ValueError(
+            f"{', '.join(overrides)} defeat workspace targeting — set the region and "
+            "credentials on the WorkspaceContext instead of on the client"
+        )
     key: SessionKey = (ctx.account_id, ctx.region, ctx.role_arn, ctx.external_id)
     session = get_session(*key)
     with _LOCK:

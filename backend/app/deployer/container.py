@@ -23,31 +23,33 @@ from app.services import agent_iam, ecr
 from app.services.agentcore import codebuild as cb
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
-from app.services.workspace import default_workspace_context
+from app.services.workspace import WorkspaceContext
 from app.templates.claude_sdk_agent import assemble_build_context
 
 from .zip_runtime import bundle_skill_paths_into, sanitize_runtime_name
 
 
-def _image_ref(settings, agent: Agent) -> tuple[str, str, str]:
-    registry = f"{settings.account_id}.dkr.ecr.{settings.region}.amazonaws.com"
-    repo = settings.resources.get("ecr_repo", "launchpad-agents")
+def _image_ref(workspace: WorkspaceContext, agent: Agent) -> tuple[str, str, str]:
+    registry = f"{workspace.account_id}.dkr.ecr.{workspace.region}.amazonaws.com"
+    repo = workspace.resources.get("ecr_repo", "launchpad-agents")
     tag = f"{agent.name}-v{agent.version or '1'}"
     return registry, repo, tag
 
 
-def _build_context(spec: AgentSpec, agent: Agent, log) -> Path:
+def _build_context(
+    spec: AgentSpec, agent: Agent, log, workspace: WorkspaceContext
+) -> Path:
     """Template files + rendered main.py, then spec.skills S3 prefixes into
     .claude/skills/{name}/ so the claude CLI discovers them next to agents/."""
     context_dir = assemble_build_context(spec, Path(f"/tmp/launchpad_ctx_{agent.name}"))
     if spec.skills:
-        bundle_skill_paths_into(spec.skills, context_dir / ".claude", log)
+        bundle_skill_paths_into(spec.skills, context_dir / ".claude", log, workspace)
     return context_dir
 
 
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     spec = AgentSpec(**agent.spec)
-    context_dir = _build_context(spec, agent, ctx.log)
+    context_dir = _build_context(spec, agent, ctx.log, ctx.workspace)
     files = sorted(str(p.relative_to(context_dir)) for p in context_dir.rglob("*") if p.is_file())
     ctx.scratch["context_dir"] = str(context_dir)
     ctx.log(f"build context assembled: {', '.join(files)}")
@@ -56,10 +58,14 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
 
 def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     settings = get_settings()
-    bucket = settings.resources.get("artifacts_bucket")
-    project = settings.resources.get("codebuild_project")
+    workspace = ctx.workspace
+    bucket = workspace.resources.get("artifacts_bucket")
+    project = workspace.resources.get("codebuild_project")
     if not bucket or not project:
-        raise RuntimeError("artifacts_bucket/codebuild_project missing — run scripts/bootstrap.py")
+        raise RuntimeError(
+            "artifacts_bucket/codebuild_project missing from this workspace's "
+            "resource map — run its bootstrap"
+        )
 
     spec = AgentSpec(**agent.spec)
     context_dir = Path(
@@ -68,11 +74,10 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     )
     archive = shutil.make_archive(str(context_dir) + "_src", "zip", context_dir)
     s3_key = f"builds/{agent.name}/source.zip"
-    workspace = default_workspace_context()
     workspace.client("s3").upload_file(archive, bucket, s3_key)
     ctx.log(f"source zip uploaded → s3://{bucket}/{s3_key}")
 
-    registry, repo, tag = _image_ref(settings, agent)
+    registry, repo, tag = _image_ref(workspace, agent)
     codebuild = workspace.client("codebuild")
     t0 = time.monotonic()
     build_id = cb.start_image_build(
@@ -80,7 +85,7 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
         project=project,
         s3_bucket=bucket,
         s3_key=s3_key,
-        region=settings.region,
+        region=workspace.region,
         ecr_registry=registry,
         ecr_repo=repo,
         image_tag=tag,
@@ -190,7 +195,7 @@ def _vpc(spec: AgentSpec) -> dict | None:
 def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) -> StageResult:
     spec = AgentSpec(**agent.spec)
     role_arn, detail = agent_iam.provision_execution_role(
-        agent, spec, get_settings(), ctx.log, iam=iam_client
+        agent, spec, get_settings(), ctx.workspace, ctx.log, iam=iam_client
     )
     ctx.scratch["execution_role_arn"] = role_arn
     return StageResult(detail=detail)
@@ -211,15 +216,15 @@ def _recorded_digest_uri(ctx: StageContext, registry: str, repo: str) -> str | N
 
 
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
-    settings = get_settings()
-    client = control_client()
+    workspace = ctx.workspace
+    client = control_client(workspace)
     mode = ctx.scratch.get("mode", "create")
     db = ctx.session()
     try:
         row = db.get(Agent, agent.id)
 
         def _kwargs() -> dict:
-            registry, repo, tag = _image_ref(settings, row)
+            registry, repo, tag = _image_ref(workspace, row)
             spec = AgentSpec(**row.spec)
             return {
                 "container_uri": ctx.scratch.get("image_uri")
@@ -229,8 +234,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 # to rely on.
                 or f"{registry}/{repo}:{tag}",
                 "role_arn": ctx.scratch.get("execution_role_arn")
-                or settings.resources.get("execution_role_arn", ""),
-                "environment": runtime_environment(spec, settings.resources),
+                or workspace.resources.get("execution_role_arn", ""),
+                "environment": runtime_environment(spec, workspace.resources),
                 "filesystem_configurations": _filesystem_configurations(spec) or None,
                 "vpc": _vpc(spec),
             }
@@ -291,10 +296,12 @@ STAGES = {
 register_method("container", STAGES)
 
 
-def delete_agent_resources(agent: Agent, iam_client: Any = None) -> None:
+def delete_agent_resources(
+    agent: Agent, workspace: WorkspaceContext, iam_client: Any = None
+) -> None:
     if not agent.resource_id:
         return
-    client = control_client()
+    client = control_client(workspace)
     try:
         rt.delete_runtime(client, agent.resource_id)
     except client.exceptions.ResourceNotFoundException:
@@ -306,10 +313,10 @@ def delete_agent_resources(agent: Agent, iam_client: Any = None) -> None:
     settings = get_settings()
     if settings.per_agent_execution_roles:
         return
-    role_arn = agent_iam.shared_role_arn(settings)
+    role_arn = agent_iam.shared_role_arn(workspace)
     if role_arn:
         try:
-            iam = iam_client or default_workspace_context().client("iam")
+            iam = iam_client or workspace.client("iam")
             iam.delete_role_policy(
                 RoleName=role_arn.rsplit("/", 1)[-1],
                 PolicyName=agent_iam.fs_policy_name(agent.name),

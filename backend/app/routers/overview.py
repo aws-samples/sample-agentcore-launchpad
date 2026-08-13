@@ -7,36 +7,38 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.core.db import get_db
 from app.evaluation.models import EvalRun
 from app.models.ledger import ChatSession
-from app.services.agentcore import policy as policy_api
+from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services.agentcore.client import control_client
+from app.services.governance import attached_policy_engine_id
 from app.services.registry_console import console_list
-from app.services.workspace import default_workspace_context
+from app.services.workspace import WorkspaceContext
 
 router = APIRouter(prefix="/api", tags=["overview"])
 
 _TTL_SECONDS = 30.0
-_cache: dict[str, Any] = {
-    "assets_at": 0.0,
-    "assets": None,
-    "traces_at": 0.0,
-    "traces": None,
-    "policy_at": 0.0,
-    "policy": None,
-}
+# Keyed by workspace: every value below is a fact about one account/region.
+_cache: dict[str, dict[str, Any]] = {}
 
 
-def _registry_assets() -> dict[str, int]:
+def _slot(workspace_id: str) -> dict[str, Any]:
+    return _cache.setdefault(
+        workspace_id,
+        {"assets_at": 0.0, "assets": None, "traces_at": 0.0, "traces": None},
+    )
+
+
+def _registry_assets(workspace: WorkspaceContext) -> dict[str, int]:
     """Non-deprecated record counts per asset type (30s cache — AWS-backed)."""
-    if _cache["assets"] is not None and time.monotonic() - _cache["assets_at"] < _TTL_SECONDS:
-        return _cache["assets"]
+    slot = _slot(workspace.id)
+    if slot["assets"] is not None and time.monotonic() - slot["assets_at"] < _TTL_SECONDS:
+        return slot["assets"]
     counts = {"agents": 0, "tools": 0, "skills": 0}
     by_type = {"A2A": "agents", "MCP": "tools", "AGENT_SKILLS": "skills"}
     try:
-        for record in console_list():
+        for record in console_list(workspace):
             if record.get("status") == "DEPRECATED":
                 continue
             key = by_type.get(record.get("descriptorType", ""))
@@ -45,68 +47,50 @@ def _registry_assets() -> dict[str, int]:
     except Exception:
         # keep the last good value warm; on a cold cache return the default
         # WITHOUT caching it, so the next request retries immediately
-        return _cache["assets"] if _cache["assets"] is not None else counts
-    _cache.update(assets_at=time.monotonic(), assets=counts)
+        return slot["assets"] if slot["assets"] is not None else counts
+    slot.update(assets_at=time.monotonic(), assets=counts)
     return counts
 
 
-def _traces_active() -> bool:
+def _traces_active(workspace: WorkspaceContext) -> bool:
     """Transaction Search destination check (30s cache — AWS-backed)."""
-    if _cache["traces"] is not None and time.monotonic() - _cache["traces_at"] < _TTL_SECONDS:
-        return _cache["traces"]
+    slot = _slot(workspace.id)
+    if slot["traces"] is not None and time.monotonic() - slot["traces_at"] < _TTL_SECONDS:
+        return slot["traces"]
     try:
-        dest = default_workspace_context().client("xray")
+        dest = workspace.client("xray")
         response = dest.get_trace_segment_destination()
         active = response.get("Destination") == "CloudWatchLogs" and response.get(
             "Status"
         ) in ("ACTIVE", "PENDING")
     except Exception:
         # cold cache: report False but don't cache it — retry next request
-        return _cache["traces"] if _cache["traces"] is not None else False
-    _cache.update(traces_at=time.monotonic(), traces=active)
+        return slot["traces"] if slot["traces"] is not None else False
+    slot.update(traces_at=time.monotonic(), traces=active)
     return active
 
 
-def _attached_policy_engine_id() -> str:
-    """Read the configured Gateway's live Policy attachment (30s cache)."""
-    gateway_id = get_settings().resources.get("gateway_id")
-    if not gateway_id:
-        return ""
-    if (
-        _cache["policy"] is not None
-        and time.monotonic() - _cache["policy_at"] < _TTL_SECONDS
-    ):
-        return str(_cache["policy"])
-    try:
-        control = control_client()
-        gateway = control.get_gateway(gatewayIdentifier=gateway_id)
-        engine_arn = str(
-            (gateway.get("policyEngineConfiguration") or {}).get("arn") or ""
-        )
-        engine_id = engine_arn.rsplit("/", 1)[-1] if engine_arn else ""
-        if engine_id and policy_api.find_policy_engine(control, engine_id) is None:
-            # The reference outlived the Engine; Policy is not usable.
-            engine_id = ""
-    except Exception:
-        # Keep the last confirmed state warm. A cold failure remains unconfigured
-        # rather than reviving a stale identifier from generated config.
-        return str(_cache["policy"]) if _cache["policy"] is not None else ""
-    _cache.update(policy_at=time.monotonic(), policy=engine_id)
-    return engine_id
-
-
 @router.get("/overview")
-def overview(db: Session = Depends(get_db)) -> dict[str, Any]:
-    resources = get_settings().resources
-    assets = _registry_assets()
-    policy_engine_id = _attached_policy_engine_id()
+def overview(
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    resources = ws.context.resources
+    assets = _registry_assets(ws.context)
+    policy_engine_id = attached_policy_engine_id(control_client(ws.context), ws.context)
 
     day_ago = datetime.now(UTC) - timedelta(hours=24)
     active_sessions = (
-        db.query(ChatSession).filter(ChatSession.last_at >= day_ago).count()
+        db.query(ChatSession)
+        .filter(ChatSession.workspace_id == ws.id, ChatSession.last_at >= day_ago)
+        .count()
     )
 
-    runs = db.query(EvalRun).filter(EvalRun.status == "completed").all()
+    runs = (
+        db.query(EvalRun)
+        .filter(EvalRun.workspace_id == ws.id, EvalRun.status == "completed")
+        .all()
+    )
     scores = [
         s["score"]
         for run in runs
@@ -121,7 +105,7 @@ def overview(db: Session = Depends(get_db)) -> dict[str, Any]:
         "registry": bool(resources.get("registry_id")),
         "policy": bool(policy_engine_id),
         "evaluation": len(runs) > 0,
-        "observability": _traces_active(),
+        "observability": _traces_active(ws.context),
     }
     detail = {
         "gateway": resources.get("gateway_id", ""),

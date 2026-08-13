@@ -4,11 +4,10 @@ Uploads land under agent-skills/{uid8}/{name}/ and NO registry record is
 created (mocked AWS, no live calls)."""
 
 import io
-import types
 import zipfile
 
-import app.routers.agent_skills as attach_router
 from app.services import aws_clients
+from tests.conftest import set_default_resources
 
 SKILL_MD = (
     "---\nname: meeting-summarizer\ndescription: Summarize meetings\n"
@@ -40,10 +39,8 @@ def _zip(name: str = "meeting-summarizer") -> bytes:
 
 
 def _patch_aws(monkeypatch, fake_s3):
-    monkeypatch.setattr(
-        attach_router, "get_settings",
-        lambda: types.SimpleNamespace(resources={"artifacts_bucket": "bkt"}, region="us-west-2"),
-    )
+    # The route reads the bucket off the request's workspace row now.
+    set_default_resources({"artifacts_bucket": "bkt"})
     monkeypatch.setattr(aws_clients, "client", lambda *a, **k: fake_s3)
 
 

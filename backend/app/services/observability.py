@@ -28,7 +28,7 @@ from app.evaluation.models import EvalRun
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.optimization.models import Experiment
 from app.services import memory
-from app.services.workspace import default_workspace_context
+from app.services.workspace import WorkspaceContext
 
 SPANS_LOG_GROUP = "aws/spans"
 RUNTIME_LOG_GROUP_PREFIX = "/aws/bedrock-agentcore/runtimes/"
@@ -105,12 +105,12 @@ def cached(key: str, force: bool, build: Callable[[], dict[str, Any]]) -> dict[s
     return {**value, "cache": {"hit": False, "age_seconds": 0.0}}
 
 
-def logs_client() -> Any:
-    return default_workspace_context().client("logs")
+def logs_client(workspace: WorkspaceContext) -> Any:
+    return workspace.client("logs")
 
 
-def cw_client() -> Any:
-    return default_workspace_context().client("cloudwatch")
+def cw_client(workspace: WorkspaceContext) -> Any:
+    return workspace.client("cloudwatch")
 
 
 # ── Logs Insights runner ────────────────────────────────────────────────────
@@ -155,9 +155,18 @@ def _start_query(
 def run_insights_queries(
     queries: dict[str, str], hours: int, logs: Any = None,
     log_groups: list[str] | None = None,
+    workspace: WorkspaceContext | None = None,
 ) -> dict[str, list[dict[str, str]]]:
-    """Start all queries concurrently, poll each to completion, flatten rows."""
-    logs = logs or logs_client()
+    """Start all queries concurrently, poll each to completion, flatten rows.
+
+    Queries run in the workspace's region — CloudWatch Logs is regional, so a
+    caller must supply either a ``logs`` client or the ``workspace`` to build one
+    from.
+    """
+    if logs is None:
+        if workspace is None:
+            raise ValueError("run_insights_queries needs either logs or workspace")
+        logs = logs_client(workspace)
     end = int(_now())
     start = end - hours * 3600
     query_ids = {
@@ -505,16 +514,22 @@ def categorize_span(name: str, attributes: dict[str, Any] | None = None,
 # ── Agent-name mapper (service.name → platform agent display name) ─────────
 
 
-def build_agent_resolver(db: Session) -> Callable[[str | None], Agent | None]:
+def build_agent_resolver(
+    db: Session, workspace_id: str
+) -> Callable[[str | None], Agent | None]:
     """service.name (from a span) → the Agent row that owns that runtime.
 
     The transcript fallback needs the agent *id* (to build scoped memory actor
     candidates), so the matching lives here and `build_agent_mapper` is a thin
     display wrapper over it — one set of rules for both.
+
+    Only this workspace's agents are candidates: the spans came from its region,
+    and a resource-id match against another environment's row would label a trace
+    with an agent that never produced it.
     """
     rows = (
         db.query(Agent)
-        .filter(Agent.resource_id.isnot(None))
+        .filter(Agent.workspace_id == workspace_id, Agent.resource_id.isnot(None))
         .order_by(Agent.updated_at.asc())
         .all()
     )
@@ -538,8 +553,8 @@ def build_agent_resolver(db: Session) -> Callable[[str | None], Agent | None]:
     return resolve_service
 
 
-def build_agent_mapper(db: Session) -> Callable[[str | None], str]:
-    resolve = build_agent_resolver(db)
+def build_agent_mapper(db: Session, workspace_id: str) -> Callable[[str | None], str]:
+    resolve = build_agent_resolver(db, workspace_id)
 
     def map_service(service: str | None) -> str:
         if not service:
@@ -758,7 +773,9 @@ def _span_log_groups(raw_spans: list[dict[str, Any]]) -> list[str]:
 # ── Metrics (bedrock-agentcore namespace) ───────────────────────────────────
 
 
-def query_token_usage_metrics(hours: int, cw: Any = None) -> list[dict[str, Any]]:
+def query_token_usage_metrics(
+    hours: int, workspace: WorkspaceContext, cw: Any = None
+) -> list[dict[str, Any]]:
     """gen_ai.client.token.usage summed over the range, grouped by model.
 
     Fallback source only: verified live (us-east-1 + us-west-2, 2026-08-11)
@@ -766,7 +783,7 @@ def query_token_usage_metrics(hours: int, cw: Any = None) -> list[dict[str, Any]
     Strands runtimes emit spans but no metric, so span aggregation
     (q_tokens_by_model) is the primary tokens-by-model source.
     """
-    cw = cw or cw_client()
+    cw = cw or cw_client(workspace)
     metrics: list[dict[str, Any]] = []
     for page in cw.get_paginator("list_metrics").paginate(
         Namespace="bedrock-agentcore", MetricName="gen_ai.client.token.usage"
@@ -885,7 +902,7 @@ def _session_row(row: dict[str, str], map_agent: Callable[[str | None], str],
 # ── Public views ────────────────────────────────────────────────────────────
 
 
-def get_dashboard(range_key: str, force: bool = False,
+def get_dashboard(range_key: str, workspace: WorkspaceContext, force: bool = False,
                   logs: Any = None, cw: Any = None) -> dict[str, Any]:
     hours = RANGE_HOURS[range_key]
 
@@ -900,6 +917,7 @@ def get_dashboard(range_key: str, force: bool = False,
             },
             hours,
             logs=logs,
+            workspace=workspace,
         )
         totals = results["totals"][0] if results["totals"] else {}
         distincts = results["distincts"][0] if results["distincts"] else {}
@@ -911,7 +929,7 @@ def get_dashboard(range_key: str, force: bool = False,
         tokens_by_model = _tokens_by_model_rows(results.get("tokens_by_model") or [])
         if not tokens_by_model:
             try:
-                tokens_by_model = query_token_usage_metrics(hours, cw=cw)
+                tokens_by_model = query_token_usage_metrics(hours, workspace, cw=cw)
             except ClientError:
                 # Metrics are one tile/chart — a CloudWatch failure must not
                 # take down the dashboard when the Logs Insights data succeeded.
@@ -966,34 +984,41 @@ def get_dashboard(range_key: str, force: bool = False,
             "top_tools": tools,
         }
 
-    return cached(f"dashboard:{range_key}", force, build)
+    # Every cache key carries the workspace: the same range in two environments
+    # is two different answers.
+    return cached(f"dashboard:{workspace.id}:{range_key}", force, build)
 
 
-def list_traces(range_key: str, db: Session, force: bool = False,
-                logs: Any = None) -> dict[str, Any]:
+def list_traces(range_key: str, db: Session, workspace: WorkspaceContext,
+                force: bool = False, logs: Any = None) -> dict[str, Any]:
     hours = RANGE_HOURS[range_key]
 
     def build() -> dict[str, Any]:
         results = run_insights_queries(
-            {"aggregates": q_trace_aggregates(), "roots": q_root_spans()}, hours, logs=logs
+            {"aggregates": q_trace_aggregates(), "roots": q_root_spans()},
+            hours,
+            logs=logs,
+            workspace=workspace,
         )
         roots = {row.get("traceId"): row for row in results["roots"]}
-        map_agent = build_agent_mapper(db)
+        map_agent = build_agent_mapper(db, workspace.id)
         rows = [
             _trace_row(agg, roots.get(agg.get("traceId")), map_agent)
             for agg in results["aggregates"]
         ]
         return {"range": range_key, "traces": rows, "count": len(rows), "limit": TRACE_LIMIT}
 
-    return cached(f"traces:{range_key}", force, build)
+    return cached(f"traces:{workspace.id}:{range_key}", force, build)
 
 
-def get_trace(trace_id: str, range_key: str, db: Session, force: bool = False,
-              logs: Any = None) -> dict[str, Any]:
+def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceContext,
+              force: bool = False, logs: Any = None) -> dict[str, Any]:
     hours = RANGE_HOURS[range_key]
 
     def build() -> dict[str, Any]:
-        results = run_insights_queries({"spans": q_trace_spans(trace_id)}, hours, logs=logs)
+        results = run_insights_queries(
+            {"spans": q_trace_spans(trace_id)}, hours, logs=logs, workspace=workspace
+        )
         raw_spans = []
         for row in results["spans"]:
             try:
@@ -1010,7 +1035,7 @@ def get_trace(trace_id: str, range_key: str, db: Session, force: bool = False,
             try:
                 event_rows = run_insights_queries(
                     {"events": q_trace_message_events(trace_id)},
-                    hours, logs=logs, log_groups=log_groups,
+                    hours, logs=logs, log_groups=log_groups, workspace=workspace,
                 )["events"]
                 messages_by_span = parse_message_events(event_rows)
             except Exception:  # best-effort enrichment — never fail the trace
@@ -1046,7 +1071,7 @@ def get_trace(trace_id: str, range_key: str, db: Session, force: bool = False,
              if s["attributes"].get("session.id")),
             None,
         )
-        map_agent = build_agent_mapper(db)
+        map_agent = build_agent_mapper(db, workspace.id)
         root = tree["tree"][0] if tree["tree"] else None
         return {
             "trace_id": trace_id,
@@ -1068,28 +1093,40 @@ def get_trace(trace_id: str, range_key: str, db: Session, force: bool = False,
             "spans": spans,
         }
 
-    return cached(f"trace:{trace_id}:{range_key}", force, build)
+    return cached(f"trace:{workspace.id}:{trace_id}:{range_key}", force, build)
 
 
-def list_sessions(range_key: str, db: Session, force: bool = False,
-                  logs: Any = None) -> dict[str, Any]:
+def list_sessions(range_key: str, db: Session, workspace: WorkspaceContext,
+                  force: bool = False, logs: Any = None) -> dict[str, Any]:
     hours = RANGE_HOURS[range_key]
+    workspace_id = workspace.id
 
     def build() -> dict[str, Any]:
-        results = run_insights_queries({"sessions": q_session_aggregates()}, hours, logs=logs)
-        map_agent = build_agent_mapper(db)
-        platform_ids = {row.session_id for row in db.query(ChatSession.session_id).all()}
+        results = run_insights_queries(
+            {"sessions": q_session_aggregates()}, hours, logs=logs, workspace=workspace
+        )
+        map_agent = build_agent_mapper(db, workspace_id)
+        # "Is this one of our chat sessions" is answered per workspace: a bare
+        # session_id match would claim another environment's session as ours.
+        platform_ids = {
+            row.session_id
+            for row in db.query(ChatSession.session_id)
+            .filter(ChatSession.workspace_id == workspace_id)
+            .all()
+        }
         rows = [_session_row(r, map_agent, platform_ids) for r in results["sessions"]]
         return {"range": range_key, "sessions": rows, "count": len(rows),
                 "limit": SESSION_LIMIT}
 
-    return cached(f"sessions:{range_key}", force, build)
+    return cached(f"sessions:{workspace_id}:{range_key}", force, build)
 
 
-def _agent_from_traces(db: Session, traces: list[dict[str, Any]]) -> Agent | None:
+def _agent_from_traces(
+    db: Session, workspace_id: str, traces: list[dict[str, Any]]
+) -> Agent | None:
     """The agent behind a session's spans — the only agent signal a session with
     no platform ledger row has."""
-    resolve = build_agent_resolver(db)
+    resolve = build_agent_resolver(db, workspace_id)
     for trace in traces:
         agent = resolve(trace.get("service"))
         if agent is not None:
@@ -1097,7 +1134,8 @@ def _agent_from_traces(db: Session, traces: list[dict[str, Any]]) -> Agent | Non
     return None
 
 
-def get_session(session_id: str, range_key: str, db: Session, force: bool = False,
+def get_session(session_id: str, range_key: str, db: Session,
+                workspace: WorkspaceContext, force: bool = False,
                 logs: Any = None) -> dict[str, Any]:
     hours = RANGE_HOURS[range_key]
 
@@ -1106,9 +1144,10 @@ def get_session(session_id: str, range_key: str, db: Session, force: bool = Fals
             {"aggregates": q_trace_aggregates(session_id=session_id), "roots": q_root_spans()},
             hours,
             logs=logs,
+            workspace=workspace,
         )
         roots = {row.get("traceId"): row for row in results["roots"]}
-        map_agent = build_agent_mapper(db)
+        map_agent = build_agent_mapper(db, workspace.id)
         rows = [
             _trace_row(agg, roots.get(agg.get("traceId")), map_agent)
             for agg in results["aggregates"]
@@ -1136,13 +1175,16 @@ def get_session(session_id: str, range_key: str, db: Session, force: bool = Fals
             "traces": rows,
         }
 
-    payload = cached(f"session:{session_id}:{range_key}", force, build)
+    payload = cached(f"session:{workspace.id}:{session_id}:{range_key}", force, build)
     # Transcript is attached outside the cache: memory errors must degrade to
     # {available: false} on every request, never poison the cached span data.
     # It runs AFTER the trace query because sessions with no ledger row carry
     # their only agent signal in the spans (service.name → Agent).
     transcript = session_transcript(
-        db, session_id, agent=_agent_from_traces(db, payload["traces"])
+        db,
+        session_id,
+        workspace,
+        agent=_agent_from_traces(db, workspace.id, payload["traces"]),
     )
     return {**payload, "transcript": transcript}
 
@@ -1181,11 +1223,12 @@ def _event_iso(value: Any) -> str:
 
 
 def _chat_ledger_turns(
-    db: Session, agent_id: str, session_id: str
+    db: Session, workspace_id: str, agent_id: str, session_id: str
 ) -> list[dict[str, Any]]:
     rows = (
         db.query(ChatMessage)
         .filter(
+            ChatMessage.workspace_id == workspace_id,
             ChatMessage.agent_id == agent_id,
             ChatMessage.session_id == session_id,
             ChatMessage.role.in_(("user", "agent")),
@@ -1204,12 +1247,20 @@ def _chat_ledger_turns(
     ]
 
 
-def _eval_run_for_session(db: Session, session_id: str) -> EvalRun | None:
+def _eval_run_for_session(
+    db: Session, workspace_id: str, session_id: str
+) -> EvalRun | None:
     """The eval run that PRODUCED this session, if any. Insights re-runs reuse
     an earlier run's session_ids, so the oldest match is the creator (its
     created_at anchors the content-log time window). session_ids is a JSON
     column, so membership is checked in Python over recent runs (small table)."""
-    rows = db.query(EvalRun).order_by(EvalRun.created_at.desc()).limit(500).all()
+    rows = (
+        db.query(EvalRun)
+        .filter(EvalRun.workspace_id == workspace_id)
+        .order_by(EvalRun.created_at.desc())
+        .limit(500)
+        .all()
+    )
     matches = [r for r in rows if session_id in (r.session_ids or [])]
     return matches[-1] if matches else None  # desc scan → last match is the oldest
 
@@ -1268,6 +1319,7 @@ def eval_turns_from_content_logs(
     log_group: str,
     session_id: str,
     started_at: datetime | None,
+    workspace: WorkspaceContext,
     logs: Any = None,
 ) -> list[dict[str, Any]]:
     """USER/ASSISTANT turns for an eval session, rebuilt from content logs.
@@ -1279,7 +1331,7 @@ def eval_turns_from_content_logs(
     startTime (the run's creation time) is load-bearing — without it the scan
     exhausts its page budget on old log data and returns nothing.
     """
-    logs = logs or logs_client()
+    logs = logs or logs_client(workspace)
     started = started_at or datetime.now(UTC)
     if started.tzinfo is None:
         started = started.replace(tzinfo=UTC)
@@ -1366,11 +1418,19 @@ def _turns_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 NOT_PLATFORM_SESSION = {"available": False, "reason": "not_platform_session"}
 
 
-def _experiment_for_session(db: Session, session_id: str) -> Experiment | None:
+def _experiment_for_session(
+    db: Session, workspace_id: str, session_id: str
+) -> Experiment | None:
     """The experiment whose gateway traffic minted this session id, if still
     recorded. Stepwise re-runs OVERWRITE artifacts["traffic"], so a miss means
     "not attributable", never "not experiment traffic" — labeling only."""
-    rows = db.query(Experiment).order_by(Experiment.created_at.desc()).limit(200).all()
+    rows = (
+        db.query(Experiment)
+        .filter(Experiment.workspace_id == workspace_id)
+        .order_by(Experiment.created_at.desc())
+        .limit(200)
+        .all()
+    )
     for experiment in rows:
         traffic = (experiment.artifacts or {}).get("traffic")
         if isinstance(traffic, dict) and session_id in (traffic.get("session_ids") or []):
@@ -1379,7 +1439,7 @@ def _experiment_for_session(db: Session, session_id: str) -> Experiment | None:
 
 
 def _external_transcript(
-    db: Session, session_id: str, agent: Agent | None
+    db: Session, session_id: str, workspace: WorkspaceContext, agent: Agent | None
 ) -> dict[str, Any]:
     """Transcript for a session that is in NO platform ledger — experiment
     gateway traffic, a `/v1` caller, or any other direct runtime invoke.
@@ -1390,16 +1450,18 @@ def _external_transcript(
     """
     try:
         candidates = (
-            memory.list_actor_ids(prefix=f"{agent.id}{memory.SCOPE_SEP}")
+            memory.list_actor_ids(workspace, prefix=f"{agent.id}{memory.SCOPE_SEP}")
             if agent is not None
             else []
         )
         candidates.append("default")
         for actor_id in candidates:
-            turns = _turns_from_events(memory.list_events(actor_id, session_id, 100))
+            turns = _turns_from_events(
+                memory.list_events(workspace, actor_id, session_id, 100)
+            )
             if not turns:
                 continue
-            experiment = _experiment_for_session(db, session_id)
+            experiment = _experiment_for_session(db, workspace.id, session_id)
             return {
                 "available": True,
                 "actor_id": actor_id,
@@ -1424,14 +1486,24 @@ def _external_transcript(
 
 
 def session_transcript(
-    db: Session, session_id: str, agent: Agent | None = None
+    db: Session,
+    session_id: str,
+    workspace: WorkspaceContext,
+    agent: Agent | None = None,
 ) -> dict[str, Any]:
-    row = db.query(ChatSession).filter(ChatSession.session_id == session_id).first()
-    run = None if row else _eval_run_for_session(db, session_id)
+    row = (
+        db.query(ChatSession)
+        .filter(
+            ChatSession.workspace_id == workspace.id,
+            ChatSession.session_id == session_id,
+        )
+        .first()
+    )
+    run = None if row else _eval_run_for_session(db, workspace.id, session_id)
     if row is None and run is None:
         # Not chat, not eval — try memory directly (`agent` comes from the
         # session's traces, which is the only agent signal such sessions carry).
-        return _external_transcript(db, session_id, agent)
+        return _external_transcript(db, session_id, workspace, agent)
     if row is not None:
         agent = db.get(Agent, row.agent_id)
         # Memory is written under an agent-scoped actor (memory.scoped_actor);
@@ -1448,14 +1520,14 @@ def session_transcript(
         agent_id, actor_display = run.agent_id, "default"
     memory_error = None
     try:
-        events = memory.list_events(mem_actor, session_id, max_results=100)
+        events = memory.list_events(workspace, mem_actor, session_id, max_results=100)
     except Exception as exc:
         memory_error = exc
         events = []  # chat may fall back to its ledger; eval may use content logs
     turns = _turns_from_events(events)
     origin = "memory"
     if row is not None:
-        ledger_turns = _chat_ledger_turns(db, row.agent_id, session_id)
+        ledger_turns = _chat_ledger_turns(db, workspace.id, row.agent_id, session_id)
         memory_signature = [(turn["role"], turn["text"]) for turn in turns]
         ledger_signature = [(turn["role"], turn["text"]) for turn in ledger_turns]
         if ledger_turns and ledger_signature != memory_signature:
@@ -1481,7 +1553,9 @@ def session_transcript(
         and agent.resource_id
     ):
         log_group = f"/aws/bedrock-agentcore/runtimes/{agent.resource_id}-DEFAULT"
-        turns = eval_turns_from_content_logs(log_group, session_id, run.created_at)
+        turns = eval_turns_from_content_logs(
+            log_group, session_id, run.created_at, workspace
+        )
         if turns:
             origin = "logs"
     # Long-term records only make sense for chat sessions — eval traffic all
@@ -1491,7 +1565,7 @@ def session_transcript(
     if row is not None:
         try:
             long_term = sum(
-                len(memory.list_records(f"{ns}/{mem_actor}", max_results=20))
+                len(memory.list_records(workspace, f"{ns}/{mem_actor}", max_results=20))
                 for ns in ("/preferences", "/facts")
             )
         except Exception:

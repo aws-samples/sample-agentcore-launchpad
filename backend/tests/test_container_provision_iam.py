@@ -4,6 +4,8 @@
 from app.deployer import container as c
 from app.schemas.agent import AgentSpec
 
+from .conftest import ws_ctx
+
 S3_AP = "arn:aws:s3files:us-west-2:111122223333:file-system/fs-abc/access-point/ap-1"
 S3_AP2 = "arn:aws:s3files:us-west-2:111122223333:file-system/fs-abc/access-point/ap-2"
 EFS_AP = "arn:aws:elasticfilesystem:us-west-2:111122223333:access-point/fsap-0123"
@@ -49,7 +51,7 @@ def test_delete_agent_resources_drops_the_stale_shared_role_policy(monkeypatch):
         def delete_agent_runtime(self, agentRuntimeId):
             pass
 
-    monkeypatch.setattr(c, "control_client", lambda: StubControlClient())
+    monkeypatch.setattr(c, "control_client", lambda _ws=None: StubControlClient())
     monkeypatch.setattr(c.rt, "delete_runtime", lambda cl, rid: None)
 
     class Settings:
@@ -61,6 +63,6 @@ def test_delete_agent_resources_drops_the_stale_shared_role_policy(monkeypatch):
 
     monkeypatch.setattr(c, "get_settings", lambda: Settings())
     iam = StubIam()
-    c.delete_agent_resources(AgentRow(), iam_client=iam)
+    c.delete_agent_resources(AgentRow(), ws_ctx(Settings.resources), iam_client=iam)
     (call,) = iam.delete_calls
     assert call == {"RoleName": "launchpad-base", "PolicyName": "launchpad-fs-fs-agent"}

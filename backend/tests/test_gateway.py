@@ -9,13 +9,17 @@ import httpx
 import pytest
 from botocore.exceptions import ClientError
 
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError
 from app.deployer.harness import build_create_params
+from app.models.ledger import Workspace
 from app.routers import tools as tools_router
+from app.routers.workspaces import WORKSPACE_HEADER
 from app.schemas.agent import AgentSpec
 from app.services import aws_clients, mcp_client
 from app.services import gateway_bootstrap as gb
 from app.services.agentcore.harness import user_authenticated_tools
+from tests.conftest import set_default_resources, ws_ctx
 
 GW_ARN = "arn:aws:bedrock-agentcore:us-west-2:111:gateway/launchpad-gw-abc"
 OAUTH_ARN = (
@@ -230,13 +234,8 @@ def test_mcp_cognito_auth_rejection_becomes_app_error(monkeypatch):
         },
         "InitiateAuth",
     )
-    monkeypatch.setattr(
-        mcp_client,
-        "get_settings",
-        lambda: SimpleNamespace(
-            region="us-west-2",
-            resources={"user_pool_client_id": "client-id"},
-        ),
+    set_default_resources(
+        {"user_pool_client_id": "client-id", "gateway_url": "https://gw.example/mcp"}
     )
     monkeypatch.setattr(
         mcp_client,
@@ -247,7 +246,7 @@ def test_mcp_cognito_auth_rejection_becomes_app_error(monkeypatch):
     mcp_client._token_cache.clear()
 
     with pytest.raises(AppError) as err:
-        mcp_client.get_cognito_token()
+        mcp_client.get_cognito_token(ws_ctx({"user_pool_client_id": "client-id"}))
 
     assert err.value.code == "gateway.credentials_rejected"
     assert err.value.status_code == 503
@@ -255,7 +254,7 @@ def test_mcp_cognito_auth_rejection_becomes_app_error(monkeypatch):
 
 
 def test_tool_catalog_degrades_when_gateway_credentials_are_rejected(client, monkeypatch):
-    def rejected():
+    def rejected(_ws):
         raise AppError(
             "gateway.credentials_rejected",
             "demo user credentials were rejected",
@@ -263,7 +262,7 @@ def test_tool_catalog_degrades_when_gateway_credentials_are_rejected(client, mon
         )
 
     monkeypatch.setattr(mcp_client, "tools_list", rejected)
-    tools_router._cache.update(tools=None, at=0.0)
+    tools_router._cache.clear()
 
     response = client.get("/api/tools?refresh=true")
 
@@ -341,6 +340,58 @@ def test_browser_demo_retains_live_session_until_stopped(client, monkeypatch):
     assert browser_client.stopped is True
 
 
+def test_a_browser_demo_session_is_only_stoppable_by_the_workspace_that_started_it(client):
+    """The live-session dict is process-global, but each entry names the workspace
+    whose account/region the browser runs in. Another workspace's DELETE answers
+    exactly like an expired session — the console stops a possibly-expired previous
+    session before starting the next, so "already gone" has to stay a success, and a
+    404 would make a foreign id distinguishable from a missing one.
+    """
+    class FakeBrowserClient:
+        def __init__(self):
+            self.stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+    other = "acct-usw1"
+    db = SessionLocal()
+    try:
+        db.add(
+            Workspace(
+                id=other, name=other, account_id="444455556666", region="us-west-1",
+                bootstrap_status="ready", resources={},
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+    browser_client = FakeBrowserClient()
+    session_id = "01KXNH955ZJWTEVR5PFHGE827F"
+    tools_router._browser_demo_sessions[session_id] = tools_router._BrowserDemoSession(
+        client=browser_client,
+        browser_identifier="aws.browser.v1",
+        profile_identifier=None,
+        save_profile=False,
+        workspace_id=DEFAULT_WORKSPACE_ID,
+    )
+    try:
+        foreign = client.delete(
+            f"/api/demos/browser/{session_id}", headers={WORKSPACE_HEADER: other}
+        )
+
+        assert foreign.status_code == 200
+        assert foreign.json()["stopped"] is False
+        assert browser_client.stopped is False  # still running, still tracked
+
+        owner = client.delete(f"/api/demos/browser/{session_id}")
+
+        assert owner.json()["stopped"] is True
+        assert browser_client.stopped is True
+    finally:
+        tools_router._browser_demo_sessions.pop(session_id, None)
+
+
 def test_browser_demo_options_lists_web_bot_auth_browsers_and_profiles(
     client,
     monkeypatch,
@@ -386,7 +437,7 @@ def test_browser_demo_options_lists_web_bot_auth_browsers_and_profiles(
             assert browserId == "signed-browser-123"
             return {"status": "READY", "browserSigning": {"enabled": True}}
 
-    monkeypatch.setattr(tools_router, "control_client", lambda: FakeControlClient())
+    monkeypatch.setattr(tools_router, "control_client", lambda _ws=None: FakeControlClient())
 
     response = client.get("/api/demos/browser/options")
 
@@ -467,7 +518,7 @@ def test_browser_demo_uses_web_bot_auth_browser_and_saves_profile(
     chromium.connect_over_cdp.return_value = remote_browser
     playwright = SimpleNamespace(chromium=chromium)
 
-    monkeypatch.setattr(tools_router, "control_client", lambda: FakeControlClient())
+    monkeypatch.setattr(tools_router, "control_client", lambda _ws=None: FakeControlClient())
     monkeypatch.setattr("bedrock_agentcore.tools.BrowserClient", FakeBrowserClient)
     monkeypatch.setattr(
         "playwright.sync_api.sync_playwright",

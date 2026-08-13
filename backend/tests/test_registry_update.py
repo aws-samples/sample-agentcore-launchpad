@@ -5,7 +5,6 @@ are mocked; no live calls."""
 
 import io
 import json
-import types
 import zipfile
 
 import pytest
@@ -15,6 +14,10 @@ import app.services.registry_console as console_mod
 from app.core.errors import AppError
 from app.services import aws_clients
 from app.services import skill_ingest as si
+
+from .conftest import ws_ctx
+
+WS = ws_ctx({"artifacts_bucket": "bkt"})
 
 SKILL_MD = (
     "---\nname: meeting-summarizer\ndescription: Summarize meetings\n"
@@ -113,12 +116,8 @@ def _mcp_record(*, status="DRAFT", version="1.0.0", name="my-mcp"):
 
 
 def _patch_update_aws(monkeypatch, fake_s3, record) -> dict:
-    monkeypatch.setattr(console_mod, "control_client", lambda: object())
-    monkeypatch.setattr(console_mod, "_registry_id", lambda: "reg")
-    monkeypatch.setattr(
-        console_mod, "get_settings",
-        lambda: types.SimpleNamespace(resources={"artifacts_bucket": "bkt"}, region="us-west-2"),
-    )
+    monkeypatch.setattr(console_mod, "control_client", lambda _ws=None: object())
+    monkeypatch.setattr(console_mod, "_registry_id", lambda _ws: "reg")
     monkeypatch.setattr(aws_clients, "client", lambda *a, **k: fake_s3)
     monkeypatch.setattr(console_mod.reg, "get_record", lambda c, r, rid: record)
     captured: dict = {}
@@ -153,7 +152,7 @@ def test_update_description_only_does_not_bump(monkeypatch):
     record = _skill_record()
     captured = _patch_update_aws(monkeypatch, fake, record)
 
-    out = console_mod.update_record("r1", description="a fresh description")
+    out = console_mod.update_record("r1", WS, description="a fresh description")
 
     assert out["status"] == "DRAFT"
     assert captured["record_version"] is None  # metadata-only → no version bump
@@ -169,7 +168,7 @@ def test_update_mcp_url_rebuilds_descriptor_and_bumps(monkeypatch):
     record = _mcp_record(version="1.0.0")
     captured = _patch_update_aws(monkeypatch, fake, record)
 
-    console_mod.update_record("m1", url="https://new.example.com/mcp")
+    console_mod.update_record("m1", WS, url="https://new.example.com/mcp")
 
     assert captured["record_version"] == "1.1.0"
     assert captured["descriptor_type"] == "MCP"
@@ -193,7 +192,7 @@ def test_update_skill_md_overwrites_only_skill_md(monkeypatch):
     captured = _patch_update_aws(monkeypatch, fake, record)
     new_md = "---\nname: meeting-summarizer\nversion: 0.9.0\n---\n# new body\n"
 
-    console_mod.update_record("r1", skill_md=new_md)
+    console_mod.update_record("r1", WS, skill_md=new_md)
 
     # ONLY SKILL.md is written — nothing deleted, support files untouched
     assert fake.ops == [("put", "skills/meeting-summarizer/SKILL.md")]
@@ -214,7 +213,7 @@ def test_update_skill_md_keeps_old_version_when_frontmatter_lacks_it(monkeypatch
     record = _skill_record(version="1.0.0")  # definition.version == "0.3.0"
     captured = _patch_update_aws(monkeypatch, fake, record)
 
-    console_mod.update_record("r1", skill_md="---\nname: meeting-summarizer\n---\n# x")
+    console_mod.update_record("r1", WS, skill_md="---\nname: meeting-summarizer\n---\n# x")
 
     assert _definition_from(captured)["version"] == "0.3.0"  # fell back to old
 
@@ -233,7 +232,7 @@ def test_update_skill_md_legacy_definition_without_files_source(monkeypatch):
     captured = _patch_update_aws(monkeypatch, fake, record)
 
     console_mod.update_record(
-        "r1", skill_md="---\nname: meeting-summarizer\nversion: 2.0.0\n---\n# x"
+        "r1", WS, skill_md="---\nname: meeting-summarizer\nversion: 2.0.0\n---\n# x"
     )
 
     assert fake.ops == [("put", "skills/meeting-summarizer/SKILL.md")]
@@ -254,7 +253,7 @@ def test_update_skill_md_unparseable_definition_rebuilds_from_scratch(monkeypatc
     captured = _patch_update_aws(monkeypatch, fake, record)
 
     console_mod.update_record(
-        "r1", skill_md="---\nname: meeting-summarizer\nversion: 2.0.0\n---\n# x"
+        "r1", WS, skill_md="---\nname: meeting-summarizer\nversion: 2.0.0\n---\n# x"
     )
 
     assert fake.ops == [("put", "skills/meeting-summarizer/SKILL.md")]
@@ -269,7 +268,7 @@ def test_update_skill_md_and_description_together(monkeypatch):
     captured = _patch_update_aws(monkeypatch, fake, record)
 
     console_mod.update_record(
-        "r1", description="edited desc",
+        "r1", WS, description="edited desc",
         skill_md="---\nname: meeting-summarizer\nversion: 1.2.0\n---\n# x",
     )
 
@@ -283,7 +282,7 @@ def test_update_skill_md_non_semver_current_version_resets_bump(monkeypatch):
     record = _skill_record(version="weird")
     captured = _patch_update_aws(monkeypatch, fake, record)
 
-    console_mod.update_record("r1", skill_md="---\nname: meeting-summarizer\n---\n# x")
+    console_mod.update_record("r1", WS, skill_md="---\nname: meeting-summarizer\n---\n# x")
 
     assert captured["record_version"] == "1.1.0"  # _bump_minor resets unparseable
 
@@ -294,7 +293,7 @@ def test_update_skill_md_oversize_422(monkeypatch):
     _patch_update_aws(monkeypatch, fake, record)
 
     with pytest.raises(AppError) as exc:
-        console_mod.update_record("r1", skill_md="x" * (si.SKILL_MD_MAX_BYTES + 1))
+        console_mod.update_record("r1", WS, skill_md="x" * (si.SKILL_MD_MAX_BYTES + 1))
     assert exc.value.status_code == 422
     assert exc.value.code == "registry.skill_invalid"
     assert fake.ops == []  # nothing written when the content is oversized
@@ -312,7 +311,7 @@ def test_update_bundle_replace_swaps_prefix_and_files(monkeypatch):
 
     bundle = si.bundle_from_zip(_multifile_zip())
     try:
-        console_mod.update_record("r1", bundle=bundle)
+        console_mod.update_record("r1", WS, bundle=bundle)
     finally:
         bundle.close()
 
@@ -334,7 +333,7 @@ def test_update_deprecated_record_400(monkeypatch):
     record = _skill_record(status="DEPRECATED")
     _patch_update_aws(monkeypatch, FakeS3(), record)
     with pytest.raises(AppError) as exc:
-        console_mod.update_record("r1", description="x")
+        console_mod.update_record("r1", WS, description="x")
     assert exc.value.status_code == 400
     assert exc.value.code == "registry.not_editable"
 
@@ -344,7 +343,7 @@ def test_update_a2a_record_400(monkeypatch):
               "descriptorType": "A2A", "recordVersion": "1.0.0", "descriptors": {}}
     _patch_update_aws(monkeypatch, FakeS3(), record)
     with pytest.raises(AppError) as exc:
-        console_mod.update_record("a1", description="x")
+        console_mod.update_record("a1", WS, description="x")
     assert exc.value.status_code == 400
     assert exc.value.code == "registry.not_editable"
 
@@ -366,7 +365,7 @@ def test_put_skill_md_and_staging_conflict_400(client):
 
 def test_put_url_on_skill_record_type_mismatch_400(client, monkeypatch):
     monkeypatch.setattr(registry_router.console, "console_get",
-                        lambda rid: {"descriptorType": "AGENT_SKILLS"})
+                        lambda _ws, rid: {"descriptorType": "AGENT_SKILLS"})
     res = client.put("/api/registry/records/r1", json={"url": "https://x.example.com"})
     assert res.status_code == 400
     assert res.json()["code"] == "registry.field_type_mismatch"
@@ -374,7 +373,7 @@ def test_put_url_on_skill_record_type_mismatch_400(client, monkeypatch):
 
 def test_put_skill_md_on_mcp_record_type_mismatch_400(client, monkeypatch):
     monkeypatch.setattr(registry_router.console, "console_get",
-                        lambda rid: {"descriptorType": "MCP"})
+                        lambda _ws, rid: {"descriptorType": "MCP"})
     res = client.put("/api/registry/records/m1", json={"skill_md": "x"})
     assert res.status_code == 400
     assert res.json()["code"] == "registry.field_type_mismatch"
@@ -382,7 +381,7 @@ def test_put_skill_md_on_mcp_record_type_mismatch_400(client, monkeypatch):
 
 def test_put_bad_url_scheme_400(client, monkeypatch):
     monkeypatch.setattr(registry_router.console, "console_get",
-                        lambda rid: {"descriptorType": "MCP"})
+                        lambda _ws, rid: {"descriptorType": "MCP"})
     res = client.put("/api/registry/records/m1", json={"url": "ftp://x"})
     assert res.status_code == 400
     assert res.json()["code"] == "registry.invalid_url"
@@ -390,7 +389,7 @@ def test_put_bad_url_scheme_400(client, monkeypatch):
 
 def test_put_unknown_staging_410(client, monkeypatch):
     monkeypatch.setattr(registry_router.console, "console_get",
-                        lambda rid: {"descriptorType": "AGENT_SKILLS"})
+                        lambda _ws, rid: {"descriptorType": "AGENT_SKILLS"})
     res = client.put("/api/registry/records/r1",
                      json={"staging_id": "does-not-exist"})
     assert res.status_code == 410
@@ -409,7 +408,7 @@ def _stage_zip(client):
 
 def test_put_staging_index_out_of_range_400(client, monkeypatch):
     monkeypatch.setattr(registry_router.console, "console_get",
-                        lambda rid: {"descriptorType": "AGENT_SKILLS"})
+                        lambda _ws, rid: {"descriptorType": "AGENT_SKILLS"})
     sid = _stage_zip(client)  # single-skill zip → only index 0 exists
     res = client.put("/api/registry/records/r1",
                      json={"staging_id": sid, "index": 5})
@@ -420,10 +419,10 @@ def test_put_staging_index_out_of_range_400(client, monkeypatch):
 
 def test_put_staging_bundle_consumed_on_success(client, monkeypatch):
     monkeypatch.setattr(registry_router.console, "console_get",
-                        lambda rid: {"descriptorType": "AGENT_SKILLS"})
+                        lambda _ws, rid: {"descriptorType": "AGENT_SKILLS"})
     seen = {}
 
-    def fake_update(rid, *, description=None, url=None, skill_md=None, bundle=None):
+    def fake_update(rid, _ws, *, description=None, url=None, skill_md=None, bundle=None):
         seen["files"] = bundle.files if bundle else None
         return {"recordId": rid, "name": "s", "descriptorType": "AGENT_SKILLS",
                 "status": "DRAFT", "recordVersion": "1.1.0"}
@@ -439,9 +438,9 @@ def test_put_staging_bundle_consumed_on_success(client, monkeypatch):
 
 def test_put_staging_bundle_kept_on_failure(client, monkeypatch):
     monkeypatch.setattr(registry_router.console, "console_get",
-                        lambda rid: {"descriptorType": "AGENT_SKILLS"})
+                        lambda _ws, rid: {"descriptorType": "AGENT_SKILLS"})
 
-    def boom(rid, **kwargs):
+    def boom(rid, _ws, **kwargs):
         raise AppError("registry.skill_invalid", "bad bundle", status_code=422)
 
     monkeypatch.setattr(registry_router.console, "update_record", boom)
@@ -453,10 +452,10 @@ def test_put_staging_bundle_kept_on_failure(client, monkeypatch):
 
 def test_put_returns_record_out_shape(client, monkeypatch):
     monkeypatch.setattr(registry_router.console, "console_get",
-                        lambda rid: {"descriptorType": "AGENT_SKILLS"})
+                        lambda _ws, rid: {"descriptorType": "AGENT_SKILLS"})
     monkeypatch.setattr(
         registry_router.console, "update_record",
-        lambda rid, **k: {"recordId": rid, "name": "meeting-summarizer",
+        lambda rid, _ws, **k: {"recordId": rid, "name": "meeting-summarizer",
                           "descriptorType": "AGENT_SKILLS", "status": "DRAFT",
                           "recordVersion": "1.1.0", "description": "d"},
     )

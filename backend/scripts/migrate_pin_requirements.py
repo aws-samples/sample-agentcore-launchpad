@@ -64,6 +64,7 @@ def _report_skill_records() -> int:
     """List git skill records lacking a commit. Returns the count."""
     from app.services.agentcore import registry as reg
     from app.services.agentcore.client import registry_control_client
+    from app.services.workspace import default_workspace_context
 
     settings = get_settings()
     registry_id = settings.resources.get("registry_id")
@@ -72,7 +73,7 @@ def _report_skill_records() -> int:
               "--skip-registry")
         return 0
 
-    client = registry_control_client()
+    client = registry_control_client(default_workspace_context())
     # ListRegistryRecords returns descriptors as null, so each record has to be
     # fetched to see its stored source.
     summaries = reg.list_records(client, registry_id, descriptor_type="AGENT_SKILLS")

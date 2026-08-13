@@ -11,14 +11,17 @@ lever is applied consistently on every write and read boundary.
 
 import app.routers.chat as chat_router
 import app.services.memory as memory_service
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent, ChatSession
 from app.services.memory import scoped_actor
+
+from .conftest import ws_ctx
 
 
 def make_active_agent(name="mem-agent") -> str:
     db = SessionLocal()
     agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
         name=name, method="zip_runtime", status="active",
         arn="arn:aws:bedrock-agentcore:us-west-2:1:runtime/x", spec={"name": name},
     )
@@ -43,7 +46,7 @@ def test_chat_write_passes_scoped_actor_but_ledger_keeps_human(client, monkeypat
     agent_id = make_active_agent(name="mem-write")
     captured: dict[str, str] = {}
 
-    def fake_stream(agent, prompt, session_id=None, actor_id="river"):
+    def fake_stream(agent, prompt, session_id=None, actor_id="river", **_kw):
         captured["actor_id"] = actor_id
         yield {"event": "meta",
                "data": {"session_id": "s" * 40, "agent": agent.name, "mode": "buffered"}}
@@ -67,6 +70,7 @@ def test_existing_session_keeps_original_actor_partition(client, monkeypatch):
     db = SessionLocal()
     db.add(
         ChatSession(
+            workspace_id=DEFAULT_WORKSPACE_ID,
             agent_id=agent_id,
             session_id=session_id,
             actor_id="runtime-diagnostic",
@@ -76,7 +80,7 @@ def test_existing_session_keeps_original_actor_partition(client, monkeypatch):
     db.close()
     captured: dict[str, str] = {}
 
-    def fake_stream(agent, prompt, session_id=None, actor_id="river"):
+    def fake_stream(agent, prompt, session_id=None, actor_id="river", **_kw):
         captured["actor_id"] = actor_id
         yield {
             "event": "meta",
@@ -95,7 +99,7 @@ def test_existing_session_keeps_original_actor_partition(client, monkeypatch):
 
     summary_actor: dict[str, str] = {}
 
-    def fake_summary(actor_id, requested_session_id):
+    def fake_summary(_ws, actor_id, requested_session_id):
         summary_actor["actor_id"] = actor_id
         assert requested_session_id == session_id
         return {"event_count": 0, "events": [], "records": []}
@@ -113,7 +117,7 @@ def test_session_memory_read_uses_same_scoped_actor(client, monkeypatch):
     agent_id = make_active_agent(name="mem-read")
     captured: dict[str, str] = {}
 
-    def fake_summary(actor_id, session_id):
+    def fake_summary(_ws, actor_id, session_id):
         captured["actor_id"] = actor_id
         return {"event_count": 0, "events": [], "records": []}
 
@@ -132,7 +136,8 @@ def test_summary_echoes_the_partition_it_read(client, monkeypatch):
     session_id = "s" * 40
     db = SessionLocal()
     db.add(
-        ChatSession(agent_id=agent_id, session_id=session_id, actor_id="runtime-diagnostic")
+        ChatSession(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                    session_id=session_id, actor_id="runtime-diagnostic")
     )
     db.commit()
     db.close()
@@ -140,7 +145,7 @@ def test_summary_echoes_the_partition_it_read(client, monkeypatch):
     monkeypatch.setattr(
         memory_service,
         "session_memory_summary",
-        lambda actor_id, sid: {"event_count": 0, "events": [], "records": []},
+        lambda _ws, actor_id, sid: {"event_count": 0, "events": [], "records": []},
     )
     body = client.get(
         f"/api/chat/{agent_id}/memory",
@@ -157,10 +162,10 @@ def test_summary_display_label_hides_compound_actor(monkeypatch):
     monkeypatch.setattr(memory_service, "list_events", lambda *a, **k: [])
     monkeypatch.setattr(
         memory_service, "list_records",
-        lambda ns, max_results=10: [{"content": {"text": "likes brevity"},
-                                     "memoryRecordId": "r1"}],
+        lambda _ws, ns, max_results=10: [{"content": {"text": "likes brevity"},
+                                          "memoryRecordId": "r1"}],
     )
-    out = memory_service.session_memory_summary("agentX__river", "sess")
+    out = memory_service.session_memory_summary(ws_ctx(), "agentX__river", "sess")
     labels = {r["namespace"] for r in out["records"]}
     assert labels <= {"/preferences", "/facts"}
     assert all("river" not in r["namespace"] for r in out["records"])
@@ -176,7 +181,9 @@ def test_rail_renders_structured_preference_records_readably(monkeypatch):
     monkeypatch.setattr(memory_service, "list_events", lambda *a, **k: [])
     monkeypatch.setattr(
         memory_service, "list_records",
-        lambda ns, max_results=10: [{"content": {"text": stored}, "memoryRecordId": "r1"}],
+        lambda _ws, ns, max_results=10: [
+            {"content": {"text": stored}, "memoryRecordId": "r1"}
+        ],
     )
-    out = memory_service.session_memory_summary("agentX__river", "sess")
+    out = memory_service.session_memory_summary(ws_ctx(), "agentX__river", "sess")
     assert all(r["text"] == "Wants numbered lists" for r in out["records"])

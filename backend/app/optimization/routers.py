@@ -12,6 +12,8 @@ from app.evaluation.models import EvalDataset
 from app.models.ledger import Agent
 from app.optimization import readiness, service
 from app.optimization.models import STAGES, Experiment
+from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.services.agentcore.client import control_client
 
 router = APIRouter(prefix="/api/experiments", tags=["experiments"])
 
@@ -35,13 +37,32 @@ def _out(exp: Experiment) -> dict[str, Any]:
 
 
 @router.get("")
-def list_experiments(db: Session = Depends(get_db)) -> dict[str, Any]:
-    rows = db.query(Experiment).order_by(Experiment.created_at.desc()).limit(20).all()
+def list_experiments(
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    rows = (
+        db.query(Experiment)
+        .filter(Experiment.workspace_id == ws.id)
+        .order_by(Experiment.created_at.desc())
+        .limit(20)
+        .all()
+    )
     return {"experiments": [_out(e) for e in rows]}
 
 
-def _eligible_agent(agent_id: str, db: Session) -> Agent:
+def _experiment_in(db: Session, ws: WorkspaceScope, exp_id: str) -> Experiment:
+    """The experiment, or 404 — another workspace's row is not visible here."""
+    exp = db.get(Experiment, exp_id)
+    if exp is None or exp.workspace_id != ws.id:
+        raise NotFoundError("experiment.not_found", "experiment not found")
+    return exp
+
+
+def _eligible_agent(agent_id: str, db: Session, ws: WorkspaceScope) -> Agent:
     agent = db.get(Agent, agent_id)
+    if agent is not None and agent.workspace_id != ws.id:
+        agent = None
     if agent is None or agent.status != "active":
         raise AppError("agent.not_active", "agent must be active", status_code=400)
     capability = service.experiment_capability(agent)
@@ -70,22 +91,25 @@ def experiment_readiness(
     ),
     force: bool = False,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    agent = _eligible_agent(agent_id, db)
+    agent = _eligible_agent(agent_id, db, ws)
     return readiness.project_readiness(
         agent,
         db,
+        ws.context,
         lookback_hours=lookback_hours,
         force=force,
     )
 
 
 @router.get("/{exp_id}")
-def get_experiment(exp_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    exp = db.get(Experiment, exp_id)
-    if exp is None:
-        raise NotFoundError("experiment.not_found", "experiment not found")
-    return _out(exp)
+def get_experiment(
+    exp_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return _out(_experiment_in(db, ws, exp_id))
 
 
 class ExperimentCreate(BaseModel):
@@ -98,11 +122,19 @@ class ExperimentCreate(BaseModel):
 
 
 @router.post("", status_code=201)
-def create_experiment(req: ExperimentCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
+def create_experiment(
+    req: ExperimentCreate,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     # experiments share one gateway (EXP_GATEWAY_NAME) and the AB service
     # allows a single active test per gateway — a concurrent loop would fail
     # at the abtest stage, so reject up front.
-    running = db.query(Experiment).filter(Experiment.status == "running").first()
+    running = (
+        db.query(Experiment)
+        .filter(Experiment.workspace_id == ws.id, Experiment.status == "running")
+        .first()
+    )
     if running is not None:
         raise AppError(
             "experiment.already_running",
@@ -110,10 +142,11 @@ def create_experiment(req: ExperimentCreate, db: Session = Depends(get_db)) -> d
             "wait for its verdict or clean it up first",
             status_code=409,
         )
-    agent = _eligible_agent(req.agent_id, db)
+    agent = _eligible_agent(req.agent_id, db, ws)
     trace_readiness = readiness.project_readiness(
         agent,
         db,
+        ws.context,
         lookback_hours=req.lookback_hours,
     )
     if trace_readiness["state"] == "missing":
@@ -123,7 +156,7 @@ def create_experiment(req: ExperimentCreate, db: Session = Depends(get_db)) -> d
             {"readiness": trace_readiness},
             status_code=409,
         )
-    exp = service.start_experiment(agent)
+    exp = service.start_experiment(agent, ws.context)
     return _out(exp)
 
 
@@ -158,10 +191,9 @@ class ActionRequest(BaseModel):
 def experiment_action(
     exp_id: str, req: ActionRequest, response: Response,
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    exp = db.get(Experiment, exp_id)
-    if exp is None:
-        raise NotFoundError("experiment.not_found", "experiment not found")
+    exp = _experiment_in(db, ws, exp_id)
     if exp.running_action:
         raise AppError(
             "experiment.action_in_flight",
@@ -225,7 +257,7 @@ def experiment_action(
                 status_code=422,
             )
         dataset = db.get(EvalDataset, req.dataset_id)
-        if dataset is None:
+        if dataset is None or dataset.workspace_id != ws.id:
             raise NotFoundError("dataset.not_found", "dataset not found")
         try:
             prompts = service.resolve_traffic_prompts(dataset)
@@ -243,7 +275,7 @@ def experiment_action(
         # another agent's should be an immediate API error, not a failed background
         # job the user has to go read a stage error to understand
         source = service.resolve_recommend_source(
-            exp.agent_id, req.recommend_source_run_id
+            exp.agent_id, req.recommend_source_run_id, ws.context
         )
         service.run_action(
             exp.id, "recommend",
@@ -253,10 +285,12 @@ def experiment_action(
                 source=source),
         )
     elif req.action == "gateway":
-        service.assert_shared_gateway_available()
+        service.assert_shared_gateway_available(ws.context)
         # validated here, not inside the thread: a bad evaluator id shouldn't
         # cost a gateway + runtime-target round-trip before it is caught
-        evaluators = service.normalize_online_evaluators(req.online_evaluators)
+        evaluators = service.normalize_online_evaluators(
+            req.online_evaluators, control_client(ws.context)
+        )
         service.run_action(
             exp.id, "gateway",
             lambda progress: service.act_gateway(exp_id, progress, evaluators),
@@ -264,7 +298,7 @@ def experiment_action(
     else:  # abtest | verdict | cleanup
         if req.action == "abtest":
             service.assert_shared_gateway_available(
-                own_test_name=f"exp_{exp.id[:8]}_bundle"
+                ws.context, own_test_name=f"exp_{exp.id[:8]}_bundle"
             )
         fn = {
             "abtest": service.act_abtest,

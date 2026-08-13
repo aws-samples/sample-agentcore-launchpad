@@ -38,7 +38,7 @@ def stub_control(monkeypatch):
         "evaluatorArn": "arn:aws:bedrock-agentcore:us-west-2:1:evaluator/my_judge-abc123",
     }
     stub.get_evaluator.return_value = EVALUATOR_DETAIL
-    monkeypatch.setattr("app.evaluation.routers.control_client", lambda: stub)
+    monkeypatch.setattr("app.evaluation.routers.control_client", lambda _ws=None: stub)
     return stub
 
 

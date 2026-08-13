@@ -6,11 +6,12 @@ import time
 from dataclasses import asdict
 from typing import Any, Literal
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from starlette.datastructures import UploadFile
 
 from app.core.errors import AppError
+from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import registry_console as console
 from app.services import skill_ingest as si
 from app.services.skill_ingest import (
@@ -31,7 +32,9 @@ class A2ADemoRequest(BaseModel):
 
 
 @router.post("/a2a-demo")
-def a2a_demo(req: A2ADemoRequest) -> dict[str, Any]:
+def a2a_demo(
+    req: A2ADemoRequest, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
     """Invoke a front-desk-style agent and return {answer, trace}.
 
     Deliberately bypasses invoke_agent_text: the demo needs the agent's extra
@@ -48,6 +51,10 @@ def a2a_demo(req: A2ADemoRequest) -> dict[str, Any]:
     db = SessionLocal()
     try:
         agent = db.get(Agent, req.agent_id)
+        # An agent from another workspace is as good as absent: this route is the
+        # second invoke entrance, so it owes the same boundary as /agents/{id}/invoke.
+        if agent is not None and agent.workspace_id != ws.id:
+            agent = None
         if agent is None or agent.status != "active":
             raise AppError("registry.a2a_demo_agent", "agent not found or not active",
                            status_code=404)
@@ -61,7 +68,7 @@ def a2a_demo(req: A2ADemoRequest) -> dict[str, Any]:
 
     started = time.monotonic()
     session_id = new_session_id()
-    response = data_client().invoke_agent_runtime(
+    response = data_client(ws.context).invoke_agent_runtime(
         agentRuntimeArn=arn,
         runtimeSessionId=session_id,
         payload=_json.dumps({"prompt": req.question, "actor_id": "a2a-demo"}).encode(),
@@ -77,7 +84,8 @@ def a2a_demo(req: A2ADemoRequest) -> dict[str, Any]:
         "latency_ms": int((time.monotonic() - started) * 1000),
     }
 
-_attachables_cache: dict[str, Any] = {"data": None, "at": 0.0}
+# Per workspace: the catalog is that environment's registry + gateways.
+_attachables_cache: dict[str, dict[str, Any]] = {}
 
 # Skill inspect→import staging. inspect() acquires + validates bundles into a
 # server-side temp dir and parks them here under a random id; import() consumes
@@ -87,8 +95,8 @@ _STAGING_TTL_S = 600  # 10 minutes
 _staging: dict[str, dict[str, Any]] = {}  # id → {"bundles": [SkillBundle], "expires": float}
 
 
-def _invalidate_attachables() -> None:
-    _attachables_cache.update(data=None, at=0.0)
+def _invalidate_attachables(workspace_id: str) -> None:
+    _attachables_cache.pop(workspace_id, None)
 
 
 def _record_out(record: dict[str, Any]) -> dict[str, Any]:
@@ -107,19 +115,25 @@ def _record_out(record: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.get("/records")
-def list_records(type: str | None = None, status: str | None = None) -> dict[str, Any]:
-    records = console.console_list(type, status)
+def list_records(
+    type: str | None = None,
+    status: str | None = None,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    records = console.console_list(ws.context, type, status)
     return {"records": [_record_out(r) for r in records]}
 
 
 @router.get("/records/search")
-def search(q: str) -> dict[str, Any]:
-    return {"records": [_record_out(r) for r in console.console_search(q)]}
+def search(q: str, ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
+    return {"records": [_record_out(r) for r in console.console_search(ws.context, q)]}
 
 
 @router.get("/records/{record_id}")
-def get_record(record_id: str) -> dict[str, Any]:
-    return _record_out(console.console_get(record_id))
+def get_record(
+    record_id: str, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    return _record_out(console.console_get(ws.context, record_id))
 
 
 class ActionRequest(BaseModel):
@@ -127,13 +141,17 @@ class ActionRequest(BaseModel):
 
 
 @router.post("/records/{record_id}/action")
-def record_action(record_id: str, req: ActionRequest) -> dict[str, Any]:
+def record_action(
+    record_id: str,
+    req: ActionRequest,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     try:
-        console.console_action(record_id, req.action)
+        console.console_action(ws.context, record_id, req.action)
     except ValueError as exc:
         raise AppError("registry.unknown_action", str(exc), status_code=400) from exc
-    _invalidate_attachables()
-    return _record_out(console.console_get(record_id))
+    _invalidate_attachables(ws.id)
+    return _record_out(console.console_get(ws.context, record_id))
 
 
 class RegisterRequest(BaseModel):
@@ -148,7 +166,9 @@ class RegisterRequest(BaseModel):
 
 
 @router.post("/records", status_code=201)
-def register_record(req: RegisterRequest) -> dict[str, Any]:
+def register_record(
+    req: RegisterRequest, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
     if req.type == "MCP":
         if not req.url or not req.url.startswith(("https://", "http://")):
             raise AppError(
@@ -156,8 +176,10 @@ def register_record(req: RegisterRequest) -> dict[str, Any]:
                 "MCP registration needs a http(s) streamable-http server URL",
                 status_code=400,
             )
-        record = console.register_mcp_server(req.name, req.description, req.url)
-        _invalidate_attachables()
+        record = console.register_mcp_server(
+            ws.context, req.name, req.description, req.url
+        )
+        _invalidate_attachables(ws.id)
         return _record_out(record)
     if not req.skill_md or not req.skill_md.strip():
         raise AppError(
@@ -165,8 +187,8 @@ def register_record(req: RegisterRequest) -> dict[str, Any]:
             "skill registration needs SKILL.md content",
             status_code=400,
         )
-    record = console.register_skill(req.name, req.description, req.skill_md)
-    _invalidate_attachables()
+    record = console.register_skill(ws.context, req.name, req.description, req.skill_md)
+    _invalidate_attachables(ws.id)
     return _record_out(record)
 
 
@@ -319,7 +341,9 @@ def _match_bundle(bundles: list[SkillBundle], sel: ImportSelection) -> SkillBund
 
 
 @router.post("/skills/import")
-def import_skills(req: ImportRequest) -> dict[str, Any]:
+def import_skills(
+    req: ImportRequest, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
     """Register each selected staged bundle via the shared pipeline. A per-item
     failure (name conflict, validation) is reported inline and never aborts the
     other selections. Staging is consumed once the batch completes."""
@@ -346,6 +370,7 @@ def import_skills(req: ImportRequest) -> dict[str, Any]:
         try:
             record = console.register_skill_bundle(
                 bundle,
+                ws.context,
                 name_override=sel.name_override,
                 description_override=sel.description_override,
             )
@@ -363,7 +388,7 @@ def import_skills(req: ImportRequest) -> dict[str, Any]:
     if all(r["ok"] for r in records):
         _drop_staging(req.staging_id)
     if any(r["ok"] for r in records):
-        _invalidate_attachables()
+        _invalidate_attachables(ws.id)
     return {"records": records}
 
 
@@ -383,14 +408,16 @@ def install_git() -> dict[str, Any]:
 
 
 @router.post("/records/{record_id}/reimport")
-def reimport_record(record_id: str) -> dict[str, Any]:
+def reimport_record(
+    record_id: str, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
     """Re-run the ingestion pipeline for a git/url-sourced skill: re-acquire from
     the stored source, replace the S3 prefix, and bump the record version. Returns
     the updated record (same shape as GET). inline/zip records (no retrievable
     origin) and DEPRECATED records return 400 ``registry.not_reimportable``; a
     failed re-acquire/validation returns 422 ``registry.skill_invalid``."""
-    record = console.reimport_skill(record_id)
-    _invalidate_attachables()
+    record = console.reimport_skill(ws.context, record_id)
+    _invalidate_attachables(ws.id)
     return _record_out(record)
 
 
@@ -409,7 +436,11 @@ class UpdateRecordRequest(BaseModel):
 
 
 @router.put("/records/{record_id}")
-def update_record(record_id: str, req: UpdateRecordRequest) -> dict[str, Any]:
+def update_record(
+    record_id: str,
+    req: UpdateRecordRequest,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     """Edit a record's description and/or content. Description-only edits don't
     bump the version; content edits (MCP url / skill SKILL.md / whole bundle) do.
     Returns the refreshed record (same shape as GET). DEPRECATED/A2A records are
@@ -432,7 +463,7 @@ def update_record(record_id: str, req: UpdateRecordRequest) -> dict[str, Any]:
             status_code=400,
         )
 
-    rtype = console.console_get(record_id).get("descriptorType")
+    rtype = console.console_get(ws.context, record_id).get("descriptorType")
     if req.url is not None and rtype != "MCP":
         raise AppError(
             "registry.field_type_mismatch",
@@ -475,6 +506,7 @@ def update_record(record_id: str, req: UpdateRecordRequest) -> dict[str, Any]:
     # staged bundle survives for retry; it is dropped only once the save lands.
     result = console.update_record(
         record_id,
+        ws.context,
         description=req.description,
         url=req.url,
         skill_md=req.skill_md,
@@ -482,35 +514,36 @@ def update_record(record_id: str, req: UpdateRecordRequest) -> dict[str, Any]:
     )
     if req.staging_id is not None:
         _drop_staging(req.staging_id)
-    _invalidate_attachables()
+    _invalidate_attachables(ws.id)
     return _record_out(result)
 
 
 @router.delete("/records/{record_id}")
-def delete_record(record_id: str) -> dict[str, Any]:
-    console.console_delete(record_id)
-    _invalidate_attachables()
+def delete_record(
+    record_id: str, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    console.console_delete(ws.context, record_id)
+    _invalidate_attachables(ws.id)
     return {"deleted": True, "record_id": record_id}
 
 
 @router.get("/attachables")
-def attachables(refresh: bool = False) -> dict[str, Any]:
+def attachables(
+    refresh: bool = False, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
     """APPROVED MCP servers + skills the create wizard offers for mounting.
-    Cached 60s — each call walks GetRegistryRecord per record."""
-    if (
-        not refresh
-        and _attachables_cache["data"] is not None
-        and time.time() - _attachables_cache["at"] < 60
-    ):
-        return _attachables_cache["data"]
-    data = console.attachable_records()
-    _attachables_cache.update(data=data, at=time.time())
+    Cached 60s per workspace — each call walks GetRegistryRecord per record."""
+    slot = _attachables_cache.get(ws.id)
+    if not refresh and slot is not None and time.time() - slot["at"] < 60:
+        return slot["data"]
+    data = console.attachable_records(ws.context)
+    _attachables_cache[ws.id] = {"data": data, "at": time.time()}
     return data
 
 
 @router.post("/sync-defaults")
-def sync_defaults() -> dict[str, Any]:
+def sync_defaults(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
     """Register gateway targets (MCP) + the sample skill bundle (AGENT_SKILLS)."""
-    results = console.ensure_default_records()
-    _invalidate_attachables()
+    results = console.ensure_default_records(ws.context)
+    _invalidate_attachables(ws.id)
     return {"results": results}

@@ -1,5 +1,6 @@
 /** Typed client for the Launchpad backend. */
 
+import i18n from "../i18n";
 import type { ModelSource } from "./models";
 
 export interface StageInfo {
@@ -337,6 +338,20 @@ export class ApiError extends Error {
 
 export const AUTH_UNAUTHORIZED_EVENT = "launchpad-unauthorized";
 
+/**
+ * Console copy for a backend error code, when `apiErrors.<code>` exists.
+ *
+ * The backend message is operator-facing English written for a log; a code the
+ * console has copy for gets that copy instead, so the ~90 catch branches that
+ * toast `err.message` show a translated string without each one mapping codes.
+ * Pages that map codes themselves (`t(`apiErrors.${code}`, err.message)`) keep
+ * working — they resolve the same key.
+ */
+function localizedMessage(code: string, fallback: string): string {
+  const key = `apiErrors.${code}`;
+  return i18n.exists(key) ? i18n.t(key) : fallback;
+}
+
 async function parseResponse<T>(path: string, res: Response): Promise<T> {
   const body = await res.json().catch(() => null);
   if (!res.ok) {
@@ -344,15 +359,21 @@ async function parseResponse<T>(path: string, res: Response): Promise<T> {
       window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
     }
     const env = (body ?? {}) as { code?: string; message?: string; detail?: unknown };
-    throw new ApiError(env.code ?? `http.${res.status}`, env.message ?? res.statusText, env.detail);
+    const code = env.code ?? `http.${res.status}`;
+    throw new ApiError(code, localizedMessage(code, env.message ?? res.statusText), env.detail);
   }
   return body as T;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/** `headers` is narrowed to a plain record so the merge below is exhaustive. */
+type RequestInitJson = Omit<RequestInit, "headers"> & { headers?: Record<string, string> };
+
+async function request<T>(path: string, init?: RequestInitJson): Promise<T> {
   const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
     ...init,
+    // Merged, not spread over: an init that carries headers (the workspace-
+    // targeted job poll) would otherwise drop the JSON content type.
+    headers: { "Content-Type": "application/json", ...init?.headers },
   });
   return parseResponse<T>(path, res);
 }
@@ -1275,6 +1296,55 @@ export interface RegisterResult {
   valid_days: number;
 }
 
+/* ── workspaces (the environment a request targets) ────────────────────── */
+
+export type WorkspaceBootstrapStatus = "registered" | "bootstrapping" | "ready" | "failed";
+
+export interface Workspace {
+  id: string;
+  name: string;
+  account_id: string;
+  region: string;
+  bootstrap_status: WorkspaceBootstrapStatus;
+  /** the hub's own environment: cannot be deleted or bootstrapped from here */
+  is_default: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface WorkspaceListResult {
+  workspaces: Workspace[];
+  /** true when the caller is an admin, i.e. the list is every workspace */
+  all_workspaces: boolean;
+}
+
+export interface WorkspaceGrantUser {
+  id: string;
+  username: string;
+  email: string;
+  role: ConsoleRole;
+}
+
+/** Members granted a workspace. Admins reach every workspace by role and are
+ * deliberately absent. */
+export interface WorkspaceGrants {
+  workspace_id: string;
+  users: WorkspaceGrantUser[];
+}
+
+export interface WorkspaceBootstrapAck {
+  job_id: string;
+  workspace_id: string;
+  bootstrap_status: WorkspaceBootstrapStatus;
+  stages: StageInfo[];
+}
+
+/** The bootstrap job's per-stage records live on its payload, not on a
+ * Deployment row (there is no agent involved). */
+export interface WorkspaceBootstrapJob extends JobInfo {
+  payload?: { workspace_id?: string; stages?: StageInfo[] } | null;
+}
+
 /* ── console accounts (admin user management) ──────────────────────────── */
 
 export type UserState = "pending" | "active" | "expired" | "disabled";
@@ -1295,6 +1365,8 @@ export interface ConsoleUser {
   created_by: string;
   /** effective agent-management permission map (admins: all true) */
   permissions: Record<AgentPermission, boolean>;
+  /** granted workspace ids; empty for an admin, who reaches every workspace */
+  workspaces: string[];
   /** only present on a password reset the platform generated */
   generated_password?: string;
 }
@@ -1331,6 +1403,8 @@ export interface UserPatchBody {
   password?: string | null;
   /** partial map; unsent keys stay granted, null resets to all-granted */
   permissions?: Partial<Record<AgentPermission, boolean>> | null;
+  /** full replacement of the account's workspace grants */
+  workspaces?: string[];
 }
 
 export const api = {
@@ -1361,6 +1435,45 @@ export const api = {
     return request<UserListResult>(`/api/users${suffix ? `?${suffix}` : ""}`);
   },
   userStats: () => request<UserStats>("/api/users/stats"),
+  listWorkspaces: () => request<WorkspaceListResult>("/api/workspaces"),
+  createWorkspace: (body: {
+    id: string;
+    name: string;
+    account_id: string;
+    region: string;
+  }) =>
+    request<Workspace>("/api/workspaces", { method: "POST", body: JSON.stringify(body) }),
+  patchWorkspace: (id: string, body: { name: string }) =>
+    request<Workspace>(`/api/workspaces/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteWorkspace: (id: string) =>
+    request<{ deleted: boolean; workspace_id: string }>(`/api/workspaces/${id}`, {
+      method: "DELETE",
+    }),
+  listWorkspaceGrants: (id: string) =>
+    request<WorkspaceGrants>(`/api/workspaces/${id}/grants`),
+  bootstrapWorkspace: (id: string) =>
+    request<WorkspaceBootstrapAck>(`/api/workspaces/${id}/bootstrap`, { method: "POST" }),
+  /** The latest bootstrap run, so a browser that did not start it can watch. */
+  getWorkspaceBootstrap: (id: string) =>
+    request<{
+      workspace_id: string;
+      bootstrap_status: string;
+      job: { id: string; status: string; stages: StageInfo[] } | null;
+    }>(`/api/workspaces/${id}/bootstrap`),
+  /**
+   * A job of a workspace other than the current selection.
+   *
+   * `GET /api/jobs/{id}` is workspace-scoped and 404s across workspaces, so
+   * watching a bootstrap has to name its target explicitly instead of letting
+   * the global header stamp the selected one.
+   */
+  getWorkspaceJob: (jobId: string, workspaceId: string) =>
+    request<WorkspaceBootstrapJob>(`/api/jobs/${jobId}`, {
+      headers: { "X-Workspace": workspaceId },
+    }),
   updateUser: (id: string, patch: UserPatchBody) =>
     request<ConsoleUser>(`/api/users/${id}`, {
       method: "PATCH",

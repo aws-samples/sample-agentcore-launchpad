@@ -9,6 +9,7 @@ import json
 
 import pytest
 
+from app.core.db import DEFAULT_WORKSPACE_ID
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
 from app.services import agent_iam
@@ -86,7 +87,9 @@ S3_AP = "arn:aws:s3files:us-west-2:123456789012:file-system/fs-abc/access-point/
 
 
 def _agent(name="probe", agent_id="abcdef1234") -> Agent:
-    return Agent(id=agent_id, name=name, method="zip_runtime", spec={}, version="1")
+    return Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        id=agent_id, name=name, method="zip_runtime", spec={}, version="1")
 
 
 def _spec(**over) -> AgentSpec:

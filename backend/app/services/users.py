@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError, NotFoundError
-from app.models.ledger import User
+from app.models.ledger import User, UserWorkspace, Workspace
 
 # Member-grantable agent-management capabilities. Defined here (not in
 # routers.auth, which imports this module) so both auth and the users console
@@ -198,8 +198,16 @@ def days_remaining(user: User, now: datetime | None = None) -> int | None:
     return max(0, int(seconds // 86400))
 
 
-def serialize(user: User, now: datetime | None = None) -> dict[str, Any]:
-    """Console-facing shape. The password hash never leaves the backend."""
+def serialize(
+    user: User, now: datetime | None = None, workspaces: list[str] | None = None
+) -> dict[str, Any]:
+    """Console-facing shape. The password hash never leaves the backend.
+
+    `workspaces` is the account's grant list; the caller passes it because it
+    needs a ledger session this function does not take. Admins reach every
+    workspace by role, so their (usually empty) grant list is not a capability
+    statement.
+    """
     moment = now or datetime.now(UTC)
     expires_at = as_utc(user.expires_at)
     last_login = as_utc(user.last_login_at)
@@ -217,6 +225,7 @@ def serialize(user: User, now: datetime | None = None) -> dict[str, Any]:
         "login_count": user.login_count,
         "created_by": user.created_by,
         "permissions": effective_permissions(user),
+        "workspaces": workspaces or [],
     }
 
 
@@ -367,8 +376,9 @@ def list_users(
         rows = [row for row in rows if account_state(row, now) == status]
     total = len(rows)
     window = rows[offset : offset + limit] if limit > 0 else rows[offset:]
+    grants = workspace_grants(db, [row.id for row in window])
     return UserPage(
-        items=[serialize(row, now) for row in window],
+        items=[serialize(row, now, grants.get(row.id, [])) for row in window],
         total=total,
         limit=limit,
         offset=offset,
@@ -487,9 +497,66 @@ def apply_patch(
         generated = None if chosen else password
     if "permissions" in patch:
         user.permissions = _normalized_permissions(patch["permissions"])
+    if "workspaces" in patch:
+        set_workspace_grants(db, user, patch["workspaces"])
     db.commit()
     db.refresh(user)
     return generated
+
+
+def workspace_grants(db: Session, user_ids: Sequence[str]) -> dict[str, list[str]]:
+    """Granted workspace ids per user id, for the ids asked about."""
+    if not user_ids:
+        return {}
+    rows = db.execute(
+        select(UserWorkspace.user_id, UserWorkspace.workspace_id).where(
+            UserWorkspace.user_id.in_(list(user_ids))
+        )
+    ).all()
+    grants: dict[str, list[str]] = {}
+    for user_id, workspace_id in rows:
+        grants.setdefault(user_id, []).append(workspace_id)
+    return {user_id: sorted(ids) for user_id, ids in grants.items()}
+
+
+def set_workspace_grants(db: Session, user: User, value: Any) -> None:
+    """Replace this account's workspace grants with `value` (None clears them).
+
+    A full replacement rather than a per-workspace toggle: the console edits the
+    whole set, and two concurrent toggles against a replacement list cannot
+    resurrect a grant the other one just removed. Staged on the session; the
+    caller commits.
+    """
+    if value is None:
+        requested: set[str] = set()
+    elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+        requested = {item.strip() for item in value if item.strip()}
+    else:
+        raise AppError(
+            "users.invalid_workspaces", "workspaces must be a list of workspace ids"
+        )
+    if requested:
+        known = set(
+            db.scalars(select(Workspace.id).where(Workspace.id.in_(sorted(requested))))
+        )
+        unknown = sorted(requested - known)
+        if unknown:
+            raise AppError(
+                "users.invalid_workspaces",
+                f"Unknown workspace id(s): {', '.join(unknown)}",
+            )
+    current = set(
+        db.scalars(
+            select(UserWorkspace.workspace_id).where(UserWorkspace.user_id == user.id)
+        )
+    )
+    for workspace_id in current - requested:
+        db.query(UserWorkspace).filter(
+            UserWorkspace.user_id == user.id,
+            UserWorkspace.workspace_id == workspace_id,
+        ).delete()
+    for workspace_id in requested - current:
+        db.add(UserWorkspace(user_id=user.id, workspace_id=workspace_id))
 
 
 def _normalized_permissions(value: Any) -> dict[str, bool] | None:
@@ -515,5 +582,8 @@ def _normalized_permissions(value: Any) -> dict[str, bool] | None:
 
 
 def delete_user(db: Session, user: User) -> None:
+    # grants first: SQLite does not enforce the FK, so the rows would linger and
+    # a recycled user id would inherit them
+    db.query(UserWorkspace).filter(UserWorkspace.user_id == user.id).delete()
     db.delete(user)
     db.commit()

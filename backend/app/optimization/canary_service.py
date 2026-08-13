@@ -6,7 +6,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.evaluation import agentcore_eval as ac
@@ -16,6 +15,7 @@ from app.optimization import service as experiment_service
 from app.optimization.models import RuntimeCanary
 from app.schemas.agent import AgentSpec
 from app.services.agentcore.client import control_client, data_client
+from app.services.workspace import WorkspaceContext, context_for_workspace
 
 Progress = Callable[[str], None]
 RAMP_WEIGHTS = ((90, 10), (50, 50), (1, 99))
@@ -177,6 +177,7 @@ def _agent_meta(agent: Any, control: Any) -> dict[str, Any]:
 def start_canary(
     agent: Any,
     edited_spec: AgentSpec,
+    workspace: WorkspaceContext,
     source_experiment_id: str | None = None,
 ) -> RuntimeCanary:
     """Create only the ledger row; setup mints the candidate version + gateway.
@@ -186,8 +187,9 @@ def start_canary(
     candidate is described by ``edited_spec`` (stored as a dump) and materialized
     at setup, never here.
     """
-    control = control_client()
+    control = control_client(workspace)
     row = RuntimeCanary(
+        workspace_id=agent.workspace_id,
         name=f"CANARY-{agent.name[:32]}",
         champion_agent_id=agent.id,
         champion_agent_name=agent.name,
@@ -323,6 +325,7 @@ def assert_verdict_allows(
 def _create_variant_eval(
     *,
     control: Any,
+    workspace: WorkspaceContext,
     eval_name: str,
     resource_id: str,
     runtime_name: str,
@@ -337,7 +340,7 @@ def _create_variant_eval(
         name=eval_name,
         log_group=canary_infra.endpoint_log_group(resource_id, endpoint),
         service_name=canary_infra.endpoint_service_name(runtime_name, endpoint),
-        role_arn=get_settings().resources["execution_role_arn"],
+        role_arn=workspace.resources["execution_role_arn"],
     )
     return {
         "online_eval_id": online_eval.get("onlineEvaluationConfigId"),
@@ -359,10 +362,11 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
     finally:
         db.close()
 
-    control = control_client()
-    data = data_client()
+    workspace = context_for_workspace(row.workspace_id)
+    control = control_client(workspace)
+    data = data_client(workspace)
     runtime_id = meta["resource_id"]
-    role_arn = get_settings().resources["execution_role_arn"]
+    role_arn = workspace.resources["execution_role_arn"]
     stable = f"stable{canary_id[:6]}"
     treatment = f"treat{canary_id[:6]}"
 
@@ -373,7 +377,7 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
 
     # (2) Dedicated per-canary gateway.
     gw = canary_infra.create_canary_gateway(
-        control_client=control, canary_id=canary_id, log=progress
+        control_client=control, workspace=workspace, canary_id=canary_id, log=progress
     )
 
     # (3) Stable endpoint pinned to v_current, READY — created BEFORE the mint so
@@ -402,8 +406,8 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
     # stable endpoint = v_current until the gateway A/B goes live).
     progress("minting candidate runtime version…")
     _, v_candidate, candidate_key = canary_infra.mint_candidate_version(
-        agent=agent, edited_spec=spec, control_client=control, log=progress,
-        canary_id=canary_id, role="candidate",
+        agent=agent, edited_spec=spec, control_client=control, workspace=workspace,
+        log=progress, canary_id=canary_id, role="candidate",
     )
 
     # (6) Treatment endpoint pinned to the candidate, READY.
@@ -424,6 +428,7 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
 
     control_eval = _create_variant_eval(
         control=control,
+        workspace=workspace,
         eval_name=f"can_{canary_id[:8]}_oec",
         resource_id=meta["resource_id"],
         runtime_name=meta["runtime_name"],
@@ -433,6 +438,7 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
     )
     treatment_eval = _create_variant_eval(
         control=control,
+        workspace=workspace,
         eval_name=f"can_{canary_id[:8]}_oet",
         resource_id=meta["resource_id"],
         runtime_name=meta["runtime_name"],
@@ -514,15 +520,17 @@ def act_traffic(
     progress: Progress,
 ) -> dict[str, Any]:
     row = _get(canary_id)
+    workspace = context_for_workspace(row.workspace_id)
     setup = row.artifacts["setup"]
     metrics = ac.normalize_ab_results(
-        ac.get_ab_test(data_client(), ab_test_id=setup["ab_test_id"])
+        ac.get_ab_test(data_client(workspace), ab_test_id=setup["ab_test_id"])
     )
     baseline_n = metric_sample_count(metrics)
     result = experiment_service.send_gateway_traffic(
         setup["gateway_url"],
         setup["champion"]["target_name"],
         prompts,
+        workspace,
         progress=progress,
     )
     attempt = {
@@ -546,7 +554,7 @@ def act_verdict(canary_id: str, progress: Progress) -> dict[str, Any]:
     if current is None or not current.get("traffic_attempts"):
         raise RuntimeError("current ramp stage has no traffic attempt")
     baseline_n = int(current["traffic_attempts"][-1].get("baseline_n", 0))
-    data = data_client()
+    data = data_client(context_for_workspace(row.workspace_id))
     deadline = datetime.now(UTC).timestamp() + 900
     metrics: list[dict[str, Any]] = []
     sample_n = 0
@@ -604,7 +612,9 @@ def act_advance(
     )
     progress(f"updating experiment Gateway traffic to {control_weight}/{treatment_weight}…")
     experiment_service.update_weights_with_pause(
-        data_client(), setup["ab_test_id"], variants
+        data_client(context_for_workspace(row.workspace_id)),
+        setup["ab_test_id"],
+        variants,
     )
     setup.update(
         ramp_stage=next_stage,
@@ -636,7 +646,7 @@ def act_complete(
     setup = row.artifacts["setup"]
     meta = row.artifacts["agent_meta"]
     stopped = experiment_service._stop_ab_test(
-        data_client(),
+        data_client(context_for_workspace(row.workspace_id)),
         setup["ab_test_id"],
         progress,
         label="Runtime canary A/B test",
@@ -681,14 +691,15 @@ def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
     row = _get(canary_id)
     setup = row.artifacts.get("setup") or {}
     meta = row.artifacts["agent_meta"]
-    control = control_client()
+    workspace = context_for_workspace(row.workspace_id)
+    control = control_client(workspace)
     # A partial setup (failed mid-way) may have no A/B test yet — only stop one
     # when it exists; the roll-forward below runs unconditionally so DEFAULT is
     # restored to v_current whether or not the candidate was ever minted.
     stopped: dict[str, Any] = {}
     if setup.get("ab_test_id"):
         stopped = experiment_service._stop_ab_test(
-            data_client(),
+            data_client(workspace),
             setup["ab_test_id"],
             progress,
             label="Runtime canary A/B test",
@@ -707,8 +718,8 @@ def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
     # DEFAULT off the rejected candidate back to current behavior.
     progress("rolling production forward off the rejected candidate…")
     _, v_restored, restored_key = canary_infra.mint_candidate_version(
-        agent=agent, edited_spec=current_spec, control_client=control, log=progress,
-        canary_id=canary_id, role="restore",
+        agent=agent, edited_spec=current_spec, control_client=control,
+        workspace=workspace, log=progress, canary_id=canary_id, role="restore",
     )
     db = SessionLocal()
     try:
@@ -786,6 +797,7 @@ def _owned_resources(
 def _cleanup_candidate_objects(
     row: RuntimeCanary,
     control: Any,
+    workspace: WorkspaceContext,
     progress: Progress,
 ) -> list[dict[str, str]]:
     """Delete the zips this canary uploaded, except the one behind the version
@@ -830,7 +842,7 @@ def _cleanup_candidate_objects(
             continue
         try:
             progress(f"deleting candidate artifact s3://…/{key}")
-            canary_infra.delete_object_quiet(key)
+            canary_infra.delete_object_quiet(key, workspace)
             results.append({"category": f"s3:{key}", "status": "deleted", "detail": ""})
         except Exception as exc:
             results.append({
@@ -851,8 +863,9 @@ def act_cleanup(
     endpoint is needed post-canary — both are deleted."""
     row = _get(canary_id)
     setup = row.artifacts.get("setup") or {}
-    control = control_client()
-    data = data_client()
+    workspace = context_for_workspace(row.workspace_id)
+    control = control_client(workspace)
+    data = data_client(workspace)
     gateway_id, target_ids, online_eval_ids, ab_test_ids = _owned_resources(
         row, control, data
     )
@@ -910,7 +923,7 @@ def act_cleanup(
                 "status": "skipped",
                 "detail": f"{type(exc).__name__}: {exc}",
             })
-    results.extend(_cleanup_candidate_objects(row, control, progress))
+    results.extend(_cleanup_candidate_objects(row, control, workspace, progress))
     _update(
         canary_id,
         status="cleaned",

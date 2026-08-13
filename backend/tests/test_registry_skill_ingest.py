@@ -3,7 +3,6 @@ the inspect→import router flow with staging (mocked AWS, no live calls)."""
 
 import io
 import json
-import types
 import zipfile
 
 import app.routers.registry as registry_router
@@ -11,6 +10,9 @@ import app.services.registry_console as console_mod
 from app.core.errors import AppError
 from app.services import aws_clients
 from app.services import skill_ingest as si
+from tests.conftest import ws_ctx
+
+WS = ws_ctx({"artifacts_bucket": "bkt"})
 
 SKILL_MD = (
     "---\nname: meeting-summarizer\ndescription: Summarize meetings\n"
@@ -40,12 +42,8 @@ def _multifile_zip() -> bytes:
 
 
 def _patch_aws(monkeypatch, fake_s3, *, existing=None, upsert=None):
-    monkeypatch.setattr(console_mod, "control_client", lambda: object())
-    monkeypatch.setattr(console_mod, "_registry_id", lambda: "reg")
-    monkeypatch.setattr(
-        console_mod, "get_settings",
-        lambda: types.SimpleNamespace(resources={"artifacts_bucket": "bkt"}, region="us-west-2"),
-    )
+    monkeypatch.setattr(console_mod, "control_client", lambda _ws=None: object())
+    monkeypatch.setattr(console_mod, "_registry_id", lambda _ws: "reg")
     monkeypatch.setattr(aws_clients, "client", lambda *a, **k: fake_s3)
     monkeypatch.setattr(console_mod.reg, "find_record", lambda *a, **k: existing)
     if upsert is None:
@@ -64,7 +62,7 @@ def test_register_skill_bundle_uploads_all_files_and_stamps_source(monkeypatch):
     _patch_aws(monkeypatch, fake)
     bundle = si.bundle_from_zip(_multifile_zip())
     try:
-        record = console_mod.register_skill_bundle(bundle)
+        record = console_mod.register_skill_bundle(bundle, WS)
     finally:
         bundle.close()
     assert record["status"] == "DRAFT"
@@ -92,7 +90,7 @@ def test_register_skill_bundle_cleans_up_on_record_failure(monkeypatch):
     bundle = si.bundle_from_zip(_multifile_zip())
     try:
         try:
-            console_mod.register_skill_bundle(bundle)
+            console_mod.register_skill_bundle(bundle, WS)
             raise AssertionError("expected failure")
         except RuntimeError:
             pass
@@ -109,7 +107,7 @@ def test_register_skill_bundle_rejects_bad_name(monkeypatch):
     bundle = si.bundle_from_inline("---\nname: Bad Name\n---\n# x")
     try:
         try:
-            console_mod.register_skill_bundle(bundle)
+            console_mod.register_skill_bundle(bundle, WS)
             raise AssertionError("expected validation error")
         except AppError as exc:
             assert exc.status_code == 422
@@ -128,7 +126,7 @@ def test_register_skill_bundle_rejects_oversized_descriptor(monkeypatch):
     bundle.files = [f"references/{'d' * 500}/doc-{i}.md" for i in range(200)]
     try:
         try:
-            console_mod.register_skill_bundle(bundle)
+            console_mod.register_skill_bundle(bundle, WS)
             raise AssertionError("expected validation error")
         except AppError as exc:
             assert exc.status_code == 422
@@ -142,7 +140,7 @@ def test_inline_register_skill_stamps_inline_source(monkeypatch):
     """Legacy paste path still works and now records source.kind == inline."""
     fake = FakeS3()
     _patch_aws(monkeypatch, fake)
-    console_mod.register_skill("meeting-summarizer", "", SKILL_MD)
+    console_mod.register_skill(WS, "meeting-summarizer", "", SKILL_MD)
     definition = json.loads(
         _patch_aws.captured["descriptors"]["agentSkills"]["skillDefinition"]["inlineContent"]
     )
@@ -155,7 +153,7 @@ def test_inline_register_skill_stamps_inline_source(monkeypatch):
 def test_inspect_then_import_happy_path(client, monkeypatch):
     seen = {}
 
-    def fake_register(bundle, *, name_override=None, description_override=None):
+    def fake_register(bundle, _ws, *, name_override=None, description_override=None):
         seen["files"] = bundle.files
         seen["name_override"] = name_override
         return {"recordId": "r9", "name": name_override or bundle.name,
@@ -234,7 +232,7 @@ def test_import_unknown_staging_id_410(client):
 
 
 def test_import_name_conflict_reported_per_item(client, monkeypatch):
-    def conflict(bundle, *, name_override=None, description_override=None):
+    def conflict(bundle, _ws, *, name_override=None, description_override=None):
         raise AppError("registry.name_exists", "already exists", status_code=409)
 
     monkeypatch.setattr(registry_router.console, "register_skill_bundle", conflict)

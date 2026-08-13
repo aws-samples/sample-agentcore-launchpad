@@ -20,6 +20,8 @@ import pytest
 from app.core.errors import AppError
 from app.services import traces
 
+from .conftest import ws_ctx
+
 SID = "bc796356c8bf4349a846de46870fcf633c82b513faa244a49da2be8e3fdc1fdf"
 SHARED = "aws/spans"
 AGENT_GROUP = "/aws/bedrock-agentcore/runtimes/kb_deep_zip_eeaaea-ly9FpCDNz2-DEFAULT"
@@ -51,7 +53,7 @@ class FakeInsights:
         self.queries: list[str] = []
         self.hours: list[int] = []
 
-    def __call__(self, queries, hours, logs=None, log_groups=None):
+    def __call__(self, queries, hours, logs=None, log_groups=None, workspace=None):
         query = next(iter(queries.values()))
         self.queries.append(query)
         self.hours.append(hours)
@@ -88,7 +90,7 @@ def insights(monkeypatch):
 def test_spans_from_both_log_groups_reach_the_rail(insights):
     """Forward compatibility, not an observed loss: if an agent ever writes spans to its
     own group (AWS's documented default for newer agents), the rail must include them."""
-    result = traces.session_trace(SID)
+    result = traces.session_trace(SID, ws_ctx())
 
     assert result["span_count"] == 4
     names = {s["name"] for s in result["spans"]}
@@ -105,7 +107,7 @@ def test_spans_from_both_log_groups_reach_the_rail(insights):
 
 def test_query_uses_the_shared_multi_group_source(insights):
     """Pins the fix: a regression to a single log group fails here."""
-    traces.session_trace(SID)
+    traces.session_trace(SID, ws_ctx())
     query = insights.queries[0]
     assert traces.SPANS_SOURCE in query
     assert "aws/spans" in query
@@ -121,7 +123,7 @@ def test_primary_group_is_the_biggest_contributor(monkeypatch):
         _row(_span("c", 1_000_000_000, 2_000_000_000), SHARED),
     ]
     monkeypatch.setattr(traces, "run_insights_queries", FakeInsights(rows))
-    result = traces.session_trace(SID)
+    result = traces.session_trace(SID, ws_ctx())
 
     assert result["log_group"] == AGENT_GROUP
     assert result["log_groups"][0] == AGENT_GROUP
@@ -130,13 +132,13 @@ def test_primary_group_is_the_biggest_contributor(monkeypatch):
 
 
 def test_lookback_hours_is_passed_through(insights):
-    traces.session_trace(SID, lookback_hours=168)
+    traces.session_trace(SID, ws_ctx(), lookback_hours=168)
     assert insights.hours == [168]
 
 
 def test_query_failure_leaves_an_empty_rail_without_raising(monkeypatch):
     monkeypatch.setattr(traces, "run_insights_queries", FakeInsights(fail=True))
-    result = traces.session_trace(SID)
+    result = traces.session_trace(SID, ws_ctx())
 
     assert result["span_count"] == 0 and result["spans"] == []
     assert result["unavailable_reason"] == "observability.query_failed"
@@ -147,7 +149,7 @@ def test_query_failure_leaves_an_empty_rail_without_raising(monkeypatch):
 
 def test_no_spans_falls_back_to_the_shared_group_link(monkeypatch):
     monkeypatch.setattr(traces, "run_insights_queries", FakeInsights([]))
-    result = traces.session_trace(SID)
+    result = traces.session_trace(SID, ws_ctx())
 
     assert result["span_count"] == 0
     assert result["log_groups"] == []
@@ -163,13 +165,13 @@ def test_malformed_message_is_skipped(monkeypatch):
         {"@log": f"{ACCOUNT}:{SHARED}"},  # no message at all
     ]
     monkeypatch.setattr(traces, "run_insights_queries", FakeInsights(rows))
-    result = traces.session_trace(SID)
+    result = traces.session_trace(SID, ws_ctx())
     assert result["span_count"] == 1
 
 
 def test_response_keeps_the_fields_the_chat_rail_consumes(insights):
     """frontend/src/pages/Chat.tsx reads exactly these."""
-    result = traces.session_trace(SID)
+    result = traces.session_trace(SID, ws_ctx())
     for field in ("span_count", "spans", "cloudwatch_url"):
         assert field in result
     for span in result["spans"]:

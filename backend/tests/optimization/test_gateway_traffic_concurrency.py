@@ -19,6 +19,9 @@ import pytest
 
 from app.core.config import get_settings
 from app.optimization import service as svc
+from tests.conftest import ws_ctx
+
+WS = ws_ctx()
 
 
 class _Poster:
@@ -66,7 +69,7 @@ class _Poster:
 
 def _send(prompts, poster, **kwargs):
     return svc.send_gateway_traffic(
-        "https://gw.example", "expv1", prompts,
+        "https://gw.example", "expv1", prompts, WS,
         poster=poster, signer=lambda creds, region, req: None, **kwargs
     )
 
@@ -227,12 +230,12 @@ def test_replay_posts_use_the_longer_traffic_timeout(monkeypatch):
     """
     seen = []
 
-    def fake_sigv4_post(url, body, **kwargs):
+    def fake_sigv4_post(url, body, _ws, **kwargs):
         seen.append(kwargs.get("timeout"))
         return type("Resp", (), {"status_code": 200})()
 
     monkeypatch.setattr(svc, "sigv4_post", fake_sigv4_post)
-    svc.send_gateway_traffic("https://gw.example", "expv1", ["p1", "p2"])
+    svc.send_gateway_traffic("https://gw.example", "expv1", ["p1", "p2"], WS)
 
     assert seen == [svc.TRAFFIC_REQUEST_TIMEOUT_S] * 2
     assert svc.TRAFFIC_REQUEST_TIMEOUT_S == 180.0

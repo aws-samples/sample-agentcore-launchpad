@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Outlet, useLocation } from "react-router-dom";
 
+import { useWorkspace } from "../workspace/workspace-context";
 import { ALL_NAV_ENTRIES, NAV_ENTRIES } from "./nav";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
@@ -17,6 +18,7 @@ export function Shell() {
   const location = useLocation();
   const { t } = useTranslation();
   const health = useHealth();
+  const { current } = useWorkspace();
 
   return (
     <>
@@ -24,7 +26,10 @@ export function Shell() {
       <div className="layout">
         <Sidebar health={health} />
         <main>
-          <div className="view">
+          {/* Keyed on the workspace: switching discards every page's state in
+              one place, so the ~20 mount-only loaders refetch against the new
+              environment instead of showing the old one's rows. */}
+          <div className="view" key={current?.id ?? "none"}>
             <Outlet />
             <footer>
               {t("footer.phase")}

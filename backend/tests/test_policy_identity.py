@@ -12,6 +12,7 @@ from pydantic import SecretStr
 
 from app.core.errors import AppError
 from app.services import aws_clients, policy_identity
+from tests.conftest import ws_ctx
 
 
 def _jwt(username: str, groups: list[str], exp: int | None = None) -> str:
@@ -29,11 +30,10 @@ def _jwt(username: str, groups: list[str], exp: int | None = None) -> str:
 
 
 def _settings(password: str | None = "console-secret"):
-    return SimpleNamespace(
-        auth_password=SecretStr(password) if password else None,
-        region="us-west-2",
-        resources={"user_pool_id": "pool", "user_pool_client_id": "client"},
-    )
+    return SimpleNamespace(auth_password=SecretStr(password) if password else None)
+
+
+WS = ws_ctx({"user_pool_id": "pool", "user_pool_client_id": "client"})
 
 
 @pytest.fixture(autouse=True)
@@ -50,7 +50,7 @@ def test_open_console_keeps_m2m_without_cognito(monkeypatch):
         "client",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no AWS call")),
     )
-    assert policy_identity.gateway_user_token("river", "admin") is None
+    assert policy_identity.gateway_user_token(WS, "river", "admin") is None
 
 
 def test_demo_user_uses_bootstrap_password_and_reconciles_group(monkeypatch):
@@ -74,7 +74,7 @@ def test_demo_user_uses_bootstrap_password_and_reconciles_group(monkeypatch):
     )
     monkeypatch.setattr(aws_clients, "client", lambda *a, **k: cognito)
 
-    assert policy_identity.gateway_user_token("demo", "member") == token
+    assert policy_identity.gateway_user_token(WS, "demo", "member") == token
     assert cognito.initiate_auth.call_args.kwargs["AuthParameters"] == {
         "USERNAME": "demo",
         "PASSWORD": "bootstrap-password",
@@ -85,6 +85,44 @@ def test_demo_user_uses_bootstrap_password_and_reconciles_group(monkeypatch):
     cognito.admin_add_user_to_group.assert_called_once_with(
         UserPoolId="pool", Username="demo", GroupName="hr-analyst"
     )
+
+
+def test_a_non_default_workspace_ignores_the_hubs_demo_passwords(monkeypatch):
+    """`demo_users.passwords` names users only `make bootstrap` creates, in the
+    hub's pool. A console-registered workspace has the groups but no lab users, so
+    the same caller must get a shadow identity in that pool instead of a 503."""
+    token = _jwt("admin", ["platform-admin"])
+    cognito = MagicMock()
+    cognito.admin_get_user.side_effect = ClientError(
+        {"Error": {"Code": "UserNotFoundException", "Message": "missing"}},
+        "AdminGetUser",
+    )
+    cognito.admin_create_user.return_value = {
+        "User": {
+            "Attributes": [
+                {"Name": "preferred_username", "Value": policy_identity.SHADOW_MARKER}
+            ]
+        }
+    }
+    cognito.admin_list_groups_for_user.return_value = {"Groups": []}
+    cognito.initiate_auth.return_value = {
+        "AuthenticationResult": {"AccessToken": token, "ExpiresIn": 3600}
+    }
+    monkeypatch.setattr(policy_identity, "get_settings", _settings)
+    monkeypatch.setattr(
+        policy_identity,
+        "load_yaml_config",
+        lambda: {"demo_users": {"passwords": {"admin": "hub-pool-password"}}},
+    )
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: cognito)
+    other = ws_ctx({"user_pool_id": "pool", "user_pool_client_id": "client"}, id="acct2")
+
+    assert policy_identity.gateway_user_token(other, "admin", "admin") == token
+    assert (
+        cognito.initiate_auth.call_args.kwargs["AuthParameters"]["PASSWORD"]
+        != "hub-pool-password"
+    )
+    cognito.admin_create_user.assert_called_once()
 
 
 def test_new_console_user_creates_marked_shadow_identity(monkeypatch):
@@ -110,7 +148,7 @@ def test_new_console_user_creates_marked_shadow_identity(monkeypatch):
     monkeypatch.setattr(aws_clients, "client", lambda *a, **k: cognito)
 
     assert (
-        policy_identity.gateway_user_token("clare", "admin", "clare@example.com")
+        policy_identity.gateway_user_token(WS, "clare", "admin", "clare@example.com")
         == token
     )
     attributes = cognito.admin_create_user.call_args.kwargs["UserAttributes"]
@@ -130,7 +168,7 @@ def test_unmarked_existing_cognito_user_is_not_adopted(monkeypatch):
     monkeypatch.setattr(aws_clients, "client", lambda *a, **k: cognito)
 
     with pytest.raises(AppError) as error:
-        policy_identity.gateway_user_token("clare", "member")
+        policy_identity.gateway_user_token(WS, "clare", "member")
     assert error.value.code == "policy.identity_conflict"
     cognito.admin_set_user_password.assert_not_called()
 
@@ -159,5 +197,5 @@ def test_mismatched_jwt_claims_are_rejected(monkeypatch):
     monkeypatch.setattr(aws_clients, "client", lambda *a, **k: cognito)
 
     with pytest.raises(AppError) as error:
-        policy_identity.gateway_user_token("demo", "member")
+        policy_identity.gateway_user_token(WS, "demo", "member")
     assert error.value.code == "policy.identity_invalid"

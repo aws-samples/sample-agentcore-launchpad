@@ -4,23 +4,31 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import app.routers.overview as overview_mod
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.evaluation.models import EvalRun
 from app.models.ledger import Agent, ChatSession
+from app.services import governance
+from tests.conftest import set_default_resources, ws_ctx
 
 
 def _seed():
     db = SessionLocal()
-    agent = Agent(name="ov-agent", method="harness", status="active", spec={})
+    agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="ov-agent", method="harness", status="active", spec={})
     db.add(agent)
     db.flush()
-    db.add(ChatSession(agent_id=agent.id, session_id="s1", turns=2))
-    stale = ChatSession(agent_id=agent.id, session_id="s2", turns=1)
+    db.add(ChatSession(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        agent_id=agent.id, session_id="s1", turns=2))
+    stale = ChatSession(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        agent_id=agent.id, session_id="s2", turns=1)
     stale.last_at = datetime.now(UTC) - timedelta(days=3)
     db.add(stale)
     db.add(
         EvalRun(
-            agent_id=agent.id,
+            workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent.id,
             agent_name=agent.name,
             status="completed",
             scores=[{"evaluatorId": "Builtin.Helpfulness", "score": 1.0},
@@ -39,10 +47,12 @@ def test_overview_tiles_and_health(client, monkeypatch):
         {"recordId": "r3", "descriptorType": "AGENT_SKILLS", "status": "APPROVED"},
         {"recordId": "r4", "descriptorType": "A2A", "status": "DEPRECATED"},
     ]
-    monkeypatch.setattr(overview_mod, "console_list", lambda: records)
-    monkeypatch.setattr(overview_mod, "_traces_active", lambda: True)
-    monkeypatch.setattr(overview_mod, "_attached_policy_engine_id", lambda: "pe-live")
-    overview_mod._cache.update(assets_at=0.0, assets=None)
+    monkeypatch.setattr(overview_mod, "console_list", lambda _ws: records)
+    monkeypatch.setattr(overview_mod, "_traces_active", lambda _ws: True)
+    monkeypatch.setattr(
+        overview_mod, "attached_policy_engine_id", lambda _c, _ws: "pe-live"
+    )
+    overview_mod._cache.clear()
 
     res = client.get("/api/overview")
     assert res.status_code == 200, res.text
@@ -60,38 +70,33 @@ def test_overview_tiles_and_health(client, monkeypatch):
 
 
 def test_overview_registry_failure_falls_back_to_cache(client, monkeypatch):
-    def boom():
+    def boom(_ws):
         raise RuntimeError("registry down")
 
     monkeypatch.setattr(overview_mod, "console_list", boom)
-    monkeypatch.setattr(overview_mod, "_traces_active", lambda: False)
-    monkeypatch.setattr(overview_mod, "_attached_policy_engine_id", lambda: "")
-    overview_mod._cache.update(
-        assets_at=0.0, assets={"agents": 7, "tools": 0, "skills": 0}
+    monkeypatch.setattr(overview_mod, "_traces_active", lambda _ws: False)
+    monkeypatch.setattr(
+        overview_mod, "attached_policy_engine_id", lambda _c, _ws: ""
     )
+    overview_mod._cache["default"] = {
+        "assets_at": 0.0, "assets": {"agents": 7, "tools": 0, "skills": 0},
+        "traces_at": 0.0, "traces": None,
+    }
     res = client.get("/api/overview")
     assert res.status_code == 200
     assert res.json()["registry_assets"]["agents"] == 7
 
 
 def test_overview_exposes_registry_unavailable_reason(client, monkeypatch):
+    set_default_resources({
+        "registry_id": "",
+        "registry_unavailable_reason": "blocked by account policy",
+    })
+    monkeypatch.setattr(overview_mod, "_traces_active", lambda _ws: False)
     monkeypatch.setattr(
-        overview_mod,
-        "get_settings",
-        lambda: type(
-            "Settings",
-            (),
-            {
-                "resources": {
-                    "registry_id": "",
-                    "registry_unavailable_reason": "blocked by account policy",
-                }
-            },
-        )(),
+        overview_mod, "attached_policy_engine_id", lambda _c, _ws: ""
     )
-    monkeypatch.setattr(overview_mod, "_traces_active", lambda: False)
-    monkeypatch.setattr(overview_mod, "_attached_policy_engine_id", lambda: "")
-    overview_mod._cache.update(assets_at=0.0, assets=None)
+    overview_mod._cache.clear()
 
     response = client.get("/api/overview")
 
@@ -111,19 +116,10 @@ def test_policy_health_reads_live_gateway_attachment(monkeypatch):
             )
         }
     }
-    monkeypatch.setattr(
-        overview_mod,
-        "get_settings",
-        lambda: type(
-            "Settings",
-            (),
-            {"resources": {"gateway_id": "launchpad-gw-1"}},
-        )(),
-    )
-    monkeypatch.setattr(overview_mod, "control_client", lambda: control)
-    overview_mod._cache.update(policy_at=0.0, policy=None)
+    workspace = ws_ctx({"gateway_id": "launchpad-gw-1"})
+    governance._engine_cache.clear()
 
-    assert overview_mod._attached_policy_engine_id() == "launchpad_pe-abc"
+    assert governance.attached_policy_engine_id(control, workspace) == "launchpad_pe-abc"
     control.get_gateway.assert_called_once_with(
         gatewayIdentifier="launchpad-gw-1"
     )

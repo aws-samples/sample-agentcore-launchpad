@@ -16,11 +16,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.core.db import SessionLocal  # noqa: E402
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal  # noqa: E402
 from app.models.ledger import Agent  # noqa: E402
 from app.services.agentcore import registry as reg  # noqa: E402
 from app.services.agentcore.client import registry_control_client  # noqa: E402
 from app.services.registry_console import _registry_id, register_agent_record  # noqa: E402
+from app.services.workspace import default_workspace_context  # noqa: E402
 
 
 def main() -> None:
@@ -30,14 +31,23 @@ def main() -> None:
 
     db = SessionLocal()
     try:
-        agents = db.query(Agent).filter(Agent.status == "active").all()
+        # Hub workspace only: every record below is written to the hub registry,
+        # so another workspace's agent would land in the wrong one.
+        agents = (
+            db.query(Agent)
+            .filter(
+                Agent.workspace_id == DEFAULT_WORKSPACE_ID, Agent.status == "active"
+            )
+            .all()
+        )
         rows = [(a.id, a.name, a.method, dict(a.spec or {}), a.arn, a.version)
                 for a in agents]
     finally:
         db.close()
 
-    client = registry_control_client()
-    registry_id = _registry_id()
+    workspace = default_workspace_context()
+    client = registry_control_client(workspace)
+    registry_id = _registry_id(workspace)
 
     for agent_id, name, method, spec, arn, version in rows:
         skills = reg.derive_card_skills(spec)
@@ -48,7 +58,7 @@ def main() -> None:
         before = (existing or {}).get("status", "—")
         agent = Agent(id=agent_id, name=name, method=method, spec=spec,
                       arn=arn, version=version, status="active")
-        result = register_agent_record(agent, auto_submit=True)
+        result = register_agent_record(agent, workspace, auto_submit=True)
         record_id = result["record_id"]
         # updates transition through an async UPDATING state — settle first,
         # only then read/repair the approval status

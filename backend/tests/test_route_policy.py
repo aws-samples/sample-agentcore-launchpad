@@ -22,7 +22,9 @@ from app.core.route_policy import (
     MEMBER,
     PUBLIC,
     ROUTE_POLICY,
+    WORKSPACE_EXEMPT,
     enforce_route_policy,
+    is_hub_global,
 )
 from app.main import create_app
 from app.routers import auth
@@ -172,6 +174,42 @@ class TestNoDrift:
         for path in auth._OPEN_API_PATHS:
             entries = {v for (_, p), v in ROUTE_POLICY.items() if p == path}
             assert entries == {PUBLIC}, f"{path} is open in the middleware but {entries}"
+
+    def test_the_workspace_dimension_matches_the_hub_global_rule(self):
+        """The second dimension drifts in both directions too: a hub-global route
+        cannot be left workspace-scoped, and a workspace-scoped one cannot be
+        quietly exempted (absence from the set is the classification)."""
+        derived = {
+            (method, path)
+            for (method, path), role in ROUTE_POLICY.items()
+            if role == PUBLIC or is_hub_global(path)
+        }
+        assert WORKSPACE_EXEMPT == derived
+
+    def test_the_hub_global_rule_matches_whole_segments(self):
+        """A raw prefix match would exempt a future `/api/userspace` by accident,
+        and an accidental exemption is the fail-open direction."""
+        assert is_hub_global("/api/users") and is_hub_global("/api/users/{user_id}")
+        assert not is_hub_global("/api/userspace")
+        assert not is_hub_global("/api/authorizers")
+
+    def test_public_routes_are_never_workspace_scoped(self):
+        """A PUBLIC route has no identity, so there is nobody to resolve a
+        workspace for."""
+        public = {key for key, role in ROUTE_POLICY.items() if role == PUBLIC}
+        assert public <= WORKSPACE_EXEMPT
+
+    def test_the_console_surface_is_workspace_scoped(self):
+        for key in [
+            ("GET", "/api/agents"),
+            ("POST", "/api/agents"),
+            ("GET", "/api/jobs/{job_id}"),
+            ("GET", "/api/apikeys"),
+            ("POST", "/api/chat/{agent_id}"),
+            ("GET", "/api/eval/runs"),
+            ("GET", "/api/observability/sessions"),
+        ]:
+            assert key not in WORKSPACE_EXEMPT
 
 
 class TestAdminRoutesAreEnforced:

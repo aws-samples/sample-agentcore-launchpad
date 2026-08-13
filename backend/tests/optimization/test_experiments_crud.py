@@ -5,21 +5,24 @@ from unittest.mock import MagicMock
 
 import app.optimization.routers as opt_router
 import app.optimization.service as svc
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent
 from app.optimization.models import Experiment
+from tests.conftest import ws_ctx
 
 
 def test_experiment_create_and_persisted_stages(client, monkeypatch):
     db = SessionLocal()
-    agent = Agent(name="exp-agent", method="zip_runtime", status="active",
+    agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="exp-agent", method="zip_runtime", status="active",
                   arn="arn:rt", resource_id="rt-1", spec={"system_prompt": "x"})
     db.add(agent)
     db.commit()
 
     monkeypatch.setattr(
         opt_router.service, "start_experiment",
-        lambda a: _make_exp(a),
+        lambda a, _ws: _make_exp(a),
     )
     monkeypatch.setattr(
         opt_router.readiness,
@@ -41,7 +44,9 @@ def test_experiment_create_and_persisted_stages(client, monkeypatch):
 def _make_exp(agent_row):
     db = SessionLocal()
     exp = Experiment(
-        name="EXP-t", agent_id=agent_row.id, agent_name=agent_row.name,
+
+            workspace_id=DEFAULT_WORKSPACE_ID,
+            name="EXP-t", agent_id=agent_row.id, agent_name=agent_row.name,
         status="ready", stage="verdict",
         artifacts={"bundles": {"control": {"arn": "arn:c"},
                                "treatment": {"arn": "arn:t"}}},
@@ -55,10 +60,14 @@ def _make_exp(agent_row):
 
 def test_second_experiment_blocked_while_one_runs(client):
     db = SessionLocal()
-    agent = Agent(name="exp-agent-2", method="zip_runtime", status="active",
+    agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="exp-agent-2", method="zip_runtime", status="active",
                   arn="arn:rt", resource_id="rt-2", spec={})
     db.add(agent)
-    db.add(Experiment(name="EXP-busy", agent_id="other", agent_name="other",
+    db.add(Experiment(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="EXP-busy", agent_id="other", agent_name="other",
                       status="running", stage="traffic"))
     db.commit()
     res = client.post("/api/experiments", json={"agent_id": agent.id})
@@ -69,7 +78,9 @@ def test_second_experiment_blocked_while_one_runs(client):
 
 def test_harness_agents_rejected_for_experiments(client):
     db = SessionLocal()
-    agent = Agent(name="h-agent", method="harness", status="active", arn="arn:h",
+    agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name="h-agent", method="harness", status="active", arn="arn:h",
                   spec={})
     db.add(agent)
     db.commit()
@@ -101,7 +112,7 @@ def test_gateway_traffic_signs_and_collects_sessions(monkeypatch):
         ),
     )
     result = svc.send_gateway_traffic(
-        "https://gw.example", "expv1", ["p1", "p2", "p3"],
+        "https://gw.example", "expv1", ["p1", "p2", "p3"], ws_ctx(),
         poster=poster,
         signer=lambda creds, region, req: signed.append(creds),
     )

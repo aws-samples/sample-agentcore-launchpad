@@ -3,8 +3,10 @@ import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../auth/auth-context";
 import { LAB_GUIDE_URL } from "../lib/links";
+import { useWorkspace } from "../workspace/workspace-context";
 import type { HealthInfo } from "./useHealth";
 import { LangSwitcher } from "./LangSwitcher";
+import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 interface TopbarProps {
   crumbKey: string;
@@ -14,6 +16,7 @@ interface TopbarProps {
 export function Topbar({ crumbKey, health }: TopbarProps) {
   const { t } = useTranslation();
   const { authRequired, username, role, accountExpiresAt, logout } = useAuth();
+  const { current } = useWorkspace();
   const displayName = authRequired ? (username ?? "—") : "river";
   const initials = displayName.slice(0, 2).toUpperCase();
   const roleLabel = authRequired
@@ -39,9 +42,14 @@ export function Topbar({ crumbKey, health }: TopbarProps) {
           <span className="led"></span>
           {t("topbar.allSystemsGo")}
         </div>
-        <div className="syschip">{health?.region ?? "—"}</div>
-        <div className="syschip">
-          {t("topbar.acct")} {health?.account_id || "—"}
+        <WorkspaceSwitcher />
+        {/* The workspace owns the environment; health only backs the chips up
+            while the workspace list is unavailable. */}
+        <div className="syschip" data-testid="topbar-region">
+          {current?.region ?? health?.region ?? "—"}
+        </div>
+        <div className="syschip" data-testid="topbar-account">
+          {t("topbar.acct")} {current?.account_id || health?.account_id || "—"}
         </div>
         <a
           className="syschip link"

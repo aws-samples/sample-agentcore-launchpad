@@ -10,7 +10,7 @@ import time
 from unittest.mock import MagicMock
 
 import app.evaluation.service as svc
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.evaluation.models import EvalRun
 
 
@@ -18,7 +18,9 @@ def make_run(**fields) -> str:
     db = SessionLocal()
     try:
         run = EvalRun(
-            agent_id="a1", agent_name="eval-target-v2", mode="insights",
+
+                workspace_id=DEFAULT_WORKSPACE_ID,
+                agent_id="a1", agent_name="eval-target-v2", mode="insights",
             evaluators=[], session_ids=["s1", "s2"], **fields,
         )
         db.add(run)
@@ -48,7 +50,7 @@ def wait_status(run_id: str, target: str, timeout: float = 5.0) -> EvalRun:
 
 def test_evaluating_run_with_batch_is_reconciled(monkeypatch):
     run_id = make_run(status="evaluating", batch_eval_id="run_abc-123")
-    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
     monkeypatch.setattr(
         svc.ac, "poll_batch_evaluation",
         lambda client, batch_id, max_polls=60: {
@@ -85,7 +87,7 @@ def test_terminal_runs_untouched():
 
 def test_reconcile_failure_marks_run_failed(monkeypatch):
     run_id = make_run(status="evaluating", batch_eval_id="run_gone-1")
-    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
 
     def boom(client, batch_id, max_polls=60):
         raise RuntimeError("ResourceNotFound")

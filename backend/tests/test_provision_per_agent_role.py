@@ -7,6 +7,7 @@ does it, and that the documented escape hatch still yields the shared role.
 
 import pytest
 
+from app.core.db import DEFAULT_WORKSPACE_ID
 from app.deployer import container as container_method
 from app.deployer import harness as harness_method
 from app.deployer import zip_runtime as zip_method
@@ -14,6 +15,8 @@ from app.deployer.pipeline import StageContext
 from app.models.ledger import Agent
 from app.services import agent_iam
 from tests.test_agent_iam_lifecycle import StubIam
+
+from .conftest import ws_ctx
 
 SHARED = "arn:aws:iam::123456789012:role/launchpad-agent-execution-role"
 
@@ -36,7 +39,7 @@ class SharedRoleSettings(Settings):
 
 def _agent(method="zip_runtime", name="probe") -> Agent:
     return Agent(
-        id="abcdef1234",
+        workspace_id=DEFAULT_WORKSPACE_ID, id="abcdef1234",
         name=name,
         method=method,
         spec={"name": name, "method": method, "system_prompt": "p"},
@@ -44,8 +47,11 @@ def _agent(method="zip_runtime", name="probe") -> Agent:
     )
 
 
-def _ctx() -> StageContext:
-    return StageContext(agent_id="abcdef1234", deployment_id="d", job_id="j")
+def _ctx(resources: dict | None = None) -> StageContext:
+    return StageContext(
+        agent_id="abcdef1234", deployment_id="d", job_id="j",
+        workspace=ws_ctx(Settings.resources if resources is None else resources),
+    )
 
 
 @pytest.mark.parametrize(
@@ -63,7 +69,7 @@ class TestEachDeployerProvisionsItsOwnRole:
         monkeypatch.setattr(module, "get_settings", lambda: Settings())
         if module is harness_method:
             # the harness provision stage also touches the KB gateway; no KBs here
-            monkeypatch.setattr(module, "control_client", lambda: object())
+            monkeypatch.setattr(module, "control_client", lambda _ws=None: object())
         iam = StubIam()
         agent = _agent(method)
         ctx = _ctx()
@@ -77,7 +83,7 @@ class TestEachDeployerProvisionsItsOwnRole:
     def test_is_idempotent_for_a_resumed_job(self, module, method, monkeypatch):
         monkeypatch.setattr(module, "get_settings", lambda: Settings())
         if module is harness_method:
-            monkeypatch.setattr(module, "control_client", lambda: object())
+            monkeypatch.setattr(module, "control_client", lambda _ws=None: object())
         iam = StubIam()
         agent = _agent(method)
         first = module._stage_provision(_ctx(), agent, iam_client=iam)
@@ -90,7 +96,7 @@ class TestEachDeployerProvisionsItsOwnRole:
         without a code change."""
         monkeypatch.setattr(module, "get_settings", lambda: SharedRoleSettings())
         if module is harness_method:
-            monkeypatch.setattr(module, "control_client", lambda: object())
+            monkeypatch.setattr(module, "control_client", lambda _ws=None: object())
         iam = StubIam()
         ctx = _ctx()
         module._stage_provision(ctx, _agent(method), iam_client=iam)
@@ -105,7 +111,7 @@ class TestSharedRoleFallbackStillValidatesConfig:
 
         monkeypatch.setattr(zip_method, "get_settings", lambda: NoRole())
         with pytest.raises(RuntimeError, match="bootstrap"):
-            zip_method._stage_provision(_ctx(), _agent(), iam_client=StubIam())
+            zip_method._stage_provision(_ctx({}), _agent(), iam_client=StubIam())
 
 
 class TestTwoAgentsAreIsolated:
@@ -114,11 +120,11 @@ class TestTwoAgentsAreIsolated:
         monkeypatch.setattr(zip_method, "get_settings", lambda: Settings())
         iam = StubIam()
         first = Agent(
-            id="1111111111", name="alpha", method="zip_runtime",
+            workspace_id=DEFAULT_WORKSPACE_ID, id="1111111111", name="alpha", method="zip_runtime",
             spec={"name": "alpha", "method": "zip_runtime", "system_prompt": "p"},
         )
         second = Agent(
-            id="2222222222", name="beta", method="zip_runtime",
+            workspace_id=DEFAULT_WORKSPACE_ID, id="2222222222", name="beta", method="zip_runtime",
             spec={"name": "beta", "method": "zip_runtime", "system_prompt": "p"},
         )
         ctx_a, ctx_b = _ctx(), _ctx()
@@ -138,12 +144,22 @@ class TestDeleteRemovesTheRole:
         agent_iam.ensure_role(
             iam, agent,
             __import__("app.schemas.agent", fromlist=["AgentSpec"]).AgentSpec(**agent.spec),
-            agent_iam.context_from_settings(Settings()),
+            agent_iam.role_context(ws_ctx(Settings.resources)),
         )
-        assert agent_iam.delete_execution_role(agent, Settings(), iam=iam) is True
+        assert (
+            agent_iam.delete_execution_role(
+                agent, Settings(), ws_ctx(Settings.resources), iam=iam
+            )
+            is True
+        )
         assert iam.roles == {}
 
     def test_the_shared_role_is_never_deleted(self, monkeypatch):
         iam = StubIam()
-        assert agent_iam.delete_execution_role(_agent(), SharedRoleSettings(), iam=iam) is True
+        assert (
+            agent_iam.delete_execution_role(
+                _agent(), SharedRoleSettings(), ws_ctx(Settings.resources), iam=iam
+            )
+            is True
+        )
         assert "delete_role" not in " ".join(iam.calls)

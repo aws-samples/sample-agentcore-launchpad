@@ -15,6 +15,7 @@ import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.core.config import get_settings  # noqa: E402
+from app.core.db import DEFAULT_WORKSPACE_ID  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.models.conversation import (  # noqa: E402
     ChatMessage,
@@ -56,8 +57,10 @@ def test_construct_messages_list_shape():
     sid = "s1"
     svc.sessions[sid] = ConversationSession(session_id=sid)
     svc.messages[sid] = [
-        ChatMessage(session_id=sid, sender="user", content="q1"),
-        ChatMessage(session_id=sid, sender="agent", content="a1"),
+        ChatMessage(workspace_id=DEFAULT_WORKSPACE_ID, session_id=sid, sender="user", content="q1"),
+        ChatMessage(
+            workspace_id=DEFAULT_WORKSPACE_ID,
+            session_id=sid, sender="agent", content="a1"),
     ]
     assert svc._construct_messages_list(sid) == [
         {"role": "user", "content": [{"text": "q1"}]},
@@ -70,11 +73,17 @@ def test_construct_messages_list_excludes_failed_turn_as_pair():
     sid = "s2"
     svc.sessions[sid] = ConversationSession(session_id=sid)
     svc.messages[sid] = [
-        ChatMessage(session_id=sid, sender="user", content="q1"),
-        ChatMessage(session_id=sid, sender="agent", content="a1"),
-        ChatMessage(session_id=sid, sender="user", content="bad", metadata={"error": True}),
-        ChatMessage(session_id=sid, sender="agent", content="err", metadata={"error": True}),
-        ChatMessage(session_id=sid, sender="user", content="q3"),
+        ChatMessage(workspace_id=DEFAULT_WORKSPACE_ID, session_id=sid, sender="user", content="q1"),
+        ChatMessage(
+            workspace_id=DEFAULT_WORKSPACE_ID,
+            session_id=sid, sender="agent", content="a1"),
+        ChatMessage(
+            workspace_id=DEFAULT_WORKSPACE_ID,
+            session_id=sid, sender="user", content="bad", metadata={"error": True}),
+        ChatMessage(
+            workspace_id=DEFAULT_WORKSPACE_ID,
+            session_id=sid, sender="agent", content="err", metadata={"error": True}),
+        ChatMessage(workspace_id=DEFAULT_WORKSPACE_ID, session_id=sid, sender="user", content="q3"),
     ]
     roles = [m["role"] for m in svc._construct_messages_list(sid)]
     texts = [m["content"][0]["text"] for m in svc._construct_messages_list(sid)]

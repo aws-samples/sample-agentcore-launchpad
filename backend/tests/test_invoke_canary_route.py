@@ -6,6 +6,7 @@ byte-identical; a gateway failure degrades to the control-safe stable endpoint
 import json
 
 import app.services.invoke as invoke_mod
+from app.core.db import DEFAULT_WORKSPACE_ID
 from app.models.ledger import Agent
 
 ROUTE = {
@@ -18,7 +19,7 @@ ROUTE = {
 
 def _agent() -> Agent:
     agent = Agent(
-        name="subject",
+        workspace_id=DEFAULT_WORKSPACE_ID, name="subject",
         method="zip_runtime",
         status="active",
         arn="arn:agent",
@@ -41,12 +42,12 @@ def test_active_canary_routes_through_gateway(monkeypatch):
     )
     calls: dict = {}
 
-    def fake_sigv4(url, body, *, session_id=None):
+    def fake_sigv4(url, body, _ws, *, session_id=None):
         calls.update(url=url, body=body, session_id=session_id)
         return _Resp(200, json.dumps({"result": "hello from candidate"}))
 
     monkeypatch.setattr(invoke_mod.gateway, "sigv4_post", fake_sigv4)
-    monkeypatch.setattr(invoke_mod, "data_client", lambda: object())
+    monkeypatch.setattr(invoke_mod, "data_client", lambda _ws=None: object())
 
     def _no_direct(*args, **kwargs):
         raise AssertionError("must route via gateway, not direct invoke")
@@ -67,12 +68,12 @@ def test_short_session_id_is_replaced_before_gateway_post(monkeypatch):
     )
     calls: dict = {}
 
-    def fake_sigv4(url, body, *, session_id=None):
+    def fake_sigv4(url, body, _ws, *, session_id=None):
         calls.update(session_id=session_id, body=body)
         return _Resp(200, json.dumps({"result": "ok"}))
 
     monkeypatch.setattr(invoke_mod.gateway, "sigv4_post", fake_sigv4)
-    monkeypatch.setattr(invoke_mod, "data_client", lambda: object())
+    monkeypatch.setattr(invoke_mod, "data_client", lambda _ws=None: object())
 
     out = invoke_mod.invoke_agent_text(_agent(), "hi", session_id="short")
 
@@ -88,12 +89,12 @@ def test_authenticated_canary_payload_keeps_user_policy_identity(monkeypatch):
     )
     calls: dict = {}
 
-    def fake_sigv4(url, body, *, session_id=None):
+    def fake_sigv4(url, body, _ws, *, session_id=None):
         calls.update(body=body)
         return _Resp(200, json.dumps({"result": "ok"}))
 
     monkeypatch.setattr(invoke_mod.gateway, "sigv4_post", fake_sigv4)
-    monkeypatch.setattr(invoke_mod, "data_client", lambda: object())
+    monkeypatch.setattr(invoke_mod, "data_client", lambda _ws=None: object())
     invoke_mod.invoke_agent_text(
         _agent(),
         "hi",
@@ -127,7 +128,7 @@ def test_no_canary_uses_direct_invoke_no_qualifier(monkeypatch):
         return {"text": "direct reply", "session_id": session_id or "s"}
 
     monkeypatch.setattr(invoke_mod.rt, "invoke_runtime_text", fake_invoke)
-    monkeypatch.setattr(invoke_mod, "data_client", lambda: object())
+    monkeypatch.setattr(invoke_mod, "data_client", lambda _ws=None: object())
 
     def _no_gateway(*args, **kwargs):
         raise AssertionError("non-canary path must not touch the gateway")
@@ -163,7 +164,7 @@ def test_gateway_error_falls_back_to_stable_endpoint(monkeypatch):
         return {"text": "control reply", "session_id": session_id or "s"}
 
     monkeypatch.setattr(invoke_mod.rt, "invoke_runtime_text", fake_invoke)
-    monkeypatch.setattr(invoke_mod, "data_client", lambda: object())
+    monkeypatch.setattr(invoke_mod, "data_client", lambda _ws=None: object())
 
     out = invoke_mod.invoke_agent_text(_agent(), "hi", session_id=None)
 
@@ -198,7 +199,7 @@ def test_provisioning_route_invokes_stable_endpoint_directly(monkeypatch):
         return {"text": "control reply", "session_id": session_id or "s"}
 
     monkeypatch.setattr(invoke_mod.rt, "invoke_runtime_text", fake_invoke)
-    monkeypatch.setattr(invoke_mod, "data_client", lambda: object())
+    monkeypatch.setattr(invoke_mod, "data_client", lambda _ws=None: object())
 
     def _no_gateway(*args, **kwargs):
         raise AssertionError("provisioning route must not touch the gateway")
@@ -233,7 +234,7 @@ def test_gateway_non_200_falls_back_to_stable_endpoint(monkeypatch):
         return {"text": "control reply", "session_id": "s"}
 
     monkeypatch.setattr(invoke_mod.rt, "invoke_runtime_text", fake_invoke)
-    monkeypatch.setattr(invoke_mod, "data_client", lambda: object())
+    monkeypatch.setattr(invoke_mod, "data_client", lambda _ws=None: object())
 
     out = invoke_mod.invoke_agent_text(_agent(), "hi", session_id="y" * 40)
 

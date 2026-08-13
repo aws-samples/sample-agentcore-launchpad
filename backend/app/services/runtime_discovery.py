@@ -244,6 +244,7 @@ def require_invoke_capability(agent: Agent) -> None:
 
 def _managed_match(
     db: Session,
+    workspace_id: str,
     runtime_arn: str | None,
     runtime_id: str,
     harness: dict[str, Any] | None = None,
@@ -252,10 +253,18 @@ def _managed_match(
 
     Prefers a launchpad-managed row over a stale discovered import of the same
     resource, so a harness backing runtime surfaces its real harness agent.
+
+    Scoped to the workspace the scan ran against: the same resource name/id can
+    exist in two environments, and matching ledger-wide would report an agent
+    from a region this scan never looked at.
     """
     arns = {value for value in (runtime_arn, (harness or {}).get("arn")) if value}
     ids = {value for value in (runtime_id, (harness or {}).get("harnessId")) if value}
-    rows = db.query(Agent).filter(Agent.status != "deleted").all()
+    rows = (
+        db.query(Agent)
+        .filter(Agent.workspace_id == workspace_id, Agent.status != "deleted")
+        .all()
+    )
     matches = [row for row in rows if row.arn in arns] or [
         row for row in rows if row.resource_id in ids
     ]
@@ -268,6 +277,7 @@ def _candidate(
     detail: dict[str, Any],
     db: Session,
     *,
+    workspace_id: str,
     summary: dict[str, Any] | None = None,
     harness_index: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -284,7 +294,7 @@ def _candidate(
         if harness is not None
         else _import_capability(protocol)
     )
-    managed = _managed_match(db, runtime_arn or None, runtime_id, harness=harness)
+    managed = _managed_match(db, workspace_id, runtime_arn or None, runtime_id, harness=harness)
     return {
         "runtime_id": runtime_id,
         "runtime_arn": runtime_arn,
@@ -315,11 +325,11 @@ def _candidate(
 
 
 def _inspection_failure(
-    summary: dict[str, Any], db: Session, exc: Exception
+    summary: dict[str, Any], db: Session, exc: Exception, *, workspace_id: str
 ) -> dict[str, Any]:
     runtime_id = str(summary.get("agentRuntimeId") or "")
     runtime_arn = str(summary.get("agentRuntimeArn") or "")
-    managed = _managed_match(db, runtime_arn or None, runtime_id)
+    managed = _managed_match(db, workspace_id, runtime_arn or None, runtime_id)
     reason = f"Runtime detail inspection failed ({_aws_error(exc)})."
     return {
         "runtime_id": runtime_id,
@@ -346,7 +356,7 @@ def _inspection_failure(
     }
 
 
-def scan_runtimes(control: Any, db: Session) -> list[dict[str, Any]]:
+def scan_runtimes(control: Any, db: Session, *, workspace_id: str) -> list[dict[str, Any]]:
     try:
         summaries = runtime_api.list_runtimes(control)
     except Exception as exc:
@@ -362,14 +372,24 @@ def scan_runtimes(control: Any, db: Session) -> list[dict[str, Any]]:
         try:
             detail = runtime_api.get_runtime(control, str(summary["agentRuntimeId"]))
             candidates.append(
-                _candidate(detail, db, summary=summary, harness_index=harness_index)
+                _candidate(
+                    detail,
+                    db,
+                    workspace_id=workspace_id,
+                    summary=summary,
+                    harness_index=harness_index,
+                )
             )
         except Exception as exc:
-            candidates.append(_inspection_failure(summary, db, exc))
+            candidates.append(
+                _inspection_failure(summary, db, exc, workspace_id=workspace_id)
+            )
     return candidates
 
 
-def _harness_candidate(record: dict[str, Any], db: Session) -> dict[str, Any]:
+def _harness_candidate(
+    record: dict[str, Any], db: Session, *, workspace_id: str
+) -> dict[str, Any]:
     """Projection of one ListHarnesses summary / GetHarness detail.
 
     Harness summaries carry no authorizer or artifact detail, so the scan makes
@@ -379,7 +399,7 @@ def _harness_candidate(record: dict[str, Any], db: Session) -> dict[str, Any]:
     harness_id = str(record.get("harnessId") or "")
     harness_arn = str(record.get("arn") or "")
     aws_status = str(record.get("status") or "UNKNOWN").upper()
-    managed = _managed_match(db, harness_arn or None, harness_id)
+    managed = _managed_match(db, workspace_id, harness_arn or None, harness_id)
     capability = _harness_status_capability(aws_status)
     return {
         "harness_id": harness_id,
@@ -398,7 +418,9 @@ def _harness_candidate(record: dict[str, Any], db: Session) -> dict[str, Any]:
     }
 
 
-def scan_harnesses(control: Any, db: Session) -> tuple[list[dict[str, Any]], str | None]:
+def scan_harnesses(
+    control: Any, db: Session, *, workspace_id: str
+) -> tuple[list[dict[str, Any]], str | None]:
     """Harness candidates plus a fail-soft error string.
 
     Unlike the Runtime scan a ListHarnesses failure is not fatal: the Runtime
@@ -409,7 +431,13 @@ def scan_harnesses(control: Any, db: Session) -> tuple[list[dict[str, Any]], str
         summaries = harness_api.list_harnesses(control)
     except Exception as exc:
         return [], f"AgentCore Harness discovery failed ({_aws_error(exc)})."
-    return [_harness_candidate(summary, db) for summary in summaries], None
+    return (
+        [
+            _harness_candidate(summary, db, workspace_id=workspace_id)
+            for summary in summaries
+        ],
+        None,
+    )
 
 
 def _ledger_status(aws_status: str) -> str:
@@ -421,11 +449,20 @@ def _ledger_status(aws_status: str) -> str:
 
 
 def _display_name(
-    db: Session, resource_name: str, resource_id: str, existing: Agent | None
+    db: Session,
+    resource_name: str,
+    resource_id: str,
+    existing: Agent | None,
+    *,
+    workspace_id: str,
 ) -> str:
     conflict = (
         db.query(Agent)
-        .filter(Agent.name == resource_name, Agent.status != "deleted")
+        .filter(
+            Agent.workspace_id == workspace_id,
+            Agent.name == resource_name,
+            Agent.status != "deleted",
+        )
         .first()
     )
     if conflict is None or (existing is not None and conflict.id == existing.id):
@@ -469,14 +506,23 @@ def _empty_import_result() -> dict[str, list[dict[str, Any]]]:
 
 
 def import_runtimes(
-    control: Any, db: Session, runtime_ids: list[str]
+    control: Any, db: Session, runtime_ids: list[str], *, workspace_id: str
 ) -> dict[str, list[dict[str, Any]]]:
+    """Import selected Runtimes as externally-owned ledger rows (idempotent).
+
+    `workspace_id` is the environment the scan ran against: it stamps the rows
+    this call creates and scopes every ownership/name-collision query, so a
+    resource that another workspace already imported is invisible here rather
+    than refreshed in place.
+    """
     result = _empty_import_result()
     harness_index = _harness_index(control)
     for runtime_id in runtime_ids:
         try:
             detail = runtime_api.get_runtime(control, runtime_id)
-            candidate = _candidate(detail, db, harness_index=harness_index)
+            candidate = _candidate(
+                detail, db, workspace_id=workspace_id, harness_index=harness_index
+            )
         except Exception as exc:
             result["failed"].append(
                 {
@@ -520,9 +566,13 @@ def import_runtimes(
 
         now = datetime.now(UTC)
         created = existing is None
-        display_name = _display_name(db, candidate["name"], runtime_id, existing)
+        display_name = _display_name(
+            db, candidate["name"], runtime_id, existing, workspace_id=workspace_id
+        )
         if existing is None:
-            existing = Agent(method=DISCOVERED_METHOD, owner="aws-discovery")
+            existing = Agent(
+                workspace_id=workspace_id, method=DISCOVERED_METHOD, owner="aws-discovery"
+            )
             db.add(existing)
         existing.name = display_name
         existing.status = _ledger_status(candidate["aws_status"])
@@ -544,12 +594,13 @@ def import_runtimes(
 
 
 def import_harnesses(
-    control: Any, db: Session, harness_ids: list[str]
+    control: Any, db: Session, harness_ids: list[str], *, workspace_id: str
 ) -> dict[str, list[dict[str, Any]]]:
     """Import managed Harnesses as externally-owned ledger rows (idempotent).
 
     The row carries the harness ARN/id, never the backing runtime's, so delete
-    stays ledger-only and invoke dispatches to InvokeHarness.
+    stays ledger-only and invoke dispatches to InvokeHarness. `workspace_id`
+    stamps the rows this call creates and scopes the ownership/name queries.
     """
     result = _empty_import_result()
     for harness_id in harness_ids:
@@ -564,7 +615,7 @@ def import_harnesses(
                 }
             )
             continue
-        candidate = _harness_candidate(detail, db)
+        candidate = _harness_candidate(detail, db, workspace_id=workspace_id)
 
         # Ownership first: a harness deployed by launchpad (method="harness")
         # must never be duplicated as an externally-owned import.
@@ -600,9 +651,13 @@ def import_harnesses(
             continue
 
         created = existing is None
-        display_name = _display_name(db, candidate["name"], harness_id, existing)
+        display_name = _display_name(
+            db, candidate["name"], harness_id, existing, workspace_id=workspace_id
+        )
         if existing is None:
-            existing = Agent(method=DISCOVERED_METHOD, owner="aws-discovery")
+            existing = Agent(
+                workspace_id=workspace_id, method=DISCOVERED_METHOD, owner="aws-discovery"
+            )
             db.add(existing)
         existing.name = display_name
         existing.status = _ledger_status(candidate["aws_status"])

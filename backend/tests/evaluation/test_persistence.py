@@ -6,7 +6,7 @@ completed runs must still be there (SQLite is the source of truth).
 
 from fastapi.testclient import TestClient
 
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.evaluation.models import EvalRun
 from app.main import create_app
 
@@ -14,7 +14,9 @@ from app.main import create_app
 def test_runs_survive_restart():
     db = SessionLocal()
     run = EvalRun(
-        agent_id="a1", agent_name="persist-agent", dataset_name="ds",
+
+            workspace_id=DEFAULT_WORKSPACE_ID,
+            agent_id="a1", agent_name="persist-agent", dataset_name="ds",
         evaluators=["Builtin.Correctness"], status="completed",
         scores=[{"evaluatorId": "Builtin.Correctness", "score": 0.9}],
     )
@@ -136,7 +138,9 @@ def test_runs_list_pagination_and_mode_filter(client):
     made = []
     for index in range(7):
         run = EvalRun(
-            agent_id="a1", agent_name=f"pager-agent-{index}", dataset_name="ds",
+
+                workspace_id=DEFAULT_WORKSPACE_ID,
+                agent_id="a1", agent_name=f"pager-agent-{index}", dataset_name="ds",
             evaluators=["Builtin.Correctness"], status="completed",
             mode="insights" if index % 2 else "evaluators",
         )
@@ -175,7 +179,9 @@ def test_runs_list_filters_by_agent_for_the_recommend_source_picker(client):
     for index in range(3):
         for agent_id, bucket in (("rec-a", mine), ("rec-b", theirs)):
             run = EvalRun(
-                agent_id=agent_id, agent_name=agent_id, mode="insights",
+
+                    workspace_id=DEFAULT_WORKSPACE_ID,
+                    agent_id=agent_id, agent_name=agent_id, mode="insights",
                 status="completed" if index else "evaluating",
                 batch_eval_id=f"be-{agent_id}-{index}",
             )

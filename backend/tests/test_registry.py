@@ -201,13 +201,15 @@ def test_register_stage_log_does_not_claim_a_submit_it_never_made(monkeypatch):
     row = SimpleNamespace(id="a1", registry_record_id=None)
     session = MagicMock()
     session.get.return_value = row
-    ctx = SimpleNamespace(session=lambda: session, log=logs.append)
+    ctx = SimpleNamespace(session=lambda: session, log=logs.append, workspace=object())
 
     for created, expected in ((True, "auto-submitted"), (False, "DRAFT")):
         logs.clear()
+        # Stub arity mirrors the real (agent, workspace) signature — the live
+        # us-east-2 deploy failed on exactly this drift going unnoticed.
         monkeypatch.setattr(
             registration, "register_agent_record",
-            lambda _row, created=created: {"record_id": "rec-1", "created": created},
+            lambda _row, _ws, created=created: {"record_id": "rec-1", "created": created},
         )
         result = registration.register_stage(ctx, row)
         assert expected in logs[0], logs
@@ -226,11 +228,11 @@ def test_register_stage_skips_only_explicit_registry_unavailability(monkeypatch)
     row = SimpleNamespace(id="a1", registry_record_id=None)
     session = MagicMock()
     session.get.return_value = row
-    ctx = SimpleNamespace(session=lambda: session, log=logs.append)
+    ctx = SimpleNamespace(session=lambda: session, log=logs.append, workspace=object())
     monkeypatch.setattr(
         registration,
         "register_agent_record",
-        lambda _row: (_ for _ in ()).throw(
+        lambda _row, _ws: (_ for _ in ()).throw(
             RegistryUnavailableError("blocked by account policy")
         ),
     )

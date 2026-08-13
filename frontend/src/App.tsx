@@ -13,26 +13,31 @@ import { Observability } from "./pages/Observability";
 import { Overview } from "./pages/Overview";
 import { Registry } from "./pages/Registry";
 import { Users } from "./pages/Users";
+import { Workspaces } from "./pages/Workspaces";
+import { WorkspaceProvider } from "./workspace/WorkspaceProvider";
 
 export default function App() {
   return (
     <BrowserRouter>
       <ToastProvider>
-        <Routes>
-          <Route element={<Shell />}>
-            <Route index element={<Overview />} />
-            <Route path="create" element={<CreateAgent />} />
-            <Route path="create/studio" element={<CreateAgentStudio />} />
-            <Route path="registry" element={<Registry />} />
-            <Route path="knowledge-bases" element={<KnowledgeBases />} />
-            <Route path="memory" element={<Memory />} />
-            <Route path="chat" element={<Chat />} />
-            <Route path="observability" element={<Observability />} />
-            <Route path="evaluation" element={<Evaluation />} />
-            <Route path="governance" element={<Governance />} />
-            <Route path="users" element={<Users />} />
-          </Route>
-        </Routes>
+        <WorkspaceProvider>
+          <Routes>
+            <Route element={<Shell />}>
+              <Route index element={<Overview />} />
+              <Route path="create" element={<CreateAgent />} />
+              <Route path="create/studio" element={<CreateAgentStudio />} />
+              <Route path="registry" element={<Registry />} />
+              <Route path="knowledge-bases" element={<KnowledgeBases />} />
+              <Route path="memory" element={<Memory />} />
+              <Route path="chat" element={<Chat />} />
+              <Route path="observability" element={<Observability />} />
+              <Route path="evaluation" element={<Evaluation />} />
+              <Route path="governance" element={<Governance />} />
+              <Route path="users" element={<Users />} />
+              <Route path="workspaces" element={<Workspaces />} />
+            </Route>
+          </Routes>
+        </WorkspaceProvider>
       </ToastProvider>
     </BrowserRouter>
   );

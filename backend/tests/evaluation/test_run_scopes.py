@@ -7,9 +7,10 @@ scoped with filterConfig.timeRange over the agent's existing traffic.
 import time
 from datetime import datetime, timedelta
 
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.evaluation import service as svc
 from app.evaluation.models import EvalRun
+from tests.conftest import ws_ctx
 from tests.evaluation.test_runs_flow import make_agent, stub_environment
 
 
@@ -105,7 +106,9 @@ def test_insights_subset_only_selected_ids(client, monkeypatch):
 def test_session_metadata_passthrough(client, monkeypatch):
     db = SessionLocal()
     agent = make_agent(db, name="meta-agent")
-    run = EvalRun(agent_id=agent.id, agent_name=agent.name, mode="evaluators",
+    run = EvalRun(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        agent_id=agent.id, agent_name=agent.name, mode="evaluators",
                   evaluators=["Builtin.Correctness"], status="queued")
     db.add(run)
     db.commit()
@@ -117,6 +120,7 @@ def test_session_metadata_passthrough(client, monkeypatch):
                  "groundTruth": {"expectedResponse": "42"}}]
     svc.execute_run(
         run_id,
+        workspace=ws_ctx(),
         agent_arn=agent.arn, method="zip_runtime", service_name="svc.DEFAULT", log_group="/lg",
         items=[], evaluators=["Builtin.Correctness"], mode="evaluators",
         wait_seconds=0, existing_session_ids=["s1" + "x" * 32],

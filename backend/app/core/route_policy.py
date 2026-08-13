@@ -32,11 +32,21 @@ bases, governance, evaluation datasets/evaluators, experiments, canaries, API ke
 studio local exec, tools/demos, prices refresh) is now `MEMBER`; only `/api/users*`
 still requires an administrator. The `perm:*` entries keep their revocation
 semantics unchanged.
+Since 2026-08-12 the table carries a **second dimension**: whether a route
+operates inside a workspace (one account/region environment). `WORKSPACE_EXEMPT`
+names the hub-global routes; every other entry is workspace-scoped, and
+`enforce_route_policy` resolves + authorizes the caller's workspace for it
+before the handler runs (`routers/workspaces.resolve_workspace`). Absence from
+the exempt set *is* the classification, so a new route cannot ship without one.
+
 Consequences worth knowing before editing this table:
 
-* There is still no per-user data partitioning — every member sees and can now
-  mutate the same shared agents, records, datasets and gateways. `ADMIN` no longer
-  marks "state changes"; it marks user management only.
+* Data is partitioned per workspace, not per user: within a workspace every
+  member still sees and can mutate the same shared agents, records, datasets and
+  gateways, but a member only reaches the workspaces an admin granted them
+  (`user_workspaces`), and a resource id belonging to another workspace answers
+  404. `ADMIN` marks user + workspace management; it no longer marks "state
+  changes".
 * The studio local-exec surface (`/api/execute*`, conversations writes) stays safe
   in production through its own handler guard (`local_exec`, refused outright in
   prod unless explicitly opted in) — that guard, not this table, is the real
@@ -56,6 +66,7 @@ from fastapi import Request
 
 from app.core.errors import AppError
 from app.routers.auth import require_admin, require_permission
+from app.routers.workspaces import resolve_workspace
 
 ADMIN = "admin"
 MEMBER = "member"
@@ -241,7 +252,60 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/users/stats"): ADMIN,
     ("PATCH", "/api/users/{user_id}"): ADMIN,
     ("DELETE", "/api/users/{user_id}"): ADMIN,
+    # ---- workspace administration (hub-global, see WORKSPACE_EXEMPT) ----
+    ("GET", "/api/workspaces"): MEMBER,  # returns only the caller's workspaces
+    ("POST", "/api/workspaces"): ADMIN,
+    ("PATCH", "/api/workspaces/{workspace_id}"): ADMIN,
+    ("DELETE", "/api/workspaces/{workspace_id}"): ADMIN,
+    ("POST", "/api/workspaces/{workspace_id}/bootstrap"): ADMIN,
+    ("GET", "/api/workspaces/{workspace_id}/bootstrap"): ADMIN,
+    ("GET", "/api/workspaces/{workspace_id}/grants"): ADMIN,
 }
+
+# Hub-global route prefixes: nothing under them operates inside a workspace.
+HUB_GLOBAL_PREFIXES = ("/api/auth", "/api/users", "/api/workspaces")
+
+
+def is_hub_global(path_format: str) -> bool:
+    """Whether a path sits under a hub-global prefix.
+
+    Matched on path segments, not raw string prefixes: a bare `startswith` would
+    also swallow a future `/api/userspace` and silently exempt it from the
+    workspace boundary, which is the one direction that fails open.
+    """
+    return any(
+        path_format == prefix or path_format.startswith(f"{prefix}/")
+        for prefix in HUB_GLOBAL_PREFIXES
+    )
+
+# The routes that are NOT workspace-scoped. Listed rather than derived so the
+# posture is auditable entry by entry; `tests/test_route_policy.py` asserts the
+# set against the rule "PUBLIC (no identity to resolve a workspace for) or
+# hub-global prefix" in both directions, so it can neither rot nor grow quietly.
+WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("GET", "/api/health"),
+        ("GET", "/api/docs"),
+        ("GET", "/api/openapi.json"),
+        ("GET", "/api/auth/status"),
+        ("POST", "/api/auth/login"),
+        ("POST", "/api/auth/register"),
+        ("POST", "/api/auth/logout"),
+        ("GET", "/api/users"),
+        ("GET", "/api/users/stats"),
+        ("PATCH", "/api/users/{user_id}"),
+        ("DELETE", "/api/users/{user_id}"),
+        ("GET", "/api/workspaces"),
+        ("POST", "/api/workspaces"),
+        ("PATCH", "/api/workspaces/{workspace_id}"),
+        ("DELETE", "/api/workspaces/{workspace_id}"),
+        # Operates ON a workspace that is not usable yet; the target is the path
+        # parameter, not the caller's X-Workspace header.
+        ("POST", "/api/workspaces/{workspace_id}/bootstrap"),
+        ("GET", "/api/workspaces/{workspace_id}/bootstrap"),
+        ("GET", "/api/workspaces/{workspace_id}/grants"),
+    }
+)
 
 # Routers whose classification was extrapolated from the signed-off principle
 # rather than reviewed route by route. Since the 2026-08-11 amendment they are
@@ -261,6 +325,12 @@ def required_role(method: str, path_format: str) -> str | None:
     # Starlette answers HEAD from the GET handler; authorize it the same way.
     lookup = "GET" if method == "HEAD" else method
     return ROUTE_POLICY.get((lookup, path_format))
+
+
+def is_workspace_scoped(method: str, path_format: str) -> bool:
+    """Whether this route operates inside one workspace environment."""
+    lookup = "GET" if method == "HEAD" else method
+    return (lookup, path_format) not in WORKSPACE_EXEMPT
 
 
 def enforce_route_policy(request: Request) -> None:
@@ -290,3 +360,8 @@ def enforce_route_policy(request: Request) -> None:
         require_admin(request)
     elif role.startswith(_PERM_PREFIX):
         require_permission(request, role.removeprefix(_PERM_PREFIX))
+    if is_workspace_scoped(request.method, path_format):
+        # Resolved here rather than per handler: enforcement must not depend on a
+        # router remembering to declare the dependency. Handlers read the result
+        # back through `require_workspace`.
+        resolve_workspace(request)

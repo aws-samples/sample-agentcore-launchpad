@@ -13,15 +13,15 @@ the verify gate.
 import inspect
 import json
 from datetime import UTC, datetime
-from types import SimpleNamespace
 
 import pytest
 from botocore.exceptions import ClientError
 
-import app.services.memory as memory_service
 import app.services.memory_console as mc
 from app.core.db import SessionLocal
 from app.models.ledger import Agent, ChatMessage, ChatSession
+
+from .conftest import set_default_resources
 
 MEM_ID = "launchpad_memory-ABC123"
 AT = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
@@ -112,33 +112,30 @@ class StubData:
 
 
 @pytest.fixture
-def configured(monkeypatch):
-    """Bootstrap has run: memory_id present in settings."""
-    monkeypatch.setattr(
-        memory_service,
-        "get_settings",
-        lambda: SimpleNamespace(resources={"memory_id": MEM_ID}),
-    )
+def configured(client):
+    """Bootstrap has run: memory_id on the workspace the request resolves to."""
+    set_default_resources({"memory_id": MEM_ID})
 
 
 @pytest.fixture
-def unconfigured(monkeypatch):
-    monkeypatch.setattr(
-        memory_service, "get_settings", lambda: SimpleNamespace(resources={})
-    )
+def unconfigured(client):
+    set_default_resources({})
 
 
 def wire(monkeypatch, data=None, control=None):
     data = data or StubData()
     control = control or StubControl()
-    monkeypatch.setattr(mc, "data_client", lambda: data)
-    monkeypatch.setattr(mc, "control_client", lambda: control)
+    monkeypatch.setattr(mc, "data_client", lambda _ws=None: data)
+    monkeypatch.setattr(mc, "control_client", lambda _ws=None: control)
     return data, control
 
 
 def make_agent(name="mem-console-agent") -> str:
     db = SessionLocal()
-    agent = Agent(name=name, method="zip_runtime", status="active", spec={"name": name})
+    agent = Agent(
+        workspace_id="default", name=name, method="zip_runtime", status="active",
+        spec={"name": name},
+    )
     db.add(agent)
     db.commit()
     agent_id = agent.id
@@ -298,9 +295,12 @@ def test_sessions_join_ledger_when_console_wrote_them(client, configured, monkey
     agent_id = make_agent(name="chatty")
     session_id = "s" * 40
     db = SessionLocal()
-    db.add(ChatSession(agent_id=agent_id, session_id=session_id, actor_id="river", turns=2))
-    db.add(ChatMessage(agent_id=agent_id, session_id=session_id, role="user", text="hi"))
-    db.add(ChatMessage(agent_id=agent_id, session_id=session_id, role="agent", text="yo"))
+    db.add(ChatSession(workspace_id="default", agent_id=agent_id,
+                       session_id=session_id, actor_id="river", turns=2))
+    db.add(ChatMessage(workspace_id="default", agent_id=agent_id,
+                       session_id=session_id, role="user", text="hi"))
+    db.add(ChatMessage(workspace_id="default", agent_id=agent_id,
+                       session_id=session_id, role="agent", text="yo"))
     db.commit()
     db.close()
 

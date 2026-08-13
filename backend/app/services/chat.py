@@ -9,13 +9,13 @@ import time
 from collections.abc import Iterator
 from typing import Any
 
-from app.core.config import get_settings
 from app.models.ledger import Agent
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import data_client
 from app.services.agentcore.harness import new_session_id
 from app.services.invoke import invoke_agent_events
 from app.services.runtime_discovery import is_discovered_harness
+from app.services.workspace import WorkspaceContext, context_for_workspace
 
 
 def chat_stream(
@@ -25,12 +25,17 @@ def chat_stream(
     actor_id: str = "river",
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
+    workspace: WorkspaceContext | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield SSE-ready events: meta → (heartbeat|tool|delta)* → done.
 
-    Never raises mid-stream; errors surface as an `error` event.
+    Never raises mid-stream; errors surface as an `error` event. ``workspace``
+    defaults to the agent's own — see ``invoke._agent_workspace``.
     """
     session_id = session_id or new_session_id()
+    workspace = workspace if workspace is not None else context_for_workspace(
+        agent.workspace_id
+    )
     # Imported harnesses stream through the same InvokeHarness path as 方式B.
     harness = agent.method == "harness" or is_discovered_harness(agent)
     mode = "stream" if harness or agent.method == "container" else "buffered"
@@ -46,6 +51,7 @@ def chat_stream(
                 prompt,
                 session_id,
                 actor_id,
+                workspace,
                 runtime_user_id=runtime_user_id,
                 gateway_access_token=gateway_access_token,
             )
@@ -60,6 +66,7 @@ def chat_stream(
                 prompt,
                 session_id=session_id,
                 actor_id=actor_id,
+                workspace=workspace,
                 **invoke_kwargs,
             )
     except Exception as exc:
@@ -76,6 +83,7 @@ def _harness_events(
     prompt: str,
     session_id: str,
     actor_id: str,
+    workspace: WorkspaceContext,
     *,
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
@@ -91,10 +99,10 @@ def _harness_events(
     if gateway_access_token:
         params["tools"] = hc.user_authenticated_tools(
             agent.spec or {},
-            get_settings().resources,
+            workspace.resources,
             gateway_access_token,
         )
-    response = data_client().invoke_harness(
+    response = data_client(workspace).invoke_harness(
         **params,
     )
     for event in response["stream"]:

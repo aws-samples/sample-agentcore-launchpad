@@ -17,14 +17,28 @@ def _engine(tmp_path, name="ledger.db"):
 
 
 def _added_columns() -> set[tuple[str, str]]:
-    """(table, column) pairs `_migrate` knows how to add, read off its own DDL."""
+    """(table, column) pairs `_migrate` knows how to add, read off its own DDL.
+
+    `_migrate` delegates a step to a `_migrate_*` helper when the DDL is long, so
+    every such function is scanned, not just `_migrate` itself.
+    """
     import inspect as py_inspect
     import re
 
-    source = py_inspect.getsource(db_module._migrate)
-    return set(
-        re.findall(r"ALTER TABLE (\w+) ADD COLUMN (\w+)", source)
-    )
+    sources = [
+        py_inspect.getsource(member)
+        for name, member in vars(db_module).items()
+        if name.startswith("_migrate") and py_inspect.isfunction(member)
+    ]
+    return set(re.findall(r"ALTER TABLE (\w+) ADD COLUMN (\w+)", "\n".join(sources)))
+
+
+def _indexes_on(engine, table, column) -> list[str]:
+    return [
+        index["name"]
+        for index in sa.inspect(engine).get_indexes(table)
+        if column in index["column_names"]
+    ]
 
 
 def test_migrate_declares_every_column_missing_from_an_older_table(tmp_path):
@@ -37,8 +51,15 @@ def test_migrate_declares_every_column_missing_from_an_older_table(tmp_path):
     pairs = _added_columns()
     assert pairs, "no ALTER statements found — did _migrate change shape?"
 
+    # SQLite refuses to drop an indexed column, and a database predating the
+    # column has neither it nor its index — so drop both.
+    drops = [
+        (table, column, _indexes_on(engine, table, column)) for table, column in sorted(pairs)
+    ]
     with engine.begin() as conn:
-        for table, column in sorted(pairs):
+        for table, column, indexes in drops:
+            for index in indexes:
+                conn.execute(sa.text(f"DROP INDEX {index}"))
             conn.execute(sa.text(f"ALTER TABLE {table} DROP COLUMN {column}"))
 
     stale = schema_drift(engine)

@@ -13,20 +13,35 @@ from typing import Any
 import httpx
 from botocore.exceptions import BotoCoreError, ClientError
 
-from app.core.config import get_settings, load_yaml_config
+from app.core.config import load_yaml_config
 from app.core.errors import AppError
-from app.services.workspace import default_workspace_context
+from app.services.workspace import WorkspaceContext
 
 _rpc_id = itertools.count(1)
-_token_cache: dict[str, Any] = {}
+_token_cache: dict[tuple[str, str, str], Any] = {}
 
 
-def get_cognito_token(username: str = "admin") -> str:
-    """Access token for a demo user via USER_PASSWORD_AUTH (cached until expiry)."""
-    cached = _token_cache.get(username)
+def _gateway_url(workspace: WorkspaceContext) -> str:
+    url = workspace.resources.get("gateway_url")
+    if not url:
+        raise AppError(
+            "gateway.not_bootstrapped",
+            "gateway_url missing from this workspace's resource map — run its bootstrap",
+            status_code=503,
+        )
+    return str(url)
+
+
+def get_cognito_token(workspace: WorkspaceContext, username: str = "admin") -> str:
+    """Access token for a demo user via USER_PASSWORD_AUTH (cached until expiry).
+
+    Cached per workspace as well as per user: each environment has its own user
+    pool, so a token minted in one is rejected by another's gateway.
+    """
+    cache_key = (workspace.account_id, workspace.region, username)
+    cached = _token_cache.get(cache_key)
     if cached and cached["expires_at"] > time.time() + 60:
         return cached["token"]
-    settings = get_settings()
     config_pw = (
         (load_yaml_config().get("demo_users") or {}).get("passwords", {}).get(username)
     )
@@ -36,10 +51,10 @@ def get_cognito_token(username: str = "admin") -> str:
             "demo user password missing — run scripts/bootstrap.py",
             status_code=503,
         )
-    client = default_workspace_context().client("cognito-idp")
+    client = workspace.client("cognito-idp")
     try:
         resp = client.initiate_auth(
-            ClientId=settings.resources["user_pool_client_id"],
+            ClientId=workspace.resources["user_pool_client_id"],
             AuthFlow="USER_PASSWORD_AUTH",
             AuthParameters={"USERNAME": username, "PASSWORD": config_pw},
         )["AuthenticationResult"]
@@ -64,7 +79,7 @@ def get_cognito_token(username: str = "admin") -> str:
             "Cognito authentication is unavailable",
             status_code=503,
         ) from exc
-    _token_cache[username] = {
+    _token_cache[cache_key] = {
         "token": resp["AccessToken"],
         "expires_at": time.time() + resp.get("ExpiresIn", 3600),
     }
@@ -104,28 +119,19 @@ def _parse_jsonrpc_body(response: httpx.Response) -> dict:
     return json.loads(text) if text.strip() else {}
 
 
-def tools_list(username: str = "admin") -> list[dict[str, Any]]:
-    settings = get_settings()
-    url = settings.resources.get("gateway_url")
-    if not url:
-        raise AppError(
-            "gateway.not_bootstrapped", "gateway_url missing — run scripts/bootstrap.py",
-            status_code=503,
-        )
-    token = get_cognito_token(username)
+def tools_list(workspace: WorkspaceContext, username: str = "admin") -> list[dict[str, Any]]:
+    url = _gateway_url(workspace)
+    token = get_cognito_token(workspace, username)
     result = _rpc(url, token, "tools/list")
     return result.get("tools", [])
 
 
 def tools_call(
-    name: str, arguments: dict[str, Any], username: str = "admin"
+    workspace: WorkspaceContext,
+    name: str,
+    arguments: dict[str, Any],
+    username: str = "admin",
 ) -> dict[str, Any]:
-    settings = get_settings()
-    url = settings.resources.get("gateway_url")
-    if not url:
-        raise AppError(
-            "gateway.not_bootstrapped", "gateway_url missing — run scripts/bootstrap.py",
-            status_code=503,
-        )
-    token = get_cognito_token(username)
+    url = _gateway_url(workspace)
+    token = get_cognito_token(workspace, username)
     return _rpc(url, token, "tools/call", {"name": name, "arguments": arguments})

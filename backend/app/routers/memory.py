@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.core.errors import AppError
 from app.models.ledger import Agent, ChatMessage, ChatSession
+from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import memory_console
 
 router = APIRouter(prefix="/api/memory", tags=["memory"])
@@ -50,17 +51,29 @@ def _guard(fn, *args, **kwargs):
         ) from exc
 
 
-def _agent_names(db: Session, agent_ids: list[str]) -> dict[str, str]:
-    """One batched lookup per page — never N+1 across the actor list."""
+def _agent_names(db: Session, ws: WorkspaceScope, agent_ids: list[str]) -> dict[str, str]:
+    """One batched lookup per page — never N+1 across the actor list.
+
+    Scoped to the request's workspace: an actor id names an agent of *this*
+    environment, and an id that resolves elsewhere stays nameless rather than
+    leaking a foreign agent's name.
+    """
     ids = [i for i in dict.fromkeys(agent_ids) if i]
     if not ids:
         return {}
-    rows = db.query(Agent.id, Agent.name).filter(Agent.id.in_(ids)).all()
+    rows = (
+        db.query(Agent.id, Agent.name)
+        .filter(Agent.workspace_id == ws.id, Agent.id.in_(ids))
+        .all()
+    )
     return {row[0]: row[1] for row in rows}
 
 
 def _resolve_namespace(
-    namespace: str | None, actor_id: str | None, strategy_id: str | None
+    ws: WorkspaceScope,
+    namespace: str | None,
+    actor_id: str | None,
+    strategy_id: str | None,
 ) -> str:
     """Explicit namespace wins; otherwise derive it from (actor, strategy)."""
     if namespace:
@@ -71,7 +84,7 @@ def _resolve_namespace(
             "Provide either `namespace`, or `actor_id` (+ optional `strategy_id`).",
             status_code=400,
         )
-    candidates = _guard(memory_console.resolve_namespaces, actor_id)
+    candidates = _guard(memory_console.resolve_namespaces, ws.context, actor_id)
     usable = [c for c in candidates if c["resolvable"]]
     if strategy_id:
         usable = [c for c in usable if c["strategy_id"] == strategy_id]
@@ -85,8 +98,8 @@ def _resolve_namespace(
 
 
 @router.get("/overview")
-def overview() -> dict[str, Any]:
-    return _guard(memory_console.memory_overview)
+def overview(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
+    return _guard(memory_console.memory_overview, ws.context)
 
 
 @router.get("/actors")
@@ -94,9 +107,12 @@ def actors(
     next_token: str | None = None,
     max_results: int | None = Query(default=None, ge=1, le=100),
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    page = _guard(memory_console.list_actors, next_token, max_results)
-    names = _agent_names(db, [a["agent_id"] for a in page["items"] if a["agent_id"]])
+    page = _guard(memory_console.list_actors, ws.context, next_token, max_results)
+    names = _agent_names(
+        db, ws, [a["agent_id"] for a in page["items"] if a["agent_id"]]
+    )
     for item in page["items"]:
         # A scoped actor whose agent row is gone keeps scoped=True with a null
         # name — the memory partition outlives the agent it belonged to.
@@ -110,21 +126,30 @@ def sessions(
     next_token: str | None = None,
     max_results: int | None = Query(default=None, ge=1, le=100),
     db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    page = _guard(memory_console.list_sessions, actor_id, next_token, max_results)
+    page = _guard(
+        memory_console.list_sessions, ws.context, actor_id, next_token, max_results
+    )
     session_ids = [s["session_id"] for s in page["items"] if s["session_id"]]
     ledger: dict[str, dict[str, Any]] = {}
     if session_ids:
         rows = (
             db.query(ChatSession, Agent.name)
             .outerjoin(Agent, Agent.id == ChatSession.agent_id)
-            .filter(ChatSession.session_id.in_(session_ids))
+            .filter(
+                ChatSession.workspace_id == ws.id,
+                ChatSession.session_id.in_(session_ids),
+            )
             .all()
         )
         counts = {
             row[0]: row[1]
             for row in db.query(ChatMessage.session_id, func.count(ChatMessage.id))
-            .filter(ChatMessage.session_id.in_(session_ids))
+            .filter(
+                ChatMessage.workspace_id == ws.id,
+                ChatMessage.session_id.in_(session_ids),
+            )
             .group_by(ChatMessage.session_id)
             .all()
         }
@@ -149,9 +174,11 @@ def events(
     include_payloads: bool = True,
     next_token: str | None = None,
     max_results: int | None = Query(default=None, ge=1, le=100),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     return _guard(
         memory_console.list_events,
+        ws.context,
         actor_id,
         session_id,
         include_payloads,
@@ -161,8 +188,11 @@ def events(
 
 
 @router.get("/namespaces")
-def namespaces(actor_id: str = Query(min_length=1)) -> dict[str, Any]:
-    return {"items": _guard(memory_console.resolve_namespaces, actor_id)}
+def namespaces(
+    actor_id: str = Query(min_length=1),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return {"items": _guard(memory_console.resolve_namespaces, ws.context, actor_id)}
 
 
 @router.get("/records")
@@ -172,18 +202,28 @@ def records(
     namespace: str | None = None,
     next_token: str | None = None,
     max_results: int | None = Query(default=None, ge=1, le=100),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    resolved = _resolve_namespace(namespace, actor_id, strategy_id)
+    resolved = _resolve_namespace(ws, namespace, actor_id, strategy_id)
     return _guard(
-        memory_console.list_records, resolved, strategy_id, next_token, max_results
+        memory_console.list_records,
+        ws.context,
+        resolved,
+        strategy_id,
+        next_token,
+        max_results,
     )
 
 
 @router.post("/records/search")
-def search_records(req: SearchRequest) -> dict[str, Any]:
-    resolved = _resolve_namespace(req.namespace, req.actor_id, req.strategy_id)
+def search_records(
+    req: SearchRequest,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    resolved = _resolve_namespace(ws, req.namespace, req.actor_id, req.strategy_id)
     return _guard(
         memory_console.search_records,
+        ws.context,
         resolved,
         req.query,
         req.top_k,
@@ -199,9 +239,11 @@ def extraction_jobs(
     status: str | None = None,
     next_token: str | None = None,
     max_results: int | None = Query(default=None, ge=1, le=100),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     return _guard(
         memory_console.list_extraction_jobs,
+        ws.context,
         actor_id,
         session_id,
         strategy_id,

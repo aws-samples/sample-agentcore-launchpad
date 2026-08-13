@@ -11,6 +11,7 @@ import pytest
 from app.services import aws_clients
 from app.services.agentcore import gateway as gw
 from app.services.agentcore import runtime as rt
+from tests.conftest import ws_ctx
 
 
 # ─── named endpoint wrappers ─────────────────────────────────────────────────
@@ -200,6 +201,7 @@ def test_sigv4_post_sets_session_header_and_signs(monkeypatch):
     resp = gw.sigv4_post(
         "https://gw/x/invocations",
         {"prompt": "hi"},
+        ws_ctx(),
         session_id="sess-123",
         poster=poster,
         signer=lambda creds, region, req: signed.append(creds),
@@ -220,7 +222,7 @@ def test_sigv4_post_omits_session_header_when_absent(monkeypatch):
         return _FakeResp()
 
     gw.sigv4_post(
-        "https://gw/x/invocations", {"prompt": "hi"},
+        "https://gw/x/invocations", {"prompt": "hi"}, ws_ctx(),
         poster=poster, signer=lambda *a: None,
     )
     assert gw.SESSION_HEADER not in captured["headers"]

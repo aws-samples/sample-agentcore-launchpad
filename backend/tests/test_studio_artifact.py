@@ -14,7 +14,7 @@ from strands.models import BedrockModel
 async def main():
     model = BedrockModel(model_id="global.anthropic.claude-sonnet-4-6")
     agent = Agent(
-        model=model,
+        workspace_id=DEFAULT_WORKSPACE_ID, model=model,
         system_prompt="You are a helpful research assistant.",
     )
     response = agent("hello")

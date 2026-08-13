@@ -4,6 +4,8 @@ from pathlib import Path
 
 from app.deployer.zip_runtime import bundle_skill_paths_into
 
+from .conftest import ws_ctx
+
 
 class StubS3:
     """Paginator + download_file stub over a {key: bytes} store."""
@@ -43,6 +45,7 @@ def test_bundles_explicit_paths(tmp_path: Path):
         ["s3://bkt/skills/web-analyzer/", "s3://bkt/agent-skills/ab12cd34/custom-notes/"],
         tmp_path / ".claude",
         logs.append,
+        ws_ctx(),
         s3_client=s3,
     )
     assert result["bundled"] == ["web-analyzer", "custom-notes"]
@@ -53,10 +56,10 @@ def test_bundles_explicit_paths(tmp_path: Path):
 
 
 def test_empty_and_blank_paths_are_noops(tmp_path: Path):
-    result = bundle_skill_paths_into([], tmp_path, lambda m: None, s3_client=None)
+    result = bundle_skill_paths_into([], tmp_path, lambda m: None, ws_ctx(), s3_client=None)
     assert result == {"bundled": [], "files": 0, "bytes": 0}
     # blank entries filtered before any S3 client is needed
-    result = bundle_skill_paths_into(["", "  "], tmp_path, lambda m: None, s3_client=None)
+    result = bundle_skill_paths_into(["", "  "], tmp_path, lambda m: None, ws_ctx(), s3_client=None)
     assert result == {"bundled": [], "files": 0, "bytes": 0}
 
 
@@ -64,7 +67,8 @@ def test_missing_prefix_skips_without_raising(tmp_path: Path):
     s3 = StubS3({"skills/other/SKILL.md": b"x"})
     logs: list[str] = []
     result = bundle_skill_paths_into(
-        ["s3://bkt/skills/ghost/"], tmp_path / ".claude", logs.append, s3_client=s3
+        ["s3://bkt/skills/ghost/"], tmp_path / ".claude", logs.append, ws_ctx(),
+        s3_client=s3,
     )
     assert result["bundled"] == []
     assert not (tmp_path / ".claude/skills/ghost").exists()  # empty dir cleaned up
@@ -88,6 +92,7 @@ def test_download_error_skips_that_skill_only(tmp_path: Path):
         ["s3://bkt/skills/bad/", "s3://bkt/skills/good/"],
         tmp_path / ".claude",
         logs.append,
+        ws_ctx(),
         s3_client=s3,
     )
     assert result["bundled"] == ["good"]
@@ -110,13 +115,15 @@ def test_container_build_context_includes_skills(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         c,
         "bundle_skill_paths_into",
-        lambda paths, dest, log, **kw: bundle_skill_paths_into(paths, dest, log, s3_client=s3),
+        lambda paths, dest, log, workspace, **kw: bundle_skill_paths_into(
+            paths, dest, log, workspace, s3_client=s3
+        ),
     )
 
     class AgentRow:
         name = "sdk-skill-agent"
 
-    ctx_dir = c._build_context(spec, AgentRow(), lambda m: None)
+    ctx_dir = c._build_context(spec, AgentRow(), lambda m: None, ws_ctx())
     assert (ctx_dir / ".claude/skills/web-analyzer/SKILL.md").exists()
     assert not (ctx_dir / ".claude/agents").exists()  # no baked-in subagents anymore
     assert (ctx_dir / "main.py").exists()

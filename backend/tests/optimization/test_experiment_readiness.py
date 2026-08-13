@@ -3,12 +3,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError
 from app.evaluation.models import EvalRun
 from app.models.ledger import Agent
 from app.optimization import readiness
 from app.optimization.models import Experiment
+from tests.conftest import ws_ctx
+
+WS = ws_ctx()
 
 
 @pytest.fixture(autouse=True)
@@ -21,7 +24,7 @@ def clear_readiness_cache():
 def _agent(*, tools: list[dict] | None = None, toolkits: list[str] | None = None) -> Agent:
     db = SessionLocal()
     row = Agent(
-        name="readiness-agent",
+        workspace_id=DEFAULT_WORKSPACE_ID, name="readiness-agent",
         method="zip_runtime",
         status="active",
         arn="arn:aws:bedrock-agentcore:us-west-2:123:runtime/readiness",
@@ -44,11 +47,11 @@ def _project(agent: Agent, monkeypatch, rows: dict, *, lookback_hours: int = 24)
     monkeypatch.setattr(
         readiness,
         "resolve_telemetry",
-        lambda _agent: ('runtime_"quoted".DEFAULT', "/aws/runtime"),
+        lambda _agent, _ws: ('runtime_"quoted".DEFAULT', "/aws/runtime"),
     )
     captured: dict = {}
 
-    def run(queries, hours):
+    def run(queries, hours, **_kw):
         captured.update(queries=queries, hours=hours)
         return rows
 
@@ -56,8 +59,7 @@ def _project(agent: Agent, monkeypatch, rows: dict, *, lookback_hours: int = 24)
     db = SessionLocal()
     try:
         result = readiness.project_readiness(
-            agent,
-            db,
+        agent, db, WS,
             lookback_hours=lookback_hours,
             force=True,
         )
@@ -150,7 +152,7 @@ def test_readiness_query_failure_is_unavailable(monkeypatch):
     monkeypatch.setattr(
         readiness,
         "resolve_telemetry",
-        lambda _agent: ("runtime.DEFAULT", "/aws/runtime"),
+        lambda _agent, _ws: ("runtime.DEFAULT", "/aws/runtime"),
     )
 
     def fail(*_args, **_kwargs):
@@ -159,7 +161,8 @@ def test_readiness_query_failure_is_unavailable(monkeypatch):
     monkeypatch.setattr(readiness, "run_insights_queries", fail)
     db = SessionLocal()
     try:
-        result = readiness.project_readiness(agent, db, force=True)
+        result = readiness.project_readiness(
+        agent, db, WS, force=True)
     finally:
         db.close()
 
@@ -172,14 +175,14 @@ def test_readiness_joins_newest_run_without_using_it_as_trace_proof(monkeypatch)
     agent = _agent()
     db = SessionLocal()
     older = EvalRun(
-        agent_id=agent.id,
+        workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent.id,
         agent_name=agent.name,
         status="completed",
         session_ids=["old"],
         created_at=datetime.now(UTC) - timedelta(hours=1),
     )
     latest = EvalRun(
-        agent_id=agent.id,
+        workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent.id,
         agent_name=agent.name,
         status="waiting",
         session_ids=["s1", "s2"],
@@ -203,7 +206,7 @@ def test_readiness_cache_and_force_bypass(monkeypatch):
     monkeypatch.setattr(
         readiness,
         "resolve_telemetry",
-        lambda _agent: ("runtime.DEFAULT", "/aws/runtime"),
+        lambda _agent, _ws: ("runtime.DEFAULT", "/aws/runtime"),
     )
     calls = 0
 
@@ -220,9 +223,10 @@ def test_readiness_cache_and_force_bypass(monkeypatch):
     monkeypatch.setattr(readiness, "run_insights_queries", run)
     db = SessionLocal()
     try:
-        assert readiness.project_readiness(agent, db)["state"] == "ready"
-        assert readiness.project_readiness(agent, db)["state"] == "ready"
-        assert readiness.project_readiness(agent, db, force=True)["state"] == "missing"
+        assert readiness.project_readiness(agent, db, WS)["state"] == "ready"
+        assert readiness.project_readiness(agent, db, WS)["state"] == "ready"
+        assert readiness.project_readiness(
+        agent, db, WS, force=True)["state"] == "missing"
     finally:
         db.close()
     assert calls == 2
@@ -233,20 +237,23 @@ def test_readiness_cache_is_partitioned_by_lookback_window(monkeypatch):
     monkeypatch.setattr(
         readiness,
         "resolve_telemetry",
-        lambda _agent: ("runtime.DEFAULT", "/aws/runtime"),
+        lambda _agent, _ws: ("runtime.DEFAULT", "/aws/runtime"),
     )
     windows: list[int] = []
 
-    def run(_queries, hours):
+    def run(_queries, hours, **_kw):
         windows.append(hours)
         return {"summary": [], "tools": []}
 
     monkeypatch.setattr(readiness, "run_insights_queries", run)
     db = SessionLocal()
     try:
-        readiness.project_readiness(agent, db, lookback_hours=24)
-        readiness.project_readiness(agent, db, lookback_hours=168)
-        readiness.project_readiness(agent, db, lookback_hours=24)
+        readiness.project_readiness(
+        agent, db, WS, lookback_hours=24)
+        readiness.project_readiness(
+        agent, db, WS, lookback_hours=168)
+        readiness.project_readiness(
+        agent, db, WS, lookback_hours=24)
     finally:
         db.close()
 
@@ -257,7 +264,7 @@ def test_readiness_get_is_static_route(client, monkeypatch):
     agent = _agent()
     captured: dict = {}
 
-    def project(row, db, *, lookback_hours, force=False):
+    def project(row, db, _ws, *, lookback_hours, force=False):
         captured.update(lookback_hours=lookback_hours, force=force)
         return {
             "agent_id": row.id,
@@ -340,10 +347,10 @@ def test_create_fails_open_when_readiness_is_unavailable(client, monkeypatch):
         lambda *_args, **_kwargs: {"state": "unavailable", "agent_id": agent.id},
     )
 
-    def start(row):
+    def start(row, _ws):
         db = SessionLocal()
         exp = Experiment(
-            name="EXP-ready",
+            workspace_id=DEFAULT_WORKSPACE_ID, name="EXP-ready",
             agent_id=row.id,
             agent_name=row.name,
             status="ready",

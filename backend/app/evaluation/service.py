@@ -37,7 +37,7 @@ from app.models.ledger import Agent
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
-from app.services.workspace import default_workspace_context
+from app.services.workspace import WorkspaceContext, context_for_workspace
 from app.templates import gateway_support
 
 EVAL_SUPPORTED_METHODS = {"zip_runtime", "studio", "container", "harness"}
@@ -70,14 +70,16 @@ def _start_with_retry(start: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     return start()
 
 
-def _harness_telemetry(agent: Agent, logs_client: Any = None) -> tuple[str, str]:
+def _harness_telemetry(
+    agent: Agent, workspace: WorkspaceContext, logs_client: Any = None
+) -> tuple[str, str]:
     """Harness span identity: the harnessId is ``{harnessName}-{suffix}`` and the
     managed backing runtime emits ``harness_{harnessName}.DEFAULT``. Its log
     group carries the BACKING runtime's own id (≠ harnessId) — discover it by
     prefix; a re-created harness leaves stale groups behind, so newest wins."""
     base = agent.resource_id.rsplit("-", 1)[0]
     prefix = f"/aws/bedrock-agentcore/runtimes/harness_{base}-"
-    logs = logs_client or default_workspace_context().client("logs")
+    logs = logs_client or workspace.client("logs")
     groups = [
         g for g in logs.describe_log_groups(logGroupNamePrefix=prefix).get("logGroups", [])
         if g["logGroupName"].endswith("-DEFAULT")
@@ -93,7 +95,9 @@ def _harness_telemetry(agent: Agent, logs_client: Any = None) -> tuple[str, str]
     return f"harness_{base}.DEFAULT", newest["logGroupName"]
 
 
-def resolve_telemetry(agent: Agent, logs_client: Any = None) -> tuple[str, str]:
+def resolve_telemetry(
+    agent: Agent, workspace: WorkspaceContext, logs_client: Any = None
+) -> tuple[str, str]:
     """(service_name, log_group) for a platform agent's spans + content logs."""
     if agent.method not in EVAL_SUPPORTED_METHODS:
         raise AppError(
@@ -104,8 +108,8 @@ def resolve_telemetry(agent: Agent, logs_client: Any = None) -> tuple[str, str]:
     if not agent.resource_id:
         raise AppError("eval.agent_not_deployed", "agent has no runtime", status_code=400)
     if agent.method == "harness":
-        return _harness_telemetry(agent, logs_client)
-    detail = rt.get_runtime(control_client(), agent.resource_id)
+        return _harness_telemetry(agent, workspace, logs_client)
+    detail = rt.get_runtime(control_client(workspace), agent.resource_id)
     runtime_name = detail["agentRuntimeName"]
     return f"{runtime_name}.DEFAULT", (
         f"/aws/bedrock-agentcore/runtimes/{agent.resource_id}-DEFAULT"
@@ -125,12 +129,13 @@ def _update(run_id: str, **fields: Any) -> None:
 
 def _wait_for_fresh_telemetry(
     *,
+    workspace: WorkspaceContext,
     session_id: str,
     content_log_group: str,
     start_time_ms: int,
     stability_seconds: int,
 ) -> None:
-    logs = default_workspace_context().client("logs")
+    logs = workspace.client("logs")
     telemetry.wait_for_evaluation_telemetry(
         logs,
         session_id=session_id,
@@ -144,6 +149,7 @@ def _wait_for_fresh_telemetry(
 def execute_run(
     run_id: str,
     *,
+    workspace: WorkspaceContext,
     agent_arn: str,
     method: str,
     service_name: str,
@@ -167,7 +173,7 @@ def execute_run(
     agent's past traffic — the window path skips invoke/wait entirely."""
     telemetry_start_ms = int(time.time() * 1000) - TELEMETRY_QUERY_LOOKBACK_MS
     try:
-        data = data_client()
+        data = data_client(workspace)
         session_ids = list(existing_session_ids or [])
         if not session_ids and not time_range:
             # One session per scenario. Predefined scenarios replay their turns
@@ -210,6 +216,7 @@ def execute_run(
                 session_metadata = ground_truth_metadata(scenarios, session_ids) or None
             _update(run_id, status="waiting")
             _wait_for_fresh_telemetry(
+                workspace=workspace,
                 session_id=session_ids[-1],
                 content_log_group=log_group,
                 start_time_ms=telemetry_start_ms,
@@ -276,11 +283,15 @@ def _finish_from_result(run_id: str, mode: str, result: dict[str, Any]) -> None:
                 error=error)
 
 
-def reconcile_run(run_id: str, *, mode: str, batch_id: str) -> None:
+def reconcile_run(
+    run_id: str, *, mode: str, batch_id: str, workspace: WorkspaceContext
+) -> None:
     """Finish a run whose in-process poller died (restart / dev reload) while
     the batch evaluation kept running server-side."""
     try:
-        result = ac.poll_batch_evaluation(data_client(), batch_id=batch_id, max_polls=60)
+        result = ac.poll_batch_evaluation(
+            data_client(workspace), batch_id=batch_id, max_polls=60
+        )
         _finish_from_result(run_id, mode, result)
     except Exception as exc:
         _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
@@ -300,10 +311,14 @@ def resume_interrupted_runs() -> list[str]:
         resumed: list[str] = []
         for run in rows:
             if run.status == "evaluating" and run.batch_eval_id:
+                # The workspace is rebuilt from the row, not from ambient
+                # settings: the batch is being polled in the account/region the
+                # run was submitted against.
+                workspace = context_for_workspace(run.workspace_id)
                 run_queue.submit(
                     run.id,
-                    lambda rid=run.id, m=run.mode, b=run.batch_eval_id: reconcile_run(
-                        rid, mode=m, batch_id=b
+                    lambda rid=run.id, m=run.mode, b=run.batch_eval_id, w=workspace: (
+                        reconcile_run(rid, mode=m, batch_id=b, workspace=w)
                     ),
                 )
                 resumed.append(run.id)
@@ -320,6 +335,7 @@ def resume_interrupted_runs() -> list[str]:
 def submit_run(
     *,
     agent: Agent,
+    workspace: WorkspaceContext,
     dataset_items: list[dict[str, Any]],
     dataset_id: str | None,
     dataset_name: str | None,
@@ -333,7 +349,7 @@ def submit_run(
     lookback_hours: int | None = None,
     actor_model_id: str | None = None,
 ) -> EvalRun:
-    service_name, log_group = resolve_telemetry(agent)
+    service_name, log_group = resolve_telemetry(agent, workspace)
     # Window runs have no dataset; encode the scope in dataset_name so the
     # runs list can render "window · Nh" without a schema change.
     if lookback_hours and not dataset_name:
@@ -341,6 +357,7 @@ def submit_run(
     db = SessionLocal()
     try:
         run = EvalRun(
+            workspace_id=agent.workspace_id,
             agent_id=agent.id,
             agent_name=agent.name,
             dataset_id=dataset_id,
@@ -366,6 +383,7 @@ def submit_run(
         run_id,
         lambda: execute_run(
             run_id,
+            workspace=workspace,
             agent_arn=agent_arn,
             method=agent_method,
             protocol=agent_protocol,
