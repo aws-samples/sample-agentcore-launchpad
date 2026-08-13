@@ -31,6 +31,14 @@ vendored Strands Studio 子应用。主要能力包括：
   内置评估器、自定义 LLM-as-a-judge 和失败归因（insights）。优化流程会生成
   control/treatment **配置包（configuration bundles）**，通过网关运行 A/B 和
   canary 流量，再决定是否晋级胜出版本。
+- **工作区（多账号 / 多区域）。** 一个控制台管理多套 AWS 环境：一个**工作区**
+  对应一个 `(账号, 区域)` 组合，拥有独立的 AgentCore 资源集，由管理页里可恢复的
+  十阶段引导作业直接创建——不需要 CDK，也不需要登录服务器。管理员可在顶栏自由
+  切换工作区；成员只能看到被授权的工作区，所有 API 响应都限定在当前工作区内。
+  组织内的其他账号只需部署一个 CloudFormation
+  栈（[spoke 角色模板](infra/spoke/launchpad-workspace-role.yaml)）即可接入——
+  访问基于短期有效的 `sts:AssumeRole` 凭证（不存任何密钥），删除该栈即可整体
+  吊销。详见 [docs/cross-account-workspaces.md](docs/cross-account-workspaces.md)。
 
 这些能力与 AgentCore 服务的对应关系见
 [docs/architecture.zh-CN.md](docs/architecture.zh-CN.md)。
@@ -223,6 +231,7 @@ export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # 白名单
 | [docs/api.zh-CN.md](docs/api.zh-CN.md) | 公开 `/v1` API 参考（[English](docs/api.md)） |
 | [docs/troubleshooting.zh-CN.md](docs/troubleshooting.zh-CN.md) | 已验证的问题与耗时（[English](docs/troubleshooting.md)） |
 | [docs/teardown.zh-CN.md](docs/teardown.zh-CN.md) | 演示资源与共享基础设施清理（[English](docs/teardown.md)） |
+| [docs/cross-account-workspaces.md](docs/cross-account-workspaces.md) | 跨账号工作区：spoke 角色模板、StackSets、信任边界（English） |
 | [docs/studio-integration.md](docs/studio-integration.md) | Strands Studio（方式C）集成 |
 | [docs/agent-runbook-dev.md](docs/agent-runbook-dev.md) | 面向 Agent 的运维手册：本地 dev 模式启动与验证 |
 | [docs/agent-runbook-prod.md](docs/agent-runbook-prod.md) | 面向 Agent 的运维手册：prod 模式启动（launcher + systemd）、更新流程、沙盒姿态 |

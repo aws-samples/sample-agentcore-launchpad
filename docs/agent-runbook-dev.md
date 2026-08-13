@@ -114,3 +114,42 @@ make verify       # canonical gate: backend ruff+pytest, infra ruff+pytest, fron
 Foreground `make dev`: Ctrl-C (its trap kills both children). Background
 one-offs: kill the specific pids/ports you started — never `pkill -f uvicorn`
 broadly on a shared box.
+
+## 7. Workspaces — what an operating agent must know
+
+Since 2026-08-13 the console manages multiple `(account, region)` environments
+("workspaces"); the original us-west-2 environment is the reserved `default`
+workspace. Full feature docs: [architecture.md](architecture.md#workspaces--multi-accountmulti-region-environments),
+[cross-account-workspaces.md](cross-account-workspaces.md).
+
+**Every `/api` probe is workspace-scoped.** curl without a header resolves to
+`default` (admin / open console), so §3's smoke commands keep working — but a
+resource in another workspace answers **404, not 403**, from `default`'s view.
+When probing a non-default workspace, name it:
+
+```bash
+curl -s localhost:8000/api/agents -H 'X-Workspace: <id>'
+# jobs are scoped too — polling a bootstrap job REQUIRES the target workspace:
+curl -s localhost:8000/api/jobs/<job_id> -H 'X-Workspace: <id>'
+```
+
+**Restart side effects grew.** `resume_pending_jobs()` now also resumes
+interrupted `bootstrap_workspace` jobs (real AWS provisioning continues in the
+target account/region). And startup **refuses to boot** if any scoped ledger
+row has a NULL `workspace_id` — the error names the table; that is a write-path
+bug to fix, not a row to hand-patch into `default`.
+
+**The `default` row mirrors `config/launchpad.yaml` on every startup**; all
+other workspaces are ledger-authoritative and provisioned by the ten-stage
+bootstrap job (resumable: a failed run re-POSTs and skips succeeded stages).
+Mutating calls against a non-`ready` workspace 409 by design; reads work.
+
+**Never register `(434444145045, us-east-1)`** — that region hosts the
+independent prod deployment; the bootstrap's validate-access stage refuses
+regions with foreign Launchpad resources, so it fails fast, but don't try.
+
+**Demo workspaces kept on this box** (beyond `default`): `lab-use2`
+(same-account us-east-2) and `spoke-use1` (cross-account 936038267572 through
+`LaunchpadWorkspaceRole`; deleting that account's `launchpad-workspace-role`
+CFN stack revokes hub access entirely). A workspace with ANY rows (even one
+failed job) cannot be detached — known limitation, purge decision pending.
