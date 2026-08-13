@@ -378,6 +378,26 @@ Resources:
                   - xray:UpdateTraceSegmentDestination
                 Resource: "*"
 
+              # ── Secrets Manager (AgentCore Identity token vault) ──────────
+              # LIVE-OBSERVED, not call-site derivable (2026-08-13, first spoke
+              # bootstrap): CreateOauth2CredentialProvider fails with "not
+              # authorized to perform: secretsmanager:CreateSecret" — the
+              # Identity token vault stores provider credentials as Secrets
+              # Manager secrets under the caller's own permissions. Scoped to
+              # the vault's fixed prefix.
+              - Sid: SecretsManagerForTokenVault
+                Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:TagResource
+                  - secretsmanager:UpdateSecret
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:secretsmanager:*:${AWS::AccountId}:secret:bedrock-agentcore-identity!*"
+
               # ── KMS ────────────────────────────────────────────────────────
               # Also NOT derivable from call sites (same provenance as
               # CreateServiceLinkedRoles): AgentCore encrypts memory and session

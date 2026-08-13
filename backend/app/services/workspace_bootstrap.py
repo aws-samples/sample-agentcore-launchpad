@@ -1152,7 +1152,13 @@ def execute_bootstrap_job(job_id: str, timeouts: Timeouts | None = None) -> None
             try:
                 detail = STAGES[stage_name](ctx)
             except Exception as exc:
-                detail = f"{type(exc).__name__}: {exc}"
+                # A hard credential-refresh failure (<600s left on the assumed
+                # session) can detonate inside ANY stage, not just
+                # validate-access — map it to the same actionable diagnostic.
+                if isinstance(exc, ClientError) and aws_clients.is_assume_role_failure(exc):
+                    detail = aws_clients.assume_role_diagnostic(exc)
+                else:
+                    detail = f"{type(exc).__name__}: {exc}"
                 _set_stage(db, job_id, stage_name, "failed", detail)
                 _append_log(db, job_id, stage_name, detail, level="error")
                 _append_log(
