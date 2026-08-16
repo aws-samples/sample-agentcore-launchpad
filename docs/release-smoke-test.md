@@ -235,7 +235,7 @@ independently runnable.
 
 | Step | Command | Notes | Time |
 |---|---|---|---|
-| Container path (方式A) | `uv run python scripts/e2e_claude_sdk.py --base $BASE --skip-local` | CodeBuild + ECR; the long one. `--skip-local` skips the local docker smoke (no docker on the box) | 12–20 min |
+| Container path (方式A) + native evaluation | `uv run python scripts/e2e_claude_sdk.py --base $BASE --skip-local --with-eval` | CodeBuild + ECR + native Claude Observability + one Batch Evaluation. `--skip-local` skips the local docker smoke (no docker on the box) | 20–35 min |
 | Full evaluation | `uv run python scripts/e2e_eval_extended.py` | window scopes, custom evaluators, insight subsets, cloud-dataset runs; takes the account batch slot repeatedly | 15–25 min |
 | Configuration A/B experiment | `uv run python scripts/e2e_experiment.py` | needs **no** `running` experiment and a free shared gateway; online-eval aggregation alone is 10–15 min | 25–40 min |
 | Runtime canary | `uv run python scripts/e2e_runtime_canary.py` | service layer, no HTTP. Mints a candidate version, 90/10 real traffic split, then rolls back | 15–25 min |

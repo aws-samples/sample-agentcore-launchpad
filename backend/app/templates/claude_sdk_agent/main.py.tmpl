@@ -8,10 +8,10 @@ Wizard-selected skills are bundled into /app/.claude/skills/ (and any
 subagent markdown dropped into /app/.claude/agents/) — both discovered by
 the claude CLI via setting_sources.
 
-Telemetry: the SDK drives the claude CLI as a subprocess, invisible to ADOT
-auto-instrumentation — tracing.py emits the gen_ai spans/events manually
-(invoke_agent → execute_tool per tool call + one aggregate chat span with the
-query's token usage), parented under the auto-instrumented /invocations span.
+Telemetry: AgentCore's ADOT launcher auto-discovers the Claude Agent SDK
+OpenInference instrumentation. The runtime session id is propagated through
+OpenInference context so native ClaudeAgentSDK.query spans align with
+Launchpad Evaluation and Observability sessions.
 """
 
 import asyncio
@@ -25,7 +25,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import boto3
-import tracing
 from bedrock_agentcore.memory import MemorySessionManager
 from bedrock_agentcore.memory.constants import ConversationalMessage, MessageRole
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
@@ -36,13 +35,12 @@ from claude_agent_sdk import (
     ResultMessage,
     StreamEvent,
     TextBlock,
-    ToolResultBlock,
     ToolUseBlock,
-    UserMessage,
     create_sdk_mcp_server,
     query,
     tool,
 )
+from openinference.instrumentation import using_session
 
 AGENT_NAME = "__LAUNCHPAD_AGENT_NAME__"
 MODEL_ID = "__LAUNCHPAD_MODEL_ID__"
@@ -441,82 +439,89 @@ def build_options(memory: AgentCoreMemory | None = None) -> ClaudeAgentOptions:
 
 
 @dataclass
-class ToolCall:
-    """One tool invocation: ToolUseBlock paired with its ToolResultBlock."""
-
-    call_id: str
-    name: str
-    input: dict[str, Any]
-    result_text: str = ""
-    is_error: bool = False
-
-
-@dataclass
 class QueryOutcome:
     result: str = ""
     usage: dict[str, Any] = field(default_factory=dict)
-    tool_calls: list[ToolCall] = field(default_factory=list)
 
 
 async def _events_with_heartbeat(
     events: AsyncIterator[dict[str, Any]],
     interval_s: float = SSE_HEARTBEAT_INTERVAL_S,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Keep the response active without cancelling a pending SDK event read."""
+    """Keep the response active while one task owns the SDK async generator.
+
+    OpenTelemetry and OpenInference context tokens must be detached in the task
+    that attached them. A fresh ``anext`` task per event breaks that invariant,
+    so one producer task pumps the iterator into a queue while this consumer
+    emits heartbeat frames during quiet periods.
+    """
     iterator = events.__aiter__()
-    pending: asyncio.Task[dict[str, Any]] | None = None
+    queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=1)
+
+    async def produce() -> None:
+        try:
+            async for event in iterator:
+                await queue.put(("event", event))
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            await queue.put(("error", exc))
+        else:
+            await queue.put(("done", None))
+
+    producer = asyncio.create_task(produce())
     try:
         while True:
-            pending = asyncio.create_task(anext(iterator))
-            while True:
-                done, _ = await asyncio.wait({pending}, timeout=interval_s)
-                if done:
-                    break
+            try:
+                kind, value = await asyncio.wait_for(queue.get(), timeout=interval_s)
+            except TimeoutError:
                 # Keep this frame larger than the backend's 32-byte SSE read chunk.
                 yield {"event": "heartbeat", "timestamp": time.time()}
-            try:
-                event = pending.result()
-            except StopAsyncIteration:
+                continue
+            if kind == "event":
+                yield value
+            elif kind == "error":
+                raise value
+            else:
                 return
-            pending = None
-            yield event
     finally:
-        if pending is not None and not pending.done():
-            pending.cancel()
+        if not producer.done():
+            producer.cancel()
             with suppress(asyncio.CancelledError):
-                await pending
+                await producer
         close = getattr(iterator, "aclose", None)
         if close is not None:
             await close()
 
 
-def _result_text(content: Any) -> str:
-    """Flatten a ToolResultBlock's content (str or [{type: text, ...}])."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = [b.get("text", "") for b in content if isinstance(b, dict)]
-        return "\n".join(p for p in parts if p)
-    return json.dumps(content) if content is not None else ""
+async def _query_messages(
+    prompt: str,
+    memory: AgentCoreMemory | None,
+    session_id: str,
+) -> AsyncIterator[Any]:
+    """Keep the AgentCore Runtime session active for the native query span."""
+    with using_session(session_id):
+        async for message in query(prompt=prompt, options=build_options(memory)):
+            yield message
 
 
 async def _query_events(
     prompt: str,
     memory: AgentCoreMemory | None,
     outcome: QueryOutcome,
+    session_id: str,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream one SDK query while collecting its authoritative final outcome.
 
-    Tool use arrives as ToolUseBlock (in AssistantMessage) and its matching
-    ToolResultBlock (in UserMessage), paired by tool_use_id — captured so
-    telemetry can emit one execute_tool span per call.
+    ToolUseBlock values remain runtime stream events. Native OpenInference
+    instrumentation owns tool spans and merges its hooks with the request-local
+    memory hook configured in build_options().
     """
     chunks: list[str] = []
     partial_chunks: list[str] = []
-    calls: dict[str, ToolCall] = {}
     fallback_result = ""
     partial_since_assistant = False
-    async for message in query(prompt=prompt, options=build_options(memory)):
+    async for message in _query_messages(prompt, memory, session_id):
         if isinstance(message, StreamEvent):
             event = message.event
             delta = event.get("delta") if event.get("type") == "content_block_delta" else None
@@ -536,21 +541,11 @@ async def _query_events(
                     # SDK-MCP tools are namespaced mcp__<server>__<name>;
                     # Claude Code built-ins (Task, …) pass through unchanged.
                     name = block.name.split("__")[-1]
-                    calls[block.id] = ToolCall(
-                        call_id=block.id, name=name, input=dict(block.input or {})
-                    )
                     yield {"event": "tool", "name": name, "id": block.id}
             # Older CLI builds may omit StreamEvent despite the SDK option.
             if message_text and not partial_since_assistant:
                 yield {"event": "delta", "text": "\n".join(message_text)}
             partial_since_assistant = False
-        elif isinstance(message, UserMessage):
-            content = message.content if isinstance(message.content, list) else []
-            for block in content:
-                if isinstance(block, ToolResultBlock) and block.tool_use_id in calls:
-                    call = calls[block.tool_use_id]
-                    call.result_text = _result_text(block.content)
-                    call.is_error = bool(block.is_error)
         elif isinstance(message, ResultMessage):
             if message.is_error:
                 raise RuntimeError(f"claude query failed: {message.result}")
@@ -567,15 +562,16 @@ async def _query_events(
         or fallback_result.strip()
         or "".join(partial_chunks).strip()
     )
-    outcome.tool_calls = list(calls.values())
 
 
 async def run_query(
-    prompt: str, memory: AgentCoreMemory | None = None
+    prompt: str,
+    memory: AgentCoreMemory | None = None,
+    session_id: str = "adhoc",
 ) -> QueryOutcome:
     """Collect a query for callers that need one buffered result."""
     outcome = QueryOutcome()
-    async for _event in _query_events(prompt, memory, outcome):
+    async for _event in _query_events(prompt, memory, outcome, session_id):
         pass
     return outcome
 
@@ -586,35 +582,11 @@ async def _invocation_events(
     actor_id: str,
 ) -> AsyncIterator[dict[str, Any]]:
     memory = _create_memory(actor_id, session_id)
-    with tracing.traced_invocation(AGENT_NAME, session_id) as span:
-        outcome = QueryOutcome()
-        async for event in _query_events(prompt, memory, outcome):
-            yield event
-        for call in outcome.tool_calls:
-            tracing.record_tool_call(
-                session_id=session_id,
-                call_id=call.call_id,
-                name=call.name,
-                arguments=call.input,
-                result_text=call.result_text,
-                is_error=call.is_error,
-            )
-        tracing.record_llm_usage(
-            session_id=session_id,
-            model=MODEL_ID,
-            usage=outcome.usage,
-            num_turns=outcome.usage.get("num_turns"),
-        )
-        tracing.record_result(
-            span,
-            session_id=session_id,
-            system_prompt=SYSTEM_PROMPT,
-            prompt=prompt,
-            output=outcome.result,
-            model=MODEL_ID,
-        )
-        if memory:
-            await asyncio.to_thread(memory.save_turn, prompt, outcome.result)
+    outcome = QueryOutcome()
+    async for event in _query_events(prompt, memory, outcome, session_id):
+        yield event
+    if memory:
+        await asyncio.to_thread(memory.save_turn, prompt, outcome.result)
     yield {"event": "complete", "result": outcome.result, "usage": outcome.usage}
 
 

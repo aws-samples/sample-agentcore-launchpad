@@ -1,10 +1,12 @@
 # Claude Agent SDK runtime image — linux/arm64 (AgentCore Runtime requirement).
 # Slim on purpose: python base + node (for the claude CLI) + the SDK, no dev deps.
-FROM --platform=linux/arm64 python:3.12-slim
+FROM --platform=linux/arm64 python:3.12-slim-bookworm
 
 # node 22 + claude CLI (the python claude-agent-sdk drives this binary)
+# Git is intentionally absent: generated agents do not expose Bash/Edit by
+# default, and keeping git pulls the full Perl runtime into the production image.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates git \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && npm install -g @anthropic-ai/claude-code \

@@ -1,6 +1,5 @@
 """Claude SDK container template: render, build context, codebuild pipeline."""
 
-import ast
 import asyncio
 import importlib.util
 import json
@@ -9,10 +8,8 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any, cast
 
 import pytest
-from opentelemetry._logs import SeverityNumber
 
 from app.schemas.agent import AgentSpec
 from app.services.agentcore import codebuild as cb
@@ -159,147 +156,37 @@ def test_render_mounts_kb_mcp_server_and_prompt_section(tmp_path: Path):
     py_compile.compile(str(target), doraise=True)
 
 
-def test_rendered_main_emits_manual_telemetry():
-    """The SDK's LLM/tool work happens in the claude CLI subprocess, invisible
-    to ADOT — the generated agent must emit the gen_ai telemetry itself."""
+def test_rendered_main_uses_native_openinference_telemetry():
     code = render_main_py(SPEC)
-    assert "tracing.traced_invocation" in code
-    assert "tracing.record_tool_call" in code
-    assert "tracing.record_llm_usage" in code
-    assert "tracing.record_result" in code
-
-
-def test_tracing_module_compiles_and_uses_eval_scope(tmp_path: Path):
-    src = Path("app/templates/claude_sdk_agent/tracing.py")
-    py_compile.compile(str(src), cfile=str(tmp_path / "tracing.pyc"), doraise=True)
-    text = src.read_text(encoding="utf-8")
-    # Evaluations only parse spans/events from supported instrumentation scopes.
-    assert 'EVAL_SCOPE = "strands.telemetry.tracer"' in text
-    # cache token attr names follow the aws/spans convention the console sums
-    assert "gen_ai.usage.cache_write_input_tokens" in text
-    # The experimental events API was REMOVED upstream (deprecated 1.39.0), and
-    # an unpinned distro let a fresh CodeBuild resolve a wheel without it — the
-    # container then died on `import tracing` while the deploy reported green.
-    # docs/issues/2026-07-26-container-otel-events-import.md
-    # Checked against the parsed imports, not the raw text: the module docstring
-    # names the removed API when explaining why it is gone.
-    imported: set[str] = set()
-    for node in ast.walk(ast.parse(text)):
-        if isinstance(node, ast.Import):
-            imported.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            imported.add(node.module or "")
-    assert "opentelemetry._events" not in imported
-    assert "opentelemetry._logs" in imported
+    assert "from openinference.instrumentation import using_session" in code
+    assert "with using_session(session_id):" in code
+    assert "import tracing" not in code
+    assert "tracing." not in code
+    assert "ToolResultBlock" not in code
+    assert "UserMessage" not in code
 
 
 def test_container_requirements_pin_drifting_deps():
-    """Open upper bounds on these two are how a green deploy turns into an agent
+    """Open upper bounds on these dependencies can turn a green deploy into an agent
     that fails every invoke — the image is built fresh by CodeBuild each time."""
     requirements = Path("app/templates/claude_sdk_agent/requirements.txt").read_text()
     assert "aws-opentelemetry-distro==0.19.*" in requirements
     assert "claude-agent-sdk==0.2.*" in requirements
     assert "bedrock-agentcore==1.17.*" in requirements
-
-
-def _in_memory_tracing(monkeypatch):
-    """The template's tracing module wired to in-memory tracer/log providers.
-
-    Module attributes are replaced rather than calling set_tracer_provider /
-    set_logger_provider: those are `Once`-guarded globals, so a test that sets
-    them is order-dependent across the session."""
-    from opentelemetry.sdk._logs import LoggerProvider
-    from opentelemetry.sdk._logs.export import (
-        InMemoryLogRecordExporter,
-        SimpleLogRecordProcessor,
-    )
-    from opentelemetry.sdk.trace import TracerProvider
-
-    from app.templates.claude_sdk_agent import tracing
-
-    exporter = InMemoryLogRecordExporter()
-    logger_provider = LoggerProvider()
-    logger_provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
-    monkeypatch.setattr(tracing, "_event_logger", logger_provider.get_logger(tracing.EVAL_SCOPE))
-    monkeypatch.setattr(tracing, "_tracer", TracerProvider().get_tracer(tracing.EVAL_SCOPE))
-    return tracing, exporter
-
-
-def test_tracing_emits_evaluation_shaped_content_record(monkeypatch):
-    """Guards the wire shape AgentCore Evaluations parses, which the events →
-    logs API migration had to preserve byte for byte."""
-    tracing, exporter = _in_memory_tracing(monkeypatch)
-
-    with tracing.traced_invocation("shape-agent", "sess-1") as span:
-        span_ctx = span.get_span_context()
-        tracing.record_result(
-            span,
-            session_id="sess-1",
-            system_prompt="You are a test agent.",
-            prompt="hello",
-            output="hi there",
-            model="claude-sonnet-4-5",
-        )
-
-    (emitted,) = exporter.get_finished_logs()
-    record = emitted.log_record
-    attributes = dict(record.attributes or {})
-    assert isinstance(record.body, dict)
-    body = cast(dict[str, Any], record.body)
-    # 1. scope — anything else and evaluation silently skips the record
-    assert emitted.instrumentation_scope is not None
-    assert emitted.instrumentation_scope.name == "strands.telemetry.tracer"
-    # 2. event identity stays an ATTRIBUTE (what the removed events API wrote);
-    #    the LogRecord `event_name` field is deliberately left unset
-    assert attributes["event.name"] == "strands.telemetry.tracer"
-    assert attributes["session.id"] == "sess-1"
-    assert getattr(record, "event_name", None) is None
-    # 3. correlation to the enclosing span — how the console joins spans↔messages
-    assert record.trace_id == span_ctx.trace_id
-    assert record.span_id == span_ctx.span_id
-    assert record.severity_number is SeverityNumber.INFO
-    # 4. body shape: a plain {content: <str>} fails AWS-side parsing
-    assert body["input"]["messages"] == [
-        {"content": "You are a test agent.", "role": "system"},
-        {"content": {"content": '[{"text": "hello"}]'}, "role": "user"},
-    ]
-    assert body["output"]["messages"] == [
-        {"content": {"message": "hi there", "finish_reason": "end_turn"},
-         "role": "assistant"},
-    ]
-
-
-def test_tracing_tool_call_records_span_and_content(monkeypatch):
-    tracing, exporter = _in_memory_tracing(monkeypatch)
-
-    with tracing.traced_invocation("shape-agent", "sess-2"):
-        tracing.record_tool_call(
-            session_id="sess-2",
-            call_id="call-1",
-            name="Read",
-            arguments={"path": "/tmp/x"},
-            result_text="ok",
-        )
-
-    (emitted,) = exporter.get_finished_logs()
-    assert isinstance(emitted.log_record.body, dict)
-    body = cast(dict[str, Any], emitted.log_record.body)
-    assert emitted.instrumentation_scope is not None
-    assert emitted.instrumentation_scope.name == "strands.telemetry.tracer"
-    assert body["input"]["messages"][0]["content"]["id"] == "call-1"
-    assert body["input"]["messages"][0]["role"] == "tool"
-    assert body["output"]["messages"][0]["content"]["message"] == '[{"text": "ok"}]'
+    assert "openinference-instrumentation-claude-agent-sdk>=0.1.3,<0.2" in requirements
 
 
 def test_assemble_build_context(tmp_path: Path):
     ctx = assemble_build_context(SPEC, tmp_path / "ctx")
     files = {str(p.relative_to(ctx)) for p in ctx.rglob("*") if p.is_file()}
-    assert {"Dockerfile", "requirements.txt", "buildspec.yml", "main.py",
-            "tracing.py"} <= files
+    assert {"Dockerfile", "requirements.txt", "buildspec.yml", "main.py"} <= files
+    assert "tracing.py" not in files
     # no baked-in subagents: the fact-checker sample was dropped (not SDK-native)
     assert not any(f.startswith(".claude/agents/") for f in files)
     dockerfile = (ctx / "Dockerfile").read_text()
     assert "linux/arm64" in dockerfile
+    assert "python:3.12-slim-bookworm" in dockerfile
+    assert "ca-certificates git" not in dockerfile
     assert "CLAUDE_CODE_USE_BEDROCK=1" in dockerfile
     assert "@anthropic-ai/claude-code" in dockerfile
     requirements = (ctx / "requirements.txt").read_text()
@@ -307,18 +194,17 @@ def test_assemble_build_context(tmp_path: Path):
 
 
 def _import_rendered(spec, tmp_path: Path, monkeypatch, stem: str):
-    """Import a rendered runtime with tracing replaced by side-effect-free fakes."""
-    tracing = ModuleType("tracing")
-
+    """Import a rendered runtime with a side-effect-free OpenInference context."""
     @contextmanager
-    def traced_invocation(_agent_name, _session_id):
-        yield object()
+    def using_session(_session_id):
+        yield
 
-    tracing.traced_invocation = traced_invocation
-    tracing.record_tool_call = lambda **_kwargs: None
-    tracing.record_llm_usage = lambda **_kwargs: None
-    tracing.record_result = lambda *_args, **_kwargs: None
-    monkeypatch.setitem(sys.modules, "tracing", tracing)
+    openinference = ModuleType("openinference")
+    instrumentation = ModuleType("openinference.instrumentation")
+    instrumentation.using_session = using_session
+    openinference.instrumentation = instrumentation
+    monkeypatch.setitem(sys.modules, "openinference", openinference)
+    monkeypatch.setitem(sys.modules, "openinference.instrumentation", instrumentation)
     monkeypatch.setenv("AWS_REGION", "us-west-2")
 
     target = tmp_path / f"{stem}.py"
@@ -615,8 +501,18 @@ def test_query_events_stream_text_without_repeating_final_message(
 ):
     module = rendered_memory_module
     captured = {}
+    session_context: list[tuple[str, str]] = []
+
+    @contextmanager
+    def capture_session(session_id):
+        session_context.append(("enter", session_id))
+        try:
+            yield
+        finally:
+            session_context.append(("exit", session_id))
 
     async def fake_query(*, prompt, options):
+        assert session_context == [("enter", "runtime-session-one")]
         captured.update(prompt=prompt, options=options)
         yield module.StreamEvent(
             uuid="message-1",
@@ -649,10 +545,15 @@ def test_query_events_stream_text_without_repeating_final_message(
             result="hello world",
         )
 
+    monkeypatch.setattr(module, "using_session", capture_session)
     monkeypatch.setattr(module, "query", fake_query)
     outcome = module.QueryOutcome()
 
-    events = asyncio.run(collect_async(module._query_events("hello", None, outcome)))
+    events = asyncio.run(
+        collect_async(
+            module._query_events("hello", None, outcome, "runtime-session-one")
+        )
+    )
 
     assert events == [
         {"event": "delta", "text": "hello "},
@@ -660,6 +561,10 @@ def test_query_events_stream_text_without_repeating_final_message(
     ]
     assert outcome.result == "hello world"
     assert captured["options"].include_partial_messages is True
+    assert session_context == [
+        ("enter", "runtime-session-one"),
+        ("exit", "runtime-session-one"),
+    ]
 
 
 def test_heartbeat_keeps_pending_query_event_alive(rendered_memory_module):
@@ -689,15 +594,78 @@ def test_heartbeat_keeps_pending_query_event_alive(rendered_memory_module):
     assert delayed == {"event": "delta", "text": "still running"}
 
 
+def test_heartbeat_resumes_source_generator_in_one_task(rendered_memory_module):
+    module = rendered_memory_module
+    task_ids: list[int] = []
+
+    async def task_bound_events():
+        task_ids.append(id(asyncio.current_task()))
+        try:
+            yield {"event": "delta", "text": "one"}
+            await asyncio.sleep(0)
+            task_ids.append(id(asyncio.current_task()))
+            yield {"event": "delta", "text": "two"}
+        finally:
+            task_ids.append(id(asyncio.current_task()))
+
+    events = asyncio.run(
+        collect_async(module._events_with_heartbeat(task_bound_events(), interval_s=1))
+    )
+
+    assert events == [
+        {"event": "delta", "text": "one"},
+        {"event": "delta", "text": "two"},
+    ]
+    assert len(set(task_ids)) == 1
+
+
+def test_heartbeat_producer_keeps_bounded_backpressure(rendered_memory_module):
+    module = rendered_memory_module
+
+    async def exercise():
+        produced: list[int] = []
+
+        async def source():
+            for index in range(4):
+                produced.append(index)
+                yield {"event": "delta", "text": str(index)}
+
+        events = module._events_with_heartbeat(source(), interval_s=1)
+        first = await anext(events)
+        await asyncio.sleep(0)
+        ahead = list(produced)
+        rest = [event async for event in events]
+        return first, ahead, rest
+
+    first, ahead, rest = asyncio.run(exercise())
+
+    assert first == {"event": "delta", "text": "0"}
+    assert len(ahead) < 4
+    assert rest == [
+        {"event": "delta", "text": "1"},
+        {"event": "delta", "text": "2"},
+        {"event": "delta", "text": "3"},
+    ]
+
+
+def test_local_smoke_traps_credential_file_before_export():
+    smoke = Path("../scripts/local_container_smoke.sh").read_text()
+    assert smoke.index("trap cleanup EXIT") < smoke.index(
+        "aws configure export-credentials"
+    )
+    assert '[[ -z "$ENVFILE" ]] || rm -f "$ENVFILE"' in smoke
+
+
 def test_invoke_persists_completed_turn_once(rendered_memory_module, monkeypatch):
     module = rendered_memory_module
     saved: list[tuple[str, str]] = []
     memory = SimpleNamespace(save_turn=lambda prompt, response: saved.append((prompt, response)))
     monkeypatch.setattr(module, "_create_memory", lambda actor, session: memory)
 
-    async def fake_query_events(prompt, request_memory, outcome):
+    async def fake_query_events(prompt, request_memory, outcome, session_id):
         assert prompt == "hello"
         assert request_memory is memory
+        assert session_id == "session-one"
         outcome.result = "hello back"
         outcome.usage = {"input_tokens": 2}
         yield {"event": "delta", "text": "hello back"}
@@ -743,7 +711,7 @@ def test_query_failure_does_not_persist_turn(rendered_memory_module, monkeypatch
     memory = SimpleNamespace(save_turn=lambda prompt, response: saved.append((prompt, response)))
     monkeypatch.setattr(module, "_create_memory", lambda actor, session: memory)
 
-    async def failed_query(_prompt, _memory, _outcome):
+    async def failed_query(_prompt, _memory, _outcome, _session_id):
         raise RuntimeError("claude failed")
         yield
 

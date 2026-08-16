@@ -98,8 +98,7 @@ def assemble_build_context(spec: AgentSpec, target_dir: Path) -> Path:
     if target_dir.exists():
         shutil.rmtree(target_dir)
     target_dir.mkdir(parents=True)
-    for name in ("Dockerfile", "requirements.txt", "buildspec.yml", "README.md",
-                 "tracing.py"):
+    for name in ("Dockerfile", "requirements.txt", "buildspec.yml", "README.md"):
         shutil.copy2(TEMPLATE_DIR / name, target_dir / name)
     # .claude scaffold ships empty since the fact-checker sample was dropped —
     # git can't track empty dirs, so copy only if a future scaffold reappears;

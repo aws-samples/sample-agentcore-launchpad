@@ -58,6 +58,22 @@ DEDUP_SPANS = [
           attrs={**_LLM_USAGE, "gen_ai.system": "aws.bedrock"}),
 ]
 
+NATIVE_SPANS = [
+    _span("native-root", None, "ClaudeAgentSDK.query", 0, 10, attrs={
+        "openinference.span.kind": "AGENT",
+        "llm.model_name": "global.anthropic.claude-sonnet-4-6",
+        "llm.token_count.prompt": 700,
+        "llm.token_count.completion": 42,
+        "llm.token_count.prompt_details.cache_read": 100,
+        "llm.token_count.prompt_details.cache_write": 10,
+        "session.id": "n" * 64,
+    }),
+    _span("native-tool", "native-root", "ClaudeAgentSDK.tool", 2, 4, attrs={
+        "openinference.span.kind": "TOOL",
+        "tool.name": "calculator",
+    }),
+]
+
 
 # trace with runtime-log-group resources + gen_ai message events attached
 MSG_SPANS = [
@@ -118,6 +134,23 @@ def test_span_tree_orphan_becomes_root():
     assert {n["span_id"] for n in tree["tree"]} == {"root", "lost"}
 
 
+def test_native_claude_span_tree_uses_openinference_attributes():
+    tree = obs.build_span_tree(NATIVE_SPANS, prices=PRICES)
+    root = tree["tree"][0]
+    assert root["category"] == "agent"
+    assert root["model"] == "global.anthropic.claude-sonnet-4-6"
+    assert root["tokens"] == {
+        "input": 700.0,
+        "output": 42.0,
+        "cache_read": 100.0,
+        "cache_write": 10.0,
+    }
+    assert root["est_cost_usd"] is not None
+    tool = root["children"][0]
+    assert tool["category"] == "tool"
+    assert tool["tool_name"] == "calculator"
+
+
 def test_categorize_span_contract():
     cases = [
         ("chat global.anthropic.claude-sonnet-4-6", {}, None, "llm"),
@@ -136,6 +169,9 @@ def test_categorize_span_contract():
         ("execute_tool search_memory", {}, None, "tool"),
         ("execute_tool mcp_lookup", {"gen_ai.tool.name": "mcp_lookup"}, None, "tool"),
         ("chat agent helper", {"gen_ai.operation.name": "chat"}, None, "llm"),
+        ("ClaudeAgentSDK.query", {"openinference.span.kind": "AGENT"}, None, "agent"),
+        ("ClaudeAgentSDK.tool", {"openinference.span.kind": "TOOL"}, None, "tool"),
+        ("tool callback", {"tool.name": "calculator"}, None, "tool"),
     ]
     for name, attrs, kind, expected in cases:
         assert obs.categorize_span(name, attrs, kind) == expected, name
@@ -161,7 +197,36 @@ def test_llm_aggregation_excludes_framework_wrapper_spans():
     # fields must exclude the wrapper or all token sums double.
     query = obs.q_trace_aggregates()
     assert 'strcontains(coalesce(attributes.gen_ai.system, ""), "strands-agents")' in query
-    assert 'strcontains(attributes.gen_ai.operation.name, "chat")' in query
+    assert (
+        'strcontains(coalesce(attributes.gen_ai.operation.name, ""), "chat")'
+        in query
+    )
+
+
+def test_native_claude_query_builders_coalesce_openinference_fields():
+    aggregate_queries = (obs.q_trace_aggregates(), obs.q_session_aggregates())
+    for query in aggregate_queries:
+        assert (
+            "coalesce(attributes.gen_ai.request.model, attributes.llm.model_name) "
+            "as telemetry_model"
+            in query
+        )
+        assert "attributes.llm.token_count.prompt" in query
+        assert "attributes.llm.token_count.completion" in query
+        assert "attributes.llm.token_count.prompt_details.cache_read" in query
+        assert "attributes.llm.token_count.prompt_details.cache_write" in query
+        assert "attributes.openinference.span.kind" in query
+        assert 'coalesce(attributes.gen_ai.operation.name, "")' in query
+
+    model_query = obs.q_tokens_by_model()
+    assert "attributes.llm.model_name" in model_query
+    assert "attributes.openinference.span.kind" in model_query
+    assert 'coalesce(attributes.gen_ai.operation.name, "")' in model_query
+    assert "by telemetry_model as model" in model_query
+
+    tool_query = obs.q_top_tools()
+    assert "coalesce(attributes.gen_ai.tool.name, attributes.tool.name) as tool" in tool_query
+    assert "by tool" in tool_query
 
 
 def test_trace_meta_dedupes_wrapper_llm_spans(client, mocked_aws):
@@ -172,6 +237,31 @@ def test_trace_meta_dedupes_wrapper_llm_spans(client, mocked_aws):
     # → only the terminal span counts
     assert meta["llm_count"] == 1
     assert meta["tokens"]["input"] == 500 and meta["tokens"]["output"] == 50
+
+
+def test_trace_meta_counts_native_agent_root_as_token_call():
+    trace_id = "e" * 32
+    fake = FakeLogs({
+        f'filter traceId = "{trace_id}"': [
+            {"@message": json.dumps({**span, "traceId": trace_id})}
+            for span in NATIVE_SPANS
+        ]
+    })
+    db = SessionLocal()
+    result = obs.get_trace(trace_id, "24h", db, ws_ctx(), logs=fake)
+    db.close()
+    meta = result["meta"]
+    assert meta["llm_count"] == 1
+    assert meta["tokens"] == {
+        "input": 700,
+        "output": 42,
+        "cache_read": 100,
+        "cache_write": 10,
+        "total": 742,
+    }
+    native = next(span for span in result["spans"] if span["span_id"] == "native-root")
+    assert native["category"] == "agent"
+    assert native["model"] == "global.anthropic.claude-sonnet-4-6"
 
 
 def test_session_filtered_query_is_well_formed():
@@ -208,9 +298,9 @@ def test_span_aggregates_preserve_string_metadata_with_latest():
     assert "latest(attributes.session.id) as session_id" in trace_query
     for query in (trace_query, session_query):
         assert "latest(resource.attributes.service.name) as service" in query
-        assert "latest(attributes.gen_ai.request.model) as model" in query
+        assert "latest(telemetry_model) as model" in query
         assert "max(resource.attributes.service.name)" not in query
-        assert "max(attributes.gen_ai.request.model)" not in query
+        assert "max(telemetry_model)" not in query
 
 
 def test_parse_message_events_from_runtime_log_record():
@@ -388,7 +478,7 @@ def _fake_logs():
                               "p95_nano": 11_800_000_000}],
         "count_distinct(attributes.session.id) as sessions": [
             {"sessions": 3, "agents": 2}],
-        "by attributes.gen_ai.tool.name as tool": [
+        "by tool": [
             {"tool": "hr-database___get_employee", "calls": 9, "errors": 1}],
         f'filter traceId = "{"c" * 32}"': [
             {"@message": json.dumps({**s, "traceId": "c" * 32})} for s in DEDUP_SPANS],
@@ -858,7 +948,40 @@ def test_eval_turns_from_content_logs_groups_by_trace():
     assert "startTime" in logs.calls[0]  # load-bearing: scan is oldest-first
 
 
-def test_transcript_eval_falls_back_to_content_logs(monkeypatch):
+def test_eval_turns_from_content_logs_accepts_native_claude_event():
+    sid = "n" * 64
+    record = json.dumps(
+        {
+            "scope": {
+                "name": "openinference.instrumentation.claude_agent_sdk"
+            },
+            "timeUnixNano": 2_000,
+            "traceId": "native-trace",
+            "attributes": {"session.id": sid},
+            "body": {
+                "input": {
+                    "messages": [{"role": "user", "content": "Native question"}]
+                },
+                "output": {
+                    "messages": [{"role": "assistant", "content": "Native answer"}]
+                },
+            },
+        }
+    )
+    logs = FakeLogsClient([[record]])
+
+    turns = obs.eval_turns_from_content_logs(
+        "/native-runtime", sid, None, ws_ctx(), logs=logs
+    )
+
+    assert [(turn["role"], turn["text"]) for turn in turns] == [
+        ("USER", "Native question"),
+        ("ASSISTANT", "Native answer"),
+    ]
+
+
+@pytest.mark.parametrize("method", ["zip_runtime", "container"])
+def test_transcript_eval_falls_back_to_content_logs(monkeypatch, method):
     """Runtime-backed agents write no memory events — the transcript is rebuilt
     from the runtime's OTEL content logs. Insights re-runs reuse session ids,
     so the CREATOR run (oldest match) anchors the log window and run_id."""
@@ -866,7 +989,7 @@ def test_transcript_eval_falls_back_to_content_logs(monkeypatch):
 
     from app.evaluation.models import EvalRun
 
-    agent_id = _seed_agent(method="zip_runtime")
+    agent_id = _seed_agent(method=method)
     sid = "f" * 64
     db = SessionLocal()
     creator = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
@@ -974,7 +1097,7 @@ def test_dashboard_tokens_prefer_span_aggregation(client, monkeypatch):
     emit); wrapper-only models fall back to their wrapper sums; models with no
     tokens at all are dropped."""
     fake_logs = _fake_logs()
-    fake_logs.rows_by_marker["by attributes.gen_ai.request.model as model"] = [
+    fake_logs.rows_by_marker["by telemetry_model as model"] = [
         {"model": "global.anthropic.claude-sonnet-4-6", "tokens_in": 1000,
          "tokens_out": 100, "wrapper_in": 1000, "wrapper_out": 100},
         {"model": "openai.gpt-5.6-terra", "tokens_in": 0, "tokens_out": 0,
