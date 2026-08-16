@@ -791,17 +791,19 @@ Logs Insights is billed per scan — with `force=true` (the ⟳ REFRESH button)
 bypassing it. Ranges are whitelisted (`1h/6h/24h/7d`); trace ids
 (`^[0-9a-f]{32}$`) and session ids (`^[A-Za-z0-9_-]{8,128}$`) are validated at
 the router **and** re-checked in the query builders before being interpolated
-into Logs Insights query strings. Token sums count only terminal LLM
-operations (`chat` / `text_completion` / `generate_content`) because
-agent-level `invoke_agent` spans repeat their children's `gen_ai.usage.*`
-values. Unified groups also contain prompts, OTel events, structured logs, and
-standard output; span-derived queries require `startTimeUnixNano` so correlated
-non-span records do not inflate trace, latency, error, token, or tool counts.
+into Logs Insights query strings. Token sums use one framework-specific
+token-bearing span: terminal LLM operations (`chat` / `text_completion` /
+`generate_content`) for Strands, or the native OpenInference `AGENT` root for
+Claude Agent SDK. Strands agent-level `invoke_agent` spans and framework
+wrappers repeat child/provider usage and remain excluded. Unified groups also
+contain prompts, OTel events, structured logs, and standard output;
+span-derived queries require `startTimeUnixNano` so correlated non-span records
+do not inflate trace, latency, error, token, or tool counts.
 
 Cost figures are **advisory estimates**: token counts × `model_prices` from
 `config/launchpad.yaml` (USD per 1M tokens, substring-matched against
-`gen_ai.request.model`; unknown models show token counts with a `—` cost). The
-UI labels them `≈ / EST`. The price map is kept fresh from litellm's public
+`gen_ai.request.model` or native `llm.model_name`; unknown models show token
+counts with a `—` cost). The UI labels them `≈ / EST`. The price map is kept fresh from litellm's public
 price file (`app/services/model_prices.py`): a daily daemon plus the dashboard's
 `⟳ UPDATE PRICES` button (`POST /api/observability/prices/refresh`) pull exact
 per-model entries — including regional Bedrock premiums and cache read/write
@@ -811,15 +813,18 @@ interval are configurable (`model_prices_source_url`,
 `model_prices_refresh_hours`; `0` disables the daemon).
 
 **Telemetry per creation method:** Strands (zip/studio) and harness agents emit
-gen_ai spans natively. Claude Agent SDK containers drive the `claude` CLI as a
-subprocess — invisible to ADOT auto-instrumentation — so the generated agent
-emits the telemetry manually (`app/templates/claude_sdk_agent/tracing.py`,
-adapted from the agentxray demo-agent): an `invoke_agent` root span, one
-`execute_tool` span per tool call, one aggregate `chat` span carrying the
-query's token usage (`ResultMessage.usage`; the SDK's `cache_creation` maps to
-`cache_write`), and Strands-shaped content events for the span drawer's
-input/output messages. The scope name must stay `strands.telemetry.tracer` —
-AgentCore only parses spans/events from supported instrumentation scopes.
+gen_ai spans natively. Claude Agent SDK containers install AgentCore's supported
+`openinference-instrumentation-claude-agent-sdk` integration and keep the
+existing ADOT launcher (`opentelemetry-instrument python main.py`). The
+instrumentation wraps the SDK's `query()` call as `ClaudeAgentSDK.query`, emits
+native AGENT/TOOL OpenInference spans, and automatically emits same-scope
+structured content events for input/output messages. Model, token, cache-token,
+cost, and tool data stay on the native spans. The runtime wraps each query in
+`using_session(context.session_id)`, so the native span carries the same
+`session.id` used by Chat, Evaluation, and Observability rather than the Claude
+CLI's internal session id. Evaluation readiness pairs the completed native span
+with its automatic content event by span id; Strands telemetry keeps the same
+root-plus-content contract.
 
 Tab IA: **DASHBOARD** (5 stat tiles + traffic/latency/tokens/tools charts) ·
 **SESSIONS** (list → detail with Memory/ledger-reconciled transcript + traces-in-session cards) ·

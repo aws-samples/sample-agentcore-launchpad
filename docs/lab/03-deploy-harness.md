@@ -121,7 +121,7 @@ Hooks、MCP 服务器），经 CodeBuild 打成 **ARM64** 镜像推到 ECR，再
 
 ```json
 {"stage":"generate","msg":"skills bundled: <SKILL_NAME> (<FILE_COUNT> files, <SIZE>)"}
-{"stage":"generate","msg":"build context assembled: .claude/skills/<SKILL_NAME>/SKILL.md, Dockerfile, README.md, buildspec.yml, main.py, requirements.txt, tracing.py"}
+{"stage":"generate","msg":"build context assembled: .claude/skills/<SKILL_NAME>/SKILL.md, Dockerfile, README.md, buildspec.yml, main.py, requirements.txt"}
 {"stage":"package","msg":"source zip uploaded → s3://launchpad-artifacts-…/builds/lab-fund-packager/source.zip"}
 {"stage":"package","msg":"codebuild started · launchpad-agent-builder:<BUILD_ID>"}
 {"stage":"package","msg":"codebuild phase: QUEUED → PRE_BUILD → BUILD → POST_BUILD → COMPLETED"}
@@ -131,10 +131,11 @@ Hooks、MCP 服务器），经 CodeBuild 打成 **ARM64** 镜像推到 ECR，再
 {"stage":"register","msg":"a2a record created · <RECORD_ID> · auto-submitted"}
 ```
 
-> `tracing.py` 出现在构建上下文里，是因为 Claude SDK 容器把 `claude` CLI 当子进程跑，
-> ADOT 自动埋点看不见它，所以生成的 Agent **手工发射** gen_ai 遥测（`invoke_agent` 根 span、
-> 每次工具调用一个 `execute_tool`、一个聚合 `chat` span 带 token 用量）。第 07 章因此也能
-> 在追踪瀑布图中显示容器 Agent。
+> `requirements.txt` 包含 AgentCore 已支持的
+> `openinference-instrumentation-claude-agent-sdk`。容器仍由
+> `opentelemetry-instrument` 启动，ADOT 会自动发现该插桩并记录
+> `ClaudeAgentSDK.query` 及其工具子 span；模板不再手工伪造 Strands 遥测。
+> 第 07 章因此能直接展示 Claude Agent SDK 的原生模型、token 与工具属性。
 
 > **注意**：容器方式部署完成后，务必手工调一次再往下走。五阶段全绿只说明镜像已推送、
 > Runtime 到了 `READY`，**不代表容器进程能起来**。平台目前没有部署后探活。验证方法见

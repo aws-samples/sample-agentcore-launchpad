@@ -30,14 +30,19 @@ docker build --platform linux/arm64 -t "$NAME" "$CTX"
 
 echo "── docker run"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
+ENVFILE=
+cleanup() {
+  [[ -z "$ENVFILE" ]] || rm -f "$ENVFILE"
+  docker rm -f "$NAME" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
 ENVFILE=$(mktemp)
 aws configure export-credentials --format env-no-export > "$ENVFILE"
 echo "AWS_REGION=${AWS_REGION:-us-west-2}" >> "$ENVFILE"
 docker run -d --name "$NAME" --env-file "$ENVFILE" -p "$PORT:8080" "$NAME" >/dev/null
 rm -f "$ENVFILE"
-
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+ENVFILE=
 
 echo "── waiting for /ping"
 for _ in $(seq 1 30); do
@@ -46,8 +51,9 @@ for _ in $(seq 1 30); do
 done
 curl -sf "localhost:$PORT/ping" >/dev/null || { echo "container never became healthy"; docker logs "$NAME" | tail -20; exit 1; }
 
-echo "── listing subagent scaffold in image"
-docker exec "$NAME" ls /app/.claude/agents/
+echo "── checking optional subagent scaffold in image"
+docker exec "$NAME" sh -c \
+  'test ! -d /app/.claude/agents || ls /app/.claude/agents/'
 
 echo "── invoking: what is 2+2?"
 ANSWER=$(curl -sf -X POST "localhost:$PORT/invocations" \

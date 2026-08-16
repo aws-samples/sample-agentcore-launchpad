@@ -221,22 +221,46 @@ def run_insights_queries(
 # ── Query builders (shapes validated against live aws/spans data) ──────────
 
 
-# Aggregations restrict token sums/LLM counts to terminal LLM client spans:
+# Aggregations restrict token sums/LLM counts to one token-bearing span:
 # (a) agent-level spans (operation.name=invoke_agent) repeat their children's
 # gen_ai.usage.* values, and (b) the Strands SDK emits each LLM call twice —
 # a framework wrapper span (gen_ai.system=strands-agents) plus the terminal
 # provider span (gen_ai.system=aws.bedrock) with identical token counts (both
-# verified against live data; naive sums count 2-3x). The `x * is_llm`
-# multiplication is Logs Insights' conditional sum.
-_IS_LLM_FIELDS = """fields (strcontains(attributes.gen_ai.operation.name, "chat")
-        + strcontains(attributes.gen_ai.operation.name, "text_completion")
-        + strcontains(attributes.gen_ai.operation.name, "generate_content"))
-       * (1 - strcontains(coalesce(attributes.gen_ai.system, ""), "strands-agents")) as is_llm,
+# verified against live data; naive sums count 2-3x). Native Claude SDK spans
+# instead put the aggregate usage on their OpenInference AGENT root.
+_MODEL_FIELD = "coalesce(attributes.gen_ai.request.model, attributes.llm.model_name)"
+_INPUT_TOKENS_FIELD = (
+    "coalesce(attributes.gen_ai.usage.input_tokens, attributes.llm.token_count.prompt)"
+)
+_OUTPUT_TOKENS_FIELD = (
+    "coalesce(attributes.gen_ai.usage.output_tokens, attributes.llm.token_count.completion)"
+)
+_CACHE_READ_FIELD = (
+    "coalesce(attributes.gen_ai.usage.cache_read_input_tokens, "
+    "attributes.llm.token_count.prompt_details.cache_read)"
+)
+_CACHE_WRITE_FIELD = (
+    "coalesce(attributes.gen_ai.usage.cache_write_input_tokens, "
+    "attributes.llm.token_count.prompt_details.cache_write)"
+)
+_NATIVE_AGENT_FIELD = (
+    'strcontains(coalesce(attributes.openinference.span.kind, ""), "AGENT")'
+)
+_OPERATION_FIELD = 'coalesce(attributes.gen_ai.operation.name, "")'
+
+# The `x * is_llm` multiplication is Logs Insights' conditional sum.
+_IS_LLM_FIELDS = f"""fields {_MODEL_FIELD} as telemetry_model,
+       ((strcontains({_OPERATION_FIELD}, "chat")
+        + strcontains({_OPERATION_FIELD}, "text_completion")
+        + strcontains({_OPERATION_FIELD}, "generate_content"))
+        * (1 - strcontains(coalesce(attributes.gen_ai.system, ""), "strands-agents"))
+        * (1 - {_NATIVE_AGENT_FIELD})
+        + {_NATIVE_AGENT_FIELD}) as is_llm,
        strcontains(status.code, "ERROR") as is_error
-| fields attributes.gen_ai.usage.input_tokens * is_llm as llm_in,
-         attributes.gen_ai.usage.output_tokens * is_llm as llm_out,
-         attributes.gen_ai.usage.cache_read_input_tokens * is_llm as llm_cache_read,
-         attributes.gen_ai.usage.cache_write_input_tokens * is_llm as llm_cache_write"""
+| fields {_INPUT_TOKENS_FIELD} * is_llm as llm_in,
+         {_OUTPUT_TOKENS_FIELD} * is_llm as llm_out,
+         {_CACHE_READ_FIELD} * is_llm as llm_cache_read,
+         {_CACHE_WRITE_FIELD} * is_llm as llm_cache_write"""
 
 
 def q_trace_aggregates(session_id: str | None = None, limit: int = TRACE_LIMIT) -> str:
@@ -258,8 +282,8 @@ def q_trace_aggregates(session_id: str | None = None, limit: int = TRACE_LIMIT) 
         min(startTimeUnixNano) as start_ns, max(endTimeUnixNano) as end_ns,
         latest(attributes.session.id) as session_id,
         latest(resource.attributes.service.name) as service,
-        latest(attributes.gen_ai.request.model) as model,
-        count_distinct(attributes.gen_ai.request.model) as model_count
+        latest(telemetry_model) as model,
+        count_distinct(telemetry_model) as model_count
   by traceId
 | sort start_ns desc
 | limit {limit}
@@ -290,7 +314,7 @@ def q_session_aggregates(limit: int = SESSION_LIMIT) -> str:
         sum(is_error) as errors,
         min(startTimeUnixNano) as first_ns, max(endTimeUnixNano) as last_ns,
         latest(resource.attributes.service.name) as service,
-        latest(attributes.gen_ai.request.model) as model
+        latest(telemetry_model) as model
   by attributes.session.id as session_id
 | sort last_ns desc
 | limit {limit}
@@ -332,10 +356,12 @@ def q_dashboard_distincts() -> str:
 def q_top_tools(limit: int = 10) -> str:
     return f"""
 {SPANS_SOURCE}
-| filter ispresent(startTimeUnixNano) and ispresent(attributes.gen_ai.tool.name)
-| fields strcontains(status.code, "ERROR") as is_error
+| filter ispresent(startTimeUnixNano)
+    and (ispresent(attributes.gen_ai.tool.name) or ispresent(attributes.tool.name))
+| fields coalesce(attributes.gen_ai.tool.name, attributes.tool.name) as tool,
+         strcontains(status.code, "ERROR") as is_error
 | stats count(*) as calls, sum(is_error) as errors
-  by attributes.gen_ai.tool.name as tool
+  by tool
 | sort calls desc
 | limit {limit}
 """
@@ -352,18 +378,22 @@ def q_tokens_by_model(limit: int = 25) -> str:
     """
     return f"""
 {SPANS_SOURCE}
-| filter ispresent(startTimeUnixNano) and ispresent(attributes.gen_ai.request.model)
-| fields (strcontains(attributes.gen_ai.operation.name, "chat")
-        + strcontains(attributes.gen_ai.operation.name, "text_completion")
-        + strcontains(attributes.gen_ai.operation.name, "generate_content")) as is_call,
+| filter ispresent(startTimeUnixNano)
+    and (ispresent(attributes.gen_ai.request.model) or ispresent(attributes.llm.model_name))
+| fields {_MODEL_FIELD} as telemetry_model,
+       ((strcontains({_OPERATION_FIELD}, "chat")
+        + strcontains({_OPERATION_FIELD}, "text_completion")
+        + strcontains({_OPERATION_FIELD}, "generate_content")
+        ) * (1 - {_NATIVE_AGENT_FIELD})
+        + {_NATIVE_AGENT_FIELD}) as is_call,
        strcontains(coalesce(attributes.gen_ai.system, ""), "strands-agents") as is_wrapper
-| fields attributes.gen_ai.usage.input_tokens * is_call * (1 - is_wrapper) as llm_in,
-         attributes.gen_ai.usage.output_tokens * is_call * (1 - is_wrapper) as llm_out,
-         attributes.gen_ai.usage.input_tokens * is_call * is_wrapper as wrap_in,
-         attributes.gen_ai.usage.output_tokens * is_call * is_wrapper as wrap_out
+| fields {_INPUT_TOKENS_FIELD} * is_call * (1 - is_wrapper) as llm_in,
+         {_OUTPUT_TOKENS_FIELD} * is_call * (1 - is_wrapper) as llm_out,
+         {_INPUT_TOKENS_FIELD} * is_call * is_wrapper as wrap_in,
+         {_OUTPUT_TOKENS_FIELD} * is_call * is_wrapper as wrap_out
 | stats sum(llm_in) as tokens_in, sum(llm_out) as tokens_out,
         sum(wrap_in) as wrapper_in, sum(wrap_out) as wrapper_out
-  by attributes.gen_ai.request.model as model
+  by telemetry_model as model
 | limit {limit}
 """
 
@@ -482,6 +512,18 @@ _AGENT_NEEDLES = ("invoke_agent", "event_loop", "invoke_harness", "agent")
 _LLM_OPS = ("chat", "text_completion", "generate_content")
 
 
+def _attr(attrs: dict[str, Any], *names: str) -> Any:
+    for name in names:
+        value = attrs.get(name)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _openinference_kind(attrs: dict[str, Any]) -> str:
+    return str(attrs.get("openinference.span.kind") or "").upper()
+
+
 def categorize_span(name: str, attributes: dict[str, Any] | None = None,
                     kind: str | None = None) -> str:
     """Order matters: strong signals (execute_tool prefix, operation.name)
@@ -490,8 +532,15 @@ def categorize_span(name: str, attributes: dict[str, Any] | None = None,
     attrs = attributes or {}
     lowered = name.lower()
     operation = str(attrs.get("gen_ai.operation.name", ""))
-    if lowered.startswith("execute_tool") or operation == "execute_tool":
+    openinference_kind = _openinference_kind(attrs)
+    if (
+        lowered.startswith("execute_tool")
+        or operation == "execute_tool"
+        or openinference_kind == "TOOL"
+    ):
         return "tool"
+    if openinference_kind == "AGENT":
+        return "agent"
     if operation in _LLM_OPS:
         return "llm"
     if operation == "invoke_agent":
@@ -500,7 +549,7 @@ def categorize_span(name: str, attributes: dict[str, Any] | None = None,
         return "gateway"
     if any(n in lowered for n in _MEMORY_NEEDLES):
         return "memory"
-    if "gen_ai.tool.name" in attrs:
+    if "gen_ai.tool.name" in attrs or "tool.name" in attrs:
         return "tool"
     if any(n in lowered for n in _AGENT_NEEDLES):
         return "agent"
@@ -577,14 +626,31 @@ def _span_ns(span: dict[str, Any], key: str) -> float | None:
 
 
 def _token_usage(attrs: dict[str, Any]) -> dict[str, float] | None:
-    if "gen_ai.usage.input_tokens" not in attrs and "gen_ai.usage.output_tokens" not in attrs:
-        return None
-    return {
-        "input": float(attrs.get("gen_ai.usage.input_tokens") or 0),
-        "output": float(attrs.get("gen_ai.usage.output_tokens") or 0),
-        "cache_read": float(attrs.get("gen_ai.usage.cache_read_input_tokens") or 0),
-        "cache_write": float(attrs.get("gen_ai.usage.cache_write_input_tokens") or 0),
+    values = {
+        "input": _attr(
+            attrs,
+            "gen_ai.usage.input_tokens",
+            "llm.token_count.prompt",
+        ),
+        "output": _attr(
+            attrs,
+            "gen_ai.usage.output_tokens",
+            "llm.token_count.completion",
+        ),
+        "cache_read": _attr(
+            attrs,
+            "gen_ai.usage.cache_read_input_tokens",
+            "llm.token_count.prompt_details.cache_read",
+        ),
+        "cache_write": _attr(
+            attrs,
+            "gen_ai.usage.cache_write_input_tokens",
+            "llm.token_count.prompt_details.cache_write",
+        ),
     }
+    if all(value is None for value in values.values()):
+        return None
+    return {key: float(value or 0) for key, value in values.items()}
 
 
 def build_span_tree(raw_spans: list[dict[str, Any]],
@@ -607,7 +673,7 @@ def build_span_tree(raw_spans: list[dict[str, Any]],
         duration_ns = (end - start) if start and end else _span_ns(span, "durationNano") or 0.0
         offset_ns = (start - trace_start) if start else 0.0
         tokens = _token_usage(attrs)
-        model = attrs.get("gen_ai.request.model")
+        model = _attr(attrs, "gen_ai.request.model", "llm.model_name")
         finish = attrs.get("gen_ai.response.finish_reasons") or attrs.get(
             "gen_ai.response.finish_reason"
         )
@@ -624,7 +690,7 @@ def build_span_tree(raw_spans: list[dict[str, Any]],
             "width_pct": round(duration_ns / total_ns * 100, 2),
             "model": model,
             "finish_reason": finish,
-            "tool_name": attrs.get("gen_ai.tool.name"),
+            "tool_name": _attr(attrs, "gen_ai.tool.name", "tool.name"),
             "tokens": tokens,
             "est_cost_usd": (
                 estimate_cost(model, tokens["input"], tokens["output"],
@@ -1043,9 +1109,18 @@ def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceCo
         for span in spans:
             span["messages"] = messages_by_span.get(span["span_id"] or "")
         # Strands emits each LLM call as a wrapper span (system=strands-agents)
-        # plus a terminal provider span with identical tokens; sum terminal
-        # spans only, falling back to wrappers for SDKs that emit just those.
-        with_tokens = [s for s in spans if s["tokens"] and s["category"] == "llm"]
+        # plus a terminal provider span with identical tokens; native Claude
+        # instead carries aggregate usage on its AGENT root. Sum those call
+        # spans, preferring Strands terminal providers over wrappers.
+        with_tokens = [
+            s
+            for s in spans
+            if s["tokens"]
+            and (
+                s["category"] == "llm"
+                or _openinference_kind(s["attributes"]) == "AGENT"
+            )
+        ]
         llm_spans = [
             s for s in with_tokens
             if s["attributes"].get("gen_ai.system") != "strands-agents"

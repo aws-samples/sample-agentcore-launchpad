@@ -56,8 +56,10 @@ current_utc_time
 - **成本是估算**：token 数 × `config/launchpad.yaml` 里的 `model_prices`（USD / 1M tokens）。
   界面用 `≈ / EST` 标注。`⟳ 更新价格` 按钮会从 litellm 公共价格表拉取当前账号见到过的每个模型的
   精确价格（含区域溢价与缓存读写价）。未知模型只显示 token 数、成本显示 `—`。
-- **Token 只统计末端 LLM 调用**（`chat` / `text_completion` / `generate_content`）。
-  Agent 级的 `invoke_agent` span 会重复其子 span 的 `gen_ai.usage.*`，如果一并累加会翻倍。
+- **Token 按框架只统计一个携带用量的 span**：Strands 统计末端 LLM 调用
+  （`chat` / `text_completion` / `generate_content`），Claude SDK 统计原生
+  OpenInference `AGENT` 根 span。Strands 的 `invoke_agent` 与 wrapper span
+  会重复子级/provider 用量，因此不参与求和。
 
 ## 7.3 会话视图：业务视角
 
@@ -146,11 +148,12 @@ Mounted knowledge bases:
 |---|---|
 | Strands（zip / studio） | Strands 原生发射 gen_ai span |
 | 托管 Harness | 内部 Strands 运行时，`service.name = harness_{name}.DEFAULT`，scope 为 `strands.telemetry.tracer` |
-| Claude SDK 容器 | **手工发射**：`claude` CLI 是子进程，ADOT 自动埋点看不到它，所以模板里的 `tracing.py` 自己造 `invoke_agent` / `execute_tool` / `chat` span |
+| Claude SDK 容器 | AgentCore 支持的 OpenInference 插桩原生发射 `ClaudeAgentSDK.query` AGENT span 与工具子 span，scope 为 `openinference.instrumentation.claude_agent_sdk` |
 
-> 容器方式的 scope 名必须保持 `strands.telemetry.tracer`，AgentCore 只解析受支持的
-> instrumentation scope 发出的 span/event。模板中的 `tracing.py` 会发出 `invoke_agent`
-> 与 `chat` span，因此容器 Agent 也能出现在瀑布图中。
+> 容器模板用 `using_session(context.session_id)` 把 AgentCore Runtime session
+> 传给 OpenInference，因此可观测性与评估看到的是同一个 `session.id`。输入输出位于
+> 插桩自动发射的同 scope content event，模型与 token 位于 `llm.*` 原生属性；
+> 平台会把这些数据与现有 `gen_ai.*` 字段统一投影到仪表盘、会话和追踪详情。
 
 ---
 
@@ -172,7 +175,7 @@ Mounted knowledge bases:
 | 刚聊完看不到 trace | 摄取延迟（约 1 分钟起） | 等一会点 `⟳ 刷新` |
 | 数字过一会儿才变 | 60 秒 TTL 缓存 | 点 `⟳ 刷新` 绕过 |
 | 成本显示 `—` | 该模型不在价格表里 | 点 `⟳ 更新价格` |
-| Token 数看起来偏小/偏大 | 只统计末端 LLM span（避免 `invoke_agent` 重复累加） | 属预期设计 |
+| Token 数看起来偏小/偏大 | Strands 统计末端 LLM span；Claude SDK 统计原生 AGENT 根 span，均避免重复累加 | 属预期设计 |
 | 只有 Agent 名而没有会话 | 该 Agent 的调用没带会话（如某些 `/v1` 无状态调用） | 正常 |
 
 ---

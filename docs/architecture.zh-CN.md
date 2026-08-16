@@ -413,16 +413,19 @@ Chat Playground 的「会话记忆」右栏通过 `OPEN IN MEMORY ↗` 深链进
 按扫描量计费 —— `force=true`(⟳ 刷新按钮)可绕过缓存。时间范围为白名单
 (`1h/6h/24h/7d`);trace id(`^[0-9a-f]{32}$`)与 session id
 (`^[A-Za-z0-9_-]{8,128}$`)在路由层校验,并在查询构造器中**再次校验**后才会
-插入 Logs Insights 查询字符串。TOKEN 求和只统计终端 LLM 操作
-(`chat` / `text_completion` / `generate_content`),因为 agent 级
-`invoke_agent` Span 会重复其子 Span 的 `gen_ai.usage.*` 值。
+插入 Logs Insights 查询字符串。TOKEN 求和按框架只选择一个携带用量的 Span:
+Strands 统计终端 LLM 操作(`chat` / `text_completion` /
+`generate_content`),Claude Agent SDK 统计原生 OpenInference `AGENT`
+根 Span。Strands 的 agent 级 `invoke_agent` Span 与框架 wrapper 会重复
+子级/provider 用量,因此仍排除。
 统一日志组还包含 prompt、OTel event、结构化日志和标准输出；所有基于 Span
 的查询都要求存在 `startTimeUnixNano`，避免带 trace 关联信息的非 Span 记录
 抬高 trace、延迟、错误、token 或工具调用统计。
 
 成本为**参考估算**:token 数 × `config/launchpad.yaml` 中的 `model_prices`
-(每百万 token 的美元价,按子串匹配 `gen_ai.request.model`;未知模型只显示
-token 数,成本为 `—`)。界面以 `≈ / EST` 标注。价格表通过 litellm 的公开
+(每百万 token 的美元价,按子串匹配 `gen_ai.request.model` 或原生
+`llm.model_name`;未知模型只显示 token 数,成本为 `—`)。界面以
+`≈ / EST` 标注。价格表通过 litellm 的公开
 价格文件保持更新(`app/services/model_prices.py`):每日守护线程 + 仪表盘的
 「⟳ 更新价格」按钮(`POST /api/observability/prices/refresh`)会为账户遥测中
 出现过的每个模型拉取精确条目(含 Bedrock 区域溢价与缓存读写价),刷新运维
@@ -430,13 +433,16 @@ token 数,成本为 `—`)。界面以 `≈ / EST` 标注。价格表通过 lite
 (`model_prices_source_url`、`model_prices_refresh_hours`,设 `0` 关闭守护线程)。
 
 **各创建方式的遥测:** Strands(zip/studio)与 harness Agent 原生发射 gen_ai
-span。Claude Agent SDK 容器把 `claude` CLI 当子进程驱动——ADOT 自动插桩看不见
-——因此生成的 Agent 手工发射遥测(`app/templates/claude_sdk_agent/tracing.py`,
-移植自 agentxray demo-agent):一个 `invoke_agent` 根 span、每次工具调用一个
-`execute_tool` span、一个携带整次查询 token 用量的聚合 `chat` span
-(`ResultMessage.usage`;SDK 的 `cache_creation` 映射为 `cache_write`),以及
-供 Span 抽屉展示输入/输出消息的 Strands 形状内容 event。scope 名必须保持
-`strands.telemetry.tracer` —— AgentCore 只解析受支持插桩库的 span/event。
+span。Claude Agent SDK 容器安装 AgentCore 已支持的
+`openinference-instrumentation-claude-agent-sdk`,并继续通过
+`opentelemetry-instrument python main.py` 启动 ADOT。插桩会把 SDK 的
+`query()` 调用记录为 `ClaudeAgentSDK.query`,原生发射 AGENT/TOOL
+OpenInference span,并自动发射同 scope 的结构化 content event 承载输入输出消息;
+模型、token、缓存 token、成本与工具数据保留在原生 span 上。
+运行时用 `using_session(context.session_id)` 包住每次查询,因此原生 span 的
+`session.id` 与 Chat、Evaluation、Observability 使用的平台 session 一致,不会
+被 Claude CLI 内部 session id 替换。Evaluation readiness 按 span id 配对完整的
+原生 span 与自动 content event;Strands 遥测继续使用相同的 root + content 契约。
 
 页签结构:**仪表盘**(5 个统计卡片 + 流量/延迟/TOKEN/工具图表)·
 **会话**(列表 → 含记忆转录与会话内追踪卡片的详情)·
