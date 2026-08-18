@@ -211,6 +211,12 @@ class Settings(BaseSettings):
     # the backend host at build-context assembly; `{}` fallback when absent. The
     # file embeds proprietary model instructions, so it is never committed.
     skill_lab_codex_catalog_path: str = "~/.codex/model-catalogs/bedrock-models.json"
+    # Sandbox launcher argv (shlex-split) for the agentic judge's artifact
+    # parsers — runs on the backend HOST (upstream architecture; the worker
+    # microVM cannot run bubblewrap). Strict-AppArmor hosts where unprivileged
+    # bwrap is blocked set "sudo -n bwrap" (upstream's SKILLOPT_JUDGE_SANDBOX
+    # escape hatch); the vendored fail-closed boundary probe still applies.
+    skill_lab_judge_sandbox: str = "bwrap"
     # Reports the claude CLI version baked into the exec-worker image. The
     # Dockerfile's `ARG CLAUDE_CLI_VERSION` is what the build actually uses (and
     # what the image's content hash covers); this mirrors it for display, with

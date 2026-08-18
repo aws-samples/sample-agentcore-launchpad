@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import type { SkillLabStatus, SkillLabTargetBackend } from "../../lib/api";
+import type { SkillLabJudgeMode, SkillLabStatus, SkillLabTargetBackend } from "../../lib/api";
 
 /** Upstream studio's fixed backend labels — the values are API contract. */
 const BACKEND_LABELS: Record<SkillLabTargetBackend, string> = {
@@ -39,6 +39,8 @@ export function BackendModelFields({
   setTargetModel,
   judgeModel,
   setJudgeModel,
+  judgeMode,
+  setJudgeMode,
 }: {
   status: SkillLabStatus | null;
   /** data-testid prefix, e.g. "eval" → eval-param-targetModel */
@@ -49,11 +51,19 @@ export function BackendModelFields({
   setTargetModel: (m: string) => void;
   judgeModel: string;
   setJudgeModel: (m: string) => void;
+  judgeMode: SkillLabJudgeMode;
+  setJudgeMode: (m: SkillLabJudgeMode) => void;
 }) {
   const { t } = useTranslation();
   const backends = status?.target_backends?.length
     ? status.target_backends
     : (Object.keys(BACKEND_LABELS) as SkillLabTargetBackend[]);
+  const judgeModes: SkillLabJudgeMode[] = status?.judge_modes?.length
+    ? status.judge_modes
+    : ["auto", "chat", "agentic"];
+  // Without the host sandbox launcher, auto/agentic still run — but binary-
+  // artifact tasks fail closed. Warn on the option rather than hiding it.
+  const agenticReady = status?.agentic_judge_ready !== false;
 
   const applyBackend = (next: SkillLabTargetBackend) => {
     if (next === backend) return;
@@ -118,6 +128,27 @@ export function BackendModelFields({
           </datalist>
           <span className="mono dim" style={{ fontSize: 10.5 }}>
             {t("skillLab.backend.judgeHint")}
+          </span>
+        </div>
+        <div className="field" style={{ minWidth: 170 }}>
+          <label>{t("skillLab.backend.judgeMode")}</label>
+          <select
+            className="input"
+            value={judgeMode}
+            data-testid={`${idPrefix}-param-judgeMode`}
+            onChange={(e) => setJudgeMode(e.target.value as SkillLabJudgeMode)}
+          >
+            {judgeModes.map((option) => (
+              <option key={option} value={option} style={{ background: "#141816" }}>
+                {t(`skillLab.backend.judgeModeOption.${option}`)}
+                {option !== "chat" && !agenticReady ? " ⚠" : ""}
+              </option>
+            ))}
+          </select>
+          <span className="mono dim" style={{ fontSize: 10.5 }}>
+            {judgeMode !== "chat" && !agenticReady
+              ? t("skillLab.backend.judgeModeUnready")
+              : t(`skillLab.backend.judgeModeHint.${judgeMode}`)}
           </span>
         </div>
       </div>

@@ -29,7 +29,8 @@ import argparse, json, os, pathlib, subprocess, sys, time
 parser = argparse.ArgumentParser()
 for flag in ("--skill","--tasks","--out_root","--target_backend","--model",
              "--optimizer_backend","--optimizer_model","--judge_mode",
-             "--workers","--timeout","--limit"):
+             "--judge_exec_backend","--judge_exec_model","--judge_exec_effort",
+             "--judge_sandbox_command","--workers","--timeout","--limit"):
     parser.add_argument(flag)
 args = parser.parse_args()
 tasks = json.loads(pathlib.Path(args.tasks).read_text())
@@ -145,7 +146,7 @@ def test_command_contract(lab, tmp_path):
     assert command[0] == sys.executable
     assert "--target_backend claude_code_exec" in text
     assert "--optimizer_backend bedrock_chat" in text
-    assert "--judge_mode chat" in text
+    assert "--judge_mode auto" in text
     assert "--workers 3" in text and "--limit 5" in text
 
 
@@ -194,6 +195,64 @@ def test_train_config_carries_target_backend(lab, tmp_path):
     config = yaml.safe_load(config_path.read_text())
     assert config["model"]["target_backend"] == "codex_exec"
     assert config["model"]["target"] == get_settings().skill_lab_codex_target_model_id
+
+
+def test_judge_mode_param(lab, tmp_path):
+    """auto is the default; chat carries NO judge-exec flags; auto/agentic carry
+    the host-side judge quartet with judge_exec_model mirroring judge_model."""
+    from app.core.errors import AppError
+
+    def argv(params):
+        return " ".join(
+            runner.build_eval_command(
+                skill_dir=tmp_path / "s", tasks_file=tmp_path / "t.json",
+                out_dir=tmp_path / "o", params=params,
+            )
+        )
+
+    default = runner.clamp_params(None)
+    assert default["judge_mode"] == "auto"
+    text = argv(default)
+    assert "--judge_mode auto" in text
+    assert f"--judge_exec_model {default['judge_model']}" in text
+    assert "--judge_exec_backend claude_code_exec" in text
+    assert "--judge_sandbox_command bwrap" in text
+
+    chat = argv(runner.clamp_params({"judge_mode": "chat"}))
+    assert "--judge_mode chat" in chat and "--judge_exec" not in chat
+
+    with pytest.raises(AppError) as err:
+        runner.clamp_params({"judge_mode": "vibes"})
+    assert err.value.status_code == 422
+
+
+def test_train_config_judge_keys(lab, tmp_path):
+    import yaml
+
+    split_env = {"split_mode": "ratio", "data_path": "x", "split_ratio": "4:3:3"}
+
+    def env_of(params):
+        path = runner.build_train_config(
+            skill_dir=tmp_path / "skill", split_env=split_env, eval_test=True,
+            out_config=tmp_path / f"cfg-{params.get('judge_mode', 'auto')}.yaml",
+            params=params,
+        )
+        return yaml.safe_load(path.read_text())["env"]
+
+    auto_env = env_of(runner.clamp_train_params(None))
+    assert auto_env["judge_mode"] == "auto"
+    assert auto_env["judge_backend"] == "claude_code_exec"
+    assert auto_env["judge_model"] == runner.clamp_train_params(None)["judge_model"]
+    assert auto_env["judge_sandbox_command"] == "bwrap"
+
+    chat_env = env_of(runner.clamp_train_params({"judge_mode": "chat"}))
+    assert chat_env["judge_mode"] == "chat" and "judge_backend" not in chat_env
+
+
+def test_status_reports_agentic_judge_readiness(lab):
+    body = lab.get("/api/skill-lab/status").json()
+    assert body["judge_modes"] == ["auto", "chat", "agentic"]
+    assert isinstance(body["agentic_judge_ready"], bool)
 
 
 def test_env_is_allowlisted(lab, monkeypatch):

@@ -175,7 +175,7 @@ def test_train_config_contract_split_mode(lab):
     # is silently dropped and the run quietly uses the vendored default.
     assert config["optimizer"]["learning_rate"] == 4  # → edit_budget
     assert config["evaluation"]["gate_metric"] == "hard"
-    assert config["env"]["judge_mode"] == "chat"
+    assert config["env"]["judge_mode"] == "auto"
     assert config["env"]["skill_dir"].endswith("/skills/demo-skill")
     assert config["env"]["skill_init"].endswith("/skills/demo-skill/SKILL.md")
     assert config["env"]["workers"] == 2 and config["env"]["timeout"] == 600

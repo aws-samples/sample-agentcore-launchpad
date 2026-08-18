@@ -58,7 +58,20 @@ def skill_lab_status(ws: WorkspaceScope = Depends(require_workspace)) -> dict[st
         "default_judge_model": settings.skill_lab_judge_model_id,
         "default_codex_target_model": settings.skill_lab_codex_target_model_id,
         "target_backends": list(runner.TARGET_BACKENDS),
+        "judge_modes": list(runner.JUDGE_MODES),
+        # Host-side agentic judge readiness: the sandbox launcher binary must
+        # exist here (parsers run under it). When false, auto/agentic runs
+        # still work for text-only tasks; artifact tasks fail closed.
+        "agentic_judge_ready": _sandbox_launcher_present(settings),
     }
+
+
+def _sandbox_launcher_present(settings: Any) -> bool:
+    import shlex
+    import shutil
+
+    argv = shlex.split(settings.skill_lab_judge_sandbox or "")
+    return bool(argv) and shutil.which(argv[0]) is not None
 
 
 @router.get("/tasksets")

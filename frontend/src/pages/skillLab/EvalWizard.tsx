@@ -8,6 +8,7 @@ import type {
   InspectedSkill,
   SkillLabJobBody,
   SkillLabJobInfo,
+  SkillLabJudgeMode,
   SkillLabStatus,
   SkillLabTargetBackend,
   SkillLabTasksetInfo,
@@ -62,6 +63,7 @@ export function EvalWizard({
   const [split, setSplit] = useState("");
 
   const [targetBackend, setTargetBackend] = useState<SkillLabTargetBackend>("claude_code_exec");
+  const [judgeMode, setJudgeMode] = useState<SkillLabJudgeMode>("auto");
   const [targetModel, setTargetModel] = useState("");
   const [judgeModel, setJudgeModel] = useState("");
   const [workers, setWorkers] = useState(2);
@@ -177,6 +179,7 @@ export function EvalWizard({
           target_backend: targetBackend,
           target_model: targetModel.trim(),
           judge_model: judgeModel.trim(),
+          judge_mode: judgeMode,
           workers,
           timeout,
           limit,
@@ -428,6 +431,8 @@ export function EvalWizard({
         setTargetModel={setTargetModel}
         judgeModel={judgeModel}
         setJudgeModel={setJudgeModel}
+        judgeMode={judgeMode}
+        setJudgeMode={setJudgeMode}
       />
 
       <div className="field">
