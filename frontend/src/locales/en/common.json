@@ -454,7 +454,8 @@
       "cardUrlCopy": "copy endpoint",
       "cardUrlCopied": "endpoint copied",
       "cardStreaming": "STREAMING",
-      "cardSkills": "SKILLS ({{n}})"
+      "cardSkills": "SKILLS ({{n}})",
+      "evaluateInSkillLab": "Evaluate in Skill Lab"
     },
     "confirmDisable": {
       "title": "Disable record",
@@ -1097,7 +1098,138 @@
     },
     "eval": {
       "title": "Evaluate a skill",
-      "sub": "one-shot scoring of a skill against a task set"
+      "sub": "one-shot scoring of a skill against a task set",
+      "listTitle": "Evaluation jobs",
+      "listSub": "one managed CLI run per job — click a row to open it",
+      "new": "New evaluation",
+      "empty": "No evaluation jobs yet — start one",
+      "unknownSkill": "(skill unknown)",
+      "progress": "PROGRESS",
+      "queuedAt": "position {{n}} in the queue",
+      "cancel": "Cancel run",
+      "cancelRequested": "Cancel signalled — the job settles once the subprocess is gone.",
+      "delete": "Delete job",
+      "deleted": "Job deleted.",
+      "noResults": "No judged results were written — the run ended before the scoring stage. Check the log below.",
+      "noTasks": "The results file carries no tasks.",
+      "noDetail": "No judge output was recorded for this task.",
+      "invalidNote": "{{count}} task(s) failed on infrastructure (rollout or judge error) and are excluded from the pass rate — they are not scored as failures.",
+      "status": {
+        "queued": "QUEUED",
+        "running": "RUNNING",
+        "succeeded": "SUCCEEDED",
+        "failed": "FAILED",
+        "cancelled": "CANCELLED",
+        "interrupted": "INTERRUPTED"
+      },
+      "col": {
+        "status": "Status",
+        "skill": "Skill",
+        "taskset": "Task set",
+        "passRate": "Pass rate",
+        "created": "Created",
+        "task": "Task",
+        "verdict": "Verdict",
+        "soft": "Soft",
+        "taskDuration": "Duration",
+        "artifacts": "Files"
+      },
+      "field": {
+        "skillSource": "Source",
+        "models": "Models",
+        "target": "target",
+        "judge": "judge",
+        "execution": "Execution",
+        "elapsed": "Elapsed"
+      },
+      "verdict": {
+        "pass": "PASS",
+        "fail": "FAIL",
+        "invalid": "INVALID"
+      },
+      "stat": {
+        "passRate": "PASS RATE",
+        "passedOf": "{{passed}} of {{scored}} scored tasks",
+        "softMean": "SOFT SCORE",
+        "softFoot": "mean partial credit, 0–1",
+        "invalid": "INVALID",
+        "invalidFoot": "infrastructure failures, excluded",
+        "duration": "ROLLOUT TIME",
+        "durationFoot": "summed over {{n}} tasks"
+      },
+      "detail": {
+        "judgeStatus": "judge_status",
+        "judgeReason": "judge rationale",
+        "judgeError": "judge error",
+        "error": "rollout error",
+        "response": "agent response (excerpt)",
+        "artifacts": "artifacts"
+      },
+      "log": {
+        "title": "CLI LOG",
+        "waiting": "waiting for output …"
+      },
+      "artifacts": {
+        "title": "OUTPUT FILES",
+        "name": "Name",
+        "size": "Size",
+        "download": "download",
+        "empty": "This directory is empty.",
+        "notADir": "That path is a file, not a directory.",
+        "truncated": "truncated at 512 KB — download the file for the rest",
+        "binary": "Binary file — use the download link."
+      },
+      "gone": {
+        "title": "Job unavailable",
+        "body": "That job no longer exists in this workspace — pick one from the table above."
+      },
+      "confirmCancel": {
+        "title": "Cancel evaluation",
+        "body": "Kill this job's process group? Rollouts already dispatched to the cloud exec worker keep running until their session hits its idle timeout (about 5 minutes), so a little cost may still land."
+      },
+      "confirmDelete": {
+        "title": "Delete evaluation job",
+        "body": "Delete the job for “{{name}}”? Its log and output files are removed from disk and this cannot be undone."
+      },
+      "wizard": {
+        "title": "New evaluation",
+        "sub": "skill × task set × models — the run happens on the exec worker",
+        "blocked": "The Skill Lab exec worker or interpreter is missing on this host, so jobs cannot be submitted — run `make bootstrap` first.",
+        "submit": "Start evaluation",
+        "submitting": "Submitting …",
+        "advanced": "Advanced",
+        "searchSkills": "Filter skills by name or description",
+        "noSkills": "No skill records in this workspace — register one in the Registry first.",
+        "anyStatus": "Every status is evaluable, including DRAFT — publishing is not a prerequisite.",
+        "uploadHint": "A .zip holding SKILL.md at its root, or one directory per skill.",
+        "uploadNote": "An uploaded bundle is staged for this job only — no Registry record is created, and the staging session expires after 10 minutes.",
+        "inspecting": "inspecting the archive …",
+        "noTasksets": "No task sets yet — create one on the TASK SETS page.",
+        "source": {
+          "registry": "Registry record",
+          "upload": "Upload .zip"
+        },
+        "field": {
+          "skill": "Skill under test",
+          "taskset": "Task set",
+          "targetModel": "Target model",
+          "judgeModel": "Judge model",
+          "workers": "workers",
+          "timeout": "timeout (s)",
+          "limit": "limit"
+        },
+        "hint": {
+          "targetModel": "Bedrock model id the skill runs on, inside the exec worker.",
+          "judgeModel": "Bedrock model id that scores each response against its rubric.",
+          "workers": "parallel rollouts, {{min}}–{{max}}",
+          "timeout": "per-task ceiling, {{min}}–{{max}}",
+          "limit": "first N tasks only; 0 runs the whole split"
+        },
+        "err": {
+          "noSkill": "Pick a skill to evaluate.",
+          "noTaskset": "Pick a task set to evaluate against."
+        }
+      }
     },
     "train": {
       "title": "Optimize a skill",
@@ -1264,7 +1396,18 @@
     "workspace.assume_role_failed": "This workspace's role could not be assumed — check the spoke role's trust policy and the external id.",
     "users.invalid_workspaces": "The workspace list must name existing workspaces.",
     "workspace.cross_account_tool_unavailable": "This tool demo only runs under this deployment's own credentials, so it cannot target a workspace in another account.",
-    "workspace.hub_identity_unavailable": "This backend could not read its own AWS identity, so it cannot say which principal a spoke role should trust."
+    "workspace.hub_identity_unavailable": "This backend could not read its own AWS identity, so it cannot say which principal a spoke role should trust.",
+    "skill_lab.job_not_found": "Evaluation job not found",
+    "skill_lab.results_pending": "This job has not written judged results yet.",
+    "skill_lab.bad_params": "One of the run parameters is out of range.",
+    "skill_lab.workspace_unsupported": "Skill Lab jobs run with the hub host's own credentials and do not support cross-account workspaces yet.",
+    "skill_lab.job_not_cancellable": "Only queued or running jobs can be cancelled.",
+    "skill_lab.job_not_deletable": "Only finished jobs can be deleted — cancel it first.",
+    "skill_lab.skill_unreadable": "The selected skill bundle could not be read — see the job log.",
+    "skill_lab.taskset_in_use": "An evaluation job still references this task set — delete the job first.",
+    "skill_lab.artifact_not_found": "No such output file in this job.",
+    "skill_lab.bad_path": "That output path is not inside the job's output directory.",
+    "registry.staging_expired": "The upload session expired — pick the archive again."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",

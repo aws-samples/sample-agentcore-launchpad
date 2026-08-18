@@ -1,0 +1,307 @@
+"""Subprocess mechanics for Skill Lab jobs: skill materialization, command
+construction, env allowlist, spawn, and the exec-jobs S3 janitor.
+
+The vendored CLI runs in the dedicated venv with an allowlisted environment —
+never `os.environ.copy()` — so backend settings and operator secrets don't
+reach the child. Rollouts execute on the AgentCore worker (the vendored
+runner's own boto3 talks to S3/runtime); the judge goes to Bedrock via
+bedrock_chat, so the child needs ambient AWS credentials only.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import IO, Any
+
+from app.core.config import get_settings
+from app.core.errors import AppError
+from app.services.local_exec import _AWS_CREDENTIAL_ENV, build_spawn_kwargs
+from app.services.workspace import WorkspaceContext
+from app.skill_lab import artifacts
+from app.skill_lab.infra import EXEC_JOBS_PREFIX
+from app.skill_lab.worker_build import VENDOR_ROOT
+
+EVAL_SCRIPT = VENDOR_ROOT / "scripts" / "evaluate_skill.py"
+TRAIN_SCRIPT = VENDOR_ROOT / "scripts" / "train.py"
+
+# Studio PARAM_RANGES floor (S§2.1) — refuse impossible jobs before spending money.
+PARAM_BOUNDS = {"workers": (1, 8), "timeout": (60, 3600), "limit": (0, 10000)}
+_BASE_ENV_KEYS = ("PATH", "HOME", "TMPDIR", "LANG", "SSL_CERT_FILE", "SSL_CERT_DIR")
+_EXEC_JOBS_TTL = timedelta(days=7)
+# Isolation profile for the CLI child. `build_spawn_kwargs`' own defaults describe
+# the studio's *caller-supplied code* posture, which misfires here: this child is
+# platform code that must reach the backend's credentials and write into the job
+# dir (a uid drop breaks both), and it spends minutes waiting on AgentCore and
+# Bedrock (the 5-CPU-minute studio ceiling would SIGKILL a long run as
+# "process exited -9"). The untrusted part — the skill's own generated code —
+# runs in the exec worker's microVM, not here. Memory and file-size ceilings are
+# kept and widened: a vendored bug must not take the control plane down, and the
+# docker profile is forced off because it carries no rlimits at all.
+_SPAWN_CEILINGS = {
+    "studio_exec_backend": "subprocess",
+    "studio_exec_user": "",
+    "studio_exec_cpu_seconds": 24 * 3600,
+    "studio_exec_memory_mb": 4096,
+    "studio_exec_max_file_mb": 1024,
+}
+
+
+def clamp_params(params: dict[str, Any] | None) -> dict[str, Any]:
+    settings = get_settings()
+    merged = {
+        "target_model": settings.skill_lab_target_model_id,
+        "judge_model": settings.skill_lab_judge_model_id,
+        "workers": 2,
+        "timeout": 600,
+        "limit": 0,
+    }
+    merged.update({k: v for k, v in (params or {}).items() if v not in (None, "")})
+    for key, (low, high) in PARAM_BOUNDS.items():
+        try:
+            value = int(merged[key])
+        except (TypeError, ValueError):
+            raise AppError(
+                "skill_lab.bad_params", f"{key} must be an integer", status_code=422
+            ) from None
+        if not low <= value <= high:
+            raise AppError(
+                "skill_lab.bad_params",
+                f"{key} must be between {low} and {high}",
+                status_code=422,
+            )
+        merged[key] = value
+    for key in ("target_model", "judge_model"):
+        if not str(merged[key]).strip():
+            raise AppError("skill_lab.bad_params", f"{key} must not be empty", status_code=422)
+    return merged
+
+
+def require_worker(workspace: WorkspaceContext) -> dict[str, str]:
+    """The resource keys a job needs; 503 with the bootstrap hint when absent."""
+    resources = workspace.resources
+    needed = {
+        "runtime_arn": str(resources.get("skill_lab_worker_runtime_arn") or ""),
+        "bucket": str(resources.get("artifacts_bucket") or ""),
+    }
+    if not all(needed.values()):
+        raise AppError(
+            "skill_lab.not_provisioned",
+            "the Skill Lab exec worker is not provisioned for this workspace — "
+            "run `make bootstrap` (hub) or re-bootstrap the workspace",
+            status_code=503,
+        )
+    if workspace.role_arn:
+        # Frozen assumed-role credentials expire in <=1h; an eval/train job can
+        # outlive them (parent design §8). Hub-account workspaces only for v1.
+        raise AppError(
+            "skill_lab.workspace_unsupported",
+            "Skill Lab jobs run with the backend host's credentials and do not "
+            "support assumed-role workspaces yet",
+            status_code=400,
+        )
+    if not Path(get_settings().skill_lab_python).exists():
+        raise AppError(
+            "skill_lab.not_provisioned",
+            "skill-lab interpreter missing — run `make bootstrap`",
+            status_code=503,
+        )
+    return needed
+
+
+def materialize_registry_skill(
+    workspace: WorkspaceContext,
+    record_id: str,
+    dest_parent: Path,
+    log: Callable[[str], None],
+) -> tuple[Path, dict[str, Any]]:
+    """Download a Registry skill record's bundle into <dest_parent>/skills/<name>/.
+
+    Any-status records are accepted on purpose: a just-registered DRAFT skill is
+    exactly what a user wants to evaluate (deliberate divergence from the
+    APPROVED-only attachables path).
+    """
+    from app.deployer.zip_runtime import bundle_skill_paths_into
+    from app.services import registry_console
+
+    record = registry_console.console_get(workspace, record_id)
+    try:
+        definition = json.loads(
+            record["descriptors"]["agentSkills"]["skillDefinition"]["inlineContent"]
+        )
+        name = str(definition["name"])
+        path = str(definition["path"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise AppError(
+            "skill_lab.skill_unreadable",
+            f"record {record_id} is not a readable skill record ({exc})",
+            status_code=400,
+        ) from exc
+    bundle_skill_paths_into([path], dest_parent, log, workspace)
+    # The downloader names the directory after the S3 prefix tail (and refuses a
+    # tail that is not a valid skill name), so that — not the descriptor's `name`
+    # field — is where the bundle actually landed. They agree for records this
+    # platform registered; joining on the tail keeps a hand-written descriptor
+    # from either missing the dir or steering the path.
+    skill_dir = dest_parent / "skills" / path.rstrip("/").rsplit("/", 1)[-1]
+    if not (skill_dir / "SKILL.md").is_file():
+        raise AppError(
+            "skill_lab.skill_unreadable",
+            f"failed to materialize skill '{name}' from {path} — see the job log",
+            status_code=502,
+        )
+    return skill_dir, {
+        "kind": "registry",
+        "record_id": record_id,
+        "name": name,
+        "version": str(record.get("recordVersion") or ""),
+    }
+
+
+def materialize_staged_skill(
+    staging_id: str, index: int, dest_parent: Path
+) -> tuple[Path, dict[str, Any]]:
+    """Copy an inspect-staged bundle (ad-hoc upload) into the job dir.
+
+    The staging entry is deliberately NOT consumed: registry semantics keep it
+    until a successful *import*, and here it lets an operator score the same
+    upload twice (or after a submit error) without re-uploading. The TTL sweep
+    reclaims it.
+    """
+    from app.routers.registry import _staging, _sweep_staging
+    from app.services.skill_ingest import SKILL_NAME_RE, validate_bundle
+
+    _sweep_staging()
+    entry = _staging.get(staging_id)
+    if entry is None:
+        raise AppError(
+            "registry.staging_expired",
+            "staging session expired or unknown — re-inspect the source",
+            status_code=410,
+        )
+    bundles = entry["bundles"]
+    if not 0 <= index < len(bundles):
+        raise AppError(
+            "skill_lab.skill_unreadable", f"no staged skill at index {index}", status_code=400
+        )
+    bundle = bundles[index]
+    # Same gate as a registry import, for the same two reasons: an unimportable
+    # bundle can't be evaluated either, and `name` comes from caller-supplied
+    # SKILL.md frontmatter — unchecked it is a path segment the caller controls.
+    validate_bundle(bundle)
+    name = bundle.name
+    if SKILL_NAME_RE.match(name) is None:
+        raise AppError(
+            "skill_lab.skill_unreadable",
+            f"skill name '{name}' is not a valid skill name "
+            "(lowercase letters, digits and hyphens, 3-64 chars)",
+            status_code=422,
+        )
+    skill_dir = dest_parent / "skills" / name
+    shutil.copytree(bundle.root, skill_dir)
+    return skill_dir, {"kind": "upload", "name": name, "version": bundle.version}
+
+
+def build_eval_command(
+    *, skill_dir: Path, tasks_file: Path, out_dir: Path, params: dict[str, Any]
+) -> list[str]:
+    command = [
+        get_settings().skill_lab_python,
+        str(EVAL_SCRIPT),
+        "--skill", str(skill_dir),
+        "--tasks", str(tasks_file),
+        "--out_root", str(out_dir),
+        "--target_backend", "claude_code_exec",
+        "--model", str(params["target_model"]),
+        "--optimizer_backend", "bedrock_chat",
+        "--optimizer_model", str(params["judge_model"]),
+        "--judge_mode", "chat",
+        "--workers", str(params["workers"]),
+        "--timeout", str(params["timeout"]),
+    ]
+    if int(params.get("limit") or 0) > 0:
+        command += ["--limit", str(params["limit"])]
+    return command
+
+
+def build_job_env(workspace: WorkspaceContext) -> dict[str, str]:
+    """Allowlist env for the vendored CLI (foundation spec §4 contract)."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key in _BASE_ENV_KEYS or key in _AWS_CREDENTIAL_ENV
+    }
+    env.update(
+        {
+            "PYTHONDONTWRITEBYTECODE": "1",
+            # stdout goes to log.txt (a file → Python block-buffers); unbuffered
+            # keeps the tail live AND preserves output when a cancel kills the
+            # process mid-buffer — exactly when the operator wants the log.
+            "PYTHONUNBUFFERED": "1",
+            # The allowlist drops the locale vars a login shell would carry, so
+            # under systemd the child would otherwise pick ASCII for stdout and
+            # die on the first non-ASCII task title it prints.
+            "PYTHONUTF8": "1",
+            "PYTHONIOENCODING": "utf-8",
+            "SKILLOPT_EXEC_RUNNER": "agentcore",
+            "SKILLOPT_AGENTCORE_RUNTIME_ARN": str(
+                workspace.resources.get("skill_lab_worker_runtime_arn") or ""
+            ),
+            "SKILLOPT_AGENTCORE_S3_BUCKET": str(
+                workspace.resources.get("artifacts_bucket") or ""
+            ),
+            "SKILLOPT_AGENTCORE_S3_PREFIX": EXEC_JOBS_PREFIX,
+            "SKILLOPT_AGENTCORE_REGION": workspace.region,
+            "AWS_REGION": workspace.region,
+        }
+    )
+    return env
+
+
+def spawn(command: list[str], env: dict[str, str], log_file: IO[bytes]) -> subprocess.Popen:
+    """Process-group leader with the job ceilings; stdout+stderr → log.txt."""
+    return subprocess.Popen(
+        command,
+        cwd=str(VENDOR_ROOT),
+        env=env,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        **build_spawn_kwargs(get_settings().model_copy(update=_SPAWN_CEILINGS)),
+    )
+
+
+def sweep_exec_jobs_prefix(workspace: WorkspaceContext, log: Callable[[str], None]) -> None:
+    """Best-effort removal of exec-jobs S3 debris older than the TTL — the
+    vendored runner never cleans up after itself (upstream leaves tarballs
+    forever). Piggybacked on job completion; failures are logged, never fatal."""
+    bucket = str(workspace.resources.get("artifacts_bucket") or "")
+    if not bucket:
+        return
+    try:
+        s3 = workspace.client("s3")
+        cutoff = datetime.now(UTC) - _EXEC_JOBS_TTL
+        paginator = s3.get_paginator("list_objects_v2")
+        stale: list[dict[str, str]] = []
+        for page in paginator.paginate(Bucket=bucket, Prefix=f"{EXEC_JOBS_PREFIX}/"):
+            stale.extend(
+                {"Key": obj["Key"]}
+                for obj in page.get("Contents", [])
+                if obj.get("LastModified") and obj["LastModified"] < cutoff
+            )
+        for start in range(0, len(stale), 1000):
+            s3.delete_objects(
+                Bucket=bucket, Delete={"Objects": stale[start : start + 1000], "Quiet": True}
+            )
+        if stale:
+            log(f"exec-jobs janitor: removed {len(stale)} stale object(s)")
+    except Exception as exc:  # noqa: BLE001 — hygiene must never fail a job
+        log(f"exec-jobs janitor skipped: {exc}")
+
+
+def remove_job_dir(job_id: str) -> None:
+    shutil.rmtree(artifacts.job_dir(job_id), ignore_errors=True)

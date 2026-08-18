@@ -690,6 +690,20 @@ export function Registry() {
                       {t("registry.drawer.edit")}
                     </Btn>
                   )}
+                  {/* Any status is evaluable — a fresh DRAFT skill is exactly
+                      what an author wants to score before publishing it. */}
+                  {selected.type === "AGENT_SKILLS" && (
+                    <Btn
+                      data-testid="evaluate-in-skill-lab-btn"
+                      onClick={() =>
+                        navigate(
+                          `/skill-lab?view=eval&job=new&record=${encodeURIComponent(selected.record_id)}`,
+                        )
+                      }
+                    >
+                      {t("registry.drawer.evaluateInSkillLab")}
+                    </Btn>
+                  )}
                   {selected.type === "AGENT_SKILLS" &&
                     (skillMeta?.source?.kind === "git" || skillMeta?.source?.kind === "url") &&
                     selected.status !== "DEPRECATED" && (
