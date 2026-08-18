@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from botocore.exceptions import ClientError
 
 from app.core.db import SessionLocal
 from app.core.errors import AppError
@@ -173,6 +174,24 @@ class FakeIam:
                 for action in kwargs["ActionNames"]
             ]
         }
+
+
+class FailingIam:
+    def simulate_principal_policy(self, **kwargs):
+        return {
+            "EvaluationResults": [
+                {"EvalActionName": action, "EvalDecision": "explicitDeny"}
+                for action in kwargs["ActionNames"]
+            ]
+        }
+
+
+class UnknownIam:
+    def simulate_principal_policy(self, **_kwargs):
+        raise ClientError(
+            {"Error": {"Code": "AccessDeniedException", "Message": "denied"}},
+            "SimulatePrincipalPolicy",
+        )
 
 
 def _refresh(db, operation_id):
@@ -420,6 +439,168 @@ def test_gateway_enforce_requires_evidence_or_audited_override():
         assert change.override_reason == "emergency rollout approved by operator"
         assert change.requested["evidence_count"] == 0
         assert control.gateway["policyEngineConfiguration"]["mode"] == "ENFORCE"
+    finally:
+        db.close()
+
+
+def test_shared_engine_does_not_require_acknowledgement_for_gateway_mode():
+    control = FakeControl()
+    iam = FakeIam()
+    engine = control.create_policy_engine(name="shared")
+    attachment = {"arn": engine["policyEngineArn"], "mode": "ENFORCE"}
+    control.gateway["policyEngineConfiguration"] = dict(attachment)
+    shared_gateway = {
+        **control.gateway,
+        "gatewayId": "gw-2",
+        "gatewayArn": "arn:aws:bedrock-agentcore:us-west-2:123:gateway/gw-2",
+        "name": "shared-gw",
+        "policyEngineConfiguration": dict(attachment),
+    }
+    original_get_gateway = control.get_gateway
+
+    def get_gateway(*, gatewayIdentifier):
+        if gatewayIdentifier == "gw-2":
+            return dict(shared_gateway)
+        return original_get_gateway(gatewayIdentifier=gatewayIdentifier)
+
+    control.get_gateway = get_gateway
+    control.list_gateways = lambda **_: {
+        "items": [
+            {"gatewayId": "gw-1", "name": "payments-gw", "protocolType": "MCP"},
+            {"gatewayId": "gw-2", "name": "shared-gw", "protocolType": "MCP"},
+        ]
+    }
+    db = SessionLocal()
+    try:
+        queued = governance.queue_gateway_mode(
+            db,
+            control,
+            ws_ctx(),
+            iam,
+            "gw-1",
+            GatewayModeRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                mode="LOG_ONLY",
+            ),
+            evidence_count=0,
+        )
+        governance.run_policy_change(queued["id"], control=control, iam=iam)
+
+        change = _refresh(db, queued["id"])
+        assert change.status == "succeeded"
+        assert control.gateway["policyEngineConfiguration"]["mode"] == "LOG_ONLY"
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("preflight_status", ["fail", "unknown"])
+def test_gateway_log_only_records_nonpassing_iam_preflight(preflight_status):
+    control = FakeControl()
+    engine = control.create_policy_engine(name="existing")
+    control.gateway["policyEngineConfiguration"] = {
+        "arn": engine["policyEngineArn"],
+        "mode": "ENFORCE",
+    }
+    iam = FailingIam() if preflight_status == "fail" else UnknownIam()
+    db = SessionLocal()
+    try:
+        queued = governance.queue_gateway_mode(
+            db,
+            control,
+            ws_ctx(),
+            iam,
+            "gw-1",
+            GatewayModeRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                mode="LOG_ONLY",
+            ),
+            evidence_count=0,
+        )
+        governance.run_policy_change(queued["id"], control=control, iam=iam)
+
+        change = _refresh(db, queued["id"])
+        assert change.status == "succeeded"
+        assert change.before["iam_preflight"]["status"] == preflight_status
+        assert change.after["iam_preflight"]["status"] == preflight_status
+        assert (
+            change.after["gateway"]["policy_engine_configuration"]["mode"]
+            == "LOG_ONLY"
+        )
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(
+    ("preflight_status", "error_code"),
+    [
+        ("fail", "governance.iam_preflight_fail"),
+        ("unknown", "governance.iam_preflight_unknown"),
+    ],
+)
+def test_gateway_enforce_rejects_nonpassing_iam_preflight(preflight_status, error_code):
+    control = FakeControl()
+    engine = control.create_policy_engine(name="existing")
+    control.gateway["policyEngineConfiguration"] = {
+        "arn": engine["policyEngineArn"],
+        "mode": "LOG_ONLY",
+    }
+    iam = FailingIam() if preflight_status == "fail" else UnknownIam()
+    db = SessionLocal()
+    try:
+        with pytest.raises(AppError, match="Gateway role") as caught:
+            governance.queue_gateway_mode(
+                db,
+                control,
+                ws_ctx(),
+                iam,
+                "gw-1",
+                GatewayModeRequest(
+                    expected_gateway_updated_at=control.gateway["updatedAt"],
+                    mode="ENFORCE",
+                    confirmation_name="payments-gw",
+                    override_reason="approved zero-evidence cutover",
+                ),
+                evidence_count=0,
+            )
+        assert caught.value.code == error_code
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("execution_iam", [FailingIam(), UnknownIam()])
+def test_gateway_enforce_rechecks_iam_before_execution(execution_iam):
+    control = FakeControl()
+    engine = control.create_policy_engine(name="existing")
+    control.gateway["policyEngineConfiguration"] = {
+        "arn": engine["policyEngineArn"],
+        "mode": "LOG_ONLY",
+    }
+    db = SessionLocal()
+    try:
+        queued = governance.queue_gateway_mode(
+            db,
+            control,
+            ws_ctx(),
+            FakeIam(),
+            "gw-1",
+            GatewayModeRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                mode="ENFORCE",
+                confirmation_name="payments-gw",
+                override_reason="approved zero-evidence cutover",
+            ),
+            evidence_count=0,
+        )
+
+        governance.run_policy_change(
+            queued["id"],
+            control=control,
+            iam=execution_iam,
+        )
+
+        change = _refresh(db, queued["id"])
+        assert change.status == "failed"
+        assert control.gateway["policyEngineConfiguration"]["mode"] == "LOG_ONLY"
     finally:
         db.close()
 

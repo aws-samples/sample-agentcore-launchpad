@@ -343,6 +343,39 @@ def wait_gateway_ready(
     )
 
 
+def wait_gateway_policy_configuration(
+    client: Any,
+    gateway_id: str,
+    *,
+    engine_arn: str,
+    mode: str,
+    timeout_s: int = 600,
+    interval_s: int = 5,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    """Wait for the exact Gateway Policy Engine attachment to settle."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        detail = get_gateway(client, gateway_id)
+        status = str(detail.get("status") or "")
+        configuration = detail.get("policyEngineConfiguration") or {}
+        if (
+            status == "READY"
+            and configuration.get("arn") == engine_arn
+            and configuration.get("mode") == mode
+        ):
+            return detail
+        if status in GATEWAY_FAILURES:
+            reasons = detail.get("statusReasons") or []
+            raise RuntimeError(f"gateway {gateway_id} entered {status}: {reasons}")
+        if time.monotonic() > deadline:
+            raise TimeoutError(
+                f"gateway {gateway_id} did not reach READY with "
+                f"policy engine {engine_arn} in {mode} after {timeout_s}s"
+            )
+        sleeper(interval_s)
+
+
 def wait_policy_engine_active(
     client: Any,
     engine_id: str,

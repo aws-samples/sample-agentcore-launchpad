@@ -146,6 +146,142 @@ def test_wait_policy_surfaces_terminal_failure():
         )
 
 
+def test_wait_gateway_configuration_ignores_stale_ready_snapshot():
+    control = MagicMock()
+    control.get_gateway.side_effect = [
+        {
+            "status": "READY",
+            "policyEngineConfiguration": {"arn": "arn:engine", "mode": "ENFORCE"},
+        },
+        {
+            "status": "READY",
+            "policyEngineConfiguration": {"arn": "arn:engine", "mode": "LOG_ONLY"},
+        },
+    ]
+
+    settled = policy.wait_gateway_policy_configuration(
+        control,
+        "gw-1",
+        engine_arn="arn:engine",
+        mode="LOG_ONLY",
+        interval_s=0,
+        sleeper=lambda _: None,
+    )
+
+    assert settled["policyEngineConfiguration"]["mode"] == "LOG_ONLY"
+    assert control.get_gateway.call_count == 2
+
+
+def test_wait_gateway_configuration_ignores_wrong_engine_arn():
+    control = MagicMock()
+    control.get_gateway.side_effect = [
+        {
+            "status": "READY",
+            "policyEngineConfiguration": {"arn": "arn:old-engine", "mode": "LOG_ONLY"},
+        },
+        {
+            "status": "READY",
+            "policyEngineConfiguration": {"arn": "arn:engine", "mode": "LOG_ONLY"},
+        },
+    ]
+
+    settled = policy.wait_gateway_policy_configuration(
+        control,
+        "gw-1",
+        engine_arn="arn:engine",
+        mode="LOG_ONLY",
+        interval_s=0,
+        sleeper=lambda _: None,
+    )
+
+    assert settled["policyEngineConfiguration"]["arn"] == "arn:engine"
+    assert control.get_gateway.call_count == 2
+
+
+def test_wait_gateway_configuration_waits_for_ready_after_transition():
+    control = MagicMock()
+    control.get_gateway.side_effect = [
+        {
+            "status": "UPDATING",
+            "policyEngineConfiguration": {"arn": "arn:engine", "mode": "LOG_ONLY"},
+        },
+        {
+            "status": "READY",
+            "policyEngineConfiguration": {"arn": "arn:engine", "mode": "LOG_ONLY"},
+        },
+    ]
+
+    settled = policy.wait_gateway_policy_configuration(
+        control,
+        "gw-1",
+        engine_arn="arn:engine",
+        mode="LOG_ONLY",
+        interval_s=0,
+        sleeper=lambda _: None,
+    )
+
+    assert settled["status"] == "READY"
+
+
+def test_wait_gateway_configuration_accepts_exact_ready_snapshot():
+    control = MagicMock()
+    control.get_gateway.return_value = {
+        "status": "READY",
+        "policyEngineConfiguration": {"arn": "arn:engine", "mode": "ENFORCE"},
+    }
+
+    settled = policy.wait_gateway_policy_configuration(
+        control,
+        "gw-1",
+        engine_arn="arn:engine",
+        mode="ENFORCE",
+    )
+
+    assert settled["policyEngineConfiguration"] == {
+        "arn": "arn:engine",
+        "mode": "ENFORCE",
+    }
+
+
+def test_wait_gateway_configuration_surfaces_terminal_failure():
+    control = MagicMock()
+    control.get_gateway.return_value = {
+        "status": "UPDATE_UNSUCCESSFUL",
+        "statusReasons": ["invalid configuration"],
+    }
+
+    with pytest.raises(RuntimeError, match="invalid configuration"):
+        policy.wait_gateway_policy_configuration(
+            control,
+            "gw-1",
+            engine_arn="arn:engine",
+            mode="LOG_ONLY",
+            interval_s=0,
+            sleeper=lambda _: None,
+        )
+
+
+def test_wait_gateway_configuration_times_out_on_wrong_ready_snapshot(monkeypatch):
+    control = MagicMock()
+    control.get_gateway.return_value = {
+        "status": "READY",
+        "policyEngineConfiguration": {"arn": "arn:engine", "mode": "ENFORCE"},
+    }
+    monotonic = MagicMock(side_effect=[0, 1])
+    monkeypatch.setattr(policy.time, "monotonic", monotonic)
+
+    with pytest.raises(TimeoutError, match="did not reach READY"):
+        policy.wait_gateway_policy_configuration(
+            control,
+            "gw-1",
+            engine_arn="arn:engine",
+            mode="LOG_ONLY",
+            timeout_s=0,
+            interval_s=0,
+            sleeper=lambda _: None,
+        )
+
+
 def test_create_policy_is_always_log_only():
     control = MagicMock()
     policy.create_policy(

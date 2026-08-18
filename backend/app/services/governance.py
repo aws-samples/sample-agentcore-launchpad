@@ -1391,19 +1391,14 @@ def queue_gateway_mode(
         gateway.get("updatedAt"),
         "Gateway",
     )
-    attachment, engine = _attached_engine(control, gateway)
-    _assert_shared_for_mutation(
-        control,
-        attachment["arn"],
-        request.acknowledged_gateway_ids,
-    )
+    _, engine = _attached_engine(control, gateway)
     preflight = iam_preflight(
         iam,
         role_arn=gateway.get("roleArn"),
         engine_arn=engine["policyEngineArn"],
         gateway_arn=gateway["gatewayArn"],
     )
-    if preflight["status"] != "pass":
+    if request.mode == "ENFORCE" and preflight["status"] != "pass":
         raise AppError(
             f"governance.iam_preflight_{preflight['status']}",
             "Gateway role cannot be verified for Policy evaluation",
@@ -1472,11 +1467,12 @@ def _preflight_change(
     engine = None
     if change.operation != "engine_attach":
         attachment, engine = _attached_engine(control, gateway)
-        _assert_shared_for_mutation(
-            control,
-            attachment["arn"],
-            change.requested.get("acknowledged_gateway_ids") or [],
-        )
+        if change.operation != "gateway_mode":
+            _assert_shared_for_mutation(
+                control,
+                attachment["arn"],
+                change.requested.get("acknowledged_gateway_ids") or [],
+            )
     return gateway, engine
 
 
@@ -1525,18 +1521,24 @@ def _execute_engine_attach(
             preflight,
             status_code=409,
         )
+    requested_mode = change.requested.get("mode") or "LOG_ONLY"
     policy_api.update_gateway_policy_configuration(
         control,
         gateway_id=gateway["gatewayId"],
         engine_arn=engine["policyEngineArn"],
-        mode=change.requested.get("mode") or "LOG_ONLY",
+        mode=requested_mode,
     )
-    settled = policy_api.wait_gateway_ready(control, gateway["gatewayId"])
+    settled = policy_api.wait_gateway_policy_configuration(
+        control,
+        gateway["gatewayId"],
+        engine_arn=engine["policyEngineArn"],
+        mode=requested_mode,
+    )
     return {
         "adopted": False,
         "gateway": _gateway_policy_snapshot(settled),
         "engine": _engine_snapshot(engine),
-        "mode": change.requested.get("mode") or "LOG_ONLY",
+        "mode": requested_mode,
         "replaced_engine_arn": replaced_arn,
         "iam_preflight": preflight,
     }
@@ -1811,7 +1813,7 @@ def _execute_gateway_mode(
         engine_arn=engine["policyEngineArn"],
         gateway_arn=gateway["gatewayArn"],
     )
-    if preflight["status"] != "pass":
+    if requested_mode == "ENFORCE" and preflight["status"] != "pass":
         raise AppError(
             f"governance.iam_preflight_{preflight['status']}",
             "Gateway role cannot be verified for Policy evaluation",
@@ -1826,7 +1828,12 @@ def _execute_gateway_mode(
             engine_arn=engine["policyEngineArn"],
             mode=requested_mode,
         )
-        gateway = policy_api.wait_gateway_ready(control, gateway["gatewayId"])
+        gateway = policy_api.wait_gateway_policy_configuration(
+            control,
+            gateway["gatewayId"],
+            engine_arn=engine["policyEngineArn"],
+            mode=requested_mode,
+        )
     return {
         "gateway": _gateway_policy_snapshot(gateway),
         "engine": _engine_snapshot(engine),

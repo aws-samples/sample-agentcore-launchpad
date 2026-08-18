@@ -760,6 +760,7 @@
     },
     "actions": {
       "add": "添加",
+      "applyGatewayMode": "应用 GATEWAY 模式",
       "back": "返回",
       "buildDraft": "生成 CEDAR 草稿",
       "chooseGateway": "选择 GATEWAY",
@@ -832,6 +833,9 @@
       "engineName": "引擎",
       "engineStatus": "引擎状态",
       "gatewayMode": "GATEWAY 模式",
+      "currentGatewayMode": "当前 GATEWAY 模式",
+      "targetGatewayMode": "目标 GATEWAY 模式",
+      "modeBlockedPrefix": "暂时无法应用该模式：",
       "initialGatewayMode": "初始 GATEWAY 模式",
       "initialGatewayModeHelp": "选择 Gateway 挂载模式；创建后仍可通过模式控件切换。",
       "initialEnforceWarning": "ENFORCE 默认拒绝；在 ACTIVE Policy 明确放行前，Gateway 动作可能被阻断。",
@@ -932,7 +936,10 @@
       "busy": "上一个操作仍在执行",
       "noPolicy": "请先选择一个已有策略",
       "confirmName": "请输入 Gateway 名称确认",
-      "evidenceOrOverride": "需要至少一条匹配的 LOG_ONLY 决策，或填写 Gateway 名称 + 覆盖理由"
+      "evidenceOrOverride": "需要至少一条匹配的 LOG_ONLY 决策，或填写覆盖理由",
+      "engineNotActive": "Policy 引擎不处于 ACTIVE",
+      "iamPreflight": "IAM 预检未通过",
+      "modeAlreadyActive": "所选模式已是当前模式"
     },
     "tools": {
       "title": "工具目录 - GATEWAY 目标 + 内置工具",

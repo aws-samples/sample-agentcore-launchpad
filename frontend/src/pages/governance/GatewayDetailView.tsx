@@ -77,6 +77,8 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
     useState<GovernanceAuthorizationModel>("allowlist");
   const [initialEngineMode, setInitialEngineMode] =
     useState<GovernanceGatewayMode>("ENFORCE");
+  const [targetGatewayMode, setTargetGatewayMode] =
+    useState<GovernanceGatewayMode>("ENFORCE");
   const [highRiskAcknowledged, setHighRiskAcknowledged] = useState(false);
   const [operation, setOperation] = useState<GovernanceOperation | null>(null);
 
@@ -93,6 +95,10 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
 
     if (gatewayResult.status === "fulfilled") {
       setGateway(gatewayResult.value);
+      const liveMode = gatewayResult.value.policy_engine?.missing
+        ? null
+        : gatewayResult.value.policy_engine?.mode;
+      if (liveMode) setTargetGatewayMode(liveMode);
     } else {
       setFatalError(governanceError(gatewayResult.reason));
     }
@@ -145,20 +151,13 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
   );
   const needsSharedAck = (gateway?.shared_gateways.length ?? 0) > 1;
   const operationBusy = busy !== null || isOperationPending(operation);
-  const evidenceCount = evidence?.decisions.length ?? 0;
-  const hasOverride = confirmationName === gateway?.name && overrideReason.trim().length > 0;
+  const evidenceCount = evidence?.log_only_count ?? 0;
+  const hasOverrideReason = overrideReason.trim().length > 0;
   const engineReady = gateway?.policy_engine?.status.toUpperCase() === "ACTIVE";
   const iamPass = gateway?.iam_preflight?.status === "pass";
   const commonMutationReady =
     !!gateway && gateway.managed && isGatewayReady(gateway) && !operationBusy;
   const sharedReady = !needsSharedAck || sharedAcknowledged;
-  const enforceReady =
-    commonMutationReady &&
-    engineReady &&
-    iamPass &&
-    sharedReady &&
-    confirmationName === gateway?.name &&
-    (evidenceCount > 0 || hasOverride);
 
   const mutationEnvelope = () => ({
     expected_gateway_updated_at: gateway?.updated_at,
@@ -244,6 +243,7 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
     void finishMutation("mode", () =>
       api.setGovernanceGatewayMode(gateway.id, {
         ...mutationEnvelope(),
+        acknowledged_gateway_ids: [],
         mode,
         evidence_range: "24h",
       }),
@@ -281,6 +281,19 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
   const danglingEngine = gateway.policy_engine?.missing
     ? gateway.policy_engine
     : null;
+  const modeBlockers: string[] = [];
+  if (!gateway.managed) modeBlockers.push("notManaged");
+  if (!isGatewayReady(gateway)) modeBlockers.push("gatewayNotReady");
+  if (operationBusy) modeBlockers.push("busy");
+  if (!engineReady) modeBlockers.push("engineNotActive");
+  if (targetGatewayMode === liveEngine?.mode) modeBlockers.push("modeAlreadyActive");
+  if (targetGatewayMode === "ENFORCE") {
+    if (!iamPass) modeBlockers.push("iamPreflight");
+    if (confirmationName !== gateway.name) modeBlockers.push("confirmName");
+    if (evidenceCount === 0 && !hasOverrideReason) {
+      modeBlockers.push("evidenceOrOverride");
+    }
+  }
   const confirmBody =
     t(`governance.confirm.${confirmAction ?? "manage"}`, {
       name: gateway.name,
@@ -493,7 +506,7 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
                 <span className="v">{liveEngine.status}</span>
               </div>
               <div className="kv">
-                <span className="k">{t("governance.detail.gatewayMode")}</span>
+                <span className="k">{t("governance.detail.currentGatewayMode")}</span>
                 <span className="v">{liveEngine.mode ?? "-"}</span>
               </div>
               <div className="kv">
@@ -609,51 +622,74 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
 
           {liveEngine ? (
             <div className="gov-rollout">
-              <div className="gov-mode-control">
-                <button
-                  type="button"
-                  className={`selchip${liveEngine.mode === "LOG_ONLY" ? " on" : ""}`}
-                  disabled={!commonMutationReady || liveEngine.mode === "LOG_ONLY"}
-                  onClick={() => setConfirmAction("logOnly")}
-                >
-                  LOG_ONLY
-                </button>
-                <button
-                  type="button"
-                  className={`selchip${liveEngine.mode === "ENFORCE" ? " on" : ""}`}
-                  disabled={!enforceReady || liveEngine.mode === "ENFORCE"}
-                  onClick={() => setConfirmAction("enforce")}
-                >
-                  ENFORCE
-                </button>
-              </div>
               <div className="field">
-                <label>{t("governance.detail.confirmGatewayName")}</label>
-                <input
-                  className="input mono"
-                  value={confirmationName}
-                  onChange={(event) => setConfirmationName(event.target.value)}
-                  placeholder={gateway.name}
-                />
+                <label>{t("governance.detail.targetGatewayMode")}</label>
+                <div
+                  className="gov-mode-control"
+                  role="group"
+                  aria-label={t("governance.detail.targetGatewayMode")}
+                >
+                  {(["LOG_ONLY", "ENFORCE"] as GovernanceGatewayMode[]).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={`selchip${targetGatewayMode === mode ? " on" : ""}`}
+                      onClick={() => setTargetGatewayMode(mode)}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
               </div>
-              {evidenceCount === 0 ? (
-                <div className="field">
-                  <label>{t("governance.detail.overrideReason")}</label>
-                  <textarea
-                    className="input"
-                    rows={3}
-                    value={overrideReason}
-                    onChange={(event) => setOverrideReason(event.target.value)}
-                  />
+              {targetGatewayMode === "ENFORCE" ? (
+                <>
+                  <div className="field">
+                    <label>{t("governance.detail.confirmGatewayName")}</label>
+                    <input
+                      className="input mono"
+                      value={confirmationName}
+                      onChange={(event) => setConfirmationName(event.target.value)}
+                      placeholder={gateway.name}
+                    />
+                  </div>
+                  {evidenceCount === 0 ? (
+                    <div className="field">
+                      <label>{t("governance.detail.overrideReason")}</label>
+                      <textarea
+                        className="input"
+                        rows={3}
+                        value={overrideReason}
+                        onChange={(event) => setOverrideReason(event.target.value)}
+                      />
+                    </div>
+                  ) : (
+                    <div className="gov-alert gov-alert-good">
+                      <Check size={15} aria-hidden="true" />
+                      {t("governance.detail.evidenceReady", { count: evidenceCount })}
+                    </div>
+                  )}
+                  {loadErrors.decisions ? (
+                    <div className="gov-inline-error">{loadErrors.decisions}</div>
+                  ) : null}
+                </>
+              ) : null}
+              <Btn
+                primary
+                disabled={modeBlockers.length > 0}
+                onClick={() =>
+                  setConfirmAction(targetGatewayMode === "ENFORCE" ? "enforce" : "logOnly")
+                }
+              >
+                <Check size={14} aria-hidden="true" />
+                {t("governance.actions.applyGatewayMode")}
+              </Btn>
+              {modeBlockers.length > 0 ? (
+                <div className="gov-inline-error" data-testid="gateway-mode-blockers">
+                  {t("governance.detail.modeBlockedPrefix")}{" "}
+                  {modeBlockers
+                    .map((key) => t(`governance.blockers.${key}`))
+                    .join(" · ")}
                 </div>
-              ) : (
-                <div className="gov-alert gov-alert-good">
-                  <Check size={15} aria-hidden="true" />
-                  {t("governance.detail.evidenceReady", { count: evidenceCount })}
-                </div>
-              )}
-              {loadErrors.decisions ? (
-                <div className="gov-inline-error">{loadErrors.decisions}</div>
               ) : null}
             </div>
           ) : null}

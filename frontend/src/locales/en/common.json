@@ -760,6 +760,7 @@
     },
     "actions": {
       "add": "ADD",
+      "applyGatewayMode": "APPLY GATEWAY MODE",
       "back": "BACK",
       "buildDraft": "BUILD CEDAR DRAFT",
       "chooseGateway": "CHOOSE GATEWAY",
@@ -832,6 +833,9 @@
       "engineName": "ENGINE",
       "engineStatus": "ENGINE STATUS",
       "gatewayMode": "GATEWAY MODE",
+      "currentGatewayMode": "CURRENT GATEWAY MODE",
+      "targetGatewayMode": "TARGET GATEWAY MODE",
+      "modeBlockedPrefix": "Cannot apply this mode yet:",
       "initialGatewayMode": "INITIAL GATEWAY MODE",
       "initialGatewayModeHelp": "Choose the Gateway attachment mode. You can change it later with the mode controls.",
       "initialEnforceWarning": "ENFORCE is default-deny. Gateway actions can be blocked until an ACTIVE Policy permits them.",
@@ -932,7 +936,10 @@
       "busy": "an operation is still running",
       "noPolicy": "select an existing policy",
       "confirmName": "type the Gateway name to confirm",
-      "evidenceOrOverride": "needs one matching LOG_ONLY decision, or the Gateway name plus an override reason"
+      "evidenceOrOverride": "needs one matching LOG_ONLY decision or an override reason",
+      "engineNotActive": "Policy Engine is not ACTIVE",
+      "iamPreflight": "IAM preflight is not passing",
+      "modeAlreadyActive": "selected mode is already active"
     },
     "tools": {
       "title": "TOOL CATALOG - GATEWAY TARGETS + BUILTINS",
