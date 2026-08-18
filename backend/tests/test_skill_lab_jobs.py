@@ -149,6 +149,53 @@ def test_command_contract(lab, tmp_path):
     assert "--workers 3" in text and "--limit 5" in text
 
 
+def test_target_backend_param(lab, tmp_path):
+    """codex_exec flows into argv and swaps the blank-model default to the codex
+    catalog slug; an explicit model always wins; unknown backends 422."""
+    params = runner.clamp_params({"target_backend": "codex_exec"})
+    assert params["target_model"] == get_settings().skill_lab_codex_target_model_id
+    command = runner.build_eval_command(
+        skill_dir=tmp_path / "skill",
+        tasks_file=tmp_path / "tasks.json",
+        out_dir=tmp_path / "out",
+        params=params,
+    )
+    text = " ".join(command)
+    assert "--target_backend codex_exec" in text
+    assert f"--model {params['target_model']}" in text
+
+    explicit = runner.clamp_params(
+        {"target_backend": "codex_exec", "target_model": "openai.gpt-5.5"}
+    )
+    assert explicit["target_model"] == "openai.gpt-5.5"
+
+    # claude default untouched by the codex path
+    assert runner.clamp_params(None)["target_model"] == "us.anthropic.claude-sonnet-5"
+
+    from app.core.errors import AppError
+
+    with pytest.raises(AppError) as err:
+        runner.clamp_params({"target_backend": "gemini_exec"})
+    assert err.value.status_code == 422
+
+
+def test_train_config_carries_target_backend(lab, tmp_path):
+    params = runner.clamp_train_params({"target_backend": "codex_exec"})
+    split_env = {"split_mode": "ratio", "data_path": "x", "split_ratio": "4:3:3"}
+    config_path = runner.build_train_config(
+        skill_dir=tmp_path / "skill",
+        split_env=split_env,
+        eval_test=True,
+        out_config=tmp_path / "config.yaml",
+        params=params,
+    )
+    import yaml
+
+    config = yaml.safe_load(config_path.read_text())
+    assert config["model"]["target_backend"] == "codex_exec"
+    assert config["model"]["target"] == get_settings().skill_lab_codex_target_model_id
+
+
 def test_env_is_allowlisted(lab, monkeypatch):
     monkeypatch.setenv("LAUNCHPAD_ADMIN_PASSWORD", "secret")
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATEST")
@@ -157,9 +204,28 @@ def test_env_is_allowlisted(lab, monkeypatch):
     assert "LAUNCHPAD_ADMIN_PASSWORD" not in env
     assert env["AWS_ACCESS_KEY_ID"] == "AKIATEST"
     assert env["SKILLOPT_EXEC_RUNNER"] == "agentcore"
+    # codex contract (both ride the exec-job payload into the worker): >=0.147
+    # has no `exec --full-auto`, and the microVM kernel can't run bubblewrap —
+    # the VM itself is the sandbox. Live-verified 2026-08-18.
+    assert env["CODEX_EXEC_FULL_AUTO"] == "false"
+    assert env["CODEX_EXEC_SANDBOX"] == "danger-full-access"
     assert env["SKILLOPT_AGENTCORE_S3_PREFIX"] == "skill-lab/exec-jobs"
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
     assert env["PYTHONUNBUFFERED"] == "1"  # killed jobs must not lose buffered log output
+
+
+def test_worker_role_policy_covers_codex_mantle_path():
+    """codex's amazon-bedrock provider calls bedrock-mantle (a separate IAM
+    service): without the statement a codex_exec rollout 401s at runtime."""
+    from app.services.workspace_iam import skill_lab_worker_role_policy
+
+    policy = skill_lab_worker_role_policy("bkt", "arn:aws:ecr:us-west-2:1:repository/r", "1")
+    statements = {s["Sid"]: s for s in policy["Statement"]}
+    mantle = statements["BedrockMantleInference"]
+    assert "bedrock-mantle:CreateInference" in mantle["Action"]
+    # Mantle models live outside the workspace region (sol is us-east-1-only),
+    # so the region segment must stay wildcarded.
+    assert mantle["Resource"].startswith("arn:aws:bedrock-mantle:*:")
 
 
 # ── lifecycle ──────────────────────────────────────────────────────────────

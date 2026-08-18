@@ -16,6 +16,7 @@ from app.core.errors import AppError
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.skill_lab import artifacts as artifacts_svc
 from app.skill_lab import jobs as jobs_svc
+from app.skill_lab import runner
 from app.skill_lab import tasksets as svc
 
 router = APIRouter(prefix="/api/skill-lab", tags=["skill-lab"])
@@ -55,6 +56,8 @@ def skill_lab_status(ws: WorkspaceScope = Depends(require_workspace)) -> dict[st
         # prefills these so it can't drift from an operator's config override.
         "default_target_model": settings.skill_lab_target_model_id,
         "default_judge_model": settings.skill_lab_judge_model_id,
+        "default_codex_target_model": settings.skill_lab_codex_target_model_id,
+        "target_backends": list(runner.TARGET_BACKENDS),
     }
 
 

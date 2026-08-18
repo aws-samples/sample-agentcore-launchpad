@@ -14,13 +14,13 @@ Vendored subset of https://github.com/xiehust/SkillEvalOpt_Studio
 ## Subset (what was copied)
 
 `scripts/{evaluate_skill,train}.py`, `configs/{_base_,skilleval}/`,
-`deploy/agentcore/Dockerfile`, and the `skillopt/` package minus: all benchmark
+`deploy/agentcore/{Dockerfile,codex-config.toml}`, and the `skillopt/` package minus: all benchmark
 envs (`envs/*` except `base.py`, `__init__.py`, `skilleval/`), `scheduler/`
 (unused placeholder), `engine/plugin_trainer.py`, `evaluation/plugin_gate.py`,
 `model/{codex_backend,router}.py` (unreferenced by the vendored entry points).
 Not copied: `skillopt_studio/`, `skillopt_webui/`, `skillopt_sleep*/`, `plugins/`,
 `tests/`, `ckpt/`, `data/`, docs, `scripts/agentcore/` (replaced by Launchpad
-bootstrap), `deploy/agentcore/codex-config.toml` (codex dropped).
+bootstrap).
 
 ## Patches
 
@@ -32,18 +32,30 @@ zero-key: default credential chain (instance role), no endpoint/bearer/CLI.
 Wired in `model/__init__.py` (imports, four chat dispatch branches, token-summary
 merge, reset/effort/deployment fan-outs), `model/backend_config.py` (optimizer +
 target allow-lists), `model/common.py` (aliases `bedrock`/`bedrock_chat`, default
-model `us.anthropic.claude-sonnet-5`). All edits carry a `# LAUNCHPAD PATCH`
+model `global.anthropic.claude-opus-5`). All edits carry a `# LAUNCHPAD PATCH`
 marker. `tools`/`tool_choice`/`return_message` raise `NotImplementedError`
 (no optimizer-role caller in this subset passes them).
 
 ### 2. `deploy/agentcore/Dockerfile` rework
 
 Upstream copied host `claude`/`codex` binaries into the image. This variant
-installs a pinned claude CLI (`ARG CLAUDE_CLI_VERSION=2.1.234`, official
-installer) and drops codex + `codex-home/`. The image is built by Launchpad's
-CodeBuild ARM64 pipeline from a context assembled in
+installs pinned CLIs inside the image (reproducible, host-independent): claude
+via the official installer (`ARG CLAUDE_CLI_VERSION=2.1.234`) and codex via the
+official standalone GitHub release binary (`ARG CODEX_CLI_VERSION=0.147.0`,
+asset `codex-aarch64-unknown-linux-musl.tar.gz`). The image is built by
+Launchpad's CodeBuild ARM64 pipeline from a context assembled in
 `backend/app/skill_lab/worker_build.py` (upstream's `build_and_push.sh` and
 `scripts/agentcore/setup_infra.py` are not vendored).
+
+`codex-home/` is staged by the assembler, not committed wholesale:
+`deploy/agentcore/codex-config.toml` (this tree, Launchpad variant — same
+amazon-bedrock provider + `openai.gpt-5.6-sol` default as upstream's) plus
+`model-catalogs/bedrock-models.json` read from the backend host's
+`~/.codex/model-catalogs/` at context-assembly time, with upstream's `{}`
+fallback when absent. The catalog is deliberately never committed: it embeds
+OpenAI-proprietary `base_instructions` prompt text, which must not enter this
+public repository. Both blobs are part of the content-addressed image tag, so a
+host catalog change rolls the worker.
 
 ### 3. `requirements-launchpad.txt` (authored, replaces upstream `requirements.txt`)
 
@@ -74,7 +86,6 @@ interpreter instead of requiring the provisioned venv.
   documented behavior. The inspector deps (mcp/openpyxl/Pillow/python-docx/
   python-pptx) ARE installed in the venv — `evaluate_skill.py` imports them at
   module load regardless of judge mode.
-- `claude_code_exec` target only (image has no codex).
 - Single-account credentials: the exec runner uses the process's default AWS
   credential chain; no assume-role support (`SKILLOPT_AGENTCORE_ROLE_ARN` patch
   reserved as a follow-up).

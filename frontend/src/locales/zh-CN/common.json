@@ -1091,6 +1091,13 @@
       "eval": "评估",
       "train": "优化"
     },
+    "backend": {
+      "field": "执行后端",
+      "hint": "在 exec worker 里执行任务的 CLI——两者都以执行角色直连 Bedrock，无需 API key。",
+      "targetHintClaude": "claude CLI 运行的 Bedrock inference profile ID（us./global. 前缀）。",
+      "targetHintCodex": "codex 的 amazon-bedrock provider 解析的模型目录 slug（如 openai.gpt-5.6-sol）。",
+      "judgeHint": "LLM 判分模型的 Converse inference profile ID（us./global. 前缀，可自由输入）。"
+    },
     "unprovisioned": {
       "body": "当前工作区尚未开通技能实验室执行 worker——执行 `make bootstrap` 创建。评估与优化运行依赖它;任务集现在即可编写。",
       "venv": "本机缺少技能实验室解释器,因此任务集也无法保存——执行 `make bootstrap` 创建。"

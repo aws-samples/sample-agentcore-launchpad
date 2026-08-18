@@ -1091,6 +1091,13 @@
       "eval": "EVALUATE",
       "train": "OPTIMIZE"
     },
+    "backend": {
+      "field": "Execution backend",
+      "hint": "Which CLI runs the tasks inside the exec worker — both talk to Bedrock with the execution role, no API key.",
+      "targetHintClaude": "Bedrock inference-profile id the claude CLI runs (us./global. prefix).",
+      "targetHintCodex": "Codex catalog slug resolved by its amazon-bedrock provider (e.g. openai.gpt-5.6-sol).",
+      "judgeHint": "Converse inference-profile id for the LLM judge (us./global. prefix; free text)."
+    },
     "unprovisioned": {
       "body": "The Skill Lab exec worker is not provisioned in this workspace — run `make bootstrap` to create it. Evaluation and optimization runs need it; task sets can be authored now.",
       "venv": "The Skill Lab interpreter is missing on this host, so task sets cannot be saved either — `make bootstrap` creates it."

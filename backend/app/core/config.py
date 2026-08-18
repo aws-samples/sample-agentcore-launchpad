@@ -201,13 +201,23 @@ class Settings(BaseSettings):
     # judge/optimizer role calls Bedrock directly (bedrock_chat backend).
     skill_lab_python: str = str(DATA_DIR / "skill-lab-venv" / "bin" / "python")
     skill_lab_max_concurrent_jobs: int = Field(default=1, ge=1, le=4)
-    skill_lab_judge_model_id: str = "us.anthropic.claude-sonnet-5"
-    skill_lab_target_model_id: str = "us.anthropic.claude-sonnet-5"
+    skill_lab_judge_model_id: str = "global.anthropic.claude-opus-5"
+    skill_lab_target_model_id: str = "global.anthropic.claude-opus-5"
+    # Default target model for the codex_exec backend: the Bedrock catalog slug
+    # the baked codex config resolves through its amazon-bedrock provider (NOT a
+    # Converse inference-profile id — codex does its own model resolution).
+    skill_lab_codex_target_model_id: str = "openai.gpt-5.6-sol"
+    # Bedrock model catalog staged into the worker image's codex-home. Read from
+    # the backend host at build-context assembly; `{}` fallback when absent. The
+    # file embeds proprietary model instructions, so it is never committed.
+    skill_lab_codex_catalog_path: str = "~/.codex/model-catalogs/bedrock-models.json"
     # Reports the claude CLI version baked into the exec-worker image. The
     # Dockerfile's `ARG CLAUDE_CLI_VERSION` is what the build actually uses (and
     # what the image's content hash covers); this mirrors it for display, with
     # parity asserted in tests/test_skill_lab_foundation.py — bump both together.
     skill_lab_worker_cli_version: str = "2.1.234"
+    # Same mirror/parity contract for the codex CLI (`ARG CODEX_CLI_VERSION`).
+    skill_lab_worker_codex_version: str = "0.147.0"
 
     # Advisory USD-per-1M-token prices for observability cost estimates.
     # Keys are substring-matched against gen_ai.request.model ids; unknown

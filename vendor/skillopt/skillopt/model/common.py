@@ -26,7 +26,7 @@ _BACKEND_DEFAULT_MODELS = {
     "claude_code_exec": "claude-sonnet-4-6",
     "qwen_chat": "Qwen/Qwen3.5-4B",
     "minimax_chat": "MiniMax-M2.7",
-    "bedrock_chat": "us.anthropic.claude-sonnet-5",  # LAUNCHPAD PATCH
+    "bedrock_chat": "global.anthropic.claude-opus-5",  # LAUNCHPAD PATCH
 }
 
 _BACKEND_ALIASES = {

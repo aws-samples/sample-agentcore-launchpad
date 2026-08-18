@@ -34,6 +34,10 @@ TRAIN_SCRIPT = VENDOR_ROOT / "scripts" / "train.py"
 
 # Studio PARAM_RANGES floor (S§2.1) — refuse impossible jobs before spending money.
 PARAM_BOUNDS = {"workers": (1, 8), "timeout": (60, 3600), "limit": (0, 10000)}
+# Studio's exec-backend pair; both CLIs are baked into the worker image and talk
+# to Bedrock with the execution role (claude via CLAUDE_CODE_USE_BEDROCK, codex
+# via its baked amazon-bedrock provider config).
+TARGET_BACKENDS = ("claude_code_exec", "codex_exec")
 _BASE_ENV_KEYS = ("PATH", "HOME", "TMPDIR", "LANG", "SSL_CERT_FILE", "SSL_CERT_DIR")
 _EXEC_JOBS_TTL = timedelta(days=7)
 # Isolation profile for the CLI child. `build_spawn_kwargs`' own defaults describe
@@ -56,14 +60,32 @@ _SPAWN_CEILINGS = {
 
 def clamp_params(params: dict[str, Any] | None) -> dict[str, Any]:
     settings = get_settings()
+    incoming = {k: v for k, v in (params or {}).items() if v not in (None, "")}
+    backend = str(incoming.get("target_backend") or TARGET_BACKENDS[0])
+    if backend not in TARGET_BACKENDS:
+        raise AppError(
+            "skill_lab.bad_params",
+            f"target_backend must be one of {'/'.join(TARGET_BACKENDS)}",
+            status_code=422,
+        )
     merged = {
-        "target_model": settings.skill_lab_target_model_id,
+        "target_backend": backend,
+        # A blank target model resolves per backend: the CLIs consume different
+        # id families (claude: Converse profile ids; codex: the catalog slugs
+        # its baked amazon-bedrock provider resolves). Always explicit — an
+        # empty --model would let train.py substitute upstream's non-Bedrock
+        # per-backend default (gpt-4o for codex_exec).
+        "target_model": (
+            settings.skill_lab_codex_target_model_id
+            if backend == "codex_exec"
+            else settings.skill_lab_target_model_id
+        ),
         "judge_model": settings.skill_lab_judge_model_id,
         "workers": 2,
         "timeout": 600,
         "limit": 0,
     }
-    merged.update({k: v for k, v in (params or {}).items() if v not in (None, "")})
+    merged.update(incoming)
     for key, (low, high) in PARAM_BOUNDS.items():
         try:
             value = int(merged[key])
@@ -218,7 +240,7 @@ def build_eval_command(
         "--skill", str(skill_dir),
         "--tasks", str(tasks_file),
         "--out_root", str(out_dir),
-        "--target_backend", "claude_code_exec",
+        "--target_backend", str(params["target_backend"]),
         "--model", str(params["target_model"]),
         "--optimizer_backend", "bedrock_chat",
         "--optimizer_model", str(params["judge_model"]),
@@ -251,6 +273,20 @@ def build_job_env(workspace: WorkspaceContext) -> dict[str, str]:
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
             "SKILLOPT_EXEC_RUNNER": "agentcore",
+            # The exec-job payload carries the CLIENT process's codex config into
+            # the worker (agentcore_worker._apply_exec_config overrides the image
+            # env with cfg.get("full_auto")/cfg.get("sandbox")), so these must be
+            # set HERE, not in the Dockerfile. Live-verified 2026-08-18:
+            # - codex >= 0.147 dropped `exec --full-auto`; false makes the
+            #   harness pass `--sandbox <CODEX_EXEC_SANDBOX>` instead.
+            # - codex's linux sandbox is bubblewrap, and the worker microVM's
+            #   kernel can't run it (every command/file-read fails). The microVM
+            #   IS the sandbox — one task per Firecracker VM, destroyed after —
+            #   so OS-level sandboxing is disabled, the exact posture the
+            #   claude_code_exec path has always run with (allow_file_edits +
+            #   Bash, no OS sandbox).
+            "CODEX_EXEC_FULL_AUTO": "false",
+            "CODEX_EXEC_SANDBOX": "danger-full-access",
             "SKILLOPT_AGENTCORE_RUNTIME_ARN": str(
                 workspace.resources.get("skill_lab_worker_runtime_arn") or ""
             ),
@@ -393,7 +429,7 @@ def build_train_config(
     config: dict[str, Any] = {
         "_base_": str(BASE_TRAIN_CONFIG),
         "model": {
-            "target_backend": "claude_code_exec",
+            "target_backend": str(params["target_backend"]),
             "target": str(params["target_model"]),
             "optimizer_backend": "bedrock_chat",
             "optimizer": str(params["judge_model"]),

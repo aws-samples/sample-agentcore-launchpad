@@ -17,13 +17,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from app.core.config import REPO_ROOT
+from app.core.config import REPO_ROOT, get_settings
 from app.services import ecr
 from app.services.agentcore import codebuild as cb
 from app.services.workspace import WorkspaceContext
 
 VENDOR_ROOT = REPO_ROOT / "vendor" / "skillopt"
 WORKER_DOCKERFILE = VENDOR_ROOT / "deploy" / "agentcore" / "Dockerfile"
+WORKER_CODEX_CONFIG = VENDOR_ROOT / "deploy" / "agentcore" / "codex-config.toml"
 WORKER_PACKAGE_DIR = VENDOR_ROOT / "skillopt"
 # The buildspec contract (ECR login → docker build arm64 → push) is shared with
 # the 方式A container path; reuse its file verbatim.
@@ -57,14 +58,39 @@ def _iter_context_files() -> list[tuple[str, Path]]:
     return pairs
 
 
+def _codex_catalog_bytes() -> bytes:
+    """The bedrock model catalog staged into codex-home, read from the backend
+    host (settings.skill_lab_codex_catalog_path). `{}` mirrors upstream
+    build_and_push.sh's fallback when the host has no catalog — the file embeds
+    proprietary model instructions, so it is never committed to this repo."""
+    path = Path(get_settings().skill_lab_codex_catalog_path).expanduser()
+    if path.is_file():
+        return path.read_bytes()
+    return b"{}"
+
+
+def _extra_context_blobs() -> list[tuple[str, bytes]]:
+    """In-memory build-context files (sorted, hashed alongside the file pairs).
+
+    codex-home/ is assembled here rather than committed: config.toml is the
+    vendored launchpad variant; the model catalog comes from the host."""
+    return [
+        ("codex-home/config.toml", WORKER_CODEX_CONFIG.read_bytes()),
+        ("codex-home/model-catalogs/bedrock-models.json", _codex_catalog_bytes()),
+    ]
+
+
 def context_content_hash() -> str:
     """sha256 over every file that reaches the build context. The image tag is
     derived from this, so 'rebuild when sources change' is a tag lookup."""
     digest = hashlib.sha256()
-    for name, path in _iter_context_files():
+    for name, payload in [
+        *((name, path.read_bytes()) for name, path in _iter_context_files()),
+        *_extra_context_blobs(),
+    ]:
         digest.update(name.encode())
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        digest.update(payload)
         digest.update(b"\0")
     return digest.hexdigest()
 
@@ -74,13 +100,17 @@ def image_tag(content_hash: str | None = None) -> str:
 
 
 def assemble_worker_context(target_dir: Path) -> Path:
-    """Stage Dockerfile + buildspec + the vendored skillopt package."""
+    """Stage Dockerfile + buildspec + the vendored skillopt package + codex-home."""
     if target_dir.exists():
         shutil.rmtree(target_dir)
     target_dir.mkdir(parents=True)
     shutil.copy2(WORKER_DOCKERFILE, target_dir / "Dockerfile")
     shutil.copy2(BUILDSPEC_TEMPLATE, target_dir / "buildspec.yml")
     shutil.copytree(WORKER_PACKAGE_DIR, target_dir / "skillopt", ignore=_COPY_IGNORE)
+    for name, payload in _extra_context_blobs():
+        dest = target_dir / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(payload)
     return target_dir
 
 
@@ -125,6 +155,8 @@ def ensure_worker_image(
         log(f"worker image up to date · :{tag} @ {digest[:19]}…")
         return {"tag": tag, "digest": digest, "uri": f"{repo_uri}@{digest}"}
 
+    if not Path(get_settings().skill_lab_codex_catalog_path).expanduser().is_file():
+        log("codex model catalog missing on this host — staging empty `{}` catalog")
     with tempfile.TemporaryDirectory(prefix="skill_lab_worker_ctx_") as tmp:
         context_dir = assemble_worker_context(Path(tmp) / "ctx")
         archive = shutil.make_archive(str(context_dir) + "_src", "zip", context_dir)

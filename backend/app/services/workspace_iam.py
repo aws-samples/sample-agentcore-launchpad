@@ -248,7 +248,10 @@ def execution_role_policy(
 
 
 def skill_lab_worker_role_policy(
-    artifacts_bucket: str, ecr_repo_arn: str, s3_prefix: str = "skill-lab/"
+    artifacts_bucket: str,
+    ecr_repo_arn: str,
+    account_id: str,
+    s3_prefix: str = "skill-lab/",
 ) -> dict[str, Any]:
     """Execution role for the Skill Lab exec-worker runtime.
 
@@ -307,6 +310,21 @@ def skill_lab_worker_role_policy(
                     "bedrock:InvokeModelWithResponseStream",
                 ],
                 "Resource": "*",
+            },
+            {
+                # codex's amazon-bedrock provider talks to the Mantle
+                # OpenAI-compatible endpoint (a separate IAM service from
+                # bedrock) with SigV4 — without this, a codex_exec rollout
+                # 401s on bedrock-mantle:CreateInference. Same statement shape
+                # as the agent-runtime role. Live-verified 2026-08-18.
+                "Sid": "BedrockMantleInference",
+                "Effect": "Allow",
+                "Action": [
+                    "bedrock-mantle:Get*",
+                    "bedrock-mantle:List*",
+                    "bedrock-mantle:CreateInference",
+                ],
+                "Resource": f"arn:aws:bedrock-mantle:*:{account_id}:project/*",
             },
             {
                 "Sid": "WorkspaceObjects",
