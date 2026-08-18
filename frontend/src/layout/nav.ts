@@ -18,7 +18,8 @@ export const NAV_ENTRIES: NavEntry[] = [
   { idx: "06", to: "/chat", labelKey: "nav.chat" },
   { idx: "07", to: "/observability", labelKey: "nav.observability" },
   { idx: "08", to: "/evaluation", labelKey: "nav.evaluation" },
-  { idx: "09", to: "/governance", labelKey: "nav.governance" },
+  { idx: "09", to: "/skill-lab", labelKey: "nav.skillLab" },
+  { idx: "10", to: "/governance", labelKey: "nav.governance" },
 ];
 
 export const PLATFORM_COUNT = 6;
@@ -32,8 +33,8 @@ export const PLATFORM_COUNT = 6;
  * console for members).
  */
 export const ADMIN_NAV_ENTRIES: NavEntry[] = [
-  { idx: "10", to: "/users", labelKey: "nav.users" },
-  { idx: "11", to: "/workspaces", labelKey: "nav.workspaces" },
+  { idx: "11", to: "/users", labelKey: "nav.users" },
+  { idx: "12", to: "/workspaces", labelKey: "nav.workspaces" },
 ];
 
 /** Every routable entry, for breadcrumb resolution. */

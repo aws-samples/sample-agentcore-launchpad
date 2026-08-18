@@ -12,6 +12,7 @@ import { Memory } from "./pages/Memory";
 import { Observability } from "./pages/Observability";
 import { Overview } from "./pages/Overview";
 import { Registry } from "./pages/Registry";
+import { SkillLab } from "./pages/SkillLab";
 import { Users } from "./pages/Users";
 import { Workspaces } from "./pages/Workspaces";
 import { WorkspaceProvider } from "./workspace/WorkspaceProvider";
@@ -32,6 +33,7 @@ export default function App() {
               <Route path="chat" element={<Chat />} />
               <Route path="observability" element={<Observability />} />
               <Route path="evaluation" element={<Evaluation />} />
+              <Route path="skill-lab" element={<SkillLab />} />
               <Route path="governance" element={<Governance />} />
               <Route path="users" element={<Users />} />
               <Route path="workspaces" element={<Workspaces />} />

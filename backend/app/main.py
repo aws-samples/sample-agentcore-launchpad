@@ -44,6 +44,7 @@ from app.routers.workspaces import router as workspaces_router
 from app.services import local_exec
 from app.services.governance import reconcile_policy_changes
 from app.services.model_prices import start_auto_refresh
+from app.skill_lab.routers import router as skill_lab_router
 
 API_DESCRIPTION = """AgentCore Launchpad — enterprise agent platform.
 
@@ -133,6 +134,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(governance_router)
     app.include_router(observability_router)
     app.include_router(evaluation_router)
+    app.include_router(skill_lab_router)
     app.include_router(experiments_router)
     app.include_router(runtime_canaries_router)
     app.include_router(users_router)  # admin-only console account management

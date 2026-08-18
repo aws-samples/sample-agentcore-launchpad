@@ -55,6 +55,18 @@ upstream extra to a hard dependency, because its absence makes
 malformed-JSON case is exactly the non-OpenAI backend this integration uses.
 Floors otherwise match upstream's.
 
+### 4. `scripts/validate_tasks.py` (new, launchpad addition)
+
+Thin CLI over `skillopt.envs.skilleval.dataloader.load_tasks` so the Launchpad
+backend's task-set validation is by construction identical to what
+`evaluate_skill.py` / `train.py` accept. JSON-on-stdout protocol; exit 0 when
+the validator ran (failures are data). The only third-party import the loader's
+chain reaches is `openai` (via `skillopt.model.azure_openai`), which the script
+replaces with a placeholder when absent — `load_tasks` never calls a model, so
+verdicts are identical either way (checked against the real venv interpreter).
+That is what lets hermetic backend tests run this validator with a bare
+interpreter instead of requiring the provisioned venv.
+
 ## Known v1 limitations (deliberate)
 
 - Chat judge only: no `bwrap` sandbox is provisioned, so `judge_mode` must stay

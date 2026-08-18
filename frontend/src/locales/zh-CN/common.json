@@ -80,6 +80,7 @@
     "chat": "对话演练场",
     "observability": "可观测",
     "evaluation": "评估",
+    "skillLab": "技能实验室",
     "governance": "治理",
     "payments": "支付",
     "settings": "设置",
@@ -1079,7 +1080,148 @@
       "requestAccepted": "治理操作已受理"
     }
   },
+  "skillLab": {
+    "kicker": "// 技能优化",
+    "title": "技能实验室",
+    "meta": "用自有任务集评估并优化 Agent Skill",
+    "comingSoon": "下一批次上线",
+    "nav": {
+      "label": "技能实验室模块导航",
+      "tasksets": "任务集",
+      "eval": "评估",
+      "train": "优化"
+    },
+    "unprovisioned": {
+      "body": "当前工作区尚未开通技能实验室执行 worker——执行 `make bootstrap` 创建。评估与优化运行依赖它;任务集现在即可编写。",
+      "venv": "本机缺少技能实验室解释器,因此任务集也无法保存——执行 `make bootstrap` 创建。"
+    },
+    "eval": {
+      "title": "评估技能",
+      "sub": "针对任务集对技能做一次性打分"
+    },
+    "train": {
+      "title": "优化技能",
+      "sub": "带留出集门控的 SKILL.md 迭代优化"
+    },
+    "tasksets": {
+      "listTitle": "全部任务集",
+      "listSub": "skilleval 原生任务文件——点击行选中",
+      "new": "新建任务集",
+      "empty": "暂无任务集——先创建一个",
+      "col": {
+        "name": "名称",
+        "mode": "结构",
+        "counts": "任务数",
+        "updated": "更新时间"
+      },
+      "mode": {
+        "single": "单一",
+        "split": "分割",
+        "singleHint": "单个任务列表——仅用于评估运行。",
+        "splitHint": "train / val / test——优化运行必需;test 可选。"
+      },
+      "createTitle": "创建任务集",
+      "createSub": "每条任务包含 id、question 与 rubric",
+      "editTitle": "编辑任务集",
+      "edit": "编辑",
+      "delete": "删除",
+      "save": "保存修改",
+      "create": "创建",
+      "created": "任务集已创建。",
+      "updated": "任务集已更新。",
+      "deleted": "任务集已删除。",
+      "previewTruncated": "预览仅显示每个分割的前 20 条任务——打开编辑器查看全部。",
+      "gone": {
+        "title": "任务集不可用",
+        "body": "该任务集在当前工作区已不存在——请从上方表格中选择。"
+      },
+      "rowCount": "{{count}} 条任务",
+      "testOptional": "可选",
+      "addRow": "增加任务",
+      "removeRow": "删除此任务",
+      "filesChip": "{{count}} 个文件",
+      "field": {
+        "id": "id",
+        "question": "question",
+        "rubric": "rubric",
+        "taskType": "task_type",
+        "taskTypePlaceholder": "task_type(可选)",
+        "files": "files",
+        "mode": "结构",
+        "name": "名称",
+        "description": "描述"
+      },
+      "tab": {
+        "rows": "行编辑器",
+        "upload": "JSON 上传"
+      },
+      "upload": {
+        "label": "任务 JSON 文件",
+        "hint": "可以是任务数组,也可以是按分割命名的对象(tasks / train / val / test)。",
+        "targetSplit": "目标分割",
+        "badJson": "JSON 无效:{{msg}}",
+        "badShape": "需要任务数组或按分割命名的对象。",
+        "badSplit": "分割 '{{split}}' 必须是任务对象数组。",
+        "unknownSplits": "未知分割键:{{splits}}(应为 tasks / train / val / test)。",
+        "mixedSplits": "'tasks' 不能与 train/val/test 混用——请选择一种结构。",
+        "modeLocked": "该任务集为 {{mode}} 结构且不可更改——请上传分割匹配的文件。",
+        "loaded": "已载入 {{summary}}——检查行内容后保存。",
+        "loadedSplit": "已向 {{split}} 载入 {{count}} 条任务——检查行内容后保存。"
+      },
+      "err": {
+        "idRequired": "id 必填",
+        "idUnsafe": "id 会用作任务工作目录名,必须文件系统安全(不含 '/'、'\\' 或 '..')",
+        "idDuplicate": "该分割中 id '{{id}}' 重复",
+        "questionRequired": "question 必填",
+        "rubricRequired": "rubric 必填",
+        "nameRequired": "任务集名称必填",
+        "splitEmpty": "分割 '{{split}}' 至少需要一条任务",
+        "editTargetGone": "该任务集已不在列表中——请从表格重新打开后再编辑"
+      },
+      "help": {
+        "title": "任务格式",
+        "example": "示例",
+        "copy": "复制",
+        "copied": "示例已复制。",
+        "note": "存储格式与 skilleval 完全一致——评估与优化 CLI 直接读取这些文件,无需转换。",
+        "field": {
+          "id": {
+            "key": "id",
+            "text": "必填。用作任务工作目录名,因此在同一分割内唯一,且不能含 '/'、'\\' 或 '..'。"
+          },
+          "question": {
+            "key": "question",
+            "text": "必填。交给被测 Agent 的提示词。"
+          },
+          "rubric": {
+            "key": "rubric",
+            "text": "必填。LLM 评判的通过标准——写成可观察的判定条件。"
+          },
+          "taskType": {
+            "key": "task_type",
+            "text": "可选。用于按类型汇总得分;缺省为 'default'。"
+          },
+          "files": {
+            "key": "files",
+            "text": "可选。相对路径到文本内容的映射,运行前写入任务工作区。仅支持文本。"
+          },
+          "judgeMode": {
+            "key": "judge_mode",
+            "text": "可选。'chat' 或 'agentic'。本版本使用 chat 评判;需要 agentic 评判的任务会直接判失败。"
+          }
+        }
+      },
+      "confirmDelete": {
+        "title": "删除任务集",
+        "body": "删除任务集“{{name}}”？其任务文件将从磁盘移除，操作不可恢复。"
+      }
+    }
+  },
   "apiErrors": {
+    "skill_lab.taskset_invalid": "任务校验器拒绝了该任务集——参见各分割的提示信息。",
+    "skill_lab.taskset_not_found": "任务集不存在",
+    "skill_lab.not_provisioned": "本机尚未开通技能实验室——请执行 `make bootstrap`。",
+    "skill_lab.validator_error": "任务校验器运行失败。",
     "agent.name_exists": "同名 Agent 已存在",
     "agent.method_not_available": "该创建方式将在后续阶段开放",
     "agent.not_active": "Agent 尚未处于运行状态",
