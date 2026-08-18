@@ -234,6 +234,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("DELETE", "/api/skill-lab/jobs/{job_id}"): MEMBER,
     ("POST", "/api/skill-lab/jobs/{job_id}/resume"): MEMBER,
     ("POST", "/api/skill-lab/jobs/{job_id}/publish"): MEMBER,
+    ("POST", "/api/skill-lab/jobs/{job_id}/import-taskset"): MEMBER,
+    ("POST", "/api/skill-lab/jobs/{job_id}/apply-expansion"): MEMBER,
     ("GET", "/api/skill-lab/jobs/{job_id}/train-summary"): MEMBER,
     ("GET", "/api/skill-lab/jobs/{job_id}/diff"): MEMBER,
     ("GET", "/api/skill-lab/jobs/{job_id}/log"): MEMBER,

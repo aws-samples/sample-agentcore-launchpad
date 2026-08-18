@@ -28,17 +28,20 @@ def _now() -> datetime:
 
 
 class SkillLabJob(Base):
-    """One evaluation or training run of the vendored SkillOpt CLIs.
+    """One evaluation, training, or task-generation run of the vendored CLIs.
 
     The row is status + identifiers only: the CLI log streams from
     data/skill-lab/jobs/<id>/log.txt and results are re-read from out/ per
-    request (studio parity). Shared by eval and train — `type` discriminates."""
+    request (studio parity). `type` discriminates eval/train/taskgen; a taskgen
+    row's taskset_id/split name the EXPANSION TARGET ("" when generating a new
+    set) and its params carry the import markers (imported_taskset_id /
+    expanded) once the operator saves the reviewed output."""
 
     __tablename__ = "skill_lab_jobs"
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=_job_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
-    type: Mapped[str] = mapped_column(String(8))  # eval | train
+    type: Mapped[str] = mapped_column(String(8))  # eval | train | taskgen
     # queued | running | succeeded | failed | cancelled | interrupted
     status: Mapped[str] = mapped_column(String(12), default="queued")
     queue_position: Mapped[int] = mapped_column(default=0)

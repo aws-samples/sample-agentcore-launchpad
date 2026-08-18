@@ -31,6 +31,7 @@ from app.skill_lab.worker_build import VENDOR_ROOT
 
 EVAL_SCRIPT = VENDOR_ROOT / "scripts" / "evaluate_skill.py"
 TRAIN_SCRIPT = VENDOR_ROOT / "scripts" / "train.py"
+TASKGEN_SCRIPT = VENDOR_ROOT / "scripts" / "generate_tasks.py"
 
 # Studio PARAM_RANGES floor (S§2.1) — refuse impossible jobs before spending money.
 PARAM_BOUNDS = {"workers": (1, 8), "timeout": (60, 3600), "limit": (0, 10000)}
@@ -250,6 +251,123 @@ def build_eval_command(
     ]
     if int(params.get("limit") or 0) > 0:
         command += ["--limit", str(params["limit"])]
+    return command
+
+
+# Studio taskgen bounds (count mirrors upstream PARAM_RANGES; guidance is free
+# text folded into the generation prompt, capped so a paste can't blow it up).
+TASKGEN_PARAM_BOUNDS = {"count": (1, 30), "timeout": (60, 3600)}
+TASKGEN_GUIDANCE_MAX_CHARS = 4000
+# Upstream studio floor: every skill of a multi-skill set must be targeted by
+# at least this many distinct generated tasks.
+TASKGEN_MIN_TASKS_PER_SKILL = 1
+
+
+def clamp_taskgen_params(params: dict[str, Any] | None) -> dict[str, Any]:
+    """Validated params for a taskgen job — the generation agent has no judge
+    and no workers; it is one exec run (plus one validation-feedback retry)."""
+    settings = get_settings()
+    incoming = {k: v for k, v in (params or {}).items() if v not in (None, "")}
+    backend = str(incoming.get("target_backend") or TARGET_BACKENDS[0])
+    if backend not in TARGET_BACKENDS:
+        raise AppError(
+            "skill_lab.bad_params",
+            f"target_backend must be one of {'/'.join(TARGET_BACKENDS)}",
+            status_code=422,
+        )
+    merged = {
+        "target_backend": backend,
+        "model": (
+            settings.skill_lab_codex_target_model_id
+            if backend == "codex_exec"
+            else settings.skill_lab_target_model_id
+        ),
+        "count": 5,
+        "guidance": "",
+        "timeout": 900,
+    }
+    merged.update(incoming)
+    for key, (low, high) in TASKGEN_PARAM_BOUNDS.items():
+        try:
+            value = int(merged[key])
+        except (TypeError, ValueError):
+            raise AppError(
+                "skill_lab.bad_params", f"{key} must be an integer", status_code=422
+            ) from None
+        if not low <= value <= high:
+            raise AppError(
+                "skill_lab.bad_params",
+                f"{key} must be between {low} and {high}",
+                status_code=422,
+            )
+        merged[key] = value
+    if not str(merged["model"]).strip():
+        raise AppError("skill_lab.bad_params", "model must not be empty", status_code=422)
+    guidance = str(merged["guidance"])
+    if len(guidance) > TASKGEN_GUIDANCE_MAX_CHARS:
+        raise AppError(
+            "skill_lab.bad_params",
+            f"guidance must be at most {TASKGEN_GUIDANCE_MAX_CHARS} characters",
+            status_code=422,
+        )
+    merged["guidance"] = guidance
+    return merged
+
+
+def write_expansion_snapshot(
+    job_dir: Path, taskset_id: str, target_split: str, tasks_by_split: dict[str, Any]
+) -> Path:
+    """The --existing-tasks snapshot generate_tasks.py decodes strictly: full
+    current content of the target task set, so the agent avoids semantic
+    duplicates and the reserved-id collision check has the complete id set."""
+    job_dir.mkdir(parents=True, exist_ok=True)
+    snapshot = job_dir / "existing_tasks.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "taskset_id": taskset_id,
+                "target_split": target_split,
+                "tasks_by_split": tasks_by_split,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return snapshot
+
+
+def build_taskgen_command(
+    *,
+    skill_dirs: list[Path],
+    out_root: Path,
+    params: dict[str, Any],
+    expansion: tuple[Path, str] | None = None,
+) -> list[str]:
+    """argv for scripts/generate_tasks.py; generated_tasks.json lands in out_root.
+
+    Multi-skill mode mirrors upstream: the requested count is floored at one
+    task per skill and --min-tasks-per-skill enforces coverage."""
+    count = int(params["count"])
+    if len(skill_dirs) > 1:
+        count = max(count, len(skill_dirs) * TASKGEN_MIN_TASKS_PER_SKILL)
+    command = [get_settings().skill_lab_python, str(TASKGEN_SCRIPT)]
+    for skill_dir in skill_dirs:
+        command += ["--skill", str(skill_dir)]
+    command += [
+        "--backend", str(params["target_backend"]),
+        "--model", str(params["model"]),
+        "--count", str(count),
+        "--timeout", str(params["timeout"]),
+        "--out_root", str(out_root),
+    ]
+    if len(skill_dirs) > 1:
+        command += ["--min-tasks-per-skill", str(TASKGEN_MIN_TASKS_PER_SKILL)]
+    if str(params.get("guidance") or "").strip():
+        command += ["--guidance", str(params["guidance"])]
+    if expansion is not None:
+        snapshot_path, target_split = expansion
+        command += ["--existing-tasks", str(snapshot_path), "--target-split", target_split]
     return command
 
 

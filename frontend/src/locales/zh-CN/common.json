@@ -1098,6 +1098,67 @@
       "targetHintCodex": "codex 的 amazon-bedrock provider 解析的模型目录 slug（如 openai.gpt-5.6-sol）。",
       "judgeHint": "LLM 判分模型的 Converse inference profile ID（us./global. 前缀，可自由输入）。"
     },
+    "taskgen": {
+      "open": "AI 自动生成",
+      "close": "返回任务集",
+      "listTitle": "AI 任务生成",
+      "listSub": "由 exec 后端 agent 在 AgentCore worker 上撰写 skilleval 任务；结果先审阅、后保存。",
+      "empty": "还没有生成作业——在下方发起一次。",
+      "target": {
+        "new": "新任务集"
+      },
+      "col": {
+        "job": "作业",
+        "skills": "技能",
+        "target": "目标",
+        "status": "状态",
+        "created": "创建时间",
+        "id": "ID",
+        "question": "问题",
+        "rubric": "评分标准"
+      },
+      "wizard": {
+        "title": "生成任务",
+        "sub": "选择一个技能（或多选生成统一的多技能任务集），由 agent 撰写评估任务。",
+        "submit": "开始生成",
+        "submitting": "启动中…"
+      },
+      "field": {
+        "skills": "待评估技能",
+        "count": "任务数量",
+        "timeout": "超时（秒）",
+        "guidance": "生成指引（可选）",
+        "expand": "扩充已有任务集",
+        "targetSplit": "目标分割"
+      },
+      "hint": {
+        "skills": "点击切换选中。多技能会生成一个带覆盖度约束的统一任务集。",
+        "count": "{{min}}-{{max}}；多技能时下限为每技能至少一个任务。",
+        "timeout": "每次生成尝试 {{min}}-{{max}} 秒。",
+        "guidance": "例如：侧重边界场景；任务需要读取输入文件；难度递进",
+        "expand": "可选：生成的任务将追加到该任务集，而不是新建——已有任务会提供给 agent 以避免重复。"
+      },
+      "expand": {
+        "none": "— 新建任务集 —"
+      },
+      "err": {
+        "noSkill": "请至少选择一个技能。"
+      },
+      "job": {
+        "title": "生成作业 {{id}}",
+        "newSub": "审阅生成的任务后，导入为新任务集。",
+        "expandSub": "扩充「{{name}}」 · 目标分割 {{split}}",
+        "cancel": "取消"
+      },
+      "review": {
+        "title": "生成的任务（{{n}}）——保存前请审阅",
+        "name": "新任务集名称",
+        "import": "导入为任务集",
+        "apply": "追加到 {{split}} 分割",
+        "imported": "已导入为任务集",
+        "applied": "已追加到「{{name}}」。"
+      }
+    },
     "unprovisioned": {
       "body": "当前工作区尚未开通技能实验室执行 worker——执行 `make bootstrap` 创建。评估与优化运行依赖它;任务集现在即可编写。",
       "venv": "本机缺少技能实验室解释器,因此任务集也无法保存——执行 `make bootstrap` 创建。"

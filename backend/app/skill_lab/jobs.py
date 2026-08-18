@@ -249,6 +249,245 @@ def submit_train_job(
     return _enqueue(db, row, command)
 
 
+def _materialize_taskgen_skills(
+    workspace: Any,
+    skill_source: dict[str, Any],
+    directory: Path,
+    log_lines: list[str],
+) -> tuple[list[Path], dict[str, Any]]:
+    """Taskgen accepts the eval-style single source OR a registry multi-select
+    (`record_ids`) for a unified multi-skill task set (upstream plugin mode)."""
+    record_ids = skill_source.get("record_ids")
+    if str(skill_source.get("kind") or "") == "registry" and record_ids is not None:
+        ids = [str(rid) for rid in record_ids if str(rid).strip()]
+        if not 1 <= len(ids) <= 8:
+            raise AppError(
+                "skill_lab.bad_params",
+                "skill_source.record_ids must carry 1-8 registry record ids",
+                status_code=422,
+            )
+        if len(set(ids)) != len(ids):
+            raise AppError(
+                "skill_lab.bad_params",
+                "skill_source.record_ids must be unique",
+                status_code=422,
+            )
+        skill_dirs: list[Path] = []
+        names: list[str] = []
+        for record_id in ids:
+            skill_dir, resolved = runner.materialize_registry_skill(
+                workspace, record_id, directory, log_lines.append
+            )
+            skill_dirs.append(skill_dir)
+            names.append(str(resolved.get("name") or skill_dir.name))
+        if len({d.name for d in skill_dirs}) != len(skill_dirs):
+            # generate_tasks.py keys coverage on skill names — a duplicate would
+            # also have collided on disk under <job>/skills/<name>/.
+            raise AppError(
+                "skill_lab.bad_params",
+                f"selected records resolve to duplicate skill names: {sorted(names)}",
+                status_code=422,
+            )
+        return skill_dirs, {"kind": "registry", "record_ids": ids, "names": names}
+    skill_dir, resolved = _materialize_skill(workspace, skill_source, directory, log_lines)
+    return [skill_dir], resolved
+
+
+def submit_taskgen_job(
+    db: Session,
+    workspace_id: str,
+    workspace: Any,
+    *,
+    skill_source: dict[str, Any],
+    taskset_id: str | None = None,
+    target_split: str | None = None,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """AI task-set generation (studio parity): an exec-backend agent authors
+    tasks for the selected skill(s) on the AgentCore worker; the result is a
+    reviewable artifact, imported into a task set only by an explicit action."""
+    runner.require_worker(workspace)
+    merged_params = runner.clamp_taskgen_params(params)
+    if (taskset_id is None) != (target_split is None):
+        raise AppError(
+            "skill_lab.bad_params",
+            "taskset_id and target_split must be provided together for expansion",
+            status_code=422,
+        )
+
+    ts_row = None
+    tasks_by_split: dict[str, Any] = {}
+    if taskset_id is not None:
+        ts_row = taskset_svc.get_row(db, workspace_id, taskset_id)
+        tasks_by_split = taskset_svc.read_taskset(
+            db, workspace_id, taskset_id, full=True
+        )["tasks_by_split"]
+        if ts_row.mode == "single":
+            if target_split != "tasks":
+                raise AppError(
+                    "skill_lab.bad_params",
+                    "single-mode expansion target_split must be 'tasks'",
+                    status_code=422,
+                )
+        elif target_split not in tasks_by_split and target_split != "test":
+            raise AppError(
+                "skill_lab.bad_params",
+                "split-mode target_split must be an existing split or 'test', "
+                f"got '{target_split}'",
+                status_code=422,
+            )
+
+    row = SkillLabJob(
+        workspace_id=workspace_id,
+        type="taskgen",
+        taskset_id=ts_row.id if ts_row is not None else "",
+        taskset_name=ts_row.name if ts_row is not None else "",
+        split=target_split or "",
+        params=merged_params,
+    )
+    db.add(row)
+    db.flush()
+    directory = artifacts.job_dir(row.id)
+    directory.mkdir(parents=True, exist_ok=True)
+    log_lines: list[str] = []
+    try:
+        skill_dirs, resolved_source = _materialize_taskgen_skills(
+            workspace, skill_source, directory, log_lines
+        )
+        expansion = None
+        if ts_row is not None and target_split is not None:
+            snapshot = runner.write_expansion_snapshot(
+                directory, ts_row.id, target_split, tasks_by_split
+            )
+            expansion = (snapshot, target_split)
+    except BaseException:
+        runner.remove_job_dir(row.id)
+        raise
+
+    row.skill_source = resolved_source
+    db.commit()
+    if log_lines:
+        (directory / "log.txt").write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+
+    command = runner.build_taskgen_command(
+        skill_dirs=skill_dirs,
+        out_root=directory / "out",
+        params=merged_params,
+        expansion=expansion,
+    )
+    return _enqueue(db, row, command)
+
+
+def _finished_taskgen_job(db: Session, workspace_id: str, job_id: str) -> SkillLabJob:
+    row = get_job(db, workspace_id, job_id)
+    if row.type != "taskgen":
+        raise AppError(
+            "skill_lab.not_a_taskgen_job",
+            f"job {job_id} is a {row.type} job",
+            status_code=400,
+        )
+    if row.status != "succeeded":
+        raise AppError(
+            "skill_lab.job_not_finished",
+            f"job {job_id} is {row.status} — generated tasks exist only after success",
+            status_code=409,
+        )
+    return row
+
+
+def import_taskgen_taskset(
+    db: Session, workspace_id: str, job_id: str, *, name: str
+) -> dict[str, Any]:
+    """Save a taskgen job's reviewed output as a NEW single-mode task set.
+
+    Goes through the taskset service's validated staging swap — the same
+    validator subprocess as an upload — so the import can never plant a file
+    the eval/train CLIs would refuse."""
+    row = _finished_taskgen_job(db, workspace_id, job_id)
+    if (row.params or {}).get("imported_taskset_id"):
+        raise AppError(
+            "skill_lab.already_imported",
+            f"job {job_id} was already imported as task set "
+            f"{row.params['imported_taskset_id']}",
+            status_code=409,
+        )
+    results = artifacts.taskgen_results(row.id)
+    if results is None:
+        raise AppError(
+            "skill_lab.results_missing",
+            f"job {job_id} has no generated_tasks.json on disk",
+            status_code=409,
+        )
+    info = taskset_svc.create_taskset(
+        db,
+        workspace_id,
+        name=name,
+        mode="single",
+        tasks_by_split={"tasks": results["tasks"]},
+    )
+    row.params = {**(row.params or {}), "imported_taskset_id": info["id"]}
+    db.commit()
+    return {"job": job_out(row), "taskset": info}
+
+
+def apply_taskgen_expansion(db: Session, workspace_id: str, job_id: str) -> dict[str, Any]:
+    """Append a taskgen expansion job's output to its target task set/split.
+
+    Full-replace through update_taskset (validated staging swap). The id-collision
+    re-check matters even though the CLI already checked against its snapshot:
+    the task set may have changed between generation and this click."""
+    row = _finished_taskgen_job(db, workspace_id, job_id)
+    if not row.taskset_id:
+        raise AppError(
+            "skill_lab.not_an_expansion_job",
+            f"job {job_id} did not target an existing task set",
+            status_code=400,
+        )
+    if (row.params or {}).get("expanded"):
+        raise AppError(
+            "skill_lab.already_imported",
+            f"job {job_id} was already applied to task set {row.taskset_id}",
+            status_code=409,
+        )
+    results = artifacts.taskgen_results(row.id)
+    if results is None:
+        raise AppError(
+            "skill_lab.results_missing",
+            f"job {job_id} has no generated_tasks.json on disk",
+            status_code=409,
+        )
+    ts_row = taskset_svc.get_row(db, workspace_id, row.taskset_id)  # 404 if deleted
+    merged = dict(
+        taskset_svc.read_taskset(db, workspace_id, ts_row.id, full=True)["tasks_by_split"]
+    )
+    existing_ids = {
+        str(task.get("id"))
+        for tasks in merged.values()
+        for task in tasks
+        if isinstance(task, dict)
+    }
+    collisions = sorted(
+        str(task.get("id"))
+        for task in results["tasks"]
+        if isinstance(task, dict) and str(task.get("id")) in existing_ids
+    )
+    if collisions:
+        raise AppError(
+            "skill_lab.expansion_conflict",
+            "the task set changed since generation — generated ids now collide: "
+            + ", ".join(collisions),
+            status_code=409,
+        )
+    target = row.split
+    merged[target] = list(merged.get(target, [])) + results["tasks"]
+    info = taskset_svc.update_taskset(
+        db, workspace_id, ts_row.id, tasks_by_split=merged
+    )
+    row.params = {**(row.params or {}), "expanded": True}
+    db.commit()
+    return {"job": job_out(row), "taskset": info}
+
+
 def resume_job(db: Session, workspace_id: str, workspace: Any, job_id: str) -> dict[str, Any]:
     """Re-enqueue an interrupted/failed TRAIN job — train.py resumes from
     out/runtime_state.json after the last completed step, so this is the same
