@@ -6,7 +6,7 @@ deployed and nobody can run `cdk deploy` from a web backend, so the same
 substrate is provisioned here with boto3 only, as a staged job:
 
     validate-access → iam → storage → codebuild → cognito
-    → gateway → memory → registry → observability → finalize
+    → gateway → memory → registry → skill-lab → observability → finalize
 
 The shape follows `deployer/pipeline.py` on purpose — ordered stages, per-stage
 status persisted (here on `Job.payload["stages"]`, the same records the deploy
@@ -69,6 +69,7 @@ STAGE_ORDER = [
     "gateway",
     "memory",
     "registry",
+    "skill-lab",
     "observability",
     "finalize",
 ]
@@ -1099,6 +1100,38 @@ def _stage_finalize(ctx: BootstrapContext) -> str:
     return f"{len(REQUIRED_RESOURCE_KEYS)} required resources present · ready"
 
 
+def _stage_skill_lab(ctx: BootstrapContext) -> str:
+    """Skill Lab exec worker: role + content-addressed image + runtime.
+
+    Keys stay out of REQUIRED_RESOURCE_KEYS by design — a workspace without the
+    worker still deploys/invokes; Skill Lab just shows unprovisioned. The
+    dedicated host venv is provisioned by the hub bootstrap (`make bootstrap`),
+    not per workspace: it is host-local and shared.
+
+    Degrades instead of failing, like the Registry and Observability stages, and
+    for a stronger reason: a raised failure here leaves the workspace `failed`,
+    and every non-read request against a workspace that is not `ready` is
+    refused (routers/workspaces.py). One optional feature's CodeBuild or runtime
+    problem must not cost the environment its deploy/invoke path."""
+    from app.skill_lab import infra as skill_lab_infra
+
+    try:
+        resources = skill_lab_infra.ensure_skill_lab_worker(
+            ctx.workspace, ctx.workspace_id, log=ctx.log
+        )
+    # RuntimeError covers ForeignResourceError and the wrappers' build/runtime
+    # failures; OSError covers the waiters' TimeoutError.
+    except (BotoCoreError, ClientError, OSError, RuntimeError) as exc:
+        detail = _error_code(exc) or f"{type(exc).__name__}: {exc}"
+        ctx.log(f"skill lab worker unavailable ({detail}) — Skill Lab stays unprovisioned")
+        return f"unavailable · {detail}"
+    ctx.record(resources)
+    return (
+        f"{skill_lab_infra.WORKER_RUNTIME_NAME} · "
+        f"{resources['skill_lab_worker_image_tag']}"
+    )
+
+
 STAGES: dict[str, Callable[[BootstrapContext], str]] = {
     "validate-access": _stage_validate_access,
     "iam": _stage_iam,
@@ -1108,6 +1141,7 @@ STAGES: dict[str, Callable[[BootstrapContext], str]] = {
     "gateway": _stage_gateway,
     "memory": _stage_memory,
     "registry": _stage_registry,
+    "skill-lab": _stage_skill_lab,
     "observability": _stage_observability,
     "finalize": _stage_finalize,
 }

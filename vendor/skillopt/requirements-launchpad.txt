@@ -1,0 +1,18 @@
+# Dependency subset for the Skill Lab venv (data/skill-lab-venv), which runs the
+# vendored evaluate_skill.py / train.py as subprocesses of the Launchpad backend.
+boto3>=1.35        # AgentCore exec runner (S3 + invoke) and bedrock_chat backend
+openai>=1.60       # imported by skillopt.model at import time (azure_openai module)
+pyyaml>=6.0        # skillopt.config
+# Optional in skillopt.utils.json_utils, but the fallback silently DROPS a
+# malformed analyst/judge edit — and the malformed-JSON case is exactly the
+# non-OpenAI backends this integration uses (bedrock_chat).
+json_repair>=0.61.0   # upstream's own floor (pyproject [claude] extra)
+# Inspector/agentic-judge stack: evaluate_skill.py imports these at module load
+# (agentic_judge → verdict → inspectors) even in chat judge mode, so they must
+# be installed. The agentic judge itself still stays OFF in v1 — no bwrap
+# sandbox is provisioned (see LAUNCHPAD_DEVIATIONS.md).
+mcp>=1.26,<2
+openpyxl>=3.1
+Pillow>=10.0
+python-docx>=1.1
+python-pptx>=1.0.0   # upstream's floor; 0.6.x predates the shapes API used

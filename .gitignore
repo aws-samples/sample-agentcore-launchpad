@@ -43,6 +43,9 @@ config/launchpad.yaml
 cdk.out/
 vendor-src/
 data/harness-export/
+# Local upstream clone the Skill Lab vendored subset (vendor/skillopt, tracked)
+# is copied from — never part of this public repo.
+SkillEvalOpt_Studio/
 
 # --- security review artifacts (kept local) ---
 # The threat model names still-unmitigated issues with file:line detail, and this

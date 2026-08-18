@@ -193,6 +193,22 @@ class Settings(BaseSettings):
     codegen_timeout_s: float = 180.0
     codegen_max_repair_rounds: int = 2
 
+    # Skill Lab (vendored SkillOpt integration). Evaluation/training CLIs from
+    # vendor/skillopt run as subprocesses in the dedicated interpreter below
+    # (provisioned by bootstrap from vendor/skillopt/requirements-launchpad.txt);
+    # the backend process itself never imports the vendored tree. Rollout
+    # execution goes to the launchpad_skill_lab_worker AgentCore runtime; the
+    # judge/optimizer role calls Bedrock directly (bedrock_chat backend).
+    skill_lab_python: str = str(DATA_DIR / "skill-lab-venv" / "bin" / "python")
+    skill_lab_max_concurrent_jobs: int = Field(default=1, ge=1, le=4)
+    skill_lab_judge_model_id: str = "us.anthropic.claude-sonnet-5"
+    skill_lab_target_model_id: str = "us.anthropic.claude-sonnet-5"
+    # Reports the claude CLI version baked into the exec-worker image. The
+    # Dockerfile's `ARG CLAUDE_CLI_VERSION` is what the build actually uses (and
+    # what the image's content hash covers); this mirrors it for display, with
+    # parity asserted in tests/test_skill_lab_foundation.py — bump both together.
+    skill_lab_worker_cli_version: str = "2.1.234"
+
     # Advisory USD-per-1M-token prices for observability cost estimates.
     # Keys are substring-matched against gen_ai.request.model ids; unknown
     # models report tokens with a null cost. Overridable in launchpad.yaml,

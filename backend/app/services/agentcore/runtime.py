@@ -81,8 +81,12 @@ def create_container_runtime(
     environment: dict[str, str] | None = None,
     filesystem_configurations: list[dict[str, Any]] | None = None,
     vpc: dict[str, Any] | None = None,
+    lifecycle: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    """CreateAgentRuntime from an ECR image (Claude SDK container path)."""
+    """CreateAgentRuntime from an ECR image (Claude SDK container path).
+
+    ``lifecycle`` = {idleRuntimeSessionTimeout, maxLifetime} seconds (the Skill
+    Lab exec worker caps sessions at 8h and reaps idle ones at 5min)."""
     params: dict[str, Any] = {
         "agentRuntimeName": runtime_name,
         "agentRuntimeArtifact": {
@@ -95,6 +99,8 @@ def create_container_runtime(
         params["environmentVariables"] = dict(environment)
     if filesystem_configurations:
         params["filesystemConfigurations"] = filesystem_configurations
+    if lifecycle:
+        params["lifecycleConfiguration"] = dict(lifecycle)
     return client.create_agent_runtime(**params)
 
 
@@ -146,6 +152,7 @@ def update_container_runtime(
     environment: dict[str, str] | None = None,
     filesystem_configurations: list[dict[str, Any]] | None = None,
     vpc: dict[str, Any] | None = None,
+    lifecycle: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """UpdateAgentRuntime with a new container image — new version, same ARN.
     NB: a version bump resets managed session storage (documented UI note)."""
@@ -159,6 +166,8 @@ def update_container_runtime(
         params["environmentVariables"] = dict(environment)
     if filesystem_configurations:
         params["filesystemConfigurations"] = filesystem_configurations
+    if lifecycle:
+        params["lifecycleConfiguration"] = dict(lifecycle)
     return client.update_agent_runtime(**params)
 
 
