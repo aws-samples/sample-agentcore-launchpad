@@ -11,6 +11,13 @@
 model = "openai.gpt-5.6-sol"
 model_provider = "amazon-bedrock"
 model_catalog_json = "/home/agent/.codex/model-catalogs/bedrock-models.json"
+# codex 0.147 + the bedrock provider misbehaves with the web-search tool and the
+# multi-agent v2 feature enabled (operator-reported 2026-08-18); both are also
+# pointless in the offline exec worker — tasks run without network access.
+web_search = "disabled"
+
+[features.multi_agent_v2]
+enabled = false
 
 [model_providers.amazon-bedrock.aws]
 # Mantle data-plane region, NOT the workspace region: the us-west-2 Mantle
