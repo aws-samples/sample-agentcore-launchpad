@@ -72,7 +72,7 @@ def ensure_worker_role(
         ),
         inline_policies={
             "launchpad-skill-lab-worker": workspace_iam.skill_lab_worker_role_policy(
-                bucket, ecr_repo_arn, s3_prefix=f"{S3_PREFIX}/"
+                bucket, ecr_repo_arn, workspace.account_id, s3_prefix=f"{S3_PREFIX}/"
             )
         },
         description="Assumed by the Launchpad Skill Lab exec-worker runtime",

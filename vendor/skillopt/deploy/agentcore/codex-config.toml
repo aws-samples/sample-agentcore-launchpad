@@ -13,7 +13,12 @@ model_provider = "amazon-bedrock"
 model_catalog_json = "/home/agent/.codex/model-catalogs/bedrock-models.json"
 
 [model_providers.amazon-bedrock.aws]
-region = "us-west-2"
+# Mantle data-plane region, NOT the workspace region: the us-west-2 Mantle
+# catalog has no openai.gpt-5.6-sol (only -terra/-luna), while us-east-1
+# carries the full set — the same reason the platform's own
+# DEFAULT_MANTLE_REGION is us-east-1 (frontend/src/studio/lib/models.ts).
+# Enumerated live via GET bedrock-mantle.<region>.api.aws/v1/models 2026-08-18.
+region = "us-east-1"
 
 [projects."/mnt/workspace"]
 trust_level = "trusted"

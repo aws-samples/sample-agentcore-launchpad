@@ -273,6 +273,20 @@ def build_job_env(workspace: WorkspaceContext) -> dict[str, str]:
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
             "SKILLOPT_EXEC_RUNNER": "agentcore",
+            # The exec-job payload carries the CLIENT process's codex config into
+            # the worker (agentcore_worker._apply_exec_config overrides the image
+            # env with cfg.get("full_auto")/cfg.get("sandbox")), so these must be
+            # set HERE, not in the Dockerfile. Live-verified 2026-08-18:
+            # - codex >= 0.147 dropped `exec --full-auto`; false makes the
+            #   harness pass `--sandbox <CODEX_EXEC_SANDBOX>` instead.
+            # - codex's linux sandbox is bubblewrap, and the worker microVM's
+            #   kernel can't run it (every command/file-read fails). The microVM
+            #   IS the sandbox — one task per Firecracker VM, destroyed after —
+            #   so OS-level sandboxing is disabled, the exact posture the
+            #   claude_code_exec path has always run with (allow_file_edits +
+            #   Bash, no OS sandbox).
+            "CODEX_EXEC_FULL_AUTO": "false",
+            "CODEX_EXEC_SANDBOX": "danger-full-access",
             "SKILLOPT_AGENTCORE_RUNTIME_ARN": str(
                 workspace.resources.get("skill_lab_worker_runtime_arn") or ""
             ),

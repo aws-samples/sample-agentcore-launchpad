@@ -204,9 +204,28 @@ def test_env_is_allowlisted(lab, monkeypatch):
     assert "LAUNCHPAD_ADMIN_PASSWORD" not in env
     assert env["AWS_ACCESS_KEY_ID"] == "AKIATEST"
     assert env["SKILLOPT_EXEC_RUNNER"] == "agentcore"
+    # codex contract (both ride the exec-job payload into the worker): >=0.147
+    # has no `exec --full-auto`, and the microVM kernel can't run bubblewrap —
+    # the VM itself is the sandbox. Live-verified 2026-08-18.
+    assert env["CODEX_EXEC_FULL_AUTO"] == "false"
+    assert env["CODEX_EXEC_SANDBOX"] == "danger-full-access"
     assert env["SKILLOPT_AGENTCORE_S3_PREFIX"] == "skill-lab/exec-jobs"
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
     assert env["PYTHONUNBUFFERED"] == "1"  # killed jobs must not lose buffered log output
+
+
+def test_worker_role_policy_covers_codex_mantle_path():
+    """codex's amazon-bedrock provider calls bedrock-mantle (a separate IAM
+    service): without the statement a codex_exec rollout 401s at runtime."""
+    from app.services.workspace_iam import skill_lab_worker_role_policy
+
+    policy = skill_lab_worker_role_policy("bkt", "arn:aws:ecr:us-west-2:1:repository/r", "1")
+    statements = {s["Sid"]: s for s in policy["Statement"]}
+    mantle = statements["BedrockMantleInference"]
+    assert "bedrock-mantle:CreateInference" in mantle["Action"]
+    # Mantle models live outside the workspace region (sol is us-east-1-only),
+    # so the region segment must stay wildcarded.
+    assert mantle["Resource"].startswith("arn:aws:bedrock-mantle:*:")
 
 
 # ── lifecycle ──────────────────────────────────────────────────────────────

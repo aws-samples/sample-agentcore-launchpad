@@ -44,6 +44,9 @@ ENV PYTHONPATH=/opt/skillopt \
     CLAUDE_CODE_USE_BEDROCK=1 \
     CLAUDE_CODE_EXEC_USE_SDK=cli \
     CODEX_EXEC_USE_SDK=cli \
+    # codex >= 0.147 dropped `exec --full-auto`; false makes the harness pass
+    # `--sandbox workspace-write` (the same policy --full-auto used to imply).
+    CODEX_EXEC_FULL_AUTO=false \
     DISABLE_AUTOUPDATER=1 \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
