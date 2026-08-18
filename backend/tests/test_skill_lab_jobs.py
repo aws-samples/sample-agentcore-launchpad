@@ -149,6 +149,53 @@ def test_command_contract(lab, tmp_path):
     assert "--workers 3" in text and "--limit 5" in text
 
 
+def test_target_backend_param(lab, tmp_path):
+    """codex_exec flows into argv and swaps the blank-model default to the codex
+    catalog slug; an explicit model always wins; unknown backends 422."""
+    params = runner.clamp_params({"target_backend": "codex_exec"})
+    assert params["target_model"] == get_settings().skill_lab_codex_target_model_id
+    command = runner.build_eval_command(
+        skill_dir=tmp_path / "skill",
+        tasks_file=tmp_path / "tasks.json",
+        out_dir=tmp_path / "out",
+        params=params,
+    )
+    text = " ".join(command)
+    assert "--target_backend codex_exec" in text
+    assert f"--model {params['target_model']}" in text
+
+    explicit = runner.clamp_params(
+        {"target_backend": "codex_exec", "target_model": "openai.gpt-5.5"}
+    )
+    assert explicit["target_model"] == "openai.gpt-5.5"
+
+    # claude default untouched by the codex path
+    assert runner.clamp_params(None)["target_model"] == "us.anthropic.claude-sonnet-5"
+
+    from app.core.errors import AppError
+
+    with pytest.raises(AppError) as err:
+        runner.clamp_params({"target_backend": "gemini_exec"})
+    assert err.value.status_code == 422
+
+
+def test_train_config_carries_target_backend(lab, tmp_path):
+    params = runner.clamp_train_params({"target_backend": "codex_exec"})
+    split_env = {"split_mode": "ratio", "data_path": "x", "split_ratio": "4:3:3"}
+    config_path = runner.build_train_config(
+        skill_dir=tmp_path / "skill",
+        split_env=split_env,
+        eval_test=True,
+        out_config=tmp_path / "config.yaml",
+        params=params,
+    )
+    import yaml
+
+    config = yaml.safe_load(config_path.read_text())
+    assert config["model"]["target_backend"] == "codex_exec"
+    assert config["model"]["target"] == get_settings().skill_lab_codex_target_model_id
+
+
 def test_env_is_allowlisted(lab, monkeypatch):
     monkeypatch.setenv("LAUNCHPAD_ADMIN_PASSWORD", "secret")
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATEST")

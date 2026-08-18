@@ -1,14 +1,16 @@
 # SkillOpt AgentCore exec worker (linux/arm64) — Launchpad Skill Lab variant.
 #
 # LAUNCHPAD PATCH (see ../../LAUNCHPAD_DEVIATIONS.md): upstream copied the build
-# host's claude/codex standalone binaries into the image. This variant installs a
-# PINNED claude CLI version inside the image (reproducible, host-independent) and
-# drops codex entirely (Skill Lab v1 is claude_code_exec only). Built by the
-# Launchpad CodeBuild pipeline from the context assembled in
-# backend/app/skill_lab/worker_build.py — not by upstream's build_and_push.sh.
+# host's claude/codex standalone binaries into the image. This variant installs
+# PINNED claude and codex CLI versions inside the image (reproducible,
+# host-independent). Built by the Launchpad CodeBuild pipeline from the context
+# assembled in backend/app/skill_lab/worker_build.py — not by upstream's
+# build_and_push.sh. That assembler also stages codex-home/ (config.toml from
+# this directory + the bedrock model catalog read from the backend host).
 FROM public.ecr.aws/docker/library/python:3.12-slim-bookworm
 
 ARG CLAUDE_CLI_VERSION=2.1.234
+ARG CODEX_CLI_VERSION=0.147.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git ripgrep procps unzip jq \
@@ -23,7 +25,16 @@ RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_CLI_VERSION}"
     && rm -rf /root/.local/share/claude /root/.local/bin/claude \
     && /usr/local/bin/claude --version
 
+# Pinned codex CLI (official standalone release binary, version-locked).
+RUN curl -fsSL -o /tmp/codex.tar.gz \
+        "https://github.com/openai/codex/releases/download/rust-v${CODEX_CLI_VERSION}/codex-aarch64-unknown-linux-musl.tar.gz" \
+    && tar -xzf /tmp/codex.tar.gz -C /tmp codex-aarch64-unknown-linux-musl \
+    && install -m 0755 /tmp/codex-aarch64-unknown-linux-musl /usr/local/bin/codex \
+    && rm -f /tmp/codex.tar.gz /tmp/codex-aarch64-unknown-linux-musl \
+    && /usr/local/bin/codex --version
+
 RUN useradd -m -u 1000 agent
+COPY --chown=agent:agent codex-home/ /home/agent/.codex/
 COPY skillopt/ /opt/skillopt/skillopt/
 
 ENV PYTHONPATH=/opt/skillopt \
@@ -32,6 +43,7 @@ ENV PYTHONPATH=/opt/skillopt \
     AWS_REGION=us-west-2 \
     CLAUDE_CODE_USE_BEDROCK=1 \
     CLAUDE_CODE_EXEC_USE_SDK=cli \
+    CODEX_EXEC_USE_SDK=cli \
     DISABLE_AUTOUPDATER=1 \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 

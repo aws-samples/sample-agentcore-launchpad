@@ -1475,7 +1475,13 @@ export interface SkillLabStatus {
   /** platform defaults a job runs with when its params omit the models */
   default_target_model: string;
   default_judge_model: string;
+  /** blank-model default for the codex_exec backend (a codex catalog slug) */
+  default_codex_target_model: string;
+  /** exec backends baked into the worker image */
+  target_backends: SkillLabTargetBackend[];
 }
+
+export type SkillLabTargetBackend = "claude_code_exec" | "codex_exec";
 
 export type SkillLabTasksetMode = "single" | "split";
 
@@ -1542,6 +1548,8 @@ export interface SkillLabSkillSource {
 export type SkillLabGateMetric = "hard" | "soft" | "mixed";
 
 export interface SkillLabJobParams {
+  /** exec backend running the tasks (default claude_code_exec) */
+  target_backend?: SkillLabTargetBackend;
   target_model: string;
   judge_model: string;
   workers: number;

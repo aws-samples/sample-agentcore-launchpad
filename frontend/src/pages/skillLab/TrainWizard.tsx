@@ -10,10 +10,12 @@ import type {
   SkillLabJobBody,
   SkillLabJobInfo,
   SkillLabStatus,
+  SkillLabTargetBackend,
   SkillLabTasksetInfo,
 } from "../../lib/api";
 import { api, ApiError } from "../../lib/api";
 import type { RegistryRecord } from "../Registry";
+import { BackendModelFields } from "./BackendModelFields";
 
 const GATE_METRICS: SkillLabGateMetric[] = ["hard", "soft", "mixed"];
 
@@ -83,6 +85,7 @@ export function TrainWizard({
   const [epochs, setEpochs] = useState(1);
   const [learningRate, setLearningRate] = useState(4);
   const [gateMetric, setGateMetric] = useState<SkillLabGateMetric>("hard");
+  const [targetBackend, setTargetBackend] = useState<SkillLabTargetBackend>("claude_code_exec");
   const [targetModel, setTargetModel] = useState("");
   const [judgeModel, setJudgeModel] = useState("");
   const [workers, setWorkers] = useState(2);
@@ -188,6 +191,7 @@ export function TrainWizard({
         skill_source: source,
         taskset_id: tasksetId,
         params: {
+          target_backend: targetBackend,
           target_model: targetModel.trim(),
           judge_model: judgeModel.trim(),
           epochs,
@@ -475,31 +479,17 @@ export function TrainWizard({
         </button>
         {advanced && (
           <>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
-              <div className="field" style={{ flex: 1, minWidth: 240 }}>
-                <label>{t("skillLab.eval.wizard.field.targetModel")}</label>
-                <input
-                  className="input mono"
-                  value={targetModel}
-                  data-testid="train-param-targetModel"
-                  onChange={(e) => setTargetModel(e.target.value)}
-                />
-                <span className="mono dim" style={{ fontSize: 10.5 }}>
-                  {t("skillLab.eval.wizard.hint.targetModel")}
-                </span>
-              </div>
-              <div className="field" style={{ flex: 1, minWidth: 240 }}>
-                <label>{t("skillLab.train.wizard.field.judgeModel")}</label>
-                <input
-                  className="input mono"
-                  value={judgeModel}
-                  data-testid="train-param-judgeModel"
-                  onChange={(e) => setJudgeModel(e.target.value)}
-                />
-                <span className="mono dim" style={{ fontSize: 10.5 }}>
-                  {t("skillLab.train.wizard.hint.judgeModel")}
-                </span>
-              </div>
+            <div style={{ marginTop: 8 }}>
+              <BackendModelFields
+                status={status}
+                idPrefix="train"
+                backend={targetBackend}
+                setBackend={setTargetBackend}
+                targetModel={targetModel}
+                setTargetModel={setTargetModel}
+                judgeModel={judgeModel}
+                setJudgeModel={setJudgeModel}
+              />
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
               {numberField("workers", workers, setWorkers, 1, 8)}

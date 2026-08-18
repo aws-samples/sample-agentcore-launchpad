@@ -45,6 +45,7 @@ def test_vendored_tree_shape():
         "configs/_base_/default.yaml",
         "configs/skilleval/default.yaml",
         "deploy/agentcore/Dockerfile",
+        "deploy/agentcore/codex-config.toml",
     ):
         assert (VENDOR_ROOT / rel).is_file(), f"missing {rel}"
     # Subprocess runs bytecode-compile the vendored tree on disk (that's fine —
@@ -61,6 +62,9 @@ def test_worker_cli_version_pin_matches_the_dockerfile():
     pin = re.search(r"^ARG CLAUDE_CLI_VERSION=(\S+)", dockerfile, re.MULTILINE)
     assert pin, "the worker Dockerfile lost its CLAUDE_CLI_VERSION pin"
     assert pin.group(1) == get_settings().skill_lab_worker_cli_version
+    codex_pin = re.search(r"^ARG CODEX_CLI_VERSION=(\S+)", dockerfile, re.MULTILINE)
+    assert codex_pin, "the worker Dockerfile lost its CODEX_CLI_VERSION pin"
+    assert codex_pin.group(1) == get_settings().skill_lab_worker_codex_version
 
 
 def test_skill_lab_stage_registered_but_not_required():
@@ -105,9 +109,20 @@ def fake_vendor(tmp_path, monkeypatch):
     (pkg / "model" / "worker.py").write_text("WORKER = 1\n")
     (pkg / "__pycache__").mkdir()
     (pkg / "__pycache__" / "junk.pyc").write_bytes(b"x")
+    codex_config = tmp_path / "codex-config.toml"
+    codex_config.write_text('model = "openai.gpt-5.6-sol"\n')
     monkeypatch.setattr(worker_build, "WORKER_DOCKERFILE", dockerfile)
     monkeypatch.setattr(worker_build, "BUILDSPEC_TEMPLATE", buildspec)
     monkeypatch.setattr(worker_build, "WORKER_PACKAGE_DIR", pkg)
+    monkeypatch.setattr(worker_build, "WORKER_CODEX_CONFIG", codex_config)
+    # Keep the context independent of this host's real ~/.codex catalog.
+    monkeypatch.setattr(
+        worker_build,
+        "get_settings",
+        lambda: get_settings().model_copy(
+            update={"skill_lab_codex_catalog_path": str(tmp_path / "bedrock-models.json")}
+        ),
+    )
     return tmp_path
 
 
@@ -125,6 +140,24 @@ def test_assemble_worker_context_excludes_pycache(fake_vendor, tmp_path):
     assert (target / "buildspec.yml").is_file()
     assert (target / "skillopt" / "model" / "worker.py").is_file()
     assert not (target / "skillopt" / "__pycache__").exists()
+
+
+def test_context_carries_codex_home_with_host_catalog(fake_vendor, tmp_path):
+    """codex-home is assembled (config from the vendored tree, catalog from the
+    host path) and both blobs are part of the content hash — a catalog change
+    must roll the image tag or the runtime keeps a stale codex config."""
+    without_catalog = worker_build.context_content_hash()
+    target = worker_build.assemble_worker_context(tmp_path / "ctx")
+    assert (target / "codex-home" / "config.toml").read_text().startswith("model = ")
+    # No host catalog → upstream build_and_push.sh's `{}` fallback.
+    catalog = target / "codex-home" / "model-catalogs" / "bedrock-models.json"
+    assert catalog.read_bytes() == b"{}"
+
+    (fake_vendor / "bedrock-models.json").write_text('{"models": []}')
+    assert worker_build.context_content_hash() != without_catalog
+    target = worker_build.assemble_worker_context(tmp_path / "ctx2")
+    catalog = target / "codex-home" / "model-catalogs" / "bedrock-models.json"
+    assert catalog.read_bytes() == b'{"models": []}'
 
 
 class _FakeEcr:

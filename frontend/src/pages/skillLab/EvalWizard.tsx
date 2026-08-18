@@ -9,10 +9,12 @@ import type {
   SkillLabJobBody,
   SkillLabJobInfo,
   SkillLabStatus,
+  SkillLabTargetBackend,
   SkillLabTasksetInfo,
 } from "../../lib/api";
 import { api, ApiError } from "../../lib/api";
 import type { RegistryRecord } from "../Registry";
+import { BackendModelFields } from "./BackendModelFields";
 
 const SPLIT_PREFERENCE = ["test", "val", "train"] as const;
 
@@ -59,6 +61,7 @@ export function EvalWizard({
   const [tasksetId, setTasksetId] = useState("");
   const [split, setSplit] = useState("");
 
+  const [targetBackend, setTargetBackend] = useState<SkillLabTargetBackend>("claude_code_exec");
   const [targetModel, setTargetModel] = useState("");
   const [judgeModel, setJudgeModel] = useState("");
   const [workers, setWorkers] = useState(2);
@@ -171,6 +174,7 @@ export function EvalWizard({
         taskset_id: tasksetId,
         ...(split ? { split } : {}),
         params: {
+          target_backend: targetBackend,
           target_model: targetModel.trim(),
           judge_model: judgeModel.trim(),
           workers,
@@ -415,32 +419,16 @@ export function EvalWizard({
         )}
       </div>
 
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <div className="field" style={{ flex: 1, minWidth: 240 }}>
-          <label>{t("skillLab.eval.wizard.field.targetModel")}</label>
-          <input
-            className="input mono"
-            value={targetModel}
-            data-testid="eval-param-targetModel"
-            onChange={(e) => setTargetModel(e.target.value)}
-          />
-          <span className="mono dim" style={{ fontSize: 10.5 }}>
-            {t("skillLab.eval.wizard.hint.targetModel")}
-          </span>
-        </div>
-        <div className="field" style={{ flex: 1, minWidth: 240 }}>
-          <label>{t("skillLab.eval.wizard.field.judgeModel")}</label>
-          <input
-            className="input mono"
-            value={judgeModel}
-            data-testid="eval-param-judgeModel"
-            onChange={(e) => setJudgeModel(e.target.value)}
-          />
-          <span className="mono dim" style={{ fontSize: 10.5 }}>
-            {t("skillLab.eval.wizard.hint.judgeModel")}
-          </span>
-        </div>
-      </div>
+      <BackendModelFields
+        status={status}
+        idPrefix="eval"
+        backend={targetBackend}
+        setBackend={setTargetBackend}
+        targetModel={targetModel}
+        setTargetModel={setTargetModel}
+        judgeModel={judgeModel}
+        setJudgeModel={setJudgeModel}
+      />
 
       <div className="field">
         <button

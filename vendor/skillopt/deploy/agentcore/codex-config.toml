@@ -1,0 +1,22 @@
+# Codex CLI config baked into the Skill Lab worker image (Launchpad variant of
+# upstream deploy/agentcore/codex-config.toml — see ../../LAUNCHPAD_DEVIATIONS.md).
+# Bedrock-direct: SigV4 credentials come from the runtime execution role; no
+# API key. The harness passes the model per invocation via `-m`; this default
+# applies when the operator leaves the target model blank upstream — Launchpad
+# always passes an explicit model, so it is a safety net only.
+#
+# The model catalog file is staged into the build context from the backend
+# host's ~/.codex/model-catalogs/ (never committed — it carries proprietary
+# model instructions); an empty `{}` catalog is the documented fallback.
+model = "openai.gpt-5.6-sol"
+model_provider = "amazon-bedrock"
+model_catalog_json = "/home/agent/.codex/model-catalogs/bedrock-models.json"
+
+[model_providers.amazon-bedrock.aws]
+region = "us-west-2"
+
+[projects."/mnt/workspace"]
+trust_level = "trusted"
+
+[projects."/tmp"]
+trust_level = "trusted"
