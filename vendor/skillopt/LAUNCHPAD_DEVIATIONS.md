@@ -18,9 +18,18 @@ Vendored subset of https://github.com/xiehust/SkillEvalOpt_Studio
 envs (`envs/*` except `base.py`, `__init__.py`, `skilleval/`), `scheduler/`
 (unused placeholder), `engine/plugin_trainer.py`, `evaluation/plugin_gate.py`,
 `model/{codex_backend,router}.py` (unreferenced by the vendored entry points).
+Also copied (2026-08-18): `data/skilleval_demo/` — the self-authored demo
+skills (`logtriage_skill`, `logtriage_skill_v2`, `report_skill/initial.md`) and
+demo task sets (`logtriage_tasks/`, `report_tasks/`, `xlsx_tasks.json`), seeded
+by `backend/app/skill_lab/samples.py` as registry records + read-only sample
+task sets. Deliberately NOT copied from upstream's sample surface: `ckpt/`
+paper-checkpoint skills (research payloads stay out of this public repo) and
+the benchmark subsets (searchqa/livemath/officeqa — external dataset content;
+upstream itself only commits ID-only manifests for licensing reasons).
+
 Not copied: `skillopt_studio/`, `skillopt_webui/`, `skillopt_sleep*/`, `plugins/`,
-`tests/`, `ckpt/`, `data/`, docs, `scripts/agentcore/` (replaced by Launchpad
-bootstrap).
+`tests/`, `ckpt/`, `data/` (except `data/skilleval_demo/` above), docs,
+`scripts/agentcore/` (replaced by Launchpad bootstrap).
 
 ## Patches
 

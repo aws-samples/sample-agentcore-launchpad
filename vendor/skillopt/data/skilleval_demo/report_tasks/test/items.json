@@ -1,0 +1,29 @@
+[
+  {
+    "id": "test_revenue_sum",
+    "task_type": "sum",
+    "question": "把 data/revenue.csv 转换成 report.xlsx：包含全部数据和一个汇总行，表头加粗。最后在回答中报告合计金额。",
+    "rubric": "验收标准共 5 条，每缺一条 score 扣 0.2，全部满足才 pass=true：(1) 工作区出现 report.xlsx；(2) 回答报告的合计为 2000；(3) 合计必须由 SUM 公式计算而非硬编码数值，回答需说明；(4) 文件包含名为 Metadata 的工作表，其中写入 generated_by=skill-demo 和 source_rows=8，回答需确认；(5) 汇总行标签必须为全大写 TOTAL，回答需确认。",
+    "files": {
+      "data/revenue.csv": "month,amount\n2026-01,150\n2026-02,200\n2026-03,250\n2026-04,300\n2026-05,180\n2026-06,220\n2026-07,350\n2026-08,350\n"
+    }
+  },
+  {
+    "id": "test_region_sumif",
+    "task_type": "sumif",
+    "question": "基于 data/region.csv 制作 summary.xlsx：按 region 汇总 sales 并附总计行。最后在回答中报告各区域小计和总计。",
+    "rubric": "验收标准共 5 条，每缺一条 score 扣 0.2，全部满足才 pass=true：(1) 工作区出现 summary.xlsx；(2) 回答报告的分类小计为 North=500、South=380、East=320、总计 1200；(3) 分类汇总必须用 SUMIF（或等效公式）而非硬编码，回答需说明；(4) 文件包含名为 Metadata 的工作表，其中写入 generated_by=skill-demo 和 source_rows=5，回答需确认；(5) 总计行标签必须为全大写 TOTAL，回答需确认。",
+    "files": {
+      "data/region.csv": "id,region,sales\n1,North,200\n2,South,180\n3,East,320\n4,North,300\n5,South,200\n"
+    }
+  },
+  {
+    "id": "test_products_avg",
+    "task_type": "avg",
+    "question": "把 data/products.csv 转换成 report.xlsx：包含全部数据和一个平均价格行。最后在回答中报告平均价格。",
+    "rubric": "验收标准共 5 条，每缺一条 score 扣 0.2，全部满足才 pass=true：(1) 工作区出现 report.xlsx；(2) 回答报告的平均值为 15；(3) 平均值必须由 AVERAGE 公式计算而非硬编码，回答需说明；(4) 文件包含名为 Metadata 的工作表，其中写入 generated_by=skill-demo 和 source_rows=6，回答需确认；(5) 平均行标签必须为全大写 AVERAGE，回答需确认。",
+    "files": {
+      "data/products.csv": "sku,price\np1,10\np2,12\np3,14\np4,16\np5,18\np6,20\n"
+    }
+  }
+]

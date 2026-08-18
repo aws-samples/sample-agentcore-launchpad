@@ -67,6 +67,9 @@ class SkillLabTaskset(Base):
     name: Mapped[str] = mapped_column(String(96))
     description: Mapped[str] = mapped_column(Text, default="")
     mode: Mapped[str] = mapped_column(String(8))  # single | split
+    # Built-in demo sample (seeded from vendor/skillopt/data/skilleval_demo by
+    # the skill-lab bootstrap stage): read-only — update/delete refuse with 409.
+    sample: Mapped[bool] = mapped_column(default=False)
     # {"tasks": n} for single, {"train": n, "val": n, "test": n?} for split
     counts: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

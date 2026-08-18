@@ -325,7 +325,7 @@ export function TaskgenPanel({
         <div className="field" style={{ flex: 1, minWidth: 240 }}>
           <label>{t("skillLab.backend.field")}</label>
           <select
-            className="fsel"
+            className="input"
             value={backend}
             data-testid="taskgen-param-targetBackend"
             onChange={(e) => applyBackend(e.target.value as SkillLabTargetBackend)}
@@ -334,7 +334,7 @@ export function TaskgenPanel({
               ? status.target_backends
               : (Object.keys(BACKEND_LABELS) as SkillLabTargetBackend[])
             ).map((option) => (
-              <option key={option} value={option}>
+              <option key={option} value={option} style={{ background: "#141816" }}>
                 {BACKEND_LABELS[option] ?? option}
               </option>
             ))}
@@ -379,14 +379,15 @@ export function TaskgenPanel({
         <div className="field" style={{ flex: 1, minWidth: 240 }}>
           <label>{t("skillLab.taskgen.field.expand")}</label>
           <select
-            className="fsel"
+            className="input"
             value={expandId}
             data-testid="taskgen-expand-select"
             onChange={(e) => setExpandId(e.target.value)}
           >
-            <option value="">{t("skillLab.taskgen.expand.none")}</option>
-            {tasksets.map((row) => (
-              <option key={row.id} value={row.id}>
+            <option value="" style={{ background: "#141816" }}>{t("skillLab.taskgen.expand.none")}</option>
+            {/* samples are read-only — expanding one would 409 at submit */}
+            {tasksets.filter((row) => !row.sample).map((row) => (
+              <option key={row.id} value={row.id} style={{ background: "#141816" }}>
                 {row.name} ({row.mode})
               </option>
             ))}
@@ -399,13 +400,13 @@ export function TaskgenPanel({
           <div className="field" style={{ minWidth: 160 }}>
             <label>{t("skillLab.taskgen.field.targetSplit")}</label>
             <select
-              className="fsel"
+              className="input"
               value={targetSplit}
               data-testid="taskgen-target-split"
               onChange={(e) => setTargetSplit(e.target.value)}
             >
               {splitOptions.map((option) => (
-                <option key={option} value={option}>
+                <option key={option} value={option} style={{ background: "#141816" }}>
                   {option}
                 </option>
               ))}

@@ -1,0 +1,29 @@
+[
+  {
+    "id": "csv_to_formatted_xlsx",
+    "task_type": "create",
+    "question": "把工作目录里的 data/sales.csv 转换成一个专业格式的 Excel 文件 report.xlsx：包含全部 12 个月的数据，并在数据下方添加一行 Total，Total 的金额必须用 SUM 公式计算（不允许硬编码数值），表头加粗。最后在回答中给出 Total 的数值。",
+    "rubric": "验收标准：(1) 工作区中必须出现 report.xlsx 文件；(2) 回答中给出的 Total 数值必须等于 1350；(3) 回答必须说明 Total 行使用的是 SUM 公式而不是硬编码数值；(4) 回答应体现执行了公式重算或验证步骤（如运行 recalc 脚本或用 LibreOffice/openpyxl 验证），且报告无公式错误。四条全满足记 pass=true；每缺一条 score 扣 0.25。",
+    "files": {
+      "data/sales.csv": "month,amount\n2026-01,100\n2026-02,120\n2026-03,90\n2026-04,110\n2026-05,130\n2026-06,95\n2026-07,105\n2026-08,115\n2026-09,125\n2026-10,85\n2026-11,140\n2026-12,135\n"
+    }
+  },
+  {
+    "id": "messy_csv_cleanup",
+    "task_type": "clean",
+    "question": "工作目录里的 data/messy.csv 是一个从老系统导出的脏文件：有注释行、空行、垃圾行，真正的表头也不在第一行。请把它清洗成一个规范的 Excel 文件 clean.xlsx（正确的表头 + 只保留有效数据行），并在回答中说明你保留了哪几行有效数据、删掉了哪些内容。",
+    "rubric": "验收标准：(1) 工作区中必须出现 clean.xlsx 文件；(2) 回答必须准确指出有效数据行恰好是 3 行：Widget、Gadget、Doohickey；(3) 回答必须说明删除的内容包括注释行、空行和垃圾行（GARBAGE ROW ###）；(4) 表头应为 product/qty/price。四条全满足记 pass=true；每缺一条 score 扣 0.25。",
+    "files": {
+      "data/messy.csv": "# exported 2026-07-02 by legacy tool\n,,\nproduct,qty,price\nWidget,2,9.5\n,,\nGadget,3,15\nGARBAGE ROW ###\nDoohickey,5,4\n,,\n"
+    }
+  },
+  {
+    "id": "category_subtotals",
+    "task_type": "analyze",
+    "question": "基于工作目录里的 data/orders.csv 制作 summary.xlsx：一个 Summary 工作表，按 category 汇总 amount（要求用公式如 SUMIF 完成汇总，不允许硬编码结果），并附总计行。最后在回答中报告每个 category 的小计和总计。",
+    "rubric": "验收标准：(1) 工作区中必须出现 summary.xlsx；(2) 回答报告的小计必须为 A=350、B=480、C=420；(3) 总计必须为 1250；(4) 回答必须说明汇总使用了公式（SUMIF 或等效）而非硬编码。四条全满足记 pass=true；每缺一条 score 扣 0.25。",
+    "files": {
+      "data/orders.csv": "order_id,category,amount\n1,A,100\n2,B,250\n3,A,50\n4,C,300\n5,B,150\n6,A,200\n7,C,120\n8,B,80\n"
+    }
+  }
+]

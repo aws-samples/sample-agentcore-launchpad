@@ -151,7 +151,10 @@ def _validate_files(files: dict[str, Path], validator_python: str | None) -> Non
 
 
 def _stage_validated(
-    tasks_by_split: dict[str, Any], keys: list[str], validator_python: str | None
+    tasks_by_split: dict[str, Any],
+    keys: list[str],
+    validator_python: str | None,
+    run_validator: bool = True,
 ) -> Path:
     """Write the split files to a staging dir and validate them there.
 
@@ -172,7 +175,8 @@ def _stage_validated(
                 encoding="utf-8",
             )
             files[split] = path
-        _validate_files(files, validator_python)
+        if run_validator:
+            _validate_files(files, validator_python)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
@@ -208,10 +212,24 @@ def taskset_info(row: SkillLabTaskset) -> dict[str, Any]:
         "name": row.name,
         "description": row.description,
         "mode": row.mode,
+        "sample": bool(row.sample),
         "counts": row.counts,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
+
+
+def _reject_sample_write(row: SkillLabTaskset) -> None:
+    """Built-in samples are read-only (upstream semantics): runnable by eval and
+    train, but never edited, expanded, or deleted — a user who wants a variant
+    creates their own set. Bootstrap re-seeds missing samples, so mutability
+    would only create drift between installs."""
+    if row.sample:
+        raise AppError(
+            "skill_lab.sample_readonly",
+            f"task set '{row.name}' is a built-in sample and is read-only",
+            status_code=409,
+        )
 
 
 def list_tasksets(db: Session, workspace_id: str) -> list[dict[str, Any]]:
@@ -239,18 +257,25 @@ def create_taskset(
     mode: str,
     tasks_by_split: dict[str, Any],
     validator_python: str | None = None,
+    sample: bool = False,
+    run_validator: bool = True,
 ) -> dict[str, Any]:
+    """`sample`/`run_validator` are seeding-only knobs (app/skill_lab/samples.py):
+    the router never passes them. Skipping the validator subprocess is safe only
+    for the vendored demo files — a hermetic test runs the real validator over
+    them, and seeding must not depend on the skill-lab venv existing yet."""
     name = (name or "").strip()
     if not name:
         raise _invalid([{"split": "name", "message": "name is required"}])
     keys = _split_keys_for(mode, tasks_by_split)
-    staging = _stage_validated(tasks_by_split, keys, validator_python)
+    staging = _stage_validated(tasks_by_split, keys, validator_python, run_validator)
     try:
         row = SkillLabTaskset(
             workspace_id=workspace_id,
             name=name,
             description=description or "",
             mode=mode,
+            sample=sample,
             counts=_counts(tasks_by_split, keys),
         )
         db.add(row)
@@ -295,6 +320,7 @@ def update_taskset(
     validator_python: str | None = None,
 ) -> dict[str, Any]:
     row = get_row(db, workspace_id, taskset_id)
+    _reject_sample_write(row)
     keys = _split_keys_for(row.mode, tasks_by_split)  # mode is immutable
     if name is not None and not name.strip():
         raise _invalid([{"split": "name", "message": "name is required"}])
@@ -316,6 +342,7 @@ def update_taskset(
 
 def delete_taskset(db: Session, workspace_id: str, taskset_id: str) -> None:
     row = get_row(db, workspace_id, taskset_id)
+    _reject_sample_write(row)
     from app.skill_lab.jobs import taskset_in_use
 
     if taskset_in_use(db, workspace_id, taskset_id):

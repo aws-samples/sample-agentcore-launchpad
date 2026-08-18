@@ -712,14 +712,14 @@ export function SkillLabTasksets() {
           <label>{t("skillLab.tasksets.upload.label")}</label>
           {mode === "split" && (
             <select
-              className="fsel"
+              className="input"
               value={uploadSplit}
               aria-label={t("skillLab.tasksets.upload.targetSplit")}
               style={{ marginBottom: 8 }}
               onChange={(e) => setUploadSplit(e.target.value)}
             >
               {SPLIT_ORDER.map((split) => (
-                <option key={split} value={split}>
+                <option key={split} value={split} style={{ background: "#141816" }}>
                   {split}
                 </option>
               ))}
@@ -827,14 +827,18 @@ export function SkillLabTasksets() {
       title={selected.name}
       sub={`${selected.id} · ${selected.mode}`}
       end={
-        <>
-          <Btn data-testid="taskset-edit" onClick={() => void startEdit(selected)}>
-            {t("skillLab.tasksets.edit")}
-          </Btn>
-          <Btn data-testid="taskset-delete" onClick={() => setConfirmDelete(selected)}>
-            {t("skillLab.tasksets.delete")}
-          </Btn>
-        </>
+        selected.sample ? (
+          <Chip tone="aqua">{t("skillLab.tasksets.sampleChip")}</Chip>
+        ) : (
+          <>
+            <Btn data-testid="taskset-edit" onClick={() => void startEdit(selected)}>
+              {t("skillLab.tasksets.edit")}
+            </Btn>
+            <Btn data-testid="taskset-delete" onClick={() => setConfirmDelete(selected)}>
+              {t("skillLab.tasksets.delete")}
+            </Btn>
+          </>
+        )
       }
       style={{ "--i": 1 } as CSSProperties}
     >
@@ -954,7 +958,15 @@ export function SkillLabTasksets() {
                     background: tsParam === row.id ? "rgba(255,176,0,.045)" : undefined,
                   }}
                 >
-                  <td className="pri">{row.name}</td>
+                  <td className="pri">
+                    {row.name}
+                    {row.sample && (
+                      <>
+                        {" "}
+                        <Chip tone="aqua">{t("skillLab.tasksets.sampleChip")}</Chip>
+                      </>
+                    )}
+                  </td>
                   <td>
                     <Chip tone={row.mode === "split" ? "aqua" : "muted"}>
                       {t(`skillLab.tasksets.mode.${row.mode}`)}

@@ -1126,9 +1126,25 @@ def _stage_skill_lab(ctx: BootstrapContext) -> str:
         ctx.log(f"skill lab worker unavailable ({detail}) — Skill Lab stays unprovisioned")
         return f"unavailable · {detail}"
     ctx.record(resources)
+    # Demo samples (vendored logtriage/report demos → registry records + sample
+    # task sets). Same degrade posture: seeding problems must not fail the stage.
+    try:
+        from app.core.db import SessionLocal
+        from app.skill_lab.samples import ensure_skill_lab_samples
+
+        db = SessionLocal()
+        try:
+            samples_detail = ensure_skill_lab_samples(
+                db, ctx.workspace_id, ctx.workspace, log=ctx.log
+            )
+        finally:
+            db.close()
+    except Exception as exc:  # noqa: BLE001 — optional demo content only
+        ctx.log(f"sample seeding skipped ({type(exc).__name__}: {exc})")
+        samples_detail = "samples skipped"
     return (
         f"{skill_lab_infra.WORKER_RUNTIME_NAME} · "
-        f"{resources['skill_lab_worker_image_tag']}"
+        f"{resources['skill_lab_worker_image_tag']} · {samples_detail}"
     )
 
 

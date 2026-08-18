@@ -1,0 +1,29 @@
+[
+  {
+    "id": "val_expense_sum",
+    "task_type": "sum",
+    "question": "把 data/expenses.csv 转换成 report.xlsx：包含全部数据和一个汇总行，表头加粗。最后在回答中报告合计金额。",
+    "rubric": "验收标准共 5 条，每缺一条 score 扣 0.2，全部满足才 pass=true：(1) 工作区出现 report.xlsx；(2) 回答报告的合计为 1250；(3) 合计必须由 SUM 公式计算而非硬编码数值，回答需说明；(4) 文件包含名为 Metadata 的工作表，其中写入 generated_by=skill-demo 和 source_rows=5，回答需确认；(5) 汇总行标签必须为全大写 TOTAL，回答需确认。",
+    "files": {
+      "data/expenses.csv": "item,amount\nrent,200\ntravel,300\nmeals,150\nequip,250\ncloud,350\n"
+    }
+  },
+  {
+    "id": "val_dept_sumif",
+    "task_type": "sumif",
+    "question": "基于 data/dept.csv 制作 summary.xlsx：按 dept 汇总 cost 并附总计行。最后在回答中报告各部门小计和总计。",
+    "rubric": "验收标准共 5 条，每缺一条 score 扣 0.2，全部满足才 pass=true：(1) 工作区出现 summary.xlsx；(2) 回答报告的分类小计为 X=400、Y=350、总计 750；(3) 分类汇总必须用 SUMIF（或等效公式）而非硬编码，回答需说明；(4) 文件包含名为 Metadata 的工作表，其中写入 generated_by=skill-demo 和 source_rows=4，回答需确认；(5) 总计行标签必须为全大写 TOTAL，回答需确认。",
+    "files": {
+      "data/dept.csv": "id,dept,cost\n1,X,150\n2,Y,100\n3,X,250\n4,Y,250\n"
+    }
+  },
+  {
+    "id": "val_metrics_avg",
+    "task_type": "avg",
+    "question": "把 data/metrics.csv 转换成 report.xlsx：包含全部数据和一个平均值行。最后在回答中报告平均值。",
+    "rubric": "验收标准共 5 条，每缺一条 score 扣 0.2，全部满足才 pass=true：(1) 工作区出现 report.xlsx；(2) 回答报告的平均值为 25；(3) 平均值必须由 AVERAGE 公式计算而非硬编码，回答需说明；(4) 文件包含名为 Metadata 的工作表，其中写入 generated_by=skill-demo 和 source_rows=4，回答需确认；(5) 平均行标签必须为全大写 AVERAGE，回答需确认。",
+    "files": {
+      "data/metrics.csv": "day,value\nd1,10\nd2,20\nd3,30\nd4,40\n"
+    }
+  }
+]

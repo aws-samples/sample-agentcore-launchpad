@@ -69,13 +69,13 @@ export function BackendModelFields({
       <div className="field">
         <label>{t("skillLab.backend.field")}</label>
         <select
-          className="fsel"
+          className="input"
           value={backend}
           data-testid={`${idPrefix}-param-targetBackend`}
           onChange={(e) => applyBackend(e.target.value as SkillLabTargetBackend)}
         >
           {backends.map((option) => (
-            <option key={option} value={option}>
+            <option key={option} value={option} style={{ background: "#141816" }}>
               {BACKEND_LABELS[option] ?? option}
             </option>
           ))}

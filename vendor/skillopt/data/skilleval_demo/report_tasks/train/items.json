@@ -1,0 +1,38 @@
+[
+  {
+    "id": "train_sales_sum",
+    "task_type": "sum",
+    "question": "把 data/sales.csv 转换成 report.xlsx：包含全部数据和一个汇总行，表头加粗。最后在回答中报告合计金额。",
+    "rubric": "验收标准共 5 条，每缺一条 score 扣 0.2，全部满足才 pass=true：(1) 工作区出现 report.xlsx；(2) 回答报告的合计为 690；(3) 合计必须由 SUM 公式计算而非硬编码数值，回答需说明；(4) 文件包含名为 Metadata 的工作表，其中写入 generated_by=skill-demo 和 source_rows=6，回答需确认；(5) 汇总行标签必须为全大写 TOTAL，回答需确认。",
+    "files": {
+      "data/sales.csv": "month,amount\n2026-01,100\n2026-02,120\n2026-03,90\n2026-04,150\n2026-05,110\n2026-06,120\n"
+    }
+  },
+  {
+    "id": "train_category_sumif",
+    "task_type": "sumif",
+    "question": "基于 data/orders.csv 制作 summary.xlsx：按 category 汇总 amount 并附总计行。最后在回答中报告各分类小计和总计。",
+    "rubric": "验收标准共 5 条，每缺一条 score 扣 0.2，全部满足才 pass=true：(1) 工作区出现 summary.xlsx；(2) 回答报告的分类小计为 A=300、B=450、总计 750；(3) 分类汇总必须用 SUMIF（或等效公式）而非硬编码，回答需说明；(4) 文件包含名为 Metadata 的工作表，其中写入 generated_by=skill-demo 和 source_rows=6，回答需确认；(5) 总计行标签必须为全大写 TOTAL，回答需确认。",
+    "files": {
+      "data/orders.csv": "order_id,category,amount\n1,A,100\n2,B,150\n3,A,80\n4,B,200\n5,A,120\n6,B,100\n"
+    }
+  },
+  {
+    "id": "train_scores_avg",
+    "task_type": "avg",
+    "question": "把 data/scores.csv 转换成 report.xlsx：包含全部数据和一个平均值行。最后在回答中报告平均分。",
+    "rubric": "验收标准共 5 条，每缺一条 score 扣 0.2，全部满足才 pass=true：(1) 工作区出现 report.xlsx；(2) 回答报告的平均值为 80；(3) 平均值必须由 AVERAGE 公式计算而非硬编码，回答需说明；(4) 文件包含名为 Metadata 的工作表，其中写入 generated_by=skill-demo 和 source_rows=5，回答需确认；(5) 平均行标签必须为全大写 AVERAGE，回答需确认。",
+    "files": {
+      "data/scores.csv": "student,score\ns1,70\ns2,75\ns3,80\ns4,85\ns5,90\n"
+    }
+  },
+  {
+    "id": "train_cleanup_count",
+    "task_type": "clean",
+    "question": "data/messy.csv 是脏数据（有注释行、空行、垃圾行）。清洗成 clean.xlsx（只保留有效数据行）并加一个数量汇总行。最后在回答中报告有效行数与数量合计。",
+    "rubric": "验收标准共 5 条，每缺一条 score 扣 0.2，全部满足才 pass=true：(1) 工作区出现 clean.xlsx；(2) 回答报告有效数据行恰为 4 行、qty 合计为 10；(3) 合计必须由 SUM 公式计算而非硬编码，回答需说明；(4) 文件包含名为 Metadata 的工作表，其中写入 generated_by=skill-demo 和 source_rows=4，回答需确认；(5) 汇总行标签必须为全大写 TOTAL，回答需确认。",
+    "files": {
+      "data/messy.csv": "# legacy export\n,,\nproduct,qty\nalpha,2\n,,\nbeta,3\nJUNK###\ngamma,1\ndelta,4\n,,\n"
+    }
+  }
+]
