@@ -9,6 +9,7 @@ import type {
   SkillLabGateMetric,
   SkillLabJobBody,
   SkillLabJobInfo,
+  SkillLabJudgeMode,
   SkillLabStatus,
   SkillLabTargetBackend,
   SkillLabTasksetInfo,
@@ -86,6 +87,7 @@ export function TrainWizard({
   const [learningRate, setLearningRate] = useState(4);
   const [gateMetric, setGateMetric] = useState<SkillLabGateMetric>("hard");
   const [targetBackend, setTargetBackend] = useState<SkillLabTargetBackend>("claude_code_exec");
+  const [judgeMode, setJudgeMode] = useState<SkillLabJudgeMode>("auto");
   const [targetModel, setTargetModel] = useState("");
   const [judgeModel, setJudgeModel] = useState("");
   const [workers, setWorkers] = useState(2);
@@ -194,6 +196,7 @@ export function TrainWizard({
           target_backend: targetBackend,
           target_model: targetModel.trim(),
           judge_model: judgeModel.trim(),
+          judge_mode: judgeMode,
           epochs,
           learning_rate: learningRate,
           gate_metric: gateMetric,
@@ -489,6 +492,8 @@ export function TrainWizard({
                 setTargetModel={setTargetModel}
                 judgeModel={judgeModel}
                 setJudgeModel={setJudgeModel}
+                judgeMode={judgeMode}
+                setJudgeMode={setJudgeMode}
               />
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>

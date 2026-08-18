@@ -39,6 +39,10 @@ PARAM_BOUNDS = {"workers": (1, 8), "timeout": (60, 3600), "limit": (0, 10000)}
 # to Bedrock with the execution role (claude via CLAUDE_CODE_USE_BEDROCK, codex
 # via its baked amazon-bedrock provider config).
 TARGET_BACKENDS = ("claude_code_exec", "codex_exec")
+# Upstream JUDGE_MODES: auto picks per task (chat for text-only, agentic when
+# artifacts need inspection). The agentic judge runs on the HOST — its claude
+# CLI + bwrap-sandboxed artifact parsers; see design.md for why not the worker.
+JUDGE_MODES = ("auto", "chat", "agentic")
 _BASE_ENV_KEYS = ("PATH", "HOME", "TMPDIR", "LANG", "SSL_CERT_FILE", "SSL_CERT_DIR")
 _EXEC_JOBS_TTL = timedelta(days=7)
 # Isolation profile for the CLI child. `build_spawn_kwargs`' own defaults describe
@@ -54,7 +58,10 @@ _SPAWN_CEILINGS = {
     "studio_exec_backend": "subprocess",
     "studio_exec_user": "",
     "studio_exec_cpu_seconds": 24 * 3600,
-    "studio_exec_memory_mb": 4096,
+    # ≥ the agentic judge's own sandbox cap: its prlimit sets --as=max(6GiB,
+    # scratch*4) on the parser tree, and a child cannot raise a hard limit —
+    # a 4GiB ceiling here EPERM'd the boundary probe (live 2026-08-18).
+    "studio_exec_memory_mb": 8192,
     "studio_exec_max_file_mb": 1024,
 }
 
@@ -82,11 +89,18 @@ def clamp_params(params: dict[str, Any] | None) -> dict[str, Any]:
             else settings.skill_lab_target_model_id
         ),
         "judge_model": settings.skill_lab_judge_model_id,
+        "judge_mode": "auto",
         "workers": 2,
         "timeout": 600,
         "limit": 0,
     }
     merged.update(incoming)
+    if merged["judge_mode"] not in JUDGE_MODES:
+        raise AppError(
+            "skill_lab.bad_params",
+            f"judge_mode must be one of {'/'.join(JUDGE_MODES)}",
+            status_code=422,
+        )
     for key, (low, high) in PARAM_BOUNDS.items():
         try:
             value = int(merged[key])
@@ -232,6 +246,21 @@ def materialize_staged_skill(
     return skill_dir, {"kind": "upload", "name": name, "version": bundle.version}
 
 
+def _judge_exec_flags(params: dict[str, Any]) -> list[str]:
+    """Agentic-judge CLI flags (eval path). One judge model drives both modes:
+    `judge_model` feeds --optimizer_model (chat verdicts) AND --judge_exec_model
+    (the host-side judge agent's claude CLI, Bedrock via the instance role).
+    Only claude_code_exec v1 — a codex judge would couple to host ~/.codex."""
+    if params["judge_mode"] == "chat":
+        return []
+    return [
+        "--judge_exec_backend", "claude_code_exec",
+        "--judge_exec_model", str(params["judge_model"]),
+        "--judge_exec_effort", "low",
+        "--judge_sandbox_command", str(get_settings().skill_lab_judge_sandbox),
+    ]
+
+
 def build_eval_command(
     *, skill_dir: Path, tasks_file: Path, out_dir: Path, params: dict[str, Any]
 ) -> list[str]:
@@ -245,7 +274,8 @@ def build_eval_command(
         "--model", str(params["target_model"]),
         "--optimizer_backend", "bedrock_chat",
         "--optimizer_model", str(params["judge_model"]),
-        "--judge_mode", "chat",
+        "--judge_mode", str(params["judge_mode"]),
+        *_judge_exec_flags(params),
         "--workers", str(params["workers"]),
         "--timeout", str(params["timeout"]),
     ]
@@ -405,6 +435,11 @@ def build_job_env(workspace: WorkspaceContext) -> dict[str, str]:
             #   Bash, no OS sandbox).
             "CODEX_EXEC_FULL_AUTO": "false",
             "CODEX_EXEC_SANDBOX": "danger-full-access",
+            # The agentic judge's claude CLI runs on THIS host (never the
+            # worker) and must take the Bedrock path with the instance role.
+            # Rollout claude runs in the worker with the image's own env, so
+            # this key only affects the judge.
+            "CLAUDE_CODE_USE_BEDROCK": "1",
             "SKILLOPT_AGENTCORE_RUNTIME_ARN": str(
                 workspace.resources.get("skill_lab_worker_runtime_arn") or ""
             ),
@@ -561,7 +596,21 @@ def build_train_config(
         "env": {
             "skill_init": str(skill_dir / "SKILL.md"),
             "skill_dir": str(skill_dir),
-            "judge_mode": "chat",
+            "judge_mode": str(params["judge_mode"]),
+            # adapter kwargs (exact names): the agentic judge's claude CLI +
+            # bwrap-sandboxed parsers run on the host; chat mode ignores these.
+            **(
+                {
+                    "judge_backend": "claude_code_exec",
+                    "judge_model": str(params["judge_model"]),
+                    "judge_effort": "low",
+                    "judge_sandbox_command": str(
+                        get_settings().skill_lab_judge_sandbox
+                    ),
+                }
+                if params["judge_mode"] != "chat"
+                else {}
+            ),
             "workers": int(params["workers"]),
             "timeout": int(params["timeout"]),
             "limit": int(params["limit"]),

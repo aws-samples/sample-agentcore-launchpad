@@ -1479,9 +1479,15 @@ export interface SkillLabStatus {
   default_codex_target_model: string;
   /** exec backends baked into the worker image */
   target_backends: SkillLabTargetBackend[];
+  judge_modes: SkillLabJudgeMode[];
+  /** host-side sandbox launcher present — without it, auto/agentic runs fail
+   *  closed on binary-artifact tasks (text-only tasks still judge fine) */
+  agentic_judge_ready: boolean;
 }
 
 export type SkillLabTargetBackend = "claude_code_exec" | "codex_exec";
+/** auto = per task (chat for text-only, agentic when artifacts need inspection) */
+export type SkillLabJudgeMode = "auto" | "chat" | "agentic";
 
 export type SkillLabTasksetMode = "single" | "split";
 
@@ -1558,6 +1564,8 @@ export interface SkillLabJobParams {
   target_backend?: SkillLabTargetBackend;
   target_model: string;
   judge_model: string;
+  /** eval/train: how verdicts are produced (default auto) */
+  judge_mode?: SkillLabJudgeMode;
   /** taskgen only: the generation agent's model (no judge/target split) */
   model?: string;
   /** taskgen only: how many tasks to author (1-30) */
