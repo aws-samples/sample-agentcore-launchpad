@@ -1472,6 +1472,9 @@ export interface SkillLabStatus {
   /** workspace resource keys the exec worker still needs */
   missing: string[];
   venv_ready: boolean;
+  /** platform defaults a job runs with when its params omit the models */
+  default_target_model: string;
+  default_judge_model: string;
 }
 
 export type SkillLabTasksetMode = "single" | "split";
@@ -1519,6 +1522,102 @@ export interface SkillLabTasksetIssue {
   split: string;
   message: string;
 }
+
+export type SkillLabJobStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
+/** Where the evaluated skill came from; `record_id` only on registry sources. */
+export interface SkillLabSkillSource {
+  kind: "registry" | "upload";
+  name: string;
+  record_id?: string;
+  version?: string;
+}
+
+export interface SkillLabJobParams {
+  target_model: string;
+  judge_model: string;
+  workers: number;
+  timeout: number;
+  limit: number;
+}
+
+export interface SkillLabJobInfo {
+  id: string;
+  type: "eval" | "train";
+  status: SkillLabJobStatus;
+  /** 0 unless the job is still waiting behind another one in the queue. */
+  queue_position: number;
+  /** Live phrase derived from the CLI log tail ("rollout 3 tasks"); never stored. */
+  progress: string;
+  skill_source: SkillLabSkillSource | null;
+  taskset_id: string;
+  taskset_name: string;
+  /** "" for single-mode task sets. */
+  split: string;
+  params: SkillLabJobParams;
+  error: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+/** Body for `POST /api/skill-lab/jobs`; params fall back to platform defaults. */
+export interface SkillLabJobBody {
+  type: "eval";
+  skill_source:
+    | { kind: "registry"; record_id: string }
+    | { kind: "upload"; staging_id: string; index: number };
+  taskset_id: string;
+  split?: string;
+  params?: Partial<SkillLabJobParams>;
+}
+
+/**
+ * One judged task. `score_valid === false` marks an infrastructure failure (the
+ * rollout or the judge never produced a verdict) — those rows are counted as
+ * `invalid` and excluded from the pass-rate denominator, never scored as zero.
+ */
+export interface SkillLabResultRow {
+  id: string;
+  task_type: string | null;
+  hard: number | null;
+  soft: number | null;
+  score_valid: boolean | null;
+  duration_s: number | null;
+  judge_status: string | null;
+  judge_reason: string | null;
+  judge_error: string | null;
+  error: string | null;
+  usage: Record<string, unknown> | null;
+  judge_usage: Record<string, unknown> | null;
+  /** Excerpted server-side. */
+  response: string;
+  artifacts: { path: string | null; size: number | null }[];
+}
+
+export interface SkillLabJobResults {
+  summary: {
+    tasks: number;
+    passed: number;
+    invalid: number;
+    pass_rate: number;
+    soft_mean: number;
+    duration_s: number;
+  };
+  rows: SkillLabResultRow[];
+}
+
+/** `GET /jobs/{id}/artifacts` returns a directory listing or one file's body. */
+export type SkillLabArtifactListing =
+  | { kind: "dir"; path: string; dirs: string[]; files: { name: string; size: number }[] }
+  | { kind: "text"; path: string; size: number; truncated: boolean; content: string }
+  | { kind: "binary"; path: string; size: number };
 
 export const api = {
   authStatus: () => request<AuthStatus>("/api/auth/status"),
@@ -1988,4 +2087,47 @@ export const api = {
     request<{ ok: boolean }>(`/api/skill-lab/tasksets/${encodeURIComponent(id)}`, {
       method: "DELETE",
     }),
+  skillLabJobs: (type?: "eval" | "train") =>
+    request<SkillLabJobInfo[]>(`/api/skill-lab/jobs${type ? `?type=${type}` : ""}`),
+  skillLabJobCreate: (body: SkillLabJobBody) =>
+    request<SkillLabJobInfo>("/api/skill-lab/jobs", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  skillLabJobGet: (id: string) =>
+    request<SkillLabJobInfo>(`/api/skill-lab/jobs/${encodeURIComponent(id)}`),
+  skillLabJobCancel: (id: string) =>
+    request<SkillLabJobInfo>(`/api/skill-lab/jobs/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+    }),
+  skillLabJobDelete: (id: string) =>
+    request<{ ok: boolean }>(`/api/skill-lab/jobs/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  /**
+   * Byte-offset tail: append `content`, then poll again with `next_offset`.
+   * `eof: false` means the server capped the chunk — keep polling to catch up.
+   */
+  skillLabJobLog: (id: string, offset = 0) =>
+    request<{ content: string; next_offset: number; eof: boolean }>(
+      `/api/skill-lab/jobs/${encodeURIComponent(id)}/log?offset=${offset}`,
+    ),
+  skillLabJobResults: (id: string) =>
+    request<SkillLabJobResults>(`/api/skill-lab/jobs/${encodeURIComponent(id)}/results`),
+  skillLabJobArtifacts: (id: string, path = "") =>
+    request<SkillLabArtifactListing>(
+      `/api/skill-lab/jobs/${encodeURIComponent(id)}/artifacts?path=${encodeURIComponent(path)}`,
+    ),
+  /**
+   * Raw artifact bytes. Fetched (not linked): an `<a href>` navigation skips the
+   * `window.fetch` wrapper that stamps `X-Workspace`, so the backend would look
+   * the job up in the fallback workspace and 404 for everyone whose selection is
+   * not the default one.
+   */
+  skillLabJobArtifactRaw: async (id: string, path: string) => {
+    const url = `/api/skill-lab/jobs/${encodeURIComponent(id)}/artifacts/raw?path=${encodeURIComponent(path)}`;
+    const res = await fetch(url);
+    if (!res.ok) return parseResponse<never>(url, res);
+    return res.blob();
+  },
 };

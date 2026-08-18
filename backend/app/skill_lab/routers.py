@@ -6,12 +6,16 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.db import get_db
+from app.core.errors import AppError
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.skill_lab import artifacts as artifacts_svc
+from app.skill_lab import jobs as jobs_svc
 from app.skill_lab import tasksets as svc
 
 router = APIRouter(prefix="/api/skill-lab", tags=["skill-lab"])
@@ -41,11 +45,16 @@ def skill_lab_status(ws: WorkspaceScope = Depends(require_workspace)) -> dict[st
     """Provisioning state for the page banner: the worker keys are deliberately
     optional resources (a workspace bootstrapped before this feature has none)."""
     resources = ws.context.resources
+    settings = get_settings()
     missing = [key for key in WORKER_RESOURCE_KEYS if not resources.get(key)]
     return {
         "provisioned": not missing,
         "missing": missing,
-        "venv_ready": Path(get_settings().skill_lab_python).exists(),
+        "venv_ready": Path(settings.skill_lab_python).exists(),
+        # What a job runs with when its params omit the models — the wizard
+        # prefills these so it can't drift from an operator's config override.
+        "default_target_model": settings.skill_lab_target_model_id,
+        "default_judge_model": settings.skill_lab_judge_model_id,
     }
 
 
@@ -108,3 +117,125 @@ def delete_taskset(
 ) -> dict[str, Any]:
     svc.delete_taskset(db, ws.id, taskset_id)
     return {"ok": True}
+
+
+# ── jobs ───────────────────────────────────────────────────────────────────
+
+
+class JobCreate(BaseModel):
+    type: str = "eval"  # train arrives in the next slice
+    skill_source: dict[str, Any]
+    taskset_id: str
+    split: str | None = None
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.get("/jobs")
+def list_jobs(
+    type: str | None = None,
+    ws: WorkspaceScope = Depends(require_workspace),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    return jobs_svc.list_jobs(db, ws.id, type_filter=type)
+
+
+@router.post("/jobs", status_code=201)
+def create_job(
+    body: JobCreate,
+    ws: WorkspaceScope = Depends(require_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    if body.type != "eval":
+        raise AppError(
+            "skill_lab.bad_params",
+            "only type='eval' jobs are supported (training arrives in the next slice)",
+            status_code=422,
+        )
+    return jobs_svc.submit_eval_job(
+        db,
+        ws.id,
+        ws.context,
+        skill_source=body.skill_source,
+        taskset_id=body.taskset_id,
+        split=body.split,
+        params=body.params,
+    )
+
+
+@router.get("/jobs/{job_id}")
+def get_job(
+    job_id: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return jobs_svc.job_out(jobs_svc.get_job(db, ws.id, job_id))
+
+
+@router.post("/jobs/{job_id}/cancel")
+def cancel_job(
+    job_id: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return jobs_svc.cancel_job(db, ws.id, job_id)
+
+
+@router.delete("/jobs/{job_id}")
+def delete_job(
+    job_id: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    jobs_svc.delete_job(db, ws.id, job_id)
+    return {"ok": True}
+
+
+@router.get("/jobs/{job_id}/log")
+def job_log(
+    job_id: str,
+    offset: int = 0,
+    ws: WorkspaceScope = Depends(require_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    jobs_svc.get_job(db, ws.id, job_id)  # workspace ownership gate
+    return artifacts_svc.read_log(job_id, offset)
+
+
+@router.get("/jobs/{job_id}/results")
+def job_results(
+    job_id: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    row = jobs_svc.get_job(db, ws.id, job_id)
+    results = artifacts_svc.eval_results(job_id)
+    if results is None:
+        raise AppError(
+            "skill_lab.results_pending",
+            f"results not available yet (job status: {row.status})",
+            status_code=404,
+        )
+    return results
+
+
+@router.get("/jobs/{job_id}/artifacts")
+def job_artifacts(
+    job_id: str,
+    path: str = "",
+    ws: WorkspaceScope = Depends(require_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    jobs_svc.get_job(db, ws.id, job_id)
+    return artifacts_svc.list_artifacts(job_id, path)
+
+
+@router.get("/jobs/{job_id}/artifacts/raw")
+def job_artifact_raw(
+    job_id: str,
+    path: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    jobs_svc.get_job(db, ws.id, job_id)
+    target = artifacts_svc.artifact_file(job_id, path)
+    return FileResponse(target, filename=target.name)

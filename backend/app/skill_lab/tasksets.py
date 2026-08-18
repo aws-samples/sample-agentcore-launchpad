@@ -316,6 +316,15 @@ def update_taskset(
 
 def delete_taskset(db: Session, workspace_id: str, taskset_id: str) -> None:
     row = get_row(db, workspace_id, taskset_id)
+    from app.skill_lab.jobs import taskset_in_use
+
+    if taskset_in_use(db, workspace_id, taskset_id):
+        raise AppError(
+            "skill_lab.taskset_in_use",
+            "this task set is referenced by evaluation/training jobs — "
+            "delete those jobs first",
+            status_code=409,
+        )
     directory = taskset_dir(row.id)
     db.delete(row)
     db.commit()

@@ -454,7 +454,8 @@
       "cardUrlCopy": "复制端点",
       "cardUrlCopied": "端点已复制",
       "cardStreaming": "流式",
-      "cardSkills": "技能（{{n}}）"
+      "cardSkills": "技能（{{n}}）",
+      "evaluateInSkillLab": "在 Skill Lab 中评测"
     },
     "confirmDisable": {
       "title": "停用记录",
@@ -1096,8 +1097,139 @@
       "venv": "本机缺少技能实验室解释器,因此任务集也无法保存——执行 `make bootstrap` 创建。"
     },
     "eval": {
-      "title": "评估技能",
-      "sub": "针对任务集对技能做一次性打分"
+      "title": "评测技能",
+      "sub": "针对任务集对技能做一次性评分",
+      "listTitle": "评测作业",
+      "listSub": "每个作业对应一次受管 CLI 运行 —— 点击行可打开",
+      "new": "新建评测",
+      "empty": "暂无评测作业 —— 新建一个",
+      "unknownSkill": "（技能未知）",
+      "progress": "进度",
+      "queuedAt": "队列第 {{n}} 位",
+      "cancel": "取消运行",
+      "cancelRequested": "已发出取消信号 —— 子进程退出后作业才会落到终态。",
+      "delete": "删除作业",
+      "deleted": "作业已删除。",
+      "noResults": "没有写出评审结果 —— 运行在评分阶段前就结束了，请查看下方日志。",
+      "noTasks": "结果文件中没有任务。",
+      "noDetail": "该任务没有记录评审输出。",
+      "invalidNote": "{{count}} 个任务因基础设施原因失败（推理或评审出错），已从通过率中排除 —— 它们不计为失败。",
+      "status": {
+        "queued": "排队中",
+        "running": "运行中",
+        "succeeded": "已成功",
+        "failed": "已失败",
+        "cancelled": "已取消",
+        "interrupted": "已中断"
+      },
+      "col": {
+        "status": "状态",
+        "skill": "技能",
+        "taskset": "任务集",
+        "passRate": "通过率",
+        "created": "创建时间",
+        "task": "任务",
+        "verdict": "判定",
+        "soft": "软分",
+        "taskDuration": "耗时",
+        "artifacts": "文件"
+      },
+      "field": {
+        "skillSource": "来源",
+        "models": "模型",
+        "target": "被测",
+        "judge": "评审",
+        "execution": "执行参数",
+        "elapsed": "已耗时"
+      },
+      "verdict": {
+        "pass": "通过",
+        "fail": "未通过",
+        "invalid": "无效"
+      },
+      "stat": {
+        "passRate": "通过率",
+        "passedOf": "{{scored}} 个计分任务中通过 {{passed}} 个",
+        "softMean": "软分",
+        "softFoot": "部分得分均值，0–1",
+        "invalid": "无效",
+        "invalidFoot": "基础设施失败，已排除",
+        "duration": "推理总耗时",
+        "durationFoot": "{{n}} 个任务合计"
+      },
+      "detail": {
+        "judgeStatus": "judge_status",
+        "judgeReason": "评审理由",
+        "judgeError": "评审错误",
+        "error": "推理错误",
+        "response": "智能体输出（摘录）",
+        "artifacts": "产物文件"
+      },
+      "log": {
+        "title": "CLI 日志",
+        "waiting": "等待输出 …"
+      },
+      "artifacts": {
+        "title": "输出文件",
+        "name": "名称",
+        "size": "大小",
+        "download": "下载",
+        "empty": "该目录为空。",
+        "notADir": "该路径是文件，不是目录。",
+        "truncated": "已在 512 KB 处截断 —— 下载文件查看完整内容",
+        "binary": "二进制文件 —— 请使用下载链接。"
+      },
+      "gone": {
+        "title": "作业不可用",
+        "body": "该作业在当前工作区已不存在 —— 请从上方表格中选择。"
+      },
+      "confirmCancel": {
+        "title": "取消评测",
+        "body": "结束该作业的整个进程组？已下发到云端执行 worker 的推理会继续跑到会话空闲超时（约 5 分钟），因此仍可能产生少量费用。"
+      },
+      "confirmDelete": {
+        "title": "删除评测作业",
+        "body": "删除“{{name}}”的作业？其日志与输出文件将从磁盘移除，且不可恢复。"
+      },
+      "wizard": {
+        "title": "新建评测",
+        "sub": "技能 × 任务集 × 模型 —— 运行发生在执行 worker 上",
+        "blocked": "本机缺少 Skill Lab 执行 worker 或解释器，无法提交作业 —— 请先运行 `make bootstrap`。",
+        "submit": "开始评测",
+        "submitting": "提交中 …",
+        "advanced": "高级选项",
+        "searchSkills": "按名称或描述筛选技能",
+        "noSkills": "当前工作区没有技能记录 —— 请先在 Registry 中注册。",
+        "anyStatus": "任意状态都可评测，包括 DRAFT —— 无需先发布。",
+        "uploadHint": "根目录含 SKILL.md 的 .zip，或每个技能一个子目录。",
+        "uploadNote": "上传的技能包仅用于本次作业 —— 不会创建 Registry 记录，暂存会话 10 分钟后过期。",
+        "inspecting": "正在解析压缩包 …",
+        "noTasksets": "暂无任务集 —— 请先在「任务集」页面创建。",
+        "source": {
+          "registry": "Registry 记录",
+          "upload": "上传 .zip"
+        },
+        "field": {
+          "skill": "被测技能",
+          "taskset": "任务集",
+          "targetModel": "被测模型",
+          "judgeModel": "评审模型",
+          "workers": "并发数",
+          "timeout": "超时（秒）",
+          "limit": "任务上限"
+        },
+        "hint": {
+          "targetModel": "技能在执行 worker 中运行时使用的 Bedrock 模型 id。",
+          "judgeModel": "按 rubric 为每个回答评分的 Bedrock 模型 id。",
+          "workers": "并行推理数，{{min}}–{{max}}",
+          "timeout": "单任务上限，{{min}}–{{max}}",
+          "limit": "只跑前 N 个任务；0 表示整个 split"
+        },
+        "err": {
+          "noSkill": "请选择要评测的技能。",
+          "noTaskset": "请选择用于评测的任务集。"
+        }
+      }
     },
     "train": {
       "title": "优化技能",
@@ -1264,7 +1396,18 @@
     "workspace.assume_role_failed": "无法扮演该工作区的角色——请检查 spoke 角色的信任策略与 external id。",
     "users.invalid_workspaces": "工作区列表必须是已存在的工作区 id。",
     "workspace.cross_account_tool_unavailable": "该工具演示只能使用本部署自身的凭证运行，因此无法指向其他账户的工作区。",
-    "workspace.hub_identity_unavailable": "后端无法读取自身的 AWS 身份，因此无法给出 spoke 角色应当信任的主体。"
+    "workspace.hub_identity_unavailable": "后端无法读取自身的 AWS 身份，因此无法给出 spoke 角色应当信任的主体。",
+    "skill_lab.job_not_found": "未找到该评测作业",
+    "skill_lab.results_pending": "该作业尚未写出评审结果。",
+    "skill_lab.bad_params": "某个运行参数超出取值范围。",
+    "skill_lab.workspace_unsupported": "Skill Lab 作业使用 hub 主机自身的凭证运行，暂不支持跨账号工作区。",
+    "skill_lab.job_not_cancellable": "只有排队中或运行中的作业可以取消。",
+    "skill_lab.job_not_deletable": "只有已结束的作业可以删除 —— 请先取消。",
+    "skill_lab.skill_unreadable": "无法读取所选技能包 —— 请查看作业日志。",
+    "skill_lab.taskset_in_use": "仍有评测作业引用该任务集 —— 请先删除作业。",
+    "skill_lab.artifact_not_found": "该作业中没有此输出文件。",
+    "skill_lab.bad_path": "该输出路径不在作业的输出目录内。",
+    "registry.staging_expired": "上传会话已过期 —— 请重新选择压缩包。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",

@@ -7,12 +7,13 @@ import { Btn, Panel, ViewHead } from "../components";
 import { SkillLabNav } from "../components/SkillLabNav";
 import type { SkillLabStatus } from "../lib/api";
 import { api } from "../lib/api";
+import { SkillLabEval } from "./SkillLabEval";
 import { SkillLabTasksets } from "./SkillLabTasksets";
 
 /**
  * Skill Lab shell: the module head, the `?view=` switcher and the worker
- * provisioning banner. Task sets are the default view; eval and train arrive in
- * the next slices and render a placeholder until then.
+ * provisioning banner. Task sets are the default view; optimization arrives in
+ * the next slice and renders a placeholder until then.
  */
 export function SkillLab() {
   const { t } = useTranslation();
@@ -72,14 +73,16 @@ export function SkillLab() {
         </div>
       )}
 
-      {view === "eval" || view === "train" ? (
+      {view === "eval" ? (
+        <SkillLabEval status={status} />
+      ) : view === "train" ? (
         <Panel
           brk
-          title={t(`skillLab.${view}.title`)}
-          sub={t(`skillLab.${view}.sub`)}
+          title={t("skillLab.train.title")}
+          sub={t("skillLab.train.sub")}
           style={{ "--i": 0 } as CSSProperties}
         >
-          <div className="empty" data-testid={`skill-lab-${view}-placeholder`}>
+          <div className="empty" data-testid="skill-lab-train-placeholder">
             {t("skillLab.comingSoon")}
           </div>
         </Panel>
