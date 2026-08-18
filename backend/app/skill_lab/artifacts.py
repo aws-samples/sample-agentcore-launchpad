@@ -169,6 +169,32 @@ def eval_results(job_id: str) -> dict[str, Any] | None:
     }
 
 
+def taskgen_results(job_id: str) -> dict[str, Any] | None:
+    """Generated tasks + gen_summary from a taskgen job's out/; None until the
+    CLI wrote its validated output. The tasks are returned verbatim (they went
+    through load_tasks in the CLI) so the review UI and the import path see
+    exactly what will be saved."""
+    tasks_path = out_root(job_id) / "generated_tasks.json"
+    if not tasks_path.is_file():
+        return None
+    try:
+        tasks = json.loads(tasks_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(tasks, list):
+        return None
+    summary: dict[str, Any] = {}
+    summary_path = out_root(job_id) / "gen_summary.json"
+    if summary_path.is_file():
+        try:
+            loaded = json.loads(summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                summary = loaded
+        except (OSError, json.JSONDecodeError):
+            summary = {}
+    return {"count": len(tasks), "tasks": tasks, "summary": summary}
+
+
 def _safe_resolve(job_id: str, rel: str) -> Path:
     """Resolve a user-supplied path strictly inside the job's out/ tree.
 

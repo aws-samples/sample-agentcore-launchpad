@@ -12,6 +12,7 @@ import type {
   SkillLabTasksetMode,
 } from "../lib/api";
 import { api, ApiError } from "../lib/api";
+import { TaskgenPanel } from "./skillLab/TaskgenPanel";
 
 const SINGLE_SPLIT = "tasks";
 const SPLIT_ORDER = ["train", "val", "test"] as const;
@@ -124,6 +125,8 @@ export function SkillLabTasksets() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tsParam = searchParams.get("ts");
   const creating = tsParam === "new";
+  // AI generation sub-surface: "new" = wizard, otherwise a taskgen job id.
+  const genParam = searchParams.get("gen");
 
   const [rows, setRows] = useState<SkillLabTasksetInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -220,6 +223,10 @@ export function SkillLabTasksets() {
 
   const select = (id: string | null) => {
     setSearchParams(id ? { view: "tasksets", ts: id } : { view: "tasksets" });
+  };
+
+  const selectGen = (id: string | null) => {
+    setSearchParams(id ? { view: "tasksets", gen: id } : { view: "tasksets" });
   };
 
   const selectedIndex = rows.findIndex((row) => row.id === tsParam);
@@ -891,6 +898,22 @@ export function SkillLabTasksets() {
   // say so — otherwise the page just renders a list and swallows the `ts=` param.
   const staleSelection = !creating && !editing && !loading && tsParam !== null && selected === null;
 
+  // The AI-generation sub-surface replaces the list+detail entirely (it has its
+  // own job list); importing refreshes the sets and jumps to the new one.
+  if (genParam) {
+    return (
+      <TaskgenPanel
+        genParam={genParam}
+        tasksets={rows}
+        onSelectJob={selectGen}
+        onImported={(tasksetId) => {
+          void load();
+          select(tasksetId);
+        }}
+      />
+    );
+  }
+
   return (
     <>
       {!creating && !editing && (
@@ -900,9 +923,14 @@ export function SkillLabTasksets() {
           title={t("skillLab.tasksets.listTitle")}
           sub={t("skillLab.tasksets.listSub")}
           end={
-            <Btn primary data-testid="new-taskset-btn" onClick={() => select("new")}>
-              + {t("skillLab.tasksets.new")}
-            </Btn>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Btn data-testid="taskgen-open-btn" onClick={() => selectGen("new")}>
+                ✳ {t("skillLab.taskgen.open")}
+              </Btn>
+              <Btn primary data-testid="new-taskset-btn" onClick={() => select("new")}>
+                + {t("skillLab.tasksets.new")}
+              </Btn>
+            </div>
           }
           style={{ "--i": 0, marginBottom: 14 } as CSSProperties}
         >

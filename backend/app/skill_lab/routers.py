@@ -126,10 +126,13 @@ def delete_taskset(
 
 
 class JobCreate(BaseModel):
-    type: str = "eval"  # eval | train
+    type: str = "eval"  # eval | train | taskgen
     skill_source: dict[str, Any]
-    taskset_id: str
+    # required for eval/train; optional for taskgen (expansion target only)
+    taskset_id: str | None = None
     split: str | None = None
+    # taskgen expansion only: which split the generated tasks will extend
+    target_split: str | None = None
     params: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -148,6 +151,10 @@ def create_job(
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    if body.type in ("eval", "train") and not body.taskset_id:
+        raise AppError(
+            "skill_lab.bad_params", "taskset_id is required", status_code=422
+        )
     if body.type == "eval":
         return jobs_svc.submit_eval_job(
             db,
@@ -171,6 +178,22 @@ def create_job(
             ws.context,
             skill_source=body.skill_source,
             taskset_id=body.taskset_id,
+            params=body.params,
+        )
+    if body.type == "taskgen":
+        if body.split:
+            raise AppError(
+                "skill_lab.bad_params",
+                "taskgen expansion uses `target_split`, not `split`",
+                status_code=422,
+            )
+        return jobs_svc.submit_taskgen_job(
+            db,
+            ws.id,
+            ws.context,
+            skill_source=body.skill_source,
+            taskset_id=body.taskset_id,
+            target_split=body.target_split,
             params=body.params,
         )
     raise AppError(
@@ -224,14 +247,43 @@ def job_results(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     row = jobs_svc.get_job(db, ws.id, job_id)
-    results = artifacts_svc.eval_results(job_id)
+    results = (
+        artifacts_svc.taskgen_results(job_id)
+        if row.type == "taskgen"
+        else artifacts_svc.eval_results(job_id)
+    )
     if results is None:
         raise AppError(
             "skill_lab.results_pending",
             f"results not available yet (job status: {row.status})",
             status_code=404,
         )
-    return results
+    return {"type": row.type, **results} if row.type == "taskgen" else results
+
+
+class ImportTasksetRequest(BaseModel):
+    name: str
+
+
+@router.post("/jobs/{job_id}/import-taskset", status_code=201)
+def import_taskgen_taskset(
+    job_id: str,
+    body: ImportTasksetRequest,
+    ws: WorkspaceScope = Depends(require_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Save a succeeded taskgen job's reviewed tasks as a new task set."""
+    return jobs_svc.import_taskgen_taskset(db, ws.id, job_id, name=body.name)
+
+
+@router.post("/jobs/{job_id}/apply-expansion")
+def apply_taskgen_expansion(
+    job_id: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Append a succeeded expansion job's tasks to its target task set/split."""
+    return jobs_svc.apply_taskgen_expansion(db, ws.id, job_id)
 
 
 class PublishRequest(BaseModel):

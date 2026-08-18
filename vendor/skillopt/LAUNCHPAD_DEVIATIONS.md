@@ -13,7 +13,7 @@ Vendored subset of https://github.com/xiehust/SkillEvalOpt_Studio
 
 ## Subset (what was copied)
 
-`scripts/{evaluate_skill,train}.py`, `configs/{_base_,skilleval}/`,
+`scripts/{evaluate_skill,train,generate_tasks}.py`, `configs/{_base_,skilleval}/`,
 `deploy/agentcore/{Dockerfile,codex-config.toml}`, and the `skillopt/` package minus: all benchmark
 envs (`envs/*` except `base.py`, `__init__.py`, `skilleval/`), `scheduler/`
 (unused placeholder), `engine/plugin_trainer.py`, `evaluation/plugin_gate.py`,

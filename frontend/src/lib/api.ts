@@ -1540,9 +1540,13 @@ export type SkillLabJobStatus =
 /** Where the evaluated skill came from; `record_id` only on registry sources. */
 export interface SkillLabSkillSource {
   kind: "registry" | "upload";
-  name: string;
+  /** absent on multi-skill taskgen sources (which carry `names` instead) */
+  name?: string;
   record_id?: string;
   version?: string;
+  /** taskgen multi-skill source only */
+  record_ids?: string[];
+  names?: string[];
 }
 
 export type SkillLabGateMetric = "hard" | "soft" | "mixed";
@@ -1552,6 +1556,16 @@ export interface SkillLabJobParams {
   target_backend?: SkillLabTargetBackend;
   target_model: string;
   judge_model: string;
+  /** taskgen only: the generation agent's model (no judge/target split) */
+  model?: string;
+  /** taskgen only: how many tasks to author (1-30) */
+  count?: number;
+  /** taskgen only: free-text steering folded into the generation prompt */
+  guidance?: string;
+  /** taskgen only: present once the operator saved the reviewed output */
+  imported_taskset_id?: string;
+  /** taskgen expansion only: true once applied to the target task set */
+  expanded?: boolean;
   workers: number;
   timeout: number;
   limit: number;
@@ -1565,7 +1579,7 @@ export interface SkillLabJobParams {
 
 export interface SkillLabJobInfo {
   id: string;
-  type: "eval" | "train";
+  type: "eval" | "train" | "taskgen";
   status: SkillLabJobStatus;
   /** 0 unless the job is still waiting behind another one in the queue. */
   queue_position: number;
@@ -1589,13 +1603,25 @@ export interface SkillLabJobInfo {
  * set (single-mode sets are auto-split 4:3:3 by the loader).
  */
 export interface SkillLabJobBody {
-  type: "eval" | "train";
+  type: "eval" | "train" | "taskgen";
   skill_source:
     | { kind: "registry"; record_id: string }
+    | { kind: "registry"; record_ids: string[] }
     | { kind: "upload"; staging_id: string; index: number };
-  taskset_id: string;
+  /** required for eval/train; for taskgen it names the expansion target */
+  taskset_id?: string;
   split?: string;
+  /** taskgen expansion only: the split the generated tasks will extend */
+  target_split?: string;
   params?: Partial<SkillLabJobParams>;
+}
+
+/** `GET /jobs/{id}/results` for a taskgen job (eval jobs return SkillLabJobResults). */
+export interface SkillLabTaskgenResults {
+  type: "taskgen";
+  count: number;
+  tasks: SkillLabTask[];
+  summary: Record<string, unknown>;
 }
 
 /**
@@ -2168,7 +2194,7 @@ export const api = {
     request<{ ok: boolean }>(`/api/skill-lab/tasksets/${encodeURIComponent(id)}`, {
       method: "DELETE",
     }),
-  skillLabJobs: (type?: "eval" | "train") =>
+  skillLabJobs: (type?: "eval" | "train" | "taskgen") =>
     request<SkillLabJobInfo[]>(`/api/skill-lab/jobs${type ? `?type=${type}` : ""}`),
   skillLabJobCreate: (body: SkillLabJobBody) =>
     request<SkillLabJobInfo>("/api/skill-lab/jobs", {
@@ -2195,6 +2221,20 @@ export const api = {
     ),
   skillLabJobResults: (id: string) =>
     request<SkillLabJobResults>(`/api/skill-lab/jobs/${encodeURIComponent(id)}/results`),
+  skillLabTaskgenResults: (id: string) =>
+    request<SkillLabTaskgenResults>(`/api/skill-lab/jobs/${encodeURIComponent(id)}/results`),
+  /** Save a succeeded taskgen job's reviewed tasks as a NEW single-mode task set. */
+  skillLabTaskgenImport: (id: string, name: string) =>
+    request<{ job: SkillLabJobInfo; taskset: SkillLabTasksetInfo }>(
+      `/api/skill-lab/jobs/${encodeURIComponent(id)}/import-taskset`,
+      { method: "POST", body: JSON.stringify({ name }) },
+    ),
+  /** Append a succeeded expansion job's tasks to its target task set/split. */
+  skillLabTaskgenApply: (id: string) =>
+    request<{ job: SkillLabJobInfo; taskset: SkillLabTasksetInfo }>(
+      `/api/skill-lab/jobs/${encodeURIComponent(id)}/apply-expansion`,
+      { method: "POST" },
+    ),
   /** 404 `skill_lab.results_pending` until the first optimizer step lands. */
   skillLabJobTrainSummary: (id: string) =>
     request<SkillLabTrainSummary>(`/api/skill-lab/jobs/${encodeURIComponent(id)}/train-summary`),

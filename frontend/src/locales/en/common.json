@@ -1098,6 +1098,67 @@
       "targetHintCodex": "Codex catalog slug resolved by its amazon-bedrock provider (e.g. openai.gpt-5.6-sol).",
       "judgeHint": "Converse inference-profile id for the LLM judge (us./global. prefix; free text)."
     },
+    "taskgen": {
+      "open": "AI Generate",
+      "close": "Back to task sets",
+      "listTitle": "AI task generation",
+      "listSub": "An exec-backend agent authors skilleval tasks on the AgentCore worker; results are reviewed before anything is saved.",
+      "empty": "No generation jobs yet — start one below.",
+      "target": {
+        "new": "new task set"
+      },
+      "col": {
+        "job": "Job",
+        "skills": "Skills",
+        "target": "Target",
+        "status": "Status",
+        "created": "Created",
+        "id": "ID",
+        "question": "Question",
+        "rubric": "Rubric"
+      },
+      "wizard": {
+        "title": "Generate tasks",
+        "sub": "Pick one skill (or several for a unified multi-skill set), then let the agent author the tasks.",
+        "submit": "Start generation",
+        "submitting": "Starting…"
+      },
+      "field": {
+        "skills": "Skills under evaluation",
+        "count": "Task count",
+        "timeout": "Timeout (s)",
+        "guidance": "Guidance (optional)",
+        "expand": "Expand an existing task set",
+        "targetSplit": "Target split"
+      },
+      "hint": {
+        "skills": "Click to toggle. Multiple skills produce one unified task set with per-skill coverage.",
+        "count": "{{min}}-{{max}}; multi-skill runs floor this at one task per skill.",
+        "timeout": "{{min}}-{{max}} seconds per generation attempt.",
+        "guidance": "e.g. focus on edge cases; tasks should read input files; increasing difficulty",
+        "expand": "Optional: the generated tasks extend this set instead of forming a new one — existing tasks are shown to the agent to avoid duplicates."
+      },
+      "expand": {
+        "none": "— create a new task set —"
+      },
+      "err": {
+        "noSkill": "Select at least one skill."
+      },
+      "job": {
+        "title": "Generation {{id}}",
+        "newSub": "Review the generated tasks, then import them as a new task set.",
+        "expandSub": "Expansion of \"{{name}}\" · target split {{split}}",
+        "cancel": "Cancel"
+      },
+      "review": {
+        "title": "Generated tasks ({{n}}) — review before saving",
+        "name": "New task set name",
+        "import": "Import as task set",
+        "apply": "Append to split {{split}}",
+        "imported": "Imported as task set",
+        "applied": "Applied to \"{{name}}\"."
+      }
+    },
     "unprovisioned": {
       "body": "The Skill Lab exec worker is not provisioned in this workspace — run `make bootstrap` to create it. Evaluation and optimization runs need it; task sets can be authored now.",
       "venv": "The Skill Lab interpreter is missing on this host, so task sets cannot be saved either — `make bootstrap` creates it."
