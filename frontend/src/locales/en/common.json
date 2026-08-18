@@ -1085,7 +1085,6 @@
     "kicker": "// SKILL OPTIMIZATION",
     "title": "Skill Lab",
     "meta": "Evaluate and optimize Agent Skills against your own task sets",
-    "comingSoon": "SHIPS IN THE NEXT SLICE",
     "nav": {
       "label": "Skill Lab sections",
       "tasksets": "TASK SETS",
@@ -1232,8 +1231,125 @@
       }
     },
     "train": {
-      "title": "Optimize a skill",
-      "sub": "iterative SKILL.md optimization behind a held-out gate"
+      "listTitle": "Optimization runs",
+      "listSub": "one training loop per job — click a row to open it",
+      "new": "New optimization",
+      "empty": "No optimization runs yet — start one",
+      "resume": "Resume run",
+      "resumed": "Resumed — training continues from the last completed step.",
+      "stepLabel": "step {{n}}",
+      "epochLabel": "epoch {{n}}",
+      "bestTag": "BEST",
+      "testScores": "Held-out test score: baseline {{baseline}} → final {{final}}",
+      "col": {
+        "step": "Step",
+        "gate": "Gate",
+        "hard": "Val hard",
+        "soft": "Val soft",
+        "skillLen": "SKILL.md",
+        "wall": "Wall time",
+        "best": "Best score"
+      },
+      "gate": {
+        "accept": "ACCEPT",
+        "reject": "REJECT",
+        "skip": "SKIP",
+        "other": "OTHER"
+      },
+      "detail": {
+        "gateReasons": "gate reasons",
+        "excludedFailures": "excluded infrastructure failures"
+      },
+      "curve": {
+        "waiting": "No optimizer step has been recorded yet — the first one lands once the seed skill has been scored.",
+        "hard": "validation pass rate",
+        "soft": "validation soft score",
+        "baseline": "seed baseline · {{score}}",
+        "best": "best step · {{step}}",
+        "steps": "{{n}} recorded step(s)"
+      },
+      "field": {
+        "loop": "Loop",
+        "epochs": "{{n}} epoch(s)",
+        "lr": "{{n}} edits/step",
+        "gate": "gate on {{metric}}",
+        "optimizer": "optimizer"
+      },
+      "stat": {
+        "bestScore": "BEST VAL SCORE",
+        "bestFoot": "reached at step {{step}}",
+        "bestFootNone": "no step has beaten the seed yet",
+        "baseline": "SEED BASELINE",
+        "baselineFoot": "seed skill on the validation split",
+        "steps": "STEPS",
+        "stepsFoot": "{{accepts}} accepted · {{rejects}} rejected · {{skips}} skipped",
+        "wall": "WALL TIME",
+        "wallFoot": "summed over the recorded steps"
+      },
+      "diff": {
+        "title": "SEED → BEST SKILL.md",
+        "changed": "EDITED",
+        "unchanged": "NO ACCEPTED EDIT",
+        "seed": "SEED · skills/skill_v0000.md",
+        "best": "BEST · best_skill.md"
+      },
+      "publish": {
+        "title": "PUBLISH",
+        "record": "Registry record",
+        "action": "Publish to Registry",
+        "confirmTitle": "Publish the optimized skill",
+        "confirmBody": "Write best_skill.md onto “{{name}}” (currently {{version}}) as a bumped minor version. Support files such as scripts/ and references/ are left untouched, and the pre-publish SKILL.md stays in this job's artifacts.",
+        "confirmDraft": "Any record update settles the record back into DRAFT, so it cannot be attached to an agent until it is submitted and approved again.",
+        "reapprove": "re-approve the record after publishing",
+        "reapproveNoop": "This record is {{status}}, so there is nothing to re-approve — the option is ignored.",
+        "done": "{{name}} published as {{version}} (status {{status}}).",
+        "noChange": "Training accepted no edits, so there is nothing to publish.",
+        "uploadSource": "This run started from an uploaded bundle, so there is no Registry record to publish to — download the optimized SKILL.md instead.",
+        "download": "Download best_skill.md",
+        "openRegistry": "Open the Registry"
+      },
+      "confirmCancel": {
+        "title": "Cancel optimization"
+      },
+      "confirmResume": {
+        "title": "Resume optimization",
+        "body": "Re-run the trainer over this job's existing config and output directory. It picks up after the last completed step, so finished steps are not paid for twice."
+      },
+      "confirmDelete": {
+        "title": "Delete optimization job"
+      },
+      "wizard": {
+        "title": "New optimization",
+        "sub": "the trainer edits SKILL.md and keeps a change only when a held-out split improves",
+        "submit": "Start optimization",
+        "uploadNote": "An uploaded bundle is staged for this job only. Publishing the result needs a Registry source — an upload run ends with a downloadable SKILL.md instead.",
+        "autoSplit": "Single task set — the loader auto-splits it 4:3:3 (deterministic): about {{train}} train and {{val}} validation tasks.",
+        "splitCounts": "train {{train}} · val {{val}} · test {{test}}",
+        "estimate": "Roughly {{n}} exec-worker task runs, plus optimizer calls per step — approximate; a real run spends both model tokens and worker time.",
+        "field": {
+          "skill": "Skill to optimize",
+          "epochs": "epochs",
+          "learningRate": "learning rate",
+          "gateMetric": "gate metric",
+          "judgeModel": "Optimizer / judge model",
+          "workers": "workers",
+          "timeout": "timeout (s)",
+          "limit": "limit"
+        },
+        "hint": {
+          "epochs": "passes over the train split, {{min}}–{{max}}",
+          "learningRate": "max edits accepted per step, {{min}}–{{max}}",
+          "gateMetric": "which validation score the gate compares",
+          "judgeModel": "Bedrock model id that judges rollouts and proposes SKILL.md edits.",
+          "workers": "parallel rollouts, {{min}}–{{max}}",
+          "timeout": "per-task ceiling, {{min}}–{{max}}",
+          "limit": "first N tasks per split only; 0 uses all"
+        },
+        "err": {
+          "noSkill": "Pick a skill to optimize.",
+          "noTaskset": "Pick a task set to optimize against."
+        }
+      }
     },
     "tasksets": {
       "listTitle": "All task sets",
@@ -1407,7 +1523,10 @@
     "skill_lab.taskset_in_use": "An evaluation job still references this task set — delete the job first.",
     "skill_lab.artifact_not_found": "No such output file in this job.",
     "skill_lab.bad_path": "That output path is not inside the job's output directory.",
-    "registry.staging_expired": "The upload session expired — pick the archive again."
+    "registry.staging_expired": "The upload session expired — pick the archive again.",
+    "skill_lab.job_not_resumable": "Only an interrupted or failed training job can be resumed — evaluations are cheap, submit them again.",
+    "skill_lab.publish_unsupported": "This job cannot publish a skill — publishing needs a succeeded training run whose skill came from a Registry record.",
+    "skill_lab.publish_no_change": "Training accepted no edits, so there is nothing to publish."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",

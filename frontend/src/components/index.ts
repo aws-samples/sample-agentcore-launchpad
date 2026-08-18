@@ -5,6 +5,7 @@ export { ConfirmDialog } from "./ConfirmDialog";
 export { ToastProvider } from "./Toast";
 export { useToast } from "./toast-context";
 export { DataTable, type Column } from "./DataTable";
+export { DiffPanes } from "./DiffPanes";
 export { Kicker } from "./Kicker";
 export { LaunchSequence } from "./LaunchSequence";
 export { Markdown } from "./Markdown";

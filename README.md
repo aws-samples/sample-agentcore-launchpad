@@ -232,9 +232,10 @@ For terminal-attached development, use `make dev` and stop it with `Ctrl+C`.
 | `backend/` | FastAPI backend — deploy pipeline, invoke chain, evaluation & optimization, SQLite ledger |
 | `backend/app/routers/` | Console `/api` + public `/v1` endpoints |
 | `backend/app/deployer/` | Unified pipeline + per-method stages (harness, zip_runtime, container, studio) |
-| `frontend/` | React console (Vite) — Overview, Create Agent, Registry, Chat, Observability, Evaluation, Governance |
+| `frontend/` | React console (Vite) — Overview, Create Agent, Registry, Chat, Observability, Evaluation, Skill Lab, Governance |
 | `infra/` | AWS CDK app — the `launchpad-base` shared stack |
 | `apps/studio/` | Vendored Strands Studio sub-app (方式C), rewired to the platform pipeline |
+| `vendor/skillopt/` | Vendored SkillOpt subset (skill evaluation & training engine; pin + patches in `LAUNCHPAD_DEVIATIONS.md`) |
 | `start.py`, `stop.sh` | Background local-stack lifecycle, health checks, PID ownership and logs |
 | `scripts/` | `bootstrap.py`, `teardown.py`, `dev.sh`, `verify.sh`, `i18n_check.py` |
 | `config/` | `launchpad.example.yaml` (committed); `launchpad.yaml` (generated, gitignored) |

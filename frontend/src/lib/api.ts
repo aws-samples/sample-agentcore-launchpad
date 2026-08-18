@@ -1539,12 +1539,20 @@ export interface SkillLabSkillSource {
   version?: string;
 }
 
+export type SkillLabGateMetric = "hard" | "soft" | "mixed";
+
 export interface SkillLabJobParams {
   target_model: string;
   judge_model: string;
   workers: number;
   timeout: number;
   limit: number;
+  /** train jobs only */
+  epochs?: number;
+  /** train jobs only: max edits accepted per step ("learning rate") */
+  learning_rate?: number;
+  /** train jobs only: which score the held-out gate compares */
+  gate_metric?: SkillLabGateMetric;
 }
 
 export interface SkillLabJobInfo {
@@ -1567,9 +1575,13 @@ export interface SkillLabJobInfo {
   finished_at: string | null;
 }
 
-/** Body for `POST /api/skill-lab/jobs`; params fall back to platform defaults. */
+/**
+ * Body for `POST /api/skill-lab/jobs`; params fall back to platform defaults.
+ * `split` is an evaluation-only choice — training always uses the whole task
+ * set (single-mode sets are auto-split 4:3:3 by the loader).
+ */
 export interface SkillLabJobBody {
-  type: "eval";
+  type: "eval" | "train";
   skill_source:
     | { kind: "registry"; record_id: string }
     | { kind: "upload"; staging_id: string; index: number };
@@ -1618,6 +1630,67 @@ export type SkillLabArtifactListing =
   | { kind: "dir"; path: string; dirs: string[]; files: { name: string; size: number }[] }
   | { kind: "text"; path: string; size: number; truncated: boolean; content: string }
   | { kind: "binary"; path: string; size: number };
+
+/**
+ * One optimizer step, straight out of the trainer's history record. `action`
+ * carries the gate verdict as a substring ("accept" / "reject" / "skip…"), and
+ * a null `selection_hard` means the step never reached the gate.
+ */
+export interface SkillLabTrainStep {
+  step: number | null;
+  epoch: number | null;
+  action: string | null;
+  selection_hard: number | null;
+  selection_soft: number | null;
+  current_score: number | null;
+  best_score: number | null;
+  best_step: number | null;
+  skill_len: number | null;
+  wall_time_s: number | null;
+  gate_reasons: unknown;
+  excluded_failures: unknown;
+}
+
+/**
+ * `GET /jobs/{id}/train-summary` — readable MID-RUN: `steps` grows as the
+ * trainer appends to history.json, while `finished` (and the totals/test
+ * scores read from summary.json) only turn real at the end.
+ */
+export interface SkillLabTrainSummary {
+  steps: SkillLabTrainStep[];
+  finished: boolean;
+  /** score of the seed skill on the val split; only known once finished */
+  baseline_selection_hard: number | null;
+  best_step: number | null;
+  best_score: number | null;
+  test_scores: { baseline: number | null; final: number | null };
+  totals: {
+    steps: number | null;
+    accepts: number | null;
+    rejects: number | null;
+    skips: number | null;
+    wall_time_s: number | null;
+  };
+}
+
+/** `GET /jobs/{id}/diff` — SEED (skill_v0000.md) vs BEST (best_skill.md). */
+export interface SkillLabSkillDiff {
+  seed: string;
+  best: string;
+  /** false means no edit was ever accepted — publishing is refused */
+  changed: boolean;
+  diff: string;
+}
+
+/** `POST /jobs/{id}/publish` result; the update settles the record into DRAFT. */
+export interface SkillLabPublishResult {
+  record_id: string;
+  name: string | null;
+  new_version: string;
+  status_before: string;
+  status_after: string;
+  reapproved: boolean;
+}
 
 export const api = {
   authStatus: () => request<AuthStatus>("/api/auth/status"),
@@ -2114,6 +2187,21 @@ export const api = {
     ),
   skillLabJobResults: (id: string) =>
     request<SkillLabJobResults>(`/api/skill-lab/jobs/${encodeURIComponent(id)}/results`),
+  /** 404 `skill_lab.results_pending` until the first optimizer step lands. */
+  skillLabJobTrainSummary: (id: string) =>
+    request<SkillLabTrainSummary>(`/api/skill-lab/jobs/${encodeURIComponent(id)}/train-summary`),
+  skillLabJobDiff: (id: string) =>
+    request<SkillLabSkillDiff>(`/api/skill-lab/jobs/${encodeURIComponent(id)}/diff`),
+  /** Train only: re-runs the same command, which continues from the last step. */
+  skillLabJobResume: (id: string) =>
+    request<SkillLabJobInfo>(`/api/skill-lab/jobs/${encodeURIComponent(id)}/resume`, {
+      method: "POST",
+    }),
+  skillLabJobPublish: (id: string, reapprove: boolean) =>
+    request<SkillLabPublishResult>(`/api/skill-lab/jobs/${encodeURIComponent(id)}/publish`, {
+      method: "POST",
+      body: JSON.stringify({ reapprove }),
+    }),
   skillLabJobArtifacts: (id: string, path = "") =>
     request<SkillLabArtifactListing>(
       `/api/skill-lab/jobs/${encodeURIComponent(id)}/artifacts?path=${encodeURIComponent(path)}`,

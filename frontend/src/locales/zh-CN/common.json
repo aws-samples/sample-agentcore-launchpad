@@ -1085,7 +1085,6 @@
     "kicker": "// 技能优化",
     "title": "技能实验室",
     "meta": "用自有任务集评估并优化 Agent Skill",
-    "comingSoon": "下一批次上线",
     "nav": {
       "label": "技能实验室模块导航",
       "tasksets": "任务集",
@@ -1232,8 +1231,125 @@
       }
     },
     "train": {
-      "title": "优化技能",
-      "sub": "带留出集门控的 SKILL.md 迭代优化"
+      "listTitle": "优化运行",
+      "listSub": "每个作业对应一次训练循环 —— 点击行可打开",
+      "new": "新建优化",
+      "empty": "暂无优化运行 —— 新建一个",
+      "resume": "继续运行",
+      "resumed": "已继续 —— 训练从上一个完成的 step 之后接着跑。",
+      "stepLabel": "第 {{n}} 步",
+      "epochLabel": "第 {{n}} 轮",
+      "bestTag": "最佳",
+      "testScores": "留出测试分：基线 {{baseline}} → 最终 {{final}}",
+      "col": {
+        "step": "步骤",
+        "gate": "门控",
+        "hard": "验证硬分",
+        "soft": "验证软分",
+        "skillLen": "SKILL.md",
+        "wall": "耗时",
+        "best": "最佳分数"
+      },
+      "gate": {
+        "accept": "接受",
+        "reject": "拒绝",
+        "skip": "跳过",
+        "other": "其他"
+      },
+      "detail": {
+        "gateReasons": "门控理由",
+        "excludedFailures": "已排除的基础设施失败"
+      },
+      "curve": {
+        "waiting": "尚未记录任何优化步骤 —— 种子技能评分完成后会出现第一步。",
+        "hard": "验证集通过率",
+        "soft": "验证集软分",
+        "baseline": "种子基线 · {{score}}",
+        "best": "最佳步骤 · {{step}}",
+        "steps": "已记录 {{n}} 步"
+      },
+      "field": {
+        "loop": "训练循环",
+        "epochs": "{{n}} 轮",
+        "lr": "每步最多 {{n}} 处修改",
+        "gate": "按 {{metric}} 门控",
+        "optimizer": "优化器"
+      },
+      "stat": {
+        "bestScore": "最佳验证分",
+        "bestFoot": "在第 {{step}} 步达到",
+        "bestFootNone": "还没有步骤超过种子技能",
+        "baseline": "种子基线",
+        "baselineFoot": "种子技能在验证集上的分数",
+        "steps": "步数",
+        "stepsFoot": "接受 {{accepts}} · 拒绝 {{rejects}} · 跳过 {{skips}}",
+        "wall": "总耗时",
+        "wallFoot": "已记录步骤合计"
+      },
+      "diff": {
+        "title": "种子 → 最佳 SKILL.md",
+        "changed": "已修改",
+        "unchanged": "无被接受的修改",
+        "seed": "种子 · skills/skill_v0000.md",
+        "best": "最佳 · best_skill.md"
+      },
+      "publish": {
+        "title": "发布",
+        "record": "Registry 记录",
+        "action": "发布到 Registry",
+        "confirmTitle": "发布优化后的技能",
+        "confirmBody": "把 best_skill.md 写入“{{name}}”（当前 {{version}}），并递增次版本号。scripts/、references/ 等附属文件保持不变，发布前的 SKILL.md 仍保留在本作业的产物中。",
+        "confirmDraft": "任何记录更新都会让该记录回到 DRAFT 状态，在重新提交并审批之前无法挂载到 Agent。",
+        "reapprove": "发布后重新审批该记录",
+        "reapproveNoop": "该记录当前为 {{status}}，没有需要重新审批的内容 —— 该选项将被忽略。",
+        "done": "{{name}} 已发布为 {{version}}（状态 {{status}}）。",
+        "noChange": "训练没有接受任何修改，无内容可发布。",
+        "uploadSource": "本次运行来自上传的技能包，没有可发布的 Registry 记录 —— 请直接下载优化后的 SKILL.md。",
+        "download": "下载 best_skill.md",
+        "openRegistry": "打开 Registry"
+      },
+      "confirmCancel": {
+        "title": "取消优化"
+      },
+      "confirmResume": {
+        "title": "继续优化",
+        "body": "在该作业已有的配置与输出目录上重新运行训练器。它会从上一个完成的 step 之后接着跑，已完成的步骤不会重复计费。"
+      },
+      "confirmDelete": {
+        "title": "删除优化作业"
+      },
+      "wizard": {
+        "title": "新建优化",
+        "sub": "训练器修改 SKILL.md，只有当留出集分数提升时才保留改动",
+        "submit": "开始优化",
+        "uploadNote": "上传的技能包仅用于本次作业。把结果发布回去需要 Registry 来源 —— 上传方式的运行只能下载优化后的 SKILL.md。",
+        "autoSplit": "单一任务集 —— 加载器按 4:3:3 确定性自动切分：约 {{train}} 条训练、{{val}} 条验证任务。",
+        "splitCounts": "训练 {{train}} · 验证 {{val}} · 测试 {{test}}",
+        "estimate": "约 {{n}} 次执行 worker 任务运行，另有每步的优化器调用 —— 仅为估算；实际运行会消耗模型 token 与 worker 时长。",
+        "field": {
+          "skill": "待优化技能",
+          "epochs": "轮数",
+          "learningRate": "学习率",
+          "gateMetric": "门控指标",
+          "judgeModel": "优化器 / 评审模型",
+          "workers": "并发数",
+          "timeout": "超时（秒）",
+          "limit": "任务上限"
+        },
+        "hint": {
+          "epochs": "遍历训练集的次数，{{min}}–{{max}}",
+          "learningRate": "每步最多接受的修改数，{{min}}–{{max}}",
+          "gateMetric": "门控比较哪个验证分数",
+          "judgeModel": "评审推理结果并提出 SKILL.md 修改的 Bedrock 模型 id。",
+          "workers": "并行推理数，{{min}}–{{max}}",
+          "timeout": "单任务上限，{{min}}–{{max}}",
+          "limit": "每个 split 只跑前 N 个任务；0 表示全部"
+        },
+        "err": {
+          "noSkill": "请选择要优化的技能。",
+          "noTaskset": "请选择用于优化的任务集。"
+        }
+      }
     },
     "tasksets": {
       "listTitle": "全部任务集",
@@ -1407,7 +1523,10 @@
     "skill_lab.taskset_in_use": "仍有评测作业引用该任务集 —— 请先删除作业。",
     "skill_lab.artifact_not_found": "该作业中没有此输出文件。",
     "skill_lab.bad_path": "该输出路径不在作业的输出目录内。",
-    "registry.staging_expired": "上传会话已过期 —— 请重新选择压缩包。"
+    "registry.staging_expired": "上传会话已过期 —— 请重新选择压缩包。",
+    "skill_lab.job_not_resumable": "只有已中断或已失败的训练作业可以继续 —— 评测成本低，直接重新提交。",
+    "skill_lab.publish_unsupported": "该作业无法发布技能 —— 发布需要一次成功的训练运行，且其技能来自 Registry 记录。",
+    "skill_lab.publish_no_change": "训练没有接受任何修改，无内容可发布。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",

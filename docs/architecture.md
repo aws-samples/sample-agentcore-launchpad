@@ -897,6 +897,49 @@ that never became usable: `registered` or `failed`, agent-free, never `default`.
 Whatever a failed run had already provisioned stays in the target account — the
 response's `resource_keys` says which resource kinds that is.
 
+## Skill Lab — skill evaluation & training (SkillOpt integration)
+
+Skill Lab closes a loop no other console surface offers: a Registry skill record
+is evaluated against a rubric-carrying task set on real AgentCore Runtime
+microVMs, optimized by the vendored [SkillOpt](https://github.com/xiehust/SkillEvalOpt_Studio)
+training loop (rollout → reflect → aggregate → select → update → gate), and the
+improved SKILL.md is published back onto the same record as a bumped minor
+version — ready to attach to agents.
+
+**Vendored engine, subprocess-only.** `vendor/skillopt/` is a trimmed subset of
+the SkillOpt research framework (upstream pin and every local patch documented
+in `vendor/skillopt/LAUNCHPAD_DEVIATIONS.md`; notable patches: a `bedrock_chat`
+judge/optimizer backend on the Converse API so the LLM judge runs zero-key off
+the instance role, and a worker Dockerfile with a pinned claude CLI). The
+backend process **never imports** the vendored tree — `evaluate_skill.py` /
+`train.py` run as subprocesses in a dedicated venv (`data/skill-lab-venv/`,
+provisioned by bootstrap) with an allowlisted environment. A guard test
+enforces the boundary; task-set validation shells out to the same `load_tasks`
+the CLIs use, so API acceptance can never drift from CLI acceptance.
+
+**Execution topology.** The orchestrating subprocess stays on the backend host
+(judge and optimizer calls go straight to Bedrock); each task's agent rollout
+runs in its own AgentCore Runtime microVM session on the
+`launchpad_skill_lab_worker` runtime (managed session storage, 5-minute idle /
+8-hour lifetime, image content-addressed into the shared `launchpad-agents`
+ECR repo, built by the shared CodeBuild project). Workspaces bootstrapped
+before this feature simply show Skill Lab as unprovisioned — the worker's
+resource keys are deliberately optional.
+
+**Console surface** (`/skill-lab`, `?view=tasksets|eval|train`): task sets
+(train/val/test splits, row-level validation with the vendored validator's own
+locators), evaluation jobs (any-status Registry skills or ad-hoc zip uploads,
+live log tail, per-task hard/soft judge results, artifact browser), training
+jobs (live score curve + step timeline with ACCEPT/REJECT gate decisions,
+SEED→BEST diff, resume-from-checkpoint for interrupted runs), and publish
+(minor version bump via the record-update path; the record settles into DRAFT
+— surfaced with an optional re-approve). The Registry drawer links here via
+"Evaluate in Skill Lab".
+
+Ledger: `skill_lab_tasksets` + `skill_lab_jobs` (workspace-scoped); artifacts
+live under `data/skill-lab/` (task files, job logs, the CLI's out/ tree —
+the files, not the ledger, are the source of truth for content).
+
 ## The SQLite ledger and job/event model
 
 State that is cheap and local lives in a SQLite ledger at `data/launchpad.db`
