@@ -123,7 +123,7 @@ def delete_taskset(
 
 
 class JobCreate(BaseModel):
-    type: str = "eval"  # train arrives in the next slice
+    type: str = "eval"  # eval | train
     skill_source: dict[str, Any]
     taskset_id: str
     split: str | None = None
@@ -145,20 +145,33 @@ def create_job(
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    if body.type != "eval":
-        raise AppError(
-            "skill_lab.bad_params",
-            "only type='eval' jobs are supported (training arrives in the next slice)",
-            status_code=422,
+    if body.type == "eval":
+        return jobs_svc.submit_eval_job(
+            db,
+            ws.id,
+            ws.context,
+            skill_source=body.skill_source,
+            taskset_id=body.taskset_id,
+            split=body.split,
+            params=body.params,
         )
-    return jobs_svc.submit_eval_job(
-        db,
-        ws.id,
-        ws.context,
-        skill_source=body.skill_source,
-        taskset_id=body.taskset_id,
-        split=body.split,
-        params=body.params,
+    if body.type == "train":
+        if body.split:
+            raise AppError(
+                "skill_lab.bad_params",
+                "training uses the whole task set — omit `split`",
+                status_code=422,
+            )
+        return jobs_svc.submit_train_job(
+            db,
+            ws.id,
+            ws.context,
+            skill_source=body.skill_source,
+            taskset_id=body.taskset_id,
+            params=body.params,
+        )
+    raise AppError(
+        "skill_lab.bad_params", "type must be 'eval' or 'train'", status_code=422
     )
 
 
@@ -216,6 +229,63 @@ def job_results(
             status_code=404,
         )
     return results
+
+
+class PublishRequest(BaseModel):
+    reapprove: bool = False
+
+
+@router.post("/jobs/{job_id}/resume")
+def resume_job(
+    job_id: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return jobs_svc.resume_job(db, ws.id, ws.context, job_id)
+
+
+@router.post("/jobs/{job_id}/publish")
+def publish_job(
+    job_id: str,
+    body: PublishRequest,
+    ws: WorkspaceScope = Depends(require_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return jobs_svc.publish_job(db, ws.id, ws.context, job_id, reapprove=body.reapprove)
+
+
+@router.get("/jobs/{job_id}/train-summary")
+def job_train_summary(
+    job_id: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    row = jobs_svc.get_job(db, ws.id, job_id)
+    summary = artifacts_svc.train_summary(job_id)
+    if summary is None:
+        raise AppError(
+            "skill_lab.results_pending",
+            f"no training steps recorded yet (job status: {row.status})",
+            status_code=404,
+        )
+    return summary
+
+
+@router.get("/jobs/{job_id}/diff")
+def job_skill_diff(
+    job_id: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    row = jobs_svc.get_job(db, ws.id, job_id)
+    diff = artifacts_svc.skill_diff(job_id)
+    if diff is None:
+        raise AppError(
+            "skill_lab.results_pending",
+            f"skill versions not written yet (job status: {row.status})",
+            status_code=404,
+        )
+    return diff
 
 
 @router.get("/jobs/{job_id}/artifacts")

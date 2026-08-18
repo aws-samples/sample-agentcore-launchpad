@@ -19,6 +19,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import IO, Any
 
+import yaml
+
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.services.local_exec import _AWS_CREDENTIAL_ENV, build_spawn_kwargs
@@ -305,3 +307,123 @@ def sweep_exec_jobs_prefix(workspace: WorkspaceContext, log: Callable[[str], Non
 
 def remove_job_dir(job_id: str) -> None:
     shutil.rmtree(artifacts.job_dir(job_id), ignore_errors=True)
+
+
+# ── training ───────────────────────────────────────────────────────────────
+
+TRAIN_PARAM_BOUNDS = {"epochs": (1, 10), "learning_rate": (1, 16)}
+GATE_METRICS = ("hard", "soft", "mixed")
+BASE_TRAIN_CONFIG = VENDOR_ROOT / "configs" / "skilleval" / "default.yaml"
+SINGLE_SPLIT_RATIO = "4:3:3"  # studio default for un-split task sets
+
+
+def clamp_train_params(params: dict[str, Any] | None) -> dict[str, Any]:
+    merged = clamp_params(params)
+    extras = {"epochs": 1, "learning_rate": 4, "gate_metric": "hard"}
+    extras.update(
+        {k: v for k, v in (params or {}).items() if k in extras and v not in (None, "")}
+    )
+    for key, (low, high) in TRAIN_PARAM_BOUNDS.items():
+        try:
+            value = int(extras[key])
+        except (TypeError, ValueError):
+            raise AppError(
+                "skill_lab.bad_params", f"{key} must be an integer", status_code=422
+            ) from None
+        if not low <= value <= high:
+            raise AppError(
+                "skill_lab.bad_params",
+                f"{key} must be between {low} and {high}",
+                status_code=422,
+            )
+        extras[key] = value
+    if extras["gate_metric"] not in GATE_METRICS:
+        raise AppError(
+            "skill_lab.bad_params",
+            f"gate_metric must be one of {'/'.join(GATE_METRICS)}",
+            status_code=422,
+        )
+    merged.update(extras)
+    return merged
+
+
+def materialize_train_splits(
+    taskset_dir: Path, mode: str, job_dir: Path
+) -> tuple[dict[str, Any], bool]:
+    """Env split config + whether a real test split exists.
+
+    SplitDataLoader's split_dir layout is `<dir>/<split>/items.json` SUBDIRS,
+    while tasksets store flat `<split>.json` files — so split-mode sets are
+    copied into the loader's shape. A missing test split is backfilled with a
+    copy of val and `evaluation.eval_test` turned off so the duplicate is never
+    scored (studio parity). Single-mode sets use the loader's deterministic
+    ratio split instead.
+    """
+    if mode == "single":
+        return {
+            "split_mode": "ratio",
+            "data_path": str(taskset_dir / "tasks.json"),
+            "split_ratio": SINGLE_SPLIT_RATIO,
+            "split_output_dir": str(job_dir / "splits"),
+        }, True
+    splits_dir = job_dir / "splits"
+    has_test = (taskset_dir / "test.json").is_file()
+    for split in ("train", "val", "test"):
+        source = taskset_dir / f"{split}.json"
+        if split == "test" and not has_test:
+            source = taskset_dir / "val.json"
+        target = splits_dir / split / "items.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    return {"split_mode": "split_dir", "split_dir": str(splits_dir)}, has_test
+
+
+def build_train_config(
+    *,
+    skill_dir: Path,
+    split_env: dict[str, Any],
+    eval_test: bool,
+    out_config: Path,
+    params: dict[str, Any],
+) -> Path:
+    """Write the job's train YAML. `_base_` is the vendored default by absolute
+    path — train.py resolves inheritance itself, so the backend never imports
+    skillopt.config (boundary rule). Probe-verified: an absolute `_base_`
+    resolves (os.path.join(dir, abs) is abs)."""
+    config: dict[str, Any] = {
+        "_base_": str(BASE_TRAIN_CONFIG),
+        "model": {
+            "target_backend": "claude_code_exec",
+            "target": str(params["target_model"]),
+            "optimizer_backend": "bedrock_chat",
+            "optimizer": str(params["judge_model"]),
+        },
+        "train": {"num_epochs": int(params["epochs"])},
+        "optimizer": {"learning_rate": int(params["learning_rate"])},
+        "evaluation": {
+            "gate_metric": str(params["gate_metric"]),
+            "eval_test": bool(eval_test),
+        },
+        "env": {
+            "skill_init": str(skill_dir / "SKILL.md"),
+            "skill_dir": str(skill_dir),
+            "judge_mode": "chat",
+            "workers": int(params["workers"]),
+            "timeout": int(params["timeout"]),
+            "limit": int(params["limit"]),
+            **split_env,
+        },
+    }
+    out_config.write_text(
+        yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+    return out_config
+
+
+def build_train_command(*, config_file: Path, out_dir: Path) -> list[str]:
+    return [
+        get_settings().skill_lab_python,
+        str(TRAIN_SCRIPT),
+        "--config", str(config_file),
+        "--out_root", str(out_dir),
+    ]

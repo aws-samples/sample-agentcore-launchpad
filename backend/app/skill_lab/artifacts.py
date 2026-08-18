@@ -8,6 +8,7 @@ are cheap to parse and running ones change under us).
 
 from __future__ import annotations
 
+import difflib
 import json
 import re
 from pathlib import Path
@@ -240,3 +241,117 @@ def artifact_file(job_id: str, rel: str) -> Path:
     if not target.is_file():
         raise AppError("skill_lab.artifact_not_found", f"no artifact at {rel!r}", status_code=404)
     return target
+
+
+# ── training reads ─────────────────────────────────────────────────────────
+
+_STEP_FIELDS = (
+    "step",
+    "epoch",
+    "action",
+    "selection_hard",
+    "selection_soft",
+    "current_score",
+    "best_score",
+    "best_step",
+    "skill_len",
+    "wall_time_s",
+    "gate_reasons",
+    "excluded_failures",
+)
+
+
+def _read_json_file(path: Path) -> Any:
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def train_summary(job_id: str) -> dict[str, Any] | None:
+    """Timeline + totals from out/history.json (grows step by step — usable
+    MID-RUN) and out/summary.json (written once, at the end). None until the
+    first step record lands."""
+    out = out_root(job_id)
+    history = _read_json_file(out / "history.json")
+    summary = _read_json_file(out / "summary.json")
+    finished = isinstance(summary, dict)
+    if not isinstance(history, list):
+        # No step file: either nothing has landed yet (or a torn mid-write read),
+        # or the run ended before its first step — the latter still has totals.
+        if not finished:
+            return None
+        history = []
+    steps = [
+        {key: record.get(key) for key in _STEP_FIELDS}
+        for record in history
+        if isinstance(record, dict)
+    ]
+    if finished:
+        totals = {
+            "steps": summary.get("total_steps"),
+            "accepts": summary.get("total_accepts"),
+            "rejects": summary.get("total_rejects"),
+            "skips": summary.get("total_skips"),
+            "wall_time_s": summary.get("total_wall_time_s"),
+        }
+        baseline = summary.get("baseline_selection_hard")
+        best_step = summary.get("best_step")
+        best_score = summary.get("best_selection_hard")
+        # `final` is the score of the skill this job actually hands over —
+        # best_skill.md, i.e. the trainer's `test_hard` (what train.py itself
+        # prints as "Final test"). `final_test_hard` grades the LAST accepted
+        # skill, which with the gate on need not be the best one, so it is only
+        # the fallback.
+        best_test = summary.get("test_hard")
+        test_scores = {
+            "baseline": summary.get("baseline_test_hard"),
+            "final": summary.get("final_test_hard") if best_test is None else best_test,
+        }
+    else:
+        actions = [str(step.get("action") or "") for step in steps]
+        totals = {
+            "steps": len(steps),
+            "accepts": sum("accept" in a for a in actions),
+            "rejects": sum("reject" in a for a in actions),
+            "skips": sum("skip" in a for a in actions),
+            "wall_time_s": round(
+                sum(float(step.get("wall_time_s") or 0.0) for step in steps), 1
+            ),
+        }
+        baseline = None
+        best_step = steps[-1].get("best_step") if steps else None
+        best_score = steps[-1].get("best_score") if steps else None
+        test_scores = {"baseline": None, "final": None}
+    return {
+        "steps": steps,
+        "finished": finished,
+        "baseline_selection_hard": baseline,
+        "best_step": best_step,
+        "best_score": best_score,
+        "test_scores": test_scores,
+        "totals": totals,
+    }
+
+
+def skill_diff(job_id: str) -> dict[str, Any] | None:
+    """SEED (skills/skill_v0000.md, re-written every run) vs best_skill.md.
+    None until both exist; `changed` False means no edit was ever accepted."""
+    out = out_root(job_id)
+    seed_path = out / "skills" / "skill_v0000.md"
+    best_path = out / "best_skill.md"
+    if not (seed_path.is_file() and best_path.is_file()):
+        return None
+    seed = seed_path.read_text(encoding="utf-8")
+    best = best_path.read_text(encoding="utf-8")
+    diff = "".join(
+        difflib.unified_diff(
+            seed.splitlines(keepends=True),
+            best.splitlines(keepends=True),
+            fromfile="SEED skill_v0000.md",
+            tofile="BEST best_skill.md",
+        )
+    )
+    return {"seed": seed, "best": best, "changed": seed != best, "diff": diff}

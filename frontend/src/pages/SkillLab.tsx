@@ -1,19 +1,18 @@
-import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { Btn, Panel, ViewHead } from "../components";
+import { Btn, ViewHead } from "../components";
 import { SkillLabNav } from "../components/SkillLabNav";
 import type { SkillLabStatus } from "../lib/api";
 import { api } from "../lib/api";
 import { SkillLabEval } from "./SkillLabEval";
 import { SkillLabTasksets } from "./SkillLabTasksets";
+import { SkillLabTrain } from "./SkillLabTrain";
 
 /**
  * Skill Lab shell: the module head, the `?view=` switcher and the worker
- * provisioning banner. Task sets are the default view; optimization arrives in
- * the next slice and renders a placeholder until then.
+ * provisioning banner. Task sets are the default view.
  */
 export function SkillLab() {
   const { t } = useTranslation();
@@ -76,16 +75,7 @@ export function SkillLab() {
       {view === "eval" ? (
         <SkillLabEval status={status} />
       ) : view === "train" ? (
-        <Panel
-          brk
-          title={t("skillLab.train.title")}
-          sub={t("skillLab.train.sub")}
-          style={{ "--i": 0 } as CSSProperties}
-        >
-          <div className="empty" data-testid="skill-lab-train-placeholder">
-            {t("skillLab.comingSoon")}
-          </div>
-        </Panel>
+        <SkillLabTrain status={status} />
       ) : (
         <SkillLabTasksets />
       )}
