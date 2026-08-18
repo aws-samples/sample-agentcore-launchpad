@@ -4,7 +4,9 @@
 Scope (reverse creation order):
   1. AgentCore memory  (launchpad_memory-*)
   2. AgentCore registry (launchpad-registry) — records must be gone first
-  3. CDK stack launchpad-base (S3 bucket auto-empties, ECR force-deletes)
+  3. Skill Lab exec worker (launchpad_skill_lab_worker runtime + its IAM role);
+     its image tags and the skill-lab/ S3 prefix live in stack-owned ECR/S3
+  4. CDK stack launchpad-base (S3 bucket auto-empties, ECR force-deletes)
 
 Later phases extend this list (gateway, policy engine, runtimes) — teardown
 always deletes dependents before the shared substrate.
@@ -41,6 +43,27 @@ def collect_targets(region: str) -> list[tuple[str, str, str]]:
         if reg["name"] == bs.REGISTRY_NAME:
             targets.append(("registry", reg["registryId"], reg["registryArn"]))
 
+    # Skill Lab exec worker (runtime + IAM role). Image tags and the skill-lab/
+    # S3 prefix live in stack-owned ECR/S3 and go with the stack.
+    from app.services.agentcore import runtime as rt
+    from app.services.workspace_iam import SKILL_LAB_ROLE_BASE, regional_role_name
+    from app.skill_lab.infra import WORKER_RUNTIME_NAME
+
+    # Paginated: an account past one page of runtimes would otherwise keep the
+    # worker (and its role) behind after the stack is gone.
+    for runtime in rt.list_runtimes(control):
+        if runtime.get("agentRuntimeName") == WORKER_RUNTIME_NAME:
+            targets.append(
+                ("skill-lab-runtime", runtime["agentRuntimeId"], runtime["agentRuntimeArn"])
+            )
+    role_name = regional_role_name(SKILL_LAB_ROLE_BASE, region)
+    iam = bs._client("iam", region)
+    try:
+        role = iam.get_role(RoleName=role_name)
+        targets.append(("skill-lab-role", role_name, role["Role"]["Arn"]))
+    except Exception:
+        pass
+
     try:
         bs.get_stack_outputs(region)
         targets.append(("cdk-stack", bs.STACK_NAME, "cloudformation stack + all resources"))
@@ -63,6 +86,15 @@ def delete_target(kind: str, identifier: str, region: str) -> None:
                 registryId=identifier, recordId=rec["recordId"]
             )
         registry_control.delete_registry(registryId=identifier)
+    elif kind == "skill-lab-runtime":
+        from app.services.agentcore import runtime as rt
+
+        rt.delete_runtime(control, identifier)
+    elif kind == "skill-lab-role":
+        iam = bs._client("iam", region)
+        for policy in iam.list_role_policies(RoleName=identifier)["PolicyNames"]:
+            iam.delete_role_policy(RoleName=identifier, PolicyName=policy)
+        iam.delete_role(RoleName=identifier)
     elif kind == "cdk-stack":
         subprocess.run(
             ["uv", "run", "cdk", "destroy", "--force"],

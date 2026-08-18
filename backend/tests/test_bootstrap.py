@@ -135,6 +135,19 @@ def test_run_bootstrap_continues_and_clears_registry_ids(monkeypatch):
         lambda update, replace=None: written.append(update | (replace or {})) or update,
     )
 
+    monkeypatch.setattr(
+        bs,
+        "ensure_skill_lab",
+        lambda _account, _region, _resources: {
+            "skill_lab_worker_role_arn": "arn:role/skill-lab",
+            "skill_lab_worker_runtime_arn": "arn:rt/skill-lab",
+            "skill_lab_worker_runtime_id": "rt-1",
+            "skill_lab_worker_image_tag": "skill-lab-worker-abc",
+            "skill_lab_worker_image_digest": "sha256:abc",
+            "python": "/tmp/skill-lab-venv/bin/python",
+        },
+    )
+
     summary = bs.run_bootstrap("us-west-2")
 
     assert summary["registry"] == {
@@ -231,6 +244,19 @@ def test_run_bootstrap_gateway_does_not_provision_policy(monkeypatch):
         gateway_bootstrap,
         "run_gateway_bootstrap",
         lambda *_args, **_kwargs: gateway_summary,
+    )
+
+    monkeypatch.setattr(
+        bs,
+        "ensure_skill_lab",
+        lambda _account, _region, _resources: {
+            "skill_lab_worker_role_arn": "arn:role/skill-lab",
+            "skill_lab_worker_runtime_arn": "arn:rt/skill-lab",
+            "skill_lab_worker_runtime_id": "rt-1",
+            "skill_lab_worker_image_tag": "skill-lab-worker-abc",
+            "skill_lab_worker_image_digest": "sha256:abc",
+            "python": "/tmp/skill-lab-venv/bin/python",
+        },
     )
 
     summary = bs.run_bootstrap("us-west-2")

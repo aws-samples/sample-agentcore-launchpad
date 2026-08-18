@@ -521,6 +521,15 @@ def _stage_status(job: Job) -> dict[str, str]:
     return {entry["name"]: entry["status"] for entry in wb.job_stages(job)}
 
 
+@pytest.fixture(autouse=True)
+def _stub_skill_lab_stage(monkeypatch):
+    """This suite asserts exact fake-AWS creation lists and resource maps; the
+    skill-lab stage's internals (CodeBuild image, runtime, role) have their own
+    focused fakes in test_skill_lab_foundation.py, so here the stage is a no-op
+    that records nothing."""
+    monkeypatch.setitem(wb.STAGES, "skill-lab", lambda _ctx: "stubbed")
+
+
 # ── stages ─────────────────────────────────────────────────────────────────
 
 
@@ -989,6 +998,7 @@ class TestRunner:
             "gateway": "pending",
             "memory": "pending",
             "registry": "pending",
+            "skill-lab": "pending",
             "observability": "pending",
             "finalize": "pending",
         }
@@ -1045,6 +1055,7 @@ class TestRunner:
             "gateway": "pending",
             "memory": "pending",
             "registry": "pending",
+            "skill-lab": "pending",
             "observability": "pending",
             "finalize": "pending",
         }

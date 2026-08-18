@@ -1,0 +1,19 @@
+# skilleval demo — multi-file skill (log triage). Only SKILL.md is the
+# trainable state; scripts/ and references/ under skill_dir are frozen and
+# copied into every rollout workspace alongside it.
+_base_: default.yaml
+
+train:
+  num_epochs: 4
+
+evaluation:
+  # These rubrics need five exact-format criteria at once, so hard is
+  # all-or-nothing and a hard gate stalls at 0 while candidates improve one
+  # criterion per step. Gate on soft so partial progress is banked and
+  # compounds; hard follows once every criterion lands.
+  gate_metric: soft
+
+env:
+  skill_init: data/skilleval_demo/logtriage_skill/SKILL.md
+  skill_dir: data/skilleval_demo/logtriage_skill
+  split_dir: data/skilleval_demo/logtriage_tasks

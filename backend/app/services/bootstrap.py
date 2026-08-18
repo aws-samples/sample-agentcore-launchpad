@@ -289,6 +289,28 @@ def write_config(
     return merged
 
 
+def ensure_skill_lab(
+    account_id: str, region: str, resources: dict[str, Any]
+) -> dict[str, str]:
+    """Skill Lab exec worker (role + image + runtime) and the host venv.
+
+    Returns the `skill_lab_worker_*` resource keys plus `python` (the venv
+    interpreter — host state, not a resource key)."""
+    from app.skill_lab import infra as skill_lab_infra
+
+    def log(msg: str) -> None:
+        print(f"  [skill-lab] {msg}", flush=True)
+
+    workspace = WorkspaceContext(
+        account_id=account_id, region=region, resources=resources
+    )
+    skill_lab_resources = skill_lab_infra.ensure_skill_lab_worker(
+        workspace, workspace.id, log=log
+    )
+    python = skill_lab_infra.ensure_skill_lab_venv(log=log)
+    return {**skill_lab_resources, "python": python}
+
+
 def run_bootstrap(region: str | None = None) -> dict[str, Any]:
     """Full bootstrap pass. Returns a summary of what was created vs reused."""
     region = region or get_settings().region
@@ -372,7 +394,19 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
 
         observability_summary = ensure_transaction_search(_client("xray", region))
 
+    # Skill Lab exec worker (vendored SkillOpt): role + content-addressed image
+    # + runtime, plus the dedicated host venv the vendored CLIs run in. The
+    # first run includes a CodeBuild image build (~10 min); later runs are a
+    # tag lookup.
+    skill_lab_summary = ensure_skill_lab(
+        account_id, region, dict(config.get("resources") or {})
+    )
+    write_config(
+        {"resources": {k: v for k, v in skill_lab_summary.items() if k != "python"}}
+    )
+
     return {
+        "skill_lab": skill_lab_summary,
         "account_id": account_id,
         "region": region,
         "registry": registry_summary,

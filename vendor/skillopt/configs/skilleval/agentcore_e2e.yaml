@@ -1,0 +1,18 @@
+# Minimal 1-epoch/1-step run used to e2e the AgentCore remote exec runner
+# (docs/guide/agentcore.md). Rollouts execute in AgentCore microVMs when
+# SKILLOPT_EXEC_RUNNER=agentcore is exported; judge/optimizer stay local.
+_base_: default.yaml
+
+model:
+  target: us.anthropic.claude-sonnet-5   # worker calls Bedrock directly
+  optimizer: openai.gpt-5.5
+
+train:
+  num_epochs: 1
+  batch_size: 4          # = train split size -> exactly one step
+
+env:
+  skill_init: data/skilleval_demo/logtriage_skill/SKILL.md
+  split_dir: data/skilleval_demo/logtriage_tasks
+  timeout: 600
+  judge_mode: chat       # text-only artifacts; keep the local judge chat-based

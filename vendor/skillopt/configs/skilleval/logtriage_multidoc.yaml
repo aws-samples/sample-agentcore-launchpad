@@ -1,0 +1,18 @@
+# skilleval demo — multi-document training. The trainable state is a bundle
+# (see skillopt/envs/skilleval/bundle.py) of SKILL.md plus the files listed
+# in trainable_files; everything else under skill_dir stays frozen. The seed
+# skill defers its report format to references/report-template.md, and that
+# template is deliberately wrong — fixing it requires editing a document
+# other than SKILL.md.
+#
+# Seed bundle is generated, not hand-written:
+#   python3 -m skillopt.envs.skilleval.bundle build data/skilleval_demo/logtriage_skill_v2 \
+#       --files references/report-template.md \
+#       --out data/skilleval_demo/logtriage_skill_v2_bundle.md
+_base_: logtriage.yaml
+
+env:
+  skill_init: data/skilleval_demo/logtriage_skill_v2_bundle.md
+  skill_dir: data/skilleval_demo/logtriage_skill_v2
+  trainable_files:
+    - references/report-template.md

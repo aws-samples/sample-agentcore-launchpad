@@ -39,6 +39,7 @@ EXECUTION_ROLE_BASE = "launchpad-agent-execution-role"
 GATEWAY_ROLE_BASE = "launchpad-gateway-role"
 KB_ROLE_BASE = "launchpad-kb-role"
 CODEBUILD_ROLE_BASE = "launchpad-codebuild-role"
+SKILL_LAB_ROLE_BASE = "launchpad-skill-lab-worker"
 
 
 def regional_role_name(base_name: str, region: str) -> str:
@@ -241,6 +242,84 @@ def execution_role_policy(
                     "cloudwatch:PutMetricData",
                 ],
                 "Resource": "*",
+            },
+        ],
+    }
+
+
+def skill_lab_worker_role_policy(
+    artifacts_bucket: str, ecr_repo_arn: str, s3_prefix: str = "skill-lab/"
+) -> dict[str, Any]:
+    """Execution role for the Skill Lab exec-worker runtime.
+
+    Same six capability groups as the upstream SkillOpt worker role, but S3 is
+    scoped to the skill-lab/ prefix of the shared artifacts bucket and ECR pull
+    to the shared launchpad-agents repository. Bedrock model access stays a
+    wildcard — the model id is a per-job user input.
+    """
+    bucket_arn = f"arn:aws:s3:::{artifacts_bucket}"
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "EcrAuth",
+                "Effect": "Allow",
+                "Action": ["ecr:GetAuthorizationToken"],
+                "Resource": "*",
+            },
+            {
+                "Sid": "EcrPull",
+                "Effect": "Allow",
+                "Action": [
+                    "ecr:BatchGetImage",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchCheckLayerAvailability",
+                ],
+                "Resource": ecr_repo_arn,
+            },
+            {
+                "Sid": "Logs",
+                "Effect": "Allow",
+                "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents",
+                    "logs:DescribeLogGroups",
+                    "logs:DescribeLogStreams",
+                ],
+                "Resource": "*",
+            },
+            {
+                "Sid": "Telemetry",
+                "Effect": "Allow",
+                "Action": [
+                    "xray:PutTraceSegments",
+                    "xray:PutTelemetryRecords",
+                    "cloudwatch:PutMetricData",
+                ],
+                "Resource": "*",
+            },
+            {
+                "Sid": "BedrockModels",
+                "Effect": "Allow",
+                "Action": [
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream",
+                ],
+                "Resource": "*",
+            },
+            {
+                "Sid": "WorkspaceObjects",
+                "Effect": "Allow",
+                "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                "Resource": f"{bucket_arn}/{s3_prefix}*",
+            },
+            {
+                "Sid": "WorkspaceList",
+                "Effect": "Allow",
+                "Action": ["s3:ListBucket"],
+                "Resource": bucket_arn,
+                "Condition": {"StringLike": {"s3:prefix": f"{s3_prefix}*"}},
             },
         ],
     }

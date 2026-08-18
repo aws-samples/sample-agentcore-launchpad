@@ -152,6 +152,13 @@ def main() -> int:
                 ("enabled" if obs["enabled"] else str(obs.get("status") or "not ready")),
             )
         )
+    if summary.get("skill_lab"):
+        sl = summary["skill_lab"]
+        rows += [
+            ("skill-lab runtime", sl["skill_lab_worker_runtime_arn"]),
+            ("skill-lab image", sl["skill_lab_worker_image_tag"]),
+            ("skill-lab venv", sl["python"]),
+        ]
     width = max(len(k) for k, _ in rows)
     print("\n══ bootstrap summary ══")
     for key, value in rows:
