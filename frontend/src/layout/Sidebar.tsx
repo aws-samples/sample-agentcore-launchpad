@@ -44,13 +44,13 @@ export function Sidebar({ health }: { health: HealthInfo | null }) {
         </>
       ) : null}
       <div className="label">{t("nav.phase02")}</div>
-      {/* 11 belongs to Workspaces since 2026-08-12; the placeholders moved up */}
+      {/* 09 belongs to Skill Lab since 2026-08-18; the placeholders moved up */}
       <div className="nav-item dim">
-        <span className="idx">12</span>
+        <span className="idx">13</span>
         {t("nav.payments")}
       </div>
       <div className="nav-item dim">
-        <span className="idx">13</span>
+        <span className="idx">14</span>
         {t("nav.settings")}
       </div>
       <div className="sys" data-testid="sidebar-region">

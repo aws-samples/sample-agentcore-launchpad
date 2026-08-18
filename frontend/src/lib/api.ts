@@ -1465,6 +1465,61 @@ export interface UserPatchBody {
   workspaces?: string[];
 }
 
+/* ── skill lab (skill evaluation & optimization) ────────────────────────── */
+
+export interface SkillLabStatus {
+  provisioned: boolean;
+  /** workspace resource keys the exec worker still needs */
+  missing: string[];
+  venv_ready: boolean;
+}
+
+export type SkillLabTasksetMode = "single" | "split";
+
+export interface SkillLabTasksetInfo {
+  id: string;
+  name: string;
+  description: string;
+  mode: SkillLabTasksetMode;
+  /** {tasks: n} in single mode, {train, val, test?} in split mode */
+  counts: Record<string, number>;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/**
+ * One skilleval task. `id`/`question`/`rubric` are required by the vendored
+ * loader; every other key (`files`, `judge_mode`, `artifact_checks`, anything
+ * the CLI grows later) is carried through untouched on edit.
+ */
+export interface SkillLabTask {
+  id: string;
+  question: string;
+  rubric: string;
+  task_type?: string;
+  [key: string]: unknown;
+}
+
+export interface SkillLabTasksetDetail {
+  info: SkillLabTasksetInfo;
+  tasks_by_split: Record<string, SkillLabTask[]>;
+  /** true when a split was capped at the preview size (ask for full) */
+  truncated: boolean;
+}
+
+export interface SkillLabTasksetBody {
+  name: string;
+  description?: string;
+  mode: SkillLabTasksetMode;
+  tasks_by_split: Record<string, SkillLabTask[]>;
+}
+
+/** 422 `skill_lab.taskset_invalid` detail: the validator's own message per split. */
+export interface SkillLabTasksetIssue {
+  split: string;
+  message: string;
+}
+
 export const api = {
   authStatus: () => request<AuthStatus>("/api/auth/status"),
   login: (username: string, password: string) =>
@@ -1909,4 +1964,28 @@ export const api = {
       "/api/observability/prices/refresh",
       { method: "POST" },
     ),
+  skillLabStatus: () => request<SkillLabStatus>("/api/skill-lab/status"),
+  skillLabTasksets: () => request<SkillLabTasksetInfo[]>("/api/skill-lab/tasksets"),
+  skillLabTasksetGet: (id: string, full = false) =>
+    request<SkillLabTasksetDetail>(
+      `/api/skill-lab/tasksets/${encodeURIComponent(id)}${full ? "?full=true" : ""}`,
+    ),
+  skillLabTasksetCreate: (body: SkillLabTasksetBody) =>
+    request<SkillLabTasksetInfo>("/api/skill-lab/tasksets", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  /** Full replace: `tasks_by_split` must carry every split that should exist. */
+  skillLabTasksetUpdate: (
+    id: string,
+    body: { name?: string; description?: string; tasks_by_split: Record<string, SkillLabTask[]> },
+  ) =>
+    request<SkillLabTasksetInfo>(`/api/skill-lab/tasksets/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  skillLabTasksetDelete: (id: string) =>
+    request<{ ok: boolean }>(`/api/skill-lab/tasksets/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
 };

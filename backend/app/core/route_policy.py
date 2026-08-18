@@ -220,6 +220,13 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/eval/runs"): MEMBER,
     ("POST", "/api/eval/runs"): PERM_EVAL_RUN,
     ("GET", "/api/eval/runs/{run_id}"): MEMBER,
+    # ---- skill lab: task sets are local artifacts; jobs come in a later slice ----
+    ("GET", "/api/skill-lab/status"): MEMBER,
+    ("GET", "/api/skill-lab/tasksets"): MEMBER,
+    ("POST", "/api/skill-lab/tasksets"): MEMBER,
+    ("GET", "/api/skill-lab/tasksets/{taskset_id}"): MEMBER,
+    ("PUT", "/api/skill-lab/tasksets/{taskset_id}"): MEMBER,
+    ("DELETE", "/api/skill-lab/tasksets/{taskset_id}"): MEMBER,
     ("GET", "/api/experiments"): MEMBER,
     ("GET", "/api/experiments/readiness"): MEMBER,
     ("POST", "/api/experiments"): MEMBER,

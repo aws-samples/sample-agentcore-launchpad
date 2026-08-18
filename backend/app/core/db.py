@@ -33,6 +33,7 @@ WORKSPACE_SCOPED_TABLES = (
     "eval_runs",
     "experiments",
     "runtime_canaries",
+    "skill_lab_tasksets",
 )
 
 
@@ -203,6 +204,7 @@ def _migrate_workspace_columns(bind) -> None:
         "eval_runs": "ALTER TABLE eval_runs ADD COLUMN workspace_id VARCHAR(32)",
         "experiments": "ALTER TABLE experiments ADD COLUMN workspace_id VARCHAR(32)",
         "runtime_canaries": "ALTER TABLE runtime_canaries ADD COLUMN workspace_id VARCHAR(32)",
+        "skill_lab_tasksets": "ALTER TABLE skill_lab_tasksets ADD COLUMN workspace_id VARCHAR(32)",
     }
     inspector = inspect(bind)
     live_tables = set(inspector.get_table_names())
