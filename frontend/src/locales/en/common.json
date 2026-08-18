@@ -1530,7 +1530,8 @@
       "confirmDelete": {
         "title": "Delete task set",
         "body": "Delete task set “{{name}}”? Its task files are removed from disk and this cannot be undone."
-      }
+      },
+      "sampleChip": "built-in sample"
     }
   },
   "apiErrors": {

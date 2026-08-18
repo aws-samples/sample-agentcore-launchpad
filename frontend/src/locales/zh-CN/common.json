@@ -1530,7 +1530,8 @@
       "confirmDelete": {
         "title": "删除任务集",
         "body": "删除任务集“{{name}}”？其任务文件将从磁盘移除，操作不可恢复。"
-      }
+      },
+      "sampleChip": "内置样例"
     }
   },
   "apiErrors": {

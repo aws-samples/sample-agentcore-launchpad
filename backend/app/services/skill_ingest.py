@@ -109,7 +109,7 @@ _STDERR_TAIL_CHARS = 2000
 class SkillSource:
     """Provenance stamped into ``skillDefinition.inlineContent.source``."""
 
-    kind: Literal["inline", "zip", "git", "url"]
+    kind: Literal["inline", "zip", "git", "url", "sample"]
     url: str | None = None
     ref: str | None = None
     subdir: str | None = None
@@ -172,6 +172,13 @@ def bundle_from_inline(skill_md: str) -> SkillBundle:
     root = Path(tmp.name)
     (root / "SKILL.md").write_text(skill_md, encoding="utf-8")
     return _bundle_from_dir(root, SkillSource(kind="inline"), tmp)
+
+
+def bundle_from_dir(path: Path) -> SkillBundle:
+    """A bundle over an existing on-disk skill directory (no copy, no tmp) —
+    the vendored-sample seeding path (app/skill_lab/samples.py). The caller
+    owns the directory's lifetime; registration only reads from it."""
+    return _bundle_from_dir(path, SkillSource(kind="sample"), None)
 
 
 def bundle_from_zip(data: bytes) -> SkillBundle:

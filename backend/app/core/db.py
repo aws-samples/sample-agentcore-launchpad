@@ -180,6 +180,16 @@ def _migrate(bind) -> None:
             if column not in existing:
                 with bind.begin() as conn:
                     conn.execute(text(ddl))
+    if "skill_lab_tasksets" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("skill_lab_tasksets")}
+        if "sample" not in existing:
+            with bind.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE skill_lab_tasksets "
+                        "ADD COLUMN sample BOOLEAN DEFAULT 0 NOT NULL"
+                    )
+                )
     _migrate_workspace_columns(bind)
 
 

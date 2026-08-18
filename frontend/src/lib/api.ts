@@ -1490,6 +1490,8 @@ export interface SkillLabTasksetInfo {
   name: string;
   description: string;
   mode: SkillLabTasksetMode;
+  /** built-in demo sample: read-only (update/delete/expansion refuse with 409) */
+  sample: boolean;
   /** {tasks: n} in single mode, {train, val, test?} in split mode */
   counts: Record<string, number>;
   created_at: string | null;

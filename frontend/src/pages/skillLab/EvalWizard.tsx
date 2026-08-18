@@ -384,14 +384,14 @@ export function EvalWizard({
       <div className="field">
         <label>{t("skillLab.eval.wizard.field.taskset")}</label>
         <select
-          className="fsel"
+          className="input"
           value={tasksetId}
           data-testid="eval-taskset-select"
           onChange={(e) => setTasksetId(e.target.value)}
         >
-          <option value="">—</option>
+          <option value="" style={{ background: "#141816" }}>—</option>
           {tasksets.map((row) => (
-            <option key={row.id} value={row.id}>
+            <option key={row.id} value={row.id} style={{ background: "#141816" }}>
               {row.name} ({row.mode})
             </option>
           ))}

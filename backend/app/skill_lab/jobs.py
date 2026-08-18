@@ -319,6 +319,9 @@ def submit_taskgen_job(
     tasks_by_split: dict[str, Any] = {}
     if taskset_id is not None:
         ts_row = taskset_svc.get_row(db, workspace_id, taskset_id)
+        # Refuse at submit time, not at apply time: generating against a
+        # read-only sample would only ever dead-end at apply-expansion.
+        taskset_svc._reject_sample_write(ts_row)
         tasks_by_split = taskset_svc.read_taskset(
             db, workspace_id, taskset_id, full=True
         )["tasks_by_split"]
