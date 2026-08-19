@@ -11,12 +11,16 @@ const BACKEND_LABELS: Record<SkillLabTargetBackend, string> = {
  * Judge suggestions are Converse inference-profile ids (`us.`/`global.`
  * prefixed) — the bedrock_chat judge calls Converse directly, and bare model
  * ids like `openai.gpt-5.6-sol` are rejected with "use an inference profile".
+ * The agentic judge routes by family: openai.* → host codex CLI, else claude.
  */
 const JUDGE_MODEL_SUGGESTIONS = [
+  "us.openai.gpt-5.6-sol",
   "global.anthropic.claude-opus-5",
   "us.anthropic.claude-sonnet-5",
-  "us.openai.gpt-5.6-sol",
 ];
+
+/** Mirrors backend runner.judge_exec_route's family test. */
+const isOpenAiJudge = (model: string) => /^((us|eu|apac|global)\.)?openai\./.test(model);
 
 function defaultFor(status: SkillLabStatus | null, backend: SkillLabTargetBackend): string {
   if (status === null) return "";
@@ -61,9 +65,11 @@ export function BackendModelFields({
   const judgeModes: SkillLabJudgeMode[] = status?.judge_modes?.length
     ? status.judge_modes
     : ["auto", "chat", "agentic"];
-  // Without the host sandbox launcher, auto/agentic still run — but binary-
-  // artifact tasks fail closed. Warn on the option rather than hiding it.
-  const agenticReady = status?.agentic_judge_ready !== false;
+  // Without the host sandbox launcher — or, for an openai-family judge model,
+  // without the host codex CLI the agentic judge routes to — auto/agentic
+  // still run, but binary-artifact tasks fail closed. Warn, don't hide.
+  const codexJudgeMissing = isOpenAiJudge(judgeModel) && status?.judge_codex_ready === false;
+  const agenticReady = status?.agentic_judge_ready !== false && !codexJudgeMissing;
 
   const applyBackend = (next: SkillLabTargetBackend) => {
     if (next === backend) return;
@@ -147,7 +153,11 @@ export function BackendModelFields({
           </select>
           <span className="mono dim" style={{ fontSize: 10.5 }}>
             {judgeMode !== "chat" && !agenticReady
-              ? t("skillLab.backend.judgeModeUnready")
+              ? t(
+                  codexJudgeMissing
+                    ? "skillLab.backend.judgeCodexUnready"
+                    : "skillLab.backend.judgeModeUnready",
+                )
               : t(`skillLab.backend.judgeModeHint.${judgeMode}`)}
           </span>
         </div>

@@ -63,15 +63,23 @@ def skill_lab_status(ws: WorkspaceScope = Depends(require_workspace)) -> dict[st
         # exist here (parsers run under it). When false, auto/agentic runs
         # still work for text-only tasks; artifact tasks fail closed.
         "agentic_judge_ready": _sandbox_launcher_present(settings),
+        # An openai-family judge model routes the agentic judge to the host
+        # codex CLI (runner.judge_exec_route) — warn the wizard when absent.
+        "judge_codex_ready": _which("codex"),
     }
+
+
+def _which(binary: str) -> bool:
+    import shutil
+
+    return shutil.which(binary) is not None
 
 
 def _sandbox_launcher_present(settings: Any) -> bool:
     import shlex
-    import shutil
 
     argv = shlex.split(settings.skill_lab_judge_sandbox or "")
-    return bool(argv) and shutil.which(argv[0]) is not None
+    return bool(argv) and _which(argv[0])
 
 
 @router.get("/tasksets")

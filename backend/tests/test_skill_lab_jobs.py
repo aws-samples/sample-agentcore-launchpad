@@ -253,6 +253,75 @@ def test_status_reports_agentic_judge_readiness(lab):
     body = lab.get("/api/skill-lab/status").json()
     assert body["judge_modes"] == ["auto", "chat", "agentic"]
     assert isinstance(body["agentic_judge_ready"], bool)
+    assert isinstance(body["judge_codex_ready"], bool)
+
+
+def test_judge_codex_home_seed(lab, tmp_path, monkeypatch):
+    """A codex judge starts from an isolated empty CODEX_HOME (vendored
+    fail-closed behavior) — the runner materializes a Bedrock provider seed and
+    points SKILLOPT_JUDGE_CODEX_HOME at it so the judge never needs an OpenAI
+    key. Catalog mirrors the host file, `{}` when absent."""
+    from app.core.config import get_settings
+
+    catalog = tmp_path / "cat.json"
+    catalog.write_text('{"models": []}')
+    monkeypatch.setattr(
+        get_settings(), "skill_lab_codex_catalog_path", str(catalog), raising=False
+    )
+    seed = runner.ensure_judge_codex_home()
+    config_text = (seed / "config.toml").read_text()
+    assert 'model_provider = "amazon-bedrock"' in config_text
+    assert 'web_search = "disabled"' in config_text
+    assert 'region = "us-east-1"' in config_text
+    assert "[features.multi_agent_v2]" in config_text
+    assert str(seed / "bedrock-models.json") in config_text
+    assert (seed / "bedrock-models.json").read_text() == '{"models": []}'
+
+    workspace = SimpleNamespace(resources=dict(WORKER_RESOURCES), region="us-west-2")
+    env = runner.build_job_env(workspace)
+    assert env["SKILLOPT_JUDGE_CODEX_HOME"] == str(seed)
+
+
+def test_judge_exec_route_by_family(lab, tmp_path):
+    """An openai-family judge model (the default: us.openai.gpt-5.6-sol) runs
+    the agentic judge on the host codex CLI with the Converse profile prefix
+    stripped — codex resolves bare catalog slugs; the chat judge keeps the
+    profile id as-is. Anthropic judges keep the claude CLI unchanged."""
+    assert runner.judge_exec_route("us.openai.gpt-5.6-sol") == (
+        "codex_exec", "openai.gpt-5.6-sol",
+    )
+    assert runner.judge_exec_route("openai.gpt-5.6-sol") == (
+        "codex_exec", "openai.gpt-5.6-sol",
+    )
+    assert runner.judge_exec_route("global.anthropic.claude-opus-5") == (
+        "claude_code_exec", "global.anthropic.claude-opus-5",
+    )
+
+    params = runner.clamp_params({"judge_model": "us.openai.gpt-5.6-sol"})
+    text = " ".join(
+        runner.build_eval_command(
+            skill_dir=tmp_path / "s", tasks_file=tmp_path / "t.json",
+            out_dir=tmp_path / "o", params=params,
+        )
+    )
+    assert "--optimizer_model us.openai.gpt-5.6-sol" in text
+    assert "--judge_exec_backend codex_exec" in text
+    assert "--judge_exec_model openai.gpt-5.6-sol" in text
+
+    import yaml
+
+    cfg = runner.build_train_config(
+        skill_dir=tmp_path / "skill",
+        split_env={"split_mode": "ratio", "data_path": "x", "split_ratio": "4:3:3"},
+        eval_test=True,
+        out_config=tmp_path / "cfg-gpt.yaml",
+        params=runner.clamp_train_params({"judge_model": "us.openai.gpt-5.6-sol"}),
+    )
+    env = yaml.safe_load(cfg.read_text())["env"]
+    assert env["judge_backend"] == "codex_exec"
+    assert env["judge_model"] == "openai.gpt-5.6-sol"
+    config = yaml.safe_load(cfg.read_text())
+    assert config["model"]["optimizer"] == "us.openai.gpt-5.6-sol"
 
 
 def test_env_is_allowlisted(lab, monkeypatch):

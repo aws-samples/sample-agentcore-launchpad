@@ -201,7 +201,11 @@ class Settings(BaseSettings):
     # judge/optimizer role calls Bedrock directly (bedrock_chat backend).
     skill_lab_python: str = str(DATA_DIR / "skill-lab-venv" / "bin" / "python")
     skill_lab_max_concurrent_jobs: int = Field(default=1, ge=1, le=4)
-    skill_lab_judge_model_id: str = "global.anthropic.claude-opus-5"
+    # Judge default mirrors the upstream studio: gpt-5.6-sol. Must be a Converse
+    # inference-profile id (the bedrock_chat judge rejects bare model ids); the
+    # agentic judge routes it by family — openai.* runs on the host codex CLI
+    # with the profile prefix stripped (runner.judge_exec_route).
+    skill_lab_judge_model_id: str = "us.openai.gpt-5.6-sol"
     skill_lab_target_model_id: str = "global.anthropic.claude-opus-5"
     # Default target model for the codex_exec backend: the Bedrock catalog slug
     # the baked codex config resolves through its amazon-bedrock provider (NOT a

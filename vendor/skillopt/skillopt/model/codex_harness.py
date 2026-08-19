@@ -1209,6 +1209,17 @@ def _run_codex_judge_cli(
             json.dump(schema, handle)
     codex_home = os.path.join(work_dir, ".codex_home")
     os.makedirs(codex_home, exist_ok=True)
+    # LAUNCHPAD DEVIATION: the isolated CODEX_HOME starts empty, which pins the
+    # judge client to codex's default `openai` provider (needs OPENAI_API_KEY).
+    # A deployment that fronts the model through another provider (Bedrock)
+    # seeds provider config into the fresh home via this env var — top-level
+    # files only (config.toml + model catalog), isolation otherwise unchanged.
+    seed_dir = os.environ.get("SKILLOPT_JUDGE_CODEX_HOME", "").strip()
+    if seed_dir and os.path.isdir(seed_dir):
+        for name in os.listdir(seed_dir):
+            source = os.path.join(seed_dir, name)
+            if os.path.isfile(source):
+                shutil.copy(source, os.path.join(codex_home, name))
     cmd = [
         str(config["path"]),
         "exec",
@@ -1230,6 +1241,14 @@ def _run_codex_judge_cli(
         f"mcp_servers.{server_name}.command={json.dumps(mcp_command[0])}",
         "-c",
         f"mcp_servers.{server_name}.args={json.dumps(list(mcp_command[1:]))}",
+        # LAUNCHPAD DEVIATION: codex >= 0.147 gates MCP tool calls behind
+        # approval unless the tool is annotated read-only, and this headless
+        # run's approval_policy="never" CANCELS every prompt ("user cancelled
+        # MCP tool call") — the judge then sees zero evidence. "approve" is
+        # codex's pre-approved mode; the server is the judge's own required,
+        # networkless, bwrap-sandboxed Artifact MCP, so approvals add nothing.
+        "-c",
+        f'mcp_servers.{server_name}.default_tools_approval_mode="approve"',
     ]
     reasoning_effort = str(config.get("reasoning_effort", "")).strip()
     if reasoning_effort and reasoning_effort != "none":

@@ -1108,7 +1108,8 @@
         "chat": "一次 Converse 调用对回复文本判分；二进制产物任务按 fail-closed 处理。",
         "agentic": "判分 agent 通过主机上无网络的沙箱 MCP 服务器检查产物。"
       },
-      "judgeModeUnready": "主机未找到沙箱启动器（bwrap）——二进制产物任务将 fail-closed。"
+      "judgeModeUnready": "主机未找到沙箱启动器（bwrap）——二进制产物任务将 fail-closed。",
+      "judgeCodexUnready": "主机未找到 codex CLI——openai 系 judge 模型的 agentic 裁决需要它，二进制产物任务将 fail-closed。"
     },
     "taskgen": {
       "open": "AI 自动生成",

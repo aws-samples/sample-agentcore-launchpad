@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -27,7 +28,7 @@ from app.services.local_exec import _AWS_CREDENTIAL_ENV, build_spawn_kwargs
 from app.services.workspace import WorkspaceContext
 from app.skill_lab import artifacts
 from app.skill_lab.infra import EXEC_JOBS_PREFIX
-from app.skill_lab.worker_build import VENDOR_ROOT
+from app.skill_lab.worker_build import VENDOR_ROOT, _codex_catalog_bytes
 
 EVAL_SCRIPT = VENDOR_ROOT / "scripts" / "evaluate_skill.py"
 TRAIN_SCRIPT = VENDOR_ROOT / "scripts" / "train.py"
@@ -246,19 +247,89 @@ def materialize_staged_skill(
     return skill_dir, {"kind": "upload", "name": name, "version": bundle.version}
 
 
+# Converse cross-region inference-profile prefixes. The chat judge needs the
+# profile id as-is; codex resolves the bare catalog slug through ~/.codex.
+_PROFILE_PREFIX = re.compile(r"^(us|eu|apac|global)\.")
+
+
+def judge_exec_route(judge_model: str) -> tuple[str, str]:
+    """(exec backend, exec model) the agentic judge runs with for `judge_model`.
+
+    One judge model still drives both judge modes, but the judge *agent* is a
+    host CLI and only claude can run anthropic models: an openai-family judge
+    (e.g. us.openai.gpt-5.6-sol) routes to the host codex CLI with the profile
+    prefix stripped — codex does its own resolution via ~/.codex, the same
+    coupling the worker image build already relies on for its model catalog.
+    Anything non-openai keeps the claude CLI with the model id unchanged."""
+    bare = _PROFILE_PREFIX.sub("", judge_model)
+    if bare.startswith("openai."):
+        return "codex_exec", bare
+    return "claude_code_exec", judge_model
+
+
 def _judge_exec_flags(params: dict[str, Any]) -> list[str]:
-    """Agentic-judge CLI flags (eval path). One judge model drives both modes:
-    `judge_model` feeds --optimizer_model (chat verdicts) AND --judge_exec_model
-    (the host-side judge agent's claude CLI, Bedrock via the instance role).
-    Only claude_code_exec v1 — a codex judge would couple to host ~/.codex."""
+    """Agentic-judge CLI flags (eval path). `judge_model` feeds
+    --optimizer_model (chat verdicts, Bedrock Converse via the instance role)
+    AND — routed by family — the host-side judge agent's exec CLI."""
     if params["judge_mode"] == "chat":
         return []
+    backend, model = judge_exec_route(str(params["judge_model"]))
     return [
-        "--judge_exec_backend", "claude_code_exec",
-        "--judge_exec_model", str(params["judge_model"]),
+        "--judge_exec_backend", backend,
+        "--judge_exec_model", model,
         "--judge_exec_effort", "low",
         "--judge_sandbox_command", str(get_settings().skill_lab_judge_sandbox),
     ]
+
+
+# Provider config the codex judge client starts from. The vendored judge runs
+# codex with an isolated, initially-empty CODEX_HOME (fail-closed: no user
+# config, rules or sessions leak in), which would pin it to codex's default
+# `openai` provider — this seed keeps the isolation but swaps the provider to
+# Bedrock (Mantle). Region pinned to us-east-1 like the worker image's baked
+# config: us-west-2's Mantle catalog lacks openai.gpt-5.6-sol (live-verified).
+_JUDGE_CODEX_CONFIG = """\
+model_provider = "amazon-bedrock"
+web_search = "disabled"
+model_catalog_json = "{catalog}"
+
+[model_providers.amazon-bedrock.aws]
+region = "us-east-1"
+
+[features.multi_agent_v2]
+enabled = false
+"""
+
+
+def ensure_judge_codex_home() -> Path:
+    """Materialize the judge codex-home seed (config + bedrock model catalog).
+
+    Rewritten on every job submit — cheap, and it tracks host-catalog updates
+    the same way a worker image rebuild would. The catalog falls back to `{}`
+    when the host has none (mirrors worker_build._codex_catalog_bytes; that
+    file embeds proprietary model instructions and is never committed).
+    """
+    seed = artifacts.JOBS_DIR.parent / "codex-judge-home"
+    seed.mkdir(parents=True, exist_ok=True)
+    catalog = seed / "bedrock-models.json"
+    catalog.write_bytes(_codex_catalog_bytes())
+    (seed / "config.toml").write_text(
+        _JUDGE_CODEX_CONFIG.format(catalog=catalog), encoding="utf-8"
+    )
+    return seed
+
+
+def _train_judge_env(params: dict[str, Any]) -> dict[str, str]:
+    """Train-config counterpart of `_judge_exec_flags` (adapter kwarg names)."""
+    if params["judge_mode"] == "chat":
+        return {}
+    backend, model = judge_exec_route(str(params["judge_model"]))
+    return {
+        "judge_backend": backend,
+        "judge_model": model,
+        "judge_effort": "low",
+        "judge_sandbox_command": str(get_settings().skill_lab_judge_sandbox),
+    }
 
 
 def build_eval_command(
@@ -440,6 +511,10 @@ def build_job_env(workspace: WorkspaceContext) -> dict[str, str]:
             # Rollout claude runs in the worker with the image's own env, so
             # this key only affects the judge.
             "CLAUDE_CODE_USE_BEDROCK": "1",
+            # Same for a codex judge (openai-family judge model): the vendored
+            # harness isolates CODEX_HOME per call, and this seed swaps its
+            # provider from codex's default `openai` to Bedrock Mantle.
+            "SKILLOPT_JUDGE_CODEX_HOME": str(ensure_judge_codex_home()),
             "SKILLOPT_AGENTCORE_RUNTIME_ARN": str(
                 workspace.resources.get("skill_lab_worker_runtime_arn") or ""
             ),
@@ -597,20 +672,10 @@ def build_train_config(
             "skill_init": str(skill_dir / "SKILL.md"),
             "skill_dir": str(skill_dir),
             "judge_mode": str(params["judge_mode"]),
-            # adapter kwargs (exact names): the agentic judge's claude CLI +
+            # adapter kwargs (exact names): the agentic judge's exec CLI +
             # bwrap-sandboxed parsers run on the host; chat mode ignores these.
-            **(
-                {
-                    "judge_backend": "claude_code_exec",
-                    "judge_model": str(params["judge_model"]),
-                    "judge_effort": "low",
-                    "judge_sandbox_command": str(
-                        get_settings().skill_lab_judge_sandbox
-                    ),
-                }
-                if params["judge_mode"] != "chat"
-                else {}
-            ),
+            # The backend/model pair is family-routed like the eval path.
+            **_train_judge_env(params),
             "workers": int(params["workers"]),
             "timeout": int(params["timeout"]),
             "limit": int(params["limit"]),
