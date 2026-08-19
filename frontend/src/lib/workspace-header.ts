@@ -61,15 +61,22 @@ export function installWorkspaceHeader(): void {
   installed = true;
   const original = window.fetch.bind(window);
   window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    if (backendPath(input) === null) return original(input, init);
+    // Console API responses are live state and must never be satisfied from the
+    // HTTP cache. The backend sends no caching headers, so normally nothing is
+    // cached — but whatever once answered on this origin (a port forward that
+    // briefly pointed elsewhere, a static preview server on the same port) can
+    // leave a heuristically-fresh 200 under an /api URL, and the browser then
+    // serves that entry to every fetch() without touching the network.
+    const stamped: RequestInit = { ...init, cache: init?.cache ?? "no-store" };
     const workspaceId = storedWorkspaceId();
-    if (!workspaceId || backendPath(input) === null) return original(input, init);
+    if (!workspaceId) return original(input, stamped);
     const headers = new Headers(
       init?.headers ?? (input instanceof Request ? input.headers : undefined),
     );
     // A caller that named a workspace means it (the Workspaces page polls the
     // bootstrap job of a workspace that is not the current selection).
-    if (headers.has(WORKSPACE_HEADER)) return original(input, init);
-    headers.set(WORKSPACE_HEADER, workspaceId);
-    return original(input, { ...init, headers });
+    if (!headers.has(WORKSPACE_HEADER)) headers.set(WORKSPACE_HEADER, workspaceId);
+    return original(input, { ...stamped, headers });
   };
 }

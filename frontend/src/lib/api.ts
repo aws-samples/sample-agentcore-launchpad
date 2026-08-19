@@ -353,6 +353,9 @@ function localizedMessage(code: string, fallback: string): string {
 }
 
 async function parseResponse<T>(path: string, res: Response): Promise<T> {
+  // Cloned before the body is consumed, so a parse failure can still show what
+  // the wire actually carried — the error is undiagnosable without it.
+  const clone = res.clone();
   // `undefined` marks a parse failure — JSON.parse itself can never yield it.
   const body: unknown = await res.json().catch(() => undefined);
   if (!res.ok) {
@@ -368,7 +371,13 @@ async function parseResponse<T>(path: string, res: Response): Promise<T> {
     // truncated response). Every console endpoint returns a JSON body, so
     // resolving `null` here poisons callers that stored the result as data
     // (e.g. a table's rows) and crashed far from the cause.
-    throw new ApiError("http.invalid_json", `invalid JSON response from ${path}`, null);
+    const text = await clone.text().catch(() => "");
+    const snippet = text ? JSON.stringify(text.slice(0, 120)) : "<empty body>";
+    throw new ApiError(
+      "http.invalid_json",
+      `invalid JSON response from ${path}: ${snippet}`,
+      null,
+    );
   }
   return body as T;
 }
