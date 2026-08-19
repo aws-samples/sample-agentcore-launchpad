@@ -88,11 +88,35 @@ verdicts are identical either way (checked against the real venv interpreter).
 That is what lets hermetic backend tests run this validator with a bare
 interpreter instead of requiring the provisioned venv.
 
+### 5. `skillopt/model/codex_harness.py` — judge CODEX_HOME seeding
+
+`_run_codex_judge_cli` runs codex with an isolated, initially-empty
+`CODEX_HOME` — fail-closed against user config/rules/session leakage, but it
+also pins the judge client to codex's default `openai` provider (needs
+`OPENAI_API_KEY`). The patch copies top-level files from the directory named
+by `SKILLOPT_JUDGE_CODEX_HOME` (when set) into the fresh home before launch,
+so a Bedrock-only deployment can seed `config.toml` (amazon-bedrock provider,
+us-east-1, web_search disabled, multi_agent_v2 off) plus the model catalog.
+Isolation is otherwise unchanged; the env var unset = upstream behavior. The
+seed is materialized per job submit by the launchpad runner
+(`ensure_judge_codex_home`), never committed (the catalog embeds proprietary
+model instructions).
+
+Second part of the same patch: the judge's Artifact MCP server is registered
+with `default_tools_approval_mode="approve"`. codex >= 0.147 gates MCP tool
+calls behind an approval prompt unless the tool is annotated read-only, and
+the judge's `approval_policy="never"` cancels every prompt — verdicts then
+report "Artifact MCP inventory 调用被取消" with zero evidence (live-reproduced
+2026-08-19). "approve" is codex's pre-approved mode; the server is required,
+networkless and bwrap-sandboxed, so the prompt protects nothing here.
+
 ## Known v1 limitations (deliberate)
 
-- Chat judge only: no `bwrap` sandbox is provisioned, so `judge_mode` must stay
-  `chat`; binary-artifact tasks fail closed (`score_valid=False`), upstream's
-  documented behavior. The inspector deps (mcp/openpyxl/Pillow/python-docx/
+- ~~Chat judge only~~ (lifted 2026-08-18): the host provisions `bwrap` and the
+  runner passes the judge quartet, so `auto`/`agentic` judge modes work — see
+  the launchpad spec (skill-lab-foundation §13). Binary-artifact tasks still
+  fail closed when the host lacks the sandbox launcher, upstream's documented
+  behavior. The inspector deps (mcp/openpyxl/Pillow/python-docx/
   python-pptx) ARE installed in the venv — `evaluate_skill.py` imports them at
   module load regardless of judge mode.
 - Single-account credentials: the exec runner uses the process's default AWS

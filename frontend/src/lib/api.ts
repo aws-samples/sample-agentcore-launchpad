@@ -1500,6 +1500,9 @@ export interface SkillLabStatus {
   /** host-side sandbox launcher present — without it, auto/agentic runs fail
    *  closed on binary-artifact tasks (text-only tasks still judge fine) */
   agentic_judge_ready: boolean;
+  /** host codex CLI present — an openai-family judge model routes the
+   *  agentic judge to codex, so auto/agentic needs it for artifact tasks */
+  judge_codex_ready: boolean;
 }
 
 export type SkillLabTargetBackend = "claude_code_exec" | "codex_exec";
