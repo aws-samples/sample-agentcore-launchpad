@@ -353,7 +353,8 @@ function localizedMessage(code: string, fallback: string): string {
 }
 
 async function parseResponse<T>(path: string, res: Response): Promise<T> {
-  const body = await res.json().catch(() => null);
+  // `undefined` marks a parse failure — JSON.parse itself can never yield it.
+  const body: unknown = await res.json().catch(() => undefined);
   if (!res.ok) {
     if (res.status === 401 && !path.startsWith("/api/auth/")) {
       window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
@@ -361,6 +362,13 @@ async function parseResponse<T>(path: string, res: Response): Promise<T> {
     const env = (body ?? {}) as { code?: string; message?: string; detail?: unknown };
     const code = env.code ?? `http.${res.status}`;
     throw new ApiError(code, localizedMessage(code, env.message ?? res.statusText), env.detail);
+  }
+  if (body === undefined) {
+    // A 200 whose body isn't JSON (backend mid-restart behind the dev proxy,
+    // truncated response). Every console endpoint returns a JSON body, so
+    // resolving `null` here poisons callers that stored the result as data
+    // (e.g. a table's rows) and crashed far from the cause.
+    throw new ApiError("http.invalid_json", `invalid JSON response from ${path}`, null);
   }
   return body as T;
 }
