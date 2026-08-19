@@ -173,6 +173,8 @@ interface EvaluatorInfo {
   level?: string;
   source: string;
   requires_ground_truth?: boolean;
+  evaluator_type?: string | null;
+  provider?: string | null;
 }
 
 // What the online evaluation config scores both arms with when the operator
@@ -1556,6 +1558,45 @@ function ConfigurationExperimentView() {
     </StageCard>
   );
 
+  // One chip renderer for both online-evaluator groups (main + third-party) —
+  // the ONLINE_EVAL_MAX gate must apply across the whole selection.
+  const onlineEvalChip = (e: EvaluatorInfo) => {
+    const on = onlineEvaluators.includes(e.id);
+    const full = !on && onlineEvaluators.length >= ONLINE_EVAL_MAX;
+    return (
+      <button
+        key={e.id}
+        type="button"
+        className={`selchip${on ? " on" : ""}`}
+        data-testid={`online-eval-${e.id}`}
+        disabled={full}
+        style={{ opacity: full ? 0.4 : undefined }}
+        title={e.source === "custom" ? t("expPage.customEvaluator") : e.id}
+        onClick={() =>
+          setOnlineEvaluators((prev) =>
+            prev.includes(e.id)
+              ? prev.filter((x) => x !== e.id)
+              : [...prev, e.id])
+        }
+      >
+        {e.source === "custom" ? (e.name ?? e.id) : evaluatorLabel(t, e.id)}
+        {e.source === "custom" && (
+          <span className="mono" style={{ fontSize: 8.5, marginLeft: 6 }}>
+            ◆
+          </span>
+        )}
+        {e.source === "third_party" && e.provider && (
+          <span
+            className="mono"
+            style={{ fontSize: 8.5, marginLeft: 6, letterSpacing: ".08em", opacity: 0.7 }}
+          >
+            {e.provider}
+          </span>
+        )}
+      </button>
+    );
+  };
+
   const gwabCard = exp && !!a.bundles && (
     <StageCard
       id="gwab" index={3} title={t("expPage.card.gwab")}
@@ -1569,35 +1610,23 @@ function ConfigurationExperimentView() {
               <span className="i">[i]</span>
               <span>{t("expPage.onlineEvaluatorsHint", { max: ONLINE_EVAL_MAX })}</span>
             </div>
-            <div className="selchips" style={{ maxHeight: 132, overflowY: "auto" }}>
-              {evaluators.map((e) => {
-                const on = onlineEvaluators.includes(e.id);
-                const full = !on && onlineEvaluators.length >= ONLINE_EVAL_MAX;
-                return (
-                  <button
-                    key={e.id}
-                    type="button"
-                    className={`selchip${on ? " on" : ""}`}
-                    data-testid={`online-eval-${e.id}`}
-                    disabled={full}
-                    style={{ opacity: full ? 0.4 : undefined }}
-                    title={e.source === "custom" ? t("expPage.customEvaluator") : e.id}
-                    onClick={() =>
-                      setOnlineEvaluators((prev) =>
-                        prev.includes(e.id)
-                          ? prev.filter((x) => x !== e.id)
-                          : [...prev, e.id])
-                    }
+            <div style={{ maxHeight: 132, overflowY: "auto" }}>
+              <div className="selchips">
+                {evaluators.filter((e) => e.source !== "third_party").map(onlineEvalChip)}
+              </div>
+              {evaluators.some((e) => e.source === "third_party") && (
+                <>
+                  <div
+                    className="mono dim"
+                    style={{ fontSize: 9.5, letterSpacing: ".08em", margin: "8px 0 4px" }}
                   >
-                    {e.source === "custom" ? (e.name ?? e.id) : evaluatorLabel(t, e.id)}
-                    {e.source === "custom" && (
-                      <span className="mono" style={{ fontSize: 8.5, marginLeft: 6 }}>
-                        ◆
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
+                    {t("expPage.thirdPartyGroup")}
+                  </div>
+                  <div className="selchips">
+                    {evaluators.filter((e) => e.source === "third_party").map(onlineEvalChip)}
+                  </div>
+                </>
+              )}
             </div>
           </div>
           {actionBtn("gateway", t("expPage.createGateway"), {

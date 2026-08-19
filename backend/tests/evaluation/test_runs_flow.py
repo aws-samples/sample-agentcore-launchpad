@@ -113,6 +113,36 @@ def test_active_run_completes_with_scores(client, monkeypatch):
     db.close()
 
 
+def test_skill_and_thirdparty_evaluator_ids_pass_through(client, monkeypatch):
+    """No run-side allowlist: skill builtins and ThirdParty ids reach
+    StartBatchEvaluation verbatim."""
+    db = SessionLocal()
+    agent = make_agent(db, name="eval-agent-3p")
+    dataset = EvalDataset(
+        workspace_id=DEFAULT_WORKSPACE_ID, name="mini-3p", items=[{"prompt": "x"}])
+    db.add(dataset)
+    db.commit()
+    data, _ = stub_environment(monkeypatch)
+
+    evaluators = ["Builtin.SkillInstructionFollowing", "ThirdParty.AutoEval.Security"]
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "dataset_id": dataset.id,
+        "evaluators": evaluators, "wait_seconds": 0,
+    })
+    assert res.status_code == 201
+    run_id = res.json()["id"]
+    import time
+    for _ in range(50):
+        run = client.get(f"/api/eval/runs/{run_id}").json()
+        if run["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.1)
+    assert run["status"] == "completed", run.get("error")
+    kwargs = data.start_batch_evaluation.call_args.kwargs
+    assert kwargs["evaluators"] == [{"evaluatorId": e} for e in evaluators]
+    db.close()
+
+
 def test_run_failure_recorded(client, monkeypatch):
     db = SessionLocal()
     agent = make_agent(db, name="eval-agent-fail")

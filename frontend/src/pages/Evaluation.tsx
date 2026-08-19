@@ -30,8 +30,10 @@ interface EvaluatorInfo {
   id: string;
   name?: string | null;
   level: string;
-  source: "builtin" | "custom";
+  source: "builtin" | "custom" | "third_party";
   requires_ground_truth?: boolean;
+  evaluator_type?: string | null;
+  provider?: string | null;
 }
 
 const INSIGHT_TYPES = [
@@ -642,46 +644,89 @@ export function Evaluation() {
                     {t("evalPage.newRun.manageEvaluators")} ▸
                   </button>
                 </div>
-                <div className="selchips" style={{ maxHeight: 168, overflowY: "auto" }}>
-                  {evaluators.map((e) => {
-                    const gated = e.requires_ground_truth && !trajectoryAllowed;
-                    const badge = LEVEL_BADGE[e.level];
-                    return (
-                      <button
-                        key={e.id}
-                        type="button"
-                        className={`selchip${chosenEvaluators.includes(e.id) ? " on" : ""}`}
-                        style={{ cursor: gated ? "not-allowed" : "pointer",
-                                 opacity: gated ? 0.4 : undefined }}
-                        disabled={gated}
-                        title={
-                          gated
-                            ? t("evalPage.newRun.trajectoryNeedsGt")
-                            : e.source === "custom"
-                              ? t("evalPage.newRun.customTitle")
-                              : e.id
-                        }
-                        onClick={() =>
-                          setChosenEvaluators((prev) =>
-                            prev.includes(e.id)
-                              ? prev.filter((x) => x !== e.id)
-                              : [...prev, e.id],
-                          )
-                        }
+                <div style={{ maxHeight: 168, overflowY: "auto" }}>
+                  <div className="selchips">
+                    {evaluators.filter((e) => e.source !== "third_party").map((e) => {
+                      const gated = e.requires_ground_truth && !trajectoryAllowed;
+                      const badge = LEVEL_BADGE[e.level];
+                      return (
+                        <button
+                          key={e.id}
+                          type="button"
+                          className={`selchip${chosenEvaluators.includes(e.id) ? " on" : ""}`}
+                          style={{ cursor: gated ? "not-allowed" : "pointer",
+                                   opacity: gated ? 0.4 : undefined }}
+                          disabled={gated}
+                          title={
+                            gated
+                              ? t("evalPage.newRun.trajectoryNeedsGt")
+                              : e.source === "custom"
+                                ? t("evalPage.newRun.customTitle")
+                                : e.id
+                          }
+                          onClick={() =>
+                            setChosenEvaluators((prev) =>
+                              prev.includes(e.id)
+                                ? prev.filter((x) => x !== e.id)
+                                : [...prev, e.id],
+                            )
+                          }
+                        >
+                          {e.source === "custom" ? (e.name ?? e.id) : evaluatorLabel(t, e.id)}
+                          {(e.source === "custom" || e.requires_ground_truth) && badge && (
+                            <span
+                              className="mono"
+                              style={{ fontSize: 8.5, marginLeft: 6, color: badge.color,
+                                       letterSpacing: ".08em" }}
+                            >
+                              {e.source === "custom" ? `◆ ${badge.label}` : badge.label}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {evaluators.some((e) => e.source === "third_party") && (
+                    <>
+                      <div
+                        className="mono dim"
+                        style={{ fontSize: 9.5, letterSpacing: ".08em", margin: "8px 0 4px" }}
                       >
-                        {e.source === "custom" ? (e.name ?? e.id) : evaluatorLabel(t, e.id)}
-                        {(e.source === "custom" || e.requires_ground_truth) && badge && (
-                          <span
-                            className="mono"
-                            style={{ fontSize: 8.5, marginLeft: 6, color: badge.color,
-                                     letterSpacing: ".08em" }}
+                        {t("evalPage.newRun.thirdPartyGroup")}
+                      </div>
+                      <div className="selchips">
+                        {evaluators.filter((e) => e.source === "third_party").map((e) => (
+                          <button
+                            key={e.id}
+                            type="button"
+                            className={`selchip${
+                              chosenEvaluators.includes(e.id) ? " on" : ""
+                            }`}
+                            style={{ cursor: "pointer" }}
+                            title={e.id}
+                            onClick={() =>
+                              setChosenEvaluators((prev) =>
+                                prev.includes(e.id)
+                                  ? prev.filter((x) => x !== e.id)
+                                  : [...prev, e.id],
+                              )
+                            }
                           >
-                            {e.source === "custom" ? `◆ ${badge.label}` : badge.label}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
+                            {evaluatorLabel(t, e.id)}
+                            {e.provider && (
+                              <span
+                                className="mono"
+                                style={{ fontSize: 8.5, marginLeft: 6,
+                                         letterSpacing: ".08em", opacity: 0.7 }}
+                              >
+                                {e.provider}
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             ) : (

@@ -444,29 +444,49 @@ def delete_cloud_dataset(
 @router.get("/evaluators")
 def list_evaluators(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
     builtin = [
-        {"id": name, "level": level, "source": "builtin"}
+        {
+            "id": name,
+            "level": level,
+            "source": "builtin",
+            "evaluator_type": "Builtin",
+            "provider": "AWS",
+        }
         for name, level in ac.ALL_BUILTIN_EVALUATORS.items()
     ] + [
-        {"id": name, "level": level, "source": "builtin", "requires_ground_truth": True}
+        {
+            "id": name,
+            "level": level,
+            "source": "builtin",
+            "requires_ground_truth": True,
+            "evaluator_type": "Builtin",
+            "provider": "AWS",
+        }
         for name, level in ac.TRAJECTORY_EVALUATORS.items()
     ]
-    custom: list[dict[str, Any]] = []
+    live: list[dict[str, Any]] = []
     try:
         for ev in ac.list_evaluators(control_client(ws.context)):
             evaluator_id = ev.get("evaluatorId", "")
-            if not evaluator_id.startswith("Builtin."):
-                custom.append(
-                    {
-                        "id": evaluator_id,
-                        "name": ev.get("evaluatorName"),
-                        "level": ev.get("level"),
-                        "status": ev.get("status"),
-                        "source": "custom",
-                    }
-                )
+            if evaluator_id.startswith("Builtin."):
+                continue  # rendered from the local dicts above
+            evaluator_type = ev.get("evaluatorType")
+            third_party = evaluator_type == "ThirdParty" or evaluator_id.startswith(
+                "ThirdParty."
+            )
+            live.append(
+                {
+                    "id": evaluator_id,
+                    "name": ev.get("evaluatorName"),
+                    "level": ev.get("level"),
+                    "status": ev.get("status"),
+                    "source": "third_party" if third_party else "custom",
+                    "evaluator_type": evaluator_type,
+                    "provider": ev.get("provider"),
+                }
+            )
     except Exception:
         pass  # account listing unavailable — builtins still render
-    return {"evaluators": builtin + custom, "builtin_count": len(builtin)}
+    return {"evaluators": builtin + live, "builtin_count": len(builtin)}
 
 
 _PLACEHOLDER_RE = re.compile(r"\{[a-zA-Z_][a-zA-Z0-9_]*\}")
@@ -485,11 +505,48 @@ class RatingScaleItem(BaseModel):
 
 class JudgeCreate(BaseModel):
     name: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_]{0,47}$")
-    instructions: str = Field(min_length=10, max_length=4000)
+    instructions: str | None = Field(default=None, min_length=10, max_length=4000)
+    # Derived (CustomDerived) definition: run this base evaluator's prompt and
+    # scoring on the caller-supplied Bedrock model instead of authoring one.
+    base_evaluator_id: str | None = Field(
+        default=None, pattern=r"^(Builtin|ThirdParty)\.[A-Za-z0-9_.]+$"
+    )
     model_id: str = "global.anthropic.claude-sonnet-5"
     level: str = Field(default="TRACE", pattern="^(TOOL_CALL|TRACE|SESSION)$")
     description: str = Field(default="", max_length=1000)
     rating_scale: list[RatingScaleItem] | None = Field(default=None, min_length=2)
+
+
+def _require_one_definition(req: "JudgeCreate | JudgeUpdate") -> None:
+    if (req.instructions is None) == (req.base_evaluator_id is None):
+        raise AppError(
+            "evaluator.definition_ambiguous",
+            "provide exactly one of instructions (LLM-as-a-judge) or "
+            "base_evaluator_id (derived evaluator)",
+            status_code=400,
+        )
+    if req.base_evaluator_id and req.rating_scale:
+        raise AppError(
+            "evaluator.rating_scale_not_allowed",
+            "derived evaluators inherit the base evaluator's rating scale",
+            status_code=400,
+        )
+
+
+def _resolve_base_level(client: Any, base_evaluator_id: str) -> str:
+    """Level for a derived evaluator — CreateEvaluator requires one even for
+    derived configs, so it is taken from the base evaluator."""
+    level = ac.ALL_BUILTIN_EVALUATORS.get(base_evaluator_id)
+    if level:
+        return level
+    try:
+        return ac.get_evaluator(client, evaluator_id=base_evaluator_id)["level"]
+    except Exception as exc:
+        raise AppError(
+            "evaluator.base_not_found",
+            f"base evaluator {base_evaluator_id} not found",
+            status_code=400,
+        ) from exc
 
 
 def _require_placeholder(instructions: str) -> None:
@@ -509,8 +566,10 @@ def _rating_scale_payload(scale: list[RatingScaleItem] | None) -> list[dict[str,
 
 
 def _evaluator_out(detail: dict[str, Any]) -> dict[str, Any]:
-    judge = (detail.get("evaluatorConfig") or {}).get("llmAsAJudge") or {}
-    model_config = (judge.get("modelConfig") or {}).get(
+    config = detail.get("evaluatorConfig") or {}
+    judge = config.get("llmAsAJudge") or {}
+    derived = config.get("derived") or {}
+    model_config = ((derived or judge).get("modelConfig") or {}).get(
         "bedrockEvaluatorModelConfig"
     ) or {}
     return {
@@ -518,9 +577,12 @@ def _evaluator_out(detail: dict[str, Any]) -> dict[str, Any]:
         "name": detail.get("evaluatorName"),
         "level": detail.get("level"),
         "description": detail.get("description"),
-        "instructions": judge.get("instructions"),
+        "instructions": "" if derived else judge.get("instructions"),
         "rating_scale": (judge.get("ratingScale") or {}).get("numerical", []),
         "model_id": model_config.get("modelId"),
+        "base_evaluator_id": derived.get("baseEvaluatorId"),
+        "evaluator_type": detail.get("evaluatorType"),
+        "provider": detail.get("provider"),
         "status": detail.get("status"),
     }
 
@@ -529,16 +591,28 @@ def _evaluator_out(detail: dict[str, Any]) -> dict[str, Any]:
 def create_judge(
     req: JudgeCreate, ws: WorkspaceScope = Depends(require_workspace)
 ) -> dict[str, Any]:
-    _require_placeholder(req.instructions)
-    created = ac.create_llm_judge_evaluator(
-        control_client(ws.context),
-        name=req.name,
-        instructions=req.instructions,
-        rating_scale=_rating_scale_payload(req.rating_scale),
-        model_id=req.model_id,
-        level=req.level,
-        description=req.description,
-    )
+    _require_one_definition(req)
+    client = control_client(ws.context)
+    if req.base_evaluator_id:
+        created = ac.create_derived_evaluator(
+            client,
+            name=req.name,
+            description=req.description,
+            base_evaluator_id=req.base_evaluator_id,
+            model_id=req.model_id,
+            level=_resolve_base_level(client, req.base_evaluator_id),
+        )
+    else:
+        _require_placeholder(req.instructions)
+        created = ac.create_llm_judge_evaluator(
+            client,
+            name=req.name,
+            instructions=req.instructions,
+            rating_scale=_rating_scale_payload(req.rating_scale),
+            model_id=req.model_id,
+            level=req.level,
+            description=req.description,
+        )
     return {"evaluator_id": created.get("evaluatorId"), "arn": created.get("evaluatorArn")}
 
 
@@ -552,11 +626,23 @@ def get_evaluator(
 
 
 class JudgeUpdate(BaseModel):
-    instructions: str = Field(min_length=10, max_length=4000)
+    instructions: str | None = Field(default=None, min_length=10, max_length=4000)
+    base_evaluator_id: str | None = Field(
+        default=None, pattern=r"^(Builtin|ThirdParty)\.[A-Za-z0-9_.]+$"
+    )
     model_id: str = "global.anthropic.claude-sonnet-5"
     level: str = Field(default="TRACE", pattern="^(TOOL_CALL|TRACE|SESSION)$")
     description: str = Field(default="", max_length=1000)
     rating_scale: list[RatingScaleItem] | None = Field(default=None, min_length=2)
+
+
+def _reject_managed(evaluator_id: str) -> None:
+    if evaluator_id.startswith(("Builtin.", "ThirdParty.")):
+        raise AppError(
+            "evaluator.builtin_immutable",
+            "built-in and third-party managed evaluators cannot be modified",
+            status_code=400,
+        )
 
 
 @router.put("/evaluators/{evaluator_id}")
@@ -565,23 +651,41 @@ def update_evaluator(
     req: JudgeUpdate,
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    if evaluator_id.startswith("Builtin."):
+    _reject_managed(evaluator_id)
+    _require_one_definition(req)
+    if req.instructions is not None:
+        _require_placeholder(req.instructions)
+    client = control_client(ws.context)
+    # UpdateEvaluator full-replaces the config, so a payload of the wrong
+    # definition type would silently convert the evaluator — reject instead.
+    current = ac.get_evaluator(client, evaluator_id=evaluator_id)
+    is_derived = "derived" in (current.get("evaluatorConfig") or {})
+    if is_derived != bool(req.base_evaluator_id):
         raise AppError(
-            "evaluator.builtin_immutable",
-            "built-in evaluators cannot be modified",
+            "evaluator.definition_mismatch",
+            "update payload must match the evaluator's definition type "
+            "(instructions for LLM-as-a-judge, base_evaluator_id for derived)",
             status_code=400,
         )
-    _require_placeholder(req.instructions)
-    client = control_client(ws.context)
-    ac.update_evaluator(
-        client,
-        evaluator_id=evaluator_id,
-        instructions=req.instructions,
-        rating_scale=_rating_scale_payload(req.rating_scale),
-        model_id=req.model_id,
-        level=req.level,
-        description=req.description,
-    )
+    if req.base_evaluator_id:
+        ac.update_derived_evaluator(
+            client,
+            evaluator_id=evaluator_id,
+            description=req.description,
+            base_evaluator_id=req.base_evaluator_id,
+            model_id=req.model_id,
+            level=_resolve_base_level(client, req.base_evaluator_id),
+        )
+    else:
+        ac.update_evaluator(
+            client,
+            evaluator_id=evaluator_id,
+            instructions=req.instructions,
+            rating_scale=_rating_scale_payload(req.rating_scale),
+            model_id=req.model_id,
+            level=req.level,
+            description=req.description,
+        )
     return _evaluator_out(ac.get_evaluator(client, evaluator_id=evaluator_id))
 
 
@@ -589,6 +693,7 @@ def update_evaluator(
 def delete_evaluator(
     evaluator_id: str, ws: WorkspaceScope = Depends(require_workspace)
 ) -> dict[str, Any]:
+    _reject_managed(evaluator_id)
     ac.delete_evaluator(control_client(ws.context), evaluator_id=evaluator_id)
     return {"deleted": True}
 
