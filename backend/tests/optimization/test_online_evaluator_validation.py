@@ -116,6 +116,41 @@ def test_inspection_happens_after_dedup_and_cap():
     assert control.calls == []  # rejected without paying for 11 lookups
 
 
+def test_skill_builtins_accepted_without_aws_call():
+    control = StubControl()
+    chosen = normalize_online_evaluators(
+        ["Builtin.SkillSelectionAccuracy", "Builtin.SkillInstructionFollowing"], control
+    )
+    assert chosen == [
+        "Builtin.SkillSelectionAccuracy",
+        "Builtin.SkillInstructionFollowing",
+    ]
+    assert control.calls == []
+
+
+def test_third_party_evaluator_accepted():
+    """Managed third-party evaluators expose no llmAsAJudge config — the
+    GetEvaluator probe finds nothing ground-truth-shaped and lets them through."""
+    control = StubControl({
+        "ThirdParty.DeepEval.TaskCompletion": {
+            "evaluatorId": "ThirdParty.DeepEval.TaskCompletion",
+            "evaluatorType": "ThirdParty",
+            "provider": "DeepEval",
+        }
+    })
+    chosen = normalize_online_evaluators(["ThirdParty.DeepEval.TaskCompletion"], control)
+    assert chosen == ["ThirdParty.DeepEval.TaskCompletion"]
+    assert control.calls == ["ThirdParty.DeepEval.TaskCompletion"]
+
+
+def test_skill_builtin_typo_rejected():
+    control = StubControl()
+    with pytest.raises(AppError) as excinfo:
+        normalize_online_evaluators(["Builtin.SkillTypo"], control)
+    assert excinfo.value.status_code == 400
+    assert control.calls == []
+
+
 def test_existing_rejections_unchanged():
     control = StubControl()
     with pytest.raises(AppError) as trajectory:

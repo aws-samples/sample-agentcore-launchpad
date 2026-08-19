@@ -21,7 +21,7 @@ BUILTIN_EVALUATORS = [
     "Builtin.Correctness",
 ]
 
-# The 13 general-purpose built-in evaluators, by evaluation level (see
+# The 15 general-purpose built-in evaluators, by evaluation level (see
 # AgentCore Evaluations docs: built-in-evaluators-overview). IDs are used as
 # `Builtin.<Name>`.
 ALL_BUILTIN_EVALUATORS: dict[str, str] = {
@@ -42,6 +42,10 @@ ALL_BUILTIN_EVALUATORS: dict[str, str] = {
     # tool-call level
     "Builtin.ToolSelectionAccuracy": "TOOL_CALL",
     "Builtin.ToolParameterAccuracy": "TOOL_CALL",
+    # tool-call level — skills (one result per skill invocation; zero results
+    # when the session loaded no skills is expected, not an error)
+    "Builtin.SkillSelectionAccuracy": "TOOL_CALL",
+    "Builtin.SkillInstructionFollowing": "TOOL_CALL",
 }
 
 # Ground-truth-only trajectory matchers — they score against
@@ -54,13 +58,21 @@ TRAJECTORY_EVALUATORS: dict[str, str] = {
     "Builtin.TrajectoryAnyOrderMatch": "SESSION",
 }
 
-# Built-in evaluators whose score is a *penalty*: the judge answers "Yes" /
-# "Harmful" / "Stereotyping" when the response is BAD, so the lower-mean arm is
-# the better arm. Verified against the AWS built-in prompt templates
-# (AgentCore docs: prompt-templates-builtin). Every other evaluator scores a
+# Evaluators whose score is a *penalty*: the judge answers "Yes" / "Harmful" /
+# "Stereotyping" when the response is BAD, so the lower-mean arm is the better
+# arm. Built-ins verified against the AWS prompt templates (AgentCore docs:
+# prompt-templates-builtin); the DeepEval metrics score the presence of the
+# named defect (docs: third-party-evaluators). Every other evaluator scores a
 # desirable property, where a higher mean wins.
 LOWER_IS_BETTER_EVALUATORS = frozenset(
-    {"Builtin.Refusal", "Builtin.Harmfulness", "Builtin.Stereotyping"}
+    {
+        "Builtin.Refusal",
+        "Builtin.Harmfulness",
+        "Builtin.Stereotyping",
+        "ThirdParty.DeepEval.Bias",
+        "ThirdParty.DeepEval.Toxicity",
+        "ThirdParty.DeepEval.PIILeakage",
+    }
 )
 
 
@@ -424,6 +436,65 @@ def update_evaluator(
             "llmAsAJudge": {
                 "instructions": instructions,
                 "ratingScale": {"numerical": rating_scale},
+                "modelConfig": {
+                    "bedrockEvaluatorModelConfig": {"modelId": model_id}
+                },
+            }
+        },
+        clientToken=str(uuid.uuid4()),
+    )
+
+
+def create_derived_evaluator(
+    client: Any,
+    *,
+    name: str,
+    description: str = "",
+    base_evaluator_id: str,
+    model_id: str,
+    level: str,
+) -> dict[str, Any]:
+    """Create a CustomDerived evaluator: the base evaluator's prompt/scoring
+    run on a caller-supplied Bedrock model.
+
+    ``base_evaluator_id`` is any ``Builtin.*`` or ``ThirdParty.*`` LLM-based
+    evaluator. CreateEvaluator marks ``level`` required even for derived
+    configs, so callers pass the base evaluator's level.
+    """
+    return client.create_evaluator(
+        evaluatorName=name,
+        description=description or name,
+        level=level,
+        evaluatorConfig={
+            "derived": {
+                "baseEvaluatorId": base_evaluator_id,
+                "modelConfig": {
+                    "bedrockEvaluatorModelConfig": {"modelId": model_id}
+                },
+            }
+        },
+        clientToken=str(uuid.uuid4()),
+    )
+
+
+def update_derived_evaluator(
+    client: Any,
+    *,
+    evaluator_id: str,
+    description: str,
+    base_evaluator_id: str,
+    model_id: str,
+    level: str,
+) -> dict[str, Any]:
+    """Full-replace update of a derived evaluator config (same idiom as
+    :func:`update_evaluator` — UpdateEvaluator takes the complete config)."""
+    return client.update_evaluator(
+        evaluatorId=evaluator_id,
+        description=description,
+        level=level,
+        evaluatorConfig={
+            "derived": {
+                "baseEvaluatorId": base_evaluator_id,
                 "modelConfig": {
                     "bedrockEvaluatorModelConfig": {"modelId": model_id}
                 },

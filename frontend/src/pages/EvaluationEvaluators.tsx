@@ -16,8 +16,10 @@ interface EvaluatorRow {
   name?: string | null;
   level: string;
   status?: string | null;
-  source: "builtin" | "custom";
+  source: "builtin" | "custom" | "third_party";
   requires_ground_truth?: boolean;
+  evaluator_type?: string | null;
+  provider?: string | null;
 }
 
 interface ScalePoint {
@@ -35,10 +37,18 @@ interface EvaluatorDetail {
   rating_scale: ScalePoint[];
   model_id: string | null;
   status: string | null;
+  evaluator_type?: string | null;
+  provider?: string | null;
+  base_evaluator_id?: string | null;
 }
 
 const NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,47}$/;
 const PLACEHOLDER_RE = /\{[a-zA-Z_][a-zA-Z0-9_]*\}/;
+
+// Sentinel row for the collapsible third-party section toggle — it sits inside
+// the ordered list so client-side pagination counts it like a normal row.
+const TP_TOGGLE_ID = "__thirdparty_toggle__";
+const TP_TOGGLE_ROW: EvaluatorRow = { id: TP_TOGGLE_ID, level: "", source: "third_party" };
 
 // Judge models CreateEvaluator accepted in a live probe (us-west-2,
 // 2026-07-11) — the service validates modelId per region and rejects the
@@ -59,7 +69,13 @@ const LEVELS: Level[] = ["TRACE", "SESSION", "TOOL_CALL"];
 
 // Placeholder tokens the judge prompt can reference, by evaluation level.
 // Ground-truth tokens resolve only on dataset runs that carry ground truth.
-const LEVEL_PLACEHOLDERS: Record<Level, { core: string[]; groundTruth: string[] }> = {
+// Skill tokens (TOOL_CALL only) restrict the evaluator to skill-invocation
+// tool calls; {skill_content} additionally switches {context} to the full
+// session context.
+const LEVEL_PLACEHOLDERS: Record<
+  Level,
+  { core: string[]; groundTruth: string[]; skill?: string[] }
+> = {
   TRACE: {
     core: ["{context}", "{assistant_turn}"],
     groundTruth: ["{expected_response}"],
@@ -71,6 +87,7 @@ const LEVEL_PLACEHOLDERS: Record<Level, { core: string[]; groundTruth: string[] 
   TOOL_CALL: {
     core: ["{context}", "{available_tools}", "{tool_turn}"],
     groundTruth: [],
+    skill: ["{invoked_skill}", "{skill_content}", "{available_skills}", "{user_message}"],
   },
 };
 
@@ -152,6 +169,9 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<EvaluatorRow | null>(null);
+  const [tpOpen, setTpOpen] = useState(false);
+  const [defType, setDefType] = useState<"judge" | "derived">("judge");
+  const [baseEvaluatorId, setBaseEvaluatorId] = useState("");
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   const load = useCallback(async () => {
@@ -172,7 +192,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
   }, [load]);
 
   const custom = rows.filter((r) => r.source === "custom");
-  const ordered = [...custom, ...rows.filter((r) => r.source === "builtin")];
+  const thirdParty = rows.filter((r) => r.source === "third_party");
 
   // "?ev=<id>" selects a row from the table (linkable, back-button friendly);
   // "?ev=new" opens the create form even while evaluators exist.
@@ -189,10 +209,30 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
     setSearchParams({ view: "evaluators" }, { replace: true });
   };
   const editingId = selected?.source === "custom" ? selected.id : null;
+  // A deep link to a third-party row must never strand it inside the
+  // collapsed section, so a third-party selection forces the section open.
+  const tpVisible = tpOpen || selected?.source === "third_party";
+  const ordered = [
+    ...custom,
+    ...rows.filter((r) => r.source === "builtin"),
+    ...(thirdParty.length ? [TP_TOGGLE_ROW, ...(tpVisible ? thirdParty : [])] : []),
+  ];
   const { rows: pageRows, pagerProps } = useTablePage(
     ordered,
     ordered.findIndex((row) => row.id === selected?.id),
   );
+
+  // Derived (CustomDerived) evaluators reuse the create/edit form with the
+  // instructions + rating-scale sections swapped for a base-evaluator pick;
+  // base candidates are the LLM-based managed rows (trajectory matchers are
+  // deterministic and cannot back a derived evaluator).
+  const derivedForm = editingId ? !!detail?.base_evaluator_id : defType === "derived";
+  const baseOptions = rows.filter(
+    (r) => (r.source === "builtin" || r.source === "third_party") && !r.requires_ground_truth,
+  );
+  const derivedLevel = editingId
+    ? (detail?.level ?? null)
+    : (rows.find((r) => r.id === baseEvaluatorId)?.level ?? null);
 
   // Detail + draft hydrate declaratively from the selected row; switching
   // rows must not leak the previous draft into the next form.
@@ -202,6 +242,8 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
     setDetail(null);
     setDetailError(false);
     setDraft(emptyDraft());
+    setDefType("judge");
+    setBaseEvaluatorId("");
     if (!selectedId) return;
     let cancelled = false;
     void (async () => {
@@ -221,6 +263,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
             ...p,
           })),
         });
+        setBaseEvaluatorId(d.base_evaluator_id ?? "");
       } catch {
         if (!cancelled) setDetailError(true);
       }
@@ -255,26 +298,41 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
       setFormError(t("evalPage.evaluators.nameInvalid"));
       return;
     }
-    if (!PLACEHOLDER_RE.test(draft.instructions)) {
-      setFormError(t("evalPage.evaluators.missingPlaceholder"));
-      return;
-    }
-    if (
-      draft.rating_scale.length < 2 ||
-      draft.rating_scale.some((p) => !p.label.trim() || !p.definition.trim())
-    ) {
-      setFormError(t("evalPage.evaluators.scaleIncomplete"));
-      return;
+    if (derivedForm) {
+      if (!baseEvaluatorId) {
+        setFormError(t("evalPage.evaluators.baseRequired"));
+        return;
+      }
+    } else {
+      if (!PLACEHOLDER_RE.test(draft.instructions)) {
+        setFormError(t("evalPage.evaluators.missingPlaceholder"));
+        return;
+      }
+      if (
+        draft.rating_scale.length < 2 ||
+        draft.rating_scale.some((p) => !p.label.trim() || !p.definition.trim())
+      ) {
+        setFormError(t("evalPage.evaluators.scaleIncomplete"));
+        return;
+      }
     }
     setBusy(true);
     try {
-      const body = {
-        instructions: draft.instructions,
-        model_id: draft.model_id,
-        level: draft.level,
-        description: draft.description,
-        rating_scale: draft.rating_scale,
-      };
+      // Derived evaluators carry no instructions/scale/level — the base
+      // evaluator owns those server-side.
+      const body = derivedForm
+        ? {
+            base_evaluator_id: baseEvaluatorId,
+            model_id: draft.model_id,
+            description: draft.description,
+          }
+        : {
+            instructions: draft.instructions,
+            model_id: draft.model_id,
+            level: draft.level,
+            description: draft.description,
+            rating_scale: draft.rating_scale,
+          };
       const res = editingId
         ? await fetch(`/api/eval/evaluators/${editingId}`, {
             method: "PUT",
@@ -334,6 +392,31 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
   // form — only the name field and the submit label differ.
   const formBody = (
     <>
+      {!editingId && (
+        <div className="field">
+          <label>{t("evalPage.evaluators.definitionType")}</label>
+          <div className="selchips">
+            <button
+              type="button"
+              data-testid="definition-type-judge"
+              className={`selchip${defType === "judge" ? " on" : ""}`}
+              style={{ cursor: "pointer" }}
+              onClick={() => setDefType("judge")}
+            >
+              {t("evalPage.evaluators.defJudge")}
+            </button>
+            <button
+              type="button"
+              data-testid="definition-type-derived"
+              className={`selchip${defType === "derived" ? " on" : ""}`}
+              style={{ cursor: "pointer" }}
+              onClick={() => setDefType("derived")}
+            >
+              {t("evalPage.evaluators.defDerived")}
+            </button>
+          </div>
+        </div>
+      )}
       <div className="field">
         <label>{t("evalPage.evaluators.name")}</label>
         <input
@@ -345,22 +428,62 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
           onChange={(e) => setDraft({ ...draft, name: e.target.value })}
         />
       </div>
-      <div className="field">
-        <label>{t("evalPage.evaluators.level")}</label>
-        <div className="selchips">
-          {LEVELS.map((lvl) => (
-            <button
-              key={lvl}
-              type="button"
-              className={`selchip${draft.level === lvl ? " on" : ""}`}
-              style={{ cursor: "pointer" }}
-              onClick={() => setDraft({ ...draft, level: lvl })}
+      {derivedForm ? (
+        <div className="field">
+          <label>{t("evalPage.evaluators.baseEvaluator")}</label>
+          {editingId ? (
+            <input
+              className="input mono"
+              value={baseEvaluatorId}
+              readOnly
+              style={{ opacity: 0.6 }}
+            />
+          ) : (
+            <select
+              className="input"
+              data-testid="derived-base-select"
+              value={baseEvaluatorId}
+              onChange={(e) => setBaseEvaluatorId(e.target.value)}
             >
-              {lvl}
-            </button>
-          ))}
+              <option value="" style={{ background: "#141816" }}>
+                {t("evalPage.evaluators.basePick")}
+              </option>
+              {baseOptions.map((r) => (
+                <option key={r.id} value={r.id} style={{ background: "#141816" }}>
+                  {evaluatorLabel(t, r.id)}
+                  {r.source === "third_party" && r.provider ? ` · ${r.provider}` : ""}
+                </option>
+              ))}
+            </select>
+          )}
+          <div
+            className="mono dim"
+            style={{ fontSize: 9.5, letterSpacing: ".08em", marginTop: 6 }}
+          >
+            {t("evalPage.evaluators.derivedLevel")}: {derivedLevel ?? "—"}
+          </div>
+          <div className="mono dim" style={{ fontSize: 9.5, marginTop: 4 }}>
+            {t("evalPage.evaluators.derivedHint")}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="field">
+          <label>{t("evalPage.evaluators.level")}</label>
+          <div className="selchips">
+            {LEVELS.map((lvl) => (
+              <button
+                key={lvl}
+                type="button"
+                className={`selchip${draft.level === lvl ? " on" : ""}`}
+                style={{ cursor: "pointer" }}
+                onClick={() => setDraft({ ...draft, level: lvl })}
+              >
+                {lvl}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="field">
         <label>{t("evalPage.evaluators.model")}</label>
         <select
@@ -386,6 +509,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
           onChange={(e) => setDraft({ ...draft, description: e.target.value })}
         />
       </div>
+      {!derivedForm && (
       <div className="field">
         <label>{t("evalPage.evaluators.instructions")}</label>
         <textarea
@@ -432,7 +556,36 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
             ◆ {t("evalPage.evaluators.gtOnly")}
           </div>
         )}
+        {placeholders.skill && (
+          <>
+            <div
+              className="mono dim"
+              style={{ fontSize: 9.5, letterSpacing: ".08em", margin: "8px 0 4px" }}
+            >
+              {t("evalPage.evaluators.skillGroup")}
+            </div>
+            <div className="selchips">
+              {placeholders.skill.map((token) => (
+                <button
+                  key={token}
+                  type="button"
+                  className="selchip"
+                  style={{ cursor: "pointer", borderStyle: "dotted" }}
+                  title={t("evalPage.evaluators.skillHint")}
+                  onClick={() => insertPlaceholder(token)}
+                >
+                  {token}
+                </button>
+              ))}
+            </div>
+            <div className="mono dim" style={{ fontSize: 9.5, marginTop: 4 }}>
+              {t("evalPage.evaluators.skillHint")}
+            </div>
+          </>
+        )}
       </div>
+      )}
+      {!derivedForm && (
       <div className="field">
         <label>{t("evalPage.evaluators.ratingScale")}</label>
         {draft.rating_scale.map((p, i) => (
@@ -485,6 +638,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
           + {t("evalPage.evaluators.addPoint")}
         </Btn>
       </div>
+      )}
       {formError && (
         <div className="note" style={{ borderColor: "var(--crit)", marginBottom: 10 }}>
           <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
@@ -494,7 +648,11 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
         <Btn
           primary
-          disabled={busy || (!editingId && !draft.name.trim()) || !draft.instructions.trim()}
+          disabled={
+            busy ||
+            (!editingId && !draft.name.trim()) ||
+            (derivedForm ? !baseEvaluatorId : !draft.instructions.trim())
+          }
           onClick={() => void submit()}
         >
           ▸ {editingId ? t("evalPage.evaluators.save") : t("evalPage.evaluators.create")}
@@ -503,16 +661,19 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
     </>
   );
 
-  // Builtin detail is read-only — the backend PUT rejects Builtin.* with 400,
-  // so no save/delete entry points render here. GetEvaluator works for
-  // builtins; a failed fetch degrades to the list-row info.
-  const builtinBody = selected?.source === "builtin" && (
+  // Builtin/third-party detail is read-only — the backend PUT rejects both
+  // with 400, so no save/delete entry points render here. GetEvaluator works
+  // for managed ids; a failed fetch degrades to the list-row info.
+  const readonlyBody = selected && selected.source !== "custom" && (
     <>
       {!detail && !detailError && <div className="empty">{t("common.loading")}</div>}
       {detail && (
         <>
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
             {levelBadge(detail.level ?? selected.level)}
+            {selected.provider && selected.source === "third_party" && (
+              <Chip tone="muted">{selected.provider}</Chip>
+            )}
             {detail.status && (
               <Chip tone={detail.status === "ACTIVE" ? "good" : "warn"}>{detail.status}</Chip>
             )}
@@ -572,7 +733,13 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
       )}
       <div className="note" style={{ marginTop: 10 }}>
         <span className="i">[i]</span>
-        <span>{t("evalPage.evaluators.readonlyHint")}</span>
+        <span>
+          {t(
+            selected.source === "third_party"
+              ? "evalPage.evaluators.thirdPartyReadonlyHint"
+              : "evalPage.evaluators.readonlyHint",
+          )}
+        </span>
       </div>
     </>
   );
@@ -623,7 +790,22 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
               </tr>
             </thead>
             <tbody>
-              {pageRows.map((row) => (
+              {pageRows.map((row) =>
+                row.id === TP_TOGGLE_ID ? (
+                  <tr
+                    key={row.id}
+                    data-testid="thirdparty-toggle"
+                    onClick={() => setTpOpen(!tpVisible)}
+                    style={{ cursor: "pointer" }}
+                  >
+                    <td colSpan={5} className="mono dim" style={{ letterSpacing: ".08em" }}>
+                      {tpVisible ? "▾" : "▸"}{" "}
+                      {t("evalPage.evaluators.thirdPartySection", {
+                        count: thirdParty.length,
+                      })}
+                    </td>
+                  </tr>
+                ) : (
                 <tr
                   key={row.id}
                   data-testid={`evaluator-row-${row.id}`}
@@ -635,9 +817,34 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
                   }}
                 >
                   {row.source === "custom" ? (
-                    <td className="pri">{row.name ?? row.id}</td>
+                    <td className="pri">
+                      {row.name ?? row.id}
+                      {row.evaluator_type === "CustomDerived" && (
+                        <span
+                          className="mono"
+                          style={{
+                            fontSize: 8.5,
+                            marginLeft: 6,
+                            letterSpacing: ".08em",
+                            color: "var(--aqua)",
+                          }}
+                        >
+                          {t("evalPage.evaluators.derivedChip")}
+                        </span>
+                      )}
+                    </td>
                   ) : (
-                    <td className="mono" title={row.id}>{evaluatorLabel(t, row.id)}</td>
+                    <td className="mono" title={row.id}>
+                      {evaluatorLabel(t, row.id)}
+                      {row.source === "third_party" && row.provider && (
+                        <span
+                          className="mono dim"
+                          style={{ fontSize: 8.5, marginLeft: 6, letterSpacing: ".08em" }}
+                        >
+                          {row.provider}
+                        </span>
+                      )}
+                    </td>
                   )}
                   <td>{levelBadge(row.level)}</td>
                   <td className="mono dim">{row.source.toUpperCase()}</td>
@@ -650,7 +857,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
                     {row.requires_ground_truth ? "◆" : "—"}
                   </td>
                   <td>
-                    {row.source === "builtin" ? (
+                    {row.source !== "custom" ? (
                       <Chip tone="muted">{t("evalPage.evaluators.readonly")}</Chip>
                     ) : row.status ? (
                       <Chip tone={row.status === "ACTIVE" ? "good" : "warn"}>{row.status}</Chip>
@@ -659,7 +866,8 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
                     )}
                   </td>
                 </tr>
-              ))}
+                ),
+              )}
               {loading && (
                 <tr>
                   <td colSpan={5} className="dim mono" style={{ textAlign: "center" }}>
@@ -704,7 +912,12 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
           sub={!selected ? t("evalPage.evaluators.formSub") : selected.id}
           end={
             !selected ? (
-              <Btn onClick={() => setDraft(SAMPLE_DRAFT())}>
+              <Btn
+                onClick={() => {
+                  setDefType("judge"); // the sample is a judge draft
+                  setDraft(SAMPLE_DRAFT());
+                }}
+              >
                 {t("evalPage.evaluators.prefill")}
               </Btn>
             ) : selected.source === "custom" ? (
@@ -730,7 +943,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
               {detail && formBody}
             </>
           )}
-          {builtinBody}
+          {readonlyBody}
         </Panel>
 
         <Panel
