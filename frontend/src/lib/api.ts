@@ -1605,6 +1605,9 @@ export interface SkillLabJobParams {
   learning_rate?: number;
   /** train jobs only: which score the held-out gate compares */
   gate_metric?: SkillLabGateMetric;
+  /** train jobs only: extra skill files (relative paths) that co-evolve with
+   *  SKILL.md as one bundle; empty/omitted = SKILL.md-only training */
+  trainable_files?: string[];
 }
 
 export interface SkillLabJobInfo {

@@ -384,6 +384,57 @@ def test_publish_happy_path(lab, registry_seam):
     assert "[publish]" in log
 
 
+def test_trainable_files_bundle_flow(lab, registry_seam):
+    """Multi-doc training end to end with the REAL vendored bundle codec:
+    submit builds seed_bundle.md (FILE headers, SKILL.md last) and points
+    skill_init at it; publish splits best_skill.md back onto the original dir
+    and pushes a whole-bundle update instead of skill_md."""
+    ts = _split_taskset(lab)
+    job = _submit_train(
+        lab, ts, params={"epochs": 2, "trainable_files": ["references/note.md"]}
+    ).json()
+    assert job["params"]["trainable_files"] == ["references/note.md"]
+
+    config = yaml.safe_load(
+        (artifacts.job_dir(job["id"]) / "config.yaml").read_text()
+    )
+    seed_path = Path(config["env"]["skill_init"])
+    assert seed_path.name == "seed_bundle.md"
+    assert config["env"]["trainable_files"] == ["references/note.md"]
+    seed = seed_path.read_text()
+    assert seed.index("<!-- FILE: references/note.md -->") < seed.index(
+        "<!-- FILE: SKILL.md -->"
+    )  # SKILL.md last, so tail-appends grow SKILL.md
+
+    job = _wait(lab, job["id"])
+    assert job["status"] == "succeeded"
+    result = lab.post(f"/api/skill-lab/jobs/{job['id']}/publish", json={}).json()
+    assert result["new_version"] == "1.1.0-skill"
+    record_id, kwargs = registry_seam.update
+    assert record_id == "rec-1" and "skill_md" not in kwargs
+    assert set(kwargs["bundle"].files) == {"SKILL.md", "references/note.md"}
+    # The stub trainer appends IMPROVED at the bundle tail = the SKILL.md section.
+    assert "IMPROVED" in (kwargs["bundle"].root / "SKILL.md").read_text()
+    assert (kwargs["bundle"].root / "references" / "note.md").read_text().strip() == (
+        "support file"
+    )
+
+
+def test_trainable_files_validation(lab):
+    ts = _split_taskset(lab, name="val-ts")
+    for bad, code in (
+        (["../escape.md"], 422),
+        (["SKILL.md"], 422),
+        ("references/note.md", 422),  # string, not a list
+        (["references/missing.md"], 422),  # bundle build: file not found
+    ):
+        refused = _submit_train(
+            lab, ts, params={"epochs": 1, "trainable_files": bad}
+        )
+        assert refused.status_code == code, refused.text
+        assert refused.json()["code"] == "skill_lab.bad_params"
+
+
 def test_publish_reapproves_only_previously_approved(lab, registry_seam):
     registry_seam.status_before = "APPROVED"
     ts = _split_taskset(lab)

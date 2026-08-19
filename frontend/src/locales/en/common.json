@@ -1415,7 +1415,8 @@
           "judgeModel": "Optimizer / judge model",
           "workers": "workers",
           "timeout": "timeout (s)",
-          "limit": "limit"
+          "limit": "limit",
+          "trainableFiles": "Trainable files (optional)"
         },
         "hint": {
           "epochs": "passes over the train split, {{min}}–{{max}}",
@@ -1424,7 +1425,8 @@
           "judgeModel": "Bedrock model id that judges rollouts and proposes SKILL.md edits.",
           "workers": "parallel rollouts, {{min}}–{{max}}",
           "timeout": "per-task ceiling, {{min}}–{{max}}",
-          "limit": "first N tasks per split only; 0 uses all"
+          "limit": "first N tasks per split only; 0 uses all",
+          "trainableFiles": "Selected files co-evolve with SKILL.md as one bundle ({{n}} selected). None selected = only SKILL.md is trained."
         },
         "err": {
           "noSkill": "Pick a skill to optimize.",

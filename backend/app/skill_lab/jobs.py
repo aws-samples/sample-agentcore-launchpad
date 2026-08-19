@@ -226,6 +226,17 @@ def submit_train_job(
         skill_dir, resolved_source = _materialize_skill(
             workspace, skill_source, directory, log_lines
         )
+        # Multi-doc training: join the checked files + SKILL.md into the one
+        # seed document the trainer evolves. Runs at submit so a bad file
+        # list 422s here instead of failing minutes into the run.
+        seed_bundle = None
+        if merged_params["trainable_files"]:
+            seed_bundle = runner.build_seed_bundle(
+                skill_dir=skill_dir,
+                files=merged_params["trainable_files"],
+                out=directory / "seed_bundle.md",
+                log=log_lines.append,
+            )
         split_env, has_test = runner.materialize_train_splits(
             taskset_dir, ts_row.mode, directory
         )
@@ -235,6 +246,7 @@ def submit_train_job(
             eval_test=has_test,
             out_config=directory / "config.yaml",
             params=merged_params,
+            seed_bundle=seed_bundle,
         )
     except BaseException:
         runner.remove_job_dir(row.id)
@@ -529,6 +541,36 @@ def resume_job(db: Session, workspace_id: str, workspace: Any, job_id: str) -> d
     return _enqueue(db, row, command)
 
 
+def _split_best_bundle(job_id: str):
+    """Deployable SkillBundle from a bundle-trained job: split best_skill.md
+    onto a copy of the original skill dir (frozen files kept, trained files +
+    SKILL.md overwritten). The split dir is rebuilt on every publish call."""
+    import shutil
+
+    from app.services.skill_ingest import bundle_from_dir
+
+    directory = artifacts.job_dir(job_id)
+    skills_root = directory / "skills"
+    skill_dirs = [p for p in skills_root.iterdir() if p.is_dir()] if skills_root.is_dir() else []
+    if len(skill_dirs) != 1:
+        raise AppError(
+            "skill_lab.publish_unsupported",
+            "the job's materialized skill directory is missing — resubmit the training",
+            status_code=400,
+        )
+    out_dir = directory / "publish_skill"
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    log_lines: list[str] = []
+    runner.split_trained_bundle(
+        bundle_file=artifacts.out_root(job_id) / "best_skill.md",
+        skill_dir=skill_dirs[0],
+        out_dir=out_dir,
+        log=log_lines.append,
+    )
+    return bundle_from_dir(out_dir)
+
+
 def publish_job(
     db: Session,
     workspace_id: str,
@@ -573,7 +615,16 @@ def publish_job(
     record_id = str(source["record_id"])
     before = registry_console.console_get(workspace, record_id)
     status_before = str(before.get("status") or "")
-    updated = registry_console.update_record(record_id, workspace, skill_md=diff["best"])
+    trainable = list((row.params or {}).get("trainable_files") or [])
+    if trainable:
+        # best_skill.md is a multi-doc bundle — split it back onto a copy of
+        # the original skill dir (kept in the job dir since submit) and push
+        # the whole bundle, replacing the trained files AND SKILL.md.
+        updated = registry_console.update_record(
+            record_id, workspace, bundle=_split_best_bundle(row.id)
+        )
+    else:
+        updated = registry_console.update_record(record_id, workspace, skill_md=diff["best"])
     status_after = str(updated.get("status") or "")
     reapproved = False
     if reapprove and status_before == "APPROVED" and status_after != "APPROVED":

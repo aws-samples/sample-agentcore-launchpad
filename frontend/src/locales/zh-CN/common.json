@@ -1415,7 +1415,8 @@
           "judgeModel": "优化器 / 评审模型",
           "workers": "并发数",
           "timeout": "超时（秒）",
-          "limit": "任务上限"
+          "limit": "任务上限",
+          "trainableFiles": "可训练文件（可选）"
         },
         "hint": {
           "epochs": "遍历训练集的次数，{{min}}–{{max}}",
@@ -1424,7 +1425,8 @@
           "judgeModel": "评审推理结果并提出 SKILL.md 修改的 Bedrock 模型 id。",
           "workers": "并行推理数，{{min}}–{{max}}",
           "timeout": "单任务上限，{{min}}–{{max}}",
-          "limit": "每个 split 只跑前 N 个任务；0 表示全部"
+          "limit": "每个 split 只跑前 N 个任务；0 表示全部",
+          "trainableFiles": "勾选的文件与 SKILL.md 作为一个整体共同训练（已选 {{n}} 个）。不勾选则只训练 SKILL.md。"
         },
         "err": {
           "noSkill": "请选择要优化的技能。",
