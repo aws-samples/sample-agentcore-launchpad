@@ -83,9 +83,14 @@ export function TrainWizard({
   const [tasksets, setTasksets] = useState<SkillLabTasksetInfo[]>([]);
   const [tasksetId, setTasksetId] = useState("");
 
+  // trainable_files candidates (upstream studio parity): .md files inside the
+  // skill, minus SKILL.md (which is always trainable). Unchecked = SKILL.md-only.
+  const [candidateFiles, setCandidateFiles] = useState<string[]>([]);
+  const [trainableFiles, setTrainableFiles] = useState<string[]>([]);
+
   const [epochs, setEpochs] = useState(1);
   const [learningRate, setLearningRate] = useState(4);
-  const [gateMetric, setGateMetric] = useState<SkillLabGateMetric>("hard");
+  const [gateMetric, setGateMetric] = useState<SkillLabGateMetric>("soft");
   const [targetBackend, setTargetBackend] = useState<SkillLabTargetBackend>("claude_code_exec");
   const [judgeMode, setJudgeMode] = useState<SkillLabJudgeMode>("auto");
   const [targetModel, setTargetModel] = useState("");
@@ -134,6 +139,45 @@ export function TrainWizard({
     setTargetModel((prev) => prev || status.default_target_model);
     setJudgeModel((prev) => prev || status.default_judge_model);
   }, [status]);
+
+  // Candidate files follow the selected source. Registry: the record detail's
+  // skillDefinition already carries the bundle's file list (no S3 round-trip);
+  // upload: the staged inspection result carries it.
+  useEffect(() => {
+    setTrainableFiles([]);
+    setCandidateFiles([]);
+    const mdOnly = (files: string[]) =>
+      files.filter((f) => f.toLowerCase().endsWith(".md") && f !== "SKILL.md");
+    if (sourceTab === "upload") {
+      const staged = staging?.skills.find((skill) => skill.index === stagedIndex);
+      if (staged) setCandidateFiles(mdOnly(staged.files));
+      return;
+    }
+    if (!recordId) return;
+    let stale = false;
+    fetch(`/api/registry/records/${encodeURIComponent(recordId)}`)
+      .then(async (res) => {
+        if (!res.ok || stale) return;
+        const body = (await res.json()) as {
+          descriptors?: { agentSkills?: { skillDefinition?: { inlineContent?: string } } };
+        };
+        const inline = body.descriptors?.agentSkills?.skillDefinition?.inlineContent;
+        if (!inline) return;
+        const definition = JSON.parse(inline) as { files?: string[] };
+        if (!stale) setCandidateFiles(mdOnly(definition.files ?? []));
+      })
+      .catch(() => {
+        /* no candidates — the section simply stays hidden */
+      });
+    return () => {
+      stale = true;
+    };
+  }, [sourceTab, recordId, staging, stagedIndex]);
+
+  const toggleTrainable = (file: string) =>
+    setTrainableFiles((prev) =>
+      prev.includes(file) ? prev.filter((f) => f !== file) : [...prev, file],
+    );
 
   const selectedTaskset = tasksets.find((row) => row.id === tasksetId) ?? null;
   const counts = splitCounts(selectedTaskset);
@@ -203,6 +247,7 @@ export function TrainWizard({
           workers,
           timeout,
           limit,
+          ...(trainableFiles.length > 0 ? { trainable_files: trainableFiles } : {}),
         },
       });
       onCreated(job);
@@ -401,6 +446,47 @@ export function TrainWizard({
             <span className="i">[i]</span>
             <span>{t("skillLab.train.wizard.uploadNote")}</span>
           </div>
+        </div>
+      )}
+
+      {candidateFiles.length > 0 && (
+        <div className="field" data-testid="train-trainable-files">
+          <label>{t("skillLab.train.wizard.field.trainableFiles")}</label>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+              gap: 6,
+            }}
+          >
+            {candidateFiles.map((file) => (
+              <label
+                key={file}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "6px 10px",
+                  border: `1px solid ${trainableFiles.includes(file) ? "var(--good)" : "var(--grid)"}`,
+                  cursor: "pointer",
+                  minWidth: 0,
+                }}
+                data-testid={`train-trainable-${file}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={trainableFiles.includes(file)}
+                  onChange={() => toggleTrainable(file)}
+                />
+                <span className="mono" style={{ fontSize: 11, overflowWrap: "anywhere" }}>
+                  {file}
+                </span>
+              </label>
+            ))}
+          </div>
+          <span className="mono dim" style={{ fontSize: 10.5 }}>
+            {t("skillLab.train.wizard.hint.trainableFiles", { n: trainableFiles.length })}
+          </span>
         </div>
       )}
 

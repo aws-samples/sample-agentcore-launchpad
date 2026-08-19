@@ -581,9 +581,59 @@ BASE_TRAIN_CONFIG = VENDOR_ROOT / "configs" / "skilleval" / "default.yaml"
 SINGLE_SPLIT_RATIO = "4:3:3"  # studio default for un-split task sets
 
 
+MAX_TRAINABLE_FILES = 32
+
+
+def _clamp_trainable_files(raw: Any) -> list[str]:
+    """Optional multi-doc training whitelist (upstream `trainable_files`):
+    relative paths inside the skill dir whose text co-evolves with SKILL.md as
+    one bundle. Mirrors the vendored bundle codec's path safety rules without
+    importing it (boundary rule); SKILL.md itself is always trainable and must
+    not be listed. Existence is checked by the bundle-build step at submit."""
+    if raw in (None, ""):
+        return []
+    if not isinstance(raw, list) or any(not isinstance(item, str) for item in raw):
+        raise AppError(
+            "skill_lab.bad_params",
+            "trainable_files must be a list of relative paths",
+            status_code=422,
+        )
+    cleaned: list[str] = []
+    for item in raw:
+        path = item.strip().replace("\\", "/")
+        parts = [p for p in path.split("/") if p not in ("", ".")]
+        if not parts or path.startswith("/") or ".." in parts or re.match(r"^[A-Za-z]:", path):
+            raise AppError(
+                "skill_lab.bad_params",
+                f"trainable_files entry is not a safe relative path: {item!r}",
+                status_code=422,
+            )
+        normalized = "/".join(parts)
+        if normalized == "SKILL.md":
+            raise AppError(
+                "skill_lab.bad_params",
+                "SKILL.md is always trainable — do not list it in trainable_files",
+                status_code=422,
+            )
+        if normalized not in cleaned:
+            cleaned.append(normalized)
+    if len(cleaned) > MAX_TRAINABLE_FILES:
+        raise AppError(
+            "skill_lab.bad_params",
+            f"trainable_files supports at most {MAX_TRAINABLE_FILES} files",
+            status_code=422,
+        )
+    return cleaned
+
+
 def clamp_train_params(params: dict[str, Any] | None) -> dict[str, Any]:
     merged = clamp_params(params)
-    extras = {"epochs": 1, "learning_rate": 4, "gate_metric": "hard"}
+    merged["trainable_files"] = _clamp_trainable_files((params or {}).get("trainable_files"))
+    # soft gate by default: strict evidence-based judges rarely move the
+    # binary hard score in few epochs, so a hard-gated run rejects genuinely
+    # better candidates (live-observed on the logtriage demo); operators
+    # wanting the stricter bar pick it in the wizard.
+    extras = {"epochs": 1, "learning_rate": 4, "gate_metric": "soft"}
     extras.update(
         {k: v for k, v in (params or {}).items() if k in extras and v not in (None, "")}
     )
@@ -642,6 +692,56 @@ def materialize_train_splits(
     return {"split_mode": "split_dir", "split_dir": str(splits_dir)}, has_test
 
 
+# Bundle codec CLI (`build` at submit, `split` at publish). Runs as a
+# subprocess like every other vendored entry point (boundary rule); the module
+# is pure stdlib, and `-m` resolves because the child's cwd is the vendor root.
+BUNDLE_MODULE = "skillopt.envs.skilleval.bundle"
+
+
+def _run_bundle_cli(args: list[str], log: Callable[[str], None]) -> None:
+    result = subprocess.run(
+        [get_settings().skill_lab_python, "-m", BUNDLE_MODULE, *args],
+        cwd=VENDOR_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    for line in (result.stdout or "").splitlines():
+        log(f"[bundle] {line}")
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        raise AppError(
+            "skill_lab.bad_params",
+            detail[-1] if detail else f"bundle {args[0]} failed",
+            status_code=422,
+        )
+
+
+def build_seed_bundle(
+    *, skill_dir: Path, files: list[str], out: Path, log: Callable[[str], None]
+) -> Path:
+    """Join the trainable files + SKILL.md into the single seed document the
+    ReflACT trainer evolves (upstream studio's pre-train bundle step). Fails
+    422 when a listed file is missing — at submit, not minutes into the run."""
+    _run_bundle_cli(
+        ["build", str(skill_dir), "--files", ",".join(files), "--out", str(out)], log
+    )
+    return out
+
+
+def split_trained_bundle(
+    *, bundle_file: Path, skill_dir: Path, out_dir: Path, log: Callable[[str], None]
+) -> Path:
+    """Split a trained bundle back into a deployable skill dir: frozen files
+    copied from the original, trained sections overwritten (whitelist-safe —
+    the codec drops sections whose path was never trainable)."""
+    _run_bundle_cli(
+        ["split", str(bundle_file), "--skill_dir", str(skill_dir), "--out_dir", str(out_dir)],
+        log,
+    )
+    return out_dir
+
+
 def build_train_config(
     *,
     skill_dir: Path,
@@ -649,11 +749,15 @@ def build_train_config(
     eval_test: bool,
     out_config: Path,
     params: dict[str, Any],
+    seed_bundle: Path | None = None,
 ) -> Path:
     """Write the job's train YAML. `_base_` is the vendored default by absolute
     path — train.py resolves inheritance itself, so the backend never imports
     skillopt.config (boundary rule). Probe-verified: an absolute `_base_`
     resolves (os.path.join(dir, abs) is abs)."""
+    trainable = list(params.get("trainable_files") or [])
+    if bool(trainable) != (seed_bundle is not None):
+        raise ValueError("trainable_files and seed_bundle must be passed together")
     config: dict[str, Any] = {
         "_base_": str(BASE_TRAIN_CONFIG),
         "model": {
@@ -669,7 +773,10 @@ def build_train_config(
             "eval_test": bool(eval_test),
         },
         "env": {
-            "skill_init": str(skill_dir / "SKILL.md"),
+            # Multi-doc training seeds from the bundle; the adapter needs the
+            # matching whitelist (exact kwarg name `trainable_files`).
+            "skill_init": str(seed_bundle if seed_bundle else skill_dir / "SKILL.md"),
+            **({"trainable_files": trainable} if trainable else {}),
             "skill_dir": str(skill_dir),
             "judge_mode": str(params["judge_mode"]),
             # adapter kwargs (exact names): the agentic judge's exec CLI +
