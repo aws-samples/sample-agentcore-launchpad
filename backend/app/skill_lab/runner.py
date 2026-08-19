@@ -629,7 +629,11 @@ def _clamp_trainable_files(raw: Any) -> list[str]:
 def clamp_train_params(params: dict[str, Any] | None) -> dict[str, Any]:
     merged = clamp_params(params)
     merged["trainable_files"] = _clamp_trainable_files((params or {}).get("trainable_files"))
-    extras = {"epochs": 1, "learning_rate": 4, "gate_metric": "hard"}
+    # soft gate by default: strict evidence-based judges rarely move the
+    # binary hard score in few epochs, so a hard-gated run rejects genuinely
+    # better candidates (live-observed on the logtriage demo); operators
+    # wanting the stricter bar pick it in the wizard.
+    extras = {"epochs": 1, "learning_rate": 4, "gate_metric": "soft"}
     extras.update(
         {k: v for k, v in (params or {}).items() if k in extras and v not in (None, "")}
     )

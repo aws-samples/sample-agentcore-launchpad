@@ -174,7 +174,7 @@ def test_train_config_contract_split_mode(lab):
     # (skillopt/config.py _FLATTEN_MAP): a param written under the wrong section
     # is silently dropped and the run quietly uses the vendored default.
     assert config["optimizer"]["learning_rate"] == 4  # → edit_budget
-    assert config["evaluation"]["gate_metric"] == "hard"
+    assert config["evaluation"]["gate_metric"] == "soft"  # platform default
     assert config["env"]["judge_mode"] == "auto"
     assert config["env"]["skill_dir"].endswith("/skills/demo-skill")
     assert config["env"]["skill_init"].endswith("/skills/demo-skill/SKILL.md")
