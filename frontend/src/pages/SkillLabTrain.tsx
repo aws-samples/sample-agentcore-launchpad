@@ -574,22 +574,6 @@ export function SkillLabTrain({ status }: { status: SkillLabStatus | null }) {
             beforeLabel={t("skillLab.train.diff.seed")}
             afterLabel={t("skillLab.train.diff.best")}
           />
-          {diff.changed && (
-            <pre
-              className="code"
-              data-testid="train-diff-unified"
-              style={{
-                marginTop: 8,
-                maxHeight: 260,
-                overflow: "auto",
-                whiteSpace: "pre-wrap",
-                overflowWrap: "anywhere",
-                fontSize: 10.5,
-              }}
-            >
-              {diff.diff}
-            </pre>
-          )}
         </div>
       )}
 
