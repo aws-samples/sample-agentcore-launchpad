@@ -11,9 +11,6 @@ import re
 import time
 from typing import Any
 
-from app.core.config import get_settings
-from app.core.db import DEFAULT_WORKSPACE_ID
-from app.services.bootstrap import write_config
 from app.services.gateway_bootstrap import (
     _list_targets,
     _wait_gateway_ready,
@@ -273,11 +270,10 @@ def ensure_kb_gateway_persisted(
 ) -> dict[str, str]:
     """Lazily ensure the KB gateway and persist its id/arn/url onto the workspace.
 
-    The workspace row is the resource map of record, so the ids land there (and on
-    the in-memory context, so the rest of *this* request sees them). For the
-    `default` workspace the same keys are mirrored into `launchpad.yaml`, which
-    `make bootstrap` and the settings-seeded default row still read — without the
-    mirror the next startup's settings mirror would overwrite the row's copy.
+    The ids land on the workspace row (and on the in-memory context, so the rest
+    of *this* request sees them); `merge_workspace_resources` itself mirrors the
+    default workspace's keys into `launchpad.yaml` so the startup settings
+    mirror cannot wipe them.
     """
     resources = workspace.resources
     if resources.get("kb_gateway_id") and resources.get("kb_gateway_url"):
@@ -293,7 +289,4 @@ def ensure_kb_gateway_persisted(
         "kb_gateway_url": gateway["url"],
     }
     merge_workspace_resources(workspace, provisioned)
-    if workspace.id == DEFAULT_WORKSPACE_ID:
-        write_config({"resources": provisioned})
-        get_settings.cache_clear()
     return gateway

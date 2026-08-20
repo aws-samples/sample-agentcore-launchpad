@@ -12,7 +12,7 @@ import pytest
 import app.routers.overview as overview_mod
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Workspace
-from app.services import governance, kb_gateway
+from app.services import bootstrap, governance, kb_gateway
 from app.services import observability as obs
 from app.services import workspace as ws
 
@@ -79,7 +79,7 @@ class TestLazyProvisioningWritesTheRow:
         )
         written: list[dict] = []
         monkeypatch.setattr(
-            kb_gateway, "write_config", lambda payload: written.append(payload)
+            bootstrap, "write_config", lambda payload: written.append(payload)
         )
 
         gateway = kb_gateway.ensure_kb_gateway_persisted(self._control(), context)
@@ -97,9 +97,9 @@ class TestLazyProvisioningWritesTheRow:
         monkeypatch.setattr(kb_gateway, "_wait_gateway_ready", lambda *a, **k: None)
         written: list[dict] = []
         monkeypatch.setattr(
-            kb_gateway, "write_config", lambda payload: written.append(payload)
+            bootstrap, "write_config", lambda payload: written.append(payload)
         )
-        monkeypatch.setattr(kb_gateway.get_settings, "cache_clear", lambda: None)
+        monkeypatch.setattr(ws.get_settings, "cache_clear", lambda: None)
         context = ws_ctx(
             {
                 "user_pool_id": "pool",
@@ -134,6 +134,40 @@ class TestLazyProvisioningWritesTheRow:
 
         assert gateway["id"] == "kbgw-old"
         control.create_gateway.assert_not_called()
+
+
+class TestMergeWorkspaceResources:
+    """The default workspace's resources are re-converged from launchpad.yaml on
+    every startup (core/db.init_db), so a row-only merge silently evaporates at
+    the next restart — the trap that wiped prod's Skill Lab worker keys
+    (2026-08-20). The merge itself now owns the yaml mirror."""
+
+    def test_default_merge_lands_in_the_yaml_too(self, monkeypatch):
+        import yaml as yaml_mod
+
+        from app.services import bootstrap
+
+        monkeypatch.setattr(ws.get_settings, "cache_clear", lambda: None)
+        context = ws_ctx({}, id=DEFAULT_WORKSPACE_ID)
+        ws.merge_workspace_resources(context, {"skill_lab_worker_runtime_arn": "arn:rt"})
+
+        assert _row_resources(DEFAULT_WORKSPACE_ID)["skill_lab_worker_runtime_arn"] == "arn:rt"
+        # conftest repoints bootstrap.CONFIG_FILE at a per-test temp file
+        persisted = yaml_mod.safe_load(bootstrap.CONFIG_FILE.read_text())
+        assert persisted["resources"]["skill_lab_worker_runtime_arn"] == "arn:rt"
+
+    def test_non_default_merge_stays_off_the_yaml(self, other_workspace):
+        from app.services import bootstrap
+
+        db = SessionLocal()
+        try:
+            context = ws.workspace_context(db.get(Workspace, other_workspace))
+        finally:
+            db.close()
+        ws.merge_workspace_resources(context, {"skill_lab_worker_runtime_arn": "arn:rt"})
+
+        assert _row_resources(other_workspace)["skill_lab_worker_runtime_arn"] == "arn:rt"
+        assert not bootstrap.CONFIG_FILE.exists()
 
 
 class TestCachesAreKeyedByWorkspace:
