@@ -68,8 +68,11 @@ class WorkspaceContext:
 def workspace_context(row: Workspace) -> WorkspaceContext:
     """The context a ``Workspace`` ledger row describes.
 
-    The row is authoritative for every workspace, including ``default`` — the
-    settings resource map only seeds it at migration time.
+    The row is what requests read for every workspace — but for ``default`` it
+    is a MIRROR of ``config/launchpad.yaml``, re-converged from settings on
+    every startup (core/db.init_db). Anything durably provisioned onto the
+    default workspace must therefore land in the yaml, which
+    ``merge_workspace_resources`` does automatically.
     """
     return WorkspaceContext(
         id=row.id,
@@ -128,6 +131,14 @@ def merge_workspace_resources(
     thread while a request can lazily provision the KB gateway. Two unlocked
     merges would interleave and the later commit would drop the earlier stage's
     identifiers.
+
+    For the DEFAULT workspace the same keys are also mirrored into
+    ``config/launchpad.yaml``: init_db's startup mirror re-converges the default
+    row on settings every boot, so a row-only write would silently evaporate at
+    the next restart. That trap was paid for twice — first by the lazy KB
+    gateway (which used to carry this mirror itself), then by a prod Skill Lab
+    provisioning whose worker keys vanished on restart (2026-08-20) — hence it
+    lives here now, where every caller gets it.
     """
     with _MERGE_LOCK:
         db = SessionLocal()
@@ -142,6 +153,13 @@ def merge_workspace_resources(
         finally:
             db.close()
         workspace.resources.update(values)
+        if workspace.id == DEFAULT_WORKSPACE_ID:
+            # Late import: services.bootstrap reaches back into workspace-adjacent
+            # modules, so a top-level import would cycle.
+            from app.services import bootstrap
+
+            bootstrap.write_config({"resources": values})
+            get_settings.cache_clear()
 
 
 def granted_workspace_ids(db: Session, user_id: str) -> list[str]:

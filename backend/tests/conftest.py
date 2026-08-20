@@ -77,6 +77,17 @@ def clean_tables():
 
 
 @pytest.fixture(autouse=True)
+def isolated_config_file(tmp_path, monkeypatch):
+    # merge_workspace_resources mirrors default-workspace keys into
+    # config/launchpad.yaml via bootstrap.write_config — a hermetic test must
+    # never write the developer's real file. bootstrap imports CONFIG_FILE by
+    # value, so its own binding is the one to repoint.
+    from app.services import bootstrap
+
+    monkeypatch.setattr(bootstrap, "CONFIG_FILE", tmp_path / "launchpad-test.yaml")
+
+
+@pytest.fixture(autouse=True)
 def reset_aws_client_cache():
     # Tests that stub aws_clients.get_session still populate the module-level
     # client cache; a fake cached under a real key must not leak across tests.
