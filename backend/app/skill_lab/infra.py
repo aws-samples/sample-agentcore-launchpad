@@ -11,6 +11,7 @@ Lab as unprovisioned.
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -187,9 +188,33 @@ def ensure_skill_lab_venv(log: Callable[[str], None] = lambda _m: None) -> str:
         [uv, "pip", "install", "--python", str(python_path), "-r", str(REQUIREMENTS_FILE)],
         check=True,
     )
+    _resolve_interpreter_symlinks(log)
     VENV_STAMP.write_text(wanted + "\n", encoding="utf-8")
     log(f"skill-lab venv provisioned · {VENV_DIR}")
     return str(python_path)
+
+
+def _resolve_interpreter_symlinks(log: Callable[[str], None]) -> None:
+    """Re-point the venv's absolute interpreter symlinks at their final target.
+
+    A uv-MANAGED interpreter (host without a system python3.12) links the venv
+    python through uv's version-less alias dir (cpython-3.12-… → the versioned
+    cpython-3.12.13-… install). The agentic judge's bwrap sandbox binds the
+    RESOLVED runtime dirs (sys.base_prefix) but knows nothing about the alias,
+    so the venv symlink dangles inside the sandbox and the boundary probe dies
+    with "prlimit: failed to execute …/bin/python: No such file or directory"
+    (live on the us-east-1 prod box, 2026-08-20). Relative intra-venv links
+    (python3 → python) are left alone.
+    """
+    for candidate in (VENV_DIR / "bin").iterdir():
+        if not candidate.is_symlink():
+            continue
+        raw = os.readlink(candidate)
+        resolved = candidate.resolve()
+        if os.path.isabs(raw) and str(resolved) != raw:
+            candidate.unlink()
+            candidate.symlink_to(resolved)
+            log(f"resolved venv symlink {candidate.name} → {resolved}")
 
 
 def ensure_skill_lab_worker(
