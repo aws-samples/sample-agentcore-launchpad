@@ -369,3 +369,43 @@ def test_venv_provision_and_stamp_skip(tmp_path, monkeypatch):
     requirements.write_text("boto3\nnumpy\n")
     infra.ensure_skill_lab_venv()
     assert len(calls) == 4  # requirements changed → reprovisioned
+
+
+def test_venv_interpreter_symlinks_resolved(tmp_path, monkeypatch):
+    """A uv-managed interpreter links venv python through uv's version-less
+    ALIAS dir; the judge sandbox binds only the resolved runtime dirs, so the
+    alias hop dangles inside bwrap (live: prod us-east-1, 2026-08-20). The
+    provisioner re-points absolute symlinks at their final target; relative
+    intra-venv links stay untouched."""
+    store = tmp_path / "store"
+    real = store / "cpython-3.12.13" / "bin" / "python3.12"
+    real.parent.mkdir(parents=True)
+    real.write_text("")
+    alias = store / "cpython-3.12"
+    alias.symlink_to(store / "cpython-3.12.13")
+
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("boto3\n")
+    venv_dir = tmp_path / "venv"
+    python = venv_dir / "bin" / "python"
+    monkeypatch.setattr(infra, "REQUIREMENTS_FILE", requirements)
+    monkeypatch.setattr(infra, "VENV_DIR", venv_dir)
+    monkeypatch.setattr(infra, "VENV_STAMP", venv_dir / ".requirements.sha256")
+    monkeypatch.setattr(
+        infra, "get_settings", lambda: SimpleNamespace(skill_lab_python=str(python))
+    )
+    monkeypatch.setattr(infra.shutil, "which", lambda name: "/usr/bin/uv")
+
+    def fake_run(cmd, check):
+        python.parent.mkdir(parents=True, exist_ok=True)
+        if not python.exists():
+            python.symlink_to(alias / "bin" / "python3.12")  # through the alias
+            (python.parent / "python3").symlink_to("python")  # relative link
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(infra.subprocess, "run", fake_run)
+    infra.ensure_skill_lab_venv()
+    import os
+
+    assert os.readlink(python) == str(real)  # alias hop resolved away
+    assert os.readlink(python.parent / "python3") == "python"  # untouched
