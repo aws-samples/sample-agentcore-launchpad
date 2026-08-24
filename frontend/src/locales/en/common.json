@@ -1551,6 +1551,7 @@
       "sampleChip": "built-in sample",
       "assets": {
         "label": "Binary task files",
+        "pick": "Choose files…",
         "uploading": "Uploading…",
         "destination": "Destination path",
         "remove": "Remove"

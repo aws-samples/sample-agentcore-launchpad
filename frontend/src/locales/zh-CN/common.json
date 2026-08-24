@@ -1551,6 +1551,7 @@
       "sampleChip": "内置样例",
       "assets": {
         "label": "二进制任务文件",
+        "pick": "选择文件…",
         "uploading": "正在上传…",
         "destination": "目标路径",
         "remove": "移除"

@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
@@ -206,6 +206,9 @@ export function SkillLabTasksets() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [drafts, setDrafts] = useState<Drafts>(() => seedDrafts("single"));
+  // Hidden per-row file inputs, keyed by draft key: the visible picker is a
+  // themed <Btn> that clicks the input for its own row.
+  const assetInputs = useRef<Record<string, HTMLInputElement | null>>({});
   const [tab, setTab] = useState<"rows" | "upload">("rows");
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadNote, setUploadNote] = useState<string | null>(null);
@@ -389,9 +392,8 @@ export function SkillLabTasksets() {
   const uploadTaskAssets = async (
     split: string,
     key: string,
-    selected: FileList | null,
+    files: File[],
   ) => {
-    const files = Array.from(selected ?? []);
     if (!files.length) return;
     patchDraft(split, key, { assetBusy: true, assetError: null });
     try {
@@ -813,21 +815,36 @@ export function SkillLabTasksets() {
             </div>
             <div className="field" style={{ marginTop: 8 }}>
               <label>{t("skillLab.tasksets.assets.label")}</label>
+              {/* A `<label className="btn">` would lose the button styling:
+                  `.field label` (0,1,1) outranks `.btn` (0,1,0) and forces
+                  display:block plus the dim 9.5px field-caption type. So drive
+                  a hidden input from a real button, as CreateAgent does. */}
+              <Btn
+                disabled={draft.assetBusy}
+                onClick={() => assetInputs.current[draft.key]?.click()}
+              >
+                {draft.assetBusy
+                  ? t("skillLab.tasksets.assets.uploading")
+                  : t("skillLab.tasksets.assets.pick")}
+              </Btn>
               <input
+                ref={(node) => {
+                  assetInputs.current[draft.key] = node;
+                }}
                 type="file"
                 multiple
                 accept=".xlsx,.pdf,.png,.jpg,.jpeg,.webp"
+                style={{ display: "none" }}
                 disabled={draft.assetBusy}
                 data-testid={`task-assets-${split}-${index}`}
-                onChange={(event) =>
-                  void uploadTaskAssets(split, draft.key, event.target.files)
-                }
+                onChange={(event) => {
+                  // Snapshot the File objects first: clearing `value` (so the
+                  // same filename can be re-picked) empties the live FileList.
+                  const picked = Array.from(event.target.files ?? []);
+                  event.target.value = "";
+                  void uploadTaskAssets(split, draft.key, picked);
+                }}
               />
-              {draft.assetBusy && (
-                <span className="mono dim">
-                  {t("skillLab.tasksets.assets.uploading")}
-                </span>
-              )}
               {draft.assets.map((asset) => (
                 <div
                   key={asset.key}
