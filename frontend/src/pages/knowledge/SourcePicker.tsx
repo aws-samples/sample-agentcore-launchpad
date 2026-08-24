@@ -1,6 +1,8 @@
 import { type ChangeEvent, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
+import { Btn } from "../../components";
+
 export type SourceMode = "upload" | "existing";
 
 interface SourcePickerProps {
@@ -92,17 +94,20 @@ export function SourcePicker({
       {mode === "upload" ? (
         <div className="field">
           <label>{t("knowledge.source.uploadLabel")}</label>
-          <label className="btn" style={{ cursor: "pointer", justifyContent: "center" }}>
+          {/* Not a `<label className="btn">`: this sits in a `.field`, and
+              `.field label` (0,1,1) outranks `.btn` (0,1,0), which would force
+              display:block plus the dim 9.5px field-caption type. */}
+          <Btn onClick={() => fileRef.current?.click()}>
             {t("knowledge.source.uploadPick")}
-            <input
-              ref={fileRef}
-              type="file"
-              multiple
-              style={{ display: "none" }}
-              data-testid="kb-file-input"
-              onChange={handlePick}
-            />
-          </label>
+          </Btn>
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            style={{ display: "none" }}
+            data-testid="kb-file-input"
+            onChange={handlePick}
+          />
           {files.length > 0 && (
             <div className="code" style={{ maxHeight: 160, overflowY: "auto", marginTop: 9 }}>
               {files.map((f, i) => (

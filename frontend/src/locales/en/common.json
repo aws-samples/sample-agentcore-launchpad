@@ -1281,6 +1281,7 @@
         "searchSkills": "Filter skills by name or description",
         "noSkills": "No skill records in this workspace — register one in the Registry first.",
         "anyStatus": "Every status is evaluable, including DRAFT — publishing is not a prerequisite.",
+        "uploadPick": "Choose a .zip…",
         "uploadHint": "A .zip holding SKILL.md at its root, or one directory per skill.",
         "uploadNote": "An uploaded bundle is staged for this job only — no Registry record is created, and the staging session expires after 10 minutes.",
         "inspecting": "inspecting the archive …",
@@ -1488,6 +1489,7 @@
       },
       "upload": {
         "label": "Task JSON file",
+        "pick": "Choose a JSON file…",
         "hint": "A bare array of tasks, or an object keyed by split (tasks / train / val / test).",
         "targetSplit": "Target split",
         "badJson": "Not valid JSON: {{msg}}",

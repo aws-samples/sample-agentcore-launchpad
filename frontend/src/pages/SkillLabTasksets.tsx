@@ -209,6 +209,7 @@ export function SkillLabTasksets() {
   // Hidden per-row file inputs, keyed by draft key: the visible picker is a
   // themed <Btn> that clicks the input for its own row.
   const assetInputs = useRef<Record<string, HTMLInputElement | null>>({});
+  const jsonRef = useRef<HTMLInputElement>(null);
   const [tab, setTab] = useState<"rows" | "upload">("rows");
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadNote, setUploadNote] = useState<string | null>(null);
@@ -1099,10 +1100,19 @@ export function SkillLabTasksets() {
               ))}
             </select>
           )}
+          {/* Themed button + hidden input, as with the per-task asset picker:
+              `className="input"` styles only the box around the browser's own
+              native file button. */}
+          <div>
+            <Btn onClick={() => jsonRef.current?.click()}>
+              {t("skillLab.tasksets.upload.pick")}
+            </Btn>
+          </div>
           <input
+            ref={jsonRef}
             type="file"
             accept=".json,application/json"
-            className="input"
+            style={{ display: "none" }}
             data-testid="taskset-upload-input"
             onChange={(e) => {
               const file = e.target.files?.[0];

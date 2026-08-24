@@ -1281,6 +1281,7 @@
         "searchSkills": "按名称或描述筛选技能",
         "noSkills": "当前工作区没有技能记录 —— 请先在 Registry 中注册。",
         "anyStatus": "任意状态都可评测，包括 DRAFT —— 无需先发布。",
+        "uploadPick": "选择 .zip 文件…",
         "uploadHint": "根目录含 SKILL.md 的 .zip，或每个技能一个子目录。",
         "uploadNote": "上传的技能包仅用于本次作业 —— 不会创建 Registry 记录，暂存会话 10 分钟后过期。",
         "inspecting": "正在解析压缩包 …",
@@ -1488,6 +1489,7 @@
       },
       "upload": {
         "label": "任务 JSON 文件",
+        "pick": "选择 JSON 文件…",
         "hint": "可以是任务数组,也可以是按分割命名的对象(tasks / train / val / test)。",
         "targetSplit": "目标分割",
         "badJson": "JSON 无效:{{msg}}",
