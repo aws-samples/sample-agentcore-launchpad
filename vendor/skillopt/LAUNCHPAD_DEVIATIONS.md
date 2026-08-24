@@ -128,3 +128,13 @@ networkless and bwrap-sandboxed, so the prompt protects nothing here.
 - Runtime env deliberately omits upstream's `ANTHROPIC_SMALL_FAST_MODEL` pin:
   the claude CLI version is pinned in the image, so its default small-fast
   model is stable, and the live smoke passes without the extra pin.
+
+## Binary task assets
+
+Launchpad task files may use stable binary descriptors in `files` alongside legacy inline
+strings. `load_tasks(..., assets_dir=...)` verifies each content-addressed blob and records
+private `_asset_files` copy pairs; split serialization removes private fields and reload
+reconstructs them. `evaluate_skill.py` and `validate_tasks.py` accept `--assets-dir`, the
+training adapter accepts `assets_dir`, and rollout copies each blob to its declared relative
+path before Runtime transport. The worker image pins openpyxl 3.1.5, Pillow 11.3.0, and pypdf
+6.0.0 so supported XLSX/image/PDF inputs can be inspected in the microVM.

@@ -145,7 +145,12 @@ def _rollout_one(
                 (src, os.path.join(SKILL_INSTALL_DIR, rel_dst))
                 for src, rel_dst in (skill_files or [])
             ]
-        extra_files = dict(item.get("files") or {})
+        copy_files.extend(item.get("_asset_files") or [])
+        extra_files = {
+            rel_path: content
+            for rel_path, content in (item.get("files") or {}).items()
+            if isinstance(content, str)
+        }
         for rel_dst, content in (skill_docs or {}).items():
             extra_files[os.path.join(SKILL_INSTALL_DIR, rel_dst)] = content
         prepare_workspace(

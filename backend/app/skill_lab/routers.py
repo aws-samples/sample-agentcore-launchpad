@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.skill_lab import artifacts as artifacts_svc
 from app.skill_lab import jobs as jobs_svc
 from app.skill_lab import runner
+from app.skill_lab import task_assets as asset_svc
 from app.skill_lab import tasksets as svc
 
 router = APIRouter(prefix="/api/skill-lab", tags=["skill-lab"])
@@ -80,6 +81,14 @@ def _sandbox_launcher_present(settings: Any) -> bool:
 
     argv = shlex.split(settings.skill_lab_judge_sandbox or "")
     return bool(argv) and _which(argv[0])
+
+
+@router.post("/task-assets", status_code=201)
+async def upload_task_assets(
+    files: list[UploadFile] = File(...),  # noqa: B008 - FastAPI multipart declaration
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return {"assets": await asset_svc.stage_uploads(ws.id, files)}
 
 
 @router.get("/tasksets")
@@ -173,9 +182,7 @@ def create_job(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     if body.type in ("eval", "train") and not body.taskset_id:
-        raise AppError(
-            "skill_lab.bad_params", "taskset_id is required", status_code=422
-        )
+        raise AppError("skill_lab.bad_params", "taskset_id is required", status_code=422)
     if body.type == "eval":
         return jobs_svc.submit_eval_job(
             db,
@@ -217,9 +224,7 @@ def create_job(
             target_split=body.target_split,
             params=body.params,
         )
-    raise AppError(
-        "skill_lab.bad_params", "type must be 'eval' or 'train'", status_code=422
-    )
+    raise AppError("skill_lab.bad_params", "type must be 'eval' or 'train'", status_code=422)
 
 
 @router.get("/jobs/{job_id}")

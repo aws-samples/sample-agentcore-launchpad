@@ -152,46 +152,52 @@ def submit_eval_job(
     split: str | None = None,
     params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    runner.require_worker(workspace)
-    merged_params = runner.clamp_params(params)
-    tasks_file, resolved_split, taskset_name = _resolve_tasks_file(
-        db, workspace_id, taskset_id, split
-    )
-
-    row = SkillLabJob(
-        workspace_id=workspace_id,
-        type="eval",
-        taskset_id=taskset_id,
-        taskset_name=taskset_name,
-        split=resolved_split,
-        params=merged_params,
-    )
-    db.add(row)
-    db.flush()
-    directory = artifacts.job_dir(row.id)
-    directory.mkdir(parents=True, exist_ok=True)
-    log_lines: list[str] = []
-    try:
-        skill_dir, resolved_source = _materialize_skill(
-            workspace, skill_source, directory, log_lines
+    # The per-taskset lock keeps the source stable through snapshot copy and
+    # the first commit that makes this job row visible. Delete then either
+    # runs first or observes the committed reference and refuses.
+    with taskset_svc.taskset_operation(taskset_id):
+        runner.require_worker(workspace)
+        merged_params = runner.clamp_params(params)
+        tasks_file, resolved_split, taskset_name = _resolve_tasks_file(
+            db, workspace_id, taskset_id, split
         )
-    except BaseException:
-        runner.remove_job_dir(row.id)
-        raise
 
-    row.skill_source = resolved_source
-    db.commit()
-    if log_lines:  # materialization notes lead the job log
-        (directory / "log.txt").write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+        row = SkillLabJob(
+            workspace_id=workspace_id,
+            type="eval",
+            taskset_id=taskset_id,
+            taskset_name=taskset_name,
+            split=resolved_split,
+            params=merged_params,
+        )
+        db.add(row)
+        db.flush()
+        directory = artifacts.job_dir(row.id)
+        directory.mkdir(parents=True, exist_ok=True)
+        log_lines: list[str] = []
+        try:
+            inputs = taskset_svc.snapshot_taskset(taskset_id, directory / "inputs")
+            tasks_file = inputs / tasks_file.name
+            skill_dir, resolved_source = _materialize_skill(
+                workspace, skill_source, directory, log_lines
+            )
+        except BaseException:
+            runner.remove_job_dir(row.id)
+            raise
 
-    command = runner.build_eval_command(
-        skill_dir=skill_dir,
-        tasks_file=tasks_file,
-        out_dir=directory / "out",
-        params=merged_params,
-    )
-    return _enqueue(db, row, command)
+        row.skill_source = resolved_source
+        db.commit()
+        if log_lines:  # materialization notes lead the job log
+            (directory / "log.txt").write_text("\n".join(log_lines) + "\n", encoding="utf-8")
 
+        command = runner.build_eval_command(
+            skill_dir=skill_dir,
+            tasks_file=tasks_file,
+            out_dir=directory / "out",
+            params=merged_params,
+            assets_dir=inputs / "assets" if (inputs / "assets").is_dir() else None,
+        )
+        return _enqueue(db, row, command)
 
 def submit_train_job(
     db: Session,
@@ -202,64 +208,66 @@ def submit_train_job(
     taskset_id: str,
     params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Training uses the whole task set (train/val[/test] splits or an auto
-    ratio-split for single-mode sets); there is no per-job split selection."""
-    runner.require_worker(workspace)
-    merged_params = runner.clamp_train_params(params)
-    ts_row = taskset_svc.get_row(db, workspace_id, taskset_id)
-    taskset_dir = taskset_svc.taskset_dir(ts_row.id)
+    """Submit training after atomically snapshotting the whole task set."""
+    # The per-taskset lock keeps the source stable through snapshot copy and
+    # the first commit that makes this job row visible. Delete then either
+    # runs first or observes the committed reference and refuses.
+    with taskset_svc.taskset_operation(taskset_id):
+        runner.require_worker(workspace)
+        merged_params = runner.clamp_train_params(params)
+        ts_row = taskset_svc.get_row(db, workspace_id, taskset_id)
 
-    row = SkillLabJob(
-        workspace_id=workspace_id,
-        type="train",
-        taskset_id=taskset_id,
-        taskset_name=ts_row.name,
-        split="",
-        params=merged_params,
-    )
-    db.add(row)
-    db.flush()
-    directory = artifacts.job_dir(row.id)
-    directory.mkdir(parents=True, exist_ok=True)
-    log_lines: list[str] = []
-    try:
-        skill_dir, resolved_source = _materialize_skill(
-            workspace, skill_source, directory, log_lines
-        )
-        # Multi-doc training: join the checked files + SKILL.md into the one
-        # seed document the trainer evolves. Runs at submit so a bad file
-        # list 422s here instead of failing minutes into the run.
-        seed_bundle = None
-        if merged_params["trainable_files"]:
-            seed_bundle = runner.build_seed_bundle(
-                skill_dir=skill_dir,
-                files=merged_params["trainable_files"],
-                out=directory / "seed_bundle.md",
-                log=log_lines.append,
-            )
-        split_env, has_test = runner.materialize_train_splits(
-            taskset_dir, ts_row.mode, directory
-        )
-        config_file = runner.build_train_config(
-            skill_dir=skill_dir,
-            split_env=split_env,
-            eval_test=has_test,
-            out_config=directory / "config.yaml",
+        row = SkillLabJob(
+            workspace_id=workspace_id,
+            type="train",
+            taskset_id=taskset_id,
+            taskset_name=ts_row.name,
+            split="",
             params=merged_params,
-            seed_bundle=seed_bundle,
         )
-    except BaseException:
-        runner.remove_job_dir(row.id)
-        raise
+        db.add(row)
+        db.flush()
+        directory = artifacts.job_dir(row.id)
+        directory.mkdir(parents=True, exist_ok=True)
+        log_lines: list[str] = []
+        try:
+            taskset_dir = taskset_svc.snapshot_taskset(taskset_id, directory / "inputs")
+            skill_dir, resolved_source = _materialize_skill(
+                workspace, skill_source, directory, log_lines
+            )
+            # Multi-doc training: join the checked files + SKILL.md into the one
+            # seed document the trainer evolves. Runs at submit so a bad file
+            # list 422s here instead of failing minutes into the run.
+            seed_bundle = None
+            if merged_params["trainable_files"]:
+                seed_bundle = runner.build_seed_bundle(
+                    skill_dir=skill_dir,
+                    files=merged_params["trainable_files"],
+                    out=directory / "seed_bundle.md",
+                    log=log_lines.append,
+                )
+            split_env, has_test = runner.materialize_train_splits(
+                taskset_dir, ts_row.mode, directory
+            )
+            config_file = runner.build_train_config(
+                skill_dir=skill_dir,
+                split_env=split_env,
+                eval_test=has_test,
+                out_config=directory / "config.yaml",
+                params=merged_params,
+                seed_bundle=seed_bundle,
+            )
+        except BaseException:
+            runner.remove_job_dir(row.id)
+            raise
 
-    row.skill_source = resolved_source
-    db.commit()
-    if log_lines:
-        (directory / "log.txt").write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+        row.skill_source = resolved_source
+        db.commit()
+        if log_lines:
+            (directory / "log.txt").write_text("\n".join(log_lines) + "\n", encoding="utf-8")
 
-    command = runner.build_train_command(config_file=config_file, out_dir=directory / "out")
-    return _enqueue(db, row, command)
-
+        command = runner.build_train_command(config_file=config_file, out_dir=directory / "out")
+        return _enqueue(db, row, command)
 
 def _materialize_taskgen_skills(
     workspace: Any,

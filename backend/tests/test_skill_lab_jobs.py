@@ -9,6 +9,7 @@ results.json row per task.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -30,7 +31,7 @@ parser = argparse.ArgumentParser()
 for flag in ("--skill","--tasks","--out_root","--target_backend","--model",
              "--optimizer_backend","--optimizer_model","--judge_mode",
              "--judge_exec_backend","--judge_exec_model","--judge_exec_effort",
-             "--judge_sandbox_command","--workers","--timeout","--limit"):
+             "--judge_sandbox_command","--workers","--timeout","--limit","--assets-dir"):
     parser.add_argument(flag)
 args = parser.parse_args()
 tasks = json.loads(pathlib.Path(args.tasks).read_text())
@@ -689,3 +690,114 @@ def test_job_dir_layout_and_materialization_log(lab):
     assert (directory / "skills" / "demo-skill" / "SKILL.md").is_file()
     log = lab.get(f"/api/skill-lab/jobs/{job['id']}/log").json()["content"]
     assert log.startswith("materialized stub skill")
+
+
+def test_eval_submission_uses_immutable_binary_snapshot(lab, monkeypatch):
+    from app.skill_lab import task_assets
+
+    data = b"%PDF-eval-snapshot"
+    digest = hashlib.sha256(data).hexdigest()
+    stage = task_assets.STAGING_DIR / "stage"
+    blob = stage / "blob"
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(data)
+    record = {
+        "staged_asset": "ta_test",
+        "name": "input.pdf",
+        "media_type": "application/pdf",
+        "size": len(data),
+        "sha256": digest,
+    }
+    monkeypatch.setattr(
+        task_assets,
+        "resolve_staged",
+        lambda _workspace, _token: (record, blob, stage),
+    )
+    descriptor = {
+        "staged_asset": "ta_test",
+        "name": "input.pdf",
+        "media_type": "application/pdf",
+        "size": len(data),
+    }
+    task = {
+        "id": "asset",
+        "question": "quick",
+        "rubric": "PASS",
+        "files": {"data/input.pdf": descriptor},
+    }
+    created = lab.post(
+        "/api/skill-lab/tasksets",
+        json={"name": "eval-assets", "mode": "single", "tasks_by_split": {"tasks": [task]}},
+    )
+    assert created.status_code == 201, created.text
+    job = _wait(lab, _submit(lab, created.json()["id"]).json()["id"])
+    directory = artifacts.job_dir(job["id"])
+    snapshot = directory / "inputs"
+    assert (snapshot / "assets" / digest).read_bytes() == data
+    log = (directory / "log.txt").read_text()
+    assert f"from {snapshot / 'tasks.json'}" in log
+
+    live = taskset_svc.taskset_dir(created.json()["id"])
+    (live / "tasks.json").write_text("[]")
+    (live / "assets" / digest).write_bytes(b"changed")
+    assert json.loads((snapshot / "tasks.json").read_text())[0]["id"] == "asset"
+    assert (snapshot / "assets" / digest).read_bytes() == data
+
+
+def test_submit_snapshot_and_row_visibility_are_serialized_against_delete(lab, monkeypatch):
+    import threading
+
+    from app.core.db import SessionLocal
+    from app.services.workspace import context_for_workspace
+
+    taskset_id = _taskset(lab, ["quick"])
+    entered_snapshot = threading.Event()
+    release_snapshot = threading.Event()
+    real_snapshot = taskset_svc.snapshot_taskset
+    submit_result = {}
+    delete_result = {}
+
+    def paused_snapshot(ts_id, destination):
+        entered_snapshot.set()
+        assert release_snapshot.wait(5)
+        return real_snapshot(ts_id, destination)
+
+    monkeypatch.setattr(taskset_svc, "snapshot_taskset", paused_snapshot)
+
+    def submit():
+        db = SessionLocal()
+        try:
+            submit_result["job"] = jobs.submit_eval_job(
+                db,
+                "default",
+                context_for_workspace("default"),
+                skill_source={"kind": "registry", "record_id": "rec-1"},
+                taskset_id=taskset_id,
+            )
+        finally:
+            db.close()
+
+    def delete():
+        db = SessionLocal()
+        try:
+            taskset_svc.delete_taskset(db, "default", taskset_id)
+            delete_result["deleted"] = True
+        except Exception as exc:  # expected stable in-use AppError
+            delete_result["error"] = exc
+        finally:
+            db.close()
+
+    submit_thread = threading.Thread(target=submit)
+    submit_thread.start()
+    assert entered_snapshot.wait(5)
+    delete_thread = threading.Thread(target=delete)
+    delete_thread.start()
+    assert delete_thread.is_alive()
+    release_snapshot.set()
+    submit_thread.join(5)
+    delete_thread.join(5)
+    assert not submit_thread.is_alive() and not delete_thread.is_alive()
+    assert submit_result["job"]["taskset_id"] == taskset_id
+    error = delete_result.get("error")
+    assert getattr(error, "code", None) == "skill_lab.taskset_in_use"
+    assert taskset_svc.taskset_dir(taskset_id).is_dir()

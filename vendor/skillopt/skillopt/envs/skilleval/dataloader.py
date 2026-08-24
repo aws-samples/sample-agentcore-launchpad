@@ -18,6 +18,9 @@ Task item schema::
 """
 from __future__ import annotations
 
+import hashlib
+import os
+
 from skillopt.datasets.base import (
     SplitDataLoader,
     _compute_weighted_counts,
@@ -49,15 +52,17 @@ def _validate_id(index: int, item: dict) -> str:
     return task_id
 
 
-def _validate_files(index: int, item: dict) -> dict:
+def _validate_files(index: int, item: dict, assets_dir: str | None = None) -> tuple[dict, list[tuple[str, str]]]:
     files = item.get("files")
     if files is None:
-        return {}
+        return {}, []
     if not isinstance(files, dict):
         raise ValueError(
             f"{_item_label(index, item)}: 'files' must be a dict of "
             f"{{relative path: text content}}, got {type(files).__name__}"
         )
+    asset_files: list[tuple[str, str]] = []
+    seen_asset_paths: set[str] = set()
     for rel_path, content in files.items():
         if (
             not isinstance(rel_path, str)
@@ -71,20 +76,48 @@ def _validate_files(index: int, item: dict) -> dict:
                 "must be a safe relative path"
             )
         parts = rel_path.split("/")
-        if parts[0] in {".agents", "task.md"}:
+        if parts[0].casefold() in {".agents", ".claude", ".codex", ".git", "task.md"}:
             raise ValueError(
                 f"{_item_label(index, item)}: 'files' path {rel_path!r} "
                 "collides with the evaluation runtime"
             )
-        if not isinstance(content, str):
+        if isinstance(content, str):
+            continue
+        folded_path = rel_path.casefold()
+        if folded_path in seen_asset_paths:
+            raise ValueError(
+                f"{_item_label(index, item)}: binary 'files' path {rel_path!r} "
+                "duplicates another binary path ignoring case"
+            )
+        seen_asset_paths.add(folded_path)
+        if not isinstance(content, dict):
             raise ValueError(
                 f"{_item_label(index, item)}: 'files' value for {rel_path!r} "
-                f"must be str, got {type(content).__name__}"
+                f"must be str or asset descriptor, got {type(content).__name__}"
             )
-    return dict(files)
+        asset = content.get("asset")
+        digest = asset.removeprefix("sha256:") if isinstance(asset, str) else ""
+        if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+            raise ValueError(f"{_item_label(index, item)}: invalid asset digest for {rel_path!r}")
+        if not assets_dir:
+            raise ValueError(f"{_item_label(index, item)}: assets_dir required for {rel_path!r}")
+        source_path = os.path.abspath(os.path.join(assets_dir, digest))
+        root = os.path.abspath(assets_dir)
+        if os.path.commonpath([source_path, root]) != root or not os.path.isfile(source_path):
+            raise ValueError(f"{_item_label(index, item)}: asset bytes missing for {rel_path!r}")
+        actual_digest = hashlib.sha256()
+        actual_size = 0
+        with open(source_path, "rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                actual_size += len(chunk)
+                actual_digest.update(chunk)
+        if actual_size != content.get("size") or actual_digest.hexdigest() != digest:
+            raise ValueError(f"{_item_label(index, item)}: asset digest/size mismatch for {rel_path!r}")
+        asset_files.append((source_path, rel_path))
+    return dict(files), asset_files
 
 
-def _normalize_items(raw_items: list, source: str) -> list[dict]:
+def _normalize_items(raw_items: list, source: str, assets_dir: str | None = None) -> list[dict]:
     """Validate and normalize raw task items (shared by file and split loading)."""
     if not isinstance(raw_items, list) or not raw_items:
         raise ValueError(f"No task items found in {source}")
@@ -116,7 +149,7 @@ def _normalize_items(raw_items: list, source: str) -> list[dict]:
                 f"{_item_label(index, item)}: 'task_type' must be a string"
             )
         normalized = dict(item)
-        normalized["files"] = _validate_files(index, item)
+        normalized["files"], normalized["_asset_files"] = _validate_files(index, item, assets_dir)
         normalized["task_type"] = raw_task_type or _DEFAULT_TASK_TYPE
         judge_mode, artifact_checks, mode_explicit = normalize_judge_contract(
             index,
@@ -129,7 +162,7 @@ def _normalize_items(raw_items: list, source: str) -> list[dict]:
     return tasks
 
 
-def load_tasks(path: str, limit: int = 0) -> list[dict]:
+def load_tasks(path: str, limit: int = 0, assets_dir: str | None = None) -> list[dict]:
     """Load and validate a skilleval task file (JSON array or JSONL).
 
     The entire file is validated before any slicing so a corrupt item fails
@@ -141,7 +174,7 @@ def load_tasks(path: str, limit: int = 0) -> list[dict]:
         On any missing/empty required field, duplicate id, unsafe id, or
         non-str ``files`` value.  The message names the offending item.
     """
-    tasks = _normalize_items(_load_json_or_jsonl(path), path)
+    tasks = _normalize_items(_load_json_or_jsonl(path), path, assets_dir)
     if limit and limit > 0:
         tasks = tasks[:limit]
     return tasks
@@ -178,6 +211,7 @@ class SkillEvalDataLoader(SplitDataLoader):
                 raise ValueError(
                     f"{key} must be installed Plugin Skills: {unknown}"
                 )
+        self.assets_dir = cfg.get("assets_dir") or None
         self._minimum_training_count = 0
         self._minimum_validation_count = 0
         super().setup(cfg)
@@ -203,14 +237,14 @@ class SkillEvalDataLoader(SplitDataLoader):
         return items
 
     def load_raw_items(self, data_path: str) -> list[dict]:
-        items = _normalize_items(_load_json_or_jsonl(data_path), data_path)
+        items = _normalize_items(_load_json_or_jsonl(data_path), data_path, self.assets_dir)
         return self._normalize_plugin_metadata(items)
 
     def write_split_items(self, split_path: str, items: list[dict]) -> None:
         serialized_items: list[dict] = []
         for item in items:
-            serialized = dict(item)
-            mode_explicit = serialized.pop("_judge_mode_explicit")
+            serialized = {key: value for key, value in item.items() if not key.startswith("_")}
+            mode_explicit = bool(item.get("_judge_mode_explicit"))
             if not mode_explicit:
                 serialized.pop("judge_mode", None)
             serialized_items.append(serialized)
@@ -218,7 +252,7 @@ class SkillEvalDataLoader(SplitDataLoader):
 
     def load_split_items(self, split_path: str) -> list[dict]:
         items = super().load_split_items(split_path)
-        normalized = _normalize_items(items, split_path)
+        normalized = _normalize_items(items, split_path, self.assets_dir)
         return self._normalize_plugin_metadata(normalized)
 
     def _partition_ratio_items(

@@ -18,6 +18,7 @@ carried in `error`); nonzero only on crashes, which callers map to a 500.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -48,13 +49,14 @@ from skillopt.envs.skilleval.dataloader import load_tasks  # noqa: E402
 
 
 def main(argv: list[str]) -> int:
-    if not argv:
-        print("usage: validate_tasks.py <file> [<file> ...]", file=sys.stderr)
-        return 2
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--assets-dir")
+    parser.add_argument("files", nargs="+")
+    args = parser.parse_args(argv)
     results = []
-    for path in argv:
+    for path in args.files:
         try:
-            tasks = load_tasks(path)
+            tasks = load_tasks(path, assets_dir=args.assets_dir)
             results.append({"path": path, "ok": True, "count": len(tasks), "error": None})
         except (ValueError, OSError, json.JSONDecodeError) as exc:
             results.append({"path": path, "ok": False, "count": 0, "error": str(exc)})
