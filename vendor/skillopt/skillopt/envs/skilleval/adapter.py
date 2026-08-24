@@ -37,6 +37,7 @@ class SkillEvalAdapter(EnvAdapter):
         split_ratio: str = "4:3:3",
         split_seed: int = 42,
         split_output_dir: str = "",
+        assets_dir: str = "",
         workers: int = 3,
         timeout: int = 900,
         analyst_workers: int = 4,
@@ -117,6 +118,7 @@ class SkillEvalAdapter(EnvAdapter):
             split_ratio=split_ratio,
             split_seed=split_seed,
             split_output_dir=split_output_dir,
+            assets_dir=assets_dir,
             seed=seed,
             limit=limit,
         )

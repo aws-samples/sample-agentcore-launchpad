@@ -1281,6 +1281,7 @@
         "searchSkills": "Filter skills by name or description",
         "noSkills": "No skill records in this workspace — register one in the Registry first.",
         "anyStatus": "Every status is evaluable, including DRAFT — publishing is not a prerequisite.",
+        "uploadPick": "Choose a .zip…",
         "uploadHint": "A .zip holding SKILL.md at its root, or one directory per skill.",
         "uploadNote": "An uploaded bundle is staged for this job only — no Registry record is created, and the staging session expires after 10 minutes.",
         "inspecting": "inspecting the archive …",
@@ -1488,6 +1489,7 @@
       },
       "upload": {
         "label": "Task JSON file",
+        "pick": "Choose a JSON file…",
         "hint": "A bare array of tasks, or an object keyed by split (tasks / train / val / test).",
         "targetSplit": "Target split",
         "badJson": "Not valid JSON: {{msg}}",
@@ -1505,6 +1507,8 @@
         "idDuplicate": "duplicate id '{{id}}' in this split",
         "questionRequired": "question is required",
         "rubricRequired": "rubric is required",
+        "assetPathUnsafe": "File destination “{{path}}” must be a safe relative path outside .agents, .claude, .codex, .git, and task.md.",
+        "assetPathDuplicate": "Binary file destination “{{path}}” is duplicated in this task.",
         "nameRequired": "A task set name is required",
         "splitEmpty": "Split '{{split}}' needs at least one task",
         "editTargetGone": "This task set is no longer listed — reopen it from the table and edit again"
@@ -1534,7 +1538,7 @@
           },
           "files": {
             "key": "files",
-            "text": "Optional. Map of relative path to text content, seeded into the task workspace before the run. Text only."
+            "text": "Optional. Map of safe relative paths to inline text or uploaded XLSX, PDF, PNG, JPEG, and WebP files, seeded into the task workspace before the run."
           },
           "judgeMode": {
             "key": "judge_mode",
@@ -1546,7 +1550,14 @@
         "title": "Delete task set",
         "body": "Delete task set “{{name}}”? Its task files are removed from disk and this cannot be undone."
       },
-      "sampleChip": "built-in sample"
+      "sampleChip": "built-in sample",
+      "assets": {
+        "label": "Binary task files",
+        "pick": "Choose files…",
+        "uploading": "Uploading…",
+        "destination": "Destination path",
+        "remove": "Remove"
+      }
     }
   },
   "apiErrors": {
@@ -1554,6 +1565,22 @@
     "skill_lab.taskset_not_found": "Task set not found",
     "skill_lab.not_provisioned": "The Skill Lab is not provisioned on this host — run `make bootstrap`.",
     "skill_lab.validator_error": "The task validator failed to run.",
+    "skill_lab.asset_upload_empty": "Choose at least one binary task file.",
+    "skill_lab.asset_limit_exceeded": "The binary task file count or total size exceeds the allowed limit.",
+    "skill_lab.asset_too_large": "A binary task file exceeds the 25 MiB limit.",
+    "skill_lab.asset_name_invalid": "Binary task files must use plain filenames.",
+    "skill_lab.asset_duplicate_name": "Binary task filenames must be unique within one upload.",
+    "skill_lab.asset_format_invalid": "A binary task file has an unsupported extension or does not match its format.",
+    "skill_lab.asset_token_invalid": "The staged binary file reference is invalid.",
+    "skill_lab.asset_token_expired": "A staged binary file expired. Upload it again.",
+    "skill_lab.asset_token_not_found": "A staged binary file was not found in this workspace. Upload it again.",
+    "skill_lab.asset_missing": "Stored binary task file bytes are missing.",
+    "skill_lab.asset_digest_mismatch": "A binary task file failed its integrity check.",
+    "skill_lab.asset_descriptor_invalid": "A binary task file descriptor is invalid.",
+    "skill_lab.asset_not_owned": "That binary file is not owned by this task set.",
+    "skill_lab.asset_path_invalid": "A binary task file destination is unsafe.",
+    "skill_lab.asset_duplicate_path": "Binary task file destinations must be unique.",
+    "skill_lab.snapshot_exists": "This job already has an immutable input snapshot.",
     "agent.name_exists": "An agent with this name already exists",
     "agent.method_not_available": "This creation method ships in a later phase",
     "agent.not_active": "The agent is not active yet",
@@ -1610,7 +1637,9 @@
     "registry.staging_expired": "The upload session expired — pick the archive again.",
     "skill_lab.job_not_resumable": "Only an interrupted or failed training job can be resumed — evaluations are cheap, submit them again.",
     "skill_lab.publish_unsupported": "This job cannot publish a skill — publishing needs a succeeded training run whose skill came from a Registry record.",
-    "skill_lab.publish_no_change": "Training accepted no edits, so there is nothing to publish."
+    "skill_lab.publish_no_change": "Training accepted no edits, so there is nothing to publish.",
+    "skill_lab.asset_request_too_large": "The multipart task-file upload exceeds the 101 MiB request limit.",
+    "skill_lab.taskset_cleanup_failed": "Task-set asset cleanup failed. The task set was retained so deletion can be retried."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",

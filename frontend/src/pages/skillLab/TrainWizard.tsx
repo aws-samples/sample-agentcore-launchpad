@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Btn, Chip, Panel } from "../../components";
@@ -78,6 +78,7 @@ export function TrainWizard({
   const [staging, setStaging] = useState<{ id: string; skills: InspectedSkill[] } | null>(null);
   const [stagedIndex, setStagedIndex] = useState<number | null>(null);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const zipRef = useRef<HTMLInputElement>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   const [tasksets, setTasksets] = useState<SkillLabTasksetInfo[]>([]);
@@ -378,10 +379,21 @@ export function TrainWizard({
         </div>
       ) : (
         <div className="field" key="source-upload">
+          {/* A themed button driving a hidden input: `className="input"` only
+              styles the field box, leaving the browser's native file button
+              inside it (and `.field label` would override a `label.btn`). */}
+          <div>
+            <Btn disabled={uploadBusy} onClick={() => zipRef.current?.click()}>
+              {uploadBusy
+                ? t("skillLab.eval.wizard.inspecting")
+                : t("skillLab.eval.wizard.uploadPick")}
+            </Btn>
+          </div>
           <input
+            ref={zipRef}
             type="file"
             accept=".zip,application/zip"
-            className="input"
+            style={{ display: "none" }}
             data-testid="train-skill-upload"
             onChange={(e) => {
               const file = e.target.files?.[0];
@@ -392,11 +404,6 @@ export function TrainWizard({
           <span className="mono dim" style={{ fontSize: 10.5 }}>
             {t("skillLab.eval.wizard.uploadHint")}
           </span>
-          {uploadBusy && (
-            <span className="mono dim" style={{ fontSize: 10.5 }}>
-              {t("skillLab.eval.wizard.inspecting")}
-            </span>
-          )}
           {uploadError !== null && (
             <div
               className="note"

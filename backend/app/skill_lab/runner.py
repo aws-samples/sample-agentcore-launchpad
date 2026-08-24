@@ -333,7 +333,12 @@ def _train_judge_env(params: dict[str, Any]) -> dict[str, str]:
 
 
 def build_eval_command(
-    *, skill_dir: Path, tasks_file: Path, out_dir: Path, params: dict[str, Any]
+    *,
+    skill_dir: Path,
+    tasks_file: Path,
+    out_dir: Path,
+    params: dict[str, Any],
+    assets_dir: Path | None = None,
 ) -> list[str]:
     command = [
         get_settings().skill_lab_python,
@@ -350,6 +355,8 @@ def build_eval_command(
         "--workers", str(params["workers"]),
         "--timeout", str(params["timeout"]),
     ]
+    if assets_dir is not None:
+        command += ["--assets-dir", str(assets_dir)]
     if int(params.get("limit") or 0) > 0:
         command += ["--limit", str(params["limit"])]
     return command
@@ -679,6 +686,11 @@ def materialize_train_splits(
             "data_path": str(taskset_dir / "tasks.json"),
             "split_ratio": SINGLE_SPLIT_RATIO,
             "split_output_dir": str(job_dir / "splits"),
+            **(
+                {"assets_dir": str(taskset_dir / "assets")}
+                if (taskset_dir / "assets").is_dir()
+                else {}
+            ),
         }, True
     splits_dir = job_dir / "splits"
     has_test = (taskset_dir / "test.json").is_file()
@@ -689,7 +701,15 @@ def materialize_train_splits(
         target = splits_dir / split / "items.json"
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
-    return {"split_mode": "split_dir", "split_dir": str(splits_dir)}, has_test
+    return {
+        "split_mode": "split_dir",
+        "split_dir": str(splits_dir),
+        **(
+            {"assets_dir": str(taskset_dir / "assets")}
+            if (taskset_dir / "assets").is_dir()
+            else {}
+        ),
+    }, has_test
 
 
 # Bundle codec CLI (`build` at submit, `split` at publish). Runs as a

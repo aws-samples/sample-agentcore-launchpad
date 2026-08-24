@@ -17,7 +17,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # openai/pyyaml: imported by skillopt.model / skillopt.config at import time
-RUN pip install --no-cache-dir boto3 bedrock-agentcore openai pyyaml
+RUN pip install --no-cache-dir \
+        boto3 bedrock-agentcore openai pyyaml \
+        openpyxl==3.1.5 Pillow==11.3.0 pypdf==6.0.0
 
 # Pinned standalone claude CLI (official installer, version-locked).
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_CLI_VERSION}" \

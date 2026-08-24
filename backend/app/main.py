@@ -44,6 +44,7 @@ from app.routers.workspaces import router as workspaces_router
 from app.services import local_exec
 from app.services.governance import reconcile_policy_changes
 from app.services.model_prices import start_auto_refresh
+from app.skill_lab import task_assets
 from app.skill_lab.jobs import sweep_interrupted_jobs as sweep_skill_lab_jobs
 from app.skill_lab.routers import router as skill_lab_router
 
@@ -110,6 +111,9 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         # and awkward to clear.
         app.middleware("http")(hsts)
 
+    # Register before auth so Starlette's reverse middleware stack keeps auth
+    # outermost while this exact-route gate still runs before multipart parsing.
+    app.middleware("http")(task_assets.task_asset_body_limit_middleware)
     app.middleware("http")(auth_middleware)
     app.add_middleware(
         CORSMiddleware,

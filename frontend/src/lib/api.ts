@@ -1537,6 +1537,18 @@ export interface SkillLabTask {
   [key: string]: unknown;
 }
 
+export interface SkillLabAssetDescriptor {
+  asset?: `sha256:${string}`;
+  staged_asset?: string;
+  name: string;
+  media_type: string;
+  size: number;
+}
+
+export interface SkillLabTaskAssetUploadResponse {
+  assets: SkillLabAssetDescriptor[];
+}
+
 export interface SkillLabTasksetDetail {
   info: SkillLabTasksetInfo;
   tasks_by_split: Record<string, SkillLabTask[]>;
@@ -2203,6 +2215,14 @@ export const api = {
       "/api/observability/prices/refresh",
       { method: "POST" },
     ),
+  skillLabTaskAssetsUpload: (files: File[]) => {
+    const form = new FormData();
+    for (const file of files) form.append("files", file);
+    return requestForm<SkillLabTaskAssetUploadResponse>(
+      "/api/skill-lab/task-assets",
+      form,
+    );
+  },
   skillLabStatus: () => request<SkillLabStatus>("/api/skill-lab/status"),
   skillLabTasksets: () => request<SkillLabTasksetInfo[]>("/api/skill-lab/tasksets"),
   skillLabTasksetGet: (id: string, full = false) =>

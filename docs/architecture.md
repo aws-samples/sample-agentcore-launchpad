@@ -942,6 +942,32 @@ the files, not the ledger, are the source of truth for content).
 
 ## The SQLite ledger and job/event model
 
+**Binary task inputs.** A task's `files` map remains backward-compatible with inline text and
+also accepts staged XLSX, PDF, PNG, JPEG, and WebP inputs. The browser uploads multipart bytes to
+a workspace-hashed, opaque-token staging area under `data/skill-lab/` (24-hour TTL); task-set
+create/update verifies signatures, limits, digest and ownership, then commits deduplicated blobs
+as `tasksets/<id>/assets/<sha256>` while JSON stores only stable metadata descriptors. Destination
+paths are safe POSIX-relative rollout paths and never storage paths. Full-replacement updates
+atomically preserve kept assets and drop omitted ones. Eval and train submission re-hash and copy
+the selected JSON/assets into `jobs/<id>/inputs`, so queued/running work is immutable. Vendored
+SkillOpt receives the explicit snapshot assets root and copies exact bytes into each rollout work
+directory before the existing binary-safe S3 tar → AgentCore Runtime → output-tar transport.
+Limits are 32 binary files per upload/task, 25 MiB per file, 100 MiB per task, and 256
+references/200 MiB unique bytes per task set; legacy inline text maps keep their historical count
+and case-distinct-path behavior. `.agents`, `.claude`, `.codex`, `.git`, and `task.md` are reserved
+rollout roots. A route-specific middleware rejects known oversized multipart `Content-Length` values
+before Starlette parses the form, while streamed per-file enforcement remains authoritative. Chunked
+bodies have no length at this layer, so production ingress/proxies should also enforce a whole-body
+limit when a hard cap for chunked transfer is required.
+
+Task-set update, delete, and job snapshot operations use a process-local lock keyed by task-set id.
+The lock spans filesystem rollback names, snapshot verification, and the job-row commit, so deletion
+either wins before submission or observes the committed job reference. This matches the supported
+single-host/single-backend-process SQLite architecture; sharing `data/skill-lab/` across processes
+would require replacing it with an inter-process/file lock. Delete first renames the tree, and a cleanup
+failure compensates the ledger delete and restores the canonical tree so the operator receives a stable
+error and can retry instead of leaking unowned assets.
+
 State that is cheap and local lives in a SQLite ledger at `data/launchpad.db`
 (`backend/app/models/ledger.py` + the evaluation/optimization models):
 

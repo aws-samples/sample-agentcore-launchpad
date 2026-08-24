@@ -10,6 +10,7 @@ one more accepted step and marks the best skill RESUMED.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import time
@@ -203,6 +204,73 @@ def test_train_config_single_mode_uses_ratio(lab):
     assert config["env"]["split_mode"] == "ratio"
     assert config["env"]["split_ratio"] == "4:3:3"
     assert config["evaluation"]["eval_test"] is True
+
+
+def _asset_descriptor(monkeypatch, tmp_path, data: bytes):
+    from app.skill_lab import task_assets
+
+    digest = hashlib.sha256(data).hexdigest()
+    stage = tmp_path / f"stage-{digest}"
+    blob = stage / "blob"
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(data)
+    record = {
+        "staged_asset": f"ta_{digest}",
+        "name": "input.pdf",
+        "media_type": "application/pdf",
+        "size": len(data),
+        "sha256": digest,
+    }
+    monkeypatch.setattr(
+        task_assets,
+        "resolve_staged",
+        lambda _workspace, _token: (record, blob, stage),
+    )
+    return digest, {
+        "staged_asset": record["staged_asset"],
+        "name": record["name"],
+        "media_type": record["media_type"],
+        "size": record["size"],
+    }
+
+
+@pytest.mark.parametrize("mode", ["single", "split"])
+def test_train_submission_uses_binary_snapshot_for_both_modes(lab, monkeypatch, tmp_path, mode):
+    data = f"%PDF-train-{mode}".encode()
+    digest, descriptor = _asset_descriptor(monkeypatch, tmp_path, data)
+    task = {
+        "id": "asset",
+        "question": "quick",
+        "rubric": "PASS",
+        "files": {"data/input.pdf": descriptor},
+    }
+    tasks_by_split = (
+        {"tasks": [task]}
+        if mode == "single"
+        else {
+            "train": [task],
+            "val": [dict(task, id="asset-val")],
+        }
+    )
+    created = lab.post(
+        "/api/skill-lab/tasksets",
+        json={"name": f"train-{mode}", "mode": mode, "tasks_by_split": tasks_by_split},
+    )
+    assert created.status_code == 201, created.text
+    job = _wait(lab, _submit_train(lab, created.json()["id"]).json()["id"])
+    directory = artifacts.job_dir(job["id"])
+    inputs = directory / "inputs"
+    config = yaml.safe_load((directory / "config.yaml").read_text())
+    assert config["env"]["assets_dir"] == str(inputs / "assets")
+    assert (inputs / "assets" / digest).read_bytes() == data
+    if mode == "single":
+        assert config["env"]["data_path"] == str(inputs / "tasks.json")
+    else:
+        assert json.loads((directory / "splits/train/items.json").read_text())[0]["id"] == "asset"
+
+    live = taskset_svc.taskset_dir(created.json()["id"])
+    (live / "assets" / digest).write_bytes(b"changed")
+    assert (inputs / "assets" / digest).read_bytes() == data
 
 
 def test_train_param_bounds_and_split_refusal(lab):

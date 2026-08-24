@@ -70,6 +70,9 @@ def parse_args() -> argparse.Namespace:
                         "containing SKILL.md (supporting files are copied along)")
     p.add_argument("--tasks", type=str, required=True,
                    help="Task file (JSON array or JSONL; id/question/rubric per item)")
+    p.add_argument("--assets-dir", type=str, default=None,
+                   help="Content-addressed binary task asset directory")
+
     p.add_argument("--out_root", type=str, required=True,
                    help="Output directory for results.json / report.md / rollouts/")
     p.add_argument("--workers", type=int, default=4)
@@ -342,7 +345,7 @@ def main() -> None:
     plugin_mode = len(runtime_skills) > 1
     primary = runtime_skills[0]
     try:
-        items = load_tasks(args.tasks)
+        items = load_tasks(args.tasks, assets_dir=args.assets_dir)
         normalize_plugin_tasks(items, {skill["name"] for skill in runtime_skills})
         if args.limit and args.limit > 0:
             items = items[:args.limit]

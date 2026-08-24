@@ -11,16 +11,21 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import threading
 import uuid
+from collections import defaultdict
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, make_transient
 
 from app.core.config import DATA_DIR, get_settings
 from app.core.errors import AppError
+from app.skill_lab import task_assets
 from app.skill_lab.models import SkillLabTaskset
 from app.skill_lab.worker_build import VENDOR_ROOT
 
@@ -32,6 +37,21 @@ SINGLE_KEY = "tasks"
 MAX_TASKS_PER_SPLIT = 2000
 PREVIEW_CAP = 20
 _VALIDATOR_TIMEOUT_S = 60.0
+
+# File trees and their shared ``<id>.old`` rollback names are process-local
+# resources. This application intentionally supports one backend process on one
+# host for its SQLite/file-backed Skill Lab, so a keyed in-process RLock is the
+# appropriate serialization boundary. A multi-process deployment must replace
+# this with an inter-process/file lock before sharing DATA_DIR. RLock permits job
+# submit to hold the boundary across row commit while snapshot_taskset nests it.
+_TASKSET_LOCKS: defaultdict[str, threading.RLock] = defaultdict(threading.RLock)
+
+
+@contextmanager
+def taskset_operation(taskset_id: str) -> Iterator[None]:
+    """Serialize filesystem mutation/snapshot work for one task set in this process."""
+    with _TASKSET_LOCKS[taskset_id]:
+        yield
 
 
 def _not_found(taskset_id: str) -> AppError:
@@ -113,13 +133,19 @@ def _validator_python(override: str | None) -> str:
     return python
 
 
-def _validate_files(files: dict[str, Path], validator_python: str | None) -> None:
+def _validate_files(
+    files: dict[str, Path], validator_python: str | None, assets_dir: Path | None = None
+) -> None:
     """Run the vendored validator on every split file; raise 422 on failures."""
     python = _validator_python(validator_python)
     ordered = list(files.items())
+    command = [python, str(VALIDATOR_SCRIPT)]
+    if assets_dir is not None:
+        command += ["--assets-dir", str(assets_dir)]
+    command += [str(path) for _, path in ordered]
     try:
         proc = subprocess.run(
-            [python, str(VALIDATOR_SCRIPT), *[str(path) for _, path in ordered]],
+            command,
             capture_output=True,
             text=True,
             timeout=_VALIDATOR_TIMEOUT_S,
@@ -150,12 +176,165 @@ def _validate_files(files: dict[str, Path], validator_python: str | None) -> Non
         raise _invalid(failures)
 
 
+def _owned_descriptors(current_live: Path | None) -> set[tuple[str, str, str, int]]:
+    """Canonical descriptors already owned by the task set being replaced."""
+    owned: set[tuple[str, str, str, int]] = set()
+    if current_live is None:
+        return owned
+    for task_file in current_live.glob("*.json"):
+        try:
+            tasks = json.loads(task_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for task in tasks if isinstance(tasks, list) else ():
+            files = task.get("files") if isinstance(task, dict) else None
+            for value in files.values() if isinstance(files, dict) else ():
+                if not isinstance(value, dict) or "asset" not in value:
+                    continue
+                try:
+                    digest = task_assets.digest_from_descriptor(value)
+                    descriptor = (
+                        digest,
+                        str(value["name"]),
+                        str(value["media_type"]),
+                        int(value["size"]),
+                    )
+                except (KeyError, TypeError, ValueError):
+                    continue
+                owned.add(descriptor)
+    return owned
+
+
+def _canonicalize_assets(
+    tasks_by_split: dict[str, Any],
+    keys: list[str],
+    workspace_id: str,
+    staging: Path,
+    current_live: Path | None,
+) -> tuple[dict[str, Any], list[tuple[Path, str]]]:
+    """Resolve descriptors into a complete staged assets tree without mutating input."""
+    canonical = json.loads(json.dumps(tasks_by_split))
+    assets_dir = staging / task_assets.ASSETS_DIRNAME
+    references = 0
+    unique_sizes: dict[str, int] = {}
+    consumed: list[tuple[Path, str]] = []
+    owned = _owned_descriptors(current_live)
+    for split in keys:
+        for index, task in enumerate(canonical[split]):
+            if not isinstance(task, dict):
+                continue  # vendored validator owns the row-level shape message
+            files = task.get("files")
+            if files is None:
+                continue
+            if not isinstance(files, dict):
+                continue
+            binary_values = [value for value in files.values() if not isinstance(value, str)]
+            if len(binary_values) > task_assets.MAX_FILES_PER_TASK:
+                raise _invalid([{"split": split, "message": f"item #{index}: too many files"}])
+            # These constraints belong to new binary descriptors only. Legacy
+            # inline text paths continue through the vendored loader's historical
+            # path rules (including case-distinct names and >32 text files).
+            seen_binary_paths: set[str] = set()
+            task_bytes = 0
+            for destination, value in list(files.items()):
+                if isinstance(value, str):
+                    continue
+                safe = task_assets.validate_destination(destination)
+                folded = safe.casefold()
+                if folded in seen_binary_paths:
+                    raise task_assets._error(
+                        "asset_duplicate_path", f"duplicate task asset destination {destination!r}"
+                    )
+                seen_binary_paths.add(folded)
+                if not isinstance(value, dict):
+                    raise task_assets._error(
+                        "asset_descriptor_invalid", f"invalid task asset value for {destination!r}"
+                    )
+                source: Path
+                if "staged_asset" in value:
+                    record, source, stage_dir = task_assets.resolve_staged(
+                        workspace_id, str(value.get("staged_asset") or "")
+                    )
+                    descriptor = task_assets.stable_descriptor(record)
+                    consumed.append((stage_dir, str(record["staged_asset"])))
+                    digest = str(record["sha256"])
+                else:
+                    digest = task_assets.digest_from_descriptor(value)
+                    if current_live is None:
+                        raise task_assets._error(
+                            "asset_not_owned", "stable task assets may only be kept during update"
+                        )
+                    descriptor = {
+                        "asset": f"sha256:{digest}",
+                        "name": str(value.get("name") or ""),
+                        "media_type": str(value.get("media_type") or ""),
+                        "size": int(value.get("size", -1)),
+                    }
+                    identity = (
+                        digest,
+                        descriptor["name"],
+                        descriptor["media_type"],
+                        descriptor["size"],
+                    )
+                    if identity not in owned:
+                        raise task_assets._error(
+                            "asset_not_owned",
+                            "stable task asset descriptor is not owned by this task set",
+                        )
+                    source = current_live / task_assets.ASSETS_DIRNAME / digest
+                    task_assets._verify_blob(
+                        source,
+                        {"size": descriptor["size"], "sha256": digest},
+                    )
+                size = int(descriptor["size"])
+                references += 1
+                task_bytes += size
+                if task_bytes > task_assets.MAX_TASK_BYTES:
+                    raise task_assets._error(
+                        "asset_limit_exceeded", "task binary assets exceed 100 MiB"
+                    )
+                unique_sizes.setdefault(digest, size)
+                assets_dir.mkdir(parents=True, exist_ok=True)
+                target = assets_dir / digest
+                if not target.exists():
+                    shutil.copyfile(source, target)
+                files[destination] = descriptor
+    if references > task_assets.MAX_TASKSET_REFERENCES:
+        raise task_assets._error("asset_limit_exceeded", "task set has too many binary assets")
+    if sum(unique_sizes.values()) > task_assets.MAX_TASKSET_UNIQUE_BYTES:
+        raise task_assets._error("asset_limit_exceeded", "task set binary assets exceed 200 MiB")
+    return canonical, consumed
+
+
+def _consume_staged(consumed: list[tuple[Path, str]]) -> None:
+    for stage_dir, token in consumed:
+        blob = stage_dir / "blobs" / token
+        blob.unlink(missing_ok=True)
+        try:
+            metadata_path = stage_dir / "metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["assets"] = [
+                record
+                for record in metadata.get("assets", [])
+                if record.get("staged_asset") != token
+            ]
+            if metadata["assets"]:
+                metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+            else:
+                shutil.rmtree(stage_dir, ignore_errors=True)
+        except (OSError, json.JSONDecodeError):
+            pass
+
+
 def _stage_validated(
     tasks_by_split: dict[str, Any],
     keys: list[str],
     validator_python: str | None,
     run_validator: bool = True,
-) -> Path:
+    *,
+    workspace_id: str = "",
+    current_live: Path | None = None,
+) -> tuple[Path, dict[str, Any], list[tuple[Path, str]]]:
     """Write the split files to a staging dir and validate them there.
 
     Nothing outside the staging dir is touched, and every failure path — shape
@@ -167,29 +346,30 @@ def _stage_validated(
     staging = TASKSETS_DIR / f".staging-{uuid.uuid4().hex[:8]}"
     staging.mkdir(parents=True)
     try:
+        canonical, consumed = _canonicalize_assets(
+            tasks_by_split, keys, workspace_id, staging, current_live
+        )
         files: dict[str, Path] = {}
         for split in keys:
             path = staging / ("tasks.json" if split == SINGLE_KEY else f"{split}.json")
             path.write_text(
-                json.dumps(tasks_by_split[split], ensure_ascii=False, indent=2),
+                json.dumps(canonical[split], ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             files[split] = path
         if run_validator:
-            _validate_files(files, validator_python)
+            assets_dir = staging / task_assets.ASSETS_DIRNAME
+            _validate_files(files, validator_python, assets_dir if assets_dir.exists() else None)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
-    return staging
+    return staging, canonical, consumed
 
 
-def _swap_in(staging: Path, live: Path) -> None:
-    """Atomic-ish replace: old content is restored if the swap fails midway."""
+def _swap_in(staging: Path, live: Path) -> Path | None:
+    """Replace the live tree while retaining a rollback copy through DB commit."""
     backup = live.with_name(live.name + ".old")
     had_live = live.exists()
-    # A leftover backup is debris, never state anything reads: failing to remove
-    # it must not fail the write (the rename below refuses a non-empty target
-    # anyway, which lands in the restore path).
     shutil.rmtree(backup, ignore_errors=True)
     try:
         if had_live:
@@ -199,7 +379,18 @@ def _swap_in(staging: Path, live: Path) -> None:
         if had_live and backup.exists() and not live.exists():
             backup.rename(live)
         raise
-    shutil.rmtree(backup, ignore_errors=True)
+    return backup if had_live else None
+
+
+def _restore_swap(live: Path, backup: Path | None) -> None:
+    shutil.rmtree(live, ignore_errors=True)
+    if backup is not None and backup.exists():
+        backup.rename(live)
+
+
+def _finish_swap(backup: Path | None) -> None:
+    if backup is not None:
+        shutil.rmtree(backup, ignore_errors=True)
 
 
 def _counts(tasks_by_split: dict[str, Any], keys: list[str]) -> dict[str, int]:
@@ -268,7 +459,13 @@ def create_taskset(
     if not name:
         raise _invalid([{"split": "name", "message": "name is required"}])
     keys = _split_keys_for(mode, tasks_by_split)
-    staging = _stage_validated(tasks_by_split, keys, validator_python, run_validator)
+    staging, canonical, consumed = _stage_validated(
+        tasks_by_split,
+        keys,
+        validator_python,
+        run_validator,
+        workspace_id=workspace_id,
+    )
     try:
         row = SkillLabTaskset(
             workspace_id=workspace_id,
@@ -276,16 +473,23 @@ def create_taskset(
             description=description or "",
             mode=mode,
             sample=sample,
-            counts=_counts(tasks_by_split, keys),
+            counts=_counts(canonical, keys),
         )
         db.add(row)
         db.flush()  # allocate the id before the content claims its directory
-        _swap_in(staging, taskset_dir(row.id))
+        live = taskset_dir(row.id)
+        backup = _swap_in(staging, live)
     except BaseException:
         # closing the session rolls the flushed row back; the dir is ours to undo
         shutil.rmtree(staging, ignore_errors=True)
         raise
-    db.commit()
+    try:
+        db.commit()
+    except BaseException:
+        _restore_swap(live, backup)
+        raise
+    _finish_swap(backup)
+    _consume_staged(consumed)
     return taskset_info(row)
 
 
@@ -309,6 +513,40 @@ def read_taskset(
     return {"info": taskset_info(row), "tasks_by_split": tasks_by_split, "truncated": truncated}
 
 
+def snapshot_taskset(taskset_id: str, destination: Path) -> Path:
+    """Copy and integrity-check immutable job inputs under the task-set lock."""
+    with taskset_operation(taskset_id):
+        source = taskset_dir(taskset_id)
+        if not source.is_dir():
+            raise _not_found(taskset_id)
+        if destination.exists():
+            raise AppError(
+                "skill_lab.snapshot_exists",
+                f"job input snapshot already exists at {destination}",
+                status_code=409,
+            )
+        staging = destination.with_name(f".{destination.name}-{uuid.uuid4().hex[:8]}.staging")
+        try:
+            shutil.copytree(source, staging)
+            assets = staging / task_assets.ASSETS_DIRNAME
+            for task_file in staging.glob("*.json"):
+                tasks = json.loads(task_file.read_text(encoding="utf-8"))
+                for task in tasks:
+                    files = task.get("files") if isinstance(task, dict) else None
+                    for value in files.values() if isinstance(files, dict) else ():
+                        if isinstance(value, dict):
+                            digest = task_assets.digest_from_descriptor(value)
+                            task_assets._verify_blob(
+                                assets / digest,
+                                {"size": int(value.get("size", -1)), "sha256": digest},
+                            )
+            staging.rename(destination)
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        return destination
+
+
 def update_taskset(
     db: Session,
     workspace_id: str,
@@ -319,40 +557,92 @@ def update_taskset(
     tasks_by_split: dict[str, Any],
     validator_python: str | None = None,
 ) -> dict[str, Any]:
-    row = get_row(db, workspace_id, taskset_id)
-    _reject_sample_write(row)
-    keys = _split_keys_for(row.mode, tasks_by_split)  # mode is immutable
-    if name is not None and not name.strip():
-        raise _invalid([{"split": "name", "message": "name is required"}])
-    staging = _stage_validated(tasks_by_split, keys, validator_python)
-    try:
-        _swap_in(staging, taskset_dir(row.id))
-    except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
-    if name is not None:
-        row.name = name.strip()
-    if description is not None:
-        row.description = description
-    row.counts = _counts(tasks_by_split, keys)
-    row.updated_at = datetime.now(UTC)
-    db.commit()
-    return taskset_info(row)
+    # Lock includes reading the current tree, staging from owned descriptors,
+    # the shared .old swap, ledger commit, and staged-token consumption.
+    with taskset_operation(taskset_id):
+        row = get_row(db, workspace_id, taskset_id)
+        _reject_sample_write(row)
+        keys = _split_keys_for(row.mode, tasks_by_split)  # mode is immutable
+        if name is not None and not name.strip():
+            raise _invalid([{"split": "name", "message": "name is required"}])
+        live = taskset_dir(row.id)
+        staging, canonical, consumed = _stage_validated(
+            tasks_by_split,
+            keys,
+            validator_python,
+            workspace_id=workspace_id,
+            current_live=live,
+        )
+        try:
+            backup = _swap_in(staging, live)
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        if name is not None:
+            row.name = name.strip()
+        if description is not None:
+            row.description = description
+        row.counts = _counts(canonical, keys)
+        row.updated_at = datetime.now(UTC)
+        try:
+            db.commit()
+        except BaseException:
+            _restore_swap(live, backup)
+            raise
+        _finish_swap(backup)
+        _consume_staged(consumed)
+        return taskset_info(row)
 
 
 def delete_taskset(db: Session, workspace_id: str, taskset_id: str) -> None:
-    row = get_row(db, workspace_id, taskset_id)
-    _reject_sample_write(row)
-    from app.skill_lab.jobs import taskset_in_use
+    """Delete ledger + tree, compensating a failed post-commit tree cleanup.
 
-    if taskset_in_use(db, workspace_id, taskset_id):
-        raise AppError(
-            "skill_lab.taskset_in_use",
-            "this task set is referenced by evaluation/training jobs — "
-            "delete those jobs first",
-            status_code=409,
-        )
-    directory = taskset_dir(row.id)
-    db.delete(row)
-    db.commit()
-    shutil.rmtree(directory, ignore_errors=True)
+    Renaming first removes the canonical tree atomically. The ledger deletion is
+    committed before recursive cleanup; if cleanup fails, the same row and tree
+    are restored and a stable error is returned instead of reporting success
+    while leaking an unowned task-set directory.
+    """
+    with taskset_operation(taskset_id):
+        row = get_row(db, workspace_id, taskset_id)
+        _reject_sample_write(row)
+        from app.skill_lab.jobs import taskset_in_use
+
+        if taskset_in_use(db, workspace_id, taskset_id):
+            raise AppError(
+                "skill_lab.taskset_in_use",
+                "this task set is referenced by evaluation/training jobs — delete those jobs first",
+                status_code=409,
+            )
+        directory = taskset_dir(row.id)
+        tombstone = directory.with_name(f".deleting-{row.id}-{uuid.uuid4().hex[:8]}")
+        if directory.exists():
+            try:
+                directory.rename(tombstone)
+            except OSError as exc:
+                raise AppError(
+                    "skill_lab.taskset_cleanup_failed",
+                    "task set assets could not be prepared for deletion; the task set was retained",
+                    status_code=500,
+                ) from exc
+        db.delete(row)
+        try:
+            db.commit()
+        except BaseException:
+            if tombstone.exists() and not directory.exists():
+                tombstone.rename(directory)
+            raise
+        try:
+            if tombstone.exists():
+                shutil.rmtree(tombstone)
+        except OSError as exc:
+            # Compensating transaction: retain a visible/retryable ledger row.
+            make_transient(row)
+            db.add(row)
+            db.commit()
+            if tombstone.exists() and not directory.exists():
+                tombstone.rename(directory)
+            raise AppError(
+                "skill_lab.taskset_cleanup_failed",
+                "task set asset cleanup failed; the task set was restored and can be retried",
+                status_code=500,
+            ) from exc

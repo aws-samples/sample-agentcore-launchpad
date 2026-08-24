@@ -1,10 +1,20 @@
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { Btn, Chip, ConfirmDialog, DataTable, Pager, Panel, useTablePage, useToast } from "../components";
+import {
+  Btn,
+  Chip,
+  ConfirmDialog,
+  DataTable,
+  Pager,
+  Panel,
+  useTablePage,
+  useToast,
+} from "../components";
 import type {
+  SkillLabAssetDescriptor,
   SkillLabTask,
   SkillLabTasksetDetail,
   SkillLabTasksetInfo,
@@ -26,6 +36,12 @@ const splitsFor = (mode: SkillLabTasksetMode): string[] =>
  * (`files`, `judge_mode`, `artifact_checks`, anything the CLI grows later)
  * survive an edit untouched — only the four edited fields are overwritten.
  */
+interface TaskAssetDraft {
+  key: string;
+  path: string;
+  value: SkillLabAssetDescriptor;
+}
+
 interface TaskDraft {
   key: string;
   original: SkillLabTask | null;
@@ -33,6 +49,10 @@ interface TaskDraft {
   question: string;
   rubric: string;
   taskType: string;
+  files: Record<string, string>;
+  assets: TaskAssetDraft[];
+  assetBusy: boolean;
+  assetError: string | null;
 }
 
 type Drafts = Record<string, TaskDraft[]>;
@@ -49,6 +69,10 @@ const emptyDraft = (n: number): TaskDraft => ({
   question: "",
   rubric: "",
   taskType: "",
+  files: {},
+  assets: [],
+  assetBusy: false,
+  assetError: null,
 });
 
 /**
@@ -61,6 +85,32 @@ const seedDrafts = (mode: SkillLabTasksetMode): Drafts =>
     ? { [SINGLE_SPLIT]: [emptyDraft(1)] }
     : { train: [emptyDraft(1)], val: [emptyDraft(1)], test: [] };
 
+const rawTaskFiles = (
+  task: SkillLabTask,
+): Record<string, string | SkillLabAssetDescriptor> => {
+  if (
+    task.files === null ||
+    typeof task.files !== "object" ||
+    Array.isArray(task.files)
+  )
+    return {};
+  return task.files as Record<string, string | SkillLabAssetDescriptor>;
+};
+
+const taskTextFiles = (task: SkillLabTask): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(rawTaskFiles(task)).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
+
+const taskAssetDrafts = (task: SkillLabTask): TaskAssetDraft[] =>
+  Object.entries(rawTaskFiles(task)).flatMap(([path, value]) =>
+    typeof value === "string"
+      ? []
+      : [{ key: draftKey(), path, value: { ...value } }],
+  );
+
 const toDraft = (task: SkillLabTask): TaskDraft => ({
   key: draftKey(),
   original: task,
@@ -68,6 +118,10 @@ const toDraft = (task: SkillLabTask): TaskDraft => ({
   question: typeof task.question === "string" ? task.question : "",
   rubric: typeof task.rubric === "string" ? task.rubric : "",
   taskType: typeof task.task_type === "string" ? task.task_type : "",
+  files: taskTextFiles(task),
+  assets: taskAssetDrafts(task),
+  assetBusy: false,
+  assetError: null,
 });
 
 function toTask(draft: TaskDraft): SkillLabTask {
@@ -80,6 +134,12 @@ function toTask(draft: TaskDraft): SkillLabTask {
   const taskType = draft.taskType.trim();
   if (taskType) task.task_type = taskType;
   else delete task.task_type;
+  const files: Record<string, string | SkillLabAssetDescriptor> = {
+    ...draft.files,
+  };
+  for (const asset of draft.assets) files[asset.path.trim()] = asset.value;
+  if (Object.keys(files).length) task.files = files;
+  else delete task.files;
   return task;
 }
 
@@ -94,7 +154,8 @@ function suggestId(list: TaskDraft[]): string {
 }
 
 const isTaskArray = (value: unknown): value is SkillLabTask[] =>
-  Array.isArray(value) && value.every((item) => item !== null && typeof item === "object");
+  Array.isArray(value) &&
+  value.every((item) => item !== null && typeof item === "object");
 
 const countsLabel = (counts: Record<string, number>) =>
   Object.entries(counts)
@@ -106,7 +167,9 @@ const excerpt = (text: string, max = 90) =>
 
 const fileCount = (task: SkillLabTask): number => {
   const files = task.files;
-  return files !== null && typeof files === "object" ? Object.keys(files).length : 0;
+  return files !== null && typeof files === "object"
+    ? Object.keys(files).length
+    : 0;
 };
 
 const EXAMPLE_TASKS = `[
@@ -132,7 +195,8 @@ export function SkillLabTasksets() {
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
   const [detail, setDetail] = useState<SkillLabTasksetDetail | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<SkillLabTasksetInfo | null>(null);
+  const [confirmDelete, setConfirmDelete] =
+    useState<SkillLabTasksetInfo | null>(null);
 
   // Editor state. Create and edit share it, and it is hydrated ONLY by an
   // explicit user action (select "new", press Edit) — a list refresh must never
@@ -142,6 +206,10 @@ export function SkillLabTasksets() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [drafts, setDrafts] = useState<Drafts>(() => seedDrafts("single"));
+  // Hidden per-row file inputs, keyed by draft key: the visible picker is a
+  // themed <Btn> that clicks the input for its own row.
+  const assetInputs = useRef<Record<string, HTMLInputElement | null>>({});
+  const jsonRef = useRef<HTMLInputElement>(null);
   const [tab, setTab] = useState<"rows" | "upload">("rows");
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadNote, setUploadNote] = useState<string | null>(null);
@@ -249,9 +317,52 @@ export function SkillLabTasksets() {
         if (!id) errors[draft.key] = t("skillLab.tasksets.err.idRequired");
         else if (id.includes("/") || id.includes("\\") || id.includes(".."))
           errors[draft.key] = t("skillLab.tasksets.err.idUnsafe");
-        else if (seen.has(id)) errors[draft.key] = t("skillLab.tasksets.err.idDuplicate", { id });
-        else if (!draft.question.trim()) errors[draft.key] = t("skillLab.tasksets.err.questionRequired");
-        else if (!draft.rubric.trim()) errors[draft.key] = t("skillLab.tasksets.err.rubricRequired");
+        else if (seen.has(id))
+          errors[draft.key] = t("skillLab.tasksets.err.idDuplicate", { id });
+        else if (!draft.question.trim())
+          errors[draft.key] = t("skillLab.tasksets.err.questionRequired");
+        else if (!draft.rubric.trim())
+          errors[draft.key] = t("skillLab.tasksets.err.rubricRequired");
+        const paths = [
+          ...Object.keys(draft.files),
+          ...draft.assets.map((asset) => asset.path.trim()),
+        ];
+        for (const path of paths) {
+          const unsafe =
+            !path ||
+            path.startsWith("/") ||
+            path.startsWith("\\") ||
+            path.startsWith("~") ||
+            path.includes("\\") ||
+            path
+              .split("/")
+              .some((part) => !part || part === "." || part === "..") ||
+            [".agents", ".claude", ".codex", ".git", "task.md"].includes(
+              path.split("/")[0]?.toLowerCase(),
+            );
+          if (unsafe) {
+            errors[draft.key] = t("skillLab.tasksets.err.assetPathUnsafe", {
+              path,
+            });
+            break;
+          }
+        }
+        // Case-fold collision protection is a binary descriptor constraint.
+        // Legacy inline text maps may contain case-distinct paths and must keep
+        // round-tripping exactly as the historical loader allowed.
+        const foldedAssetPaths = new Set<string>();
+        for (const asset of draft.assets) {
+          const path = asset.path.trim();
+          const folded = path.toLowerCase();
+          if (foldedAssetPaths.has(folded)) {
+            errors[draft.key] = t("skillLab.tasksets.err.assetPathDuplicate", {
+              path,
+            });
+            break;
+          }
+          foldedAssetPaths.add(folded);
+        }
+
         if (id) seen.add(id);
       }
       out[split] = errors;
@@ -259,12 +370,91 @@ export function SkillLabTasksets() {
     return out;
   }, [drafts, t]);
 
-  const hasMirrorErrors = Object.values(mirrorErrors).some((errs) => Object.keys(errs).length > 0);
+  const hasMirrorErrors = Object.values(mirrorErrors).some(
+    (errs) => Object.keys(errs).length > 0,
+  );
+  const anyAssetBusy = Object.values(drafts).some((list) =>
+    list.some((draft) => draft.assetBusy),
+  );
 
-  const patchDraft = (split: string, key: string, patch: Partial<TaskDraft>) => {
+  const patchDraft = (
+    split: string,
+    key: string,
+    patch: Partial<TaskDraft>,
+  ) => {
     setDrafts((prev) => ({
       ...prev,
-      [split]: prev[split].map((draft) => (draft.key === key ? { ...draft, ...patch } : draft)),
+      [split]: prev[split].map((draft) =>
+        draft.key === key ? { ...draft, ...patch } : draft,
+      ),
+    }));
+  };
+
+  const uploadTaskAssets = async (
+    split: string,
+    key: string,
+    files: File[],
+  ) => {
+    if (!files.length) return;
+    patchDraft(split, key, { assetBusy: true, assetError: null });
+    try {
+      const response = await api.skillLabTaskAssetsUpload(files);
+      setDrafts((prev) => ({
+        ...prev,
+        [split]: prev[split].map((draft) => {
+          if (draft.key !== key) return draft;
+          const assets = [
+            ...draft.assets,
+            ...response.assets.map((value) => ({
+              key: draftKey(),
+              path: `data/${value.name}`,
+              value,
+            })),
+          ];
+          return { ...draft, assets, assetBusy: false };
+        }),
+      }));
+    } catch (err) {
+      patchDraft(split, key, {
+        assetBusy: false,
+        assetError: err instanceof ApiError ? err.message : String(err),
+      });
+    }
+  };
+
+  const renameTaskAsset = (
+    split: string,
+    key: string,
+    assetKey: string,
+    path: string,
+  ) => {
+    setDrafts((prev) => ({
+      ...prev,
+      [split]: prev[split].map((draft) =>
+        draft.key === key
+          ? {
+              ...draft,
+              assets: draft.assets.map((asset) =>
+                asset.key === assetKey ? { ...asset, path } : asset,
+              ),
+            }
+          : draft,
+      ),
+    }));
+  };
+
+  const removeTaskAsset = (split: string, key: string, assetKey: string) => {
+    setDrafts((prev) => ({
+      ...prev,
+      [split]: prev[split].map((draft) =>
+        draft.key === key
+          ? {
+              ...draft,
+              assets: draft.assets.filter((asset) => asset.key !== assetKey),
+              assetError: null,
+            }
+          : draft,
+      ),
     }));
   };
 
@@ -317,13 +507,19 @@ export function SkillLabTasksets() {
       setUploadNote(null);
       setEditing(true);
     } catch (err) {
-      toast(t("common.actionFailed", { msg: err instanceof ApiError ? err.message : String(err) }));
+      toast(
+        t("common.actionFailed", {
+          msg: err instanceof ApiError ? err.message : String(err),
+        }),
+      );
     }
   };
 
   const applyServerError = (err: unknown) => {
     if (err instanceof ApiError && err.code === "skill_lab.taskset_invalid") {
-      const detailList = Array.isArray(err.detail) ? (err.detail as SkillLabTasksetIssue[]) : [];
+      const detailList = Array.isArray(err.detail)
+        ? (err.detail as SkillLabTasksetIssue[])
+        : [];
       setIssues(detailList);
       if (detailList.length === 0) setFormError(err.message);
       return;
@@ -334,19 +530,26 @@ export function SkillLabTasksets() {
   const save = async () => {
     setFormError(null);
     setIssues([]);
+    if (anyAssetBusy) return;
     if (!name.trim()) {
       setFormError(t("skillLab.tasksets.err.nameRequired"));
       return;
     }
     const payload = payloadSplits();
-    const emptySplit = Object.entries(payload).find(([, list]) => list.length === 0);
+    const emptySplit = Object.entries(payload).find(
+      ([, list]) => list.length === 0,
+    );
     if (emptySplit) {
-      setFormError(t("skillLab.tasksets.err.splitEmpty", { split: emptySplit[0] }));
+      setFormError(
+        t("skillLab.tasksets.err.splitEmpty", { split: emptySplit[0] }),
+      );
       return;
     }
     // An edit must never fall through to the create branch — that would publish a
     // duplicate set under a new id instead of reporting the lost target.
-    const editTarget = editing ? (selected?.id ?? detail?.info.id ?? null) : null;
+    const editTarget = editing
+      ? (selected?.id ?? detail?.info.id ?? null)
+      : null;
     if (editing && editTarget === null) {
       setFormError(t("skillLab.tasksets.err.editTargetGone"));
       return;
@@ -388,7 +591,11 @@ export function SkillLabTasksets() {
       if (tsParam === row.id) select(null);
       await load();
     } catch (err) {
-      toast(t("common.actionFailed", { msg: err instanceof ApiError ? err.message : String(err) }));
+      toast(
+        t("common.actionFailed", {
+          msg: err instanceof ApiError ? err.message : String(err),
+        }),
+      );
     }
   };
 
@@ -399,25 +606,42 @@ export function SkillLabTasksets() {
     try {
       parsed = JSON.parse(await file.text());
     } catch (err) {
-      setUploadError(t("skillLab.tasksets.upload.badJson", { msg: (err as Error).message }));
+      setUploadError(
+        t("skillLab.tasksets.upload.badJson", { msg: (err as Error).message }),
+      );
       return;
     }
     if (isTaskArray(parsed)) {
       const split = mode === "single" ? SINGLE_SPLIT : uploadSplit;
       setDrafts((prev) => ({ ...prev, [split]: parsed.map(toDraft) }));
-      setUploadNote(t("skillLab.tasksets.upload.loadedSplit", { split, count: parsed.length }));
+      setUploadNote(
+        t("skillLab.tasksets.upload.loadedSplit", {
+          split,
+          count: parsed.length,
+        }),
+      );
       setTab("rows");
       return;
     }
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed)
+    ) {
       setUploadError(t("skillLab.tasksets.upload.badShape"));
       return;
     }
     const entries = Object.entries(parsed as Record<string, unknown>);
     const known = [SINGLE_SPLIT, ...SPLIT_ORDER] as string[];
-    const unknown = entries.filter(([key]) => !known.includes(key)).map(([key]) => key);
+    const unknown = entries
+      .filter(([key]) => !known.includes(key))
+      .map(([key]) => key);
     if (unknown.length > 0) {
-      setUploadError(t("skillLab.tasksets.upload.unknownSplits", { splits: unknown.join(", ") }));
+      setUploadError(
+        t("skillLab.tasksets.upload.unknownSplits", {
+          splits: unknown.join(", "),
+        }),
+      );
       return;
     }
     const bad = entries.find(([, value]) => !isTaskArray(value));
@@ -425,7 +649,9 @@ export function SkillLabTasksets() {
       setUploadError(t("skillLab.tasksets.upload.badSplit", { split: bad[0] }));
       return;
     }
-    const nextMode: SkillLabTasksetMode = entries.some(([key]) => key === SINGLE_SPLIT)
+    const nextMode: SkillLabTasksetMode = entries.some(
+      ([key]) => key === SINGLE_SPLIT,
+    )
       ? "single"
       : "split";
     if (nextMode === "single" && entries.length > 1) {
@@ -433,7 +659,10 @@ export function SkillLabTasksets() {
       return;
     }
     const loaded = Object.fromEntries(
-      entries.map(([split, value]) => [split, (value as SkillLabTask[]).map(toDraft)]),
+      entries.map(([split, value]) => [
+        split,
+        (value as SkillLabTask[]).map(toDraft),
+      ]),
     ) as Drafts;
     // editing cannot change the mode — the backend refuses mismatched keys
     if (editing && nextMode !== mode) {
@@ -449,21 +678,30 @@ export function SkillLabTasksets() {
     });
     setUploadNote(
       t("skillLab.tasksets.upload.loaded", {
-        summary: entries.map(([split, value]) => `${split} ${(value as unknown[]).length}`).join(" · "),
+        summary: entries
+          .map(([split, value]) => `${split} ${(value as unknown[]).length}`)
+          .join(" · "),
       }),
     );
     setTab("rows");
   };
 
-  const splitIssues = (split: string) => issues.filter((issue) => issue.split === split);
+  const splitIssues = (split: string) =>
+    issues.filter((issue) => issue.split === split);
   // Anything the validator blamed on something other than a rendered split
   // ("mode", "name", "train/val") — never dropped, or the save would look silent.
-  const globalIssues = issues.filter((issue) => !splitsFor(mode).includes(issue.split));
+  const globalIssues = issues.filter(
+    (issue) => !splitsFor(mode).includes(issue.split),
+  );
 
   /* ── row editor ─────────────────────────────────────────────────────────── */
 
   const rowEditor = (split: string) => (
-    <div key={split} style={{ marginBottom: 14 }} data-testid={`taskset-split-${split}`}>
+    <div
+      key={split}
+      style={{ marginBottom: 14 }}
+      data-testid={`taskset-split-${split}`}
+    >
       <div
         style={{
           display: "flex",
@@ -478,7 +716,9 @@ export function SkillLabTasksets() {
           {split.toUpperCase()}
         </span>
         <span className="mono dim" style={{ fontSize: 10.5 }}>
-          {t("skillLab.tasksets.rowCount", { count: (drafts[split] ?? []).length })}
+          {t("skillLab.tasksets.rowCount", {
+            count: (drafts[split] ?? []).length,
+          })}
         </span>
         {split === "test" && (
           <span className="mono dim" style={{ fontSize: 10 }}>
@@ -496,7 +736,7 @@ export function SkillLabTasksets() {
 
       {(drafts[split] ?? []).map((draft, index) => {
         const error = mirrorErrors[split]?.[draft.key];
-        const files = draft.original ? fileCount(draft.original) : 0;
+        const files = Object.keys(draft.files).length + draft.assets.length;
         return (
           <div
             key={draft.key}
@@ -508,14 +748,23 @@ export function SkillLabTasksets() {
               marginBottom: 8,
             }}
           >
-            <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 6,
+                alignItems: "center",
+                marginBottom: 6,
+              }}
+            >
               <input
                 className="input mono"
                 value={draft.id}
                 aria-label={t("skillLab.tasksets.field.id")}
                 placeholder={taskId(index + 1)}
                 style={{ maxWidth: 200, fontSize: 11 }}
-                onChange={(e) => patchDraft(split, draft.key, { id: e.target.value })}
+                onChange={(e) =>
+                  patchDraft(split, draft.key, { id: e.target.value })
+                }
               />
               <input
                 className="input mono"
@@ -523,7 +772,9 @@ export function SkillLabTasksets() {
                 aria-label={t("skillLab.tasksets.field.taskType")}
                 placeholder={t("skillLab.tasksets.field.taskTypePlaceholder")}
                 style={{ maxWidth: 180, fontSize: 11 }}
-                onChange={(e) => patchDraft(split, draft.key, { taskType: e.target.value })}
+                onChange={(e) =>
+                  patchDraft(split, draft.key, { taskType: e.target.value })
+                }
               />
               {files > 0 && (
                 <Chip tone="aqua" icon="◆">
@@ -546,7 +797,9 @@ export function SkillLabTasksets() {
                 rows={2}
                 value={draft.question}
                 style={{ resize: "vertical", fontSize: 11.5 }}
-                onChange={(e) => patchDraft(split, draft.key, { question: e.target.value })}
+                onChange={(e) =>
+                  patchDraft(split, draft.key, { question: e.target.value })
+                }
               />
             </div>
             <div className="field" style={{ marginBottom: 0 }}>
@@ -556,11 +809,97 @@ export function SkillLabTasksets() {
                 rows={2}
                 value={draft.rubric}
                 style={{ resize: "vertical", fontSize: 11.5 }}
-                onChange={(e) => patchDraft(split, draft.key, { rubric: e.target.value })}
+                onChange={(e) =>
+                  patchDraft(split, draft.key, { rubric: e.target.value })
+                }
               />
             </div>
+            <div className="field" style={{ marginTop: 8 }}>
+              <label>{t("skillLab.tasksets.assets.label")}</label>
+              {/* A `<label className="btn">` would lose the button styling:
+                  `.field label` (0,1,1) outranks `.btn` (0,1,0) and forces
+                  display:block plus the dim 9.5px field-caption type. So drive
+                  a hidden input from a real button, as CreateAgent does. */}
+              <Btn
+                disabled={draft.assetBusy}
+                onClick={() => assetInputs.current[draft.key]?.click()}
+              >
+                {draft.assetBusy
+                  ? t("skillLab.tasksets.assets.uploading")
+                  : t("skillLab.tasksets.assets.pick")}
+              </Btn>
+              <input
+                ref={(node) => {
+                  assetInputs.current[draft.key] = node;
+                }}
+                type="file"
+                multiple
+                accept=".xlsx,.pdf,.png,.jpg,.jpeg,.webp"
+                style={{ display: "none" }}
+                disabled={draft.assetBusy}
+                data-testid={`task-assets-${split}-${index}`}
+                onChange={(event) => {
+                  // Snapshot the File objects first: clearing `value` (so the
+                  // same filename can be re-picked) empties the live FileList.
+                  const picked = Array.from(event.target.files ?? []);
+                  event.target.value = "";
+                  void uploadTaskAssets(split, draft.key, picked);
+                }}
+              />
+              {draft.assets.map((asset) => (
+                <div
+                  key={asset.key}
+                  data-testid={`task-asset-${split}-${index}-${asset.key}`}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr auto",
+                    gap: 8,
+                    marginTop: 6,
+                  }}
+                >
+                  <input
+                    className="input mono"
+                    value={asset.path}
+                    aria-label={t("skillLab.tasksets.assets.destination")}
+                    onChange={(event) =>
+                      renameTaskAsset(
+                        split,
+                        draft.key,
+                        asset.key,
+                        event.target.value,
+                      )
+                    }
+                  />
+                  <Btn
+                    data-testid={`task-asset-remove-${split}-${index}-${asset.key}`}
+                    onClick={() => removeTaskAsset(split, draft.key, asset.key)}
+                  >
+                    {t("skillLab.tasksets.assets.remove")}
+                  </Btn>
+                  <span
+                    className="mono dim"
+                    style={{ gridColumn: "1 / -1", fontSize: 10 }}
+                  >
+                    {asset.value.name} · {asset.value.media_type} ·{" "}
+                    {asset.value.size.toLocaleString()} B
+                  </span>
+                </div>
+              ))}
+              {draft.assetError && (
+                <div
+                  className="mono"
+                  style={{ color: "var(--crit)", fontSize: 10.5 }}
+                >
+                  {draft.assetError}
+                </div>
+              )}
+            </div>
+
             {error && (
-              <div className="mono" style={{ color: "var(--crit)", fontSize: 10.5, marginTop: 6 }}>
+              <div
+                className="mono"
+                style={{ color: "var(--crit)", fontSize: 10.5, marginTop: 6 }}
+              >
                 {error}
               </div>
             )}
@@ -600,15 +939,36 @@ export function SkillLabTasksets() {
       </button>
       {helpOpen && (
         <div style={{ marginTop: 8 }} data-testid="taskset-help">
-          {(["id", "question", "rubric", "taskType", "files", "judgeMode"] as const).map((row) => (
+          {(
+            [
+              "id",
+              "question",
+              "rubric",
+              "taskType",
+              "files",
+              "judgeMode",
+            ] as const
+          ).map((row) => (
             <div className="kv" key={row}>
-              <span className="k mono">{t(`skillLab.tasksets.help.field.${row}.key`)}</span>
-              <span className="v" style={{ textAlign: "left", flex: 1, marginLeft: 12 }}>
+              <span className="k mono">
+                {t(`skillLab.tasksets.help.field.${row}.key`)}
+              </span>
+              <span
+                className="v"
+                style={{ textAlign: "left", flex: 1, marginLeft: 12 }}
+              >
                 {t(`skillLab.tasksets.help.field.${row}.text`)}
               </span>
             </div>
           ))}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0 4px" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              margin: "8px 0 4px",
+            }}
+          >
             <span className="mono dim" style={{ fontSize: 10.5 }}>
               {t("skillLab.tasksets.help.example")}
             </span>
@@ -623,7 +983,10 @@ export function SkillLabTasksets() {
               {t("skillLab.tasksets.help.copy")}
             </Btn>
           </div>
-          <pre className="code" style={{ fontSize: 10.5, whiteSpace: "pre-wrap" }}>
+          <pre
+            className="code"
+            style={{ fontSize: 10.5, whiteSpace: "pre-wrap" }}
+          >
             {EXAMPLE_TASKS}
           </pre>
           <div className="note" style={{ marginTop: 8 }}>
@@ -638,8 +1001,16 @@ export function SkillLabTasksets() {
   const editor = (
     <Panel
       brk
-      title={editing ? t("skillLab.tasksets.editTitle") : t("skillLab.tasksets.createTitle")}
-      sub={editing && selected ? `${selected.id} · ${selected.mode}` : t("skillLab.tasksets.createSub")}
+      title={
+        editing
+          ? t("skillLab.tasksets.editTitle")
+          : t("skillLab.tasksets.createTitle")
+      }
+      sub={
+        editing && selected
+          ? `${selected.id} · ${selected.mode}`
+          : t("skillLab.tasksets.createSub")
+      }
       style={{ "--i": 1 } as CSSProperties}
     >
       {!editing && (
@@ -719,16 +1090,29 @@ export function SkillLabTasksets() {
               onChange={(e) => setUploadSplit(e.target.value)}
             >
               {SPLIT_ORDER.map((split) => (
-                <option key={split} value={split} style={{ background: "#141816" }}>
+                <option
+                  key={split}
+                  value={split}
+                  style={{ background: "#141816" }}
+                >
                   {split}
                 </option>
               ))}
             </select>
           )}
+          {/* Themed button + hidden input, as with the per-task asset picker:
+              `className="input"` styles only the box around the browser's own
+              native file button. */}
+          <div>
+            <Btn onClick={() => jsonRef.current?.click()}>
+              {t("skillLab.tasksets.upload.pick")}
+            </Btn>
+          </div>
           <input
+            ref={jsonRef}
             type="file"
             accept=".json,application/json"
-            className="input"
+            style={{ display: "none" }}
             data-testid="taskset-upload-input"
             onChange={(e) => {
               const file = e.target.files?.[0];
@@ -759,7 +1143,11 @@ export function SkillLabTasksets() {
       )}
 
       {uploadNote && (
-        <div className="note" style={{ marginBottom: 10 }} data-testid="taskset-upload-note">
+        <div
+          className="note"
+          style={{ marginBottom: 10 }}
+          data-testid="taskset-upload-note"
+        >
           <span className="i">[i]</span>
           <span className="mono" style={{ fontSize: 10.5 }}>
             {uploadNote}
@@ -779,12 +1167,17 @@ export function SkillLabTasksets() {
             [✕]
           </span>
           <span className="mono" style={{ fontSize: 10.5 }}>
-            {globalIssues.map((issue) => `${issue.split}: ${issue.message}`).join(" · ")}
+            {globalIssues
+              .map((issue) => `${issue.split}: ${issue.message}`)
+              .join(" · ")}
           </span>
         </div>
       )}
       {formError && (
-        <div className="note" style={{ borderColor: "var(--crit)", margin: "10px 0" }}>
+        <div
+          className="note"
+          style={{ borderColor: "var(--crit)", margin: "10px 0" }}
+        >
           <span className="i" style={{ color: "var(--crit)" }}>
             [✕]
           </span>
@@ -792,7 +1185,14 @@ export function SkillLabTasksets() {
         </div>
       )}
 
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          gap: 8,
+          marginTop: 10,
+        }}
+      >
         <Btn
           data-testid="taskset-cancel"
           onClick={() => {
@@ -809,11 +1209,17 @@ export function SkillLabTasksets() {
         </Btn>
         <Btn
           primary
-          disabled={busy || hasMirrorErrors || !name.trim()}
+          disabled={busy || anyAssetBusy || hasMirrorErrors || !name.trim()}
+          aria-busy={busy || anyAssetBusy}
           data-testid="taskset-save"
           onClick={() => void save()}
         >
-          ▸ {editing ? t("skillLab.tasksets.save") : t("skillLab.tasksets.create")}
+          ▸{" "}
+          {anyAssetBusy
+            ? t("skillLab.tasksets.assets.uploading")
+            : editing
+              ? t("skillLab.tasksets.save")
+              : t("skillLab.tasksets.create")}
         </Btn>
       </div>
     </Panel>
@@ -831,10 +1237,16 @@ export function SkillLabTasksets() {
           <Chip tone="aqua">{t("skillLab.tasksets.sampleChip")}</Chip>
         ) : (
           <>
-            <Btn data-testid="taskset-edit" onClick={() => void startEdit(selected)}>
+            <Btn
+              data-testid="taskset-edit"
+              onClick={() => void startEdit(selected)}
+            >
               {t("skillLab.tasksets.edit")}
             </Btn>
-            <Btn data-testid="taskset-delete" onClick={() => setConfirmDelete(selected)}>
+            <Btn
+              data-testid="taskset-delete"
+              onClick={() => setConfirmDelete(selected)}
+            >
               {t("skillLab.tasksets.delete")}
             </Btn>
           </>
@@ -843,7 +1255,9 @@ export function SkillLabTasksets() {
       style={{ "--i": 1 } as CSSProperties}
     >
       <div className="kv">
-        <span className="k mono">{t("skillLab.tasksets.field.description")}</span>
+        <span className="k mono">
+          {t("skillLab.tasksets.field.description")}
+        </span>
         <span className="v">{selected.description || "—"}</span>
       </div>
       <div className="kv">
@@ -853,7 +1267,9 @@ export function SkillLabTasksets() {
       <div className="kv">
         <span className="k mono">{t("skillLab.tasksets.col.updated")}</span>
         <span className="v mono">
-          {selected.updated_at ? new Date(selected.updated_at).toLocaleString() : "—"}
+          {selected.updated_at
+            ? new Date(selected.updated_at).toLocaleString()
+            : "—"}
         </span>
       </div>
 
@@ -863,14 +1279,28 @@ export function SkillLabTasksets() {
         splitsFor(selected.mode)
           .filter((split) => detail.tasks_by_split[split] !== undefined)
           .map((split) => (
-            <div key={split} style={{ marginTop: 12 }} data-testid={`taskset-detail-${split}`}>
-              <div className="mono" style={{ fontSize: 11, letterSpacing: ".08em", marginBottom: 6 }}>
+            <div
+              key={split}
+              style={{ marginTop: 12 }}
+              data-testid={`taskset-detail-${split}`}
+            >
+              <div
+                className="mono"
+                style={{
+                  fontSize: 11,
+                  letterSpacing: ".08em",
+                  marginBottom: 6,
+                }}
+              >
                 {split.toUpperCase()}
               </div>
               <DataTable
                 columns={[
                   { key: "id", label: t("skillLab.tasksets.field.id") },
-                  { key: "question", label: t("skillLab.tasksets.field.question") },
+                  {
+                    key: "question",
+                    label: t("skillLab.tasksets.field.question"),
+                  },
                   { key: "type", label: t("skillLab.tasksets.field.taskType") },
                   { key: "files", label: t("skillLab.tasksets.field.files") },
                 ]}
@@ -880,7 +1310,9 @@ export function SkillLabTasksets() {
                     <td className="mono">{String(task.id)}</td>
                     <td>{excerpt(String(task.question ?? ""))}</td>
                     <td className="mono dim">
-                      {typeof task.task_type === "string" ? task.task_type : "—"}
+                      {typeof task.task_type === "string"
+                        ? task.task_type
+                        : "—"}
                     </td>
                     <td className="mono dim">{fileCount(task) || "—"}</td>
                   </tr>
@@ -900,7 +1332,8 @@ export function SkillLabTasksets() {
 
   // A deep link to a set that was deleted (or belongs to another workspace) must
   // say so — otherwise the page just renders a list and swallows the `ts=` param.
-  const staleSelection = !creating && !editing && !loading && tsParam !== null && selected === null;
+  const staleSelection =
+    !creating && !editing && !loading && tsParam !== null && selected === null;
 
   // The AI-generation sub-surface replaces the list+detail entirely (it has its
   // own job list); importing refreshes the sets and jumps to the new one.
@@ -928,10 +1361,17 @@ export function SkillLabTasksets() {
           sub={t("skillLab.tasksets.listSub")}
           end={
             <div style={{ display: "flex", gap: 8 }}>
-              <Btn data-testid="taskgen-open-btn" onClick={() => selectGen("new")}>
+              <Btn
+                data-testid="taskgen-open-btn"
+                onClick={() => selectGen("new")}
+              >
                 ✳ {t("skillLab.taskgen.open")}
               </Btn>
-              <Btn primary data-testid="new-taskset-btn" onClick={() => select("new")}>
+              <Btn
+                primary
+                data-testid="new-taskset-btn"
+                onClick={() => select("new")}
+              >
                 + {t("skillLab.tasksets.new")}
               </Btn>
             </div>
@@ -955,7 +1395,8 @@ export function SkillLabTasksets() {
                   onClick={() => select(row.id)}
                   style={{
                     cursor: "pointer",
-                    background: tsParam === row.id ? "rgba(255,176,0,.045)" : undefined,
+                    background:
+                      tsParam === row.id ? "rgba(255,176,0,.045)" : undefined,
                   }}
                 >
                   <td className="pri">
@@ -963,7 +1404,9 @@ export function SkillLabTasksets() {
                     {row.sample && (
                       <>
                         {" "}
-                        <Chip tone="aqua">{t("skillLab.tasksets.sampleChip")}</Chip>
+                        <Chip tone="aqua">
+                          {t("skillLab.tasksets.sampleChip")}
+                        </Chip>
                       </>
                     )}
                   </td>
@@ -974,27 +1417,41 @@ export function SkillLabTasksets() {
                   </td>
                   <td className="mono dim">{countsLabel(row.counts)}</td>
                   <td className="mono dim">
-                    {row.updated_at ? new Date(row.updated_at).toLocaleString() : "—"}
+                    {row.updated_at
+                      ? new Date(row.updated_at).toLocaleString()
+                      : "—"}
                   </td>
                 </tr>
               ))}
               {loading && (
                 <tr>
-                  <td colSpan={4} className="dim mono" style={{ textAlign: "center" }}>
+                  <td
+                    colSpan={4}
+                    className="dim mono"
+                    style={{ textAlign: "center" }}
+                  >
                     {t("common.loading")}
                   </td>
                 </tr>
               )}
               {!loading && rows.length === 0 && listError === null && (
                 <tr>
-                  <td colSpan={4} className="dim mono" style={{ textAlign: "center" }}>
+                  <td
+                    colSpan={4}
+                    className="dim mono"
+                    style={{ textAlign: "center" }}
+                  >
                     {t("skillLab.tasksets.empty")}
                   </td>
                 </tr>
               )}
               {listError !== null && (
                 <tr>
-                  <td colSpan={4} className="dim mono" style={{ textAlign: "center" }}>
+                  <td
+                    colSpan={4}
+                    className="dim mono"
+                    style={{ textAlign: "center" }}
+                  >
                     {listError}
                   </td>
                 </tr>
@@ -1008,7 +1465,11 @@ export function SkillLabTasksets() {
       {creating || editing ? (
         editor
       ) : staleSelection ? (
-        <Panel brk title={t("skillLab.tasksets.gone.title")} style={{ "--i": 1 } as CSSProperties}>
+        <Panel
+          brk
+          title={t("skillLab.tasksets.gone.title")}
+          style={{ "--i": 1 } as CSSProperties}
+        >
           <div className="empty" data-testid="taskset-gone">
             {t("skillLab.tasksets.gone.body")}
           </div>
@@ -1020,7 +1481,9 @@ export function SkillLabTasksets() {
       <ConfirmDialog
         open={confirmDelete !== null}
         title={t("skillLab.tasksets.confirmDelete.title")}
-        body={t("skillLab.tasksets.confirmDelete.body", { name: confirmDelete?.name ?? "" })}
+        body={t("skillLab.tasksets.confirmDelete.body", {
+          name: confirmDelete?.name ?? "",
+        })}
         confirmLabel={t("skillLab.tasksets.delete")}
         onConfirm={() => {
           const row = confirmDelete;
