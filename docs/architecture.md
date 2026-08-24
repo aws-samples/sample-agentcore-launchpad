@@ -942,17 +942,22 @@ the files, not the ledger, are the source of truth for content).
 
 ## The SQLite ledger and job/event model
 
-**Binary task inputs.** A task's `files` map remains backward-compatible with inline text and
-also accepts staged XLSX, PDF, PNG, JPEG, and WebP inputs. The browser uploads multipart bytes to
-a workspace-hashed, opaque-token staging area under `data/skill-lab/` (24-hour TTL); task-set
-create/update verifies signatures, limits, digest and ownership, then commits deduplicated blobs
+**Uploaded task inputs.** A task's `files` map remains backward-compatible with inline text and
+also accepts staged XLSX, PDF, PNG, JPEG, WebP, Markdown, plain-text and CSV inputs. The browser
+uploads multipart bytes to a workspace-hashed, opaque-token staging area under `data/skill-lab/`
+(24-hour TTL); task-set create/update verifies content class, limits, digest and ownership, then
+commits deduplicated blobs
 as `tasksets/<id>/assets/<sha256>` while JSON stores only stable metadata descriptors. Destination
 paths are safe POSIX-relative rollout paths and never storage paths. Full-replacement updates
 atomically preserve kept assets and drop omitted ones. Eval and train submission re-hash and copy
 the selected JSON/assets into `jobs/<id>/inputs`, so queued/running work is immutable. Vendored
 SkillOpt receives the explicit snapshot assets root and copies exact bytes into each rollout work
 directory before the existing binary-safe S3 tar → AgentCore Runtime → output-tar transport.
-Limits are 32 binary files per upload/task, 25 MiB per file, 100 MiB per task, and 256
+Formats are trusted by content, not by extension: binaries must match their magic bytes (with
+extra member/ratio/macro hardening for XLSX), and the text formats — which have no signature — must
+decode as UTF-8, contain no NUL byte, and not carry a binary signature under a text extension.
+Uploaded bytes are stored verbatim, so a BOM or CRLF survives content addressing untouched.
+Limits are 32 uploaded files per upload/task, 25 MiB per file, 100 MiB per task, and 256
 references/200 MiB unique bytes per task set; legacy inline text maps keep their historical count
 and case-distinct-path behavior. `.agents`, `.claude`, `.codex`, `.git`, and `task.md` are reserved
 rollout roots. A route-specific middleware rejects known oversized multipart `Content-Length` values
