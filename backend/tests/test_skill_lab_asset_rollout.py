@@ -73,7 +73,7 @@ print(json.dumps({'asset_files': items[0]['_asset_files'], 'work_dir': result['w
     assert all("_asset_files" not in item for item in persisted)
 
 
-def test_vendored_loader_materializes_all_supported_binary_formats(tmp_path):
+def test_vendored_loader_materializes_every_supported_format(tmp_path):
     assets = tmp_path / "assets"
     assets.mkdir()
     xlsx = io.BytesIO()
@@ -86,6 +86,11 @@ def test_vendored_loader_materializes_all_supported_binary_formats(tmp_path):
         "images/pixel.png": b"\x89PNG\r\n\x1a\nbytes",
         "images/photo.jpg": b"\xff\xd8\xffbytes",
         "images/photo.webp": b"RIFF\x04\x00\x00\x00WEBP",
+        # Text formats travel the same path: the loader verifies digest+size and
+        # never looks at media_type, so nothing about them is format-specific.
+        "data/notes.md": "# 标题\n\n- item\n".encode(),
+        "data/plain.txt": b"line one\r\nline two",
+        "data/rows.csv": b"a,b\n1,2\n",
     }
     files = {}
     for destination, data in fixtures.items():

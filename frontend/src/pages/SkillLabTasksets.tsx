@@ -820,21 +820,29 @@ export function SkillLabTasksets() {
                   `.field label` (0,1,1) outranks `.btn` (0,1,0) and forces
                   display:block plus the dim 9.5px field-caption type. So drive
                   a hidden input from a real button, as CreateAgent does. */}
-              <Btn
-                disabled={draft.assetBusy}
-                onClick={() => assetInputs.current[draft.key]?.click()}
-              >
-                {draft.assetBusy
-                  ? t("skillLab.tasksets.assets.uploading")
-                  : t("skillLab.tasksets.assets.pick")}
-              </Btn>
+              <div>
+                <Btn
+                  disabled={draft.assetBusy}
+                  onClick={() => assetInputs.current[draft.key]?.click()}
+                >
+                  {draft.assetBusy
+                    ? t("skillLab.tasksets.assets.uploading")
+                    : t("skillLab.tasksets.assets.pick")}
+                </Btn>
+                <span
+                  className="mono dim"
+                  style={{ fontSize: 10, marginLeft: 10 }}
+                >
+                  {t("skillLab.tasksets.assets.hint")}
+                </span>
+              </div>
               <input
                 ref={(node) => {
                   assetInputs.current[draft.key] = node;
                 }}
                 type="file"
                 multiple
-                accept=".xlsx,.pdf,.png,.jpg,.jpeg,.webp"
+                accept=".xlsx,.pdf,.png,.jpg,.jpeg,.webp,.md,.txt,.csv"
                 style={{ display: "none" }}
                 disabled={draft.assetBusy}
                 data-testid={`task-assets-${split}-${index}`}

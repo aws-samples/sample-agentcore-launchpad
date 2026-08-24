@@ -220,6 +220,9 @@ def test_all_supported_signatures_and_upload_metadata(lab):
         ("photo.jpg", b"\xff\xd8\xffbytes", task_assets._MEDIA["jpg"]),
         ("photo.jpeg", b"\xff\xd8\xffmore", task_assets._MEDIA["jpg"]),
         ("image.webp", b"RIFF\x04\x00\x00\x00WEBP", task_assets._MEDIA["webp"]),
+        ("notes.md", "# Q2\n\n- 收入增长 14%\n".encode(), task_assets._MEDIA["md"]),
+        ("plain.txt", b"line one\r\nline two\n", task_assets._MEDIA["txt"]),
+        ("rows.csv", b"a,b\n1,2\n", task_assets._MEDIA["csv"]),
     )
     response = _upload(
         lab,
@@ -550,3 +553,122 @@ def test_delete_cleanup_failure_restores_row_and_assets(lab, monkeypatch):
     detail = lab.get(f"/api/skill-lab/tasksets/{created['id']}?full=true")
     assert detail.status_code == 200
     assert detail.json()["tasks_by_split"]["tasks"] == [VALID_TASK]
+
+
+def test_text_assets_round_trip_byte_exactly_including_bom_and_crlf(lab):
+    """Text goes through the same content-addressed path, so the bytes are the
+    contract: no BOM stripping, no newline translation, no re-encoding."""
+    payloads = {
+        "bom.md": "\ufeff# title\r\n".encode(),
+        "tail.csv": b"a,b\n1,2",  # no trailing newline
+        "wide.txt": "naïve — 中文\n".encode(),
+    }
+    staged = _upload(
+        lab,
+        [
+            ("files", (name, data, "application/octet-stream"))
+            for name, data in payloads.items()
+        ],
+    ).json()["assets"]
+    assert [row["size"] for row in staged] == [len(data) for data in payloads.values()]
+    for row, (name, data) in zip(staged, payloads.items(), strict=True):
+        _, blob, _ = task_assets.resolve_staged("default", row["staged_asset"])
+        assert blob.read_bytes() == data, name
+        assert row["media_type"] == task_assets._MEDIA[
+            task_assets._EXTENSIONS[f".{name.rsplit('.', 1)[1]}"]
+        ]
+
+
+@pytest.mark.parametrize(
+    ("name", "data", "reason"),
+    (
+        # A lone 0x80 continuation byte is never valid UTF-8.
+        ("bad.txt", b"ok then \x80\x81", "is not valid UTF-8"),
+        # Truncated multibyte sequence at EOF: the incremental decoder holds it
+        # back mid-stream, so only the final flush catches this.
+        ("cut.md", "中".encode()[:2], "is not valid UTF-8"),
+        ("nul.csv", b"a,b\n1,\x00\n", "contains NUL bytes"),
+        # A real binary payload wearing a text extension: extension and content
+        # must agree for text exactly as they do for binaries.
+        ("renamed.txt", b"%PDF-1.7\ntext?", "does not match its extension"),
+        ("renamed.md", _xlsx(), "does not match its extension"),
+        ("renamed.csv", b"\x89PNG\r\n\x1a\nrows", "does not match its extension"),
+    ),
+)
+def test_text_content_class_is_enforced(lab, name, data, reason):
+    response = _upload(lab, [("files", (name, data, "text/plain"))])
+    assert response.status_code == 422, response.text
+    body = response.json()
+    assert body["code"] == "skill_lab.asset_format_invalid"
+    assert reason in body["message"]
+
+
+def test_utf16_text_is_refused_because_of_its_nul_bytes(lab):
+    response = _upload(lab, [("files", ("utf16.txt", "hello".encode("utf-16"), "text/plain"))])
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "skill_lab.asset_format_invalid"
+
+
+def test_empty_text_asset_is_accepted_deliberately(lab):
+    """Nothing in the content class forbids an empty file, and inventing a rule
+    here would diverge from the documented checks. Pinned so a future change is
+    a decision, not an accident."""
+    staged = _upload(lab, [("files", ("empty.txt", b"", "text/plain"))])
+    assert staged.status_code == 201, staged.text
+    assert staged.json()["assets"][0]["size"] == 0
+
+
+def test_text_asset_survives_create_read_and_update_with_mixed_inline_files(lab):
+    """The acceptance path for a text upload: it commits, comes back as a stable
+    descriptor, is kept across an update alongside an inline text file, and the
+    committed blob still matches the uploaded bytes."""
+    payload = b"region,revenue\nAPAC,1240\nEMEA,980\n"
+    staged = _upload(lab, [("files", ("rows.csv", payload, "text/csv"))]).json()["assets"][0]
+    created = lab.post(
+        "/api/skill-lab/tasksets",
+        json={
+            "name": "text-assets",
+            "mode": "single",
+            "tasks_by_split": {
+                "tasks": [
+                    dict(
+                        VALID_TASK,
+                        files={
+                            "data/rows.csv": staged,
+                            "notes/readme.md": "inline text still works",
+                        },
+                    )
+                ]
+            },
+        },
+    )
+    assert created.status_code == 201, created.text
+    taskset_id = created.json()["id"]
+    files = lab.get(f"/api/skill-lab/tasksets/{taskset_id}?full=true").json()[
+        "tasks_by_split"
+    ]["tasks"][0]["files"]
+    stable = files["data/rows.csv"]
+    assert stable["media_type"] == "text/csv"
+    assert stable["asset"] == f"sha256:{hashlib.sha256(payload).hexdigest()}"
+    assert files["notes/readme.md"] == "inline text still works"
+
+    kept = lab.put(
+        f"/api/skill-lab/tasksets/{taskset_id}",
+        json={
+            "tasks_by_split": {
+                "tasks": [
+                    dict(
+                        VALID_TASK,
+                        files={"input/rows.csv": stable, "notes/readme.md": "still inline"},
+                    )
+                ]
+            }
+        },
+    )
+    assert kept.status_code == 200, kept.text
+    blob = (
+        tasksets.taskset_dir(taskset_id)
+        / task_assets.ASSETS_DIRNAME
+        / hashlib.sha256(payload).hexdigest()
+    )
+    assert blob.read_bytes() == payload

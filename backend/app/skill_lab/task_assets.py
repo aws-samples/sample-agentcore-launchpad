@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import secrets
@@ -40,6 +41,9 @@ _MEDIA = {
     "png": "image/png",
     "jpg": "image/jpeg",
     "webp": "image/webp",
+    "md": "text/markdown",
+    "txt": "text/plain",
+    "csv": "text/csv",
 }
 _EXTENSIONS = {
     ".xlsx": "xlsx",
@@ -48,7 +52,15 @@ _EXTENSIONS = {
     ".jpg": "jpg",
     ".jpeg": "jpg",
     ".webp": "webp",
+    ".md": "md",
+    ".txt": "txt",
+    ".csv": "csv",
 }
+# Text formats carry no signature to sniff, so they are verified by content class
+# instead: decodable as UTF-8, free of NUL, and not a binary payload wearing a
+# text extension.
+_TEXT_KINDS = frozenset({"md", "txt", "csv"})
+_BINARY_SIGNATURES = (b"%PDF-", b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"PK\x03\x04")
 
 
 def _error(code: str, message: str, status: int = 422) -> AppError:
@@ -121,11 +133,49 @@ def sweep_expired(now: datetime | None = None) -> None:
             shutil.rmtree(metadata_path.parent, ignore_errors=True)
 
 
+def _verify_text(path: Path, name: str) -> None:
+    """Content-class check for the text formats, which have no signature.
+
+    Streams the blob: a text asset may be 25 MiB and there is no reason to hold
+    it in memory. WebP's signature needs 12 bytes, so a 16-byte head covers
+    every entry in `_BINARY_SIGNATURES`.
+    """
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(16)
+            if any(head.startswith(signature) for signature in _BINARY_SIGNATURES):
+                raise _error(
+                    "asset_format_invalid",
+                    f"task asset {name!r} does not match its extension",
+                )
+            chunk = head
+            while chunk:
+                if b"\x00" in chunk:
+                    raise _error(
+                        "asset_format_invalid",
+                        f"text task asset {name!r} contains NUL bytes",
+                    )
+                decoder.decode(chunk)
+                chunk = handle.read(_CHUNK)
+        # Catches a multibyte sequence truncated at EOF, which the incremental
+        # decoder holds back rather than rejecting mid-stream.
+        decoder.decode(b"", final=True)
+    except UnicodeDecodeError as exc:
+        raise _error(
+            "asset_format_invalid", f"text task asset {name!r} is not valid UTF-8: {exc}"
+        ) from exc
+
+
 def _detect(path: Path, name: str) -> tuple[str, str]:
     expected = _EXTENSIONS.get(Path(name).suffix.casefold())
     if expected is None:
         raise _error("asset_format_invalid", f"unsupported task asset extension for {name!r}")
-    head = path.read_bytes()[:16]
+    if expected in _TEXT_KINDS:
+        _verify_text(path, name)
+        return expected, _MEDIA[expected]
+    with path.open("rb") as handle:
+        head = handle.read(16)
     detected = None
     if head.startswith(b"%PDF-"):
         detected = "pdf"
