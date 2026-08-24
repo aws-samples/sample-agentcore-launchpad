@@ -11,7 +11,9 @@ jobs can be picked up again (`resume_job` — the trainer checkpoints per step).
 
 from __future__ import annotations
 
+import json
 import logging
+import shutil
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,7 +28,7 @@ from app.core.errors import AppError
 from app.evaluation.queue import EvalRunQueue
 from app.services.local_exec import kill_process_group
 from app.services.workspace import context_for_workspace
-from app.skill_lab import artifacts, runner
+from app.skill_lab import artifacts, runner, task_assets
 from app.skill_lab import tasksets as taskset_svc
 from app.skill_lab.models import SkillLabJob
 
@@ -313,6 +315,79 @@ def _materialize_taskgen_skills(
     return [skill_dir], resolved
 
 
+def _snapshot_taskgen_attachments(
+    workspace_id: str, attachments: list[dict[str, Any]], directory: Path
+) -> tuple[list[dict[str, Any]], Path | None]:
+    """Resolve staged tokens into an immutable per-job attachment snapshot.
+
+    Returns the trusted manifest plus the assets root, or `(<empty>, None)` when
+    the job has no attachments. Names, media types and sizes come from the staging
+    record — never from the request — and every blob is digest-verified on the way
+    in, so a later task-set edit or a swept staging area cannot change what this
+    job generates against.
+    """
+    if not attachments:
+        return [], None
+    if len(attachments) > runner.TASKGEN_MAX_ATTACHMENTS:
+        raise AppError(
+            "skill_lab.asset_limit_exceeded",
+            f"at most {runner.TASKGEN_MAX_ATTACHMENTS} attachments per taskgen job",
+            status_code=422,
+        )
+    inputs = directory / "inputs"
+    assets_dir = inputs / task_assets.ASSETS_DIRNAME
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    manifest: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    total = 0
+    consumed: list[tuple[Path, str]] = []
+    for value in attachments:
+        if not isinstance(value, dict) or "staged_asset" not in value:
+            raise AppError(
+                "skill_lab.asset_descriptor_invalid",
+                "each taskgen attachment must carry a staged_asset token",
+                status_code=422,
+            )
+        record, blob, stage_dir = task_assets.resolve_staged(
+            workspace_id, str(value.get("staged_asset") or "")
+        )
+        name = str(record["name"])
+        folded = name.casefold()
+        if folded in seen:
+            raise AppError(
+                "skill_lab.asset_duplicate_name",
+                f"attachment name {name!r} is duplicated in this taskgen job",
+                status_code=422,
+            )
+        seen.add(folded)
+        total += int(record["size"])
+        if total > runner.TASKGEN_MAX_ATTACHMENT_BYTES:
+            raise AppError(
+                "skill_lab.asset_limit_exceeded",
+                "taskgen attachments exceed the 25 MiB aggregate limit",
+                status_code=413,
+            )
+        digest = str(record["sha256"])
+        target = assets_dir / digest
+        if not target.exists():
+            shutil.copyfile(blob, target)
+        task_assets._verify_blob(target, {"size": int(record["size"]), "sha256": digest})
+        manifest.append(
+            {
+                "name": name,
+                "media_type": str(record["media_type"]),
+                "size": int(record["size"]),
+                "sha256": digest,
+            }
+        )
+        consumed.append((stage_dir, str(record["staged_asset"])))
+    (inputs / "attachments.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    task_assets.consume_staged(consumed)
+    return manifest, assets_dir
+
+
 def submit_taskgen_job(
     db: Session,
     workspace_id: str,
@@ -322,10 +397,15 @@ def submit_taskgen_job(
     taskset_id: str | None = None,
     target_split: str | None = None,
     params: dict[str, Any] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """AI task-set generation (studio parity): an exec-backend agent authors
     tasks for the selected skill(s) on the AgentCore worker; the result is a
-    reviewable artifact, imported into a task set only by an explicit action."""
+    reviewable artifact, imported into a task set only by an explicit action.
+
+    `attachments` carries staged asset tokens: the bytes are snapshotted into the
+    job and materialized into the generation work directory, so the agent authors
+    tasks against real documents instead of pasted text."""
     runner.require_worker(workspace)
     merged_params = runner.clamp_taskgen_params(params)
     if (taskset_id is None) != (target_split is None):
@@ -377,6 +457,14 @@ def submit_taskgen_job(
         skill_dirs, resolved_source = _materialize_taskgen_skills(
             workspace, skill_source, directory, log_lines
         )
+        manifest, attachment_assets = _snapshot_taskgen_attachments(
+            workspace_id, list(attachments or []), directory
+        )
+        if manifest:
+            log_lines.append(
+                "attachments: "
+                + ", ".join(f"{row['name']} ({row['size']}B)" for row in manifest)
+            )
         expansion = None
         if ts_row is not None and target_split is not None:
             snapshot = runner.write_expansion_snapshot(
@@ -397,6 +485,8 @@ def submit_taskgen_job(
         out_root=directory / "out",
         params=merged_params,
         expansion=expansion,
+        attachments=(directory / "inputs" / "attachments.json") if manifest else None,
+        attachment_assets=attachment_assets,
     )
     return _enqueue(db, row, command)
 

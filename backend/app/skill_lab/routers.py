@@ -163,6 +163,8 @@ class JobCreate(BaseModel):
     split: str | None = None
     # taskgen expansion only: which split the generated tasks will extend
     target_split: str | None = None
+    # taskgen only: staged asset tokens the generation agent authors against
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
     params: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -223,6 +225,7 @@ def create_job(
             taskset_id=body.taskset_id,
             target_split=body.target_split,
             params=body.params,
+            attachments=body.attachments,
         )
     raise AppError("skill_lab.bad_params", "type must be 'eval' or 'train'", status_code=422)
 

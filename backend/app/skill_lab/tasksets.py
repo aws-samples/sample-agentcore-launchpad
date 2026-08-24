@@ -306,26 +306,6 @@ def _canonicalize_assets(
     return canonical, consumed
 
 
-def _consume_staged(consumed: list[tuple[Path, str]]) -> None:
-    for stage_dir, token in consumed:
-        blob = stage_dir / "blobs" / token
-        blob.unlink(missing_ok=True)
-        try:
-            metadata_path = stage_dir / "metadata.json"
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            metadata["assets"] = [
-                record
-                for record in metadata.get("assets", [])
-                if record.get("staged_asset") != token
-            ]
-            if metadata["assets"]:
-                metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-            else:
-                shutil.rmtree(stage_dir, ignore_errors=True)
-        except (OSError, json.JSONDecodeError):
-            pass
-
-
 def _stage_validated(
     tasks_by_split: dict[str, Any],
     keys: list[str],
@@ -489,7 +469,7 @@ def create_taskset(
         _restore_swap(live, backup)
         raise
     _finish_swap(backup)
-    _consume_staged(consumed)
+    task_assets.consume_staged(consumed)
     return taskset_info(row)
 
 
@@ -590,7 +570,7 @@ def update_taskset(
             _restore_swap(live, backup)
             raise
         _finish_swap(backup)
-        _consume_staged(consumed)
+        task_assets.consume_staged(consumed)
         return taskset_info(row)
 
 
