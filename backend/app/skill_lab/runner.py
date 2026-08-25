@@ -369,6 +369,15 @@ TASKGEN_GUIDANCE_MAX_CHARS = 4000
 # Upstream studio floor: every skill of a multi-skill set must be targeted by
 # at least this many distinct generated tasks.
 TASKGEN_MIN_TASKS_PER_SKILL = 1
+# Attachment bounds are deliberately tighter than the per-task asset limits: the
+# generation agent decides how much of a document to pull into its context, while
+# evaluation only copies bytes. Per-file size and the accepted formats still come
+# from task_assets, so there is one place that decides what may be uploaded.
+TASKGEN_MAX_ATTACHMENTS = 8
+TASKGEN_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+# Where attachments live inside the generation work dir, and — by contract stated
+# in the prompt — inside the evaluation work dir of a task that declares one.
+TASKGEN_ATTACHMENT_DIR = "data"
 
 
 def clamp_taskgen_params(params: dict[str, Any] | None) -> dict[str, Any]:
@@ -451,6 +460,8 @@ def build_taskgen_command(
     out_root: Path,
     params: dict[str, Any],
     expansion: tuple[Path, str] | None = None,
+    attachments: Path | None = None,
+    attachment_assets: Path | None = None,
 ) -> list[str]:
     """argv for scripts/generate_tasks.py; generated_tasks.json lands in out_root.
 
@@ -476,6 +487,13 @@ def build_taskgen_command(
     if expansion is not None:
         snapshot_path, target_split = expansion
         command += ["--existing-tasks", str(snapshot_path), "--target-split", target_split]
+    if attachments is not None and attachment_assets is not None:
+        # The manifest names the documents; the assets root holds the bytes keyed
+        # by digest. Both point into the job's immutable snapshot, never staging.
+        command += [
+            "--attachments", str(attachments),
+            "--attachment-assets", str(attachment_assets),
+        ]
     return command
 
 

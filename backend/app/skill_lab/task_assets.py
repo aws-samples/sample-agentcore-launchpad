@@ -317,6 +317,32 @@ def _verify_blob(path: Path, record: dict[str, Any]) -> None:
         raise _error("asset_digest_mismatch", "task asset bytes failed integrity verification")
 
 
+def consume_staged(consumed: list[tuple[Path, str]]) -> None:
+    """Drop staged blobs a caller has committed elsewhere.
+
+    Lives here rather than in the task-set service because both task-set writes
+    and taskgen submission consume staging entries, and the staging layout is
+    this module's business. Failure to tidy up is not fatal: the TTL sweep is
+    the backstop."""
+    for stage_dir, token in consumed:
+        blob = stage_dir / "blobs" / token
+        blob.unlink(missing_ok=True)
+        try:
+            metadata_path = stage_dir / "metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["assets"] = [
+                record
+                for record in metadata.get("assets", [])
+                if record.get("staged_asset") != token
+            ]
+            if metadata["assets"]:
+                metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+            else:
+                shutil.rmtree(stage_dir, ignore_errors=True)
+        except (OSError, json.JSONDecodeError):
+            pass
+
+
 def stable_descriptor(record: dict[str, Any]) -> dict[str, Any]:
     return {
         "asset": f"sha256:{record['sha256']}",

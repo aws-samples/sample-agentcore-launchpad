@@ -1128,7 +1128,8 @@
         "created": "Created",
         "id": "ID",
         "question": "Question",
-        "rubric": "Rubric"
+        "rubric": "Rubric",
+        "attachments": "documents"
       },
       "wizard": {
         "title": "Generate tasks",
@@ -1142,7 +1143,8 @@
         "timeout": "Timeout (s)",
         "guidance": "Guidance (optional)",
         "expand": "Expand an existing task set",
-        "targetSplit": "Target split"
+        "targetSplit": "Target split",
+        "attachments": "Input documents"
       },
       "hint": {
         "skills": "Click to toggle. Multiple skills produce one unified task set with per-skill coverage.",
@@ -1169,7 +1171,14 @@
         "import": "Import as task set",
         "apply": "Append to split {{split}}",
         "imported": "Imported as task set",
-        "applied": "Applied to \"{{name}}\"."
+        "applied": "Applied to \"{{name}}\".",
+        "unusedAttachments": "No generated task used: {{names}}. Those uploads will not be attached to the saved task set."
+      },
+      "attach": {
+        "pick": "Choose files…",
+        "uploading": "Uploading…",
+        "remove": "Remove",
+        "hint": "The agent reads these and writes questions about them; tasks that use one carry it as an input file."
       }
     },
     "unprovisioned": {
@@ -1581,6 +1590,9 @@
     "skill_lab.asset_not_owned": "That file is not owned by this task set.",
     "skill_lab.asset_path_invalid": "A task input file destination is unsafe.",
     "skill_lab.asset_duplicate_path": "Task input file destinations must be unique.",
+    "skill_lab.attachment_missing": "The generation job's attachment snapshot is missing — regenerate before importing.",
+    "skill_lab.attachment_unknown": "A generated task declares a document this job was not given.",
+    "skill_lab.attachment_path_conflict": "A generated task both declares an attached document and defines the same path inline.",
     "skill_lab.snapshot_exists": "This job already has an immutable input snapshot.",
     "agent.name_exists": "An agent with this name already exists",
     "agent.method_not_available": "This creation method ships in a later phase",

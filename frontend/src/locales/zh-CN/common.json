@@ -1128,7 +1128,8 @@
         "created": "创建时间",
         "id": "ID",
         "question": "问题",
-        "rubric": "评分标准"
+        "rubric": "评分标准",
+        "attachments": "文档"
       },
       "wizard": {
         "title": "生成任务",
@@ -1142,7 +1143,8 @@
         "timeout": "超时（秒）",
         "guidance": "生成指引（可选）",
         "expand": "扩充已有任务集",
-        "targetSplit": "目标分割"
+        "targetSplit": "目标分割",
+        "attachments": "输入文档"
       },
       "hint": {
         "skills": "点击切换选中。多技能会生成一个带覆盖度约束的统一任务集。",
@@ -1169,7 +1171,14 @@
         "import": "导入为任务集",
         "apply": "追加到 {{split}} 分割",
         "imported": "已导入为任务集",
-        "applied": "已追加到「{{name}}」。"
+        "applied": "已追加到「{{name}}」。",
+        "unusedAttachments": "没有任何生成任务用到：{{names}}。这些上传不会附加到保存后的任务集。"
+      },
+      "attach": {
+        "pick": "选择文件…",
+        "uploading": "正在上传…",
+        "remove": "移除",
+        "hint": "生成 agent 会阅读这些文档并据此出题；用到某个文档的任务会把它作为输入文件带上。"
       }
     },
     "unprovisioned": {
@@ -1581,6 +1590,9 @@
     "skill_lab.asset_not_owned": "该文件不属于此任务集。",
     "skill_lab.asset_path_invalid": "某个任务输入文件的目标路径不安全。",
     "skill_lab.asset_duplicate_path": "任务输入文件的目标路径不能重复。",
+    "skill_lab.attachment_missing": "生成任务的附件快照缺失——请重新生成后再导入。",
+    "skill_lab.attachment_unknown": "某个生成的任务声明了本次生成未提供的文档。",
+    "skill_lab.attachment_path_conflict": "某个生成的任务既声明了附件，又在同一路径内联定义了文件。",
     "skill_lab.snapshot_exists": "该作业已有不可变输入快照。",
     "agent.name_exists": "同名 Agent 已存在",
     "agent.method_not_available": "该创建方式将在后续阶段开放",

@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 from typing import Any, NamedTuple
@@ -45,6 +46,19 @@ MAX_EXISTING_TASK_ITEMS = 100
 MAX_EXISTING_TASK_CONTEXT_CHARS = 24000
 MAX_EXISTING_TASK_FIELD_CHARS = 600
 MAX_ATTEMPTS = 2
+# Where attachments are materialized inside the generation work dir. The prompt
+# states the same relative path is what an evaluated agent will see, so a
+# question the model writes ("open data/source.xlsx") stays literally true.
+ATTACHMENT_DIR = "data"
+
+
+class Attachment(NamedTuple):
+    """One document handed to the generation agent, from a trusted manifest."""
+
+    name: str
+    media_type: str
+    size: int
+    sha256: str
 
 
 class SkillDocument(NamedTuple):
@@ -102,7 +116,86 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Target split recorded in --existing-tasks",
     )
+    p.add_argument(
+        "--attachments",
+        type=str,
+        default="",
+        help="Optional JSON manifest of input documents: "
+             "[{name, media_type, size, sha256}]",
+    )
+    p.add_argument(
+        "--attachment-assets",
+        type=str,
+        default="",
+        help="Directory holding the manifest's bytes, keyed by sha256",
+    )
     return p.parse_args()
+
+
+def load_attachments(manifest_path: str, assets_dir: str) -> list[Attachment]:
+    """Strictly decode the attachment manifest before any model call.
+
+    Mirrors --existing-tasks: fail loudly and early rather than letting the agent
+    discover a broken input. Bytes are verified against the manifest so a
+    truncated snapshot cannot silently become the document the tasks describe.
+    """
+    try:
+        with open(manifest_path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid --attachments manifest: {exc}") from None
+    if not isinstance(payload, list) or not payload:
+        raise ValueError("--attachments manifest must be a non-empty JSON array")
+    attachments: list[Attachment] = []
+    seen: set[str] = set()
+    for index, row in enumerate(payload):
+        if not isinstance(row, dict):
+            raise ValueError(f"--attachments item #{index} must be an object")
+        name = row.get("name")
+        digest = row.get("sha256")
+        size = row.get("size")
+        if not isinstance(name, str) or not name or "/" in name or "\\" in name:
+            raise ValueError(f"--attachments item #{index} has an unsafe name: {name!r}")
+        if name.casefold() in seen:
+            raise ValueError(f"--attachments repeats the name {name!r}")
+        seen.add(name.casefold())
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise ValueError(f"--attachments item #{index} has an invalid sha256")
+        if not isinstance(size, int) or size < 0:
+            raise ValueError(f"--attachments item #{index} has an invalid size")
+        source = os.path.join(assets_dir, digest)
+        if not os.path.isfile(source):
+            raise ValueError(f"--attachments bytes missing for {name!r}")
+        if os.path.getsize(source) != size:
+            raise ValueError(f"--attachments size mismatch for {name!r}")
+        media_type = row.get("media_type")
+        attachments.append(
+            Attachment(
+                name=name,
+                media_type=media_type if isinstance(media_type, str) else "",
+                size=size,
+                sha256=digest,
+            )
+        )
+    return attachments
+
+
+def materialize_attachments(
+    attachments: list[Attachment], assets_dir: str, work_dir: str
+) -> None:
+    """Copy attachment bytes into the agent's work dir at ATTACHMENT_DIR/<name>.
+
+    They ride the ordinary work-directory transport from here — the remote exec
+    runner refuses host paths outside work_dir, so materializing is the only way
+    to get bytes to a worker.
+    """
+    target_dir = os.path.join(work_dir, ATTACHMENT_DIR)
+    os.makedirs(target_dir, exist_ok=True)
+    for attachment in attachments:
+        shutil.copyfile(
+            os.path.join(assets_dir, attachment.sha256),
+            os.path.join(target_dir, attachment.name),
+        )
 
 
 def load_existing_task_context(path: str, target_split: str) -> ExistingTaskContext:
@@ -221,6 +314,7 @@ def build_prompt(
     guidance: str = "",
     feedback: str | None = None,
     existing_context: ExistingTaskContext | None = None,
+    attachments: list[Attachment] | None = None,
 ) -> str:
     """Backward-compatible single-skill generation prompt."""
     skill = SkillDocument(
@@ -230,7 +324,12 @@ def build_prompt(
         support_files=support_files,
     )
     return _build_prompt(
-        [skill], count, guidance, feedback, existing_context=existing_context
+        [skill],
+        count,
+        guidance,
+        feedback,
+        existing_context=existing_context,
+        attachments=attachments,
     )
 
 
@@ -241,6 +340,7 @@ def build_multi_skill_prompt(
     feedback: str | None = None,
     min_tasks_per_skill: int = 1,
     existing_context: ExistingTaskContext | None = None,
+    attachments: list[Attachment] | None = None,
 ) -> str:
     """Unified generation prompt for multiple named skills."""
     if len(skills) < 2:
@@ -252,7 +352,45 @@ def build_multi_skill_prompt(
         feedback,
         min_tasks_per_skill=min_tasks_per_skill,
         existing_context=existing_context,
+        attachments=attachments,
     )
+
+
+def _attachment_prompt_lines(attachments: list[Attachment]) -> list[str]:
+    """Describe the documents already sitting in the agent's working directory.
+
+    The paths given here are the paths an evaluated agent will see, so a question
+    that says "open data/source.xlsx" remains true after import. The agent must
+    name a document rather than describe its bytes: the platform maps the name
+    back to a verified content-addressed asset, and only the platform can.
+    """
+    if not attachments:
+        return []
+    lines = [
+        "## Attached documents",
+        "",
+        "These files already exist in your working directory, and the task set will "
+        "ship them to the agent being evaluated at the SAME relative paths:",
+        "",
+    ]
+    for attachment in attachments:
+        detail = f", {attachment.media_type}" if attachment.media_type else ""
+        lines.append(
+            f"- `{ATTACHMENT_DIR}/{attachment.name}` ({attachment.size} bytes{detail}) "
+            f"— declare as \"{attachment.name}\""
+        )
+    lines += [
+        "",
+        "Read them before writing anything: ground every question in what they actually "
+        "contain — real column names, real figures, real section titles — never in an "
+        "invented example.",
+        "A task that needs a document MUST list that document's name in its "
+        '"attachments" array and refer to it by path in the question text. Do NOT copy '
+        'the content into "files", do not rename the files, and do not invent names that '
+        "are not listed above. Tasks that need no document simply omit the field.",
+        "",
+    ]
+    return lines
 
 
 def _build_prompt(
@@ -263,6 +401,7 @@ def _build_prompt(
     *,
     min_tasks_per_skill: int = 1,
     existing_context: ExistingTaskContext | None = None,
+    attachments: list[Attachment] | None = None,
 ) -> str:
     """Generation prompt implementation shared by single and multi-skill modes."""
     multi = len(skills) > 1
@@ -320,8 +459,15 @@ def _build_prompt(
         "itself the behavior being tested. "
         "Each task must be completable inside an isolated working directory with no network "
         "access and no external accounts; if a task needs input data, provide it inline via "
-        'its "files" field.',
+        'its "files" field'
+        + (
+            " — except for the attached documents below, which are already present and must "
+            'be declared, never inlined.'
+            if attachments
+            else "."
+        ),
         "",
+        *_attachment_prompt_lines(attachments or []),
         "## Output format (STRICT)",
         "",
         f"Write ONE file named `{OUTPUT_FILENAME}` in the current working directory: a UTF-8 "
@@ -332,6 +478,14 @@ def _build_prompt(
         '- "rubric" (string, required): acceptance criteria for an LLM judge — objectively '
         "checkable from the agent's response/artifacts alone, never vague quality adjectives",
         '- "files" (object, optional): {relative path: text content} seeded into the agent\'s working directory',
+        *(
+            [
+                '- "attachments" (array of strings, optional): names of the attached '
+                "documents this task needs, copied EXACTLY from the list above"
+            ]
+            if attachments
+            else []
+        ),
         (
             '- "target_skills" (array of strings, required): one or more exact skill names '
             "from the collection above that should handle the task"
@@ -374,6 +528,9 @@ def _bounded_task_summary(task: dict[str, Any]) -> dict[str, Any]:
     files = task.get("files")
     if isinstance(files, dict) and files:
         summary["file_paths"] = sorted(str(name) for name in files)
+    declared = task.get("attachments")
+    if isinstance(declared, list) and declared:
+        summary["attachments"] = sorted(str(name) for name in declared)
     return summary
 
 
@@ -426,12 +583,75 @@ def build_existing_tasks_prompt(context: ExistingTaskContext) -> str:
     return "\n".join(lines)
 
 
+def _validate_declared_attachments(
+    tasks: list[dict], attachments: list[Attachment]
+) -> None:
+    """Check every "attachments" declaration against what was actually attached.
+
+    A failure here is fed back to the agent for its retry, so the messages name
+    the offending item and the legal names. Declaring a document that was never
+    attached is the interesting case: the platform maps names to verified assets,
+    so an invented name would otherwise become a silently missing input.
+    """
+    allowed = {attachment.name.casefold(): attachment.name for attachment in attachments}
+    for index, task in enumerate(tasks):
+        declared = task.get("attachments")
+        if declared is None:
+            continue
+        label = _item_label_for(index, task)
+        if not isinstance(declared, list):
+            raise ValueError(f'{label}: "attachments" must be an array of names')
+        if not attachments:
+            raise ValueError(
+                f'{label}: declares attachments but no documents were attached to this run'
+            )
+        seen: set[str] = set()
+        for name in declared:
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(f'{label}: "attachments" entries must be non-empty strings')
+            folded = name.casefold()
+            if folded not in allowed:
+                raise ValueError(
+                    f"{label}: attachment {name!r} was not attached to this run; "
+                    f"available: {sorted(allowed.values())}"
+                )
+            if folded in seen:
+                raise ValueError(f"{label}: attachment {name!r} is declared twice")
+            seen.add(folded)
+            if name != allowed[folded]:
+                raise ValueError(
+                    f"{label}: attachment {name!r} must match the attached name exactly "
+                    f"({allowed[folded]!r})"
+                )
+        files = task.get("files")
+        if isinstance(files, dict):
+            clashes = sorted(
+                path
+                for path in files
+                if isinstance(path, str)
+                and path.casefold() in {
+                    f"{ATTACHMENT_DIR}/{name}".casefold() for name in declared
+                }
+            )
+            if clashes:
+                raise ValueError(
+                    f"{label}: \"files\" re-declares attached document path(s) {clashes}; "
+                    "attached documents are already present — do not inline them"
+                )
+
+
+def _item_label_for(index: int, task: dict) -> str:
+    task_id = task.get("id")
+    return f"item #{index} (id={task_id!r})" if task_id else f"item #{index}"
+
+
 def validate_generated_tasks(
     tasks: list[dict],
     requested_count: int,
     skills: list[SkillDocument],
     min_tasks_per_skill: int = 1,
     reserved_ids: frozenset[str] = frozenset(),
+    attachments: list[Attachment] | None = None,
 ) -> None:
     if len(tasks) != requested_count:
         raise ValueError(
@@ -444,6 +664,7 @@ def validate_generated_tasks(
         raise ValueError(
             f"generated task IDs collide with existing reserved IDs: {collisions}"
         )
+    _validate_declared_attachments(tasks, attachments or [])
     if len(skills) < 2:
         return
 
@@ -519,6 +740,16 @@ def main() -> None:
         )
     except ValueError as exc:
         sys.exit(f"error: {exc}")
+    if bool(args.attachments) != bool(args.attachment_assets):
+        sys.exit("error: --attachments and --attachment-assets must be provided together")
+    try:
+        attachments = (
+            load_attachments(args.attachments, args.attachment_assets)
+            if args.attachments
+            else []
+        )
+    except ValueError as exc:
+        sys.exit(f"error: {exc}")
     if args.count < 1:
         sys.exit(f"error: --count must be >= 1, got {args.count}")
     if args.min_tasks_per_skill < 1:
@@ -539,6 +770,13 @@ def main() -> None:
     work_dir = os.path.join(out_root, "gen_workspace")
     os.makedirs(work_dir, exist_ok=True)
     out_file = os.path.join(work_dir, OUTPUT_FILENAME)
+    if attachments:
+        materialize_attachments(attachments, args.attachment_assets, work_dir)
+        print(
+            "[taskgen] attachments: "
+            + ", ".join(f"{a.name} ({a.size}B)" for a in attachments),
+            flush=True,
+        )
 
     print(f"[taskgen] skills: {len(skills)}")
     for skill in skills:
@@ -567,6 +805,7 @@ def main() -> None:
                 feedback,
                 min_tasks_per_skill=args.min_tasks_per_skill,
                 existing_context=existing_context,
+                attachments=attachments,
             )
         else:
             prompt = build_prompt(
@@ -576,6 +815,7 @@ def main() -> None:
                 args.guidance,
                 feedback,
                 existing_context=existing_context,
+                attachments=attachments,
             )
         agent_response = run_agent(args.backend, work_dir, prompt, model, args.timeout)
         try:
@@ -594,6 +834,7 @@ def main() -> None:
                 reserved_ids=(
                     existing_context.reserved_ids if existing_context else frozenset()
                 ),
+                attachments=attachments,
             )
             break
         except ValueError as exc:
@@ -623,6 +864,7 @@ def main() -> None:
         "min_tasks_per_skill": args.min_tasks_per_skill,
         "attempts": attempts,
         "duration_s": duration_s,
+        "attachments": [a.name for a in attachments],
     }
     if existing_context is not None:
         summary["taskset_id"] = existing_context.taskset_id

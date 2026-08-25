@@ -953,6 +953,17 @@ atomically preserve kept assets and drop omitted ones. Eval and train submission
 the selected JSON/assets into `jobs/<id>/inputs`, so queued/running work is immutable. Vendored
 SkillOpt receives the explicit snapshot assets root and copies exact bytes into each rollout work
 directory before the existing binary-safe S3 tar → AgentCore Runtime → output-tar transport.
+**Taskgen input attachments.** AI task generation accepts the same staged uploads. Submission
+resolves the tokens, snapshots bytes into `jobs/<id>/inputs/assets/<digest>` with a trusted
+manifest at `inputs/attachments.json`, and the vendored generator materializes each document at
+`data/<name>` inside its working directory — the only channel to a worker, since the remote exec
+runner refuses host paths outside `work_dir`. The prompt states that the evaluated agent will see
+the same relative path, so a generated question that names one stays true. A task may declare
+`attachments: [<name>, …]`; the agent only ever names documents, and import maps each name to a
+verified descriptor from that job's manifest, dropping the declaration once `files` carries it.
+Generation bounds are tighter than the per-task asset limits (8 documents, 25 MiB aggregate)
+because the agent decides how much of a document to read into context.
+
 Formats are trusted by content, not by extension: binaries must match their magic bytes (with
 extra member/ratio/macro hardening for XLSX), and the text formats — which have no signature — must
 decode as UTF-8, contain no NUL byte, and not carry a binary signature under a text extension.
