@@ -26,11 +26,13 @@ import boto3
 import httpx
 from _e2e_client import e2e_client
 
-# Facts that exist ONLY inside the workbook. A question mentioning any of them
-# could not have been written without reading the file.
+# Facts that exist ONLY inside the workbook. A task mentioning any of them could
+# not have been written without reading the file. Do NOT name these `SECRET_*`:
+# CodeQL's clear-text-logging query treats such names as credential sources, and
+# they are printed as evidence at the end of a successful run.
 SHEET_NAME = "Q2Regions"
-SECRET_COLUMN = "gross_margin_pct"
-SECRET_REGION = "Zanzibar"
+WORKBOOK_COLUMN = "gross_margin_pct"
+WORKBOOK_REGION = "Zanzibar"
 
 
 def xlsx_bytes() -> bytes:
@@ -51,8 +53,8 @@ def xlsx_bytes() -> bytes:
         archive.writestr(
             "xl/sharedStrings.xml",
             '<?xml version="1.0"?><sst>'
-            f"<si><t>region</t></si><si><t>revenue</t></si><si><t>{SECRET_COLUMN}</t></si>"
-            f"<si><t>{SECRET_REGION}</t></si><si><t>APAC</t></si>"
+            f"<si><t>region</t></si><si><t>revenue</t></si><si><t>{WORKBOOK_COLUMN}</t></si>"
+            f"<si><t>{WORKBOOK_REGION}</t></si><si><t>APAC</t></si>"
             "</sst>",
         )
     return out.getvalue()
@@ -167,7 +169,7 @@ def main() -> int:
         #    only inside the workbook.
         text = json.dumps(tasks, ensure_ascii=False)
         cited = [
-            fact for fact in (SHEET_NAME, SECRET_COLUMN, SECRET_REGION) if fact in text
+            fact for fact in (SHEET_NAME, WORKBOOK_COLUMN, WORKBOOK_REGION) if fact in text
         ]
         if not cited:
             raise SystemExit(
@@ -217,12 +219,12 @@ def main() -> int:
                             "inline_files": sorted((task.get("files") or {}).keys()),
                             "cites_in_question": [
                                 fact
-                                for fact in (SHEET_NAME, SECRET_COLUMN, SECRET_REGION)
+                                for fact in (SHEET_NAME, WORKBOOK_COLUMN, WORKBOOK_REGION)
                                 if fact in str(task.get("question", ""))
                             ],
                             "cites_in_rubric": [
                                 fact
-                                for fact in (SHEET_NAME, SECRET_COLUMN, SECRET_REGION)
+                                for fact in (SHEET_NAME, WORKBOOK_COLUMN, WORKBOOK_REGION)
                                 if fact in str(task.get("rubric", ""))
                             ],
                             "question": task.get("question"),
