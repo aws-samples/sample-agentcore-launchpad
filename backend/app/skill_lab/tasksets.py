@@ -211,8 +211,16 @@ def _canonicalize_assets(
     workspace_id: str,
     staging: Path,
     current_live: Path | None,
+    extra_sources: dict[str, Path] | None = None,
 ) -> tuple[dict[str, Any], list[tuple[Path, str]]]:
-    """Resolve descriptors into a complete staged assets tree without mutating input."""
+    """Resolve descriptors into a complete staged assets tree without mutating input.
+
+    `extra_sources` maps digest -> a blob path this write may also draw from, for
+    bytes that live neither in staging nor in the task set being updated — today
+    only a taskgen job snapshot. It is INTERNAL: no request body can populate it,
+    so the API-facing rule (a stable descriptor must already be owned by this task
+    set) is unchanged. Bytes from it are digest-verified like any other.
+    """
     canonical = json.loads(json.dumps(tasks_by_split))
     assets_dir = staging / task_assets.ASSETS_DIRNAME
     references = 0
@@ -260,28 +268,33 @@ def _canonicalize_assets(
                     digest = str(record["sha256"])
                 else:
                     digest = task_assets.digest_from_descriptor(value)
-                    if current_live is None:
-                        raise task_assets._error(
-                            "asset_not_owned", "stable task assets may only be kept during update"
-                        )
                     descriptor = {
                         "asset": f"sha256:{digest}",
                         "name": str(value.get("name") or ""),
                         "media_type": str(value.get("media_type") or ""),
                         "size": int(value.get("size", -1)),
                     }
-                    identity = (
-                        digest,
-                        descriptor["name"],
-                        descriptor["media_type"],
-                        descriptor["size"],
-                    )
-                    if identity not in owned:
-                        raise task_assets._error(
-                            "asset_not_owned",
-                            "stable task asset descriptor is not owned by this task set",
+                    provided = (extra_sources or {}).get(digest)
+                    if provided is not None:
+                        source = provided
+                    else:
+                        if current_live is None:
+                            raise task_assets._error(
+                                "asset_not_owned",
+                                "stable task assets may only be kept during update",
+                            )
+                        identity = (
+                            digest,
+                            descriptor["name"],
+                            descriptor["media_type"],
+                            descriptor["size"],
                         )
-                    source = current_live / task_assets.ASSETS_DIRNAME / digest
+                        if identity not in owned:
+                            raise task_assets._error(
+                                "asset_not_owned",
+                                "stable task asset descriptor is not owned by this task set",
+                            )
+                        source = current_live / task_assets.ASSETS_DIRNAME / digest
                     task_assets._verify_blob(
                         source,
                         {"size": descriptor["size"], "sha256": digest},
@@ -314,6 +327,7 @@ def _stage_validated(
     *,
     workspace_id: str = "",
     current_live: Path | None = None,
+    extra_sources: dict[str, Path] | None = None,
 ) -> tuple[Path, dict[str, Any], list[tuple[Path, str]]]:
     """Write the split files to a staging dir and validate them there.
 
@@ -327,7 +341,7 @@ def _stage_validated(
     staging.mkdir(parents=True)
     try:
         canonical, consumed = _canonicalize_assets(
-            tasks_by_split, keys, workspace_id, staging, current_live
+            tasks_by_split, keys, workspace_id, staging, current_live, extra_sources
         )
         files: dict[str, Path] = {}
         for split in keys:
@@ -430,6 +444,7 @@ def create_taskset(
     validator_python: str | None = None,
     sample: bool = False,
     run_validator: bool = True,
+    extra_sources: dict[str, Path] | None = None,
 ) -> dict[str, Any]:
     """`sample`/`run_validator` are seeding-only knobs (app/skill_lab/samples.py):
     the router never passes them. Skipping the validator subprocess is safe only
@@ -445,6 +460,7 @@ def create_taskset(
         validator_python,
         run_validator,
         workspace_id=workspace_id,
+        extra_sources=extra_sources,
     )
     try:
         row = SkillLabTaskset(
@@ -536,6 +552,7 @@ def update_taskset(
     description: str | None = None,
     tasks_by_split: dict[str, Any],
     validator_python: str | None = None,
+    extra_sources: dict[str, Path] | None = None,
 ) -> dict[str, Any]:
     # Lock includes reading the current tree, staging from owned descriptors,
     # the shared .old swap, ledger commit, and staged-token consumption.
@@ -552,6 +569,7 @@ def update_taskset(
             validator_python,
             workspace_id=workspace_id,
             current_live=live,
+            extra_sources=extra_sources,
         )
         try:
             backup = _swap_in(staging, live)

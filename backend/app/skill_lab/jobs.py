@@ -491,6 +491,75 @@ def submit_taskgen_job(
     return _enqueue(db, row, command)
 
 
+def _bind_taskgen_attachments(
+    job_id: str, tasks: list[Any]
+) -> tuple[list[Any], dict[str, Path]]:
+    """Turn each task's `attachments` declaration into real asset descriptors.
+
+    The generation agent only ever names documents; the digests come from this
+    job's own manifest, so a declaration cannot reference bytes the job was not
+    given. Returns the rewritten tasks plus the digest->blob map the task-set
+    write draws from (`extra_sources`), since these bytes live in the job
+    snapshot rather than in staging or in the task set.
+
+    The declaration is dropped once bound: `files` then carries the whole truth,
+    and two representations of the same input would only drift.
+    """
+    inputs = artifacts.job_dir(job_id) / "inputs"
+    manifest_path = inputs / "attachments.json"
+    declared_anywhere = any(
+        isinstance(task, dict) and task.get("attachments") for task in tasks
+    )
+    if not manifest_path.is_file():
+        if declared_anywhere:
+            raise AppError(
+                "skill_lab.attachment_missing",
+                f"job {job_id} declares attachments but has no attachment manifest",
+                status_code=409,
+            )
+        return tasks, {}
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    by_name = {str(row["name"]): row for row in manifest}
+    assets_root = inputs / task_assets.ASSETS_DIRNAME
+    bound: list[Any] = []
+    sources: dict[str, Path] = {}
+    for task in tasks:
+        if not isinstance(task, dict) or not task.get("attachments"):
+            bound.append(task)
+            continue
+        task = dict(task)
+        names = task.pop("attachments")
+        files = dict(task.get("files") or {})
+        for name in names:
+            record = by_name.get(str(name))
+            if record is None:
+                raise AppError(
+                    "skill_lab.attachment_unknown",
+                    f"task {task.get('id')!r} declares attachment {name!r}, which this "
+                    "job was not given",
+                    status_code=409,
+                )
+            destination = f"{runner.TASKGEN_ATTACHMENT_DIR}/{record['name']}"
+            if destination in files:
+                raise AppError(
+                    "skill_lab.attachment_path_conflict",
+                    f"task {task.get('id')!r} both declares attachment "
+                    f"{record['name']!r} and defines {destination!r} inline",
+                    status_code=409,
+                )
+            digest = str(record["sha256"])
+            files[destination] = {
+                "asset": f"sha256:{digest}",
+                "name": str(record["name"]),
+                "media_type": str(record["media_type"]),
+                "size": int(record["size"]),
+            }
+            sources[digest] = assets_root / digest
+        task["files"] = files
+        bound.append(task)
+    return bound, sources
+
+
 def _finished_taskgen_job(db: Session, workspace_id: str, job_id: str) -> SkillLabJob:
     row = get_job(db, workspace_id, job_id)
     if row.type != "taskgen":
@@ -531,12 +600,14 @@ def import_taskgen_taskset(
             f"job {job_id} has no generated_tasks.json on disk",
             status_code=409,
         )
+    tasks, extra_sources = _bind_taskgen_attachments(row.id, results["tasks"])
     info = taskset_svc.create_taskset(
         db,
         workspace_id,
         name=name,
         mode="single",
-        tasks_by_split={"tasks": results["tasks"]},
+        tasks_by_split={"tasks": tasks},
+        extra_sources=extra_sources,
     )
     row.params = {**(row.params or {}), "imported_taskset_id": info["id"]}
     db.commit()
@@ -591,10 +662,11 @@ def apply_taskgen_expansion(db: Session, workspace_id: str, job_id: str) -> dict
             + ", ".join(collisions),
             status_code=409,
         )
+    tasks, extra_sources = _bind_taskgen_attachments(row.id, results["tasks"])
     target = row.split
-    merged[target] = list(merged.get(target, [])) + results["tasks"]
+    merged[target] = list(merged.get(target, [])) + tasks
     info = taskset_svc.update_taskset(
-        db, workspace_id, ts_row.id, tasks_by_split=merged
+        db, workspace_id, ts_row.id, tasks_by_split=merged, extra_sources=extra_sources
     )
     row.params = {**(row.params or {}), "expanded": True}
     db.commit()

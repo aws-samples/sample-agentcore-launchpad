@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import time
@@ -447,3 +448,135 @@ def test_a_refused_attachment_leaves_no_job_directory_behind(lab):
     # partially-resolved attachment set can never be picked up by the restart sweep.
     assert _job_dirs() == []
     assert lab.get("/api/skill-lab/jobs?type=taskgen").json() == []
+
+
+# ── attachments: declaration → descriptor on import/apply ──────────────────
+
+
+def _declaring_stub(ids_to_names: dict[str, list[str]]) -> str:
+    """A stub CLI that writes `attachments` declarations for chosen task ids."""
+    return STUB_GEN_CLI.replace(
+        'tasks = [{"id": i, "question": "q for " + i, "rubric": "PASS always"} for i in ids]',
+        "declared = " + json.dumps(ids_to_names) + "\n"
+        'tasks = [{"id": i, "question": "q for " + i, "rubric": "PASS always",\n'
+        '          **({"attachments": declared[i]} if i in declared else {})}\n'
+        "         for i in ids]",
+    )
+
+
+@pytest.fixture
+def declaring_lab(lab, tmp_path, monkeypatch):
+    """`lab`, but the generator declares rows.csv on the first generated task."""
+    stub = tmp_path / "declaring_cli.py"
+    stub.write_text(_declaring_stub({"gen_001": ["rows.csv"]}))
+    monkeypatch.setattr(runner, "TASKGEN_SCRIPT", stub)
+    return lab
+
+
+def test_declarations_become_owned_descriptors_on_import(declaring_lab):
+    staged = _stage(declaring_lab, ("rows.csv", CSV), ("brief.md", MD))
+    job = _submit(declaring_lab, attachments=staged, params={"count": 2}).json()
+    assert _wait(declaring_lab, job["id"])["status"] == "succeeded"
+
+    imported = declaring_lab.post(
+        f"/api/skill-lab/jobs/{job['id']}/import-taskset", json={"name": "from-taskgen"}
+    )
+    assert imported.status_code == 201, imported.text
+    taskset_id = imported.json()["taskset"]["id"]
+    detail = declaring_lab.get(
+        f"/api/skill-lab/tasksets/{taskset_id}?full=true"
+    ).json()["tasks_by_split"]["tasks"]
+
+    first, second = detail[0], detail[1]
+    # The declaration is gone; `files` carries the whole truth.
+    assert "attachments" not in first
+    descriptor = first["files"]["data/rows.csv"]
+    assert descriptor["asset"] == f"sha256:{hashlib.sha256(CSV).hexdigest()}"
+    assert (descriptor["name"], descriptor["media_type"], descriptor["size"]) == (
+        "rows.csv",
+        "text/csv",
+        len(CSV),
+    )
+    # A task that declared nothing gains nothing — the unused upload is not forced in.
+    assert not second.get("files")
+
+    # Bytes landed in the task set itself, so it no longer depends on the job.
+    blob = (
+        taskset_svc.taskset_dir(taskset_id)
+        / "assets"
+        / hashlib.sha256(CSV).hexdigest()
+    )
+    assert blob.read_bytes() == CSV
+
+
+def test_expansion_keeps_the_targets_own_assets_and_adds_the_new_one(declaring_lab):
+    # A task set that already owns an asset, created the ordinary way.
+    existing = _stage(declaring_lab, ("prior.csv", b"a,b\n1,2\n"))[0]
+    taskset_id = _taskset(
+        declaring_lab,
+        {"tasks": [{"id": "kept_1", "question": "q", "rubric": "PASS",
+                    "files": {"data/prior.csv": existing}}]},
+        name="expandable",
+    )
+    staged = _stage(declaring_lab, ("rows.csv", CSV))
+    job = _submit(
+        declaring_lab,
+        attachments=staged,
+        taskset_id=taskset_id,
+        target_split="tasks",
+        params={"count": 1},
+    ).json()
+    assert _wait(declaring_lab, job["id"])["status"] == "succeeded"
+    applied = declaring_lab.post(f"/api/skill-lab/jobs/{job['id']}/apply-expansion")
+    assert applied.status_code == 200, applied.text
+
+    tasks = declaring_lab.get(
+        f"/api/skill-lab/tasksets/{taskset_id}?full=true"
+    ).json()["tasks_by_split"]["tasks"]
+    assert [task["id"] for task in tasks] == ["kept_1", "gen_001"]
+    # Both the pre-existing asset and the newly bound one are present and readable.
+    assert tasks[0]["files"]["data/prior.csv"]["name"] == "prior.csv"
+    assert tasks[1]["files"]["data/rows.csv"]["name"] == "rows.csv"
+    assets = taskset_svc.taskset_dir(taskset_id) / "assets"
+    assert (assets / hashlib.sha256(CSV).hexdigest()).read_bytes() == CSV
+    assert (assets / hashlib.sha256(b"a,b\n1,2\n").hexdigest()).exists()
+
+
+def test_import_refuses_a_declaration_the_job_was_never_given(lab, tmp_path, monkeypatch):
+    stub = tmp_path / "ghost_cli.py"
+    stub.write_text(_declaring_stub({"gen_001": ["ghost.csv"]}))
+    monkeypatch.setattr(runner, "TASKGEN_SCRIPT", stub)
+    staged = _stage(lab, ("rows.csv", CSV))
+    job = _submit(lab, attachments=staged, params={"count": 1}).json()
+    assert _wait(lab, job["id"])["status"] == "succeeded"
+    response = lab.post(f"/api/skill-lab/jobs/{job['id']}/import-taskset", json={"name": "ghost"})
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "skill_lab.attachment_unknown"
+    assert lab.get("/api/skill-lab/tasksets").json() == []
+
+
+def test_the_internal_snapshot_channel_is_not_reachable_from_a_request(lab):
+    """`extra_sources` must stay internal: a caller that knows a digest still
+    cannot mint a descriptor for it through the public task-set API."""
+    staged = _stage(lab, ("rows.csv", CSV))
+    job = _submit(lab, attachments=staged, params={"count": 1}).json()
+    assert _wait(lab, job["id"])["status"] == "succeeded"
+    forged = {
+        "asset": f"sha256:{hashlib.sha256(CSV).hexdigest()}",
+        "name": "rows.csv",
+        "media_type": "text/csv",
+        "size": len(CSV),
+    }
+    response = lab.post(
+        "/api/skill-lab/tasksets",
+        json={
+            "name": "forged",
+            "mode": "single",
+            "tasks_by_split": {
+                "tasks": [{"id": "t1", "question": "q", "rubric": "PASS",
+                           "files": {"data/rows.csv": forged}}]
+            },
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "skill_lab.asset_not_owned"
