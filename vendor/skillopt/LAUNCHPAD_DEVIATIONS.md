@@ -138,3 +138,27 @@ reconstructs them. `evaluate_skill.py` and `validate_tasks.py` accept `--assets-
 training adapter accepts `assets_dir`, and rollout copies each blob to its declared relative
 path before Runtime transport. The worker image pins openpyxl 3.1.5, Pillow 11.3.0, and pypdf
 6.0.0 so supported XLSX/image/PDF inputs can be inspected in the microVM.
+
+## Taskgen input attachments
+
+`generate_tasks.py` gained `--attachments <manifest.json>` + `--attachment-assets <dir>`
+(the manifest names documents; the directory holds their bytes keyed by sha256, both inside
+the platform's immutable job snapshot). The manifest is decoded strictly before any model
+call — name safety, digest shape, byte presence and size are all checked — then each
+document is copied to `data/<name>` in the generation work dir, which is the only channel
+to a worker: `agentcore_runner.run_remote_exec` explicitly refuses `images`/`data_dirs`
+because they reference host paths outside `work_dir`.
+
+The prompt gains an "Attached documents" section stating that the same relative path is
+what the evaluated agent will see, so a question the model writes ("open `data/rows.csv`")
+stays true after import. Task items may carry `attachments: [<name>, …]`; the agent names
+documents and never handles digests, because only the platform can mint a verified
+descriptor. `validate_generated_tasks` rejects a declaration that is not an array, names a
+document that was not attached, differs from the attached name in case, repeats a name, or
+re-inlines an attached path through `files` — all as feedback for the existing one-retry
+loop rather than a hard failure on the first attempt. `_bounded_task_summary` echoes
+declared names so expansion context shows which documents existing tasks already use.
+
+Upstream has no equivalent: it handles binary evaluation through separate envs with their
+own `data_root` (`spreadsheetbench`, `officeqa`, `docvqa`) rather than through the skilleval
+task schema, so there is nothing to converge with here.
