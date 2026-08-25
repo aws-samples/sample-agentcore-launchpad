@@ -476,6 +476,14 @@ def submit_taskgen_job(
         raise
 
     row.skill_source = resolved_source
+    if manifest:
+        # Recorded in params (already echoed by job_out) rather than read from disk
+        # per row: the panel can then show what a RUNNING or failed job was given,
+        # while gen_summary only exists once generation succeeded.
+        row.params = {
+            **(row.params or {}),
+            "attachment_names": [row_["name"] for row_ in manifest],
+        }
     db.commit()
     if log_lines:
         (directory / "log.txt").write_text("\n".join(log_lines) + "\n", encoding="utf-8")

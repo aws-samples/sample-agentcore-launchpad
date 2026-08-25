@@ -144,7 +144,8 @@ path before Runtime transport. The worker image pins openpyxl 3.1.5, Pillow 11.3
 `generate_tasks.py` gained `--attachments <manifest.json>` + `--attachment-assets <dir>`
 (the manifest names documents; the directory holds their bytes keyed by sha256, both inside
 the platform's immutable job snapshot). The manifest is decoded strictly before any model
-call — name safety, digest shape, byte presence and size are all checked — then each
+call — JSON shape, non-empty array, name safety, case-insensitive duplicate names,
+digest shape, size shape, byte presence and byte size are all checked — then each
 document is copied to `data/<name>` in the generation work dir, which is the only channel
 to a worker: `agentcore_runner.run_remote_exec` explicitly refuses `images`/`data_dirs`
 because they reference host paths outside `work_dir`.

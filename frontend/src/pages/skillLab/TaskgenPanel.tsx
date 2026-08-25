@@ -95,11 +95,14 @@ export function TaskgenPanel({
   const [importName, setImportName] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
 
-  // What the finished run was given vs what its tasks actually asked for. The
-  // summary echo is the job's own record, so this stays right for an old job.
-  const attachedNames = Array.isArray(results?.summary?.attachments)
-    ? (results.summary.attachments as unknown[]).map(String)
-    : [];
+  // What the run was given vs what its tasks actually asked for. `params` is
+  // recorded at submission so this works while a job is still running; the
+  // gen_summary echo is the fallback for jobs submitted before that was stored.
+  const attachedNames =
+    detail?.params?.attachment_names ??
+    (Array.isArray(results?.summary?.attachments)
+      ? (results.summary.attachments as unknown[]).map(String)
+      : []);
   const declaredNames = new Set(
     (results?.tasks ?? []).flatMap((task) =>
       Array.isArray(task.attachments) ? task.attachments.map(String) : [],

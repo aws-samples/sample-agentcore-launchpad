@@ -1610,6 +1610,12 @@ export interface SkillLabJobParams {
   count?: number;
   /** taskgen only: free-text steering folded into the generation prompt */
   guidance?: string;
+  /**
+   * taskgen only: names of the documents the job was submitted with, recorded at
+   * submission so the panel can show them for a running or failed job too
+   * (`gen_summary` only exists once generation succeeded).
+   */
+  attachment_names?: string[];
   /** taskgen only: present once the operator saved the reviewed output */
   imported_taskset_id?: string;
   /** taskgen expansion only: true once applied to the target task set */

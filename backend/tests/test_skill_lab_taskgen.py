@@ -580,3 +580,14 @@ def test_the_internal_snapshot_channel_is_not_reachable_from_a_request(lab):
     )
     assert response.status_code == 422, response.text
     assert response.json()["code"] == "skill_lab.asset_not_owned"
+
+
+def test_job_params_record_the_attachment_names_for_any_status(lab):
+    """The panel must be able to show what a job was given while it is still
+    running, when no gen_summary exists yet."""
+    staged = _stage(lab, ("rows.csv", CSV), ("notes.md", MD))
+    job = _submit(lab, attachments=staged).json()
+    assert job["params"]["attachment_names"] == ["rows.csv", "notes.md"]
+    listed = lab.get("/api/skill-lab/jobs?type=taskgen").json()[0]
+    assert listed["params"]["attachment_names"] == ["rows.csv", "notes.md"]
+    assert "attachment_names" not in _submit(lab).json()["params"]
