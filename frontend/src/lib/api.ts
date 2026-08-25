@@ -1534,6 +1534,12 @@ export interface SkillLabTask {
   question: string;
   rubric: string;
   task_type?: string;
+  /**
+   * taskgen only, and only until import: names of the attached documents this
+   * task needs. The backend replaces it with `files` asset descriptors when the
+   * reviewed output is saved, so a stored task never carries it.
+   */
+  attachments?: string[];
   [key: string]: unknown;
 }
 
@@ -1658,6 +1664,12 @@ export interface SkillLabJobBody {
   split?: string;
   /** taskgen expansion only: the split the generated tasks will extend */
   target_split?: string;
+  /**
+   * taskgen only: staged task-asset tokens the generation agent authors
+   * against. The agent reads them at `data/<name>` and names the ones a task
+   * needs; the backend turns those names into asset descriptors on import.
+   */
+  attachments?: { staged_asset: string }[];
   params?: Partial<SkillLabJobParams>;
 }
 

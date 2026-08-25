@@ -1128,7 +1128,8 @@
         "created": "Created",
         "id": "ID",
         "question": "Question",
-        "rubric": "Rubric"
+        "rubric": "Rubric",
+        "attachments": "documents"
       },
       "wizard": {
         "title": "Generate tasks",
@@ -1142,7 +1143,8 @@
         "timeout": "Timeout (s)",
         "guidance": "Guidance (optional)",
         "expand": "Expand an existing task set",
-        "targetSplit": "Target split"
+        "targetSplit": "Target split",
+        "attachments": "Input documents"
       },
       "hint": {
         "skills": "Click to toggle. Multiple skills produce one unified task set with per-skill coverage.",
@@ -1169,7 +1171,14 @@
         "import": "Import as task set",
         "apply": "Append to split {{split}}",
         "imported": "Imported as task set",
-        "applied": "Applied to \"{{name}}\"."
+        "applied": "Applied to \"{{name}}\".",
+        "unusedAttachments": "No generated task used: {{names}}. Those uploads will not be attached to the saved task set."
+      },
+      "attach": {
+        "pick": "Choose files…",
+        "uploading": "Uploading…",
+        "remove": "Remove",
+        "hint": "The agent reads these and writes questions about them; tasks that use one carry it as an input file."
       }
     },
     "unprovisioned": {

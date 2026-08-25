@@ -1128,7 +1128,8 @@
         "created": "创建时间",
         "id": "ID",
         "question": "问题",
-        "rubric": "评分标准"
+        "rubric": "评分标准",
+        "attachments": "文档"
       },
       "wizard": {
         "title": "生成任务",
@@ -1142,7 +1143,8 @@
         "timeout": "超时（秒）",
         "guidance": "生成指引（可选）",
         "expand": "扩充已有任务集",
-        "targetSplit": "目标分割"
+        "targetSplit": "目标分割",
+        "attachments": "输入文档"
       },
       "hint": {
         "skills": "点击切换选中。多技能会生成一个带覆盖度约束的统一任务集。",
@@ -1169,7 +1171,14 @@
         "import": "导入为任务集",
         "apply": "追加到 {{split}} 分割",
         "imported": "已导入为任务集",
-        "applied": "已追加到「{{name}}」。"
+        "applied": "已追加到「{{name}}」。",
+        "unusedAttachments": "没有任何生成任务用到：{{names}}。这些上传不会附加到保存后的任务集。"
+      },
+      "attach": {
+        "pick": "选择文件…",
+        "uploading": "正在上传…",
+        "remove": "移除",
+        "hint": "生成 agent 会阅读这些文档并据此出题；用到某个文档的任务会把它作为输入文件带上。"
       }
     },
     "unprovisioned": {

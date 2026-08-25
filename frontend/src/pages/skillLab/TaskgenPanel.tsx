@@ -1,10 +1,11 @@
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Btn, Chip, Panel } from "../../components";
 import type { ChipTone } from "../../components";
 import type {
+  SkillLabAssetDescriptor,
   SkillLabJobInfo,
   SkillLabStatus,
   SkillLabTargetBackend,
@@ -36,6 +37,10 @@ const excerpt = (text: unknown, max = 110) => {
   const value = typeof text === "string" ? text : "";
   return value.length > max ? `${value.slice(0, max)}…` : value;
 };
+
+/** Mirrors runner.TASKGEN_ATTACHMENT_DIR: where the agent (and later the
+ *  evaluated agent) sees an attached document. */
+const runtimeAttachmentDir = "data";
 
 function modelDefault(status: SkillLabStatus | null, backend: SkillLabTargetBackend): string {
   if (status === null) return "";
@@ -76,6 +81,11 @@ export function TaskgenPanel({
   const [timeout, setTimeoutSeconds] = useState(900);
   const [expandId, setExpandId] = useState("");
   const [targetSplit, setTargetSplit] = useState("tasks");
+  // Input documents the generation agent authors against. Staged through the
+  // shared task-asset endpoint, so these rows are already verified descriptors.
+  const [attachments, setAttachments] = useState<SkillLabAssetDescriptor[]>([]);
+  const [attachBusy, setAttachBusy] = useState(false);
+  const attachInput = useRef<HTMLInputElement>(null);
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -84,6 +94,18 @@ export function TaskgenPanel({
   const [results, setResults] = useState<SkillLabTaskgenResults | null>(null);
   const [importName, setImportName] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // What the finished run was given vs what its tasks actually asked for. The
+  // summary echo is the job's own record, so this stays right for an old job.
+  const attachedNames = Array.isArray(results?.summary?.attachments)
+    ? (results.summary.attachments as unknown[]).map(String)
+    : [];
+  const declaredNames = new Set(
+    (results?.tasks ?? []).flatMap((task) =>
+      Array.isArray(task.attachments) ? task.attachments.map(String) : [],
+    ),
+  );
+  const unusedAttachments = attachedNames.filter((name) => !declaredNames.has(name));
 
   const creating = genParam === "new";
   const jobId = creating ? null : genParam;
@@ -181,6 +203,13 @@ export function TaskgenPanel({
             ? { kind: "registry", record_id: recordIds[0] }
             : { kind: "registry", record_ids: recordIds },
         ...(expandId ? { taskset_id: expandId, target_split: targetSplit } : {}),
+        ...(attachments.length
+          ? {
+              attachments: attachments.map((asset) => ({
+                staged_asset: String(asset.staged_asset),
+              })),
+            }
+          : {}),
         params: {
           target_backend: backend,
           model: model.trim(),
@@ -195,6 +224,20 @@ export function TaskgenPanel({
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const uploadAttachments = async (files: File[]) => {
+    if (!files.length) return;
+    setError(null);
+    setAttachBusy(true);
+    try {
+      const response = await api.skillLabTaskAssetsUpload(files);
+      setAttachments((prev) => [...prev, ...response.assets]);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setAttachBusy(false);
     }
   };
 
@@ -375,6 +418,66 @@ export function TaskgenPanel({
         />
       </div>
 
+      <div className="field">
+        <label>{t("skillLab.taskgen.field.attachments")}</label>
+        <div>
+          <Btn
+            disabled={attachBusy}
+            data-testid="taskgen-attach-btn"
+            onClick={() => attachInput.current?.click()}
+          >
+            {attachBusy
+              ? t("skillLab.taskgen.attach.uploading")
+              : t("skillLab.taskgen.attach.pick")}
+          </Btn>
+          <span className="mono dim" style={{ fontSize: 10, marginLeft: 10 }}>
+            {t("skillLab.taskgen.attach.hint")}
+          </span>
+        </div>
+        <input
+          ref={attachInput}
+          type="file"
+          multiple
+          accept=".xlsx,.pdf,.png,.jpg,.jpeg,.webp,.md,.txt,.csv"
+          style={{ display: "none" }}
+          disabled={attachBusy}
+          data-testid="taskgen-attach-input"
+          onChange={(event) => {
+            const picked = Array.from(event.target.files ?? []);
+            event.target.value = "";
+            void uploadAttachments(picked);
+          }}
+        />
+        {attachments.map((asset) => (
+          <div
+            key={String(asset.staged_asset)}
+            data-testid={`taskgen-attachment-${asset.name}`}
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 8,
+              marginTop: 6,
+            }}
+          >
+            <span className="mono dim" style={{ fontSize: 10.5 }}>
+              {`${runtimeAttachmentDir}/${asset.name}`} · {asset.media_type} ·{" "}
+              {asset.size.toLocaleString()} B
+            </span>
+            <Btn
+              data-testid={`taskgen-attachment-remove-${asset.name}`}
+              onClick={() =>
+                setAttachments((prev) =>
+                  prev.filter((row) => row.staged_asset !== asset.staged_asset),
+                )
+              }
+            >
+              {t("skillLab.taskgen.attach.remove")}
+            </Btn>
+          </div>
+        ))}
+      </div>
+
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <div className="field" style={{ flex: 1, minWidth: 240 }}>
           <label>{t("skillLab.taskgen.field.expand")}</label>
@@ -507,6 +610,9 @@ export function TaskgenPanel({
                   <th>{t("skillLab.taskgen.col.id")}</th>
                   <th>{t("skillLab.taskgen.col.question")}</th>
                   <th>{t("skillLab.taskgen.col.rubric")}</th>
+                  {attachedNames.length > 0 && (
+                    <th>{t("skillLab.taskgen.col.attachments")}</th>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -517,11 +623,37 @@ export function TaskgenPanel({
                     <td className="dim" style={{ fontSize: 10.5 }}>
                       {excerpt(task.rubric)}
                     </td>
+                    {attachedNames.length > 0 && (
+                      <td
+                        className="mono dim"
+                        style={{ fontSize: 10 }}
+                        data-testid={`taskgen-task-attachments-${String(task.id ?? "")}`}
+                      >
+                        {Array.isArray(task.attachments) && task.attachments.length
+                          ? task.attachments.map(String).join(" · ")
+                          : "—"}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+
+          {unusedAttachments.length > 0 && (
+            <div
+              className="note"
+              style={{ marginTop: 10 }}
+              data-testid="taskgen-unused-attachments"
+            >
+              <span className="i">[i]</span>
+              <span>
+                {t("skillLab.taskgen.review.unusedAttachments", {
+                  names: unusedAttachments.join(", "),
+                })}
+              </span>
+            </div>
+          )}
 
           {imported || expanded ? (
             <div className="note" style={{ marginTop: 10 }} data-testid="taskgen-imported">
