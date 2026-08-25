@@ -78,11 +78,11 @@ def _exec_job_inputs(bucket: str, region: str, since: float) -> dict[str, bytes]
     """
     s3 = boto3.client("s3", region_name=region)
     newest: tuple[float, str] | None = None
-    token: str | None = None
+    cursor: str | None = None
     while True:
         kwargs = {"Bucket": bucket, "Prefix": "skill-lab/exec-jobs/"}
-        if token:
-            kwargs["ContinuationToken"] = token
+        if cursor:
+            kwargs["ContinuationToken"] = cursor
         page = s3.list_objects_v2(**kwargs)
         for item in page.get("Contents", []):
             if not str(item["Key"]).endswith("/in.tar.gz"):
@@ -92,7 +92,7 @@ def _exec_job_inputs(bucket: str, region: str, since: float) -> dict[str, bytes]
                 newest = (stamp, str(item["Key"]))
         if not page.get("IsTruncated"):
             break
-        token = page.get("NextContinuationToken")
+        cursor = page.get("NextContinuationToken")
     if newest is None:
         raise SystemExit("no exec-job in.tar.gz written during this run")
     raw = s3.get_object(Bucket=bucket, Key=newest[1])["Body"].read()
@@ -128,7 +128,7 @@ def main() -> int:
         files=[("files", ("regions.xlsx", workbook, "application/octet-stream"))],
     )
     staged.raise_for_status()
-    token = staged.json()["assets"][0]["staged_asset"]
+    staged_asset = staged.json()["assets"][0]["staged_asset"]
 
     started = time.time()
     job_id = None
@@ -139,7 +139,7 @@ def main() -> int:
             json={
                 "type": "taskgen",
                 "skill_source": {"kind": "registry", "record_id": args.record_id},
-                "attachments": [{"staged_asset": token}],
+                "attachments": [{"staged_asset": staged_asset}],
                 "params": {"count": args.count},
             },
         )
