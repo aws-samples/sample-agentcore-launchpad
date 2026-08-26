@@ -80,19 +80,13 @@ def test_a_genuinely_declared_judge_mode_still_reads_as_explicit(tmp_path):
     assert declared[0]["_judge_mode_explicit"] is True
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="slice 4 of 08-26-skill-lab-judge-route-readiness: jobs.strip_derived_task_fields "
-    "does not exist yet. strict=True so this flips to a hard failure the moment the fix "
-    "lands and the marker is forgotten.",
-)
 @pytest.mark.parametrize("derived_field", ("judge_mode", "_judge_mode_explicit"))
 def test_taskgen_import_does_not_persist_a_derived_judge_mode(tmp_path, derived_field):
     """What the platform stores must look like an authored document.
 
-    Expected to fail until slice 4: `import_taskgen_taskset` saves the loader's
-    normalized items verbatim, so a mode nobody chose is stored and comes back
-    explicit.
+    The regression this whole task came from: saving the loader's normalized items
+    verbatim stored a mode nobody chose, which came back explicit and outranked the
+    run-level `chat`.
     """
     generated = _load_tasks(tmp_path, [RAW_TASK], "generated.json")
     assert derived_field in generated[0], "probe assumption changed"
@@ -349,3 +343,40 @@ def test_a_healthy_run_carries_no_prerequisite_noise(tmp_path, monkeypatch):
     assert result["rows"][0]["judge_prerequisite"] is None
     assert result["summary"]["judge_prerequisite_missing"] == []
     assert result["summary"]["passed"] == 1
+
+
+def test_a_generator_declared_judge_mode_is_kept_and_still_wins(tmp_path):
+    """Stripping must not silence a task that really did choose a mode."""
+    declared = _load_tasks(tmp_path, [dict(RAW_TASK, judge_mode="agentic")], "declared2.json")
+    stored = jobs.strip_derived_task_fields(declared)
+    assert stored[0]["judge_mode"] == "agentic"
+    assert "_judge_mode_explicit" not in stored[0]
+    # Re-read: presence of the field is exactly how an authored mode reads explicit.
+    reloaded = _load_tasks(tmp_path, stored, "declared2_stored.json")
+    assert reloaded[0]["judge_mode"] == "agentic"
+    assert reloaded[0]["_judge_mode_explicit"] is True
+
+
+def test_private_loader_fields_do_not_reach_storage(tmp_path):
+    generated = _load_tasks(tmp_path, [RAW_TASK], "private.json")
+    assert any(key.startswith("_") for key in generated[0]), "probe assumption changed"
+    stored = jobs.strip_derived_task_fields(generated)
+    assert not [key for key in stored[0] if key.startswith("_")]
+    # Public loader defaults are deliberately left in place: they carry no
+    # promotion, and dropping them would change what the UI shows.
+    assert stored[0]["task_type"] == generated[0]["task_type"]
+
+
+def test_an_already_saved_set_carrying_the_derived_fields_still_loads(tmp_path):
+    """Existing taskgen-produced task sets keep working — the fix is not a migration."""
+    legacy = _load_tasks(tmp_path, [RAW_TASK], "legacy.json")
+    reloaded = _load_tasks(tmp_path, legacy, "legacy_stored.json")
+    assert reloaded[0]["id"] == RAW_TASK["id"]
+    assert reloaded[0]["judge_mode"] == "auto"
+    # Still promoted — that is why such a set keeps escalating until it is re-imported.
+    assert reloaded[0]["_judge_mode_explicit"] is True
+
+
+def test_non_dict_items_pass_through_untouched():
+    """The vendored validator owns row-shape errors; stripping must not mask them."""
+    assert jobs.strip_derived_task_fields(["nonsense", 3, None]) == ["nonsense", 3, None]

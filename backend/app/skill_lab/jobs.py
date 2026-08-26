@@ -499,6 +499,39 @@ def submit_taskgen_job(
     return _enqueue(db, row, command)
 
 
+def strip_derived_task_fields(tasks: list[Any]) -> list[Any]:
+    """Return generated tasks as an AUTHORED document, not a normalized one.
+
+    `load_tasks` decorates every item with derived state — a `judge_mode` default,
+    private `_`-prefixed bookkeeping — and taskgen output has been through it. Saving
+    that verbatim is what broke a live prod run: the loader recomputes
+    `_judge_mode_explicit` from the mere presence of `judge_mode`, so a default
+    nobody chose came back as an explicit per-task choice and outranked the
+    run-level `chat`, escalating artifact tasks to the agentic judge.
+
+    So: private fields always go, and `judge_mode` goes unless the generator really
+    declared it. A declared one is kept and will correctly re-read as explicit.
+
+    Public loader defaults (`task_type`, `artifact_checks`, `files`) are left alone
+    — they carry no such promotion, and dropping them would change what the review
+    table and the task editor display.
+    """
+    stripped: list[Any] = []
+    for task in tasks:
+        if not isinstance(task, dict):
+            stripped.append(task)
+            continue
+        explicit = bool(task.get("_judge_mode_explicit"))
+        stripped.append(
+            {
+                key: value
+                for key, value in task.items()
+                if not key.startswith("_") and (key != "judge_mode" or explicit)
+            }
+        )
+    return stripped
+
+
 def _bind_taskgen_attachments(
     job_id: str, tasks: list[Any]
 ) -> tuple[list[Any], dict[str, Path]]:
@@ -608,7 +641,9 @@ def import_taskgen_taskset(
             f"job {job_id} has no generated_tasks.json on disk",
             status_code=409,
         )
-    tasks, extra_sources = _bind_taskgen_attachments(row.id, results["tasks"])
+    tasks, extra_sources = _bind_taskgen_attachments(
+        row.id, strip_derived_task_fields(results["tasks"])
+    )
     info = taskset_svc.create_taskset(
         db,
         workspace_id,
@@ -670,7 +705,9 @@ def apply_taskgen_expansion(db: Session, workspace_id: str, job_id: str) -> dict
             + ", ".join(collisions),
             status_code=409,
         )
-    tasks, extra_sources = _bind_taskgen_attachments(row.id, results["tasks"])
+    tasks, extra_sources = _bind_taskgen_attachments(
+        row.id, strip_derived_task_fields(results["tasks"])
+    )
     target = row.split
     merged[target] = list(merged.get(target, [])) + tasks
     info = taskset_svc.update_taskset(

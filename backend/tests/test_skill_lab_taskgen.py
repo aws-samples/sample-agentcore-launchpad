@@ -591,3 +591,25 @@ def test_job_params_record_the_attachment_names_for_any_status(lab):
     listed = lab.get("/api/skill-lab/jobs?type=taskgen").json()[0]
     assert listed["params"]["attachment_names"] == ["rows.csv", "notes.md"]
     assert "attachment_names" not in _submit(lab).json()["params"]
+
+
+def test_imported_taskgen_set_defers_to_the_run_level_judge_mode(declaring_lab):
+    """End to end: the stored document must not carry a mode nobody chose.
+
+    A live prod eval submitted as `chat` escalated to the agentic judge because the
+    imported set carried a derived `judge_mode: auto` that re-read as explicit.
+    """
+    staged = _stage(declaring_lab, ("rows.csv", CSV))
+    job = _submit(declaring_lab, attachments=staged, params={"count": 1}).json()
+    assert _wait(declaring_lab, job["id"])["status"] == "succeeded"
+    imported = declaring_lab.post(
+        f"/api/skill-lab/jobs/{job['id']}/import-taskset", json={"name": "no-derived-mode"}
+    )
+    assert imported.status_code == 201, imported.text
+    task = declaring_lab.get(
+        f"/api/skill-lab/tasksets/{imported.json()['taskset']['id']}?full=true"
+    ).json()["tasks_by_split"]["tasks"][0]
+    assert "judge_mode" not in task
+    assert not [key for key in task if key.startswith("_")]
+    # The attachment binding still happened.
+    assert "data/rows.csv" in task["files"]
