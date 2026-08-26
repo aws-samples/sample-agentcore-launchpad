@@ -267,12 +267,31 @@ def judge_exec_route(judge_model: str) -> tuple[str, str]:
     return "claude_code_exec", judge_model
 
 
+# The host binary each judge exec backend shells out to. Kept beside
+# judge_exec_route because it is the same routing knowledge: readiness has to
+# probe the CLI a run would actually use, not a fixed one.
+JUDGE_CLI_BINARY = {"claude_code_exec": "claude", "codex_exec": "codex"}
+
+
+def judge_cli_binary(judge_model: str) -> str:
+    """Host binary the agentic judge needs for `judge_model`'s route."""
+    backend, _ = judge_exec_route(judge_model)
+    return JUDGE_CLI_BINARY[backend]
+
+
 def _judge_exec_flags(params: dict[str, Any]) -> list[str]:
     """Agentic-judge CLI flags (eval path). `judge_model` feeds
     --optimizer_model (chat verdicts, Bedrock Converse via the instance role)
-    AND — routed by family — the host-side judge agent's exec CLI."""
-    if params["judge_mode"] == "chat":
-        return []
+    AND — routed by family — the host-side judge agent's exec CLI.
+
+    Passed for EVERY mode, `chat` included. Whether the agentic judge runs is
+    decided by `--judge_mode` alone (vendored `evaluator.should_use_agentic`
+    keys on the config's mode, never on flag presence), but a task can still
+    escalate under a chat run — an explicit per-task `judge_mode` outranks the
+    run-level one. Omitting the flags there left that escalation on the vendored
+    default backend (`claude_code_exec`) regardless of the judge model's family,
+    which is how an openai-family judge reached the claude CLI on the prod host
+    and died with FileNotFoundError."""
     backend, model = judge_exec_route(str(params["judge_model"]))
     return [
         "--judge_exec_backend", backend,
@@ -320,9 +339,10 @@ def ensure_judge_codex_home() -> Path:
 
 
 def _train_judge_env(params: dict[str, Any]) -> dict[str, str]:
-    """Train-config counterpart of `_judge_exec_flags` (adapter kwarg names)."""
-    if params["judge_mode"] == "chat":
-        return {}
+    """Train-config counterpart of `_judge_exec_flags` (adapter kwarg names).
+
+    Same reasoning: emitted for every mode so an escalation cannot land on a CLI
+    that does not match the judge model's family."""
     backend, model = judge_exec_route(str(params["judge_model"]))
     return {
         "judge_backend": backend,

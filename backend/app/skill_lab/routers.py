@@ -60,13 +60,23 @@ def skill_lab_status(ws: WorkspaceScope = Depends(require_workspace)) -> dict[st
         "default_codex_target_model": settings.skill_lab_codex_target_model_id,
         "target_backends": list(runner.TARGET_BACKENDS),
         "judge_modes": list(runner.JUDGE_MODES),
-        # Host-side agentic judge readiness: the sandbox launcher binary must
-        # exist here (parsers run under it). When false, auto/agentic runs
-        # still work for text-only tasks; artifact tasks fail closed.
+        # The SHARED agentic-judge prerequisite only: the sandbox launcher binary
+        # must exist here (parsers run under it). It is deliberately not the whole
+        # answer — the judge also shells out to the CLI its route resolves to, so
+        # a host with bwrap but no judge CLI still fails every artifact task. That
+        # is what the two per-CLI probes below are for.
         "agentic_judge_ready": _sandbox_launcher_present(settings),
-        # An openai-family judge model routes the agentic judge to the host
-        # codex CLI (runner.judge_exec_route) — warn the wizard when absent.
+        # Per-CLI probes, so a client can answer readiness for the judge model the
+        # operator actually selected (runner.judge_exec_route decides which one).
         "judge_codex_ready": _which("codex"),
+        "judge_claude_ready": _which("claude"),
+        # Readiness for the CONFIGURED DEFAULT judge model, for a caller that does
+        # not want to reimplement the routing rule — e.g. a bare curl against a
+        # host. The wizards use the two probes above because they know the
+        # selected model.
+        "judge_cli_ready": _which(
+            runner.judge_cli_binary(settings.skill_lab_judge_model_id)
+        ),
     }
 
 

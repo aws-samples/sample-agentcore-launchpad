@@ -42,6 +42,14 @@ _ROW_FIELDS = (
     "judge_usage",
 )
 
+# A judge worker that cannot start reports the missing binary through a Python
+# FileNotFoundError, which otherwise reaches the operator only as a stack trace
+# on a row counted as `invalid` — the shape that turned a one-line host
+# prerequisite into a long investigation. Only a KNOWN judge CLI is reported as a
+# prerequisite: an unrelated FileNotFoundError inside the judge must keep looking
+# like the crash it is.
+_MISSING_BINARY = re.compile(r"FileNotFoundError:[^']*'([\w.\-/]+)'")
+
 _PROGRESS_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\[STEP (\d+) done\]"), "step {0} done"),
     (re.compile(r"STEP (\d+)\b"), "step {0} running"),
@@ -141,6 +149,7 @@ def eval_results(job_id: str) -> dict[str, Any] | None:
         if not isinstance(item, dict):
             continue
         row = {key: item.get(key) for key in _ROW_FIELDS}
+        row["judge_prerequisite"] = _judge_prerequisite(row)
         row["response"] = _excerpt(item.get("response"))
         row["artifacts"] = [
             {"path": a.get("path"), "size": a.get("size")}
@@ -152,11 +161,16 @@ def eval_results(job_id: str) -> dict[str, Any] | None:
     scored = [r for r in rows if r.get("score_valid") is not False]
     invalid = len(rows) - len(scored)
     passed = sum(1 for r in scored if r.get("hard"))
+    # One aggregate so the console can state the fix once instead of per row.
+    missing_clis = sorted(
+        {str(r["judge_prerequisite"]) for r in rows if r.get("judge_prerequisite")}
+    )
     return {
         "summary": {
             "tasks": len(rows),
             "passed": passed,
             "invalid": invalid,
+            "judge_prerequisite_missing": missing_clis,
             "pass_rate": round(passed / len(scored), 4) if scored else 0.0,
             "soft_mean": (
                 round(sum(float(r.get("soft") or 0.0) for r in scored) / len(scored), 4)
@@ -167,6 +181,21 @@ def eval_results(job_id: str) -> dict[str, Any] | None:
         },
         "rows": rows,
     }
+
+
+def _judge_prerequisite(row: dict[str, Any]) -> str | None:
+    """Name the host judge CLI a judge failure blames, or None.
+
+    `runner` imports this module, so the binary map is fetched locally rather
+    than at import time.
+    """
+    match = _MISSING_BINARY.search(str(row.get("judge_error") or ""))
+    if match is None:
+        return None
+    from app.skill_lab import runner
+
+    binary = match.group(1).rsplit("/", 1)[-1]
+    return binary if binary in set(runner.JUDGE_CLI_BINARY.values()) else None
 
 
 def taskgen_results(job_id: str) -> dict[str, Any] | None:

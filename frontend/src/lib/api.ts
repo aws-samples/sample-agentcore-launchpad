@@ -1497,12 +1497,21 @@ export interface SkillLabStatus {
   /** exec backends baked into the worker image */
   target_backends: SkillLabTargetBackend[];
   judge_modes: SkillLabJudgeMode[];
-  /** host-side sandbox launcher present — without it, auto/agentic runs fail
-   *  closed on binary-artifact tasks (text-only tasks still judge fine) */
+  /** host-side sandbox launcher present. The SHARED agentic-judge prerequisite
+   *  only: the judge also shells out to the CLI its route resolves to, so this
+   *  being true does not by itself mean artifact tasks can be judged. */
   agentic_judge_ready: boolean;
   /** host codex CLI present — an openai-family judge model routes the
    *  agentic judge to codex, so auto/agentic needs it for artifact tasks */
   judge_codex_ready: boolean;
+  /** host claude CLI present — every non-openai judge model routes there.
+   *  Its absence is what made prod report "ready" while every artifact task
+   *  died with FileNotFoundError. */
+  judge_claude_ready: boolean;
+  /** readiness for the CONFIGURED DEFAULT judge model's route, for callers that
+   *  do not reimplement the routing rule. The wizards use the two probes above,
+   *  since they know which model is selected. */
+  judge_cli_ready: boolean;
 }
 
 export type SkillLabTargetBackend = "claude_code_exec" | "codex_exec";
@@ -1707,7 +1716,9 @@ export interface SkillLabResultRow {
   judge_usage: Record<string, unknown> | null;
   /** Excerpted server-side. */
   response: string;
-  artifacts: { path: string | null; size: number | null }[];
+  artifacts: { path: string | null; size: number | null   /** the host judge CLI this row's failure blames, when that is the cause */
+  judge_prerequisite?: string | null;
+}[];
 }
 
 export interface SkillLabJobResults {
@@ -1718,6 +1729,9 @@ export interface SkillLabJobResults {
     pass_rate: number;
     soft_mean: number;
     duration_s: number;
+    /** host judge CLIs a judge failure named as missing — an operator-fixable
+     *  prerequisite rather than a bad task, stated once for the whole run */
+    judge_prerequisite_missing: string[];
   };
   rows: SkillLabResultRow[];
 }
