@@ -219,8 +219,15 @@ def test_judge_mode_param(lab, tmp_path):
     assert "--judge_exec_backend claude_code_exec" in text
     assert "--judge_sandbox_command bwrap" in text
 
+    # `chat` states the route too (08-26): a per-task explicit judge_mode can still
+    # escalate under a chat run, and omitting the flags left that escalation on the
+    # vendored default backend regardless of the judge model's family. The mode —
+    # not flag presence — is what decides whether the agentic judge runs; see
+    # tests/test_skill_lab_judge_routing.py.
     chat = argv(runner.clamp_params({"judge_mode": "chat"}))
-    assert "--judge_mode chat" in chat and "--judge_exec" not in chat
+    assert "--judge_mode chat" in chat
+    assert "--judge_exec_backend claude_code_exec" in chat
+    assert "--judge_sandbox_command bwrap" in chat
 
     with pytest.raises(AppError) as err:
         runner.clamp_params({"judge_mode": "vibes"})
@@ -246,8 +253,10 @@ def test_train_config_judge_keys(lab, tmp_path):
     assert auto_env["judge_model"] == runner.clamp_train_params(None)["judge_model"]
     assert auto_env["judge_sandbox_command"] == "bwrap"
 
+    # Same contract change as the eval path (08-26).
     chat_env = env_of(runner.clamp_train_params({"judge_mode": "chat"}))
-    assert chat_env["judge_mode"] == "chat" and "judge_backend" not in chat_env
+    assert chat_env["judge_mode"] == "chat"
+    assert chat_env["judge_backend"] == "claude_code_exec"
 
 
 def test_status_reports_agentic_judge_readiness(lab):
