@@ -1716,7 +1716,9 @@ export interface SkillLabResultRow {
   judge_usage: Record<string, unknown> | null;
   /** Excerpted server-side. */
   response: string;
-  artifacts: { path: string | null; size: number | null }[];
+  artifacts: { path: string | null; size: number | null   /** the host judge CLI this row's failure blames, when that is the cause */
+  judge_prerequisite?: string | null;
+}[];
 }
 
 export interface SkillLabJobResults {
@@ -1727,6 +1729,9 @@ export interface SkillLabJobResults {
     pass_rate: number;
     soft_mean: number;
     duration_s: number;
+    /** host judge CLIs a judge failure named as missing — an operator-fixable
+     *  prerequisite rather than a bad task, stated once for the whole run */
+    judge_prerequisite_missing: string[];
   };
   rows: SkillLabResultRow[];
 }

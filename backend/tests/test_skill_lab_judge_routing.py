@@ -268,3 +268,84 @@ def test_judge_cli_binary_matches_the_route():
     assert runner.judge_cli_binary("us.openai.gpt-5.6-sol") == "codex"
     assert runner.judge_cli_binary("global.anthropic.claude-opus-5") == "claude"
     assert set(runner.JUDGE_CLI_BINARY) == set(runner.TARGET_BACKENDS)
+
+
+# ── a missing judge CLI is an actionable prerequisite, not a mystery row ────
+
+
+def _write_results(tmp_path, monkeypatch, rows: list[dict]) -> dict:
+    from app.skill_lab import artifacts
+
+    monkeypatch.setattr(artifacts, "JOBS_DIR", tmp_path / "jobs")
+    out = artifacts.out_root("job_x")
+    out.mkdir(parents=True)
+    (out / "results.json").write_text(json.dumps(rows), encoding="utf-8")
+    result = artifacts.eval_results("job_x")
+    assert result is not None
+    return result
+
+
+CLI_CRASH = (
+    "judge worker exited 1: Traceback (most recent call last):\n"
+    "  File \"…/codex_harness.py\", line 1160, in _run_claude_code_judge_cli\n"
+    "FileNotFoundError: [Errno 2] No such file or directory: 'claude'"
+)
+
+
+def test_a_missing_judge_cli_is_named_on_the_row_and_summarised_once(tmp_path, monkeypatch):
+    """The prod shape: two invalid rows whose only cause was a stack trace."""
+    result = _write_results(
+        tmp_path,
+        monkeypatch,
+        [
+            {"id": "t1", "score_valid": False, "hard": 0, "judge_status": "evaluation_error",
+             "judge_error": CLI_CRASH},
+            {"id": "t2", "score_valid": False, "hard": 0, "judge_status": "evaluation_error",
+             "judge_error": CLI_CRASH},
+        ],
+    )
+    assert [row["judge_prerequisite"] for row in result["rows"]] == ["claude", "claude"]
+    # Stated once for the run, not per row.
+    assert result["summary"]["judge_prerequisite_missing"] == ["claude"]
+    assert result["summary"]["invalid"] == 2
+
+
+def test_an_absolute_cli_path_is_reduced_to_the_binary_name(tmp_path, monkeypatch):
+    result = _write_results(
+        tmp_path,
+        monkeypatch,
+        [{"id": "t1", "score_valid": False,
+          "judge_error": "FileNotFoundError: [Errno 2] No such file or directory: "
+                         "'/usr/local/bin/codex'"}],
+    )
+    assert result["rows"][0]["judge_prerequisite"] == "codex"
+    assert result["summary"]["judge_prerequisite_missing"] == ["codex"]
+
+
+@pytest.mark.parametrize(
+    "judge_error",
+    (
+        # A file the judge itself could not find is NOT a host prerequisite.
+        "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/evidence/report.xlsx'",
+        "ValueError: judge returned no verdict",
+        "",
+        None,
+    ),
+)
+def test_an_unrelated_judge_failure_is_not_reported_as_a_prerequisite(
+    tmp_path, monkeypatch, judge_error
+):
+    result = _write_results(
+        tmp_path, monkeypatch, [{"id": "t1", "score_valid": False, "judge_error": judge_error}]
+    )
+    assert result["rows"][0]["judge_prerequisite"] is None
+    assert result["summary"]["judge_prerequisite_missing"] == []
+
+
+def test_a_healthy_run_carries_no_prerequisite_noise(tmp_path, monkeypatch):
+    result = _write_results(
+        tmp_path, monkeypatch, [{"id": "t1", "score_valid": True, "hard": 1, "soft": 1.0}]
+    )
+    assert result["rows"][0]["judge_prerequisite"] is None
+    assert result["summary"]["judge_prerequisite_missing"] == []
+    assert result["summary"]["passed"] == 1

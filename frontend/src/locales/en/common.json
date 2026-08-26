@@ -1204,6 +1204,7 @@
       "noTasks": "The results file carries no tasks.",
       "noDetail": "No judge output was recorded for this task.",
       "invalidNote": "{{count}} task(s) failed on infrastructure (rollout or judge error) and are excluded from the pass rate — they are not scored as failures.",
+      "judgePrerequisiteNote": "The host is missing the judge CLI ({{clis}}), so those tasks could not be judged — install it on the machine running the backend and re-run. This is a host prerequisite, not a task failure.",
       "status": {
         "queued": "QUEUED",
         "running": "RUNNING",

@@ -382,6 +382,9 @@ def test_lifecycle_success_with_results_and_log(lab):
     assert results["summary"] == {
         "tasks": 2, "passed": 2, "invalid": 0, "pass_rate": 1.0,
         "soft_mean": 1.0, "duration_s": 0.2,
+        # empty on a healthy run; populated only when a judge failure names a
+        # missing host CLI (08-26)
+        "judge_prerequisite_missing": [],
     }
     assert [r["id"] for r in results["rows"]] == ["task_001", "task_002"]
 

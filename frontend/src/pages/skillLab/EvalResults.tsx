@@ -82,6 +82,25 @@ export function EvalResults({ results }: { results: SkillLabJobResults }) {
         </div>
       )}
 
+      {/* A missing host judge CLI is the operator's to fix, so name it instead of
+          leaving them to read a stack trace on an invalid row. */}
+      {(summary.judge_prerequisite_missing?.length ?? 0) > 0 && (
+        <div
+          className="note"
+          style={{ borderColor: "var(--crit)", marginBottom: 10 }}
+          data-testid="eval-judge-prerequisite-note"
+        >
+          <span className="i" style={{ color: "var(--crit)" }}>
+            [✕]
+          </span>
+          <span>
+            {t("skillLab.eval.judgePrerequisiteNote", {
+              clis: summary.judge_prerequisite_missing.join(", "),
+            })}
+          </span>
+        </div>
+      )}
+
       <table data-testid="eval-results-table">
         <thead>
           <tr>
