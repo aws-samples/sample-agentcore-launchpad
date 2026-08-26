@@ -65,11 +65,16 @@ export function BackendModelFields({
   const judgeModes: SkillLabJudgeMode[] = status?.judge_modes?.length
     ? status.judge_modes
     : ["auto", "chat", "agentic"];
-  // Without the host sandbox launcher — or, for an openai-family judge model,
-  // without the host codex CLI the agentic judge routes to — auto/agentic
-  // still run, but binary-artifact tasks fail closed. Warn, don't hide.
-  const codexJudgeMissing = isOpenAiJudge(judgeModel) && status?.judge_codex_ready === false;
-  const agenticReady = status?.agentic_judge_ready !== false && !codexJudgeMissing;
+  // Two independent host prerequisites, and BOTH have to hold: the sandbox
+  // launcher (shared) and the CLI this judge model's route resolves to. Probing
+  // only the codex side is what let prod look ready with no claude CLI at all.
+  // auto/agentic still run when one is missing, but artifact tasks fail closed —
+  // warn, don't hide.
+  const judgeRoutesToCodex = isOpenAiJudge(judgeModel);
+  const codexJudgeMissing = judgeRoutesToCodex && status?.judge_codex_ready === false;
+  const claudeJudgeMissing = !judgeRoutesToCodex && status?.judge_claude_ready === false;
+  const agenticReady =
+    status?.agentic_judge_ready !== false && !codexJudgeMissing && !claudeJudgeMissing;
 
   const applyBackend = (next: SkillLabTargetBackend) => {
     if (next === backend) return;
@@ -156,7 +161,9 @@ export function BackendModelFields({
               ? t(
                   codexJudgeMissing
                     ? "skillLab.backend.judgeCodexUnready"
-                    : "skillLab.backend.judgeModeUnready",
+                    : claudeJudgeMissing
+                      ? "skillLab.backend.judgeClaudeUnready"
+                      : "skillLab.backend.judgeModeUnready",
                 )
               : t(`skillLab.backend.judgeModeHint.${judgeMode}`)}
           </span>

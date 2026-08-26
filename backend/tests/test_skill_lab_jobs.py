@@ -262,8 +262,9 @@ def test_train_config_judge_keys(lab, tmp_path):
 def test_status_reports_agentic_judge_readiness(lab):
     body = lab.get("/api/skill-lab/status").json()
     assert body["judge_modes"] == ["auto", "chat", "agentic"]
-    assert isinstance(body["agentic_judge_ready"], bool)
-    assert isinstance(body["judge_codex_ready"], bool)
+    for key in ("agentic_judge_ready", "judge_codex_ready", "judge_claude_ready",
+                "judge_cli_ready"):
+        assert isinstance(body[key], bool), key
 
 
 def test_judge_codex_home_seed(lab, tmp_path, monkeypatch):

@@ -267,6 +267,18 @@ def judge_exec_route(judge_model: str) -> tuple[str, str]:
     return "claude_code_exec", judge_model
 
 
+# The host binary each judge exec backend shells out to. Kept beside
+# judge_exec_route because it is the same routing knowledge: readiness has to
+# probe the CLI a run would actually use, not a fixed one.
+JUDGE_CLI_BINARY = {"claude_code_exec": "claude", "codex_exec": "codex"}
+
+
+def judge_cli_binary(judge_model: str) -> str:
+    """Host binary the agentic judge needs for `judge_model`'s route."""
+    backend, _ = judge_exec_route(judge_model)
+    return JUDGE_CLI_BINARY[backend]
+
+
 def _judge_exec_flags(params: dict[str, Any]) -> list[str]:
     """Agentic-judge CLI flags (eval path). `judge_model` feeds
     --optimizer_model (chat verdicts, Bedrock Converse via the instance role)

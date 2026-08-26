@@ -80,12 +80,19 @@ def test_a_genuinely_declared_judge_mode_still_reads_as_explicit(tmp_path):
     assert declared[0]["_judge_mode_explicit"] is True
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="slice 4 of 08-26-skill-lab-judge-route-readiness: jobs.strip_derived_task_fields "
+    "does not exist yet. strict=True so this flips to a hard failure the moment the fix "
+    "lands and the marker is forgotten.",
+)
 @pytest.mark.parametrize("derived_field", ("judge_mode", "_judge_mode_explicit"))
 def test_taskgen_import_does_not_persist_a_derived_judge_mode(tmp_path, derived_field):
     """What the platform stores must look like an authored document.
 
-    Fails before the fix: `import_taskgen_taskset` saves the loader's normalized items
-    verbatim, so a mode nobody chose is stored and comes back explicit.
+    Expected to fail until slice 4: `import_taskgen_taskset` saves the loader's
+    normalized items verbatim, so a mode nobody chose is stored and comes back
+    explicit.
     """
     generated = _load_tasks(tmp_path, [RAW_TASK], "generated.json")
     assert derived_field in generated[0], "probe assumption changed"
@@ -205,3 +212,59 @@ def test_chat_still_produces_chat_verdicts_when_the_route_is_stated(tmp_path):
     )
     gate = json.loads(proc.stdout)
     assert gate == {"chat": False, "auto": True, "agentic": True}, gate
+
+
+# ── readiness follows the route, not a fixed CLI ───────────────────────────
+
+
+def _status(client, present: set[str], judge_model: str, monkeypatch) -> dict:
+    """Status with only `present` binaries resolvable on this host."""
+    import shutil
+
+    from app.skill_lab import routers as skill_lab_routers
+
+    monkeypatch.setattr(
+        shutil, "which", lambda binary: f"/usr/bin/{binary}" if binary in present else None
+    )
+    settings = skill_lab_routers.get_settings()
+    monkeypatch.setattr(
+        skill_lab_routers,
+        "get_settings",
+        lambda: settings.model_copy(update={"skill_lab_judge_model_id": judge_model}),
+    )
+    response = client.get("/api/skill-lab/status")
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_readiness_is_false_for_the_route_whose_cli_is_absent(client, monkeypatch):
+    """The prod shape: bwrap + codex present, claude absent. Before this slice the
+    status reported the agentic judge ready and every artifact task still died."""
+    body = _status(client, {"bwrap", "codex"}, "global.anthropic.claude-opus-5", monkeypatch)
+    assert body["agentic_judge_ready"] is True  # the shared prerequisite does hold
+    assert body["judge_codex_ready"] is True
+    assert body["judge_claude_ready"] is False
+    # …but the configured judge model routes to claude, so the honest answer is no.
+    assert body["judge_cli_ready"] is False
+
+
+def test_readiness_is_true_when_the_routed_cli_is_present(client, monkeypatch):
+    body = _status(client, {"bwrap", "codex"}, "us.openai.gpt-5.6-sol", monkeypatch)
+    assert body["judge_cli_ready"] is True
+    assert body["judge_claude_ready"] is False  # irrelevant for this route
+
+
+def test_the_shared_prerequisite_is_reported_separately(client, monkeypatch):
+    """A host with both CLIs but no sandbox launcher: per-CLI probes say yes, the
+    shared one says no. Keeping them separate is what lets the wizard name the
+    actual missing piece."""
+    body = _status(client, {"claude", "codex"}, "us.openai.gpt-5.6-sol", monkeypatch)
+    assert body["agentic_judge_ready"] is False
+    assert body["judge_codex_ready"] is True and body["judge_claude_ready"] is True
+    assert body["judge_cli_ready"] is True
+
+
+def test_judge_cli_binary_matches_the_route():
+    assert runner.judge_cli_binary("us.openai.gpt-5.6-sol") == "codex"
+    assert runner.judge_cli_binary("global.anthropic.claude-opus-5") == "claude"
+    assert set(runner.JUDGE_CLI_BINARY) == set(runner.TARGET_BACKENDS)

@@ -1109,7 +1109,8 @@
         "agentic": "A judge agent inspects artifacts via a networkless sandboxed MCP server on the host."
       },
       "judgeModeUnready": "Sandbox launcher (bwrap) not found on the host — binary-artifact tasks will fail closed.",
-      "judgeCodexUnready": "Host codex CLI not found — an openai-family judge model needs it for agentic verdicts; binary-artifact tasks will fail closed."
+      "judgeCodexUnready": "Host codex CLI not found — an openai-family judge model needs it for agentic verdicts; binary-artifact tasks will fail closed.",
+      "judgeClaudeUnready": "Host claude CLI not found — a non-openai judge model needs it for agentic verdicts; binary-artifact tasks will fail closed."
     },
     "taskgen": {
       "open": "AI Generate",
