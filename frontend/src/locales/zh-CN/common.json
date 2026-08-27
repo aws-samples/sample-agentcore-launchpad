@@ -1767,7 +1767,7 @@
     },
     "scores": {
       "title": "评估器得分",
-      "note": "支持 13 个内置评估器 + 自定义 LLM 评审。",
+      "note": "支持 19 个内置评估器 + 自定义 LLM 评审。",
       "empty": "选择一个已完成的运行查看得分"
     },
     "insights": {
@@ -1962,6 +1962,7 @@
       "Correctness": "正确性",
       "Faithfulness": "忠实性",
       "ResponseRelevance": "回复相关性",
+      "ContextRelevance": "上下文相关性",
       "Conciseness": "简洁性",
       "Coherence": "连贯性",
       "InstructionFollowing": "指令遵循",

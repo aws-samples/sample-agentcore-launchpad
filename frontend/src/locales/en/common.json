@@ -1767,7 +1767,7 @@
     },
     "scores": {
       "title": "EVALUATOR SCORES",
-      "note": "13 built-in evaluators + custom LLM-judge supported.",
+      "note": "19 built-in evaluators + custom LLM-judge supported.",
       "empty": "SELECT A COMPLETED RUN TO SEE SCORES"
     },
     "insights": {
@@ -1962,6 +1962,7 @@
       "Correctness": "Correctness",
       "Faithfulness": "Faithfulness",
       "ResponseRelevance": "Response Relevance",
+      "ContextRelevance": "Context Relevance",
       "Conciseness": "Conciseness",
       "Coherence": "Coherence",
       "InstructionFollowing": "Instruction Following",

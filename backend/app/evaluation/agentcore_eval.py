@@ -21,9 +21,10 @@ BUILTIN_EVALUATORS = [
     "Builtin.Correctness",
 ]
 
-# The 15 general-purpose built-in evaluators, by evaluation level (see
-# AgentCore Evaluations docs: built-in-evaluators-overview). IDs are used as
-# `Builtin.<Name>`.
+# The 14 general AWS-managed prompt-template evaluators: 12 evaluate a trace or
+# session, and 2 evaluate ordinary tool calls. IDs are used as `Builtin.<Name>`.
+# GoalSuccessRate and Correctness ground-truth forms are modes of these IDs, not
+# separate evaluators (see AgentCore Evaluations docs: prompt-templates-builtin).
 ALL_BUILTIN_EVALUATORS: dict[str, str] = {
     # session level
     "Builtin.GoalSuccessRate": "SESSION",
@@ -32,6 +33,7 @@ ALL_BUILTIN_EVALUATORS: dict[str, str] = {
     "Builtin.Correctness": "TRACE",
     "Builtin.Faithfulness": "TRACE",
     "Builtin.ResponseRelevance": "TRACE",
+    "Builtin.ContextRelevance": "TRACE",
     "Builtin.Conciseness": "TRACE",
     "Builtin.Coherence": "TRACE",
     "Builtin.InstructionFollowing": "TRACE",
@@ -39,19 +41,19 @@ ALL_BUILTIN_EVALUATORS: dict[str, str] = {
     # trace level — safety
     "Builtin.Harmfulness": "TRACE",
     "Builtin.Stereotyping": "TRACE",
-    # tool-call level
+    # ordinary tool-call level
     "Builtin.ToolSelectionAccuracy": "TOOL_CALL",
     "Builtin.ToolParameterAccuracy": "TOOL_CALL",
-    # tool-call level — skills (one result per skill invocation; zero results
-    # when the session loaded no skills is expected, not an error)
+    # 2 skill prompt-template evaluators at tool-call level (one result per skill
+    # invocation; zero results when the session loaded no skills is expected)
     "Builtin.SkillSelectionAccuracy": "TOOL_CALL",
     "Builtin.SkillInstructionFollowing": "TOOL_CALL",
 }
 
-# Ground-truth-only trajectory matchers — they score against
-# evaluationMetadata.groundTruth.expectedTrajectory, so they are only valid
-# on dataset runs whose scenarios define expected_trajectory (levels verified
-# against a live ListEvaluators).
+# 3 ground-truth-only programmatic trajectory matchers at session level. They
+# score against evaluationMetadata.groundTruth.expectedTrajectory, so they are
+# only valid on dataset runs whose scenarios define expected_trajectory (levels
+# verified against a live ListEvaluators).
 TRAJECTORY_EVALUATORS: dict[str, str] = {
     "Builtin.TrajectoryExactOrderMatch": "SESSION",
     "Builtin.TrajectoryInOrderMatch": "SESSION",

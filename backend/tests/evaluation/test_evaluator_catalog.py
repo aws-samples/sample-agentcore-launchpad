@@ -7,6 +7,38 @@ evaluatorType/provider. The AWS call is fail-soft: builtins render without it.
 
 from unittest.mock import MagicMock
 
+GENERAL_PROMPT_TEMPLATE_EVALUATORS = {
+    "Builtin.GoalSuccessRate": "SESSION",
+    "Builtin.Helpfulness": "TRACE",
+    "Builtin.Correctness": "TRACE",
+    "Builtin.Faithfulness": "TRACE",
+    "Builtin.ResponseRelevance": "TRACE",
+    "Builtin.ContextRelevance": "TRACE",
+    "Builtin.Conciseness": "TRACE",
+    "Builtin.Coherence": "TRACE",
+    "Builtin.InstructionFollowing": "TRACE",
+    "Builtin.Refusal": "TRACE",
+    "Builtin.Harmfulness": "TRACE",
+    "Builtin.Stereotyping": "TRACE",
+    "Builtin.ToolSelectionAccuracy": "TOOL_CALL",
+    "Builtin.ToolParameterAccuracy": "TOOL_CALL",
+}
+SKILL_EVALUATORS = {
+    "Builtin.SkillSelectionAccuracy": "TOOL_CALL",
+    "Builtin.SkillInstructionFollowing": "TOOL_CALL",
+}
+TRAJECTORY_EVALUATORS = {
+    "Builtin.TrajectoryExactOrderMatch": "SESSION",
+    "Builtin.TrajectoryInOrderMatch": "SESSION",
+    "Builtin.TrajectoryAnyOrderMatch": "SESSION",
+}
+EXPECTED_BUILTIN_EVALUATORS = {
+    **GENERAL_PROMPT_TEMPLATE_EVALUATORS,
+    **SKILL_EVALUATORS,
+    **TRAJECTORY_EVALUATORS,
+}
+
+
 LIVE_EVALUATORS = [
     {
         "evaluatorId": "ThirdParty.DeepEval.TaskCompletion",
@@ -69,17 +101,30 @@ def test_catalog_classification(client, monkeypatch):
     rows = res.json()["evaluators"]
     by_id = {r["id"]: r for r in rows}
 
-    # builtins appear exactly once (live Builtin.Helpfulness echo skipped)
-    assert sum(1 for r in rows if r["id"] == "Builtin.Helpfulness") == 1
-    helpful = by_id["Builtin.Helpfulness"]
-    assert helpful["source"] == "builtin"
-    assert helpful["evaluator_type"] == "Builtin"
-    assert helpful["provider"] == "AWS"
+    builtin_rows = [r for r in rows if r["source"] == "builtin"]
+    builtin_by_id = {r["id"]: r for r in builtin_rows}
 
-    # skill builtins at TOOL_CALL level
-    for skill_id in ("Builtin.SkillSelectionAccuracy", "Builtin.SkillInstructionFollowing"):
-        assert by_id[skill_id]["level"] == "TOOL_CALL"
-        assert by_id[skill_id]["source"] == "builtin"
+    # The local catalog is exact, with no duplicate from the live builtin echo.
+    assert len(GENERAL_PROMPT_TEMPLATE_EVALUATORS) == 14
+    assert len(SKILL_EVALUATORS) == 2
+    assert len(TRAJECTORY_EVALUATORS) == 3
+    assert len(builtin_rows) == len(EXPECTED_BUILTIN_EVALUATORS) == 19
+    assert len(builtin_by_id) == len(builtin_rows)
+    assert {evaluator_id: row["level"] for evaluator_id, row in builtin_by_id.items()} == (
+        EXPECTED_BUILTIN_EVALUATORS
+    )
+    assert res.json()["builtin_count"] == 19
+    assert all(r["evaluator_type"] == "Builtin" for r in builtin_rows)
+    assert all(r["provider"] == "AWS" for r in builtin_rows)
+
+    # Ground-truth is required only by the three session-level trajectory matchers.
+    assert {
+        r["id"] for r in builtin_rows if r.get("requires_ground_truth")
+    } == set(TRAJECTORY_EVALUATORS)
+    assert all(
+        builtin_by_id[evaluator_id]["level"] == "TOOL_CALL"
+        for evaluator_id in SKILL_EVALUATORS
+    )
 
     # third-party rows carry provider + source
     for tp_id, provider in (
@@ -113,6 +158,9 @@ def test_catalog_fail_soft_builtins_only(client, monkeypatch):
     res = client.get("/api/eval/evaluators")
     assert res.status_code == 200
     body = res.json()
-    assert all(r["source"] == "builtin" for r in body["evaluators"])
-    assert body["builtin_count"] == len(body["evaluators"])
-    assert any(r["id"] == "Builtin.SkillSelectionAccuracy" for r in body["evaluators"])
+    rows = body["evaluators"]
+    assert all(r["source"] == "builtin" for r in rows)
+    assert body["builtin_count"] == len(rows) == 19
+    assert {r["id"]: r["level"] for r in rows} == EXPECTED_BUILTIN_EVALUATORS
+    context_relevance = next(r for r in rows if r["id"] == "Builtin.ContextRelevance")
+    assert context_relevance["level"] == "TRACE"
