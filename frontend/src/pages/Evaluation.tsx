@@ -26,6 +26,11 @@ import { ExperimentView } from "./EvaluationExperiment";
 
 const cloudRunnable = (d: CloudDataset) => d.status === "ACTIVE";
 
+// Keep service-documented evaluators visible while a target region is still
+// rolling them out. Remove an id after live ListEvaluators verification shows
+// it is available in the deployment region.
+const TEMPORARILY_UNAVAILABLE_EVALUATORS = new Set(["Builtin.ContextRelevance"]);
+
 interface EvaluatorInfo {
   id: string;
   name?: string | null;
@@ -157,6 +162,9 @@ export function Evaluation() {
   const [scope, setScope] = useState<"dataset" | "window">("dataset");
   const [lookbackHours, setLookbackHours] = useState(24);
   const [chosenEvaluators, setChosenEvaluators] = useState<string[]>(DEFAULT_EVALUATORS);
+  const availableChosenEvaluators = chosenEvaluators.filter(
+    (id) => !TEMPORARILY_UNAVAILABLE_EVALUATORS.has(id),
+  );
   const [chosenInsights, setChosenInsights] = useState<string[]>(INSIGHT_TYPES);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [insightsBusy, setInsightsBusy] = useState(false);
@@ -302,7 +310,7 @@ export function Evaluation() {
     const payload =
       mode === "insights"
         ? { ...base, insights: chosenInsights }
-        : { ...base, evaluators: chosenEvaluators };
+        : { ...base, evaluators: availableChosenEvaluators };
     const res = await fetch("/api/eval/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -647,18 +655,23 @@ export function Evaluation() {
                 <div style={{ maxHeight: 168, overflowY: "auto" }}>
                   <div className="selchips">
                     {evaluators.filter((e) => e.source !== "third_party").map((e) => {
-                      const gated = e.requires_ground_truth && !trajectoryAllowed;
+                      const unavailable = TEMPORARILY_UNAVAILABLE_EVALUATORS.has(e.id);
+                      const gated = unavailable || (e.requires_ground_truth && !trajectoryAllowed);
                       const badge = LEVEL_BADGE[e.level];
                       return (
                         <button
                           key={e.id}
                           type="button"
-                          className={`selchip${chosenEvaluators.includes(e.id) ? " on" : ""}`}
+                          className={`selchip${
+                            availableChosenEvaluators.includes(e.id) ? " on" : ""
+                          }`}
                           style={{ cursor: gated ? "not-allowed" : "pointer",
                                    opacity: gated ? 0.4 : undefined }}
                           disabled={gated}
                           title={
-                            gated
+                            unavailable
+                              ? t("evalPage.newRun.temporarilyUnavailableHint")
+                              : gated
                               ? t("evalPage.newRun.trajectoryNeedsGt")
                               : e.source === "custom"
                                 ? t("evalPage.newRun.customTitle")
@@ -673,6 +686,14 @@ export function Evaluation() {
                           }
                         >
                           {e.source === "custom" ? (e.name ?? e.id) : evaluatorLabel(t, e.id)}
+                          {unavailable && (
+                            <span
+                              className="mono"
+                              style={{ fontSize: 8.5, marginLeft: 6, letterSpacing: ".08em" }}
+                            >
+                              {t("evalPage.newRun.temporarilyUnavailable")}
+                            </span>
+                          )}
                           {(e.source === "custom" || e.requires_ground_truth) && badge && (
                             <span
                               className="mono"
@@ -776,7 +797,7 @@ export function Evaluation() {
                 disabled={
                   !agentId ||
                   (scope === "dataset" && !datasetId) ||
-                  (mode === "evaluators" && chosenEvaluators.length === 0) ||
+                  (mode === "evaluators" && availableChosenEvaluators.length === 0) ||
                   (mode === "insights" && chosenInsights.length === 0)
                 }
                 onClick={() => void startRun()}

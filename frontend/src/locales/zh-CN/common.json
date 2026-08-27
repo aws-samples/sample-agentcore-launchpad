@@ -1757,6 +1757,8 @@
       "manageEvaluators": "管理评估器",
       "trajectoryNeedsGt": "需要 scenario 定义了 expected_trajectory 真值的数据集",
       "customTitle": "自定义 LLM 评审评估器",
+      "temporarilyUnavailable": "暂不可用",
+      "temporarilyUnavailableHint": "当前 AWS 区域暂不可用",
       "thirdPartyGroup": "第三方评估器",
       "localGroup": "本地数据集",
       "cloudGroup": "AWS 云端数据集",

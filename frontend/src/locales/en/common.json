@@ -1757,6 +1757,8 @@
       "manageEvaluators": "MANAGE EVALUATORS",
       "trajectoryNeedsGt": "needs a dataset whose scenarios define expected_trajectory ground truth",
       "customTitle": "custom LLM-judge evaluator",
+      "temporarilyUnavailable": "TEMPORARILY UNAVAILABLE",
+      "temporarilyUnavailableHint": "Temporarily unavailable in the current AWS region",
       "thirdPartyGroup": "THIRD-PARTY EVALUATORS",
       "localGroup": "LOCAL DATASETS",
       "cloudGroup": "AWS CLOUD DATASETS",
