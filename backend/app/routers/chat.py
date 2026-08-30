@@ -292,7 +292,7 @@ def session_memory(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    _agent_in(db, ws, agent_id)
+    agent = _agent_in(db, ws, agent_id)
     try:
         # Read back the same agent-scoped partition the chat write path uses.
         session_actor = _session_actor(
@@ -309,7 +309,11 @@ def session_memory(
         # rule (a session may have recorded a different human actor entirely).
         return {
             **memory_service.session_memory_summary(
-                ws.context, mem_actor, session_id
+                ws.context,
+                mem_actor,
+                session_id,
+                # an agent that pins its own memory writes there — read it back
+                memory_id=memory_service.spec_memory_id(agent.spec),
             ),
             "actor_id": mem_actor,
         }

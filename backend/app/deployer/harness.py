@@ -19,6 +19,7 @@ from app.services import agent_iam, registry_console
 from app.services import kb_gateway as kbgw
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import control_client
+from app.services.memory import memory_arn_for
 from app.services.workspace import WorkspaceContext
 
 BUILTIN_TOOL_TYPES = {
@@ -232,10 +233,16 @@ def _kb_gateway_config(resources: dict[str, Any]) -> dict[str, str] | None:
 
 def _build_live_params(spec: AgentSpec, workspace: WorkspaceContext) -> dict[str, Any]:
     resources = workspace.resources
+    # a spec-pinned memory overrides the workspace's shared bootstrap memory
+    memory_arn = (
+        memory_arn_for(workspace, spec.memory.memory_id)
+        if spec.memory.memory_id
+        else resources.get("memory_arn")
+    )
     return build_create_params(
         spec,
         resources.get("execution_role_arn", ""),
-        resources.get("memory_arn"),
+        memory_arn,
         kb_gateway=_kb_gateway_config(resources),
         gateway_attachments=registry_console.resolve_gateway_attachments(
             spec.tools, workspace

@@ -99,7 +99,7 @@ def test_existing_session_keeps_original_actor_partition(client, monkeypatch):
 
     summary_actor: dict[str, str] = {}
 
-    def fake_summary(_ws, actor_id, requested_session_id):
+    def fake_summary(_ws, actor_id, requested_session_id, memory_id=None):
         summary_actor["actor_id"] = actor_id
         assert requested_session_id == session_id
         return {"event_count": 0, "events": [], "records": []}
@@ -117,7 +117,7 @@ def test_session_memory_read_uses_same_scoped_actor(client, monkeypatch):
     agent_id = make_active_agent(name="mem-read")
     captured: dict[str, str] = {}
 
-    def fake_summary(_ws, actor_id, session_id):
+    def fake_summary(_ws, actor_id, session_id, memory_id=None):
         captured["actor_id"] = actor_id
         return {"event_count": 0, "events": [], "records": []}
 
@@ -145,7 +145,7 @@ def test_summary_echoes_the_partition_it_read(client, monkeypatch):
     monkeypatch.setattr(
         memory_service,
         "session_memory_summary",
-        lambda _ws, actor_id, sid: {"event_count": 0, "events": [], "records": []},
+        lambda _ws, actor_id, sid, memory_id=None: {"event_count": 0, "events": [], "records": []},
     )
     body = client.get(
         f"/api/chat/{agent_id}/memory",
@@ -162,7 +162,7 @@ def test_summary_display_label_hides_compound_actor(monkeypatch):
     monkeypatch.setattr(memory_service, "list_events", lambda *a, **k: [])
     monkeypatch.setattr(
         memory_service, "list_records",
-        lambda _ws, ns, max_results=10: [{"content": {"text": "likes brevity"},
+        lambda _ws, ns, max_results=10, memory_id=None: [{"content": {"text": "likes brevity"},
                                           "memoryRecordId": "r1"}],
     )
     out = memory_service.session_memory_summary(ws_ctx(), "agentX__river", "sess")
@@ -181,7 +181,7 @@ def test_rail_renders_structured_preference_records_readably(monkeypatch):
     monkeypatch.setattr(memory_service, "list_events", lambda *a, **k: [])
     monkeypatch.setattr(
         memory_service, "list_records",
-        lambda _ws, ns, max_results=10: [
+        lambda _ws, ns, max_results=10, memory_id=None: [
             {"content": {"text": stored}, "memoryRecordId": "r1"}
         ],
     )

@@ -69,6 +69,12 @@ class KnowledgeBaseRef(BaseModel):
 class MemoryConfig(BaseModel):
     short_term: bool = True
     long_term: bool = False
+    # Per-agent AgentCore Memory selection. None ⇒ the workspace's shared
+    # bootstrap memory (every spec written before this field existed reads back
+    # that way). Ids follow the AgentCore `{name}-{suffix}` shape.
+    memory_id: str | None = Field(
+        default=None, max_length=128, pattern=r"^[a-zA-Z][a-zA-Z0-9_-]*$"
+    )
 
 
 class A2ASkill(BaseModel):

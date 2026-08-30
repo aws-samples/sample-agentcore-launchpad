@@ -26,6 +26,23 @@ def _memory_id(workspace: WorkspaceContext) -> str:
     return memory_id
 
 
+def spec_memory_id(agent_spec: dict | None) -> str | None:
+    """The per-agent memory an agent spec pins, or None for the workspace default.
+
+    Reads the raw ledger JSON so callers that hold an ``Agent`` row don't have to
+    re-validate the whole spec just to learn which memory its turns land in.
+    """
+    return ((agent_spec or {}).get("memory") or {}).get("memory_id") or None
+
+
+def memory_arn_for(workspace: WorkspaceContext, memory_id: str) -> str:
+    """Memory id → ARN in this workspace's account/region (GetMemory-free)."""
+    return (
+        f"arn:aws:bedrock-agentcore:{workspace.region}:"
+        f"{workspace.account_id}:memory/{memory_id}"
+    )
+
+
 SCOPE_SEP = "__"
 
 # Strategies do not agree on a record payload shape: SEMANTIC stores prose in
@@ -132,10 +149,13 @@ def list_actor_ids(
 
 
 def list_records(
-    workspace: WorkspaceContext, namespace_prefix: str, max_results: int = 20
+    workspace: WorkspaceContext,
+    namespace_prefix: str,
+    max_results: int = 20,
+    memory_id: str | None = None,
 ) -> list[dict]:
     return data_client(workspace).list_memory_records(
-        memoryId=_memory_id(workspace),
+        memoryId=memory_id or _memory_id(workspace),
         namespacePath=namespace_prefix,
         maxResults=min(max_results, 100),
     ).get("memoryRecordSummaries", [])
@@ -152,15 +172,25 @@ def retrieve_records(
 
 
 def session_memory_summary(
-    workspace: WorkspaceContext, actor_id: str, session_id: str
+    workspace: WorkspaceContext,
+    actor_id: str,
+    session_id: str,
+    memory_id: str | None = None,
 ) -> dict[str, Any]:
-    """Right-rail panel data: event count + long-term records for the actor."""
-    events = list_events(workspace, actor_id, session_id)
+    """Right-rail panel data: event count + long-term records for the actor.
+
+    ``memory_id`` selects the agent's own memory when its spec pins one — the
+    write side (the deployed runtime) targets that memory, so the rail must
+    read the same one back.
+    """
+    events = list_events(workspace, actor_id, session_id, memory_id=memory_id)
     records: list[dict[str, Any]] = []
     for label in ("/preferences", "/facts"):
         # actor_id is already agent-scoped (see scoped_actor); the display label
         # keeps just the strategy — the actor/agent is implied by the session.
-        for record in list_records(workspace, f"{label}/{actor_id}", max_results=10):
+        for record in list_records(
+            workspace, f"{label}/{actor_id}", max_results=10, memory_id=memory_id
+        ):
             content = record.get("content", {})
             # /preferences records are structured JSON, /facts records prose —
             # decode so the rail shows a sentence, not a serialized object.

@@ -1594,8 +1594,12 @@ def session_transcript(
         mem_actor = "default"
         agent_id, actor_display = run.agent_id, "default"
     memory_error = None
+    # an agent whose spec pins its own memory writes its turns there
+    mem_override = memory.spec_memory_id(agent.spec if agent else None)
     try:
-        events = memory.list_events(workspace, mem_actor, session_id, max_results=100)
+        events = memory.list_events(
+            workspace, mem_actor, session_id, max_results=100, memory_id=mem_override
+        )
     except Exception as exc:
         memory_error = exc
         events = []  # chat may fall back to its ledger; eval may use content logs
@@ -1640,7 +1644,14 @@ def session_transcript(
     if row is not None:
         try:
             long_term = sum(
-                len(memory.list_records(workspace, f"{ns}/{mem_actor}", max_results=20))
+                len(
+                    memory.list_records(
+                        workspace,
+                        f"{ns}/{mem_actor}",
+                        max_results=20,
+                        memory_id=mem_override,
+                    )
+                )
                 for ns in ("/preferences", "/facts")
             )
         except Exception:

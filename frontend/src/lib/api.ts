@@ -943,6 +943,35 @@ export interface MemoryOverview {
   other_memories: MemorySibling[];
 }
 
+/** One row of the memory *resource management* view (`/api/memory/resources`). */
+export interface MemoryResourceRow {
+  id: string | null;
+  arn: string | null;
+  /** derived from the id (`{name}-{suffix}`) — ListMemories carries no name */
+  name: string | null;
+  status: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  /** the workspace's bootstrap memory — delete-protected default */
+  is_default: boolean;
+  /** live agents whose spec pins this memory (default users excluded) */
+  agents: { id: string; name: string }[];
+}
+
+export interface MemoryResourceList {
+  items: MemoryResourceRow[];
+  default_id: string | null;
+}
+
+export interface MemoryResourceCreateInput {
+  /** CreateMemory name constraint: `[a-zA-Z][a-zA-Z0-9_]{0,47}` */
+  name: string;
+  description?: string;
+  event_expiry_days?: number;
+  /** subset of "semantic" | "user_preference" | "summarization" | "episodic" */
+  strategies?: string[];
+}
+
 /** AgentCore keys memory on actorId alone, so the platform folds the agent in:
  *  `<agent_id>__<human>`. These fields are that id decoded. */
 export interface MemoryActor {
@@ -2225,6 +2254,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
+  memoryResources: () => request<MemoryResourceList>("/api/memory/resources"),
+  memoryResourceCreate: (input: MemoryResourceCreateInput) =>
+    request<MemoryResourceRow>("/api/memory/resources", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  memoryResourceDelete: (memoryId: string) =>
+    request<{ deleted: boolean; id: string }>(
+      `/api/memory/resources/${encodeURIComponent(memoryId)}`,
+      { method: "DELETE" },
+    ),
   // NOTE: `GET /api/memory/extraction-jobs` exists on the backend but is not
   // surfaced in the console — the AWS list only ever returns FAILED jobs
   // (retry backlog), which reads as "nothing extracted" to an operator.

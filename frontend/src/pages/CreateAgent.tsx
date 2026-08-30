@@ -25,6 +25,7 @@ import type {
   HarnessDiscoveryCandidate,
   InspectedSkill,
   JobInfo,
+  MemoryResourceRow,
   RuntimeDiscoveryCandidate,
   RuntimeImportResult,
   Toolkit,
@@ -130,7 +131,7 @@ interface StoredSpec {
   toolkits?: Toolkit[];
   skills?: string[];
   knowledge_bases?: KbRef[];
-  memory?: { long_term?: boolean };
+  memory?: { long_term?: boolean; memory_id?: string | null };
   protocol?: "http" | "a2a";
   a2a_skills?: { id?: string; name?: string; description?: string; tags?: string[] }[];
   env?: Record<string, string>;
@@ -857,6 +858,9 @@ function CreateAgentWizard() {
     notes: Record<string, string>;
   } | null>(null);
   const [longTerm, setLongTerm] = useState(true);
+  // per-agent AgentCore Memory pin — "" means the workspace's shared default
+  const [memoryId, setMemoryId] = useState("");
+  const [memoryOptions, setMemoryOptions] = useState<MemoryResourceRow[]>([]);
   const [mcpServers, setMcpServers] = useState("");
   // custom skill sources attached without a registry record (name shown on the chip)
   const [customSkills, setCustomSkills] = useState<{ name: string; path: string }[]>([]);
@@ -904,6 +908,14 @@ function CreateAgentWizard() {
       .then((d: { items: AttachableKb[] }) => setKbCatalog(d.items ?? []))
       .catch(() => {
         /* KB catalog unavailable — section stays empty */
+      });
+    // Memory resources — offered as a per-agent pick; a failed list just
+    // leaves the selector on the workspace's shared default memory.
+    void api
+      .memoryResources()
+      .then((d) => setMemoryOptions(d.items))
+      .catch(() => {
+        /* memory list unavailable — default memory only */
       });
   }, []);
 
@@ -1127,7 +1139,11 @@ const deployLock = !canDeploy
             method === "zip_runtime" && protocol === "http"
             ? gatewayToolRefs()
             : [],
-    memory: { short_term: true, long_term: longTerm },
+    memory: {
+      short_term: true,
+      long_term: longTerm,
+      ...(memoryId ? { memory_id: memoryId } : {}),
+    },
     ...(method === "zip_runtime"
       ? {
           protocol,
@@ -1238,6 +1254,7 @@ const deployLock = !canDeploy
     setSpecKbs(spec.knowledge_bases ?? []);
     setSkills(spec.skills ?? []);
     setLongTerm(spec.memory?.long_term ?? true);
+    setMemoryId(spec.memory?.memory_id ?? "");
     setMcpServers(spec.env?.LAUNCHPAD_MCP_SERVERS ?? "");
     // custom (non-registry) skill paths get their chip name from the path tail
     setCustomSkills(
@@ -2210,6 +2227,40 @@ const deployLock = !canDeploy
                 >
                   {t("create.configure.memoryLong")} {longTerm ? "✓" : "+"}
                 </button>
+              </div>
+            </div>
+            <div className="field">
+              <label htmlFor="agent-memory-select">
+                {t("create.configure.memoryResource")}
+              </label>
+              <select
+                id="agent-memory-select"
+                className="input"
+                data-testid="memory-select"
+                value={memoryId}
+                onChange={(e) => setMemoryId(e.target.value)}
+              >
+                <option value="">{t("create.configure.memoryDefault")}</option>
+                {memoryOptions
+                  .filter((m) => m.id && !m.is_default)
+                  .map((m) => (
+                    <option
+                      key={m.id}
+                      value={m.id ?? ""}
+                      disabled={m.status !== "ACTIVE"}
+                    >
+                      {m.name ?? m.id}
+                      {m.status !== "ACTIVE" ? ` (${m.status ?? "?"})` : ""}
+                    </option>
+                  ))}
+                {/* an edited spec may pin a memory that has since vanished from
+                    the list — keep it selectable so re-publish round-trips */}
+                {memoryId && !memoryOptions.some((m) => m.id === memoryId) && (
+                  <option value={memoryId}>{memoryId}</option>
+                )}
+              </select>
+              <div className="dim" style={{ fontSize: 11, marginTop: 6 }}>
+                {t("create.configure.memoryResourceHint")}
               </div>
             </div>
             <div className="note">

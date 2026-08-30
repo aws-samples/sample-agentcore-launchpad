@@ -34,6 +34,7 @@ from app.routers.execution import router as execution_router
 from app.routers.governance import router as governance_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.memory import router as memory_router
+from app.routers.memory_resources import router as memory_resources_router
 from app.routers.observability import router as observability_router
 from app.routers.overview import router as overview_router
 from app.routers.public_api import router as public_router
@@ -133,6 +134,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(knowledge_router)  # managed knowledge bases + retrieval playground
     app.include_router(chat_router)
     app.include_router(memory_router)  # read-only short-/long-term memory console
+    app.include_router(memory_resources_router)  # memory resource lifecycle (create/delete)
     app.include_router(execution_router)  # studio local-debug: run un-deployed code
     app.include_router(conversations_router)  # studio local-debug: multi-turn chat
     app.include_router(codegen_router)  # studio local-debug: AI fix (diagnose + repair)

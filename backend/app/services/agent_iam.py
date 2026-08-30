@@ -248,14 +248,16 @@ def policy_document(spec: AgentSpec, ctx: RoleContext) -> dict:
         })
 
     # ---- memory ----
-    # NOTE: the memory is a shared singleton, so this scopes to that one resource
-    # but does NOT give per-agent memory isolation. Partitioning is done by folding
-    # the agent id into the actor id (see services/memory.py::scoped_actor), not by
-    # IAM. Per-agent memories would be a different change.
+    # NOTE: the memory defaults to a shared singleton, so this scopes to one
+    # resource but does NOT give per-agent memory isolation there. Partitioning is
+    # done by folding the agent id into the actor id (see services/memory.py::
+    # scoped_actor). A spec that pins its own memory (spec.memory.memory_id) gets
+    # the grant scoped to that memory instead.
     if spec.memory.short_term or spec.memory.long_term:
+        selected_memory = spec.memory.memory_id or ctx.memory_id
         memory_resource = (
-            f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}:memory/{ctx.memory_id}"
-            if ctx.memory_id else "*"
+            f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}:memory/{selected_memory}"
+            if selected_memory else "*"
         )
         statements.append({
             "Sid": "AgentCoreMemory",

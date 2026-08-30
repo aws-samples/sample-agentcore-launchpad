@@ -263,6 +263,10 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/memory/records"): MEMBER,
     ("POST", "/api/memory/records/search"): MEMBER,  # a search, not a mutation
     ("GET", "/api/memory/sessions"): MEMBER,
+    ("GET", "/api/memory/resources"): MEMBER,
+    ("POST", "/api/memory/resources"): MEMBER,  # creates an AgentCore Memory resource
+    ("GET", "/api/memory/resources/{memory_id}"): MEMBER,
+    ("DELETE", "/api/memory/resources/{memory_id}"): MEMBER,
     ("GET", "/api/observability/dashboard"): MEMBER,
     ("GET", "/api/observability/sessions"): MEMBER,
     ("GET", "/api/observability/sessions/{session_id}"): MEMBER,

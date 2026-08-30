@@ -130,7 +130,10 @@ agents, which legitimately call peers.
 
 **Per-agent roles do not give per-agent memory isolation.** There is one shared
 memory, partitioned by folding the agent id into the actor id
-(`services/memory.py::scoped_actor`), not by IAM. A per-agent memory is separate work.
+(`services/memory.py::scoped_actor`), not by IAM. An agent whose spec pins its
+own memory (`spec.memory.memory_id`, picked in the Create wizard) does get its
+grant — and its `LAUNCHPAD_MEMORY_ID` / harness memory configuration — scoped to
+that resource instead of the shared one; actor scoping still applies within it.
 
 Lifecycle: created in `provision`, reconciled on re-publish so a dropped capability
 shrinks the policy, deleted with the agent — **after** the runtime, since removing the
@@ -724,13 +727,26 @@ actor decoding, namespace resolution and pagination, and imports `SCOPE_SEP` /
 Read-only is structural, not a UI guard: no wrapper or handler for `CreateEvent`,
 `DeleteEvent`, `DeleteMemoryRecord`, `Batch*MemoryRecords`,
 `StartMemoryExtractionJob`, `CreateMemory`, `UpdateMemory` or `DeleteMemory`
-exists in either file, and `tests/test_memory_console.py` asserts that.
+exists in either file, and `tests/test_memory_console.py` asserts that. The one
+mutating surface — the `resources` view — therefore lives in a **separate pair**
+(`services/memory_admin.py` + `routers/memory_resources.py`, tested by
+`tests/test_memory_resources.py`): it manages the memory *resources* themselves
+(create/delete), never events or records, and the structural guarantee on the
+console modules stays intact.
 
 | `?view=` | Shows | AgentCore operations |
 |---|---|---|
 | `overview` | resource config (id/arn/status/event expiry/KMS/execution role), each long-term strategy with its `namespaces` + `namespaceTemplates`, and the account's other memory resources with the platform singleton marked | `GetMemory`, `ListMemories`, `ListActors` |
 | `short-term` | actor → session → event drill-down; events render as a timeline of conversational role/text turns, blob payloads as a byte count only | `ListActors`, `ListSessions`, `ListEvents` |
 | `long-term` | records for a resolved namespace, plus semantic retrieval with relevance scores | `ListMemoryRecords`, `RetrieveMemoryRecords` |
+| `resources` | every memory in the account/region (workspace default marked, plus the agents whose spec pins each one); create a memory (name, description, event expiry, strategy picks that mirror the bootstrap layout) and delete one — the workspace default and any memory a live agent references are delete-protected | `ListMemories`, `GetMemory`, `CreateMemory`, `DeleteMemory` |
+
+Memories created here become selectable per agent: the Create wizard stores the
+pick as `spec.memory.memory_id`, which overrides the workspace default across
+the deployers (`LAUNCHPAD_MEMORY_ID` env / harness `agentCoreMemoryConfiguration`),
+the IAM grant, and the platform's read-back paths (Chat memory rail,
+observability transcripts). `None` keeps the shared bootstrap memory, so every
+pre-existing spec is unaffected.
 
 **Extraction is not a console surface.** Turning short-term events into long-term
 records is a job the AgentCore Memory service runs itself, asynchronously, from the

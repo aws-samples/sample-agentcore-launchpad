@@ -734,7 +734,7 @@ def test_transcript_falls_back_to_eval_run_session(monkeypatch):
 
     seen: dict = {}
 
-    def fake_events(_ws, actor_id, session_id, max_results=20):
+    def fake_events(_ws, actor_id, session_id, max_results=20, memory_id=None):
         seen["actor"] = actor_id
         envelope = json.dumps(
             {"message": {"role": "user", "content": [{"text": "PTO balance?"}]}}
@@ -765,7 +765,7 @@ def _events_for(actor_map):
     """memory.list_events stub: {actor_id: [texts]} → conversational events."""
     probed = []
 
-    def fake_events(_ws, actor_id, session_id, max_results=20):
+    def fake_events(_ws, actor_id, session_id, max_results=20, memory_id=None):
         probed.append(actor_id)
         return [
             {"eventTimestamp": f"2026-07-28T0{i}:00:00", "payload": [

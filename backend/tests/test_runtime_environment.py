@@ -34,6 +34,17 @@ def test_memory_disabled_spec_gets_nothing():
     assert runtime_environment(spec, RESOURCES) == {}
 
 
+def test_a_spec_pinned_memory_overrides_the_workspace_default():
+    spec = PLAIN.model_copy(
+        update={"memory": MemoryConfig(short_term=True, memory_id="team_notes-XYZ789")}
+    )
+    assert runtime_environment(spec, RESOURCES) == {
+        "LAUNCHPAD_MEMORY_ID": "team_notes-XYZ789"
+    }
+    # the pin also works before bootstrap has recorded a workspace memory
+    assert runtime_environment(spec, {}) == {"LAUNCHPAD_MEMORY_ID": "team_notes-XYZ789"}
+
+
 def test_gateway_spec_gets_url_provider_and_scope():
     env = runtime_environment(GATEWAY, RESOURCES)
     assert env["LAUNCHPAD_GATEWAY_URL"] == RESOURCES["gateway_url"]

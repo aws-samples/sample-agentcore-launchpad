@@ -26,7 +26,8 @@ def runtime_environment(
     self-minted token", not as an error.
     """
     environment = dict(spec.env)
-    memory_id = resources.get("memory_id")
+    # a spec-pinned memory overrides the workspace's shared bootstrap memory
+    memory_id = spec.memory.memory_id or resources.get("memory_id")
     if (spec.memory.short_term or spec.memory.long_term) and memory_id:
         environment["LAUNCHPAD_MEMORY_ID"] = str(memory_id)
     if uses_gateway(spec):

@@ -7,9 +7,10 @@ import type { MemoryOverview } from "../lib/api";
 import { api } from "../lib/api";
 import { LongTermTab } from "./memory/LongTermTab";
 import { OverviewTab } from "./memory/OverviewTab";
+import { ResourcesTab } from "./memory/ResourcesTab";
 import { ShortTermTab } from "./memory/ShortTermTab";
 
-const VIEWS = ["overview", "short-term", "long-term"] as const;
+const VIEWS = ["overview", "short-term", "long-term", "resources"] as const;
 type ViewKey = (typeof VIEWS)[number];
 
 /**
@@ -184,6 +185,7 @@ export function Memory() {
           onSelectStrategy={selectStrategy}
         />
       )}
+      {overview && view === "resources" && <ResourcesTab />}
     </section>
   );
 }

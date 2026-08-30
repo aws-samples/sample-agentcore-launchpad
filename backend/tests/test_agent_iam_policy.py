@@ -179,6 +179,11 @@ class TestMemory:
         memory = next(s for s in doc["Statement"] if s["Sid"] == "AgentCoreMemory")
         assert memory["Resource"] == "*"
 
+    def test_a_spec_pinned_memory_overrides_the_workspace_default(self):
+        spec = _spec(memory={"short_term": True, "memory_id": "team_notes-XYZ789"})
+        statement = _statement(spec, "AgentCoreMemory")
+        assert statement["Resource"].endswith("memory/team_notes-XYZ789")
+
     def test_disabling_memory_drops_the_statement(self):
         spec = _spec(memory={"short_term": False, "long_term": False})
         assert "AgentCoreMemory" not in _sids(spec)
