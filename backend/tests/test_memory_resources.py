@@ -215,6 +215,68 @@ def test_create_rejects_unknown_strategies(client, configured, monkeypatch):
     assert res.json()["code"] == "memory.invalid_strategy"
 
 
+def test_create_maps_namespace_keys_onto_the_aws_shape(client, configured, monkeypatch):
+    """Flexible namespace variables: keys + optional validation rules become
+    CreateMemory ``namespaceKeys``; the created detail echoes them back."""
+    control = wire(monkeypatch)
+    res = client.post(
+        "/api/memory/resources",
+        json={
+            "name": "tenant_mem",
+            "strategies": [],
+            "namespace_keys": [
+                {"key": "orgname", "allowed_values": ["acme", "globex"]},
+                {"key": "teamname", "regex_pattern": "^[a-z][a-z0-9-]*$"},
+                {"key": "env"},
+            ],
+        },
+    )
+    assert res.status_code == 201
+    kw = control.kwargs_for("create_memory")
+    assert kw["namespaceKeys"] == [
+        {"key": "orgname", "validation": {"allowedValues": ["acme", "globex"]}},
+        {"key": "teamname", "validation": {"regexPattern": "^[a-z][a-z0-9-]*$"}},
+        {"key": "env"},  # no rules → no validation object at all
+    ]
+    # the console shape round-trips the definitions
+    assert res.json()["namespace_keys"] == [
+        {"key": "orgname", "allowed_values": ["acme", "globex"], "regex_pattern": None},
+        {"key": "teamname", "allowed_values": None, "regex_pattern": "^[a-z][a-z0-9-]*$"},
+        {"key": "env", "allowed_values": None, "regex_pattern": None},
+    ]
+
+
+def test_create_omits_namespace_keys_when_none_are_defined(
+    client, configured, monkeypatch
+):
+    control = wire(monkeypatch)
+    res = client.post("/api/memory/resources", json={"name": "plain_mem"})
+    assert res.status_code == 201
+    assert "namespaceKeys" not in control.kwargs_for("create_memory")
+
+
+@pytest.mark.parametrize(
+    "keys",
+    [
+        [{"key": "OrgName"}],  # keys must be lowercase alphanumeric
+        [{"key": "actorid" * 5}],  # > 32 chars
+        [{"key": "org"}, {"key": "org"}],  # duplicates
+        [{"key": f"k{i}"} for i in range(6)],  # > 5 keys per resource
+        [{"key": "org", "allowed_values": ["Acme!"]}],  # bad value charset
+        [{"key": "org", "regex_pattern": "x" * 65}],  # regex > 64 chars
+    ],
+)
+def test_create_rejects_invalid_namespace_keys_before_aws(
+    client, configured, monkeypatch, keys
+):
+    control = wire(monkeypatch)
+    res = client.post(
+        "/api/memory/resources", json={"name": "ok_name", "namespace_keys": keys}
+    )
+    assert res.status_code == 422
+    assert control.calls == []
+
+
 # --------------------------------------------------------------------------- #
 # Delete
 # --------------------------------------------------------------------------- #

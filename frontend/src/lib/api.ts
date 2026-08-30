@@ -970,6 +970,20 @@ export interface MemoryResourceCreateInput {
   event_expiry_days?: number;
   /** subset of "semantic" | "user_preference" | "summarization" | "episodic" */
   strategies?: string[];
+  /** flexible namespace variables — up to 5 keys per memory resource */
+  namespace_keys?: MemoryNamespaceKeyInput[];
+}
+
+/** One custom namespace variable key (CreateMemory `namespaceKeys` entry).
+ *  Values are supplied at runtime via CreateEvent's
+ *  `extractionConfig.namespaceVariables`; both rules apply when both are set. */
+export interface MemoryNamespaceKeyInput {
+  /** lowercase alphanumeric, starts with a letter, max 32 chars */
+  key: string;
+  /** up to 10 permitted values: `[a-z0-9][a-z0-9_-]*`, max 64 chars each */
+  allowed_values?: string[];
+  /** regex the runtime value must match, max 64 chars */
+  regex_pattern?: string;
 }
 
 /** AgentCore keys memory on actorId alone, so the platform folds the agent in:

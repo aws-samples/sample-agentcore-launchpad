@@ -115,6 +115,17 @@ def _detail(raw: dict[str, Any], default_id: str | None) -> dict[str, Any]:
             }
             for s in raw.get("strategies") or []
         ],
+        # flexible namespace variables defined on the resource (CreateMemory
+        # namespaceKeys) — validation rules echoed in the console's shape
+        "namespace_keys": [
+            {
+                "key": k.get("key"),
+                "allowed_values": list((k.get("validation") or {}).get("allowedValues") or [])
+                or None,
+                "regex_pattern": (k.get("validation") or {}).get("regexPattern"),
+            }
+            for k in raw.get("namespaceKeys") or []
+        ],
     }
 
 
@@ -148,12 +159,21 @@ def create_memory_resource(
     description: str,
     event_expiry_days: int,
     strategies: list[str],
+    namespace_keys: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """CreateMemory with the platform's strategy layout; returns CREATING state.
 
     Creation takes minutes to reach ACTIVE — deliberately no wait here: the list
     view surfaces the live status and an agent can only be pointed at a memory
     the user selects, so a not-yet-ACTIVE id is visible for what it is.
+
+    ``namespace_keys`` pre-registers flexible namespace variables (up to 5) on
+    the resource — CreateMemory's ``namespaceKeys``. The platform's canned
+    strategy templates deliberately do NOT reference them: the console's invoke
+    path never supplies ``extractionConfig.namespaceVariables`` on CreateEvent,
+    and a template variable left unresolved silently skips long-term extraction
+    for that strategy. External consumers of the memory can reference the keys
+    in their own strategies/templates and supply values at event time.
     """
     unknown = sorted(set(strategies) - set(STRATEGIES))
     if unknown:
@@ -175,8 +195,23 @@ def create_memory_resource(
         role_arn = _platform_execution_role(control, workspace)
         if role_arn:
             params["memoryExecutionRoleArn"] = role_arn
+    if namespace_keys:
+        params["namespaceKeys"] = [_namespace_key_entry(k) for k in namespace_keys]
     created = control.create_memory(**params).get("memory", {})
     return _detail(created, memory_id_or_none(workspace))
+
+
+def _namespace_key_entry(key: dict[str, Any]) -> dict[str, Any]:
+    """Console shape → CreateMemory ``NamespaceKeyEntry`` (validation only if set)."""
+    entry: dict[str, Any] = {"key": key["key"]}
+    validation: dict[str, Any] = {}
+    if key.get("allowed_values"):
+        validation["allowedValues"] = list(key["allowed_values"])
+    if key.get("regex_pattern"):
+        validation["regexPattern"] = key["regex_pattern"]
+    if validation:
+        entry["validation"] = validation
+    return entry
 
 
 def _platform_execution_role(control: Any, workspace: WorkspaceContext) -> str | None:

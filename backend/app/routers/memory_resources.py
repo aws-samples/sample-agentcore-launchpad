@@ -8,10 +8,11 @@ memory is the default for agents that pick none, so it is delete-protected here
 and a memory referenced by a live agent's spec refuses deletion too.
 """
 
+import re
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -21,6 +22,32 @@ from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import memory_admin
 
 router = APIRouter(prefix="/api/memory/resources", tags=["memory-resources"])
+
+
+class NamespaceKeyInput(BaseModel):
+    """One custom namespace variable key (CreateMemory ``namespaceKeys`` entry).
+
+    Constraints mirror the AWS shapes so bad input is a 422 with a field
+    pointer instead of a mid-request ValidationException. Keys are lowercase
+    alphanumeric by the API's own pattern, which also rules out the built-in
+    variable names (``actorId``, ``sessionId``, ``memoryStrategyId``).
+    """
+
+    key: str = Field(pattern=r"^[a-z][a-z0-9]{0,31}$")
+    # up to 10 permitted runtime values (AND-ed with regex_pattern when both set)
+    allowed_values: list[str] | None = Field(default=None, min_length=1, max_length=10)
+    regex_pattern: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @field_validator("allowed_values")
+    @classmethod
+    def _values_shape(cls, values: list[str] | None) -> list[str] | None:
+        for value in values or []:
+            if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", value):
+                raise ValueError(
+                    f"allowed value {value!r} must be lowercase alphanumeric "
+                    "with hyphens/underscores (max 64 chars)"
+                )
+        return values
 
 
 class CreateMemoryResourceRequest(BaseModel):
@@ -35,6 +62,16 @@ class CreateMemoryResourceRequest(BaseModel):
     strategies: list[str] = Field(
         default_factory=lambda: ["semantic", "user_preference"], max_length=4
     )
+    # flexible namespace variables — up to 5 keys per memory resource
+    namespace_keys: list[NamespaceKeyInput] = Field(default_factory=list, max_length=5)
+
+    @field_validator("namespace_keys")
+    @classmethod
+    def _unique_keys(cls, keys: list[NamespaceKeyInput]) -> list[NamespaceKeyInput]:
+        names = [k.key for k in keys]
+        if len(names) != len(set(names)):
+            raise ValueError("namespace keys must be unique")
+        return keys
 
 
 def _guard(fn, *args, **kwargs):
@@ -93,6 +130,7 @@ def create_resource(
         req.description,
         req.event_expiry_days,
         req.strategies,
+        [k.model_dump() for k in req.namespace_keys],
     )
 
 
