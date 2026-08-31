@@ -4,6 +4,7 @@ Stubbed clients drive the full pipeline: invoking → waiting → evaluating →
 completed with parsed scores.
 """
 
+import json
 from unittest.mock import ANY, MagicMock
 
 import app.evaluation.service as svc
@@ -367,3 +368,74 @@ def test_start_with_retry_raises_non_transient(monkeypatch):
     else:
         raise AssertionError("expected ClientError")
     assert sleeps == []  # no pointless backoff on a permanent error
+
+
+# The real per-trace reason a batch failed lives only in its results log stream.
+FAILED_BATCH = {
+    "status": "FAILED",
+    "errorDetails": ["All 30 sessions failed during batch evaluation."],
+    "outputConfig": {
+        "cloudWatchConfig": {
+            "logGroupName": "/aws/bedrock-agentcore/evaluations/results/default",
+            "logStreamName": "run-run_abc-123",
+        }
+    },
+}
+TRACE_ERROR_EVENT = {
+    "message": json.dumps({
+        "name": "gen_ai.evaluation.result",
+        "attributes": {
+            "gen_ai.evaluation.name": "reference_grounding",
+            "error.type": "ValueError",
+            "error.message": "Evaluator prompt requires: 'expected_response'",
+        },
+    })
+}
+
+
+def _failing_run(client, monkeypatch, logs):
+    db = SessionLocal()
+    agent = make_agent(db, name=f"eval-agent-{id(logs) % 10000}")
+    dataset = EvalDataset(
+        workspace_id=DEFAULT_WORKSPACE_ID, name=f"ds-{id(logs) % 10000}",
+        items=[{"prompt": "x"}])
+    db.add(dataset)
+    db.commit()
+    data, _ = stub_environment(monkeypatch)
+    data.get_batch_evaluation.return_value = FAILED_BATCH
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: logs)
+
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "dataset_id": dataset.id, "wait_seconds": 0,
+    })
+    run_id = res.json()["id"]
+    import time
+    for _ in range(50):
+        run = client.get(f"/api/eval/runs/{run_id}").json()
+        if run["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.1)
+    db.close()
+    return run
+
+
+def test_failed_batch_surfaces_error_details_and_trace_reason(client, monkeypatch):
+    logs = MagicMock()
+    logs.get_log_events.return_value = {"events": [TRACE_ERROR_EVENT]}
+
+    run = _failing_run(client, monkeypatch, logs)
+
+    assert run["status"] == "failed"
+    assert "All 30 sessions failed" in run["error"]
+    assert "reference_grounding: ValueError: Evaluator prompt requires" in run["error"]
+
+
+def test_failed_batch_degrades_when_results_log_unreadable(client, monkeypatch):
+    logs = MagicMock()
+    logs.get_log_events.side_effect = RuntimeError("ResourceNotFoundException")
+
+    run = _failing_run(client, monkeypatch, logs)
+
+    assert run["status"] == "failed"
+    assert "batch evaluation ended FAILED" in run["error"]
+    assert "All 30 sessions failed" in run["error"]

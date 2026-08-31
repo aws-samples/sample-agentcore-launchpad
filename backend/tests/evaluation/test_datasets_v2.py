@@ -492,3 +492,107 @@ def test_migrate_adds_dataset_columns_idempotently(tmp_path):
     _migrate(eng)  # second pass over the upgraded schema — must be a no-op
     cols_again = {c["name"] for c in inspect(eng).get_columns("eval_datasets")}
     assert cols == cols_again
+
+
+# ─── custom-judge ground-truth preflight ─────────────────────────────────────
+GT_JUDGE_DETAIL = {
+    "evaluatorId": "ref_grounding-abc123",
+    "level": "TRACE",
+    "evaluatorConfig": {
+        "llmAsAJudge": {
+            "instructions": (
+                "Context: {context}\nAnswer: {assistant_turn}\n"
+                "Reference: {expected_response}\nScore it."
+            )
+        }
+    },
+}
+
+
+def _stub_judge(monkeypatch, detail=GT_JUDGE_DETAIL):
+    """Control client whose GetEvaluator returns one ground-truth judge."""
+    stub = MagicMock()
+    stub.get_evaluator.return_value = detail
+    monkeypatch.setattr("app.evaluation.routers.control_client", lambda _ws=None: stub)
+    return stub
+
+
+def test_judge_ground_truth_gate_rejects_scopes_without_it(client, monkeypatch):
+    db = SessionLocal()
+    agent = make_agent(db, name="judge-gate-agent")
+    plain = EvalDataset(
+        workspace_id=DEFAULT_WORKSPACE_ID, name="no-gt-judge", items=[{"prompt": "x"}])
+    db.add(plain)
+    db.commit()
+    plain_id = plain.id
+    db.close()
+    _stub_judge(monkeypatch)
+
+    # dataset scope, but no scenario carries expected_response
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "dataset_id": plain_id,
+        "evaluators": ["ref_grounding-abc123"],
+    })
+    assert res.status_code == 422
+    body = res.json()
+    assert body["code"] == "run.judge_needs_ground_truth"
+    assert "expected_response" in body["message"]
+
+    # window scope — ground truth is impossible there
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "lookback_hours": 24,
+        "evaluators": ["ref_grounding-abc123"],
+    })
+    assert res.status_code == 422
+    assert res.json()["code"] == "run.judge_needs_ground_truth"
+
+
+def test_judge_ground_truth_gate_accepts_dataset_with_expected_response(
+    client, monkeypatch
+):
+    db = SessionLocal()
+    agent = make_agent(db, name="judge-ok-agent")
+    ds = EvalDataset(
+        workspace_id=DEFAULT_WORKSPACE_ID, name="gt-judge", kind="predefined",
+        items=[SCENARIO])
+    db.add(ds)
+    db.commit()
+    ds_id = ds.id
+    db.close()
+    stub_environment(monkeypatch)
+    _stub_judge(monkeypatch)
+
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "dataset_id": ds_id,
+        "evaluators": ["ref_grounding-abc123"], "wait_seconds": 0,
+    })
+    assert res.status_code == 201, res.text
+
+
+def test_judge_ground_truth_gate_skips_builtins_and_fails_open(client, monkeypatch):
+    db = SessionLocal()
+    agent = make_agent(db, name="judge-open-agent")
+    plain = EvalDataset(
+        workspace_id=DEFAULT_WORKSPACE_ID, name="no-gt-open", items=[{"prompt": "x"}])
+    db.add(plain)
+    db.commit()
+    plain_id = plain.id
+    db.close()
+    stub_environment(monkeypatch)
+    stub = _stub_judge(monkeypatch)
+
+    # builtin-only selection never asks the control plane
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "dataset_id": plain_id,
+        "evaluators": ["Builtin.Correctness"], "wait_seconds": 0,
+    })
+    assert res.status_code == 201, res.text
+    stub.get_evaluator.assert_not_called()
+
+    # an unreadable control plane must not block the run (AWS enforces it too)
+    stub.get_evaluator.side_effect = RuntimeError("control plane unavailable")
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "dataset_id": plain_id,
+        "evaluators": ["ref_grounding-abc123"], "wait_seconds": 0,
+    })
+    assert res.status_code == 201, res.text

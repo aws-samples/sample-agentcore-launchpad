@@ -1715,7 +1715,11 @@
       "status": "状态",
       "empty": "还没有运行——点击 + 新建运行",
       "newEvaluation": "新建评估",
-      "createExperiment": "创建 BUNDLE A/B 实验"
+      "createExperiment": "创建 BUNDLE A/B 实验",
+      "sessions": "会话数",
+      "batch": "BATCH ID",
+      "applied": "已选评估器",
+      "failureReason": "失败原因:"
     },
     "status": {
       "completed": "已完成",

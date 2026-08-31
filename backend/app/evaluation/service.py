@@ -259,21 +259,44 @@ def execute_run(
             )
         else:
             result = ac.poll_batch_evaluation(data, batch_id=batch_id, max_polls=60)
-        _finish_from_result(run_id, mode, result)
+        _finish_from_result(run_id, mode, result, workspace=workspace)
     except Exception as exc:
         _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
 
 
-def _finish_from_result(run_id: str, mode: str, result: dict[str, Any]) -> None:
+def _finish_from_result(
+    run_id: str,
+    mode: str,
+    result: dict[str, Any],
+    *,
+    workspace: WorkspaceContext | None = None,
+) -> None:
     """Write a terminal batch-evaluation result back onto the run row.
 
     COMPLETED_WITH_ERRORS still completes the run, but the service's
     errorDetails (e.g. "insufficient samples for clustering") are surfaced in
-    the error column so the UI can show why results are partial/empty."""
+    the error column so the UI can show why results are partial/empty.
+
+    A non-completed batch raises, and the message carries everything the
+    operator needs: the service's errorDetails plus the first per-trace
+    evaluator error, which lives only in the batch's results log stream. (A run
+    whose judge prompt wants ground truth the dataset lacks fails every single
+    session with exactly that reason, and used to surface as a bare "ended
+    FAILED".)"""
     status = result.get("status")
-    if status not in ("COMPLETED", "COMPLETED_WITH_ERRORS"):
-        raise RuntimeError(f"batch evaluation ended {status}")
     details = result.get("errorDetails") or []
+    if status not in ("COMPLETED", "COMPLETED_WITH_ERRORS"):
+        message = f"batch evaluation ended {status}"
+        if details:
+            message += " — " + "; ".join(str(d) for d in details)
+        reason = (
+            ac.batch_failure_reason(lambda: workspace.client("logs"), result)
+            if workspace is not None
+            else None
+        )
+        if reason:
+            message += f" · {reason}"
+        raise RuntimeError(message)
     error = "; ".join(str(d) for d in details)[:500] or None
     if mode == "insights":
         _update(run_id, status="completed", insights=ac.parse_insights(result),
@@ -292,7 +315,7 @@ def reconcile_run(
         result = ac.poll_batch_evaluation(
             data_client(workspace), batch_id=batch_id, max_polls=60
         )
-        _finish_from_result(run_id, mode, result)
+        _finish_from_result(run_id, mode, result, workspace=workspace)
     except Exception as exc:
         _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
 

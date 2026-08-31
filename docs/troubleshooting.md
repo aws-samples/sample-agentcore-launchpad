@@ -55,6 +55,22 @@ entry below was observed during implementation — none is speculative.
   metrics take time to populate, so with a handful of invocations the verdict
   is honestly reported as *insufficient-data* rather than forced. Use larger
   traffic (or wait) for a real significance call.
+- **A judge that needs ground truth is refused before the run starts.** A custom
+  LLM-judge prompt referencing `{expected_response}`, `{expected_tool_trajectory}`
+  or `{assertions}` is filled from the dataset's scenarios. Against a window /
+  session scope, or a dataset carrying none of it, AgentCore throws
+  `ValueError: Evaluator prompt requires: 'expected_response'` on every
+  (session × evaluator) pair and the whole batch ends FAILED ~10 minutes later,
+  so the console rejects the submission with `run.judge_needs_ground_truth`
+  instead. Fix it by adding ground truth to the dataset scenarios
+  (`turns[].expected_response` / `expected_trajectory` / `assertions`) or by
+  editing the judge prompt to drop the placeholder.
+- **A failed run names its cause.** A batch's `errorDetails` only counts the
+  casualties ("All 30 sessions failed"); the per-trace reason is written only to
+  the batch's results log stream
+  (`/aws/bedrock-agentcore/evaluations/batch-evaluations/results/<workspace>`,
+  stream `run-<batchEvaluationId>`). The run's error now carries both, so read the
+  run row first and go to the log stream only for the remaining traces.
 - **Harness agents are excluded from batch evaluation.** Managed-harness agents
   don't expose a span service name for trace scoping, so batch eval targets
   runtime-backed agents (`zip_runtime` / `studio` / `container`). The UI states

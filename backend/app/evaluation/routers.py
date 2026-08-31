@@ -19,7 +19,7 @@ from app.evaluation import agentcore_eval as ac
 from app.evaluation import service
 from app.evaluation.models import EvalDataset, EvalRun
 from app.evaluation.queue import run_queue
-from app.evaluation.scenarios import normalize_scenarios
+from app.evaluation.scenarios import available_ground_truth, normalize_scenarios
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services.agentcore.client import control_client
@@ -127,6 +127,51 @@ def _has_ground_truth(items: list[dict[str, Any]]) -> bool:
         if any(t.get("expected_response") for t in scenario.get("turns", [])):
             return True
     return False
+
+
+def _assert_judge_ground_truth(
+    ws: WorkspaceScope, evaluators: list[str], items: list[dict[str, Any]]
+) -> None:
+    """Reject a custom judge whose prompt wants ground truth this scope lacks.
+
+    A judge prompt referencing e.g. ``{expected_response}`` gets it from the
+    ``sessionMetadata`` this run derives from the dataset's scenarios. With
+    nothing to fill it, AgentCore throws ``ValueError: Evaluator prompt
+    requires: 'expected_response'`` on EVERY (session x evaluator) pair and the
+    whole batch ends FAILED ~10 minutes later — so the run is refused up front
+    instead. Builtin and ThirdParty ids skip the lookup entirely — neither owns
+    an authored judge prompt (``Builtin.Trajectory*`` has its own gate below). A
+    control-plane error fails OPEN: the service enforces the same constraint,
+    and a listing blip must not block submitting a run.
+    """
+    custom = [e for e in evaluators if not e.startswith(("Builtin.", "ThirdParty."))]
+    if not custom:
+        return
+    available = available_ground_truth(items)
+    control = control_client(ws.context)
+    missing: dict[str, list[str]] = {}
+    for evaluator in custom:
+        try:
+            detail = ac.get_evaluator(control, evaluator_id=evaluator)
+        except Exception:
+            continue
+        wanted = ac.ground_truth_placeholders(ac.judge_instructions(detail))
+        gap = [p for p in wanted if p not in available]
+        if gap:
+            missing[evaluator] = gap
+    if not missing:
+        return
+    named = "; ".join(
+        f"{e} needs " + ", ".join(f"{{{p}}}" for p in gap) for e, gap in missing.items()
+    )
+    raise AppError(
+        "run.judge_needs_ground_truth",
+        f"{named} — this run's scope carries no such ground truth. Add it to the "
+        "dataset scenarios (turns[].expected_response / expected_trajectory / "
+        "assertions), or edit the judge prompt to drop the placeholder.",
+        {"evaluators": missing},
+        status_code=422,
+    )
 
 
 def _dataset_out(dataset: EvalDataset) -> dict[str, Any]:
@@ -833,6 +878,9 @@ def create_run(
             "actor_model_id (the Bedrock model that plays the user)",
             status_code=422,
         )
+
+    if req.mode == "evaluators":
+        _assert_judge_ground_truth(ws, req.evaluators, items)
 
     # Trajectory*Match evaluators score against expectedTrajectory ground
     # truth — only a dataset run whose scenarios carry it can supply that.

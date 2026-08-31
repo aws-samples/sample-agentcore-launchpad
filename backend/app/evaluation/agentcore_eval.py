@@ -9,6 +9,7 @@ clients so tests inject stubs; payloads mirror Lab4_AgentCore_Optimization.
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -251,6 +252,39 @@ def start_batch_evaluation(
 
 def get_batch_evaluation(client: Any, *, batch_id: str) -> dict[str, Any]:
     return client.get_batch_evaluation(batchEvaluationId=batch_id)
+
+
+def batch_failure_reason(logs_factory: Any, result: dict[str, Any]) -> str | None:
+    """First per-trace evaluator error a batch evaluation recorded, if any.
+
+    A FAILED batch's ``errorDetails`` only counts the casualties ("All 30
+    sessions failed during batch evaluation."); the reason each trace threw is
+    written exclusively to the batch's own results log stream, as
+    ``attributes.error.type`` / ``error.message`` on a ``gen_ai.evaluation.result``
+    record. Best-effort by design — the caller has a failure to report either way,
+    so an unreadable stream must degrade, not raise. ``logs_factory`` is called
+    only once a stream is actually on the result, so a batch that never produced
+    one costs no client.
+    """
+    cw = (result.get("outputConfig") or {}).get("cloudWatchConfig") or {}
+    group, stream = cw.get("logGroupName"), cw.get("logStreamName")
+    if not group or not stream:
+        return None
+    try:
+        events = logs_factory().get_log_events(
+            logGroupName=group, logStreamName=stream, limit=20, startFromHead=True
+        )["events"]
+        for event in events:
+            attrs = json.loads(event["message"]).get("attributes") or {}
+            message = attrs.get("error.message")
+            if not message:
+                continue
+            evaluator = attrs.get("gen_ai.evaluation.name") or "evaluator"
+            kind = attrs.get("error.type") or "error"
+            return f"{evaluator}: {kind}: {message}"
+    except Exception:
+        return None
+    return None
 
 
 def parse_eval_scores(result: dict[str, Any]) -> list[dict[str, Any]]:
