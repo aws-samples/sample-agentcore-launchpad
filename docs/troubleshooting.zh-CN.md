@@ -49,6 +49,20 @@ English: [troubleshooting.md](troubleshooting.md)
 - **小样本下 A/B 各臂指标滞后 > 30 分钟。** online-evaluation 指标需要时间填充,
   因此在只有少量调用时,verdict 会如实报告为 *insufficient-data*,而不是强行给出。
   要得到真实的显著性判定,请用更大的流量(或等待)。
+- **需要参考答案的 judge 会在运行开始前被拒绝。** 自定义 LLM judge 的 prompt 若
+  引用 `{expected_response}`、`{expected_tool_trajectory}` 或 `{assertions}`,这些
+  值来自数据集场景。若运行范围是时间窗口 / 会话 id,或数据集本身不带这些内容,
+  AgentCore 会对每个 (会话 × 评估器) 组合抛出
+  `ValueError: Evaluator prompt requires: 'expected_response'`,整个 batch 在约
+  10 分钟后以 FAILED 结束;因此控制台会直接以 `run.judge_needs_ground_truth`
+  拒绝提交。修复方式:给数据集场景补上参考答案
+  (`turns[].expected_response` / `expected_trajectory` / `assertions`),或编辑
+  judge prompt 去掉该占位符。
+- **失败的运行会写明原因。** batch 的 `errorDetails` 只统计伤亡("All 30 sessions
+  failed");每条 trace 的真实原因只写在该 batch 自己的结果日志流里
+  (`/aws/bedrock-agentcore/evaluations/batch-evaluations/results/<workspace>`,
+  流名 `run-<batchEvaluationId>`)。现在运行记录的 error 同时带上两者,先读运行行,
+  只在需要看其余 trace 时才去翻日志流。
 - **Harness Agent 不参与 batch evaluation。** Managed-harness Agent 不暴露用于
   trace 范围限定的 span service name,因此 batch eval 面向 runtime 型 Agent
   (`zip_runtime` / `studio` / `container`)。UI 会说明这一限制。

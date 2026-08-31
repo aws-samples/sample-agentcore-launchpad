@@ -89,3 +89,21 @@ def ground_truth_metadata(
             }
         )
     return out
+
+
+def available_ground_truth(items: list[dict[str, Any]]) -> set[str]:
+    """Judge placeholders a dataset's scenarios can actually fill.
+
+    Named after ``agentcore_eval.GROUND_TRUTH_PLACEHOLDERS`` so a judge prompt's
+    placeholders can be diffed against a run's scope directly. An empty item
+    list (window / session-id scope) supplies nothing.
+    """
+    available: set[str] = set()
+    for scenario in normalize_scenarios(items):
+        if any(t.get("expected_response") for t in scenario.get("turns", [])):
+            available.add("expected_response")
+        if scenario.get("expected_trajectory"):
+            available.add("expected_tool_trajectory")
+        if scenario.get("assertions"):
+            available.add("assertions")
+    return available

@@ -907,7 +907,12 @@ export function Evaluation() {
                 <td className="mono">run-{run.id.slice(0, 6)}</td>
                 <td className="pri">{run.agent_name}</td>
                 <td className="mono dim">{scopeLabel(run)}</td>
-                <td className="mono dim">{run.evaluators.length}</td>
+                <td
+                  className="mono dim"
+                  title={run.evaluators.map((e) => evaluatorLabel(t, e)).join(", ")}
+                >
+                  {run.evaluators.length}
+                </td>
                 <td
                   className="mono"
                   style={{ color: run.scores.length ? "var(--good)" : "var(--ink-3)" }}
@@ -986,6 +991,66 @@ export function Evaluation() {
                 <span>{t("evalPage.scores.note")}</span>
               </div>
             </>
+          ) : selectedRun ? (
+            // A failed (or still running) run has no scores, and used to fall
+            // through to "select a completed run" — hiding both what was applied
+            // and why it failed, since the reason only ever flashed past in a
+            // toast during polling.
+            <div data-testid="run-detail">
+              <div className="kv">
+                <span className="k">{t("evalPage.newRun.mode")}</span>
+                <span className="v">
+                  {t(
+                    selectedRun.mode === "insights"
+                      ? "evalPage.newRun.modeInsights"
+                      : "evalPage.newRun.modeEvaluators",
+                  )}
+                </span>
+              </div>
+              <div className="kv">
+                <span className="k">{t("evalPage.runs.dataset")}</span>
+                <span className="v">{scopeLabel(selectedRun)}</span>
+              </div>
+              <div className="kv">
+                <span className="k">{t("evalPage.runs.sessions")}</span>
+                <span className="v">{selectedRun.session_ids.length}</span>
+              </div>
+              {selectedRun.batch_eval_id && (
+                <div className="kv">
+                  <span className="k">{t("evalPage.runs.batch")}</span>
+                  <span className="v">{selectedRun.batch_eval_id}</span>
+                </div>
+              )}
+              <div className="kv" style={{ marginTop: 4 }}>
+                <span className="k">
+                  {t(
+                    selectedRun.mode === "insights"
+                      ? "evalPage.newRun.insightTypes"
+                      : "evalPage.runs.applied",
+                  )}
+                </span>
+              </div>
+              <div className="selchips" style={{ marginBottom: 10 }}>
+                {selectedRun.evaluators.map((id) => (
+                  <span className="selchip" key={id} title={id}>
+                    {evaluatorLabel(t, id)}
+                  </span>
+                ))}
+              </div>
+              {selectedRun.error ? (
+                <div className="note" style={{ borderColor: "var(--crit)" }}>
+                  <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+                  <span>
+                    {t("evalPage.runs.failureReason")}{" "}
+                    <span className="mono" data-testid="run-error">
+                      {selectedRun.error}
+                    </span>
+                  </span>
+                </div>
+              ) : (
+                <div className="empty">{t("evalPage.scores.empty")}</div>
+              )}
+            </div>
           ) : (
             <div className="empty">{t("evalPage.scores.empty")}</div>
           )}
@@ -1053,9 +1118,11 @@ export function Evaluation() {
                 detail={(c) => c.affectedSessions?.find((s) => s.finalOutcome)?.finalOutcome}
               />
             </div>
-          ) : selectedRun?.error ? (
+          ) : selectedRun?.error && selectedRun.status === "completed" ? (
             // COMPLETED_WITH_ERRORS: the run finished but the service returned
             // no trees (e.g. under 3 sessions — clustering minimum). Show why.
+            // A FAILED run is not a partial result — its reason belongs to the
+            // run-detail block on the left, not here.
             <div className="note" style={{ borderColor: "var(--warn)" }}>
               <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
               <span>

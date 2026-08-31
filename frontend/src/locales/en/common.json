@@ -1715,7 +1715,11 @@
       "status": "STATUS",
       "empty": "NO RUNS YET — PRESS + NEW RUN",
       "newEvaluation": "NEW Evaluation",
-      "createExperiment": "CREATE BUNDLE A/B EXPERIMENT"
+      "createExperiment": "CREATE BUNDLE A/B EXPERIMENT",
+      "sessions": "SESSIONS",
+      "batch": "BATCH ID",
+      "applied": "APPLIED EVALUATORS",
+      "failureReason": "Failure reason:"
     },
     "status": {
       "completed": "COMPLETE",
