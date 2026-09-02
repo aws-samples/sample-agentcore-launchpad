@@ -6,15 +6,23 @@ Platform contracts baked into every generated agent:
   falling back to the defaults below when no bundle is routed.
 - **Observability (ADOT):** the runtime entrypoint launches this file through
   ``opentelemetry-instrument`` so traces land in CloudWatch automatically.
+- **Streaming (Chat contract):** the entrypoint is an async generator that
+  yields ``delta`` / ``tool`` / ``complete`` events (plus ``heartbeat`` frames
+  during quiet periods) — the same envelope the Claude SDK container template
+  emits, so the platform shows a zip runtime's tokens and tool calls live,
+  exactly like a Managed Harness agent.
 
 Template lineage: adapted from agentcore_eva_opt lab4 deploy pattern
 (github.com/xiehust/agentcore_eva_opt).
 """
 
 import ast
+import asyncio
 import operator
 import os
-from contextlib import ExitStack
+import time
+from collections.abc import AsyncIterator
+from contextlib import ExitStack, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -260,15 +268,96 @@ def build_agent(
 
 app = BedrockAgentCoreApp()
 
+# Keep this frame larger than the backend's 32-byte SSE read chunk, and the
+# interval shorter than any idle timeout between the Runtime and the console.
+SSE_HEARTBEAT_INTERVAL_S = 15.0
 
-@app.entrypoint
-def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]:
-    prompt = str(payload.get("prompt", "")).strip()
-    if not prompt:
-        return {"error": "payload must include a non-empty 'prompt'"}
+
+async def _events_with_heartbeat(
+    events: AsyncIterator[dict[str, Any]],
+    interval_s: float = SSE_HEARTBEAT_INTERVAL_S,
+) -> AsyncIterator[dict[str, Any]]:
+    """Keep the response active while one task owns the agent's async generator.
+
+    OpenTelemetry context tokens must be detached in the task that attached
+    them, so a single producer task pumps the iterator into a queue while this
+    consumer emits heartbeat frames during quiet periods (long tool calls).
+    """
+    iterator = events.__aiter__()
+    queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=1)
+
+    async def produce() -> None:
+        try:
+            async for event in iterator:
+                await queue.put(("event", event))
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            await queue.put(("error", exc))
+        else:
+            await queue.put(("done", None))
+
+    producer = asyncio.create_task(produce())
+    try:
+        while True:
+            try:
+                kind, value = await asyncio.wait_for(queue.get(), timeout=interval_s)
+            except TimeoutError:
+                yield {"event": "heartbeat", "timestamp": time.time()}
+                continue
+            if kind == "event":
+                yield value
+            elif kind == "error":
+                raise value
+            else:
+                return
+    finally:
+        if not producer.done():
+            producer.cancel()
+            with suppress(asyncio.CancelledError):
+                await producer
+        close = getattr(iterator, "aclose", None)
+        if close is not None:
+            await close()
+
+
+async def agent_events(agent: Agent, prompt: str) -> AsyncIterator[dict[str, Any]]:
+    """Map Strands ``stream_async`` events onto the platform's runtime envelope.
+
+    ``data`` text chunks become ``delta``; the first sight of each tool use
+    (``current_tool_use`` or the raw ``contentBlockStart``) becomes one ``tool``
+    event; the final ``AgentResult`` closes the turn as ``complete``. The
+    platform (``rt._runtime_payload_events``) parses this identically to the
+    Claude SDK container stream and to InvokeHarness's content blocks.
+    """
+    seen_tool_ids: set[str] = set()
+    result: Any = None
+    async for event in agent.stream_async(prompt):
+        if not isinstance(event, dict):
+            continue
+        text = event.get("data")
+        if isinstance(text, str) and text:
+            yield {"event": "delta", "text": text}
+        tool_use = event.get("current_tool_use")
+        if not isinstance(tool_use, dict):
+            raw = event.get("event")
+            if isinstance(raw, dict):
+                tool_use = raw.get("contentBlockStart", {}).get("start", {}).get("toolUse")
+        if isinstance(tool_use, dict) and tool_use.get("name"):
+            tool_id = str(tool_use.get("toolUseId") or "")
+            key = tool_id or str(tool_use["name"])
+            if key not in seen_tool_ids:
+                seen_tool_ids.add(key)
+                yield {"event": "tool", "name": str(tool_use["name"]), "id": tool_id or None}
+        if "result" in event:
+            result = event["result"]
+    yield {"event": "complete", "result": str(result) if result is not None else ""}
+
+
+async def _turn_events(
+    payload: dict[str, Any], prompt: str, session_id: str
+) -> AsyncIterator[dict[str, Any]]:
     actor_id = str(payload.get("actor_id", "default"))
-    session_id = str(getattr(context, "session_id", "") or payload.get("session_id", "") or "adhoc")
-
     # The Gateway MCP session must stay open for as long as the agent may call one
     # of its tools, so it is scoped to the whole turn. GATEWAY_TOOLS is a no-op
     # returning [] for a spec with no gateway tool.
@@ -289,8 +378,22 @@ def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]:
         known = recall_context(actor_id, prompt)
         if known:
             agent.system_prompt = f"{resolve_system_prompt()}\n\nKnown user context:\n{known}"
-        result = agent(prompt)
-        return {"result": str(result)}
+        async for event in agent_events(agent, prompt):
+            yield event
+
+
+@app.entrypoint
+async def invoke(
+    payload: dict[str, Any], context: Any = None
+) -> AsyncIterator[dict[str, Any]]:
+    prompt = str(payload.get("prompt", "")).strip()
+    if not prompt:
+        yield {"event": "error", "message": "payload must include a non-empty 'prompt'"}
+        return
+    session_id = str(getattr(context, "session_id", "") or payload.get("session_id", "") or "adhoc")
+    turn = _turn_events(payload, prompt, session_id)
+    async for event in _events_with_heartbeat(turn, SSE_HEARTBEAT_INTERVAL_S):
+        yield event
 
 
 if __name__ == "__main__":

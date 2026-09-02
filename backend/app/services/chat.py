@@ -1,7 +1,8 @@
 """The single chat/invoke chain shared by the Chat playground and the public /v1 API.
 
-Harness and Claude SDK container agents stream real deltas, including tool-use
-events. Other runtime methods keep the buffered compatibility path.
+Harness, Claude SDK container, and generated Strands zip-runtime agents stream
+real deltas, including tool-use events. Other runtime methods keep the buffered
+compatibility path.
 """
 
 import json
@@ -13,7 +14,7 @@ from app.models.ledger import Agent
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import data_client
 from app.services.agentcore.harness import new_session_id
-from app.services.invoke import invoke_agent_events
+from app.services.invoke import NATIVE_STREAM_METHODS, invoke_agent_events
 from app.services.runtime_discovery import is_discovered_harness
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
@@ -38,7 +39,7 @@ def chat_stream(
     )
     # Imported harnesses stream through the same InvokeHarness path as 方式B.
     harness = agent.method == "harness" or is_discovered_harness(agent)
-    mode = "stream" if harness or agent.method == "container" else "buffered"
+    mode = "stream" if harness or agent.method in NATIVE_STREAM_METHODS else "buffered"
     yield {
         "event": "meta",
         "data": {"session_id": session_id, "agent": agent.name, "mode": mode},

@@ -1,5 +1,6 @@
 """Template rendering, compilation, and the config-bundle fallback contract."""
 
+import asyncio
 import importlib.util
 import py_compile
 import sys
@@ -563,19 +564,88 @@ def test_invoke_closes_batched_session_manager(template_module, monkeypatch):
     def fake_build_agent(actor_id, session_id, extra_tools=None, session_manager=None):
         captured["session_manager"] = session_manager
 
-        def run(prompt):
+        async def stream_async(prompt):
             events.append("invoke")
-            return "ok"
+            yield {"result": "ok"}
 
-        return run
+        return types.SimpleNamespace(stream_async=stream_async)
 
     monkeypatch.setattr(template_module, "build_agent", fake_build_agent)
 
-    out = template_module.invoke({"prompt": "hi"})
+    out = _drain(template_module.invoke({"prompt": "hi"}))
 
-    assert out == {"result": "ok"}
+    assert out == [{"event": "complete", "result": "ok"}]
     assert captured["session_manager"] is manager
     assert events == ["enter", "invoke", "exit"]
+
+
+def _drain(agen):
+    async def collect():
+        return [event async for event in agen]
+
+    return asyncio.run(collect())
+
+
+def test_invoke_streams_deltas_and_tool_calls_like_the_harness(template_module, monkeypatch):
+    """The zip runtime's SSE envelope must match the container template's
+    (delta/tool/complete) so Chat renders live tokens and tool calls for both."""
+    strands_events = [
+        {"event": {"messageStart": {"role": "assistant"}}},
+        {"data": "Let me ", "delta": {"text": "Let me "}},
+        {"data": "check.", "delta": {"text": "check."}},
+        # Tool use: the raw contentBlockStart, then per-input-delta current_tool_use
+        {"event": {"contentBlockStart": {"start": {"toolUse": {
+            "toolUseId": "t1", "name": "calculator"}}}}},
+        {"current_tool_use": {"toolUseId": "t1", "name": "calculator", "input": "{"}},
+        {"current_tool_use": {"toolUseId": "t1", "name": "calculator", "input": '{"e'}},
+        {"data": "8", "delta": {"text": "8"}},
+        {"result": "Let me check.8"},
+    ]
+
+    def fake_build_agent(actor_id, session_id, extra_tools=None, session_manager=None):
+        async def stream_async(prompt):
+            assert prompt == "2+2*3"
+            for event in strands_events:
+                yield event
+
+        return types.SimpleNamespace(stream_async=stream_async)
+
+    monkeypatch.setattr(template_module, "memory_session_manager", lambda a, s: None)
+    monkeypatch.setattr(template_module, "build_agent", fake_build_agent)
+
+    out = _drain(template_module.invoke({"prompt": "2+2*3"}))
+
+    assert out == [
+        {"event": "delta", "text": "Let me "},
+        {"event": "delta", "text": "check."},
+        {"event": "tool", "name": "calculator", "id": "t1"},  # emitted once per tool use
+        {"event": "delta", "text": "8"},
+        {"event": "complete", "result": "Let me check.8"},
+    ]
+
+
+def test_invoke_rejects_empty_prompt_as_error_event(template_module):
+    assert _drain(template_module.invoke({"prompt": "  "})) == [
+        {"event": "error", "message": "payload must include a non-empty 'prompt'"}
+    ]
+
+
+def test_invoke_emits_heartbeat_during_a_quiet_tool_call(template_module, monkeypatch):
+    def fake_build_agent(actor_id, session_id, extra_tools=None, session_manager=None):
+        async def stream_async(prompt):
+            await asyncio.sleep(0.05)  # a slow tool
+            yield {"result": "done"}
+
+        return types.SimpleNamespace(stream_async=stream_async)
+
+    monkeypatch.setattr(template_module, "memory_session_manager", lambda a, s: None)
+    monkeypatch.setattr(template_module, "build_agent", fake_build_agent)
+    monkeypatch.setattr(template_module, "SSE_HEARTBEAT_INTERVAL_S", 0.01)
+
+    out = _drain(template_module.invoke({"prompt": "hi"}))
+
+    assert out[-1] == {"event": "complete", "result": "done"}
+    assert out[0]["event"] == "heartbeat" and "timestamp" in out[0]
 
 
 # --- platform toolkits ------------------------------------------------------

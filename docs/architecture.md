@@ -490,14 +490,19 @@ invoke, Chat, and `/v1` enforce the same projection. Imported runtimes use the
 buffered compatibility path because Launchpad cannot assume an arbitrary
 external runtime emits the generated Claude SDK event contract.
 
-Harness and Claude Agent SDK container agents stream native model deltas.
-Claude containers enable SDK partial messages and yield `delta`, `tool`, and
-`complete` events through the AgentCore Runtime SSE response; the platform
-parses the Runtime `StreamingBody` incrementally and forwards those events
-without waiting for EOF. Synchronous invoke consumes the same event parser and
-joins deltas. Zip/studio runtimes and active canary Gateway routes retain the
-buffered compatibility path. Existing containers must be republished to pick
-up a changed generated runtime template. AgentCore pins an existing runtime
+Harness, Claude Agent SDK container, and generated Strands zip-runtime agents
+stream native model deltas. Claude containers enable SDK partial messages, and
+the Strands zip template drives `Agent.stream_async` from an async-generator
+entrypoint; both yield the same `delta`, `tool`, and `complete` events (plus
+`heartbeat` frames during long tool calls) through the AgentCore Runtime SSE
+response. The platform parses the Runtime `StreamingBody` incrementally and
+forwards those events without waiting for EOF, so a zip agent's tokens and tool
+calls appear in Chat exactly as a Managed Harness agent's do. Synchronous invoke
+consumes the same event parser and joins deltas. Studio runtimes, A2A runtimes,
+and active canary Gateway routes retain the buffered compatibility path; a zip
+runtime deployed from the older template still answers one JSON result, which
+the same parser renders as a single delta. Existing runtimes must be republished
+to pick up a changed generated template. AgentCore pins an existing runtime
 session to the version that first served it, so a post-republish validation
 must start a new Chat session; an old session continues on its original image.
 

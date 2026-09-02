@@ -87,12 +87,12 @@ curl -sN -X POST "http://127.0.0.1:8000/v1/agents/$AGENT_ID/invoke-stream" \
   -d '{"prompt":"用两句话比较 Runtime 的流式连接和异步任务最长持续时间。","session_id":null}'
 ```
 
-`lab-quota-assistant` 是 ZIP Runtime，流式接口会使用缓冲兼容模式。下面保留事件结构，
-文本和耗时以你的调用结果为准：
+`lab-quota-assistant` 是 ZIP Runtime，流式接口会原生逐字输出，并在触发工具时给出 `tool`
+事件。下面保留事件结构，文本和耗时以你的调用结果为准：
 
 ```
 event: meta
-data: {"session_id": "<session id>", "agent": "lab-quota-assistant", "mode": "buffered"}
+data: {"session_id": "<session id>", "agent": "lab-quota-assistant", "mode": "stream"}
 
 event: delta
 data: {"text": "<一段增量文本>"}
@@ -110,9 +110,9 @@ data: {"latency_ms": <端到端毫秒数，整数>}
 | `tool` | 触发工具时返回工具调用信息 |
 | `done` | 结束，带 `latency_ms` |
 
-> `"mode": "buffered"` 表示 ZIP Runtime 先取回完整结果，再按 SSE 契约切成 `delta` 帧。
-> 托管 Harness 支持原生增量流式输出。两种方式使用相同的公共 SSE 事件类型，但首段文本到达时间
-> 和逐字输出体感会不同。
+> `"mode": "stream"` 表示 ZIP Runtime 与托管 Harness 一样，逐字输出原生模型增量，并实时
+> 返回 `tool` 事件。只有 Studio runtime 与 A2A runtime 仍是 `"buffered"`：先取回完整结果，
+> 再按 SSE 契约切成 `delta` 帧。
 
 ## 6.5 鉴权失败长什么样
 

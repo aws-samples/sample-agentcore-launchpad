@@ -40,8 +40,9 @@ def make_active_agent(method="zip_runtime", name="chat-agent") -> str:
 
 
 def test_chat_stream_buffered_chunks(monkeypatch):
+    # Studio runtimes capture stdout as one result, so they stay on the buffered path.
     db = SessionLocal()
-    agent = db.get(Agent, make_active_agent())
+    agent = db.get(Agent, make_active_agent(method="studio"))
     db.close()
     monkeypatch.setattr(
         chat_service,
@@ -78,6 +79,75 @@ def test_chat_stream_container_forwards_native_events(monkeypatch):
     assert events[0]["data"]["mode"] == "stream"
     assert events[1:-1] == native
     assert events[-1]["event"] == "done"
+
+
+def test_zip_runtime_streams_native_runtime_events_like_harness(monkeypatch):
+    """STRANDS · ZIP agents must show live deltas and tool calls in the playground,
+    not a 60-char buffered replay — same contract as harness/container."""
+    import app.services.invoke as invoke_service
+
+    db = SessionLocal()
+    agent = db.get(Agent, make_active_agent(method="zip_runtime", name="zip-stream"))
+    db.close()
+
+    class Body:
+        def iter_lines(self, *, chunk_size):
+            yield from [
+                b'data: {"event":"delta","text":"hello "}',
+                b"",
+                b'data: {"event":"tool","name":"calculator","id":"tool-1"}',
+                b"",
+                b'data: {"event":"delta","text":"world"}',
+                b"",
+                b'data: {"event":"complete","result":"hello world"}',
+                b"",
+            ]
+
+    class StreamingDataPlane:
+        def __init__(self):
+            self.invoked_with = None
+
+        def invoke_agent_runtime(self, **kwargs):
+            self.invoked_with = kwargs
+            return {"response": Body(), "contentType": "text/event-stream"}
+
+    data = StreamingDataPlane()
+    monkeypatch.setattr(invoke_service, "data_client", lambda _ws=None: data)
+    monkeypatch.setattr(invoke_service.canary_service, "active_canary_route", lambda _id: None)
+
+    events = list(chat_stream(agent, "hello", session_id="s" * 40, workspace=ws_ctx()))
+
+    assert events[0]["data"]["mode"] == "stream"
+    assert [e["event"] for e in events] == ["meta", "delta", "tool", "delta", "done"]
+    assert events[2]["data"] == {"name": "calculator", "id": "tool-1"}
+    assert "".join(e["data"]["text"] for e in events if e["event"] == "delta") == "hello world"
+    assert data.invoked_with["agentRuntimeArn"] == agent.arn
+
+
+def test_zip_runtime_legacy_json_result_still_renders(monkeypatch):
+    """A zip runtime deployed from the pre-streaming template answers JSON; the
+    native path must turn that into one delta instead of failing."""
+    import app.services.invoke as invoke_service
+
+    db = SessionLocal()
+    agent = db.get(Agent, make_active_agent(method="zip_runtime", name="zip-legacy"))
+    db.close()
+
+    class Body:
+        def read(self):
+            return b'{"result": "plain answer"}'
+
+    class JsonDataPlane:
+        def invoke_agent_runtime(self, **_kwargs):
+            return {"response": Body(), "contentType": "application/json"}
+
+    monkeypatch.setattr(invoke_service, "data_client", lambda _ws=None: JsonDataPlane())
+    monkeypatch.setattr(invoke_service.canary_service, "active_canary_route", lambda _id: None)
+
+    events = list(chat_stream(agent, "hello", session_id="s" * 40, workspace=ws_ctx()))
+
+    assert [e["event"] for e in events] == ["meta", "delta", "done"]
+    assert events[1]["data"]["text"] == "plain answer"
 
 
 def test_chat_stream_error_event(monkeypatch):

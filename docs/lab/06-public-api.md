@@ -84,7 +84,7 @@ SSE 输出应先出现 `meta`，随后出现若干 `delta`。例如：
 
 ```
 event: meta
-data: {"session_id": "<SESSION_ID>", "agent": "lab-fund-assistant", "mode": "buffered"}
+data: {"session_id": "<SESSION_ID>", "agent": "lab-fund-assistant", "mode": "stream"}
 
 event: delta
 data: {"text": "<第一段增量文本>"}
@@ -102,9 +102,9 @@ data: {"text": "<下一段增量文本>"}
 | `tool` | 工具调用；是否出现取决于当前问题 |
 | `complete` | 结束 |
 
-> `"mode": "buffered"` 是个有用的细节：**zip/studio runtime 走缓冲兼容路径**（先取回再切帧），
-> 而 Harness 与 Claude SDK 容器能吐**原生**模型增量。所以同一个 SSE 契约下，
-> 不同创建方式的"逐字"体感不同，这是数据面能力差异。
+> `mode` 是个有用的细节：Harness、Claude SDK 容器和 Strands ZIP runtime 都是 `"stream"`，
+> 能吐**原生**模型增量和 `tool` 事件；只有 studio runtime 与 A2A runtime 仍是 `"buffered"`
+> （先取回完整结果再切成 `delta` 帧）。同一个 SSE 契约下，后者没有"逐字"体感，也看不到工具调用。
 >
 > `lab-fund-assistant` 没有挂知识库，同一事实的回答可能不稳定。不要把这一节的回答当作
 > 资料依据；第 08 章会用带真值的数据集量化这种差异。

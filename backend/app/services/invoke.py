@@ -26,6 +26,10 @@ from app.templates import gateway_support
 
 logger = logging.getLogger(__name__)
 BUFFERED_CHUNK_CHARS = 60
+# Runtime methods whose generated entrypoint emits the delta/tool/complete
+# envelope over SSE (see `rt._runtime_payload_events`). Shared with chat so the
+# advertised `mode` and the actual invoke path can't drift apart.
+NATIVE_STREAM_METHODS = frozenset({"container", "zip_runtime"})
 
 
 def _runtime_user_id(
@@ -217,13 +221,21 @@ def invoke_agent_events(
     gateway_access_token: str | None = None,
     workspace: WorkspaceContext | None = None,
 ) -> Iterator[dict[str, Any]]:
-    """Yield native container events, with a buffered compatibility fallback."""
+    """Yield native runtime events, with a buffered compatibility fallback.
+
+    Claude SDK containers and generated Strands zip runtimes both emit the
+    delta/tool/complete envelope over the Runtime SSE response, so they are
+    parsed incrementally. A zip runtime deployed before its template streamed
+    still answers a JSON ``{"result": ...}`` body, which the same parser turns
+    into one delta — so the switch is safe for existing agents.
+    """
     require_invoke_capability(agent)
     workspace = _agent_workspace(agent, workspace)
-    is_http_container = (
-        agent.method == "container" and (agent.spec or {}).get("protocol", "http") != "a2a"
+    streams_natively = (
+        agent.method in NATIVE_STREAM_METHODS
+        and (agent.spec or {}).get("protocol", "http") != "a2a"
     )
-    if is_http_container and canary_service.active_canary_route(agent.id) is None:
+    if streams_natively and canary_service.active_canary_route(agent.id) is None:
         kwargs: dict[str, Any] = {
             "session_id": session_id,
             "actor_id": actor_id,
