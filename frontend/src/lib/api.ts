@@ -1356,6 +1356,96 @@ export interface RegisterResult {
   valid_days: number;
 }
 
+/* ── online evaluation (continuous, sampled scoring of live sessions) ───── */
+
+export type OnlineEvalOwner = "agent" | "experiment" | "external";
+
+export type OnlineEvalFilterOperator =
+  | "Equals"
+  | "NotEquals"
+  | "GreaterThan"
+  | "LessThan"
+  | "GreaterThanOrEqual"
+  | "LessThanOrEqual"
+  | "Contains"
+  | "NotContains";
+
+/** Exactly one of the value branches is set (AWS `rule.filters[].value`). */
+export interface OnlineEvalFilter {
+  key: string;
+  operator: OnlineEvalFilterOperator;
+  value: { stringValue?: string; doubleValue?: number; booleanValue?: boolean };
+}
+
+/**
+ * One shape for list rows and Get details — `detailed` tells which: list
+ * summaries of experiment-owned configs carry no evaluators/rule (AWS lists
+ * lack them and the page does not enrich those rows).
+ */
+export interface OnlineEvalConfigRow {
+  config_id: string;
+  arn: string | null;
+  name: string | null;
+  description: string;
+  owner: OnlineEvalOwner;
+  status: string | null;
+  execution_status: string | null;
+  failure_reason: string | null;
+  agent_id: string | null;
+  agent_name: string | null;
+  matched_agent: { id: string; name: string } | null;
+  detailed: boolean;
+  evaluators: string[];
+  sampling_percentage: number | null;
+  session_timeout_minutes: number | null;
+  filter_count: number;
+  filters: OnlineEvalFilter[];
+  data_source: { log_groups: string[]; service_name: string | null };
+  insights: string[];
+  clustering_frequencies: string[];
+  execution_role_arn: string | null;
+  results_log_group: string;
+  duplicate_enabled: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface OnlineEvalResultsEvaluator {
+  evaluator_id: string;
+  level: string | null;
+  mean: number | null;
+  count: number;
+  sessions: number;
+  labels: Record<string, number>;
+}
+
+export interface OnlineEvalResultsPoint {
+  bucket: string;
+  mean: number | null;
+  count: number;
+}
+
+export interface OnlineEvalResultsRecord {
+  time: string | null;
+  session_id: string | null;
+  trace_id: string | null;
+  evaluator_id: string | null;
+  level: string | null;
+  score: number | null;
+  label: string | null;
+  explanation: string | null;
+  error: string | null;
+}
+
+export interface OnlineEvalResults {
+  range: string;
+  log_group: string;
+  evaluators: OnlineEvalResultsEvaluator[];
+  series: Record<string, OnlineEvalResultsPoint[]>;
+  recent: OnlineEvalResultsRecord[];
+  errors: { count: number; first_message: string | null };
+}
+
 /* ── workspaces (the environment a request targets) ────────────────────── */
 
 export type WorkspaceBootstrapStatus = "registered" | "bootstrapping" | "ready" | "failed";

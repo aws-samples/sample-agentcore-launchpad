@@ -61,3 +61,26 @@ class EvalRun(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )
+
+
+class OnlineEvalConfig(Base):
+    """Ledger row linking an AWS online evaluation config to the agent it scores.
+
+    Identifiers only — status, evaluators, rule and data source are read back from
+    ``GetOnlineEvaluationConfig`` on every list/detail (AWS is the source of
+    truth). Configs the console did not create (experiment arms, AWS console /
+    CLI) have no row and are classified by name at read time.
+    """
+
+    __tablename__ = "online_eval_configs"
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    agent_id: Mapped[str] = mapped_column(String(32), index=True)
+    agent_name: Mapped[str] = mapped_column(String(64))
+    config_id: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    config_arn: Mapped[str] = mapped_column(String(256))
+    name: Mapped[str] = mapped_column(String(48))
+    service_name: Mapped[str] = mapped_column(String(128))
+    log_group: Mapped[str] = mapped_column(String(256))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
