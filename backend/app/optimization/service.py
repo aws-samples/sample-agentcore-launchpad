@@ -28,6 +28,11 @@ from app.core.errors import AppError
 from app.deployer.pipeline import create_deployment, execute_deploy_job
 from app.evaluation import agentcore_eval as ac
 from app.evaluation.models import EvalRun
+from app.evaluation.online_evaluators import (  # noqa: F401 — re-exported
+    ONLINE_EVAL_DEFAULT,
+    ONLINE_EVAL_MAX,
+    normalize_online_evaluators,
+)
 from app.evaluation.scenarios import scenario_prompts
 from app.models.ledger import Agent, Deployment, Job
 from app.optimization.models import Experiment
@@ -41,10 +46,10 @@ from app.templates.toolkits import toolkit_tool_descriptions
 EXP_GATEWAY_NAME = "launchpad-exp-gw"
 
 # Online evaluation for an experiment: the arms are scored by whatever evaluators
-# the operator picks at the GATEWAY stage. The default pair is what every
-# experiment used before the set became selectable.
-ONLINE_EVAL_DEFAULT = ("Builtin.GoalSuccessRate", "Builtin.Helpfulness")
-ONLINE_EVAL_MAX = 10  # CreateOnlineEvaluationConfig caps the list at 10
+# the operator picks at the GATEWAY stage. The validation and defaults live in
+# app.evaluation.online_evaluators (shared with the per-agent online evaluation
+# surface); re-exported here so callers and tests keep importing from service.
+__all__ = ["ONLINE_EVAL_DEFAULT", "ONLINE_EVAL_MAX", "normalize_online_evaluators"]
 
 # Ceiling on in-flight gateway posts per traffic send, independent of what
 # `settings.traffic_concurrency` (or a caller) asks for. Every prompt opens its
@@ -758,90 +763,6 @@ def create_runtime_target_idempotent(
             return target_id
         _sleep(5)
     raise TimeoutError(f"target {name} not READY")
-
-
-def normalize_online_evaluators(
-    ids: Sequence[str] | None, control: Any
-) -> list[str]:
-    """Validate an operator-chosen evaluator set for online evaluation.
-
-    ``None``/empty falls back to :data:`ONLINE_EVAL_DEFAULT`. Online evaluation
-    scores live traces, which carry no ground truth, so two families are rejected
-    here rather than halfway through the gateway stage: the built-in trajectory
-    matchers, and custom judges whose instructions reference a ground-truth
-    placeholder (``{expected_response}`` & friends — AWS refuses those in an
-    online evaluation config too, but only at ``CreateOnlineEvaluationConfig``,
-    after :func:`stage_gateway` has already created the gateway and the runtime
-    target).
-
-    Inspecting a custom judge costs one ``GetEvaluator``, so it happens after
-    dedup and the count cap and only for non-``Builtin.`` ids — a built-in-only
-    selection, the common case, makes no AWS call at all.
-    """
-    chosen: list[str] = []
-    for raw in ids or ():
-        evaluator = str(raw).strip()
-        if not evaluator or evaluator in chosen:
-            continue
-        if evaluator in ac.TRAJECTORY_EVALUATORS:
-            raise AppError(
-                "experiment.evaluator_unsupported",
-                f"{evaluator} scores against dataset ground truth, which online "
-                "evaluation does not carry — use a batch evaluation run instead",
-                {"evaluator": evaluator},
-                status_code=400,
-            )
-        if evaluator.startswith("Builtin.") and evaluator not in ac.ALL_BUILTIN_EVALUATORS:
-            raise AppError(
-                "experiment.evaluator_unsupported",
-                f"unknown built-in evaluator {evaluator}",
-                {"evaluator": evaluator},
-                status_code=400,
-            )
-        chosen.append(evaluator)
-    if not chosen:
-        return list(ONLINE_EVAL_DEFAULT)
-    if len(chosen) > ONLINE_EVAL_MAX:
-        raise AppError(
-            "experiment.evaluator_unsupported",
-            f"online evaluation accepts at most {ONLINE_EVAL_MAX} evaluators, "
-            f"got {len(chosen)}",
-            {"count": len(chosen)},
-            status_code=400,
-        )
-    custom = [e for e in chosen if not e.startswith("Builtin.")]
-    if custom:
-        client = control
-        for evaluator in custom:
-            _assert_no_ground_truth(client, evaluator)
-    return chosen
-
-
-def _assert_no_ground_truth(control: Any, evaluator: str) -> None:
-    """Reject a custom judge that needs ground truth it will never get online."""
-    try:
-        detail = ac.get_evaluator(control, evaluator_id=evaluator)
-    except Exception as exc:
-        if _is_not_found(exc):
-            raise AppError(
-                "experiment.evaluator_unsupported",
-                f"unknown evaluator {evaluator}",
-                {"evaluator": evaluator},
-                status_code=400,
-            ) from exc
-        # a control-plane blip must not block gateway creation: AWS enforces the
-        # same constraint server-side, so fail open and let it have the last word
-        return
-    placeholders = ac.ground_truth_placeholders(ac.judge_instructions(detail))
-    if placeholders:
-        rendered = ", ".join(f"{{{p}}}" for p in placeholders)
-        raise AppError(
-            "experiment.evaluator_unsupported",
-            f"{evaluator} references {rendered}, which is ground truth online "
-            "evaluation does not carry — use a batch evaluation run instead",
-            {"evaluator": evaluator, "placeholders": placeholders},
-            status_code=400,
-        )
 
 
 def create_online_eval_idempotent(

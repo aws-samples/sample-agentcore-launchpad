@@ -1700,6 +1700,7 @@
       "label": "评估模块导航",
       "runs": "运行",
       "experiments": "实验",
+      "online": "在线评估",
       "datasets": "数据集",
       "evaluators": "评估器"
     },
@@ -1870,6 +1871,128 @@
         "s3": "评分量表——至少 2 档的数值量表(标签+定义)",
         "s4": "选用——在 NEW RUN 中把评审勾选为评估器",
         "note": "内置评估器由服务托管、只读;自定义评审运行在所选 Bedrock 模型上。"
+      }
+    },
+    "online": {
+      "title": "在线评估",
+      "meta": "持续运行 · 对线上会话抽样并由评估器打分——无需批量任务",
+      "listTitle": "在线评估配置",
+      "listSub": "工作区账户内的全部配置,按归属分类——点击行选中",
+      "new": "新建在线评估",
+      "detailTitle": "配置",
+      "col": {
+        "name": "名称",
+        "agent": "Agent",
+        "owner": "归属",
+        "evaluators": "评估器",
+        "sampling": "抽样率",
+        "status": "状态",
+        "updated": "更新时间"
+      },
+      "owner": {
+        "agent": "AGENT",
+        "experiment": "实验",
+        "external": "外部"
+      },
+      "matchedHint": "非本平台创建——通过运行时日志组匹配到该 Agent",
+      "empty": "暂无在线评估配置——在下方创建",
+      "loadFailed": "在线评估配置列表不可用",
+      "detailFailed": "配置详情不可用",
+      "formTitleCreate": "创建在线评估",
+      "formSub": "对单个 Agent 的线上会话抽样 · 会话超时后交给评估器打分",
+      "form": {
+        "badge": "新建",
+        "agent": "AGENT — 已部署且处于 ACTIVE",
+        "agentPick": "——选择 Agent——",
+        "agentHint": "Agent 需至少被调用过一次:运行时日志组尚不存在时 AWS 会拒绝创建配置。",
+        "evaluators": "评估器",
+        "evaluatorsHint": "每个被抽样的会话都会由所选的每个评估器打分(最多 {{max}} 个)。真值匹配类评估器不可用:在线评估读取的是线上 trace。",
+        "evaluatorsSelected": "已选 {{count}} / {{max}}",
+        "sampling": "抽样率 % — 0.01 … 100",
+        "timeout": "会话超时(分钟)— 1 … 1440",
+        "filters": "过滤条件 — 可选,最多 {{max}} 条",
+        "filtersHint": "只有 span 属性满足全部过滤条件的会话才会被采样。若 key 在 span 上不存在,所有会话都会被静默排除(用 session.id 实测过)——建议先不加过滤器,确认有结果后再加(AWS 文档示例:user.region、session.duration)。key 允许字母、数字、. _ -",
+        "filterValue": "值",
+        "addFilter": "添加过滤条件",
+        "removeFilter": "删除此条件",
+        "kind": {
+          "string": "字符串",
+          "number": "数值",
+          "boolean": "布尔"
+        },
+        "description": "描述 — 可选,≤ 200 字符",
+        "descriptionPlaceholder": "留空时按 Agent 名称自动生成",
+        "enableOnCreate": "创建后立即启用——配置进入 ACTIVE 后即开始抽样",
+        "create": "创建"
+      },
+      "err": {
+        "agent": "请先选择 Agent",
+        "sampling": "抽样率须在 0.01 到 100 之间",
+        "timeout": "会话超时须为 1 到 1440 之间的整数(分钟)",
+        "evaluators": "请选择 1 到 {{max}} 个评估器",
+        "filterCount": "过滤条件最多 {{max}} 条",
+        "filterKey": "过滤键名须匹配 ^[a-zA-Z0-9._-]{1,256}$",
+        "filterValue": "每条过滤条件都需要值(数值类型须为数字)",
+        "description": "描述不能超过 200 个字符"
+      },
+      "kv": {
+        "agent": "Agent",
+        "serviceName": "服务名",
+        "logGroups": "来源日志组",
+        "resultsLogGroup": "结果日志组",
+        "created": "创建时间",
+        "updated": "更新时间",
+        "evaluators": "评估器",
+        "sampling": "抽样率",
+        "timeout": "会话超时",
+        "filters": "过滤条件"
+      },
+      "minutes": "{{count}} 分钟",
+      "editTitle": "编辑 — 描述 · 评估器 · 规则",
+      "duplicateWarn": "同一 Agent 上还有另一个已启用的在线评估——相同的抽样会话会被重复评判并重复计费。",
+      "experimentReadonly": "此配置属于某个实验或金丝雀的对照/实验臂,其生命周期由该记录的清理流程管理。请前往",
+      "externalReadonly": "在 Launchpad 之外创建(控制台、CLI 或快速入门)。可查看状态与结果,可暂停、恢复、删除;因归属 Agent 未知,不可编辑数据源。",
+      "externalMatched": "在 Launchpad 之外创建。其运行时日志组与 Agent“{{name}}”匹配。可暂停、恢复、删除,不可编辑。",
+      "firstResultsHint": "会话空闲达到会话超时({{count}} 分钟)后才会被评判,因此首批结果最早在被抽样会话结束后这么久才出现。",
+      "pause": "暂停",
+      "resume": "恢复",
+      "delete": "删除",
+      "save": "保存修改",
+      "created": "在线评估已创建——数秒后进入 ACTIVE。",
+      "saved": "在线评估已更新。",
+      "paused": "已暂停抽样——配置为 DISABLED。",
+      "resumed": "已恢复抽样——配置为 ENABLED。",
+      "deleted": "在线评估已删除。结果保留在 {{logGroup}}。",
+      "confirmDelete": {
+        "title": "删除在线评估",
+        "body": "删除“{{name}}”?抽样将停止,配置从账户中移除。结果日志组 {{logGroup}} 会保留——如不再需要分数,请在 CloudWatch 中自行删除。"
+      },
+      "results": {
+        "title": "结果",
+        "range": "结果时间范围",
+        "failed": "结果查询失败——CloudWatch Logs Insights 不可用",
+        "empty": "该时间范围内暂无结果——被抽样会话在最后一个 span 之后 {{count}} 分钟才会被评判",
+        "lowerIsBetter": "越低越好——该评估器打的是惩罚分",
+        "tileFoot": "{{count}} 次打分 · {{sessions}} 个会话",
+        "errors": "该时间范围内有 {{count}} 次评估错误",
+        "col": {
+          "time": "时间",
+          "session": "会话",
+          "evaluator": "评估器",
+          "score": "分数",
+          "label": "标签",
+          "explanation": "解释 — 点击行展开"
+        }
+      },
+      "how": {
+        "title": "在线评估如何工作",
+        "sub": "AgentCore OnlineEvaluationConfig · 抽样 → 评判 → CloudWatch",
+        "s1": "抽样——按抽样率从 Agent 的运行时日志组中选取线上会话,可用过滤条件进一步收窄",
+        "s2": "等待——会话空闲达到会话超时后视为结束",
+        "s3": "评判——每个评估器对会话打分;结果写入结果日志组,并以 CloudWatch 指标(Bedrock-AgentCore/Evaluations)发布",
+        "s4": "读取——本页用 Logs Insights 聚合结果日志组;指标可用于 CloudWatch 告警",
+        "s5": "成本——评审调用次数 = 抽样会话数 × 评估器数;被已启用配置引用的自定义评审会被锁定,不可编辑或删除",
+        "note": "删除配置会保留其结果日志组。同一 Agent 上两个已启用的配置会把相同会话评判两次。"
       }
     },
     "datasets": {

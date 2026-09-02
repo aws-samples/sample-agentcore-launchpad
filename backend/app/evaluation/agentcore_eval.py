@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -1065,3 +1066,79 @@ def poll_dataset_active(
             raise RuntimeError(f"dataset creation failed: {reason}")
         sleeper(interval)
     raise TimeoutError(f"dataset {dataset_id} not ACTIVE after {max_polls} polls")
+
+
+# ─── Online evaluation configs (control plane) ──────────────────────────────
+# Continuous, sampled scoring of live sessions. Results land in a per-config
+# CloudWatch log group (also EMF metrics under Bedrock-AgentCore/Evaluations).
+
+ONLINE_EVAL_RESULTS_PREFIX = "/aws/bedrock-agentcore/evaluations/results/"
+
+
+def online_eval_results_log_group(config_id: str) -> str:
+    """The results log group AWS creates for a config (live-verified shape)."""
+    return f"{ONLINE_EVAL_RESULTS_PREFIX}{config_id}"
+
+
+def list_online_eval_configs(client: Any) -> list[dict[str, Any]]:
+    """Every online evaluation config summary in the account/region."""
+    out: list[dict[str, Any]] = []
+    token: str | None = None
+    while True:
+        kwargs: dict[str, Any] = {"maxResults": 100}
+        if token:
+            kwargs["nextToken"] = token
+        resp = client.list_online_evaluation_configs(**kwargs)
+        out.extend(resp.get("onlineEvaluationConfigs", []))
+        token = resp.get("nextToken")
+        if not token:
+            return out
+
+
+def get_online_eval_config(client: Any, *, config_id: str) -> dict[str, Any]:
+    return client.get_online_evaluation_config(onlineEvaluationConfigId=config_id)
+
+
+def create_online_eval_config(
+    client: Any,
+    *,
+    name: str,
+    description: str,
+    log_group: str,
+    service_name: str,
+    evaluators: Sequence[str],
+    rule: dict[str, Any],
+    role_arn: str,
+    enable_on_create: bool,
+) -> dict[str, Any]:
+    """``CreateOnlineEvaluationConfig`` with the platform's fixed data-source shape.
+
+    ``rule`` must be complete (sampling + session timeout + filters): AWS treats
+    it as one value on Update, so the caller owns its assembly in one place.
+    """
+    return client.create_online_evaluation_config(
+        onlineEvaluationConfigName=name,
+        description=description,
+        dataSourceConfig={
+            "cloudWatchLogs": {"logGroupNames": [log_group], "serviceNames": [service_name]}
+        },
+        evaluators=[{"evaluatorId": e} for e in evaluators],
+        rule=rule,
+        evaluationExecutionRoleArn=role_arn,
+        enableOnCreate=enable_on_create,
+        clientToken=str(uuid.uuid4()),
+    )
+
+
+def update_online_eval_config(client: Any, *, config_id: str, **fields: Any) -> dict[str, Any]:
+    """``UpdateOnlineEvaluationConfig``: omitted top-level fields are kept, but a
+    supplied ``rule`` REPLACES the whole rule (filters + sessionConfig included —
+    live-verified 2026-09-02). Pass the complete rule or none at all."""
+    return client.update_online_evaluation_config(
+        onlineEvaluationConfigId=config_id, clientToken=str(uuid.uuid4()), **fields
+    )
+
+
+def delete_online_eval_config(client: Any, *, config_id: str) -> dict[str, Any]:
+    """Delete works while ENABLED (live-verified); the results log group survives."""
+    return client.delete_online_evaluation_config(onlineEvaluationConfigId=config_id)

@@ -1,10 +1,11 @@
-import { Activity, Database, FlaskConical, ListChecks } from "lucide-react";
+import { Activity, Database, FlaskConical, ListChecks, Radar } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 const ITEMS = [
   { view: "", key: "runs", icon: Activity },
   { view: "experiment", key: "experiments", icon: FlaskConical },
+  { view: "online", key: "online", icon: Radar },
   { view: "datasets", key: "datasets", icon: Database },
   { view: "evaluators", key: "evaluators", icon: ListChecks },
 ] as const;

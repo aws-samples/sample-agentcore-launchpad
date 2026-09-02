@@ -68,3 +68,24 @@ with requests.post(
 
 错误使用平台统一信封 `{code, message, detail}`——例如
 `auth.missing_api_key`(401)、`agent.not_active`(409)、`agent.not_found`(404)。
+
+## 控制台在线评估 API / Console Online Evaluation API
+
+`/api/eval/online/*` 管理 AgentCore **在线评估配置**:按采样比例持续给真实会话打分。AWS 是唯一事实来源,
+ledger 只存标识。列表返回 workspace 账号内全部配置并按 `owner` 归类:`agent`(本控制台为 agent 创建)、
+`experiment`(`exp_*`/`can_*` 实验 arm,只读)、`external`(其他来源)。
+
+| 方法 | 路径 | 结果 |
+|---|---|---|
+| `GET` | `/api/eval/online` | `{configs, total}`:全部配置,含 `owner`、双状态、`failure_reason`、evaluators、采样率、超时、`matched_agent`、`duplicate_enabled`、`results_log_group` |
+| `POST` | `/api/eval/online` | 为 active agent 创建:`{agent_id, evaluators[1..10], sampling_percentage 0.01–100(默认 10), session_timeout_minutes 1–1440(默认 15), filters[0..5], description?, enable_on_create(默认 true)}` → 201 |
+| `GET` | `/api/eval/online/{config_id}` | 完整详情(`filters`、`data_source`、`execution_role_arn`) |
+| `PATCH` | `/api/eval/online/{config_id}` | 仅 `owner=agent`:修改描述 / evaluators / 采样率 / 超时 / filters;后端总是重发完整 `rule`(AWS 整体替换) |
+| `POST` | `/api/eval/online/{config_id}/pause` · `/resume` | 切换 `executionStatus`(`agent` 与 `external`) |
+| `DELETE` | `/api/eval/online/{config_id}` | 删除 AWS 配置并删掉 ledger 行(`agent` 与 `external`);结果日志组保留并在响应里给出 |
+| `GET` | `/api/eval/online/{config_id}/results?range=1h\|6h\|24h\|7d` | Logs Insights 聚合结果日志组:每个 evaluator 的均值 / 计数 / 会话数 / 标签分布、按时间分桶的趋势、最近 ≤50 条带 judge 解释的记录、错误计数 |
+
+错误码:`online_eval.no_telemetry`(400,agent 还没有遥测日志组,先跑一次会话)、`online_eval.evaluator_unsupported`(400)、
+`online_eval.read_only`(403)、`online_eval.not_found`(404)、`online_eval.conflict`(409)、
+`online_eval.workspace_not_bootstrapped`(400)、`online_eval.invalid_filter` / `online_eval.bad_range`(422)。
+结果最早在会话空闲 `session_timeout_minutes` 之后出现;ENABLED 配置引用的自定义 evaluator 会被 AWS 锁定。

@@ -23,6 +23,7 @@ import { evaluatorLabel } from "../lib/evaluators";
 import { DatasetsView } from "./EvaluationDatasets";
 import { EvaluatorsView } from "./EvaluationEvaluators";
 import { ExperimentView } from "./EvaluationExperiment";
+import { OnlineView } from "./EvaluationOnline";
 
 const cloudRunnable = (d: CloudDataset) => d.status === "ACTIVE";
 
@@ -423,6 +424,11 @@ export function Evaluation() {
   // ── Datasets management sub-page (?view=datasets) ─────────────────────────
   if (view === "datasets") {
     return <DatasetsView onBack={() => setSearchParams({}, { replace: true })} />;
+  }
+
+  // ── Online evaluation sub-page (?view=online) ─────────────────────────────
+  if (view === "online") {
+    return <OnlineView onBack={() => setSearchParams({}, { replace: true })} />;
   }
 
   // ── Experiment sub-page (?view=experiment) ────────────────────────────────

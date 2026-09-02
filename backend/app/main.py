@@ -13,6 +13,7 @@ from app.core.db import init_db
 from app.core.errors import register_error_handlers
 from app.core.route_policy import enforce_route_policy
 from app.deployer.pipeline import resume_pending_jobs
+from app.evaluation.online_routers import router as online_eval_router
 from app.evaluation.routers import router as evaluation_router
 from app.evaluation.service import resume_interrupted_runs
 from app.optimization.canary_routers import router as runtime_canaries_router
@@ -141,6 +142,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(governance_router)
     app.include_router(observability_router)
     app.include_router(evaluation_router)
+    app.include_router(online_eval_router)
     app.include_router(skill_lab_router)
     app.include_router(experiments_router)
     app.include_router(runtime_canaries_router)

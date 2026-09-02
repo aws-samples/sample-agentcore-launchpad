@@ -220,6 +220,16 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/eval/runs"): MEMBER,
     ("POST", "/api/eval/runs"): PERM_EVAL_RUN,
     ("GET", "/api/eval/runs/{run_id}"): MEMBER,
+    # online evaluation configs: create/resume start billed judge calls on live
+    # traffic, the same cost class as starting a run; list/detail/results read AWS
+    ("GET", "/api/eval/online"): MEMBER,
+    ("POST", "/api/eval/online"): PERM_EVAL_RUN,
+    ("GET", "/api/eval/online/{config_id}"): MEMBER,
+    ("PATCH", "/api/eval/online/{config_id}"): MEMBER,
+    ("POST", "/api/eval/online/{config_id}/pause"): MEMBER,
+    ("POST", "/api/eval/online/{config_id}/resume"): PERM_EVAL_RUN,
+    ("DELETE", "/api/eval/online/{config_id}"): MEMBER,
+    ("GET", "/api/eval/online/{config_id}/results"): MEMBER,
     # ---- skill lab: local task assets/task sets + Runtime-backed jobs ----
     ("GET", "/api/skill-lab/status"): MEMBER,
     ("POST", "/api/skill-lab/task-assets"): MEMBER,

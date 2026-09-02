@@ -160,6 +160,39 @@ Error codes: `memory.not_configured` (409, bootstrap has not run — except
 render a setup state), `memory.namespace_required` (400, no namespace could be
 derived), `memory.unavailable` (502, the underlying AWS call failed).
 
+## Console Online Evaluation API
+
+`/api/eval/online/*` manages AgentCore **online evaluation configs** — continuous,
+sampled scoring of live sessions. AWS is the source of truth; the ledger keeps
+identifiers only. Every config in the workspace account is listed and classified
+by `owner`: `agent` (created here for an agent), `experiment` (`exp_*`/`can_*`
+arms owned by experiments — read-only), `external` (anything else).
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/eval/online` | `{configs, total}` — all configs, newest first, with `owner`, both statuses, `failure_reason`, evaluators, sampling, timeout, `matched_agent` (external rows whose log group matches a workspace agent), `duplicate_enabled` (two ENABLED agent configs on one agent), `results_log_group` |
+| `POST` | `/api/eval/online` | Create for an active agent: `{agent_id, evaluators[1..10], sampling_percentage 0.01–100 (10), session_timeout_minutes 1–1440 (15), filters[0..5], description?, enable_on_create (true)}` → 201 row (`status` starts `CREATING`) |
+| `GET` | `/api/eval/online/{config_id}` | Full detail incl. `filters`, `data_source`, `execution_role_arn` |
+| `PATCH` | `/api/eval/online/{config_id}` | `owner=agent` only: any of `description, evaluators, sampling_percentage, session_timeout_minutes, filters` — the backend re-sends the complete `rule` (AWS replaces it as a unit) |
+| `POST` | `/api/eval/online/{config_id}/pause` · `/resume` | Flip `executionStatus` (`agent` + `external`) |
+| `DELETE` | `/api/eval/online/{config_id}` | Delete on AWS + drop the ledger row (`agent` + `external`); the results log group is left in place and named in the response |
+| `GET` | `/api/eval/online/{config_id}/results?range=1h\|6h\|24h\|7d` | Logs Insights over the results log group: `evaluators[{evaluator_id, level, mean, count, sessions, labels}]`, `series{evaluator: [{bucket, mean, count}]}`, `recent[≤50]` with judge `explanation`, `errors{count, first_message}`; empty collections while nothing has been evaluated yet |
+
+Filter shape: `{key: "[a-zA-Z0-9._-]+", operator: Equals|NotEquals|GreaterThan|LessThan|
+GreaterThanOrEqual|LessThanOrEqual|Contains|NotContains, value: {stringValue|doubleValue|booleanValue}}`
+(exactly one typed value).
+
+Error codes: `online_eval.no_telemetry` (400, the agent has no telemetry log group
+yet — run one session first), `online_eval.evaluator_unsupported` (400, trajectory
+matcher / unknown built-in / custom judge that needs ground truth),
+`online_eval.read_only` (403, action not allowed for that owner),
+`online_eval.not_found` (404), `online_eval.conflict` (409, name collision after one
+retry), `online_eval.workspace_not_bootstrapped` (400), `online_eval.invalid_filter`
+/ `online_eval.bad_range` (422).
+
+Results appear only after a session is idle for `session_timeout_minutes`; custom
+evaluators referenced by an ENABLED config are locked by AWS (no edit/delete).
+
 ## Console Accounts API
 
 `/api/auth/*` gates the console and `/api/users/*` manages the accounts behind

@@ -1700,6 +1700,7 @@
       "label": "Evaluation sections",
       "runs": "RUNS",
       "experiments": "EXPERIMENTS",
+      "online": "ONLINE",
       "datasets": "DATASETS",
       "evaluators": "EVALUATORS"
     },
@@ -1870,6 +1871,128 @@
         "s3": "RATING SCALE — a numerical scale with 2+ labeled points",
         "s4": "SELECT — pick the judge as an evaluator in NEW RUN",
         "note": "Builtin evaluators are service-managed and read-only; custom judges run on the Bedrock model you pick."
+      }
+    },
+    "online": {
+      "title": "ONLINE EVALUATION",
+      "meta": "CONTINUOUS · SAMPLED LIVE SESSIONS SCORED BY EVALUATORS — NO BATCH JOBS",
+      "listTitle": "ONLINE EVALUATION CONFIGS",
+      "listSub": "every config in the workspace account, classified by owner — click a row",
+      "new": "NEW ONLINE EVAL",
+      "detailTitle": "CONFIG",
+      "col": {
+        "name": "NAME",
+        "agent": "AGENT",
+        "owner": "OWNER",
+        "evaluators": "EVALUATORS",
+        "sampling": "SAMPLING",
+        "status": "STATUS",
+        "updated": "UPDATED"
+      },
+      "owner": {
+        "agent": "AGENT",
+        "experiment": "EXPERIMENT",
+        "external": "EXTERNAL"
+      },
+      "matchedHint": "not created here — matched to this agent by its runtime log group",
+      "empty": "NO ONLINE EVALUATION CONFIGS — CREATE ONE BELOW",
+      "loadFailed": "online evaluation config listing unavailable",
+      "detailFailed": "config detail unavailable",
+      "formTitleCreate": "CREATE ONLINE EVALUATION",
+      "formSub": "sample live sessions of one agent · judge them after the session timeout",
+      "form": {
+        "badge": "NEW",
+        "agent": "AGENT — ACTIVE, DEPLOYED",
+        "agentPick": "— select an agent —",
+        "agentHint": "The agent must have been invoked at least once: AWS refuses a config whose runtime log group does not exist yet.",
+        "evaluators": "EVALUATORS",
+        "evaluatorsHint": "Every sampled session is scored by each selected evaluator (max {{max}}). Ground-truth matchers are unavailable: online evaluation reads live traces.",
+        "evaluatorsSelected": "{{count}} / {{max}} selected",
+        "sampling": "SAMPLING % — 0.01 … 100",
+        "timeout": "SESSION TIMEOUT (MIN) — 1 … 1440",
+        "filters": "FILTERS — OPTIONAL, MAX {{max}}",
+        "filtersHint": "Only sessions whose span attributes match every filter are sampled. A key no span carries excludes EVERY session silently (live-verified with session.id) — start without filters, confirm results arrive, then add one (AWS examples: user.region, session.duration). Key: letters, digits, . _ -",
+        "filterValue": "value",
+        "addFilter": "ADD FILTER",
+        "removeFilter": "remove this filter",
+        "kind": {
+          "string": "string",
+          "number": "number",
+          "boolean": "boolean"
+        },
+        "description": "DESCRIPTION — OPTIONAL, ≤ 200 CHARS",
+        "descriptionPlaceholder": "auto-filled from the agent name when empty",
+        "enableOnCreate": "Enable on create — start sampling as soon as the config is ACTIVE",
+        "create": "CREATE"
+      },
+      "err": {
+        "agent": "pick an agent first",
+        "sampling": "sampling must be between 0.01 and 100",
+        "timeout": "session timeout must be a whole number between 1 and 1440 minutes",
+        "evaluators": "select between 1 and {{max}} evaluators",
+        "filterCount": "at most {{max}} filters",
+        "filterKey": "filter key must match ^[a-zA-Z0-9._-]{1,256}$",
+        "filterValue": "every filter needs a value (a number for numeric filters)",
+        "description": "description must be 200 characters or fewer"
+      },
+      "kv": {
+        "agent": "Agent",
+        "serviceName": "Service name",
+        "logGroups": "Source log groups",
+        "resultsLogGroup": "Results log group",
+        "created": "Created",
+        "updated": "Updated",
+        "evaluators": "Evaluators",
+        "sampling": "Sampling",
+        "timeout": "Session timeout",
+        "filters": "Filters"
+      },
+      "minutes": "{{count}} min",
+      "editTitle": "EDIT — DESCRIPTION · EVALUATORS · RULE",
+      "duplicateWarn": "Another ENABLED online evaluation targets the same agent — the same sampled sessions are judged twice and billed twice.",
+      "experimentReadonly": "This config belongs to an experiment or canary arm; its lifecycle is owned by that record's cleanup. Manage it from",
+      "externalReadonly": "Created outside Launchpad (console, CLI or quick start). Status and results are visible; pause, resume and delete are allowed; the data source cannot be edited because the owning agent is unknown.",
+      "externalMatched": "Created outside Launchpad. Its runtime log group matches agent “{{name}}”. Pause, resume and delete are allowed; edits are not.",
+      "firstResultsHint": "A session is judged once it has been idle for the session timeout ({{count}} min), so the first results arrive at least that long after a sampled session ends.",
+      "pause": "PAUSE",
+      "resume": "RESUME",
+      "delete": "DELETE",
+      "save": "SAVE CHANGES",
+      "created": "Online evaluation created — it turns ACTIVE in a few seconds.",
+      "saved": "Online evaluation updated.",
+      "paused": "Sampling paused — the config is DISABLED.",
+      "resumed": "Sampling resumed — the config is ENABLED.",
+      "deleted": "Online evaluation deleted. Results remain in {{logGroup}}.",
+      "confirmDelete": {
+        "title": "Delete online evaluation",
+        "body": "Delete “{{name}}”? Sampling stops and the config is removed from the account. The results log group {{logGroup}} is kept — delete it in CloudWatch if you no longer need the scores."
+      },
+      "results": {
+        "title": "RESULTS",
+        "range": "Results time range",
+        "failed": "results query failed — CloudWatch Logs Insights unavailable",
+        "empty": "NO RESULTS IN THIS RANGE — A SAMPLED SESSION IS JUDGED {{count}} MIN AFTER ITS LAST SPAN",
+        "lowerIsBetter": "lower is better — this evaluator scores a penalty",
+        "tileFoot": "{{count}} scores · {{sessions}} sessions",
+        "errors": "{{count}} evaluation errors in this range",
+        "col": {
+          "time": "TIME",
+          "session": "SESSION",
+          "evaluator": "EVALUATOR",
+          "score": "SCORE",
+          "label": "LABEL",
+          "explanation": "EXPLANATION — CLICK ROW TO EXPAND"
+        }
+      },
+      "how": {
+        "title": "HOW ONLINE EVALUATION WORKS",
+        "sub": "AgentCore OnlineEvaluationConfig · sample → judge → CloudWatch",
+        "s1": "SAMPLE — a share (sampling %) of live sessions is picked from the agent's runtime log group, optionally narrowed by filters",
+        "s2": "WAIT — a session counts as complete once it has been idle for the session timeout",
+        "s3": "JUDGE — each evaluator scores the session; results land in the results log group and as CloudWatch metrics (Bedrock-AgentCore/Evaluations)",
+        "s4": "READ — this page aggregates the results log group with Logs Insights; the metrics can drive CloudWatch alarms",
+        "s5": "COST — judge invocations = sampled sessions × evaluators; custom judges referenced by an ENABLED config are locked against edit and delete",
+        "note": "Deleting a config keeps its results log group. Two ENABLED configs on one agent judge the same sessions twice."
       }
     },
     "datasets": {
