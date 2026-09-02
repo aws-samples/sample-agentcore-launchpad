@@ -1234,6 +1234,15 @@ def get_session(session_id: str, range_key: str, db: Session,
         tokens["total"] = tokens["input"] + tokens["output"]
         costs = [r["est_cost_usd"] for r in rows if r["est_cost_usd"] is not None]
         times = [r["time"] for r in rows if r["time"]]
+        # Online evaluation scores ride along in the same cache entry but run
+        # as their own Logs Insights call: a failure there degrades to
+        # {unavailable: true} instead of taking the traces down. Local import —
+        # the online module imports this one for the query runner.
+        from app.evaluation import online as online_eval
+
+        online_scores = online_eval.session_online_scores(
+            db, workspace, session_id, hours, logs=logs
+        )
         return {
             "session_id": session_id,
             "range": range_key,
@@ -1248,6 +1257,7 @@ def get_session(session_id: str, range_key: str, db: Session,
                 "last": max(times) if times else None,
             },
             "traces": rows,
+            "online_scores": online_scores,
         }
 
     payload = cached(f"session:{workspace.id}:{session_id}:{range_key}", force, build)
