@@ -7,6 +7,7 @@ import {
   Btn, Chip, ConfirmDialog, PAGE_SIZES, Pager, Panel, useToast, ViewHead,
 } from "../components";
 import { EvaluationNav } from "../components/EvaluationNav";
+import { InsightClusters } from "../components/InsightClusters";
 import type { AgentInfo } from "../lib/api";
 import { api } from "../lib/api";
 import {
@@ -17,7 +18,7 @@ import {
   type CloudDatasetInfo as CloudDataset,
   type EvaluationDatasetInfo as Dataset,
   type EvaluationRunInfo as RunInfo,
-  type InsightCluster,
+  hasInsightTrees,
 } from "../lib/evaluation";
 import { evaluatorLabel } from "../lib/evaluators";
 import { DatasetsView } from "./EvaluationDatasets";
@@ -63,7 +64,8 @@ const LEVEL_BADGE: Record<string, { label: string; color: string }> = {
 };
 
 // Backend scope encodings for the runs table: "window:24h" → "window · 24h",
-// "cloud:name" (AWS cloud dataset) → "☁ name".
+// "cloud:name" (AWS cloud dataset) → "☁ name", "online:<configId>" (on-demand
+// report of an online insights config) → "online · <configId>".
 function scopeLabel(run: RunInfo): string {
   if (run.dataset_name?.startsWith("window:")) {
     return `window · ${run.dataset_name.slice("window:".length)}`;
@@ -71,59 +73,11 @@ function scopeLabel(run: RunInfo): string {
   if (run.dataset_name?.startsWith("cloud:")) {
     return `☁ ${run.dataset_name.slice("cloud:".length)}`;
   }
+  if (run.dataset_name?.startsWith("online:")) {
+    return `online · ${run.dataset_name.slice("online:".length)}`;
+  }
   if (run.mode === "insights") return `insights · ${run.session_ids.length}`;
   return run.dataset_name ?? "—";
-}
-
-function InsightSection({
-  label,
-  tone,
-  icon,
-  clusters,
-  detail,
-}: {
-  label: string;
-  tone: "crit" | "aqua" | "good";
-  icon: string;
-  clusters: InsightCluster[];
-  detail: (c: InsightCluster) => string | undefined;
-}) {
-  const { t } = useTranslation();
-  if (!clusters.length) return null;
-  return (
-    <>
-      <div
-        className="mono dim"
-        style={{ fontSize: 9.5, letterSpacing: ".12em", margin: "10px 0 6px" }}
-      >
-        {label} · {clusters.length}
-      </div>
-      {clusters.slice(0, 3).map((c, i) => {
-        const extra = detail(c);
-        return (
-          <div className="insight" key={c.clusterId ?? i}>
-            <div className="ih">
-              <Chip tone={tone} icon={icon}> </Chip>
-              <b>{c.name ?? c.category ?? `#${i + 1}`}</b>
-              <span className="pct">
-                {typeof c.percentage === "number"
-                  ? `${Math.round(c.percentage)}%`
-                  : t("evalPage.insights.sessions", {
-                      count: c.affectedSessionCount ?? c.affectedSessions?.length ?? 0,
-                    })}
-              </span>
-            </div>
-            {c.description && <div className="fix">{c.description.slice(0, 220)}</div>}
-            {extra && (
-              <div className="fix mono" style={{ color: "var(--ink-3)" }}>
-                {extra.slice(0, 150)}
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </>
-  );
 }
 
 export function Evaluation() {
@@ -1089,40 +1043,9 @@ export function Evaluation() {
           }
           style={{ "--i": 2 } as CSSProperties}
         >
-          {selectedRun &&
-          ((selectedRun.insights?.failures?.length ?? 0) > 0 ||
-            (selectedRun.insights?.userIntents?.length ?? 0) > 0 ||
-            (selectedRun.insights?.executionSummaries?.length ?? 0) > 0) ? (
+          {selectedRun && hasInsightTrees(selectedRun.insights) ? (
             <div style={{ maxHeight: 460, overflowY: "auto" }}>
-              <InsightSection
-                label={t("evalPage.insights.secFailures")}
-                tone="crit"
-                icon="✕"
-                clusters={selectedRun.insights.failures ?? []}
-                detail={(c) => {
-                  const rec = c.subCategories
-                    ?.flatMap((s) => s.rootCauses ?? [])
-                    .find((r) => r.recommendation)?.recommendation;
-                  return rec ? `⌁ ${rec}` : undefined;
-                }}
-              />
-              <InsightSection
-                label={t("evalPage.insights.secIntents")}
-                tone="aqua"
-                icon="◈"
-                clusters={selectedRun.insights.userIntents ?? []}
-                detail={(c) => {
-                  const msg = c.affectedSessions?.flatMap((s) => s.userMessages ?? [])[0];
-                  return msg ? `“${msg}”` : undefined;
-                }}
-              />
-              <InsightSection
-                label={t("evalPage.insights.secSummaries")}
-                tone="good"
-                icon="●"
-                clusters={selectedRun.insights.executionSummaries ?? []}
-                detail={(c) => c.affectedSessions?.find((s) => s.finalOutcome)?.finalOutcome}
-              />
+              <InsightClusters insights={selectedRun.insights} />
             </div>
           ) : selectedRun?.error && selectedRun.status === "completed" ? (
             // COMPLETED_WITH_ERRORS: the run finished but the service returned

@@ -165,16 +165,38 @@ def execute_run(
     session_metadata: list[dict[str, Any]] | None = None,
     actor_model_id: str | None = None,
     runtime_user_id: str | None = None,
+    online_config_arn: str | None = None,
 ) -> None:
     """Drive one evaluation run to completion (runs on a run-queue worker).
 
     Scope is one of: dataset ``items`` (invoke fresh sessions), explicit
-    ``existing_session_ids``, or a passive ``time_range`` window over the
-    agent's past traffic — the window path skips invoke/wait entirely."""
+    ``existing_session_ids``, a passive ``time_range`` window over the
+    agent's past traffic — the window path skips invoke/wait entirely — or an
+    online evaluation config (``online_config_arn`` + ``time_range``): an
+    on-demand report over the sessions that config sampled, where the batch
+    inherits the config's insights/evaluators (passing them is rejected)."""
     telemetry_start_ms = int(time.time() * 1000) - TELEMETRY_QUERY_LOOKBACK_MS
     try:
         data = data_client(workspace)
         session_ids = list(existing_session_ids or [])
+        if online_config_arn:
+            _update(run_id, status="evaluating")
+            response = _start_with_retry(
+                lambda: ac.start_online_report(
+                    data,
+                    name=f"run_{run_id[:8]}",
+                    config_arn=online_config_arn,
+                    time_range=time_range or {},
+                    description="Launchpad on-demand online report",
+                )
+            )
+            batch_id = response["batchEvaluationId"]
+            _update(run_id, batch_eval_id=batch_id)
+            result = ac.poll_batch_evaluation(
+                data, batch_id=batch_id, max_polls=60, interval=30.0
+            )
+            _finish_from_result(run_id, mode, result, workspace=workspace)
+            return
         if not session_ids and not time_range:
             # One session per scenario. Predefined scenarios replay their turns
             # sequentially in that session; simulated persona scenarios run the
@@ -371,6 +393,7 @@ def submit_run(
     session_metadata: list[dict[str, Any]] | None = None,
     lookback_hours: int | None = None,
     actor_model_id: str | None = None,
+    online_config_arn: str | None = None,
 ) -> EvalRun:
     service_name, log_group = resolve_telemetry(agent, workspace)
     # Window runs have no dataset; encode the scope in dataset_name so the
@@ -422,6 +445,7 @@ def submit_run(
             session_metadata=session_metadata,
             actor_model_id=actor_model_id,
             runtime_user_id=agent_runtime_user,
+            online_config_arn=online_config_arn,
         ),
     )
     _update(run_id, queue_position=position)

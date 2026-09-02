@@ -39,6 +39,19 @@ export interface InsightCluster {
   }[];
 }
 
+/** The three insight trees `parse_insights` yields — shared by batch insights
+ *  runs (`EvaluationRunInfo.insights`) and online-config reports. */
+export interface InsightTrees {
+  failures?: InsightCluster[];
+  userIntents?: InsightCluster[];
+  executionSummaries?: InsightCluster[];
+}
+
+export const hasInsightTrees = (insights: InsightTrees | null | undefined): boolean =>
+  (insights?.failures?.length ?? 0) > 0 ||
+  (insights?.userIntents?.length ?? 0) > 0 ||
+  (insights?.executionSummaries?.length ?? 0) > 0;
+
 export interface EvaluationRunInfo {
   id: string;
   agent_id: string;
@@ -50,11 +63,7 @@ export interface EvaluationRunInfo {
   status: string;
   queue_position: number | null;
   scores: EvaluationScore[];
-  insights: {
-    failures?: InsightCluster[];
-    userIntents?: InsightCluster[];
-    executionSummaries?: InsightCluster[];
-  };
+  insights: InsightTrees;
   session_ids: string[];
   /** The AWS batch evaluation behind this run; absent for window-scoped runs that
    *  never started one. Required to pin RECOMMEND to this run's sessions. */

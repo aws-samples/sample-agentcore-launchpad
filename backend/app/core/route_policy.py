@@ -230,6 +230,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/eval/online/{config_id}/resume"): PERM_EVAL_RUN,
     ("DELETE", "/api/eval/online/{config_id}"): MEMBER,
     ("GET", "/api/eval/online/{config_id}/results"): MEMBER,
+    ("GET", "/api/eval/online/{config_id}/reports"): MEMBER,
+    ("POST", "/api/eval/online/{config_id}/reports"): PERM_EVAL_RUN,
+    ("GET", "/api/eval/online/{config_id}/reports/{batch_id}"): MEMBER,
     # ---- skill lab: local task assets/task sets + Runtime-backed jobs ----
     ("GET", "/api/skill-lab/status"): MEMBER,
     ("POST", "/api/skill-lab/task-assets"): MEMBER,

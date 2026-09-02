@@ -52,20 +52,45 @@ class FilterSpec(BaseModel):
 
 class OnlineConfigCreate(BaseModel):
     agent_id: str
-    evaluators: list[str] = Field(min_length=1, max_length=ONLINE_EVAL_MAX)
-    sampling_percentage: float = Field(default=10.0, ge=0.01, le=100.0)
+    mode: Literal["scores", "insights"] = "scores"
+    # scores mode: 1..10 evaluators; insights mode: 1..3 insight ids (+ frequencies)
+    evaluators: list[str] | None = Field(default=None, max_length=ONLINE_EVAL_MAX)
+    insights: list[str] | None = Field(default=None, max_length=3)
+    clustering_frequencies: list[str] = Field(default_factory=list, max_length=3)
+    # None → 10 (scores, console default) / 100 (insights, AWS default)
+    sampling_percentage: float | None = Field(default=None, ge=0.01, le=100.0)
     session_timeout_minutes: int = Field(default=15, ge=1, le=1440)
     filters: list[FilterSpec] = Field(default_factory=list, max_length=online.MAX_FILTERS)
     description: str | None = Field(default=None, max_length=200)
     enable_on_create: bool = True
 
+    @model_validator(mode="after")
+    def _one_analysis_kind(self) -> OnlineConfigCreate:
+        if self.mode == "insights":
+            if self.evaluators:
+                raise ValueError("insights mode takes no evaluators")
+            if not self.insights:
+                raise ValueError("insights mode needs 1..3 insights")
+        else:
+            if self.insights or self.clustering_frequencies:
+                raise ValueError("scores mode takes no insights / clustering_frequencies")
+            if not self.evaluators:
+                raise ValueError("scores mode needs 1..10 evaluators")
+        return self
+
 
 class OnlineConfigPatch(BaseModel):
     description: str | None = Field(default=None, max_length=200)
     evaluators: list[str] | None = Field(default=None, min_length=1, max_length=ONLINE_EVAL_MAX)
+    insights: list[str] | None = Field(default=None, min_length=1, max_length=3)
+    clustering_frequencies: list[str] | None = Field(default=None, max_length=3)
     sampling_percentage: float | None = Field(default=None, ge=0.01, le=100.0)
     session_timeout_minutes: int | None = Field(default=None, ge=1, le=1440)
     filters: list[FilterSpec] | None = Field(default=None, max_length=online.MAX_FILTERS)
+
+
+class ReportStart(BaseModel):
+    range: Literal["1h", "6h", "24h", "7d"] = "24h"
 
 
 def _agent_in(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent:
@@ -92,10 +117,16 @@ def create_config(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     agent = _agent_in(db, ws, req.agent_id)
+    default_sampling = 100.0 if req.mode == "insights" else 10.0
     return online.create_config(
         db, ws, agent,
+        mode=req.mode,
         evaluators=req.evaluators,
-        sampling_percentage=req.sampling_percentage,
+        insights=req.insights,
+        clustering_frequencies=req.clustering_frequencies,
+        sampling_percentage=(
+            default_sampling if req.sampling_percentage is None else req.sampling_percentage
+        ),
         session_timeout_minutes=req.session_timeout_minutes,
         filters=[f.payload() for f in req.filters],
         description=req.description,
@@ -123,6 +154,35 @@ def patch_config(
     if "filters" in patch:
         patch["filters"] = [f.payload() for f in req.filters or []]
     return online.patch_config(db, ws, config_id, patch)
+
+
+@router.get("/{config_id}/reports")
+def list_reports(
+    config_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return online.reports(db, ws, config_id)
+
+
+@router.post("/{config_id}/reports", status_code=202)
+def run_report(
+    config_id: str,
+    req: ReportStart,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return online.start_report(db, ws, config_id, req.range)
+
+
+@router.get("/{config_id}/reports/{batch_id}")
+def report_detail(
+    config_id: str,
+    batch_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return online.report_detail(db, ws, config_id, batch_id)
 
 
 @router.post("/{config_id}/pause")
@@ -158,4 +218,6 @@ def config_results(
     range: str = Query(default="24h"),  # noqa: A002 — mirrors the observability API
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
+    # An insights-mode config never writes score records, so this is simply empty
+    # for it; the console reads `mode` from the detail and shows REPORTS instead.
     return online.results(ws, config_id, range)
