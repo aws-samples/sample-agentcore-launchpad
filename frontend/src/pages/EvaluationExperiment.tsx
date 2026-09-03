@@ -386,7 +386,6 @@ function ConfigurationExperimentView() {
   // "" = the provider's default; CUSTOM_MODEL_OPTION reveals the free-text input
   const [recModelChoice, setRecModelChoice] = useState("");
   const [recModelCustom, setRecModelCustom] = useState("");
-  const [toolInputsJson, setToolInputsJson] = useState<string | null>(null);
   const [confirmCleanup, setConfirmCleanup] = useState(false);
   const [confirmPromote, setConfirmPromote] = useState(false);
 
@@ -600,7 +599,6 @@ function ConfigurationExperimentView() {
     const recTypes = exp?.id ? loadRecTypes(exp.id) : { sp: false, td: false };
     setGenSp(recTypes.sp);
     setGenTd(recTypes.td);
-    setToolInputsJson(null);
     setConfirmCleanup(false);
     setConfirmPromote(false);
   }, [exp?.id]);
@@ -1175,13 +1173,13 @@ function ConfigurationExperimentView() {
   const acceptBlocked = spFailed
     && acceptPromptValue.trim() === currentPrompt.trim();
 
-  // toolName → current description handed to the tool-description optimizer;
-  // discovery covers spec/code tools only, so the set stays user-editable
-  // (gateway/MCP tools exist only at runtime)
+  // toolName → current description the tool-description optimizer analyzes.
+  // Only the agent's OWN tools (discovered from its spec/code by the backend)
+  // are in scope — gateway/MCP tool descriptions are not optimized here, so
+  // the set is shown read-only and never edited or sent by the console.
   const knownTools = rec?.analyzed_tools && Object.keys(rec.analyzed_tools).length
     ? rec.analyzed_tools : (a.agent_meta?.tools ?? {});
-  const toolInputsValue = toolInputsJson
-    ?? (Object.keys(knownTools).length ? JSON.stringify(knownTools, null, 2) : "");
+  const hasKnownTools = Object.keys(knownTools).length > 0;
   const parseToolJson = (raw: string): Record<string, string> | null => {
     try {
       const parsed: unknown = JSON.parse(raw);
@@ -1195,10 +1193,6 @@ function ConfigurationExperimentView() {
       return null;
     }
   };
-  const toolInputs = toolInputsValue.trim()
-    ? parseToolJson(toolInputsValue) : undefined;
-  const toolInputsBad = toolInputsValue.trim() !== "" && toolInputs === null;
-
   const recProvider = recProviders.find((p) => p.id === recProviderId)
     ?? recProviders.find((p) => p.id === "agentcore");
   const recProviderIsAws = !recProvider || recProvider.id === "agentcore";
@@ -1300,11 +1294,10 @@ function ConfigurationExperimentView() {
         </div>
   ) : null;
 
-  const onGenerate = (types: string[], withTools: boolean) => {
+  const onGenerate = (types: string[]) => {
     if (!exp) return;
-    const extra: Record<string, unknown> = { recommend_types: types, ...providerExtra };
-    if (withTools && toolInputs) extra.recommend_tools = toolInputs;
-    void onAction(exp.id, "recommend", extra);
+    // no recommend_tools: the backend analyzes the agent's discovered tools
+    void onAction(exp.id, "recommend", { recommend_types: types, ...providerExtra });
   };
 
   const recRunning = exp?.running_action === "recommend";
@@ -1330,35 +1323,28 @@ function ConfigurationExperimentView() {
     });
   };
 
-  // tools-to-analyze editor — shared by the initial generator form and the
-  // regenerate path after an empty/failed tool run
-  const toolInputsEditor = (
-    <>
+  // read-only list of the tools the optimizer will analyze — shared by the
+  // initial generator form and the regenerate path after an empty tool run
+  const toolsPreview = (
+    <div data-testid="rec-tools-preview">
       <div className="mono dim" style={{ fontSize: 10, margin: "6px 0 4px" }}>
         {t("expPage.toolsToAnalyze")}
       </div>
-      <textarea
-        className="input"
-        rows={4}
-        spellCheck={false}
-        data-testid="rec-tools-input"
-        placeholder={'{"tool_name": "current description"}'}
-        value={toolInputsValue}
-        onChange={(e) => setToolInputsJson(e.target.value)}
-        style={{ width: "100%", fontFamily: "inherit", fontSize: 11 }}
-      />
-      {Object.keys(knownTools).length === 0 && !toolInputsValue.trim() && (
-        <div className="mono dim" style={{ fontSize: 10, marginTop: 2 }}>
+      {hasKnownTools ? (
+        <ul className="mono" style={{ fontSize: 10.5, margin: 0, paddingLeft: 16 }}>
+          {Object.entries(knownTools).map(([name, desc]) => (
+            <li key={name}>
+              <span style={{ color: "var(--accent)" }}>{name}</span>
+              {desc ? ` — ${desc}` : ""}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="mono dim" style={{ fontSize: 10 }}>
           {t("expPage.noDiscoveredTools")}
         </div>
       )}
-      {toolInputsBad && (
-        <div className="mono" style={{ fontSize: 10, marginTop: 2,
-                                       color: "var(--crit)" }}>
-          {t("expPage.invalidToolJson")}
-        </div>
-      )}
-    </>
+    </div>
   );
 
   const selectGenSp = (v: boolean) => {
@@ -1433,7 +1419,7 @@ function ConfigurationExperimentView() {
             {recTypeCheckbox(t("expPage.recTypePrompt"), genSp, selectGenSp,
                              "rec-type-sp")}
             {recTypeCheckbox(t("expPage.recTypeTools"), genTd, selectGenTd,
-                             "rec-type-td", !toolDescriptionsSupported)}
+                             "rec-type-td", !toolDescriptionsSupported || !hasKnownTools)}
           </div>
           <div className="field" style={{ marginBottom: 8 }}>
             <label htmlFor="rec-source">{t("expPage.recSource")}</label>
@@ -1477,8 +1463,8 @@ function ConfigurationExperimentView() {
             </div>
           </div>
           {providerControls}
-          {genTd && toolDescriptionsSupported && (
-            <div style={{ marginBottom: 8 }}>{toolInputsEditor}</div>
+          {toolDescriptionsSupported && (genTd || !hasKnownTools) && (
+            <div style={{ marginBottom: 8 }}>{toolsPreview}</div>
           )}
           {!toolDescriptionsSupported && (
             <div className="mono dim" style={{ fontSize: 10, marginBottom: 8 }}>
@@ -1488,15 +1474,12 @@ function ConfigurationExperimentView() {
           {actionBtn("recommend", t("expPage.generateRec"), {
             primary: true,
             disabled: (!genSp && !(genTd && toolDescriptionsSupported))
-              || (genTd && toolDescriptionsSupported && toolInputsBad)
               || (genSp && (providerNeedsSource || providerModelMissing)),
             extra: {
               recommend_types: [
                 ...(genSp ? ["system_prompt"] : []),
                 ...(genTd && toolDescriptionsSupported ? ["tool_descriptions"] : []),
               ],
-              ...(genTd && toolDescriptionsSupported && toolInputs
-                ? { recommend_tools: toolInputs } : {}),
               ...(recSourceRunId ? { recommend_source_run_id: recSourceRunId } : {}),
               // the provider only matters for the system-prompt generator
               ...(genSp ? providerExtra : {}),
@@ -1582,7 +1565,7 @@ function ConfigurationExperimentView() {
                   disabled={busy || !!exp.running_action
                     || providerNeedsSource || providerModelMissing}
                   data-testid="action-recommend-sp"
-                  onClick={() => onGenerate(["system_prompt"], false)}
+                  onClick={() => onGenerate(["system_prompt"])}
                 >
                   ▸ {t("expPage.genSp")}
                 </Btn>
@@ -1590,13 +1573,12 @@ function ConfigurationExperimentView() {
               {toolDescriptionsSupported
                 && (!tdRan || (tdRan && Object.keys(recToolDescs).length === 0)) && (
                 <div style={{ marginTop: !spDone ? 8 : 0 }}>
-                  {toolInputsEditor}
+                  {toolsPreview}
                   <div style={{ marginTop: 6 }}>
                     <Btn
-                      disabled={busy || !!exp.running_action || toolInputsBad
-                        || !toolInputsValue.trim()}
+                      disabled={busy || !!exp.running_action || !hasKnownTools}
                       data-testid="action-recommend-td"
-                      onClick={() => onGenerate(["tool_descriptions"], true)}
+                      onClick={() => onGenerate(["tool_descriptions"])}
                     >
                       ▸ {t("expPage.genTd")}
                     </Btn>
