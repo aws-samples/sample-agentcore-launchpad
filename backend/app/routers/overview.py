@@ -1,5 +1,6 @@
 """Mission-control overview: live tile metrics + control-plane service health."""
 
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -8,6 +9,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
+from app.evaluation import online as online_eval
 from app.evaluation.models import EvalRun
 from app.models.ledger import ChatSession
 from app.routers.workspaces import WorkspaceScope, require_workspace
@@ -19,14 +21,21 @@ from app.services.workspace import WorkspaceContext
 router = APIRouter(prefix="/api", tags=["overview"])
 
 _TTL_SECONDS = 30.0
+# Logs Insights is billed per scan; the online-quality tile polls with the page.
+_QUALITY_TTL_SECONDS = 120.0
 # Keyed by workspace: every value below is a fact about one account/region.
 _cache: dict[str, dict[str, Any]] = {}
+# Single-flight per workspace: a slow Logs Insights poll for one account must not
+# hold up another workspace's tile.
+_quality_locks: dict[str, threading.Lock] = {}
+_quality_locks_guard = threading.Lock()
 
 
 def _slot(workspace_id: str) -> dict[str, Any]:
     return _cache.setdefault(
         workspace_id,
-        {"assets_at": 0.0, "assets": None, "traces_at": 0.0, "traces": None},
+        {"assets_at": 0.0, "assets": None, "traces_at": 0.0, "traces": None,
+         "quality_at": 0.0, "quality": None},
     )
 
 
@@ -126,3 +135,35 @@ def overview(
         "services": services,
         "service_detail": detail,
     }
+
+
+@router.get("/overview/online-quality")
+def overview_online_quality(
+    force: bool = False,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """ONLINE QUALITY · 24h tile: polarity-normalised mean of every online
+    evaluation score the workspace's agent-owned configs produced in the last
+    24 h. Served from a 120 s per-workspace cache with single-flight (one Logs
+    Insights scan per window, however many tabs poll); a workspace with no agent
+    config short-circuits without any AWS call."""
+    slot = _slot(ws.id)
+
+    def fresh() -> dict[str, Any] | None:
+        if slot["quality"] is not None and not force and (
+            time.monotonic() - slot["quality_at"] < _QUALITY_TTL_SECONDS
+        ):
+            return slot["quality"]
+        return None
+
+    if (hit := fresh()) is not None:
+        return {**hit, "cached": True}
+    with _quality_locks_guard:
+        lock = _quality_locks.setdefault(ws.id, threading.Lock())
+    with lock:
+        if (hit := fresh()) is not None:
+            return {**hit, "cached": True}
+        value = online_eval.online_quality(db, ws.context)
+        slot.update(quality_at=time.monotonic(), quality=value)
+    return {**value, "cached": False}

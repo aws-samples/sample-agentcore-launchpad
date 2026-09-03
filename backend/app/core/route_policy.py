@@ -265,6 +265,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/runtime-canaries/{canary_id}/action"): MEMBER,
     # ---- read-only consoles ----
     ("GET", "/api/overview"): MEMBER,
+    ("GET", "/api/overview/online-quality"): MEMBER,
     ("GET", "/api/memory/overview"): MEMBER,
     ("GET", "/api/memory/actors"): MEMBER,
     ("GET", "/api/memory/events"): MEMBER,

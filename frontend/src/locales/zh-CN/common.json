@@ -126,7 +126,11 @@
       "noRuns": "暂无评估运行",
       "last24h": "近 24 小时",
       "breakdown": "{{agents}} 个 Agent · {{tools}} 个工具 · {{skills}} 个技能",
-      "runCount": "{{count}} 次运行"
+      "runCount": "{{count}} 次运行",
+      "onlineQuality": "在线质量 · 24h",
+      "onlineQualityFoot": "{{sessions}} 个会话 · {{agents}} 个 agent",
+      "onlineQualityNone": "暂无在线评估配置",
+      "onlineQualityPending": "24 小时内暂无评分"
     },
     "health": {
       "title": "服务健康",
@@ -2574,6 +2578,13 @@
       "tracesTitle": "会话内追踪",
       "tracesSub": "{{count}} · 最新在前",
       "noTraces": "该时间范围内此会话无追踪",
+      "onlineTitle": "在线评估",
+      "onlineSub": "{{count}} 条评分 · {{configs}} 个配置",
+      "onlineSubPending": "被采样的会话会在会话超时后被评判",
+      "onlineUnavailable": "在线评估结果不可用 — 追踪与对话记录不受影响",
+      "onlineNone": "该会话暂无在线评分",
+      "onlineBy": "来自 {{agent}}",
+      "onlineOpenConfig": "打开配置",
       "back": "‹ 会话"
     },
     "prices": {

@@ -126,7 +126,11 @@
       "noRuns": "no runs yet",
       "last24h": "last 24 h",
       "breakdown": "{{agents}} agents · {{tools}} tools · {{skills}} skills",
-      "runCount": "{{count}} runs"
+      "runCount": "{{count}} runs",
+      "onlineQuality": "ONLINE QUALITY · 24h",
+      "onlineQualityFoot": "{{sessions}} sessions · {{agents}} agents",
+      "onlineQualityNone": "no online configs",
+      "onlineQualityPending": "no scores in 24 h"
     },
     "health": {
       "title": "SERVICE HEALTH",
@@ -2574,6 +2578,13 @@
       "tracesTitle": "TRACES IN SESSION",
       "tracesSub": "{{count}} · newest first",
       "noTraces": "NO TRACES IN RANGE FOR THIS SESSION",
+      "onlineTitle": "ONLINE EVALUATION",
+      "onlineSub": "{{count}} scores · {{configs}} configs",
+      "onlineSubPending": "sampled sessions are judged after the session timeout",
+      "onlineUnavailable": "online evaluation results unavailable — traces and transcript are unaffected",
+      "onlineNone": "NO ONLINE SCORES FOR THIS SESSION YET",
+      "onlineBy": "by {{agent}}",
+      "onlineOpenConfig": "OPEN CONFIG",
       "back": "‹ SESSIONS"
     },
     "prices": {
