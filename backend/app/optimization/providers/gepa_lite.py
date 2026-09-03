@@ -108,6 +108,12 @@ RETRY_SUFFIX = (
     "\n\nYour previous answer was not a parseable JSON object. Answer again with "
     "ONLY the JSON object described above — no prose, no code fences."
 )
+TRUNCATED_SUFFIX = (
+    "\n\nYour previous answer was cut off by the output limit before the JSON object "
+    "closed. Answer again with ONLY the JSON object, and keep it compact: no prose "
+    "outside the JSON, short diagnosis, and only the tool descriptions that change."
+)
+MAX_TOKENS_CEILING = 16000
 
 EXPLANATION_MAX = 1200
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
@@ -343,13 +349,19 @@ class GepaLiteProvider:
         call = converse or converse_for(req.workspace)
         started = time.monotonic()
         usage_total = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+        budget = {"max_tokens": req.max_tokens, "truncated": False}
 
         def _ask(system: str, user: str) -> str:
             text, usage = call(req.model_id, system, [{"role": "user", "text": user}],
-                               req.max_tokens)
+                               budget["max_tokens"])
             usage_total["calls"] += 1
             for k in ("input_tokens", "output_tokens"):
                 usage_total[k] += int(usage.get(k) or 0)
+            # a reply cut off by the output limit can never parse — remember it so
+            # the retry grows the budget instead of just asking for cleaner JSON
+            budget["truncated"] = str(usage.get("stop_reason") or "") == "max_tokens"
+            if budget["truncated"]:
+                budget["max_tokens"] = min(budget["max_tokens"] * 2, MAX_TOKENS_CEILING)
             return text
 
         def _finish(**extra: Any) -> dict[str, Any]:
@@ -372,10 +384,24 @@ class GepaLiteProvider:
             progress(f"reflecting on {len(req.evidence)} sessions with {req.model_id}…")
             parsed = parse_reflection(_ask(system, user))
             if parsed is None:
-                progress("reflection returned no JSON — retrying once…")
-                parsed = parse_reflection(_ask(system, user + RETRY_SUFFIX))
+                if budget["truncated"]:
+                    progress(
+                        "reflection output hit the token limit — retrying with "
+                        f"{budget['max_tokens']} tokens…"
+                    )
+                    parsed = parse_reflection(_ask(system, user + TRUNCATED_SUFFIX))
+                else:
+                    progress("reflection returned no JSON — retrying once…")
+                    parsed = parse_reflection(_ask(system, user + RETRY_SUFFIX))
             if parsed is None:
-                return _fail("reflection model returned no parseable JSON", _finish())
+                reason = (
+                    "reflection output truncated by the token limit "
+                    f"({usage_total['output_tokens']} output tokens over "
+                    f"{usage_total['calls']} calls) — raise prompt_opt_max_tokens"
+                    if budget["truncated"]
+                    else "reflection model returned no parseable JSON"
+                )
+                return _fail(reason, _finish())
             prompt = str(parsed.get("revised_prompt") or "").strip()
             if want_prompt and not prompt:
                 return _fail("reflection model returned an empty revised_prompt", _finish())

@@ -1217,6 +1217,52 @@ function ConfigurationExperimentView() {
     : { recommend_provider: recProvider!.id,
         ...(recModelId ? { recommend_model_id: recModelId } : {}) };
 
+  // trace-source picker — shown before the first generation and again next to
+  // the regenerate buttons: a re-run must be able to pin (or re-pin) its run
+  const sourceControls = (
+      <div className="field" style={{ marginBottom: 8 }}>
+        <label htmlFor="rec-source">{t("expPage.recSource")}</label>
+        <select
+          id="rec-source"
+          data-testid="rec-source"
+          className="input mono"
+          value={recSourceRunId}
+          onChange={(e) => setRecSourceRunId(e.target.value)}
+        >
+          <option value="" style={{ background: "#141816" }}>
+            {t("expPage.recSourceWindow")}
+          </option>
+          {recSourceRuns.map((run) => (
+            <option key={run.id} value={run.id} style={{ background: "#141816" }}>
+              {run.mode === "insights"
+                ? t("expPage.recSourceInsights")
+                : t("expPage.recSourceEval")}
+              {" · "}
+              {run.dataset_name ?? run.id}
+              {/* A window-scoped run records no session ids, so several runs of
+                  the same shape would otherwise be indistinguishable here — the
+                  timestamp is what lets a user pick the analysis they just ran. */}
+              {" · "}
+              {run.created_at
+                ? new Date(run.created_at).toLocaleString()
+                : run.id}
+              {run.session_ids.length > 0
+                ? ` · ${t("expPage.recSourceSessions", { count: run.session_ids.length })}`
+                : ""}
+            </option>
+          ))}
+        </select>
+        <div className="note" style={{ marginTop: 6 }}>
+          <span className="i">[i]</span>
+          <span>
+            {recSourceRunId
+              ? t("expPage.recSourcePinnedNote")
+              : t("expPage.recSourceWindowNote")}
+          </span>
+        </div>
+      </div>
+  );
+
   // provider + model pickers — shown before the first generation and again next
   // to the regenerate buttons, so a failed provider run can be retried with a
   // different optimizer or model
@@ -1305,8 +1351,15 @@ function ConfigurationExperimentView() {
 
   const onGenerate = (types: string[]) => {
     if (!exp) return;
-    // no recommend_tools: the backend analyzes the agent's discovered tools
-    void onAction(exp.id, "recommend", { recommend_types: types, ...providerExtra });
+    // no recommend_tools: the backend analyzes the agent's discovered tools.
+    // The pinned run rides along like on the first generation — a re-run that
+    // silently fell back to the rolling window would lose its lineage (and a
+    // provider that needs scores would be refused with a 422).
+    void onAction(exp.id, "recommend", {
+      recommend_types: types,
+      ...(recSourceRunId ? { recommend_source_run_id: recSourceRunId } : {}),
+      ...providerExtra,
+    });
   };
 
   const recRunning = exp?.running_action === "recommend";
@@ -1432,47 +1485,7 @@ function ConfigurationExperimentView() {
             {recTypeCheckbox(t("expPage.recTypeTools"), genTd, selectGenTd,
                              "rec-type-td", !toolDescriptionsSupported || !hasKnownTools)}
           </div>
-          <div className="field" style={{ marginBottom: 8 }}>
-            <label htmlFor="rec-source">{t("expPage.recSource")}</label>
-            <select
-              id="rec-source"
-              data-testid="rec-source"
-              className="input mono"
-              value={recSourceRunId}
-              onChange={(e) => setRecSourceRunId(e.target.value)}
-            >
-              <option value="" style={{ background: "#141816" }}>
-                {t("expPage.recSourceWindow")}
-              </option>
-              {recSourceRuns.map((run) => (
-                <option key={run.id} value={run.id} style={{ background: "#141816" }}>
-                  {run.mode === "insights"
-                    ? t("expPage.recSourceInsights")
-                    : t("expPage.recSourceEval")}
-                  {" · "}
-                  {run.dataset_name ?? run.id}
-                  {/* A window-scoped run records no session ids, so several runs of
-                      the same shape would otherwise be indistinguishable here — the
-                      timestamp is what lets a user pick the analysis they just ran. */}
-                  {" · "}
-                  {run.created_at
-                    ? new Date(run.created_at).toLocaleString()
-                    : run.id}
-                  {run.session_ids.length > 0
-                    ? ` · ${t("expPage.recSourceSessions", { count: run.session_ids.length })}`
-                    : ""}
-                </option>
-              ))}
-            </select>
-            <div className="note" style={{ marginTop: 6 }}>
-              <span className="i">[i]</span>
-              <span>
-                {recSourceRunId
-                  ? t("expPage.recSourcePinnedNote")
-                  : t("expPage.recSourceWindowNote")}
-              </span>
-            </div>
-          </div>
+          {sourceControls}
           {providerControls}
           {toolDescriptionsSupported && (genTd || !hasKnownTools) && (
             <div style={{ marginBottom: 8 }}>{toolsPreview}</div>
@@ -1588,6 +1601,7 @@ function ConfigurationExperimentView() {
           {!recommendDone && (!spDone || !tdRan
             || Object.keys(recToolDescs).length === 0) && (
             <div style={{ marginTop: 8 }}>
+              {sourceControls}
               {!spDone && providerControls}
               {!spDone && (
                 <Btn
@@ -1605,7 +1619,8 @@ function ConfigurationExperimentView() {
                   {toolsPreview}
                   <div style={{ marginTop: 6 }}>
                     <Btn
-                      disabled={busy || !!exp.running_action || !hasKnownTools}
+                      disabled={busy || !!exp.running_action || !hasKnownTools
+                        || providerNeedsSource || providerModelMissing}
                       data-testid="action-recommend-td"
                       onClick={() => onGenerate(["tool_descriptions"])}
                     >
