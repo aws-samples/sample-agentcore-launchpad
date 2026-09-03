@@ -2359,6 +2359,7 @@
     "toolRecNoCalls": "No tool descriptions were proposed: {{msg}}",
     "toolRecFailed": "Tool-description recommendation failed: {{msg}}",
     "spRecFailed": "System-prompt recommendation {{status}} on AWS — no recommendation was produced: {{msg}}",
+    "spRecFailedProvider": "System-prompt recommendation failed — the reflection call to {{model}} via {{provider}} did not produce a result: {{msg}}",
     "acceptBlockedRecFailed": "Cannot accept a failed recommendation. Re-generate it, or edit the prompt above into your own treatment before continuing.",
     "toolRecEmpty": "The optimizer suggested no changes for the analyzed tool descriptions.",
     "toolBundleUnsupported": "This converted runtime supports system-prompt bundles only. Tool-description experiments require a newly converted runtime.",

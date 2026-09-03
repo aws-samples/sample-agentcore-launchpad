@@ -163,6 +163,10 @@ class Settings(BaseSettings):
     # 8192: a two-component reflection (prompt + several tool descriptions) ran past
     # 4096 on Claude Sonnet 5 (live, 2026-09-03); the provider doubles once on truncation.
     prompt_opt_max_tokens: int = Field(default=8192, ge=512, le=16000)
+    # Read timeout of the reflection call. Claude Opus 5 over 30 sessions runs far
+    # past botocore's 60 s default (prod, 2026-09-03: five silent re-sends, then
+    # ReadTimeoutError); the call streams, so this bounds the gap between chunks.
+    prompt_opt_read_timeout_s: int = Field(default=900, gt=0)
 
     # Studio local-debug (un-deployed flow execution + AI fix). The control-plane
     # backend env has no strands/openai; generated code runs in the dedicated

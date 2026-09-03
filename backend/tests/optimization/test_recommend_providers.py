@@ -610,3 +610,87 @@ def test_accept_without_tool_field_takes_the_recommended_descriptions(client):
     res = client.post(f"/api/experiments/{exp2.id}/action", json={"action": "accept"})
     rec = res.json()["experiment"]["artifacts"]["recommend"]
     assert "accepted_tool_descriptions" not in rec and rec["accepted_edited"] is False
+
+
+# ─── bedrock_lm: streaming + client config ──────────────────────────────────
+class _StreamClient:
+    """Fake bedrock-runtime client: records the ConverseStream request, replays events."""
+
+    def __init__(self, events):
+        self.events = events
+        self.calls: list[dict[str, Any]] = []
+
+    def converse_stream(self, **kw):
+        self.calls.append(kw)
+        return {"stream": iter(self.events)}
+
+
+def test_converse_text_streams_text_deltas_only_and_reads_usage_from_metadata():
+    from app.optimization.providers import bedrock_lm
+
+    client = _StreamClient([
+        {"messageStart": {"role": "assistant"}},
+        {"contentBlockStart": {"contentBlockIndex": 0}},
+        # Opus-style reasoning block first — never part of the answer
+        {"contentBlockDelta": {"delta": {"reasoningContent": {"text": "thinking…"}}}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        {"contentBlockDelta": {"delta": {"text": '{"revised_'}}},
+        {"contentBlockDelta": {"delta": {"text": 'prompt": "P"}'}}},
+        {"messageStop": {"stopReason": "end_turn"}},
+        {"metadata": {"usage": {"inputTokens": 1234, "outputTokens": 56}}},
+    ])
+    text, usage = bedrock_lm.converse_text(
+        WS, "m", "sys", [{"role": "user", "text": "hi"}], 777, client=client
+    )
+    assert text == '{"revised_prompt": "P"}'
+    assert usage == {"input_tokens": 1234, "output_tokens": 56, "stop_reason": "end_turn"}
+    req = client.calls[0]
+    assert req["modelId"] == "m" and req["system"] == [{"text": "sys"}]
+    assert req["messages"] == [{"role": "user", "content": [{"text": "hi"}]}]
+    # maxTokens only — the Claude 5 / GPT-5.6 profiles reject temperature
+    assert req["inferenceConfig"] == {"maxTokens": 777}
+
+
+def test_converse_text_reports_truncation_via_message_stop():
+    from app.optimization.providers import bedrock_lm
+
+    client = _StreamClient([
+        {"contentBlockDelta": {"delta": {"text": "partial"}}},
+        {"messageStop": {"stopReason": "max_tokens"}},
+        {"metadata": {"usage": {"inputTokens": 1, "outputTokens": 2}}},
+    ])
+    text, usage = bedrock_lm.converse_text(WS, "m", "s", [], 5, client=client)
+    assert text == "partial" and usage["stop_reason"] == "max_tokens"
+
+
+def test_runtime_client_has_long_read_timeout_and_standard_retries(monkeypatch):
+    """The prod failure mode: botocore's 60 s default × 5 legacy attempts silently
+    re-sent a minutes-long Opus 5 reflection five times, then raised
+    ReadTimeoutError. The stream makes a timeout mean a real stall, so retries
+    stay (standard mode: throttling + connection errors with backoff)."""
+    from app.optimization.providers import bedrock_lm
+
+    seen: dict[str, Any] = {}
+
+    class _WS:
+        def client(self, service, cache_token=None, **cfg):
+            seen.update(service=service, cache_token=cache_token, **cfg)
+            return "CLIENT"
+
+    monkeypatch.setattr(get_settings(), "prompt_opt_read_timeout_s", 1234)
+    assert bedrock_lm.runtime_client(_WS()) == "CLIENT"
+    assert seen["service"] == "bedrock-runtime"
+    cfg = seen["config"]
+    assert cfg.read_timeout == 1234
+    assert cfg.retries == {"max_attempts": 5, "mode": "standard"}
+    # cached path: the token stands in for the Config in the funnel's cache key
+    assert seen["cache_token"] and "1234" in seen["cache_token"]
+
+
+def test_converse_text_builds_client_through_the_workspace_funnel(monkeypatch):
+    from app.optimization.providers import bedrock_lm
+
+    fake = _StreamClient([{"contentBlockDelta": {"delta": {"text": "ok"}}}])
+    monkeypatch.setattr(bedrock_lm, "runtime_client", lambda ws: fake)
+    text, usage = bedrock_lm.converse_for(WS)("m", "s", [{"role": "user", "text": "u"}], 9)
+    assert text == "ok" and usage["stop_reason"] is None and fake.calls[0]["modelId"] == "m"
