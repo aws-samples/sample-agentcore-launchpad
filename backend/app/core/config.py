@@ -150,10 +150,10 @@ class Settings(BaseSettings):
     # inference-profile ids invoked through the workspace client funnel; the list
     # is what the console offers, the default leads it. GPT-5.6 Sol is invocable
     # via Converse in us-west-2 too (unlike Mantle for harnesses) — live-verified.
-    prompt_opt_default_model_id: str = "global.anthropic.claude-sonnet-5"
+    prompt_opt_default_model_id: str = "global.anthropic.claude-opus-5"
     prompt_opt_models: list[str] = [
-        "global.anthropic.claude-sonnet-5",
         "global.anthropic.claude-opus-5",
+        "global.anthropic.claude-sonnet-5",
         "global.anthropic.claude-sonnet-4-6",
         "us.openai.gpt-5.6-sol",
     ]

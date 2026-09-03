@@ -249,7 +249,7 @@ batch-evaluation results stream (per-session evaluator scores, labels and
 explanations — the same `gen_ai.evaluation.result` records online evaluation
 emits) joined with each session's transcript, samples up to 30 sessions
 worst-first (polarity-normalised, with a best-scoring contrast set), and asks a
-Bedrock model — Claude Sonnet 5 by default, GPT-5.6 Sol / Opus 5 selectable,
+Bedrock model — Claude Opus 5 by default, Sonnet 5 / GPT-5.6 Sol selectable,
 custom ids allowed — for one reflective rewrite: diagnosis, concrete changes,
 revised prompt — and, in the same call, revised descriptions for the agent's
 **own** tools (the discovered set the treatment bundle can overlay), reasoning
