@@ -610,3 +610,34 @@ def test_collect_evidence_normalizes_transcript_role_case():
     text = gepa_lite.render_reflective_dataset(evidence)
     assert "Inputs:\n  - the question" in text
     assert "Generated Outputs:\n  - the answer" in text
+
+
+def test_truncated_reflection_retries_with_a_bigger_budget():
+    prov = gepa_lite.GepaLiteProvider()
+    calls: list[int] = []
+    replies = iter(['{"diagnosis": "cut off', json.dumps({"revised_prompt": "P2"})])
+
+    def converse(model_id, system, messages, max_tokens):
+        calls.append(max_tokens)
+        text = next(replies)
+        stop = "max_tokens" if len(calls) == 1 else "end_turn"
+        return text, {"input_tokens": 1, "output_tokens": 1, "stop_reason": stop}
+
+    req = _req([_session()], components=("system_prompt",))
+    req.max_tokens = 4096
+    res = prov.optimize(req, svc._noop, converse=converse)
+    assert res.status == "COMPLETED" and res.recommended_prompt == "P2"
+    assert calls == [4096, 8192]  # the retry doubles the budget
+
+
+def test_truncated_twice_reports_the_token_limit():
+    prov = gepa_lite.GepaLiteProvider()
+
+    def converse(model_id, system, messages, max_tokens):
+        return '{"diagnosis": "cut', {"input_tokens": 1, "output_tokens": max_tokens,
+                                      "stop_reason": "max_tokens"}
+
+    res = prov.optimize(_req([_session()]), svc._noop, converse=converse)
+    assert res.status == "FAILED" and "truncated by the token limit" in res.error
+    assert "raise prompt_opt_max_tokens" in res.error
+    assert res.tool_status == "error"

@@ -160,7 +160,9 @@ class Settings(BaseSettings):
     # Sessions a provider reads from the pinned run (worst-first + a best-scoring
     # contrast set) and the reflection call's output budget.
     prompt_opt_max_sessions: int = Field(default=30, ge=3, le=100)
-    prompt_opt_max_tokens: int = Field(default=4096, ge=512, le=16000)
+    # 8192: a two-component reflection (prompt + several tool descriptions) ran past
+    # 4096 on Claude Sonnet 5 (live, 2026-09-03); the provider doubles once on truncation.
+    prompt_opt_max_tokens: int = Field(default=8192, ge=512, le=16000)
 
     # Studio local-debug (un-deployed flow execution + AI fix). The control-plane
     # backend env has no strands/openai; generated code runs in the dedicated
