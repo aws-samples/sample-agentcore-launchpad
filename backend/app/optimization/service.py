@@ -35,7 +35,10 @@ from app.evaluation.online_evaluators import (  # noqa: F401 — re-exported
 )
 from app.evaluation.scenarios import scenario_prompts
 from app.models.ledger import Agent, Deployment, Job
+from app.optimization import providers as rec_providers
 from app.optimization.models import Experiment
+from app.optimization.providers import evidence as rec_evidence
+from app.optimization.providers.base import OptimizeRequest
 from app.schemas.agent import AgentSpec
 from app.services.agentcore.client import control_client, data_client
 from app.services.agentcore.gateway import sigv4_post
@@ -384,12 +387,18 @@ def _noop(_msg: str) -> None:
 
 # ─── stage implementations ───────────────────────────────────────────────────
 REC_TYPES = ("system_prompt", "tool_descriptions")
+# Ledger-side cap on a recommended / accepted prompt. The AgentCore path still
+# truncates AWS-produced text to it (as it always has); a 3rd-party provider is
+# handed the budget up front and FAILS rather than truncate (see gepa_lite).
+REC_PROMPT_MAX_CHARS = 8000
 
 # artifact keys owned by each recommendation type — a re-generation of one
-# type replaces exactly these and leaves the other type's output in place
+# type replaces exactly these and leaves the other type's output in place.
+# provider* keys ride with the system prompt: they attribute exactly that text.
 _REC_KEYS: dict[str, tuple[str, ...]] = {
     "system_prompt": ("system_prompt_status", "system_prompt_error",
-                      "recommended_prompt", "explanation"),
+                      "recommended_prompt", "explanation",
+                      "provider", "provider_model_id", "provider_meta"),
     "tool_descriptions": ("tool_status", "tool_error", "tool_descriptions",
                           "analyzed_tools"),
 }
@@ -465,7 +474,10 @@ def resolve_recommend_source(
             {"batch_eval_id": batch_id},
             status_code=502,
         )
-    return {
+    # The batch's own results stream — where a 3rd-party provider reads the
+    # per-session scores/explanations from (the AgentCore job reads via the ARN).
+    cw = (detail.get("outputConfig") or {}).get("cloudWatchConfig") or {}
+    source = {
         "kind": "batch_evaluation",
         "run_id": run_id,
         "batch_eval_id": batch_id,
@@ -473,6 +485,10 @@ def resolve_recommend_source(
         "run_mode": mode,
         "session_count": sessions,
     }
+    if cw.get("logGroupName") and cw.get("logStreamName"):
+        source["results_log_group"] = cw["logGroupName"]
+        source["results_log_stream"] = cw["logStreamName"]
+    return source
 
 
 def stage_recommend(
@@ -483,6 +499,8 @@ def stage_recommend(
     types: tuple[str, ...] = REC_TYPES,
     tools: dict[str, str] | None = None,
     source: dict[str, Any] | None = None,
+    provider: str | None = None,
+    model_id: str | None = None,
 ) -> dict[str, Any]:
     data = data_client(workspace)
     log_group = f"/aws/bedrock-agentcore/runtimes/{agent['resource_id']}-DEFAULT"
@@ -515,7 +533,17 @@ def stage_recommend(
     # so a re-run never collides with the job an earlier run created
     run_tag = uuid.uuid4().hex[:6]
 
-    if "system_prompt" in types:
+    provider_id = provider or rec_providers.DEFAULT_PROVIDER
+    if "system_prompt" in types and provider_id != rec_providers.DEFAULT_PROVIDER:
+        # a 3rd-party optimizer replaces ONLY the system-prompt generator; it
+        # writes the same keys the AWS job does, plus provider attribution
+        out.update(
+            _third_party_prompt_recommendation(
+                exp_id, agent, workspace, progress,
+                provider_id=provider_id, model_id=model_id, source=source or {},
+            )
+        )
+    elif "system_prompt" in types:
         progress(
             "generating system-prompt recommendation from "
             + ("the selected evaluation run…" if pinned_arn else "recent traces…")
@@ -537,7 +565,7 @@ def stage_recommend(
         if sp_status == "COMPLETED" and sp_out:
             out.update(
                 system_prompt_status=sp_status,
-                recommended_prompt=sp_out[:4000],
+                recommended_prompt=sp_out[:REC_PROMPT_MAX_CHARS],
                 explanation=sp_payload.get("explanation", "")[:600],
             )
         else:
@@ -592,6 +620,100 @@ def stage_recommend(
                 out["tool_descriptions"] = {}
 
     return out
+
+
+def _third_party_prompt_recommendation(
+    exp_id: str,
+    agent: dict[str, Any],
+    workspace: WorkspaceContext,
+    progress: Progress,
+    *,
+    provider_id: str,
+    model_id: str | None,
+    source: dict[str, Any],
+    transcript: rec_evidence.TranscriptFn | None = None,
+    logs: Any = None,
+    converse: Any = None,
+) -> dict[str, Any]:
+    """System-prompt recommendation from a registered non-AgentCore provider.
+
+    Evidence is the pinned run's own batch-evaluation results stream joined
+    with each session's transcript; the router already guaranteed a pinned
+    source for providers that need one. Returns the artifact keys for the
+    system-prompt type — COMPLETED with a prompt, or FAILED with a reason and no
+    prompt (never an invented one), exactly like the AWS job path.
+    """
+    prov = rec_providers.get_provider(provider_id)
+    resolved_model = model_id or prov.default_model_id() or ""
+    attribution = {"provider": prov.id, "provider_model_id": resolved_model}
+    log_group, log_stream = source.get("results_log_group"), source.get("results_log_stream")
+    if not (log_group and log_stream):
+        return {
+            **attribution,
+            "system_prompt_status": "FAILED",
+            "system_prompt_error": (
+                "the selected run's batch evaluation has no results log stream to read"
+            ),
+        }
+    settings = get_settings()
+    db = SessionLocal()
+    try:
+        run = db.get(EvalRun, source.get("run_id") or "")
+        agent_row = db.get(Agent, agent.get("id") or "")
+        extra_feedback = (
+            rec_evidence.insight_feedback(run.insights)
+            if run is not None and run.mode == "insights" else []
+        )
+        progress("collecting evidence from the selected evaluation run…")
+        evidence, stats = rec_evidence.collect_evidence(
+            workspace=workspace,
+            log_group=str(log_group),
+            log_stream=str(log_stream),
+            transcript=transcript or rec_evidence.default_transcript(db, workspace, agent_row),
+            max_sessions=settings.prompt_opt_max_sessions,
+            logs=logs,
+            progress=progress,
+        )
+    finally:
+        db.close()
+    result = prov.optimize(
+        OptimizeRequest(
+            current_prompt=agent.get("system_prompt") or "",
+            agent=agent,
+            trace_source=source,
+            evidence=evidence,
+            stats=stats,
+            model_id=resolved_model,
+            workspace=workspace,
+            max_chars=REC_PROMPT_MAX_CHARS,
+            extra_feedback=extra_feedback,
+            max_tokens=settings.prompt_opt_max_tokens,
+        ),
+        progress,
+        converse=converse,
+    )
+    out: dict[str, Any] = {
+        **attribution,
+        "provider_meta": result.meta,
+        "system_prompt_status": result.status,
+    }
+    if result.status == "COMPLETED" and result.recommended_prompt:
+        out["recommended_prompt"] = result.recommended_prompt
+        out["explanation"] = result.explanation
+    else:
+        out["system_prompt_status"] = "FAILED"
+        out["system_prompt_error"] = (result.error or "provider produced no prompt")[:300]
+    return out
+
+
+def recommendation_attribution(rec: dict[str, Any] | None) -> str | None:
+    """`"<provider> · <model>"` for a non-AgentCore recommendation, else None."""
+    rec = rec or {}
+    provider = rec.get("provider")
+    if not provider or provider == rec_providers.DEFAULT_PROVIDER:
+        return None
+    model = rec.get("provider_model_id")
+    return f"{provider} · {model}" if model else str(provider)
 
 
 def _run_tool_recommendation(
@@ -695,6 +817,7 @@ def stage_bundles(
     exp_id: str, agent: dict[str, Any], treatment_prompt: str,
     workspace: WorkspaceContext,
     treatment_tool_descs: dict[str, str] | None = None,
+    attribution: str | None = None,
 ) -> dict:
     control = control_client(workspace)
     current_prompt = agent["system_prompt"]
@@ -715,7 +838,9 @@ def stage_bundles(
         bundle_name=f"exp_{exp_id[:8]}_treatment",
         system_prompt=treatment_prompt,
         tool_descriptions={**current_descs, **(treatment_tool_descs or {})},
-        commit_message="treatment — accepted recommendation",
+        # who produced the treatment text is part of the bundle's own history
+        commit_message="treatment — accepted recommendation"
+        + (f" ({attribution})" if attribution else ""),
     )
     return {
         "control": {
@@ -1219,6 +1344,8 @@ def act_recommend(
     types: Sequence[str] | None = None,
     tools: dict[str, str] | None = None,
     source: dict[str, Any] | None = None,
+    provider: str | None = None,
+    model_id: str | None = None,
 ) -> None:
     exp = _get(exp_id)
     workspace = context_for_workspace(exp.workspace_id)
@@ -1231,6 +1358,9 @@ def act_recommend(
         types=sel,
         tools=tools,
         source=source,
+        # only when chosen: the default path's call shape stays exactly as before
+        **({"provider": provider} if provider else {}),
+        **({"model_id": model_id} if model_id else {}),
     )
     # merge over the prior artifact: the type(s) just generated replace their
     # own keys; the other type's output and any earlier accept survive
@@ -1247,7 +1377,10 @@ def action_accept(
 ) -> dict[str, Any]:
     """Persist the (possibly user-edited) recommendation; unlocks bundles."""
     rec = dict(exp.artifacts.get("recommend") or {})
-    rec["accepted_prompt"] = prompt[:4000]
+    rec["accepted_prompt"] = prompt[:REC_PROMPT_MAX_CHARS]
+    # an edited accept still descends from the provider's seed — attribution
+    # stays, but the edit is on record
+    rec["accepted_edited"] = rec["accepted_prompt"] != (rec.get("recommended_prompt") or "")
     if tool_descriptions:
         rec["accepted_tool_descriptions"] = {
             str(k): str(v) for k, v in tool_descriptions.items()
@@ -1260,9 +1393,12 @@ def action_bundles(exp: Experiment) -> dict[str, Any]:
     rec = exp.artifacts.get("recommend") or {}
     treatment_prompt = rec.get("accepted_prompt") or rec.get("recommended_prompt") or ""
     workspace = context_for_workspace(exp.workspace_id)
+    attribution = recommendation_attribution(rec)
     result = stage_bundles(
         exp.id, _agent_meta(exp, workspace), treatment_prompt, workspace,
         rec.get("accepted_tool_descriptions"),
+        # only for a 3rd-party recommendation — the AgentCore path is unchanged
+        **({"attribution": attribution} if attribution else {}),
     )
     _update(exp.id, stage="bundles", artifact={"bundles": result})
     return result

@@ -1,5 +1,6 @@
 """Experiments API — create, inspect, and drive one stage action at a time."""
 
+import re
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Response
@@ -10,6 +11,7 @@ from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.evaluation.models import EvalDataset
 from app.models.ledger import Agent
+from app.optimization import providers as rec_providers
 from app.optimization import readiness, service
 from app.optimization.models import STAGES, Experiment
 from app.routers.workspaces import WorkspaceScope, require_workspace
@@ -103,6 +105,14 @@ def experiment_readiness(
     )
 
 
+@router.get("/providers")
+def recommend_providers(
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """The recommend-stage generators the console can offer (no AWS call)."""
+    return {"providers": rec_providers.describe_providers()}
+
+
 @router.get("/{exp_id}")
 def get_experiment(
     exp_id: str,
@@ -176,6 +186,13 @@ class ActionRequest(BaseModel):
     # Insights job) instead of the default rolling window, so the recommendation is
     # generated from exactly the sessions that run analysed. Omitted ⇒ unchanged.
     recommend_source_run_id: str | None = Field(default=None, min_length=1, max_length=16)
+    # recommend — which system-prompt generator runs. Absent ⇒ the AgentCore
+    # recommendation job (unchanged path). A 3rd-party provider reflects on the
+    # pinned run's scored sessions with the given Bedrock model (or its default);
+    # tool descriptions always come from AgentCore. The Literal mirrors
+    # providers.PROVIDER_IDS (pinned by a test) so an unknown id is a 422.
+    recommend_provider: Literal["agentcore", "gepa_lite"] | None = None
+    recommend_model_id: str | None = Field(default=None, min_length=3, max_length=128)
     accepted_prompt: str | None = None                        # accept
     accepted_tool_descriptions: dict[str, str] | None = None  # accept
     dataset_id: str | None = None                             # traffic
@@ -185,6 +202,36 @@ class ActionRequest(BaseModel):
         default=None, min_length=1, max_length=service.ONLINE_EVAL_MAX
     )
     challenger_agent_id: str | None = None                    # legacy canary
+
+
+_MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$")
+
+
+def _validate_recommend_provider(req: ActionRequest) -> None:
+    """Provider-side preconditions, checked before any thread or AWS call.
+
+    A provider that reflects on scored evidence needs a pinned evaluation run —
+    the rolling CloudWatch window carries traces but no judge scores. Only
+    enforced when the system-prompt generator is actually selected: a
+    tool-descriptions-only run ignores the provider (AgentCore generates those).
+    """
+    if req.recommend_model_id is not None and not _MODEL_ID.match(req.recommend_model_id):
+        raise AppError(
+            "experiment.model_id_invalid",
+            "recommend_model_id must be a Bedrock model / inference-profile id",
+            {"model_id": req.recommend_model_id},
+            status_code=422,
+        )
+    provider = rec_providers.get_provider(req.recommend_provider)
+    wants_prompt = req.recommend_types is None or "system_prompt" in req.recommend_types
+    if wants_prompt and provider.requires_source and not req.recommend_source_run_id:
+        raise AppError(
+            "experiment.provider_requires_source",
+            f"the {provider.id} provider reflects on a completed evaluation run's "
+            "scores — pin one with recommend_source_run_id",
+            {"provider": provider.id},
+            status_code=422,
+        )
 
 
 @router.post("/{exp_id}/action")
@@ -271,6 +318,7 @@ def experiment_action(
                                                  progress),
         )
     elif req.action == "recommend":
+        _validate_recommend_provider(req)
         # resolved here, not inside the thread: a run that is missing, unfinished, or
         # another agent's should be an immediate API error, not a failed background
         # job the user has to go read a stage error to understand
@@ -282,7 +330,8 @@ def experiment_action(
             lambda progress: service.act_recommend(
                 exp_id, progress,
                 types=req.recommend_types, tools=req.recommend_tools,
-                source=source),
+                source=source, provider=req.recommend_provider,
+                model_id=req.recommend_model_id),
         )
     elif req.action == "gateway":
         service.assert_shared_gateway_available(ws.context)

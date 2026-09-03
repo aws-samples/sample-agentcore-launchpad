@@ -2080,8 +2080,22 @@ export interface SkillLabPublishResult {
   reapproved: boolean;
 }
 
+/** One recommend-stage generator (`GET /api/experiments/providers`). */
+export interface RecommendProviderInfo {
+  id: string;
+  label: string;
+  /** Needs a pinned evaluation run (scored evidence) — the rolling window has none. */
+  requires_source: boolean;
+  supports: string[];
+  /** Empty for AgentCore: the job picks its own judge; the model picker is hidden. */
+  models: { model_id: string; label: string }[];
+  default_model_id: string | null;
+}
+
 export const api = {
   authStatus: () => request<AuthStatus>("/api/auth/status"),
+  experimentProviders: () =>
+    request<{ providers: RecommendProviderInfo[] }>("/api/experiments/providers"),
   login: (username: string, password: string) =>
     request<AuthLoginResult>("/api/auth/login", {
       method: "POST",
