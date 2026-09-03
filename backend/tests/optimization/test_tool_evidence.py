@@ -641,3 +641,21 @@ def test_truncated_twice_reports_the_token_limit():
     assert res.status == "FAILED" and "truncated by the token limit" in res.error
     assert "raise prompt_opt_max_tokens" in res.error
     assert res.tool_status == "error"
+
+
+def test_parse_reflection_accepts_raw_newlines_inside_strings():
+    raw = '{"diagnosis": "line one\nline two", "revised_prompt": "a\n\tb"}'  # literal control chars
+    obj = gepa_lite.parse_reflection(raw)
+    assert obj == {"diagnosis": "line one\nline two", "revised_prompt": "a\n\tb"}
+    assert gepa_lite.parse_reflection("no json here") is None
+    assert "no JSON object" in gepa_lite.describe_unparseable("just prose")
+    assert "JSON error" in gepa_lite.describe_unparseable('{"a": 1,, "b"}')
+
+
+def test_unparseable_reply_reason_carries_the_json_error():
+    prov = gepa_lite.GepaLiteProvider()
+    converse = _converse(['{"diagnosis": "x" "revised_prompt": 1}', '{"a": [}'])
+    res = prov.optimize(_req([_session()], components=("system_prompt",)), svc._noop,
+                        converse=converse)
+    assert res.status == "FAILED"
+    assert res.error.startswith("reflection model returned no parseable JSON — JSON error:")

@@ -588,3 +588,25 @@ def test_action_bundles_passes_attribution_only_for_third_party(client, monkeypa
     assert client.post(f"/api/experiments/{exp2.id}/action",
                        json={"action": "bundles"}).status_code == 200
     assert captured[-1] == {}
+
+
+def test_accept_without_tool_field_takes_the_recommended_descriptions(client):
+    """A scripted accept that omits accepted_tool_descriptions must not build a
+    treatment with the OLD descriptions — absent falls back to the recommendation,
+    an explicit {} means no tool changes (found live on prod, 2026-09-03)."""
+    exp = _mk_exp(artifacts={"recommend": {"recommended_prompt": "rec",
+                                           "tool_descriptions": {"t": "new"}}})
+    res = client.post(f"/api/experiments/{exp.id}/action", json={"action": "accept"})
+    rec = res.json()["experiment"]["artifacts"]["recommend"]
+    assert rec["accepted_tool_descriptions"] == {"t": "new"}
+    assert rec["accepted_edited"] is False
+    res = client.post(f"/api/experiments/{exp.id}/action",
+                      json={"action": "accept", "accepted_tool_descriptions": {}})
+    rec = res.json()["experiment"]["artifacts"]["recommend"]
+    assert rec["accepted_tool_descriptions"] == {}
+    assert rec["accepted_edited"] is True  # the operator declined the tool changes
+    # no recommended descriptions at all → nothing recorded, nothing edited
+    exp2 = _mk_exp(artifacts={"recommend": {"recommended_prompt": "rec"}})
+    res = client.post(f"/api/experiments/{exp2.id}/action", json={"action": "accept"})
+    rec = res.json()["experiment"]["artifacts"]["recommend"]
+    assert "accepted_tool_descriptions" not in rec and rec["accepted_edited"] is False
