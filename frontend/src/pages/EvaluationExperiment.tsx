@@ -1519,10 +1519,19 @@ function ConfigurationExperimentView() {
          data-testid="sp-status-note">
       <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
       <span className="mono" style={{ fontSize: 10.5 }}>
-        {t("expPage.spRecFailed", {
-          status: rec?.system_prompt_status ?? "FAILED",
-          msg: rec?.system_prompt_error ?? "",
-        })}
+        {rec?.provider && rec.provider !== "agentcore"
+          // a 3rd-party provider's failure is OUR call to a Bedrock model (a
+          // timeout, a rejected request, unparseable output) — not an AWS-side
+          // job status, so name the provider + model instead of "on AWS"
+          ? t("expPage.spRecFailedProvider", {
+              provider: rec.provider,
+              model: rec.provider_model_id ?? "—",
+              msg: rec.system_prompt_error ?? "",
+            })
+          : t("expPage.spRecFailed", {
+              status: rec?.system_prompt_status ?? "FAILED",
+              msg: rec?.system_prompt_error ?? "",
+            })}
       </span>
     </div>
   );
