@@ -145,6 +145,23 @@ class Settings(BaseSettings):
     # could never fit the quota anyway.
     eval_max_concurrent_runs: int = Field(default=3, ge=1, le=5)
 
+    # 3rd-party recommendation providers for the experiment RECOMMEND stage
+    # (app/optimization/providers). Model ids are Bedrock Converse
+    # inference-profile ids invoked through the workspace client funnel; the list
+    # is what the console offers, the default leads it. GPT-5.6 Sol is invocable
+    # via Converse in us-west-2 too (unlike Mantle for harnesses) — live-verified.
+    prompt_opt_default_model_id: str = "global.anthropic.claude-sonnet-5"
+    prompt_opt_models: list[str] = [
+        "global.anthropic.claude-sonnet-5",
+        "global.anthropic.claude-opus-5",
+        "global.anthropic.claude-sonnet-4-6",
+        "us.openai.gpt-5.6-sol",
+    ]
+    # Sessions a provider reads from the pinned run (worst-first + a best-scoring
+    # contrast set) and the reflection call's output budget.
+    prompt_opt_max_sessions: int = Field(default=30, ge=3, le=100)
+    prompt_opt_max_tokens: int = Field(default=4096, ge=512, le=16000)
+
     # Studio local-debug (un-deployed flow execution + AI fix). The control-plane
     # backend env has no strands/openai; generated code runs in the dedicated
     # interpreter provisioned by scripts/setup_exec_env.sh. Endpoints return a

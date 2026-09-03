@@ -18,8 +18,9 @@ import {
   ViewHead,
 } from "../components";
 import { EvaluationNav } from "../components/EvaluationNav";
-import type { AgentInfo } from "../lib/api";
+import type { AgentInfo, RecommendProviderInfo } from "../lib/api";
 import { api } from "../lib/api";
+import { CUSTOM_MODEL_OPTION } from "../lib/models";
 import {
   ACTIVE_RUN_STATUSES,
   DEFAULT_EVALUATORS,
@@ -111,6 +112,16 @@ export interface ExperimentInfo {
       tool_descriptions?: Record<string, string>;
       accepted_prompt?: string;
       accepted_tool_descriptions?: Record<string, string>;
+      /** Set by accept: the accepted text differs from the provider's seed. */
+      accepted_edited?: boolean;
+      /** Who generated the system prompt. Absent ⇒ the AgentCore recommendation
+       *  job (its artifact is unchanged); a 3rd-party provider attributes itself. */
+      provider?: string;
+      provider_model_id?: string;
+      provider_meta?: { evidence_sessions?: number; evidence_records?: number;
+        sessions_without_transcript?: number; latency_ms?: number;
+        input_tokens?: number; output_tokens?: number; calls?: number;
+        changes?: string[] };
       /** Which traces this recommendation read — recorded for both paths so a run
        *  stays explainable after the fact. Absent on pre-feature rows. */
       trace_source?: {
@@ -367,6 +378,14 @@ function ConfigurationExperimentView() {
   // that run analysed (an Insights job being the point of the feature).
   const [recSourceRunId, setRecSourceRunId] = useState("");
   const [recSourceRuns, setRecSourceRuns] = useState<EvaluationRunInfo[]>([]);
+  // RECOMMEND system-prompt generator: "agentcore" (the AWS job, default) or a
+  // 3rd-party provider reflecting on the pinned run with a Bedrock model. The
+  // list comes from the backend so a new provider needs no console change.
+  const [recProviders, setRecProviders] = useState<RecommendProviderInfo[]>([]);
+  const [recProviderId, setRecProviderId] = useState("agentcore");
+  // "" = the provider's default; CUSTOM_MODEL_OPTION reveals the free-text input
+  const [recModelChoice, setRecModelChoice] = useState("");
+  const [recModelCustom, setRecModelCustom] = useState("");
   const [toolInputsJson, setToolInputsJson] = useState<string | null>(null);
   const [confirmCleanup, setConfirmCleanup] = useState(false);
   const [confirmPromote, setConfirmPromote] = useState(false);
@@ -1086,6 +1105,14 @@ function ConfigurationExperimentView() {
     </>
   );
 
+  useEffect(() => {
+    let cancelled = false;
+    void api.experimentProviders()
+      .then((body) => { if (!cancelled) setRecProviders(body.providers); })
+      .catch(() => { if (!cancelled) setRecProviders([]); });
+    return () => { cancelled = true; };
+  }, []);
+
   // Completed runs of the experiment's own agent that can pin RECOMMEND. Only runs
   // with a batch_eval_id qualify — a window-scoped run never started one, so there
   // is no batch evaluation to read.
@@ -1172,9 +1199,110 @@ function ConfigurationExperimentView() {
     ? parseToolJson(toolInputsValue) : undefined;
   const toolInputsBad = toolInputsValue.trim() !== "" && toolInputs === null;
 
+  const recProvider = recProviders.find((p) => p.id === recProviderId)
+    ?? recProviders.find((p) => p.id === "agentcore");
+  const recProviderIsAws = !recProvider || recProvider.id === "agentcore";
+  const recModelId = recModelChoice === CUSTOM_MODEL_OPTION
+    ? recModelCustom.trim()
+    : recModelChoice || (recProvider?.default_model_id ?? "");
+  // a reflective provider needs scored evidence: a pinned run, not the window
+  const providerNeedsSource = !recProviderIsAws
+    && !!recProvider?.requires_source && !recSourceRunId;
+  const providerModelMissing = !recProviderIsAws
+    && recModelChoice === CUSTOM_MODEL_OPTION && recModelCustom.trim() === "";
+  const providerExtra: Record<string, unknown> = recProviderIsAws
+    ? {}
+    : { recommend_provider: recProvider!.id,
+        ...(recModelId ? { recommend_model_id: recModelId } : {}) };
+
+  // provider + model pickers — shown before the first generation and again next
+  // to the regenerate buttons, so a failed provider run can be retried with a
+  // different optimizer or model
+  const providerControls = recProviders.length > 1 ? (
+        <div className="field" style={{ marginBottom: 8 }}>
+          <label htmlFor="rec-provider-select">{t("expPage.providerLabel")}</label>
+          <select
+            id="rec-provider-select"
+            data-testid="rec-provider-select"
+            className="input mono"
+            value={recProvider?.id ?? "agentcore"}
+            onChange={(e) => {
+              setRecProviderId(e.target.value);
+              setRecModelChoice("");
+              setRecModelCustom("");
+            }}
+          >
+            {recProviders.map((p) => (
+              <option key={p.id} value={p.id} style={{ background: "#141816" }}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          {!recProviderIsAws && recProvider && recProvider.models.length > 0 && (
+            <>
+              <label htmlFor="rec-model-select" style={{ marginTop: 6 }}>
+                {t("expPage.providerModel")}
+              </label>
+              <select
+                id="rec-model-select"
+                data-testid="rec-model-select"
+                className="input mono"
+                value={recModelChoice}
+                onChange={(e) => setRecModelChoice(e.target.value)}
+              >
+                {recProvider.models.map((m) => (
+                  <option
+                    key={m.model_id}
+                    value={m.model_id === recProvider.default_model_id ? "" : m.model_id}
+                    style={{ background: "#141816" }}
+                  >
+                    {m.label}
+                    {m.model_id === recProvider.default_model_id
+                      ? ` · ${t("expPage.providerDefaultModel")}` : ""}
+                  </option>
+                ))}
+                <option value={CUSTOM_MODEL_OPTION} style={{ background: "#141816" }}>
+                  {t("expPage.providerCustomModel")}
+                </option>
+              </select>
+              {recModelChoice === CUSTOM_MODEL_OPTION && (
+                <input
+                  data-testid="rec-model-custom"
+                  className="input mono"
+                  style={{ marginTop: 6 }}
+                  placeholder="global.anthropic.claude-sonnet-5"
+                  value={recModelCustom}
+                  onChange={(e) => setRecModelCustom(e.target.value)}
+                />
+              )}
+            </>
+          )}
+          {!recProviderIsAws && (
+            <div className="note" style={{ marginTop: 6 }}>
+              <span className="i">[i]</span>
+              <span>
+                {t("expPage.providerNote")}
+                {genTd && toolDescriptionsSupported
+                  ? ` ${t("expPage.providerToolNote")}` : ""}
+              </span>
+            </div>
+          )}
+          {providerNeedsSource && (
+            <div
+              className="note"
+              data-testid="rec-provider-needs-source"
+              style={{ borderColor: "var(--warn)", marginTop: 6 }}
+            >
+              <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
+              <span>{t("expPage.providerNeedsSource")}</span>
+            </div>
+          )}
+        </div>
+  ) : null;
+
   const onGenerate = (types: string[], withTools: boolean) => {
     if (!exp) return;
-    const extra: Record<string, unknown> = { recommend_types: types };
+    const extra: Record<string, unknown> = { recommend_types: types, ...providerExtra };
     if (withTools && toolInputs) extra.recommend_tools = toolInputs;
     void onAction(exp.id, "recommend", extra);
   };
@@ -1348,6 +1476,7 @@ function ConfigurationExperimentView() {
               </span>
             </div>
           </div>
+          {providerControls}
           {genTd && toolDescriptionsSupported && (
             <div style={{ marginBottom: 8 }}>{toolInputsEditor}</div>
           )}
@@ -1359,7 +1488,8 @@ function ConfigurationExperimentView() {
           {actionBtn("recommend", t("expPage.generateRec"), {
             primary: true,
             disabled: (!genSp && !(genTd && toolDescriptionsSupported))
-              || (genTd && toolDescriptionsSupported && toolInputsBad),
+              || (genTd && toolDescriptionsSupported && toolInputsBad)
+              || (genSp && (providerNeedsSource || providerModelMissing)),
             extra: {
               recommend_types: [
                 ...(genSp ? ["system_prompt"] : []),
@@ -1368,6 +1498,8 @@ function ConfigurationExperimentView() {
               ...(genTd && toolDescriptionsSupported && toolInputs
                 ? { recommend_tools: toolInputs } : {}),
               ...(recSourceRunId ? { recommend_source_run_id: recSourceRunId } : {}),
+              // the provider only matters for the system-prompt generator
+              ...(genSp ? providerExtra : {}),
             },
           })}
         </>
@@ -1393,6 +1525,22 @@ function ConfigurationExperimentView() {
                 : t("expPage.recSourceUsedWindow", {
                     days: rec.trace_source.lookback_days ?? 7,
                   })}
+            </div>
+          )}
+          {/* Who generated the prompt — only a 3rd-party provider writes this;
+              an AgentCore recommendation renders exactly as before. */}
+          {rec.provider && rec.provider !== "agentcore" && (
+            <div
+              className="mono dim"
+              data-testid="rec-provider"
+              style={{ fontSize: 10, marginBottom: 6 }}
+            >
+              {t("expPage.recProducedBy", {
+                provider: rec.provider,
+                model: rec.provider_model_id ?? "—",
+                count: rec.provider_meta?.evidence_sessions ?? 0,
+              })}
+              {rec.accepted_edited ? ` · ${t("expPage.recProviderEdited")}` : ""}
             </div>
           )}
           {spDone && (
@@ -1428,9 +1576,11 @@ function ConfigurationExperimentView() {
           {!recommendDone && (!spDone || !tdRan
             || Object.keys(recToolDescs).length === 0) && (
             <div style={{ marginTop: 8 }}>
+              {!spDone && providerControls}
               {!spDone && (
                 <Btn
-                  disabled={busy || !!exp.running_action}
+                  disabled={busy || !!exp.running_action
+                    || providerNeedsSource || providerModelMissing}
                   data-testid="action-recommend-sp"
                   onClick={() => onGenerate(["system_prompt"], false)}
                 >
