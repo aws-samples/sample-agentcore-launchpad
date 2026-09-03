@@ -22,8 +22,10 @@ Live-verified AWS semantics this module leans on (2026-09-02):
 
 from __future__ import annotations
 
+import json
 import re
 import threading
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
@@ -42,6 +44,7 @@ from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope
 from app.services.agentcore.client import control_client, data_client
 from app.services.observability import BIN_BY_RANGE, RANGE_HOURS, run_insights_queries
+from app.services.workspace import WorkspaceContext
 
 EXPERIMENT_PREFIXES = ("exp_", "can_")
 NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{0,47}$")
@@ -853,3 +856,220 @@ def start_report(
         "run_id": run.id, "status": run.status, "queue_position": run.queue_position,
         "range": range_key, "config_id": config_id,
     }
+# ─── cross-surface reads (Observability session detail + Overview tile) ──────
+#
+# Both read EVERY config's results at once through a prefix source, so neither
+# has to list configs first (and neither hits the 50-group cap of logGroupNames).
+# ``_start_query`` treats a ``SOURCE`` query as un-targeted, like SPANS_SOURCE.
+
+RESULTS_SOURCE = f"SOURCE logGroups(namePrefix: ['{ac.ONLINE_EVAL_RESULTS_PREFIX}'])"
+SESSION_SCORES_LIMIT = 200
+QUALITY_RANGE = "24h"
+_NAMES_TTL_SECONDS = 120.0
+_names_cache: dict[str, tuple[float, dict[str, str]]] = {}
+_names_lock = threading.Lock()
+
+
+def session_scores_query(session_id: str) -> str:
+    """Every online result record for one session, across all configs."""
+    sid = json.dumps(session_id)
+    return f"""
+{RESULTS_SOURCE}
+| {_RESULT_FILTER} and attributes.session.id = {sid}
+| fields @timestamp as time, onlineEvaluationConfigId as config_id,
+  attributes.gen_ai.evaluation.name as evaluator,
+  attributes.aws.bedrock_agentcore.evaluation_level as level,
+  attributes.gen_ai.evaluation.score.value as score,
+  attributes.gen_ai.evaluation.score.label as label,
+  attributes.gen_ai.evaluation.explanation as explanation, traceId as trace_id
+| sort @timestamp desc
+| limit {SESSION_SCORES_LIMIT}
+"""
+
+
+def quality_queries(config_ids: Sequence[str]) -> dict[str, str]:
+    """Per-(evaluator, config) means plus account-wide distinct counters, limited
+    to the given (agent-owned) config ids."""
+    ids = ", ".join(json.dumps(c) for c in config_ids)
+    base = f"""
+{RESULTS_SOURCE}
+| {_RESULT_FILTER} and ispresent(attributes.gen_ai.evaluation.score.value)
+  and onlineEvaluationConfigId in [{ids}]
+"""
+    return {
+        "pairs": base + """| stats avg(attributes.gen_ai.evaluation.score.value) as mean,
+  count(*) as count
+  by attributes.gen_ai.evaluation.name as evaluator, onlineEvaluationConfigId as config_id
+""",
+        "totals": base + """| stats count_distinct(attributes.session.id) as sessions,
+  count_distinct(onlineEvaluationConfigId) as configs
+""",
+    }
+
+
+def config_names(workspace: WorkspaceContext, control: Any = None) -> dict[str, str]:
+    """``{config_id: name}`` for every config in the account (one paginated List,
+    cached 120 s per workspace). Only feeds owner classification of results that
+    no ledger row explains; a failure degrades to ``{}`` (→ ``external``)."""
+    hit = _names_cache.get(workspace.id)
+    if hit and time.monotonic() - hit[0] < _NAMES_TTL_SECONDS:
+        return hit[1]
+    with _names_lock:
+        hit = _names_cache.get(workspace.id)
+        if hit and time.monotonic() - hit[0] < _NAMES_TTL_SECONDS:
+            return hit[1]
+        try:
+            names = {
+                c["onlineEvaluationConfigId"]: c.get("name", "")
+                for c in ac.list_online_eval_configs(control or control_client(workspace))
+                if c.get("onlineEvaluationConfigId")
+            }
+        except Exception:
+            names = {}
+        _names_cache[workspace.id] = (time.monotonic(), names)
+        return names
+
+
+def reset_names_cache() -> None:
+    _names_cache.clear()
+
+
+def _agent_ledger_rows(db: Session, workspace_id: str) -> dict[str, OnlineEvalConfig]:
+    rows = db.scalars(
+        select(OnlineEvalConfig).where(OnlineEvalConfig.workspace_id == workspace_id)
+    ).all()
+    return {r.config_id: r for r in rows}
+
+
+def parse_session_scores(
+    rows: Sequence[dict[str, str]],
+    ledger: dict[str, OnlineEvalConfig],
+    names: dict[str, str],
+) -> dict[str, Any]:
+    """Group result records by config, classified by owner (agent rows first)."""
+    grouped: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        config_id = r.get("config_id") or ""
+        if not config_id or not r.get("evaluator"):
+            continue
+        block = grouped.get(config_id)
+        if block is None:
+            row = ledger.get(config_id)
+            block = grouped[config_id] = {
+                "config_id": config_id,
+                "config_name": row.name if row else (names.get(config_id) or None),
+                "owner": owner_of(names.get(config_id, ""), config_id, set(ledger)),
+                "agent": {"id": row.agent_id, "name": row.agent_name} if row else None,
+                "records": [],
+            }
+        block["records"].append({
+            "time": r.get("time"),
+            "evaluator_id": r["evaluator"],
+            "level": r.get("level"),
+            "score": _num(r.get("score")),
+            "label": r.get("label"),
+            "explanation": r.get("explanation"),
+            "trace_id": r.get("trace_id"),
+        })
+    order = {"agent": 0, "experiment": 1, "external": 2}
+    configs = sorted(grouped.values(), key=lambda b: (order[b["owner"]], b["config_id"]))
+    return {
+        "configs": configs,
+        "total": sum(len(b["records"]) for b in configs),
+        "unavailable": False,
+    }
+
+
+def session_online_scores(
+    db: Session,
+    workspace: WorkspaceContext,
+    session_id: str,
+    hours: int,
+    run_queries: Callable[..., dict[str, list[dict[str, str]]]] | None = None,
+    logs: Any = None,
+    control: Any = None,
+) -> dict[str, Any]:
+    """Online scores for one session — an additive, fail-soft block on the
+    Observability session detail. A Logs Insights failure here must never take
+    the traces/transcript down with it, hence the separate query + try/except.
+    ``configs_exist`` lets the UI hide the panel on workspaces that never
+    created a config (and show a "not judged yet" state on those that did)."""
+    ledger = _agent_ledger_rows(db, workspace.id)
+    exists = bool(ledger)
+    run = run_queries or run_insights_queries
+    try:
+        rows = run({"scores": session_scores_query(session_id)}, hours,
+                   logs=logs, workspace=workspace)["scores"]
+    except Exception:
+        return {"configs": [], "total": 0, "unavailable": True, "configs_exist": exists}
+    names = config_names(workspace, control) if any(
+        (r.get("config_id") or "") not in ledger for r in rows
+    ) else {}
+    return {**parse_session_scores(rows, ledger, names), "configs_exist": exists}
+
+
+def _empty_quality(configs: int = 0) -> dict[str, Any]:
+    return {"range": QUALITY_RANGE, "mean": None, "scores": 0, "sessions": 0,
+            "agents": 0, "configs": configs, "evaluators": []}
+
+
+def parse_quality(rows: dict[str, list[dict[str, str]]],
+                  ledger: dict[str, OnlineEvalConfig]) -> dict[str, Any]:
+    """Polarity-normalised, count-weighted mean over every (evaluator, config)
+    pair — a Refusal mean of 0.1 contributes 0.9, so the tile reads "higher is
+    better" regardless of the evaluator mix. ``evaluators`` keeps the RAW per-
+    evaluator means (what the online page shows) plus the polarity applied.
+    ``configs`` counts the workspace's agent-owned configs (the ledger), not
+    only the ones that scored — the tile tells "configured, nothing judged yet"
+    apart from "no config at all" with it; ``agents`` counts agents WITH scores."""
+    weighted = 0.0
+    total = 0
+    per_eval: dict[str, dict[str, float]] = {}
+    scored: set[str] = set()
+    for r in rows.get("pairs", []):
+        evaluator, mean, count = r.get("evaluator"), _num(r.get("mean")), _int(r.get("count"))
+        if not evaluator or mean is None or count <= 0:
+            continue
+        polarity = ac.evaluator_polarity(evaluator)
+        weighted += (1 - mean if polarity < 0 else mean) * count
+        total += count
+        scored.add(r.get("config_id") or "")
+        acc = per_eval.setdefault(evaluator, {"sum": 0.0, "count": 0, "polarity": polarity})
+        acc["sum"] += mean * count
+        acc["count"] += count
+    if total == 0:
+        return _empty_quality(len(ledger))
+    totals = (rows.get("totals") or [{}])[0]
+    return {
+        "range": QUALITY_RANGE,
+        "mean": round(weighted / total, 3),
+        "scores": total,
+        "sessions": _int(totals.get("sessions")),
+        "agents": len({ledger[c].agent_id for c in scored if c in ledger}),
+        "configs": len(ledger),
+        "evaluators": sorted(
+            (
+                {"evaluator_id": e, "mean": round(a["sum"] / a["count"], 3),
+                 "count": int(a["count"]), "polarity": int(a["polarity"])}
+                for e, a in per_eval.items()
+            ),
+            key=lambda e: e["evaluator_id"],
+        ),
+    }
+
+
+def online_quality(
+    db: Session,
+    workspace: WorkspaceContext,
+    run_queries: Callable[..., dict[str, list[dict[str, str]]]] | None = None,
+    logs: Any = None,
+) -> dict[str, Any]:
+    """24 h online quality over the workspace's agent-owned configs. No agent
+    config → the empty payload WITHOUT touching Logs Insights."""
+    ledger = _agent_ledger_rows(db, workspace.id)
+    if not ledger:
+        return _empty_quality()
+    run = run_queries or run_insights_queries
+    rows = run(quality_queries(sorted(ledger)), RANGE_HOURS[QUALITY_RANGE],
+               logs=logs, workspace=workspace)
+    return parse_quality(rows, ledger)

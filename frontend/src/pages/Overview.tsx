@@ -3,8 +3,15 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
-import { Chip, DataTable, MethodChip, Panel, StatTile, ViewHead } from "../components";
-import type { AgentInfo, OverviewInfo } from "../lib/api";
+import {
+  Chip,
+  DataTable,
+  MethodChip,
+  Panel,
+  StatTile,
+  ViewHead,
+} from "../components";
+import type { AgentInfo, OnlineQuality, OverviewInfo } from "../lib/api";
 import { api } from "../lib/api";
 import { LAB_GUIDE_URL } from "../lib/links";
 
@@ -73,6 +80,41 @@ function useOverview(intervalMs = 30000): OverviewInfo | null {
   return info;
 }
 
+// Separate fetch from /api/overview: this one is a Logs Insights scan (served
+// from a 120 s backend cache), so the four ledger-backed tiles must not wait on it.
+function useOnlineQuality(intervalMs = 30000): OnlineQuality | null {
+  const [quality, setQuality] = useState<OnlineQuality | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      api
+        .overviewOnlineQuality()
+        .then((res) => {
+          if (alive) setQuality(res);
+        })
+        .catch(() => {
+          /* backend offline or query failed — keep the last value */
+        });
+    load();
+    const timer = setInterval(load, intervalMs);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [intervalMs]);
+  return quality;
+}
+
+// ONLINE QUALITY tile thresholds (the mean is already polarity-normalised, so
+// higher is always better): good ≥ 0.8 · warn ≥ 0.5 · crit below.
+function qualityColor(mean: number): string {
+  return mean >= 0.8
+    ? "var(--good)"
+    : mean >= 0.5
+      ? "var(--warn)"
+      : "var(--crit-text)";
+}
+
 function ageOf(iso: string | null, now: number): string {
   if (!iso) return "—";
   const secs = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000));
@@ -101,6 +143,7 @@ export function Overview() {
   const feedLoading = agentsState === null;
   const agents = agentsState ?? [];
   const info = useOverview();
+  const quality = useOnlineQuality();
   const now = Date.now();
   const active = agents.filter((a) => a.status === "active").length;
   const assets = info?.registry_assets;
@@ -128,7 +171,7 @@ export function Overview() {
         <span className="go">{t("overview.lab.open")} ↗</span>
       </a>
 
-      <div className="tiles">
+      <div className="tiles five">
         <StatTile
           label={t("overview.tiles.deployedAgents")}
           value={String(active)}
@@ -162,7 +205,9 @@ export function Overview() {
         <StatTile
           label={t("overview.tiles.evalPassRate")}
           value={
-            info?.eval_pass_rate != null ? `${Math.round(info.eval_pass_rate * 100)}%` : "—"
+            info?.eval_pass_rate != null
+              ? `${Math.round(info.eval_pass_rate * 100)}%`
+              : "—"
           }
           foot={
             info && info.eval_runs > 0
@@ -171,6 +216,35 @@ export function Overview() {
           }
           style={{ "--i": 3 } as CSSProperties}
         />
+        <div data-testid="overview-online-quality" style={{ display: "contents" }}>
+          <StatTile
+            label={t("overview.tiles.onlineQuality")}
+            value={
+              quality == null ? (
+                "…"
+              ) : quality.mean != null ? (
+                <span style={{ color: qualityColor(quality.mean) }}>
+                  {`${Math.round(quality.mean * 100)}%`}
+                </span>
+              ) : (
+                "—"
+              )
+            }
+            foot={
+              quality == null
+                ? t("overview.tiles.last24h")
+                : quality.configs === 0 && quality.scores === 0
+                  ? t("overview.tiles.onlineQualityNone")
+                  : quality.scores === 0
+                    ? t("overview.tiles.onlineQualityPending")
+                    : t("overview.tiles.onlineQualityFoot", {
+                        sessions: quality.sessions,
+                        agents: quality.agents,
+                      })
+            }
+            style={{ "--i": 4 } as CSSProperties}
+          />
+        </div>
       </div>
 
       <div className="grid-2">
@@ -242,8 +316,10 @@ export function Overview() {
         >
           <div className="health">
             {SERVICES.map(({ id: svc, kind }) => {
-              const ready = svc === "runtime" ? active > 0 : Boolean(info?.services[svc]);
-              const detail = svc === "runtime" ? "" : (info?.service_detail[svc] ?? "");
+              const ready =
+                svc === "runtime" ? active > 0 : Boolean(info?.services[svc]);
+              const detail =
+                svc === "runtime" ? "" : (info?.service_detail[svc] ?? "");
               // an empty usage row is "you haven't made one yet", not a fault:
               // neutral LED + the action that creates it
               const led = ready ? "g" : kind === "usage" ? "n" : "off";
@@ -251,14 +327,17 @@ export function Overview() {
                 <div className="row" key={svc} data-testid={`health-${svc}`}>
                   <span className={`led ${led}`}></span>
                   <span className="nm">{t(`overview.health.${svc}`)}</span>
-                  <span className={`st${!ready && kind === "usage" ? " dim" : ""}`}>
+                  <span
+                    className={`st${!ready && kind === "usage" ? " dim" : ""}`}
+                  >
                     {svc === "runtime" && active > 0
                       ? t("overview.health.activeCount", { count: active })
                       : ready
                         ? `${t("overview.health.ready")}${detail ? ` · ${detail}` : ""}`
                         : kind === "usage"
-                          ? `${t("overview.health.notCreated")} · ${
-                            t(`overview.health.creates.${svc}`)}`
+                          ? `${t("overview.health.notCreated")} · ${t(
+                              `overview.health.creates.${svc}`,
+                            )}`
                           : t("overview.health.pending")}
                   </span>
                 </div>

@@ -1287,7 +1287,49 @@ export interface ObsSessionDetail {
   };
   traces: ObsTraceRow[];
   transcript: ObsTranscript;
+  /** online evaluation results for this session (additive; absent on older backends) */
+  online_scores?: OnlineSessionScores;
   cache: ObsCache;
+}
+
+/** One judged result record (online evaluation) for a session. */
+export interface OnlineSessionScoreRecord {
+  time: string | null;
+  evaluator_id: string;
+  level: string | null;
+  score: number | null;
+  label: string | null;
+  explanation: string | null;
+  trace_id: string | null;
+}
+
+export interface OnlineSessionScoreConfig {
+  config_id: string;
+  config_name: string | null;
+  owner: OnlineEvalOwner;
+  agent: { id: string; name: string } | null;
+  records: OnlineSessionScoreRecord[];
+}
+
+export interface OnlineSessionScores {
+  configs: OnlineSessionScoreConfig[];
+  total: number;
+  /** the results query failed — traces/transcript are still valid */
+  unavailable: boolean;
+  /** the workspace has at least one agent-owned online config */
+  configs_exist: boolean;
+}
+
+/** ONLINE QUALITY · 24h tile — polarity-normalised mean over agent-owned configs. */
+export interface OnlineQuality {
+  range: string;
+  mean: number | null;
+  scores: number;
+  sessions: number;
+  agents: number;
+  configs: number;
+  evaluators: { evaluator_id: string; mean: number; count: number; polarity: number }[];
+  cached: boolean;
 }
 
 function obsQuery(range: string, force: boolean): string {
@@ -2196,6 +2238,7 @@ export const api = {
       { method: "POST", body: JSON.stringify(spec) },
     ),
   getOverview: () => request<OverviewInfo>("/api/overview"),
+  overviewOnlineQuality: () => request<OnlineQuality>("/api/overview/online-quality"),
   getAgent: (id: string) => request<AgentInfo>(`/api/agents/${id}`),
   getJob: (id: string) => request<JobInfo>(`/api/jobs/${id}`),
   listRuntimeCanaries: () =>
