@@ -60,6 +60,45 @@ function saveRecTypes(expId: string, sp: boolean, td: boolean) {
   }
 }
 
+// The RECOMMEND pickers (trace source, optimizer, reflection model) are page
+// state too — nothing server-side holds them before the stage runs, and after a
+// run the artifact only records what WAS used. Persist them per experiment so
+// re-opening an in-progress experiment shows the operator's own selection.
+const REC_PREFS_KEY_PREFIX = "launchpad.exp-rec-prefs.";
+
+interface RecPrefs {
+  source?: string;
+  provider?: string;
+  model?: string;
+  customModel?: string;
+}
+
+function loadRecPrefs(expId: string): RecPrefs {
+  try {
+    const raw = localStorage.getItem(REC_PREFS_KEY_PREFIX + expId);
+    if (raw) {
+      const parsed = JSON.parse(raw) as RecPrefs;
+      return {
+        source: typeof parsed.source === "string" ? parsed.source : undefined,
+        provider: typeof parsed.provider === "string" ? parsed.provider : undefined,
+        model: typeof parsed.model === "string" ? parsed.model : undefined,
+        customModel: typeof parsed.customModel === "string" ? parsed.customModel : undefined,
+      };
+    }
+  } catch {
+    /* corrupt or unavailable storage falls back to defaults */
+  }
+  return {};
+}
+
+function saveRecPrefs(expId: string, prefs: RecPrefs) {
+  try {
+    localStorage.setItem(REC_PREFS_KEY_PREFIX + expId, JSON.stringify(prefs));
+  } catch {
+    /* storage unavailable — selection simply won't survive a reload */
+  }
+}
+
 function traceLookbackFromParam(value: string | null): number {
   const hours = Number(value);
   return TRACE_LOOKBACK_OPTIONS.includes(
@@ -386,6 +425,9 @@ function ConfigurationExperimentView() {
   // that run analysed (an Insights job being the point of the feature).
   const [recSourceRunId, setRecSourceRunId] = useState("");
   const [recSourceRuns, setRecSourceRuns] = useState<EvaluationRunInfo[]>([]);
+  // which agent the loaded run list belongs to — a restored source id is only
+  // validated against a list that is actually that agent's
+  const [recSourceRunsAgent, setRecSourceRunsAgent] = useState<string | null>(null);
   // RECOMMEND system-prompt generator: "agentcore" (the AWS job, default) or a
   // 3rd-party provider reflecting on the pinned run with a Bedrock model. The
   // list comes from the backend so a new provider needs no console change.
@@ -607,9 +649,24 @@ function ConfigurationExperimentView() {
     const recTypes = exp?.id ? loadRecTypes(exp.id) : { sp: false, td: false };
     setGenSp(recTypes.sp);
     setGenTd(recTypes.td);
+    // pickers: the operator's stash first, else what the last generation used
+    const prefs = exp?.id ? loadRecPrefs(exp.id) : {};
+    const lastRec = exp?.artifacts.recommend;
+    setRecSourceRunId(prefs.source ?? lastRec?.trace_source?.run_id ?? "");
+    setRecProviderId(prefs.provider ?? lastRec?.provider ?? lastRec?.tool_provider ?? "agentcore");
+    setRecModelChoice(prefs.model ?? "");
+    setRecModelCustom(prefs.customModel ?? "");
     setConfirmCleanup(false);
     setConfirmPromote(false);
   }, [exp?.id]);
+
+  const persistRecPrefs = (patch: RecPrefs) => {
+    if (!exp) return;
+    saveRecPrefs(exp.id, {
+      source: recSourceRunId, provider: recProviderId,
+      model: recModelChoice, customModel: recModelCustom, ...patch,
+    });
+  };
 
   // an action is running server-side — poll fast so its progress line moves
   const runningAction = exp?.running_action ?? null;
@@ -1140,6 +1197,7 @@ function ConfigurationExperimentView() {
         setRecSourceRuns(
           body.runs.filter((r) => r.status === "completed" && !!r.batch_eval_id),
         );
+        setRecSourceRunsAgent(recSourceAgentId);
       } catch {
         if (!cancelled) setRecSourceRuns([]);
       }
@@ -1149,10 +1207,13 @@ function ConfigurationExperimentView() {
     };
   }, [recSourceAgentId]);
 
-  // a source from another experiment's agent must not survive an experiment switch
+  // a source from another experiment's agent must not survive an experiment
+  // switch — but a RESTORED source must: validate against the agent's own run
+  // list once it has loaded, instead of blanking on every switch
   useEffect(() => {
-    setRecSourceRunId("");
-  }, [recSourceAgentId]);
+    if (!recSourceRunId || recSourceRunsAgent !== recSourceAgentId) return;
+    if (!recSourceRuns.some((r) => r.id === recSourceRunId)) setRecSourceRunId("");
+  }, [recSourceRunId, recSourceRuns, recSourceRunsAgent, recSourceAgentId]);
 
   // ── stage cards ────────────────────────────────────────────────────────────
   const currentPrompt = a.agent_meta?.system_prompt ?? "";
@@ -1227,7 +1288,10 @@ function ConfigurationExperimentView() {
           data-testid="rec-source"
           className="input mono"
           value={recSourceRunId}
-          onChange={(e) => setRecSourceRunId(e.target.value)}
+          onChange={(e) => {
+            setRecSourceRunId(e.target.value);
+            persistRecPrefs({ source: e.target.value });
+          }}
         >
           <option value="" style={{ background: "#141816" }}>
             {t("expPage.recSourceWindow")}
@@ -1278,6 +1342,7 @@ function ConfigurationExperimentView() {
               setRecProviderId(e.target.value);
               setRecModelChoice("");
               setRecModelCustom("");
+              persistRecPrefs({ provider: e.target.value, model: "", customModel: "" });
             }}
           >
             {recProviders.map((p) => (
@@ -1296,7 +1361,10 @@ function ConfigurationExperimentView() {
                 data-testid="rec-model-select"
                 className="input mono"
                 value={recModelChoice}
-                onChange={(e) => setRecModelChoice(e.target.value)}
+                onChange={(e) => {
+                  setRecModelChoice(e.target.value);
+                  persistRecPrefs({ model: e.target.value });
+                }}
               >
                 {recProvider.models.map((m) => (
                   <option
@@ -1320,7 +1388,10 @@ function ConfigurationExperimentView() {
                   style={{ marginTop: 6 }}
                   placeholder="global.anthropic.claude-sonnet-5"
                   value={recModelCustom}
-                  onChange={(e) => setRecModelCustom(e.target.value)}
+                  onChange={(e) => {
+                    setRecModelCustom(e.target.value);
+                    persistRecPrefs({ customModel: e.target.value });
+                  }}
                 />
               )}
             </>
