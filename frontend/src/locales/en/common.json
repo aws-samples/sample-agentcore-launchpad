@@ -1891,7 +1891,8 @@
         "evaluators": "EVALUATORS",
         "sampling": "SAMPLING",
         "status": "STATUS",
-        "updated": "UPDATED"
+        "updated": "UPDATED",
+        "mode": "MODE"
       },
       "owner": {
         "agent": "AGENT",
@@ -1927,7 +1928,16 @@
         "description": "DESCRIPTION — OPTIONAL, ≤ 200 CHARS",
         "descriptionPlaceholder": "auto-filled from the agent name when empty",
         "enableOnCreate": "Enable on create — start sampling as soon as the config is ACTIVE",
-        "create": "CREATE"
+        "create": "CREATE",
+        "mode": "MODE",
+        "modeHint": {
+          "scores": "SCORES — every sampled session is judged by the selected evaluators; results are scores per session.",
+          "insights": "INSIGHTS — sampled sessions are analysed and clustered into recurring failure / intent / summary reports. A config is one or the other, never both."
+        },
+        "insights": "INSIGHT TYPES — 1 … {{max}}",
+        "insightsHint": "Every sampled session is analysed by each selected insight type and clustered into a report. AWS defaults sampling to 100 % for insights — every session costs judge tokens; lower it for busy agents.",
+        "frequencies": "REPORT CADENCE — OPTIONAL",
+        "frequenciesHint": "AWS creates one scheduled report per cadence over the sessions sampled in that period. Without a cadence only on-demand reports (RUN REPORT NOW) exist."
       },
       "err": {
         "agent": "pick an agent first",
@@ -1937,7 +1947,9 @@
         "filterCount": "at most {{max}} filters",
         "filterKey": "filter key must match ^[a-zA-Z0-9._-]{1,256}$",
         "filterValue": "every filter needs a value (a number for numeric filters)",
-        "description": "description must be 200 characters or fewer"
+        "description": "description must be 200 characters or fewer",
+        "insights": "select between 1 and {{max}} insight types",
+        "frequencies": "at most {{max}} report cadences"
       },
       "kv": {
         "agent": "Agent",
@@ -1949,7 +1961,10 @@
         "evaluators": "Evaluators",
         "sampling": "Sampling",
         "timeout": "Session timeout",
-        "filters": "Filters"
+        "filters": "Filters",
+        "insights": "Insights",
+        "frequencies": "Report cadence",
+        "noFrequencies": "none — on-demand reports only"
       },
       "minutes": "{{count}} min",
       "editTitle": "EDIT — DESCRIPTION · EVALUATORS · RULE",
@@ -1996,7 +2011,52 @@
         "s3": "JUDGE — each evaluator scores the session; results land in the results log group and as CloudWatch metrics (Bedrock-AgentCore/Evaluations)",
         "s4": "READ — this page aggregates the results log group with Logs Insights; the metrics can drive CloudWatch alarms",
         "s5": "COST — judge invocations = sampled sessions × evaluators; custom judges referenced by an ENABLED config are locked against edit and delete",
-        "note": "Deleting a config keeps its results log group. Two ENABLED configs on one agent judge the same sessions twice."
+        "note": "Deleting a config keeps its results log group. Two ENABLED configs on one agent judge the same sessions twice.",
+        "insightsNote": "INSIGHTS MODE — instead of scoring, sampled sessions are clustered into failure / intent / summary reports on the chosen cadence; a report covers only the sessions the config sampled. Scores and insights cannot share one config — create two on the same agent if you need both."
+      },
+      "mode": {
+        "scores": "SCORES",
+        "insights": "INSIGHTS"
+      },
+      "insightsCount": "{{count}} insights",
+      "freq": {
+        "DAILY": "DAILY",
+        "WEEKLY": "WEEKLY",
+        "MONTHLY": "MONTHLY"
+      },
+      "editTitleInsights": "EDIT — DESCRIPTION · INSIGHTS · CADENCE · RULE",
+      "reportsHint": "A report covers only the sessions this config itself sampled and judged in the window — not all traffic. A fresh config reports 0 sessions until sampled sessions have settled (about 10 min after a session ends plus the {{count}} min session timeout).",
+      "reports": {
+        "title": "REPORTS",
+        "range": "Report time range",
+        "run": "RUN REPORT NOW",
+        "started": "Report queued — it appears below as a console run and updates every few seconds.",
+        "pendingHint": "a console report is still running — wait for it to finish",
+        "failed": "reports listing unavailable",
+        "empty": "NO REPORTS YET — AWS CREATES ONE PER CADENCE OVER THE SESSIONS SAMPLED IN THAT PERIOD; RUN REPORT NOW FOR A FIRST ONE",
+        "noBatch": "queued — the batch evaluation has not started yet",
+        "running": "the report is still running — clusters appear when it completes",
+        "detailFailed": "report detail unavailable",
+        "noSessions": "This report covers 0 sampled sessions: the config had judged no session in the window. Sessions are picked at the sampling rate and settle about 10 min after they end plus the {{count}} min session timeout — run the report again later.",
+        "noTrees": "The report completed without clusters — insights need at least 3 sessions.",
+        "errors": "{{count}} error(s) reported by the evaluation service",
+        "insightsFromConfig": "as configured",
+        "insightsInherited": "a config-sourced report inherits the config's insight types; AWS does not echo them on the batch",
+        "unattributed": "unattributed insights reports (account-wide) · {{count}}",
+        "unattributedNote": "Insights batch evaluations that name no online config as their source — best-effort listing, they may belong to another config or to a deleted one.",
+        "origin": {
+          "console": "CONSOLE",
+          "aws_scheduled": "AWS SCHEDULED",
+          "unknown": "UNKNOWN"
+        },
+        "col": {
+          "created": "CREATED",
+          "origin": "ORIGIN",
+          "status": "STATUS",
+          "sessions": "SESSIONS ✓ / ✕",
+          "insights": "INSIGHTS — CLICK ROW TO EXPAND"
+        },
+        "awsUnavailable": "AWS report listing unavailable right now — showing console-started reports only"
       }
     },
     "datasets": {

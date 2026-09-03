@@ -1,6 +1,7 @@
 /** Typed client for the Launchpad backend. */
 
 import i18n from "../i18n";
+import type { InsightTrees } from "./evaluation";
 import type { ModelSource } from "./models";
 
 export interface StageInfo {
@@ -1402,6 +1403,13 @@ export interface RegisterResult {
 
 export type OnlineEvalOwner = "agent" | "experiment" | "external";
 
+/** `scores` = evaluators judge each sampled session; `insights` = sampled
+ *  sessions are clustered into recurring failure / intent / summary reports.
+ *  Derived server-side (`insights` non-empty → insights); immutable after create. */
+export type OnlineEvalMode = "scores" | "insights";
+export type OnlineEvalFrequency = "DAILY" | "WEEKLY" | "MONTHLY";
+export type OnlineEvalRange = "1h" | "6h" | "24h" | "7d";
+
 export type OnlineEvalFilterOperator =
   | "Equals"
   | "NotEquals"
@@ -1437,6 +1445,7 @@ export interface OnlineEvalConfigRow {
   agent_name: string | null;
   matched_agent: { id: string; name: string } | null;
   detailed: boolean;
+  mode: OnlineEvalMode;
   evaluators: string[];
   sampling_percentage: number | null;
   session_timeout_minutes: number | null;
@@ -1450,6 +1459,36 @@ export interface OnlineEvalConfigRow {
   duplicate_enabled: boolean;
   created_at: string | null;
   updated_at: string | null;
+}
+
+/** `POST /api/eval/online`. Exactly one kind per mode: `evaluators` for scores,
+ *  `insights` (+ `clustering_frequencies`) for insights — mixing → 422
+ *  `online_eval.mode_conflict`. Omitting `sampling_percentage` takes the AWS
+ *  default (10 for scores, 100 for insights). */
+export interface OnlineEvalConfigCreate {
+  agent_id: string;
+  mode?: OnlineEvalMode;
+  evaluators?: string[];
+  insights?: string[];
+  clustering_frequencies?: OnlineEvalFrequency[];
+  sampling_percentage?: number;
+  session_timeout_minutes: number;
+  filters: OnlineEvalFilter[];
+  description?: string | null;
+  enable_on_create: boolean;
+}
+
+/** `PATCH /api/eval/online/{id}` — only changed fields travel; the rule is
+ *  merged server-side. `insights` / `clustering_frequencies` are complete
+ *  lists (insights mode only), `evaluators` is scores mode only. */
+export interface OnlineEvalConfigPatch {
+  description?: string;
+  evaluators?: string[];
+  insights?: string[];
+  clustering_frequencies?: OnlineEvalFrequency[];
+  sampling_percentage?: number;
+  session_timeout_minutes?: number;
+  filters?: OnlineEvalFilter[];
 }
 
 export interface OnlineEvalResultsEvaluator {
@@ -1486,6 +1525,69 @@ export interface OnlineEvalResults {
   series: Record<string, OnlineEvalResultsPoint[]>;
   recent: OnlineEvalResultsRecord[];
   errors: { count: number; first_message: string | null };
+}
+
+/** Session counters of one report (a batch evaluation). `total` is null until
+ *  the batch exists. */
+export interface OnlineEvalReportSessions {
+  completed: number;
+  failed: number;
+  in_progress: number;
+  total: number | null;
+}
+
+/**
+ * One insights report of an online config. `aws_scheduled` reports are created
+ * by AWS on the clustering cadence; `console` reports are on-demand runs
+ * (also visible on the Runs page as `online:<configId>` insights runs).
+ * `status` is the AWS batch status, or the uppercased run status for a console
+ * run that has no batch yet (e.g. "QUEUED"); `batch_id` is null in that case.
+ */
+export interface OnlineEvalReportRow {
+  batch_id: string | null;
+  name: string | null;
+  status: string | null;
+  run_status: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  insights: string[];
+  sessions: OnlineEvalReportSessions;
+  origin: "console" | "aws_scheduled";
+  run_id: string | null;
+  error: string | null;
+}
+
+export interface OnlineEvalReports {
+  config_id: string;
+  mode: OnlineEvalMode;
+  /** newest first */
+  reports: OnlineEvalReportRow[];
+  /** insights batches that could not be attributed to any config (best-effort;
+   *  absent when attribution is exact) */
+  unattributed?: OnlineEvalReportRow[];
+  /** ListBatchEvaluations failed — only console (ledger) rows are present */
+  aws_unavailable?: boolean;
+}
+
+export interface OnlineEvalReportDetail {
+  batch_id: string;
+  name: string | null;
+  status: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  time_range: { startTime?: string | null; endTime?: string | null } | null;
+  sessions: OnlineEvalReportSessions;
+  /** same trees the Runs page renders for a batch insights run */
+  insights: InsightTrees;
+  error_details: string[];
+}
+
+export interface OnlineEvalRunReportAck {
+  run_id: string;
+  status: string;
+  queue_position: number | null;
+  range: OnlineEvalRange;
+  config_id: string;
 }
 
 /* ── workspaces (the environment a request targets) ────────────────────── */
@@ -2415,6 +2517,19 @@ export const api = {
   // NOTE: `GET /api/memory/extraction-jobs` exists on the backend but is not
   // surfaced in the console — the AWS list only ever returns FAILED jobs
   // (retry backlog), which reads as "nothing extracted" to an operator.
+  onlineEvalReports: (configId: string) =>
+    request<OnlineEvalReports>(`/api/eval/online/${encodeURIComponent(configId)}/reports`),
+  onlineEvalReport: (configId: string, batchId: string) =>
+    request<OnlineEvalReportDetail>(
+      `/api/eval/online/${encodeURIComponent(configId)}/reports/${encodeURIComponent(batchId)}`,
+    ),
+  /** Starts an on-demand insights report over the config's sampled sessions
+   *  in `range` (agent-owned insights configs only; queued like any run). */
+  onlineEvalRunReport: (configId: string, range: OnlineEvalRange) =>
+    request<OnlineEvalRunReportAck>(
+      `/api/eval/online/${encodeURIComponent(configId)}/reports`,
+      { method: "POST", body: JSON.stringify({ range }) },
+    ),
   obsDashboard: (range: string, force = false) =>
     request<ObsDashboard>(`/api/observability/dashboard?${obsQuery(range, force)}`),
   obsTraces: (range: string, force = false) =>

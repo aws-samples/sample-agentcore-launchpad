@@ -1891,7 +1891,8 @@
         "evaluators": "评估器",
         "sampling": "抽样率",
         "status": "状态",
-        "updated": "更新时间"
+        "updated": "更新时间",
+        "mode": "模式"
       },
       "owner": {
         "agent": "AGENT",
@@ -1927,7 +1928,16 @@
         "description": "描述 — 可选,≤ 200 字符",
         "descriptionPlaceholder": "留空时按 Agent 名称自动生成",
         "enableOnCreate": "创建后立即启用——配置进入 ACTIVE 后即开始抽样",
-        "create": "创建"
+        "create": "创建",
+        "mode": "模式",
+        "modeHint": {
+          "scores": "打分——每个被抽样的会话由所选评估器评判,结果是逐会话的分数。",
+          "insights": "洞察——对被抽样的会话进行分析并聚类为周期性的失败 / 意图 / 执行摘要报告。一个配置只能是其中一种,不能兼有。"
+        },
+        "insights": "洞察类型 — 1 … {{max}}",
+        "insightsHint": "每个被抽样的会话都会按所选洞察类型分析并聚类成报告。洞察模式下 AWS 默认抽样率为 100%——每个会话都会消耗评审 token;流量大的 Agent 请调低。",
+        "frequencies": "报告周期 — 可选",
+        "frequenciesHint": "AWS 会按每个周期、对该周期内被抽样的会话生成一份定时报告。不选周期时只有按需报告(立即生成报告)。"
       },
       "err": {
         "agent": "请先选择 Agent",
@@ -1937,7 +1947,9 @@
         "filterCount": "过滤条件最多 {{max}} 条",
         "filterKey": "过滤键名须匹配 ^[a-zA-Z0-9._-]{1,256}$",
         "filterValue": "每条过滤条件都需要值(数值类型须为数字)",
-        "description": "描述不能超过 200 个字符"
+        "description": "描述不能超过 200 个字符",
+        "insights": "请选择 1 到 {{max}} 种洞察类型",
+        "frequencies": "报告周期最多 {{max}} 个"
       },
       "kv": {
         "agent": "Agent",
@@ -1949,7 +1961,10 @@
         "evaluators": "评估器",
         "sampling": "抽样率",
         "timeout": "会话超时",
-        "filters": "过滤条件"
+        "filters": "过滤条件",
+        "insights": "洞察",
+        "frequencies": "报告周期",
+        "noFrequencies": "无——仅按需报告"
       },
       "minutes": "{{count}} 分钟",
       "editTitle": "编辑 — 描述 · 评估器 · 规则",
@@ -1996,7 +2011,52 @@
         "s3": "评判——每个评估器对会话打分;结果写入结果日志组,并以 CloudWatch 指标(Bedrock-AgentCore/Evaluations)发布",
         "s4": "读取——本页用 Logs Insights 聚合结果日志组;指标可用于 CloudWatch 告警",
         "s5": "成本——评审调用次数 = 抽样会话数 × 评估器数;被已启用配置引用的自定义评审会被锁定,不可编辑或删除",
-        "note": "删除配置会保留其结果日志组。同一 Agent 上两个已启用的配置会把相同会话评判两次。"
+        "note": "删除配置会保留其结果日志组。同一 Agent 上两个已启用的配置会把相同会话评判两次。",
+        "insightsNote": "洞察模式——不打分,而是按所选周期把被抽样的会话聚类为失败 / 意图 / 执行摘要报告;报告只覆盖该配置抽样过的会话。打分与洞察不能共用一个配置——两者都需要时请在同一 Agent 上创建两个配置。"
+      },
+      "mode": {
+        "scores": "打分",
+        "insights": "洞察"
+      },
+      "insightsCount": "{{count}} 项洞察",
+      "freq": {
+        "DAILY": "每日",
+        "WEEKLY": "每周",
+        "MONTHLY": "每月"
+      },
+      "editTitleInsights": "编辑 — 描述 · 洞察 · 周期 · 规则",
+      "reportsHint": "报告只覆盖该配置自身在时间窗内抽样并评判过的会话,而非全部流量。新建配置在被抽样会话沉降前会报告 0 个会话(会话结束后约 10 分钟加上 {{count}} 分钟会话超时)。",
+      "reports": {
+        "title": "报告",
+        "range": "报告时间范围",
+        "run": "立即生成报告",
+        "started": "报告已排队——将以控制台运行的形式出现在下方,每几秒刷新一次。",
+        "pendingHint": "已有一个控制台报告仍在运行——请等待其完成",
+        "failed": "报告列表不可用",
+        "empty": "暂无报告——AWS 按周期对该周期内被抽样的会话生成报告;点击“立即生成报告”获得第一份",
+        "noBatch": "排队中——批量评估尚未开始",
+        "running": "报告仍在运行——完成后显示聚类结果",
+        "detailFailed": "报告详情不可用",
+        "noSessions": "该报告覆盖 0 个被抽样会话:配置在该时间窗内没有评判过任何会话。会话按抽样率选取,并在结束后约 10 分钟加上 {{count}} 分钟会话超时后沉降——请稍后再生成。",
+        "noTrees": "报告已完成但没有聚类——洞察至少需要 3 个会话。",
+        "errors": "评估服务报告了 {{count}} 个错误",
+        "insightsFromConfig": "按配置",
+        "insightsInherited": "以配置为来源的报告继承配置的洞察类型;AWS 不会在批量记录上回显",
+        "unattributed": "未归属的洞察报告(账户范围)· {{count}}",
+        "unattributedNote": "未标明来源在线配置的洞察批量评估——尽力列出,可能属于其他配置或已删除的配置。",
+        "origin": {
+          "console": "控制台",
+          "aws_scheduled": "AWS 定时",
+          "unknown": "未知"
+        },
+        "col": {
+          "created": "创建时间",
+          "origin": "来源",
+          "status": "状态",
+          "sessions": "会话 ✓ / ✕",
+          "insights": "洞察 — 点击行展开"
+        },
+        "awsUnavailable": "AWS 报告列表暂不可用 — 仅显示控制台发起的报告"
       }
     },
     "datasets": {

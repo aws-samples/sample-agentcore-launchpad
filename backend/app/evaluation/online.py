@@ -28,7 +28,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Sequence
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -36,12 +36,13 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
 from app.evaluation import agentcore_eval as ac
-from app.evaluation.models import OnlineEvalConfig
+from app.evaluation import service as eval_service
+from app.evaluation.models import EvalRun, OnlineEvalConfig
 from app.evaluation.online_evaluators import normalize_online_evaluators
 from app.evaluation.service import EVAL_SUPPORTED_METHODS, resolve_telemetry
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope
-from app.services.agentcore.client import control_client
+from app.services.agentcore.client import control_client, data_client
 from app.services.observability import BIN_BY_RANGE, RANGE_HOURS, run_insights_queries
 from app.services.workspace import WorkspaceContext
 
@@ -54,6 +55,14 @@ FILTER_OPERATORS = (
 )
 MAX_FILTERS = 5
 RECENT_LIMIT = 50
+# Insights mode: a config carries `insights` (+ optional clusteringConfig) INSTEAD of
+# `evaluators` — AWS forbids both. Reports are batch evaluations sourced from the
+# config (AWS-scheduled on the clustering cadence, or on demand from the console).
+INSIGHT_IDS = tuple(ac.INSIGHT_TYPES)
+FREQUENCIES = ("DAILY", "WEEKLY", "MONTHLY")
+Mode = str  # "scores" | "insights"
+REPORT_SCAN_LIMIT = 300
+REPORT_RANGES = {"1h": 1, "6h": 6, "24h": 24, "7d": 168}
 RUNTIME_LOG_GROUP_PREFIX = "/aws/bedrock-agentcore/runtimes/"
 
 Owner = str  # "agent" | "experiment" | "external"
@@ -82,6 +91,39 @@ def owner_of(name: str, config_id: str, ledger_ids: set[str]) -> Owner:
     if str(name or "").startswith(EXPERIMENT_PREFIXES):
         return "experiment"
     return "external"
+
+
+def mode_of(aws: dict[str, Any]) -> Mode:
+    return "insights" if aws.get("insights") else "scores"
+
+
+def validate_insights(
+    insights: Sequence[str] | None, frequencies: Sequence[str] | None
+) -> tuple[list[str], list[str]]:
+    """Insights-mode payload: 1..3 distinct known insight ids, 0..3 distinct frequencies."""
+    ids = list(dict.fromkeys(insights or []))
+    bad = [i for i in ids if i not in INSIGHT_IDS]
+    if not ids or bad:
+        raise AppError(
+            "online_eval.mode_conflict",
+            f"insights must be 1..3 of {list(INSIGHT_IDS)}",
+            {"invalid": bad},
+            status_code=422,
+        )
+    freqs = list(dict.fromkeys(frequencies or []))
+    bad_f = [f for f in freqs if f not in FREQUENCIES]
+    if bad_f:
+        raise AppError(
+            "online_eval.mode_conflict",
+            f"clustering_frequencies must be a subset of {list(FREQUENCIES)}",
+            {"invalid": bad_f},
+            status_code=422,
+        )
+    return ids, freqs
+
+
+def _mode_conflict(msg: str) -> AppError:
+    return AppError("online_eval.mode_conflict", msg, status_code=422)
 
 
 def generate_name(agent_name: str, suffix: str | None = None) -> str:
@@ -195,6 +237,7 @@ def _normalize(
             "log_groups": list(ds.get("logGroupNames") or ([row.log_group] if row else [])),
             "service_name": (ds.get("serviceNames") or [row.service_name if row else None])[0],
         },
+        "mode": mode_of(aws),
         "insights": [i.get("insightId") for i in aws.get("insights") or []],
         "clustering_frequencies": list(
             (aws.get("clusteringConfig") or {}).get("frequencies") or []
@@ -308,12 +351,25 @@ def create_config(
     filters: Sequence[dict[str, Any]] | None,
     description: str | None,
     enable_on_create: bool,
+    mode: Mode = "scores",
+    insights: Sequence[str] | None = None,
+    clustering_frequencies: Sequence[str] | None = None,
     control: Any = None,
     logs: Any = None,
 ) -> dict[str, Any]:
     control = control or control_client(ws.context)
     service_name, log_group = resolve_telemetry(agent, ws.context, logs)
-    chosen = normalize_online_evaluators(evaluators, control, code_prefix="online_eval")
+    chosen: list[str] = []
+    chosen_insights: list[str] = []
+    freqs: list[str] = []
+    if mode == "insights":
+        if evaluators:
+            raise _mode_conflict("insights mode takes no evaluators")
+        chosen_insights, freqs = validate_insights(insights, clustering_frequencies)
+    else:
+        if insights or clustering_frequencies:
+            raise _mode_conflict("scores mode takes no insights / clustering_frequencies")
+        chosen = normalize_online_evaluators(evaluators, control, code_prefix="online_eval")
     rule = build_rule(sampling_percentage, session_timeout_minutes, validate_filters(filters))
     role_arn = ws.context.resources.get("execution_role_arn")
     if not role_arn:
@@ -332,6 +388,7 @@ def create_config(
                 control, name=name, description=text, log_group=log_group,
                 service_name=service_name, evaluators=chosen, rule=rule,
                 role_arn=role_arn, enable_on_create=enable_on_create,
+                insights=chosen_insights, clustering_frequencies=freqs,
             )
             break
         except Exception as exc:
@@ -375,6 +432,8 @@ def create_config(
             "cloudWatchLogs": {"logGroupNames": [log_group], "serviceNames": [service_name]}
         },
         "evaluators": [{"evaluatorId": e} for e in chosen],
+        "insights": [{"insightId": i} for i in chosen_insights],
+        "clusteringConfig": {"frequencies": freqs} if freqs else None,
         "evaluationExecutionRoleArn": role_arn,
     }
     return _normalize(aws, owner="agent", row=row, detailed=True)
@@ -400,11 +459,30 @@ def patch_config(
         fields["description"] = text or (
             f"Launchpad online evaluation · {current['agent_name'] or current['name']}"
         )[:200]
-    if patch.get("evaluators") is not None:
-        chosen = normalize_online_evaluators(
-            patch["evaluators"], control, code_prefix="online_eval"
-        )
-        fields["evaluators"] = [{"evaluatorId": e} for e in chosen]
+    # Mode is immutable: each mode accepts only its own analysis fields.
+    if current["mode"] == "insights":
+        if patch.get("evaluators") is not None:
+            raise _mode_conflict("this config runs insights — evaluators cannot be set")
+        if patch.get("insights") is not None or patch.get("clustering_frequencies") is not None:
+            ids, freqs = validate_insights(
+                current["insights"] if patch.get("insights") is None else patch["insights"],
+                current["clustering_frequencies"]
+                if patch.get("clustering_frequencies") is None
+                else patch["clustering_frequencies"],
+            )
+            if patch.get("insights") is not None:
+                fields["insights"] = [{"insightId": i} for i in ids]  # top-level replace
+            if patch.get("clustering_frequencies") is not None:
+                # complete list; [] clears clustering (AWS then reports null)
+                fields["clusteringConfig"] = {"frequencies": freqs}
+    else:
+        if patch.get("insights") is not None or patch.get("clustering_frequencies") is not None:
+            raise _mode_conflict("this config runs evaluators — insights cannot be set")
+        if patch.get("evaluators") is not None:
+            chosen = normalize_online_evaluators(
+                patch["evaluators"], control, code_prefix="online_eval"
+            )
+            fields["evaluators"] = [{"evaluatorId": e} for e in chosen]
     rule_keys = {"sampling_percentage", "session_timeout_minutes", "filters"}
     if any(patch.get(k) is not None for k in rule_keys):
         sampling = patch.get("sampling_percentage")
@@ -591,6 +669,193 @@ def results(
     return {"range": range_key, "log_group": log_group, **parse_results(rows)}
 
 
+# ─── insights reports (batch evaluations sourced from a config) ──────────────
+#
+# A report is a batch evaluation whose data source is the config
+# (`dataSourceConfig.onlineEvaluationConfigSource`). AWS creates them on the
+# clustering cadence; the console starts one on demand through the run queue.
+# Live facts (research/report-attribution.md): such a batch echoes NEITHER
+# `evaluators` NOR `insights` in its record, so summaries with neither key are the
+# attribution candidates; the source ARN is only on Get — cached per batch id
+# because a batch's data source never changes.
+
+_ATTRIBUTION_CAP = 1000
+# batch id → (source arn | None, Get detail). The detail is kept because List
+# summaries of config-sourced batches carry no session counts (live-verified) —
+# the row takes them from the Get. Only terminal batches are cached (their
+# counts and status are final); in-flight ones are re-read on every listing.
+_attribution: dict[str, tuple[str | None, dict[str, Any]]] = {}
+_attribution_lock = threading.Lock()
+_TERMINAL = frozenset({"COMPLETED", "COMPLETED_WITH_ERRORS", "FAILED", "STOPPED"})
+
+
+def reset_attribution_cache() -> None:
+    _attribution.clear()
+
+
+def _source_info(data: Any, batch_id: str) -> tuple[str | None, dict[str, Any]]:
+    with _attribution_lock:
+        if batch_id in _attribution:
+            return _attribution[batch_id]
+    try:
+        detail = ac.get_batch_evaluation(data, batch_id=batch_id)
+    except Exception:
+        return None, {}  # not cached: retried on the next listing
+    info = (ac.report_source_arn(detail), detail)
+    if detail.get("status") in _TERMINAL:
+        with _attribution_lock:
+            if len(_attribution) >= _ATTRIBUTION_CAP:
+                _attribution.pop(next(iter(_attribution)))
+            _attribution[batch_id] = info
+    return info
+
+
+def _sessions(res: dict[str, Any]) -> dict[str, Any]:
+    """Session counters; AWS omits ``totalNumberOfSessions`` on config-sourced
+    batches (live), so the total falls back to the sum of the parts."""
+    completed = res.get("numberOfSessionsCompleted", 0) or 0
+    failed = res.get("numberOfSessionsFailed", 0) or 0
+    in_progress = res.get("numberOfSessionsInProgress", 0) or 0
+    total = res.get("totalNumberOfSessions")
+    return {
+        "completed": completed,
+        "failed": failed,
+        "in_progress": in_progress,
+        "total": total if total is not None else completed + failed + in_progress,
+    }
+
+
+def _report_row(summary: dict[str, Any], *, origin: str, run: EvalRun | None = None,
+                insights: Sequence[str] | None = None,
+                detail: dict[str, Any] | None = None) -> dict[str, Any]:
+    res = summary.get("evaluationResults") or (detail or {}).get("evaluationResults") or {}
+    return {
+        "batch_id": summary.get("batchEvaluationId") or (run.batch_eval_id if run else None),
+        "name": summary.get("batchEvaluationName"),
+        "status": summary.get("status") or (run.status.upper() if run else None),
+        "run_status": run.status if run else None,
+        "created_at": _iso(summary.get("createdAt")) or (_iso(run.created_at) if run else None),
+        "updated_at": _iso(summary.get("updatedAt")) or (_iso(run.updated_at) if run else None),
+        "insights": list(insights or []),
+        "sessions": _sessions(res),
+        "origin": origin,
+        "run_id": run.id if run else None,
+        "error": (summary.get("errorDetails") or [None])[0] or (run.error if run else None),
+    }
+
+
+def _console_runs(db: Session, ws: WorkspaceScope, config_id: str) -> list[EvalRun]:
+    return list(db.scalars(
+        select(EvalRun).where(EvalRun.workspace_id == ws.id,
+                              EvalRun.dataset_name == f"online:{config_id}")
+        .order_by(EvalRun.created_at.desc())
+    ).all())
+
+
+def reports(
+    db: Session, ws: WorkspaceScope, config_id: str, *, data: Any = None, control: Any = None,
+) -> dict[str, Any]:
+    """Every report of one config: console-started runs (ledger) merged with
+    AWS-scheduled batches attributed by their source ARN, newest first."""
+    config = get_config(db, ws, config_id, control)
+    data = data or data_client(ws.context)
+    runs = _console_runs(db, ws, config_id)
+    # The ledger half of the list must survive an AWS listing failure (throttle /
+    # outage): console runs are still shown, flagged, and AWS-scheduled rows wait.
+    aws_unavailable = False
+    try:
+        summaries = {b.get("batchEvaluationId"): b
+                     for b in ac.list_batch_evaluations(data, limit=REPORT_SCAN_LIMIT)}
+    except Exception:
+        summaries = {}
+        aws_unavailable = True
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for run in runs:  # console runs first — queued ones have no batch yet
+        summary = summaries.get(run.batch_eval_id or "", {})
+        detail = None
+        if run.batch_eval_id and summary and not summary.get("evaluationResults"):
+            detail = _source_info(data, run.batch_eval_id)[1]
+        rows.append(_report_row(summary, origin="console", run=run, insights=run.evaluators,
+                                detail=detail))
+        if run.batch_eval_id:
+            seen.add(run.batch_eval_id)
+    for batch_id, summary in summaries.items():
+        if not batch_id or batch_id in seen:
+            continue
+        if summary.get("evaluators") or summary.get("insights"):
+            continue  # a cloudWatchLogs-sourced batch (console run) — never a report
+        arn, detail = _source_info(data, batch_id)
+        if arn != config["arn"]:
+            continue
+        rows.append(_report_row(summary, origin="aws_scheduled", insights=config["insights"],
+                                detail=detail))
+    rows.sort(key=lambda r: r["created_at"] or "", reverse=True)
+    return {"config_id": config_id, "mode": config["mode"], "reports": rows,
+            "aws_unavailable": aws_unavailable}
+
+
+def report_detail(
+    db: Session, ws: WorkspaceScope, config_id: str, batch_id: str, *,
+    data: Any = None, control: Any = None,
+) -> dict[str, Any]:
+    config = get_config(db, ws, config_id, control)
+    data = data or data_client(ws.context)
+    try:
+        batch = ac.get_batch_evaluation(data, batch_id=batch_id)
+    except Exception as exc:
+        if _is_not_found(exc):
+            raise NotFoundError("online_eval.report_not_found", f"report {batch_id}") from exc
+        raise
+    if ac.report_source_arn(batch) != config["arn"]:
+        raise NotFoundError("online_eval.report_not_found",
+                            f"report {batch_id} is not sourced from {config_id}")
+    res = batch.get("evaluationResults") or {}
+    return {
+        "batch_id": batch.get("batchEvaluationId"),
+        "name": batch.get("batchEvaluationName"),
+        "status": batch.get("status"),
+        "created_at": _iso(batch.get("createdAt")),
+        "updated_at": _iso(batch.get("updatedAt")),
+        "time_range": {
+            k: _iso(v) for k, v in (
+                ((batch.get("dataSourceConfig") or {}).get("onlineEvaluationConfigSource")
+                 or {}).get("timeRange") or {}
+            ).items()
+        },
+        "sessions": _sessions(res),
+        "insights": ac.parse_insights(batch),
+        "error_details": list(batch.get("errorDetails") or []),
+    }
+
+
+def start_report(
+    db: Session, ws: WorkspaceScope, config_id: str, range_key: str, *, control: Any = None,
+) -> dict[str, Any]:
+    """RUN REPORT NOW: an on-demand insights report over the sessions this config
+    sampled in the window, through the bounded run queue (shared 5-active quota)."""
+    if range_key not in REPORT_RANGES:
+        raise AppError("online_eval.bad_range", f"range must be one of {sorted(REPORT_RANGES)}",
+                       status_code=422)
+    config = get_config(db, ws, config_id, control)
+    _require_owner(config, ("agent",), "run a report for")
+    if config["mode"] != "insights":
+        raise _mode_conflict("reports exist only for insights-mode configs")
+    agent = db.get(Agent, config["agent_id"]) if config["agent_id"] else None
+    if agent is None or agent.workspace_id != ws.id:
+        raise NotFoundError("online_eval.not_found", f"agent of {config_id} is gone")
+    now = datetime.now(UTC)
+    time_range = {"startTime": now - timedelta(hours=REPORT_RANGES[range_key]), "endTime": now}
+    run = eval_service.submit_run(
+        agent=agent, workspace=ws.context, dataset_items=[], dataset_id=None,
+        dataset_name=f"online:{config_id}", evaluators=list(config["insights"]),
+        mode="insights", insights=list(config["insights"]), time_range=time_range,
+        online_config_arn=config["arn"],
+    )
+    return {
+        "run_id": run.id, "status": run.status, "queue_position": run.queue_position,
+        "range": range_key, "config_id": config_id,
+    }
 # ─── cross-surface reads (Observability session detail + Overview tile) ──────
 #
 # Both read EVERY config's results at once through a prefix source, so neither

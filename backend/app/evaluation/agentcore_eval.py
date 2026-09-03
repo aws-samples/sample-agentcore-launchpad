@@ -1106,28 +1106,92 @@ def create_online_eval_config(
     description: str,
     log_group: str,
     service_name: str,
-    evaluators: Sequence[str],
+    evaluators: Sequence[str] | None,
     rule: dict[str, Any],
     role_arn: str,
     enable_on_create: bool,
+    insights: Sequence[str] | None = None,
+    clustering_frequencies: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """``CreateOnlineEvaluationConfig`` with the platform's fixed data-source shape.
 
     ``rule`` must be complete (sampling + session timeout + filters): AWS treats
     it as one value on Update, so the caller owns its assembly in one place.
+    Exactly one of ``evaluators`` (scores mode) / ``insights`` (insights mode) is
+    sent — AWS forbids both on one config; ``clusteringConfig`` only with insights
+    and only when non-empty (live-verified 2026-09-02).
     """
-    return client.create_online_evaluation_config(
-        onlineEvaluationConfigName=name,
-        description=description,
-        dataSourceConfig={
+    kwargs: dict[str, Any] = {
+        "onlineEvaluationConfigName": name,
+        "description": description,
+        "dataSourceConfig": {
             "cloudWatchLogs": {"logGroupNames": [log_group], "serviceNames": [service_name]}
         },
-        evaluators=[{"evaluatorId": e} for e in evaluators],
-        rule=rule,
-        evaluationExecutionRoleArn=role_arn,
-        enableOnCreate=enable_on_create,
-        clientToken=str(uuid.uuid4()),
-    )
+        "rule": rule,
+        "evaluationExecutionRoleArn": role_arn,
+        "enableOnCreate": enable_on_create,
+        "clientToken": str(uuid.uuid4()),
+    }
+    if insights:
+        kwargs["insights"] = [{"insightId": i} for i in insights]
+        if clustering_frequencies:
+            kwargs["clusteringConfig"] = {"frequencies": list(clustering_frequencies)}
+    else:
+        kwargs["evaluators"] = [{"evaluatorId": e} for e in (evaluators or [])]
+    return client.create_online_evaluation_config(**kwargs)
+
+
+def start_online_report(
+    client: Any,
+    *,
+    name: str,
+    config_arn: str,
+    time_range: dict[str, Any],
+    description: str | None = None,
+) -> dict[str, Any]:
+    """On-demand report over an online evaluation config's already-sampled sessions
+    (``dataSourceConfig.onlineEvaluationConfigSource``). The batch inherits the
+    config's evaluators/insights — passing either is a ValidationException
+    (live-verified 2026-09-02) — and its record echoes neither back."""
+    kwargs: dict[str, Any] = {
+        "batchEvaluationName": name,
+        "dataSourceConfig": {
+            "onlineEvaluationConfigSource": {
+                "onlineEvaluationConfigArn": config_arn,
+                "timeRange": time_range,
+            }
+        },
+        "clientToken": str(uuid.uuid4()),
+    }
+    if description:
+        kwargs["description"] = description[:200]
+    return client.start_batch_evaluation(**kwargs)
+
+
+def list_batch_evaluations(client: Any, *, limit: int = 300) -> list[dict[str, Any]]:
+    """Batch evaluation summaries, newest first. The API does not order by
+    creation time (live-verified), so every page is read (bounded by ``limit``)
+    and sorted here."""
+    out: list[dict[str, Any]] = []
+    token: str | None = None
+    while len(out) < limit:
+        kwargs: dict[str, Any] = {"maxResults": 100}
+        if token:
+            kwargs["nextToken"] = token
+        resp = client.list_batch_evaluations(**kwargs)
+        out.extend(resp.get("batchEvaluations", []))
+        token = resp.get("nextToken")
+        if not token:
+            break
+    out.sort(key=lambda b: str(b.get("createdAt") or ""), reverse=True)
+    return out[:limit]
+
+
+def report_source_arn(batch: dict[str, Any]) -> str | None:
+    """Config ARN a batch evaluation was sourced from, or None for cloudWatchLogs
+    sources (console runs)."""
+    src = (batch.get("dataSourceConfig") or {}).get("onlineEvaluationConfigSource") or {}
+    return src.get("onlineEvaluationConfigArn") or None
 
 
 def update_online_eval_config(client: Any, *, config_id: str, **fields: Any) -> dict[str, Any]:
