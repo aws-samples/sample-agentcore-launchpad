@@ -260,16 +260,38 @@ def validate_tool_descriptions(
 
 
 def parse_reflection(text: str) -> dict[str, Any] | None:
-    """The first JSON object in ``text`` (fences tolerated), or None."""
+    """The first JSON object in ``text`` (fences tolerated), or None.
+
+    Long revised prompts make models emit raw newlines / tabs inside JSON
+    strings, which the strict decoder rejects — ``strict=False`` accepts those
+    control characters, so a structurally sound answer is not lost to escaping.
+    """
     cleaned = _FENCE.sub("", text or "").strip()
     start, end = cleaned.find("{"), cleaned.rfind("}")
     if start < 0 or end <= start:
         return None
+    body = cleaned[start : end + 1]
+    for strict in (True, False):
+        try:
+            obj = json.loads(body, strict=strict)
+        except ValueError:
+            continue
+        return obj if isinstance(obj, dict) else None
+    return None
+
+
+def describe_unparseable(text: str) -> str:
+    """Why ``text`` did not parse, for the operator-facing failure reason."""
+    cleaned = _FENCE.sub("", text or "").strip()
+    start, end = cleaned.find("{"), cleaned.rfind("}")
+    if start < 0 or end <= start:
+        head = cleaned[:80].replace("\n", " ")
+        return f"no JSON object in the reply (starts: {head!r})"
     try:
-        obj = json.loads(cleaned[start : end + 1])
-    except ValueError:
-        return None
-    return obj if isinstance(obj, dict) else None
+        json.loads(cleaned[start : end + 1], strict=False)
+    except ValueError as exc:
+        return f"JSON error: {str(exc)[:120]}"
+    return "reply parsed to a non-object"
 
 
 class GepaLiteProvider:
@@ -382,7 +404,8 @@ class GepaLiteProvider:
         )
         try:
             progress(f"reflecting on {len(req.evidence)} sessions with {req.model_id}…")
-            parsed = parse_reflection(_ask(system, user))
+            raw = _ask(system, user)
+            parsed = parse_reflection(raw)
             if parsed is None:
                 if budget["truncated"]:
                     progress(
@@ -392,14 +415,16 @@ class GepaLiteProvider:
                     parsed = parse_reflection(_ask(system, user + TRUNCATED_SUFFIX))
                 else:
                     progress("reflection returned no JSON — retrying once…")
-                    parsed = parse_reflection(_ask(system, user + RETRY_SUFFIX))
+                    raw = _ask(system, user + RETRY_SUFFIX)
+                    parsed = parse_reflection(raw)
             if parsed is None:
                 reason = (
                     "reflection output truncated by the token limit "
                     f"({usage_total['output_tokens']} output tokens over "
                     f"{usage_total['calls']} calls) — raise prompt_opt_max_tokens"
                     if budget["truncated"]
-                    else "reflection model returned no parseable JSON"
+                    else "reflection model returned no parseable JSON — "
+                    + describe_unparseable(raw)
                 )
                 return _fail(reason, _finish())
             prompt = str(parsed.get("revised_prompt") or "").strip()

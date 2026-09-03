@@ -1443,13 +1443,19 @@ def action_accept(
     """Persist the (possibly user-edited) recommendation; unlocks bundles."""
     rec = dict(exp.artifacts.get("recommend") or {})
     rec["accepted_prompt"] = prompt[:REC_PROMPT_MAX_CHARS]
-    if tool_descriptions:
+    if tool_descriptions is None:
+        # absent ⇒ accept the recommended tool descriptions as-is (the same
+        # accepted→recommended fallback the prompt has); an explicit {} means
+        # "no tool changes" and is honoured. Found live: a scripted accept
+        # without the field built a treatment bundle with the OLD descriptions.
+        tool_descriptions = rec.get("tool_descriptions") or None
+    if tool_descriptions is not None:
         rec["accepted_tool_descriptions"] = {
             str(k): str(v) for k, v in tool_descriptions.items()
         }
     # an edited accept still descends from the provider's seed — attribution
     # stays, but the edit is on record (either component)
-    tools_edited = bool(tool_descriptions) and (
+    tools_edited = "accepted_tool_descriptions" in rec and (
         rec["accepted_tool_descriptions"] != (rec.get("tool_descriptions") or {})
     )
     rec["accepted_edited"] = (

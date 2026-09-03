@@ -1367,7 +1367,11 @@ function ConfigurationExperimentView() {
 
   const onAccept = () => {
     if (!exp || acceptBlocked) return;
-    let toolDescs: Record<string, string> | undefined;
+    // Always explicit: the map the operator sees (edited or not), or {} when
+    // the editor was cleared — the backend treats an ABSENT field as "accept
+    // the recommended descriptions", so a cleared editor must send {} to mean
+    // "no tool changes".
+    let toolDescs: Record<string, string> = {};
     const raw = editedToolJson
       ?? (Object.keys(recToolDescs).length
         ? JSON.stringify(recToolDescs, null, 2) : "");
