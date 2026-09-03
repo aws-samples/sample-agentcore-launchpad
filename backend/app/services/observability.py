@@ -1400,21 +1400,19 @@ def _ns_iso(ns: int) -> str:
     return datetime.fromtimestamp((ns or 0) / 1e9, UTC).isoformat(timespec="seconds")
 
 
-def eval_turns_from_content_logs(
+def _content_records(
     log_group: str,
     session_id: str,
     started_at: datetime | None,
     workspace: WorkspaceContext,
     logs: Any = None,
 ) -> list[dict[str, Any]]:
-    """USER/ASSISTANT turns for an eval session, rebuilt from content logs.
+    """The session's gen_ai content records (otel-rt-logs), oldest first.
 
-    One invocation = one traceId. Its USER turn is the trace's latest input
-    user message (later records carry the full history — last one is the
-    current turn); its ASSISTANT turn is the ``end_turn`` output, falling back
-    to the last assistant text. filter_log_events scans oldest-first, so
-    startTime (the run's creation time) is load-bearing — without it the scan
-    exhausts its page budget on old log data and returns nothing.
+    Shared by the text-turn and the tool-turn extractors. filter_log_events
+    scans oldest-first, so startTime (the run's creation time) is load-bearing —
+    without it the scan exhausts its page budget on old log data and returns
+    nothing. A missing group / permission error degrades to ``[]``.
     """
     logs = logs or logs_client(workspace)
     started = started_at or datetime.now(UTC)
@@ -1445,6 +1443,119 @@ def eval_turns_from_content_logs(
         if not token:
             break
         kwargs["nextToken"] = token
+    return sorted(records, key=lambda r: r.get("timeUnixNano") or 0)
+
+
+def _iter_body_parts(body: dict[str, Any]):
+    """(kind, role, parts) for each message of a content record whose content is
+    a JSON-encoded part list — the shape tool calls arrive in. Plain-string
+    content (text-only messages) yields nothing here; `_iter_body_messages`
+    covers those."""
+    for kind in ("input", "output"):
+        for msg in (body.get(kind) or {}).get("messages") or []:
+            if not isinstance(msg, dict):
+                continue
+            content = msg.get("content")
+            if isinstance(content, dict):
+                raw = content.get("message") if "message" in content else content.get("content")
+            else:
+                raw = content
+            if not isinstance(raw, str) or not raw.lstrip().startswith("["):
+                continue
+            try:
+                parts = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(parts, list):
+                yield kind, msg.get("role"), [p for p in parts if isinstance(p, dict)]
+
+
+def eval_tool_turns_from_content_logs(
+    log_group: str,
+    session_id: str,
+    started_at: datetime | None,
+    workspace: WorkspaceContext,
+    logs: Any = None,
+) -> list[dict[str, Any]]:
+    """TOOL_CALL / TOOL_RESULT turns for an eval session, from content logs.
+
+    Strands runtimes record the model's ``toolUse`` parts on output/assistant
+    messages and the ``toolResult`` parts on the next input/tool message (and
+    echo the result on the output too). Every record carries the FULL history
+    so far, so the same call appears in many records — deduped by
+    ``toolUseId``, first sighting wins for time, the input/tool copy wins for
+    the result body. Ordered by first sighting; a call precedes its result.
+    Companion of `eval_turns_from_content_logs` (which keeps text turns only).
+    """
+    records = _content_records(log_group, session_id, started_at, workspace, logs)
+    calls: dict[str, dict[str, Any]] = {}
+    results: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for rec in records:
+        ts = rec.get("timeUnixNano") or 0
+        trace_id = rec.get("traceId")
+        for kind, _role, parts in _iter_body_parts(rec.get("body") or {}):
+            for part in parts:
+                use = part.get("toolUse")
+                if isinstance(use, dict) and use.get("toolUseId"):
+                    tid = str(use["toolUseId"])
+                    if tid not in calls:
+                        calls[tid] = {
+                            "role": "TOOL_CALL", "id": tid,
+                            "name": str(use.get("name") or ""),
+                            "input": use.get("input"),
+                            "at": _ns_iso(ts), "trace_id": trace_id,
+                        }
+                        order.append(tid)
+                    continue
+                res = part.get("toolResult")
+                if isinstance(res, dict) and res.get("toolUseId"):
+                    tid = str(res["toolUseId"])
+                    texts = [
+                        c.get("text") for c in (res.get("content") or [])
+                        if isinstance(c, dict) and c.get("text")
+                    ]
+                    entry = {
+                        "role": "TOOL_RESULT", "id": tid,
+                        "name": calls.get(tid, {}).get("name", ""),
+                        "status": str(res.get("status") or ""),
+                        "text": "\n".join(str(t) for t in texts),
+                        "at": _ns_iso(ts), "trace_id": trace_id,
+                    }
+                    # the input/tool copy is the one the model actually consumed
+                    if tid not in results or kind == "input":
+                        results[tid] = entry
+                    if tid not in calls:
+                        order.append(tid)
+    turns: list[dict[str, Any]] = []
+    for tid in order:
+        if tid in calls:
+            turns.append(calls[tid])
+        if tid in results:
+            res = results[tid]
+            if not res["name"] and tid in calls:
+                res["name"] = calls[tid]["name"]
+            turns.append(res)
+    return turns
+
+
+def eval_turns_from_content_logs(
+    log_group: str,
+    session_id: str,
+    started_at: datetime | None,
+    workspace: WorkspaceContext,
+    logs: Any = None,
+) -> list[dict[str, Any]]:
+    """USER/ASSISTANT turns for an eval session, rebuilt from content logs.
+
+    One invocation = one traceId. Its USER turn is the trace's latest input
+    user message (later records carry the full history — last one is the
+    current turn); its ASSISTANT turn is the ``end_turn`` output, falling back
+    to the last assistant text. filter_log_events scans oldest-first, so
+    startTime (the run's creation time) is load-bearing — without it the scan
+    exhausts its page budget on old log data and returns nothing.
+    """
+    records = _content_records(log_group, session_id, started_at, workspace, logs)
 
     invocations: dict[str, dict[str, Any]] = {}
     for rec in sorted(records, key=lambda r: r.get("timeUnixNano") or 0):

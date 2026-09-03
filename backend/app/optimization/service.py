@@ -400,7 +400,8 @@ _REC_KEYS: dict[str, tuple[str, ...]] = {
                       "recommended_prompt", "explanation",
                       "provider", "provider_model_id", "provider_meta"),
     "tool_descriptions": ("tool_status", "tool_error", "tool_descriptions",
-                          "analyzed_tools"),
+                          "analyzed_tools", "tool_explanation",
+                          "tool_provider", "tool_provider_model_id", "tool_provider_meta"),
 }
 
 
@@ -534,16 +535,29 @@ def stage_recommend(
     run_tag = uuid.uuid4().hex[:6]
 
     provider_id = provider or rec_providers.DEFAULT_PROVIDER
-    if "system_prompt" in types and provider_id != rec_providers.DEFAULT_PROVIDER:
-        # a 3rd-party optimizer replaces ONLY the system-prompt generator; it
-        # writes the same keys the AWS job does, plus provider attribution
+    # the types a 3rd-party provider takes over; everything else keeps its
+    # AgentCore generator. Empty for the default provider ⇒ the path below is
+    # exactly the pre-provider code.
+    mine: tuple[str, ...] = ()
+    if provider_id != rec_providers.DEFAULT_PROVIDER:
+        supported = rec_providers.get_provider(provider_id).supports
+        mine = tuple(t for t in types if t in supported)
+    if mine:
+        # one provider call covers every type it supports (one reflection can
+        # revise the instruction and the tool descriptions together); it writes
+        # the same keys the AWS jobs do, plus provider attribution
         out.update(
             _third_party_prompt_recommendation(
                 exp_id, agent, workspace, progress,
                 provider_id=provider_id, model_id=model_id, source=source or {},
+                # the DISCOVERED set is authoritative for a provider component —
+                # the bundle overlay can only change tools it knows, so a caller's
+                # `recommend_tools` is ignored here (it keeps its meaning on the
+                # AgentCore branch below)
+                components=mine, tools=agent.get("tools") or {},
             )
         )
-    elif "system_prompt" in types:
+    if "system_prompt" in types and "system_prompt" not in mine:
         progress(
             "generating system-prompt recommendation from "
             + ("the selected evaluation run…" if pinned_arn else "recent traces…")
@@ -578,7 +592,7 @@ def stage_recommend(
                 system_prompt_error=_rec_error(sp_payload, sp_status)[:300],
             )
 
-    if "tool_descriptions" in types:
+    if "tool_descriptions" in types and "tool_descriptions" not in mine:
         # the optimizer improves descriptions for the tools it is handed —
         # they must be the agent's real tools, or it has nothing to match
         # against in the traces
@@ -634,8 +648,13 @@ def _third_party_prompt_recommendation(
     transcript: rec_evidence.TranscriptFn | None = None,
     logs: Any = None,
     converse: Any = None,
+    components: tuple[str, ...] = ("system_prompt",),
+    tools: dict[str, str] | None = None,
+    tool_turns: rec_evidence.ToolTurnsFn | None = None,
+    tool_spans: rec_evidence.ToolSpansFn | None = None,
 ) -> dict[str, Any]:
-    """System-prompt recommendation from a registered non-AgentCore provider.
+    """Recommendation(s) from a registered non-AgentCore provider — the system
+    prompt and/or the agent's own tool descriptions, per ``components``.
 
     Evidence is the pinned run's own batch-evaluation results stream joined
     with each session's transcript; the router already guaranteed a pinned
@@ -645,16 +664,29 @@ def _third_party_prompt_recommendation(
     """
     prov = rec_providers.get_provider(provider_id)
     resolved_model = model_id or prov.default_model_id() or ""
-    attribution = {"provider": prov.id, "provider_model_id": resolved_model}
+    want_prompt = "system_prompt" in components
+    want_tools = "tool_descriptions" in components
+    own_tools = dict(tools or {})
+    attribution: dict[str, Any] = {}
+    if want_prompt:
+        attribution.update(provider=prov.id, provider_model_id=resolved_model)
+    if want_tools:
+        attribution.update(
+            tool_provider=prov.id, tool_provider_model_id=resolved_model,
+            analyzed_tools=own_tools,
+        )
+
+    def _failed(reason: str) -> dict[str, Any]:
+        out: dict[str, Any] = dict(attribution)
+        if want_prompt:
+            out.update(system_prompt_status="FAILED", system_prompt_error=reason[:300])
+        if want_tools:
+            out.update(tool_status="error", tool_error=reason[:300], tool_descriptions={})
+        return out
+
     log_group, log_stream = source.get("results_log_group"), source.get("results_log_stream")
     if not (log_group and log_stream):
-        return {
-            **attribution,
-            "system_prompt_status": "FAILED",
-            "system_prompt_error": (
-                "the selected run's batch evaluation has no results log stream to read"
-            ),
-        }
+        return _failed("the selected run's batch evaluation has no results log stream to read")
     settings = get_settings()
     db = SessionLocal()
     try:
@@ -665,6 +697,16 @@ def _third_party_prompt_recommendation(
             if run is not None and run.mode == "insights" else []
         )
         progress("collecting evidence from the selected evaluation run…")
+        started_at = run.created_at if run is not None else None
+        if want_tools:
+            # tool evidence: content-log calls/results + spans (names, the
+            # description the model saw); injected stubs win in tests
+            tool_turns = tool_turns or rec_evidence.default_tool_turns(
+                workspace, agent_row, started_at
+            )
+            tool_spans = tool_spans or rec_evidence.default_tool_spans(workspace, started_at)
+        else:
+            tool_turns = tool_spans = None
         evidence, stats = rec_evidence.collect_evidence(
             workspace=workspace,
             log_group=str(log_group),
@@ -673,6 +715,8 @@ def _third_party_prompt_recommendation(
             max_sessions=settings.prompt_opt_max_sessions,
             logs=logs,
             progress=progress,
+            tool_turns=tool_turns,
+            tool_spans=tool_spans,
         )
     finally:
         db.close()
@@ -688,31 +732,52 @@ def _third_party_prompt_recommendation(
             max_chars=REC_PROMPT_MAX_CHARS,
             extra_feedback=extra_feedback,
             max_tokens=settings.prompt_opt_max_tokens,
+            components=components,
+            tools=own_tools,
         ),
         progress,
         converse=converse,
     )
-    out: dict[str, Any] = {
-        **attribution,
-        "provider_meta": result.meta,
-        "system_prompt_status": result.status,
-    }
-    if result.status == "COMPLETED" and result.recommended_prompt:
-        out["recommended_prompt"] = result.recommended_prompt
-        out["explanation"] = result.explanation
-    else:
-        out["system_prompt_status"] = "FAILED"
-        out["system_prompt_error"] = (result.error or "provider produced no prompt")[:300]
+    out: dict[str, Any] = dict(attribution)
+    if want_prompt:
+        # the prompt's meta; the tool component's counters live in tool_provider_meta
+        out["provider_meta"] = {
+            k: v for k, v in result.meta.items() if not k.startswith("tool_")
+        }
+        if result.status == "COMPLETED" and result.recommended_prompt:
+            out["system_prompt_status"] = "COMPLETED"
+            out["recommended_prompt"] = result.recommended_prompt
+            out["explanation"] = result.explanation
+        else:
+            out["system_prompt_status"] = "FAILED"
+            out["system_prompt_error"] = (result.error or "provider produced no prompt")[:300]
+    if want_tools:
+        out["tool_provider_meta"] = {
+            k: v for k, v in result.meta.items()
+            if k.startswith("tool_") or k in (
+                "evidence_sessions", "evidence_records", "sessions_with_tool_calls",
+                "latency_ms", "calls",
+            )
+        }
+        out["tool_status"] = result.tool_status or "error"
+        out["tool_descriptions"] = result.tool_descriptions or {}
+        if result.tool_status == "COMPLETED":
+            if result.tool_explanation:
+                out["tool_explanation"] = result.tool_explanation
+        else:
+            out["tool_error"] = (result.tool_error or result.error or "provider produced "
+                                 "no tool descriptions")[:300]
     return out
 
 
 def recommendation_attribution(rec: dict[str, Any] | None) -> str | None:
     """`"<provider> · <model>"` for a non-AgentCore recommendation, else None."""
     rec = rec or {}
-    provider = rec.get("provider")
+    # either component may carry the attribution; the prompt's wins when both do
+    provider = rec.get("provider") or rec.get("tool_provider")
     if not provider or provider == rec_providers.DEFAULT_PROVIDER:
         return None
-    model = rec.get("provider_model_id")
+    model = rec.get("provider_model_id") or rec.get("tool_provider_model_id")
     return f"{provider} · {model}" if model else str(provider)
 
 
@@ -1378,13 +1443,18 @@ def action_accept(
     """Persist the (possibly user-edited) recommendation; unlocks bundles."""
     rec = dict(exp.artifacts.get("recommend") or {})
     rec["accepted_prompt"] = prompt[:REC_PROMPT_MAX_CHARS]
-    # an edited accept still descends from the provider's seed — attribution
-    # stays, but the edit is on record
-    rec["accepted_edited"] = rec["accepted_prompt"] != (rec.get("recommended_prompt") or "")
     if tool_descriptions:
         rec["accepted_tool_descriptions"] = {
             str(k): str(v) for k, v in tool_descriptions.items()
         }
+    # an edited accept still descends from the provider's seed — attribution
+    # stays, but the edit is on record (either component)
+    tools_edited = bool(tool_descriptions) and (
+        rec["accepted_tool_descriptions"] != (rec.get("tool_descriptions") or {})
+    )
+    rec["accepted_edited"] = (
+        rec["accepted_prompt"] != (rec.get("recommended_prompt") or "") or tools_edited
+    )
     _update(exp.id, stage="bundles", artifact={"recommend": rec})
     return rec
 

@@ -212,8 +212,9 @@ def _validate_recommend_provider(req: ActionRequest) -> None:
 
     A provider that reflects on scored evidence needs a pinned evaluation run —
     the rolling CloudWatch window carries traces but no judge scores. Only
-    enforced when the system-prompt generator is actually selected: a
-    tool-descriptions-only run ignores the provider (AgentCore generates those).
+    enforced when at least one selected generator is one the provider supports;
+    a type the provider does not support stays with AgentCore (default provider:
+    both types, no source rule).
     """
     if req.recommend_model_id is not None and not _MODEL_ID.match(req.recommend_model_id):
         raise AppError(
@@ -223,8 +224,9 @@ def _validate_recommend_provider(req: ActionRequest) -> None:
             status_code=422,
         )
     provider = rec_providers.get_provider(req.recommend_provider)
-    wants_prompt = req.recommend_types is None or "system_prompt" in req.recommend_types
-    if wants_prompt and provider.requires_source and not req.recommend_source_run_id:
+    # the types this provider would take over (the rest stay AgentCore's)
+    wants = set(req.recommend_types or service.REC_TYPES) & set(provider.supports)
+    if wants and provider.requires_source and not req.recommend_source_run_id:
         raise AppError(
             "experiment.provider_requires_source",
             f"the {provider.id} provider reflects on a completed evaluation run's "
