@@ -159,7 +159,7 @@ def test_providers_endpoint_shape_follows_settings(client):
     assert "tool_descriptions" in provs["agentcore"]["supports"]
     g = provs["gepa_lite"]
     assert g["requires_source"] is True
-    assert g["supports"] == ["system_prompt"]
+    assert g["supports"] == ["system_prompt", "tool_descriptions"]
     settings = get_settings()
     assert [m["model_id"] for m in g["models"]] == settings.prompt_opt_models
     assert g["default_model_id"] == settings.prompt_opt_default_model_id
@@ -179,13 +179,20 @@ def test_gepa_lite_requires_a_pinned_source(client, monkeypatch):
     assert "recommend" not in _reload(exp.id).artifacts
 
 
-def test_gepa_lite_tool_descriptions_only_skips_the_source_rule(client, monkeypatch):
+def test_gepa_lite_tool_descriptions_only_also_needs_a_source(client, monkeypatch):
+    """gepa_lite now owns tool descriptions too, so the source rule applies to a
+    tool-only request; the AgentCore default keeps bypassing it."""
     captured: dict = {}
     monkeypatch.setattr(svc, "run_action", lambda *a, **k: captured.update(ok=True))
     exp = _mk_exp(artifacts={"agent_meta": {"system_prompt": "cur"}})
     res = client.post(f"/api/experiments/{exp.id}/action",
                       json={"action": "recommend", "recommend_provider": "gepa_lite",
                             "recommend_types": ["tool_descriptions"]})
+    assert res.status_code == 422
+    assert res.json()["code"] == "experiment.provider_requires_source"
+    assert captured == {}
+    res = client.post(f"/api/experiments/{exp.id}/action",
+                      json={"action": "recommend", "recommend_types": ["tool_descriptions"]})
     assert res.status_code == 202
     assert captured == {"ok": True}
 
@@ -530,6 +537,11 @@ def test_accept_records_whether_the_seed_was_edited(client):
     rec = res.json()["experiment"]["artifacts"]["recommend"]
     assert rec["accepted_edited"] is True
     assert rec["provider"] == "gepa_lite"  # attribution survives an edit
+    # an unchanged prompt with a hand-edited tool description is an edit too
+    res = client.post(f"/api/experiments/{exp.id}/action",
+                      json={"action": "accept", "accepted_prompt": "rec",
+                            "accepted_tool_descriptions": {"t": "hand-written"}})
+    assert res.json()["experiment"]["artifacts"]["recommend"]["accepted_edited"] is True
 
 
 def test_recommendation_attribution_text():

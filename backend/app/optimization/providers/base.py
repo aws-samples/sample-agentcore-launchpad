@@ -39,7 +39,10 @@ class EvaluatorRecord:
 @dataclass
 class SessionEvidence:
     session_id: str
-    turns: list[dict[str, str]]  # [{"role": "user"|"assistant", "text": ...}]
+    # [{"role": "user"|"assistant", "text": ...}] plus, when tool evidence was
+    # collected, {"role": "tool_call", "id", "name", "input"} /
+    # {"role": "tool_result", "id", "name", "status", "text"} in conversation order
+    turns: list[dict[str, Any]]
     records: list[EvaluatorRecord]
     # polarity-normalised mean of the scored records (+1 = better), None when
     # the session carries only errored / unscored records
@@ -52,6 +55,12 @@ class EvidenceStats:
     sessions_selected: int = 0  # after the sampling policy
     sessions_with_transcript: int = 0
     records: int = 0  # result records read from the stream (all sessions)
+    # tool evidence (only when collected)
+    sessions_with_tool_calls: int = 0
+    tool_calls_seen: int = 0
+    # {tool name: {"calls": n, "errors": n, "description_seen": str|None}} —
+    # what the traces show the model actually called / saw (spans + content logs)
+    observed_tools: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -66,6 +75,12 @@ class OptimizeRequest:
     max_chars: int
     extra_feedback: list[str] = field(default_factory=list)  # e.g. insight clusters
     max_tokens: int = 4096
+    # which recommendation types this call must produce; anything not listed is
+    # frozen (the provider must not propose changes to it)
+    components: tuple[str, ...] = ("system_prompt",)
+    # the agent's OWN tools (discovered from its spec/code) → current description;
+    # the only tools whose descriptions a provider may rewrite
+    tools: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -75,6 +90,13 @@ class OptimizeResult:
     explanation: str = ""
     error: str | None = None
     meta: dict[str, Any] = field(default_factory=dict)
+    # tool-description component (only when requested): validated
+    # {name: new description} — {} means "no changes suggested"; tool_status
+    # mirrors the artifact vocabulary: COMPLETED | error | no-tools | no-tool-calls
+    tool_descriptions: dict[str, str] | None = None
+    tool_status: str | None = None
+    tool_error: str | None = None
+    tool_explanation: str = ""
 
     @classmethod
     def failed(cls, error: str, **meta: Any) -> OptimizeResult:

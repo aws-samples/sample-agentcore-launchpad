@@ -251,8 +251,13 @@ emits) joined with each session's transcript, samples up to 30 sessions
 worst-first (polarity-normalised, with a best-scoring contrast set), and asks a
 Bedrock model — Claude Sonnet 5 by default, GPT-5.6 Sol / Opus 5 selectable,
 custom ids allowed — for one reflective rewrite: diagnosis, concrete changes,
-revised prompt. It is GEPA's reflection step without GEPA's search loop: the
-configuration A/B that follows is what evaluates the candidate. A provider
+revised prompt — and, in the same call, revised descriptions for the agent's
+**own** tools (the discovered set the treatment bundle can overlay), reasoning
+from each session's tool calls, results and tool-call judge verdicts; gateway /
+MCP tools are shown as context and never rewritten, and a run with no tool
+calls settles the tool side as `no-tool-calls` while the prompt proceeds. It is
+GEPA's reflection step without GEPA's search loop: the configuration A/B that
+follows is what evaluates the candidate. A provider
 that cannot produce a usable prompt (no scored sessions, model access denied,
 unparseable output, over the 8 000-character budget after one compression)
 writes a `FAILED` status and reason and **no prompt** — the same ISSUE-007 rule

@@ -110,6 +110,14 @@ export interface ExperimentInfo {
       tool_error?: string;
       analyzed_tools?: Record<string, string>;
       tool_descriptions?: Record<string, string>;
+      /** 3rd-party tool-description component: attribution + the provider's
+       *  change notes (absent on the AgentCore path). */
+      tool_provider?: string;
+      tool_provider_model_id?: string;
+      tool_provider_meta?: { evidence_sessions?: number; tool_calls_seen?: number;
+        sessions_with_tool_calls?: number; tool_descriptions_proposed?: number;
+        tool_changes?: string[] };
+      tool_explanation?: string;
       accepted_prompt?: string;
       accepted_tool_descriptions?: Record<string, string>;
       /** Set by accept: the accepted text differs from the provider's seed. */
@@ -1277,6 +1285,7 @@ function ConfigurationExperimentView() {
               <span>
                 {t("expPage.providerNote")}
                 {genTd && toolDescriptionsSupported
+                  && !recProvider?.supports.includes("tool_descriptions")
                   ? ` ${t("expPage.providerToolNote")}` : ""}
               </span>
             </div>
@@ -1397,6 +1406,8 @@ function ConfigurationExperimentView() {
       <span className="i">[i]</span>
       <span>
         {rec?.tool_status === "no-tools" ? t("expPage.toolRecNoTools")
+          : rec?.tool_status === "no-tool-calls"
+            ? t("expPage.toolRecNoCalls", { msg: rec?.tool_error ?? "" })
           : rec?.tool_status === "error"
             ? t("expPage.toolRecFailed", { msg: rec?.tool_error ?? "" })
             : t("expPage.toolRecEmpty")}
@@ -1512,20 +1523,28 @@ function ConfigurationExperimentView() {
           )}
           {/* Who generated the prompt — only a 3rd-party provider writes this;
               an AgentCore recommendation renders exactly as before. */}
-          {rec.provider && rec.provider !== "agentcore" && (
-            <div
-              className="mono dim"
-              data-testid="rec-provider"
-              style={{ fontSize: 10, marginBottom: 6 }}
-            >
-              {t("expPage.recProducedBy", {
-                provider: rec.provider,
-                model: rec.provider_model_id ?? "—",
-                count: rec.provider_meta?.evidence_sessions ?? 0,
-              })}
-              {rec.accepted_edited ? ` · ${t("expPage.recProviderEdited")}` : ""}
-            </div>
-          )}
+          {(() => {
+            // either component may carry the attribution; render it once
+            const provider = rec.provider ?? rec.tool_provider;
+            if (!provider || provider === "agentcore") return null;
+            const model = rec.provider_model_id ?? rec.tool_provider_model_id ?? "—";
+            // the label says "scored sessions": both metas carry evidence_sessions
+            const count = rec.provider_meta?.evidence_sessions
+              ?? rec.tool_provider_meta?.evidence_sessions ?? 0;
+            const revised = Object.keys(rec.tool_descriptions ?? {}).length;
+            return (
+              <div
+                className="mono dim"
+                data-testid="rec-provider"
+                style={{ fontSize: 10, marginBottom: 6 }}
+              >
+                {t("expPage.recProducedBy", { provider, model, count })}
+                {rec.tool_provider && revised > 0
+                  ? ` · ${t("expPage.recProviderTools", { count: revised })}` : ""}
+                {rec.accepted_edited ? ` · ${t("expPage.recProviderEdited")}` : ""}
+              </div>
+            );
+          })()}
           {spDone && (
             <>
               <DiffPanes
@@ -1547,12 +1566,22 @@ function ConfigurationExperimentView() {
               <div className="mono dim" style={{ fontSize: 10, marginBottom: 4 }}>
                 {t("expPage.toolRecLabel")}
               </div>
+              {/* the recommendation is an OVERLAY on the current set (that is how
+                  bundles applies it), so diff the merged view — otherwise every
+                  untouched tool reads as a deletion */}
               <DiffPanes
                 before={JSON.stringify(rec.analyzed_tools ?? {}, null, 2)}
-                after={JSON.stringify(recToolDescs, null, 2)}
+                after={JSON.stringify({ ...(rec.analyzed_tools ?? {}), ...recToolDescs },
+                                      null, 2)}
                 beforeLabel={t("expPage.currentLabel")}
                 afterLabel={t("expPage.recommendedLabel")}
               />
+              {rec.tool_explanation && (
+                <div className="dim" data-testid="rec-tool-explanation"
+                     style={{ fontSize: 10.5, marginTop: 6, whiteSpace: "pre-line" }}>
+                  {rec.tool_explanation}
+                </div>
+              )}
             </div>
           )}
           {tdStatusNote}
