@@ -360,6 +360,7 @@ export function Chat() {
                   padding: "3px 8px",
                 }}
                 data-testid="agent-select"
+                aria-label={t("chatPage.agentSelectLabel")}
               >
                 {agents.length === 0 && (
                   <option value="">

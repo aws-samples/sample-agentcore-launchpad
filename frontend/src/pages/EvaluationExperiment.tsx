@@ -884,6 +884,7 @@ function ConfigurationExperimentView() {
           className="input"
           value={startAgentId}
           data-testid="exp-agent-select"
+          aria-label={t("evalPage.newRun.agent")}
           onChange={(e) => selectStartAgent(e.target.value)}
         >
           {agents.length === 0 && (
@@ -1102,6 +1103,7 @@ function ConfigurationExperimentView() {
               className="input"
               value={baselineDatasetId}
               data-testid="baseline-dataset"
+              aria-label={t("expPage.readiness.baselineDataset")}
               onChange={(event) => setBaselineDatasetId(event.target.value)}
             >
               {datasets.length === 0 && (

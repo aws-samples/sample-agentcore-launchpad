@@ -1042,6 +1042,7 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
           <input
             className="input mono"
             data-testid="online-sampling"
+            aria-label={t("evalPage.online.form.sampling")}
             type="number"
             min={0.01}
             max={100}
@@ -1061,6 +1062,7 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
           <input
             className="input mono"
             data-testid="online-timeout"
+            aria-label={t("evalPage.online.form.timeout")}
             type="number"
             min={1}
             max={1440}

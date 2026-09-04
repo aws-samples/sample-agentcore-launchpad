@@ -352,7 +352,7 @@
       "agentResources": "Agent resources",
       "agentResourcesV": "boto3 fast path · tracked in ledger",
       "onSuccess": "On success",
-      "onSuccessV": "auto-register → Registry (phase 7)"
+      "onSuccessV": "auto-register → Registry"
     },
     "sequence": {
       "title": "LAUNCH SEQUENCE",
@@ -1684,8 +1684,9 @@
     "send": "SEND",
     "toolCalled": "TOOL CALLED",
     "memorySaved": "memory.create_event — turn saved to short-term",
+    "agentSelectLabel": "Agent",
     "traceTitle": "TRACE",
-    "tracePlaceholder": "END-TO-END TRACE RAIL ARRIVES WITH OBSERVABILITY (PHASE 9)",
+    "tracePlaceholder": "SEND A MESSAGE — THE TRACE RAIL LOADS SPANS FOR THIS SESSION",
     "memoryTitle": "SESSION MEMORY",
     "shortTermEvents": "Short-term events",
     "longTermRecords": "Long-term records",
