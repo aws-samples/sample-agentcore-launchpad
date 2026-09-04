@@ -69,6 +69,25 @@ with requests.post(
 错误使用平台统一信封 `{code, message, detail}`——例如
 `auth.missing_api_key`(401)、`agent.not_active`(409)、`agent.not_found`(404)。
 
+平台没有映射成自有服务错误码(`kb.not_found`、`memory.unavailable` 等)的 AWS 侧失败,
+同样以信封返回,而不是裸的 `500 Internal Server Error` 或 botocore 的
+`An error occurred (…) when calling the … operation:` 原文。`app/core/errors.py` 中的全局
+`ClientError` 处理器按 AWS 错误码映射:
+
+| AWS 错误码 | HTTP | `code` |
+|---|---|---|
+| `ResourceNotFoundException` | 404 | `aws.not_found` |
+| `ValidationException` | 400 | `aws.validation` |
+| `AccessDeniedException`、`UnauthorizedException` | 403 | `aws.access_denied` |
+| `ThrottlingException`、`TooManyRequestsException`、`ServiceQuotaExceededException` | 429 | `aws.throttled` |
+| `ConflictException`、`ResourceInUseException` | 409 | `aws.conflict` |
+
+`message` 是去掉 botocore 前缀后的 AWS 消息;`detail` 为
+`{"aws_error_code": "<AWS 错误码>", "operation": "<boto 操作名>"}`。其他 AWS 错误码
+(如 `InternalServerException`)仍是未处理的 500,后端日志保留完整堆栈。跨账号角色扮演失败
+保持原有答复:502 `workspace.assume_role_failed`。`/api` 与 `/v1` 共用应用的异常处理器,
+以上信封对两者同样适用。
+
 ## 控制台在线评估 API / Console Online Evaluation API
 
 `/api/eval/online/*` 管理 AgentCore **在线评估配置**:按采样比例持续给真实会话打分。AWS 是唯一事实来源,

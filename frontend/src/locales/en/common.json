@@ -1673,6 +1673,11 @@
     "skill_lab.publish_no_change": "Training accepted no edits, so there is nothing to publish.",
     "skill_lab.asset_request_too_large": "The multipart task-file upload exceeds the 101 MiB request limit.",
     "skill_lab.taskset_cleanup_failed": "Task-set asset cleanup failed. The task set was retained so deletion can be retried.",
+    "aws.not_found": "The AWS resource was not found — it may have been deleted, or the id is wrong.",
+    "aws.validation": "AWS rejected the request as invalid — check the id or the values you entered.",
+    "aws.access_denied": "AWS denied access to this resource — this deployment's role lacks permission, or the id belongs to another account.",
+    "aws.throttled": "AWS is throttling this request — wait a moment and retry.",
+    "aws.conflict": "The AWS resource is busy or in a conflicting state — retry once it settles.",
     "network": "Backend unreachable — no HTTP response"
   },
   "chatPage": {

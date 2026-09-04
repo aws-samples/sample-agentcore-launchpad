@@ -1102,6 +1102,34 @@ rows (`.histrow`) wrap or clamp to the panel width at that breakpoint. New
 pages should reuse `DataTable` or the `.table-scroll` wrapper rather than
 setting per-page widths; the ≥ 1180 px layout is unaffected by either tier.
 
+## Error envelope and AWS `ClientError` mapping
+
+Every error leaves the backend as `{code, message, detail}` through the handlers
+registered in `app/core/errors.register_error_handlers`; the console translates
+`code` through the `apiErrors.*` i18n block (`localizedMessage` in `lib/api.ts`)
+and falls back to `message`. Services that anticipate a failure raise `AppError`
+with their own code (`kb.not_found`, `agent.not_found`, `memory.unavailable`) and
+those always win, because they are raised before any `ClientError` can escape.
+
+An AWS `ClientError` nobody anticipated — a wrong id in a URL, an IAM gap, a
+throttle — detonates at whichever route was signing the request, so it is mapped
+in one place rather than per route: the global `ClientError` handler answers
+`ResourceNotFoundException` → 404 `aws.not_found`, `ValidationException` → 400
+`aws.validation`, `AccessDeniedException` / `UnauthorizedException` → 403
+`aws.access_denied`, `ThrottlingException` / `TooManyRequestsException` /
+`ServiceQuotaExceededException` → 429 `aws.throttled`, and `ConflictException` /
+`ResourceInUseException` → 409 `aws.conflict`, with the botocore
+`An error occurred (…) when calling the … operation:` prefix stripped from
+`message` and `{aws_error_code, operation}` in `detail`. The mapping is
+deliberately a closed list (`AWS_ERROR_MAP`): any other code is re-raised and stays
+an unhandled 500 with the traceback in the log, so a genuinely unexpected AWS
+failure is still loud. A failed cross-account `AssumeRole` is checked first and
+keeps its 502 `workspace.assume_role_failed` diagnostic. The Memory routers'
+`memory.unavailable` wrapper lets a mapped `ClientError` through to this handler,
+so an unknown actor toasts the localized "not found" copy instead of raw boto
+text. `tests/test_errors_aws.py` pins the table; do not add per-route
+`except ClientError` blocks for these codes.
+
 ## Console failure states (backend unreachable)
 
 The console never reports an empty account it could not read. Two rules are
