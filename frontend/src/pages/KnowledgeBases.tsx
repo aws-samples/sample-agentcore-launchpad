@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { Btn, Chip, LoadError, Panel, ViewHead } from "../components";
+import { Btn, Chip, LoadError, Panel, StaleLink, useStaleParam, ViewHead } from "../components";
 import type { ChipTone } from "../components";
 import { errorMessage, getJson } from "../lib/api";
 import { CreateView } from "./knowledge/CreateView";
@@ -106,6 +106,19 @@ export function KnowledgeBases() {
     void load();
   }, [load]);
 
+  // "?view=detail" whose kb is missing or answers 4xx: back to the list with a
+  // notice naming the id — never a permanent LOADING or a silent redirect.
+  const kbParam = searchParams.get("kb");
+  const [detailGone, setDetailGone] = useState(false);
+  const staleKb = useStaleParam(
+    view === "detail" ? (kbParam ?? "") : null,
+    view === "detail" && (!kbParam || detailGone),
+    () => {
+      setDetailGone(false);
+      setSearchParams({}, { replace: true });
+    },
+  );
+
   // ── Create sub-page (?view=create) ────────────────────────────────────────
   if (view === "create") {
     return (
@@ -120,7 +133,8 @@ export function KnowledgeBases() {
   if (view === "detail") {
     return (
       <DetailView
-        kbId={searchParams.get("kb") ?? ""}
+        kbId={kbParam ?? ""}
+        onGone={() => setDetailGone(true)}
         onBack={() => {
           setSearchParams({}, { replace: true });
           void load();
@@ -140,6 +154,13 @@ export function KnowledgeBases() {
         title={t("knowledge.title")}
         meta={t("knowledge.meta")}
       />
+      {staleKb.staleId !== null && (
+        <StaleLink
+          kind={t("staleLink.kind.knowledgeBase")}
+          id={staleKb.staleId}
+          onDismiss={staleKb.dismiss}
+        />
+      )}
 
       <Panel
         brk

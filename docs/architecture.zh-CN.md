@@ -546,6 +546,23 @@ OpenInference span,并自动发射同 scope 的结构化 content event 承载输
   `getJson` / `responseMessage` / `errorMessage`,使消息遵循 `apiErrors.*` 本地化规则
   (未收到 HTTP 响应的请求对应 `apiErrors.network`)。
 
+## 失效的深链接会说明资源已不存在
+
+id 不再能解析的深链接绝不会静默回退。共享的 `components/StaleLink.tsx` 是唯一的提示
+区块("`<类型>` `<id>` 在当前工作区已不存在 —— 请从下方表格中选择。",`staleLink.*`,
+可关闭),`components/useStaleParam.ts` 是与之配套的 hook:调用方传入参数的当前值与
+自己的判定 —— 只有列表已加载而其中没有该 id、或详情请求返回 4xx(上文 `ClientError`
+映射中的 `aws.not_found` / `aws.validation` / `aws.access_denied`)时才为真 —— hook 记下
+id 供提示使用,并通过 `setSearchParams(..., { replace: true })` 一次性去掉该参数,同一
+链接不会再次触发,页面随后就是一次普通访问。列表加载失败*不是*判定:该状态归
+`LoadError`,参数保留以便重试。已接入的界面:评估 `?view=datasets&ds=`(本地行在本地
+列表加载后判定,`cloud:` 行在云端列表加载后判定)、`?view=evaluators&ev=`、
+`?view=online&oe=`、`?view=experiment&exp=`,对话 `?agent=`(连同其伴随的 `?session=`
+一并去掉),以及知识库 `?view=detail&kb=` —— 缺少 `kb` 时以同样方式提示
+(`staleLink.bodyMissing`),而不是永久 LOADING。对话是唯一不得挑选替代品的界面:选择器
+停在 `chatPage.pickAgent` 占位项(`value=""`)直到用户选择,因为自动选中的智能体会静默
+接收下一条提示词。有效链接仍像以前一样精确选中对应的行 / 智能体。
+
 ## 禁用的主操作说明缺了什么
 
 表单的主操作按钮绝不会只是"变暗"。共享的 `components/Btn.tsx` 接受可选的

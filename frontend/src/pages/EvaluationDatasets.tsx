@@ -4,7 +4,16 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import {
-  Btn, Chip, ConfirmDialog, Pager, Panel, useTablePage, useToast, ViewHead,
+  Btn,
+  Chip,
+  ConfirmDialog,
+  Pager,
+  Panel,
+  StaleLink,
+  useStaleParam,
+  useTablePage,
+  useToast,
+  ViewHead,
 } from "../components";
 import { EvaluationNav } from "../components/EvaluationNav";
 
@@ -287,6 +296,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
   const [cloudRows, setCloudRows] = useState<CloudRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [cloudError, setCloudError] = useState(false);
+  const [cloudLoaded, setCloudLoaded] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [confirmLocal, setConfirmLocal] = useState<DatasetRow | null>(null);
@@ -323,6 +333,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
     } catch {
       setCloudError(true);
     }
+    setCloudLoaded(true);
   }, []);
 
   useEffect(() => {
@@ -360,6 +371,17 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
     const row = (dsParam ? rows.find((r) => r.id === dsParam) : undefined) ?? rows[0];
     return row ? { kind: "local", row } : null;
   }, [creatingNew, dsParam, rows, cloudRows]);
+
+  // A stale "?ds=" (list loaded, id absent) says so at the top of the page and
+  // drops the param — the row fallback below then reads as a plain list visit.
+  const dsIsCloud = !!dsParam?.startsWith(CLOUD_PREFIX);
+  const dsSettled = dsIsCloud ? cloudLoaded && !cloudError : !loading;
+  const dsFound =
+    creatingNew ||
+    (dsIsCloud
+      ? selection?.kind === "cloud"
+      : selection?.kind === "local" && selection.row.id === dsParam);
+  const staleDs = useStaleParam(dsParam, dsSettled && !dsFound, backToList);
 
   const local = selection?.kind === "local" ? selection.row : null;
   const cloud = selection?.kind === "cloud" ? selection.row : null;
@@ -900,6 +922,13 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
         )}
       />
       <EvaluationNav />
+      {staleDs.staleId !== null && (
+        <StaleLink
+          kind={t("staleLink.kind.dataset")}
+          id={staleDs.staleId}
+          onDismiss={staleDs.dismiss}
+        />
+      )}
       <div style={{ marginBottom: 14 }}>
         <Btn onClick={creatingNew ? backToList : onBack}>
           ◂ {t(creatingNew ? "evalPage.datasets.title" : "evalPage.backToRuns")}

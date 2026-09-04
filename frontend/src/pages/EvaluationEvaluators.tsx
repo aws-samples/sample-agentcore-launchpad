@@ -4,7 +4,16 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import {
-  Btn, Chip, ConfirmDialog, Pager, Panel, useTablePage, useToast, ViewHead,
+  Btn,
+  Chip,
+  ConfirmDialog,
+  Pager,
+  Panel,
+  StaleLink,
+  useStaleParam,
+  useTablePage,
+  useToast,
+  ViewHead,
 } from "../components";
 import { EvaluationNav } from "../components/EvaluationNav";
 import { evaluatorLabel } from "../lib/evaluators";
@@ -208,6 +217,13 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
   const backToList = () => {
     setSearchParams({ view: "evaluators" }, { replace: true });
   };
+  // A stale "?ev=" (list loaded, id absent) says so at the top of the page
+  // and drops the param; the custom[0] fallback then reads as a plain visit.
+  const staleEv = useStaleParam(
+    evParam,
+    !loading && !loadError && !creatingNew && selected?.id !== evParam,
+    backToList,
+  );
   const editingId = selected?.source === "custom" ? selected.id : null;
   // A deep link to a third-party row must never strand it inside the
   // collapsed section, so a third-party selection forces the section open.
@@ -761,6 +777,13 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
         )}
       />
       <EvaluationNav />
+      {staleEv.staleId !== null && (
+        <StaleLink
+          kind={t("staleLink.kind.evaluator")}
+          id={staleEv.staleId}
+          onDismiss={staleEv.dismiss}
+        />
+      )}
       <div style={{ marginBottom: 14 }}>
         <Btn onClick={creatingNew ? backToList : onBack}>
           ◂ {t(

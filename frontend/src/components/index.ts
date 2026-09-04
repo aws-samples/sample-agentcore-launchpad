@@ -9,6 +9,8 @@ export { DiffPanes } from "./DiffPanes";
 export { Kicker } from "./Kicker";
 export { LaunchSequence } from "./LaunchSequence";
 export { LoadError } from "./LoadError";
+export { StaleLink } from "./StaleLink";
+export { useStaleParam } from "./useStaleParam";
 export { Markdown } from "./Markdown";
 export { MethodChip } from "./MethodChip";
 export { methodLabel } from "./methodChipMeta";
