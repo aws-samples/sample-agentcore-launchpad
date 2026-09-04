@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "react-router-dom";
 
-import { Btn, Panel, ViewHead } from "../components";
+import { Panel, ViewHead } from "../components";
 
 /**
  * Catch-all view for URLs the router does not know (typos, stale bookmarks to
@@ -26,8 +26,10 @@ export function NotFound() {
             {pathname}
           </span>
         </p>
-        <Link to="/" style={{ textDecoration: "none" }} data-testid="notfound-home">
-          <Btn primary>{t("notFound.backToOverview")}</Btn>
+        {/* A Link styled as the house primary button — never a <button> inside
+            an <a>, which is invalid interactive-content nesting. */}
+        <Link to="/" className="btn primary" data-testid="notfound-home">
+          {t("notFound.backToOverview")}
         </Link>
       </Panel>
     </>
