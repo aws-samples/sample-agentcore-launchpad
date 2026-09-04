@@ -38,6 +38,10 @@ def make_client() -> TestClient:
         except ClientError as exc:
             raise AppError("kb.not_found", "Knowledge base not found", status_code=404) from exc
 
+    @app.get("/v1/aws/{code}")
+    def raise_aws_public(code: str, message: str = "", operation: str = "InvokeAgentRuntime"):
+        raise aws_error(code, message, operation)
+
     @app.get("/assume-role-denied")
     def assume_role_denied():
         raise aws_error("AccessDenied", "not authorized to perform sts:AssumeRole", "AssumeRole")
@@ -125,3 +129,56 @@ def test_assume_role_failure_is_still_the_workspace_diagnostic():
     body = res.json()
     assert body["code"] == "workspace.assume_role_failed"
     assert body["detail"] == {"aws_error_code": "AccessDenied"}
+
+
+RAW_DENIED = (
+    "User: arn:aws:sts::123456789012:assumed-role/admin_role/i-0abc is not authorized "
+    "to perform: bedrock-agentcore:InvokeAgentRuntime"
+)
+
+
+def test_public_api_gets_a_generic_message_and_no_operation():
+    """The same ClientError, two trust boundaries: the console operator sees the
+    stripped AWS text; an API-key holder on /v1 must not learn the deployment's
+    role ARN, instance id or boto operation."""
+    client = make_client()
+    params = {"message": RAW_DENIED, "operation": "InvokeAgentRuntime"}
+
+    console = client.get("/aws/AccessDeniedException", params=params)
+    assert console.status_code == 403
+    assert console.json() == {
+        "code": "aws.access_denied",
+        "message": RAW_DENIED,
+        "detail": {"aws_error_code": "AccessDeniedException", "operation": "InvokeAgentRuntime"},
+    }
+
+    public = client.get("/v1/aws/AccessDeniedException", params=params)
+    assert public.status_code == 403
+    body = public.json()
+    assert body == {
+        "code": "aws.access_denied",
+        "message": "AWS access denied",
+        "detail": {"aws_error_code": "AccessDeniedException"},
+    }
+    assert "arn:aws" not in public.text and "i-0abc" not in public.text
+    assert "operation" not in public.text and "InvokeAgentRuntime" not in public.text
+
+
+@pytest.mark.parametrize(
+    ("aws_code", "status", "code", "message"),
+    [
+        ("ResourceNotFoundException", 404, "aws.not_found", "AWS resource not found"),
+        ("ValidationException", 400, "aws.validation", "AWS rejected the request as invalid"),
+        ("UnauthorizedException", 403, "aws.access_denied", "AWS access denied"),
+        ("ThrottlingException", 429, "aws.throttled", "AWS is throttling this request"),
+        ("ConflictException", 409, "aws.conflict", "AWS resource conflict"),
+    ],
+)
+def test_every_public_code_has_a_generic_message(aws_code, status, code, message):
+    res = make_client().get(f"/v1/aws/{aws_code}", params={"message": "secret detail"})
+    assert res.status_code == status
+    assert res.json() == {
+        "code": code,
+        "message": message,
+        "detail": {"aws_error_code": aws_code},
+    }

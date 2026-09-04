@@ -89,6 +89,18 @@ AWS_ERROR_MAP: dict[str, tuple[int, str]] = {
     "ResourceInUseException": (409, "aws.conflict"),
 }
 
+# What an API-key consumer on `/v1` sees instead of the AWS message. The raw text
+# names this deployment's role ARN, instance id and operation — fine for the
+# console operator, a leak across the API-key trust boundary.
+PUBLIC_API_PREFIX = "/v1"
+_PUBLIC_AWS_MESSAGES: dict[str, str] = {
+    "aws.not_found": "AWS resource not found",
+    "aws.validation": "AWS rejected the request as invalid",
+    "aws.access_denied": "AWS access denied",
+    "aws.throttled": "AWS is throttling this request",
+    "aws.conflict": "AWS resource conflict",
+}
+
 # botocore renders `str(exc)` as
 # "An error occurred (Code) when calling the Op operation: Message" — that
 # prefix is what this handler exists to keep out of the console.
@@ -118,7 +130,7 @@ def mapped_aws_error(exc: BaseException) -> tuple[int, str] | None:
     return AWS_ERROR_MAP.get(aws_error_code(exc))
 
 
-async def client_error_handler(_: Request, exc: ClientError) -> JSONResponse:
+async def client_error_handler(request: Request, exc: ClientError) -> JSONResponse:
     """Turn an AWS `ClientError` the platform did not anticipate into a 4xx envelope.
 
     Every boto3 client is built in one place, but the calls are spread over every
@@ -134,6 +146,11 @@ async def client_error_handler(_: Request, exc: ClientError) -> JSONResponse:
 
     Codes outside `AWS_ERROR_MAP` are re-raised, which leaves them exactly where
     they were before: an unhandled 500 with the AWS error in the log.
+
+    On the public `/v1` API the status and code are kept but the message is a
+    generic per-code sentence and `detail` carries only `aws_error_code`: the raw
+    AWS text names the deployment's role ARN, instance id and operation, which an
+    API-key holder has no business seeing.
     """
     # Imported here: `core` must not take a startup dependency on `services`.
     from app.services.aws_clients import assume_role_diagnostic, is_assume_role_failure
@@ -160,6 +177,13 @@ async def client_error_handler(_: Request, exc: ClientError) -> JSONResponse:
         code,
         aws_error_message(exc),
     )
+    if request.url.path.startswith(PUBLIC_API_PREFIX):
+        return JSONResponse(
+            status_code=status,
+            content=envelope(
+                code, _PUBLIC_AWS_MESSAGES[code], {"aws_error_code": aws_error_code(exc)}
+            ),
+        )
     return JSONResponse(
         status_code=status,
         content=envelope(

@@ -86,8 +86,12 @@ as a bare `500 Internal Server Error` or as botocore's
 `{"aws_error_code": "<AWS code>", "operation": "<boto operation>"}`. Any other
 AWS error code (e.g. `InternalServerException`) remains an unhandled 500 with the
 traceback in the backend log. A failed cross-account role assumption keeps its own
-answer: 502 `workspace.assume_role_failed`. These envelopes apply to `/api` and
-`/v1` alike, since both share the app's exception handlers.
+answer: 502 `workspace.assume_role_failed`. `/v1` shares the handler and returns
+the same status and `code`, but its `message` is a generic per-code sentence
+(`AWS resource not found`, `AWS rejected the request as invalid`, `AWS access
+denied`, `AWS is throttling this request`, `AWS resource conflict`) and `detail`
+carries only `aws_error_code` — the raw AWS text names the deployment's role ARN,
+instance id and operation, which stay on the console side of the API-key boundary.
 
 ## Console Governance API
 

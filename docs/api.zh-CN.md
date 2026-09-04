@@ -85,8 +85,11 @@ with requests.post(
 `message` 是去掉 botocore 前缀后的 AWS 消息;`detail` 为
 `{"aws_error_code": "<AWS 错误码>", "operation": "<boto 操作名>"}`。其他 AWS 错误码
 (如 `InternalServerException`)仍是未处理的 500,后端日志保留完整堆栈。跨账号角色扮演失败
-保持原有答复:502 `workspace.assume_role_failed`。`/api` 与 `/v1` 共用应用的异常处理器,
-以上信封对两者同样适用。
+保持原有答复:502 `workspace.assume_role_failed`。`/v1` 共用同一处理器,状态码与 `code` 相同,
+但 `message` 是按错误码固定的通用句子(`AWS resource not found`、`AWS rejected the request as
+invalid`、`AWS access denied`、`AWS is throttling this request`、`AWS resource conflict`),
+`detail` 只含 `aws_error_code`——AWS 原文会暴露本部署的角色 ARN、实例 id 与操作名,这些只留在
+API-key 信任边界的控制台一侧。
 
 ## 控制台在线评估 API / Console Online Evaluation API
 
