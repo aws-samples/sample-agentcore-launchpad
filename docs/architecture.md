@@ -1068,6 +1068,26 @@ transition to `Job.log`; `GET /api/jobs/{id}` returns those events and
 state (runtime status, registry record status, eval/trace data) always lives in
 AWS; the ledger holds identifiers and derived progress only.
 
+## Console layout breakpoints
+
+The console is desktop-first but has two deliberate responsive tiers in
+`frontend/src/theme/app.css`. Below **1180 px** every two-column grid
+(`.grid-2`, `.reg-grid`, `.chat-grid`, `.eval-grid`, the governance/observability
+grids and `.mem-grid-3`) collapses to one column and its children get
+`min-width:0`, so a wide child (a `<pre>` curl block, a long key/value row)
+scrolls inside its panel instead of widening the track. Below **720 px** the
+sidebar becomes a horizontal nav strip, the topbar drops its identity text, and
+the page must never scroll horizontally as a whole: wide content scrolls inside
+its own container or wraps. Tables are the main source of width, so the shared
+`DataTable` component and every raw `<table>` that is not a direct child of
+`.panel` sit inside a `.table-scroll` wrapper (`overflow-x:auto;min-width:0`,
+a no-op when the table fits); the `.panel:has(> table)` rule covers tables
+rendered directly under a panel. Toolbars (`.tabs`, `.tabs-actions`), filter
+pickers (`.filters .fsel`, `.fsearch`), the creation stepper (`.steps`) and list
+rows (`.histrow`) wrap or clamp to the panel width at that breakpoint. New
+pages should reuse `DataTable` or the `.table-scroll` wrapper rather than
+setting per-page widths; the ≥ 1180 px layout is unaffected by either tier.
+
 ## Local process topology
 
 `./start.py` starts the two platform processes, waits for every HTTP health

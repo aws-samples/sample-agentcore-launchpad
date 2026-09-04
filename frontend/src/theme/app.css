@@ -191,6 +191,8 @@ main{padding:26px 28px 60px;max-width:1460px;width:100%;min-width:0;margin:0 aut
 .phead .sub{font-family:var(--mono);font-size:10px;color:var(--ink-3)}
 .phead .end{margin-left:auto;display:flex;gap:6px 8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;min-width:0}
 .pbody{padding:16px}
+/* wide tables scroll inside this wrapper instead of widening the page; a no-op when the table fits */
+.table-scroll{overflow-x:auto;min-width:0}
 
 /* chips / status — icon + label always, never color alone */
 .chip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;letter-spacing:.05em;padding:3px 8px;border:1px solid var(--line-2);color:var(--ink-2);white-space:nowrap}
@@ -359,6 +361,8 @@ td.chipcell{min-width:170px}
 .tab .cnt{color:var(--ink-3);margin-left:5px}
 .reg-grid{display:grid;grid-template-columns:1fr 330px;gap:14px}
 .search{display:flex;gap:9px;align-items:center;background:#0E1210;border:1px solid var(--line-2);padding:8px 12px;font-family:var(--mono);font-size:11px;color:var(--ink-3);flex:1;max-width:420px}
+.search input{min-width:0}
+.tabs-actions{margin-left:auto;align-self:center;display:flex;gap:8px}
 .flowchips{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:9.5px;color:var(--ink-3)}
 .flowchips i{font-style:normal;color:var(--line-2)}
 .drawer .sect{padding:13px 16px;border-bottom:1px solid var(--grid)}
@@ -779,7 +783,7 @@ a:focus-visible,button:focus-visible,.btn:focus-visible,.selchip:focus-visible,.
 .loading-line{padding:26px 16px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--ink-3);letter-spacing:.12em;animation:pulse 1.4s ease-in-out infinite}
 footer{margin-top:34px;display:flex;gap:14px;align-items:center;font-family:var(--mono);font-size:9.5px;color:var(--ink-3);letter-spacing:.1em}
 footer .sep{color:var(--line-2)}
-@media(max-width:1180px){.tiles,.tiles.five{grid-template-columns:repeat(2,1fr)}.grid-2,.reg-grid,.chat-grid,.eval-grid,.gov-grid,.gov-demo-grid,.cfg-grid,.obs-grid,.gov-editor-grid,.gov-audit-grid{grid-template-columns:1fr}.methods{grid-template-columns:1fr}.gov-editor-side{position:static}}
+@media(max-width:1180px){.tiles,.tiles.five{grid-template-columns:repeat(2,1fr)}.grid-2,.reg-grid,.chat-grid,.eval-grid,.gov-grid,.gov-demo-grid,.cfg-grid,.obs-grid,.gov-editor-grid,.gov-audit-grid{grid-template-columns:1fr}.methods{grid-template-columns:1fr}.gov-editor-side{position:static}.grid-2>*,.reg-grid>*,.chat-grid>*,.mem-grid-3>*{min-width:0}}
 @media(max-width:720px){
   .auth-topbar{padding:8px 10px}
   .auth-main{padding:24px 12px}
@@ -832,6 +836,16 @@ footer .sep{color:var(--line-2)}
   .gov-operation{align-items:flex-start;flex-wrap:wrap}
   .panel:has(> table){overflow-x:auto}
   .panel > table{min-width:680px}
+  /* toolbars, pickers and list rows wrap or clamp to the panel instead of widening the page */
+  .tabs{flex-wrap:wrap}
+  .tabs-actions{margin-left:0;width:100%;flex-wrap:wrap;padding:8px 0}
+  .search{max-width:none}
+  .search > span{display:none}
+  .filters .fsel,.filters .fsearch{max-width:100%}
+  .histrow{min-width:0}
+  .histrow > span{overflow-wrap:anywhere}
+  .steps{overflow-x:auto}
+  .step{padding:12px 12px;white-space:nowrap}
   .verdict{align-items:flex-start;flex-wrap:wrap}
   .toasts{left:10px;right:10px;max-width:none}
   .confirm-backdrop{padding:12px}

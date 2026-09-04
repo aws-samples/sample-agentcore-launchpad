@@ -478,6 +478,22 @@ OpenInference span,并自动发射同 scope 的结构化 content event 承载输
 `deploying → active`(或 `failed`)。权威的资源状态(runtime 状态、注册记录状态、
 评估/trace 数据)始终存放在 AWS;台账只保存标识符与派生的进度。
 
+## 控制台布局断点
+
+控制台以桌面为主,但在 `frontend/src/theme/app.css` 中有两个刻意设计的响应式
+层级。**1180 px** 以下,所有双栏网格(`.grid-2`、`.reg-grid`、`.chat-grid`、
+`.eval-grid`、治理/可观测网格以及 `.mem-grid-3`)折叠为单栏,其子元素获得
+`min-width:0`,因此过宽的子元素(curl `<pre>` 块、很长的键值行)会在自己的面板内
+滚动,而不是把网格轨道撑宽。**720 px** 以下,侧栏变为横向导航条,顶栏隐藏身份文字,
+并且页面整体绝不允许横向滚动:过宽的内容要在自身容器内滚动或换行。表格是宽度的
+主要来源,因此共享的 `DataTable` 组件以及所有不是 `.panel` 直接子元素的原生
+`<table>` 都包在 `.table-scroll` 容器中(`overflow-x:auto;min-width:0`,表格放得下
+时不产生任何效果);直接位于面板下的表格由 `.panel:has(> table)` 规则覆盖。
+工具栏(`.tabs`、`.tabs-actions`)、筛选选择器(`.filters .fsel`、`.fsearch`)、
+创建向导步骤条(`.steps`)和列表行(`.histrow`)在该断点下换行或收敛到面板宽度。
+新页面应复用 `DataTable` 或 `.table-scroll` 容器,而不是设置页面级宽度;
+两个层级都不影响 ≥ 1180 px 的布局。
+
 ## 本地进程拓扑
 
 `./start.py` 启动平台的两个后台进程,等待全部 HTTP 健康检查通过,并把进程归属

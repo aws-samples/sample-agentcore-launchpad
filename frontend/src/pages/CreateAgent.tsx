@@ -2509,109 +2509,111 @@ function AgentList({
           placeholder={t("create.list.searchPlaceholder")}
         />
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>{t("create.list.colName")}</th>
-            <th>{t("create.list.colMethod")}</th>
-            <th>{t("create.list.colStatus")}</th>
-            <th>{t("create.list.colRev")}</th>
-            <th>{t("create.list.colUpdated")}</th>
-            <th style={{ textAlign: "right" }}>{t("create.list.colActions")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {pageRows.map((a) => (
-            <tr key={a.id}>
-              <td className="pri">{a.name}</td>
-              <td>
-                <div className="agent-method-cell">
-                  <MethodChip method={a.method} />
-                  {a.method === "discovered_runtime" && (
-                    <span className="mono dim">
-                      {String(a.spec.protocol ?? "unknown").toUpperCase()}
-                    </span>
-                  )}
-                </div>
-              </td>
-              <td>
-                <Chip
-                  tone={STATUS_TONE[a.status] ?? "muted"}
-                  icon={a.status === "active" ? "●" : a.status === "failed" ? "✕" : "◐"}
-                >
-                  {t(`status.${a.status}`, a.status.toUpperCase())}
-                </Chip>
-              </td>
-              <td className="mono">
-                {a.method === "discovered_runtime" ? `v${a.version ?? "—"}` : (a.revision ?? "—")}
-              </td>
-              <td className="mono dim">{(a.updated_at ?? "").replace("T", " ").slice(0, 16)}</td>
-              <td>
-                <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                  {a.method !== "discovered_runtime" && (
-                    <button
-                      type="button"
-                      className="rowact"
-                      disabled={!canEdit || a.status === "deploying"}
-                      style={
-                        !canEdit || a.status === "deploying" ? { opacity: 0.35 } : undefined
-                      }
-                      title={permHint(canEdit)}
-                      onClick={() => onEdit(a)}
-                    >
-                      {t("create.list.edit")}
-                    </button>
-                  )}
-                  {a.invoke_capability.eligible && (
-                    <Link className="rowact" to={`/chat?agent=${a.id}`}>
-                      {t("create.list.chat")}
-                    </Link>
-                  )}
-                  {a.method === "harness" && a.status === "active" && (
-                    <button
-                      type="button"
-                      className="rowact"
-                      data-testid={`convert-${a.name}`}
-                      disabled={!canConvert}
-                      style={!canConvert ? { opacity: 0.35 } : undefined}
-                      title={permHint(canConvert)}
-                      onClick={() => onConvert(a.id, a.name)}
-                    >
-                      {t("create.list.convert")}
-                    </button>
-                  )}
-                  {a.deployment && (
-                    <button type="button" className="rowact" onClick={() => onDetails(a)}>
-                      {t("create.list.details")}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="rowact"
-                    disabled={!canDelete}
-                    style={!canDelete ? { opacity: 0.35 } : undefined}
-                    title={permHint(canDelete)}
-                    onClick={() => onDelete(a)}
-                  >
-                    {t(
-                      a.method === "discovered_runtime"
-                        ? "create.list.remove"
-                        : "create.list.delete",
-                    )}
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
-          {rows.length === 0 && (
+      <div className="table-scroll">
+        <table>
+          <thead>
             <tr>
-              <td colSpan={6} className="dim mono" style={{ textAlign: "center" }}>
-                {t(agents.length ? "create.list.noMatch" : "create.list.empty")}
-              </td>
+              <th>{t("create.list.colName")}</th>
+              <th>{t("create.list.colMethod")}</th>
+              <th>{t("create.list.colStatus")}</th>
+              <th>{t("create.list.colRev")}</th>
+              <th>{t("create.list.colUpdated")}</th>
+              <th style={{ textAlign: "right" }}>{t("create.list.colActions")}</th>
             </tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {pageRows.map((a) => (
+              <tr key={a.id}>
+                <td className="pri">{a.name}</td>
+                <td>
+                  <div className="agent-method-cell">
+                    <MethodChip method={a.method} />
+                    {a.method === "discovered_runtime" && (
+                      <span className="mono dim">
+                        {String(a.spec.protocol ?? "unknown").toUpperCase()}
+                      </span>
+                    )}
+                  </div>
+                </td>
+                <td>
+                  <Chip
+                    tone={STATUS_TONE[a.status] ?? "muted"}
+                    icon={a.status === "active" ? "●" : a.status === "failed" ? "✕" : "◐"}
+                  >
+                    {t(`status.${a.status}`, a.status.toUpperCase())}
+                  </Chip>
+                </td>
+                <td className="mono">
+                  {a.method === "discovered_runtime" ? `v${a.version ?? "—"}` : (a.revision ?? "—")}
+                </td>
+                <td className="mono dim">{(a.updated_at ?? "").replace("T", " ").slice(0, 16)}</td>
+                <td>
+                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                    {a.method !== "discovered_runtime" && (
+                      <button
+                        type="button"
+                        className="rowact"
+                        disabled={!canEdit || a.status === "deploying"}
+                        style={
+                          !canEdit || a.status === "deploying" ? { opacity: 0.35 } : undefined
+                        }
+                        title={permHint(canEdit)}
+                        onClick={() => onEdit(a)}
+                      >
+                        {t("create.list.edit")}
+                      </button>
+                    )}
+                    {a.invoke_capability.eligible && (
+                      <Link className="rowact" to={`/chat?agent=${a.id}`}>
+                        {t("create.list.chat")}
+                      </Link>
+                    )}
+                    {a.method === "harness" && a.status === "active" && (
+                      <button
+                        type="button"
+                        className="rowact"
+                        data-testid={`convert-${a.name}`}
+                        disabled={!canConvert}
+                        style={!canConvert ? { opacity: 0.35 } : undefined}
+                        title={permHint(canConvert)}
+                        onClick={() => onConvert(a.id, a.name)}
+                      >
+                        {t("create.list.convert")}
+                      </button>
+                    )}
+                    {a.deployment && (
+                      <button type="button" className="rowact" onClick={() => onDetails(a)}>
+                        {t("create.list.details")}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="rowact"
+                      disabled={!canDelete}
+                      style={!canDelete ? { opacity: 0.35 } : undefined}
+                      title={permHint(canDelete)}
+                      onClick={() => onDelete(a)}
+                    >
+                      {t(
+                        a.method === "discovered_runtime"
+                          ? "create.list.remove"
+                          : "create.list.delete",
+                      )}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={6} className="dim mono" style={{ textAlign: "center" }}>
+                  {t(agents.length ? "create.list.noMatch" : "create.list.empty")}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
       <Pager
         total={rows.length}
         page={currentPage}
