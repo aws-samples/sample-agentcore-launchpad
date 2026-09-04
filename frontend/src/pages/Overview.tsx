@@ -1,18 +1,19 @@
 import type { CSSProperties } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import {
   Chip,
   DataTable,
+  LoadError,
   MethodChip,
   Panel,
   StatTile,
   ViewHead,
 } from "../components";
 import type { AgentInfo, OnlineQuality, OverviewInfo } from "../lib/api";
-import { api } from "../lib/api";
+import { api, errorMessage } from "../lib/api";
 import { LAB_GUIDE_URL } from "../lib/links";
 
 // Two kinds of health row, and they need different empty states:
@@ -34,18 +35,34 @@ const SERVICES = [
   { id: "observability", kind: "bootstrap" },
 ] as const;
 
-function useAgents(intervalMs = 5000): AgentInfo[] | null {
+interface AgentsState {
+  /** `null` until the first answer — never coerced to `[]` on failure. */
+  agents: AgentInfo[] | null;
+  /** Copy for the last failed poll; cleared by the next success. */
+  error: string | null;
+  retry: () => void;
+}
+
+function useAgents(intervalMs = 5000): AgentsState {
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // bumping `tick` restarts the effect: an immediate fetch + a fresh interval
+  const [tick, setTick] = useState(0);
+  const retry = useCallback(() => setTick((n) => n + 1), []);
   useEffect(() => {
     let alive = true;
     const load = () =>
       api
         .listAgents()
         .then((res) => {
-          if (alive) setAgents(res.agents);
+          if (!alive) return;
+          setAgents(res.agents);
+          setError(null);
         })
-        .catch(() => {
-          if (alive) setAgents((prev) => prev ?? []); // backend offline — empty state
+        .catch((err: unknown) => {
+          // Rows already loaded stay on screen (the topbar chip reports the
+          // outage); an empty ledger is only claimed after a 200.
+          if (alive) setError(errorMessage(err));
         });
     load();
     const timer = setInterval(load, intervalMs);
@@ -53,22 +70,35 @@ function useAgents(intervalMs = 5000): AgentInfo[] | null {
       alive = false;
       clearInterval(timer);
     };
-  }, [intervalMs]);
-  return agents;
+  }, [intervalMs, tick]);
+  return { agents, error, retry };
 }
 
-function useOverview(intervalMs = 30000): OverviewInfo | null {
+interface OverviewState {
+  info: OverviewInfo | null;
+  error: string | null;
+  retry: () => void;
+}
+
+function useOverview(intervalMs = 30000): OverviewState {
   const [info, setInfo] = useState<OverviewInfo | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+  const retry = useCallback(() => setTick((n) => n + 1), []);
   useEffect(() => {
     let alive = true;
     const load = () =>
       api
         .getOverview()
         .then((res) => {
-          if (alive) setInfo(res);
+          if (!alive) return;
+          setInfo(res);
+          setError(null);
         })
-        .catch(() => {
-          /* backend offline — tiles keep last values */
+        .catch((err: unknown) => {
+          // tiles keep their last values through an outage; only a never-
+          // loaded overview renders as failed (not as "none yet")
+          if (alive) setError(errorMessage(err));
         });
     load();
     const timer = setInterval(load, intervalMs);
@@ -76,8 +106,8 @@ function useOverview(intervalMs = 30000): OverviewInfo | null {
       alive = false;
       clearInterval(timer);
     };
-  }, [intervalMs]);
-  return info;
+  }, [intervalMs, tick]);
+  return { info, error, retry };
 }
 
 // Separate fetch from /api/overview: this one is a Logs Insights scan (served
@@ -139,10 +169,13 @@ function stageSummary(agent: AgentInfo): string {
 
 export function Overview() {
   const { t } = useTranslation();
-  const agentsState = useAgents();
-  const feedLoading = agentsState === null;
+  const { agents: agentsState, error: agentsError, retry: retryAgents } = useAgents();
+  // never answered 2xx and the last attempt failed ⇒ the account is unknown, not empty
+  const agentsFailed = agentsState === null && agentsError !== null;
+  const feedLoading = agentsState === null && !agentsFailed;
   const agents = agentsState ?? [];
-  const info = useOverview();
+  const { info, error: overviewError, retry: retryOverview } = useOverview();
+  const overviewFailed = info === null && overviewError !== null;
   const quality = useOnlineQuality();
   const now = Date.now();
   const active = agents.filter((a) => a.status === "active").length;
@@ -174,31 +207,35 @@ export function Overview() {
       <div className="tiles five">
         <StatTile
           label={t("overview.tiles.deployedAgents")}
-          value={String(active)}
+          value={agentsFailed ? "—" : String(active)}
           foot={
-            agents.length > active
-              ? t("overview.tiles.inFlight", { count: agents.length - active })
-              : t("overview.tiles.none")
+            agentsFailed
+              ? t("common.loadFailedShort")
+              : agents.length > active
+                ? t("overview.tiles.inFlight", { count: agents.length - active })
+                : t("overview.tiles.none")
           }
           style={{ "--i": 0 } as CSSProperties}
         />
         <StatTile
           label={t("overview.tiles.activeSessions")}
           value={info ? String(info.active_sessions) : "—"}
-          foot={t("overview.tiles.last24h")}
+          foot={overviewFailed ? t("common.loadFailedShort") : t("overview.tiles.last24h")}
           style={{ "--i": 1 } as CSSProperties}
         />
         <StatTile
           label={t("overview.tiles.registryAssets")}
           value={assets ? String(assets.total) : "—"}
           foot={
-            assets && assets.total > 0
-              ? t("overview.tiles.breakdown", {
-                  agents: assets.agents,
-                  tools: assets.tools,
-                  skills: assets.skills,
-                })
-              : t("overview.tiles.breakdownEmpty")
+            overviewFailed
+              ? t("common.loadFailedShort")
+              : assets && assets.total > 0
+                ? t("overview.tiles.breakdown", {
+                    agents: assets.agents,
+                    tools: assets.tools,
+                    skills: assets.skills,
+                  })
+                : t("overview.tiles.breakdownEmpty")
           }
           style={{ "--i": 2 } as CSSProperties}
         />
@@ -210,9 +247,11 @@ export function Overview() {
               : "—"
           }
           foot={
-            info && info.eval_runs > 0
-              ? t("overview.tiles.runCount", { count: info.eval_runs })
-              : t("overview.tiles.noRuns")
+            overviewFailed
+              ? t("common.loadFailedShort")
+              : info && info.eval_runs > 0
+                ? t("overview.tiles.runCount", { count: info.eval_runs })
+                : t("overview.tiles.noRuns")
           }
           style={{ "--i": 3 } as CSSProperties}
         />
@@ -265,6 +304,8 @@ export function Overview() {
               { key: "age", label: t("overview.feed.age") },
             ]}
             isEmpty={agents.length === 0}
+            error={agentsFailed ? agentsError : null}
+            onRetry={retryAgents}
             empty={
               feedLoading ? (
                 <span className="loading-line" style={{ padding: 0 }}>
@@ -314,36 +355,46 @@ export function Overview() {
           pad={false}
           style={{ "--i": 5 } as CSSProperties}
         >
-          <div className="health">
-            {SERVICES.map(({ id: svc, kind }) => {
-              const ready =
-                svc === "runtime" ? active > 0 : Boolean(info?.services[svc]);
-              const detail =
-                svc === "runtime" ? "" : (info?.service_detail[svc] ?? "");
-              // an empty usage row is "you haven't made one yet", not a fault:
-              // neutral LED + the action that creates it
-              const led = ready ? "g" : kind === "usage" ? "n" : "off";
-              return (
-                <div className="row" key={svc} data-testid={`health-${svc}`}>
-                  <span className={`led ${led}`}></span>
-                  <span className="nm">{t(`overview.health.${svc}`)}</span>
-                  <span
-                    className={`st${!ready && kind === "usage" ? " dim" : ""}`}
-                  >
-                    {svc === "runtime" && active > 0
-                      ? t("overview.health.activeCount", { count: active })
-                      : ready
-                        ? `${t("overview.health.ready")}${detail ? ` · ${detail}` : ""}`
-                        : kind === "usage"
-                          ? `${t("overview.health.notCreated")} · ${t(
-                              `overview.health.creates.${svc}`,
-                            )}`
-                          : t("overview.health.pending")}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+          {overviewFailed ? (
+            // the rows would otherwise read "NONE YET" for every service — a
+            // fresh-account story that is false when /api/overview never answered
+            <LoadError
+              message={overviewError}
+              onRetry={retryOverview}
+              data-testid="overview-health-load-error"
+            />
+          ) : (
+            <div className="health">
+              {SERVICES.map(({ id: svc, kind }) => {
+                const ready =
+                  svc === "runtime" ? active > 0 : Boolean(info?.services[svc]);
+                const detail =
+                  svc === "runtime" ? "" : (info?.service_detail[svc] ?? "");
+                // an empty usage row is "you haven't made one yet", not a fault:
+                // neutral LED + the action that creates it
+                const led = ready ? "g" : kind === "usage" ? "n" : "off";
+                return (
+                  <div className="row" key={svc} data-testid={`health-${svc}`}>
+                    <span className={`led ${led}`}></span>
+                    <span className="nm">{t(`overview.health.${svc}`)}</span>
+                    <span
+                      className={`st${!ready && kind === "usage" ? " dim" : ""}`}
+                    >
+                      {svc === "runtime" && active > 0
+                        ? t("overview.health.activeCount", { count: active })
+                        : ready
+                          ? `${t("overview.health.ready")}${detail ? ` · ${detail}` : ""}`
+                          : kind === "usage"
+                            ? `${t("overview.health.notCreated")} · ${t(
+                                `overview.health.creates.${svc}`,
+                              )}`
+                            : t("overview.health.pending")}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </Panel>
       </div>
     </section>

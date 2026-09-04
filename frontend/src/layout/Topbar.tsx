@@ -4,16 +4,17 @@ import { useTranslation } from "react-i18next";
 import { useAuth } from "../auth/auth-context";
 import { LAB_GUIDE_URL } from "../lib/links";
 import { useWorkspace } from "../workspace/workspace-context";
-import type { HealthInfo } from "./useHealth";
+import type { HealthInfo, HealthStatus } from "./useHealth";
 import { LangSwitcher } from "./LangSwitcher";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 interface TopbarProps {
   crumbKey: string;
   health: HealthInfo | null;
+  healthStatus: HealthStatus;
 }
 
-export function Topbar({ crumbKey, health }: TopbarProps) {
+export function Topbar({ crumbKey, health, healthStatus }: TopbarProps) {
   const { t } = useTranslation();
   const { authRequired, username, role, accountExpiresAt, logout } = useAuth();
   const { current } = useWorkspace();
@@ -38,10 +39,20 @@ export function Topbar({ crumbKey, health }: TopbarProps) {
         {t("topbar.console")} / <b>{t(crumbKey).toUpperCase()}</b>
       </div>
       <div className="right">
-        <div className="syschip">
-          <span className="led"></span>
-          {t("topbar.allSystemsGo")}
-        </div>
+        {/* Bound to the /api/health probe: green only while the last probe
+            answered 2xx; "loading" and "down" both read as unreachable so a
+            dead backend never shows a green chip. Same box either way. */}
+        {healthStatus === "ok" ? (
+          <div className="syschip" data-testid="topbar-health" data-status="ok">
+            <span className="led"></span>
+            {t("topbar.allSystemsGo")}
+          </div>
+        ) : (
+          <div className="syschip down" data-testid="topbar-health" data-status={healthStatus}>
+            <span className="led crit"></span>
+            {t("topbar.backendDown")}
+          </div>
+        )}
         <WorkspaceSwitcher />
         {/* The workspace owns the environment; health only backs the chips up
             while the workspace list is unavailable. */}

@@ -402,6 +402,36 @@ async function requestForm<T>(path: string, form: FormData): Promise<T> {
   return parseResponse<T>(path, res);
 }
 
+/**
+ * GET a console endpoint with the same envelope handling as the typed client,
+ * for pages that still fetch by path. A non-2xx or non-JSON answer throws an
+ * `ApiError` instead of being folded into an empty result.
+ */
+export function getJson<T>(path: string): Promise<T> {
+  return request<T>(path);
+}
+
+/** Console copy for a non-2xx `Response` a page fetched itself (same envelope rules). */
+export async function responseMessage(res: Response): Promise<string> {
+  try {
+    await parseResponse<unknown>(res.url, res);
+    return res.statusText;
+  } catch (err) {
+    return errorMessage(err);
+  }
+}
+
+/**
+ * Console copy for a failed load. `ApiError` messages are already localized;
+ * a fetch-level `TypeError` means the request never got an HTTP answer
+ * (backend down, network) and gets its own copy instead of "Failed to fetch".
+ */
+export function errorMessage(err: unknown): string {
+  if (err instanceof ApiError) return err.message;
+  if (err instanceof TypeError) return i18n.t("apiErrors.network");
+  return err instanceof Error ? err.message : String(err);
+}
+
 /* ── governance ────────────────────────────────────────────────────────── */
 
 export type GovernanceGatewayMode = "LOG_ONLY" | "ENFORCE";

@@ -4,9 +4,9 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/auth-context";
-import { Btn, Chip, ConfirmDialog, Markdown, Panel, ViewHead } from "../components";
+import { Btn, Chip, ConfirmDialog, LoadError, Markdown, Panel, ViewHead } from "../components";
 import type { AgentInfo } from "../lib/api";
-import { api } from "../lib/api";
+import { api, errorMessage } from "../lib/api";
 
 interface Message {
   kind: "user" | "agent" | "tool" | "memory" | "error";
@@ -98,6 +98,9 @@ export function Chat() {
   const linkedAgent = searchParams.get("agent");
   const linkedSession = searchParams.get("session");
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  // set when the agent list itself failed to load — "no active agents" is
+  // only claimed after a 200 answered with none
+  const [agentsError, setAgentsError] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -112,7 +115,7 @@ export function Chat() {
   const threadRef = useRef<HTMLDivElement>(null);
   const restoredRef = useRef(false);
 
-  useEffect(() => {
+  const loadAgents = () =>
     api
       .listAgents()
       .then((res) => {
@@ -120,6 +123,7 @@ export function Chat() {
           (a) => a.status === "active" && a.invoke_capability.eligible,
         );
         setAgents(active);
+        setAgentsError(null);
         const linked = linkedAgent && active.find((a) => a.id === linkedAgent);
         if (linked) {
           setAgentId(linked.id);
@@ -130,7 +134,10 @@ export function Chat() {
           if (active.length && !agentId) setAgentId(active[0].id);
         }
       })
-      .catch(() => {});
+      .catch((err: unknown) => setAgentsError(errorMessage(err)));
+
+  useEffect(() => {
+    void loadAgents();
     void loadKeys();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -354,7 +361,11 @@ export function Chat() {
                 }}
                 data-testid="agent-select"
               >
-                {agents.length === 0 && <option value="">{t("chatPage.noAgents")}</option>}
+                {agents.length === 0 && (
+                  <option value="">
+                    {agentsError ? t("common.loadFailedShort") : t("chatPage.noAgents")}
+                  </option>
+                )}
                 {agents.map((a) => (
                   <option key={a.id} value={a.id} style={{ background: "#141816" }}>
                     {a.name}
@@ -380,7 +391,14 @@ export function Chat() {
           style={{ "--i": 0 } as CSSProperties}
         >
           <div className="thread" ref={threadRef} data-testid="thread">
-            {messages.length === 0 && (
+            {agentsError && agents.length === 0 && (
+              <LoadError
+                message={agentsError}
+                onRetry={() => void loadAgents()}
+                data-testid="chat-agents-load-error"
+              />
+            )}
+            {messages.length === 0 && !(agentsError && agents.length === 0) && (
               <div className="empty">{t("chatPage.emptyThread")}</div>
             )}
             {messages.map((msg, i) =>

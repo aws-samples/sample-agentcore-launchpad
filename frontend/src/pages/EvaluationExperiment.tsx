@@ -10,6 +10,7 @@ import {
   Chip,
   ConfirmDialog,
   DiffPanes,
+  LoadError,
   Pager,
   Panel,
   StageCard,
@@ -19,7 +20,7 @@ import {
 } from "../components";
 import { EvaluationNav } from "../components/EvaluationNav";
 import type { AgentInfo, RecommendProviderInfo } from "../lib/api";
-import { api } from "../lib/api";
+import { api, errorMessage, responseMessage } from "../lib/api";
 import { CUSTOM_MODEL_OPTION } from "../lib/models";
 import {
   ACTIVE_RUN_STATUSES,
@@ -439,14 +440,20 @@ function ConfigurationExperimentView() {
   const [confirmCleanup, setConfirmCleanup] = useState(false);
   const [confirmPromote, setConfirmPromote] = useState(false);
 
+  // the experiments list failed to load (cleared by the next successful poll)
+  const [listError, setListError] = useState<string | null>(null);
   const refresh = useCallback(async () => {
     try {
       const res = await fetch("/api/experiments");
       if (res.ok) {
         setExperiments(((await res.json()) as { experiments: ExperimentInfo[] }).experiments);
+        setListError(null);
+      } else {
+        setListError(await responseMessage(res));
       }
-    } catch {
-      /* backend offline */
+    } catch (err) {
+      // backend unreachable — the table renders the error, never "NO EXPERIMENTS"
+      setListError(errorMessage(err));
     }
   }, []);
 
@@ -2389,7 +2396,19 @@ function ConfigurationExperimentView() {
                   </td>
                 </tr>
               ))}
-              {experiments.length === 0 && (
+              {experiments.length === 0 && listError !== null && (
+                <tr>
+                  <td colSpan={6}>
+                    <LoadError
+                      message={listError}
+                      onRetry={() => void refresh()}
+                      inline
+                      data-testid="experiments-load-error"
+                    />
+                  </td>
+                </tr>
+              )}
+              {experiments.length === 0 && listError === null && (
                 <tr>
                   <td colSpan={6} className="dim mono" style={{ textAlign: "center" }}>
                     {t("evalPage.experiment.list.empty")}

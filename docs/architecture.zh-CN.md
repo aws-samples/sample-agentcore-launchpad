@@ -478,6 +478,26 @@ OpenInference span,并自动发射同 scope 的结构化 content event 承载输
 `deploying → active`(或 `failed`)。权威的资源状态(runtime 状态、注册记录状态、
 评估/trace 数据)始终存放在 AWS;台账只保存标识符与派生的进度。
 
+## 控制台故障态(后端不可达)
+
+控制台绝不会把"读不到"呈现为"账户为空"。两条规则是关键:
+
+- **顶栏健康芯片绑定 `/api/health`。** `useHealth` 在挂载时、每 30 s、以及 `window`
+  的 `online` / `focus` 事件时立即探测,并返回
+  `{ health, status: "loading" | "ok" | "down", refresh }`。`Topbar` 只在
+  `status === "ok"` 时渲染绿色 LED 与 `topbar.allSystemsGo`;探测失败(无响应、5xx、
+  开发代理返回的非 JSON 正文)或尚未返回时,渲染同尺寸的芯片、`crit` LED 与
+  `topbar.backendDown`。上一次成功的载荷会在故障期间保留,后端重启时区域 / 账户芯片
+  不会变空。
+- **列表加载失败渲染共享的错误态,而不是空态文案。**
+  `components/LoadError.tsx`(也可通过 `DataTable` 的 `error` / `onRetry` 属性使用)
+  是唯一的"加载失败:… · 重试"区块;概览(指标卡、发布动态、健康行)、注册表、知识库、
+  对话(智能体选择器)、评估运行与实验列表都使用它,与既有的可观测 / 治理错误区块一致。
+  "创建你的第一个 …" / "暂无记录" 文案只在 200 返回空列表后渲染;已加载过的行在之后的
+  轮询失败时保留,重试按钮会重新发起请求。按路径 fetch 的页面使用 `lib/api.ts` 中的
+  `getJson` / `responseMessage` / `errorMessage`,使消息遵循 `apiErrors.*` 本地化规则
+  (未收到 HTTP 响应的请求对应 `apiErrors.network`)。
+
 ## 本地进程拓扑
 
 `./start.py` 启动平台的两个后台进程,等待全部 HTTP 健康检查通过,并把进程归属
