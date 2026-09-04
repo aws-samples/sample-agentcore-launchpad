@@ -488,6 +488,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
         <label>{t("evalPage.evaluators.model")}</label>
         <select
           className="input"
+          aria-label={t("evalPage.evaluators.model")}
           value={draft.model_id}
           onChange={(e) => setDraft({ ...draft, model_id: e.target.value })}
         >
@@ -505,6 +506,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
         <label>{t("evalPage.evaluators.description")}</label>
         <input
           className="input"
+          aria-label={t("evalPage.evaluators.description")}
           value={draft.description}
           onChange={(e) => setDraft({ ...draft, description: e.target.value })}
         />
@@ -515,6 +517,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
         <textarea
           ref={taRef}
           className="input mono"
+          aria-label={t("evalPage.evaluators.instructions")}
           rows={7}
           style={{ fontSize: 11, lineHeight: 1.5, resize: "vertical" }}
           value={draft.instructions}

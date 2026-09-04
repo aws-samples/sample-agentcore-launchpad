@@ -1151,12 +1151,18 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
                 <>
                   <div className="field">
                     <label>{t("evalPage.datasets.name")}</label>
-                    <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+                    <input
+                      className="input"
+                      aria-label={t("evalPage.datasets.name")}
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                    />
                   </div>
                   <div className="field">
                     <label>{t("evalPage.datasets.description")}</label>
                     <input
                       className="input"
+                      aria-label={t("evalPage.datasets.description")}
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
                     />

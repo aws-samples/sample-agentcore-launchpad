@@ -9,6 +9,7 @@ import { Evaluation } from "./pages/Evaluation";
 import { Governance } from "./pages/Governance";
 import { KnowledgeBases } from "./pages/KnowledgeBases";
 import { Memory } from "./pages/Memory";
+import { NotFound } from "./pages/NotFound";
 import { Observability } from "./pages/Observability";
 import { Overview } from "./pages/Overview";
 import { Registry } from "./pages/Registry";
@@ -37,6 +38,9 @@ export default function App() {
               <Route path="governance" element={<Governance />} />
               <Route path="users" element={<Users />} />
               <Route path="workspaces" element={<Workspaces />} />
+              {/* Catch-all stays INSIDE the Shell group so an unknown URL keeps
+                  the sidebar/topbar/footer instead of a bare background grid. */}
+              <Route path="*" element={<NotFound />} />
             </Route>
           </Routes>
         </WorkspaceProvider>

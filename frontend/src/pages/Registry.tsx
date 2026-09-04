@@ -4,8 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
+import { Btn, Chip, ConfirmDialog, LoadError, Panel, useToast, ViewHead } from "../components";
 import type { ChipTone } from "../components";
+import { ApiError, errorMessage, getJson } from "../lib/api";
 import { A2ADemoView } from "./registry/A2ADemoView";
 import { EditView } from "./registry/EditView";
 import { RegisterView } from "./registry/RegisterView";
@@ -136,6 +137,7 @@ export function Registry() {
   const view = searchParams.get("view");
   const [records, setRecords] = useState<RegistryRecord[] | null>(null);
   const [unavailable, setUnavailable] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [tab, setTab] = useState<RecordType>("A2A");
   const [selected, setSelected] = useState<RegistryRecord | null>(null);
   const [query, setQuery] = useState("");
@@ -148,24 +150,20 @@ export function Registry() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch("/api/registry/records");
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as {
-          code?: string;
-          message?: string;
-        };
-        if (res.status === 503 && body.code === "registry.unavailable") {
-          setUnavailable(body.message ?? t("registry.unavailableBody"));
-        }
+      const body = await getJson<{ records: RegistryRecord[] }>("/api/registry/records");
+      setUnavailable(null);
+      setLoadError(null);
+      setRecords(body.records);
+    } catch (err) {
+      // 503 registry.unavailable = the account has no Registry — a distinct
+      // full-page state. Anything else (backend down, 5xx) is a failed load:
+      // the table says so instead of claiming there are no records.
+      if (err instanceof ApiError && err.code === "registry.unavailable") {
+        setUnavailable(err.message || t("registry.unavailableBody"));
         setRecords((prev) => prev ?? []);
         return;
       }
-      const body = (await res.json()) as { records: RegistryRecord[] };
-      setUnavailable(null);
-      setRecords(body.records);
-    } catch {
-      setUnavailable(t("registry.unavailableBody"));
-      setRecords((prev) => prev ?? []); // backend offline — show empty state
+      setLoadError(errorMessage(err));
     }
   }, [t]);
 
@@ -364,6 +362,8 @@ export function Registry() {
   const loading = records === null;
   const skillMeta = selected ? parseSkillDefinition(selected) : null;
   const loaded = records ?? [];
+  // rows that were loaded once stay visible through a later failed poll
+  const failed = loadError !== null && loaded.length === 0;
   const visible = searching ? loaded : loaded.filter((r) => r.type === tab);
   const counts = (type: RecordType) => loaded.filter((r) => r.type === type).length;
 
@@ -486,14 +486,26 @@ export function Registry() {
                     </tr>
                   );
                 })}
-                {loading && (
+                {loading && !failed && (
                   <tr>
                     <td colSpan={4} className="loading-line">
                       {t("common.loading")}
                     </td>
                   </tr>
                 )}
-                {!loading && visible.length === 0 && (
+                {failed && (
+                  <tr>
+                    <td colSpan={4}>
+                      <LoadError
+                        message={loadError}
+                        onRetry={() => void load()}
+                        inline
+                        data-testid="registry-load-error"
+                      />
+                    </td>
+                  </tr>
+                )}
+                {!loading && !failed && visible.length === 0 && (
                   <tr>
                     <td colSpan={4} className="dim mono" style={{ textAlign: "center" }}>
                       {t("registry.empty")}

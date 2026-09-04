@@ -271,6 +271,18 @@ public  /v1  ──┘        │
 公开 `/v1` 接口额外加了 `X-Api-Key` 鉴权(密钥以 sha256 哈希存储);分派之后的
 一切与控制台路径完全相同。
 
+## 控制台路由
+
+控制台只有一张 `react-router-dom` 路由表(`frontend/src/App.tsx`),全部嵌在同一个
+`<Shell />` 元素之下,由它持有侧栏、顶栏(面包屑)和页脚。各模块是顶层路由,模块内
+的子页面走 `?view=` 查询参数,不用嵌套路由。路由表末尾有一条位于 Shell 组**内部**的
+`path="*"` 兜底路由:未匹配的 URL(拼写错误、指向已下线子路由的旧书签)会渲染
+`pages/NotFound.tsx` — kicker、标题、等宽字体显示的请求路径,以及返回总览的主按钮 —
+并保留整套外壳,而不是只剩背景网格。面包屑在 `layout/Shell.tsx` 中推导:路径若与
+`ROUTE_PATHS`(`layout/nav.ts`,与路由表保持一致)中任何一项都不匹配,就使用
+`nav.notFound`;否则取最长前缀匹配的导航项。新增路由时,`<Route>` 表和 `ROUTE_PATHS`
+都要加。
+
 ## 控制台认证与账户
 
 控制台有一个可选的本地账户网关,与 Gateway/Cedar 演示使用的 Cognito 用户以及
@@ -493,6 +505,26 @@ OpenInference span,并自动发射同 scope 的结构化 content event 承载输
 创建向导步骤条(`.steps`)和列表行(`.histrow`)在该断点下换行或收敛到面板宽度。
 新页面应复用 `DataTable` 或 `.table-scroll` 容器,而不是设置页面级宽度;
 两个层级都不影响 ≥ 1180 px 的布局。
+
+## 控制台故障态(后端不可达)
+
+控制台绝不会把"读不到"呈现为"账户为空"。两条规则是关键:
+
+- **顶栏健康芯片绑定 `/api/health`。** `useHealth` 在挂载时、每 30 s、以及 `window`
+  的 `online` / `focus` 事件时立即探测,并返回
+  `{ health, status: "loading" | "ok" | "down", refresh }`。`Topbar` 只在
+  `status === "ok"` 时渲染绿色 LED 与 `topbar.allSystemsGo`;探测失败(无响应、5xx、
+  开发代理返回的非 JSON 正文)或尚未返回时,渲染同尺寸的芯片、`crit` LED 与
+  `topbar.backendDown`。上一次成功的载荷会在故障期间保留,后端重启时区域 / 账户芯片
+  不会变空。
+- **列表加载失败渲染共享的错误态,而不是空态文案。**
+  `components/LoadError.tsx`(也可通过 `DataTable` 的 `error` / `onRetry` 属性使用)
+  是唯一的"加载失败:… · 重试"区块;概览(指标卡、发布动态、健康行)、注册表、知识库、
+  对话(智能体选择器)、评估运行与实验列表都使用它,与既有的可观测 / 治理错误区块一致。
+  "创建你的第一个 …" / "暂无记录" 文案只在 200 返回空列表后渲染;已加载过的行在之后的
+  轮询失败时保留,重试按钮会重新发起请求。按路径 fetch 的页面使用 `lib/api.ts` 中的
+  `getJson` / `responseMessage` / `errorMessage`,使消息遵循 `apiErrors.*` 本地化规则
+  (未收到 HTTP 响应的请求对应 `apiErrors.network`)。
 
 ## 本地进程拓扑
 

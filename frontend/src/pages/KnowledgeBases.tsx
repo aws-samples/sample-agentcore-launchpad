@@ -3,8 +3,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { Btn, Chip, Panel, ViewHead } from "../components";
+import { Btn, Chip, LoadError, Panel, ViewHead } from "../components";
 import type { ChipTone } from "../components";
+import { errorMessage, getJson } from "../lib/api";
 import { CreateView } from "./knowledge/CreateView";
 import { DetailView } from "./knowledge/DetailView";
 
@@ -88,18 +89,16 @@ export function KnowledgeBases() {
   const [searchParams, setSearchParams] = useSearchParams();
   const view = searchParams.get("view");
   const [items, setItems] = useState<KnowledgeBaseSummary[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch("/api/knowledge-bases");
-      if (!res.ok) {
-        setItems((prev) => prev ?? []);
-        return;
-      }
-      const body = (await res.json()) as { items: KnowledgeBaseSummary[] };
+      const body = await getJson<{ items: KnowledgeBaseSummary[] }>("/api/knowledge-bases");
       setItems(body.items ?? []);
-    } catch {
-      setItems((prev) => prev ?? []); // backend offline — show empty state
+      setLoadError(null);
+    } catch (err) {
+      // never `[]` on failure — "No knowledge bases yet" is only true after a 200
+      setLoadError(errorMessage(err));
     }
   }, []);
 
@@ -132,6 +131,7 @@ export function KnowledgeBases() {
 
   const loading = items === null;
   const rows = items ?? [];
+  const failed = loadError !== null && rows.length === 0;
 
   return (
     <section>
@@ -194,14 +194,26 @@ export function KnowledgeBases() {
                   <td className="mono dim">{kb.updated_at?.slice(0, 19) ?? "—"}</td>
                 </tr>
               ))}
-              {loading && (
+              {loading && !failed && (
                 <tr>
                   <td colSpan={5} className="loading-line">
                     {t("common.loading")}
                   </td>
                 </tr>
               )}
-              {!loading && rows.length === 0 && (
+              {failed && (
+                <tr>
+                  <td colSpan={5}>
+                    <LoadError
+                      message={loadError}
+                      onRetry={() => void load()}
+                      inline
+                      data-testid="kb-load-error"
+                    />
+                  </td>
+                </tr>
+              )}
+              {!loading && !failed && rows.length === 0 && (
                 <tr>
                   <td colSpan={5} style={{ padding: "26px 16px" }}>
                     <div className="note" style={{ alignItems: "flex-start" }}>

@@ -7,7 +7,8 @@
     "labGuideTitle": "在 AWS Workshop Studio 打开动手实验指南",
     "workspaceLabel": "工作区",
     "workspaceTitle": "当前所有请求所指向的账户与区域",
-    "workspaceManage": "管理工作区"
+    "workspaceManage": "管理工作区",
+    "backendDown": "后端不可达"
   },
   "auth": {
     "kicker": "// 操作员访问",
@@ -87,7 +88,17 @@
     "memory": "记忆",
     "users": "用户管理",
     "workspaces": "工作区",
+    "notFound": "页面不存在",
     "administration": "管理"
+  },
+  "notFound": {
+    "kicker": "控制台 // 404",
+    "title": "页面不存在",
+    "panelTitle": "此地址下没有页面",
+    "panelSub": "未知路由",
+    "body": "控制台里没有这个页面——链接可能已失效，或地址输入有误。",
+    "pathLabel": "请求的路径",
+    "backToOverview": "返回总览 →"
   },
   "sidebar": {
     "region": "区域",
@@ -341,7 +352,7 @@
       "agentResources": "Agent 资源",
       "agentResourcesV": "boto3 快速通道 · 台账跟踪",
       "onSuccess": "成功后",
-      "onSuccessV": "自动注册 → Registry(第 7 阶段)"
+      "onSuccessV": "自动注册 → Registry"
     },
     "sequence": {
       "title": "部署序列",
@@ -1661,7 +1672,8 @@
     "skill_lab.publish_unsupported": "该作业无法发布技能 —— 发布需要一次成功的训练运行，且其技能来自 Registry 记录。",
     "skill_lab.publish_no_change": "训练没有接受任何修改，无内容可发布。",
     "skill_lab.asset_request_too_large": "多部分任务文件上传超过 101 MiB 请求限制。",
-    "skill_lab.taskset_cleanup_failed": "任务集资源清理失败。任务集已保留，可重试删除。"
+    "skill_lab.taskset_cleanup_failed": "任务集资源清理失败。任务集已保留，可重试删除。",
+    "network": "无法连接后端 — 没有收到 HTTP 响应"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",
@@ -1672,8 +1684,9 @@
     "send": "发送",
     "toolCalled": "已调用工具",
     "memorySaved": "memory.create_event — 本轮已存入短期记忆",
+    "agentSelectLabel": "Agent",
     "traceTitle": "链路追踪",
-    "tracePlaceholder": "端到端链路追踪将随可观测性上线(第 9 阶段)",
+    "tracePlaceholder": "发送一条消息 — 链路追踪栏将加载本会话的 SPAN",
     "memoryTitle": "会话记忆",
     "shortTermEvents": "短期事件",
     "longTermRecords": "长期记录",
@@ -3000,7 +3013,10 @@
     "cancel": "取消",
     "loading": "加载中 ▸",
     "actionFailed": "操作失败:{{msg}}",
-    "close": "关闭"
+    "close": "关闭",
+    "retry": "重试",
+    "loadFailed": "加载失败:{{msg}}",
+    "loadFailedShort": "加载失败"
   },
   "memoryPage": {
     "kicker": "// 上下文层",

@@ -39,3 +39,25 @@ export const ADMIN_NAV_ENTRIES: NavEntry[] = [
 
 /** Every routable entry, for breadcrumb resolution. */
 export const ALL_NAV_ENTRIES: NavEntry[] = [...NAV_ENTRIES, ...ADMIN_NAV_ENTRIES];
+
+/**
+ * Every path the router in `App.tsx` matches, in react-router pattern form.
+ * Keep it in step with the `<Route>` table there: the Shell's breadcrumb falls
+ * back to `nav.notFound` when the current pathname matches none of these, which
+ * is exactly when the catch-all route renders the not-found view.
+ */
+export const ROUTE_PATHS: string[] = [
+  "/",
+  "/create",
+  "/create/studio",
+  "/registry",
+  "/knowledge-bases",
+  "/memory",
+  "/chat",
+  "/observability",
+  "/evaluation",
+  "/skill-lab",
+  "/governance",
+  "/users",
+  "/workspaces",
+];

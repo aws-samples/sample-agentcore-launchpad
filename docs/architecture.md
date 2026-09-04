@@ -626,6 +626,20 @@ explicit operational tooling; normal bootstrap never calls it. The console's
 delivery-status probe is read-only, and a missing channel is an expected state
 until the operator opts into detailed Policy spans.
 
+## Console routing
+
+The console is a single `react-router-dom` route table in `frontend/src/App.tsx`,
+nested under one `<Shell />` element that owns the sidebar, topbar (breadcrumb)
+and footer. Modules are top-level routes; their sub-surfaces are `?view=` query
+params, never nested routes. The table ends with a `path="*"` catch-all **inside**
+the Shell group, so an unrouted URL (typo, stale bookmark to a retired sub-route)
+renders `pages/NotFound.tsx` — kicker, heading, the requested pathname in mono
+and a primary link back to the Overview — with the chrome intact instead of a bare
+background grid. The breadcrumb is derived in `layout/Shell.tsx`: a pathname that
+matches none of `ROUTE_PATHS` (`layout/nav.ts`, mirrors the route table) gets the
+`nav.notFound` crumb; otherwise the longest-prefix nav entry labels it. Adding a
+route means adding it to both the `<Route>` table and `ROUTE_PATHS`.
+
 ## Console authentication and accounts
 
 The platform console has an optional local account gate, independent from both
@@ -1087,6 +1101,31 @@ pickers (`.filters .fsel`, `.fsearch`), the creation stepper (`.steps`) and list
 rows (`.histrow`) wrap or clamp to the panel width at that breakpoint. New
 pages should reuse `DataTable` or the `.table-scroll` wrapper rather than
 setting per-page widths; the ≥ 1180 px layout is unaffected by either tier.
+
+## Console failure states (backend unreachable)
+
+The console never reports an empty account it could not read. Two rules are
+load-bearing:
+
+- **The topbar health chip is bound to `/api/health`.** `useHealth` probes on
+  mount, every 30 s, and immediately on `window` `online` / `focus`, and returns
+  `{ health, status: "loading" | "ok" | "down", refresh }`. `Topbar` renders the
+  green LED with `topbar.allSystemsGo` only while `status === "ok"`; a probe that
+  failed (no answer, 5xx, non-JSON body from the dev proxy) or has not answered yet
+  renders the same-sized chip with a `crit` LED and `topbar.backendDown`. The last
+  successful payload is kept through an outage so the region / account chips do not
+  blank while the backend restarts.
+- **A failed list load renders the shared error state, not the empty copy.**
+  `components/LoadError.tsx` (also reachable through `DataTable`'s `error` /
+  `onRetry` props) is the one "Failed to load: … · RETRY" block; Overview (tiles,
+  launch feed, health rows), Registry, Knowledge Bases, Chat (agent picker),
+  Evaluation runs and Experiments all use it, matching the older Observability /
+  Governance blocks. "Create your first …" / "NO RECORDS" copy is only rendered
+  after a 200 answered with an empty list; rows that loaded once stay visible
+  through a later failed poll, and Retry re-issues the fetch. Pages that fetch by
+  path use `getJson` / `responseMessage` / `errorMessage` from `lib/api.ts` so the
+  message follows the `apiErrors.*` localisation rules (`apiErrors.network` for a
+  request that never got an HTTP answer).
 
 ## Local process topology
 
