@@ -1155,6 +1155,25 @@ load-bearing:
   message follows the `apiErrors.*` localisation rules (`apiErrors.network` for a
   request that never got an HTTP answer).
 
+## Disabled primary actions explain what is missing
+
+A form's primary action is never *just* dimmed. The shared `components/Btn.tsx`
+takes an optional `disabledReason`; while the button is `disabled` and a reason is
+set, it renders `title={reason}` plus a sibling `.btn-hint` (mono, `--ink-3`, the
+weight of `.dim` helper text) that the button points at through
+`aria-describedby`. When the button is enabled — or no reason is given — no hint
+element exists. The reason is derived from the *same* predicates that compute
+`disabled`, read in order so the first unmet one is named; the prop never changes
+*when* a button is disabled, only what the console says about it. Every reason is
+an i18n key (en + zh-CN). Forms wired today: Registry Register (`▲ REGISTER` —
+name rule / MCP URL / SKILL.md), Registry Edit (`▲ SAVE` — no changes / invalid
+bundle), Knowledge Base Create (`▲ CREATE` — name rule / no files / no bucket),
+Strands Studio (`▲ Publish` — no nodes; the publish dialog's name rule), Online
+Evaluation Create (`▸ CREATE` — no agent / no evaluator / no insight) and the
+Workspace detail `RUN BOOTSTRAP` (hub workspace / already running / already
+READY). Busy states (`saving`, `busy`) deliberately carry no reason: the label
+already says what is happening.
+
 ## Local process topology
 
 `./start.py` starts the two platform processes, waits for every HTTP health

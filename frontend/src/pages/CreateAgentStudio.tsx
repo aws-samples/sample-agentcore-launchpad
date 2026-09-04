@@ -506,7 +506,12 @@ export function CreateAgentStudio() {
           <Btn onClick={() => setConfirmClear(true)} disabled={nodes.length === 0 && edges.length === 0}>
             {t("studio.toolbar.clearCanvas")}
           </Btn>
-          <Btn primary onClick={openPublish} disabled={!canPublish}>
+          <Btn
+            primary
+            onClick={openPublish}
+            disabled={!canPublish}
+            disabledReason={canPublish ? undefined : t("studio.toolbar.publishDisabledNoNodes")}
+          >
             ▲ {editing ? t("studio.toolbar.rePublish") : t("studio.toolbar.publish")}
           </Btn>
         </div>
@@ -704,7 +709,12 @@ export function CreateAgentStudio() {
 
             <div className="confirm-actions" style={{ marginTop: 16 }}>
               <Btn onClick={() => setPublishOpen(false)}>{t("common.cancel")}</Btn>
-              <Btn primary disabled={!nameValid} onClick={() => void doPublish()}>
+              <Btn
+                primary
+                disabled={!nameValid}
+                disabledReason={nameValid ? undefined : t("studio.publish.disabledName")}
+                onClick={() => void doPublish()}
+              >
                 ▲ {editing ? t("studio.toolbar.rePublish") : t("studio.toolbar.publish")}
               </Btn>
             </div>

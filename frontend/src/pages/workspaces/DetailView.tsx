@@ -405,6 +405,17 @@ export function WorkspaceDetailView({
     !bootstrapping &&
     row.bootstrap_status !== "ready" &&
     !busy;
+  // Read in `canBootstrap`'s order: the first unmet predicate names the reason.
+  const bootstrapDisabledReason =
+    row === null
+      ? undefined
+      : row.is_default
+        ? t("workspacesPage.detail.bootstrapDisabledHub")
+        : bootstrapping
+          ? t("workspacesPage.detail.bootstrapDisabledRunning")
+          : row.bootstrap_status === "ready"
+            ? t("workspacesPage.detail.bootstrapDisabledReady")
+            : undefined;
   // Only registration residue is purgeable: a READY environment is in use, and
   // retiring one means deleting its AWS resources, which purge does not do.
   const canPurge =
@@ -507,6 +518,7 @@ export function WorkspaceDetailView({
             <Btn
               primary
               disabled={!canBootstrap}
+              disabledReason={bootstrapDisabledReason}
               onClick={() => void startBootstrap()}
               data-testid="workspace-bootstrap-btn"
             >

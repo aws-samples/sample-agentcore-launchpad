@@ -33,6 +33,11 @@ export function CreateView({ onBack, onCreated }: CreateViewProps) {
   const sourceValid =
     mode === "upload" ? files.length > 0 : bucket.trim().length > 0;
   const canSubmit = nameValid && sourceValid && !busy;
+  const disabledReason = !nameValid
+    ? t("knowledge.create.disabledName")
+    : !sourceValid
+      ? t(mode === "upload" ? "knowledge.create.disabledFiles" : "knowledge.create.disabledBucket")
+      : undefined;
 
   const submit = async () => {
     setBusy(true);
@@ -156,7 +161,13 @@ export function CreateView({ onBack, onCreated }: CreateViewProps) {
               </div>
             )}
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
-              <Btn primary disabled={!canSubmit} onClick={() => void submit()} data-testid="kb-submit">
+              <Btn
+                primary
+                disabled={!canSubmit}
+                disabledReason={disabledReason}
+                onClick={() => void submit()}
+                data-testid="kb-submit"
+              >
                 ▲ {busy ? t("knowledge.create.creating") : t("knowledge.create.submit")}
               </Btn>
             </div>
