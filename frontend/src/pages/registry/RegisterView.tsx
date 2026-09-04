@@ -32,9 +32,15 @@ export function RegisterView({ onDone, onBack, initialType = "MCP" }: RegisterVi
   const [regMd, setRegMd] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const regValid =
-    /^[a-z][a-z0-9-]{2,63}$/.test(regName) &&
-    (regType === "MCP" ? /^https?:\/\/.+/.test(regUrl) : regMd.trim().length > 0);
+  const regNameValid = /^[a-z][a-z0-9-]{2,63}$/.test(regName);
+  const regBodyValid = regType === "MCP" ? /^https?:\/\/.+/.test(regUrl) : regMd.trim().length > 0;
+  const regValid = regNameValid && regBodyValid;
+  // Same predicates as `regValid`, read in order: the first unmet one is the hint.
+  const regDisabledReason = !regNameValid
+    ? t("registry.register.disabledName")
+    : !regBodyValid
+      ? t(regType === "MCP" ? "registry.register.disabledUrl" : "registry.register.disabledMd")
+      : undefined;
 
   const submitRegistration = async () => {
     setBusy(true);
@@ -157,6 +163,7 @@ export function RegisterView({ onDone, onBack, initialType = "MCP" }: RegisterVi
                   <Btn
                     primary
                     disabled={busy || !regValid}
+                    disabledReason={regDisabledReason}
                     onClick={() => void submitRegistration()}
                   >
                     ▲ {t("registry.register.submit")}

@@ -1252,6 +1252,15 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
               ? draft.insights.length === 0
               : draft.evaluators.length === 0)
           }
+          disabledReason={
+            !agentId
+              ? t("evalPage.online.form.disabledAgent")
+              : draft.mode === "insights" && draft.insights.length === 0
+                ? t("evalPage.online.form.disabledInsights")
+                : draft.mode !== "insights" && draft.evaluators.length === 0
+                  ? t("evalPage.online.form.disabledEvaluators")
+                  : undefined
+          }
           onClick={() => void create()}
         >
           ▸ {t("evalPage.online.form.create")}

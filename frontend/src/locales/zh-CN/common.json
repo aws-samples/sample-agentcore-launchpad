@@ -540,7 +540,10 @@
         "s3": "批准——发布为 APPROVED",
         "s4": "挂载——只有 APPROVED 记录可挂载到 Agent",
         "note": "技能会上传到制品桶（SKILL.md ≤ 100KB，bundle ≤ 50MB）；MCP 记录指向远程服务器 URL。"
-      }
+      },
+      "disabledName": "名称需 3–64 个字符：小写字母、数字、连字符，且以字母开头",
+      "disabledUrl": "请输入 MCP 服务器 URL（http:// 或 https://）",
+      "disabledMd": "请添加 SKILL.md"
     },
     "edit": {
       "pageTitle": "编辑记录 · {{name}}",
@@ -574,7 +577,9 @@
       "saved": "“{{name}}”已更新。",
       "stagingExpired": "上传预览已过期，请重新上传 ZIP。",
       "loadFailed": "加载记录失败：{{msg}}",
-      "notFound": "未找到该记录。"
+      "notFound": "未找到该记录。",
+      "disabledNoChanges": "没有可保存的更改",
+      "disabledInvalidBundle": "上传的 bundle 未通过校验，请先上传有效的 ZIP"
     },
     "deleted": "已删除“{{name}}”。",
     "confirmDelete": {
@@ -674,7 +679,10 @@
         "s3": "验证——用检索 Playground 确认返回的 chunk 与 score 质量",
         "s4": "挂载——在创建 Agent 向导中把 ACTIVE 的 KB 挂载到 harness Agent",
         "note": "托管 KB 为你处理向量库、embedding 与重排,无需配置基础设施。v1 仅支持 S3 数据源。"
-      }
+      },
+      "disabledName": "名称需 1–100 个字符：仅含字母、数字、连字符、下划线",
+      "disabledFiles": "请至少添加一个待上传文件",
+      "disabledBucket": "请输入 S3 存储桶名称"
     },
     "detail": {
       "meta": "托管知识库",
@@ -1955,7 +1963,10 @@
         "insights": "洞察类型 — 1 … {{max}}",
         "insightsHint": "每个被抽样的会话都会按所选洞察类型分析并聚类成报告。洞察模式下 AWS 默认抽样率为 100%——每个会话都会消耗评审 token;流量大的 Agent 请调低。",
         "frequencies": "报告周期 — 可选",
-        "frequenciesHint": "AWS 会按每个周期、对该周期内被抽样的会话生成一份定时报告。不选周期时只有按需报告(立即生成报告)。"
+        "frequenciesHint": "AWS 会按每个周期、对该周期内被抽样的会话生成一份定时报告。不选周期时只有按需报告(立即生成报告)。",
+        "disabledAgent": "请选择一个 Agent",
+        "disabledEvaluators": "请至少选择一个评估器",
+        "disabledInsights": "请至少选择一个洞察"
       },
       "err": {
         "agent": "请先选择 Agent",
@@ -2714,7 +2725,8 @@
       "localChat": "本地调试",
       "debugDisabled": "请先修复代码生成错误再开始本地调试。",
       "regen": "从画布重新生成",
-      "regenHint": "丢弃 AI 修复的代码,从画布重新生成。"
+      "regenHint": "丢弃 AI 修复的代码,从画布重新生成。",
+      "publishDisabledNoNodes": "请至少添加一个节点"
     },
     "samples": {
       "title": "示例画廊",
@@ -2766,7 +2778,8 @@
       "errHasErrors": "代码生成存在错误。请关闭并修正流程。",
       "errTooLarge": "生成的代码为 {{size}} 字符,超出 {{limit}} 上限。",
       "aiFixed": "正在发布 AI 修复的代码(未从画布重新生成)。",
-      "aiFixedStale": "正在发布 AI 修复的代码;此后画布已变更,保存的流程图可能与该代码不一致。"
+      "aiFixedStale": "正在发布 AI 修复的代码;此后画布已变更,保存的流程图可能与该代码不一致。",
+      "disabledName": "Agent 名称需 3–48 个字符：小写字母、数字、连字符，且以字母开头"
     },
     "confirmClear": {
       "title": "清空画布",
@@ -3429,7 +3442,10 @@
       "how3": "就绪之后才允许写请求——即在该环境中创建、部署、评估与治理。",
       "how4": "只要还有账本记录（Agent、任务、会话历史、审计记录）引用该工作区，解除注册都会被拒绝。“彻底清除”会连同注册一起删除这些记录，且仅对从未真正可用的工作区开放。",
       "howNote": "阶段明细只针对本浏览器启动的运行渲染；无论如何，上方的工作区状态才是权威。",
-      "roleArn": "ASSUME 的角色"
+      "roleArn": "ASSUME 的角色",
+      "bootstrapDisabledHub": "Hub 工作区由 `make bootstrap`（CDK）配置，不在此处运行",
+      "bootstrapDisabledRunning": "Bootstrap 正在运行中",
+      "bootstrapDisabledReady": "Bootstrap 已运行过，该工作区已为 READY"
     },
     "external": "跨账户"
   }

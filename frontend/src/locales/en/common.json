@@ -540,7 +540,10 @@
         "s3": "APPROVE — published as APPROVED",
         "s4": "ATTACH — only APPROVED records are attachable to agents",
         "note": "Skills are uploaded to the artifacts bucket (SKILL.md ≤ 100KB, bundle ≤ 50MB); MCP records point at the remote server URL."
-      }
+      },
+      "disabledName": "Name must be 3–64 chars: lowercase letters, digits, hyphens; starts with a letter",
+      "disabledUrl": "Enter the MCP server URL (http:// or https://)",
+      "disabledMd": "Add a SKILL.md"
     },
     "edit": {
       "pageTitle": "Edit Record · {{name}}",
@@ -574,7 +577,9 @@
       "saved": "“{{name}}” updated.",
       "stagingExpired": "Upload preview expired — please re-upload the ZIP.",
       "loadFailed": "Failed to load record: {{msg}}",
-      "notFound": "Record not found."
+      "notFound": "Record not found.",
+      "disabledNoChanges": "No changes to save",
+      "disabledInvalidBundle": "The uploaded bundle failed validation — upload a valid ZIP first"
     },
     "deleted": "“{{name}}” deleted.",
     "confirmDelete": {
@@ -674,7 +679,10 @@
         "s3": "VERIFY — use the retrieval Playground to confirm chunks come back with good scores",
         "s4": "ATTACH — mount ACTIVE KBs onto harness agents in the Create Agent wizard",
         "note": "Managed KBs handle the vector store, embeddings and reranking for you — no infrastructure to configure. v1 supports S3 data sources only."
-      }
+      },
+      "disabledName": "Name must be 1–100 chars: letters, digits, hyphens, underscores",
+      "disabledFiles": "Add at least one file to upload",
+      "disabledBucket": "Enter the S3 bucket name"
     },
     "detail": {
       "meta": "MANAGED KNOWLEDGE BASE",
@@ -1955,7 +1963,10 @@
         "insights": "INSIGHT TYPES — 1 … {{max}}",
         "insightsHint": "Every sampled session is analysed by each selected insight type and clustered into a report. AWS defaults sampling to 100 % for insights — every session costs judge tokens; lower it for busy agents.",
         "frequencies": "REPORT CADENCE — OPTIONAL",
-        "frequenciesHint": "AWS creates one scheduled report per cadence over the sessions sampled in that period. Without a cadence only on-demand reports (RUN REPORT NOW) exist."
+        "frequenciesHint": "AWS creates one scheduled report per cadence over the sessions sampled in that period. Without a cadence only on-demand reports (RUN REPORT NOW) exist.",
+        "disabledAgent": "Choose an agent",
+        "disabledEvaluators": "Pick at least one evaluator",
+        "disabledInsights": "Pick at least one insight"
       },
       "err": {
         "agent": "pick an agent first",
@@ -2714,7 +2725,8 @@
       "localChat": "Local debug",
       "debugDisabled": "Fix the code generation errors to start local debugging.",
       "regen": "Regenerate from flow",
-      "regenHint": "Discard the AI-fixed code and regenerate from the canvas."
+      "regenHint": "Discard the AI-fixed code and regenerate from the canvas.",
+      "publishDisabledNoNodes": "Add at least one node"
     },
     "samples": {
       "title": "Sample gallery",
@@ -2766,7 +2778,8 @@
       "errHasErrors": "Code generation has errors. Close and fix the flow.",
       "errTooLarge": "Generated code is {{size}} chars, over the {{limit}} limit.",
       "aiFixed": "Publishing AI-fixed code (not regenerated from the canvas).",
-      "aiFixedStale": "Publishing AI-fixed code; the canvas has changed since, so the saved flow graph may not match this code."
+      "aiFixedStale": "Publishing AI-fixed code; the canvas has changed since, so the saved flow graph may not match this code.",
+      "disabledName": "Agent name must be 3–48 chars: lowercase letters, digits, hyphens; starts with a letter"
     },
     "confirmClear": {
       "title": "Clear canvas",
@@ -3429,7 +3442,10 @@
       "how3": "READY unlocks mutating traffic — create, deploy, evaluate and govern in this environment.",
       "how4": "Detaching is refused while any ledger row (agents, jobs, chat history, audit trail) still names the workspace. PURGE deletes those rows with the registration, and is offered only for a workspace that never became usable.",
       "howNote": "Stage detail is rendered for runs this browser started; the workspace status above is authoritative either way.",
-      "roleArn": "ASSUMED ROLE"
+      "roleArn": "ASSUMED ROLE",
+      "bootstrapDisabledHub": "The hub workspace is provisioned by `make bootstrap` (CDK), not from here",
+      "bootstrapDisabledRunning": "Bootstrap is already running",
+      "bootstrapDisabledReady": "Bootstrap already ran — this workspace is READY"
     },
     "external": "EXTERNAL"
   }

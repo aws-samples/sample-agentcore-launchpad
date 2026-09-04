@@ -222,6 +222,12 @@ export function EditView({ recordId, onDone, onBack }: EditViewProps) {
   const mdChanged = isSkill && mode === "md" && md !== origMd;
   const zipStaged = isSkill && mode === "zip" && stagingId !== null;
   const dirty = descChanged || urlChanged || mdChanged || zipStaged;
+  const bundleInvalid = isSkill && mode === "zip" && !!preview && !preview.valid;
+  const saveDisabledReason = !dirty
+    ? t("registry.edit.disabledNoChanges")
+    : bundleInvalid
+      ? t("registry.edit.disabledInvalidBundle")
+      : undefined;
 
   const save = async () => {
     if (!record || !dirty) return;
@@ -471,7 +477,8 @@ export function EditView({ recordId, onDone, onBack }: EditViewProps) {
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
               <Btn
                 primary
-                disabled={saving || !dirty || (isSkill && mode === "zip" && !!preview && !preview.valid)}
+                disabled={saving || !dirty || bundleInvalid}
+                disabledReason={saveDisabledReason}
                 onClick={() => void save()}
                 data-testid="edit-save-btn"
               >
