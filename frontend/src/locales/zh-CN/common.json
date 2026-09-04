@@ -341,7 +341,7 @@
       "agentResources": "Agent 资源",
       "agentResourcesV": "boto3 快速通道 · 台账跟踪",
       "onSuccess": "成功后",
-      "onSuccessV": "自动注册 → Registry(第 7 阶段)"
+      "onSuccessV": "自动注册 → Registry"
     },
     "sequence": {
       "title": "部署序列",
@@ -1672,8 +1672,9 @@
     "send": "发送",
     "toolCalled": "已调用工具",
     "memorySaved": "memory.create_event — 本轮已存入短期记忆",
+    "agentSelectLabel": "Agent",
     "traceTitle": "链路追踪",
-    "tracePlaceholder": "端到端链路追踪将随可观测性上线(第 9 阶段)",
+    "tracePlaceholder": "发送一条消息 — 链路追踪栏将加载本会话的 SPAN",
     "memoryTitle": "会话记忆",
     "shortTermEvents": "短期事件",
     "longTermRecords": "长期记录",
