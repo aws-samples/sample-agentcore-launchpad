@@ -17,7 +17,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.errors import AppError
+from app.core.errors import AppError, mapped_aws_error
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import memory_console
@@ -39,13 +39,18 @@ def _guard(fn, *args, **kwargs):
     """Map AWS/botocore failures onto the ``memory.unavailable`` envelope.
 
     Domain errors raised by the service (``memory.not_configured``) already carry
-    a code, so they pass through untouched — mirrors ``routers/chat.py``.
+    a code, so they pass through untouched — mirrors ``routers/chat.py``. An AWS
+    ``ClientError`` the console can translate (``ResourceNotFoundException`` for
+    an unknown actor, ``AccessDeniedException``, …) is left to the global handler
+    in ``app.core.errors`` so the toast reads "not found", not raw boto text.
     """
     try:
         return fn(*args, **kwargs)
     except AppError:
         raise
     except Exception as exc:  # botocore ClientError, endpoint errors, ...
+        if mapped_aws_error(exc):
+            raise
         raise AppError(
             "memory.unavailable", f"memory lookup failed: {exc}", status_code=502
         ) from exc

@@ -33,9 +33,9 @@ def make_client() -> TestClient:
             "AssumeRole",
         )
 
-    @app.get("/aws-denied")
-    def aws_denied():
-        raise ClientError({"Error": {"Code": "AccessDeniedException"}}, "CreateGateway")
+    @app.get("/aws-internal")
+    def aws_internal():
+        raise ClientError({"Error": {"Code": "InternalServerException"}}, "CreateGateway")
 
     return TestClient(app, raise_server_exceptions=False)
 
@@ -71,9 +71,10 @@ def test_a_failed_role_assumption_is_a_translatable_error_not_a_500():
     assert body["detail"] == {"aws_error_code": "AccessDenied"}
 
 
-def test_other_aws_errors_are_left_alone():
-    """The net is deliberately narrow: only STS AssumeRole is a credential
-    problem. Everything else stays the unhandled failure it was."""
+def test_unmapped_aws_errors_are_left_alone():
+    """Only the codes in `AWS_ERROR_MAP` become 4xx envelopes (see
+    test_errors_aws.py). An AWS-side failure the console cannot translate stays
+    the unhandled 500 it was, traceback and all."""
     with pytest.raises(ClientError):
-        TestClient(make_client().app, raise_server_exceptions=True).get("/aws-denied")
-    assert make_client().get("/aws-denied").status_code == 500
+        TestClient(make_client().app, raise_server_exceptions=True).get("/aws-internal")
+    assert make_client().get("/aws-internal").status_code == 500

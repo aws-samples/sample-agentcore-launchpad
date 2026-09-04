@@ -1673,6 +1673,11 @@
     "skill_lab.publish_no_change": "训练没有接受任何修改，无内容可发布。",
     "skill_lab.asset_request_too_large": "多部分任务文件上传超过 101 MiB 请求限制。",
     "skill_lab.taskset_cleanup_failed": "任务集资源清理失败。任务集已保留，可重试删除。",
+    "aws.not_found": "未找到该 AWS 资源——可能已被删除,或 id 有误。",
+    "aws.validation": "AWS 拒绝了该请求(参数无效)——请检查 id 或输入的值。",
+    "aws.access_denied": "AWS 拒绝访问该资源——本部署的角色缺少权限,或该 id 属于其他账号。",
+    "aws.throttled": "AWS 正在限流该请求——请稍候重试。",
+    "aws.conflict": "该 AWS 资源正忙或处于冲突状态——待其稳定后重试。",
     "network": "无法连接后端 — 没有收到 HTTP 响应"
   },
   "chatPage": {

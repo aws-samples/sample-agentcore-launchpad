@@ -767,6 +767,28 @@ def test_extraction_jobs_use_the_lower_page_cap(client, configured, monkeypatch)
 
 
 def test_aws_failure_becomes_a_502_envelope(client, configured, monkeypatch):
+    """An AWS failure the console cannot translate stays the memory-specific 502."""
+
+    class Boom(StubData):
+        def list_actors(self, **kw):
+            raise ClientError(
+                {"Error": {"Code": "InternalServerException", "Message": "nope"}},
+                "ListActors",
+            )
+
+    wire(monkeypatch, Boom())
+    res = client.get("/api/memory/actors")
+    assert res.status_code == 502
+    assert res.json()["code"] == "memory.unavailable"
+
+
+def test_translatable_aws_failure_is_a_4xx_envelope_not_boto_text(
+    client, configured, monkeypatch
+):
+    """A mapped ClientError (unknown actor, IAM gap) is left to the global
+    handler in app.core.errors so the toast reads localized copy, never
+    `An error occurred (…) when calling the … operation`."""
+
     class Boom(StubData):
         def list_actors(self, **kw):
             raise ClientError(
@@ -776,8 +798,11 @@ def test_aws_failure_becomes_a_502_envelope(client, configured, monkeypatch):
 
     wire(monkeypatch, Boom())
     res = client.get("/api/memory/actors")
-    assert res.status_code == 502
-    assert res.json()["code"] == "memory.unavailable"
+    assert res.status_code == 403
+    body = res.json()
+    assert body["code"] == "aws.access_denied"
+    assert body["message"] == "nope"
+    assert body["detail"] == {"aws_error_code": "AccessDeniedException", "operation": "ListActors"}
 
 
 def test_console_exposes_no_memory_mutation():

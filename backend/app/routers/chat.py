@@ -10,7 +10,7 @@ from sqlalchemy import exists
 from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal, get_db
-from app.core.errors import AppError, NotFoundError
+from app.core.errors import AppError, NotFoundError, mapped_aws_error
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import require_identity
@@ -318,6 +318,8 @@ def session_memory(
             "actor_id": mem_actor,
         }
     except Exception as exc:
+        if mapped_aws_error(exc):
+            raise  # translatable AWS error → 4xx envelope via app.core.errors
         raise AppError(
             "memory.unavailable", f"memory lookup failed: {exc}", status_code=502
         ) from exc

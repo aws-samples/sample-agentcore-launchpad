@@ -506,6 +506,26 @@ OpenInference span,并自动发射同 scope 的结构化 content event 承载输
 新页面应复用 `DataTable` 或 `.table-scroll` 容器,而不是设置页面级宽度;
 两个层级都不影响 ≥ 1180 px 的布局。
 
+## 错误信封与 AWS `ClientError` 映射
+
+所有错误都经 `app/core/errors.register_error_handlers` 注册的处理器以 `{code, message, detail}`
+信封离开后端;控制台通过 `apiErrors.*` i18n 块(`lib/api.ts` 的 `localizedMessage`)翻译 `code`,
+无对应文案时回退到 `message`。服务层预见到的失败以自有错误码抛出 `AppError`(`kb.not_found`、
+`agent.not_found`、`memory.unavailable`),它们永远优先——因为在 `ClientError` 逃逸之前就已抛出。
+
+没人预见的 AWS `ClientError`——URL 里写错的 id、IAM 缺口、限流——会在正在签名请求的任意路由上
+爆炸,所以只在一处映射而不是逐路由处理:全局 `ClientError` 处理器把 `ResourceNotFoundException`
+→ 404 `aws.not_found`、`ValidationException` → 400 `aws.validation`、`AccessDeniedException` /
+`UnauthorizedException` → 403 `aws.access_denied`、`ThrottlingException` /
+`TooManyRequestsException` / `ServiceQuotaExceededException` → 429 `aws.throttled`、
+`ConflictException` / `ResourceInUseException` → 409 `aws.conflict`;`message` 去掉 botocore 的
+`An error occurred (…) when calling the … operation:` 前缀,`detail` 携带
+`{aws_error_code, operation}`。映射是刻意封闭的列表(`AWS_ERROR_MAP`):其他错误码原样重抛,
+仍是带完整堆栈的未处理 500,确保真正意外的 AWS 失败依然醒目。跨账号 `AssumeRole` 失败先行判定,
+保留 502 `workspace.assume_role_failed` 诊断。Memory 路由的 `memory.unavailable` 包装会放行
+可映射的 `ClientError` 到此处理器,因此未知 actor 的 toast 显示本地化的"未找到"文案而不是 boto
+原文。`tests/test_errors_aws.py` 固定了这张表;不要为这些错误码再加逐路由的 `except ClientError`。
+
 ## 控制台故障态(后端不可达)
 
 控制台绝不会把"读不到"呈现为"账户为空"。两条规则是关键:

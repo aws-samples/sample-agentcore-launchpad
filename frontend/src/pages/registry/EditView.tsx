@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { Btn, Chip, Panel, useToast, ViewHead } from "../../components";
 import type { ChipTone } from "../../components";
+import { responseMessage } from "../../lib/api";
 import type { RegistryRecord } from "../Registry";
 
 interface EditViewProps {
@@ -144,11 +145,13 @@ export function EditView({ recordId, onDone, onBack }: EditViewProps) {
     void (async () => {
       try {
         const res = await fetch(`/api/registry/records/${recordId}`);
-        const body = (await res.json().catch(() => ({}))) as RegistryRecord & { message?: string };
         if (!res.ok) {
-          if (alive) setLoadError(t("registry.edit.loadFailed", { msg: body.message ?? `HTTP ${res.status}` }));
+          // Envelope-aware: an `aws.*` / `registry.*` code renders its console copy.
+          const msg = await responseMessage(res);
+          if (alive) setLoadError(t("registry.edit.loadFailed", { msg }));
           return;
         }
+        const body = (await res.json()) as RegistryRecord;
         if (!alive) return;
         setRecord(body);
         setDesc(body.description ?? "");

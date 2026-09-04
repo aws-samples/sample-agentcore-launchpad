@@ -348,7 +348,7 @@ export const AUTH_UNAUTHORIZED_EVENT = "launchpad-unauthorized";
  * Pages that map codes themselves (`t(`apiErrors.${code}`, err.message)`) keep
  * working — they resolve the same key.
  */
-function localizedMessage(code: string, fallback: string): string {
+export function localizedMessage(code: string, fallback: string): string {
   const key = `apiErrors.${code}`;
   return i18n.exists(key) ? i18n.t(key) : fallback;
 }

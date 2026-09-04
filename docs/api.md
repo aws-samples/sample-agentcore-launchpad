@@ -68,6 +68,31 @@ with requests.post(
 Errors use the platform envelope `{code, message, detail}` — e.g.
 `auth.missing_api_key` (401), `agent.not_active` (409), `agent.not_found` (404).
 
+An AWS-side failure the platform did not map to a service code of its own
+(`kb.not_found`, `memory.unavailable`, …) is still returned as an envelope, never
+as a bare `500 Internal Server Error` or as botocore's
+`An error occurred (…) when calling the … operation:` text. The global
+`ClientError` handler in `app/core/errors.py` maps the AWS error code:
+
+| AWS error code | HTTP | `code` |
+|---|---|---|
+| `ResourceNotFoundException` | 404 | `aws.not_found` |
+| `ValidationException` | 400 | `aws.validation` |
+| `AccessDeniedException`, `UnauthorizedException` | 403 | `aws.access_denied` |
+| `ThrottlingException`, `TooManyRequestsException`, `ServiceQuotaExceededException` | 429 | `aws.throttled` |
+| `ConflictException`, `ResourceInUseException` | 409 | `aws.conflict` |
+
+`message` is the AWS message with the botocore prefix stripped; `detail` is
+`{"aws_error_code": "<AWS code>", "operation": "<boto operation>"}`. Any other
+AWS error code (e.g. `InternalServerException`) remains an unhandled 500 with the
+traceback in the backend log. A failed cross-account role assumption keeps its own
+answer: 502 `workspace.assume_role_failed`. `/v1` shares the handler and returns
+the same status and `code`, but its `message` is a generic per-code sentence
+(`AWS resource not found`, `AWS rejected the request as invalid`, `AWS access
+denied`, `AWS is throttling this request`, `AWS resource conflict`) and `detail`
+carries only `aws_error_code` — the raw AWS text names the deployment's role ARN,
+instance id and operation, which stay on the console side of the API-key boundary.
+
 ## Console Governance API
 
 These `/api` routes back the authenticated console. They are not part of the
