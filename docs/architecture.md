@@ -626,6 +626,20 @@ explicit operational tooling; normal bootstrap never calls it. The console's
 delivery-status probe is read-only, and a missing channel is an expected state
 until the operator opts into detailed Policy spans.
 
+## Console routing
+
+The console is a single `react-router-dom` route table in `frontend/src/App.tsx`,
+nested under one `<Shell />` element that owns the sidebar, topbar (breadcrumb)
+and footer. Modules are top-level routes; their sub-surfaces are `?view=` query
+params, never nested routes. The table ends with a `path="*"` catch-all **inside**
+the Shell group, so an unrouted URL (typo, stale bookmark to a retired sub-route)
+renders `pages/NotFound.tsx` — kicker, heading, the requested pathname in mono
+and a primary link back to the Overview — with the chrome intact instead of a bare
+background grid. The breadcrumb is derived in `layout/Shell.tsx`: a pathname that
+matches none of `ROUTE_PATHS` (`layout/nav.ts`, mirrors the route table) gets the
+`nav.notFound` crumb; otherwise the longest-prefix nav entry labels it. Adding a
+route means adding it to both the `<Route>` table and `ROUTE_PATHS`.
+
 ## Console authentication and accounts
 
 The platform console has an optional local account gate, independent from both

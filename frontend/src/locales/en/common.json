@@ -87,7 +87,17 @@
     "memory": "Memory",
     "users": "User Management",
     "workspaces": "Workspaces",
+    "notFound": "Not found",
     "administration": "ADMINISTRATION"
+  },
+  "notFound": {
+    "kicker": "CONSOLE // 404",
+    "title": "Page not found",
+    "panelTitle": "NOTHING AT THIS ADDRESS",
+    "panelSub": "unknown route",
+    "body": "The page you asked for does not exist in this console — the link may be stale or the address mistyped.",
+    "pathLabel": "REQUESTED PATH",
+    "backToOverview": "BACK TO OVERVIEW →"
   },
   "sidebar": {
     "region": "REGION",
