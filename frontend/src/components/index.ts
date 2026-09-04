@@ -8,6 +8,7 @@ export { DataTable, type Column } from "./DataTable";
 export { DiffPanes } from "./DiffPanes";
 export { Kicker } from "./Kicker";
 export { LaunchSequence } from "./LaunchSequence";
+export { LoadError } from "./LoadError";
 export { Markdown } from "./Markdown";
 export { MethodChip } from "./MethodChip";
 export { methodLabel } from "./methodChipMeta";

@@ -7,7 +7,8 @@
     "labGuideTitle": "Open the hands-on lab guide on AWS Workshop Studio",
     "workspaceLabel": "WORKSPACE",
     "workspaceTitle": "The account and region every request targets",
-    "workspaceManage": "MANAGE WORKSPACES"
+    "workspaceManage": "MANAGE WORKSPACES",
+    "backendDown": "BACKEND UNREACHABLE"
   },
   "auth": {
     "kicker": "// OPERATOR ACCESS",
@@ -1671,7 +1672,8 @@
     "skill_lab.publish_unsupported": "This job cannot publish a skill — publishing needs a succeeded training run whose skill came from a Registry record.",
     "skill_lab.publish_no_change": "Training accepted no edits, so there is nothing to publish.",
     "skill_lab.asset_request_too_large": "The multipart task-file upload exceeds the 101 MiB request limit.",
-    "skill_lab.taskset_cleanup_failed": "Task-set asset cleanup failed. The task set was retained so deletion can be retried."
+    "skill_lab.taskset_cleanup_failed": "Task-set asset cleanup failed. The task set was retained so deletion can be retried.",
+    "network": "Backend unreachable — no HTTP response"
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",
@@ -3010,7 +3012,10 @@
     "cancel": "Cancel",
     "loading": "LOADING ▸",
     "actionFailed": "Action failed: {{msg}}",
-    "close": "Close"
+    "close": "Close",
+    "retry": "RETRY",
+    "loadFailed": "Failed to load: {{msg}}",
+    "loadFailedShort": "failed to load"
   },
   "memoryPage": {
     "kicker": "// CONTEXT LAYER",

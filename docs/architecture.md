@@ -1082,6 +1082,31 @@ transition to `Job.log`; `GET /api/jobs/{id}` returns those events and
 state (runtime status, registry record status, eval/trace data) always lives in
 AWS; the ledger holds identifiers and derived progress only.
 
+## Console failure states (backend unreachable)
+
+The console never reports an empty account it could not read. Two rules are
+load-bearing:
+
+- **The topbar health chip is bound to `/api/health`.** `useHealth` probes on
+  mount, every 30 s, and immediately on `window` `online` / `focus`, and returns
+  `{ health, status: "loading" | "ok" | "down", refresh }`. `Topbar` renders the
+  green LED with `topbar.allSystemsGo` only while `status === "ok"`; a probe that
+  failed (no answer, 5xx, non-JSON body from the dev proxy) or has not answered yet
+  renders the same-sized chip with a `crit` LED and `topbar.backendDown`. The last
+  successful payload is kept through an outage so the region / account chips do not
+  blank while the backend restarts.
+- **A failed list load renders the shared error state, not the empty copy.**
+  `components/LoadError.tsx` (also reachable through `DataTable`'s `error` /
+  `onRetry` props) is the one "Failed to load: … · RETRY" block; Overview (tiles,
+  launch feed, health rows), Registry, Knowledge Bases, Chat (agent picker),
+  Evaluation runs and Experiments all use it, matching the older Observability /
+  Governance blocks. "Create your first …" / "NO RECORDS" copy is only rendered
+  after a 200 answered with an empty list; rows that loaded once stay visible
+  through a later failed poll, and Retry re-issues the fetch. Pages that fetch by
+  path use `getJson` / `responseMessage` / `errorMessage` from `lib/api.ts` so the
+  message follows the `apiErrors.*` localisation rules (`apiErrors.network` for a
+  request that never got an HTTP answer).
+
 ## Local process topology
 
 `./start.py` starts the two platform processes, waits for every HTTP health

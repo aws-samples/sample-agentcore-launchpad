@@ -20,12 +20,16 @@ function crumbKeyFor(pathname: string): string {
 export function Shell() {
   const location = useLocation();
   const { t } = useTranslation();
-  const health = useHealth();
+  const { health, status: healthStatus } = useHealth();
   const { current } = useWorkspace();
 
   return (
     <>
-      <Topbar crumbKey={crumbKeyFor(location.pathname)} health={health} />
+      <Topbar
+        crumbKey={crumbKeyFor(location.pathname)}
+        health={health}
+        healthStatus={healthStatus}
+      />
       <div className="layout">
         <Sidebar health={health} />
         <main>

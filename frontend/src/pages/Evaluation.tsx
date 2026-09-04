@@ -4,12 +4,12 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import {
-  Btn, Chip, ConfirmDialog, PAGE_SIZES, Pager, Panel, useToast, ViewHead,
+  Btn, Chip, ConfirmDialog, LoadError, PAGE_SIZES, Pager, Panel, useToast, ViewHead,
 } from "../components";
 import { EvaluationNav } from "../components/EvaluationNav";
 import { InsightClusters } from "../components/InsightClusters";
 import type { AgentInfo } from "../lib/api";
-import { api } from "../lib/api";
+import { api, errorMessage, responseMessage } from "../lib/api";
 import {
   ACTOR_MODELS,
   CLOUD_VALUE_PREFIX,
@@ -126,6 +126,8 @@ export function Evaluation() {
   const [confirmInsights, setConfirmInsights] = useState(false);
 
   const failedSeen = useRef<Set<string> | null>(null);
+  // the runs list failed to load (cleared by the next successful poll)
+  const [runsError, setRunsError] = useState<string | null>(null);
   const refresh = useCallback(async () => {
     try {
       const offset = (runPage - 1) * runSize;
@@ -149,9 +151,12 @@ export function Evaluation() {
         });
         setRuns(body.runs);
         setRunTotal(body.total);
+        setRunsError(null);
         setSelectedRun(
           (prev) => body.runs.find((r) => r.id === prev?.id) ?? body.runs[0] ?? null,
         );
+      } else {
+        setRunsError(await responseMessage(runsRes));
       }
       if (insightsRes.ok) {
         setInsightsRuns(((await insightsRes.json()) as { runs: RunInfo[] }).runs);
@@ -161,8 +166,9 @@ export function Evaluation() {
         setQueueLocked(queue.locked);
         setQueueMax(queue.max_concurrency);
       }
-    } catch {
-      /* backend offline */
+    } catch (err) {
+      // backend unreachable — the table renders the error, never "NO RUNS YET"
+      setRunsError(errorMessage(err));
     }
   }, [runPage, runSize, t, toast]);
 
@@ -885,7 +891,19 @@ export function Evaluation() {
                 <td>{statusChip(run)}</td>
               </tr>
             ))}
-            {runs.length === 0 && (
+            {runs.length === 0 && runsError !== null && (
+              <tr>
+                <td colSpan={7}>
+                  <LoadError
+                    message={runsError}
+                    onRetry={() => void refresh()}
+                    inline
+                    data-testid="runs-load-error"
+                  />
+                </td>
+              </tr>
+            )}
+            {runs.length === 0 && runsError === null && (
               <tr>
                 <td colSpan={7} className="dim mono" style={{ textAlign: "center" }}>
                   {t("evalPage.runs.empty")}
