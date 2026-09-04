@@ -422,7 +422,7 @@ export function Registry() {
             </button>
           ))}
           {searching && <span className="tab active">{t("registry.searchResults")}</span>}
-          <div style={{ marginLeft: "auto", alignSelf: "center", display: "flex", gap: 8 }}>
+          <div className="tabs-actions">
             <Btn onClick={() => navigate("/governance")}>
               <Network size={14} aria-hidden="true" />
               {t("registry.importGateway")}
@@ -444,7 +444,7 @@ export function Registry() {
         </div>
 
         <div className="reg-grid" style={{ padding: 14 }}>
-          <div>
+          <div className="table-scroll">
             <table>
               <thead>
                 <tr>

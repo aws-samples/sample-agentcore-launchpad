@@ -29,15 +29,17 @@ export function DataTable({
   if (error != null && isEmpty) {
     return (
       <div>
-        <table>
-          <thead>
-            <tr>
-              {columns.map((c) => (
-                <th key={c.key}>{c.label}</th>
-              ))}
-            </tr>
-          </thead>
-        </table>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                {columns.map((c) => (
+                  <th key={c.key}>{c.label}</th>
+                ))}
+              </tr>
+            </thead>
+          </table>
+        </div>
         <LoadError message={error} onRetry={onRetry} inline />
       </div>
     );
@@ -45,29 +47,33 @@ export function DataTable({
   if (isEmpty && empty != null) {
     return (
       <div>
-        <table>
-          <thead>
-            <tr>
-              {columns.map((c) => (
-                <th key={c.key}>{c.label}</th>
-              ))}
-            </tr>
-          </thead>
-        </table>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                {columns.map((c) => (
+                  <th key={c.key}>{c.label}</th>
+                ))}
+              </tr>
+            </thead>
+          </table>
+        </div>
         <div className="empty">{empty}</div>
       </div>
     );
   }
   return (
-    <table>
-      <thead>
-        <tr>
-          {columns.map((c) => (
-            <th key={c.key}>{c.label}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>{children}</tbody>
-    </table>
+    <div className="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            {columns.map((c) => (
+              <th key={c.key}>{c.label}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>{children}</tbody>
+      </table>
+    </div>
   );
 }

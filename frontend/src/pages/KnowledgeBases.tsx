@@ -157,7 +157,7 @@ export function KnowledgeBases() {
         pad={false}
         style={{ "--i": 0 } as CSSProperties}
       >
-        <div style={{ padding: 14 }}>
+        <div className="table-scroll" style={{ padding: 14 }}>
           <table>
             <thead>
               <tr>
