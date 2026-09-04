@@ -4,7 +4,16 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/auth-context";
-import { Btn, Chip, ConfirmDialog, LoadError, Markdown, Panel, ViewHead } from "../components";
+import {
+  Btn,
+  Chip,
+  ConfirmDialog,
+  LoadError,
+  Markdown,
+  Panel,
+  StaleLink,
+  ViewHead,
+} from "../components";
 import type { AgentInfo } from "../lib/api";
 import { api, errorMessage } from "../lib/api";
 
@@ -114,6 +123,10 @@ export function Chat() {
   const [newKey, setNewKey] = useState<KeyInfo | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   const restoredRef = useRef(false);
+  // "?agent=<id>" that no active agent matches: the notice names it and the
+  // picker stays on its placeholder — never silently another agent's runtime.
+  const [staleAgent, setStaleAgent] = useState<string | null>(null);
+  const autoPickBlocked = useRef(false);
 
   const loadAgents = () =>
     api
@@ -127,11 +140,16 @@ export function Chat() {
         const linked = linkedAgent && active.find((a) => a.id === linkedAgent);
         if (linked) {
           setAgentId(linked.id);
-        } else {
-          // Linked agent unknown/inactive: drop the linked session too, so a
-          // foreign session id is never posted to a different agent's runtime.
+        } else if (linkedAgent) {
+          // Linked agent unknown/inactive: say so, drop the linked session too
+          // (a foreign session id is never posted to a different agent's
+          // runtime), strip both params, and leave the picker unselected.
+          setStaleAgent(linkedAgent);
+          autoPickBlocked.current = true;
           if (linkedSession) setSessionId(null);
-          if (active.length && !agentId) setAgentId(active[0].id);
+          setSearchParams({}, { replace: true });
+        } else if (active.length && !agentId && !autoPickBlocked.current) {
+          setAgentId(active[0].id);
         }
       })
       .catch((err: unknown) => setAgentsError(errorMessage(err)));
@@ -339,6 +357,14 @@ export function Chat() {
   return (
     <section>
       <ViewHead kicker={t("chat.kicker")} title={t("chat.title")} meta={t("chat.metaLive")} />
+      {staleAgent !== null && (
+        <StaleLink
+          kind={t("staleLink.kind.agent")}
+          id={staleAgent}
+          pickFrom="picker"
+          onDismiss={() => setStaleAgent(null)}
+        />
+      )}
 
       <div className="chat-grid">
         <Panel
@@ -349,6 +375,7 @@ export function Chat() {
               <select
                 value={agentId}
                 onChange={(e) => {
+                  autoPickBlocked.current = false;
                   setAgentId(e.target.value);
                   newSession(e.target.value);
                 }}
@@ -365,6 +392,11 @@ export function Chat() {
                 {agents.length === 0 && (
                   <option value="">
                     {agentsError ? t("common.loadFailedShort") : t("chatPage.noAgents")}
+                  </option>
+                )}
+                {agents.length > 0 && agentId === "" && (
+                  <option value="" disabled>
+                    {t("chatPage.pickAgent")}
                   </option>
                 )}
                 {agents.map((a) => (

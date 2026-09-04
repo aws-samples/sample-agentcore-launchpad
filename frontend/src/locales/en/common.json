@@ -1720,7 +1720,8 @@
     "openInMemory": "OPEN IN MEMORY",
     "historyTitle": "HISTORY",
     "historyEmpty": "No previous conversations with this agent.",
-    "historyTurns": "{{count}} turn(s)"
+    "historyTurns": "{{count}} turn(s)",
+    "pickAgent": "Pick an agent…"
   },
   "evalPage": {
     "metaLive": "BATCH + INSIGHTS · LLM-AS-A-JUDGE · CONCURRENCY-CAPPED — QUEUE MANAGED",
@@ -3448,5 +3449,19 @@
       "bootstrapDisabledReady": "Bootstrap already ran — this workspace is READY"
     },
     "external": "EXTERNAL"
+  },
+  "staleLink": {
+    "body": "{{kind}} `{{id}}` no longer exists in this workspace — pick one from the table below.",
+    "bodyPicker": "{{kind}} `{{id}}` no longer exists in this workspace — pick one from the agent picker.",
+    "bodyMissing": "The {{kind}} link carried no id — pick one from the table below.",
+    "dismiss": "Dismiss",
+    "kind": {
+      "dataset": "Dataset",
+      "evaluator": "Evaluator",
+      "onlineConfig": "Online evaluation config",
+      "experiment": "Experiment",
+      "agent": "Agent",
+      "knowledgeBase": "Knowledge base"
+    }
   }
 }

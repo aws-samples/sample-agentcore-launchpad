@@ -14,6 +14,8 @@ import {
   Pager,
   Panel,
   StageCard,
+  StaleLink,
+  useStaleParam,
   useTablePage,
   useToast,
   ViewHead,
@@ -442,12 +444,15 @@ function ConfigurationExperimentView() {
 
   // the experiments list failed to load (cleared by the next successful poll)
   const [listError, setListError] = useState<string | null>(null);
+  // first successful list load — a stale "?exp=" is only judged after it
+  const [listLoaded, setListLoaded] = useState(false);
   const refresh = useCallback(async () => {
     try {
       const res = await fetch("/api/experiments");
       if (res.ok) {
         setExperiments(((await res.json()) as { experiments: ExperimentInfo[] }).experiments);
         setListError(null);
+        setListLoaded(true);
       } else {
         setListError(await responseMessage(res));
       }
@@ -604,6 +609,13 @@ function ConfigurationExperimentView() {
   const exp = creatingNew
     ? null
     : (experiments.find((e) => e.id === expParam) ?? experiments[0] ?? null);
+  // A stale "?exp=" (list loaded, id absent) says so above the list and drops
+  // the param; the experiments[0] fallback then reads as a plain visit.
+  const staleExp = useStaleParam(
+    expParam,
+    listLoaded && !creatingNew && exp?.id !== expParam,
+    () => setSearchParams({ view: "experiment" }, { replace: true }),
+  );
   const selectExp = (id: string | null) => {
     setSearchParams(
       id
@@ -2335,6 +2347,13 @@ function ConfigurationExperimentView() {
 
   return (
     <>
+      {staleExp.staleId !== null && (
+        <StaleLink
+          kind={t("staleLink.kind.experiment")}
+          id={staleExp.staleId}
+          onDismiss={staleExp.dismiss}
+        />
+      )}
       {!creatingNew && (
         <Panel
           brk

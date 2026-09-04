@@ -1155,6 +1155,29 @@ load-bearing:
   message follows the `apiErrors.*` localisation rules (`apiErrors.network` for a
   request that never got an HTTP answer).
 
+## Stale deep links say the resource is gone
+
+A deep link whose id no longer resolves never falls back silently. The shared
+`components/StaleLink.tsx` is the one notice ("`<Kind>` `<id>` no longer exists in
+this workspace — pick one from the table below.", `staleLink.*`, dismissible), and
+`components/useStaleParam.ts` is the hook that pairs with it: the caller passes the
+param's current value and its own verdict — true only once the list has loaded
+without the id, or the detail fetch answered 4xx (`aws.not_found` /
+`aws.validation` / `aws.access_denied` from the `ClientError` mapping above) — and
+the hook captures the id for the notice and strips the param once through
+`setSearchParams(..., { replace: true })`, so the same link never re-fires and the
+page then reads as a plain visit. A list that failed to load is *not* a verdict:
+`LoadError` owns that state and the param is kept for the retry. Surfaces wired:
+Evaluation `?view=datasets&ds=` (local rows after the local list, `cloud:` rows
+after the cloud list), `?view=evaluators&ev=`, `?view=online&oe=`,
+`?view=experiment&exp=`, Chat `?agent=` (plus its companion `?session=`, dropped
+too), and Knowledge Bases `?view=detail&kb=` — a missing `kb` is reported the same
+way (`staleLink.bodyMissing`) instead of a permanent LOADING. Chat is the one
+surface that must not pick a substitute: the picker stays on the
+`chatPage.pickAgent` placeholder (`value=""`) until the user chooses, because an
+auto-selected agent would silently receive the next prompt. Valid links keep
+selecting the row / agent exactly as before.
+
 ## Disabled primary actions explain what is missing
 
 A form's primary action is never *just* dimmed. The shared `components/Btn.tsx`

@@ -9,7 +9,9 @@ import {
   ConfirmDialog,
   Pager,
   Panel,
+  StaleLink,
   StatTile,
+  useStaleParam,
   useTablePage,
   useToast,
   ViewHead,
@@ -407,6 +409,13 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
   const backToList = () => {
     setSearchParams({ view: "online" }, { replace: true });
   };
+  // A stale "?oe=" (list loaded, id absent) says so at the top of the page
+  // and drops the param; the rows[0] fallback then reads as a plain visit.
+  const staleOe = useStaleParam(
+    oeParam,
+    !loading && !loadError && !creatingNew && selected?.config_id !== oeParam,
+    backToList,
+  );
   const { rows: pageRows, pagerProps } = useTablePage(
     rows,
     rows.findIndex((r) => r.config_id === selected?.config_id),
@@ -2080,6 +2089,13 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
         )}
       />
       <EvaluationNav />
+      {staleOe.staleId !== null && (
+        <StaleLink
+          kind={t("staleLink.kind.onlineConfig")}
+          id={staleOe.staleId}
+          onDismiss={staleOe.dismiss}
+        />
+      )}
       <div style={{ marginBottom: 14 }}>
         <Btn onClick={creatingNew ? backToList : onBack}>
           ◂ {t(creatingNew ? "evalPage.online.title" : "evalPage.backToRuns")}

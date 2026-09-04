@@ -1720,7 +1720,8 @@
     "openInMemory": "在记忆中打开",
     "historyTitle": "历史会话",
     "historyEmpty": "与该 Agent 还没有历史会话。",
-    "historyTurns": "{{count}} 轮"
+    "historyTurns": "{{count}} 轮",
+    "pickAgent": "选择智能体…"
   },
   "evalPage": {
     "metaLive": "批量 + 洞察 · LLM 评审 · 并发限额 — 队列托管",
@@ -3448,5 +3449,19 @@
       "bootstrapDisabledReady": "Bootstrap 已运行过，该工作区已为 READY"
     },
     "external": "跨账户"
+  },
+  "staleLink": {
+    "body": "{{kind}} `{{id}}` 在当前工作区已不存在 —— 请从下方表格中选择。",
+    "bodyPicker": "{{kind}} `{{id}}` 在当前工作区已不存在 —— 请在智能体选择器中重新选择。",
+    "bodyMissing": "该{{kind}}链接未携带 id —— 请从下方表格中选择。",
+    "dismiss": "关闭",
+    "kind": {
+      "dataset": "数据集",
+      "evaluator": "评估器",
+      "onlineConfig": "在线评估配置",
+      "experiment": "实验",
+      "agent": "智能体",
+      "knowledgeBase": "知识库"
+    }
   }
 }

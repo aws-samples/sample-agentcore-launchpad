@@ -21,6 +21,8 @@ import { SourcePicker, type SourceMode } from "./SourcePicker";
 interface DetailViewProps {
   kbId: string;
   onBack: () => void;
+  /** The detail fetch answered 4xx (not found / validation / access denied) — the id is gone. */
+  onGone?: () => void;
 }
 
 // A KB is "in flight" (worth polling) while it is provisioning, any data source
@@ -191,7 +193,7 @@ function SourceDocuments({ kbId, dsId }: { kbId: string; dsId: string }) {
   );
 }
 
-export function DetailView({ kbId, onBack }: DetailViewProps) {
+export function DetailView({ kbId, onBack, onGone }: DetailViewProps) {
   const { t } = useTranslation();
   const toast = useToast();
 
@@ -239,6 +241,9 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { message?: string };
         setLoadError(kbErrorMessage(body, res.status));
+        // any 4xx (aws.not_found / aws.validation / aws.access_denied) means
+        // the linked id does not resolve in this workspace — 401 is auth
+        if (res.status >= 400 && res.status < 500 && res.status !== 401) onGone?.();
         return null;
       }
       const body = (await res.json()) as KnowledgeBaseDetail;
@@ -249,7 +254,7 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
       setLoadError(String(err));
       return null;
     }
-  }, [kbId]);
+  }, [kbId, onGone]);
 
   // Create-flow automation guards (fire each step at most once per mount).
   const autoSynced = useRef<Set<string>>(new Set());
