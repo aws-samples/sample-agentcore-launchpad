@@ -546,6 +546,21 @@ OpenInference span,并自动发射同 scope 的结构化 content event 承载输
   `getJson` / `responseMessage` / `errorMessage`,使消息遵循 `apiErrors.*` 本地化规则
   (未收到 HTTP 响应的请求对应 `apiErrors.network`)。
 
+## 禁用的主操作说明缺了什么
+
+表单的主操作按钮绝不会只是"变暗"。共享的 `components/Btn.tsx` 接受可选的
+`disabledReason`;按钮处于 `disabled` 且给出了原因时,渲染 `title={reason}`,并在旁边
+渲染一个同级的 `.btn-hint`(等宽字体、`--ink-3`,与 `.dim` 辅助文字同一视觉权重),按钮
+通过 `aria-describedby` 指向它。按钮可用时,或未给出原因时,不渲染任何提示元素。原因由
+计算 `disabled` 的*同一组*谓词按顺序推导,第一个未满足的谓词即为提示内容;该属性从不
+改变按钮*何时*被禁用,只改变控制台对此说了什么。所有原因都是 i18n 键(en + zh-CN)。
+目前接入的表单:注册表登记(`▲ REGISTER` — 名称规则 / MCP URL / SKILL.md)、注册表编辑
+(`▲ SAVE` — 无更改 / bundle 无效)、知识库创建(`▲ CREATE` — 名称规则 / 无文件 / 无存储桶)、
+Strands Studio(`▲ Publish` — 无节点;发布对话框中的名称规则)、在线评估创建
+(`▸ CREATE` — 未选智能体 / 未选评估器 / 未选洞察)以及工作区详情的 `RUN BOOTSTRAP`
+(hub 工作区 / 正在运行 / 已为 READY)。忙碌态(`saving`、`busy`)刻意不带原因:按钮文字
+本身已经说明正在发生什么。
+
 ## 本地进程拓扑
 
 `./start.py` 启动平台的两个后台进程,等待全部 HTTP 健康检查通过,并把进程归属
