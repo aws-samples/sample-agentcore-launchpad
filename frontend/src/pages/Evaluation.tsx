@@ -18,6 +18,7 @@ import {
   type CloudDatasetInfo as CloudDataset,
   type EvaluationDatasetInfo as Dataset,
   type EvaluationRunInfo as RunInfo,
+  isActiveRun,
   hasInsightTrees,
 } from "../lib/evaluation";
 import { evaluatorLabel } from "../lib/evaluators";
@@ -124,6 +125,9 @@ export function Evaluation() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [insightsBusy, setInsightsBusy] = useState(false);
   const [confirmInsights, setConfirmInsights] = useState(false);
+  // run awaiting the operator's STOP confirmation (row or detail button)
+  const [confirmStop, setConfirmStop] = useState<RunInfo | null>(null);
+  const [stopBusy, setStopBusy] = useState<string | null>(null);
 
   const failedSeen = useRef<Set<string> | null>(null);
   // the runs list failed to load (cleared by the next successful poll)
@@ -337,15 +341,59 @@ export function Evaluation() {
     }
   };
 
+  const stopRun = async (run: RunInfo) => {
+    setStopBusy(run.id);
+    try {
+      const updated = await api.stopEvaluationRun(run.id);
+      toast(
+        t(
+          updated.status === "stopped"
+            ? "evalPage.runs.stop.cancelledToast"
+            : "evalPage.runs.stop.requestedToast",
+          { run: `run-${run.id.slice(0, 6)}` },
+        ),
+      );
+      void refresh();
+    } catch (err) {
+      toast(t("common.actionFailed", { msg: errorMessage(err) }));
+    } finally {
+      setStopBusy(null);
+    }
+  };
+
+  // Why STOP is unavailable for this run, in the operator's words — null when
+  // it can be clicked. Drives both `disabled` and `disabledReason` (shared Btn).
+  const stopDisabledReason = (run: RunInfo): string | null => {
+    if (run.status === "completed") return t("evalPage.runs.stop.disabledCompleted");
+    if (run.status === "failed") return t("evalPage.runs.stop.disabledFailed");
+    if (run.status === "stopped") return t("evalPage.runs.stop.disabledStopped");
+    if (run.stop_requested) return t("evalPage.runs.stop.disabledRequested");
+    return null;
+  };
+
+  const stopButton = (run: RunInfo, testId: string) => {
+    const reason = stopDisabledReason(run);
+    return (
+      <Btn
+        disabled={reason !== null || stopBusy === run.id}
+        disabledReason={reason ?? undefined}
+        data-testid={testId}
+        onClick={(e) => {
+          e.stopPropagation();
+          setConfirmStop(run);
+        }}
+      >
+        ■ {t("evalPage.runs.stop.action")}
+      </Btn>
+    );
+  };
+
   // An insights run over this exact session set that hasn't settled yet —
   // re-clicking would only enqueue a duplicate behind the account lock.
   const insightsPending = (run: RunInfo): boolean => {
     const key = [...(run.session_ids ?? [])].sort().join(",");
     return insightsRuns.some(
-      (r) =>
-        r.status !== "completed" &&
-        r.status !== "failed" &&
-        [...(r.session_ids ?? [])].sort().join(",") === key,
+      (r) => isActiveRun(r) && [...(r.session_ids ?? [])].sort().join(",") === key,
     );
   };
 
@@ -365,6 +413,10 @@ export function Evaluation() {
       return <Chip tone="good" icon="●">{t("evalPage.status.completed")}</Chip>;
     if (run.status === "failed")
       return <Chip tone="crit" icon="✕">{t("evalPage.status.failed")}</Chip>;
+    if (run.status === "stopped")
+      return <Chip tone="muted" icon="■">{t("evalPage.status.stopped")}</Chip>;
+    if (run.stop_requested)
+      return <Chip tone="warn" icon="◐">{t("evalPage.status.stopping")}</Chip>;
     if (run.status === "queued" && (run.queue_position ?? 0) >= 1)
       return <Chip tone="muted" icon="◌">{t("evalPage.status.queued")}</Chip>;
     return <Chip tone="warn" icon="◐">{run.status.toUpperCase()}</Chip>;
@@ -888,7 +940,12 @@ export function Evaluation() {
                 <td className="mono dim">
                   {run.created_at ? new Date(run.created_at).toLocaleString() : "—"}
                 </td>
-                <td>{statusChip(run)}</td>
+                <td>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    {statusChip(run)}
+                    {isActiveRun(run) && stopButton(run, `run-stop-${run.id}`)}
+                  </span>
+                </td>
               </tr>
             ))}
             {runs.length === 0 && runsError !== null && (
@@ -930,24 +987,28 @@ export function Evaluation() {
           title={t("evalPage.scores.title")}
           sub={selectedRun ? `run-${selectedRun.id.slice(0, 6)} · ${selectedRun.agent_name}` : "—"}
           end={
-            selectedRun &&
-            selectedRun.session_ids.length > 0 &&
-            agents.find((agent) => agent.id === selectedRun.agent_id)
-              ?.experiment_capability.eligible ? (
-                <Btn
-                  data-testid="run-to-experiment"
-                  onClick={() =>
-                    setSearchParams({
-                      view: "experiment",
-                      exp: "new",
-                      agent: selectedRun.agent_id,
-                      sourceRun: selectedRun.id,
-                    })
-                  }
-                >
-                  {t("evalPage.runs.createExperiment")}
-                </Btn>
-              ) : undefined
+            selectedRun && (
+              <>
+                {stopButton(selectedRun, "run-stop-detail")}
+                {selectedRun.session_ids.length > 0 &&
+                  agents.find((agent) => agent.id === selectedRun.agent_id)
+                    ?.experiment_capability.eligible && (
+                    <Btn
+                      data-testid="run-to-experiment"
+                      onClick={() =>
+                        setSearchParams({
+                          view: "experiment",
+                          exp: "new",
+                          agent: selectedRun.agent_id,
+                          sourceRun: selectedRun.id,
+                        })
+                      }
+                    >
+                      {t("evalPage.runs.createExperiment")}
+                    </Btn>
+                  )}
+              </>
+            )
           }
           style={{ "--i": 1 } as CSSProperties}
         >
@@ -964,6 +1025,16 @@ export function Evaluation() {
                   <span className="hv">{score.score.toFixed(2)}</span>
                 </div>
               ))}
+              {selectedRun.status === "stopped" && (
+                <div
+                  className="note"
+                  style={{ marginTop: 6, borderColor: "var(--warn)" }}
+                  data-testid="run-stopped-partial"
+                >
+                  <span className="i" style={{ color: "var(--warn)" }}>[■]</span>
+                  <span>{t("evalPage.runs.stop.partialScores")}</span>
+                </div>
+              )}
               <div className="note" style={{ marginTop: 6 }}>
                 <span className="i">[i]</span>
                 <span>{t("evalPage.scores.note")}</span>
@@ -1015,7 +1086,18 @@ export function Evaluation() {
                   </span>
                 ))}
               </div>
-              {selectedRun.error ? (
+              {selectedRun.status === "stopped" ? (
+                // Operator stop: terminal, but not a failure — no crit styling.
+                <div className="note" style={{ borderColor: "var(--warn)" }}>
+                  <span className="i" style={{ color: "var(--warn)" }}>[■]</span>
+                  <span>
+                    {t("evalPage.runs.stop.reasonLabel")}{" "}
+                    <span className="mono" data-testid="run-stopped-reason">
+                      {selectedRun.error ?? t("evalPage.runs.stop.reasonDefault")}
+                    </span>
+                  </span>
+                </div>
+              ) : selectedRun.error ? (
                 <div className="note" style={{ borderColor: "var(--crit)" }}>
                   <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
                   <span>
@@ -1101,6 +1183,25 @@ export function Evaluation() {
           if (selectedRun) void startInsightsOnRun(selectedRun);
         }}
         onCancel={() => setConfirmInsights(false)}
+      />
+      <ConfirmDialog
+        open={confirmStop !== null}
+        title={t("evalPage.runs.stop.confirmTitle")}
+        body={t(
+          confirmStop?.batch_eval_id
+            ? "evalPage.runs.stop.confirmBodyBatch"
+            : confirmStop?.status === "queued"
+              ? "evalPage.runs.stop.confirmBodyQueued"
+              : "evalPage.runs.stop.confirmBodyReplay",
+          { run: confirmStop ? `run-${confirmStop.id.slice(0, 6)}` : "" },
+        )}
+        confirmLabel={t("evalPage.runs.stop.confirm")}
+        onConfirm={() => {
+          const run = confirmStop;
+          setConfirmStop(null);
+          if (run) void stopRun(run);
+        }}
+        onCancel={() => setConfirmStop(null)}
       />
     </section>
   );

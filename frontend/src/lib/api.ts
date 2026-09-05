@@ -1,7 +1,7 @@
 /** Typed client for the Launchpad backend. */
 
 import i18n from "../i18n";
-import type { InsightTrees } from "./evaluation";
+import type { EvaluationRunInfo, InsightTrees } from "./evaluation";
 import type { ModelSource } from "./models";
 
 export interface StageInfo {
@@ -2157,6 +2157,14 @@ export interface RecommendProviderInfo {
 
 export const api = {
   authStatus: () => request<AuthStatus>("/api/auth/status"),
+  /** `POST /api/eval/runs/{id}/stop` (202). With a batch on AWS: StopBatchEvaluation,
+   *  the row follows STOPPING → STOPPED and comes back `stop_requested`; a queued run
+   *  is cancelled locally and returns `stopped` at once. Terminal runs → 409
+   *  `run.not_active`. */
+  stopEvaluationRun: (runId: string) =>
+    request<EvaluationRunInfo>(`/api/eval/runs/${encodeURIComponent(runId)}/stop`, {
+      method: "POST",
+    }),
   experimentProviders: () =>
     request<{ providers: RecommendProviderInfo[] }>("/api/experiments/providers"),
   login: (username: string, password: string) =>

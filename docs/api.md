@@ -203,6 +203,22 @@ Error codes: `memory.not_configured` (409, bootstrap has not run — except
 render a setup state), `memory.namespace_required` (400, no namespace could be
 derived), `memory.unavailable` (502, the underlying AWS call failed).
 
+## Console Evaluation Runs API
+
+`/api/eval/runs` drives batch evaluations / insights analyses through the bounded
+run queue (`eval_max_concurrent_runs`, capped at the 5 active-batch-evaluations
+account quota). Run status: `queued → invoking → waiting → evaluating → completed |
+failed | stopped`. Every row carries `stop_requested` (an operator stop is pending
+on a run whose batch is still STOPPING).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/eval/runs?limit&offset&mode&agent_id` | Newest-first page `{runs, total, limit, offset}` |
+| `GET` | `/api/eval/runs/{run_id}` | One run (scores / insight trees / `batch_eval_id` / `error` / `stop_requested`) |
+| `POST` | `/api/eval/runs` | Start a run (exactly one scope: `dataset_id` \| `cloud_dataset_id` \| `session_ids` \| `lookback_hours`) → 201 |
+| `POST` | `/api/eval/runs/{run_id}/stop` | **Stop an active run** → 202 with the run. A run whose batch exists on AWS (`batch_eval_id` set) is stopped with `StopBatchEvaluation`: the batch goes `STOPPING → STOPPED`, the sessions already judged keep their results, and the poller records the run as `stopped` with those partial scores / insight trees and `error = "stopped by operator"`. A run still `queued` is cancelled locally (the worker skips it, AWS is never called) and returns `stopped` at once. A run replaying its dataset or waiting for telemetry (no batch yet) stops between prompts and never calls `StartBatchEvaluation`. Terminal runs (`completed` / `failed` / `stopped`) → 409 `run.not_active`; unknown → 404 `run.not_found`. `DeleteBatchEvaluation` is deliberately not exposed — the ledger keeps the partial results AWS would drop |
+| `GET` | `/api/eval/queue` | `{running, queued, locked, max_concurrency}` — cancelled runs leave the queue immediately, so the count covers active runs only |
+
 ## Console Online Evaluation API
 
 `/api/eval/online/*` manages AgentCore **online evaluation configs** — continuous,
