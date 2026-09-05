@@ -1751,12 +1751,31 @@
       "sessions": "会话数",
       "batch": "BATCH ID",
       "applied": "已选评估器",
-      "failureReason": "失败原因："
+      "failureReason": "失败原因：",
+      "stop": {
+        "action": "停止",
+        "confirmTitle": "停止此评估运行？",
+        "confirmBodyBatch": "{{run}} 的批量评估正在 AWS 上运行。StopBatchEvaluation 会终止它；已评判的会话保留分数，运行记为「已停止」。",
+        "confirmBodyQueued": "{{run}} 仍在排队，尚未提交到 AWS。将在本地取消并释放名额。",
+        "confirmBodyReplay": "{{run}} 正在回放数据集。剩余提示词将被跳过，不会启动批量评估；运行记为「已停止」。",
+        "confirm": "停止运行",
+        "requestedToast": "已请求停止 {{run}}——已评判的会话保留分数",
+        "cancelledToast": "{{run}} 已取消——未提交到 AWS",
+        "disabledCompleted": "已完成",
+        "disabledFailed": "已失败",
+        "disabledStopped": "已停止",
+        "disabledRequested": "已请求停止——等待 AWS 响应",
+        "reasonLabel": "停止原因：",
+        "reasonDefault": "操作员停止",
+        "partialScores": "已由操作员停止——分数仅覆盖停止前已评判的会话。"
+      }
     },
     "status": {
       "completed": "已完成",
       "failed": "失败",
-      "queued": "排队中 · 等待空闲名额"
+      "queued": "排队中 · 等待空闲名额",
+      "stopped": "已停止",
+      "stopping": "停止中"
     },
     "newRun": {
       "title": "新建运行",

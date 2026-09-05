@@ -1751,12 +1751,31 @@
       "sessions": "SESSIONS",
       "batch": "BATCH ID",
       "applied": "APPLIED EVALUATORS",
-      "failureReason": "Failure reason:"
+      "failureReason": "Failure reason:",
+      "stop": {
+        "action": "STOP",
+        "confirmTitle": "Stop this evaluation run?",
+        "confirmBodyBatch": "{{run}} has a batch evaluation running on AWS. StopBatchEvaluation ends it; the sessions already judged keep their scores and the run is recorded as STOPPED.",
+        "confirmBodyQueued": "{{run}} is still queued and has not reached AWS. It is cancelled locally and frees its slot.",
+        "confirmBodyReplay": "{{run}} is replaying its dataset. The remaining prompts are skipped and no batch evaluation is started; the run is recorded as STOPPED.",
+        "confirm": "STOP RUN",
+        "requestedToast": "Stop requested for {{run}} — sessions already judged keep their scores",
+        "cancelledToast": "{{run}} cancelled — it never reached AWS",
+        "disabledCompleted": "already completed",
+        "disabledFailed": "already failed",
+        "disabledStopped": "already stopped",
+        "disabledRequested": "stop already requested — waiting for AWS",
+        "reasonLabel": "Stopped:",
+        "reasonDefault": "stopped by operator",
+        "partialScores": "Stopped by operator — scores cover only the sessions judged before the stop."
+      }
     },
     "status": {
       "completed": "COMPLETE",
       "failed": "FAILED",
-      "queued": "QUEUED · waiting for a slot"
+      "queued": "QUEUED · waiting for a slot",
+      "stopped": "STOPPED",
+      "stopping": "STOPPING"
     },
     "newRun": {
       "title": "NEW RUN",
