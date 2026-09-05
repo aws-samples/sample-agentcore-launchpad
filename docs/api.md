@@ -80,7 +80,7 @@ as a bare `500 Internal Server Error` or as botocore's
 | `ValidationException` | 400 | `aws.validation` |
 | `AccessDeniedException`, `UnauthorizedException` | 403 | `aws.access_denied` |
 | `ThrottlingException`, `TooManyRequestsException`, `ServiceQuotaExceededException` | 429 | `aws.throttled` |
-| `ConflictException`, `ResourceInUseException` | 409 | `aws.conflict` |
+| `ConflictException`, `ResourceInUseException`, `RetryableConflictException` | 409 | `aws.conflict` |
 
 `message` is the AWS message with the botocore prefix stripped; `detail` is
 `{"aws_error_code": "<AWS code>", "operation": "<boto operation>"}`. Any other
@@ -184,6 +184,24 @@ Error codes: `memory.not_configured` (409, bootstrap has not run — except
 `/overview`, which instead returns `{"configured": false, …}` so the page can
 render a setup state), `memory.namespace_required` (400, no namespace could be
 derived), `memory.unavailable` (502, the underlying AWS call failed).
+
+## Console Chat API
+
+`/api/chat/*` backs the Chat playground over the same invoke chain as `/v1`
+(`app.services.invoke`). Sessions are AgentCore Runtime sessions: the id the
+console sends as `runtimeSessionId` is the one the ledger tracks.
+
+| Method | Path | Result |
+|---|---|---|
+| `POST` | `/api/chat/{agent_id}` | One turn as SSE (`meta` → `delta`/`tool`/`error` → `done`); `{prompt, session_id?}`, a missing id starts a new session |
+| `GET` | `/api/chat/{agent_id}/sessions` | Replayable sessions for the agent: `{session_id, actor_id, turns, last_at, ended_at, preview}` — `ended_at` is set once the console explicitly ended the runtime session, `null` while it is live or merely idle |
+| `GET` | `/api/chat/{agent_id}/history?session_id=` | The rendered thread items of one session, in replay order |
+| `POST` | `/api/chat/{agent_id}/sessions/{session_id}/stop` | **END SESSION** — data-plane `StopRuntimeSession(agentRuntimeArn, runtimeSessionId)` → `{session_id, ended: true, already_ended, ended_at}`. `already_ended: true` when AWS answered `ResourceNotFoundException` (the session had already ended or idle-expired) — a success, not an error. The ledger row is kept (history stays replayable) and stamped `ended_at`; a later turn posted under the same id starts a fresh runtime session and clears it. Only runtime-backed agents qualify (`zip_runtime`, `studio`, `container`, discovered runtimes); a managed Harness — deployed or imported — has no session-stop operation and answers 409 `chat.session_stop_unsupported` with `detail.reason_code` (`harness`). A session of another agent or workspace is 404 `chat.session_not_found`. A `RetryableConflictException` that outlives botocore's retries is 409 `aws.conflict` |
+
+Ending is explicit: NEW SESSION in the console only forgets the id locally, so the
+runtime session it leaves behind idles out on its own. END SESSION is what to press
+after a re-publish — AgentCore pins a live session to the version that first
+served it, so validation of the new version needs a fresh session.
 
 ## Console Online Evaluation API
 

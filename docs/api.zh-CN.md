@@ -80,7 +80,7 @@ with requests.post(
 | `ValidationException` | 400 | `aws.validation` |
 | `AccessDeniedException`、`UnauthorizedException` | 403 | `aws.access_denied` |
 | `ThrottlingException`、`TooManyRequestsException`、`ServiceQuotaExceededException` | 429 | `aws.throttled` |
-| `ConflictException`、`ResourceInUseException` | 409 | `aws.conflict` |
+| `ConflictException`、`ResourceInUseException`、`RetryableConflictException` | 409 | `aws.conflict` |
 
 `message` 是去掉 botocore 前缀后的 AWS 消息;`detail` 为
 `{"aws_error_code": "<AWS 错误码>", "operation": "<boto 操作名>"}`。其他 AWS 错误码
@@ -90,6 +90,22 @@ with requests.post(
 invalid`、`AWS access denied`、`AWS is throttling this request`、`AWS resource conflict`),
 `detail` 只含 `aws_error_code`——AWS 原文会暴露本部署的角色 ARN、实例 id 与操作名,这些只留在
 API-key 信任边界的控制台一侧。
+
+## 控制台 Chat API / Console Chat API
+
+`/api/chat/*` 支撑 Chat 交互页面，与 `/v1` 共用同一条调用链（`app.services.invoke`）。
+这里的会话就是 AgentCore Runtime 会话：控制台作为 `runtimeSessionId` 发出的 id，正是台账所记录的 id。
+
+| 方法 | 路径 | 结果 |
+|---|---|---|
+| `POST` | `/api/chat/{agent_id}` | 一轮对话，SSE 形式（`meta` → `delta`/`tool`/`error` → `done`）；`{prompt, session_id?}`，不带 id 即开启新会话 |
+| `GET` | `/api/chat/{agent_id}/sessions` | 该 agent 可回放的会话：`{session_id, actor_id, turns, last_at, ended_at, preview}`——`ended_at` 在控制台显式结束 runtime 会话后写入，仍存活或只是空闲时为 `null` |
+| `GET` | `/api/chat/{agent_id}/history?session_id=` | 某会话已渲染的对话条目，按回放顺序 |
+| `POST` | `/api/chat/{agent_id}/sessions/{session_id}/stop` | **结束会话**——数据面 `StopRuntimeSession(agentRuntimeArn, runtimeSessionId)` → `{session_id, ended: true, already_ended, ended_at}`。AWS 回 `ResourceNotFoundException`（会话早已结束或因空闲过期）时 `already_ended: true`，视为成功而非错误。台账行保留（历史仍可回放）并打上 `ended_at`；之后若在同一 id 下再发一轮，会开启新的 runtime 会话并清掉该标记。只有 runtime 支撑的 agent 才可结束（`zip_runtime`、`studio`、`container`、已发现的 runtime）；托管 Harness——无论自建还是导入——没有结束会话的操作，返回 409 `chat.session_stop_unsupported`，`detail.reason_code` 为 `harness`。其他 agent 或其他 workspace 的会话返回 404 `chat.session_not_found`。撑过 botocore 重试仍然出现的 `RetryableConflictException` 映射为 409 `aws.conflict` |
+
+结束是显式动作：控制台的「新会话」只在本地忘掉 id，留下的 runtime 会话会自行空闲过期。
+重新发布之后应当按「结束会话」——AgentCore 会把存活的会话钉在首次服务它的版本上，
+验证新版本需要一个全新的会话。
 
 ## 控制台在线评估 API / Console Online Evaluation API
 
