@@ -171,6 +171,13 @@ def _migrate(bind) -> None:
             if column not in existing:
                 with bind.begin() as conn:
                     conn.execute(text(ddl))
+    if "eval_runs" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("eval_runs")}
+        if "dataset_version" not in existing:
+            with bind.begin() as conn:
+                conn.execute(
+                    text("ALTER TABLE eval_runs ADD COLUMN dataset_version VARCHAR(16)")
+                )
     if "experiments" in inspector.get_table_names():
         existing = {c["name"] for c in inspector.get_columns("experiments")}
         additions = {

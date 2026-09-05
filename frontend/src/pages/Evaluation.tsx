@@ -29,6 +29,16 @@ import { OnlineView } from "./EvaluationOnline";
 
 const cloudRunnable = (d: CloudDataset) => d.status === "ACTIVE";
 
+// GET /api/eval/datasets/cloud/{id} — what the New Run form keeps per selection.
+interface CloudRunVersion {
+  version: string;
+  example_count: number | null;
+}
+interface CloudRunDetail {
+  has_ground_truth: boolean;
+  versions: CloudRunVersion[];
+}
+
 // Keep service-documented evaluators visible while a target region is still
 // rolling them out. Remove an id after live ListEvaluators verification shows
 // it is available in the deployment region.
@@ -65,14 +75,16 @@ const LEVEL_BADGE: Record<string, { label: string; color: string }> = {
 };
 
 // Backend scope encodings for the runs table: "window:24h" → "window · 24h",
-// "cloud:name" (AWS cloud dataset) → "☁ name", "online:<configId>" (on-demand
-// report of an online insights config) → "online · <configId>".
-function scopeLabel(run: RunInfo): string {
+// "cloud:name" (AWS cloud dataset) → "☁ name · v2" when the run pinned a
+// published version, "☁ name · <draftLabel>" otherwise; "online:<configId>"
+// (on-demand report of an online insights config) → "online · <configId>".
+function scopeLabel(run: RunInfo, draftLabel: string): string {
   if (run.dataset_name?.startsWith("window:")) {
     return `window · ${run.dataset_name.slice("window:".length)}`;
   }
   if (run.dataset_name?.startsWith("cloud:")) {
-    return `☁ ${run.dataset_name.slice("cloud:".length)}`;
+    const version = run.dataset_version ? `v${run.dataset_version}` : draftLabel;
+    return `☁ ${run.dataset_name.slice("cloud:".length)} · ${version}`;
   }
   if (run.dataset_name?.startsWith("online:")) {
     return `online · ${run.dataset_name.slice("online:".length)}`;
@@ -95,8 +107,11 @@ export function Evaluation() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [cloudDatasets, setCloudDatasets] = useState<CloudDataset[]>([]);
-  // cloud dataset ground-truth flags, fetched lazily per selection
-  const [cloudGt, setCloudGt] = useState<Record<string, boolean>>({});
+  // cloud dataset detail (ground-truth flag + published versions), fetched
+  // lazily per selection
+  const [cloudDetail, setCloudDetail] = useState<Record<string, CloudRunDetail>>({});
+  // published version to replay for a cloud dataset; "" = the DRAFT
+  const [datasetVersion, setDatasetVersion] = useState("");
   const [evaluators, setEvaluators] = useState<EvaluatorInfo[]>([]);
   const [runs, setRuns] = useState<RunInfo[]>([]);
   const [runTotal, setRunTotal] = useState(0);
@@ -231,19 +246,30 @@ export function Evaluation() {
     ? datasetId.slice(CLOUD_VALUE_PREFIX.length)
     : null;
   useEffect(() => {
-    if (!selectedCloudId || selectedCloudId in cloudGt) return;
+    if (!selectedCloudId || selectedCloudId in cloudDetail) return;
     fetch(`/api/eval/datasets/cloud/${selectedCloudId}`)
       .then((res) => res.json())
-      .then((d: { has_ground_truth?: boolean }) =>
-        setCloudGt((p) => ({ ...p, [selectedCloudId]: !!d.has_ground_truth })),
+      .then((d: { has_ground_truth?: boolean; versions?: CloudRunVersion[] }) =>
+        setCloudDetail((p) => ({
+          ...p,
+          [selectedCloudId]: {
+            has_ground_truth: !!d.has_ground_truth,
+            versions: d.versions ?? [],
+          },
+        })),
       )
       .catch(() => {});
-  }, [selectedCloudId, cloudGt]);
+  }, [selectedCloudId, cloudDetail]);
+  // the pinned version belongs to one dataset — a new selection is the draft
+  useEffect(() => {
+    setDatasetVersion("");
+  }, [selectedCloudId]);
+  const cloudVersions = selectedCloudId ? (cloudDetail[selectedCloudId]?.versions ?? []) : [];
   const selectedDataset = datasets.find((d) => d.id === datasetId);
   const trajectoryAllowed =
     scope === "dataset" &&
     (selectedCloudId
-      ? !!cloudGt[selectedCloudId]
+      ? !!cloudDetail[selectedCloudId]?.has_ground_truth
       : !!selectedDataset?.has_ground_truth);
   // Simulated persona datasets need an actor model (an LLM plays the user).
   const selectedCloud = cloudDatasets.find((d) => d.datasetId === selectedCloudId);
@@ -268,7 +294,10 @@ export function Evaluation() {
       ...(scope === "window"
         ? { lookback_hours: lookbackHours }
         : selectedCloudId
-          ? { cloud_dataset_id: selectedCloudId }
+          ? {
+              cloud_dataset_id: selectedCloudId,
+              ...(datasetVersion ? { dataset_version: datasetVersion } : {}),
+            }
           : { dataset_id: datasetId }),
       ...(simulatedSelected ? { actor_model_id: actorModelId } : {}),
     };
@@ -583,6 +612,33 @@ export function Evaluation() {
                   <div className="note" style={{ marginTop: 8 }}>
                     <span className="i">[i]</span>
                     <span>{t("evalPage.newRun.cloudHint")}</span>
+                  </div>
+                )}
+                {selectedCloudId && cloudVersions.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <label>{t("evalPage.newRun.version")}</label>
+                    <select
+                      className="input"
+                      value={datasetVersion}
+                      data-testid="dataset-version"
+                      onChange={(e) => setDatasetVersion(e.target.value)}
+                    >
+                      <option value="" style={{ background: "#141816" }}>
+                        {t("evalPage.newRun.versionDraft")}
+                      </option>
+                      {cloudVersions.map((v) => (
+                        <option key={v.version} value={v.version} style={{ background: "#141816" }}>
+                          {t("evalPage.newRun.versionOption", {
+                            version: v.version,
+                            examples: v.example_count ?? "?",
+                          })}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="note" style={{ marginTop: 8 }}>
+                      <span className="i">[i]</span>
+                      <span>{t("evalPage.newRun.versionHint")}</span>
+                    </div>
                   </div>
                 )}
                 {simulatedSelected && (
@@ -924,7 +980,7 @@ export function Evaluation() {
               >
                 <td className="mono">run-{run.id.slice(0, 6)}</td>
                 <td className="pri">{run.agent_name}</td>
-                <td className="mono dim">{scopeLabel(run)}</td>
+                <td className="mono dim">{scopeLabel(run, t("evalPage.runs.draftVersion"))}</td>
                 <td
                   className="mono dim"
                   title={run.evaluators.map((e) => evaluatorLabel(t, e)).join(", ")}
@@ -1058,7 +1114,7 @@ export function Evaluation() {
               </div>
               <div className="kv">
                 <span className="k">{t("evalPage.runs.dataset")}</span>
-                <span className="v">{scopeLabel(selectedRun)}</span>
+                <span className="v">{scopeLabel(selectedRun, t("evalPage.runs.draftVersion"))}</span>
               </div>
               <div className="kv">
                 <span className="k">{t("evalPage.runs.sessions")}</span>

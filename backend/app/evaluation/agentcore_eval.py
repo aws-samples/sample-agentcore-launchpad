@@ -1019,8 +1019,15 @@ def create_dataset(
     return client.create_dataset(**kwargs)
 
 
-def get_dataset(client: Any, *, dataset_id: str) -> dict[str, Any]:
-    return client.get_dataset(datasetId=dataset_id)
+def get_dataset(
+    client: Any, *, dataset_id: str, version: str | None = None
+) -> dict[str, Any]:
+    """GetDataset — the DRAFT by default, or one published version when
+    ``version`` (a version number, never the literal ``DRAFT``) is given."""
+    kwargs: dict[str, Any] = {"datasetId": dataset_id}
+    if version:
+        kwargs["datasetVersion"] = version
+    return client.get_dataset(**kwargs)
 
 
 def list_datasets(client: Any) -> list[dict[str, Any]]:
@@ -1035,15 +1042,22 @@ def list_datasets(client: Any) -> list[dict[str, Any]]:
             return out
 
 
-def list_dataset_examples(client: Any, *, dataset_id: str) -> list[dict[str, Any]]:
+def list_dataset_examples(
+    client: Any, *, dataset_id: str, version: str | None = None
+) -> list[dict[str, Any]]:
     """All examples of a cloud dataset, in the schema they were created with
-    (each carries a service-assigned ``exampleId`` on top)."""
+    (each carries a service-assigned ``exampleId`` on top). Reads the DRAFT
+    unless ``version`` pins a published version; AWS only honours
+    ``datasetVersion`` on the first page (later pages take it from the
+    pagination token), so it is sent once."""
     out: list[dict[str, Any]] = []
     token: str | None = None
     while True:
         kwargs: dict[str, Any] = {"datasetId": dataset_id}
         if token:
             kwargs["nextToken"] = token
+        elif version:
+            kwargs["datasetVersion"] = version
         resp = client.list_dataset_examples(**kwargs)
         out.extend(resp.get("examples", []))
         token = resp.get("nextToken")

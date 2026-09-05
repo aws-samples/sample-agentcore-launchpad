@@ -1845,6 +1845,7 @@
       "created": "创建时间",
       "status": "状态",
       "empty": "还没有运行——点击 + 新建运行",
+      "draftVersion": "草稿",
       "newEvaluation": "新建评估",
       "createExperiment": "创建 BUNDLE A/B 实验",
       "sessions": "会话数",
@@ -1921,6 +1922,10 @@
       "cloudGroup": "AWS 云端数据集",
       "cloudSimulated": "模拟人格",
       "cloudHint": "AWS 云端数据集——运行时从 AWS 取回 scenario 对 Agent 执行，真值一并注入。",
+      "version": "版本",
+      "versionDraft": "草稿",
+      "versionOption": "v{{version}} · {{examples}} 条示例",
+      "versionHint": "草稿回放数据集当前内容；固定到已发布版本则精确回放该快照中的 scenario，之后草稿如何变化都不受影响。",
       "actorModel": "扮演用户的 ACTOR 模型",
       "actorModelHint": "模拟人格场景：由 LLM actor 扮演用户与 Agent 对话，直到达成目标或达到 max_turns。此处选择驱动 actor 的 Bedrock 模型。"
     },
