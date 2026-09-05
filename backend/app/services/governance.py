@@ -3,6 +3,8 @@
 import json
 import re
 import time
+import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -366,6 +368,359 @@ def unmanage_gateway(control: Any, gateway_id: str) -> dict[str, Any]:
     policy_api.untag_managed(control, gateway["gatewayArn"])
     invalidate_gateway_cache()
     return {"gateway_id": gateway_id, "managed": False}
+
+
+# ---- Gateway rate limits (synchronous control-plane calls) --------------------
+
+# Fixed keys from the AgentCore dimension catalogue; `$.context.jwt.<claim>` is the
+# only open-ended family and is matched by RATE_LIMIT_JWT_CLAIM below.
+RATE_LIMIT_FIXED_KEYS = (
+    "targetName",
+    "toolName",
+    "qualifiedModelId",
+    "$.context.iam.principal",
+    "$.context.iam.sourceIdentity",
+)
+RATE_LIMIT_JWT_PREFIX = "$.context.jwt."
+# botocore's DimensionKey pattern for the claim part (a 1-char claim is rejected by AWS too)
+RATE_LIMIT_JWT_CLAIM = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_\-.]{0,61}[a-zA-Z0-9_]$")
+# metric → periods the service accepts (tokens are per-minute only; connections per-second only)
+RATE_LIMIT_PERIODS: dict[str, tuple[str, ...]] = {
+    "requests": ("second", "minute"),
+    "tokens": ("minute",),
+    "connections": ("second",),
+}
+RATE_LIMIT_MAX_KEYS = 10
+RATE_LIMIT_MAX_ENTRIES = 1000
+RATE_LIMIT_MAX_RATE = 10_000_000
+RATE_LIMIT_MAX_DESCRIPTION = 512
+RATE_LIMIT_WILDCARD = "*"
+
+
+def _rate_limit_invalid(reason: str, message: str, **extra: Any) -> AppError:
+    return AppError(
+        "governance.rate_limit_invalid",
+        message,
+        {"reason": reason, **extra},
+        status_code=422,
+    )
+
+
+def is_rate_limit_dimension_key(key: str) -> bool:
+    if key in RATE_LIMIT_FIXED_KEYS:
+        return True
+    if key.startswith(RATE_LIMIT_JWT_PREFIX):
+        return bool(RATE_LIMIT_JWT_CLAIM.match(key[len(RATE_LIMIT_JWT_PREFIX) :]))
+    return False
+
+
+def _entry_field(entry: Any, name: str) -> Any:
+    """Read a field from a pydantic entry or a plain dict alike."""
+    return entry.get(name) if isinstance(entry, dict) else getattr(entry, name, None)
+
+
+def _rate_configs(entry: Any, metric: str) -> list[dict[str, Any]]:
+    return [
+        item if isinstance(item, dict) else {"rate": item.rate, "period": item.period}
+        for item in (_entry_field(entry, metric) or [])
+    ]
+
+
+def _entry_dimensions(entry: Any) -> dict[str, str]:
+    return dict(_entry_field(entry, "dimensions") or {})
+
+
+def validate_rate_limit_spec(
+    dimension_keys: list[str],
+    entries: list[Any],
+    description: str | None,
+) -> list[dict[str, Any]]:
+    """Check a rate-limit spec against the documented service rules.
+
+    Runs before any AWS call so a malformed spec answers 422 with a stable
+    ``detail.reason`` instead of a ``ValidationException`` that names the
+    operation. Returns the ``entries`` in the exact ``LimitEntry`` wire shape
+    (only the metrics that were supplied are present).
+    """
+    if not 1 <= len(dimension_keys) <= RATE_LIMIT_MAX_KEYS:
+        raise _rate_limit_invalid(
+            "dimension_keys_count",
+            f"a rate limit needs 1-{RATE_LIMIT_MAX_KEYS} dimension keys",
+        )
+    seen: set[str] = set()
+    for key in dimension_keys:
+        if not is_rate_limit_dimension_key(key):
+            raise _rate_limit_invalid(
+                "dimension_key_unknown",
+                f"{key!r} is not a Gateway rate-limit dimension key",
+                key=key,
+            )
+        if key in seen:
+            raise _rate_limit_invalid(
+                "dimension_key_duplicate", f"dimension key {key!r} is listed twice", key=key
+            )
+        seen.add(key)
+    if not 1 <= len(entries) <= RATE_LIMIT_MAX_ENTRIES:
+        raise _rate_limit_invalid(
+            "entries_count", f"a rate limit needs 1-{RATE_LIMIT_MAX_ENTRIES} entries"
+        )
+    if description is not None and len(description) > RATE_LIMIT_MAX_DESCRIPTION:
+        raise _rate_limit_invalid(
+            "description_too_long",
+            f"description must be at most {RATE_LIMIT_MAX_DESCRIPTION} characters",
+        )
+
+    wire: list[dict[str, Any]] = []
+    for index, entry in enumerate(entries):
+        dimensions = _entry_dimensions(entry)
+        if set(dimensions) != set(dimension_keys):
+            raise _rate_limit_invalid(
+                "entry_dimensions_mismatch",
+                f"entry {index} must set exactly the dimension keys {list(dimension_keys)}",
+                index=index,
+            )
+        # `*` only in trailing positions: once a value is the wildcard, every later
+        # (less significant) key must be the wildcard as well.
+        values = [dimensions[key] for key in dimension_keys]
+        if any(not value for value in values):
+            raise _rate_limit_invalid(
+                "entry_dimension_empty", f"entry {index} has an empty dimension value", index=index
+            )
+        wildcard_seen = False
+        for value in values:
+            if value == RATE_LIMIT_WILDCARD:
+                wildcard_seen = True
+            elif wildcard_seen:
+                raise _rate_limit_invalid(
+                    "wildcard_not_trailing",
+                    f"entry {index}: '*' is only allowed in trailing dimension positions",
+                    index=index,
+                )
+        wire_entry: dict[str, Any] = {"dimensions": dict(dimensions)}
+        for metric, periods in RATE_LIMIT_PERIODS.items():
+            configs = _rate_configs(entry, metric)
+            if not configs:
+                continue
+            if len(configs) != 1:
+                raise _rate_limit_invalid(
+                    "rate_config_count",
+                    f"entry {index}: {metric} takes exactly one rate config",
+                    index=index,
+                    metric=metric,
+                )
+            config = configs[0]
+            rate = config.get("rate")
+            if not isinstance(rate, int | float) or not 0 <= rate <= RATE_LIMIT_MAX_RATE:
+                raise _rate_limit_invalid(
+                    "rate_out_of_range",
+                    f"entry {index}: {metric} rate must be between 0 and {RATE_LIMIT_MAX_RATE}",
+                    index=index,
+                    metric=metric,
+                )
+            if config.get("period") not in periods:
+                raise _rate_limit_invalid(
+                    "period_not_allowed",
+                    f"entry {index}: {metric} accepts period {' or '.join(periods)}",
+                    index=index,
+                    metric=metric,
+                )
+            wire_entry[metric] = [{"rate": float(rate), "period": config["period"]}]
+        if len(wire_entry) == 1:
+            raise _rate_limit_invalid(
+                "entry_no_metric",
+                f"entry {index} needs at least one of requests, tokens or connections",
+                index=index,
+            )
+        wire.append(wire_entry)
+    return wire
+
+
+def _rate_limit_out(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item.get("rateLimitId"),
+        "gateway_id": item.get("gatewayIdentifier"),
+        "description": item.get("description") or "",
+        "dimension_keys": list(item.get("dimensionKeys") or []),
+        "entries": list(item.get("entries") or []),
+        "status": item.get("status") or "",
+        "created_at": iso(item.get("createdAt")),
+        "updated_at": iso(item.get("updatedAt")),
+    }
+
+
+def _aws_payload(response: Any) -> dict[str, Any]:
+    if not isinstance(response, dict):
+        return {}
+    return {key: value for key, value in response.items() if key != "ResponseMetadata"}
+
+
+def list_rate_limits(control: Any, gateway_id: str) -> dict[str, Any]:
+    """Read-only: every rate limit on a Gateway, managed or not."""
+    return {
+        "rate_limits": [
+            _rate_limit_out(item)
+            for item in policy_api.list_gateway_rate_limits(control, gateway_id)
+        ]
+    }
+
+
+def _current_rate_limit(control: Any, gateway_id: str, rate_limit_id: str) -> dict[str, Any]:
+    """The prior rate limit for the ``before`` snapshot, or ``{}`` if unreadable.
+
+    The journal must never block the mutation: a missing rate limit surfaces from
+    the mutation call itself as the mapped AWS error.
+    """
+    try:
+        return _aws_payload(policy_api.get_gateway_rate_limit(control, gateway_id, rate_limit_id))
+    except Exception:
+        return {}
+
+
+def _journaled_rate_limit_call(
+    db: Session,
+    *,
+    workspace_id: str,
+    gateway: dict[str, Any],
+    operation: str,
+    before: dict[str, Any],
+    requested: dict[str, Any],
+    call: Callable[[], Any],
+) -> dict[str, Any]:
+    """Run one synchronous rate-limit mutation inside a ``policy_changes`` row.
+
+    Unlike the policy mutations there is no 202/operation hop: the row is written
+    as ``running`` before the call and closed as ``succeeded``/``failed`` right
+    after, so the Audit view lists it and a crash mid-call leaves a visible row.
+    """
+    change = PolicyChange(
+        workspace_id=workspace_id,
+        gateway_id=gateway["gatewayId"],
+        gateway_arn=gateway["gatewayArn"],
+        gateway_name=gateway["name"],
+        operation=operation,
+        operator=operator_identity(),
+        status="running",
+        before=json_snapshot(before),
+        requested=json_snapshot(requested),
+        started_at=datetime.now(UTC),
+    )
+    db.add(change)
+    db.commit()
+    try:
+        response = _aws_payload(call())
+    except Exception as exc:
+        change.status = "failed"
+        change.error = str(exc)
+        change.completed_at = datetime.now(UTC)
+        db.commit()
+        raise
+    change.status = "succeeded"
+    change.after = json_snapshot(response)
+    change.completed_at = datetime.now(UTC)
+    db.commit()
+    return response
+
+
+def create_rate_limit(
+    db: Session,
+    control: Any,
+    workspace_id: str,
+    gateway_id: str,
+    request: Any,
+) -> dict[str, Any]:
+    entries = validate_rate_limit_spec(
+        list(request.dimension_keys), list(request.entries), request.description
+    )
+    gateway = _require_managed(control, gateway_id)
+    requested = {
+        "dimension_keys": list(request.dimension_keys),
+        "entries": entries,
+        "description": request.description,
+    }
+    response = _journaled_rate_limit_call(
+        db,
+        workspace_id=workspace_id,
+        gateway=gateway,
+        operation="rate_limit.create",
+        before={},
+        requested=requested,
+        call=lambda: policy_api.create_gateway_rate_limit(
+            control,
+            gateway_id=gateway_id,
+            dimension_keys=list(request.dimension_keys),
+            entries=entries,
+            description=request.description,
+            client_token=uuid.uuid4().hex,
+        ),
+    )
+    return _rate_limit_out(response)
+
+
+def update_rate_limit(
+    db: Session,
+    control: Any,
+    workspace_id: str,
+    gateway_id: str,
+    rate_limit_id: str,
+    request: Any,
+) -> dict[str, Any]:
+    if getattr(request, "dimension_keys", None) is not None:
+        raise _rate_limit_invalid(
+            "dimension_keys_immutable",
+            "dimension keys cannot change after creation — delete and recreate the rate limit",
+        )
+    gateway = _require_managed(control, gateway_id)
+    before = _current_rate_limit(control, gateway_id, rate_limit_id)
+    dimension_keys = list(before.get("dimensionKeys") or [])
+    if not dimension_keys:
+        # The prior record is unreadable (or the stub has none): derive the key set
+        # from the first entry so the trailing-`*` and period rules still run.
+        dimension_keys = list(_entry_dimensions(request.entries[0])) if request.entries else []
+    entries = validate_rate_limit_spec(dimension_keys, list(request.entries), request.description)
+    requested = {"entries": entries, "description": request.description}
+    response = _journaled_rate_limit_call(
+        db,
+        workspace_id=workspace_id,
+        gateway=gateway,
+        operation="rate_limit.update",
+        before=before,
+        requested=requested,
+        call=lambda: policy_api.update_gateway_rate_limit(
+            control,
+            gateway_id=gateway_id,
+            rate_limit_id=rate_limit_id,
+            entries=entries,
+            description=request.description,
+        ),
+    )
+    return _rate_limit_out(response)
+
+
+def delete_rate_limit(
+    db: Session,
+    control: Any,
+    workspace_id: str,
+    gateway_id: str,
+    rate_limit_id: str,
+) -> dict[str, Any]:
+    gateway = _require_managed(control, gateway_id)
+    before = _current_rate_limit(control, gateway_id, rate_limit_id)
+    response = _journaled_rate_limit_call(
+        db,
+        workspace_id=workspace_id,
+        gateway=gateway,
+        operation="rate_limit.delete",
+        before=before,
+        requested={"rate_limit_id": rate_limit_id},
+        call=lambda: policy_api.delete_gateway_rate_limit(
+            control, gateway_id=gateway_id, rate_limit_id=rate_limit_id
+        ),
+    )
+    return {
+        "deleted": True,
+        "id": response.get("rateLimitId") or rate_limit_id,
+        "status": response.get("status") or "DELETING",
+    }
 
 
 def discover_actions(targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
