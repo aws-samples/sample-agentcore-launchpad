@@ -115,6 +115,10 @@ public `/v1` agent invocation contract.
 | `POST` | `/api/governance/gateways/{id}/generations` | Start NL → Cedar generation for review only |
 | `GET` | `/api/governance/gateways/{id}/generations/{generation_id}` | Poll generation status and read draft assets |
 | `GET` | `/api/governance/gateways/{id}/decisions` | AWS decision projection or explicit unavailable state |
+| `GET` | `/api/governance/gateways/{id}/rate-limits` | `{rate_limits: [...]}` — every Gateway rate limit (all `nextToken` pages); works on any Gateway |
+| `POST` | `/api/governance/gateways/{id}/rate-limits` | Create a rate limit → `201` with the created record; managed Gateways only |
+| `PUT` | `/api/governance/gateways/{id}/rate-limits/{rate_limit_id}` | Replace `entries` (+ optional `description`); `dimensionKeys` are immutable → `422` |
+| `DELETE` | `/api/governance/gateways/{id}/rate-limits/{rate_limit_id}` | Delete → `{deleted: true, id, status}` |
 | `GET` | `/api/governance/gateways/{id}/audit` | Immutable local change journal |
 | `GET` | `/api/governance/operations/{operation_id}` | Async operation status |
 
@@ -123,6 +127,44 @@ Policy and Gateway mutations return `202`:
 ```json
 {"operation": {"id": "...", "status": "pending", "operation": "policy_create"}}
 ```
+
+The rate-limit routes are **synchronous** — no operation to poll. A rate limit
+is `{id, gateway_id, description, dimension_keys, entries, status, created_at,
+updated_at}` with `status` ∈ `CREATING | ACTIVE | UPDATING | DELETING`. Create
+takes:
+
+```json
+{
+  "dimension_keys": ["targetName", "$.context.jwt.sub"],
+  "entries": [
+    {"dimensions": {"targetName": "office-facts", "$.context.jwt.sub": "*"},
+     "requests": [{"rate": 10, "period": "second"}],
+     "tokens": [{"rate": 5000, "period": "minute"}]},
+    {"dimensions": {"targetName": "*", "$.context.jwt.sub": "*"},
+     "requests": [{"rate": 60, "period": "minute"}]}
+  ],
+  "description": "per-target RPS with a default bucket"
+}
+```
+
+Update takes `entries` (replace semantics) and optional `description`. Validation
+runs before any AWS call and answers `422 governance.rate_limit_invalid` with
+`detail.reason` ∈ `dimension_keys_count | dimension_key_unknown |
+dimension_key_duplicate | entries_count | entry_dimensions_mismatch |
+entry_dimension_empty | wildcard_not_trailing | entry_no_metric |
+rate_config_count | rate_out_of_range | period_not_allowed |
+description_too_long | dimension_keys_immutable`: 1–10 keys from `targetName`,
+`toolName`, `qualifiedModelId`, `$.context.jwt.<claim>`,
+`$.context.iam.principal`, `$.context.iam.sourceIdentity`; 1–1000 entries whose
+`dimensions` carry exactly the parent keys; `*` only in trailing positions; at
+least one metric per entry; `rate` 0–10 000 000; `requests` per
+`second`/`minute`, `tokens` per `minute` only, `connections` per `second` only;
+description ≤ 512 chars. Mutations on an unmanaged Gateway answer `409
+governance.gateway_not_managed`; a duplicate dimension-key set or a busy Gateway
+is AWS `ConflictException` → `409 aws.conflict`. Every mutation is journaled in
+the audit route as `rate_limit.create` / `rate_limit.update` /
+`rate_limit.delete` (`before` = prior record or `{}`, `requested` = payload,
+`after` = AWS response, status `succeeded`/`failed`).
 
 Generation start returns
 `{"operation": …, "generation_id": …, "status": …}`; a generated asset is only

@@ -56,7 +56,7 @@ English: [architecture.md](architecture.md)
 | **Runtime** | 托管 zip 与 container Agent(`CreateAgentRuntime`);调用链访问 runtime 数据面。 |
 | **Harness** | 托管方式B Agent(`CreateHarness`)——托管入口,无构建产物。 |
 | **Memory** | 一个共享的 `launchpad_memory` 单例:短期 session 事件 + 长期语义与用户偏好策略。命名空间只按 `{actorId}` 分区(没有 `{agentId}` 模板变量),因此平台把 Agent id 折进 actor——`scoped_actor(agent_id, human)` → `<agent>__<human>`——从而让**短期事件与长期记录**(`/facts/<agent>__<human>`)都按 Agent 分区。生成的 Strands Runtime 通过 `AgentCoreMemorySessionManager` 恢复短期对话。Claude Agent SDK 容器为每次调用创建独立的 `MemorySessionManager`,通过 `UserPromptSubmit` Hook 注入有界的短期对话及 `/facts/<actor>`、`/preferences/<actor>` 记录,并在调用成功后把 USER/ASSISTANT 对作为一个事件持久化。A2A Runtime 使用 `<agent>__a2a__<contextId>`,因为直接 A2A 调用目前没有经过身份认证的 human actor envelope。一个 Agent 学到的偏好不会串到同一个人的另一个 Agent 或 A2A context;台账仍存裸的 human actor 用于展示。 |
-| **Gateway** | `launchpad-gw` 把一个 REST API(office-facts)和一个 Lambda(hr-database)转成带 Cognito-JWT 鉴权的 MCP 工具;Agent 的工具调用经由它流转。 |
+| **Gateway** | `launchpad-gw` 把一个 REST API(office-facts)和一个 Lambda(hr-database)转成带 Cognito-JWT 鉴权的 MCP 工具;Agent 的工具调用经由它流转。治理页为已纳管的 Gateway 管理 **Gateway 限流**（2026 年 8 月 GA）：`ListGatewayRateLimits` / `CreateGatewayRateLimit` / `UpdateGatewayRateLimit` / `DeleteGatewayRateLimit` 位于网关详情的「限流」面板之后，服务端校验并记入 `policy_changes`。 |
 | **Identity** | 支撑网关的 token vault——一个 OAuth2 provider(Agent 出站鉴权)和一个 API-key provider。 |
 | **Registry** | `launchpad-registry` 编目三类 descriptor:A2A(Agent)、MCP(工具)、AGENT_SKILLS(Skill)。每次部署都会自动创建并提交一条 A2A 记录。控制台也支持手动注册——外部远程 MCP 服务器(streamable-http URL)与技能(SKILL.md → 制品桶)——并驱动完整生命周期:提交 → 批准/驳回(REJECTED 仍可改判批准)、下架(终态——已实测,之后只能删除)、删除。注册中心同时是**挂载目录**:`GET /api/registry/attachables` 只向创建向导提供 APPROVED 的 MCP/技能记录,MCP 记录按 URL 分流——共享网关 URL 挂为 `agentcore_gateway`(OAuth),其他 URL 挂为 `remote_mcp`(暂不带鉴权)——技能按其 s3 路径经 `skills[{path}]` 挂载。 |
 | **Policy** | 挂接到网关的 Cedar 策略引擎,初始挂载模式由操作员选择(默认 `ENFORCE`,可选 `LOG_ONLY`);deny 决策会带上作出判定的 policy id。支持 NL → Cedar 策略生成。引用已被删除的引擎时,治理页面显式展示失效引用而不是报错,策略变更返回 409,创建并挂载会替换该引用。 |
@@ -270,6 +270,39 @@ public  /v1  ──┘        │
 
 公开 `/v1` 接口额外加了 `X-Api-Key` 鉴权(密钥以 sha256 哈希存储);分派之后的
 一切与控制台路径完全相同。
+
+## 既有 Gateway 治理：限流
+
+网关详情的「限流」面板通过 `/api/governance/gateways/{id}/rate-limits` 下的四条同步路由
+（`GET` 列表、`POST` 创建、`PUT /{rate_limit_id}` 更新、`DELETE /{rate_limit_id}` 删除）管理
+AgentCore Gateway 限流（2026 年 8 月 GA）。封装函数（`list_gateway_rate_limits`、
+`create_gateway_rate_limit`、`update_gateway_rate_limit`、`delete_gateway_rate_limit`）放在
+`app/services/agentcore/policy.py`，与其他 Gateway 控制面调用并列，显式接收 control client；
+列表会跟完所有 `nextToken` 分页。读取对任意 Gateway 可用；所有变更都要求 Launchpad 纳管标签
+（`409 governance.gateway_not_managed`，与策略变更同一规则）。
+
+一条限流规则 = 一组固定且有序的**维度键** + 最多 1000 个**条目**；每个条目为每个键给一个值
+（`*` 表示任意）并为每个指标给一个速率。`validate_rate_limit_spec` 在任何 AWS 调用之前校验
+文档规则，失败返回 `422 governance.rate_limit_invalid` 并带稳定的 `detail.reason`：
+
+| 规则 | `detail.reason` |
+|---|---|
+| 1–10 个键，每个取自 `targetName`、`toolName`、`qualifiedModelId`、`$.context.jwt.<claim>`、`$.context.iam.principal`、`$.context.iam.sourceIdentity`，不得重复 | `dimension_keys_count`、`dimension_key_unknown`、`dimension_key_duplicate` |
+| 1–1000 个条目；每个条目的 `dimensions` 必须恰好是父级键集合，值不能为空 | `entries_count`、`entry_dimensions_mismatch`、`entry_dimension_empty` |
+| `*` 只能出现在尾部位置（某个值为 `*` 后，其后每个键都必须是 `*`） | `wildcard_not_trailing` |
+| `requests` / `tokens` / `connections` 至少一个，每个指标恰好一个速率配置 | `entry_no_metric`、`rate_config_count` |
+| `rate` 0–10 000 000；`requests` 按 `second`/`minute`，`tokens` 仅 `minute`，`connections` 仅 `second` | `rate_out_of_range`、`period_not_allowed` |
+| 描述 ≤ 512 字符；更新时不得携带 `dimensionKeys` | `description_too_long`、`dimension_keys_immutable` |
+
+AWS `ConflictException`（同一键集合已有限流规则，或 Gateway 正忙）经共享的 `ClientError`
+信封映射为 `409 aws.conflict`。与策略变更不同，这里没有 202/operation 跳转：`PolicyChange`
+行（`rate_limit.create` / `rate_limit.update` / `rate_limit.delete`；`before` = 变更前的限流规则
+或 `{}`，`requested` = 校验后的载荷，`after` = AWS 响应）在调用前以 `running` 写入、调用后
+内联收口为 `succeeded`/`failed`，因此审计视图能列出它，调用中途崩溃也会留下可见的行。面板
+明示文档语义——生效速率 = min(服务托管上限，配置值)、约 30 秒内生效、故障放行（fail-open）、
+速率 0 拦截全部匹配流量、在 Policy **之前**评估——在客户端镜像尾部 `*` 与周期矩阵规则，并通过
+共享 `Btn` 的 `disabledReason` 解释被禁用的操作（未纳管 / Gateway 非 READY / 限流规则非 ACTIVE /
+表单无效）。无需 IAM 变更：控制台角色已具备 `bedrock-agentcore:*`。
 
 ## 控制台路由
 

@@ -91,6 +91,46 @@ invalid`、`AWS access denied`、`AWS is throttling this request`、`AWS resourc
 `detail` 只含 `aws_error_code`——AWS 原文会暴露本部署的角色 ARN、实例 id 与操作名,这些只留在
 API-key 信任边界的控制台一侧。
 
+## 控制台治理 API：Gateway 限流 / Console Governance API: Gateway rate limits
+
+`/api/governance/gateways/{id}/rate-limits` 管理 AgentCore **Gateway 限流**（2026 年 8 月 GA）。这些路由是**同步**的，
+没有可轮询的 operation；AWS 是唯一事实来源，每次变更都记入本地审计日志。
+
+| 方法 | 路径 | 结果 |
+|---|---|---|
+| `GET` | `/api/governance/gateways/{id}/rate-limits` | `{rate_limits: [...]}`：该 Gateway 的全部限流规则（跟完所有 `nextToken` 分页）；对任意 Gateway 可读 |
+| `POST` | `/api/governance/gateways/{id}/rate-limits` | 创建 → `201` 返回创建的记录；仅限已纳管 Gateway |
+| `PUT` | `/api/governance/gateways/{id}/rate-limits/{rate_limit_id}` | 整体替换 `entries`（可带 `description`）；`dimensionKeys` 不可变，携带则 `422` |
+| `DELETE` | `/api/governance/gateways/{id}/rate-limits/{rate_limit_id}` | 删除 → `{deleted: true, id, status}` |
+
+一条限流规则为 `{id, gateway_id, description, dimension_keys, entries, status, created_at, updated_at}`，
+`status` ∈ `CREATING | ACTIVE | UPDATING | DELETING`。创建请求体：
+
+```json
+{
+  "dimension_keys": ["targetName", "$.context.jwt.sub"],
+  "entries": [
+    {"dimensions": {"targetName": "office-facts", "$.context.jwt.sub": "*"},
+     "requests": [{"rate": 10, "period": "second"}],
+     "tokens": [{"rate": 5000, "period": "minute"}]},
+    {"dimensions": {"targetName": "*", "$.context.jwt.sub": "*"},
+     "requests": [{"rate": 60, "period": "minute"}]}
+  ],
+  "description": "per-target RPS with a default bucket"
+}
+```
+
+校验在任何 AWS 调用之前完成，失败返回 `422 governance.rate_limit_invalid`，`detail.reason` ∈
+`dimension_keys_count | dimension_key_unknown | dimension_key_duplicate | entries_count | entry_dimensions_mismatch |
+entry_dimension_empty | wildcard_not_trailing | entry_no_metric | rate_config_count | rate_out_of_range |
+period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 个键，取自 `targetName`、`toolName`、
+`qualifiedModelId`、`$.context.jwt.<claim>`、`$.context.iam.principal`、`$.context.iam.sourceIdentity`；1–1000 个条目，
+每个条目的 `dimensions` 恰好包含父级键；`*` 只能出现在尾部位置；每个条目至少一个指标；`rate` 0–10 000 000；
+`requests` 按 `second`/`minute`，`tokens` 仅 `minute`，`connections` 仅 `second`；描述 ≤ 512 字符。
+未纳管 Gateway 上的变更返回 `409 governance.gateway_not_managed`；键集合重复或 Gateway 正忙时 AWS 抛出
+`ConflictException` → `409 aws.conflict`。每次变更都以 `rate_limit.create` / `rate_limit.update` / `rate_limit.delete`
+记入审计路由（`before` = 变更前记录或 `{}`，`requested` = 载荷，`after` = AWS 响应，状态 `succeeded`/`failed`）。
+
 ## 控制台在线评估 API / Console Online Evaluation API
 
 `/api/eval/online/*` 管理 AgentCore **在线评估配置**:按采样比例持续给真实会话打分。AWS 是唯一事实来源,
