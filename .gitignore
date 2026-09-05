@@ -1,5 +1,6 @@
 # --- session / tool artifacts (repo root only) ---
 /.claude/
+/self-evolution/
 /.codegraph/
 /.trellis/
 /.supergoal/

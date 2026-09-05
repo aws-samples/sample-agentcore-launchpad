@@ -1,4 +1,0 @@
-# Evidence that must not bloat a public repo: screenshots (~100 MB) and the
-# Playwright probe bundles. The reports/handoffs that cite them stay tracked.
-*.png
-probe-bundle.js

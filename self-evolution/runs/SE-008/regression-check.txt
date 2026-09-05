@@ -1,4 +1,0 @@
-i18n_zh_punct: /tmp/se008_regress.json: 1 value(s) use half-width punctuation next to CJK
-  evalPage.runs.failureReason: '失败原因:' -> '失败原因：'
-i18n_zh_punct: run `python3 scripts/i18n_zh_punct.py --fix` to convert them
-i18n_zh_punct: FAIL
