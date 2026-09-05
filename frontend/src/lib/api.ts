@@ -857,6 +857,55 @@ export interface GovernanceAuditResponse {
   changes: GovernancePolicyChange[];
 }
 
+export type GovernanceRatePeriod = "second" | "minute";
+export type GovernanceRateMetric = "requests" | "tokens" | "connections";
+
+export interface GovernanceRateConfig {
+  rate: number;
+  period: GovernanceRatePeriod;
+}
+
+/** One `LimitEntry`: dimension values (in the parent's key set) + per-metric rate. */
+export interface GovernanceRateLimitEntry {
+  dimensions: Record<string, string>;
+  requests?: GovernanceRateConfig[];
+  tokens?: GovernanceRateConfig[];
+  connections?: GovernanceRateConfig[];
+}
+
+export interface GovernanceRateLimit {
+  id: string;
+  gateway_id: string | null;
+  description: string;
+  /** Immutable after creation; `*` is only allowed in trailing positions. */
+  dimension_keys: string[];
+  entries: GovernanceRateLimitEntry[];
+  status: string; // CREATING | ACTIVE | UPDATING | DELETING
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface GovernanceRateLimitListResponse {
+  rate_limits: GovernanceRateLimit[];
+}
+
+export interface GovernanceRateLimitCreateRequest {
+  dimension_keys: string[];
+  entries: GovernanceRateLimitEntry[];
+  description?: string | null;
+}
+
+export interface GovernanceRateLimitUpdateRequest {
+  entries: GovernanceRateLimitEntry[];
+  description?: string | null;
+}
+
+export interface GovernanceRateLimitDeleteResult {
+  deleted: boolean;
+  id: string;
+  status: string;
+}
+
 export interface GovernanceToolInfo {
   name: string;
   source: "gateway" | "builtin";
@@ -2486,6 +2535,29 @@ export const api = {
       `${governanceGatewayPath(gatewayId)}/decisions?${query.toString()}`,
     );
   },
+  listGovernanceRateLimits: (gatewayId: string) =>
+    request<GovernanceRateLimitListResponse>(
+      `${governanceGatewayPath(gatewayId)}/rate-limits`,
+    ),
+  createGovernanceRateLimit: (gatewayId: string, input: GovernanceRateLimitCreateRequest) =>
+    request<GovernanceRateLimit>(`${governanceGatewayPath(gatewayId)}/rate-limits`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  updateGovernanceRateLimit: (
+    gatewayId: string,
+    rateLimitId: string,
+    input: GovernanceRateLimitUpdateRequest,
+  ) =>
+    request<GovernanceRateLimit>(
+      `${governanceGatewayPath(gatewayId)}/rate-limits/${encodeURIComponent(rateLimitId)}`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
+  deleteGovernanceRateLimit: (gatewayId: string, rateLimitId: string) =>
+    request<GovernanceRateLimitDeleteResult>(
+      `${governanceGatewayPath(gatewayId)}/rate-limits/${encodeURIComponent(rateLimitId)}`,
+      { method: "DELETE" },
+    ),
   governanceAudit: (gatewayId: string) =>
     request<GovernanceAuditResponse>(`${governanceGatewayPath(gatewayId)}/audit`),
   governanceOperation: (operationId: string) =>
