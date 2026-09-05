@@ -237,7 +237,7 @@ For terminal-attached development, use `make dev` and stop it with `Ctrl+C`.
 | `apps/studio/` | Vendored Strands Studio sub-app (方式C), rewired to the platform pipeline |
 | `vendor/skillopt/` | Vendored SkillOpt subset (skill evaluation & training engine; pin + patches in `LAUNCHPAD_DEVIATIONS.md`) |
 | `start.py`, `stop.sh` | Background local-stack lifecycle, health checks, PID ownership and logs |
-| `scripts/` | `bootstrap.py`, `teardown.py`, `dev.sh`, `verify.sh`, `i18n_check.py` |
+| `scripts/` | `bootstrap.py`, `teardown.py`, `dev.sh`, `verify.sh`, `i18n_check.py`, `i18n_zh_punct.py` |
 | `config/` | `launchpad.example.yaml` (committed); `launchpad.yaml` (generated, gitignored) |
 | `docs/` | Setup, API, architecture, troubleshooting, teardown, Studio integration |
 
