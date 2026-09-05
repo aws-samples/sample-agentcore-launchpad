@@ -87,6 +87,9 @@ AWS_ERROR_MAP: dict[str, tuple[int, str]] = {
     "ServiceQuotaExceededException": (429, "aws.throttled"),
     "ConflictException": (409, "aws.conflict"),
     "ResourceInUseException": (409, "aws.conflict"),
+    # Runtime data plane (StopRuntimeSession): transient, retried by botocore
+    # first; only what survives the retries reaches the console.
+    "RetryableConflictException": (409, "aws.conflict"),
 }
 
 # What an API-key consumer on `/v1` sees instead of the AWS message. The raw text

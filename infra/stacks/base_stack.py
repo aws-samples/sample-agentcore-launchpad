@@ -319,6 +319,9 @@ class LaunchpadBaseStack(Stack):
                     "bedrock-agentcore:GetGatewayTarget",
                     "bedrock-agentcore:ListGatewayTargets",
                     "bedrock-agentcore:InvokeAgentRuntime",
+                    # Chat's explicit END SESSION (StopRuntimeSession) — a console
+                    # action, granted next to the console's InvokeAgentRuntime
+                    "bedrock-agentcore:StopRuntimeSession",
                     "bedrock-agentcore:GetConfigurationBundle",
                     "bedrock-agentcore:GetConfigurationBundleVersion",
                     "bedrock-agentcore:ListConfigurationBundleVersions",

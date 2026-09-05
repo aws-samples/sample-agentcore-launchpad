@@ -412,6 +412,35 @@
       "filterStatusAll": "全部状态",
       "searchPlaceholder": "搜索 Agent 名称 / ID……",
       "noMatch": "没有匹配当前筛选条件的 Agent"
+    },
+    "versions": {
+      "title": "版本与端点",
+      "sub": "从 AWS 读回",
+      "kindRuntime": "AgentCore Runtime",
+      "kindHarness": "托管 Harness",
+      "refresh": "从 AWS 刷新",
+      "ledgerVsLatest": "台账 vs AWS",
+      "ledger": "台账",
+      "latest": "AWS 最新",
+      "mismatch": "不一致",
+      "inSync": "一致",
+      "mismatchHint": "最近一次 Launchpad 部署记录的是 v{{ledger}}，但 AWS 上最新版本是 v{{latest}}——可能来自带外更新或金丝雀候选版本的发布。这不是错误：DEFAULT 端点会自动跟随最新版本。",
+      "canaryLeftovers": "存在金丝雀端点：{{names}}。目标金丝雀结束时通常会移除它们——残留的端点应在金丝雀页面清理，而不是在这里。",
+      "versionsHead": "版本（{{n}}）",
+      "endpointsHead": "端点（{{n}}）",
+      "noVersions": "AWS 未报告该资源的任何版本。",
+      "noEndpoints": "AWS 未报告该资源的任何端点。",
+      "colVersion": "版本",
+      "colStatus": "状态",
+      "colDescription": "描述",
+      "colUpdated": "更新时间",
+      "colEndpoint": "端点",
+      "colLive": "生效 → 目标",
+      "tagLatest": "最新",
+      "tagLedger": "台账",
+      "tagDefault": "默认端点",
+      "tagCanary": "金丝雀",
+      "readOnlyHint": "只读。重新发布会创建新版本；端点由目标金丝雀管理。"
     }
   },
   "registry": {
@@ -1628,6 +1657,8 @@
     "agent.invoke_not_supported": "该 Runtime 当前不可调用",
     "agent.redeploy_external": "发现导入的 Runtime 由外部管理，不能重新发布",
     "agent.not_found": "未找到该 Agent",
+    "chat.session_stop_unsupported": "无法从控制台结束该 Agent 的会话——Harness 没有结束会话的操作",
+    "chat.session_not_found": "未找到该会话",
     "runtime.discovery_failed": "AgentCore Runtime 扫描失败",
     "job.not_found": "未找到该任务",
     "validation.invalid_request": "请求校验失败",
@@ -1721,6 +1752,15 @@
     "historyTitle": "历史会话",
     "historyEmpty": "与该 Agent 还没有历史会话。",
     "historyTurns": "{{count}} 轮",
+    "historyEnded": "已结束",
+    "historyEnd": "结束",
+    "endSession": "结束会话",
+    "endDisabledNoSession": "请先发一条消息——还没有可结束的会话",
+    "endDisabledHarness": "Harness Agent 没有结束会话的操作——请直接开始新会话",
+    "endDisabledEnded": "该会话已结束",
+    "endDisabledBusy": "正在结束会话……",
+    "ended": "Runtime 会话已结束——下一条提示词将开启新会话",
+    "endedAlready": "该 Runtime 会话早已结束——下一条提示词将开启新会话",
     "pickAgent": "选择智能体…"
   },
   "evalPage": {
@@ -1751,12 +1791,31 @@
       "sessions": "会话数",
       "batch": "BATCH ID",
       "applied": "已选评估器",
-      "failureReason": "失败原因："
+      "failureReason": "失败原因：",
+      "stop": {
+        "action": "停止",
+        "confirmTitle": "停止此评估运行？",
+        "confirmBodyBatch": "{{run}} 的批量评估正在 AWS 上运行。StopBatchEvaluation 会终止它；已评判的会话保留分数，运行记为「已停止」。",
+        "confirmBodyQueued": "{{run}} 仍在排队，尚未提交到 AWS。将在本地取消并释放名额。",
+        "confirmBodyReplay": "{{run}} 正在回放数据集。剩余提示词将被跳过，不会启动批量评估；运行记为「已停止」。",
+        "confirm": "停止运行",
+        "requestedToast": "已请求停止 {{run}}——已评判的会话保留分数",
+        "cancelledToast": "{{run}} 已取消——未提交到 AWS",
+        "disabledCompleted": "已完成",
+        "disabledFailed": "已失败",
+        "disabledStopped": "已停止",
+        "disabledRequested": "已请求停止——等待 AWS 响应",
+        "reasonLabel": "停止原因：",
+        "reasonDefault": "操作员停止",
+        "partialScores": "已由操作员停止——分数仅覆盖停止前已评判的会话。"
+      }
     },
     "status": {
       "completed": "已完成",
       "failed": "失败",
-      "queued": "排队中 · 等待空闲名额"
+      "queued": "排队中 · 等待空闲名额",
+      "stopped": "已停止",
+      "stopping": "停止中"
     },
     "newRun": {
       "title": "新建运行",

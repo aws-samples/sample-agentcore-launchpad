@@ -6,6 +6,8 @@ Pipeline per run (executed by the bounded-concurrency run queue):
     waiting    — traces land in CloudWatch (aws/spans)
     evaluating — StartBatchEvaluation scoped to exactly those sessions
     completed  — per-evaluator average scores (or insight trees)
+    stopped    — operator stop: cancelled locally while queued/replaying, or
+                 StopBatchEvaluation once a batch exists (partial scores kept)
 
 Batch evaluation reads CloudWatch traces. Runtime-backed agents (zip_runtime /
 studio / container) derive their span service name from the runtime; managed
@@ -16,6 +18,7 @@ evaluation-parseable ``strands.telemetry.tracer`` scope (live-probed
 content-log group is discovered by log-group prefix instead of derived.
 """
 
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -45,6 +48,51 @@ TELEMETRY_READY_GRACE_SECONDS = 120
 TELEMETRY_QUERY_LOOKBACK_MS = 60_000
 
 _sleep = time.sleep  # injectable for tests
+
+# Ledger statuses a run can still be stopped from; everything else is terminal.
+ACTIVE_STATUSES = ("queued", "invoking", "waiting", "evaluating")
+STOP_REASON = "stopped by operator"
+
+
+class RunStopped(Exception):
+    """Raised inside execute_run when the operator asked for the run to stop
+    before its batch evaluation was started."""
+
+
+class _StopFlags:
+    """Operator stop requests for runs whose work is still in this process
+    (dataset replay / telemetry wait — no batch evaluation to stop on AWS yet).
+    The replay loop polls the flag between prompts and before
+    StartBatchEvaluation; in-memory by design — a restart fails those runs
+    honestly in resume_interrupted_runs anyway."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._ids: set[str] = set()
+
+    def request(self, run_id: str) -> None:
+        with self._lock:
+            self._ids.add(run_id)
+
+    def requested(self, run_id: str) -> bool:
+        with self._lock:
+            return run_id in self._ids
+
+    def clear(self, run_id: str) -> None:
+        with self._lock:
+            self._ids.discard(run_id)
+
+
+stop_flags = _StopFlags()
+
+
+def stop_requested(run_id: str) -> bool:
+    return stop_flags.requested(run_id)
+
+
+def _check_stop(run_id: str) -> None:
+    if stop_flags.requested(run_id):
+        raise RunStopped(run_id)
 
 # With up to eval_max_concurrent_runs of our own batches (plus anything else in
 # the account) contending for the 5-active / 3-TPS account quotas, a start can
@@ -177,10 +225,12 @@ def execute_run(
     inherits the config's insights/evaluators (passing them is rejected)."""
     telemetry_start_ms = int(time.time() * 1000) - TELEMETRY_QUERY_LOOKBACK_MS
     try:
+        _check_stop(run_id)
         data = data_client(workspace)
         session_ids = list(existing_session_ids or [])
         if online_config_arn:
             _update(run_id, status="evaluating")
+            _check_stop(run_id)
             response = _start_with_retry(
                 lambda: ac.start_online_report(
                     data,
@@ -192,6 +242,7 @@ def execute_run(
             )
             batch_id = response["batchEvaluationId"]
             _update(run_id, batch_eval_id=batch_id)
+            _stop_batch_if_requested(run_id, data, batch_id)
             result = ac.poll_batch_evaluation(
                 data, batch_id=batch_id, max_polls=60, interval=30.0
             )
@@ -206,6 +257,7 @@ def execute_run(
             scenarios = normalize_scenarios(items)
             _update(run_id, status="invoking")
             for scenario in scenarios:
+                _check_stop(run_id)
                 sid: str | None = None
                 if simulation.is_simulated(scenario):
                     sid = simulation.run_simulated_scenario(
@@ -219,6 +271,7 @@ def execute_run(
                     )
                 else:
                     for prompt in scenario_prompts(scenario):
+                        _check_stop(run_id)
                         if method == "harness":  # InvokeHarness, not the runtime data plane
                             result = hc.invoke_harness_text(data, agent_arn, prompt, session_id=sid)
                         elif protocol == "a2a":  # JSON-RPC runtimes reject {prompt}
@@ -236,6 +289,7 @@ def execute_run(
                 _update(run_id, session_ids=list(session_ids))
             if session_metadata is None:
                 session_metadata = ground_truth_metadata(scenarios, session_ids) or None
+            _check_stop(run_id)
             _update(run_id, status="waiting")
             _wait_for_fresh_telemetry(
                 workspace=workspace,
@@ -245,6 +299,9 @@ def execute_run(
                 stability_seconds=wait_seconds,
             )
 
+        # Last exit before the batch exists on AWS: a stop requested during
+        # replay/wait ends the run here without ever calling StartBatchEvaluation.
+        _check_stop(run_id)
         _update(run_id, status="evaluating", session_ids=session_ids)
         if mode == "insights":
             response = _start_with_retry(
@@ -273,6 +330,7 @@ def execute_run(
             )
         batch_id = response["batchEvaluationId"]
         _update(run_id, batch_eval_id=batch_id)
+        _stop_batch_if_requested(run_id, data, batch_id)
         # Insights cluster across sessions and routinely run 15-25 minutes;
         # give them a 30-minute budget instead of the evaluator default.
         if mode == "insights":
@@ -282,8 +340,20 @@ def execute_run(
         else:
             result = ac.poll_batch_evaluation(data, batch_id=batch_id, max_polls=60)
         _finish_from_result(run_id, mode, result, workspace=workspace)
+    except RunStopped:
+        _update(run_id, status="stopped", error=STOP_REASON)
     except Exception as exc:
         _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
+    finally:
+        stop_flags.clear(run_id)
+
+
+def _stop_batch_if_requested(run_id: str, data: Any, batch_id: str) -> None:
+    """Close the race between "no batch id yet" (the stop route could only set
+    the flag) and StartBatchEvaluation having just returned: forward the stop
+    to AWS now so the poller observes STOPPING → STOPPED."""
+    if stop_flags.requested(run_id):
+        ac.stop_batch_evaluation(data, batch_id=batch_id)
 
 
 def _finish_from_result(
@@ -295,7 +365,8 @@ def _finish_from_result(
 ) -> None:
     """Write a terminal batch-evaluation result back onto the run row.
 
-    COMPLETED_WITH_ERRORS still completes the run, but the service's
+    STOPPED (operator stop) ends the run as ``stopped`` with whatever scores
+    the batch had produced. COMPLETED_WITH_ERRORS still completes the run, but the service's
     errorDetails (e.g. "insufficient samples for clustering") are surfaced in
     the error column so the UI can show why results are partial/empty.
 
@@ -307,6 +378,20 @@ def _finish_from_result(
     FAILED".)"""
     status = result.get("status")
     details = result.get("errorDetails") or []
+    if status == "STOPPED":
+        # Operator stop (StopBatchEvaluation): terminal, but not a failure. AWS
+        # keeps the results of the sessions it had already judged, so the
+        # partial scores / insight trees are recorded like a completed run's.
+        reason = STOP_REASON
+        if details:
+            reason += " — " + "; ".join(str(d) for d in details)
+        parsed = (
+            {"insights": ac.parse_insights(result)}
+            if mode == "insights"
+            else {"scores": ac.parse_eval_scores(result)}
+        )
+        _update(run_id, status="stopped", error=reason[:500], **parsed)
+        return
     if status not in ("COMPLETED", "COMPLETED_WITH_ERRORS"):
         message = f"batch evaluation ended {status}"
         if details:
@@ -342,7 +427,50 @@ def reconcile_run(
         _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
 
 
-INTERRUPTED_STATUSES = ("queued", "invoking", "waiting", "evaluating")
+def request_stop(run_id: str, *, workspace: WorkspaceContext) -> EvalRun:
+    """Operator stop for an active run; returns the refreshed row.
+
+    * a batch already exists on AWS → ``StopBatchEvaluation``; the poller
+      (or startup reconciliation) sees STOPPING → STOPPED and finishes the row
+      as ``stopped`` with the sessions judged so far;
+    * still ``queued`` → cancelled locally, the worker skips it, the row is
+      ``stopped`` right away and AWS is never called;
+    * replaying / waiting for telemetry with no batch yet → a stop flag the
+      loop polls between prompts and before StartBatchEvaluation.
+    A terminal run (completed / failed / stopped) is a 409 conflict."""
+    db = SessionLocal()
+    try:
+        run = db.get(EvalRun, run_id)
+        if run is None:
+            raise AppError("run.not_found", "run not found", status_code=404)
+        if run.status not in ACTIVE_STATUSES:
+            raise AppError(
+                "run.not_active",
+                f"run is already {run.status} and cannot be stopped",
+                status_code=409,
+            )
+        batch_id = run.batch_eval_id
+    finally:
+        db.close()
+    # The flag first: whichever way the worker is racing us, it either finds
+    # the flag at its next check or forwards the stop right after the batch
+    # starts (_stop_batch_if_requested).
+    stop_flags.request(run_id)
+    if batch_id:
+        ac.stop_batch_evaluation(data_client(workspace), batch_id=batch_id)
+    elif run_queue.cancel(run_id):
+        # Never dequeued: nothing is running, so the row is settled here and
+        # the flag is not needed (no callable will ever read it).
+        stop_flags.clear(run_id)
+        _update(run_id, status="stopped", error=STOP_REASON)
+    db = SessionLocal()
+    try:
+        return db.get(EvalRun, run_id)
+    finally:
+        db.close()
+
+
+INTERRUPTED_STATUSES = ACTIVE_STATUSES
 
 
 def resume_interrupted_runs() -> list[str]:

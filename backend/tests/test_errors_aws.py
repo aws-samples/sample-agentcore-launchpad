@@ -61,6 +61,7 @@ def make_client() -> TestClient:
         ("ServiceQuotaExceededException", 429, "aws.throttled"),
         ("ConflictException", 409, "aws.conflict"),
         ("ResourceInUseException", 409, "aws.conflict"),
+        ("RetryableConflictException", 409, "aws.conflict"),
     ],
 )
 def test_mapped_client_errors_become_4xx_envelopes(aws_code, status, code):
@@ -80,6 +81,7 @@ def test_every_mapped_code_is_covered_by_the_parametrized_case():
         "ResourceNotFoundException", "ValidationException", "AccessDeniedException",
         "UnauthorizedException", "ThrottlingException", "TooManyRequestsException",
         "ServiceQuotaExceededException", "ConflictException", "ResourceInUseException",
+        "RetryableConflictException",
     }  # fmt: skip
     assert set(AWS_ERROR_MAP) == covered
 

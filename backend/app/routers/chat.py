@@ -18,6 +18,7 @@ from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import memory as memory_service
 from app.services import policy_identity
 from app.services.chat import chat_stream, sse_encode
+from app.services.invoke import stop_agent_session
 from app.services.runtime_discovery import require_invoke_capability
 from app.templates import gateway_support
 
@@ -103,6 +104,9 @@ def _track_session(
             db.add(row)
         row.turns = (row.turns or 0) + 1
         row.last_at = datetime.now(UTC)
+        # A new turn under an ended id starts a fresh AgentCore session with the
+        # same id, so the row is live again — "ended" must not outlast that.
+        row.ended_at = None
         db.commit()
     finally:
         db.close()
@@ -244,10 +248,52 @@ def list_sessions(
                 "actor_id": r.actor_id,
                 "turns": r.turns,
                 "last_at": r.last_at.isoformat() if r.last_at else None,
+                "ended_at": r.ended_at.isoformat() if r.ended_at else None,
                 "preview": preview(r.session_id),
             }
             for r in rows
         ]
+    }
+
+
+@router.post("/chat/{agent_id}/sessions/{session_id}/stop")
+def stop_session(
+    agent_id: str,
+    session_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """End the live AgentCore Runtime session behind a conversation.
+
+    The ledger row is kept (its transcript stays replayable) and stamped
+    `ended_at`; only the runtime session is terminated, so the next prompt starts
+    a fresh session on the runtime's current version. A session already gone on
+    the AWS side is a success with `already_ended: true`. Harness agents have no
+    session-stop operation → 409 `chat.session_stop_unsupported`.
+    """
+    agent = _agent_in(db, ws, agent_id)
+    row = (
+        db.query(ChatSession)
+        .filter(
+            ChatSession.workspace_id == ws.id,
+            ChatSession.agent_id == agent.id,
+            ChatSession.session_id == session_id,
+        )
+        .first()
+    )
+    if row is None:
+        # Another agent's or workspace's session must look like a missing one.
+        raise NotFoundError("chat.session_not_found", "chat session not found")
+    result = stop_agent_session(agent, session_id, workspace=ws.context)
+    if row.ended_at is None:
+        row.ended_at = datetime.now(UTC)
+        db.commit()
+        db.refresh(row)  # the rendered timestamp is the stored one, as the list reads it
+    return {
+        "session_id": session_id,
+        "ended": result["ended"],
+        "already_ended": result["already_ended"],
+        "ended_at": row.ended_at.isoformat() if row.ended_at else None,
     }
 
 

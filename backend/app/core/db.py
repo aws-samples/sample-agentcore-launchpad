@@ -181,6 +181,11 @@ def _migrate(bind) -> None:
             if column not in existing:
                 with bind.begin() as conn:
                     conn.execute(text(ddl))
+    if "chat_sessions" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("chat_sessions")}
+        if "ended_at" not in existing:
+            with bind.begin() as conn:
+                conn.execute(text("ALTER TABLE chat_sessions ADD COLUMN ended_at DATETIME"))
     if "skill_lab_tasksets" in inspector.get_table_names():
         existing = {c["name"] for c in inspector.get_columns("skill_lab_tasksets")}
         if "sample" not in existing:

@@ -53,14 +53,14 @@ English: [architecture.md](architecture.md)
 
 | AgentCore 服务 | 平台如何使用 |
 |---|---|
-| **Runtime** | 托管 zip 与 container Agent(`CreateAgentRuntime`);调用链访问 runtime 数据面。 |
-| **Harness** | 托管方式B Agent(`CreateHarness`)——托管入口,无构建产物。 |
+| **Runtime** | 托管 zip 与 container Agent(`CreateAgentRuntime`);调用链访问 runtime 数据面。Agent 详情中的只读「版本与端点」面板通过 `GET /api/agents/{id}/versions` 读回 `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints` 的全部分页,让操作者看到不可变版本列表、`DEFAULT` 端点以及任何固定在某版本上的命名端点。 |
+| **Harness** | 托管方式B Agent(`CreateHarness`)——托管入口,无构建产物。同一「版本与端点」面板对 harness 类 Agent 读取 `ListHarnessVersions` + `ListHarnessEndpoints`。 |
 | **Memory** | 一个共享的 `launchpad_memory` 单例:短期 session 事件 + 长期语义与用户偏好策略。命名空间只按 `{actorId}` 分区(没有 `{agentId}` 模板变量),因此平台把 Agent id 折进 actor——`scoped_actor(agent_id, human)` → `<agent>__<human>`——从而让**短期事件与长期记录**(`/facts/<agent>__<human>`)都按 Agent 分区。生成的 Strands Runtime 通过 `AgentCoreMemorySessionManager` 恢复短期对话。Claude Agent SDK 容器为每次调用创建独立的 `MemorySessionManager`,通过 `UserPromptSubmit` Hook 注入有界的短期对话及 `/facts/<actor>`、`/preferences/<actor>` 记录,并在调用成功后把 USER/ASSISTANT 对作为一个事件持久化。A2A Runtime 使用 `<agent>__a2a__<contextId>`,因为直接 A2A 调用目前没有经过身份认证的 human actor envelope。一个 Agent 学到的偏好不会串到同一个人的另一个 Agent 或 A2A context;台账仍存裸的 human actor 用于展示。 |
 | **Gateway** | `launchpad-gw` 把一个 REST API(office-facts)和一个 Lambda(hr-database)转成带 Cognito-JWT 鉴权的 MCP 工具;Agent 的工具调用经由它流转。 |
 | **Identity** | 支撑网关的 token vault——一个 OAuth2 provider(Agent 出站鉴权)和一个 API-key provider。 |
 | **Registry** | `launchpad-registry` 编目三类 descriptor:A2A(Agent)、MCP(工具)、AGENT_SKILLS(Skill)。每次部署都会自动创建并提交一条 A2A 记录。控制台也支持手动注册——外部远程 MCP 服务器(streamable-http URL)与技能(SKILL.md → 制品桶)——并驱动完整生命周期:提交 → 批准/驳回(REJECTED 仍可改判批准)、下架(终态——已实测,之后只能删除)、删除。注册中心同时是**挂载目录**:`GET /api/registry/attachables` 只向创建向导提供 APPROVED 的 MCP/技能记录,MCP 记录按 URL 分流——共享网关 URL 挂为 `agentcore_gateway`(OAuth),其他 URL 挂为 `remote_mcp`(暂不带鉴权)——技能按其 s3 路径经 `skills[{path}]` 挂载。 |
 | **Policy** | 挂接到网关的 Cedar 策略引擎,初始挂载模式由操作员选择(默认 `ENFORCE`,可选 `LOG_ONLY`);deny 决策会带上作出判定的 policy id。支持 NL → Cedar 策略生成。引用已被删除的引擎时,治理页面显式展示失效引用而不是报错,策略变更返回 409,创建并挂载会替换该引用。 |
-| **Evaluation** | 基于 CloudWatch trace 的真实 `StartBatchEvaluation` / insights。运行范围三选一:**数据集**(回放条目——多轮 scenario 在同一 session 内顺序回放)、显式 **session id 列表**、或**时间窗口**(`lookback_hours` 1–336——被动模式:不产生新调用,用 `filterConfig.timeRange` 圈定既有流量)。14 个通用提示词模板评估器(12 个 trace/session 级和 2 个普通工具调用级)、2 个技能 `TOOL_CALL` 提示词模板评估器,外加 3 个仅限真值的程序化 `Builtin.Trajectory*Match` session 级匹配器(仅当数据集 scenario 定义了 `expected_trajectory` 时可选),以及支持完整 CRUD 的自定义 LLM-as-a-judge 评估器——在 `?view=evaluators` 子页创建/编辑(UpdateEvaluator 为全量配置替换)。洞察运行可在三种分析类型(失败归因/用户意图/执行摘要)中任选子集。数据集以 devguide scenario 形式存于 SQLite(`?view=datasets` 子页:scenario 编辑器、JSON/JSONL 导入),一键单向同步为不可变的 AWS Dataset 资源(`AGENTCORE_EVALUATION_PREDEFINED_V1`);scenario 真值(断言/期望回复/期望轨迹)经 `evaluationMetadata.sessionMetadata` 注入批量评估。账户单批次锁与队列语义不变。 **在线评估**(`?view=online`):每个 agent + evaluator 集合对应一个 AgentCore `OnlineEvaluationConfig`,按采样比例(0.01–100 %)在会话空闲超时后对真实会话打分,不产生新的调用;结果写入 `/aws/bedrock-agentcore/evaluations/results/<configId>`(同时以 EMF 指标落到 `Bedrock-AgentCore/Evaluations`),控制台用 Logs Insights 聚合(每个 evaluator 的均值 / 标签分布 / 趋势 / 带 judge 解释的最近记录)。页面列出 workspace 账号内**全部**配置并按归属分类:`agent`(本控制台创建,可全操作)、`experiment`(`exp_*`/`can_*` 实验 arm,只读)、`external`(仅暂停/恢复/删除)。Update 始终发送完整 `rule`(AWS 整体替换),从未被调用过的 agent 创建时会被拒绝(AWS 校验日志组存在)。 配置有两种**模式**:`scores`(evaluators)或 `insights`(1–3 种洞察类型 + 可选的 DAILY/WEEKLY/MONTHLY 聚类——AWS 不允许同一配置两者兼有);insights 配置产出**报告**(以配置为数据源的批量评估:AWS 按聚类周期定期生成,或从控制台「立即出报告」经运行队列发起),通过 `GetBatchEvaluation.dataSourceConfig.onlineEvaluationConfigSource` 归属,并复用运行页的洞察聚类树渲染;报告只覆盖该配置采样过的会话。 在线评分同时出现在查看会话的地方:可观测性的会话详情带一个「在线评估」区块(该会话在所有配置下的结果记录,按归属分类,失败降级——结果查询失败不会影响追踪),概览页新增 **在线质量 · 24h** tile(对 workspace 内 agent 持有配置做极性归一、按计数加权的均值,120 秒缓存,没有配置时不调用 AWS)。二者都通过 `SOURCE logGroups(namePrefix: ['/aws/bedrock-agentcore/evaluations/results/'])` 一次读取全部结果日志组。 |
+| **Evaluation** | 基于 CloudWatch trace 的真实 `StartBatchEvaluation` / insights。运行范围三选一:**数据集**(回放条目——多轮 scenario 在同一 session 内顺序回放)、显式 **session id 列表**、或**时间窗口**(`lookback_hours` 1–336——被动模式:不产生新调用,用 `filterConfig.timeRange` 圈定既有流量)。14 个通用提示词模板评估器(12 个 trace/session 级和 2 个普通工具调用级)、2 个技能 `TOOL_CALL` 提示词模板评估器,外加 3 个仅限真值的程序化 `Builtin.Trajectory*Match` session 级匹配器(仅当数据集 scenario 定义了 `expected_trajectory` 时可选),以及支持完整 CRUD 的自定义 LLM-as-a-judge 评估器——在 `?view=evaluators` 子页创建/编辑(UpdateEvaluator 为全量配置替换)。洞察运行可在三种分析类型(失败归因/用户意图/执行摘要)中任选子集。数据集以 devguide scenario 形式存于 SQLite(`?view=datasets` 子页:scenario 编辑器、JSON/JSONL 导入),一键单向同步为不可变的 AWS Dataset 资源(`AGENTCORE_EVALUATION_PREDEFINED_V1`);scenario 真值(断言/期望回复/期望轨迹)经 `evaluationMetadata.sessionMetadata` 注入批量评估。账户单批次锁与队列语义不变。操作员可在运行页**停止**任意活跃运行(`POST /api/eval/runs/{id}/stop`):批次已在 AWS 上存在的运行用 `StopBatchEvaluation` 停止(STOPPING → STOPPED——已评判的会话保留结果,轮询器记为部分分数),仍在排队的运行在到达 AWS 之前于本地取消,正在回放数据集的运行在提示词之间停止且不会调用 `StartBatchEvaluation`。三种情形都以终态 `stopped` 结束(绝不记为 `failed`),原因为「stopped by operator」;不暴露 `DeleteBatchEvaluation`。 **在线评估**(`?view=online`):每个 agent + evaluator 集合对应一个 AgentCore `OnlineEvaluationConfig`,按采样比例(0.01–100 %)在会话空闲超时后对真实会话打分,不产生新的调用;结果写入 `/aws/bedrock-agentcore/evaluations/results/<configId>`(同时以 EMF 指标落到 `Bedrock-AgentCore/Evaluations`),控制台用 Logs Insights 聚合(每个 evaluator 的均值 / 标签分布 / 趋势 / 带 judge 解释的最近记录)。页面列出 workspace 账号内**全部**配置并按归属分类:`agent`(本控制台创建,可全操作)、`experiment`(`exp_*`/`can_*` 实验 arm,只读)、`external`(仅暂停/恢复/删除)。Update 始终发送完整 `rule`(AWS 整体替换),从未被调用过的 agent 创建时会被拒绝(AWS 校验日志组存在)。 配置有两种**模式**:`scores`(evaluators)或 `insights`(1–3 种洞察类型 + 可选的 DAILY/WEEKLY/MONTHLY 聚类——AWS 不允许同一配置两者兼有);insights 配置产出**报告**(以配置为数据源的批量评估:AWS 按聚类周期定期生成,或从控制台「立即出报告」经运行队列发起),通过 `GetBatchEvaluation.dataSourceConfig.onlineEvaluationConfigSource` 归属,并复用运行页的洞察聚类树渲染;报告只覆盖该配置采样过的会话。 在线评分同时出现在查看会话的地方:可观测性的会话详情带一个「在线评估」区块(该会话在所有配置下的结果记录,按归属分类,失败降级——结果查询失败不会影响追踪),概览页新增 **在线质量 · 24h** tile(对 workspace 内 agent 持有配置做极性归一、按计数加权的均值,120 秒缓存,没有配置时不调用 AWS)。二者都通过 `SOURCE logGroups(namePrefix: ['/aws/bedrock-agentcore/evaluations/results/'])` 一次读取全部结果日志组。 |
 | **Optimization** | 推荐 → 配置捆绑(configuration bundles)→ 网关 A/B(config-bundle 50/50)→ target-based canary → verdict → promote → cleanup。系统提示词推荐**可插拔**:默认走 AgentCore 推荐任务,也可选第三方 provider(`gepa_lite`——对所固定评估运行的逐会话 judge 分数、解释与对话记录做一轮 GEPA 式反思,模型为操作员选择的 Bedrock Converse 模型;同一轮反思也可改写 Agent 自带工具的描述),绕开 `StartRecommendation` 及其内容过滤;产出的提示词与工具描述仍写入 treatment 配置捆绑,由后续 A/B 测试衡量。发送流量阶段的数据集回放为并发发送(在途请求上限 `TRAFFIC_MAX_CONCURRENCY` = 10,可用 `LAUNCHPAD_TRAFFIC_CONCURRENCY` 下调);一条 prompt 即一个 session 即一个分组,因此不影响分流。 |
 | **Observability** | 通过 CloudWatch Logs Insights 同时读取两种遥测布局：旧版 trace 位于 `aws/spans`，统一后的 trace、日志和 prompt 位于 `/aws/bedrock-agentcore/runtimes/<agent_id>-<endpoint>`。Span 记录按 session 渲染为链路面板。 |
 | **内置工具(Builtin Tools)** | Code Interpreter(`aws.codeinterpreter.v1`)与 Browser(`aws.browser.v1`)各有一个可运行的演示端点。 |
@@ -117,7 +117,7 @@ generate → package → provision → deploy → register
 X-Ray 上报与 `cloudwatch:PutMetricData` 同理。这些在语句处就地注明,而不是悄悄收窄。
 
 **移除了两项授权**——值得知道,因为"移除"才是会以运行时失败形式暴露出来的那一类:
-`ABTestOrchestration`(18 个动作,含 `CreateGatewayRule`、`UpdateGateway`、
+`ABTestOrchestration`(19 个动作,含 `CreateGatewayRule`、`UpdateGateway`、
 `InvokeAgentRuntime`)本是**平台**用自己凭证做的事;CloudWatch Logs 的**读**动作是控制台
 路径,泄漏到了工作负载角色上。`InvokeAgentRuntime` 对 A2A agent 保留,它确实要调用同伴。
 
@@ -270,6 +270,36 @@ public  /v1  ──┘        │
 
 公开 `/v1` 接口额外加了 `X-Api-Key` 鉴权(密钥以 sha256 哈希存储);分派之后的
 一切与控制台路径完全相同。
+
+AgentCore 会把已存在的 runtime session 固定在最初服务它的那个版本上,因此重新发布后的
+验证必须开启新的 Chat 会话;旧会话继续跑在原来的镜像上。涉及的版本可以在 Agent 详情的
+「版本与端点」面板中看到(`GET /api/agents/{id}/versions`)。
+
+Chat 也可以**显式结束**存活的 runtime
+会话：「结束会话」（位于「新会话」旁，历史栏每行也有）经
+`POST /api/chat/{id}/sessions/{session_id}/stop` 调用数据面 `StopRuntimeSession`，
+然后清掉当前 id，下一条提示词即从新会话开始。仅按「新会话」只在本地忘掉 id，留下的
+runtime 会话会自行空闲过期。只有 runtime 支撑的 agent 才能结束；托管 Harness 没有结束
+会话的操作（409 `chat.session_stop_unsupported`）。`ChatSession` 行保留并打上
+`ended_at`，历史栏据此显示「已结束」，而对话记录仍可回放。
+
+### 版本与端点(只读)
+
+每次 `UpdateAgentRuntime` / `UpdateHarness` 都会发布一个不可变的新版本;`DEFAULT` 端点
+自动跟随最新版本,而命名端点(目标金丝雀的 `stable`/`treatment`)固定在某一版本。台账只记得
+Launchpad 部署时铸造的那个版本(`Agent.version`),所以 `/create` 的 Agent 详情(details 模式)
+带有一个由 `GET /api/agents/{agent_id}/versions` 支撑的**版本与端点**面板。该路由把台账行解析到
+唯一一个资源族——`zip_runtime`/`studio`/`container` 以及 `spec.discovery.resource_type` 缺省或为
+`runtime` 的导入行 → `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints`;`harness` 以及
+`resource_type == "harness"` 的导入行 → `ListHarnessVersions` + `ListHarnessEndpoints`——跟随每一页
+`nextToken`,并返回与发现功能相同风格的白名单投影(版本、状态、描述、时间戳、端点的生效/目标版本、
+失败原因;绝不包含环境变量、制品位置、执行角色或鉴权配置)。没有 AWS 资源的行(部署仍在进行、
+首次部署失败、已删除的 Agent,或解析不到任一资源族的形态)返回 409 `agent.no_resource`,并附带
+面板会原样展示的人类可读原因。
+
+面板标出 `DEFAULT`,把台账版本与 AWS 最新版本并列——带外更新或金丝雀候选版本铸造之后出现的不一致
+会以警告呈现而不是当作错误——并标记 `stable`/`treatment` 端点名,让金丝雀残留一眼可见。它是严格只读的:
+从不改指 `DEFAULT`,也从不创建、更新或删除端点;这些操作归金丝雀所有。
 
 ## 控制台路由
 
@@ -480,7 +510,7 @@ OpenInference span,并自动发射同 scope 的结构化 content event 承载输
 | `agents` | Agent 记录——name、method、status、ARN、resource id、registry record id、version、spec |
 | `deployments` | 每次部署一行——五阶段数组,含各阶段 status/detail/时间戳 |
 | `jobs` | 异步工作(type `deploy_agent`)——status + 阶段事件的 JSONL `log` |
-| `chat_sessions` | Chat 交互 session——轮次、actor、最近活跃时间 |
+| `chat_sessions` | Chat 交互 session——轮次、actor、最近活跃时间、显式结束 runtime 会话后的 `ended_at` |
 | `users` | 注册创建的控制台账户——用户名/邮箱、pbkdf2 密码哈希、角色、状态(`pending`/`active`/`disabled`)、`expires_at`(审批前为空)、最近登录与登录次数(内置 admin 仅来自配置,不入表) |
 | `api_keys` | 公开 API 密钥——sha256 哈希 + 前缀(从不存明文) |
 | `policy_decisions` | 治理决策日志——principal、tool、ALLOW/DENY、原因 |
@@ -522,7 +552,7 @@ OpenInference span,并自动发射同 scope 的结构化 content event 承载输
 → 404 `aws.not_found`、`ValidationException` → 400 `aws.validation`、`AccessDeniedException` /
 `UnauthorizedException` → 403 `aws.access_denied`、`ThrottlingException` /
 `TooManyRequestsException` / `ServiceQuotaExceededException` → 429 `aws.throttled`、
-`ConflictException` / `ResourceInUseException` → 409 `aws.conflict`;`message` 去掉 botocore 的
+`ConflictException` / `ResourceInUseException` / `RetryableConflictException` → 409 `aws.conflict`;`message` 去掉 botocore 的
 `An error occurred (…) when calling the … operation:` 前缀,`detail` 携带
 `{aws_error_code, operation}`。映射是刻意封闭的列表(`AWS_ERROR_MAP`):其他错误码原样重抛,
 仍是带完整堆栈的未处理 500,确保真正意外的 AWS 失败依然醒目。跨账号 `AssumeRole` 失败先行判定,

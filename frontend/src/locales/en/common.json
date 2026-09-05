@@ -412,6 +412,35 @@
       "filterStatusAll": "ALL STATUSES",
       "searchPlaceholder": "Search agent name / ID…",
       "noMatch": "NO AGENTS MATCH THE CURRENT FILTERS"
+    },
+    "versions": {
+      "title": "VERSIONS & ENDPOINTS",
+      "sub": "read back from AWS",
+      "kindRuntime": "AgentCore Runtime",
+      "kindHarness": "Managed Harness",
+      "refresh": "Refresh from AWS",
+      "ledgerVsLatest": "Ledger vs AWS",
+      "ledger": "ledger",
+      "latest": "AWS latest",
+      "mismatch": "MISMATCH",
+      "inSync": "IN SYNC",
+      "mismatchHint": "The last Launchpad deploy recorded v{{ledger}}, but AWS's newest version is v{{latest}} — an out-of-band update or a canary candidate published it. Not an error: DEFAULT auto-follows the latest version.",
+      "canaryLeftovers": "Canary endpoints present: {{names}}. A finished target canary normally removes them — a lingering pair is a leftover to clean up from the canary, not from here.",
+      "versionsHead": "VERSIONS ({{n}})",
+      "endpointsHead": "ENDPOINTS ({{n}})",
+      "noVersions": "AWS reports no versions for this resource.",
+      "noEndpoints": "AWS reports no endpoints for this resource.",
+      "colVersion": "VERSION",
+      "colStatus": "STATUS",
+      "colDescription": "DESCRIPTION",
+      "colUpdated": "UPDATED",
+      "colEndpoint": "ENDPOINT",
+      "colLive": "LIVE → TARGET",
+      "tagLatest": "LATEST",
+      "tagLedger": "LEDGER",
+      "tagDefault": "DEFAULT ENDPOINT",
+      "tagCanary": "CANARY",
+      "readOnlyHint": "Read-only. Re-publish creates a new version; endpoints are managed by the target canary."
     }
   },
   "registry": {
@@ -1628,6 +1657,8 @@
     "agent.invoke_not_supported": "This Runtime is not available for invocation",
     "agent.redeploy_external": "Discovered runtimes are externally owned and cannot be re-published",
     "agent.not_found": "Agent not found",
+    "chat.session_stop_unsupported": "This agent's sessions cannot be ended from the console — a Harness has no session-stop operation",
+    "chat.session_not_found": "Chat session not found",
     "runtime.discovery_failed": "AgentCore Runtime discovery failed",
     "job.not_found": "Job not found",
     "validation.invalid_request": "Request validation failed",
@@ -1721,6 +1752,15 @@
     "historyTitle": "HISTORY",
     "historyEmpty": "No previous conversations with this agent.",
     "historyTurns": "{{count}} turn(s)",
+    "historyEnded": "ENDED",
+    "historyEnd": "END",
+    "endSession": "END SESSION",
+    "endDisabledNoSession": "Send a message first — there is no live session to end",
+    "endDisabledHarness": "Harness agents have no session-stop operation — start a new session instead",
+    "endDisabledEnded": "This session is already ended",
+    "endDisabledBusy": "Ending a session…",
+    "ended": "Runtime session ended — the next prompt starts a fresh session",
+    "endedAlready": "The runtime session had already ended — the next prompt starts a fresh session",
     "pickAgent": "Pick an agent…"
   },
   "evalPage": {
@@ -1751,12 +1791,31 @@
       "sessions": "SESSIONS",
       "batch": "BATCH ID",
       "applied": "APPLIED EVALUATORS",
-      "failureReason": "Failure reason:"
+      "failureReason": "Failure reason:",
+      "stop": {
+        "action": "STOP",
+        "confirmTitle": "Stop this evaluation run?",
+        "confirmBodyBatch": "{{run}} has a batch evaluation running on AWS. StopBatchEvaluation ends it; the sessions already judged keep their scores and the run is recorded as STOPPED.",
+        "confirmBodyQueued": "{{run}} is still queued and has not reached AWS. It is cancelled locally and frees its slot.",
+        "confirmBodyReplay": "{{run}} is replaying its dataset. The remaining prompts are skipped and no batch evaluation is started; the run is recorded as STOPPED.",
+        "confirm": "STOP RUN",
+        "requestedToast": "Stop requested for {{run}} — sessions already judged keep their scores",
+        "cancelledToast": "{{run}} cancelled — it never reached AWS",
+        "disabledCompleted": "already completed",
+        "disabledFailed": "already failed",
+        "disabledStopped": "already stopped",
+        "disabledRequested": "stop already requested — waiting for AWS",
+        "reasonLabel": "Stopped:",
+        "reasonDefault": "stopped by operator",
+        "partialScores": "Stopped by operator — scores cover only the sessions judged before the stop."
+      }
     },
     "status": {
       "completed": "COMPLETE",
       "failed": "FAILED",
-      "queued": "QUEUED · waiting for a slot"
+      "queued": "QUEUED · waiting for a slot",
+      "stopped": "STOPPED",
+      "stopping": "STOPPING"
     },
     "newRun": {
       "title": "NEW RUN",

@@ -181,6 +181,7 @@ def execution_role_policy(
                     "bedrock-agentcore:GetGatewayTarget",
                     "bedrock-agentcore:ListGatewayTargets",
                     "bedrock-agentcore:InvokeAgentRuntime",
+                    "bedrock-agentcore:StopRuntimeSession",
                     "bedrock-agentcore:GetConfigurationBundle",
                     "bedrock-agentcore:GetConfigurationBundleVersion",
                     "bedrock-agentcore:ListConfigurationBundleVersions",
