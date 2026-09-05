@@ -139,6 +139,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/registry/records"): MEMBER,
     ("GET", "/api/registry/records/search"): MEMBER,
     ("GET", "/api/registry/records/{record_id}"): MEMBER,
+    # a data-plane read (GetAgentCard) of the agent's own runtime; no ARN from the client
+    ("GET", "/api/registry/records/{record_id}/live-agent-card"): MEMBER,
     ("PUT", "/api/registry/records/{record_id}"): MEMBER,
     ("DELETE", "/api/registry/records/{record_id}"): MEMBER,
     ("POST", "/api/registry/records/{record_id}/action"): MEMBER,

@@ -502,7 +502,22 @@
       "cardUrlCopied": "端点已复制",
       "cardStreaming": "流式",
       "cardSkills": "技能（{{n}}）",
-      "evaluateInSkillLab": "在 Skill Lab 中评测"
+      "evaluateInSkillLab": "在 Skill Lab 中评测",
+      "liveCard": "实时名片",
+      "liveCardReading": "读取中…",
+      "liveCardHint": "读取运行时此刻实际提供的名片（GetAgentCard）——按需发起的数据面调用，打开抽屉时不会自动发起。",
+      "liveCardTitle": "实时名片 · 由运行时提供",
+      "liveCardStatus": "HTTP {{code}}",
+      "liveCardIdentical": "与记录中的名片一致",
+      "liveCardDrift": "与记录中的名片不一致",
+      "liveCardField": "{{field}}：记录 {{record}} · 实时 {{live}}",
+      "liveCardSkillsOnlyLive": "仅实时名片中有的技能：{{ids}}",
+      "liveCardSkillsOnlyRecord": "仅记录名片中有的技能：{{ids}}",
+      "liveCardJson": "实际提供的名片（JSON）",
+      "liveCardFailed": "实时名片不可用：{{msg}}",
+      "liveCardNotLaunchpad": "只有 Launchpad 已部署 Agent 的 A2A 记录才提供实时名片",
+      "liveCardNotA2A": "该记录背后的 Agent 不是 A2A 服务器——不提供 Agent 名片",
+      "liveCardNotReady": "该 Agent 处于 {{status}} 状态——读取实时名片需要运行中的运行时"
     },
     "confirmDisable": {
       "title": "停用记录",
@@ -1792,7 +1807,11 @@
     "aws.access_denied": "AWS 拒绝访问该资源——本部署的角色缺少权限，或该 id 属于其他账号。",
     "aws.throttled": "AWS 正在限流该请求——请稍候重试。",
     "aws.conflict": "该 AWS 资源正忙或处于冲突状态——待其稳定后重试。",
-    "network": "无法连接后端 — 没有收到 HTTP 响应"
+    "network": "无法连接后端 — 没有收到 HTTP 响应",
+    "registry.record_not_deployed": "没有 Launchpad Agent 拥有该注册记录——实时名片只能从已部署 Agent 的运行时读取。",
+    "registry.record_not_a2a": "该记录背后的 Agent 不是 A2A 服务器，因此不提供 Agent 名片。",
+    "registry.agent_not_ready": "该 Agent 尚未部署并处于活动状态——读取实时名片需要运行中的运行时。",
+    "registry.live_card_failed": "运行时未能提供其 Agent 名片。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",

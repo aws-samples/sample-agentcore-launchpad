@@ -155,6 +155,57 @@ def build_a2a_descriptors(card: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def stored_a2a_card(record: dict[str, Any]) -> dict[str, Any]:
+    """The AgentCard a registry record carries (``descriptors.a2a.agentCard``
+    ``inlineContent``, parsed); ``{}`` when absent or unparseable."""
+    descriptors = record.get("descriptors") or {}
+    card = ((descriptors.get("a2a") or {}).get("agentCard") or {}).get("inlineContent")
+    if isinstance(card, dict):
+        return card
+    if not isinstance(card, str) or not card.strip():
+        return {}
+    try:
+        parsed = json.loads(card)
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+CARD_DIFF_FIELDS = ("name", "url", "version", "protocolVersion")
+
+
+def _skill_ids(card: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    for skill in card.get("skills") or []:
+        if isinstance(skill, dict) and skill.get("id") is not None:
+            out.append(str(skill["id"]))
+    return out
+
+
+def agent_card_diff(record_card: dict[str, Any], live_card: dict[str, Any]) -> dict[str, Any]:
+    """Record card vs. the card the runtime serves — identity fields + skill ids.
+
+    Only the fields a consumer keys on are compared (``name``/``url``/``version``/
+    ``protocolVersion``) plus the skill id sets; description text, capabilities
+    and the platform's own ``metadata`` block are deliberately left out, so an
+    edited description never reads as "drifted".
+    """
+    fields = [
+        {"field": f, "record": record_card.get(f), "live": live_card.get(f)}
+        for f in CARD_DIFF_FIELDS
+        if record_card.get(f) != live_card.get(f)
+    ]
+    record_ids, live_ids = set(_skill_ids(record_card)), set(_skill_ids(live_card))
+    only_live = sorted(live_ids - record_ids)
+    only_record = sorted(record_ids - live_ids)
+    return {
+        "identical": not fields and not only_live and not only_record,
+        "fields": fields,
+        "skills_only_in_live": only_live,
+        "skills_only_in_record": only_record,
+    }
+
+
 def build_mcp_descriptors(
     *,
     target: str,

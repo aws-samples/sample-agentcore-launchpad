@@ -16,8 +16,10 @@ from app.models.ledger import Agent
 from app.services import mcp_client
 from app.services.agentcore import policy as policy_api
 from app.services.agentcore import registry as reg
+from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import (
     control_client,
+    data_client,
     registry_control_client,
     registry_data_client,
 )
@@ -219,6 +221,29 @@ def console_get(workspace: WorkspaceContext, record_id: str) -> dict[str, Any]:
     return reg.get_record(
         registry_control_client(workspace), _registry_id(workspace), record_id
     )
+
+
+def console_live_agent_card(
+    workspace: WorkspaceContext, record_id: str, agent: Agent
+) -> dict[str, Any]:
+    """The card the runtime behind an A2A record serves *now* (``GetAgentCard``),
+    diffed against the card the record stores.
+
+    ``agent`` is the ledger row whose ``registry_record_id`` is ``record_id`` —
+    the caller resolved and vetted it (protocol, status, workspace) so the ARN
+    handed to the data plane is always the ledger's, never the browser's.
+    Nothing is persisted: the record keeps the deploy-time card, AWS keeps the
+    live one.
+    """
+    record = console_get(workspace, record_id)
+    live = rt.get_agent_card(data_client(workspace), runtime_arn=agent.arn or "")
+    return {
+        "agent_id": agent.id,
+        "runtime_arn": agent.arn,
+        "status_code": live["status_code"],
+        "card": live["card"],
+        "diff": reg.agent_card_diff(reg.stored_a2a_card(record), live["card"]),
+    }
 
 
 def console_search(workspace: WorkspaceContext, query: str) -> list[dict[str, Any]]:

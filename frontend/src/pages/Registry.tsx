@@ -6,7 +6,8 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { Btn, Chip, ConfirmDialog, LoadError, Panel, useToast, ViewHead } from "../components";
 import type { ChipTone } from "../components";
-import { ApiError, errorMessage, getJson } from "../lib/api";
+import { api, ApiError, errorMessage, getJson } from "../lib/api";
+import type { AgentInfo, LiveAgentCard } from "../lib/api";
 import { A2ADemoView } from "./registry/A2ADemoView";
 import { EditView } from "./registry/EditView";
 import { RegisterView } from "./registry/RegisterView";
@@ -147,6 +148,16 @@ export function Registry() {
   const [confirmDelete, setConfirmDelete] = useState<RegistryRecord | null>(null);
   const [reimporting, setReimporting] = useState(false);
   const [reimportError, setReimportError] = useState<string | null>(null);
+  // Ledger agents keyed by the registry record they own — decides whether an
+  // A2A record can serve a LIVE CARD. `null` = the list could not be loaded;
+  // the button then stays enabled and the backend's refusal is shown instead.
+  const [agentsByRecord, setAgentsByRecord] = useState<Map<string, AgentInfo> | null>(null);
+  const [liveCard, setLiveCard] = useState<{
+    recordId: string;
+    loading: boolean;
+    data: LiveAgentCard | null;
+    error: string | null;
+  } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -154,6 +165,18 @@ export function Registry() {
       setUnavailable(null);
       setLoadError(null);
       setRecords(body.records);
+      try {
+        const { agents } = await api.listAgents();
+        const byRecord = new Map<string, AgentInfo>();
+        for (const agent of agents) {
+          if (agent.registry_record_id && agent.status !== "deleted") {
+            byRecord.set(agent.registry_record_id, agent);
+          }
+        }
+        setAgentsByRecord(byRecord);
+      } catch {
+        setAgentsByRecord(null);
+      }
     } catch (err) {
       // 503 registry.unavailable = the account has no Registry — a distinct
       // full-page state. Anything else (backend down, 5xx) is a failed load:
@@ -170,6 +193,40 @@ export function Registry() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // A record's live card belongs to that record only — selecting another one
+  // drops it (the read is on demand, never repeated on open).
+  useEffect(() => {
+    setLiveCard(null);
+  }, [selected?.record_id]);
+
+  const readLiveCard = async (record: RegistryRecord) => {
+    setLiveCard({ recordId: record.record_id, loading: true, data: null, error: null });
+    try {
+      const data = await api.registryLiveAgentCard(record.record_id);
+      setLiveCard({ recordId: record.record_id, loading: false, data, error: null });
+    } catch (err) {
+      setLiveCard({
+        recordId: record.record_id,
+        loading: false,
+        data: null,
+        error: errorMessage(err),
+      });
+    }
+  };
+
+  /** Why LIVE CARD is disabled for this record, or null when it can be read. */
+  const liveCardDisabledReason = (record: RegistryRecord): string | null => {
+    if (record.type !== "A2A") return t("registry.drawer.liveCardNotLaunchpad");
+    if (agentsByRecord === null) return null; // unknown → let the backend decide
+    const agent = agentsByRecord.get(record.record_id);
+    if (!agent) return t("registry.drawer.liveCardNotLaunchpad");
+    if (agent.spec.protocol !== "a2a") return t("registry.drawer.liveCardNotA2A");
+    if (agent.status !== "active" || !agent.arn) {
+      return t("registry.drawer.liveCardNotReady", { status: agent.status });
+    }
+    return null;
+  };
 
   const runSearch = async () => {
     if (!query.trim()) {
@@ -620,6 +677,106 @@ export function Registry() {
                           ))}
                         </>
                       )}
+                      {(() => {
+                        const reason = liveCardDisabledReason(selected);
+                        const live =
+                          liveCard && liveCard.recordId === selected.record_id ? liveCard : null;
+                        const diff = live?.data?.diff;
+                        return (
+                          <div style={{ marginTop: 10 }} data-testid="live-agent-card">
+                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                              <Btn
+                                data-testid="live-card-btn"
+                                disabled={Boolean(reason) || Boolean(live?.loading)}
+                                disabledReason={reason ?? undefined}
+                                title={reason ? undefined : t("registry.drawer.liveCardHint")}
+                                onClick={() => void readLiveCard(selected)}
+                              >
+                                {live?.loading
+                                  ? t("registry.drawer.liveCardReading")
+                                  : t("registry.drawer.liveCard")}
+                              </Btn>
+                              {live?.data && (
+                                <Chip
+                                  tone={
+                                    live.data.status_code !== null &&
+                                    live.data.status_code >= 200 &&
+                                    live.data.status_code < 300
+                                      ? "good"
+                                      : "warn"
+                                  }
+                                  data-testid="live-card-status"
+                                >
+                                  {t("registry.drawer.liveCardStatus", {
+                                    code: live.data.status_code ?? "—",
+                                  })}
+                                </Chip>
+                              )}
+                              {live?.data && diff && (
+                                <Chip tone={diff.identical ? "good" : "amber"}>
+                                  {diff.identical
+                                    ? t("registry.drawer.liveCardIdentical")
+                                    : t("registry.drawer.liveCardDrift")}
+                                </Chip>
+                              )}
+                            </div>
+                            {live?.error && (
+                              <div
+                                className="mono"
+                                role="alert"
+                                data-testid="live-card-error"
+                                style={{ color: "var(--crit)", fontSize: 10.5, marginTop: 6 }}
+                              >
+                                {t("registry.drawer.liveCardFailed", { msg: live.error })}
+                              </div>
+                            )}
+                            {live?.data && diff && !diff.identical && (
+                              <ul
+                                className="mono"
+                                data-testid="live-card-diff"
+                                style={{ fontSize: 10.5, margin: "6px 0 0", paddingLeft: 16 }}
+                              >
+                                {diff.fields.map((f) => (
+                                  <li key={f.field}>
+                                    {t("registry.drawer.liveCardField", {
+                                      field: f.field,
+                                      record: String(f.record ?? "—"),
+                                      live: String(f.live ?? "—"),
+                                    })}
+                                  </li>
+                                ))}
+                                {diff.skills_only_in_live.length > 0 && (
+                                  <li>
+                                    {t("registry.drawer.liveCardSkillsOnlyLive", {
+                                      ids: diff.skills_only_in_live.join(", "),
+                                    })}
+                                  </li>
+                                )}
+                                {diff.skills_only_in_record.length > 0 && (
+                                  <li>
+                                    {t("registry.drawer.liveCardSkillsOnlyRecord", {
+                                      ids: diff.skills_only_in_record.join(", "),
+                                    })}
+                                  </li>
+                                )}
+                              </ul>
+                            )}
+                            {live?.data && (
+                              <details style={{ marginTop: 6 }} data-testid="live-card-json">
+                                <summary className="dim mono" style={{ fontSize: 10.5 }}>
+                                  {t("registry.drawer.liveCardJson")}
+                                </summary>
+                                <div
+                                  className="code"
+                                  style={{ maxHeight: 260, overflowY: "auto", marginTop: 4 }}
+                                >
+                                  {JSON.stringify(live.data.card, null, 2)}
+                                </div>
+                              </details>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                 })()}

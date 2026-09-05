@@ -91,6 +91,22 @@ invalid`、`AWS access denied`、`AWS is throttling this request`、`AWS resourc
 `detail` 只含 `aws_error_code`——AWS 原文会暴露本部署的角色 ARN、实例 id 与操作名,这些只留在
 API-key 信任边界的控制台一侧。
 
+## 控制台 Registry API——实时名片 / Console Registry API: live agent card
+
+`GET /api/registry/records/{record_id}/live-agent-card` 是 Registry 抽屉「AGENT 名片」区块中「实时名片」按钮背后的读取：
+该记录背后的运行时*此刻*实际提供的 A2A 名片，与记录在部署时存储的名片并列展示。这是一次按需的数据面调用（`GetAgentCard`），
+只在操作者点击时发起——打开抽屉不会触发——且不落任何状态。
+
+| 方法 | 路径 | 结果 |
+|---|---|---|
+| `GET` | `/api/registry/records/{record_id}/live-agent-card` | `{agent_id, runtime_arn, status_code, card, diff}`——`card` 是运行时提供的 JSON 文档（`GetAgentCard.agentCard`，即 A2A 客户端在 `/.well-known/agent-card.json` 读到的内容），`status_code` 为 `GetAgentCard.statusCode`；`diff` = `{identical, fields[{field, record, live}], skills_only_in_live[], skills_only_in_record[]}`，将 `name`/`url`/`version`/`protocolVersion` 与技能 id 集合同记录的 `descriptors.a2a.agentCard.inlineContent` 比较（描述、capabilities 与平台 `metadata` 块不参与比较）。路由在服务端完成 记录 → 账本 Agent（`Agent.registry_record_id`，同 workspace，未删除）→ `Agent.arn` 的解析；浏览器从不提供 ARN。不发送 `runtimeSessionId`；AWS 为提供名片而打开的会话随即以 `StopRuntimeSession` 结束，失败时仅记录日志，名片仍会返回 |
+
+错误码（均在调用 AWS 之前由账本判定）：`registry.record_not_deployed`（404，没有 Launchpad Agent 拥有该记录）、
+`registry.record_not_a2a`（409，Agent 的 `spec.protocol` 不是 `a2a`）、`registry.agent_not_ready`（409，Agent 不处于
+`active` 或尚无运行时 ARN）。数据面 `ClientError` 映射为标准 4xx 信封（`aws.not_found`、`aws.access_denied`、
+`aws.throttled` 等）；没有映射的运行时侧失败（`RuntimeClientError`）为 `registry.live_card_failed`（502），并带
+`detail.aws_error_code`——绝不会是裸 500。无需 IAM 变更：控制台角色已具备 `bedrock-agentcore:*`。
+
 ## 控制台治理 API：Gateway 限流 / Console Governance API: Gateway rate limits
 
 `/api/governance/gateways/{id}/rate-limits` 管理 AgentCore **Gateway 限流**（2026 年 8 月 GA）。这些路由是**同步**的，

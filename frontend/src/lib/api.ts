@@ -33,6 +33,8 @@ export interface AgentInfo {
   owner: string;
   error: string | null;
   spec: Record<string, unknown>;
+  /** The A2A registry record the last deploy created/refreshed, when Registry was available. */
+  registry_record_id?: string | null;
   experiment_capability: {
     eligible: boolean;
     system_prompt: boolean;
@@ -2280,7 +2282,27 @@ export interface RecommendProviderInfo {
   default_model_id: string | null;
 }
 
+/** GET /api/registry/records/{id}/live-agent-card — the card the runtime serves
+ *  now (GetAgentCard) vs. the card stored on the record. A data-plane read;
+ *  the backend resolves record → ledger agent → ARN, never the browser. */
+export interface LiveAgentCard {
+  agent_id: string;
+  runtime_arn: string | null;
+  status_code: number | null;
+  card: Record<string, unknown>;
+  diff: {
+    identical: boolean;
+    fields: { field: string; record: unknown; live: unknown }[];
+    skills_only_in_live: string[];
+    skills_only_in_record: string[];
+  };
+}
+
 export const api = {
+  registryLiveAgentCard: (recordId: string) =>
+    request<LiveAgentCard>(
+      `/api/registry/records/${encodeURIComponent(recordId)}/live-agent-card`,
+    ),
   authStatus: () => request<AuthStatus>("/api/auth/status"),
   /** `POST /api/eval/runs/{id}/stop` (202). With a batch on AWS: StopBatchEvaluation,
    *  the row follows STOPPING → STOPPED and comes back `stop_requested`; a queued run
