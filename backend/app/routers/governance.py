@@ -18,6 +18,8 @@ from app.schemas.governance import (
     PolicyDeleteRequest,
     PolicyTransitionRequest,
     PolicyUpdateRequest,
+    RateLimitCreateRequest,
+    RateLimitUpdateRequest,
     RegistryImportRequest,
     RetireLegacyRequest,
 )
@@ -37,6 +39,8 @@ ROLE_BY_USER = {"admin": "platform-admin", "demo": "hr-analyst"}
 GATEWAY_ID = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 RESOURCE_ID = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 OPERATION_ID = Path(pattern=r"^[a-f0-9]{32}$")
+# AWS rateLimitId: 2-64 chars, dots allowed (unlike policy/target ids)
+RATE_LIMIT_ID = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}[A-Za-z0-9]$")
 
 
 @router.get("/governance/gateways")
@@ -274,6 +278,53 @@ def rollback_gateway_policy(
     )
     background_tasks.add_task(governance_service.run_policy_change, operation["id"])
     return {"operation": operation}
+
+
+@router.get("/governance/gateways/{gateway_id}/rate-limits")
+def get_gateway_rate_limits(
+    gateway_id: str = GATEWAY_ID,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return governance_service.list_rate_limits(control_client(ws.context), gateway_id)
+
+
+@router.post("/governance/gateways/{gateway_id}/rate-limits", status_code=201)
+def create_gateway_rate_limit(
+    req: RateLimitCreateRequest,
+    gateway_id: str = GATEWAY_ID,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    # Synchronous control-plane call: the journal row is written around it inline,
+    # not through the 202/operation machinery the policy mutations use.
+    return governance_service.create_rate_limit(
+        db, control_client(ws.context), ws.id, gateway_id, req
+    )
+
+
+@router.put("/governance/gateways/{gateway_id}/rate-limits/{rate_limit_id}")
+def update_gateway_rate_limit(
+    req: RateLimitUpdateRequest,
+    gateway_id: str = GATEWAY_ID,
+    rate_limit_id: str = RATE_LIMIT_ID,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return governance_service.update_rate_limit(
+        db, control_client(ws.context), ws.id, gateway_id, rate_limit_id, req
+    )
+
+
+@router.delete("/governance/gateways/{gateway_id}/rate-limits/{rate_limit_id}")
+def delete_gateway_rate_limit(
+    gateway_id: str = GATEWAY_ID,
+    rate_limit_id: str = RATE_LIMIT_ID,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    return governance_service.delete_rate_limit(
+        db, control_client(ws.context), ws.id, gateway_id, rate_limit_id
+    )
 
 
 @router.post("/governance/gateways/{gateway_id}/mode", status_code=202)

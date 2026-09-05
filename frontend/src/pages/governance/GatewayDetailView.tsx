@@ -34,6 +34,7 @@ import {
   type GovernanceView,
 } from "./types";
 import { PolicyTestPanel } from "./PolicyTestPanel";
+import { RateLimitsPanel } from "./RateLimitsPanel";
 
 interface Props {
   gatewayId: string;
@@ -81,10 +82,14 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
     useState<GovernanceGatewayMode>("ENFORCE");
   const [highRiskAcknowledged, setHighRiskAcknowledged] = useState(false);
   const [operation, setOperation] = useState<GovernanceOperation | null>(null);
+  // Rate limits live in their own panel with their own fetch; REFRESH reaches
+  // them through this counter instead of threading the list through this view.
+  const [refreshTick, setRefreshTick] = useState(0);
 
   const load = useCallback(async () => {
     setRefreshing(true);
     setFatalError(null);
+    setRefreshTick((tick) => tick + 1);
     const [gatewayResult, policyResult, registryResult, decisionResult] =
       await Promise.allSettled([
         api.getGovernanceGateway(gatewayId),
@@ -834,6 +839,12 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
           ))}
         </DataTable>
       </Panel>
+
+      <RateLimitsPanel
+        gateway={gateway}
+        operationBusy={operationBusy}
+        refreshTick={refreshTick}
+      />
 
       {gateway.policy_test_available ? (
         <PolicyTestPanel actions={gateway.actions} />

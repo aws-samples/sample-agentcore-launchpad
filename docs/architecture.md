@@ -57,7 +57,7 @@ real, runnable code in this repo.
 | **Runtime** | Hosts zip and container agents (`CreateAgentRuntime`); the invoke chain calls the runtime data plane. Agent Management can also scan every `ListAgentRuntimes` page, inspect each resource with `GetAgentRuntime`, and explicitly import HTTP/A2A runtimes as externally owned ledger entries without changing the AWS resource. The agent detail's read-only VERSIONS & ENDPOINTS panel reads every `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints` page back (`GET /api/agents/{id}/versions`) so the operator sees the immutable versions, the `DEFAULT` endpoint, and any pinned named endpoints. |
 | **Harness** | Hosts 方式B agents (`CreateHarness`) — a managed entrypoint with no build artifact. The same VERSIONS & ENDPOINTS panel reads `ListHarnessVersions` + `ListHarnessEndpoints` for harness-backed agents. |
 | **Memory** | One shared `launchpad_memory` singleton: short-term session events + long-term semantic & user-preference strategies. Namespaces are keyed only on `{actorId}` (there is no `{agentId}` template), so the platform folds the agent id into the actor — `scoped_actor(agent_id, human)` → `<agent>__<human>` — which partitions **both** short-term events and long-term records (`/facts/<agent>__<human>`) per agent. Chat derives `human` server-side from the signed console session; the browser cannot choose it. Generated Strands runtimes restore short-term turns through `AgentCoreMemorySessionManager`. Claude Agent SDK containers create one request-local `MemorySessionManager`, inject bounded short-term turns plus `/facts/<actor>` and `/preferences/<actor>` records through a `UserPromptSubmit` hook, then persist the successful USER/ASSISTANT pair as one event. A2A runtimes use `<agent>__a2a__<contextId>` because direct A2A currently has no authenticated human actor envelope; the internal `__agent_card__` factory context is deliberately stateless because it is not a valid Memory session id. One agent's learned facts never bleed into another's for the same person or A2A context; the ledger still stores the bare human actor for display. |
-| **Gateway** | `launchpad-gw` turns a REST API (office-facts) and a Lambda (hr-database) into MCP tools with Cognito-JWT auth; agent tool calls flow through it. |
+| **Gateway** | `launchpad-gw` turns a REST API (office-facts) and a Lambda (hr-database) into MCP tools with Cognito-JWT auth; agent tool calls flow through it. Governance manages **Gateway rate limits** (GA Aug 2026) on managed Gateways — `ListGatewayRateLimits` / `CreateGatewayRateLimit` / `UpdateGatewayRateLimit` / `DeleteGatewayRateLimit` behind the RATE LIMITS panel of the gateway detail, validated server-side and journaled in `policy_changes`. |
 | **Identity** | Token vault backing the gateway — an OAuth2 provider (agent outbound auth) and an API-key provider. |
 | **Registry** | The GA `agent-registry` service hosts `launchpad-registry`, cataloguing A2A agents, MCP servers, and AGENT_SKILLS. `services/agentcore/registry.py` translates the GA `AGENT/MCP/SKILL` and `data/dataSchemaVersion` model into the stable Launchpad descriptor contract; other AgentCore services remain under `bedrock-agentcore`. GA uniqueness is `(name, recordVersion)`, so newly created records use type-qualified initial versions (`1.0.0-a2a`, `1.0.0-mcp`, `1.0.0-skill`) and content edits preserve the suffix. Every deploy auto-creates and submits an A2A record when Registry is available. In accounts whose SCP/IAM policy denies Registry setup, bootstrap records the capability as unavailable, Registry-only APIs return 503, and the deploy pipeline skips only the register stage; Runtime/Harness deployment remains usable. Governance can import one existing AgentCore Gateway as one MCP record containing the Gateway endpoint and its complete discovered tool catalog; legacy per-target records remain until an explicit retirement after the Gateway record is APPROVED. Registry approval controls catalog visibility, not Gateway authorization. `GET /api/registry/attachables` reports catalog status separately from Harness attachability and resolves Gateway auth server-side. |
 | **Policy** | Governance discovers existing MCP Gateways live, persists opt-in management through Launchpad-owned Gateway tags, and manages one attached Policy Engine plus Cedar policies. Initial Engine attachment mode is operator-selected (`ENFORCE` by default, `LOG_ONLY` available); new policies still start `LOG_ONLY`. A Gateway that references an Engine deleted out-of-band is surfaced as an explicit dangling state — reads keep the stale ARN visible, policy mutations return 409, and create-and-attach replaces the reference. ACTIVE edits create LOG_ONLY candidates, promotion and rollback use conservative ordering, and later Gateway transitions to `ENFORCE` require evidence or a typed zero-evidence override. Authenticated Chat calls to `launchpad-gw` use a server-minted Cognito user JWT, so Cedar `OAuthUser` tags such as `username` and `cognito:groups` reflect the signed-in console identity instead of the agent's M2M client. ZIP Runtime receives it in the sensitive invoke payload; Harness receives an invocation-scoped authenticated `remote_mcp` tool. Public API/evaluation traffic and an auth-disabled local console remain M2M. Every mutation is journaled locally while AWS remains the source of current state. |
@@ -665,6 +665,49 @@ prerequisite but deliberately does not create this Policy-specific delivery.
 explicit operational tooling; normal bootstrap never calls it. The console's
 delivery-status probe is read-only, and a missing channel is an expected state
 until the operator opts into detailed Policy spans.
+
+### Gateway rate limits
+
+The gateway detail's **RATE LIMITS** panel manages AgentCore Gateway rate limits
+(GA August 2026) through four synchronous routes under
+`/api/governance/gateways/{id}/rate-limits` (`GET` list, `POST` create, `PUT
+/{rate_limit_id}` update, `DELETE /{rate_limit_id}`). The wrappers
+(`list_gateway_rate_limits`, `create_gateway_rate_limit`,
+`update_gateway_rate_limit`, `delete_gateway_rate_limit`) sit in
+`app/services/agentcore/policy.py` next to the other Gateway control-plane calls
+and take the control client explicitly; the list follows every `nextToken`.
+Reading works on any Gateway; every mutation requires the Launchpad managed tag
+(`409 governance.gateway_not_managed`, same rule as policy mutations).
+
+A rate limit is a fixed, ordered set of **dimension keys** plus up to 1000
+**entries**. Each entry names one value per key (`*` = any) and one rate per
+metric. `validate_rate_limit_spec` checks the documented rules before any AWS
+call and answers `422 governance.rate_limit_invalid` with a stable
+`detail.reason`:
+
+| Rule | `detail.reason` |
+|---|---|
+| 1–10 keys, each `targetName`, `toolName`, `qualifiedModelId`, `$.context.jwt.<claim>`, `$.context.iam.principal` or `$.context.iam.sourceIdentity`, no duplicates | `dimension_keys_count`, `dimension_key_unknown`, `dimension_key_duplicate` |
+| 1–1000 entries; each entry's `dimensions` has exactly the parent keys, no empty value | `entries_count`, `entry_dimensions_mismatch`, `entry_dimension_empty` |
+| `*` only in trailing positions (once a value is `*`, every later key is `*`) | `wildcard_not_trailing` |
+| at least one of `requests` / `tokens` / `connections`, one rate config each | `entry_no_metric`, `rate_config_count` |
+| `rate` 0–10 000 000; `requests` per `second`/`minute`, `tokens` per `minute` only, `connections` per `second` only | `rate_out_of_range`, `period_not_allowed` |
+| description ≤ 512 chars; `dimensionKeys` never on update | `description_too_long`, `dimension_keys_immutable` |
+
+AWS `ConflictException` (a second rate limit with the same key set, or a busy
+Gateway) surfaces as `409 aws.conflict` through the shared `ClientError`
+envelope. Unlike the policy mutations there is no 202/operation hop: the
+`PolicyChange` row (`rate_limit.create` / `rate_limit.update` /
+`rate_limit.delete`; `before` = the prior rate limit or `{}`, `requested` = the
+validated payload, `after` = the AWS response) is written as `running` around
+the call and closed `succeeded`/`failed` inline, so the Audit view lists it and
+a crash mid-call leaves a visible row. The panel states the documented
+semantics — effective rate = min(service-managed, configured), propagation
+≤ 30 s, fail-open, rate 0 blocks matching traffic, evaluated **before** Policy
+— mirrors the trailing-`*` and period rules client-side, and explains disabled
+actions (not managed / Gateway not READY / rate limit not ACTIVE / form invalid)
+through the shared `Btn` `disabledReason`. No IAM change: the console's role
+already carries `bedrock-agentcore:*`.
 
 ## Console routing
 

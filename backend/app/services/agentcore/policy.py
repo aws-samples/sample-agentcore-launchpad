@@ -98,6 +98,79 @@ def list_gateway_target_details(client: Any, gateway_id: str) -> list[dict[str, 
     ]
 
 
+def list_gateway_rate_limits(client: Any, gateway_id: str) -> list[dict[str, Any]]:
+    """Every rate limit on a Gateway, following ``nextToken`` to the end."""
+    return _paginate(
+        client,
+        "list_gateway_rate_limits",
+        "rateLimits",
+        gatewayIdentifier=gateway_id,
+    )
+
+
+def get_gateway_rate_limit(client: Any, gateway_id: str, rate_limit_id: str) -> dict[str, Any]:
+    return client.get_gateway_rate_limit(
+        gatewayIdentifier=gateway_id,
+        rateLimitId=rate_limit_id,
+    )
+
+
+def create_gateway_rate_limit(
+    client: Any,
+    *,
+    gateway_id: str,
+    dimension_keys: list[str],
+    entries: list[dict[str, Any]],
+    description: str | None = None,
+    client_token: str | None = None,
+) -> dict[str, Any]:
+    """CreateGatewayRateLimit with exactly the validated payload.
+
+    ``dimensionKeys`` are fixed for the lifetime of the rate limit; only
+    ``entries`` and ``description`` can change afterwards. The service raises
+    ``ConflictException`` when the Gateway already has a rate limit with the same
+    dimension-key set, or while the Gateway is busy.
+    """
+    params: dict[str, Any] = {
+        "gatewayIdentifier": gateway_id,
+        "dimensionKeys": list(dimension_keys),
+        "entries": entries,
+    }
+    if description is not None:
+        params["description"] = description
+    if client_token:
+        params["clientToken"] = _client_token(client_token)
+    return client.create_gateway_rate_limit(**params)
+
+
+def update_gateway_rate_limit(
+    client: Any,
+    *,
+    gateway_id: str,
+    rate_limit_id: str,
+    entries: list[dict[str, Any]],
+    description: str | None = None,
+) -> dict[str, Any]:
+    """UpdateGatewayRateLimit — ``entries`` use replace semantics."""
+    params: dict[str, Any] = {
+        "gatewayIdentifier": gateway_id,
+        "rateLimitId": rate_limit_id,
+        "entries": entries,
+    }
+    if description is not None:
+        params["description"] = description
+    return client.update_gateway_rate_limit(**params)
+
+
+def delete_gateway_rate_limit(
+    client: Any, *, gateway_id: str, rate_limit_id: str
+) -> dict[str, Any]:
+    return client.delete_gateway_rate_limit(
+        gatewayIdentifier=gateway_id,
+        rateLimitId=rate_limit_id,
+    )
+
+
 def list_tags(client: Any, resource_arn: str) -> dict[str, str]:
     return dict(client.list_tags_for_resource(resourceArn=resource_arn).get("tags") or {})
 
