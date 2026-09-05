@@ -275,6 +275,31 @@ runtime session it leaves behind idles out on its own. END SESSION is what to pr
 after a re-publish — AgentCore pins a live session to the version that first
 served it, so validation of the new version needs a fresh session.
 
+## Console Evaluation Datasets API
+
+`/api/eval/datasets` holds the local scenario datasets (SQLite, the editable source
+of truth) and their one AWS Dataset each. AWS datasets have a **DRAFT** plus
+immutable numbered **versions**: SYNC TO AWS creates the dataset once and afterwards
+replaces the draft's examples in place; PUBLISH VERSION snapshots the draft.
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/eval/datasets` | `{datasets[]}` — local rows with `items`, `kind`, `has_ground_truth` and the `cloud` blob |
+| `POST` | `/api/eval/datasets` | Create from items (devguide scenarios, simulated personas or legacy prompts; kind is inferred) → 201 |
+| `PUT` · `DELETE` | `/api/eval/datasets/{dataset_id}` | Edit (kind is immutable → 400 `dataset.kind_immutable`) / delete the local row; a synced AWS copy stays |
+| `POST` | `/api/eval/datasets/{dataset_id}/sync-to-aws` | Without a live cloud copy: `CreateDataset` (inline examples) polled to `ACTIVE`. With one: edit its **draft in place** — `ListDatasetExamples` → `DeleteDatasetExamples` (skipped when the draft is empty) → `AddDatasetExamples` with the normalized scenarios, each polled through `UPDATING` to `ACTIVE`; the dataset id and published versions survive and the draft reads `MODIFIED`. A copy AWS no longer knows (`ResourceNotFoundException` on `GetDataset`) or marked `deleted` is re-created. Returns the row; `CREATE_FAILED` / `UPDATE_FAILED` / timeout → 502 `dataset.sync_failed` with the AWS `failureReason`, also recorded on the blob |
+| `POST` | `/api/eval/datasets/{dataset_id}/publish-version` | `CreateDatasetVersion` on the row's cloud copy, polled through `UPDATING` to `ACTIVE` → the row with the new version first in `cloud.versions` and `cloud.draft_status == "UNMODIFIED"`. No live copy → 409 `dataset.not_synced`; `UPDATE_FAILED` / timeout → 502 `dataset.publish_failed` (reason recorded on the blob, versions kept) |
+| `GET` | `/api/eval/datasets/cloud` | Every AWS dataset in the workspace region: `{datasets[{datasetId, name, status, schemaType, exampleCount, draftStatus, updatedAt}]}` |
+| `GET` | `/api/eval/datasets/cloud/{cloud_id}` | Draft detail: `{datasetId, name, status, schemaType, exampleCount, draft_status, failure_reason, versions[{version, example_count, created_at}], runnable, has_ground_truth}` — versions newest first |
+| `POST` | `/api/eval/datasets/cloud/{cloud_id}/publish-version` | PUBLISH VERSION for a cloud-only dataset → the refreshed detail above; failures as for the local route |
+| `DELETE` | `/api/eval/datasets/cloud/{cloud_id}` | `DeleteDataset` — the draft and every version; local rows pointing at it are marked `cloud.status = "deleted"` and re-create on the next sync |
+| `DELETE` | `/api/eval/datasets/cloud/{cloud_id}/versions/{version}` | `DeleteDataset` with `datasetVersion` — one published version; the draft and the other versions stay, cached lists are refreshed |
+
+The `cloud` blob on a local row: `{dataset_id, arn, status, synced_at, failure_reason,
+draft_status (MODIFIED|UNMODIFIED), example_count, versions[{version, example_count,
+created_at}]}`. It caches display state only — AWS is the source of truth and every
+mutation re-reads `GetDataset` / `ListDatasetVersions`.
+
 ## Console Evaluation Runs API
 
 `/api/eval/runs` drives batch evaluations / insights analyses through the bounded
