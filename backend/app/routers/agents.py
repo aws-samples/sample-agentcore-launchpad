@@ -20,6 +20,7 @@ from app.models.ledger import Agent, Deployment, Job
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec, InvokeRequest, InvokeResponse, RuntimeImportRequest
 from app.services import agent_iam
+from app.services.agent_versions import list_agent_versions
 from app.services.agentcore.client import control_client
 from app.services.invoke import invoke_agent_text
 from app.services.memory import scoped_actor
@@ -239,6 +240,24 @@ def get_agent(
     out = _agent_out(agent)
     out["deployments"] = [_deployment_out(d) for d in deployments]
     return out
+
+
+@router.get("/agents/{agent_id}/versions")
+def get_agent_versions(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Read-only AWS versions + endpoints of the agent's Runtime or Harness.
+
+    Follows every list page; the projection is allow-listed (no environment,
+    artifact, role or authorizer values). 409 ``agent.no_resource`` when the row
+    has no AWS resource to ask about.
+    """
+    agent = _agent_in(db, ws, agent_id)
+    if agent is None:
+        raise NotFoundError("agent.not_found", "agent not found")
+    return list_agent_versions(control_client(ws.context), agent)
 
 
 @router.post("/agents/{agent_id}/redeploy", status_code=202)
