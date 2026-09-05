@@ -281,6 +281,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/memory/resources"): MEMBER,
     ("POST", "/api/memory/resources"): MEMBER,  # creates an AgentCore Memory resource
     ("GET", "/api/memory/resources/{memory_id}"): MEMBER,
+    ("PUT", "/api/memory/resources/{memory_id}"): MEMBER,  # description / event expiry
     ("DELETE", "/api/memory/resources/{memory_id}"): MEMBER,
     ("GET", "/api/observability/dashboard"): MEMBER,
     ("GET", "/api/observability/sessions"): MEMBER,
