@@ -116,6 +116,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/chat/{agent_id}/history"): MEMBER,
     ("GET", "/api/chat/{agent_id}/memory"): MEMBER,
     ("GET", "/api/chat/{agent_id}/sessions"): MEMBER,
+    ("POST", "/api/chat/{agent_id}/sessions/{session_id}/stop"): MEMBER,
     # ---- studio local-debug scaffolding: prod refuses these in the handler
     # (local_exec guard) regardless of role ----
     ("GET", "/api/conversations"): MEMBER,

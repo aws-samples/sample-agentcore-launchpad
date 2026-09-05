@@ -546,6 +546,34 @@ def invoke_runtime_text(
     return {"text": "".join(parts), "session_id": session_id}
 
 
+def stop_runtime_session(
+    client: Any,
+    *,
+    runtime_arn: str,
+    session_id: str,
+    qualifier: str | None = None,
+) -> dict[str, Any]:
+    """Data-plane ``StopRuntimeSession``: end one live runtime session now.
+
+    Terminates the session's microVM and any streaming response still in flight,
+    so the next turn under a fresh id starts on the runtime's *current* version
+    (an existing session stays pinned to the version that first served it).
+    ``ResourceNotFoundException`` — the session already ended or idle-expired —
+    is the caller's to interpret; here it propagates unchanged.
+    """
+    params: dict[str, Any] = {
+        "agentRuntimeArn": runtime_arn,
+        "runtimeSessionId": session_id,
+    }
+    if qualifier:
+        params["qualifier"] = qualifier
+    response = client.stop_runtime_session(**params)
+    return {
+        "session_id": response.get("runtimeSessionId", session_id),
+        "status_code": response.get("statusCode"),
+    }
+
+
 def a2a_result_text(result: dict[str, Any]) -> str:
     """Reply text from a message/send result (Task or Message shape).
 

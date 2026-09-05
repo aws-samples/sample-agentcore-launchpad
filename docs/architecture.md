@@ -122,7 +122,7 @@ resource scoping, and neither do X-Ray ingestion or `cloudwatch:PutMetricData`.
 Recorded at the statement rather than quietly narrowed.
 
 **Two grants were removed**, which is worth knowing because a removal is what shows
-up as a runtime failure: `ABTestOrchestration` (18 actions including
+up as a runtime failure: `ABTestOrchestration` (19 actions including
 `CreateGatewayRule`, `UpdateGateway`, `InvokeAgentRuntime`) is what the *platform*
 does from its own credentials, and the CloudWatch Logs **read** actions were console
 paths that had leaked onto the workload role. `InvokeAgentRuntime` is kept for A2A
@@ -561,6 +561,16 @@ the same parser renders as a single delta. Existing runtimes must be republished
 to pick up a changed generated template. AgentCore pins an existing runtime
 session to the version that first served it, so a post-republish validation
 must start a new Chat session; an old session continues on its original image.
+Chat can also **end** the live runtime session explicitly — END SESSION (next to
+NEW SESSION, and per row in the history rail) calls the data-plane
+`StopRuntimeSession` through `POST /api/chat/{id}/sessions/{session_id}/stop`,
+then clears the current id so the next prompt starts fresh. NEW SESSION alone only
+forgets the id locally and leaves the runtime session to idle out. Only
+runtime-backed agents qualify; a managed Harness has no session-stop operation
+(409 `chat.session_stop_unsupported`). The `ChatSession` row is kept with an
+`ended_at` stamp so the rail can show the session as ended while its transcript
+stays replayable.
+
 The versions involved are visible in the agent detail's VERSIONS & ENDPOINTS
 panel (`GET /api/agents/{id}/versions`), which lists every AWS version alongside
 the one the ledger recorded and the version each endpoint currently serves.
@@ -1087,7 +1097,7 @@ State that is cheap and local lives in a SQLite ledger at `data/launchpad.db`
 | `agents` | Agent records — name, method, status, ARN, resource id, registry record id, version, spec |
 | `deployments` | One row per deploy run — the five-stage array with per-stage status/detail/timestamps |
 | `jobs` | Async work (type `deploy_agent`) — status + a JSONL `log` of stage events |
-| `chat_sessions` | Chat playground sessions — turns, actor, last-seen |
+| `chat_sessions` | Chat playground sessions — turns, actor, last-seen, `ended_at` once the runtime session was explicitly ended |
 | `users` | Console accounts created by registration — username/email, pbkdf2 password hash, role, status (`pending`/`active`/`disabled`), `expires_at` (null until approval), last sign-in + sign-in count (the built-in admin is config-only and has no row) |
 | `api_keys` | Public-API keys — sha256 hash + prefix (plaintext never stored) |
 | `policy_decisions` | Governance decision log — principal, tool, ALLOW/DENY, reason |
@@ -1148,7 +1158,7 @@ in one place rather than per route: the global `ClientError` handler answers
 `aws.validation`, `AccessDeniedException` / `UnauthorizedException` → 403
 `aws.access_denied`, `ThrottlingException` / `TooManyRequestsException` /
 `ServiceQuotaExceededException` → 429 `aws.throttled`, and `ConflictException` /
-`ResourceInUseException` → 409 `aws.conflict`, with the botocore
+`ResourceInUseException` / `RetryableConflictException` → 409 `aws.conflict`, with the botocore
 `An error occurred (…) when calling the … operation:` prefix stripped from
 `message` and `{aws_error_code, operation}` in `detail`. The mapping is
 deliberately a closed list (`AWS_ERROR_MAP`): any other code is re-raised and stays

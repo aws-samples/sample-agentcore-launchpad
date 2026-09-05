@@ -117,7 +117,7 @@ generate → package → provision → deploy → register
 X-Ray 上报与 `cloudwatch:PutMetricData` 同理。这些在语句处就地注明,而不是悄悄收窄。
 
 **移除了两项授权**——值得知道,因为"移除"才是会以运行时失败形式暴露出来的那一类:
-`ABTestOrchestration`(18 个动作,含 `CreateGatewayRule`、`UpdateGateway`、
+`ABTestOrchestration`(19 个动作,含 `CreateGatewayRule`、`UpdateGateway`、
 `InvokeAgentRuntime`)本是**平台**用自己凭证做的事;CloudWatch Logs 的**读**动作是控制台
 路径,泄漏到了工作负载角色上。`InvokeAgentRuntime` 对 A2A agent 保留,它确实要调用同伴。
 
@@ -274,6 +274,14 @@ public  /v1  ──┘        │
 AgentCore 会把已存在的 runtime session 固定在最初服务它的那个版本上,因此重新发布后的
 验证必须开启新的 Chat 会话;旧会话继续跑在原来的镜像上。涉及的版本可以在 Agent 详情的
 「版本与端点」面板中看到(`GET /api/agents/{id}/versions`)。
+
+Chat 也可以**显式结束**存活的 runtime
+会话：「结束会话」（位于「新会话」旁，历史栏每行也有）经
+`POST /api/chat/{id}/sessions/{session_id}/stop` 调用数据面 `StopRuntimeSession`，
+然后清掉当前 id，下一条提示词即从新会话开始。仅按「新会话」只在本地忘掉 id，留下的
+runtime 会话会自行空闲过期。只有 runtime 支撑的 agent 才能结束；托管 Harness 没有结束
+会话的操作（409 `chat.session_stop_unsupported`）。`ChatSession` 行保留并打上
+`ended_at`，历史栏据此显示「已结束」，而对话记录仍可回放。
 
 ### 版本与端点(只读)
 
@@ -498,7 +506,7 @@ OpenInference span,并自动发射同 scope 的结构化 content event 承载输
 | `agents` | Agent 记录——name、method、status、ARN、resource id、registry record id、version、spec |
 | `deployments` | 每次部署一行——五阶段数组,含各阶段 status/detail/时间戳 |
 | `jobs` | 异步工作(type `deploy_agent`)——status + 阶段事件的 JSONL `log` |
-| `chat_sessions` | Chat 交互 session——轮次、actor、最近活跃时间 |
+| `chat_sessions` | Chat 交互 session——轮次、actor、最近活跃时间、显式结束 runtime 会话后的 `ended_at` |
 | `users` | 注册创建的控制台账户——用户名/邮箱、pbkdf2 密码哈希、角色、状态(`pending`/`active`/`disabled`)、`expires_at`(审批前为空)、最近登录与登录次数(内置 admin 仅来自配置,不入表) |
 | `api_keys` | 公开 API 密钥——sha256 哈希 + 前缀(从不存明文) |
 | `policy_decisions` | 治理决策日志——principal、tool、ALLOW/DENY、原因 |
@@ -540,7 +548,7 @@ OpenInference span,并自动发射同 scope 的结构化 content event 承载输
 → 404 `aws.not_found`、`ValidationException` → 400 `aws.validation`、`AccessDeniedException` /
 `UnauthorizedException` → 403 `aws.access_denied`、`ThrottlingException` /
 `TooManyRequestsException` / `ServiceQuotaExceededException` → 429 `aws.throttled`、
-`ConflictException` / `ResourceInUseException` → 409 `aws.conflict`;`message` 去掉 botocore 的
+`ConflictException` / `ResourceInUseException` / `RetryableConflictException` → 409 `aws.conflict`;`message` 去掉 botocore 的
 `An error occurred (…) when calling the … operation:` 前缀,`detail` 携带
 `{aws_error_code, operation}`。映射是刻意封闭的列表(`AWS_ERROR_MAP`):其他错误码原样重抛,
 仍是带完整堆栈的未处理 500,确保真正意外的 AWS 失败依然醒目。跨账号 `AssumeRole` 失败先行判定,
