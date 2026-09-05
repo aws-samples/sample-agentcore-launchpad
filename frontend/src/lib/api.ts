@@ -57,6 +57,39 @@ export interface AgentInfo {
   revision?: number;
 }
 
+/** GET /api/agents/{id}/versions — the AWS-side version + endpoint set of one
+ *  Runtime- or Harness-backed agent (read-only, allow-list projected). */
+export interface AgentVersionRow {
+  version: string | null;
+  status: string | null;
+  description: string | null;
+  last_updated_at: string | null;
+}
+
+export interface AgentEndpointRow {
+  name: string | null;
+  live_version: string | null;
+  target_version: string | null;
+  status: string | null;
+  description: string | null;
+  created_at: string | null;
+  last_updated_at: string | null;
+  failure_reason: string | null;
+}
+
+export interface AgentVersionsInfo {
+  kind: "runtime" | "harness";
+  resource_id: string;
+  versions: AgentVersionRow[];
+  endpoints: AgentEndpointRow[];
+  /** highest version AWS reports */
+  latest_version: string | null;
+  /** the version the last Launchpad deploy recorded (Agent.version) */
+  ledger_version: string | null;
+  /** names among `stable`/`treatment` still present — canary leftovers */
+  canary_endpoints: string[];
+}
+
 export interface RuntimeDiscoveryCandidate {
   runtime_id: string;
   runtime_arn: string;
@@ -2284,6 +2317,7 @@ export const api = {
   getOverview: () => request<OverviewInfo>("/api/overview"),
   overviewOnlineQuality: () => request<OnlineQuality>("/api/overview/online-quality"),
   getAgent: (id: string) => request<AgentInfo>(`/api/agents/${id}`),
+  agentVersions: (id: string) => request<AgentVersionsInfo>(`/api/agents/${id}/versions`),
   getJob: (id: string) => request<JobInfo>(`/api/jobs/${id}`),
   listRuntimeCanaries: () =>
     request<{ canaries: RuntimeCanaryInfo[] }>("/api/runtime-canaries"),

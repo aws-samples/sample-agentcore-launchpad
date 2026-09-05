@@ -53,8 +53,8 @@ English: [architecture.md](architecture.md)
 
 | AgentCore 服务 | 平台如何使用 |
 |---|---|
-| **Runtime** | 托管 zip 与 container Agent(`CreateAgentRuntime`);调用链访问 runtime 数据面。 |
-| **Harness** | 托管方式B Agent(`CreateHarness`)——托管入口,无构建产物。 |
+| **Runtime** | 托管 zip 与 container Agent(`CreateAgentRuntime`);调用链访问 runtime 数据面。Agent 详情中的只读「版本与端点」面板通过 `GET /api/agents/{id}/versions` 读回 `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints` 的全部分页,让操作者看到不可变版本列表、`DEFAULT` 端点以及任何固定在某版本上的命名端点。 |
+| **Harness** | 托管方式B Agent(`CreateHarness`)——托管入口,无构建产物。同一「版本与端点」面板对 harness 类 Agent 读取 `ListHarnessVersions` + `ListHarnessEndpoints`。 |
 | **Memory** | 一个共享的 `launchpad_memory` 单例:短期 session 事件 + 长期语义与用户偏好策略。命名空间只按 `{actorId}` 分区(没有 `{agentId}` 模板变量),因此平台把 Agent id 折进 actor——`scoped_actor(agent_id, human)` → `<agent>__<human>`——从而让**短期事件与长期记录**(`/facts/<agent>__<human>`)都按 Agent 分区。生成的 Strands Runtime 通过 `AgentCoreMemorySessionManager` 恢复短期对话。Claude Agent SDK 容器为每次调用创建独立的 `MemorySessionManager`,通过 `UserPromptSubmit` Hook 注入有界的短期对话及 `/facts/<actor>`、`/preferences/<actor>` 记录,并在调用成功后把 USER/ASSISTANT 对作为一个事件持久化。A2A Runtime 使用 `<agent>__a2a__<contextId>`,因为直接 A2A 调用目前没有经过身份认证的 human actor envelope。一个 Agent 学到的偏好不会串到同一个人的另一个 Agent 或 A2A context;台账仍存裸的 human actor 用于展示。 |
 | **Gateway** | `launchpad-gw` 把一个 REST API(office-facts)和一个 Lambda(hr-database)转成带 Cognito-JWT 鉴权的 MCP 工具;Agent 的工具调用经由它流转。 |
 | **Identity** | 支撑网关的 token vault——一个 OAuth2 provider(Agent 出站鉴权)和一个 API-key provider。 |
@@ -270,6 +270,28 @@ public  /v1  ──┘        │
 
 公开 `/v1` 接口额外加了 `X-Api-Key` 鉴权(密钥以 sha256 哈希存储);分派之后的
 一切与控制台路径完全相同。
+
+AgentCore 会把已存在的 runtime session 固定在最初服务它的那个版本上,因此重新发布后的
+验证必须开启新的 Chat 会话;旧会话继续跑在原来的镜像上。涉及的版本可以在 Agent 详情的
+「版本与端点」面板中看到(`GET /api/agents/{id}/versions`)。
+
+### 版本与端点(只读)
+
+每次 `UpdateAgentRuntime` / `UpdateHarness` 都会发布一个不可变的新版本;`DEFAULT` 端点
+自动跟随最新版本,而命名端点(目标金丝雀的 `stable`/`treatment`)固定在某一版本。台账只记得
+Launchpad 部署时铸造的那个版本(`Agent.version`),所以 `/create` 的 Agent 详情(details 模式)
+带有一个由 `GET /api/agents/{agent_id}/versions` 支撑的**版本与端点**面板。该路由把台账行解析到
+唯一一个资源族——`zip_runtime`/`studio`/`container` 以及 `spec.discovery.resource_type` 缺省或为
+`runtime` 的导入行 → `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints`;`harness` 以及
+`resource_type == "harness"` 的导入行 → `ListHarnessVersions` + `ListHarnessEndpoints`——跟随每一页
+`nextToken`,并返回与发现功能相同风格的白名单投影(版本、状态、描述、时间戳、端点的生效/目标版本、
+失败原因;绝不包含环境变量、制品位置、执行角色或鉴权配置)。没有 AWS 资源的行(部署仍在进行、
+首次部署失败、已删除的 Agent,或解析不到任一资源族的形态)返回 409 `agent.no_resource`,并附带
+面板会原样展示的人类可读原因。
+
+面板标出 `DEFAULT`,把台账版本与 AWS 最新版本并列——带外更新或金丝雀候选版本铸造之后出现的不一致
+会以警告呈现而不是当作错误——并标记 `stable`/`treatment` 端点名,让金丝雀残留一眼可见。它是严格只读的:
+从不改指 `DEFAULT`,也从不创建、更新或删除端点;这些操作归金丝雀所有。
 
 ## 控制台路由
 

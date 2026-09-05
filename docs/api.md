@@ -93,6 +93,24 @@ denied`, `AWS is throttling this request`, `AWS resource conflict`) and `detail`
 carries only `aws_error_code` — the raw AWS text names the deployment's role ARN,
 instance id and operation, which stay on the console side of the API-key boundary.
 
+## Console Agents API — versions and endpoints
+
+`GET /api/agents/{agent_id}/versions` is the read-only AWS view behind the agent
+detail's VERSIONS & ENDPOINTS panel. It follows every `nextToken` page of the two
+list operations for the agent's resource family and returns an allow-listed
+projection — no environment values, artifact locations, execution roles or
+authorizer configuration.
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/agents/{agent_id}/versions` | `{kind: runtime\|harness, resource_id, versions[{version, status, description, last_updated_at}], endpoints[{name, live_version, target_version, status, description, created_at, last_updated_at, failure_reason}], latest_version, ledger_version, canary_endpoints[]}` — `versions` newest first; `endpoints` with `DEFAULT` first then by name; `latest_version` is the highest version AWS reports and `ledger_version` the one the last Launchpad deploy recorded (`Agent.version`) — they may differ after an out-of-band update or a canary candidate mint; `canary_endpoints` lists the `stable`/`treatment` names still present. Resource family: `zip_runtime`/`studio`/`container` and imported rows whose `spec.discovery.resource_type` is absent or `runtime` → `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints`; `harness` and imported rows with `resource_type == "harness"` → `ListHarnessVersions` + `ListHarnessEndpoints` (harness versions carry no description). Never mutates anything |
+
+Error codes: `agent.not_found` (404, unknown id or another workspace's agent),
+`agent.no_resource` (409, the row has no AWS resource to ask about — deploy still
+running, failed first deploy, deleted, or a shape that is neither Runtime nor
+Harness; `message` is the human reason the panel shows). AWS `ClientError`s map to
+the standard 4xx envelope.
+
 ## Console Governance API
 
 These `/api` routes back the authenticated console. They are not part of the

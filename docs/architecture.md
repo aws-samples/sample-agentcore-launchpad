@@ -54,8 +54,8 @@ real, runnable code in this repo.
 
 | AgentCore service | How the platform uses it |
 |---|---|
-| **Runtime** | Hosts zip and container agents (`CreateAgentRuntime`); the invoke chain calls the runtime data plane. Agent Management can also scan every `ListAgentRuntimes` page, inspect each resource with `GetAgentRuntime`, and explicitly import HTTP/A2A runtimes as externally owned ledger entries without changing the AWS resource. |
-| **Harness** | Hosts 方式B agents (`CreateHarness`) — a managed entrypoint with no build artifact. |
+| **Runtime** | Hosts zip and container agents (`CreateAgentRuntime`); the invoke chain calls the runtime data plane. Agent Management can also scan every `ListAgentRuntimes` page, inspect each resource with `GetAgentRuntime`, and explicitly import HTTP/A2A runtimes as externally owned ledger entries without changing the AWS resource. The agent detail's read-only VERSIONS & ENDPOINTS panel reads every `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints` page back (`GET /api/agents/{id}/versions`) so the operator sees the immutable versions, the `DEFAULT` endpoint, and any pinned named endpoints. |
+| **Harness** | Hosts 方式B agents (`CreateHarness`) — a managed entrypoint with no build artifact. The same VERSIONS & ENDPOINTS panel reads `ListHarnessVersions` + `ListHarnessEndpoints` for harness-backed agents. |
 | **Memory** | One shared `launchpad_memory` singleton: short-term session events + long-term semantic & user-preference strategies. Namespaces are keyed only on `{actorId}` (there is no `{agentId}` template), so the platform folds the agent id into the actor — `scoped_actor(agent_id, human)` → `<agent>__<human>` — which partitions **both** short-term events and long-term records (`/facts/<agent>__<human>`) per agent. Chat derives `human` server-side from the signed console session; the browser cannot choose it. Generated Strands runtimes restore short-term turns through `AgentCoreMemorySessionManager`. Claude Agent SDK containers create one request-local `MemorySessionManager`, inject bounded short-term turns plus `/facts/<actor>` and `/preferences/<actor>` records through a `UserPromptSubmit` hook, then persist the successful USER/ASSISTANT pair as one event. A2A runtimes use `<agent>__a2a__<contextId>` because direct A2A currently has no authenticated human actor envelope; the internal `__agent_card__` factory context is deliberately stateless because it is not a valid Memory session id. One agent's learned facts never bleed into another's for the same person or A2A context; the ledger still stores the bare human actor for display. |
 | **Gateway** | `launchpad-gw` turns a REST API (office-facts) and a Lambda (hr-database) into MCP tools with Cognito-JWT auth; agent tool calls flow through it. |
 | **Identity** | Token vault backing the gateway — an OAuth2 provider (agent outbound auth) and an API-key provider. |
@@ -440,6 +440,33 @@ inventory and excluded from Chat — the same split the Runtime path makes.
 Evaluation, experiments, and harness→zip conversion stay keyed on
 `method=harness` and therefore do not offer imported harnesses.
 
+### Versions and endpoints (read-only)
+
+Every `UpdateAgentRuntime` / `UpdateHarness` publishes an immutable new version;
+the `DEFAULT` endpoint auto-follows the latest while named endpoints (the target
+canary's `stable`/`treatment`) pin one. The ledger only remembers the version a
+Launchpad deploy minted (`Agent.version`), so the agent detail on `/create`
+(details mode) carries a **VERSIONS & ENDPOINTS** panel backed by
+`GET /api/agents/{agent_id}/versions`. The route resolves the row to one resource
+family — `zip_runtime`/`studio`/`container` and imported rows whose
+`spec.discovery.resource_type` is absent or `runtime` → `ListAgentRuntimeVersions`
++ `ListAgentRuntimeEndpoints`; `harness` and imported rows with
+`resource_type == "harness"` → `ListHarnessVersions` + `ListHarnessEndpoints` —
+follows every `nextToken` page, and returns the same allow-listed projection
+style as discovery (version, status, description, timestamps, endpoint
+live/target version, failure reason; never environment values, artifact
+locations, execution roles or authorizer configuration). A row with no AWS
+resource (a deploy still running, a failed first deploy, a deleted agent, or a
+shape that resolves to neither family) answers 409 `agent.no_resource` with a
+human reason the panel shows in place of the tables.
+
+The panel marks `DEFAULT`, highlights the ledger version against AWS's latest —
+a mismatch after an out-of-band update or a canary candidate mint is shown as a
+warning, not treated as an error — and flags `stable`/`treatment` endpoint names
+so canary leftovers are noticed. It is strictly read-only: it never re-points
+`DEFAULT` and never creates, updates or deletes an endpoint; the canary owns those
+operations.
+
 ## The invoke chain
 
 The Chat playground (`/api/chat/{id}`) and the public API
@@ -534,6 +561,9 @@ the same parser renders as a single delta. Existing runtimes must be republished
 to pick up a changed generated template. AgentCore pins an existing runtime
 session to the version that first served it, so a post-republish validation
 must start a new Chat session; an old session continues on its original image.
+The versions involved are visible in the agent detail's VERSIONS & ENDPOINTS
+panel (`GET /api/agents/{id}/versions`), which lists every AWS version alongside
+the one the ledger recorded and the version each endpoint currently serves.
 
 ## Existing Gateway governance
 
