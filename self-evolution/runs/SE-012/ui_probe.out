@@ -1,0 +1,15 @@
+PASS EDIT action on every row (incl. the platform default)
+PASS inline form pre-filled from GET detail (desc + expiry 30)
+PASS SAVE disabled with reason before any change: 'Nothing changed yet.'
+PASS invalid expiry 6 keeps SAVE disabled with reason: 'Expiry must be a whole number of days between 7 and 365.'
+PASS valid change enables SAVE and drops the hint
+PASS confirm dialog lists the referencing agents
+PASS confirm dialog states the expiry impact on every agent
+DIALOG: ▲ Save changes to team_notes? |  | Update team_notes-XYZ789. The new event expiry (14 days) applies to every agent using this memory — raw events older than that are dropped. Agents on this memory (2): hr-assistant, faq-bot. |  | Cancel | SAVE
+PASS PUT body carries only the changed field: [{'event_expiry_days': 14}]
+PASS row refreshed from the PUT response (status UPDATING)
+PASS no list reload after save (list GETs = 1)
+PASS success toast shown
+PASS zh-CN EDIT label
+unhandled stub paths: [('GET', '/api/health'), ('GET', '/api/health')]
+ALL PASS

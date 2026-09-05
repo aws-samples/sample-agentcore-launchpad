@@ -1,0 +1,40 @@
+
+[en] register /registry?view=register
+  OK  btn="▲ REGISTER" title="Name must be 3–64 chars: lowercase letters, digits, hyphens; starts with a letter" describedby=:r3: hintVisible=true hintText="Name must be 3–64 chars: lowercase letters, digits, hyphens; starts with a letter"
+  OK  after valid name+URL: disabled=false title="" describedby=null hints=0
+
+[en] edit /registry?view=edit&record=YACTYAZrHaBi
+  OK  btn="▲ SAVE" title="No changes to save" describedby=:r3: hintVisible=true hintText="No changes to save"
+
+[en] kb_create /knowledge-bases?view=create
+  OK  btn="▲ CREATE" title="Name must be 1–100 chars: letters, digits, hyphens, underscores" describedby=:r5: hintVisible=true hintText="Name must be 1–100 chars: letters, digits, hyphens, underscores"
+
+[en] studio /create/studio
+  OK  btn="▲ Publish" title="Add at least one node" describedby=:r9: hintVisible=true hintText="Add at least one node"
+
+[en] online_eval /evaluation?view=online&oe=new
+  OK  btn="▸ CREATE" title="Choose an agent" describedby=:r5: hintVisible=true hintText="Choose an agent"
+
+[en] workspace_detail /workspaces?view=detail&ws=lab-use2
+  OK  btn="RUN BOOTSTRAP" title="Bootstrap already ran — this workspace is READY" describedby=:r5: hintVisible=true hintText="Bootstrap already ran — this workspace is READY"
+
+[zh-CN] register /registry?view=register
+  OK  btn="▲ 注册" title="名称需 3–64 个字符：小写字母、数字、连字符，且以字母开头" describedby=:r3: hintVisible=true hintText="名称需 3–64 个字符：小写字母、数字、连字符，且以字母开头"
+  OK  after valid name+URL: disabled=false title="" describedby=null hints=0
+
+[zh-CN] edit /registry?view=edit&record=YACTYAZrHaBi
+  OK  btn="▲ 保存" title="没有可保存的更改" describedby=:r3: hintVisible=true hintText="没有可保存的更改"
+
+[zh-CN] kb_create /knowledge-bases?view=create
+  OK  btn="▲ 创建" title="名称需 1–100 个字符：仅含字母、数字、连字符、下划线" describedby=:r5: hintVisible=true hintText="名称需 1–100 个字符：仅含字母、数字、连字符、下划线"
+
+[zh-CN] studio /create/studio
+  OK  btn="▲ 发布" title="请至少添加一个节点" describedby=:r9: hintVisible=true hintText="请至少添加一个节点"
+
+[zh-CN] online_eval /evaluation?view=online&oe=new
+  OK  btn="▸ 创建" title="请选择一个 Agent" describedby=:r5: hintVisible=true hintText="请选择一个 Agent"
+
+[zh-CN] workspace_detail /workspaces?view=detail&ws=lab-use2
+  OK  btn="运行 BOOTSTRAP" title="Bootstrap 已运行过，该工作区已为 READY" describedby=:r5: hintVisible=true hintText="Bootstrap 已运行过，该工作区已为 READY"
+
+RESULT: PASS (0 failing checks)

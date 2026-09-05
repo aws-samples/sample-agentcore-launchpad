@@ -1,0 +1,10 @@
+{
+  "id": "SE-006",
+  "heading": "Disabled primary actions explain what is missing (shared Btn disabledReason)",
+  "branch": "evo/se-006-disabled-primary-actions-explain-what-is",
+  "worktree": "/home/ubuntu/workspace/agentcore_launchpad-worktrees/evo-se-006",
+  "session_id": "0e0eb7fd-4230-464a-9b2f-f351cc644d09",
+  "base": "main",
+  "started_at": "2026-09-04T15:30:02+00:00",
+  "pr": "https://github.com/aws-samples/sample-agentcore-launchpad/pull/77"
+}

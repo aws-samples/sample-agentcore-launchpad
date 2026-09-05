@@ -1,0 +1,10 @@
+{
+  "id": "SE-003",
+  "heading": "Stale \"Phase\" copy and unlabeled form controls",
+  "branch": "evo/se-003-stale-phase-copy-and-unlabeled-form-cont",
+  "worktree": "/home/ubuntu/workspace/agentcore_launchpad-worktrees/evo-se-003",
+  "session_id": "0e9b7f8c-3df3-4c9a-b94a-11dfca355b17",
+  "base": "main",
+  "started_at": "2026-09-04T12:57:47+00:00",
+  "pr": "https://github.com/aws-samples/sample-agentcore-launchpad/pull/74"
+}

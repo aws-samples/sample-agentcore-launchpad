@@ -1,0 +1,10 @@
+{
+  "id": "SE-009",
+  "heading": "Evaluation runs can be stopped (StopBatchEvaluation + queued cancel)",
+  "branch": "evo/se-009-evaluation-runs-can-be-stopped-stopbatch",
+  "worktree": "/home/ubuntu/workspace/agentcore_launchpad-worktrees/evo-se-009",
+  "session_id": "8a191895-3a62-47c6-b46c-87def3c158f6",
+  "base": "main",
+  "started_at": "2026-09-05T02:26:51+00:00",
+  "pr": "https://github.com/aws-samples/sample-agentcore-launchpad/pull/80"
+}

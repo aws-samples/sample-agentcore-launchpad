@@ -1,0 +1,149 @@
+
+=== viewport 390x844 ===
+OK   [/] scrollWidth=390
+       {"tag":"table","cls":"","right":737,"w":726,"minW":"0px","ws":"normal","text":"AGENT\t创建方式\t阶段\t状态\tRUNTIME ARN\t时"}
+       {"tag":"th","cls":"","right":688,"w":238,"minW":"0px","ws":"normal","text":"RUNTIME ARN"}
+       {"tag":"td","cls":"","right":688,"w":238,"minW":"0px","ws":"normal","text":"arn:aws:bedrock-agentcore:us-w"}
+       {"tag":"td","cls":"","right":688,"w":238,"minW":"0px","ws":"normal","text":"arn:aws:bedrock-agentcore:us-w"}
+       {"tag":"td","cls":"","right":688,"w":238,"minW":"0px","ws":"normal","text":"arn:aws:bedrock-agentcore:us-w"}
+OK   [/create] scrollWidth=390
+       {"tag":"table","cls":"","right":572,"w":561,"minW":"0px","ws":"normal","text":"名称\t方式\t状态\t版本\t更新时间\t操作\nhr-toolkit"}
+       {"tag":"div","cls":"","right":558,"w":73,"minW":"0px","ws":"normal","text":"编辑\n对话\n详情\n删除"}
+       {"tag":"div","cls":"","right":558,"w":73,"minW":"0px","ws":"normal","text":"对话\n移除"}
+       {"tag":"div","cls":"","right":558,"w":73,"minW":"0px","ws":"normal","text":"编辑\n对话\n详情\n删除"}
+       {"tag":"div","cls":"","right":558,"w":73,"minW":"0px","ws":"normal","text":"编辑\n对话\n转换 ⇄ RT\n详情\n删除"}
+OK   [/create/studio] scrollWidth=390
+OK   [/registry] scrollWidth=390
+OK   [/registry?view=register] scrollWidth=390
+OK   [/registry?view=a2a-demo] scrollWidth=390
+OK   [/knowledge-bases] scrollWidth=390
+       {"tag":"table","cls":"","right":413,"w":388,"minW":"0px","ws":"normal","text":"名称\t状态\t数据源\t关联 Agent\t更新时间\nlab-ea"}
+OK   [/knowledge-bases?view=create] scrollWidth=390
+OK   [/memory] scrollWidth=390
+       {"tag":"table","cls":"","right":513,"w":502,"minW":"0px","ws":"normal","text":"记忆 ID\t状态\t创建时间\t角色\nAgentMemory-Z"}
+       {"tag":"span","cls":"chip.amber","right":499,"w":39,"minW":"0px","ws":"nowrap","text":"平台"}
+       {"tag":"span","cls":"dim","right":486,"w":26,"minW":"0px","ws":"normal","text":"外部"}
+       {"tag":"span","cls":"dim","right":486,"w":26,"minW":"0px","ws":"normal","text":"外部"}
+       {"tag":"span","cls":"dim","right":486,"w":26,"minW":"0px","ws":"normal","text":"外部"}
+OK   [/memory?view=short-term] scrollWidth=390
+OK   [/memory?view=long-term] scrollWidth=390
+OK   [/chat] scrollWidth=390
+OK   [/observability] scrollWidth=390
+OK   [/observability?tab=sessions] scrollWidth=390
+       {"tag":"table","cls":"","right":700,"w":689,"minW":"0px","ws":"normal","text":"会话\tAGENT\t追踪数\tLLM 调用\tTOKEN · 成本"}
+       {"tag":"span","cls":"chip.good","right":686,"w":36,"minW":"0px","ws":"nowrap","text":"●\n0"}
+       {"tag":"span","cls":"chip.good","right":686,"w":36,"minW":"0px","ws":"nowrap","text":"●\n0"}
+       {"tag":"i","cls":"","right":665,"w":6,"minW":"auto","ws":"nowrap","text":"●"}
+       {"tag":"i","cls":"","right":665,"w":6,"minW":"auto","ws":"nowrap","text":"●"}
+OK   [/observability?tab=traces] scrollWidth=390
+       {"tag":"table","cls":"","right":847,"w":836,"minW":"0px","ws":"normal","text":"时间\t根操作\tAGENT\t会话\t耗时\tSPAN 数\tLLM\t"}
+       {"tag":"button","cls":"rowact","right":833,"w":64,"minW":"0px","ws":"nowrap","text":"瀑布图 ▸"}
+       {"tag":"button","cls":"rowact","right":833,"w":64,"minW":"0px","ws":"nowrap","text":"瀑布图 ▸"}
+       {"tag":"th","cls":"","right":755,"w":79,"minW":"0px","ws":"normal","text":"状态"}
+       {"tag":"td","cls":"","right":755,"w":79,"minW":"0px","ws":"normal","text":"●\n正常"}
+OK   [/evaluation] scrollWidth=390
+       {"tag":"table","cls":"","right":691,"w":680,"minW":"680px","ws":"normal","text":"运行\tAGENT\t数据集\t评估器\t得分\t创建时间\t状态\nru"}
+       {"tag":"span","cls":"chip.good","right":677,"w":61,"minW":"0px","ws":"nowrap","text":"●\n已完成"}
+       {"tag":"span","cls":"chip.good","right":677,"w":61,"minW":"0px","ws":"nowrap","text":"●\n已完成"}
+       {"tag":"span","cls":"chip.good","right":677,"w":61,"minW":"0px","ws":"nowrap","text":"●\n已完成"}
+       {"tag":"span","cls":"chip.good","right":677,"w":61,"minW":"0px","ws":"nowrap","text":"●\n已完成"}
+OK   [/evaluation?view=experiment] scrollWidth=390
+       {"tag":"table","cls":"","right":691,"w":680,"minW":"680px","ws":"normal","text":"实验\tAGENT\t阶段\t判定\t创建时间\t状态\nEXP-hr-"}
+       {"tag":"span","cls":"chip.muted","right":677,"w":75,"minW":"0px","ws":"nowrap","text":"●\nCLEANED"}
+       {"tag":"span","cls":"chip.muted","right":677,"w":75,"minW":"0px","ws":"nowrap","text":"●\nCLEANED"}
+       {"tag":"span","cls":"chip.muted","right":677,"w":75,"minW":"0px","ws":"nowrap","text":"●\nCLEANED"}
+       {"tag":"span","cls":"chip.muted","right":677,"w":75,"minW":"0px","ws":"nowrap","text":"●\nCLEANED"}
+OK   [/evaluation?view=evaluators] scrollWidth=390
+       {"tag":"table","cls":"","right":691,"w":680,"minW":"680px","ws":"normal","text":"名称\t级别\t来源\t真值\t状态\nHRPolicyComplia"}
+       {"tag":"span","cls":"chip.good","right":639,"w":57,"minW":"0px","ws":"nowrap","text":"ACTIVE"}
+       {"tag":"span","cls":"chip.good","right":639,"w":57,"minW":"0px","ws":"nowrap","text":"ACTIVE"}
+       {"tag":"span","cls":"chip.good","right":639,"w":57,"minW":"0px","ws":"nowrap","text":"ACTIVE"}
+       {"tag":"span","cls":"chip.good","right":639,"w":57,"minW":"0px","ws":"nowrap","text":"ACTIVE"}
+OK   [/evaluation?view=datasets] scrollWidth=390
+       {"tag":"table","cls":"","right":691,"w":680,"minW":"680px","ws":"normal","text":"名称\t条目\t类型\t真值\t云端\np1b-hr-toolkit-"}
+       {"tag":"span","cls":"chip.good","right":661,"w":69,"minW":"0px","ws":"nowrap","text":"●\nACTIVE"}
+       {"tag":"span","cls":"chip.good","right":661,"w":69,"minW":"0px","ws":"nowrap","text":"●\nACTIVE"}
+       {"tag":"span","cls":"chip.good","right":661,"w":69,"minW":"0px","ws":"nowrap","text":"●\nACTIVE"}
+       {"tag":"span","cls":"chip.good","right":649,"w":57,"minW":"0px","ws":"nowrap","text":"ACTIVE"}
+OK   [/evaluation?view=online] scrollWidth=390
+       {"tag":"table","cls":"","right":843,"w":832,"minW":"680px","ws":"normal","text":"名称\tAgent\t归属\t模式\t评估器\t抽样率\t状态\t更新时间"}
+       {"tag":"th","cls":"","right":703,"w":98,"minW":"0px","ws":"normal","text":"状态"}
+       {"tag":"td","cls":"","right":703,"w":98,"minW":"0px","ws":"normal","text":"ACTIVE\nENABLED"}
+       {"tag":"td","cls":"","right":703,"w":98,"minW":"0px","ws":"normal","text":"ACTIVE\nENABLED"}
+       {"tag":"td","cls":"","right":703,"w":98,"minW":"0px","ws":"normal","text":"ACTIVE\nDISABLED"}
+OK   [/skill-lab] scrollWidth=390
+       {"tag":"table","cls":"","right":691,"w":680,"minW":"680px","ws":"normal","text":"名称\t结构\t任务数\t更新时间\nsample-logtriag"}
+       {"tag":"th","cls":"","right":511,"w":193,"minW":"0px","ws":"normal","text":"任务数"}
+       {"tag":"td","cls":"mono.dim","right":511,"w":193,"minW":"0px","ws":"normal","text":"tasks 5"}
+       {"tag":"td","cls":"mono.dim","right":511,"w":193,"minW":"0px","ws":"normal","text":"tasks 3"}
+       {"tag":"td","cls":"mono.dim","right":511,"w":193,"minW":"0px","ws":"normal","text":"train 4 · val 3 · test 3"}
+OK   [/skill-lab?view=eval] scrollWidth=390
+       {"tag":"table","cls":"","right":691,"w":680,"minW":"680px","ws":"normal","text":"状态\t技能\t任务集\t通过率\t创建时间\n\n●\n已成功\tsamp"}
+       {"tag":"th","cls":"","right":507,"w":66,"minW":"0px","ws":"normal","text":"通过率"}
+       {"tag":"td","cls":"mono","right":507,"w":66,"minW":"0px","ws":"normal","text":"—"}
+       {"tag":"th","cls":"","right":441,"w":206,"minW":"0px","ws":"normal","text":"任务集"}
+       {"tag":"td","cls":"mono.dim","right":441,"w":206,"minW":"0px","ws":"normal","text":"sample-logtriage-dateset"}
+OK   [/skill-lab?view=train] scrollWidth=390
+       {"tag":"table","cls":"","right":691,"w":680,"minW":"680px","ws":"normal","text":"状态\t技能\t任务集\t最佳分数\t创建时间\n\n●\n已成功\tsam"}
+       {"tag":"th","cls":"","right":510,"w":74,"minW":"0px","ws":"normal","text":"最佳分数"}
+       {"tag":"td","cls":"mono","right":510,"w":74,"minW":"0px","ws":"normal","text":"—"}
+       {"tag":"td","cls":"mono","right":510,"w":74,"minW":"0px","ws":"normal","text":"—"}
+       {"tag":"th","cls":"","right":436,"w":195,"minW":"0px","ws":"normal","text":"任务集"}
+OK   [/governance] scrollWidth=390
+       {"tag":"table","cls":"","right":927,"w":916,"minW":"0px","ws":"normal","text":"GATEWAY\t状态\t鉴权器\t目标\tREGISTRY / H"}
+       {"tag":"div","cls":"gov-row-action","right":913,"w":72,"minW":"0px","ws":"normal","text":"已纳管"}
+       {"tag":"div","cls":"gov-row-action","right":913,"w":72,"minW":"0px","ws":"normal","text":"已纳管"}
+       {"tag":"div","cls":"gov-row-action","right":913,"w":72,"minW":"0px","ws":"normal","text":"未纳管"}
+       {"tag":"div","cls":"gov-row-action","right":913,"w":72,"minW":"0px","ws":"normal","text":"未纳管"}
+OK   [/governance?view=policy] scrollWidth=390
+       {"tag":"button","cls":"gov-nav-item","right":476,"w":61,"minW":"auto","ws":"normal","text":"工具"}
+       {"tag":"svg","cls":"","right":439,"w":14,"minW":"auto","ws":"normal","text":""}
+       {"tag":"button","cls":"gov-nav-item","right":415,"w":61,"minW":"auto","ws":"normal","text":"审计"}
+OK   [/governance?view=decisions] scrollWidth=390
+       {"tag":"button","cls":"gov-nav-item","right":476,"w":61,"minW":"auto","ws":"normal","text":"工具"}
+       {"tag":"svg","cls":"","right":439,"w":14,"minW":"auto","ws":"normal","text":""}
+       {"tag":"button","cls":"gov-nav-item","right":415,"w":61,"minW":"auto","ws":"normal","text":"审计"}
+OK   [/governance?view=audit] scrollWidth=390
+       {"tag":"button","cls":"gov-nav-item","right":476,"w":61,"minW":"auto","ws":"normal","text":"工具"}
+       {"tag":"svg","cls":"","right":439,"w":14,"minW":"auto","ws":"normal","text":""}
+       {"tag":"button","cls":"gov-nav-item.active","right":415,"w":61,"minW":"auto","ws":"normal","text":"审计"}
+OK   [/users] scrollWidth=390
+       {"tag":"table","cls":"","right":432,"w":421,"minW":"0px","ws":"normal","text":"用户\t角色\tAGENT 权限\t工作区\t状态\t有效期至\t注册时"}
+       {"tag":"th","cls":"","right":393,"w":40,"minW":"0px","ws":"normal","text":"登录次数"}
+OK   [/workspaces] scrollWidth=390
+       {"tag":"table","cls":"","right":479,"w":468,"minW":"0px","ws":"normal","text":"ID\t名称\t账户\t区域\t初始化状态\t注册时间\ndefault"}
+OK   [/workspaces?view=create] scrollWidth=390
+
+=== viewport 1440x900 ===
+OK   [/] scrollWidth=1440
+OK   [/create] scrollWidth=1440
+OK   [/create/studio] scrollWidth=1440
+OK   [/registry] scrollWidth=1440
+OK   [/registry?view=register] scrollWidth=1440
+OK   [/registry?view=a2a-demo] scrollWidth=1440
+OK   [/knowledge-bases] scrollWidth=1440
+OK   [/knowledge-bases?view=create] scrollWidth=1440
+OK   [/memory] scrollWidth=1440
+OK   [/memory?view=short-term] scrollWidth=1440
+OK   [/memory?view=long-term] scrollWidth=1440
+OK   [/chat] scrollWidth=1440
+OK   [/observability] scrollWidth=1440
+OK   [/observability?tab=sessions] scrollWidth=1440
+OK   [/observability?tab=traces] scrollWidth=1440
+OK   [/evaluation] scrollWidth=1440
+OK   [/evaluation?view=experiment] scrollWidth=1440
+OK   [/evaluation?view=evaluators] scrollWidth=1440
+OK   [/evaluation?view=datasets] scrollWidth=1440
+OK   [/evaluation?view=online] scrollWidth=1440
+OK   [/skill-lab] scrollWidth=1440
+OK   [/skill-lab?view=eval] scrollWidth=1440
+OK   [/skill-lab?view=train] scrollWidth=1440
+OK   [/governance] scrollWidth=1440
+OK   [/governance?view=policy] scrollWidth=1440
+OK   [/governance?view=decisions] scrollWidth=1440
+OK   [/governance?view=audit] scrollWidth=1440
+OK   [/users] scrollWidth=1440
+OK   [/workspaces] scrollWidth=1440
+OK   [/workspaces?view=create] scrollWidth=1440
+
+RESULT: PASS (0 route/viewport failures)

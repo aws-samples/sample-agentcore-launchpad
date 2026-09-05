@@ -1,0 +1,105 @@
+[en] datasets /evaluation?view=datasets&ds=does-not-exist
+   notice: ! Dataset `does-not-exist` no longer exists in this workspace — pick one from the table below. Dismiss
+   location.search after render: "?view=datasets"
+PASS en/datasets: notice rendered
+PASS en/datasets: stale param 'ds' removed
+PASS en/datasets: notice dismissible
+[en] evaluators /evaluation?view=evaluators&ev=does-not-exist
+   notice: ! Evaluator `does-not-exist` no longer exists in this workspace — pick one from the table below. Dismiss
+   location.search after render: "?view=evaluators"
+PASS en/evaluators: notice rendered
+PASS en/evaluators: stale param 'ev' removed
+[en] online /evaluation?view=online&oe=does-not-exist
+   notice: ! Online evaluation config `does-not-exist` no longer exists in this workspace — pick one from the table below. Dismiss
+   location.search after render: "?view=online"
+PASS en/online: notice rendered
+PASS en/online: stale param 'oe' removed
+[en] experiment /evaluation?view=experiment&exp=does-not-exist
+   notice: ! Experiment `does-not-exist` no longer exists in this workspace — pick one from the table below. Dismiss
+   location.search after render: "?view=experiment"
+PASS en/experiment: notice rendered
+PASS en/experiment: stale param 'exp' removed
+[en] chat /chat?agent=does-not-exist&session=does-not-exist-either
+   notice: ! Agent `does-not-exist` no longer exists in this workspace — pick one from the agent picker. Dismiss
+   location.search after render: ""
+PASS en/chat: notice rendered
+PASS en/chat: stale param 'agent' removed
+   agent-select value: ""
+PASS en/chat: picker stays on placeholder
+PASS en/chat: stale session param removed
+[en] kb /knowledge-bases?view=detail&kb=does-not-exist
+   notice: ! Knowledge base `does-not-exist` no longer exists in this workspace — pick one from the table below. Dismiss
+   location.search after render: ""
+PASS en/kb: notice rendered
+PASS en/kb: stale param 'kb' removed
+[en] kb-missing /knowledge-bases?view=detail
+   notice: ! The Knowledge base link carried no id — pick one from the table below. Dismiss
+   location.search after render: ""
+PASS en/kb-missing: notice rendered
+PASS en/kb-missing: stale param 'kb' removed
+PASS en/kb-missing: no permanent LOADING line (count=0)
+[zh-CN] datasets /evaluation?view=datasets&ds=does-not-exist
+   notice: ! 数据集 `does-not-exist` 在当前工作区已不存在 —— 请从下方表格中选择。 关闭
+   location.search after render: "?view=datasets"
+PASS zh-CN/datasets: notice rendered
+PASS zh-CN/datasets: stale param 'ds' removed
+[zh-CN] evaluators /evaluation?view=evaluators&ev=does-not-exist
+   notice: ! 评估器 `does-not-exist` 在当前工作区已不存在 —— 请从下方表格中选择。 关闭
+   location.search after render: "?view=evaluators"
+PASS zh-CN/evaluators: notice rendered
+PASS zh-CN/evaluators: stale param 'ev' removed
+[zh-CN] online /evaluation?view=online&oe=does-not-exist
+   notice: ! 在线评估配置 `does-not-exist` 在当前工作区已不存在 —— 请从下方表格中选择。 关闭
+   location.search after render: "?view=online"
+PASS zh-CN/online: notice rendered
+PASS zh-CN/online: stale param 'oe' removed
+[zh-CN] experiment /evaluation?view=experiment&exp=does-not-exist
+   notice: ! 实验 `does-not-exist` 在当前工作区已不存在 —— 请从下方表格中选择。 关闭
+   location.search after render: "?view=experiment"
+PASS zh-CN/experiment: notice rendered
+PASS zh-CN/experiment: stale param 'exp' removed
+[zh-CN] chat /chat?agent=does-not-exist&session=does-not-exist-either
+   notice: ! 智能体 `does-not-exist` 在当前工作区已不存在 —— 请在智能体选择器中重新选择。 关闭
+   location.search after render: ""
+PASS zh-CN/chat: notice rendered
+PASS zh-CN/chat: stale param 'agent' removed
+   agent-select value: ""
+PASS zh-CN/chat: picker stays on placeholder
+PASS zh-CN/chat: stale session param removed
+[zh-CN] kb /knowledge-bases?view=detail&kb=does-not-exist
+   notice: ! 知识库 `does-not-exist` 在当前工作区已不存在 —— 请从下方表格中选择。 关闭
+   location.search after render: ""
+PASS zh-CN/kb: notice rendered
+PASS zh-CN/kb: stale param 'kb' removed
+[zh-CN] kb-missing /knowledge-bases?view=detail
+   notice: ! 该知识库链接未携带 id —— 请从下方表格中选择。 关闭
+   location.search after render: ""
+PASS zh-CN/kb-missing: notice rendered
+PASS zh-CN/kb-missing: stale param 'kb' removed
+PASS zh-CN/kb-missing: no permanent LOADING line (count=0)
+valid/datasets /evaluation?view=datasets&ds=9be895aebb18 → search="?view=datasets&ds=9be895aebb18" notice=0
+PASS valid/datasets: no notice
+PASS valid/datasets: 'ds=9be895aebb18' kept
+PASS valid/datasets: highlighted row names 'p1b-hr-toolkit-tricky' → p1b-hr-toolkit-tricky 6 legacy — NOT SYNCED
+valid/evaluators /evaluation?view=evaluators&ev=HRPolicyCompliance053069-uB0u7M9rz4 → search="?view=evaluators&ev=HRPolicyCompliance053069-uB0u7M9rz4" notice=0
+PASS valid/evaluators: no notice
+PASS valid/evaluators: 'ev=HRPolicyCompliance053069-uB0u7M9rz4' kept
+PASS valid/evaluators: highlighted row names 'HRPolicyCompliance053069' → HRPolicyCompliance053069 TRACE CUSTOM — ACTIVE
+valid/online /evaluation?view=online&oe=oe_hr_assistant_rt_73532d-8c6mYqCIRH → search="?view=online&oe=oe_hr_assistant_rt_73532d-8c6mYqCIRH" notice=0
+PASS valid/online: no notice
+PASS valid/online: 'oe=oe_hr_assistant_rt_73532d-8c6mYqCIRH' kept
+PASS valid/online: highlighted row names 'oe_hr_assistant_rt_73532d' → oe_hr_assistant_rt_73532d hr-assistant-rt AGENT INSIGHTS 3 insights 100% ACTIVE ENABLED Sep 02, 04:23 PM
+valid/experiment /evaluation?view=experiment&exp=c410fbb7d582 → search="?view=experiment&exp=c410fbb7d582" notice=0
+PASS valid/experiment: no notice
+PASS valid/experiment: 'exp=c410fbb7d582' kept
+PASS valid/experiment: highlighted row names 'EXP-hr-toolkit-misleadin' → EXP-hr-toolkit-misleadin hr-toolkit-misleading CLEANUP NO SIGNIFICANT DIFFERENCE 9/3/2026, 10:19:02 AM ● CLEANED
+valid/chat /chat?agent=33cadb6a708b4b9983bbbfb1c8a73ee4 → search="?agent=33cadb6a708b4b9983bbbfb1c8a73ee4" notice=0
+PASS valid/chat: no notice
+PASS valid/chat: 'agent=33cadb6a708b4b9983bbbfb1c8a73ee4' kept
+PASS valid/chat: agent-select value === 33cadb6a708b4b9983bbbfb1c8a73ee4
+valid/kb /knowledge-bases?view=detail&kb=HRM2JDA6GW → search="?view=detail&kb=HRM2JDA6GW" notice=0
+PASS valid/kb: no notice
+PASS valid/kb: 'kb=HRM2JDA6GW' kept
+PASS valid/kb: detail h1 'lab-earnings-kb' === 'lab-earnings-kb'
+
+RESULT: ALL PASS

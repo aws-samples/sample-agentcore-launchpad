@@ -1,0 +1,6 @@
+bedrock-agentcore harness+session ops: [] | StopRuntimeSession present: True
+bedrock-agentcore-control harness+session ops: [] | StopRuntimeSession present: False
+input: ['runtimeSessionId', 'agentRuntimeArn', 'qualifier', 'clientToken']
+output: ['runtimeSessionId', 'statusCode']
+errors: ['ServiceQuotaExceededException', 'UnauthorizedException', 'RetryableConflictException', 'ValidationException', 'AccessDeniedException', 'ConflictException', 'RuntimeClientError', 'ThrottlingException', 'ResourceNotFoundException', 'InternalServerException']
+http: OrderedDict({'method': 'POST', 'requestUri': '/runtimes/{agentRuntimeArn}/stopruntimesession', 'responseCode': 200})

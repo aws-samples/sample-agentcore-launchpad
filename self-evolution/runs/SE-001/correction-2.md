@@ -1,0 +1,5 @@
+# Correction pass 2 for SE-001 — Catch-all route: unknown URLs render a not-found view inside the shell
+
+The host re-ran the acceptance checks on your branch and found the following. Fix exactly this, re-run `make verify`, commit on the current branch, and report as before. Do not start unrelated work.
+
+Host review: all acceptance checks pass on my own rerun (crumb, path, chrome, back link, zh-CN). One correction before I open the PR: in frontend/src/pages/NotFound.tsx you nest <Btn> (a <button>) inside a react-router <Link> (an <a>). Interactive content inside an anchor is invalid HTML and nothing else in the codebase does it (zero Link-wrapping-Btn occurrences under src/pages). Replace it with ONE of: (a) useNavigate() and <Btn primary onClick={() => navigate('/')}> or (b) a plain <Link to='/' className='btn primary'> styled by the existing .btn/.primary classes. Keep the data-testid='notfound-home' on the clickable element. Then re-run: cd frontend && npm run lint && npx tsc --noEmit && npm run build, amend or add a commit, leave the tree clean, and report the git log --oneline main..HEAD. Do not change anything else.

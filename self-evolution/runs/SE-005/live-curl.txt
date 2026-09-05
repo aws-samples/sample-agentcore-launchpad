@@ -1,0 +1,9 @@
+GET /api/registry/records/does-not-exist
+{"code":"aws.validation","message":"1 validation error detected: Value at 'recordId' failed to satisfy constraint: Member must satisfy regular expression pattern: (arn:aws(-[^:]+)?:agent-registry:[a-z0-9-]+:[0-9]{12}:registry/[a-zA-Z0-9]{12,16}/record/)?[a-zA-Z0-9]{12}","detail":{"aws_error_code":"ValidationException","operation":"GetRegistryRecord"}} [400]
+
+GET /api/knowledge-bases/does-not-exist
+{"code":"aws.access_denied","message":"User: arn:aws:sts::<account-id>:assumed-role/admin_role_for_workshop/<instance-id> is not authorized to perform: bedrock:GetKnowledgeBase","detail":{"aws_error_code":"AccessDeniedException","operation":"GetKnowledgeBase"}} [403]
+
+GET /api/memory/sessions?actor_id=does-not-exist
+{"code":"aws.not_found","message":"Actor does-not-exist not found","detail":{"aws_error_code":"ResourceNotFoundException","operation":"ListSessions"}} [404]
+

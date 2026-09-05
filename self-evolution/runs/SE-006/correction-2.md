@@ -1,0 +1,5 @@
+# Correction pass 2 for SE-006 — Disabled primary actions explain what is missing (shared Btn disabledReason)
+
+The host re-ran the acceptance checks on your branch and found the following. Fix exactly this, re-run `make verify`, commit on the current branch, and report as before. Do not start unrelated work.
+
+Host review: every functional check passes on my own rerun (make verify PASS; six forms × en/zh-CN all show title + visible aria-describedby hint; Register enables and drops the hint after valid input). One acceptance miss: your report says 'docs/architecture.md has no .zh-CN twin in the repo' — it does: docs/architecture.zh-CN.md exists at the worktree root (ls docs/architecture.zh-CN.md). User-facing docs move together in this repo. Add the Chinese counterpart of your new '## Disabled primary actions explain what is missing' section to docs/architecture.zh-CN.md at the matching position (after the 控制台失败状态 / backend-unreachable section that SE-002 added there), matching the surrounding register (技术语体, full-width punctuation). Run in the FOREGROUND, run make verify, commit on the branch, leave the tree clean, report git log --oneline main..HEAD.

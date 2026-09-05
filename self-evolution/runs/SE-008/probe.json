@@ -1,0 +1,15 @@
+{
+  "evaluation": {
+    "text": "失败原因： TelemetryReadinessTimeout: evaluation telemetry did not become ready for session e3641b020abb4eeaa23c0de1775a102c4",
+    "fullwidth": true,
+    "halfwidth": false
+  },
+  "knowledge": {
+    "text": "前缀（可选）",
+    "fullwidth": true
+  },
+  "residualHalfWidth": {
+    "evaluation": [],
+    "knowledgeCreate": []
+  }
+}

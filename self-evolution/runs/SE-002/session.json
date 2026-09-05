@@ -1,0 +1,10 @@
+{
+  "id": "SE-002",
+  "heading": "Unreachable backend: health chip reflects reality and list pages show load errors, not empty states",
+  "branch": "evo/se-002-unreachable-backend-health-chip-reflects",
+  "worktree": "/home/ubuntu/workspace/agentcore_launchpad-worktrees/evo-se-002",
+  "session_id": "9d21c85a-7eb5-4344-a6fe-dad8655d8bac",
+  "base": "main",
+  "started_at": "2026-09-04T12:29:01+00:00",
+  "pr": "https://github.com/aws-samples/sample-agentcore-launchpad/pull/73"
+}

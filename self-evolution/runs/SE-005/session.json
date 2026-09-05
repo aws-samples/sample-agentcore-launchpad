@@ -1,0 +1,10 @@
+{
+  "id": "SE-005",
+  "heading": "AWS ClientErrors on console routes map to 4xx envelopes, never a bare 500 or raw boto text",
+  "branch": "evo/se-005-aws-clienterrors-on-console-routes-map-t",
+  "worktree": "/home/ubuntu/workspace/agentcore_launchpad-worktrees/evo-se-005",
+  "session_id": "829ac2f4-432c-4c21-9907-2a0b52c9382f",
+  "base": "main",
+  "started_at": "2026-09-04T14:47:08+00:00",
+  "pr": "https://github.com/aws-samples/sample-agentcore-launchpad/pull/76"
+}

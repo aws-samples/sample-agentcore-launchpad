@@ -1,0 +1,10 @@
+{
+  "id": "SE-007",
+  "heading": "Stale deep links tell the user the resource is gone instead of silently falling back",
+  "branch": "evo/se-007-stale-deep-links-tell-the-user-the-resou",
+  "worktree": "/home/ubuntu/workspace/agentcore_launchpad-worktrees/evo-se-007",
+  "session_id": "f7ff069d-c886-4f1f-af3b-2e5419e9f94a",
+  "base": "main",
+  "started_at": "2026-09-04T15:58:11+00:00",
+  "pr": "https://github.com/aws-samples/sample-agentcore-launchpad/pull/78"
+}
