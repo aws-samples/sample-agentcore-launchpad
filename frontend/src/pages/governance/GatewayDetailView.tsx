@@ -6,6 +6,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCw,
   ShieldAlert,
   ShieldCheck,
   Trash2,
@@ -16,17 +17,19 @@ import { useTranslation } from "react-i18next";
 
 import { Btn, Chip, ConfirmDialog, DataTable, Panel, useToast } from "../../components";
 import {
-  api,
   type GovernanceAuthorizationModel,
   type GovernanceDecisionResponse,
   type GovernanceGatewayDetail,
   type GovernanceGatewayMode,
+  type GovernanceGatewayTarget,
   type GovernanceOperation,
   type GovernancePolicy,
   type GovernancePolicyListResponse,
   type GovernanceRegistryPreview,
+  api,
 } from "../../lib/api";
 import {
+  formatTimestamp,
   governanceError,
   isGatewayReady,
   isOperationPending,
@@ -40,6 +43,11 @@ interface Props {
   gatewayId: string;
   onNavigate: (view: GovernanceView, gatewayId?: string, policyId?: string) => void;
 }
+
+// SynchronizeGatewayTargets: initialize + paginated tools/list against the MCP
+// server; poll the detail every few seconds, give up after ~2 minutes.
+const TARGET_SYNC_POLL_INTERVAL_MS = 4000;
+const TARGET_SYNC_POLL_MS = 120_000;
 
 type ConfirmAction =
   | "manage"
@@ -58,7 +66,7 @@ interface LoadErrors {
 }
 
 export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const toast = useToast();
   const [gateway, setGateway] = useState<GovernanceGatewayDetail | null>(null);
   const [policies, setPolicies] = useState<GovernancePolicyListResponse | null>(null);
@@ -85,6 +93,11 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
   // Rate limits live in their own panel with their own fetch; REFRESH reaches
   // them through this counter instead of threading the list through this view.
   const [refreshTick, setRefreshTick] = useState(0);
+  // Target sync: SynchronizeGatewayTargets answers 202 and the target sits in
+  // SYNCHRONIZING with no operation row to poll, so the detail itself is
+  // re-fetched until every target leaves that state (or ~2 min pass).
+  const [syncingTarget, setSyncingTarget] = useState<string | null>(null);
+  const [syncPollStartedAt, setSyncPollStartedAt] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setRefreshing(true);
@@ -150,6 +163,22 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
     return () => window.clearTimeout(timer);
   }, [load, operation, toast]);
 
+  const synchronizingTargets = useMemo(
+    () => gateway?.targets.filter((target) => target.status === "SYNCHRONIZING") ?? [],
+    [gateway],
+  );
+
+  useEffect(() => {
+    if (syncPollStartedAt === null) return;
+    const timedOut = Date.now() - syncPollStartedAt > TARGET_SYNC_POLL_MS;
+    if (synchronizingTargets.length === 0 || timedOut) {
+      setSyncPollStartedAt(null);
+      return;
+    }
+    const timer = window.setTimeout(() => void load(), TARGET_SYNC_POLL_INTERVAL_MS);
+    return () => window.clearTimeout(timer);
+  }, [load, syncPollStartedAt, synchronizingTargets]);
+
   const sharedIds = useMemo(
     () => gateway?.shared_gateways.map((item) => item.id) ?? [],
     [gateway],
@@ -191,6 +220,44 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
     },
     [load, t, toast],
   );
+
+  const synchronizeTarget = useCallback(
+    async (target: GovernanceGatewayTarget) => {
+      if (!gateway) return;
+      setSyncingTarget(target.id);
+      try {
+        const next = await api.synchronizeGovernanceTarget(gateway.id, target.id);
+        setGateway((current) =>
+          current
+            ? {
+                ...current,
+                targets: current.targets.map((item) => (item.id === next.id ? next : item)),
+              }
+            : current,
+        );
+        setSyncPollStartedAt(Date.now());
+        toast(t("governance.messages.targetSyncAccepted", { name: target.name }), "good");
+      } catch (error) {
+        toast(governanceError(error), "crit");
+      } finally {
+        setSyncingTarget(null);
+      }
+    },
+    [gateway, t, toast],
+  );
+
+  const targetSyncBlockers = (target: GovernanceGatewayTarget): string[] => {
+    if (!gateway) return [];
+    const blockers: string[] = [];
+    if (!gateway.managed) blockers.push(t("governance.targetSync.blockers.notManaged"));
+    if (target.not_synchronizable_reason) {
+      blockers.push(t(`governance.targetSync.blockers.${target.not_synchronizable_reason}`));
+    }
+    if (operationBusy || syncingTarget !== null) {
+      blockers.push(t("governance.targetSync.blockers.busy"));
+    }
+    return blockers;
+  };
 
   const runConfirmedAction = () => {
     if (!gateway || !confirmAction) return;
@@ -856,23 +923,34 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
             { key: "target", label: t("governance.inventory.targets") },
             { key: "status", label: t("governance.inventory.status") },
             { key: "listing", label: t("governance.detail.listingMode") },
+            { key: "lastSync", label: t("governance.detail.lastSync") },
             { key: "actions", label: t("governance.detail.actions") },
+            { key: "sync", label: "" },
           ]}
           isEmpty={gateway.targets.length === 0}
           empty={t("governance.detail.noTargets")}
         >
           {gateway.targets.map((target) => {
             const actions = gateway.actions.filter((action) => action.target_id === target.id);
+            const blockers = targetSyncBlockers(target);
+            const syncFailed =
+              target.status === "SYNCHRONIZE_UNSUCCESSFUL" || target.status === "FAILED";
             return (
-              <tr key={target.id}>
+              <tr key={target.id} data-testid={`gateway-target-${target.id}`}>
                 <td className="pri">
                   {target.name}
                   <div className="gov-cell-note mono">{target.id}</div>
                 </td>
                 <td>
                   <Chip tone={statusTone(target.status)}>{target.status}</Chip>
+                  {syncFailed && target.status_reasons.length > 0 ? (
+                    <div className="gov-cell-note gov-inline-error">
+                      {target.status_reasons.join("; ")}
+                    </div>
+                  ) : null}
                 </td>
                 <td className="mono">{target.listing_mode ?? "-"}</td>
+                <td className="mono">{formatTimestamp(target.last_synchronized_at, i18n.language)}</td>
                 <td>
                   <div className="gov-action-list">
                     {actions.map((action) => (
@@ -885,6 +963,19 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
                     ))}
                     {actions.length === 0 ? "-" : null}
                   </div>
+                </td>
+                <td>
+                  <Btn
+                    disabled={blockers.length > 0}
+                    disabledReason={blockers.join("; ")}
+                    title={t("governance.targetSync.hint")}
+                    onClick={() => void synchronizeTarget(target)}
+                  >
+                    <RotateCw size={14} aria-hidden="true" />
+                    {syncingTarget === target.id || target.status === "SYNCHRONIZING"
+                      ? t("governance.actions.syncing")
+                      : t("governance.actions.sync")}
+                  </Btn>
                 </td>
               </tr>
             );

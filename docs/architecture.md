@@ -709,6 +709,49 @@ actions (not managed / Gateway not READY / rate limit not ACTIVE / form invalid)
 through the shared `Btn` `disabledReason`. No IAM change: the console's role
 already carries `bedrock-agentcore:*`.
 
+### Target synchronization
+
+Every target row in the gateway detail's **TARGETS** table shows `lastSynchronizedAt`
+(`-` when AWS has never synced it) and, for **dynamic MCP-server targets** on a
+**managed** Gateway, a **SYNC** action. `POST
+/api/governance/gateways/{id}/targets/{target_id}/synchronize` calls
+`SynchronizeGatewayTargets(gatewayIdentifier, targetIdList=[target_id])` — the
+service re-runs MCP `initialize` + paginated `tools/list` against the target
+endpoint (with the configured Identity credential when there is one) and moves the
+target to `SYNCHRONIZING`, then `READY` or `SYNCHRONIZE_UNSUCCESSFUL`. The wrapper
+`synchronize_gateway_target` lives in `app/services/agentcore/policy.py`; the route
+answers `202` with the target projection `{id, name, status, status_reasons,
+description, listing_mode, last_synchronized_at, synchronizable,
+not_synchronizable_reason}` — the same shape `gateway_detail` now returns for every
+target, so the console never re-derives AWS rules.
+
+Two gates run **before any AWS call**: the Gateway must carry the managed tag
+(`409 governance.gateway_not_managed`) and the target must be synchronizable, else
+`409 governance.target_not_synchronizable` with a stable `detail.reason`:
+
+| Rule (from the SynchronizeGatewayTargets reference) | `detail.reason` |
+|---|---|
+| `targetConfiguration.mcp.mcpServer` must be present — Lambda / OpenAPI / Smithy / connector schemas are static by construction | `not_mcp_server` |
+| a static `mcpServer.mcpToolSchema` disables sync | `static_tool_schema` |
+| `CREATE_PENDING_AUTH` / `UPDATE_PENDING_AUTH` / `SYNCHRONIZE_PENDING_AUTH` are refused until the operator completes authorization | `pending_auth` |
+| already `SYNCHRONIZING` | `synchronizing` |
+| any other transient state (`CREATING`, `UPDATING`, `DELETING`); sync needs `READY`, `SYNCHRONIZE_UNSUCCESSFUL`, `UPDATE_UNSUCCESSFUL` or `FAILED` | `not_ready` |
+
+The call is journaled inline exactly like the rate-limit mutations: one
+`PolicyChange` row (`target.synchronize`; `before` = the target projection before
+the call, `requested` = `{target_id, target_name}`, `after` = the AWS response
+target) written as `running` and closed `succeeded`/`failed`. AWS
+`ConflictException` reaches the client as `409 aws.conflict` through the shared
+`ClientError` envelope, never as a 500. There is no operation row: after a
+successful SYNC the console re-fetches the detail every few seconds while a target
+is `SYNCHRONIZING` (giving up after ~2 min) and shows `statusReasons` under a
+`SYNCHRONIZE_UNSUCCESSFUL` / `FAILED` chip. Disabled SYNC buttons explain themselves
+through the shared `Btn` `disabledReason` (not managed / target type / pending auth /
+already synchronizing / operation busy). Out of scope: listing a dynamic target's
+tools (the control plane does not return them), creating or updating targets, and
+batch sync. No IAM change — the console's role already carries
+`bedrock-agentcore:*`.
+
 ## Console routing
 
 The console is a single `react-router-dom` route table in `frontend/src/App.tsx`,
