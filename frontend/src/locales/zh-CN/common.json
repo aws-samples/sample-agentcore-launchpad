@@ -56,10 +56,10 @@
     "roleMember": "成员",
     "daysLeft": "剩余 {{days}} 天",
     "gateOff": "未启用登录",
-    "gateOffHint": "未配置控制台密码(LAUNCHPAD_AUTH_PASSWORD)——该控制台对所有可访问者开放,因此没有会话可退出。",
+    "gateOffHint": "未配置控制台密码（LAUNCHPAD_AUTH_PASSWORD）——该控制台对所有可访问者开放，因此没有会话可退出。",
     "registerSubtitleApproval": "使用公司邮箱注册。新账户需管理员审批通过后才能登录。",
     "registerPendingTitle": "等待审批",
-    "registerPendingBody": "{{username}} 已提交审核。需管理员审批通过后才能登录,{{days}} 天有效期从审批时开始计算。",
+    "registerPendingBody": "{{username}} 已提交审核。需管理员审批通过后才能登录，{{days}} 天有效期从审批时开始计算。",
     "accountStatus": "状态",
     "statusPending": "待审批",
     "accountPending": "该账户正在等待管理员审批。",
@@ -192,14 +192,14 @@
       "harness": {
         "badge": "推荐 · 免构建",
         "title": "托管 Harness",
-        "desc": "声明式 Agent — 模型、提示词、工具、技能、记忆。无需编排代码与容器,数秒内上线。",
-        "spec2": "工具:gateway / mcp / 浏览器 / 代码解释器",
+        "desc": "声明式 Agent — 模型、提示词、工具、技能、记忆。无需编排代码与容器，数秒内上线。",
+        "spec2": "工具：gateway / mcp / 浏览器 / 代码解释器",
         "spec3": "部署约 30 秒"
       },
       "studio": {
         "badge": "ZIP 通道已上线 · Studio 已上线",
         "title": "Strands Studio",
-        "desc": "平台原生拖拽式画布,支持单体、层级、图与蜂群拓扑。自动生成 Strands 代码,经 zip 快速通道部署。",
+        "desc": "平台原生拖拽式画布，支持单体、层级、图与蜂群拓扑。自动生成 Strands 代码，经 zip 快速通道部署。",
         "spec2": "多 Agent 拓扑",
         "spec3": "内置 config-bundle 与 ADOT",
         "open": "打开 Strands Studio 画布"
@@ -287,7 +287,7 @@
       "systemPrompt": "系统提示词",
       "systemPromptPlaceholder": "你是一名乐于助人的助手……",
       "tools": "工具 — 内置",
-      "gatewayToolsSoon": "+ gateway 工具 · 仅 harness 与 Strands ZIP(HTTP)支持",
+      "gatewayToolsSoon": "+ gateway 工具 · 仅 harness 与 Strands ZIP（HTTP）支持",
       "gatewayWholeNote": "选择 gateway 条目会挂载整个 AgentCore Gateway 及其暴露的所有工具 —— Registry 审批只决定目录可见性，不是按工具的授权边界。请在 Governance 中用 Cedar 策略授权单个工具动作。标记为“—”的条目因出站鉴权未解析，仅存在于目录中、无法挂载。",
       "memory": "记忆",
       "memoryShort": "短期 · 会话",
@@ -295,7 +295,7 @@
       "memoryResource": "记忆资源",
       "memoryDefault": "平台默认（工作区共享记忆）",
       "memoryResourceHint": "该 Agent 的对话将写入哪个 AgentCore Memory。可在「记忆」页面的「资源管理」标签创建新的记忆资源。",
-      "note": "已内置 Config-bundle 契约。生成的 Agent 通过 get_config_bundle() 读取系统提示词与工具描述并以默认值兜底 — 这是评估层 A/B 实验的前提。OTEL(ADOT)埋点自动注入。",
+      "note": "已内置 Config-bundle 契约。生成的 Agent 通过 get_config_bundle() 读取系统提示词与工具描述并以默认值兜底 — 这是评估层 A/B 实验的前提。OTEL（ADOT）埋点自动注入。",
       "titleZip": "配置 — STRANDS · ZIP 快速通道",
       "templateTools": "工具 — STRANDS 模板",
       "toolkits": "工具集 — DEMO TOOLKIT",
@@ -311,7 +311,7 @@
       "agentSdkClaude": "Claude Agent SDK",
       "agentSdkNote": "Claude Agent SDK 自带完整的智能体循环 —— 通过 .claude/agents 提供子 Agent，并支持 Hooks 与 MCP 服务器，模型走 Bedrock（CLAUDE_CODE_USE_BEDROCK=1）。目前该类别下仅此一个 SDK。",
       "sdkTools": "能力 — CLAUDE SDK",
-      "mcpServers": "MCP 服务器 · JSON(可选)",
+      "mcpServers": "MCP 服务器 · JSON（可选）",
       "skills": "技能 — 注册表与自定义",
       "skillsUploadZip": "上传 .zip",
       "skillsFromGit": "从 git 导入",
@@ -369,7 +369,7 @@
       "deploy": "部署",
       "register": "注册"
     },
-    "launchFailedToast": "部署在 {{stage}} 阶段失败:{{msg}}",
+    "launchFailedToast": "部署在 {{stage}} 阶段失败：{{msg}}",
     "editing": "正在编辑“{{name}}”。重新发布会就地更新——AgentCore 在同一资源上发布一个新版本（ARN 不变，DEFAULT 端点自动切到新版本），几乎无停机。",
     "republish": "重新发布",
     "republishConfirm": {
@@ -452,7 +452,7 @@
       "source": "来源",
       "sourceUrl": "来源 URL",
       "sourceCommit": "提交",
-      "commitUnknown": "未记录(导入时尚未固定提交——重新导入即可捕获)",
+      "commitUnknown": "未记录（导入时尚未固定提交——重新导入即可捕获）",
       "files": "文件束 · {{n}} 个文件",
       "useInNewAgent": "在新 AGENT 中使用",
       "submit": "提交",
@@ -477,7 +477,7 @@
     },
     "confirmDisable": {
       "title": "停用记录",
-      "body": "“{{name}}”将被置为 DEPRECATED——这是终态。若要恢复,只能删除后重新创建该记录。"
+      "body": "“{{name}}”将被置为 DEPRECATED——这是终态。若要恢复，只能删除后重新创建该记录。"
     },
     "register": {
       "cta": "注册",
@@ -635,7 +635,7 @@
     },
     "empty": {
       "title": "还没有知识库。",
-      "body": "托管知识库是全托管 RAG——向量库、embedding、分块与重排都由 Bedrock 负责。上传文档(或指定一个 S3 位置),Agent 即可从中检索有依据的答案。创建一个开始吧。"
+      "body": "托管知识库是全托管 RAG——向量库、embedding、分块与重排都由 Bedrock 负责。上传文档（或指定一个 S3 位置），Agent 即可从中检索有依据的答案。创建一个开始吧。"
     },
     "source": {
       "label": "数据源",
@@ -654,7 +654,7 @@
       "uploadHint": "文件将上传到 artifacts 桶并自动配置为数据源。数据源可用后自动开始 ingestion。",
       "removeFile": "移除",
       "bucket": "S3 桶",
-      "prefix": "前缀(可选)",
+      "prefix": "前缀（可选）",
       "existingHint": "KB 服务角色会按知识库粒度获得该桶/前缀的读取权限。"
     },
     "create": {
@@ -663,22 +663,22 @@
       "pageMeta": "托管 RAG · S3 数据源",
       "formTitle": "新建知识库",
       "name": "名称",
-      "nameInvalid": "以字母或数字开头;仅允许字母、数字、空格、- 和 _。",
+      "nameInvalid": "以字母或数字开头；仅允许字母、数字、空格、- 和 _。",
       "description": "描述",
-      "descriptionPlaceholder": "例如:产品文档与常见问题——当用户询问某功能如何使用时查询此库。",
+      "descriptionPlaceholder": "例如：产品文档与常见问题——当用户询问某功能如何使用时查询此库。",
       "descriptionHint": "Agent 会根据此描述判断何时查询该知识库——请写清它包含什么、何时应当查阅。",
       "creating": "创建中…",
       "submit": "创建",
       "done": "“{{name}}”已创建——正在预置数据源。",
-      "uploadFailed": "知识库已创建,但文件上传失败:{{msg}}",
+      "uploadFailed": "知识库已创建，但文件上传失败：{{msg}}",
       "how": {
         "title": "工作流程",
         "sub": "创建 → ingestion → 挂载",
-        "s1": "创建——预置 KB 及其 S3 数据源(2–5 分钟)",
-        "s2": "INGESTION——数据源可用后自动运行;在详情页监控进度",
+        "s1": "创建——预置 KB 及其 S3 数据源（2–5 分钟）",
+        "s2": "INGESTION——数据源可用后自动运行；在详情页监控进度",
         "s3": "验证——用检索 Playground 确认返回的 chunk 与 score 质量",
         "s4": "挂载——在创建 Agent 向导中把 ACTIVE 的 KB 挂载到 harness Agent",
-        "note": "托管 KB 为你处理向量库、embedding 与重排,无需配置基础设施。v1 仅支持 S3 数据源。"
+        "note": "托管 KB 为你处理向量库、embedding 与重排，无需配置基础设施。v1 仅支持 S3 数据源。"
       },
       "disabledName": "名称需 1–100 个字符：仅含字母、数字、连字符、下划线",
       "disabledFiles": "请至少添加一个待上传文件",
@@ -709,7 +709,7 @@
         "title": "数据源",
         "sub": "S3 数据源 · ingestion 与同步",
         "add": "新增数据源",
-        "provisioning": "知识库正在预置。数据源将在几分钟后可用,随后自动开始首次 ingestion。",
+        "provisioning": "知识库正在预置。数据源将在几分钟后可用，随后自动开始首次 ingestion。",
         "empty": "还没有数据源。",
         "adding": "处理中…",
         "uploadSubmit": "上传文件",
@@ -723,10 +723,10 @@
         "syncNotReady": "数据源需为 AVAILABLE 才能同步。",
         "syncRunning": "已有 ingestion 任务在运行。",
         "syncStarted": "ingestion 任务已启动。",
-        "syncFailed": "同步失败:{{msg}}",
+        "syncFailed": "同步失败：{{msg}}",
         "removeSource": "移除",
         "removeTitle": "移除数据源",
-        "removeBody": "从此知识库移除“{{name}}”?该来源已 ingestion 的内容将不再可检索。",
+        "removeBody": "从此知识库移除“{{name}}”？该来源已 ingestion 的内容将不再可检索。",
         "deleted": "数据源已移除。",
         "jobsTitle": "INGESTION 任务",
         "autoCreated": "数据源已自动创建。",
@@ -753,13 +753,13 @@
         "score": "score",
         "showMore": "展开",
         "showLess": "收起",
-        "noResults": "没有结果——ingestion 是否已完成?请检查上方数据源状态与 ingestion 任务。"
+        "noResults": "没有结果——ingestion 是否已完成？请检查上方数据源状态与 ingestion 任务。"
       },
       "delete": {
         "title": "删除知识库",
         "body": "将永久删除“{{name}}”及其数据源与网关 target。此操作不可撤销。",
         "conflictTitle": "知识库正在使用中",
-        "conflictBody": "此知识库已挂载到:{{agents}}。删除会中断这些 Agent 的检索。仍要删除吗?",
+        "conflictBody": "此知识库已挂载到：{{agents}}。删除会中断这些 Agent 的检索。仍要删除吗？",
         "force": "仍然删除"
       }
     }
@@ -855,8 +855,8 @@
       "previewOutcome": "预览",
       "record": "GATEWAY 记录",
       "legacy": "旧记录",
-      "registryConflict": "Registry 名称冲突:{{name}}",
-      "danglingEngine": "该 Gateway 仍引用一个已被删除的策略引擎。创建并挂载新引擎会替换这个失效引用:",
+      "registryConflict": "Registry 名称冲突：{{name}}",
+      "danglingEngine": "该 Gateway 仍引用一个已被删除的策略引擎。创建并挂载新引擎会替换这个失效引用：",
       "engine": "策略引擎与 GATEWAY 模式",
       "engineName": "引擎",
       "engineStatus": "引擎状态",
@@ -1209,8 +1209,8 @@
       }
     },
     "unprovisioned": {
-      "body": "当前工作区尚未开通技能实验室执行 worker——执行 `make bootstrap` 创建。评估与优化运行依赖它;任务集现在即可编写。",
-      "venv": "本机缺少技能实验室解释器,因此任务集也无法保存——执行 `make bootstrap` 创建。"
+      "body": "当前工作区尚未开通技能实验室执行 worker——执行 `make bootstrap` 创建。评估与优化运行依赖它；任务集现在即可编写。",
+      "venv": "本机缺少技能实验室解释器，因此任务集也无法保存——执行 `make bootstrap` 创建。"
     },
     "eval": {
       "title": "评测技能",
@@ -1487,7 +1487,7 @@
         "single": "单一",
         "split": "分割",
         "singleHint": "单个任务列表——仅用于评估运行。",
-        "splitHint": "train / val / test——优化运行必需;test 可选。"
+        "splitHint": "train / val / test——优化运行必需；test 可选。"
       },
       "createTitle": "创建任务集",
       "createSub": "每条任务包含 id、question 与 rubric",
@@ -1514,7 +1514,7 @@
         "question": "question",
         "rubric": "rubric",
         "taskType": "task_type",
-        "taskTypePlaceholder": "task_type(可选)",
+        "taskTypePlaceholder": "task_type（可选）",
         "files": "files",
         "mode": "结构",
         "name": "名称",
@@ -1527,12 +1527,12 @@
       "upload": {
         "label": "任务 JSON 文件",
         "pick": "选择 JSON 文件…",
-        "hint": "可以是任务数组,也可以是按分割命名的对象(tasks / train / val / test)。",
+        "hint": "可以是任务数组，也可以是按分割命名的对象（tasks / train / val / test）。",
         "targetSplit": "目标分割",
-        "badJson": "JSON 无效:{{msg}}",
+        "badJson": "JSON 无效：{{msg}}",
         "badShape": "需要任务数组或按分割命名的对象。",
         "badSplit": "分割 '{{split}}' 必须是任务对象数组。",
-        "unknownSplits": "未知分割键:{{splits}}(应为 tasks / train / val / test)。",
+        "unknownSplits": "未知分割键：{{splits}}（应为 tasks / train / val / test）。",
         "mixedSplits": "'tasks' 不能与 train/val/test 混用——请选择一种结构。",
         "modeLocked": "该任务集为 {{mode}} 结构且不可更改——请上传分割匹配的文件。",
         "loaded": "已载入 {{summary}}——检查行内容后保存。",
@@ -1540,7 +1540,7 @@
       },
       "err": {
         "idRequired": "id 必填",
-        "idUnsafe": "id 会用作任务工作目录名,必须文件系统安全(不含 '/'、'\\' 或 '..')",
+        "idUnsafe": "id 会用作任务工作目录名，必须文件系统安全（不含 '/'、'\\' 或 '..'）",
         "idDuplicate": "该分割中 id '{{id}}' 重复",
         "questionRequired": "question 必填",
         "rubricRequired": "rubric 必填",
@@ -1555,11 +1555,11 @@
         "example": "示例",
         "copy": "复制",
         "copied": "示例已复制。",
-        "note": "存储格式与 skilleval 完全一致——评估与优化 CLI 直接读取这些文件,无需转换。",
+        "note": "存储格式与 skilleval 完全一致——评估与优化 CLI 直接读取这些文件，无需转换。",
         "field": {
           "id": {
             "key": "id",
-            "text": "必填。用作任务工作目录名,因此在同一分割内唯一,且不能含 '/'、'\\' 或 '..'。"
+            "text": "必填。用作任务工作目录名，因此在同一分割内唯一，且不能含 '/'、'\\' 或 '..'。"
           },
           "question": {
             "key": "question",
@@ -1571,7 +1571,7 @@
           },
           "taskType": {
             "key": "task_type",
-            "text": "可选。用于按类型汇总得分;缺省为 'default'。"
+            "text": "可选。用于按类型汇总得分；缺省为 'default'。"
           },
           "files": {
             "key": "files",
@@ -1579,7 +1579,7 @@
           },
           "judgeMode": {
             "key": "judge_mode",
-            "text": "可选。'chat' 或 'agentic'。本版本使用 chat 评判;需要 agentic 评判的任务会直接判失败。"
+            "text": "可选。'chat' 或 'agentic'。本版本使用 chat 评判；需要 agentic 评判的任务会直接判失败。"
           }
         }
       },
@@ -1681,9 +1681,9 @@
     "skill_lab.publish_no_change": "训练没有接受任何修改，无内容可发布。",
     "skill_lab.asset_request_too_large": "多部分任务文件上传超过 101 MiB 请求限制。",
     "skill_lab.taskset_cleanup_failed": "任务集资源清理失败。任务集已保留，可重试删除。",
-    "aws.not_found": "未找到该 AWS 资源——可能已被删除,或 id 有误。",
-    "aws.validation": "AWS 拒绝了该请求(参数无效)——请检查 id 或输入的值。",
-    "aws.access_denied": "AWS 拒绝访问该资源——本部署的角色缺少权限,或该 id 属于其他账号。",
+    "aws.not_found": "未找到该 AWS 资源——可能已被删除，或 id 有误。",
+    "aws.validation": "AWS 拒绝了该请求（参数无效）——请检查 id 或输入的值。",
+    "aws.access_denied": "AWS 拒绝访问该资源——本部署的角色缺少权限，或该 id 属于其他账号。",
     "aws.throttled": "AWS 正在限流该请求——请稍候重试。",
     "aws.conflict": "该 AWS 资源正忙或处于冲突状态——待其稳定后重试。",
     "network": "无法连接后端 — 没有收到 HTTP 响应"
@@ -1711,7 +1711,7 @@
     "keyEnabled": "已启用 ✓",
     "keyDisabled": "已停用",
     "traceLoad": "加载链路",
-    "traceEmpty": "暂无 SPAN — 链路约 1 分钟后落地,请重试",
+    "traceEmpty": "暂无 SPAN — 链路约 1 分钟后落地，请重试",
     "confirmDisableKey": {
       "title": "停用 API 密钥",
       "body": "使用“{{name}}”的客户端将立即收到 401。之后可以重新启用。"
@@ -1751,7 +1751,7 @@
       "sessions": "会话数",
       "batch": "BATCH ID",
       "applied": "已选评估器",
-      "failureReason": "失败原因:"
+      "failureReason": "失败原因："
     },
     "status": {
       "completed": "已完成",
@@ -1784,7 +1784,7 @@
       "scopeDataset": "数据集 · 回放条目",
       "scopeWindow": "时间窗口 · 既有流量",
       "window": "窗口 — 最近 N 小时",
-      "windowCustom": "自定义小时数(1-336)",
+      "windowCustom": "自定义小时数（1-336）",
       "windowHint": "被动评估——不产生新调用。运行只对窗口内 Agent 已有的 CloudWatch 流量打分。",
       "insightTypes": "分析类型",
       "insightType": {
@@ -1825,7 +1825,7 @@
       "pendingDup": "相同会话的洞察运行已在排队或进行中",
       "confirmRun": {
         "title": "对这些会话运行洞察",
-        "body": "将基于 {{run}} 的 {{count}} 个会话新建一个洞察运行。账户的批次并发有限额,重复提交只会在运行中的任务后排队。",
+        "body": "将基于 {{run}} 的 {{count}} 个会话新建一个洞察运行。账户的批次并发有限额，重复提交只会在运行中的任务后排队。",
         "bodyRepeat": "这些会话已经有完成的洞察结果——继续将把同样的分析重复再运行一次：基于 {{run}} 的 {{count}} 个会话新建一条洞察运行记录，重新调用评估服务并产生额外用量。",
         "confirm": "运行洞察"
       }
@@ -1837,8 +1837,8 @@
       "title": "评估器",
       "meta": "内置 + 第三方目录 · 自定义 LLM 评审 / 派生 — 创建 / 编辑 / 删除",
       "listTitle": "目录",
-      "listSub": "内置 + 第三方(只读)+ 自定义评估器——点击行选中",
-      "thirdPartySection": "第三方评估器({{count}})",
+      "listSub": "内置 + 第三方（只读）+ 自定义评估器——点击行选中",
+      "thirdPartySection": "第三方评估器（{{count}}）",
       "derivedChip": "派生",
       "new": "新建评估器",
       "col": {
@@ -1849,8 +1849,8 @@
         "status": "状态"
       },
       "readonly": "只读",
-      "readonlyHint": "内置评估器由服务托管、只读——如需修改,可参考其思路创建自定义评审。",
-      "thirdPartyReadonlyHint": "第三方评估器由提供方托管、只读——可基于它派生自定义评估器,运行在自选的 Bedrock 模型上。",
+      "readonlyHint": "内置评估器由服务托管、只读——如需修改，可参考其思路创建自定义评审。",
+      "thirdPartyReadonlyHint": "第三方评估器由提供方托管、只读——可基于它派生自定义评估器，运行在自选的 Bedrock 模型上。",
       "empty": "暂无评估器——在下方创建自定义评审",
       "loadFailed": "账户评估器列表不可用",
       "detailFailed": "评估器详情不可用——请刷新后重试",
@@ -1868,7 +1868,7 @@
       "derivedLevel": "级别 — 继承自基础评估器",
       "derivedHint": "派生评估器在所选模型上运行基础评估器的提示词与评分逻辑——指令与量表由基础评估器决定。",
       "name": "名称 — ^[a-zA-Z][a-zA-Z0-9_]{0,47}$",
-      "nameInvalid": "名称须匹配 ^[a-zA-Z][a-zA-Z0-9_]{0,47}$(字母开头,仅字母/数字/下划线)",
+      "nameInvalid": "名称须匹配 ^[a-zA-Z][a-zA-Z0-9_]{0,47}$（字母开头，仅字母/数字/下划线）",
       "level": "级别",
       "model": "评审模型",
       "description": "描述",
@@ -1876,13 +1876,13 @@
       "placeholders": "占位符 — 点击插入到光标处",
       "gtOnly": "真值占位符——仅在 scenario 携带真值的数据集运行中生效",
       "skillGroup": "技能占位符 — 仅作用于技能调用类工具调用",
-      "skillHint": "技能占位符使评估器只评估技能调用类工具调用;引用 {skill_content} 后 {context} 会切换为完整会话上下文",
+      "skillHint": "技能占位符使评估器只评估技能调用类工具调用；引用 {skill_content} 后 {context} 会切换为完整会话上下文",
       "missingPlaceholder": "指令至少需要一个 {placeholder} 占位符——点击下方芯片插入",
       "ratingScale": "评分量表 — 数值 / 标签 / 定义",
       "scaleValue": "数值",
       "scaleLabel": "标签",
       "scaleDefinition": "定义",
-      "scaleIncomplete": "每个量表档位都需要标签与定义(至少 2 档)",
+      "scaleIncomplete": "每个量表档位都需要标签与定义（至少 2 档）",
       "addPoint": "增加档位",
       "removePoint": "删除此档位",
       "create": "创建",
@@ -1892,23 +1892,23 @@
       "deleted": "评估器已删除。",
       "confirmDelete": {
         "title": "删除评估器",
-        "body": "删除自定义评估器“{{name}}”?历史运行分数保留;评估器将从账户中移除。"
+        "body": "删除自定义评估器“{{name}}”？历史运行分数保留；评估器将从账户中移除。"
       },
       "how": {
         "title": "评审是如何工作的",
         "sub": "LLM 评审 · 创建后在运行中选用",
         "s1": "级别——TRACE / SESSION / TOOL_CALL 决定可用的占位符",
-        "s2": "指令——评审提示词,至少包含一个 {placeholder} 占位符",
-        "s3": "评分量表——至少 2 档的数值量表(标签+定义)",
+        "s2": "指令——评审提示词，至少包含一个 {placeholder} 占位符",
+        "s3": "评分量表——至少 2 档的数值量表（标签+定义）",
         "s4": "选用——在 NEW RUN 中把评审勾选为评估器",
-        "note": "内置评估器由服务托管、只读;自定义评审运行在所选 Bedrock 模型上。"
+        "note": "内置评估器由服务托管、只读；自定义评审运行在所选 Bedrock 模型上。"
       }
     },
     "online": {
       "title": "在线评估",
       "meta": "持续运行 · 对线上会话抽样并由评估器打分——无需批量任务",
       "listTitle": "在线评估配置",
-      "listSub": "工作区账户内的全部配置,按归属分类——点击行选中",
+      "listSub": "工作区账户内的全部配置，按归属分类——点击行选中",
       "new": "新建在线评估",
       "detailTitle": "配置",
       "col": {
@@ -1936,14 +1936,14 @@
         "badge": "新建",
         "agent": "AGENT — 已部署且处于 ACTIVE",
         "agentPick": "——选择 Agent——",
-        "agentHint": "Agent 需至少被调用过一次:运行时日志组尚不存在时 AWS 会拒绝创建配置。",
+        "agentHint": "Agent 需至少被调用过一次：运行时日志组尚不存在时 AWS 会拒绝创建配置。",
         "evaluators": "评估器",
-        "evaluatorsHint": "每个被抽样的会话都会由所选的每个评估器打分(最多 {{max}} 个)。真值匹配类评估器不可用:在线评估读取的是线上 trace。",
+        "evaluatorsHint": "每个被抽样的会话都会由所选的每个评估器打分（最多 {{max}} 个）。真值匹配类评估器不可用：在线评估读取的是线上 trace。",
         "evaluatorsSelected": "已选 {{count}} / {{max}}",
         "sampling": "抽样率 % — 0.01 … 100",
-        "timeout": "会话超时(分钟)— 1 … 1440",
-        "filters": "过滤条件 — 可选,最多 {{max}} 条",
-        "filtersHint": "只有 span 属性满足全部过滤条件的会话才会被采样。若 key 在 span 上不存在,所有会话都会被静默排除(用 session.id 实测过)——建议先不加过滤器,确认有结果后再加(AWS 文档示例:user.region、session.duration)。key 允许字母、数字、. _ -",
+        "timeout": "会话超时（分钟）— 1 … 1440",
+        "filters": "过滤条件 — 可选，最多 {{max}} 条",
+        "filtersHint": "只有 span 属性满足全部过滤条件的会话才会被采样。若 key 在 span 上不存在，所有会话都会被静默排除（用 session.id 实测过）——建议先不加过滤器，确认有结果后再加（AWS 文档示例：user.region、session.duration）。key 允许字母、数字、. _ -",
         "filterValue": "值",
         "addFilter": "添加过滤条件",
         "removeFilter": "删除此条件",
@@ -1952,19 +1952,19 @@
           "number": "数值",
           "boolean": "布尔"
         },
-        "description": "描述 — 可选,≤ 200 字符",
+        "description": "描述 — 可选，≤ 200 字符",
         "descriptionPlaceholder": "留空时按 Agent 名称自动生成",
         "enableOnCreate": "创建后立即启用——配置进入 ACTIVE 后即开始抽样",
         "create": "创建",
         "mode": "模式",
         "modeHint": {
-          "scores": "打分——每个被抽样的会话由所选评估器评判,结果是逐会话的分数。",
-          "insights": "洞察——对被抽样的会话进行分析并聚类为周期性的失败 / 意图 / 执行摘要报告。一个配置只能是其中一种,不能兼有。"
+          "scores": "打分——每个被抽样的会话由所选评估器评判，结果是逐会话的分数。",
+          "insights": "洞察——对被抽样的会话进行分析并聚类为周期性的失败 / 意图 / 执行摘要报告。一个配置只能是其中一种，不能兼有。"
         },
         "insights": "洞察类型 — 1 … {{max}}",
-        "insightsHint": "每个被抽样的会话都会按所选洞察类型分析并聚类成报告。洞察模式下 AWS 默认抽样率为 100%——每个会话都会消耗评审 token;流量大的 Agent 请调低。",
+        "insightsHint": "每个被抽样的会话都会按所选洞察类型分析并聚类成报告。洞察模式下 AWS 默认抽样率为 100%——每个会话都会消耗评审 token；流量大的 Agent 请调低。",
         "frequencies": "报告周期 — 可选",
-        "frequenciesHint": "AWS 会按每个周期、对该周期内被抽样的会话生成一份定时报告。不选周期时只有按需报告(立即生成报告)。",
+        "frequenciesHint": "AWS 会按每个周期、对该周期内被抽样的会话生成一份定时报告。不选周期时只有按需报告（立即生成报告）。",
         "disabledAgent": "请选择一个 Agent",
         "disabledEvaluators": "请至少选择一个评估器",
         "disabledInsights": "请至少选择一个洞察"
@@ -1972,11 +1972,11 @@
       "err": {
         "agent": "请先选择 Agent",
         "sampling": "抽样率须在 0.01 到 100 之间",
-        "timeout": "会话超时须为 1 到 1440 之间的整数(分钟)",
+        "timeout": "会话超时须为 1 到 1440 之间的整数（分钟）",
         "evaluators": "请选择 1 到 {{max}} 个评估器",
         "filterCount": "过滤条件最多 {{max}} 条",
         "filterKey": "过滤键名须匹配 ^[a-zA-Z0-9._-]{1,256}$",
-        "filterValue": "每条过滤条件都需要值(数值类型须为数字)",
+        "filterValue": "每条过滤条件都需要值（数值类型须为数字）",
         "description": "描述不能超过 200 个字符",
         "insights": "请选择 1 到 {{max}} 种洞察类型",
         "frequencies": "报告周期最多 {{max}} 个"
@@ -1999,10 +1999,10 @@
       "minutes": "{{count}} 分钟",
       "editTitle": "编辑 — 描述 · 评估器 · 规则",
       "duplicateWarn": "同一 Agent 上还有另一个已启用的在线评估——相同的抽样会话会被重复评判并重复计费。",
-      "experimentReadonly": "此配置属于某个实验或金丝雀的对照/实验臂,其生命周期由该记录的清理流程管理。请前往",
-      "externalReadonly": "在 Launchpad 之外创建(控制台、CLI 或快速入门)。可查看状态与结果,可暂停、恢复、删除;因归属 Agent 未知,不可编辑数据源。",
-      "externalMatched": "在 Launchpad 之外创建。其运行时日志组与 Agent“{{name}}”匹配。可暂停、恢复、删除,不可编辑。",
-      "firstResultsHint": "会话空闲达到会话超时({{count}} 分钟)后才会被评判,因此首批结果最早在被抽样会话结束后这么久才出现。",
+      "experimentReadonly": "此配置属于某个实验或金丝雀的对照/实验臂，其生命周期由该记录的清理流程管理。请前往",
+      "externalReadonly": "在 Launchpad 之外创建（控制台、CLI 或快速入门）。可查看状态与结果，可暂停、恢复、删除；因归属 Agent 未知，不可编辑数据源。",
+      "externalMatched": "在 Launchpad 之外创建。其运行时日志组与 Agent“{{name}}”匹配。可暂停、恢复、删除，不可编辑。",
+      "firstResultsHint": "会话空闲达到会话超时（{{count}} 分钟）后才会被评判，因此首批结果最早在被抽样会话结束后这么久才出现。",
       "pause": "暂停",
       "resume": "恢复",
       "delete": "删除",
@@ -2014,7 +2014,7 @@
       "deleted": "在线评估已删除。结果保留在 {{logGroup}}。",
       "confirmDelete": {
         "title": "删除在线评估",
-        "body": "删除“{{name}}”?抽样将停止,配置从账户中移除。结果日志组 {{logGroup}} 会保留——如不再需要分数,请在 CloudWatch 中自行删除。"
+        "body": "删除“{{name}}”？抽样将停止，配置从账户中移除。结果日志组 {{logGroup}} 会保留——如不再需要分数，请在 CloudWatch 中自行删除。"
       },
       "results": {
         "title": "结果",
@@ -2036,13 +2036,13 @@
       "how": {
         "title": "在线评估如何工作",
         "sub": "AgentCore OnlineEvaluationConfig · 抽样 → 评判 → CloudWatch",
-        "s1": "抽样——按抽样率从 Agent 的运行时日志组中选取线上会话,可用过滤条件进一步收窄",
+        "s1": "抽样——按抽样率从 Agent 的运行时日志组中选取线上会话，可用过滤条件进一步收窄",
         "s2": "等待——会话空闲达到会话超时后视为结束",
-        "s3": "评判——每个评估器对会话打分;结果写入结果日志组,并以 CloudWatch 指标(Bedrock-AgentCore/Evaluations)发布",
-        "s4": "读取——本页用 Logs Insights 聚合结果日志组;指标可用于 CloudWatch 告警",
-        "s5": "成本——评审调用次数 = 抽样会话数 × 评估器数;被已启用配置引用的自定义评审会被锁定,不可编辑或删除",
+        "s3": "评判——每个评估器对会话打分；结果写入结果日志组，并以 CloudWatch 指标（Bedrock-AgentCore/Evaluations）发布",
+        "s4": "读取——本页用 Logs Insights 聚合结果日志组；指标可用于 CloudWatch 告警",
+        "s5": "成本——评审调用次数 = 抽样会话数 × 评估器数；被已启用配置引用的自定义评审会被锁定，不可编辑或删除",
         "note": "删除配置会保留其结果日志组。同一 Agent 上两个已启用的配置会把相同会话评判两次。",
-        "insightsNote": "洞察模式——不打分,而是按所选周期把被抽样的会话聚类为失败 / 意图 / 执行摘要报告;报告只覆盖该配置抽样过的会话。打分与洞察不能共用一个配置——两者都需要时请在同一 Agent 上创建两个配置。"
+        "insightsNote": "洞察模式——不打分，而是按所选周期把被抽样的会话聚类为失败 / 意图 / 执行摘要报告；报告只覆盖该配置抽样过的会话。打分与洞察不能共用一个配置——两者都需要时请在同一 Agent 上创建两个配置。"
       },
       "mode": {
         "scores": "打分",
@@ -2055,25 +2055,25 @@
         "MONTHLY": "每月"
       },
       "editTitleInsights": "编辑 — 描述 · 洞察 · 周期 · 规则",
-      "reportsHint": "报告只覆盖该配置自身在时间窗内抽样并评判过的会话,而非全部流量。新建配置在被抽样会话沉降前会报告 0 个会话(会话结束后约 10 分钟加上 {{count}} 分钟会话超时)。",
+      "reportsHint": "报告只覆盖该配置自身在时间窗内抽样并评判过的会话，而非全部流量。新建配置在被抽样会话沉降前会报告 0 个会话（会话结束后约 10 分钟加上 {{count}} 分钟会话超时）。",
       "reports": {
         "title": "报告",
         "range": "报告时间范围",
         "run": "立即生成报告",
-        "started": "报告已排队——将以控制台运行的形式出现在下方,每几秒刷新一次。",
+        "started": "报告已排队——将以控制台运行的形式出现在下方，每几秒刷新一次。",
         "pendingHint": "已有一个控制台报告仍在运行——请等待其完成",
         "failed": "报告列表不可用",
-        "empty": "暂无报告——AWS 按周期对该周期内被抽样的会话生成报告;点击“立即生成报告”获得第一份",
+        "empty": "暂无报告——AWS 按周期对该周期内被抽样的会话生成报告；点击“立即生成报告”获得第一份",
         "noBatch": "排队中——批量评估尚未开始",
         "running": "报告仍在运行——完成后显示聚类结果",
         "detailFailed": "报告详情不可用",
-        "noSessions": "该报告覆盖 0 个被抽样会话:配置在该时间窗内没有评判过任何会话。会话按抽样率选取,并在结束后约 10 分钟加上 {{count}} 分钟会话超时后沉降——请稍后再生成。",
+        "noSessions": "该报告覆盖 0 个被抽样会话：配置在该时间窗内没有评判过任何会话。会话按抽样率选取，并在结束后约 10 分钟加上 {{count}} 分钟会话超时后沉降——请稍后再生成。",
         "noTrees": "报告已完成但没有聚类——洞察至少需要 3 个会话。",
         "errors": "评估服务报告了 {{count}} 个错误",
         "insightsFromConfig": "按配置",
-        "insightsInherited": "以配置为来源的报告继承配置的洞察类型;AWS 不会在批量记录上回显",
-        "unattributed": "未归属的洞察报告(账户范围)· {{count}}",
-        "unattributedNote": "未标明来源在线配置的洞察批量评估——尽力列出,可能属于其他配置或已删除的配置。",
+        "insightsInherited": "以配置为来源的报告继承配置的洞察类型；AWS 不会在批量记录上回显",
+        "unattributed": "未归属的洞察报告（账户范围）· {{count}}",
+        "unattributedNote": "未标明来源在线配置的洞察批量评估——尽力列出，可能属于其他配置或已删除的配置。",
         "origin": {
           "console": "控制台",
           "aws_scheduled": "AWS 定时",
@@ -2113,7 +2113,7 @@
       "deleted": "数据集已删除。",
       "cloudDeleted": "云端数据集已删除。",
       "cloudUnavailable": "云端数据集列表不可用",
-      "cloudReadonly": "云端数据集是不可变快照——修改本地源后重新同步,或删除此副本。",
+      "cloudReadonly": "云端数据集是不可变快照——修改本地源后重新同步，或删除此副本。",
       "detail": {
         "id": "数据集 ID",
         "schema": "SCHEMA",
@@ -2134,31 +2134,31 @@
       "description": "描述",
       "scenarioId": "scenario id",
       "turnInput": "用户输入",
-      "turnExpected": "期望回复(真值,可选)",
+      "turnExpected": "期望回复（真值，可选）",
       "addTurn": "增加轮次",
       "removeTurn": "删除此轮",
       "addScenario": "增加 SCENARIO",
       "removeScenario": "删除此 scenario",
-      "simDescription": "场景描述(可选)",
+      "simDescription": "场景描述（可选）",
       "simContext": "ACTOR CONTEXT — 模拟用户的背景",
       "simGoal": "ACTOR GOAL — 达成即停止对话",
-      "simTraits": "TRAITS — 键/值特征(可选)",
+      "simTraits": "TRAITS — 键/值特征（可选）",
       "simTraitKey": "expertise",
       "simTraitValue": "non-technical",
       "addTrait": "增加 TRAIT",
       "removeTrait": "删除此 trait",
       "simInput": "首条消息 — 对话的开场输入",
       "simMaxTurns": "轮次上限",
-      "simHint": "运行时由 LLM actor 扮演该用户——在 NEW RUN 中选择 ACTOR MODEL;goal 达成或到轮次上限即停止;assertions 即该场景的真值。",
-      "simMixedGuard": "该 simulated 数据集包含无 actor_profile 的条目(来自导入),表单编辑器无法呈现——请修正 JSON 后重新导入为新数据集,不要在此编辑。",
-      "assertions": "断言 — 真值陈述(可选)",
+      "simHint": "运行时由 LLM actor 扮演该用户——在 NEW RUN 中选择 ACTOR MODEL;goal 达成或到轮次上限即停止；assertions 即该场景的真值。",
+      "simMixedGuard": "该 simulated 数据集包含无 actor_profile 的条目（来自导入），表单编辑器无法呈现——请修正 JSON 后重新导入为新数据集，不要在此编辑。",
+      "assertions": "断言 — 真值陈述（可选）",
       "addAssertion": "增加断言",
       "removeAssertion": "删除此断言",
-      "trajectory": "期望轨迹 — 逗号分隔的工具名(可选)",
+      "trajectory": "期望轨迹 — 逗号分隔的工具名（可选）",
       "importLabel": "粘贴 DEVGUIDE JSON {\"scenarios\": [...]} 或旧版 JSONL",
       "importPreview": "已解析 {{count}} 条——可以提交",
       "importNoScenarios": "JSON 须为数组或含 \"scenarios\" 数组的对象",
-      "importBadLine": "第 {{line}} 行:JSON 无效",
+      "importBadLine": "第 {{line}} 行：JSON 无效",
       "importEmpty": "没有可导入内容——请先粘贴 JSON",
       "create": "创建",
       "save": "保存修改",
@@ -2166,20 +2166,20 @@
       "updated": "数据集已更新。",
       "confirmDelete": {
         "title": "删除数据集",
-        "body": "删除本地数据集“{{name}}”?已同步的 AWS 副本仍会保留在云端列表中。"
+        "body": "删除本地数据集“{{name}}”？已同步的 AWS 副本仍会保留在云端列表中。"
       },
       "confirmCloudDelete": {
         "title": "删除云端数据集",
-        "body": "删除 AWS 数据集“{{name}}”?云端数据集不可变——此操作将从账户中移除该资源。"
+        "body": "删除 AWS 数据集“{{name}}”？云端数据集不可变——此操作将从账户中移除该资源。"
       },
       "how": {
         "title": "数据集是如何工作的",
         "sub": "本地为源 · 单向同步到 AWS",
-        "s1": "编写——scenario 含多轮、断言与期望轨迹(真值),或 simulated persona(actor profile + goal),或导入 JSON/JSONL",
-        "s2": "存储——本地 SQLite 记录可编辑,是唯一数据源",
+        "s1": "编写——scenario 含多轮、断言与期望轨迹（真值），或 simulated persona（actor profile + goal），或导入 JSON/JSONL",
+        "s2": "存储——本地 SQLite 记录可编辑，是唯一数据源",
         "s3": "同步——SYNC TO AWS 生成不可变的云端数据集快照",
-        "s4": "运行——在 NEW RUN 中选择数据集(本地或 ☁ 云端)作为评估范围",
-        "note": "kind 由条目内容推断且服务端不可变;云端副本只能删除、不能编辑。"
+        "s4": "运行——在 NEW RUN 中选择数据集（本地或 ☁ 云端）作为评估范围",
+        "note": "kind 由条目内容推断且服务端不可变；云端副本只能删除、不能编辑。"
       }
     },
     "evaluatorNames": {
@@ -2239,13 +2239,13 @@
         "agent": "AGENT",
         "verdict": "判定",
         "created": "创建时间",
-        "cleaned": "实验已结束,AWS 资源已清理——此记录仅供回顾。",
+        "cleaned": "实验已结束，AWS 资源已清理——此记录仅供回顾。",
         "failed": "流程在该阶段失败。CLEANUP 可清除遗留的资源。"
       },
       "insufficient": {
-        "reason": "在线评估在约 15 分钟流量窗口内未产生每臂样本,暂时无法对比两组。",
-        "a1": "在 Chat Playground 给两个变体继续打流量后,重新启动一个实验——判定只计算一次。",
-        "a2": "如已有把握,可直接手动 PROMOTE。",
+        "reason": "在线评估在约 15 分钟流量窗口内未产生每臂样本，暂时无法对比两组。",
+        "a1": "在 Chat Playground 给两个变体继续打流量后，重新启动一个实验——判定只计算一次。",
+        "a2": "如已有把握，可直接手动 PROMOTE。",
         "a3": "或 CLEANUP 放弃实验并清除资源。",
         "promotedContext": "已在样本不足时手动部署——上方判定早于本次生产部署"
       },
@@ -2253,15 +2253,15 @@
       "notSignificant": "未达统计显著",
       "nonsig": {
         "title": "无显著差异",
-        "observed": "观察值:{{verdict}}",
-        "reason": "在当前样本量下,两组差异未达统计显著——表面上的胜者可能只是噪声。",
-        "a1": "继续积累证据:给两个变体多打流量后重新启动实验(判定只计算一次)。",
-        "a2": "PROMOTE 仍然可用,但这属于主观决策——仅凭当前数据不足以支持。",
+        "observed": "观察值：{{verdict}}",
+        "reason": "在当前样本量下，两组差异未达统计显著——表面上的胜者可能只是噪声。",
+        "a1": "继续积累证据：给两个变体多打流量后重新启动实验（判定只计算一次）。",
+        "a2": "PROMOTE 仍然可用，但这属于主观决策——仅凭当前数据不足以支持。",
         "a3": "或 CLEANUP 保留现有冠军——不做变更也是合理的结论。",
         "promotedContext": "已在未达统计显著时手动部署——上方判定早于本次生产部署",
         "confirmPromote": {
           "title": "在未达统计显著时放量",
-          "body": "该判定未达统计显著——领先可能只是噪声。继续推广会停止 A/B 测试，并将 Treatment 作为生产配置部署。确定继续?"
+          "body": "该判定未达统计显著——领先可能只是噪声。继续推广会停止 A/B 测试，并将 Treatment 作为生产配置部署。确定继续？"
         }
       },
       "list": {
@@ -2276,7 +2276,7 @@
         "status": "状态",
         "empty": "还没有实验——启动一个 ▸"
       },
-      "runningGuard": "已有实验在运行——共享实验网关同一时间只支持一个活跃 A/B 测试。请等它出判定,或先清理。"
+      "runningGuard": "已有实验在运行——共享实验网关同一时间只支持一个活跃 A/B 测试。请等它出判定，或先清理。"
     }
   },
   "expPage": {
@@ -2533,7 +2533,7 @@
     "cachedAgo": "缓存于 {{s}} 秒前",
     "refresh": "刷新",
     "rangeLabel": "时间范围",
-    "loadFailed": "可观测查询失败:{{msg}}",
+    "loadFailed": "可观测查询失败：{{msg}}",
     "retry": "重试",
     "tiles": {
       "traces": "追踪",
@@ -2561,7 +2561,7 @@
       "noTokens": "该时间范围内无 TOKEN 指标",
       "noTools": "该时间范围内无工具调用",
       "now": "现在",
-      "priceNote": "价格表:config/launchpad.yaml · model_prices",
+      "priceNote": "价格表：config/launchpad.yaml · model_prices",
       "callCount": "{{count}} 次调用"
     },
     "legend": {
@@ -2581,7 +2581,7 @@
     },
     "traces": {
       "agentFilter": "按 Agent 筛选",
-      "agentAll": "AGENT:全部",
+      "agentAll": "AGENT：全部",
       "searchPlaceholder": "⌕ 按 session.id / trace id 筛选…",
       "scanned": "{{count}} 条追踪 · 扫描范围 {{range}}",
       "empty": "该时间范围内无追踪 — 调用一次 Agent 即可生成 Span",
@@ -2598,7 +2598,7 @@
         "status": "状态"
       },
       "systemHidden": "◌ 已隐藏 {{count}} 条系统心跳",
-      "systemShown": "◌ 正在显示系统心跳({{count}})",
+      "systemShown": "◌ 正在显示系统心跳（{{count}}）",
       "openWaterfall": "瀑布图",
       "rowHint": "打开追踪瀑布图"
     },
@@ -2660,9 +2660,9 @@
       "tool": "工具",
       "toolName": "名称",
       "toolStatus": "状态",
-      "rawAttrs": "原始属性({{count}})",
-      "inputMessages": "输入消息({{count}})",
-      "outputMessages": "输出消息({{count}})"
+      "rawAttrs": "原始属性（{{count}}）",
+      "inputMessages": "输入消息（{{count}}）",
+      "outputMessages": "输出消息（{{count}}）"
     },
     "session": {
       "conversation": "对话",
@@ -2673,7 +2673,7 @@
       "conversationExternalSub": "外部会话 · AgentCore 记忆 · actor {{actor}}",
       "openInChat": "在对话演练场打开",
       "user": "用户",
-      "memnote": "长期记忆:已为 actor {{actor}} 提取 {{count}} 条记录",
+      "memnote": "长期记忆：已为 actor {{actor}} 提取 {{count}} 条记录",
       "noTranscript": "该 session ID 在记忆中没有任何事件",
       "noTurns": "尚未存储任何对话轮次",
       "notFound": "未找到该会话 — 请检查 ID 或扩大时间范围",
@@ -2709,7 +2709,7 @@
       "title": "Strands Studio",
       "titleEdit": "编辑 {{name}}",
       "editFallback": "Studio Agent",
-      "meta": "在画布上编排 Strands agent,再经统一流水线发布",
+      "meta": "在画布上编排 Strands agent，再经统一流水线发布",
       "publishingTitle": "正在发布 Agent",
       "republishingTitle": "正在重新发布 {{name}}",
       "publishingMeta": "经统一流水线部署"
@@ -2726,7 +2726,7 @@
       "localChat": "本地调试",
       "debugDisabled": "请先修复代码生成错误再开始本地调试。",
       "regen": "从画布重新生成",
-      "regenHint": "丢弃 AI 修复的代码,从画布重新生成。",
+      "regenHint": "丢弃 AI 修复的代码，从画布重新生成。",
       "publishDisabledNoNodes": "请至少添加一个节点"
     },
     "samples": {
@@ -2740,20 +2740,20 @@
       },
       "counts": "{{nodes}} 个节点 · {{edges}} 条连线",
       "graphMode": "图模式",
-      "requiresSkill": "需要注册表技能:{{names}}",
+      "requiresSkill": "需要注册表技能：{{names}}",
       "registerSkill": "注册技能",
       "load": "加载",
       "loaded": "已将示例「{{name}}」加载到画布。",
       "openRegistry": "打开注册表",
       "replaceTitle": "替换画布",
-      "replaceBody": "加载该示例将替换当前画布并清除已保存的草稿。是否继续?",
+      "replaceBody": "加载该示例将替换当前画布并清除已保存的草稿。是否继续？",
       "replaceConfirm": "加载示例"
     },
     "noFlow": {
-      "notice": "该 Agent 由独立 Studio 创建,未存储画布图。请在下方搭建流程以启用重新发布;在此之前仅以只读方式展示当前已部署的代码。"
+      "notice": "该 Agent 由独立 Studio 创建，未存储画布图。请在下方搭建流程以启用重新发布；在此之前仅以只读方式展示当前已部署的代码。"
     },
     "readonly": {
-      "title": "已部署代码(只读)",
+      "title": "已部署代码（只读）",
       "sub": "搭建流程以重新生成并重新发布"
     },
     "published": {
@@ -2768,30 +2768,30 @@
       "nameLabel": "名称",
       "agentName": "Agent 名称",
       "namePlaceholder": "studio-canvas-agent",
-      "nameRule": "仅限小写字母、数字和连字符;3–48 个字符,须以字母开头。",
+      "nameRule": "仅限小写字母、数字和连字符；3–48 个字符，须以字母开头。",
       "generatedCode": "生成的代码",
       "codeStat": "{{chars}} 字符 · {{lines}} 行",
       "extraReqs": "额外依赖",
       "none": "无",
       "memory": "记忆",
       "memoryValue": "short_term 关 · long_term 关",
-      "missingApiKey": "存在未填写 API 密钥的 OpenAI 节点。仍允许发布(密钥可通过其他方式配置),但缺少密钥时 Agent 将在运行时失败。Bedrock Mantle 节点无需密钥,改用运行时执行角色进行认证。",
+      "missingApiKey": "存在未填写 API 密钥的 OpenAI 节点。仍允许发布（密钥可通过其他方式配置），但缺少密钥时 Agent 将在运行时失败。Bedrock Mantle 节点无需密钥，改用运行时执行角色进行认证。",
       "errHasErrors": "代码生成存在错误。请关闭并修正流程。",
-      "errTooLarge": "生成的代码为 {{size}} 字符,超出 {{limit}} 上限。",
-      "aiFixed": "正在发布 AI 修复的代码(未从画布重新生成)。",
-      "aiFixedStale": "正在发布 AI 修复的代码;此后画布已变更,保存的流程图可能与该代码不一致。",
+      "errTooLarge": "生成的代码为 {{size}} 字符，超出 {{limit}} 上限。",
+      "aiFixed": "正在发布 AI 修复的代码（未从画布重新生成）。",
+      "aiFixedStale": "正在发布 AI 修复的代码；此后画布已变更，保存的流程图可能与该代码不一致。",
       "disabledName": "Agent 名称需 3–48 个字符：小写字母、数字、连字符，且以字母开头"
     },
     "confirmClear": {
       "title": "清空画布",
-      "body": "移除画布上的所有节点与连线?这也会清除已保存的草稿。",
+      "body": "移除画布上的所有节点与连线？这也会清除已保存的草稿。",
       "confirm": "清空"
     },
     "toast": {
       "notStudioAgent": "该 Agent 不是用 Strands Studio 创建的。",
       "loadFailed": "无法加载该 Agent。",
-      "publishFailed": "发布在 {{stage}} 阶段失败:{{msg}}",
-      "fixErrors": "请先修正代码生成错误,再发布。"
+      "publishFailed": "发布在 {{stage}} 阶段失败：{{msg}}",
+      "fixErrors": "请先修正代码生成错误，再发布。"
     },
     "palette": {
       "core": "核心",
@@ -2805,7 +2805,7 @@
       },
       "orchestrator": {
         "name": "编排 Agent",
-        "desc": "将多个 Agent 作为工具编排,处理复杂工作流"
+        "desc": "将多个 Agent 作为工具编排，处理复杂工作流"
       },
       "swarm": {
         "name": "蜂群节点",
@@ -2837,23 +2837,23 @@
       }
     },
     "nodeCard": {
-      "provider": "提供方:",
-      "model": "模型:",
-      "type": "类型:",
-      "format": "格式:",
-      "to": "去向:",
-      "tool": "工具:",
-      "function": "函数:",
-      "parameters": "参数:",
-      "maxHandoffs": "最大交接次数:",
-      "maxIterations": "最大迭代次数:",
-      "executionTimeout": "执行超时:",
-      "nodeTimeout": "节点超时:",
-      "transport": "传输:",
-      "command": "命令:",
+      "provider": "提供方：",
+      "model": "模型：",
+      "type": "类型：",
+      "format": "格式：",
+      "to": "去向：",
+      "tool": "工具：",
+      "function": "函数：",
+      "parameters": "参数：",
+      "maxHandoffs": "最大交接次数：",
+      "maxIterations": "最大迭代次数：",
+      "executionTimeout": "执行超时：",
+      "nodeTimeout": "节点超时：",
+      "transport": "传输：",
+      "command": "命令：",
       "url": "URL:",
       "inputDesc": "将用户输入连接到 Agent",
-      "skill": "技能:",
+      "skill": "技能：",
       "skillUnset": "未选择",
       "skillSelectHint": "请在属性面板中选择技能",
       "deleteTitle": "删除节点"
@@ -2870,7 +2870,7 @@
     },
     "flow": {
       "graphMode": "图模式",
-      "graphModeTitle": "切换图模式:启用基于 DAG 的多 Agent 编排",
+      "graphModeTitle": "切换图模式：启用基于 DAG 的多 Agent 编排",
       "connectionNotAllowed": "不允许该连接"
     },
     "prop": {
@@ -2879,30 +2879,30 @@
       "close": "关闭",
       "modelProvider": "模型提供方",
       "model": "模型",
-      "modelNamePlaceholder": "输入模型名称(如 gpt-4o、gpt-3.5-turbo)",
+      "modelNamePlaceholder": "输入模型名称（如 gpt-4o、gpt-3.5-turbo）",
       "customModelOption": "自定义模型 ID…",
       "customModelPlaceholder": "例如 us.anthropic.claude-sonnet-5",
       "mantleRegion": "区域",
       "mantleModelPlaceholder": "例如 xai.grok-4.3",
-      "bedrockApiKey": "Bedrock API 密钥(可选)",
+      "bedrockApiKey": "Bedrock API 密钥（可选）",
       "bedrockApiKeyPlaceholder": "留空则使用 IAM 认证",
-      "bedrockApiKeyHint": "留空时 Mantle 使用运行时执行角色认证,每次请求都会签发一个短期令牌。填写密钥可覆盖此行为,该密钥将作为 BEDROCK_API_KEY 环境变量存储。",
+      "bedrockApiKeyHint": "留空时 Mantle 使用运行时执行角色认证，每次请求都会签发一个短期令牌。填写密钥可覆盖此行为，该密钥将作为 BEDROCK_API_KEY 环境变量存储。",
       "apiKey": "API 密钥",
       "apiKeyPlaceholder": "输入你的 OpenAI API 密钥",
       "apiKeyHint": "API 密钥将作为 OPENAI_API_KEY 环境变量安全存储",
-      "baseUrl": "Base URL(可选)",
-      "baseUrlPlaceholder": "https://api.openai.com/v1(默认)",
+      "baseUrl": "Base URL（可选）",
+      "baseUrlPlaceholder": "https://api.openai.com/v1（默认）",
       "baseUrlHint": "留空则使用默认的 OpenAI API 端点",
       "advancedSettings": "高级设置",
       "enableThinking": "启用思考",
-      "thinkingHint": "Claude → 自适应思考;GPT / Grok → 推理强度",
+      "thinkingHint": "Claude → 自适应思考；GPT / Grok → 推理强度",
       "adaptiveThinkingNote": "自适应思考 —— Claude 会按每次请求自行决定思考深度。开启思考时温度固定为 1。",
-      "promptCaching": "提示词缓存(Claude)",
-      "cacheConversation": "缓存对话(自动)",
+      "promptCaching": "提示词缓存（Claude）",
+      "cacheConversation": "缓存对话（自动）",
       "cacheTools": "缓存工具",
       "cacheSystem": "缓存系统提示词",
       "cacheSystemHint": "跨请求缓存系统提示词。约 1000 tokens 以下的提示词会被静默跳过。",
-      "cachingHint": "跨请求复用缓存的提示词上下文,降低成本与延迟。缓存约 5 分钟空闲后过期。",
+      "cachingHint": "跨请求复用缓存的提示词上下文，降低成本与延迟。缓存约 5 分钟空闲后过期。",
       "reasoningEffort": "推理强度",
       "effortLow": "低",
       "effortMedium": "中",
@@ -2910,11 +2910,11 @@
       "effortXHigh": "较高",
       "effortMax": "最高",
       "effortXHighUnavailable": "仅 Claude Sonnet 5 与 Opus 4.8 支持“较高”",
-      "effortXHighClamped": "该模型不支持“较高”,将按“高”运行。",
+      "effortXHighClamped": "该模型不支持“较高”，将按“高”运行。",
       "maxTokensCapNovaPro": "Nova Pro 的最大输出 tokens 上限为 10000。",
       "maxTokensCapNovaPremier": "Nova Premier 的最大输出 tokens 上限为 32000。",
       "enableStreaming": "启用流式",
-      "streamingHintOn": "实时流式返回回复,提升使用体验",
+      "streamingHintOn": "实时流式返回回复，提升使用体验",
       "streamingHintOff": "连接一个输出节点以启用流式模式",
       "agentName": "Agent 名称",
       "agentNamePlaceholder": "Agent 名称",
@@ -2940,13 +2940,13 @@
       "serverNamePlaceholder": "MCP 服务器名称",
       "transportType": "传输类型",
       "command": "命令",
-      "arguments": "参数(每行一个)",
+      "arguments": "参数（每行一个）",
       "argumentsHint": "每个参数单独一行",
-      "envVars": "环境变量(JSON 格式)",
-      "envVarsHint": "MCP 服务器进程的可选环境变量(需为合法 JSON)",
+      "envVars": "环境变量（JSON 格式）",
+      "envVarsHint": "MCP 服务器进程的可选环境变量（需为合法 JSON）",
       "serverUrl": "服务器 URL",
-      "headers": "请求头(JSON 格式)",
-      "timeout": "超时(秒)",
+      "headers": "请求头（JSON 格式）",
+      "timeout": "超时（秒）",
       "mcpDescPlaceholder": "MCP 服务器的描述……",
       "customToolPlaceholder": "我的自定义工具",
       "pythonFunction": "Python 函数",
@@ -2958,20 +2958,20 @@
       "maxHandoffsHint": "执行期间允许的 Agent 交接次数上限",
       "maxIterations": "最大迭代次数",
       "maxIterationsHint": "所有 Agent 的总迭代次数上限",
-      "executionTimeout": "执行超时(秒)",
-      "execTimeoutHint": "总执行超时秒数(默认:900 = 15 分钟)",
-      "nodeTimeout": "节点超时(秒)",
-      "nodeTimeoutHint": "单个 Agent 的超时秒数(默认:300 = 5 分钟)",
+      "executionTimeout": "执行超时（秒）",
+      "execTimeoutHint": "总执行超时秒数（默认：900 = 15 分钟）",
+      "nodeTimeout": "节点超时（秒）",
+      "nodeTimeoutHint": "单个 Agent 的超时秒数（默认：300 = 5 分钟）",
       "repetitiveWindow": "重复交接检测窗口",
-      "repetitiveWindowHint": "检测来回往返行为时回看的近期节点数(0 = 关闭)",
+      "repetitiveWindowHint": "检测来回往返行为时回看的近期节点数（0 = 关闭）",
       "minUniqueAgents": "检测所需最少唯一 Agent 数",
-      "minUniqueAgentsHint": "近期序列中所需的最少唯一节点数(0 = 关闭)",
+      "minUniqueAgentsHint": "近期序列中所需的最少唯一节点数（0 = 关闭）",
       "graphName": "图名称",
       "graphNameHint": "该图工作流的名称",
       "entryPoints": "入口点",
-      "entryPointsHint": "将 sub-agents 句柄(右侧)连接到 Agent 节点以定义入口点。入口点 Agent 接收原始用户输入。",
+      "entryPointsHint": "将 sub-agents 句柄（右侧）连接到 Agent 节点以定义入口点。入口点 Agent 接收原始用户输入。",
       "agentDeps": "Agent 依赖",
-      "agentDepsHint": "将 Agent 输出(底部)连接到另一个 Agent 的输入(顶部)以定义执行依赖。例如 Agent A → Agent B 表示 B 依赖 A 的输出。",
+      "agentDepsHint": "将 Agent 输出（底部）连接到另一个 Agent 的输入（顶部）以定义执行依赖。例如 Agent A → Agent B 表示 B 依赖 A 的输出。",
       "enableDebugLogs": "启用调试日志",
       "debugLogsHint": "为图执行启用调试日志",
       "optionalPlaceholder": "可选",
@@ -2980,8 +2980,8 @@
       "skillLabelPlaceholder": "技能",
       "skill": "技能",
       "skillSelectPlaceholder": "—— 选择一个技能 ——",
-      "skillMissingOption": "{{name}}(不在注册表中)",
-      "skillMissingWarn": "技能“{{name}}”不是已批准的注册表技能。请在注册表中批准它,或另选一个。",
+      "skillMissingOption": "{{name}}（不在注册表中）",
+      "skillMissingWarn": "技能“{{name}}”不是已批准的注册表技能。请在注册表中批准它，或另选一个。",
       "skillRefresh": "刷新技能",
       "skillLoadError": "技能注册表不可用。",
       "skillTrustWarning": "仅挂载你信任的技能 —— 技能说明可能指示 Agent 运行随附的脚本。",
@@ -3006,8 +3006,8 @@
       "agent": "智能体",
       "streaming": "流式",
       "staleBanner": "该会话正在运行较旧的代码。开始新会话以使用最新代码。",
-      "sessionErr": "无法启动本地会话:{{msg}}",
-      "codeSyncFailed": "无法将修复后的代码同步到会话:{{msg}}"
+      "sessionErr": "无法启动本地会话：{{msg}}",
+      "codeSyncFailed": "无法将修复后的代码同步到会话：{{msg}}"
     },
     "fix": {
       "button": "AI 修复",
@@ -3025,16 +3025,16 @@
       "catConfig": "配置",
       "catEnv": "环境",
       "suggNodeProp": "节点‘{{label}}’ → {{property}}:{{action}}",
-      "suggNode": "节点‘{{label}}’:{{action}}"
+      "suggNode": "节点‘{{label}}’：{{action}}"
     }
   },
   "common": {
     "cancel": "取消",
     "loading": "加载中 ▸",
-    "actionFailed": "操作失败:{{msg}}",
+    "actionFailed": "操作失败：{{msg}}",
     "close": "关闭",
     "retry": "重试",
-    "loadFailed": "加载失败:{{msg}}",
+    "loadFailed": "加载失败：{{msg}}",
     "loadFailedShort": "加载失败"
   },
   "memoryPage": {
@@ -3372,7 +3372,7 @@
       "testAccessHint": "在注册任何内容之前，先在上方所选区域中真实 assume 一次该角色。",
       "testAccessOk": "已成功 assume 角色——到达账户 {{account}}。这组配置可用。",
       "externalIdHint": "2-128 个字母、数字或 +=,.@:/-_ 。spoke 侧的堆栈必须使用完全相同的值部署；它只保存在账本中，不会再次显示。",
-      "hubRoleNote": "部署堆栈时把下面这个 hub 角色填入 HubRoleArn——它是 spoke 唯一信任的主体:",
+      "hubRoleNote": "部署堆栈时把下面这个 hub 角色填入 HubRoleArn——它是 spoke 唯一信任的主体：",
       "hubRoleLoading": "正在读取本部署的身份…",
       "hubRoleUnknown": "不可用——后端无法读取自身的 AWS 身份",
       "xaTitle": "跨账户配置",
