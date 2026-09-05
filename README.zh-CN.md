@@ -217,7 +217,7 @@ export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # 白名单
 | `infra/` | AWS CDK 应用：`launchpad-base` 共享栈 |
 | `apps/studio/` | vendored Strands Studio 子应用（方式C），已接入平台流水线 |
 | `start.py`、`stop.sh` | 后台本地服务生命周期、健康检查、PID 归属与日志 |
-| `scripts/` | `bootstrap.py`、`teardown.py`、`dev.sh`、`verify.sh`、`i18n_check.py` |
+| `scripts/` | `bootstrap.py`、`teardown.py`、`dev.sh`、`verify.sh`、`i18n_check.py`、`i18n_zh_punct.py` |
 | `config/` | `launchpad.example.yaml`（已提交）；`launchpad.yaml`（生成、gitignored） |
 | `docs/` | 环境搭建、API、架构、故障排查、资源清理、Studio 集成 |
 

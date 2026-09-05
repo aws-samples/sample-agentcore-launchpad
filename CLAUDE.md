@@ -32,10 +32,11 @@ the precondition probes and restart side-effect traps the table below does not.
 | Single backend test | `cd backend && uv run pytest tests/test_agents_api.py::test_name -q` |
 | Frontend lint / typecheck / build | `cd frontend && npm run lint && npx tsc --noEmit && npm run build` |
 | i18n key parity (en ↔ zh-CN) | `python3 scripts/i18n_check.py` |
+| zh-CN full-width punctuation (`--fix` to convert) | `python3 scripts/i18n_zh_punct.py --check` |
 
 `scripts/verify.sh` (= `make verify`) is the canonical gate: backend ruff+pytest, infra
-ruff+pytest, frontend eslint+tsc+vite-build, and i18n parity. It must pass before any
-change is considered complete.
+ruff+pytest, frontend eslint+tsc+vite-build, i18n parity, and zh-CN full-width
+punctuation. It must pass before any change is considered complete.
 
 **`backend/tests/` vs `backend/scripts/e2e_*.py`:** `tests/` are hermetic unit tests
 (SQLite is redirected to a temp DB in `conftest.py`; AWS is stubbed) and run in
@@ -112,7 +113,10 @@ Evaluation, Governance). Complex pages expose **sub-pages via a `?view=` query p
 rather than nested routes — follow that pattern for new sub-surfaces. `src/lib/api.ts`
 is the single typed client for the backend; keep its interfaces in sync with the FastAPI
 schemas. All user-facing strings are i18n keys with **en + zh-CN parity enforced** by
-`scripts/i18n_check.py`.
+`scripts/i18n_check.py`. Chinese copy uses **full-width punctuation** (`，：；？！（）`)
+wherever a mark touches CJK text; `scripts/i18n_zh_punct.py --check` gates it and `--fix`
+converts mechanically (placeholders, backticks, URLs, ARNs and Latin-only fragments are
+never touched).
 
 ## Conventions & gotchas
 

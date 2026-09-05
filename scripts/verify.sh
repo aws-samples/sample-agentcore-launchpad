@@ -51,6 +51,9 @@ fi
 if [ -f "$ROOT/scripts/i18n_check.py" ] && [ -d "$ROOT/frontend/src/locales" ]; then
   section "i18n · key parity"
   python3 "$ROOT/scripts/i18n_check.py"; result $? "i18n_check"
+
+  section "i18n · zh-CN full-width punctuation"
+  python3 "$ROOT/scripts/i18n_zh_punct.py" --check; result $? "i18n_zh_punct"
 fi
 
 printf '\n════ verify: %s ════\n' "$([ $FAIL -eq 0 ] && echo PASS || echo FAIL)"
