@@ -49,6 +49,9 @@ class EvalRun(Base):
     agent_name: Mapped[str] = mapped_column(String(64))
     dataset_id: Mapped[str | None] = mapped_column(String(16), default=None)
     dataset_name: Mapped[str | None] = mapped_column(String(64), default=None)
+    # Published cloud-dataset version the run replayed ("2"); NULL = the DRAFT
+    # (and every local / session / window run).
+    dataset_version: Mapped[str | None] = mapped_column(String(16), default=None)
     mode: Mapped[str] = mapped_column(String(12), default="evaluators")  # evaluators|insights
     evaluators: Mapped[list[str]] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String(16), default="queued")

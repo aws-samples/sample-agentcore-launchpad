@@ -553,11 +553,22 @@ RUNNABLE_CLOUD_SCHEMAS = {
 
 
 def _cloud_dataset_items(
-    cloud_id: str, ws: WorkspaceScope
+    cloud_id: str, ws: WorkspaceScope, version: str | None = None
 ) -> tuple[str, list[dict[str, Any]]]:
-    """(display name, run items) for an ACTIVE AWS cloud dataset."""
+    """(display name, run items) for an ACTIVE AWS cloud dataset — the DRAFT,
+    or the published ``version`` when pinned (both GetDataset and
+    ListDatasetExamples read that version, so the scenarios replayed and the
+    ground truth gated on are exactly the snapshot's)."""
     client = control_client(ws.context)
-    detail = ac.get_dataset(client, dataset_id=cloud_id)
+    if version:
+        known = {str(v["version"]) for v in _cloud_versions(client, cloud_id)}
+        if version not in known:
+            raise AppError(
+                "run.dataset_version_unknown",
+                f"cloud dataset has no published version '{version}'",
+                status_code=422,
+            )
+    detail = ac.get_dataset(client, dataset_id=cloud_id, version=version)
     if detail.get("status") != "ACTIVE":
         raise AppError(
             "dataset.cloud_not_active",
@@ -572,7 +583,7 @@ def _cloud_dataset_items(
         )
     items = [
         {k: v for k, v in example.items() if k != "exampleId"}
-        for example in ac.list_dataset_examples(client, dataset_id=cloud_id)
+        for example in ac.list_dataset_examples(client, dataset_id=cloud_id, version=version)
     ]
     if not items:
         raise AppError("dataset.empty", "cloud dataset has no examples", status_code=422)
@@ -960,6 +971,9 @@ class RunCreate(BaseModel):
     agent_id: str
     dataset_id: str | None = None
     cloud_dataset_id: str | None = None  # AWS cloud dataset
+    # Published version of the cloud dataset to replay ("2"); omitted = DRAFT.
+    # Only meaningful with cloud_dataset_id.
+    dataset_version: str | None = Field(default=None, min_length=1, max_length=16)
     # Bedrock model that plays the user for simulated persona scenarios —
     # required whenever the selected dataset carries actor_profile items.
     actor_model_id: str | None = Field(default=None, min_length=1, max_length=120)
@@ -980,6 +994,8 @@ def _run_out(run: EvalRun) -> dict[str, Any]:
         "agent_name": run.agent_name,
         "dataset_id": run.dataset_id,
         "dataset_name": run.dataset_name,
+        # pinned published cloud-dataset version; null = draft / not a cloud run
+        "dataset_version": run.dataset_version,
         "mode": run.mode,
         "evaluators": run.evaluators,
         "status": run.status,
@@ -1065,6 +1081,18 @@ def create_run(
             "session_ids or lookback_hours",
             status_code=422,
         )
+    if req.dataset_version and not req.cloud_dataset_id:
+        raise AppError(
+            "run.dataset_version_scope",
+            "dataset_version only applies to a cloud_dataset_id scope",
+            status_code=422,
+        )
+    if req.dataset_version and req.dataset_version.upper() == "DRAFT":
+        raise AppError(
+            "run.dataset_version_scope",
+            "dataset_version is a published version number — omit it for the draft",
+            status_code=422,
+        )
     if req.insights:
         invalid = [i for i in req.insights if i not in ac.INSIGHT_TYPES]
         if invalid:
@@ -1082,8 +1110,11 @@ def create_run(
         items = dataset.items
         dataset_name = dataset.name
     elif req.cloud_dataset_id:
-        cloud_name, items = _cloud_dataset_items(req.cloud_dataset_id, ws)
-        # "cloud:" prefix marks the scope in the runs list (like "window:Nh")
+        cloud_name, items = _cloud_dataset_items(
+            req.cloud_dataset_id, ws, version=req.dataset_version
+        )
+        # "cloud:" prefix marks the scope in the runs list (like "window:Nh");
+        # the pinned version travels on its own column, never in this string.
         dataset_name = f"cloud:{cloud_name}"
 
     if any("actor_profile" in item for item in items) and not req.actor_model_id:
@@ -1138,6 +1169,7 @@ def create_run(
         insights=req.insights,
         lookback_hours=req.lookback_hours,
         actor_model_id=req.actor_model_id,
+        dataset_version=req.dataset_version if req.cloud_dataset_id else None,
     )
     return _run_out(run)
 

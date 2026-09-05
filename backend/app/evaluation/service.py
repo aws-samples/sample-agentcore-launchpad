@@ -522,6 +522,7 @@ def submit_run(
     lookback_hours: int | None = None,
     actor_model_id: str | None = None,
     online_config_arn: str | None = None,
+    dataset_version: str | None = None,
 ) -> EvalRun:
     service_name, log_group = resolve_telemetry(agent, workspace)
     # Window runs have no dataset; encode the scope in dataset_name so the
@@ -536,6 +537,7 @@ def submit_run(
             agent_name=agent.name,
             dataset_id=dataset_id,
             dataset_name=dataset_name,
+            dataset_version=dataset_version,
             mode=mode,
             evaluators=evaluators,
             status="queued",
