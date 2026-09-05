@@ -777,6 +777,9 @@ def _run_out(run: EvalRun) -> dict[str, Any]:
         "scores": run.scores,
         "insights": run.insights,
         "error": run.error,
+        # additive: an operator stop is pending on this run (in-memory flag;
+        # the row turns `stopped` once the poller/worker observes it)
+        "stop_requested": service.stop_requested(run.id),
         "created_at": run.created_at.isoformat() if run.created_at else None,
     }
 
@@ -925,6 +928,23 @@ def create_run(
         actor_model_id=req.actor_model_id,
     )
     return _run_out(run)
+
+
+@router.post("/runs/{run_id}/stop", status_code=202)
+def stop_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Stop an active run. With a batch on AWS this is StopBatchEvaluation
+    (202: the batch goes STOPPING → STOPPED and the row follows); a queued run
+    is cancelled locally and comes back `stopped` at once; a run replaying its
+    dataset stops before StartBatchEvaluation. Terminal runs → 409
+    `run.not_active`."""
+    run = db.get(EvalRun, run_id)
+    if run is None or run.workspace_id != ws.id:
+        raise NotFoundError("run.not_found", "run not found")
+    return _run_out(service.request_stop(run.id, workspace=ws.context))
 
 
 @router.get("/queue")

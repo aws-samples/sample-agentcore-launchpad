@@ -220,6 +220,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/eval/runs"): MEMBER,
     ("POST", "/api/eval/runs"): PERM_EVAL_RUN,
     ("GET", "/api/eval/runs/{run_id}"): MEMBER,
+    ("POST", "/api/eval/runs/{run_id}/stop"): PERM_EVAL_RUN,
     # online evaluation configs: create/resume start billed judge calls on live
     # traffic, the same cost class as starting a run; list/detail/results read AWS
     ("GET", "/api/eval/online"): MEMBER,
