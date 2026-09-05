@@ -80,6 +80,9 @@ export interface EvaluationRunInfo {
   agent_name: string;
   dataset_id?: string | null;
   dataset_name: string | null;
+  /** Published cloud-dataset version the run replayed ("2"); null = the draft
+   *  (and every local / session / window run). Absent on older backends. */
+  dataset_version?: string | null;
   mode: string;
   evaluators: string[];
   status: EvaluationRunStatus;

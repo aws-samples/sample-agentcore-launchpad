@@ -1845,6 +1845,7 @@
       "created": "CREATED",
       "status": "STATUS",
       "empty": "NO RUNS YET — PRESS + NEW RUN",
+      "draftVersion": "draft",
       "newEvaluation": "NEW Evaluation",
       "createExperiment": "CREATE BUNDLE A/B EXPERIMENT",
       "sessions": "SESSIONS",
@@ -1921,6 +1922,10 @@
       "cloudGroup": "AWS CLOUD DATASETS",
       "cloudSimulated": "personas",
       "cloudHint": "AWS cloud dataset — its scenarios are fetched from AWS and run against the agent, ground truth included.",
+      "version": "VERSION",
+      "versionDraft": "Draft",
+      "versionOption": "v{{version}} · {{examples}} examples",
+      "versionHint": "Draft replays the dataset as it is now. Pinning a published version replays exactly the scenarios in that snapshot, however the draft changes later.",
       "actorModel": "ACTOR MODEL — PLAYS THE USER",
       "actorModelHint": "Simulated personas: an LLM actor plays the user against the agent until its goal is met or max_turns is hit. This Bedrock model drives the actor."
     },
