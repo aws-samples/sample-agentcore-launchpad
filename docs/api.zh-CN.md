@@ -91,6 +91,21 @@ invalid`、`AWS access denied`、`AWS is throttling this request`、`AWS resourc
 `detail` 只含 `aws_error_code`——AWS 原文会暴露本部署的角色 ARN、实例 id 与操作名,这些只留在
 API-key 信任边界的控制台一侧。
 
+## 控制台 Memory 资源 API / Console Memory Resources API
+
+`/api/memory/*` 支撑只读的 Memory 控制台(控制台 05):没有任何接口会写事件、删记录或触发抽取。
+唯一会写的一组接口是下面的 `/api/memory/resources*`——管理记忆*资源*本身,位于独立的路由模块
+(`routers/memory_resources.py`)。详见
+[architecture.zh-CN.md](architecture.zh-CN.md)「Memory 控制台」一节。
+
+| 方法 | 路径 | 结果 |
+|---|---|---|
+| `GET` | `/api/memory/resources` | 工作区账号/区域内的全部记忆,默认记忆排首位,每条附带 spec 绑定了它的在线 Agent |
+| `POST` | `/api/memory/resources` | `CreateMemory`(`{name, description?, event_expiry_days?, strategies?, namespace_keys?}`)→ `201`,返回 `CREATING` 状态的详情投影 |
+| `GET` | `/api/memory/resources/{memory_id}` | 详情投影:描述、状态、事件过期、执行角色、策略、命名空间键 |
+| `PUT` | `/api/memory/resources/{memory_id}` | 仅限 `{description?, event_expiry_days?}` 的 `UpdateMemory`——至少提供一项(否则 422),`description` 1–4096 字符(只能替换、不能清空),`event_expiry_days` 7–365(越界 422)。只发送 `memoryId` 加给出的字段,绝不发送 `namespaceKeys`(API 会整体替换该集合);响应是用 `GetMemory` 读回的详情投影。不会因被 Agent 引用或是平台默认而被阻止;未知 id → `404 aws.not_found` |
+| `DELETE` | `/api/memory/resources/{memory_id}` | `DeleteMemory`;工作区默认记忆返回 `409 memory.platform_protected`,仍被在线 Agent 的 spec 绑定时返回 `409 memory.in_use`(附 Agent 列表) |
+
 ## 控制台 Chat API / Console Chat API
 
 `/api/chat/*` 支撑 Chat 交互页面，与 `/v1` 共用同一条调用链（`app.services.invoke`）。

@@ -178,9 +178,11 @@ mode, and records the replaced ARN on the operation.
 ## Console Memory API
 
 `/api/memory/*` backs the read-only Memory console (console 05) over the shared
-`launchpad_memory` singleton. Every route is a read: there is no endpoint that
-writes events, deletes records, triggers extraction, or changes the memory
-resource. See [architecture.md](architecture.md#the-memory-console-console-05).
+`launchpad_memory` singleton. Every console route is a read: there is no endpoint
+that writes events, deletes records or triggers extraction. The one mutating
+surface — the `/api/memory/resources*` routes below, which manage the memory
+*resources* themselves — lives in a separate router (`routers/memory_resources.py`).
+See [architecture.md](architecture.md#the-memory-console-console-05).
 
 | Method | Path | Result |
 |---|---|---|
@@ -192,6 +194,16 @@ resource. See [architecture.md](architecture.md#the-memory-console-console-05).
 | `GET` | `/api/memory/records?actor_id=&strategy_id=` or `?namespace=` | Long-term records for the resolved namespace |
 | `POST` | `/api/memory/records/search` | Semantic retrieval (`{query, actor_id, strategy_id?, namespace?, top_k}`) with relevance scores |
 | `GET` | `/api/memory/extraction-jobs` | Failed (retry-eligible) extraction jobs, filterable by `actor_id`/`session_id`/`strategy_id`/`status` — **not surfaced in the console**; AWS's `status` enum is `FAILED` only, so a healthy resource returns an empty list |
+
+Memory resource management (`?view=resources`):
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/memory/resources` | Every memory in the workspace's account/region, default first, each with the live agents whose spec pins it |
+| `POST` | `/api/memory/resources` | `CreateMemory` (`{name, description?, event_expiry_days?, strategies?, namespace_keys?}`) → `201` with the detail projection in `CREATING` state |
+| `GET` | `/api/memory/resources/{memory_id}` | Detail projection: description, status, event expiry, execution role, strategies, namespace keys |
+| `PUT` | `/api/memory/resources/{memory_id}` | `UpdateMemory` limited to `{description?, event_expiry_days?}` — at least one required (422 otherwise), `description` 1–4096 chars (it can be replaced, not cleared), `event_expiry_days` 7–365 (422 outside). Sends exactly `memoryId` + the given fields and never `namespaceKeys` (the API replaces that set wholesale); the reply is the detail projection read back with `GetMemory`. Not blocked by referencing agents or the platform default; unknown id → `404 aws.not_found` |
+| `DELETE` | `/api/memory/resources/{memory_id}` | `DeleteMemory`; `409 memory.platform_protected` for the workspace default, `409 memory.in_use` (with the agents) while a live agent's spec pins it |
 
 Every list route accepts and returns `next_token` (AWS pages at 100 items) and
 accepts `max_results` (clamped to 100) — nothing is capped silently. Namespace

@@ -819,15 +819,15 @@ exists in either file, and `tests/test_memory_console.py` asserts that. The one
 mutating surface — the `resources` view — therefore lives in a **separate pair**
 (`services/memory_admin.py` + `routers/memory_resources.py`, tested by
 `tests/test_memory_resources.py`): it manages the memory *resources* themselves
-(create/delete), never events or records, and the structural guarantee on the
-console modules stays intact.
+(create/update/delete), never events or records, and the structural guarantee on
+the console modules stays intact.
 
 | `?view=` | Shows | AgentCore operations |
 |---|---|---|
 | `overview` | resource config (id/arn/status/event expiry/KMS/execution role), each long-term strategy with its `namespaces` + `namespaceTemplates`, and the account's other memory resources with the platform singleton marked | `GetMemory`, `ListMemories`, `ListActors` |
 | `short-term` | actor → session → event drill-down; events render as a timeline of conversational role/text turns, blob payloads as a byte count only | `ListActors`, `ListSessions`, `ListEvents` |
 | `long-term` | records for a resolved namespace, plus semantic retrieval with relevance scores | `ListMemoryRecords`, `RetrieveMemoryRecords` |
-| `resources` | every memory in the account/region (workspace default marked, plus the agents whose spec pins each one); create a memory (name, description, event expiry, strategy picks that mirror the bootstrap layout, and — API-only for now — up to 5 flexible namespace variable keys: CreateMemory `namespaceKeys` with optional `allowedValues`/`regexPattern` rules; the platform's canned strategies don't reference them and the invoke path supplies no `extractionConfig.namespaceVariables` on CreateEvent, so the console form hides the editor (`SHOW_NS_KEYS` in `ResourcesTab.tsx`) and the keys are pre-registered for externally managed templates) and delete one — the workspace default and any memory a live agent references are delete-protected | `ListMemories`, `GetMemory`, `CreateMemory`, `DeleteMemory` |
+| `resources` | every memory in the account/region (workspace default marked, plus the agents whose spec pins each one); create a memory (name, description, event expiry, strategy picks that mirror the bootstrap layout, and — API-only for now — up to 5 flexible namespace variable keys: CreateMemory `namespaceKeys` with optional `allowedValues`/`regexPattern` rules; the platform's canned strategies don't reference them and the invoke path supplies no `extractionConfig.namespaceVariables` on CreateEvent, so the console form hides the editor (`SHOW_NS_KEYS` in `ResourcesTab.tsx`) and the keys are pre-registered for externally managed templates); edit one's description and event expiry (7–365 days) inline — `UpdateMemory` is sent exactly `memoryId` + the changed fields and **never** `namespaceKeys`, which the API documents as replacing the existing set wholesale (an omitted key is removed), then the detail is read back with `GetMemory`; strategies, namespace variables and the execution role are not editable, editing is never blocked, and the confirm dialog names the agents on the memory since a shorter expiry reaches all of them; and delete one — the workspace default and any memory a live agent references are delete-protected | `ListMemories`, `GetMemory`, `CreateMemory`, `UpdateMemory`, `DeleteMemory` |
 
 Memories created here become selectable per agent: the Create wizard stores the
 pick as `spec.memory.memory_id`, which overrides the workspace default across

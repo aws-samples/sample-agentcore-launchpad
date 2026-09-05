@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Btn, Chip, ConfirmDialog, DataTable, Panel, useToast } from "../../components";
 import type {
   MemoryNamespaceKeyInput,
   MemoryResourceCreateInput,
+  MemoryResourceDetail,
   MemoryResourceRow,
+  MemoryResourceUpdateInput,
 } from "../../lib/api";
 import { api } from "../../lib/api";
 import { shortId, stamp, statusTone } from "./format";
@@ -53,13 +55,103 @@ interface NsKeyDraft {
 
 const EMPTY_NS_ROW: NsKeyDraft = { key: "", allowedValues: "", regexPattern: "" };
 
+/** UpdateMemory's event-expiry range — the edit form gates on it client-side. */
+const EDIT_EXPIRY_MIN = 7;
+const EXPIRY_MAX = 365;
+
+/** Description textarea shared by the create form and the inline edit form. */
+function DescriptionField({
+  id,
+  value,
+  onChange,
+  disabled = false,
+}: {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="field">
+      <label htmlFor={id}>{t("memoryPage.resources.description")}</label>
+      <textarea
+        id={id}
+        className="input"
+        style={{ minHeight: 64, resize: "vertical" }}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={t("memoryPage.resources.descriptionPlaceholder")}
+        disabled={disabled}
+      />
+    </div>
+  );
+}
+
+/** Event-expiry (days) input shared by the create form and the inline edit form;
+ *  the caller supplies the lower bound and the hint text because CreateMemory
+ *  accepts 3 days while the edit form holds the UpdateMemory floor of 7. */
+function ExpiryField({
+  id,
+  value,
+  min,
+  hint,
+  onChange,
+  disabled = false,
+}: {
+  id: string;
+  value: number;
+  min: number;
+  hint: string;
+  onChange: (value: number) => void;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="field">
+      <label htmlFor={id}>{t("memoryPage.resources.expiry")}</label>
+      <input
+        id={id}
+        className="input mono"
+        type="number"
+        min={min}
+        max={EXPIRY_MAX}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={{ width: 120 }}
+        disabled={disabled}
+      />
+      <div className="dim" style={{ fontSize: 11, marginTop: 6 }}>
+        {hint}
+      </div>
+    </div>
+  );
+}
+
+/** The row being edited inline plus its draft values. `detail` stays null until
+ *  `GET /api/memory/resources/{id}` has answered — list rows carry neither the
+ *  description nor the expiry (ListMemories is a summary), so the form is
+ *  pre-filled from the detail read and disabled until it lands. */
+interface EditDraft {
+  row: MemoryResourceRow;
+  detail: MemoryResourceDetail | null;
+  description: string;
+  expiryDays: number;
+}
+
 /**
- * Memory resource management — create and manage AgentCore Memory resources.
+ * Memory resource management — create, edit and manage AgentCore Memory resources.
  *
  * The workspace's bootstrap memory is the delete-protected default; additional
  * memories created here become selectable per agent in the Create wizard
  * (`spec.memory.memory_id`). Status is read live from AWS: a new memory shows
  * CREATING for a few minutes before extraction strategies become ACTIVE.
+ *
+ * EDIT on a row opens an inline form for the description and the short-term
+ * event expiry only (UpdateMemory); strategies, namespace variables and the
+ * execution role are fixed at creation. Editing is never blocked by referencing
+ * agents — the confirm dialog names them instead, since a shorter expiry window
+ * reaches every agent writing to the memory.
  */
 export function ResourcesTab() {
   const { t } = useTranslation();
@@ -77,6 +169,9 @@ export function ResourcesTab() {
   const [nsKeys, setNsKeys] = useState<NsKeyDraft[]>([]);
   const [creating, setCreating] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<MemoryResourceRow | null>(null);
+  const [edit, setEdit] = useState<EditDraft | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [confirmSave, setConfirmSave] = useState(false);
 
   const load = useCallback(() => {
     const id = ++seq.current;
@@ -185,6 +280,122 @@ export function ResourcesTab() {
       .finally(() => setCreating(false));
   };
 
+  const openEdit = (row: MemoryResourceRow) => {
+    const id = row.id;
+    if (!id) return;
+    setEdit({ row, detail: null, description: "", expiryDays: 30 });
+    api
+      .memoryResource(id)
+      .then((detail) => {
+        setEdit((cur) =>
+          cur && cur.row.id === id
+            ? {
+                ...cur,
+                detail,
+                description: detail.description ?? "",
+                expiryDays: detail.event_expiry_days ?? 30,
+              }
+            : cur,
+        );
+      })
+      .catch((err: unknown) => {
+        toast(
+          t("memoryPage.resources.editLoadFailed", {
+            id,
+            msg: err instanceof Error ? err.message : String(err),
+          }),
+          "crit",
+        );
+        setEdit((cur) => (cur && cur.row.id === id ? null : cur));
+      });
+  };
+
+  // Only the fields that actually changed go on the wire (the backend forwards
+  // exactly those to UpdateMemory). Validity is judged per changed field so a
+  // memory created with a 3-day expiry can still have its description edited.
+  const editDescription = edit?.description.trim() ?? "";
+  const editDescriptionChanged =
+    edit?.detail != null && editDescription !== (edit.detail.description ?? "");
+  const editExpiryChanged =
+    edit?.detail != null && edit.expiryDays !== edit.detail.event_expiry_days;
+  const editExpiryValid =
+    edit != null &&
+    Number.isInteger(edit.expiryDays) &&
+    edit.expiryDays >= EDIT_EXPIRY_MIN &&
+    edit.expiryDays <= EXPIRY_MAX;
+  const editChanged = editDescriptionChanged || editExpiryChanged;
+  const saveReason: string | undefined =
+    edit == null
+      ? undefined
+      : edit.detail == null
+        ? t("memoryPage.resources.editLoading")
+        : saving
+          ? t("memoryPage.resources.saving")
+          : editDescriptionChanged && editDescription.length === 0
+            ? t("memoryPage.resources.editDescriptionRequired")
+            : editExpiryChanged && !editExpiryValid
+              ? t("memoryPage.resources.editExpiryInvalid")
+              : !editChanged
+                ? t("memoryPage.resources.editNothingChanged")
+                : undefined;
+
+  const save = () => {
+    if (!edit || !edit.detail || !edit.row.id || saveReason) return;
+    const id = edit.row.id;
+    const input: MemoryResourceUpdateInput = {};
+    if (editDescriptionChanged) input.description = editDescription;
+    if (editExpiryChanged) input.event_expiry_days = edit.expiryDays;
+    setSaving(true);
+    api
+      .memoryResourceUpdate(id, input)
+      .then((detail) => {
+        toast(t("memoryPage.resources.updated", { id }), "good");
+        // the row refreshes from the readback — no full reload needed
+        setRows((prev) =>
+          prev
+            ? prev.map((r) =>
+                r.id === id
+                  ? {
+                      ...r,
+                      name: detail.name ?? r.name,
+                      status: detail.status,
+                      updated_at: detail.updated_at,
+                    }
+                  : r,
+              )
+            : prev,
+        );
+        setEdit(null);
+      })
+      .catch((err: unknown) => {
+        toast(
+          t("memoryPage.resources.updateFailed", {
+            msg: err instanceof Error ? err.message : String(err),
+          }),
+          "crit",
+        );
+      })
+      .finally(() => setSaving(false));
+  };
+
+  const saveBody = edit
+    ? [
+        t("memoryPage.resources.saveBody", { id: edit.row.id ?? "" }),
+        editExpiryChanged
+          ? t("memoryPage.resources.saveBodyExpiry", { days: edit.expiryDays })
+          : null,
+        edit.row.is_default ? t("memoryPage.resources.saveBodyDefault") : null,
+        edit.row.agents.length > 0
+          ? t("memoryPage.resources.saveBodyAgents", {
+              count: edit.row.agents.length,
+              names: edit.row.agents.map((a) => a.name).join(", "),
+            })
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" ")
+    : "";
+
   const remove = (row: MemoryResourceRow) => {
     if (!row.id) return;
     api
@@ -231,7 +442,8 @@ export function ResourcesTab() {
               empty={loading ? t("common.loading") : t("memoryPage.resources.empty")}
             >
               {(rows ?? []).map((m) => (
-                <tr key={m.id ?? m.arn} className={m.is_default ? "sel" : undefined}>
+                <Fragment key={m.id ?? m.arn}>
+                <tr className={m.is_default ? "sel" : undefined}>
                   <td>
                     <div>
                       <b>{m.name ?? "—"}</b>{" "}
@@ -253,21 +465,79 @@ export function ResourcesTab() {
                   </td>
                   <td className="mono">{stamp(m.created_at)}</td>
                   <td>
-                    {!m.is_default && (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                       <Btn
-                        onClick={() => setPendingDelete(m)}
-                        disabled={m.agents.length > 0}
-                        title={
-                          m.agents.length > 0
-                            ? t("memoryPage.resources.inUseHint")
-                            : undefined
-                        }
+                        onClick={() => (edit?.row.id === m.id ? setEdit(null) : openEdit(m))}
+                        disabled={!m.id || saving}
+                        data-testid="memory-resource-edit"
                       >
-                        {t("memoryPage.resources.delete")}
+                        {t("memoryPage.resources.edit")}
                       </Btn>
-                    )}
+                      {!m.is_default && (
+                        <Btn
+                          onClick={() => setPendingDelete(m)}
+                          disabled={m.agents.length > 0}
+                          title={
+                            m.agents.length > 0
+                              ? t("memoryPage.resources.inUseHint")
+                              : undefined
+                          }
+                        >
+                          {t("memoryPage.resources.delete")}
+                        </Btn>
+                      )}
+                    </div>
                   </td>
                 </tr>
+                {edit && edit.row.id === m.id && (
+                  <tr data-testid="memory-resource-edit-row">
+                    <td colSpan={5}>
+                      <div style={{ padding: "6px 0 4px" }}>
+                        <div style={{ marginBottom: 8 }}>
+                          <b>
+                            {t("memoryPage.resources.editTitle", {
+                              name: m.name ?? m.id ?? "",
+                            })}
+                          </b>
+                          <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+                            {t("memoryPage.resources.editSub")}
+                          </div>
+                        </div>
+                        <DescriptionField
+                          id="mem-res-edit-desc"
+                          value={edit.description}
+                          onChange={(v) => setEdit((cur) => cur && { ...cur, description: v })}
+                          disabled={edit.detail === null || saving}
+                        />
+                        <ExpiryField
+                          id="mem-res-edit-expiry"
+                          value={edit.expiryDays}
+                          min={EDIT_EXPIRY_MIN}
+                          hint={t("memoryPage.resources.editExpiryHint")}
+                          onChange={(v) => setEdit((cur) => cur && { ...cur, expiryDays: v })}
+                          disabled={edit.detail === null || saving}
+                        />
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <Btn
+                            primary
+                            onClick={() => setConfirmSave(true)}
+                            disabled={saveReason !== undefined}
+                            disabledReason={saveReason}
+                            data-testid="memory-resource-save"
+                          >
+                            {saving
+                              ? t("memoryPage.resources.saving")
+                              : t("memoryPage.resources.save")}
+                          </Btn>
+                          <Btn onClick={() => setEdit(null)} disabled={saving}>
+                            {t("common.cancel")}
+                          </Btn>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </DataTable>
           )}
@@ -293,33 +563,14 @@ export function ResourcesTab() {
               </div>
             )}
           </div>
-          <div className="field">
-            <label htmlFor="mem-res-desc">{t("memoryPage.resources.description")}</label>
-            <textarea
-              id="mem-res-desc"
-              className="input"
-              style={{ minHeight: 64, resize: "vertical" }}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder={t("memoryPage.resources.descriptionPlaceholder")}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="mem-res-expiry">{t("memoryPage.resources.expiry")}</label>
-            <input
-              id="mem-res-expiry"
-              className="input mono"
-              type="number"
-              min={3}
-              max={365}
-              value={expiryDays}
-              onChange={(e) => setExpiryDays(Number(e.target.value))}
-              style={{ width: 120 }}
-            />
-            <div className="dim" style={{ fontSize: 11, marginTop: 6 }}>
-              {t("memoryPage.resources.expiryHint")}
-            </div>
-          </div>
+          <DescriptionField id="mem-res-desc" value={description} onChange={setDescription} />
+          <ExpiryField
+            id="mem-res-expiry"
+            value={expiryDays}
+            min={3}
+            hint={t("memoryPage.resources.expiryHint")}
+            onChange={setExpiryDays}
+          />
           <div className="field">
             <label>{t("memoryPage.resources.strategies")}</label>
             <div className="selchips">
@@ -467,6 +718,20 @@ export function ResourcesTab() {
           setPendingDelete(null);
         }}
         onCancel={() => setPendingDelete(null)}
+      />
+
+      <ConfirmDialog
+        open={confirmSave && edit !== null}
+        title={t("memoryPage.resources.saveTitle", {
+          name: edit?.row.name ?? edit?.row.id ?? "",
+        })}
+        body={saveBody}
+        confirmLabel={t("memoryPage.resources.save")}
+        onConfirm={() => {
+          setConfirmSave(false);
+          save();
+        }}
+        onCancel={() => setConfirmSave(false)}
       />
     </>
   );

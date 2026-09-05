@@ -4,8 +4,8 @@
 ``memory_console`` (and ``routers/memory``) is read-only **by construction** and
 a structural test pins the absence of any mutating call there. Everything that
 manages the lifecycle of the memory resources themselves — list the account's
-memories, create one, delete one — lives here instead, behind its own router
-(``routers/memory_resources``).
+memories, create one, edit one's description/event expiry, delete one — lives
+here instead, behind its own router (``routers/memory_resources``).
 
 The workspace's bootstrap memory stays the default: agents whose spec does not
 pick a memory land on it, so it can never be deleted from here.
@@ -229,6 +229,49 @@ def _platform_execution_role(control: Any, workspace: WorkspaceContext) -> str |
     except Exception:
         return None
     return raw.get("memoryExecutionRoleArn") or None
+
+
+def update_memory_resource(
+    workspace: WorkspaceContext,
+    memory_id: str,
+    *,
+    description: str | None = None,
+    event_expiry_days: int | None = None,
+) -> dict[str, Any]:
+    """UpdateMemory limited to description + event expiry; returns the refreshed detail.
+
+    Only ``memoryId`` plus the fields actually being changed go on the wire.
+    Strategies, the execution role, indexed keys and stream delivery are never
+    sent from here — the console does not edit them, and an omitted member is the
+    API's "leave unchanged" (same omit=keep contract as UpdateHarness).
+
+    ``namespaceKeys`` in particular must NEVER be echoed: the botocore model
+    documents it as "This value fully replaces the existing set — any key you
+    omit is removed", so re-sending a partial (or empty) list would silently strip
+    the resource's flexible namespace variables. The hermetic test pins the exact
+    kwarg set. Fallback if live verification ever shows that *omitting* the member
+    also clears the keys: read ``GetMemory().namespaceKeys`` first and re-send it
+    verbatim (mapped through ``_namespace_key_entry``) on every update.
+
+    The response is read back with ``GetMemory`` rather than projected from the
+    UpdateMemory reply, so the console shows the resource exactly as AWS holds it
+    (status, ``updatedAt``, strategies) — AWS is the source of truth.
+    """
+    if description is None and event_expiry_days is None:
+        raise AppError(
+            "memory.nothing_to_update",
+            "provide a description and/or event_expiry_days to update",
+            status_code=422,
+        )
+    control = control_client(workspace)
+    params: dict[str, Any] = {"memoryId": memory_id}
+    if description is not None:
+        params["description"] = description
+    if event_expiry_days is not None:
+        params["eventExpiryDuration"] = event_expiry_days
+    control.update_memory(**params)
+    raw = control.get_memory(memoryId=memory_id).get("memory", {})
+    return _detail(raw, memory_id_or_none(workspace))
 
 
 def delete_memory_resource(workspace: WorkspaceContext, memory_id: str) -> dict[str, Any]:

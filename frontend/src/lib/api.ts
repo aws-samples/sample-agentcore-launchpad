@@ -1047,6 +1047,51 @@ export interface MemoryResourceList {
   default_id: string | null;
 }
 
+/** One long-term strategy as `GET/PUT /api/memory/resources/{id}` project it. */
+export interface MemoryResourceStrategy {
+  strategy_id: string | null;
+  name: string | null;
+  type: string | null;
+  status: string | null;
+  namespaces: string[];
+}
+
+/** Flexible namespace variable key as defined on the resource. */
+export interface MemoryResourceNamespaceKey {
+  key: string | null;
+  allowed_values: string[] | null;
+  regex_pattern: string | null;
+}
+
+/** Full detail of one memory resource (`GET /api/memory/resources/{id}`; also the
+ *  reply of `POST /api/memory/resources` and `PUT /api/memory/resources/{id}`).
+ *  No `agents` here — that annotation exists on the list rows only. */
+export interface MemoryResourceDetail {
+  id: string | null;
+  arn: string | null;
+  name: string | null;
+  description: string | null;
+  status: string | null;
+  failure_reason: string | null;
+  event_expiry_days: number | null;
+  execution_role_arn: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  is_default: boolean;
+  strategies: MemoryResourceStrategy[];
+  namespace_keys: MemoryResourceNamespaceKey[];
+}
+
+/** `PUT /api/memory/resources/{id}` — both optional, at least one required.
+ *  Only these two fields are editable from the console: strategies, namespace
+ *  keys, execution role, indexed keys and stream delivery are never sent. */
+export interface MemoryResourceUpdateInput {
+  /** 1–4096 chars — UpdateMemory can replace a description but never clear it */
+  description?: string;
+  /** 7–365 days */
+  event_expiry_days?: number;
+}
+
 export interface MemoryResourceCreateInput {
   /** CreateMemory name constraint: `[a-zA-Z][a-zA-Z0-9_]{0,47}` */
   name: string;
@@ -2618,10 +2663,19 @@ export const api = {
     }),
   memoryResources: () => request<MemoryResourceList>("/api/memory/resources"),
   memoryResourceCreate: (input: MemoryResourceCreateInput) =>
-    request<MemoryResourceRow>("/api/memory/resources", {
+    request<MemoryResourceDetail>("/api/memory/resources", {
       method: "POST",
       body: JSON.stringify(input),
     }),
+  memoryResource: (memoryId: string) =>
+    request<MemoryResourceDetail>(
+      `/api/memory/resources/${encodeURIComponent(memoryId)}`,
+    ),
+  memoryResourceUpdate: (memoryId: string, input: MemoryResourceUpdateInput) =>
+    request<MemoryResourceDetail>(
+      `/api/memory/resources/${encodeURIComponent(memoryId)}`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
   memoryResourceDelete: (memoryId: string) =>
     request<{ deleted: boolean; id: string }>(
       `/api/memory/resources/${encodeURIComponent(memoryId)}`,
