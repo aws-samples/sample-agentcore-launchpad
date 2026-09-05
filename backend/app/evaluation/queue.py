@@ -22,6 +22,9 @@ class EvalRunQueue:
         self._lock = threading.Lock()
         self._pending: list[str] = []
         self._running: set[str] = set()
+        # Cancelled while still pending: the worker drops these on dequeue
+        # instead of calling the run's callable.
+        self._cancelled: set[str] = set()
         self._workers: list[threading.Thread] = []
 
     @property
@@ -40,6 +43,18 @@ class EvalRunQueue:
         self._ensure_workers()
         return position
 
+    def cancel(self, run_id: str) -> bool:
+        """Drop a run that has not been dequeued yet. Returns True when the run
+        was still pending (its callable will never execute — the worker skips
+        it on dequeue); False when it is already running or unknown, in which
+        case the caller has to stop the in-flight work itself."""
+        with self._lock:
+            if run_id not in self._pending:
+                return False
+            self._pending.remove(run_id)
+            self._cancelled.add(run_id)
+            return True
+
     def _ensure_workers(self) -> None:
         with self._lock:
             if len(self._workers) >= self._max_concurrency:
@@ -54,6 +69,11 @@ class EvalRunQueue:
         while True:
             run_id, fn = self._queue.get()
             with self._lock:
+                cancelled = run_id in self._cancelled
+                self._cancelled.discard(run_id)
+                if cancelled:
+                    self._queue.task_done()
+                    continue
                 if run_id in self._pending:
                     self._pending.remove(run_id)
                 self._running.add(run_id)

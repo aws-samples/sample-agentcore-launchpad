@@ -52,6 +52,28 @@ export const hasInsightTrees = (insights: InsightTrees | null | undefined): bool
   (insights?.userIntents?.length ?? 0) > 0 ||
   (insights?.executionSummaries?.length ?? 0) > 0;
 
+/** Ledger run states. `stopped` is terminal like `completed`/`failed` — an
+ *  operator stop (queue cancel, replay abort, or AWS StopBatchEvaluation with
+ *  the sessions judged so far kept). */
+export type EvaluationRunStatus =
+  | "queued"
+  | "invoking"
+  | "waiting"
+  | "evaluating"
+  | "completed"
+  | "failed"
+  | "stopped";
+
+export const RUN_TERMINAL_STATUSES: ReadonlySet<EvaluationRunStatus> = new Set([
+  "completed",
+  "failed",
+  "stopped",
+]);
+
+/** Still queued / running — the only runs STOP applies to. */
+export const isActiveRun = (run: { status: EvaluationRunStatus }): boolean =>
+  !RUN_TERMINAL_STATUSES.has(run.status);
+
 export interface EvaluationRunInfo {
   id: string;
   agent_id: string;
@@ -60,7 +82,10 @@ export interface EvaluationRunInfo {
   dataset_name: string | null;
   mode: string;
   evaluators: string[];
-  status: string;
+  status: EvaluationRunStatus;
+  /** an operator stop is pending (in-memory flag; the row turns `stopped` once
+   *  the worker/poller observes it). Absent on older backends. */
+  stop_requested?: boolean;
   queue_position: number | null;
   scores: EvaluationScore[];
   insights: InsightTrees;

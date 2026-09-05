@@ -50,7 +50,7 @@ class EvalRun(Base):
     mode: Mapped[str] = mapped_column(String(12), default="evaluators")  # evaluators|insights
     evaluators: Mapped[list[str]] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String(16), default="queued")
-    # queued | invoking | waiting | evaluating | completed | failed
+    # queued | invoking | waiting | evaluating | completed | failed | stopped
     queue_position: Mapped[int] = mapped_column(default=0)
     session_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     batch_eval_id: Mapped[str | None] = mapped_column(String(80), default=None)

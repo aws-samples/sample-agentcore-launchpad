@@ -12,9 +12,10 @@ import {
   Markdown,
   Panel,
   StaleLink,
+  useToast,
   ViewHead,
 } from "../components";
-import type { AgentInfo } from "../lib/api";
+import type { AgentInfo, ChatSessionInfo } from "../lib/api";
 import { api, errorMessage } from "../lib/api";
 
 interface Message {
@@ -30,13 +31,6 @@ interface MemorySummary {
   /** Compound `<agent_id>__<human>` partition the summary was read from — the
    *  id the Memory console keys on, so the deep link needs it verbatim. */
   actor_id?: string;
-}
-
-interface SessionItem {
-  session_id: string;
-  turns: number;
-  last_at: string | null;
-  preview: string;
 }
 
 interface HistoryRow {
@@ -97,8 +91,17 @@ async function* sseEvents(res: Response): AsyncGenerator<{ event: string; data: 
   }
 }
 
+/** A managed Harness (deployed or imported) has no session-stop operation. */
+function isHarnessAgent(agent: AgentInfo | undefined): boolean {
+  if (!agent) return false;
+  if (agent.method === "harness") return true;
+  const discovery = agent.spec.discovery as { resource_type?: string } | undefined;
+  return agent.method === "discovered_runtime" && discovery?.resource_type === "harness";
+}
+
 export function Chat() {
   const { t } = useTranslation();
+  const toast = useToast();
   const { authRequired, username } = useAuth();
   const userLabel = (authRequired ? (username ?? "—") : "river").toUpperCase();
   // Cross-link entry (from Observability session detail): preselect the agent
@@ -116,7 +119,9 @@ export function Chat() {
   const [sessionId, setSessionId] = useState<string | null>(linkedSession);
   const [busy, setBusy] = useState(false);
   const [memory, setMemory] = useState<MemorySummary | null>(null);
-  const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [sessions, setSessions] = useState<ChatSessionInfo[]>([]);
+  // session id whose END SESSION request is in flight (one at a time)
+  const [ending, setEnding] = useState<string | null>(null);
   const [trace, setTrace] = useState<TraceInfo | null>(null);
   const [traceBusy, setTraceBusy] = useState(false);
   const [keys, setKeys] = useState<KeyInfo[]>([]);
@@ -184,8 +189,7 @@ export function Chat() {
 
   const loadSessions = async (aid: string) => {
     try {
-      const res = await fetch(`/api/chat/${aid}/sessions`);
-      if (res.ok) setSessions(((await res.json()) as { sessions: SessionItem[] }).sessions);
+      setSessions((await api.listChatSessions(aid)).sessions);
     } catch {
       /* history rail is best-effort */
     }
@@ -315,6 +319,24 @@ export function Chat() {
     setSearchParams(aid ? { agent: aid } : {}, { replace: true });
   };
 
+  // END SESSION: terminate the live AgentCore Runtime session (not just forget
+  // the id, which is all NEW SESSION does). The ledger row stays replayable.
+  const endSession = async (sid: string) => {
+    if (!agentId || ending) return;
+    setEnding(sid);
+    try {
+      const result = await api.stopChatSession(agentId, sid);
+      toast(t(result.already_ended ? "chatPage.endedAlready" : "chatPage.ended"), "good");
+      // the ended id must not receive the next prompt — same reset as NEW SESSION
+      if (sid === sessionId) newSession();
+      void loadSessions(agentId);
+    } catch (err) {
+      toast(errorMessage(err), "crit");
+    } finally {
+      setEnding(null);
+    }
+  };
+
   const loadTrace = async () => {
     if (!sessionId) return;
     setTraceBusy(true);
@@ -353,6 +375,22 @@ export function Chat() {
   };
 
   const agent = agents.find((a) => a.id === agentId);
+  const harness = isHarnessAgent(agent);
+  const currentEnded = Boolean(
+    sessionId && sessions.find((s) => s.session_id === sessionId)?.ended_at,
+  );
+  // One predicate for `disabled` and its reason (see Btn.disabledReason).
+  const endReason = (sid: string | null, ended: boolean): string | undefined =>
+    !sid
+      ? t("chatPage.endDisabledNoSession")
+      : harness
+        ? t("chatPage.endDisabledHarness")
+        : ended
+          ? t("chatPage.endDisabledEnded")
+          : ending
+            ? t("chatPage.endDisabledBusy")
+            : undefined;
+  const currentEndReason = endReason(sessionId, currentEnded);
 
   return (
     <section>
@@ -419,6 +457,14 @@ export function Chat() {
                 {t("chatPage.memoryOn")}
               </Chip>
               <Btn onClick={() => newSession()}>{t("chatPage.newSession")}</Btn>
+              <Btn
+                disabled={currentEndReason !== undefined}
+                disabledReason={currentEndReason}
+                onClick={() => sessionId && void endSession(sessionId)}
+                data-testid="end-session"
+              >
+                {ending && ending === sessionId ? "…" : t("chatPage.endSession")}
+              </Btn>
             </>
           }
           style={{ "--i": 0 } as CSSProperties}
@@ -500,22 +546,41 @@ export function Chat() {
               {sessions.length === 0 && (
                 <div className="empty">{t("chatPage.historyEmpty")}</div>
               )}
-              {sessions.map((s) => (
-                <button
-                  key={s.session_id}
-                  type="button"
-                  className={`histrow${s.session_id === sessionId ? " on" : ""}`}
-                  onClick={() => void restoreSession(s.session_id)}
-                >
-                  <span className="hp">
-                    {s.preview || `${s.session_id.slice(0, 20)}…`}
-                  </span>
-                  <span className="hm mono">
-                    {t("chatPage.historyTurns", { count: s.turns })} ·{" "}
-                    {(s.last_at ?? "").slice(5, 16).replace("T", " ")}
-                  </span>
-                </button>
-              ))}
+              {sessions.map((s) => {
+                const rowReason = endReason(s.session_id, Boolean(s.ended_at));
+                return (
+                  <div
+                    className="histrow-line"
+                    key={s.session_id}
+                    data-ended={s.ended_at ? "true" : undefined}
+                  >
+                    <button
+                      type="button"
+                      className={`histrow${s.session_id === sessionId ? " on" : ""}`}
+                      onClick={() => void restoreSession(s.session_id)}
+                    >
+                      <span className="hp">
+                        {s.preview || `${s.session_id.slice(0, 20)}…`}
+                      </span>
+                      <span className="hm mono">
+                        {t("chatPage.historyTurns", { count: s.turns })} ·{" "}
+                        {(s.last_at ?? "").slice(5, 16).replace("T", " ")}
+                        {s.ended_at && ` · ${t("chatPage.historyEnded")}`}
+                      </span>
+                    </button>
+                    <div className="histrow-act">
+                      <Btn
+                        disabled={rowReason !== undefined}
+                        disabledReason={rowReason}
+                        onClick={() => void endSession(s.session_id)}
+                        data-testid="history-end-session"
+                      >
+                        {ending === s.session_id ? "…" : t("chatPage.historyEnd")}
+                      </Btn>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </Panel>
           <div style={{ height: 14 }} />

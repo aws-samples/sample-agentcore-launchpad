@@ -80,7 +80,7 @@ as a bare `500 Internal Server Error` or as botocore's
 | `ValidationException` | 400 | `aws.validation` |
 | `AccessDeniedException`, `UnauthorizedException` | 403 | `aws.access_denied` |
 | `ThrottlingException`, `TooManyRequestsException`, `ServiceQuotaExceededException` | 429 | `aws.throttled` |
-| `ConflictException`, `ResourceInUseException` | 409 | `aws.conflict` |
+| `ConflictException`, `ResourceInUseException`, `RetryableConflictException` | 409 | `aws.conflict` |
 
 `message` is the AWS message with the botocore prefix stripped; `detail` is
 `{"aws_error_code": "<AWS code>", "operation": "<boto operation>"}`. Any other
@@ -92,6 +92,24 @@ the same status and `code`, but its `message` is a generic per-code sentence
 denied`, `AWS is throttling this request`, `AWS resource conflict`) and `detail`
 carries only `aws_error_code` — the raw AWS text names the deployment's role ARN,
 instance id and operation, which stay on the console side of the API-key boundary.
+
+## Console Agents API — versions and endpoints
+
+`GET /api/agents/{agent_id}/versions` is the read-only AWS view behind the agent
+detail's VERSIONS & ENDPOINTS panel. It follows every `nextToken` page of the two
+list operations for the agent's resource family and returns an allow-listed
+projection — no environment values, artifact locations, execution roles or
+authorizer configuration.
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/agents/{agent_id}/versions` | `{kind: runtime\|harness, resource_id, versions[{version, status, description, last_updated_at}], endpoints[{name, live_version, target_version, status, description, created_at, last_updated_at, failure_reason}], latest_version, ledger_version, canary_endpoints[]}` — `versions` newest first; `endpoints` with `DEFAULT` first then by name; `latest_version` is the highest version AWS reports and `ledger_version` the one the last Launchpad deploy recorded (`Agent.version`) — they may differ after an out-of-band update or a canary candidate mint; `canary_endpoints` lists the `stable`/`treatment` names still present. Resource family: `zip_runtime`/`studio`/`container` and imported rows whose `spec.discovery.resource_type` is absent or `runtime` → `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints`; `harness` and imported rows with `resource_type == "harness"` → `ListHarnessVersions` + `ListHarnessEndpoints` (harness versions carry no description). Never mutates anything |
+
+Error codes: `agent.not_found` (404, unknown id or another workspace's agent),
+`agent.no_resource` (409, the row has no AWS resource to ask about — deploy still
+running, failed first deploy, deleted, or a shape that is neither Runtime nor
+Harness; `message` is the human reason the panel shows). AWS `ClientError`s map to
+the standard 4xx envelope.
 
 ## Console Governance API
 
@@ -202,9 +220,11 @@ mode, and records the replaced ARN on the operation.
 ## Console Memory API
 
 `/api/memory/*` backs the read-only Memory console (console 05) over the shared
-`launchpad_memory` singleton. Every route is a read: there is no endpoint that
-writes events, deletes records, triggers extraction, or changes the memory
-resource. See [architecture.md](architecture.md#the-memory-console-console-05).
+`launchpad_memory` singleton. Every console route is a read: there is no endpoint
+that writes events, deletes records or triggers extraction. The one mutating
+surface — the `/api/memory/resources*` routes below, which manage the memory
+*resources* themselves — lives in a separate router (`routers/memory_resources.py`).
+See [architecture.md](architecture.md#the-memory-console-console-05).
 
 | Method | Path | Result |
 |---|---|---|
@@ -217,6 +237,16 @@ resource. See [architecture.md](architecture.md#the-memory-console-console-05).
 | `POST` | `/api/memory/records/search` | Semantic retrieval (`{query, actor_id, strategy_id?, namespace?, top_k}`) with relevance scores |
 | `GET` | `/api/memory/extraction-jobs` | Failed (retry-eligible) extraction jobs, filterable by `actor_id`/`session_id`/`strategy_id`/`status` — **not surfaced in the console**; AWS's `status` enum is `FAILED` only, so a healthy resource returns an empty list |
 
+Memory resource management (`?view=resources`):
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/memory/resources` | Every memory in the workspace's account/region, default first, each with the live agents whose spec pins it |
+| `POST` | `/api/memory/resources` | `CreateMemory` (`{name, description?, event_expiry_days?, strategies?, namespace_keys?}`) → `201` with the detail projection in `CREATING` state |
+| `GET` | `/api/memory/resources/{memory_id}` | Detail projection: description, status, event expiry, execution role, strategies, namespace keys |
+| `PUT` | `/api/memory/resources/{memory_id}` | `UpdateMemory` limited to `{description?, event_expiry_days?}` — at least one required (422 otherwise), `description` 1–4096 chars (it can be replaced, not cleared), `event_expiry_days` 7–365 (422 outside). Sends exactly `memoryId` + the given fields and never `namespaceKeys` (the API replaces that set wholesale); the reply is the detail projection read back with `GetMemory`. Not blocked by referencing agents or the platform default; unknown id → `404 aws.not_found` |
+| `DELETE` | `/api/memory/resources/{memory_id}` | `DeleteMemory`; `409 memory.platform_protected` for the workspace default, `409 memory.in_use` (with the agents) while a live agent's spec pins it |
+
 Every list route accepts and returns `next_token` (AWS pages at 100 items) and
 accepts `max_results` (clamped to 100) — nothing is capped silently. Namespace
 resolution order on `/records` and `/records/search`: an explicit `namespace`
@@ -226,6 +256,40 @@ Error codes: `memory.not_configured` (409, bootstrap has not run — except
 `/overview`, which instead returns `{"configured": false, …}` so the page can
 render a setup state), `memory.namespace_required` (400, no namespace could be
 derived), `memory.unavailable` (502, the underlying AWS call failed).
+
+## Console Chat API
+
+`/api/chat/*` backs the Chat playground over the same invoke chain as `/v1`
+(`app.services.invoke`). Sessions are AgentCore Runtime sessions: the id the
+console sends as `runtimeSessionId` is the one the ledger tracks.
+
+| Method | Path | Result |
+|---|---|---|
+| `POST` | `/api/chat/{agent_id}` | One turn as SSE (`meta` → `delta`/`tool`/`error` → `done`); `{prompt, session_id?}`, a missing id starts a new session |
+| `GET` | `/api/chat/{agent_id}/sessions` | Replayable sessions for the agent: `{session_id, actor_id, turns, last_at, ended_at, preview}` — `ended_at` is set once the console explicitly ended the runtime session, `null` while it is live or merely idle |
+| `GET` | `/api/chat/{agent_id}/history?session_id=` | The rendered thread items of one session, in replay order |
+| `POST` | `/api/chat/{agent_id}/sessions/{session_id}/stop` | **END SESSION** — data-plane `StopRuntimeSession(agentRuntimeArn, runtimeSessionId)` → `{session_id, ended: true, already_ended, ended_at}`. `already_ended: true` when AWS answered `ResourceNotFoundException` (the session had already ended or idle-expired) — a success, not an error. The ledger row is kept (history stays replayable) and stamped `ended_at`; a later turn posted under the same id starts a fresh runtime session and clears it. Only runtime-backed agents qualify (`zip_runtime`, `studio`, `container`, discovered runtimes); a managed Harness — deployed or imported — has no session-stop operation and answers 409 `chat.session_stop_unsupported` with `detail.reason_code` (`harness`). A session of another agent or workspace is 404 `chat.session_not_found`. A `RetryableConflictException` that outlives botocore's retries is 409 `aws.conflict` |
+
+Ending is explicit: NEW SESSION in the console only forgets the id locally, so the
+runtime session it leaves behind idles out on its own. END SESSION is what to press
+after a re-publish — AgentCore pins a live session to the version that first
+served it, so validation of the new version needs a fresh session.
+
+## Console Evaluation Runs API
+
+`/api/eval/runs` drives batch evaluations / insights analyses through the bounded
+run queue (`eval_max_concurrent_runs`, capped at the 5 active-batch-evaluations
+account quota). Run status: `queued → invoking → waiting → evaluating → completed |
+failed | stopped`. Every row carries `stop_requested` (an operator stop is pending
+on a run whose batch is still STOPPING).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/eval/runs?limit&offset&mode&agent_id` | Newest-first page `{runs, total, limit, offset}` |
+| `GET` | `/api/eval/runs/{run_id}` | One run (scores / insight trees / `batch_eval_id` / `error` / `stop_requested`) |
+| `POST` | `/api/eval/runs` | Start a run (exactly one scope: `dataset_id` \| `cloud_dataset_id` \| `session_ids` \| `lookback_hours`) → 201 |
+| `POST` | `/api/eval/runs/{run_id}/stop` | **Stop an active run** → 202 with the run. A run whose batch exists on AWS (`batch_eval_id` set) is stopped with `StopBatchEvaluation`: the batch goes `STOPPING → STOPPED`, the sessions already judged keep their results, and the poller records the run as `stopped` with those partial scores / insight trees and `error = "stopped by operator"`. A run still `queued` is cancelled locally (the worker skips it, AWS is never called) and returns `stopped` at once. A run replaying its dataset or waiting for telemetry (no batch yet) stops between prompts and never calls `StartBatchEvaluation`. Terminal runs (`completed` / `failed` / `stopped`) → 409 `run.not_active`; unknown → 404 `run.not_found`. `DeleteBatchEvaluation` is deliberately not exposed — the ledger keeps the partial results AWS would drop |
+| `GET` | `/api/eval/queue` | `{running, queued, locked, max_concurrency}` — cancelled runs leave the queue immediately, so the count covers active runs only |
 
 ## Console Online Evaluation API
 

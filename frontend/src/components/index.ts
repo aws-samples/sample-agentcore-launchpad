@@ -19,4 +19,5 @@ export { useTablePage } from "./useTablePage";
 export { Panel } from "./Panel";
 export { StatTile } from "./StatTile";
 export { StageCard } from "./StageCard";
+export { VersionsPanel } from "./VersionsPanel";
 export { ViewHead } from "./ViewHead";

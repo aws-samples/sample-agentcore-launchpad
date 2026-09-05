@@ -2,21 +2,24 @@
 
 The memory *console* router is read-only by construction (a structural test pins
 that); this router owns the lifecycle of the AgentCore Memory resources
-themselves: list the account's memories, create one, delete one. Agents pick a
-memory at creation time via ``spec.memory.memory_id``; the workspace's bootstrap
-memory is the default for agents that pick none, so it is delete-protected here
-and a memory referenced by a live agent's spec refuses deletion too.
+themselves: list the account's memories, create one, edit one's description /
+event expiry, delete one. Agents pick a memory at creation time via
+``spec.memory.memory_id``; the workspace's bootstrap memory is the default for
+agents that pick none, so it is delete-protected here and a memory referenced by
+a live agent's spec refuses deletion too. Editing is never blocked: a new
+description or expiry is harmless to the agents on the memory (the console
+merely names them in its confirm dialog).
 """
 
 import re
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.errors import AppError
+from app.core.errors import AppError, mapped_aws_error
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import memory_admin
@@ -74,14 +77,40 @@ class CreateMemoryResourceRequest(BaseModel):
         return keys
 
 
+class UpdateMemoryResourceRequest(BaseModel):
+    """UpdateMemory surface the console exposes — description and/or event expiry.
+
+    Both optional, at least one required. Strategies, namespace keys, execution
+    role, indexed keys and stream delivery are deliberately absent: the service
+    never forwards them (``namespaceKeys`` in particular replaces the existing set
+    wholesale, so it must not be echoed — see ``memory_admin.update_memory_resource``).
+    """
+
+    # UpdateMemory's own description shape is 1–4096 chars: an existing
+    # description cannot be cleared through the API, only replaced
+    description: str | None = Field(default=None, min_length=1, max_length=4096)
+    event_expiry_days: int | None = Field(default=None, ge=7, le=365)
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "UpdateMemoryResourceRequest":
+        if self.description is None and self.event_expiry_days is None:
+            raise ValueError("provide description and/or event_expiry_days")
+        return self
+
+
 def _guard(fn, *args, **kwargs):
     """Map AWS/botocore failures onto the ``memory.unavailable`` envelope
-    (mirrors ``routers/memory``); typed domain errors pass through."""
+    (mirrors ``routers/memory``); typed domain errors pass through, and a
+    ``ClientError`` the console can translate (``ResourceNotFoundException`` for
+    an unknown memory id, ``AccessDeniedException``, …) is left to the global
+    handler in ``app.core.errors`` so the toast reads "not found", not boto text."""
     try:
         return fn(*args, **kwargs)
     except AppError:
         raise
     except Exception as exc:  # botocore ClientError, endpoint errors, ...
+        if mapped_aws_error(exc):
+            raise
         raise AppError(
             "memory.unavailable", f"memory operation failed: {exc}", status_code=502
         ) from exc
@@ -140,6 +169,28 @@ def get_resource(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     return _guard(memory_admin.get_memory_resource, ws.context, memory_id)
+
+
+@router.put("/{memory_id}")
+def update_resource(
+    memory_id: str,
+    req: UpdateMemoryResourceRequest,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Edit description / event expiry; the reply is the refreshed detail.
+
+    No in-use or platform-default guard here, unlike delete: neither field can
+    break the agents writing to the memory. The console lists those agents in its
+    confirm dialog (from the list route's ``agents`` annotation) so the operator
+    knows whom a shorter expiry window reaches.
+    """
+    return _guard(
+        memory_admin.update_memory_resource,
+        ws.context,
+        memory_id,
+        description=req.description,
+        event_expiry_days=req.event_expiry_days,
+    )
 
 
 @router.delete("/{memory_id}")

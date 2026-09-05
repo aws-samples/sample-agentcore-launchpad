@@ -1,7 +1,7 @@
 /** Typed client for the Launchpad backend. */
 
 import i18n from "../i18n";
-import type { InsightTrees } from "./evaluation";
+import type { EvaluationRunInfo, InsightTrees } from "./evaluation";
 import type { ModelSource } from "./models";
 
 export interface StageInfo {
@@ -55,6 +55,59 @@ export interface AgentInfo {
   deployment?: DeploymentInfo;
   deployments?: DeploymentInfo[];
   revision?: number;
+}
+
+/** One row of `GET /api/chat/{agent_id}/sessions`. */
+export interface ChatSessionInfo {
+  session_id: string;
+  actor_id: string;
+  turns: number;
+  last_at: string | null;
+  /** Set once the console explicitly ended the runtime session; `null` while live/idle. */
+  ended_at: string | null;
+  preview: string;
+}
+
+/** `POST /api/chat/{agent_id}/sessions/{session_id}/stop` */
+export interface ChatSessionStopResult {
+  session_id: string;
+  ended: boolean;
+  /** AWS no longer knew the session (already ended or idle-expired) — still a success. */
+  already_ended: boolean;
+  ended_at: string | null;
+}
+
+/** GET /api/agents/{id}/versions — the AWS-side version + endpoint set of one
+ *  Runtime- or Harness-backed agent (read-only, allow-list projected). */
+export interface AgentVersionRow {
+  version: string | null;
+  status: string | null;
+  description: string | null;
+  last_updated_at: string | null;
+}
+
+export interface AgentEndpointRow {
+  name: string | null;
+  live_version: string | null;
+  target_version: string | null;
+  status: string | null;
+  description: string | null;
+  created_at: string | null;
+  last_updated_at: string | null;
+  failure_reason: string | null;
+}
+
+export interface AgentVersionsInfo {
+  kind: "runtime" | "harness";
+  resource_id: string;
+  versions: AgentVersionRow[];
+  endpoints: AgentEndpointRow[];
+  /** highest version AWS reports */
+  latest_version: string | null;
+  /** the version the last Launchpad deploy recorded (Agent.version) */
+  ledger_version: string | null;
+  /** names among `stable`/`treatment` still present — canary leftovers */
+  canary_endpoints: string[];
 }
 
 export interface RuntimeDiscoveryCandidate {
@@ -1041,6 +1094,51 @@ export interface MemoryResourceRow {
 export interface MemoryResourceList {
   items: MemoryResourceRow[];
   default_id: string | null;
+}
+
+/** One long-term strategy as `GET/PUT /api/memory/resources/{id}` project it. */
+export interface MemoryResourceStrategy {
+  strategy_id: string | null;
+  name: string | null;
+  type: string | null;
+  status: string | null;
+  namespaces: string[];
+}
+
+/** Flexible namespace variable key as defined on the resource. */
+export interface MemoryResourceNamespaceKey {
+  key: string | null;
+  allowed_values: string[] | null;
+  regex_pattern: string | null;
+}
+
+/** Full detail of one memory resource (`GET /api/memory/resources/{id}`; also the
+ *  reply of `POST /api/memory/resources` and `PUT /api/memory/resources/{id}`).
+ *  No `agents` here — that annotation exists on the list rows only. */
+export interface MemoryResourceDetail {
+  id: string | null;
+  arn: string | null;
+  name: string | null;
+  description: string | null;
+  status: string | null;
+  failure_reason: string | null;
+  event_expiry_days: number | null;
+  execution_role_arn: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  is_default: boolean;
+  strategies: MemoryResourceStrategy[];
+  namespace_keys: MemoryResourceNamespaceKey[];
+}
+
+/** `PUT /api/memory/resources/{id}` — both optional, at least one required.
+ *  Only these two fields are editable from the console: strategies, namespace
+ *  keys, execution role, indexed keys and stream delivery are never sent. */
+export interface MemoryResourceUpdateInput {
+  /** 1–4096 chars — UpdateMemory can replace a description but never clear it */
+  description?: string;
+  /** 7–365 days */
+  event_expiry_days?: number;
 }
 
 export interface MemoryResourceCreateInput {
@@ -2173,6 +2271,14 @@ export interface RecommendProviderInfo {
 
 export const api = {
   authStatus: () => request<AuthStatus>("/api/auth/status"),
+  /** `POST /api/eval/runs/{id}/stop` (202). With a batch on AWS: StopBatchEvaluation,
+   *  the row follows STOPPING → STOPPED and comes back `stop_requested`; a queued run
+   *  is cancelled locally and returns `stopped` at once. Terminal runs → 409
+   *  `run.not_active`. */
+  stopEvaluationRun: (runId: string) =>
+    request<EvaluationRunInfo>(`/api/eval/runs/${encodeURIComponent(runId)}/stop`, {
+      method: "POST",
+    }),
   experimentProviders: () =>
     request<{ providers: RecommendProviderInfo[] }>("/api/experiments/providers"),
   login: (username: string, password: string) =>
@@ -2313,6 +2419,13 @@ export const api = {
       body: JSON.stringify(spec),
     }),
   listAgents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
+  listChatSessions: (agentId: string) =>
+    request<{ sessions: ChatSessionInfo[] }>(`/api/chat/${encodeURIComponent(agentId)}/sessions`),
+  stopChatSession: (agentId: string, sessionId: string) =>
+    request<ChatSessionStopResult>(
+      `/api/chat/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/stop`,
+      { method: "POST" },
+    ),
   discoverRuntimes: () =>
     request<RuntimeDiscoveryResponse>("/api/agents/discovery"),
   importRuntimes: (runtimeIds: string[], harnessIds: string[] = []) =>
@@ -2333,6 +2446,7 @@ export const api = {
   getOverview: () => request<OverviewInfo>("/api/overview"),
   overviewOnlineQuality: () => request<OnlineQuality>("/api/overview/online-quality"),
   getAgent: (id: string) => request<AgentInfo>(`/api/agents/${id}`),
+  agentVersions: (id: string) => request<AgentVersionsInfo>(`/api/agents/${id}/versions`),
   getJob: (id: string) => request<JobInfo>(`/api/jobs/${id}`),
   listRuntimeCanaries: () =>
     request<{ canaries: RuntimeCanaryInfo[] }>("/api/runtime-canaries"),
@@ -2621,10 +2735,19 @@ export const api = {
     }),
   memoryResources: () => request<MemoryResourceList>("/api/memory/resources"),
   memoryResourceCreate: (input: MemoryResourceCreateInput) =>
-    request<MemoryResourceRow>("/api/memory/resources", {
+    request<MemoryResourceDetail>("/api/memory/resources", {
       method: "POST",
       body: JSON.stringify(input),
     }),
+  memoryResource: (memoryId: string) =>
+    request<MemoryResourceDetail>(
+      `/api/memory/resources/${encodeURIComponent(memoryId)}`,
+    ),
+  memoryResourceUpdate: (memoryId: string, input: MemoryResourceUpdateInput) =>
+    request<MemoryResourceDetail>(
+      `/api/memory/resources/${encodeURIComponent(memoryId)}`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
   memoryResourceDelete: (memoryId: string) =>
     request<{ deleted: boolean; id: string }>(
       `/api/memory/resources/${encodeURIComponent(memoryId)}`,

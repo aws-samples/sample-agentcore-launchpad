@@ -403,6 +403,11 @@ td.chipcell{min-width:170px}
 .histrow.on{background:rgba(255,176,0,.07);box-shadow:inset 2px 0 0 var(--amber)}
 .histrow .hp{font-size:12px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .histrow .hm{font-size:9.5px;color:var(--ink-3);letter-spacing:.06em}
+.histrow-line{display:flex;align-items:center;border-bottom:1px solid var(--grid)}
+.histrow-line .histrow{flex:1;min-width:0;border-bottom:0}
+.histrow-act{display:flex;align-items:center;flex:none;padding-inline-end:10px}
+.histrow-act .btn{padding:4px 8px;font-size:9.5px}
+.histrow-act .btn-hint{max-width:18ch;font-size:9px;margin-inline-end:6px}
 .chatbar{display:flex;gap:10px;padding:13px 16px;border-top:1px solid var(--line)}
 .chatbar .input{flex:1;background:#0E1210;border:1px solid var(--line-2);padding:11px 14px;color:var(--ink);font-size:13px}
 .chatbar .input::placeholder{color:var(--ink-3)}

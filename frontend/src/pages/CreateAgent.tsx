@@ -16,6 +16,7 @@ import {
   Pager,
   Panel,
   useToast,
+  VersionsPanel,
   ViewHead,
 } from "../components";
 import type {
@@ -2339,6 +2340,12 @@ const deployLock = !canDeploy
               reloadAgents();
             }}
           />
+          {detailsMode && launch && (
+            <>
+              <div style={{ height: 14 }} />
+              <VersionsPanel agentId={launch.agentId} />
+            </>
+          )}
           {detailsMode && detailConversion && (
             <>
               <div style={{ height: 14 }} />

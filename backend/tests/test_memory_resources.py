@@ -3,7 +3,9 @@
 AWS is stubbed at the client-factory boundary (``memory_admin.control_client``),
 mirroring ``test_memory_console``. These pin the lifecycle surface the console's
 resource module depends on: list marks the workspace default, create maps the
-strategy picks onto the CreateMemory shape, and delete is guarded twice — the
+strategy picks onto the CreateMemory shape, update sends UpdateMemory exactly
+``memoryId`` + the changed fields (never ``namespaceKeys``, which the API
+replaces wholesale) and reads the detail back, and delete is guarded twice — the
 bootstrap memory is protected, and a memory a live agent's spec pins refuses
 deletion.
 
@@ -15,6 +17,7 @@ The read-only stance of the *console* router is untouched: mutations live in
 from datetime import UTC, datetime
 
 import pytest
+from botocore.exceptions import ClientError
 
 import app.services.memory_admin as ma
 from app.core.db import SessionLocal
@@ -74,6 +77,17 @@ class StubControl:
             kw,
             {"memory": {"id": f"{kw['name']}-NEW00001", "status": "CREATING", **kw}},
         )
+
+    def update_memory(self, **kw):
+        # the real service applies the change; mirror that so the GetMemory
+        # readback the route relies on reflects it (and bumps updatedAt)
+        memory = self.memory["memory"]
+        if "description" in kw:
+            memory["description"] = kw["description"]
+        if "eventExpiryDuration" in kw:
+            memory["eventExpiryDuration"] = kw["eventExpiryDuration"]
+        memory["updatedAt"] = datetime(2026, 9, 5, 9, 30, tzinfo=UTC)
+        return self._reply("update_memory", kw, {"memory": dict(memory)})
 
     def delete_memory(self, **kw):
         return self._reply("delete_memory", kw, {"memoryId": kw["memoryId"]})
@@ -275,6 +289,137 @@ def test_create_rejects_invalid_namespace_keys_before_aws(
     )
     assert res.status_code == 422
     assert control.calls == []
+
+
+# --------------------------------------------------------------------------- #
+# Update
+# --------------------------------------------------------------------------- #
+
+UPDATE_URL = f"/api/memory/resources/{MEM_ID}"
+
+
+def test_update_description_only_sends_exactly_memory_id_and_description(
+    client, configured, monkeypatch
+):
+    control = wire(monkeypatch)
+    res = client.put(UPDATE_URL, json={"description": "shared HR memory"})
+    assert res.status_code == 200
+    kw = control.kwargs_for("update_memory")
+    # the exact key set: no namespaceKeys (the API replaces the set wholesale —
+    # any key omitted is REMOVED), no memoryStrategies, no execution role
+    assert set(kw) == {"memoryId", "description"}
+    assert kw == {"memoryId": MEM_ID, "description": "shared HR memory"}
+
+
+def test_update_expiry_only_sends_exactly_memory_id_and_expiry(
+    client, configured, monkeypatch
+):
+    control = wire(monkeypatch)
+    res = client.put(UPDATE_URL, json={"event_expiry_days": 90})
+    assert res.status_code == 200
+    kw = control.kwargs_for("update_memory")
+    assert set(kw) == {"memoryId", "eventExpiryDuration"}
+    assert kw["eventExpiryDuration"] == 90
+
+
+def test_update_both_fields_and_returns_the_refreshed_detail(
+    client, configured, monkeypatch
+):
+    """The reply is the GetMemory readback *after* UpdateMemory — the same
+    projection as ``GET /api/memory/resources/{id}`` — not the update echo."""
+    control = wire(monkeypatch)
+    res = client.put(UPDATE_URL, json={"description": "renamed", "event_expiry_days": 7})
+    assert res.status_code == 200
+
+    kw = control.kwargs_for("update_memory")
+    assert set(kw) <= {"memoryId", "description", "eventExpiryDuration", "clientToken"}
+    assert set(kw) == {"memoryId", "description", "eventExpiryDuration"}
+    assert "namespaceKeys" not in kw and "memoryStrategies" not in kw
+
+    ops = [op for op, _ in control.calls]
+    assert ops == ["update_memory", "get_memory"]
+    assert control.kwargs_for("get_memory") == {"memoryId": MEM_ID}
+
+    body = res.json()
+    assert body["id"] == MEM_ID
+    assert body["description"] == "renamed"
+    assert body["event_expiry_days"] == 7
+    assert body["updated_at"] == "2026-09-05T09:30:00+00:00"
+    assert body["is_default"] is True
+    # same shape as the GET detail route
+    assert body == client.get(UPDATE_URL).json()
+
+
+@pytest.mark.parametrize("days", [6, 366])
+def test_update_rejects_expiry_outside_7_to_365_before_aws(
+    client, configured, monkeypatch, days
+):
+    control = wire(monkeypatch)
+    res = client.put(UPDATE_URL, json={"event_expiry_days": days})
+    assert res.status_code == 422
+    assert control.calls == []
+
+
+def test_update_requires_at_least_one_field(client, configured, monkeypatch):
+    control = wire(monkeypatch)
+    res = client.put(UPDATE_URL, json={})
+    assert res.status_code == 422
+    assert control.calls == []
+
+
+def test_update_rejects_an_empty_description(client, configured, monkeypatch):
+    """UpdateMemory's description shape is 1–4096 chars: it can be replaced,
+    never cleared — surfaced as a 422 rather than a mid-request ValidationException."""
+    control = wire(monkeypatch)
+    res = client.put(UPDATE_URL, json={"description": ""})
+    assert res.status_code == 422
+    assert control.calls == []
+
+
+def test_update_unknown_memory_maps_to_the_not_found_envelope(
+    client, configured, monkeypatch
+):
+    class Missing(StubControl):
+        def update_memory(self, **kw):
+            raise ClientError(
+                {"Error": {"Code": "ResourceNotFoundException", "Message": "no such memory"}},
+                "UpdateMemory",
+            )
+
+    wire(monkeypatch, Missing())
+    res = client.put("/api/memory/resources/ghost-000000", json={"description": "x"})
+    assert res.status_code == 404
+    assert res.json()["code"] == "aws.not_found"
+
+
+def test_update_is_not_blocked_by_referencing_agents_or_the_default(
+    client, configured, monkeypatch
+):
+    """Unlike delete, edit has no 409 guard: a new description or expiry cannot
+    break the agents on the memory (the console names them in its confirm)."""
+    control = wire(monkeypatch)
+    make_agent(memory_id="team_notes-XYZ789")
+    control.memory["memory"]["id"] = "team_notes-XYZ789"
+    res = client.put(
+        "/api/memory/resources/team_notes-XYZ789", json={"event_expiry_days": 14}
+    )
+    assert res.status_code == 200
+    assert control.kwargs_for("update_memory") == {
+        "memoryId": "team_notes-XYZ789",
+        "eventExpiryDuration": 14,
+    }
+    # the platform default is editable too (only delete protects it)
+    control.memory["memory"]["id"] = MEM_ID
+    assert client.put(UPDATE_URL, json={"description": "default memory"}).status_code == 200
+
+
+def test_update_aws_failure_stays_the_memory_unavailable_envelope(
+    client, configured, monkeypatch
+):
+    wire(monkeypatch, StubControl(fail="update_memory"))
+    res = client.put(UPDATE_URL, json={"description": "x"})
+    assert res.status_code == 502
+    assert res.json()["code"] == "memory.unavailable"
 
 
 # --------------------------------------------------------------------------- #

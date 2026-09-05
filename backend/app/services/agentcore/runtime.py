@@ -264,6 +264,36 @@ def delete_runtime_endpoint(client: Any, *, runtime_id: str, endpoint_name: str)
     )
 
 
+def list_runtime_versions(client: Any, runtime_id: str) -> list[dict[str, Any]]:
+    """Every immutable version of one runtime, across all ListAgentRuntimeVersions
+    pages. Summaries carry {agentRuntimeVersion, status, description,
+    lastUpdatedAt, …}; the caller projects — nothing here filters."""
+    versions: list[dict[str, Any]] = []
+    kwargs: dict[str, Any] = {"agentRuntimeId": runtime_id, "maxResults": 100}
+    while True:
+        page = client.list_agent_runtime_versions(**kwargs)
+        versions.extend(page.get("agentRuntimes", []))
+        token = page.get("nextToken")
+        if not token:
+            return versions
+        kwargs["nextToken"] = token
+
+
+def list_runtime_endpoints(client: Any, runtime_id: str) -> list[dict[str, Any]]:
+    """Every endpoint of one runtime (DEFAULT + named), across all
+    ListAgentRuntimeEndpoints pages. Summaries carry {name, liveVersion,
+    targetVersion, status, description, createdAt, lastUpdatedAt, …}."""
+    endpoints: list[dict[str, Any]] = []
+    kwargs: dict[str, Any] = {"agentRuntimeId": runtime_id, "maxResults": 100}
+    while True:
+        page = client.list_agent_runtime_endpoints(**kwargs)
+        endpoints.extend(page.get("runtimeEndpoints", []))
+        token = page.get("nextToken")
+        if not token:
+            return endpoints
+        kwargs["nextToken"] = token
+
+
 def wait_endpoint_ready(
     client: Any,
     *,
@@ -514,6 +544,34 @@ def invoke_runtime_text(
         if event["event"] == "delta"
     ]
     return {"text": "".join(parts), "session_id": session_id}
+
+
+def stop_runtime_session(
+    client: Any,
+    *,
+    runtime_arn: str,
+    session_id: str,
+    qualifier: str | None = None,
+) -> dict[str, Any]:
+    """Data-plane ``StopRuntimeSession``: end one live runtime session now.
+
+    Terminates the session's microVM and any streaming response still in flight,
+    so the next turn under a fresh id starts on the runtime's *current* version
+    (an existing session stays pinned to the version that first served it).
+    ``ResourceNotFoundException`` — the session already ended or idle-expired —
+    is the caller's to interpret; here it propagates unchanged.
+    """
+    params: dict[str, Any] = {
+        "agentRuntimeArn": runtime_arn,
+        "runtimeSessionId": session_id,
+    }
+    if qualifier:
+        params["qualifier"] = qualifier
+    response = client.stop_runtime_session(**params)
+    return {
+        "session_id": response.get("runtimeSessionId", session_id),
+        "status_code": response.get("statusCode"),
+    }
 
 
 def a2a_result_text(result: dict[str, Any]) -> str:
