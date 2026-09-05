@@ -560,6 +560,13 @@ export interface GovernanceGatewaySummary {
   updated_at: string | null;
 }
 
+export type GovernanceTargetSyncBlocker =
+  | "not_mcp_server"
+  | "static_tool_schema"
+  | "pending_auth"
+  | "synchronizing"
+  | "not_ready";
+
 export interface GovernanceGatewayTarget {
   id: string;
   name: string;
@@ -567,6 +574,10 @@ export interface GovernanceGatewayTarget {
   status_reasons: string[];
   description: string;
   listing_mode: string | null;
+  last_synchronized_at: string | null;
+  /** Server-derived SynchronizeGatewayTargets eligibility; never re-derive AWS rules here. */
+  synchronizable: boolean;
+  not_synchronizable_reason: GovernanceTargetSyncBlocker | null;
 }
 
 export interface GovernanceGatewayAction {
@@ -2671,6 +2682,11 @@ export const api = {
     request<GovernanceRateLimitDeleteResult>(
       `${governanceGatewayPath(gatewayId)}/rate-limits/${encodeURIComponent(rateLimitId)}`,
       { method: "DELETE" },
+    ),
+  synchronizeGovernanceTarget: (gatewayId: string, targetId: string) =>
+    request<GovernanceGatewayTarget>(
+      `${governanceGatewayPath(gatewayId)}/targets/${encodeURIComponent(targetId)}/synchronize`,
+      { method: "POST" },
     ),
   governanceAudit: (gatewayId: string) =>
     request<GovernanceAuditResponse>(`${governanceGatewayPath(gatewayId)}/audit`),

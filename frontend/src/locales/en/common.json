@@ -841,7 +841,9 @@
       "saveDraft": "SAVE DRAFT",
       "syncRegistry": "SYNC CHANGES",
       "unmanage": "UNMANAGE",
-      "useGenerated": "USE GENERATED CEDAR"
+      "useGenerated": "USE GENERATED CEDAR",
+      "sync": "SYNC",
+      "syncing": "SYNCING…"
     },
     "states": {
       "attachable": "HARNESS ATTACHABLE",
@@ -916,7 +918,8 @@
       "targets": "TARGETS + EXACT ACTIONS",
       "listingMode": "LISTING MODE",
       "actions": "ACTIONS",
-      "noTargets": "NO TARGETS FOUND"
+      "noTargets": "NO TARGETS FOUND",
+      "lastSync": "LAST SYNC"
     },
     "models": {
       "allowlist": "ALLOWLIST",
@@ -1192,7 +1195,20 @@
     },
     "messages": {
       "copied": "Copied",
-      "requestAccepted": "Governance operation accepted"
+      "requestAccepted": "Governance operation accepted",
+      "targetSyncAccepted": "Synchronization of {{name}} accepted — the target is SYNCHRONIZING"
+    },
+    "targetSync": {
+      "hint": "Re-fetch the tool list from the MCP server (SynchronizeGatewayTargets)",
+      "blockers": {
+        "notManaged": "manage the Gateway first",
+        "not_mcp_server": "only MCP-server targets can be synchronized",
+        "static_tool_schema": "this target uses a static tool schema",
+        "pending_auth": "complete the pending authorization first",
+        "synchronizing": "synchronization already in progress",
+        "not_ready": "wait until the target settles",
+        "busy": "another operation is in progress"
+      }
     }
   },
   "skillLab": {

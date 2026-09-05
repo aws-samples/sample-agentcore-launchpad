@@ -41,6 +41,8 @@ RESOURCE_ID = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 OPERATION_ID = Path(pattern=r"^[a-f0-9]{32}$")
 # AWS rateLimitId: 2-64 chars, dots allowed (unlike policy/target ids)
 RATE_LIMIT_ID = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}[A-Za-z0-9]$")
+# AWS targetId: exactly 10 alphanumerics
+TARGET_ID = Path(pattern=r"^[0-9a-zA-Z]{10}$")
 
 
 @router.get("/governance/gateways")
@@ -324,6 +326,23 @@ def delete_gateway_rate_limit(
 ) -> dict[str, Any]:
     return governance_service.delete_rate_limit(
         db, control_client(ws.context), ws.id, gateway_id, rate_limit_id
+    )
+
+
+@router.post(
+    "/governance/gateways/{gateway_id}/targets/{target_id}/synchronize",
+    status_code=202,
+)
+def synchronize_gateway_target(
+    gateway_id: str = GATEWAY_ID,
+    target_id: str = TARGET_ID,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    # SynchronizeGatewayTargets answers 202 and the target moves to SYNCHRONIZING;
+    # the console polls the gateway detail (no local operation row) for the outcome.
+    return governance_service.synchronize_target(
+        db, control_client(ws.context), ws.id, gateway_id, target_id
     )
 
 

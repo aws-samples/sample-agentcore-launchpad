@@ -841,7 +841,9 @@
       "saveDraft": "保存草稿",
       "syncRegistry": "同步变更",
       "unmanage": "取消纳管",
-      "useGenerated": "采用生成的 CEDAR"
+      "useGenerated": "采用生成的 CEDAR",
+      "sync": "同步",
+      "syncing": "同步中…"
     },
     "states": {
       "attachable": "HARNESS 可挂载",
@@ -916,7 +918,8 @@
       "targets": "目标与精确动作",
       "listingMode": "列举模式",
       "actions": "动作",
-      "noTargets": "未找到目标"
+      "noTargets": "未找到目标",
+      "lastSync": "上次同步"
     },
     "models": {
       "allowlist": "白名单",
@@ -1192,7 +1195,20 @@
     },
     "messages": {
       "copied": "已复制",
-      "requestAccepted": "治理操作已受理"
+      "requestAccepted": "治理操作已受理",
+      "targetSyncAccepted": "已受理 {{name}} 的同步请求，目标进入 SYNCHRONIZING 状态"
+    },
+    "targetSync": {
+      "hint": "从 MCP 服务器重新拉取工具列表（SynchronizeGatewayTargets）",
+      "blockers": {
+        "notManaged": "请先纳管该 Gateway",
+        "not_mcp_server": "仅 MCP 服务器目标可同步",
+        "static_tool_schema": "该目标使用静态工具 schema",
+        "pending_auth": "请先完成待处理的授权",
+        "synchronizing": "同步已在进行中",
+        "not_ready": "请等待目标状态稳定",
+        "busy": "另一项操作正在进行"
+      }
     }
   },
   "skillLab": {

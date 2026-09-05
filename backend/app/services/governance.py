@@ -576,7 +576,7 @@ def _current_rate_limit(control: Any, gateway_id: str, rate_limit_id: str) -> di
         return {}
 
 
-def _journaled_rate_limit_call(
+def _journaled_control_call(
     db: Session,
     *,
     workspace_id: str,
@@ -586,7 +586,7 @@ def _journaled_rate_limit_call(
     requested: dict[str, Any],
     call: Callable[[], Any],
 ) -> dict[str, Any]:
-    """Run one synchronous rate-limit mutation inside a ``policy_changes`` row.
+    """Run one synchronous control-plane mutation inside a ``policy_changes`` row.
 
     Unlike the policy mutations there is no 202/operation hop: the row is written
     as ``running`` before the call and closed as ``succeeded``/``failed`` right
@@ -637,7 +637,7 @@ def create_rate_limit(
         "entries": entries,
         "description": request.description,
     }
-    response = _journaled_rate_limit_call(
+    response = _journaled_control_call(
         db,
         workspace_id=workspace_id,
         gateway=gateway,
@@ -678,7 +678,7 @@ def update_rate_limit(
         dimension_keys = list(_entry_dimensions(request.entries[0])) if request.entries else []
     entries = validate_rate_limit_spec(dimension_keys, list(request.entries), request.description)
     requested = {"entries": entries, "description": request.description}
-    response = _journaled_rate_limit_call(
+    response = _journaled_control_call(
         db,
         workspace_id=workspace_id,
         gateway=gateway,
@@ -705,7 +705,7 @@ def delete_rate_limit(
 ) -> dict[str, Any]:
     gateway = _require_managed(control, gateway_id)
     before = _current_rate_limit(control, gateway_id, rate_limit_id)
-    response = _journaled_rate_limit_call(
+    response = _journaled_control_call(
         db,
         workspace_id=workspace_id,
         gateway=gateway,
@@ -926,6 +926,101 @@ def external_tools_list_command(
     )
 
 
+# Target statuses SynchronizeGatewayTargets accepts. CREATING/UPDATING/DELETING are
+# transient, SYNCHRONIZING is already in flight, and the three *_PENDING_AUTH
+# states are refused by the service until the operator completes authorization.
+SYNCHRONIZABLE_TARGET_STATUSES = frozenset(
+    {"READY", "SYNCHRONIZE_UNSUCCESSFUL", "UPDATE_UNSUCCESSFUL", "FAILED"}
+)
+PENDING_AUTH_TARGET_STATUSES = frozenset(
+    {"CREATE_PENDING_AUTH", "UPDATE_PENDING_AUTH", "SYNCHRONIZE_PENDING_AUTH"}
+)
+
+
+def _mcp_server_config(target: dict[str, Any]) -> dict[str, Any] | None:
+    mcp = (target.get("targetConfiguration") or {}).get("mcp") or {}
+    server = mcp.get("mcpServer")
+    return server if isinstance(server, dict) else None
+
+
+def target_sync_gate(target: dict[str, Any]) -> str | None:
+    """Why SynchronizeGatewayTargets would refuse this target, or ``None``.
+
+    Mirrors the documented service rules so the console never re-derives them:
+    only MCP-server targets sync (Lambda/OpenAPI/Smithy/connector schemas are
+    static by construction), a static ``mcpToolSchema`` disables sync, and the
+    target must be settled (``READY`` or one of the unsuccessful/failed states).
+    """
+    server = _mcp_server_config(target)
+    if server is None:
+        return "not_mcp_server"
+    if server.get("mcpToolSchema") is not None:
+        return "static_tool_schema"
+    status = (target.get("status") or "").upper()
+    if status in PENDING_AUTH_TARGET_STATUSES:
+        return "pending_auth"
+    if status == "SYNCHRONIZING":
+        return "synchronizing"
+    if status not in SYNCHRONIZABLE_TARGET_STATUSES:
+        return "not_ready"
+    return None
+
+
+def _target_projection(target: dict[str, Any]) -> dict[str, Any]:
+    """The console's view of one GatewayTarget (detail + sync response)."""
+    server = _mcp_server_config(target) or {}
+    reason = target_sync_gate(target)
+    return {
+        "id": target.get("targetId"),
+        "name": target.get("name"),
+        "status": target.get("status"),
+        "status_reasons": target.get("statusReasons") or [],
+        "description": target.get("description") or "",
+        "listing_mode": server.get("listingMode"),
+        "last_synchronized_at": iso(target.get("lastSynchronizedAt")),
+        "synchronizable": reason is None,
+        "not_synchronizable_reason": reason,
+    }
+
+
+def synchronize_target(
+    db: Session,
+    control: Any,
+    workspace_id: str,
+    gateway_id: str,
+    target_id: str,
+) -> dict[str, Any]:
+    """Re-fetch a dynamic MCP-server target's tool list (SynchronizeGatewayTargets).
+
+    Gates run before any mutating AWS call: the Gateway must be managed and the
+    target must be synchronizable (``409 governance.target_not_synchronizable``
+    with ``detail.reason``). The call is journaled inline like the rate-limit
+    mutations; AWS ``ConflictException`` reaches the client as ``409 aws.conflict``.
+    """
+    gateway = _require_managed(control, gateway_id)
+    # A missing target surfaces as 404 through the shared ClientError envelope.
+    current = _aws_payload(policy_api.get_gateway_target(control, gateway_id, target_id))
+    reason = target_sync_gate(current)
+    if reason is not None:
+        raise AppError(
+            "governance.target_not_synchronizable",
+            f"Target {current.get('name') or target_id} cannot be synchronized ({reason})",
+            status_code=409,
+            detail={"reason": reason, "target_id": target_id, "status": current.get("status")},
+        )
+    response = _journaled_control_call(
+        db,
+        workspace_id=workspace_id,
+        gateway=gateway,
+        operation="target.synchronize",
+        before=_target_projection(current),
+        requested={"target_id": target_id, "target_name": current.get("name")},
+        call=lambda: policy_api.synchronize_gateway_target(control, gateway_id, target_id),
+    )
+    # The 202 body may lag the accepted state; fall back to the pre-call fields.
+    return _target_projection({**current, **response})
+
+
 def gateway_detail(
     control: Any,
     iam: Any,
@@ -969,21 +1064,7 @@ def gateway_detail(
         **(registry_state or {"registry_record": None, "legacy_record_count": 0}),
         "authorizer_configuration": gateway.get("authorizerConfiguration"),
         "protocol_configuration": gateway.get("protocolConfiguration"),
-        "targets": [
-            {
-                "id": target.get("targetId"),
-                "name": target.get("name"),
-                "status": target.get("status"),
-                "status_reasons": target.get("statusReasons") or [],
-                "description": target.get("description") or "",
-                "listing_mode": (
-                    ((target.get("targetConfiguration") or {}).get("mcp") or {})
-                    .get("mcpServer", {})
-                    .get("listingMode")
-                ),
-            }
-            for target in targets
-        ],
+        "targets": [_target_projection(target) for target in targets],
         "actions": discover_actions(targets),
         "iam_preflight": preflight,
         "external_tools_list_command": external_tools_list_command(gateway, workspace),

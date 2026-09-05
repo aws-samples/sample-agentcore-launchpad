@@ -334,6 +334,40 @@ AWS `ConflictException`（同一键集合已有限流规则，或 Gateway 正忙
 共享 `Btn` 的 `disabledReason` 解释被禁用的操作（未纳管 / Gateway 非 READY / 限流规则非 ACTIVE /
 表单无效）。无需 IAM 变更：控制台角色已具备 `bedrock-agentcore:*`。
 
+### 目标同步
+
+网关详情「目标」表的每一行都显示 `lastSynchronizedAt`（AWS 从未同步过则显示 `-`）；对**已纳管**
+Gateway 上的**动态 MCP 服务器目标**，还提供「同步」操作。`POST
+/api/governance/gateways/{id}/targets/{target_id}/synchronize` 调用
+`SynchronizeGatewayTargets(gatewayIdentifier, targetIdList=[target_id])`——服务端会对目标端点
+重新执行 MCP `initialize` + 分页 `tools/list`（配置了 Identity 凭证时会带上），目标进入
+`SYNCHRONIZING`，随后变为 `READY` 或 `SYNCHRONIZE_UNSUCCESSFUL`。封装函数
+`synchronize_gateway_target` 位于 `app/services/agentcore/policy.py`；路由返回 `202` 与目标投影
+`{id, name, status, status_reasons, description, listing_mode, last_synchronized_at,
+synchronizable, not_synchronizable_reason}`——`gateway_detail` 现在对每个目标返回同一形状，
+控制台从不自行推导 AWS 规则。
+
+两道门禁在**任何 AWS 调用之前**执行：Gateway 必须带纳管标签（`409 governance.gateway_not_managed`），
+且目标必须可同步，否则返回 `409 governance.target_not_synchronizable` 并带稳定的 `detail.reason`：
+
+| 规则（来自 SynchronizeGatewayTargets 参考文档） | `detail.reason` |
+|---|---|
+| 必须存在 `targetConfiguration.mcp.mcpServer`——Lambda / OpenAPI / Smithy / connector 的 schema 天然是静态的 | `not_mcp_server` |
+| 静态 `mcpServer.mcpToolSchema` 会禁用同步 | `static_tool_schema` |
+| `CREATE_PENDING_AUTH` / `UPDATE_PENDING_AUTH` / `SYNCHRONIZE_PENDING_AUTH` 在操作者完成授权前会被拒绝 | `pending_auth` |
+| 已处于 `SYNCHRONIZING` | `synchronizing` |
+| 其他过渡状态（`CREATING`、`UPDATING`、`DELETING`）；同步要求 `READY`、`SYNCHRONIZE_UNSUCCESSFUL`、`UPDATE_UNSUCCESSFUL` 或 `FAILED` | `not_ready` |
+
+该调用与限流变更完全一致地内联记入审计：一行 `PolicyChange`（`target.synchronize`；`before` =
+调用前的目标投影，`requested` = `{target_id, target_name}`，`after` = AWS 返回的目标）以 `running`
+写入，再收口为 `succeeded`/`failed`。AWS `ConflictException` 经共享 `ClientError` 信封映射为
+`409 aws.conflict`，绝不会变成 500。这里没有 operation 行：同步受理后，只要仍有目标处于
+`SYNCHRONIZING`，控制台就每隔数秒重新拉取详情（约 2 分钟后放弃），并在
+`SYNCHRONIZE_UNSUCCESSFUL` / `FAILED` 徽标下方显示 `statusReasons`。被禁用的「同步」按钮通过共享
+`Btn` 的 `disabledReason` 说明原因（未纳管 / 目标类型 / 待授权 / 已在同步 / 操作进行中）。
+不在范围内：列举动态目标的工具（控制面不返回）、创建或更新目标、批量同步。无需 IAM 变更——
+控制台角色已具备 `bedrock-agentcore:*`。
+
 ## 控制台路由
 
 控制台只有一张 `react-router-dom` 路由表(`frontend/src/App.tsx`),全部嵌在同一个

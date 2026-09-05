@@ -40,13 +40,32 @@ export function statusTone(status: string | null | undefined): ChipTone {
   if (["READY", "ACTIVE", "SUCCEEDED", "APPROVED", "ALLOW", "PASS"].includes(normalized)) {
     return "good";
   }
-  if (["FAILED", "ERROR", "DENY", "REJECTED", "PARTIAL"].includes(normalized)) {
+  if (
+    [
+      "FAILED",
+      "ERROR",
+      "DENY",
+      "REJECTED",
+      "PARTIAL",
+      "SYNCHRONIZE_UNSUCCESSFUL",
+      "UPDATE_UNSUCCESSFUL",
+    ].includes(normalized)
+  ) {
     return "crit";
   }
   if (
-    ["CREATING", "UPDATING", "PENDING", "RUNNING", "SUBMITTED", "LOG_ONLY"].includes(
-      normalized,
-    )
+    [
+      "CREATING",
+      "UPDATING",
+      "PENDING",
+      "RUNNING",
+      "SUBMITTED",
+      "LOG_ONLY",
+      "SYNCHRONIZING",
+      "CREATE_PENDING_AUTH",
+      "UPDATE_PENDING_AUTH",
+      "SYNCHRONIZE_PENDING_AUTH",
+    ].includes(normalized)
   ) {
     return "warn";
   }

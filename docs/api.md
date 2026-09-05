@@ -137,6 +137,7 @@ public `/v1` agent invocation contract.
 | `POST` | `/api/governance/gateways/{id}/rate-limits` | Create a rate limit → `201` with the created record; managed Gateways only |
 | `PUT` | `/api/governance/gateways/{id}/rate-limits/{rate_limit_id}` | Replace `entries` (+ optional `description`); `dimensionKeys` are immutable → `422` |
 | `DELETE` | `/api/governance/gateways/{id}/rate-limits/{rate_limit_id}` | Delete → `{deleted: true, id, status}` |
+| `POST` | `/api/governance/gateways/{id}/targets/{target_id}/synchronize` | `SynchronizeGatewayTargets` for one dynamic MCP-server target → `202` with the target projection (`status` = `SYNCHRONIZING`); managed Gateways only (`409 governance.gateway_not_managed`); non-synchronizable target → `409 governance.target_not_synchronizable`, `detail.reason` ∈ `not_mcp_server`, `static_tool_schema`, `pending_auth`, `synchronizing`, `not_ready`; journaled as `target.synchronize` |
 | `GET` | `/api/governance/gateways/{id}/audit` | Immutable local change journal |
 | `GET` | `/api/governance/operations/{operation_id}` | Async operation status |
 
