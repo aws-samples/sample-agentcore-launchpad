@@ -6,11 +6,12 @@ import time
 from dataclasses import asdict
 from typing import Any, Literal
 
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from starlette.datastructures import UploadFile
 
-from app.core.errors import AppError
+from app.core.errors import AppError, aws_error_message, mapped_aws_error
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import registry_console as console
 from app.services import skill_ingest as si
@@ -134,6 +135,71 @@ def get_record(
     record_id: str, ws: WorkspaceScope = Depends(require_workspace)
 ) -> dict[str, Any]:
     return _record_out(console.console_get(ws.context, record_id))
+
+
+@router.get("/records/{record_id}/live-agent-card")
+def live_agent_card(
+    record_id: str, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    """The A2A card the runtime behind this record serves right now (GetAgentCard).
+
+    Record → ledger agent → ``Agent.arn`` is resolved here, server-side; the
+    browser only names the record. Every refusal is decided on the ledger before
+    AWS is called: a record no Launchpad agent owns (404), an agent that is not an
+    A2A server (409), an agent not yet deployed / no longer active (409). The
+    data plane's ``ClientError`` keeps the standard 4xx envelope; a runtime-side
+    failure the envelope has no mapping for is a 502, never a bare 500.
+    """
+    from app.core.db import SessionLocal
+    from app.models.ledger import Agent
+
+    db = SessionLocal()
+    try:
+        agent = (
+            db.query(Agent)
+            .filter(
+                Agent.registry_record_id == record_id,
+                Agent.workspace_id == ws.id,
+                Agent.status != "deleted",
+            )
+            .order_by(Agent.updated_at.desc())
+            .first()
+        )
+        if agent is None:
+            raise AppError(
+                "registry.record_not_deployed",
+                "no Launchpad agent owns this registry record",
+                status_code=404,
+            )
+        if (agent.spec or {}).get("protocol") != "a2a":
+            raise AppError(
+                "registry.record_not_a2a",
+                "the agent behind this record is not an A2A server",
+                detail={"agent_id": agent.id, "protocol": (agent.spec or {}).get("protocol")},
+                status_code=409,
+            )
+        if agent.status != "active" or not agent.arn:
+            raise AppError(
+                "registry.agent_not_ready",
+                f"agent is {agent.status}, not deployed and active",
+                detail={"agent_id": agent.id, "status": agent.status},
+                status_code=409,
+            )
+        db.expunge(agent)
+    finally:
+        db.close()
+
+    try:
+        return console.console_live_agent_card(ws.context, record_id, agent)
+    except ClientError as exc:
+        if mapped_aws_error(exc) is not None:
+            raise  # standard 4xx envelope (not found / access denied / throttled …)
+        raise AppError(
+            "registry.live_card_failed",
+            aws_error_message(exc),
+            detail={"aws_error_code": exc.response.get("Error", {}).get("Code")},
+            status_code=502,
+        ) from exc
 
 
 class ActionRequest(BaseModel):

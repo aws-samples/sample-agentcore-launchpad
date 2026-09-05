@@ -111,6 +111,28 @@ running, failed first deploy, deleted, or a shape that is neither Runtime nor
 Harness; `message` is the human reason the panel shows). AWS `ClientError`s map to
 the standard 4xx envelope.
 
+## Console Registry API — live agent card
+
+`GET /api/registry/records/{record_id}/live-agent-card` is the LIVE CARD read in
+the Registry drawer's AGENT CARD block: the A2A card the runtime behind the record
+serves *right now*, next to the card the record stored at deploy time. It is an
+on-demand data-plane call (`GetAgentCard`), made only when the operator asks —
+never on drawer open — and nothing is persisted.
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/registry/records/{record_id}/live-agent-card` | `{agent_id, runtime_arn, status_code, card, diff}` — `card` is the JSON document the runtime serves (`GetAgentCard.agentCard`, what an A2A client reads at `/.well-known/agent-card.json`), `status_code` is `GetAgentCard.statusCode`; `diff` = `{identical, fields[{field, record, live}], skills_only_in_live[], skills_only_in_record[]}` comparing `name`/`url`/`version`/`protocolVersion` and the skill id sets against the record's `descriptors.a2a.agentCard.inlineContent` (description, capabilities and the platform `metadata` block are not compared). The route resolves record → ledger agent (`Agent.registry_record_id`, same workspace, not deleted) → `Agent.arn` server-side; the browser never supplies an ARN. No `runtimeSessionId` is sent; the session AWS opens to serve the card is ended with `StopRuntimeSession` fail-soft (a stop failure is logged, the card is still returned) |
+
+Error codes, all decided on the ledger before AWS is called:
+`registry.record_not_deployed` (404, no Launchpad agent owns the record),
+`registry.record_not_a2a` (409, the agent's `spec.protocol` is not `a2a`),
+`registry.agent_not_ready` (409, the agent is not `active` or has no runtime ARN
+yet). A data-plane `ClientError` maps to the standard 4xx envelope (`aws.not_found`,
+`aws.access_denied`, `aws.throttled`, …); a runtime-side failure with no mapping
+(`RuntimeClientError`) is `registry.live_card_failed` (502) with
+`detail.aws_error_code` — never a bare 500. No IAM change: the console's role
+already carries `bedrock-agentcore:*`.
+
 ## Console Governance API
 
 These `/api` routes back the authenticated console. They are not part of the

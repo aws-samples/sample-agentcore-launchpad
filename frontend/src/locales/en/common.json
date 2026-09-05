@@ -502,7 +502,22 @@
       "cardUrlCopied": "endpoint copied",
       "cardStreaming": "STREAMING",
       "cardSkills": "SKILLS ({{n}})",
-      "evaluateInSkillLab": "Evaluate in Skill Lab"
+      "evaluateInSkillLab": "Evaluate in Skill Lab",
+      "liveCard": "LIVE CARD",
+      "liveCardReading": "Reading…",
+      "liveCardHint": "Reads the card the runtime serves right now (GetAgentCard) — an on-demand data-plane call, never made on open.",
+      "liveCardTitle": "LIVE CARD · served by the runtime",
+      "liveCardStatus": "HTTP {{code}}",
+      "liveCardIdentical": "identical to the record card",
+      "liveCardDrift": "differs from the record card",
+      "liveCardField": "{{field}}: record {{record}} · live {{live}}",
+      "liveCardSkillsOnlyLive": "skills only in the live card: {{ids}}",
+      "liveCardSkillsOnlyRecord": "skills only in the record card: {{ids}}",
+      "liveCardJson": "served card (JSON)",
+      "liveCardFailed": "Live card unavailable: {{msg}}",
+      "liveCardNotLaunchpad": "Only A2A records of a Launchpad-deployed agent serve a live card",
+      "liveCardNotA2A": "The agent behind this record is not an A2A server — it serves no agent card",
+      "liveCardNotReady": "The agent is {{status}} — the live card needs an active runtime"
     },
     "confirmDisable": {
       "title": "Disable record",
@@ -1792,7 +1807,11 @@
     "aws.access_denied": "AWS denied access to this resource — this deployment's role lacks permission, or the id belongs to another account.",
     "aws.throttled": "AWS is throttling this request — wait a moment and retry.",
     "aws.conflict": "The AWS resource is busy or in a conflicting state — retry once it settles.",
-    "network": "Backend unreachable — no HTTP response"
+    "network": "Backend unreachable — no HTTP response",
+    "registry.record_not_deployed": "No Launchpad agent owns this registry record — the live card can only be read from a deployed agent's runtime.",
+    "registry.record_not_a2a": "The agent behind this record is not an A2A server, so it serves no agent card.",
+    "registry.agent_not_ready": "The agent is not deployed and active — the live card needs a running runtime.",
+    "registry.live_card_failed": "The runtime did not serve its agent card."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",

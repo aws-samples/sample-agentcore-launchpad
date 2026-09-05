@@ -5,12 +5,15 @@ Explicit-client style (tests inject stubs). Shapes per bedrock-agentcore-control
 """
 
 import json
+import logging
 import time
 import uuid
 from collections.abc import Iterable, Iterator
 from typing import Any
 
 from app.services.agentcore.harness import new_session_id
+
+logger = logging.getLogger("launchpad.agentcore.runtime")
 
 TERMINAL_FAILURES = {"CREATE_FAILED", "UPDATE_FAILED"}
 SSE_READ_CHUNK_BYTES = 32
@@ -571,6 +574,46 @@ def stop_runtime_session(
     return {
         "session_id": response.get("runtimeSessionId", session_id),
         "status_code": response.get("statusCode"),
+    }
+
+
+def get_agent_card(
+    client: Any,
+    *,
+    runtime_arn: str,
+    qualifier: str = "DEFAULT",
+) -> dict[str, Any]:
+    """Data-plane ``GetAgentCard``: the A2A card the runtime serves right now.
+
+    The card is what an A2A client would read at ``/.well-known/agent-card.json``
+    (a JSON document — botocore hands it back parsed; a string body is parsed
+    here). No ``runtimeSessionId`` is sent: this is a one-off read, not a
+    conversation. AgentCore still opens a session to serve it and echoes its id;
+    that session is ended at once with ``StopRuntimeSession`` so a card read
+    never leaves a warm microVM behind. Ending it is fail-soft — the card is the
+    answer, a stop failure is logged and ignored.
+    """
+    response = client.get_agent_card(agentRuntimeArn=runtime_arn, qualifier=qualifier)
+    card = response.get("agentCard")
+    if isinstance(card, (str, bytes)):
+        try:
+            card = json.loads(card)
+        except ValueError:
+            card = {"raw": card.decode() if isinstance(card, bytes) else card}
+    session_id = response.get("runtimeSessionId")
+    if session_id:
+        try:
+            stop_runtime_session(
+                client, runtime_arn=runtime_arn, session_id=session_id, qualifier=qualifier
+            )
+        except Exception as exc:  # noqa: BLE001 — fail-soft by design
+            logger.warning(
+                "GetAgentCard session %s on %s not ended: %s", session_id, runtime_arn, exc
+            )
+    return {
+        "card": card if isinstance(card, dict) else {},
+        "status_code": response.get("statusCode"),
+        "session_id": session_id,
     }
 
 
