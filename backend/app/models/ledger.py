@@ -177,6 +177,12 @@ class ChatSession(Base):
     last_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )
+    # Set when the console explicitly ended the AgentCore Runtime session
+    # (StopRuntimeSession). The row stays so the transcript remains replayable;
+    # only new turns must go to a fresh session id.
+    ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
 
 
 class ChatMessage(Base):

@@ -9,7 +9,9 @@ import logging
 from collections.abc import Iterator
 from typing import Any
 
-from app.core.errors import AppError
+from botocore.exceptions import ClientError
+
+from app.core.errors import AppError, aws_error_code
 from app.models.ledger import Agent
 from app.optimization import canary_service
 from app.services.agentcore import gateway
@@ -30,6 +32,11 @@ BUFFERED_CHUNK_CHARS = 60
 # envelope over SSE (see `rt._runtime_payload_events`). Shared with chat so the
 # advertised `mode` and the actual invoke path can't drift apart.
 NATIVE_STREAM_METHODS = frozenset({"container", "zip_runtime"})
+# Methods whose agent ARN is an AgentCore *Runtime* — the only resource with a
+# session-stop operation. A managed Harness (deployed or imported) has none:
+# neither `bedrock-agentcore` nor `bedrock-agentcore-control` models an
+# operation that names both Harness and Session.
+RUNTIME_SESSION_METHODS = frozenset({"zip_runtime", "studio", "container", DISCOVERED_METHOD})
 
 
 def _runtime_user_id(
@@ -210,6 +217,47 @@ def invoke_agent_text(
         f"no invoke path for method '{agent.method}'",
         status_code=400,
     )
+
+
+def stop_agent_session(
+    agent: Agent,
+    session_id: str,
+    workspace: WorkspaceContext | None = None,
+) -> dict[str, Any]:
+    """End one live AgentCore Runtime session behind a conversation.
+
+    Same method dispatch and data-plane client as the invoke path, so Chat ends the
+    very session it talked to. AWS answering `ResourceNotFoundException` means the
+    session already ended (explicitly, or by idle expiry) — reported as success
+    with ``already_ended`` rather than as an error, because the caller's goal is
+    reached either way. Any other `ClientError` propagates to the shared envelope
+    mapping (a `RetryableConflictException` that outlived botocore's retries → 409).
+    """
+    if agent.method == "harness" or is_discovered_harness(agent):
+        raise AppError(
+            "chat.session_stop_unsupported",
+            "the managed Harness service has no session-stop operation; "
+            "start a new session instead",
+            {"reason_code": "harness", "method": agent.method},
+            status_code=409,
+        )
+    if agent.method not in RUNTIME_SESSION_METHODS or not agent.arn:
+        raise AppError(
+            "chat.session_stop_unsupported",
+            f"no AgentCore Runtime session to stop for method '{agent.method}'",
+            {"reason_code": "no-runtime", "method": agent.method},
+            status_code=409,
+        )
+    workspace = _agent_workspace(agent, workspace)
+    try:
+        rt.stop_runtime_session(
+            data_client(workspace), runtime_arn=agent.arn, session_id=session_id
+        )
+    except ClientError as exc:
+        if aws_error_code(exc) != "ResourceNotFoundException":
+            raise
+        return {"ended": True, "already_ended": True}
+    return {"ended": True, "already_ended": False}
 
 
 def invoke_agent_events(
