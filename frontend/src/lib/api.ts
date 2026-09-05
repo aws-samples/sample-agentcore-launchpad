@@ -57,6 +57,26 @@ export interface AgentInfo {
   revision?: number;
 }
 
+/** One row of `GET /api/chat/{agent_id}/sessions`. */
+export interface ChatSessionInfo {
+  session_id: string;
+  actor_id: string;
+  turns: number;
+  last_at: string | null;
+  /** Set once the console explicitly ended the runtime session; `null` while live/idle. */
+  ended_at: string | null;
+  preview: string;
+}
+
+/** `POST /api/chat/{agent_id}/sessions/{session_id}/stop` */
+export interface ChatSessionStopResult {
+  session_id: string;
+  ended: boolean;
+  /** AWS no longer knew the session (already ended or idle-expired) — still a success. */
+  already_ended: boolean;
+  ended_at: string | null;
+}
+
 export interface RuntimeDiscoveryCandidate {
   runtime_id: string;
   runtime_arn: string;
@@ -2264,6 +2284,13 @@ export const api = {
       body: JSON.stringify(spec),
     }),
   listAgents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
+  listChatSessions: (agentId: string) =>
+    request<{ sessions: ChatSessionInfo[] }>(`/api/chat/${encodeURIComponent(agentId)}/sessions`),
+  stopChatSession: (agentId: string, sessionId: string) =>
+    request<ChatSessionStopResult>(
+      `/api/chat/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/stop`,
+      { method: "POST" },
+    ),
   discoverRuntimes: () =>
     request<RuntimeDiscoveryResponse>("/api/agents/discovery"),
   importRuntimes: (runtimeIds: string[], harnessIds: string[] = []) =>
