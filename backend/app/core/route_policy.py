@@ -193,6 +193,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/governance/gateways/{gateway_id}/rate-limits"): MEMBER,
     ("PUT", "/api/governance/gateways/{gateway_id}/rate-limits/{rate_limit_id}"): MEMBER,
     ("DELETE", "/api/governance/gateways/{gateway_id}/rate-limits/{rate_limit_id}"): MEMBER,
+    ("POST", "/api/governance/gateways/{gateway_id}/targets/{target_id}/synchronize"): MEMBER,
     ("POST", "/api/governance/gateways/{gateway_id}/mode"): MEMBER,
     ("POST", "/api/governance/gateways/{gateway_id}/generations"): MEMBER,
     ("GET", "/api/governance/gateways/{gateway_id}/generations/{generation_id}"): MEMBER,

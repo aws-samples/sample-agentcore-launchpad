@@ -98,6 +98,22 @@ def list_gateway_target_details(client: Any, gateway_id: str) -> list[dict[str, 
     ]
 
 
+def synchronize_gateway_target(client: Any, gateway_id: str, target_id: str) -> dict[str, Any]:
+    """SynchronizeGatewayTargets for exactly one target.
+
+    The API takes ``targetIdList`` (fixed length 1 in the pinned model) and answers
+    ``202 {targets: [GatewayTarget]}``; the caller gets that single target back.
+    Pending-auth and static-``mcpToolSchema`` targets are refused by the service
+    with ``ConflictException`` — the governance layer gates those before calling.
+    """
+    response = client.synchronize_gateway_targets(
+        gatewayIdentifier=gateway_id,
+        targetIdList=[target_id],
+    )
+    targets = response.get("targets") or []
+    return targets[0] if targets else {}
+
+
 def list_gateway_rate_limits(client: Any, gateway_id: str) -> list[dict[str, Any]]:
     """Every rate limit on a Gateway, following ``nextToken`` to the end."""
     return _paginate(
