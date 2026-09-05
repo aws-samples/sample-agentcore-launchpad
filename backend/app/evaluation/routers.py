@@ -8,13 +8,14 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.errors import AppError, NotFoundError
+from app.core.errors import AppError, NotFoundError, aws_error_code
 from app.evaluation import agentcore_eval as ac
 from app.evaluation import service
 from app.evaluation.models import EvalDataset, EvalRun
@@ -322,22 +323,90 @@ def delete_dataset(
     return {"deleted": True}
 
 
-# ─── AWS cloud datasets (one-way sync) ───────────────────────────────────────
+# ─── AWS cloud datasets (draft in place + published versions) ───────────────
+# One local row ↔ one AWS Dataset. The first sync creates the dataset; every
+# later sync replaces the examples of its DRAFT in place; PUBLISH VERSION
+# snapshots the draft as an immutable numbered version. AWS is the source of
+# truth — the `cloud` blob on the row only caches display state.
+def _iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def _cloud_versions(client: Any, cloud_id: str) -> list[dict[str, Any]]:
+    """Published versions of a cloud dataset, newest first (ListDatasetVersions)."""
+    versions = [
+        {
+            "version": v.get("datasetVersion"),
+            "example_count": v.get("exampleCount"),
+            "created_at": _iso(v.get("createdAt")),
+        }
+        for v in ac.list_dataset_versions(client, dataset_id=cloud_id)
+    ]
+    versions.sort(key=lambda v: (v["created_at"] or "", str(v["version"])), reverse=True)
+    return versions
+
+
+def _cloud_blob(
+    detail: dict[str, Any],
+    *,
+    synced_at: str,
+    versions: list[dict[str, Any]] | None,
+    failure_reason: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "dataset_id": detail.get("datasetId"),
+        "arn": detail.get("datasetArn"),
+        "status": status or detail.get("status"),
+        "synced_at": synced_at,
+        "failure_reason": failure_reason,
+        "draft_status": detail.get("draftStatus"),
+        "example_count": detail.get("exampleCount"),
+        "versions": versions if versions is not None else [],
+    }
+
+
+def _existing_cloud_draft(client: Any, dataset: EvalDataset) -> dict[str, Any] | None:
+    """The live GetDataset detail of the row's recorded cloud copy, or None when
+    the row has none, the copy was deleted through the console, or AWS no longer
+    knows it (ResourceNotFoundException) — those all re-create."""
+    blob = dataset.cloud or {}
+    cloud_id = blob.get("dataset_id")
+    if not cloud_id or blob.get("status") == "deleted":
+        return None
+    try:
+        return ac.get_dataset(client, dataset_id=cloud_id)
+    except ClientError as exc:
+        if aws_error_code(exc) == "ResourceNotFoundException":
+            return None
+        raise
+
+
 @router.post("/datasets/{dataset_id}/sync-to-aws")
 def sync_dataset_to_aws(
     dataset_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    """Create an AWS Dataset resource from the local dataset (inline examples,
-    devguide predefined schema), wait for ACTIVE, and record the cloud copy on
-    the row. Cloud datasets are immutable — re-syncing creates a NEW cloud
-    dataset and overwrites the recorded copy (the old one stays listed)."""
+    """Push the local dataset to AWS. Without a live cloud copy this creates an
+    AWS Dataset (inline examples, devguide predefined schema) and waits for
+    ACTIVE. With one, the cloud dataset's DRAFT is edited in place — its current
+    examples are deleted (DeleteDatasetExamples) and the local scenarios added
+    (AddDatasetExamples), each step polled to ACTIVE — so the dataset id, its
+    published versions and any run pinned to them survive; the draft then reads
+    MODIFIED until PUBLISH VERSION snapshots it. The recorded `cloud` blob caches
+    id/arn/status plus draft_status, example_count and the version list."""
     dataset = _dataset_in(db, ws, dataset_id)
     examples = normalize_scenarios(dataset.items)
-    name = ac.sanitize_dataset_name(dataset.name)
     client = control_client(ws.context)
     synced_at = datetime.now(UTC).isoformat()
+    existing = _existing_cloud_draft(client, dataset)
+    if existing is not None:
+        return _resync_draft(db, dataset, client, existing, examples, synced_at)
+
+    name = ac.sanitize_dataset_name(dataset.name)
     try:
         created = ac.create_dataset(
             client,
@@ -360,22 +429,116 @@ def sync_dataset_to_aws(
             client, dataset_id=cloud_id, interval=2.0, max_polls=60
         )
     except (RuntimeError, TimeoutError) as exc:
-        dataset.cloud = {
-            "dataset_id": cloud_id,
-            "arn": created.get("datasetArn"),
-            "status": "CREATE_FAILED",
-            "synced_at": synced_at,
-            "failure_reason": str(exc),
-        }
+        dataset.cloud = _cloud_blob(
+            {"datasetId": cloud_id, "datasetArn": created.get("datasetArn")},
+            synced_at=synced_at,
+            versions=[],
+            status="CREATE_FAILED",
+            failure_reason=str(exc),
+        )
         db.commit()
         raise AppError("dataset.sync_failed", str(exc), status_code=502) from exc
-    dataset.cloud = {
-        "dataset_id": cloud_id,
-        "arn": final.get("datasetArn"),
-        "status": final.get("status"),
-        "synced_at": synced_at,
-        "failure_reason": None,
-    }
+    dataset.cloud = _cloud_blob(final, synced_at=synced_at, versions=[])
+    db.commit()
+    return _dataset_out(dataset)
+
+
+def _resync_draft(
+    db: Session,
+    dataset: EvalDataset,
+    client: Any,
+    detail: dict[str, Any],
+    examples: list[dict[str, Any]],
+    synced_at: str,
+) -> dict[str, Any]:
+    """Replace the DRAFT examples of the row's cloud dataset with ``examples``."""
+    cloud_id = detail["datasetId"]
+    previous = dataset.cloud or {}
+
+    def fail(exc: BaseException) -> AppError:
+        reason = str(exc)
+        dataset.cloud = _cloud_blob(
+            detail,
+            synced_at=synced_at,
+            versions=previous.get("versions") or [],
+            status="UPDATE_FAILED",
+            failure_reason=reason,
+        )
+        db.commit()
+        return AppError("dataset.sync_failed", reason, status_code=502)
+
+    try:
+        # a draft still settling from an earlier edit must reach ACTIVE first;
+        # AWS accepts example edits only on ACTIVE / *_FAILED datasets
+        if detail.get("status") not in ac.DATASET_TERMINAL:
+            ac.poll_dataset_active(client, dataset_id=cloud_id, interval=2.0, max_polls=60)
+        current_ids = [
+            ex["exampleId"]
+            for ex in ac.list_dataset_examples(client, dataset_id=cloud_id)
+            if ex.get("exampleId")
+        ]
+        if current_ids:
+            ac.delete_dataset_examples(client, dataset_id=cloud_id, example_ids=current_ids)
+            ac.poll_dataset_active(client, dataset_id=cloud_id, interval=2.0, max_polls=60)
+        ac.add_dataset_examples(client, dataset_id=cloud_id, examples=examples)
+        final = ac.poll_dataset_active(client, dataset_id=cloud_id, interval=2.0, max_polls=60)
+        versions = _cloud_versions(client, cloud_id)
+    except (RuntimeError, TimeoutError) as exc:
+        raise fail(exc) from exc
+    except ClientError as exc:
+        raise fail(exc) from exc
+    dataset.cloud = _cloud_blob(final, synced_at=synced_at, versions=versions)
+    db.commit()
+    return _dataset_out(dataset)
+
+
+def _publish_version(client: Any, cloud_id: str) -> dict[str, Any]:
+    """CreateDatasetVersion then poll the draft through UPDATING to ACTIVE.
+    Returns the final GetDataset detail; raises AppError dataset.publish_failed
+    (502) on UPDATE_FAILED / timeout with the AWS failure reason."""
+    try:
+        ac.create_dataset_version(client, dataset_id=cloud_id)
+        return ac.poll_dataset_active(client, dataset_id=cloud_id, interval=2.0, max_polls=60)
+    except (RuntimeError, TimeoutError) as exc:
+        raise AppError("dataset.publish_failed", str(exc), status_code=502) from exc
+
+
+@router.post("/datasets/{dataset_id}/publish-version")
+def publish_dataset_version(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Snapshot the cloud copy's DRAFT as the next immutable numbered version.
+    The draft stays (draft_status flips to UNMODIFIED); the new version joins
+    `cloud.versions`. 409 `dataset.not_synced` without a live cloud copy."""
+    dataset = _dataset_in(db, ws, dataset_id)
+    client = control_client(ws.context)
+    detail = _existing_cloud_draft(client, dataset)
+    if detail is None:
+        raise AppError(
+            "dataset.not_synced",
+            "this dataset has no live AWS copy — SYNC TO AWS first",
+            status_code=409,
+        )
+    cloud_id = detail["datasetId"]
+    previous = dataset.cloud or {}
+    synced_at = previous.get("synced_at") or datetime.now(UTC).isoformat()
+    try:
+        final = _publish_version(client, cloud_id)
+    except AppError as exc:
+        dataset.cloud = _cloud_blob(
+            detail,
+            synced_at=synced_at,
+            versions=previous.get("versions") or [],
+            status="UPDATE_FAILED",
+            failure_reason=exc.message,
+        )
+        db.commit()
+        raise
+    dataset.cloud = _cloud_blob(
+        final, synced_at=synced_at, versions=_cloud_versions(client, cloud_id)
+    )
     db.commit()
     return _dataset_out(dataset)
 
@@ -430,6 +593,7 @@ def list_cloud_datasets(
                 "status": ds.get("status"),
                 "schemaType": ds.get("schemaType"),
                 "exampleCount": ds.get("exampleCount"),
+                "draftStatus": ds.get("draftStatus"),
                 "updatedAt": str(ds["updatedAt"]) if ds.get("updatedAt") else None,
             }
         )
@@ -440,10 +604,16 @@ def list_cloud_datasets(
 def get_cloud_dataset(
     cloud_id: str, ws: WorkspaceScope = Depends(require_workspace)
 ) -> dict[str, Any]:
-    """Cloud dataset detail for the run form — whether it can drive a run and
-    whether its scenarios carry ground truth (gates Trajectory* evaluators)."""
+    """Cloud dataset detail for the run form and the datasets page — whether it
+    can drive a run, whether its scenarios carry ground truth (gates Trajectory*
+    evaluators), the DRAFT status and the published versions."""
     client = control_client(ws.context)
     detail = ac.get_dataset(client, dataset_id=cloud_id)
+    return _cloud_detail_out(client, detail)
+
+
+def _cloud_detail_out(client: Any, detail: dict[str, Any]) -> dict[str, Any]:
+    cloud_id = detail["datasetId"]
     runnable = (
         detail.get("status") == "ACTIVE"
         and detail.get("schemaType") in RUNNABLE_CLOUD_SCHEMAS
@@ -461,9 +631,55 @@ def get_cloud_dataset(
         "status": detail.get("status"),
         "schemaType": detail.get("schemaType"),
         "exampleCount": detail.get("exampleCount"),
+        "draft_status": detail.get("draftStatus"),
+        "failure_reason": detail.get("failureReason"),
+        "versions": _cloud_versions(client, cloud_id),
         "runnable": runnable,
         "has_ground_truth": has_ground_truth,
     }
+
+
+@router.post("/datasets/cloud/{cloud_id}/publish-version")
+def publish_cloud_dataset_version(
+    cloud_id: str, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    """PUBLISH VERSION for a cloud-only dataset (no local row): CreateDatasetVersion,
+    poll to ACTIVE, return the refreshed detail with the new version listed."""
+    client = control_client(ws.context)
+    final = _publish_version(client, cloud_id)
+    return _cloud_detail_out(client, final)
+
+
+@router.delete("/datasets/cloud/{cloud_id}/versions/{version}")
+def delete_cloud_dataset_version(
+    cloud_id: str,
+    version: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Delete ONE published version (DeleteDataset with datasetVersion); the draft
+    and the other versions stay. A local row's cached version list is refreshed."""
+    client = control_client(ws.context)
+    ac.delete_dataset(client, dataset_id=cloud_id, version=version)
+    for row in _rows_with_cloud(db, ws, cloud_id):
+        row.cloud = {
+            **row.cloud,
+            "versions": [
+                v for v in (row.cloud.get("versions") or []) if str(v.get("version")) != version
+            ],
+        }
+    db.commit()
+    return {"datasetId": cloud_id, "version": version, "deleted": True}
+
+
+def _rows_with_cloud(db: Session, ws: WorkspaceScope, cloud_id: str) -> list[EvalDataset]:
+    return [
+        row
+        for row in db.query(EvalDataset)
+        .filter(EvalDataset.workspace_id == ws.id, EvalDataset.cloud.isnot(None))
+        .all()
+        if (row.cloud or {}).get("dataset_id") == cloud_id
+    ]
 
 
 @router.delete("/datasets/cloud/{cloud_id}")
@@ -473,14 +689,10 @@ def delete_cloud_dataset(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     ac.delete_dataset(control_client(ws.context), dataset_id=cloud_id)
-    # A local row pointing at this cloud dataset loses its live copy.
-    for row in (
-        db.query(EvalDataset)
-        .filter(EvalDataset.workspace_id == ws.id, EvalDataset.cloud.isnot(None))
-        .all()
-    ):
-        if (row.cloud or {}).get("dataset_id") == cloud_id:
-            row.cloud = {**row.cloud, "status": "deleted"}
+    # A local row pointing at this cloud dataset loses its live copy — the next
+    # sync creates a fresh dataset.
+    for row in _rows_with_cloud(db, ws, cloud_id):
+        row.cloud = {**row.cloud, "status": "deleted"}
     db.commit()
     return {"datasetId": cloud_id, "deleted": True}
 

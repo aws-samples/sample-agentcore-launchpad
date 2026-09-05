@@ -154,6 +154,7 @@ def stub_cloud(monkeypatch, *, get_status="ACTIVE", failure_reason=None):
     if failure_reason:
         detail["failureReason"] = failure_reason
     stub.get_dataset.return_value = detail
+    stub.list_dataset_versions.return_value = {"versions": []}
     monkeypatch.setattr("app.evaluation.routers.control_client", lambda _ws=None: stub)
     return stub
 
@@ -211,14 +212,14 @@ def test_cloud_list_passthrough(client, monkeypatch):
     stub.list_datasets.return_value = {"datasets": [{
         "datasetId": "cloudds-9", "datasetName": "remote_only", "status": "ACTIVE",
         "schemaType": "AGENTCORE_EVALUATION_PREDEFINED_V1", "exampleCount": 7,
-        "updatedAt": "2026-07-10 00:00:00",
+        "draftStatus": None, "updatedAt": "2026-07-10 00:00:00",
     }]}
     res = client.get("/api/eval/datasets/cloud")
     assert res.status_code == 200
     assert res.json()["datasets"] == [{
         "datasetId": "cloudds-9", "name": "remote_only", "status": "ACTIVE",
         "schemaType": "AGENTCORE_EVALUATION_PREDEFINED_V1", "exampleCount": 7,
-        "updatedAt": "2026-07-10 00:00:00",
+        "draftStatus": None, "updatedAt": "2026-07-10 00:00:00",
     }]
 
 
@@ -248,6 +249,7 @@ def stub_cloud_run(monkeypatch, *, schema_type="AGENTCORE_EVALUATION_PREDEFINED_
         base = PERSONA if schema_type == "AGENTCORE_EVALUATION_SIMULATED_V1" else SCENARIO
         examples = [{"exampleId": "ex-1", **base}]
     stub.list_dataset_examples.return_value = {"examples": examples}
+    stub.list_dataset_versions.return_value = {"versions": []}
     monkeypatch.setattr("app.evaluation.routers.control_client", lambda _ws=None: stub)
     return stub
 

@@ -982,7 +982,10 @@ DATASET_SCHEMA_TYPES = {
     "simulated": "AGENTCORE_EVALUATION_SIMULATED_V1",
 }
 
-DATASET_TERMINAL = {"ACTIVE", "CREATE_FAILED"}
+# CREATING/UPDATING are in progress; the *_FAILED states end a poll. UPDATING
+# covers AddDatasetExamples / DeleteDatasetExamples / CreateDatasetVersion.
+DATASET_TERMINAL = {"ACTIVE", "CREATE_FAILED", "UPDATE_FAILED"}
+DATASET_FAILED = {"CREATE_FAILED", "UPDATE_FAILED"}
 
 
 def sanitize_dataset_name(name: str) -> str:
@@ -1048,8 +1051,60 @@ def list_dataset_examples(client: Any, *, dataset_id: str) -> list[dict[str, Any
             return out
 
 
-def delete_dataset(client: Any, *, dataset_id: str) -> dict[str, Any]:
-    return client.delete_dataset(datasetId=dataset_id)
+def add_dataset_examples(
+    client: Any, *, dataset_id: str, examples: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """AddDatasetExamples onto the dataset's DRAFT — all-or-nothing validation,
+    async (status goes UPDATING; poll to ACTIVE after)."""
+    return client.add_dataset_examples(
+        datasetId=dataset_id,
+        clientToken=str(uuid.uuid4()),
+        source={"inlineExamples": {"examples": examples}},
+    )
+
+
+def delete_dataset_examples(
+    client: Any, *, dataset_id: str, example_ids: list[str]
+) -> dict[str, Any]:
+    """DeleteDatasetExamples from the DRAFT by service-assigned exampleId —
+    all-or-nothing, async (poll to ACTIVE after)."""
+    return client.delete_dataset_examples(
+        datasetId=dataset_id, clientToken=str(uuid.uuid4()), exampleIds=example_ids
+    )
+
+
+def create_dataset_version(client: Any, *, dataset_id: str) -> dict[str, Any]:
+    """Publish the DRAFT as the next immutable numbered version. The draft
+    persists (draftStatus flips MODIFIED → UNMODIFIED); status goes UPDATING
+    until the snapshot is taken — poll to ACTIVE after."""
+    return client.create_dataset_version(datasetId=dataset_id, clientToken=str(uuid.uuid4()))
+
+
+def list_dataset_versions(client: Any, *, dataset_id: str) -> list[dict[str, Any]]:
+    """Published versions ({datasetVersion, exampleCount, createdAt}), newest
+    first as AWS returns them; the DRAFT is not a version and is not listed."""
+    out: list[dict[str, Any]] = []
+    token: str | None = None
+    while True:
+        kwargs: dict[str, Any] = {"datasetId": dataset_id}
+        if token:
+            kwargs["nextToken"] = token
+        resp = client.list_dataset_versions(**kwargs)
+        out.extend(resp.get("versions", []))
+        token = resp.get("nextToken")
+        if not token:
+            return out
+
+
+def delete_dataset(
+    client: Any, *, dataset_id: str, version: str | None = None
+) -> dict[str, Any]:
+    """DeleteDataset — the whole dataset (draft + every version), or one
+    published version when ``version`` is given."""
+    kwargs: dict[str, Any] = {"datasetId": dataset_id}
+    if version:
+        kwargs["datasetVersion"] = version
+    return client.delete_dataset(**kwargs)
 
 
 def poll_dataset_active(
@@ -1061,7 +1116,9 @@ def poll_dataset_active(
     interval: float = 2.0,
     max_polls: int = 60,
 ) -> dict[str, Any]:
-    """Poll GetDataset until ACTIVE. Raises on CREATE_FAILED / timeout."""
+    """Poll GetDataset (the DRAFT) until ACTIVE. CREATING and UPDATING are in
+    progress; CREATE_FAILED / UPDATE_FAILED raise RuntimeError carrying the AWS
+    failureReason; TimeoutError after ``max_polls``."""
     for _ in range(max_polls):
         result = client.get_dataset(datasetId=dataset_id)
         status = result.get("status")
@@ -1069,9 +1126,10 @@ def poll_dataset_active(
             progress(f"dataset status: {status}")
         if status == "ACTIVE":
             return result
-        if status == "CREATE_FAILED":
+        if status in DATASET_FAILED:
             reason = result.get("failureReason") or "unknown failure"
-            raise RuntimeError(f"dataset creation failed: {reason}")
+            verb = "creation" if status == "CREATE_FAILED" else "update"
+            raise RuntimeError(f"dataset {verb} failed: {reason}")
         sleeper(interval)
     raise TimeoutError(f"dataset {dataset_id} not ACTIVE after {max_polls} polls")
 

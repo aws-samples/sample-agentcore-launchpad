@@ -34,7 +34,9 @@ class EvalDataset(Base):
     #   [{"input", "expected_response"?}], "expected_trajectory"?: [str],
     #   "assertions"?: [str], "metadata"?: {}}]
     cloud: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
-    # cloud: {dataset_id, arn, status, synced_at, failure_reason} — last AWS sync
+    # cloud: {dataset_id, arn, status, synced_at, failure_reason, draft_status
+    #   (MODIFIED|UNMODIFIED), example_count, versions: [{version, example_count,
+    #   created_at}]} — the row's one AWS Dataset (draft edited in place on re-sync)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

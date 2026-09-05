@@ -2226,17 +2226,43 @@
       "cloudGone": "云端已删",
       "sync": "同步 AWS",
       "syncing": "同步中",
-      "synced": "数据集已同步——AWS 副本已 ACTIVE。",
+      "synced": "数据集已同步——AWS 草稿已 ACTIVE。",
       "delete": "删除",
       "deleted": "数据集已删除。",
       "cloudDeleted": "云端数据集已删除。",
       "cloudUnavailable": "云端数据集列表不可用",
-      "cloudReadonly": "云端数据集是不可变快照——修改本地源后重新同步，或删除此副本。",
+      "cloudReadonly": "仅云端数据集——控制台不在此编辑其草稿。「发布版本」把草稿快照为版本；修改需通过同步本地数据集或在控制台之外进行。",
+      "draftModified": "草稿 · 已修改",
+      "draftUnmodified": "草稿 · 未修改",
+      "publish": "发布版本",
+      "publishing": "发布中",
+      "published": "版本 {{version}} 已发布——草稿现为 UNMODIFIED。",
+      "publishBusy": "已有同步或发布正在进行",
+      "publishNotActive": "云端数据集当前为 {{status}}——请等待 ACTIVE",
+      "cloudCopy": "云端副本",
+      "cloudCopyHint": "「同步 AWS」会原地替换该数据集草稿中的示例；「发布版本」把草稿快照为不可变的编号版本。",
+      "cloudExamples": "草稿含 {{count}} 条示例",
+      "versionDeleted": "版本 {{version}} 已删除。",
+      "versions": {
+        "title": "已发布版本",
+        "none": "尚无已发布版本——目前只有草稿",
+        "delete": "删除此版本",
+        "col": {
+          "version": "版本",
+          "examples": "示例数",
+          "created": "创建时间"
+        }
+      },
+      "confirmVersionDelete": {
+        "title": "删除数据集版本",
+        "body": "删除已发布版本 v{{version}}？草稿和其他版本保留；已固定到该版本的运行将失去数据源。"
+      },
       "detail": {
         "id": "数据集 ID",
         "schema": "SCHEMA",
         "examples": "样例数",
         "status": "状态",
+        "draft": "草稿",
         "updated": "更新时间"
       },
       "formTitleCreate": "创建数据集",
@@ -2288,16 +2314,16 @@
       },
       "confirmCloudDelete": {
         "title": "删除云端数据集",
-        "body": "删除 AWS 数据集“{{name}}”？云端数据集不可变——此操作将从账户中移除该资源。"
+        "body": "删除 AWS 数据集“{{name}}”？此操作将从账户中移除草稿和所有已发布版本。"
       },
       "how": {
         "title": "数据集是如何工作的",
         "sub": "本地为源 · 单向同步到 AWS",
         "s1": "编写——scenario 含多轮、断言与期望轨迹（真值），或 simulated persona（actor profile + goal），或导入 JSON/JSONL",
         "s2": "存储——本地 SQLite 记录可编辑，是唯一数据源",
-        "s3": "同步——SYNC TO AWS 生成不可变的云端数据集快照",
+        "s3": "同步——「同步 AWS」首次创建云端数据集，之后原地替换其草稿；「发布版本」把草稿快照为不可变的编号版本",
         "s4": "运行——在 NEW RUN 中选择数据集（本地或 ☁ 云端）作为评估范围",
-        "note": "kind 由条目内容推断且服务端不可变；云端副本只能删除、不能编辑。"
+        "note": "kind 由条目内容推断且服务端不可变；已发布的云端版本不可变——只有草稿会变，且仅通过同步变更。"
       }
     },
     "evaluatorNames": {

@@ -17,12 +17,23 @@ import {
 } from "../components";
 import { EvaluationNav } from "../components/EvaluationNav";
 
+interface CloudVersion {
+  version: string | null;
+  example_count: number | null;
+  created_at: string | null;
+}
+
+// The row's one AWS Dataset: re-sync edits its DRAFT in place, PUBLISH VERSION
+// snapshots the draft as an immutable numbered version.
 interface CloudBlob {
   dataset_id: string;
   arn?: string | null;
   status: string;
   synced_at?: string | null;
   failure_reason?: string | null;
+  draft_status?: string | null;
+  example_count?: number | null;
+  versions?: CloudVersion[];
 }
 
 interface DatasetRow {
@@ -43,7 +54,17 @@ interface CloudRow {
   status: string | null;
   schemaType: string | null;
   exampleCount: number | null;
+  draftStatus?: string | null;
   updatedAt: string | null;
+}
+
+// GET /api/eval/datasets/cloud/{id} — draft + versions for a cloud-only row.
+interface CloudDetail {
+  datasetId: string;
+  status: string | null;
+  draft_status: string | null;
+  failure_reason: string | null;
+  versions: CloudVersion[];
 }
 
 interface TurnDraft {
@@ -299,6 +320,13 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
   const [cloudLoaded, setCloudLoaded] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  // publish-in-flight key: local row id or "cloud:<datasetId>"
+  const [publishingKey, setPublishingKey] = useState<string | null>(null);
+  const [cloudDetail, setCloudDetail] = useState<CloudDetail | null>(null);
+  const [confirmVersion, setConfirmVersion] = useState<{
+    cloudId: string;
+    version: string;
+  } | null>(null);
   const [confirmLocal, setConfirmLocal] = useState<DatasetRow | null>(null);
   const [confirmCloud, setConfirmCloud] = useState<CloudRow | null>(null);
 
@@ -385,6 +413,23 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
 
   const local = selection?.kind === "local" ? selection.row : null;
   const cloud = selection?.kind === "cloud" ? selection.row : null;
+  const cloudId = cloud?.datasetId ?? null;
+
+  // cloud-only rows: the list carries no versions — read the detail on selection
+  const loadCloudDetail = useCallback(async (id: string) => {
+    try {
+      const res = await fetch(`/api/eval/datasets/cloud/${id}`);
+      if (!res.ok) throw new Error(`http ${res.status}`);
+      setCloudDetail((await res.json()) as CloudDetail);
+    } catch {
+      setCloudDetail(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    setCloudDetail(null);
+    if (cloudId) void loadCloudDetail(cloudId);
+  }, [cloudId, loadCloudDetail]);
   const editingId = local?.id ?? null;
 
   // local rows then cloud-only rows are ONE list as far as the reader (and the
@@ -587,6 +632,40 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
     await load();
   };
 
+  const publish = async (key: string, url: string) => {
+    setPublishingKey(key);
+    setSyncError(null);
+    try {
+      const res = await fetch(url, { method: "POST" });
+      if (!res.ok) {
+        const env = (await res.json().catch(() => ({}))) as { message?: string };
+        setSyncError(env.message ?? `HTTP ${res.status}`);
+      } else {
+        const body = (await res.json()) as { cloud?: CloudBlob; versions?: CloudVersion[] };
+        const versions = body.cloud?.versions ?? body.versions ?? [];
+        toast(t("evalPage.datasets.published", { version: versions[0]?.version ?? "" }));
+      }
+      await load();
+      if (cloudId) await loadCloudDetail(cloudId);
+    } finally {
+      setPublishingKey(null);
+    }
+  };
+
+  const deleteVersion = async (id: string, version: string) => {
+    const res = await fetch(`/api/eval/datasets/cloud/${id}/versions/${version}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const env = (await res.json().catch(() => ({}))) as { message?: string };
+      toast(t("common.actionFailed", { msg: env.message ?? `HTTP ${res.status}` }));
+      return;
+    }
+    toast(t("evalPage.datasets.versionDeleted", { version }));
+    await load();
+    if (cloudId) await loadCloudDetail(cloudId);
+  };
+
   const cloudChip = (row: DatasetRow) => {
     if (!row.cloud) return <Chip tone="muted">{t("evalPage.datasets.notSynced")}</Chip>;
     if (row.cloud.status === "ACTIVE") return <Chip tone="good" icon="●">ACTIVE</Chip>;
@@ -594,6 +673,78 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
       return <Chip tone="muted">{t("evalPage.datasets.cloudGone")}</Chip>;
     return <Chip tone="crit" icon="✕">{row.cloud.status}</Chip>;
   };
+
+  // DRAFT status of the cloud dataset: MODIFIED = edits not yet published as a
+  // version; UNMODIFIED = the draft equals the newest version.
+  const draftChip = (draft: string | null | undefined) => {
+    if (!draft) return null;
+    const modified = draft === "MODIFIED";
+    return (
+      <Chip tone={modified ? "warn" : "good"}>
+        {modified
+          ? t("evalPage.datasets.draftModified")
+          : t("evalPage.datasets.draftUnmodified")}
+      </Chip>
+    );
+  };
+
+  // Why PUBLISH VERSION is disabled right now, or null when it is allowed.
+  const publishBlocker = (status: string | null | undefined): string | null => {
+    if (publishingKey !== null || syncingId !== null)
+      return t("evalPage.datasets.publishBusy");
+    if (status !== "ACTIVE")
+      return t("evalPage.datasets.publishNotActive", { status: status ?? "—" });
+    return null;
+  };
+
+  const versionsList = (id: string, versions: CloudVersion[] | undefined) => (
+    <div style={{ marginTop: 8 }}>
+      <div className="mono dim" style={{ fontSize: 10, letterSpacing: ".06em", marginBottom: 4 }}>
+        {t("evalPage.datasets.versions.title")}
+      </div>
+      {!versions || versions.length === 0 ? (
+        <div className="mono dim" style={{ fontSize: 10.5 }}>
+          {t("evalPage.datasets.versions.none")}
+        </div>
+      ) : (
+        <table className="tbl" style={{ fontSize: 10.5 }} data-testid={`versions-${id}`}>
+          <thead>
+            <tr>
+              <th>{t("evalPage.datasets.versions.col.version")}</th>
+              <th>{t("evalPage.datasets.versions.col.examples")}</th>
+              <th>{t("evalPage.datasets.versions.col.created")}</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {versions.map((v) => (
+              <tr key={v.version ?? ""}>
+                <td className="mono">v{v.version ?? "?"}</td>
+                <td className="mono dim">{v.example_count ?? "—"}</td>
+                <td className="mono dim">
+                  {v.created_at ? new Date(v.created_at).toLocaleString() : "—"}
+                </td>
+                <td style={{ textAlign: "right" }}>
+                  <button
+                    type="button"
+                    className="mono dim"
+                    title={t("evalPage.datasets.versions.delete")}
+                    aria-label={t("evalPage.datasets.versions.delete")}
+                    style={{ background: "none", border: 0, cursor: "pointer" }}
+                    onClick={() =>
+                      v.version && setConfirmVersion({ cloudId: id, version: v.version })
+                    }
+                  >
+                    ✕
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
 
   const scenarioEditor = (
     <>
@@ -980,7 +1131,12 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
                       <span className="mono dim">—</span>
                     )}
                   </td>
-                  <td>{cloudChip(row)}</td>
+                  <td>
+                    <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
+                      {cloudChip(row)}
+                      {row.cloud?.status !== "deleted" && draftChip(row.cloud?.draft_status)}
+                    </span>
+                  </td>
                 </tr>
               ))}
               {pageEntries.filter((entry) => entry.kind === "cloud").map(({ row }) => (
@@ -1001,7 +1157,10 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
                   </td>
                   <td className="mono dim">—</td>
                   <td>
-                    <Chip tone={row.status === "ACTIVE" ? "good" : "warn"}>{row.status}</Chip>
+                    <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
+                      <Chip tone={row.status === "ACTIVE" ? "good" : "warn"}>{row.status}</Chip>
+                      {draftChip(row.draftStatus)}
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -1061,14 +1220,45 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
                     ? `◐ ${t("evalPage.datasets.syncing")}`
                     : t("evalPage.datasets.sync")}
                 </Btn>
+                {local.cloud && local.cloud.status !== "deleted" && (
+                  <Btn
+                    disabled={publishBlocker(local.cloud.status) !== null}
+                    disabledReason={publishBlocker(local.cloud.status) ?? undefined}
+                    onClick={() =>
+                      void publish(local.id, `/api/eval/datasets/${local.id}/publish-version`)
+                    }
+                    data-testid={`publish-${local.name}`}
+                  >
+                    {publishingKey === local.id
+                      ? `◐ ${t("evalPage.datasets.publishing")}`
+                      : t("evalPage.datasets.publish")}
+                  </Btn>
+                )}
                 <Btn onClick={() => setConfirmLocal(local)}>
                   {t("evalPage.datasets.delete")}
                 </Btn>
               </>
             ) : cloud ? (
-              <Btn onClick={() => setConfirmCloud(cloud)}>
-                {t("evalPage.datasets.delete")}
-              </Btn>
+              <>
+                <Btn
+                  disabled={publishBlocker(cloudDetail?.status ?? cloud.status) !== null}
+                  disabledReason={publishBlocker(cloudDetail?.status ?? cloud.status) ?? undefined}
+                  onClick={() =>
+                    void publish(
+                      CLOUD_PREFIX + cloud.datasetId,
+                      `/api/eval/datasets/cloud/${cloud.datasetId}/publish-version`,
+                    )
+                  }
+                  data-testid={`publish-cloud-${cloud.datasetId}`}
+                >
+                  {publishingKey === CLOUD_PREFIX + cloud.datasetId
+                    ? `◐ ${t("evalPage.datasets.publishing")}`
+                    : t("evalPage.datasets.publish")}
+                </Btn>
+                <Btn onClick={() => setConfirmCloud(cloud)}>
+                  {t("evalPage.datasets.delete")}
+                </Btn>
+              </>
             ) : (
               <Btn
                 onClick={() => {
@@ -1111,11 +1301,32 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
                 </span>
               </div>
               <div className="kv">
+                <span className="k mono">{t("evalPage.datasets.detail.draft")}</span>
+                <span className="v">
+                  {draftChip(cloudDetail?.draft_status ?? cloud.draftStatus) ?? (
+                    <span className="mono dim">—</span>
+                  )}
+                </span>
+              </div>
+              <div className="kv">
                 <span className="k mono">{t("evalPage.datasets.detail.updated")}</span>
                 <span className="v mono">
                   {cloud.updatedAt ? new Date(cloud.updatedAt).toLocaleString() : "—"}
                 </span>
               </div>
+              {versionsList(cloud.datasetId, cloudDetail?.versions)}
+              {cloudDetail?.failure_reason && (
+                <div className="note" style={{ borderColor: "var(--crit)", marginTop: 10 }}>
+                  <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+                  <span className="mono" style={{ fontSize: 10 }}>{cloudDetail.failure_reason}</span>
+                </div>
+              )}
+              {syncError && (
+                <div className="note" style={{ borderColor: "var(--crit)", marginTop: 10 }}>
+                  <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+                  <span>{syncError}</span>
+                </div>
+              )}
               <div className="note" style={{ marginTop: 10 }}>
                 <span className="i">[i]</span>
                 <span>{t("evalPage.datasets.cloudReadonly")}</span>
@@ -1227,6 +1438,35 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
                 </>
               )}
 
+              {local?.cloud && local.cloud.status !== "deleted" && (
+                <div
+                  data-testid="cloud-copy"
+                  style={{
+                    border: "1px solid rgba(255,255,255,.08)",
+                    borderRadius: 4,
+                    padding: "10px 12px",
+                    marginTop: 10,
+                  }}
+                >
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <span className="mono dim" style={{ fontSize: 10, letterSpacing: ".06em" }}>
+                      {t("evalPage.datasets.cloudCopy")}
+                    </span>
+                    <span className="mono" style={{ fontSize: 10.5 }}>{local.cloud.dataset_id}</span>
+                    {cloudChip(local)}
+                    {draftChip(local.cloud.draft_status)}
+                    {typeof local.cloud.example_count === "number" && (
+                      <span className="mono dim" style={{ fontSize: 10.5 }}>
+                        {t("evalPage.datasets.cloudExamples", { count: local.cloud.example_count })}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mono dim" style={{ fontSize: 10, marginTop: 4 }}>
+                    {t("evalPage.datasets.cloudCopyHint")}
+                  </div>
+                  {versionsList(local.cloud.dataset_id, local.cloud.versions)}
+                </div>
+              )}
               {local?.cloud?.failure_reason && (
                 <div className="note" style={{ borderColor: "var(--crit)", marginTop: 10 }}>
                   <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
@@ -1303,6 +1543,20 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
           if (row) void deleteCloud(row);
         }}
         onCancel={() => setConfirmCloud(null)}
+      />
+      <ConfirmDialog
+        open={confirmVersion !== null}
+        title={t("evalPage.datasets.confirmVersionDelete.title")}
+        body={t("evalPage.datasets.confirmVersionDelete.body", {
+          version: confirmVersion?.version ?? "",
+        })}
+        confirmLabel={t("evalPage.datasets.delete")}
+        onConfirm={() => {
+          const target = confirmVersion;
+          setConfirmVersion(null);
+          if (target) void deleteVersion(target.cloudId, target.version);
+        }}
+        onCancel={() => setConfirmVersion(null)}
       />
     </section>
   );

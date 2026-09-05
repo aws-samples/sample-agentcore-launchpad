@@ -2226,17 +2226,43 @@
       "cloudGone": "CLOUD DELETED",
       "sync": "SYNC TO AWS",
       "syncing": "SYNCING",
-      "synced": "Dataset synced — the AWS copy is ACTIVE.",
+      "synced": "Dataset synced — the AWS draft is ACTIVE.",
       "delete": "DELETE",
       "deleted": "Dataset deleted.",
       "cloudDeleted": "Cloud dataset deleted.",
       "cloudUnavailable": "cloud dataset listing unavailable",
-      "cloudReadonly": "Cloud datasets are immutable snapshots — edit the local source and re-sync, or delete this copy.",
+      "cloudReadonly": "Cloud-only dataset — the console does not edit its draft here. PUBLISH VERSION snapshots the draft; edits arrive by syncing a local dataset or from outside the console.",
+      "draftModified": "DRAFT · MODIFIED",
+      "draftUnmodified": "DRAFT · UNMODIFIED",
+      "publish": "PUBLISH VERSION",
+      "publishing": "PUBLISHING",
+      "published": "Version {{version}} published — the draft is now UNMODIFIED.",
+      "publishBusy": "a sync or publish is already in flight",
+      "publishNotActive": "the cloud dataset is {{status}} — wait for ACTIVE",
+      "cloudCopy": "CLOUD COPY",
+      "cloudCopyHint": "SYNC TO AWS replaces this dataset's DRAFT examples in place; PUBLISH VERSION snapshots the draft as an immutable numbered version.",
+      "cloudExamples": "{{count}} example(s) in the draft",
+      "versionDeleted": "Version {{version}} deleted.",
+      "versions": {
+        "title": "PUBLISHED VERSIONS",
+        "none": "no published versions yet — only the draft exists",
+        "delete": "delete this version",
+        "col": {
+          "version": "VERSION",
+          "examples": "EXAMPLES",
+          "created": "CREATED"
+        }
+      },
+      "confirmVersionDelete": {
+        "title": "Delete dataset version",
+        "body": "Delete published version v{{version}}? The draft and the other versions stay; runs already pinned to it lose their source."
+      },
       "detail": {
         "id": "DATASET ID",
         "schema": "SCHEMA",
         "examples": "EXAMPLES",
         "status": "STATUS",
+        "draft": "DRAFT",
         "updated": "UPDATED"
       },
       "formTitleCreate": "CREATE DATASET",
@@ -2288,16 +2314,16 @@
       },
       "confirmCloudDelete": {
         "title": "Delete cloud dataset",
-        "body": "Delete AWS dataset “{{name}}”? Cloud datasets are immutable — this removes the resource from the account."
+        "body": "Delete AWS dataset “{{name}}”? This removes the draft and every published version from the account."
       },
       "how": {
         "title": "HOW DATASETS WORK",
         "sub": "local source of truth · one-way sync to AWS",
         "s1": "AUTHOR — scenarios with turns, assertions and an expected trajectory (ground truth), or simulated personas (actor profile + goal), or import JSON/JSONL",
         "s2": "STORE — the local SQLite row stays editable and is the source of truth",
-        "s3": "SYNC — SYNC TO AWS creates an immutable cloud dataset snapshot",
+        "s3": "SYNC — SYNC TO AWS creates the cloud dataset once, then replaces its DRAFT in place; PUBLISH VERSION snapshots the draft as an immutable numbered version",
         "s4": "RUN — pick the dataset (local or ☁ cloud) as the scope in NEW RUN",
-        "note": "kind is inferred from the items and immutable server-side; cloud copies can only be deleted, never edited."
+        "note": "kind is inferred from the items and immutable server-side; published cloud versions are immutable — only the draft changes, and only through sync."
       }
     },
     "evaluatorNames": {
