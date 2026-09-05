@@ -100,6 +100,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/agents/discovery"): MEMBER,
     ("POST", "/api/agents/discovery/import"): PERM_AGENT_IMPORT,
     ("GET", "/api/agents/{agent_id}"): MEMBER,
+    ("GET", "/api/agents/{agent_id}/versions"): MEMBER,  # read-only AWS view
     ("DELETE", "/api/agents/{agent_id}"): PERM_AGENT_DELETE,
     ("POST", "/api/agents/{agent_id}/convert"): PERM_AGENT_CONVERT,
     ("POST", "/api/agents/{agent_id}/redeploy"): PERM_AGENT_DEPLOY,
@@ -221,6 +222,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/eval/runs"): MEMBER,
     ("POST", "/api/eval/runs"): PERM_EVAL_RUN,
     ("GET", "/api/eval/runs/{run_id}"): MEMBER,
+    ("POST", "/api/eval/runs/{run_id}/stop"): PERM_EVAL_RUN,
     # online evaluation configs: create/resume start billed judge calls on live
     # traffic, the same cost class as starting a run; list/detail/results read AWS
     ("GET", "/api/eval/online"): MEMBER,

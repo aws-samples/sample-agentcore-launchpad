@@ -255,6 +255,14 @@ def get_batch_evaluation(client: Any, *, batch_id: str) -> dict[str, Any]:
     return client.get_batch_evaluation(batchEvaluationId=batch_id)
 
 
+def stop_batch_evaluation(client: Any, *, batch_id: str) -> dict[str, Any]:
+    """StopBatchEvaluation (HTTP 202): the batch goes STOPPING → STOPPED and the
+    sessions already judged keep their results, so the poller still receives
+    partial ``evaluationResults`` on the STOPPED read. Response shape:
+    ``{batchEvaluationId, batchEvaluationArn, status, description}``."""
+    return client.stop_batch_evaluation(batchEvaluationId=batch_id)
+
+
 def batch_failure_reason(logs_factory: Any, result: dict[str, Any]) -> str | None:
     """First per-trace evaluator error a batch evaluation recorded, if any.
 

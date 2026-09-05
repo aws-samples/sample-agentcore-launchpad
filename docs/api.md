@@ -93,6 +93,24 @@ denied`, `AWS is throttling this request`, `AWS resource conflict`) and `detail`
 carries only `aws_error_code` — the raw AWS text names the deployment's role ARN,
 instance id and operation, which stay on the console side of the API-key boundary.
 
+## Console Agents API — versions and endpoints
+
+`GET /api/agents/{agent_id}/versions` is the read-only AWS view behind the agent
+detail's VERSIONS & ENDPOINTS panel. It follows every `nextToken` page of the two
+list operations for the agent's resource family and returns an allow-listed
+projection — no environment values, artifact locations, execution roles or
+authorizer configuration.
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/agents/{agent_id}/versions` | `{kind: runtime\|harness, resource_id, versions[{version, status, description, last_updated_at}], endpoints[{name, live_version, target_version, status, description, created_at, last_updated_at, failure_reason}], latest_version, ledger_version, canary_endpoints[]}` — `versions` newest first; `endpoints` with `DEFAULT` first then by name; `latest_version` is the highest version AWS reports and `ledger_version` the one the last Launchpad deploy recorded (`Agent.version`) — they may differ after an out-of-band update or a canary candidate mint; `canary_endpoints` lists the `stable`/`treatment` names still present. Resource family: `zip_runtime`/`studio`/`container` and imported rows whose `spec.discovery.resource_type` is absent or `runtime` → `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints`; `harness` and imported rows with `resource_type == "harness"` → `ListHarnessVersions` + `ListHarnessEndpoints` (harness versions carry no description). Never mutates anything |
+
+Error codes: `agent.not_found` (404, unknown id or another workspace's agent),
+`agent.no_resource` (409, the row has no AWS resource to ask about — deploy still
+running, failed first deploy, deleted, or a shape that is neither Runtime nor
+Harness; `message` is the human reason the panel shows). AWS `ClientError`s map to
+the standard 4xx envelope.
+
 ## Console Governance API
 
 These `/api` routes back the authenticated console. They are not part of the
@@ -202,6 +220,22 @@ Ending is explicit: NEW SESSION in the console only forgets the id locally, so t
 runtime session it leaves behind idles out on its own. END SESSION is what to press
 after a re-publish — AgentCore pins a live session to the version that first
 served it, so validation of the new version needs a fresh session.
+
+## Console Evaluation Runs API
+
+`/api/eval/runs` drives batch evaluations / insights analyses through the bounded
+run queue (`eval_max_concurrent_runs`, capped at the 5 active-batch-evaluations
+account quota). Run status: `queued → invoking → waiting → evaluating → completed |
+failed | stopped`. Every row carries `stop_requested` (an operator stop is pending
+on a run whose batch is still STOPPING).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/eval/runs?limit&offset&mode&agent_id` | Newest-first page `{runs, total, limit, offset}` |
+| `GET` | `/api/eval/runs/{run_id}` | One run (scores / insight trees / `batch_eval_id` / `error` / `stop_requested`) |
+| `POST` | `/api/eval/runs` | Start a run (exactly one scope: `dataset_id` \| `cloud_dataset_id` \| `session_ids` \| `lookback_hours`) → 201 |
+| `POST` | `/api/eval/runs/{run_id}/stop` | **Stop an active run** → 202 with the run. A run whose batch exists on AWS (`batch_eval_id` set) is stopped with `StopBatchEvaluation`: the batch goes `STOPPING → STOPPED`, the sessions already judged keep their results, and the poller records the run as `stopped` with those partial scores / insight trees and `error = "stopped by operator"`. A run still `queued` is cancelled locally (the worker skips it, AWS is never called) and returns `stopped` at once. A run replaying its dataset or waiting for telemetry (no batch yet) stops between prompts and never calls `StartBatchEvaluation`. Terminal runs (`completed` / `failed` / `stopped`) → 409 `run.not_active`; unknown → 404 `run.not_found`. `DeleteBatchEvaluation` is deliberately not exposed — the ledger keeps the partial results AWS would drop |
+| `GET` | `/api/eval/queue` | `{running, queued, locked, max_concurrency}` — cancelled runs leave the queue immediately, so the count covers active runs only |
 
 ## Console Online Evaluation API
 

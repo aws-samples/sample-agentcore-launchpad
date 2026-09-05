@@ -264,6 +264,36 @@ def delete_runtime_endpoint(client: Any, *, runtime_id: str, endpoint_name: str)
     )
 
 
+def list_runtime_versions(client: Any, runtime_id: str) -> list[dict[str, Any]]:
+    """Every immutable version of one runtime, across all ListAgentRuntimeVersions
+    pages. Summaries carry {agentRuntimeVersion, status, description,
+    lastUpdatedAt, …}; the caller projects — nothing here filters."""
+    versions: list[dict[str, Any]] = []
+    kwargs: dict[str, Any] = {"agentRuntimeId": runtime_id, "maxResults": 100}
+    while True:
+        page = client.list_agent_runtime_versions(**kwargs)
+        versions.extend(page.get("agentRuntimes", []))
+        token = page.get("nextToken")
+        if not token:
+            return versions
+        kwargs["nextToken"] = token
+
+
+def list_runtime_endpoints(client: Any, runtime_id: str) -> list[dict[str, Any]]:
+    """Every endpoint of one runtime (DEFAULT + named), across all
+    ListAgentRuntimeEndpoints pages. Summaries carry {name, liveVersion,
+    targetVersion, status, description, createdAt, lastUpdatedAt, …}."""
+    endpoints: list[dict[str, Any]] = []
+    kwargs: dict[str, Any] = {"agentRuntimeId": runtime_id, "maxResults": 100}
+    while True:
+        page = client.list_agent_runtime_endpoints(**kwargs)
+        endpoints.extend(page.get("runtimeEndpoints", []))
+        token = page.get("nextToken")
+        if not token:
+            return endpoints
+        kwargs["nextToken"] = token
+
+
 def wait_endpoint_ready(
     client: Any,
     *,

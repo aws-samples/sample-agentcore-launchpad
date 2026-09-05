@@ -1,7 +1,7 @@
 /** Typed client for the Launchpad backend. */
 
 import i18n from "../i18n";
-import type { InsightTrees } from "./evaluation";
+import type { EvaluationRunInfo, InsightTrees } from "./evaluation";
 import type { ModelSource } from "./models";
 
 export interface StageInfo {
@@ -75,6 +75,39 @@ export interface ChatSessionStopResult {
   /** AWS no longer knew the session (already ended or idle-expired) — still a success. */
   already_ended: boolean;
   ended_at: string | null;
+}
+
+/** GET /api/agents/{id}/versions — the AWS-side version + endpoint set of one
+ *  Runtime- or Harness-backed agent (read-only, allow-list projected). */
+export interface AgentVersionRow {
+  version: string | null;
+  status: string | null;
+  description: string | null;
+  last_updated_at: string | null;
+}
+
+export interface AgentEndpointRow {
+  name: string | null;
+  live_version: string | null;
+  target_version: string | null;
+  status: string | null;
+  description: string | null;
+  created_at: string | null;
+  last_updated_at: string | null;
+  failure_reason: string | null;
+}
+
+export interface AgentVersionsInfo {
+  kind: "runtime" | "harness";
+  resource_id: string;
+  versions: AgentVersionRow[];
+  endpoints: AgentEndpointRow[];
+  /** highest version AWS reports */
+  latest_version: string | null;
+  /** the version the last Launchpad deploy recorded (Agent.version) */
+  ledger_version: string | null;
+  /** names among `stable`/`treatment` still present — canary leftovers */
+  canary_endpoints: string[];
 }
 
 export interface RuntimeDiscoveryCandidate {
@@ -2144,6 +2177,14 @@ export interface RecommendProviderInfo {
 
 export const api = {
   authStatus: () => request<AuthStatus>("/api/auth/status"),
+  /** `POST /api/eval/runs/{id}/stop` (202). With a batch on AWS: StopBatchEvaluation,
+   *  the row follows STOPPING → STOPPED and comes back `stop_requested`; a queued run
+   *  is cancelled locally and returns `stopped` at once. Terminal runs → 409
+   *  `run.not_active`. */
+  stopEvaluationRun: (runId: string) =>
+    request<EvaluationRunInfo>(`/api/eval/runs/${encodeURIComponent(runId)}/stop`, {
+      method: "POST",
+    }),
   experimentProviders: () =>
     request<{ providers: RecommendProviderInfo[] }>("/api/experiments/providers"),
   login: (username: string, password: string) =>
@@ -2311,6 +2352,7 @@ export const api = {
   getOverview: () => request<OverviewInfo>("/api/overview"),
   overviewOnlineQuality: () => request<OnlineQuality>("/api/overview/online-quality"),
   getAgent: (id: string) => request<AgentInfo>(`/api/agents/${id}`),
+  agentVersions: (id: string) => request<AgentVersionsInfo>(`/api/agents/${id}/versions`),
   getJob: (id: string) => request<JobInfo>(`/api/jobs/${id}`),
   listRuntimeCanaries: () =>
     request<{ canaries: RuntimeCanaryInfo[] }>("/api/runtime-canaries"),

@@ -60,6 +60,37 @@ def list_harnesses(client: Any) -> list[dict[str, Any]]:
         kwargs["nextToken"] = token
 
 
+def list_harness_versions(client: Any, harness_id: str) -> list[dict[str, Any]]:
+    """Every version of one harness across all ListHarnessVersions pages.
+    ``HarnessVersionSummary`` has no ``description`` and uses ``updatedAt`` (not
+    ``lastUpdatedAt``): {harnessVersion, status, createdAt, updatedAt,
+    failureReason, …}. The caller projects."""
+    versions: list[dict[str, Any]] = []
+    kwargs: dict[str, Any] = {"harnessId": harness_id, "maxResults": 100}
+    while True:
+        page = client.list_harness_versions(**kwargs)
+        versions.extend(page.get("harnessVersions", []))
+        token = page.get("nextToken")
+        if not token:
+            return versions
+        kwargs["nextToken"] = token
+
+
+def list_harness_endpoints(client: Any, harness_id: str) -> list[dict[str, Any]]:
+    """Every endpoint of one harness across all ListHarnessEndpoints pages:
+    {endpointName, liveVersion, targetVersion, status, description, createdAt,
+    updatedAt, failureReason, …}."""
+    endpoints: list[dict[str, Any]] = []
+    kwargs: dict[str, Any] = {"harnessId": harness_id, "maxResults": 100}
+    while True:
+        page = client.list_harness_endpoints(**kwargs)
+        endpoints.extend(page.get("endpoints", []))
+        token = page.get("nextToken")
+        if not token:
+            return endpoints
+        kwargs["nextToken"] = token
+
+
 def delete_harness(client: Any, harness_id: str) -> None:
     client.delete_harness(harnessId=harness_id)
 
