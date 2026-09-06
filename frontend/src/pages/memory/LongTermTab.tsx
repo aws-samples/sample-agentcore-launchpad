@@ -135,17 +135,23 @@ export function LongTermTab({
             <option
               key={`${n.strategy_id}-${n.template}`}
               value={n.strategy_id ?? ""}
-              // {sessionId}-style templates cannot be resolved from an actor alone
+              // a placeholder in the MIDDLE of the path cannot be resolved from an
+              // actor alone; trailing {sessionId} segments collapse into a prefix
               disabled={!n.resolvable}
             >
               {n.strategy_name ?? n.template}
-              {n.resolvable ? "" : ` — ${t("memoryPage.long.unresolvable")}`}
+              {n.resolvable
+                ? n.prefix
+                  ? ` — ${t("memoryPage.long.allSessions")}`
+                  : ""
+                : ` — ${t("memoryPage.long.unresolvable")}`}
             </option>
           ))}
         </select>
         {selected && (
-          <span className="mono dim" title={selected.namespace}>
+          <span className="mono dim" title={selected.template}>
             {selected.namespace}
+            {selected.prefix ? "/…" : ""}
           </span>
         )}
         <span className="spacer" />

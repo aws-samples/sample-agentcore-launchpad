@@ -17,50 +17,13 @@ from typing import Any
 from app.core.errors import AppError
 from app.services.agentcore.client import control_client
 from app.services.memory import memory_id_or_none
+from app.services.memory_strategies import STRATEGIES
 from app.services.workspace import WorkspaceContext
 
 PAGE_MAX = 100
 
-# The strategy shapes mirror the bootstrap memory exactly (services/bootstrap.py):
-# agents write under a scoped actor and the console reads /facts/... and
-# /preferences/... namespaces, so a custom memory must expose the same layout for
-# extraction and the chat rail to work unchanged. Summaries and episodes are
-# additive: their namespaces keep the platform's flat `/label/{actorId}` style
-# rather than the docs' `/strategy/{memoryStrategyId}/...` example, so the
-# console's namespace resolution treats every strategy the same way.
-STRATEGIES: dict[str, dict[str, Any]] = {
-    "semantic": {
-        "semanticMemoryStrategy": {
-            "name": "semantic_facts",
-            "namespaces": ["/facts/{actorId}"],
-        }
-    },
-    "user_preference": {
-        "userPreferenceMemoryStrategy": {
-            "name": "user_preferences",
-            "namespaces": ["/preferences/{actorId}"],
-        }
-    },
-    "summarization": {
-        "summaryMemoryStrategy": {
-            "name": "session_summaries",
-            "namespaces": ["/summaries/{actorId}/{sessionId}"],
-        }
-    },
-    # Episodes capture whole interactions (scenario/intent/actions/outcome);
-    # reflections aggregate insights across them. The live API requires the
-    # reflection namespace to be "the same as or a hierarchical prefix of" the
-    # episode namespace, so it is the per-actor prefix of the per-session one.
-    "episodic": {
-        "episodicMemoryStrategy": {
-            "name": "episodes",
-            "namespaces": ["/episodes/{actorId}/{sessionId}"],
-            "reflectionConfiguration": {
-                "namespaceTemplates": ["/episodes/{actorId}"]
-            },
-        }
-    },
-}
+# The strategy catalog is shared with bootstrap (services/memory_strategies.py) so a
+# console-created memory mirrors the platform default exactly.
 
 
 def _iso(value: Any) -> str | None:

@@ -255,7 +255,7 @@ See [architecture.md](architecture.md#the-memory-console-console-05).
 | `GET` | `/api/memory/actors` | Actors with the compound `<agent_id>__<human>` id decoded and the agent name resolved |
 | `GET` | `/api/memory/sessions?actor_id=` | Sessions for one actor, joined to the ChatSession ledger when the console wrote them |
 | `GET` | `/api/memory/events?actor_id=&session_id=` | Short-term events; conversational payloads carry role + full text, blobs only a byte count |
-| `GET` | `/api/memory/namespaces?actor_id=` | Strategy namespace templates with `{actorId}` substituted, plus a `resolvable` flag |
+| `GET` | `/api/memory/namespaces?actor_id=` | Strategy namespace templates with `{actorId}` substituted; trailing `{sessionId}` segments collapse into an actor-level prefix (`prefix: true`), a placeholder elsewhere yields `resolvable: false` |
 | `GET` | `/api/memory/records?actor_id=&strategy_id=` or `?namespace=` | Long-term records for the resolved namespace |
 | `POST` | `/api/memory/records/search` | Semantic retrieval (`{query, actor_id, strategy_id?, namespace?, top_k}`) with relevance scores |
 | `GET` | `/api/memory/extraction-jobs` | Failed (retry-eligible) extraction jobs, filterable by `actor_id`/`session_id`/`strategy_id`/`status` — **not surfaced in the console**; AWS's `status` enum is `FAILED` only, so a healthy resource returns an empty list |

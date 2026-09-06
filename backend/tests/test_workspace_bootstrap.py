@@ -269,6 +269,7 @@ class FakeControl:
         self.memories: dict[str, dict] = {}
         self.providers: dict[str, str] = {}
         self.created_gateways: list[str] = []
+        self.updated_memories: list[tuple[str, list[str]]] = []
         self.created_memories: list[str] = []
         self.created_providers: list[str] = []
         self.updated: list[str] = []
@@ -322,10 +323,36 @@ class FakeControl:
     def list_memories(self, maxResults=None, nextToken=None):  # noqa: N803
         return {"memories": list(self.memories.values())}
 
+    @staticmethod
+    def _strategy_records(entries):
+        # GetMemory reports each strategy by `type`/`name`, not by its input key
+        from app.services.memory_strategies import STRATEGY_TYPES, strategy_kind
+
+        return [
+            {
+                "strategyId": f"{entry[strategy_kind(entry)]['name']}-x",
+                "name": entry[strategy_kind(entry)]["name"],
+                "type": STRATEGY_TYPES[strategy_kind(entry)],
+                "status": "ACTIVE",
+            }
+            for entry in entries
+        ]
+
     def create_memory(self, name, **kwargs):
         memory_id = self.preexisting_memory(name)
+        self.memories[memory_id]["strategies"] = self._strategy_records(
+            kwargs.get("memoryStrategies") or []
+        )
         self.created_memories.append(name)
         return {"memory": self.memories[memory_id]}
+
+    def update_memory(self, memoryId, **kwargs):  # noqa: N803
+        # additive — `addMemoryStrategies` is the only modification the platform sends
+        added = (kwargs.get("memoryStrategies") or {}).get("addMemoryStrategies") or []
+        memory = self.memories[memoryId]
+        memory["strategies"] = list(memory.get("strategies") or []) + self._strategy_records(added)
+        self.updated_memories.append((memoryId, [next(iter(e)) for e in added]))
+        return {"memory": memory}
 
     def get_memory(self, memoryId):  # noqa: N803
         return {"memory": self.memories[memoryId]}

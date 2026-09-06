@@ -126,7 +126,17 @@ def main() -> int:
             else registry["reason"],
         ),
         ("memory", f"{summary['memory']['arn']}"),
-        ("memory state", "created" if summary["memory"]["created"] else "reused"),
+        (
+            "memory state",
+            "created"
+            if summary["memory"]["created"]
+            else "reused"
+            + (
+                f" (+ strategies: {', '.join(summary['memory']['strategies_added'])})"
+                if summary["memory"].get("strategies_added")
+                else ""
+            ),
+        ),
         ("artifacts bucket", summary["stack_outputs"]["ArtifactsBucketName"]),
         ("ecr repo", summary["stack_outputs"]["EcrRepoUri"]),
         ("codebuild", summary["stack_outputs"]["CodeBuildProjectName"]),

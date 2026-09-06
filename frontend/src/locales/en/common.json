@@ -3370,6 +3370,7 @@
       "strategyLabel": "Strategy",
       "pickStrategy": "Select a strategy…",
       "unresolvable": "needs a session",
+      "allSessions": "all sessions",
       "searchPlaceholder": "Ask what this agent remembers about the user…",
       "topKLabel": "Result count",
       "topK": "top {{k}}",

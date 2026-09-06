@@ -114,8 +114,11 @@ Agent 用「它」指代上一轮的基金，答出：目标持仓 25–40 只 /
 
 ![记忆资源概览](images/05-memory-overview.png)
 *图 5-4：平台共享的 `launchpad_memory-…`：事件过期 30 天、AWS 托管密钥、执行角色，
-以及两个长期策略：`semantic_facts`（SEMANTIC，命名空间 `/facts/{actorId}`）与
-`user_preferences`（USER_PREFERENCE，命名空间 `/preferences/{actorId}`）。
+以及四个长期策略：`semantic_facts`（SEMANTIC，命名空间 `/facts/{actorId}`）、
+`user_preferences`（USER_PREFERENCE，命名空间 `/preferences/{actorId}`）、
+`session_summaries`（SUMMARIZATION，命名空间 `/summaries/{actorId}/{sessionId}`）与
+`episodes`（EPISODIC，命名空间 `/episodes/{actorId}/{sessionId}`，反思汇总在 `/episodes/{actorId}`）。
+截图摄于只有前两个策略的版本。
 下方还列出账号里其它 memory 资源，并标注哪个属于本平台（`平台` vs `外部`）。*
 
 AgentCore 的命名空间模板里**没有 `{agentId}`**，只有 `{actorId}`。平台因此把 Agent id 折进

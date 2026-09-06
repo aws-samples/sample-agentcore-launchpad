@@ -43,7 +43,7 @@ What it creates / 创建内容:
 | Cognito user pool | `launchpad-users` (+ groups `platform-admin`, `hr-analyst`, demo users `admin`/`demo`) |
 | IAM execution role | `launchpad-agent-execution-role` |
 | AgentCore Registry | `launchpad-registry` |
-| AgentCore Memory | `launchpad_memory` (short-term events + semantic & user-preference long-term strategies) |
+| AgentCore Memory | `launchpad_memory` (short-term events + semantic, user-preference, session-summary and episodic long-term strategies; re-running bootstrap adds missing strategies to an existing memory) |
 | AgentCore Gateway | `launchpad-gw-<suffix>` |
 | Managed AgentCore CLI | `data/agentcore-cli/` (`@aws/agentcore@0.21.1`) |
 

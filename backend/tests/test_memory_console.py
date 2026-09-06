@@ -462,33 +462,65 @@ def test_namespaces_substitute_actor_into_templates(client, configured, monkeypa
         "items"
     ]
     assert [i["namespace"] for i in items] == ["/facts/ag__river", "/preferences/ag__river"]
-    assert all(i["resolvable"] for i in items)
+    assert all(i["resolvable"] and not i["prefix"] for i in items)
 
 
-def test_unknown_placeholder_marks_namespace_unresolvable(client, configured, monkeypatch):
-    payload = {
+def _strategies_payload(*templates: str) -> dict:
+    return {
         "memory": {
             **MEMORY_PAYLOAD["memory"],
             "strategies": [
                 {
-                    "strategyId": "s1",
-                    "name": "per_session",
+                    "strategyId": f"s{i}",
+                    "name": f"strategy_{i}",
                     "type": "SUMMARIZATION",
                     "status": "ACTIVE",
                     "namespaces": [],
-                    "namespaceTemplates": ["/summaries/{actorId}/{sessionId}"],
+                    "namespaceTemplates": [template],
                 }
+                for i, template in enumerate(templates)
             ],
         }
     }
-    wire(monkeypatch, control=StubControl(memory=payload))
+
+
+def test_trailing_session_placeholder_resolves_to_an_actor_prefix(
+    client, configured, monkeypatch
+):
+    """The bootstrap summary/episodic templates end in {sessionId}; both
+    ListMemoryRecords and RetrieveMemoryRecords match namespaces by prefix
+    (verified live), so the actor-level prefix reads every session at once."""
+    wire(
+        monkeypatch,
+        control=StubControl(
+            memory=_strategies_payload(
+                "/summaries/{actorId}/{sessionId}", "/episodes/{actorId}/{sessionId}/{turn}"
+            )
+        ),
+    )
+    items = client.get("/api/memory/namespaces", params={"actor_id": "ag__river"}).json()[
+        "items"
+    ]
+    assert [(i["namespace"], i["resolvable"], i["prefix"]) for i in items] == [
+        ("/summaries/ag__river", True, True),
+        ("/episodes/ag__river", True, True),
+    ]
+    assert items[0]["template"] == "/summaries/{actorId}/{sessionId}"
+
+
+def test_middle_placeholder_marks_namespace_unresolvable(client, configured, monkeypatch):
+    wire(
+        monkeypatch,
+        control=StubControl(memory=_strategies_payload("/tenants/{tenant}/{actorId}")),
+    )
     item = client.get("/api/memory/namespaces", params={"actor_id": "ag__river"}).json()[
         "items"
     ][0]
-    # {sessionId} is not resolvable from an actor alone — say so instead of
-    # sending a broken namespace to AWS
+    # a placeholder BEFORE the actor cannot be bridged by a prefix — say so
+    # instead of sending a broken namespace to AWS
     assert item["resolvable"] is False
-    assert item["namespace"] == "/summaries/ag__river/{sessionId}"
+    assert item["prefix"] is False
+    assert item["namespace"] == "/tenants/{tenant}/ag__river"
 
 
 def test_records_resolve_namespace_from_actor_and_strategy(client, configured, monkeypatch):

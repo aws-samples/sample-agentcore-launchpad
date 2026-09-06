@@ -14,12 +14,18 @@ Governance, not part of environment bootstrap.
 import secrets
 import string
 import time
+from copy import deepcopy
 from typing import Any
 
 import yaml
 from botocore.exceptions import ClientError
 
 from app.core.config import CONFIG_FILE, get_settings
+from app.services.memory_strategies import (
+    DEFAULT_STRATEGIES,
+    missing_strategies,
+    strategy_name,
+)
 from app.services.workspace import WorkspaceContext
 
 STACK_NAME = "launchpad-base"
@@ -92,11 +98,16 @@ def ensure_memory(
     execution_role_arn: str | None = None,
     wait: bool = True,
     timeout_s: int = 300,
-) -> tuple[dict[str, str], bool]:
-    """Return ({id, arn}, created).
+) -> tuple[dict[str, Any], bool]:
+    """Return ({id, arn, strategies_added}, created).
 
-    Creates short-term event storage plus two long-term strategies
-    (semantic facts + user preferences) used by the chat playground.
+    Creates short-term event storage plus the platform's four long-term
+    strategies (semantic facts, user preferences, per-session summaries and
+    episodes with reflections — ``memory_strategies.DEFAULT_STRATEGIES``). An
+    existing memory is reused, and any catalog strategy it lacks is added in
+    place through ``UpdateMemory`` so a memory bootstrapped before a strategy
+    joined the catalog converges on the same layout; ``strategies_added`` names
+    what this run had to add (empty when nothing changed).
     """
     memories: list[dict[str, Any]] = []
     token: str | None = None
@@ -110,26 +121,14 @@ def ensure_memory(
     for mem in memories:
         mem_id = mem.get("id") or mem.get("memoryId")
         if mem_id and mem_id.startswith(f"{name}-"):
-            return {"id": mem_id, "arn": mem["arn"]}, False
+            added = _ensure_memory_strategies(control, mem_id, wait=wait, timeout_s=timeout_s)
+            return {"id": mem_id, "arn": mem["arn"], "strategies_added": added}, False
 
     params: dict[str, Any] = {
         "name": name,
         "description": "Launchpad shared memory — short-term events + long-term strategies",
         "eventExpiryDuration": MEMORY_EVENT_EXPIRY_DAYS,
-        "memoryStrategies": [
-            {
-                "semanticMemoryStrategy": {
-                    "name": "semantic_facts",
-                    "namespaces": ["/facts/{actorId}"],
-                }
-            },
-            {
-                "userPreferenceMemoryStrategy": {
-                    "name": "user_preferences",
-                    "namespaces": ["/preferences/{actorId}"],
-                }
-            },
-        ],
+        "memoryStrategies": [deepcopy(entry) for entry in DEFAULT_STRATEGIES],
     }
     if execution_role_arn:
         params["memoryExecutionRoleArn"] = execution_role_arn
@@ -137,7 +136,31 @@ def ensure_memory(
     mem_id, arn = created["id"], created["arn"]
     if wait:
         _wait_memory_active(control, mem_id, timeout_s=timeout_s)
-    return {"id": mem_id, "arn": arn}, True
+    return {"id": mem_id, "arn": arn, "strategies_added": []}, True
+
+
+def _ensure_memory_strategies(
+    control: Any, memory_id: str, wait: bool = True, timeout_s: int = 300
+) -> list[str]:
+    """Add the catalog strategies an existing memory lacks; return their names.
+
+    ``UpdateMemory`` with ``memoryStrategies.addMemoryStrategies`` is additive —
+    existing strategies, the description, expiry and execution role are all left
+    untouched (only ``namespaceKeys`` would be replaced wholesale, and it is
+    never sent). The memory reports UPDATING while the new strategies build, so
+    the same ACTIVE wait as creation applies.
+    """
+    memory = control.get_memory(memoryId=memory_id)["memory"]
+    missing = missing_strategies(list(memory.get("strategies") or []))
+    if not missing:
+        return []
+    control.update_memory(
+        memoryId=memory_id,
+        memoryStrategies={"addMemoryStrategies": [deepcopy(entry) for entry in missing]},
+    )
+    if wait:
+        _wait_memory_active(control, memory_id, timeout_s=timeout_s)
+    return [strategy_name(entry) for entry in missing]
 
 
 def _wait_memory_active(control: Any, memory_id: str, timeout_s: int = 300) -> None:
