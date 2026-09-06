@@ -141,7 +141,7 @@ public `/v1` agent invocation contract.
 | Method | Path | Result |
 |---|---|---|
 | `GET` | `/api/governance/gateways` | Live MCP Gateway inventory |
-| `GET` | `/api/governance/gateways/{id}` | Targets, actions, Registry, Engine, IAM, and attachability detail |
+| `GET` | `/api/governance/gateways/{id}` | Targets (each with `kind: {protocol, variant}`), actions + `actions_uncovered_targets`, Registry, Engine, IAM, and attachability detail |
 | `POST/DELETE` | `/api/governance/gateways/{id}/manage` | Add/remove only Launchpad management tags |
 | `GET` | `/api/governance/gateways/{id}/registry-preview` | Gateway-level record diff and legacy matches |
 | `POST` | `/api/governance/gateways/{id}/registry-import` | Create/reuse/update and submit; never approve |
@@ -159,9 +159,20 @@ public `/v1` agent invocation contract.
 | `POST` | `/api/governance/gateways/{id}/rate-limits` | Create a rate limit → `201` with the created record; managed Gateways only |
 | `PUT` | `/api/governance/gateways/{id}/rate-limits/{rate_limit_id}` | Replace `entries` (+ optional `description`); `dimensionKeys` are immutable → `422` |
 | `DELETE` | `/api/governance/gateways/{id}/rate-limits/{rate_limit_id}` | Delete → `{deleted: true, id, status}` |
-| `POST` | `/api/governance/gateways/{id}/targets/{target_id}/synchronize` | `SynchronizeGatewayTargets` for one dynamic MCP-server target → `202` with the target projection (`status` = `SYNCHRONIZING`); managed Gateways only (`409 governance.gateway_not_managed`); non-synchronizable target → `409 governance.target_not_synchronizable`, `detail.reason` ∈ `not_mcp_server`, `static_tool_schema`, `pending_auth`, `synchronizing`, `not_ready`; journaled as `target.synchronize` |
+| `POST` | `/api/governance/gateways/{id}/targets/{target_id}/synchronize` | `SynchronizeGatewayTargets` for one dynamic MCP-server target → `202` with the target projection (`status` = `SYNCHRONIZING`, same `kind` as the detail); managed Gateways only (`409 governance.gateway_not_managed`); non-synchronizable target → `409 governance.target_not_synchronizable`, `detail.reason` ∈ `not_mcp_server`, `static_tool_schema`, `pending_auth`, `synchronizing`, `not_ready`; journaled as `target.synchronize` |
 | `GET` | `/api/governance/gateways/{id}/audit` | Immutable local change journal |
 | `GET` | `/api/governance/operations/{operation_id}` | Async operation status |
+
+Every target in the gateway detail and in the synchronize response is the same
+projection `{id, name, status, status_reasons, description, kind, listing_mode,
+last_synchronized_at, synchronizable, not_synchronizable_reason}`. `kind` is
+`{"protocol": "mcp" | "http" | "inference" | "unknown", "variant": <union key> |
+null}` — the `TargetConfiguration` member AWS set (`mcp/lambda`, `mcp/mcpServer`,
+`mcp/openApiSchema`, `http/passthrough`, `http/agentcoreRuntime`,
+`inference/provider`, …); an empty configuration is `unknown`/`null` and an
+unrecognized member is `protocol: <key>` / `variant: null`. The detail also carries
+`actions_uncovered_targets: [name, …]` — the `http` / `inference` targets, which
+have no tool schema and therefore never appear in `actions`.
 
 Policy and Gateway mutations return `202`:
 

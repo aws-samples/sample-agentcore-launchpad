@@ -752,6 +752,31 @@ tools (the control plane does not return them), creating or updating targets, an
 batch sync. No IAM change — the console's role already carries
 `bedrock-agentcore:*`.
 
+### Target kinds
+
+A Gateway target is not necessarily an MCP tool provider: the pinned
+`bedrock-agentcore-control` model's `TargetConfiguration` is a three-way union —
+`mcp{openApiSchema, smithyModel, lambda, mcpServer, apiGateway, connector}`,
+`http{agentcoreRuntime, passthrough, connector}` (HTTP passthrough / AgentCore
+Runtime targets) and `inference{connector, provider}` (inference targets). The
+target projection therefore carries `kind: {protocol, variant}` — derived by the
+pure helper `target_kind` in `app/services/governance.py` from whichever union
+member AWS set, e.g. `{"protocol": "mcp", "variant": "lambda"}`,
+`{"protocol": "http", "variant": "passthrough"}`,
+`{"protocol": "inference", "variant": "provider"}`. The projection is tolerant by
+design: an empty `targetConfiguration` is `{"protocol": "unknown", "variant":
+null}` and a union member the pinned model does not know yet maps to
+`protocol: <key>` / `variant: null` — never an exception. The detail's **TARGETS**
+table shows the kind in a **KIND** column (localized per `(protocol, variant)`
+under `governance.targetKind.*`, with a mono `protocol/variant` fallback for
+unknown pairs), and the SYNC blocker for a non-`mcp` target names that kind
+("… target kind: HTTP passthrough") while the reason code stays
+`not_mcp_server`; `mcp` variants other than `mcpServer` keep the generic copy.
+`discover_actions` is unchanged — only MCP schemas carry tools — so `gateway_detail`
+also returns `actions_uncovered_targets: [names]` for every `http` / `inference`
+target, which the panel renders as a one-line hint ("N target(s) expose no tool
+schema: …") so an empty ACTIONS cell is not misread as a discovery failure.
+
 ## Console routing
 
 The console is a single `react-router-dom` route table in `frontend/src/App.tsx`,

@@ -934,7 +934,9 @@
       "listingMode": "列举模式",
       "actions": "动作",
       "noTargets": "未找到目标",
-      "lastSync": "上次同步"
+      "lastSync": "上次同步",
+      "kind": "类型",
+      "noToolSchema": "{{total}} 个目标不提供工具 schema（HTTP / 推理目标不是 MCP 工具提供方）：{{names}}"
     },
     "models": {
       "allowlist": "白名单",
@@ -1217,6 +1219,7 @@
       "hint": "从 MCP 服务器重新拉取工具列表（SynchronizeGatewayTargets）",
       "blockers": {
         "notManaged": "请先纳管该 Gateway",
+        "not_mcp_server_kind": "仅 MCP 服务器目标可同步，该目标类型为 {{kind}}",
         "not_mcp_server": "仅 MCP 服务器目标可同步",
         "static_tool_schema": "该目标使用静态工具 schema",
         "pending_auth": "请先完成待处理的授权",
@@ -1224,6 +1227,29 @@
         "not_ready": "请等待目标状态稳定",
         "busy": "另一项操作正在进行"
       }
+    },
+    "targetKind": {
+      "mcp": {
+        "lambda": "MCP · Lambda",
+        "openApiSchema": "MCP · OpenAPI",
+        "smithyModel": "MCP · Smithy",
+        "mcpServer": "MCP 服务器",
+        "apiGateway": "MCP · API Gateway",
+        "connector": "MCP · 连接器",
+        "default": "MCP"
+      },
+      "http": {
+        "passthrough": "HTTP 直通",
+        "agentcoreRuntime": "HTTP · AgentCore Runtime",
+        "connector": "HTTP · 连接器",
+        "default": "HTTP"
+      },
+      "inference": {
+        "provider": "推理 · 模型提供方",
+        "connector": "推理 · 连接器",
+        "default": "推理"
+      },
+      "unknown": "未知"
     }
   },
   "skillLab": {

@@ -3,6 +3,7 @@ import {
   Check,
   ClipboardCopy,
   FileUp,
+  Info,
   Pencil,
   Plus,
   RefreshCw,
@@ -246,11 +247,38 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
     [gateway, t, toast],
   );
 
+  /**
+   * Short label for a target's `TargetConfiguration` union member. Unknown
+   * (protocol, variant) pairs fall back to the raw `protocol/variant` pair
+   * (`known: false`, rendered mono) so a future union member stays legible
+   * instead of collapsing to "unknown".
+   */
+  const targetKind = (
+    kind: GovernanceGatewayTarget["kind"],
+  ): { label: string; known: boolean } => {
+    if (kind.protocol === "unknown") {
+      return { label: t("governance.targetKind.unknown"), known: true };
+    }
+    const key = `governance.targetKind.${kind.protocol}.${kind.variant ?? "default"}`;
+    if (i18n.exists(key)) return { label: t(key), known: true };
+    return {
+      label: kind.variant ? `${kind.protocol}/${kind.variant}` : kind.protocol,
+      known: false,
+    };
+  };
+
   const targetSyncBlockers = (target: GovernanceGatewayTarget): string[] => {
     if (!gateway) return [];
     const blockers: string[] = [];
     if (!gateway.managed) blockers.push(t("governance.targetSync.blockers.notManaged"));
-    if (target.not_synchronizable_reason) {
+    if (target.not_synchronizable_reason === "not_mcp_server" && target.kind.protocol !== "mcp") {
+      // Same reason code; only the copy names the kind (HTTP passthrough, inference, …)
+      blockers.push(
+        t("governance.targetSync.blockers.not_mcp_server_kind", {
+          kind: targetKind(target.kind).label,
+        }),
+      );
+    } else if (target.not_synchronizable_reason) {
       blockers.push(t(`governance.targetSync.blockers.${target.not_synchronizable_reason}`));
     }
     if (operationBusy || syncingTarget !== null) {
@@ -921,6 +949,7 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
         <DataTable
           columns={[
             { key: "target", label: t("governance.inventory.targets") },
+            { key: "kind", label: t("governance.detail.kind") },
             { key: "status", label: t("governance.inventory.status") },
             { key: "listing", label: t("governance.detail.listingMode") },
             { key: "lastSync", label: t("governance.detail.lastSync") },
@@ -933,6 +962,7 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
           {gateway.targets.map((target) => {
             const actions = gateway.actions.filter((action) => action.target_id === target.id);
             const blockers = targetSyncBlockers(target);
+            const kind = targetKind(target.kind);
             const syncFailed =
               target.status === "SYNCHRONIZE_UNSUCCESSFUL" || target.status === "FAILED";
             return (
@@ -940,6 +970,12 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
                 <td className="pri">
                   {target.name}
                   <div className="gov-cell-note mono">{target.id}</div>
+                </td>
+                <td
+                  className={kind.known ? undefined : "mono"}
+                  data-testid={`gateway-target-kind-${target.id}`}
+                >
+                  {kind.label}
                 </td>
                 <td>
                   <Chip tone={statusTone(target.status)}>{target.status}</Chip>
@@ -981,6 +1017,17 @@ export function GatewayDetailView({ gatewayId, onNavigate }: Props) {
             );
           })}
         </DataTable>
+        {(gateway.actions_uncovered_targets ?? []).length > 0 ? (
+          <div className="gov-panel-note" data-testid="gateway-actions-uncovered">
+            <Info size={14} aria-hidden="true" />
+            <span>
+              {t("governance.detail.noToolSchema", {
+                total: gateway.actions_uncovered_targets.length,
+                names: gateway.actions_uncovered_targets.join(", "),
+              })}
+            </span>
+          </div>
+        ) : null}
         {gateway.external_tools_list_command ? (
           <div className="gov-command">
             <div className="code gov-code-wrap">{gateway.external_tools_list_command}</div>
