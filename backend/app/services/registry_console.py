@@ -217,6 +217,15 @@ def console_list(
     )
 
 
+def console_list_discoverable(
+    workspace: WorkspaceContext, descriptor_type: str | None = None
+) -> list[dict[str, Any]]:
+    """Consumer view: what the data plane discloses (``ListDiscoverableRegistryRecords``)."""
+    return reg.list_discoverable_records(
+        registry_data_client(workspace), _registry_id(workspace), descriptor_type
+    )
+
+
 def console_get(workspace: WorkspaceContext, record_id: str) -> dict[str, Any]:
     return reg.get_record(
         registry_control_client(workspace), _registry_id(workspace), record_id

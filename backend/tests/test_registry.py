@@ -263,3 +263,159 @@ def test_registry_endpoint_returns_unavailable_envelope(client, monkeypatch):
         "message": "blocked by account policy",
         "detail": {"reason": "blocked by account policy"},
     }
+
+
+# ---------- consumer view: ListDiscoverableRegistryRecords ----------
+
+_REGISTRY_ARN = f"arn:aws:agent-registry:us-west-2:111122223333:registry/{RID}"
+
+
+def _summary(record_id: str, name: str, record_type: str = "MCP", status: str = "APPROVED"):
+    """A data-plane summary — identity/status only, never `descriptors`."""
+    return {
+        "recordId": record_id,
+        "recordArn": f"{_REGISTRY_ARN}/record/{record_id}",
+        "registryArn": _REGISTRY_ARN,
+        "name": name,
+        "displayName": name.replace("-", " ").title(),
+        "description": f"{name} description",
+        "recordType": record_type,
+        "descriptorTypes": ["mcpServer"] if record_type == "MCP" else ["a2aCard"],
+        "recordVersion": "1.0.0-mcp",
+        "status": status,
+        "createdAt": "2026-09-01T00:00:00Z",
+        "updatedAt": "2026-09-05T00:00:00Z",
+    }
+
+
+def test_list_discoverable_paginates_and_normalizes():
+    data_client = MagicMock()
+    data_client.list_discoverable_registry_records.side_effect = [
+        {"registryRecords": [_summary("r1", "hr-database")], "nextToken": "page-2"},
+        {"registryRecords": [_summary("r2", "aurora-faq-a2a", "AGENT")]},
+    ]
+
+    out = reg.list_discoverable_records(data_client, RID)
+
+    assert [r["recordId"] for r in out] == ["r1", "r2"]
+    calls = data_client.list_discoverable_registry_records.call_args_list
+    assert len(calls) == 2
+    assert calls[0].kwargs == {"registryId": RID, "maxResults": 100}
+    assert calls[1].kwargs == {"registryId": RID, "maxResults": 100, "nextToken": "page-2"}
+    # normalize_record ran: platform type present, no descriptors invented
+    assert out[0]["descriptorType"] == "MCP" and out[1]["descriptorType"] == "A2A"
+    assert "descriptors" not in out[0] and "descriptors" not in out[1]
+
+
+def test_list_discoverable_type_filter_uses_ga_record_type():
+    data_client = MagicMock()
+    data_client.list_discoverable_registry_records.return_value = {"registryRecords": []}
+
+    reg.list_discoverable_records(data_client, RID, "mcp")
+    assert data_client.list_discoverable_registry_records.call_args.kwargs["filters"] == [
+        {"name": "recordType", "values": ["MCP"]}
+    ]
+
+    reg.list_discoverable_records(data_client, RID, "A2A")
+    assert data_client.list_discoverable_registry_records.call_args.kwargs["filters"] == [
+        {"name": "recordType", "values": ["AGENT"]}
+    ]
+
+    reg.list_discoverable_records(data_client, RID, "AGENT_SKILLS")
+    assert data_client.list_discoverable_registry_records.call_args.kwargs["filters"] == [
+        {"name": "recordType", "values": ["SKILL"]}
+    ]
+
+
+def test_ga_record_type_rejects_unknown():
+    import pytest
+
+    with pytest.raises(ValueError):
+        reg.ga_record_type("gadget")
+
+
+def _stub_registry_data_client(monkeypatch, data_client) -> None:
+    import app.services.registry_console as console
+    from tests.conftest import set_default_resources
+
+    set_default_resources({"registry_id": RID})
+    monkeypatch.setattr(console, "registry_data_client", lambda _ws: data_client)
+
+
+def test_discoverable_route_concatenates_pages_for_workspace_registry(client, monkeypatch):
+    data_client = MagicMock()
+    data_client.list_discoverable_registry_records.side_effect = [
+        {"registryRecords": [_summary("r1", "hr-database")], "nextToken": "t"},
+        {"registryRecords": [_summary("r2", "aurora-faq-a2a", "AGENT")]},
+    ]
+    _stub_registry_data_client(monkeypatch, data_client)
+
+    response = client.get("/api/registry/records/discoverable")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["count"] == 2 and len(body["records"]) == 2
+    calls = data_client.list_discoverable_registry_records.call_args_list
+    assert all(c.kwargs["registryId"] == RID for c in calls)
+    assert "filters" not in calls[0].kwargs  # no ?type → no filters
+    first = body["records"][0]
+    assert first["record_id"] == "r1" and first["type"] == "MCP" and first["status"] == "APPROVED"
+    assert first["display_name"] == "Hr Database"
+    assert first["descriptor_types"] == ["mcpServer"]
+    assert first["version"] == "1.0.0-mcp"
+    assert "descriptors" not in first  # summaries never carry a payload
+    assert body["records"][1]["type"] == "A2A"
+
+
+def test_discoverable_route_type_filter(client, monkeypatch):
+    data_client = MagicMock()
+    data_client.list_discoverable_registry_records.return_value = {"registryRecords": []}
+    _stub_registry_data_client(monkeypatch, data_client)
+
+    response = client.get("/api/registry/records/discoverable?type=mcp")
+
+    assert response.status_code == 200
+    assert response.json() == {"records": [], "count": 0}
+    assert data_client.list_discoverable_registry_records.call_args.kwargs["filters"] == [
+        {"name": "recordType", "values": ["MCP"]}
+    ]
+
+
+def test_discoverable_route_unknown_type_is_422(client, monkeypatch):
+    data_client = MagicMock()
+    _stub_registry_data_client(monkeypatch, data_client)
+
+    response = client.get("/api/registry/records/discoverable?type=gadget")
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "registry.bad_type"
+    data_client.list_discoverable_registry_records.assert_not_called()
+
+
+def test_discoverable_route_access_denied_is_4xx_envelope(client, monkeypatch):
+    from botocore.exceptions import ClientError
+
+    data_client = MagicMock()
+    data_client.list_discoverable_registry_records.side_effect = ClientError(
+        {"Error": {"Code": "AccessDeniedException", "Message": "no data-plane access"}},
+        "ListDiscoverableRegistryRecords",
+    )
+    _stub_registry_data_client(monkeypatch, data_client)
+
+    response = client.get("/api/registry/records/discoverable")
+
+    assert response.status_code == 403
+    body = response.json()
+    assert body["code"] == "aws.access_denied"
+    assert "no data-plane access" in body["message"]
+
+
+def test_discoverable_route_registry_unavailable_is_503(client, monkeypatch):
+    from tests.conftest import set_default_resources
+
+    set_default_resources({"registry_unavailable_reason": "blocked by account policy"})
+
+    response = client.get("/api/registry/records/discoverable")
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "registry.unavailable"

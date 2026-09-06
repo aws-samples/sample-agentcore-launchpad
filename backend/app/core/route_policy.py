@@ -138,6 +138,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/registry/records"): MEMBER,
     ("POST", "/api/registry/records"): MEMBER,
     ("GET", "/api/registry/records/search"): MEMBER,
+    # data-plane read (ListDiscoverableRegistryRecords) of the workspace registry
+    ("GET", "/api/registry/records/discoverable"): MEMBER,
     ("GET", "/api/registry/records/{record_id}"): MEMBER,
     # a data-plane read (GetAgentCard) of the agent's own runtime; no ARN from the client
     ("GET", "/api/registry/records/{record_id}/live-agent-card"): MEMBER,

@@ -25,6 +25,17 @@ _PLATFORM_TO_AWS_TYPE = {
     "CUSTOM": "CUSTOM",
 }
 _AWS_TO_PLATFORM_TYPE = {value: key for key, value in _PLATFORM_TO_AWS_TYPE.items()}
+
+
+def ga_record_type(descriptor_type: str) -> str:
+    """The GA ``recordType`` filter value for a platform (``A2A``/``MCP``/``AGENT_SKILLS``)
+    or GA (``agent``/``mcp``/``skill``, any case) type name. ``ValueError`` on anything else."""
+    key = descriptor_type.strip().upper()
+    if key in _PLATFORM_TO_AWS_TYPE:
+        return _PLATFORM_TO_AWS_TYPE[key]
+    if key in _AWS_TO_PLATFORM_TYPE:
+        return key
+    raise ValueError(f"unknown registry record type: {descriptor_type!r}")
 _INITIAL_VERSION_BY_TYPE = {
     "A2A": "1.0.0-a2a",
     "MCP": "1.0.0-mcp",
@@ -520,6 +531,32 @@ def list_records(
     records: list[dict[str, Any]] = []
     while True:
         page = client.list_registry_records(**kwargs)
+        records.extend(normalize_record(record) for record in page.get("registryRecords", []))
+        token = page.get("nextToken")
+        if not token:
+            break
+        kwargs["nextToken"] = token
+    return records
+
+
+def list_discoverable_records(
+    data_client: Any, registry_id: str, descriptor_type: str | None = None
+) -> list[dict[str, Any]]:
+    """The consumer's view of the registry: every record the data plane exposes.
+
+    ``ListDiscoverableRegistryRecords`` (GA discovery API) returns summaries only —
+    no ``descriptors`` — so the normalized rows carry the identity/status fields and
+    the caller fetches a full record via ``get_record`` when it needs the payload.
+    The publisher's ``list_records`` (control plane) also shows DRAFT / PENDING /
+    REJECTED / DEPRECATED records; the difference between the two lists is what a
+    consumer or agent with data-plane access cannot see.
+    """
+    kwargs: dict[str, Any] = {"registryId": registry_id, "maxResults": 100}
+    if descriptor_type:
+        kwargs["filters"] = [{"name": "recordType", "values": [ga_record_type(descriptor_type)]}]
+    records: list[dict[str, Any]] = []
+    while True:
+        page = data_client.list_discoverable_registry_records(**kwargs)
         records.extend(normalize_record(record) for record in page.get("registryRecords", []))
         token = page.get("nextToken")
         if not token:
