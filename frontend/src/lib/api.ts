@@ -2395,7 +2395,33 @@ export interface LiveAgentCard {
   };
 }
 
+/** One row of `GET /api/registry/records/discoverable` — the consumer view of the
+ *  workspace registry (data-plane `ListDiscoverableRegistryRecords`). A summary:
+ *  identity, type, status, version — never `descriptors`; open the record
+ *  (`GET /api/registry/records/{id}`) for the payload. Control-plane records absent
+ *  from this list are the ones approval has not exposed (DRAFT / PENDING_APPROVAL /
+ *  REJECTED / DEPRECATED). */
+export interface DiscoverableRegistryRecord {
+  record_id: string;
+  name: string;
+  display_name: string | null;
+  description: string;
+  type: "A2A" | "MCP" | "AGENT_SKILLS";
+  /** GA descriptor kinds the record carries (e.g. `mcpServer`); may be empty. */
+  descriptor_types: string[];
+  status: string;
+  status_reason?: string | null;
+  version: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 export const api = {
+  /** Consumer view of the registry; `type` is optional (`A2A` / `MCP` / `AGENT_SKILLS`). */
+  registryDiscoverable: (type?: string) =>
+    request<{ records: DiscoverableRegistryRecord[]; count: number }>(
+      `/api/registry/records/discoverable${type ? `?type=${encodeURIComponent(type)}` : ""}`,
+    ),
   registryLiveAgentCard: (recordId: string) =>
     request<LiveAgentCard>(
       `/api/registry/records/${encodeURIComponent(recordId)}/live-agent-card`,
