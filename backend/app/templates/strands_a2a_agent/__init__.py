@@ -17,6 +17,7 @@ for.
 from pathlib import Path
 
 from app.schemas.agent import AgentSpec
+from app.services.agentcore.registry import A2A_CARD_VERSION
 
 TEMPLATE_DIR = Path(__file__).parent
 
@@ -31,6 +32,7 @@ def render_a2a_main_py(spec: AgentSpec) -> str:
         .replace("__LAUNCHPAD_SYSTEM_PROMPT__", repr(spec.system_prompt))
         .replace("__LAUNCHPAD_AGENT_DESCRIPTION__", repr(spec.system_prompt[:180]))
         .replace("__LAUNCHPAD_A2A_SKILLS__", repr(skills))
+        .replace("__LAUNCHPAD_A2A_CARD_VERSION__", repr(A2A_CARD_VERSION))
     )
 
 
