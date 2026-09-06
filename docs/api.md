@@ -442,6 +442,32 @@ Online scores also surface where sessions are looked at:
 | `GET` | `/api/observability/sessions/{session_id}` | The session detail carries `online_scores: {configs[{config_id, config_name, owner, agent{id,name}?, records[{time, evaluator_id, level, score, label, explanation, trace_id}]}], total, unavailable, configs_exist}` — every config's result records for that session (agent-owned blocks first), read with one prefix `SOURCE logGroups(namePrefix: ['/aws/bedrock-agentcore/evaluations/results/'])` query. Fail-soft: a results-query failure sets `unavailable: true` and never removes traces or transcript; `configs_exist` is whether the workspace has an agent-owned config (the UI hides the block when neither results nor configs exist) |
 | `GET` | `/api/overview/online-quality` | ONLINE QUALITY · 24h tile: `{range: "24h", mean, scores, sessions, agents, configs, evaluators[{evaluator_id, mean, count, polarity}], cached}` — count-weighted mean over every (evaluator, agent-owned config) pair with lower-is-better evaluators inverted (`1 − mean`), so the tile always reads higher-is-better; `evaluators[].mean` stays raw; `configs` counts the workspace's agent-owned configs (ledger) and `agents` the agents that scored, so "configured, nothing judged yet" is distinguishable from "no config". 120 s per-workspace cache with single-flight, `force=true` bypasses; a workspace without agent-owned configs answers the empty payload without any AWS call |
 
+## Console Observability API — on-demand session scoring
+
+The Observability session detail (`/observability?session=<id>`) can score a
+session **right now** with the AgentCore data-plane `Evaluate` API. This is the
+third scoring mode next to batch runs (asynchronous, persisted, scoped by
+dataset / session ids / window) and online evaluation (sampled, continuous):
+
+| Mode | Call | Latency | Where results live |
+|---|---|---|---|
+| Batch run | `StartBatchEvaluation` (`POST /api/eval/runs`) | minutes, polled | AWS results log group + ledger `EvalRun` |
+| Online | `CreateOnlineEvaluationConfig` (`POST /api/eval/online`) | continuous, ≈10 min judge lag | AWS results log groups, read back per session |
+| **On demand** | **`Evaluate` (`POST /api/observability/sessions/{id}/evaluate`)** | **synchronous, one judge inference per evaluator** | **response body only — nothing is persisted** |
+
+| Method | Path | Body / Result |
+|---|---|---|
+| `POST` | `/api/observability/sessions/{session_id}/evaluate` | Body `{evaluator_ids: string[] (1..5, `Builtin.*` / `ThirdParty.*` / custom id), range?: "1h"\|"6h"\|"24h"\|"7d" (default 24h)}`. Fetches the session's raw span records with one Logs Insights query over both telemetry layouts (`filter ispresent(scope.name) and attributes.session.id = "<id>" \| fields @message \| sort @timestamp asc \| limit 2000`, non-JSON rows skipped), then calls `evaluate(evaluatorId, evaluationInput={sessionSpans})` once per evaluator, sequentially (≤10 results per call). Returns `{session_id, range, span_count, results[{evaluator_id, evaluator_name, evaluator_arn, value, label, explanation, span_context{sessionId,traceId?,spanId?}, token_usage{input,output,total}, error_code, error_message}]}`. A result carrying `error_code` is a per-evaluator **partial failure** (row returned, request still 200). Session-level only: no `evaluationTarget`, no ground-truth reference inputs. |
+
+Errors: `observability.session_spans_missing` (409 — no span records for the
+session in the range yet; `detail.hint` explains spans land a couple of minutes
+after the invoke), `observability.too_many_evaluators` (422), the standard
+`validation.invalid_request` (422 — >5 ids, empty list, bad range or id shape),
+`aws.validation` (400 — the AWS `ValidationException` for unsupported spans),
+`observability.query_failed` (502 — Logs Insights failure/timeout). Results are
+**never written to the ledger**; re-run any time (each run costs one judge
+inference per evaluator).
+
 ## Console Accounts API
 
 `/api/auth/*` gates the console and `/api/users/*` manages the accounts behind
