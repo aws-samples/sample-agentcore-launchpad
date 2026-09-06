@@ -130,6 +130,34 @@ def search(q: str, ws: WorkspaceScope = Depends(require_workspace)) -> dict[str,
     return {"records": [_record_out(r) for r in console.console_search(ws.context, q)]}
 
 
+def _discoverable_out(record: dict[str, Any]) -> dict[str, Any]:
+    """A data-plane summary: the publisher projection plus the consumer-facing
+    fields, minus ``descriptors`` (the discovery API never returns them)."""
+    out = _record_out(record)
+    out.pop("descriptors", None)
+    out["display_name"] = record.get("displayName")
+    out["descriptor_types"] = list(record.get("descriptorTypes") or [])
+    return out
+
+
+@router.get("/records/discoverable")
+def list_discoverable(
+    type: str | None = None, ws: WorkspaceScope = Depends(require_workspace)
+) -> dict[str, Any]:
+    """Consumer view of `launchpad-registry`: the records a consumer or agent with
+    data-plane access can actually discover (`ListDiscoverableRegistryRecords`,
+    paginated to completion). Control-plane records missing from this list are the
+    ones approval has not exposed yet (DRAFT / PENDING_APPROVAL / REJECTED /
+    DEPRECATED). Read-only; `descriptors` are never part of a summary — open a
+    record (`GET /records/{record_id}`) for the payload.
+    """
+    try:
+        records = console.console_list_discoverable(ws.context, type)
+    except ValueError as exc:  # unknown ?type= — a caller mistake, not a 500
+        raise AppError("registry.bad_type", str(exc), status_code=422) from exc
+    return {"records": [_discoverable_out(r) for r in records], "count": len(records)}
+
+
 @router.get("/records/{record_id}")
 def get_record(
     record_id: str, ws: WorkspaceScope = Depends(require_workspace)

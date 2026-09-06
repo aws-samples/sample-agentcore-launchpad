@@ -454,6 +454,29 @@
     "searchResults": "搜索结果",
     "empty": "暂无记录 — 请导入 Gateway 或注册记录",
     "importGateway": "导入 GATEWAY",
+    "consumer": {
+      "entry": "消费者视图",
+      "kicker": "// 发现层 · 消费者视图",
+      "title": "注册中心——消费者视图",
+      "meta": "拥有数据面访问权限的消费者或 Agent 实际能发现的记录 · ListDiscoverableRegistryRecords",
+      "back": "发布者列表",
+      "apiLabel": "ListDiscoverableRegistryRecords",
+      "discoverableCount": "{{count}} 条可发现",
+      "hiddenCount": "{{count}} 条不可发现",
+      "notDiscoverable": "不可发现",
+      "notDiscoverableHint": "不在数据面列表中——记录在「已发布」之前，消费者与 Agent 无法发现它。",
+      "emptyExplained": "尚无已批准的记录可被发现——发布者列表有 {{count}} 条记录，但只有「已发布」的记录会对消费者可见。批准一条记录即可让它可被发现。",
+      "emptyTab": "该类型暂无可发现的记录",
+      "cols": {
+        "name": "名称",
+        "displayName": "显示名称",
+        "type": "类型",
+        "descriptorTypes": "描述符",
+        "status": "状态",
+        "version": "版本",
+        "updated": "更新时间"
+      }
+    },
     "tabs": {
       "agents": "AGENT · A2A",
       "tools": "MCP 工具",

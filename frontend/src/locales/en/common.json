@@ -454,6 +454,29 @@
     "searchResults": "SEARCH RESULTS",
     "empty": "NO RECORDS — IMPORT A GATEWAY OR REGISTER A RECORD",
     "importGateway": "IMPORT GATEWAY",
+    "consumer": {
+      "entry": "CONSUMER VIEW",
+      "kicker": "// DISCOVERY LAYER · CONSUMER VIEW",
+      "title": "Registry — Consumer view",
+      "meta": "WHAT A CONSUMER OR AGENT WITH DATA-PLANE ACCESS DISCOVERS · ListDiscoverableRegistryRecords",
+      "back": "PUBLISHER LIST",
+      "apiLabel": "ListDiscoverableRegistryRecords",
+      "discoverableCount": "{{count}} DISCOVERABLE",
+      "hiddenCount": "{{count}} NOT DISCOVERABLE",
+      "notDiscoverable": "NOT DISCOVERABLE",
+      "notDiscoverableHint": "Absent from the data-plane list — consumers and agents cannot discover this record until it is PUBLISHED.",
+      "emptyExplained": "NO APPROVED RECORDS ARE DISCOVERABLE YET — the publisher list has {{count}} record(s), but only PUBLISHED ones reach consumers. Approve a record to expose it.",
+      "emptyTab": "NO DISCOVERABLE RECORDS OF THIS TYPE",
+      "cols": {
+        "name": "NAME",
+        "displayName": "DISPLAY NAME",
+        "type": "TYPE",
+        "descriptorTypes": "DESCRIPTORS",
+        "status": "STATUS",
+        "version": "VERSION",
+        "updated": "UPDATED"
+      }
+    },
     "tabs": {
       "agents": "AGENTS · A2A",
       "tools": "MCP TOOLS",

@@ -133,6 +133,25 @@ yet). A data-plane `ClientError` maps to the standard 4xx envelope (`aws.not_fou
 `detail.aws_error_code` — never a bare 500. No IAM change: the console's role
 already carries `bedrock-agentcore:*`.
 
+## Console Registry API — consumer view
+
+The Registry page shows the same registry from two sides. The **publisher list**
+(`GET /api/registry/records`, control plane `ListRegistryRecords`) is what the
+operator manages: every record in every state. The **consumer view**
+(`?view=discoverable`) is what a consumer or agent with data-plane access actually
+sees — the GA discovery API `ListDiscoverableRegistryRecords`. Records in the first
+list but not in the second are the ones approval has not exposed; the console chips
+them NOT DISCOVERABLE once both lists are known. Read-only; nothing is persisted.
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/registry/records/discoverable?type=` | `{records[{record_id, name, display_name, description, type, descriptor_types[], status, status_reason, version, created_at, updated_at}], count}` — data-plane `ListDiscoverableRegistryRecords(registryId=<workspace registry>, maxResults=100)` paginated to completion with `nextToken`; `type` (optional) narrows with `filters=[{name: "recordType", values: [<GA type>]}]` and accepts the platform (`A2A`/`MCP`/`AGENT_SKILLS`) or GA (`agent`/`mcp`/`skill`) name; `type` in the rows is always the platform name. Summaries never carry `descriptors` — read `GET /api/registry/records/{record_id}` for the payload. `count` = number of rows |
+
+Error codes: `registry.bad_type` (422, unknown `type`), `registry.unavailable` (503,
+the workspace has no registry). AWS `ClientError`s map to the standard 4xx envelope
+(`aws.access_denied`, `aws.throttled`, …), never a bare 500. Route policy: MEMBER,
+like the other registry reads.
+
 ## Console Governance API
 
 These `/api` routes back the authenticated console. They are not part of the

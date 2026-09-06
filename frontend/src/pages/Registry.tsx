@@ -1,13 +1,13 @@
 import type { CSSProperties } from "react";
-import { Network, TriangleAlert } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { Eye, Network, TriangleAlert } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { Btn, Chip, ConfirmDialog, LoadError, Panel, useToast, ViewHead } from "../components";
 import type { ChipTone } from "../components";
 import { api, ApiError, errorMessage, getJson } from "../lib/api";
-import type { AgentInfo, LiveAgentCard } from "../lib/api";
+import type { AgentInfo, DiscoverableRegistryRecord, LiveAgentCard } from "../lib/api";
 import { A2ADemoView } from "./registry/A2ADemoView";
 import { EditView } from "./registry/EditView";
 import { RegisterView } from "./registry/RegisterView";
@@ -158,6 +158,28 @@ export function Registry() {
     data: LiveAgentCard | null;
     error: string | null;
   } | null>(null);
+  // Consumer view (?view=discoverable): what the data plane discloses
+  // (ListDiscoverableRegistryRecords). `null` = not fetched in this page session;
+  // the publisher list marks a record "not discoverable" only once the set is
+  // known, never on a guess from its status.
+  const [discoverable, setDiscoverable] = useState<DiscoverableRegistryRecord[] | null>(null);
+  const [discoverableError, setDiscoverableError] = useState<string | null>(null);
+  const discoverableFetched = useRef(false);
+
+  const loadDiscoverable = useCallback(async () => {
+    try {
+      const body = await api.registryDiscoverable();
+      discoverableFetched.current = true;
+      setDiscoverable(body.records);
+      setDiscoverableError(null);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "registry.unavailable") {
+        setUnavailable(err.message || t("registry.unavailableBody"));
+        return;
+      }
+      setDiscoverableError(errorMessage(err));
+    }
+  }, [t]);
 
   const load = useCallback(async () => {
     try {
@@ -165,6 +187,8 @@ export function Registry() {
       setUnavailable(null);
       setLoadError(null);
       setRecords(body.records);
+      // a lifecycle action may have changed what consumers see — keep the diff honest
+      if (discoverableFetched.current) void loadDiscoverable();
       try {
         const { agents } = await api.listAgents();
         const byRecord = new Map<string, AgentInfo>();
@@ -188,11 +212,16 @@ export function Registry() {
       }
       setLoadError(errorMessage(err));
     }
-  }, [t]);
+  }, [t, loadDiscoverable]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Entering the consumer view always reads the data plane afresh.
+  useEffect(() => {
+    if (view === "discoverable") void loadDiscoverable();
+  }, [view, loadDiscoverable]);
 
   // A record's live card belongs to that record only — selecting another one
   // drops it (the read is on demand, never repeated on open).
@@ -424,16 +453,41 @@ export function Registry() {
   const visible = searching ? loaded : loaded.filter((r) => r.type === tab);
   const counts = (type: RecordType) => loaded.filter((r) => r.type === type).length;
 
+  // ── Consumer view (?view=discoverable) — same page, same drawer: the table
+  // swaps to the data-plane list and the publisher rows learn the diff.
+  const consumerView = view === "discoverable";
+  const discoverableIds =
+    discoverable === null ? null : new Set(discoverable.map((r) => r.record_id));
+  const isHidden = (record: RegistryRecord) =>
+    discoverableIds !== null && !discoverableIds.has(record.record_id);
+  const hiddenCount = loaded.filter(isHidden).length;
+  const consumerRows = (discoverable ?? []).filter((r) => r.type === tab);
+  const consumerCounts = (type: RecordType) =>
+    (discoverable ?? []).filter((r) => r.type === type).length;
+  const consumerLoading = discoverable === null && discoverableError === null;
+  const consumerFailed = discoverableError !== null && discoverable === null;
+  const hiddenChip = (
+    <span title={t("registry.consumer.notDiscoverableHint")} style={{ marginLeft: 6 }}>
+      <Chip tone="amber" icon="⊘">{t("registry.consumer.notDiscoverable")}</Chip>
+    </span>
+  );
+
   return (
     <section>
       <ViewHead
-        kicker={t("registry.kicker")}
-        title={t("registry.title")}
-        meta={t("registry.metaLive")}
+        kicker={t(consumerView ? "registry.consumer.kicker" : "registry.kicker")}
+        title={t(consumerView ? "registry.consumer.title" : "registry.title")}
+        meta={t(consumerView ? "registry.consumer.meta" : "registry.metaLive")}
       />
 
       <Panel brk pad={false} style={{ "--i": 0, marginBottom: 14 } as CSSProperties}>
         <div className="phead" style={{ borderBottom: 0, paddingBottom: 0 }}>
+          {consumerView ? (
+            <div className="search mono" style={{ gap: 9 }} data-testid="consumer-view-label">
+              <Eye size={14} aria-hidden="true" />
+              <span style={{ color: "var(--line-2)" }}>{t("registry.consumer.apiLabel")}</span>
+            </div>
+          ) : (
           <div className="search" style={{ gap: 9 }}>
             ⌕
             <input
@@ -454,12 +508,28 @@ export function Registry() {
               SearchDiscoverableRegistryRecords
             </span>
           </div>
+          )}
           <div className="end flowchips">
-            <Chip tone="muted" icon="○">{t("registry.states.draft")}</Chip>
-            <i>→</i>
-            <Chip tone="warn" icon="◍">{t("registry.states.submitted")}</Chip>
-            <i>→</i>
-            <Chip tone="good" icon="●">{t("registry.states.published")}</Chip>
+            {consumerView && discoverable !== null ? (
+              <>
+                <Chip tone="good" icon="●">
+                  {t("registry.consumer.discoverableCount", { count: discoverable.length })}
+                </Chip>
+                {!loading && (
+                  <Chip tone={hiddenCount > 0 ? "amber" : "muted"} icon="⊘">
+                    {t("registry.consumer.hiddenCount", { count: hiddenCount })}
+                  </Chip>
+                )}
+              </>
+            ) : (
+              <>
+                <Chip tone="muted" icon="○">{t("registry.states.draft")}</Chip>
+                <i>→</i>
+                <Chip tone="warn" icon="◍">{t("registry.states.submitted")}</Chip>
+                <i>→</i>
+                <Chip tone="good" icon="●">{t("registry.states.published")}</Chip>
+              </>
+            )}
           </div>
         </div>
         <div className="tabs" style={{ padding: "0 16px" }}>
@@ -475,33 +545,145 @@ export function Registry() {
               }}
             >
               {t(labelKey)}
-              <span className="cnt">{counts(key)}</span>
+              <span className="cnt">{consumerView ? consumerCounts(key) : counts(key)}</span>
             </button>
           ))}
           {searching && <span className="tab active">{t("registry.searchResults")}</span>}
           <div className="tabs-actions">
-            <Btn onClick={() => navigate("/governance")}>
-              <Network size={14} aria-hidden="true" />
-              {t("registry.importGateway")}
-            </Btn>
-            <Btn
-              onClick={() => setSearchParams({ view: "a2a-demo" })}
-              data-testid="a2a-demo-btn"
-            >
-              ⇄ {t("registry.a2aDemo.entry")}
-            </Btn>
-            <Btn
-              primary
-              onClick={() => setSearchParams({ view: "register" })}
-              data-testid="register-btn"
-            >
-              + {t("registry.register.cta")}
-            </Btn>
+            {consumerView ? (
+              <Btn
+                onClick={() => setSearchParams({}, { replace: true })}
+                data-testid="publisher-list-btn"
+              >
+                ← {t("registry.consumer.back")}
+              </Btn>
+            ) : (
+              <>
+                <Btn
+                  onClick={() => {
+                    setSearching(false);
+                    setQuery("");
+                    setSearchParams({ view: "discoverable" });
+                  }}
+                  data-testid="consumer-view-btn"
+                >
+                  <Eye size={14} aria-hidden="true" />
+                  {t("registry.consumer.entry")}
+                </Btn>
+                <Btn onClick={() => navigate("/governance")}>
+                  <Network size={14} aria-hidden="true" />
+                  {t("registry.importGateway")}
+                </Btn>
+                <Btn
+                  onClick={() => setSearchParams({ view: "a2a-demo" })}
+                  data-testid="a2a-demo-btn"
+                >
+                  ⇄ {t("registry.a2aDemo.entry")}
+                </Btn>
+                <Btn
+                  primary
+                  onClick={() => setSearchParams({ view: "register" })}
+                  data-testid="register-btn"
+                >
+                  + {t("registry.register.cta")}
+                </Btn>
+              </>
+            )}
           </div>
         </div>
 
         <div className="reg-grid" style={{ padding: 14 }}>
           <div className="table-scroll">
+            {consumerView ? (
+            <table data-testid="consumer-view-table">
+              <thead>
+                <tr>
+                  <th>{t("registry.consumer.cols.name")}</th>
+                  <th>{t("registry.consumer.cols.displayName")}</th>
+                  <th>{t("registry.consumer.cols.type")}</th>
+                  <th>{t("registry.consumer.cols.descriptorTypes")}</th>
+                  <th>{t("registry.consumer.cols.status")}</th>
+                  <th>{t("registry.consumer.cols.version")}</th>
+                  <th>{t("registry.consumer.cols.updated")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {consumerRows.map((record) => {
+                  const chip = STATUS_CHIP[record.status] ?? STATUS_CHIP.APPROVED;
+                  return (
+                    <tr
+                      key={record.record_id}
+                      onClick={() => void select(record)}
+                      style={{
+                        cursor: "pointer",
+                        background:
+                          selected?.record_id === record.record_id
+                            ? "rgba(255,176,0,.045)"
+                            : undefined,
+                      }}
+                    >
+                      <td className="pri">{record.name}</td>
+                      <td>{record.display_name ?? "—"}</td>
+                      <td>
+                        {record.type === "A2A" ? (
+                          <Chip tone="amber" icon="◇">A2A</Chip>
+                        ) : record.type === "MCP" ? (
+                          <Chip tone="aqua" icon="⇄">MCP</Chip>
+                        ) : (
+                          <Chip tone="muted" icon="❖">{record.type}</Chip>
+                        )}
+                      </td>
+                      <td className="mono">
+                        {record.descriptor_types.length > 0
+                          ? record.descriptor_types.join(", ")
+                          : "—"}
+                      </td>
+                      <td>
+                        <Chip tone={chip.tone} icon={chip.icon}>{t(chip.labelKey)}</Chip>
+                      </td>
+                      <td className="mono">{record.version ?? "—"}</td>
+                      <td className="mono">{record.updated_at ?? "—"}</td>
+                    </tr>
+                  );
+                })}
+                {consumerLoading && !consumerFailed && (
+                  <tr>
+                    <td colSpan={7} className="loading-line">
+                      {t("common.loading")}
+                    </td>
+                  </tr>
+                )}
+                {consumerFailed && (
+                  <tr>
+                    <td colSpan={7}>
+                      <LoadError
+                        message={discoverableError}
+                        onRetry={() => void loadDiscoverable()}
+                        inline
+                        data-testid="consumer-view-load-error"
+                      />
+                    </td>
+                  </tr>
+                )}
+                {discoverable !== null && consumerRows.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={7}
+                      className="dim mono"
+                      style={{ textAlign: "center" }}
+                      data-testid="consumer-view-empty"
+                    >
+                      {discoverable.length === 0 && loaded.length > 0
+                        ? t("registry.consumer.emptyExplained", { count: loaded.length })
+                        : discoverable.length === 0
+                          ? t("registry.empty")
+                          : t("registry.consumer.emptyTab")}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+            ) : (
             <table>
               <thead>
                 <tr>
@@ -539,6 +721,7 @@ export function Registry() {
                       <td className="mono">{record.version ?? "—"}</td>
                       <td>
                         <Chip tone={chip.tone} icon={chip.icon}>{t(chip.labelKey)}</Chip>
+                        {isHidden(record) && hiddenChip}
                       </td>
                     </tr>
                   );
@@ -571,6 +754,7 @@ export function Registry() {
                 )}
               </tbody>
             </table>
+            )}
           </div>
 
           <Panel
@@ -580,7 +764,12 @@ export function Registry() {
               selected &&
               (() => {
                 const chip = STATUS_CHIP[selected.status] ?? STATUS_CHIP.DRAFT;
-                return <Chip tone={chip.tone} icon={chip.icon}>{t(chip.labelKey)}</Chip>;
+                return (
+                  <>
+                    <Chip tone={chip.tone} icon={chip.icon}>{t(chip.labelKey)}</Chip>
+                    {isHidden(selected) && hiddenChip}
+                  </>
+                );
               })()
             }
             pad={false}
