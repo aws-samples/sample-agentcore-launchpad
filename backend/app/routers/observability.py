@@ -1,14 +1,17 @@
 """Observability API — read-only aggregations over aws/spans + AgentCore metrics.
 
-All endpoints are GET, cached 60s per (view, range) inside the service layer;
-`force=true` bypasses the cache. Input validation is strict: range whitelist,
-trace ids are 32 lowercase hex chars, session ids match the platform id shape.
+Read endpoints are GET, cached 60s per (view, range) inside the service layer;
+`force=true` bypasses the cache. The one scoring endpoint
+(`POST /sessions/{id}/evaluate`) is synchronous, uncached and persists nothing.
+Input validation is strict: range whitelist, trace ids are 32 lowercase hex chars,
+session ids match the platform id shape.
 Violations return the standard {code, message, detail} envelope (422).
 """
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Path, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -108,3 +111,29 @@ def session_detail(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     return observability.get_session(session_id, range, db, ws.context, force=force)
+
+
+class SessionEvaluateBody(BaseModel):
+    """SCORE NOW: 1..5 evaluator ids (built-in `Builtin.*`, third-party
+    `ThirdParty.*` or a custom evaluator id) applied to one session's spans."""
+
+    evaluator_ids: list[
+        Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._-]+$")]
+    ] = Field(min_length=1, max_length=observability.MAX_ON_DEMAND_EVALUATORS)
+    range: Literal["1h", "6h", "24h", "7d"] = "24h"
+
+
+@router.post("/sessions/{session_id}/evaluate")
+def session_evaluate(
+    session_id: SessionIdParam,
+    body: SessionEvaluateBody,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Score the session on demand through the data-plane `Evaluate` API.
+
+    Synchronous (one judge inference per evaluator), results are returned
+    inline and never written to the ledger; 409
+    `observability.session_spans_missing` when no spans have landed yet."""
+    return observability.evaluate_session(
+        session_id, body.range, body.evaluator_ids, ws.context
+    )

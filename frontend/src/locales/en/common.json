@@ -1767,6 +1767,8 @@
     }
   },
   "apiErrors": {
+    "observability.session_spans_missing": "No span records found for this session in the selected time range yet.",
+    "observability.too_many_evaluators": "Choose between 1 and 5 evaluators.",
     "skill_lab.taskset_invalid": "The task set was refused by the task validator — see the per-split messages.",
     "skill_lab.taskset_not_found": "Task set not found",
     "skill_lab.not_provisioned": "The Skill Lab is not provisioned on this host — run `make bootstrap`.",
@@ -2906,6 +2908,31 @@
       "outputMessages": "OUTPUT MESSAGES ({{count}})"
     },
     "session": {
+      "score": {
+        "title": "SCORE NOW",
+        "sub": "{{count}} evaluators selected · max {{max}}",
+        "hint": "Synchronous data-plane Evaluate over this session's spans — one judge inference per evaluator. Results are NOT persisted; re-run any time. For a stored, repeatable score start a batch run on the Evaluation page.",
+        "run": "RUN",
+        "running": "SCORING…",
+        "pick": "Pick at least one evaluator",
+        "loadingEvaluators": "loading evaluators…",
+        "noEvaluators": "NO EVALUATORS AVAILABLE — CHECK THE EVALUATION PAGE",
+        "thirdPartyGroup": "THIRD-PARTY (MANAGED)",
+        "needsGroundTruth": "Needs ground truth — not available for on-demand session scoring",
+        "customTitle": "custom evaluator",
+        "resultSub": "{{spans}} spans sent · {{results}} results · not persisted",
+        "col": {
+          "evaluator": "EVALUATOR",
+          "value": "VALUE",
+          "label": "LABEL",
+          "explanation": "EXPLANATION",
+          "tokens": "TOKENS (IN / OUT)",
+          "status": "STATUS"
+        },
+        "ok": "scored",
+        "failed": "failed",
+        "spansMissingHint": "Spans reach CloudWatch a couple of minutes after the invoke completes — retry shortly or widen the time range."
+      },
       "conversation": "CONVERSATION",
       "conversationSub": "agentcore memory · ListEvents · actor {{actor}}",
       "conversationEvalSub": "eval run · {{run}} · agentcore memory · actor {{actor}}",

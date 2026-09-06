@@ -287,3 +287,26 @@ ledger 只存标识。列表返回 workspace 账号内全部配置并按 `owner`
 |---|---|---|
 | `GET` | `/api/observability/sessions/{session_id}` | 会话详情附带 `online_scores: {configs[{config_id, config_name, owner, agent{id,name}?, records[{time, evaluator_id, level, score, label, explanation, trace_id}]}], total, unavailable, configs_exist}`——该会话在所有配置下的结果记录(agent 持有的块排在最前),用一条前缀 `SOURCE logGroups(namePrefix: ['/aws/bedrock-agentcore/evaluations/results/'])` 查询读取。失败降级:结果查询失败只置 `unavailable: true`,绝不影响追踪与对话记录;`configs_exist` 表示 workspace 是否有 agent 持有的配置(结果与配置都没有时 UI 隐藏该区块) |
 | `GET` | `/api/overview/online-quality` | 「在线质量 · 24h」tile:`{range: "24h", mean, scores, sessions, agents, configs, evaluators[{evaluator_id, mean, count, polarity}], cached}`——对每个 (evaluator, agent 持有配置) 组合按计数加权求均值,lower-is-better 的 evaluator 取 `1 − mean`,因此 tile 始终「越高越好」;`evaluators[].mean` 保持原始值;`configs` 统计 workspace 内 agent 持有的配置数(账本),`agents` 统计有评分的 agent 数,因此「已配置但尚无评分」与「没有配置」可区分。按 workspace 缓存 120 秒并单飞,`force=true` 绕过;没有 agent 持有配置的 workspace 直接返回空载荷,不调用 AWS |
+
+## 控制台可观测 API——会话即时评分 / Console Observability API
+
+可观测会话详情(`/observability?session=<id>`)可以用 AgentCore 数据面 `Evaluate` API
+**立刻**对会话打分。这是批量运行(异步、持久化、按数据集 / 会话 id / 时间窗口取范围)与
+在线评估(抽样、持续)之外的第三种评分模式:
+
+| 模式 | 调用 | 时延 | 结果存放 |
+|---|---|---|---|
+| 批量运行 | `StartBatchEvaluation`(`POST /api/eval/runs`) | 分钟级,轮询 | AWS 结果日志组 + 台账 `EvalRun` |
+| 在线 | `CreateOnlineEvaluationConfig`(`POST /api/eval/online`) | 持续,judge 延迟约 10 分钟 | AWS 结果日志组,按会话读回 |
+| **即时** | **`Evaluate`(`POST /api/observability/sessions/{id}/evaluate`)** | **同步,每个 evaluator 一次 judge 推理** | **仅响应体——不持久化** |
+
+| Method | Path | Body / Result |
+|---|---|---|
+| `POST` | `/api/observability/sessions/{session_id}/evaluate` | Body `{evaluator_ids: string[](1..5,`Builtin.*` / `ThirdParty.*` / 自定义 id), range?: "1h"\|"6h"\|"24h"\|"7d"(默认 24h)}`。先用一条覆盖两种遥测布局的 Logs Insights 查询取回该会话的原始 span 记录(`filter ispresent(scope.name) and attributes.session.id = "<id>" \| fields @message \| sort @timestamp asc \| limit 2000`,非 JSON 行跳过),再按 evaluator 逐个、顺序调用 `evaluate(evaluatorId, evaluationInput={sessionSpans})`(每次 ≤10 条结果)。返回 `{session_id, range, span_count, results[{evaluator_id, evaluator_name, evaluator_arn, value, label, explanation, span_context{sessionId,traceId?,spanId?}, token_usage{input,output,total}, error_code, error_message}]}`。带 `error_code` 的结果是该 evaluator 的**部分失败**(仍返回该行,请求仍为 200)。仅会话级:没有 `evaluationTarget`,也没有 ground truth 参考输入。 |
+
+错误:`observability.session_spans_missing`(409——所选范围内尚无该会话的 span 记录;
+`detail.hint` 说明调用完成后 span 需要几分钟才会落地)、`observability.too_many_evaluators`(422)、
+标准的 `validation.invalid_request`(422——超过 5 个 id、空列表、范围或 id 形状不合法)、
+`aws.validation`(400——AWS 对不支持的 span 返回的 `ValidationException`)、
+`observability.query_failed`(502——Logs Insights 失败/超时)。结果**绝不写入台账**;
+可随时重跑(每次运行按 evaluator 各计一次 judge 推理)。

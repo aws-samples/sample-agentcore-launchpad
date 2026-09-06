@@ -6,11 +6,13 @@ import { Link, useNavigate } from "react-router-dom";
 import { Btn, Chip, Markdown, Panel } from "../../components";
 import type { ChipTone } from "../../components/Chip";
 import type {
+  EvaluatorRow,
   ObsSessionDetail,
+  ObsSessionScore,
   OnlineSessionScoreConfig,
   OnlineSessionScores,
 } from "../../lib/api";
-import { api, ApiError } from "../../lib/api";
+import { api, ApiError, getJson } from "../../lib/api";
 import { evaluatorLabel, evaluatorPolarity } from "../../lib/evaluators";
 import { fmtCost, fmtDuration, fmtInt, shortId } from "./format";
 
@@ -190,6 +192,291 @@ function OnlineScoresPanel({ scores }: { scores: OnlineSessionScores }) {
               </div>
             </div>
           ))
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+// Mirrors MAX_ON_DEMAND_EVALUATORS in backend/app/services/observability.py —
+// the body validator rejects a sixth id, so the picker stops accepting at five.
+const MAX_SCORE_EVALUATORS = 5;
+
+/** SCORE NOW — on-demand scoring of this session through the data-plane
+ * `Evaluate` API. Synchronous, one judge inference per evaluator, nothing is
+ * persisted (the hint says so); the operator can re-run with another set. */
+function ScoreNowPanel({ sessionId, range }: { sessionId: string; range: string }) {
+  const { t } = useTranslation();
+  const [evaluators, setEvaluators] = useState<EvaluatorRow[] | null>(null);
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<ObsSessionScore | null>(null);
+  const [error, setError] = useState<{ code: string | null; message: string } | null>(null);
+  const [open, setOpen] = useState<Set<number>>(new Set());
+
+  // Same list the run wizard offers (GET /api/eval/evaluators): built-ins,
+  // third-party managed and custom evaluators. Loaded once per mount.
+  useEffect(() => {
+    let alive = true;
+    getJson<{ evaluators: EvaluatorRow[] }>("/api/eval/evaluators")
+      .then((d) => {
+        if (alive) setEvaluators(d.evaluators);
+      })
+      .catch(() => {
+        if (alive) setEvaluators([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Results belong to one session — switching sessions clears them.
+  useEffect(() => {
+    setResult(null);
+    setError(null);
+    setOpen(new Set());
+  }, [sessionId]);
+
+  const toggle = (id: string) =>
+    setChosen((prev) =>
+      prev.includes(id)
+        ? prev.filter((x) => x !== id)
+        : prev.length >= MAX_SCORE_EVALUATORS
+          ? prev
+          : [...prev, id],
+    );
+  const toggleOpen = (i: number) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+
+  const run = async () => {
+    if (chosen.length === 0 || running) return;
+    setRunning(true);
+    setError(null);
+    setResult(null);
+    setOpen(new Set());
+    try {
+      const res = await api.obsEvaluateSession(sessionId, {
+        evaluator_ids: chosen,
+        range: range as "1h" | "6h" | "24h" | "7d",
+      });
+      setResult(res);
+    } catch (err: unknown) {
+      setError(
+        err instanceof ApiError
+          ? { code: err.code, message: t(`apiErrors.${err.code}`, err.message) }
+          : { code: null, message: err instanceof Error ? err.message : String(err) },
+      );
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const evaluatorName = (id: string): string => {
+    const row = evaluators?.find((e) => e.id === id);
+    return row?.source === "custom" ? (row.name ?? id) : evaluatorLabel(t, id);
+  };
+
+  const chip = (e: EvaluatorRow) => {
+    // On-demand scoring sends session spans only (no ground truth) — trajectory
+    // matchers cannot run here.
+    const gated = !!e.requires_ground_truth;
+    const full = !chosen.includes(e.id) && chosen.length >= MAX_SCORE_EVALUATORS;
+    return (
+      <button
+        key={e.id}
+        type="button"
+        data-testid={`obs-score-evaluator-${e.id}`}
+        className={`selchip${chosen.includes(e.id) ? " on" : ""}`}
+        style={{
+          cursor: gated ? "not-allowed" : "pointer",
+          opacity: gated || full ? 0.4 : undefined,
+        }}
+        disabled={gated || full || running}
+        title={
+          gated
+            ? t("obs.session.score.needsGroundTruth")
+            : e.source === "custom"
+              ? `${t("obs.session.score.customTitle")} · ${e.id}`
+              : e.id
+        }
+        onClick={() => toggle(e.id)}
+      >
+        {e.source === "custom" ? (e.name ?? e.id) : evaluatorLabel(t, e.id)}
+        {e.source === "custom" && (
+          <span className="mono" style={{ fontSize: 8.5, marginLeft: 6, letterSpacing: ".08em" }}>
+            ◆ {e.level}
+          </span>
+        )}
+        {e.source === "third_party" && e.provider && (
+          <span
+            className="mono"
+            style={{ fontSize: 8.5, marginLeft: 6, letterSpacing: ".08em", opacity: 0.7 }}
+          >
+            {e.provider}
+          </span>
+        )}
+      </button>
+    );
+  };
+
+  const firstParty = (evaluators ?? []).filter((e) => e.source !== "third_party");
+  const thirdParty = (evaluators ?? []).filter((e) => e.source === "third_party");
+  const spansMissing = error?.code === "observability.session_spans_missing";
+
+  return (
+    <div data-testid="obs-score-now" style={{ gridColumn: "1 / -1" }}>
+      <Panel
+        title={t("obs.session.score.title")}
+        sub={t("obs.session.score.sub", { count: chosen.length, max: MAX_SCORE_EVALUATORS })}
+        end={
+          <Btn
+            primary
+            data-testid="obs-score-run"
+            disabled={chosen.length === 0 || running}
+            disabledReason={chosen.length === 0 ? t("obs.session.score.pick") : undefined}
+            onClick={() => void run()}
+          >
+            {running ? t("obs.session.score.running") : `▶ ${t("obs.session.score.run")}`}
+          </Btn>
+        }
+        style={{ "--i": 3 } as CSSProperties}
+      >
+        <div className="dim" style={{ fontSize: 11, marginBottom: 10 }}>
+          {t("obs.session.score.hint")}
+        </div>
+        {evaluators == null ? (
+          <div className="loading-line">{t("obs.session.score.loadingEvaluators")}</div>
+        ) : evaluators.length === 0 ? (
+          <div className="empty">{t("obs.session.score.noEvaluators")}</div>
+        ) : (
+          <div style={{ maxHeight: 168, overflowY: "auto" }}>
+            <div className="selchips">{firstParty.map(chip)}</div>
+            {thirdParty.length > 0 && (
+              <>
+                <div
+                  className="mono dim"
+                  style={{ fontSize: 9.5, letterSpacing: ".08em", margin: "8px 0 4px" }}
+                >
+                  {t("obs.session.score.thirdPartyGroup")}
+                </div>
+                <div className="selchips">{thirdParty.map(chip)}</div>
+              </>
+            )}
+          </div>
+        )}
+        {running && (
+          <div className="loading-line" data-testid="obs-score-loading" style={{ marginTop: 12 }}>
+            {t("obs.session.score.running")}
+          </div>
+        )}
+        {error && (
+          <div
+            className={spansMissing ? "note" : "obs-error"}
+            data-testid="obs-score-error"
+            style={{ marginTop: 12 }}
+          >
+            <span className="i">[!]</span>
+            <span>
+              {error.message}
+              {spansMissing && ` ${t("obs.session.score.spansMissingHint")}`}
+            </span>
+          </div>
+        )}
+        {result && (
+          <div style={{ marginTop: 12 }}>
+            <div className="mono dim" style={{ fontSize: 10, marginBottom: 6 }}>
+              {t("obs.session.score.resultSub", {
+                spans: result.span_count,
+                results: result.results.length,
+              })}
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ minWidth: 640 }} data-testid="obs-score-results">
+                <thead>
+                  <tr>
+                    <th>{t("obs.session.score.col.evaluator")}</th>
+                    <th>{t("obs.session.score.col.value")}</th>
+                    <th>{t("obs.session.score.col.label")}</th>
+                    <th>{t("obs.session.score.col.explanation")}</th>
+                    <th>{t("obs.session.score.col.tokens")}</th>
+                    <th>{t("obs.session.score.col.status")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.results.map((r, i) => {
+                    const failed = r.error_code != null;
+                    const expanded = open.has(i);
+                    return (
+                      <tr
+                        key={`${r.evaluator_id}:${i}`}
+                        data-testid={`obs-score-row-${i}`}
+                        onClick={() => r.explanation && toggleOpen(i)}
+                        style={{
+                          cursor: r.explanation ? "pointer" : undefined,
+                          verticalAlign: "top",
+                        }}
+                      >
+                        <td title={r.evaluator_arn ?? r.evaluator_id}>
+                          {r.evaluator_name ?? evaluatorName(r.evaluator_id)}
+                          <div className="mono dim" style={{ fontSize: 8.5 }}>
+                            {r.evaluator_id}
+                          </div>
+                        </td>
+                        <td
+                          className="mono"
+                          style={{
+                            color: r.value != null ? scoreColor(r.value, r.evaluator_id) : undefined,
+                          }}
+                        >
+                          {r.value != null ? r.value.toFixed(2) : "—"}
+                        </td>
+                        <td className="mono dim">{r.label ?? "—"}</td>
+                        <td
+                          style={{
+                            fontSize: 11,
+                            maxWidth: expanded ? undefined : 320,
+                            whiteSpace: expanded ? "pre-wrap" : "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {r.explanation ? `${expanded ? "▾" : "▸"} ${r.explanation}` : "—"}
+                        </td>
+                        <td className="mono dim">
+                          {r.token_usage
+                            ? `${fmtInt(r.token_usage.input ?? 0)} / ${fmtInt(r.token_usage.output ?? 0)}`
+                            : "—"}
+                        </td>
+                        <td>
+                          {failed ? (
+                            <>
+                              <Chip tone="crit" icon="✕">
+                                {r.error_code}
+                              </Chip>
+                              {r.error_message && (
+                                <div className="dim" style={{ fontSize: 10.5, marginTop: 4 }}>
+                                  {r.error_message}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <Chip tone="good" icon="●">
+                              {t("obs.session.score.ok")}
+                            </Chip>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )}
       </Panel>
     </div>
@@ -432,6 +719,7 @@ export function SessionDetailView({
         )}
       </Panel>
       {showOnline && <OnlineScoresPanel scores={onlineScores} />}
+      <ScoreNowPanel sessionId={sessionId} range={range} />
     </div>,
   );
 }

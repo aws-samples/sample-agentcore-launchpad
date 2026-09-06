@@ -28,6 +28,8 @@ from app.evaluation.models import EvalRun
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.optimization.models import Experiment
 from app.services import memory
+from app.services.agentcore import evaluation as agentcore_evaluation
+from app.services.agentcore.client import data_client
 from app.services.workspace import WorkspaceContext
 
 SPANS_LOG_GROUP = "aws/spans"
@@ -43,6 +45,10 @@ BIN_BY_RANGE = {"1h": "5m", "6h": "15m", "24h": "1h", "7d": "6h"}
 TRACE_LIMIT = 500
 SESSION_LIMIT = 500
 SPANS_PER_TRACE = 500
+# On-demand scoring sends a whole session to Evaluate (model cap 20k spans);
+# a bounded Logs Insights fetch keeps one call's payload and scan predictable.
+SESSION_SPANS_LIMIT = 2000
+MAX_ON_DEMAND_EVALUATORS = 5
 CACHE_TTL_SECONDS = 60.0
 QUERY_DEADLINE_SECONDS = 55
 NANOS_PER_MS = 1_000_000
@@ -429,6 +435,22 @@ def q_trace_spans(trace_id: str) -> str:
 | filter traceId = "{trace_id}" and ispresent(startTimeUnixNano)
 | fields @message
 | limit {SPANS_PER_TRACE}
+"""
+
+
+def q_session_spans(session_id: str) -> str:
+    """Raw span records of one session, oldest first — the exact per-session
+    query the AgentCore on-demand evaluation guide prescribes, over both
+    telemetry layouts. Records without ``scope.name`` are correlated logs, not
+    spans, and Evaluate rejects them."""
+    _require(SESSION_ID_RE, session_id, "session id")
+    return f"""
+{SPANS_SOURCE}
+| filter ispresent(scope.name) and ispresent(attributes.session.id)
+    and attributes.session.id = "{session_id}"
+| fields @message
+| sort @timestamp asc
+| limit {SESSION_SPANS_LIMIT}
 """
 
 
@@ -1787,4 +1809,96 @@ def session_transcript(
         "run_id": run.id if run else None,
         "turns": turns,
         "long_term_records": long_term,
+    }
+
+
+# ── On-demand session scoring (data-plane Evaluate) ────────────────────────
+
+
+def fetch_session_spans(
+    session_id: str, hours: int, *, logs: Any = None,
+    workspace: WorkspaceContext | None = None,
+) -> list[dict[str, Any]]:
+    """The session's raw span documents, parsed from ``@message``.
+
+    Rows whose message is not a JSON object (structured log lines, stdout that
+    shares a unified log group) are skipped — Evaluate accepts span documents
+    only.
+    """
+    rows = run_insights_queries(
+        {"spans": q_session_spans(session_id)}, hours, logs=logs, workspace=workspace
+    )["spans"]
+    spans: list[dict[str, Any]] = []
+    for row in rows:
+        raw = row.get("@message")
+        if not raw:
+            continue
+        try:
+            doc = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(doc, dict):
+            spans.append(doc)
+    return spans
+
+
+def evaluate_session(
+    session_id: str, range_key: str, evaluator_ids: list[str],
+    workspace: WorkspaceContext, *, logs: Any = None, data: Any = None,
+) -> dict[str, Any]:
+    """Score one session synchronously with each evaluator via ``Evaluate``.
+
+    Not cached and not persisted: every call re-reads the spans and re-runs the
+    judges (one model inference per evaluator). A result carrying
+    ``errorCode`` is returned as an error row; an AWS ``ClientError`` from
+    ``Evaluate`` (e.g. ``ValidationException`` on unsupported spans) propagates
+    to the shared 4xx envelope handler.
+    """
+    hours = RANGE_HOURS[range_key]
+    ids = list(dict.fromkeys(evaluator_ids))  # de-dupe, keep order
+    if not ids or len(ids) > MAX_ON_DEMAND_EVALUATORS:
+        raise AppError(
+            "observability.too_many_evaluators",
+            f"choose between 1 and {MAX_ON_DEMAND_EVALUATORS} evaluators",
+            status_code=422,
+        )
+    spans = fetch_session_spans(session_id, hours, logs=logs, workspace=workspace)
+    if not spans:
+        raise AppError(
+            "observability.session_spans_missing",
+            f"no span records found for session {session_id} in the last {range_key}",
+            detail={
+                "session_id": session_id,
+                "range": range_key,
+                "hint": (
+                    "Spans reach CloudWatch a couple of minutes after the invoke "
+                    "completes; retry shortly or widen the time range."
+                ),
+            },
+            status_code=409,
+        )
+    client = data if data is not None else data_client(workspace)
+    results: list[dict[str, Any]] = []
+    for evaluator_id in ids:
+        raw_results = agentcore_evaluation.evaluate_session_spans(
+            client, evaluator_id=evaluator_id, spans=spans
+        )
+        if not raw_results:
+            results.append(
+                agentcore_evaluation.normalize_result(
+                    {"errorCode": "NoResult",
+                     "errorMessage": "Evaluate returned no result for this evaluator"},
+                    evaluator_id=evaluator_id,
+                )
+            )
+            continue
+        results.extend(
+            agentcore_evaluation.normalize_result(r, evaluator_id=evaluator_id)
+            for r in raw_results
+        )
+    return {
+        "session_id": session_id,
+        "range": range_key,
+        "span_count": len(spans),
+        "results": results,
     }
