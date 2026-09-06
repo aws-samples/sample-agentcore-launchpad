@@ -2019,7 +2019,7 @@
     "backToExperiment": "返回实验",
     "evaluators": {
       "title": "评估器",
-      "meta": "内置 + 第三方目录 · 自定义 LLM 评审 / 派生 — 创建 / 编辑 / 删除",
+      "meta": "内置 + 第三方目录 · 自定义 LLM 评审 / 派生 / 代码 — 创建 / 编辑 / 删除",
       "listTitle": "目录",
       "listSub": "内置 + 第三方（只读）+ 自定义评估器——点击行选中",
       "thirdPartySection": "第三方评估器（{{count}}）",
@@ -2041,11 +2041,19 @@
       "delete": "删除",
       "formTitleCreate": "创建评估器",
       "formTitleEdit": "编辑评估器",
-      "formSub": "LLM 评审 · 数值量表",
+      "formSub": "LLM 评审 · 派生 · 代码评估器（Lambda）",
       "prefill": "填充样例",
       "definitionType": "定义类型",
       "defJudge": "LLM 评审",
       "defDerived": "基于基础评估器派生",
+      "defCode": "代码评估器（Lambda）",
+      "codeChip": "代码",
+      "lambdaArn": "LAMBDA 函数 ARN — 须与 workspace 同区域",
+      "lambdaArnInvalid": "Lambda ARN 须形如 arn:aws:lambda:<region>:<account>:function:<name>[:qualifier]",
+      "lambdaTimeout": "超时 — 秒（1–300，默认 60）",
+      "lambdaTimeoutInvalid": "超时须为 1 到 300 之间的整数秒",
+      "codeIamHint": "控制台不管理 IAM：批量/在线运行作为 evaluationExecutionRoleArn 传入的评估执行角色需要对该函数拥有 lambda:InvokeFunction + lambda:GetFunction 权限，且函数的资源策略须允许 bedrock-agentcore.amazonaws.com。",
+      "codeContractHint": "函数接收 {schemaVersion, evaluatorId, evaluatorName, evaluationLevel, evaluationInput.sessionSpans, evaluationReferenceInputs, evaluationTarget}，返回 {label, value?, explanation?} 或 {errorCode, errorMessage}——限制 300 秒 / 6 MB；不涉及指令、量表与评审模型。",
       "baseEvaluator": "基础评估器 — 内置或第三方",
       "basePick": "——选择基础评估器——",
       "baseRequired": "请先选择要派生的基础评估器",
@@ -2085,7 +2093,7 @@
         "s2": "指令——评审提示词，至少包含一个 {placeholder} 占位符",
         "s3": "评分量表——至少 2 档的数值量表（标签+定义）",
         "s4": "选用——在 NEW RUN 中把评审勾选为评估器",
-        "note": "内置评估器由服务托管、只读；自定义评审运行在所选 Bedrock 模型上。"
+        "note": "内置评估器由服务托管、只读；自定义评审运行在所选 Bedrock 模型上，代码评估器运行你的 Lambda。"
       }
     },
     "online": {

@@ -1608,6 +1608,84 @@ export interface RegisterResult {
   valid_days: number;
 }
 
+/* ── evaluators (custom evaluator CRUD on `?view=evaluators`) ─────────────── */
+
+/** The three custom-evaluator definitions `POST /api/eval/evaluators` builds:
+ *  `judge` = llmAsAJudge (instructions + rating scale + model), `derived` =
+ *  a managed base evaluator's prompt on a chosen model, `code` = a Lambda
+ *  in the workspace Region (`codeBased.lambdaConfig`). */
+export type EvaluatorDefinition = "judge" | "derived" | "code";
+
+/** One row of `GET /api/eval/evaluators`. `definition` is set for custom rows
+ *  only (ListEvaluators carries no config, so it is read off `evaluatorType`). */
+export interface EvaluatorRow {
+  id: string;
+  name?: string | null;
+  level: string;
+  status?: string | null;
+  source: "builtin" | "custom" | "third_party";
+  requires_ground_truth?: boolean;
+  evaluator_type?: string | null;
+  provider?: string | null;
+  definition?: EvaluatorDefinition | null;
+}
+
+export interface ScalePoint {
+  value: number;
+  label: string;
+  definition: string;
+}
+
+/** `GET /api/eval/evaluators/{id}` — the projection of GetEvaluator. Fields of
+ *  the other definitions are empty/null: a code-based evaluator has no
+ *  `instructions`, `rating_scale` or `model_id`; only it carries `lambda_arn`
+ *  and `lambda_timeout_s`. */
+export interface EvaluatorDetail {
+  id: string;
+  name: string | null;
+  level: string | null;
+  description: string | null;
+  definition: EvaluatorDefinition;
+  instructions: string | null;
+  rating_scale: ScalePoint[];
+  model_id: string | null;
+  base_evaluator_id: string | null;
+  lambda_arn: string | null;
+  lambda_timeout_s: number | null;
+  status: string | null;
+  evaluator_type?: string | null;
+  provider?: string | null;
+}
+
+/** Exactly one definition per body (`instructions` | `base_evaluator_id` |
+ *  `lambda_arn`) — anything else is 400 `evaluator.definition_ambiguous`.
+ *  `rating_scale` is judge-only; `lambda_timeout_s` (1–300, default 60) is
+ *  code-only and the Lambda must be in the workspace Region
+ *  (422 `evaluator.lambda_region_mismatch`). */
+export interface EvaluatorJudgeBody {
+  instructions: string;
+  model_id: string;
+  level: string;
+  description: string;
+  rating_scale: ScalePoint[];
+}
+export interface EvaluatorDerivedBody {
+  base_evaluator_id: string;
+  model_id: string;
+  description: string;
+}
+export interface EvaluatorCodeBody {
+  lambda_arn: string;
+  lambda_timeout_s: number;
+  level: string;
+  description: string;
+}
+/** `PUT /api/eval/evaluators/{id}` full-replaces the config and must carry
+ *  the evaluator's current kind (else 400 `evaluator.definition_mismatch`). */
+export type EvaluatorUpdateBody = EvaluatorJudgeBody | EvaluatorDerivedBody | EvaluatorCodeBody;
+/** `POST /api/eval/evaluators` → 201 `{evaluator_id, arn}`. */
+export type EvaluatorCreateBody = EvaluatorUpdateBody & { name: string };
+
 /* ── online evaluation (continuous, sampled scoring of live sessions) ───── */
 
 export type OnlineEvalOwner = "agent" | "experiment" | "external";

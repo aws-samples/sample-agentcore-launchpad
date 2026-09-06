@@ -334,6 +334,36 @@ draft_status (MODIFIED|UNMODIFIED), example_count, versions[{version, example_co
 created_at}]}`. It caches display state only — AWS is the source of truth and every
 mutation re-reads `GetDataset` / `ListDatasetVersions`.
 
+## Console Evaluators API
+
+`/api/eval/evaluators` is the custom-evaluator CRUD behind the `?view=evaluators`
+sub-page. AWS is the source of truth (no ledger row); built-in and third-party
+evaluators are read-only. A custom evaluator has exactly one of three
+**definitions**, chosen by which body field is present — `instructions`
+(LLM-as-a-judge, `llmAsAJudge`), `base_evaluator_id` (derived, `derived`) or
+`lambda_arn` (code-based, `codeBased.lambdaConfig`); two or none → 400
+`evaluator.definition_ambiguous`.
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/eval/evaluators` | `{evaluators[], builtin_count}` — local builtin catalog first (`source: builtin`, trajectory matchers flagged `requires_ground_truth`), then the account's `ListEvaluators` rows (`source: third_party \| custom`, `evaluator_type`, `provider`, `status`). Custom rows carry `definition: judge \| derived \| code` (read off `evaluatorType` — the list has no config) |
+| `POST` | `/api/eval/evaluators` | Create → 201 `{evaluator_id, arn}`. Common: `name` (`^[a-zA-Z][a-zA-Z0-9_]{0,47}$`), `description`. **Judge**: `instructions` (10–4000 chars, ≥1 `{placeholder}` else 422 `evaluator.missing_placeholder`), `rating_scale[≥2]` (default pass/fail), `model_id`, `level` (TOOL_CALL \| TRACE \| SESSION, default TRACE). **Derived**: `base_evaluator_id` (`Builtin.*` \| `ThirdParty.*`; unknown → 400 `evaluator.base_not_found`), `model_id`; the level is the base's. **Code-based**: `lambda_arn` (`arn:aws[-partition]:lambda:<region>:<account>:function:<name>[:qualifier]`), `lambda_timeout_s` 1–300 (default 60), `level`; the Lambda must be in the workspace Region, else 422 `evaluator.lambda_region_mismatch` (`detail: {lambda_region, workspace_region}`). `rating_scale` with a derived or code-based body → 400 `evaluator.rating_scale_not_allowed`. `CreateEvaluator` requires `level` for every definition |
+| `GET` | `/api/eval/evaluators/{evaluator_id}` | `{id, name, level, description, definition, instructions, rating_scale, model_id, base_evaluator_id, lambda_arn, lambda_timeout_s, evaluator_type, provider, status}` — the other definitions' fields are empty/null (a code-based evaluator has `instructions: ""`, `rating_scale: []`, `model_id: null`) |
+| `PUT` | `/api/eval/evaluators/{evaluator_id}` | Full-config replace (`UpdateEvaluator` takes the complete config, so every field is sent back) with the same bodies as create minus `name` → the refreshed detail. The payload must be of the evaluator's **current** definition: a judge/derived payload against a code-based evaluator, or a code payload against a judge/derived one → 400 `evaluator.definition_mismatch` (`detail: {current, payload}`) — the evaluator is never converted. Managed ids → 400 `evaluator.builtin_immutable` |
+| `DELETE` | `/api/eval/evaluators/{evaluator_id}` | `DeleteEvaluator` → `{deleted: true}`; managed ids → 400 `evaluator.builtin_immutable`. Evaluators referenced by an ENABLED online config are locked by AWS |
+
+**Code-based (Lambda) contract.** The function is invoked by the service with
+`{schemaVersion, evaluatorId, evaluatorName, evaluationLevel, evaluationInput.sessionSpans,
+evaluationReferenceInputs, evaluationTarget}` and returns `{label, value?, explanation?}`
+or `{errorCode, errorMessage}`; the invocation is capped at the configured timeout
+(≤ 300 s) and 6 MB of payload. **The console manages no IAM for it**: the
+evaluation execution role the platform passes as `evaluationExecutionRoleArn` on
+batch and online runs needs `lambda:InvokeFunction` + `lambda:GetFunction` on the
+function, and the function's resource policy must allow the
+`bedrock-agentcore.amazonaws.com` principal (scope it with `aws:SourceAccount` /
+`aws:SourceArn`). Neither is checked at create time — a run against a function the
+role cannot invoke fails per session, like any evaluator error.
+
 ## Console Evaluation Runs API
 
 `/api/eval/runs` drives batch evaluations / insights analyses through the bounded

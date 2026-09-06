@@ -709,6 +709,9 @@ def delete_cloud_dataset(
 
 
 # ─── evaluators ──────────────────────────────────────────────────────────────
+_LIST_DEFINITION = {"Custom": "judge", "CustomDerived": "derived", "CustomCode": "code"}
+
+
 @router.get("/evaluators")
 def list_evaluators(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
     builtin = [
@@ -750,6 +753,11 @@ def list_evaluators(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str
                     "source": "third_party" if third_party else "custom",
                     "evaluator_type": evaluator_type,
                     "provider": ev.get("provider"),
+                    # ListEvaluators carries no config, so the kind comes from
+                    # evaluatorType (Custom / CustomDerived / CustomCode).
+                    "definition": (
+                        None if third_party else _LIST_DEFINITION.get(evaluator_type, "judge")
+                    ),
                 }
             )
     except Exception:
@@ -758,6 +766,12 @@ def list_evaluators(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str
 
 
 _PLACEHOLDER_RE = re.compile(r"\{[a-zA-Z_][a-zA-Z0-9_]*\}")
+# Lambda function ARN, optionally qualified with a version or alias.
+_LAMBDA_ARN_PATTERN = (
+    r"^arn:aws(-[a-z]+)?:lambda:[a-z0-9-]+:\d{12}:function:[A-Za-z0-9_-]+"
+    r"(:[A-Za-z0-9_$-]+)?$"
+)
+DEFAULT_LAMBDA_TIMEOUT_S = 60
 
 DEFAULT_RATING_SCALE = [
     {"value": 1.0, "label": "pass", "definition": "meets the instruction"},
@@ -779,26 +793,68 @@ class JudgeCreate(BaseModel):
     base_evaluator_id: str | None = Field(
         default=None, pattern=r"^(Builtin|ThirdParty)\.[A-Za-z0-9_.]+$"
     )
+    # Code-based definition: a Lambda in the workspace Region implements the
+    # scoring; the service invokes it with the platform's evaluation
+    # execution role (lambda:InvokeFunction + lambda:GetFunction on the
+    # function, and a resource policy trusting bedrock-agentcore.amazonaws.com
+    # — neither is managed by the console).
+    lambda_arn: str | None = Field(default=None, pattern=_LAMBDA_ARN_PATTERN)
+    lambda_timeout_s: int | None = Field(default=None, ge=1, le=300)
     model_id: str = "global.anthropic.claude-sonnet-5"
     level: str = Field(default="TRACE", pattern="^(TOOL_CALL|TRACE|SESSION)$")
     description: str = Field(default="", max_length=1000)
     rating_scale: list[RatingScaleItem] | None = Field(default=None, min_length=2)
 
 
+def _definition_kind(req: "JudgeCreate | JudgeUpdate") -> str:
+    """``judge`` / ``derived`` / ``code`` — which of the three definitions a
+    payload carries. Callers run :func:`_require_one_definition` first."""
+    if req.lambda_arn is not None:
+        return "code"
+    if req.base_evaluator_id is not None:
+        return "derived"
+    return "judge"
+
+
 def _require_one_definition(req: "JudgeCreate | JudgeUpdate") -> None:
-    if (req.instructions is None) == (req.base_evaluator_id is None):
+    given = [
+        field
+        for field in ("instructions", "base_evaluator_id", "lambda_arn")
+        if getattr(req, field) is not None
+    ]
+    if len(given) != 1:
         raise AppError(
             "evaluator.definition_ambiguous",
-            "provide exactly one of instructions (LLM-as-a-judge) or "
-            "base_evaluator_id (derived evaluator)",
+            "provide exactly one of instructions (LLM-as-a-judge), "
+            "base_evaluator_id (derived evaluator) or lambda_arn (code-based)",
             status_code=400,
         )
-    if req.base_evaluator_id and req.rating_scale:
+    if req.rating_scale and given[0] != "instructions":
         raise AppError(
             "evaluator.rating_scale_not_allowed",
-            "derived evaluators inherit the base evaluator's rating scale",
+            "derived evaluators inherit the base evaluator's rating scale; "
+            "code-based evaluators return their own label/value",
             status_code=400,
         )
+
+
+def _require_lambda_region(lambda_arn: str, workspace_region: str) -> None:
+    """A code-based evaluator's Lambda must live in the evaluator's Region."""
+    arn_region = lambda_arn.split(":")[3]
+    if arn_region != workspace_region:
+        raise AppError(
+            "evaluator.lambda_region_mismatch",
+            f"the Lambda is in {arn_region} but the workspace is {workspace_region} — "
+            "a code-based evaluator's function must be in the same Region",
+            {"lambda_region": arn_region, "workspace_region": workspace_region},
+            status_code=422,
+        )
+
+
+def _lambda_timeout(req: "JudgeCreate | JudgeUpdate") -> int:
+    return (
+        req.lambda_timeout_s if req.lambda_timeout_s is not None else DEFAULT_LAMBDA_TIMEOUT_S
+    )
 
 
 def _resolve_base_level(client: Any, base_evaluator_id: str) -> str:
@@ -833,10 +889,22 @@ def _rating_scale_payload(scale: list[RatingScaleItem] | None) -> list[dict[str,
     return [item.model_dump() for item in scale]
 
 
+def _current_definition(detail: dict[str, Any]) -> str:
+    """Definition kind of a GetEvaluator record — keyed on which config member
+    is present (``evaluatorType`` is absent on some records)."""
+    config = detail.get("evaluatorConfig") or {}
+    if config.get("codeBased"):
+        return "code"
+    if config.get("derived"):
+        return "derived"
+    return "judge"
+
+
 def _evaluator_out(detail: dict[str, Any]) -> dict[str, Any]:
     config = detail.get("evaluatorConfig") or {}
     judge = config.get("llmAsAJudge") or {}
     derived = config.get("derived") or {}
+    lambda_config = (config.get("codeBased") or {}).get("lambdaConfig") or {}
     model_config = ((derived or judge).get("modelConfig") or {}).get(
         "bedrockEvaluatorModelConfig"
     ) or {}
@@ -845,10 +913,13 @@ def _evaluator_out(detail: dict[str, Any]) -> dict[str, Any]:
         "name": detail.get("evaluatorName"),
         "level": detail.get("level"),
         "description": detail.get("description"),
-        "instructions": "" if derived else judge.get("instructions"),
+        "definition": _current_definition(detail),
+        "instructions": "" if (derived or lambda_config) else judge.get("instructions"),
         "rating_scale": (judge.get("ratingScale") or {}).get("numerical", []),
         "model_id": model_config.get("modelId"),
         "base_evaluator_id": derived.get("baseEvaluatorId"),
+        "lambda_arn": lambda_config.get("lambdaArn"),
+        "lambda_timeout_s": lambda_config.get("lambdaTimeoutInSeconds"),
         "evaluator_type": detail.get("evaluatorType"),
         "provider": detail.get("provider"),
         "status": detail.get("status"),
@@ -861,7 +932,17 @@ def create_judge(
 ) -> dict[str, Any]:
     _require_one_definition(req)
     client = control_client(ws.context)
-    if req.base_evaluator_id:
+    if req.lambda_arn:
+        _require_lambda_region(req.lambda_arn, ws.context.region)
+        created = ac.create_code_evaluator(
+            client,
+            name=req.name,
+            lambda_arn=req.lambda_arn,
+            lambda_timeout_s=_lambda_timeout(req),
+            level=req.level,
+            description=req.description,
+        )
+    elif req.base_evaluator_id:
         created = ac.create_derived_evaluator(
             client,
             name=req.name,
@@ -898,6 +979,8 @@ class JudgeUpdate(BaseModel):
     base_evaluator_id: str | None = Field(
         default=None, pattern=r"^(Builtin|ThirdParty)\.[A-Za-z0-9_.]+$"
     )
+    lambda_arn: str | None = Field(default=None, pattern=_LAMBDA_ARN_PATTERN)
+    lambda_timeout_s: int | None = Field(default=None, ge=1, le=300)
     model_id: str = "global.anthropic.claude-sonnet-5"
     level: str = Field(default="TRACE", pattern="^(TOOL_CALL|TRACE|SESSION)$")
     description: str = Field(default="", max_length=1000)
@@ -925,17 +1008,31 @@ def update_evaluator(
         _require_placeholder(req.instructions)
     client = control_client(ws.context)
     # UpdateEvaluator full-replaces the config, so a payload of the wrong
-    # definition type would silently convert the evaluator — reject instead.
+    # definition type would silently convert the evaluator (a judge into a
+    # Lambda evaluator, a Lambda evaluator into a judge, …) — reject instead.
     current = ac.get_evaluator(client, evaluator_id=evaluator_id)
-    is_derived = "derived" in (current.get("evaluatorConfig") or {})
-    if is_derived != bool(req.base_evaluator_id):
+    current_kind = _current_definition(current)
+    payload_kind = _definition_kind(req)
+    if current_kind != payload_kind:
         raise AppError(
             "evaluator.definition_mismatch",
             "update payload must match the evaluator's definition type "
-            "(instructions for LLM-as-a-judge, base_evaluator_id for derived)",
+            "(instructions for LLM-as-a-judge, base_evaluator_id for derived, "
+            "lambda_arn for code-based)",
+            {"current": current_kind, "payload": payload_kind},
             status_code=400,
         )
-    if req.base_evaluator_id:
+    if req.lambda_arn:
+        _require_lambda_region(req.lambda_arn, ws.context.region)
+        ac.update_code_evaluator(
+            client,
+            evaluator_id=evaluator_id,
+            lambda_arn=req.lambda_arn,
+            lambda_timeout_s=_lambda_timeout(req),
+            level=req.level,
+            description=req.description,
+        )
+    elif req.base_evaluator_id:
         ac.update_derived_evaluator(
             client,
             evaluator_id=evaluator_id,
