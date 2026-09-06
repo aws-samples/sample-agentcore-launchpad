@@ -215,3 +215,40 @@ def test_rail_renders_episodic_records_by_their_intent():
     )
     assert decode_record_text(episode)[0] == "Get the Q3 revenue figure"
     assert decode_record_text(reflection)[0] == "Finance lookups"
+
+
+def test_rail_reads_events_and_records_from_the_pinned_memory(monkeypatch):
+    """Regression: the rail passed ``memory_id`` to ``list_events`` which did
+    not accept it (9179b25), so `/api/chat/{id}/memory` 500'd `memory.unavailable`
+    for every agent — unnoticed because earlier tests stubbed list_events itself.
+    Stub the AWS client instead so the real wrappers run end to end."""
+
+    class Data:
+        def __init__(self):
+            self.calls: list[tuple[str, dict]] = []
+
+        def list_events(self, **kw):
+            self.calls.append(("list_events", kw))
+            return {"events": []}
+
+        def list_memory_records(self, **kw):
+            self.calls.append(("list_memory_records", kw))
+            return {"memoryRecordSummaries": []}
+
+    data = Data()
+    monkeypatch.setattr(memory_service, "data_client", lambda _ws: data)
+    monkeypatch.setattr(memory_service, "memory_id_or_none", lambda _ws: "workspace-default-mem")
+
+    out = memory_service.session_memory_summary(
+        ws_ctx(), "agentX__river", "sess", memory_id="agent-pinned-mem"
+    )
+    assert out["event_count"] == 0 and out["records"] == []
+    assert [op for op, _ in data.calls] == ["list_events"] + ["list_memory_records"] * 4
+    assert {kw["memoryId"] for _, kw in data.calls} == {"agent-pinned-mem"}
+    assert data.calls[0][1]["actorId"] == "agentX__river"
+    assert data.calls[0][1]["sessionId"] == "sess"
+
+    # without a pinned memory the workspace default is used everywhere
+    data.calls.clear()
+    memory_service.session_memory_summary(ws_ctx(), "agentX__river", "sess")
+    assert {kw["memoryId"] for _, kw in data.calls} == {"workspace-default-mem"}
