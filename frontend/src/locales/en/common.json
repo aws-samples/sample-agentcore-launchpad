@@ -2019,7 +2019,7 @@
     "backToExperiment": "BACK TO EXPERIMENT",
     "evaluators": {
       "title": "EVALUATORS",
-      "meta": "BUILTIN + THIRD-PARTY CATALOG · CUSTOM LLM-AS-A-JUDGE / DERIVED — CREATE / EDIT / DELETE",
+      "meta": "BUILTIN + THIRD-PARTY CATALOG · CUSTOM LLM-AS-A-JUDGE / DERIVED / CODE-BASED — CREATE / EDIT / DELETE",
       "listTitle": "CATALOG",
       "listSub": "builtin + third-party (read-only) + custom evaluators — click a row",
       "thirdPartySection": "THIRD-PARTY EVALUATORS ({{count}})",
@@ -2041,11 +2041,19 @@
       "delete": "DELETE",
       "formTitleCreate": "CREATE EVALUATOR",
       "formTitleEdit": "EDIT EVALUATOR",
-      "formSub": "LLM-as-a-judge · numerical rating scale",
+      "formSub": "LLM-as-a-judge · derived · code-based (Lambda)",
       "prefill": "PREFILL SAMPLE",
       "definitionType": "DEFINITION TYPE",
       "defJudge": "LLM-AS-A-JUDGE",
       "defDerived": "DERIVED FROM BASE EVALUATOR",
+      "defCode": "CODE-BASED (LAMBDA)",
+      "codeChip": "CODE",
+      "lambdaArn": "LAMBDA FUNCTION ARN — SAME REGION AS THE WORKSPACE",
+      "lambdaArnInvalid": "lambda ARN must look like arn:aws:lambda:<region>:<account>:function:<name>[:qualifier]",
+      "lambdaTimeout": "TIMEOUT — SECONDS (1–300, DEFAULT 60)",
+      "lambdaTimeoutInvalid": "timeout must be a whole number of seconds between 1 and 300",
+      "codeIamHint": "The console does not manage IAM. The evaluation execution role that batch/online runs pass as evaluationExecutionRoleArn needs lambda:InvokeFunction + lambda:GetFunction on this function, and the function's resource policy must allow bedrock-agentcore.amazonaws.com.",
+      "codeContractHint": "The function receives {schemaVersion, evaluatorId, evaluatorName, evaluationLevel, evaluationInput.sessionSpans, evaluationReferenceInputs, evaluationTarget} and returns {label, value?, explanation?} or {errorCode, errorMessage} — 300 s / 6 MB limits; no instructions, rating scale or judge model apply.",
       "baseEvaluator": "BASE EVALUATOR — BUILTIN OR THIRD-PARTY",
       "basePick": "— select a base evaluator —",
       "baseRequired": "pick a base evaluator to derive from",
@@ -2085,7 +2093,7 @@
         "s2": "INSTRUCTIONS — a judge prompt with at least one {placeholder} token",
         "s3": "RATING SCALE — a numerical scale with 2+ labeled points",
         "s4": "SELECT — pick the judge as an evaluator in NEW RUN",
-        "note": "Builtin evaluators are service-managed and read-only; custom judges run on the Bedrock model you pick."
+        "note": "Builtin evaluators are service-managed and read-only; custom judges run on the Bedrock model you pick, code-based evaluators run your Lambda."
       }
     },
     "online": {

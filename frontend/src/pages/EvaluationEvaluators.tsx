@@ -16,43 +16,23 @@ import {
   ViewHead,
 } from "../components";
 import { EvaluationNav } from "../components/EvaluationNav";
+import type {
+  EvaluatorDefinition,
+  EvaluatorDetail,
+  EvaluatorRow,
+  EvaluatorUpdateBody,
+  ScalePoint,
+} from "../lib/api";
 import { evaluatorLabel } from "../lib/evaluators";
 
 type Level = "TOOL_CALL" | "TRACE" | "SESSION";
 
-interface EvaluatorRow {
-  id: string;
-  name?: string | null;
-  level: string;
-  status?: string | null;
-  source: "builtin" | "custom" | "third_party";
-  requires_ground_truth?: boolean;
-  evaluator_type?: string | null;
-  provider?: string | null;
-}
-
-interface ScalePoint {
-  value: number;
-  label: string;
-  definition: string;
-}
-
-interface EvaluatorDetail {
-  id: string;
-  name: string | null;
-  level: string | null;
-  description: string | null;
-  instructions: string | null;
-  rating_scale: ScalePoint[];
-  model_id: string | null;
-  status: string | null;
-  evaluator_type?: string | null;
-  provider?: string | null;
-  base_evaluator_id?: string | null;
-}
-
 const NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,47}$/;
 const PLACEHOLDER_RE = /\{[a-zA-Z_][a-zA-Z0-9_]*\}/;
+// Lambda function ARN, optionally version/alias-qualified (mirrors the backend).
+const LAMBDA_ARN_RE =
+  /^arn:aws(-[a-z]+)?:lambda:[a-z0-9-]+:\d{12}:function:[A-Za-z0-9_-]+(:[A-Za-z0-9_$-]+)?$/;
+const DEFAULT_LAMBDA_TIMEOUT = "60";
 
 // Sentinel row for the collapsible third-party section toggle — it sits inside
 // the ordered list so client-side pagination counts it like a normal row.
@@ -179,8 +159,13 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
   const [formError, setFormError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<EvaluatorRow | null>(null);
   const [tpOpen, setTpOpen] = useState(false);
-  const [defType, setDefType] = useState<"judge" | "derived">("judge");
+  const [defType, setDefType] = useState<EvaluatorDefinition>("judge");
   const [baseEvaluatorId, setBaseEvaluatorId] = useState("");
+  // Code-based (Lambda) definition — the ARN and timeout the Lambda config
+  // carries; the timeout stays a string while typed so a cleared field is
+  // distinguishable from 0.
+  const [lambdaArn, setLambdaArn] = useState("");
+  const [lambdaTimeout, setLambdaTimeout] = useState(DEFAULT_LAMBDA_TIMEOUT);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   const load = useCallback(async () => {
@@ -238,11 +223,17 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
     ordered.findIndex((row) => row.id === selected?.id),
   );
 
-  // Derived (CustomDerived) evaluators reuse the create/edit form with the
-  // instructions + rating-scale sections swapped for a base-evaluator pick;
-  // base candidates are the LLM-based managed rows (trajectory matchers are
-  // deterministic and cannot back a derived evaluator).
-  const derivedForm = editingId ? !!detail?.base_evaluator_id : defType === "derived";
+  // The three definitions share the create/edit form. Derived swaps the
+  // instructions + rating-scale sections for a base-evaluator pick (base
+  // candidates are the LLM-based managed rows — trajectory matchers are
+  // deterministic and cannot back a derived evaluator); code-based swaps them
+  // and the judge model for a Lambda ARN + timeout. In edit mode the kind is
+  // the evaluator's own — the backend rejects a mismatched payload rather
+  // than converting, so the form never offers a different kind.
+  const activeDef: EvaluatorDefinition = editingId ? (detail?.definition ?? "judge") : defType;
+  const derivedForm = activeDef === "derived";
+  const codeForm = activeDef === "code";
+  const judgeForm = activeDef === "judge";
   const baseOptions = rows.filter(
     (r) => (r.source === "builtin" || r.source === "third_party") && !r.requires_ground_truth,
   );
@@ -260,6 +251,8 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
     setDraft(emptyDraft());
     setDefType("judge");
     setBaseEvaluatorId("");
+    setLambdaArn("");
+    setLambdaTimeout(DEFAULT_LAMBDA_TIMEOUT);
     if (!selectedId) return;
     let cancelled = false;
     void (async () => {
@@ -280,6 +273,8 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
           })),
         });
         setBaseEvaluatorId(d.base_evaluator_id ?? "");
+        setLambdaArn(d.lambda_arn ?? "");
+        setLambdaTimeout(String(d.lambda_timeout_s ?? DEFAULT_LAMBDA_TIMEOUT));
       } catch {
         if (!cancelled) setDetailError(true);
       }
@@ -314,9 +309,19 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
       setFormError(t("evalPage.evaluators.nameInvalid"));
       return;
     }
+    const timeoutSeconds = Number(lambdaTimeout);
     if (derivedForm) {
       if (!baseEvaluatorId) {
         setFormError(t("evalPage.evaluators.baseRequired"));
+        return;
+      }
+    } else if (codeForm) {
+      if (!LAMBDA_ARN_RE.test(lambdaArn.trim())) {
+        setFormError(t("evalPage.evaluators.lambdaArnInvalid"));
+        return;
+      }
+      if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 300) {
+        setFormError(t("evalPage.evaluators.lambdaTimeoutInvalid"));
         return;
       }
     } else {
@@ -335,20 +340,28 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
     setBusy(true);
     try {
       // Derived evaluators carry no instructions/scale/level — the base
-      // evaluator owns those server-side.
-      const body = derivedForm
+      // evaluator owns those server-side. Code-based ones carry no
+      // instructions/scale/model — the Lambda returns the label and value.
+      const body: EvaluatorUpdateBody = derivedForm
         ? {
             base_evaluator_id: baseEvaluatorId,
             model_id: draft.model_id,
             description: draft.description,
           }
-        : {
-            instructions: draft.instructions,
-            model_id: draft.model_id,
-            level: draft.level,
-            description: draft.description,
-            rating_scale: draft.rating_scale,
-          };
+        : codeForm
+          ? {
+              lambda_arn: lambdaArn.trim(),
+              lambda_timeout_s: timeoutSeconds,
+              level: draft.level,
+              description: draft.description,
+            }
+          : {
+              instructions: draft.instructions,
+              model_id: draft.model_id,
+              level: draft.level,
+              description: draft.description,
+              rating_scale: draft.rating_scale,
+            };
       const res = editingId
         ? await fetch(`/api/eval/evaluators/${editingId}`, {
             method: "PUT",
@@ -430,6 +443,15 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
             >
               {t("evalPage.evaluators.defDerived")}
             </button>
+            <button
+              type="button"
+              data-testid="definition-type-code"
+              className={`selchip${defType === "code" ? " on" : ""}`}
+              style={{ cursor: "pointer" }}
+              onClick={() => setDefType("code")}
+            >
+              {t("evalPage.evaluators.defCode")}
+            </button>
           </div>
         </div>
       )}
@@ -500,6 +522,45 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
           </div>
         </div>
       )}
+      {codeForm && (
+        <>
+          <div className="field">
+            <label htmlFor="evaluator-lambda-arn">{t("evalPage.evaluators.lambdaArn")}</label>
+            <input
+              id="evaluator-lambda-arn"
+              className="input mono"
+              data-testid="code-lambda-arn"
+              value={lambdaArn}
+              placeholder="arn:aws:lambda:us-west-2:123456789012:function:my-evaluator"
+              onChange={(e) => setLambdaArn(e.target.value)}
+            />
+            <div className="mono dim" style={{ fontSize: 9.5, marginTop: 4 }}>
+              {t("evalPage.evaluators.codeIamHint")}
+            </div>
+          </div>
+          <div className="field">
+            <label htmlFor="evaluator-lambda-timeout">
+              {t("evalPage.evaluators.lambdaTimeout")}
+            </label>
+            <input
+              id="evaluator-lambda-timeout"
+              className="input mono"
+              data-testid="code-lambda-timeout"
+              type="number"
+              min={1}
+              max={300}
+              step={1}
+              value={lambdaTimeout}
+              style={{ width: 110 }}
+              onChange={(e) => setLambdaTimeout(e.target.value)}
+            />
+            <div className="mono dim" style={{ fontSize: 9.5, marginTop: 4 }}>
+              {t("evalPage.evaluators.codeContractHint")}
+            </div>
+          </div>
+        </>
+      )}
+      {!codeForm && (
       <div className="field">
         <label>{t("evalPage.evaluators.model")}</label>
         <select
@@ -518,6 +579,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
           ))}
         </select>
       </div>
+      )}
       <div className="field">
         <label>{t("evalPage.evaluators.description")}</label>
         <input
@@ -527,7 +589,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
           onChange={(e) => setDraft({ ...draft, description: e.target.value })}
         />
       </div>
-      {!derivedForm && (
+      {judgeForm && (
       <div className="field">
         <label>{t("evalPage.evaluators.instructions")}</label>
         <textarea
@@ -604,7 +666,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
         )}
       </div>
       )}
-      {!derivedForm && (
+      {judgeForm && (
       <div className="field">
         <label>{t("evalPage.evaluators.ratingScale")}</label>
         {draft.rating_scale.map((p, i) => (
@@ -670,7 +732,11 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
           disabled={
             busy ||
             (!editingId && !draft.name.trim()) ||
-            (derivedForm ? !baseEvaluatorId : !draft.instructions.trim())
+            (derivedForm
+              ? !baseEvaluatorId
+              : codeForm
+                ? !lambdaArn.trim()
+                : !draft.instructions.trim())
           }
           onClick={() => void submit()}
         >
@@ -845,17 +911,22 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
                   {row.source === "custom" ? (
                     <td className="pri">
                       {row.name ?? row.id}
-                      {row.evaluator_type === "CustomDerived" && (
+                      {(row.definition === "derived" || row.definition === "code") && (
                         <span
                           className="mono"
+                          data-testid={`evaluator-kind-${row.definition}`}
                           style={{
                             fontSize: 8.5,
                             marginLeft: 6,
                             letterSpacing: ".08em",
-                            color: "var(--aqua)",
+                            color: row.definition === "code" ? "var(--good)" : "var(--aqua)",
                           }}
                         >
-                          {t("evalPage.evaluators.derivedChip")}
+                          {t(
+                            row.definition === "code"
+                              ? "evalPage.evaluators.codeChip"
+                              : "evalPage.evaluators.derivedChip",
+                          )}
                         </span>
                       )}
                     </td>
