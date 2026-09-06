@@ -119,10 +119,15 @@ def create_turn_event(
 
 
 def list_events(
-    workspace: WorkspaceContext, actor_id: str, session_id: str, max_results: int = 20
+    workspace: WorkspaceContext,
+    actor_id: str,
+    session_id: str,
+    max_results: int = 20,
+    memory_id: str | None = None,
 ) -> list[dict]:
+    """Short-term events of one session; ``memory_id`` selects an agent-pinned memory."""
     return data_client(workspace).list_events(
-        memoryId=_memory_id(workspace),
+        memoryId=memory_id or _memory_id(workspace),
         actorId=actor_id,
         sessionId=session_id,
         includePayloads=True,
