@@ -348,15 +348,23 @@ def resolve_namespaces(
     """Turn each strategy's namespace template into a concrete namespace.
 
     Substitution happens server-side so the ``{actorId}`` contract lives next to
-    ``scoped_actor`` instead of being re-implemented in TypeScript. Templates
-    with any other placeholder are returned as ``resolvable: False`` so the UI
-    can disable them rather than sending a broken namespace to AWS.
+    ``scoped_actor`` instead of being re-implemented in TypeScript.
+
+    Templates that keep a placeholder only in their *trailing* segments (the
+    per-session ``/summaries/{actorId}/{sessionId}`` and
+    ``/episodes/{actorId}/{sessionId}`` shapes) resolve to the actor-level prefix
+    (``/summaries/<actor>``) with ``prefix: True`` — both ``ListMemoryRecords``
+    and ``RetrieveMemoryRecords`` match namespaces by prefix (verified live), so
+    that reads every session's records for the actor at once. A placeholder in
+    the middle of the path cannot be bridged that way and is returned as
+    ``resolvable: False`` so the UI can disable it rather than sending a broken
+    namespace to AWS.
     """
     resolved: list[dict[str, Any]] = []
     for strategy in strategies if strategies is not None else get_strategies(workspace):
         templates = strategy["namespace_templates"] or strategy["namespaces"]
         for template in templates:
-            namespace = template.replace("{actorId}", actor_id)
+            namespace, prefix = _resolve_template(template, actor_id)
             resolved.append(
                 {
                     "strategy_id": strategy["strategy_id"],
@@ -365,9 +373,26 @@ def resolve_namespaces(
                     "template": template,
                     "namespace": namespace,
                     "resolvable": not _PLACEHOLDER.search(namespace),
+                    "prefix": prefix,
                 }
             )
     return resolved
+
+
+def _resolve_template(template: str, actor_id: str) -> tuple[str, bool]:
+    """Substitute the actor, then drop trailing placeholder-only segments.
+
+    Returns ``(namespace, prefix)`` — ``prefix`` is True when segments were
+    dropped, i.e. the namespace addresses a subtree rather than one leaf.
+    """
+    namespace = template.replace("{actorId}", actor_id)
+    segments = namespace.split("/")
+    trimmed = list(segments)
+    while len(trimmed) > 2 and _PLACEHOLDER.search(trimmed[-1]):
+        trimmed.pop()
+    if len(trimmed) == len(segments):
+        return namespace, False
+    return "/".join(trimmed), True
 
 
 def _record(raw: dict[str, Any]) -> dict[str, Any]:

@@ -157,17 +157,28 @@ def test_summary_echoes_the_partition_it_read(client, monkeypatch):
 
 
 def test_summary_display_label_hides_compound_actor(monkeypatch):
-    """The rail chip shows the strategy (/facts, /preferences), never the
-    compound actor id."""
+    """The rail chip shows the strategy (/facts, /preferences, /summaries,
+    /episodes), never the compound actor id. Facts and preferences are read per
+    actor; the summary and the episodes are read for THIS session only (exact
+    namespace, so actor-level reflections under /episodes/<actor> stay out)."""
+    asked: list[str] = []
+
+    def fake_list(_ws, ns, max_results=10, memory_id=None):
+        asked.append(ns)
+        return [{"content": {"text": "likes brevity"}, "memoryRecordId": "r1"}]
+
     monkeypatch.setattr(memory_service, "list_events", lambda *a, **k: [])
-    monkeypatch.setattr(
-        memory_service, "list_records",
-        lambda _ws, ns, max_results=10, memory_id=None: [{"content": {"text": "likes brevity"},
-                                          "memoryRecordId": "r1"}],
-    )
+    monkeypatch.setattr(memory_service, "list_records", fake_list)
     out = memory_service.session_memory_summary(ws_ctx(), "agentX__river", "sess")
-    labels = {r["namespace"] for r in out["records"]}
-    assert labels <= {"/preferences", "/facts"}
+    assert [r["namespace"] for r in out["records"]] == [
+        "/preferences", "/facts", "/summaries", "/episodes"
+    ]
+    assert asked == [
+        "/preferences/agentX__river",
+        "/facts/agentX__river",
+        "/summaries/agentX__river/sess",
+        "/episodes/agentX__river/sess",
+    ]
     assert all("river" not in r["namespace"] for r in out["records"])
 
 
@@ -187,3 +198,20 @@ def test_rail_renders_structured_preference_records_readably(monkeypatch):
     )
     out = memory_service.session_memory_summary(ws_ctx(), "agentX__river", "sess")
     assert all(r["text"] == "Wants numbered lists" for r in out["records"])
+
+
+def test_rail_renders_episodic_records_by_their_intent():
+    """Consolidated episodes are JSON objects (situation/intent/assessment/
+    justification/reflection) and reflections carry title/use_cases/hints — the
+    display line picks the most specific known field, never the raw object."""
+    from app.services.memory import decode_record_text
+
+    episode = (
+        '{"situation":"User asked for Q3 numbers.","intent":"Get the Q3 revenue figure",'
+        '"assessment":"Yes","justification":"tool returned it","reflection":"call finance first"}'
+    )
+    reflection = (
+        '{"title":"Finance lookups","use_cases":"revenue questions","hints":"use the tool"}'
+    )
+    assert decode_record_text(episode)[0] == "Get the Q3 revenue figure"
+    assert decode_record_text(reflection)[0] == "Finance lookups"

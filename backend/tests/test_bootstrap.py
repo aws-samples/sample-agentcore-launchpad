@@ -286,18 +286,82 @@ def test_ensure_memory_creates_when_missing():
     assert created is True
     assert result["id"] == "launchpad_memory-xyz789"
     kwargs = control.create_memory.call_args.kwargs
-    strategy_kinds = {next(iter(s)) for s in kwargs["memoryStrategies"]}
-    assert strategy_kinds == {"semanticMemoryStrategy", "userPreferenceMemoryStrategy"}
+    strategy_kinds = [next(iter(s)) for s in kwargs["memoryStrategies"]]
+    assert strategy_kinds == [
+        "semanticMemoryStrategy",
+        "userPreferenceMemoryStrategy",
+        "summaryMemoryStrategy",
+        "episodicMemoryStrategy",
+    ]
+    episodic = kwargs["memoryStrategies"][3]["episodicMemoryStrategy"]
+    assert episodic["namespaces"] == ["/episodes/{actorId}/{sessionId}"]
+    assert episodic["reflectionConfiguration"] == {"namespaceTemplates": ["/episodes/{actorId}"]}
     assert kwargs["memoryExecutionRoleArn"] == "arn:aws:iam::111:role/x"
+    assert result["strategies_added"] == []
 
 
-def test_ensure_memory_reuses_existing():
+LIVE_STRATEGIES = [
+    {"strategyId": "semantic_facts-1", "name": "semantic_facts", "type": "SEMANTIC"},
+    {"strategyId": "user_preferences-1", "name": "user_preferences", "type": "USER_PREFERENCE"},
+    {"strategyId": "session_summaries-1", "name": "session_summaries", "type": "SUMMARIZATION"},
+    {"strategyId": "episodes-1", "name": "episodes", "type": "EPISODIC"},
+]
+
+
+def test_ensure_memory_reuses_existing_without_touching_a_complete_memory():
     existing = {"id": "launchpad_memory-xyz789", "arn": MEM_ARN}
     control = make_control(memories=[existing])
+    control.get_memory.return_value = {
+        "memory": {"status": "ACTIVE", "strategies": LIVE_STRATEGIES}
+    }
     result, created = bs.ensure_memory(control)
     assert created is False
     assert result["arn"] == MEM_ARN
+    assert result["strategies_added"] == []
     control.create_memory.assert_not_called()
+    control.update_memory.assert_not_called()
+
+
+def test_ensure_memory_adds_the_strategies_an_existing_memory_lacks():
+    """A memory bootstrapped when the catalog had two strategies converges on
+    the four-strategy layout through an additive UpdateMemory — never a
+    re-create, never a touch of description/expiry/role/namespaceKeys."""
+    existing = {"id": "launchpad_memory-xyz789", "arn": MEM_ARN}
+    control = make_control(memories=[existing])
+    control.get_memory.return_value = {
+        "memory": {"status": "ACTIVE", "strategies": LIVE_STRATEGIES[:2]}
+    }
+    result, created = bs.ensure_memory(control)
+    assert created is False
+    assert result["strategies_added"] == ["session_summaries", "episodes"]
+    control.create_memory.assert_not_called()
+    kwargs = control.update_memory.call_args.kwargs
+    assert set(kwargs) == {"memoryId", "memoryStrategies"}
+    assert kwargs["memoryId"] == "launchpad_memory-xyz789"
+    added = kwargs["memoryStrategies"]["addMemoryStrategies"]
+    assert [next(iter(s)) for s in added] == ["summaryMemoryStrategy", "episodicMemoryStrategy"]
+    assert added[0]["summaryMemoryStrategy"]["namespaces"] == ["/summaries/{actorId}/{sessionId}"]
+
+
+def test_ensure_memory_treats_a_same_type_strategy_as_present():
+    """A differently named strategy of the same type (or a same-named one of
+    another type) counts as present — CreateMemory/UpdateMemory would reject a
+    duplicate name, and a second SUMMARIZATION strategy is not the intent."""
+    existing = {"id": "launchpad_memory-xyz789", "arn": MEM_ARN}
+    control = make_control(memories=[existing])
+    control.get_memory.return_value = {
+        "memory": {
+            "status": "ACTIVE",
+            "strategies": LIVE_STRATEGIES[:2]
+            + [
+                {"strategyId": "x", "name": "my_digest", "type": "SUMMARIZATION"},
+                {"strategyId": "y", "name": "episodes", "type": "CUSTOM"},
+            ],
+        }
+    }
+    result, _ = bs.ensure_memory(control)
+    assert result["strategies_added"] == []
+    control.update_memory.assert_not_called()
 
 
 def test_merge_config_deep_merges():

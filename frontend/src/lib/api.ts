@@ -1227,8 +1227,12 @@ export interface MemoryNamespace {
   strategy_type: string | null;
   template: string;
   namespace: string;
-  /** false when a placeholder other than {actorId} remains unresolved */
+  /** false when a placeholder other than {actorId} remains unresolved in the
+   *  middle of the path (trailing ones collapse into a prefix instead) */
   resolvable: boolean;
+  /** true when trailing `{sessionId}`-style segments were dropped, so the
+   *  namespace addresses every session of the actor (AWS matches by prefix) */
+  prefix: boolean;
 }
 
 export interface MemoryRecord {

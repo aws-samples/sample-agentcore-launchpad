@@ -3370,6 +3370,7 @@
       "strategyLabel": "策略",
       "pickStrategy": "选择策略…",
       "unresolvable": "需要会话维度",
+      "allSessions": "全部会话",
       "searchPlaceholder": "问问该智能体记住了用户的哪些信息…",
       "topKLabel": "结果数量",
       "topK": "前 {{k}} 条",

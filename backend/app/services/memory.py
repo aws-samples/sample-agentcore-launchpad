@@ -50,7 +50,19 @@ SCOPE_SEP = "__"
 # JSON object there. Showing that object verbatim is unreadable, so pick the
 # first present display field — in decreasing specificity — and hand the parsed
 # object back so callers can render the rest.
-_RECORD_DISPLAY_KEYS = ("preference", "summary", "fact", "context", "text")
+# Episodic records (consolidated episodes: situation/intent/assessment/
+# justification/reflection; reflections: title/use_cases/hints) sit between the
+# purpose-built keys and the generic fallbacks.
+_RECORD_DISPLAY_KEYS = (
+    "preference",
+    "summary",
+    "fact",
+    "title",
+    "intent",
+    "situation",
+    "context",
+    "text",
+)
 
 
 def decode_record_text(raw: str) -> tuple[str, dict | None]:
@@ -185,15 +197,25 @@ def session_memory_summary(
     """
     events = list_events(workspace, actor_id, session_id, memory_id=memory_id)
     records: list[dict[str, Any]] = []
-    for label in ("/preferences", "/facts"):
-        # actor_id is already agent-scoped (see scoped_actor); the display label
-        # keeps just the strategy — the actor/agent is implied by the session.
-        for record in list_records(
-            workspace, f"{label}/{actor_id}", max_results=10, memory_id=memory_id
-        ):
+    # actor_id is already agent-scoped (see scoped_actor); the display label
+    # keeps just the strategy — the actor/agent is implied by the session.
+    # Facts and preferences are per actor; the summary and the episodes are per
+    # session, so those two are read for THIS session only (the namespace is
+    # exact, not a prefix, so the actor-level reflections under /episodes/<actor>
+    # stay out of the rail). A memory without the strategy lists nothing — the
+    # API answers an unknown namespace with an empty page, not an error.
+    namespaces = (
+        ("/preferences", f"/preferences/{actor_id}"),
+        ("/facts", f"/facts/{actor_id}"),
+        ("/summaries", f"/summaries/{actor_id}/{session_id}"),
+        ("/episodes", f"/episodes/{actor_id}/{session_id}"),
+    )
+    for label, namespace in namespaces:
+        for record in list_records(workspace, namespace, max_results=10, memory_id=memory_id):
             content = record.get("content", {})
-            # /preferences records are structured JSON, /facts records prose —
-            # decode so the rail shows a sentence, not a serialized object.
+            # /preferences, /summaries and /episodes records are structured JSON,
+            # /facts records prose — decode so the rail shows a sentence, not a
+            # serialized object.
             display, _ = decode_record_text(content.get("text", ""))
             records.append(
                 {
