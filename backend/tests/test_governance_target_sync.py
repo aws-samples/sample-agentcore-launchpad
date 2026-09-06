@@ -117,12 +117,14 @@ def test_sync_calls_aws_once_and_journals_the_target(client, install):
     assert body["listing_mode"] == "ALL"
     assert body["synchronizable"] is False
     assert body["not_synchronizable_reason"] == "synchronizing"
+    assert body["kind"] == {"protocol": "mcp", "variant": "mcpServer"}
     assert set(body) == {
         "id",
         "name",
         "status",
         "status_reasons",
         "description",
+        "kind",
         "listing_mode",
         "last_synchronized_at",
         "synchronizable",
@@ -281,7 +283,22 @@ def test_gateway_detail_targets_expose_sync_projection():
         lastSynchronizedAt=None,
     )
     pending = _target("PENDING001", status="SYNCHRONIZE_PENDING_AUTH")
-    by_id = {t["targetId"]: t for t in (dynamic, static, lambda_target, pending)}
+    http_target = _target(
+        "HTTPPASS01",
+        name="t1HR",
+        config={"http": {"passthrough": {"endpoint": "https://api.example.test"}}},
+        lastSynchronizedAt=None,
+    )
+    inference_target = _target(
+        "INFERENCE1",
+        name="t2HRv2",
+        config={"inference": {"provider": {"providerType": "BEDROCK"}}},
+        lastSynchronizedAt=None,
+    )
+    by_id = {
+        t["targetId"]: t
+        for t in (dynamic, static, lambda_target, pending, http_target, inference_target)
+    }
     control = _control()
     control.list_gateway_targets.return_value = {
         "items": [{"targetId": target_id} for target_id in by_id]
@@ -305,5 +322,82 @@ def test_gateway_detail_targets_expose_sync_projection():
     assert targets["LAMBDA0001"]["listing_mode"] is None
     assert targets["PENDING001"]["synchronizable"] is False
     assert targets["PENDING001"]["not_synchronizable_reason"] == "pending_auth"
+    # every row names its kind; non-MCP protocols keep the `not_mcp_server` reason code
+    assert targets["DYNAMIC001"]["kind"] == {"protocol": "mcp", "variant": "mcpServer"}
+    assert targets["LAMBDA0001"]["kind"] == {"protocol": "mcp", "variant": "lambda"}
+    assert targets["HTTPPASS01"]["kind"] == {"protocol": "http", "variant": "passthrough"}
+    assert targets["HTTPPASS01"]["not_synchronizable_reason"] == "not_mcp_server"
+    assert targets["HTTPPASS01"]["listing_mode"] is None
+    assert targets["INFERENCE1"]["kind"] == {"protocol": "inference", "variant": "provider"}
+    assert targets["INFERENCE1"]["not_synchronizable_reason"] == "not_mcp_server"
     # the static MCP-server schema still yields discovered actions; dynamic ones do not
     assert {a["target_id"] for a in detail["actions"]} <= {"STATIC0001", "LAMBDA0001"}
+    # http / inference targets carry no tool schema — surfaced as a hint, not as actions
+    assert detail["actions_uncovered_targets"] == ["t1HR", "t2HRv2"]
+    assert not {a["target_id"] for a in detail["actions"]} & {"HTTPPASS01", "INFERENCE1"}
+
+
+# ---- target kinds -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        (
+            {"mcp": {"lambda": {"lambdaArn": "arn:aws:lambda:x", "toolSchema": {}}}},
+            {"protocol": "mcp", "variant": "lambda"},
+        ),
+        (_mcp_server(), {"protocol": "mcp", "variant": "mcpServer"}),
+        (
+            {"mcp": {"openApiSchema": {"inlinePayload": "{}"}}},
+            {"protocol": "mcp", "variant": "openApiSchema"},
+        ),
+        (
+            {"http": {"passthrough": {"endpoint": "https://api.example.test"}}},
+            {"protocol": "http", "variant": "passthrough"},
+        ),
+        (
+            {"http": {"agentcoreRuntime": {"agentRuntimeArn": "arn:aws:bedrock-agentcore:x"}}},
+            {"protocol": "http", "variant": "agentcoreRuntime"},
+        ),
+        (
+            {"inference": {"provider": {"providerType": "BEDROCK"}}},
+            {"protocol": "inference", "variant": "provider"},
+        ),
+        ({}, {"protocol": "unknown", "variant": None}),
+        # tolerant of union members the pinned model does not know yet
+        ({"graphql": {"endpoint": "https://x"}}, {"protocol": "graphql", "variant": None}),
+        ({"http": {}}, {"protocol": "http", "variant": None}),
+    ],
+)
+def test_target_kind_names_protocol_and_variant(config, expected):
+    assert governance.target_kind(_target(config=config)) == expected
+
+
+def test_target_kind_tolerates_missing_configuration():
+    assert governance.target_kind({"targetId": "X"}) == {"protocol": "unknown", "variant": None}
+    assert governance.target_kind({"targetConfiguration": None}) == {
+        "protocol": "unknown",
+        "variant": None,
+    }
+
+
+def test_target_kind_ignores_none_valued_union_members():
+    # botocore never emits absent members, but a hand-built payload may carry ``None``
+    config = {"mcp": {"lambda": None, "mcpServer": {"endpoint": "https://x"}}}
+    assert governance.target_kind(_target(config=config)) == {
+        "protocol": "mcp",
+        "variant": "mcpServer",
+    }
+
+
+def test_actions_uncovered_targets_lists_only_non_mcp_protocols():
+    targets = [
+        _target("MCP0000001", name="mcp"),
+        _target("HTTP000001", name="http", config={"http": {"passthrough": {}}}),
+        _target("INFER00001", name="infer", config={"inference": {"connector": {}}}),
+        _target("EMPTY00001", name="empty", config={}),
+    ]
+    assert governance.actions_uncovered_targets(targets) == ["http", "infer"]
+    # discover_actions stays MCP-only: non-MCP targets contribute nothing
+    assert governance.discover_actions(targets) == []

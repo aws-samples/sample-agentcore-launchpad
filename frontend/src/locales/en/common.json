@@ -934,7 +934,9 @@
       "listingMode": "LISTING MODE",
       "actions": "ACTIONS",
       "noTargets": "NO TARGETS FOUND",
-      "lastSync": "LAST SYNC"
+      "lastSync": "LAST SYNC",
+      "kind": "KIND",
+      "noToolSchema": "{{total}} target(s) expose no tool schema (HTTP / inference targets are not MCP tool providers): {{names}}"
     },
     "models": {
       "allowlist": "ALLOWLIST",
@@ -1217,6 +1219,7 @@
       "hint": "Re-fetch the tool list from the MCP server (SynchronizeGatewayTargets)",
       "blockers": {
         "notManaged": "manage the Gateway first",
+        "not_mcp_server_kind": "only MCP-server targets can be synchronized — target kind: {{kind}}",
         "not_mcp_server": "only MCP-server targets can be synchronized",
         "static_tool_schema": "this target uses a static tool schema",
         "pending_auth": "complete the pending authorization first",
@@ -1224,6 +1227,29 @@
         "not_ready": "wait until the target settles",
         "busy": "another operation is in progress"
       }
+    },
+    "targetKind": {
+      "mcp": {
+        "lambda": "MCP · Lambda",
+        "openApiSchema": "MCP · OpenAPI",
+        "smithyModel": "MCP · Smithy",
+        "mcpServer": "MCP server",
+        "apiGateway": "MCP · API Gateway",
+        "connector": "MCP · connector",
+        "default": "MCP"
+      },
+      "http": {
+        "passthrough": "HTTP passthrough",
+        "agentcoreRuntime": "HTTP · AgentCore Runtime",
+        "connector": "HTTP · connector",
+        "default": "HTTP"
+      },
+      "inference": {
+        "provider": "Inference · provider",
+        "connector": "Inference · connector",
+        "default": "Inference"
+      },
+      "unknown": "unknown"
     }
   },
   "skillLab": {

@@ -368,6 +368,25 @@ synchronizable, not_synchronizable_reason}`——`gateway_detail` 现在对每�
 不在范围内：列举动态目标的工具（控制面不返回）、创建或更新目标、批量同步。无需 IAM 变更——
 控制台角色已具备 `bedrock-agentcore:*`。
 
+### 目标类型
+
+Gateway 目标未必是 MCP 工具提供方：所锁定的 `bedrock-agentcore-control` 模型中，
+`TargetConfiguration` 是三路联合——`mcp{openApiSchema, smithyModel, lambda, mcpServer,
+apiGateway, connector}`、`http{agentcoreRuntime, passthrough, connector}`（HTTP 直通 /
+AgentCore Runtime 目标）和 `inference{connector, provider}`（推理目标）。因此目标投影带有
+`kind: {protocol, variant}`，由 `app/services/governance.py` 中的纯函数 `target_kind` 依据 AWS
+实际设置的联合成员推导，例如 `{"protocol": "mcp", "variant": "lambda"}`、
+`{"protocol": "http", "variant": "passthrough"}`、`{"protocol": "inference", "variant":
+"provider"}`。投影刻意保持宽容：空的 `targetConfiguration` 为 `{"protocol": "unknown",
+"variant": null}`，锁定模型尚不认识的联合成员映射为 `protocol: <key>` / `variant: null`，
+绝不抛异常。详情页「目标」表在「类型」列显示该类型（按 `(protocol, variant)` 于
+`governance.targetKind.*` 下本地化，未知组合回退为等宽的 `protocol/variant`）；非 `mcp`
+目标的「同步」禁用原因会直接点出类型（「……该目标类型为 HTTP 直通」），而原因码仍为
+`not_mcp_server`；`mcp` 下除 `mcpServer` 之外的变体保持原有文案。`discover_actions` 不变——
+只有 MCP schema 携带工具——因此 `gateway_detail` 还会为每个 `http` / `inference` 目标返回
+`actions_uncovered_targets: [names]`，面板以一行提示渲染（「N 个目标不提供工具 schema：……」），
+避免把空的「动作」单元格误读为发现失败。
+
 ## 控制台路由
 
 控制台只有一张 `react-router-dom` 路由表(`frontend/src/App.tsx`),全部嵌在同一个

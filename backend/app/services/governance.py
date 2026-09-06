@@ -966,6 +966,38 @@ def target_sync_gate(target: dict[str, Any]) -> str | None:
     return None
 
 
+TARGET_PROTOCOLS = ("mcp", "http", "inference")
+"""``TargetConfiguration`` union members (bedrock-agentcore-control 2023-06-05).
+
+Each protocol is itself a union: ``mcp{openApiSchema, smithyModel, lambda,
+mcpServer, apiGateway, connector}``, ``http{agentcoreRuntime, passthrough,
+connector}``, ``inference{connector, provider}``. Only the protocol list is pinned
+here — the variant is whatever single key AWS set, so a future union member
+surfaces as ``variant=<key>`` instead of raising.
+"""
+
+
+def target_kind(target: dict[str, Any]) -> dict[str, Any]:
+    """``{"protocol": "mcp"|"http"|"inference"|"unknown", "variant": <union key>|None}``.
+
+    Pure projection of ``targetConfiguration``; tolerant by design — an empty or
+    unrecognized configuration maps to ``{"protocol": "unknown", "variant": None}``
+    and an unrecognized top-level key to ``{"protocol": <key>, "variant": None}``.
+    """
+    configuration = target.get("targetConfiguration")
+    if not isinstance(configuration, dict) or not configuration:
+        return {"protocol": "unknown", "variant": None}
+    protocol = next((key for key in TARGET_PROTOCOLS if key in configuration), None)
+    if protocol is None:
+        protocol = next(iter(configuration))
+        return {"protocol": str(protocol), "variant": None}
+    members = configuration.get(protocol)
+    variant = None
+    if isinstance(members, dict):
+        variant = next((str(key) for key, value in members.items() if value is not None), None)
+    return {"protocol": protocol, "variant": variant}
+
+
 def _target_projection(target: dict[str, Any]) -> dict[str, Any]:
     """The console's view of one GatewayTarget (detail + sync response)."""
     server = _mcp_server_config(target) or {}
@@ -976,11 +1008,26 @@ def _target_projection(target: dict[str, Any]) -> dict[str, Any]:
         "status": target.get("status"),
         "status_reasons": target.get("statusReasons") or [],
         "description": target.get("description") or "",
+        "kind": target_kind(target),
         "listing_mode": server.get("listingMode"),
         "last_synchronized_at": iso(target.get("lastSynchronizedAt")),
         "synchronizable": reason is None,
         "not_synchronizable_reason": reason,
     }
+
+
+def actions_uncovered_targets(targets: list[dict[str, Any]]) -> list[str]:
+    """Names of targets whose protocol carries no tool schema (``http`` / ``inference``).
+
+    ``discover_actions`` only reads MCP schemas, so these targets legitimately
+    contribute zero actions; the detail surfaces them so an empty ACTIONS cell is
+    not misread as a discovery failure.
+    """
+    return [
+        str(target.get("name") or target.get("targetId") or "")
+        for target in targets
+        if target_kind(target)["protocol"] in ("http", "inference")
+    ]
 
 
 def synchronize_target(
@@ -1066,6 +1113,7 @@ def gateway_detail(
         "protocol_configuration": gateway.get("protocolConfiguration"),
         "targets": [_target_projection(target) for target in targets],
         "actions": discover_actions(targets),
+        "actions_uncovered_targets": actions_uncovered_targets(targets),
         "iam_preflight": preflight,
         "external_tools_list_command": external_tools_list_command(gateway, workspace),
     }

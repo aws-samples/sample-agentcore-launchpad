@@ -118,7 +118,16 @@ API-key 信任边界的控制台一侧。
 | `POST` | `/api/governance/gateways/{id}/rate-limits` | 创建 → `201` 返回创建的记录；仅限已纳管 Gateway |
 | `PUT` | `/api/governance/gateways/{id}/rate-limits/{rate_limit_id}` | 整体替换 `entries`（可带 `description`）；`dimensionKeys` 不可变，携带则 `422` |
 | `DELETE` | `/api/governance/gateways/{id}/rate-limits/{rate_limit_id}` | 删除 → `{deleted: true, id, status}` |
-| `POST` | `/api/governance/gateways/{id}/targets/{target_id}/synchronize` | 对单个动态 MCP 服务器目标执行 `SynchronizeGatewayTargets` → `202` 返回目标投影（`status` = `SYNCHRONIZING`）；仅限已纳管 Gateway（`409 governance.gateway_not_managed`）；目标不可同步 → `409 governance.target_not_synchronizable`，`detail.reason` ∈ `not_mcp_server`、`static_tool_schema`、`pending_auth`、`synchronizing`、`not_ready`；审计操作名 `target.synchronize` |
+| `POST` | `/api/governance/gateways/{id}/targets/{target_id}/synchronize` | 对单个动态 MCP 服务器目标执行 `SynchronizeGatewayTargets` → `202` 返回目标投影（`status` = `SYNCHRONIZING`，`kind` 与详情一致）；仅限已纳管 Gateway（`409 governance.gateway_not_managed`）；目标不可同步 → `409 governance.target_not_synchronizable`，`detail.reason` ∈ `not_mcp_server`、`static_tool_schema`、`pending_auth`、`synchronizing`、`not_ready`；审计操作名 `target.synchronize` |
+
+`GET /api/governance/gateways/{id}` 详情与同步响应中的每个目标都是同一投影
+`{id, name, status, status_reasons, description, kind, listing_mode, last_synchronized_at,
+synchronizable, not_synchronizable_reason}`。`kind` 为 `{"protocol": "mcp" | "http" | "inference" |
+"unknown", "variant": <联合成员键> | null}`，即 AWS 实际设置的 `TargetConfiguration` 成员（`mcp/lambda`、
+`mcp/mcpServer`、`mcp/openApiSchema`、`http/passthrough`、`http/agentcoreRuntime`、`inference/provider` 等）；
+空配置为 `unknown`/`null`，未识别的成员映射为 `protocol: <key>` / `variant: null`。详情还带有
+`actions_uncovered_targets: [name, …]`，即没有工具 schema、因此绝不会出现在 `actions` 中的 `http` /
+`inference` 目标。
 
 一条限流规则为 `{id, gateway_id, description, dimension_keys, entries, status, created_at, updated_at}`，
 `status` ∈ `CREATING | ACTIVE | UPDATING | DELETING`。创建请求体：

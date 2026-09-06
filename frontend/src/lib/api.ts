@@ -569,12 +569,25 @@ export type GovernanceTargetSyncBlocker =
   | "synchronizing"
   | "not_ready";
 
+export type GovernanceTargetProtocol = "mcp" | "http" | "inference" | "unknown";
+
+/**
+ * Which `TargetConfiguration` union member the target uses. `variant` is the
+ * protocol's own union key (`lambda`, `mcpServer`, `passthrough`, `provider`, …)
+ * and `null` when AWS set none the backend could name.
+ */
+export interface GovernanceTargetKind {
+  protocol: GovernanceTargetProtocol;
+  variant: string | null;
+}
+
 export interface GovernanceGatewayTarget {
   id: string;
   name: string;
   status: string;
   status_reasons: string[];
   description: string;
+  kind: GovernanceTargetKind;
   listing_mode: string | null;
   last_synchronized_at: string | null;
   /** Server-derived SynchronizeGatewayTargets eligibility; never re-derive AWS rules here. */
@@ -605,6 +618,8 @@ export interface GovernanceGatewayDetail extends GovernanceGatewaySummary {
   protocol_configuration: Record<string, unknown> | null;
   targets: GovernanceGatewayTarget[];
   actions: GovernanceGatewayAction[];
+  /** Names of `http` / `inference` targets — they carry no tool schema, so `actions` is empty for them by design. */
+  actions_uncovered_targets: string[];
   iam_preflight: GovernanceIamPreflight | null;
   external_tools_list_command?: string | null;
 }

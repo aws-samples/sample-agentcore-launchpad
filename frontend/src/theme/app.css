@@ -538,6 +538,8 @@ td.chipcell{min-width:170px}
 .gov-action-list{display:flex;gap:5px;flex-wrap:wrap;min-width:180px}
 .gov-action-list .chip{white-space:normal;overflow-wrap:anywhere}
 .gov-command{display:flex;gap:8px;align-items:flex-start;padding:12px 16px;border-top:1px solid var(--line)}
+.gov-panel-note{display:flex;gap:8px;align-items:flex-start;padding:10px 16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:10.5px;line-height:1.5}
+.gov-panel-note svg{flex:none;margin-top:2px}
 .gov-command .code{flex:1;min-width:0}
 .gov-code-wrap{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;max-height:300px;overflow:auto}
 .gov-operation{position:sticky;bottom:10px;z-index:20;display:flex;align-items:center;gap:10px;margin-top:12px;padding:9px 12px;border:1px solid var(--line-2);background:var(--panel);box-shadow:0 12px 32px -16px rgba(0,0,0,.8);font-family:var(--mono);font-size:10px;overflow-wrap:anywhere}
