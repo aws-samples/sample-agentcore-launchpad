@@ -1,6 +1,7 @@
 """A2A-protocol agents — spec validation, template, deploy params, invoke,
 card enrichment, experiment gating."""
 
+import ast
 import importlib.util
 import json
 import sys
@@ -123,6 +124,96 @@ def test_a2a_template_renders_compiles_and_carries_skills():
     assert "SKILLS_ENABLED = True" in code
     assert "AgentSkills(skills=str(SKILLS_ROOT))" in code
     assert 'kwargs["plugins"] = plugins' in code
+
+
+def test_a2a_template_serves_the_platform_card_version():
+    """The live card (Strands A2AServer) and the registry record must agree on
+    ``version``: both read ``A2A_CARD_VERSION``. Without an explicit ``version``
+    Strands serves its own default ``0.0.1`` and the live-card diff flags every
+    A2A agent by construction (SE-017 live check on aurora-faq-a2a)."""
+    code, _ = _generate_code(_spec(protocol="a2a"))
+
+    compile(code, "main.py", "exec")
+    assert f"A2A_CARD_VERSION = {reg.A2A_CARD_VERSION!r}" in code
+    server_block = code[code.index("server = A2AServer("):]
+    server_block = server_block[: server_block.index("\n)")]
+    assert "version=A2A_CARD_VERSION" in server_block
+    assert reg.A2A_CARD_VERSION != "0.0.1"  # never collapse onto the Strands default
+
+
+def test_build_a2a_card_defaults_version_to_the_platform_constant():
+    card = reg.build_a2a_card(name="n", description="d", arn="arn:x", method="zip_runtime")
+    assert card["version"] == reg.A2A_CARD_VERSION
+    # an explicit value still wins (record edits / imports)
+    assert reg.build_a2a_card(name="n", description="d", arn="arn:x", method="zip_runtime",
+                              version="7")["version"] == "7"
+
+
+@pytest.mark.parametrize("runtime_version", [None, "1", "3", "12"])
+def test_register_agent_record_card_version_ignores_runtime_version(
+    monkeypatch, runtime_version
+):
+    """``Agent.version`` is the AgentCore *runtime* version (assigned after the
+    template is rendered) — it is not an A2A card field. The record carries the
+    platform constant regardless."""
+    from app.services import registry_console as console
+
+    calls: dict[str, dict] = {}
+
+    class _StubRegistry:
+        def list_registry_records(self, **kwargs):
+            return {"registryRecords": []}
+
+        def create_registry_record(self, **kwargs):
+            calls["create"] = kwargs
+            return {"recordArn": "arn:aws:agent-registry:us-west-2:1:registry/r/record/rec-1",
+                    "status": "CREATING"}
+
+    monkeypatch.setattr(console, "registry_control_client", lambda _ws: _StubRegistry())
+    monkeypatch.setattr(console, "_registry_id", lambda _ws: "reg-1")
+    agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID, name="aurora-faq-a2a", method="zip_runtime",
+        status="active", version=runtime_version,
+        arn="arn:aws:bedrock-agentcore:us-west-2:1:runtime/aurora-1",
+        spec={"protocol": "a2a", "a2a_skills": [SKILL]},
+    )
+
+    result = console.register_agent_record(agent, ws_ctx(), auto_submit=False)
+
+    assert result == {"record_id": "rec-1", "created": True}
+    record = reg.normalize_record(
+        {"recordType": "AGENT", "descriptors": calls["create"]["descriptors"]})
+    record_card = reg.stored_a2a_card(record)
+    assert record_card["version"] == reg.A2A_CARD_VERSION
+    assert record_card["version"] != runtime_version
+
+    # what the rendered runtime serves (Strands echoes ``version`` into the
+    # public card) vs. what the record stores → identical on ``version``
+    live_card = {"name": agent.name, "url": record_card["url"],
+                 "version": reg.A2A_CARD_VERSION,
+                 "protocolVersion": reg.A2A_SCHEMA_VERSION, "skills": [SKILL]}
+    diff = reg.agent_card_diff(record_card, live_card)
+    assert diff["identical"] is True and diff["fields"] == []
+
+
+def test_rendered_template_and_record_agree_on_card_version():
+    """End-to-end on the version field: pull the literal the rendered main.py
+    hands to ``A2AServer(version=...)`` and diff it against a record card."""
+    code, _ = _generate_code(_spec(protocol="a2a", a2a_skills=[A2ASkill(**SKILL)]))
+    tree = ast.parse(code)
+    rendered = next(
+        ast.literal_eval(node.value) for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "A2A_CARD_VERSION" for t in node.targets)
+    )
+    record_card = reg.build_a2a_card(name="a2a-check", description="d", arn="arn:x",
+                                     method="zip_runtime", url="https://u/", skills=[SKILL])
+    live_card = {**record_card, "version": rendered}
+    assert reg.agent_card_diff(record_card, live_card)["identical"] is True
+    # and a Strands default would still be caught — the diff is not muted
+    assert reg.agent_card_diff(record_card, {**record_card, "version": "0.0.1"})["fields"] == [
+        {"field": "version", "record": reg.A2A_CARD_VERSION, "live": "0.0.1"}
+    ]
 
 
 def test_a2a_template_without_mounted_skills_disables_plugin():

@@ -14,6 +14,13 @@ from typing import Any
 from urllib.parse import quote
 
 A2A_SCHEMA_VERSION = "0.3.0"
+# Platform-owned A2A AgentCard ``version``. The runtime template (Strands
+# ``A2AServer(version=...)``) and the registry record (``build_a2a_card``) both
+# read this one constant, so the live card and the stored card agree by
+# construction. It is NOT the AgentCore runtime version: that is assigned by
+# Create/UpdateAgentRuntime only after the template has been rendered, and
+# keeps living in the ledger (``Agent.version``) and the VERSIONS & ENDPOINTS panel.
+A2A_CARD_VERSION = "1.0.0"
 MCP_SERVER_SCHEMA_VERSION = "2025-07-09"  # MCP registry server.json schema date
 MCP_PROTOCOL_VERSION = "2025-06-18"
 SKILL_SCHEMA_VERSION = "0.1.0"
@@ -121,8 +128,8 @@ def build_a2a_card(
     name: str,
     description: str,
     arn: str,
-    version: str,
     method: str,
+    version: str | None = None,
     url: str | None = None,
     skills: list[dict[str, Any]] | None = None,
     transport: str = "agentcore-http",
@@ -132,6 +139,8 @@ def build_a2a_card(
     ``transport`` tells consumers whether ``url`` speaks real A2A JSON-RPC
     (`a2a-jsonrpc` — serverProtocol=A2A runtimes) or the AgentCore HTTP
     invocations contract (`agentcore-http` — call via the platform API).
+    ``version`` defaults to ``A2A_CARD_VERSION`` — the same constant the A2A
+    runtime template serves — so record and live card match on that field.
     """
     return {
         "protocolVersion": A2A_SCHEMA_VERSION,
@@ -139,7 +148,7 @@ def build_a2a_card(
         "description": description,
         "url": url or arn,
         "preferredTransport": "JSONRPC",
-        "version": version or "1",
+        "version": version or A2A_CARD_VERSION,
         "capabilities": {"streaming": True},
         "defaultInputModes": ["text/plain"],
         "defaultOutputModes": ["text/plain"],

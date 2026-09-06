@@ -35,6 +35,7 @@ MODEL_ID = "__LAUNCHPAD_MODEL_ID__"
 SYSTEM_PROMPT = __LAUNCHPAD_SYSTEM_PROMPT__
 AGENT_DESCRIPTION = __LAUNCHPAD_AGENT_DESCRIPTION__
 CARD_SKILLS: list[dict] = __LAUNCHPAD_A2A_SKILLS__
+A2A_CARD_VERSION = __LAUNCHPAD_A2A_CARD_VERSION__  # shared with the registry record
 SKILLS_ENABLED = __LAUNCHPAD_SKILLS_ENABLED__
 SKILLS_ROOT = Path(__file__).parent / "skills"
 MEMORY_ID = os.environ.get("LAUNCHPAD_MEMORY_ID", "")
@@ -130,6 +131,10 @@ server = A2AServer(
     http_url=os.environ.get("AGENTCORE_RUNTIME_URL"),
     serve_at_root=True,
     skills=[AgentSkill(**s) for s in CARD_SKILLS] or None,
+    # Same platform constant the registry record carries (A2A_CARD_VERSION in
+    # services/agentcore/registry.py) — without it Strands would serve its own
+    # default "0.0.1" and the record/live-card diff would flag `version`.
+    version=A2A_CARD_VERSION,
 )
 
 app = FastAPI()

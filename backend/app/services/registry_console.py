@@ -91,7 +91,10 @@ def register_agent_record(
         name=agent.name,
         description=(spec.get("system_prompt") or "")[:180] or f"Launchpad agent {agent.name}",
         arn=arn,
-        version=agent.version or "1",
+        # Card version is the platform constant shared with the A2A runtime
+        # template, not the AgentCore runtime version (which the card cannot
+        # carry — it is assigned after the template is rendered).
+        version=reg.A2A_CARD_VERSION,
         method=agent.method,
         url=(
             reg.data_plane_invocations_url(arn, workspace.region)
