@@ -5,6 +5,7 @@ import json
 import pytest
 
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
+from app.core.errors import AppError
 from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.services import observability as obs
 
@@ -1189,3 +1190,198 @@ def test_validation_rejects_bad_inputs(client):
         "/api/observability/traces?session=bad$chars"
     ).status_code == 422
     assert client.get("/api/observability/traces?status=weird").status_code == 422
+
+
+# ── SCORE NOW: on-demand session scoring via the data-plane Evaluate API ────
+
+
+SCORE_SESSION = "s" * 64
+SCORE_SPANS = [{**s, "attributes": {**s["attributes"], "session.id": SCORE_SESSION},
+                "scope": {"name": "strands.telemetry"}} for s in TREE_SPANS]
+
+
+def _score_result(evaluator_id, **overrides):
+    return {
+        "evaluatorArn": "arn:aws:bedrock-agentcore:us-west-2:111122223333:evaluator/"
+        + evaluator_id,
+        "evaluatorId": evaluator_id,
+        "evaluatorName": evaluator_id.split(".")[-1],
+        "value": 0.8,
+        "label": "Helpful",
+        "explanation": "The agent answered the question directly.",
+        "context": {"spanContext": {"sessionId": SCORE_SESSION, "traceId": "a" * 32}},
+        "tokenUsage": {"inputTokens": 1200, "outputTokens": 80, "totalTokens": 1280},
+        **overrides,
+    }
+
+
+class FakeDataPlane:
+    """`bedrock-agentcore` data-plane stub: records Evaluate calls, answers canned."""
+
+    def __init__(self, results_by_evaluator=None, raise_code=None):
+        self.results_by_evaluator = results_by_evaluator or {}
+        self.raise_code = raise_code
+        self.calls = []
+
+    def evaluate(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.raise_code:
+            from botocore.exceptions import ClientError
+
+            raise ClientError(
+                {"Error": {"Code": self.raise_code, "Message": "unsupported span format"}},
+                "Evaluate",
+            )
+        evaluator_id = kwargs["evaluatorId"]
+        return {"evaluationResults": self.results_by_evaluator.get(
+            evaluator_id, [_score_result(evaluator_id)])}
+
+
+def _score_logs(rows):
+    # the session query is the only one these tests run; route it by the
+    # session filter so a different query would surface as an empty result
+    return FakeLogs({f'attributes.session.id = "{SCORE_SESSION}"': rows})
+
+
+@pytest.fixture
+def score_stack(monkeypatch):
+    def install(rows, data=None):
+        fake_logs = _score_logs(rows)
+        fake_data = data or FakeDataPlane()
+        monkeypatch.setattr(obs, "logs_client", lambda _ws=None: fake_logs)
+        monkeypatch.setattr(obs, "data_client", lambda _ws=None: fake_data)
+        return fake_logs, fake_data
+    return install
+
+
+def test_session_spans_query_is_the_on_demand_guide_shape():
+    q = obs.q_session_spans(SCORE_SESSION)
+    assert obs.SPANS_SOURCE in q  # both telemetry layouts
+    assert "ispresent(scope.name)" in q and "ispresent(attributes.session.id)" in q
+    assert f'attributes.session.id = "{SCORE_SESSION}"' in q
+    assert "fields @message" in q and "sort @timestamp asc" in q
+    assert f"limit {obs.SESSION_SPANS_LIMIT}" in q
+    with pytest.raises(AppError):
+        obs.q_session_spans('bad"id')
+
+
+def test_score_now_parses_messages_and_calls_evaluate_per_evaluator(client, score_stack):
+    rows = [{"@message": json.dumps(s)} for s in SCORE_SPANS]
+    rows.insert(1, {"@message": "2026-09-06 stdout line that is not JSON"})
+    rows.append({"@message": json.dumps(["a", "list", "not", "a", "span"])})
+    fake_logs, fake_data = score_stack(rows)
+
+    res = client.post(
+        f"/api/observability/sessions/{SCORE_SESSION}/evaluate",
+        json={"evaluator_ids": ["Builtin.Helpfulness", "Builtin.Correctness"],
+              "range": "7d"},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["session_id"] == SCORE_SESSION and body["range"] == "7d"
+    assert body["span_count"] == len(SCORE_SPANS)  # non-JSON + non-object rows skipped
+    # one Logs Insights query over a 7d window, one Evaluate call per evaluator
+    assert fake_logs.start_calls == 1
+    start, end = fake_logs.start_kwargs[0]["startTime"], fake_logs.start_kwargs[0]["endTime"]
+    assert end - start == 7 * 24 * 3600
+    assert [c["evaluatorId"] for c in fake_data.calls] == [
+        "Builtin.Helpfulness", "Builtin.Correctness"]
+    assert fake_data.calls[0]["evaluationInput"] == {"sessionSpans": SCORE_SPANS}
+    assert "evaluationTarget" not in fake_data.calls[0]  # session-level only
+    assert len(body["results"]) == 2
+    row = body["results"][0]
+    assert row["evaluator_id"] == "Builtin.Helpfulness"
+    assert row["evaluator_name"] == "Helpfulness"
+    assert row["value"] == 0.8 and row["label"] == "Helpful"
+    assert row["explanation"].startswith("The agent answered")
+    assert row["token_usage"] == {"input": 1200, "output": 80, "total": 1280}
+    assert row["span_context"]["sessionId"] == SCORE_SESSION
+    assert row["error_code"] is None and row["error_message"] is None
+
+
+def test_score_now_without_spans_is_409_with_readiness_hint(client, score_stack):
+    _, fake_data = score_stack([])
+    res = client.post(
+        f"/api/observability/sessions/{SCORE_SESSION}/evaluate",
+        json={"evaluator_ids": ["Builtin.Helpfulness"]},
+    )
+    assert res.status_code == 409
+    body = res.json()
+    assert body["code"] == "observability.session_spans_missing"
+    assert "minutes" in body["detail"]["hint"]
+    assert body["detail"]["range"] == "24h"  # default window
+    assert fake_data.calls == []  # never reaches Evaluate
+
+
+def test_score_now_partial_failure_is_an_error_row_not_an_exception(client, score_stack):
+    failing = _score_result("Builtin.Faithfulness", value=None, label=None,
+                            explanation=None, tokenUsage=None,
+                            errorCode="ValidationException",
+                            errorMessage="no tool spans to judge")
+    failing = {k: v for k, v in failing.items() if v is not None}
+    _, fake_data = score_stack(
+        [{"@message": json.dumps(s)} for s in SCORE_SPANS],
+        data=FakeDataPlane({"Builtin.Faithfulness": [failing], "Builtin.NoResult": []}),
+    )
+    res = client.post(
+        f"/api/observability/sessions/{SCORE_SESSION}/evaluate",
+        json={"evaluator_ids": ["Builtin.Helpfulness", "Builtin.Faithfulness",
+                                "Builtin.NoResult", "Builtin.Helpfulness"]},
+    )
+    assert res.status_code == 200, res.text
+    rows = res.json()["results"]
+    # duplicate id collapsed → 3 evaluators scored, in request order
+    assert [c["evaluatorId"] for c in fake_data.calls] == [
+        "Builtin.Helpfulness", "Builtin.Faithfulness", "Builtin.NoResult"]
+    assert [r["evaluator_id"] for r in rows] == [
+        "Builtin.Helpfulness", "Builtin.Faithfulness", "Builtin.NoResult"]
+    ok, failed, empty = rows
+    assert ok["error_code"] is None and ok["value"] == 0.8
+    assert failed["error_code"] == "ValidationException"
+    assert failed["error_message"] == "no tool spans to judge"
+    assert failed["value"] is None and failed["label"] is None
+    assert failed["token_usage"] is None
+    # an evaluator answering with zero results still gets a row the UI can show
+    assert empty["error_code"] == "NoResult" and empty["value"] is None
+
+
+def test_score_now_rejects_bad_bodies(client, score_stack):
+    _, fake_data = score_stack([{"@message": json.dumps(s)} for s in SCORE_SPANS])
+    url = f"/api/observability/sessions/{SCORE_SESSION}/evaluate"
+    too_many = client.post(url, json={"evaluator_ids": [f"Builtin.E{i}" for i in range(6)]})
+    assert too_many.status_code == 422
+    assert too_many.json()["code"] == "validation.invalid_request"
+    assert client.post(url, json={"evaluator_ids": []}).status_code == 422
+    assert client.post(url, json={"evaluator_ids": ["Builtin.Helpfulness"],
+                                  "range": "99h"}).status_code == 422
+    assert client.post(url, json={"evaluator_ids": ['bad"id']}).status_code == 422
+    assert client.post("/api/observability/sessions/ab/evaluate",
+                       json={"evaluator_ids": ["Builtin.Helpfulness"]}).status_code == 422
+    assert fake_data.calls == []
+
+
+def test_score_now_aws_validation_error_maps_to_4xx_envelope(client, score_stack):
+    score_stack([{"@message": json.dumps(s)} for s in SCORE_SPANS],
+                data=FakeDataPlane(raise_code="ValidationException"))
+    res = client.post(
+        f"/api/observability/sessions/{SCORE_SESSION}/evaluate",
+        json={"evaluator_ids": ["Builtin.Helpfulness"]},
+    )
+    assert res.status_code == 400
+    body = res.json()
+    assert body["code"] == "aws.validation"
+    assert "unsupported span format" in body["message"]
+    assert "An error occurred" not in body["message"]
+
+
+def test_evaluate_session_spans_wrapper_shape():
+    from app.services.agentcore import evaluation as ace
+
+    fake = FakeDataPlane()
+    out = ace.evaluate_session_spans(fake, evaluator_id="Builtin.Helpfulness",
+                                     spans=SCORE_SPANS)
+    assert fake.calls == [{"evaluatorId": "Builtin.Helpfulness",
+                           "evaluationInput": {"sessionSpans": SCORE_SPANS}}]
+    assert out[0]["evaluatorId"] == "Builtin.Helpfulness"
+    with pytest.raises(ValueError):
+        ace.evaluate_session_spans(fake, evaluator_id="Builtin.Helpfulness", spans=[])

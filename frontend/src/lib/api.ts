@@ -1501,6 +1501,39 @@ export interface ObsSessionDetail {
   cache: ObsCache;
 }
 
+/** SCORE NOW — one evaluator's result from the data-plane `Evaluate` call.
+ *  `value`/`label`/`explanation` are null when `error_code` is set: the
+ *  evaluator failed on this session and the row is an error row. */
+export interface ObsSessionScoreResult {
+  evaluator_id: string;
+  evaluator_name: string | null;
+  evaluator_arn: string | null;
+  value: number | null;
+  label: string | null;
+  explanation: string | null;
+  span_context: { sessionId?: string; traceId?: string; spanId?: string } | null;
+  token_usage: { input: number | null; output: number | null; total: number | null } | null;
+  error_code: string | null;
+  error_message: string | null;
+}
+
+/** `POST /api/observability/sessions/{id}/evaluate` — synchronous, not
+ *  persisted (re-run any time); 409 `observability.session_spans_missing`
+ *  while the session's spans have not landed in CloudWatch yet. */
+export interface ObsSessionScore {
+  session_id: string;
+  range: string;
+  /** span documents sent to Evaluate (capped server-side) */
+  span_count: number;
+  results: ObsSessionScoreResult[];
+}
+
+export interface ObsSessionScoreBody {
+  /** 1..5 evaluator ids (`Builtin.*`, `ThirdParty.*` or a custom evaluator id) */
+  evaluator_ids: string[];
+  range?: "1h" | "6h" | "24h" | "7d";
+}
+
 /** One judged result record (online evaluation) for a session. */
 export interface OnlineSessionScoreRecord {
   time: string | null;
@@ -2943,6 +2976,11 @@ export const api = {
   obsSession: (sessionId: string, range: string, force = false) =>
     request<ObsSessionDetail>(
       `/api/observability/sessions/${encodeURIComponent(sessionId)}?${obsQuery(range, force)}`,
+    ),
+  obsEvaluateSession: (sessionId: string, body: ObsSessionScoreBody) =>
+    request<ObsSessionScore>(
+      `/api/observability/sessions/${encodeURIComponent(sessionId)}/evaluate`,
+      { method: "POST", body: JSON.stringify(body) },
     ),
   obsRefreshPrices: () =>
     request<{ prices: Record<string, unknown>; meta: Required<ObsPricesMeta> }>(

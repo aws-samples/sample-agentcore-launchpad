@@ -301,6 +301,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/observability/dashboard"): MEMBER,
     ("GET", "/api/observability/sessions"): MEMBER,
     ("GET", "/api/observability/sessions/{session_id}"): MEMBER,
+    # on-demand Evaluate: a judge inference, persists nothing
+    ("POST", "/api/observability/sessions/{session_id}/evaluate"): MEMBER,
     ("GET", "/api/observability/traces"): MEMBER,
     ("GET", "/api/observability/traces/{trace_id}"): MEMBER,
     ("GET", "/api/observability/prices"): MEMBER,

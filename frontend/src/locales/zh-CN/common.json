@@ -1767,6 +1767,8 @@
     }
   },
   "apiErrors": {
+    "observability.session_spans_missing": "所选时间范围内尚未找到该会话的 span 记录。",
+    "observability.too_many_evaluators": "请选择 1 到 5 个 evaluator。",
     "skill_lab.taskset_invalid": "任务校验器拒绝了该任务集——参见各分割的提示信息。",
     "skill_lab.taskset_not_found": "任务集不存在",
     "skill_lab.not_provisioned": "本机尚未开通技能实验室——请执行 `make bootstrap`。",
@@ -2906,6 +2908,31 @@
       "outputMessages": "输出消息（{{count}}）"
     },
     "session": {
+      "score": {
+        "title": "即时评分",
+        "sub": "已选 {{count}} 个 evaluator · 最多 {{max}} 个",
+        "hint": "通过数据面 Evaluate 同步对该会话的 span 打分——每个 evaluator 一次 judge 推理。结果不会持久化，可随时重跑；需要留档、可复现的分数请在评估页发起批量运行。",
+        "run": "运行",
+        "running": "评分中…",
+        "pick": "至少选择一个 evaluator",
+        "loadingEvaluators": "加载 evaluator 中…",
+        "noEvaluators": "没有可用的 evaluator——请检查评估页",
+        "thirdPartyGroup": "第三方（托管）",
+        "needsGroundTruth": "需要 ground truth——即时会话评分不可用",
+        "customTitle": "自定义 evaluator",
+        "resultSub": "已发送 {{spans}} 个 span · {{results}} 条结果 · 未持久化",
+        "col": {
+          "evaluator": "EVALUATOR",
+          "value": "数值",
+          "label": "标签",
+          "explanation": "解释",
+          "tokens": "TOKEN（输入 / 输出）",
+          "status": "状态"
+        },
+        "ok": "已评分",
+        "failed": "失败",
+        "spansMissingHint": "调用完成后 span 需要几分钟才会到达 CloudWatch——请稍后重试或放宽时间范围。"
+      },
       "conversation": "对话",
       "conversationSub": "AgentCore 记忆 · ListEvents · actor {{actor}}",
       "conversationEvalSub": "评估运行 · {{run}} · agentcore memory · actor {{actor}}",
