@@ -107,6 +107,16 @@ API-key 信任边界的控制台一侧。
 `aws.throttled` 等）；没有映射的运行时侧失败（`RuntimeClientError`）为 `registry.live_card_failed`（502），并带
 `detail.aws_error_code`——绝不会是裸 500。无需 IAM 变更：控制台角色已具备 `bedrock-agentcore:*`。
 
+## 控制台 Registry API——消费者视图 / Console Registry API: consumer view
+
+Registry 页面从两个侧面展示同一个注册中心。**发布者列表**（`GET /api/registry/records`，控制面 `ListRegistryRecords`）是运维者管理的全集：所有状态的全部记录。**消费者视图**（`?view=discoverable`）则是拥有数据面访问权限的消费者或 Agent 实际能看到的记录——即 GA 发现 API `ListDiscoverableRegistryRecords`。出现在前者而不在后者中的记录，就是尚未经批准对外暴露的记录；两份列表都拿到后，控制台会给它们打上「不可发现」标签。只读，不落任何数据。
+
+| 方法 | 路径 | 结果 |
+|---|---|---|
+| `GET` | `/api/registry/records/discoverable?type=` | `{records[{record_id, name, display_name, description, type, descriptor_types[], status, status_reason, version, created_at, updated_at}], count}`——数据面 `ListDiscoverableRegistryRecords(registryId=<workspace 注册中心>, maxResults=100)`，按 `nextToken` 翻页到底；可选的 `type` 以 `filters=[{name: "recordType", values: [<GA 类型>]}]` 收窄，接受平台名（`A2A`/`MCP`/`AGENT_SKILLS`）或 GA 名（`agent`/`mcp`/`skill`）；行内的 `type` 始终是平台名。摘要从不包含 `descriptors`——需要载荷时读取 `GET /api/registry/records/{record_id}`。`count` 为行数 |
+
+错误码：`registry.bad_type`（422，未知的 `type`）、`registry.unavailable`（503，该 workspace 没有注册中心）。AWS `ClientError` 映射为标准 4xx 信封（`aws.access_denied`、`aws.throttled` 等），绝不返回裸 500。路由策略为 MEMBER，与其他 Registry 读接口一致。
+
 ## 控制台治理 API：Gateway 限流 / Console Governance API: Gateway rate limits
 
 `/api/governance/gateways/{id}/rate-limits` 管理 AgentCore **Gateway 限流**（2026 年 8 月 GA）。这些路由是**同步**的，
