@@ -549,6 +549,70 @@ def update_derived_evaluator(
     )
 
 
+def _code_based_config(lambda_arn: str, lambda_timeout_s: int) -> dict[str, Any]:
+    """``evaluatorConfig`` for a code-based (Lambda) evaluator. The pinned model
+    documents ``lambdaTimeoutInSeconds`` as "Defaults to 60. Must be between 1
+    and 300." — callers validate the range; the platform always sends it so
+    GetEvaluator echoes the effective value."""
+    return {
+        "codeBased": {
+            "lambdaConfig": {
+                "lambdaArn": lambda_arn,
+                "lambdaTimeoutInSeconds": lambda_timeout_s,
+            }
+        }
+    }
+
+
+def create_code_evaluator(
+    client: Any,
+    *,
+    name: str,
+    lambda_arn: str,
+    lambda_timeout_s: int = 60,
+    level: str,
+    description: str = "",
+) -> dict[str, Any]:
+    """Create a code-based (Lambda) custom evaluator.
+
+    The Lambda must live in the same Region as the evaluator and implements
+    the devguide contract (input ``{schemaVersion, evaluatorId, evaluatorName,
+    evaluationLevel, evaluationInput.sessionSpans, evaluationReferenceInputs,
+    evaluationTarget}`` → ``{label, value?, explanation?}`` or ``{errorCode,
+    errorMessage}``). The platform's evaluation execution role needs
+    ``lambda:InvokeFunction`` + ``lambda:GetFunction`` on it and the function's
+    resource policy must trust ``bedrock-agentcore.amazonaws.com`` — neither is
+    managed here. CreateEvaluator requires ``level`` for every config kind.
+    """
+    return client.create_evaluator(
+        evaluatorName=name,
+        description=description or name,
+        level=level,
+        evaluatorConfig=_code_based_config(lambda_arn, lambda_timeout_s),
+        clientToken=str(uuid.uuid4()),
+    )
+
+
+def update_code_evaluator(
+    client: Any,
+    *,
+    evaluator_id: str,
+    lambda_arn: str,
+    lambda_timeout_s: int,
+    level: str,
+    description: str,
+) -> dict[str, Any]:
+    """Full-replace update of a code-based evaluator config (same idiom as
+    :func:`update_evaluator` — UpdateEvaluator takes the complete config)."""
+    return client.update_evaluator(
+        evaluatorId=evaluator_id,
+        description=description,
+        level=level,
+        evaluatorConfig=_code_based_config(lambda_arn, lambda_timeout_s),
+        clientToken=str(uuid.uuid4()),
+    )
+
+
 def list_evaluators(client: Any) -> list[dict[str, Any]]:
     """All evaluators in the account/region (built-ins first, then custom)."""
     out: list[dict[str, Any]] = []

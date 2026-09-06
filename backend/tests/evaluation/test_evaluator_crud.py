@@ -1,7 +1,8 @@
 """Custom evaluator CRUD — create with full params, get, update, delete.
 
-Stubbed control client; asserts the boto3 payload shapes (llmAsAJudge with
-numerical rating scale + bedrock model config).
+Stubbed control client; asserts the boto3 payload shapes for the three
+definition kinds: llmAsAJudge (numerical rating scale + bedrock model config),
+derived (base evaluator + model) and codeBased (Lambda ARN + timeout).
 """
 
 from unittest.mock import MagicMock
@@ -101,10 +102,13 @@ def test_get_evaluator_output_mapping(client, monkeypatch):
         "name": "my_judge",
         "level": "SESSION",
         "description": "checks tone",
+        "definition": "judge",
         "instructions": "Rate the tone of {session}",
         "rating_scale": FIVE_POINT_SCALE,
         "model_id": "global.anthropic.claude-sonnet-4-6",
         "base_evaluator_id": None,
+        "lambda_arn": None,
+        "lambda_timeout_s": None,
         "evaluator_type": None,
         "provider": None,
         "status": "ACTIVE",
@@ -273,10 +277,13 @@ def test_get_derived_output_mapping(client, monkeypatch):
         "name": "my_derived",
         "level": "SESSION",
         "description": "task completion on sonnet",
+        "definition": "derived",
         "instructions": "",
         "rating_scale": [],
         "model_id": "global.anthropic.claude-sonnet-5",
         "base_evaluator_id": "ThirdParty.DeepEval.TaskCompletion",
+        "lambda_arn": None,
+        "lambda_timeout_s": None,
         "evaluator_type": "CustomDerived",
         "provider": "DeepEval",
         "status": "ACTIVE",
@@ -348,3 +355,228 @@ def test_delete_managed_rejected(client, monkeypatch):
         assert res.status_code == 400
         assert res.json()["code"] == "evaluator.builtin_immutable"
     stub.delete_evaluator.assert_not_called()
+
+
+# ─── code-based (Lambda) evaluators ──────────────────────────────────────────
+LAMBDA_ARN = "arn:aws:lambda:us-west-2:111122223333:function:se019-eval-probe"
+CODE_DETAIL = {
+    "evaluatorId": "se019_probe-ghi789",
+    "evaluatorName": "se019_probe",
+    "level": "TRACE",
+    "description": "lambda scorer",
+    "status": "ACTIVE",
+    "evaluatorType": "CustomCode",
+    "evaluatorConfig": {
+        "codeBased": {
+            "lambdaConfig": {"lambdaArn": LAMBDA_ARN, "lambdaTimeoutInSeconds": 45}
+        }
+    },
+}
+
+
+def test_code_create_payload_shape_default_timeout(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    res = client.post("/api/eval/evaluators", json={
+        "name": "se019_probe",
+        "lambda_arn": LAMBDA_ARN,
+        "level": "SESSION",
+        "description": "lambda scorer",
+    })
+    assert res.status_code == 201
+    kwargs = stub.create_evaluator.call_args.kwargs
+    assert kwargs["evaluatorName"] == "se019_probe"
+    assert kwargs["level"] == "SESSION"
+    assert kwargs["description"] == "lambda scorer"
+    assert kwargs["evaluatorConfig"] == {
+        "codeBased": {
+            "lambdaConfig": {"lambdaArn": LAMBDA_ARN, "lambdaTimeoutInSeconds": 60}
+        }
+    }
+    assert kwargs["clientToken"]
+    stub.get_evaluator.assert_not_called()  # no base to resolve, no AWS lookup
+
+
+def test_code_create_explicit_timeout_and_qualified_arn(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    res = client.post("/api/eval/evaluators", json={
+        "name": "se019_probe",
+        "lambda_arn": LAMBDA_ARN + ":live",
+        "lambda_timeout_s": 300,
+    })
+    assert res.status_code == 201
+    kwargs = stub.create_evaluator.call_args.kwargs
+    assert kwargs["level"] == "TRACE"  # JudgeCreate default, not resolved from anywhere
+    lambda_config = kwargs["evaluatorConfig"]["codeBased"]["lambdaConfig"]
+    assert lambda_config == {"lambdaArn": LAMBDA_ARN + ":live", "lambdaTimeoutInSeconds": 300}
+
+
+def test_code_create_timeout_out_of_range_rejected(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    for timeout in (0, 301):
+        res = client.post("/api/eval/evaluators", json={
+            "name": "se019_probe",
+            "lambda_arn": LAMBDA_ARN,
+            "lambda_timeout_s": timeout,
+        })
+        assert res.status_code == 422, timeout
+    stub.create_evaluator.assert_not_called()
+
+
+def test_code_create_malformed_arn_rejected(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    for arn in (
+        "arn:aws:lambda:us-west-2:111122223333:layer:not-a-function",
+        "arn:aws:iam::111122223333:role/x",
+        "se019-eval-probe",
+    ):
+        res = client.post("/api/eval/evaluators", json={"name": "p", "lambda_arn": arn})
+        assert res.status_code == 422, arn
+    stub.create_evaluator.assert_not_called()
+
+
+def test_code_create_region_mismatch_rejected(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    # the default workspace row is us-west-2 (conftest)
+    res = client.post("/api/eval/evaluators", json={
+        "name": "se019_probe",
+        "lambda_arn": "arn:aws:lambda:us-east-1:111122223333:function:se019-eval-probe",
+    })
+    assert res.status_code == 422
+    body = res.json()
+    assert body["code"] == "evaluator.lambda_region_mismatch"
+    assert body["detail"] == {"lambda_region": "us-east-1", "workspace_region": "us-west-2"}
+    stub.create_evaluator.assert_not_called()
+
+
+def test_code_create_with_instructions_ambiguous(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    res = client.post("/api/eval/evaluators", json={
+        "name": "se019_probe",
+        "lambda_arn": LAMBDA_ARN,
+        "instructions": "Rate the tone of {session}",
+    })
+    assert res.status_code == 400
+    assert res.json()["code"] == "evaluator.definition_ambiguous"
+    res = client.post("/api/eval/evaluators", json={
+        "name": "se019_probe",
+        "lambda_arn": LAMBDA_ARN,
+        "base_evaluator_id": "Builtin.Helpfulness",
+    })
+    assert res.status_code == 400
+    assert res.json()["code"] == "evaluator.definition_ambiguous"
+    stub.create_evaluator.assert_not_called()
+
+
+def test_code_create_rating_scale_rejected(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    res = client.post("/api/eval/evaluators", json={
+        "name": "se019_probe",
+        "lambda_arn": LAMBDA_ARN,
+        "rating_scale": FIVE_POINT_SCALE,
+    })
+    assert res.status_code == 400
+    assert res.json()["code"] == "evaluator.rating_scale_not_allowed"
+    stub.create_evaluator.assert_not_called()
+
+
+def test_get_code_output_mapping(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    stub.get_evaluator.return_value = CODE_DETAIL
+    res = client.get("/api/eval/evaluators/se019_probe-ghi789")
+    assert res.status_code == 200
+    assert res.json() == {
+        "id": "se019_probe-ghi789",
+        "name": "se019_probe",
+        "level": "TRACE",
+        "description": "lambda scorer",
+        "definition": "code",
+        "instructions": "",
+        "rating_scale": [],
+        "model_id": None,
+        "base_evaluator_id": None,
+        "lambda_arn": LAMBDA_ARN,
+        "lambda_timeout_s": 45,
+        "evaluator_type": "CustomCode",
+        "provider": None,
+        "status": "ACTIVE",
+    }
+
+
+def test_list_marks_code_rows(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    stub.list_evaluators.return_value = {
+        "evaluators": [
+            {"evaluatorId": "se019_probe-ghi789", "evaluatorType": "CustomCode"},
+            {"evaluatorId": "my_derived-def456", "evaluatorType": "CustomDerived"},
+            {"evaluatorId": "my_judge-abc123", "evaluatorType": "Custom"},
+            {"evaluatorId": "ThirdParty.DeepEval.TaskCompletion", "evaluatorType": "ThirdParty"},
+        ]
+    }
+    res = client.get("/api/eval/evaluators")
+    assert res.status_code == 200
+    by_id = {r["id"]: r for r in res.json()["evaluators"] if r["source"] != "builtin"}
+    assert by_id["se019_probe-ghi789"]["definition"] == "code"
+    assert by_id["my_derived-def456"]["definition"] == "derived"
+    assert by_id["my_judge-abc123"]["definition"] == "judge"
+    assert by_id["ThirdParty.DeepEval.TaskCompletion"]["definition"] is None
+
+
+def test_code_update_payload_shape(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    stub.get_evaluator.return_value = CODE_DETAIL
+    res = client.put("/api/eval/evaluators/se019_probe-ghi789", json={
+        "lambda_arn": LAMBDA_ARN,
+        "lambda_timeout_s": 120,
+        "level": "SESSION",
+        "description": "lambda scorer v2",
+    })
+    assert res.status_code == 200
+    kwargs = stub.update_evaluator.call_args.kwargs
+    assert kwargs["evaluatorId"] == "se019_probe-ghi789"
+    assert kwargs["level"] == "SESSION"
+    assert kwargs["description"] == "lambda scorer v2"
+    assert kwargs["evaluatorConfig"] == {
+        "codeBased": {
+            "lambdaConfig": {"lambdaArn": LAMBDA_ARN, "lambdaTimeoutInSeconds": 120}
+        }
+    }
+    assert kwargs["clientToken"]
+    assert res.json()["definition"] == "code"
+
+
+def test_code_update_region_mismatch_rejected(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    stub.get_evaluator.return_value = CODE_DETAIL
+    res = client.put("/api/eval/evaluators/se019_probe-ghi789", json={
+        "lambda_arn": "arn:aws:lambda:eu-west-1:111122223333:function:elsewhere",
+    })
+    assert res.status_code == 422
+    assert res.json()["code"] == "evaluator.lambda_region_mismatch"
+    stub.update_evaluator.assert_not_called()
+
+
+def test_update_code_definition_mismatch_rejected(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    # judge payload against a code-based evaluator — would convert it
+    stub.get_evaluator.return_value = CODE_DETAIL
+    res = client.put("/api/eval/evaluators/se019_probe-ghi789", json={
+        "instructions": "Rate the tone of {session}",
+    })
+    assert res.status_code == 400
+    assert res.json()["code"] == "evaluator.definition_mismatch"
+    assert res.json()["detail"] == {"current": "code", "payload": "judge"}
+    # derived payload against a code-based evaluator
+    res = client.put("/api/eval/evaluators/se019_probe-ghi789", json={
+        "base_evaluator_id": "Builtin.Helpfulness",
+    })
+    assert res.status_code == 400
+    assert res.json()["code"] == "evaluator.definition_mismatch"
+    # code payload against a judge and against a derived evaluator
+    for current in (EVALUATOR_DETAIL, DERIVED_DETAIL):
+        stub.get_evaluator.return_value = current
+        res = client.put(f"/api/eval/evaluators/{current['evaluatorId']}", json={
+            "lambda_arn": LAMBDA_ARN,
+        })
+        assert res.status_code == 400
+        assert res.json()["code"] == "evaluator.definition_mismatch"
+    stub.update_evaluator.assert_not_called()
