@@ -58,7 +58,7 @@ English: [architecture.md](architecture.md)
 | **Memory** | 一个共享的 `launchpad_memory` 单例:短期 session 事件 + 长期语义与用户偏好策略。命名空间只按 `{actorId}` 分区(没有 `{agentId}` 模板变量),因此平台把 Agent id 折进 actor——`scoped_actor(agent_id, human)` → `<agent>__<human>`——从而让**短期事件与长期记录**(`/facts/<agent>__<human>`)都按 Agent 分区。生成的 Strands Runtime 通过 `AgentCoreMemorySessionManager` 恢复短期对话。Claude Agent SDK 容器为每次调用创建独立的 `MemorySessionManager`,通过 `UserPromptSubmit` Hook 注入有界的短期对话及 `/facts/<actor>`、`/preferences/<actor>` 记录,并在调用成功后把 USER/ASSISTANT 对作为一个事件持久化。A2A Runtime 使用 `<agent>__a2a__<contextId>`,因为直接 A2A 调用目前没有经过身份认证的 human actor envelope。一个 Agent 学到的偏好不会串到同一个人的另一个 Agent 或 A2A context;台账仍存裸的 human actor 用于展示。 |
 | **Gateway** | `launchpad-gw` 把一个 REST API(office-facts)和一个 Lambda(hr-database)转成带 Cognito-JWT 鉴权的 MCP 工具;Agent 的工具调用经由它流转。治理页为已纳管的 Gateway 管理 **Gateway 限流**（2026 年 8 月 GA）：`ListGatewayRateLimits` / `CreateGatewayRateLimit` / `UpdateGatewayRateLimit` / `DeleteGatewayRateLimit` 位于网关详情的「限流」面板之后，服务端校验并记入 `policy_changes`。 |
 | **Identity** | 支撑网关的 token vault——一个 OAuth2 provider(Agent 出站鉴权)和一个 API-key provider。 |
-| **Registry** | `launchpad-registry` 编目三类 descriptor:A2A(Agent)、MCP(工具)、AGENT_SKILLS(Skill)。每次部署都会自动创建并提交一条 A2A 记录。控制台也支持手动注册——外部远程 MCP 服务器(streamable-http URL)与技能(SKILL.md → 制品桶)——并驱动完整生命周期:提交 → 批准/驳回(REJECTED 仍可改判批准)、下架(终态——已实测,之后只能删除)、删除。注册中心同时是**挂载目录**:`GET /api/registry/attachables` 只向创建向导提供 APPROVED 的 MCP/技能记录,MCP 记录按 URL 分流——共享网关 URL 挂为 `agentcore_gateway`(OAuth),其他 URL 挂为 `remote_mcp`(暂不带鉴权)——技能按其 s3 路径经 `skills[{path}]` 挂载。对于已部署 Launchpad A2A Agent 所拥有的 A2A 记录，Registry 抽屉的「实时名片」会读取运行时此刻实际提供的名片（`GET /api/registry/records/{id}/live-agent-card` → 以账本中的 `Agent.arn` 调用数据面 `GetAgentCard`，AWS 为此打开的会话随即结束），并与记录中存储的名片做对比；实时名片不落账本——AWS 始终是事实来源。两份名片的 `version` 都来自同一个平台常量——`services/agentcore/registry.py` 中的 `A2A_CARD_VERSION`：A2A 运行时模板在打包阶段把它传给 Strands `A2AServer(version=...)`，`build_a2a_card` 在注册阶段把它写进记录，因此两边从构造上就是一致的。它**不是** AgentCore 运行时版本（`Agent.version`，显示在「版本与端点」面板）——运行时版本由 Create/UpdateAgentRuntime 在模板渲染完成之后才分配，名片无法携带。在该常量出现之前发布的 A2A Agent 仍会提供 Strands 默认的 `0.0.1`，而记录里是 `1`；对比会持续标出差异，直到下一次重新发布（重新渲染 + 重新注册）让两边收敛。Registry 页面对同一个注册中心提供两种视图：**发布者列表**（`GET /api/registry/records` → 控制面 `ListRegistryRecords`，包含所有状态的全部记录）与**消费者视图**（`?view=discoverable`，`GET /api/registry/records/discoverable` → 数据面 `ListDiscoverableRegistryRecords`，按 `nextToken` 翻页到底）——即拥有数据面访问权限的消费者或 Agent 实际能发现的记录。发现摘要不含 `descriptors`，点开某一行才读取完整记录。在同一页面会话中拉取过消费者视图后，凡不在其中的控制面记录都会打上「不可发现」标签（DRAFT / PENDING_APPROVAL / REJECTED / DEPRECATED 是预期情形）——两份列表的差异才是这项功能的意义。 |
+| **Registry** | GA 的 `agent-registry` 服务托管 `launchpad-registry`，编目 A2A Agent、MCP 服务器与 AGENT_SKILLS。`services/agentcore/registry.py` 把 GA 的 `AGENT/MCP/SKILL` 与 `data/dataSchemaVersion` 模型翻译成稳定的 Launchpad descriptor 契约；其他 AgentCore 服务仍在 `bedrock-agentcore` 之下。GA 的唯一性约束是 `(name, recordVersion)`，因此新建记录使用带类型后缀的初始版本（`1.0.0-a2a`、`1.0.0-mcp`、`1.0.0-skill`），内容编辑会保留该后缀。Registry 可用时，每次部署都会自动创建并提交一条 A2A 记录。在 SCP/IAM 策略拒绝 Registry 初始化的账号中，bootstrap 会把该能力记为不可用，仅属于 Registry 的 API 返回 503，部署管道只跳过 register 阶段；Runtime/Harness 部署仍然可用。控制台也支持手动注册——外部远程 MCP 服务器(streamable-http URL)与技能(SKILL.md → 制品桶)——并驱动完整生命周期:提交 → 批准/驳回(REJECTED 仍可改判批准)、下架(终态——已实测,之后只能删除)、删除。注册中心同时是**挂载目录**:`GET /api/registry/attachables` 只向创建向导提供 APPROVED 的 MCP/技能记录,MCP 记录按 URL 分流——共享网关 URL 挂为 `agentcore_gateway`(OAuth),其他 URL 挂为 `remote_mcp`(暂不带鉴权)——技能按其 s3 路径经 `skills[{path}]` 挂载。治理页可以把一个既有的 AgentCore Gateway 导入为**一条** MCP 记录，其中包含 Gateway 端点与它完整的已发现工具目录；旧的按 target 逐条的记录会一直保留，直到该 Gateway 记录 APPROVED 之后被显式下架。Registry 的批准控制的是目录可见性，而不是 Gateway 授权。`GET /api/registry/attachables` 会把目录状态与 Harness 可挂载性分开报告，并在服务端解析 Gateway 鉴权方式。对于已部署 Launchpad A2A Agent 所拥有的 A2A 记录，Registry 抽屉的「实时名片」会读取运行时此刻实际提供的名片（`GET /api/registry/records/{id}/live-agent-card` → 以账本中的 `Agent.arn` 调用数据面 `GetAgentCard`，AWS 为此打开的会话随即结束），并与记录中存储的名片做对比；实时名片不落账本——AWS 始终是事实来源。两份名片的 `version` 都来自同一个平台常量——`services/agentcore/registry.py` 中的 `A2A_CARD_VERSION`：A2A 运行时模板在打包阶段把它传给 Strands `A2AServer(version=...)`，`build_a2a_card` 在注册阶段把它写进记录，因此两边从构造上就是一致的。它**不是** AgentCore 运行时版本（`Agent.version`，显示在「版本与端点」面板）——运行时版本由 Create/UpdateAgentRuntime 在模板渲染完成之后才分配，名片无法携带。在该常量出现之前发布的 A2A Agent 仍会提供 Strands 默认的 `0.0.1`，而记录里是 `1`；对比会持续标出差异，直到下一次重新发布（重新渲染 + 重新注册）让两边收敛。Registry 页面对同一个注册中心提供两种视图：**发布者列表**（`GET /api/registry/records` → 控制面 `ListRegistryRecords`，包含所有状态的全部记录）与**消费者视图**（`?view=discoverable`，`GET /api/registry/records/discoverable` → 数据面 `ListDiscoverableRegistryRecords`，按 `nextToken` 翻页到底）——即拥有数据面访问权限的消费者或 Agent 实际能发现的记录。发现摘要不含 `descriptors`，点开某一行才读取完整记录。在同一页面会话中拉取过消费者视图后，凡不在其中的控制面记录都会打上「不可发现」标签（DRAFT / PENDING_APPROVAL / REJECTED / DEPRECATED 是预期情形）——两份列表的差异才是这项功能的意义。 |
 | **Policy** | 挂接到网关的 Cedar 策略引擎,初始挂载模式由操作员选择(默认 `ENFORCE`,可选 `LOG_ONLY`);deny 决策会带上作出判定的 policy id。支持 NL → Cedar 策略生成。引用已被删除的引擎时,治理页面显式展示失效引用而不是报错,策略变更返回 409,创建并挂载会替换该引用。 |
 | **Evaluation** | 基于 CloudWatch trace 的真实 `StartBatchEvaluation` / insights。运行范围三选一:**数据集**(回放条目——多轮 scenario 在同一 session 内顺序回放)、显式 **session id 列表**、或**时间窗口**(`lookback_hours` 1–336——被动模式:不产生新调用,用 `filterConfig.timeRange` 圈定既有流量)。14 个通用提示词模板评估器(12 个 trace/session 级和 2 个普通工具调用级)、2 个技能 `TOOL_CALL` 提示词模板评估器,外加 3 个仅限真值的程序化 `Builtin.Trajectory*Match` session 级匹配器(仅当数据集 scenario 定义了 `expected_trajectory` 时可选),以及在 `?view=evaluators` 子页支持完整 CRUD 的**自定义评估器**，共三种定义——**LLM 评审**（`llmAsAJudge`：带占位符的指令、数值量表、Bedrock 评审模型）、**派生**（`derived`：在所选模型上运行某个 Builtin/ThirdParty 基础评估器的提示词）与**代码评估器**（`codeBased.lambdaConfig`：位于 workspace 同区域的 Lambda 函数 ARN 加 1–300 秒超时，默认 60；没有指令、量表与模型）。任何定义在 `CreateEvaluator` 上都必须带 `level`。控制台详情投影带 `definition: judge|derived|code`；`UpdateEvaluator` 为全量配置替换，因此更新载荷必须与评估器自身的类型一致——用评审载荷更新代码评估器（或任何跨类型组合）会被 `evaluator.definition_mismatch` 拒绝，而不是被静默转换。代码评估器的 Lambda 接收 `{schemaVersion, evaluatorId, evaluatorName, evaluationLevel, evaluationInput.sessionSpans, evaluationReferenceInputs, evaluationTarget}`，返回 `{label, value?, explanation?}` 或 `{errorCode, errorMessage}`（限制 300 秒 / 6 MB）；控制台**不管理其 IAM**——批量/在线运行作为 `evaluationExecutionRoleArn` 传入的评估执行角色需要对该函数拥有 `lambda:InvokeFunction` + `lambda:GetFunction` 权限，且函数的资源策略须允许 `bedrock-agentcore.amazonaws.com`，两点都以提示形式写在 ARN 字段下方。代码评估器在所有可选自定义评估器的地方（批量运行、实验、在线配置）均可选用。洞察运行可在三种分析类型(失败归因/用户意图/执行摘要)中任选子集。数据集以 devguide scenario 形式存于 SQLite(`?view=datasets` 子页:scenario 编辑器、JSON/JSONL 导入),一键单向同步为 AWS Dataset 资源(`AGENTCORE_EVALUATION_PREDEFINED_V1`):首次同步创建数据集(`CreateDataset`),之后每次同步都原地编辑该数据集的**草稿(DRAFT)**(`ListDatasetExamples` → `DeleteDatasetExamples` → `AddDatasetExamples`,每步经 `UPDATING` 轮询到 `ACTIVE`),因此数据集 id 与已发布版本得以保留;**发布版本**(`CreateDatasetVersion`)把草稿快照为不可变的编号版本,并把 `draftStatus` 从 `MODIFIED` 翻为 `UNMODIFIED`。行上的 `cloud` blob 缓存 id/ARN/状态以及 `draft_status`、`example_count` 与版本列表(`ListDatasetVersions`);仅云端的数据集以只读方式展示同样信息并同样可发布,单个已发布版本可删除(带 `datasetVersion` 的 `DeleteDataset`)。云端数据集运行可**固定到某个已发布版本**(`dataset_version`,在创建运行行之前先对照 `ListDatasetVersions` 校验;随后 `GetDataset` 与 `ListDatasetExamples` 读取该快照,回放的 scenario 与真值即该版本的内容);默认使用草稿,固定的版本记录在运行上并在运行列表显示为 `· v<N>`。已记录的副本若 AWS 已不认识(`ResourceNotFoundException`)或已经控制台删除,下次同步会重新创建;scenario 真值(断言/期望回复/期望轨迹)经 `evaluationMetadata.sessionMetadata` 注入批量评估。账户单批次锁与队列语义不变。操作员可在运行页**停止**任意活跃运行(`POST /api/eval/runs/{id}/stop`):批次已在 AWS 上存在的运行用 `StopBatchEvaluation` 停止(STOPPING → STOPPED——已评判的会话保留结果,轮询器记为部分分数),仍在排队的运行在到达 AWS 之前于本地取消,正在回放数据集的运行在提示词之间停止且不会调用 `StartBatchEvaluation`。三种情形都以终态 `stopped` 结束(绝不记为 `failed`),原因为「stopped by operator」;不暴露 `DeleteBatchEvaluation`。运行行只保存每个评估器的**平均分**(`evaluatorSummaries.statistics.averageScore`);**每个分数背后评审模型给出的理由**只存在于批次自己的结果日志流中(`GetBatchEvaluation.outputConfig.cloudWatchConfig` → `/aws/bedrock-agentcore/evaluations/batch-evaluations/results/default` 下的 `run-<batchId>`,`gen_ai.evaluation.result` 记录),Runs 页面在选中终态运行时按需读取(`GET /api/eval/runs/{id}/results`,绝不持久化),渲染为「会话结果」面板 —— 按会话分组,每条评审一行(评估器、层级、得分、标签、可展开的理由;span 级评估器每次工具调用一行),并链接到可观测性的会话详情。 **在线评估**(`?view=online`):每个 agent + evaluator 集合对应一个 AgentCore `OnlineEvaluationConfig`,按采样比例(0.01–100 %)在会话空闲超时后对真实会话打分,不产生新的调用;结果写入 `/aws/bedrock-agentcore/evaluations/results/<configId>`(同时以 EMF 指标落到 `Bedrock-AgentCore/Evaluations`),控制台用 Logs Insights 聚合(每个 evaluator 的均值 / 标签分布 / 趋势 / 带 judge 解释的最近记录)。页面列出 workspace 账号内**全部**配置并按归属分类:`agent`(本控制台创建,可全操作)、`experiment`(`exp_*`/`can_*` 实验 arm,只读)、`external`(仅暂停/恢复/删除)。Update 始终发送完整 `rule`(AWS 整体替换),从未被调用过的 agent 创建时会被拒绝(AWS 校验日志组存在)。 配置有两种**模式**:`scores`(evaluators)或 `insights`(1–3 种洞察类型 + 可选的 DAILY/WEEKLY/MONTHLY 聚类——AWS 不允许同一配置两者兼有);insights 配置产出**报告**(以配置为数据源的批量评估:AWS 按聚类周期定期生成,或从控制台「立即出报告」经运行队列发起),通过 `GetBatchEvaluation.dataSourceConfig.onlineEvaluationConfigSource` 归属,并复用运行页的洞察聚类树渲染;报告只覆盖该配置采样过的会话。 在线评分同时出现在查看会话的地方:可观测性的会话详情带一个「在线评估」区块(该会话在所有配置下的结果记录,按归属分类,失败降级——结果查询失败不会影响追踪),概览页新增 **在线质量 · 24h** tile(对 workspace 内 agent 持有配置做极性归一、按计数加权的均值,120 秒缓存,没有配置时不调用 AWS)。二者都通过 `SOURCE logGroups(namePrefix: ['/aws/bedrock-agentcore/evaluations/results/'])` 一次读取全部结果日志组。第三种**即时**模式从可观测会话详情同步调用数据面 `Evaluate` API 对单个会话打分(SCORE NOW:≤5 个 evaluator、每次调用 ≤10 条结果、不持久化)——用于试跑自定义 evaluator 或排查某个可疑会话;需要留档的分数仍由批量运行给出。 |
 | **Optimization** | 推荐 → 配置捆绑(configuration bundles)→ 网关 A/B(config-bundle 50/50)→ target-based canary → verdict → promote → cleanup。系统提示词推荐**可插拔**:默认走 AgentCore 推荐任务,也可选第三方 provider(`gepa_lite`——对所固定评估运行的逐会话 judge 分数、解释与对话记录做一轮 GEPA 式反思,模型为操作员选择的 Bedrock Converse 模型;同一轮反思也可改写 Agent 自带工具的描述),绕开 `StartRecommendation` 及其内容过滤;产出的提示词与工具描述仍写入 treatment 配置捆绑,由后续 A/B 测试衡量。发送流量阶段的数据集回放为并发发送(在途请求上限 `TRAFFIC_MAX_CONCURRENCY` = 10,可用 `LAUNCHPAD_TRAFFIC_CONCURRENCY` 下调);一条 prompt 即一个 session 即一个分组,因此不影响分流。 |
@@ -190,6 +190,89 @@ spec 也能被无歧义地读回,将来新增第二个 SDK 无需迁移已存 sp
 该字段做分派**:在类别出现第二个成员之前,`app/deployer/container.py` 与
 `app/templates/claude_sdk_agent/` 保持无条件实现。
 
+### 推荐的 trace 来源
+
+`RECOMMEND` 读取两者之一:默认是滚动的 `RECOMMEND_LOOKBACK_DAYS`（7）天 CloudWatch 窗口，
+或者由 `agentTraces.batchEvaluation` 固定的某一次已完成的批量评估。固定它有两重意义:
+
+- **血缘。** 一个洞察任务与一次基于同一窗口的推荐只是彼此**重叠**;固定之后，推荐才是
+  可证明地*从*那次分析生成出来的。
+- **可复现。** 7 天窗口比任何单次分析都**更宽**，所以默认路径可能摄入没有人看过的流量
+  ——包括上一次实验的 treatment 分支——而明天重跑同一个实验读到的又是另一批 trace。
+
+控制台提供该实验 Agent 自己已完成的运行（`GET /api/eval/runs?agent_id=…`）;后端用
+`GetBatchEvaluation` 解析所选运行，这同时也是校验手段（存在、已完成、属于同一个 Agent）。
+同一次 RECOMMEND 中的两个生成器共享被固定的来源，而解析出的来源——ARN、run id、batch id、
+模式——会为两条路径都记录在 `recommend` 产物上，因此一个已完成的实验始终可解释。
+
+### 推荐 provider
+
+RECOMMEND 背后的系统提示词生成器是一个 **provider**
+（`backend/app/optimization/providers/`）;工具描述生成器则始终是 AgentCore 自己的。
+`recommend_provider` 缺省意味着 `StartRecommendation` 任务与以前完全一样地运行。
+`gepa_lite` 则改为读取被固定运行的批量评估结果流（逐会话的评估器分数、标签与解释——与在线
+评估发出的 `gen_ai.evaluation.result` 记录同源），与每个会话的对话记录做联接，按最差优先
+采样最多 30 个会话（做极性归一，并带一组得分最高的对照样本），然后请一个 Bedrock 模型
+——默认 Claude Opus 5，可选 Sonnet 5 / GPT-5.6 Sol，也允许自定义 id——做一轮反思式重写:
+诊断、具体改动、修订后的提示词;并在同一次调用中，依据每个会话的工具调用、结果与工具调用级
+评审判定，为该 Agent **自带的**工具（treatment 捆绑可以覆盖的那一组已发现工具）给出修订后
+的描述;gateway / MCP 工具只作为上下文展示、绝不被改写，而一次没有任何工具调用的运行会把
+工具侧收口为 `no-tool-calls`，提示词侧照常进行。这是去掉了 GEPA 搜索循环、只留下其反思步骤
+的做法:随后的配置 A/B 才是评估该候选者的环节。无法产出可用提示词的 provider（没有已打分
+的会话、模型访问被拒、输出无法解析、经过一次压缩后仍超出 8 000 字符预算）会写入 `FAILED`
+状态与原因并且**不写提示词**——与失败的 AWS 任务遵循同一条 ISSUE-007 规则——因此 `accept`
+仍然被闸门挡住。产物记录 `provider`、`provider_model_id` 与证据数量，treatment 捆绑的提交
+信息也会点出它们，因此一个已完成的实验始终可解释。Bedrock 调用走 workspace 客户端漏斗;
+`gepa` 包（以及它构造的 litellm 客户端）刻意不作为依赖引入。契约:
+[`.trellis/spec/launchpad/prompt-optimization-providers.md`](../.trellis/spec/launchpad/prompt-optimization-providers.md)。
+
+### 平台工具包（`AgentSpec.toolkits`）
+
+**工具包（toolkit）**是一组有名字、由平台自己拥有的本地 `@tool` 函数，覆盖在内嵌的种子
+数据之上，由 Strands ZIP 模板内联进生成的 `main.py`。仅适用于 `zip_runtime` +
+`protocol=http`;今天只有一个成员 `hr_assistant`（五个 HR 工具:PTO 余额/申请、政策查询、
+福利摘要、工资单）。
+
+它刻意**不是** `ToolRef.type` 的一个成员:现有每个成员都指向一个外部资源，会驱动 IAM 与
+部署器行为，而工具包两者都不驱动——没有 ARN、没有授权、没有 gateway、没有网络调用、也没有
+额外的 pip 依赖。
+
+有两个性质让它值得拥有自己的字段:
+
+- **它在 generate 阶段渲染，因此 `spec.code` / `spec.code_bundle` 保持 `None`**，Agent 也
+  就保留了配置捆绑实验的资格。把生成的源码写进这两个字段中的任何一个，都会让
+  `experiment_capability` 返回 `custom-source-unverified`——这正是它是一个 spec *选择项*
+  而不是被物化的代码的原因。
+- **工具包是把模板自带的 `calculator` / `current_utc_time` 替换掉，而不是在其之上追加**，
+  因此部署出的工具面就恰好是工具包本身。这一点对 trace 就绪度很重要:`missing_tools` 非空
+  会强制 `state="sparse"`，于是一个被期望却从未被调用过的工具会把 Agent 永久压在 `ready`
+  之下。
+
+工具名与描述用 `ast` 从工具包源码派生，遵循 Strands 自己的 docstring 规则（docstring 去掉
+`Args:` 段），因此 `discover_agent_tools`——以及由它决定的 `expected_tools`、就绪度和推荐
+界面里的「当前描述」——报告的正是模型看到的内容。完整契约:
+[`.trellis/spec/launchpad/agent-toolkits.md`](../.trellis/spec/launchpad/agent-toolkits.md)。
+
+### Registry 技能与部署快照
+
+创建 Agent 向导只从 `GET /api/registry/attachables` 读取 APPROVED 的 `AGENT_SKILLS` 记录。
+选中之后，`AgentSpec.skills` 中存的是该 bundle 的 S3 前缀;调用时绝不会去检索 Registry。
+被选中的前缀同时驱动所属 Agent 的 `SkillBundle*` IAM 语句。
+
+每种方式按自己的产物模型消费这同一个字段:
+
+| Agent 形态 | 技能物化方式 | 运行时激活 |
+|---|---|---|
+| Harness | 原生 Harness S3 Skill 源 | Harness 渐进式披露 |
+| 生成的 zip，HTTP 或 A2A | 打包时快照到 `skills/<name>/` | Strands `AgentSkills` 插件，仅当至少打进一个 `SKILL.md` 时启用 |
+| Container | 镜像构建时快照到 `.claude/skills/<name>/` | Claude Agent SDK 项目的 `Skill` 工具 |
+| Studio | 生成代码中的引用把 APPROVED 的 bundle 解析进 `skills/<name>/` | Studio 生成的 `AgentSkills` 插件 |
+| 由 Harness 转换出的 `code_bundle` | 没有平台快照;导出的 fetcher 仍然是权威 | 导出的运行时 fetcher |
+
+Registry 上的编辑与重新导入不会热更新 zip、container 或 Studio 产物——要重新发布 Agent 才会
+抓取新的快照。A2A 有两个彼此独立的 Skill 概念:`AgentSpec.skills` 挂载指令/资源 bundle，而
+`AgentSpec.a2a_skills` 发布 AgentCard 的路由元数据。
+
 ### 模型来源(方式B + 方式C)
 
 `AgentSpec.model_source` 决定模型的托管面:`mantle`(Bedrock Mantle)或
@@ -246,6 +329,65 @@ A2A zip Agent 使用另一个没有 Mantle 分支的模板,因此向导会将其
 `bedrock` 且只提供 Claude 模型 —— 该类别目前唯一的成员 Claude Agent SDK 只能
 驱动 Claude;向导在此处用 SDK 选项替代模型来源控件。
 
+### 发现既有 Runtime 与 Harness
+
+`/create?view=discover` 是与三种创建方式并列的一条接入路径，而不是一种部署方式。
+`GET /api/agents/discovery` 会跟完所配置 Region 中 Runtime 列表的每一页，并对每个资源做一次
+详情读取。后端只返回白名单投影:Runtime 标识、名称、描述、协议、制品类型、authorizer 类型、
+AWS 状态/版本以及最近更新时间。环境变量值、制品位置、执行角色与 authorizer 配置从不离开
+后端。
+
+一次显式的 `POST /api/agents/discovery/import` 会重新读取每个被选中的 Runtime，并创建或刷新
+一条 `method=discovered_runtime`、`owner=aws-discovery` 的 `Agent` 行。它不创建 Deployment 或
+Job，不运行任何管道阶段，也不做 Registry 注册。幂等标识先看 ARN、再看 Runtime ID;命中某条由
+Launchpad 创建的行时会报告「已纳管」并且绝不改写它。移除一条导入行只是本地解除关联，绝不
+调用任何 AgentCore 删除或更新操作。
+
+HTTP 与 A2A 资源可以导入;MCP Runtime 资源在扫描中仍然可见，但它们不是 Agent，不能被导入。
+导入能力与调用能力刻意分开:导入的 HTTP/A2A 资源只有在 AWS 报告 `READY` 且没有配置自定义
+JWT authorizer 时才可调用。带自定义 JWT 的资源可以作为清单保留，但会被排除在 Chat 与 `/v1`
+之外。
+
+托管 Harness 服务会把每个 harness 物化为一个由它自己拥有的后端 Runtime（名为
+`harness_<harnessName>`，跑该服务自己的 `public.ecr.aws/…/harness-<region>` 镜像），而该
+Runtime 拒绝 `InvokeAgentRuntime`。扫描通过联接 `ListHarnesses` 把这些行标记为制品类型
+`harness`:它们永不可导入（原因 `harness-managed`）、永不可调用，并且当拥有它的 harness 是
+一个 Launchpad Agent 时，该行会链接到那个 Agent 并标为已纳管。若 `ListHarnesses` 失败，镜像
+启发式仍会把它们标出来——只是丢掉归属链接。
+
+操作者真正要导入的是**拥有它的那个 Harness**。同一个响应带一个 `harnesses` 数组（标识、
+状态、版本、最近更新、归属链接）以及一个失败降级的 `harness_scan_error`——`ListHarnesses`
+失败时 Runtime 那一半扫描仍然完好，而不是让整个请求失败。`POST
+/api/agents/discovery/import` 在 `runtime_ids` 之外还接受 `harness_ids`，创建的是同一种外部
+拥有的行形态，由 `spec.discovery.resource_type = "harness"` 区分（缺省 ⇒ `runtime`，所以在
+此之前导入的行行为不变）。这条行存的是 **harness** 的 ARN 与 id，其余一切都由此自然推出:
+Chat 与 `/v1` 完全像对待 Launchpad `method=harness` Agent 那样分派到 `InvokeHarness`，该
+harness 的后端 runtime 通过既有的 ARN 联接解析出它的归属，重新发布被拒绝，而移除则是一次
+绝不调用 `DeleteHarness`、也不触碰 IAM 的台账解除关联。已经由 Launchpad 部署过的 harness 会
+被报告为已纳管，绝不重复创建。状态只对首次导入设门禁（`CREATE_FAILED`/`DELETING` 不能
+导入）;对已存在的行重新导入总是刷新它，台账正是这样得知一个外部 harness 已经坏掉。导入会读
+`GetHarness`，因此被自定义 JWT authorizer 挡在前面的 harness 会作为清单保留并被排除在 Chat
+之外——与 Runtime 路径完全一样的切分。评估、实验以及 harness→zip 转换都仍然以
+`method=harness` 为键，因此不会提供导入进来的 harness。
+
+### 版本与端点(只读)
+
+每次 `UpdateAgentRuntime` / `UpdateHarness` 都会发布一个不可变的新版本;`DEFAULT` 端点
+自动跟随最新版本,而命名端点(目标金丝雀的 `stable`/`treatment`)固定在某一版本。台账只记得
+Launchpad 部署时铸造的那个版本(`Agent.version`),所以 `/create` 的 Agent 详情(details 模式)
+带有一个由 `GET /api/agents/{agent_id}/versions` 支撑的**版本与端点**面板。该路由把台账行解析到
+唯一一个资源族——`zip_runtime`/`studio`/`container` 以及 `spec.discovery.resource_type` 缺省或为
+`runtime` 的导入行 → `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints`;`harness` 以及
+`resource_type == "harness"` 的导入行 → `ListHarnessVersions` + `ListHarnessEndpoints`——跟随每一页
+`nextToken`,并返回与发现功能相同风格的白名单投影(版本、状态、描述、时间戳、端点的生效/目标版本、
+失败原因;绝不包含环境变量、制品位置、执行角色或鉴权配置)。没有 AWS 资源的行(部署仍在进行、
+首次部署失败、已删除的 Agent,或解析不到任一资源族的形态)返回 409 `agent.no_resource`,并附带
+面板会原样展示的人类可读原因。
+
+面板标出 `DEFAULT`,把台账版本与 AWS 最新版本并列——带外更新或金丝雀候选版本铸造之后出现的不一致
+会以警告呈现而不是当作错误——并标记 `stable`/`treatment` 端点名,让金丝雀残留一眼可见。它是严格只读的:
+从不改指 `DEFAULT`,也从不创建、更新或删除端点;这些操作归金丝雀所有。
+
 ## 调用链
 
 Chat 交互页面(`/api/chat/{id}`)与公开 API(`/v1/agents/{id}/invoke` +
@@ -268,8 +410,59 @@ public  /v1  ──┘        │
                         └─ Observability (spans → CloudWatch Transaction Search)
 ```
 
+### Gateway（MCP）工具同时可达 Harness 与 zip runtime
+
+Gateway `ToolRef` 过去是 harness 独有的能力，这在实验课上划出了一条没有参与者会预期的分界
+线:第 11 章治理的是只有 Harness 才做得出的工具调用，而第 09/10 章做实验的 runtime 一个工具
+调用也做不出来。现在两种方式都能触达 `launchpad-gw`;差别只在*由谁完成令牌交换*。
+
+| | 托管 Harness | 生成的 zip runtime |
+|---|---|---|
+| 工具接线 | 声明式的 `agentcore_gateway` 工具，带一个 `outboundAuth` OAuth 块 | 生成的 `main.py` 中内置的 MCP 客户端 |
+| 令牌交换 | 由 Harness 服务完成 | 由 Agent 自己完成:workload identity token → `GetResourceOauth2Token(oauth2Flow="M2M")` |
+| 执行角色 | `agent_iam._uses_gateway()` | **同一个**——它只看 `tool.type`，从不看 `spec.method` |
+| Cedar | 在 Gateway 处 | 同样在 Gateway 处 |
+
+runtime 这一侧能跑起来靠三件事，三件都是必需的:
+
+1. **必须存在 workload identity 令牌。** 只有当调用方在 `InvokeAgentRuntime` 上带了
+   `runtimeUserId` 时，Runtime 才会注入一个（`WorkloadAccessToken`）。调用链**只**为 spec
+   中带 gateway ToolRef 的 Agent 发送它，因此其他所有 Agent 的调用毫无变化。已实测:不带它
+   时客户端会打出 `NOT injected` 并以无工具状态运行。
+2. **来自 `settings.resources` 的环境变量**——`LAUNCHPAD_GATEWAY_URL` / `_PROVIDER` /
+   `_SCOPE`，由 `runtime_environment()` 仅为 gateway spec 注入，且仅在三者全部解析成功时
+   注入（半套环境变量看上去像是配好了，却会以令人困惑的方式鉴权失败）。
+3. **按构造失败降级。** 生成的客户端里每一处有风险的 import 都写在函数内部，每条失败路径
+   都记录日志并返回中性值，因此没有任何模块级语句能抛异常。import 期崩溃比缺少工具更糟:
+   部署管道的健康信号仍会把 Agent 报成 `active`，而之后每一次调用都会失败。
+
+Harness→runtime 转换出于同样这三条理由保留它的 gateway 工具——见
+[harness-conversion.md](../.trellis/spec/launchpad/harness-conversion.md);v1 那条「gateway
+MCP 未接线」的说明是被删掉了，不是被改了措辞。
+
+一个被路由的配置捆绑会让 runtime **和** Gateway 双方各以自己的角色去解析该捆绑，因此按
+Agent 的执行角色*和* `launchpad-gateway-role` 上都需要 `GetConfigurationBundleVersion`。
+runtime 侧缺它会让调用从内部 500;Gateway 侧缺它会让 MCP 调用返回
+`HTTP 400 "Config bundle fetch failed"`，而 Agent 会静默地丢掉所有 Gateway 工具。两处授权
+都已到位，这正是配置捆绑 A/B 能够改变一个 *Gateway* 工具描述的前提。
+
+仍然是 harness 独有的部分:zip runtime 上的远端（`type: "mcp"`）服务器，以及 container 方式
+上的 Gateway 工具。
+
 公开 `/v1` 接口额外加了 `X-Api-Key` 鉴权(密钥以 sha256 哈希存储);分派之后的
-一切与控制台路径完全相同。
+一切与控制台路径完全相同。每个 Agent 的响应都带一份由后端拥有的 `invoke_capability`;
+控制台调用、Chat 与 `/v1` 强制的是同一份投影。导入进来的 runtime 走带缓冲的兼容路径，
+因为 Launchpad 无法假定一个任意的外部 runtime 会发出生成代码那套 Claude SDK 事件契约。
+
+Harness、Claude Agent SDK container 以及生成的 Strands zip runtime Agent 都会流式输出
+模型原生的增量。Claude container 启用 SDK 的 partial message，而 Strands zip 模板从一个
+异步生成器入口驱动 `Agent.stream_async`;两者经 AgentCore Runtime 的 SSE 响应产出同一组
+`delta`、`tool` 与 `complete` 事件（长时间工具调用期间还有 `heartbeat` 帧）。平台增量地
+解析 Runtime 的 `StreamingBody` 并在不等 EOF 的情况下转发这些事件，因此一个 zip Agent 的
+token 与工具调用在 Chat 里的呈现与托管 Harness Agent 完全一致。同步调用消费同一个事件
+解析器并把增量拼接起来。Studio runtime、A2A runtime 以及处于活跃状态的金丝雀 Gateway
+路由保留带缓冲的兼容路径;用旧模板部署出的 zip runtime 仍然只回一个 JSON 结果，同一个
+解析器会把它渲染为单条增量。已存在的 runtime 必须重新发布才能采纳被改动过的生成模板。
 
 AgentCore 会把已存在的 runtime session 固定在最初服务它的那个版本上,因此重新发布后的
 验证必须开启新的 Chat 会话;旧会话继续跑在原来的镜像上。涉及的版本可以在 Agent 详情的
@@ -283,25 +476,74 @@ runtime 会话会自行空闲过期。只有 runtime 支撑的 agent 才能结�
 会话的操作（409 `chat.session_stop_unsupported`）。`ChatSession` 行保留并打上
 `ended_at`，历史栏据此显示「已结束」，而对话记录仍可回放。
 
-### 版本与端点(只读)
+## 既有 Gateway 治理
 
-每次 `UpdateAgentRuntime` / `UpdateHarness` 都会发布一个不可变的新版本;`DEFAULT` 端点
-自动跟随最新版本,而命名端点(目标金丝雀的 `stable`/`treatment`)固定在某一版本。台账只记得
-Launchpad 部署时铸造的那个版本(`Agent.version`),所以 `/create` 的 Agent 详情(details 模式)
-带有一个由 `GET /api/agents/{agent_id}/versions` 支撑的**版本与端点**面板。该路由把台账行解析到
-唯一一个资源族——`zip_runtime`/`studio`/`container` 以及 `spec.discovery.resource_type` 缺省或为
-`runtime` 的导入行 → `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints`;`harness` 以及
-`resource_type == "harness"` 的导入行 → `ListHarnessVersions` + `ListHarnessEndpoints`——跟随每一页
-`nextToken`,并返回与发现功能相同风格的白名单投影(版本、状态、描述、时间戳、端点的生效/目标版本、
-失败原因;绝不包含环境变量、制品位置、执行角色或鉴权配置)。没有 AWS 资源的行(部署仍在进行、
-首次部署失败、已删除的 Agent,或解析不到任一资源族的形态)返回 409 `agent.no_resource`,并附带
-面板会原样展示的人类可读原因。
+`/governance` 直接从 AgentCore 读取 MCP Gateway、目标、Policy Engine、策略与 Registry 记录。
+打开一个 Gateway 是只读的。选择**纳管**只会加上这两个持久标签:
 
-面板标出 `DEFAULT`,把台账版本与 AWS 最新版本并列——带外更新或金丝雀候选版本铸造之后出现的不一致
-会以警告呈现而不是当作错误——并标记 `stable`/`treatment` 端点名,让金丝雀残留一眼可见。它是严格只读的:
-从不改指 `DEFAULT`,也从不创建、更新或删除端点;这些操作归金丝雀所有。
+```text
+agentcore-launchpad:managed = true
+agentcore-launchpad:managed-by = agentcore-launchpad
+```
 
-## 既有 Gateway 治理：限流
+Registry 导入与 Policy 变更要求带有该标签并且 `updatedAt` 是新鲜的。取消纳管只移除这两个
+标签，绝不解除或删除 Gateway、Engine、Policy 或 Registry 资源。
+
+Registry 与 Harness 的边界刻意分开。一条 Gateway MCP 记录包含整个 Gateway 的工具目录。选中
+该记录就是把整个 Gateway 挂到一个 Harness 上;具体动作由 Cedar 策略授权。AWS_IAM 与免鉴权的
+Gateway 解析为 `awsIam` 与 `none`。Launchpad 自有的 CUSTOM_JWT Gateway 复用它配置好的 OAuth
+provider。没有纳管 provider 映射的外部 CUSTOM_JWT Gateway 只能停留在目录层面。
+
+策略决策证据来自 `AWS/Bedrock-AgentCore` 的 CloudWatch 指标（`AllowDecisions`、
+`DenyDecisions` 以及 determining/mismatch 这一族），AgentCore 默认就会发布它们——不需要按
+Gateway 逐个启用。`app/services/governance_evidence.py` 拥有这次读取，同时供给限定范围的
+决策端点与切换闸门背后真实的 `evidence_count`;该闸门只统计 LOG_ONLY 模式下的决策，与文档化
+的晋级规则一致。`available=false` 现在只保留给不可读的通道（并报告 AWS 错误码）;通道可读但
+窗口内一片安静时是 `available=true` 加 `evidence_count=0`，而零证据晋级仍然要求输入 Gateway
+名称并记录一条理由。
+
+这个指标通道的两个性质塑造了整份契约:
+
+- **只有聚合值。** 指标维度无法携带 principal、判定理由或 trace id，所以 `decisions[]` 保持
+  为空，也绝不被合成出来。逐条决策行需要 Policy span，而它确实要求在挂接的 Gateway 上启用
+  trace 投递。
+- **计数基准按操作不同。** `AuthorizeAction` 发布的是 gateway 级别的数据流（每次调用一条
+  决策）;`PartiallyAuthorizeActions` 实测只发布 `ToolName` 投影（每个调用/工具对一条决策）。
+  因此每个操作各自解析自己的维度投影，并报告它所依据的 `basis`。AWS 会为同一个事件发布若干
+  彼此重叠的投影，所以选择时匹配的是精确的维度名集合——跨投影求和会让计数翻上几倍。
+
+逐条决策行来自那个 span 通道，由 `app/services/governance_spans.py` 解析。行的来源是
+`AgentCore.Gateway.InvokeTool` 这个 SERVER span，它同时携带 `tool.name` **和**
+`aws.agentcore.policy.authorization_decision`;子 span `AgentCore.Policy.*` 补上
+determining/mismatched 策略 id 以及 `aws.agentcore.policy.log_only_matched_policies`——一个
+未公开的属性，它能从 ENFORCE 模式的 span 里揭示一条 LOG_ONLY *候选*策略本会匹配到什么，而
+这是指标通道无法表达的。`session.id` 需要按 `traceId` 联接的第二趟查询。有三个性质是承重的:
+
+- **`principal` 在结构上就取不到。** trace 中没有任何 span 携带 principal，因为 Harness 是用
+  OAuth M2M 客户端凭证向 Gateway 认证的——请求没有人类主体。该字段渲染为「已解释的缺失」，
+  绝不推断。本地演示台账保留它自己的 principal，两者不会被混为一谈。
+- **`PartiallyAuthorizeActions` 的拒绝是列举期的工具可见性判定**，不是被拦下的调用:在
+  ENFORCE 下该工具会被从 `tools/list` 中过滤掉，模型根本看不到它。行上带一个 `evaluation`
+  类别（`invocation` / `tool_listing`），因此两者不会被当成同一种事件呈现。在 ENFORCE 下，
+  列举期拒绝是唯一可能出现的 DENY。
+- **span 绝不重新定义 `evidence_count`。** span 是采样的，而指标是精确计数，所以闸门用的
+  数字始终来自指标;span 通道故障时降级为仅用指标（`spans_unavailable_reason`），而不是让
+  请求失败。
+
+决策响应还会独立报告实时投递配置，即 `span_channel_status`（`ready`、`missing` 或
+`unknown`）加 `span_channel_reason`。一次成功但零行的 Logs Insights 查询并不能证明 Gateway
+tracing 已经配置好:`ready` 要求存在预期的 TRACES 源、XRAY 目的地以及把两者连起来的
+delivery。这次探测是只读的;GET 路由绝不修复 AWS 资源。
+
+span 通道是需要主动开启的那一半，而且是**按 Gateway** 的:只有在挂接的 Gateway 上启用了
+trace 投递之后，AgentCore 才会发出 Policy 决策 span。那是一条 CloudWatch vended-log
+delivery（源 `logType=TRACES` → `XRAY` 目的地 → delivery），不是一个 Gateway 设置，所以启用
+它从不调用 `UpdateGateway`。`make bootstrap` 会启用共享的 Transaction Search 前置条件，但
+刻意不创建这条 Policy 专用的 delivery。`policy_bootstrap.ensure_gateway_traces()` 仍然是
+供显式运维工具调用的幂等原语;正常 bootstrap 从不调用它。控制台的投递状态探测是只读的，在
+操作者主动开启详细 Policy span 之前，通道缺失都是预期状态。
+
+### Gateway 限流
 
 网关详情的「限流」面板通过 `/api/governance/gateways/{id}/rate-limits` 下的四条同步路由
 （`GET` 列表、`POST` 创建、`PUT /{rate_limit_id}` 更新、`DELETE /{rate_limit_id}` 删除）管理
@@ -605,6 +847,85 @@ Logs Insights 查询(`filter ispresent(scope.name) and attributes.session.id =
 几分钟才会到达 CloudWatch)。适合试跑自定义 evaluator 或排查某个会话;需要留档、
 可复现的分数请用下文的批量运行。
 
+## Workspaces —— 多账号/多区域环境
+
+控制台管理的每一个环境都是一个 **workspace**:一对 `(account_id, region)`（带 UNIQUE 约束），
+在台账行（`workspaces` 表）上携带它自己的一整套 AgentCore 资源映射。中枢最初的那个环境作为
+保留的 `default` workspace 存续，它的行在每次启动时镜像 `config/launchpad.yaml`;其他所有
+workspace 都以台账行为权威，并由一个控制台驱动、可恢复的 **bootstrap 作业**
+（`POST /api/workspaces/{id}/bootstrap`，十个幂等阶段:validate-access → iam → storage →
+codebuild → cognito → gateway → memory → registry → observability → finalize）来开通。
+`validate-access` 会拒绝一个已经承载了别人的 Launchpad 部署的区域，而 IAM 角色只有在带
+`launchpad:workspace` 标签时才会被接管。位于**另一个账号**的 workspace 会带上 `role_arn` +
+`external_id`:中枢扮演该角色（自动续期的一小时会话，按 `(account, region, role)` 缓存），
+并且为该 workspace 发出的每一次调用——bootstrap、CodeBuild 构建、invoke、CloudWatch 读取
+——都用它签名。spoke 角色以纯 CloudFormation 形式提供
+（`infra/spoke/launchpad-workspace-role.yaml`）;开通流程与信任边界上的取舍见
+[cross-account-workspaces.md](cross-account-workspaces.md)。`POST /api/workspaces/preflight`
+（注册表单上的「测试访问」按钮）会在任何东西被记录之前，用一次 AssumeRole +
+`GetCallerIdentity` 探测这一对参数——被拒绝时返回 `ok: false`，并附上与 bootstrap 阶段会打印
+的同一条诊断信息，因此一个填错的 ExternalId 会在一秒内被发现，而不是等一次失败的开通运行。
+
+**请求边界。** 控制台请求用 `X-Workspace` 头指明自己的 workspace（前端一个 `window.fetch`
+包装器会全局盖上它;管理员回落到 `default`，成员回落到自己唯一的授权）。解析发生在应用级的
+route-policy 依赖内部——授权检查（成员需要一条 `user_workspaces` 行;管理员绕过）、对变更类
+方法的就绪度门禁，以及给处理函数用的 `request.state.workspace`。路由默认按 workspace 限定
+范围;只有中枢全局的前缀（`/api/auth`、`/api/users`、`/api/workspaces`）豁免，并且有漂移
+测试双向强制这个分类。所有按环境划分的台账表都带一个 `workspace_id` 列;查询按它过滤，因此
+一个外部的资源 id 会返回 404。公开 `/v1` 接口完全忽略该头:一个 API 密钥只授权它自己所属的
+那个 workspace。
+
+**后台工作**（部署阶段、评估运行、实验、金丝雀、策略对齐）从它所属的那条持久化的行重新
+构造 `WorkspaceContext`，绝不从环境中的设置里取;并且只要有任何一条按范围划分的行缺少
+`workspace_id`，启动就会拒绝启动。用户与控制台认证保持中枢全局。授权可以从两侧编辑:在
+Users 页面按账号编辑（审批时会分配授权，`PATCH /api/users/{id}` 会替换该账号的整份列表），
+或在 Workspaces 详情视图按 workspace 编辑——它的成员表在服务端分页、搜索与过滤
+（`GET /api/workspaces/{id}/grants`），并能在一次调用里对所选集合授予或撤销（同一路径上的
+`PUT`）。两者都只写 `user_workspaces`;管理员从不作为其中的行存在，因为他们靠角色就能触达
+每一个 workspace。
+
+**移除。** `DELETE /api/workspaces/{id}` 是一次解除关联——行与它的授权一起消失，AWS 不受
+影响——并且只要还有任何按范围划分的行指向该 workspace，它就会被拒绝。这道门禁同时也会困住
+一次*失败的*注册:它的 bootstrap 留下的那一行 job 会挡住解除关联，并占住那个
+`(account, region)` 槽位，于是该环境无法被重新注册。`POST /api/workspaces/{id}/purge`
+（管理员;`?dry_run=true` 预览各表行数）在一个事务里删除按范围划分的行、授权与那条行本身，
+并且只对从未真正可用过的 workspace 允许执行:状态为 `registered` 或 `failed`、没有 Agent、
+且不是 `default`。一次失败的运行已经开通出来的东西会留在目标账号里——响应中的
+`resource_keys` 会说明那是哪些资源种类。
+
+## Skill Lab —— 技能评估与训练（SkillOpt 集成）
+
+Skill Lab 闭合了一个其他控制台界面都不提供的环路:一条 Registry 技能记录在真实的 AgentCore
+Runtime microVM 上，针对一个携带评分量表的任务集接受评估，由内置的
+[SkillOpt](https://github.com/xiehust/SkillEvalOpt_Studio) 训练环路（rollout → reflect →
+aggregate → select → update → gate）优化，改进后的 SKILL.md 再作为一个次版本号递增的版本
+发布回同一条记录——随后即可挂载给 Agent。
+
+**内置引擎，只走子进程。** `vendor/skillopt/` 是 SkillOpt 研究框架的一个裁剪子集（上游 pin
+与每一处本地补丁都记录在 `vendor/skillopt/LAUNCHPAD_DEVIATIONS.md` 中;值得一提的补丁:一个
+基于 Converse API 的 `bedrock_chat` 评审/优化器后端，让 LLM 评审零密钥地跑在实例角色上;以及
+一个 pin 了 claude CLI 的 worker Dockerfile）。后端进程**从不 import** 这棵内置的树——
+`evaluate_skill.py` / `train.py` 以子进程形式跑在一个专用 venv（`data/skill-lab-venv/`，由
+bootstrap 开通）里，环境变量走白名单。一条守卫测试强制这条边界;任务集校验会 shell 出去调用
+CLI 用的同一个 `load_tasks`，因此 API 的接受标准永远不会与 CLI 的接受标准漂移。
+
+**执行拓扑。** 编排子进程留在后端主机上（评审与优化器调用直接打到 Bedrock）;每个任务的
+Agent rollout 各自跑在 `launchpad_skill_lab_worker` runtime 上自己的 AgentCore Runtime
+microVM 会话中（托管会话存储，5 分钟空闲 / 8 小时生命周期，镜像按内容寻址进共享的
+`launchpad-agents` ECR 仓库，由共享的 CodeBuild 项目构建）。在此能力出现之前 bootstrap 过的
+workspace 只会把 Skill Lab 显示为未开通——worker 的 resource key 刻意是可选的。
+
+**控制台界面**（`/skill-lab`，`?view=tasksets|eval|train`）:任务集（train/val/test 划分，
+行级校验直接用内置校验器自己的定位信息）、评估作业（任意状态的 Registry 技能或临时上传的
+zip，日志实时跟随，逐任务的硬/软评审结果，产物浏览器）、训练作业（实时分数曲线与带
+ACCEPT/REJECT 闸门判定的步骤时间轴，SEED→BEST 差异对比，为被中断的运行提供从 checkpoint
+恢复），以及发布（经记录更新路径做次版本号递增;记录会落回 DRAFT——界面上给出可选的
+重新批准）。Registry 抽屉通过「在 Skill Lab 中评估」链接到这里。
+
+台账:`skill_lab_tasksets` + `skill_lab_jobs`（按 workspace 限定范围）;产物存放在
+`data/skill-lab/` 之下（任务文件、作业日志、CLI 的 out/ 目录树——内容的事实来源是这些文件，
+不是台账）。
+
 ## SQLite 台账与 job/event 模型
 
 廉价且本地的状态存放在 `data/launchpad.db` 的 SQLite 台账中
@@ -626,8 +947,12 @@ Logs Insights 查询(`filter ispresent(scope.name) and attributes.session.id =
 **Job/event 模型。** 创建 Agent 返回 `202` 并带一个 `job_id`。部署 job 在后台线程
 运行,每次阶段切换向 `Job.log` 追加一条 JSONL 事件;`GET /api/jobs/{id}` 返回这些
 事件,`GET /api/agents/{id}` 返回 `Deployment.stages` 数组。随 job 完成,Agent 从
-`deploying → active`(或 `failed`)。权威的资源状态(runtime 状态、注册记录状态、
-评估/trace 数据)始终存放在 AWS;台账只保存标识符与派生的进度。
+`deploying → active`(或 `failed`)。在任何阶段之外抛出的失败（job 的 workspace 行已不
+存在、方式未注册、台账行缺失）会以同样的方式落到 Agent 上:`Job`、`Deployment` 与
+`Agent` 三者都被标记为 `failed` 并带上错误，一条 `error` 事件被追加到 `Job.log`，而管道
+的 `launchpad.deploy` logger 会把每一次阶段失败或 job 失败都报告到进程日志。权威的资源
+状态(runtime 状态、注册记录状态、评估/trace 数据)始终存放在 AWS;台账只保存标识符与
+派生的进度。
 
 ## 控制台布局断点
 
