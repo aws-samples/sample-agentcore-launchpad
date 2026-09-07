@@ -117,18 +117,34 @@ Registry 页面从两个侧面展示同一个注册中心。**发布者列表**�
 
 错误码：`registry.bad_type`（422，未知的 `type`）、`registry.unavailable`（503，该 workspace 没有注册中心）。AWS `ClientError` 映射为标准 4xx 信封（`aws.access_denied`、`aws.throttled` 等），绝不返回裸 500。路由策略为 MEMBER，与其他 Registry 读接口一致。
 
-## 控制台治理 API：Gateway 限流 / Console Governance API: Gateway rate limits
+## 控制台治理 API / Console Governance API
 
-`/api/governance/gateways/{id}/rate-limits` 管理 AgentCore **Gateway 限流**（2026 年 8 月 GA）。这些路由是**同步**的，
-没有可轮询的 operation；AWS 是唯一事实来源，每次变更都记入本地审计日志。
+以下 `/api` 路由支撑需要鉴权的控制台，不属于公开的 `/v1` Agent 调用契约。
 
 | 方法 | 路径 | 结果 |
 |---|---|---|
+| `GET` | `/api/governance/gateways` | 实时的 MCP Gateway 清单 |
+| `GET` | `/api/governance/gateways/{id}` | 目标（每个带 `kind: {protocol, variant}`）、actions 与 `actions_uncovered_targets`、Registry、Engine、IAM 以及可挂接性详情 |
+| `POST/DELETE` | `/api/governance/gateways/{id}/manage` | 仅添加/移除 Launchpad 纳管标签 |
+| `GET` | `/api/governance/gateways/{id}/registry-preview` | Gateway 级记录差异与遗留记录匹配 |
+| `POST` | `/api/governance/gateways/{id}/registry-import` | 创建/复用/更新并提交；绝不批准 |
+| `POST` | `/api/governance/gateways/{id}/retire-legacy-records` | Gateway 记录获批后的显式退役 |
+| `POST` | `/api/governance/gateways/{id}/engine` | 以所选模式（默认 `ENFORCE`）创建/采用并挂接一个 Engine |
+| `GET/POST` | `/api/governance/gateways/{id}/policies` | 列出或创建 `LOG_ONLY` 策略 |
+| `PUT` | `/api/governance/gateways/{id}/policies/{policy_id}` | 更新 LOG_ONLY 策略，或创建 ACTIVE 策略候选 |
+| `POST` | `/api/governance/gateways/{id}/policies/{policy_id}/promote` | 以证据为门禁的激活/切换 |
+| `POST` | `/api/governance/gateways/{id}/policies/{policy_id}/rollback` | 有审计记录的快照/候选回滚 |
+| `POST` | `/api/governance/gateways/{id}/mode` | Gateway `LOG_ONLY`/`ENFORCE` 模式切换 |
+| `POST` | `/api/governance/gateways/{id}/generations` | 启动自然语言 → Cedar 生成，仅供审阅 |
+| `GET` | `/api/governance/gateways/{id}/generations/{generation_id}` | 轮询生成状态并读取草稿资产 |
+| `GET` | `/api/governance/gateways/{id}/decisions` | AWS 决策投影，或显式的不可用状态 |
 | `GET` | `/api/governance/gateways/{id}/rate-limits` | `{rate_limits: [...]}`：该 Gateway 的全部限流规则（跟完所有 `nextToken` 分页）；对任意 Gateway 可读 |
 | `POST` | `/api/governance/gateways/{id}/rate-limits` | 创建 → `201` 返回创建的记录；仅限已纳管 Gateway |
 | `PUT` | `/api/governance/gateways/{id}/rate-limits/{rate_limit_id}` | 整体替换 `entries`（可带 `description`）；`dimensionKeys` 不可变，携带则 `422` |
 | `DELETE` | `/api/governance/gateways/{id}/rate-limits/{rate_limit_id}` | 删除 → `{deleted: true, id, status}` |
 | `POST` | `/api/governance/gateways/{id}/targets/{target_id}/synchronize` | 对单个动态 MCP 服务器目标执行 `SynchronizeGatewayTargets` → `202` 返回目标投影（`status` = `SYNCHRONIZING`，`kind` 与详情一致）；仅限已纳管 Gateway（`409 governance.gateway_not_managed`）；目标不可同步 → `409 governance.target_not_synchronizable`，`detail.reason` ∈ `not_mcp_server`、`static_tool_schema`、`pending_auth`、`synchronizing`、`not_ready`；审计操作名 `target.synchronize` |
+| `GET` | `/api/governance/gateways/{id}/audit` | 不可变的本地变更日志 |
+| `GET` | `/api/governance/operations/{operation_id}` | 异步 operation 状态 |
 
 `GET /api/governance/gateways/{id}` 详情与同步响应中的每个目标都是同一投影
 `{id, name, status, status_reasons, description, kind, listing_mode, last_synchronized_at,
@@ -139,6 +155,13 @@ synchronizable, not_synchronizable_reason}`。`kind` 为 `{"protocol": "mcp" | "
 `actions_uncovered_targets: [name, …]`，即没有工具 schema、因此绝不会出现在 `actions` 中的 `http` /
 `inference` 目标。
 
+策略与 Gateway 变更返回 `202`：
+
+```json
+{"operation": {"id": "...", "status": "pending", "operation": "policy_create"}}
+```
+
+限流路由（AgentCore **Gateway 限流**，2026 年 8 月 GA）是**同步**的——没有可轮询的 operation。
 一条限流规则为 `{id, gateway_id, description, dimension_keys, entries, status, created_at, updated_at}`，
 `status` ∈ `CREATING | ACTIVE | UPDATING | DELETING`。创建请求体：
 
@@ -167,12 +190,51 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 `ConflictException` → `409 aws.conflict`。每次变更都以 `rate_limit.create` / `rate_limit.update` / `rate_limit.delete`
 记入审计路由（`before` = 变更前记录或 `{}`，`requested` = 载荷，`after` = AWS 响应，状态 `succeeded`/`failed`）。
 
-## 控制台 Memory 资源 API / Console Memory Resources API
+生成启动返回 `{"operation": …, "generation_id": …, "status": …}`；生成出的资产只是供编辑器使用的草稿，
+绝不会激活任何策略。
 
-`/api/memory/*` 支撑只读的 Memory 控制台(控制台 05):没有任何接口会写事件、删记录或触发抽取。
-唯一会写的一组接口是下面的 `/api/memory/resources*`——管理记忆*资源*本身,位于独立的路由模块
-(`routers/memory_resources.py`)。详见
+轮询 operation 路由，直到状态为 `succeeded`、`failed`、`partial` 或 `interrupted`。`interrupted` 表示重启后
+无法证明 AWS 侧的效果，该 operation 必须被显式重试——后端绝不自动重放。变更请求携带适用于该 operation 的
+实时时间戳与确认信息：
+
+```json
+{
+  "expected_gateway_updated_at": "2026-07-16T09:00:00+00:00",
+  "expected_policy_updated_at": "2026-07-16T09:01:00+00:00",
+  "acknowledged_gateway_ids": ["gw-a", "gw-b"],
+  "confirmation_name": "finance-gateway",
+  "override_reason": null
+}
+```
+
+常见冲突码有 `governance.gateway_not_managed`、`governance.concurrent_change`、
+`governance.shared_engine_changed`、`governance.iam_preflight_failed`、`governance.evidence_required`、
+`governance.policy_engine_deleted` 与 `governance.registry_record_not_approved`。
+
+当 Gateway 仍引用一个已被带外删除的 Policy Engine 时，读操作不会失败，而是以 `policy_engine.missing = true`
+与 `status = "DELETED"` 报告该引用；策略变更返回 `409 governance.policy_engine_deleted`；`POST .../engine`
+把该引用视为未挂接：创建一个新的 Engine，以所选模式挂接，并把被替换的 ARN 记录在 operation 上。
+
+## 控制台 Memory API / Console Memory API
+
+`/api/memory/*` 支撑只读的 Memory 控制台（控制台 05），底层是共享的 `launchpad_memory` 单例。
+控制台的每条路由都是读操作：没有任何接口会写事件、删记录或触发抽取。
+唯一会写的一组接口是下面的 `/api/memory/resources*`——管理记忆*资源*本身，位于独立的路由模块
+（`routers/memory_resources.py`）。详见
 [architecture.zh-CN.md](architecture.zh-CN.md)「Memory 控制台」一节。
+
+| 方法 | 路径 | 结果 |
+|---|---|---|
+| `GET` | `/api/memory/overview` | 资源配置、长期策略、有界的 actor 计数、同级记忆 |
+| `GET` | `/api/memory/actors` | actor 列表，复合 id `<agent_id>__<human>` 已解码并解析出 Agent 名称 |
+| `GET` | `/api/memory/sessions?actor_id=` | 单个 actor 的会话；由控制台写入的会话会关联到 ChatSession 台账 |
+| `GET` | `/api/memory/events?actor_id=&session_id=` | 短期事件；对话类载荷带角色与全文，blob 只带字节数 |
+| `GET` | `/api/memory/namespaces?actor_id=` | 已替换 `{actorId}` 的策略命名空间模板；尾部的 `{sessionId}` 段折叠为 actor 级前缀（`prefix: true`），其他位置的占位符则产生 `resolvable: false` |
+| `GET` | `/api/memory/records?actor_id=&strategy_id=` 或 `?namespace=` | 解析所得命名空间下的长期记录 |
+| `POST` | `/api/memory/records/search` | 语义检索（`{query, actor_id, strategy_id?, namespace?, top_k}`），带相关性分数 |
+| `GET` | `/api/memory/extraction-jobs` | 失败（可重试）的抽取作业，可按 `actor_id`/`session_id`/`strategy_id`/`status` 过滤——**控制台未展示**；AWS 的 `status` 枚举只有 `FAILED`，因此健康的资源返回空列表 |
+
+记忆资源管理（`?view=resources`）：
 
 | 方法 | 路径 | 结果 |
 |---|---|---|
@@ -181,6 +243,14 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 | `GET` | `/api/memory/resources/{memory_id}` | 详情投影:描述、状态、事件过期、执行角色、策略、命名空间键 |
 | `PUT` | `/api/memory/resources/{memory_id}` | 仅限 `{description?, event_expiry_days?}` 的 `UpdateMemory`——至少提供一项(否则 422),`description` 1–4096 字符(只能替换、不能清空),`event_expiry_days` 7–365(越界 422)。只发送 `memoryId` 加给出的字段,绝不发送 `namespaceKeys`(API 会整体替换该集合);响应是用 `GetMemory` 读回的详情投影。不会因被 Agent 引用或是平台默认而被阻止;未知 id → `404 aws.not_found` |
 | `DELETE` | `/api/memory/resources/{memory_id}` | `DeleteMemory`;工作区默认记忆返回 `409 memory.platform_protected`,仍被在线 Agent 的 spec 绑定时返回 `409 memory.in_use`(附 Agent 列表) |
+
+每条列表路由都接受并返回 `next_token`（AWS 按 100 条分页），并接受 `max_results`（上限 100）——
+不会有任何静默截断。`/records` 与 `/records/search` 的命名空间解析顺序：显式的 `namespace` 优先，
+否则由 `actor_id`（+ 可选的 `strategy_id`）推导。
+
+错误码：`memory.not_configured`（409，尚未运行 bootstrap——`/overview` 例外，它改为返回
+`{"configured": false, …}`，以便页面渲染初始化状态）、`memory.namespace_required`（400，无法推导出
+命名空间）、`memory.unavailable`（502，底层 AWS 调用失败）。
 
 ## 控制台 Chat API / Console Chat API
 
@@ -311,3 +381,29 @@ ledger 只存标识。列表返回 workspace 账号内全部配置并按 `owner`
 `aws.validation`(400——AWS 对不支持的 span 返回的 `ValidationException`)、
 `observability.query_failed`(502——Logs Insights 失败/超时)。结果**绝不写入台账**;
 可随时重跑(每次运行按 evaluator 各计一次 judge 推理)。
+
+## 控制台账户 API / Console Accounts API
+
+`/api/auth/*` 守住控制台入口，`/api/users/*` 管理其背后的账户。两组接口都不触碰 AWS。详见
+[architecture.zh-CN.md](architecture.zh-CN.md)「控制台认证与账户」一节。
+
+| 方法 | 路径 | 鉴权 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/auth/status` | 开放 | `{auth_required, authenticated, registration_enabled, registration_requires_approval, username, role, email, account_expires_at, permissions}`——身份字段在认证前为 null（`permissions` 为 `[]`） |
+| `POST` | `/api/auth/login` | 开放 | 设置 `launchpad_session` cookie（12 小时，且不超过账户有效期）并回显身份 |
+| `POST` | `/api/auth/register` | 开放 | `201`——创建一个 `member` 账户；默认 `status=pending` 且 `expires_at=null`，直到管理员批准，之后有效期为 `auth_registration_valid_days`（默认 7 天） |
+| `POST` | `/api/auth/logout` | 会话 | 清除 cookie |
+| `GET` | `/api/users?q=&status=all\|pending\|active\|expired\|disabled&limit=&offset=` | 管理员 | 分页账户列表，带派生的 `state` / `days_remaining` |
+| `GET` | `/api/users/stats` | 管理员 | 汇总数据，包括 `pending` 审批队列、`expiring_soon`（≤3 天）、7 天内的注册/登录计数、14 天注册序列、邮箱域名排行 |
+| `PATCH` | `/api/users/{id}` | 管理员 | 以下任意字段：`status`（`pending`\|`active`\|`disabled`；对待审批账户设为 `active` 即批准并启动其有效期）、`role`、`extend_days`、`expires_at`（`null` = 永不过期）、`password`（`null` = 生成并一次性返回）、`permissions`（`{permission_key: bool}`，`null` = 全部授予）、`workspaces`（整体替换该账户的 workspace 授权，`null` 清空） |
+| `DELETE` | `/api/users/{id}` | 管理员 | 删除该账户 |
+
+注册错误码：`auth.registration_disabled`（400，认证门未开启或注册已关闭）、
+`auth.invalid_username` / `auth.invalid_email` / `auth.email_domain_blocked` / `auth.weak_password`（400）、
+`auth.username_taken` / `auth.email_taken`（409）。
+
+登录错误码：`auth.invalid_credentials`（401），以及在提交的凭据本身正确之后的
+`auth.account_pending` / `auth.account_disabled` / `auth.account_expired`（401）。
+
+会话与角色错误：`auth.required`（401——cookie 缺失、被篡改或已过期，也包括账户此后被禁用、过期或删除）、
+`auth.forbidden`（403——member 会话访问 `/api/users*`）、`users.not_found`（404）。

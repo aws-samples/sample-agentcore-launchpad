@@ -477,13 +477,13 @@ it. Neither surface touches AWS. See
 
 | Method | Path | Auth | Result |
 |---|---|---|---|
-| `GET` | `/api/auth/status` | open | `{auth_required, authenticated, registration_enabled, registration_requires_approval, username, role, email, account_expires_at}` — identity fields are null until authenticated |
+| `GET` | `/api/auth/status` | open | `{auth_required, authenticated, registration_enabled, registration_requires_approval, username, role, email, account_expires_at, permissions}` — identity fields are null (`permissions`: `[]`) until authenticated |
 | `POST` | `/api/auth/login` | open | Sets the `launchpad_session` cookie (12h, clamped to the account validity) and echoes the identity |
 | `POST` | `/api/auth/register` | open | `201` — creates a `member` account; by default `status=pending` with `expires_at=null` until an admin approves it, then valid for `auth_registration_valid_days` (default 7) |
 | `POST` | `/api/auth/logout` | session | Clears the cookie |
 | `GET` | `/api/users?q=&status=all\|pending\|active\|expired\|disabled&limit=&offset=` | admin | Paged account list with derived `state` / `days_remaining` |
 | `GET` | `/api/users/stats` | admin | Totals including the `pending` approval queue, `expiring_soon` (≤3 days), 7-day registration/sign-in counts, a 14-day registration series, top email domains |
-| `PATCH` | `/api/users/{id}` | admin | Any of `status` (`pending`\|`active`\|`disabled`; `active` on a pending account approves it and starts its window), `role`, `extend_days`, `expires_at` (`null` = never expires), `password` (`null` = generate and return once) |
+| `PATCH` | `/api/users/{id}` | admin | Any of `status` (`pending`\|`active`\|`disabled`; `active` on a pending account approves it and starts its window), `role`, `extend_days`, `expires_at` (`null` = never expires), `password` (`null` = generate and return once), `permissions` (`{permission_key: bool}`, `null` = all granted), `workspaces` (full replacement of the account's workspace grants, `null` clears them) |
 | `DELETE` | `/api/users/{id}` | admin | Removes the account |
 
 Registration error codes: `auth.registration_disabled` (400, gate off or
