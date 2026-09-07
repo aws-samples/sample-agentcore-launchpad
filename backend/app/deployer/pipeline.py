@@ -11,6 +11,7 @@ non-succeeded stage.
 """
 
 import json
+import logging
 import threading
 import traceback
 from collections.abc import Callable
@@ -26,6 +27,10 @@ from app.services import workspace_bootstrap
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
 STAGE_ORDER = ["generate", "package", "provision", "deploy", "register"]
+
+# Child of the "launchpad" logger app.main uses, so deploy failures reach the
+# process log (journalctl on prod) and not only the per-job JSONL ledger.
+logger = logging.getLogger("launchpad.deploy")
 
 
 @dataclass
@@ -198,6 +203,10 @@ def execute_deploy_job(job_id: str) -> None:
                     )
             except Exception as exc:
                 detail = f"{type(exc).__name__}: {exc}"
+                logger.warning(
+                    "deploy job %s: agent %s failed at stage %s: %s",
+                    job_id, agent_id, stage_name, detail,
+                )
                 _set_stage(db, deployment_id, stage_name, "failed", detail)
                 _append_log(db, job_id, stage_name, detail, level="error")
                 _append_log(db, job_id, stage_name, traceback.format_exc(limit=3), level="debug")
@@ -209,14 +218,46 @@ def execute_deploy_job(job_id: str) -> None:
 
         _finish(db, job_id, deployment_id, agent_id, error=None)
     except Exception as exc:  # job-level failure — never crash the worker
+        # The session may sit in a failed transaction; clear it before touching rows.
         db.rollback()
-        job = db.get(Job, job_id)
-        if job is not None:
-            job.status = "failed"
-            job.error = f"{type(exc).__name__}: {exc}"
-            db.commit()
+        _fail_job(db, job_id, exc)
     finally:
         db.close()
+
+
+def _fail_job(db: Session, job_id: str, exc: BaseException) -> None:
+    """Land a failure raised *outside* any stage on the same rows a stage failure does.
+
+    Workspace gone (`LookupError`), unregistered method (`ValueError`) or missing
+    ledger rows all reach here. The agent must still end up `failed` — otherwise
+    the Create page polls forever, redeploy is refused with 409 and Overview keeps
+    counting it as deploying. Rows are resolved from the job payload and each one
+    is optional, so a half-deleted ledger still gets the job marked failed.
+    """
+    detail = f"{type(exc).__name__}: {exc}"
+    job = db.get(Job, job_id)
+    payload = (job.payload or {}) if job is not None else {}
+    agent_id = payload.get("agent_id")
+    deployment_id = payload.get("deployment_id")
+    logger.exception(
+        "deploy job %s: agent %s failed outside a stage: %s", job_id, agent_id, detail
+    )
+    if job is None:
+        return
+    now = datetime.now(UTC)
+    job.status = "failed"
+    job.error = detail
+    deployment = db.get(Deployment, deployment_id) if deployment_id else None
+    if deployment is not None:
+        deployment.status = "failed"
+        deployment.ended_at = now
+    agent = db.get(Agent, agent_id) if agent_id else None
+    if agent is not None:
+        agent.status = "failed"
+        agent.error = detail
+    db.commit()
+    _append_log(db, job_id, "job", detail, level="error")
+    _append_log(db, job_id, "job", traceback.format_exc(limit=3), level="debug")
 
 
 def _finish(
