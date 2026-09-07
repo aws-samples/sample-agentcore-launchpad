@@ -326,3 +326,43 @@ def test_invoke_harness_text_surfaces_runtime_error():
     stub = StubData([{"runtimeClientError": {"message": "boom"}}])
     with pytest.raises(RuntimeError, match="runtime client error"):
         hc.invoke_harness_text(stub, "arn:h-123", "hi")
+
+
+def test_delete_agent_resources_logs_swallowed_target_failure(monkeypatch, caplog):
+    """A failing KB-gateway target delete must not block harness deletion, but it
+    must leave a WARNING naming the gateway so a leaked target is findable."""
+    import logging
+
+    from app.deployer import harness as harness_deploy
+    from app.models.ledger import Agent
+
+    caplog.set_level(logging.WARNING, logger="launchpad.deploy")
+    deleted = []
+
+    class Exceptions:
+        class ResourceNotFoundException(Exception):
+            pass
+
+    class Control:
+        exceptions = Exceptions
+
+    def target_boom(_client, _gateway_id, _name):
+        raise RuntimeError("ThrottlingException: slow down")
+
+    monkeypatch.setattr(harness_deploy, "control_client", lambda _ws=None: Control())
+    monkeypatch.setattr(harness_deploy.kbgw, "delete_agentic_target", target_boom)
+    monkeypatch.setattr(
+        harness_deploy.hc, "delete_harness", lambda _c, hid: deleted.append(hid)
+    )
+
+    agent = Agent(id="agent-1", name="hr-assistant-v3", method="harness", status="active",
+                  resource_id="h-123", spec={"name": "hr-assistant-v3"})
+    harness_deploy.delete_agent_resources(
+        agent, ws_ctx(resources={"kb_gateway_id": "gw-kb-42"})
+    )
+
+    assert deleted == ["h-123"]  # deletion proceeded past the swallowed failure
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    msg = warnings[0].getMessage()
+    assert "gw-kb-42" in msg and "hr-assistant-v3" in msg and "ThrottlingException" in msg

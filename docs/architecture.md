@@ -1253,7 +1253,12 @@ not open a second ledger session for the same request.
 deploy job runs on a background thread, appending one JSONL event per stage
 transition to `Job.log`; `GET /api/jobs/{id}` returns those events and
 `GET /api/agents/{id}` returns the `Deployment.stages` array. The agent moves
-`deploying → active` (or `failed`) as the job finishes. Authoritative resource
+`deploying → active` (or `failed`) as the job finishes. A failure raised outside
+any stage (the job's workspace row is gone, the method is not registered, ledger
+rows are missing) lands on the agent the same way: `Job`, `Deployment` and
+`Agent` are all marked `failed` with the error, an `error` event is appended to
+`Job.log`, and the pipeline's `launchpad.deploy` logger reports every stage or
+job failure to the process log. Authoritative resource
 state (runtime status, registry record status, eval/trace data) always lives in
 AWS; the ledger holds identifiers and derived progress only.
 

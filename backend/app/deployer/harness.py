@@ -8,6 +8,7 @@ Stage mapping:
     register  → create/refresh the A2A registry record (auto-submit)
 """
 
+import logging
 import re
 from typing import Any
 
@@ -21,6 +22,8 @@ from app.services.agentcore import harness as hc
 from app.services.agentcore.client import control_client
 from app.services.memory import memory_arn_for
 from app.services.workspace import WorkspaceContext
+
+logger = logging.getLogger("launchpad.deploy")
 
 BUILTIN_TOOL_TYPES = {
     "code-interpreter": "agentcore_code_interpreter",
@@ -379,8 +382,12 @@ def delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> None:
         spec_name = (agent.spec or {}).get("name") or agent.name
         try:
             kbgw.delete_agentic_target(client, resources["kb_gateway_id"], spec_name)
-        except Exception:  # noqa: BLE001 — target cleanup must not block deletion
-            pass
+        except Exception as exc:  # noqa: BLE001 — target cleanup must not block deletion
+            # Deletion still proceeds; log so a leaked launchpad-kb-gw target is findable.
+            logger.warning(
+                "agent %s: could not delete KB gateway target for '%s' on gateway %s: %s",
+                agent.id, spec_name, resources["kb_gateway_id"], f"{type(exc).__name__}: {exc}",
+            )
     if not agent.resource_id:
         return
     try:
