@@ -13,20 +13,26 @@ up-to-date map of how each console feature backs onto an AgentCore service and r
 All Python is managed by **uv** — run backend/infra commands from their own directory
 with `uv run`, never bare `python`/`pip`.
 
+**Before starting/stopping/updating the running stack**, read the agent runbooks:
+[docs/agent-runbook-dev.md](docs/agent-runbook-dev.md) (local dev) /
+[docs/agent-runbook-prod.md](docs/agent-runbook-prod.md) (prod, systemd) — they carry
+the precondition probes and restart side-effect traps the table below does not.
+
 | Task | Command |
 |---|---|
 | Full verify gate (**run before reporting done**) | `make verify` |
-| Run local stack (backend :8000, frontend :5173, studio :8100/:5273) | `make dev` |
+| Run local stack (backend :8000, frontend :5173) | `make dev` |
 | One-time infra + AgentCore bootstrap (idempotent) | `make bootstrap` |
 | Backend only / frontend only | `make backend` / `make frontend` |
 | Backend lint + tests | `cd backend && uv run ruff check . && uv run pytest -q` |
 | Single backend test | `cd backend && uv run pytest tests/test_agents_api.py::test_name -q` |
 | Frontend lint / typecheck / build | `cd frontend && npm run lint && npx tsc --noEmit && npm run build` |
 | i18n key parity (en ↔ zh-CN) | `python3 scripts/i18n_check.py` |
+| zh-CN full-width punctuation (`--fix` to convert) | `python3 scripts/i18n_zh_punct.py --check` |
 
 `scripts/verify.sh` (= `make verify`) is the canonical gate: backend ruff+pytest, infra
-ruff+pytest, frontend eslint+tsc+vite-build, and i18n parity. It must pass before any
-change is considered complete.
+ruff+pytest, frontend eslint+tsc+vite-build, i18n parity, and zh-CN full-width
+punctuation. It must pass before any change is considered complete.
 
 **`backend/tests/` vs `backend/scripts/e2e_*.py`:** `tests/` are hermetic unit tests
 (SQLite is redirected to a temp DB in `conftest.py`; AWS is stubbed) and run in
@@ -74,8 +80,11 @@ under `.trellis/spec/launchpad/`.
   state (runtime status, registry record status, traces, eval results) is always read
   back from AWS.
 
-- **All boto3 clients are built in exactly one place.** `app/services/agentcore/client.py`
-  is the only module that constructs AgentCore clients; preview-API drift is contained
+- **All boto3 clients are built in exactly one place.** `app/services/aws_clients.py`
+  constructs every AWS client/session, keyed by a `WorkspaceContext` (account, region,
+  future assume-role) from `app/services/workspace.py`; a hermetic guard test
+  (`tests/test_client_funnel.py`) fails on construction anywhere else. AgentCore client
+  *names* stay in `app/services/agentcore/client.py`, and preview-API drift is contained
   there and in the sibling wrapper modules (`runtime.py`, `harness.py`, `registry.py`,
   `codebuild.py`). Everything else receives clients explicitly so tests can inject stubs
   — follow this; do not call `boto3.client(...)` elsewhere.
@@ -94,18 +103,25 @@ under `.trellis/spec/launchpad/`.
 ## Frontend conventions
 
 React + Vite + `react-router-dom`, TypeScript strict. Top-level routes are in
-`src/App.tsx` (Overview, Create, Registry, Knowledge Bases, Chat, Observability,
-Evaluation, Governance). Complex pages expose **sub-pages via a `?view=` query param**
-(e.g. Evaluation's `?view=experiment|evaluators|datasets`, Registry's register/edit)
-rather than nested routes — follow that pattern for new sub-surfaces. `src/lib/api.ts`
+`src/App.tsx` (Overview, Create incl. `create/studio`, Registry, Knowledge Bases, Memory,
+Chat, Observability, Evaluation, Skill Lab, Governance, Users, Workspaces). Complex pages
+expose **sub-pages via a `?view=` query param** (e.g. Evaluation's
+`?view=experiment|evaluators|datasets`, Registry's register/edit) rather than nested
+routes — follow that pattern for new sub-surfaces. `src/lib/api.ts`
 is the single typed client for the backend; keep its interfaces in sync with the FastAPI
 schemas. All user-facing strings are i18n keys with **en + zh-CN parity enforced** by
-`scripts/i18n_check.py`.
+`scripts/i18n_check.py`. Chinese copy uses **full-width punctuation** (`，：；？！（）`)
+wherever a mark touches CJK text; `scripts/i18n_zh_punct.py --check` gates it and `--fix`
+converts mechanically (placeholders, backticks, URLs, ARNs and Latin-only fragments are
+never touched).
 
 ## Conventions & gotchas
 
 - **All documentation is written in English** (per the launchpad spec index), even
   though the product UI and top-level docs are bilingual.
+- **`AGENTS.md` mirrors this file's body** (everything below the title, above its Trellis
+  block) for non-Claude agents — update both in the same commit;
+  `backend/tests/test_agents_md_mirror.py` fails on drift.
 - Python: ruff (line length 100, target py312, rules `E,F,I,W,UP,B`); FastAPI routers
   live in `app/routers/` (console `/api`) and `app/routers/public_api.py` (public `/v1`);
   errors go through `app/core/errors.register_error_handlers`.
