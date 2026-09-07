@@ -545,7 +545,8 @@ Chat Playground 的「会话记忆」右栏通过 `OPEN IN MEMORY ↗` 深链进
 每个视图都由 **60 秒 TTL 缓存**(按视图 + 时间范围)提供服务 —— Logs Insights
 按扫描量计费 —— `force=true`(⟳ 刷新按钮)可绕过缓存。时间范围为白名单
 (`1h/6h/24h/7d`);trace id(`^[0-9a-f]{32}$`)与 session id
-(`^[A-Za-z0-9_-]{8,128}$`)在路由层校验,并在查询构造器中**再次校验**后才会
+(`^[A-Za-z0-9_\-#:.@]{8,256}$`,`#`/`:`/`.`/`@` 用于兼容外部调用方拼接的
+`<ulid>#feishu#<chat_id>` 这类复合 id)在路由层校验,并在查询构造器中**再次校验**后才会
 插入 Logs Insights 查询字符串。TOKEN 求和按框架只选择一个携带用量的 Span:
 Strands 统计终端 LLM 操作(`chat` / `text_completion` /
 `generate_content`),Claude Agent SDK 统计原生 OpenInference `AGENT`

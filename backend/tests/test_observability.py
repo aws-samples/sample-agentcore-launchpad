@@ -190,6 +190,18 @@ def test_query_builders_reject_unvalidated_ids():
         obs.q_trace_aggregates(session_id='x" or traceId like "')
     with pytest.raises(AppError):
         obs.q_trace_aggregates(session_id="short")
+    with pytest.raises(AppError):
+        obs.q_session_spans('01KKRNGA47RK9XD3ZKDWX1R5WD#feishu#x" | fields @message')
+
+
+def test_query_builders_accept_composite_external_session_ids():
+    # Regression: an external (Feishu) caller mints runtimeSessionIds such as
+    # `<ulid>#feishu#<chat_id>`. The list view showed the session (ids come
+    # straight from the spans) but the detail route 422'd on `#`, which the
+    # console rendered as "session not found".
+    sid = "01KKRNGA47RK9XD3ZKDWX1R5WD#feishu#oc_115a912b912ff5efb7895263ccc1ea70"
+    assert f'attributes.session.id = "{sid}"' in obs.q_trace_aggregates(session_id=sid)
+    assert f'attributes.session.id = "{sid}"' in obs.q_session_spans(sid)
 
 
 def test_llm_aggregation_excludes_framework_wrapper_spans():
@@ -1186,10 +1198,25 @@ def test_validation_rejects_bad_inputs(client):
     assert client.get("/api/observability/traces/not-a-trace-id").status_code == 422
     assert client.get("/api/observability/traces/ABC123").status_code == 422
     assert client.get("/api/observability/sessions/ab").status_code == 422  # too short
+    assert client.get("/api/observability/sessions/" + "s" * 257).status_code == 422
+    assert client.get('/api/observability/sessions/abcdefgh"x').status_code == 422
     assert client.get(
         "/api/observability/traces?session=bad$chars"
     ).status_code == 422
     assert client.get("/api/observability/traces?status=weird").status_code == 422
+
+
+def test_session_routes_accept_composite_external_ids(client, mocked_aws, monkeypatch):
+    # `#` must survive the URL (percent-encoded by the console) and the router
+    # pattern; the detail route then runs the normal session build.
+    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
+    monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [])
+    sid = "01KKRNGA47RK9XD3ZKDWX1R5WD#feishu#oc_115a912b912ff5efb7895263ccc1ea70"
+    encoded = sid.replace("#", "%23")
+    detail = client.get(f"/api/observability/sessions/{encoded}")
+    assert detail.status_code == 200
+    assert detail.json()["session_id"] == sid
+    assert client.get(f"/api/observability/traces?session={encoded}").status_code == 200
 
 
 # ── SCORE NOW: on-demand session scoring via the data-plane Evaluate API ────

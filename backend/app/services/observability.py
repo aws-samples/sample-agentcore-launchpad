@@ -60,8 +60,12 @@ CACHE_WRITE_FACTOR = 1.25
 
 # The router enforces these shapes too; re-checked here (defense in depth)
 # because the ids are interpolated into Logs Insights query strings.
+# AgentCore only bounds runtimeSessionId by length (33..256, no alphabet), and
+# external integrations compose ids such as `<ulid>#feishu#<chat_id>` — so the
+# allowlist admits `#` `:` `.` `@` while still excluding the characters that
+# would matter inside a double-quoted Logs Insights literal (`"`, `\`, `|`).
 TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
-SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_\-#:.@]{8,256}$")
 
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _CACHE_LOCK = threading.Lock()

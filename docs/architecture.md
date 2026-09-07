@@ -1005,7 +1005,8 @@ botocore failures map to `memory.unavailable` (502).
 Every view is served from a **60-second TTL cache** keyed by (view, range) —
 Logs Insights is billed per scan — with `force=true` (the ⟳ REFRESH button)
 bypassing it. Ranges are whitelisted (`1h/6h/24h/7d`); trace ids
-(`^[0-9a-f]{32}$`) and session ids (`^[A-Za-z0-9_-]{8,128}$`) are validated at
+(`^[0-9a-f]{32}$`) and session ids (`^[A-Za-z0-9_\-#:.@]{8,256}$` — `#`/`:`/`.`/`@`
+admit composite ids such as `<ulid>#feishu#<chat_id>` from external callers) are validated at
 the router **and** re-checked in the query builders before being interpolated
 into Logs Insights query strings. Token sums use one framework-specific
 token-bearing span: terminal LLM operations (`chat` / `text_completion` /

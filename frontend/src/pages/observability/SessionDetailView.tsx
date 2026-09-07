@@ -16,7 +16,9 @@ import { api, ApiError, getJson } from "../../lib/api";
 import { evaluatorLabel, evaluatorPolarity } from "../../lib/evaluators";
 import { fmtCost, fmtDuration, fmtInt, shortId } from "./format";
 
-export const SESSION_ID_RE = /^[A-Za-z0-9_-]{8,128}$/;
+// Mirrors the backend SessionIdParam alphabet: external callers compose
+// runtimeSessionIds like `<ulid>#feishu#<chat_id>`, so `#` `:` `.` `@` are valid.
+export const SESSION_ID_RE = /^[A-Za-z0-9_\-#:.@]{8,256}$/;
 
 /** Event timestamps are UTC ISO from the backend — render in the browser tz
  * (same as the trace cards); fall back to a raw HH:MM:SS extract. */

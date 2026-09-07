@@ -23,10 +23,15 @@ router = APIRouter(prefix="/api/observability", tags=["observability"])
 
 RangeParam = Annotated[str, Query(pattern="^(1h|6h|24h|7d)$")]
 TraceIdParam = Annotated[str, Path(pattern="^[0-9a-f]{32}$")]
-SessionIdParam = Annotated[str, Path(pattern="^[A-Za-z0-9_-]{8,128}$")]
+# Same alphabet as observability.SESSION_ID_RE — external callers compose
+# runtimeSessionIds like `<ulid>#feishu#<chat_id>`, so `#` `:` `.` `@` are
+# legitimate; quote / backslash / pipe stay excluded (Logs Insights literals).
+SessionIdParam = Annotated[str, Path(pattern=r"^[A-Za-z0-9_\-#:.@]{8,256}$")]
 AgentParam = Annotated[str | None, Query(max_length=64, pattern=r"^[A-Za-z0-9._-]+$")]
 StatusParam = Annotated[str | None, Query(pattern="^(ok|error)$")]
-SessionSearchParam = Annotated[str | None, Query(max_length=128, pattern="^[A-Za-z0-9_-]+$")]
+SessionSearchParam = Annotated[
+    str | None, Query(max_length=256, pattern=r"^[A-Za-z0-9_\-#:.@]+$")
+]
 
 
 @router.get("/dashboard")
