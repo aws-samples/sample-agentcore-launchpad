@@ -1,7 +1,7 @@
 /** Typed client for the Launchpad backend. */
 
 import i18n from "../i18n";
-import type { EvaluationRunInfo, InsightTrees } from "./evaluation";
+import type { EvaluationRunInfo, EvaluationRunResults, InsightTrees } from "./evaluation";
 import type { ModelSource } from "./models";
 
 export interface StageInfo {
@@ -2468,6 +2468,12 @@ export const api = {
     request<EvaluationRunInfo>(`/api/eval/runs/${encodeURIComponent(runId)}/stop`, {
       method: "POST",
     }),
+  /** `GET /api/eval/runs/{id}/results` — per-session scores + judge explanations
+   *  of a terminal evaluators run, read on demand from the batch's results log
+   *  stream (never persisted). `available=false` + `reason` when there is
+   *  nothing to read yet. */
+  evaluationRunResults: (runId: string) =>
+    request<EvaluationRunResults>(`/api/eval/runs/${encodeURIComponent(runId)}/results`),
   experimentProviders: () =>
     request<{ providers: RecommendProviderInfo[] }>("/api/experiments/providers"),
   login: (username: string, password: string) =>

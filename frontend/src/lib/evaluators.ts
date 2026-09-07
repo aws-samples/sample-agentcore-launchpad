@@ -38,3 +38,15 @@ const LOWER_IS_BETTER = new Set([
 export function evaluatorPolarity(id: string): number {
   return LOWER_IS_BETTER.has(id) ? -1 : 1;
 }
+
+/** Polarity-aware colour for one 0..1 score (shared by SCORE NOW, the online
+ *  results and the run results): a penalty evaluator is good when LOW, so its
+ *  thresholds invert. */
+export function scoreColor(score: number, evaluatorId: string): string {
+  const oriented = evaluatorPolarity(evaluatorId) < 0 ? 1 - score : score;
+  return oriented >= 0.7
+    ? "var(--good)"
+    : oriented >= 0.4
+      ? "var(--warn)"
+      : "var(--crit-text)";
+}

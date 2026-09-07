@@ -439,3 +439,116 @@ def test_failed_batch_degrades_when_results_log_unreadable(client, monkeypatch):
     assert run["status"] == "failed"
     assert "batch evaluation ended FAILED" in run["error"]
     assert "All 30 sessions failed" in run["error"]
+
+
+# ── per-session results (scores + judge explanations) ───────────────────────
+# The row keeps only per-evaluator averages; the explanation of every judgement
+# lives in the batch's results log stream (same record family as SCORE NOW's
+# online results). Live shape verified 2026-09-07 on run_5cc20fb8-a5356bdac8.
+def _result_event(session_id, evaluator, score, label, explanation, level="Trace"):
+    return {"message": json.dumps({
+        "name": "gen_ai.evaluation.result",
+        "attributes": {
+            "gen_ai.evaluation.name": evaluator,
+            "session.id": session_id,
+            "gen_ai.evaluation.score.value": score,
+            "gen_ai.evaluation.score.label": label,
+            "gen_ai.evaluation.explanation": explanation,
+            "aws.bedrock_agentcore.evaluation_level": level,
+        },
+    })}
+
+
+COMPLETED_BATCH_WITH_STREAM = {
+    "status": "COMPLETED",
+    "outputConfig": {"cloudWatchConfig": {
+        "logGroupName": "/aws/bedrock-agentcore/evaluations/batch-evaluations/results/default",
+        "logStreamName": "run-be-123",
+    }},
+}
+
+
+def _seed_run(**overrides):
+    from app.evaluation.models import EvalRun
+
+    fields = dict(
+        workspace_id=DEFAULT_WORKSPACE_ID, agent_id="a1", agent_name="eval-agent",
+        mode="evaluators", evaluators=["Builtin.Helpfulness"], status="completed",
+        session_ids=["s-a" + "x" * 30, "s-b" + "x" * 30], batch_eval_id="be-123",
+        scores=[{"evaluatorId": "Builtin.Helpfulness", "score": 0.5}],
+    )
+    fields.update(overrides)
+    db = SessionLocal()
+    run = EvalRun(**fields)
+    db.add(run)
+    db.commit()
+    run_id = run.id
+    db.close()
+    return run_id
+
+
+def test_run_results_groups_judge_records_per_session(client, monkeypatch):
+    sid_a, sid_b = "s-a" + "x" * 30, "s-b" + "x" * 30
+    data, _ = stub_environment(monkeypatch)
+    data.get_batch_evaluation.return_value = COMPLETED_BATCH_WITH_STREAM
+    logs = MagicMock()
+    logs.get_log_events.return_value = {"events": [
+        # stream order differs from the run's session order — the run's wins
+        _result_event(sid_b, "Builtin.Helpfulness", 0.33, "Somewhat Unhelpful",
+                      "The agent used the wrong tool."),
+        _result_event(sid_a, "Builtin.Helpfulness", 1.0, "Very Helpful", "Answered fully."),
+        _result_event(sid_a, "Builtin.ToolParameterAccuracy", 0.0, "No",
+                      "employee_id was invented.", level="Span"),
+        {"message": "not json"},
+    ], "nextForwardToken": None}
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: logs)
+    run_id = _seed_run()
+
+    res = client.get(f"/api/eval/runs/{run_id}/results")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["available"] is True and body["count"] == 3 and body["truncated"] is False
+    assert [s["session_id"] for s in body["sessions"]] == [sid_a, sid_b]
+    rows = body["sessions"][0]["results"]
+    assert rows[0] == {
+        "evaluator_id": "Builtin.Helpfulness", "level": "Trace", "score": 1.0,
+        "label": "Very Helpful", "explanation": "Answered fully.",
+        "error_type": None, "error_message": None,
+    }
+    assert rows[1]["level"] == "Span" and rows[1]["score"] == 0.0
+    assert body["sessions"][1]["results"][0]["explanation"] == "The agent used the wrong tool."
+    data.get_batch_evaluation.assert_called_once_with(batchEvaluationId="be-123")
+    assert logs.get_log_events.call_args.kwargs["logStreamName"] == "run-be-123"
+
+
+def test_run_results_degrades_instead_of_failing(client, monkeypatch):
+    data, _ = stub_environment(monkeypatch)
+
+    # an insights run has no per-evaluator judgements at all
+    res = client.get(f"/api/eval/runs/{_seed_run(mode='insights')}/results").json()
+    assert res == {**res, "available": False, "reason": "insights_run", "sessions": []}
+    # a window-scoped run that never started a batch
+    res = client.get(f"/api/eval/runs/{_seed_run(batch_eval_id=None)}/results").json()
+    assert res["available"] is False and res["reason"] == "no_batch"
+    # still judging — the stream is being written, don't read half of it
+    res = client.get(f"/api/eval/runs/{_seed_run(status='evaluating')}/results").json()
+    assert res["available"] is False and res["reason"] == "run_active"
+    assert not data.get_batch_evaluation.called
+
+    # batch known, but the service reported no output location
+    data.get_batch_evaluation.return_value = {"status": "COMPLETED"}
+    res = client.get(f"/api/eval/runs/{_seed_run()}/results").json()
+    assert res["available"] is False and res["reason"] == "stream_missing"
+
+    # stream unreadable (expired retention / permission): reason + detail, not a 5xx
+    data.get_batch_evaluation.return_value = COMPLETED_BATCH_WITH_STREAM
+    logs = MagicMock()
+    logs.get_log_events.side_effect = RuntimeError("ResourceNotFoundException")
+    monkeypatch.setattr(aws_clients, "client", lambda *a, **k: logs)
+    res = client.get(f"/api/eval/runs/{_seed_run()}/results")
+    assert res.status_code == 200
+    assert res.json()["reason"] == "unreadable"
+    assert "ResourceNotFoundException" in res.json()["detail"]
+
+    assert client.get("/api/eval/runs/nope/results").status_code == 404
+

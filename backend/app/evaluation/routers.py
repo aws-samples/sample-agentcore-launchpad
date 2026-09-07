@@ -1157,6 +1157,21 @@ def get_run(
     return _run_out(run)
 
 
+@router.get("/runs/{run_id}/results")
+def get_run_results(
+    run_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Per-session scores + judge explanations of a terminal evaluators run,
+    read on demand from the batch's results log stream (never persisted).
+    ``available=false`` + ``reason`` when there is nothing to read."""
+    run = db.get(EvalRun, run_id)
+    if run is None or run.workspace_id != ws.id:
+        raise NotFoundError("run.not_found", "run not found")
+    return service.run_results(run, workspace=ws.context)
+
+
 @router.post("/runs", status_code=201)
 def create_run(
     req: RunCreate,

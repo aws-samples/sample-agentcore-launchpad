@@ -100,6 +100,44 @@ export interface EvaluationRunInfo {
   created_at?: string | null;
 }
 
+/** One judge record of a batch run (`GET /api/eval/runs/{id}/results`) — the
+ *  same columns SCORE NOW shows on the Observability session detail, plus the
+ *  evaluation level: a span-level evaluator writes one record per tool call, so
+ *  a session can carry several rows for one evaluator. */
+export interface EvaluationRunResultRow {
+  evaluator_id: string;
+  level: string | null;
+  score: number | null;
+  label: string | null;
+  explanation: string | null;
+  error_type: string | null;
+  error_message: string | null;
+}
+
+export interface EvaluationRunSessionResults {
+  session_id: string;
+  results: EvaluationRunResultRow[];
+}
+
+export type EvaluationRunResultsReason =
+  | "insights_run"
+  | "no_batch"
+  | "run_active"
+  | "stream_missing"
+  | "unreadable";
+
+export interface EvaluationRunResults {
+  run_id: string;
+  batch_eval_id: string | null;
+  available: boolean;
+  reason?: EvaluationRunResultsReason;
+  detail?: string;
+  /** run `session_ids` order first, then sessions only the stream knows */
+  sessions: EvaluationRunSessionResults[];
+  count: number;
+  truncated: boolean;
+}
+
 export interface ExperimentReadiness {
   agent_id: string;
   lookback_hours: number;

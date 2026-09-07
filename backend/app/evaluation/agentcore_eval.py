@@ -263,6 +263,14 @@ def stop_batch_evaluation(client: Any, *, batch_id: str) -> dict[str, Any]:
     return client.stop_batch_evaluation(batchEvaluationId=batch_id)
 
 
+def results_stream(result: dict[str, Any]) -> tuple[str, str] | None:
+    """``(logGroupName, logStreamName)`` of a batch evaluation's own results
+    stream, or None when the service reported no output location (yet)."""
+    cw = (result.get("outputConfig") or {}).get("cloudWatchConfig") or {}
+    group, stream = cw.get("logGroupName"), cw.get("logStreamName")
+    return (group, stream) if group and stream else None
+
+
 def batch_failure_reason(logs_factory: Any, result: dict[str, Any]) -> str | None:
     """First per-trace evaluator error a batch evaluation recorded, if any.
 
@@ -275,10 +283,10 @@ def batch_failure_reason(logs_factory: Any, result: dict[str, Any]) -> str | Non
     only once a stream is actually on the result, so a batch that never produced
     one costs no client.
     """
-    cw = (result.get("outputConfig") or {}).get("cloudWatchConfig") or {}
-    group, stream = cw.get("logGroupName"), cw.get("logStreamName")
-    if not group or not stream:
+    location = results_stream(result)
+    if location is None:
         return None
+    group, stream = location
     try:
         events = logs_factory().get_log_events(
             logGroupName=group, logStreamName=stream, limit=20, startFromHead=True
@@ -294,6 +302,72 @@ def batch_failure_reason(logs_factory: Any, result: dict[str, Any]) -> str | Non
     except Exception:
         return None
     return None
+
+
+# Hard stop on one results-stream read (≈ 30 evaluators × 150 sessions). Shared
+# by the run-results view and the optimizer's evidence reader.
+RESULT_RECORDS_MAX = 5000
+
+
+def read_result_records(
+    logs: Any, log_group: str, log_stream: str, *, max_events: int = RESULT_RECORDS_MAX
+) -> list[dict[str, Any]]:
+    """Every ``gen_ai.evaluation.result`` record's ``attributes`` in the stream.
+
+    ``get_log_events`` pages forward until the token stops changing (the
+    documented end-of-stream signal); ``max_events`` bounds a runaway read.
+    Unparseable events are skipped — one bad line must not void the run.
+    """
+    out: list[dict[str, Any]] = []
+    token: str | None = None
+    while len(out) < max_events:
+        kwargs: dict[str, Any] = {
+            "logGroupName": log_group,
+            "logStreamName": log_stream,
+            "startFromHead": True,
+        }
+        if token:
+            kwargs["nextToken"] = token
+        page = logs.get_log_events(**kwargs)
+        for event in page.get("events") or []:
+            try:
+                body = json.loads(event["message"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            attrs = body.get("attributes") if isinstance(body, dict) else None
+            if not isinstance(attrs, dict) or not attrs.get("gen_ai.evaluation.name"):
+                continue
+            out.append(attrs)
+        nxt = page.get("nextForwardToken")
+        if not nxt or nxt == token:
+            break
+        token = nxt
+    return out
+
+
+def _score_value(value: Any) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def normalize_result_record(attrs: dict[str, Any]) -> dict[str, Any]:
+    """Project one results-stream record onto the console's stable row — the
+    same columns SCORE NOW shows (``services.agentcore.evaluation.normalize_result``),
+    plus the evaluation level (Session / Trace / Span; a span-level evaluator
+    writes one record per tool call, so a session can carry several rows for
+    one evaluator). A failed judgement has ``error_type``/``error_message`` and
+    no score."""
+    return {
+        "evaluator_id": str(attrs.get("gen_ai.evaluation.name")),
+        "level": attrs.get("aws.bedrock_agentcore.evaluation_level"),
+        "score": _score_value(attrs.get("gen_ai.evaluation.score.value")),
+        "label": attrs.get("gen_ai.evaluation.score.label"),
+        "explanation": attrs.get("gen_ai.evaluation.explanation"),
+        "error_type": attrs.get("error.type"),
+        "error_message": attrs.get("error.message"),
+    }
 
 
 def parse_eval_scores(result: dict[str, Any]) -> list[dict[str, Any]]:

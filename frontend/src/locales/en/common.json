@@ -2020,6 +2020,32 @@
       "note": "19 built-in evaluators + custom LLM-judge supported.",
       "empty": "SELECT A COMPLETED RUN TO SEE SCORES"
     },
+    "results": {
+      "title": "SESSION RESULTS — JUDGE EXPLANATIONS",
+      "sub": "{{sessions}} sessions · {{records}} judgements · read from the batch's results log",
+      "loading": "reading the batch's results log…",
+      "empty": "SELECT A COMPLETED EVALUATORS RUN TO SEE PER-SESSION EXPLANATIONS",
+      "none": "the results log holds no judgement records for this run",
+      "reason": {
+        "insights_run": "An insights run clusters sessions instead of scoring them — see the INSIGHTS panel.",
+        "no_batch": "This run never started a batch evaluation, so there are no judgements to read.",
+        "run_active": "Judgements land once the batch evaluation finishes — check back when the run completes.",
+        "stream_missing": "The evaluation service reported no results log for this batch.",
+        "unreadable": "The batch's results log could not be read (retention expired or no permission)."
+      },
+      "truncated": "showing the first {{max}} judgement records only",
+      "session": "SESSION",
+      "viewSession": "open in observability →",
+      "mean": "mean",
+      "col": {
+        "evaluator": "EVALUATOR",
+        "level": "LEVEL",
+        "score": "SCORE",
+        "label": "LABEL",
+        "explanation": "EXPLANATION"
+      },
+      "failed": "failed"
+    },
     "insights": {
       "title": "INSIGHTS — FAILURE TRIAGE",
       "sub": "failure analysis · user intents",

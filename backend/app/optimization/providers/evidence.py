@@ -24,10 +24,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.evaluation import agentcore_eval as ac
+from app.evaluation.agentcore_eval import read_result_records
 from app.optimization.providers.base import EvaluatorRecord, EvidenceStats, SessionEvidence
 from app.services.workspace import WorkspaceContext
 
-MAX_EVENTS = 5000  # hard stop on the stream read (≈ 30 evaluators × 150 sessions)
+MAX_EVENTS = ac.RESULT_RECORDS_MAX  # hard stop on the stream read
 MAX_TURN_CHARS = 1500
 _HEAD, _TAIL = 1200, 300
 CONTRAST_SHARE = 0.2  # share of the selection reserved for best-scoring sessions
@@ -45,40 +46,9 @@ ToolSpansFn = Callable[[list[str]], dict[str, list[dict[str, Any]]]]
 
 
 # ─── results stream ──────────────────────────────────────────────────────────
-def read_result_records(
-    logs: Any, log_group: str, log_stream: str, *, max_events: int = MAX_EVENTS
-) -> list[dict[str, Any]]:
-    """Every ``gen_ai.evaluation.result`` record's ``attributes`` in the stream.
-
-    ``get_log_events`` pages forward until the token stops changing (the
-    documented end-of-stream signal); ``max_events`` bounds a runaway read.
-    Unparseable events are skipped — one bad line must not void the run.
-    """
-    out: list[dict[str, Any]] = []
-    token: str | None = None
-    while len(out) < max_events:
-        kwargs: dict[str, Any] = {
-            "logGroupName": log_group,
-            "logStreamName": log_stream,
-            "startFromHead": True,
-        }
-        if token:
-            kwargs["nextToken"] = token
-        page = logs.get_log_events(**kwargs)
-        for event in page.get("events") or []:
-            try:
-                body = json.loads(event["message"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            attrs = body.get("attributes") if isinstance(body, dict) else None
-            if not isinstance(attrs, dict) or not attrs.get("gen_ai.evaluation.name"):
-                continue
-            out.append(attrs)
-        nxt = page.get("nextForwardToken")
-        if not nxt or nxt == token:
-            break
-        token = nxt
-    return out
+# `read_result_records` lives in agentcore_eval (the run-results view reads the
+# same stream) and is imported above under its original name, so callers and
+# tests keep `evidence.read_result_records`.
 
 
 def _num(value: Any) -> float | None:

@@ -8,6 +8,7 @@ import {
 } from "../components";
 import { EvaluationNav } from "../components/EvaluationNav";
 import { InsightClusters } from "../components/InsightClusters";
+import { RunResultsPanel } from "../components/RunResultsPanel";
 import type { AgentInfo } from "../lib/api";
 import { api, errorMessage, responseMessage } from "../lib/api";
 import {
@@ -1220,6 +1221,10 @@ export function Evaluation() {
           )}
         </Panel>
       </div>
+
+      {/* What the averages above are made of: every judgement with the judge's
+          explanation, per session — the same view SCORE NOW gives one session. */}
+      <RunResultsPanel run={selectedRun} />
 
       <ConfirmDialog
         open={confirmInsights && !!selectedRun}

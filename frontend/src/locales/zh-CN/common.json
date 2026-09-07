@@ -2020,6 +2020,32 @@
       "note": "支持 19 个内置评估器 + 自定义 LLM 评审。",
       "empty": "选择一个已完成的运行查看得分"
     },
+    "results": {
+      "title": "会话结果 — 评审理由",
+      "sub": "{{sessions}} 个会话 · {{records}} 条评审记录 · 读取自批量评估的结果日志",
+      "loading": "正在读取批量评估的结果日志…",
+      "empty": "选择一个已完成的评估器运行，查看每个会话的评审理由",
+      "none": "结果日志中没有该运行的评审记录",
+      "reason": {
+        "insights_run": "Insights 运行对会话做聚类而不是打分 —— 请查看 INSIGHTS 面板。",
+        "no_batch": "该运行从未启动批量评估，因此没有可读取的评审记录。",
+        "run_active": "评审记录在批量评估完成后才会落地 —— 请在运行完成后再查看。",
+        "stream_missing": "评估服务未为该批次报告结果日志。",
+        "unreadable": "无法读取该批次的结果日志（日志已过期或没有权限）。"
+      },
+      "truncated": "仅显示前 {{max}} 条评审记录",
+      "session": "会话",
+      "viewSession": "在可观测性中打开 →",
+      "mean": "均值",
+      "col": {
+        "evaluator": "评估器",
+        "level": "层级",
+        "score": "得分",
+        "label": "标签",
+        "explanation": "理由"
+      },
+      "failed": "失败"
+    },
     "insights": {
       "title": "洞察 — 失败归因",
       "sub": "失败分析 · 用户意图",

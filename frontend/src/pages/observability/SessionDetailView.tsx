@@ -13,7 +13,7 @@ import type {
   OnlineSessionScores,
 } from "../../lib/api";
 import { api, ApiError, getJson } from "../../lib/api";
-import { evaluatorLabel, evaluatorPolarity } from "../../lib/evaluators";
+import { evaluatorLabel, scoreColor } from "../../lib/evaluators";
 import { fmtCost, fmtDuration, fmtInt, shortId } from "./format";
 
 // Mirrors the backend SessionIdParam alphabet: external callers compose
@@ -35,17 +35,6 @@ const OWNER_TONE: Record<OnlineSessionScoreConfig["owner"], ChipTone> = {
   experiment: "muted",
   external: "warn",
 };
-
-// Polarity-aware colour (mirrors the online page): a penalty evaluator is good
-// when LOW, so its thresholds invert.
-function scoreColor(score: number, evaluatorId: string): string {
-  const oriented = evaluatorPolarity(evaluatorId) < 0 ? 1 - score : score;
-  return oriented >= 0.7
-    ? "var(--good)"
-    : oriented >= 0.4
-      ? "var(--warn)"
-      : "var(--crit-text)";
-}
 
 /** Online evaluation results for the session, one block per config (agent-owned
  * first). Rendered only when the workspace has configs or results exist. */

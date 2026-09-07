@@ -473,6 +473,62 @@ def request_stop(run_id: str, *, workspace: WorkspaceContext) -> EvalRun:
 INTERRUPTED_STATUSES = ACTIVE_STATUSES
 
 
+def run_results(run: EvalRun, *, workspace: WorkspaceContext) -> dict[str, Any]:
+    """Per-session judge records of a run — score, label and the judge's
+    explanation for every evaluator, grouped by session.
+
+    The row only stores the per-evaluator averages (``run.scores``); the
+    explanations live exclusively in the batch's own results log stream
+    (``GetBatchEvaluation.outputConfig.cloudWatchConfig``), the same
+    ``gen_ai.evaluation.result`` records the optimizer reads as evidence. Read
+    on demand, never persisted — a terminal batch's stream is immutable.
+
+    Degrades rather than raises: ``available=false`` + ``reason`` when the run
+    has nothing to read (insights run, no batch, still active, stream not
+    reported) or the read itself failed (``unreadable`` + ``detail``).
+    Sessions come back in the run's own ``session_ids`` order (dataset order),
+    then any the stream knows and the row does not.
+    """
+    base: dict[str, Any] = {
+        "run_id": run.id,
+        "batch_eval_id": run.batch_eval_id,
+        "available": False,
+        "sessions": [],
+        "count": 0,
+        "truncated": False,
+    }
+    if run.mode != "evaluators":
+        return {**base, "reason": "insights_run"}
+    if not run.batch_eval_id:
+        return {**base, "reason": "no_batch"}
+    if run.status in ACTIVE_STATUSES:
+        return {**base, "reason": "run_active"}
+    try:
+        detail = ac.get_batch_evaluation(data_client(workspace), batch_id=run.batch_eval_id)
+        location = ac.results_stream(detail)
+        if location is None:
+            return {**base, "reason": "stream_missing"}
+        records = ac.read_result_records(workspace.client("logs"), *location)
+    except Exception as exc:  # ClientError, network, malformed stream — all degrade
+        return {**base, "reason": "unreadable", "detail": f"{type(exc).__name__}: {exc}"[:300]}
+
+    by_session: dict[str, list[dict[str, Any]]] = {}
+    for attrs in records:
+        sid = attrs.get("session.id")
+        if not sid:
+            continue
+        by_session.setdefault(str(sid), []).append(ac.normalize_result_record(attrs))
+    ordered = [sid for sid in (run.session_ids or []) if sid in by_session]
+    ordered += [sid for sid in by_session if sid not in set(ordered)]
+    return {
+        **base,
+        "available": True,
+        "sessions": [{"session_id": sid, "results": by_session[sid]} for sid in ordered],
+        "count": len(records),
+        "truncated": len(records) >= ac.RESULT_RECORDS_MAX,
+    }
+
+
 def resume_interrupted_runs() -> list[str]:
     """Startup reconciliation. The account-lock worker and its pollers are
     in-memory, so a backend restart orphans in-flight rows: runs that already
