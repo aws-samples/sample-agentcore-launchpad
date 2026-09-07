@@ -111,8 +111,13 @@ export function RunResultsPanel({ run }: { run: EvaluationRunInfo | null }) {
   } else if (results && results.sessions.length === 0) {
     body = <div className="empty">{t("evalPage.results.none")}</div>;
   } else if (results) {
+    // right padding clears an overlay scrollbar, which otherwise floats over
+    // the session link and the explanation ellipsis
     body = (
-      <div style={{ maxHeight: 560, overflowY: "auto" }} data-testid="run-results">
+      <div
+        style={{ maxHeight: 560, overflowY: "auto", paddingRight: 12 }}
+        data-testid="run-results"
+      >
         {results.truncated && (
           <div className="note" style={{ borderColor: "var(--warn)", marginBottom: 8 }}>
             <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
@@ -132,7 +137,6 @@ export function RunResultsPanel({ run }: { run: EvaluationRunInfo | null }) {
                   fontSize: 9.5,
                   letterSpacing: ".12em",
                   margin: "6px 0",
-                  paddingRight: 8,
                 }}
               >
                 <span>
@@ -155,7 +159,18 @@ export function RunResultsPanel({ run }: { run: EvaluationRunInfo | null }) {
                 </Link>
               </div>
               <div style={{ overflowX: "auto" }}>
-                <table style={{ minWidth: 640 }}>
+                {/* Fixed layout: with auto layout, expanding one explanation to
+                    pre-wrap makes the browser re-balance every column and the
+                    evaluator / level / score / label columns visibly shrink.
+                    Pinned widths keep them still; the explanation takes the rest. */}
+                <table style={{ minWidth: 640, tableLayout: "fixed" }}>
+                  <colgroup>
+                    <col style={{ width: 210 }} />
+                    <col style={{ width: 72 }} />
+                    <col style={{ width: 72 }} />
+                    <col style={{ width: 140 }} />
+                    <col />
+                  </colgroup>
                   <thead>
                     <tr>
                       <th>{t("evalPage.results.col.evaluator")}</th>
@@ -199,7 +214,6 @@ export function RunResultsPanel({ run }: { run: EvaluationRunInfo | null }) {
                           <td
                             style={{
                               fontSize: 11,
-                              maxWidth: expanded ? undefined : 360,
                               whiteSpace: expanded ? "pre-wrap" : "nowrap",
                               overflow: "hidden",
                               textOverflow: "ellipsis",
