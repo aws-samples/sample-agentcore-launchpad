@@ -7,12 +7,14 @@ English: [troubleshooting.md](troubleshooting.md)
 
 ## 账号与环境
 
-- **AgentCore 预览需按账号开启。** Runtime、Harness、Registry、Gateway、Policy
-  与 Evaluation 都是预览功能,必须先在 `us-west-2` 为你的账号开启,bootstrap 才能
-  成功。
-- **默认模型是 `global.anthropic.claude-sonnet-4-6`。** 目标账号中没有
-  `sonnet-5` inference profile(已通过 `bedrock list-inference-profiles` 验证)。
-  Agent 默认使用该 profile;可在 AgentSpec 中用 `model_id` 逐个覆盖。
+- **AgentCore 预览需按账号开启。** Runtime、Harness、Gateway、Policy 与
+  Evaluation 都是预览功能，必须先在 `us-west-2` 为你的账号开启，bootstrap 才能
+  成功。Agent Registry 已 GA（自 2026-08-06 起使用 `agent-registry` 命名空间，见
+  [registry-ga-migration.md](registry-ga-migration.md)），无需开启预览。
+- **默认模型是 `global.anthropic.claude-sonnet-5`**（`DEFAULT_MODEL_ID`）。
+  新建 Agent 默认使用该 inference profile；Sonnet 4.6
+  （`global.anthropic.claude-sonnet-4-6`）仍可选择，已有 Agent 保留各自的
+  `model_id`。可在 AgentSpec 中用 `model_id` 逐个覆盖。
 - **`config/launchpad.yaml` 已 gitignore。** 它包含账号 id 与演示凭证,因此从不
   提交。若缺失(全新 clone,或你删了它),重新运行 `make bootstrap`——它是幂等的,
   会从既有资源重写该文件。

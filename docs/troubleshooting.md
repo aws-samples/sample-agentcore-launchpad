@@ -8,12 +8,16 @@ entry below was observed during implementation — none is speculative.
 ## Account & environment
 
 - **AgentCore previews must be enabled per account.** Runtime, Harness,
-  Registry, Gateway, Policy and Evaluation are previews that have to be turned
-  on for your account in `us-west-2` before bootstrap will succeed.
-- **Default model is `global.anthropic.claude-sonnet-4-6`.** There is no
-  `sonnet-5` inference profile in the target account (verified via
-  `bedrock list-inference-profiles`). Agents default to this profile; override
-  per agent with `model_id` in the AgentSpec.
+  Gateway, Policy and Evaluation are previews that have to be turned on for
+  your account in `us-west-2` before bootstrap will succeed. Agent Registry is
+  GA (the `agent-registry` namespace since 2026-08-06, see
+  [registry-ga-migration.md](registry-ga-migration.md)) and needs no preview
+  enablement.
+- **Default model is `global.anthropic.claude-sonnet-5`** (`DEFAULT_MODEL_ID`).
+  New agents default to this inference profile; Sonnet 4.6
+  (`global.anthropic.claude-sonnet-4-6`) stays selectable, and existing agents
+  keep their own `model_id`. Override per agent with `model_id` in the
+  AgentSpec.
 - **`config/launchpad.yaml` is gitignored.** It holds account ids and demo
   credentials, so it is never committed. If it is missing (fresh clone, or you
   deleted it), rerun `make bootstrap` — it is idempotent and rewrites the file
