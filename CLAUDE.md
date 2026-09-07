@@ -25,7 +25,7 @@ the precondition probes and restart side-effect traps the table below does not.
 | Task | Command |
 |---|---|
 | Full verify gate (**run before reporting done**) | `make verify` |
-| Run local stack (backend :8000, frontend :5173, studio :8100/:5273) | `make dev` |
+| Run local stack (backend :8000, frontend :5173) | `make dev` |
 | One-time infra + AgentCore bootstrap (idempotent) | `make bootstrap` |
 | Backend only / frontend only | `make backend` / `make frontend` |
 | Backend lint + tests | `cd backend && uv run ruff check . && uv run pytest -q` |
@@ -107,10 +107,11 @@ under `.trellis/spec/launchpad/`.
 ## Frontend conventions
 
 React + Vite + `react-router-dom`, TypeScript strict. Top-level routes are in
-`src/App.tsx` (Overview, Create, Registry, Knowledge Bases, Chat, Observability,
-Evaluation, Governance). Complex pages expose **sub-pages via a `?view=` query param**
-(e.g. Evaluation's `?view=experiment|evaluators|datasets`, Registry's register/edit)
-rather than nested routes — follow that pattern for new sub-surfaces. `src/lib/api.ts`
+`src/App.tsx` (Overview, Create incl. `create/studio`, Registry, Knowledge Bases, Memory,
+Chat, Observability, Evaluation, Skill Lab, Governance, Users, Workspaces). Complex pages
+expose **sub-pages via a `?view=` query param** (e.g. Evaluation's
+`?view=experiment|evaluators|datasets`, Registry's register/edit) rather than nested
+routes — follow that pattern for new sub-surfaces. `src/lib/api.ts`
 is the single typed client for the backend; keep its interfaces in sync with the FastAPI
 schemas. All user-facing strings are i18n keys with **en + zh-CN parity enforced** by
 `scripts/i18n_check.py`. Chinese copy uses **full-width punctuation** (`，：；？！（）`)
@@ -122,6 +123,9 @@ never touched).
 
 - **All documentation is written in English** (per the launchpad spec index), even
   though the product UI and top-level docs are bilingual.
+- **`AGENTS.md` mirrors this file's body** (everything below the title, above its Trellis
+  block) for non-Claude agents — update both in the same commit;
+  `backend/tests/test_agents_md_mirror.py` fails on drift.
 - Python: ruff (line length 100, target py312, rules `E,F,I,W,UP,B`); FastAPI routers
   live in `app/routers/` (console `/api`) and `app/routers/public_api.py` (public `/v1`);
   errors go through `app/core/errors.register_error_handlers`.
