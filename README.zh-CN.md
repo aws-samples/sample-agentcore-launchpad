@@ -57,7 +57,9 @@ vendored Strands Studio 子应用。主要能力包括：
 ### 前置条件
 
 - AWS 账号已在 `us-west-2` 开启 Bedrock AgentCore 预览（Runtime、Harness、
-  Registry、Gateway、Policy、Evaluation）
+  Gateway、Policy、Evaluation）；Agent Registry 已 GA（自 2026-08-06 起使用
+  `agent-registry` 命名空间，见 [docs/registry-ga-migration.md](docs/registry-ga-migration.md)），
+  无需开启预览
 - 具备管理员级权限的凭证（`aws sts get-caller-identity` 可用）
 - `uv` ≥ 0.8、Node.js ≥ 20（`npm`）、AWS CDK CLI v2（`npm i -g aws-cdk`）
 - Docker，且支持 ARM64（仅方式A容器路径需要）
@@ -242,7 +244,8 @@ export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # 白名单
 通常不高，实际金额取决于各项能力的使用量：
 
 - **Runtime / Harness 调用**：每次调用都会产生模型 token 费用（默认模型为
-  `global.anthropic.claude-sonnet-4-6`），以及托管 runtime/session 的计算费用。
+  `global.anthropic.claude-sonnet-5`，Sonnet 4.6 仍可按 Agent 选择），以及托管
+  runtime/session 的计算费用。
 - **容器构建（方式A）**：CodeBuild 按 ARM64 构建时长计费，每个 Agent 构建约 2 分钟。
   方式B（Harness）无需构建，方式C 使用更快的 zip 路径。
 - **批量评估（batch evaluation）**：LLM-as-a-judge 的模型 token 用量会随

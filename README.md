@@ -66,7 +66,10 @@ For how these map onto AgentCore services, see [docs/architecture.md](docs/archi
 ### Prerequisites
 
 - AWS account with Bedrock AgentCore previews enabled (Runtime, Harness,
-  Registry, Gateway, Policy, Evaluation) in `us-west-2`
+  Gateway, Policy, Evaluation) in `us-west-2`; Agent Registry is GA
+  (`agent-registry` namespace since 2026-08-06, see
+  [docs/registry-ga-migration.md](docs/registry-ga-migration.md)) and needs no
+  preview enablement
 - Credentials with administrator-level access (`aws sts get-caller-identity` works)
 - `uv` ≥ 0.8, Node.js ≥ 20 (`npm`), AWS CDK CLI v2 (`npm i -g aws-cdk`),
   Docker (ARM64-capable — only needed for the 方式A container path)
@@ -263,7 +266,8 @@ Launchpad cost. Costs are qualitative and small at demo scale, but scale with
 how much you exercise each layer:
 
 - **Runtime / Harness invocations** — every invoke bills model tokens (default
-  `global.anthropic.claude-sonnet-4-6`) plus managed runtime/session compute.
+  `global.anthropic.claude-sonnet-5`; Sonnet 4.6 stays selectable per agent)
+  plus managed runtime/session compute.
 - **Container builds (方式A)** — CodeBuild ARM64 build minutes, roughly 2
   minutes per agent build; 方式B (harness) has no build, and 方式C rides the
   faster zip path.

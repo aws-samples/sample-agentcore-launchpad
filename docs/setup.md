@@ -2,7 +2,7 @@
 
 ## Prerequisites / 前置条件
 
-- AWS account with Bedrock AgentCore previews enabled (Runtime, Harness, Registry, Gateway, Policy, Evaluation) in `us-west-2`
+- AWS account with Bedrock AgentCore previews enabled (Runtime, Harness, Gateway, Policy, Evaluation) in `us-west-2`; Agent Registry is GA (`agent-registry` namespace since 2026-08-06, see [registry-ga-migration.md](registry-ga-migration.md)) and needs no preview enablement
 - Credentials with administrator-level access (`aws sts get-caller-identity` works)
 - `uv` ≥ 0.8, Node.js ≥ 20 (`npm`), AWS CDK CLI v2 (`npm i -g aws-cdk`), Docker (ARM64-capable, phase 5)
 - One-time CDK bootstrap per account/region: `cdk bootstrap aws://<account>/us-west-2`

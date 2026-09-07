@@ -4,8 +4,10 @@ English: [setup.md](setup.md)
 
 ## 前置条件
 
-- 已在 `us-west-2` 开启 Bedrock AgentCore 预览的 AWS 账号(Runtime、Harness、
-  Registry、Gateway、Policy、Evaluation)
+- 已在 `us-west-2` 开启 Bedrock AgentCore 预览的 AWS 账号（Runtime、Harness、
+  Gateway、Policy、Evaluation）；Agent Registry 已 GA（自 2026-08-06 起使用
+  `agent-registry` 命名空间，见 [registry-ga-migration.md](registry-ga-migration.md)），
+  无需开启预览
 - 具备管理员级别权限的凭证(`aws sts get-caller-identity` 可用)
 - `uv` ≥ 0.8、Node.js ≥ 20(`npm`)、AWS CDK CLI v2(`npm i -g aws-cdk`)、
   Docker(支持 ARM64,第 5 阶段容器路径需要)
