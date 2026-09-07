@@ -153,7 +153,7 @@ export function RunResultsPanel({ run }: { run: EvaluationRunInfo | null }) {
                 )}
                 <Link
                   to={`/observability?tab=sessions&session=${encodeURIComponent(session.session_id)}`}
-                  style={{ marginLeft: "auto", letterSpacing: 0 }}
+                  style={{ marginLeft: "auto", letterSpacing: 0, color: "var(--amber)" }}
                 >
                   {t("evalPage.results.viewSession")}
                 </Link>
