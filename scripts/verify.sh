@@ -16,7 +16,11 @@ if [ -d "$ROOT/backend" ]; then
   (cd "$ROOT/backend" && uv run ruff check .); result $? "ruff"
 
   section "backend · pytest"
-  (cd "$ROOT/backend" && uv run pytest -q); result $? "pytest"
+  # -n auto fans the ~2.8k hermetic tests across every core (6.4 min -> ~1 min).
+  # The tests are process-safe: conftest.py redirects the ledger to a per-process
+  # temp SQLite file before any app import. Kept out of addopts so a single
+  # `uv run pytest tests/foo.py::bar` stays serial.
+  (cd "$ROOT/backend" && uv run pytest -q -n auto); result $? "pytest"
 fi
 
 if [ -d "$ROOT/infra" ]; then

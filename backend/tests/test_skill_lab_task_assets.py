@@ -17,11 +17,21 @@ from app.skill_lab import task_assets, tasksets
 VALID_TASK = {"id": "asset_1", "question": "Inspect inputs", "rubric": "PASS"}
 
 
+# One value of this helper is baked into a parametrize id at collection time, so
+# the bytes must be identical in every process: writestr() with a bare name would
+# stamp the current local time into each ZIP header, and xdist workers that
+# collect a second apart would then disagree on the test id.
+_FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
+
+
 def _xlsx() -> bytes:
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w") as archive:
-        archive.writestr("[Content_Types].xml", "<Types/>")
-        archive.writestr("xl/workbook.xml", "<workbook/>")
+        for name, body in (
+            ("[Content_Types].xml", "<Types/>"),
+            ("xl/workbook.xml", "<workbook/>"),
+        ):
+            archive.writestr(zipfile.ZipInfo(name, _FIXED_ZIP_TIME), body)
     return out.getvalue()
 
 
