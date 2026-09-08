@@ -223,8 +223,11 @@ RECOMMEND 背后的系统提示词生成器是一个 **provider**
 状态与原因并且**不写提示词**——与失败的 AWS 任务遵循同一条 ISSUE-007 规则——因此 `accept`
 仍然被闸门挡住。产物记录 `provider`、`provider_model_id` 与证据数量，treatment 捆绑的提交
 信息也会点出它们，因此一个已完成的实验始终可解释。Bedrock 调用走 workspace 客户端漏斗;
-`gepa` 包（以及它构造的 litellm 客户端）刻意不作为依赖引入。契约:
-[`.trellis/spec/launchpad/prompt-optimization-providers.md`](../.trellis/spec/launchpad/prompt-optimization-providers.md)。
+`gepa` 包（以及它构造的 litellm 客户端）刻意不作为依赖引入。provider 自身位于
+`backend/app/optimization/providers/`:`base.py` 是每个 provider 都要实现的契约，
+`registry.py` 是靠 import 副作用注册的注册表，`evidence.py` 负责已打分会话与对话内容
+的关联，`bedrock_lm.py` 是 ConverseStream 文本调用体，`gepa_lite.py` 是上文那一轮反思，
+`agentcore.py` 则是仅为被发现而列出的内置 AgentCore 任务。
 
 ### 平台工具包（`AgentSpec.toolkits`）
 
@@ -250,8 +253,10 @@ RECOMMEND 背后的系统提示词生成器是一个 **provider**
 
 工具名与描述用 `ast` 从工具包源码派生，遵循 Strands 自己的 docstring 规则（docstring 去掉
 `Args:` 段），因此 `discover_agent_tools`——以及由它决定的 `expected_tools`、就绪度和推荐
-界面里的「当前描述」——报告的正是模型看到的内容。完整契约:
-[`.trellis/spec/launchpad/agent-toolkits.md`](../.trellis/spec/launchpad/agent-toolkits.md)。
+界面里的「当前描述」——报告的正是模型看到的内容。目录本身是
+`backend/app/templates/toolkits/__init__.py`（每个成员的工具源码是它旁边的
+`*.py.tmpl` 模板）;spec 字段是 `backend/app/schemas/agent.py` 里的
+`AgentSpec.toolkits`。
 
 ### Registry 技能与部署快照
 
@@ -436,9 +441,21 @@ runtime 这一侧能跑起来靠三件事，三件都是必需的:
    都记录日志并返回中性值，因此没有任何模块级语句能抛异常。import 期崩溃比缺少工具更糟:
    部署管道的健康信号仍会把 Agent 报成 `active`，而之后每一次调用都会失败。
 
-Harness→runtime 转换出于同样这三条理由保留它的 gateway 工具——见
-[harness-conversion.md](../.trellis/spec/launchpad/harness-conversion.md);v1 那条「gateway
-MCP 未接线」的说明是被删掉了，不是被改了措辞。
+Harness→runtime 转换出于同样这三条理由保留它的 gateway 工具。
+`POST /api/agents/{agent_id}/convert`（`routers/agents.py` 里的 `convert_agent`）只接受
+处于 *active* 的 `harness` Agent，返回 `202` 与 `{agent, job_id, deployment_id}`:它绝不
+修改源 harness，而是新建一个名为 `<source>-rt` 的 Agent。具体工作在
+`services/harness_convert.py` 里完成。`resolve_agentcore_cli` 找到 bootstrap 安装在
+`data/agentcore-cli/` 下、由本仓库托管的 `@aws/agentcore` CLI，`export_harness` 在一个
+可复用的临时项目里、以一个唯一的目标 Agent 名执行它的
+`export harness --build CodeZip`，随后把生成的目录树读进内存并删除——真正的存档产物是
+spec 的 `code_bundle`。`build_conversion_spec` 把 Launchpad 的配置捆绑契约嫁接到导出的
+`main.py` 上，这一步是必需的而不是修饰:导出代码把 `DEFAULT_SYSTEM_PROMPT` 写成常量，
+因此未经嫁接的转换做 A/B 实验时会像 harness 一样空转，所以嫁接锚点缺失会让整次转换失败，
+而不是发布一个静默无法 A/B 的 Agent。产出的 `zip_runtime` spec 把源 harness 的 gateway
+`ToolRef`、技能前缀、memory 与知识库配置一并带过来，在 `conversion_notes` 里记下哪些被
+接通，并写上 `source_harness`，使 `experiment_capability` 判定新 Agent 具备实验资格。
+v1 那条「gateway MCP 未接线」的说明是被删掉了，不是被改了措辞。
 
 一个被路由的配置捆绑会让 runtime **和** Gateway 双方各以自己的角色去解析该捆绑，因此按
 Agent 的执行角色*和* `launchpad-gateway-role` 上都需要 `GetConfigurationBundleVersion`。

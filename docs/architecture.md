@@ -265,8 +265,12 @@ as a failed AWS job — so `accept` stays gated. The artifact records
 `provider`, `provider_model_id` and evidence counts, and the treatment bundle's
 commit message names them, so a finished experiment stays explainable. The
 Bedrock call goes through the workspace client funnel; the `gepa` package (and
-its litellm client construction) is deliberately not a dependency. Contract:
-[`.trellis/spec/launchpad/prompt-optimization-providers.md`](../.trellis/spec/launchpad/prompt-optimization-providers.md).
+its litellm client construction) is deliberately not a dependency. The providers
+themselves live in `backend/app/optimization/providers/`: `base.py` is the contract
+every provider implements, `registry.py` the import-side-effect registry,
+`evidence.py` the scored-session/conversation join, `bedrock_lm.py` the
+ConverseStream text callable, `gepa_lite.py` the reflective round described above,
+and `agentcore.py` the built-in AgentCore job listed for discovery only.
 
 ### Platform toolkits (`AgentSpec.toolkits`)
 
@@ -297,8 +301,10 @@ Two properties make it worth its own field:
 Tool names and descriptions are derived from the toolkit source with `ast`, using
 Strands' own docstring rule (docstring minus the `Args:` section), so
 `discover_agent_tools` — and therefore `expected_tools`, readiness, and the
-recommend UI's "current description" — reports exactly what the model sees. Full
-contract: [`.trellis/spec/launchpad/agent-toolkits.md`](../.trellis/spec/launchpad/agent-toolkits.md).
+recommend UI's "current description" — reports exactly what the model sees. The
+catalog itself is `backend/app/templates/toolkits/__init__.py` (each member's tool
+source is a `*.py.tmpl` template beside it); the spec field is `AgentSpec.toolkits`
+in `backend/app/schemas/agent.py`.
 
 ### Registry Skills and deployment snapshots
 
@@ -524,9 +530,25 @@ Three pieces make the runtime side work, and all three are required:
    missing tools: the deploy pipeline's health signal still reports the agent
    `active`, and every invoke then fails.
 
-Harness→runtime conversion keeps its gateway tools for the same three reasons —
-see [harness-conversion.md](../.trellis/spec/launchpad/harness-conversion.md); the
-v1 "gateway MCP not wired" caveat is gone, not reworded.
+Harness→runtime conversion keeps its gateway tools for the same three reasons.
+`POST /api/agents/{agent_id}/convert` (`convert_agent` in `routers/agents.py`)
+accepts only an *active* `harness` agent and answers `202` with
+`{agent, job_id, deployment_id}`: it never modifies the source harness, it creates a
+**new** agent named `<source>-rt`. `services/harness_convert.py` does the work.
+`resolve_agentcore_cli` locates the repository-managed `@aws/agentcore` CLI that
+bootstrap installs under `data/agentcore-cli/`, and `export_harness` runs its
+`export harness --build CodeZip` inside one reusable scratch project under a unique
+target agent name, then reads the generated tree into memory and deletes it — the
+spec's `code_bundle` is the artifact of record. `build_conversion_spec` grafts the
+Launchpad config-bundle contract onto the exported `main.py`, which is mandatory
+rather than cosmetic: the export bakes `DEFAULT_SYSTEM_PROMPT` as a constant, so an
+ungrafted conversion would no-op A/B experiments exactly as the harness does, and a
+missing graft anchor therefore fails the conversion instead of shipping a silently
+non-A/B-able agent. The emitted `zip_runtime` spec carries the harness's gateway
+`ToolRef`s, skill prefixes, memory and KB configuration forward, records what was
+wired in `conversion_notes`, and stamps `source_harness` so `experiment_capability`
+reports the new agent eligible. The v1 "gateway MCP not wired" caveat is gone, not
+reworded.
 
 A routed configuration bundle makes **both** the runtime and the Gateway resolve
 that bundle, each with its own role, so `GetConfigurationBundleVersion` is needed on

@@ -270,8 +270,9 @@ After the run:
    curl -s $BASE/api/agents | python3 -c "import json,sys;[print(a['id'],a['name']) for a in json.load(sys.stdin)['agents'] if a['name'].startswith('e2e-')]"
    curl -s -X DELETE $BASE/api/agents/<id>      # with the session cookie
    ```
-   Datasets: `DELETE /api/datasets/{id}`. A half-built KB must be deleted from the Knowledge
-   Bases page — it owns an OpenSearch collection and keeps costing money.
+   Datasets: `DELETE /api/eval/datasets/{dataset_id}`. A half-built KB must be deleted
+   from the Knowledge Bases page — it owns an OpenSearch collection and keeps costing
+   money.
 3. `data/launchpad.db` was backed up during the deploy; the smoke test only adds rows, so
    that backup stays a valid floor if the ledger needs restoring.
 

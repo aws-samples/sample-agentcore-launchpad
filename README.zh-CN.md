@@ -194,7 +194,7 @@ export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # 白名单
 
 实际部署所需的 systemd 单元、nginx origin-key 校验、CloudFront 配置与更新流程见
 [docs/setup.zh-CN.md](docs/setup.zh-CN.md#生产部署) 与
-`.trellis/spec/launchpad/remote-production-deployment.md`。
+[docs/agent-runbook-prod.md](docs/agent-runbook-prod.md#3-shape-b--systemd-reference-the-us-east-1-box)。
 
 ### 停止服务
 
