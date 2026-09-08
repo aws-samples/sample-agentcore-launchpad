@@ -7,6 +7,12 @@ interface LoadErrorProps {
   message: string;
   /** Re-issues the fetch. Omitted ⇒ message only (the caller polls anyway). */
   onRetry?: () => void;
+  /**
+   * Action label, already localized. Defaults to `common.retry` ("RETRY"),
+   * which is right for re-issuing a fetch; a caller whose recovery is something
+   * else (the lazy-route boundary reloads the console) names it here.
+   */
+  retryLabel?: string;
   /** Tighter padding for a table cell / panel row instead of a full panel. */
   inline?: boolean;
   "data-testid"?: string;
@@ -21,6 +27,7 @@ interface LoadErrorProps {
 export function LoadError({
   message,
   onRetry,
+  retryLabel,
   inline = false,
   "data-testid": testId = "load-error",
 }: LoadErrorProps) {
@@ -30,7 +37,7 @@ export function LoadError({
       <span>{t("common.loadFailed", { msg: message })}</span>
       {onRetry && (
         <Btn onClick={onRetry} data-testid={`${testId}-retry`}>
-          {t("common.retry")}
+          {retryLabel ?? t("common.retry")}
         </Btn>
       )}
     </div>

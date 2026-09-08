@@ -66,6 +66,16 @@ export default defineConfig(({ mode }) => {
         "@babel/runtime",
       ],
     },
+    build: {
+      // Only the vendored NICE DCV live-view SDK is above the 500 kB default,
+      // and it is already behind a `React.lazy` boundary (governance/ToolsView)
+      // — nothing but the Governance browser demo ever downloads it. 2900 kB
+      // covers that one chunk and nothing more: the entry chunk (~600 kB once
+      // the route table went lazy, App.tsx) and every page chunk stay an order
+      // of magnitude below it, so a regression that inflates them still trips
+      // this warning. Raise it only if the DCV SDK itself grows.
+      chunkSizeWarningLimit: 2900,
+    },
     server: {
       proxy,
     },

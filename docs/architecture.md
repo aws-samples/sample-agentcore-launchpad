@@ -791,6 +791,36 @@ matches none of `ROUTE_PATHS` (`layout/nav.ts`, mirrors the route table) gets th
 `nav.notFound` crumb; otherwise the longest-prefix nav entry labels it. Adding a
 route means adding it to both the `<Route>` table and `ROUTE_PATHS`.
 
+**Pages load on demand.** Every module but the index route is a `React.lazy`
+boundary in that same table: the entry chunk carries only the shell — React,
+the router, i18n, the shared component and `lib/api` layers — and a route's code
+arrives on the navigation that needs it. That keeps the Studio canvas
+(`@xyflow/react` plus the monaco loader), the markdown/highlight stack and the
+other twelve pages out of a first visit; the entry chunk is ~600 kB minified
+instead of 1,936 kB, next to one chunk per page and a shared `Markdown` chunk for
+Chat and the observability session detail. `Overview` and `NotFound` stay eager:
+a chunk for the index route would cost the very first paint a round trip and
+nothing else would use it, and the catch-all is a few hundred bytes that an
+unrouted URL needs immediately. `layout/RouteChunk.tsx` is the boundary the Shell
+wraps around `<Outlet />`, *inside* `.view`, so the sidebar, topbar and footer
+never move: while a chunk is in flight it renders one translated mono line
+(`routeChunk.loading`), never a blank page. When the import rejects it renders the
+shared `LoadError` block with a RELOAD action instead of RETRY (`routeChunk.failed`
+/ `routeChunk.reload`, `LoadError`'s `retryLabel` prop). That failure is expected
+rather than exotic: chunk filenames are content-hashed, so rebuilding the box
+under an open tab (prod serves a built `dist/` through `vite preview`, see
+[agent-runbook-prod.md](agent-runbook-prod.md)) makes the hash the loaded shell
+asks for disappear, and reloading is the whole fix — as it is when a dev/preview
+server went away. The boundary claims that diagnosis **only** for a rejected
+dynamic import (the message matched against the browsers' phrasings); any other
+error a page throws is re-thrown untouched, so a real render bug still surfaces
+as it did before. It is keyed on `location.pathname`, so navigating away clears a
+failure while a `?view=` change never remounts the page. Only the vendored DCV
+live-view chunk (already lazy, `pages/governance/ToolsView.tsx`) is above Vite's
+500 kB chunk warning, and `build.chunkSizeWarningLimit` in `vite.config.ts` is
+raised just far enough to cover that one chunk (2900 kB), so the warning still
+fires if the entry or a page chunk regresses.
+
 ## Console authentication and accounts
 
 The platform console has an optional local account gate, independent from both

@@ -641,6 +641,28 @@ AgentCore Runtime 目标）和 `inference{connector, provider}`（推理目标�
 `nav.notFound`;否则取最长前缀匹配的导航项。新增路由时,`<Route>` 表和 `ROUTE_PATHS`
 都要加。
 
+**页面按需加载。** 除首页(index)路由之外，同一张表里的每个模块都是一个 `React.lazy`
+边界:入口 chunk 只带外壳——React、路由、i18n、共享组件与 `lib/api` 层——某个路由的代码
+只在真正导航到它时才下载。于是 Studio 画布（`@xyflow/react` 加 monaco loader）、
+markdown/highlight 栈以及另外十二个页面都不再出现在首次访问里:入口 chunk 从 1,936 kB
+降到约 600 kB（压缩前的 minified 体积），旁边是每个页面各自的 chunk，以及供 Chat 与可观测
+会话详情共用的一个 `Markdown` chunk。`Overview` 与 `NotFound` 仍然是静态导入:给首页路由
+单独切一个 chunk 只会让第一次绘制多一个往返，而且没有别的页面会用它；兜底页只有几百字节，
+却正是一个未匹配 URL 立刻就需要的东西。`layout/RouteChunk.tsx` 就是 Shell 包在 `<Outlet />`
+外面的那个边界，位置在 `.view` **内部**，所以侧栏、顶栏与页脚不会发生位移:chunk 还在路上时
+它渲染一行已翻译的等宽提示（`routeChunk.loading`），而不是一片空白。若这次 import 失败，
+它渲染共享的 `LoadError` 区块，动作按钮为「重新加载」而非「重试」（`routeChunk.failed` /
+`routeChunk.reload`，走 `LoadError` 的 `retryLabel` 属性）。这种失败是预期内的、并不罕见:
+chunk 文件名带内容哈希，因此在标签页开着的时候重新构建那台机器（生产环境用 `vite preview`
+提供已构建的 `dist/`，见 [agent-runbook-prod.md](agent-runbook-prod.md)）就会让已加载的外壳
+所请求的那个哈希消失，而重新加载就是全部的修复动作——dev/preview 服务器消失时同理。这个边界
+**只**对被拒绝的动态 import 给出该诊断（按各浏览器的措辞匹配错误信息）；页面抛出的其他错误
+一律原样重新抛出，因此真正的渲染缺陷仍然像以前那样暴露出来。边界以 `location.pathname` 为
+key，所以导航离开即清除上一个页面的失败态，而 `?view=` 的变化不会重新挂载页面。只有内置的
+DCV live-view chunk（它本来就是懒加载的，见 `pages/governance/ToolsView.tsx`）超过 Vite 的
+500 kB chunk 警告线，`vite.config.ts` 中的 `build.chunkSizeWarningLimit` 只被抬高到刚好覆盖
+这一个 chunk（2900 kB），因此入口 chunk 或任何页面 chunk 一旦劣化，这条警告仍会触发。
+
 ## 控制台认证与账户
 
 控制台有一个可选的本地账户网关,与 Gateway/Cedar 演示使用的 Cognito 用户以及

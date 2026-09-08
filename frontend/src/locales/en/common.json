@@ -100,6 +100,11 @@
     "pathLabel": "REQUESTED PATH",
     "backToOverview": "BACK TO OVERVIEW →"
   },
+  "routeChunk": {
+    "loading": "LOADING PAGE ▸",
+    "failed": "this page's code. The console may have been updated — reload to get the current version.",
+    "reload": "RELOAD"
+  },
   "sidebar": {
     "region": "REGION",
     "sdk": "SDK",

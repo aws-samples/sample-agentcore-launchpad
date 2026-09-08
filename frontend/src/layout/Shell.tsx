@@ -3,6 +3,7 @@ import { matchPath, Outlet, useLocation } from "react-router-dom";
 
 import { useWorkspace } from "../workspace/workspace-context";
 import { ALL_NAV_ENTRIES, NAV_ENTRIES, ROUTE_PATHS } from "./nav";
+import { RouteChunk } from "./RouteChunk";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { useHealth } from "./useHealth";
@@ -37,7 +38,13 @@ export function Shell() {
               one place, so the ~20 mount-only loaders refetch against the new
               environment instead of showing the old one's rows. */}
           <div className="view" key={current?.id ?? "none"}>
-            <Outlet />
+            {/* Pages are lazily loaded (see App.tsx): the pending line and the
+                chunk-load failure state belong inside the content area, and the
+                boundary is keyed on the route so navigating away clears a
+                previous page's failure. `?view=` sub-pages keep the same key. */}
+            <RouteChunk key={location.pathname}>
+              <Outlet />
+            </RouteChunk>
             <footer>
               {t("footer.phase")}
               <span className="sep">|</span>
