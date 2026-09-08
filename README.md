@@ -24,6 +24,15 @@ infrastructure (CDK) and a vendored Strands Studio sub-app. It delivers:
 - **Registry console.** A visual front end over AgentCore Registry for
   cataloguing and discovering the three asset types — agents (A2A), MCP tools,
   and skills — with submit → approve lifecycle actions.
+- **Knowledge Bases.** Managed Bedrock Knowledge Bases — fully-managed RAG
+  where the vector store, embeddings and reranking are the service's. Create one
+  from an existing S3 location or from files uploaded through the console, watch
+  ingestion and per-document index status, and confirm what agents will see in a
+  retrieval playground before anything is attached. ACTIVE knowledge bases are
+  then mountable on an agent in the Create Agent wizard: a managed Harness reaches
+  them through the dedicated `launchpad-kb-gw` MCP gateway, while zip and
+  container agents get `kb_search` / `kb_deep_search` tools baked into their
+  generated code.
 - **Chat playground + public `/v1` API.** Pick any active agent and talk to it
   with streaming responses, multi-turn history, and session-scoped memory. The
   same invoke chain is exposed as an `X-Api-Key`-authenticated `/v1` surface

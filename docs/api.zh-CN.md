@@ -215,6 +215,41 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 与 `status = "DELETED"` 报告该引用；策略变更返回 `409 governance.policy_engine_deleted`；`POST .../engine`
 把该引用视为未挂接：创建一个新的 Engine，以所选模式挂接，并把被替换的 ARN 记录在 operation 上。
 
+## 控制台知识库 API / Console Knowledge Bases API
+
+`/api/knowledge-bases/*` 支撑知识库控制台（控制台 04），底层是 Bedrock 的*托管*知识库
+——控制面走 `bedrock-agent`，检索走 `bedrock-agent-runtime`。只有
+`type == "MANAGED"` 的知识库可寻址：同一账号内的 VECTOR 知识库会返回
+`kb.not_found`。本地不存任何状态，因此每条路由都是一次实时 AWS 调用。详见
+[architecture.zh-CN.md](architecture.zh-CN.md)「托管知识库」一节。
+
+| 方法 | 路径 | 结果 |
+|---|---|---|
+| `GET` | `/api/knowledge-bases?status=` | 全部 MANAGED 知识库，字段为 `{kb_id, name, description, status, updated_at, data_source_count, attached_agents}`；`status` 是读取后再施加的可选精确匹配过滤（例如 `ACTIVE`） |
+| `POST` | `/api/knowledge-bases` | `202`——`CreateKnowledgeBase`（`{name, description?, source: {mode: "upload"\|"existing", bucket?, prefix?}}`）在知识库仍处于 `CREATING` 时就返回详情，并附 `source_pending`；数据源由后端线程在知识库变为 `ACTIVE` 之后（1.5–3 分钟）在请求之外创建，因此客户端轮询 `GET /{kb_id}` |
+| `GET` | `/api/knowledge-bases/{kb_id}` | 详情：状态、ARN、时间戳、`failure_reasons`、`attached_agents`，以及每个数据源的桶/前缀、状态与最近 10 个 ingestion 作业 |
+| `PATCH` | `/api/knowledge-bases/{kb_id}` | `{description}`（≤1000 字符）→ `UpdateKnowledgeBase`，名称、角色与配置原样读回后回传；响应是刷新后的详情 |
+| `DELETE` | `/api/knowledge-bases/{kb_id}?force=` | 依次删除数据源、按知识库的网关 `Retrieve` 目标与按知识库的内联 S3 策略，最后 `DeleteKnowledgeBase`。仍有 Agent 挂载时返回 `409 kb.has_attached_agents`；`force=true` 会先把它从每个挂载它的 Agent spec 里摘掉（并重新同步 harness 类 Agent 的 agentic 目标） |
+| `POST` | `/api/knowledge-bases/{kb_id}/files` | `multipart/form-data`，一个或多个名为 `files`（或 `file`）的部件 → artifacts 桶 `kb/{kb_id}/` 下的 `{keys}`。数据源尚不存在时也允许上传；数据源全在别处的知识库返回 `409 kb.no_upload_target` |
+| `POST` | `/api/knowledge-bases/{kb_id}/data-sources` | `201`——用同样的 `{mode, bucket?, prefix?}` 请求体创建 `MANAGED_KNOWLEDGE_BASE_CONNECTOR` 数据源，并返回刷新后的详情。按 S3 位置幂等：同一桶/前缀上已有连接器时直接返回它，而不是再建一个。这同时也是「知识库没有数据源」时的手动补建入口 |
+| `DELETE` | `/api/knowledge-bases/{kb_id}/data-sources/{ds_id}` | `DeleteDataSource` → `{deleted, ds_id}`（AWS 侧为异步删除） |
+| `POST` | `/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/sync` | `StartIngestionJob` → 作业投影 `{job_id, status, started_at, updated_at, statistics, failure_reasons}` |
+| `GET` | `/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/ingestion-jobs` | 最近 50 个 ingestion 作业，最新优先，投影同上 |
+| `GET` | `/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/documents?page_size=&token=` | `ListKnowledgeBaseDocuments` 的一页（`page_size` 1–100，默认 50），形如 `{documents, next_token, page_size}`；每个文档带知识库侧的 `status`/`status_reason`/`indexed_at`，以及按对象 key 联结进来的 S3 侧 `size_bytes`/`uploaded_at`（后端无权列举该桶时为空） |
+| `POST` | `/api/knowledge-bases/{kb_id}/query` | 检索 Playground——`{text, number_of_results?}`（1–100，默认 8）→ 带 `managedSearchConfiguration` 的 `Retrieve`，响应 `{results}`，元素为 `{text, score, location_uri, metadata}` |
+| `POST` | `/api/knowledge-bases/ensure-gateway` | 按名字「不存在才创建」共享的 `launchpad-kb-gw` MCP 网关，并把 `{id, arn, url}` 持久化到工作区。幂等；harness 部署路径调用的是同一个 helper，因此这条路由只用于提前预置网关 |
+
+错误码：`kb.not_found`（404——未知 id，或该知识库不是 MANAGED）、`kb.ds_not_found`
+（404）、`kb.has_attached_agents`（409，阻塞的 Agent 名在 `detail.agents` 里）、
+`kb.delete_conflict`（409——知识库仍在 `CREATING`）、`kb.no_upload_target`（409）、
+`kb.no_files`（400——表单里没有上传部件）、`kb.sync_not_ready`（409——
+`StartIngestionJob` 抛出 `ValidationException` 或 `ConflictException`：数据源仍在预置，
+或已有同步在跑）、`kb.bucket_required` / `kb.invalid_bucket` / `kb.invalid_prefix` /
+`kb.invalid_source`（400——数据源校验）、`kb.query_failed`（502——知识库侧检索失败，
+例如索引仍在构建）。其余任何 AWS `ClientError` 都走上文的全局映射（`aws.validation`、
+`aws.conflict` 等）。资源映射里没有 `kb_role_arn`（创建）或没有 `artifacts_bucket`
+（上传）的工作区尚未完成引导，会返回点明缺失键的 `500`。
+
 ## 控制台 Memory API / Console Memory API
 
 `/api/memory/*` 支撑只读的 Memory 控制台（控制台 05），底层是共享的 `launchpad_memory` 单例。
