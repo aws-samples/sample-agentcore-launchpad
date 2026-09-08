@@ -47,7 +47,7 @@ bootstrap 还负责安装 Harness 转 Runtime 时使用的 CLI。它会把固定
 | Cognito 用户池 | `launchpad-users`(+ 组 `platform-admin`、`hr-analyst`,演示用户 `admin`/`demo`) |
 | IAM 执行角色 | `launchpad-agent-execution-role` |
 | AgentCore Registry | `launchpad-registry` |
-| AgentCore Memory | `launchpad_memory`(短期事件 + 语义与用户偏好的长期策略) |
+| AgentCore Memory | `launchpad_memory`(短期事件 + 语义、用户偏好、会话摘要、情节这四种长期策略;对已存在的 memory 重跑 bootstrap 会补齐缺失的策略) |
 | AgentCore Gateway | `launchpad-gw-<suffix>` |
 | 托管 AgentCore CLI | `data/agentcore-cli/` (`@aws/agentcore@0.21.1`) |
 
@@ -405,8 +405,8 @@ Cookie 过期。
 
 `./start.py --prod` 只是本地预览:构建前端、提供构建产物、关闭后端自动重载,并绑定到
 `0.0.0.0`。长期运行的主机应改用进程管理器托管这两个服务,并在前面放一层终结 TLS 的
-边缘。参考部署(workshop EC2 + CloudFront)的完整规格见
-`.trellis/spec/launchpad/remote-production-deployment.md`,其拓扑为:
+边缘。参考部署(workshop EC2 + CloudFront)的单元文件与实测过的更新流程见
+[agent-runbook-prod.md](agent-runbook-prod.md#3-shape-b--systemd-reference-the-us-east-1-box),其拓扑为:
 
 ```text
 浏览器 → CloudFront(TLS、不缓存、放通全部方法、注入一个密钥请求头)

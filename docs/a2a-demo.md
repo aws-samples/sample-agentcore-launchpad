@@ -68,4 +68,7 @@ cd backend
 ```
 
 `aurora-faq-a2a` was created through Agent Management (Strands zip →
-SERVICE PROTOCOL = A2A) — see `.trellis/spec/launchpad/a2a-agents.md`.
+SERVICE PROTOCOL = A2A) — see
+[architecture.md](architecture.md#creation-entrances) for that entrance, and the
+Registry / Runtime rows of its service-mapping table for how an A2A agent is
+catalogued, discovered and invoked.

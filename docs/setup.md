@@ -455,8 +455,9 @@ cookie to lapse.
 `./start.py --prod` is a local preview: it builds the frontend, serves the built
 bundle, drops backend auto-reload, and binds to `0.0.0.0`. For a host that stays
 up, supervise the two processes instead and keep the console behind an edge that
-terminates TLS. The reference deployment (workshop EC2 + CloudFront) is specified
-in `.trellis/spec/launchpad/remote-production-deployment.md`; its shape is:
+terminates TLS. The reference deployment (workshop EC2 + CloudFront) — its unit
+files and the verified update sequence — is written up in
+[agent-runbook-prod.md](agent-runbook-prod.md#3-shape-b--systemd-reference-the-us-east-1-box); its shape is:
 
 ```text
 browser → CloudFront (TLS, no caching, all methods, injects a secret origin header)
