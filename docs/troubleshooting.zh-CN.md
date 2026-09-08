@@ -69,6 +69,33 @@ English: [troubleshooting.md](troubleshooting.md)
   trace 范围限定的 span service name,因此 batch eval 面向 runtime 型 Agent
   (`zip_runtime` / `studio` / `container`)。UI 会说明这一限制。
 
+## 知识库
+
+- **创建返回 `202`，数据源在几分钟后才出现。** 托管知识库需要 1.5–3 分钟才离开
+  `CREATING`，而它的数据源必须等到 `ACTIVE` 之后才能创建，所以
+  `POST /api/knowledge-bases` 会立即返回，由后端线程
+  （`knowledge._start_source_completion`）随后轮询并创建数据源。若后端在这个窗口内
+  重启，线程随之消失，就会留下一个 `ACTIVE` 但**没有任何数据源**的知识库。详情页会
+  把这件事说清楚并给出修复入口：「数据源还没建好。后端会在知识库变为 ACTIVE 后自动
+  创建（通常 1–3 分钟）；若长时间没有出现，点右侧按钮补建——重复点击不会创建多个
+  数据源。」（`knowledge.detail.sources.missingSource`），旁边是「补建数据源」按钮，
+  它发出 `POST /api/knowledge-bases/{kb_id}/data-sources`。多点几次也安全：
+  `_find_data_source_at` 会对同一桶/前缀返回既有连接器，而不是再建一个。
+- **过早触发的同步会以 `409 kb.sync_not_ready` 被拒。** 数据源仍在预置（还不是
+  `AVAILABLE`）时 `StartIngestionJob` 抛 `ValidationException`，已有同步在跑时抛
+  `ConflictException`；`knowledge.start_sync` 把两者一起捕获，统一答以
+  `409 kb.sync_not_ready`（「数据源可能仍在预置，或已有同步在运行」）。等数据源报告
+  `AVAILABLE` 即可——控制台随后会自行发起首次 ingestion。在知识库的*其他*路由上，
+  这两个 AWS 异常并不在本地捕获，而是经全局映射到达控制台，即 `400 aws.validation`
+  与 `409 aws.conflict`（见 [api.zh-CN.md](api.zh-CN.md) 的错误码表）。
+- **`kb_role_arn` 填错只会在 ingestion 时才失败。** `CreateKnowledgeBase` 不校验
+  `roleArn`，因此用错误或权限不足的角色创建的知识库照样会变成 `ACTIVE`；问题要等到
+  ingestion 作业失败时才暴露（其 `failure_reasons` 按数据源展示）。为自带桶授予
+  `s3:GetObject`/`s3:ListBucket` 的按知识库内联策略，也是放到同一个 ARN 指向的角色上
+  （`knowledge._sync_kb_policy`），所以同样会落到错误的角色。而该键完全缺失时会被提前
+  拦住：`create_kb` 直接以「kb_role_arn missing from this workspace's resource map —
+  run its bootstrap」拒绝，而不是创建一个不可用的知识库。
+
 ## 本地开发
 
 - **Vite 自动切换前端端口。** 若 `5173` 被占用,平台前端会落到 `5174`(或下一个

@@ -56,6 +56,7 @@ English: [architecture.md](architecture.md)
 | **Runtime** | 托管 zip 与 container Agent(`CreateAgentRuntime`);调用链访问 runtime 数据面。Agent 详情中的只读「版本与端点」面板通过 `GET /api/agents/{id}/versions` 读回 `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints` 的全部分页,让操作者看到不可变版本列表、`DEFAULT` 端点以及任何固定在某版本上的命名端点。 |
 | **Harness** | 托管方式B Agent(`CreateHarness`)——托管入口,无构建产物。同一「版本与端点」面板对 harness 类 Agent 读取 `ListHarnessVersions` + `ListHarnessEndpoints`。 |
 | **Memory** | 一个共享的 `launchpad_memory` 单例:短期 session 事件 + 长期语义与用户偏好策略。命名空间只按 `{actorId}` 分区(没有 `{agentId}` 模板变量),因此平台把 Agent id 折进 actor——`scoped_actor(agent_id, human)` → `<agent>__<human>`——从而让**短期事件与长期记录**(`/facts/<agent>__<human>`)都按 Agent 分区。生成的 Strands Runtime 通过 `AgentCoreMemorySessionManager` 恢复短期对话。Claude Agent SDK 容器为每次调用创建独立的 `MemorySessionManager`,通过 `UserPromptSubmit` Hook 注入有界的短期对话及 `/facts/<actor>`、`/preferences/<actor>` 记录,并在调用成功后把 USER/ASSISTANT 对作为一个事件持久化。A2A Runtime 使用 `<agent>__a2a__<contextId>`,因为直接 A2A 调用目前没有经过身份认证的 human actor envelope。一个 Agent 学到的偏好不会串到同一个人的另一个 Agent 或 A2A context;台账仍存裸的 human actor 用于展示。 |
+| **知识库（Knowledge Bases）** *（Bedrock，不属于 AgentCore）* | 托管 Bedrock 知识库（`type: MANAGED`——向量库、嵌入与重排都由服务负责）是接地层：`MANAGED_KNOWLEDGE_BASE_CONNECTOR` 类型的 S3 数据源、ingestion 作业，以及 `Retrieve` / `AgenticRetrieveStream` 检索。Agent 既可以经专用 MCP 网关 `launchpad-kb-gw` 挂载（托管 Harness），也可以通过烤进生成的 zip/container 代码里的 `kb_search` / `kb_deep_search` 工具挂载——详见「托管知识库」一节。 |
 | **Gateway** | `launchpad-gw` 把一个 REST API(office-facts)和一个 Lambda(hr-database)转成带 Cognito-JWT 鉴权的 MCP 工具;Agent 的工具调用经由它流转。治理页为已纳管的 Gateway 管理 **Gateway 限流**（2026 年 8 月 GA）：`ListGatewayRateLimits` / `CreateGatewayRateLimit` / `UpdateGatewayRateLimit` / `DeleteGatewayRateLimit` 位于网关详情的「限流」面板之后，服务端校验并记入 `policy_changes`。 |
 | **Identity** | 支撑网关的 token vault——一个 OAuth2 provider(Agent 出站鉴权)和一个 API-key provider。 |
 | **Registry** | GA 的 `agent-registry` 服务托管 `launchpad-registry`，编目 A2A Agent、MCP 服务器与 AGENT_SKILLS。`services/agentcore/registry.py` 把 GA 的 `AGENT/MCP/SKILL` 与 `data/dataSchemaVersion` 模型翻译成稳定的 Launchpad descriptor 契约；其他 AgentCore 服务仍在 `bedrock-agentcore` 之下。GA 的唯一性约束是 `(name, recordVersion)`，因此新建记录使用带类型后缀的初始版本（`1.0.0-a2a`、`1.0.0-mcp`、`1.0.0-skill`），内容编辑会保留该后缀。Registry 可用时，每次部署都会自动创建并提交一条 A2A 记录。在 SCP/IAM 策略拒绝 Registry 初始化的账号中，bootstrap 会把该能力记为不可用，仅属于 Registry 的 API 返回 503，部署管道只跳过 register 阶段；Runtime/Harness 部署仍然可用。控制台也支持手动注册——外部远程 MCP 服务器(streamable-http URL)与技能(SKILL.md → 制品桶)——并驱动完整生命周期:提交 → 批准/驳回(REJECTED 仍可改判批准)、下架(终态——已实测,之后只能删除)、删除。注册中心同时是**挂载目录**:`GET /api/registry/attachables` 只向创建向导提供 APPROVED 的 MCP/技能记录,MCP 记录按 URL 分流——共享网关 URL 挂为 `agentcore_gateway`(OAuth),其他 URL 挂为 `remote_mcp`(暂不带鉴权)——技能按其 s3 路径经 `skills[{path}]` 挂载。治理页可以把一个既有的 AgentCore Gateway 导入为**一条** MCP 记录，其中包含 Gateway 端点与它完整的已发现工具目录；旧的按 target 逐条的记录会一直保留，直到该 Gateway 记录 APPROVED 之后被显式下架。Registry 的批准控制的是目录可见性，而不是 Gateway 授权。`GET /api/registry/attachables` 会把目录状态与 Harness 可挂载性分开报告，并在服务端解析 Gateway 鉴权方式。对于已部署 Launchpad A2A Agent 所拥有的 A2A 记录，Registry 抽屉的「实时名片」会读取运行时此刻实际提供的名片（`GET /api/registry/records/{id}/live-agent-card` → 以账本中的 `Agent.arn` 调用数据面 `GetAgentCard`，AWS 为此打开的会话随即结束），并与记录中存储的名片做对比；实时名片不落账本——AWS 始终是事实来源。两份名片的 `version` 都来自同一个平台常量——`services/agentcore/registry.py` 中的 `A2A_CARD_VERSION`：A2A 运行时模板在打包阶段把它传给 Strands `A2AServer(version=...)`，`build_a2a_card` 在注册阶段把它写进记录，因此两边从构造上就是一致的。它**不是** AgentCore 运行时版本（`Agent.version`，显示在「版本与端点」面板）——运行时版本由 Create/UpdateAgentRuntime 在模板渲染完成之后才分配，名片无法携带。在该常量出现之前发布的 A2A Agent 仍会提供 Strands 默认的 `0.0.1`，而记录里是 `1`；对比会持续标出差异，直到下一次重新发布（重新渲染 + 重新注册）让两边收敛。Registry 页面对同一个注册中心提供两种视图：**发布者列表**（`GET /api/registry/records` → 控制面 `ListRegistryRecords`，包含所有状态的全部记录）与**消费者视图**（`?view=discoverable`，`GET /api/registry/records/discoverable` → 数据面 `ListDiscoverableRegistryRecords`，按 `nextToken` 翻页到底）——即拥有数据面访问权限的消费者或 Agent 实际能发现的记录。发现摘要不含 `descriptors`，点开某一行才读取完整记录。在同一页面会话中拉取过消费者视图后，凡不在其中的控制面记录都会打上「不可发现」标签（DRAFT / PENDING_APPROVAL / REJECTED / DEPRECATED 是预期情形）——两份列表的差异才是这项功能的意义。 |
@@ -752,6 +753,116 @@ localhost"更窄:uvicorn 的 proxy-header 中间件(默认 `forwarded_allow_ips=
 `localhost` 粘死到 HTTPS。不设置密码则对 loopback 保持网关关闭(控制台开放、注册返回
 `auth.registration_disabled`、`/api/users*` 以隐式本地 admin 身份可达),保持免引导的
 本地开发与测试流程。
+
+## 托管知识库（控制台 04）
+
+`/knowledge-bases` 是接地（grounding）层，也是唯一一个背靠 **Bedrock** 而非某个
+AgentCore 服务的控制台模块：*托管* 的 Bedrock 知识库就是全托管 RAG——向量库、
+嵌入与重排都归服务所有。它由 `backend/app/services/knowledge.py` 拥有（之下是
+`bedrock-agent` 控制面与 `bedrock-agent-runtime` 数据面），对外暴露为
+`/api/knowledge-bases/*`（`backend/app/routers/knowledge.py`，逐条列表见
+[api.zh-CN.md](api.zh-CN.md)「控制台知识库 API」一节）。这里没有知识库台账表：
+状态全在 AWS，平台本地只存每个 Agent 上的 `AgentSpec.knowledge_bases` 引用。
+
+**资源模型。** `create_kb` 以
+`knowledgeBaseConfiguration.type = "MANAGED"` 与
+`managedKnowledgeBaseConfiguration.embeddingModelType = "MANAGED"` 调用
+`CreateKnowledgeBase`——索引侧没有任何可配置项——`roleArn` 取工作区资源映射里的
+共享引导角色 `kb_role_arn`（该键缺失时 `create_kb` 直接拒绝，提示「run its
+bootstrap」）。文档经由 `MANAGED_KNOWLEDGE_BASE_CONNECTOR` 类型的 S3 数据源进入
+（`_data_source_configuration`：桶名与 `bucketOwnerAccountId` 放在
+`connectorParameters.connectionConfiguration` 下，可选前缀作为
+`filterConfiguration.inclusionPrefixes`，解析策略为 `SMART_PARSING`），每个数据源
+由 ingestion 作业建立索引（`StartIngestionJob` / `ListIngestionJobs`），检索则是带
+`managedSearchConfiguration` 的 `bedrock-agent-runtime.retrieve`。只有
+`type == "MANAGED"` 的知识库在范围内：列表摘要不带类型，因此 `list_kbs` 对每个 id
+读一次 `GetKnowledgeBase` 并丢弃其余类型；所有按 id 的路径都会走
+`_require_managed`，对账号内确实存在的 VECTOR 知识库返回 `kb.not_found`。
+
+**创建返回 `202`，尾巴在请求之外收。** 知识库需要 1.5–3 分钟才离开 `CREATING`，
+而它的数据源必须等到 `ACTIVE` 之后才能创建，所以 `POST /api/knowledge-bases` 直接
+以 `202` 返回仍处于 `CREATING` 的详情，外加 `source_pending` 描述符；
+`_start_source_completion` 在守护线程里轮询 `GetKnowledgeBase`（间隔 10 秒，
+截止 15 分钟，自带 client——请求的 client 不能活得比请求更久），一旦知识库转为
+`ACTIVE` 就创建数据源。此前的实现是在请求内轮询，被 ~60 秒的代理源超时从中间切断，
+浏览器随后的文件上传就静默丢失了。也正因如此，数据源创建有三处可能相互竞争的入口
+——创建路径、该后台线程、手动 `POST …/data-sources`——所以 `_create_data_source`
+先调 `_find_data_source_at`：它比对每个既有连接器解析出的（桶，前缀），命中就直接
+返回，因此同一个 S3 位置不可能产生第二个连接器。客户端轮询
+`GET /api/knowledge-bases/{kb_id}`，并在数据源报告 `AVAILABLE` 后自行发起首次
+ingestion。
+
+`?view=` 之下挂着两个子页面（`frontend/src/pages/KnowledgeBases.tsx`）；列表是默认
+视图，而 `?view=detail&kb=` 指向的 id 若已解析不到，会走共享的失效深链接提示，而不是
+永远停在 LOADING。
+
+| `?view=` | 展示内容 |
+|---|---|
+| `create` | 名称、描述，以及数据源选择器——待上传的文件，或一个既有的桶 + 前缀（`CreateView.tsx`、`SourcePicker.tsx`）。提交时：先创建，再（上传模式下）用 `POST …/files` 推送所选文件，然后直接跳到新知识库的详情页 |
+| `detail&kb=<id>` | 概览（id、ARN、更新时间、描述就地编辑、删除）、已挂载的 Agent、数据源——桶/前缀、状态、最近的 ingestion 作业及其统计，以及可折叠的按数据源文档分页（`ListKnowledgeBaseDocuments`，按 token 分页，每行的索引状态还联结了 S3 侧的大小与上传时间）——以及检索 Playground（`POST …/query`，1–100 条结果，带分数与来源 URI）。只要还有动作在进行中，页面每 5 秒轮询一次；对已 `AVAILABLE` 但还没有作业的数据源自动触发首次同步；当一个 `ACTIVE` 知识库压根没有数据源时，给出告警并提供「补建数据源」按钮 |
+
+**数据源。** `_resolve_source` 接受两种模式。`upload` 指向平台 artifacts 桶的
+`kb/{kb_id}/` 前缀，也正是 `upload_files` 写入的位置——文件可以先于连接器落地；而
+数据源全在别处的知识库会以 `kb.no_upload_target` 拒绝上传。`existing` 取调用方给的
+桶与可选前缀，并对两者做校验（`_validate_external_source`）：桶名必须符合 S3 自身
+的命名规则，前缀必须是字面路径——因为二者会被直接插进下面的授权 ARN，桶名里的 `*`
+或 `/` 会把该授权从一个桶放大到整个账号。
+
+**按知识库的 IAM。** 自带的桶还得让知识库角色读得到，所以 `_create_data_source` 会
+调 `_sync_kb_policy`：在 `kb_role_arn` 指向的角色上放一条内联策略
+`launchpad-kb-<kb_id>`——`<bucket>/<prefix>*` 上的 `s3:GetObject`，加上桶级的
+`s3:ListBucket`，后者在设置了前缀时带 `s3:prefix` 条件（`_kb_policy_document`）。
+artifacts 桶会被跳过——引导阶段已经授权过一次。删除时 `_delete_kb_policy` 再把这条
+策略摘掉。`roleArn` 本身在创建时并不会被校验，因此错误的 `kb_role_arn` 只会在
+ingestion 失败时才暴露。
+
+**删除。** 只要还有 Agent 的 spec 挂载着这个知识库，`delete_kb` 就以
+`409 kb.has_attached_agents` 拒绝（阻塞的 Agent 名在 `detail.agents` 里）。
+`force=true` 会先跑 `_strip_kb_from_agents`：把该知识库从每个挂载它的 spec 里摘掉，
+并且**只**为 harness 类 Agent 重新同步按 Agent 的网关目标——zip/container Agent 本
+就没有这种目标，为它们动网关只会*创建*一个永远用不到的目标。随后尽力删除各数据源、
+移除按知识库的 `Retrieve` 目标（仅在网关已存在时——删除流程绝不去预置它）、摘掉内联
+策略，最后调 `DeleteKnowledgeBase`；仍在 `CREATING` 的知识库会返回
+`409 kb.delete_conflict`。已部署的 harness 会保留其过时的提示词段落，直到下一次
+重新发布——这无害，因为对应工具已经不再指向那个已死的知识库。
+
+**两条挂载通道，按创建方式选择。** `AgentSpec.knowledge_bases` 最多容纳 10 个
+`KnowledgeBaseRef`（`kb_id` 加上反规范化的名称/描述，这样提示词与详情视图都不必再
+回访 Bedrock）；spec 校验器允许 `harness`、`zip_runtime` 与 `container`，拒绝 Studio
+画布与 `protocol="a2a"`。
+
+- **网关通道——方式B（harness）。** `services/kb_gateway.py` 拥有一个共享的 MCP
+  网关 `launchpad-kb-gw`（入站 Cognito-JWT 鉴权，出站 `GATEWAY_IAM_ROLE`，连接器为
+  `bedrock-knowledge-bases`），上面挂两类目标：按知识库的 `Retrieve` 目标，命名为
+  `<kb-slug>-<kb_id>`（每个知识库一个，全局可见）；以及按 Agent 的
+  `AgenticRetrieveStream` 目标 `agentic-<agent>`，其 `retrievers` 恰好是该 Agent 的
+  那几个知识库，基础模型与重排模型类型都是 `MANAGED`。每个 `ensure_*` 都是按名字
+  「不存在才创建」，并且 retrieve 目标在遇到 `ConflictException` 时会接管并发发布者
+  的胜者，而不是让本次发布失败。harness 部署器的 **provision** 阶段负责引导网关
+  （`ensure_kb_gateway_persisted`，它把 `kb_gateway_{id,arn,url}` 持久化到工作区）、
+  确保按知识库的目标、同步按 Agent 的目标，然后重新渲染 `CreateHarness` 请求——首次
+  挂载时 `generate` 跑在网关存在之前——并以 `CLIENT_CREDENTIALS` 出站鉴权把它作为
+  `agentcore_gateway` 工具挂上。`harness.py::_kb_prompt` 会追加一段
+  `## Knowledge bases` 提示词，点名网关的 MCP 工具（`…___Retrieve`、
+  `agentic-…___AgenticRetrieveStream`）。网关是惰性创建的：在第一个挂载知识库的
+  harness 部署（或显式的 `POST /api/knowledge-bases/ensure-gateway`）之前，没有任何
+  东西会去预置它。
+- **直连通道——方式A（container）与 `zip_runtime`。** 不经网关；生成的运行时自带两个
+  工具，用 Agent 自己的执行角色直接调 Bedrock 数据面：`kb_search` → `Retrieve`
+  （一次相似度检索，不调用基础模型），以及 `kb_deep_search` →
+  `AgenticRetrieveStream`（一个规划循环：拆解问题、跨所有已挂载知识库检索——单个知识
+  库最多 3 轮、多个最多 5 轮——并返回带引用的答案）。两种方式的一切都取自
+  `templates/kb_support.py`，因此不会各自漂移：`mounted_kb_refs` 把知识库字面量烤进
+  生成的源码，`kb_prompt_section` 追加在两个工具之间做取舍的提示词段落；容器把它们以
+  `mcp__launchpad_kb__<tool>` 的命名空间形式暴露。授权是 `ManagedKbRetrieval`
+  （`bedrock:Retrieve` + `GetKnowledgeBase`，由 `services/agent_iam.py` 的按 Agent
+  角色收窄到已挂载的知识库 ARN）与 `ManagedKbAgenticRetrieval`
+  （`bedrock:AgenticRetrieveStream`，刻意为 `*`——该动作无法按资源收窄），两者都定义在
+  `infra/stacks/base_stack.py`；同一对语句也挂在 `launchpad-gateway-role` 上，供网关
+  通道使用。
+
+`launchpad-kb-gw` 属于「引导邻接」而非引导创建，因此拆除脚本按名字连同它的目标一起
+清扫——见 [teardown.zh-CN.md](teardown.zh-CN.md)。
 
 ## 记忆控制台(控制台 05)
 

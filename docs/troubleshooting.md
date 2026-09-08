@@ -80,6 +80,41 @@ entry below was observed during implementation — none is speculative.
   runtime-backed agents (`zip_runtime` / `studio` / `container`). The UI states
   this limitation.
 
+## Knowledge Bases
+
+- **Creation answers `202` and the data source appears a few minutes later.** A
+  managed KB needs 1.5–3 min to leave `CREATING`, and its data source cannot be
+  created before it is `ACTIVE`, so `POST /api/knowledge-bases` returns
+  immediately and a backend thread (`knowledge._start_source_completion`) polls
+  and creates the source afterwards. A backend restart inside that window kills
+  the thread and leaves an `ACTIVE` KB with **zero data sources**. The detail page
+  says so and offers the fix: "No data source yet. The backend creates it once the
+  knowledge base turns ACTIVE (usually 1–3 min); if it never appears, repair it
+  here — clicking twice cannot create a duplicate."
+  (`knowledge.detail.sources.missingSource`) next to a `Repair data source`
+  button, which posts `POST /api/knowledge-bases/{kb_id}/data-sources`.
+  Double-clicking is safe: `_find_data_source_at` returns the existing connector
+  for the same bucket/prefix instead of creating a second one.
+- **A sync started too early is refused as `409 kb.sync_not_ready`.**
+  `StartIngestionJob` throws `ValidationException` while the data source is still
+  provisioning (not yet `AVAILABLE`) and `ConflictException` when a sync is already
+  running for it; `knowledge.start_sync` catches both and answers one
+  `409 kb.sync_not_ready` ("the data source may still be provisioning, or another
+  sync is already running"). Wait for the source to report `AVAILABLE` — the
+  console then starts the first ingestion by itself. On every *other* KB route
+  those two AWS exceptions are not caught locally and reach the console through the
+  global mapping instead, as `400 aws.validation` and `409 aws.conflict` (see the
+  error table in [api.md](api.md)).
+- **A wrong `kb_role_arn` only fails at ingestion.** `CreateKnowledgeBase` does
+  not validate `roleArn`, so a KB created with a bad or under-privileged role
+  still goes `ACTIVE`; the failure surfaces later as a failed ingestion job (its
+  `failure_reasons` are shown per data source). The per-KB inline policy that
+  grants `s3:GetObject`/`s3:ListBucket` on a BYO bucket is put on the role named
+  by that same ARN (`knowledge._sync_kb_policy`), so it lands on the wrong role
+  too. Missing entirely, the key is caught up front: `create_kb` refuses with
+  "kb_role_arn missing from this workspace's resource map — run its bootstrap"
+  rather than creating an unusable KB.
+
 ## Local dev
 
 - **Vite auto-shifts the frontend port.** If `5173` is taken, the platform

@@ -57,6 +57,7 @@ real, runnable code in this repo.
 | **Runtime** | Hosts zip and container agents (`CreateAgentRuntime`); the invoke chain calls the runtime data plane. Agent Management can also scan every `ListAgentRuntimes` page, inspect each resource with `GetAgentRuntime`, and explicitly import HTTP/A2A runtimes as externally owned ledger entries without changing the AWS resource. The agent detail's read-only VERSIONS & ENDPOINTS panel reads every `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints` page back (`GET /api/agents/{id}/versions`) so the operator sees the immutable versions, the `DEFAULT` endpoint, and any pinned named endpoints. |
 | **Harness** | Hosts 方式B agents (`CreateHarness`) — a managed entrypoint with no build artifact. The same VERSIONS & ENDPOINTS panel reads `ListHarnessVersions` + `ListHarnessEndpoints` for harness-backed agents. |
 | **Memory** | One shared `launchpad_memory` singleton: short-term session events + four long-term strategies — semantic facts (`/facts/{actorId}`), user preferences (`/preferences/{actorId}`), per-session summaries (`/summaries/{actorId}/{sessionId}`) and episodes (`/episodes/{actorId}/{sessionId}`) whose reflections consolidate on the per-actor prefix `/episodes/{actorId}`. The catalog lives in `services/memory_strategies.py`; `ensure_memory` creates a new memory with all four and, on re-bootstrap, adds whatever an existing memory lacks through `UpdateMemory addMemoryStrategies` (additive — nothing else on the resource is touched). Namespaces are keyed only on `{actorId}` (there is no `{agentId}` template), so the platform folds the agent id into the actor — `scoped_actor(agent_id, human)` → `<agent>__<human>` — which partitions **both** short-term events and long-term records (`/facts/<agent>__<human>`) per agent. Chat derives `human` server-side from the signed console session; the browser cannot choose it. Generated Strands runtimes restore short-term turns through `AgentCoreMemorySessionManager`. Claude Agent SDK containers create one request-local `MemorySessionManager`, inject bounded short-term turns plus `/facts/<actor>` and `/preferences/<actor>` records through a `UserPromptSubmit` hook, then persist the successful USER/ASSISTANT pair as one event. The chat rail lists the actor's facts and preferences plus this session's summary and episodes (exact per-session namespaces, so actor-level reflections stay out). A2A runtimes use `<agent>__a2a__<contextId>` because direct A2A currently has no authenticated human actor envelope; the internal `__agent_card__` factory context is deliberately stateless because it is not a valid Memory session id. One agent's learned facts never bleed into another's for the same person or A2A context; the ledger still stores the bare human actor for display. |
+| **Knowledge Bases** *(Bedrock, not AgentCore)* | Managed Bedrock Knowledge Bases (`type: MANAGED` — the service owns the vector store, embeddings and reranking) are the grounding layer: S3 `MANAGED_KNOWLEDGE_BASE_CONNECTOR` data sources, ingestion jobs, and `Retrieve` / `AgenticRetrieveStream` retrieval. Agents mount them through the dedicated MCP gateway `launchpad-kb-gw` (managed Harness) or through `kb_search` / `kb_deep_search` tools baked into generated zip/container code — see [Managed Knowledge Bases](#managed-knowledge-bases-console-04). |
 | **Gateway** | `launchpad-gw` turns a REST API (office-facts) and a Lambda (hr-database) into MCP tools with Cognito-JWT auth; agent tool calls flow through it. Governance manages **Gateway rate limits** (GA Aug 2026) on managed Gateways — `ListGatewayRateLimits` / `CreateGatewayRateLimit` / `UpdateGatewayRateLimit` / `DeleteGatewayRateLimit` behind the RATE LIMITS panel of the gateway detail, validated server-side and journaled in `policy_changes`. |
 | **Identity** | Token vault backing the gateway — an OAuth2 provider (agent outbound auth) and an API-key provider. |
 | **Registry** | The GA `agent-registry` service hosts `launchpad-registry`, cataloguing A2A agents, MCP servers, and AGENT_SKILLS. `services/agentcore/registry.py` translates the GA `AGENT/MCP/SKILL` and `data/dataSchemaVersion` model into the stable Launchpad descriptor contract; other AgentCore services remain under `bedrock-agentcore`. GA uniqueness is `(name, recordVersion)`, so newly created records use type-qualified initial versions (`1.0.0-a2a`, `1.0.0-mcp`, `1.0.0-skill`) and content edits preserve the suffix. Every deploy auto-creates and submits an A2A record when Registry is available. In accounts whose SCP/IAM policy denies Registry setup, bootstrap records the capability as unavailable, Registry-only APIs return 503, and the deploy pipeline skips only the register stage; Runtime/Harness deployment remains usable. Governance can import one existing AgentCore Gateway as one MCP record containing the Gateway endpoint and its complete discovered tool catalog; legacy per-target records remain until an explicit retirement after the Gateway record is APPROVED. Registry approval controls catalog visibility, not Gateway authorization. `GET /api/registry/attachables` reports catalog status separately from Harness attachability and resolves Gateway auth server-side. For an A2A record owned by a deployed Launchpad A2A agent, the Registry drawer's LIVE CARD reads the card the runtime serves right now (`GET /api/registry/records/{id}/live-agent-card` → data-plane `GetAgentCard` on the ledger's `Agent.arn`, the session AWS opens is ended at once) and diffs it against the record's stored card; the live card is never persisted — AWS stays the source of truth. Both cards read their `version` from one platform constant, `A2A_CARD_VERSION` in `services/agentcore/registry.py`: the A2A runtime template passes it to Strands `A2AServer(version=...)` at package time and `build_a2a_card` stamps it on the record at register time, so the two agree by construction. It is deliberately **not** the AgentCore runtime version (`Agent.version`, shown in VERSIONS & ENDPOINTS) — that is assigned by Create/UpdateAgentRuntime only after the template has been rendered, so the card cannot carry it. A2A agents published before this constant existed still serve Strands' default `0.0.1` against a record `version` of `1`; the diff flags them until their next re-publish (re-render + re-register), which converges both sides. The Registry page has two views over the same registry: the **publisher list** (`GET /api/registry/records` → control-plane `ListRegistryRecords`, every record in every state) and the **consumer view** (`?view=discoverable`, `GET /api/registry/records/discoverable` → data-plane `ListDiscoverableRegistryRecords`, paginated to completion) — what a consumer or agent with data-plane access actually discovers. Discovery summaries carry no `descriptors`; opening a row reads the full record. Once the consumer view has been fetched in a page session, every control-plane record absent from it is chipped NOT DISCOVERABLE (DRAFT / PENDING_APPROVAL / REJECTED / DEPRECATED are the expected cases) — the diff, not the list, is the point. |
@@ -965,6 +966,137 @@ in the developer's browser. Leaving the password unset keeps the gate off for
 loopback (console open, registration refused with `auth.registration_disabled`,
 `/api/users*` reachable as the implicit local admin), preserving the
 bootstrap-free local development and test flow.
+
+## Managed Knowledge Bases (console 04)
+
+`/knowledge-bases` is the grounding layer, and the one console module that backs
+onto **Bedrock** rather than an AgentCore service: a *managed* Bedrock Knowledge
+Base is fully-managed RAG — the vector store, embeddings and reranking belong to
+the service. `backend/app/services/knowledge.py`, over the `bedrock-agent`
+control plane and the `bedrock-agent-runtime` data plane, owns it and is exposed
+as `/api/knowledge-bases/*` (`backend/app/routers/knowledge.py`, tabulated in
+[api.md](api.md#console-knowledge-bases-api)). There is no KB ledger table: AWS
+holds the whole state, and the only thing the platform stores locally is the
+`AgentSpec.knowledge_bases` reference on each agent.
+
+**Resource model.** `create_kb` sends `CreateKnowledgeBase` with
+`knowledgeBaseConfiguration.type = "MANAGED"` and
+`managedKnowledgeBaseConfiguration.embeddingModelType = "MANAGED"` — nothing
+about the index is configurable — and `roleArn` is the shared bootstrap role
+from the workspace resource map's `kb_role_arn` (a missing key makes `create_kb`
+refuse outright, "run its bootstrap"). Documents arrive through S3 data sources
+of type `MANAGED_KNOWLEDGE_BASE_CONNECTOR` (`_data_source_configuration`: the
+bucket plus `bucketOwnerAccountId` under
+`connectorParameters.connectionConfiguration`, an optional prefix as
+`filterConfiguration.inclusionPrefixes`, `SMART_PARSING`), each indexed by an
+ingestion job (`StartIngestionJob` / `ListIngestionJobs`), and retrieval is
+`bedrock-agent-runtime.retrieve` with a `managedSearchConfiguration`. Only
+`type == "MANAGED"` KBs are in scope: list summaries do not carry the type, so
+`list_kbs` reads `GetKnowledgeBase` per id and drops the rest, and every by-id
+path runs `_require_managed`, which answers `kb.not_found` for a VECTOR KB that
+really does exist in the account.
+
+**Create returns `202` and finishes off-request.** A KB needs 1.5–3 min to leave
+`CREATING` and its data source cannot be created before it is `ACTIVE`, so
+`POST /api/knowledge-bases` answers `202` with the still-`CREATING` detail plus
+the `source_pending` descriptor, and `_start_source_completion` polls
+`GetKnowledgeBase` on a daemon thread (10 s interval, 15 min deadline, its own
+client — a request's client must not outlive the request) and creates the data
+source the moment the KB turns `ACTIVE`. This replaced an in-request poll that a
+~60 s proxy origin timeout cut mid-request, which silently lost the browser's
+follow-up upload. Data-source creation is therefore attempted from three places
+that can race — the create path, that thread, a manual `POST …/data-sources` —
+so `_create_data_source` first calls `_find_data_source_at`, which compares the
+parsed (bucket, prefix) of every existing connector and returns the match
+instead: a second connector for one S3 location cannot be produced. The client
+polls `GET /api/knowledge-bases/{kb_id}` and starts the first ingestion itself
+once a source reports `AVAILABLE`.
+
+Two sub-pages hang off `?view=` (`frontend/src/pages/KnowledgeBases.tsx`); the
+list is the default view, and a `?view=detail&kb=` whose id no longer resolves
+goes through the shared stale-deep-link notice rather than a permanent LOADING.
+
+| `?view=` | Shows |
+|---|---|
+| `create` | Name, description, and the source picker — files to upload, or an existing bucket + prefix (`CreateView.tsx`, `SourcePicker.tsx`). On submit: create, then (upload mode) `POST …/files` with the picked files, then straight to the new KB's detail |
+| `detail&kb=<id>` | OVERVIEW (id, ARN, updated, inline description edit, DELETE), ATTACHED AGENTS, DATA SOURCES — bucket/prefix, status, the recent ingestion jobs with their statistics, and a collapsible per-source document page (`ListKnowledgeBaseDocuments`, token-paginated, each row's index status joined with S3 size and upload time) — and the RETRIEVAL PLAYGROUND (`POST …/query`, 1–100 results with scores and source URIs). It polls every 5 s while anything is in flight, auto-starts the first sync of an `AVAILABLE` source that has no jobs yet, and warns plus offers `Repair data source` when an `ACTIVE` KB has no data source at all |
+
+**Sources.** `_resolve_source` accepts two modes. `upload` targets the platform
+artifacts bucket under `kb/{kb_id}/`, which is exactly where `upload_files`
+writes — files may land before the connector exists, while a KB whose only
+sources are elsewhere refuses uploads with `kb.no_upload_target`. `existing`
+takes the caller's bucket and optional prefix and validates both
+(`_validate_external_source`): the bucket must match S3's own naming rule and the
+prefix must be a literal path, because both are interpolated straight into the
+grant ARNs below — a `*` or a `/` in the bucket name would widen that grant from
+one bucket to the whole account.
+
+**Per-KB IAM.** A BYO bucket also has to be readable by the KB role, so
+`_create_data_source` calls `_sync_kb_policy`, which puts one inline policy
+`launchpad-kb-<kb_id>` on the role named by `kb_role_arn`: `s3:GetObject` on
+`<bucket>/<prefix>*` plus `s3:ListBucket` on the bucket, the latter conditioned
+on `s3:prefix` whenever a prefix is set (`_kb_policy_document`). The artifacts
+bucket is skipped — bootstrap granted it once. `_delete_kb_policy` removes the
+policy again on delete. `roleArn` itself is never validated at create time, so a
+wrong `kb_role_arn` surfaces only when ingestion fails.
+
+**Delete.** `delete_kb` refuses with `409 kb.has_attached_agents` (the blocking
+names in `detail.agents`) while any agent's spec mounts the KB. `force=true`
+runs `_strip_kb_from_agents` first, which drops the KB from every mounted spec
+and re-syncs the per-agent gateway target of the **harness** agents only —
+zip/container agents have no such target, so touching the gateway for them would
+*create* one nothing ever uses. Then the data sources are deleted best-effort,
+the per-KB `Retrieve` target is removed (only if the gateway already exists — a
+delete never provisions it), the inline policy goes, and `DeleteKnowledgeBase`
+runs; a KB still `CREATING` answers `409 kb.delete_conflict`. An already deployed
+harness keeps its stale prompt section until its next re-publish — harmless,
+because the tool no longer routes to the dead KB.
+
+**Two attach channels, picked by method.** `AgentSpec.knowledge_bases` holds up
+to 10 `KnowledgeBaseRef`s (`kb_id` plus a denormalized name/description, so the
+prompt and the detail views need no Bedrock round-trip); the spec validator
+allows them on `harness`, `zip_runtime` and `container` and rejects the Studio
+canvas and `protocol="a2a"`.
+
+- **Gateway channel — 方式B (harness).** `services/kb_gateway.py` owns one shared
+  MCP gateway, `launchpad-kb-gw` (Cognito-JWT inbound auth, `GATEWAY_IAM_ROLE`
+  outbound, the `bedrock-knowledge-bases` connector), carrying two kinds of
+  target: a per-KB `Retrieve` target named `<kb-slug>-<kb_id>` (one per KB,
+  globally visible) and a per-agent `AgenticRetrieveStream` target
+  `agentic-<agent>` whose `retrievers` are exactly that agent's KBs, with
+  `MANAGED` foundation and reranking model types. Every `ensure_*` is
+  create-if-missing by name, and the retrieve target adopts a concurrent
+  publisher's winner on `ConflictException` instead of failing the publish. The
+  harness deployer's **provision** stage bootstraps the gateway
+  (`ensure_kb_gateway_persisted`, which persists `kb_gateway_{id,arn,url}` onto
+  the workspace), ensures the per-KB targets, syncs the per-agent one, then
+  re-renders the `CreateHarness` request — `generate` ran before the gateway
+  existed on a first attach — and attaches it as an `agentcore_gateway` tool with
+  `CLIENT_CREDENTIALS` outbound auth. `harness.py::_kb_prompt` appends a
+  `## Knowledge bases` prompt section naming the gateway's MCP tools
+  (`…___Retrieve`, `agentic-…___AgenticRetrieveStream`). The gateway is created
+  lazily: nothing provisions it until the first KB-mounting harness deploy, or an
+  explicit `POST /api/knowledge-bases/ensure-gateway`.
+- **Direct channel — 方式A (container) and `zip_runtime`.** No gateway; the
+  generated runtime carries two tools that call the Bedrock data plane with the
+  agent's own execution role: `kb_search` → `Retrieve` (one similarity search,
+  no FM call) and `kb_deep_search` → `AgenticRetrieveStream` (a planning loop
+  that decomposes the question, searches every mounted KB over up to 3 rounds for
+  a single KB or 5 across several, and returns a cited answer). Both methods
+  derive everything from `templates/kb_support.py` so they cannot drift:
+  `mounted_kb_refs` bakes the KB literal into the rendered source and
+  `kb_prompt_section` appends the prompt block that steers between the two tools;
+  the container exposes them namespaced as `mcp__launchpad_kb__<tool>`. The
+  grants are `ManagedKbRetrieval` (`bedrock:Retrieve` + `GetKnowledgeBase`,
+  narrowed to the attached KB ARNs by the per-agent role in
+  `services/agent_iam.py`) and `ManagedKbAgenticRetrieval`
+  (`bedrock:AgenticRetrieveStream`, deliberately `*` — the action is not
+  resource-scopable), both defined in `infra/stacks/base_stack.py`; the same pair
+  sits on `launchpad-gateway-role` for the gateway channel.
+
+`launchpad-kb-gw` is bootstrap-adjacent rather than bootstrap-created, so
+teardown sweeps it by name together with its targets — see
+[teardown.md](teardown.md).
 
 ## The Memory console (console 05)
 

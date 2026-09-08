@@ -270,6 +270,45 @@ reads report the reference with `policy_engine.missing = true` and
 reference as unattached: it creates a new Engine, attaches it in the selected
 mode, and records the replaced ARN on the operation.
 
+## Console Knowledge Bases API
+
+`/api/knowledge-bases/*` backs the Knowledge Bases console (console 04) over
+Bedrock *managed* knowledge bases — `bedrock-agent` for the control plane,
+`bedrock-agent-runtime` for retrieval. Only `type == "MANAGED"` KBs are
+addressable: a VECTOR KB in the same account answers `kb.not_found`. Nothing is
+stored locally, so every route is a live AWS call. See
+[architecture.md](architecture.md#managed-knowledge-bases-console-04).
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/knowledge-bases?status=` | Every MANAGED KB with `{kb_id, name, description, status, updated_at, data_source_count, attached_agents}`; `status` is an optional exact-match filter applied after the read (e.g. `ACTIVE`) |
+| `POST` | `/api/knowledge-bases` | `202` — `CreateKnowledgeBase` (`{name, description?, source: {mode: "upload"\|"existing", bucket?, prefix?}}`) returns the detail while it is still `CREATING`, plus `source_pending`; the data source is created off-request by a backend thread once the KB is `ACTIVE` (1.5–3 min), so the client polls `GET /{kb_id}` |
+| `GET` | `/api/knowledge-bases/{kb_id}` | Detail: status, ARN, timestamps, `failure_reasons`, `attached_agents`, and each data source with bucket/prefix, status and its 10 most recent ingestion jobs |
+| `PATCH` | `/api/knowledge-bases/{kb_id}` | `{description}` (≤1000 chars) → `UpdateKnowledgeBase` with the name, role and configuration read back unchanged; answers the fresh detail |
+| `DELETE` | `/api/knowledge-bases/{kb_id}?force=` | Deletes data sources, the per-KB gateway `Retrieve` target and the per-KB inline S3 policy, then `DeleteKnowledgeBase`. `409 kb.has_attached_agents` while agents mount it; `force=true` strips it from every mounted agent's spec (and re-syncs the harness agents' agentic targets) first |
+| `POST` | `/api/knowledge-bases/{kb_id}/files` | `multipart/form-data`, one or more parts named `files` (or `file`) → `{keys}` in the artifacts bucket under `kb/{kb_id}/`. Allowed while the data source does not exist yet; `409 kb.no_upload_target` for a KB whose sources are all elsewhere |
+| `POST` | `/api/knowledge-bases/{kb_id}/data-sources` | `201` — creates a `MANAGED_KNOWLEDGE_BASE_CONNECTOR` source from the same `{mode, bucket?, prefix?}` body and answers the fresh detail. Idempotent per S3 location: an existing connector on the same bucket/prefix is returned instead of a second one. This is also the manual repair for a KB left with no data source |
+| `DELETE` | `/api/knowledge-bases/{kb_id}/data-sources/{ds_id}` | `DeleteDataSource` → `{deleted, ds_id}` (deletion is asynchronous on the AWS side) |
+| `POST` | `/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/sync` | `StartIngestionJob` → the job projection `{job_id, status, started_at, updated_at, statistics, failure_reasons}` |
+| `GET` | `/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/ingestion-jobs` | The 50 most recent ingestion jobs, newest first, in the same projection |
+| `GET` | `/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/documents?page_size=&token=` | One page of `ListKnowledgeBaseDocuments` (`page_size` 1–100, default 50) as `{documents, next_token, page_size}`; each document carries the KB-side `status`/`status_reason`/`indexed_at` plus S3-side `size_bytes`/`uploaded_at` joined by object key (absent when the backend cannot list the bucket) |
+| `POST` | `/api/knowledge-bases/{kb_id}/query` | Retrieval playground — `{text, number_of_results?}` (1–100, default 8) → `Retrieve` with a `managedSearchConfiguration`, answering `{results}` of `{text, score, location_uri, metadata}` |
+| `POST` | `/api/knowledge-bases/ensure-gateway` | Create-if-missing the shared `launchpad-kb-gw` MCP gateway and persist `{id, arn, url}` onto the workspace. Idempotent; the harness deploy path calls the same helper, so this is only needed to provision the gateway ahead of time |
+
+Error codes: `kb.not_found` (404 — unknown id, or a KB that is not MANAGED),
+`kb.ds_not_found` (404), `kb.has_attached_agents` (409, with the blocking names
+in `detail.agents`), `kb.delete_conflict` (409 — the KB is still `CREATING`),
+`kb.no_upload_target` (409), `kb.no_files` (400 — no upload part in the form),
+`kb.sync_not_ready` (409 — `StartIngestionJob` hit `ValidationException` or
+`ConflictException`: the data source is still provisioning, or a sync is already
+running), `kb.bucket_required` / `kb.invalid_bucket` / `kb.invalid_prefix` /
+`kb.invalid_source` (400 — source validation), `kb.query_failed` (502 —
+retrieval failed on the KB side, e.g. the index is still building). Any other
+AWS `ClientError` goes through the global mapping above (`aws.validation`,
+`aws.conflict`, …). A workspace whose resource map has no `kb_role_arn` (create)
+or no `artifacts_bucket` (uploads) has not been bootstrapped and raises a `500`
+naming the missing key.
+
 ## Console Memory API
 
 `/api/memory/*` backs the read-only Memory console (console 05) over the shared

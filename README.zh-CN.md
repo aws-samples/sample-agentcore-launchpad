@@ -21,6 +21,12 @@ vendored Strands Studio 子应用。主要能力包括：
   或托管 Harness 服务（方式B）。
 - **注册中心。** 通过 AgentCore Registry 登记和查找三类资产：Agent（A2A）、
   MCP 工具和 Skill，并支持提交、审批等生命周期操作。
+- **知识库。** 托管 Bedrock 知识库——全托管 RAG，向量库、嵌入与重排都由服务负责。
+  既可以指向既有的 S3 位置，也可以直接在控制台上传文件来创建；可以查看 ingestion
+  进度与逐文档的索引状态，并在挂载之前用检索 Playground 确认 Agent 实际能检索到
+  什么。已 ACTIVE 的知识库随后可在「创建 Agent」向导里挂到 Agent 上：托管 Harness
+  经专用 MCP 网关 `launchpad-kb-gw` 访问它们，zip 与 container Agent 则在生成的代码
+  里自带 `kb_search` / `kb_deep_search` 工具。
 - **Chat 交互页面和公开 `/v1` API。** 选中任意已激活的 Agent 即可对话，支持
   流式响应、多轮历史和 session 级记忆。外部系统可通过带 `X-Api-Key` 鉴权的
   `/v1` 接口调用同一条链路，因此 API 与控制台的行为一致。
