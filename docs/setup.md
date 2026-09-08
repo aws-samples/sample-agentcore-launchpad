@@ -78,6 +78,19 @@ decision rows require separately managed trace delivery.
 
 Use `make dev` for the foreground, terminal-attached development stack.
 
+Every setting named in this document is a key in `config/launchpad.yaml`, or the
+same name upper-cased with a `LAUNCHPAD_` prefix in the process environment
+(`database_url` → `LAUNCHPAD_DATABASE_URL`). Precedence is defaults <
+`config/launchpad.yaml` < environment < init kwargs, so an env var always wins
+over the file bootstrap generated. Three keys decide how the backend itself
+starts:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `database_url` | `sqlite:///<repo>/data/launchpad.db` | SQLAlchemy URL of the ledger. The default is a single SQLite file under `data/`; it holds identifiers and derived progress only — AWS stays the source of truth — so a lost ledger costs console history, not resources. Point it elsewhere to relocate the file. |
+| `cors_origins` | `["http://localhost:5173", "http://127.0.0.1:5173"]` | Browser origins allowed to call `/api`. The defaults cover the dev frontend under either loopback spelling; add your own origin when the console is served from a different host or port. `./start.py --prod` serves console and API from one origin and needs no entry. |
+| `agentcore_read_timeout_s` | `1000` | boto read timeout for the AgentCore data-plane client (`backend/app/services/agentcore/client.py:30`). A synchronous AgentCore invoke may run for **up to 15 minutes**, so this has to stay above that service limit — botocore's 60 s default abandons a slow buffered agent before it can return its final response. |
+
 ### Console login / 控制台登录
 
 The console can use local accounts without Cognito or any other AWS dependency.
@@ -305,6 +318,25 @@ memory/CPU/pids/file-size ceilings mapped onto docker flags. Timeouts kill the
 container itself, and a startup janitor sweeps any `strands-exec-*` containers a
 backend crash left behind. Per-run overhead is ~0.3 s.
 
+Those ceilings, and the image the container comes from, are settings:
+
+| Setting | Default | Docker flag |
+|---|---|---|
+| `studio_exec_memory_mb` | `2048` | `--memory` and `--memory-swap`, pinned to the same value so the container cannot page around the limit |
+| `studio_exec_cpu_seconds` | `300` | `--ulimit cpu=<n>:<n>` — CPU **seconds** burned, not wall clock; wall clock is `execute_timeout_s` |
+| `studio_exec_max_processes` | `64` | `--pids-limit` |
+| `studio_exec_max_file_mb` | `256` | `--ulimit fsize=<bytes>` — the largest file the generated code may write |
+| `studio_exec_docker_image` | `launchpad-studio-exec:latest` | the image `docker run` starts; change it only if you build the sandbox image under another name |
+
+The same four ceilings apply to the **subprocess** backend, where they become
+`resource.RLIMIT_*` values lowered in the forked child instead of docker flags
+(`backend/app/services/local_exec.py`: `_docker_run_argv` assembles the flags
+from line 380, the rlimit list is built around line 557). One asymmetry:
+`studio_exec_max_processes` maps to `RLIMIT_NPROC`, which counts processes and
+threads **per uid**, so the subprocess backend applies it only when
+`studio_exec_user` is set — against the backend's own uid it would count your
+whole login session and every thread the child tried to start would fail.
+
 Because the code no longer runs on the control-plane host, **selecting the
 docker backend is itself the production opt-in**: `run_mode=prod` +
 `studio_exec_backend=docker` serves the local-debug endpoints without
@@ -330,6 +362,65 @@ network set, rather than pretending.
 
 A deeper sandbox (AgentCore Code Interpreter re-host) remains unimplemented;
 the docker backend is the recommended middle tier.
+
+#### Code generation (AI Fix)
+
+Studio's **AI Fix** hands the failing flow's generated code, its traceback and
+the validation errors to a coding agent, which rewrites `generated_agent.py` in
+a scratch workspace and hands it back over SSE. Four settings control that:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `codegen_backend` | `claude` | Which coding agent performs the fix. `claude` (the Claude Agent SDK) is the only registered backend today; an unregistered name fails the request with the list of registered names rather than silently falling back. |
+| `codegen_model` | `global.anthropic.claude-sonnet-5` | Model that coding agent runs on. A stronger model repairs more per attempt and costs more per attempt. |
+| `codegen_timeout_s` | `180.0` | End-to-end budget for one AI-fix request, repair rounds included. Raise it if fixes are being cut off before the agent finishes writing the file. |
+| `codegen_max_repair_rounds` | `2` | How many times a rewrite may be re-validated and re-attempted before the request gives up. Each extra round is another model call on a flow whose first fix did not import cleanly. |
+
+### Skill Lab
+
+Skill Lab evaluates and trains Registry skill records: the vendored SkillOpt
+CLIs run as **subprocesses** on the backend host, each task's agent rollout runs
+in its own AgentCore Runtime microVM session on `launchpad_skill_lab_worker`,
+and the LLM judge calls Bedrock directly. `make bootstrap` provisions both
+halves — the dedicated interpreter and the worker image — so the settings below
+tune a provisioned Skill Lab rather than switch it on.
+
+| Setting | Default | Effect |
+|---|---|---|
+| `skill_lab_python` | `<repo>/data/skill-lab-venv/bin/python` | Interpreter the vendored `evaluate_skill.py` / `train.py` / task-set validators run in. Bootstrap builds it from `vendor/skillopt/requirements-launchpad.txt` and rebuilds it when that file changes; the backend process never imports the vendored tree itself. `GET /api/skill-lab/status` reports `venv_ready: false` while this path is missing — that is what an un-provisioned workspace looks like. |
+| `skill_lab_max_concurrent_jobs` | `1` (1–4) | How many evaluation/training jobs run at once. Each job is a CLI subprocess plus its own worker sessions, so this trades wall clock against host CPU/memory and pressure on the worker runtime; excess jobs queue instead of failing. |
+| `skill_lab_judge_model_id` | `us.openai.gpt-5.6-sol` | Model that scores rollouts. It must be a Bedrock **Converse inference-profile id** — the `bedrock_chat` judge rejects bare model ids. It also selects the agentic judge's host CLI by family: an `openai.*` id routes to the host `codex` binary with the profile prefix stripped, anything else to the host `claude` binary (`runner.judge_exec_route`). Changing this therefore changes which CLI the host must have installed. |
+| `skill_lab_target_model_id` | `global.anthropic.claude-opus-5` | Default model the skill under test runs on for the `claude_code_exec` target backend — again a Converse inference-profile id. Per-job parameters override it; a blank value is never sent, because an empty `--model` would let the vendored CLI substitute its own non-Bedrock default. |
+| `skill_lab_codex_target_model_id` | `openai.gpt-5.6-sol` | The same default for the `codex_exec` target backend, but a Bedrock **catalog slug** rather than a Converse profile id: codex resolves models itself through the `amazon-bedrock` provider baked into its config. Kept as a separate key so neither backend can ever be handed the other's id family. |
+| `skill_lab_codex_catalog_path` | `~/.codex/model-catalogs/bedrock-models.json` | Bedrock model catalog read from the backend host and staged into the worker image's codex-home at build time. The file embeds proprietary model instructions and is never committed, so when it is absent the build stages an empty `{}` catalog and logs that it did — codex targets on that image then have no catalog to resolve against. |
+| `skill_lab_judge_sandbox` | `bwrap` | Sandbox launcher argv (shlex-split) for the agentic judge's artifact parsers, which run on the backend **host** — the worker microVM cannot run bubblewrap. On hosts where unprivileged `bwrap` is blocked by AppArmor, set `sudo -n bwrap`. `GET /api/skill-lab/status` probes this argv's first word for `agentic_judge_ready`, and the vendored fail-closed boundary check still applies on top. |
+| `skill_lab_worker_cli_version` | `2.1.234` | Reports the `claude` CLI version baked into the worker image. |
+| `skill_lab_worker_codex_version` | `0.147.0` | Reports the `codex` CLI version baked into the worker image. |
+
+The two `*_version` keys are **mirrors, not inputs**. The build uses the
+`ARG CLAUDE_CLI_VERSION` / `ARG CODEX_CLI_VERSION` defaults in
+`vendor/skillopt/deploy/agentcore/Dockerfile` — that Dockerfile is what the
+image's content hash covers — while these settings only feed the console's
+display. **Bump both together:**
+`backend/tests/test_skill_lab_foundation.py` asserts the parity, so a one-sided
+change fails `make verify`. A version bump also changes the build-context hash,
+which is how the next bootstrap knows to rebuild and re-push the worker image.
+
+### Prompt optimization
+
+The experiment RECOMMEND stage asks a 3rd-party provider
+(`backend/app/optimization/providers`) to rewrite an agent's system prompt and
+tool descriptions from a pinned evaluation run's worst- and best-scoring
+sessions. Model ids here are Bedrock Converse inference-profile ids, invoked
+through the same workspace client funnel as everything else.
+
+| Setting | Default | Effect |
+|---|---|---|
+| `prompt_opt_models` | `["global.anthropic.claude-opus-5", "global.anthropic.claude-sonnet-5", "global.anthropic.claude-sonnet-4-6", "us.openai.gpt-5.6-sol"]` | The reflection models the console offers. Add an id here to make it selectable. |
+| `prompt_opt_default_model_id` | `global.anthropic.claude-opus-5` | Which of them leads that list and is used when a request names none. |
+| `prompt_opt_max_sessions` | `30` (3–100) | How many sessions of the pinned run a provider reads (worst-first plus a best-scoring contrast set). Fewer is cheaper and faster; more gives the reflection more evidence to generalise from. |
+| `prompt_opt_max_tokens` | `8192` (512–16000) | Output budget of the reflection call. A two-component reflection (prompt plus several tool descriptions) ran past 4096, and the provider doubles this once on its own when a response comes back truncated. |
+| `prompt_opt_read_timeout_s` | `900` | Read timeout of the reflection call. The call streams, so this bounds the gap between chunks rather than the total. botocore's 60 s default is far too low: in production a large model over 30 sessions ran past it and botocore silently re-sent the whole request five times before failing. |
 
 ### Self-service accounts and User Management
 

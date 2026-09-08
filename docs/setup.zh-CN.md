@@ -78,6 +78,18 @@ bootstrap 仍会为通用可观测性开启 CloudWatch Transaction Search，但�
 
 需要绑定当前终端的前台开发栈时,使用 `make dev`。
 
+本文档中提到的每一个配置项，都既可以写成 `config/launchpad.yaml` 里的 key，也可以
+写成同名大写加 `LAUNCHPAD_` 前缀的进程环境变量（`database_url` →
+`LAUNCHPAD_DATABASE_URL`）。优先级为：默认值 < `config/launchpad.yaml` < 环境变量 <
+init kwargs，因此环境变量总是压过 bootstrap 生成的那份文件。有三个 key 决定后端本身
+如何启动：
+
+| 配置项 | 默认值 | 作用 |
+|---|---|---|
+| `database_url` | `sqlite:///<repo>/data/launchpad.db` | 台账的 SQLAlchemy URL。默认是 `data/` 下的单个 SQLite 文件；它只存标识符与派生进度——AWS 始终是权威状态——所以丢掉台账损失的是控制台历史，而不是资源本身。改这个值即可迁移文件位置。 |
+| `cors_origins` | `["http://localhost:5173", "http://127.0.0.1:5173"]` | 允许调用 `/api` 的浏览器 origin。默认值覆盖开发态前端的两种 loopback 写法；当控制台由别的主机或端口提供时，需要把自己的 origin 加进来。`./start.py --prod` 让控制台与 API 同源，无需新增条目。 |
+| `agentcore_read_timeout_s` | `1000` | AgentCore 数据面客户端的 boto 读超时（`backend/app/services/agentcore/client.py:30`）。AgentCore 同步调用**最长可运行 15 分钟**，因此该值必须高于这条服务侧上限——botocore 默认的 60 秒会在缓冲式 agent 返回最终响应之前就放弃。 |
+
 ### 控制台登录
 
 控制台支持本地账户登录,不依赖 Cognito 或其他 AWS 服务。未配置密码时登录网关关闭,
@@ -271,6 +283,23 @@ export LAUNCHPAD_STUDIO_EXEC_BACKEND=docker   # 或在 launchpad.yaml 里写 stu
 参数。超时会击杀容器本身,后端启动时还有一个清扫器回收崩溃遗留的
 `strands-exec-*` 容器。单次运行开销约 0.3 秒。
 
+这些上限以及容器所用的镜像都是配置项：
+
+| 配置项 | 默认值 | 对应 docker 参数 |
+|---|---|---|
+| `studio_exec_memory_mb` | `2048` | `--memory` 与 `--memory-swap`，两者取同一个值，使容器无法靠 swap 绕过限制 |
+| `studio_exec_cpu_seconds` | `300` | `--ulimit cpu=<n>:<n>`——限制的是消耗的 CPU **秒数**，不是墙上时间；墙上时间由 `execute_timeout_s` 约束 |
+| `studio_exec_max_processes` | `64` | `--pids-limit` |
+| `studio_exec_max_file_mb` | `256` | `--ulimit fsize=<字节数>`——生成代码可写出的最大单文件 |
+| `studio_exec_docker_image` | `launchpad-studio-exec:latest` | `docker run` 启动的镜像；只有当你用别的名字构建沙箱镜像时才需要改 |
+
+同样这四项上限也作用于**子进程**后端，只不过在那里是 fork 后在子进程里下调的
+`resource.RLIMIT_*`，而不是 docker 参数（`backend/app/services/local_exec.py`：
+`_docker_run_argv` 从第 380 行开始拼装 docker 参数，rlimit 列表在第 557 行附近构造）。
+有一处不对称：`studio_exec_max_processes` 映射到 `RLIMIT_NPROC`，而它是**按 uid**
+统计进程与线程的，因此子进程后端只在配置了 `studio_exec_user` 时才施加该上限——落在
+后端自己的 uid 上，它会把你整个登录会话都算进去，导致子进程每次创建线程都失败。
+
 由于代码不再运行在控制面主机上,**选择 docker 后端本身就是生产环境的 opt-in**:
 `run_mode=prod` + `studio_exec_backend=docker` 即可提供本地调试端点,不再需要
 `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED=true`(显式设为 `false` 仍然是总开关)。
@@ -292,6 +321,61 @@ Mantle 权衡同上)。如果配置了无凭证姿态却没有配置该网络,�
 
 更深一层的沙箱(迁移到 AgentCore Code Interpreter)尚未实现;docker 后端是推荐的
 中间档。
+
+#### 代码生成（AI Fix）
+
+Studio 的 **AI Fix** 会把执行失败的流程的生成代码、traceback 与校验错误交给一个编码
+agent，由它在临时工作目录里重写 `generated_agent.py`，再通过 SSE 回传。控制它的有四个
+配置项：
+
+| 配置项 | 默认值 | 作用 |
+|---|---|---|
+| `codegen_backend` | `claude` | 由哪个编码 agent 执行修复。目前只注册了 `claude`（Claude Agent SDK）；填入未注册的名字会让请求直接失败并列出已注册的名字，而不是静默回退。 |
+| `codegen_model` | `global.anthropic.claude-sonnet-5` | 该编码 agent 使用的模型。更强的模型单次修得更多，单次也更贵。 |
+| `codegen_timeout_s` | `180.0` | 一次 AI Fix 请求的端到端预算，含全部修复轮次。如果修复总在 agent 写完文件之前被打断，就调大它。 |
+| `codegen_max_repair_rounds` | `2` | 一次重写最多可以被重新校验并重试几轮。每多一轮就是对首次修复仍无法导入的流程多发一次模型调用。 |
+
+### Skill Lab
+
+Skill Lab 负责评估与训练 Registry 里的技能记录：vendored 的 SkillOpt CLI 以**子进程**
+形式跑在后端主机上，每个任务的 agent rollout 跑在 `launchpad_skill_lab_worker` 上各自
+独立的 AgentCore Runtime microVM 会话里，LLM 判分器则直接调用 Bedrock。
+`make bootstrap` 会把两半都开通好——专用解释器与 worker 镜像——所以下面这些配置项调的是
+一个已开通的 Skill Lab，而不是开关。
+
+| 配置项 | 默认值 | 作用 |
+|---|---|---|
+| `skill_lab_python` | `<repo>/data/skill-lab-venv/bin/python` | 运行 vendored 的 `evaluate_skill.py` / `train.py` / 任务集校验器的解释器。bootstrap 依据 `vendor/skillopt/requirements-launchpad.txt` 构建它，并在该文件变化时重建；后端进程自身永不 import vendored 目录树。该路径缺失时 `GET /api/skill-lab/status` 会返回 `venv_ready: false`——这就是未开通的 workspace 的样子。 |
+| `skill_lab_max_concurrent_jobs` | `1`（1–4） | 同时运行的评估/训练任务数。每个任务是一个 CLI 子进程外加它自己的 worker 会话，因此这是在墙上时间与主机 CPU/内存、worker runtime 压力之间取舍；超出的任务排队而不是失败。 |
+| `skill_lab_judge_model_id` | `us.openai.gpt-5.6-sol` | 给 rollout 打分的模型。必须是 Bedrock 的 **Converse inference-profile id**——`bedrock_chat` 判分器会拒绝裸 model id。它同时按模型家族决定 agentic 判分器使用的宿主 CLI：`openai.*` 的 id 会去掉 profile 前缀后路由到宿主的 `codex`，其余路由到宿主的 `claude`（`runner.judge_exec_route`）。因此改这一项也就改变了宿主必须安装哪个 CLI。 |
+| `skill_lab_target_model_id` | `global.anthropic.claude-opus-5` | `claude_code_exec` 目标后端下被测技能默认运行的模型，同样是 Converse inference-profile id。逐任务参数可以覆盖它；空值永远不会被下发，因为空的 `--model` 会让 vendored CLI 换上它自己的非 Bedrock 默认值。 |
+| `skill_lab_codex_target_model_id` | `openai.gpt-5.6-sol` | `codex_exec` 目标后端下的同一个默认值，但它是 Bedrock 的**目录 slug**而不是 Converse profile id：codex 通过自己配置里内置的 `amazon-bedrock` provider 自行解析模型。单独设一个 key，是为了让两个后端永远不会拿到对方的 id 家族。 |
+| `skill_lab_codex_catalog_path` | `~/.codex/model-catalogs/bedrock-models.json` | 构建时从后端主机读取、并塞进 worker 镜像 codex-home 的 Bedrock 模型目录。该文件内嵌了专有的模型指令，因此从不入库；缺失时构建会塞一个空的 `{}` 目录并在日志里写明——那个镜像上的 codex 目标也就没有目录可供解析。 |
+| `skill_lab_judge_sandbox` | `bwrap` | agentic 判分器的产物解析器所用的沙箱启动 argv（按 shlex 切分），它跑在后端**主机**上——worker microVM 无法运行 bubblewrap。若主机上非特权 `bwrap` 被 AppArmor 拦住，改成 `sudo -n bwrap`。`GET /api/skill-lab/status` 会探测该 argv 的第一个词来给出 `agentic_judge_ready`，vendored 那层 fail-closed 的边界校验仍然叠加生效。 |
+| `skill_lab_worker_cli_version` | `2.1.234` | 报告 worker 镜像里内置的 `claude` CLI 版本。 |
+| `skill_lab_worker_codex_version` | `0.147.0` | 报告 worker 镜像里内置的 `codex` CLI 版本。 |
+
+最后两个 `*_version` 是**镜像值，不是输入值**。真正生效的是
+`vendor/skillopt/deploy/agentcore/Dockerfile` 里 `ARG CLAUDE_CLI_VERSION` /
+`ARG CODEX_CLI_VERSION` 的默认值——被镜像内容哈希覆盖的是那个 Dockerfile——这两个配置项
+只用于控制台展示。**必须成对修改：**`backend/tests/test_skill_lab_foundation.py` 会断言
+两边一致，只改一边会让 `make verify` 失败。版本号变化同时会改变构建上下文的哈希，下一次
+bootstrap 正是据此判断要重建并重新推送 worker 镜像。
+
+### 提示词优化
+
+实验的 RECOMMEND 阶段会让第三方 provider（`backend/app/optimization/providers`）依据某次
+被固定的评估运行中得分最差与最好的会话，改写 agent 的系统提示词与工具描述。这里的 model
+id 都是 Bedrock Converse 的 inference-profile id，并和其他调用一样走同一个 workspace
+客户端漏斗。
+
+| 配置项 | 默认值 | 作用 |
+|---|---|---|
+| `prompt_opt_models` | `["global.anthropic.claude-opus-5", "global.anthropic.claude-sonnet-5", "global.anthropic.claude-sonnet-4-6", "us.openai.gpt-5.6-sol"]` | 控制台提供选择的反思模型清单。想让某个 id 可选，就加到这里。 |
+| `prompt_opt_default_model_id` | `global.anthropic.claude-opus-5` | 其中哪一个排在最前、并在请求未指定模型时被使用。 |
+| `prompt_opt_max_sessions` | `30`（3–100） | provider 从被固定的那次运行里读取多少个会话（最差优先，另加一组得分最好的对照）。读得少更便宜更快，读得多则给反思更多可归纳的证据。 |
+| `prompt_opt_max_tokens` | `8192`（512–16000） | 反思调用的输出预算。含提示词与若干工具描述的双组件反思实测超过了 4096；响应被截断时 provider 会自行把该值翻倍一次。 |
+| `prompt_opt_read_timeout_s` | `900` | 反思调用的读超时。该调用是流式的，因此它约束的是两个数据块之间的间隔而不是总时长。botocore 默认的 60 秒在这里远远不够：生产环境里大模型处理 30 个会话时超过了它，botocore 静默重发了整个请求五次才最终失败。 |
 
 ### 自助注册与用户管理
 
