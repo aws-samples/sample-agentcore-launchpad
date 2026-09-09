@@ -394,7 +394,7 @@ def json_payload(value) -> dict:
     return {"json": {"content": value}}
 
 
-def get_payload(client, events: list[dict]) -> list[dict]:
+def get_payload(client) -> list[dict]:
     return client.get(
         "/api/memory/events", params={"actor_id": "a__river", "session_id": "s1"}
     ).json()["items"][0]["payload"]
@@ -421,7 +421,7 @@ def test_json_event_payload_is_projected_losslessly(client, configured, monkeypa
         monkeypatch,
         StubData(list_events={"events": [{"eventId": "e", "payload": [json_payload(value)]}]}),
     )
-    payload = get_payload(client, [])
+    payload = get_payload(client)
 
     assert len(payload) == 1
     entry = payload[0]
@@ -463,7 +463,7 @@ def test_json_member_without_content_is_dropped_like_unknown_kinds(
             }
         ),
     )
-    payload = get_payload(client, [])
+    payload = get_payload(client)
     assert [p["kind"] for p in payload] == ["json"]
     assert json.loads(payload[0]["text"]) == {"kept": True}
 
