@@ -1219,8 +1219,13 @@ export interface MemorySessionRow {
 }
 
 export interface MemoryEventPayload {
-  kind: "conversational" | "blob";
+  /** `json` = an AgentCore JSON event payload (`{json: {content}}`), not a turn */
+  kind: "conversational" | "blob" | "json";
+  /** conversational role; always null for json and blob entries */
   role: string | null;
+  /** conversational: the turn text. json: the value serialized as canonical
+   *  JSON text (so `null`, `false`, `0` and `""` arrive as `"null"`, `"false"`,
+   *  `"0"`, `'""'` — never as a missing payload). blob: null. */
   text: string | null;
   /** Harness message-envelope part kinds (text / toolUse / toolResult …); empty
    *  for plain-text turns. Lets a tool-only turn render as itself. */

@@ -883,9 +883,16 @@ ingestion 失败时才暴露。
 | `?view=` | 展示内容 | AgentCore 操作 |
 |---|---|---|
 | `overview` | 资源配置(id/arn/状态/事件过期/KMS/执行角色)、每条长期策略及其 `namespaces` + `namespaceTemplates`、以及账号内其他记忆资源(标出平台单例) | `GetMemory`、`ListMemories`、`ListActors` |
-| `short-term` | actor → session → event 三级下钻;事件以时间轴呈现对话轮次的角色/文本,blob 载荷只显示字节数 | `ListActors`、`ListSessions`、`ListEvents` |
+| `short-term` | actor → session → event 三级下钻;事件以时间轴呈现对话轮次的角色/文本,JSON 载荷(`{json: {content}}`)显示为带标签、可展开的 JSON 块,blob 载荷只显示字节数 | `ListActors`、`ListSessions`、`ListEvents` |
 | `long-term` | 解析出的命名空间下的记录,以及带相关度评分的语义检索 | `ListMemoryRecords`、`RetrieveMemoryRecords` |
 | `resources` | 账号/区域内的全部记忆(标出工作区默认记忆,以及 spec 绑定了每个记忆的 Agent);创建记忆(名称、描述、事件过期、与引导布局一致的策略选择,以及——目前仅 API 可用——最多 5 个灵活命名空间变量键:CreateMemory `namespaceKeys`,控制台表单通过 `ResourcesTab.tsx` 的 `SHOW_NS_KEYS` 隐藏该编辑器);行内编辑描述与事件过期(7–365 天)——`UpdateMemory` 只发送 `memoryId` 加实际改动的字段,**绝不**发送 `namespaceKeys`(API 文档写明该字段整体替换现有集合,漏掉的键会被删除),随后用 `GetMemory` 读回详情;策略、命名空间变量与执行角色不可编辑,编辑不会被阻止,确认对话框会列出使用该记忆的 Agent(缩短过期窗口会影响它们全部);删除记忆——工作区默认记忆与仍被在线 Agent 引用的记忆受删除保护 | `ListMemories`、`GetMemory`、`CreateMemory`、`UpdateMemory`、`DeleteMemory` |
+
+`ListEvents` 的载荷条目是一个标签联合:`conversational`、`blob`,以及自 2026 年 8 月
+Memory 发布起新增的 `json`(`{json: {content: <任意 JSON 值>}}`)。控制台把每条投影为
+`{kind, role, text, parts, blob_bytes}`:`json` 条目的 `role` 保持为 null(它是 Agent 存下的
+数据,不是对话轮次),值原样序列化到 `text`,因此 `false`、`0`、`null`、`""`、数组与对象都
+按其本身显示——投影检查的是 `content` 键是否存在,而不是值的真假。blob 字节仍不会离开服务端,
+平台不认识的联合成员仍被省略。这只是**读取**投影:平台不会写入 JSON 事件。
 
 **抽取不作为控制台视图**。把短期事件变成长期记录是 AgentCore Memory 服务**自己**按资源上
 配置的策略异步跑的任务,平台从不触发。`ListMemoryExtractionJobs` 也不是任务历史:它的

@@ -389,6 +389,147 @@ def conversational(text: str, role: str = "ASSISTANT") -> dict:
     return {"conversational": {"role": role, "content": {"text": text}}}
 
 
+def json_payload(value) -> dict:
+    """The ListEvents ``json`` union member: ``{json: {content: <any JSON value>}}``."""
+    return {"json": {"content": value}}
+
+
+def get_payload(client, events: list[dict]) -> list[dict]:
+    return client.get(
+        "/api/memory/events", params={"actor_id": "a__river", "session_id": "s1"}
+    ).json()["items"][0]["payload"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param({"step": "plan", "done": False, "n": 0, "tags": None}, id="object"),
+        pytest.param([1, "two", {"three": 3}, [], {}], id="array"),
+        pytest.param("plain string", id="string"),
+        pytest.param("", id="empty-string"),
+        pytest.param(0, id="zero"),
+        pytest.param(12.5, id="number"),
+        pytest.param(False, id="false"),
+        pytest.param(None, id="null"),
+        pytest.param({"问候": "你好，世界 🌏", "emoji": "✅"}, id="unicode"),
+    ],
+)
+def test_json_event_payload_is_projected_losslessly(client, configured, monkeypatch, value):
+    """Every JSON value — including the falsy ones — comes back as a distinct
+    ``json`` kind whose text parses back to exactly the original value."""
+    wire(
+        monkeypatch,
+        StubData(list_events={"events": [{"eventId": "e", "payload": [json_payload(value)]}]}),
+    )
+    payload = get_payload(client, [])
+
+    assert len(payload) == 1
+    entry = payload[0]
+    assert entry["kind"] == "json"
+    assert entry["role"] is None
+    assert entry["parts"] == []
+    assert entry["blob_bytes"] is None
+    assert isinstance(entry["text"], str) and entry["text"]
+    loaded = json.loads(entry["text"])
+    assert loaded == value
+    # ``0 == False`` in Python — pin the JSON type too, so false never becomes 0
+    assert type(loaded) is type(value)
+    if isinstance(value, str):
+        # Unicode is kept readable, not \u-escaped
+        assert value in entry["text"]
+
+
+def test_json_member_without_content_is_dropped_like_unknown_kinds(
+    client, configured, monkeypatch
+):
+    """The API model requires ``content``; a json member lacking it is malformed
+    and must not be turned into a fabricated ``null`` — nor may a genuinely
+    unknown union member be surfaced."""
+    wire(
+        monkeypatch,
+        StubData(
+            list_events={
+                "events": [
+                    {
+                        "eventId": "e",
+                        "payload": [
+                            {"json": {}},
+                            {"json": "not-a-member-object"},
+                            {"somethingNew": {"opaque": True}},
+                            json_payload({"kept": True}),
+                        ],
+                    }
+                ]
+            }
+        ),
+    )
+    payload = get_payload(client, [])
+    assert [p["kind"] for p in payload] == ["json"]
+    assert json.loads(payload[0]["text"]) == {"kept": True}
+
+
+def test_mixed_payload_kinds_keep_order_and_blob_stays_server_side(
+    client, configured, monkeypatch
+):
+    long_json = {"items": [{"i": i, "label": "x" * 20} for i in range(20)]}
+    data, _ = wire(
+        monkeypatch,
+        StubData(
+            list_events={
+                "events": [
+                    {
+                        "eventId": "e",
+                        "eventTimestamp": AT,
+                        "payload": [
+                            conversational("hello", role="USER"),
+                            json_payload(long_json),
+                            {"blob": b"SECRET-BYTES-\x00\x01"},
+                            {"somethingNew": {"opaque": True}},
+                            json_payload(False),
+                        ],
+                    }
+                ],
+                "nextToken": "tok-2",
+            }
+        ),
+    )
+    resp = client.get(
+        "/api/memory/events",
+        params={
+            "actor_id": "a__river",
+            "session_id": "s1",
+            "include_payloads": "false",
+            "next_token": "tok-1",
+            "max_results": 7,
+        },
+    )
+    body = resp.json()
+    payload = body["items"][0]["payload"]
+
+    # order preserved, unknown dropped, kinds distinct
+    assert [p["kind"] for p in payload] == ["conversational", "json", "blob", "json"]
+    assert payload[0]["role"] == "USER" and payload[0]["text"] == "hello"
+    # long JSON (well past the 240-char UI clamp) is complete server-side
+    assert len(payload[1]["text"]) > 240
+    assert json.loads(payload[1]["text"]) == long_json
+    assert json.loads(payload[3]["text"]) is False
+    # blob content never leaves the service — only its size
+    assert payload[2] == {
+        "kind": "blob",
+        "role": None,
+        "text": None,
+        "parts": [],
+        "blob_bytes": len(b"SECRET-BYTES-\x00\x01"),
+    }
+    assert "SECRET-BYTES" not in resp.text
+    # pagination + include_payloads forwarded unchanged
+    kw = data.kwargs_for("list_events")
+    assert kw["includePayloads"] is False
+    assert kw["nextToken"] == "tok-1"
+    assert kw["maxResults"] == 7
+    assert body["next_token"] == "tok-2"
+
+
 def test_harness_message_envelope_is_decoded(client, configured, monkeypatch):
     """Harness agents persist a whole message envelope as the event text —
     showing that raw JSON in a memory inspector is unreadable."""

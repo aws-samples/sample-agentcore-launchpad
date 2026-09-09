@@ -263,7 +263,7 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 | `GET` | `/api/memory/overview` | 资源配置、长期策略、有界的 actor 计数、同级记忆 |
 | `GET` | `/api/memory/actors` | actor 列表，复合 id `<agent_id>__<human>` 已解码并解析出 Agent 名称 |
 | `GET` | `/api/memory/sessions?actor_id=` | 单个 actor 的会话；由控制台写入的会话会关联到 ChatSession 台账 |
-| `GET` | `/api/memory/events?actor_id=&session_id=` | 短期事件；对话类载荷带角色与全文，blob 只带字节数 |
+| `GET` | `/api/memory/events?actor_id=&session_id=` | 短期事件；每条载荷的 `kind` 为 `conversational`（角色 + 全文）、`json`（JSON 值无损序列化到 `text`，含 `null`、`false`、`0` 与 `""`）或 `blob`（只带字节数）；未知类型省略 |
 | `GET` | `/api/memory/namespaces?actor_id=` | 已替换 `{actorId}` 的策略命名空间模板；尾部的 `{sessionId}` 段折叠为 actor 级前缀（`prefix: true`），其他位置的占位符则产生 `resolvable: false` |
 | `GET` | `/api/memory/records?actor_id=&strategy_id=` 或 `?namespace=` | 解析所得命名空间下的长期记录 |
 | `POST` | `/api/memory/records/search` | 语义检索（`{query, actor_id, strategy_id?, namespace?, top_k}`），带相关性分数 |
