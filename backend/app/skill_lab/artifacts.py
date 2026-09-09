@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -127,6 +128,130 @@ def _excerpt(text: Any) -> str:
     return value
 
 
+# Token counters the vendored producers report. The target side comes from
+# `extract_exec_usage` over the rollout transcript: claude transcripts yield all
+# four counters plus their `total`; a codex transcript yields ONLY `total`
+# (its four counters are literal zeros). The judge side (`judge_usage`) is
+# `{"input", "output"}` only — the agentic judge worker folds cache reads and
+# writes into `input`, the chat judge never sees them — so judge cache counters
+# are structurally unknown, never zero.
+USAGE_COUNTERS = ("input", "cache_write", "cache_read", "output")
+_USAGE_SIDES = (("target", "usage"), ("judge", "judge_usage"))
+
+
+def _counter(value: Any) -> tuple[int | None, bool]:
+    """Validate one reported counter → (count, malformed).
+
+    Absent (None) is unknown, not malformed. Accepted: non-negative ints and
+    integral finite floats (JSON may carry `12.0`). Rejected as malformed —
+    never coerced to a believable zero: bools, negatives, NaN/inf, fractions,
+    strings and anything else.
+    """
+    if value is None:
+        return None, False
+    if isinstance(value, bool):
+        return None, True
+    if isinstance(value, int):
+        return (value, False) if value >= 0 else (None, True)
+    if isinstance(value, float):
+        if math.isfinite(value) and value.is_integer() and value >= 0:
+            return int(value), False
+        return None, True
+    return None, True
+
+
+def usage_record(raw: Any) -> dict[str, Any]:
+    """Normalize one side's usage report for one row.
+
+    `status`: `reported` (at least one valid counter), `missing` (no report, or
+    a report carrying no counters), `malformed` (a counter failed validation;
+    the valid ones are still carried). Each counter is an int or None (=
+    unknown). `unattributed` is what the producer reported only as a `total`
+    beyond the sum of its counters — the codex total-only form; when every
+    counter is a zero placeholder under a positive total, the counters become
+    unknown rather than masquerading as real zeros. A `total` smaller than the
+    counters is inconsistent and ignored; the counters stand on their own.
+    """
+    record: dict[str, Any] = {key: None for key in USAGE_COUNTERS}
+    record["unattributed"] = None
+    if raw is None:
+        record["status"] = "missing"
+        return record
+    if not isinstance(raw, dict):
+        record["status"] = "malformed"
+        return record
+    malformed = False
+    for key in USAGE_COUNTERS:
+        value, bad = _counter(raw.get(key))
+        record[key] = value
+        malformed = malformed or bad
+    total, bad = _counter(raw.get("total"))
+    malformed = malformed or bad
+    known = [record[key] for key in USAGE_COUNTERS if record[key] is not None]
+    if total is not None and (not known or total > sum(known)):
+        # A total with no breakdown is still a report — a total-only zero stays
+        # a known zero total, with no breakdown invented for it.
+        record["unattributed"] = total - sum(known)
+        if not any(known):
+            for key in USAGE_COUNTERS:
+                record[key] = None
+    reported = bool(known) or record["unattributed"] is not None
+    record["status"] = "malformed" if malformed else ("reported" if reported else "missing")
+    return record
+
+
+def _usage_side_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Sum one side over all rows; a counter no row reported stays None.
+
+    Two distinct kinds of completeness, so a partial sum can never read as a run
+    total: `reports_complete` (report coverage — every row reported cleanly) and
+    `complete` (breakdown completeness — reports complete AND every counter at
+    least one row reported was reported by every row). A counter no row
+    reported is unknown (None) and does not by itself make the breakdown
+    partial; a counter some rows reported and others did not does (e.g. a
+    claude row next to a codex total-only row). `counter_rows` / `counter_complete`
+    carry that per counter.
+    """
+    statuses = [record["status"] for record in records]
+    rows = len(records)
+    side: dict[str, Any] = {
+        "rows": rows,
+        "reported_rows": statuses.count("reported"),
+        "missing_rows": statuses.count("missing"),
+        "malformed_rows": statuses.count("malformed"),
+    }
+    side["reports_complete"] = bool(records) and side["reported_rows"] == rows
+    counter_rows: dict[str, int] = {}
+    counter_complete: dict[str, bool] = {}
+    for key in (*USAGE_COUNTERS, "unattributed"):
+        values = [record[key] for record in records if record[key] is not None]
+        side[key] = sum(values) if values else None
+        counter_rows[key] = len(values)
+        counter_complete[key] = len(values) == rows
+    side["counter_rows"] = counter_rows
+    side["counter_complete"] = counter_complete
+    side["complete"] = side["reports_complete"] and all(
+        counter_rows[key] in (0, rows) for key in USAGE_COUNTERS
+    )
+    return side
+
+
+def _json_safe(value: Any) -> Any:
+    """Make a raw producer value serializable without altering the file.
+
+    `json.loads` accepts NaN/Infinity tokens that `JSONResponse` then refuses to
+    emit; they become their textual form ("nan", "inf", "-inf") so the raw
+    compatibility fields stay visible and honest. Nothing else is touched.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return repr(value)
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
+
+
 def eval_results(job_id: str) -> dict[str, Any] | None:
     """Summary + per-task rows from out/results.json; None until it exists.
 
@@ -148,8 +273,12 @@ def eval_results(job_id: str) -> dict[str, Any] | None:
     for item in results:
         if not isinstance(item, dict):
             continue
-        row = {key: item.get(key) for key in _ROW_FIELDS}
+        row = {key: _json_safe(item.get(key)) for key in _ROW_FIELDS}
         row["judge_prerequisite"] = _judge_prerequisite(row)
+        # Raw `usage` / `judge_usage` stay on the row for compatibility; this is
+        # the validated projection the console renders. Invalid-score rows
+        # keep their usage: the tokens were spent whether or not a verdict came.
+        row["token_usage"] = {side: usage_record(item.get(source)) for side, source in _USAGE_SIDES}
         row["response"] = _excerpt(item.get("response"))
         row["artifacts"] = [
             {"path": a.get("path"), "size": a.get("size")}
@@ -178,6 +307,15 @@ def eval_results(job_id: str) -> dict[str, Any] | None:
                 else 0.0
             ),
             "duration_s": round(sum(float(r.get("duration_s") or 0.0) for r in rows), 1),
+            # Observed usage as the transcripts reported it — coverage says how
+            # much of the run it covers; it is not a billing total.
+            "token_usage": {
+                "scope": "reported",
+                **{
+                    side: _usage_side_summary([r["token_usage"][side] for r in rows])
+                    for side, _source in _USAGE_SIDES
+                },
+            },
         },
         "rows": rows,
     }

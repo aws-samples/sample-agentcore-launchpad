@@ -1374,6 +1374,35 @@ Ledger: `skill_lab_tasksets` + `skill_lab_jobs` (workspace-scoped); artifacts
 live under `data/skill-lab/` (task files, job logs, the CLI's out/ tree —
 the files, not the ledger, are the source of truth for content).
 
+**Evaluation token usage.** Each row of the CLI's `results.json` may carry the
+token counters the vendored producers observed: `usage` for the target rollout
+(from the exec transcript — claude transcripts yield `input` / `cache_write` /
+`cache_read` / `output` plus a `total`; a codex transcript yields **only** a
+total, its four counters being literal zeros) and `judge_usage` for the judge
+(`input` / `output` only — the agentic judge worker folds cache reads and writes
+into `input`, the chat judge never sees them). The backend
+(`skill_lab/artifacts.py`) validates these per row into `token_usage.{target,
+judge}` and sums them per side onto the summary, **without** touching the
+scoring semantics (invalid-score rows stay out of the pass-rate denominators but
+their usage counts — the tokens were spent). The projection is deliberately
+strict: a counter no row reported is `null` (unknown, never 0); a bool,
+negative, NaN/inf, fractional or non-numeric counter is dropped and the row
+marked `malformed` rather than coerced to zero; a `total` beyond the counters
+becomes `unattributed` (the codex total-only form, whose zero placeholders are
+then reported as unknown; a total-only `0` is still a report), while a total
+below them is ignored. The raw `usage` / `judge_usage` stay on the row, made
+JSON-safe only where the file carried `NaN`/`Infinity` tokens. The summary
+side distinguishes **report coverage** (`reports_complete`: every row reported
+cleanly — `rows` / `reported_rows` / `missing_rows` / `malformed_rows`) from
+**breakdown completeness** (`complete`: reports complete AND every counter
+anyone reported was reported by every row; `counter_rows` / `counter_complete`
+per counter). A counter only some rows reported is a partial sum the console
+marks `k/n` — a claude row beside a codex total-only row can never read as a
+complete breakdown. `scope` is always `reported`: this is observed usage over
+the tasks that reported it — not a billing total, and the console shows no cost
+estimate. The console renders it as a TOKEN USAGE table under the result tiles
+and per task in the expanded row, with a dash for every unknown counter.
+
 ## The SQLite ledger and job/event model
 
 **Uploaded task inputs.** A task's `files` map remains backward-compatible with inline text and
