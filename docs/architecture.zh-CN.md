@@ -1083,6 +1083,24 @@ ACCEPT/REJECT 闸门判定的步骤时间轴，SEED→BEST 差异对比，为被
 `data/skill-lab/` 之下（任务文件、作业日志、CLI 的 out/ 目录树——内容的事实来源是这些文件，
 不是台账）。
 
+**产物浏览器。** `GET /api/skill-lab/jobs/{job_id}/artifacts?path=`（目录列表，或上限
+512 KB 的文本读取）与 `GET /api/skill-lab/jobs/{job_id}/artifacts/raw?path=`（逐字节下载）
+对调用方 workspace 所拥有的任意作业开放，不限状态：尚未写出
+`out/` 的作业返回空的根目录列表，已消失的子路径则是 404。服务端的路径守卫（`_safe_resolve`：
+拒绝绝对路径、`~`、反斜杠与 NUL，两侧都做 resolve，因此被植入的符号链接无法扩大窗口）是唯一
+权威；控制台从不请求其之外的任何路径。控制台对排队中、运行中与已结束的作业都显示浏览器，
+并且**从不轮询目录树**——列表与打开的文件都带有「已于 … 刷新」的时间戳和手动刷新按钮，刷新
+失败时保留上一次成功加载的内容并标注其加载时间，而不是清空。每个响应都会与其发出时的作业、
+路径和请求代次核对，因此上一个作业、目录或文件的迟到响应不可能落到当前选择上（包括查看器
+已关闭之后）。`.md` 产物提供「预览／源码」切换：预览复用 Chat 的渲染栈（GFM 表格、围栏代码
+高亮、不加载 `rehype-raw`——产物中的 HTML 是惰性文本），但在 `skillLab/ArtifactMarkdown.tsx`
+中采用更严格的链接策略——相对链接以当前文件所在目录为基准在 `out/` 内解析
+（`artifactLinks.ts`）并经同一受 workspace 限定的 API 打开，http/https/mailto 链接在新标签页
+打开并带 `rel="noreferrer noopener"`，其他协议、绝对路径、越出根目录、百分号编码格式错误或
+暗含编码分隔符（`%2F`、`%5C`、`%00`）的链接一律渲染为惰性文本，图片从不抓取（以占位文字标出
+来源；树内图片作为产物打开）。源码模式逐字显示服务端截断后、按 UTF-8 解码的文本（不做渲染）；
+只有原始下载才是逐字节精确的。截断提示在两种模式下都会显示。
+
 **评估 token 用量。** CLI 写出的 `results.json` 每一行可能携带内置生产者实际观测到的 token
 计数：目标 rollout 的 `usage`（来自 exec transcript——claude transcript 给出 `input` /
 `cache_write` / `cache_read` / `output` 以及一个 `total`；codex transcript **只**给出总数，

@@ -310,27 +310,30 @@ export function SkillLabEval({ status }: { status: SkillLabStatus | null }) {
         </div>
       )}
 
+      {!isLive(detail) &&
+        (results !== null ? (
+          <div style={{ marginTop: 14 }}>
+            <EvalResults results={results} />
+          </div>
+        ) : (
+          <div className="empty" data-testid="eval-no-results" style={{ marginTop: 14 }}>
+            {resultsPending ? t("common.loading") : t("skillLab.eval.noResults")}
+          </div>
+        ))}
+      {/* Every status: per-task rollout dirs appear under out/ as the run
+          progresses, and the browser refreshes on demand rather than polling. */}
+      <div style={{ marginTop: 14 }}>
+        <div className="mono" style={{ fontSize: 11, letterSpacing: ".08em", marginBottom: 6 }}>
+          {t("skillLab.eval.artifacts.title")}
+        </div>
+        <ArtifactBrowser jobId={detail.id} live={isLive(detail)} />
+      </div>
       {!isLive(detail) && (
         <div style={{ marginTop: 14 }}>
-          {results !== null ? (
-            <EvalResults results={results} />
-          ) : (
-            <div className="empty" data-testid="eval-no-results">
-              {resultsPending ? t("common.loading") : t("skillLab.eval.noResults")}
-            </div>
-          )}
-          <div style={{ marginTop: 14 }}>
-            <div className="mono" style={{ fontSize: 11, letterSpacing: ".08em", marginBottom: 6 }}>
-              {t("skillLab.eval.artifacts.title")}
-            </div>
-            <ArtifactBrowser jobId={detail.id} />
+          <div className="mono" style={{ fontSize: 11, letterSpacing: ".08em", marginBottom: 6 }}>
+            {t("skillLab.eval.log.title")}
           </div>
-          <div style={{ marginTop: 14 }}>
-            <div className="mono" style={{ fontSize: 11, letterSpacing: ".08em", marginBottom: 6 }}>
-              {t("skillLab.eval.log.title")}
-            </div>
-            <JobLogPane jobId={detail.id} live={false} />
-          </div>
+          <JobLogPane jobId={detail.id} live={false} />
         </div>
       )}
     </Panel>

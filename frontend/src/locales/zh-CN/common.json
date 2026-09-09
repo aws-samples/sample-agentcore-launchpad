@@ -1498,7 +1498,22 @@
         "empty": "该目录为空。",
         "notADir": "该路径是文件，不是目录。",
         "truncated": "已在 512 KB 处截断 —— 下载文件查看完整内容",
-        "binary": "二进制文件 —— 请使用下载链接。"
+        "binary": "二进制文件 —— 请使用下载链接。",
+        "refresh": "刷新",
+        "refreshedAt": "已于 {{time}} 刷新",
+        "staleListing": "下方列表是 {{time}} 加载的结果 —— 再次刷新以查看当前状态。",
+        "staleFile": "所显示的内容是 {{time}} 加载的 —— 再次刷新以查看当前状态。",
+        "liveHint": "作业仍在写入该目录 —— 此处不会自动轮询；请刷新以查看新增或变大的文件。",
+        "emptyLive": "尚无输出文件。",
+        "preview": "预览",
+        "source": "源码",
+        "modeLabel": "查看模式",
+        "openLink": "从该作业的输出中打开 {{path}}",
+        "linkOutside": "链接指向该作业输出目录之外 —— 不会跟随。",
+        "linkAbsolute": "绝对路径 —— 不会跟随。",
+        "linkMalformed": "链接路径格式错误或暗含路径分隔符 —— 不会跟随。",
+        "linkBlocked": "不允许的链接协议 —— 不会跟随。",
+        "image": "[图片未加载：{{alt}} {{src}}]"
       },
       "gone": {
         "title": "作业不可用",

@@ -938,6 +938,131 @@ def test_reads_are_capped(lab, monkeypatch):
     assert second == {"content": "89", "next_offset": 10, "eof": True}
 
 
+def test_artifacts_endpoint_serves_live_and_queued_jobs(lab):
+    """The console shows the browser for any job status: a running job's files
+    are readable while the CLI still writes them, and a queued job (no out/
+    yet) is an empty root — not an error."""
+    running_ts = _taskset(lab, ["SPAWNCHILD"], name="live")
+    queued_ts = _taskset(lab, ["quick"], name="behind")
+    running_id = _submit(lab, running_ts).json()["id"]
+    queued = _submit(lab, queued_ts).json()
+    assert queued["queue_position"] >= 1
+
+    child_file = artifacts.out_root(running_id) / "child_pid.txt"
+    deadline = time.monotonic() + 15
+    while not child_file.is_file():
+        assert time.monotonic() < deadline, "stub never spawned its child"
+        time.sleep(0.1)
+    try:
+        assert lab.get(f"/api/skill-lab/jobs/{running_id}").json()["status"] == "running"
+        listing = lab.get(f"/api/skill-lab/jobs/{running_id}/artifacts")
+        assert listing.status_code == 200
+        assert listing.json()["kind"] == "dir"
+        assert [f["name"] for f in listing.json()["files"]] == ["child_pid.txt"]
+        read = lab.get(f"/api/skill-lab/jobs/{running_id}/artifacts?path=child_pid.txt").json()
+        assert read["kind"] == "text" and read["content"] == child_file.read_text()
+        raw = lab.get(f"/api/skill-lab/jobs/{running_id}/artifacts/raw?path=child_pid.txt")
+        assert raw.status_code == 200 and raw.content == child_file.read_bytes()
+
+        # queued: nothing written yet → honest empty listing at the root only
+        assert not artifacts.out_root(queued["id"]).exists()
+        empty = lab.get(f"/api/skill-lab/jobs/{queued['id']}/artifacts")
+        assert empty.status_code == 200
+        assert empty.json() == {"kind": "dir", "path": "", "dirs": [], "files": []}
+        missing = lab.get(f"/api/skill-lab/jobs/{queued['id']}/artifacts?path=results.json")
+        assert missing.status_code == 404
+        assert missing.json()["code"] == "skill_lab.artifact_not_found"
+        sub = lab.get(f"/api/skill-lab/jobs/{queued['id']}/artifacts?path=rollouts")
+        assert sub.status_code == 404
+    finally:
+        lab.post(f"/api/skill-lab/jobs/{queued['id']}/cancel")
+        lab.post(f"/api/skill-lab/jobs/{running_id}/cancel")
+        _wait(lab, running_id, statuses=("cancelled",))
+
+
+def test_artifacts_endpoint_is_workspace_scoped(lab):
+    """A member of another workspace cannot list or download a job's files — the
+    job lookup (not the path guard) is what scopes the tree."""
+    from app.core.db import SessionLocal
+    from app.models.ledger import Workspace
+    from app.routers.workspaces import WORKSPACE_HEADER
+
+    ts = _taskset(lab, ["quick"])
+    job = _wait(lab, _submit(lab, ts).json()["id"])
+    assert job["status"] == "succeeded"
+    db = SessionLocal()
+    try:
+        db.add(
+            Workspace(
+                id="acct-other",
+                name="other",
+                account_id="444455556666",
+                region="us-west-1",
+                bootstrap_status="ready",
+                resources={},
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    own = lab.get(f"/api/skill-lab/jobs/{job['id']}/artifacts")
+    assert own.status_code == 200
+    assert "results.json" in [f["name"] for f in own.json()["files"]]
+    foreign = {WORKSPACE_HEADER: "acct-other"}
+    listing = lab.get(f"/api/skill-lab/jobs/{job['id']}/artifacts", headers=foreign)
+    assert listing.status_code == 404
+    assert listing.json()["code"] == "skill_lab.job_not_found"
+    raw = lab.get(
+        f"/api/skill-lab/jobs/{job['id']}/artifacts/raw?path=results.json", headers=foreign
+    )
+    assert raw.status_code == 404
+    assert raw.json()["code"] == "skill_lab.job_not_found"
+
+
+def test_artifacts_endpoint_guards_paths_and_serves_raw_bytes(lab, monkeypatch):
+    """HTTP contract behind the console's browser: escapes are 400 (never a
+    500 or a read), binary and over-cap text are classified honestly, and the
+    raw download is the exact bytes regardless of the text cap. A Markdown
+    file is plain `text` server-side — rendering is the client's decision."""
+    ts = _taskset(lab, ["quick"])
+    job = _wait(lab, _submit(lab, ts).json()["id"])
+    job_id = job["id"]
+    out = artifacts.out_root(job_id)
+    (out / "rollouts").mkdir()
+    report = "# Report\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```python\nprint(1)\n```\n"
+    (out / "rollouts" / "report.md").write_text(report, encoding="utf-8")
+    blob = b"\x89PNG\x00\x01\x02binary"
+    (out / "rollouts" / "blob.bin").write_bytes(blob)
+    (out / "escape").symlink_to("/etc")
+
+    base = f"/api/skill-lab/jobs/{job_id}/artifacts"
+    escapes = (
+        "../../secrets", "/etc/passwd", "~/x", "rollouts\\..\\x", "escape", "escape/hostname"
+    )
+    for bad in escapes:
+        response = lab.get(base, params={"path": bad})
+        assert response.status_code == 400, (bad, response.text)
+        assert response.json()["code"] == "skill_lab.bad_path"
+        raw = lab.get(f"{base}/raw", params={"path": bad})
+        assert raw.status_code == 400, (bad, raw.text)
+    assert lab.get(base, params={"path": "rollouts/nope.md"}).status_code == 404
+    assert lab.get(f"{base}/raw", params={"path": "rollouts"}).status_code == 404
+
+    md = lab.get(base, params={"path": "rollouts/report.md"}).json()
+    assert md["kind"] == "text" and md["truncated"] is False and md["content"] == report
+    binary = lab.get(base, params={"path": "rollouts/blob.bin"}).json()
+    assert binary == {"kind": "binary", "path": "rollouts/blob.bin", "size": len(blob)}
+    assert lab.get(f"{base}/raw", params={"path": "rollouts/blob.bin"}).content == blob
+
+    monkeypatch.setattr(artifacts, "TEXT_ARTIFACT_CAP", 8)
+    capped = lab.get(base, params={"path": "rollouts/report.md"}).json()
+    assert capped["truncated"] is True and capped["content"] == report[:8]
+    assert capped["size"] == len(report.encode("utf-8"))
+    raw = lab.get(f"{base}/raw", params={"path": "rollouts/report.md"})
+    assert raw.content == report.encode("utf-8")  # the cap never touches downloads
+
+
 # ── ad-hoc upload source ───────────────────────────────────────────────────
 
 
