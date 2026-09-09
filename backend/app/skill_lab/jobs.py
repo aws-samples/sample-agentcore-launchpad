@@ -532,6 +532,100 @@ def strip_derived_task_fields(tasks: list[Any]) -> list[Any]:
     return stripped
 
 
+# Author fields an operator may change while reviewing generated tasks. Everything
+# else on a row (files, target_skills, attachments, judge contract…) is rebuilt
+# from the immutable generated_tasks.json, never taken from the request.
+TASKGEN_AUTHOR_FIELDS = ("id", "question", "rubric", "task_type")
+# Per-field caps for review edits: the generated document is bounded by the
+# taskgen count clamp, so these bound one row's text, not the task set.
+TASKGEN_EDIT_ID_MAX_CHARS = 200
+TASKGEN_EDIT_TYPE_MAX_CHARS = 64
+TASKGEN_EDIT_TEXT_MAX_CHARS = 64_000
+
+
+def select_taskgen_rows(tasks: list[Any], edits: list[dict[str, Any]] | None) -> list[Any]:
+    """Rebuild the rows to save from ORIGINAL-row references plus author-field edits.
+
+    `edits` is the complete selection: a generated row absent from it is excluded.
+    Each entry names one original row by its index in generated_tasks.json and
+    may override any of TASKGEN_AUTHOR_FIELDS (a None value keeps the original;
+    an empty `task_type` clears the field so the loader default applies). Rows
+    keep their generated order regardless of the order the references arrive in.
+    `None` (no edits at all) is the legacy full import of every row verbatim.
+
+    The router's strict models already bound the indices, forbid unknown fields
+    and reject coerced ints; this re-checks range/duplication because those are
+    document-relative, and refuses duplicate ids so a bad edit fails here with a
+    row-level message instead of deep inside the validator subprocess.
+    """
+    if edits is None:
+        return list(tasks)
+    if not edits:
+        raise AppError(
+            "skill_lab.taskgen_empty_selection",
+            "no generated tasks selected — keep at least one row to save",
+            status_code=422,
+        )
+    by_index: dict[int, dict[str, Any]] = {}
+    for edit in edits:
+        index = edit["index"]
+        if type(index) is not int or index < 0:
+            raise AppError(
+                "skill_lab.taskgen_bad_selection",
+                f"row reference {index!r} is not a non-negative integer",
+                status_code=422,
+            )
+        if index >= len(tasks):
+            raise AppError(
+                "skill_lab.taskgen_bad_selection",
+                f"row {index} does not exist — the job generated {len(tasks)} tasks",
+                status_code=422,
+            )
+        if index in by_index:
+            raise AppError(
+                "skill_lab.taskgen_bad_selection",
+                f"row {index} is referenced more than once",
+                status_code=422,
+            )
+        by_index[index] = edit
+    selected: list[Any] = []
+    for index in sorted(by_index):
+        original = tasks[index]
+        if not isinstance(original, dict):
+            raise AppError(
+                "skill_lab.taskgen_bad_selection",
+                f"row {index} is not a task object",
+                status_code=422,
+            )
+        edit = by_index[index]
+        task = dict(original)
+        for field in ("id", "question", "rubric"):
+            value = edit.get(field)
+            if value is not None:
+                task[field] = value
+        task_type = edit.get("task_type")
+        if task_type is not None:
+            if task_type:
+                task["task_type"] = task_type
+            else:
+                task.pop("task_type", None)
+        selected.append(task)
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for task in selected:
+        task_id = str(task.get("id"))
+        if task_id in seen and task_id not in duplicates:
+            duplicates.append(task_id)
+        seen.add(task_id)
+    if duplicates:
+        raise AppError(
+            "skill_lab.taskgen_duplicate_id",
+            "edited ids are not unique: " + ", ".join(sorted(duplicates)),
+            status_code=422,
+        )
+    return selected
+
+
 def _bind_taskgen_attachments(
     job_id: str, tasks: list[Any]
 ) -> tuple[list[Any], dict[str, Path]]:
@@ -619,13 +713,20 @@ def _finished_taskgen_job(db: Session, workspace_id: str, job_id: str) -> SkillL
 
 
 def import_taskgen_taskset(
-    db: Session, workspace_id: str, job_id: str, *, name: str
+    db: Session,
+    workspace_id: str,
+    job_id: str,
+    *,
+    name: str,
+    edits: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Save a taskgen job's reviewed output as a NEW single-mode task set.
 
-    Goes through the taskset service's validated staging swap — the same
-    validator subprocess as an upload — so the import can never plant a file
-    the eval/train CLIs would refuse."""
+    `edits` (see select_taskgen_rows) lets the reviewer drop rows and fix author
+    fields first; None saves every generated row as before. Goes through the
+    taskset service's validated staging swap — the same validator subprocess as
+    an upload — so the import can never plant a file the eval/train CLIs would
+    refuse. Nothing is written and the job stays un-imported when any check fails."""
     row = _finished_taskgen_job(db, workspace_id, job_id)
     if (row.params or {}).get("imported_taskset_id"):
         raise AppError(
@@ -642,7 +743,7 @@ def import_taskgen_taskset(
             status_code=409,
         )
     tasks, extra_sources = _bind_taskgen_attachments(
-        row.id, strip_derived_task_fields(results["tasks"])
+        row.id, strip_derived_task_fields(select_taskgen_rows(results["tasks"], edits))
     )
     info = taskset_svc.create_taskset(
         db,
@@ -657,12 +758,20 @@ def import_taskgen_taskset(
     return {"job": job_out(row), "taskset": info}
 
 
-def apply_taskgen_expansion(db: Session, workspace_id: str, job_id: str) -> dict[str, Any]:
+def apply_taskgen_expansion(
+    db: Session,
+    workspace_id: str,
+    job_id: str,
+    *,
+    edits: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Append a taskgen expansion job's output to its target task set/split.
 
-    Full-replace through update_taskset (validated staging swap). The id-collision
-    re-check matters even though the CLI already checked against its snapshot:
-    the task set may have changed between generation and this click."""
+    `edits` (see select_taskgen_rows) narrows/fixes the rows first; None appends
+    every generated row as before. Full-replace through update_taskset (validated
+    staging swap). The id-collision re-check runs on the EDITED ids against every
+    current split — the CLI checked its own snapshot, but the task set may have
+    changed since, and a reviewer may have renamed a row onto an existing id."""
     row = _finished_taskgen_job(db, workspace_id, job_id)
     if not row.taskset_id:
         raise AppError(
@@ -683,6 +792,7 @@ def apply_taskgen_expansion(db: Session, workspace_id: str, job_id: str) -> dict
             f"job {job_id} has no generated_tasks.json on disk",
             status_code=409,
         )
+    selected = select_taskgen_rows(results["tasks"], edits)
     ts_row = taskset_svc.get_row(db, workspace_id, row.taskset_id)  # 404 if deleted
     merged = dict(
         taskset_svc.read_taskset(db, workspace_id, ts_row.id, full=True)["tasks_by_split"]
@@ -695,7 +805,7 @@ def apply_taskgen_expansion(db: Session, workspace_id: str, job_id: str) -> dict
     }
     collisions = sorted(
         str(task.get("id"))
-        for task in results["tasks"]
+        for task in selected
         if isinstance(task, dict) and str(task.get("id")) in existing_ids
     )
     if collisions:
@@ -706,7 +816,7 @@ def apply_taskgen_expansion(db: Session, workspace_id: str, job_id: str) -> dict
             status_code=409,
         )
     tasks, extra_sources = _bind_taskgen_attachments(
-        row.id, strip_derived_task_fields(results["tasks"])
+        row.id, strip_derived_task_fields(selected)
     )
     target = row.split
     merged[target] = list(merged.get(target, [])) + tasks

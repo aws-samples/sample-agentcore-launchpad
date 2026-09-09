@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -300,8 +300,62 @@ def job_results(
     return {"type": row.type, **results} if row.type == "taskgen" else results
 
 
+def _not_blank(value: str) -> str:
+    if not value.strip():
+        raise ValueError("must not be blank")
+    return value
+
+
+# One reviewed row: WHICH generated row (by its index in generated_tasks.json) plus
+# the author fields the reviewer may change. `extra="forbid"` is the security
+# boundary — a client can never smuggle `files`, `attachments` or any other key;
+# the server rebuilds those from the job's own artifacts. `index` is strict so a
+# bool / "1" / 1.0 cannot select a row by coercion.
+_TaskgenId = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=jobs_svc.TASKGEN_EDIT_ID_MAX_CHARS
+    ),
+]
+_TaskgenText = Annotated[
+    str,
+    StringConstraints(min_length=1, max_length=jobs_svc.TASKGEN_EDIT_TEXT_MAX_CHARS),
+    AfterValidator(_not_blank),
+]
+_TaskgenType = Annotated[
+    str, StringConstraints(strip_whitespace=True, max_length=jobs_svc.TASKGEN_EDIT_TYPE_MAX_CHARS)
+]
+
+
+class TaskgenRowEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    index: int = Field(strict=True, ge=0, le=svc.MAX_TASKS_PER_SPLIT - 1)
+    id: _TaskgenId | None = None
+    question: _TaskgenText | None = None
+    rubric: _TaskgenText | None = None
+    # "" clears the field (loader default applies); None keeps the generated value.
+    task_type: _TaskgenType | None = None
+
+
+_TaskgenSelection = Annotated[
+    list[TaskgenRowEdit] | None, Field(max_length=svc.MAX_TASKS_PER_SPLIT)
+]
+
+
 class ImportTasksetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str
+    # Omitted/null → every generated row verbatim (legacy full import).
+    tasks: _TaskgenSelection = None
+
+
+class ApplyExpansionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tasks: _TaskgenSelection = None
+
+
+def _edits(selection: list[TaskgenRowEdit] | None) -> list[dict[str, Any]] | None:
+    return None if selection is None else [row.model_dump() for row in selection]
 
 
 @router.post("/jobs/{job_id}/import-taskset", status_code=201)
@@ -312,17 +366,23 @@ def import_taskgen_taskset(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Save a succeeded taskgen job's reviewed tasks as a new task set."""
-    return jobs_svc.import_taskgen_taskset(db, ws.id, job_id, name=body.name)
+    return jobs_svc.import_taskgen_taskset(
+        db, ws.id, job_id, name=body.name, edits=_edits(body.tasks)
+    )
 
 
 @router.post("/jobs/{job_id}/apply-expansion")
 def apply_taskgen_expansion(
     job_id: str,
+    body: ApplyExpansionRequest | None = None,
     ws: WorkspaceScope = Depends(require_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Append a succeeded expansion job's tasks to its target task set/split."""
-    return jobs_svc.apply_taskgen_expansion(db, ws.id, job_id)
+    """Append a succeeded expansion job's tasks to its target task set/split.
+    The body is optional: no body (or no `tasks`) appends every generated row."""
+    return jobs_svc.apply_taskgen_expansion(
+        db, ws.id, job_id, edits=_edits(body.tasks) if body is not None else None
+    )
 
 
 class PublishRequest(BaseModel):

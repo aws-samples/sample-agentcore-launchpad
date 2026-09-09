@@ -613,3 +613,372 @@ def test_imported_taskgen_set_defers_to_the_run_level_judge_mode(declaring_lab):
     assert not [key for key in task if key.startswith("_")]
     # The attachment binding still happened.
     assert "data/rows.csv" in task["files"]
+
+
+# ── review edits before save (SE-037) ──────────────────────────────────────
+#
+# The reviewer may drop generated rows and change id/question/rubric/task_type
+# BEFORE anything is written. The request names original rows by index and
+# carries only those four fields; the server rebuilds everything else (files,
+# attachments, derived-field stripping) from the immutable generated_tasks.json.
+
+
+def _job_dir_digest(job_id: str) -> dict[str, str]:
+    """sha256 of every file under the job directory — proves artifacts stay put."""
+    root = artifacts.job_dir(job_id)
+    return {
+        str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _finished_generation(client, **overrides):
+    job = _submit(client, **overrides).json()
+    assert _wait(client, job["id"])["status"] == "succeeded"
+    return job
+
+
+def _import(client, job_id, body):
+    return client.post(f"/api/skill-lab/jobs/{job_id}/import-taskset", json=body)
+
+
+def _apply(client, job_id, body=None):
+    url = f"/api/skill-lab/jobs/{job_id}/apply-expansion"
+    return client.post(url) if body is None else client.post(url, json=body)
+
+
+def _stored_tasks(client, taskset_id, split="tasks"):
+    return client.get(f"/api/skill-lab/tasksets/{taskset_id}?full=true").json()["tasks_by_split"][
+        split
+    ]
+
+
+def test_edited_import_saves_only_the_selected_rows_with_the_author_edits(lab):
+    job = _finished_generation(lab, params={"count": 4})
+    before = _job_dir_digest(job["id"])
+
+    response = _import(
+        lab,
+        job["id"],
+        {
+            "name": "reviewed",
+            "tasks": [
+                # references arrive out of order; the saved order is the generated one
+                {"index": 3, "question": "q for gen_004 (clarified)", "task_type": "edge"},
+                {"index": 0, "id": " renamed_001 ", "rubric": "PASS when it cites the CSV"},
+                {"index": 2},  # untouched row, kept as generated
+                # gen_002 (index 1) is excluded
+            ],
+        },
+    )
+    assert response.status_code == 201, response.text
+    taskset_id = response.json()["taskset"]["id"]
+    assert response.json()["taskset"]["counts"] == {"tasks": 3}
+    assert response.json()["job"]["params"]["imported_taskset_id"] == taskset_id
+
+    saved = _stored_tasks(lab, taskset_id)
+    assert [task["id"] for task in saved] == ["renamed_001", "gen_003", "gen_004"]
+    assert saved[0]["question"] == "q for gen_001"  # untouched field keeps its value
+    assert saved[0]["rubric"] == "PASS when it cites the CSV"
+    assert saved[1] == {"id": "gen_003", "question": "q for gen_003", "rubric": "PASS always"}
+    assert saved[2]["question"] == "q for gen_004 (clarified)"
+    assert saved[2]["task_type"] == "edge"
+    # the artifacts the edits were drawn from are untouched
+    assert _job_dir_digest(job["id"]) == before
+
+
+def test_edited_import_keeps_bound_attachments_and_strips_derived_fields(declaring_lab):
+    """An edited row keeps the FILES the job bound for it: the descriptor comes from
+    the job's own manifest even when the reviewer renamed the row, and a client
+    cannot supply one (see the forbidden-field test)."""
+    staged = _stage(declaring_lab, ("rows.csv", CSV))
+    job = _finished_generation(declaring_lab, attachments=staged, params={"count": 2})
+    before = _job_dir_digest(job["id"])
+    response = _import(
+        declaring_lab,
+        job["id"],
+        {"name": "edited-with-files", "tasks": [{"index": 0, "id": "csv_question"}]},
+    )
+    assert response.status_code == 201, response.text
+    saved = _stored_tasks(declaring_lab, response.json()["taskset"]["id"])
+    assert [task["id"] for task in saved] == ["csv_question"]
+    assert "attachments" not in saved[0]
+    digest = hashlib.sha256(CSV).hexdigest()
+    assert saved[0]["files"]["data/rows.csv"]["asset"] == f"sha256:{digest}"
+    assert "judge_mode" not in saved[0]
+    assert not [key for key in saved[0] if key.startswith("_")]
+    assert _job_dir_digest(job["id"]) == before
+
+
+def test_clearing_task_type_drops_the_field(lab):
+    job = _finished_generation(lab, params={"count": 1})
+    response = _import(
+        lab, job["id"], {"name": "typed", "tasks": [{"index": 0, "task_type": "  "}]}
+    )
+    assert response.status_code == 201, response.text
+    assert "task_type" not in _stored_tasks(lab, response.json()["taskset"]["id"])[0]
+
+
+def test_legacy_import_without_edits_is_unchanged(lab):
+    """No `tasks` key, or an explicit null, still saves every generated row verbatim."""
+    for body in ({"name": "all-implicit"}, {"name": "all-explicit-null", "tasks": None}):
+        job = _finished_generation(lab, params={"count": 3})
+        response = _import(lab, job["id"], body)
+        assert response.status_code == 201, response.text
+        saved = _stored_tasks(lab, response.json()["taskset"]["id"])
+        assert [task["id"] for task in saved] == ["gen_001", "gen_002", "gen_003"]
+
+
+def _assert_nothing_saved(client, job_id, *, tasksets_before):
+    """A refused edit leaves no task set behind and the job still importable."""
+    assert client.get("/api/skill-lab/tasksets").json() == tasksets_before
+    params = client.get(f"/api/skill-lab/jobs/{job_id}").json()["params"]
+    assert "imported_taskset_id" not in params and "expanded" not in params
+
+
+@pytest.mark.parametrize(
+    "tasks, code",
+    [
+        ([], "skill_lab.taskgen_empty_selection"),
+        ([{"index": 0}, {"index": 0}], "skill_lab.taskgen_bad_selection"),
+        ([{"index": 3}], "skill_lab.taskgen_bad_selection"),  # only 3 rows exist
+        ([{"index": 0, "id": "gen_002"}, {"index": 1}], "skill_lab.taskgen_duplicate_id"),
+        (
+            [{"index": 0, "id": "same"}, {"index": 2, "id": "same"}],
+            "skill_lab.taskgen_duplicate_id",
+        ),
+    ],
+)
+def test_bad_selections_are_refused_without_writing(lab, tasks, code):
+    job = _finished_generation(lab, params={"count": 3})
+    tasksets_before = lab.get("/api/skill-lab/tasksets").json()
+    response = _import(lab, job["id"], {"name": "refused", "tasks": tasks})
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == code
+    _assert_nothing_saved(lab, job["id"], tasksets_before=tasksets_before)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"index": True},  # bool must not select row 1
+        {"index": "0"},  # no string coercion
+        {"index": 0.0},  # no float coercion
+        {"index": -1},
+        {"index": 2000},  # beyond MAX_TASKS_PER_SPLIT
+        {"index": None},
+        {},  # index is required
+        {"index": 0, "files": {"data/evil.csv": {"asset": "sha256:00"}}},  # not an author field
+        {"index": 0, "attachments": ["rows.csv"]},
+        {"index": 0, "judge_mode": "agentic"},
+        {"index": 0, "_judge_mode_explicit": True},
+        {"index": 0, "id": ""},
+        {"index": 0, "id": "   "},
+        {"index": 0, "id": "x" * (jobs.TASKGEN_EDIT_ID_MAX_CHARS + 1)},
+        {"index": 0, "question": ""},
+        {"index": 0, "question": " \n "},
+        {"index": 0, "rubric": "r" * (jobs.TASKGEN_EDIT_TEXT_MAX_CHARS + 1)},
+        {"index": 0, "task_type": "t" * (jobs.TASKGEN_EDIT_TYPE_MAX_CHARS + 1)},
+        {"index": 0, "question": 42},
+        {"index": 0, "rubric": ["PASS"]},
+        {"index": 0, "task_type": {"kind": "x"}},
+    ],
+)
+def test_malformed_rows_fail_request_validation(lab, row):
+    job = _finished_generation(lab, params={"count": 2})
+    tasksets_before = lab.get("/api/skill-lab/tasksets").json()
+    response = _import(lab, job["id"], {"name": "malformed", "tasks": [row]})
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "validation.invalid_request"
+    _assert_nothing_saved(lab, job["id"], tasksets_before=tasksets_before)
+
+
+def test_unknown_request_fields_and_oversized_selections_are_refused(lab):
+    job = _finished_generation(lab, params={"count": 2})
+    response = _import(lab, job["id"], {"name": "n", "tasks": [{"index": 0}], "mode": "split"})
+    assert response.status_code == 422 and response.json()["code"] == "validation.invalid_request"
+    response = _import(lab, job["id"], {"name": "n", "tasks": "all"})
+    assert response.status_code == 422 and response.json()["code"] == "validation.invalid_request"
+    too_many = [{"index": i} for i in range(taskset_svc.MAX_TASKS_PER_SPLIT + 1)]
+    response = _import(lab, job["id"], {"name": "n", "tasks": too_many})
+    assert response.status_code == 422 and response.json()["code"] == "validation.invalid_request"
+    response = _apply(lab, job["id"], {"tasks": [{"index": 0}], "split": "train"})
+    assert response.status_code == 422 and response.json()["code"] == "validation.invalid_request"
+
+
+def test_edited_import_of_an_unsafe_id_is_refused_by_the_validator(lab):
+    """The loader's own rules still apply to edited fields: nothing bypasses the
+    validator subprocess, and a failure there also writes nothing."""
+    job = _finished_generation(lab, params={"count": 2})
+    tasksets_before = lab.get("/api/skill-lab/tasksets").json()
+    response = _import(lab, job["id"], {"name": "unsafe", "tasks": [{"index": 0, "id": "../x"}]})
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "skill_lab.taskset_invalid"
+    _assert_nothing_saved(lab, job["id"], tasksets_before=tasksets_before)
+
+
+def test_edits_are_workspace_scoped(lab):
+    from app.core.db import SessionLocal
+    from app.models.ledger import Workspace
+    from app.routers.workspaces import WORKSPACE_HEADER
+
+    job = _finished_generation(lab, params={"count": 2})
+    db = SessionLocal()
+    try:
+        db.add(
+            Workspace(
+                id="acct-other",
+                name="other",
+                account_id="444455556666",
+                region="us-west-1",
+                bootstrap_status="ready",
+                resources={},
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+    foreign = {WORKSPACE_HEADER: "acct-other"}
+    response = lab.post(
+        f"/api/skill-lab/jobs/{job['id']}/import-taskset",
+        json={"name": "stolen", "tasks": [{"index": 0}]},
+        headers=foreign,
+    )
+    assert response.status_code == 404 and response.json()["code"] == "skill_lab.job_not_found"
+    response = lab.post(
+        f"/api/skill-lab/jobs/{job['id']}/apply-expansion",
+        json={"tasks": [{"index": 0}]},
+        headers=foreign,
+    )
+    assert response.status_code == 404 and response.json()["code"] == "skill_lab.job_not_found"
+    assert "imported_taskset_id" not in lab.get(f"/api/skill-lab/jobs/{job['id']}").json()["params"]
+
+
+def test_edits_on_an_unfinished_job_are_refused(lab, client):
+    from app.core.db import SessionLocal
+    from app.skill_lab.models import SkillLabJob
+
+    db = SessionLocal()
+    running = SkillLabJob(
+        workspace_id="default", type="taskgen", taskset_id="", params={}, status="running"
+    )
+    db.add(running)
+    db.commit()
+    running_id = running.id
+    db.close()
+    response = _import(client, running_id, {"name": "early", "tasks": [{"index": 0}]})
+    assert response.status_code == 409 and response.json()["code"] == "skill_lab.job_not_finished"
+    response = _apply(client, running_id, {"tasks": [{"index": 0}]})
+    # not an expansion job is judged before "finished" is; either way nothing happens
+    assert response.status_code in (400, 409)
+    assert response.json()["code"] in (
+        "skill_lab.job_not_finished",
+        "skill_lab.not_an_expansion_job",
+    )
+
+
+def test_edited_import_cannot_be_repeated(lab):
+    job = _finished_generation(lab, params={"count": 2})
+    first = _import(lab, job["id"], {"name": "once", "tasks": [{"index": 1}]})
+    assert first.status_code == 201, first.text
+    again = _import(lab, job["id"], {"name": "twice", "tasks": [{"index": 0}]})
+    assert again.status_code == 409 and again.json()["code"] == "skill_lab.already_imported"
+    assert lab.get(f"/api/skill-lab/tasksets/{first.json()['taskset']['id']}").json()["info"][
+        "counts"
+    ] == {"tasks": 1}
+
+
+def test_edited_expansion_appends_only_the_kept_rows_to_the_target_split(lab):
+    ts = _taskset(
+        lab,
+        {"train": _seed_tasks(["tr_1"]), "val": _seed_tasks(["va_1"])},
+        mode="split",
+    )
+    job = _finished_generation(lab, taskset_id=ts, target_split="test")
+    before = _job_dir_digest(job["id"])
+    response = _apply(
+        lab,
+        job["id"],
+        {
+            "tasks": [
+                {"index": 2, "id": "test_edge", "rubric": "PASS on the edge case"},
+                {"index": 0, "question": "q for gen_001 — reworded"},
+            ]
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["taskset"]["counts"] == {"train": 1, "val": 1, "test": 2}
+    assert response.json()["job"]["params"]["expanded"] is True
+    full = lab.get(f"/api/skill-lab/tasksets/{ts}?full=true").json()["tasks_by_split"]
+    assert [task["id"] for task in full["train"]] == ["tr_1"]  # other splits preserved
+    assert [task["id"] for task in full["val"]] == ["va_1"]
+    assert [(task["id"], task["question"]) for task in full["test"]] == [
+        ("gen_001", "q for gen_001 — reworded"),
+        ("test_edge", "q for gen_003"),
+    ]
+    assert full["test"][1]["rubric"] == "PASS on the edge case"
+    assert _job_dir_digest(job["id"]) == before
+
+    again = _apply(lab, job["id"], {"tasks": [{"index": 1}]})
+    assert again.status_code == 409 and again.json()["code"] == "skill_lab.already_imported"
+    assert lab.get(f"/api/skill-lab/tasksets/{ts}").json()["info"]["counts"]["test"] == 2
+
+
+def test_edited_expansion_checks_edited_ids_against_every_current_split(lab):
+    """Renaming a generated row onto an id that lives in ANOTHER split is a
+    collision — the target split is not the only namespace."""
+    ts = _taskset(
+        lab,
+        {"train": _seed_tasks(["tr_1"]), "val": _seed_tasks(["va_1"])},
+        mode="split",
+    )
+    job = _finished_generation(lab, taskset_id=ts, target_split="test")
+    snapshot = lab.get(f"/api/skill-lab/tasksets/{ts}?full=true").json()
+    for tasks in (
+        [{"index": 0, "id": "tr_1"}],
+        [{"index": 0, "id": "va_1"}, {"index": 1}],
+    ):
+        response = _apply(lab, job["id"], {"tasks": tasks})
+        assert response.status_code == 409, response.text
+        assert response.json()["code"] == "skill_lab.expansion_conflict"
+    assert lab.get(f"/api/skill-lab/tasksets/{ts}?full=true").json() == snapshot
+    assert "expanded" not in lab.get(f"/api/skill-lab/jobs/{job['id']}").json()["params"]
+
+
+def test_edited_expansion_refuses_bad_selections_without_touching_the_set(lab):
+    ts = _taskset(lab, {"tasks": _seed_tasks(["task_001"])})
+    job = _finished_generation(lab, taskset_id=ts, target_split="tasks")
+    snapshot = lab.get(f"/api/skill-lab/tasksets/{ts}?full=true").json()
+    for tasks, code in (
+        ([], "skill_lab.taskgen_empty_selection"),
+        ([{"index": 7}], "skill_lab.taskgen_bad_selection"),
+        ([{"index": 1}, {"index": 1}], "skill_lab.taskgen_bad_selection"),
+        ([{"index": 0, "id": "dup"}, {"index": 1, "id": "dup"}], "skill_lab.taskgen_duplicate_id"),
+    ):
+        response = _apply(lab, job["id"], {"tasks": tasks})
+        assert response.status_code == 422, response.text
+        assert response.json()["code"] == code
+    assert lab.get(f"/api/skill-lab/tasksets/{ts}?full=true").json() == snapshot
+    assert "expanded" not in lab.get(f"/api/skill-lab/jobs/{job['id']}").json()["params"]
+    # the legacy no-body apply still works afterwards
+    assert _apply(lab, job["id"]).status_code == 200
+
+
+def test_select_taskgen_rows_unit_contract():
+    tasks = [
+        {"id": "a", "question": "qa", "rubric": "ra", "task_type": "default", "files": {"x": "y"}},
+        {"id": "b", "question": "qb", "rubric": "rb"},
+    ]
+    assert jobs.select_taskgen_rows(tasks, None) == tasks
+    picked = jobs.select_taskgen_rows(
+        tasks, [{"index": 1, "id": "b2"}, {"index": 0, "task_type": "", "question": None}]
+    )
+    assert picked == [
+        {"id": "a", "question": "qa", "rubric": "ra", "files": {"x": "y"}},
+        {"id": "b2", "question": "qb", "rubric": "rb"},
+    ]
+    assert tasks[0]["task_type"] == "default"  # originals are not mutated
+    with pytest.raises(AppError) as exc:
+        jobs.select_taskgen_rows(tasks, [{"index": True}])
+    assert exc.value.code == "skill_lab.taskgen_bad_selection"
