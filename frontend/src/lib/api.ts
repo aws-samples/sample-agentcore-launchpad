@@ -2297,6 +2297,21 @@ export interface SkillLabTaskgenResults {
   tasks: SkillLabTask[];
   summary: Record<string, unknown>;
 }
+/**
+ * One reviewed generated row for `import-taskset` / `apply-expansion`: WHICH
+ * original row (its index in the job's `generated_tasks.json`) plus the only
+ * author fields a reviewer may change. Omitted fields keep the generated value;
+ * `task_type: ""` clears it. Rows absent from the selection are excluded. The
+ * server rebuilds files/attachments from the job's own artifacts and rejects
+ * any other key (`extra="forbid"`), so this is deliberately not a `SkillLabTask`.
+ */
+export interface SkillLabTaskgenRowEdit {
+  index: number;
+  id?: string;
+  question?: string;
+  rubric?: string;
+  task_type?: string;
+}
 
 /**
  * Token counters one side (target rollout or judge) reported for one task, as
@@ -3110,17 +3125,19 @@ export const api = {
     request<SkillLabJobResults>(`/api/skill-lab/jobs/${encodeURIComponent(id)}/results`),
   skillLabTaskgenResults: (id: string) =>
     request<SkillLabTaskgenResults>(`/api/skill-lab/jobs/${encodeURIComponent(id)}/results`),
-  /** Save a succeeded taskgen job's reviewed tasks as a NEW single-mode task set. */
-  skillLabTaskgenImport: (id: string, name: string) =>
+  /** Save a succeeded taskgen job's reviewed tasks as a NEW single-mode task set.
+   *  `tasks` (optional) is the reviewed selection; omitted → every generated row. */
+  skillLabTaskgenImport: (id: string, name: string, tasks?: SkillLabTaskgenRowEdit[]) =>
     request<{ job: SkillLabJobInfo; taskset: SkillLabTasksetInfo }>(
       `/api/skill-lab/jobs/${encodeURIComponent(id)}/import-taskset`,
-      { method: "POST", body: JSON.stringify({ name }) },
+      { method: "POST", body: JSON.stringify(tasks ? { name, tasks } : { name }) },
     ),
-  /** Append a succeeded expansion job's tasks to its target task set/split. */
-  skillLabTaskgenApply: (id: string) =>
+  /** Append a succeeded expansion job's tasks to its target task set/split.
+   *  `tasks` (optional) is the reviewed selection; omitted → every generated row. */
+  skillLabTaskgenApply: (id: string, tasks?: SkillLabTaskgenRowEdit[]) =>
     request<{ job: SkillLabJobInfo; taskset: SkillLabTasksetInfo }>(
       `/api/skill-lab/jobs/${encodeURIComponent(id)}/apply-expansion`,
-      { method: "POST" },
+      tasks ? { method: "POST", body: JSON.stringify({ tasks }) } : { method: "POST" },
     ),
   /** 404 `skill_lab.results_pending` until the first optimizer step lands. */
   skillLabJobTrainSummary: (id: string) =>

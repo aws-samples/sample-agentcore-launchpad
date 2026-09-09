@@ -1372,7 +1372,18 @@
         "apply": "追加到 {{split}} 分割",
         "imported": "已导入为任务集",
         "applied": "已追加到「{{name}}」。",
-        "unusedAttachments": "没有任何生成任务用到：{{names}}。这些上传不会附加到保存后的任务集。"
+        "unusedAttachments": "没有任何生成任务用到：{{names}}。这些上传不会附加到保存后的任务集。",
+        "editHint": "可修改任意一行的 id、question、rubric 或 task_type，并排除不需要的行。输入文件仍绑定在各自的行上。点击下方保存前不会写入任何内容。",
+        "summary": "将保存 {{kept}}/{{total}} 个任务",
+        "excludedCount": "已排除 {{n}} 个",
+        "exclude": "排除",
+        "restore": "恢复",
+        "excludedTag": "已排除",
+        "reset": "重置编辑",
+        "noneKept": "至少保留一个任务才能保存。",
+        "rowIncomplete": "第 {{n}} 行：id、question 和 rubric 为必填。",
+        "duplicateIds": "id 重复：{{ids}}",
+        "nameRequired": "请输入新任务集名称。"
       },
       "attach": {
         "pick": "选择文件…",

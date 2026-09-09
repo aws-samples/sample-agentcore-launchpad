@@ -15,6 +15,9 @@ import type {
 import { api, ApiError } from "../../lib/api";
 import type { RegistryRecord } from "../Registry";
 import { JobLogPane } from "./JobLogPane";
+import type { TaskgenReviewDraft } from "./taskgenReview";
+import { reviewBlocker, reviewSelection, toReviewDrafts } from "./taskgenReview";
+import { TaskgenReviewEditor } from "./TaskgenReviewEditor";
 
 const JOB_POLL_MS = 2500;
 const LIVE_STATUSES = ["queued", "running"];
@@ -94,6 +97,16 @@ export function TaskgenPanel({
   const [results, setResults] = useState<SkillLabTaskgenResults | null>(null);
   const [importName, setImportName] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  // Review drafts: what the save request will be built from. Derived from
+  // `results` exactly once per fetched result set — the job poll only touches
+  // `detail`, and a language change re-renders without refetching — so typed
+  // edits survive both. Switching to another job clears `results` (below) and
+  // therefore starts a fresh draft; coming back re-derives from the generated
+  // rows, i.e. drafts are per visit, never persisted.
+  const [drafts, setDrafts] = useState<TaskgenReviewDraft[] | null>(null);
+  useEffect(() => {
+    setDrafts(results === null ? null : toReviewDrafts(results.tasks));
+  }, [results]);
 
   // What the run was given vs what its tasks actually asked for. `params` is
   // recorded at submission so this works while a job is still running; the
@@ -134,19 +147,25 @@ export function TaskgenPanel({
   }, [status, backend]);
 
   // Selected job: fetch, then poll while live (results appear on success).
+  // `resultsRequested` is per effect run, i.e. per selected job: reading the
+  // `results` state here instead would see the PREVIOUS job's value when the
+  // operator switches straight from one finished job to another, and the second
+  // job's results would never be fetched.
   useEffect(() => {
     setDetail(null);
     setResults(null);
     setActionError(null);
     if (!jobId) return;
     let stale = false;
+    let resultsRequested = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const tick = async () => {
       try {
         const job = await api.skillLabJobGet(jobId);
         if (stale) return;
         setDetail(job);
-        if (job.status === "succeeded" && results === null) {
+        if (job.status === "succeeded" && !resultsRequested) {
+          resultsRequested = true;
           api
             .skillLabTaskgenResults(jobId)
             .then((r) => !stale && setResults(r))
@@ -166,7 +185,6 @@ export function TaskgenPanel({
       stale = true;
       if (timer) clearTimeout(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- results is written here
   }, [jobId, loadJobs]);
 
   const applyBackend = (next: SkillLabTargetBackend) => {
@@ -244,11 +262,17 @@ export function TaskgenPanel({
     }
   };
 
+  // A failed save (validation, collision, …) shows its reason and leaves the
+  // drafts exactly as typed — nothing here resets them.
   const importAsNew = async () => {
-    if (!detail) return;
+    if (!detail || drafts === null) return;
     setActionError(null);
     try {
-      const outcome = await api.skillLabTaskgenImport(detail.id, importName.trim());
+      const outcome = await api.skillLabTaskgenImport(
+        detail.id,
+        importName.trim(),
+        reviewSelection(drafts).tasks,
+      );
       setDetail(outcome.job);
       onImported(outcome.taskset.id);
     } catch (err) {
@@ -257,10 +281,10 @@ export function TaskgenPanel({
   };
 
   const applyExpansion = async () => {
-    if (!detail) return;
+    if (!detail || drafts === null) return;
     setActionError(null);
     try {
-      const outcome = await api.skillLabTaskgenApply(detail.id);
+      const outcome = await api.skillLabTaskgenApply(detail.id, reviewSelection(drafts).tasks);
       setDetail(outcome.job);
       onImported(outcome.taskset.id);
     } catch (err) {
@@ -555,6 +579,10 @@ export function TaskgenPanel({
   const imported = detail?.params.imported_taskset_id;
   const expanded = detail?.params.expanded === true;
   const isExpansion = detail !== null && detail.taskset_id !== "";
+  const selection = drafts === null ? null : reviewSelection(drafts);
+  const keptCount = selection?.kept.length ?? 0;
+  const excludedCount = drafts === null ? 0 : drafts.length - keptCount;
+  const blocker = drafts === null ? null : reviewBlocker(drafts, t);
 
   const jobPanel = detail !== null && (
     <Panel
@@ -601,46 +629,49 @@ export function TaskgenPanel({
       )}
       <JobLogPane jobId={detail.id} live={live} testId="taskgen-job-log" />
 
-      {results !== null && (
+      {results !== null && drafts !== null && (
         <div style={{ marginTop: 12 }} data-testid="taskgen-results">
-          <div className="mono" style={{ fontSize: 11, marginBottom: 6 }}>
+          <div className="mono" style={{ fontSize: 11, marginBottom: 4 }}>
             {t("skillLab.taskgen.review.title", { n: results.count })}
           </div>
-          <div style={{ maxHeight: 300, overflowY: "auto", border: "1px solid var(--grid)" }}>
-            <table data-testid="taskgen-task-table">
-              <thead>
-                <tr>
-                  <th>{t("skillLab.taskgen.col.id")}</th>
-                  <th>{t("skillLab.taskgen.col.question")}</th>
-                  <th>{t("skillLab.taskgen.col.rubric")}</th>
-                  {attachedNames.length > 0 && (
-                    <th>{t("skillLab.taskgen.col.attachments")}</th>
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {results.tasks.map((task, index) => (
-                  <tr key={`${task.id}-${index}`}>
-                    <td className="mono">{String(task.id ?? "")}</td>
-                    <td style={{ fontSize: 11 }}>{excerpt(task.question)}</td>
-                    <td className="dim" style={{ fontSize: 10.5 }}>
-                      {excerpt(task.rubric)}
-                    </td>
-                    {attachedNames.length > 0 && (
-                      <td
-                        className="mono dim"
-                        style={{ fontSize: 10 }}
-                        data-testid={`taskgen-task-attachments-${String(task.id ?? "")}`}
-                      >
-                        {Array.isArray(task.attachments) && task.attachments.length
-                          ? task.attachments.map(String).join(" · ")
-                          : "—"}
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {!(imported || expanded) && (
+            <div className="dim" style={{ fontSize: 10.5, marginBottom: 6 }}>
+              {t("skillLab.taskgen.review.editHint")}
+            </div>
+          )}
+          <div style={{ maxHeight: 420, overflowY: "auto", padding: 2 }}>
+            <TaskgenReviewEditor
+              drafts={drafts}
+              onChange={setDrafts}
+              showAttachments={attachedNames.length > 0}
+              readOnly={Boolean(imported || expanded)}
+            />
+          </div>
+          <div
+            className="mono dim"
+            style={{
+              fontSize: 10.5,
+              marginTop: 6,
+              display: "flex",
+              gap: 10,
+              alignItems: "center",
+            }}
+            data-testid="taskgen-review-summary"
+          >
+            <span>
+              {t("skillLab.taskgen.review.summary", { kept: keptCount, total: drafts.length })}
+              {excludedCount > 0 &&
+                ` · ${t("skillLab.taskgen.review.excludedCount", { n: excludedCount })}`}
+            </span>
+            {!(imported || expanded) && (
+              <Btn
+                data-testid="taskgen-review-reset"
+                disabled={!selection?.dirty}
+                onClick={() => setDrafts(toReviewDrafts(results.tasks))}
+              >
+                {t("skillLab.taskgen.review.reset")}
+              </Btn>
+            )}
           </div>
 
           {unusedAttachments.length > 0 && (
@@ -678,7 +709,13 @@ export function TaskgenPanel({
           ) : (
             <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginTop: 10 }}>
               {isExpansion ? (
-                <Btn primary data-testid="taskgen-apply" onClick={() => void applyExpansion()}>
+                <Btn
+                  primary
+                  data-testid="taskgen-apply"
+                  disabled={blocker !== null}
+                  disabledReason={blocker ?? undefined}
+                  onClick={() => void applyExpansion()}
+                >
                   ▸ {t("skillLab.taskgen.review.apply", { split: detail.split })}
                 </Btn>
               ) : (
@@ -694,7 +731,11 @@ export function TaskgenPanel({
                   </div>
                   <Btn
                     primary
-                    disabled={!importName.trim()}
+                    disabled={!importName.trim() || blocker !== null}
+                    disabledReason={
+                      blocker ??
+                      (!importName.trim() ? t("skillLab.taskgen.review.nameRequired") : undefined)
+                    }
                     data-testid="taskgen-import"
                     onClick={() => void importAsNew()}
                   >

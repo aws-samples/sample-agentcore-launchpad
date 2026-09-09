@@ -1372,7 +1372,18 @@
         "apply": "Append to split {{split}}",
         "imported": "Imported as task set",
         "applied": "Applied to \"{{name}}\".",
-        "unusedAttachments": "No generated task used: {{names}}. Those uploads will not be attached to the saved task set."
+        "unusedAttachments": "No generated task used: {{names}}. Those uploads will not be attached to the saved task set.",
+        "editHint": "Edit the id, question, rubric or task_type of any row and exclude the rows you do not want. Input files stay bound to their row. Nothing is written until you save below.",
+        "summary": "{{kept}} of {{total}} tasks will be saved",
+        "excludedCount": "{{n}} excluded",
+        "exclude": "Exclude",
+        "restore": "Restore",
+        "excludedTag": "excluded",
+        "reset": "Reset edits",
+        "noneKept": "Keep at least one task to save.",
+        "rowIncomplete": "Row {{n}}: id, question and rubric are required.",
+        "duplicateIds": "Duplicate ids: {{ids}}",
+        "nameRequired": "Enter a name for the new task set."
       },
       "attach": {
         "pick": "Choose files…",
