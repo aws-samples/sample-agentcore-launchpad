@@ -1084,20 +1084,24 @@ ACCEPT/REJECT 闸门判定的步骤时间轴，SEED→BEST 差异对比，为被
 不是台账）。
 
 **评估 token 用量。** CLI 写出的 `results.json` 每一行可能携带内置生产者实际观测到的 token
-计数:目标 rollout 的 `usage`（来自 exec transcript——claude transcript 给出 `input` /
-`cache_write` / `cache_read` / `output` 以及一个 `total`;codex transcript **只**给出总数，
+计数：目标 rollout 的 `usage`（来自 exec transcript——claude transcript 给出 `input` /
+`cache_write` / `cache_read` / `output` 以及一个 `total`；codex transcript **只**给出总数，
 四个分项计数是字面上的零）与评审方的 `judge_usage`（仅 `input` / `output`——agentic 评审
 worker 把缓存读写折算进 `input`，chat 评审根本看不到缓存计数）。后端
 （`skill_lab/artifacts.py`）逐行校验后投影为 `token_usage.{target, judge}`，再按侧汇总到
 summary 上，**不改动**任何评分语义（score 无效的行仍被排除在通过率分母之外，但它们的用量照常
-计入——token 确实消耗了）。这层投影刻意从严:没有任何一行上报的计数为 `null`（未知，绝不是
-0）;bool、负数、NaN/inf、小数或非数值的计数会被丢弃并把该行标为 `malformed`，而不是折算成零;
-`total` 超出分项之和的部分记为 `unattributed`（codex 的仅总数形态，此时其零占位符按未知上报），
-低于分项之和的 total 则被忽略。summary 侧带有覆盖度（`rows` / `reported_rows` /
-`missing_rows` / `malformed_rows`，以及逐计数的 `counter_rows`），只有每一行都干净上报时才
-`complete`。`scope` 恒为 `reported`:这是对上报了用量的任务的观测统计——不是计费总额，控制台
-也不给出任何费用估算。控制台在结果磁贴下方以「TOKEN 用量」表格展示，并在展开的任务行中逐任务
-展示，未知计数一律显示为破折号。
+计入——token 确实消耗了）。这层投影刻意从严：没有任何一行上报的计数为 `null`（未知，绝不是
+0）；bool、负数、NaN/inf、小数或非数值的计数会被丢弃并把该行标为 `malformed`，而不是折算成零；
+`total` 超出分项之和的部分记为 `unattributed`（codex 的仅总数形态，此时其零占位符按未知上报；
+只上报 `total: 0` 也仍是一次上报），低于分项之和的 total 则被忽略。原始的 `usage` /
+`judge_usage` 保留在行上，仅在文件带有 `NaN`/`Infinity` 字面量时做可序列化处理。summary 侧
+区分**上报覆盖度**（`reports_complete`：每一行都干净上报——`rows` / `reported_rows` /
+`missing_rows` / `malformed_rows`）与**拆分完整性**（`complete`：上报完整，且凡有任何一行上报过
+的计数都被每一行上报了；逐计数的 `counter_rows` / `counter_complete`）。只有部分行上报的计数是
+部分求和，控制台标出 `k/n`——一行 claude 加一行 codex 仅总数，永远不会显示为完整拆分。`scope`
+恒为 `reported`：这是对上报了用量的任务的观测统计——不是计费总额，控制台也不给出任何费用估算。
+控制台在结果磁贴下方以「TOKEN 用量」表格展示，并在展开的任务行中逐任务展示，未知计数一律显示为
+破折号。
 
 ## SQLite 台账与 job/event 模型
 

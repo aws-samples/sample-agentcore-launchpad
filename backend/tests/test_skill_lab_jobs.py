@@ -694,7 +694,13 @@ def test_results_usage_sums_target_and_judge_independently(lab):
     for side in (target, judge):
         assert side["rows"] == 2 and side["reported_rows"] == 2
         assert side["missing_rows"] == 0 and side["malformed_rows"] == 0
+        assert side["reports_complete"] is True
+        # Judge cache counters were reported by NO row: unknown, which does not
+        # make the breakdown partial — every counter anyone reported, all did.
         assert side["complete"] is True
+    assert judge["counter_complete"] == {
+        "input": True, "cache_write": False, "cache_read": False, "output": True,
+        "unattributed": False}
     # Raw producer fields stay on the row (compatibility) next to the projection.
     first = artifacts.eval_results("job_usage_sums")["rows"][0]
     assert first["usage"] == _CLAUDE_USAGE and first["judge_usage"] == _JUDGE_USAGE
@@ -720,7 +726,7 @@ def test_results_usage_partial_missing_and_malformed_rows(lab):
     assert target["reported_rows"] == 1
     assert target["missing_rows"] == 1
     assert target["malformed_rows"] == 1
-    assert target["complete"] is False
+    assert target["reports_complete"] is False and target["complete"] is False
     # Valid counters from the malformed row still count; the bad one does not.
     assert target["input"] == 1000 and target["output"] == 57
     assert target["counter_rows"] == {
@@ -743,11 +749,86 @@ def test_results_usage_codex_total_only_run(lab):
          "usage": {**_CODEX_TOTAL_ONLY, "total": 800}, "judge_usage": _JUDGE_USAGE},
     ]
     target = _write_results("job_usage_codex", rows)["summary"]["token_usage"]["target"]
-    assert target["complete"] is True and target["reported_rows"] == 2
+    assert target["reports_complete"] is True and target["reported_rows"] == 2
+    # Every row reported and none broke anything down: nothing is partial.
+    assert target["complete"] is True
     assert target["unattributed"] == 5000
     # Not a single attributed counter: every one stays unknown rather than 0.
     assert {k: target[k] for k in _UNKNOWN} == _UNKNOWN
     assert target["counter_rows"]["input"] == 0
+
+
+def test_usage_record_total_only_zero_is_a_report():
+    record = artifacts.usage_record({"total": 0})
+    assert record["status"] == "reported"
+    assert record["unattributed"] == 0
+    assert {k: record[k] for k in _UNKNOWN} == _UNKNOWN  # no breakdown invented
+    both_zero = artifacts.usage_record({"input": 0, "output": 0, "total": 0})
+    assert both_zero["input"] == 0 and both_zero["unattributed"] is None
+
+
+def test_usage_summary_complementary_partial_rows_are_not_complete():
+    """Every row reported, but `input` came from one of two rows: report
+    coverage is complete, the breakdown is not — the 10 must not read as a
+    run total."""
+    side = artifacts._usage_side_summary([
+        artifacts.usage_record({"input": 10, "output": 2}),
+        artifacts.usage_record({"output": 3}),
+    ])
+    assert side["reports_complete"] is True and side["reported_rows"] == 2
+    assert side["complete"] is False
+    assert side["input"] == 10 and side["output"] == 5
+    assert side["counter_rows"]["input"] == 1 and side["counter_rows"]["output"] == 2
+    assert side["counter_complete"]["input"] is False
+    assert side["counter_complete"]["output"] is True
+
+
+def test_results_usage_mixed_claude_and_total_only_rows(lab):
+    rows = [
+        {"id": "a", "hard": 1, "soft": 1.0, "score_valid": True, "duration_s": 1.0,
+         "usage": _CLAUDE_USAGE, "judge_usage": _JUDGE_USAGE},
+        {"id": "b", "hard": 1, "soft": 1.0, "score_valid": True, "duration_s": 1.0,
+         "usage": _CODEX_TOTAL_ONLY, "judge_usage": _JUDGE_USAGE},
+    ]
+    usage = _write_results("job_usage_mixed", rows)["summary"]["token_usage"]
+    target, judge = usage["target"], usage["judge"]
+    assert target["reports_complete"] is True and target["reported_rows"] == 2
+    assert target["complete"] is False  # breakdown covers 1 of 2 reported rows
+    assert target["input"] == 1000 and target["unattributed"] == 4200
+    assert target["counter_rows"] == {
+        "input": 1, "cache_write": 1, "cache_read": 1, "output": 1, "unattributed": 1}
+    assert target["counter_complete"]["input"] is False
+    # Both judge rows carry input+output: complete on both axes.
+    assert judge["reports_complete"] is True and judge["complete"] is True
+
+
+def test_results_route_serializes_nonfinite_raw_usage(lab):
+    """`json.loads` admits NaN/Infinity tokens; the route must still answer 200
+    with the raw compatibility fields visible and the projection sanitized."""
+    ts = _taskset(lab, ["do a"])
+    job = _wait(lab, _submit(lab, ts).json()["id"])
+    out = artifacts.out_root(job["id"])
+    raw_text = json.dumps([{
+        "id": "task_001", "hard": 1, "soft": 1.0, "score_valid": True, "duration_s": 1.0,
+        "usage": {"input": float("nan"), "output": 7, "nested": {"x": [float("inf"), 1]}},
+        "judge_usage": {"input": -float("inf"), "output": 3},
+    }])
+    assert "NaN" in raw_text and "Infinity" in raw_text
+    (out / "results.json").write_text(raw_text)
+    response = lab.get(f"/api/skill-lab/jobs/{job['id']}/results")
+    assert response.status_code == 200, response.text
+    row = response.json()["rows"][0]
+    assert row["usage"] == {"input": "nan", "output": 7, "nested": {"x": ["inf", 1]}}
+    assert row["judge_usage"] == {"input": "-inf", "output": 3}
+    assert row["token_usage"]["target"]["status"] == "malformed"
+    assert row["token_usage"]["target"]["input"] is None
+    assert row["token_usage"]["target"]["output"] == 7
+    assert row["token_usage"]["judge"]["input"] is None
+    summary = response.json()["summary"]
+    assert summary["token_usage"]["target"]["malformed_rows"] == 1
+    assert summary["pass_rate"] == 1.0  # scoring untouched
+    # The file itself is exactly what the CLI wrote.
+    assert (out / "results.json").read_text() == raw_text
 
 
 def test_results_usage_legacy_rows_without_usage_keys(lab):
@@ -760,6 +841,7 @@ def test_results_usage_legacy_rows_without_usage_keys(lab):
         summary = results["summary"]["token_usage"][side]
         assert summary["rows"] == 2 and summary["reported_rows"] == 0
         assert summary["missing_rows"] == 2 and summary["complete"] is False
+        assert summary["reports_complete"] is False
         assert {k: summary[k] for k in _UNKNOWN} == _UNKNOWN
         assert summary["unattributed"] is None
     # Scoring is untouched by the projection.

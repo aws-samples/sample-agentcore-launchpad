@@ -188,7 +188,9 @@ def usage_record(raw: Any) -> dict[str, Any]:
     total, bad = _counter(raw.get("total"))
     malformed = malformed or bad
     known = [record[key] for key in USAGE_COUNTERS if record[key] is not None]
-    if total is not None and total > sum(known):
+    if total is not None and (not known or total > sum(known)):
+        # A total with no breakdown is still a report — a total-only zero stays
+        # a known zero total, with no breakdown invented for it.
         record["unattributed"] = total - sum(known)
         if not any(known):
             for key in USAGE_COUNTERS:
@@ -201,24 +203,53 @@ def usage_record(raw: Any) -> dict[str, Any]:
 def _usage_side_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Sum one side over all rows; a counter no row reported stays None.
 
-    `complete` is only true when every row reported cleanly — a partial or
-    malformed set of reports must never read as a run total.
+    Two distinct kinds of completeness, so a partial sum can never read as a run
+    total: `reports_complete` (report coverage — every row reported cleanly) and
+    `complete` (breakdown completeness — reports complete AND every counter at
+    least one row reported was reported by every row). A counter no row
+    reported is unknown (None) and does not by itself make the breakdown
+    partial; a counter some rows reported and others did not does (e.g. a
+    claude row next to a codex total-only row). `counter_rows` / `counter_complete`
+    carry that per counter.
     """
     statuses = [record["status"] for record in records]
+    rows = len(records)
     side: dict[str, Any] = {
-        "rows": len(records),
+        "rows": rows,
         "reported_rows": statuses.count("reported"),
         "missing_rows": statuses.count("missing"),
         "malformed_rows": statuses.count("malformed"),
     }
-    side["complete"] = bool(records) and side["reported_rows"] == len(records)
+    side["reports_complete"] = bool(records) and side["reported_rows"] == rows
     counter_rows: dict[str, int] = {}
+    counter_complete: dict[str, bool] = {}
     for key in (*USAGE_COUNTERS, "unattributed"):
         values = [record[key] for record in records if record[key] is not None]
         side[key] = sum(values) if values else None
         counter_rows[key] = len(values)
+        counter_complete[key] = len(values) == rows
     side["counter_rows"] = counter_rows
+    side["counter_complete"] = counter_complete
+    side["complete"] = side["reports_complete"] and all(
+        counter_rows[key] in (0, rows) for key in USAGE_COUNTERS
+    )
     return side
+
+
+def _json_safe(value: Any) -> Any:
+    """Make a raw producer value serializable without altering the file.
+
+    `json.loads` accepts NaN/Infinity tokens that `JSONResponse` then refuses to
+    emit; they become their textual form ("nan", "inf", "-inf") so the raw
+    compatibility fields stay visible and honest. Nothing else is touched.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return repr(value)
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 def eval_results(job_id: str) -> dict[str, Any] | None:
@@ -242,7 +273,7 @@ def eval_results(job_id: str) -> dict[str, Any] | None:
     for item in results:
         if not isinstance(item, dict):
             continue
-        row = {key: item.get(key) for key in _ROW_FIELDS}
+        row = {key: _json_safe(item.get(key)) for key in _ROW_FIELDS}
         row["judge_prerequisite"] = _judge_prerequisite(row)
         # Raw `usage` / `judge_usage` stay on the row for compatibility; this is
         # the validated projection the console renders. Invalid-score rows

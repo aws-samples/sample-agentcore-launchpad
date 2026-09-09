@@ -1449,7 +1449,7 @@
       },
       "usage": {
         "title": "TOKEN USAGE",
-        "scope": "Observed usage as the rollout and judge transcripts reported it — not a billing total and not a cost. \"—\" means the counter was not reported; the judge never reports cache counters (the agentic judge folds them into input).",
+        "scope": "Observed usage as the rollout and judge transcripts reported it — not a billing total and not a cost. \"—\" means the counter was not reported; a k/n mark is a partial sum over the k tasks that reported that counter. The judge never reports cache counters (the agentic judge folds them into input).",
         "col": {
           "side": "Side",
           "input": "Input",
@@ -1460,15 +1460,17 @@
           "coverage": "Reported"
         },
         "unattributedHint": "tokens a transcript reported only as a total (codex), so they cannot be split by kind",
+        "partialCounterHint": "partial sum: only {{rows}} of {{total}} tasks reported this counter",
         "side": {
           "target": "Target",
           "judge": "Judge"
         },
-        "coverage": "{{reported}} of {{rows}} tasks",
+        "coverage": "{{reported}} of {{rows}} tasks reported",
         "malformed": "{{count}} malformed",
         "state": {
           "complete": "COMPLETE",
           "partial": "PARTIAL",
+          "breakdownPartial": "BREAKDOWN PARTIAL",
           "none": "NONE REPORTED",
           "reported": "REPORTED",
           "missing": "NOT REPORTED",

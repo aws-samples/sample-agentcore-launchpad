@@ -1449,7 +1449,7 @@
       },
       "usage": {
         "title": "TOKEN 用量",
-        "scope": "按推理与评审 transcript 实际上报的用量统计——不是计费总额，也不是费用。「—」表示该计数未上报；评审方从不上报缓存计数（agentic 评审会把缓存折算进输入）。",
+        "scope": "按推理与评审 transcript 实际上报的用量统计——不是计费总额，也不是费用。「—」表示该计数未上报；k/n 标记表示仅对上报了该计数的 k 个任务求和的部分结果。评审方从不上报缓存计数（agentic 评审会把缓存折算进输入）。",
         "col": {
           "side": "侧",
           "input": "输入",
@@ -1460,15 +1460,17 @@
           "coverage": "已上报"
         },
         "unattributedHint": "transcript 只上报了总数（codex）、无法按类别拆分的 token",
+        "partialCounterHint": "部分求和：{{total}} 个任务中只有 {{rows}} 个上报了该计数",
         "side": {
           "target": "目标",
           "judge": "评审"
         },
-        "coverage": "{{rows}} 个任务中的 {{reported}} 个",
+        "coverage": "{{rows}} 个任务中有 {{reported}} 个已上报",
         "malformed": "{{count}} 个格式异常",
         "state": {
           "complete": "完整",
           "partial": "部分",
+          "breakdownPartial": "拆分不完整",
           "none": "未上报",
           "reported": "已上报",
           "missing": "未上报",

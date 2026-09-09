@@ -517,15 +517,19 @@ its response gained a validated token-usage projection.
 
 | Method | Path | Result |
 |---|---|---|
-| `GET` | `/api/skill-lab/jobs/{job_id}/results` | `{summary, rows[]}` for an eval job (a taskgen job returns `{count, tasks, summary}` instead). `summary` = `{tasks, passed, invalid, pass_rate, soft_mean, duration_s, judge_prerequisite_missing[], token_usage}`; each row = `{id, task_type, hard, soft, score_valid, duration_s, judge_status, judge_reason, judge_error, error, judge_prerequisite, response (excerpt), artifacts[{path,size}], usage, judge_usage, token_usage}`. `409 skill_lab.results_pending` until the file exists. |
+| `GET` | `/api/skill-lab/jobs/{job_id}/results` | `{summary, rows[]}` for an eval job (a taskgen job returns `{type: "taskgen", count, tasks, summary}` instead). `summary` = `{tasks, passed, invalid, pass_rate, soft_mean, duration_s, judge_prerequisite_missing[], token_usage}`; each row = `{id, task_type, hard, soft, score_valid, duration_s, judge_status, judge_reason, judge_error, error, judge_prerequisite, response (excerpt), artifacts[{path,size}], usage, judge_usage, token_usage}`. The job's status is not checked: the file is served as soon as the CLI has written it (before the process exits), and `404 skill_lab.results_pending` is the answer until then (also the final answer for a job that ended before scoring). |
 
 **`token_usage` (added).** Per row: `{target: <record>, judge: <record>}` where
 a record is `{status: "reported"|"missing"|"malformed", input, cache_write,
 cache_read, output, unattributed}` — every counter an integer or `null`. The
 raw producer fields `usage` / `judge_usage` stay on the row unchanged.
+The raw fields are made JSON-safe only where the file carried `NaN` /
+`Infinity` tokens (which `json.loads` admits): those values are emitted as the
+strings `"nan"` / `"inf"` / `"-inf"`; the file itself is never rewritten.
 On the summary: `{scope: "reported", target: <side>, judge: <side>}` where a
-side is `{rows, reported_rows, missing_rows, malformed_rows, complete, input,
-cache_write, cache_read, output, unattributed, counter_rows{<counter>: n}}`.
+side is `{rows, reported_rows, missing_rows, malformed_rows, reports_complete,
+complete, input, cache_write, cache_read, output, unattributed,
+counter_rows{<counter>: n}, counter_complete{<counter>: bool}}`.
 
 Semantics: `null` is *unknown* (no row reported that counter), never zero. The
 judge producers report `input`/`output` only, so judge `cache_*` is always
@@ -535,11 +539,20 @@ positive total, the counters are reported as `null`). Malformed counters (bool,
 negative, NaN/inf, fractional, non-numeric) are dropped, never coerced; the
 row's other valid counters still count and the row is tallied in
 `malformed_rows`. Invalid-score rows (`score_valid: false`) keep their usage
-in the sums while staying out of `pass_rate` / `soft_mean`. `complete` is true
-only when `reported_rows == rows` with no malformed rows. `scope` is always
-`reported`: observed usage over the tasks that reported it — not a billing
-total; no cost is estimated. Legacy results written before usage capture show
-every side as `missing_rows == rows` with `null` counters.
+in the sums while staying out of `pass_rate` / `soft_mean`. Two kinds of
+completeness: `reports_complete` (report coverage — `reported_rows == rows`,
+no malformed rows) and `complete` (breakdown completeness — reports complete
+AND every counter at least one row reported was reported by every row). A
+counter reported by only some rows is a **partial sum**: `counter_rows[k] <
+rows`, `counter_complete[k] == false`, and the console marks the cell `k/n`
+(e.g. a claude row next to a codex total-only row gives `input` from 1 of 2
+rows and `complete: false` even though both rows reported). A counter no row
+reported is unknown and does not by itself make the breakdown partial. A
+total-only report of `0` is a report (`unattributed: 0`, counters `null`), not
+a missing one. `scope` is always `reported`: observed usage over the tasks that
+reported it — not a billing total; no cost is estimated. Legacy results written
+before usage capture show every side as `missing_rows == rows` with `null`
+counters.
 
 ## Console Accounts API
 

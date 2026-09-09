@@ -2299,11 +2299,6 @@ export interface SkillLabTaskgenResults {
 }
 
 /**
- * One judged task. `score_valid === false` marks an infrastructure failure (the
- * rollout or the judge never produced a verdict) — those rows are counted as
- * `invalid` and excluded from the pass-rate denominator, never scored as zero.
- */
-/**
  * Token counters one side (target rollout or judge) reported for one task, as
  * validated by the backend. Every counter is `null` when it was not reported —
  * unknown, never zero. The judge producers report input/output only (the
@@ -2326,15 +2321,18 @@ export type SkillLabUsageCounter = keyof Omit<SkillLabUsageRecord, "status">;
 /**
  * One side summed over every task row (invalid-score rows included: the tokens
  * were spent whether or not a verdict came). A counter no row reported stays
- * `null`; `counter_rows` says how many rows fed each sum. `complete` is true
- * only when every row reported cleanly — anything less is observed usage over
- * part of the run, not a run total.
+ * `null`. Two kinds of completeness: `reports_complete` = report coverage
+ * (every row reported cleanly); `complete` = breakdown completeness (reports
+ * complete AND every counter anyone reported was reported by every row). A
+ * counter reported by only some rows is a partial sum — `counter_rows` /
+ * `counter_complete` say so per counter — and must never read as a run total.
  */
 export interface SkillLabUsageSide {
   rows: number;
   reported_rows: number;
   missing_rows: number;
   malformed_rows: number;
+  reports_complete: boolean;
   complete: boolean;
   input: number | null;
   cache_write: number | null;
@@ -2342,8 +2340,14 @@ export interface SkillLabUsageSide {
   output: number | null;
   unattributed: number | null;
   counter_rows: Record<SkillLabUsageCounter, number>;
+  counter_complete: Record<SkillLabUsageCounter, boolean>;
 }
 
+/**
+ * One judged task. `score_valid === false` marks an infrastructure failure (the
+ * rollout or the judge never produced a verdict) — those rows are counted as
+ * `invalid` and excluded from the pass-rate denominator, never scored as zero.
+ */
 export interface SkillLabResultRow {
   id: string;
   task_type: string | null;

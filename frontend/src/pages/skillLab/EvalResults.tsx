@@ -27,12 +27,22 @@ const USAGE_COLUMNS: [SkillLabUsageCounter, string][] = [
 
 const USAGE_SIDES = ["target", "judge"] as const;
 
-/** Coverage chip for one side of the run summary: only a run where every task
- *  reported cleanly may read as complete. */
+/** Coverage chip for one side of the run summary. Report coverage and breakdown
+ *  completeness are distinct: every task may have reported (reports complete)
+ *  while a counter came from only some of them (breakdown partial) — neither
+ *  may read as complete. */
 function coverageState(side: SkillLabUsageSide): { tone: ChipTone; key: string } {
   if (side.complete) return { tone: "good", key: "complete" };
+  if (side.reports_complete) return { tone: "warn", key: "breakdownPartial" };
   if (side.reported_rows > 0 || side.malformed_rows > 0) return { tone: "warn", key: "partial" };
   return { tone: "muted", key: "none" };
+}
+
+/** `k/n` marker for a summed counter only some rows reported (a partial sum). */
+function partialMark(side: SkillLabUsageSide | SkillLabUsageRecord, key: SkillLabUsageCounter) {
+  if (!("rows" in side) || key === "unattributed" || side[key] === null) return null;
+  const rows = side.counter_rows[key];
+  return rows < side.rows ? `${rows}/${side.rows}` : null;
 }
 
 const recordTone: Record<SkillLabUsageRecord["status"], ChipTone> = {
@@ -83,16 +93,32 @@ function UsageTable({
               <td className="pri" style={cellStyle}>
                 {t(`skillLab.eval.usage.side.${name}`)}
               </td>
-              {USAGE_COLUMNS.map(([key]) => (
-                <td
-                  key={key}
-                  className={side[key] === null ? "mono dim" : "mono"}
-                  style={cellStyle}
-                  data-counter={key}
-                >
-                  {count(side[key])}
-                </td>
-              ))}
+              {USAGE_COLUMNS.map(([key]) => {
+                const partial = partialMark(side, key);
+                return (
+                  <td
+                    key={key}
+                    className={side[key] === null ? "mono dim" : "mono"}
+                    style={cellStyle}
+                    data-counter={key}
+                    data-partial={partial ?? undefined}
+                  >
+                    {count(side[key])}
+                    {partial && (
+                      <span
+                        className="dim"
+                        style={{ marginLeft: 4, fontSize: 9.5 }}
+                        title={t("skillLab.eval.usage.partialCounterHint", {
+                          rows: summary?.counter_rows[key],
+                          total: summary?.rows,
+                        })}
+                      >
+                        {partial}
+                      </span>
+                    )}
+                  </td>
+                );
+              })}
               <td style={cellStyle}>
                 {summary && state ? (
                   <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>

@@ -1389,10 +1389,16 @@ strict: a counter no row reported is `null` (unknown, never 0); a bool,
 negative, NaN/inf, fractional or non-numeric counter is dropped and the row
 marked `malformed` rather than coerced to zero; a `total` beyond the counters
 becomes `unattributed` (the codex total-only form, whose zero placeholders are
-then reported as unknown), while a total below them is ignored. The summary
-side carries coverage (`rows` / `reported_rows` / `missing_rows` /
-`malformed_rows`, `counter_rows` per counter) and is `complete` only when every
-row reported cleanly. `scope` is always `reported`: this is observed usage over
+then reported as unknown; a total-only `0` is still a report), while a total
+below them is ignored. The raw `usage` / `judge_usage` stay on the row, made
+JSON-safe only where the file carried `NaN`/`Infinity` tokens. The summary
+side distinguishes **report coverage** (`reports_complete`: every row reported
+cleanly — `rows` / `reported_rows` / `missing_rows` / `malformed_rows`) from
+**breakdown completeness** (`complete`: reports complete AND every counter
+anyone reported was reported by every row; `counter_rows` / `counter_complete`
+per counter). A counter only some rows reported is a partial sum the console
+marks `k/n` — a claude row beside a codex total-only row can never read as a
+complete breakdown. `scope` is always `reported`: this is observed usage over
 the tasks that reported it — not a billing total, and the console shows no cost
 estimate. The console renders it as a TOKEN USAGE table under the result tiles
 and per task in the expanded row, with a dash for every unknown counter.
