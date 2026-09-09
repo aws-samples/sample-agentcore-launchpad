@@ -99,8 +99,11 @@ export function TaskgenReviewEditor({
               )}
             </div>
             <div className="field">
-              <label>{t("skillLab.tasksets.field.question")}</label>
+              <label htmlFor={`taskgen-review-question-${draft.index}`}>
+                {t("skillLab.tasksets.field.question")}
+              </label>
               <textarea
+                id={`taskgen-review-question-${draft.index}`}
                 className="input"
                 rows={2}
                 value={draft.question}
@@ -111,8 +114,11 @@ export function TaskgenReviewEditor({
               />
             </div>
             <div className="field" style={{ marginBottom: 0 }}>
-              <label>{t("skillLab.tasksets.field.rubric")}</label>
+              <label htmlFor={`taskgen-review-rubric-${draft.index}`}>
+                {t("skillLab.tasksets.field.rubric")}
+              </label>
               <textarea
+                id={`taskgen-review-rubric-${draft.index}`}
                 className="input"
                 rows={2}
                 value={draft.rubric}

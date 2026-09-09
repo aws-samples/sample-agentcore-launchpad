@@ -1357,7 +1357,13 @@
         "none": "— create a new task set —"
       },
       "err": {
-        "noSkill": "Select at least one skill."
+        "noSkill": "Select at least one skill.",
+        "expansionConflict": "The task set changed since generation — these ids already exist: {{ids}}",
+        "alreadySaved": "This generation was already saved.",
+        "badSelection": {
+          "out_of_range": "Row {{row}} does not exist — the job generated {{total}} tasks.",
+          "repeated": "Row {{row}} is referenced more than once."
+        }
       },
       "job": {
         "title": "Generation {{id}}",
@@ -1383,7 +1389,11 @@
         "noneKept": "Keep at least one task to save.",
         "rowIncomplete": "Row {{n}}: id, question and rubric are required.",
         "duplicateIds": "Duplicate ids: {{ids}}",
-        "nameRequired": "Enter a name for the new task set."
+        "nameRequired": "Enter a name for the new task set.",
+        "originalTitle": "Original generated output ({{n}}) — read-only",
+        "originalNote": "This is the generator's original output, not the saved selection. Rows you excluded or edited before saving exist only in the task set — open it below.",
+        "openSaved": "Open \"{{name}}\"",
+        "saving": "Saving…"
       },
       "attach": {
         "pick": "Choose files…",

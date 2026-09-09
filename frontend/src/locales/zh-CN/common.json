@@ -1357,7 +1357,13 @@
         "none": "— 新建任务集 —"
       },
       "err": {
-        "noSkill": "请至少选择一个技能。"
+        "noSkill": "请至少选择一个技能。",
+        "expansionConflict": "任务集在生成后发生了变化——以下 id 已存在：{{ids}}",
+        "alreadySaved": "这次生成已经保存过。",
+        "badSelection": {
+          "out_of_range": "第 {{row}} 行不存在——该作业生成了 {{total}} 个任务。",
+          "repeated": "第 {{row}} 行被引用了多次。"
+        }
       },
       "job": {
         "title": "生成作业 {{id}}",
@@ -1383,7 +1389,11 @@
         "noneKept": "至少保留一个任务才能保存。",
         "rowIncomplete": "第 {{n}} 行：id、question 和 rubric 为必填。",
         "duplicateIds": "id 重复：{{ids}}",
-        "nameRequired": "请输入新任务集名称。"
+        "nameRequired": "请输入新任务集名称。",
+        "originalTitle": "生成器的原始输出（{{n}}）——只读",
+        "originalNote": "这里显示的是生成器的原始输出，而不是保存的选择。保存前排除或编辑的行只存在于任务集中——请在下方打开。",
+        "openSaved": "打开「{{name}}」",
+        "saving": "保存中…"
       },
       "attach": {
         "pick": "选择文件…",

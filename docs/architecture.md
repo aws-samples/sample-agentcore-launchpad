@@ -1471,7 +1471,15 @@ a path, or a judge contract through the review. Bad selections (empty, out-of-ra
 index, duplicate edited ids) and, for expansion, edited ids that collide with **any** current
 split are refused before any write and leave the job un-imported; a request without `tasks`
 (or the legacy no-body apply) still saves every generated row verbatim. The drafts are
-client-side only: a job switch resets them, a status poll or language change does not.
+client-side only: a job switch resets them, a status poll or language change does not; while a
+save is in flight the editor, reset and save controls are locked, and an outcome that arrives
+after the operator switched jobs is dropped rather than applied to the new job's view. **After a
+save the job page shows the generator's ORIGINAL output, read-only and labelled as such** — the
+console persists no receipt of the selection; excluded/edited rows exist only in the task set,
+which the page links to (`imported_taskset_id`, or the expansion target). Refused saves are
+localized from the error code plus its structured `detail` (`{ids}` for duplicates/collisions,
+`{reason, index, count}` for bad references), so the Chinese UI never shows the English server
+sentence and never loses the ids it named.
 
 Formats are trusted by content, not by extension: binaries must match their magic bytes (with
 extra member/ratio/macro hardening for XLSX), and the text formats — which have no signature — must

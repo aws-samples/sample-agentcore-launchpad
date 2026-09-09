@@ -564,6 +564,7 @@ def select_taskgen_rows(tasks: list[Any], edits: list[dict[str, Any]] | None) ->
         raise AppError(
             "skill_lab.taskgen_empty_selection",
             "no generated tasks selected — keep at least one row to save",
+            detail={"reason": "empty"},
             status_code=422,
         )
     by_index: dict[int, dict[str, Any]] = {}
@@ -573,18 +574,21 @@ def select_taskgen_rows(tasks: list[Any], edits: list[dict[str, Any]] | None) ->
             raise AppError(
                 "skill_lab.taskgen_bad_selection",
                 f"row reference {index!r} is not a non-negative integer",
+                detail={"reason": "not_an_index", "index": str(index)},
                 status_code=422,
             )
         if index >= len(tasks):
             raise AppError(
                 "skill_lab.taskgen_bad_selection",
                 f"row {index} does not exist — the job generated {len(tasks)} tasks",
+                detail={"reason": "out_of_range", "index": index, "count": len(tasks)},
                 status_code=422,
             )
         if index in by_index:
             raise AppError(
                 "skill_lab.taskgen_bad_selection",
                 f"row {index} is referenced more than once",
+                detail={"reason": "repeated", "index": index},
                 status_code=422,
             )
         by_index[index] = edit
@@ -595,6 +599,7 @@ def select_taskgen_rows(tasks: list[Any], edits: list[dict[str, Any]] | None) ->
             raise AppError(
                 "skill_lab.taskgen_bad_selection",
                 f"row {index} is not a task object",
+                detail={"reason": "not_a_task", "index": index},
                 status_code=422,
             )
         edit = by_index[index]
@@ -621,6 +626,7 @@ def select_taskgen_rows(tasks: list[Any], edits: list[dict[str, Any]] | None) ->
         raise AppError(
             "skill_lab.taskgen_duplicate_id",
             "edited ids are not unique: " + ", ".join(sorted(duplicates)),
+            detail={"ids": sorted(duplicates)},
             status_code=422,
         )
     return selected
@@ -813,6 +819,7 @@ def apply_taskgen_expansion(
             "skill_lab.expansion_conflict",
             "the task set changed since generation — generated ids now collide: "
             + ", ".join(collisions),
+            detail={"ids": collisions},
             status_code=409,
         )
     tasks, extra_sources = _bind_taskgen_attachments(

@@ -756,6 +756,14 @@ def test_bad_selections_are_refused_without_writing(lab, tasks, code):
     response = _import(lab, job["id"], {"name": "refused", "tasks": tasks})
     assert response.status_code == 422, response.text
     assert response.json()["code"] == code
+    # structured context travels in `detail` so the console can localize the message
+    detail = response.json()["detail"]
+    if code == "skill_lab.taskgen_duplicate_id":
+        assert detail["ids"] and all(isinstance(i, str) for i in detail["ids"])
+    elif code == "skill_lab.taskgen_bad_selection":
+        assert detail["reason"] in ("out_of_range", "repeated") and isinstance(detail["index"], int)
+    else:
+        assert detail == {"reason": "empty"}
     _assert_nothing_saved(lab, job["id"], tasksets_before=tasksets_before)
 
 
@@ -942,6 +950,7 @@ def test_edited_expansion_checks_edited_ids_against_every_current_split(lab):
         response = _apply(lab, job["id"], {"tasks": tasks})
         assert response.status_code == 409, response.text
         assert response.json()["code"] == "skill_lab.expansion_conflict"
+        assert response.json()["detail"] == {"ids": [tasks[0]["id"]]}
     assert lab.get(f"/api/skill-lab/tasksets/{ts}?full=true").json() == snapshot
     assert "expanded" not in lab.get(f"/api/skill-lab/jobs/{job['id']}").json()["params"]
 
