@@ -379,6 +379,10 @@ def test_lifecycle_success_with_results_and_log(lab):
     assert job["skill_source"]["name"] == "demo-skill"
 
     results = lab.get(f"/api/skill-lab/jobs/{job['id']}/results").json()
+    # The stub CLI writes no usage: the projection reports exactly that (see the
+    # token-usage tests for the arithmetic) and stays out of the scoring summary.
+    token_usage = results["summary"].pop("token_usage")
+    assert token_usage["target"]["missing_rows"] == 2 and token_usage["target"]["input"] is None
     assert results["summary"] == {
         "tasks": 2, "passed": 2, "invalid": 0, "pass_rate": 1.0,
         "soft_mean": 1.0, "duration_s": 0.2,
@@ -573,6 +577,236 @@ def test_results_exclude_invalid_rows_from_denominators(lab, tmp_path):
     assert results["summary"]["invalid"] == 1
     assert results["summary"]["pass_rate"] == 0.5   # 1/2 scored, c excluded
     assert results["summary"]["soft_mean"] == 0.75
+
+
+# ── token usage projection ─────────────────────────────────────────────────
+#
+# Shapes below are the ones the vendored producers actually write (read, not
+# imported): `extract_exec_usage` → {input, cache_write, cache_read, output,
+# total} for a claude transcript and a total-only form (four literal zeros +
+# total) for a codex transcript; the judge worker / chat judge → {input, output}
+# only, with the agentic worker folding cache reads+writes into `input`; the
+# agentic evaluation-error fragment → judge_usage {"input": 0, "output": 0}.
+
+_CLAUDE_USAGE = {"input": 1000, "cache_write": 200, "cache_read": 300, "output": 50, "total": 1550}
+_CODEX_TOTAL_ONLY = {"input": 0, "cache_write": 0, "cache_read": 0, "output": 0, "total": 4200}
+_JUDGE_USAGE = {"input": 700, "output": 40}
+
+_UNKNOWN = {"input": None, "cache_write": None, "cache_read": None, "output": None}
+
+
+def _write_results(job_id, rows):
+    out = artifacts.out_root(job_id)
+    out.mkdir(parents=True)
+    (out / "results.json").write_text(json.dumps(rows))
+    return artifacts.eval_results(job_id)
+
+
+def test_usage_record_claude_and_judge_shapes():
+    target = artifacts.usage_record(_CLAUDE_USAGE)
+    assert target == {
+        "status": "reported",
+        "input": 1000,
+        "cache_write": 200,
+        "cache_read": 300,
+        "output": 50,
+        "unattributed": None,
+    }
+    judge = artifacts.usage_record(_JUDGE_USAGE)
+    # The judge never reports cache counters — unknown, not zero.
+    assert judge == {
+        "status": "reported",
+        "input": 700,
+        "cache_write": None,
+        "cache_read": None,
+        "output": 40,
+        "unattributed": None,
+    }
+
+
+def test_usage_record_codex_total_only_is_unattributed_not_zero():
+    record = artifacts.usage_record(_CODEX_TOTAL_ONLY)
+    assert record["status"] == "reported"
+    assert record["unattributed"] == 4200
+    # The four literal zeros are placeholders under a positive total, so they
+    # must not read as measured zero counters.
+    assert {k: record[k] for k in _UNKNOWN} == _UNKNOWN
+    # A mixed transcript (claude segment + codex segment) keeps the real
+    # counters and reports only the excess as unattributed.
+    mixed = artifacts.usage_record({**_CLAUDE_USAGE, "total": 1550 + 900})
+    assert mixed["input"] == 1000 and mixed["unattributed"] == 900
+    # A total smaller than the counters is inconsistent: ignored, counters stand.
+    low = artifacts.usage_record({**_CLAUDE_USAGE, "total": 10})
+    assert low["input"] == 1000 and low["unattributed"] is None
+    assert low["status"] == "reported"
+
+
+def test_usage_record_zero_vs_missing():
+    zero = artifacts.usage_record({"input": 0, "output": 0})
+    assert zero["status"] == "reported" and zero["input"] == 0 and zero["output"] == 0
+    assert zero["cache_read"] is None
+    for absent in (None, {}):
+        record = artifacts.usage_record(absent)
+        assert record["status"] == "missing"
+        assert {k: record[k] for k in _UNKNOWN} == _UNKNOWN
+        assert record["unattributed"] is None
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [-1, True, False, float("nan"), float("inf"), -float("inf"), 1.5, "12", [12], {"n": 1}],
+)
+def test_usage_record_malformed_counter_never_becomes_zero(bad):
+    record = artifacts.usage_record({"input": bad, "output": 40})
+    assert record["status"] == "malformed"
+    assert record["input"] is None  # dropped, not coerced
+    assert record["output"] == 40  # the valid sibling survives
+    total = artifacts.usage_record({"input": 5, "output": 1, "total": bad})
+    assert total["status"] == "malformed" and total["unattributed"] is None
+
+
+def test_usage_record_integral_float_and_non_dict():
+    assert artifacts.usage_record({"input": 12.0})["input"] == 12
+    for raw in ("1000", 1000, [1000], True):
+        record = artifacts.usage_record(raw)
+        assert record["status"] == "malformed"
+        assert {k: record[k] for k in _UNKNOWN} == _UNKNOWN
+
+
+def test_results_usage_sums_target_and_judge_independently(lab):
+    rows = [
+        {"id": "a", "hard": 1, "soft": 1.0, "score_valid": True, "duration_s": 1.0,
+         "usage": _CLAUDE_USAGE, "judge_usage": _JUDGE_USAGE},
+        {"id": "b", "hard": 0, "soft": 0.5, "score_valid": True, "duration_s": 1.0,
+         "usage": {"input": 10, "cache_write": 1, "cache_read": 2, "output": 3, "total": 16},
+         "judge_usage": {"input": 30, "output": 4}},
+    ]
+    usage = _write_results("job_usage_sums", rows)["summary"]["token_usage"]
+    assert usage["scope"] == "reported"
+    target, judge = usage["target"], usage["judge"]
+    assert (target["input"], target["cache_write"], target["cache_read"], target["output"]) == (
+        1010, 201, 302, 53)
+    assert (judge["input"], judge["output"]) == (730, 44)
+    # Judge cache counters: no row reported them → unknown, not 0.
+    assert judge["cache_write"] is None and judge["cache_read"] is None
+    assert judge["counter_rows"]["cache_write"] == 0
+    assert target["unattributed"] is None
+    for side in (target, judge):
+        assert side["rows"] == 2 and side["reported_rows"] == 2
+        assert side["missing_rows"] == 0 and side["malformed_rows"] == 0
+        assert side["complete"] is True
+    # Raw producer fields stay on the row (compatibility) next to the projection.
+    first = artifacts.eval_results("job_usage_sums")["rows"][0]
+    assert first["usage"] == _CLAUDE_USAGE and first["judge_usage"] == _JUDGE_USAGE
+    assert first["token_usage"]["target"]["input"] == 1000
+    assert first["token_usage"]["judge"]["output"] == 40
+
+
+def test_results_usage_partial_missing_and_malformed_rows(lab):
+    rows = [
+        {"id": "a", "hard": 1, "soft": 1.0, "score_valid": True, "duration_s": 1.0,
+         "usage": _CLAUDE_USAGE, "judge_usage": _JUDGE_USAGE},
+        # rollout crashed before the transcript existed: no usage key at all;
+        # the chat judge skipped the empty response: no judge_usage key.
+        {"id": "b", "hard": 0, "soft": 0.0, "score_valid": True, "duration_s": 0.2,
+         "error": "claude_code_exec failed"},
+        # a hand-edited / corrupted record
+        {"id": "c", "hard": 1, "soft": 1.0, "score_valid": True, "duration_s": 1.0,
+         "usage": {"input": -5, "output": 7}, "judge_usage": "n/a"},
+    ]
+    results = _write_results("job_usage_partial", rows)
+    target = results["summary"]["token_usage"]["target"]
+    assert target["rows"] == 3
+    assert target["reported_rows"] == 1
+    assert target["missing_rows"] == 1
+    assert target["malformed_rows"] == 1
+    assert target["complete"] is False
+    # Valid counters from the malformed row still count; the bad one does not.
+    assert target["input"] == 1000 and target["output"] == 57
+    assert target["counter_rows"] == {
+        "input": 1, "cache_write": 1, "cache_read": 1, "output": 2, "unattributed": 0}
+    judge = results["summary"]["token_usage"]["judge"]
+    assert judge["reported_rows"] == 1 and judge["missing_rows"] == 1
+    assert judge["malformed_rows"] == 1 and judge["complete"] is False
+    assert judge["input"] == 700 and judge["output"] == 40
+    statuses = [r["token_usage"]["target"]["status"] for r in results["rows"]]
+    assert statuses == ["reported", "missing", "malformed"]
+    assert [r["token_usage"]["judge"]["status"] for r in results["rows"]] == [
+        "reported", "missing", "malformed"]
+
+
+def test_results_usage_codex_total_only_run(lab):
+    rows = [
+        {"id": "a", "hard": 1, "soft": 1.0, "score_valid": True, "duration_s": 1.0,
+         "usage": _CODEX_TOTAL_ONLY, "judge_usage": _JUDGE_USAGE},
+        {"id": "b", "hard": 1, "soft": 1.0, "score_valid": True, "duration_s": 1.0,
+         "usage": {**_CODEX_TOTAL_ONLY, "total": 800}, "judge_usage": _JUDGE_USAGE},
+    ]
+    target = _write_results("job_usage_codex", rows)["summary"]["token_usage"]["target"]
+    assert target["complete"] is True and target["reported_rows"] == 2
+    assert target["unattributed"] == 5000
+    # Not a single attributed counter: every one stays unknown rather than 0.
+    assert {k: target[k] for k in _UNKNOWN} == _UNKNOWN
+    assert target["counter_rows"]["input"] == 0
+
+
+def test_results_usage_legacy_rows_without_usage_keys(lab):
+    rows = [
+        {"id": "a", "hard": 1, "soft": 1.0, "score_valid": True, "duration_s": 1.0},
+        {"id": "b", "hard": 0, "soft": 0.5, "score_valid": True, "duration_s": 1.0},
+    ]
+    results = _write_results("job_usage_legacy", rows)
+    for side in ("target", "judge"):
+        summary = results["summary"]["token_usage"][side]
+        assert summary["rows"] == 2 and summary["reported_rows"] == 0
+        assert summary["missing_rows"] == 2 and summary["complete"] is False
+        assert {k: summary[k] for k in _UNKNOWN} == _UNKNOWN
+        assert summary["unattributed"] is None
+    # Scoring is untouched by the projection.
+    assert results["summary"]["pass_rate"] == 0.5 and results["summary"]["passed"] == 1
+
+
+def test_results_usage_counts_invalid_rows_but_scores_do_not(lab):
+    rows = [
+        {"id": "a", "hard": 1, "soft": 1.0, "score_valid": True, "duration_s": 1.0,
+         "usage": _CLAUDE_USAGE, "judge_usage": _JUDGE_USAGE},
+        # The agentic evaluation-error fragment: tokens were spent on the
+        # rollout, the judge reports its placeholder zeros, the score is invalid.
+        {"id": "c", "hard": 0, "soft": 0.0, "score_valid": False, "duration_s": 3.0,
+         "judge_status": "evaluation_error", "judge_error": "infra",
+         "usage": {"input": 500, "cache_write": 0, "cache_read": 0, "output": 20, "total": 520},
+         "judge_usage": {"input": 0, "output": 0}},
+    ]
+    results = _write_results("job_usage_invalid", rows)
+    summary = results["summary"]
+    # Unchanged denominators: c is excluded from the score, not from usage.
+    assert summary["tasks"] == 2 and summary["invalid"] == 1
+    assert summary["pass_rate"] == 1.0 and summary["soft_mean"] == 1.0
+    target, judge = summary["token_usage"]["target"], summary["token_usage"]["judge"]
+    assert target["input"] == 1500 and target["output"] == 70
+    assert target["rows"] == 2 and target["reported_rows"] == 2 and target["complete"]
+    # A reported zero is a reported zero — coverage says both rows reported.
+    assert judge["input"] == 700 and judge["output"] == 40 and judge["reported_rows"] == 2
+
+
+def test_results_usage_empty_run(lab):
+    results = _write_results("job_usage_empty", [])
+    for side in ("target", "judge"):
+        summary = results["summary"]["token_usage"][side]
+        assert summary["rows"] == 0 and summary["complete"] is False
+        assert summary["input"] is None
+
+
+def test_results_route_carries_token_usage(lab):
+    """The existing results route ships the projection — no new route."""
+    ts = _taskset(lab, ["do a"])
+    job = _wait(lab, _submit(lab, ts).json()["id"])
+    body = lab.get(f"/api/skill-lab/jobs/{job['id']}/results").json()
+    assert body["summary"]["token_usage"]["scope"] == "reported"
+    # The stub CLI writes no usage: every side is missing, nothing reads as 0.
+    assert body["summary"]["token_usage"]["target"]["missing_rows"] == body["summary"]["tasks"]
+    assert body["summary"]["token_usage"]["target"]["input"] is None
+    assert all(r["token_usage"]["target"]["status"] == "missing" for r in body["rows"])
 
 
 def test_artifact_traversal_guard_and_reads(lab):

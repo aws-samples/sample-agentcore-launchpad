@@ -417,6 +417,32 @@ ledger 只存标识。列表返回 workspace 账号内全部配置并按 `owner`
 `observability.query_failed`(502——Logs Insights 失败/超时)。结果**绝不写入台账**;
 可随时重跑(每次运行按 evaluator 各计一次 judge 推理)。
 
+## 控制台 Skill Lab API——评估结果 / Console Skill Lab API
+
+Skill Lab 评估详情页（`/skill-lab?view=eval&job=<id>`）从 CLI 的 `out/results.json` 读取一个
+已结束作业的逐任务评审行;权威来源是这个文件而不是台账，每次请求都会重新读取。路由本身不变，
+其响应新增了一层经过校验的 token 用量投影。
+
+| 方法 | 路径 | 结果 |
+|---|---|---|
+| `GET` | `/api/skill-lab/jobs/{job_id}/results` | eval 作业返回 `{summary, rows[]}`（taskgen 作业则返回 `{count, tasks, summary}`）。`summary` = `{tasks, passed, invalid, pass_rate, soft_mean, duration_s, judge_prerequisite_missing[], token_usage}`;每行 = `{id, task_type, hard, soft, score_valid, duration_s, judge_status, judge_reason, judge_error, error, judge_prerequisite, response（摘录）, artifacts[{path,size}], usage, judge_usage, token_usage}`。文件尚不存在时返回 `409 skill_lab.results_pending`。 |
+
+**`token_usage`（新增）。** 逐行:`{target: <record>, judge: <record>}`，其中 record 为
+`{status: "reported"|"missing"|"malformed", input, cache_write, cache_read, output,
+unattributed}`——每个计数是整数或 `null`。原始生产者字段 `usage` / `judge_usage` 原样保留在行上。
+summary 上:`{scope: "reported", target: <side>, judge: <side>}`，其中 side 为
+`{rows, reported_rows, missing_rows, malformed_rows, complete, input, cache_write, cache_read,
+output, unattributed, counter_rows{<counter>: n}}`。
+
+语义:`null` 表示*未知*（没有任何一行上报该计数），绝不是零。评审生产者只上报 `input`/`output`，
+因此评审侧的 `cache_*` 恒为 `null`。`unattributed` 是 transcript 只以 `total` 形式上报、超出分项
+之和的部分（codex 形态——当所有分项都是正总数之下的零占位符时，分项按 `null` 上报）。格式异常的
+计数（bool、负数、NaN/inf、小数、非数值）会被丢弃而不是折算;该行其余有效计数照常计入，且该行计入
+`malformed_rows`。score 无效的行（`score_valid: false`）用量照常求和，但不进入 `pass_rate` /
+`soft_mean`。仅当 `reported_rows == rows` 且没有格式异常行时 `complete` 才为 true。`scope` 恒为
+`reported`:这是对上报了用量的任务的观测统计——不是计费总额，也不做任何费用估算。在用量采集之前
+写出的旧结果，每一侧都表现为 `missing_rows == rows` 且计数全为 `null`。
+
 ## 控制台账户 API / Console Accounts API
 
 `/api/auth/*` 守住控制台入口，`/api/users/*` 管理其背后的账户。两组接口都不触碰 AWS。详见

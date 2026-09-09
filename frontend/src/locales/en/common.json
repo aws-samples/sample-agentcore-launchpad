@@ -1447,13 +1447,42 @@
         "duration": "ROLLOUT TIME",
         "durationFoot": "summed over {{n}} tasks"
       },
+      "usage": {
+        "title": "TOKEN USAGE",
+        "scope": "Observed usage as the rollout and judge transcripts reported it — not a billing total and not a cost. \"—\" means the counter was not reported; the judge never reports cache counters (the agentic judge folds them into input).",
+        "col": {
+          "side": "Side",
+          "input": "Input",
+          "cacheWrite": "Cache write",
+          "cacheRead": "Cache read",
+          "output": "Output",
+          "unattributed": "Total only",
+          "coverage": "Reported"
+        },
+        "unattributedHint": "tokens a transcript reported only as a total (codex), so they cannot be split by kind",
+        "side": {
+          "target": "Target",
+          "judge": "Judge"
+        },
+        "coverage": "{{reported}} of {{rows}} tasks",
+        "malformed": "{{count}} malformed",
+        "state": {
+          "complete": "COMPLETE",
+          "partial": "PARTIAL",
+          "none": "NONE REPORTED",
+          "reported": "REPORTED",
+          "missing": "NOT REPORTED",
+          "malformed": "MALFORMED"
+        }
+      },
       "detail": {
         "judgeStatus": "judge_status",
         "judgeReason": "judge rationale",
         "judgeError": "judge error",
         "error": "rollout error",
         "response": "agent response (excerpt)",
-        "artifacts": "artifacts"
+        "artifacts": "artifacts",
+        "usage": "token usage"
       },
       "log": {
         "title": "CLI LOG",

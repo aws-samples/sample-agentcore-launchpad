@@ -2303,6 +2303,47 @@ export interface SkillLabTaskgenResults {
  * rollout or the judge never produced a verdict) — those rows are counted as
  * `invalid` and excluded from the pass-rate denominator, never scored as zero.
  */
+/**
+ * Token counters one side (target rollout or judge) reported for one task, as
+ * validated by the backend. Every counter is `null` when it was not reported —
+ * unknown, never zero. The judge producers report input/output only (the
+ * agentic judge folds cache reads/writes into `input`), so judge cache counters
+ * are always `null`. `unattributed` is what a transcript reported only as a
+ * total (the codex form) — tokens that exist but cannot be split by kind.
+ * `malformed` means a counter failed validation and was dropped, not coerced.
+ */
+export interface SkillLabUsageRecord {
+  status: "reported" | "missing" | "malformed";
+  input: number | null;
+  cache_write: number | null;
+  cache_read: number | null;
+  output: number | null;
+  unattributed: number | null;
+}
+
+export type SkillLabUsageCounter = keyof Omit<SkillLabUsageRecord, "status">;
+
+/**
+ * One side summed over every task row (invalid-score rows included: the tokens
+ * were spent whether or not a verdict came). A counter no row reported stays
+ * `null`; `counter_rows` says how many rows fed each sum. `complete` is true
+ * only when every row reported cleanly — anything less is observed usage over
+ * part of the run, not a run total.
+ */
+export interface SkillLabUsageSide {
+  rows: number;
+  reported_rows: number;
+  missing_rows: number;
+  malformed_rows: number;
+  complete: boolean;
+  input: number | null;
+  cache_write: number | null;
+  cache_read: number | null;
+  output: number | null;
+  unattributed: number | null;
+  counter_rows: Record<SkillLabUsageCounter, number>;
+}
+
 export interface SkillLabResultRow {
   id: string;
   task_type: string | null;
@@ -2314,8 +2355,10 @@ export interface SkillLabResultRow {
   judge_reason: string | null;
   judge_error: string | null;
   error: string | null;
+  /** raw producer reports, kept for compatibility — render `token_usage` */
   usage: Record<string, unknown> | null;
   judge_usage: Record<string, unknown> | null;
+  token_usage: { target: SkillLabUsageRecord; judge: SkillLabUsageRecord };
   /** Excerpted server-side. */
   response: string;
   artifacts: { path: string | null; size: number | null   /** the host judge CLI this row's failure blames, when that is the cause */
@@ -2334,6 +2377,10 @@ export interface SkillLabJobResults {
     /** host judge CLIs a judge failure named as missing — an operator-fixable
      *  prerequisite rather than a bad task, stated once for the whole run */
     judge_prerequisite_missing: string[];
+    /** observed token usage as the transcripts reported it — `scope` is always
+     *  "reported": coverage says how much of the run it covers; it is not a
+     *  billing total and carries no cost estimate */
+    token_usage: { scope: "reported"; target: SkillLabUsageSide; judge: SkillLabUsageSide };
   };
   rows: SkillLabResultRow[];
 }

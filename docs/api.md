@@ -508,6 +508,39 @@ after the invoke), `observability.too_many_evaluators` (422), the standard
 **never written to the ledger**; re-run any time (each run costs one judge
 inference per evaluator).
 
+## Console Skill Lab API — evaluation results
+
+The Skill Lab evaluation detail (`/skill-lab?view=eval&job=<id>`) reads one
+finished job's judged rows from the CLI's `out/results.json`; the file, not the
+ledger, is authoritative and is re-read per request. The route is unchanged;
+its response gained a validated token-usage projection.
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/skill-lab/jobs/{job_id}/results` | `{summary, rows[]}` for an eval job (a taskgen job returns `{count, tasks, summary}` instead). `summary` = `{tasks, passed, invalid, pass_rate, soft_mean, duration_s, judge_prerequisite_missing[], token_usage}`; each row = `{id, task_type, hard, soft, score_valid, duration_s, judge_status, judge_reason, judge_error, error, judge_prerequisite, response (excerpt), artifacts[{path,size}], usage, judge_usage, token_usage}`. `409 skill_lab.results_pending` until the file exists. |
+
+**`token_usage` (added).** Per row: `{target: <record>, judge: <record>}` where
+a record is `{status: "reported"|"missing"|"malformed", input, cache_write,
+cache_read, output, unattributed}` — every counter an integer or `null`. The
+raw producer fields `usage` / `judge_usage` stay on the row unchanged.
+On the summary: `{scope: "reported", target: <side>, judge: <side>}` where a
+side is `{rows, reported_rows, missing_rows, malformed_rows, complete, input,
+cache_write, cache_read, output, unattributed, counter_rows{<counter>: n}}`.
+
+Semantics: `null` is *unknown* (no row reported that counter), never zero. The
+judge producers report `input`/`output` only, so judge `cache_*` is always
+`null`. `unattributed` is what a transcript reported only as a `total` beyond
+its counters (the codex form — when every counter is a zero placeholder under a
+positive total, the counters are reported as `null`). Malformed counters (bool,
+negative, NaN/inf, fractional, non-numeric) are dropped, never coerced; the
+row's other valid counters still count and the row is tallied in
+`malformed_rows`. Invalid-score rows (`score_valid: false`) keep their usage
+in the sums while staying out of `pass_rate` / `soft_mean`. `complete` is true
+only when `reported_rows == rows` with no malformed rows. `scope` is always
+`reported`: observed usage over the tasks that reported it — not a billing
+total; no cost is estimated. Legacy results written before usage capture show
+every side as `missing_rows == rows` with `null` counters.
+
 ## Console Accounts API
 
 `/api/auth/*` gates the console and `/api/users/*` manages the accounts behind
