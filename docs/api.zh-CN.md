@@ -426,6 +426,8 @@ Skill Lab 评估详情页（`/skill-lab?view=eval&job=<id>`）从 CLI 的 `out/r
 | 方法 | 路径 | 结果 |
 |---|---|---|
 | `GET` | `/api/skill-lab/jobs/{job_id}/results` | eval 作业返回 `{summary, rows[]}`（taskgen 作业则返回 `{type: "taskgen", count, tasks, summary}`）。`summary` = `{tasks, passed, invalid, pass_rate, soft_mean, duration_s, judge_prerequisite_missing[], token_usage}`；每行 = `{id, task_type, hard, soft, score_valid, duration_s, judge_status, judge_reason, judge_error, error, judge_prerequisite, response（摘录）, artifacts[{path,size}], usage, judge_usage, token_usage}`。不检查作业状态：CLI 一写出文件（在进程退出之前）就会返回；此前返回 `404 skill_lab.results_pending`（对在评分阶段之前就结束的作业，这也是最终答复）。 |
+| `GET` | `/api/skill-lab/jobs/{job_id}/artifacts?path=` | 作业的 `out/` 目录树，不限状态。目录 → `{kind: "dir", path, dirs[], files[{name, size}]}`；文件 → `{kind: "text", path, size, truncated, content}`（UTF-8，`content` 上限 512 KB，超出部分以 `truncated: true` 标记）或 `{kind: "binary", path, size}`（含 NUL 字节／无法解码）。尚未创建 `out/` 的作业（排队中，或 CLI 尚未写出任何内容的运行中作业）返回**空的根目录列表**而不是错误；不存在或已消失的子路径返回 `404 skill_lab.artifact_not_found`。绝对路径、`~`、反斜杠、NUL，以及（含符号链接）解析到 `out/` 之外的任何路径返回 `400 skill_lab.bad_path`。 |
+| `GET` | `/api/skill-lab/jobs/{job_id}/artifacts/raw?path=` | 以下载形式返回文件的精确字节（`Content-Disposition` 带文件名），永不截断；目录或不存在的文件返回 `404 skill_lab.artifact_not_found`，同样受 `400 skill_lab.bad_path` 守卫。两条路由对调用方 workspace 之外的作业均返回 `404 skill_lab.job_not_found`。 |
 
 **`token_usage`（新增）。** 逐行：`{target: <record>, judge: <record>}`，其中 record 为
 `{status: "reported"|"missing"|"malformed", input, cache_write, cache_read, output,

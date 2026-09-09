@@ -381,7 +381,17 @@ def _safe_resolve(job_id: str, rel: str) -> Path:
 
 
 def list_artifacts(job_id: str, rel: str = "") -> dict[str, Any]:
+    """Directory listing or file read under the job's out/ tree.
+
+    A job that has not written anything yet (queued, or running before the CLI
+    creates out/) has an honestly empty root — that is a listing, not a 404, so
+    the console can show the browser for a live job. A *sub*-path that is gone
+    stays a 404: the tree is written under us, and a vanished directory is real
+    news, not an empty one.
+    """
     target = _safe_resolve(job_id, rel)
+    if target == out_root(job_id).resolve() and not target.exists():
+        return {"kind": "dir", "path": "", "dirs": [], "files": []}
     if target.is_dir():
         dirs: list[str] = []
         files: list[dict[str, Any]] = []

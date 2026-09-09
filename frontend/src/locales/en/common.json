@@ -1498,7 +1498,22 @@
         "empty": "This directory is empty.",
         "notADir": "That path is a file, not a directory.",
         "truncated": "truncated at 512 KB — download the file for the rest",
-        "binary": "Binary file — use the download link."
+        "binary": "Binary file — use the download link.",
+        "refresh": "REFRESH",
+        "refreshedAt": "refreshed {{time}}",
+        "staleListing": "The listing below is the one loaded at {{time}} — refresh again for the current state.",
+        "staleFile": "The content shown was loaded at {{time}} — refresh again for the current state.",
+        "liveHint": "The job is still writing this tree — nothing here polls; refresh to see new or grown files.",
+        "emptyLive": "No output files yet.",
+        "preview": "Preview",
+        "source": "Source",
+        "modeLabel": "View mode",
+        "openLink": "Open {{path}} from this job's output",
+        "linkOutside": "Link points outside this job's output tree — not followed.",
+        "linkAbsolute": "Absolute path — not followed.",
+        "linkMalformed": "Link path is malformed or hides a path separator — not followed.",
+        "linkBlocked": "Link scheme not allowed — not followed.",
+        "image": "[image not loaded: {{alt}} {{src}}]"
       },
       "gone": {
         "title": "Job unavailable",

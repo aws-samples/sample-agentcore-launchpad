@@ -660,21 +660,21 @@ export function SkillLabTrain({ status }: { status: SkillLabStatus | null }) {
         </div>
       )}
 
+      {/* Every status: the trainer writes best_skill.md / history under out/
+          while it runs, and reading them mid-run is the point. */}
+      <div style={{ marginTop: 14 }}>
+        <div className="mono" style={{ fontSize: 11, letterSpacing: ".08em", marginBottom: 6 }}>
+          {t("skillLab.eval.artifacts.title")}
+        </div>
+        <ArtifactBrowser jobId={detail.id} live={isLive(detail)} />
+      </div>
       {!isLive(detail) && (
-        <>
-          <div style={{ marginTop: 14 }}>
-            <div className="mono" style={{ fontSize: 11, letterSpacing: ".08em", marginBottom: 6 }}>
-              {t("skillLab.eval.artifacts.title")}
-            </div>
-            <ArtifactBrowser jobId={detail.id} />
+        <div style={{ marginTop: 14 }}>
+          <div className="mono" style={{ fontSize: 11, letterSpacing: ".08em", marginBottom: 6 }}>
+            {t("skillLab.eval.log.title")}
           </div>
-          <div style={{ marginTop: 14 }}>
-            <div className="mono" style={{ fontSize: 11, letterSpacing: ".08em", marginBottom: 6 }}>
-              {t("skillLab.eval.log.title")}
-            </div>
-            <JobLogPane jobId={detail.id} live={false} />
-          </div>
-        </>
+          <JobLogPane jobId={detail.id} live={false} />
+        </div>
       )}
     </Panel>
   );

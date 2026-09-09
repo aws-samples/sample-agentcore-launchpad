@@ -1374,6 +1374,33 @@ Ledger: `skill_lab_tasksets` + `skill_lab_jobs` (workspace-scoped); artifacts
 live under `data/skill-lab/` (task files, job logs, the CLI's out/ tree —
 the files, not the ledger, are the source of truth for content).
 
+**Artifact browser.** `GET /api/skill-lab/jobs/{job_id}/artifacts?path=`
+(listing, or a text read capped at 512 KB) and
+`GET /api/skill-lab/jobs/{job_id}/artifacts/raw?path=` (byte-exact download)
+serve any job the caller's workspace owns, in every status: a job that has not written `out/` yet
+answers an empty root listing, a sub-path that is gone is a 404. The server's
+path guard (`_safe_resolve`: no absolute/`~`/backslash/NUL paths, both sides
+resolved so a planted symlink cannot widen the window) is the authority; the
+console never asks for anything outside it. The console shows the browser for
+queued and running jobs as well as finished ones and **never polls the tree** —
+the listing and the open file carry a "refreshed at" time and a manual refresh,
+and a refresh that fails keeps the last successful load on screen labelled with
+its time instead of clearing it. Every response is checked against the job, path
+and request generation it was issued for, so a slow answer for a previous job,
+directory or file cannot land on the current selection (including after the
+viewer was closed). `.md` artifacts get a Preview/Source toggle: Preview is the
+Chat renderer stack (GFM tables, fenced-code highlighting, no `rehype-raw` — HTML
+in the artifact is inert) with a stricter link policy in
+`skillLab/ArtifactMarkdown.tsx` — relative links resolve from the current file's
+directory inside `out/` (`artifactLinks.ts`) and open through the same scoped
+API, http/https/mailto links open in a new tab with `rel="noreferrer noopener"`,
+every other scheme, absolute path, root escape, malformed percent-encoding or
+encoded separator (`%2F`, `%5C`, `%00`) renders as inert text, and images are
+never fetched (a placeholder names the source; an in-tree image opens as an
+artifact). Source mode shows the server's capped, UTF-8-decoded text verbatim
+(no rendering); only the raw download is byte-exact. The truncation notice is
+shown in both modes.
+
 **Evaluation token usage.** Each row of the CLI's `results.json` may carry the
 token counters the vendored producers observed: `usage` for the target rollout
 (from the exec transcript — claude transcripts yield `input` / `cache_write` /
