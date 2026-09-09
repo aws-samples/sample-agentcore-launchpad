@@ -3475,6 +3475,8 @@
       "noEvents": "该会话没有事件。",
       "noPayload": "未返回载荷",
       "blob": "二进制",
+      "json": "JSON",
+      "jsonHint": "JSON 事件载荷（非对话轮次）",
       "expand": "展开",
       "collapse": "收起",
       "noText": "无文本部分"

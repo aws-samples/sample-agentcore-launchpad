@@ -264,10 +264,28 @@ def _decode_turn(raw: str) -> tuple[str, list[str]]:
 def _payload_entry(raw: dict[str, Any]) -> dict[str, Any] | None:
     """Normalize one event payload entry.
 
-    Conversational text is passed through in full (the UI clamps it); blob
-    payloads report only a byte count so binary agent state never reaches the
-    browser. Unknown payload kinds are dropped — the preview SDK may add more.
+    Conversational text is passed through in full (the UI clamps it); JSON
+    payloads (``{json: {content: <any JSON value>}}``) are serialized verbatim so
+    ``false``/``0``/``null``/``""`` survive as themselves; blob payloads report
+    only a byte count so binary agent state never reaches the browser. Unknown
+    payload kinds are dropped — the preview SDK may add more.
     """
+    if "json" in raw:
+        data = raw["json"]
+        # ``content`` is required by the API model and may legitimately be any
+        # JSON value, including null/false/0/"" — test for the key, never the
+        # value's truthiness. A json member without it is malformed, not a turn.
+        if not isinstance(data, dict) or "content" not in data:
+            return None
+        return {
+            "kind": "json",
+            "role": None,
+            # Canonical JSON text: ``json.loads(text)`` gives the value back
+            # losslessly; pretty-printed so the console can show it as-is.
+            "text": json.dumps(data["content"], ensure_ascii=False, indent=2),
+            "parts": [],
+            "blob_bytes": None,
+        }
     if "conversational" in raw:
         conv = raw["conversational"] or {}
         text, kinds = _decode_turn((conv.get("content") or {}).get("text", "") or "")

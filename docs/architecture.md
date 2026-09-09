@@ -1120,9 +1120,19 @@ the console modules stays intact.
 | `?view=` | Shows | AgentCore operations |
 |---|---|---|
 | `overview` | resource config (id/arn/status/event expiry/KMS/execution role), each long-term strategy with its `namespaces` + `namespaceTemplates`, and the account's other memory resources with the platform singleton marked | `GetMemory`, `ListMemories`, `ListActors` |
-| `short-term` | actor → session → event drill-down; events render as a timeline of conversational role/text turns, blob payloads as a byte count only | `ListActors`, `ListSessions`, `ListEvents` |
+| `short-term` | actor → session → event drill-down; events render as a timeline of conversational role/text turns, JSON payloads (`{json: {content}}`) as a labelled, expandable JSON block, blob payloads as a byte count only | `ListActors`, `ListSessions`, `ListEvents` |
 | `long-term` | records for a resolved namespace, plus semantic retrieval with relevance scores. Templates that end in `{sessionId}` segments (summaries, episodes) resolve to the actor-level prefix (`/summaries/<actor>`, flagged `prefix`) because both APIs match namespaces by prefix — the picker reads every session's records at once; only a placeholder in the middle of a path is unresolvable | `ListMemoryRecords`, `RetrieveMemoryRecords` |
 | `resources` | every memory in the account/region (workspace default marked, plus the agents whose spec pins each one); create a memory (name, description, event expiry, strategy picks that mirror the bootstrap layout, and — API-only for now — up to 5 flexible namespace variable keys: CreateMemory `namespaceKeys` with optional `allowedValues`/`regexPattern` rules; the platform's canned strategies don't reference them and the invoke path supplies no `extractionConfig.namespaceVariables` on CreateEvent, so the console form hides the editor (`SHOW_NS_KEYS` in `ResourcesTab.tsx`) and the keys are pre-registered for externally managed templates); edit one's description and event expiry (7–365 days) inline — `UpdateMemory` is sent exactly `memoryId` + the changed fields and **never** `namespaceKeys`, which the API documents as replacing the existing set wholesale (an omitted key is removed), then the detail is read back with `GetMemory`; strategies, namespace variables and the execution role are not editable, editing is never blocked, and the confirm dialog names the agents on the memory since a shorter expiry reaches all of them; and delete one — the workspace default and any memory a live agent references are delete-protected | `ListMemories`, `GetMemory`, `CreateMemory`, `UpdateMemory`, `DeleteMemory` |
+
+`ListEvents` payload entries are a tagged union — `conversational`, `blob` and, since
+the August 2026 Memory release, `json` (`{json: {content: <any JSON value>}}`). The
+console projects each to `{kind, role, text, parts, blob_bytes}`: a `json` entry keeps
+`role` null (it is data an agent stored, not a turn) and carries the value serialized
+verbatim into `text`, so `false`, `0`, `null`, `""`, arrays and objects all display as
+themselves — the projection tests for the `content` key, never the value's truthiness.
+Blob bytes still never leave the service, and union members the platform does not
+recognise are still omitted. This is a **read** projection only: the platform does not
+write JSON events.
 
 Memories created here become selectable per agent: the Create wizard stores the
 pick as `spec.memory.memory_id`, which overrides the workspace default across

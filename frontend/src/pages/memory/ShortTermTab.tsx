@@ -25,8 +25,15 @@ function ActorLabel({ actor }: { actor: MemoryActor }) {
   );
 }
 
+/** The clamp shows ~3 lines; pretty-printed JSON can exceed that in far fewer
+ *  than 240 characters, so line count is a second reason to offer EXPAND. */
+function needsExpand(text: string | null): boolean {
+  if (!text) return false;
+  return text.length > 240 || text.split("\n").length > 3;
+}
+
 /** One event's payload entries; long text is expandable, never silently cut. */
-function EventCard({ event }: { event: MemoryEvent }) {
+export function EventCard({ event }: { event: MemoryEvent }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   return (
@@ -47,6 +54,21 @@ function EventCard({ event }: { event: MemoryEvent }) {
             <>
               <Chip tone="muted">{t("memoryPage.short.blob")}</Chip>
               <span className="mono dim">{bytes(p.blob_bytes)}</span>
+            </>
+          ) : p.kind === "json" ? (
+            <>
+              {/* A JSON payload is not a conversational turn: label it as JSON,
+                  never with a role. The text is the value serialized server-side,
+                  so null / false / 0 / "" are rendered as themselves. React
+                  escapes it — this is text, never HTML. */}
+              <Chip tone="aqua">{t("memoryPage.short.json")}</Chip>
+              <span className="dim">{t("memoryPage.short.jsonHint")}</span>
+              <span
+                className={open ? "mem-text mono open" : "mem-text mono"}
+                style={{ whiteSpace: "pre-wrap" }}
+              >
+                {p.text ?? ""}
+              </span>
             </>
           ) : (
             <>
@@ -69,7 +91,7 @@ function EventCard({ event }: { event: MemoryEvent }) {
           )}
         </div>
       ))}
-      {event.payload.some((p) => (p.text?.length ?? 0) > 240) && (
+      {event.payload.some((p) => needsExpand(p.text)) && (
         <button className="rowact" onClick={() => setOpen(!open)}>
           {open ? t("memoryPage.short.collapse") : t("memoryPage.short.expand")}
         </button>

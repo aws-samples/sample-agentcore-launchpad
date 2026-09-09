@@ -3475,6 +3475,8 @@
       "noEvents": "This session has no events.",
       "noPayload": "no payload returned",
       "blob": "BLOB",
+      "json": "JSON",
+      "jsonHint": "JSON event payload (not a conversational turn)",
       "expand": "EXPAND",
       "collapse": "COLLAPSE",
       "noText": "no text part"
