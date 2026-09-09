@@ -1309,6 +1309,7 @@ export function SkillLabTasksets() {
                     key: "question",
                     label: t("skillLab.tasksets.field.question"),
                   },
+                  { key: "rubric", label: t("skillLab.tasksets.field.rubric") },
                   { key: "type", label: t("skillLab.tasksets.field.taskType") },
                   { key: "files", label: t("skillLab.tasksets.field.files") },
                 ]}
@@ -1317,6 +1318,7 @@ export function SkillLabTasksets() {
                   <tr key={String(task.id)}>
                     <td className="mono">{String(task.id)}</td>
                     <td>{excerpt(String(task.question ?? ""))}</td>
+                    <td>{excerpt(String(task.rubric ?? ""))}</td>
                     <td className="mono dim">
                       {typeof task.task_type === "string"
                         ? task.task_type
