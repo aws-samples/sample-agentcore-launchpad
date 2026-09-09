@@ -421,11 +421,13 @@ ledger 只存标识。列表返回 workspace 账号内全部配置并按 `owner`
 
 Skill Lab 评估详情页（`/skill-lab?view=eval&job=<id>`）从 CLI 的 `out/results.json` 读取一个
 作业的逐任务评审行；权威来源是这个文件而不是台账，每次请求都会重新读取。路由本身不变，
-其响应新增了一层经过校验的 token 用量投影。
+其响应新增了一层经过校验的 token 用量投影。同一张表也收录了保存审阅后 taskgen 结果的两条路由。
 
 | 方法 | 路径 | 结果 |
 |---|---|---|
 | `GET` | `/api/skill-lab/jobs/{job_id}/results` | eval 作业返回 `{summary, rows[]}`（taskgen 作业则返回 `{type: "taskgen", count, tasks, summary}`）。`summary` = `{tasks, passed, invalid, pass_rate, soft_mean, duration_s, judge_prerequisite_missing[], token_usage}`；每行 = `{id, task_type, hard, soft, score_valid, duration_s, judge_status, judge_reason, judge_error, error, judge_prerequisite, response（摘录）, artifacts[{path,size}], usage, judge_usage, token_usage}`。不检查作业状态：CLI 一写出文件（在进程退出之前）就会返回；此前返回 `404 skill_lab.results_pending`（对在评分阶段之前就结束的作业，这也是最终答复）。 |
+| `POST` | `/api/skill-lab/jobs/{job_id}/import-taskset` | 把一个**已成功的 taskgen** 作业生成的任务保存为新的 single 模式任务集。请求体 `{name, tasks?}`；`tasks` 是审阅后的选择——`[{index, id?, question?, rubric?, task_type?}]`（最多 `MAX_TASKS_PER_SPLIT` 项），`index` 是该行在作业 `generated_tasks.json` 中的位置（严格整数，不接受 bool/字符串/浮点强转），四个可选字段是唯一接受的作者编辑；未知键（如 `files`、`attachments`）返回 `422 validation.invalid_request`。未出现在 `tasks` 中的行被排除，省略的字段保留生成值，`task_type: ""` 清除该字段；服务端从作业快照重建 `files`/附件。省略 `tasks` 或传 `null` → 原样保存全部生成行（旧行为）。`201 {job, taskset}`。所有错误都发生在任何写入之前：`400 skill_lab.not_a_taskgen_job`、`409 skill_lab.job_not_finished` / `skill_lab.already_imported` / `skill_lab.results_missing`、`422 skill_lab.taskgen_empty_selection`（`tasks` 为空）、`422 skill_lab.taskgen_bad_selection`（索引越界或重复）、`422 skill_lab.taskgen_duplicate_id`（编辑后 id 不唯一）、`422 skill_lab.taskset_invalid`（校验器子进程，例如不安全的 id）、调用方 workspace 之外返回 `404 skill_lab.job_not_found`。 |
+| `POST` | `/api/skill-lab/jobs/{job_id}/apply-expansion` | 把一个**已成功的扩展**作业生成的任务追加到其目标任务集/分割。请求体可选：`{tasks?}`，选择的形状与规则同 `import-taskset`；无请求体或无 `tasks` 时追加全部生成行。**编辑后的** id 会对照目标任务集当前的每个分割重新检查（`409 skill_lab.expansion_conflict` 列出冲突的 id），其他分割保持不变，写入为经过校验的全量替换。`200 {job, taskset}`；`400 skill_lab.not_an_expansion_job`，以及与导入相同的 `409`/`422`/`404` 族。两条路由都不会改动作业的 `generated_tasks.json` 与附件快照。 |
 | `GET` | `/api/skill-lab/jobs/{job_id}/artifacts?path=` | 作业的 `out/` 目录树，不限状态。目录 → `{kind: "dir", path, dirs[], files[{name, size}]}`；文件 → `{kind: "text", path, size, truncated, content}`（UTF-8，`content` 上限 512 KB，超出部分以 `truncated: true` 标记）或 `{kind: "binary", path, size}`（含 NUL 字节／无法解码）。尚未创建 `out/` 的作业（排队中，或 CLI 尚未写出任何内容的运行中作业）返回**空的根目录列表**而不是错误；不存在或已消失的子路径返回 `404 skill_lab.artifact_not_found`。绝对路径、`~`、反斜杠、NUL，以及（含符号链接）解析到 `out/` 之外的任何路径返回 `400 skill_lab.bad_path`。 |
 | `GET` | `/api/skill-lab/jobs/{job_id}/artifacts/raw?path=` | 以下载形式返回文件的精确字节（`Content-Disposition` 带文件名），永不截断；目录或不存在的文件返回 `404 skill_lab.artifact_not_found`，同样受 `400 skill_lab.bad_path` 守卫。两条路由对调用方 workspace 之外的作业均返回 `404 skill_lab.job_not_found`。 |
 

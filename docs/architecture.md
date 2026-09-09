@@ -1454,6 +1454,25 @@ verified descriptor from that job's manifest, dropping the declaration once `fil
 Generation bounds are tighter than the per-task asset limits (8 documents, 25 MiB aggregate)
 because the agent decides how much of a document to read into context.
 
+**Reviewing generated tasks before save.** A finished generation job writes an immutable
+`out/generated_tasks.json`; the console renders it as an editable review (per row: `id`,
+`question`, `rubric`, optional `task_type`, an exclude/restore toggle, and a read-only
+"documents" chip) and **nothing is written until the operator saves** — as a new task set
+(`POST …/import-taskset`) or appended to the expansion target (`POST …/apply-expansion`).
+The save request carries only a *selection*: `tasks: [{index, id?, question?, rubric?,
+task_type?}]`, where `index` is the row's position in `generated_tasks.json` and the four
+fields are the only author edits accepted (`extra="forbid"`, strict non-coerced `index`, per-field
+length caps, at most `MAX_TASKS_PER_SPLIT` rows). Rows absent from the selection are excluded;
+an omitted field keeps the generated value; `task_type: ""` clears it. The server reconstructs
+every other field — `files`, `target_skills`, the `attachments` declaration — from the job's own
+artifacts, then runs the unchanged pipeline (derived-field stripping → snapshot attachment
+binding → validator subprocess → staging swap), so a client can never plant a file descriptor,
+a path, or a judge contract through the review. Bad selections (empty, out-of-range or repeated
+index, duplicate edited ids) and, for expansion, edited ids that collide with **any** current
+split are refused before any write and leave the job un-imported; a request without `tasks`
+(or the legacy no-body apply) still saves every generated row verbatim. The drafts are
+client-side only: a job switch resets them, a status poll or language change does not.
+
 Formats are trusted by content, not by extension: binaries must match their magic bytes (with
 extra member/ratio/macro hardening for XLSX), and the text formats — which have no signature — must
 decode as UTF-8, contain no NUL byte, and not carry a binary signature under a text extension.
