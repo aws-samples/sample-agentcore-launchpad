@@ -111,6 +111,28 @@ running, failed first deploy, deleted, or a shape that is neither Runtime nor
 Harness; `message` is the human reason the panel shows). AWS `ClientError`s map to
 the standard 4xx envelope.
 
+## Console System Agents API — managed presets
+
+System-managed presets (see architecture → *System-managed presets*) are installed,
+repaired and removed only here. Reads never touch AWS; the install is an explicit,
+billable operator action that runs the normal deploy pipeline.
+
+| Method | Path | Role | Result |
+|---|---|---|---|
+| `GET` | `/api/system-agents` | member | `{workspace_id, presets[{key, name, label, description, method, skill_version, installed_skill_version, update_available, status, requirements[], name_collision, agent_id, agent_status, error, job_id, deployment_id, deployment_status, model_id, model_source, knowledge_bases[], allowed_tools[], can_install, updated_at}]}` — `status ∈ configuration_required | not_installed | deploying | active | failed`; ledger-only |
+| `POST` | `/api/system-agents/{key}/install` | admin | body `{model_id?, model_source?, knowledge_bases?[{kb_id, name?, description?}], force?}` → `202 {agent, job_id, deployment_id, created, changed, preset}` when a job started, `200` with `job_id: null` when the active preset already matches. Idempotent: a deploying preset returns its in-flight job; a bodiless call keeps the stored choices |
+| `DELETE` | `/api/system-agents/{key}` | admin | `{deleted, agent_id, aws_resource_deleted}` — tears down the Harness + role and frees the key for a reinstall |
+
+Error codes: `system_agent.unknown` (404), `system_agent.workspace_not_ready` (409,
+`detail.requirements` lists what bootstrap still owes), `system_agent.name_collision`
+(409, an ordinary agent holds the reserved name — never adopted),
+`system_agent.not_installed` (404 on uninstall), `agent.deploy_in_progress` (409 on
+uninstall while deploying). On the ordinary agent routes a preset answers
+`agent.system_managed` (403, `detail.action ∈ redeploy | delete | convert`,
+`detail.maintenance_route`) before any AWS call, and `POST /api/agents` with a
+reserved name answers `agent.name_reserved` (409). Every agent projection carries
+`system: {managed, key, label, skill_version, protected_actions} | null`.
+
 ## Console Registry API — live agent card
 
 `GET /api/registry/records/{record_id}/live-agent-card` is the LIVE CARD read in

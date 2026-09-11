@@ -91,6 +91,25 @@ invalid`、`AWS access denied`、`AWS is throttling this request`、`AWS resourc
 `detail` 只含 `aws_error_code`——AWS 原文会暴露本部署的角色 ARN、实例 id 与操作名,这些只留在
 API-key 信任边界的控制台一侧。
 
+## 控制台系统 Agent API——托管预置 / Console System Agents API
+
+系统托管预置（见架构文档“系统托管预置”）只能在这里安装、修复与移除。读取不触达 AWS；
+安装是显式、计费的操作员动作，走标准部署管道。
+
+| 方法 | 路径 | 角色 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/system-agents` | 成员 | `{workspace_id, presets[{key, name, label, description, method, skill_version, installed_skill_version, update_available, status, requirements[], name_collision, agent_id, agent_status, error, job_id, deployment_id, deployment_status, model_id, model_source, knowledge_bases[], allowed_tools[], can_install, updated_at}]}`——`status ∈ configuration_required | not_installed | deploying | active | failed`；仅读台账 |
+| `POST` | `/api/system-agents/{key}/install` | 管理员 | 请求体 `{model_id?, model_source?, knowledge_bases?[{kb_id, name?, description?}], force?}` → 启动任务时 `202 {agent, job_id, deployment_id, created, changed, preset}`；运行中的预置已匹配时 `200` 且 `job_id: null`。幂等：部署中的预置返回进行中的任务；无请求体的调用保留已存选择 |
+| `DELETE` | `/api/system-agents/{key}` | 管理员 | `{deleted, agent_id, aws_resource_deleted}`——拆除 Harness 与角色，释放 key 以便重装 |
+
+错误码：`system_agent.unknown`（404）、`system_agent.workspace_not_ready`（409，
+`detail.requirements` 列出引导仍欠缺的项）、`system_agent.name_collision`（409，普通 Agent
+占用保留名称——绝不接管）、`system_agent.not_installed`（卸载时 404）、
+`agent.deploy_in_progress`（部署中卸载时 409）。普通 Agent 路由上，预置在任何 AWS 调用之前返回
+`agent.system_managed`（403，`detail.action ∈ redeploy | delete | convert`，
+`detail.maintenance_route`）；用保留名称 `POST /api/agents` 返回 `agent.name_reserved`（409）。
+每个 Agent 投影都带 `system: {managed, key, label, skill_version, protected_actions} | null`。
+
 ## 控制台 Registry API——实时名片 / Console Registry API: live agent card
 
 `GET /api/registry/records/{record_id}/live-agent-card` 是 Registry 抽屉「AGENT 名片」区块中「实时名片」按钮背后的读取：

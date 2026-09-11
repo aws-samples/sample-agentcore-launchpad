@@ -56,10 +56,15 @@ def test_migrate_declares_every_column_missing_from_an_older_table(tmp_path):
     drops = [
         (table, column, _indexes_on(engine, table, column)) for table, column in sorted(pairs)
     ]
+    # A composite index (agents.uq_agents_workspace_system_key spans workspace_id
+    # and system_key) is reported for each of its columns — drop it once.
+    dropped_indexes: set[str] = set()
     with engine.begin() as conn:
         for table, column, indexes in drops:
             for index in indexes:
-                conn.execute(sa.text(f"DROP INDEX {index}"))
+                if index not in dropped_indexes:
+                    conn.execute(sa.text(f"DROP INDEX {index}"))
+                    dropped_indexes.add(index)
             conn.execute(sa.text(f"ALTER TABLE {table} DROP COLUMN {column}"))
 
     stale = schema_drift(engine)

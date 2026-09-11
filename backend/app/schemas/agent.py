@@ -158,6 +158,10 @@ class FilesystemConfig(BaseModel):
         return self
 
 
+# HarnessAllowedTool pattern from the bedrock-agentcore-control service model.
+_ALLOWED_TOOL_RE = re.compile(r"^(\*|@?[^/]{1,63}(/[^/]+)?)$")
+
+
 class AgentSpec(BaseModel):
     name: str = Field(pattern=r"^[a-z][a-z0-9-]{2,47}$")
     method: Method
@@ -190,6 +194,12 @@ class AgentSpec(BaseModel):
     # experiment_capability to "custom-source-unverified".
     toolkits: list[Toolkit] = Field(default_factory=list, max_length=2)
     skills: list[str] = Field(default_factory=list)
+    # Harness ``allowedTools`` patterns (harness method only; the other methods ignore
+    # it). None ⇒ omit the member, which AgentCore reads as "all tools" — including the
+    # default ``shell`` and ``file_operations`` builtins every session gets. A list
+    # restricts the model's tool selection to the matching builtins / MCP servers.
+    # Pattern per the service model: ``*`` or ``@?[^/]+(/[^/]+)?``, ≤ 64 chars.
+    allowed_tools: list[str] | None = Field(default=None, max_length=50)
     # extra pip requirements for zip_runtime/studio agents (on top of the template base set)
     requirements: list[str] = Field(default_factory=list)
     # pre-generated agent code (studio method) — bypasses the strands template
@@ -242,6 +252,15 @@ class AgentSpec(BaseModel):
             ids = [s.id for s in self.a2a_skills]
             if len(ids) != len(set(ids)):
                 raise ValueError("a2a_skills ids must be unique")
+        return self
+
+    @model_validator(mode="after")
+    def _allowed_tools_shape(self) -> "AgentSpec":
+        for pattern in self.allowed_tools or []:
+            if not _ALLOWED_TOOL_RE.match(pattern):
+                raise ValueError(
+                    f"allowed_tools entry {pattern!r} must match '*' or '@?name(/tool)?'"
+                )
         return self
 
     @model_validator(mode="after")

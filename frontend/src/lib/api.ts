@@ -35,6 +35,12 @@ export interface AgentInfo {
   spec: Record<string, unknown>;
   /** The A2A registry record the last deploy created/refreshed, when Registry was available. */
   registry_record_id?: string | null;
+  /**
+   * Server-owned system identity; null for every ordinary agent. Set only by the
+   * backend for a platform-managed preset — the console never derives it from
+   * `spec` or `owner`, and the protected actions are refused server-side too.
+   */
+  system?: SystemAgentIdentity | null;
   experiment_capability: {
     eligible: boolean;
     system_prompt: boolean;
@@ -57,6 +63,67 @@ export interface AgentInfo {
   deployment?: DeploymentInfo;
   deployments?: DeploymentInfo[];
   revision?: number;
+}
+
+export interface SystemAgentIdentity {
+  managed: true;
+  key: string;
+  label: string;
+  skill_version: string | null;
+  protected_actions: string[];
+}
+
+export type SystemPresetStatus =
+  | "configuration_required"
+  | "not_installed"
+  | "deploying"
+  | "active"
+  | "failed";
+
+/** One row of `GET /api/system-agents` — ledger-only, never an AWS read. */
+export interface SystemPresetInfo {
+  key: string;
+  name: string;
+  label: string;
+  description: string;
+  method: "harness";
+  skill_version: string;
+  installed_skill_version: string | null;
+  update_available: boolean;
+  status: SystemPresetStatus;
+  /** what the workspace still lacks before an install is possible */
+  requirements: string[];
+  /** a live ordinary agent holding the reserved name (the preset never adopts it) */
+  name_collision: { agent_id: string; agent_name: string; method: string } | null;
+  agent_id: string | null;
+  agent_status: string | null;
+  error: string | null;
+  job_id: string | null;
+  deployment_id: string | null;
+  deployment_status: string | null;
+  model_id: string | null;
+  model_source: string | null;
+  knowledge_bases: { kb_id: string; name: string; description: string }[];
+  allowed_tools: string[];
+  /** server verdict: administrator + ready workspace + no collision */
+  can_install: boolean;
+  updated_at: string | null;
+}
+
+export interface SystemPresetInstallInput {
+  model_id?: string;
+  model_source?: ModelSource;
+  knowledge_bases?: { kb_id: string; name?: string; description?: string }[];
+  force?: boolean;
+}
+
+export interface SystemPresetInstallResult {
+  agent: AgentInfo;
+  job_id: string | null;
+  deployment_id: string | null;
+  created: boolean;
+  changed: boolean;
+  preset: SystemPresetInfo;
 }
 
 /** One row of `GET /api/chat/{agent_id}/sessions`. */
@@ -2685,6 +2752,18 @@ export const api = {
       body: JSON.stringify(spec),
     }),
   listAgents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
+  listSystemPresets: () =>
+    request<{ workspace_id: string; presets: SystemPresetInfo[] }>("/api/system-agents"),
+  installSystemPreset: (key: string, input: SystemPresetInstallInput = {}) =>
+    request<SystemPresetInstallResult>(
+      `/api/system-agents/${encodeURIComponent(key)}/install`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  uninstallSystemPreset: (key: string) =>
+    request<{ deleted: boolean; agent_id: string; aws_resource_deleted: boolean }>(
+      `/api/system-agents/${encodeURIComponent(key)}`,
+      { method: "DELETE" },
+    ),
   listChatSessions: (agentId: string) =>
     request<{ sessions: ChatSessionInfo[] }>(`/api/chat/${encodeURIComponent(agentId)}/sessions`),
   stopChatSession: (agentId: string, sessionId: string) =>

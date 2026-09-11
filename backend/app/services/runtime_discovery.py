@@ -456,6 +456,8 @@ def _display_name(
     *,
     workspace_id: str,
 ) -> str:
+    from app.system_agents.presets import is_reserved_name
+
     conflict = (
         db.query(Agent)
         .filter(
@@ -465,6 +467,8 @@ def _display_name(
         )
         .first()
     )
+    if is_reserved_name(resource_name):
+        conflict = conflict or existing or object()  # reserved for a system preset
     if conflict is None or (existing is not None and conflict.id == existing.id):
         return resource_name[:64]
     suffix = f"-{resource_id[-10:]}"

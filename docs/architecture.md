@@ -329,6 +329,101 @@ artifacts. Re-publish the agent to capture a new snapshot. A2A has two separate
 Skill concepts: `AgentSpec.skills` mounts instruction/resource bundles, while
 `AgentSpec.a2a_skills` publishes AgentCard routing metadata.
 
+### System-managed presets (`aws-agent-solution-architect`)
+
+A **system-managed preset** is an agent whose identity and spec belong to the
+platform rather than to a member. The first (and so far only) preset is
+`aws-agent-solution-architect`: a managed Harness (方式B) that turns an AI-agent
+business requirement into an evaluation-first AWS design. It adapts an external
+methodology package (three intake rounds, pain point → metric → golden test →
+evaluator mapping, AgentCore-first trade-offs, evidence ranking, no autonomous
+execution) into platform-owned **English** assets under
+`backend/app/system_agents/skills/aws-agent-solution-architect/` — a `SKILL.md`
+plus `references/` — and a system prompt in `backend/app/system_agents/presets.py`.
+The original package is never vendored, and none of its PDF, DOCX, installer or
+desktop scripts ship. The agent answers in the language of the user's latest message
+instead of a hard-wired locale.
+
+**Server-owned identity.** `Agent.system_key` (new, nullable, indexed) marks a preset
+row. It is never read from a request: `AgentSpec` has no such field, so a client
+sending `system_key`/`system` in a spec is ignored (Pydantic drops unknown members)
+and the row stays ordinary. The reserved name is refused for ordinary agents
+(`409 agent.name_reserved`) and skipped by discovery import, and a partial unique
+index on `(workspace_id, system_key) WHERE system_key IS NOT NULL AND status !=
+'deleted'` binds one live preset per workspace. The API projection carries a
+`system` member (`{managed, key, label, skill_version, protected_actions}` or `null`)
+which is what the console renders the SYSTEM chip from.
+
+**Protected mutation paths.** `POST …/redeploy`, `DELETE /api/agents/{id}` and
+`POST …/convert` answer `403 agent.system_managed` for a preset **before any AWS
+client is built**, whatever `perm:agents.*` the caller holds — including an
+administrator, who maintains presets only through `/api/system-agents`. The
+experiment and canary capability projections report `reason_code: system-managed`,
+so optimization promotions can never rewrite the spec. Ordinary agents keep the
+2026-08-07 member-lifecycle rights unchanged (`tests/test_system_agents.py` asserts
+the parity).
+
+**Explicit, idempotent installation — never on startup or read.**
+`GET /api/system-agents` (member) is a ledger-only read reporting one of
+`configuration_required` (workspace not `ready` or missing `artifacts_bucket` /
+`execution_role_arn`), `not_installed`, `deploying`, `active`, `failed`, plus
+`name_collision` when a pre-existing ordinary agent holds the reserved name (the
+preset **never adopts** it — `409 system_agent.name_collision` on install) and
+`can_install` (the server's verdict: administrator + ready + no collision).
+`POST /api/system-agents/{key}/install` (admin) is the one path that reaches AWS:
+
+| Preset state | Result |
+|---|---|
+| not installed | row + create job (`202`, `created: true`) |
+| deploying | the in-flight job is returned (`202`, `changed: false`) — repeated clicks stack no jobs |
+| active, same version + options | no-op (`200`, `job_id: null`) |
+| failed / options changed / newer bundle / `force: true` | update job = in-place re-publish (`202`) |
+
+Concurrent installs race into the unique index; the loser re-reads the winner. The
+job runs the **normal** `generate → package → provision → deploy → register`
+pipeline: the harness `package` stage, skipped for ordinary harnesses, uploads the
+preset's bundle to the **versioned** prefix
+`s3://<artifacts_bucket>/system-skills/<name>/<skill_version>/` with per-object
+SHA-256 checksums S3 verifies on receipt, and reports the bundle digest in the stage
+detail. The prefix family is disjoint from the member-writable `skills/` (registry)
+and `agent-skills/` (wizard staging) prefixes, and the SKILL.md frontmatter
+`version` must equal the catalogue's `skill_version` or the stage fails — a content
+change cannot ship under a stale version directory. `DELETE
+/api/system-agents/{key}` (admin) tears the Harness down through the same helper
+ordinary deletes use and frees the key for a later reinstall.
+
+**Constrained tool surface.** The harness exposes `shell` and `file_operations` to
+every session unless `allowedTools` restricts them, so `AgentSpec.allowed_tools`
+(new, harness-only, `None` = API default for every existing agent) maps to the
+request's `allowedTools`, and the preset sends `["file_*", "@aws_knowledge"]`: the
+file tools its skill needs, the public AWS Knowledge MCP server
+(`https://knowledge-mcp.global.api.aws`, a `remote_mcp` tool, no credential), and no
+shell. `allowedTools` scopes LLM tool selection only; the real boundary is the
+per-agent execution role, whose derivation is unchanged: model invoke, short-term
+memory, the workload-identity grant every MCP agent gets, `s3:GetObject` on exactly
+the versioned skill prefix, telemetry — no code interpreter, browser, ECR or KB
+statements. Memory is short-term only, so a new session's requirement baseline is
+independent of persistent memory by construction.
+
+**Optional knowledge base.** The install body may name existing, already-authorized
+knowledge bases (`knowledge_bases: [{kb_id, name, description}]`); they mount through
+the ordinary harness KB gateway path. Nothing is created automatically, and the skill
+says so: with no retrieval tool the agent works from its methodology index and states
+that the original guide was not consulted.
+
+**Administrator choices** are the model (`model_id` + `model_source`, defaulting to
+the platform's `DEFAULT_MODEL_ID`) and the optional knowledge bases; a bodiless
+install/repair keeps what is stored, so ordinary use never overwrites version or
+configuration.
+
+**Pending live validation.** Everything above is hermetically tested (`tests/
+test_system_agents.py`); the live smoke — install in an approved workspace, confirm
+the S3 skill actually loads under the `allowedTools` restriction, the AWS Knowledge
+tool answers, a member cannot delete/redeploy, and a repeated install creates no
+duplicate — has **not** been run yet and is required before the preset is called
+operational. If the harness's skill-loading tool turns out to need a name outside
+`file_*`, add it to `ARCHITECT.allowed_tools` rather than widening to `*`.
+
 ### Model source (方式B + 方式C)
 
 `AgentSpec.model_source` selects the model-hosting surface: `mantle` (Bedrock

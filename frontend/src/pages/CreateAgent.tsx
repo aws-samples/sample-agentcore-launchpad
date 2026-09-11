@@ -33,6 +33,7 @@ import type {
 } from "../lib/api";
 import { api, ApiError } from "../lib/api";
 import type { ModelSource } from "../lib/models";
+import { SystemPresetsPanel } from "./create/SystemPresetsPanel";
 import {
   CLAUDE_SDK_MODEL_SOURCE,
   CUSTOM_MODEL_OPTION,
@@ -858,6 +859,8 @@ function CreateAgentWizard() {
     source: string;
     notes: Record<string, string>;
   } | null>(null);
+  // the viewed agent's server-owned system identity (details mode only)
+  const [detailSystem, setDetailSystem] = useState<AgentInfo["system"]>(null);
   const [longTerm, setLongTerm] = useState(true);
   // per-agent AgentCore Memory pin — "" means the workspace's shared default
   const [memoryId, setMemoryId] = useState("");
@@ -1292,6 +1295,7 @@ const deployLock = !canDeploy
     if (!jobId) return;
     setEditing(null);
     setDetailsMode(true);
+    setDetailSystem(agent.system ?? null);
     setDetailKbs(((agent.spec ?? {}) as StoredSpec).knowledge_bases ?? []);
     const spec = (agent.spec ?? {}) as Record<string, unknown>;
     const src = spec.source_harness as { agent_name?: string } | undefined;
@@ -1534,6 +1538,14 @@ const deployLock = !canDeploy
             </span>
           </div>
 
+          <div style={{ height: 18 }} />
+          <SystemPresetsPanel
+            onChanged={reloadAgents}
+            onDetails={(agentId) => {
+              const target = agents.find((a) => a.id === agentId);
+              if (target) openDetails(target);
+            }}
+          />
           <div style={{ height: 18 }} />
           <AgentList
             agents={agents}
@@ -2340,6 +2352,20 @@ const deployLock = !canDeploy
               reloadAgents();
             }}
           />
+          {detailsMode && detailSystem && (
+            <>
+              <div style={{ height: 14 }} />
+              <div className="note" data-testid="system-managed-note">
+                <span className="i">◈</span>
+                <span>
+                  {t("create.system.detailNote", {
+                    label: detailSystem.label,
+                    version: detailSystem.skill_version ?? "—",
+                  })}
+                </span>
+              </div>
+            </>
+          )}
           {detailsMode && launch && (
             <>
               <div style={{ height: 14 }} />
@@ -2530,8 +2556,22 @@ function AgentList({
           </thead>
           <tbody>
             {pageRows.map((a) => (
-              <tr key={a.id}>
-                <td className="pri">{a.name}</td>
+              <tr key={a.id} data-system={a.system ? "true" : undefined}>
+                <td className="pri">
+                  <div className="agent-method-cell">
+                    {a.name}
+                    {a.system && (
+                      <Chip
+                        tone="blue"
+                        icon="◈"
+                        className="system-chip"
+                        title={t("create.system.protected")}
+                      >
+                        {t("create.system.chip")}
+                      </Chip>
+                    )}
+                  </div>
+                </td>
                 <td>
                   <div className="agent-method-cell">
                     <MethodChip method={a.method} />
@@ -2560,11 +2600,13 @@ function AgentList({
                       <button
                         type="button"
                         className="rowact"
-                        disabled={!canEdit || a.status === "deploying"}
+                        disabled={!canEdit || a.status === "deploying" || !!a.system}
                         style={
-                          !canEdit || a.status === "deploying" ? { opacity: 0.35 } : undefined
+                          !canEdit || a.status === "deploying" || a.system
+                            ? { opacity: 0.35 }
+                            : undefined
                         }
-                        title={permHint(canEdit)}
+                        title={a.system ? t("create.system.protected") : permHint(canEdit)}
                         onClick={() => onEdit(a)}
                       >
                         {t("create.list.edit")}
@@ -2580,9 +2622,9 @@ function AgentList({
                         type="button"
                         className="rowact"
                         data-testid={`convert-${a.name}`}
-                        disabled={!canConvert}
-                        style={!canConvert ? { opacity: 0.35 } : undefined}
-                        title={permHint(canConvert)}
+                        disabled={!canConvert || !!a.system}
+                        style={!canConvert || a.system ? { opacity: 0.35 } : undefined}
+                        title={a.system ? t("create.system.protected") : permHint(canConvert)}
                         onClick={() => onConvert(a.id, a.name)}
                       >
                         {t("create.list.convert")}
@@ -2596,9 +2638,10 @@ function AgentList({
                     <button
                       type="button"
                       className="rowact"
-                      disabled={!canDelete}
-                      style={!canDelete ? { opacity: 0.35 } : undefined}
-                      title={permHint(canDelete)}
+                      data-testid={`delete-${a.name}`}
+                      disabled={!canDelete || !!a.system}
+                      style={!canDelete || a.system ? { opacity: 0.35 } : undefined}
+                      title={a.system ? t("create.system.protected") : permHint(canDelete)}
                       onClick={() => onDelete(a)}
                     >
                       {t(

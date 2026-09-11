@@ -102,6 +102,13 @@ under `.trellis/spec/launchpad/`.
   short-term events and long-term facts per agent. The ledger still stores the bare
   human actor for display.
 
+- **System-managed presets are server-owned.** `Agent.system_key` (never settable via
+  `AgentSpec`) marks a platform preset (`backend/app/system_agents/`); the ordinary
+  redeploy/delete/convert routes refuse such rows before any AWS call, and admins
+  install/repair/uninstall only through `/api/system-agents`. Nothing installs on
+  startup or on a read. Preset skills upload to the versioned
+  `system-skills/<name>/<version>/` S3 prefix, disjoint from member-writable prefixes.
+
 ## Frontend conventions
 
 React + Vite + `react-router-dom`, TypeScript strict. Top-level routes are in

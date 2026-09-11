@@ -253,6 +253,12 @@ def experiment_capability(agent_row: Any) -> dict[str, Any]:
         "reason": None,
         "reason_code": None,
     }
+    if getattr(agent_row, "system_key", None):
+        return {
+            **base,
+            "reason_code": "system-managed",
+            "reason": "System-managed presets cannot be modified by an experiment.",
+        }
     if agent_row.method != "zip_runtime":
         return {
             **base,
@@ -310,6 +316,12 @@ def canary_capability(agent_row: Any) -> dict[str, Any]:
     ``zip_runtime`` / ``studio`` are eligible today.
     """
     base = {"eligible": False, "reason": None, "reason_code": None}
+    if getattr(agent_row, "system_key", None):
+        return {
+            **base,
+            "reason_code": "system-managed",
+            "reason": "System-managed presets cannot be the subject of a canary.",
+        }
     if agent_row.status != "active":
         return {
             **base,

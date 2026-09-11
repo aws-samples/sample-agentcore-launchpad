@@ -195,6 +195,10 @@ def build_create_params(
         params["tools"] = tools
     if spec.skills:
         params["skills"] = [_skill_source(path) for path in spec.skills]
+    if spec.allowed_tools is not None:
+        # Restricts LLM tool selection only (InvokeHarness); IAM is unaffected, which is
+        # why the per-agent role stays the real boundary (services/agent_iam.py).
+        params["allowedTools"] = list(spec.allowed_tools)
     if spec.env:
         params["environmentVariables"] = dict(spec.env)
     if (spec.memory.short_term or spec.memory.long_term) and memory_arn:
@@ -265,6 +269,12 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
 
 
 def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
+    if agent.system_key:
+        # A system-managed preset's only artifact is its versioned skill bundle. The
+        # upload happens here — inside the job, with stage status — never on a read.
+        from app.system_agents.service import package_preset_skills
+
+        return package_preset_skills(ctx, agent)
     return StageResult(skipped=True, detail="skipped · harness — no build required")
 
 
