@@ -1363,7 +1363,12 @@
         "badSelection": {
           "out_of_range": "Row {{row}} does not exist — the job generated {{total}} tasks.",
           "repeated": "Row {{row}} is referenced more than once."
-        }
+        },
+        "validatorRefused": "The task validator refused the selection — fix the rows below (nothing was saved, your edits are kept):",
+        "requestRefused": "The request was refused by field validation — fix the fields below (nothing was saved, your edits are kept):",
+        "moreIssues": "… {{n}} more issue(s) not shown",
+        "unreadableIssues": "{{n}} diagnostic(s) could not be displayed (unexpected shape)",
+        "truncated": "(truncated)"
       },
       "job": {
         "title": "Generation {{id}}",

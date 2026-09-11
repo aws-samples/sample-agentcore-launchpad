@@ -1363,7 +1363,12 @@
         "badSelection": {
           "out_of_range": "第 {{row}} 行不存在——该作业生成了 {{total}} 个任务。",
           "repeated": "第 {{row}} 行被引用了多次。"
-        }
+        },
+        "validatorRefused": "任务校验器拒绝了这次选择——请修正下列行（未保存任何内容，你的编辑已保留）：",
+        "requestRefused": "字段校验拒绝了这次请求——请修正下列字段（未保存任何内容，你的编辑已保留）：",
+        "moreIssues": "……还有 {{n}} 个问题未显示",
+        "unreadableIssues": "{{n}} 条诊断信息无法显示（格式异常）",
+        "truncated": "（已截断）"
       },
       "job": {
         "title": "生成作业 {{id}}",
