@@ -107,6 +107,10 @@ def build_create_params(
         "timeoutSeconds": spec.timeout_seconds,
     }
     tools = []
+    # Names of the tools that reach launchpad-kb-gw — when the spec restricts
+    # allowedTools, the mounted retrieval tools must be allowed too or the KB
+    # section in the prompt names tools the model can never call.
+    kb_tool_names: list[str] = []
     for tool in spec.tools:
         if tool.type == "builtin" and tool.name in BUILTIN_TOOL_TYPES:
             tools.append({"type": BUILTIN_TOOL_TYPES[tool.name], "name": tool.name})
@@ -145,6 +149,8 @@ def build_create_params(
                     },
                 }
             )
+            if kb_gateway and gateway_arn == kb_gateway["arn"]:
+                kb_tool_names.append(name)
     elif gateway and any(t.type == "gateway" for t in spec.tools):
         tools.append(
             {
@@ -173,6 +179,7 @@ def build_create_params(
         and spec.knowledge_bases
         and kb_gateway["arn"] not in resolved_gateway_arns
     ):
+        kb_tool_names.append("launchpad_kb_gw")
         tools.append(
             {
                 "type": "agentcore_gateway",
@@ -197,12 +204,24 @@ def build_create_params(
         params["skills"] = [_skill_source(path) for path in spec.skills]
     if spec.allowed_tools is not None:
         # Restricts LLM tool selection only (InvokeHarness); IAM is unaffected, which is
-        # why the per-agent role stays the real boundary (services/agent_iam.py).
-        params["allowedTools"] = list(spec.allowed_tools)
+        # why the per-agent role stays the real boundary (services/agent_iam.py). A
+        # mounted KB's gateway tool is added as ``@<tool name>`` (the service model's
+        # ``@server`` pattern) — only when KBs are actually mounted, never ``*``.
+        allowed = list(spec.allowed_tools)
+        for name in kb_tool_names:
+            if spec.knowledge_bases and f"@{name}" not in allowed:
+                allowed.append(f"@{name}")
+        params["allowedTools"] = allowed
     if spec.env:
         params["environmentVariables"] = dict(spec.env)
     if (spec.memory.short_term or spec.memory.long_term) and memory_arn:
         params["memory"] = {"agentCoreMemoryConfiguration": {"arn": memory_arn}}
+    elif not (spec.memory.short_term or spec.memory.long_term):
+        # Explicit opt-out. Omitting ``memory`` on CreateHarness is NOT "no memory":
+        # the service model documents the default as harness-managed memory with the
+        # SEMANTIC + SUMMARIZATION long-term strategies. ``wrap_params_for_update``
+        # already sends this variant for a flag-less spec; create now agrees.
+        params["memory"] = {"disabled": {}}
     return params
 
 
@@ -257,8 +276,48 @@ def _build_live_params(spec: AgentSpec, workspace: WorkspaceContext) -> dict[str
     )
 
 
+def client_token(deployment_id: str) -> str:
+    """CreateHarness/UpdateHarness ``clientToken`` for one deployment run.
+
+    Derived from the persisted Deployment id — not from scratch state — so a job
+    resumed after a crash between the AWS call and the ledger write repeats the
+    *same* request instead of creating a second harness. Model constraints
+    (2023-06-05): 33–256 chars, ``[a-zA-Z0-9](-*[a-zA-Z0-9]){0,256}``.
+    """
+    return f"lp-{deployment_id}"
+
+
+def _execution_role_arn(ctx: StageContext, agent: Agent) -> str:
+    """The role the harness request must carry.
+
+    The provision stage's result is preferred; a resumed job whose scratch was lost
+    re-derives the deterministic per-agent role name (`agent_iam.role_name_for`)
+    instead of silently falling back to the shared workspace role. System presets
+    fail closed: they are never created or updated on the shared role.
+    """
+    arn = ctx.scratch.get("execution_role_arn")
+    if not arn:
+        if get_settings().per_agent_execution_roles:
+            arn = (
+                f"arn:aws:iam::{ctx.workspace.account_id}:role/"
+                f"{agent_iam.role_name_for(agent.name, agent.id)}"
+            )
+        else:
+            arn = agent_iam.shared_role_arn(ctx.workspace)
+    if agent.system_key:
+        from app.system_agents.service import require_dedicated_role
+
+        require_dedicated_role(agent, arn, ctx.workspace, get_settings())
+    return arn
+
+
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     spec = AgentSpec(**agent.spec)
+    if agent.system_key:
+        from app.system_agents.service import require_dedicated_role
+
+        # Fail closed before any AWS call: a preset never rides the shared role.
+        require_dedicated_role(agent, None, ctx.workspace, get_settings())
     params = _build_live_params(spec, ctx.workspace)
     ctx.scratch["create_params"] = params
     ctx.log(
@@ -286,6 +345,12 @@ def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) ->
     ctx.scratch["execution_role_arn"] = role_arn
 
     if spec.knowledge_bases:
+        if agent.system_key:
+            from app.system_agents.service import verify_knowledge_bases
+
+            # The install body was only shape-validated; prove the KBs exist in THIS
+            # workspace before any gateway target is created for them.
+            verify_knowledge_bases(ctx, spec)
         control = control_client(ctx.workspace)
         gw = kbgw.ensure_kb_gateway_persisted(control, ctx.workspace)
         for kb in spec.knowledge_bases:
@@ -329,7 +394,13 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             params = ctx.scratch.get("create_params")
             if params is None:  # resume/update path without scratch — regenerate
                 params = _build_live_params(AgentSpec(**row.spec), ctx.workspace)
-            return params
+            # generate ran with the workspace's shared role placeholder; the request
+            # must carry the role provision actually produced (or re-derived).
+            return {
+                **params,
+                "executionRoleArn": _execution_role_arn(ctx, row),
+                "clientToken": client_token(ctx.deployment_id),
+            }
 
         if mode == "update" and row.resource_id:  # in-place re-publish → UpdateHarness
             harness_id = row.resource_id

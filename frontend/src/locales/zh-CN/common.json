@@ -456,6 +456,24 @@
         "repair": "这会用平台持有的配置和当前技能包就地重新发布“{{name}}”（新的 Harness 版本，ARN 不变）。",
         "uninstallTitle": "卸载系统预置？",
         "uninstall": "这会删除“{{name}}”背后的 Harness 和执行角色。对话历史保留在台账中；之后可以重新安装。"
+      },
+      "loading": "加载中……",
+      "reload": "刷新",
+      "retry": "重试",
+      "loadFailed": "无法加载系统预置：{{reason}}",
+      "requirementsInstalled": "该 Workspace 已不再满足预置的前置条件，恢复前无法修复：{{list}}",
+      "memoryDisabled": "持久记忆：已关闭（每个会话从全新基线开始）",
+      "adminOptionsApiOnly": "模型与可选知识库由管理员通过安装 API 请求体（{model_id, model_source, knowledge_bases}）指定；本面板按已存或默认选择安装。",
+      "requirementCodes": {
+        "bootstrap_not_ready": "Workspace 引导尚未完成",
+        "missing_artifacts_bucket": "Workspace 缺少制品存储桶",
+        "missing_execution_role": "Workspace 缺少执行角色",
+        "per_agent_roles_disabled": "按 Agent 的执行角色已禁用；预置绝不运行在共享角色上"
+      },
+      "presets": {
+        "aws-agent-solution-architect": {
+          "description": "平台托管的顾问型 Harness，把 AI Agent 业务需求转化为评估优先、生产级的 AWS 方案设计。通过公共 AWS Knowledge MCP 服务器核验 AWS 事实，并从带版本的 S3 技能包加载方法论。"
+        }
       }
     },
     "versions": {
@@ -1985,7 +2003,8 @@
     "registry.record_not_deployed": "没有 Launchpad Agent 拥有该注册记录——实时名片只能从已部署 Agent 的运行时读取。",
     "registry.record_not_a2a": "该记录背后的 Agent 不是 A2A 服务器，因此不提供 Agent 名片。",
     "registry.agent_not_ready": "该 Agent 尚未部署并处于活动状态——读取实时名片需要运行中的运行时。",
-    "registry.live_card_failed": "运行时未能提供其 Agent 名片。"
+    "registry.live_card_failed": "运行时未能提供其 Agent 名片。",
+    "kb.attached_to_system_agent": "该知识库已挂载在系统托管预置上；请先通过预置维护路径解除挂载，再删除。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",

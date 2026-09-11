@@ -456,6 +456,24 @@
         "repair": "This re-publishes “{{name}}” in place with the platform-owned spec and current skill bundle (new Harness version, same ARN).",
         "uninstallTitle": "Uninstall system preset?",
         "uninstall": "This deletes the Harness and execution role behind “{{name}}”. Chat history stays in the ledger; the preset can be installed again later."
+      },
+      "loading": "LOADING…",
+      "reload": "RELOAD",
+      "retry": "RETRY",
+      "loadFailed": "System presets could not be loaded: {{reason}}",
+      "requirementsInstalled": "This workspace no longer meets the preset's prerequisites, so repair is unavailable until they are restored: {{list}}",
+      "memoryDisabled": "persistent memory: disabled (fresh baseline per session)",
+      "adminOptionsApiOnly": "Model and optional knowledge bases are chosen by an administrator through the install API body ({model_id, model_source, knowledge_bases}); this panel installs with the stored or default choices.",
+      "requirementCodes": {
+        "bootstrap_not_ready": "the workspace bootstrap has not completed",
+        "missing_artifacts_bucket": "the workspace has no artifacts bucket",
+        "missing_execution_role": "the workspace has no execution role",
+        "per_agent_roles_disabled": "per-agent execution roles are disabled; a preset never runs on the shared role"
+      },
+      "presets": {
+        "aws-agent-solution-architect": {
+          "description": "Platform-managed advisory Harness that turns an AI-agent business requirement into an evaluation-first, production-grade AWS design. Verifies AWS facts through the public AWS Knowledge MCP server and loads its methodology from a versioned S3 skill bundle."
+        }
       }
     },
     "versions": {
@@ -1985,7 +2003,8 @@
     "registry.record_not_deployed": "No Launchpad agent owns this registry record — the live card can only be read from a deployed agent's runtime.",
     "registry.record_not_a2a": "The agent behind this record is not an A2A server, so it serves no agent card.",
     "registry.agent_not_ready": "The agent is not deployed and active — the live card needs a running runtime.",
-    "registry.live_card_failed": "The runtime did not serve its agent card."
+    "registry.live_card_failed": "The runtime did not serve its agent card.",
+    "kb.attached_to_system_agent": "This knowledge base is mounted on a system-managed preset; detach it through the preset's maintenance route before deleting."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",

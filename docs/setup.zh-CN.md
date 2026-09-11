@@ -138,11 +138,14 @@ HTTP 回传,所以若 TLS 在某处终止后再以 HTTP 转发,登录会静默�
 `aws-agent-solution-architect`）。引导、启动和任何页面读取都不会安装它：由**管理员**在每个
 Workspace 中通过面板的“安装”按钮（或 `POST /api/system-agents/<key>/install`）显式安装，这是
 一次走标准管道的计费部署（约 30 秒）。Workspace 必须处于 `ready`（引导完成，具备
-`artifacts_bucket` 与 `execution_role_arn`）。可选安装项：模型（`model_id`/`model_source`，
-默认为平台默认值）与要挂载的既有知识库（`knowledge_bases`）——不会替你创建任何知识库。
-“修复/更新”就地重新发布；“卸载”删除 Harness 与角色。成员可以像普通 Agent 一样与预置对话，
-但会看到“系统”标签，编辑/重新发布/转换/删除按钮被禁用，后端也会无视权限拒绝这些调用。若已有
-普通 Agent 占用保留名称，安装会被拒绝——请先删除或重命名该 Agent；预置绝不接管它。
+`artifacts_bucket` 与 `execution_role_arn`，且启用按 Agent 的执行角色）。可选安装项——模型
+（`model_id`/`model_source`，默认为平台默认值）与要挂载的既有知识库（`knowledge_bases`，在
+provision 阶段于 Workspace 中核验；不会替你创建任何知识库）——**仅通过 API** 指定：面板以 `{}`
+安装。“修复/更新”就地重新发布；“卸载”删除 Harness 与角色。预置关闭持久记忆，并运行在自己的
+受限执行角色上（绝不使用共享角色）。成员可以像普通 Agent 一样与预置对话，但会看到“系统”标签，
+编辑/重新发布/转换/删除按钮被禁用，后端也会无视权限拒绝这些调用；挂载在预置上的知识库在管理员
+通过预置解除挂载之前无法强制删除。若已有普通 Agent 占用保留名称，安装会被拒绝——请先删除或
+重命名该 Agent；预置绝不接管它。
 **实机冒烟尚未完成**（见 architecture.zh-CN.md →“系统托管预置”）。
 
 ### 应急开关

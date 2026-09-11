@@ -22,7 +22,9 @@ SKILLS_ROOT = Path(__file__).resolve().parent / "skills"
 SYSTEM_SKILLS_PREFIX = "system-skills"
 
 # Public AWS Knowledge MCP server (unauthenticated, streamable HTTP). The same URL the
-# Studio sample flow uses; a remote_mcp harness tool needs no IAM grant of its own.
+# Studio sample flow uses; a remote_mcp harness tool needs no IAM grant of its own —
+# ``auth: "none"`` in the ToolRef config is what tells agent_iam to skip the
+# workload-identity / token-vault statements it grants authenticated MCP refs.
 AWS_KNOWLEDGE_MCP_URL = "https://knowledge-mcp.global.api.aws"
 AWS_KNOWLEDGE_TOOL_NAME = "aws_knowledge"
 
@@ -133,10 +135,17 @@ class InstallOptions:
 def build_spec(preset: SystemPreset, bucket: str, options: InstallOptions) -> AgentSpec:
     """The server-owned spec for one preset in one workspace.
 
-    Memory: short-term only, so a session keeps its own turns while the requirement
-    baseline stays independent of persistent (long-term) memory by construction, not by
-    prompt alone. Skills: the versioned S3 prefix, so the execution role's
-    ``SkillBundle*`` statements scope to exactly this version.
+    Memory: explicitly **disabled** (``{"disabled": {}}`` on the harness request). The
+    boolean flags cannot express "short-term only" against the real API — the shared
+    workspace memory carries long-term strategies, and the harness-managed default
+    creates one with SEMANTIC + SUMMARIZATION — so the preset opts out of persistent
+    memory altogether: a new session's requirement baseline is independent of every
+    earlier one by construction, and the execution role gets no memory grant. The
+    conversation inside one runtime session lives in the harness session itself
+    (memory persists context *across* sessions per the service model); that
+    within-session continuity is part of the pending live smoke. Skills: the
+    versioned S3 prefix, so the role's ``SkillBundle*`` statements scope to exactly
+    this version.
     """
     return AgentSpec(
         name=preset.name,
@@ -148,12 +157,12 @@ def build_spec(preset: SystemPreset, bucket: str, options: InstallOptions) -> Ag
             ToolRef(
                 type="mcp",
                 name=AWS_KNOWLEDGE_TOOL_NAME,
-                config={"url": AWS_KNOWLEDGE_MCP_URL},
+                config={"url": AWS_KNOWLEDGE_MCP_URL, "auth": "none"},
             )
         ],
         skills=[preset.skill_uri(bucket)],
         allowed_tools=list(preset.allowed_tools),
-        memory={"short_term": True, "long_term": False, "memory_id": None},
+        memory={"short_term": False, "long_term": False, "memory_id": None},
         knowledge_bases=list(options.knowledge_bases),
         max_iterations=preset.max_iterations,
         timeout_seconds=preset.timeout_seconds,
@@ -197,6 +206,16 @@ def bundle_digest(skill_dir: Path) -> tuple[str, list[str]]:
         h.update((skill_dir / rel).read_bytes())
         h.update(b"\0")
     return h.hexdigest(), files
+
+
+def bundle_release(preset: SystemPreset) -> dict:
+    """The release an install pins onto its job: ``{version, digest, files}``.
+
+    The package stage refuses to publish anything else, so a job queued under one
+    release can never upload a later checkout's bytes under the stored version.
+    """
+    digest, files = bundle_digest(preset.skill_path())
+    return {"version": preset.skill_version, "digest": digest, "files": len(files)}
 
 
 def load_bundle(preset: SystemPreset):

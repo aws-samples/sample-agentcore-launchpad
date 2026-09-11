@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
@@ -7,6 +7,7 @@ import { Btn, Chip, ConfirmDialog, Panel, useToast } from "../../components";
 import type { ChipTone } from "../../components";
 import type { SystemPresetInfo, SystemPresetStatus } from "../../lib/api";
 import { api, ApiError } from "../../lib/api";
+import { useWorkspace } from "../../workspace/workspace-context";
 
 const STATUS_TONE: Record<SystemPresetStatus, ChipTone> = {
   configuration_required: "muted",
@@ -16,18 +17,28 @@ const STATUS_TONE: Record<SystemPresetStatus, ChipTone> = {
   failed: "crit",
 };
 
+const TERMINAL: SystemPresetStatus[] = ["active", "failed"];
+const POLL_MS = 4000;
+
+type Operation = "install" | "repair" | "uninstall";
+
 /**
  * System-managed presets: platform-owned agents an administrator installs on
  * purpose. Reads are ledger-only (`GET /api/system-agents` builds no AWS client),
- * so this panel may poll while a preset deploys; the install button is the one
- * place a preset reaches AWS, and it is rendered only for administrators — the
- * server refuses the call for everyone else regardless.
+ * so this panel may poll while a preset deploys; install/repair/uninstall are the
+ * only paths that reach AWS and the server refuses them for non-administrators
+ * regardless of what this component renders.
+ *
+ * Every asynchronous outcome is checked against the workspace it was started in
+ * and against the mounted state, so an operation finishing after a workspace
+ * switch (or after navigation) never announces into the wrong context.
  */
 export function SystemPresetsPanel({
   onChanged,
   onDetails,
 }: {
-  /** fired after an install/repair/uninstall changed ledger state */
+  /** fired after an install/repair/uninstall changed ledger state AND when a
+   * deploying preset reaches a terminal status, so the parent list converges */
   onChanged?: () => void;
   /** open the deployment detail for the preset's agent */
   onDetails?: (agentId: string) => void;
@@ -35,42 +46,131 @@ export function SystemPresetsPanel({
   const { t } = useTranslation();
   const toast = useToast();
   const { isAdmin } = useAuth();
+  const { current } = useWorkspace();
+  const workspaceId = current?.id ?? null;
   const [presets, setPresets] = useState<SystemPresetInfo[] | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [confirm, setConfirm] = useState<
-    { kind: "install" | "repair" | "uninstall"; preset: SystemPresetInfo } | null
-  >(null);
+  const [confirm, setConfirm] = useState<{ kind: Operation; preset: SystemPresetInfo } | null>(
+    null,
+  );
+  // stale-outcome guard: unmounted or a different workspace ⇒ ignore the result
+  const alive = useRef(true);
+  const scope = useRef(workspaceId);
+  useEffect(() => {
+    alive.current = true;
+    scope.current = workspaceId;
+    return () => {
+      alive.current = false;
+    };
+  }, [workspaceId]);
+  const stillCurrent = useCallback(
+    (startedIn: string | null) => alive.current && scope.current === startedIn,
+    [],
+  );
+  const previousStatuses = useRef<Record<string, SystemPresetStatus>>({});
+  // refs keep `load` identity stable: a re-created `t` or parent callback must
+  // not re-fire the mount effect and issue a duplicate status read
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
+  const tRef = useRef(t);
+  tRef.current = t;
+
+  const apiMessage = useCallback(
+    (err: unknown) =>
+      err instanceof ApiError ? tRef.current(`apiErrors.${err.code}`, err.message) : String(err),
+    [],
+  );
+
+  const applyPresets = useCallback(
+    (rows: SystemPresetInfo[]) => {
+      setPresets(rows);
+      setError(null);
+      // a preset that just left `deploying` changes the agent list too
+      const converged = rows.some(
+        (row) =>
+          previousStatuses.current[row.key] === "deploying" && TERMINAL.includes(row.status),
+      );
+      previousStatuses.current = Object.fromEntries(rows.map((row) => [row.key, row.status]));
+      if (converged) onChangedRef.current?.();
+    },
+    [],
+  );
 
   const load = useCallback(() => {
+    const startedIn = scope.current;
+    setLoading(true);
     void api
       .listSystemPresets()
       .then((res) => {
-        setPresets(res.presets);
-        setError(null);
+        if (!stillCurrent(startedIn)) return;
+        applyPresets(res.presets);
       })
       .catch((err: unknown) => {
-        setError(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
+        if (!stillCurrent(startedIn)) return;
+        setError(apiMessage(err));
+      })
+      .finally(() => {
+        if (stillCurrent(startedIn)) setLoading(false);
       });
-  }, [t]);
+  }, [applyPresets, apiMessage, stillCurrent]);
 
-  useEffect(() => load(), [load]);
-  // a deploying preset resolves in ~30 s; poll the ledger read until it settles
+  // Load once the workspace is resolved: a read fired before that would be
+  // discarded as stale the moment the provider settles on an environment.
+  useEffect(() => {
+    if (workspaceId === null) return;
+    load();
+  }, [load, workspaceId]);
+  // a deploying preset settles in ~30 s; poll the ledger read until it does
   const deploying = (presets ?? []).some((p) => p.status === "deploying");
   useEffect(() => {
     if (!deploying) return;
-    const timer = window.setInterval(load, 4000);
+    const timer = window.setInterval(load, POLL_MS);
     return () => window.clearInterval(timer);
   }, [deploying, load]);
 
-  const run = async (kind: "install" | "repair" | "uninstall", preset: SystemPresetInfo) => {
+  const run = async (kind: Operation, preset: SystemPresetInfo) => {
+    const startedIn = scope.current;
     setBusy(preset.key);
     try {
       if (kind === "uninstall") {
         await api.uninstallSystemPreset(preset.key);
-        toast(t("create.system.uninstalled", { name: preset.label }));
+        if (!stillCurrent(startedIn)) return;
+        // consume the outcome: the row is gone even if the follow-up GET fails
+        setPresets((prev) =>
+          (prev ?? []).map((row) =>
+            row.key === preset.key
+              ? {
+                  ...row,
+                  status: "not_installed",
+                  agent_id: null,
+                  agent_status: null,
+                  job_id: null,
+                  deployment_id: null,
+                  deployment_status: null,
+                  installed_skill_version: null,
+                  update_available: false,
+                  error: null,
+                  can_install: isAdmin && row.requirements.length === 0 && !row.name_collision,
+                  can_repair: false,
+                  can_uninstall: false,
+                }
+              : row,
+          ),
+        );
+        toast(t("create.system.uninstalled", { name: preset.label }), "good");
       } else {
-        const res = await api.installSystemPreset(preset.key, kind === "repair" ? { force: true } : {});
+        const res = await api.installSystemPreset(
+          preset.key,
+          kind === "repair" ? { force: true } : {},
+        );
+        if (!stillCurrent(startedIn)) return;
+        // the response already carries the preset's new state — render it now so
+        // a failed follow-up GET cannot leave a stale not-installed row behind
+        setPresets((prev) =>
+          (prev ?? []).map((row) => (row.key === preset.key ? res.preset : row)),
+        );
         toast(
           t(
             res.changed
@@ -80,36 +180,63 @@ export function SystemPresetsPanel({
               : "create.system.alreadyCurrent",
             { name: preset.label },
           ),
+          "good",
         );
       }
+      onChangedRef.current?.();
       load();
-      onChanged?.();
     } catch (err) {
-      toast(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
+      if (!stillCurrent(startedIn)) return;
+      toast(apiMessage(err));
     } finally {
-      setBusy(null);
+      if (stillCurrent(startedIn)) setBusy(null);
     }
   };
 
   const adminHint = isAdmin ? undefined : t("create.system.adminOnly");
+  const requirementText = (preset: SystemPresetInfo) =>
+    preset.requirements
+      .map((req) => t(`create.system.requirementCodes.${req.code}`, req.message))
+      .join("; ");
 
   return (
-    <Panel title={t("create.system.title")} sub={t("create.system.sub")} className="system-presets">
+    <Panel
+      title={t("create.system.title")}
+      sub={t("create.system.sub")}
+      className="system-presets"
+      end={
+        <Btn
+          data-testid="system-presets-reload"
+          disabled={loading}
+          onClick={load}
+          title={t("create.system.reload")}
+        >
+          {loading ? t("create.system.loading") : t("create.system.reload")}
+        </Btn>
+      }
+    >
       {error && (
-        <div className="note" style={{ borderColor: "var(--crit)" }}>
-          <span className="i">[!]</span>
-          <span>{error}</span>
+        <div className="note" style={{ borderColor: "var(--crit)" }} data-testid="system-presets-error">
+          <span className="i" style={{ color: "var(--crit)" }}>[!]</span>
+          <span>{t("create.system.loadFailed", { reason: error })}</span>
+          <Btn data-testid="system-presets-retry" onClick={load} disabled={loading}>
+            {t("create.system.retry")}
+          </Btn>
+        </div>
+      )}
+      {presets === null && !error && (
+        <div className="dim mono" data-testid="system-presets-loading">
+          {t("create.system.loading")}
         </div>
       )}
       {presets?.length === 0 && <div className="dim mono">{t("create.system.empty")}</div>}
       {(presets ?? []).map((preset) => {
         const installed = preset.agent_id != null;
-        const reason =
-          preset.status === "configuration_required"
-            ? t("create.system.requirements", { list: preset.requirements.join("; ") })
-            : preset.name_collision
-              ? t("create.system.collision", { name: preset.name_collision.agent_name })
-              : null;
+        const blockers = preset.requirements.length > 0 ? requirementText(preset) : null;
+        const collision = preset.name_collision
+          ? t("create.system.collision", { name: preset.name_collision.agent_name })
+          : null;
+        const isBusy = busy === preset.key;
         return (
           <div
             key={preset.key}
@@ -134,24 +261,38 @@ export function SystemPresetsPanel({
                 )}
               </span>
             </div>
-            <p className="dim" style={{ margin: 0 }}>{preset.description}</p>
+            <p className="dim" style={{ margin: 0 }} data-testid="preset-description">
+              {t(`create.system.presets.${preset.key}.description`, preset.description)}
+            </p>
             <div className="mono dim" style={{ fontSize: 11 }}>
               {t("create.system.tools")}: {preset.allowed_tools.join(", ")}
+              {` · ${t("create.system.memoryDisabled")}`}
               {preset.model_id ? ` · ${t("create.system.model")}: ${preset.model_id}` : ""}
               {preset.knowledge_bases.length > 0
                 ? ` · ${t("create.system.kb", { n: preset.knowledge_bases.length })}`
                 : ` · ${t("create.system.kbNone")}`}
             </div>
+            <div className="dim" style={{ fontSize: 11 }}>{t("create.system.adminOptionsApiOnly")}</div>
             {preset.error && preset.status === "failed" && (
               <div className="note" style={{ borderColor: "var(--crit)" }} data-testid="preset-error">
                 <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
                 <span className="mono" style={{ fontSize: 11 }}>{preset.error}</span>
               </div>
             )}
-            {reason && (
+            {blockers && (
               <div className="note" data-testid="preset-reason">
                 <span className="i">[i]</span>
-                <span>{reason}</span>
+                <span>
+                  {t(installed ? "create.system.requirementsInstalled" : "create.system.requirements", {
+                    list: blockers,
+                  })}
+                </span>
+              </div>
+            )}
+            {collision && (
+              <div className="note" data-testid="preset-collision">
+                <span className="i">[i]</span>
+                <span>{collision}</span>
               </div>
             )}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -159,8 +300,8 @@ export function SystemPresetsPanel({
                 <Btn
                   primary
                   data-testid={`install-${preset.key}`}
-                  disabled={!isAdmin || !preset.can_install || busy === preset.key}
-                  disabledReason={isAdmin ? (reason ?? undefined) : undefined}
+                  disabled={!preset.can_install || isBusy}
+                  disabledReason={isAdmin ? (blockers ?? collision ?? undefined) : undefined}
                   title={adminHint}
                   onClick={() => setConfirm({ kind: "install", preset })}
                 >
@@ -170,7 +311,8 @@ export function SystemPresetsPanel({
               {installed && preset.status !== "deploying" && (
                 <Btn
                   data-testid={`repair-${preset.key}`}
-                  disabled={!isAdmin || busy === preset.key}
+                  disabled={!preset.can_repair || isBusy}
+                  disabledReason={isAdmin ? (blockers ?? undefined) : undefined}
                   title={adminHint}
                   onClick={() => setConfirm({ kind: "repair", preset })}
                 >
@@ -183,14 +325,17 @@ export function SystemPresetsPanel({
                 </Link>
               )}
               {installed && preset.agent_id && onDetails && (
-                <Btn onClick={() => onDetails(preset.agent_id as string)}>
+                <Btn
+                  data-testid={`details-${preset.key}`}
+                  onClick={() => onDetails(preset.agent_id as string)}
+                >
                   {t("create.list.details")}
                 </Btn>
               )}
               {installed && preset.status !== "deploying" && (
                 <Btn
                   data-testid={`uninstall-${preset.key}`}
-                  disabled={!isAdmin || busy === preset.key}
+                  disabled={!preset.can_uninstall || isBusy}
                   title={adminHint}
                   onClick={() => setConfirm({ kind: "uninstall", preset })}
                 >

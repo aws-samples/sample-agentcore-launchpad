@@ -1,7 +1,8 @@
 """Install / repair / status / uninstall of system-managed presets.
 
 Everything that touches the ledger or AWS for a preset lives here so the router stays a
-thin HTTP mapping and the agents router can ask one question (``is_system_agent``).
+thin HTTP mapping and the rest of the app can ask one question (``is_system_agent`` /
+``refuse_system_mutation``).
 
 Invariants this module upholds:
 
@@ -10,24 +11,38 @@ Invariants this module upholds:
   client-influenced values are the administrator's install options.
 * **Never adopt.** A live ordinary agent that already holds the reserved name is a
   refusal, not a takeover — an operator removes or renames it first.
-* **Idempotent under races.** The partial unique index on
-  ``(workspace_id, system_key)`` is the arbiter; the loser of a concurrent install
-  re-reads the winner and returns it instead of creating a second row or job.
+* **Durable, atomic maintenance claims.** Fresh installs race into the partial unique
+  index on ``(workspace_id, system_key)``; repair and uninstall race through a
+  compare-and-set on ``agents.status`` executed in the same transaction as the job
+  row they create. Whoever loses re-reads the winner and returns *its* job, so
+  repeated or concurrent requests converge on one outcome and never stack jobs.
+* **Pinned releases.** The install pins ``{version, digest}`` of the skill bundle on
+  the job; the package stage refuses to publish anything else and treats an already
+  published version as immutable.
+* **Dedicated role or nothing.** A preset is never created or updated on the shared
+  workspace execution role (see ``require_dedicated_role``).
 """
 
 import base64
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any
 
+from botocore.exceptions import ClientError
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
 from app.deployer.pipeline import StageContext, StageResult, create_deployment
 from app.models.ledger import Agent, Deployment, Job, Workspace
+from app.schemas.agent import AgentSpec
+from app.services import agent_iam
+from app.services.workspace import WorkspaceContext
 from app.system_agents import presets as catalogue
 from app.system_agents.presets import InstallOptions, SystemPreset
 
@@ -40,6 +55,16 @@ STATUS_NOT_INSTALLED = "not_installed"
 STATUS_DEPLOYING = "deploying"
 STATUS_ACTIVE = "active"
 STATUS_FAILED = "failed"
+
+# Statuses a maintenance claim may take over (a deploying row belongs to its job).
+_CLAIMABLE = ("active", "failed", "draft")
+
+MANIFEST_KEY = ".bundle-manifest.json"
+
+
+# ---------------------------------------------------------------------------
+# identity helpers used across the app
+# ---------------------------------------------------------------------------
 
 
 def is_system_agent(agent: Agent | None) -> bool:
@@ -68,6 +93,26 @@ def refuse_system_mutation(agent: Agent, action: str) -> None:
         )
 
 
+def assert_not_system_agent(db: Session, agent_id: str | None, action: str) -> None:
+    """Router-side guard for rows that *reference* an agent (experiments, canaries)."""
+    if not agent_id:
+        return
+    agent = db.get(Agent, agent_id)
+    if agent is not None:
+        refuse_system_mutation(agent, action)
+
+
+def refuse_system_agent_id(agent_id: str | None, action: str) -> None:
+    """Service-side guard with its own short-lived session (background actions)."""
+    if not agent_id:
+        return
+    db = SessionLocal()
+    try:
+        assert_not_system_agent(db, agent_id, action)
+    finally:
+        db.close()
+
+
 def system_projection(agent: Agent) -> dict[str, Any] | None:
     """The ``system`` member of the agent API projection (None for ordinary rows)."""
     if not is_system_agent(agent):
@@ -86,18 +131,107 @@ def system_projection(agent: Agent) -> dict[str, Any] | None:
 # workspace readiness
 # ---------------------------------------------------------------------------
 
+REQ_BOOTSTRAP = "bootstrap_not_ready"
+REQ_BUCKET = "missing_artifacts_bucket"
+REQ_ROLE = "missing_execution_role"
+REQ_PER_AGENT_ROLES = "per_agent_roles_disabled"
 
-def workspace_requirements(row: Workspace) -> list[str]:
-    """What this workspace still lacks before a preset can be installed."""
-    missing: list[str] = []
+
+def workspace_requirements(row: Workspace, settings: Any | None = None) -> list[dict[str, str]]:
+    """What still stands between this workspace and a preset install.
+
+    Each entry is ``{code, message}``: the console localizes on ``code`` and shows the
+    English ``message`` only as a fallback. Ledger + settings only — no AWS.
+    """
+    missing: list[dict[str, str]] = []
     if row.bootstrap_status != READY:
-        missing.append(f"workspace bootstrap is '{row.bootstrap_status}', needs 'ready'")
+        missing.append({
+            "code": REQ_BOOTSTRAP,
+            "message": f"workspace bootstrap is '{row.bootstrap_status}', needs 'ready'",
+        })
     resources = row.resources or {}
     if not resources.get("artifacts_bucket"):
-        missing.append("artifacts_bucket missing from the workspace resource map")
+        missing.append({
+            "code": REQ_BUCKET,
+            "message": "artifacts_bucket missing from the workspace resource map",
+        })
     if not resources.get("execution_role_arn"):
-        missing.append("execution_role_arn missing from the workspace resource map")
+        missing.append({
+            "code": REQ_ROLE,
+            "message": "execution_role_arn missing from the workspace resource map",
+        })
+    if settings is None:
+        from app.core.config import get_settings
+
+        settings = get_settings()
+    if not settings.per_agent_execution_roles:
+        missing.append({
+            "code": REQ_PER_AGENT_ROLES,
+            "message": (
+                "per-agent execution roles are disabled (LAUNCHPAD_PER_AGENT_EXECUTION_"
+                "ROLES=false) — a preset never runs on the shared role"
+            ),
+        })
     return missing
+
+
+def require_dedicated_role(
+    agent: Agent, role_arn: str | None, workspace: WorkspaceContext, settings: Any
+) -> None:
+    """Fail closed: a preset is deployed on its own restricted role or not at all.
+
+    ``role_arn`` is the ARN about to be sent (None at generate time, when only the
+    setting can be checked). The shared CDK role can read every member's skill
+    bundle and mutate gateways — the opposite of the preset contract.
+    """
+    if not settings.per_agent_execution_roles:
+        raise RuntimeError(
+            f"system preset '{agent.system_key}' requires per-agent execution roles; "
+            "set LAUNCHPAD_PER_AGENT_EXECUTION_ROLES=true (the default) and re-run "
+            "the install — the preset is never deployed on the shared workspace role"
+        )
+    shared = agent_iam.shared_role_arn(workspace)
+    if role_arn is not None and (not role_arn or role_arn == shared):
+        raise RuntimeError(
+            f"system preset '{agent.system_key}' resolved to the shared workspace "
+            f"execution role ({shared or 'unset'}); refusing to deploy it — the "
+            "provision stage must produce the dedicated launchpad-agent-* role"
+        )
+
+
+def verify_knowledge_bases(ctx: StageContext, spec: AgentSpec) -> None:
+    """Prove every referenced KB exists, is MANAGED and ACTIVE in *this* workspace.
+
+    Runs in the provision stage before any gateway target is created, so a typo or a
+    KB from another account fails with an actionable stage error instead of a wired
+    target pointing at nothing.
+    """
+    if not spec.knowledge_bases:
+        return
+    from app.services.agentcore.client import agent_client
+    from app.services.knowledge import _kb_type
+
+    client = agent_client(ctx.workspace)
+    where = f"workspace {ctx.workspace.id} ({ctx.workspace.region})"
+    for kb in spec.knowledge_bases:
+        try:
+            detail = client.get_knowledge_base(knowledgeBaseId=kb.kb_id)["knowledgeBase"]
+        except client.exceptions.ResourceNotFoundException as exc:
+            raise RuntimeError(
+                f"knowledge base {kb.kb_id} does not exist in {where} — mount an "
+                "existing, authorized knowledge base or install without it"
+            ) from exc
+        if _kb_type(detail) != "MANAGED":
+            raise RuntimeError(
+                f"knowledge base {kb.kb_id} in {where} is not a MANAGED knowledge base"
+            )
+        status = detail.get("status")
+        if status != "ACTIVE":
+            raise RuntimeError(
+                f"knowledge base {kb.kb_id} in {where} is {status or 'in an unknown state'}, "
+                "not ACTIVE — wait for it or install without it"
+            )
+        ctx.log(f"knowledge base {kb.kb_id} verified · MANAGED · ACTIVE")
 
 
 # ---------------------------------------------------------------------------
@@ -135,9 +269,15 @@ def _latest_deployment(db: Session, agent_id: str) -> Deployment | None:
     return (
         db.query(Deployment)
         .filter(Deployment.agent_id == agent_id)
-        .order_by(Deployment.started_at.desc())
+        .order_by(Deployment.started_at.desc(), Deployment.id.desc())
         .first()
     )
+
+
+def _latest_job(db: Session, agent: Agent) -> tuple[Deployment | None, Job | None]:
+    deployment = _latest_deployment(db, agent.id)
+    job = db.get(Job, deployment.job_id) if deployment and deployment.job_id else None
+    return deployment, job
 
 
 def preset_status(
@@ -158,6 +298,8 @@ def preset_status(
     deployment = _latest_deployment(db, agent.id) if agent else None
     spec = (agent.spec or {}) if agent else {}
     installed_version = catalogue.skill_version_from_spec(spec) if agent else None
+    installed = agent is not None
+    settled = installed and agent.status != "deploying"
     return {
         "key": preset.key,
         "name": preset.name,
@@ -184,7 +326,12 @@ def preset_status(
         "model_source": spec.get("model_source"),
         "knowledge_bases": spec.get("knowledge_bases") or [],
         "allowed_tools": spec.get("allowed_tools") or list(preset.allowed_tools),
-        "can_install": is_admin and not requirements and holder is None,
+        "memory": "disabled",
+        # Operation-specific server verdicts — the console disables on these, the
+        # routes re-check them.
+        "can_install": is_admin and not installed and not requirements and holder is None,
+        "can_repair": is_admin and settled and not requirements,
+        "can_uninstall": is_admin and settled,
         "updated_at": agent.updated_at.isoformat() if agent and agent.updated_at else None,
     }
 
@@ -207,11 +354,11 @@ class InstallOutcome:
     job: Job | None
     deployment: Deployment | None
     created: bool
-    changed: bool
+    changed: bool  # True ⇔ this call started a new job (caller launches it)
 
     @property
     def status_code(self) -> int:
-        return 202 if self.job is not None else 200
+        return 202 if self.job is not None and self.agent.status == "deploying" else 200
 
 
 def _require_ready(row: Workspace) -> str:
@@ -219,11 +366,24 @@ def _require_ready(row: Workspace) -> str:
     if missing:
         raise AppError(
             "system_agent.workspace_not_ready",
-            "this workspace cannot host a system preset yet: " + "; ".join(missing),
+            "this workspace cannot host a system preset yet: "
+            + "; ".join(m["message"] for m in missing),
             {"requirements": missing, "workspace_id": row.id},
             status_code=409,
         )
     return str(row.resources["artifacts_bucket"])
+
+
+def _pin_release(db: Session, job: Job, preset: SystemPreset) -> None:
+    """Record the exact bundle release this job may publish."""
+    job.payload = {**(job.payload or {}), "preset_bundle": catalogue.bundle_release(preset)}
+    db.commit()
+
+
+def _in_flight(db: Session, agent: Agent) -> InstallOutcome:
+    deployment, job = _latest_job(db, agent)
+    return InstallOutcome(agent=agent, job=job, deployment=deployment, created=False,
+                          changed=False)
 
 
 def install_preset(
@@ -236,13 +396,14 @@ def install_preset(
 ) -> InstallOutcome:
     """Install, or repair, one preset in one workspace. Idempotent.
 
-    * not installed → create the row (racing installs collapse onto one) + a create job
-    * deploying → return the in-flight job, never a second one
+    * not installed → row + create job (a racing twin collapses onto the winner and
+      returns the winner's job)
+    * deploying → the in-flight job, never a second one
     * active, same version and same options, not forced → no-op (200, no job)
     * failed, changed options, newer bundle, or ``force`` → update job (re-publish)
 
-    The only AWS work this starts is the deploy job on a background thread; the request
-    itself makes no cloud call.
+    The only AWS work this starts is the deploy job on a background thread; the
+    request itself makes no cloud call.
     """
     bucket = _require_ready(row)
     holder = find_name_holder(db, row.id, preset)
@@ -272,20 +433,15 @@ def install_preset(
     db.add(agent)
     try:
         db.flush()
+        deployment, job = create_deployment(db, agent)  # commits the row + job together
     except IntegrityError:
-        # A concurrent install won the unique index; hand back its row untouched.
+        # A concurrent install won the unique index; hand back its row AND its job.
         db.rollback()
         winner = find_installed(db, row.id, preset)
         if winner is None:  # pragma: no cover — the index only fires for a live twin
             raise
-        return InstallOutcome(
-            agent=winner,
-            job=None,
-            deployment=_latest_deployment(db, winner.id),
-            created=False,
-            changed=False,
-        )
-    deployment, job = create_deployment(db, agent)
+        return _in_flight(db, winner)
+    _pin_release(db, job, preset)
     logger.info("system preset %s: install job %s in workspace %s", preset.key, job.id, row.id)
     return InstallOutcome(agent=agent, job=job, deployment=deployment, created=True, changed=True)
 
@@ -299,43 +455,89 @@ def _repair(
     *,
     force: bool,
 ) -> InstallOutcome:
+    db.refresh(agent)  # never decide on a stale ORM snapshot
     if agent.status == "deploying":
-        # Repeated clicks while a job runs must not stack jobs.
-        deployment = _latest_deployment(db, agent.id)
-        job = db.get(Job, deployment.job_id) if deployment and deployment.job_id else None
-        return InstallOutcome(agent=agent, job=job, deployment=deployment, created=False,
-                              changed=False)
+        return _in_flight(db, agent)  # repeated clicks while a job runs stack nothing
 
     stored = agent.spec or {}
     resolved = options or catalogue.options_from_spec(stored)
     desired = catalogue.build_spec(preset, bucket, resolved).model_dump()
-    unchanged = desired == stored
-    if agent.status == "active" and unchanged and not force:
-        return InstallOutcome(agent=agent, job=None, deployment=_latest_deployment(db, agent.id),
-                              created=False, changed=False)
+    if agent.status == "active" and desired == stored and not force:
+        deployment, job = _latest_job(db, agent)
+        return InstallOutcome(agent=agent, job=job, deployment=deployment, created=False,
+                              changed=False)
 
-    agent.spec = desired
-    agent.status = "deploying"
-    agent.error = None
-    agent.updated_at = datetime.now(UTC)
-    db.flush()
-    deployment, job = create_deployment(db, agent, mode="update")
+    # Durable claim: one UPDATE conditioned on the status we are taking over, in the
+    # same transaction as the job row. Two sessions that both loaded an active row
+    # serialize on the write lock; the second sees 0 rows and returns the winner.
+    now = datetime.now(UTC)
+    claimed = db.execute(
+        update(Agent)
+        .where(Agent.id == agent.id, Agent.status.in_(_CLAIMABLE))
+        .values(status="deploying", spec=desired, error=None, updated_at=now)
+    ).rowcount
+    if claimed != 1:
+        db.rollback()
+        db.expire_all()
+        current = db.get(Agent, agent.id)
+        if current is None or current.status == "deleted":
+            raise NotFoundError(
+                "system_agent.not_installed", f"'{preset.key}' was uninstalled meanwhile"
+            )
+        return _in_flight(db, current)
+    db.expire(agent)
+    deployment, job = create_deployment(db, agent, mode="update")  # commits the claim
+    _pin_release(db, job, preset)
     logger.info("system preset %s: repair job %s for agent %s", preset.key, job.id, agent.id)
     return InstallOutcome(agent=agent, job=job, deployment=deployment, created=False,
                           changed=True)
 
 
 # ---------------------------------------------------------------------------
-# package stage: versioned skill upload (runs inside the deploy job)
+# package stage: versioned, checksummed, pinned skill upload (inside the deploy job)
 # ---------------------------------------------------------------------------
 
 
-def package_preset_skills(ctx: StageContext, agent: Agent) -> StageResult:
-    """Upload the preset's repository bundle to its versioned S3 prefix.
+def _pinned_release(ctx: StageContext) -> dict[str, Any] | None:
+    db = ctx.session()
+    try:
+        job = db.get(Job, ctx.job_id)
+        return dict((job.payload or {}).get("preset_bundle") or {}) if job else None
+    finally:
+        db.close()
 
-    Every object is sent with a SHA-256 checksum S3 verifies on receipt, so a corrupted
-    upload fails the stage instead of silently shipping a broken skill. Re-running the
-    stage (resume, repair) rewrites identical bytes — idempotent by construction.
+
+def _read_manifest(s3: Any, bucket: str, key: str) -> dict[str, Any] | None:
+    try:
+        body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") in ("NoSuchKey", "404", "NotFound"):
+            return None
+        raise
+    except Exception as exc:  # noqa: BLE001 — stub clients raise their own shapes
+        if type(exc).__name__ in ("NoSuchKey", "NotFound"):
+            return None
+        raise
+    try:
+        return json.loads(body)
+    except (TypeError, ValueError):
+        return {"digest": None, "corrupt": True}
+
+
+def package_preset_skills(ctx: StageContext, agent: Agent) -> StageResult:
+    """Publish the preset's repository bundle to its versioned S3 prefix.
+
+    Order of checks, all before the first write:
+
+    1. the stored spec's version must equal this build's catalogue version (a job
+       queued under one release is not silently served another);
+    2. the job's pinned ``{version, digest}`` must equal the bytes on disk (a checkout
+       mutated between queueing and running fails here);
+    3. an already published version is immutable: an existing manifest with the same
+       digest makes this a verified no-op, a different digest is a hard failure.
+
+    Objects are sent with a SHA-256 checksum S3 verifies on receipt; the manifest is
+    written last, so a partial upload has no manifest and the next run re-publishes.
     """
     preset = catalogue.get_preset(agent.system_key or "")
     if preset is None:
@@ -343,11 +545,43 @@ def package_preset_skills(ctx: StageContext, agent: Agent) -> StageResult:
     bucket = ctx.workspace.resources.get("artifacts_bucket")
     if not bucket:
         raise RuntimeError("artifacts_bucket missing from this workspace's resource map")
-    prefix = preset.skill_prefix()
+
+    spec_version = catalogue.skill_version_from_spec(agent.spec or {})
+    if spec_version != preset.skill_version:
+        raise RuntimeError(
+            f"queued release mismatch: the stored spec pins skill bundle v{spec_version} "
+            f"but this build ships v{preset.skill_version} — re-run the preset install "
+            "so the spec and the bundle are re-derived together"
+        )
     digest, files = catalogue.bundle_digest(preset.skill_path())
+    pinned = _pinned_release(ctx)
+    if pinned and (pinned.get("version") != preset.skill_version or pinned.get("digest") != digest):
+        raise RuntimeError(
+            f"pinned bundle mismatch: the job was queued for v{pinned.get('version')} "
+            f"digest {str(pinned.get('digest'))[:12]}, the checkout now holds "
+            f"v{preset.skill_version} digest {digest[:12]} — re-run the preset install"
+        )
+
+    prefix = preset.skill_prefix()
+    s3 = ctx.workspace.client("s3")
+    manifest_key = f"{prefix}{MANIFEST_KEY}"
+    published = _read_manifest(s3, bucket, manifest_key)
+    if published is not None:
+        if published.get("digest") == digest:
+            detail = (
+                f"skill bundle {preset.name} v{preset.skill_version} already published · "
+                f"sha256 {digest[:12]} verified · s3://{bucket}/{prefix}"
+            )
+            ctx.log(detail)
+            return StageResult(detail=detail)
+        raise RuntimeError(
+            f"s3://{bucket}/{prefix} already holds v{preset.skill_version} with digest "
+            f"{str(published.get('digest'))[:12]} ≠ {digest[:12]}; a published version is "
+            "immutable — bump the preset's skill_version (and the SKILL.md version)"
+        )
+
     bundle = catalogue.load_bundle(preset)
     try:
-        s3 = ctx.workspace.client("s3")
         for rel in bundle.files:
             body = (bundle.root / rel).read_bytes()
             checksum = base64.b64encode(sha256(body).digest()).decode()
@@ -362,6 +596,16 @@ def package_preset_skills(ctx: StageContext, agent: Agent) -> StageResult:
             ctx.log(f"uploaded s3://{bucket}/{prefix}{rel}")
     finally:
         bundle.close()
+    manifest = json.dumps(
+        {"name": preset.name, "version": preset.skill_version, "digest": digest,
+         "files": files, "published_at": datetime.now(UTC).isoformat()},
+        ensure_ascii=False,
+    ).encode()
+    s3.put_object(
+        Bucket=bucket, Key=manifest_key, Body=manifest,
+        ChecksumSHA256=base64.b64encode(sha256(manifest).digest()).decode(),
+        ContentType="application/json",
+    )
     detail = (
         f"skill bundle {preset.name} v{preset.skill_version} · {len(files)} files · "
         f"sha256 {digest[:12]} → s3://{bucket}/{prefix}"
@@ -376,19 +620,42 @@ def package_preset_skills(ctx: StageContext, agent: Agent) -> StageResult:
 
 
 def uninstall_preset(db: Session, row: Workspace, preset: SystemPreset, delete_resources) -> dict:
-    """Admin-only teardown: AWS resources through the same helper ordinary deletes use,
-    then the ledger row is marked deleted so the partial index frees the key."""
+    """Admin-only teardown, serialized against repair by the same status CAS.
+
+    The ledger claim (``status='deleted'``) lands first so a concurrent repair sees a
+    gone preset instead of re-publishing a harness being torn down; the AWS teardown
+    then uses the helper ordinary deletes use. If the teardown raises, the row is put
+    back to ``failed`` with the reason so the console can retry the uninstall.
+    """
     agent = find_installed(db, row.id, preset)
     if agent is None:
         raise NotFoundError("system_agent.not_installed", f"'{preset.key}' is not installed here")
-    if agent.status == "deploying":
+    now = datetime.now(UTC)
+    claimed = db.execute(
+        update(Agent)
+        .where(Agent.id == agent.id, Agent.status.in_(_CLAIMABLE))
+        .values(status="deleted", updated_at=now)
+    ).rowcount
+    db.commit()
+    if claimed != 1:
+        db.expire_all()
+        current = db.get(Agent, agent.id)
+        if current is None or current.status == "deleted":
+            raise NotFoundError(
+                "system_agent.not_installed", f"'{preset.key}' is not installed here"
+            )
         raise AppError(
             "agent.deploy_in_progress",
             "a deployment is in progress for this preset — wait for it to finish",
             status_code=409,
         )
-    aws_deleted = delete_resources(agent)
-    agent.status = "deleted"
-    agent.updated_at = datetime.now(UTC)
-    db.commit()
+    db.refresh(agent)
+    try:
+        aws_deleted = delete_resources(agent)
+    except Exception as exc:
+        agent.status = "failed"
+        agent.error = f"uninstall failed: {type(exc).__name__}: {exc}"[:500]
+        agent.updated_at = datetime.now(UTC)
+        db.commit()
+        raise
     return {"deleted": True, "agent_id": agent.id, "aws_resource_deleted": aws_deleted}

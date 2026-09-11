@@ -158,8 +158,10 @@ class FilesystemConfig(BaseModel):
         return self
 
 
-# HarnessAllowedTool pattern from the bedrock-agentcore-control service model.
-_ALLOWED_TOOL_RE = re.compile(r"^(\*|@?[^/]{1,63}(/[^/]+)?)$")
+# HarnessAllowedTool from the bedrock-agentcore-control service model (2023-06-05):
+# pattern ``\*|@?[^/]+(/[^/]+)?``, length 1–64.
+_ALLOWED_TOOL_RE = re.compile(r"^(\*|@?[^/]+(/[^/]+)?)$")
+ALLOWED_TOOL_MAX_LEN = 64
 
 
 class AgentSpec(BaseModel):
@@ -257,6 +259,10 @@ class AgentSpec(BaseModel):
     @model_validator(mode="after")
     def _allowed_tools_shape(self) -> "AgentSpec":
         for pattern in self.allowed_tools or []:
+            if not 1 <= len(pattern) <= ALLOWED_TOOL_MAX_LEN:
+                raise ValueError(
+                    f"allowed_tools entry {pattern!r} must be 1–{ALLOWED_TOOL_MAX_LEN} characters"
+                )
             if not _ALLOWED_TOOL_RE.match(pattern):
                 raise ValueError(
                     f"allowed_tools entry {pattern!r} must match '*' or '@?name(/tool)?'"

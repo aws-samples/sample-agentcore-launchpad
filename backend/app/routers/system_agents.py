@@ -28,8 +28,9 @@ router = APIRouter(prefix="/api/system-agents", tags=["system-agents"])
 
 
 class InstallRequest(BaseModel):
-    """The administrator's choices. Omit everything to install with platform defaults
-    or to repair with the currently stored choices."""
+    """The administrator's choices. An empty JSON object (``{}``) installs with the
+    platform defaults or repairs with the currently stored choices; the body itself
+    is required."""
 
     model_id: str | None = Field(default=None, min_length=1, max_length=200)
     model_source: ModelSource | None = None
@@ -90,7 +91,7 @@ def install_system_agent(
         db, ws.row, preset, req.options(stored.spec if stored else None), force=req.force
     )
     db.commit()
-    if outcome.job is not None and outcome.changed:
+    if outcome.job is not None and outcome.changed:  # only the claim winner launches
         start_deploy_async(outcome.job.id)
     body = {
         "agent": _agent_out(outcome.agent, outcome.deployment),

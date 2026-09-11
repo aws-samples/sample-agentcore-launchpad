@@ -185,10 +185,21 @@ def model_resources(model_id: str, ctx: RoleContext) -> list[str]:
 
 
 def _uses_gateway(spec: AgentSpec) -> bool:
-    """Whether anything in the spec needs an AgentCore workload token."""
+    """Whether anything in the spec needs an AgentCore workload token.
+
+    A remote MCP tool whose config declares ``auth: "none"`` is a public,
+    unauthenticated server (e.g. the AWS Knowledge MCP): no token, no vault secret,
+    so no identity grant. Every other MCP ref keeps the historical grant — an
+    existing agent's outbound auth must not change under it.
+    """
     if spec.knowledge_bases:
         return True  # harness KBs ride the shared KB gateway
-    return any(tool.type in ("gateway", "mcp") for tool in spec.tools)
+    for tool in spec.tools:
+        if tool.type == "gateway":
+            return True
+        if tool.type == "mcp" and (tool.config or {}).get("auth") != "none":
+            return True
+    return False
 
 
 def _builtin_names(spec: AgentSpec) -> set[str]:

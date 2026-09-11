@@ -91,8 +91,8 @@ export interface SystemPresetInfo {
   installed_skill_version: string | null;
   update_available: boolean;
   status: SystemPresetStatus;
-  /** what the workspace still lacks before an install is possible */
-  requirements: string[];
+  /** what the workspace still lacks; `code` is localized, `message` is the fallback */
+  requirements: { code: string; message: string }[];
   /** a live ordinary agent holding the reserved name (the preset never adopts it) */
   name_collision: { agent_id: string; agent_name: string; method: string } | null;
   agent_id: string | null;
@@ -105,8 +105,12 @@ export interface SystemPresetInfo {
   model_source: string | null;
   knowledge_bases: { kb_id: string; name: string; description: string }[];
   allowed_tools: string[];
-  /** server verdict: administrator + ready workspace + no collision */
+  /** persistent memory contract of the preset (`disabled`) */
+  memory: string;
+  /** server verdicts per operation: administrator + operation-specific readiness */
   can_install: boolean;
+  can_repair: boolean;
+  can_uninstall: boolean;
   updated_at: string | null;
 }
 
@@ -417,6 +421,12 @@ export interface AgentSpecInput {
    */
   toolkits?: Toolkit[];
   skills?: string[];
+  /**
+   * Harness `allowedTools` patterns (harness method only). Omitted/null keeps the
+   * API default (every tool, incl. the built-in shell). The wizard round-trips a
+   * stored value untouched so a re-publish never widens an agent's tool surface.
+   */
+  allowed_tools?: string[] | null;
   // Managed KB references mounted onto the agent (harness method only).
   knowledge_bases?: { kb_id: string; name: string; description: string }[];
   memory?: { short_term: boolean; long_term: boolean };

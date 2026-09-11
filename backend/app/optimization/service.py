@@ -144,6 +144,10 @@ def run_action(exp_id: str, action: str, fn: Callable[[Progress], Any]) -> None:
     def progress(msg: str) -> None:
         _update(exp_id, progress=msg[:300])
 
+    # Refuse before running_action is written and before the thread exists: a
+    # system-managed preset is never the subject of an experiment action.
+    _refuse_system_agent(_get(exp_id).agent_id, action)
+
     def runner() -> None:
         try:
             fn(progress)
@@ -1649,8 +1653,16 @@ def _stop_ab_test(
     raise TimeoutError(f"{label} {ab_test_id} did not reach STOPPED")
 
 
+def _refuse_system_agent(agent_id: str | None, action: str) -> None:
+    from app.system_agents.service import refuse_system_agent_id
+
+    refuse_system_agent_id(agent_id, action)
+
+
 def act_promote(exp_id: str, progress: Progress) -> dict[str, Any]:
     """Stop the A/B test, apply treatment defaults, and deploy in place."""
+    # Before the status write and before the A/B test is touched.
+    _refuse_system_agent(_get(exp_id).agent_id, "promote")
     _update(exp_id, status="ready")
     exp = _get(exp_id)
     data = data_client(context_for_workspace(exp.workspace_id))

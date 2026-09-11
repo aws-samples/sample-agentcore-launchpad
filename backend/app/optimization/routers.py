@@ -16,6 +16,7 @@ from app.optimization import readiness, service
 from app.optimization.models import STAGES, Experiment
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services.agentcore.client import control_client
+from app.system_agents import service as system_agents
 
 router = APIRouter(prefix="/api/experiments", tags=["experiments"])
 
@@ -243,6 +244,9 @@ def experiment_action(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     exp = _experiment_in(db, ws, exp_id)
+    # A stale row that references a system-managed preset must not drive any
+    # action — checked before running_action or any other state is written.
+    system_agents.assert_not_system_agent(db, exp.agent_id, "experiment")
     if exp.running_action:
         raise AppError(
             "experiment.action_in_flight",

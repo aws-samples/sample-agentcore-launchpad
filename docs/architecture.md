@@ -357,53 +357,121 @@ which is what the console renders the SYSTEM chip from.
 **Protected mutation paths.** `POST …/redeploy`, `DELETE /api/agents/{id}` and
 `POST …/convert` answer `403 agent.system_managed` for a preset **before any AWS
 client is built**, whatever `perm:agents.*` the caller holds — including an
-administrator, who maintains presets only through `/api/system-agents`. The
-experiment and canary capability projections report `reason_code: system-managed`,
-so optimization promotions can never rewrite the spec. Ordinary agents keep the
-2026-08-07 member-lifecycle rights unchanged (`tests/test_system_agents.py` asserts
-the parity).
+administrator, who maintains presets only through `/api/system-agents`. The same
+refusal guards the indirect writers: `POST /api/experiments/{id}/action` and
+`POST /api/runtime-canaries/{id}/action` refuse any action on a (possibly stale)
+row that references a preset before `running_action` is written, and the service
+entry points a background thread would run (`act_promote`, canary `act_setup` /
+`act_complete` / `act_rollback`, both `run_action` dispatchers) refuse before the
+first AWS call; the capability projections additionally report
+`reason_code: system-managed`. `DELETE /api/knowledge-bases/{kb_id}` — with or
+without `force` — answers `409 kb.attached_to_system_agent` as a ledger-only
+preflight when the KB is mounted on a preset, so a member can never force-detach a
+preset's knowledge base or touch its gateway target; an administrator detaches it
+first by repairing the preset with a `knowledge_bases` body that omits the KB.
+Ordinary agents keep the 2026-08-07 member-lifecycle rights and the ordinary KB
+force-delete semantics unchanged (`tests/test_system_agents.py` asserts the
+parity).
 
 **Explicit, idempotent installation — never on startup or read.**
 `GET /api/system-agents` (member) is a ledger-only read reporting one of
-`configuration_required` (workspace not `ready` or missing `artifacts_bucket` /
-`execution_role_arn`), `not_installed`, `deploying`, `active`, `failed`, plus
-`name_collision` when a pre-existing ordinary agent holds the reserved name (the
-preset **never adopts** it — `409 system_agent.name_collision` on install) and
-`can_install` (the server's verdict: administrator + ready + no collision).
+`configuration_required` (workspace not `ready`, missing `artifacts_bucket` /
+`execution_role_arn`, or per-agent roles disabled), `not_installed`, `deploying`,
+`active`, `failed`, plus `requirements` as `{code, message}` pairs (also on an
+installed preset whose workspace later lost a prerequisite), `name_collision` when
+a pre-existing ordinary agent holds the reserved name (the preset **never adopts**
+it — `409 system_agent.name_collision` on install) and the operation-specific
+verdicts `can_install` / `can_repair` / `can_uninstall` (administrator +
+operation-specific readiness). The console localizes descriptions and requirement
+codes and shows loading, error and retry states; it consumes the install/uninstall
+response directly and refreshes the agent list when a poll reaches a terminal
+status.
 `POST /api/system-agents/{key}/install` (admin) is the one path that reaches AWS:
 
 | Preset state | Result |
 |---|---|
 | not installed | row + create job (`202`, `created: true`) |
 | deploying | the in-flight job is returned (`202`, `changed: false`) — repeated clicks stack no jobs |
-| active, same version + options | no-op (`200`, `job_id: null`) |
+| active, same version + options | no-op (`200`, `job_id` = the job that produced the active preset) |
 | failed / options changed / newer bundle / `force: true` | update job = in-place re-publish (`202`) |
 
-Concurrent installs race into the unique index; the loser re-reads the winner. The
-job runs the **normal** `generate → package → provision → deploy → register`
-pipeline: the harness `package` stage, skipped for ordinary harnesses, uploads the
-preset's bundle to the **versioned** prefix
-`s3://<artifacts_bucket>/system-skills/<name>/<skill_version>/` with per-object
-SHA-256 checksums S3 verifies on receipt, and reports the bundle digest in the stage
-detail. The prefix family is disjoint from the member-writable `skills/` (registry)
-and `agent-skills/` (wizard staging) prefixes, and the SKILL.md frontmatter
-`version` must equal the catalogue's `skill_version` or the stage fails — a content
-change cannot ship under a stale version directory. `DELETE
-/api/system-agents/{key}` (admin) tears the Harness down through the same helper
-ordinary deletes use and frees the key for a later reinstall.
+The request body is a required JSON object; `{}` means "platform defaults" on a
+first install and "the stored choices" on a repair. Maintenance claims are durable
+and atomic: a fresh install races into the partial unique index and the loser
+re-reads the winner **and returns the winner's job id**; a repair or uninstall
+executes one compare-and-set `UPDATE … WHERE status IN (active, failed)` in the
+same transaction as the job row it creates, so two sessions that both loaded an
+active row converge on one job (the second sees no claimed row and returns the
+first's in-flight job), and a repair racing an uninstall answers
+`404 system_agent.not_installed` instead of re-publishing a harness being torn
+down. The job runs the **normal** `generate → package → provision → deploy →
+register` pipeline with three preset-specific hardenings:
+
+- **release pinning** — the install records `{version, digest}` of the repository
+  bundle on the job; the `package` stage (skipped for ordinary harnesses) refuses
+  to run when the stored spec pins another version than this build ships, when the
+  checkout's bytes differ from the pinned digest, or when the versioned prefix
+  `s3://<artifacts_bucket>/system-skills/<name>/<skill_version>/` already holds a
+  manifest with a different digest (a published version is immutable — bump
+  `skill_version` and the SKILL.md `version` together). A matching manifest makes
+  the stage a verified no-op; otherwise every object is uploaded with a SHA-256
+  checksum S3 verifies on receipt and the manifest (`.bundle-manifest.json`) is
+  written last, so a partial upload is re-published by the next run;
+- **idempotent AWS requests** — every harness create/update sends
+  `clientToken = lp-<deployment id>` (persisted, not scratch state), so a job
+  resumed after a crash between the AWS call and the ledger write repeats the same
+  request instead of creating a second harness. This applies to every harness
+  agent, not only presets;
+- **the provisioned role is what AWS receives** — the deploy stage sets
+  `executionRoleArn` from the provision stage's result (or, on a resume that lost
+  scratch, from the deterministic `launchpad-agent-<name>-<id8>` role name) for
+  every harness agent; the generate stage's shared-role placeholder never reaches
+  CreateHarness/UpdateHarness anymore. A preset additionally **fails closed**: with
+  `per_agent_execution_roles=false`, or if the resolved role is the shared
+  workspace role, generate/deploy raise before any AWS call and the status read
+  reports the `per_agent_roles_disabled` requirement.
+
+The prefix family is disjoint from the member-writable `skills/` (registry) and
+`agent-skills/` (wizard staging) prefixes. `DELETE /api/system-agents/{key}`
+(admin) claims the row first, tears the Harness down through the same helper
+ordinary deletes use, and on a teardown failure puts the row back to `failed`
+with the reason so the uninstall can be retried.
 
 **Constrained tool surface.** The harness exposes `shell` and `file_operations` to
 every session unless `allowedTools` restricts them, so `AgentSpec.allowed_tools`
-(new, harness-only, `None` = API default for every existing agent) maps to the
-request's `allowedTools`, and the preset sends `["file_*", "@aws_knowledge"]`: the
-file tools its skill needs, the public AWS Knowledge MCP server
+(new, harness-only, `None` = API default for every existing agent; each entry
+1–64 chars matching the service model's `*|@?name(/tool)?`) maps to the request's
+`allowedTools`, and the preset sends `["file_*", "@aws_knowledge"]`: the file tools
+its skill needs, the public AWS Knowledge MCP server
 (`https://knowledge-mcp.global.api.aws`, a `remote_mcp` tool, no credential), and no
-shell. `allowedTools` scopes LLM tool selection only; the real boundary is the
-per-agent execution role, whose derivation is unchanged: model invoke, short-term
-memory, the workload-identity grant every MCP agent gets, `s3:GetObject` on exactly
-the versioned skill prefix, telemetry — no code interpreter, browser, ECR or KB
-statements. Memory is short-term only, so a new session's requirement baseline is
-independent of persistent memory by construction.
+shell. When knowledge bases are mounted, the deployer appends `@<kb gateway tool
+name>` (`@launchpad_kb_gw`) — only then, and never `*` — so the retrieval tools
+the prompt names are callable. `allowedTools` scopes LLM tool selection only; the
+real boundary is the per-agent execution role: model invoke, `s3:GetObject` on
+exactly the versioned skill prefix, telemetry — and nothing else for the docs-only
+preset. The MCP ToolRef carries `auth: "none"`, which tells the role derivation to
+skip the workload-identity and token-vault statements an authenticated MCP ref
+gets (ordinary agents' MCP refs are unchanged); mounting a KB adds exactly the
+gateway OAuth path and the scoped `bedrock:Retrieve` grants, nothing more. The
+wizard round-trips a stored `allowed_tools` untouched on edit/re-publish (typed
+in `AgentSpecInput`), so a console re-publish can never widen an agent's tool
+surface — note that omitting `allowedTools` on UpdateHarness keeps the live
+restriction per the service model, so the risk was lost ledger intent on a later
+recreate, not immediate widening.
+
+**Memory.** The `short_term`/`long_term` flags cannot express "short-term only"
+against the real API: the shared workspace memory carries long-term strategies,
+and an *omitted* `memory` member on CreateHarness means the harness-managed
+default, which creates a memory with the SEMANTIC + SUMMARIZATION strategies
+(`HarnessManagedMemoryConfiguration`; its strategy list has a minimum of one). The
+preset therefore sends `memory: {"disabled": {}}` — no persistent memory at all,
+no memory grant on its role — and a new session's requirement baseline is
+independent of every earlier one by construction. Conversation inside one runtime
+session lives in the harness session (the service model describes memory as
+persisting context *across* sessions); confirming that within-session continuity
+is part of the pending live smoke. As a consistency fix, every flag-less harness
+spec now sends the explicit `disabled` variant on create as it already did on
+update.
 
 **Optional knowledge base.** The install body may name existing, already-authorized
 knowledge bases (`knowledge_bases: [{kb_id, name, description}]`); they mount through
@@ -412,9 +480,13 @@ says so: with no retrieval tool the agent works from its methodology index and s
 that the original guide was not consulted.
 
 **Administrator choices** are the model (`model_id` + `model_source`, defaulting to
-the platform's `DEFAULT_MODEL_ID`) and the optional knowledge bases; a bodiless
-install/repair keeps what is stored, so ordinary use never overwrites version or
-configuration.
+the platform's `DEFAULT_MODEL_ID`) and the optional knowledge bases. They are
+**API-only** — the console panel installs with `{}` (defaults, or the stored
+choices on repair) and says so; there is no model/KB field in the panel. The
+knowledge-base references are shape-validated at request time and **verified in
+the provision stage** (`GetKnowledgeBase` in the target workspace: exists, MANAGED,
+ACTIVE) before any gateway target is created, failing the stage with an actionable
+reason otherwise. Ordinary use never overwrites version or configuration.
 
 **Pending live validation.** Everything above is hermetically tested (`tests/
 test_system_agents.py`); the live smoke — install in an approved workspace, confirm

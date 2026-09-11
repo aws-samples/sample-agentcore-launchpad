@@ -119,19 +119,24 @@ billable operator action that runs the normal deploy pipeline.
 
 | Method | Path | Role | Result |
 |---|---|---|---|
-| `GET` | `/api/system-agents` | member | `{workspace_id, presets[{key, name, label, description, method, skill_version, installed_skill_version, update_available, status, requirements[], name_collision, agent_id, agent_status, error, job_id, deployment_id, deployment_status, model_id, model_source, knowledge_bases[], allowed_tools[], can_install, updated_at}]}` — `status ∈ configuration_required | not_installed | deploying | active | failed`; ledger-only |
-| `POST` | `/api/system-agents/{key}/install` | admin | body `{model_id?, model_source?, knowledge_bases?[{kb_id, name?, description?}], force?}` → `202 {agent, job_id, deployment_id, created, changed, preset}` when a job started, `200` with `job_id: null` when the active preset already matches. Idempotent: a deploying preset returns its in-flight job; a bodiless call keeps the stored choices |
-| `DELETE` | `/api/system-agents/{key}` | admin | `{deleted, agent_id, aws_resource_deleted}` — tears down the Harness + role and frees the key for a reinstall |
+| `GET` | `/api/system-agents` | member | `{workspace_id, presets[{key, name, label, description, method, skill_version, installed_skill_version, update_available, status, requirements[{code, message}], name_collision, agent_id, agent_status, error, job_id, deployment_id, deployment_status, model_id, model_source, knowledge_bases[], allowed_tools[], memory, can_install, can_repair, can_uninstall, updated_at}]}` — `status ∈ configuration_required | not_installed | deploying | active | failed`; requirement codes `bootstrap_not_ready | missing_artifacts_bucket | missing_execution_role | per_agent_roles_disabled`; `memory` is `disabled`; ledger-only |
+| `POST` | `/api/system-agents/{key}/install` | admin | required JSON body `{model_id?, model_source?, knowledge_bases?[{kb_id, name?, description?}], force?}` (`{}` = platform defaults on install, stored choices on repair) → `202 {agent, job_id, deployment_id, created, changed, preset}` when a job is in flight (a deploying preset returns its existing job, `changed: false`; a racing install returns the winner's job), `200` with the last job's id when the active preset already matches. Knowledge bases are verified in the target workspace during the provision stage |
+| `DELETE` | `/api/system-agents/{key}` | admin | `{deleted, agent_id, aws_resource_deleted}` — claims the row, tears down the Harness + role and frees the key for a reinstall; a teardown failure leaves the row `failed` with the reason (retryable) |
 
 Error codes: `system_agent.unknown` (404), `system_agent.workspace_not_ready` (409,
-`detail.requirements` lists what bootstrap still owes), `system_agent.name_collision`
-(409, an ordinary agent holds the reserved name — never adopted),
-`system_agent.not_installed` (404 on uninstall), `agent.deploy_in_progress` (409 on
-uninstall while deploying). On the ordinary agent routes a preset answers
-`agent.system_managed` (403, `detail.action ∈ redeploy | delete | convert`,
-`detail.maintenance_route`) before any AWS call, and `POST /api/agents` with a
-reserved name answers `agent.name_reserved` (409). Every agent projection carries
-`system: {managed, key, label, skill_version, protected_actions} | null`.
+`detail.requirements[{code, message}]`), `system_agent.name_collision` (409, an
+ordinary agent holds the reserved name — never adopted), `system_agent.not_installed`
+(404 on uninstall, or on a repair that raced an uninstall), `agent.deploy_in_progress`
+(409 on uninstall while deploying). On the ordinary agent routes a preset answers
+`agent.system_managed` (403, `detail.action ∈ redeploy | delete | convert |
+experiment | canary | promote | …`, `detail.maintenance_route`) before any AWS call;
+the experiment and runtime-canary action routes answer the same for rows referencing
+a preset; `DELETE /api/knowledge-bases/{kb_id}` answers `kb.attached_to_system_agent`
+(409, `detail.agents`) when the KB is mounted on a preset, with or without `force`;
+and `POST /api/agents` with a reserved name answers `agent.name_reserved` (409).
+Every agent projection carries `system: {managed, key, label, skill_version,
+protected_actions} | null`. `AgentSpec.allowed_tools` (harness only) accepts 1–64
+character entries matching `*|@?name(/tool)?`.
 
 ## Console Registry API — live agent card
 

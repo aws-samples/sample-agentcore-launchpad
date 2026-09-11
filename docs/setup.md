@@ -151,14 +151,18 @@ by bootstrap, startup or any page read: an **administrator** installs a preset p
 workspace with the panel's INSTALL button (or `POST
 /api/system-agents/<key>/install`), which is a billable deploy through the normal
 pipeline (~30 s). The workspace must be `ready` (bootstrap done, `artifacts_bucket`
-and `execution_role_arn` present). Optional install choices: the model
-(`model_id`/`model_source`, default = the platform default) and existing knowledge
-bases to mount (`knowledge_bases`) — none is created for you. REPAIR/UPDATE
-re-publishes in place; UNINSTALL removes the Harness and role. Members can chat with
-the preset like any agent but see a SYSTEM chip with the edit/re-publish/convert/
-delete actions disabled, and the backend refuses those calls regardless of
-permissions. If an ordinary agent already holds the reserved name, the install is
-refused — delete or rename that agent first; the preset never adopts it.
+and `execution_role_arn` present, per-agent execution roles enabled). Optional
+install choices — the model (`model_id`/`model_source`, default = the platform
+default) and existing knowledge bases to mount (`knowledge_bases`, verified in the
+workspace during provision; none is created for you) — are **API-only**: the panel
+installs with `{}`. REPAIR/UPDATE re-publishes in place; UNINSTALL removes the
+Harness and role. The preset runs with persistent memory disabled and on its own
+restricted execution role (never the shared role). Members can chat with the preset
+like any agent but see a SYSTEM chip with the edit/re-publish/convert/delete actions
+disabled, and the backend refuses those calls regardless of permissions; a knowledge
+base mounted on the preset cannot be force-deleted until an administrator detaches
+it through the preset. If an ordinary agent already holds the reserved name, the
+install is refused — delete or rename that agent first; the preset never adopts it.
 **Live smoke is still pending** (see architecture.md → *System-managed presets*).
 
 ### Escape hatches / 应急开关

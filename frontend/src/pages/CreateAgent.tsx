@@ -132,6 +132,7 @@ interface StoredSpec {
   }[];
   toolkits?: Toolkit[];
   skills?: string[];
+  allowed_tools?: string[] | null;
   knowledge_bases?: KbRef[];
   memory?: { long_term?: boolean; memory_id?: string | null };
   protocol?: "http" | "a2a";
@@ -827,6 +828,10 @@ function CreateAgentWizard() {
   const [step, setStep] = useState<Step>(prefillGateway || prefillSkill ? 2 : 1);
   const [method, setMethod] = useState<Method>("harness");
   const [skills, setSkills] = useState<string[]>(prefillSkill ? [prefillSkill] : []);
+  // Harness allowedTools carried through an edit untouched (the wizard has no
+  // editor for it yet); null = API default. Dropping it on re-publish would lose
+  // the stored restriction.
+  const [allowedTools, setAllowedTools] = useState<string[] | null>(null);
   const [name, setName] = useState("");
   const [modelId, setModelId] = useState(defaultModelFor(DEFAULT_MODEL_SOURCE));
   const [modelSource, setModelSource] = useState<ModelSource>(DEFAULT_MODEL_SOURCE);
@@ -1025,6 +1030,7 @@ const deployLock = !canDeploy
     setSpecKbs([]);
     setDetailKbs([]);
     setSkills([]);
+    setAllowedTools(null);
     setLongTerm(true);
     setMcpServers("");
     setCustomSkills([]);
@@ -1176,6 +1182,7 @@ const deployLock = !canDeploy
     skills.length
       ? { skills }
       : {}),
+    ...(method === "harness" && allowedTools ? { allowed_tools: allowedTools } : {}),
     ...(method === "container" && mcpServers.trim()
       ? { env: { LAUNCHPAD_MCP_SERVERS: mcpServers.trim() } }
       : {}),
@@ -1257,6 +1264,7 @@ const deployLock = !canDeploy
     setSelectedKbs((spec.knowledge_bases ?? []).map((k) => k.kb_id));
     setSpecKbs(spec.knowledge_bases ?? []);
     setSkills(spec.skills ?? []);
+    setAllowedTools(spec.allowed_tools ?? null);
     setLongTerm(spec.memory?.long_term ?? true);
     setMemoryId(spec.memory?.memory_id ?? "");
     setMcpServers(spec.env?.LAUNCHPAD_MCP_SERVERS ?? "");
@@ -1543,7 +1551,20 @@ const deployLock = !canDeploy
             onChanged={reloadAgents}
             onDetails={(agentId) => {
               const target = agents.find((a) => a.id === agentId);
-              if (target) openDetails(target);
+              if (target) {
+                openDetails(target);
+                return;
+              }
+              // the list may lag the panel's own poll — read the row directly
+              void api
+                .getAgent(agentId)
+                .then((fresh) => {
+                  openDetails({ ...fresh, deployment: fresh.deployments?.[0] });
+                  reloadAgents();
+                })
+                .catch((err) => {
+                  toast(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
+                });
             }}
           />
           <div style={{ height: 18 }} />
