@@ -796,6 +796,12 @@ a:focus-visible,button:focus-visible,.btn:focus-visible,.selchip:focus-visible,.
 .mem-turn{display:flex;align-items:flex-start;gap:8px;margin-bottom:5px}
 .mem-text{font-size:12px;color:var(--ink-2);display:-webkit-box;-webkit-line-clamp:3;line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .mem-text.open{display:block;-webkit-line-clamp:none;line-clamp:none}
+/* Keep record selection from resizing the list/detail columns. */
+.mem-record-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.mem-record-grid>*{min-width:0}
+.mem-record-grid .phead .sub,.mem-record-grid .kv{overflow-wrap:anywhere}
+.mem-record-grid .kv .k{flex-shrink:0}
+.mem-record-grid .kv .v{min-width:0}
 .mem-cell-text{max-width:420px;overflow-wrap:anywhere}
 .mem-record-body{font-size:12.5px;color:var(--ink-2);line-height:1.7;margin:12px 0;overflow-wrap:anywhere}
 /* raw record payloads are single-line JSON — wrap them or they widen the page */

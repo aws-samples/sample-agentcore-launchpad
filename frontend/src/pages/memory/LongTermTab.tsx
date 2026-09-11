@@ -186,7 +186,7 @@ export function LongTermTab({
         )}
       </div>
 
-      <div className="grid-2">
+      <div className="grid-2 mem-record-grid">
         <Panel
           title={
             isSearch ? t("memoryPage.long.resultsTitle") : t("memoryPage.long.recordsTitle")
