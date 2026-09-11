@@ -1473,7 +1473,9 @@ split are refused before any write and leave the job un-imported; a request with
 (or the legacy no-body apply) still saves every generated row verbatim. The drafts are
 client-side only: a job switch resets them, a status poll or language change does not; while a
 save is in flight the editor, reset and save controls are locked, and an outcome that arrives
-after the operator switched jobs is dropped rather than applied to the new job's view. **After a
+after the operator switched jobs, left the surface, or returned to the same job is dropped (a
+per-view generation counter, advanced on every job-effect run and cleanup) rather than navigating
+the console; the server write itself stands. **After a
 save the job page shows the generator's ORIGINAL output, read-only and labelled as such** — the
 console persists no receipt of the selection; excluded/edited rows exist only in the task set,
 which the page links to (`imported_taskset_id`, or the expansion target). Refused saves are

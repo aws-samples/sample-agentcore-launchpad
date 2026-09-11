@@ -146,11 +146,14 @@ export function TaskgenPanel({
   }, [results]);
   // Save in flight. The ref is the synchronous guard (a second click in the same
   // tick must not start a second POST); the state drives the disabled controls.
-  // `activeJobRef` lets a save that resolves after the operator moved to another
-  // job be ignored instead of writing its outcome onto the new job's view.
+  // `viewGenRef` is a view generation: it advances every time the selected-job
+  // effect runs AND when it cleans up (job switch, leaving the surface, unmount).
+  // A save compares the generation it started under with the current one, so an
+  // outcome that resolves after the operator moved on — to another job, back to
+  // the list, or even back to the SAME job — is dropped instead of navigating.
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
-  const activeJobRef = useRef<string | null>(null);
+  const viewGenRef = useRef(0);
 
   // What the run was given vs what its tasks actually asked for. `params` is
   // recorded at submission so this works while a job is still running; the
@@ -199,7 +202,7 @@ export function TaskgenPanel({
     setDetail(null);
     setResults(null);
     setActionError(null);
-    activeJobRef.current = jobId;
+    viewGenRef.current += 1;
     savingRef.current = false;
     setSaving(false);
     if (!jobId) return;
@@ -230,6 +233,7 @@ export function TaskgenPanel({
     void tick();
     return () => {
       stale = true;
+      viewGenRef.current += 1; // invalidates any save still in flight for this view
       if (timer) clearTimeout(timer);
     };
   }, [jobId, loadJobs]);
@@ -318,20 +322,21 @@ export function TaskgenPanel({
     ) => Promise<{ job: SkillLabJobInfo; taskset: SkillLabTasksetInfo }>,
   ) => {
     if (!detail || drafts === null || savingRef.current) return;
-    const startedFor = detail.id;
+    const startedGen = viewGenRef.current;
+    const current = () => viewGenRef.current === startedGen;
     savingRef.current = true;
     setSaving(true);
     setActionError(null);
     try {
       const outcome = await request(detail, drafts);
-      if (activeJobRef.current !== startedFor) return; // operator moved on; job effect reset us
+      if (!current()) return; // operator moved on (or left); the server write stands
       setDetail(outcome.job);
       onImported(outcome.taskset.id);
     } catch (err) {
-      if (activeJobRef.current !== startedFor) return;
+      if (!current()) return;
       setActionError(err);
     } finally {
-      if (activeJobRef.current === startedFor) {
+      if (current()) {
         savingRef.current = false;
         setSaving(false);
       }
