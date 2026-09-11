@@ -1357,7 +1357,18 @@
         "none": "— 新建任务集 —"
       },
       "err": {
-        "noSkill": "请至少选择一个技能。"
+        "noSkill": "请至少选择一个技能。",
+        "expansionConflict": "任务集在生成后发生了变化——以下 id 已存在：{{ids}}",
+        "alreadySaved": "这次生成已经保存过。",
+        "badSelection": {
+          "out_of_range": "第 {{row}} 行不存在——该作业生成了 {{total}} 个任务。",
+          "repeated": "第 {{row}} 行被引用了多次。"
+        },
+        "validatorRefused": "任务校验器拒绝了这次选择——请修正下列行（未保存任何内容，你的编辑已保留）：",
+        "requestRefused": "字段校验拒绝了这次请求——请修正下列字段（未保存任何内容，你的编辑已保留）：",
+        "moreIssues": "……还有 {{n}} 个问题未显示",
+        "unreadableIssues": "{{n}} 条诊断信息无法显示（格式异常）",
+        "truncated": "（已截断）"
       },
       "job": {
         "title": "生成作业 {{id}}",
@@ -1372,7 +1383,22 @@
         "apply": "追加到 {{split}} 分割",
         "imported": "已导入为任务集",
         "applied": "已追加到「{{name}}」。",
-        "unusedAttachments": "没有任何生成任务用到：{{names}}。这些上传不会附加到保存后的任务集。"
+        "unusedAttachments": "没有任何生成任务用到：{{names}}。这些上传不会附加到保存后的任务集。",
+        "editHint": "可修改任意一行的 id、question、rubric 或 task_type，并排除不需要的行。输入文件仍绑定在各自的行上。点击下方保存前不会写入任何内容。",
+        "summary": "将保存 {{kept}}/{{total}} 个任务",
+        "excludedCount": "已排除 {{n}} 个",
+        "exclude": "排除",
+        "restore": "恢复",
+        "excludedTag": "已排除",
+        "reset": "重置编辑",
+        "noneKept": "至少保留一个任务才能保存。",
+        "rowIncomplete": "第 {{n}} 行：id、question 和 rubric 为必填。",
+        "duplicateIds": "id 重复：{{ids}}",
+        "nameRequired": "请输入新任务集名称。",
+        "originalTitle": "生成器的原始输出（{{n}}）——只读",
+        "originalNote": "这里显示的是生成器的原始输出，而不是保存的选择。保存前排除或编辑的行只存在于任务集中——请在下方打开。",
+        "openSaved": "打开「{{name}}」",
+        "saving": "保存中…"
       },
       "attach": {
         "pick": "选择文件…",

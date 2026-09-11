@@ -1357,7 +1357,18 @@
         "none": "— create a new task set —"
       },
       "err": {
-        "noSkill": "Select at least one skill."
+        "noSkill": "Select at least one skill.",
+        "expansionConflict": "The task set changed since generation — these ids already exist: {{ids}}",
+        "alreadySaved": "This generation was already saved.",
+        "badSelection": {
+          "out_of_range": "Row {{row}} does not exist — the job generated {{total}} tasks.",
+          "repeated": "Row {{row}} is referenced more than once."
+        },
+        "validatorRefused": "The task validator refused the selection — fix the rows below (nothing was saved, your edits are kept):",
+        "requestRefused": "The request was refused by field validation — fix the fields below (nothing was saved, your edits are kept):",
+        "moreIssues": "… {{n}} more issue(s) not shown",
+        "unreadableIssues": "{{n}} diagnostic(s) could not be displayed (unexpected shape)",
+        "truncated": "(truncated)"
       },
       "job": {
         "title": "Generation {{id}}",
@@ -1372,7 +1383,22 @@
         "apply": "Append to split {{split}}",
         "imported": "Imported as task set",
         "applied": "Applied to \"{{name}}\".",
-        "unusedAttachments": "No generated task used: {{names}}. Those uploads will not be attached to the saved task set."
+        "unusedAttachments": "No generated task used: {{names}}. Those uploads will not be attached to the saved task set.",
+        "editHint": "Edit the id, question, rubric or task_type of any row and exclude the rows you do not want. Input files stay bound to their row. Nothing is written until you save below.",
+        "summary": "{{kept}} of {{total}} tasks will be saved",
+        "excludedCount": "{{n}} excluded",
+        "exclude": "Exclude",
+        "restore": "Restore",
+        "excludedTag": "excluded",
+        "reset": "Reset edits",
+        "noneKept": "Keep at least one task to save.",
+        "rowIncomplete": "Row {{n}}: id, question and rubric are required.",
+        "duplicateIds": "Duplicate ids: {{ids}}",
+        "nameRequired": "Enter a name for the new task set.",
+        "originalTitle": "Original generated output ({{n}}) — read-only",
+        "originalNote": "This is the generator's original output, not the saved selection. Rows you excluded or edited before saving exist only in the task set — open it below.",
+        "openSaved": "Open \"{{name}}\"",
+        "saving": "Saving…"
       },
       "attach": {
         "pick": "Choose files…",
