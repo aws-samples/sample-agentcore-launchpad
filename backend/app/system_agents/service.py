@@ -600,14 +600,19 @@ def _refuse_uninstalling(db: Session, agent: Agent, preset: SystemPreset) -> Non
 # ---------------------------------------------------------------------------
 
 
-def assert_job_release_pinned(payload: dict[str, Any] | None, agent: Agent) -> dict[str, Any]:
+def assert_job_release_pinned(
+    payload: dict[str, Any] | None, agent: Agent, workspace: WorkspaceContext
+) -> dict[str, Any]:
     """Job-entry guard for every system-preset deploy job, run BEFORE any stage —
     including a resumed job whose package stage already succeeded or was skipped.
 
-    The pin must exist and be well-formed, and the stored spec, the pin and this
-    build's snapshot must describe the same release (version, digest and prefix).
-    Anything else fails closed with the repair instruction; the pipeline lands it as
-    a failed job before touching AWS.
+    The pin must exist and be well-formed; the stored spec, the pin and this build's
+    snapshot must describe the same release; and the spec's ``skills`` must be
+    exactly the one **complete** expected URI for this workspace —
+    ``s3://<workspace artifacts bucket>/system-skills/<preset name>/<version>-<digest12>/``
+    — never a legacy plain-version directory, another bucket, another preset's path
+    or an extra skill. Reads may still display such a spec; execution fails closed
+    with the repair instruction before any AWS write.
     """
     preset = catalogue.get_preset(agent.system_key or "")
     if preset is None:
@@ -639,12 +644,18 @@ def assert_job_release_pinned(payload: dict[str, Any] | None, agent: Agent) -> d
             f"{str(pinned.get('digest'))[:12]}, the checkout now holds {snapshot.digest[:12]} — "
             "re-run the preset install"
         )
-    if release and release[1] and release[1] != snapshot.digest[:12]:
+    bucket = (workspace.resources or {}).get("artifacts_bucket") or ""
+    if not bucket:
+        raise RuntimeError("artifacts_bucket missing from this workspace's resource map")
+    expected = preset.skill_uri(bucket, snapshot.digest)
+    skills = list((agent.spec or {}).get("skills") or [])
+    if skills != [expected]:
         raise RuntimeError(
-            f"the stored spec loads release {release[0]}-{release[1]} but the pinned snapshot "
-            f"is {snapshot.digest[:12]} — re-run the preset install"
+            f"the stored spec loads {skills or ['<nothing>']} but this workspace's pinned "
+            f"release is exactly {expected} — a legacy, foreign or extra skill source is "
+            "refused; re-run the preset install so the spec is re-derived"
         )
-    return {"pin": pinned, "snapshot": snapshot}
+    return {"pin": pinned, "snapshot": snapshot, "expected_uri": expected}
 
 
 def _pinned_release(ctx: StageContext) -> dict[str, Any] | None:
@@ -787,7 +798,7 @@ def package_preset_skills(ctx: StageContext, agent: Agent) -> StageResult:
         db.close()
     # same guard the job entry runs; its snapshot is the one immutable copy this
     # stage validates against, uploads and reads back
-    snapshot = assert_job_release_pinned(payload, agent)["snapshot"]
+    snapshot = assert_job_release_pinned(payload, agent, ctx.workspace)["snapshot"]
 
     # The Harness loads exactly the directory the spec names; publish there and nowhere
     # else. The content-addressed name ties the directory to this snapshot.
@@ -970,11 +981,18 @@ def uninstall_preset(db: Session, row: Workspace, preset: SystemPreset) -> Unins
             "the preset changed underneath this request — reload and retry",
             status_code=409,
         )
-    job = Job(
-        workspace_id=row.id,
-        type=UNINSTALL_JOB_TYPE,
-        payload={"agent_id": agent.id, "preset_key": preset.key, "attempt": attempt},
-    )
+    # a new attempt carries forward only steps the previous one VERIFIED done; the
+    # worker re-checks that each carried step names the same exact resource id
+    prior_progress = ((previous.payload or {}).get("progress") or {}) if previous else {}
+    carried = {
+        step: entry
+        for step, entry in prior_progress.items()
+        if isinstance(entry, dict) and entry.get("state") == "done"
+    }
+    payload: dict[str, Any] = {"agent_id": agent.id, "preset_key": preset.key, "attempt": attempt}
+    if carried:
+        payload["progress"] = carried
+    job = Job(workspace_id=row.id, type=UNINSTALL_JOB_TYPE, payload=payload)
     db.add(job)
     db.commit()  # claim + job together
     db.refresh(agent)

@@ -173,12 +173,6 @@ def execute_deploy_job(job_id: str) -> None:
         if agent is None or deployment is None:
             raise RuntimeError("ledger rows missing for job")
 
-        if agent.system_key:
-            # Every system-preset job — fresh or resumed, whatever stages already
-            # succeeded — proves its release pin before a single stage runs.
-            from app.system_agents.service import assert_job_release_pinned
-
-            assert_job_release_pinned(job.payload, agent)
         stages = get_method(agent.method)
         ctx = StageContext(
             agent_id=agent_id,
@@ -186,6 +180,13 @@ def execute_deploy_job(job_id: str) -> None:
             job_id=job_id,
             workspace=context_for_workspace(job.workspace_id),
         )
+        if agent.system_key:
+            # Every system-preset job — fresh or resumed, whatever stages already
+            # succeeded or were skipped — proves its release pin and the complete
+            # expected skill URI for THIS workspace before a single stage runs.
+            from app.system_agents.service import assert_job_release_pinned
+
+            assert_job_release_pinned(job.payload, agent, ctx.workspace)
         ctx.scratch["mode"] = job.payload.get("mode", "create")
 
         done = {s["name"] for s in deployment.stages if s["status"] in ("succeeded", "skipped")}

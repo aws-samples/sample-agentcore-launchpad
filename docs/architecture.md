@@ -416,27 +416,48 @@ the key while the AWS resources are still being removed (both answer `409
 system_agent.uninstalling`); a failed teardown leaves the row `uninstalling` with
 the reason and per-step progress on the job (`operation.retryable`), and another
 explicit uninstall starts attempt N+1. The worker (`system_agents/uninstall.py`) is
-**fenced**: it runs only if it wins the job's `queued → running` CAS (a startup
-resume may also adopt a `running` job the crashed process left), and it re-checks
-before every cloud step and inside the finalizing transaction that the job is of the
-right type and workspace, still `running`, and still the row's *newest* uninstall
-attempt while the row is still `uninstalling` — a duplicate, superseded or late
-worker is inert, cannot finish or fail another attempt, and cannot resolve a
-replacement install's KB target by reused name. The teardown is **strict**: the
-agentic KB target (only when KBs were mounted) is removed, `DeleteHarness` is
-issued and then `GetHarness` is polled until `ResourceNotFoundException` (a mere
-accepted `DELETING` is not a deletion; `DELETE_FAILED` or the 90 s bound are
-retryable failures), and only then is the execution role deleted — an IAM delete
-that reports failure is a retryable failure, never an ignored `False`. Progress per
-step (`kb_target`, `harness`, `role`) is recorded on the job so a retry skips what
-is done and re-runs idempotent steps. Only a fully verified teardown marks the row
+**exclusive and fenced**. Exclusivity is a single-host guarantee matching this
+repository's topology (one process tree, one SQLite ledger): the worker holds an
+advisory `fcntl` lock on `data/locks/system-agents/uninstall-<agent id>.lock` for
+the whole run — a lock the kernel releases when its holder dies, so a startup
+resume can adopt a `running` job a crashed process left while a still-alive twin
+(thread or process on this host) is refused — and it must also win the job's
+`queued → running` CAS. This is not a distributed lease. The fence re-reads job and
+row before every cloud step, inside every progress write and inside the finalizing
+transaction: right job type and workspace, job still `running`, row still
+`uninstalling`, this job still the row's *newest* attempt — a duplicate, superseded
+or late worker is inert and cannot finish or fail another attempt. Resource
+identity is exact: the harness id comes from the row; the KB agentic target is
+resolved **once** by the reserved name (while the row still owns that name
+exclusively — the desired spec is not consulted, because a failed detach-repair
+rewrites it before the old target is gone), its id is **pinned on the job before
+the delete**, and deletion and readback use the pinned id only; the execution role
+is the deterministic per-agent role, which must carry this agent's
+`launchpad:agent-id` tag and must not be the shared workspace role. The teardown is
+**strict** and uses low-level clients, never the best-effort `kb_gateway` helpers:
+every gateway-target page is read, `DeleteGatewayTarget` is issued and
+`GetGatewayTarget` polled until `ResourceNotFoundException` (`AccessDenied`,
+throttling, `FAILED` and the 60 s bound are retryable failures); `DeleteHarness` is
+issued and `GetHarness` polled until `ResourceNotFoundException` (`DELETE_FAILED` or
+the 90 s bound are retryable failures); only then is the role deleted, by installed
+ownership regardless of the current `per_agent_execution_roles` toggle (a preset is
+never on the shared role), and an IAM delete that reports failure is a retryable
+failure, never an ignored `False`. Progress per step (`kb_target`, `harness`, `role`,
+with the exact resource id) is recorded on the job; a new attempt carries forward
+only steps verified done, and the worker trusts a carried step only when its
+resource id still matches the row. Only a fully verified teardown marks the row
 `deleted`. The ordinary agent delete keeps its best-effort semantics; the preset does
 not use it. The deploy job runs the **normal** `generate → package → provision →
 deploy → register` pipeline with three preset-specific hardenings, guarded **at job
 entry**: every system-preset deploy job — fresh or resumed, whatever stages already
 succeeded or were skipped — proves its release pin (present, well-formed, matching
-the stored spec, this build's snapshot and the release directory) before a single
-stage runs, or lands as a failed job without touching AWS:
+the stored spec and this build's snapshot) **and** that the spec's `skills` is
+exactly the one complete expected URI for the job's workspace,
+`s3://<workspace artifacts bucket>/system-skills/<preset name>/<version>-<digest12>/`
+— a legacy plain-version directory, another bucket, another preset's path, a
+foreign prefix or an extra skill source is refused with the repair instruction — or
+it lands as a failed job without touching AWS. Reads may still display such a spec;
+execution never accepts it:
 
 - **release pinning, atomically** — before anything is written, the install reads
   the repository bundle **once** into an immutable in-memory snapshot, validates that

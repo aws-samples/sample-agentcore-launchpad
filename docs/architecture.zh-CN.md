@@ -338,20 +338,32 @@ evaluator 映射、AgentCore 优先的取舍、证据分级、不自主执行）
 一个任务，落败方接受它（`started: false`）。在 worker 的拆除被**核实**之前，该行保留系统身份——
 部分唯一索引也持续占用该 key——因此 AWS 资源尚在删除时，任何安装或修复都无法夺取该 key（均返回
 `409 system_agent.uninstalling`）；拆除失败时行仍为 `uninstalling`，原因与逐步进度记录在任务上
-（`operation.retryable`），再次显式卸载启动第 N+1 次尝试。worker（`system_agents/uninstall.py`）
-带**围栏**：只有赢得任务 `queued → running` 条件更新才运行（启动恢复也可接手崩溃进程留下的
-`running` 任务），并在每个云端步骤之前与最终事务内部反复核对：任务类型与 Workspace 正确、仍为
-`running`、仍是该行*最新*的卸载尝试且行仍为 `uninstalling`——重复、被取代或迟到的 worker 都是
-惰性的，无法完成或标失另一次尝试，也无法按复用名称解析到替换安装的知识库目标。拆除是**严格**的：
-移除 agentic 知识库目标（仅在挂载过知识库时）、发出 `DeleteHarness` 后轮询 `GetHarness` 直到
-`ResourceNotFoundException`（仅被接受的 `DELETING` 不算删除；`DELETE_FAILED` 或 90 秒上限都是
-可重试失败），然后才删除执行角色——报告失败的 IAM 删除是可重试失败，绝不是被忽略的 `False`。
-逐步进度（`kb_target`、`harness`、`role`）记录在任务上，重试跳过已完成步骤、重跑幂等步骤。只有
-完全核实的拆除才把行标记为 `deleted`。普通 Agent 删除保持尽力而为语义；预置不使用它。部署任务走
+（`operation.retryable`），再次显式卸载启动第 N+1 次尝试。worker（`system_agents/uninstall.py`）**独占且带围栏**。独占是与本仓库拓扑
+（单进程树、单 SQLite 台账）相匹配的单主机保证：worker 在整个运行期间持有
+`data/locks/system-agents/uninstall-<agent id>.lock` 上的 `fcntl` 建议锁——持有者死亡时内核自动
+释放，因此启动恢复可以接手崩溃进程留下的 `running` 任务，而仍存活的孪生 worker（本机线程或进程）
+会被拒绝——同时还必须赢得任务的 `queued → running` 条件更新。这不是分布式租约。围栏在每个云端步骤
+之前、每次进度写入之内与最终事务之内重读任务与行：任务类型与 Workspace 正确、仍为 `running`、行仍为
+`uninstalling`、本任务仍是该行*最新*的尝试——重复、被取代或迟到的 worker 都是惰性的，无法完成或标失
+另一次尝试。资源身份精确：Harness ID 来自行；agentic 知识库目标按保留名称**一次性**解析（此时行仍
+独占该名称——不参考期望 spec，因为失败的解绑修复会在旧目标消失前改写它），其 ID 在删除前**钉在任务上**，
+删除与回读只使用钉住的 ID；执行角色是确定性的按 Agent 角色，必须带本 Agent 的 `launchpad:agent-id`
+标签且不得是共享 Workspace 角色。拆除是**严格**的，使用低层客户端而非尽力而为的 `kb_gateway` helper：
+读取全部网关目标分页，发出 `DeleteGatewayTarget` 并轮询 `GetGatewayTarget` 直到
+`ResourceNotFoundException`（`AccessDenied`、限流、`FAILED` 与 60 秒上限都是可重试失败）；发出
+`DeleteHarness` 并轮询 `GetHarness` 直到 `ResourceNotFoundException`（`DELETE_FAILED` 或 90 秒上限都是
+可重试失败）；然后才按安装时的归属删除角色，与当前 `per_agent_execution_roles` 开关无关（预置绝不在
+共享角色上），报告失败的 IAM 删除是可重试失败，绝不是被忽略的 `False`。逐步进度（`kb_target`、
+`harness`、`role`，含精确资源 ID）记录在任务上；新尝试只继承已核实完成的步骤，worker 只在资源 ID 仍
+与行一致时信任继承的步骤。只有完全核实的拆除才把行标记为 `deleted`。普通 Agent 删除保持尽力而为语义；
+预置不使用它。部署任务走
 **标准** `generate → package → provision → deploy → register` 管道，并带三项预置专属加固，且在
 **任务入口**设防：每个系统预置部署任务——无论新建还是恢复、无论哪些阶段已成功或已跳过——在任何
-阶段运行之前都要证明其版本钉住（存在、格式正确、与已存 spec、当前构建快照和发布目录一致），否则
-在触碰 AWS 之前以失败任务落地：
+阶段运行之前都要证明其版本钉住（存在、格式正确、与已存 spec 和当前构建快照一致），**并且** spec 的
+`skills` 恰好是该任务 Workspace 的唯一完整期望 URI
+`s3://<Workspace 制品桶>/system-skills/<预置名>/<version>-<digest12>/`——旧的纯版本目录、其他桶、
+其他预置路径、外来前缀或额外技能源都会连同修复指引一并被拒绝——否则在触碰 AWS 之前以失败任务落地。
+读取仍可展示这样的 spec；执行绝不接受它：
 
 - **原子版本钉住**——写入任何内容之前，安装把仓库技能包**一次性**读入不可变的内存快照，校验该
   快照（与成员技能相同的 `validate_bundle`，加版本/名称不变量）并计算哈希；随后

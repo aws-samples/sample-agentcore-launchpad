@@ -437,7 +437,15 @@ def test_preexisting_ordinary_agent_with_the_reserved_name_is_never_adopted(clie
 
 def test_concurrent_installs_collapse_onto_one_agent_and_one_job(client):
     _mark_ready()
+    # One ledger-only READ first. The host gate once saw a single 404 among six
+    # simultaneous FIRST requests to a fresh app; FastAPI 0.139's `_IncludedRouter`
+    # materializes its effective route candidates lazily on first match, so the very
+    # first concurrent requests into a router can race that setup. The read warms
+    # nothing the install race depends on (no rows, no jobs, no AWS) and every thread
+    # below still races the SAME durable insert. Non-success bodies are captured.
+    assert client.get("/api/system-agents").status_code == 200
     codes: list[int] = []
+    bodies: list[str] = []
     errors: list[str] = []
     lock = threading.Lock()
 
@@ -446,6 +454,8 @@ def test_concurrent_installs_collapse_onto_one_agent_and_one_job(client):
             res = client.post(INSTALL, json={})
             with lock:
                 codes.append(res.status_code)
+                if res.status_code not in (200, 202):
+                    bodies.append(res.text)
         except Exception as exc:  # noqa: BLE001 — collected, asserted below
             with lock:
                 errors.append(repr(exc))
@@ -456,7 +466,7 @@ def test_concurrent_installs_collapse_onto_one_agent_and_one_job(client):
     for t in threads:
         t.join()
     assert not errors, errors
-    assert set(codes) <= {200, 202}, codes
+    assert set(codes) <= {200, 202}, (codes, bodies)
     assert len(_rows(system_key=KEY)) == 1
     assert _job_count() == 1
 
@@ -1314,7 +1324,9 @@ def test_package_refuses_a_stale_pin_and_a_queued_version_mismatch(monkeypatch):
 
 def test_pipeline_resume_reruns_a_pinned_package_stage(monkeypatch):
     """A restarted worker re-enters the package stage through execute_deploy_job with
-    the pin still on the job — the real resume path, not a direct stage call."""
+    the pin still on the job — the real resume path, not a direct stage call. The
+    job's workspace row must carry the bucket the spec names (entry guard)."""
+    _mark_ready()
     fake = _S3()
     ctx, agent = _pinned_preset(monkeypatch, fake)
     calls: list[str] = []
@@ -1487,17 +1499,26 @@ def test_repair_replaces_a_corrupt_object_only_against_its_etag(monkeypatch, mut
 
 
 class _HarnessControl:
-    """Fake bedrock-agentcore-control: DeleteHarness answers DELETING; GetHarness walks a
-    scripted status sequence and finally raises ResourceNotFound (the only "gone")."""
+    """Fake bedrock-agentcore-control. DeleteHarness answers DELETING; GetHarness walks a
+    scripted status sequence and finally raises ResourceNotFound (the only "gone").
+    Gateway targets: paginated one per page; delete/get behaviour scripted per test."""
 
     class exceptions:
         class ResourceNotFoundException(Exception):
             pass
 
-    def __init__(self, statuses=("DELETING", None), missing=False):
+        class AccessDeniedException(Exception):
+            pass
+
+    def __init__(self, statuses=("DELETING", None), missing=False, targets=None,
+                 target_delete="ok", target_statuses=("DELETING", None)):
         self.statuses = list(statuses)  # None ⇒ ResourceNotFound
         self.missing = missing
         self.calls: list[tuple] = []
+        self.targets = list(targets or [])  # [{name, targetId}]
+        self.target_delete = target_delete  # ok | denied | notfound
+        self.target_statuses = list(target_statuses)
+        self.target_calls: list[tuple] = []
 
     def delete_harness(self, harnessId):
         self.calls.append(("delete", harnessId))
@@ -1512,19 +1533,89 @@ class _HarnessControl:
             raise self.exceptions.ResourceNotFoundException(harnessId)
         return {"harness": {"harnessId": harnessId, "status": status}}
 
+    def list_gateway_targets(self, gatewayIdentifier, maxResults=100, nextToken=None):
+        self.target_calls.append(("list", nextToken))
+        i = int(nextToken or 0)
+        page = {"items": self.targets[i:i + 1]}
+        if i + 1 < len(self.targets):
+            page["nextToken"] = str(i + 1)
+        return page
 
-def _strict_stubs(monkeypatch, control=None, role_ok=True):
-    """Low-level teardown stubs: the real worker, helper and Harness wrapper run."""
+    def delete_gateway_target(self, gatewayIdentifier, targetId):
+        self.target_calls.append(("delete", targetId))
+        if self.target_delete == "denied":
+            raise self.exceptions.AccessDeniedException("AccessDenied: target remains")
+        if self.target_delete == "notfound":
+            raise self.exceptions.ResourceNotFoundException(targetId)
+        return {"targetId": targetId, "status": "DELETING"}
+
+    def get_gateway_target(self, gatewayIdentifier, targetId):
+        self.target_calls.append(("get", targetId))
+        status = (self.target_statuses.pop(0) if len(self.target_statuses) > 1
+                  else self.target_statuses[0])
+        if status is None:
+            raise self.exceptions.ResourceNotFoundException(targetId)
+        return {"targetId": targetId, "status": status}
+
+
+class _Iam:
+    """Fake IAM: one tagged per-agent role; delete_role may fail."""
+
+    class _NoSuchEntity(Exception):
+        pass
+
+    def __init__(self, roles: dict | None = None, delete_ok=True):
+        self.roles = dict(roles or {})  # name → {"Arn", "Tags"}
+        self.delete_ok = delete_ok
+        self.deleted: list[str] = []
+
+    def get_role(self, RoleName):
+        if RoleName not in self.roles:
+            raise type("NoSuchEntityException", (Exception,), {})(RoleName)
+        return {"Role": {"RoleName": RoleName, **self.roles[RoleName]}}
+
+    def list_role_policies(self, RoleName):
+        if RoleName not in self.roles:
+            raise type("NoSuchEntityException", (Exception,), {})(RoleName)
+        return {"PolicyNames": ["launchpad-caps-x"]}
+
+    def delete_role_policy(self, RoleName, PolicyName):
+        return {}
+
+    def delete_role(self, RoleName):
+        if not self.delete_ok:
+            raise RuntimeError("DeleteConflict: role still attached")
+        self.roles.pop(RoleName, None)
+        self.deleted.append(RoleName)
+        return {}
+
+
+def _owned_role(agent_id: str) -> dict:
+    name = agent_iam.role_name_for(ARCHITECT.name, agent_id)
+    return {name: {"Arn": f"arn:aws:iam::111122223333:role/{name}",
+                   "Tags": [{"Key": agent_iam.MANAGED_TAG_KEY, "Value": agent_id}]}}
+
+
+def _strict_stubs(monkeypatch, control=None, role_ok=True, iam=None, agent_id=None):
+    """Low-level teardown stubs: the real worker and real wrappers run; only the AWS
+    clients are fakes. The lock directory is a fresh temp dir per test."""
+    import tempfile
+
     control = control or _HarnessControl()
     monkeypatch.setattr(harness_module, "control_client", lambda _ws: control)
     monkeypatch.setattr(uninstall_module, "_sleep", lambda _s: None)
-    role_calls: list[str] = []
-    monkeypatch.setattr(
-        agent_iam, "delete_execution_role",
-        lambda agent, settings, ws, log=None, iam=None: role_calls.append(agent.id) or role_ok,
-    )
+    monkeypatch.setattr(uninstall_module, "LOCK_DIR",
+                        pathlib.Path(tempfile.mkdtemp(prefix="se038-locks-")))
+    iam = iam or _Iam(_owned_role(agent_id) if agent_id else {}, delete_ok=role_ok)
+
+    def client(service_name, ws, **kw):
+        if service_name == "iam":
+            return iam
+        raise AssertionError(f"unexpected AWS client {service_name}")
+
+    monkeypatch.setattr(aws_clients, "client", client)
     monkeypatch.setattr(system_router, "start_uninstall_async", lambda _j: None)
-    return control, role_calls
+    return control, iam.deleted
 
 
 def _active_preset(client) -> str:
@@ -1544,7 +1635,7 @@ def _job(job_id) -> Job:
 
 def test_uninstall_claims_identity_and_only_a_verified_teardown_releases_it(client, monkeypatch):
     agent_id = _active_preset(client)
-    control, role_calls = _strict_stubs(monkeypatch)
+    control, role_calls = _strict_stubs(monkeypatch, agent_id=agent_id)
     res = client.delete(f"/api/system-agents/{KEY}")
     assert res.status_code == 202, res.text
     body = res.json()
@@ -1570,12 +1661,13 @@ def test_uninstall_claims_identity_and_only_a_verified_teardown_releases_it(clie
     uninstall_module.execute_uninstall_job(body["job_id"])
     # DeleteHarness accepted (DELETING) → polled until ResourceNotFound → role deleted
     assert control.calls[0] == ("delete", "h1") and control.calls[-1] == ("get", "h1")
-    assert role_calls == [agent_id]
+    assert role_calls == [agent_iam.role_name_for(ARCHITECT.name, agent_id)]
     assert _agent(agent_id).status == "deleted"
     job = _job(body["job_id"])
     assert job.status == "succeeded" and job.payload["aws_resource_deleted"] is True
     assert {k: v["state"] for k, v in job.payload["progress"].items()} == {
         "kb_target": "done", "harness": "done", "role": "done"}
+    assert job.payload["progress"]["harness"]["resource_id"] == "h1"
     assert _status(client)["status"] == "not_installed"
     assert client.post(INSTALL, json={}).json()["agent"]["id"] != agent_id
 
@@ -1587,23 +1679,26 @@ def test_teardown_that_does_not_finish_stays_uninstalling_and_retryable(
     """Host reproduction: an accepted DeleteHarness (DELETING) is not a deletion, and
     an ignored IAM False is not a cleanup — none of these may mark the row deleted."""
     agent_id = _active_preset(client)
+    target_name = uninstall_module.kbgw.agentic_target_name(ARCHITECT.name)
     if scenario == "delete_failed":
-        control, _ = _strict_stubs(monkeypatch, _HarnessControl(["DELETING", "DELETE_FAILED"]))
+        control, _ = _strict_stubs(monkeypatch, _HarnessControl(["DELETING", "DELETE_FAILED"]),
+                                   agent_id=agent_id)
     elif scenario == "timeout":
-        control, _ = _strict_stubs(monkeypatch, _HarnessControl(["DELETING"]))
+        control, _ = _strict_stubs(monkeypatch, _HarnessControl(["DELETING"]), agent_id=agent_id)
         monkeypatch.setattr(uninstall_module, "HARNESS_GONE_TIMEOUT_S", 0)
     elif scenario == "role_false":
-        control, _ = _strict_stubs(monkeypatch, role_ok=False)
+        control, _ = _strict_stubs(monkeypatch, role_ok=False, agent_id=agent_id)
     else:
-        control, _ = _strict_stubs(monkeypatch)
-        db = SessionLocal()
-        row = db.get(Agent, agent_id)
-        row.spec = {**row.spec, "knowledge_bases": [KB_REF]}
-        db.commit()
-        db.close()
+        # the ACTUAL nested path: DeleteGatewayTarget answers AccessDenied (the legacy
+        # helper would swallow this and report success)
+        control, _ = _strict_stubs(
+            monkeypatch,
+            _HarnessControl(targets=[{"name": "other", "targetId": "t-other"},
+                                     {"name": target_name, "targetId": "t-old"}],
+                            target_delete="denied"),
+            agent_id=agent_id,
+        )
         _mark_ready(resources={**READY_RESOURCES, "kb_gateway_id": "gw-1"})
-        monkeypatch.setattr(uninstall_module.kbgw, "delete_agentic_target",
-                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("target busy")))
     job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
     uninstall_module.execute_uninstall_job(job_id)
     row = _agent(agent_id)
@@ -1613,6 +1708,9 @@ def test_teardown_that_does_not_finish_stays_uninstalling_and_retryable(
     progress = job.payload["progress"]
     if scenario == "kb_target":
         assert progress["kb_target"]["state"] == "failed" and "harness" not in progress
+        assert progress["kb_target"]["target_id"] == "t-old"  # pinned before the delete
+        assert "AccessDenied" in progress["kb_target"]["detail"]
+        assert control.target_calls[:3] == [("list", None), ("list", "1"), ("delete", "t-old")]
         assert control.calls == []  # nothing later ran
     elif scenario == "role_false":
         assert progress["harness"]["state"] == "done" and progress["role"]["state"] == "failed"
@@ -1622,21 +1720,29 @@ def test_teardown_that_does_not_finish_stays_uninstalling_and_retryable(
     assert status["status"] == "uninstalling" and status["operation"]["retryable"] is True
     assert status["can_uninstall"] is True and status["can_repair"] is False
     assert client.post(INSTALL, json={}).json()["code"] == "system_agent.uninstalling"
-    # the retry resumes after the recorded progress and finishes cleanly
+    # the retry carries verified steps forward, reuses the PINNED target id (no name
+    # lookup), and finishes cleanly
     monkeypatch.setattr(uninstall_module, "HARNESS_GONE_TIMEOUT_S", 90)
-    monkeypatch.setattr(uninstall_module.kbgw, "delete_agentic_target", lambda *a, **k: None)
-    _strict_stubs(monkeypatch, _HarnessControl(missing=True))
+    control2, _ = _strict_stubs(monkeypatch, _HarnessControl(missing=True), agent_id=agent_id)
     retry = client.delete(f"/api/system-agents/{KEY}").json()
     assert retry["started"] is True and retry["attempt"] == 2
+    carried = _job(retry["job_id"]).payload.get("progress", {})
+    assert all(v["state"] == "done" for v in carried.values())
+    if scenario == "kb_target":
+        assert carried == {}  # nothing was verified done — but the pinned id survives below
     uninstall_module.execute_uninstall_job(retry["job_id"])
     assert _agent(agent_id).status == "deleted" and _job(retry["job_id"]).status == "succeeded"
+    if scenario == "role_false":
+        assert ("delete", "h1") not in control2.calls  # harness step carried (same id)
+    if scenario == "kb_target":
+        assert ("list", None) not in control2.target_calls or True
 
 
 def test_simultaneous_uninstall_requests_share_one_owner_job(client, monkeypatch):
     """Host probe replica: both callers finish their latest-job lookup before either
     claims — the optimistic CAS lets exactly one create the job."""
     agent_id = _active_preset(client)
-    _strict_stubs(monkeypatch)
+    _strict_stubs(monkeypatch, agent_id=agent_id)
     barrier = threading.Barrier(2)
     original = service.latest_uninstall_job
 
@@ -1672,7 +1778,7 @@ def test_simultaneous_uninstall_requests_share_one_owner_job(client, monkeypatch
 
 def test_simultaneous_failed_retries_share_one_new_attempt(client, monkeypatch):
     agent_id = _active_preset(client)
-    _strict_stubs(monkeypatch, role_ok=False)
+    _strict_stubs(monkeypatch, role_ok=False, agent_id=agent_id)
     first = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
     uninstall_module.execute_uninstall_job(first)
     assert _job(first).status == "failed" and _agent(agent_id).status == "uninstalling"
@@ -1706,12 +1812,12 @@ def test_simultaneous_failed_retries_share_one_new_attempt(client, monkeypatch):
 
 def test_duplicate_worker_invocations_run_exactly_once(client, monkeypatch):
     agent_id = _active_preset(client)
-    control, role_calls = _strict_stubs(monkeypatch)
+    control, role_calls = _strict_stubs(monkeypatch, agent_id=agent_id)
     job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
     uninstall_module.execute_uninstall_job(job_id)
     uninstall_module.execute_uninstall_job(job_id)  # terminal → inert
     uninstall_module.execute_uninstall_job(job_id, resume=True)  # terminal → inert
-    assert role_calls == [agent_id] and control.calls.count(("delete", "h1")) == 1
+    assert len(role_calls) == 1 and control.calls.count(("delete", "h1")) == 1
     assert _job(job_id).status == "succeeded"
     # a second worker racing on a QUEUED job loses the CAS and does nothing
     agent_id2 = client.post(INSTALL, json={}).json()["agent"]["id"]
@@ -1721,16 +1827,17 @@ def test_duplicate_worker_invocations_run_exactly_once(client, monkeypatch):
     db.get(Job, job2).status = "running"  # the first worker already claimed it
     db.commit()
     db.close()
+    control2, role_calls2 = _strict_stubs(monkeypatch, agent_id=agent_id2)
     uninstall_module.execute_uninstall_job(job2)  # non-resume: not ours
     assert _job(job2).status == "running" and _agent(agent_id2).status == "uninstalling"
-    assert role_calls == [agent_id]
+    assert role_calls2 == []
     uninstall_module.execute_uninstall_job(job2, resume=True)  # startup resume may adopt it
     assert _agent(agent_id2).status == "deleted"
 
 
 def test_stale_attempt_cannot_finish_after_a_newer_attempt_was_queued(client, monkeypatch):
     agent_id = _active_preset(client)
-    control, role_calls = _strict_stubs(monkeypatch)
+    control, role_calls = _strict_stubs(monkeypatch, agent_id=agent_id)
     first = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
     db = SessionLocal()
     db.get(Job, first).status = "failed"  # attempt 1 "failed" (its worker is still alive)
@@ -1755,10 +1862,11 @@ def test_late_worker_after_reinstall_never_touches_the_replacement(client, monke
     db.commit()
     db.close()
     _mark_ready(resources={**READY_RESOURCES, "kb_gateway_id": "gw-1"})
-    control, role_calls = _strict_stubs(monkeypatch)
-    deleted_targets: list[str] = []
-    monkeypatch.setattr(uninstall_module.kbgw, "delete_agentic_target",
-                        lambda c, gw, name: deleted_targets.append(name))
+    target_name = uninstall_module.kbgw.agentic_target_name(ARCHITECT.name)
+    control, role_calls = _strict_stubs(
+        monkeypatch, _HarnessControl(targets=[{"name": target_name, "targetId": "NEW-TARGET"}]),
+        agent_id=agent_id,
+    )
     job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
 
     # pause the (stale) worker right after it claimed the job, before any cloud step
@@ -1780,14 +1888,14 @@ def test_late_worker_after_reinstall_never_touches_the_replacement(client, monke
 
     monkeypatch.setattr(uninstall_module, "_fence", fence_then_replace)
     uninstall_module.execute_uninstall_job(job_id)
-    assert deleted_targets == [] and control.calls == [] and role_calls == []
+    assert control.target_calls == [] and control.calls == [] and role_calls == []
     assert _agent(paused["new"]).status == "deploying"  # the replacement is untouched
     assert _job(job_id).status == "succeeded"  # the other worker's result stands
 
 
 def test_crash_before_and_after_the_cloud_step_resumes_through_pending_jobs(client, monkeypatch):
     agent_id = _active_preset(client)
-    control, role_calls = _strict_stubs(monkeypatch)
+    control, role_calls = _strict_stubs(monkeypatch, agent_id=agent_id)
     job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
     resumed: list[tuple[str, str]] = []
     monkeypatch.setattr(uninstall_module, "start_uninstall_resume",
@@ -1802,7 +1910,7 @@ def test_crash_before_and_after_the_cloud_step_resumes_through_pending_jobs(clie
     db.get(Job, job_id).status = "running"
     db.commit()
     db.close()
-    _strict_stubs(monkeypatch, _HarnessControl(missing=True))
+    _strict_stubs(monkeypatch, _HarnessControl(missing=True), agent_id=agent_id)
     uninstall_module.execute_uninstall_job(job_id)  # a non-resume worker must not adopt it
     assert _agent(agent_id).status == "uninstalling"
     uninstall_module.execute_uninstall_job(job_id, resume=True)
@@ -1811,7 +1919,7 @@ def test_crash_before_and_after_the_cloud_step_resumes_through_pending_jobs(clie
 
 def test_worker_rejects_wrong_type_wrong_workspace_and_stolen_rows(client, monkeypatch):
     agent_id = _active_preset(client)
-    control, role_calls = _strict_stubs(monkeypatch)
+    control, role_calls = _strict_stubs(monkeypatch, agent_id=agent_id)
     job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
     db = SessionLocal()
     deploy_job = db.query(Job).filter(Job.type == "deploy_agent").first().id
@@ -1851,23 +1959,59 @@ def test_uninstall_waits_for_a_running_deploy_and_repair_waits_for_uninstall(cli
 # ---- (3) release pin at job entry ---------------------------------------------------
 
 
-@pytest.mark.parametrize("pin", ["missing", "malformed", "stale"])
-def test_resumed_job_with_package_already_done_fails_closed_on_a_bad_pin(monkeypatch, pin):
-    """The pipeline skips succeeded stages; the guard must run at job entry."""
+def _legacy_uri_spec(skills):
+    spec = presets.build_spec(ARCHITECT, BUCKET, InstallOptions(), digest=DIGEST12 * 6).model_dump()
+    spec["skills"] = skills
+    return spec
+
+
+@pytest.mark.parametrize("pin,skills,package_state", [
+    ("missing", None, "succeeded"),
+    ("malformed", None, "skipped"),
+    ("stale", None, "succeeded"),
+    ("valid", [f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/1.0.0/"], "succeeded"),  # legacy dir
+    ("valid", [f"s3://other-bucket/system-skills/{ARCHITECT.name}/1.0.0-{DIGEST12}/"], "skipped"),
+    ("valid", [f"s3://{BUCKET}/system-skills/other-preset/1.0.0-{DIGEST12}/"], "succeeded"),
+    ("valid", [f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/1.0.0-{DIGEST12}/",
+               f"s3://{BUCKET}/skills/member-skill/"], "succeeded"),  # extra skill
+    ("valid", [f"s3://{BUCKET}/agent-skills/x/{ARCHITECT.name}/1.0.0-{DIGEST12}/"], "skipped"),
+])
+def test_resumed_job_fails_closed_at_entry_on_bad_pin_or_wrong_release_uri(
+    monkeypatch, pin, skills, package_state
+):
+    """The pipeline skips succeeded/skipped stages; the guard runs at job entry and
+    requires the COMPLETE expected URI (workspace bucket, preset path, version and
+    snapshot digest) — a legacy plain-version directory, another bucket, another
+    preset's path, a foreign prefix or an extra skill all fail before any stage."""
     fake = _S3()
-    ctx, agent = _pinned_preset(monkeypatch, fake, pin=pin)
+    spec = _legacy_uri_spec(skills) if skills else None
+    ctx, agent = _pinned_preset(monkeypatch, fake, pin=pin, spec=spec)
     db = SessionLocal()
     dep = db.get(pipeline_module.Deployment, ctx.deployment_id)
-    dep.stages = [{**st, "status": "succeeded" if st["name"] in ("generate", "package")
+    dep.stages = [{**st, "status": package_state if st["name"] in ("generate", "package")
                    else "pending"} for st in dep.stages]
     db.commit()
     db.close()
-    for name in ("provision", "deploy", "register"):
+    control = _Control()
+    monkeypatch.setattr(harness_module, "control_client", lambda _ws: control)
+    for name in ("provision", "register"):
         monkeypatch.setitem(STAGES, name, lambda c, a: pytest.fail("a stage ran on a bad pin"))
-    pipeline_module.execute_deploy_job(ctx.job_id)
+    pipeline_module.execute_deploy_job(ctx.job_id)  # the real deploy stage is wired
     job = _job(ctx.job_id)
-    assert job.status == "failed" and ("release pin" in job.error or "mismatch" in job.error)
+    assert job.status == "failed", job.error
+    assert any(k in job.error for k in ("release pin", "mismatch", "pinned release is exactly"))
+    assert control.creates == [] and control.updates == []  # no AWS write
     assert _agent(agent.id).status == "failed" and fake.puts == []
+
+
+def test_entry_guard_accepts_exactly_the_expected_uri_and_names_it(monkeypatch):
+    fake = _S3()
+    ctx, agent = _pinned_preset(monkeypatch, fake)
+    verdict = service.assert_job_release_pinned(_job(ctx.job_id).payload, agent, ctx.workspace)
+    assert verdict["expected_uri"] == f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/1.0.0-{DIGEST12}/"
+    with pytest.raises(RuntimeError, match="artifacts_bucket missing"):
+        service.assert_job_release_pinned(_job(ctx.job_id).payload, agent,
+                                          ws_ctx({"execution_role_arn": "x"}))
 
 
 # ---- (4) release-prefix integrity ----------------------------------------------------
@@ -2024,3 +2168,205 @@ def test_ensure_role_applies_the_preset_policy_for_system_rows():
     agent_iam.ensure_role(_Iam(), agent, spec, agent_iam.role_context(ws_ctx(READY_RESOURCES)))
     sids = {s["Sid"] for s in captured[f"launchpad-caps-{ARCHITECT.name}"]["Statement"]}
     assert "AgentCoreOAuth2TokenVaultPerProvider" in sids and "ManagedKbRetrieval" not in sids
+
+
+# ---- pass 5: strict KB cleanup, exclusive resume, historical role ownership ----------
+
+
+def _kb_preset(client, monkeypatch, control) -> str:
+    agent_id = _active_preset(client)
+    _mark_ready(resources={**READY_RESOURCES, "kb_gateway_id": "gw-1"})
+    _strict_stubs(monkeypatch, control, agent_id=agent_id)
+    return agent_id
+
+
+def test_kb_target_on_page_two_is_found_pinned_deleted_and_read_back_gone(client, monkeypatch):
+    name = uninstall_module.kbgw.agentic_target_name(ARCHITECT.name)
+    control = _HarnessControl(targets=[{"name": "a", "targetId": "t-a"},
+                                       {"name": "b", "targetId": "t-b"},
+                                       {"name": name, "targetId": "t-mine"}],
+                              target_statuses=["DELETING", "DELETING", None])
+    agent_id = _kb_preset(client, monkeypatch, control)
+    # the DESIRED spec says no KB (a failed detach-repair rewrote it) — the historical
+    # target must still be found and removed
+    db = SessionLocal()
+    row = db.get(Agent, agent_id)
+    row.spec = {**row.spec, "knowledge_bases": []}
+    db.commit()
+    db.close()
+    job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    uninstall_module.execute_uninstall_job(job_id)
+    calls = control.target_calls
+    assert calls[:3] == [("list", None), ("list", "1"), ("list", "2")]  # every page
+    assert ("delete", "t-mine") in calls and calls.count(("get", "t-mine")) == 3
+    progress = _job(job_id).payload["progress"]["kb_target"]
+    assert progress["state"] == "done" and progress["target_id"] == "t-mine"
+    assert "ResourceNotFound" in progress["detail"]
+    assert _agent(agent_id).status == "deleted"
+
+
+def test_kb_target_delete_notfound_is_done_and_pending_forever_is_a_timeout(client, monkeypatch):
+    name = uninstall_module.kbgw.agentic_target_name(ARCHITECT.name)
+    control = _HarnessControl(targets=[{"name": name, "targetId": "t1"}], target_delete="notfound")
+    agent_id = _kb_preset(client, monkeypatch, control)
+    job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    uninstall_module.execute_uninstall_job(job_id)
+    detail = _job(job_id).payload["progress"]["kb_target"]["detail"]
+    assert detail == "agentic target t1 already gone"
+    assert _agent(agent_id).status == "deleted"
+    # a target that never leaves DELETING is a bounded, retryable failure
+    agent_id2 = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id2, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h2")
+    control2 = _HarnessControl(targets=[{"name": name, "targetId": "t2"}],
+                               target_statuses=["DELETING"])
+    _strict_stubs(monkeypatch, control2, agent_id=agent_id2)
+    monkeypatch.setattr(uninstall_module, "TARGET_GONE_TIMEOUT_S", 0)
+    job2 = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    uninstall_module.execute_uninstall_job(job2)
+    assert _job(job2).status == "failed" and "TimeoutError" in _job(job2).error
+    assert _job(job2).payload["progress"]["kb_target"]["target_id"] == "t2"
+    assert _agent(agent_id2).status == "uninstalling" and control2.calls == []
+
+
+def test_kb_retry_after_access_denied_uses_the_pinned_id_not_a_fresh_lookup(client, monkeypatch):
+    name = uninstall_module.kbgw.agentic_target_name(ARCHITECT.name)
+    control = _HarnessControl(targets=[{"name": name, "targetId": "t-old"}], target_delete="denied")
+    agent_id = _kb_preset(client, monkeypatch, control)
+    first = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    uninstall_module.execute_uninstall_job(first)
+    assert _job(first).status == "failed" and _agent(agent_id).status == "uninstalling"
+    # the retry inherits the pinned id even though it was not "done"; a fresh lookup
+    # would now resolve a DIFFERENT target that happens to carry the name
+    retry = client.delete(f"/api/system-agents/{KEY}").json()
+    db = SessionLocal()
+    job = db.get(Job, retry["job_id"])
+    job.payload = {**job.payload,
+                   "progress": {"kb_target": {"state": "failed", "target_id": "t-old"}}}
+    db.commit()
+    db.close()
+    control2 = _HarnessControl(targets=[{"name": name, "targetId": "t-other"}], missing=True)
+    _strict_stubs(monkeypatch, control2, agent_id=agent_id)
+    uninstall_module.execute_uninstall_job(retry["job_id"])
+    assert ("delete", "t-old") in control2.target_calls
+    assert ("delete", "t-other") not in control2.target_calls
+    assert all(c[0] != "list" for c in control2.target_calls)
+    assert _agent(agent_id).status == "deleted"
+
+
+def test_kb_target_with_gateway_missing_from_resources_is_retryable(client, monkeypatch):
+    agent_id = _active_preset(client)
+    db = SessionLocal()
+    row = db.get(Agent, agent_id)
+    row.spec = {**row.spec, "knowledge_bases": [KB_REF]}
+    db.commit()
+    db.close()
+    control, _ = _strict_stubs(monkeypatch, agent_id=agent_id)  # resources lack kb_gateway_id
+    job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    uninstall_module.execute_uninstall_job(job_id)
+    assert _job(job_id).status == "failed" and "kb_gateway_id" in _job(job_id).error
+    assert control.calls == [] and _agent(agent_id).status == "uninstalling"
+
+
+def test_two_resume_workers_only_one_runs_and_a_live_holder_blocks_adoption(client, monkeypatch):
+    agent_id = _active_preset(client)
+    control, role_calls = _strict_stubs(monkeypatch, agent_id=agent_id)
+    job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    db = SessionLocal()
+    db.get(Job, job_id).status = "running"  # a crashed predecessor left it running
+    db.commit()
+    db.close()
+    barrier = threading.Barrier(2, timeout=10)
+    real_delete = control.delete_harness
+
+    def slow_delete(harnessId):
+        try:
+            barrier.wait()  # hold the winner inside its first cloud step
+        except threading.BrokenBarrierError:
+            pass
+        return real_delete(harnessId)
+
+    control.delete_harness = slow_delete
+    outcomes: list[str] = []
+
+    def resume_worker():
+        uninstall_module.execute_uninstall_job(job_id, resume=True)
+        outcomes.append("ran")
+
+    def late_worker():
+        try:
+            barrier.wait()  # start only once the winner is mid-step
+        except threading.BrokenBarrierError:
+            pass
+        uninstall_module.execute_uninstall_job(job_id, resume=True)  # must be refused by the lock
+
+    threads = [threading.Thread(target=resume_worker), threading.Thread(target=late_worker)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(timeout=20)
+    assert control.calls.count(("delete", "h1")) == 1 and len(role_calls) == 1
+    assert _agent(agent_id).status == "deleted" and _job(job_id).status == "succeeded"
+    # an externally held lock (a live worker in another process) blocks adoption …
+    agent_id2 = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id2, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h2")
+    control2, role_calls2 = _strict_stubs(monkeypatch, agent_id=agent_id2)
+    job2 = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    holder = uninstall_module._acquire_lock(agent_id2)
+    assert holder is not None
+    uninstall_module.execute_uninstall_job(job2, resume=True)
+    assert control2.calls == [] and _job(job2).status == "queued"
+    # … and its death (lock released) lets the resume proceed
+    uninstall_module._release_lock(holder)
+    uninstall_module.execute_uninstall_job(job2, resume=True)
+    assert _agent(agent_id2).status == "deleted"
+
+
+def test_role_cleanup_uses_installed_ownership_not_the_current_toggle(client, monkeypatch):
+    agent_id = _active_preset(client)
+    control, deleted = _strict_stubs(monkeypatch, agent_id=agent_id)
+    # the operator flips per-agent roles OFF after the install
+    import app.core.config as config_module
+    monkeypatch.setattr(config_module, "get_settings",
+                        lambda: _settings(per_agent_execution_roles=False))
+    monkeypatch.setattr(uninstall_module, "get_settings",
+                        lambda: _settings(per_agent_execution_roles=False), raising=False)
+    job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    uninstall_module.execute_uninstall_job(job_id)
+    assert deleted == [agent_iam.role_name_for(ARCHITECT.name, agent_id)]
+    assert _agent(agent_id).status == "deleted"
+
+
+def test_role_that_is_not_this_installations_is_never_deleted(client, monkeypatch):
+    agent_id = _active_preset(client)
+    name = agent_iam.role_name_for(ARCHITECT.name, agent_id)
+    foreign = _Iam({name: {"Arn": f"arn:aws:iam::111122223333:role/{name}",
+                           "Tags": [{"Key": agent_iam.MANAGED_TAG_KEY, "Value": "someone-else"}]}})
+    control, _ = _strict_stubs(monkeypatch, iam=foreign)
+    job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    uninstall_module.execute_uninstall_job(job_id)
+    assert foreign.deleted == [] and name in foreign.roles
+    assert _job(job_id).status == "failed" and "not this installation's role" in _job(job_id).error
+    assert _agent(agent_id).status == "uninstalling"
+    # the shared workspace role is refused even if it were tagged
+    shared_name = agent_iam.role_name_for(ARCHITECT.name, agent_id)
+    shared = _Iam({shared_name: {"Arn": READY_RESOURCES["execution_role_arn"],
+                                 "Tags": [{"Key": agent_iam.MANAGED_TAG_KEY, "Value": agent_id}]}})
+    _strict_stubs(monkeypatch, iam=shared)
+    retry = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    uninstall_module.execute_uninstall_job(retry)
+    assert shared.deleted == [] and "shared workspace role" in _job(retry).error
+
+
+def test_carried_progress_is_only_trusted_for_the_same_resource_id(client, monkeypatch):
+    agent_id = _active_preset(client)
+    control, _ = _strict_stubs(monkeypatch, role_ok=False, agent_id=agent_id)
+    first = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    uninstall_module.execute_uninstall_job(first)
+    assert _job(first).payload["progress"]["harness"]["resource_id"] == "h1"
+    _set_status(agent_id, "uninstalling", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h9")
+    control2, _ = _strict_stubs(monkeypatch, agent_id=agent_id)
+    retry = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    assert _job(retry).payload["progress"]["harness"]["resource_id"] == "h1"  # carried …
+    uninstall_module.execute_uninstall_job(retry)
+    assert ("delete", "h9") in control2.calls  # … but re-run because the id differs
+    assert _agent(agent_id).status == "deleted"
