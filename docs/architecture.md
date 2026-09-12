@@ -451,7 +451,13 @@ against the same resource and never resolves a replacement by name. A queued ret
 requested while the failed predecessor still holds the lock waits boundedly
 (30 s) for the release; a repeated `DELETE` for a still-queued job launches a worker
 again (the `queued → running` CAS admits exactly one), so a queued attempt never
-depends on an app restart. Only a fully verified teardown marks the row
+depends on an app restart. Waiting workers are coalesced: the starters keep at most
+one live worker thread per job in this process (a synchronized registry cleared in
+the worker's own `finally` and on a failed start), so twelve repeated requests park
+one waiting thread, not twelve, and a later request re-wakes the same queued job
+with a fresh thread once the earlier waiter has exited. The registry only bounds
+waiters; the per-agent kernel lock and the job CAS remain the exclusivity and
+ownership mechanisms. Only a fully verified teardown marks the row
 `deleted`. The ordinary agent delete keeps its best-effort semantics; the preset does
 not use it. The deploy job runs the **normal** `generate → package → provision →
 deploy → register` pipeline with three preset-specific hardenings, guarded **at job

@@ -2460,3 +2460,171 @@ def test_queued_retry_that_times_out_stays_queued_and_the_next_request_relaunche
     db.close()
     assert client.delete(f"/api/system-agents/{KEY}").json()["started"] is False
     assert launched == [job2]
+
+
+# ---- pass 8: one live waiter per job -------------------------------------------------
+
+
+def _hold_predecessor_lock(monkeypatch):
+    """A real failed predecessor that holds its flock after committing the failure until
+    told to release — the window in which an operator can already retry."""
+    failed_committed = threading.Event()
+    release = threading.Event()
+    real_release = uninstall_module._release_lock
+
+    def retiring_release(fd):
+        if fd is not None and not release.is_set():
+            failed_committed.set()
+            release.wait(timeout=15)
+        real_release(fd)
+
+    monkeypatch.setattr(uninstall_module, "_release_lock", retiring_release)
+    return failed_committed, release
+
+
+def _use_real_starter(monkeypatch):
+    monkeypatch.setattr(system_router, "start_uninstall_async",
+                        uninstall_module.start_uninstall_async)
+
+
+def test_repeated_deletes_on_a_queued_retry_share_one_waiting_worker(client, monkeypatch):
+    agent_id = _active_preset(client)
+    control, _ = _strict_stubs(monkeypatch, role_ok=False, agent_id=agent_id)
+    monkeypatch.setattr(uninstall_module, "_lock_sleep", lambda s: time.sleep(0.01))
+    monkeypatch.setattr(uninstall_module, "LOCK_WAIT_S", 15)
+    failed_committed, release = _hold_predecessor_lock(monkeypatch)
+    first = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    predecessor = threading.Thread(target=uninstall_module.execute_uninstall_job, args=(first,))
+    predecessor.start()
+    assert failed_committed.wait(timeout=10) and _job(first).status == "failed"
+
+    _use_real_starter(monkeypatch)  # the REAL route + starter from here on
+    good_iam = _Iam(_owned_role(agent_id))
+    monkeypatch.setattr(aws_clients, "client",
+                        lambda name, ws, **kw: good_iam if name == "iam" else pytest.fail(name))
+    before = threading.active_count()
+    responses = [client.delete(f"/api/system-agents/{KEY}").json() for _ in range(12)]
+    retry_job = responses[0]["job_id"]
+    assert responses[0]["started"] is True and retry_job != first
+    assert all(r["job_id"] == retry_job and r["started"] is False for r in responses[1:])
+    waiter = uninstall_module.live_worker(retry_job)
+    assert waiter is not None and waiter.is_alive()
+    assert len(uninstall_module._WORKERS) == 1  # exactly one tracked worker for the job
+    assert threading.active_count() - before <= 1  # one waiting thread, not twelve
+    assert _job(retry_job).status == "queued"  # still waiting behind the retiring lock
+    db = SessionLocal()
+    assert db.query(Job).filter(Job.type == service.UNINSTALL_JOB_TYPE).count() == 2
+    db.close()
+
+    release.set()
+    predecessor.join(timeout=10)
+    waiter.join(timeout=20)
+    assert _job(retry_job).status == "succeeded" and _agent(agent_id).status == "deleted"
+    assert good_iam.deleted == [agent_iam.role_name_for(ARCHITECT.name, agent_id)]
+    assert control.calls.count(("delete", "h1")) == 1  # no duplicate cloud effect
+    assert uninstall_module.live_worker(retry_job) is None
+    assert retry_job not in uninstall_module._WORKERS
+
+
+def test_expired_waiter_is_cleared_and_the_next_request_wakes_one_fresh_worker(client, monkeypatch):
+    agent_id = _active_preset(client)
+    control, _ = _strict_stubs(monkeypatch, agent_id=agent_id)
+    _use_real_starter(monkeypatch)
+    # a controllable clock: the waiter parks in _lock_sleep until the test advances
+    # time past the bound, so "expiry" is deterministic rather than a real timeout
+    from types import SimpleNamespace
+
+    clock = {"now": 1000.0}
+    parked = threading.Event()
+    advance = threading.Event()
+
+    def lock_sleep(_s):
+        parked.set()
+        advance.wait(timeout=10)
+
+    monkeypatch.setattr(uninstall_module, "time",
+                        SimpleNamespace(monotonic=lambda: clock["now"], sleep=time.sleep))
+    monkeypatch.setattr(uninstall_module, "LOCK_WAIT_S", 15)
+    monkeypatch.setattr(uninstall_module, "_lock_sleep", lock_sleep)
+    holder = uninstall_module._acquire_lock(agent_id)  # a live holder elsewhere
+    job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    assert parked.wait(timeout=10)
+    first_worker = uninstall_module.live_worker(job_id)
+    assert first_worker is not None
+    clock["now"] += 100  # the bounded wait expires …
+    advance.set()
+    first_worker.join(timeout=10)  # … and the worker gives up
+    assert _job(job_id).status == "queued" and control.calls == []
+    assert job_id not in uninstall_module._WORKERS  # registry cleared on exit
+    parked.clear()
+    advance.clear()
+
+    again = [client.delete(f"/api/system-agents/{KEY}").json() for _ in range(5)]
+    assert all(r["job_id"] == job_id and r["started"] is False for r in again)
+    assert parked.wait(timeout=10)
+    second_worker = uninstall_module.live_worker(job_id)
+    assert second_worker is not None and second_worker is not first_worker
+    assert len(uninstall_module._WORKERS) == 1  # the five requests coalesced again
+    uninstall_module._release_lock(holder)
+    advance.set()  # the waiter re-checks the lock and now acquires it
+    second_worker.join(timeout=20)
+    assert _job(job_id).status == "succeeded" and _agent(agent_id).status == "deleted"
+    assert control.calls.count(("delete", "h1")) == 1
+    assert job_id not in uninstall_module._WORKERS
+
+
+def test_start_failure_leaves_no_registry_entry_and_terminal_jobs_stay_inert(client, monkeypatch):
+    agent_id = _active_preset(client)
+    control, _ = _strict_stubs(monkeypatch, agent_id=agent_id)
+    job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    real_start = threading.Thread.start
+    calls = {"n": 0}
+
+    def failing_start(self):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("can't start new thread")
+        return real_start(self)
+
+    monkeypatch.setattr(threading.Thread, "start", failing_start)
+    with pytest.raises(RuntimeError, match="start new thread"):
+        uninstall_module.start_uninstall_async(job_id)
+    assert job_id not in uninstall_module._WORKERS  # no dead placeholder
+    worker = uninstall_module.start_uninstall_async(job_id)  # the next attempt launches
+    worker.join(timeout=20)
+    assert _job(job_id).status == "succeeded" and job_id not in uninstall_module._WORKERS
+    # terminal job: both entrypoints run inert and leave the registry clean
+    for starter in (uninstall_module.start_uninstall_async,
+                    uninstall_module.start_uninstall_resume):
+        t = starter(job_id)
+        t.join(timeout=10)
+    assert control.calls.count(("delete", "h1")) == 1 and job_id not in uninstall_module._WORKERS
+
+
+def test_concurrent_callers_coalesce_on_one_worker(client, monkeypatch):
+    agent_id = _active_preset(client)
+    control, _ = _strict_stubs(monkeypatch, agent_id=agent_id)
+    monkeypatch.setattr(uninstall_module, "LOCK_WAIT_S", 15)
+    monkeypatch.setattr(uninstall_module, "_lock_sleep", lambda s: time.sleep(0.01))
+    holder = uninstall_module._acquire_lock(agent_id)
+    job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    barrier = threading.Barrier(8, timeout=10)
+    threads_seen: list[threading.Thread] = []
+    seen_lock = threading.Lock()
+
+    def caller():
+        barrier.wait()
+        t = uninstall_module.start_uninstall_async(job_id)
+        with seen_lock:
+            threads_seen.append(t)
+
+    callers = [threading.Thread(target=caller) for _ in range(8)]
+    for c in callers:
+        c.start()
+    for c in callers:
+        c.join(timeout=10)
+    assert len({id(t) for t in threads_seen}) == 1  # every caller got the same worker
+    assert len(uninstall_module._WORKERS) == 1
+    uninstall_module._release_lock(holder)
+    threads_seen[0].join(timeout=20)
+    assert _job(job_id).status == "succeeded" and control.calls.count(("delete", "h1")) == 1

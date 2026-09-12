@@ -433,20 +433,64 @@ def _fail(db, job: Job | None, agent: Agent | None, detail: str) -> None:
     _append_log(db, job.id, "teardown", detail, level="error")
 
 
+# ---------------------------------------------------------------------------
+# starters: at most one live worker thread per job in this process
+# ---------------------------------------------------------------------------
+#
+# The route re-wakes a still-queued job on every repeated DELETE (a queued job must
+# never depend on a restart), and a queued worker may wait up to LOCK_WAIT_S for a
+# retiring predecessor's lock. Without coalescing, N repeated requests would park N
+# waiting threads on one job. This registry bounds that to one live worker per job
+# *in this process*; it is a waiter bound only — the kernel flock (per agent, cross
+# process) and the queued→running CAS remain the exclusivity and ownership mechanisms.
+_WORKERS: dict[str, threading.Thread] = {}
+_WORKERS_LOCK = threading.Lock()
+
+
+def live_worker(job_id: str) -> threading.Thread | None:
+    """The live worker thread tracked for ``job_id`` in this process, if any."""
+    with _WORKERS_LOCK:
+        thread = _WORKERS.get(job_id)
+        return thread if thread is not None and thread.is_alive() else None
+
+
+def _launch(job_id: str, *, resume: bool) -> threading.Thread:
+    """Start a worker for ``job_id`` unless one is already live here; return the live one.
+
+    The registry entry is removed in the worker's own ``finally`` (completion, failure,
+    superseded, lock-wait timeout) and on a start failure, so a later request can
+    re-wake the same queued job with a fresh thread. Concurrent callers serialize on
+    the registry lock, so exactly one of them creates the thread.
+    """
+    with _WORKERS_LOCK:
+        existing = _WORKERS.get(job_id)
+        if existing is not None and existing.is_alive():
+            return existing
+
+        def run() -> None:
+            try:
+                execute_uninstall_job(job_id, resume=resume)
+            finally:
+                with _WORKERS_LOCK:
+                    if _WORKERS.get(job_id) is threading.current_thread():
+                        del _WORKERS[job_id]
+
+        thread = threading.Thread(target=run, daemon=True, name=f"uninstall-{job_id[:8]}")
+        _WORKERS[job_id] = thread
+        try:
+            thread.start()
+        except Exception:
+            _WORKERS.pop(job_id, None)  # never leave a dead placeholder behind
+            raise
+        return thread
+
+
 def start_uninstall_async(job_id: str) -> threading.Thread:
-    thread = threading.Thread(target=execute_uninstall_job, args=(job_id,), daemon=True)
-    thread.start()
-    return thread
+    return _launch(job_id, resume=False)
 
 
 def start_uninstall_resume(job_id: str) -> threading.Thread:
     """Startup resume: may adopt a job the crashed process left ``running`` — safe
     because the advisory lock the dead process held is gone, while a live twin's
     lock still refuses us."""
-    thread = threading.Thread(
-        target=execute_uninstall_job, args=(job_id,), kwargs={"resume": True}, daemon=True
-    )
-    thread.start()
-    return thread
-
-
+    return _launch(job_id, resume=True)
