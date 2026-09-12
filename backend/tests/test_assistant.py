@@ -47,6 +47,11 @@ RESOURCES = {
     "oauth_provider_arn": OAUTH["oauth"]["providerArn"],
     "execution_role_arn": "arn:aws:iam::111122223333:role/launchpad-agent-execution-role",
 }
+KB_AUTHORIZER = {"customJWTAuthorizer": {"discoveryUrl": "https://cognito.example/.well-known",
+                                         "allowedClients": ["client-a", "client-m2m"]}}
+KB_GATEWAY_LIVE = {"gateway_id": "kbgw-1", "gateway_arn": RESOURCES["kb_gateway_arn"],
+                   "url": "https://kb.example/mcp", "authorizer_type": "CUSTOM_JWT",
+                   "authorizer": KB_AUTHORIZER, "status": "READY"}
 CATALOG = {
     "fetched_at": "2026-09-12T00:00:00+00:00",
     "tools": [
@@ -63,10 +68,11 @@ CATALOG = {
     ],
     "skills": [{"key": "meeting-summarizer", "name": "meeting-summarizer", "description": "",
                 "path": "s3://bucket/skills/meeting-summarizer/1.0.0/", "record_id": "rec-9",
-                "content_digest": "d" * 64, "object_count": 3}],
+                "source_prefix": "s3://bucket/skills/meeting-summarizer/1.0.0/",
+                "content_digest": "d" * 64, "object_count": 3, "total_bytes": 30}],
     "knowledge_bases": [{"kb_id": "KB123ABC", "name": "hr-policies", "description": "policies"}],
     "warnings": [],
-    "resources": dict(RESOURCES),
+    "resources": {**RESOURCES, "kb_gateway": dict(KB_GATEWAY_LIVE)},
     "target": {"workspace_id": "default", "account_id": "111122223333", "region": "us-west-2"},
 }
 VALID_PROPOSAL = {
@@ -1338,7 +1344,7 @@ def test_job_entry_guard_deploys_exactly_the_reviewed_bindings_or_fails_closed(
         db.commit()
         drifted_res = _catalog(resources={**RESOURCES, "kb_gateway_arn": "arn:aws:other-gw"})
         monkeypatch.setattr(service, "fetch_catalog", lambda workspace: drifted_res)
-        with pytest.raises(RuntimeError, match="resources.kb_gateway"):
+        with pytest.raises(RuntimeError, match="knowledge-base gateway|resources.kb_gateway"):
             service.assert_job_bindings_pinned(job.payload, db.get(Agent, agent.id),
                                                workspace_context(ws_row))
     finally:
@@ -1380,20 +1386,34 @@ def test_fetch_catalog_composes_live_identity_from_the_platform_helpers(monkeypa
         {"kb_id": "KB123ABC", "name": "hr-policies", "description": "p", "status": "ACTIVE"},
         {"kb_id": "KBCREATING", "name": "x", "description": "", "status": "CREATING"}])
 
+    import io
+
     class S3:
         def list_objects_v2(self, **kw):
             assert kw == {"Bucket": "bucket", "Prefix": "skills/meeting-summarizer/1.0.0/"}
             return {"Contents": [{"Key": "skills/meeting-summarizer/1.0.0/SKILL.md",
                                   "ETag": '"abc"', "Size": 10}], "IsTruncated": False}
 
+        def get_object(self, Bucket, Key):
+            return {"Body": io.BytesIO(b"---\nname: x\n---\n")}
+
+    class Control:
+        def get_gateway(self, gatewayIdentifier):
+            return {"gatewayId": gatewayIdentifier, "gatewayArn": RESOURCES["kb_gateway_arn"],
+                    "gatewayUrl": "https://kb.example/mcp", "authorizerType": "CUSTOM_JWT",
+                    "authorizerConfiguration": KB_AUTHORIZER, "status": "READY"}
+
     from app.services import workspace as workspace_mod
 
     monkeypatch.setattr(workspace_mod.WorkspaceContext, "client", lambda self, name, **k: S3())
+    monkeypatch.setattr(service, "control_client", lambda ws: Control())
     ws = workspace.__class__(account_id="111122223333", region="us-west-2", resources=RESOURCES)
     cat = service.fetch_catalog(ws)
     gw = next(t for t in cat["tools"] if t["kind"] == "gateway")
     assert gw["outbound_auth"] == OAUTH and gw["gateway_arn"] == GW_ARN
     assert cat["skills"][0]["content_digest"] and cat["skills"][0]["object_count"] == 1
+    assert cat["skills"][0]["source_prefix"] == "s3://bucket/skills/meeting-summarizer/1.0.0/"
+    assert cat["resources"]["kb_gateway"] == KB_GATEWAY_LIVE
     assert [k["kb_id"] for k in cat["knowledge_bases"]] == ["KB123ABC"]
     assert cat["resources"]["memory_arn"] == RESOURCES["memory_arn"]
     assert cat["warnings"] == []

@@ -569,6 +569,26 @@ spec、内容仍有效、实时绑定 = 固定绑定、知识库 Gateway 未变�
 只有启动恢复可接管死进程遗留的 `running` 任务，终态任务不可再运行——陈旧的批准重试重新唤醒它时
 什么也不会发生。
 
+**精确执行与收尾（第三轮评审）。** 各阶段**消费**固定值而不重新解析：Harness 请求携带已审阅的
+Gateway ARN 与出站认证身份、已审阅的记忆 ARN（或显式 `disabled`）以及已审阅的知识库 Gateway。
+**技能从不可变副本部署，绝不从可变源部署**：审阅时目录快照的是 *Harness 实际加载的目录*（旧式
+`…/SKILL.md` 源规范化为其父目录，因此每个同级对象都计入）并对每个对象的真实字节做哈希
+（`source_prefix`、`content_digest`、`object_count`、`total_bytes`）；获批的 `package` 阶段重新
+读取这些字节，若已与审阅摘要不符则拒绝，否则将其作为内容寻址副本发布到 Workspace 自己的 artifacts
+bucket（`assistant-skills/<digest16>/…`，条件写入 `If-None-Match: *`，已存在对象必须字节相同，
+不删除任何内容），并把 Agent 的 spec、任务 pin（`skill_copies`）与请求切换到副本 URI，在
+`CreateHarness` 之前再次对其哈希。知识库挂载在任何 IAM/目标写入之前核验 Workspace **既有**
+（绝不列举后创建）的 Gateway 为 READY 且仍具有已审阅的 ID、ARN、URL、入站认证类型与配置
+（`lookup_existing_kb_gateway`）。批准的每个“胜出方”响应——目录读取之前、之后（包括目录读取本身
+因实时 Registry 错误失败时；无胜出方则 `502 assistant.catalog_unavailable`）以及事务内——都先重新
+校验调用者（当前会话、权限、授权、就绪，以及与会话所有者的不可变 principal 相等）；授权与归属错误
+绝不会被转换为成功。持有者仍是本进程活跃请求的轮次无论多旧都不会被接管（`_LIVE_TURNS`）；TTL
+接管只针对死进程的孤儿，且一轮对话的每次写入（用户、工具、回复、提案）都以声明令牌围栏。上游事件流
+由生产者线程消费，响应生成器最多等待一个心跳（SSE keep-alive），因此客户端断开（ASGI 2.0 或 ASGI
+2.4 发送失败）在一秒内被观察到，立即关闭上游——解除阻塞中的读取——随后由响应对象收尾。可观测保留
+**每条**内容事件的 `session.id`（记录属性或嵌套的 `resource.attributes`，按 span 合并为
+`meta.session_ids`），因此仅由内容事件提及的私有会话在缓存前后都保持隐藏。
+
 **控制台。** 页面（`pages/CreateAgentAssistant.tsx`）显示带流式输出的记录（原始提案块被替换为
 指向面板的提示）、含 Workspace 记忆/知识库 Gateway 能力的目录摘要、提案（字段、**精确绑定**含
 Gateway 认证身份与技能内容摘要、提示词、方案内容）、内嵌的类型化编辑器（工具/技能/知识库从目录中

@@ -160,7 +160,8 @@ provision 阶段于 Workspace 中核验；不会替你创建任何知识库）�
 的提案。提案只引用 Workspace 中已存在的工具、S3 技能与知识库（APPROVED 的 Registry 记录、ACTIVE
 的托管知识库），并展示将要部署的**精确绑定**（Gateway ARN 与认证身份、技能 S3 路径与内容摘要、
 Workspace 共享记忆或无记忆）。在你点击**批准并部署**之前它保持惰性——那是一个独立的、计费的
-操作，需要 `agents.deploy` 权限（在执行时连同你的账号与 Workspace 授权一起重新检查），并通过常规
+操作（获批的技能从 Workspace artifacts bucket 中一份与审阅字节完全一致的不可变副本部署），需要
+`agents.deploy` 权限（在执行时连同你的账号与 Workspace 授权一起重新检查），并通过常规
 部署任务在 Workspace 的账号与 Region 中创建 Agent；若任何绑定资源在你审阅后发生变化，批准会被
 拒绝，任务本身也会在触碰 AWS 之前失败关闭。编辑提案会生成需要重新批准的新修订；取消则使其不可
 执行。记忆只能是 `disabled` 或 Workspace 既有的共享记忆（含其全部策略）——没有中间态。挂载知识库

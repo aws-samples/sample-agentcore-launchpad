@@ -105,8 +105,26 @@ class TurnResponse(StreamingResponse):
         self._run = run
 
     async def __call__(self, scope, receive, send) -> None:
+        run = self._run
+
+        async def receive_watch():
+            message = await receive()
+            if message.get("type") == "http.disconnect":
+                run.signal()  # close upstream NOW; the blocked worker read returns
+            return message
+
+        async def send_watch(message):
+            try:
+                await send(message)
+            except BaseException:
+                # ASGI 2.4: a failed send (OSError, or the cancellation it turns into
+                # further up the stack) IS the disconnect signal — close the upstream
+                # now, before anything waits for the worker thread to unwind
+                run.signal()
+                raise
+
         try:
-            await super().__call__(scope, receive, send)
+            await super().__call__(scope, receive_watch, send_watch)
         finally:
             import anyio
 

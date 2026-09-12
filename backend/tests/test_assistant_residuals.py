@@ -33,6 +33,8 @@ from .test_assistant import (  # noqa: F401 — shared hermetic fixtures + helpe
     BASE,
     CATALOG,
     GW_ARN,
+    KB_AUTHORIZER,
+    KB_GATEWAY_LIVE,
     MEMBER_CREDS,
     OAUTH,
     RESOURCES,
@@ -639,11 +641,16 @@ def test_assistant_kb_mount_uses_an_existing_ready_gateway_and_never_creates_one
         def create_gateway(self, **kw):
             raise AssertionError("assistant KB mount must never create a gateway")
 
+        url = "https://kb.example/mcp"
+        authorizer_type = "CUSTOM_JWT"
+        authorizer = KB_AUTHORIZER
+
         def get_gateway(self, gatewayIdentifier):
             if self.missing:
                 raise RuntimeError("ResourceNotFoundException")
             return {"gatewayId": gatewayIdentifier, "gatewayArn": self.arn,
-                    "gatewayUrl": "https://kb.example/mcp", "status": self.status}
+                    "gatewayUrl": self.url, "authorizerType": self.authorizer_type,
+                    "authorizerConfiguration": self.authorizer, "status": self.status}
 
     ws = workspace_context(Workspace(id="default", name="d", account_id="111122223333",
                                      region="us-west-2", bootstrap_status="ready",
@@ -705,3 +712,428 @@ def test_pipeline_entry_seeds_the_pin_for_the_stages(client, ready, harness, mon
     _REAL_EXECUTE(body["job_id"], resume=False)
     assert seen["pin"]["bindings"]["resources"]["gateways"]["gw-1"]["outbound_auth"] == OAUTH
     assert seen["pin"]["revision"] == 1
+
+
+# ---------------------------------------------------------------------------
+# review 3 residuals
+# ---------------------------------------------------------------------------
+
+
+def test_provenance_covers_nested_resource_attrs_and_merged_multi_sid_events(
+    gated, harness, monkeypatch
+):
+    _admin, member, other, _ids, _preset = gated
+    cid = _open(member)
+    harness.reply("private CUSTOMER_SECRET_HOST")
+    sid = _turn(member, cid, "workshop")[0][1]["session_id"]
+    trace_id = "b" * 32
+    span = {"traceId": trace_id, "spanId": "s1", "name": "invoke_agent", "kind": "SERVER",
+            "startTimeUnixNano": "1", "endTimeUnixNano": "2", "durationNano": "1",
+            "attributes": {"gen_ai.system": "x"},
+            "resource": {"attributes": {
+                "aws.log.group.names": "/aws/bedrock-agentcore/runtimes/r"}}}
+    variants = {
+        "nested-resource-attrs": [
+            {"spanId": "s1", "resource": {"attributes": {"session.id": sid}},
+             "body": {"input": {"messages": [{"role": "user",
+                                              "content": "CUSTOMER_SECRET_HOST"}]}}}],
+        "merged-public-then-private": [
+            {"spanId": "s1", "attributes": {"session.id": "public-session-1234567890"},
+             "body": {"input": {"messages": [{"role": "user", "content": "public"}]}}},
+            {"spanId": "s1", "attributes": {"session.id": sid},
+             "body": {"output": {"messages": [{"role": "assistant",
+                                                "content": "CUSTOMER_SECRET_HOST"}]}}}],
+    }
+    def make_queries(events):
+        def fake_queries(queries, hours, **kw):
+            out = {}
+            for key in queries:
+                out[key] = ([{"@message": json.dumps(span)}] if key == "spans"
+                            else [{"@message": json.dumps(e)} for e in events]
+                            if key == "events" else [])
+            return out
+        return fake_queries
+
+    for name, events in variants.items():
+        monkeypatch.setattr(observability, "run_insights_queries", make_queries(events))
+        observability.reset_cache()
+        owner = member.get(f"/api/observability/traces/{trace_id}")
+        assert owner.status_code == 200 and sid in owner.json()["meta"]["session_ids"], name
+        res = other.get(f"/api/observability/traces/{trace_id}")  # cache is warm now
+        assert res.status_code == 404 and "CUSTOMER_SECRET_HOST" not in res.text, name
+
+
+@pytest.mark.parametrize("mode", ["asgi-2.0-disconnect", "asgi-2.4-send-error"])
+def test_disconnect_while_the_upstream_read_blocks_is_cleaned_up_within_budget(
+    client, ready, harness, mode
+):
+    """One delta, then the next upstream read BLOCKS. The response's own disconnect
+    handling must close the upstream (unblocking the read) BEFORE waiting for the
+    worker, so the whole request returns, persists and releases within the budget."""
+    import gc
+
+    release = threading.Event()
+
+    class Blocking:
+        closed = False
+
+        def __init__(self):
+            self.sent = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if not self.sent:
+                self.sent = True
+                return {"contentBlockDelta": {"delta": {"text": "first delta "}}}
+            if self.closed:
+                raise StopIteration
+            release.wait(timeout=30)  # a read that never returns on its own
+            raise StopIteration
+
+        def close(self):
+            self.closed = True
+            release.set()
+
+    blocking = Blocking()
+    harness.invoke_harness = lambda **kw: {"stream": blocking}
+    gc.disable()
+    try:
+        cid = _open(client)
+        started = time.monotonic()
+        if mode == "asgi-2.0-disconnect":
+            _asgi_turn(client.app, cid, spec_version="2.0", fail_send_after=None,
+                       disconnect_after=2)
+        else:
+            _asgi_turn(client.app, cid, spec_version="2.4", fail_send_after=2,
+                       disconnect_after=None)
+        elapsed = time.monotonic() - started
+        assert elapsed < 5, elapsed  # not the worker's 30 s block, not the 5 s cancel budget
+        assert blocking.closed
+        db = SessionLocal()
+        try:
+            conv = db.get(AssistantConversation, cid)
+            assert conv.active_turn is None and conv.active_turn_token is None
+            msgs = service._messages(db, cid)
+            assert [m.role for m in msgs] == ["user", "assistant", "error"]
+            assert msgs[1].text == "first delta " and "interrupted" in msgs[2].text
+        finally:
+            db.close()
+    finally:
+        gc.enable()
+
+
+def test_live_local_turn_is_never_taken_over_and_tool_writes_are_fenced(client, ready, harness):
+    """The first request is LIVE (blocked upstream) with an aged claim: a second POST is
+    refused, only one invocation happens, and the first request's later tool event can
+    still only be written by the claim holder. An ORPHAN (no live owner) is recovered."""
+    entered, release = threading.Event(), threading.Event()
+
+    class Blocking:
+        def __init__(self):
+            self.step = 0
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            self.step += 1
+            if self.step == 1:
+                entered.set()
+                release.wait(timeout=30)
+                return {"contentBlockStart": {"start": {"toolUse": {"name": "late_tool",
+                                                                     "toolUseId": "t"}}}}
+            if self.step == 2:
+                return {"contentBlockDelta": {"delta": {"text": "done"}}}
+            raise StopIteration
+
+        def close(self):
+            release.set()
+
+    calls: list = []
+
+    def invoke(**kw):
+        calls.append(kw)
+        return {"stream": Blocking()}
+
+    harness.invoke_harness = invoke
+    cid = _open(client)
+    results: list = []
+    t = threading.Thread(target=lambda: results.append(
+        client.post(f"{BASE}/conversations/{cid}/turns", json={"prompt": "first"})))
+    t.start()
+    assert entered.wait(timeout=10)
+    db = SessionLocal()
+    try:  # age the LIVE claim in the ledger as if the TTL had passed
+        row = db.get(AssistantConversation, cid)
+        row.active_turn_started_at = datetime.now(UTC) - timedelta(
+            seconds=service.TURN_CLAIM_TTL_S + 5)
+        db.commit()
+    finally:
+        db.close()
+    second = client.post(f"{BASE}/conversations/{cid}/turns", json={"prompt": "second"})
+    assert second.status_code == 409 and second.json()["code"] == "assistant.turn_in_progress"
+    assert len(calls) == 1  # no concurrent second invocation
+    release.set()
+    t.join(timeout=30)
+    assert _sse(results[0])[-1][0] == "done"
+    detail = _latest(client, cid)
+    assert [m["role"] for m in detail["messages"]] == ["user", "tool", "assistant"]
+    assert detail["turns"] == 1 and detail["turn_in_progress"] is None
+    # ORPHAN recovery still works through the unpatched route (no live owner here)
+    db = SessionLocal()
+    try:
+        row = db.get(AssistantConversation, cid)
+        row.active_turn, row.active_turn_token = 9, "dead-process-token"
+        row.active_turn_started_at = datetime.now(UTC) - timedelta(
+            seconds=service.TURN_CLAIM_TTL_S + 5)
+        row.turns = 9
+        db.commit()
+    finally:
+        db.close()
+    harness.reply("recovered")
+    harness.invoke_harness = harness.__class__.invoke_harness.__get__(harness)
+    events = _turn(client, cid, "again")
+    assert events[0][1]["turn"] == 10 and events[-1][0] == "done"
+    # a stale token (the dead process) cannot write a tool row afterwards
+    db = SessionLocal()
+    try:
+        conv = db.get(AssistantConversation, cid)
+        assert service._holds_claim(db, cid, 9, "dead-process-token") is False
+        assert not any(m.turn == 9 for m in service._messages(db, cid))
+        assert conv.active_turn is None
+    finally:
+        db.close()
+
+
+def test_skill_bytes_are_snapshotted_on_the_normalized_directory_and_deployed_from_a_copy(
+    monkeypatch, workspace
+):
+    """Legacy `…/SKILL.md` source → the whole parent directory (incl. helper.py) is the
+    reviewed content; the package stage proves the bytes and publishes an immutable
+    content-addressed copy; the request loads the COPY, and a sibling change after
+    review (or between listing and use) is refused."""
+    import io
+
+    store = {
+        "skills/legacy/SKILL.md": b"---\nname: legacy\n---\nbody",
+        "skills/legacy/helper.py": b"print('v1')",
+    }
+    copies: dict[str, bytes] = {}
+
+    class S3:
+        def list_objects_v2(self, Bucket, Prefix, **kw):
+            src = store if Bucket == "bucket" else copies
+            return {"Contents": [{"Key": k, "ETag": '"e"', "Size": len(v)}
+                                 for k, v in sorted(src.items()) if k.startswith(Prefix)],
+                    "IsTruncated": False}
+
+        def get_object(self, Bucket, Key):
+            src = store if Bucket == "bucket" else copies
+            return {"Body": io.BytesIO(src[Key])}
+
+        def put_object(self, Bucket, Key, Body, IfNoneMatch=None):
+            assert Bucket == "launchpad-artifacts-test" and IfNoneMatch == "*"
+            if Key in copies:
+                from botocore.exceptions import ClientError
+
+                raise ClientError({"Error": {"Code": "PreconditionFailed"}}, "PutObject")
+            copies[Key] = Body
+
+    from app.services import workspace as workspace_mod
+
+    monkeypatch.setattr(workspace_mod.WorkspaceContext, "client", lambda self, name, **k: S3())
+    ws = workspace.__class__(account_id="111122223333", region="us-west-2",
+                             resources={**RESOURCES,
+                                        "artifacts_bucket": "launchpad-artifacts-test"})
+    snap = service.skill_content_snapshot(ws, "s3://bucket/skills/legacy/SKILL.md")
+    assert snap["source_prefix"] == "s3://bucket/skills/legacy/" and snap["object_count"] == 2
+    digest = snap["content_digest"]
+    # a sibling helper change (not SKILL.md) changes the reviewed identity
+    store["skills/legacy/helper.py"] = b"print('v2')"
+    assert service.skill_content_snapshot(ws, "s3://bucket/skills/legacy/SKILL.md")[
+        "content_digest"] != digest
+    store["skills/legacy/helper.py"] = b"print('v1')"
+    pinned = {"path": "s3://bucket/skills/legacy/SKILL.md", **snap}
+    uri = service.publish_skill_copy(ws, pinned)
+    assert uri == f"s3://launchpad-artifacts-test/assistant-skills/{digest[:16]}/"
+    assert set(copies) == {f"assistant-skills/{digest[:16]}/SKILL.md",
+                           f"assistant-skills/{digest[:16]}/helper.py"}
+    service.verify_skill_copy(ws, uri, pinned)  # the bytes the request will load
+    assert service.publish_skill_copy(ws, pinned) == uri  # idempotent, conditional writes
+    # source drift between review and the approved package → refused, nothing published
+    store["skills/legacy/helper.py"] = b"print('evil')"
+    before = dict(copies)
+    with pytest.raises(RuntimeError, match="no longer match the reviewed content"):
+        service.publish_skill_copy(ws, pinned)
+    assert copies == before
+    # tampering with an existing copy object (same key, different bytes) is refused
+    copies[f"assistant-skills/{digest[:16]}/helper.py"] = b"tampered"
+    with pytest.raises(RuntimeError, match="does not match the reviewed digest"):
+        service.verify_skill_copy(ws, uri, pinned)
+
+
+def test_package_stage_switches_the_agent_and_request_to_the_immutable_copy(
+    client, ready, harness, monkeypatch
+):
+    cid = _open(client)
+    r1 = _propose(client, harness, cid)
+    body = _approve(client, cid, r1).json()
+    published: dict = {}
+
+    def fake_publish(ws, pinned):
+        published["pinned"] = pinned
+        return "s3://launchpad-artifacts-test/assistant-skills/dddddddddddddddd/"
+
+    monkeypatch.setattr(service, "publish_skill_copy", fake_publish)
+    monkeypatch.setattr(service, "verify_skill_copy", lambda ws, uri, pinned: None)
+    monkeypatch.setattr(registry_console, "resolve_gateway_attachments", lambda tools, w: [
+        {"gateway_id": "gw-1", "gateway_arn": GW_ARN, "outbound_auth": OAUTH}])
+    db = SessionLocal()
+    try:
+        job = db.get(Job, body["job_id"])
+        agent = db.get(Agent, body["agent"]["id"])
+        ws = workspace_context(db.get(Workspace, DEFAULT_WORKSPACE_ID))
+        ctx = StageContext(agent_id=agent.id, deployment_id=body["deployment_id"],
+                           job_id=job.id, workspace=ws)
+        ctx.scratch["assistant_pin"] = dict(job.payload["assistant"])
+        ctx.scratch["mode"] = "create"
+        ctx.log = lambda m: None
+        result = harness_deployer._stage_package(ctx, agent)
+        assert "immutable" in result.detail
+        assert published["pinned"]["source_prefix"] == "s3://bucket/skills/meeting-summarizer/1.0.0/"
+        db.expire_all()
+        assert db.get(Agent, agent.id).spec["skills"] == [
+            "s3://launchpad-artifacts-test/assistant-skills/dddddddddddddddd/"]
+        assert db.get(Job, job.id).payload["assistant"]["skill_copies"] == {
+            "s3://bucket/skills/meeting-summarizer/1.0.0/":
+            "s3://launchpad-artifacts-test/assistant-skills/dddddddddddddddd/"}
+        # the regenerated request loads the COPY, never the mutable source
+        assert ctx.scratch["create_params"]["skills"] == [
+            {"s3": {"uri": "s3://launchpad-artifacts-test/assistant-skills/dddddddddddddddd/"}}]
+        # and the job-entry guard accepts the copy-rewritten spec (a resumed job)
+        service.assert_job_bindings_pinned(db.get(Job, job.id).payload, db.get(Agent, agent.id), ws)
+    finally:
+        db.close()
+
+
+def test_kb_gateway_url_and_authorizer_are_pinned_and_verified_before_target_writes(monkeypatch):
+    from .test_assistant_residuals import (  # local reuse of the fake control above
+        test_assistant_kb_mount_uses_an_existing_ready_gateway_and_never_creates_one as _,  # noqa
+    )
+    pinned = _pin()["bindings"]["resources"]["kb_gateway"]
+    assert pinned["url"] == "https://kb.example/mcp" and pinned["authorizer_type"] == "CUSTOM_JWT"
+    assert pinned["authorizer"] == KB_AUTHORIZER
+
+    class Control:
+        targets: list = []
+        url = "https://kb.example/mcp"
+        authorizer_type = "CUSTOM_JWT"
+        authorizer = KB_AUTHORIZER
+
+        def list_gateways(self, **kw):
+            raise AssertionError("never list-and-create")
+
+        def create_gateway(self, **kw):
+            raise AssertionError("never create")
+
+        def get_gateway(self, gatewayIdentifier):
+            return {"gatewayId": gatewayIdentifier, "gatewayArn": RESOURCES["kb_gateway_arn"],
+                    "gatewayUrl": self.url, "authorizerType": self.authorizer_type,
+                    "authorizerConfiguration": self.authorizer, "status": "READY"}
+
+    ws = workspace_context(Workspace(id="default", name="d", account_id="111122223333",
+                                     region="us-west-2", bootstrap_status="ready",
+                                     resources=dict(RESOURCES)))
+    ok = kbgw.lookup_existing_kb_gateway(Control(), ws, expected=pinned)
+    assert ok["url"] == "https://kb.example/mcp"
+    # same id/ARN/READY but the live URL or inbound auth differ → refused
+    for attr, value in (("url", "https://other.example/mcp"), ("authorizer_type", "AWS_IAM"),
+                        ("authorizer", {"customJWTAuthorizer": {"discoveryUrl": "x",
+                                                                 "allowedClients": []}})):
+        control = Control()
+        setattr(control, attr, value)
+        with pytest.raises(RuntimeError, match="differs from the reviewed configuration"):
+            kbgw.lookup_existing_kb_gateway(control, ws, expected=pinned)
+    # through the real provision stage: drift → zero target writes, zero creations
+    control = Control()
+    control.authorizer_type = "AWS_IAM"
+    monkeypatch.setattr(harness_deployer, "control_client", lambda w: control)
+    monkeypatch.setattr(harness_deployer.agent_iam, "provision_execution_role",
+                        lambda *a, **k: ("arn:aws:iam::1:role/x", "role ok"))
+    monkeypatch.setattr(harness_deployer.kbgw, "ensure_retrieve_target",
+                        lambda *a, **k: control.targets.append("retrieve"))
+    monkeypatch.setattr(harness_deployer.kbgw, "sync_agentic_target",
+                        lambda *a, **k: control.targets.append("agentic"))
+    spec = contract.to_agent_spec(contract.parse_content(VALID_PROPOSAL)[0], _catalog())
+    agent = Agent(id="a2", workspace_id="default", name="hr-helpdesk", method="harness",
+                  status="deploying", spec=spec.model_dump())
+    ctx = StageContext(agent_id="a2", deployment_id="d", job_id="j", workspace=ws)
+    ctx.scratch["assistant_pin"] = _pin()
+    ctx.log = lambda m: None
+    with pytest.raises(RuntimeError, match="differs from the reviewed configuration"):
+        harness_deployer._stage_provision(ctx, agent)
+    assert control.targets == []
+
+
+def test_winner_branches_revalidate_the_caller_and_never_mask_auth_errors(
+    gated, harness, monkeypatch
+):
+    """A waits in the catalog read; B (same account) approves; meanwhile A's account is
+    deleted and the username re-registered → A must get 401/404, never the winner."""
+    admin, member, _other, ids, _preset = gated
+    cid = _open(member)
+    r1 = _propose(member, harness, cid)
+    old_id = ids[MEMBER_CREDS["username"]]
+    gate, released = threading.Event(), threading.Event()
+    original = service.fetch_catalog
+    n: list[int] = []
+
+    def paced(workspace):
+        n.append(1)
+        if len(n) == 1:
+            gate.set()
+            released.wait(timeout=10)
+        return original(workspace)
+
+    monkeypatch.setattr(service, "fetch_catalog", paced)
+    results: dict = {}
+    t = threading.Thread(target=lambda: results.__setitem__("a", _approve(member, cid, r1)))
+    t.start()
+    assert gate.wait(timeout=10)
+    with TestClient(admin.app, client=("127.0.0.1", 4321)) as twin:  # same account, B
+        twin.cookies.set(auth_module.COOKIE_NAME, member.cookies.get(auth_module.COOKIE_NAME))
+        winner = _approve(twin, cid, r1)
+        assert winner.status_code == 202
+    assert admin.delete(f"/api/users/{old_id}").status_code == 200
+    with TestClient(admin.app, client=("127.0.0.1", 4321)) as reborn:
+        _activate(MEMBER_CREDS, reborn)
+    released.set()
+    t.join(timeout=30)
+    assert results["a"].status_code in (401, 404), results["a"].text
+    assert results["a"].json()["code"] in ("auth.required", "assistant.conversation_not_found")
+    assert _count(Job) == 1
+    # a still-authorized caller of the same account gets the historical winner
+    # (the twin did above: 202 winner, and a retry is 200)
+    # catalog failure path: real low-level failure after a winner exists → winner for an
+    # authorized caller, actionable 502 when there is none
+    from botocore.exceptions import EndpointConnectionError
+
+    def failing(workspace):
+        raise EndpointConnectionError(endpoint_url="https://registry.example")
+
+    monkeypatch.setattr(service, "fetch_catalog", original)
+    acid = _open(admin)
+    ra = _propose(admin, harness, acid, {**VALID_PROPOSAL, "name": "hr-admin-copy"})
+    monkeypatch.setattr(service, "fetch_catalog", failing)
+    res = _approve(admin, acid, ra)
+    assert res.status_code == 502 and res.json()["code"] == "assistant.catalog_unavailable"
+    assert _count(Job) == 1
+    monkeypatch.setattr(service, "fetch_catalog", original)
+    won = _approve(admin, acid, ra)
+    assert won.status_code == 202
+    monkeypatch.setattr(service, "fetch_catalog", failing)
+    again = _approve(admin, acid, ra)  # winner exists → authorized caller gets it
+    assert again.status_code == 200 and again.json()["job_id"] == won.json()["job_id"]
+

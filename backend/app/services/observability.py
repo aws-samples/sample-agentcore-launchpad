@@ -841,10 +841,20 @@ def parse_message_events(rows: list[dict[str, str]]) -> dict[str, dict[str, Any]
             # Provenance survives normalization: the session id a content event was
             # recorded under (a correlated span may carry none) is what the privacy
             # boundary filters on, before AND after the cache.
-            attrs = record.get("attributes") if isinstance(record.get("attributes"), dict) else {}
-            sid = attrs.get("session.id") or (record.get("resource") or {}).get("session.id")
-            if isinstance(sid, str) and sid and not entry.get("session_id"):
-                entry["session_id"] = sid
+            resource = record.get("resource") if isinstance(record.get("resource"), dict) else {}
+            candidates = [
+                (record.get("attributes") or {}).get("session.id")
+                if isinstance(record.get("attributes"), dict) else None,
+                (resource.get("attributes") or {}).get("session.id")
+                if isinstance(resource.get("attributes"), dict) else None,
+                resource.get("session.id"),
+            ]
+            sids = entry.setdefault("session_ids", [])
+            for sid in candidates:
+                if isinstance(sid, str) and sid and sid not in sids:
+                    sids.append(sid)  # EVERY contributing event's id, not only the first
+            if sids and not entry.get("session_id"):
+                entry["session_id"] = sids[0]
             for side in ("input", "output"):
                 payload = body.get(side)
                 if not entry.get(side) and isinstance(payload, dict):
@@ -1145,7 +1155,7 @@ def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceCo
         session_ids = sorted({
             sid for sid in (
                 [s["attributes"].get("session.id") for s in spans]
-                + [m.get("session_id") for m in messages_by_span.values()]
+                + [sid for m in messages_by_span.values() for sid in (m.get("session_ids") or [])]
             ) if isinstance(sid, str) and sid
         })
         # Strands emits each LLM call as a wrapper span (system=strands-agents)

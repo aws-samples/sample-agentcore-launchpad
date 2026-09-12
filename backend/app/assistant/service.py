@@ -44,6 +44,7 @@ Invariants (``tests/test_assistant.py`` pins each one with request/fault probes)
 import hashlib
 import json
 import logging
+import queue
 import threading
 import time
 import uuid
@@ -68,8 +69,10 @@ from app.routers.auth import Identity
 from app.schemas.agent import ToolRef
 from app.services import agent_names, knowledge, registry_console
 from app.services.agentcore import harness as hc
-from app.services.agentcore.client import data_client
+from app.services.agentcore.client import control_client, data_client
+from app.services.kb_gateway import gateway_identity
 from app.services.memory import scoped_actor
+from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES
 from app.services.workspace import WorkspaceContext
 from app.system_agents import service as system_agents
 from app.system_agents.presets import ARCHITECT
@@ -92,6 +95,9 @@ MAX_REVISIONS = 50
 # A turn claim older than this belongs to a dead process (the harness itself times
 # out at ≤ 3600 s; the preset uses 900 s) and may be reclaimed.
 TURN_CLAIM_TTL_S = 1800
+# SSE keep-alive cadence while the upstream is silent; also the longest the turn's
+# consumer ever blocks, so cancellation is observed within one interval.
+HEARTBEAT_S = 1.0
 
 # ---------------------------------------------------------------------------
 # the model-facing protocol (server-composed, appended to the FIRST user turn)
@@ -194,29 +200,113 @@ def _short(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {str(exc)[:200]}"
 
 
-def skill_content_snapshot(workspace: WorkspaceContext, path: str) -> dict[str, Any] | None:
-    """Identity of a skill bundle's CURRENT S3 content: sha256 over the sorted
-    ``(key, etag, size)`` triples under the prefix. ``None`` when unreadable/empty."""
-    if not path.startswith("s3://"):
-        return None
-    bucket, _, prefix = path[5:].partition("/")
+def skill_source_prefix(path: str) -> str:
+    """``s3://bucket/dir/`` — the exact directory the Harness loads for this source
+    (same normalization as the deployer: a legacy ``…/SKILL.md`` means its parent)."""
+    prefix = path.removesuffix("SKILL.md")
+    return prefix if prefix.endswith("/") else prefix + "/"
+
+
+def read_skill_bytes(workspace: WorkspaceContext, source_prefix: str) -> dict[str, bytes]:
+    """Every object under the normalized directory, ``relative key → bytes``. Bounded by
+    the platform skill bundle cap; raises ``ValueError`` when it is exceeded."""
+    bucket, _, prefix = source_prefix[5:].partition("/")
     s3 = workspace.client("s3")
-    entries: list[tuple[str, str, int]] = []
+    files: dict[str, bytes] = {}
+    total = 0
     kwargs: dict[str, Any] = {"Bucket": bucket, "Prefix": prefix}
     while True:
         page = s3.list_objects_v2(**kwargs)
         for obj in page.get("Contents") or []:
-            entries.append((obj["Key"], str(obj.get("ETag", "")).strip('"'),
-                            int(obj.get("Size", 0))))
+            key = obj["Key"]
+            if key.endswith("/"):
+                continue
+            body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+            total += len(body)
+            if total > SKILL_BUNDLE_MAX_BYTES:
+                raise ValueError(f"skill bundle under {source_prefix} exceeds the size cap")
+            files[key[len(prefix):]] = body
         if not page.get("IsTruncated"):
             break
         kwargs["ContinuationToken"] = page.get("NextContinuationToken")
-    if not entries:
-        return None
+    return files
+
+
+def bytes_digest(files: dict[str, bytes]) -> str:
     digest = hashlib.sha256()
-    for key, etag, size in sorted(entries):
-        digest.update(f"{key}\0{etag}\0{size}\0".encode())
-    return {"content_digest": digest.hexdigest(), "object_count": len(entries)}
+    for rel in sorted(files):
+        digest.update(rel.encode())
+        digest.update(b"\0")
+        digest.update(files[rel])
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def skill_content_snapshot(workspace: WorkspaceContext, path: str) -> dict[str, Any] | None:
+    """Identity of a skill bundle's CURRENT content: the normalized source directory
+    and the sha256 of every loaded object's real bytes. ``None`` when unreadable/empty."""
+    if not path.startswith("s3://"):
+        return None
+    prefix = skill_source_prefix(path)
+    files = read_skill_bytes(workspace, prefix)
+    if not files:
+        return None
+    return {
+        "source_prefix": prefix,
+        "content_digest": bytes_digest(files),
+        "object_count": len(files),
+        "total_bytes": sum(len(b) for b in files.values()),
+    }
+
+
+ASSISTANT_SKILLS_PREFIX = "assistant-skills"
+
+
+def skill_copy_uri(bucket: str, digest: str) -> str:
+    return f"s3://{bucket}/{ASSISTANT_SKILLS_PREFIX}/{digest[:16]}/"
+
+
+def publish_skill_copy(workspace: WorkspaceContext, pinned: dict[str, Any]) -> str:
+    """Approved package stage only: read the reviewed source directory, prove its bytes
+    still hash to the reviewed digest, and publish them as an immutable,
+    content-addressed copy under the workspace's own artifacts bucket
+    (``assistant-skills/<digest16>/…``, conditional writes — an existing object must
+    carry the same bytes). The Harness request then loads the COPY, never the mutable
+    source. Nothing is ever deleted here."""
+    bucket = (workspace.resources or {}).get("artifacts_bucket")
+    if not bucket:
+        raise RuntimeError("workspace has no artifacts_bucket to publish the reviewed skill copy")
+    files = read_skill_bytes(workspace, pinned["source_prefix"])
+    digest = bytes_digest(files) if files else None
+    if not files or digest != pinned.get("content_digest"):
+        raise RuntimeError(
+            f"skill bytes under {pinned['source_prefix']} no longer match the reviewed content "
+            f"({(digest or 'empty')[:12]} vs {str(pinned.get('content_digest'))[:12]}) — refusing "
+            "to deploy changed skill bytes"
+        )
+    uri = skill_copy_uri(bucket, digest)
+    key_prefix = uri[len(f"s3://{bucket}/"):]
+    s3 = workspace.client("s3")
+    for rel, body in sorted(files.items()):
+        key = key_prefix + rel
+        try:
+            s3.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*")
+        except ClientError as exc:
+            code = (exc.response or {}).get("Error", {}).get("Code")
+            if code not in ("PreconditionFailed", "412"):
+                raise
+            existing = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+            if existing != body:  # same digest can never carry different bytes
+                raise RuntimeError(
+                    f"immutable skill copy {key} exists with different bytes — refusing to deploy"
+                ) from exc
+    return uri
+
+
+def verify_skill_copy(workspace: WorkspaceContext, copy_uri: str, pinned: dict[str, Any]) -> None:
+    files = read_skill_bytes(workspace, copy_uri)
+    if not files or bytes_digest(files) != pinned.get("content_digest"):
+        raise RuntimeError(f"immutable skill copy {copy_uri} does not match the reviewed digest")
 
 
 def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
@@ -312,8 +402,10 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
                 "description": skill.get("description") or "",
                 "path": skill["path"],
                 "record_id": skill.get("record_id"),
+                "source_prefix": (snapshot or {}).get("source_prefix"),
                 "content_digest": (snapshot or {}).get("content_digest"),
                 "object_count": (snapshot or {}).get("object_count"),
+                "total_bytes": (snapshot or {}).get("total_bytes"),
             })
     except (AppError, ClientError, KeyError, ValueError) as exc:
         warnings.append(f"registry catalog unavailable: {_short(exc)}")
@@ -328,6 +420,13 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
     except (AppError, ClientError, KeyError, ValueError) as exc:
         warnings.append(f"knowledge base catalog unavailable: {_short(exc)}")
     res = workspace.resources or {}
+    kb_gateway: dict[str, Any] | None = None
+    if res.get("kb_gateway_id"):
+        try:  # the live configuration a KB mount would depend on (read-only)
+            detail = control_client(workspace).get_gateway(gatewayIdentifier=res["kb_gateway_id"])
+            kb_gateway = gateway_identity(detail)
+        except Exception as exc:  # unreadable → not mountable here (never created)
+            warnings.append(f"knowledge-base gateway unreadable: {_short(exc)}")
     return {
         "fetched_at": datetime.now(UTC).isoformat(),
         "tools": tools,
@@ -340,6 +439,7 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
             "kb_gateway_arn": res.get("kb_gateway_arn"),
             "oauth_provider_arn": res.get("oauth_provider_arn"),
             "execution_role_arn": res.get("execution_role_arn"),
+            "kb_gateway": kb_gateway,
         },
         "target": {
             "workspace_id": workspace.id,
@@ -632,6 +732,18 @@ def _claim_is_stale(row: AssistantConversation, now: datetime) -> bool:
     return now - started > timedelta(seconds=TURN_CLAIM_TTL_S)
 
 
+# Single-host live ownership: turns streaming in THIS process. A claim whose owner is
+# still alive here is never taken over, whatever its age; TTL takeover is for orphans
+# of a dead process only. The durable token still fences every write.
+_LIVE_TURNS: dict[str, str] = {}
+_LIVE_TURNS_LOCK = threading.Lock()
+
+
+def _turn_live_here(conversation_id: str) -> bool:
+    with _LIVE_TURNS_LOCK:
+        return conversation_id in _LIVE_TURNS
+
+
 def claim_turn(db: Session, conversation_id: str) -> tuple[int, str]:
     """Atomically reserve the next turn number, refusing while another turn is in
     flight (`409 assistant.turn_in_progress`) or the conversation is full. A claim
@@ -653,7 +765,8 @@ def claim_turn(db: Session, conversation_id: str) -> tuple[int, str]:
     ).rowcount
     if claimed != 1:
         row = db.get(AssistantConversation, conversation_id)
-        if row is not None and _claim_is_stale(row, now) and row.turns < MAX_TURNS:
+        if (row is not None and _claim_is_stale(row, now) and row.turns < MAX_TURNS
+                and not _turn_live_here(conversation_id)):
             claimed = db.execute(
                 update(AssistantConversation)
                 .where(AssistantConversation.id == conversation_id,
@@ -726,8 +839,8 @@ def require_turn_capacity(conversation: AssistantConversation) -> None:
     """409 before a stream opens (a refusal inside the stream would be a 500)."""
     if (conversation.turns or 0) + 1 > MAX_TURNS:
         raise _turn_limit_error()
-    if conversation.active_turn is not None and not _claim_is_stale(
-        conversation, datetime.now(UTC)
+    if conversation.active_turn is not None and (
+        _turn_live_here(conversation.id) or not _claim_is_stale(conversation, datetime.now(UTC))
     ):
         raise AppError(
             "assistant.turn_in_progress",
@@ -930,6 +1043,10 @@ def _persist_partial(
     return True
 
 
+class _ClaimLost(Exception):
+    """Raised inside a turn when its claim was taken over: writes stop immediately."""
+
+
 class TurnRun:
     """Ownership handle for one streaming turn.
 
@@ -961,6 +1078,16 @@ class TurnRun:
                 close()
             except Exception:  # pragma: no cover — best effort
                 pass
+
+    def signal(self) -> None:
+        """Non-blocking: mark cancelled and close the upstream stream so a worker
+        blocked in the read returns NOW — called from the response's own disconnect
+        handling before anything waits for the worker to unwind."""
+        with self._lock:
+            if self.finished:
+                return
+            self.cancelled = True
+        self._close_upstream()
 
     def cancel(self, wait_s: float = 5.0) -> None:
         with self._lock:
@@ -1013,6 +1140,8 @@ def run_turn(
     check_prompt(conversation, prompt)
     conversation_id = conversation.id
     turn, token = claim_turn(db, conversation_id)
+    with _LIVE_TURNS_LOCK:
+        _LIVE_TURNS[conversation_id] = token
     conversation = db.get(AssistantConversation, conversation_id)
     session_id = hc.new_session_id()
     parts: list[str] = []
@@ -1033,13 +1162,48 @@ def run_turn(
                                          "omitted_turns": omitted}}
         try:
             actor = scoped_actor(agent.id, identity.username)
-            for event in hc.invoke_harness_events(
-                data_client(workspace), agent.arn, messages,
-                session_id=session_id, actor_id=actor, on_stream=run.attach_upstream,
-            ):
+            # Upstream production runs in its own thread; this generator only ever
+            # waits on the queue for one heartbeat interval at a time. The response
+            # layer can therefore always reach a send/cancel point promptly, and a
+            # disconnect closes the upstream (unblocking the producer) instead of
+            # waiting behind an uncancellable blocked read.
+            events: queue.Queue = queue.Queue()
+
+            def produce() -> None:
+                try:
+                    for produced in hc.invoke_harness_events(
+                        data_client(workspace), agent.arn, messages,
+                        session_id=session_id, actor_id=actor, on_stream=run.attach_upstream,
+                    ):
+                        events.put(("event", produced))
+                        if run.cancelled:
+                            break
+                    events.put(("end", None))
+                except BaseException as exc:  # surfaced to the consumer below
+                    events.put(("error", exc))
+
+            threading.Thread(target=produce, daemon=True,
+                             name=f"assistant-turn-{conversation_id[:8]}-{turn}").start()
+            while True:
+                try:
+                    kind, event = events.get(timeout=HEARTBEAT_S)
+                except queue.Empty:
+                    if run.cancelled:
+                        break
+                    yield {"event": "heartbeat", "data": {}}
+                    continue
+                if kind == "end":
+                    break
+                if kind == "error":
+                    raise event
                 if run.cancelled:
-                    raise GeneratorExit
+                    break  # the owner cancelled: handled as interrupted below
                 if event["event"] == "tool":
+                    # fenced like every other write: only the current claim holder
+                    _lock_conversation(db, conversation_id)
+                    if not _holds_claim(db, conversation_id, turn, token):
+                        db.rollback()
+                        raise _ClaimLost()
                     db.add(AssistantMessage(
                         workspace_id=conversation.workspace_id, conversation_id=conversation_id,
                         turn=turn, role="tool", text="", name=event["data"].get("name"),
@@ -1114,6 +1278,9 @@ def run_turn(
             release_turn(db, conversation_id, turn, token)
         except Exception:  # pragma: no cover
             logger.exception("assistant: could not release turn claim %s", turn)
+        with _LIVE_TURNS_LOCK:
+            if _LIVE_TURNS.get(conversation_id) == token:
+                del _LIVE_TURNS[conversation_id]
         run.finished = True
 
 
@@ -1205,6 +1372,26 @@ def _stale(current: AssistantProposal | None, message: str) -> AppError:
 Recheck = Callable[[Session], tuple[Identity, Workspace]]
 
 
+def _revalidate_caller(
+    db: Session, conversation_id: str, identity: Identity, row: Workspace,
+    recheck: "Recheck | None",
+) -> None:
+    """Current auth + permission + grant + readiness (via ``recheck``) and the immutable
+    principal equality against the conversation owner. Raises the auth error itself."""
+    if recheck is not None:
+        approver, fresh_row = recheck(db)
+    else:
+        approver, fresh_row = identity, db.get(Workspace, row.id)
+    conversation = db.get(AssistantConversation, conversation_id)
+    if (
+        conversation is None
+        or fresh_row is None
+        or principal_of(approver) != principal_of(identity)
+        or conversation.owner_principal != principal_of(approver)
+    ):
+        raise NotFoundError("assistant.conversation_not_found", "conversation not found")
+
+
 def approve_proposal(
     db: Session,
     conversation: AssistantConversation,
@@ -1233,6 +1420,7 @@ def approve_proposal(
     if proposal.content_hash != content_hash:
         raise _stale(latest, "the proposal content changed since it was shown — review it again")
     if proposal.status == "approved":
+        _revalidate_caller(db, conversation_id, identity, row, recheck)
         return _outcome(db, proposal, started=False)
     if proposal.status != "draft":
         raise AppError("assistant.proposal_not_approvable",
@@ -1253,13 +1441,33 @@ def approve_proposal(
                        + "; ".join(m["message"] for m in requirements),
                        {"requirements": requirements}, status_code=409)
     # 3. LIVE catalog + resource identity — network I/O, outside every lock
-    live_catalog = fetch_catalog(workspace)
-    # A twin may have executed this exact revision while we were reading: its
-    # recorded outcome is authoritative and comes before any catalog refusal.
-    db.expire_all()
-    current = db.get(AssistantProposal, proposal.id)
-    if current is not None and current.status == "approved":
+    def winner_after_io() -> ApprovalOutcome | None:
+        """A twin may have executed this exact revision while we were reading: its
+        recorded outcome is authoritative — but only for a caller who is STILL the
+        authorized owner right now (re-resolved), never as a way around an auth
+        or ownership failure."""
+        db.rollback()
+        db.expire_all()
+        current = db.get(AssistantProposal, proposal.id)
+        if current is None or current.status != "approved":
+            return None
+        _revalidate_caller(db, conversation_id, identity, row, recheck)
         return _outcome(db, current, started=False)
+
+    try:
+        live_catalog = fetch_catalog(workspace)
+    except Exception as exc:
+        winner = winner_after_io()
+        if winner is not None:
+            return winner
+        raise AppError(
+            "assistant.catalog_unavailable",
+            f"the workspace catalog could not be read: {_short(exc)}",
+            {"revision": proposal.revision}, status_code=502,
+        ) from exc
+    winner = winner_after_io()
+    if winner is not None:
+        return winner
     content, _display, errors = proposal_contract.validate(proposal.content, live_catalog)
     if content is None or errors:
         raise AppError("assistant.proposal_invalid",
@@ -1305,7 +1513,7 @@ def approve_proposal(
                            {"requirements": deploy_requirements(fresh_row) if fresh_row else []},
                            status_code=409)
         current = db.get(AssistantProposal, proposal.id)
-        if current.status == "approved":
+        if current.status == "approved":  # recheck() already ran above in this transaction
             db.rollback()
             return _outcome(db, current, started=False)
         if current.status != "draft" or current.content_hash != content_hash:
@@ -1347,12 +1555,19 @@ def approve_proposal(
             .values(agent_id=agent.id, deployment_id=deployment.id, job_id=job.id)
         )
         db.commit()
-    except (AppError, IntegrityError):
+    except (AppError, IntegrityError) as exc:
+        if isinstance(exc, AppError) and exc.code.split(".")[0] in ("auth", "workspace") or (
+            isinstance(exc, NotFoundError)
+        ):
+            db.rollback()
+            raise  # an authorization/ownership failure is never converted into a success
         db.rollback()
         db.expire_all()
         current = db.get(AssistantProposal, proposal.id)
         if current is not None and current.status == "approved":
-            # a racing approval of this very revision won — hand back ITS outcome
+            # a racing approval of this very revision won — hand back ITS outcome, to
+            # a caller who is still the authorized owner
+            _revalidate_caller(db, conversation_id, identity, row, recheck)
             return _outcome(db, current, started=False)
         raise
     db.expire_all()
@@ -1383,7 +1598,12 @@ def assert_job_bindings_pinned(
     content_raw = pin.get("content")
     if not isinstance(pinned, dict) or not isinstance(content_raw, dict):
         raise RuntimeError("assistant job has no pinned bindings — refusing to deploy")
+    copies = pin.get("skill_copies") or {}
     for key in _SPEC_KEYS:
+        if key == "skills" and copies:
+            expected = [copies.get(path, path) for path in pinned.get("skills") or []]
+            if (agent.spec or {}).get("skills") == expected:
+                continue
         if (agent.spec or {}).get(key) != pinned.get(key):
             raise RuntimeError(
                 f"assistant job: agent spec member '{key}' differs from the approved "

@@ -181,7 +181,9 @@ and review its proposal for **one new managed Harness business agent**. The prop
 only references tools, S3 skills and knowledge bases that already exist in the
 workspace (APPROVED registry records, ACTIVE managed KBs) and shows the **exact
 bindings** it will deploy (gateway ARN and auth identity, skill S3 path and content
-digest, the workspace's shared memory or none). It is inert until you click
+digest of every file in the skill directory, the workspace's shared memory or none);
+approved skills deploy from an immutable copy of exactly those bytes in the workspace's
+artifacts bucket. It is inert until you click
 **APPROVE & DEPLOY** — a separate, billable action that requires the `agents.deploy`
 permission (re-checked, together with your account and workspace grant, at the moment
 of execution) and creates the agent through the normal deploy job in the workspace's

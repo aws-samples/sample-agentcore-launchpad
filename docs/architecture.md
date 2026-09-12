@@ -783,6 +783,39 @@ permitted mount operation). Job eligibility is durable: a launch claims
 a dead process left `running`, and a terminal job is inert — a stale approval retry
 that re-wakes it runs nothing.
 
+**Exact execution and cleanup (review 3).** The stages **consume** the pin instead of
+re-resolving: the Harness request carries the reviewed gateway ARNs and outbound-auth
+identities, the reviewed memory ARN (or the explicit `disabled` opt-out) and the
+reviewed KB gateway. **Skills are deployed from an immutable copy, never from the
+mutable source**: at review the catalog snapshots the *exact directory the Harness
+loads* (a legacy `…/SKILL.md` source is normalized to its parent, so every sibling
+object counts) and hashes the real bytes of every object (`source_prefix`,
+`content_digest`, `object_count`, `total_bytes`); the approved `package` stage reads
+those bytes again, refuses when they no longer hash to the reviewed digest, publishes
+them as a content-addressed copy under the workspace's own artifacts bucket
+(`assistant-skills/<digest16>/…`, conditional `If-None-Match: *` writes, an existing
+object must carry identical bytes, nothing is ever deleted), and switches the agent's
+spec, the job pin (`skill_copies`) and the request to the copy URI, which is re-hashed
+right before `CreateHarness`. A KB mount verifies, before any IAM/target write, that
+the workspace's **existing** gateway (never listed-and-created) is READY and still has
+the reviewed id, ARN, URL, inbound authorizer type and configuration
+(`lookup_existing_kb_gateway`). Every "winner" answer of an approval — before the
+catalog read, after it (including when the catalog read itself fails with a live
+registry error; `502 assistant.catalog_unavailable` when there is no winner) and inside
+the transaction — first re-validates the caller (current session, permission, grant,
+readiness, immutable principal equality with the conversation owner); authorization
+and ownership errors are never converted into a success. A turn whose owner is still a
+live request of this process is never taken over whatever its age (`_LIVE_TURNS`);
+TTL takeover is for orphans of a dead process, and every write of a turn (user, tool,
+reply, proposal) is fenced on the claim token. The upstream event stream is consumed
+by a producer thread while the response generator waits at most one heartbeat (SSE
+keep-alive), so a client disconnect (ASGI 2.0 or a failed ASGI 2.4 send) is observed
+within a second, closes the upstream — unblocking a pending read — and the response
+object finalizes the turn. Observability keeps **every** content event's
+`session.id` (record attributes or nested `resource.attributes`, merged per span into
+`meta.session_ids`), so a private session named only by a content event stays hidden
+before and after the cache.
+
 **Console.** The page (`pages/CreateAgentAssistant.tsx`) shows the transcript with
 streaming (the raw proposal block is replaced by a pointer to the panel), the catalog
 summary with the workspace's memory/KB-gateway capabilities, the proposal (fields,

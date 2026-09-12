@@ -222,9 +222,11 @@ def reference_errors(content: ProposalContent, catalog: dict[str, Any]) -> list[
             errors.append(
                 f"knowledge_bases: '{kb_id}' is not an active managed knowledge base here"
             )
+    live_kb = resources.get("kb_gateway") or {}
     if content.knowledge_bases and not (
         resources.get("kb_gateway_id") and resources.get("kb_gateway_arn")
         and resources.get("oauth_provider_arn")
+        and live_kb.get("url") and live_kb.get("status") == "READY"
     ):
         errors.append(
             "knowledge_bases: this workspace has no ready knowledge-base gateway "
@@ -312,16 +314,25 @@ def resource_bindings(content: ProposalContent, catalog: dict[str, Any]) -> dict
         key: {
             "record_id": index["skills"][key].get("record_id"),
             "path": index["skills"][key]["path"],
+            # the EXACT directory the Harness loads (a legacy `…/SKILL.md` path is
+            # normalized to its parent) and the sha256 of every object's real bytes
+            "source_prefix": index["skills"][key].get("source_prefix"),
             "content_digest": index["skills"][key].get("content_digest"),
             "object_count": index["skills"][key].get("object_count"),
+            "total_bytes": index["skills"][key].get("total_bytes"),
         }
         for key in content.skills
     }
+    live_kb = resources.get("kb_gateway") or {}
     kb_gateway = (
         {
             "gateway_id": resources.get("kb_gateway_id"),
             "gateway_arn": resources.get("kb_gateway_arn"),
             "oauth_provider_arn": resources.get("oauth_provider_arn"),
+            # the live configuration the mount depends on, pinned for the stages
+            "url": live_kb.get("url"),
+            "authorizer_type": live_kb.get("authorizer_type"),
+            "authorizer": live_kb.get("authorizer"),
         }
         if content.knowledge_bases
         else None

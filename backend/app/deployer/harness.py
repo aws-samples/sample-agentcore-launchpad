@@ -329,7 +329,14 @@ def _verify_pinned_resources(
                     "bindings — refusing to deploy a resolution the member did not approve"
                 )
     if skills:
+        from app.assistant.service import verify_skill_copy
+
+        copies = pin.get("skill_copies") or {}
         for key, pinned in (res.get("skills") or {}).items():
+            copy_uri = copies.get(pinned["path"])
+            if copy_uri:
+                verify_skill_copy(ctx.workspace, copy_uri, pinned)  # the bytes the request loads
+                continue
             snapshot = skill_content_snapshot(ctx.workspace, pinned["path"])
             if snapshot is None or snapshot["content_digest"] != pinned.get("content_digest"):
                 raise RuntimeError(
@@ -415,7 +422,52 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     return StageResult(detail=f"harnessName: {params['harnessName']}")
 
 
+def _package_assistant_skills(ctx: StageContext, agent: Agent, pin: dict[str, Any]) -> StageResult:
+    """Approved assistant job: prove the reviewed skill bytes, publish them as an
+    immutable content-addressed copy in the workspace's artifacts bucket, and switch
+    the agent's spec + the job pin to the COPY URIs (so IAM, the request and every
+    later resume use the copy). Idempotent: an existing copy with identical bytes is
+    reused; different bytes under the same digest are refused."""
+    from app.assistant.service import publish_skill_copy
+    from app.models.ledger import Job
+
+    spec = AgentSpec(**agent.spec)
+    pinned_skills = ((pin.get("bindings") or {}).get("resources") or {}).get("skills") or {}
+    if not spec.skills:
+        return StageResult(skipped=True, detail="skipped · harness — no skills to pin")
+    copies: dict[str, str] = dict(pin.get("skill_copies") or {})
+    by_path = {v["path"]: v for v in pinned_skills.values()}
+    for path in (pin.get("bindings") or {}).get("skills") or []:
+        pinned = by_path.get(path)
+        if pinned is None or not pinned.get("source_prefix") or not pinned.get("content_digest"):
+            raise RuntimeError(f"skill {path}: no reviewed byte identity to pin — refusing")
+        if path not in copies:
+            copies[path] = publish_skill_copy(ctx.workspace, pinned)
+            ctx.log(f"skill {path} → immutable copy {copies[path]}")
+    db = ctx.session()
+    try:
+        row = db.get(Agent, agent.id)
+        job = db.get(Job, ctx.job_id)
+        new_spec = dict(row.spec)
+        pinned_paths = (pin.get("bindings") or {}).get("skills") or []
+        new_spec["skills"] = [copies.get(p, p) for p in pinned_paths]
+        row.spec = new_spec
+        payload = dict(job.payload)
+        payload["assistant"] = {**payload["assistant"], "skill_copies": copies}
+        job.payload = payload
+        db.commit()
+        agent.spec = new_spec
+    finally:
+        db.close()
+    pin["skill_copies"] = copies
+    ctx.scratch["create_params"] = _build_live_params(AgentSpec(**agent.spec), ctx.workspace, pin)
+    return StageResult(detail=f"{len(copies)} reviewed skill bundle(s) pinned as immutable copies")
+
+
 def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
+    pin = ctx.scratch.get("assistant_pin")
+    if pin:
+        return _package_assistant_skills(ctx, agent, pin)
     if agent.system_key:
         # A system-managed preset's only artifact is its versioned skill bundle. The
         # upload happens here — inside the job, with stage status — never on a read.
@@ -445,9 +497,9 @@ def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) ->
             # Assistant approval: mount on the EXISTING, READY gateway the member
             # reviewed — never the list-and-create helper.
             expected = ((pin.get("bindings") or {}).get("resources") or {}).get("kb_gateway") or {}
-            gw = kbgw.lookup_existing_kb_gateway(
-                control, ctx.workspace, expected_arn=expected.get("gateway_arn")
-            )
+            # id, ARN, URL, inbound authorizer type + configuration and READY — verified
+            # against the reviewed configuration BEFORE any IAM/target write
+            gw = kbgw.lookup_existing_kb_gateway(control, ctx.workspace, expected=expected)
             ctx.log(f"kb gateway {gw['id']} verified READY (existing, reviewed)")
         else:
             gw = kbgw.ensure_kb_gateway_persisted(control, ctx.workspace)
