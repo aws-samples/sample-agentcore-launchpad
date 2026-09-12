@@ -40,6 +40,7 @@ from app.routers.observability import router as observability_router
 from app.routers.overview import router as overview_router
 from app.routers.public_api import router as public_router
 from app.routers.registry import router as registry_router
+from app.routers.system_agents import router as system_agents_router
 from app.routers.tools import router as tools_router
 from app.routers.users import router as users_router
 from app.routers.workspaces import router as workspaces_router
@@ -132,6 +133,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(agent_skills_router)  # attach-without-registering skill sources
     app.include_router(tools_router)
     app.include_router(registry_router)
+    app.include_router(system_agents_router)
     app.include_router(knowledge_router)  # managed knowledge bases + retrieval playground
     app.include_router(chat_router)
     app.include_router(memory_router)  # read-only short-/long-term memory console

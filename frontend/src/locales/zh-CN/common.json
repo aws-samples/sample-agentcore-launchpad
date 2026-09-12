@@ -120,7 +120,8 @@
   "status": {
     "active": "运行中",
     "deploying": "部署中",
-    "failed": "失败"
+    "failed": "失败",
+    "uninstalling": "卸载中"
   },
   "overview": {
     "kicker": "// 任务控制中心",
@@ -417,6 +418,72 @@
       "filterStatusAll": "全部状态",
       "searchPlaceholder": "搜索 Agent 名称 / ID……",
       "noMatch": "没有匹配当前筛选条件的 Agent"
+    },
+    "system": {
+      "title": "系统预置",
+      "sub": "平台托管 · 管理员安装",
+      "chip": "系统",
+      "protected": "系统托管预置：不提供编辑、重新发布、转换和删除。管理员在“系统预置”面板中维护它。",
+      "detailNote": "{{label}} 是系统托管预置（技能包 v{{version}}）。其配置由平台持有；请在“系统预置”面板中修复、更新或卸载。",
+      "empty": "此构建未定义任何系统预置。",
+      "adminOnly": "安装、修复和卸载系统预置需要管理员账号。",
+      "requirements": "该 Workspace 尚未满足预置的安装条件：{{list}}",
+      "collision": "已有一个名为“{{name}}”的普通 Agent 占用了保留名称。预置不会接管它——请先删除或重命名该 Agent。",
+      "updateAvailable": "有可用更新",
+      "installedVersion": "已安装 v{{v}}",
+      "tools": "允许的工具",
+      "model": "模型",
+      "kb": "已挂载 {{n}} 个知识库",
+      "kbNone": "未挂载知识库（仅使用方法论索引）",
+      "install": "安装",
+      "repair": "修复",
+      "update": "更新",
+      "uninstall": "卸载",
+      "installStarted": "正在安装 {{name}}——部署任务已启动。",
+      "repairStarted": "正在重新发布 {{name}}——部署任务已启动。",
+      "alreadyCurrent": "{{name}} 已按当前版本与配置安装，无需变更。",
+      "uninstalled": "已卸载 {{name}}。",
+      "status": {
+        "configuration_required": "WORKSPACE 未就绪",
+        "not_installed": "未安装",
+        "deploying": "部署中",
+        "active": "运行中",
+        "failed": "失败",
+        "uninstalling": "卸载中"
+      },
+      "confirm": {
+        "installTitle": "安装系统预置？",
+        "install": "这会在当前 Workspace 中为“{{name}}”创建托管 Harness、执行角色和带版本的 S3 技能包——这是一次计费的 AWS 部署，走标准部署管道。",
+        "repairTitle": "重新发布系统预置？",
+        "repair": "这会用平台持有的配置和当前技能包就地重新发布“{{name}}”（新的 Harness 版本，ARN 不变）。",
+        "uninstallTitle": "卸载系统预置？",
+        "uninstall": "这会排入一个拆除任务，删除“{{name}}”背后的 Harness 与执行角色。拆除完成前预置保留其身份；失败的拆除可以重试。对话历史保留在台账中；之后可以重新安装。"
+      },
+      "loading": "加载中……",
+      "reload": "刷新",
+      "retry": "重试",
+      "loadFailed": "无法加载系统预置：{{reason}}",
+      "requirementsInstalled": "该 Workspace 已不再满足预置的前置条件，恢复前无法修复：{{list}}",
+      "memoryDisabled": "持久记忆：已关闭（每个会话从全新基线开始）",
+      "adminOptionsApiOnly": "模型与可选知识库由管理员通过安装 API 请求体（{model_id, model_source, knowledge_bases}）指定；本面板按已存或默认选择安装。",
+      "requirementCodes": {
+        "bootstrap_not_ready": "Workspace 引导尚未完成",
+        "missing_artifacts_bucket": "Workspace 缺少制品存储桶",
+        "missing_execution_role": "Workspace 缺少执行角色",
+        "per_agent_roles_disabled": "按 Agent 的执行角色已禁用；预置绝不运行在共享角色上",
+        "missing_oauth_provider": "Workspace 缺少知识库网关的 OAuth2 凭证提供者（挂载知识库所需）"
+      },
+      "presets": {
+        "aws-agent-solution-architect": {
+          "description": "平台托管的顾问型 Harness，把 AI Agent 业务需求转化为评估优先、生产级的 AWS 方案设计。通过公共 AWS Knowledge MCP 服务器核验 AWS 事实，并从带版本的 S3 技能包加载方法论。"
+        }
+      },
+      "retryUninstall": "重试卸载",
+      "uninstallStarted": "正在卸载 {{name}}——拆除任务已启动。",
+      "uninstallRetried": "正在重试卸载 {{name}}——新的拆除任务已启动。",
+      "uninstallInFlight": "{{name}} 的卸载已在进行中。",
+      "uninstallRunning": "第 {{attempt}} 次卸载（任务 {{job}}）正在删除 Harness 及其角色；拆除完成前预置保留其身份。",
+      "uninstallFailed": "第 {{attempt}} 次卸载（任务 {{job}}）失败；预置保留其身份并可重试。期间安装与修复会被拒绝。"
     },
     "versions": {
       "title": "版本与端点",
@@ -1888,6 +1955,12 @@
     "http.500": "服务器内部错误",
     "agent.redeploy_immutable": "重新发布时名称和方式不能变——如需变更请克隆为新 Agent。",
     "agent.deploy_in_progress": "该 Agent 已有一个部署正在进行中。",
+    "agent.system_managed": "这是系统托管预置——该操作不可用。管理员请在“系统预置”面板中维护。",
+    "agent.name_reserved": "该名称已保留给系统托管预置。",
+    "system_agent.workspace_not_ready": "该 Workspace 尚不能承载系统预置——请先完成其引导。",
+    "system_agent.name_collision": "已有普通 Agent 占用了保留名称；预置不会接管它。请先删除或重命名该 Agent。",
+    "system_agent.not_installed": "当前 Workspace 未安装该系统预置。",
+    "system_agent.unknown": "未知的系统预置。",
     "registry.name_exists": "同名记录已存在。",
     "registry.invalid_url": "注册 MCP 需要 http(s) 服务器 URL。",
     "registry.skill_md_required": "注册技能需要 SKILL.md 内容。",
@@ -1939,7 +2012,9 @@
     "registry.record_not_deployed": "没有 Launchpad Agent 拥有该注册记录——实时名片只能从已部署 Agent 的运行时读取。",
     "registry.record_not_a2a": "该记录背后的 Agent 不是 A2A 服务器，因此不提供 Agent 名片。",
     "registry.agent_not_ready": "该 Agent 尚未部署并处于活动状态——读取实时名片需要运行中的运行时。",
-    "registry.live_card_failed": "运行时未能提供其 Agent 名片。"
+    "registry.live_card_failed": "运行时未能提供其 Agent 名片。",
+    "kb.attached_to_system_agent": "该知识库已挂载在系统托管预置上；请先通过预置维护路径解除挂载，再删除。",
+    "system_agent.uninstalling": "该预置正在卸载（或上次卸载失败、等待重试）；拆除完成前安装与修复会被拒绝。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",

@@ -99,7 +99,9 @@ def test_build_params_tools_skills_env_no_memory():
     ]
     assert params["skills"] == [{"path": "skills/expense-report-writer"}]
     assert params["environmentVariables"] == {"FOO": "bar"}
-    assert "memory" not in params
+    # a flag-less spec opts out explicitly: an OMITTED memory member means the
+    # harness default (managed memory + long-term strategies), not "no memory"
+    assert params["memory"] == {"disabled": {}}
 
 
 def test_build_params_multiple_gateway_auth_modes():

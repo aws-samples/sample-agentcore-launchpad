@@ -48,6 +48,8 @@ def _pre_p2_database(tmp_path):
     engine = sa.create_engine(f"sqlite:///{tmp_path / 'ledger.db'}")
     Base.metadata.create_all(bind=engine)
     with engine.begin() as conn:
+        # the system-preset index spans agents.workspace_id and postdates P2 too
+        conn.execute(sa.text("DROP INDEX uq_agents_workspace_system_key"))
         for table in WORKSPACE_SCOPED_TABLES:
             conn.execute(sa.text(f"DROP INDEX ix_{table}_workspace_id"))
             conn.execute(sa.text(f"ALTER TABLE {table} DROP COLUMN workspace_id"))

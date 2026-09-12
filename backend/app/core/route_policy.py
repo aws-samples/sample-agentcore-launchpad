@@ -106,6 +106,13 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/agents/{agent_id}/redeploy"): PERM_AGENT_DEPLOY,
     ("POST", "/api/agents/{agent_id}/invoke"): MEMBER,  # parity with Chat
     ("GET", "/api/jobs/{job_id}"): MEMBER,
+    # ---- system-managed presets: status is a ledger read; install/repair and
+    # uninstall create or delete billable AWS resources on an operator's explicit
+    # request and are the ONLY mutation paths for a preset (the agent routes above
+    # refuse rows that carry Agent.system_key, whatever perm:* the caller holds) ----
+    ("GET", "/api/system-agents"): MEMBER,
+    ("POST", "/api/system-agents/{preset_key}/install"): ADMIN,
+    ("DELETE", "/api/system-agents/{preset_key}"): ADMIN,
     # ---- credential minting ----
     ("GET", "/api/apikeys"): MEMBER,
     ("POST", "/api/apikeys"): MEMBER,

@@ -34,6 +34,8 @@ from app.services.runtime_discovery import (
     scan_runtimes,
 )
 from app.services.workspace import WorkspaceContext
+from app.system_agents import service as system_agents
+from app.system_agents.presets import is_reserved_name
 
 logger = logging.getLogger("launchpad.agents")
 
@@ -57,6 +59,9 @@ def _agent_out(agent: Agent, deployment: Deployment | None = None) -> dict[str, 
         "owner": agent.owner,
         "error": agent.error,
         "spec": agent.spec,
+        # Server-owned; None for every ordinary agent. The console renders the
+        # SYSTEM chip and disables the protected actions from this, never from spec.
+        "system": system_agents.system_projection(agent),
         "experiment_capability": experiment_capability(agent),
         "canary_capability": canary_capability(agent),
         "invoke_capability": invoke_capability(agent),
@@ -134,6 +139,15 @@ def create_agent(
             f"method '{spec.method}' ships in a later phase",
             {"supported": sorted(SUPPORTED_METHODS)},
             status_code=400,
+        )
+    if is_reserved_name(spec.name):
+        # Reserved for a system-managed preset: an ordinary agent can never hold it,
+        # so a later install cannot be confused with (or adopt) a member's agent.
+        raise AppError(
+            "agent.name_reserved",
+            f"'{spec.name}' is reserved for a system-managed preset",
+            {"name": spec.name},
+            status_code=409,
         )
     # Names are unique per workspace, not per ledger: two environments own their
     # own AgentCore resource namespaces.
@@ -282,6 +296,7 @@ def redeploy_agent(
     agent = _agent_in(db, ws, agent_id)
     if agent is None or agent.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
+    system_agents.refuse_system_mutation(agent, "redeploy")
     if agent.method == DISCOVERED_METHOD:
         raise AppError(
             "agent.redeploy_external",
@@ -331,6 +346,7 @@ def convert_agent(
     source = _agent_in(db, ws, agent_id)
     if source is None or source.status == "deleted":
         raise NotFoundError("agent.not_found", "agent not found")
+    system_agents.refuse_system_mutation(source, "convert")
     if source.method != "harness" or source.status != "active":
         raise AppError(
             "agent.convert_unsupported",
@@ -420,6 +436,8 @@ def delete_agent(
     agent = _agent_in(db, ws, agent_id)
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
+    # Before the AWS teardown: a refused delete must leave the harness untouched.
+    system_agents.refuse_system_mutation(agent, "delete")
     aws_resource_deleted = _delete_agent_resources(agent, ws.context)
     agent.status = "deleted"
     agent.updated_at = datetime.now(UTC)

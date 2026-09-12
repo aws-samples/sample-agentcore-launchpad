@@ -91,6 +91,30 @@ invalid`、`AWS access denied`、`AWS is throttling this request`、`AWS resourc
 `detail` 只含 `aws_error_code`——AWS 原文会暴露本部署的角色 ARN、实例 id 与操作名,这些只留在
 API-key 信任边界的控制台一侧。
 
+## 控制台系统 Agent API——托管预置 / Console System Agents API
+
+系统托管预置（见架构文档“系统托管预置”）只能在这里安装、修复与移除。读取不触达 AWS；
+安装是显式、计费的操作员动作，走标准部署管道。
+
+| 方法 | 路径 | 角色 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/system-agents` | 成员 | `{workspace_id, presets[{key, name, label, description, method, skill_version, installed_skill_version, update_available, status, requirements[{code, message}], name_collision, agent_id, agent_status, error, job_id, deployment_id, deployment_status, model_id, model_source, knowledge_bases[], allowed_tools[], memory, operation, can_install, can_repair, can_uninstall, updated_at}]}`——`status ∈ configuration_required | not_installed | deploying | uninstalling | active | failed`；拆除任务持有该行时 `operation` 为 `{kind: uninstall, job_id, job_status, attempt, error, retryable}`，否则为 `null`；条件 code 为 `bootstrap_not_ready | missing_artifacts_bucket | missing_execution_role | per_agent_roles_disabled | missing_oauth_provider`；`memory` 为 `disabled`；仅读台账 |
+| `POST` | `/api/system-agents/{key}/install` | 管理员 | 必需的 JSON 请求体 `{model_id?, model_source?, knowledge_bases?[{kb_id, name?, description?}], force?}`（`{}` = 安装时平台默认值，修复时已存选择）→ 有任务在途时 `202 {agent, job_id, deployment_id, created, changed, preset}`（部署中的预置返回其既有任务且 `changed: false`；竞争安装返回胜出方的任务），运行中的预置已匹配时 `200` 并带上一任务的 ID。知识库在 provision 阶段于目标 Workspace 中核验 |
+| `DELETE` | `/api/system-agents/{key}` | 管理员 | `202 {agent, job_id, operation: uninstall, attempt, started, preset}`——在一次提交中声明该行（`uninstalling`，乐观条件更新）并排入拆除任务；同时到达的请求共享一个任务（落败方 `started: false`）；独占（按 Agent 的建议锁，单主机）且带围栏的 worker 核实每个知识库目标、Harness 与专用角色均已消失之前（任务上有含精确资源 ID 的逐步 `progress`，仅在已核实时继承到下一次尝试）该行保留身份；拆除失败则进入第 N+1 次尝试；部署进行中返回 `409 agent.deploy_in_progress` |
+
+错误码：`system_agent.unknown`（404）、`system_agent.workspace_not_ready`（409，
+`detail.requirements[{code, message}]`）、`system_agent.name_collision`（409，普通 Agent
+占用保留名称——绝不接管）、`system_agent.not_installed`（卸载不存在的预置时 404）、
+`system_agent.uninstalling`（拆除任务持有该行或上次尝试失败时，安装/修复返回 409，
+`detail.job_id/job_status/error`）、`agent.deploy_in_progress`（部署中卸载时 409）。普通 Agent 路由上，预置在任何 AWS 调用之前返回
+`agent.system_managed`（403，`detail.action ∈ redeploy | delete | convert | experiment |
+canary | promote | …`，`detail.maintenance_route`）；实验与运行时金丝雀的 action 路由对引用预置的
+记录返回同样的错误；`DELETE /api/knowledge-bases/{kb_id}` 在知识库挂载于预置时返回
+`kb.attached_to_system_agent`（409，`detail.agents`），无论是否 `force`；用保留名称
+`POST /api/agents` 返回 `agent.name_reserved`（409）。每个 Agent 投影都带
+`system: {managed, key, label, skill_version, protected_actions} | null`。
+`AgentSpec.allowed_tools`（仅 Harness）接受 1–64 字符、匹配 `*|@?name(/tool)?` 的条目。
+
 ## 控制台 Registry API——实时名片 / Console Registry API: live agent card
 
 `GET /api/registry/records/{record_id}/live-agent-card` 是 Registry 抽屉「AGENT 名片」区块中「实时名片」按钮背后的读取：

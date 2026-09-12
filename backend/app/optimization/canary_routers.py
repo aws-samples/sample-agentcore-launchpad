@@ -16,6 +16,7 @@ from app.optimization.models import RUNTIME_CANARY_STAGES, Experiment, RuntimeCa
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec
 from app.services.harness_convert import graft_config_bundle
+from app.system_agents import service as system_agents
 
 router = APIRouter(prefix="/api/runtime-canaries", tags=["runtime-canaries"])
 
@@ -225,6 +226,8 @@ def runtime_canary_action(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     row = _canary_in(db, ws, canary_id)
+    system_agents.assert_not_system_agent(db, row.champion_agent_id, "canary")
+    system_agents.assert_not_system_agent(db, row.challenger_agent_id, "canary")
     if row.running_action:
         raise AppError(
             "canary.action_in_flight",

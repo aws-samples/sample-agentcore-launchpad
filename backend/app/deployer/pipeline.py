@@ -118,13 +118,17 @@ def create_deployment(
     mode: str = "create",
     *,
     skip_register: bool = False,
+    payload_extra: dict[str, Any] | None = None,
 ) -> tuple[Deployment, Job]:
     """Create the Deployment (stages pending) + Job rows for one deploy run.
 
     ``mode`` is "create" for a first deploy or "update" for an in-place
     re-publish; the deploy stage reads it to choose Create* vs Update* APIs.
     Promotion updates may skip registry publication because identity is
-    unchanged and registry failure must not obscure a successful rollout."""
+    unchanged and registry failure must not obscure a successful rollout.
+    ``payload_extra`` lands on the Job in the SAME commit as the rows (a caller
+    that must pin data to the job — the system-preset release — cannot be left
+    with a runnable job and no pin by a crash between two commits)."""
     # The workspace comes off the agent, not the request: a promotion or resumed
     # job must land in the same environment as the agent it deploys.
     deployment = Deployment(
@@ -142,6 +146,7 @@ def create_deployment(
             "deployment_id": deployment.id,
             "mode": mode,
             "skip_register": skip_register,
+            **(payload_extra or {}),
         },
     )
     db.add(job)
@@ -175,6 +180,13 @@ def execute_deploy_job(job_id: str) -> None:
             job_id=job_id,
             workspace=context_for_workspace(job.workspace_id),
         )
+        if agent.system_key:
+            # Every system-preset job — fresh or resumed, whatever stages already
+            # succeeded or were skipped — proves its release pin and the complete
+            # expected skill URI for THIS workspace before a single stage runs.
+            from app.system_agents.service import assert_job_release_pinned
+
+            assert_job_release_pinned(job.payload, agent, ctx.workspace)
         ctx.scratch["mode"] = job.payload.get("mode", "create")
 
         done = {s["name"] for s in deployment.stages if s["status"] in ("succeeded", "skipped")}
@@ -295,9 +307,16 @@ def resume_pending_jobs() -> list[str]:
     their workspace from `jobs.workspace_id` inside the worker, so this only has
     to hand over the id.
     """
+    # Lazy: the uninstall worker imports the agents router (teardown helper), which
+    # imports the system-agents service, which imports this module.
+    from app.system_agents import uninstall as system_uninstall
+
     starters: dict[str, Callable[[str], threading.Thread]] = {
         "deploy_agent": start_deploy_async,
         workspace_bootstrap.JOB_TYPE: workspace_bootstrap.start_bootstrap_async,
+        # a crashed uninstall is still `running` in the ledger; the resume starter
+        # is the only caller allowed to pick such a job up again
+        system_uninstall.JOB_TYPE: system_uninstall.start_uninstall_resume,
     }
     db = SessionLocal()
     try:

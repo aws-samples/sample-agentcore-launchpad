@@ -67,6 +67,8 @@ def run_action(
     def progress(message: str) -> None:
         _update(canary_id, progress=message[:300])
 
+    _refuse_system_subject(_get(canary_id), action)  # before any write or thread
+
     def runner() -> None:
         try:
             fn(progress)
@@ -348,10 +350,23 @@ def _create_variant_eval(
     }
 
 
+def _refuse_system_subject(row: RuntimeCanary, action: str) -> None:
+    """A canary whose champion or challenger is a system-managed preset never
+    mints, promotes, rolls back or cleans up — refused before AWS is touched."""
+    from app.system_agents.service import refuse_system_agent_id
+
+    refuse_system_agent_id(row.champion_agent_id, action)
+    refuse_system_agent_id(row.challenger_agent_id, action)
+    meta_id = (row.artifacts or {}).get("agent_meta", {}).get("id")
+    if meta_id:
+        refuse_system_agent_id(meta_id, action)
+
+
 def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
     """Mint the candidate version, stand up the dedicated Gateway + stable/
     treatment endpoints, and start the 90/10 target-based A/B test."""
     row = _get(canary_id)
+    _refuse_system_subject(row, "setup")
     meta = row.artifacts["agent_meta"]
     spec = AgentSpec(**row.artifacts["edited_spec"])
     db = SessionLocal()
@@ -640,6 +655,7 @@ def act_complete(
     endpoint repoint. Endpoint teardown happens in cleanup.
     """
     row = _get(canary_id)
+    _refuse_system_subject(row, "complete")
     assert_verdict_allows(
         row, allow_non_significant=allow_non_significant
     )
@@ -689,6 +705,7 @@ def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
     is production truth again.
     """
     row = _get(canary_id)
+    _refuse_system_subject(row, "rollback")
     setup = row.artifacts.get("setup") or {}
     meta = row.artifacts["agent_meta"]
     workspace = context_for_workspace(row.workspace_id)

@@ -35,6 +35,12 @@ export interface AgentInfo {
   spec: Record<string, unknown>;
   /** The A2A registry record the last deploy created/refreshed, when Registry was available. */
   registry_record_id?: string | null;
+  /**
+   * Server-owned system identity; null for every ordinary agent. Set only by the
+   * backend for a platform-managed preset — the console never derives it from
+   * `spec` or `owner`, and the protected actions are refused server-side too.
+   */
+  system?: SystemAgentIdentity | null;
   experiment_capability: {
     eligible: boolean;
     system_prompt: boolean;
@@ -57,6 +63,85 @@ export interface AgentInfo {
   deployment?: DeploymentInfo;
   deployments?: DeploymentInfo[];
   revision?: number;
+}
+
+export interface SystemAgentIdentity {
+  managed: true;
+  key: string;
+  label: string;
+  skill_version: string | null;
+  protected_actions: string[];
+}
+
+export type SystemPresetStatus =
+  | "configuration_required"
+  | "not_installed"
+  | "deploying"
+  | "uninstalling"
+  | "active"
+  | "failed";
+
+/** The maintenance operation that currently owns a preset row (uninstall job). */
+export interface SystemPresetOperation {
+  kind: "uninstall";
+  job_id: string;
+  job_status: "queued" | "running" | "succeeded" | "failed";
+  attempt: number;
+  error: string | null;
+  /** the teardown failed (or its worker died) and another uninstall may retry it */
+  retryable: boolean;
+}
+
+/** One row of `GET /api/system-agents` — ledger-only, never an AWS read. */
+export interface SystemPresetInfo {
+  key: string;
+  name: string;
+  label: string;
+  description: string;
+  method: "harness";
+  skill_version: string;
+  installed_skill_version: string | null;
+  update_available: boolean;
+  status: SystemPresetStatus;
+  /** what the workspace still lacks; `code` is localized, `message` is the fallback */
+  requirements: { code: string; message: string }[];
+  /** a live ordinary agent holding the reserved name (the preset never adopts it) */
+  name_collision: { agent_id: string; agent_name: string; method: string } | null;
+  agent_id: string | null;
+  agent_status: string | null;
+  error: string | null;
+  job_id: string | null;
+  deployment_id: string | null;
+  deployment_status: string | null;
+  model_id: string | null;
+  model_source: string | null;
+  knowledge_bases: { kb_id: string; name: string; description: string }[];
+  allowed_tools: string[];
+  /** persistent memory contract of the preset (`disabled`) */
+  memory: string;
+  /** set while an uninstall job owns the row (status `uninstalling`) */
+  operation: SystemPresetOperation | null;
+  /** server verdicts per operation: administrator + operation-specific readiness */
+  can_install: boolean;
+  can_repair: boolean;
+  can_uninstall: boolean;
+  updated_at: string | null;
+}
+
+export interface SystemPresetInstallInput {
+  model_id?: string;
+  model_source?: ModelSource;
+  knowledge_bases?: { kb_id: string; name?: string; description?: string }[];
+  force?: boolean;
+}
+
+export interface SystemPresetInstallResult {
+  agent: AgentInfo;
+  job_id: string | null;
+  deployment_id: string | null;
+  created: boolean;
+  changed: boolean;
+  preset: SystemPresetInfo;
 }
 
 /** One row of `GET /api/chat/{agent_id}/sessions`. */
@@ -350,6 +435,12 @@ export interface AgentSpecInput {
    */
   toolkits?: Toolkit[];
   skills?: string[];
+  /**
+   * Harness `allowedTools` patterns (harness method only). Omitted/null keeps the
+   * API default (every tool, incl. the built-in shell). The wizard round-trips a
+   * stored value untouched so a re-publish never widens an agent's tool surface.
+   */
+  allowed_tools?: string[] | null;
   // Managed KB references mounted onto the agent (harness method only).
   knowledge_bases?: { kb_id: string; name: string; description: string }[];
   memory?: { short_term: boolean; long_term: boolean };
@@ -2685,6 +2776,24 @@ export const api = {
       body: JSON.stringify(spec),
     }),
   listAgents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
+  listSystemPresets: () =>
+    request<{ workspace_id: string; presets: SystemPresetInfo[] }>("/api/system-agents"),
+  installSystemPreset: (key: string, input: SystemPresetInstallInput = {}) =>
+    request<SystemPresetInstallResult>(
+      `/api/system-agents/${encodeURIComponent(key)}/install`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  /** 202: claims the row (`uninstalling`) and queues the teardown job; repeated calls
+   * return the same live job, a failed teardown gets a new attempt. */
+  uninstallSystemPreset: (key: string) =>
+    request<{
+      agent: AgentInfo;
+      job_id: string;
+      operation: "uninstall";
+      attempt: number;
+      started: boolean;
+      preset: SystemPresetInfo;
+    }>(`/api/system-agents/${encodeURIComponent(key)}`, { method: "DELETE" }),
   listChatSessions: (agentId: string) =>
     request<{ sessions: ChatSessionInfo[] }>(`/api/chat/${encodeURIComponent(agentId)}/sessions`),
   stopChatSession: (agentId: string, sessionId: string) =>

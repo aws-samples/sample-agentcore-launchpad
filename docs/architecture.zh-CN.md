@@ -279,6 +279,176 @@ Registry 上的编辑与重新导入不会热更新 zip、container 或 Studio �
 抓取新的快照。A2A 有两个彼此独立的 Skill 概念:`AgentSpec.skills` 挂载指令/资源 bundle，而
 `AgentSpec.a2a_skills` 发布 AgentCard 的路由元数据。
 
+### 系统托管预置（`aws-agent-solution-architect`）
+
+**系统托管预置**是身份与配置归平台、而非成员所有的 Agent。第一个预置是
+`aws-agent-solution-architect`：一个托管 Harness（方式B），把 AI Agent 业务需求转化为
+评估优先的 AWS 方案设计。它把一份外部方法论包（三轮需求采集、痛点 → 指标 → 黄金测试 →
+evaluator 映射、AgentCore 优先的取舍、证据分级、不自主执行）改写为平台自有的**英文**资产：
+`backend/app/system_agents/skills/aws-agent-solution-architect/` 下的 `SKILL.md` 与
+`references/`，以及 `backend/app/system_agents/presets.py` 中的系统提示词。原始包不入库，
+其 PDF、DOCX、安装器与桌面脚本一律不发布。Agent 用用户最新一条消息的语言回复，不写死语言。
+
+**服务端持有身份。** 新增可空、带索引的 `Agent.system_key` 标记预置行。它从不从请求读取：
+`AgentSpec` 没有该字段，客户端在 spec 中传 `system_key`/`system` 会被 Pydantic 丢弃，行仍是
+普通 Agent。保留名称对普通 Agent 拒绝（`409 agent.name_reserved`），发现导入也会绕开它；
+`(workspace_id, system_key) WHERE system_key IS NOT NULL AND status != 'deleted'` 上的部分
+唯一索引保证每个 Workspace 只有一个在用的预置。API 投影新增 `system` 成员
+（`{managed, key, label, skill_version, protected_actions}` 或 `null`），控制台据此渲染
+“系统”标签。
+
+**受保护的变更路径。** 对预置，`POST …/redeploy`、`DELETE /api/agents/{id}` 与
+`POST …/convert` 在**构建任何 AWS 客户端之前**返回 `403 agent.system_managed`，无论调用者持有
+哪些 `perm:agents.*`——管理员也一样，只能通过 `/api/system-agents` 维护。间接写入路径受同一拒绝
+保护：`POST /api/experiments/{id}/action` 与 `POST /api/runtime-canaries/{id}/action` 在写入
+`running_action` 之前就拒绝任何引用预置的（可能陈旧的）记录；后台线程会执行的服务入口
+（`act_promote`、金丝雀 `act_setup`/`act_complete`/`act_rollback`、两个 `run_action`
+调度器）在第一次 AWS 调用前拒绝；能力投影另外返回 `reason_code: system-managed`。
+`DELETE /api/knowledge-bases/{kb_id}`（无论是否 `force`）在知识库挂载于预置时，以仅读台账的
+预检返回 `409 kb.attached_to_system_agent`，成员永远无法强制解除预置的知识库或触碰其网关目标；
+管理员先用省略该知识库的 `knowledge_bases` 请求体修复预置来解除挂载。普通 Agent 保持
+2026-08-07 的成员生命周期权限与普通知识库强制删除语义不变（`tests/test_system_agents.py`
+断言了这一对等性）。
+
+**显式、幂等安装——绝不在启动或读取时发生。** `GET /api/system-agents`（成员）只读台账，
+状态为 `configuration_required`（Workspace 未 `ready`、缺 `artifacts_bucket` /
+`execution_role_arn`、或按 Agent 角色被禁用）、`not_installed`、`deploying`、`active`、
+`uninstalling`（拆除任务持有该行；`operation` 携带其任务 ID、状态、尝试次数、错误与
+`retryable`）、`failed` 之一，附带 `{code, message}` 形式的 `requirements`（已安装但 Workspace 后来失去前置
+条件时同样给出），在已有普通 Agent 占用保留名称时给出 `name_collision`（预置**绝不接管**，安装
+返回 `409 system_agent.name_collision`），以及按操作区分的裁决 `can_install` / `can_repair` /
+`can_uninstall`（管理员 + 该操作的就绪条件）。控制台按 code 本地化描述与条件，显示加载、错误与
+重试状态；直接消费安装/卸载响应，并在轮询到终态时刷新 Agent 列表。
+`POST /api/system-agents/{key}/install`（管理员）是唯一触达 AWS 的路径：
+
+| 预置状态 | 结果 |
+|---|---|
+| 未安装 | 新建行 + 创建任务（`202`，`created: true`） |
+| 部署中 | 返回进行中的任务（`202`，`changed: false`）——重复点击不会堆叠任务 |
+| 运行中，版本与选项相同 | 无操作（`200`，`job_id` = 产出当前运行中预置的那个任务） |
+| 失败 / 选项变更 / 技能包更新 / `force: true` | 更新任务 = 就地重新发布（`202`） |
+
+请求体是必需的 JSON 对象；`{}` 在首次安装时表示“平台默认值”，在修复时表示“已存选择”。维护
+声明是持久且原子的：新安装在部分唯一索引上竞争，落败方重读胜出方**并返回其任务 ID**；修复在与
+所建任务行相同的事务里执行一次条件更新 `UPDATE … WHERE status IN (active, failed)`，两个都
+加载了运行中行的会话收敛到同一个任务。**卸载是持久、独占持有的任务，不是终态标记**：
+`DELETE /api/system-agents/{key}` 把行置为非终态 `uninstalling`，并**同时**创建
+`uninstall_system_agent` 任务（`202 {job_id, attempt, started, preset}`）。声明是对请求读到的行
+`updated_at` 的乐观条件更新，因此两个同时到达的请求——首次的一对，或失败尝试的两次重试——只创建
+一个任务，落败方接受它（`started: false`）。在 worker 的拆除被**核实**之前，该行保留系统身份——
+部分唯一索引也持续占用该 key——因此 AWS 资源尚在删除时，任何安装或修复都无法夺取该 key（均返回
+`409 system_agent.uninstalling`）；拆除失败时行仍为 `uninstalling`，原因与逐步进度记录在任务上
+（`operation.retryable`），再次显式卸载启动第 N+1 次尝试。worker（`system_agents/uninstall.py`）**独占且带围栏**。独占是与本仓库拓扑
+（单进程树、单 SQLite 台账）相匹配的单主机保证：worker 在整个运行期间持有
+`data/locks/system-agents/uninstall-<agent id>.lock` 上的 `fcntl` 建议锁——持有者死亡时内核自动
+释放，因此启动恢复可以接手崩溃进程留下的 `running` 任务，而仍存活的孪生 worker（本机线程或进程）
+会被拒绝——同时还必须赢得任务的 `queued → running` 条件更新。这不是分布式租约。围栏在每个云端步骤
+之前、每次进度写入之内与最终事务之内重读任务与行：任务类型与 Workspace 正确、仍为 `running`、行仍为
+`uninstalling`、本任务仍是该行*最新*的尝试——重复、被取代或迟到的 worker 都是惰性的，无法完成或标失
+另一次尝试。资源身份精确：Harness ID 来自行；agentic 知识库目标按保留名称**一次性**解析（此时行仍
+独占该名称——不参考期望 spec，因为失败的解绑修复会在旧目标消失前改写它），其 ID 在删除前**钉在任务上**，
+删除与回读只使用钉住的 ID；执行角色是确定性的按 Agent 角色，必须带本 Agent 的 `launchpad:agent-id`
+标签且不得是共享 Workspace 角色。拆除是**严格**的，使用低层客户端而非尽力而为的 `kb_gateway` helper：
+读取全部网关目标分页，发出 `DeleteGatewayTarget` 并轮询 `GetGatewayTarget` 直到
+`ResourceNotFoundException`（`AccessDenied`、限流、`FAILED` 与 60 秒上限都是可重试失败）；发出
+`DeleteHarness` 并轮询 `GetHarness` 直到 `ResourceNotFoundException`（`DELETE_FAILED` 或 90 秒上限都是
+可重试失败）；然后才按安装时的归属删除角色，与当前 `per_agent_execution_roles` 开关无关（预置绝不在
+共享角色上），报告失败的 IAM 删除是可重试失败，绝不是被忽略的 `False`。逐步进度（`kb_target`、
+`harness`、`role`，含精确资源 ID）记录在任务上；新尝试把已核实完成的步骤作为可跳过项继承（仅在资源 ID
+仍与行一致时信任），并把失败或未完成步骤的**身份**——钉住的目标 ID 与网关 ID——以 `pinned` 状态继承，
+因此重试针对同一资源重跑该步骤，绝不按名称解析到替换资源。在失败的前任仍持有锁时请求的排队重试会
+有界等待（30 秒）锁释放；对仍处于排队状态的任务重复 `DELETE` 会再次启动 worker
+（`queued → running` 条件更新只放行一个），因此排队的尝试绝不依赖应用重启。等待中的 worker 会被
+合并：启动器在本进程内每个任务最多保留一个存活的 worker 线程（同步的登记表，在 worker 自己的
+`finally` 中以及启动失败时清除），因此十二次重复请求只停驻一个等待线程而非十二个；早先的等待者退出后，
+后续请求会用新线程再次唤醒同一个排队任务。登记表只限制等待者数量；按 Agent 的内核锁与任务条件更新
+仍是独占与归属机制。只有完全核实的拆除才把行标记为 `deleted`。普通 Agent 删除保持尽力而为语义；
+预置不使用它。部署任务走
+**标准** `generate → package → provision → deploy → register` 管道，并带三项预置专属加固，且在
+**任务入口**设防：每个系统预置部署任务——无论新建还是恢复、无论哪些阶段已成功或已跳过——在任何
+阶段运行之前都要证明其版本钉住（存在、格式正确、与已存 spec 和当前构建快照一致），**并且** spec 的
+`skills` 恰好是该任务 Workspace 的唯一完整期望 URI
+`s3://<Workspace 制品桶>/system-skills/<预置名>/<version>-<digest12>/`——旧的纯版本目录、其他桶、
+其他预置路径、外来前缀或额外技能源都会连同修复指引一并被拒绝——否则在触碰 AWS 之前以失败任务落地。
+读取仍可展示这样的 spec；执行绝不接受它：
+
+- **原子版本钉住**——写入任何内容之前，安装把仓库技能包**一次性**读入不可变的内存快照，校验该
+  快照（与成员技能相同的 `validate_bundle`，加版本/名称不变量）并计算哈希；随后
+  `{version, digest, files{rel: sha256}}` 与 Agent、Deployment、Job 行**在同一次提交**中落到任务上
+  （`create_deployment(payload_extra=…)`），崩溃永远不会留下没有钉住信息的可运行任务。普通 Harness
+  跳过的 `package` 阶段在钉住信息缺失或格式错误时故障关闭——不接受任何“遗留”情况——并在已存
+  spec、钉住信息与当前构建快照不一致时拒绝；
+- **单一字节快照、内容寻址发布、冲突安全**——被校验和哈希的字节就是被上传并回读的字节。发布目录
+  按内容寻址：`s3://<artifacts_bucket>/system-skills/<name>/<skill_version>-<digest12>/`
+  （快照摘要前 12 位十六进制），已存 spec 的 `skills` URI 精确指向该目录，因此同一版本的两个有效
+  快照（例如多一个参考文件）永远不会共享 Harness 加载的目录——落败的写入者无法向胜出者已部署的
+  目录添加字节。每个对象都以
+  `If-None-Match: *` 创建；412 表示另一写入者抢先，已有字节必须与我们的一致（部分上传后的重启，
+  或相同内容的并发重试），否则阶段失败且不覆盖任何内容。清单（`.bundle-manifest.json`，含逐文件
+  摘要）最后条件写入；竞争的清单只有完全一致时才被接受。已有清单只在与快照完全匹配时才被信任
+  （格式错误或不同 → 失败：已发布版本不可变，同时提升 `skill_version` 与 SKILL.md 的
+  `version`）。最后**回读并哈希每个对象**与快照比对：缺失对象以 `If-None-Match: *` 恢复，损坏
+  对象只以读取时 `ETag` 的 `If-Match` 替换，仍不一致的前缀则失败。最终校验还会列出**整个**
+  发布目录并要求其恰好等于快照文件加清单（外来对象使阶段失败且绝不被删除），重新读取并校验清单
+  本身（版本、摘要与逐文件摘要），并把“合法 JSON 但类型错误”的清单当作故障关闭、零写入、带可操作
+  指引的冲突——该阶段绝不会对缺失或被改动的 `SKILL.md` 报告“已核验”，也绝不写入发布前缀之外；
+- **幂等 AWS 请求**——每次 Harness 创建/更新都发送 `clientToken = lp-<deployment id>`
+  （持久化，而非 scratch 状态），在 AWS 调用与台账写入之间崩溃后恢复的任务重放同一请求，不会
+  创建第二个 Harness。这适用于所有 Harness Agent，不限于预置；
+- **AWS 收到的就是所供给的角色**——deploy 阶段对每个 Harness Agent 都用 provision 阶段的结果
+  （或在丢失 scratch 的恢复中用确定性的 `launchpad-agent-<name>-<id8>` 角色名）设置
+  `executionRoleArn`；generate 阶段的共享角色占位符不再到达 CreateHarness/UpdateHarness。
+  预置另外**故障关闭**：`per_agent_execution_roles=false`，或解析出的角色是共享 Workspace 角色时，
+  generate/deploy 在任何 AWS 调用前抛错，状态读取报告 `per_agent_roles_disabled` 条件。
+
+该前缀族与成员可写的 `skills/`（Registry）和 `agent-skills/`（向导暂存）互不相交。
+
+**受约束的工具面。** Harness 默认向每个会话暴露 `shell` 与 `file_operations`，除非
+`allowedTools` 加以限制，因此新增 harness 专用的 `AgentSpec.allowed_tools`（`None` = 既有
+Agent 保持 API 默认；每项 1–64 字符，匹配服务模型的 `*|@?name(/tool)?`），映射到请求的
+`allowedTools`；预置发送 `["file_*", "@aws_knowledge"]`：技能所需的文件工具、公共 AWS
+Knowledge MCP 服务器（`https://knowledge-mcp.global.api.aws`，`remote_mcp` 工具，无凭证），
+没有 shell。挂载知识库时，部署器追加 `@<知识库网关工具名>`（`@launchpad_kb_gw`）——仅在此时，
+且绝不使用 `*`——使提示词点名的检索工具可被调用。`allowedTools` 只约束 LLM 的工具选择；真正的
+边界是按 Agent 的执行角色：模型调用、仅限该版本技能前缀的 `s3:GetObject`、遥测——仅文档型预置
+别无其他。MCP ToolRef 携带 `auth: "none"`，告知角色推导跳过带认证 MCP 引用才有的工作负载身份与
+令牌库语句（普通 Agent 的 MCP 引用不变）。挂载知识库**恰好**增加 Harness 开发指南为 OAuth2 凭证
+提供者列出的三条语句（“Execution role policy → OAuth2 credential provider”，2026-09-12 阅读），
+以 Workspace 的 `oauth_provider_arn` 实例化到知识库网关的真实提供者：`GetResourceOauth2Token`
+作用于 `token-vault/default`、`workload-identity-directory/default` 与
+`…/workload-identity/harness_<name>-*`；`GetResourceOauth2Token` 作用于提供者 ARN 本身；
+`secretsmanager:GetSecretValue` 作用于 `bedrock-agentcore-identity!default/oauth2/<provider>-*`
+（提供者范围的密钥**确实**需要并予以保留）。没有 `GetResourceApiKey`、没有
+`GetWorkloadAccessToken*`、没有家族级 `bedrock-agentcore-identity!*` 密钥，也没有直接的
+`bedrock:Retrieve` / `AgenticRetrieveStream`——Harness 经网关访问知识库，检索由网关连接器角色执行。
+Workspace 没有可限定的提供者时，带知识库的安装被拒绝（`409`，条件 `missing_oauth_provider`）。
+普通 Agent 保持历史策略形状。向导在编辑/重新发布时原样回传已存的 `allowed_tools`（`AgentSpecInput`
+已定型），控制台重新发布永远不会放宽工具面——注意按服务模型，UpdateHarness 省略 `allowedTools`
+会保留线上限制，因此此前的风险是后续重建时丢失台账意图，而非立刻放宽。
+
+**记忆。** `short_term`/`long_term` 标志无法对真实 API 表达“仅短期”：共享 Workspace 记忆带有
+长期策略，而 CreateHarness *省略* `memory` 成员意味着 Harness 托管默认值，会创建带
+SEMANTIC + SUMMARIZATION 策略的记忆（`HarnessManagedMemoryConfiguration`，其策略列表最少一项）。
+因此预置发送 `memory: {"disabled": {}}`——完全没有持久记忆，角色上也没有记忆授权——新会话的需求
+基线在结构上独立于此前所有会话。单个运行时会话内的对话保存在 Harness 会话中（服务模型把记忆
+描述为*跨*会话持久化上下文）；确认会话内连续性属于待完成的实机冒烟。作为一致性修复，所有无标志
+的 Harness spec 现在在创建时也发送显式 `disabled` 变体，与更新路径一致。
+
+**可选知识库。** 安装请求体可以指定既有、已授权的知识库
+（`knowledge_bases: [{kb_id, name, description}]`），通过普通 Harness 知识库网关路径挂载。
+不会自动创建任何东西，技能也如实声明：没有检索工具时按方法论索引工作，并说明未查阅原文。
+
+**管理员的选择**仅限模型（`model_id` + `model_source`，默认平台 `DEFAULT_MODEL_ID`）与可选
+知识库，且**仅通过 API**——控制台面板以 `{}` 安装（默认值，修复时为已存选择）并如实说明；面板
+没有模型/知识库字段。知识库引用在请求时做形状校验，并在 **provision 阶段核验**（在目标 Workspace
+中 `GetKnowledgeBase`：存在、MANAGED、ACTIVE），然后才创建网关目标，否则以可操作的原因使阶段失败。
+普通使用绝不会覆盖版本或配置。
+
+**待实机验证。** 以上全部有封闭测试（`tests/test_system_agents.py`）；实机冒烟——在获批的
+Workspace 安装、确认 S3 技能在 `allowedTools` 限制下真正加载、AWS Knowledge 工具可用、成员
+无法删除/重新发布、重复安装不产生重复——**尚未**执行，预置在此之前不算可运营。若 Harness 的
+技能加载工具名不在 `file_*` 之内，请把它加进 `ARCHITECT.allowed_tools`，而不是放宽为 `*`。
+
 ### 模型来源(方式B + 方式C)
 
 `AgentSpec.model_source` 决定模型的托管面:`mantle`(Bedrock Mantle)或

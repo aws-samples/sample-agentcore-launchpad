@@ -149,6 +149,12 @@ def _migrate(bind) -> None:
                 conn.execute(
                     text("ALTER TABLE agents ADD COLUMN registry_record_id VARCHAR(64)")
                 )
+        if "system_key" not in existing:
+            with bind.begin() as conn:
+                conn.execute(text("ALTER TABLE agents ADD COLUMN system_key VARCHAR(64)"))
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_agents_system_key ON agents (system_key)")
+                )
     if "deployments" in inspector.get_table_names():
         existing = {c["name"] for c in inspector.get_columns("deployments")}
         if "image_digest" not in existing:
@@ -204,6 +210,29 @@ def _migrate(bind) -> None:
                     )
                 )
     _migrate_workspace_columns(bind)
+    _migrate_system_key_index(bind)
+
+
+def _migrate_system_key_index(bind) -> None:
+    """The partial unique index that arbitrates concurrent preset installs.
+
+    Runs after the column migrations because it spans `workspace_id` (added by
+    `_migrate_workspace_columns`) and `system_key`. A table created by an older
+    release has neither the column nor the index; `create_all` on a fresh ledger
+    builds both from the model.
+    """
+    from sqlalchemy import inspect, text
+
+    if "agents" not in inspect(bind).get_table_names():
+        return
+    with bind.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_workspace_system_key "
+                "ON agents (workspace_id, system_key) "
+                "WHERE system_key IS NOT NULL AND status != 'deleted'"
+            )
+        )
 
 
 def _migrate_workspace_columns(bind) -> None:

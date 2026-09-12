@@ -57,6 +57,10 @@ class RoleContext:
     artifacts_bucket: str
     ecr_repo_arn: str
     memory_id: str = ""
+    # The OAuth2 credential provider the KB gateway's CLIENT_CREDENTIALS outbound
+    # auth uses (bootstrap writes it as `oauth_provider_arn`). Only the
+    # system-preset KB path scopes to it; ordinary agents keep the family grant.
+    oauth_provider_arn: str = ""
 
 
 def role_context(workspace: WorkspaceContext) -> RoleContext:
@@ -71,7 +75,13 @@ def role_context(workspace: WorkspaceContext) -> RoleContext:
             f"arn:aws:ecr:{workspace.region}:{workspace.account_id}:repository/{repo}"
         ),
         memory_id=resources.get("memory_id", ""),
+        oauth_provider_arn=resources.get("oauth_provider_arn", ""),
     )
+
+
+def oauth_provider_name(provider_arn: str) -> str:
+    """`…:token-vault/default/oauth2credentialprovider/<name>` → `<name>`."""
+    return provider_arn.rsplit("/", 1)[-1] if provider_arn else ""
 
 
 def live_runtime_role_arn(
@@ -185,21 +195,83 @@ def model_resources(model_id: str, ctx: RoleContext) -> list[str]:
 
 
 def _uses_gateway(spec: AgentSpec) -> bool:
-    """Whether anything in the spec needs an AgentCore workload token."""
+    """Whether anything in the spec needs an AgentCore workload token.
+
+    A remote MCP tool whose config declares ``auth: "none"`` is a public,
+    unauthenticated server (e.g. the AWS Knowledge MCP): no token, no vault secret,
+    so no identity grant. Every other MCP ref keeps the historical grant — an
+    existing agent's outbound auth must not change under it.
+    """
     if spec.knowledge_bases:
         return True  # harness KBs ride the shared KB gateway
-    return any(tool.type in ("gateway", "mcp") for tool in spec.tools)
+    for tool in spec.tools:
+        if tool.type == "gateway":
+            return True
+        if tool.type == "mcp" and (tool.config or {}).get("auth") != "none":
+            return True
+    return False
 
 
 def _builtin_names(spec: AgentSpec) -> set[str]:
     return {tool.name for tool in spec.tools if tool.type == "builtin"}
 
 
-def policy_document(spec: AgentSpec, ctx: RoleContext) -> dict:
+def _preset_kb_oauth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, Any]]:
+    """The exact OAuth2-credential-provider grants the harness devguide lists for an
+    OAuth-protected gateway ("Execution role policy → OAuth2 credential provider",
+    read 2026-09-12), instantiated for the KB gateway's real provider.
+
+    Nothing else: no `GetResourceApiKey` (no API-key provider is attached), no
+    `GetWorkloadAccessToken*` (the devguide's OAuth policy names only
+    `GetResourceOauth2Token`), no family-wide `bedrock-agentcore-identity!*` secret,
+    and no direct `bedrock:Retrieve` / `AgenticRetrieveStream` — a harness reaches the
+    KB through the gateway, whose connector role performs the retrieval.
+    """
+    provider = oauth_provider_name(ctx.oauth_provider_arn)
+    if not provider:
+        raise ValueError(
+            "the workspace resource map has no oauth_provider_arn — the KB gateway's "
+            "OAuth2 credential provider is required to scope the preset's grants"
+        )
+    base = f"arn:aws:bedrock-agentcore:{ctx.region}:{ctx.account_id}"
+    harness_name = spec.name.replace("-", "_")  # deployer/harness.py harnessName
+    return [
+        {
+            "Sid": "AgentCoreOAuth2TokenVaultDefault",
+            "Effect": "Allow",
+            "Action": "bedrock-agentcore:GetResourceOauth2Token",
+            "Resource": [
+                f"{base}:token-vault/default",
+                f"{base}:workload-identity-directory/default",
+                f"{base}:workload-identity-directory/default/workload-identity/"
+                f"harness_{harness_name}-*",
+            ],
+        },
+        {
+            "Sid": "AgentCoreOAuth2TokenVaultPerProvider",
+            "Effect": "Allow",
+            "Action": "bedrock-agentcore:GetResourceOauth2Token",
+            "Resource": ctx.oauth_provider_arn,
+        },
+        {
+            "Sid": "AgentCoreOAuth2Secret",
+            "Effect": "Allow",
+            "Action": "secretsmanager:GetSecretValue",
+            "Resource": (
+                f"arn:aws:secretsmanager:{ctx.region}:{ctx.account_id}:secret:"
+                f"bedrock-agentcore-identity!default/oauth2/{provider}-*"
+            ),
+        },
+    ]
+
+
+def policy_document(spec: AgentSpec, ctx: RoleContext, *, system_preset: bool = False) -> dict:
     """The capability policy for one agent.
 
     Statements appear only when the spec calls for them. Sids match the shared CDK
-    role so the two can be diffed.
+    role so the two can be diffed. ``system_preset`` selects the narrow, devguide-
+    exact OAuth grants for a preset's KB gateway instead of the generic identity
+    family (see `_preset_kb_oauth_statements`); ordinary agents are unchanged.
     """
     statements: list[dict[str, Any]] = []
 
@@ -276,7 +348,9 @@ def policy_document(spec: AgentSpec, ctx: RoleContext) -> dict:
         })
 
     # ---- identity / workload tokens ----
-    if _uses_gateway(spec):
+    if system_preset and spec.knowledge_bases:
+        statements.extend(_preset_kb_oauth_statements(spec, ctx))
+    elif _uses_gateway(spec):
         statements.append({
             # UNSCOPABLE: workload-token actions take no resource.
             "Sid": "AgentCoreWorkloadIdentity",
@@ -364,7 +438,9 @@ def policy_document(spec: AgentSpec, ctx: RoleContext) -> dict:
         })
 
     # ---- managed knowledge bases: scoped to the attached ones ----
-    if spec.knowledge_bases:
+    # A system preset reaches its KBs only through the KB gateway (the connector's
+    # own role retrieves), so it gets no direct retrieval grant at all.
+    if spec.knowledge_bases and not system_preset:
         statements.append({
             "Sid": "ManagedKbRetrieval",
             "Effect": "Allow",
@@ -567,7 +643,9 @@ def ensure_role(
     iam.put_role_policy(
         RoleName=name,
         PolicyName=capability_policy_name(agent.name),
-        PolicyDocument=json.dumps(policy_document(spec, ctx)),
+        PolicyDocument=json.dumps(
+            policy_document(spec, ctx, system_preset=bool(getattr(agent, "system_key", None)))
+        ),
     )
     _sync_fs_policy(iam, name, agent, spec, log)
     return role_arn

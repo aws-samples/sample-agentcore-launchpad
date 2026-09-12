@@ -12,11 +12,13 @@ from sqlalchemy import (
     JSON,
     DateTime,
     ForeignKey,
+    Index,
     String,
     Text,
     UniqueConstraint,
     event,
     inspect,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -95,9 +97,29 @@ class Agent(Base):
     version: Mapped[str | None] = mapped_column(String(16), default=None)
     owner: Mapped[str] = mapped_column(String(64), default="river")
     error: Mapped[str | None] = mapped_column(Text, default=None)
+    # Server-owned system identity. NULL for every ordinary agent; a preset key
+    # (``app.system_agents.presets``) for a platform-managed preset the console
+    # installed on an administrator's explicit request. Never read from a client
+    # payload — ``AgentSpec`` has no such field — and never editable through the
+    # ordinary lifecycle routes, which refuse rows that carry it.
+    system_key: Mapped[str | None] = mapped_column(String(64), index=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+    __table_args__ = (
+        # One live preset per (workspace, key). Partial so a deleted (uninstalled)
+        # preset does not block a later reinstall, and so ordinary rows (NULL key)
+        # are never compared. Two concurrent installs race into this index; the
+        # loser's INSERT fails and the install handler re-reads the winner.
+        Index(
+            "uq_agents_workspace_system_key",
+            "workspace_id",
+            "system_key",
+            unique=True,
+            sqlite_where=text("system_key IS NOT NULL AND status != 'deleted'"),
+        ),
     )
 
 

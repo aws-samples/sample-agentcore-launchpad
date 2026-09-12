@@ -167,6 +167,42 @@ def attached_agents(workspace: WorkspaceContext, kb_id: str) -> list[str]:
     return _attached_map(workspace).get(kb_id, [])
 
 
+def attached_system_agents(workspace: WorkspaceContext, kb_id: str) -> list[str]:
+    """Names of system-managed presets that mount ``kb_id`` (ledger-only read)."""
+    db = SessionLocal()
+    try:
+        return [
+            agent.name
+            for agent in _workspace_agents(db, workspace)
+            if agent.system_key
+            and any(
+                isinstance(ref, dict) and ref.get("kb_id") == kb_id
+                for ref in (agent.spec or {}).get("knowledge_bases") or []
+            )
+        ]
+    finally:
+        db.close()
+
+
+def refuse_if_attached_to_system_agent(workspace: WorkspaceContext, kb_id: str) -> None:
+    """A KB mounted on a system-managed preset is never force-detached here.
+
+    The preset's spec is server-owned: an administrator changes its mounts through
+    the preset maintenance route (install/repair without that KB) first. Raised
+    before any AWS read or write so a refusal has no side effect at all.
+    """
+    protected = attached_system_agents(workspace, kb_id)
+    if protected:
+        raise AppError(
+            "kb.attached_to_system_agent",
+            f"knowledge base is mounted on the system-managed preset(s) "
+            f"{', '.join(protected)}; detach it through the preset's maintenance "
+            "route before deleting",
+            detail={"agents": protected, "maintenance_route": "/api/system-agents"},
+            status_code=409,
+        )
+
+
 def _workspace_agents(db: Session, workspace: WorkspaceContext) -> list[Agent]:
     return (
         db.query(Agent)
@@ -185,6 +221,7 @@ def _strip_kb_from_agents(workspace: WorkspaceContext, kb_id: str) -> list[str]:
     Only harness agents have a kb-gw target: zip/container agents retrieve
     directly through bedrock-agent-runtime, so touching the gateway for them
     would CREATE a target nothing ever uses."""
+    refuse_if_attached_to_system_agent(workspace, kb_id)  # before any mutation
     gateway_id = workspace.resources.get("kb_gateway_id")
     control = control_client(workspace) if gateway_id else None
     stripped: list[str] = []
@@ -748,6 +785,9 @@ def query(
 def delete_kb(
     workspace: WorkspaceContext, kb_id: str, force: bool = False
 ) -> dict[str, Any]:
+    # Preflight, ledger-only, before the first AWS read: a preset mount blocks the
+    # delete outright (force or not) — see refuse_if_attached_to_system_agent.
+    refuse_if_attached_to_system_agent(workspace, kb_id)
     client = agent_client(workspace)
     _require_managed(_get_kb(client, kb_id))
     agents = attached_agents(workspace, kb_id)

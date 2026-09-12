@@ -120,7 +120,8 @@
   "status": {
     "active": "ACTIVE",
     "deploying": "DEPLOYING",
-    "failed": "FAILED"
+    "failed": "FAILED",
+    "uninstalling": "UNINSTALLING"
   },
   "overview": {
     "kicker": "// MISSION CONTROL",
@@ -417,6 +418,72 @@
       "filterStatusAll": "ALL STATUSES",
       "searchPlaceholder": "Search agent name / ID…",
       "noMatch": "NO AGENTS MATCH THE CURRENT FILTERS"
+    },
+    "system": {
+      "title": "SYSTEM PRESETS",
+      "sub": "platform-managed · administrator install",
+      "chip": "SYSTEM",
+      "protected": "System-managed preset: edit, re-publish, convert and delete are not available. Administrators maintain it from the System presets panel.",
+      "detailNote": "{{label}} is a system-managed preset (skill bundle v{{version}}). Its spec is owned by the platform; use the System presets panel to repair, update or uninstall it.",
+      "empty": "No system presets are defined for this build.",
+      "adminOnly": "Installing, repairing and uninstalling a system preset requires an administrator account.",
+      "requirements": "This workspace is not ready for a preset yet: {{list}}",
+      "collision": "An ordinary agent named “{{name}}” already holds the reserved name. The preset never adopts it — delete or rename that agent first.",
+      "updateAvailable": "UPDATE AVAILABLE",
+      "installedVersion": "installed v{{v}}",
+      "tools": "allowed tools",
+      "model": "model",
+      "kb": "{{n}} knowledge base(s) mounted",
+      "kbNone": "no knowledge base mounted (methodology index only)",
+      "install": "INSTALL",
+      "repair": "REPAIR",
+      "update": "UPDATE",
+      "uninstall": "UNINSTALL",
+      "installStarted": "Installing {{name}} — the deploy job is running.",
+      "repairStarted": "Re-publishing {{name}} — the deploy job is running.",
+      "alreadyCurrent": "{{name}} is already installed with the current version and configuration.",
+      "uninstalled": "{{name}} uninstalled.",
+      "status": {
+        "configuration_required": "WORKSPACE NOT READY",
+        "not_installed": "NOT INSTALLED",
+        "deploying": "DEPLOYING",
+        "active": "ACTIVE",
+        "failed": "FAILED",
+        "uninstalling": "UNINSTALLING"
+      },
+      "confirm": {
+        "installTitle": "Install system preset?",
+        "install": "This creates a managed Harness, its execution role and a versioned S3 skill bundle for “{{name}}” in the current workspace — a billable AWS deployment. It runs through the normal deploy pipeline.",
+        "repairTitle": "Re-publish system preset?",
+        "repair": "This re-publishes “{{name}}” in place with the platform-owned spec and current skill bundle (new Harness version, same ARN).",
+        "uninstallTitle": "Uninstall system preset?",
+        "uninstall": "This queues a teardown job that deletes the Harness and execution role behind “{{name}}”. The preset keeps its identity until the teardown completes; a failed teardown can be retried. Chat history stays in the ledger; the preset can be installed again later."
+      },
+      "loading": "LOADING…",
+      "reload": "RELOAD",
+      "retry": "RETRY",
+      "loadFailed": "System presets could not be loaded: {{reason}}",
+      "requirementsInstalled": "This workspace no longer meets the preset's prerequisites, so repair is unavailable until they are restored: {{list}}",
+      "memoryDisabled": "persistent memory: disabled (fresh baseline per session)",
+      "adminOptionsApiOnly": "Model and optional knowledge bases are chosen by an administrator through the install API body ({model_id, model_source, knowledge_bases}); this panel installs with the stored or default choices.",
+      "requirementCodes": {
+        "bootstrap_not_ready": "the workspace bootstrap has not completed",
+        "missing_artifacts_bucket": "the workspace has no artifacts bucket",
+        "missing_execution_role": "the workspace has no execution role",
+        "per_agent_roles_disabled": "per-agent execution roles are disabled; a preset never runs on the shared role",
+        "missing_oauth_provider": "the workspace has no KB gateway OAuth2 credential provider (needed to mount a knowledge base)"
+      },
+      "presets": {
+        "aws-agent-solution-architect": {
+          "description": "Platform-managed advisory Harness that turns an AI-agent business requirement into an evaluation-first, production-grade AWS design. Verifies AWS facts through the public AWS Knowledge MCP server and loads its methodology from a versioned S3 skill bundle."
+        }
+      },
+      "retryUninstall": "RETRY UNINSTALL",
+      "uninstallStarted": "Uninstalling {{name}} — the teardown job is running.",
+      "uninstallRetried": "Retrying the uninstall of {{name}} — a new teardown job is running.",
+      "uninstallInFlight": "An uninstall of {{name}} is already in progress.",
+      "uninstallRunning": "Uninstall attempt {{attempt}} (job {{job}}) is removing the Harness and its role; the preset keeps its identity until the teardown completes.",
+      "uninstallFailed": "Uninstall attempt {{attempt}} (job {{job}}) failed; the preset keeps its identity and can be retried. Install and repair are refused meanwhile."
     },
     "versions": {
       "title": "VERSIONS & ENDPOINTS",
@@ -1888,6 +1955,12 @@
     "http.500": "Internal server error",
     "agent.redeploy_immutable": "Name and method cannot change on re-publish — clone to a new agent instead.",
     "agent.deploy_in_progress": "A deployment is already in progress for this agent.",
+    "agent.system_managed": "This is a system-managed preset — the action is not available on it. Administrators maintain it from the System presets panel.",
+    "agent.name_reserved": "This name is reserved for a system-managed preset.",
+    "system_agent.workspace_not_ready": "This workspace cannot host a system preset yet — finish its bootstrap first.",
+    "system_agent.name_collision": "An ordinary agent already holds the reserved name; the preset never adopts it. Delete or rename that agent first.",
+    "system_agent.not_installed": "This system preset is not installed in the current workspace.",
+    "system_agent.unknown": "Unknown system preset.",
     "registry.name_exists": "A record with this name already exists.",
     "registry.invalid_url": "MCP registration needs a http(s) server URL.",
     "registry.skill_md_required": "Skill registration needs SKILL.md content.",
@@ -1939,7 +2012,9 @@
     "registry.record_not_deployed": "No Launchpad agent owns this registry record — the live card can only be read from a deployed agent's runtime.",
     "registry.record_not_a2a": "The agent behind this record is not an A2A server, so it serves no agent card.",
     "registry.agent_not_ready": "The agent is not deployed and active — the live card needs a running runtime.",
-    "registry.live_card_failed": "The runtime did not serve its agent card."
+    "registry.live_card_failed": "The runtime did not serve its agent card.",
+    "kb.attached_to_system_agent": "This knowledge base is mounted on a system-managed preset; detach it through the preset's maintenance route before deleting.",
+    "system_agent.uninstalling": "This preset is being uninstalled (or its last uninstall failed and awaits a retry); install and repair are refused until the teardown completes."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",
