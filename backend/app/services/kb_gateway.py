@@ -265,6 +265,47 @@ def delete_agentic_target(control: Any, gateway_id: str, agent_name: str) -> Non
         _delete_target(control, gateway_id, target["targetId"])
 
 
+def lookup_existing_kb_gateway(
+    control: Any, workspace: WorkspaceContext, *, expected_arn: str | None = None
+) -> dict[str, str]:
+    """The workspace's EXISTING, READY KB gateway — or a ``RuntimeError`` naming the
+    manual prerequisite. Never lists-and-creates: the assistant flow mounts KBs on a
+    gateway that already exists; provisioning one is an operator action elsewhere."""
+    resources = workspace.resources
+    gateway_id = resources.get("kb_gateway_id")
+    if not gateway_id:
+        raise RuntimeError(
+            "this workspace has no knowledge-base gateway (kb_gateway_id) — mounting a "
+            "knowledge base here is a manual prerequisite; nothing is created by this flow"
+        )
+    try:
+        detail = control.get_gateway(gatewayIdentifier=gateway_id)
+    except Exception as exc:  # ResourceNotFound, AccessDenied, throttling → manual work
+        raise RuntimeError(
+            f"the workspace's knowledge-base gateway {gateway_id} could not be read "
+            f"({type(exc).__name__}) — it must exist and be READY before a KB can be mounted"
+        ) from exc
+    status = detail.get("status")
+    if status != "READY":
+        raise RuntimeError(
+            f"the workspace's knowledge-base gateway {gateway_id} is {status or 'unknown'}, "
+            "not READY"
+        )
+    arn = detail.get("gatewayArn")
+    if expected_arn and arn != expected_arn:
+        raise RuntimeError(
+            f"the workspace's knowledge-base gateway {gateway_id} is no longer the one that "
+            "was reviewed (ARN changed)"
+        )
+    if resources.get("kb_gateway_arn") and arn != resources.get("kb_gateway_arn"):
+        raise RuntimeError(
+            f"knowledge-base gateway {gateway_id} ARN drifted from the workspace resource map"
+        )
+    if not detail.get("gatewayUrl"):
+        raise RuntimeError(f"knowledge-base gateway {gateway_id} has no URL")
+    return {"id": detail["gatewayId"], "arn": arn or "", "url": detail["gatewayUrl"]}
+
+
 def ensure_kb_gateway_persisted(
     control: Any, workspace: WorkspaceContext
 ) -> dict[str, str]:

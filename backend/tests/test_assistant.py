@@ -624,9 +624,7 @@ def test_stale_turn_claim_is_reclaimed_and_cleared_on_startup(client, ready, har
     finally:
         db.close()
     harness.reply("recovered")
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(service, "require_turn_capacity", lambda c: None)  # router pre-check aside
-        events = _turn(client, cid, "again")
+    events = _turn(client, cid, "again")  # the ordinary route recovers the expired claim
     assert events[0][1]["turn"] == 4 and events[-1][0] == "done"
     db = SessionLocal()
     try:
@@ -1291,7 +1289,7 @@ def test_starter_failure_is_recovered_by_retry_and_by_startup_resume(
 def test_deploy_starter_coalesces_one_live_worker_per_job(monkeypatch):
     started, release = threading.Event(), threading.Event()
 
-    def fake_execute(job_id):
+    def fake_execute(job_id, **_kw):
         started.set()
         release.wait(timeout=10)
 

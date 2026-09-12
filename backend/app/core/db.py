@@ -258,6 +258,9 @@ def _migrate_assistant_columns(bind) -> None:
             "revision_seq": (
                 "ALTER TABLE assistant_conversations ADD COLUMN revision_seq INTEGER DEFAULT 0"
             ),
+            "active_turn_token": (
+                "ALTER TABLE assistant_conversations ADD COLUMN active_turn_token VARCHAR(32)"
+            ),
         },
         "assistant_proposals": {
             "bindings": "ALTER TABLE assistant_proposals ADD COLUMN bindings JSON",

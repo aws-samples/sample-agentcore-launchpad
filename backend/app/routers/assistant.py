@@ -10,12 +10,14 @@ transaction. Every route is workspace-scoped; conversations are additionally bou
 to the caller's immutable principal (``app.assistant.principal``).
 """
 
+import json as _json
+from collections.abc import Iterator
 from dataclasses import replace
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.assistant import proposal as proposal_contract
@@ -31,6 +33,85 @@ from app.routers.workspaces import WorkspaceScope, _authorize, require_workspace
 from app.services.chat import sse_encode
 
 router = APIRouter(prefix="/api/assistant/architect", tags=["assistant"])
+
+# Ingress cap for every assistant write (bytes actually received, whatever
+# Content-Length says): the largest legitimate body is a 100k-char prompt.
+ASSISTANT_BODY_MAX_BYTES = 512_000
+_CAPPED_PREFIX = "/api/assistant/"
+
+
+class AssistantBodyCap:
+    """Pure ASGI middleware: refuse an assistant request body above the cap while it
+    is still being received — before FastAPI/Pydantic ever parse it, and without
+    trusting a missing or lying Content-Length."""
+
+    def __init__(self, app, max_bytes: int = ASSISTANT_BODY_MAX_BYTES) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not scope.get("path", "").startswith(_CAPPED_PREFIX) \
+                or scope.get("method") not in ("POST", "PUT", "PATCH"):
+            await self.app(scope, receive, send)
+            return
+        received = 0
+        tripped = False
+        started = False
+
+        async def capped_receive():
+            nonlocal received, tripped
+            message = await receive()
+            if message.get("type") == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    tripped = True
+                    # the app sees a disconnect and stops reading; its own reaction
+                    # (a 400) is swallowed below in favour of the 413
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def capped_send(message):
+            nonlocal started
+            if tripped:
+                return
+            started = True
+            await send(message)
+
+        try:
+            await self.app(scope, capped_receive, capped_send)
+        except Exception:
+            if not tripped:
+                raise
+        if tripped and not started:
+            body = _json.dumps({
+                "code": "assistant.request_too_large",
+                "message": f"request body exceeds {self.max_bytes} bytes",
+                "detail": {"max_bytes": self.max_bytes},
+            }).encode()
+            await send({"type": "http.response.start", "status": 413,
+                        "headers": [(b"content-type", b"application/json"),
+                                    (b"content-length", str(len(body)).encode())]})
+            await send({"type": "http.response.body", "body": body})
+
+
+class TurnResponse(StreamingResponse):
+    """A streaming response that owns its turn: whatever way the response ends —
+    completion, ASGI 2.0 disconnect (task-group cancel) or ASGI 2.4 send error — the
+    turn is finalized deterministically (upstream stream closed, generator closed,
+    partial answer persisted as interrupted, claim released), never left to GC."""
+
+    def __init__(self, run: service.TurnRun, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._run = run
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            import anyio
+
+            with anyio.CancelScope(shield=True):  # cleanup survives a cancelled scope
+                await anyio.to_thread.run_sync(self._run.cancel)
 
 
 def _caller(request: Request) -> Identity:
@@ -77,7 +158,9 @@ class TurnRequest(BaseModel):
 
 class ProposalEdit(BaseModel):
     # Validated by the proposal contract, not here: the same allowlist and byte cap
-    # apply to a member edit as to a model emission.
+    # apply to a member edit as to a model emission. Unknown outer members are
+    # refused rather than silently ignored (they would otherwise ride under the cap).
+    model_config = ConfigDict(extra="forbid")
     content: dict[str, Any]
 
 
@@ -162,15 +245,17 @@ def turn(
     service.require_turn_capacity(conversation)
     service.check_prompt(conversation, req.prompt)
     workspace_row, workspace = ws.row, ws.context
+    run = service.TurnRun()
 
-    def generate():
+    def generate() -> Iterator[str]:
         # The stream outlives the request scope → its own session.
         session = SessionLocal()
         try:
             conversation = service.owned_conversation(session, ws.id, principal, conversation_id)
-            for event in service.run_turn(
-                session, conversation, workspace_row, workspace, identity, req.prompt
-            ):
+            run.inner = service.run_turn(
+                session, conversation, workspace_row, workspace, identity, req.prompt, run=run
+            )
+            for event in run.inner:
                 yield sse_encode(event)
         except AppError as exc:  # a claim refusal after the response started
             yield sse_encode({"event": "error", "data": {"code": exc.code,
@@ -178,8 +263,10 @@ def turn(
         finally:
             session.close()
 
-    return StreamingResponse(
-        generate(),
+    run.generator = generate()
+    return TurnResponse(
+        run,
+        run.generator,
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

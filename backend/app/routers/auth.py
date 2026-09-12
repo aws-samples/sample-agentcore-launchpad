@@ -31,13 +31,17 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError, envelope
+from app.models.ledger import User
 from app.services import users as users_service
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 COOKIE_NAME = "launchpad_session"
 SESSION_TTL_SECONDS = 12 * 3600
-_COOKIE_VERSION = "1"
+# v2 binds a registered account's session to its IMMUTABLE ``users.id`` (v1 carried
+# the username only, so a deleted-and-re-registered username kept an old cookie
+# valid for the NEW account). v1 cookies are refused: existing sessions re-login once.
+_COOKIE_VERSION = "2"
 
 _OPEN_API_PATHS = {
     "/api/auth/login",
@@ -122,8 +126,9 @@ def _signing_key(settings: Settings | None = None) -> bytes:
     return hashlib.sha256(material.encode("utf-8")).digest()
 
 
-def _encode_payload(subject: str, expiry: int) -> str:
-    raw = f"{_COOKIE_VERSION}:{subject}:{expiry}".encode()
+def _encode_payload(subject: str, expiry: int, user_id: str | None = None) -> str:
+    # ``user_id`` is empty for the row-less config admin — its own stable principal.
+    raw = f"{_COOKIE_VERSION}:{subject}:{user_id or ''}:{expiry}".encode()
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
@@ -134,12 +139,16 @@ def _sign(payload: str, settings: Settings | None = None) -> str:
     return f"{payload}.{signature.hexdigest()}"
 
 
-def _issue(subject: str, expiry: int, settings: Settings | None = None) -> str:
-    return _sign(_encode_payload(subject, expiry), settings)
+def _issue(
+    subject: str, expiry: int, settings: Settings | None = None, user_id: str | None = None
+) -> str:
+    return _sign(_encode_payload(subject, expiry, user_id), settings)
 
 
-def _decode(cookie: str | None, settings: Settings | None = None) -> tuple[str, int] | None:
-    """Return `(subject, expiry)` for an authentic, unexpired cookie."""
+def _decode(
+    cookie: str | None, settings: Settings | None = None
+) -> tuple[str, str | None, int] | None:
+    """Return `(subject, user_id | None, expiry)` for an authentic, unexpired v2 cookie."""
     if not cookie or "." not in cookie:
         return None
     payload = cookie.rpartition(".")[0]
@@ -151,11 +160,12 @@ def _decode(cookie: str | None, settings: Settings | None = None) -> tuple[str, 
     except (binascii.Error, UnicodeDecodeError, ValueError):
         return None
     version, _, rest = raw.partition(":")
-    subject, _, expiry_text = rest.rpartition(":")
+    head, _, expiry_text = rest.rpartition(":")
+    subject, _, user_id = head.rpartition(":")
     if version != _COOKIE_VERSION or not subject or not expiry_text.isdigit():
         return None
     expiry = int(expiry_text)
-    return (subject, expiry) if expiry > time.time() else None
+    return (subject, user_id or None, expiry) if expiry > time.time() else None
 
 
 def resolve_identity(
@@ -173,15 +183,27 @@ def resolve_identity(
     decoded = _decode(request.cookies.get(COOKIE_NAME), current)
     if decoded is None:
         return None
-    subject, _ = decoded
-    if hmac.compare_digest(subject.encode("utf-8"), current.auth_username.encode("utf-8")):
+    subject, user_id, _ = decoded
+    if user_id is None and hmac.compare_digest(
+        subject.encode("utf-8"), current.auth_username.encode("utf-8")
+    ):
         return Identity(username=current.auth_username, role=ROLE_ADMIN)
+    if user_id is None:
+        return None  # a registered account's session always names its user id
 
     owned = db is None
     session = db or SessionLocal()
     try:
-        user = users_service.find_by_username(session, subject)
-        if user is None or user.status != "active" or users_service.is_expired(user):
+        # Resolved by the immutable id, then the display name must still match: a
+        # deleted account's cookie names an id that no longer exists, and never the
+        # new account that re-registered the same username.
+        user = session.get(User, user_id)
+        if (
+            user is None
+            or user.username_key != users_service.normalize_username(subject).lower()
+            or user.status != "active"
+            or users_service.is_expired(user)
+        ):
             return None
         return Identity(
             username=user.username,
@@ -410,7 +432,7 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
     max_age = max(1, expiry - int(time.time()))
     response.set_cookie(
         COOKIE_NAME,
-        _issue(identity.username, expiry, settings),
+        _issue(identity.username, expiry, settings, user_id=identity.user_id),
         max_age=max_age,
         httponly=True,
         secure=cookie_secure(settings),

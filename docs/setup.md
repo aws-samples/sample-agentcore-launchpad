@@ -169,6 +169,10 @@ install is refused — delete or rename that agent first; the preset never adopt
 
 ### Architect assistant / 架构助手
 
+> **Upgrade note:** this release changes the console session cookie to version 2
+> (bound to the account id). Every signed-in user — members and the administrator —
+> is signed out once and must log in again; nothing else changes for them.
+
 Once the `aws-agent-solution-architect` preset is ACTIVE, every member of the workspace
 can open the **architect assistant** (`/create/assistant`, linked from the Managed
 Harness entrance card and from the SYSTEM PRESETS panel). Paste your Workshop output,

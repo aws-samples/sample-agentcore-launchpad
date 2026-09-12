@@ -151,6 +151,9 @@ provision 阶段于 Workspace 中核验；不会替你创建任何知识库）�
 
 ### 架构助手
 
+> **升级提示：** 本次发布把控制台会话 Cookie 升级为版本 2（绑定账号 ID）。所有已登录用户——
+> 成员与管理员——会被登出一次并需要重新登录；其余无变化。
+
 `aws-agent-solution-architect` 预置进入运行中后，Workspace 的每位成员都可以打开**架构助手**
 （`/create/assistant`，可从“托管 Harness”入口卡片与“系统预置”面板进入）。粘贴 Workshop 产出，
 让助手确认需求基线并只追问缺失且影响架构的问题，然后审阅它对**一个新的托管 Harness 业务 Agent**

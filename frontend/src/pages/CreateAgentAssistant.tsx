@@ -246,17 +246,19 @@ export function CreateAgentAssistant() {
   }, [apiMessage, stillCurrent]);
 
   const loadConversations = useCallback(() => {
+    // scoped to the workspace lifecycle, NOT to the selection generation: a
+    // deep-linked conversation load must not discard the list started at mount
     const startedIn = scope.current;
-    const gen = generation.current;
     void api
       .assistantConversations()
       .then((res) => {
-        if (stillCurrent(startedIn, gen)) setConversations(res.conversations);
+        if (alive.current && scope.current === startedIn)
+          setConversations(res.conversations);
       })
       .catch(() => {
         /* the list is secondary; the status panel reports the real failure */
       });
-  }, [stillCurrent]);
+  }, []);
 
   const setLinked = useCallback(
     (id: string | null) =>
@@ -274,34 +276,50 @@ export function CreateAgentAssistant() {
 
   /** Select a conversation: a new operation generation, so every earlier in-flight
    * load / stream / poll for another conversation is dropped when it resolves. */
+  const pendingSelection = useRef<string | null>(null);
+  const bootedLink = useRef<string | null>(null);
   const selectConversation = useCallback(
     (id: string) => {
+      // clicking the already-selected conversation is a no-op: it must not bump the
+      // generation (which would silently stop the running outcome poll)
+      if (pendingSelection.current === null && conversation?.id === id) return;
       const startedIn = scope.current;
       const gen = bump();
+      pendingSelection.current = id;
+      // an explicit selection IS the deep-link boot for this id: the URL effect must
+      // not re-select (and re-bump) while the detail is still loading
+      bootedLink.current = `${startedIn}:${id}`;
+      // the old conversation is neither shown nor actionable while B loads: an
+      // operation started in this window cannot capture A's id under B's generation
+      setConversation(null);
+      setMessages([]);
       setEditing(null);
       setConfirm(null);
+      // generation-owned flags belong to the operations we just invalidated
+      setBusy(false);
+      setApproving(false);
       setLinked(id);
       void api
         .assistantConversation(id)
         .then((detail) => {
           if (!stillCurrent(startedIn, gen)) return;
+          pendingSelection.current = null;
           setConversation(detail);
           setMessages(toLive(detail.messages));
         })
         .catch((err: unknown) => {
           if (!stillCurrent(startedIn, gen)) return;
+          pendingSelection.current = null;
           toastRef.current(apiMessage(err));
           if (
             err instanceof ApiError &&
             err.code === "assistant.conversation_not_found"
           ) {
-            setConversation(null);
-            setMessages([]);
             setLinked(null);
           }
         });
     },
-    [apiMessage, bump, setLinked, stillCurrent],
+    [apiMessage, bump, conversation?.id, setLinked, stillCurrent],
   );
 
   // Workspace (re)mount: reset and re-read. Depends on the workspace only — a
@@ -319,7 +337,6 @@ export function CreateAgentAssistant() {
 
   // Deep link: opened once per (workspace, linked id) when the assistant is
   // available and nothing else is selected yet.
-  const bootedLink = useRef<string | null>(null);
   useEffect(() => {
     if (workspaceId === null || !status?.available || !linkedConversation)
       return;
@@ -340,7 +357,10 @@ export function CreateAgentAssistant() {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
   }, [messages]);
 
-  const proposals = useMemo(() => conversation?.proposals ?? [], [conversation]);
+  const proposals = useMemo(
+    () => conversation?.proposals ?? [],
+    [conversation],
+  );
   const latest = useMemo(
     () => (proposals.length ? proposals[proposals.length - 1] : null),
     [proposals],
@@ -430,6 +450,11 @@ export function CreateAgentAssistant() {
   const newConversation = async () => {
     const startedIn = scope.current;
     const gen = bump();
+    pendingSelection.current = null;
+    setLinked(null); // before the detail is cleared, so the URL effect stays quiet
+    setConversation(null);
+    setMessages([]);
+    setApproving(false);
     setBusy(true);
     try {
       const detail = await api.assistantCreateConversation();

@@ -26,6 +26,7 @@ from app.optimization.service import clear_stale_running_actions
 from app.routers.agent_skills import router as agent_skills_router
 from app.routers.agents import router as agents_router
 from app.routers.apikeys import router as apikeys_router
+from app.routers.assistant import AssistantBodyCap
 from app.routers.assistant import router as assistant_router
 from app.routers.auth import OPEN_CONSOLE_REMEDY, auth_middleware
 from app.routers.auth import enabled as auth_enabled
@@ -120,6 +121,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     # outermost while this exact-route gate still runs before multipart parsing.
     app.middleware("http")(task_assets.task_asset_body_limit_middleware)
     app.middleware("http")(auth_middleware)
+    app.add_middleware(AssistantBodyCap)  # ingress byte cap for assistant writes
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

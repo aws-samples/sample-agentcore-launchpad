@@ -838,6 +838,13 @@ def parse_message_events(rows: list[dict[str, str]]) -> dict[str, dict[str, Any]
             if not span_id or not isinstance(body, dict):
                 continue
             entry = by_span.setdefault(span_id, {})
+            # Provenance survives normalization: the session id a content event was
+            # recorded under (a correlated span may carry none) is what the privacy
+            # boundary filters on, before AND after the cache.
+            attrs = record.get("attributes") if isinstance(record.get("attributes"), dict) else {}
+            sid = attrs.get("session.id") or (record.get("resource") or {}).get("session.id")
+            if isinstance(sid, str) and sid and not entry.get("session_id"):
+                entry["session_id"] = sid
             for side in ("input", "output"):
                 payload = body.get(side)
                 if not entry.get(side) and isinstance(payload, dict):
@@ -848,7 +855,7 @@ def parse_message_events(rows: list[dict[str, str]]) -> dict[str, dict[str, Any]
             continue  # malformed record — message events are best-effort
         if len(by_span) >= 50:
             break
-    return {k: v for k, v in by_span.items() if v}
+    return {k: v for k, v in by_span.items() if v.get("input") or v.get("output")}
 
 
 def _span_log_groups(raw_spans: list[dict[str, Any]]) -> list[str]:
@@ -1134,6 +1141,13 @@ def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceCo
                 messages_by_span = {}
         for span in spans:
             span["messages"] = messages_by_span.get(span["span_id"] or "")
+        # Every session id this trace's spans OR content events were recorded under.
+        session_ids = sorted({
+            sid for sid in (
+                [s["attributes"].get("session.id") for s in spans]
+                + [m.get("session_id") for m in messages_by_span.values()]
+            ) if isinstance(sid, str) and sid
+        })
         # Strands emits each LLM call as a wrapper span (system=strands-agents)
         # plus a terminal provider span with identical tokens; native Claude
         # instead carries aggregate usage on its AGENT root. Sum those call
@@ -1182,6 +1196,7 @@ def get_trace(trace_id: str, range_key: str, db: Session, workspace: WorkspaceCo
                 "service": service,
                 "agent": map_agent(service),
                 "session_id": session_id,
+                "session_ids": session_ids,
                 "start": tree["start"],
                 "duration_ms": tree["duration_ms"],
                 "span_count": len(spans),

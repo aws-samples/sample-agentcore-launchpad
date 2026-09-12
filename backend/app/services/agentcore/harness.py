@@ -204,6 +204,7 @@ def invoke_harness_events(
     *,
     session_id: str,
     actor_id: str,
+    on_stream: Any = None,
 ) -> Iterator[dict[str, Any]]:
     """Stream one ``InvokeHarness`` call whose ``messages`` carries a bounded
     replayed conversation (``[{role: user|assistant, content: [{text}]}]``, the
@@ -216,6 +217,8 @@ def invoke_harness_events(
         messages=messages,
     )
     stream = response["stream"]
+    if on_stream is not None:
+        on_stream(stream)  # lets the owner close a blocked read from another thread
     try:
         for event in stream:
             if "contentBlockStart" in event:

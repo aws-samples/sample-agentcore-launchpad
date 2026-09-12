@@ -56,6 +56,9 @@ class AssistantConversation(Base):
     active_turn_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
+    # Random token minted with the claim: every write the turn makes is conditioned
+    # on it, so a worker whose stale claim was reclaimed can never publish.
+    active_turn_token: Mapped[str | None] = mapped_column(String(32), default=None)
     # Monotonic revision allocator, bumped inside the same transaction that writes
     # a revision row (unique index below), so two concurrent writers never share one.
     revision_seq: Mapped[int] = mapped_column(default=0)

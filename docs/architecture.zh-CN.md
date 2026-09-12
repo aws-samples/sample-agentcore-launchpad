@@ -470,7 +470,11 @@ principal)` 的会话，并快照 Workspace 目录：与创建向导相同的 Re
 前置资源（`memory_arn`、`kb_gateway_id`/`kb_gateway_arn`/`oauth_provider_arn`、
 `execution_role_arn`）。**principal** 不可变：注册账号为 `user:<users.id>`，无行的内置管理员为
 `config-admin`，登录门关闭时为 `local-operator`。用户名仅用于显示——同名账号删除后重新注册是新的
-principal，不会继承任何内容；principal 为 NULL 的行（principal 之前的台账）对任何人都不可见，绝不
+principal，不会继承任何内容。会话 Cookie 补全了同一边界：自本次变更起为**版本 2**，记录注册账号
+不可变的 `users.id`（内置管理员的 Cookie 不含 id——它是自己的 principal），因此已删除账号的 Cookie
+不再对任何人生效，也永远不会解析到重新注册了该用户名的账号；版本 1 的 Cookie 被拒绝，即**升级后
+所有已登录的成员与管理员都需要重新登录一次**。批准还要求发起请求的 principal、声明时重新解析的
+principal 与会话所有者 principal 三者完全一致；principal 为 NULL 的行（principal 之前的台账）对任何人都不可见，绝不
 按用户名匹配收养。所有读写在 Workspace 范围之上再按 principal 绑定——其他成员或管理员的请求返回
 404——因为粘贴的 Workshop 材料是客户输入，不是共享的 Workspace 资源。预置**禁用**持久记忆，因此助手不依赖服务端
 会话连续性：记录存于 `assistant_messages`，每轮铸造一个**新的 64 位十六进制 runtime session id**，
@@ -483,10 +487,14 @@ principal，不会继承任何内容；principal 为 NULL 的行（principal 之
 模式）附在第一条用户消息上；Harness 请求不携带 `systemPrompt`、`tools` 或 `model` 覆盖。任何私有
 内容都不会写入共享的长期记忆。模型是否忠实遵循重放/协议属于**待完成的实机冒烟**。
 
-**单轮在途、私有 runtime 会话。** 一轮对话是对会话行的原子条件声明（`active_turn`，由一个
-短写事务的第一条语句取得）：并发的第二轮在打开流之前被拒绝为 `409 assistant.turn_in_progress`
-（在声明处输掉竞争则是流内的同一错误，绝不伪造第二轮）；死进程遗留的声明在 `TURN_CLAIM_TTL_S`
-之后可回收，并在启动时清空（只有运行中进程的活跃请求才可能持有它）。每轮的 session id 在数据面
+**单轮在途、私有 runtime 会话。** 一轮对话是对会话行的原子条件声明（`active_turn` + 随机
+`active_turn_token`，由一个短写事务的第一条语句取得）：并发的第二轮在打开流之前被拒绝为
+`409 assistant.turn_in_progress`（在声明处输掉竞争则是流内的同一错误，绝不伪造第二轮）。超过
+`TURN_CLAIM_TTL_S`（30 分钟）的声明会被下一次普通轮次请求接管；原持有者的每一次写入（部分回答、
+最终回复、释放）都以其 token 为条件，因此声明被回收的 worker 什么也发布不了（其自身流中返回
+`assistant.turn_superseded`）。启动时清空全部声明。清理由响应对象（`TurnResponse`）而非垃圾回收
+负责：无论正常完成、ASGI 2.0 断连还是 ASGI 2.4 发送失败，都会关闭上游事件流（解除阻塞读取）、
+关闭响应体与 `run_turn` 生成器、把部分回答保存为 `interrupted` 轮次并释放声明。每轮的 session id 在数据面
 调用*之前*写入用户消息行，因此从 Harness 可能知道它的第一刻起就是私有的。通用入口——控制台
 对话、`POST /api/agents/{id}/invoke`、`/v1` 同步与流式——都会调用
 `app.assistant.sessions.refuse_assistant_session`，对系统托管 Agent 上的此类 id 返回 `404
@@ -499,8 +507,11 @@ chat.session_not_found`；普通 Agent 不产生台账读取。对话会话/历�
 （关闭传输不代表服务端计算已停止）。
 
 **惰性提案。** 普通模型轮次结束后，回复被扫描是否恰有一个标记为 `launchpad-proposal` 的围栏块
-（`app/assistant/proposal.py`）。该块不受信任：一个序列化 UTF-8 **字节上限**（64 000 字节）在
-校验之前、存储之前同样适用于模型块与成员编辑（超限的成员编辑为 `413 assistant.proposal_too_large`；
+（`app/assistant/proposal.py`）。该块不受信任：所有助手写请求先在入口受限（`AssistantBodyCap`，纯 ASGI 中间件，无论 Content-Length
+如何声明，实际接收超过 512 000 字节即返回 `413 assistant.request_too_large`；未知的外层请求成员
+被拒绝而非忽略），然后一个序列化 UTF-8 **字节上限**（64 000 字节）在校验之前、存储之前同样适用于
+模型块与成员编辑——并再次适用于实际存储与哈希的**规范化**内容（填入默认值后），因此绝不会保留
+超限的数据块（超限的成员编辑为 `413 assistant.proposal_too_large`；
 超限的模型块成为仅保留标记的 `invalid` 修订）；`ProposalContent` 是带 `extra="forbid"` 与逐字段/
 逐项上限的 Pydantic 白名单——`env`、`code`、`requirements`、`allowed_tools`、`protocol`、
 `filesystem`、`network`、URL、ARN、S3 前缀或角色都无法通过。`memory` 为 `"disabled"` 或
@@ -545,11 +556,18 @@ revision, approved_by, content, bindings}})`——`Deployment` 与 `deploy_agent
 助手从不重启它，新提案必须使用仍然空闲的名称。会话有界（200 轮、50 个修订 →
 `409 assistant.conversation_full`）。
 
-**固定执行。** 部署任务运行常规管道，仅在任务入口多一道守卫（`assert_job_bindings_pinned`，
-无论新任务还是恢复任务）：Agent 存储的 spec 必须是固定的那份，固定的内容必须仍能在实时 Workspace
-中校验通过，实时 `resource_bindings` 必须等于固定值，知识库挂载必须仍指向 Workspace 完全相同的
-知识库 Gateway/OAuth 提供方——否则任务在任何阶段运行之前落为 `failed`，不发生任何 AWS 写入。
-因此 provision 阶段的知识库 Gateway 助手在助手任务中只会找到既有 Gateway；在这条路径上绝不创建。
+**固定执行。** 部署任务运行常规管道，但助手任务把已审阅的 `{content, bindings}` 带入各阶段
+（`scratch.assistant_pin`），Harness 请求**由固定绑定构建**而不再重新解析：Gateway ARN 与出站认证
+身份、记忆 ARN（或显式的 `disabled` 退出）、知识库 Gateway 都按批准时的 `bindings.resources`
+原样使用。三道失败关闭的检查守护写入：任务入口（`assert_job_bindings_pinned`：存储 spec = 固定
+spec、内容仍有效、实时绑定 = 固定绑定、知识库 Gateway 未变）、`generate` 阶段、以及 `CreateHarness`
+之前的最后一刻（`_verify_pinned_resources`：实时 Gateway 解析仍等于固定 ARN/认证，S3 技能包的内容
+摘要仍等于审阅值——同一前缀下被改写的技能字节会被拒绝而非部署）。知识库挂载使用
+`kb_gateway.lookup_existing_kb_gateway`——Workspace **既有**的 Gateway 必须 READY 且 ARN 与审阅
+一致；缺失、未就绪或漂移都是可操作的失败。这条路径绝不调用“列出并创建”助手（在该既有 Gateway 上
+配置按 Agent 的检索目标是允许的挂载操作）。任务资格是持久的：启动以一次条件更新把 `queued → running`，
+只有启动恢复可接管死进程遗留的 `running` 任务，终态任务不可再运行——陈旧的批准重试重新唤醒它时
+什么也不会发生。
 
 **控制台。** 页面（`pages/CreateAgentAssistant.tsx`）显示带流式输出的记录（原始提案块被替换为
 指向面板的提示）、含 Workspace 记忆/知识库 Gateway 能力的目录摘要、提案（字段、**精确绑定**含

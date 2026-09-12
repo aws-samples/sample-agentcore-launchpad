@@ -257,7 +257,92 @@ def _kb_gateway_config(resources: dict[str, Any]) -> dict[str, str] | None:
     return None
 
 
-def _build_live_params(spec: AgentSpec, workspace: WorkspaceContext) -> dict[str, Any]:
+def _pinned_params(
+    spec: AgentSpec, workspace: WorkspaceContext, pin: dict[str, Any]
+) -> dict[str, Any]:
+    """CreateHarness kwargs from an assistant approval's REVIEWED bindings.
+
+    Nothing is re-resolved: the gateway ARNs + outbound-auth identities, the memory
+    ARN and the KB gateway come from ``pin["bindings"]["resources"]`` exactly as the
+    member approved them (the job-entry guard and the stages verify the live
+    resources still match before any write). ``executionRoleArn`` is still the
+    provision stage's own product.
+    """
+    res = (pin.get("bindings") or {}).get("resources") or {}
+    attachments = [
+        {
+            "gateway_arn": g.get("gateway_arn"),
+            "gateway_name": g.get("gateway_name") or gateway_id,
+            "outbound_auth": g.get("outbound_auth"),
+        }
+        for gateway_id, g in (res.get("gateways") or {}).items()
+    ]
+    memory = res.get("memory") or {}
+    kb = res.get("kb_gateway") or None
+    kb_gateway = (
+        {"arn": kb["gateway_arn"], "oauth_provider_arn": kb["oauth_provider_arn"]}
+        if kb and kb.get("gateway_arn") and kb.get("oauth_provider_arn")
+        else None
+    )
+    if spec.knowledge_bases and kb_gateway:
+        # the KB gateway rides as a pinned attachment too, so build_create_params
+        # never consults the (possibly drifted) workspace resource map for it
+        attachments.append({
+            "gateway_arn": kb_gateway["arn"],
+            "gateway_name": "launchpad_kb_gw",
+            "outbound_auth": {"oauth": {"providerArn": kb_gateway["oauth_provider_arn"],
+                                        "grantType": "CLIENT_CREDENTIALS",
+                                        "scopes": [GATEWAY_SCOPE]}},
+        })
+    return build_create_params(
+        spec,
+        workspace.resources.get("execution_role_arn", ""),
+        memory.get("arn") if memory.get("mode") == "workspace" else None,
+        kb_gateway=kb_gateway,
+        gateway_attachments=attachments,
+    )
+
+
+def _verify_pinned_resources(
+    ctx: StageContext, spec: AgentSpec, pin: dict[str, Any], *, skills: bool
+) -> None:
+    """Fail closed right before a write when a reviewed resource drifted: live gateway
+    auth vs pinned, live skill content digest vs pinned."""
+    from app.assistant.service import skill_content_snapshot
+
+    res = (pin.get("bindings") or {}).get("resources") or {}
+    pinned_gateways = res.get("gateways") or {}
+    if pinned_gateways:
+        live = {
+            a.get("gateway_id"): a
+            for a in registry_console.resolve_gateway_attachments(spec.tools, ctx.workspace)
+        }
+        for gateway_id, pinned in pinned_gateways.items():
+            current = live.get(gateway_id)
+            if (
+                current is None
+                or current.get("gateway_arn") != pinned.get("gateway_arn")
+                or current.get("outbound_auth") != pinned.get("outbound_auth")
+            ):
+                raise RuntimeError(
+                    f"gateway {gateway_id}: live ARN/outbound auth differ from the reviewed "
+                    "bindings — refusing to deploy a resolution the member did not approve"
+                )
+    if skills:
+        for key, pinned in (res.get("skills") or {}).items():
+            snapshot = skill_content_snapshot(ctx.workspace, pinned["path"])
+            if snapshot is None or snapshot["content_digest"] != pinned.get("content_digest"):
+                raise RuntimeError(
+                    f"skill '{key}': the bundle at {pinned['path']} no longer matches the "
+                    "reviewed content — refusing to deploy changed skill bytes"
+                )
+
+
+def _build_live_params(
+    spec: AgentSpec, workspace: WorkspaceContext, pin: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    if pin:
+        return _pinned_params(spec, workspace, pin)
     resources = workspace.resources
     # a spec-pinned memory overrides the workspace's shared bootstrap memory
     memory_arn = (
@@ -318,7 +403,10 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
 
         # Fail closed before any AWS call: a preset never rides the shared role.
         require_dedicated_role(agent, None, ctx.workspace, get_settings())
-    params = _build_live_params(spec, ctx.workspace)
+    pin = ctx.scratch.get("assistant_pin")
+    if pin:
+        _verify_pinned_resources(ctx, spec, pin, skills=True)
+    params = _build_live_params(spec, ctx.workspace, pin)
     ctx.scratch["create_params"] = params
     ctx.log(
         f"harness request generated for {params['harnessName']} · "
@@ -344,6 +432,7 @@ def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) ->
     )
     ctx.scratch["execution_role_arn"] = role_arn
 
+    pin = ctx.scratch.get("assistant_pin")
     if spec.knowledge_bases:
         if agent.system_key:
             from app.system_agents.service import verify_knowledge_bases
@@ -352,7 +441,16 @@ def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) ->
             # workspace before any gateway target is created for them.
             verify_knowledge_bases(ctx, spec)
         control = control_client(ctx.workspace)
-        gw = kbgw.ensure_kb_gateway_persisted(control, ctx.workspace)
+        if pin:
+            # Assistant approval: mount on the EXISTING, READY gateway the member
+            # reviewed — never the list-and-create helper.
+            expected = ((pin.get("bindings") or {}).get("resources") or {}).get("kb_gateway") or {}
+            gw = kbgw.lookup_existing_kb_gateway(
+                control, ctx.workspace, expected_arn=expected.get("gateway_arn")
+            )
+            ctx.log(f"kb gateway {gw['id']} verified READY (existing, reviewed)")
+        else:
+            gw = kbgw.ensure_kb_gateway_persisted(control, ctx.workspace)
         for kb in spec.knowledge_bases:
             kbgw.ensure_retrieve_target(
                 control, gw["id"], kb.kb_id, kb.name or kb.kb_id, kb.description
@@ -368,7 +466,7 @@ def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) ->
         )
         # generate ran before the KB gateway existed on first attach — rebuild
         # the request now that kb_gateway_* resources are persisted
-        ctx.scratch["create_params"] = _build_live_params(spec, ctx.workspace)
+        ctx.scratch["create_params"] = _build_live_params(spec, ctx.workspace, pin)
         ctx.log(f"kb gateway ready · {len(spec.knowledge_bases)} knowledge base(s) mounted")
         return StageResult(
             detail=f"{role_detail} · kb targets ready ({len(spec.knowledge_bases)})"
@@ -390,10 +488,16 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
     try:
         row = db.get(Agent, agent.id)
 
+        pin = ctx.scratch.get("assistant_pin")
+
         def _params() -> dict[str, Any]:
             params = ctx.scratch.get("create_params")
             if params is None:  # resume/update path without scratch — regenerate
-                params = _build_live_params(AgentSpec(**row.spec), ctx.workspace)
+                params = _build_live_params(AgentSpec(**row.spec), ctx.workspace, pin)
+            if pin:
+                # the last check before the write: the reviewed resources still are
+                # what the request is about to send
+                _verify_pinned_resources(ctx, AgentSpec(**row.spec), pin, skills=True)
             # generate ran with the workspace's shared role placeholder; the request
             # must carry the role provision actually produced (or re-derived).
             return {

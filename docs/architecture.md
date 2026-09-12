@@ -625,7 +625,14 @@ prerequisites (`memory_arn`, `kb_gateway_id`/`kb_gateway_arn`/`oauth_provider_ar
 registered account, `config-admin` for the row-less built-in administrator,
 `local-operator` with the login gate off. The username is display only — an account
 deleted and re-registered under the same name is a new principal and inherits
-nothing; a row with a NULL principal (pre-principal ledger) is visible to nobody, it
+nothing. The session cookie completes the same boundary: since this change it is
+**version 2** and names the registered account's immutable `users.id` (the config
+admin's cookie carries no id — it is its own principal), so a deleted account's cookie
+authenticates nobody and can never resolve to the account that re-registered its
+username; version-1 cookies are refused, i.e. **every signed-in member and admin must
+log in once again after this upgrade**. An approval additionally requires the
+principal that started the request, the principal re-resolved at the claim and the
+conversation's owner principal to be identical; a row with a NULL principal (pre-principal ledger) is visible to nobody, it
 is never adopted by a username match. Every read and write is principal-bound on top
 of the workspace scope — another member's or an administrator's request answers 404 —
 because the pasted Workshop material is customer input, not a shared workspace
@@ -648,12 +655,19 @@ first user message; the harness request carries no `systemPrompt`, `tools` or
 follows the replay/protocol faithfully is part of the **pending live smoke**.
 
 **One in-flight turn, private runtime sessions.** A turn is an atomic conditional
-claim on the conversation row (`active_turn`, taken by the first statement of a short
-write transaction): a second concurrent turn is refused with `409
-assistant.turn_in_progress` before it opens a stream (a lost race at the claim
-itself is the same error inside the stream, never a fabricated second turn); a claim
-left by a dead process is reclaimable after `TURN_CLAIM_TTL_S` and cleared at startup
-(only a live request of the running process can hold one). The per-turn session id is
+claim on the conversation row (`active_turn` + a random `active_turn_token`, taken by
+the first statement of a short write transaction): a second concurrent turn is
+refused with `409 assistant.turn_in_progress` before it opens a stream (a lost race at
+the claim itself is the same error inside the stream, never a fabricated second turn).
+A claim older than `TURN_CLAIM_TTL_S` (30 min) is taken over by the next ordinary
+turn request; every write the previous holder would make (partial answer, final
+reply, release) is conditioned on its token, so a worker whose claim was reclaimed
+publishes nothing (`assistant.turn_superseded` in its own stream). Startup clears all
+claims. Cleanup is owned by the response object (`TurnResponse`), not by garbage
+collection: on completion, an ASGI 2.0 disconnect or an ASGI 2.4 send failure it
+closes the upstream event stream (unblocking a pending read), closes the body and
+`run_turn` generators, persists the partial answer as an `interrupted` turn and
+releases the claim. The per-turn session id is
 written to the user row *before* the data-plane call, so it is private from the first
 instant the harness could know it. The generic entrances — console Chat, `POST
 /api/agents/{id}/invoke`, `/v1` sync and stream — call
@@ -673,8 +687,13 @@ transport does not claim the service-side computation stopped).
 
 **Inert proposals.** After an ordinary model turn the reply is scanned for exactly
 one fenced block tagged `launchpad-proposal` (`app/assistant/proposal.py`). The block
-is untrusted: one serialized-UTF-8 **byte cap** (64 000 bytes) applies to the model
-block and to a member edit alike, *before* validation and before anything is stored
+is untrusted: every assistant write is first bounded at ingress (`AssistantBodyCap`, a
+pure ASGI middleware refusing bodies above 512 000 received bytes with `413
+assistant.request_too_large`, whatever Content-Length claims; unknown outer request
+members are refused, not ignored), then one serialized-UTF-8 **byte cap** (64 000
+bytes) applies to the model block and to a member edit alike, *before* validation and
+before anything is stored — and again to the **normalized** content that is actually
+stored and hashed (defaults filled in), so no over-cap blob is ever kept
 (an oversized member edit is `413 assistant.proposal_too_large`; an oversized model
 block is an `invalid` revision that keeps only a marker); `ProposalContent` is a
 Pydantic allowlist with `extra="forbid"` and per-field/per-item bounds — no `env`,
@@ -744,14 +763,25 @@ on its original job; the assistant never restarts it, and a new proposal must us
 name that is still free. Conversations are bounded (200 turns, 50 revisions → `409
 assistant.conversation_full`).
 
-**Pinned execution.** The deploy job runs the normal pipeline with one guard at job
-entry (`assert_job_bindings_pinned`, fresh or resumed): the agent's stored spec must be
-the pinned one, the pinned content must still validate in the live workspace, the
-live `resource_bindings` must equal the pinned ones, and a KB mount must still point
-at the workspace's very same KB gateway/OAuth provider — otherwise the job lands
-`failed` before any stage runs and no AWS write happens. The provision stage's KB
-gateway helper therefore only ever finds the existing gateway for an assistant job;
-it never creates one on this path.
+**Pinned execution.** The deploy job runs the normal pipeline, but an assistant
+job carries its reviewed `{content, bindings}` into the stages (`scratch.assistant_pin`)
+and the Harness request is built **from the pin**, never re-resolved: gateway ARNs and
+outbound-auth identities, the memory ARN (or the explicit `disabled` opt-out) and the KB
+gateway come from `bindings.resources` exactly as approved. Three fail-closed checks
+guard the writes: at job entry (`assert_job_bindings_pinned`: stored spec = pinned
+spec, content still valid, live bindings = pinned, KB gateway unchanged), in
+`generate`, and again immediately before `CreateHarness` (`_verify_pinned_resources`:
+the live gateway resolution still equals the pinned ARN/auth, the S3 skill bundle's
+content digest still equals the reviewed one — changed skill bytes under the same
+prefix are refused rather than deployed). A KB mount uses
+`kb_gateway.lookup_existing_kb_gateway` — the workspace's **existing** gateway must be
+READY and carry the reviewed ARN; a missing, not-ready or drifted gateway is an
+actionable failure. The list-and-create helper is never called on this path
+(configuring the per-agent retrieval targets on that existing gateway is the
+permitted mount operation). Job eligibility is durable: a launch claims
+`queued → running` with one conditional UPDATE, only the startup resume may adopt a job
+a dead process left `running`, and a terminal job is inert — a stale approval retry
+that re-wakes it runs nothing.
 
 **Console.** The page (`pages/CreateAgentAssistant.tsx`) shows the transcript with
 streaming (the raw proposal block is replaced by a pointer to the panel), the catalog

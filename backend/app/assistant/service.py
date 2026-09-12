@@ -44,6 +44,9 @@ Invariants (``tests/test_assistant.py`` pins each one with request/fault probes)
 import hashlib
 import json
 import logging
+import threading
+import time
+import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -620,10 +623,22 @@ def _turn_limit_error() -> AppError:
     )
 
 
-def claim_turn(db: Session, conversation_id: str) -> int:
+def _claim_is_stale(row: AssistantConversation, now: datetime) -> bool:
+    if row.active_turn is None or row.active_turn_started_at is None:
+        return False
+    started = row.active_turn_started_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    return now - started > timedelta(seconds=TURN_CLAIM_TTL_S)
+
+
+def claim_turn(db: Session, conversation_id: str) -> tuple[int, str]:
     """Atomically reserve the next turn number, refusing while another turn is in
-    flight (`409 assistant.turn_in_progress`) or the conversation is full."""
+    flight (`409 assistant.turn_in_progress`) or the conversation is full. A claim
+    older than ``TURN_CLAIM_TTL_S`` is taken over; the previous holder's token is
+    invalidated so it can never publish (fail-safe, no result stealing)."""
     now = datetime.now(UTC)
+    token = uuid.uuid4().hex
     _lock_conversation(db, conversation_id)
     claimed = db.execute(
         update(AssistantConversation)
@@ -634,25 +649,19 @@ def claim_turn(db: Session, conversation_id: str) -> int:
         )
         .values(turns=AssistantConversation.turns + 1,
                 active_turn=AssistantConversation.turns + 1,
-                active_turn_started_at=now)
+                active_turn_started_at=now, active_turn_token=token)
     ).rowcount
     if claimed != 1:
         row = db.get(AssistantConversation, conversation_id)
-        stale = (
-            row is not None and row.active_turn is not None
-            and row.active_turn_started_at is not None
-            and (now - row.active_turn_started_at.replace(tzinfo=UTC)
-                 if row.active_turn_started_at.tzinfo is None
-                 else now - row.active_turn_started_at) > timedelta(seconds=TURN_CLAIM_TTL_S)
-        )
-        if row is not None and stale and row.turns < MAX_TURNS:
+        if row is not None and _claim_is_stale(row, now) and row.turns < MAX_TURNS:
             claimed = db.execute(
                 update(AssistantConversation)
                 .where(AssistantConversation.id == conversation_id,
-                       AssistantConversation.active_turn == row.active_turn)
+                       AssistantConversation.active_turn == row.active_turn,
+                       AssistantConversation.active_turn_token == row.active_turn_token)
                 .values(turns=AssistantConversation.turns + 1,
                         active_turn=AssistantConversation.turns + 1,
-                        active_turn_started_at=now)
+                        active_turn_started_at=now, active_turn_token=token)
             ).rowcount
         if claimed != 1:
             db.rollback()
@@ -669,19 +678,30 @@ def claim_turn(db: Session, conversation_id: str) -> int:
             )
     db.commit()
     db.expire_all()
-    return db.execute(
+    turn = db.execute(
         select(AssistantConversation.active_turn)
         .where(AssistantConversation.id == conversation_id)
     ).scalar_one()
+    return turn, token
 
 
-def release_turn(db: Session, conversation_id: str, turn: int) -> None:
+def _holds_claim(db: Session, conversation_id: str, turn: int, token: str) -> bool:
+    row = db.execute(
+        select(AssistantConversation.active_turn, AssistantConversation.active_turn_token)
+        .where(AssistantConversation.id == conversation_id)
+    ).first()
+    return row is not None and row[0] == turn and row[1] == token
+
+
+def release_turn(db: Session, conversation_id: str, turn: int, token: str) -> None:
     db.rollback()
     db.execute(
         update(AssistantConversation)
         .where(AssistantConversation.id == conversation_id,
-               AssistantConversation.active_turn == turn)
-        .values(active_turn=None, active_turn_started_at=None, updated_at=datetime.now(UTC))
+               AssistantConversation.active_turn == turn,
+               AssistantConversation.active_turn_token == token)
+        .values(active_turn=None, active_turn_started_at=None, active_turn_token=None,
+                updated_at=datetime.now(UTC))
     )
     db.commit()
 
@@ -694,7 +714,7 @@ def clear_stale_turn_claims() -> int:
         count = db.execute(
             update(AssistantConversation)
             .where(AssistantConversation.active_turn.isnot(None))
-            .values(active_turn=None, active_turn_started_at=None)
+            .values(active_turn=None, active_turn_started_at=None, active_turn_token=None)
         ).rowcount
         db.commit()
         return count
@@ -706,7 +726,9 @@ def require_turn_capacity(conversation: AssistantConversation) -> None:
     """409 before a stream opens (a refusal inside the stream would be a 500)."""
     if (conversation.turns or 0) + 1 > MAX_TURNS:
         raise _turn_limit_error()
-    if conversation.active_turn is not None:
+    if conversation.active_turn is not None and not _claim_is_stale(
+        conversation, datetime.now(UTC)
+    ):
         raise AppError(
             "assistant.turn_in_progress",
             f"turn {conversation.active_turn} of this conversation is still streaming; wait "
@@ -853,6 +875,12 @@ def record_proposal(
     bounded raw object — never altered to make it pass."""
     content, display, errors = proposal_contract.validate(raw, catalog)
     errors = list(extra_errors or []) + errors
+    if proposal_contract.serialized_bytes(display) > proposal_contract.PROPOSAL_MAX_BYTES:
+        # the NORMALIZED content (defaults filled in) is what gets stored and hashed;
+        # it must respect the same cap as the raw input
+        display = {"_rejected": "normalized proposal exceeds the size limit"}
+        errors = errors + [
+            f"normalized proposal exceeds {proposal_contract.PROPOSAL_MAX_BYTES} bytes"]
     valid = content is not None and not errors
     bindings = proposal_contract.resource_bindings(content, catalog) if valid else None
     revision = _allocate_revision(db, conversation_id)
@@ -880,10 +908,15 @@ def record_proposal(
 
 
 def _persist_partial(
-    db: Session, conversation: AssistantConversation, turn: int, session_id: str,
+    db: Session, conversation: AssistantConversation, turn: int, token: str, session_id: str,
     text: str, error: str,
-) -> None:
-    db.rollback()
+) -> bool:
+    """Persist a partial/failed turn — only while this worker still holds the claim
+    (a reclaimed turn's late worker writes nothing)."""
+    _lock_conversation(db, conversation.id)
+    if not _holds_claim(db, conversation.id, turn, token):
+        db.rollback()
+        return False
     if text:
         db.add(AssistantMessage(
             workspace_id=conversation.workspace_id, conversation_id=conversation.id,
@@ -894,6 +927,66 @@ def _persist_partial(
         turn=turn, role="error", text=error[:4000], runtime_session_id=session_id,
     ))
     db.commit()
+    return True
+
+
+class TurnRun:
+    """Ownership handle for one streaming turn.
+
+    The response object (not garbage collection) drives cleanup: ``cancel`` flags
+    the run, closes the upstream event stream so a blocked read returns, and then
+    closes the generator (bounded retries while it is still executing in the
+    worker thread) so ``run_turn``'s ``finally`` persists the partial answer as an
+    interrupted turn and releases the claim. Closing the transport is not a claim
+    that the AWS-side computation stopped.
+    """
+
+    def __init__(self) -> None:
+        self.cancelled = False
+        self.upstream: Any = None
+        self.generator: Iterator[Any] | None = None  # the response body iterator
+        self.inner: Iterator[dict[str, Any]] | None = None  # run_turn itself
+        self.finished = False
+        self._lock = threading.Lock()
+
+    def attach_upstream(self, stream: Any) -> None:
+        self.upstream = stream
+        if self.cancelled:
+            self._close_upstream()
+
+    def _close_upstream(self) -> None:
+        close = getattr(self.upstream, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:  # pragma: no cover — best effort
+                pass
+
+    def cancel(self, wait_s: float = 5.0) -> None:
+        with self._lock:
+            if self.finished:
+                return
+            self.cancelled = True
+        self._close_upstream()
+        deadline = time.monotonic() + wait_s
+        # outer (response body) first, then run_turn itself: explicit, never refcount-
+        # or GC-dependent
+        for gen in (self.generator, self.inner):
+            if gen is None:
+                continue
+            while True:
+                try:
+                    gen.close()  # raises GeneratorExit at the pending yield → finally runs
+                    break
+                except ValueError:  # "generator already executing" in the worker thread
+                    if time.monotonic() > deadline:
+                        logger.warning("assistant: turn generator still executing after %.1fs",
+                                       wait_s)
+                        return
+                    time.sleep(0.02)
+                except Exception:  # pragma: no cover — cleanup must not raise
+                    logger.exception("assistant: closing the turn generator failed")
+                    break
 
 
 def run_turn(
@@ -903,6 +996,7 @@ def run_turn(
     workspace: WorkspaceContext,
     identity: Identity,
     prompt: str,
+    run: TurnRun | None = None,
 ) -> Iterator[dict[str, Any]]:
     """One assistant turn as SSE-ready events:
     ``meta → (tool|delta)* → (proposal)? → done`` or ``error``.
@@ -914,10 +1008,11 @@ def run_turn(
     persists the partial answer with an ``error`` row (no proposal) and releases the
     claim; nothing is retried automatically.
     """
+    run = run or TurnRun()
     agent = _require_available(db, row)
     check_prompt(conversation, prompt)
     conversation_id = conversation.id
-    turn = claim_turn(db, conversation_id)
+    turn, token = claim_turn(db, conversation_id)
     conversation = db.get(AssistantConversation, conversation_id)
     session_id = hc.new_session_id()
     parts: list[str] = []
@@ -940,8 +1035,10 @@ def run_turn(
             actor = scoped_actor(agent.id, identity.username)
             for event in hc.invoke_harness_events(
                 data_client(workspace), agent.arn, messages,
-                session_id=session_id, actor_id=actor,
+                session_id=session_id, actor_id=actor, on_stream=run.attach_upstream,
             ):
+                if run.cancelled:
+                    raise GeneratorExit
                 if event["event"] == "tool":
                     db.add(AssistantMessage(
                         workspace_id=conversation.workspace_id, conversation_id=conversation_id,
@@ -953,14 +1050,31 @@ def run_turn(
                     parts.append(event["data"].get("text", ""))
                 yield event
         except Exception as exc:
-            _persist_partial(db, conversation, turn, session_id, "".join(parts),
+            _persist_partial(db, conversation, turn, token, session_id, "".join(parts),
                              f"{type(exc).__name__}: {exc}")
             terminal = True
             yield {"event": "error", "data": {"message": f"{type(exc).__name__}: {exc}"}}
             return
+        if run.cancelled:
+            # the owner cancelled while we were blocked upstream: the stream ended
+            # because it was closed, not because the reply completed
+            _persist_partial(db, conversation, turn, token, session_id, "".join(parts),
+                             "interrupted: the response stream was closed before the reply "
+                             "completed")
+            terminal = True
+            yield {"event": "error", "data": {"message": "interrupted"}}
+            return
         text = "".join(parts)
         block, block_errors = proposal_contract.extract_block(text)
         _lock_conversation(db, conversation_id)
+        if not _holds_claim(db, conversation_id, turn, token):
+            # our claim was reclaimed as stale while we streamed: never publish
+            db.rollback()
+            terminal = True
+            yield {"event": "error", "data": {"code": "assistant.turn_superseded",
+                                              "message": "this turn's claim expired and was "
+                                                         "taken over; its reply was discarded"}}
+            return
         db.add(AssistantMessage(
             workspace_id=conversation.workspace_id, conversation_id=conversation_id,
             turn=turn, role="assistant", text=text, runtime_session_id=session_id,
@@ -991,15 +1105,16 @@ def run_turn(
             # never derive a proposal from an incomplete reply.
             try:
                 _persist_partial(
-                    db, conversation, turn, session_id, "".join(parts),
+                    db, conversation, turn, token, session_id, "".join(parts),
                     "interrupted: the response stream was closed before the reply completed",
                 )
             except Exception:  # pragma: no cover — teardown must not mask the cause
                 logger.exception("assistant: could not persist interrupted turn %s", turn)
         try:
-            release_turn(db, conversation_id, turn)
+            release_turn(db, conversation_id, turn, token)
         except Exception:  # pragma: no cover
             logger.exception("assistant: could not release turn claim %s", turn)
+        run.finished = True
 
 
 # ---------------------------------------------------------------------------
@@ -1139,6 +1254,12 @@ def approve_proposal(
                        {"requirements": requirements}, status_code=409)
     # 3. LIVE catalog + resource identity — network I/O, outside every lock
     live_catalog = fetch_catalog(workspace)
+    # A twin may have executed this exact revision while we were reading: its
+    # recorded outcome is authoritative and comes before any catalog refusal.
+    db.expire_all()
+    current = db.get(AssistantProposal, proposal.id)
+    if current is not None and current.status == "approved":
+        return _outcome(db, current, started=False)
     content, _display, errors = proposal_contract.validate(proposal.content, live_catalog)
     if content is None or errors:
         raise AppError("assistant.proposal_invalid",
@@ -1168,6 +1289,16 @@ def approve_proposal(
             approver, fresh_row = recheck(db)
         else:
             approver, fresh_row = identity, db.get(Workspace, row.id)
+        # The principal that started the request, the principal resolved NOW and
+        # the conversation's owner must be one and the same: an account replaced
+        # under the same username during the catalog read is not the approver.
+        fresh_conversation = db.get(AssistantConversation, conversation_id)
+        if (
+            fresh_conversation is None
+            or principal_of(approver) != principal_of(identity)
+            or fresh_conversation.owner_principal != principal_of(approver)
+        ):
+            raise NotFoundError("assistant.conversation_not_found", "conversation not found")
         if fresh_row is None or deploy_requirements(fresh_row):
             raise AppError("assistant.workspace_not_ready",
                            "this workspace cannot deploy yet",
