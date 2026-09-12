@@ -331,16 +331,27 @@ evaluator 映射、AgentCore 优先的取舍、证据分级、不自主执行）
 请求体是必需的 JSON 对象；`{}` 在首次安装时表示“平台默认值”，在修复时表示“已存选择”。维护
 声明是持久且原子的：新安装在部分唯一索引上竞争，落败方重读胜出方**并返回其任务 ID**；修复在与
 所建任务行相同的事务里执行一次条件更新 `UPDATE … WHERE status IN (active, failed)`，两个都
-加载了运行中行的会话收敛到同一个任务。**卸载是持久任务，不是终态标记**：
+加载了运行中行的会话收敛到同一个任务。**卸载是持久、独占持有的任务，不是终态标记**：
 `DELETE /api/system-agents/{key}` 把行置为非终态 `uninstalling`，并**同时**创建
-`uninstall_system_agent` 任务（`202 {job_id, attempt, started, preset}`）。在 worker 拆除成功
-之前，该行保留系统身份——部分唯一索引也持续占用该 key——因此 AWS 资源尚在删除时，任何安装或
-修复都无法夺取该 key（均返回 `409 system_agent.uninstalling`）；重复卸载返回同一个在途任务；
-拆除失败时行仍为 `uninstalling`，原因记录在任务与行上（`operation.retryable`），再次显式卸载
-启动第 N+1 次尝试；拆除中途崩溃由 `resume_pending_jobs()` 与其他任务一样恢复，worker 只处理
-仍处于 `uninstalling` 的行。只有拆除成功才把行标记为 `deleted`。拆除使用普通删除同一个幂等
-helper，只处理该行上记录的资源。部署任务走**标准**
-`generate → package → provision → deploy → register` 管道，并带三项预置专属加固：
+`uninstall_system_agent` 任务（`202 {job_id, attempt, started, preset}`）。声明是对请求读到的行
+`updated_at` 的乐观条件更新，因此两个同时到达的请求——首次的一对，或失败尝试的两次重试——只创建
+一个任务，落败方接受它（`started: false`）。在 worker 的拆除被**核实**之前，该行保留系统身份——
+部分唯一索引也持续占用该 key——因此 AWS 资源尚在删除时，任何安装或修复都无法夺取该 key（均返回
+`409 system_agent.uninstalling`）；拆除失败时行仍为 `uninstalling`，原因与逐步进度记录在任务上
+（`operation.retryable`），再次显式卸载启动第 N+1 次尝试。worker（`system_agents/uninstall.py`）
+带**围栏**：只有赢得任务 `queued → running` 条件更新才运行（启动恢复也可接手崩溃进程留下的
+`running` 任务），并在每个云端步骤之前与最终事务内部反复核对：任务类型与 Workspace 正确、仍为
+`running`、仍是该行*最新*的卸载尝试且行仍为 `uninstalling`——重复、被取代或迟到的 worker 都是
+惰性的，无法完成或标失另一次尝试，也无法按复用名称解析到替换安装的知识库目标。拆除是**严格**的：
+移除 agentic 知识库目标（仅在挂载过知识库时）、发出 `DeleteHarness` 后轮询 `GetHarness` 直到
+`ResourceNotFoundException`（仅被接受的 `DELETING` 不算删除；`DELETE_FAILED` 或 90 秒上限都是
+可重试失败），然后才删除执行角色——报告失败的 IAM 删除是可重试失败，绝不是被忽略的 `False`。
+逐步进度（`kb_target`、`harness`、`role`）记录在任务上，重试跳过已完成步骤、重跑幂等步骤。只有
+完全核实的拆除才把行标记为 `deleted`。普通 Agent 删除保持尽力而为语义；预置不使用它。部署任务走
+**标准** `generate → package → provision → deploy → register` 管道，并带三项预置专属加固，且在
+**任务入口**设防：每个系统预置部署任务——无论新建还是恢复、无论哪些阶段已成功或已跳过——在任何
+阶段运行之前都要证明其版本钉住（存在、格式正确、与已存 spec、当前构建快照和发布目录一致），否则
+在触碰 AWS 之前以失败任务落地：
 
 - **原子版本钉住**——写入任何内容之前，安装把仓库技能包**一次性**读入不可变的内存快照，校验该
   快照（与成员技能相同的 `validate_bundle`，加版本/名称不变量）并计算哈希；随后
@@ -348,15 +359,20 @@ helper，只处理该行上记录的资源。部署任务走**标准**
   （`create_deployment(payload_extra=…)`），崩溃永远不会留下没有钉住信息的可运行任务。普通 Harness
   跳过的 `package` 阶段在钉住信息缺失或格式错误时故障关闭——不接受任何“遗留”情况——并在已存
   spec、钉住信息与当前构建快照不一致时拒绝；
-- **单一字节快照、冲突安全发布**——被校验和哈希的字节就是被上传并回读的字节。
-  `s3://<artifacts_bucket>/system-skills/<name>/<skill_version>/` 下每个对象都以
+- **单一字节快照、内容寻址发布、冲突安全**——被校验和哈希的字节就是被上传并回读的字节。发布目录
+  按内容寻址：`s3://<artifacts_bucket>/system-skills/<name>/<skill_version>-<digest12>/`
+  （快照摘要前 12 位十六进制），已存 spec 的 `skills` URI 精确指向该目录，因此同一版本的两个有效
+  快照（例如多一个参考文件）永远不会共享 Harness 加载的目录——落败的写入者无法向胜出者已部署的
+  目录添加字节。每个对象都以
   `If-None-Match: *` 创建；412 表示另一写入者抢先，已有字节必须与我们的一致（部分上传后的重启，
   或相同内容的并发重试），否则阶段失败且不覆盖任何内容。清单（`.bundle-manifest.json`，含逐文件
   摘要）最后条件写入；竞争的清单只有完全一致时才被接受。已有清单只在与快照完全匹配时才被信任
   （格式错误或不同 → 失败：已发布版本不可变，同时提升 `skill_version` 与 SKILL.md 的
   `version`）。最后**回读并哈希每个对象**与快照比对：缺失对象以 `If-None-Match: *` 恢复，损坏
-  对象只以读取时 ETag 的 `If-Match` 替换，仍不一致的前缀则失败——该阶段绝不会对缺失或被改动的
-  `SKILL.md` 报告“已核验”，也绝不写入带版本前缀之外；
+  对象只以读取时 `ETag` 的 `If-Match` 替换，仍不一致的前缀则失败。最终校验还会列出**整个**
+  发布目录并要求其恰好等于快照文件加清单（外来对象使阶段失败且绝不被删除），重新读取并校验清单
+  本身（版本、摘要与逐文件摘要），并把“合法 JSON 但类型错误”的清单当作故障关闭、零写入、带可操作
+  指引的冲突——该阶段绝不会对缺失或被改动的 `SKILL.md` 报告“已核验”，也绝不写入发布前缀之外；
 - **幂等 AWS 请求**——每次 Harness 创建/更新都发送 `clientToken = lp-<deployment id>`
   （持久化，而非 scratch 状态），在 AWS 调用与台账写入之间崩溃后恢复的任务重放同一请求，不会
   创建第二个 Harness。这适用于所有 Harness Agent，不限于预置；

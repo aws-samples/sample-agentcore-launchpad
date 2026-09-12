@@ -173,6 +173,12 @@ def execute_deploy_job(job_id: str) -> None:
         if agent is None or deployment is None:
             raise RuntimeError("ledger rows missing for job")
 
+        if agent.system_key:
+            # Every system-preset job — fresh or resumed, whatever stages already
+            # succeeded — proves its release pin before a single stage runs.
+            from app.system_agents.service import assert_job_release_pinned
+
+            assert_job_release_pinned(job.payload, agent)
         stages = get_method(agent.method)
         ctx = StageContext(
             agent_id=agent_id,
@@ -307,7 +313,9 @@ def resume_pending_jobs() -> list[str]:
     starters: dict[str, Callable[[str], threading.Thread]] = {
         "deploy_agent": start_deploy_async,
         workspace_bootstrap.JOB_TYPE: workspace_bootstrap.start_bootstrap_async,
-        system_uninstall.JOB_TYPE: system_uninstall.start_uninstall_async,
+        # a crashed uninstall is still `running` in the ledger; the resume starter
+        # is the only caller allowed to pick such a job up again
+        system_uninstall.JOB_TYPE: system_uninstall.start_uninstall_resume,
     }
     db = SessionLocal()
     try:

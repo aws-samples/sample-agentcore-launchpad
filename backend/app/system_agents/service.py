@@ -289,6 +289,11 @@ def _latest_deployment(db: Session, agent_id: str) -> Deployment | None:
 
 def latest_uninstall_job(db: Session, agent_id: str) -> Job | None:
     """The newest uninstall job for this row (jobs carry the agent id in payload)."""
+    return _owner_job(db, agent_id)
+
+
+def _owner_job(db: Session, agent_id: str) -> Job | None:
+    """The job that currently owns the row's teardown: the newest uninstall job."""
     rows = (
         db.query(Job)
         .filter(Job.type == UNINSTALL_JOB_TYPE)
@@ -483,8 +488,10 @@ def install_preset(
     if existing is not None:
         return _repair(db, existing, preset, bucket, options, force=force)
 
-    spec = catalogue.build_spec(preset, bucket, options or InstallOptions())
     pin = _release_pin(preset)  # validated snapshot identity, before anything is written
+    spec = catalogue.build_spec(
+        preset, bucket, options or InstallOptions(), digest=pin["preset_bundle"]["digest"]
+    )
     agent = Agent(
         workspace_id=row.id,
         name=preset.name,
@@ -528,8 +535,10 @@ def _repair(
     stored = agent.spec or {}
     resolved = options or catalogue.options_from_spec(stored)
     _require_kb_prerequisites(_workspace_row(db, agent.workspace_id), resolved)
-    desired = catalogue.build_spec(preset, bucket, resolved).model_dump()
     pin = _release_pin(preset)  # before the claim, so nothing is claimed for a bad bundle
+    desired = catalogue.build_spec(
+        preset, bucket, resolved, digest=pin["preset_bundle"]["digest"]
+    ).model_dump()
     if agent.status == "active" and desired == stored and not force:
         deployment, job = _latest_job(db, agent)
         return InstallOutcome(agent=agent, job=job, deployment=deployment, created=False,
@@ -589,6 +598,53 @@ def _refuse_uninstalling(db: Session, agent: Agent, preset: SystemPreset) -> Non
 # ---------------------------------------------------------------------------
 # package stage: versioned, checksummed, pinned skill upload (inside the deploy job)
 # ---------------------------------------------------------------------------
+
+
+def assert_job_release_pinned(payload: dict[str, Any] | None, agent: Agent) -> dict[str, Any]:
+    """Job-entry guard for every system-preset deploy job, run BEFORE any stage —
+    including a resumed job whose package stage already succeeded or was skipped.
+
+    The pin must exist and be well-formed, and the stored spec, the pin and this
+    build's snapshot must describe the same release (version, digest and prefix).
+    Anything else fails closed with the repair instruction; the pipeline lands it as
+    a failed job before touching AWS.
+    """
+    preset = catalogue.get_preset(agent.system_key or "")
+    if preset is None:
+        raise RuntimeError(f"unknown system preset key {agent.system_key!r} on agent {agent.id}")
+    pinned = (payload or {}).get("preset_bundle")
+    if (
+        not isinstance(pinned, dict)
+        or not isinstance(pinned.get("files"), dict)
+        or not pinned.get("digest")
+        or not pinned.get("version")
+    ):
+        raise RuntimeError(
+            "this job carries no valid release pin (payload.preset_bundle) — it was not "
+            "queued by the preset install/repair route; re-run the install from the "
+            "System presets panel so the bundle identity is pinned with the job"
+        )
+    release = catalogue.skill_release_from_spec(agent.spec or {})
+    spec_version = release[0] if release else None
+    if spec_version != preset.skill_version or pinned.get("version") != preset.skill_version:
+        raise RuntimeError(
+            f"queued release mismatch: spec pins v{spec_version}, job pins "
+            f"v{pinned.get('version')}, this build ships v{preset.skill_version} — re-run "
+            "the preset install so spec, pin and bundle are re-derived together"
+        )
+    snapshot = catalogue.snapshot_bundle(preset)
+    if pinned.get("digest") != snapshot.digest or pinned.get("files") != snapshot.file_digests():
+        raise RuntimeError(
+            f"pinned bundle mismatch: the job was queued for digest "
+            f"{str(pinned.get('digest'))[:12]}, the checkout now holds {snapshot.digest[:12]} — "
+            "re-run the preset install"
+        )
+    if release and release[1] and release[1] != snapshot.digest[:12]:
+        raise RuntimeError(
+            f"the stored spec loads release {release[0]}-{release[1]} but the pinned snapshot "
+            f"is {snapshot.digest[:12]} — re-run the preset install"
+        )
+    return {"pin": pinned, "snapshot": snapshot}
 
 
 def _pinned_release(ctx: StageContext) -> dict[str, Any] | None:
@@ -658,6 +714,32 @@ def _content_type(rel: str) -> str:
     return "text/markdown; charset=utf-8" if rel.endswith(".md") else "application/octet-stream"
 
 
+def _parse_manifest(raw: bytes) -> Any:
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _describe_manifest(manifest: Any) -> str:
+    if isinstance(manifest, dict):
+        return f"digest {str(manifest.get('digest'))[:12]}"
+    if manifest is None:
+        return "not valid JSON"
+    return f"JSON {type(manifest).__name__}, not an object"
+
+
+def _list_keys(s3: Any, bucket: str, prefix: str) -> set[str]:
+    keys: set[str] = set()
+    kwargs: dict[str, Any] = {"Bucket": bucket, "Prefix": prefix}
+    while True:
+        page = s3.list_objects_v2(**kwargs)
+        keys.update(item["Key"] for item in page.get("Contents", []) or [])
+        if not page.get("IsTruncated"):
+            return keys
+        kwargs["ContinuationToken"] = page.get("NextContinuationToken")
+
+
 def _manifest_matches(manifest: Any, snapshot: catalogue.BundleSnapshot) -> bool:
     return (
         isinstance(manifest, dict)
@@ -697,45 +779,39 @@ def package_preset_skills(ctx: StageContext, agent: Agent) -> StageResult:
     if not bucket:
         raise RuntimeError("artifacts_bucket missing from this workspace's resource map")
 
-    pinned = _pinned_release(ctx)
-    if not pinned or not isinstance(pinned.get("files"), dict) or not pinned.get("digest"):
-        raise RuntimeError(
-            "this job carries no valid release pin (payload.preset_bundle) — it was not "
-            "queued by the preset install/repair route; re-run the install from the "
-            "System presets panel so the bundle identity is pinned with the job"
-        )
-    spec_version = catalogue.skill_version_from_spec(agent.spec or {})
-    if spec_version != preset.skill_version or pinned.get("version") != preset.skill_version:
-        raise RuntimeError(
-            f"queued release mismatch: spec pins v{spec_version}, job pins "
-            f"v{pinned.get('version')}, this build ships v{preset.skill_version} — re-run "
-            "the preset install so spec, pin and bundle are re-derived together"
-        )
-    snapshot = catalogue.snapshot_bundle(preset)
-    if pinned.get("digest") != snapshot.digest or pinned.get("files") != snapshot.file_digests():
-        raise RuntimeError(
-            f"pinned bundle mismatch: the job was queued for digest "
-            f"{str(pinned.get('digest'))[:12]}, the checkout now holds {snapshot.digest[:12]} — "
-            "re-run the preset install"
-        )
+    db = ctx.session()
+    try:
+        job = db.get(Job, ctx.job_id)
+        payload = dict(job.payload or {}) if job else {}
+    finally:
+        db.close()
+    # same guard the job entry runs; its snapshot is the one immutable copy this
+    # stage validates against, uploads and reads back
+    snapshot = assert_job_release_pinned(payload, agent)["snapshot"]
 
-    prefix = preset.skill_prefix()
+    # The Harness loads exactly the directory the spec names; publish there and nowhere
+    # else. The content-addressed name ties the directory to this snapshot.
+    prefix = catalogue.skill_prefix_from_spec(agent.spec or {}) or preset.skill_prefix(
+        snapshot.digest
+    )
+    if prefix != preset.skill_prefix(snapshot.digest):
+        raise RuntimeError(
+            f"the stored spec loads {prefix} but this snapshot publishes to "
+            f"{preset.skill_prefix(snapshot.digest)} — re-run the preset install"
+        )
     s3 = ctx.workspace.client("s3")
     manifest_key = f"{prefix}{MANIFEST_KEY}"
 
     published = _get_bytes(s3, bucket, manifest_key)
     if published is not None:
-        try:
-            manifest = json.loads(published[0])
-        except (TypeError, ValueError):
-            manifest = None
+        manifest = _parse_manifest(published[0])
         if not _manifest_matches(manifest, snapshot):
             raise RuntimeError(
                 f"s3://{bucket}/{prefix} already carries a manifest that is malformed or "
-                f"describes different content (digest "
-                f"{str((manifest or {}).get('digest'))[:12]} ≠ {snapshot.digest[:12]}); a "
-                "published version is immutable — inspect the prefix, then bump the "
-                "preset's skill_version (and the SKILL.md version) to publish"
+                f"describes different content ({_describe_manifest(manifest)} ≠ digest "
+                f"{snapshot.digest[:12]}); a published release is immutable — inspect the "
+                "prefix (nothing was written), then bump the preset's skill_version (and "
+                "the SKILL.md version) to publish a new release"
             )
 
     # ---- objects: create-if-absent, else verify existing bytes; repair corrupt ----
@@ -775,17 +851,34 @@ def package_preset_skills(ctx: StageContext, agent: Agent) -> StageResult:
         ).encode()
         if not _put_if_absent(s3, bucket, manifest_key, manifest_body, "application/json"):
             other = _get_bytes(s3, bucket, manifest_key)
-            try:
-                other_manifest = json.loads(other[0]) if other else None
-            except (TypeError, ValueError):
-                other_manifest = None
+            other_manifest = _parse_manifest(other[0]) if other else None
             if not _manifest_matches(other_manifest, snapshot):
                 raise RuntimeError(
                     f"a competing publication claimed s3://{bucket}/{prefix} with different "
                     "content while this job was uploading; refusing to overwrite it"
                 )
 
-    # ---- verification: read back every object and hash it against the snapshot ----
+    # ---- verification: the whole directory, the manifest and every object ----
+    expected = {f"{prefix}{rel}" for rel in snapshot.files} | {manifest_key}
+    listed = _list_keys(s3, bucket, prefix)
+    unexpected = sorted(listed - expected)
+    if unexpected:
+        # never deleted here: they are not ours to remove and the Harness would load them
+        raise RuntimeError(
+            f"s3://{bucket}/{prefix} holds {len(unexpected)} object(s) outside the pinned "
+            f"snapshot ({', '.join(k[len(prefix):] for k in unexpected[:5])}) — the "
+            "release directory is not exactly the validated snapshot; inspect and remove "
+            "the foreign objects, then re-run the install"
+        )
+    final_manifest = _get_bytes(s3, bucket, manifest_key)
+    final_ok = final_manifest is not None and _manifest_matches(
+        _parse_manifest(final_manifest[0]), snapshot
+    )
+    if not final_ok:
+        raise RuntimeError(
+            f"post-upload verification failed for s3://{bucket}/{manifest_key}: the manifest "
+            "is missing or does not describe the pinned snapshot"
+        )
     for rel, body in snapshot.files.items():
         key = f"{prefix}{rel}"
         readback = _get_bytes(s3, bucket, key)
@@ -846,9 +939,17 @@ def uninstall_preset(db: Session, row: Workspace, preset: SystemPreset) -> Unins
                                 attempt=(previous.payload or {}).get("attempt", 1))
     attempt = ((previous.payload or {}).get("attempt", 0) + 1) if previous else 1
     now = datetime.now(UTC)
+    # Optimistic CAS: the row version is its updated_at as this session read it. Two
+    # simultaneous requests (initial or failed-retry) read the same value; the first
+    # UPDATE moves it, the second matches 0 rows and adopts the first's job.
+    seen = agent.updated_at
     claimed = db.execute(
         update(Agent)
-        .where(Agent.id == agent.id, Agent.status.in_(_UNINSTALLABLE))
+        .where(
+            Agent.id == agent.id,
+            Agent.status.in_(_UNINSTALLABLE),
+            Agent.updated_at == seen,
+        )
         .values(status=STATUS_UNINSTALLING, updated_at=now)
     ).rowcount
     if claimed != 1:
@@ -859,9 +960,14 @@ def uninstall_preset(db: Session, row: Workspace, preset: SystemPreset) -> Unins
             raise NotFoundError(
                 "system_agent.not_installed", f"'{preset.key}' is not installed here"
             )
+        if current.status == STATUS_UNINSTALLING:
+            owner = _owner_job(db, current.id)
+            if owner is not None and owner.status in _LIVE_JOB:
+                return UninstallOutcome(agent=current, job=owner, started=False,
+                                        attempt=(owner.payload or {}).get("attempt", 1))
         raise AppError(
             "agent.deploy_in_progress",
-            "a deployment is in progress for this preset — wait for it to finish",
+            "the preset changed underneath this request — reload and retry",
             status_code=409,
         )
     job = Job(

@@ -404,20 +404,39 @@ re-reads the winner **and returns the winner's job id**; a repair executes one
 compare-and-set `UPDATE … WHERE status IN (active, failed)` in the same transaction
 as the job row it creates, so two sessions that both loaded an active row converge
 on one job (the second sees no claimed row and returns the first's in-flight job).
-**Uninstall is a durable job, not a terminal flag**: `DELETE /api/system-agents/
-{key}` moves the row to the non-terminal `uninstalling` status **together with** an
-`uninstall_system_agent` job (`202 {job_id, attempt, started, preset}`). The row keeps
-its system identity — and the partial unique index keeps holding the key — until the
-worker's teardown succeeds, so no install or repair can take the key while the AWS
-resources are still being removed (both answer `409 system_agent.uninstalling`); a
-repeated uninstall returns the same live job; a failed teardown leaves the row
-`uninstalling` with the reason on the job and the row (`operation.retryable`), and
-another explicit uninstall starts attempt N+1; a crash mid-teardown is resumed by
-`resume_pending_jobs()` like any other job, and the worker only acts on rows still
-in `uninstalling`. Only a successful teardown marks the row `deleted`. The teardown
-is the same idempotent helper ordinary deletes use, addressing only the resources
-named on the row. The deploy job runs the **normal** `generate → package →
-provision → deploy → register` pipeline with three preset-specific hardenings:
+**Uninstall is a durable, exclusively owned job, not a terminal flag**: `DELETE
+/api/system-agents/{key}` moves the row to the non-terminal `uninstalling` status
+**together with** an `uninstall_system_agent` job (`202 {job_id, attempt, started,
+preset}`). The claim is an optimistic compare-and-set on the row's `updated_at` as
+the request read it, so two simultaneous requests — an initial pair or two retries of
+a failed attempt — create exactly one job and the loser adopts it (`started: false`).
+The row keeps its system identity — and the partial unique index keeps holding the
+key — until the worker's teardown is **verified**, so no install or repair can take
+the key while the AWS resources are still being removed (both answer `409
+system_agent.uninstalling`); a failed teardown leaves the row `uninstalling` with
+the reason and per-step progress on the job (`operation.retryable`), and another
+explicit uninstall starts attempt N+1. The worker (`system_agents/uninstall.py`) is
+**fenced**: it runs only if it wins the job's `queued → running` CAS (a startup
+resume may also adopt a `running` job the crashed process left), and it re-checks
+before every cloud step and inside the finalizing transaction that the job is of the
+right type and workspace, still `running`, and still the row's *newest* uninstall
+attempt while the row is still `uninstalling` — a duplicate, superseded or late
+worker is inert, cannot finish or fail another attempt, and cannot resolve a
+replacement install's KB target by reused name. The teardown is **strict**: the
+agentic KB target (only when KBs were mounted) is removed, `DeleteHarness` is
+issued and then `GetHarness` is polled until `ResourceNotFoundException` (a mere
+accepted `DELETING` is not a deletion; `DELETE_FAILED` or the 90 s bound are
+retryable failures), and only then is the execution role deleted — an IAM delete
+that reports failure is a retryable failure, never an ignored `False`. Progress per
+step (`kb_target`, `harness`, `role`) is recorded on the job so a retry skips what
+is done and re-runs idempotent steps. Only a fully verified teardown marks the row
+`deleted`. The ordinary agent delete keeps its best-effort semantics; the preset does
+not use it. The deploy job runs the **normal** `generate → package → provision →
+deploy → register` pipeline with three preset-specific hardenings, guarded **at job
+entry**: every system-preset deploy job — fresh or resumed, whatever stages already
+succeeded or were skipped — proves its release pin (present, well-formed, matching
+the stored spec, this build's snapshot and the release directory) before a single
+stage runs, or lands as a failed job without touching AWS:
 
 - **release pinning, atomically** — before anything is written, the install reads
   the repository bundle **once** into an immutable in-memory snapshot, validates that
@@ -428,9 +447,15 @@ provision → deploy → register` pipeline with three preset-specific hardening
   job without its pin. The `package` stage (skipped for ordinary harnesses) fails
   closed on a missing or malformed pin — nothing "legacy" is accepted — and refuses
   when the stored spec, the pin and this build's snapshot disagree;
-- **one byte snapshot, conflict-safe publication** — the bytes that were validated
-  and hashed are the bytes that are uploaded and read back. Every object under
-  `s3://<artifacts_bucket>/system-skills/<name>/<skill_version>/` is created with
+- **one byte snapshot, content-addressed release, conflict-safe publication** — the
+  bytes that were validated and hashed are the bytes that are uploaded and read back.
+  The release directory is content-addressed:
+  `s3://<artifacts_bucket>/system-skills/<name>/<skill_version>-<digest12>/` (the
+  first 12 hex digits of the snapshot digest), and the stored spec's `skills` URI
+  names exactly that directory, so two valid snapshots of the same version (one with
+  an extra reference file, say) can never share the directory the Harness loads — a
+  losing writer cannot add bytes to the winner's deployed tree. Every object is
+  created with
   `If-None-Match: *`; a 412 means another writer got there first and the existing
   bytes must equal ours (restart after a partial upload, or a same-content
   concurrent retry) or the stage fails without overwriting anything. The manifest
@@ -441,8 +466,13 @@ provision → deploy → register` pipeline with three preset-specific hardening
   SKILL.md `version` together). Finally **every object is read back and hashed
   against the snapshot**: a missing object is restored with `If-None-Match: *`, a
   corrupt one is replaced only with `If-Match` on the ETag that was read, and a
-  prefix that still disagrees fails — the stage never reports "verified" for an
-  absent or altered `SKILL.md`, and never writes outside the versioned prefix;
+  prefix that still disagrees fails. Final verification also lists the **entire**
+  release directory and requires it to be exactly the snapshot's files plus the
+  manifest (a foreign object fails the stage and is never deleted), re-reads and
+  re-validates the manifest itself (version, digest and per-file digests), and treats
+  a manifest that is valid JSON of the wrong type as a fail-closed, zero-write
+  conflict with actionable guidance — the stage never reports "verified" for an
+  absent or altered `SKILL.md`, and never writes outside the release prefix;
 - **idempotent AWS requests** — every harness create/update sends
   `clientToken = lp-<deployment id>` (persisted, not scratch state), so a job
   resumed after a crash between the AWS call and the ledger write repeats the same

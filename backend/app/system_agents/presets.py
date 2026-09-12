@@ -54,12 +54,21 @@ class SystemPreset:
     def skill_path(self) -> Path:
         return SKILLS_ROOT / (self.skill_dir or self.name)
 
-    def skill_prefix(self) -> str:
-        """Versioned S3 key prefix (no bucket), trailing slash."""
-        return f"{SYSTEM_SKILLS_PREFIX}/{self.name}/{self.skill_version}/"
+    def skill_prefix(self, digest: str | None = None) -> str:
+        """Release S3 key prefix (no bucket), trailing slash.
 
-    def skill_uri(self, bucket: str) -> str:
-        return f"s3://{bucket}/{self.skill_prefix()}"
+        Content-addressed: ``<version>-<digest12>`` names one exact validated snapshot,
+        so two valid snapshots of the same version (say, one with an extra reference
+        file) can never share a directory — the Harness loads the whole directory, so
+        a losing writer must not be able to add bytes to the winner's deployed tree.
+        ``digest=None`` yields the plain version directory (pre-content-addressing
+        specs, and the parent for listing).
+        """
+        release = self.skill_version if not digest else f"{self.skill_version}-{digest[:12]}"
+        return f"{SYSTEM_SKILLS_PREFIX}/{self.name}/{release}/"
+
+    def skill_uri(self, bucket: str, digest: str | None = None) -> str:
+        return f"s3://{bucket}/{self.skill_prefix(digest)}"
 
 
 ARCHITECT_SYSTEM_PROMPT = """\
@@ -138,7 +147,9 @@ class InstallOptions:
     knowledge_bases: tuple[KnowledgeBaseRef, ...] = field(default_factory=tuple)
 
 
-def build_spec(preset: SystemPreset, bucket: str, options: InstallOptions) -> AgentSpec:
+def build_spec(
+    preset: SystemPreset, bucket: str, options: InstallOptions, *, digest: str | None = None
+) -> AgentSpec:
     """The server-owned spec for one preset in one workspace.
 
     Memory: explicitly **disabled** (``{"disabled": {}}`` on the harness request). The
@@ -166,7 +177,7 @@ def build_spec(preset: SystemPreset, bucket: str, options: InstallOptions) -> Ag
                 config={"url": AWS_KNOWLEDGE_MCP_URL, "auth": "none"},
             )
         ],
-        skills=[preset.skill_uri(bucket)],
+        skills=[preset.skill_uri(bucket, digest)],
         allowed_tools=list(preset.allowed_tools),
         memory={"short_term": False, "long_term": False, "memory_id": None},
         knowledge_bases=list(options.knowledge_bases),
@@ -186,13 +197,32 @@ def options_from_spec(spec: dict) -> InstallOptions:
     )
 
 
-def skill_version_from_spec(spec: dict) -> str | None:
-    """The bundle version a stored preset spec points at (``…/<version>/``)."""
+def skill_release_from_spec(spec: dict) -> tuple[str, str | None] | None:
+    """``(version, digest12 | None)`` of the release a stored preset spec points at
+    (``…/<version>/`` or the content-addressed ``…/<version>-<digest12>/``)."""
     for path in spec.get("skills") or []:
         marker = f"/{SYSTEM_SKILLS_PREFIX}/"
         if marker in path:
-            parts = path.rstrip("/").split("/")
-            return parts[-1] if len(parts) >= 2 else None
+            leaf = path.rstrip("/").rsplit("/", 1)[-1]
+            version, sep, digest = leaf.rpartition("-")
+            if sep and len(digest) == 12 and all(c in "0123456789abcdef" for c in digest):
+                return version, digest
+            return leaf, None
+    return None
+
+
+def skill_version_from_spec(spec: dict) -> str | None:
+    """The bundle version a stored preset spec points at."""
+    release = skill_release_from_spec(spec)
+    return release[0] if release else None
+
+
+def skill_prefix_from_spec(spec: dict) -> str | None:
+    """The S3 key prefix (no bucket) the stored spec's Harness actually loads from."""
+    for path in spec.get("skills") or []:
+        marker = f"/{SYSTEM_SKILLS_PREFIX}/"
+        if marker in path and path.startswith("s3://"):
+            return path.split("/", 3)[3]
     return None
 
 
