@@ -449,6 +449,74 @@ Workspace 安装、确认 S3 技能在 `allowedTools` 限制下真正加载、AW
 无法删除/重新发布、重复安装不产生重复——**尚未**执行，预置在此之前不算可运营。若 Harness 的
 技能加载工具名不在 `file_*` 之内，请把它加进 `ARCHITECT.allowed_tools`，而不是放宽为 `*`。
 
+### 架构助手（SE-039）——经审阅、幂等的 Harness 提案
+
+**架构助手**（`/create/assistant`，可从“托管 Harness”入口卡片进入，预置运行中时也可从“系统预置”
+面板进入）是成员与受保护预置 `aws-agent-solution-architect` 的一次对话，其终点是**一个惰性的、
+可审阅的提案，对应一个新的托管 Harness 业务 Agent**。它是创建助手，不是管理机器人：从不编辑或
+删除既有 Agent，从不创建知识库、Gateway 或评估器，也从不自行执行任何操作。
+
+**此处支持的范围。** 提案可以命名 Agent、选择模型（`model_id` + `model_source`）、编写系统提示词、
+设置记忆开关、迭代与超时控制，并按目录 key 引用 Workspace 中**既有**资源：APPROVED 的 Registry
+MCP 记录（`gateway:<name>` / `mcp:<name>`）、APPROVED 的 Registry `AGENT_SKILLS` 记录（S3 技能路径）
+与 ACTIVE 的托管知识库。痛点 → 指标 → 黄金测试表、评估器建议、假设与*需手动实现事项*作为**方案
+内容**随修订保存并渲染供审阅；控制台标注“此处不会创建”，不会自动配置任何东西。不支持 DOCX/PDF
+上传，不导出 Word/draw.io。
+
+**会话模型。** `POST /api/assistant/architect/conversations` 打开一个绑定到 `(workspace, 所有者
+用户名)` 的会话，并快照 Workspace 目录（与创建向导相同的 Registry attachables + 知识库读取）。
+所有读写在 Workspace 范围之上再按所有者绑定——其他成员或管理员的请求返回 404——因为粘贴的
+Workshop 材料是客户输入，不是共享的 Workspace 资源。预置**禁用**持久记忆，因此助手不依赖服务端
+会话连续性：记录存于 `assistant_messages`，每轮铸造一个**新的 64 位十六进制 runtime session id**，
+并通过 `InvokeHarness.messages`（`[{role: user|assistant, content: [{text}]}]`，≤ 24 条 /
+≤ 160k 字符，连续同角色行合并以保证交替）重放有界的记录窗口。服务端撰写的协议前言（规则 + 目录
+key）附在第一条用户消息上；Harness 请求不携带 `systemPrompt`、`tools` 或 `model` 覆盖。任何私有
+内容都不会写入共享的长期记忆。模型是否忠实遵循重放/协议属于**待完成的实机冒烟**。
+
+**私有 runtime 会话。** 每轮的 session id 在数据面调用*之前*写入用户消息行。通用入口——控制台
+对话、`POST /api/agents/{id}/invoke`、`/v1` 同步与流式——都会调用
+`app.assistant.sessions.refuse_assistant_session`，对系统托管 Agent 上的此类 id 返回 `404
+chat.session_not_found`；普通 Agent 不产生台账读取。对话会话/历史从不列出助手轮次（不写入
+`ChatSession` / `ChatMessage` 行）。
+
+**惰性提案。** 普通模型轮次结束后，回复被扫描是否恰有一个标记为 `launchpad-proposal` 的围栏块
+（`app/assistant/proposal.py`）。该块不受信任：`ProposalContent` 是带 `extra="forbid"` 与字段
+上限的 Pydantic 白名单——`env`、`code`、`requirements`、`allowed_tools`、`protocol`、`filesystem`、
+`network`、URL、ARN、S3 前缀或角色都无法通过。引用按会话的目录快照校验，预置保留名与
+`launchpad-`/`harness-`/`system-` 前缀被拒绝，`to_agent_spec` 是映射到 `AgentSpec` 的唯一路径：
+MCP URL、Gateway 记录/Gateway ID、S3 技能路径与知识库名称来自 **key 所指的目录条目**，绝不来自
+提案本身。每次模型输出（以及成员通过 `PUT …/proposal` 的每次编辑）都成为一个新**修订**
+（`assistant_proposals`）：有效为 `draft`，否则为 `invalid`（原样保留并附错误，可见但永不可执行）；
+更早的草稿变为 `superseded`。有效修订还会保存其**绑定**——解析后的 spec——且 `content_hash`
+同时覆盖内容**与**绑定，因此审阅者看到确切资源，批准所指即所渲染的内容。提示词或回复中的
+“approved”之类文字不改变任何事：一轮对话只在记录与提案表中创建行，别无其他。
+
+**批准——唯一的执行者。** `POST …/proposal/approve`（`perm:agents.deploy`，与 `POST /api/agents`
+同一权限，处理器内再次断言）指定 `{revision, content_hash}`。在任何声明之前依次检查：权限 →
+该修订是当前修订且哈希匹配 → 未曾 `approved`（重复请求返回已记录结果，`200 started:false`）→
+状态为 `draft` → Workspace 部署就绪（`bootstrap_status = ready`、`execution_role_arn`）→ 内容
+按**实时**目录重新校验（资源已移除时 `409 assistant.proposal_invalid`）→ 保留名/重名 → 实时解析
+必须等于已存绑定（key 指向了不同的 URL、Gateway、路径或知识库时 `409 assistant.bindings_changed`）。
+随后一个事务：条件更新 `UPDATE … WHERE status='draft'` 写入 `approved`、批准人与时间；添加普通
+`Agent` 行（`owner` = 批准人，无 `system_key`）并链接到提案；
+`create_deployment(payload_extra={"assistant": {conversation_id, proposal_id, revision,
+approved_by}})` 写入 `Deployment` 与 `deploy_agent` `Job` 并一次提交。只有声明胜出方启动任务
+线程（`202 started:true`）；并发或重复请求重读胜出方的结果。持久提交与尽力而为的
+`deployment_id`/`job_id` 反规范化之间崩溃无害——读取方通过 Agent 链接解析结果。排队中的任务
+通过 `resume_pending_jobs` 挺过进程故障。失败的部署保持在其原始任务上；助手从不重启它，新提案
+必须使用仍然空闲的名称。会话有界（200 轮、50 个修订 → `409 assistant.conversation_full`）。
+
+**控制台。** 页面（`pages/CreateAgentAssistant.tsx`）显示带流式输出的记录、目录摘要、提案
+（字段、绑定、提示词、方案内容）、内嵌的类型化编辑器（工具/技能/知识库从目录中选择）、“取消提案”、
+带账号与 Region 确认对话框及计费警告的“批准并部署”，以及部署结果（通过普通的 `/api/jobs` 与
+`/api/agents` 读取轮询任务与阶段，链接到 Agent 管理与对话）。它处理预置未运行状态（管理员 →
+系统预置；成员 → 联系管理员）、缺少权限状态（批准按钮禁用并说明原因）、对话中途的 401/403，
+并在切换 Workspace 时丢弃草稿（路由子树重挂载；会话在服务端按 Workspace 隔离）。中英双语。
+
+**仍需实机检查。** `tests/test_assistant.py` 为封闭测试。尚未执行：真实的预置对话与有依据的
+AWS 回答、有效的模型生成提案、授权批准创建测试 Harness、回读并清理测试所属资源。仅凭
+`make verify` 不能证明模型遵循协议。
+
 ### 模型来源(方式B + 方式C)
 
 `AgentSpec.model_source` 决定模型的托管面:`mantle`(Bedrock Mantle)或

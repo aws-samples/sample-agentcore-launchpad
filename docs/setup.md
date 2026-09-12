@@ -167,6 +167,24 @@ it through the preset. If an ordinary agent already holds the reserved name, the
 install is refused — delete or rename that agent first; the preset never adopts it.
 **Live smoke is still pending** (see architecture.md → *System-managed presets*).
 
+### Architect assistant / 架构助手
+
+Once the `aws-agent-solution-architect` preset is ACTIVE, every member of the workspace
+can open the **architect assistant** (`/create/assistant`, linked from the Managed
+Harness entrance card and from the SYSTEM PRESETS panel). Paste your Workshop output,
+let the assistant confirm the baseline and ask only the impactful missing questions,
+and review its proposal for **one new managed Harness business agent**. The proposal
+only references tools, S3 skills and knowledge bases that already exist in the
+workspace (APPROVED registry records, ACTIVE managed KBs) and is inert until you click
+**APPROVE & DEPLOY** — a separate, billable action that requires the `agents.deploy`
+permission and creates the agent through the normal deploy job in the workspace's
+account and Region. Editing a proposal creates a new revision that needs its own
+approval; cancelling makes it non-executable. The assistant never edits or deletes
+existing agents and creates no knowledge base, gateway or evaluator — those, and the
+golden tests it recommends, are guidance for manual implementation. Conversations are
+private to the member who opened them, per workspace. **The live smoke of this flow
+(a real conversation, proposal and approval) is still pending.**
+
 ### Escape hatches / 应急开关
 
 | Variable | Effect |

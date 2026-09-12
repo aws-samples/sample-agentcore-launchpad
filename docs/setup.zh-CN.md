@@ -149,6 +149,18 @@ provision 阶段于 Workspace 中核验；不会替你创建任何知识库）�
 重命名该 Agent；预置绝不接管它。
 **实机冒烟尚未完成**（见 architecture.zh-CN.md →“系统托管预置”）。
 
+### 架构助手
+
+`aws-agent-solution-architect` 预置进入运行中后，Workspace 的每位成员都可以打开**架构助手**
+（`/create/assistant`，可从“托管 Harness”入口卡片与“系统预置”面板进入）。粘贴 Workshop 产出，
+让助手确认需求基线并只追问缺失且影响架构的问题，然后审阅它对**一个新的托管 Harness 业务 Agent**
+的提案。提案只引用 Workspace 中已存在的工具、S3 技能与知识库（APPROVED 的 Registry 记录、ACTIVE
+的托管知识库），并在你点击**批准并部署**之前保持惰性——那是一个独立的、计费的操作，需要
+`agents.deploy` 权限，并通过常规部署任务在 Workspace 的账号与 Region 中创建 Agent。编辑提案会
+生成需要重新批准的新修订；取消则使其不可执行。助手从不编辑或删除既有 Agent，也不创建知识库、
+Gateway 或评估器——这些以及它建议的黄金测试都是供手动实现的指导。会话按 Workspace 归属于打开它的
+成员。**该流程的实机冒烟（真实对话、提案与批准）尚未完成。**
+
 ### 应急开关
 
 | 变量 | 效果 |

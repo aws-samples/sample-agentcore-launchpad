@@ -140,6 +140,46 @@ Every agent projection carries `system: {managed, key, label, skill_version,
 protected_actions} | null`. `AgentSpec.allowed_tools` (harness only) accepts 1–64
 character entries matching `*|@?name(/tool)?`.
 
+## Console Architect Assistant API — reviewed Harness proposals
+
+The architect assistant (see architecture → *Architect assistant (SE-039)*) is a
+member conversation with the protected `aws-agent-solution-architect` preset that ends
+in an inert proposal for one new managed Harness. Discussion routes are `member`
+(parity with Chat); the approval rides `perm:agents.deploy` (parity with `POST
+/api/agents`). Every route is workspace-scoped **and owner-bound**: a conversation of
+another member — or of an administrator — answers `404 assistant.conversation_not_found`.
+Reads are ledger-only except where noted.
+
+| Method | Path | Role | Result |
+|---|---|---|---|
+| `GET` | `/api/assistant/architect` | member | `{workspace_id, account_id, region, available, reasons[], preset{key, label, status, agent_id, requirements[], can_install}, can_deploy, deploy_requirements[{code, message}], is_admin, owner}` — `available` ⇔ the preset is `active`; ledger-only |
+| `GET` | `/api/assistant/architect/conversations` | member | `{conversations[{id, title, turns, status, proposal_status, proposal_revision, created_at, updated_at}]}` — the caller's own, newest first (≤ 50) |
+| `POST` | `/api/assistant/architect/conversations` | member | body `{title?}` → `201` conversation detail (below); snapshots the workspace **catalog** (registry attachables + ACTIVE managed KBs — the only AWS reads); `409 assistant.unavailable` (`detail.preset_status`) while the preset is not active |
+| `GET` | `/api/assistant/architect/conversations/{id}` | member | `{…summary, catalog{fetched_at, tools[{key, kind, name, description, attachable, reason}], skills[{key, name, description}], knowledge_bases[{kb_id, name, description}], warnings[], target{workspace_id, account_id, region}}, messages[{id, turn, role: user|assistant|tool|error, text, name, at}], proposals[…]}` |
+| `POST` | `/api/assistant/architect/conversations/{id}/catalog` | member | re-reads the catalog → `{catalog}` |
+| `POST` | `/api/assistant/architect/conversations/{id}/turns` | member | body `{prompt}` (≤ 100k chars) → SSE `meta{conversation_id, turn, session_id, agent} → (tool|delta)* → proposal? → done` or `error` (kept on the transcript). One `InvokeHarness` on the preset with the bounded replayed transcript; a `launchpad-proposal` block becomes a new revision (`draft` or `invalid`); **no other write**. `409 assistant.unavailable` / `assistant.conversation_full` (200 turns) before the stream opens |
+| `PUT` | `/api/assistant/architect/conversations/{id}/proposal` | member | body `{content}` (the proposal allowlist) → `{proposal}` — a **new** revision (`source: member`), never a mutation; invalid content is stored as `invalid` with `validation_errors`, never corrected |
+| `POST` | `/api/assistant/architect/conversations/{id}/proposal/reject` | member | body `{revision}` → `{proposal}` with `status: rejected` (non-executable); `409 assistant.proposal_stale` for a non-current revision, `409 assistant.proposal_already_approved` for an approved one |
+| `POST` | `/api/assistant/architect/conversations/{id}/proposal/approve` | `perm:agents.deploy` | body `{revision, content_hash}` → `202 {proposal, agent, job_id, deployment_id, started: true}` when this call claimed the revision and created the ordinary agent + deployment + `deploy_agent` job in one commit; `200 … started: false` with the recorded outcome for a repeated or concurrent request. Refusals, all before any write: `403 auth.permission_required`, `409 assistant.proposal_stale` (not current / hash differs), `409 assistant.proposal_not_approvable` (invalid, rejected, superseded), `409 assistant.workspace_not_ready`, `409 assistant.proposal_invalid` (live catalog no longer has a referenced resource), `409 agent.name_reserved`, `409 agent.name_exists`, `409 assistant.bindings_changed` (`detail.changed[]` — a key resolves to a different URL/gateway/path/KB than reviewed) |
+
+A proposal is `{id, conversation_id, revision, source: model|member, status: draft|invalid|
+approved|rejected|superseded, content, content_hash, bindings, validation_errors[],
+created_by, created_at, approval, rejected_by, rejected_at}`. `content` is the
+allowlisted object `{version: 1, name, model_id, model_source, system_prompt, tools[key],
+skills[key], knowledge_bases[kb_id], memory{short_term, long_term}, max_iterations,
+timeout_seconds, summary, requirements_baseline[], assumptions[], manual_tasks[],
+golden_tests[{id, input, expected_response, expected_tools[], forbidden_behavior,
+pass_criteria, evaluator, source}], evaluator_recommendations[]}`; `bindings` is the
+resolved `{name, method, model_id, model_source, tools[ToolRef], skills[s3 path],
+knowledge_bases[KnowledgeBaseRef], memory, max_iterations, timeout_seconds}` (null when
+invalid); `content_hash` = sha256 of canonical `{content, bindings}`. `approval` is
+`{approved_by, approved_at, agent_id, agent_name, agent_status, agent_error,
+deployment_id, job_id, job_status} | null`; the job and agent are ordinary rows readable
+through `GET /api/jobs/{id}` and `GET /api/agents/{id}`. The generic invoke entrances
+(`POST /api/chat/{id}`, `POST /api/agents/{id}/invoke`, `/v1 …/invoke[-stream]`) answer
+`404 chat.session_not_found` for an assistant turn's `session_id` on a system-managed
+agent.
+
 ## Console Registry API — live agent card
 
 `GET /api/registry/records/{record_id}/live-agent-card` is the LIVE CARD read in

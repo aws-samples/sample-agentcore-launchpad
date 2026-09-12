@@ -113,6 +113,19 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/system-agents"): MEMBER,
     ("POST", "/api/system-agents/{preset_key}/install"): ADMIN,
     ("DELETE", "/api/system-agents/{preset_key}"): ADMIN,
+    # ---- architect assistant (SE-039): discussion with the preset is member
+    # (parity with Chat); approving a proposal deploys a NEW agent and rides the
+    # same permission as POST /api/agents. Conversations are owner-bound on top. ----
+    ("GET", "/api/assistant/architect"): MEMBER,
+    ("GET", "/api/assistant/architect/conversations"): MEMBER,
+    ("POST", "/api/assistant/architect/conversations"): MEMBER,
+    ("GET", "/api/assistant/architect/conversations/{conversation_id}"): MEMBER,
+    ("POST", "/api/assistant/architect/conversations/{conversation_id}/catalog"): MEMBER,
+    ("POST", "/api/assistant/architect/conversations/{conversation_id}/turns"): MEMBER,
+    ("PUT", "/api/assistant/architect/conversations/{conversation_id}/proposal"): MEMBER,
+    ("POST", "/api/assistant/architect/conversations/{conversation_id}/proposal/reject"): MEMBER,
+    ("POST", "/api/assistant/architect/conversations/{conversation_id}/proposal/approve"):
+        PERM_AGENT_DEPLOY,
     # ---- credential minting ----
     ("GET", "/api/apikeys"): MEMBER,
     ("POST", "/api/apikeys"): MEMBER,

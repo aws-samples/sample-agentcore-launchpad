@@ -115,6 +115,42 @@ canary | promote | …`，`detail.maintenance_route`）；实验与运行时金�
 `system: {managed, key, label, skill_version, protected_actions} | null`。
 `AgentSpec.allowed_tools`（仅 Harness）接受 1–64 字符、匹配 `*|@?name(/tool)?` 的条目。
 
+## 控制台架构助手 API——经审阅的 Harness 提案 / Console Architect Assistant API
+
+架构助手（见 architecture.zh-CN.md →“架构助手（SE-039）”）是成员与受保护预置
+`aws-agent-solution-architect` 的对话，终点是一个新托管 Harness 的惰性提案。讨论路由为
+`成员`（与对话演练场对等）；批准使用 `perm:agents.deploy`（与 `POST /api/agents` 对等）。所有
+路由按 Workspace 限定**且按所有者绑定**：其他成员——或管理员——的会话返回
+`404 assistant.conversation_not_found`。除特别说明外读取仅访问台账。
+
+| 方法 | 路径 | 角色 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/assistant/architect` | 成员 | `{workspace_id, account_id, region, available, reasons[], preset{key, label, status, agent_id, requirements[], can_install}, can_deploy, deploy_requirements[{code, message}], is_admin, owner}`——`available` ⇔ 预置为 `active`；仅读台账 |
+| `GET` | `/api/assistant/architect/conversations` | 成员 | `{conversations[{id, title, turns, status, proposal_status, proposal_revision, created_at, updated_at}]}`——仅调用者自己的会话，最新在前（≤ 50） |
+| `POST` | `/api/assistant/architect/conversations` | 成员 | 请求体 `{title?}` → `201` 会话详情（见下）；快照 Workspace **目录**（Registry attachables + ACTIVE 托管知识库——唯一的 AWS 读取）；预置未运行时 `409 assistant.unavailable`（`detail.preset_status`） |
+| `GET` | `/api/assistant/architect/conversations/{id}` | 成员 | `{…摘要, catalog{fetched_at, tools[{key, kind, name, description, attachable, reason}], skills[{key, name, description}], knowledge_bases[{kb_id, name, description}], warnings[], target{workspace_id, account_id, region}}, messages[{id, turn, role: user|assistant|tool|error, text, name, at}], proposals[…]}` |
+| `POST` | `/api/assistant/architect/conversations/{id}/catalog` | 成员 | 重新读取目录 → `{catalog}` |
+| `POST` | `/api/assistant/architect/conversations/{id}/turns` | 成员 | 请求体 `{prompt}`（≤ 100k 字符）→ SSE `meta{conversation_id, turn, session_id, agent} → (tool|delta)* → proposal? → done` 或 `error`（保留在记录中）。对预置发起一次携带有界重放记录的 `InvokeHarness`；`launchpad-proposal` 块成为新修订（`draft` 或 `invalid`）；**无其他写入**。流打开前返回 `409 assistant.unavailable` / `assistant.conversation_full`（200 轮） |
+| `PUT` | `/api/assistant/architect/conversations/{id}/proposal` | 成员 | 请求体 `{content}`（提案白名单）→ `{proposal}`——一个**新**修订（`source: member`），绝非就地修改；无效内容按 `invalid` 保存并附 `validation_errors`，从不被更正 |
+| `POST` | `/api/assistant/architect/conversations/{id}/proposal/reject` | 成员 | 请求体 `{revision}` → `{proposal}`，`status: rejected`（不可执行）；非当前修订返回 `409 assistant.proposal_stale`，已批准的返回 `409 assistant.proposal_already_approved` |
+| `POST` | `/api/assistant/architect/conversations/{id}/proposal/approve` | `perm:agents.deploy` | 请求体 `{revision, content_hash}` → 本次调用声明该修订并在一次提交中创建普通 Agent + Deployment + `deploy_agent` 任务时返回 `202 {proposal, agent, job_id, deployment_id, started: true}`；重复或并发请求返回已记录结果 `200 … started: false`。拒绝均发生在任何写入之前：`403 auth.permission_required`、`409 assistant.proposal_stale`（非当前 / 哈希不同）、`409 assistant.proposal_not_approvable`（无效、已取消、已被替代）、`409 assistant.workspace_not_ready`、`409 assistant.proposal_invalid`（实时目录已无所引用资源）、`409 agent.name_reserved`、`409 agent.name_exists`、`409 assistant.bindings_changed`（`detail.changed[]`——某个 key 解析到了与审阅时不同的 URL/Gateway/路径/知识库） |
+
+提案为 `{id, conversation_id, revision, source: model|member, status: draft|invalid|approved|
+rejected|superseded, content, content_hash, bindings, validation_errors[], created_by,
+created_at, approval, rejected_by, rejected_at}`。`content` 是白名单对象 `{version: 1, name,
+model_id, model_source, system_prompt, tools[key], skills[key], knowledge_bases[kb_id],
+memory{short_term, long_term}, max_iterations, timeout_seconds, summary,
+requirements_baseline[], assumptions[], manual_tasks[], golden_tests[{id, input,
+expected_response, expected_tools[], forbidden_behavior, pass_criteria, evaluator,
+source}], evaluator_recommendations[]}`；`bindings` 是解析后的 `{name, method, model_id,
+model_source, tools[ToolRef], skills[s3 路径], knowledge_bases[KnowledgeBaseRef], memory,
+max_iterations, timeout_seconds}`（无效时为 null）；`content_hash` = 规范化
+`{content, bindings}` 的 sha256。`approval` 为 `{approved_by, approved_at, agent_id,
+agent_name, agent_status, agent_error, deployment_id, job_id, job_status} | null`；任务与
+Agent 是普通行，可通过 `GET /api/jobs/{id}` 与 `GET /api/agents/{id}` 读取。通用调用入口
+（`POST /api/chat/{id}`、`POST /api/agents/{id}/invoke`、`/v1 …/invoke[-stream]`）对系统托管
+Agent 上助手轮次的 `session_id` 返回 `404 chat.session_not_found`。
+
 ## 控制台 Registry API——实时名片 / Console Registry API: live agent card
 
 `GET /api/registry/records/{record_id}/live-agent-card` 是 Registry 抽屉「AGENT 名片」区块中「实时名片」按钮背后的读取：

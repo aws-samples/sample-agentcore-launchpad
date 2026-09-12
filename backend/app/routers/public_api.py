@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.assistant.sessions import refuse_assistant_session
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, ApiKey
@@ -116,7 +117,7 @@ def v1_invoke_stream(
     key: ApiKey = Depends(require_api_key),
 ) -> StreamingResponse:
     agent = _active_agent(db, key, agent_id)
-
+    refuse_assistant_session(agent, req.session_id)  # 404 before the stream opens
     mem_actor = scoped_actor(agent.id, req.actor_id)
 
     def generate():

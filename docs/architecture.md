@@ -594,6 +594,107 @@ duplicate — has **not** been run yet and is required before the preset is call
 operational. If the harness's skill-loading tool turns out to need a name outside
 `file_*`, add it to `ARCHITECT.allowed_tools` rather than widening to `*`.
 
+### Architect assistant (SE-039) — reviewed, idempotent Harness proposals
+
+The **architect assistant** (`/create/assistant`, reachable from the Managed Harness
+entrance card and from the SYSTEM PRESETS panel once the preset is active) is a member
+conversation with the protected `aws-agent-solution-architect` preset that ends in an
+**inert, reviewable proposal for ONE new managed-Harness business agent**. It is a
+creation assistant, not an administration bot: it never edits or deletes an existing
+agent, never creates a knowledge base, gateway or evaluator, and never runs anything
+by itself.
+
+**Scope of what is supported here.** The proposal may name the agent, pick a model
+(`model_id` + `model_source`), write the system prompt, choose memory flags, iteration
+and timeout controls, and reference **existing** workspace resources by catalog key:
+APPROVED registry MCP records (`gateway:<name>` / `mcp:<name>`), APPROVED registry
+`AGENT_SKILLS` records (S3 skill paths) and ACTIVE managed knowledge bases. Painpoint →
+metric → golden-test tables, evaluator recommendations, assumptions and *manual tasks*
+are carried as **solution content** on the revision and rendered for review; the
+console labels them "not created here" and nothing provisions them. No DOCX/PDF
+upload, no Word/draw.io export.
+
+**Conversation model.** `POST /api/assistant/architect/conversations` opens a
+conversation bound to `(workspace, owner username)` and snapshots the workspace
+catalog (the same registry-attachables + KB reads the create wizard performs). Every
+read and write is owner-bound on top of the workspace scope — another member's or an
+administrator's request answers 404 — because the pasted Workshop material is customer
+input, not a shared workspace resource. The preset runs with persistent memory
+**disabled**, so the assistant does not rely on service-side session continuity: the
+transcript lives in `assistant_messages`, each turn mints a **fresh 64-hex runtime
+session id** and replays a bounded window of the transcript through
+`InvokeHarness.messages` (`[{role: user|assistant, content: [{text}]}]`, ≤ 24
+messages / ≤ 160k chars, consecutive same-role rows merged so the list alternates).
+The server-composed protocol preamble (rules + the catalog keys) rides on the first
+user message; the harness request carries no `systemPrompt`, `tools` or `model`
+override. Nothing private is written to shared long-term memory. Whether the model
+follows the replay/protocol faithfully is part of the **pending live smoke**.
+
+**Private runtime sessions.** The per-turn session id is written to the user row
+*before* the data-plane call. The generic entrances — console Chat, `POST
+/api/agents/{id}/invoke`, `/v1` sync and stream — call
+`app.assistant.sessions.refuse_assistant_session` and answer `404
+chat.session_not_found` for such an id on a system-managed agent; ordinary agents pay
+no ledger read. Chat sessions/history never list assistant turns (no `ChatSession` /
+`ChatMessage` row is written).
+
+**Inert proposals.** After an ordinary model turn the reply is scanned for exactly
+one fenced block tagged `launchpad-proposal` (`app/assistant/proposal.py`). The block
+is untrusted: `ProposalContent` is a Pydantic allowlist with `extra="forbid"` and
+bounded fields — no `env`, `code`, `requirements`, `allowed_tools`, `protocol`,
+`filesystem`, `network`, URLs, ARNs, S3 prefixes or roles can pass. References are
+validated against the conversation's catalog snapshot, reserved preset names and the
+`launchpad-`/`harness-`/`system-` prefixes are refused, and `to_agent_spec` is the
+single mapping into an `AgentSpec`: the MCP URL, gateway record/gateway ids, S3 skill
+path and KB name come from the **catalog entry the key names**, never from the
+proposal. Every emission (and every member edit through `PUT …/proposal`) becomes a
+new **revision** (`assistant_proposals`): `draft` when valid, `invalid` (kept verbatim
+with its errors, shown but never executable) otherwise; earlier drafts become
+`superseded`. A valid revision also stores its **bindings** — the resolved spec — and
+its `content_hash` covers content **and** bindings, so the reviewer sees the exact
+resources and an approval names exactly what was rendered. Words like "approved" in
+the prompt or reply change nothing: a turn creates rows in the transcript and proposal
+tables and nothing else.
+
+**Approval — the only executor.** `POST …/proposal/approve` (`perm:agents.deploy`,
+the same permission as `POST /api/agents`, re-asserted in the handler) names
+`{revision, content_hash}`. In order, before any claim: permission → the revision is
+the current one and the hash matches → not already `approved` (a repeat returns the
+recorded outcome, `200 started:false`) → status is `draft` → workspace deploy
+readiness (`bootstrap_status = ready`, `execution_role_arn`) → the content is
+re-validated against the **live** catalog (`409 assistant.proposal_invalid` for a
+removed resource) → reserved / existing name → the live resolution must equal the
+stored bindings (`409 assistant.bindings_changed` when a key now points at a different
+URL, gateway, path or KB). Then one transaction: a compare-and-set
+`UPDATE … WHERE status='draft'` stamps `approved`, approver and time; the ordinary
+`Agent` row (`owner` = approver, no `system_key`) is added and linked on the
+proposal; `create_deployment(payload_extra={"assistant": {conversation_id,
+proposal_id, revision, approved_by}})` writes the `Deployment` + `deploy_agent` `Job`
+and commits everything at once. Only the claim winner launches the job thread
+(`202 started:true`); a concurrent or repeated request re-reads the winner's outcome.
+A crash between the durable commit and the best-effort `deployment_id`/`job_id`
+denormalization is harmless — readers resolve the outcome through the agent link. A
+queued job survives a process failure through `resume_pending_jobs`. A failed deploy
+stays failed on its original job; the assistant never restarts it, and a new proposal
+must use a name that is still free. Conversations are bounded (200 turns, 50
+revisions → `409 assistant.conversation_full`).
+
+**Console.** The page (`pages/CreateAgentAssistant.tsx`) shows the transcript with
+streaming, the catalog summary, the proposal (fields, bindings, prompt, solution
+content), an inline typed editor (tools/skills/KBs are picked from the catalog), CANCEL
+PROPOSAL, APPROVE & DEPLOY with a confirm dialog naming account and Region and the
+billable-action warning, and the deployment outcome (job + stages polled through the
+ordinary `/api/jobs` and `/api/agents` reads, links to Agent management and Chat). It
+handles the preset-not-active state (administrator → System presets; member → ask an
+administrator), the missing-permission state (approve disabled with the reason), 401/403
+mid-conversation, and discards drafts across a workspace switch (the routed subtree
+remounts; conversations are per workspace server-side). en + zh-CN.
+
+**Live check still required.** `tests/test_assistant.py` is hermetic. Not yet run: a
+real preset conversation with a grounded AWS answer, a valid model-emitted proposal,
+an authorized approval creating a test Harness, readback and cleanup of the test-owned
+resources. `make verify` alone is not proof that the model follows the protocol.
+
 ### Model source (方式B + 方式C)
 
 `AgentSpec.model_source` selects the model-hosting surface: `mantle` (Bedrock

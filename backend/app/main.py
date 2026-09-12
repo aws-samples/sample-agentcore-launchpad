@@ -25,6 +25,7 @@ from app.optimization.service import clear_stale_running_actions
 from app.routers.agent_skills import router as agent_skills_router
 from app.routers.agents import router as agents_router
 from app.routers.apikeys import router as apikeys_router
+from app.routers.assistant import router as assistant_router
 from app.routers.auth import OPEN_CONSOLE_REMEDY, auth_middleware
 from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import router as auth_router
@@ -134,6 +135,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(tools_router)
     app.include_router(registry_router)
     app.include_router(system_agents_router)
+    app.include_router(assistant_router)  # architect assistant (SE-039)
     app.include_router(knowledge_router)  # managed knowledge bases + retrieval playground
     app.include_router(chat_router)
     app.include_router(memory_router)  # read-only short-/long-term memory console

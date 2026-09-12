@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import exists
 from sqlalchemy.orm import Session
 
+from app.assistant.sessions import refuse_assistant_session
 from app.core.db import SessionLocal, get_db
 from app.core.errors import AppError, NotFoundError, mapped_aws_error
 from app.models.ledger import Agent, ChatMessage, ChatSession
@@ -121,6 +122,8 @@ def chat(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> StreamingResponse:
     agent = _get_active_agent(db, ws, agent_id)
+    # An assistant-owned session of the preset is private to the assistant page.
+    refuse_assistant_session(agent, req.session_id)
     identity = require_identity(request)
     human_actor = identity.username if auth_enabled() else "river"
 
