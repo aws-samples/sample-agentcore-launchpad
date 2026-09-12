@@ -265,6 +265,69 @@ def delete_agentic_target(control: Any, gateway_id: str, agent_name: str) -> Non
         _delete_target(control, gateway_id, target["targetId"])
 
 
+def gateway_identity(detail: dict[str, Any]) -> dict[str, Any]:
+    """The configuration a KB mount depends on (no secrets): id, ARN, URL, inbound
+    authorizer type + configuration (discovery URL / allowed clients), status."""
+    return {
+        "gateway_id": detail.get("gatewayId"),
+        "gateway_arn": detail.get("gatewayArn"),
+        "url": detail.get("gatewayUrl"),
+        "authorizer_type": detail.get("authorizerType"),
+        "authorizer": detail.get("authorizerConfiguration"),
+        "status": detail.get("status"),
+    }
+
+
+def lookup_existing_kb_gateway(
+    control: Any, workspace: WorkspaceContext, *, expected_arn: str | None = None,
+    expected: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """The workspace's EXISTING, READY KB gateway — or a ``RuntimeError`` naming the
+    manual prerequisite. Never lists-and-creates: the assistant flow mounts KBs on a
+    gateway that already exists; provisioning one is an operator action elsewhere."""
+    resources = workspace.resources
+    gateway_id = resources.get("kb_gateway_id")
+    if not gateway_id:
+        raise RuntimeError(
+            "this workspace has no knowledge-base gateway (kb_gateway_id) — mounting a "
+            "knowledge base here is a manual prerequisite; nothing is created by this flow"
+        )
+    try:
+        detail = control.get_gateway(gatewayIdentifier=gateway_id)
+    except Exception as exc:  # ResourceNotFound, AccessDenied, throttling → manual work
+        raise RuntimeError(
+            f"the workspace's knowledge-base gateway {gateway_id} could not be read "
+            f"({type(exc).__name__}) — it must exist and be READY before a KB can be mounted"
+        ) from exc
+    status = detail.get("status")
+    if status != "READY":
+        raise RuntimeError(
+            f"the workspace's knowledge-base gateway {gateway_id} is {status or 'unknown'}, "
+            "not READY"
+        )
+    arn = detail.get("gatewayArn")
+    if expected_arn and arn != expected_arn:
+        raise RuntimeError(
+            f"the workspace's knowledge-base gateway {gateway_id} is no longer the one that "
+            "was reviewed (ARN changed)"
+        )
+    if resources.get("kb_gateway_arn") and arn != resources.get("kb_gateway_arn"):
+        raise RuntimeError(
+            f"knowledge-base gateway {gateway_id} ARN drifted from the workspace resource map"
+        )
+    if not detail.get("gatewayUrl"):
+        raise RuntimeError(f"knowledge-base gateway {gateway_id} has no URL")
+    if expected:
+        live = gateway_identity(detail)
+        for key in ("gateway_id", "gateway_arn", "url", "authorizer_type", "authorizer"):
+            if expected.get(key) is not None and live.get(key) != expected.get(key):
+                raise RuntimeError(
+                    f"knowledge-base gateway {gateway_id}: live {key} differs from the reviewed "
+                    "configuration — refusing to mount on a gateway the member did not approve"
+                )
+    return {"id": detail["gatewayId"], "arn": arn or "", "url": detail["gatewayUrl"]}
+
+
 def ensure_kb_gateway_persisted(
     control: Any, workspace: WorkspaceContext
 ) -> dict[str, str]:

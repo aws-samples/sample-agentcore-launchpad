@@ -10,12 +10,16 @@ Violations return the standard {code, message, detail} envelope (422).
 
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Path, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.assistant.principal import principal_of
+from app.assistant.sessions import PrivateSessions
 from app.core.config import get_settings
-from app.core.db import get_db
+from app.core.db import SessionLocal, get_db
+from app.core.errors import NotFoundError
+from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import model_prices, observability
 
@@ -32,6 +36,19 @@ StatusParam = Annotated[str | None, Query(pattern="^(ok|error)$")]
 SessionSearchParam = Annotated[
     str | None, Query(max_length=256, pattern=r"^[A-Za-z0-9_\-#:.@]+$")
 ]
+
+
+def _private(request: Request, ws: WorkspaceScope, db: Session | None = None) -> PrivateSessions:
+    """Assistant sessions of OTHER principals in this workspace: filtered out of
+    every view below, after the per-workspace cache (see app.assistant.sessions)."""
+    principal = principal_of(require_identity(request))
+    if db is not None:
+        return PrivateSessions(db, ws.id, principal)
+    own = SessionLocal()
+    try:
+        return PrivateSessions(own, ws.id, principal)
+    finally:
+        own.close()
 
 
 @router.get("/dashboard")
@@ -64,6 +81,7 @@ def refresh_prices() -> dict[str, Any]:
 
 @router.get("/traces")
 def traces(
+    request: Request,
     range: RangeParam = "24h",
     agent: AgentParam = None,
     status: StatusParam = None,
@@ -72,8 +90,9 @@ def traces(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
+    private = _private(request, ws, db)
     payload = observability.list_traces(range, db, ws.context, force=force)
-    rows = payload["traces"]
+    rows = [r for r in payload["traces"] if private.visible(r.get("session_id"))]
     if agent:
         rows = [r for r in rows if r["agent"] == agent or r["service"] == agent]
     if status:
@@ -89,33 +108,48 @@ def traces(
 @router.get("/traces/{trace_id}")
 def trace_detail(
     trace_id: TraceIdParam,
+    request: Request,
     range: RangeParam = "24h",
     force: bool = False,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return observability.get_trace(trace_id, range, db, ws.context, force=force)
+    private = _private(request, ws, db)
+    payload = observability.get_trace(trace_id, range, db, ws.context, force=force)
+    if private.mentions_hidden(payload):
+        raise NotFoundError("observability.trace_not_found", "trace not found")
+    return payload
 
 
 @router.get("/sessions")
 def sessions(
+    request: Request,
     range: RangeParam = "24h",
     force: bool = False,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return observability.list_sessions(range, db, ws.context, force=force)
+    private = _private(request, ws, db)
+    payload = observability.list_sessions(range, db, ws.context, force=force)
+    rows = [r for r in payload["sessions"] if private.visible(r.get("session_id"))]
+    return {**payload, "sessions": rows, "count": len(rows)}
 
 
 @router.get("/sessions/{session_id}")
 def session_detail(
     session_id: SessionIdParam,
+    request: Request,
     range: RangeParam = "24h",
     force: bool = False,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return observability.get_session(session_id, range, db, ws.context, force=force)
+    private = _private(request, ws, db)
+    private.require_visible(session_id)  # before any query, cached or not
+    payload = observability.get_session(session_id, range, db, ws.context, force=force)
+    if private.mentions_hidden(payload):
+        raise NotFoundError("observability.session_not_found", "session not found")
+    return payload
 
 
 class SessionEvaluateBody(BaseModel):
@@ -132,8 +166,10 @@ class SessionEvaluateBody(BaseModel):
 def session_evaluate(
     session_id: SessionIdParam,
     body: SessionEvaluateBody,
+    request: Request,
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
+    _private(request, ws).require_visible(session_id)  # another principal's turn: 404
     """Score the session on demand through the data-plane `Evaluate` API.
 
     Synchronous (one judge inference per evaluator), results are returned

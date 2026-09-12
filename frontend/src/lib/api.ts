@@ -578,6 +578,199 @@ export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/* ── architect assistant (SE-039) ─────────────────────────────────────── */
+
+/** `GET /api/assistant/architect` — ledger-only availability of the assistant. */
+export interface AssistantStatus {
+  workspace_id: string;
+  account_id: string;
+  region: string;
+  available: boolean;
+  reasons: ("preset_not_active")[];
+  preset: {
+    key: string;
+    label: string;
+    status: SystemPresetStatus;
+    agent_id: string | null;
+    requirements: { code: string; message: string }[];
+    can_install: boolean;
+  };
+  /** the caller holds `agents.deploy` (approval rides that permission) */
+  can_deploy: boolean;
+  deploy_requirements: { code: string; message: string }[];
+  /** workspace prerequisites a proposal may bind to (never created by the assistant) */
+  capabilities: { shared_memory: boolean; kb_gateway: boolean };
+  is_admin: boolean;
+  owner: string;
+  /** the immutable principal conversations are bound to */
+  principal: string;
+}
+
+export interface AssistantCatalogTool {
+  key: string;
+  kind: "gateway" | "mcp";
+  name: string;
+  description: string;
+  attachable: boolean;
+  reason?: string | null;
+}
+
+export interface AssistantCatalog {
+  fetched_at: string;
+  tools: AssistantCatalogTool[];
+  skills: { key: string; name: string; description: string; content_digest?: string | null }[];
+  knowledge_bases: { kb_id: string; name: string; description: string }[];
+  warnings: string[];
+  resources?: {
+    memory_arn: string | null;
+    kb_gateway_id: string | null;
+    kb_gateway_arn: string | null;
+    oauth_provider_arn: string | null;
+    execution_role_arn: string | null;
+  };
+  target?: { workspace_id: string; account_id: string; region: string };
+}
+
+/** The only memory choices the Harness API can enforce. */
+export type AssistantMemoryMode = "disabled" | "workspace";
+
+export interface AssistantGoldenTest {
+  id: string;
+  input: string;
+  expected_response?: string;
+  expected_tools?: string[];
+  forbidden_behavior?: string;
+  pass_criteria?: string;
+  evaluator?: string;
+  source?: "customer_pain_point" | "industry_assumption";
+}
+
+/** The bounded proposal content (server allowlist; anything else is refused). */
+export interface AssistantProposalContent {
+  version?: 1;
+  name: string;
+  model_id: string;
+  model_source: ModelSource;
+  system_prompt: string;
+  tools: string[];
+  skills: string[];
+  knowledge_bases: string[];
+  memory: AssistantMemoryMode;
+  max_iterations: number;
+  timeout_seconds: number;
+  summary?: string;
+  requirements_baseline?: string[];
+  assumptions?: string[];
+  manual_tasks?: string[];
+  golden_tests?: AssistantGoldenTest[];
+  evaluator_recommendations?: string[];
+}
+
+export interface AssistantBindings {
+  name: string;
+  method: "harness";
+  model_id: string;
+  model_source: ModelSource;
+  tools: { type: "gateway" | "mcp"; name: string; config: Record<string, string> }[];
+  skills: string[];
+  knowledge_bases: { kb_id: string; name: string; description: string }[];
+  memory: { short_term: boolean; long_term: boolean; memory_id: string | null };
+  max_iterations: number;
+  timeout_seconds: number;
+  /** deployment-relevant identity of every referenced resource (no secret values) */
+  resources: {
+    gateways: Record<
+      string,
+      {
+        gateway_arn: string | null;
+        gateway_name: string | null;
+        record_id: string;
+        auth_type: string | null;
+        outbound_auth: Record<string, unknown> | null;
+      }
+    >;
+    remote_mcp: Record<string, { url: string; record_id: string | null }>;
+    skills: Record<
+      string,
+      { record_id: string | null; path: string; content_digest: string | null; object_count: number | null }
+    >;
+    kb_gateway: { gateway_id: string | null; gateway_arn: string | null; oauth_provider_arn: string | null } | null;
+    memory: { mode: AssistantMemoryMode; arn: string | null };
+    execution_role_arn: string | null;
+  };
+}
+
+export type AssistantProposalStatus = "draft" | "invalid" | "approved" | "rejected" | "superseded";
+
+export interface AssistantApproval {
+  approved_by: string | null;
+  approved_at: string | null;
+  agent_id: string | null;
+  agent_name: string | null;
+  agent_status: string | null;
+  agent_error: string | null;
+  deployment_id: string | null;
+  job_id: string | null;
+  job_status: "queued" | "running" | "succeeded" | "failed" | null;
+}
+
+export interface AssistantProposal {
+  id: string;
+  conversation_id: string;
+  revision: number;
+  source: "model" | "member";
+  status: AssistantProposalStatus;
+  /** validated content, or the raw (bounded) object of an invalid revision */
+  content: Partial<AssistantProposalContent> & Record<string, unknown>;
+  content_hash: string;
+  /** the concrete resources the content resolved to at revision time (what an
+   * approval must still resolve to); null for an invalid revision */
+  bindings: AssistantBindings | null;
+  validation_errors: string[];
+  created_by: string;
+  created_at: string | null;
+  approval: AssistantApproval | null;
+  rejected_by: string | null;
+  rejected_at: string | null;
+}
+
+export interface AssistantMessage {
+  id: number;
+  turn: number;
+  role: "user" | "assistant" | "tool" | "error";
+  text: string;
+  name: string | null;
+  at: string | null;
+}
+
+export interface AssistantConversationSummary {
+  id: string;
+  title: string;
+  turns: number;
+  /** the turn number currently streaming, when one is */
+  turn_in_progress: number | null;
+  status: "open" | "archived";
+  proposal_status: AssistantProposalStatus | null;
+  proposal_revision: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface AssistantConversationDetail extends AssistantConversationSummary {
+  catalog: AssistantCatalog;
+  messages: AssistantMessage[];
+  proposals: AssistantProposal[];
+}
+
+export interface AssistantApproveResult {
+  proposal: AssistantProposal;
+  agent: AgentInfo;
+  job_id: string | null;
+  deployment_id: string | null;
+  /** true ⇔ this call created the deploy job (202); false = the recorded outcome (200) */
+  started: boolean;
+}
+
 /* ── governance ────────────────────────────────────────────────────────── */
 
 export type GovernanceGatewayMode = "LOG_ONLY" | "ENFORCE";
@@ -2794,6 +2987,43 @@ export const api = {
       started: boolean;
       preset: SystemPresetInfo;
     }>(`/api/system-agents/${encodeURIComponent(key)}`, { method: "DELETE" }),
+  /* ── architect assistant (SE-039) ── */
+  assistantStatus: () => request<AssistantStatus>("/api/assistant/architect"),
+  assistantConversations: () =>
+    request<{ conversations: AssistantConversationSummary[] }>(
+      "/api/assistant/architect/conversations",
+    ),
+  assistantCreateConversation: (title = "") =>
+    request<AssistantConversationDetail>("/api/assistant/architect/conversations", {
+      method: "POST",
+      body: JSON.stringify({ title }),
+    }),
+  assistantConversation: (id: string) =>
+    request<AssistantConversationDetail>(
+      `/api/assistant/architect/conversations/${encodeURIComponent(id)}`,
+    ),
+  assistantRefreshCatalog: (id: string) =>
+    request<{ catalog: AssistantCatalog }>(
+      `/api/assistant/architect/conversations/${encodeURIComponent(id)}/catalog`,
+      { method: "POST" },
+    ),
+  /** A member edit is a NEW revision that needs its own approval. */
+  assistantEditProposal: (id: string, content: AssistantProposalContent) =>
+    request<{ proposal: AssistantProposal }>(
+      `/api/assistant/architect/conversations/${encodeURIComponent(id)}/proposal`,
+      { method: "PUT", body: JSON.stringify({ content }) },
+    ),
+  assistantRejectProposal: (id: string, revision: number) =>
+    request<{ proposal: AssistantProposal }>(
+      `/api/assistant/architect/conversations/${encodeURIComponent(id)}/proposal/reject`,
+      { method: "POST", body: JSON.stringify({ revision }) },
+    ),
+  /** The only executor: names the exact revision + content hash that was shown. */
+  assistantApproveProposal: (id: string, revision: number, contentHash: string) =>
+    request<AssistantApproveResult>(
+      `/api/assistant/architect/conversations/${encodeURIComponent(id)}/proposal/approve`,
+      { method: "POST", body: JSON.stringify({ revision, content_hash: contentHash }) },
+    ),
   listChatSessions: (agentId: string) =>
     request<{ sessions: ChatSessionInfo[] }>(`/api/chat/${encodeURIComponent(agentId)}/sessions`),
   stopChatSession: (agentId: string, sessionId: string) =>

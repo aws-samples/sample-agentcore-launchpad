@@ -6,7 +6,7 @@ kwargs. Payload shapes follow bedrock-agentcore-control 1.43.x.
 
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 TERMINAL_FAILURES = {"CREATE_FAILED", "UPDATE_FAILED", "DELETE_FAILED"}
@@ -195,6 +195,57 @@ def user_authenticated_tools(
             }
         )
     return result
+
+
+def invoke_harness_events(
+    client: Any,
+    harness_arn: str,
+    messages: list[dict[str, Any]],
+    *,
+    session_id: str,
+    actor_id: str,
+    on_stream: Any = None,
+) -> Iterator[dict[str, Any]]:
+    """Stream one ``InvokeHarness`` call whose ``messages`` carries a bounded
+    replayed conversation (``[{role: user|assistant, content: [{text}]}]``, the
+    2023-06-05 model's ``ConversationMessage`` list). Yields the same ``tool`` /
+    ``delta`` events the chat chain uses; runtime errors raise."""
+    response = client.invoke_harness(
+        harnessArn=harness_arn,
+        runtimeSessionId=session_id,
+        actorId=actor_id,
+        messages=messages,
+    )
+    stream = response["stream"]
+    if on_stream is not None:
+        on_stream(stream)  # lets the owner close a blocked read from another thread
+    try:
+        for event in stream:
+            if "contentBlockStart" in event:
+                tool_use = event["contentBlockStart"].get("start", {}).get("toolUse")
+                if tool_use:
+                    yield {
+                        "event": "tool",
+                        "data": {"name": tool_use.get("name", ""),
+                                 "id": tool_use.get("toolUseId")},
+                    }
+            elif "contentBlockDelta" in event:
+                delta = event["contentBlockDelta"].get("delta", {})
+                if delta.get("text"):
+                    yield {"event": "delta", "data": {"text": delta["text"]}}
+            elif "runtimeClientError" in event or "internalServerException" in event:
+                detail = event.get("runtimeClientError") or event.get("internalServerException")
+                raise RuntimeError(str(detail))
+    finally:
+        # A consumer that stops early (client disconnect -> GeneratorExit) must not
+        # leave the HTTP event stream open. Closing the transport does NOT claim the
+        # service-side computation stopped, only that this process released it.
+        close = getattr(stream, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:  # pragma: no cover - best effort on teardown
+                pass
 
 
 def invoke_harness_text(

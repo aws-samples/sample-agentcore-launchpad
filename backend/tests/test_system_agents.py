@@ -2502,7 +2502,14 @@ def test_repeated_deletes_on_a_queued_retry_share_one_waiting_worker(client, mon
     good_iam = _Iam(_owned_role(agent_id))
     monkeypatch.setattr(aws_clients, "client",
                         lambda name, ws, **kw: good_iam if name == "iam" else pytest.fail(name))
-    before = threading.active_count()
+    # Count the job's own worker threads (named ``uninstall-<job8>`` by _launch),
+    # not the whole process: TestClient/AnyIO portal threads come and go around
+    # every request and made a bare active_count() delta flaky (host verify-2).
+    def uninstall_workers() -> list[str]:
+        return sorted(t.name for t in threading.enumerate()
+                      if t.name.startswith("uninstall-") and t.is_alive())
+
+    before = uninstall_workers()
     responses = [client.delete(f"/api/system-agents/{KEY}").json() for _ in range(12)]
     retry_job = responses[0]["job_id"]
     assert responses[0]["started"] is True and retry_job != first
@@ -2510,7 +2517,10 @@ def test_repeated_deletes_on_a_queued_retry_share_one_waiting_worker(client, mon
     waiter = uninstall_module.live_worker(retry_job)
     assert waiter is not None and waiter.is_alive()
     assert len(uninstall_module._WORKERS) == 1  # exactly one tracked worker for the job
-    assert threading.active_count() - before <= 1  # one waiting thread, not twelve
+    after = uninstall_workers()
+    # one waiting thread for the retry job, not twelve — by identity, with evidence
+    assert after.count(f"uninstall-{retry_job[:8]}") == 1, after
+    assert len(after) - len(before) <= 1, (before, after)
     assert _job(retry_job).status == "queued"  # still waiting behind the retiring lock
     db = SessionLocal()
     assert db.query(Job).filter(Job.type == service.UNINSTALL_JOB_TYPE).count() == 2

@@ -449,6 +449,169 @@ Workspace 安装、确认 S3 技能在 `allowedTools` 限制下真正加载、AW
 无法删除/重新发布、重复安装不产生重复——**尚未**执行，预置在此之前不算可运营。若 Harness 的
 技能加载工具名不在 `file_*` 之内，请把它加进 `ARCHITECT.allowed_tools`，而不是放宽为 `*`。
 
+### 架构助手（SE-039）——经审阅、幂等的 Harness 提案
+
+**架构助手**（`/create/assistant`，可从“托管 Harness”入口卡片进入，预置运行中时也可从“系统预置”
+面板进入）是成员与受保护预置 `aws-agent-solution-architect` 的一次对话，其终点是**一个惰性的、
+可审阅的提案，对应一个新的托管 Harness 业务 Agent**。它是创建助手，不是管理机器人：从不编辑或
+删除既有 Agent，从不创建知识库、Gateway 或评估器，也从不自行执行任何操作。
+
+**此处支持的范围。** 提案可以命名 Agent、选择模型（`model_id` + `model_source`）、编写系统提示词、
+设置记忆开关、迭代与超时控制，并按目录 key 引用 Workspace 中**既有**资源：APPROVED 的 Registry
+MCP 记录（`gateway:<name>` / `mcp:<name>`）、APPROVED 的 Registry `AGENT_SKILLS` 记录（S3 技能路径）
+与 ACTIVE 的托管知识库。痛点 → 指标 → 黄金测试表、评估器建议、假设与*需手动实现事项*作为**方案
+内容**随修订保存并渲染供审阅；控制台标注“此处不会创建”，不会自动配置任何东西。不支持 DOCX/PDF
+上传，不导出 Word/draw.io。
+
+**会话模型。** `POST /api/assistant/architect/conversations` 打开一个绑定到 `(workspace, 所有者
+principal)` 的会话，并快照 Workspace 目录：与创建向导相同的 Registry attachables + 知识库读取，
+**加上**批准将要固定的部署身份——每条 Gateway 记录的实时 Gateway ARN 与出站认证身份（用部署
+阶段自己的解析助手得到）、每个技能包的 S3 内容摘要（按 key/ETag/size 排序）、以及 Workspace
+前置资源（`memory_arn`、`kb_gateway_id`/`kb_gateway_arn`/`oauth_provider_arn`、
+`execution_role_arn`）。**principal** 不可变：注册账号为 `user:<users.id>`，无行的内置管理员为
+`config-admin`，登录门关闭时为 `local-operator`。用户名仅用于显示——同名账号删除后重新注册是新的
+principal，不会继承任何内容。会话 Cookie 补全了同一边界：自本次变更起为**版本 2**，记录注册账号
+不可变的 `users.id`（内置管理员的 Cookie 不含 id——它是自己的 principal），因此已删除账号的 Cookie
+不再对任何人生效，也永远不会解析到重新注册了该用户名的账号；版本 1 的 Cookie 被拒绝，即**升级后
+所有已登录的成员与管理员都需要重新登录一次**。批准还要求发起请求的 principal、声明时重新解析的
+principal 与会话所有者 principal 三者完全一致；principal 为 NULL 的行（principal 之前的台账）对任何人都不可见，绝不
+按用户名匹配收养。所有读写在 Workspace 范围之上再按 principal 绑定——其他成员或管理员的请求返回
+404——因为粘贴的 Workshop 材料是客户输入，不是共享的 Workspace 资源。预置**禁用**持久记忆，因此助手不依赖服务端
+会话连续性：记录存于 `assistant_messages`，每轮铸造一个**新的 64 位十六进制 runtime session id**，
+并通过 `InvokeHarness.messages`（`[{role: user|assistant, content: [{text}]}]`）重放有界的记录
+窗口。轮次**按轮次号配对**（绝不按插入顺序）：每个重放轮次是成员文本加上有回复时的回复，失败/中断
+的轮次以明确的“无回复”标记重放。一个**最终**预算（`MAX_REPLAY_CHARS` = 160k 字符，≤ 12 轮）
+覆盖前言 + 目录 + 重放轮次 + 当前消息：保留能放下的最新轮次，省略的更早轮次数在前言与 `meta`
+事件中披露，当前消息绝不截断——放不下的（或超过 100k 字符 / 300k 字节的）在任何声明之前以
+`413 assistant.prompt_too_large` 拒绝。服务端撰写的协议前言（规则 + 目录 key + 此处存在哪些记忆
+模式）附在第一条用户消息上；Harness 请求不携带 `systemPrompt`、`tools` 或 `model` 覆盖。任何私有
+内容都不会写入共享的长期记忆。模型是否忠实遵循重放/协议属于**待完成的实机冒烟**。
+
+**单轮在途、私有 runtime 会话。** 一轮对话是对会话行的原子条件声明（`active_turn` + 随机
+`active_turn_token`，由一个短写事务的第一条语句取得）：并发的第二轮在打开流之前被拒绝为
+`409 assistant.turn_in_progress`（在声明处输掉竞争则是流内的同一错误，绝不伪造第二轮）。超过
+`TURN_CLAIM_TTL_S`（30 分钟）的声明会被下一次普通轮次请求接管；原持有者的每一次写入（部分回答、
+最终回复、释放）都以其 token 为条件，因此声明被回收的 worker 什么也发布不了（其自身流中返回
+`assistant.turn_superseded`）。启动时清空全部声明。清理由响应对象（`TurnResponse`）而非垃圾回收
+负责：无论正常完成、ASGI 2.0 断连还是 ASGI 2.4 发送失败，都会关闭上游事件流（解除阻塞读取）、
+关闭响应体与 `run_turn` 生成器、把部分回答保存为 `interrupted` 轮次并释放声明。每轮的 session id 在数据面
+调用*之前*写入用户消息行，因此从 Harness 可能知道它的第一刻起就是私有的。通用入口——控制台
+对话、`POST /api/agents/{id}/invoke`、`/v1` 同步与流式——都会调用
+`app.assistant.sessions.refuse_assistant_session`，对系统托管 Agent 上的此类 id 返回 `404
+chat.session_not_found`；普通 Agent 不产生台账读取。对话会话/历史从不列出助手轮次（不写入
+`ChatSession` / `ChatMessage` 行）。**可观测**在其按 Workspace 的缓存之后应用同一 principal
+边界：会话与 trace 列表丢弃其他 principal 的助手会话行，会话/trace 详情与按需评估在载荷任何位置
+（span 属性、记录、消息事件）提及此类会话时返回 404，所有者仍能看到自己的轮次，普通 Agent 的会话
+保持共享（`app.assistant.sessions.PrivateSessions`）。流在回复完成前出错或被客户端关闭时，保存
+部分回答与一条 `error` 行（`interrupted …`），绝不从不完整输出派生提案，释放声明并关闭上游事件流
+（关闭传输不代表服务端计算已停止）。
+
+**惰性提案。** 普通模型轮次结束后，回复被扫描是否恰有一个标记为 `launchpad-proposal` 的围栏块
+（`app/assistant/proposal.py`）。该块不受信任：所有助手写请求先在入口受限（`AssistantBodyCap`，纯 ASGI 中间件，无论 Content-Length
+如何声明，实际接收超过 512 000 字节即返回 `413 assistant.request_too_large`；未知的外层请求成员
+被拒绝而非忽略），然后一个序列化 UTF-8 **字节上限**（64 000 字节）在校验之前、存储之前同样适用于
+模型块与成员编辑——并再次适用于实际存储与哈希的**规范化**内容（填入默认值后），因此绝不会保留
+超限的数据块（超限的成员编辑为 `413 assistant.proposal_too_large`；
+超限的模型块成为仅保留标记的 `invalid` 修订）；`ProposalContent` 是带 `extra="forbid"` 与逐字段/
+逐项上限的 Pydantic 白名单——`env`、`code`、`requirements`、`allowed_tools`、`protocol`、
+`filesystem`、`network`、URL、ARN、S3 前缀或角色都无法通过。`memory` 为 `"disabled"` 或
+`"workspace"`——Harness API 唯一能强制执行的两种状态（`{"disabled": {}}`，或 Workspace 既有的共享
+AgentCore Memory 及其全部策略）；“仅短期”的退出无法表达，也不提供。引用按会话的目录快照校验
+**并包含前置条件**：Gateway 工具需要已解析的 Gateway ARN + 出站认证身份，技能需要可读的包内容，
+挂载知识库需要 Workspace **既有**且就绪的知识库 Gateway + OAuth 提供方（在没有 Gateway 的地方挂载
+知识库属于手动工作——本流程绝不创建 Gateway），`workspace` 记忆需要共享的 `memory_arn`；预置
+保留名与 `launchpad-`/`harness-`/`system-` 前缀被拒绝。`to_agent_spec` 是映射到 `AgentSpec` 的
+唯一路径，`resource_bindings` 是映射到**已审阅部署身份**的唯一路径：spec 加上每个资源的 Gateway
+ARN/名称/记录与出站认证身份（提供方 ARN、授权类型、scope——绝非凭据值）、技能记录 ID + S3 路径 +
+内容摘要、知识库 Gateway 前置资源、记忆模式 + ARN。每次模型输出（以及成员通过 `PUT …/proposal`
+的每次编辑）都成为一个新**修订**（`assistant_proposals`），其编号来自会话的 `revision_seq`，在
+写入该行的同一个短写事务中递增（`(conversation_id, revision)` 唯一索引），因此并发写入者绝不
+共享编号：有效为 `draft`（带绑定），否则为 `invalid`（原样保留并附错误，可见但永不可执行）；更早的
+草稿变为 `superseded`。`content_hash` 同时覆盖内容**与**绑定，因此批准所指即所渲染的内容。提示词
+或回复中的“approved”之类文字不改变任何事：一轮对话只在记录与提案表中创建行，别无其他。
+
+**批准——唯一的执行者。** `POST …/proposal/approve`（`perm:agents.deploy`，与 `POST /api/agents`
+同一权限，处理器内再次断言）指定 `{revision, content_hash}`。首先解析**请求的确切修订**：已批准的
+修订返回其已记录结果（`200 started:false`），即使已有更新的修订——这就是幂等重试；哈希不匹配或
+修订不存在为 `409 assistant.proposal_stale`；`invalid`/`rejected`/`superseded` 为
+`409 assistant.proposal_not_approvable`。快照预检（权限、就绪）之后是任何锁之外的**实时**读取：
+重新拉取目录、重新校验内容（资源移除或前置条件丢失时 `409 assistant.proposal_invalid`）并重新
+计算 `resource_bindings`——必须与已存绑定逐字节相等（`409 assistant.bindings_changed`，
+`detail.changed[]` 列出漂移部分：key 解析到了另一个 URL、另一个 Gateway 认证身份、同一 S3 前缀下
+被覆写的技能字节、另一个记忆或知识库 Gateway）。随后是**一个短写事务**，其第一条语句取得会话的
+写锁：调用者的账号、部署权限与 Workspace 授权**从数据库重新解析**（`resolve_identity` +
+`_authorize`），Workspace 就绪重新读取——目录读取期间发生的撤销会被遵守（`401/403`，不写入任何
+内容）；重新读取修订（期间已批准 → 返回其结果；已变化 → stale）；Agent 名称通过 `agent_name_claims`
+（唯一 `claim_key`）**原子声明**，与 `POST /api/agents` 及 `…/convert` 使用同一预留，因此助手批准
+与普通创建或另一会话的批准竞争时恰好产生一个 Agent 与一个 `409 agent.name_exists`（早于该表的
+既有 Agent 仍由持有者查询捕获，绝不重复或删除）；条件更新 `UPDATE … WHERE status='draft'` 写入
+`approved`、批准人与时间；普通 `Agent` 行（`owner` = 批准人，无 `system_key`）以及——通过
+`create_deployment(commit=False, payload_extra={"assistant": {conversation_id, proposal_id,
+revision, approved_by, content, bindings}})`——`Deployment` 与 `deploy_agent` `Job` 被 flush，
+其 ID **在同一次提交中写到提案上**（不存在可能失败的提交后记账）。事务内的拒绝或 `IntegrityError`
+会整体回滚并重新读取修订：*同一*修订的竞争批准胜出 → 落败方返回胜出方的结果，绝不是名称冲突。
+只有声明胜出方启动任务线程（`202 started:true`）；对仍为 `queued` 且无活跃 worker 的任务，重复
+批准会**重新唤醒**它（`start_deploy_async` 在本进程内每个任务合并为一个活跃 worker，因此重试
+绝不会把管道跑两次），`resume_pending_jobs` 在启动时接起排队任务。失败的部署保持在其原始任务上；
+助手从不重启它，新提案必须使用仍然空闲的名称。会话有界（200 轮、50 个修订 →
+`409 assistant.conversation_full`）。
+
+**固定执行。** 部署任务运行常规管道，但助手任务把已审阅的 `{content, bindings}` 带入各阶段
+（`scratch.assistant_pin`），Harness 请求**由固定绑定构建**而不再重新解析：Gateway ARN 与出站认证
+身份、记忆 ARN（或显式的 `disabled` 退出）、知识库 Gateway 都按批准时的 `bindings.resources`
+原样使用。三道失败关闭的检查守护写入：任务入口（`assert_job_bindings_pinned`：存储 spec = 固定
+spec、内容仍有效、实时绑定 = 固定绑定、知识库 Gateway 未变）、`generate` 阶段、以及 `CreateHarness`
+之前的最后一刻（`_verify_pinned_resources`：实时 Gateway 解析仍等于固定 ARN/认证，S3 技能包的内容
+摘要仍等于审阅值——同一前缀下被改写的技能字节会被拒绝而非部署）。知识库挂载使用
+`kb_gateway.lookup_existing_kb_gateway`——Workspace **既有**的 Gateway 必须 READY 且 ARN 与审阅
+一致；缺失、未就绪或漂移都是可操作的失败。这条路径绝不调用“列出并创建”助手（在该既有 Gateway 上
+配置按 Agent 的检索目标是允许的挂载操作）。任务资格是持久的：启动以一次条件更新把 `queued → running`，
+只有启动恢复可接管死进程遗留的 `running` 任务，终态任务不可再运行——陈旧的批准重试重新唤醒它时
+什么也不会发生。
+
+**精确执行与收尾（第三轮评审）。** 各阶段**消费**固定值而不重新解析：Harness 请求携带已审阅的
+Gateway ARN 与出站认证身份、已审阅的记忆 ARN（或显式 `disabled`）以及已审阅的知识库 Gateway。
+**技能从不可变副本部署，绝不从可变源部署**：审阅时目录快照的是 *Harness 实际加载的目录*（旧式
+`…/SKILL.md` 源规范化为其父目录，因此每个同级对象都计入）并对每个对象的真实字节做哈希
+（`source_prefix`、`content_digest`、`object_count`、`total_bytes`）；获批的 `package` 阶段重新
+读取这些字节，若已与审阅摘要不符则拒绝，否则将其作为内容寻址副本发布到 Workspace 自己的 artifacts
+bucket（`assistant-skills/<digest16>/…`，条件写入 `If-None-Match: *`，已存在对象必须字节相同，
+不删除任何内容），并把 Agent 的 spec、任务 pin（`skill_copies`）与请求切换到副本 URI，在
+`CreateHarness` 之前再次对其哈希。知识库挂载在任何 IAM/目标写入之前核验 Workspace **既有**
+（绝不列举后创建）的 Gateway 为 READY 且仍具有已审阅的 ID、ARN、URL、入站认证类型与配置
+（`lookup_existing_kb_gateway`）。批准的每个“胜出方”响应——目录读取之前、之后（包括目录读取本身
+因实时 Registry 错误失败时；无胜出方则 `502 assistant.catalog_unavailable`）以及事务内——都先重新
+校验调用者（当前会话、权限、授权、就绪，以及与会话所有者的不可变 principal 相等）；授权与归属错误
+绝不会被转换为成功。持有者仍是本进程活跃请求的轮次无论多旧都不会被接管（`_LIVE_TURNS`）；TTL
+接管只针对死进程的孤儿，且一轮对话的每次写入（用户、工具、回复、提案）都以声明令牌围栏。持久声明与本地
+活跃发布在注册表锁下作为一次获取完成（不存在可观察的“已声明但尚未活跃”窗口）；第一条用户行与数据面
+调用同样以当前所有权围栏；一轮对话的每条退出路径——完成、早期错误、声明丢失——都会关闭上游流并
+有界地等待生产者线程结束。知识库挂载对已审阅 Gateway 身份/就绪的完整检查在创建执行角色或任何目标
+之前运行。上游事件流
+由生产者线程消费，响应生成器最多等待一个心跳（SSE keep-alive），因此客户端断开（ASGI 2.0 或 ASGI
+2.4 发送失败）在一秒内被观察到，立即关闭上游——解除阻塞中的读取——随后由响应对象收尾。可观测保留
+**每条**内容事件的 `session.id`（记录属性或嵌套的 `resource.attributes`，按 span 合并为
+`meta.session_ids`），因此仅由内容事件提及的私有会话在缓存前后都保持隐藏。
+
+**控制台。** 页面（`pages/CreateAgentAssistant.tsx`）显示带流式输出的记录（原始提案块被替换为
+指向面板的提示）、含 Workspace 记忆/知识库 Gateway 能力的目录摘要、提案（字段、**精确绑定**含
+Gateway 认证身份与技能内容摘要、提示词、方案内容）、内嵌的类型化编辑器（工具/技能/知识库从目录中
+选择，记忆仅 `disabled`/`workspace` 且后者仅在 Workspace 有共享记忆时可选）、“取消提案”、
+“批准并部署”以及部署结果。陈旧性由**操作代数**处理：每次会话选择、Workspace 切换与卸载都会递增，
+所有加载、流、重载与任务轮询在代数已前进时丢弃结果——会话 A 的慢加载绝不覆盖更新的选择 B，A 的
+待完成轮次或批准重载绝不把 A 拉回来，清理后才返回的任务轮询既不写入也不重新调度。加载回调通过
+ref 读取 `t`，因此切换语言只重新渲染而不重跑挂载效果（草稿、编辑与流式回复均得以保留）。批准
+确认框**固定**在打开时的会话/修订/哈希/名称并提交恰好这些；最新修订或哈希一旦变化它就自行关闭
+（后端的 stale 拒绝仍是边界）。显示的结果属于最新修订（若其已批准），否则属于最近一次批准的修订；
+更早的批准带修订号、Agent 与任务状态单独列出。原始 SSE fetch 在 401 时与类型化客户端一样派发
+控制台的未授权事件。它处理预置未运行状态（管理员 → 系统预置；成员 → 联系管理员）、缺少权限状态
+（批准按钮禁用并说明原因）、对话中途的 401/403，并在切换 Workspace 时丢弃草稿（路由子树重挂载；
+会话在服务端按 Workspace 隔离）。中英双语。
+
+**仍需实机检查。** `tests/test_assistant.py` 为封闭测试。尚未执行：真实的预置对话与有依据的
+AWS 回答、有效的模型生成提案、授权批准创建测试 Harness、回读并清理测试所属资源。仅凭
+`make verify` 不能证明模型遵循协议。
+
 ### 模型来源(方式B + 方式C)
 
 `AgentSpec.model_source` 决定模型的托管面:`mantle`(Bedrock Mantle)或

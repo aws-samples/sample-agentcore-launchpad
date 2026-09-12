@@ -11,6 +11,7 @@ from typing import Any
 
 from botocore.exceptions import ClientError
 
+from app.assistant.sessions import refuse_assistant_session
 from app.core.errors import AppError, aws_error_code
 from app.models.ledger import Agent
 from app.optimization import canary_service
@@ -171,6 +172,7 @@ def invoke_agent_text(
     workspace: WorkspaceContext | None = None,
 ) -> dict[str, Any]:
     require_invoke_capability(agent)
+    refuse_assistant_session(agent, session_id)
     workspace = _agent_workspace(agent, workspace)
     # An imported harness carries the harness ARN, so it invokes exactly like a
     # launchpad-deployed one — InvokeHarness, never InvokeAgentRuntime.
@@ -278,6 +280,7 @@ def invoke_agent_events(
     into one delta — so the switch is safe for existing agents.
     """
     require_invoke_capability(agent)
+    refuse_assistant_session(agent, session_id)
     workspace = _agent_workspace(agent, workspace)
     streams_natively = (
         agent.method in NATIVE_STREAM_METHODS

@@ -1478,6 +1478,14 @@ const deployLock = !canDeploy
                 <span>{t("create.methods.harness.spec2")}</span>
                 <span>{t("create.methods.harness.spec3")}</span>
               </div>
+              <Link
+                className="studio-link"
+                to="/create/assistant"
+                onClick={(e) => e.stopPropagation()}
+                data-testid="open-assistant"
+              >
+                {t("create.methods.harness.assistant")}
+              </Link>
             </div>
             <div
               className={`method${method === "zip_runtime" ? " sel" : ""}`}

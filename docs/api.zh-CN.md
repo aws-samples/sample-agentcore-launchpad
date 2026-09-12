@@ -115,6 +115,51 @@ canary | promote | …`，`detail.maintenance_route`）；实验与运行时金�
 `system: {managed, key, label, skill_version, protected_actions} | null`。
 `AgentSpec.allowed_tools`（仅 Harness）接受 1–64 字符、匹配 `*|@?name(/tool)?` 的条目。
 
+## 控制台架构助手 API——经审阅的 Harness 提案 / Console Architect Assistant API
+
+架构助手（见 architecture.zh-CN.md →“架构助手（SE-039）”）是成员与受保护预置
+`aws-agent-solution-architect` 的对话，终点是一个新托管 Harness 的惰性提案。讨论路由为
+`成员`（与对话演练场对等）；批准使用 `perm:agents.deploy`（与 `POST /api/agents` 对等），并在其
+写事务内从数据库重新解析调用者的账号、权限与 Workspace 授权。所有路由按 Workspace 限定**且按
+principal 绑定**（`user:<id>` / `config-admin` / `local-operator`；用户名仅用于显示）：其他
+principal——其他成员、管理员、或同名重新注册的账号——的会话返回
+`404 assistant.conversation_not_found`。除特别说明外读取仅访问台账。
+
+| 方法 | 路径 | 角色 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/assistant/architect` | 成员 | `{workspace_id, account_id, region, available, reasons[], preset{key, label, status, agent_id, requirements[], can_install}, can_deploy, deploy_requirements[{code, message}], capabilities{shared_memory, kb_gateway}, is_admin, owner, principal}`——`available` ⇔ 预置为 `active`；`capabilities` 说明提案可绑定哪些前置资源（此处绝不创建）；仅读台账 |
+| `GET` | `/api/assistant/architect/conversations` | 成员 | `{conversations[{id, title, turns, turn_in_progress, status, proposal_status, proposal_revision, created_at, updated_at}]}`——仅调用者自己的会话，最新在前（≤ 50） |
+| `POST` | `/api/assistant/architect/conversations` | 成员 | 请求体 `{title?}` → `201` 会话详情（见下）；快照 Workspace **目录**（Registry attachables、每条 Gateway 记录的实时 Gateway ARN + 出站认证身份、每个技能的 S3 内容摘要、ACTIVE 托管知识库、Workspace 前置资源——唯一的 AWS 读取）；预置未运行时 `409 assistant.unavailable`（`detail.preset_status`） |
+| `GET` | `/api/assistant/architect/conversations/{id}` | 成员 | `{…摘要, catalog{fetched_at, tools[{key, kind, name, description, attachable, reason, gateway_arn?, auth_type?, outbound_auth?, url?, record_id}], skills[{key, name, description, path, record_id, content_digest, object_count}], knowledge_bases[{kb_id, name, description}], warnings[], resources{memory_arn, kb_gateway_id, kb_gateway_arn, oauth_provider_arn, execution_role_arn}, target{workspace_id, account_id, region}}, messages[{id, turn, role: user|assistant|tool|error, text, name, at}], proposals[…]}` |
+| `POST` | `/api/assistant/architect/conversations/{id}/catalog` | 成员 | 重新读取目录 → `{catalog}` |
+| `POST` | `/api/assistant/architect/conversations/{id}/turns` | 成员 | 请求体 `{prompt}`（≤ 100k 字符 / 300k 字节，且须与前言一起放入请求预算）→ SSE `meta{conversation_id, turn, session_id, agent, omitted_turns} → (tool|delta)* → proposal? → done` 或 `error{code?, message}`（保留在记录中；客户端关闭流时留下部分回答 + 一条 `interrupted` 错误行，且无提案）。对预置发起一次携带有界重放记录（按轮次配对，≤ 12 轮 / 含前言 160k 字符）的 `InvokeHarness`；`launchpad-proposal` 块（≤ 64 000 字节）成为新修订（`draft` 或 `invalid`）；**无其他写入**。流打开前：`409 assistant.unavailable`、`409 assistant.turn_in_progress`（`detail.active_turn`——每会话单轮在途）、`409 assistant.conversation_full`（200 轮）、`413 assistant.prompt_too_large` |
+| `PUT` | `/api/assistant/architect/conversations/{id}/proposal` | 成员 | 请求体 `{content}`（提案白名单；未知外层成员 → 422）→ `{proposal}`——一个**新**修订（`source: member`，唯一单调编号），绝非就地修改；无效内容按 `invalid` 保存并附 `validation_errors`，从不被更正；序列化超过 64 000 字节返回 `413 assistant.proposal_too_large`（不存储任何内容；规范化后的存储内容按同一上限复查）；达到 50 个修订返回 `409 assistant.conversation_full`。所有助手写请求同时在入口受限：实际接收超过 512 000 字节返回 `413 assistant.request_too_large` |
+| `POST` | `/api/assistant/architect/conversations/{id}/proposal/reject` | 成员 | 请求体 `{revision}` → `{proposal}`，`status: rejected`（不可执行）；条件转换——非当前修订返回 `409 assistant.proposal_stale`，期间已执行的修订返回 `409 assistant.proposal_already_approved`（`detail.approval`） |
+| `POST` | `/api/assistant/architect/conversations/{id}/proposal/approve` | `perm:agents.deploy` | 请求体 `{revision, content_hash}` → 本次调用声明该修订、声明 Agent 名称（与 `POST /api/agents` 共享）并在一次提交中创建普通 Agent + Deployment + `deploy_agent` 任务且把其 ID 写到提案上时返回 `202 {proposal, agent, job_id, deployment_id, started: true}`；重复、并发或历史（已批准，即使有更新修订）请求返回已记录结果 `200 … started: false`——并重新唤醒仍 `queued` 且无活跃 worker 的任务。拒绝均发生在任何写入之前：`401 auth.required` / `403 auth.permission_required` / `403 workspace.forbidden`（实时目录读取之后、在声明处从数据库重新解析）、`409 assistant.proposal_stale`（修订不存在 / 哈希不同 / 批准期间变化）、`409 assistant.proposal_not_approvable`（无效、已取消、已被替代）、`409 assistant.workspace_not_ready`、`409 assistant.proposal_invalid`（实时目录已无所引用资源或前置条件——如知识库 Gateway）、`409 agent.name_reserved`、`409 agent.name_exists`（原子——两个竞争创建者之一）、`409 assistant.bindings_changed`（`detail.changed[]`——某个 key 解析到了与审阅时不同的 URL、Gateway 认证身份、技能内容、记忆或知识库 Gateway）、`502 assistant.catalog_unavailable`（实时目录无法读取且无胜出方）；每个“已批准”响应都先重新校验调用者 |
+
+提案为 `{id, conversation_id, revision, source: model|member, status: draft|invalid|approved|
+rejected|superseded, content, content_hash, bindings, validation_errors[], created_by,
+created_at, approval, rejected_by, rejected_at}`。`content` 是白名单对象 `{version: 1, name,
+model_id, model_source, system_prompt, tools[key], skills[key], knowledge_bases[kb_id],
+memory: disabled|workspace, max_iterations, timeout_seconds, summary,
+requirements_baseline[], assumptions[], manual_tasks[], golden_tests[{id, input,
+expected_response, expected_tools[], forbidden_behavior, pass_criteria, evaluator,
+source}], evaluator_recommendations[]}`；`bindings` 是解析后的 `{name, method, model_id,
+model_source, tools[ToolRef], skills[s3 路径], knowledge_bases[KnowledgeBaseRef],
+memory{short_term, long_term, memory_id}, max_iterations, timeout_seconds,
+resources{gateways{<gateway_id>: {gateway_arn, gateway_name, record_id, auth_type,
+outbound_auth}}, remote_mcp{<name>: {url, record_id}}, skills{<key>: {record_id, path,
+source_prefix, content_digest, object_count, total_bytes}}, kb_gateway{gateway_id, gateway_arn,
+oauth_provider_arn, url, authorizer_type, authorizer} | null, memory{mode, arn}, execution_role_arn}}`（无效时为 null；`outbound_auth` 是身份——提供方
+ARN、授权类型、scope——绝非凭据值）；`content_hash` = 规范化 `{content, bindings}` 的 sha256。
+部署任务的 payload 携带 `{content, bindings}` 并在任务入口重新检查（漂移 → 任务在任何阶段之前
+失败）。可观测路由（`/api/observability/sessions*`、`/traces*`、`…/evaluate`）隐藏其他 principal
+的助手会话，其详情返回 `404 observability.session_not_found` / `observability.trace_not_found`。`approval` 为 `{approved_by, approved_at, agent_id,
+agent_name, agent_status, agent_error, deployment_id, job_id, job_status} | null`；任务与
+Agent 是普通行，可通过 `GET /api/jobs/{id}` 与 `GET /api/agents/{id}` 读取。通用调用入口
+（`POST /api/chat/{id}`、`POST /api/agents/{id}/invoke`、`/v1 …/invoke[-stream]`）对系统托管
+Agent 上助手轮次的 `session_id` 返回 `404 chat.session_not_found`。
+
 ## 控制台 Registry API——实时名片 / Console Registry API: live agent card
 
 `GET /api/registry/records/{record_id}/live-agent-card` 是 Registry 抽屉「AGENT 名片」区块中「实时名片」按钮背后的读取：

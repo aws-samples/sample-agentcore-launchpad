@@ -328,6 +328,16 @@ export function SystemPresetsPanel({
               </div>
             )}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              {preset.status === "active" && preset.key === "aws-agent-solution-architect" && (
+                <Link
+                  className="assist-link"
+                  style={{ marginTop: 0 }}
+                  to="/create/assistant"
+                  data-testid="preset-open-assistant"
+                >
+                  {t("create.system.openAssistant")}
+                </Link>
+              )}
               {!installed && (
                 <Btn
                   primary

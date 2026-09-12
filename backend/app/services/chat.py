@@ -10,6 +10,7 @@ import time
 from collections.abc import Iterator
 from typing import Any
 
+from app.assistant.sessions import refuse_assistant_session
 from app.models.ledger import Agent
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import data_client
@@ -46,6 +47,7 @@ def chat_stream(
     }
     started = time.monotonic()
     try:
+        refuse_assistant_session(agent, session_id)
         if harness:
             yield from _harness_events(
                 agent,

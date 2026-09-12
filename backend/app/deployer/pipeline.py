@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
@@ -119,6 +120,7 @@ def create_deployment(
     *,
     skip_register: bool = False,
     payload_extra: dict[str, Any] | None = None,
+    commit: bool = True,
 ) -> tuple[Deployment, Job]:
     """Create the Deployment (stages pending) + Job rows for one deploy run.
 
@@ -128,7 +130,9 @@ def create_deployment(
     unchanged and registry failure must not obscure a successful rollout.
     ``payload_extra`` lands on the Job in the SAME commit as the rows (a caller
     that must pin data to the job — the system-preset release — cannot be left
-    with a runnable job and no pin by a crash between two commits)."""
+    with a runnable job and no pin by a crash between two commits). ``commit=False``
+    leaves the rows flushed in the caller's transaction so the caller can link the
+    freshly minted ids onto its own rows and commit everything at once."""
     # The workspace comes off the agent, not the request: a promotion or resumed
     # job must land in the same environment as the agent it deploys.
     deployment = Deployment(
@@ -152,21 +156,48 @@ def create_deployment(
     db.add(job)
     db.flush()
     deployment.job_id = job.id
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return deployment, job
 
 
-def execute_deploy_job(job_id: str) -> None:
-    """Run (or resume) one deploy job to completion. Never raises."""
+# Jobs the startup resume is about to adopt: the only launches allowed to take a job a
+# dead process left `running`. Filled by `resume_pending_jobs` before it starts them.
+_RESUMING: set[str] = set()
+
+
+def execute_deploy_job(job_id: str, *, resume: bool | None = None) -> None:
+    """Run (or resume) one deploy job to completion. Never raises.
+
+    Durable eligibility claim: a fresh launch (``start_deploy_async``) takes
+    ``queued → running`` with one conditional UPDATE; only the explicit startup
+    resume (and a direct call, which is how the resume tests drive it) may also adopt
+    a job a dead process left ``running``. A terminal job (succeeded/failed) is inert
+    — a late retry that re-wakes a job whose worker already finished runs nothing.
+    """
+    if resume is None:
+        resume = True  # direct callers are resume drivers; the starter passes False
+    if job_id in _RESUMING:
+        _RESUMING.discard(job_id)
+        resume = True
     db = SessionLocal()
     try:
+        eligible = ["queued", "running"] if resume else ["queued"]
+        claimed = db.execute(
+            update(Job)
+            .where(Job.id == job_id, Job.status.in_(eligible))
+            .values(status="running", updated_at=datetime.now(UTC))
+        ).rowcount
+        db.commit()
+        if claimed != 1:
+            return
         job = db.get(Job, job_id)
         if job is None:
             return
         agent_id = job.payload["agent_id"]
         deployment_id = job.payload["deployment_id"]
-        job.status = "running"
-        db.commit()
 
         agent = db.get(Agent, agent_id)
         deployment = db.get(Deployment, deployment_id)
@@ -187,6 +218,17 @@ def execute_deploy_job(job_id: str) -> None:
             from app.system_agents.service import assert_job_release_pinned
 
             assert_job_release_pinned(job.payload, agent, ctx.workspace)
+        if (job.payload or {}).get("assistant"):
+            # An assistant-approved job deploys exactly the reviewed bindings or
+            # fails closed before any stage: the pinned gateway auth identity, skill
+            # content digests, KB-gateway prerequisites and memory binding are
+            # re-resolved and compared here (fresh or resumed job alike).
+            from app.assistant.service import assert_job_bindings_pinned
+
+            assert_job_bindings_pinned(job.payload, agent, ctx.workspace)
+            # The stages consume the reviewed bindings (gateway ARN + outbound auth,
+            # memory ARN, KB gateway, skill content identity) instead of re-resolving.
+            ctx.scratch["assistant_pin"] = job.payload["assistant"]
         ctx.scratch["mode"] = job.payload.get("mode", "create")
 
         done = {s["name"] for s in deployment.stages if s["status"] in ("succeeded", "skipped")}
@@ -294,10 +336,42 @@ def _finish(
     db.commit()
 
 
+# One live worker per deploy job in this process. A repeated approval (or any
+# retry) may re-wake a job that is still `queued` because its first starter
+# failed; the registry makes that a no-op while a worker is alive, so the pipeline
+# never runs twice for one job. Single-host bound, like the uninstall registry.
+_LIVE_WORKERS: dict[str, threading.Thread] = {}
+_LIVE_LOCK = threading.Lock()
+
+
+def live_deploy_worker(job_id: str) -> threading.Thread | None:
+    with _LIVE_LOCK:
+        thread = _LIVE_WORKERS.get(job_id)
+        return thread if thread is not None and thread.is_alive() else None
+
+
 def start_deploy_async(job_id: str) -> threading.Thread:
-    thread = threading.Thread(target=execute_deploy_job, args=(job_id,), daemon=True)
-    thread.start()
-    return thread
+    with _LIVE_LOCK:
+        existing = _LIVE_WORKERS.get(job_id)
+        if existing is not None and existing.is_alive():
+            return existing
+
+        def run() -> None:
+            try:
+                execute_deploy_job(job_id, resume=False)
+            finally:
+                with _LIVE_LOCK:
+                    if _LIVE_WORKERS.get(job_id) is threading.current_thread():
+                        del _LIVE_WORKERS[job_id]
+
+        thread = threading.Thread(target=run, daemon=True, name=f"deploy-{job_id[:8]}")
+        _LIVE_WORKERS[job_id] = thread
+        try:
+            thread.start()
+        except Exception:
+            _LIVE_WORKERS.pop(job_id, None)
+            raise
+        return thread
 
 
 def resume_pending_jobs() -> list[str]:
@@ -332,5 +406,7 @@ def resume_pending_jobs() -> list[str]:
     finally:
         db.close()
     for job_id, job_type in found:
+        if job_type == "deploy_agent":
+            _RESUMING.add(job_id)  # startup may adopt a `running` job a dead process left
         starters[job_type](job_id)
     return [job_id for job_id, _ in found]

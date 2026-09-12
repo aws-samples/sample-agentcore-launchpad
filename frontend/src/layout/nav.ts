@@ -50,6 +50,7 @@ export const ROUTE_PATHS: string[] = [
   "/",
   "/create",
   "/create/studio",
+  "/create/assistant",
   "/registry",
   "/knowledge-bases",
   "/memory",

@@ -25,6 +25,9 @@ const CreateAgent = lazy(() =>
 const CreateAgentStudio = lazy(() =>
   import("./pages/CreateAgentStudio").then((m) => ({ default: m.CreateAgentStudio })),
 );
+const CreateAgentAssistant = lazy(() =>
+  import("./pages/CreateAgentAssistant").then((m) => ({ default: m.CreateAgentAssistant })),
+);
 const Evaluation = lazy(() =>
   import("./pages/Evaluation").then((m) => ({ default: m.Evaluation })),
 );
@@ -55,6 +58,7 @@ export default function App() {
               <Route index element={<Overview />} />
               <Route path="create" element={<CreateAgent />} />
               <Route path="create/studio" element={<CreateAgentStudio />} />
+              <Route path="create/assistant" element={<CreateAgentAssistant />} />
               <Route path="registry" element={<Registry />} />
               <Route path="knowledge-bases" element={<KnowledgeBases />} />
               <Route path="memory" element={<Memory />} />

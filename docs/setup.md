@@ -167,6 +167,39 @@ it through the preset. If an ordinary agent already holds the reserved name, the
 install is refused — delete or rename that agent first; the preset never adopts it.
 **Live smoke is still pending** (see architecture.md → *System-managed presets*).
 
+### Architect assistant / 架构助手
+
+> **Upgrade note:** this release changes the console session cookie to version 2
+> (bound to the account id). Every signed-in user — members and the administrator —
+> is signed out once and must log in again; nothing else changes for them.
+
+Once the `aws-agent-solution-architect` preset is ACTIVE, every member of the workspace
+can open the **architect assistant** (`/create/assistant`, linked from the Managed
+Harness entrance card and from the SYSTEM PRESETS panel). Paste your Workshop output,
+let the assistant confirm the baseline and ask only the impactful missing questions,
+and review its proposal for **one new managed Harness business agent**. The proposal
+only references tools, S3 skills and knowledge bases that already exist in the
+workspace (APPROVED registry records, ACTIVE managed KBs) and shows the **exact
+bindings** it will deploy (gateway ARN and auth identity, skill S3 path and content
+digest of every file in the skill directory, the workspace's shared memory or none);
+approved skills deploy from an immutable copy of exactly those bytes in the workspace's
+artifacts bucket. It is inert until you click
+**APPROVE & DEPLOY** — a separate, billable action that requires the `agents.deploy`
+permission (re-checked, together with your account and workspace grant, at the moment
+of execution) and creates the agent through the normal deploy job in the workspace's
+account and Region; if any bound resource changed since you reviewed it, the approval
+is refused and the job itself fails closed before touching AWS. Editing a proposal
+creates a new revision that needs its own approval; cancelling makes it
+non-executable. Memory is `disabled` or the workspace's existing shared memory (with
+all its strategies) — nothing in between. Mounting a knowledge base requires the
+workspace's existing KB gateway; where there is none, it is manual work. The assistant
+never edits or deletes existing agents and creates no knowledge base, gateway or
+evaluator — those, and the golden tests it recommends, are guidance for manual
+implementation. Conversations are private to the account that opened them (by
+immutable account id, not by username), per workspace, and are hidden from other
+members in Observability too. **The live smoke of this flow
+(a real conversation, proposal and approval) is still pending.**
+
 ### Escape hatches / 应急开关
 
 | Variable | Effect |
