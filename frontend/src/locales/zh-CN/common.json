@@ -2026,7 +2026,12 @@
     "assistant.proposal_already_approved": "已批准的提案无法取消；其部署已经存在。",
     "assistant.workspace_not_ready": "本 Workspace 尚未就绪，无法部署。",
     "assistant.bindings_changed": "该提案背后的资源在审阅后发生了变化 — 请刷新目录并审阅新的修订。",
-    "assistant.conversation_full": "该会话已达到大小上限 — 请新建一个会话。"
+    "assistant.conversation_full": "该会话已达到大小上限 — 请新建一个会话。",
+    "assistant.turn_in_progress": "该会话的另一轮对话仍在流式返回 — 请等待其完成。",
+    "assistant.prompt_too_large": "消息过大，无法在一轮内发送 — 请缩短或拆分。",
+    "assistant.proposal_too_large": "提案超过大小上限。",
+    "observability.session_not_found": "会话不存在。",
+    "observability.trace_not_found": "Trace 不存在。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",
@@ -3999,9 +4004,6 @@
     "field.iterations": "最大迭代次数",
     "field.timeout": "超时（秒）",
     "field.target": "目标",
-    "memoryShort": "短期",
-    "memoryLong": "长期",
-    "memoryOff": "已禁用",
     "none": "—",
     "summary": "摘要",
     "baseline": "需求基线",
@@ -4055,6 +4057,16 @@
     "expiredSession": "你的会话已过期或已失去访问权限 — 请重新登录并重新打开助手。",
     "workspaceChanged": "Workspace 已切换 — 草稿归属于其编写时所在的 Workspace。",
     "catalogChanged": "目录已刷新。引用已移除资源的提案将在批准时重新检查。",
-    "bindings": "精确绑定（将要部署的内容）"
+    "bindings": "精确绑定（将要部署的内容）",
+    "proposalInText": "_[已收到结构化提案 — 请在“提案”面板中审阅]_",
+    "dialogStale": "确认框打开期间提案已变化；未批准任何内容。请审阅最新修订。",
+    "outcomeHistory": "更早的批准",
+    "memoryWorkspace": "Workspace 共享记忆（含全部已配置策略）",
+    "memoryDisabled": "已禁用（无记忆）",
+    "memoryWorkspaceAvailable": "共享记忆可用",
+    "memoryNoShared": "本 Workspace 没有共享记忆 — 只能选择“已禁用”",
+    "kbGatewayMissing": "此处没有就绪的知识库 Gateway — 挂载知识库需手动完成",
+    "bindingsAuth": "认证：",
+    "bindingsDigest": "内容"
   }
 }

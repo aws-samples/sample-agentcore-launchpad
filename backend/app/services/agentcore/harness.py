@@ -215,21 +215,34 @@ def invoke_harness_events(
         actorId=actor_id,
         messages=messages,
     )
-    for event in response["stream"]:
-        if "contentBlockStart" in event:
-            tool_use = event["contentBlockStart"].get("start", {}).get("toolUse")
-            if tool_use:
-                yield {
-                    "event": "tool",
-                    "data": {"name": tool_use.get("name", ""), "id": tool_use.get("toolUseId")},
-                }
-        elif "contentBlockDelta" in event:
-            delta = event["contentBlockDelta"].get("delta", {})
-            if delta.get("text"):
-                yield {"event": "delta", "data": {"text": delta["text"]}}
-        elif "runtimeClientError" in event or "internalServerException" in event:
-            detail = event.get("runtimeClientError") or event.get("internalServerException")
-            raise RuntimeError(str(detail))
+    stream = response["stream"]
+    try:
+        for event in stream:
+            if "contentBlockStart" in event:
+                tool_use = event["contentBlockStart"].get("start", {}).get("toolUse")
+                if tool_use:
+                    yield {
+                        "event": "tool",
+                        "data": {"name": tool_use.get("name", ""),
+                                 "id": tool_use.get("toolUseId")},
+                    }
+            elif "contentBlockDelta" in event:
+                delta = event["contentBlockDelta"].get("delta", {})
+                if delta.get("text"):
+                    yield {"event": "delta", "data": {"text": delta["text"]}}
+            elif "runtimeClientError" in event or "internalServerException" in event:
+                detail = event.get("runtimeClientError") or event.get("internalServerException")
+                raise RuntimeError(str(detail))
+    finally:
+        # A consumer that stops early (client disconnect -> GeneratorExit) must not
+        # leave the HTTP event stream open. Closing the transport does NOT claim the
+        # service-side computation stopped, only that this process released it.
+        close = getattr(stream, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:  # pragma: no cover - best effort on teardown
+                pass
 
 
 def invoke_harness_text(

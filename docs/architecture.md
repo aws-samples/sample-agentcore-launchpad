@@ -615,80 +615,168 @@ console labels them "not created here" and nothing provisions them. No DOCX/PDF
 upload, no Word/draw.io export.
 
 **Conversation model.** `POST /api/assistant/architect/conversations` opens a
-conversation bound to `(workspace, owner username)` and snapshots the workspace
-catalog (the same registry-attachables + KB reads the create wizard performs). Every
-read and write is owner-bound on top of the workspace scope — another member's or an
-administrator's request answers 404 — because the pasted Workshop material is customer
-input, not a shared workspace resource. The preset runs with persistent memory
+conversation bound to `(workspace, owner principal)` and snapshots the workspace
+catalog: the registry-attachables + KB reads the create wizard performs, **plus** the
+deployment identity an approval will pin — the live gateway ARN and outbound-auth
+identity per gateway record (resolved with the deploy stage's own helper), the S3
+content digest of every skill bundle (sorted key/ETag/size), and the workspace
+prerequisites (`memory_arn`, `kb_gateway_id`/`kb_gateway_arn`/`oauth_provider_arn`,
+`execution_role_arn`). The **principal** is immutable: `user:<users.id>` for a
+registered account, `config-admin` for the row-less built-in administrator,
+`local-operator` with the login gate off. The username is display only — an account
+deleted and re-registered under the same name is a new principal and inherits
+nothing; a row with a NULL principal (pre-principal ledger) is visible to nobody, it
+is never adopted by a username match. Every read and write is principal-bound on top
+of the workspace scope — another member's or an administrator's request answers 404 —
+because the pasted Workshop material is customer input, not a shared workspace
+resource. The preset runs with persistent memory
 **disabled**, so the assistant does not rely on service-side session continuity: the
 transcript lives in `assistant_messages`, each turn mints a **fresh 64-hex runtime
 session id** and replays a bounded window of the transcript through
-`InvokeHarness.messages` (`[{role: user|assistant, content: [{text}]}]`, ≤ 24
-messages / ≤ 160k chars, consecutive same-role rows merged so the list alternates).
-The server-composed protocol preamble (rules + the catalog keys) rides on the first
-user message; the harness request carries no `systemPrompt`, `tools` or `model`
-override. Nothing private is written to shared long-term memory. Whether the model
+`InvokeHarness.messages` (`[{role: user|assistant, content: [{text}]}]`). Turns are
+**paired by turn number** (never by insert order): each replayed turn is the member's
+text plus the reply when there was one, a failed/interrupted turn is replayed with an
+explicit "no reply" marker. One **final** budget (`MAX_REPLAY_CHARS` = 160k
+characters, ≤ 12 turns) covers preamble + catalog + replayed turns + the current
+message: the newest turns that fit are kept, the number of omitted older turns is
+disclosed in the preamble and in the `meta` event, and the current message is never
+truncated — one that cannot fit (or exceeds 100k chars / 300k bytes) is refused with
+`413 assistant.prompt_too_large` before any claim. The server-composed protocol
+preamble (rules + the catalog keys + which memory modes exist here) rides on the
+first user message; the harness request carries no `systemPrompt`, `tools` or
+`model` override. Nothing private is written to shared long-term memory. Whether the model
 follows the replay/protocol faithfully is part of the **pending live smoke**.
 
-**Private runtime sessions.** The per-turn session id is written to the user row
-*before* the data-plane call. The generic entrances — console Chat, `POST
+**One in-flight turn, private runtime sessions.** A turn is an atomic conditional
+claim on the conversation row (`active_turn`, taken by the first statement of a short
+write transaction): a second concurrent turn is refused with `409
+assistant.turn_in_progress` before it opens a stream (a lost race at the claim
+itself is the same error inside the stream, never a fabricated second turn); a claim
+left by a dead process is reclaimable after `TURN_CLAIM_TTL_S` and cleared at startup
+(only a live request of the running process can hold one). The per-turn session id is
+written to the user row *before* the data-plane call, so it is private from the first
+instant the harness could know it. The generic entrances — console Chat, `POST
 /api/agents/{id}/invoke`, `/v1` sync and stream — call
 `app.assistant.sessions.refuse_assistant_session` and answer `404
 chat.session_not_found` for such an id on a system-managed agent; ordinary agents pay
 no ledger read. Chat sessions/history never list assistant turns (no `ChatSession` /
-`ChatMessage` row is written).
+`ChatMessage` row is written). **Observability** applies the same principal boundary
+after its per-workspace cache: session and trace lists drop rows of another
+principal's assistant sessions, session/trace detail and on-demand evaluation answer
+404 when the payload names such a session anywhere (span attributes, transcript,
+message events), while the owner still sees their own turns and ordinary agents'
+sessions stay shared (`app.assistant.sessions.PrivateSessions`). A stream that errors
+or is closed by the client before the reply completed persists the partial answer
+plus an `error` row (`interrupted …`), never derives a proposal from the incomplete
+output, releases the claim and closes the upstream event stream (closing the
+transport does not claim the service-side computation stopped).
 
 **Inert proposals.** After an ordinary model turn the reply is scanned for exactly
 one fenced block tagged `launchpad-proposal` (`app/assistant/proposal.py`). The block
-is untrusted: `ProposalContent` is a Pydantic allowlist with `extra="forbid"` and
-bounded fields — no `env`, `code`, `requirements`, `allowed_tools`, `protocol`,
-`filesystem`, `network`, URLs, ARNs, S3 prefixes or roles can pass. References are
-validated against the conversation's catalog snapshot, reserved preset names and the
-`launchpad-`/`harness-`/`system-` prefixes are refused, and `to_agent_spec` is the
-single mapping into an `AgentSpec`: the MCP URL, gateway record/gateway ids, S3 skill
-path and KB name come from the **catalog entry the key names**, never from the
-proposal. Every emission (and every member edit through `PUT …/proposal`) becomes a
-new **revision** (`assistant_proposals`): `draft` when valid, `invalid` (kept verbatim
-with its errors, shown but never executable) otherwise; earlier drafts become
-`superseded`. A valid revision also stores its **bindings** — the resolved spec — and
-its `content_hash` covers content **and** bindings, so the reviewer sees the exact
-resources and an approval names exactly what was rendered. Words like "approved" in
+is untrusted: one serialized-UTF-8 **byte cap** (64 000 bytes) applies to the model
+block and to a member edit alike, *before* validation and before anything is stored
+(an oversized member edit is `413 assistant.proposal_too_large`; an oversized model
+block is an `invalid` revision that keeps only a marker); `ProposalContent` is a
+Pydantic allowlist with `extra="forbid"` and per-field/per-item bounds — no `env`,
+`code`, `requirements`, `allowed_tools`, `protocol`, `filesystem`, `network`, URLs,
+ARNs, S3 prefixes or roles can pass. `memory` is `"disabled"` or `"workspace"` — the
+only two states the Harness API can enforce (`{"disabled": {}}`, or the workspace's
+existing shared AgentCore Memory with every strategy it carries); a "short-term
+only" opt-out is not representable and is not offered. References are validated
+against the conversation's catalog snapshot **including prerequisites**: a gateway
+tool needs a resolved gateway ARN + outbound-auth identity, a skill needs readable
+bundle content, a mounted KB needs the workspace's **existing** ready KB gateway +
+OAuth provider (mounting a KB where none exists is manual work — this flow never
+creates a gateway), `workspace` memory needs the shared `memory_arn`; reserved preset
+names and the `launchpad-`/`harness-`/`system-` prefixes are refused. `to_agent_spec`
+is the single mapping into an `AgentSpec`, and `resource_bindings` the single mapping
+into the **reviewed deployment identity**: the spec plus, per resource, the gateway
+ARN/name/record and outbound-auth identity (provider ARN, grant type, scopes — never
+a credential value), the skill record id + S3 path + content digest, the KB gateway
+prerequisites and the memory mode + ARN. Every emission (and every member edit
+through `PUT …/proposal`) becomes a new **revision** (`assistant_proposals`) whose
+number comes from the conversation's `revision_seq`, bumped inside the same short
+write transaction that stores the row (unique index on `(conversation_id, revision)`),
+so two concurrent writers never share a number: `draft` when valid (with its
+bindings), `invalid` (kept verbatim with its errors, shown but never executable)
+otherwise; earlier drafts become `superseded`. `content_hash` covers content **and**
+bindings, so an approval names exactly what was rendered. Words like "approved" in
 the prompt or reply change nothing: a turn creates rows in the transcript and proposal
 tables and nothing else.
 
 **Approval — the only executor.** `POST …/proposal/approve` (`perm:agents.deploy`,
 the same permission as `POST /api/agents`, re-asserted in the handler) names
-`{revision, content_hash}`. In order, before any claim: permission → the revision is
-the current one and the hash matches → not already `approved` (a repeat returns the
-recorded outcome, `200 started:false`) → status is `draft` → workspace deploy
-readiness (`bootstrap_status = ready`, `execution_role_arn`) → the content is
-re-validated against the **live** catalog (`409 assistant.proposal_invalid` for a
-removed resource) → reserved / existing name → the live resolution must equal the
-stored bindings (`409 assistant.bindings_changed` when a key now points at a different
-URL, gateway, path or KB). Then one transaction: a compare-and-set
-`UPDATE … WHERE status='draft'` stamps `approved`, approver and time; the ordinary
-`Agent` row (`owner` = approver, no `system_key`) is added and linked on the
-proposal; `create_deployment(payload_extra={"assistant": {conversation_id,
-proposal_id, revision, approved_by}})` writes the `Deployment` + `deploy_agent` `Job`
-and commits everything at once. Only the claim winner launches the job thread
-(`202 started:true`); a concurrent or repeated request re-reads the winner's outcome.
-A crash between the durable commit and the best-effort `deployment_id`/`job_id`
-denormalization is harmless — readers resolve the outcome through the agent link. A
-queued job survives a process failure through `resume_pending_jobs`. A failed deploy
-stays failed on its original job; the assistant never restarts it, and a new proposal
-must use a name that is still free. Conversations are bounded (200 turns, 50
-revisions → `409 assistant.conversation_full`).
+`{revision, content_hash}`. The **exact requested revision** is resolved first: an
+already-approved one returns its recorded outcome (`200 started:false`) even when
+newer revisions exist — that is the idempotent retry; a hash mismatch or unknown
+revision is `409 assistant.proposal_stale`; `invalid`/`rejected`/`superseded` is `409
+assistant.proposal_not_approvable`. Snapshot preflight (permission, readiness) is
+followed by the **live** reads, outside every lock: the catalog is re-fetched, the
+content re-validated (`409 assistant.proposal_invalid` for a removed resource or lost
+prerequisite) and `resource_bindings` recomputed — it must equal the stored bindings
+byte for byte (`409 assistant.bindings_changed`, `detail.changed[]` names the drifted
+parts: a key that now resolves to another URL, another gateway auth identity,
+overwritten skill bytes under the same S3 prefix, another memory or KB gateway).
+Then **one short write transaction** whose first statement takes the conversation's
+write lock: the caller's account, deploy permission and workspace grant are
+**re-resolved from the database** (`resolve_identity` + `_authorize`) and the
+workspace readiness re-read — a revocation that happened during the catalog read is
+honoured (`401/403`, nothing written); the revision is re-read (approved meanwhile →
+its outcome; changed → stale); the agent name is **claimed atomically** through
+`agent_name_claims` (a unique `claim_key`), the same reservation `POST /api/agents`
+and `…/convert` make, so an assistant approval racing an ordinary creation or another
+conversation's approval yields exactly one agent and one `409 agent.name_exists`
+(legacy agents predating the table are still caught by the holder query, never
+duplicated or deleted); a compare-and-set `UPDATE … WHERE status='draft'` stamps
+`approved`, approver and time; the ordinary `Agent` row (`owner` = approver, no
+`system_key`) and — through `create_deployment(commit=False,
+payload_extra={"assistant": {conversation_id, proposal_id, revision, approved_by,
+content, bindings}})` — the `Deployment` + `deploy_agent` `Job` are flushed and their
+ids written **onto the proposal in the same commit** (no post-commit bookkeeping can
+fail). A refusal or an `IntegrityError` inside the transaction rolls everything back
+and re-reads the revision: a racing approval of the *same* revision wins → the loser
+returns the winner's outcome, never a name conflict. Only the claim winner launches
+the job thread (`202 started:true`); a repeated approval of a job that is still
+`queued` with no live worker **re-wakes** it (`start_deploy_async` coalesces one live
+worker per job in this process, so a retry can never run the pipeline twice), and
+`resume_pending_jobs` picks a queued job up at startup. A failed deploy stays failed
+on its original job; the assistant never restarts it, and a new proposal must use a
+name that is still free. Conversations are bounded (200 turns, 50 revisions → `409
+assistant.conversation_full`).
+
+**Pinned execution.** The deploy job runs the normal pipeline with one guard at job
+entry (`assert_job_bindings_pinned`, fresh or resumed): the agent's stored spec must be
+the pinned one, the pinned content must still validate in the live workspace, the
+live `resource_bindings` must equal the pinned ones, and a KB mount must still point
+at the workspace's very same KB gateway/OAuth provider — otherwise the job lands
+`failed` before any stage runs and no AWS write happens. The provision stage's KB
+gateway helper therefore only ever finds the existing gateway for an assistant job;
+it never creates one on this path.
 
 **Console.** The page (`pages/CreateAgentAssistant.tsx`) shows the transcript with
-streaming, the catalog summary, the proposal (fields, bindings, prompt, solution
-content), an inline typed editor (tools/skills/KBs are picked from the catalog), CANCEL
-PROPOSAL, APPROVE & DEPLOY with a confirm dialog naming account and Region and the
-billable-action warning, and the deployment outcome (job + stages polled through the
-ordinary `/api/jobs` and `/api/agents` reads, links to Agent management and Chat). It
-handles the preset-not-active state (administrator → System presets; member → ask an
-administrator), the missing-permission state (approve disabled with the reason), 401/403
-mid-conversation, and discards drafts across a workspace switch (the routed subtree
-remounts; conversations are per workspace server-side). en + zh-CN.
+streaming (the raw proposal block is replaced by a pointer to the panel), the catalog
+summary with the workspace's memory/KB-gateway capabilities, the proposal (fields,
+**exact bindings** incl. gateway auth identity and skill content digest, prompt,
+solution content), an inline typed editor (tools/skills/KBs picked from the catalog,
+memory `disabled`/`workspace` only where the workspace has a shared memory), CANCEL
+PROPOSAL, APPROVE & DEPLOY, and the deployment outcome. Staleness is handled by an
+**operation generation**: every conversation selection, workspace change and unmount
+bumps it, and every load, stream, reload and job poll drops its result when the
+generation moved on — a slower load of conversation A never overwrites the newer
+selection B, a pending turn or approval reload never pulls A back, and a job poll that
+resolves after cleanup neither writes nor reschedules. Load callbacks read `t` through
+refs, so a locale change re-renders without re-running mount effects (drafts, edits
+and a streaming reply survive it). The approve dialog is **pinned** to the
+conversation/revision/hash/name it was opened on and submits exactly that; it closes
+itself the moment the latest revision or hash changes (the backend's stale refusal
+remains the boundary). The outcome shown belongs to the latest revision when that one
+was approved, otherwise to the most recent approved revision; earlier approvals are
+listed with their revision, agent and job status. The raw SSE fetch dispatches the
+console's unauthorized event on 401 like the typed client. It handles the
+preset-not-active state (administrator → System presets; member → ask an
+administrator), the missing-permission state (approve disabled with the reason),
+401/403 mid-conversation, and discards drafts across a workspace switch (the routed
+subtree remounts; conversations are per workspace server-side). en + zh-CN.
 
 **Live check still required.** `tests/test_assistant.py` is hermetic. Not yet run: a
 real preset conversation with a grounded AWS answer, a valid model-emitted proposal,

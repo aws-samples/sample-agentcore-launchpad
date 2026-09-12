@@ -39,6 +39,7 @@ WORKSPACE_SCOPED_TABLES = (
     "assistant_conversations",
     "assistant_messages",
     "assistant_proposals",
+    "agent_name_claims",
 )
 
 
@@ -212,6 +213,7 @@ def _migrate(bind) -> None:
                         "ADD COLUMN sample BOOLEAN DEFAULT 0 NOT NULL"
                     )
                 )
+    _migrate_assistant_columns(bind)
     _migrate_workspace_columns(bind)
     _migrate_system_key_index(bind)
 
@@ -236,6 +238,41 @@ def _migrate_system_key_index(bind) -> None:
                 "WHERE system_key IS NOT NULL AND status != 'deleted'"
             )
         )
+
+
+def _migrate_assistant_columns(bind) -> None:
+    """Additive columns of the assistant tables (SE-039 correction): the immutable
+    owner principal (NULL = visible to nobody, never adopted by username), the
+    turn claim and the revision allocator, and the proposal bindings."""
+    from sqlalchemy import inspect, text
+
+    additions = {
+        "assistant_conversations": {
+            "owner_principal": (
+                "ALTER TABLE assistant_conversations ADD COLUMN owner_principal VARCHAR(96)"
+            ),
+            "active_turn": "ALTER TABLE assistant_conversations ADD COLUMN active_turn INTEGER",
+            "active_turn_started_at": (
+                "ALTER TABLE assistant_conversations ADD COLUMN active_turn_started_at DATETIME"
+            ),
+            "revision_seq": (
+                "ALTER TABLE assistant_conversations ADD COLUMN revision_seq INTEGER DEFAULT 0"
+            ),
+        },
+        "assistant_proposals": {
+            "bindings": "ALTER TABLE assistant_proposals ADD COLUMN bindings JSON",
+        },
+    }
+    inspector = inspect(bind)
+    live_tables = set(inspector.get_table_names())
+    for table, columns in additions.items():
+        if table not in live_tables:
+            continue
+        existing = {c["name"] for c in inspector.get_columns(table)}
+        for column, ddl in columns.items():
+            if column not in existing:
+                with bind.begin() as conn:
+                    conn.execute(text(ddl))
 
 
 def _migrate_workspace_columns(bind) -> None:
@@ -274,6 +311,7 @@ def _migrate_workspace_columns(bind) -> None:
         "assistant_proposals": (
             "ALTER TABLE assistant_proposals ADD COLUMN workspace_id VARCHAR(32)"
         ),
+        "agent_name_claims": "ALTER TABLE agent_name_claims ADD COLUMN workspace_id VARCHAR(32)",
     }
     inspector = inspect(bind)
     live_tables = set(inspector.get_table_names())

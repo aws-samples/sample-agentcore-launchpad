@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import app.deployer.container  # noqa: F401 — registers the container (Claude SDK) method
 import app.deployer.harness  # noqa: F401 — registers the harness deploy method
 import app.deployer.zip_runtime  # noqa: F401 — registers zip_runtime + studio methods
+from app.assistant.service import clear_stale_turn_claims
 from app.core.config import get_settings
 from app.core.db import init_db
 from app.core.errors import register_error_handlers
@@ -155,6 +156,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(apikeys_router)
     app.include_router(public_router)
     if resume_jobs:
+        clear_stale_turn_claims()  # only a live request of THIS process can hold one
         resumed = resume_pending_jobs()
         if resumed:
             logging.getLogger("launchpad").info(

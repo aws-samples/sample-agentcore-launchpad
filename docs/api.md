@@ -146,33 +146,47 @@ The architect assistant (see architecture → *Architect assistant (SE-039)*) is
 member conversation with the protected `aws-agent-solution-architect` preset that ends
 in an inert proposal for one new managed Harness. Discussion routes are `member`
 (parity with Chat); the approval rides `perm:agents.deploy` (parity with `POST
-/api/agents`). Every route is workspace-scoped **and owner-bound**: a conversation of
-another member — or of an administrator — answers `404 assistant.conversation_not_found`.
-Reads are ledger-only except where noted.
+/api/agents`) and additionally re-resolves the caller's account, permission and
+workspace grant from the database inside its write transaction. Every route is
+workspace-scoped **and principal-bound** (`user:<id>` / `config-admin` /
+`local-operator`; usernames are display only): a conversation of another principal —
+another member, an administrator, or a re-registered account with the same username —
+answers `404 assistant.conversation_not_found`. Reads are ledger-only except where
+noted.
 
 | Method | Path | Role | Result |
 |---|---|---|---|
-| `GET` | `/api/assistant/architect` | member | `{workspace_id, account_id, region, available, reasons[], preset{key, label, status, agent_id, requirements[], can_install}, can_deploy, deploy_requirements[{code, message}], is_admin, owner}` — `available` ⇔ the preset is `active`; ledger-only |
-| `GET` | `/api/assistant/architect/conversations` | member | `{conversations[{id, title, turns, status, proposal_status, proposal_revision, created_at, updated_at}]}` — the caller's own, newest first (≤ 50) |
-| `POST` | `/api/assistant/architect/conversations` | member | body `{title?}` → `201` conversation detail (below); snapshots the workspace **catalog** (registry attachables + ACTIVE managed KBs — the only AWS reads); `409 assistant.unavailable` (`detail.preset_status`) while the preset is not active |
-| `GET` | `/api/assistant/architect/conversations/{id}` | member | `{…summary, catalog{fetched_at, tools[{key, kind, name, description, attachable, reason}], skills[{key, name, description}], knowledge_bases[{kb_id, name, description}], warnings[], target{workspace_id, account_id, region}}, messages[{id, turn, role: user|assistant|tool|error, text, name, at}], proposals[…]}` |
+| `GET` | `/api/assistant/architect` | member | `{workspace_id, account_id, region, available, reasons[], preset{key, label, status, agent_id, requirements[], can_install}, can_deploy, deploy_requirements[{code, message}], capabilities{shared_memory, kb_gateway}, is_admin, owner, principal}` — `available` ⇔ the preset is `active`; `capabilities` says which prerequisites a proposal may bind to (never created here); ledger-only |
+| `GET` | `/api/assistant/architect/conversations` | member | `{conversations[{id, title, turns, turn_in_progress, status, proposal_status, proposal_revision, created_at, updated_at}]}` — the caller's own, newest first (≤ 50) |
+| `POST` | `/api/assistant/architect/conversations` | member | body `{title?}` → `201` conversation detail (below); snapshots the workspace **catalog** (registry attachables, live gateway ARN + outbound-auth identity per gateway record, S3 content digest per skill, ACTIVE managed KBs, workspace prerequisites — the only AWS reads); `409 assistant.unavailable` (`detail.preset_status`) while the preset is not active |
+| `GET` | `/api/assistant/architect/conversations/{id}` | member | `{…summary, catalog{fetched_at, tools[{key, kind, name, description, attachable, reason, gateway_arn?, auth_type?, outbound_auth?, url?, record_id}], skills[{key, name, description, path, record_id, content_digest, object_count}], knowledge_bases[{kb_id, name, description}], warnings[], resources{memory_arn, kb_gateway_id, kb_gateway_arn, oauth_provider_arn, execution_role_arn}, target{workspace_id, account_id, region}}, messages[{id, turn, role: user|assistant|tool|error, text, name, at}], proposals[…]}` |
 | `POST` | `/api/assistant/architect/conversations/{id}/catalog` | member | re-reads the catalog → `{catalog}` |
-| `POST` | `/api/assistant/architect/conversations/{id}/turns` | member | body `{prompt}` (≤ 100k chars) → SSE `meta{conversation_id, turn, session_id, agent} → (tool|delta)* → proposal? → done` or `error` (kept on the transcript). One `InvokeHarness` on the preset with the bounded replayed transcript; a `launchpad-proposal` block becomes a new revision (`draft` or `invalid`); **no other write**. `409 assistant.unavailable` / `assistant.conversation_full` (200 turns) before the stream opens |
-| `PUT` | `/api/assistant/architect/conversations/{id}/proposal` | member | body `{content}` (the proposal allowlist) → `{proposal}` — a **new** revision (`source: member`), never a mutation; invalid content is stored as `invalid` with `validation_errors`, never corrected |
-| `POST` | `/api/assistant/architect/conversations/{id}/proposal/reject` | member | body `{revision}` → `{proposal}` with `status: rejected` (non-executable); `409 assistant.proposal_stale` for a non-current revision, `409 assistant.proposal_already_approved` for an approved one |
-| `POST` | `/api/assistant/architect/conversations/{id}/proposal/approve` | `perm:agents.deploy` | body `{revision, content_hash}` → `202 {proposal, agent, job_id, deployment_id, started: true}` when this call claimed the revision and created the ordinary agent + deployment + `deploy_agent` job in one commit; `200 … started: false` with the recorded outcome for a repeated or concurrent request. Refusals, all before any write: `403 auth.permission_required`, `409 assistant.proposal_stale` (not current / hash differs), `409 assistant.proposal_not_approvable` (invalid, rejected, superseded), `409 assistant.workspace_not_ready`, `409 assistant.proposal_invalid` (live catalog no longer has a referenced resource), `409 agent.name_reserved`, `409 agent.name_exists`, `409 assistant.bindings_changed` (`detail.changed[]` — a key resolves to a different URL/gateway/path/KB than reviewed) |
+| `POST` | `/api/assistant/architect/conversations/{id}/turns` | member | body `{prompt}` (≤ 100k chars / 300k bytes, and it must fit the request budget with the preamble) → SSE `meta{conversation_id, turn, session_id, agent, omitted_turns} → (tool|delta)* → proposal? → done` or `error{code?, message}` (kept on the transcript; a stream closed by the client leaves the partial answer + an `interrupted` error row and no proposal). One `InvokeHarness` on the preset with the bounded replayed transcript (paired by turn, ≤ 12 turns / 160k chars incl. preamble); a `launchpad-proposal` block (≤ 64 000 bytes) becomes a new revision (`draft` or `invalid`); **no other write**. Before the stream opens: `409 assistant.unavailable`, `409 assistant.turn_in_progress` (`detail.active_turn` — one in-flight turn per conversation), `409 assistant.conversation_full` (200 turns), `413 assistant.prompt_too_large` |
+| `PUT` | `/api/assistant/architect/conversations/{id}/proposal` | member | body `{content}` (the proposal allowlist) → `{proposal}` — a **new** revision (`source: member`, unique monotonic number), never a mutation; invalid content is stored as `invalid` with `validation_errors`, never corrected; `413 assistant.proposal_too_large` above 64 000 serialized bytes (nothing stored); `409 assistant.conversation_full` at 50 revisions |
+| `POST` | `/api/assistant/architect/conversations/{id}/proposal/reject` | member | body `{revision}` → `{proposal}` with `status: rejected` (non-executable); a conditional transition — `409 assistant.proposal_stale` for a non-current revision, `409 assistant.proposal_already_approved` (`detail.approval`) when the revision was executed meanwhile |
+| `POST` | `/api/assistant/architect/conversations/{id}/proposal/approve` | `perm:agents.deploy` | body `{revision, content_hash}` → `202 {proposal, agent, job_id, deployment_id, started: true}` when this call claimed the revision, claimed the agent name (shared with `POST /api/agents`) and created the ordinary agent + deployment + `deploy_agent` job with their ids on the proposal in one commit; `200 … started: false` with the recorded outcome for a repeated, concurrent or historical (already approved, even if newer revisions exist) request — and a still-`queued` job with no live worker is re-woken. Refusals, all before any write: `401 auth.required` / `403 auth.permission_required` / `403 workspace.forbidden` (re-resolved from the database at the claim, after the live catalog read), `409 assistant.proposal_stale` (unknown revision / hash differs / changed while approving), `409 assistant.proposal_not_approvable` (invalid, rejected, superseded), `409 assistant.workspace_not_ready`, `409 assistant.proposal_invalid` (live catalog no longer has a referenced resource or prerequisite — e.g. the KB gateway), `409 agent.name_reserved`, `409 agent.name_exists` (atomic — one of two racing creators), `409 assistant.bindings_changed` (`detail.changed[]` — a key resolves to a different URL, gateway auth identity, skill content, memory or KB gateway than reviewed) |
 
 A proposal is `{id, conversation_id, revision, source: model|member, status: draft|invalid|
 approved|rejected|superseded, content, content_hash, bindings, validation_errors[],
 created_by, created_at, approval, rejected_by, rejected_at}`. `content` is the
 allowlisted object `{version: 1, name, model_id, model_source, system_prompt, tools[key],
-skills[key], knowledge_bases[kb_id], memory{short_term, long_term}, max_iterations,
+skills[key], knowledge_bases[kb_id], memory: disabled|workspace, max_iterations,
 timeout_seconds, summary, requirements_baseline[], assumptions[], manual_tasks[],
 golden_tests[{id, input, expected_response, expected_tools[], forbidden_behavior,
 pass_criteria, evaluator, source}], evaluator_recommendations[]}`; `bindings` is the
 resolved `{name, method, model_id, model_source, tools[ToolRef], skills[s3 path],
-knowledge_bases[KnowledgeBaseRef], memory, max_iterations, timeout_seconds}` (null when
-invalid); `content_hash` = sha256 of canonical `{content, bindings}`. `approval` is
+knowledge_bases[KnowledgeBaseRef], memory{short_term, long_term, memory_id},
+max_iterations, timeout_seconds, resources{gateways{<gateway_id>: {gateway_arn,
+gateway_name, record_id, auth_type, outbound_auth}}, remote_mcp{<name>: {url,
+record_id}}, skills{<key>: {record_id, path, content_digest, object_count}},
+kb_gateway{gateway_id, gateway_arn, oauth_provider_arn} | null, memory{mode, arn},
+execution_role_arn}}` (null when invalid; `outbound_auth` is an identity — provider
+ARN, grant type, scopes — never a credential value); `content_hash` = sha256 of
+canonical `{content, bindings}`. The deploy job carries `{content, bindings}` on its
+payload and re-checks them at job entry (drift → the job fails before any stage). The
+Observability routes (`/api/observability/sessions*`, `/traces*`, `…/evaluate`) hide
+another principal's assistant sessions and answer `404
+observability.session_not_found` / `observability.trace_not_found` for their details. `approval` is
 `{approved_by, approved_at, agent_id, agent_name, agent_status, agent_error,
 deployment_id, job_id, job_status} | null`; the job and agent are ordinary rows readable
 through `GET /api/jobs/{id}` and `GET /api/agents/{id}`. The generic invoke entrances

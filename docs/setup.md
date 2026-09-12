@@ -175,14 +175,23 @@ Harness entrance card and from the SYSTEM PRESETS panel). Paste your Workshop ou
 let the assistant confirm the baseline and ask only the impactful missing questions,
 and review its proposal for **one new managed Harness business agent**. The proposal
 only references tools, S3 skills and knowledge bases that already exist in the
-workspace (APPROVED registry records, ACTIVE managed KBs) and is inert until you click
+workspace (APPROVED registry records, ACTIVE managed KBs) and shows the **exact
+bindings** it will deploy (gateway ARN and auth identity, skill S3 path and content
+digest, the workspace's shared memory or none). It is inert until you click
 **APPROVE & DEPLOY** — a separate, billable action that requires the `agents.deploy`
-permission and creates the agent through the normal deploy job in the workspace's
-account and Region. Editing a proposal creates a new revision that needs its own
-approval; cancelling makes it non-executable. The assistant never edits or deletes
-existing agents and creates no knowledge base, gateway or evaluator — those, and the
-golden tests it recommends, are guidance for manual implementation. Conversations are
-private to the member who opened them, per workspace. **The live smoke of this flow
+permission (re-checked, together with your account and workspace grant, at the moment
+of execution) and creates the agent through the normal deploy job in the workspace's
+account and Region; if any bound resource changed since you reviewed it, the approval
+is refused and the job itself fails closed before touching AWS. Editing a proposal
+creates a new revision that needs its own approval; cancelling makes it
+non-executable. Memory is `disabled` or the workspace's existing shared memory (with
+all its strategies) — nothing in between. Mounting a knowledge base requires the
+workspace's existing KB gateway; where there is none, it is manual work. The assistant
+never edits or deletes existing agents and creates no knowledge base, gateway or
+evaluator — those, and the golden tests it recommends, are guidance for manual
+implementation. Conversations are private to the account that opened them (by
+immutable account id, not by username), per workspace, and are hidden from other
+members in Observability too. **The live smoke of this flow
 (a real conversation, proposal and approval) is still pending.**
 
 ### Escape hatches / 应急开关

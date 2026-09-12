@@ -119,6 +119,7 @@ def create_deployment(
     *,
     skip_register: bool = False,
     payload_extra: dict[str, Any] | None = None,
+    commit: bool = True,
 ) -> tuple[Deployment, Job]:
     """Create the Deployment (stages pending) + Job rows for one deploy run.
 
@@ -128,7 +129,9 @@ def create_deployment(
     unchanged and registry failure must not obscure a successful rollout.
     ``payload_extra`` lands on the Job in the SAME commit as the rows (a caller
     that must pin data to the job — the system-preset release — cannot be left
-    with a runnable job and no pin by a crash between two commits)."""
+    with a runnable job and no pin by a crash between two commits). ``commit=False``
+    leaves the rows flushed in the caller's transaction so the caller can link the
+    freshly minted ids onto its own rows and commit everything at once."""
     # The workspace comes off the agent, not the request: a promotion or resumed
     # job must land in the same environment as the agent it deploys.
     deployment = Deployment(
@@ -152,7 +155,10 @@ def create_deployment(
     db.add(job)
     db.flush()
     deployment.job_id = job.id
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return deployment, job
 
 
@@ -187,6 +193,14 @@ def execute_deploy_job(job_id: str) -> None:
             from app.system_agents.service import assert_job_release_pinned
 
             assert_job_release_pinned(job.payload, agent, ctx.workspace)
+        if (job.payload or {}).get("assistant"):
+            # An assistant-approved job deploys exactly the reviewed bindings or
+            # fails closed before any stage: the pinned gateway auth identity, skill
+            # content digests, KB-gateway prerequisites and memory binding are
+            # re-resolved and compared here (fresh or resumed job alike).
+            from app.assistant.service import assert_job_bindings_pinned
+
+            assert_job_bindings_pinned(job.payload, agent, ctx.workspace)
         ctx.scratch["mode"] = job.payload.get("mode", "create")
 
         done = {s["name"] for s in deployment.stages if s["status"] in ("succeeded", "skipped")}
@@ -294,10 +308,42 @@ def _finish(
     db.commit()
 
 
+# One live worker per deploy job in this process. A repeated approval (or any
+# retry) may re-wake a job that is still `queued` because its first starter
+# failed; the registry makes that a no-op while a worker is alive, so the pipeline
+# never runs twice for one job. Single-host bound, like the uninstall registry.
+_LIVE_WORKERS: dict[str, threading.Thread] = {}
+_LIVE_LOCK = threading.Lock()
+
+
+def live_deploy_worker(job_id: str) -> threading.Thread | None:
+    with _LIVE_LOCK:
+        thread = _LIVE_WORKERS.get(job_id)
+        return thread if thread is not None and thread.is_alive() else None
+
+
 def start_deploy_async(job_id: str) -> threading.Thread:
-    thread = threading.Thread(target=execute_deploy_job, args=(job_id,), daemon=True)
-    thread.start()
-    return thread
+    with _LIVE_LOCK:
+        existing = _LIVE_WORKERS.get(job_id)
+        if existing is not None and existing.is_alive():
+            return existing
+
+        def run() -> None:
+            try:
+                execute_deploy_job(job_id)
+            finally:
+                with _LIVE_LOCK:
+                    if _LIVE_WORKERS.get(job_id) is threading.current_thread():
+                        del _LIVE_WORKERS[job_id]
+
+        thread = threading.Thread(target=run, daemon=True, name=f"deploy-{job_id[:8]}")
+        _LIVE_WORKERS[job_id] = thread
+        try:
+            thread.start()
+        except Exception:
+            _LIVE_WORKERS.pop(job_id, None)
+            raise
+        return thread
 
 
 def resume_pending_jobs() -> list[str]:

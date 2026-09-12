@@ -19,7 +19,7 @@ from app.deployer.pipeline import create_deployment, start_deploy_async
 from app.models.ledger import Agent, Deployment, Job
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import AgentSpec, InvokeRequest, InvokeResponse, RuntimeImportRequest
-from app.services import agent_iam
+from app.services import agent_iam, agent_names
 from app.services.agent_versions import list_agent_versions
 from app.services.agentcore.client import control_client
 from app.services.invoke import invoke_agent_text
@@ -151,22 +151,9 @@ def create_agent(
         )
     # Names are unique per workspace, not per ledger: two environments own their
     # own AgentCore resource namespaces.
-    existing = (
-        db.query(Agent)
-        .filter(
-            Agent.workspace_id == ws.id,
-            Agent.name == spec.name,
-            Agent.status != "deleted",
-        )
-        .first()
-    )
+    existing = agent_names.live_holder(db, ws.id, spec.name)
     if existing:
-        raise AppError(
-            "agent.name_exists",
-            f"an agent named '{spec.name}' already exists",
-            {"agent_id": existing.id},
-            status_code=409,
-        )
+        raise agent_names.name_exists_error(spec.name, existing.id)
     agent = Agent(
         workspace_id=ws.id,
         name=spec.name,
@@ -176,6 +163,9 @@ def create_agent(
     )
     db.add(agent)
     db.flush()
+    # Atomic reservation shared with the assistant approval path: a concurrent
+    # creator of the same name loses here with the same 409, before any job.
+    agent_names.claim_agent_name(db, ws.id, spec.name, agent.id)
     deployment, job = create_deployment(db, agent)
     start_deploy_async(job.id)
     return {"agent": _agent_out(agent), "job_id": job.id, "deployment_id": deployment.id}
@@ -398,6 +388,7 @@ def convert_agent(
     )
     db.add(agent)
     db.flush()
+    agent_names.claim_agent_name(db, ws.id, spec.name, agent.id)
     deployment, job = create_deployment(db, agent)
     start_deploy_async(job.id)
     return {"agent": _agent_out(agent), "job_id": job.id, "deployment_id": deployment.id}
@@ -441,6 +432,7 @@ def delete_agent(
     aws_resource_deleted = _delete_agent_resources(agent, ws.context)
     agent.status = "deleted"
     agent.updated_at = datetime.now(UTC)
+    agent_names.release_agent_name(db, agent.workspace_id, agent.name, agent.id)
     db.commit()
     return {
         "deleted": True,

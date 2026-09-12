@@ -21,6 +21,7 @@ import type {
   AssistantCatalog,
   AssistantConversationDetail,
   AssistantConversationSummary,
+  AssistantMemoryMode,
   AssistantMessage,
   AssistantProposal,
   AssistantProposalContent,
@@ -29,7 +30,12 @@ import type {
   JobInfo,
   StageInfo,
 } from "../lib/api";
-import { api, ApiError, errorMessage } from "../lib/api";
+import {
+  api,
+  ApiError,
+  AUTH_UNAUTHORIZED_EVENT,
+  errorMessage,
+} from "../lib/api";
 import { MODEL_CATALOG, type ModelSource } from "../lib/models";
 import { useWorkspace } from "../workspace/workspace-context";
 
@@ -37,12 +43,18 @@ import { useWorkspace } from "../workspace/workspace-context";
  * Architect assistant (SE-039): a member conversation with the protected
  * `aws-agent-solution-architect` preset that ends in an inert, reviewable proposal
  * for ONE new managed Harness. Discussion never writes AWS; the proposal is shown
- * verbatim; only APPROVE & DEPLOY (a separate authenticated call naming the exact
- * revision + content hash) creates the agent through the normal deploy job.
+ * verbatim with the exact resources it binds to; only APPROVE & DEPLOY (a separate
+ * authenticated call naming the exact revision + content hash) creates the agent
+ * through the normal deploy job.
  *
- * Every asynchronous outcome is checked against the workspace it started in and
- * the mounted state, so a stream, poll or approval finishing after a workspace
- * switch or navigation never lands in the wrong context.
+ * Staleness model: every asynchronous outcome carries the *operation generation* it
+ * started under (a counter bumped on every conversation selection, workspace change
+ * and unmount) and is dropped when the generation moved on — so a slower load of
+ * conversation A can never overwrite the newer selection B, a pending turn or
+ * approval reload cannot pull an old conversation back, and a job poll that
+ * resolves after the user moved on schedules nothing. Load callbacks read `t` and
+ * the toast through refs so a locale change re-renders without re-running mount
+ * effects (which would drop an unsaved draft or a streaming reply).
  */
 
 const STATUS_TONE: Record<AssistantProposalStatus, ChipTone> = {
@@ -55,12 +67,22 @@ const STATUS_TONE: Record<AssistantProposalStatus, ChipTone> = {
 const JOB_POLL_MS = 3000;
 const NAME_RE = /^[a-z][a-z0-9-]{2,47}$/;
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{2,120}$/;
+const PROPOSAL_FENCE_RE =
+  /```launchpad-proposal[ \t]*\r?\n[\s\S]*?\r?\n[ \t]*```/g;
 
 interface LiveMessage {
   role: "user" | "assistant" | "tool" | "error";
   text: string;
   name?: string | null;
   streaming?: boolean;
+}
+
+/** What the approve dialog was opened on — submitted verbatim, never "the latest". */
+interface PinnedApproval {
+  conversationId: string;
+  revision: number;
+  hash: string;
+  name: string;
 }
 
 async function* sseEvents(
@@ -91,6 +113,11 @@ function toLive(rows: AssistantMessage[]): LiveMessage[] {
   return rows.map((m) => ({ role: m.role, text: m.text, name: m.name }));
 }
 
+/** The typed proposal pane shows the block; the transcript shows a pointer instead. */
+function stripProposalBlock(text: string, marker: string): string {
+  return text.replace(PROPOSAL_FENCE_RE, `> ${marker}`);
+}
+
 type EditDraft = Pick<
   AssistantProposalContent,
   | "name"
@@ -106,8 +133,6 @@ type EditDraft = Pick<
 >;
 
 function draftFrom(content: AssistantProposal["content"]): EditDraft {
-  const memory =
-    (content.memory as { short_term?: boolean; long_term?: boolean }) ?? {};
   return {
     name: String(content.name ?? ""),
     model_id: String(content.model_id ?? MODEL_CATALOG.bedrock[0].model_id),
@@ -118,14 +143,19 @@ function draftFrom(content: AssistantProposal["content"]): EditDraft {
     knowledge_bases: Array.isArray(content.knowledge_bases)
       ? content.knowledge_bases.map(String)
       : [],
-    memory: {
-      short_term: memory.short_term ?? true,
-      long_term: memory.long_term ?? false,
-    },
+    memory: content.memory === "workspace" ? "workspace" : "disabled",
     max_iterations: Number(content.max_iterations ?? 10),
     timeout_seconds: Number(content.timeout_seconds ?? 300),
   };
 }
+
+const isUnauthorized = (err: unknown) =>
+  err instanceof ApiError &&
+  (err.code === "http.401" ||
+    err.code === "http.403" ||
+    err.code === "auth.required" ||
+    err.code === "workspace.forbidden" ||
+    err.code === "auth.permission_required");
 
 export function CreateAgentAssistant() {
   const { t, i18n } = useTranslation();
@@ -149,129 +179,159 @@ export function CreateAgentAssistant() {
   const [busy, setBusy] = useState(false);
   const [approving, setApproving] = useState(false);
   const [editing, setEditing] = useState<EditDraft | null>(null);
-  const [confirm, setConfirm] = useState<"approve" | "reject" | null>(null);
-  const [job, setJob] = useState<JobInfo | null>(null);
-  const [agent, setAgent] = useState<AgentInfo | null>(null);
+  const [confirm, setConfirm] = useState<
+    | { kind: "approve"; pin: PinnedApproval }
+    | { kind: "reject"; revision: number }
+    | null
+  >(null);
+  // outcome state is keyed by the approval it was polled for
+  const [polled, setPolled] = useState<{
+    jobId: string;
+    job: JobInfo | null;
+    agent: AgentInfo | null;
+  }>({ jobId: "", job: null, agent: null });
   const threadRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // stale-outcome guard: unmounted or a different workspace ⇒ ignore the result
+  // ---- staleness: workspace scope + operation generation ------------------------
   const alive = useRef(true);
   const scope = useRef(workspaceId);
+  const generation = useRef(0);
+  const bump = useCallback(() => {
+    generation.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    return generation.current;
+  }, []);
   useEffect(() => {
     alive.current = true;
     scope.current = workspaceId;
     return () => {
       alive.current = false;
-      abortRef.current?.abort();
+      bump();
     };
-  }, [workspaceId]);
+  }, [workspaceId, bump]);
   const stillCurrent = useCallback(
-    (startedIn: string | null) => alive.current && scope.current === startedIn,
+    (startedIn: string | null, gen: number) =>
+      alive.current &&
+      scope.current === startedIn &&
+      generation.current === gen,
     [],
   );
+  // refs keep the load callbacks identity-stable across locale changes
+  const tRef = useRef(t);
+  tRef.current = t;
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
   const apiMessage = useCallback(
     (err: unknown) =>
       err instanceof ApiError
-        ? t(`apiErrors.${err.code}`, err.message)
+        ? tRef.current(`apiErrors.${err.code}`, err.message)
         : errorMessage(err),
-    [t],
+    [],
   );
-  const unauthorized = (err: unknown) =>
-    err instanceof ApiError &&
-    (err.code === "http.401" ||
-      err.code === "http.403" ||
-      err.code === "workspace.forbidden" ||
-      err.code === "auth.permission_required");
 
   const loadStatus = useCallback(() => {
     const startedIn = scope.current;
+    const gen = generation.current;
     setStatusError(null);
     void api
       .assistantStatus()
       .then((res) => {
-        if (!stillCurrent(startedIn)) return;
-        setStatus(res);
+        if (stillCurrent(startedIn, gen)) setStatus(res);
       })
       .catch((err: unknown) => {
-        if (!stillCurrent(startedIn)) return;
-        setStatusError(apiMessage(err));
+        if (stillCurrent(startedIn, gen)) setStatusError(apiMessage(err));
       });
   }, [apiMessage, stillCurrent]);
 
   const loadConversations = useCallback(() => {
     const startedIn = scope.current;
+    const gen = generation.current;
     void api
       .assistantConversations()
       .then((res) => {
-        if (stillCurrent(startedIn)) setConversations(res.conversations);
+        if (stillCurrent(startedIn, gen)) setConversations(res.conversations);
       })
       .catch(() => {
         /* the list is secondary; the status panel reports the real failure */
       });
   }, [stillCurrent]);
 
-  const openConversation = useCallback(
+  const setLinked = useCallback(
+    (id: string | null) =>
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (id) next.set("conversation", id);
+          else next.delete("conversation");
+          return next;
+        },
+        { replace: true },
+      ),
+    [setSearchParams],
+  );
+
+  /** Select a conversation: a new operation generation, so every earlier in-flight
+   * load / stream / poll for another conversation is dropped when it resolves. */
+  const selectConversation = useCallback(
     (id: string) => {
       const startedIn = scope.current;
+      const gen = bump();
+      setEditing(null);
+      setConfirm(null);
+      setLinked(id);
       void api
         .assistantConversation(id)
         .then((detail) => {
-          if (!stillCurrent(startedIn)) return;
+          if (!stillCurrent(startedIn, gen)) return;
           setConversation(detail);
           setMessages(toLive(detail.messages));
-          setEditing(null);
-          setSearchParams(
-            (prev) => {
-              const next = new URLSearchParams(prev);
-              next.set("conversation", id);
-              return next;
-            },
-            { replace: true },
-          );
         })
         .catch((err: unknown) => {
-          if (!stillCurrent(startedIn)) return;
-          toast(apiMessage(err));
+          if (!stillCurrent(startedIn, gen)) return;
+          toastRef.current(apiMessage(err));
           if (
             err instanceof ApiError &&
             err.code === "assistant.conversation_not_found"
           ) {
-            setSearchParams(
-              (prev) => {
-                const next = new URLSearchParams(prev);
-                next.delete("conversation");
-                return next;
-              },
-              { replace: true },
-            );
+            setConversation(null);
+            setMessages([]);
+            setLinked(null);
           }
         });
     },
-    [apiMessage, setSearchParams, stillCurrent, toast],
+    [apiMessage, bump, setLinked, stillCurrent],
   );
 
-  // A workspace switch remounts the routed subtree, so component state (draft
-  // input, open conversation) is reset by construction; the reads re-run here.
+  // Workspace (re)mount: reset and re-read. Depends on the workspace only — a
+  // locale change must not run this (it would drop drafts and streams).
   useEffect(() => {
     if (workspaceId === null) return;
     setConversation(null);
     setMessages([]);
-    setJob(null);
-    setAgent(null);
+    setEditing(null);
+    setConfirm(null);
+    setPolled({ jobId: "", job: null, agent: null });
     loadStatus();
     loadConversations();
   }, [loadConversations, loadStatus, workspaceId]);
 
+  // Deep link: opened once per (workspace, linked id) when the assistant is
+  // available and nothing else is selected yet.
+  const bootedLink = useRef<string | null>(null);
   useEffect(() => {
     if (workspaceId === null || !status?.available || !linkedConversation)
       return;
-    if (conversation?.id === linkedConversation) return;
-    openConversation(linkedConversation);
+    const key = `${workspaceId}:${linkedConversation}`;
+    if (bootedLink.current === key || conversation?.id === linkedConversation)
+      return;
+    bootedLink.current = key;
+    selectConversation(linkedConversation);
   }, [
     conversation?.id,
     linkedConversation,
-    openConversation,
+    selectConversation,
     status?.available,
     workspaceId,
   ]);
@@ -280,76 +340,106 @@ export function CreateAgentAssistant() {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
   }, [messages]);
 
-  const latest = useMemo(() => {
-    const rows = conversation?.proposals ?? [];
-    return rows.length ? rows[rows.length - 1] : null;
-  }, [conversation]);
-  const approvedRevision = useMemo(
-    () =>
-      (conversation?.proposals ?? []).find((p) => p.status === "approved") ??
-      null,
-    [conversation],
+  const proposals = useMemo(() => conversation?.proposals ?? [], [conversation]);
+  const latest = useMemo(
+    () => (proposals.length ? proposals[proposals.length - 1] : null),
+    [proposals],
   );
-  const approval: AssistantApproval | null = approvedRevision?.approval ?? null;
+  const approvedRevisions = useMemo(
+    () => proposals.filter((p) => p.status === "approved" && p.approval),
+    [proposals],
+  );
+  // The outcome shown belongs to the latest revision when that one was approved,
+  // otherwise to the most recent approved revision; older approvals are listed.
+  const shownApproved = useMemo(() => {
+    if (latest?.status === "approved") return latest;
+    return approvedRevisions.length
+      ? approvedRevisions[approvedRevisions.length - 1]
+      : null;
+  }, [approvedRevisions, latest]);
+  const approval: AssistantApproval | null = shownApproved?.approval ?? null;
+  const olderApprovals = approvedRevisions.filter(
+    (p) => p.id !== shownApproved?.id,
+  );
 
-  // deployment outcome: poll the ordinary job + agent while the job is live
+  // A dialog opened on revision N is invalidated the moment the latest revision or
+  // its hash changes (a turn completed, an edit landed): never approve a different
+  // review silently. The backend refuses a stale pin anyway; this keeps the UI honest.
   useEffect(() => {
-    if (!approval?.job_id || !approval.agent_id) {
-      setJob(null);
-      setAgent(null);
+    if (!confirm || confirm.kind !== "approve") return;
+    if (
+      !latest ||
+      conversation?.id !== confirm.pin.conversationId ||
+      latest.revision !== confirm.pin.revision ||
+      latest.content_hash !== confirm.pin.hash ||
+      latest.status !== "draft"
+    ) {
+      setConfirm(null);
+      toastRef.current(tRef.current("assistantPage.dialogStale"));
+    }
+  }, [confirm, conversation?.id, latest]);
+
+  // Deployment outcome: poll the ordinary job + agent while the job is live. Keyed
+  // by (generation, job id); a resolve after cleanup neither writes nor reschedules.
+  useEffect(() => {
+    const jobId = approval?.job_id;
+    const agentId = approval?.agent_id;
+    if (!jobId || !agentId) {
+      setPolled({ jobId: "", job: null, agent: null });
       return;
     }
     const startedIn = scope.current;
-    const jobId = approval.job_id;
-    const agentId = approval.agent_id;
+    const gen = generation.current;
+    let cancelled = false;
     let timer: number | undefined;
     const tick = () => {
       void Promise.all([api.getJob(jobId), api.getAgent(agentId)])
         .then(([j, a]) => {
-          if (!stillCurrent(startedIn)) return;
-          setJob(j);
-          setAgent(a);
+          if (cancelled || !stillCurrent(startedIn, gen)) return;
+          setPolled({ jobId, job: j, agent: a });
           if (j.status === "queued" || j.status === "running") {
             timer = window.setTimeout(tick, JOB_POLL_MS);
           }
         })
         .catch(() => {
-          if (!stillCurrent(startedIn)) return;
+          if (cancelled || !stillCurrent(startedIn, gen)) return;
           timer = window.setTimeout(tick, JOB_POLL_MS * 2);
         });
     };
     tick();
     return () => {
+      cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [approval?.agent_id, approval?.job_id, stillCurrent]);
+  }, [approval?.agent_id, approval?.job_id, conversation?.id, stillCurrent]);
+
+  const reload = async (
+    conversationId: string,
+    startedIn: string | null,
+    gen: number,
+  ) => {
+    const detail = await api.assistantConversation(conversationId);
+    if (!stillCurrent(startedIn, gen) || detail.id !== conversationId)
+      return null;
+    setConversation(detail);
+    setMessages(toLive(detail.messages));
+    loadConversations();
+    return detail;
+  };
 
   const newConversation = async () => {
     const startedIn = scope.current;
+    const gen = bump();
     setBusy(true);
     try {
       const detail = await api.assistantCreateConversation();
-      if (!stillCurrent(startedIn)) return;
+      if (!stillCurrent(startedIn, gen)) return;
       setConversation(detail);
       setMessages([]);
       setEditing(null);
-      setConversations((prev) => [
-        {
-          ...detail,
-          catalog: undefined,
-          messages: undefined,
-          proposals: undefined,
-        } as never,
-        ...prev,
-      ]);
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.set("conversation", detail.id);
-          return next;
-        },
-        { replace: true },
-      );
+      setConfirm(null);
+      setLinked(detail.id);
+      loadConversations();
       if (detail.catalog.warnings.length) {
         toast(
           t("assistantPage.catalogWarnings", {
@@ -358,18 +448,19 @@ export function CreateAgentAssistant() {
         );
       }
     } catch (err) {
-      if (!stillCurrent(startedIn)) return;
+      if (!stillCurrent(startedIn, gen)) return;
       toast(apiMessage(err));
       if (err instanceof ApiError && err.code === "assistant.unavailable")
         loadStatus();
     } finally {
-      if (stillCurrent(startedIn)) setBusy(false);
+      if (stillCurrent(startedIn, gen)) setBusy(false);
     }
   };
 
   const send = async () => {
     if (!conversation || !input.trim() || busy) return;
     const startedIn = scope.current;
+    const gen = generation.current;
     const conversationId = conversation.id;
     const prompt = input;
     setInput("");
@@ -401,6 +492,9 @@ export function CreateAgentAssistant() {
         },
       );
       if (!res.ok) {
+        // same session semantics as the typed client: a 401 signs the console out
+        if (res.status === 401)
+          window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
         const body = (await res.json().catch(() => ({}))) as {
           code?: string;
           message?: string;
@@ -413,7 +507,7 @@ export function CreateAgentAssistant() {
       }
       let proposal: AssistantProposal | null = null;
       for await (const evt of sseEvents(res)) {
-        if (!stillCurrent(startedIn)) return;
+        if (!stillCurrent(startedIn, gen)) return;
         const data = evt.data as Record<string, unknown>;
         if (evt.event === "delta") append(String(data.text ?? ""));
         else if (evt.event === "tool") {
@@ -436,25 +530,27 @@ export function CreateAgentAssistant() {
         } else if (evt.event === "proposal")
           proposal = data as unknown as AssistantProposal;
         else if (evt.event === "error") {
+          const code = typeof data.code === "string" ? data.code : null;
           setMessages((m) => [
             ...m.filter(
               (x) => !(x.role === "assistant" && x.streaming && !x.text),
             ),
-            { role: "error", text: String(data.message ?? "") },
+            {
+              role: "error",
+              text: code
+                ? tRef.current(`apiErrors.${code}`, String(data.message ?? ""))
+                : String(data.message ?? ""),
+            },
           ]);
         }
       }
-      if (!stillCurrent(startedIn)) return;
+      if (!stillCurrent(startedIn, gen)) return;
       setMessages((m) => m.map((x) => ({ ...x, streaming: false })));
       // re-read the server's transcript + proposals: the ledger is the truth
-      const detail = await api.assistantConversation(conversationId);
-      if (!stillCurrent(startedIn)) return;
-      setConversation(detail);
-      setMessages(toLive(detail.messages));
-      if (proposal) setEditing(null);
-      loadConversations();
+      await reload(conversationId, startedIn, gen);
+      if (proposal && stillCurrent(startedIn, gen)) setEditing(null);
     } catch (err) {
-      if (!stillCurrent(startedIn) || controller.signal.aborted) return;
+      if (!stillCurrent(startedIn, gen) || controller.signal.aborted) return;
       setMessages((m) => [
         ...m.filter((x) => !(x.role === "assistant" && x.streaming && !x.text)),
         {
@@ -462,11 +558,11 @@ export function CreateAgentAssistant() {
           text: t("assistantPage.turnFailed", { msg: apiMessage(err) }),
         },
       ]);
-      if (unauthorized(err)) toast(t("assistantPage.expiredSession"));
+      if (isUnauthorized(err)) toast(t("assistantPage.expiredSession"));
       else if (err instanceof ApiError && err.code === "assistant.unavailable")
         loadStatus();
     } finally {
-      if (stillCurrent(startedIn)) setBusy(false);
+      if (stillCurrent(startedIn, gen)) setBusy(false);
       if (abortRef.current === controller) abortRef.current = null;
     }
   };
@@ -474,37 +570,33 @@ export function CreateAgentAssistant() {
   const refreshCatalog = async () => {
     if (!conversation) return;
     const startedIn = scope.current;
+    const gen = generation.current;
+    const conversationId = conversation.id;
     try {
-      const res = await api.assistantRefreshCatalog(conversation.id);
-      if (!stillCurrent(startedIn)) return;
-      setConversation((c) => (c ? { ...c, catalog: res.catalog } : c));
+      const res = await api.assistantRefreshCatalog(conversationId);
+      if (!stillCurrent(startedIn, gen)) return;
+      setConversation((c) =>
+        c && c.id === conversationId ? { ...c, catalog: res.catalog } : c,
+      );
       toast(t("assistantPage.catalogChanged"), "good");
     } catch (err) {
-      if (stillCurrent(startedIn)) toast(apiMessage(err));
+      if (stillCurrent(startedIn, gen)) toast(apiMessage(err));
     }
   };
 
-  const reload = async (conversationId: string, startedIn: string | null) => {
-    const detail = await api.assistantConversation(conversationId);
-    if (!stillCurrent(startedIn)) return null;
-    setConversation(detail);
-    setMessages(toLive(detail.messages));
-    loadConversations();
-    return detail;
-  };
-
-  const approve = async () => {
-    if (!conversation || !latest) return;
+  const approve = async (pin: PinnedApproval) => {
     const startedIn = scope.current;
+    const gen = generation.current;
     setConfirm(null);
+    if (conversation?.id !== pin.conversationId) return;
     setApproving(true);
     try {
       const res = await api.assistantApproveProposal(
-        conversation.id,
-        latest.revision,
-        latest.content_hash,
+        pin.conversationId,
+        pin.revision,
+        pin.hash,
       );
-      if (!stillCurrent(startedIn)) return;
+      if (!stillCurrent(startedIn, gen)) return;
       toast(
         res.started
           ? t("assistantPage.approvedToast", {
@@ -513,29 +605,33 @@ export function CreateAgentAssistant() {
           : t("assistantPage.alreadyApprovedToast"),
         "good",
       );
-      await reload(conversation.id, startedIn);
+      await reload(pin.conversationId, startedIn, gen);
     } catch (err) {
-      if (!stillCurrent(startedIn)) return;
+      if (!stillCurrent(startedIn, gen)) return;
       toast(apiMessage(err));
-      if (unauthorized(err)) loadStatus();
-      else await reload(conversation.id, startedIn).catch(() => null);
+      if (isUnauthorized(err)) loadStatus();
+      else await reload(pin.conversationId, startedIn, gen).catch(() => null);
     } finally {
-      if (stillCurrent(startedIn)) setApproving(false);
+      if (stillCurrent(startedIn, gen)) setApproving(false);
     }
   };
 
-  const reject = async () => {
-    if (!conversation || !latest) return;
+  const reject = async (revision: number) => {
+    if (!conversation) return;
     const startedIn = scope.current;
+    const gen = generation.current;
+    const conversationId = conversation.id;
     setConfirm(null);
     try {
-      await api.assistantRejectProposal(conversation.id, latest.revision);
-      if (!stillCurrent(startedIn)) return;
+      await api.assistantRejectProposal(conversationId, revision);
+      if (!stillCurrent(startedIn, gen)) return;
       toast(t("assistantPage.rejectedToast"), "good");
       setEditing(null);
-      await reload(conversation.id, startedIn);
+      await reload(conversationId, startedIn, gen);
     } catch (err) {
-      if (stillCurrent(startedIn)) toast(apiMessage(err));
+      if (!stillCurrent(startedIn, gen)) return;
+      toast(apiMessage(err));
+      await reload(conversationId, startedIn, gen).catch(() => null);
     }
   };
 
@@ -559,6 +655,8 @@ export function CreateAgentAssistant() {
       return;
     }
     const startedIn = scope.current;
+    const gen = generation.current;
+    const conversationId = conversation.id;
     const base = latest.content;
     const content: AssistantProposalContent = {
       version: 1,
@@ -575,22 +673,22 @@ export function CreateAgentAssistant() {
         : [],
     };
     try {
-      const res = await api.assistantEditProposal(conversation.id, content);
-      if (!stillCurrent(startedIn)) return;
+      const res = await api.assistantEditProposal(conversationId, content);
+      if (!stillCurrent(startedIn, gen)) return;
       toast(
         t("assistantPage.editSavedToast", { n: res.proposal.revision }),
         "good",
       );
       setEditing(null);
-      await reload(conversation.id, startedIn);
+      await reload(conversationId, startedIn, gen);
     } catch (err) {
-      if (stillCurrent(startedIn)) toast(apiMessage(err));
+      if (stillCurrent(startedIn, gen)) toast(apiMessage(err));
     }
   };
 
   const canDeploy =
     (status?.can_deploy ?? can("agents.deploy")) &&
-    status?.deploy_requirements.length === 0;
+    (status?.deploy_requirements.length ?? 0) === 0;
   const deployReason = !status?.can_deploy
     ? t("assistantPage.noDeployPermission")
     : status.deploy_requirements.length
@@ -600,7 +698,6 @@ export function CreateAgentAssistant() {
       : undefined;
   const dateLabel = (iso: string | null) =>
     iso ? new Date(iso).toLocaleString(i18n.language) : "";
-
   const meta = status
     ? t("assistantPage.meta", {
         label: status.preset.label,
@@ -608,6 +705,7 @@ export function CreateAgentAssistant() {
         region: status.region,
       })
     : undefined;
+  const proposalMarker = t("assistantPage.proposalInText");
 
   return (
     <section data-testid="assistant-page">
@@ -711,8 +809,9 @@ export function CreateAgentAssistant() {
                     key={c.id}
                     type="button"
                     className={`selchip${conversation?.id === c.id ? " on" : ""}`}
-                    onClick={() => openConversation(c.id)}
+                    onClick={() => selectConversation(c.id)}
                     data-testid={`conversation-${c.id}`}
+                    data-selected={conversation?.id === c.id ? "true" : "false"}
                   >
                     {(c.title || c.id.slice(0, 8)).slice(0, 40)}
                     {c.proposal_status && (
@@ -726,6 +825,7 @@ export function CreateAgentAssistant() {
               className="thread assist-thread"
               ref={threadRef}
               data-testid="assistant-thread"
+              data-conversation={conversation?.id ?? ""}
             >
               {!conversation && (
                 <div className="empty">{t("assistantPage.noConversation")}</div>
@@ -742,7 +842,11 @@ export function CreateAgentAssistant() {
                     </div>
                   </div>
                 ) : msg.role === "assistant" ? (
-                  <div key={i} className="msg agent">
+                  <div
+                    key={i}
+                    className="msg agent"
+                    data-testid={msg.streaming ? "streaming-reply" : undefined}
+                  >
                     <div className="who">
                       {t("assistantPage.assistant")}
                       {msg.streaming
@@ -750,7 +854,13 @@ export function CreateAgentAssistant() {
                         : ""}
                     </div>
                     <div className="bub">
-                      <Markdown text={msg.text} />
+                      <Markdown
+                        text={
+                          msg.streaming
+                            ? msg.text
+                            : stripProposalBlock(msg.text, proposalMarker)
+                        }
+                      />
                       {msg.streaming && <span className="caret" />}
                     </div>
                   </div>
@@ -851,6 +961,7 @@ export function CreateAgentAssistant() {
               <ProposalEditor
                 draft={editing}
                 catalog={conversation.catalog}
+                capabilities={status.capabilities}
                 errors={editErrors(editing)}
                 onChange={setEditing}
               />
@@ -911,19 +1022,34 @@ export function CreateAgentAssistant() {
                       {(latest.status === "draft" ||
                         latest.status === "invalid") && (
                         <Btn
-                          onClick={() => setConfirm("reject")}
+                          onClick={() =>
+                            setConfirm({
+                              kind: "reject",
+                              revision: latest.revision,
+                            })
+                          }
                           data-testid="proposal-reject"
                         >
                           {t("assistantPage.reject")}
                         </Btn>
                       )}
                       <span className="spacer" />
-                      {latest.status === "draft" && (
+                      {latest.status === "draft" && conversation && (
                         <Btn
                           primary
                           disabled={!canDeploy || approving}
                           disabledReason={deployReason}
-                          onClick={() => setConfirm("approve")}
+                          onClick={() =>
+                            setConfirm({
+                              kind: "approve",
+                              pin: {
+                                conversationId: conversation.id,
+                                revision: latest.revision,
+                                hash: latest.content_hash,
+                                name: String(latest.content.name ?? ""),
+                              },
+                            })
+                          }
                           data-testid="proposal-approve"
                         >
                           {approving
@@ -936,36 +1062,64 @@ export function CreateAgentAssistant() {
                 </div>
               </>
             )}
-            {approval && (
+            {approval && shownApproved && (
               <Outcome
+                revision={shownApproved.revision}
                 approval={approval}
-                job={job}
-                agent={agent}
+                job={polled.jobId === approval.job_id ? polled.job : null}
+                agent={polled.jobId === approval.job_id ? polled.agent : null}
                 dateLabel={dateLabel}
               />
+            )}
+            {olderApprovals.length > 0 && (
+              <div className="assist-section" data-testid="outcome-history">
+                <h4>{t("assistantPage.outcomeHistory")}</h4>
+                <ul className="mono" style={{ fontSize: 11 }}>
+                  {olderApprovals.map((p) => (
+                    <li
+                      key={p.id}
+                      data-testid={`outcome-history-${p.revision}`}
+                    >
+                      {t("assistantPage.revision", { n: p.revision })} ·{" "}
+                      {p.approval?.agent_name} ·{" "}
+                      {String(p.approval?.agent_status ?? "").toUpperCase()} ·
+                      job {(p.approval?.job_id ?? "").slice(0, 8)} ·{" "}
+                      {String(p.approval?.job_status ?? "").toUpperCase()}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
           </Panel>
         </div>
       )}
 
       <ConfirmDialog
-        open={confirm === "approve" && !!latest}
-        title={t("assistantPage.approveTitle", { n: latest?.revision ?? 0 })}
+        open={confirm?.kind === "approve"}
+        title={t("assistantPage.approveTitle", {
+          n: confirm?.kind === "approve" ? confirm.pin.revision : 0,
+        })}
         body={t("assistantPage.approveBody", {
-          name: String(latest?.content.name ?? ""),
+          name: confirm?.kind === "approve" ? confirm.pin.name : "",
           account: status?.account_id ?? "",
           region: status?.region ?? "",
         })}
         confirmLabel={t("assistantPage.approveConfirm")}
-        onConfirm={() => void approve()}
+        onConfirm={() => {
+          if (confirm?.kind === "approve") void approve(confirm.pin);
+        }}
         onCancel={() => setConfirm(null)}
       />
       <ConfirmDialog
-        open={confirm === "reject" && !!latest}
+        open={confirm?.kind === "reject"}
         title={t("assistantPage.rejectTitle")}
-        body={t("assistantPage.rejectBody", { n: latest?.revision ?? 0 })}
+        body={t("assistantPage.rejectBody", {
+          n: confirm?.kind === "reject" ? confirm.revision : 0,
+        })}
         confirmLabel={t("assistantPage.rejectConfirm")}
-        onConfirm={() => void reject()}
+        onConfirm={() => {
+          if (confirm?.kind === "reject") void reject(confirm.revision);
+        }}
         onCancel={() => setConfirm(null)}
       />
     </section>
@@ -984,6 +1138,7 @@ function CatalogSummary({
     items.length
       ? items.map((i) => i.name || i.key || i.kb_id).join(", ")
       : t("assistantPage.catalogNone");
+  const res = catalog.resources;
   return (
     <div
       className="assist-section"
@@ -1014,7 +1169,20 @@ function CatalogSummary({
       </div>
       <div className="kv">
         <span className="k">{t("assistantPage.catalogKbs")}</span>
-        <span className="v">{names(catalog.knowledge_bases)}</span>
+        <span className="v">
+          {names(catalog.knowledge_bases)}
+          {res && !(res.kb_gateway_id && res.oauth_provider_arn)
+            ? ` · ${t("assistantPage.kbGatewayMissing")}`
+            : ""}
+        </span>
+      </div>
+      <div className="kv">
+        <span className="k">{t("assistantPage.field.memory")}</span>
+        <span className="v">
+          {res?.memory_arn
+            ? t("assistantPage.memoryWorkspaceAvailable")
+            : t("assistantPage.memoryNoShared")}
+        </span>
       </div>
       {catalog.warnings.length > 0 && (
         <div className="dim mono" style={{ fontSize: 10.5 }}>
@@ -1052,16 +1220,10 @@ function ProposalView({
       (kb ? `${kb.name || kb.kb_id} (${kb.kb_id})` : key)
     );
   };
-  const memory =
-    (c.memory as { short_term?: boolean; long_term?: boolean } | undefined) ??
-    {};
   const memoryLabel =
-    [
-      memory.short_term ? t("assistantPage.memoryShort") : null,
-      memory.long_term ? t("assistantPage.memoryLong") : null,
-    ]
-      .filter(Boolean)
-      .join(" + ") || t("assistantPage.memoryOff");
+    c.memory === "workspace"
+      ? t("assistantPage.memoryWorkspace")
+      : t("assistantPage.memoryDisabled");
   const chips = (keys: string[], testid: string) =>
     keys.length ? (
       <span className="selchips" data-testid={testid}>
@@ -1075,6 +1237,16 @@ function ProposalView({
       <span className="v">{t("assistantPage.none")}</span>
     );
   const golden = Array.isArray(c.golden_tests) ? c.golden_tests : [];
+  const b = proposal.bindings;
+  const authLabel = (auth: Record<string, unknown> | null) => {
+    const oauth = (auth?.oauth ?? null) as {
+      providerArn?: string;
+      grantType?: string;
+    } | null;
+    if (oauth)
+      return `oauth · ${oauth.grantType ?? ""} · ${(oauth.providerArn ?? "").split("/").slice(-1)[0]}`;
+    return auth ? Object.keys(auth).join(",") : "none";
+  };
   return (
     <div
       data-testid="proposal-view"
@@ -1133,7 +1305,9 @@ function ProposalView({
       </div>
       <div className="kv">
         <span className="k">{t("assistantPage.field.memory")}</span>
-        <span className="v">{memoryLabel}</span>
+        <span className="v" data-testid="proposal-memory">
+          {memoryLabel}
+        </span>
       </div>
       <div className="kv">
         <span className="k">
@@ -1150,31 +1324,41 @@ function ProposalView({
           {account} · {region} · harness
         </span>
       </div>
-      {proposal.bindings && (
+      {b && (
         <div className="assist-section" data-testid="proposal-bindings">
           <h4>{t("assistantPage.bindings")}</h4>
           <ul className="mono" style={{ fontSize: 11 }}>
-            {proposal.bindings.tools.map((tool) => (
-              <li key={`${tool.type}:${tool.name}`}>
-                {tool.type} · {tool.name} →{" "}
-                {tool.type === "mcp"
-                  ? tool.config.url
-                  : `record ${tool.config.record_id} · gateway ${tool.config.gateway_id}`}
+            {Object.entries(b.resources?.gateways ?? {}).map(([id, g]) => (
+              <li key={`gw-${id}`}>
+                gateway · {g.gateway_name ?? id} → {g.gateway_arn} ·{" "}
+                {t("assistantPage.bindingsAuth")} {authLabel(g.outbound_auth)}
               </li>
             ))}
-            {proposal.bindings.skills.map((path) => (
-              <li key={path}>skill → {path}</li>
+            {Object.entries(b.resources?.remote_mcp ?? {}).map(([name, m]) => (
+              <li key={`mcp-${name}`}>
+                mcp · {name} → {m.url}
+              </li>
             ))}
-            {proposal.bindings.knowledge_bases.map((kb) => (
+            {Object.entries(b.resources?.skills ?? {}).map(([key, s]) => (
+              <li key={`skill-${key}`}>
+                skill · {key} → {s.path} · {t("assistantPage.bindingsDigest")}{" "}
+                {(s.content_digest ?? "").slice(0, 12)}
+                {s.object_count != null ? ` (${s.object_count})` : ""}
+              </li>
+            ))}
+            {b.knowledge_bases.map((kb) => (
               <li key={kb.kb_id}>
                 kb → {kb.kb_id}
                 {kb.name ? ` (${kb.name})` : ""}
+                {b.resources?.kb_gateway
+                  ? ` · via ${b.resources.kb_gateway.gateway_id}`
+                  : ""}
               </li>
             ))}
-            {proposal.bindings.tools.length +
-              proposal.bindings.skills.length +
-              proposal.bindings.knowledge_bases.length ===
-              0 && <li>{t("assistantPage.none")}</li>}
+            <li data-testid="binding-memory">
+              memory → {b.resources?.memory.mode}
+              {b.resources?.memory.arn ? ` · ${b.resources.memory.arn}` : ""}
+            </li>
           </ul>
         </div>
       )}
@@ -1268,11 +1452,13 @@ function ProposalView({
 function ProposalEditor({
   draft,
   catalog,
+  capabilities,
   errors,
   onChange,
 }: {
   draft: EditDraft;
   catalog: AssistantCatalog;
+  capabilities: AssistantStatus["capabilities"];
   errors: Record<string, boolean>;
   onChange: (next: EditDraft) => void;
 }) {
@@ -1292,6 +1478,7 @@ function ProposalEditor({
   const bad = (k: string): CSSProperties | undefined =>
     errors[k] ? { borderColor: "var(--crit)" } : undefined;
   const models = MODEL_CATALOG[draft.model_source];
+  const memoryModes: AssistantMemoryMode[] = ["disabled", "workspace"];
   return (
     <div data-testid="proposal-editor">
       <div className="dim" style={{ fontSize: 11, marginBottom: 10 }}>
@@ -1407,6 +1594,12 @@ function ProposalEditor({
               type="button"
               className={`selchip${draft.knowledge_bases.includes(x.kb_id) ? " on" : ""}`}
               onClick={() => toggle("knowledge_bases", x.kb_id)}
+              disabled={!capabilities.kb_gateway}
+              title={
+                capabilities.kb_gateway
+                  ? undefined
+                  : t("assistantPage.kbGatewayMissing")
+              }
             >
               {x.name || x.kb_id}
             </button>
@@ -1419,30 +1612,25 @@ function ProposalEditor({
       <div className="field">
         <label>{t("assistantPage.field.memory")}</label>
         <div className="selchips">
-          <button
-            type="button"
-            className={`selchip${draft.memory.short_term ? " on" : ""}`}
-            onClick={() =>
-              set("memory", {
-                ...draft.memory,
-                short_term: !draft.memory.short_term,
-              })
-            }
-          >
-            {t("assistantPage.memoryShort")}
-          </button>
-          <button
-            type="button"
-            className={`selchip${draft.memory.long_term ? " on" : ""}`}
-            onClick={() =>
-              set("memory", {
-                ...draft.memory,
-                long_term: !draft.memory.long_term,
-              })
-            }
-          >
-            {t("assistantPage.memoryLong")}
-          </button>
+          {memoryModes.map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={`selchip${draft.memory === mode ? " on" : ""}`}
+              onClick={() => set("memory", mode)}
+              disabled={mode === "workspace" && !capabilities.shared_memory}
+              title={
+                mode === "workspace" && !capabilities.shared_memory
+                  ? t("assistantPage.memoryNoShared")
+                  : undefined
+              }
+              data-testid={`edit-memory-${mode}`}
+            >
+              {mode === "workspace"
+                ? t("assistantPage.memoryWorkspace")
+                : t("assistantPage.memoryDisabled")}
+            </button>
+          ))}
         </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -1478,11 +1666,13 @@ function ProposalEditor({
 }
 
 function Outcome({
+  revision,
   approval,
   job,
   agent,
   dateLabel,
 }: {
+  revision: number;
   approval: AssistantApproval;
   job: JobInfo | null;
   agent: AgentInfo | null;
@@ -1501,8 +1691,13 @@ function Outcome({
       className="assist-section assist-outcome"
       data-testid="deploy-outcome"
       data-job-status={jobStatus ?? ""}
+      data-revision={revision}
+      data-job={approval.job_id ?? ""}
     >
-      <h4>{t("assistantPage.outcomeTitle")}</h4>
+      <h4>
+        {t("assistantPage.outcomeTitle")} ·{" "}
+        {t("assistantPage.revision", { n: revision })}
+      </h4>
       <div className="dim mono" style={{ fontSize: 10.5 }}>
         {t("assistantPage.outcomeApprovedBy", {
           who: approval.approved_by ?? "",
@@ -1511,14 +1706,14 @@ function Outcome({
       </div>
       <div className="kv">
         <span className="k">{t("assistantPage.outcomeAgent")}</span>
-        <span className="v">
+        <span className="v" data-testid="outcome-agent">
           {approval.agent_name ?? agent?.name ?? ""} ·{" "}
           <Chip tone={tone}>{String(agentStatus ?? "").toUpperCase()}</Chip>
         </span>
       </div>
       <div className="kv">
         <span className="k">{t("assistantPage.outcomeJob")}</span>
-        <span className="v">
+        <span className="v" data-testid="outcome-job">
           {(approval.job_id ?? "").slice(0, 8)} ·{" "}
           {String(jobStatus ?? "").toUpperCase()}
         </span>
@@ -1572,19 +1767,13 @@ function Outcome({
       </div>
       <div className="assist-actions">
         {approval.agent_id && (
-          <Link
-            className="assist-link"
-            style={{ marginTop: 0 }}
-            to="/create"
-            data-testid="open-agent"
-          >
+          <Link className="assist-link" to="/create" data-testid="open-agent">
             {t("assistantPage.openAgent")}
           </Link>
         )}
         {succeeded && approval.agent_id && (
           <Link
             className="assist-link"
-            style={{ marginTop: 0 }}
             to={`/chat?agent=${encodeURIComponent(approval.agent_id)}`}
             data-testid="open-chat"
           >

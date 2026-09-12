@@ -598,8 +598,12 @@ export interface AssistantStatus {
   /** the caller holds `agents.deploy` (approval rides that permission) */
   can_deploy: boolean;
   deploy_requirements: { code: string; message: string }[];
+  /** workspace prerequisites a proposal may bind to (never created by the assistant) */
+  capabilities: { shared_memory: boolean; kb_gateway: boolean };
   is_admin: boolean;
   owner: string;
+  /** the immutable principal conversations are bound to */
+  principal: string;
 }
 
 export interface AssistantCatalogTool {
@@ -614,11 +618,21 @@ export interface AssistantCatalogTool {
 export interface AssistantCatalog {
   fetched_at: string;
   tools: AssistantCatalogTool[];
-  skills: { key: string; name: string; description: string }[];
+  skills: { key: string; name: string; description: string; content_digest?: string | null }[];
   knowledge_bases: { kb_id: string; name: string; description: string }[];
   warnings: string[];
+  resources?: {
+    memory_arn: string | null;
+    kb_gateway_id: string | null;
+    kb_gateway_arn: string | null;
+    oauth_provider_arn: string | null;
+    execution_role_arn: string | null;
+  };
   target?: { workspace_id: string; account_id: string; region: string };
 }
+
+/** The only memory choices the Harness API can enforce. */
+export type AssistantMemoryMode = "disabled" | "workspace";
 
 export interface AssistantGoldenTest {
   id: string;
@@ -641,7 +655,7 @@ export interface AssistantProposalContent {
   tools: string[];
   skills: string[];
   knowledge_bases: string[];
-  memory: { short_term: boolean; long_term: boolean };
+  memory: AssistantMemoryMode;
   max_iterations: number;
   timeout_seconds: number;
   summary?: string;
@@ -663,6 +677,27 @@ export interface AssistantBindings {
   memory: { short_term: boolean; long_term: boolean; memory_id: string | null };
   max_iterations: number;
   timeout_seconds: number;
+  /** deployment-relevant identity of every referenced resource (no secret values) */
+  resources: {
+    gateways: Record<
+      string,
+      {
+        gateway_arn: string | null;
+        gateway_name: string | null;
+        record_id: string;
+        auth_type: string | null;
+        outbound_auth: Record<string, unknown> | null;
+      }
+    >;
+    remote_mcp: Record<string, { url: string; record_id: string | null }>;
+    skills: Record<
+      string,
+      { record_id: string | null; path: string; content_digest: string | null; object_count: number | null }
+    >;
+    kb_gateway: { gateway_id: string | null; gateway_arn: string | null; oauth_provider_arn: string | null } | null;
+    memory: { mode: AssistantMemoryMode; arn: string | null };
+    execution_role_arn: string | null;
+  };
 }
 
 export type AssistantProposalStatus = "draft" | "invalid" | "approved" | "rejected" | "superseded";
@@ -712,6 +747,8 @@ export interface AssistantConversationSummary {
   id: string;
   title: string;
   turns: number;
+  /** the turn number currently streaming, when one is */
+  turn_in_progress: number | null;
   status: "open" | "archived";
   proposal_status: AssistantProposalStatus | null;
   proposal_revision: number | null;

@@ -2026,7 +2026,12 @@
     "assistant.proposal_already_approved": "An approved proposal cannot be cancelled; its deployment already exists.",
     "assistant.workspace_not_ready": "This workspace is not ready to deploy yet.",
     "assistant.bindings_changed": "The resources behind this proposal changed since it was reviewed — refresh the catalog and review a new revision.",
-    "assistant.conversation_full": "This conversation reached its size limit — start a new one."
+    "assistant.conversation_full": "This conversation reached its size limit — start a new one.",
+    "assistant.turn_in_progress": "Another turn of this conversation is still streaming — wait for it to finish.",
+    "assistant.prompt_too_large": "The message is too large for one turn — shorten it or split it.",
+    "assistant.proposal_too_large": "The proposal exceeds the size limit.",
+    "observability.session_not_found": "Session not found.",
+    "observability.trace_not_found": "Trace not found."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",
@@ -3999,9 +4004,6 @@
     "field.iterations": "MAX ITERATIONS",
     "field.timeout": "TIMEOUT (S)",
     "field.target": "TARGET",
-    "memoryShort": "short-term",
-    "memoryLong": "long-term",
-    "memoryOff": "disabled",
     "none": "—",
     "summary": "SUMMARY",
     "baseline": "REQUIREMENTS BASELINE",
@@ -4055,6 +4057,16 @@
     "expiredSession": "Your session expired or you no longer have access — sign in again and reopen the assistant.",
     "workspaceChanged": "Workspace changed — drafts belong to the workspace they were written in.",
     "catalogChanged": "The catalog was refreshed. Proposals referencing removed resources will be re-checked at approval.",
-    "bindings": "EXACT BINDINGS (WHAT WILL BE DEPLOYED)"
+    "bindings": "EXACT BINDINGS (WHAT WILL BE DEPLOYED)",
+    "proposalInText": "_[structured proposal received — review it in the PROPOSAL panel]_",
+    "dialogStale": "The proposal changed while the confirmation was open; nothing was approved. Review the latest revision.",
+    "outcomeHistory": "EARLIER APPROVALS",
+    "memoryWorkspace": "workspace shared memory (all configured strategies)",
+    "memoryDisabled": "disabled (no memory)",
+    "memoryWorkspaceAvailable": "shared memory available",
+    "memoryNoShared": "this workspace has no shared memory — only “disabled” is possible",
+    "kbGatewayMissing": "no ready KB gateway here — mounting a KB is manual work",
+    "bindingsAuth": "auth:",
+    "bindingsDigest": "content"
   }
 }
