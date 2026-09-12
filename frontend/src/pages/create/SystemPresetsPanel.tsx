@@ -13,11 +13,13 @@ const STATUS_TONE: Record<SystemPresetStatus, ChipTone> = {
   configuration_required: "muted",
   not_installed: "muted",
   deploying: "warn",
+  uninstalling: "warn",
   active: "good",
   failed: "crit",
 };
 
-const TERMINAL: SystemPresetStatus[] = ["active", "failed"];
+const TERMINAL: SystemPresetStatus[] = ["active", "failed", "not_installed"];
+const IN_FLIGHT: SystemPresetStatus[] = ["deploying", "uninstalling"];
 const POLL_MS = 4000;
 
 type Operation = "install" | "repair" | "uninstall";
@@ -88,10 +90,14 @@ export function SystemPresetsPanel({
       setPresets(rows);
       setError(null);
       // a preset that just left `deploying` changes the agent list too
-      const converged = rows.some(
-        (row) =>
-          previousStatuses.current[row.key] === "deploying" && TERMINAL.includes(row.status),
-      );
+      const converged = rows.some((row) => {
+        const before = previousStatuses.current[row.key];
+        const settled = TERMINAL.includes(row.status);
+        // a failed uninstall keeps `uninstalling` with a failed job — also terminal
+        const uninstallSettled =
+          row.status === "uninstalling" && row.operation?.job_status === "failed";
+        return before !== undefined && IN_FLIGHT.includes(before) && (settled || uninstallSettled);
+      });
       previousStatuses.current = Object.fromEntries(rows.map((row) => [row.key, row.status]));
       if (converged) onChangedRef.current?.();
     },
@@ -122,44 +128,42 @@ export function SystemPresetsPanel({
     if (workspaceId === null) return;
     load();
   }, [load, workspaceId]);
-  // a deploying preset settles in ~30 s; poll the ledger read until it does
-  const deploying = (presets ?? []).some((p) => p.status === "deploying");
+  // a deploying / uninstalling preset settles in ~30 s; poll the ledger read until
+  // it does (a failed uninstall stops polling: its job is no longer live)
+  const inFlight = (presets ?? []).some(
+    (p) =>
+      p.status === "deploying" ||
+      (p.status === "uninstalling" && p.operation?.job_status !== "failed"),
+  );
   useEffect(() => {
-    if (!deploying) return;
+    if (!inFlight) return;
     const timer = window.setInterval(load, POLL_MS);
     return () => window.clearInterval(timer);
-  }, [deploying, load]);
+  }, [inFlight, load]);
 
   const run = async (kind: Operation, preset: SystemPresetInfo) => {
     const startedIn = scope.current;
     setBusy(preset.key);
     try {
       if (kind === "uninstall") {
-        await api.uninstallSystemPreset(preset.key);
+        const res = await api.uninstallSystemPreset(preset.key);
         if (!stillCurrent(startedIn)) return;
-        // consume the outcome: the row is gone even if the follow-up GET fails
+        // consume the outcome: the row is now `uninstalling` with a job, whatever the
+        // follow-up GET does; the poll below carries it to not_installed or failure
         setPresets((prev) =>
-          (prev ?? []).map((row) =>
-            row.key === preset.key
-              ? {
-                  ...row,
-                  status: "not_installed",
-                  agent_id: null,
-                  agent_status: null,
-                  job_id: null,
-                  deployment_id: null,
-                  deployment_status: null,
-                  installed_skill_version: null,
-                  update_available: false,
-                  error: null,
-                  can_install: isAdmin && row.requirements.length === 0 && !row.name_collision,
-                  can_repair: false,
-                  can_uninstall: false,
-                }
-              : row,
-          ),
+          (prev ?? []).map((row) => (row.key === preset.key ? res.preset : row)),
         );
-        toast(t("create.system.uninstalled", { name: preset.label }), "good");
+        toast(
+          t(
+            res.started
+              ? res.attempt > 1
+                ? "create.system.uninstallRetried"
+                : "create.system.uninstallStarted"
+              : "create.system.uninstallInFlight",
+            { name: preset.label },
+          ),
+          "good",
+        );
       } else {
         const res = await api.installSystemPreset(
           preset.key,
@@ -279,6 +283,34 @@ export function SystemPresetsPanel({
                 <span className="mono" style={{ fontSize: 11 }}>{preset.error}</span>
               </div>
             )}
+            {preset.operation && (
+              <div
+                className="note"
+                style={
+                  preset.operation.job_status === "failed" ? { borderColor: "var(--crit)" } : undefined
+                }
+                data-testid="preset-operation"
+                data-job-status={preset.operation.job_status}
+              >
+                <span className="i">{preset.operation.job_status === "failed" ? "[✕]" : "[⟳]"}</span>
+                <span>
+                  {t(
+                    preset.operation.job_status === "failed"
+                      ? "create.system.uninstallFailed"
+                      : "create.system.uninstallRunning",
+                    { attempt: preset.operation.attempt, job: preset.operation.job_id.slice(0, 8) },
+                  )}
+                  {preset.operation.error && (
+                    <>
+                      {" "}
+                      <span className="mono" style={{ fontSize: 11 }}>
+                        {preset.operation.error}
+                      </span>
+                    </>
+                  )}
+                </span>
+              </div>
+            )}
             {blockers && (
               <div className="note" data-testid="preset-reason">
                 <span className="i">[i]</span>
@@ -308,7 +340,7 @@ export function SystemPresetsPanel({
                   {t("create.system.install")}
                 </Btn>
               )}
-              {installed && preset.status !== "deploying" && (
+              {installed && preset.status !== "deploying" && preset.status !== "uninstalling" && (
                 <Btn
                   data-testid={`repair-${preset.key}`}
                   disabled={!preset.can_repair || isBusy}
@@ -339,7 +371,11 @@ export function SystemPresetsPanel({
                   title={adminHint}
                   onClick={() => setConfirm({ kind: "uninstall", preset })}
                 >
-                  {t("create.system.uninstall")}
+                  {t(
+                    preset.operation?.retryable
+                      ? "create.system.retryUninstall"
+                      : "create.system.uninstall",
+                  )}
                 </Btn>
               )}
               {!isAdmin && (

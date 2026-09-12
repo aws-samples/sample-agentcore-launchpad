@@ -8,10 +8,16 @@ smuggle changes through a request body.
 
 from dataclasses import dataclass, field
 from hashlib import sha256
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from tempfile import TemporaryDirectory
 
 from app.schemas.agent import DEFAULT_MODEL_ID, AgentSpec, KnowledgeBaseRef, ToolRef
-from app.services.skill_ingest import bundle_from_dir, parse_frontmatter, validate_bundle
+from app.services.skill_ingest import (
+    SKILL_BUNDLE_MAX_BYTES,
+    bundle_from_dir,
+    parse_frontmatter,
+    validate_bundle,
+)
 
 SKILLS_ROOT = Path(__file__).resolve().parent / "skills"
 
@@ -208,27 +214,74 @@ def bundle_digest(skill_dir: Path) -> tuple[str, list[str]]:
     return h.hexdigest(), files
 
 
-def bundle_release(preset: SystemPreset) -> dict:
-    """The release an install pins onto its job: ``{version, digest, files}``.
+@dataclass(frozen=True)
+class BundleSnapshot:
+    """One immutable in-memory copy of the bundle: the bytes that were validated are
+    the bytes that are hashed are the bytes that are uploaded. A mutable checkout
+    re-read between those steps can never split the identity."""
 
-    The package stage refuses to publish anything else, so a job queued under one
-    release can never upload a later checkout's bytes under the stored version.
+    version: str
+    digest: str
+    files: dict[str, bytes]  # POSIX-relative path → content, sorted keys
+
+    def file_digests(self) -> dict[str, str]:
+        return {rel: sha256(body).hexdigest() for rel, body in self.files.items()}
+
+    def release(self) -> dict:
+        """What an install pins onto its job and what the manifest records."""
+        return {
+            "version": self.version,
+            "digest": self.digest,
+            "files": self.file_digests(),
+        }
+
+
+def _digest_of(files: dict[str, bytes]) -> str:
+    h = sha256()
+    for rel in sorted(files):
+        h.update(rel.encode())
+        h.update(b"\0")
+        h.update(files[rel])
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def snapshot_bundle(preset: SystemPreset) -> BundleSnapshot:
+    """Read the repository bundle ONCE into memory, validate that copy, hash it.
+
+    Validation runs against a temporary directory materialized from the snapshot
+    (never against the live checkout), with the same ``validate_bundle`` every member
+    skill passes, plus the preset's own invariants: SKILL.md ``version`` equals the
+    catalogue's ``skill_version`` (a content change cannot ship under a stale S3
+    version directory) and the SKILL.md name equals the reserved agent name. Every
+    path is a plain relative POSIX path, so the upload can only land under the
+    versioned prefix. Total size is bounded by the shared skill bundle cap.
     """
-    digest, files = bundle_digest(preset.skill_path())
-    return {"version": preset.skill_version, "digest": digest, "files": len(files)}
-
-
-def load_bundle(preset: SystemPreset):
-    """Open + validate the repository-side bundle (caller closes it).
-
-    Validation is the same ``validate_bundle`` every member skill passes, and the
-    SKILL.md frontmatter ``version`` must equal the preset's ``skill_version`` so a
-    content change cannot ship under a stale S3 version directory.
-    """
-    bundle = bundle_from_dir(preset.skill_path())
-    try:
+    root = preset.skill_path()
+    files: dict[str, bytes] = {}
+    total = 0
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        rel = PurePosixPath(path.relative_to(root).as_posix())
+        if rel.is_absolute() or any(part in ("..", "") for part in rel.parts):
+            raise ValueError(f"preset '{preset.key}': unsafe bundle path {rel!s}")
+        body = path.read_bytes()
+        total += len(body)
+        if total > SKILL_BUNDLE_MAX_BYTES:
+            raise ValueError(
+                f"preset '{preset.key}': bundle exceeds {SKILL_BUNDLE_MAX_BYTES} bytes"
+            )
+        files[str(rel)] = body
+    if "SKILL.md" not in files:
+        raise ValueError(f"preset '{preset.key}': bundle has no SKILL.md")
+    with TemporaryDirectory(prefix="preset-snapshot-") as tmp:
+        base = Path(tmp)
+        for rel, body in files.items():
+            target = base / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(body)
+        bundle = bundle_from_dir(base)
         validate_bundle(bundle)
-        front = parse_frontmatter((bundle.root / "SKILL.md").read_text(encoding="utf-8"))
+        front = parse_frontmatter(files["SKILL.md"].decode("utf-8"))
         if str(front.get("version", "")).strip() != preset.skill_version:
             raise ValueError(
                 f"preset '{preset.key}': SKILL.md version {front.get('version')!r} != "
@@ -238,7 +291,18 @@ def load_bundle(preset: SystemPreset):
             raise ValueError(
                 f"preset '{preset.key}': SKILL.md name {bundle.name!r} != {preset.name!r}"
             )
-    except Exception:
-        bundle.close()
-        raise
-    return bundle
+    return BundleSnapshot(
+        version=preset.skill_version, digest=_digest_of(files), files=dict(sorted(files.items()))
+    )
+
+
+def bundle_release(preset: SystemPreset) -> dict:
+    """The release an install pins onto its job (``{version, digest, files{rel: sha}}``)."""
+    return snapshot_bundle(preset).release()
+
+
+def load_bundle(preset: SystemPreset):
+    """Open + validate the repository-side bundle (caller closes it). Kept for
+    callers that want the ``SkillBundle`` view; publication uses ``snapshot_bundle``."""
+    snapshot_bundle(preset)  # same invariants, raised the same way
+    return bundle_from_dir(preset.skill_path())

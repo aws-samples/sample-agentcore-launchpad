@@ -377,8 +377,10 @@ parity).
 `GET /api/system-agents` (member) is a ledger-only read reporting one of
 `configuration_required` (workspace not `ready`, missing `artifacts_bucket` /
 `execution_role_arn`, or per-agent roles disabled), `not_installed`, `deploying`,
-`active`, `failed`, plus `requirements` as `{code, message}` pairs (also on an
-installed preset whose workspace later lost a prerequisite), `name_collision` when
+`uninstalling` (a teardown job owns the row; `operation` carries its job id, status,
+attempt, error and `retryable`), `active`, `failed`, plus `requirements` as `{code,
+message}` pairs (also on an installed preset whose workspace later lost a
+prerequisite), `name_collision` when
 a pre-existing ordinary agent holds the reserved name (the preset **never adopts**
 it — `409 system_agent.name_collision` on install) and the operation-specific
 verdicts `can_install` / `can_repair` / `can_uninstall` (administrator +
@@ -398,25 +400,49 @@ status.
 The request body is a required JSON object; `{}` means "platform defaults" on a
 first install and "the stored choices" on a repair. Maintenance claims are durable
 and atomic: a fresh install races into the partial unique index and the loser
-re-reads the winner **and returns the winner's job id**; a repair or uninstall
-executes one compare-and-set `UPDATE … WHERE status IN (active, failed)` in the
-same transaction as the job row it creates, so two sessions that both loaded an
-active row converge on one job (the second sees no claimed row and returns the
-first's in-flight job), and a repair racing an uninstall answers
-`404 system_agent.not_installed` instead of re-publishing a harness being torn
-down. The job runs the **normal** `generate → package → provision → deploy →
-register` pipeline with three preset-specific hardenings:
+re-reads the winner **and returns the winner's job id**; a repair executes one
+compare-and-set `UPDATE … WHERE status IN (active, failed)` in the same transaction
+as the job row it creates, so two sessions that both loaded an active row converge
+on one job (the second sees no claimed row and returns the first's in-flight job).
+**Uninstall is a durable job, not a terminal flag**: `DELETE /api/system-agents/
+{key}` moves the row to the non-terminal `uninstalling` status **together with** an
+`uninstall_system_agent` job (`202 {job_id, attempt, started, preset}`). The row keeps
+its system identity — and the partial unique index keeps holding the key — until the
+worker's teardown succeeds, so no install or repair can take the key while the AWS
+resources are still being removed (both answer `409 system_agent.uninstalling`); a
+repeated uninstall returns the same live job; a failed teardown leaves the row
+`uninstalling` with the reason on the job and the row (`operation.retryable`), and
+another explicit uninstall starts attempt N+1; a crash mid-teardown is resumed by
+`resume_pending_jobs()` like any other job, and the worker only acts on rows still
+in `uninstalling`. Only a successful teardown marks the row `deleted`. The teardown
+is the same idempotent helper ordinary deletes use, addressing only the resources
+named on the row. The deploy job runs the **normal** `generate → package →
+provision → deploy → register` pipeline with three preset-specific hardenings:
 
-- **release pinning** — the install records `{version, digest}` of the repository
-  bundle on the job; the `package` stage (skipped for ordinary harnesses) refuses
-  to run when the stored spec pins another version than this build ships, when the
-  checkout's bytes differ from the pinned digest, or when the versioned prefix
-  `s3://<artifacts_bucket>/system-skills/<name>/<skill_version>/` already holds a
-  manifest with a different digest (a published version is immutable — bump
-  `skill_version` and the SKILL.md `version` together). A matching manifest makes
-  the stage a verified no-op; otherwise every object is uploaded with a SHA-256
-  checksum S3 verifies on receipt and the manifest (`.bundle-manifest.json`) is
-  written last, so a partial upload is re-published by the next run;
+- **release pinning, atomically** — before anything is written, the install reads
+  the repository bundle **once** into an immutable in-memory snapshot, validates that
+  snapshot (same `validate_bundle` as member skills, plus the version/name
+  invariants) and hashes it; `{version, digest, files{rel: sha256}}` then lands on
+  the job **in the same commit** as the agent, deployment and job rows
+  (`create_deployment(payload_extra=…)`), so a crash can never leave a runnable
+  job without its pin. The `package` stage (skipped for ordinary harnesses) fails
+  closed on a missing or malformed pin — nothing "legacy" is accepted — and refuses
+  when the stored spec, the pin and this build's snapshot disagree;
+- **one byte snapshot, conflict-safe publication** — the bytes that were validated
+  and hashed are the bytes that are uploaded and read back. Every object under
+  `s3://<artifacts_bucket>/system-skills/<name>/<skill_version>/` is created with
+  `If-None-Match: *`; a 412 means another writer got there first and the existing
+  bytes must equal ours (restart after a partial upload, or a same-content
+  concurrent retry) or the stage fails without overwriting anything. The manifest
+  (`.bundle-manifest.json`, with per-file digests) is created last, also
+  conditionally; a competing manifest is accepted only when identical. An existing
+  manifest is trusted only when it matches the snapshot exactly (malformed or
+  differing → fail: a published version is immutable, bump `skill_version` and the
+  SKILL.md `version` together). Finally **every object is read back and hashed
+  against the snapshot**: a missing object is restored with `If-None-Match: *`, a
+  corrupt one is replaced only with `If-Match` on the ETag that was read, and a
+  prefix that still disagrees fails — the stage never reports "verified" for an
+  absent or altered `SKILL.md`, and never writes outside the versioned prefix;
 - **idempotent AWS requests** — every harness create/update sends
   `clientToken = lp-<deployment id>` (persisted, not scratch state), so a job
   resumed after a crash between the AWS call and the ledger write repeats the same
@@ -432,10 +458,7 @@ register` pipeline with three preset-specific hardenings:
   reports the `per_agent_roles_disabled` requirement.
 
 The prefix family is disjoint from the member-writable `skills/` (registry) and
-`agent-skills/` (wizard staging) prefixes. `DELETE /api/system-agents/{key}`
-(admin) claims the row first, tears the Harness down through the same helper
-ordinary deletes use, and on a teardown failure puts the row back to `failed`
-with the reason so the uninstall can be retried.
+`agent-skills/` (wizard staging) prefixes.
 
 **Constrained tool surface.** The harness exposes `shell` and `file_operations` to
 every session unless `allowedTools` restricts them, so `AgentSpec.allowed_tools`
@@ -451,8 +474,20 @@ real boundary is the per-agent execution role: model invoke, `s3:GetObject` on
 exactly the versioned skill prefix, telemetry — and nothing else for the docs-only
 preset. The MCP ToolRef carries `auth: "none"`, which tells the role derivation to
 skip the workload-identity and token-vault statements an authenticated MCP ref
-gets (ordinary agents' MCP refs are unchanged); mounting a KB adds exactly the
-gateway OAuth path and the scoped `bedrock:Retrieve` grants, nothing more. The
+gets (ordinary agents' MCP refs are unchanged). Mounting a KB adds **exactly the
+three statements the harness devguide lists for an OAuth2 credential provider**
+("Execution role policy → OAuth2 credential provider", read 2026-09-12),
+instantiated for the KB gateway's real provider from the workspace's
+`oauth_provider_arn`: `GetResourceOauth2Token` on `token-vault/default`,
+`workload-identity-directory/default` and `…/workload-identity/harness_<name>-*`;
+`GetResourceOauth2Token` on the provider ARN itself; and `secretsmanager:
+GetSecretValue` on `bedrock-agentcore-identity!default/oauth2/<provider>-*` (the
+provider-scoped secret **is** required and is kept). No `GetResourceApiKey`, no
+`GetWorkloadAccessToken*`, no family-wide `bedrock-agentcore-identity!*` secret, and
+no direct `bedrock:Retrieve` / `AgenticRetrieveStream` — a harness reaches the KB
+through the gateway, whose connector role performs the retrieval. Installing with a
+KB is refused (`409`, requirement `missing_oauth_provider`) when the workspace has
+no provider to scope to. Ordinary agents keep their historical policy shape. The
 wizard round-trips a stored `allowed_tools` untouched on edit/re-publish (typed
 in `AgentSpecInput`), so a console re-publish can never widen an agent's tool
 surface — note that omitting `allowedTools` on UpdateHarness keeps the live

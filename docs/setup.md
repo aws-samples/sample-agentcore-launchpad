@@ -155,8 +155,10 @@ and `execution_role_arn` present, per-agent execution roles enabled). Optional
 install choices — the model (`model_id`/`model_source`, default = the platform
 default) and existing knowledge bases to mount (`knowledge_bases`, verified in the
 workspace during provision; none is created for you) — are **API-only**: the panel
-installs with `{}`. REPAIR/UPDATE re-publishes in place; UNINSTALL removes the
-Harness and role. The preset runs with persistent memory disabled and on its own
+installs with `{}`. REPAIR/UPDATE re-publishes in place; UNINSTALL queues a teardown
+job — the preset shows UNINSTALLING and keeps its identity until the Harness and
+role are gone, a failed teardown shows its reason with RETRY UNINSTALL, and install
+or repair are refused meanwhile. The preset runs with persistent memory disabled and on its own
 restricted execution role (never the shared role). Members can chat with the preset
 like any agent but see a SYSTEM chip with the edit/re-publish/convert/delete actions
 disabled, and the backend refuses those calls regardless of permissions; a knowledge

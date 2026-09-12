@@ -119,15 +119,17 @@ billable operator action that runs the normal deploy pipeline.
 
 | Method | Path | Role | Result |
 |---|---|---|---|
-| `GET` | `/api/system-agents` | member | `{workspace_id, presets[{key, name, label, description, method, skill_version, installed_skill_version, update_available, status, requirements[{code, message}], name_collision, agent_id, agent_status, error, job_id, deployment_id, deployment_status, model_id, model_source, knowledge_bases[], allowed_tools[], memory, can_install, can_repair, can_uninstall, updated_at}]}` — `status ∈ configuration_required | not_installed | deploying | active | failed`; requirement codes `bootstrap_not_ready | missing_artifacts_bucket | missing_execution_role | per_agent_roles_disabled`; `memory` is `disabled`; ledger-only |
+| `GET` | `/api/system-agents` | member | `{workspace_id, presets[{key, name, label, description, method, skill_version, installed_skill_version, update_available, status, requirements[{code, message}], name_collision, agent_id, agent_status, error, job_id, deployment_id, deployment_status, model_id, model_source, knowledge_bases[], allowed_tools[], memory, operation, can_install, can_repair, can_uninstall, updated_at}]}` — `status ∈ configuration_required | not_installed | deploying | uninstalling | active | failed`; `operation` is `{kind: uninstall, job_id, job_status, attempt, error, retryable} | null` while a teardown job owns the row; requirement codes `bootstrap_not_ready | missing_artifacts_bucket | missing_execution_role | per_agent_roles_disabled | missing_oauth_provider`; `memory` is `disabled`; ledger-only |
 | `POST` | `/api/system-agents/{key}/install` | admin | required JSON body `{model_id?, model_source?, knowledge_bases?[{kb_id, name?, description?}], force?}` (`{}` = platform defaults on install, stored choices on repair) → `202 {agent, job_id, deployment_id, created, changed, preset}` when a job is in flight (a deploying preset returns its existing job, `changed: false`; a racing install returns the winner's job), `200` with the last job's id when the active preset already matches. Knowledge bases are verified in the target workspace during the provision stage |
-| `DELETE` | `/api/system-agents/{key}` | admin | `{deleted, agent_id, aws_resource_deleted}` — claims the row, tears down the Harness + role and frees the key for a reinstall; a teardown failure leaves the row `failed` with the reason (retryable) |
+| `DELETE` | `/api/system-agents/{key}` | admin | `202 {agent, job_id, operation: uninstall, attempt, started, preset}` — claims the row (`uninstalling`) and queues the teardown job in one commit; the row keeps its identity until the worker succeeds, a repeated call returns the same live job (`started: false`), a failed teardown gets attempt N+1; `409 agent.deploy_in_progress` while a deploy runs |
 
 Error codes: `system_agent.unknown` (404), `system_agent.workspace_not_ready` (409,
 `detail.requirements[{code, message}]`), `system_agent.name_collision` (409, an
 ordinary agent holds the reserved name — never adopted), `system_agent.not_installed`
-(404 on uninstall, or on a repair that raced an uninstall), `agent.deploy_in_progress`
-(409 on uninstall while deploying). On the ordinary agent routes a preset answers
+(404 on uninstall of an absent preset), `system_agent.uninstalling` (409 on install
+or repair while a teardown job owns the row or its last attempt failed —
+`detail.job_id/job_status/error`), `agent.deploy_in_progress` (409 on uninstall while
+deploying). On the ordinary agent routes a preset answers
 `agent.system_managed` (403, `detail.action ∈ redeploy | delete | convert |
 experiment | canary | promote | …`, `detail.maintenance_route`) before any AWS call;
 the experiment and runtime-canary action routes answer the same for rows referencing

@@ -313,7 +313,8 @@ evaluator 映射、AgentCore 优先的取舍、证据分级、不自主执行）
 **显式、幂等安装——绝不在启动或读取时发生。** `GET /api/system-agents`（成员）只读台账，
 状态为 `configuration_required`（Workspace 未 `ready`、缺 `artifacts_bucket` /
 `execution_role_arn`、或按 Agent 角色被禁用）、`not_installed`、`deploying`、`active`、
-`failed` 之一，附带 `{code, message}` 形式的 `requirements`（已安装但 Workspace 后来失去前置
+`uninstalling`（拆除任务持有该行；`operation` 携带其任务 ID、状态、尝试次数、错误与
+`retryable`）、`failed` 之一，附带 `{code, message}` 形式的 `requirements`（已安装但 Workspace 后来失去前置
 条件时同样给出），在已有普通 Agent 占用保留名称时给出 `name_collision`（预置**绝不接管**，安装
 返回 `409 system_agent.name_collision`），以及按操作区分的裁决 `can_install` / `can_repair` /
 `can_uninstall`（管理员 + 该操作的就绪条件）。控制台按 code 本地化描述与条件，显示加载、错误与
@@ -328,18 +329,34 @@ evaluator 映射、AgentCore 优先的取舍、证据分级、不自主执行）
 | 失败 / 选项变更 / 技能包更新 / `force: true` | 更新任务 = 就地重新发布（`202`） |
 
 请求体是必需的 JSON 对象；`{}` 在首次安装时表示“平台默认值”，在修复时表示“已存选择”。维护
-声明是持久且原子的：新安装在部分唯一索引上竞争，落败方重读胜出方**并返回其任务 ID**；修复或
-卸载在与所建任务行相同的事务里执行一次条件更新 `UPDATE … WHERE status IN (active, failed)`，
-两个都加载了运行中行的会话收敛到同一个任务（第二个看不到可声明的行，返回第一个的进行中任务），
-与卸载竞争的修复返回 `404 system_agent.not_installed`，而不是重新发布一个正在拆除的 Harness。
-任务走**标准** `generate → package → provision → deploy → register` 管道，并带三项预置专属加固：
+声明是持久且原子的：新安装在部分唯一索引上竞争，落败方重读胜出方**并返回其任务 ID**；修复在与
+所建任务行相同的事务里执行一次条件更新 `UPDATE … WHERE status IN (active, failed)`，两个都
+加载了运行中行的会话收敛到同一个任务。**卸载是持久任务，不是终态标记**：
+`DELETE /api/system-agents/{key}` 把行置为非终态 `uninstalling`，并**同时**创建
+`uninstall_system_agent` 任务（`202 {job_id, attempt, started, preset}`）。在 worker 拆除成功
+之前，该行保留系统身份——部分唯一索引也持续占用该 key——因此 AWS 资源尚在删除时，任何安装或
+修复都无法夺取该 key（均返回 `409 system_agent.uninstalling`）；重复卸载返回同一个在途任务；
+拆除失败时行仍为 `uninstalling`，原因记录在任务与行上（`operation.retryable`），再次显式卸载
+启动第 N+1 次尝试；拆除中途崩溃由 `resume_pending_jobs()` 与其他任务一样恢复，worker 只处理
+仍处于 `uninstalling` 的行。只有拆除成功才把行标记为 `deleted`。拆除使用普通删除同一个幂等
+helper，只处理该行上记录的资源。部署任务走**标准**
+`generate → package → provision → deploy → register` 管道，并带三项预置专属加固：
 
-- **版本钉住**——安装把仓库技能包的 `{version, digest}` 记录在任务上；普通 Harness 跳过的
-  `package` 阶段在以下情况拒绝运行：已存 spec 钉住的版本与当前构建不同、检出内容与钉住摘要不同、
-  带版本前缀 `s3://<artifacts_bucket>/system-skills/<name>/<skill_version>/` 已有摘要不同的清单
-  （已发布版本不可变——同时提升 `skill_version` 与 SKILL.md 的 `version`）。清单匹配时该阶段为
-  已核验的无操作；否则每个对象附带 S3 收到即校验的 SHA-256 上传，清单
-  （`.bundle-manifest.json`）最后写入，因此半途中断的上传会由下一次运行重新发布；
+- **原子版本钉住**——写入任何内容之前，安装把仓库技能包**一次性**读入不可变的内存快照，校验该
+  快照（与成员技能相同的 `validate_bundle`，加版本/名称不变量）并计算哈希；随后
+  `{version, digest, files{rel: sha256}}` 与 Agent、Deployment、Job 行**在同一次提交**中落到任务上
+  （`create_deployment(payload_extra=…)`），崩溃永远不会留下没有钉住信息的可运行任务。普通 Harness
+  跳过的 `package` 阶段在钉住信息缺失或格式错误时故障关闭——不接受任何“遗留”情况——并在已存
+  spec、钉住信息与当前构建快照不一致时拒绝；
+- **单一字节快照、冲突安全发布**——被校验和哈希的字节就是被上传并回读的字节。
+  `s3://<artifacts_bucket>/system-skills/<name>/<skill_version>/` 下每个对象都以
+  `If-None-Match: *` 创建；412 表示另一写入者抢先，已有字节必须与我们的一致（部分上传后的重启，
+  或相同内容的并发重试），否则阶段失败且不覆盖任何内容。清单（`.bundle-manifest.json`，含逐文件
+  摘要）最后条件写入；竞争的清单只有完全一致时才被接受。已有清单只在与快照完全匹配时才被信任
+  （格式错误或不同 → 失败：已发布版本不可变，同时提升 `skill_version` 与 SKILL.md 的
+  `version`）。最后**回读并哈希每个对象**与快照比对：缺失对象以 `If-None-Match: *` 恢复，损坏
+  对象只以读取时 ETag 的 `If-Match` 替换，仍不一致的前缀则失败——该阶段绝不会对缺失或被改动的
+  `SKILL.md` 报告“已核验”，也绝不写入带版本前缀之外；
 - **幂等 AWS 请求**——每次 Harness 创建/更新都发送 `clientToken = lp-<deployment id>`
   （持久化，而非 scratch 状态），在 AWS 调用与台账写入之间崩溃后恢复的任务重放同一请求，不会
   创建第二个 Harness。这适用于所有 Harness Agent，不限于预置；
@@ -350,8 +367,6 @@ evaluator 映射、AgentCore 优先的取舍、证据分级、不自主执行）
   generate/deploy 在任何 AWS 调用前抛错，状态读取报告 `per_agent_roles_disabled` 条件。
 
 该前缀族与成员可写的 `skills/`（Registry）和 `agent-skills/`（向导暂存）互不相交。
-`DELETE /api/system-agents/{key}`（管理员）先声明该行，再用普通删除同一个 helper 拆除 Harness；
-拆除失败时把行改回 `failed` 并记录原因，以便重试卸载。
 
 **受约束的工具面。** Harness 默认向每个会话暴露 `shell` 与 `file_operations`，除非
 `allowedTools` 加以限制，因此新增 harness 专用的 `AgentSpec.allowed_tools`（`None` = 既有
@@ -362,8 +377,17 @@ Knowledge MCP 服务器（`https://knowledge-mcp.global.api.aws`，`remote_mcp` 
 且绝不使用 `*`——使提示词点名的检索工具可被调用。`allowedTools` 只约束 LLM 的工具选择；真正的
 边界是按 Agent 的执行角色：模型调用、仅限该版本技能前缀的 `s3:GetObject`、遥测——仅文档型预置
 别无其他。MCP ToolRef 携带 `auth: "none"`，告知角色推导跳过带认证 MCP 引用才有的工作负载身份与
-令牌库语句（普通 Agent 的 MCP 引用不变）；挂载知识库只额外增加网关 OAuth 路径与限定范围的
-`bedrock:Retrieve` 授权。向导在编辑/重新发布时原样回传已存的 `allowed_tools`（`AgentSpecInput`
+令牌库语句（普通 Agent 的 MCP 引用不变）。挂载知识库**恰好**增加 Harness 开发指南为 OAuth2 凭证
+提供者列出的三条语句（“Execution role policy → OAuth2 credential provider”，2026-09-12 阅读），
+以 Workspace 的 `oauth_provider_arn` 实例化到知识库网关的真实提供者：`GetResourceOauth2Token`
+作用于 `token-vault/default`、`workload-identity-directory/default` 与
+`…/workload-identity/harness_<name>-*`；`GetResourceOauth2Token` 作用于提供者 ARN 本身；
+`secretsmanager:GetSecretValue` 作用于 `bedrock-agentcore-identity!default/oauth2/<provider>-*`
+（提供者范围的密钥**确实**需要并予以保留）。没有 `GetResourceApiKey`、没有
+`GetWorkloadAccessToken*`、没有家族级 `bedrock-agentcore-identity!*` 密钥，也没有直接的
+`bedrock:Retrieve` / `AgenticRetrieveStream`——Harness 经网关访问知识库，检索由网关连接器角色执行。
+Workspace 没有可限定的提供者时，带知识库的安装被拒绝（`409`，条件 `missing_oauth_provider`）。
+普通 Agent 保持历史策略形状。向导在编辑/重新发布时原样回传已存的 `allowed_tools`（`AgentSpecInput`
 已定型），控制台重新发布永远不会放宽工具面——注意按服务模型，UpdateHarness 省略 `allowedTools`
 会保留线上限制，因此此前的风险是后续重建时丢失台账意图，而非立刻放宽。
 

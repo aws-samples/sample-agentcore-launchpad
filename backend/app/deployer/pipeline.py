@@ -118,13 +118,17 @@ def create_deployment(
     mode: str = "create",
     *,
     skip_register: bool = False,
+    payload_extra: dict[str, Any] | None = None,
 ) -> tuple[Deployment, Job]:
     """Create the Deployment (stages pending) + Job rows for one deploy run.
 
     ``mode`` is "create" for a first deploy or "update" for an in-place
     re-publish; the deploy stage reads it to choose Create* vs Update* APIs.
     Promotion updates may skip registry publication because identity is
-    unchanged and registry failure must not obscure a successful rollout."""
+    unchanged and registry failure must not obscure a successful rollout.
+    ``payload_extra`` lands on the Job in the SAME commit as the rows (a caller
+    that must pin data to the job — the system-preset release — cannot be left
+    with a runnable job and no pin by a crash between two commits)."""
     # The workspace comes off the agent, not the request: a promotion or resumed
     # job must land in the same environment as the agent it deploys.
     deployment = Deployment(
@@ -142,6 +146,7 @@ def create_deployment(
             "deployment_id": deployment.id,
             "mode": mode,
             "skip_register": skip_register,
+            **(payload_extra or {}),
         },
     )
     db.add(job)
@@ -295,9 +300,14 @@ def resume_pending_jobs() -> list[str]:
     their workspace from `jobs.workspace_id` inside the worker, so this only has
     to hand over the id.
     """
+    # Lazy: the uninstall worker imports the agents router (teardown helper), which
+    # imports the system-agents service, which imports this module.
+    from app.system_agents import uninstall as system_uninstall
+
     starters: dict[str, Callable[[str], threading.Thread]] = {
         "deploy_agent": start_deploy_async,
         workspace_bootstrap.JOB_TYPE: workspace_bootstrap.start_bootstrap_async,
+        system_uninstall.JOB_TYPE: system_uninstall.start_uninstall_async,
     }
     db = SessionLocal()
     try:

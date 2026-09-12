@@ -120,7 +120,8 @@
   "status": {
     "active": "运行中",
     "deploying": "部署中",
-    "failed": "失败"
+    "failed": "失败",
+    "uninstalling": "卸载中"
   },
   "overview": {
     "kicker": "// 任务控制中心",
@@ -447,7 +448,8 @@
         "not_installed": "未安装",
         "deploying": "部署中",
         "active": "运行中",
-        "failed": "失败"
+        "failed": "失败",
+        "uninstalling": "卸载中"
       },
       "confirm": {
         "installTitle": "安装系统预置？",
@@ -455,7 +457,7 @@
         "repairTitle": "重新发布系统预置？",
         "repair": "这会用平台持有的配置和当前技能包就地重新发布“{{name}}”（新的 Harness 版本，ARN 不变）。",
         "uninstallTitle": "卸载系统预置？",
-        "uninstall": "这会删除“{{name}}”背后的 Harness 和执行角色。对话历史保留在台账中；之后可以重新安装。"
+        "uninstall": "这会排入一个拆除任务，删除“{{name}}”背后的 Harness 与执行角色。拆除完成前预置保留其身份；失败的拆除可以重试。对话历史保留在台账中；之后可以重新安装。"
       },
       "loading": "加载中……",
       "reload": "刷新",
@@ -468,13 +470,20 @@
         "bootstrap_not_ready": "Workspace 引导尚未完成",
         "missing_artifacts_bucket": "Workspace 缺少制品存储桶",
         "missing_execution_role": "Workspace 缺少执行角色",
-        "per_agent_roles_disabled": "按 Agent 的执行角色已禁用；预置绝不运行在共享角色上"
+        "per_agent_roles_disabled": "按 Agent 的执行角色已禁用；预置绝不运行在共享角色上",
+        "missing_oauth_provider": "Workspace 缺少知识库网关的 OAuth2 凭证提供者（挂载知识库所需）"
       },
       "presets": {
         "aws-agent-solution-architect": {
           "description": "平台托管的顾问型 Harness，把 AI Agent 业务需求转化为评估优先、生产级的 AWS 方案设计。通过公共 AWS Knowledge MCP 服务器核验 AWS 事实，并从带版本的 S3 技能包加载方法论。"
         }
-      }
+      },
+      "retryUninstall": "重试卸载",
+      "uninstallStarted": "正在卸载 {{name}}——拆除任务已启动。",
+      "uninstallRetried": "正在重试卸载 {{name}}——新的拆除任务已启动。",
+      "uninstallInFlight": "{{name}} 的卸载已在进行中。",
+      "uninstallRunning": "第 {{attempt}} 次卸载（任务 {{job}}）正在删除 Harness 及其角色；拆除完成前预置保留其身份。",
+      "uninstallFailed": "第 {{attempt}} 次卸载（任务 {{job}}）失败；预置保留其身份并可重试。期间安装与修复会被拒绝。"
     },
     "versions": {
       "title": "版本与端点",
@@ -2004,7 +2013,8 @@
     "registry.record_not_a2a": "该记录背后的 Agent 不是 A2A 服务器，因此不提供 Agent 名片。",
     "registry.agent_not_ready": "该 Agent 尚未部署并处于活动状态——读取实时名片需要运行中的运行时。",
     "registry.live_card_failed": "运行时未能提供其 Agent 名片。",
-    "kb.attached_to_system_agent": "该知识库已挂载在系统托管预置上；请先通过预置维护路径解除挂载，再删除。"
+    "kb.attached_to_system_agent": "该知识库已挂载在系统托管预置上；请先通过预置维护路径解除挂载，再删除。",
+    "system_agent.uninstalling": "该预置正在卸载（或上次卸载失败、等待重试）；拆除完成前安装与修复会被拒绝。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",

@@ -98,14 +98,15 @@ API-key 信任边界的控制台一侧。
 
 | 方法 | 路径 | 角色 | 结果 |
 |---|---|---|---|
-| `GET` | `/api/system-agents` | 成员 | `{workspace_id, presets[{key, name, label, description, method, skill_version, installed_skill_version, update_available, status, requirements[{code, message}], name_collision, agent_id, agent_status, error, job_id, deployment_id, deployment_status, model_id, model_source, knowledge_bases[], allowed_tools[], memory, can_install, can_repair, can_uninstall, updated_at}]}`——`status ∈ configuration_required | not_installed | deploying | active | failed`；条件 code 为 `bootstrap_not_ready | missing_artifacts_bucket | missing_execution_role | per_agent_roles_disabled`；`memory` 为 `disabled`；仅读台账 |
+| `GET` | `/api/system-agents` | 成员 | `{workspace_id, presets[{key, name, label, description, method, skill_version, installed_skill_version, update_available, status, requirements[{code, message}], name_collision, agent_id, agent_status, error, job_id, deployment_id, deployment_status, model_id, model_source, knowledge_bases[], allowed_tools[], memory, operation, can_install, can_repair, can_uninstall, updated_at}]}`——`status ∈ configuration_required | not_installed | deploying | uninstalling | active | failed`；拆除任务持有该行时 `operation` 为 `{kind: uninstall, job_id, job_status, attempt, error, retryable}`，否则为 `null`；条件 code 为 `bootstrap_not_ready | missing_artifacts_bucket | missing_execution_role | per_agent_roles_disabled | missing_oauth_provider`；`memory` 为 `disabled`；仅读台账 |
 | `POST` | `/api/system-agents/{key}/install` | 管理员 | 必需的 JSON 请求体 `{model_id?, model_source?, knowledge_bases?[{kb_id, name?, description?}], force?}`（`{}` = 安装时平台默认值，修复时已存选择）→ 有任务在途时 `202 {agent, job_id, deployment_id, created, changed, preset}`（部署中的预置返回其既有任务且 `changed: false`；竞争安装返回胜出方的任务），运行中的预置已匹配时 `200` 并带上一任务的 ID。知识库在 provision 阶段于目标 Workspace 中核验 |
-| `DELETE` | `/api/system-agents/{key}` | 管理员 | `{deleted, agent_id, aws_resource_deleted}`——先声明该行，再拆除 Harness 与角色并释放 key 以便重装；拆除失败时该行保持 `failed` 并记录原因（可重试） |
+| `DELETE` | `/api/system-agents/{key}` | 管理员 | `202 {agent, job_id, operation: uninstall, attempt, started, preset}`——在一次提交中声明该行（`uninstalling`）并排入拆除任务；worker 成功前该行保留身份，重复调用返回同一在途任务（`started: false`），拆除失败则进入第 N+1 次尝试；部署进行中返回 `409 agent.deploy_in_progress` |
 
 错误码：`system_agent.unknown`（404）、`system_agent.workspace_not_ready`（409，
 `detail.requirements[{code, message}]`）、`system_agent.name_collision`（409，普通 Agent
-占用保留名称——绝不接管）、`system_agent.not_installed`（卸载时 404，或与卸载竞争的修复）、
-`agent.deploy_in_progress`（部署中卸载时 409）。普通 Agent 路由上，预置在任何 AWS 调用之前返回
+占用保留名称——绝不接管）、`system_agent.not_installed`（卸载不存在的预置时 404）、
+`system_agent.uninstalling`（拆除任务持有该行或上次尝试失败时，安装/修复返回 409，
+`detail.job_id/job_status/error`）、`agent.deploy_in_progress`（部署中卸载时 409）。普通 Agent 路由上，预置在任何 AWS 调用之前返回
 `agent.system_managed`（403，`detail.action ∈ redeploy | delete | convert | experiment |
 canary | promote | …`，`detail.maintenance_route`）；实验与运行时金丝雀的 action 路由对引用预置的
 记录返回同样的错误；`DELETE /api/knowledge-bases/{kb_id}` 在知识库挂载于预置时返回

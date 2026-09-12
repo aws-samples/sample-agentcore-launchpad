@@ -16,13 +16,14 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.core.errors import NotFoundError
 from app.deployer.pipeline import start_deploy_async
-from app.routers.agents import _agent_out, _delete_agent_resources
+from app.routers.agents import _agent_out
 from app.routers.auth import require_admin, require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import KnowledgeBaseRef, ModelSource
 from app.system_agents import presets as catalogue
 from app.system_agents import service
 from app.system_agents.presets import InstallOptions
+from app.system_agents.uninstall import start_uninstall_async
 
 router = APIRouter(prefix="/api/system-agents", tags=["system-agents"])
 
@@ -111,8 +112,21 @@ def uninstall_system_agent(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
+    from fastapi.responses import JSONResponse
+
     require_admin(request)
     preset = _preset(preset_key)
-    return service.uninstall_preset(
-        db, ws.row, preset, lambda agent: _delete_agent_resources(agent, ws.context)
+    outcome = service.uninstall_preset(db, ws.row, preset)
+    if outcome.started:  # only the claim owner launches the worker
+        start_uninstall_async(outcome.job.id)
+    return JSONResponse(
+        status_code=202,
+        content={
+            "agent": _agent_out(outcome.agent),
+            "job_id": outcome.job.id,
+            "operation": "uninstall",
+            "attempt": outcome.attempt,
+            "started": outcome.started,
+            "preset": service.preset_status(db, ws.row, preset, is_admin=True),
+        },
     )

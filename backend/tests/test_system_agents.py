@@ -30,9 +30,12 @@ from .conftest import ws_ctx
 KEY = ARCHITECT.key
 INSTALL = f"/api/system-agents/{KEY}/install"
 BUCKET = "launchpad-artifacts-test"
+OAUTH_PROVIDER = ("arn:aws:bedrock-agentcore:us-west-2:111122223333:token-vault/default/"
+                  "oauth2credentialprovider/launchpad-gw-m2m")
 READY_RESOURCES = {
     "artifacts_bucket": BUCKET,
     "execution_role_arn": "arn:aws:iam::111122223333:role/launchpad-agent-execution-role",
+    "oauth_provider_arn": OAUTH_PROVIDER,
     "memory_arn": "arn:aws:bedrock-agentcore:us-west-2:111122223333:memory/launchpad_memory-x",
     "memory_id": "launchpad_memory-x",
 }
@@ -473,24 +476,6 @@ def test_install_race_loser_returns_the_winner(client, monkeypatch):
     assert len(_rows(system_key=KEY)) == 1 and _job_count() == 1
 
 
-def test_admin_uninstall_frees_the_key_for_reinstall(client, monkeypatch):
-    _mark_ready()
-    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
-    torn_down: list[str] = []
-    monkeypatch.setattr(system_router, "_delete_agent_resources",
-                        lambda agent, ws: torn_down.append(agent.id) or True)
-    res = client.delete(f"/api/system-agents/{KEY}")
-    assert res.status_code == 200 and res.json() == {
-        "deleted": True, "agent_id": agent_id, "aws_resource_deleted": True,
-    }
-    assert torn_down == [agent_id]
-    assert _status(client)["status"] == "not_installed"
-    assert client.delete(f"/api/system-agents/{KEY}").status_code == 404
-    again = client.post(INSTALL, json={})
-    assert again.status_code == 202 and again.json()["agent"]["id"] != agent_id
-    assert len(_rows(system_key=KEY, status="deploying")) == 1
-
 
 def test_uninstall_refused_while_deploying(client):
     _mark_ready()
@@ -643,8 +628,8 @@ def test_admin_maintains_the_preset_through_the_dedicated_routes_only(gated, mon
     assert admin.delete(f"/api/agents/{agent_id}").status_code == 403
     assert admin.post(INSTALL, json={"force": True}).status_code == 202
     _set_status(agent_id, "active")
-    monkeypatch.setattr(system_router, "_delete_agent_resources", lambda *a, **k: True)
-    assert admin.delete(f"/api/system-agents/{KEY}").status_code == 200
+    monkeypatch.setattr(system_router, "start_uninstall_async", lambda _jid: None)
+    assert admin.delete(f"/api/system-agents/{KEY}").status_code == 202
 
 
 # ---------------------------------------------------------------------------
@@ -1023,40 +1008,6 @@ def test_two_sessions_repairing_the_same_active_preset_share_one_job(client):
     assert _agent(agent_id).status == "deploying"
 
 
-def test_repair_after_uninstall_reports_not_installed_and_uninstall_waits_for_jobs(
-    client, monkeypatch
-):
-    _mark_ready()
-    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
-    # a running job blocks uninstall …
-    assert client.delete(f"/api/system-agents/{KEY}").json()["code"] == "agent.deploy_in_progress"
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
-    stale = SessionLocal()
-    stale_agent = stale.get(Agent, agent_id)  # loaded while still active
-    monkeypatch.setattr(system_router, "_delete_agent_resources", lambda *a, **k: True)
-    assert client.delete(f"/api/system-agents/{KEY}").status_code == 200
-    with pytest.raises(AppError) as exc:  # … and a repair on the stale snapshot loses
-        service._repair(stale, stale_agent, ARCHITECT, BUCKET, None, force=True)
-    stale.close()
-    assert exc.value.code == "system_agent.not_installed"
-    assert _job_count() == 1
-
-
-def test_uninstall_teardown_failure_leaves_a_retryable_failed_row(client, monkeypatch):
-    _mark_ready()
-    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
-    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
-
-    def boom(*a, **k):
-        raise RuntimeError("DeleteHarness throttled")
-
-    monkeypatch.setattr(system_router, "_delete_agent_resources", boom)
-    tolerant = TestClient(client.app, raise_server_exceptions=False)
-    res = tolerant.delete(f"/api/system-agents/{KEY}")
-    assert res.status_code == 500
-    row = _agent(agent_id)
-    assert row.status == "failed" and "DeleteHarness throttled" in row.error
-    assert _status(client)["status"] == "failed" and _status(client)["can_uninstall"] is True
 
 
 def test_status_readiness_and_operation_verdicts_for_installed_presets(client):
@@ -1084,87 +1035,9 @@ def test_status_readiness_and_operation_verdicts_for_installed_presets(client):
 # ---- (6) pinned, immutable bundle publication -----------------------------------
 
 
-class _FakeS3:
-    def __init__(self, objects: dict | None = None):
-        self.objects: dict[str, bytes] = dict(objects or {})
-        self.puts: list[dict] = []
-
-    class _NoSuchKey(Exception):
-        pass
-
-    def get_object(self, Bucket, Key):
-        if Key not in self.objects:
-            exc = self._NoSuchKey(Key)
-            exc.__class__.__name__ = "NoSuchKey"
-            raise type("NoSuchKey", (Exception,), {})(Key)
-        import io
-        return {"Body": io.BytesIO(self.objects[Key])}
-
-    def put_object(self, **kwargs):
-        self.puts.append(kwargs)
-        self.objects[kwargs["Key"]] = kwargs["Body"]
-        return {}
 
 
-def _package_ctx(monkeypatch, fake: _FakeS3, spec=None, pinned=None):
-    agent_id, dep_id, job_id = _persist_preset(spec=spec)
-    if pinned is not None:
-        db = SessionLocal()
-        job = db.get(Job, job_id)
-        job.payload = {**job.payload, "preset_bundle": pinned}
-        db.commit()
-        db.close()
-    monkeypatch.setattr(aws_clients, "client", lambda service, ws, **kw: fake)
-    return _ctx(agent_id, dep_id, job_id), _agent(agent_id)
 
-
-PREFIX = f"system-skills/{ARCHITECT.name}/1.0.0/"
-
-
-def test_package_publishes_checksummed_files_then_manifest_and_replays_as_noop(monkeypatch):
-    fake = _FakeS3()
-    ctx, agent = _package_ctx(monkeypatch, fake, pinned=presets.bundle_release(ARCHITECT))
-    result = STAGES["package"](ctx, agent)
-    digest, files = presets.bundle_digest(ARCHITECT.skill_path())
-    keys = [p["Key"] for p in fake.puts]
-    assert keys[-1] == f"{PREFIX}{service.MANIFEST_KEY}"  # manifest written LAST
-    assert sorted(keys[:-1]) == sorted(f"{PREFIX}{f}" for f in files)
-    assert all(p["Bucket"] == BUCKET and p["ChecksumSHA256"] for p in fake.puts)
-    assert digest[:12] in result.detail and "v1.0.0" in result.detail
-    manifest = json.loads(fake.objects[f"{PREFIX}{service.MANIFEST_KEY}"])
-    assert manifest["digest"] == digest and manifest["version"] == "1.0.0"
-    # replay (resume / repair): verified no-op, zero writes
-    n = len(fake.puts)
-    again = STAGES["package"](ctx, agent)
-    assert len(fake.puts) == n and "already published" in again.detail
-
-
-def test_package_refuses_a_queued_release_whose_spec_pins_another_version(monkeypatch):
-    fake = _FakeS3()
-    stale = presets.build_spec(ARCHITECT, BUCKET, InstallOptions()).model_dump()
-    stale["skills"] = [f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/0.9.0/"]
-    ctx, agent = _package_ctx(monkeypatch, fake, spec=stale)
-    with pytest.raises(RuntimeError, match="queued release mismatch"):
-        STAGES["package"](ctx, agent)
-    assert fake.puts == []  # refused before any cloud write
-
-
-def test_package_refuses_bytes_that_differ_from_the_pinned_release(monkeypatch):
-    fake = _FakeS3()
-    ctx, agent = _package_ctx(monkeypatch, fake,
-                              pinned={"version": "1.0.0", "digest": "f" * 64, "files": 5})
-    with pytest.raises(RuntimeError, match="pinned bundle mismatch"):
-        STAGES["package"](ctx, agent)
-    assert fake.puts == []
-
-
-def test_package_treats_a_published_version_as_immutable(monkeypatch):
-    fake = _FakeS3({f"{PREFIX}{service.MANIFEST_KEY}":
-                    json.dumps({"version": "1.0.0", "digest": "0" * 64}).encode()})
-    ctx, agent = _package_ctx(monkeypatch, fake, pinned=presets.bundle_release(ARCHITECT))
-    with pytest.raises(RuntimeError, match="immutable"):
-        STAGES["package"](ctx, agent)
-    assert fake.puts == []
 
 
 # ---- (5) stale experiment / canary rows ---------------------------------------
@@ -1253,3 +1126,569 @@ def test_allowed_tools_enforce_sdk_bounds():
     ok = AgentSpec(name="plain-harness", method="harness", system_prompt="hi",
                    allowed_tools=["*", "x" * 64, "@srv/tool"])
     assert ok.allowed_tools == ["*", "x" * 64, "@srv/tool"]
+
+
+# ---------------------------------------------------------------------------
+# correction pass 3 — durable uninstall, atomic pin, immutable publication, KB IAM
+# ---------------------------------------------------------------------------
+
+import io  # noqa: E402
+from hashlib import sha256  # noqa: E402
+
+from botocore.exceptions import ClientError  # noqa: E402
+
+import app.deployer.pipeline as pipeline_module  # noqa: E402
+import app.routers.agents as agents_module  # noqa: E402
+from app.system_agents import uninstall as uninstall_module  # noqa: E402
+
+PREFIX = f"system-skills/{ARCHITECT.name}/1.0.0/"
+MANIFEST = f"{PREFIX}{service.MANIFEST_KEY}"
+
+
+def _s3_error(code: str, op: str) -> ClientError:
+    return ClientError({"Error": {"Code": code, "Message": code}}, op)
+
+
+class _S3:
+    """Fake S3 with real conditional-write semantics (If-None-Match: * / If-Match) and
+    an optional hook run before each put (competing writers, corruption on store)."""
+
+    def __init__(self, objects: dict | None = None):
+        self.objects: dict[str, bytes] = dict(objects or {})
+        self.puts: list[dict] = []
+        self.before_put = None  # callable(fake, kwargs) → None
+        self.corrupt_on_store: set[str] = set()
+
+    def _etag(self, key: str) -> str:
+        return '"' + sha256(self.objects[key]).hexdigest()[:16] + '"'
+
+    def get_object(self, Bucket, Key):
+        if Key not in self.objects:
+            raise _s3_error("NoSuchKey", "GetObject")
+        return {"Body": io.BytesIO(self.objects[Key]), "ETag": self._etag(Key)}
+
+    def put_object(self, **kwargs):
+        if self.before_put:
+            self.before_put(self, kwargs)
+        key = kwargs["Key"]
+        if kwargs.get("IfNoneMatch") == "*" and key in self.objects:
+            raise _s3_error("PreconditionFailed", "PutObject")
+        stale = key not in self.objects or self._etag(key) != kwargs.get("IfMatch")
+        if "IfMatch" in kwargs and stale:
+            raise _s3_error("PreconditionFailed", "PutObject")
+        self.puts.append(kwargs)
+        body = kwargs["Body"]
+        self.objects[key] = body[:-1] + b"?" if key in self.corrupt_on_store else body
+        return {}
+
+
+def _snapshot():
+    return presets.snapshot_bundle(ARCHITECT)
+
+
+def _pinned_preset(monkeypatch, fake: _S3, *, spec=None, pin="valid"):
+    """A preset row + deployment + job whose pin is valid / missing / malformed / stale.
+    An earlier row from the same test is released first (one live key per workspace)."""
+    db = SessionLocal()
+    for row in db.query(Agent).filter(Agent.system_key == KEY, Agent.status != "deleted"):
+        row.status = "deleted"
+    db.commit()
+    db.close()
+    agent_id, dep_id, job_id = _persist_preset(spec=spec)
+    db = SessionLocal()
+    job = db.get(Job, job_id)
+    payload = dict(job.payload)
+    if pin == "valid":
+        payload["preset_bundle"] = _snapshot().release()
+    elif pin == "missing":
+        payload.pop("preset_bundle", None)
+    elif pin == "malformed":
+        payload["preset_bundle"] = {"version": "1.0.0"}  # no digest, no files
+    elif pin == "stale":
+        payload["preset_bundle"] = {**_snapshot().release(), "digest": "f" * 64}
+    job.payload = payload
+    db.commit()
+    db.close()
+    monkeypatch.setattr(aws_clients, "client", lambda service_, ws, **kw: fake)
+    return _ctx(agent_id, dep_id, job_id), _agent(agent_id)
+
+
+# ---- (2) atomic release pin --------------------------------------------------
+
+
+def test_install_pins_the_validated_snapshot_in_the_same_commit_as_the_job(client):
+    _mark_ready()
+    body = client.post(INSTALL, json={}).json()
+    db = SessionLocal()
+    try:
+        job = db.get(Job, body["job_id"])
+        pin = job.payload["preset_bundle"]
+    finally:
+        db.close()
+    snap = _snapshot()
+    assert pin == {"version": "1.0.0", "digest": snap.digest, "files": snap.file_digests()}
+    assert "SKILL.md" in pin["files"] and len(pin["files"]) == len(snap.files)
+
+
+def test_crash_inside_the_queue_commit_leaves_no_half_queued_install_or_repair(client, monkeypatch):
+    """Row, deployment, job and pin are one transaction: a crash in create_deployment
+    (the only commit) leaves nothing runnable behind — not a job without a pin."""
+    _mark_ready()
+
+    def boom(*_a, **_k):
+        raise RuntimeError("simulated crash inside the queue commit")
+
+    monkeypatch.setattr(service, "create_deployment", boom)
+    tolerant = TestClient(client.app, raise_server_exceptions=False)
+    assert tolerant.post(INSTALL, json={}).status_code == 500
+    assert _rows(system_key=KEY) == [] and _job_count() == 0
+    monkeypatch.undo()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    monkeypatch.setattr(service, "create_deployment", boom)
+    assert tolerant.post(INSTALL, json={"force": True}).status_code == 500
+    assert _agent(agent_id).status == "active" and _job_count() == 1  # claim rolled back
+    db = SessionLocal()
+    try:
+        assert all(j.payload.get("preset_bundle") for j in db.query(Job).all())
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("pin", ["missing", "malformed"])
+def test_package_fails_closed_without_a_valid_release_pin(monkeypatch, pin):
+    fake = _S3()
+    ctx, agent = _pinned_preset(monkeypatch, fake, pin=pin)
+    with pytest.raises(RuntimeError, match="no valid release pin"):
+        STAGES["package"](ctx, agent)
+    assert fake.puts == [] and fake.objects == {}
+
+
+def test_package_refuses_a_stale_pin_and_a_queued_version_mismatch(monkeypatch):
+    fake = _S3()
+    ctx, agent = _pinned_preset(monkeypatch, fake, pin="stale")
+    with pytest.raises(RuntimeError, match="pinned bundle mismatch"):
+        STAGES["package"](ctx, agent)
+    stale = presets.build_spec(ARCHITECT, BUCKET, InstallOptions()).model_dump()
+    stale["skills"] = [f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/0.9.0/"]
+    ctx, agent = _pinned_preset(monkeypatch, fake, spec=stale)
+    with pytest.raises(RuntimeError, match="queued release mismatch"):
+        STAGES["package"](ctx, agent)
+    assert fake.puts == []
+
+
+def test_pipeline_resume_reruns_a_pinned_package_stage(monkeypatch):
+    """A restarted worker re-enters the package stage through execute_deploy_job with
+    the pin still on the job — the real resume path, not a direct stage call."""
+    fake = _S3()
+    ctx, agent = _pinned_preset(monkeypatch, fake)
+    calls: list[str] = []
+    monkeypatch.setitem(STAGES, "generate", lambda c, a: calls.append("generate") or
+                        pipeline_module.StageResult(detail="stub"))
+    for name in ("provision", "deploy", "register"):
+        monkeypatch.setitem(STAGES, name, lambda c, a, n=name: calls.append(n) or
+                            pipeline_module.StageResult(detail="stub"))
+    pipeline_module.execute_deploy_job(ctx.job_id)
+    assert calls == ["generate", "provision", "deploy", "register"]
+    assert MANIFEST in fake.objects and _agent(agent.id).status == "active"
+
+
+# ---- (3)/(4) one byte snapshot, conflict-safe publication, honest repair ------
+
+
+def test_publish_uploads_the_snapshot_bytes_conditionally_and_verifies_readback(monkeypatch):
+    fake = _S3()
+    ctx, agent = _pinned_preset(monkeypatch, fake)
+    reads = {"n": 0}
+    real = presets.snapshot_bundle
+
+    def counting(preset):
+        reads["n"] += 1
+        return real(preset)
+
+    monkeypatch.setattr(presets, "snapshot_bundle", counting)
+    result = STAGES["package"](ctx, agent)
+    assert reads["n"] == 1  # the checkout is read ONCE per run
+    monkeypatch.setattr(presets, "snapshot_bundle", real)
+    snap = _snapshot()
+    keys = [p["Key"] for p in fake.puts]
+    assert keys[-1] == MANIFEST and all(k.startswith(PREFIX) for k in keys)
+    assert all(p.get("IfNoneMatch") == "*" for p in fake.puts)  # never an unconditional write
+    for rel, body in snap.files.items():
+        assert fake.objects[f"{PREFIX}{rel}"] == body  # uploaded bytes ARE the snapshot bytes
+    manifest = json.loads(fake.objects[MANIFEST])
+    assert manifest["digest"] == snap.digest and manifest["files"] == snap.file_digests()
+    assert "published" in result.detail and snap.digest[:12] in result.detail
+    # identical replay: zero writes, still verified against every object
+    n = len(fake.puts)
+    again = STAGES["package"](ctx, agent)
+    assert len(fake.puts) == n and "already published · verified" in again.detail
+
+
+def test_publish_detects_a_bad_upload_by_reading_back(monkeypatch):
+    fake = _S3()
+    fake.corrupt_on_store.add(f"{PREFIX}SKILL.md")
+    ctx, agent = _pinned_preset(monkeypatch, fake)
+    with pytest.raises(RuntimeError, match="post-upload verification failed"):
+        STAGES["package"](ctx, agent)
+
+
+def test_publish_restarts_after_a_partial_upload_without_rewriting(monkeypatch):
+    snap = _snapshot()
+    partial = {f"{PREFIX}{rel}": body for rel, body in list(snap.files.items())[:2]}
+    fake = _S3(partial)
+    ctx, agent = _pinned_preset(monkeypatch, fake)
+    result = STAGES["package"](ctx, agent)
+    written = {p["Key"] for p in fake.puts}
+    assert not (written & set(partial))  # existing identical objects were not rewritten
+    assert MANIFEST in written and "published" in result.detail
+
+
+def test_competing_publication_with_different_bytes_is_never_overwritten(monkeypatch):
+    fake = _S3()
+    ctx, agent = _pinned_preset(monkeypatch, fake)
+    foreign = f"{PREFIX}references/intake-options.md"
+
+    def competitor(s3: _S3, kwargs):
+        if kwargs["Key"].endswith("SKILL.md") and foreign not in s3.objects:
+            s3.objects[foreign] = b"# somebody else's release\n"  # lands after our manifest read
+
+    fake.before_put = competitor
+    with pytest.raises(RuntimeError, match="competing publication"):
+        STAGES["package"](ctx, agent)
+    assert fake.objects[foreign] == b"# somebody else's release\n"
+    assert MANIFEST not in fake.objects
+
+
+def test_competing_manifest_with_the_same_content_is_accepted(monkeypatch):
+    snap = _snapshot()
+    fake = _S3()
+    ctx, agent = _pinned_preset(monkeypatch, fake)
+
+    def racer(s3: _S3, kwargs):
+        if kwargs["Key"] == MANIFEST and MANIFEST not in s3.objects:
+            s3.objects[MANIFEST] = json.dumps({"name": ARCHITECT.name, **snap.release()}).encode()
+
+    fake.before_put = racer
+    assert "published" in STAGES["package"](ctx, agent).detail
+
+
+def test_competing_manifest_with_different_content_fails(monkeypatch):
+    fake = _S3()
+    ctx, agent = _pinned_preset(monkeypatch, fake)
+
+    def racer(s3: _S3, kwargs):
+        if kwargs["Key"] == MANIFEST and MANIFEST not in s3.objects:
+            s3.objects[MANIFEST] = json.dumps({"version": "1.0.0", "digest": "0" * 64,
+                                               "files": {}}).encode()
+
+    fake.before_put = racer
+    with pytest.raises(RuntimeError, match="competing publication claimed"):
+        STAGES["package"](ctx, agent)
+    assert json.loads(fake.objects[MANIFEST])["digest"] == "0" * 64  # untouched
+
+
+@pytest.mark.parametrize("manifest", [
+    b"not json", json.dumps({"version": "1.0.0"}).encode(),
+    json.dumps({"version": "1.0.0", "digest": "0" * 64, "files": {}}).encode(),
+])
+def test_malformed_or_conflicting_manifest_fails_before_any_write(monkeypatch, manifest):
+    fake = _S3({MANIFEST: manifest})
+    ctx, agent = _pinned_preset(monkeypatch, fake)
+    with pytest.raises(RuntimeError, match="immutable"):
+        STAGES["package"](ctx, agent)
+    assert fake.puts == []
+
+
+def _published(snap) -> dict[str, bytes]:
+    objs = {f"{PREFIX}{rel}": body for rel, body in snap.files.items()}
+    objs[MANIFEST] = json.dumps({"name": ARCHITECT.name, **snap.release()}).encode()
+    return objs
+
+
+def test_repair_restores_a_missing_required_object_instead_of_saying_verified(monkeypatch):
+    snap = _snapshot()
+    objs = _published(snap)
+    del objs[f"{PREFIX}SKILL.md"]
+    fake = _S3(objs)
+    ctx, agent = _pinned_preset(monkeypatch, fake)
+    result = STAGES["package"](ctx, agent)
+    assert fake.objects[f"{PREFIX}SKILL.md"] == snap.files["SKILL.md"]
+    assert [p["Key"] for p in fake.puts] == [f"{PREFIX}SKILL.md"]
+    assert fake.puts[0].get("IfNoneMatch") == "*"
+    assert "repaired" in result.detail and "verified" not in result.detail
+
+
+@pytest.mark.parametrize("mutation", ["modified", "truncated"])
+def test_repair_replaces_a_corrupt_object_only_against_its_etag(monkeypatch, mutation):
+    snap = _snapshot()
+    objs = _published(snap)
+    good = snap.files["references/intake-options.md"]
+    objs[f"{PREFIX}references/intake-options.md"] = (
+        good.replace(b"Round one", b"Round 1", 1) if mutation == "modified"
+        else good[: len(good) // 2]
+    )
+    fake = _S3(objs)
+    ctx, agent = _pinned_preset(monkeypatch, fake)
+    result = STAGES["package"](ctx, agent)
+    put = fake.puts[-1]
+    assert put["Key"] == f"{PREFIX}references/intake-options.md" and put["IfMatch"]
+    assert fake.objects[put["Key"]] == good and "repaired" in result.detail
+    # a corrupt object changed by someone else between read and repair is left alone
+    fake2 = _S3(dict(objs))
+    ticks = {"n": 0}
+
+    def churn(s3: _S3, kw):  # the object changes again between our read and our If-Match put
+        ticks["n"] += 1
+        s3.objects[kw["Key"]] = b"changed again %d" % ticks["n"]
+
+    fake2.before_put = churn
+    ctx2, agent2 = _pinned_preset(monkeypatch, fake2)
+    with pytest.raises(RuntimeError, match="changed while being repaired"):
+        STAGES["package"](ctx2, agent2)
+
+
+# ---- (1) durable uninstall -------------------------------------------------------
+
+
+def _active_preset(client) -> str:
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    return agent_id
+
+
+def test_uninstall_claims_identity_and_only_the_worker_releases_it(client, monkeypatch):
+    agent_id = _active_preset(client)
+    launched: list[str] = []
+    monkeypatch.setattr(system_router, "start_uninstall_async", launched.append)
+    res = client.delete(f"/api/system-agents/{KEY}")
+    assert res.status_code == 202, res.text
+    body = res.json()
+    assert body["started"] is True and body["attempt"] == 1 and launched == [body["job_id"]]
+    assert _agent(agent_id).status == "uninstalling"
+    status = _status(client)
+    assert status["status"] == "uninstalling" and status["agent_id"] == agent_id
+    assert status["operation"]["kind"] == "uninstall"
+    assert status["operation"]["job_id"] == body["job_id"]
+    assert status["can_install"] is False and status["can_repair"] is False
+    assert status["can_uninstall"] is False  # a live job owns the teardown
+
+    # while the teardown is pending nobody can take the identity …
+    assert client.post(INSTALL, json={}).json()["code"] == "system_agent.uninstalling"
+    assert client.post(INSTALL, json={"force": True}).json()["code"] == "system_agent.uninstalling"
+    # … a repeated uninstall returns the same job …
+    again = client.delete(f"/api/system-agents/{KEY}").json()
+    assert again["job_id"] == body["job_id"] and again["started"] is False
+    assert len(launched) == 1
+    # … and the unique index still holds the key against a direct twin insert
+    db = SessionLocal()
+    db.add(Agent(workspace_id=DEFAULT_WORKSPACE_ID, name=ARCHITECT.name, method="harness",
+                 status="deploying", spec={}, system_key=KEY))
+    from sqlalchemy.exc import IntegrityError as _IE
+    with pytest.raises(_IE):
+        db.flush()
+    db.rollback()
+    db.close()
+
+    # the worker tears down and only then releases the identity
+    torn: list[str] = []
+    monkeypatch.setattr(agents_module, "_delete_agent_resources",
+                        lambda agent, ws: torn.append(agent.id) or True)
+    uninstall_module.execute_uninstall_job(body["job_id"])
+    assert torn == [agent_id] and _agent(agent_id).status == "deleted"
+    db = SessionLocal()
+    job = db.get(Job, body["job_id"])
+    assert job.status == "succeeded" and job.payload["aws_resource_deleted"] is True
+    db.close()
+    assert _status(client)["status"] == "not_installed"
+    reinstalled = client.post(INSTALL, json={})
+    assert reinstalled.status_code == 202 and reinstalled.json()["agent"]["id"] != agent_id
+
+
+def test_failed_teardown_keeps_the_claim_and_is_retried_explicitly(client, monkeypatch):
+    """Host reproduction: an install during a failing teardown must not create a
+    second preset, and the failed teardown must remain visible and retryable."""
+    agent_id = _active_preset(client)
+    monkeypatch.setattr(system_router, "start_uninstall_async", lambda _j: None)
+    first = client.delete(f"/api/system-agents/{KEY}").json()
+
+    def install_then_fail(agent, ws):
+        other = TestClient(client.app)
+        res = other.post(INSTALL, json={})
+        assert res.status_code == 409 and res.json()["code"] == "system_agent.uninstalling"
+        raise RuntimeError("SimulatedAwsFailure: teardown failed after overlapping reinstall")
+
+    monkeypatch.setattr(agents_module, "_delete_agent_resources", install_then_fail)
+    uninstall_module.execute_uninstall_job(first["job_id"])
+    row = _agent(agent_id)
+    assert row.status == "uninstalling" and "SimulatedAwsFailure" in row.error
+    assert len(_rows(system_key=KEY)) == 1  # one identity, still held
+    status = _status(client)
+    assert status["status"] == "uninstalling"
+    assert status["operation"]["job_status"] == "failed"
+    assert "SimulatedAwsFailure" in status["operation"]["error"]
+    assert status["operation"]["retryable"] is True and status["can_uninstall"] is True
+    assert status["can_repair"] is False
+
+    # retry: a new attempt, then a clean teardown releases the key
+    second = client.delete(f"/api/system-agents/{KEY}").json()
+    assert second["started"] is True and second["attempt"] == 2
+    assert second["job_id"] != first["job_id"]
+    monkeypatch.setattr(agents_module, "_delete_agent_resources", lambda a, ws: True)
+    uninstall_module.execute_uninstall_job(second["job_id"])
+    assert _agent(agent_id).status == "deleted"
+    assert _status(client)["status"] == "not_installed"
+
+
+def test_crash_before_and_after_the_cloud_step_resumes_through_pending_jobs(client, monkeypatch):
+    agent_id = _active_preset(client)
+    monkeypatch.setattr(system_router, "start_uninstall_async", lambda _j: None)
+    job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+
+    # crash BEFORE the cloud step: the queued job is what a restart finds
+    resumed: list[tuple[str, str]] = []
+    monkeypatch.setattr(uninstall_module, "start_uninstall_async",
+                        lambda jid: resumed.append(("uninstall", jid)) or threading.Thread())
+    monkeypatch.setattr(pipeline_module, "start_deploy_async",
+                        lambda jid: resumed.append(("deploy", jid)) or threading.Thread())
+    found = pipeline_module.resume_pending_jobs()
+    assert job_id in found and ("uninstall", job_id) in resumed
+    assert _agent(agent_id).status == "uninstalling"  # a crash never leaks "not_installed"
+    assert _status(client)["status"] == "uninstalling"
+
+    # crash AFTER the cloud step but before the ledger write: the resumed worker
+    # re-runs the idempotent teardown (harness already gone) and completes
+    class _Gone(Exception):
+        pass
+
+    calls = {"n": 0}
+
+    def teardown(agent, ws):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _Gone("process killed after DeleteHarness was accepted")
+        return True  # harness already deleted → helper tolerates it
+
+    monkeypatch.setattr(agents_module, "_delete_agent_resources", teardown)
+    uninstall_module.execute_uninstall_job(job_id)  # attempt 1 "crashes" (recorded as failed)
+    assert _agent(agent_id).status == "uninstalling"
+    retry = client.delete(f"/api/system-agents/{KEY}").json()
+    uninstall_module.execute_uninstall_job(retry["job_id"])
+    assert calls["n"] == 2 and _agent(agent_id).status == "deleted"
+
+
+def test_worker_refuses_rows_it_does_not_own(client, monkeypatch):
+    agent_id = _active_preset(client)
+    monkeypatch.setattr(system_router, "start_uninstall_async", lambda _j: None)
+    job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    _set_status(agent_id, "active")  # someone flipped the row back out of band
+    monkeypatch.setattr(agents_module, "_delete_agent_resources",
+                        lambda *a, **k: pytest.fail("teardown must not run"))
+    uninstall_module.execute_uninstall_job(job_id)
+    db = SessionLocal()
+    assert db.get(Job, job_id).status == "failed" and "refusing" in db.get(Job, job_id).error
+    db.close()
+    assert _agent(agent_id).status == "active"
+
+
+def test_uninstall_waits_for_a_running_deploy_and_repair_waits_for_uninstall(client, monkeypatch):
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    assert client.delete(f"/api/system-agents/{KEY}").json()["code"] == "agent.deploy_in_progress"
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    stale = SessionLocal()
+    stale_agent = stale.get(Agent, agent_id)  # loaded while still active
+    monkeypatch.setattr(system_router, "start_uninstall_async", lambda _j: None)
+    assert client.delete(f"/api/system-agents/{KEY}").status_code == 202
+    with pytest.raises(AppError) as exc:  # the stale snapshot cannot steal the claim
+        service._repair(stale, stale_agent, ARCHITECT, BUCKET, None, force=True)
+    assert exc.value.code == "system_agent.uninstalling"
+    stale.close()
+    assert _job_count() == 2  # one deploy job, one uninstall job — nothing else
+
+
+# ---- (5) KB-mode least privilege ---------------------------------------------------
+
+
+def test_preset_kb_mode_grants_exactly_the_devguide_oauth_statements():
+    spec = presets.build_spec(ARCHITECT, BUCKET, InstallOptions(
+        knowledge_bases=(presets.KnowledgeBaseRef(**KB_REF),)))
+    ctx = agent_iam.role_context(ws_ctx(READY_RESOURCES))
+    doc = agent_iam.policy_document(spec, ctx, system_preset=True)
+    by_sid = {s["Sid"]: s for s in doc["Statement"]}
+    assert set(by_sid) == {
+        "BedrockModels", "AgentCoreOAuth2TokenVaultDefault", "AgentCoreOAuth2TokenVaultPerProvider",
+        "AgentCoreOAuth2Secret", "SkillBundleObjects", "SkillBundleList", "Telemetry",
+        "TelemetryTracing",
+    }
+    base = "arn:aws:bedrock-agentcore:us-west-2:111122223333"
+    token_action = "bedrock-agentcore:GetResourceOauth2Token"
+    assert by_sid["AgentCoreOAuth2TokenVaultDefault"]["Action"] == token_action
+    assert by_sid["AgentCoreOAuth2TokenVaultPerProvider"]["Action"] == token_action
+    assert by_sid["AgentCoreOAuth2TokenVaultDefault"]["Resource"] == [
+        f"{base}:token-vault/default",
+        f"{base}:workload-identity-directory/default",
+        f"{base}:workload-identity-directory/default/workload-identity/"
+        "harness_aws_agent_solution_architect-*",
+    ]
+    assert by_sid["AgentCoreOAuth2TokenVaultPerProvider"]["Resource"] == OAUTH_PROVIDER
+    assert by_sid["AgentCoreOAuth2Secret"]["Resource"] == (
+        "arn:aws:secretsmanager:us-west-2:111122223333:secret:"
+        "bedrock-agentcore-identity!default/oauth2/launchpad-gw-m2m-*"
+    )
+    actions = {a for s in doc["Statement"]
+               for a in ([s["Action"]] if isinstance(s["Action"], str) else s["Action"])}
+    for forbidden in ("bedrock-agentcore:GetResourceApiKey",
+                      "bedrock-agentcore:GetWorkloadAccessToken",
+                      "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
+                      "bedrock-agentcore:GetWorkloadAccessTokenForUserId",
+                      "bedrock:Retrieve", "bedrock:AgenticRetrieveStream",
+                      "bedrock:GetKnowledgeBase"):
+        assert forbidden not in actions, forbidden
+    resources = " ".join(str(s["Resource"]) for s in doc["Statement"])
+    assert "bedrock-agentcore-identity!*" not in resources  # no family-wide secret
+    assert "apikey" not in resources
+    # ordinary agents with a KB keep their historical policy shape
+    plain = AgentSpec(name="plain", method="harness", system_prompt="x", knowledge_bases=[KB_REF])
+    plain_sids = {s["Sid"] for s in agent_iam.policy_document(plain, ctx)["Statement"]}
+    assert {"AgentCoreWorkloadIdentity", "IdentityVaultSecrets", "ManagedKbRetrieval",
+            "ManagedKbAgenticRetrieval"} <= plain_sids
+
+
+def test_preset_kb_mode_requires_the_workspace_oauth_provider(client):
+    ctx = agent_iam.role_context(ws_ctx({k: v for k, v in READY_RESOURCES.items()
+                                         if k != "oauth_provider_arn"}))
+    spec = presets.build_spec(ARCHITECT, BUCKET, InstallOptions(
+        knowledge_bases=(presets.KnowledgeBaseRef(**KB_REF),)))
+    with pytest.raises(ValueError, match="oauth_provider_arn"):
+        agent_iam.policy_document(spec, ctx, system_preset=True)
+    _mark_ready(resources={k: v for k, v in READY_RESOURCES.items() if k != "oauth_provider_arn"})
+    res = client.post(INSTALL, json={"knowledge_bases": [KB_REF]})
+    assert res.status_code == 409 and res.json()["code"] == "system_agent.workspace_not_ready"
+    assert res.json()["detail"]["requirements"][0]["code"] == "missing_oauth_provider"
+    assert _rows() == []
+    # a docs-only install (no KB) does not need the provider at all
+    assert client.post(INSTALL, json={}).status_code == 202
+
+
+def test_ensure_role_applies_the_preset_policy_for_system_rows():
+    captured: dict = {}
+
+    class _Iam:
+        def create_role(self, **kw):
+            return {"Role": {"Arn": f"arn:aws:iam::111122223333:role/{kw['RoleName']}"}}
+
+        def put_role_policy(self, **kw):
+            captured[kw["PolicyName"]] = json.loads(kw["PolicyDocument"])
+
+        def delete_role_policy(self, **kw):
+            pass
+
+    spec = presets.build_spec(ARCHITECT, BUCKET, InstallOptions(
+        knowledge_bases=(presets.KnowledgeBaseRef(**KB_REF),)))
+    agent = Agent(id="c" * 32, name=ARCHITECT.name, method="harness", system_key=KEY,
+                  spec=spec.model_dump())
+    agent_iam.ensure_role(_Iam(), agent, spec, agent_iam.role_context(ws_ctx(READY_RESOURCES)))
+    sids = {s["Sid"] for s in captured[f"launchpad-caps-{ARCHITECT.name}"]["Statement"]}
+    assert "AgentCoreOAuth2TokenVaultPerProvider" in sids and "ManagedKbRetrieval" not in sids

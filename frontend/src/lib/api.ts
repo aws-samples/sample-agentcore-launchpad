@@ -77,8 +77,20 @@ export type SystemPresetStatus =
   | "configuration_required"
   | "not_installed"
   | "deploying"
+  | "uninstalling"
   | "active"
   | "failed";
+
+/** The maintenance operation that currently owns a preset row (uninstall job). */
+export interface SystemPresetOperation {
+  kind: "uninstall";
+  job_id: string;
+  job_status: "queued" | "running" | "succeeded" | "failed";
+  attempt: number;
+  error: string | null;
+  /** the teardown failed (or its worker died) and another uninstall may retry it */
+  retryable: boolean;
+}
 
 /** One row of `GET /api/system-agents` — ledger-only, never an AWS read. */
 export interface SystemPresetInfo {
@@ -107,6 +119,8 @@ export interface SystemPresetInfo {
   allowed_tools: string[];
   /** persistent memory contract of the preset (`disabled`) */
   memory: string;
+  /** set while an uninstall job owns the row (status `uninstalling`) */
+  operation: SystemPresetOperation | null;
   /** server verdicts per operation: administrator + operation-specific readiness */
   can_install: boolean;
   can_repair: boolean;
@@ -2769,11 +2783,17 @@ export const api = {
       `/api/system-agents/${encodeURIComponent(key)}/install`,
       { method: "POST", body: JSON.stringify(input) },
     ),
+  /** 202: claims the row (`uninstalling`) and queues the teardown job; repeated calls
+   * return the same live job, a failed teardown gets a new attempt. */
   uninstallSystemPreset: (key: string) =>
-    request<{ deleted: boolean; agent_id: string; aws_resource_deleted: boolean }>(
-      `/api/system-agents/${encodeURIComponent(key)}`,
-      { method: "DELETE" },
-    ),
+    request<{
+      agent: AgentInfo;
+      job_id: string;
+      operation: "uninstall";
+      attempt: number;
+      started: boolean;
+      preset: SystemPresetInfo;
+    }>(`/api/system-agents/${encodeURIComponent(key)}`, { method: "DELETE" }),
   listChatSessions: (agentId: string) =>
     request<{ sessions: ChatSessionInfo[] }>(`/api/chat/${encodeURIComponent(agentId)}/sessions`),
   stopChatSession: (agentId: string, sessionId: string) =>
