@@ -1137,3 +1137,260 @@ def test_winner_branches_revalidate_the_caller_and_never_mask_auth_errors(
     again = _approve(admin, acid, ra)  # winner exists → authorized caller gets it
     assert again.status_code == 200 and again.json()["job_id"] == won.json()["job_id"]
 
+
+
+# ---------------------------------------------------------------------------
+# review 4: ownership lifecycle + KB preflight ordering
+# ---------------------------------------------------------------------------
+
+
+def _pause_then(monkeypatch, target_module, name, gate: threading.Event, release: threading.Event):
+    """Pause the FIRST call of ``target_module.name`` (signalling ``gate``) until ``release``."""
+    original = getattr(target_module, name)
+    calls: list[int] = []
+
+    def paused(*args, **kwargs):
+        result = original(*args, **kwargs)
+        calls.append(1)
+        if len(calls) == 1:
+            gate.set()
+            assert release.wait(timeout=15)
+        return result
+
+    monkeypatch.setattr(target_module, name, paused)
+
+
+def test_live_publication_is_atomic_with_the_durable_claim(client, ready, harness, monkeypatch):
+    """Review-4 #1: pause the first request right after its claim returned (before it
+    could do anything else), age the committed claim in the ledger, send a second
+    ordinary POST: the live owner is not stolen, only one Harness invocation happens."""
+    gate, release = threading.Event(), threading.Event()
+    _pause_then(monkeypatch, service.hc, "new_session_id", gate, release)  # right after claim
+    harness.reply("first reply")
+    cid = _open(client)
+    results: list = []
+    t = threading.Thread(target=lambda: results.append(
+        client.post(f"{BASE}/conversations/{cid}/turns", json={"prompt": "first"})))
+    t.start()
+    assert gate.wait(timeout=10)
+    db = SessionLocal()
+    try:
+        row = db.get(AssistantConversation, cid)
+        assert row.active_turn == 1 and row.active_turn_token  # committed claim …
+        row.active_turn_started_at = datetime.now(UTC) - timedelta(
+            seconds=service.TURN_CLAIM_TTL_S + 5)  # … aged as if the TTL had passed
+        db.commit()
+    finally:
+        db.close()
+    second = client.post(f"{BASE}/conversations/{cid}/turns", json={"prompt": "second"})
+    assert second.status_code == 409 and second.json()["code"] == "assistant.turn_in_progress"
+    release.set()
+    t.join(timeout=30)
+    assert _sse(results[0])[-1][0] == "done"
+    assert len(harness.calls) == 1  # never two concurrent readers
+    detail = _latest(client, cid)
+    assert detail["turns"] == 1 and detail["turn_in_progress"] is None
+    assert [m["role"] for m in detail["messages"]] == ["user", "assistant"]
+    assert cid not in service._LIVE_TURNS
+
+
+def test_failed_claim_never_publishes_and_orphan_recovery_still_works(client, ready, harness):
+    cid = _open(client)
+    db = SessionLocal()
+    try:  # a live-looking claim (not stale) owned by nobody in this process
+        row = db.get(AssistantConversation, cid)
+        row.active_turn, row.turns, row.active_turn_token = 1, 1, "other"
+        row.active_turn_started_at = datetime.now(UTC)
+        db.commit()
+    finally:
+        db.close()
+    res = client.post(f"{BASE}/conversations/{cid}/turns", json={"prompt": "x"})
+    assert res.status_code == 409 and cid not in service._LIVE_TURNS
+    db = SessionLocal()
+    try:  # now an orphan (dead process): recovered through the ordinary route
+        row = db.get(AssistantConversation, cid)
+        row.active_turn_started_at = datetime.now(UTC) - timedelta(
+            seconds=service.TURN_CLAIM_TTL_S + 5)
+        db.commit()
+    finally:
+        db.close()
+    harness.reply("recovered")
+    events = _turn(client, cid, "again")
+    assert events[0][1]["turn"] == 2 and events[-1][0] == "done"
+    assert cid not in service._LIVE_TURNS
+
+
+def test_initial_writes_and_invocation_are_fenced_when_ownership_was_replaced(
+    client, ready, harness, monkeypatch
+):
+    """Review-4 #2: pause after replay composition, replace ownership in the ledger
+    (as another process's orphan takeover would), resume: no user row is committed,
+    no data-plane call is made, the stream reports the loss."""
+    gate, release = threading.Event(), threading.Event()
+    _pause_then(monkeypatch, service, "compose_messages", gate, release)
+    harness.reply("never")
+    cid = _open(client)
+    results: list = []
+    t = threading.Thread(target=lambda: results.append(
+        client.post(f"{BASE}/conversations/{cid}/turns", json={"prompt": "first"})))
+    t.start()
+    assert gate.wait(timeout=10)
+    db = SessionLocal()
+    try:
+        row = db.get(AssistantConversation, cid)
+        row.active_turn, row.active_turn_token = 1, "replaced-by-another-process"
+        row.active_turn_started_at = datetime.now(UTC)
+        db.commit()
+    finally:
+        db.close()
+    release.set()
+    t.join(timeout=30)
+    events = _sse(results[0])
+    assert events[-1][0] == "error" and events[-1][1]["code"] == "assistant.turn_superseded"
+    assert harness.calls == []  # no invocation without current ownership
+    db = SessionLocal()
+    try:
+        assert service._messages(db, cid) == []  # not even the user row
+        row = db.get(AssistantConversation, cid)
+        assert row.active_turn == 1 and row.active_turn_token == "replaced-by-another-process"
+    finally:
+        db.close()
+
+
+def test_claim_loss_mid_stream_closes_the_upstream_and_finalizes_the_producer(
+    client, ready, harness
+):
+    """Review-4 #3: the token is replaced while the upstream streams; the tool fence
+    ends the turn — and the upstream is closed and the producer thread finished, by the
+    request itself (no manual close, no rescue)."""
+    release = threading.Event()
+
+    class Stream:
+        closed = False
+
+        def __init__(self):
+            self.step = 0
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            self.step += 1
+            if self.step == 1:
+                db = SessionLocal()
+                try:  # ownership replaced by "another process" before the tool event lands
+                    row = db.query(AssistantConversation).one()
+                    row.active_turn_token = "stolen"
+                    db.commit()
+                finally:
+                    db.close()
+                return {"contentBlockStart": {"start": {"toolUse": {"name": "t",
+                                                                     "toolUseId": "1"}}}}
+            if self.closed:
+                raise StopIteration
+            release.wait(timeout=30)  # would block forever without a close
+            raise StopIteration
+
+        def close(self):
+            self.closed = True
+            release.set()
+
+    stream = Stream()
+    harness.invoke_harness = lambda **kw: {"stream": stream}
+    cid = _open(client)
+    started = time.monotonic()
+    res = client.post(f"{BASE}/conversations/{cid}/turns", json={"prompt": "go"})
+    assert res.status_code == 200
+    events = _sse(res)
+    assert events[-1][0] == "error" and events[-1][1].get("code") == "assistant.turn_superseded"
+    assert time.monotonic() - started < 6
+    assert stream.closed  # closed by the turn's own cleanup, not by the test
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and any(
+            t.name.startswith("assistant-turn-") for t in threading.enumerate()):
+        time.sleep(0.05)
+    assert not any(t.name.startswith("assistant-turn-") for t in threading.enumerate())
+    db = SessionLocal()
+    try:
+        assert not any(m.role == "tool" for m in service._messages(db, cid))  # fenced
+        assert cid not in service._LIVE_TURNS
+    finally:
+        db.close()
+
+
+def test_kb_preflight_runs_before_any_iam_or_target_write(monkeypatch):
+    """Review-4 #4: three drift cases at the reviewed KB gateway — each refused with ZERO
+    IAM, target and Harness writes; the compliant case provisions normally."""
+
+    class Iam:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        def __getattr__(self, name):
+            def record(**kw):
+                self.calls.append(name)
+                if name == "get_role":
+                    from botocore.exceptions import ClientError
+
+                    raise ClientError({"Error": {"Code": "NoSuchEntity"}}, "GetRole")
+                if name == "create_role":
+                    return {"Role": {"Arn": "arn:aws:iam::111122223333:role/launchpad-agent-x"}}
+                return {}
+            return record
+
+    class Control:
+        def __init__(self, **drift):
+            self.drift = drift
+            self.writes: list[str] = []
+
+        def list_gateways(self, **kw):
+            self.writes.append("list_gateways")
+            raise AssertionError("never list-and-create")
+
+        def create_gateway(self, **kw):
+            self.writes.append("create_gateway")
+            raise AssertionError("never create")
+
+        def get_gateway(self, gatewayIdentifier):
+            base = {"gatewayId": gatewayIdentifier, "gatewayArn": RESOURCES["kb_gateway_arn"],
+                    "gatewayUrl": "https://kb.example/mcp", "authorizerType": "CUSTOM_JWT",
+                    "authorizerConfiguration": KB_AUTHORIZER, "status": "READY"}
+            base.update(self.drift)
+            return base
+
+        def __getattr__(self, name):  # any other AgentCore call is a write we record
+            def record(**kw):
+                self.writes.append(name)
+                return {"items": [], "targetId": "t", "status": "READY"}
+            return record
+
+    spec = contract.to_agent_spec(contract.parse_content(VALID_PROPOSAL)[0], _catalog())
+    ws = workspace_context(Workspace(id="default", name="d", account_id="111122223333",
+                                     region="us-west-2", bootstrap_status="ready",
+                                     resources=dict(RESOURCES)))
+    agent = Agent(id="a3", workspace_id="default", name="hr-helpdesk", method="harness",
+                  status="deploying", spec=spec.model_dump())
+    for drift in ({"gatewayUrl": "https://other.example/mcp"}, {"authorizerType": "AWS_IAM"},
+                  {"status": "CREATING"}):
+        control, iam = Control(**drift), Iam()
+        monkeypatch.setattr(harness_deployer, "control_client", lambda w, c=control: c)
+        ctx = StageContext(agent_id="a3", deployment_id="d", job_id="j", workspace=ws)
+        ctx.scratch["assistant_pin"] = _pin()
+        ctx.log = lambda m: None
+        with pytest.raises(RuntimeError):
+            harness_deployer._stage_provision(ctx, agent, iam_client=iam)
+        assert iam.calls == [], drift            # no IAM write of any kind
+        assert control.writes == [], drift       # no target/gateway write of any kind
+    # compliant gateway: preflight passes, then the role and targets are provisioned
+    control, iam = Control(), Iam()
+    monkeypatch.setattr(harness_deployer, "control_client", lambda w: control)
+    monkeypatch.setattr(harness_deployer.kbgw, "ensure_retrieve_target",
+                        lambda c, gid, kb_id, name, desc: control.writes.append("retrieve"))
+    monkeypatch.setattr(harness_deployer.kbgw, "sync_agentic_target",
+                        lambda c, gid, name, kbs: control.writes.append("agentic"))
+    ctx = StageContext(agent_id="a3", deployment_id="d", job_id="j", workspace=ws)
+    ctx.scratch["assistant_pin"] = _pin()
+    ctx.log = lambda m: None
+    result = harness_deployer._stage_provision(ctx, agent, iam_client=iam)
+    assert "kb targets ready" in result.detail
+    assert "create_role" in iam.calls and control.writes == ["retrieve", "agentic"]

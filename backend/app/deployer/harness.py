@@ -479,12 +479,22 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
 
 def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) -> StageResult:
     spec = AgentSpec(**agent.spec)
+    pin = ctx.scratch.get("assistant_pin")
+    reviewed_gw: dict[str, str] | None = None
+    if pin and spec.knowledge_bases:
+        # Assistant approval: the EXISTING, READY gateway the member reviewed (id, ARN,
+        # URL, inbound authorizer type + configuration) is verified FIRST — before the
+        # execution role or any target is created or changed. Never list-and-create.
+        expected = ((pin.get("bindings") or {}).get("resources") or {}).get("kb_gateway") or {}
+        reviewed_gw = kbgw.lookup_existing_kb_gateway(
+            control_client(ctx.workspace), ctx.workspace, expected=expected
+        )
+        ctx.log(f"kb gateway {reviewed_gw['id']} verified READY (existing, reviewed)")
     role_arn, role_detail = agent_iam.provision_execution_role(
         agent, spec, get_settings(), ctx.workspace, ctx.log, iam=iam_client
     )
     ctx.scratch["execution_role_arn"] = role_arn
 
-    pin = ctx.scratch.get("assistant_pin")
     if spec.knowledge_bases:
         if agent.system_key:
             from app.system_agents.service import verify_knowledge_bases
@@ -493,14 +503,8 @@ def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) ->
             # workspace before any gateway target is created for them.
             verify_knowledge_bases(ctx, spec)
         control = control_client(ctx.workspace)
-        if pin:
-            # Assistant approval: mount on the EXISTING, READY gateway the member
-            # reviewed — never the list-and-create helper.
-            expected = ((pin.get("bindings") or {}).get("resources") or {}).get("kb_gateway") or {}
-            # id, ARN, URL, inbound authorizer type + configuration and READY — verified
-            # against the reviewed configuration BEFORE any IAM/target write
-            gw = kbgw.lookup_existing_kb_gateway(control, ctx.workspace, expected=expected)
-            ctx.log(f"kb gateway {gw['id']} verified READY (existing, reviewed)")
+        if reviewed_gw is not None:
+            gw = reviewed_gw  # verified above, before the IAM writes
         else:
             gw = kbgw.ensure_kb_gateway_persisted(control, ctx.workspace)
         for kb in spec.knowledge_bases:

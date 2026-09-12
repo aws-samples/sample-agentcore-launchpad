@@ -751,6 +751,16 @@ def claim_turn(db: Session, conversation_id: str) -> tuple[int, str]:
     invalidated so it can never publish (fail-safe, no result stealing)."""
     now = datetime.now(UTC)
     token = uuid.uuid4().hex
+    # ONE ownership acquisition: the process-level registry lock is held across the
+    # durable claim AND its local publication, so no other claimer in this process
+    # can observe "claimed but not yet live" and take the turn over as an orphan.
+    with _LIVE_TURNS_LOCK:
+        return _claim_turn_locked(db, conversation_id, now, token)
+
+
+def _claim_turn_locked(
+    db: Session, conversation_id: str, now: datetime, token: str
+) -> tuple[int, str]:
     _lock_conversation(db, conversation_id)
     claimed = db.execute(
         update(AssistantConversation)
@@ -766,7 +776,7 @@ def claim_turn(db: Session, conversation_id: str) -> tuple[int, str]:
     if claimed != 1:
         row = db.get(AssistantConversation, conversation_id)
         if (row is not None and _claim_is_stale(row, now) and row.turns < MAX_TURNS
-                and not _turn_live_here(conversation_id)):
+                and conversation_id not in _LIVE_TURNS):  # registry lock is held
             claimed = db.execute(
                 update(AssistantConversation)
                 .where(AssistantConversation.id == conversation_id,
@@ -790,6 +800,7 @@ def claim_turn(db: Session, conversation_id: str) -> tuple[int, str]:
                 {"active_turn": row.active_turn}, status_code=409,
             )
     db.commit()
+    _LIVE_TURNS[conversation_id] = token  # published before any other claimer may run
     db.expire_all()
     turn = db.execute(
         select(AssistantConversation.active_turn)
@@ -1021,30 +1032,43 @@ def record_proposal(
 
 
 def _persist_partial(
-    db: Session, conversation: AssistantConversation, turn: int, token: str, session_id: str,
-    text: str, error: str,
+    db: Session, conversation: AssistantConversation | tuple[str, str | None], turn: int,
+    token: str, session_id: str, text: str, error: str,
 ) -> bool:
     """Persist a partial/failed turn — only while this worker still holds the claim
-    (a reclaimed turn's late worker writes nothing)."""
-    _lock_conversation(db, conversation.id)
-    if not _holds_claim(db, conversation.id, turn, token):
+    (a reclaimed turn's late worker writes nothing). ``conversation`` may be the plain
+    ``(id, workspace_id)`` pair: the finalizer runs after the owning session may have
+    been closed, so it must not touch a (detached) ORM instance."""
+    if isinstance(conversation, tuple):
+        conversation_id, workspace_id = conversation
+    else:
+        conversation_id, workspace_id = conversation.id, conversation.workspace_id
+    _lock_conversation(db, conversation_id)
+    if not _holds_claim(db, conversation_id, turn, token):
         db.rollback()
         return False
     if text:
         db.add(AssistantMessage(
-            workspace_id=conversation.workspace_id, conversation_id=conversation.id,
+            workspace_id=workspace_id, conversation_id=conversation_id,
             turn=turn, role="assistant", text=text, runtime_session_id=session_id,
         ))
     db.add(AssistantMessage(
-        workspace_id=conversation.workspace_id, conversation_id=conversation.id,
+        workspace_id=workspace_id, conversation_id=conversation_id,
         turn=turn, role="error", text=error[:4000], runtime_session_id=session_id,
     ))
     db.commit()
     return True
 
 
-class _ClaimLost(Exception):
+class _ClaimLost(AppError):
     """Raised inside a turn when its claim was taken over: writes stop immediately."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "assistant.turn_superseded",
+            "this turn's claim was taken over; nothing was written or invoked for it",
+            status_code=409,
+        )
 
 
 class TurnRun:
@@ -1139,16 +1163,29 @@ def run_turn(
     agent = _require_available(db, row)
     check_prompt(conversation, prompt)
     conversation_id = conversation.id
-    turn, token = claim_turn(db, conversation_id)
-    with _LIVE_TURNS_LOCK:
-        _LIVE_TURNS[conversation_id] = token
+    turn, token = claim_turn(db, conversation_id)  # durable claim + live publication
     conversation = db.get(AssistantConversation, conversation_id)
+    ids = (conversation_id, conversation.workspace_id)  # plain values for the finalizer
     session_id = hc.new_session_id()
     parts: list[str] = []
     terminal = False  # True once a terminal row (reply or error) was persisted
+    producer: threading.Thread | None = None
+
+    def owned() -> bool:
+        with _LIVE_TURNS_LOCK:
+            live = _LIVE_TURNS.get(conversation_id) == token
+        return live and _holds_claim(db, conversation_id, turn, token)
+
     try:
         history = [m for m in _messages(db, conversation_id) if m.turn != turn]
         messages, omitted = compose_messages(conversation, history, prompt)
+        # the FIRST write is fenced like every other one: composing the replay took
+        # time, and ownership may have been replaced meanwhile
+        _lock_conversation(db, conversation_id)
+        if not owned():
+            db.rollback()
+            raise _ClaimLost()
+        conversation = db.get(AssistantConversation, conversation_id)
         db.add(AssistantMessage(
             workspace_id=conversation.workspace_id, conversation_id=conversation_id,
             turn=turn, role="user", text=prompt, runtime_session_id=session_id,
@@ -1182,8 +1219,15 @@ def run_turn(
                 except BaseException as exc:  # surfaced to the consumer below
                     events.put(("error", exc))
 
-            threading.Thread(target=produce, daemon=True,
-                             name=f"assistant-turn-{conversation_id[:8]}-{turn}").start()
+            # no data-plane call without CURRENT ownership
+            _lock_conversation(db, conversation_id)
+            if not owned():
+                db.rollback()
+                raise _ClaimLost()
+            db.rollback()
+            producer = threading.Thread(target=produce, daemon=True,
+                                        name=f"assistant-turn-{conversation_id[:8]}-{turn}")
+            producer.start()
             while True:
                 try:
                     kind, event = events.get(timeout=HEARTBEAT_S)
@@ -1214,15 +1258,18 @@ def run_turn(
                     parts.append(event["data"].get("text", ""))
                 yield event
         except Exception as exc:
-            _persist_partial(db, conversation, turn, token, session_id, "".join(parts),
+            _persist_partial(db, ids, turn, token, session_id, "".join(parts),
                              f"{type(exc).__name__}: {exc}")
             terminal = True
-            yield {"event": "error", "data": {"message": f"{type(exc).__name__}: {exc}"}}
+            payload: dict[str, Any] = {"message": f"{type(exc).__name__}: {exc}"}
+            if isinstance(exc, AppError):
+                payload = {"code": exc.code, "message": exc.message}
+            yield {"event": "error", "data": payload}
             return
         if run.cancelled:
             # the owner cancelled while we were blocked upstream: the stream ended
             # because it was closed, not because the reply completed
-            _persist_partial(db, conversation, turn, token, session_id, "".join(parts),
+            _persist_partial(db, ids, turn, token, session_id, "".join(parts),
                              "interrupted: the response stream was closed before the reply "
                              "completed")
             terminal = True
@@ -1269,7 +1316,7 @@ def run_turn(
             # never derive a proposal from an incomplete reply.
             try:
                 _persist_partial(
-                    db, conversation, turn, token, session_id, "".join(parts),
+                    db, ids, turn, token, session_id, "".join(parts),
                     "interrupted: the response stream was closed before the reply completed",
                 )
             except Exception:  # pragma: no cover — teardown must not mask the cause
@@ -1281,6 +1328,14 @@ def run_turn(
         with _LIVE_TURNS_LOCK:
             if _LIVE_TURNS.get(conversation_id) == token:
                 del _LIVE_TURNS[conversation_id]
+        # A terminal ledger row does not mean the transport is closed: on every exit
+        # (completion, early error, claim loss, cancel) close the upstream stream and
+        # give the producer a bounded chance to finish — never leave a blocked reader.
+        run.signal()
+        if producer is not None:
+            producer.join(timeout=HEARTBEAT_S * 3)
+            if producer.is_alive():  # pragma: no cover — logged, never hidden
+                logger.warning("assistant: turn %s producer still alive after cleanup", turn)
         run.finished = True
 
 

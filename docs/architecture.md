@@ -807,7 +807,13 @@ readiness, immutable principal equality with the conversation owner); authorizat
 and ownership errors are never converted into a success. A turn whose owner is still a
 live request of this process is never taken over whatever its age (`_LIVE_TURNS`);
 TTL takeover is for orphans of a dead process, and every write of a turn (user, tool,
-reply, proposal) is fenced on the claim token. The upstream event stream is consumed
+reply, proposal) is fenced on the claim token. The durable claim and its local live
+publication are one acquisition under the registry lock (no observable "claimed but not
+yet live" window); the first user row and the data-plane call are fenced on current
+ownership too; and every exit of a turn — completion, early error, claim loss — closes
+the upstream stream and boundedly joins the producer thread. A KB mount's full reviewed
+gateway identity/readiness check runs before the execution role or any target is
+created. The upstream event stream is consumed
 by a producer thread while the response generator waits at most one heartbeat (SSE
 keep-alive), so a client disconnect (ASGI 2.0 or a failed ASGI 2.4 send) is observed
 within a second, closes the upstream — unblocking a pending read — and the response
