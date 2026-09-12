@@ -117,7 +117,12 @@ def uninstall_system_agent(
     require_admin(request)
     preset = _preset(preset_key)
     outcome = service.uninstall_preset(db, ws.row, preset)
-    if outcome.started:  # only the claim owner launches the worker
+    # The claim owner launches the worker. A repeated request for a job that is still
+    # QUEUED launches one too: its worker may have given up waiting for a retiring
+    # predecessor's lock, and a queued job must never depend on an app restart. Two
+    # workers on one queued job are harmless — the queued→running CAS admits exactly
+    # one, the other exits; one thread per request, never a loop.
+    if outcome.started or outcome.job.status == "queued":
         start_uninstall_async(outcome.job.id)
     return JSONResponse(
         status_code=202,

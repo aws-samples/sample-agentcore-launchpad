@@ -444,8 +444,14 @@ ownership regardless of the current `per_agent_execution_roles` toggle (a preset
 never on the shared role), and an IAM delete that reports failure is a retryable
 failure, never an ignored `False`. Progress per step (`kb_target`, `harness`, `role`,
 with the exact resource id) is recorded on the job; a new attempt carries forward
-only steps verified done, and the worker trusts a carried step only when its
-resource id still matches the row. Only a fully verified teardown marks the row
+verified-done steps as skip-eligible (trusted only while their resource id still
+matches the row) and carries the **identity** of failed or pending steps — the
+pinned target id and gateway id — as `pinned`, so the retry runs the step again
+against the same resource and never resolves a replacement by name. A queued retry
+requested while the failed predecessor still holds the lock waits boundedly
+(30 s) for the release; a repeated `DELETE` for a still-queued job launches a worker
+again (the `queued → running` CAS admits exactly one), so a queued attempt never
+depends on an app restart. Only a fully verified teardown marks the row
 `deleted`. The ordinary agent delete keeps its best-effort semantics; the preset does
 not use it. The deploy job runs the **normal** `generate → package → provision →
 deploy → register` pipeline with three preset-specific hardenings, guarded **at job

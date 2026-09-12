@@ -354,8 +354,11 @@ evaluator 映射、AgentCore 优先的取舍、证据分级、不自主执行）
 `DeleteHarness` 并轮询 `GetHarness` 直到 `ResourceNotFoundException`（`DELETE_FAILED` 或 90 秒上限都是
 可重试失败）；然后才按安装时的归属删除角色，与当前 `per_agent_execution_roles` 开关无关（预置绝不在
 共享角色上），报告失败的 IAM 删除是可重试失败，绝不是被忽略的 `False`。逐步进度（`kb_target`、
-`harness`、`role`，含精确资源 ID）记录在任务上；新尝试只继承已核实完成的步骤，worker 只在资源 ID 仍
-与行一致时信任继承的步骤。只有完全核实的拆除才把行标记为 `deleted`。普通 Agent 删除保持尽力而为语义；
+`harness`、`role`，含精确资源 ID）记录在任务上；新尝试把已核实完成的步骤作为可跳过项继承（仅在资源 ID
+仍与行一致时信任），并把失败或未完成步骤的**身份**——钉住的目标 ID 与网关 ID——以 `pinned` 状态继承，
+因此重试针对同一资源重跑该步骤，绝不按名称解析到替换资源。在失败的前任仍持有锁时请求的排队重试会
+有界等待（30 秒）锁释放；对仍处于排队状态的任务重复 `DELETE` 会再次启动 worker
+（`queued → running` 条件更新只放行一个），因此排队的尝试绝不依赖应用重启。只有完全核实的拆除才把行标记为 `deleted`。普通 Agent 删除保持尽力而为语义；
 预置不使用它。部署任务走
 **标准** `generate → package → provision → deploy → register` 管道，并带三项预置专属加固，且在
 **任务入口**设防：每个系统预置部署任务——无论新建还是恢复、无论哪些阶段已成功或已跳过——在任何

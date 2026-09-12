@@ -4,6 +4,7 @@ client factory made to fail loudly wherever a read path might reach for it)."""
 
 import json
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -1727,15 +1728,21 @@ def test_teardown_that_does_not_finish_stays_uninstalling_and_retryable(
     retry = client.delete(f"/api/system-agents/{KEY}").json()
     assert retry["started"] is True and retry["attempt"] == 2
     carried = _job(retry["job_id"]).payload.get("progress", {})
-    assert all(v["state"] == "done" for v in carried.values())
+    assert all(v["state"] in ("done", "pinned") for v in carried.values())
     if scenario == "kb_target":
-        assert carried == {}  # nothing was verified done — but the pinned id survives below
+        # nothing was verified done, but the pinned target identity IS carried
+        assert set(carried) == {"kb_target"}
+        assert carried["kb_target"]["target_id"] == "t-old"
+        assert carried["kb_target"]["gateway_id"] == "gw-1"
+        assert carried["kb_target"]["state"] == "pinned"
     uninstall_module.execute_uninstall_job(retry["job_id"])
     assert _agent(agent_id).status == "deleted" and _job(retry["job_id"]).status == "succeeded"
     if scenario == "role_false":
         assert ("delete", "h1") not in control2.calls  # harness step carried (same id)
     if scenario == "kb_target":
-        assert ("list", None) not in control2.target_calls or True
+        # the retry deleted the PINNED target and never resolved a name again
+        assert ("delete", "t-old") in control2.target_calls
+        assert all(c[0] != "list" for c in control2.target_calls)
 
 
 def test_simultaneous_uninstall_requests_share_one_owner_job(client, monkeypatch):
@@ -2235,17 +2242,15 @@ def test_kb_retry_after_access_denied_uses_the_pinned_id_not_a_fresh_lookup(clie
     first = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
     uninstall_module.execute_uninstall_job(first)
     assert _job(first).status == "failed" and _agent(agent_id).status == "uninstalling"
-    # the retry inherits the pinned id even though it was not "done"; a fresh lookup
-    # would now resolve a DIFFERENT target that happens to carry the name
-    retry = client.delete(f"/api/system-agents/{KEY}").json()
-    db = SessionLocal()
-    job = db.get(Job, retry["job_id"])
-    job.payload = {**job.payload,
-                   "progress": {"kb_target": {"state": "failed", "target_id": "t-old"}}}
-    db.commit()
-    db.close()
+    # a fresh name lookup would now resolve a DIFFERENT target (a replacement carrying
+    # the same name); the ORDINARY retry request must carry the pinned identity itself
     control2 = _HarnessControl(targets=[{"name": name, "targetId": "t-other"}], missing=True)
     _strict_stubs(monkeypatch, control2, agent_id=agent_id)
+    retry = client.delete(f"/api/system-agents/{KEY}").json()
+    assert retry["started"] is True and retry["attempt"] == 2
+    carried = _job(retry["job_id"]).payload["progress"]["kb_target"]
+    assert carried["target_id"] == "t-old" and carried["gateway_id"] == "gw-1"
+    assert carried["state"] == "pinned"  # identity carried, completion NOT
     uninstall_module.execute_uninstall_job(retry["job_id"])
     assert ("delete", "t-old") in control2.target_calls
     assert ("delete", "t-other") not in control2.target_calls
@@ -2370,3 +2375,88 @@ def test_carried_progress_is_only_trusted_for_the_same_resource_id(client, monke
     uninstall_module.execute_uninstall_job(retry)
     assert ("delete", "h9") in control2.calls  # … but re-run because the id differs
     assert _agent(agent_id).status == "deleted"
+
+
+# ---- pass 7: queued retry behind a retiring predecessor's lock ------------------------
+
+
+def test_queued_retry_waits_for_the_retiring_predecessor_and_then_runs_once(client, monkeypatch):
+    """The failed attempt commits its failure BEFORE it releases the lock; an operator
+    can request the retry inside that window. The retry's worker must wait (bounded)
+    for the release and then run exactly once — no restart, no manual state."""
+    agent_id = _active_preset(client)
+    control, deleted = _strict_stubs(monkeypatch, role_ok=False, agent_id=agent_id)
+    monkeypatch.setattr(uninstall_module, "_lock_sleep", lambda s: time.sleep(0.01))
+    monkeypatch.setattr(uninstall_module, "LOCK_WAIT_S", 10)
+    failed_committed = threading.Event()
+    release_predecessor = threading.Event()
+    real_release = uninstall_module._release_lock
+
+    def retiring_release(fd):
+        # the predecessor has already committed its failure; hold the lock until told
+        if fd is not None and not release_predecessor.is_set():
+            failed_committed.set()
+            release_predecessor.wait(timeout=10)
+        real_release(fd)
+
+    monkeypatch.setattr(uninstall_module, "_release_lock", retiring_release)
+    first = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    predecessor = threading.Thread(target=uninstall_module.execute_uninstall_job, args=(first,))
+    predecessor.start()
+    assert failed_committed.wait(timeout=10)
+    assert _job(first).status == "failed"  # visible failure, lock still held
+
+    # the operator retries inside the window: a distinct queued attempt
+    launched: list[str] = []
+    monkeypatch.setattr(system_router, "start_uninstall_async", launched.append)
+    retry = client.delete(f"/api/system-agents/{KEY}").json()
+    assert retry["started"] is True and retry["attempt"] == 2 and launched == [retry["job_id"]]
+    good_iam = _Iam(_owned_role(agent_id))
+    monkeypatch.setattr(aws_clients, "client",
+                        lambda name, ws, **kw: good_iam if name == "iam" else pytest.fail(name))
+    worker = threading.Thread(target=uninstall_module.execute_uninstall_job,
+                              args=(retry["job_id"],))
+    worker.start()
+    time.sleep(0.1)
+    assert _job(retry["job_id"]).status == "queued"  # waiting behind the retiring lock
+    release_predecessor.set()
+    predecessor.join(timeout=10)
+    worker.join(timeout=15)
+    assert _job(retry["job_id"]).status == "succeeded" and _agent(agent_id).status == "deleted"
+    assert good_iam.deleted == [agent_iam.role_name_for(ARCHITECT.name, agent_id)]
+    assert control.calls.count(("delete", "h1")) == 1  # harness step carried, not repeated
+    db = SessionLocal()
+    assert db.query(Job).filter(Job.type == service.UNINSTALL_JOB_TYPE).count() == 2
+    db.close()
+
+
+def test_queued_retry_that_times_out_stays_queued_and_the_next_request_relaunches_it(
+    client, monkeypatch
+):
+    agent_id = _active_preset(client)
+    control, _ = _strict_stubs(monkeypatch, agent_id=agent_id)
+    monkeypatch.setattr(uninstall_module, "LOCK_WAIT_S", 0)
+    monkeypatch.setattr(uninstall_module, "_lock_sleep", lambda s: None)
+    launched: list[str] = []
+    monkeypatch.setattr(system_router, "start_uninstall_async", launched.append)
+    holder = uninstall_module._acquire_lock(agent_id)  # a live predecessor in another process
+    job_id = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    uninstall_module.execute_uninstall_job(job_id)  # bounded wait expires → gives up
+    assert _job(job_id).status == "queued" and control.calls == []
+    again = client.delete(f"/api/system-agents/{KEY}").json()
+    assert again["job_id"] == job_id and again["started"] is False
+    assert launched == [job_id, job_id]  # the repeated request relaunches the queued job
+    uninstall_module._release_lock(holder)
+    uninstall_module.execute_uninstall_job(job_id)
+    assert _job(job_id).status == "succeeded" and _agent(agent_id).status == "deleted"
+    # a RUNNING job is never relaunched by a repeated request
+    agent_id2 = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id2, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h2")
+    launched.clear()
+    job2 = client.delete(f"/api/system-agents/{KEY}").json()["job_id"]
+    db = SessionLocal()
+    db.get(Job, job2).status = "running"
+    db.commit()
+    db.close()
+    assert client.delete(f"/api/system-agents/{KEY}").json()["started"] is False
+    assert launched == [job2]

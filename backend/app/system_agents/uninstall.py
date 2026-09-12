@@ -65,7 +65,14 @@ JOB_TYPE = "uninstall_system_agent"
 HARNESS_GONE_TIMEOUT_S = 90
 TARGET_GONE_TIMEOUT_S = 60
 POLL_S = 3
+# A QUEUED job may wait this long for a retiring predecessor's lock (the previous
+# attempt commits its failure before it releases the lock, so an operator can request
+# the retry inside that window). A running job never waits: it is either ours (resume)
+# or someone else's.
+LOCK_WAIT_S = 30
+LOCK_POLL_S = 0.2
 _sleep = time.sleep  # injectable in tests
+_lock_sleep = time.sleep
 LOCK_DIR = DATA_DIR / "locks" / "system-agents"
 
 _STEPS = ("kb_target", "harness", "role")
@@ -184,9 +191,10 @@ def _teardown_kb_target(
     current). Its id is pinned on the job before deletion; deletion and readback use
     the pinned id only.
     """
-    gateway_id = workspace.resources.get("kb_gateway_id")
     recorded = _step_state(db.get(Job, job_id), "kb_target") if db is not None and job_id else {}
     target_id = recorded.get("target_id")
+    # the pinned gateway wins over the current resource map: identity, once pinned, is exact
+    gateway_id = recorded.get("gateway_id") or workspace.resources.get("kb_gateway_id")
     if not gateway_id:
         if target_id or (agent.spec or {}).get("knowledge_bases"):
             raise RuntimeError(
@@ -205,7 +213,7 @@ def _teardown_kb_target(
             # pin the exact id BEFORE the delete; the fence inside _progress guarantees
             # the row is still ours to clean
             _progress(db, job_id, "kb_target", "pinned", f"target {target_id}",
-                      target_id=target_id)
+                      target_id=target_id, gateway_id=gateway_id)
     try:
         control.delete_gateway_target(gatewayIdentifier=gateway_id, targetId=target_id)
     except Exception as exc:  # noqa: BLE001 — anything but not-found propagates
@@ -317,6 +325,13 @@ def execute_uninstall_job(job_id: str, *, resume: bool = False) -> None:
             return  # terminal — inert
         agent_id = (job.payload or {}).get("agent_id") or ""
         lock = _acquire_lock(agent_id)
+        if lock is None and job.status == "queued":
+            # a distinct queued retry behind a retiring predecessor: wait, bounded, for
+            # its lock to be released, then proceed through the same CAS + fence
+            deadline = time.monotonic() + LOCK_WAIT_S
+            while lock is None and time.monotonic() < deadline:
+                _lock_sleep(LOCK_POLL_S)
+                lock = _acquire_lock(agent_id)
         if lock is None:
             logger.info("uninstall job %s: another worker holds the teardown lock", job_id)
             return

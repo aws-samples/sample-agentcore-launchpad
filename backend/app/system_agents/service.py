@@ -984,11 +984,19 @@ def uninstall_preset(db: Session, row: Workspace, preset: SystemPreset) -> Unins
     # a new attempt carries forward only steps the previous one VERIFIED done; the
     # worker re-checks that each carried step names the same exact resource id
     prior_progress = ((previous.payload or {}).get("progress") or {}) if previous else {}
-    carried = {
-        step: entry
-        for step, entry in prior_progress.items()
-        if isinstance(entry, dict) and entry.get("state") == "done"
-    }
+    carried: dict[str, Any] = {}
+    for step, entry in prior_progress.items():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("state") == "done":
+            carried[step] = entry  # skip-eligible (the worker re-checks the resource id)
+            continue
+        # A failed/pending step runs again — but against the SAME pinned resource:
+        # identity is carried, completion is not.
+        identity = {k: entry[k] for k in ("target_id", "gateway_id", "resource_id") if entry.get(k)}
+        if identity:
+            carried[step] = {**identity, "state": "pinned",
+                             "detail": f"identity carried from attempt {attempt - 1}"}
     payload: dict[str, Any] = {"agent_id": agent.id, "preset_key": preset.key, "attempt": attempt}
     if carried:
         payload["progress"] = carried
