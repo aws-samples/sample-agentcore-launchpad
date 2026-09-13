@@ -398,7 +398,9 @@ def preset_status(
         # SE-043: the preset's Skill as its own Registry record — the ledger mapping
         # (identifiers + registered release; approval is read from AWS in the
         # Registry) and the admin verdict for the register/verify action.
-        "skill_registration": skill_registry.status_projection(db, row.id, preset),
+        "skill_registration": skill_registry.status_projection(
+            db, row.id, (row.resources or {}).get("registry_id"), preset
+        ),
         "can_register_skill": (
             is_admin and installed and agent.status == "active" and not requirements
         ),

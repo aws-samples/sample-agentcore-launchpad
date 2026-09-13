@@ -125,13 +125,17 @@ billable operator action that runs the normal deploy pipeline.
 | `DELETE` | `/api/system-agents/{key}` | admin | `202 {agent, job_id, operation: uninstall, attempt, started, preset}` — claims the row (`uninstalling`, optimistic CAS) and queues the teardown job in one commit; simultaneous requests share one job (`started: false` for the loser); the row keeps its identity until the exclusive (per-agent advisory lock, single host), fenced worker has verified every KB target, the Harness and the dedicated role are gone (per-step `progress` with exact resource ids on the job, carried into the next attempt only when verified); a failed teardown gets attempt N+1; `409 agent.deploy_in_progress` while a deploy runs |
 
 `GET /api/system-agents` additionally reports `skill_registration` (`{record_id,
-status: creating | registered, release_version, release_digest, path, updated_at} |
-null`, ledger-only) and `can_register_skill`. Registry records (`GET
+pending_record_id, status: creating | accepted | registered, release_version,
+release_digest, path, updated_at} | null`, ledger-only; `accepted` = our create returned
+`pending_record_id` but the read-back has not verified it, `record_id` stays `null`
+until it does; `null` when nothing is mapped for the workspace's current registry) and
+`can_register_skill`. Registry records (`GET
 /api/registry/records[/{id}]`, search, action/update/reimport responses) carry a
 server-derived `system` member — `{managed: true, preset_key, label, skill_version,
 release_digest, path, protected_actions[], admin_actions[]} | null` — set exactly when
-the workspace ledger maps the record to a system preset's Skill; it is never read from
-descriptors or tags. For such a record `PUT`, `POST …/reimport` and `DELETE` answer
+the workspace ledger maps the record (verified or accepted id) to a system preset's
+Skill **in the workspace's current registry**; it is never read from descriptors or
+tags. For such a record `PUT`, `POST …/reimport` and `DELETE` answer
 `403 registry.system_skill_protected` for every caller, `POST …/action` answers it for
 members (administrators may submit/approve/reject/disable), and an ordinary Skill
 register/import under the reserved name answers `409 registry.name_reserved`.
@@ -139,7 +143,10 @@ Skill-registration error codes: `system_skill.preset_not_active` (409),
 `system_skill.release_mismatch` (409, this build's bundle is not the installed
 release), `system_skill.bundle_unverified` (409, the published S3 release differs from
 the snapshot; nothing written), `system_skill.foreign_record` (409, a same-name Skill
-record that is not the platform's), `system_skill.stale_release` (409),
+record this platform cannot prove it created — also a lost-create replay the service
+did not honour; nothing bound), `system_skill.stale_release` (409, the caller's release
+is older than the installed / verified / intended / remote one, or pins another digest
+of the same version),
 `system_skill.record_deprecated` (409, terminal — delete in AWS and register again),
 `system_skill.readback_mismatch` (409), `registry.unavailable` (503).
 

@@ -274,7 +274,7 @@ def console_action(
     from app.system_agents.skill_registry import refuse_protected_mutation
 
     refuse_protected_mutation(
-        workspace.id, record_id, action, is_admin=is_admin, lifecycle=True
+        workspace, record_id, action, is_admin=is_admin, lifecycle=True
     )
     client = registry_control_client(workspace)
     registry_id = _registry_id(workspace)
@@ -292,7 +292,7 @@ def console_action(
 def console_delete(workspace: WorkspaceContext, record_id: str) -> None:
     from app.system_agents.skill_registry import refuse_protected_mutation
 
-    refuse_protected_mutation(workspace.id, record_id, "delete")  # before any AWS client
+    refuse_protected_mutation(workspace, record_id, "delete")  # before any AWS client
     reg.delete_record(
         registry_control_client(workspace), _registry_id(workspace), record_id
     )
@@ -1113,7 +1113,7 @@ def reimport_skill(workspace: WorkspaceContext, record_id: str) -> dict[str, Any
     """
     from app.system_agents.skill_registry import refuse_protected_mutation
 
-    refuse_protected_mutation(workspace.id, record_id, "reimport")  # before any AWS client
+    refuse_protected_mutation(workspace, record_id, "reimport")  # before any AWS client
     client = registry_control_client(workspace)
     registry_id = _registry_id(workspace)
     record = reg.get_record(client, registry_id, record_id)
@@ -1254,7 +1254,7 @@ def update_record(
     # A system-managed Skill (SE-043) is never edited here — description or content,
     # console or Skill Lab publish — whoever the caller is. Guarded before any AWS
     # client or S3 object is touched.
-    refuse_protected_mutation(workspace.id, record_id, "replace" if bundle else "edit")
+    refuse_protected_mutation(workspace, record_id, "replace" if bundle else "edit")
     client = registry_control_client(workspace)
     registry_id = _registry_id(workspace)
     record = reg.get_record(client, registry_id, record_id)

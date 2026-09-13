@@ -103,17 +103,21 @@ API-key 信任边界的控制台一侧。
 | `POST` | `/api/system-agents/{key}/skill-registration` | 管理员 | 无请求体（资源由服务端选定：已存 spec 固定的版本，与本构建比对并从 S3 回读）→ `200 {preset_key, record{system, record_id, name, type: AGENT_SKILLS, status, version, descriptors, …}, created, changed, submitted, note, skill{name, version, digest, path, files[]}, preset}`——把**运行中**预置已发布的 Skill 版本注册为独立的 Registry 记录，指向不可变的 `system-skills/<name>/<version>-<digest12>/` 前缀（不写 S3，不重新发布 Harness，Agent 的 A2A 记录不动）。`created` ⇒ 新记录已提交审核（此处绝不批准）；`changed` 而非 `created` ⇒ 描述符前滚到更新版本（DRAFT，重新审核，`recordVersion` 递增）；两者皆否 ⇒ 版本相同、空操作（保留批准）。幂等且竞争安全（持久 `clientToken`、按预置加锁）；部署管道的 register 阶段在安装/修复时执行同样的注册 |
 | `DELETE` | `/api/system-agents/{key}` | 管理员 | `202 {agent, job_id, operation: uninstall, attempt, started, preset}`——在一次提交中声明该行（`uninstalling`，乐观条件更新）并排入拆除任务；同时到达的请求共享一个任务（落败方 `started: false`）；独占（按 Agent 的建议锁，单主机）且带围栏的 worker 核实每个知识库目标、Harness 与专用角色均已消失之前（任务上有含精确资源 ID 的逐步 `progress`，仅在已核实时继承到下一次尝试）该行保留身份；拆除失败则进入第 N+1 次尝试；部署进行中返回 `409 agent.deploy_in_progress` |
 
-`GET /api/system-agents` 另外报告 `skill_registration`（`{record_id, status: creating | registered,
-release_version, release_digest, path, updated_at} | null`，仅读台账）与 `can_register_skill`。
+`GET /api/system-agents` 另外报告 `skill_registration`（`{record_id, pending_record_id, status: creating |
+accepted | registered, release_version, release_digest, path, updated_at} | null`，仅读台账；`accepted`
+表示我们的创建返回了 `pending_record_id` 但回读尚未核验，`record_id` 在核验前保持 `null`；当前 Registry
+中没有映射时为 `null`）与 `can_register_skill`。
 Registry 记录（`GET /api/registry/records[/{id}]`、搜索、action/update/reimport 的响应）携带服务端
 推导的 `system` 成员——`{managed: true, preset_key, label, skill_version, release_digest, path,
-protected_actions[], admin_actions[]} | null`——当且仅当 Workspace 台账把该记录映射到系统预置的 Skill
+protected_actions[], admin_actions[]} | null`——当且仅当 Workspace 台账在其**当前 Registry** 中把该记录（已核验或已接受的 id）映射到系统预置的 Skill
 时设置；绝不从描述符或标签读取。对这类记录，`PUT`、`POST …/reimport` 与 `DELETE` 对所有调用方返回
 `403 registry.system_skill_protected`，`POST …/action` 对成员返回同样错误（管理员可提交/批准/驳回/停用），
 以保留名称进行普通 Skill 注册/导入返回 `409 registry.name_reserved`。Skill 注册错误码：
 `system_skill.preset_not_active`（409）、`system_skill.release_mismatch`（409，本构建的技能包不是
 已安装版本）、`system_skill.bundle_unverified`（409，S3 已发布版本与快照不一致；未写入）、
-`system_skill.foreign_record`（409，同名但不属于平台的 Skill 记录）、`system_skill.stale_release`（409）、
+`system_skill.foreign_record`（409，平台无法证明由自己创建的同名 Skill 记录——包括服务不予兑现的
+丢失创建重放；不绑定）、`system_skill.stale_release`（409，调用方版本旧于已安装/已核验/意图/远端版本，
+或同版本号不同摘要）、
 `system_skill.record_deprecated`（409，终态——在 AWS 中删除后重新注册）、
 `system_skill.readback_mismatch`（409）、`registry.unavailable`（503）。
 

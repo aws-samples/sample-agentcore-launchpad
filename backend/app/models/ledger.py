@@ -160,19 +160,30 @@ class SystemSkillRecord(Base):
     # the registry the record lives in — a workspace whose registry was rebuilt must
     # not be matched against a record id from the old one
     registry_id: Mapped[str] = mapped_column(String(128))
+    # the VERIFIED record (read back and matched against the request that wrote it)
     record_id: Mapped[str | None] = mapped_column(String(64), index=True, default=None)
     record_arn: Mapped[str | None] = mapped_column(String(512), default=None)
+    # the record id AWS returned for OUR create whose read-back has not verified yet;
+    # protected like a verified one (it is ours), never projected as registered
+    pending_record_id: Mapped[str | None] = mapped_column(String(64), default=None)
     client_token: Mapped[str] = mapped_column(String(256))
-    # creating | registered — the ledger-side lifecycle only; the record's approval
-    # status is always read back from AWS
+    # the COMPLETE CreateRegistryRecord kwargs persisted before the call: a retry
+    # after a lost response replays exactly these bytes with the same token — the
+    # only thing that proves a same-name record was created by this platform
+    create_request: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # creating | accepted | registered — ledger-side lifecycle only; approval is AWS's
     status: Mapped[str] = mapped_column(String(16), default="creating")
+    # the verified release (what the record is known to describe)
     release_version: Mapped[str | None] = mapped_column(String(32), default=None)
     release_digest: Mapped[str | None] = mapped_column(String(64), default=None)
     s3_uri: Mapped[str | None] = mapped_column(String(512), default=None)
-    # sha256 of the descriptor payload last written/verified, so an identical
-    # re-registration is recognised without an UpdateRegistryRecord (which would
-    # reset approval)
     content_digest: Mapped[str | None] = mapped_column(String(64), default=None)
+    # high-water mark: the release the last create/update INTENDED to write, committed
+    # before the AWS call, so an accepted-but-lost update can never be downgraded by a
+    # worker that still holds the previous release
+    intent_version: Mapped[str | None] = mapped_column(String(32), default=None)
+    intent_digest: Mapped[str | None] = mapped_column(String(64), default=None)
+    intent_content_digest: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now

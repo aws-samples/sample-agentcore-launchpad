@@ -122,17 +122,17 @@ def _record_out(
     }
 
 
-def _with_system(
-    workspace_id: str, records: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
+def _with_system(ws: WorkspaceScope, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Scoped to the workspace AND its current registry identity: a mapping left by a
+    replaced registry never classifies a same-id record in the new one."""
     from app.system_agents.skill_registry import projections_for
 
-    owned = projections_for(workspace_id, [str(r.get("recordId") or "") for r in records])
+    owned = projections_for(ws.context, [str(r.get("recordId") or "") for r in records])
     return [_record_out(r, owned.get(str(r.get("recordId") or ""))) for r in records]
 
 
-def _one_with_system(workspace_id: str, record: dict[str, Any]) -> dict[str, Any]:
-    return _with_system(workspace_id, [record])[0]
+def _one_with_system(ws: WorkspaceScope, record: dict[str, Any]) -> dict[str, Any]:
+    return _with_system(ws, [record])[0]
 
 
 @router.get("/records")
@@ -142,12 +142,12 @@ def list_records(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     records = console.console_list(ws.context, type, status)
-    return {"records": _with_system(ws.id, records)}
+    return {"records": _with_system(ws, records)}
 
 
 @router.get("/records/search")
 def search(q: str, ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
-    return {"records": _with_system(ws.id, console.console_search(ws.context, q))}
+    return {"records": _with_system(ws, console.console_search(ws.context, q))}
 
 
 def _discoverable_out(record: dict[str, Any]) -> dict[str, Any]:
@@ -182,7 +182,7 @@ def list_discoverable(
 def get_record(
     record_id: str, ws: WorkspaceScope = Depends(require_workspace)
 ) -> dict[str, Any]:
-    return _one_with_system(ws.id, console.console_get(ws.context, record_id))
+    return _one_with_system(ws, console.console_get(ws.context, record_id))
 
 
 @router.get("/records/{record_id}/live-agent-card")
@@ -269,7 +269,7 @@ def record_action(
     except ValueError as exc:
         raise AppError("registry.unknown_action", str(exc), status_code=400) from exc
     _invalidate_attachables(ws.id)
-    return _one_with_system(ws.id, console.console_get(ws.context, record_id))
+    return _one_with_system(ws, console.console_get(ws.context, record_id))
 
 
 class RegisterRequest(BaseModel):
@@ -536,7 +536,7 @@ def reimport_record(
     failed re-acquire/validation returns 422 ``registry.skill_invalid``."""
     record = console.reimport_skill(ws.context, record_id)
     _invalidate_attachables(ws.id)
-    return _one_with_system(ws.id, record)
+    return _one_with_system(ws, record)
 
 
 class UpdateRecordRequest(BaseModel):
@@ -584,7 +584,7 @@ def update_record(
     # A system-managed Skill (SE-043) refuses every edit here, before the type read.
     from app.system_agents.skill_registry import refuse_protected_mutation
 
-    refuse_protected_mutation(ws.id, record_id, "replace" if req.staging_id else "edit")
+    refuse_protected_mutation(ws.context, record_id, "replace" if req.staging_id else "edit")
     rtype = console.console_get(ws.context, record_id).get("descriptorType")
     if req.url is not None and rtype != "MCP":
         raise AppError(
@@ -637,7 +637,7 @@ def update_record(
     if req.staging_id is not None:
         _drop_staging(req.staging_id)
     _invalidate_attachables(ws.id)
-    return _one_with_system(ws.id, result)
+    return _one_with_system(ws, result)
 
 
 @router.delete("/records/{record_id}")

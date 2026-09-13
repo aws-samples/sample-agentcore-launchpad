@@ -608,29 +608,45 @@ final verification without its repair branch). The release is derived from the
 unpublished newer revision (or an older build) is refused with the REPAIR/UPDATE
 instruction (`409 system_skill.release_mismatch`) rather than registered.
 Ownership is a server-owned ledger row — `SystemSkillRecord`
-(`system_skill_records`: workspace, preset key, registry id, record id, client
-token, registered release, content digest), one per workspace and preset, never a
-descriptor field or tag a client could send — and a record is system-protected exactly
-when the caller's workspace maps its id. `POST /api/system-agents/{key}/skill-registration`
+(`system_skill_records`: workspace, preset key, registry id, verified record id,
+accepted-but-unverified `pending_record_id`, client token, the persisted
+`create_request`, verified release + content digest, and the intended release as a
+high-water mark), one per workspace and preset. Descriptor metadata
+(`source.kind=system`, the preset key, the S3 path) is copyable and is **never**
+consulted for ownership; the only proof that a record is ours is that our own
+`CreateRegistryRecord` returned its id. A record is system-protected exactly when the
+caller's workspace **and its current registry identity** map its id (verified or
+pending) — a same-id record in another workspace, or in a replacement registry the
+workspace switched to, is ordinary, with no re-registration required. `POST /api/system-agents/{key}/skill-registration`
 (administrator, no body, workspace pinned like every preset write) registers the Skill
 of an **active** preset; the deploy pipeline's `register` stage does the same for every
 fresh install or repair after the A2A record (a failure fails the stage with the exact
 reason — the job never claims a registration AWS did not confirm). Nothing registers on
-startup or on a read. The write is idempotent and race-safe: the row is the durable
-create intent (its `clientToken`, 33–256 `[A-Za-z0-9-]`, is committed before
-`CreateRegistryRecord`, so a crash between the AWS call and the ledger commit is
-recovered by the same request or by adopting the record whose *metadata* — system
-source, preset key, this workspace's system-skills path — proves it is ours; a
-same-name record that is not is `409 system_skill.foreign_record`, never adopted or
-overwritten); concurrent registrations serialize on an advisory `fcntl` lock per
+startup or on a read. The write is idempotent and race-safe: on a fresh intent any
+same-name Skill record is foreign by definition (this platform never created one) and
+is refused before anything is persisted (`409 system_skill.foreign_record`); otherwise
+the **complete** create request (token — 33–256 `[A-Za-z0-9-]` —, name, version,
+descriptors including `imported_at`, tags) is committed to the row before the call, so
+a crash between the AWS call and the ledger commit is recovered by replaying exactly
+those bytes with the same token and letting the service answer the same id; a replay
+the service does not honour (idempotency window closed, a foreign record) is refused
+with nothing bound or written. An id AWS returned but whose read-back failed (a denied
+`GetRegistryRecord`, say) leaves the row `accepted` with `pending_record_id`:
+protected as ours, never projected as registered, verified by the next attempt without
+a second create. Concurrent registrations serialize on an advisory `fcntl` lock per
 (workspace, preset) and the unique row arbitrates across processes, so N racing calls
-converge on one record. A first registration is **submitted for review, never
+converge on one record. Under that lock the **current installed preset row is
+re-read** and must pin exactly the release (version *and* digest) the caller's agent
+object pins, the ledger's verified and *intended* releases must not be newer, and the
+remote record's own release is read before any update — so an accepted update whose
+response was lost (intent already committed as the high-water mark) is reconciled by
+the next attempt as a no-op, and a stale worker holding the previous release can never
+downgrade it (`409 system_skill.stale_release`). A first registration is **submitted for review, never
 approved** — approval is the administrator's explicit action in the Registry. An
 identical repeat is a no-op that issues no `UpdateRegistryRecord`, so an APPROVED
 record stays APPROVED (a bodiless repair, a reinstall, a re-click); a newer release
 updates the descriptor (bumping `recordVersion`, e.g. `1.0.0-skill → 1.1.0-skill`),
-which the service resets to DRAFT — normal review again; an older release can never
-downgrade the registered one (`409 system_skill.stale_release`); a DEPRECATED record
+which the service resets to DRAFT — normal review again; a DEPRECATED record
 (terminal) fails clearly instead of being rewritten (`409 system_skill.record_deprecated`,
 recovery documented in the message). Uninstalling the preset keeps the record, the
 mapping and the S3 release (other consumers may mount it); a reinstall reuses the same
@@ -640,7 +656,9 @@ console `PUT` (description *and* content, inline or staged replace), `reimport`,
 maintenance hint (`403 registry.system_skill_protected`); lifecycle actions
 (`submit`/`approve`/`reject`/`disable`) are refused for members and allowed for an
 administrator — the route passes the caller's role explicitly and the service default
-is *not admin*, so an internal caller cannot approve one by omission; the reserved
+is *not admin*, so an internal caller cannot approve one by omission; Skill Lab's
+`publish_job` checks the source record first, before the multi-file split rebuilds its
+`publish_skill/` directory or launches the splitter; the reserved
 Skill name is refused for ordinary register/import/import-with-rename before any S3
 write (`409 registry.name_reserved`; an MCP record may still use the name). Ordinary
 records keep their member-operable lifecycle and edits unchanged. The record API
