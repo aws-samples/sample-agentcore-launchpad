@@ -150,3 +150,50 @@ def test_mock_browser_script_targets_the_shared_page() -> None:
     assert "launch-submit" in mock
     # a preset redeploy is answered 403 by the fixture and asserted never to happen
     assert "/api/agents/{AGENT_ID}/redeploy" in mock and "agent.system_managed" in mock
+
+
+def _render(template: str, **values: str) -> str:
+    """The i18next interpolation the chip goes through: `{{key}}` → value, nothing else."""
+    return re.sub(r"\{\{(\w+)\}\}", lambda m: values[m.group(1)], template)
+
+
+def test_protected_skill_chip_shows_the_server_owned_name_and_version() -> None:
+    """SE-045: the PROTECTED chip reads `<preset.name> · v<version>`, both taken from the
+    server-owned row (the same `preset.name` the Registry registration is built from),
+    never a hardcoded architect string, a Registry read or an S3 path — and it stays a
+    plain read-only chip (no link, no button)."""
+    wizard = _src(WIZARD)
+    # the name travels through the editor context from the row's `name`
+    ctx = wizard[wizard.index("interface SystemEditContext {") :]
+    ctx = ctx[: ctx.index("}")]
+    assert "skillName: string;" in ctx and "skillVersion: string | null;" in ctx
+    opener = wizard[wizard.index("const startSystemEdit = (") :]
+    opener = opener[: opener.index("const openSystemEdit = async")]
+    assert "skillName: preset.name," in opener
+    assert "skillVersion: preset.installed_skill_version ?? preset.skill_version," in opener
+    # the chip renders both context fields through the one i18n key, with the `?` fallback
+    block = wizard[wizard.index('data-testid="preset-protected"') :]
+    block = block[: block.index("protectedNote")]
+    chip = block[block.index('data-testid="preset-protected-skill"') :]
+    chip = chip[: chip.index("</span>")]
+    assert 'create.system.settings.skillVersion"' in chip
+    assert "name: systemEdit.skillName," in chip
+    assert 'v: systemEdit.skillVersion ?? "?",' in chip
+    assert "aws-agent-solution-architect" not in block
+    assert "<a " not in block and "<Btn" not in block and "<button" not in block
+    assert "onClick" not in block
+    # both locales format the same `{{name}} · v{{v}}`; a fixture unrelated to the
+    # architect preset proves the name/version come from the arguments
+    for locale in ("en", "zh-CN"):
+        data = json.loads((FRONTEND / "locales" / locale / "common.json").read_text("utf-8"))
+        template = data["create"]["system"]["settings"]["skillVersion"]
+        assert template == "{{name}} · v{{v}}", (locale, template)
+        rendered = _render(template, name="fixture-preset-skill", v="7.3.1")
+        assert rendered == "fixture-preset-skill · v7.3.1"
+        assert "skill bundle" not in rendered and "技能包" not in rendered
+        assert _render(template, name="x", v="?") == "x · v?"
+    # the mock browser scenario asserts the exact chip text from its own fixture name
+    mock = _src(MOCK)
+    assert 'get_by_test_id("preset-protected-skill")' in mock
+    assert 'f"{KEY} · v1.0.0"' in mock
+    assert 'locator("a, button").count() == 0' in mock

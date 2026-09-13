@@ -534,7 +534,7 @@
         "editingNote": "Editing the system-managed preset “{{label}}”. Model, output ceiling, reasoning effort, system prompt, loop limits and knowledge bases can change; saving posts just the changed fields to the administrator maintenance route and re-publishes in place (new Harness version, same ARN). Name, method, tools, the versioned skill and the disabled memory are platform-owned.",
         "protected": "PROTECTED — PLATFORM-OWNED",
         "protectedNote": "Name, method, tools, the versioned skill bundle, allowed tools and the disabled persistent memory are catalogue-owned: they cannot be changed from this page or any request body, and no skill is uploaded or imported for a preset.",
-        "skillVersion": "skill bundle v{{v}}",
+        "skillVersion": "{{name}} · v{{v}}",
         "memoryOff": "persistent memory: disabled",
         "pendingLabel": "Pending",
         "noChangesForce": "no changes — RE-PUBLISH repeats the stored settings (retry a failed deploy / repair)",

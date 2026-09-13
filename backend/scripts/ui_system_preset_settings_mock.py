@@ -421,6 +421,9 @@ def admin_scenario(browser, base: str, evidence: Path) -> dict:
     assert page.get_by_test_id("preset-settings-readonly").count() == 0
     assert_prefilled(page)
     assert page.get_by_test_id("preset-protected").count() == 1  # tools/skill/memory read-only
+    skill_chip = page.get_by_test_id("preset-protected-skill")
+    assert skill_chip.inner_text().strip() == f"{KEY} · v1.0.0"  # server name, not a label
+    assert page.get_by_test_id("preset-protected").locator("a, button").count() == 0
     assert page.get_by_test_id("memory-select").count() == 0     # no ordinary memory editor
     assert page.locator('input[type="file"]').count() == 0        # no skill upload for a preset
     assert page.get_by_test_id("kb-picker").count() == 1
