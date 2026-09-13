@@ -976,6 +976,17 @@ function CreateAgentWizard() {
       alive.current = false;
     };
   }, []);
+  // Async-race guards. `kbCatalogGen` owns `kbCatalog`: every writer (the mount-time
+  // generic fetch, each pinned system-edit read) captures the generation it started
+  // in and applies only if no newer writer/owner took over — a late generic response
+  // that followed another tab's shared selection can never replace the catalog a
+  // preset edit reads pinned to its own workspace. `editorGen` is the editor-opening
+  // intent: an async open (table EDIT on a system row) completes only if no newer
+  // intent (edit / configure / new / back / details / restart) happened meanwhile,
+  // so a stale completion never resets a draft the user typed into.
+  const kbCatalogGen = useRef(0);
+  const editorGen = useRef(0);
+  const nextEditorIntent = () => ++editorGen.current;
 
   useEffect(() => {
     // Mountable assets come from the registry catalog: only APPROVED records
@@ -992,9 +1003,14 @@ function CreateAgentWizard() {
       });
     // Managed KB catalog — failures are tolerated: an empty catalog just leaves
     // the Knowledge section empty and never blocks the wizard.
+    const catalogGen = kbCatalogGen.current;
     fetch("/api/knowledge-bases")
       .then((res) => (res.ok ? res.json() : { items: [] }))
-      .then((d: { items: AttachableKb[] }) => setKbCatalog(d.items ?? []))
+      .then((d: { items: AttachableKb[] }) => {
+        // superseded by a pinned system-edit read ⇒ this (possibly foreign) list is dropped
+        if (!alive.current || kbCatalogGen.current !== catalogGen) return;
+        setKbCatalog(d.items ?? []);
+      })
       .catch(() => {
         /* KB catalog unavailable — section stays empty */
       });
@@ -1095,6 +1111,9 @@ const deployLock = !canDeploy
   };
 
   const resetForm = () => {
+    // back / restart / a new edit: any pending editor open or catalog read is stale
+    nextEditorIntent();
+    kbCatalogGen.current += 1;
     setEditing(null);
     setDetailsMode(false);
     setName("");
@@ -1365,23 +1384,27 @@ const deployLock = !canDeploy
   };
   // The KB catalog for a system edit is read through the typed client pinned to the
   // workspace the row came from (the mount-time fetch follows the shared selection).
+  // Each call takes ownership of the catalog: an older read (generic or pinned) that
+  // lands afterwards is dropped, so two loads out of order settle on the newest.
   const loadSystemKbCatalog = (pinned: string | null) => {
+    const catalogGen = ++kbCatalogGen.current;
+    const current = () => alive.current && kbCatalogGen.current === catalogGen;
     setSystemKbLoading(true);
     setSystemKbError(null);
     void api
       .listAttachableKnowledgeBases(pinned)
       .then((d) => {
-        if (!alive.current) return;
+        if (!current()) return;
         setKbCatalog(d.items ?? []);
       })
       .catch((err: unknown) => {
-        if (!alive.current) return;
+        if (!current()) return;
         setSystemKbError(
           err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err),
         );
       })
       .finally(() => {
-        if (alive.current) setSystemKbLoading(false);
+        if (current()) setSystemKbLoading(false);
       });
   };
 
@@ -1454,7 +1477,7 @@ const deployLock = !canDeploy
     PresetConfigureRequest) => {
     if (!preset.agent_id || !("model_id" in preset.settings)) return;
     const stored = preset.settings as SystemPresetSettings;
-    resetForm();
+    resetForm(); // also a new editor intent + catalog generation
     setEditing({
       id: preset.agent_id,
       name: preset.name,
@@ -1487,9 +1510,13 @@ const deployLock = !canDeploy
   // (stored settings + server verdicts), never by the agent's raw spec
   const openSystemEdit = async (agent: AgentInfo) => {
     const startedIn = workspaceId;
+    const intent = nextEditorIntent();
+    // a newer intent (another edit, configure, new, back, details, restart, leave)
+    // owns the editor now: this completion — success or error — is dropped silently
+    const current = () => alive.current && editorGen.current === intent;
     try {
       const res = await api.listSystemPresets(startedIn);
-      if (!alive.current) return;
+      if (!current()) return;
       const preset = res.presets.find((row) => row.key === agent.system?.key);
       if (!preset) {
         toast(t("create.system.settings.rowMissing"));
@@ -1497,12 +1524,13 @@ const deployLock = !canDeploy
       }
       startSystemEdit(presetConfigureRequest(preset, startedIn, isAdmin, t));
     } catch (err) {
-      if (!alive.current) return;
+      if (!current()) return;
       toast(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
     }
   };
 
   const startEdit = (agent: AgentInfo) => {
+    nextEditorIntent();
     const spec = (agent.spec ?? {}) as StoredSpec;
     setEditing({ id: agent.id, name: agent.name, method: agent.method as Method });
     setDetailsMode(false);
@@ -1589,6 +1617,7 @@ const deployLock = !canDeploy
   const openDetails = (agent: AgentInfo) => {
     const jobId = agent.deployment?.job_id;
     if (!jobId) return;
+    nextEditorIntent();
     setEditing(null);
     setDetailsMode(true);
     setDetailSystem(agent.system ?? null);
@@ -1837,7 +1866,14 @@ const deployLock = !canDeploy
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
             <span title={canDeploy ? undefined : t("create.permissionRequired")}>
-              <Btn primary disabled={!canDeploy} onClick={() => setStep(2)}>
+              <Btn
+                primary
+                disabled={!canDeploy}
+                onClick={() => {
+                  nextEditorIntent(); // a new agent draft supersedes any pending open
+                  setStep(2);
+                }}
+              >
                 {t("create.next")} ▸
               </Btn>
             </span>

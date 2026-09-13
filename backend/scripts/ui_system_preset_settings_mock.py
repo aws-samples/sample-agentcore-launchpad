@@ -26,6 +26,13 @@ Exercises, for the architect preset:
   stored ``max_tokens`` back;
 * member: VIEW SETTINGS is the same page read-only (no save, disabled inputs), the
   table's EDIT is disabled, and no POST is ever made;
+* async races (host review 1, genuinely held responses): the wizard's generic
+  mount-time KB catalog fetch landing AFTER the pinned preset read must not replace
+  the catalog (a foreign workspace's KB never becomes selectable in the preset
+  editor), a pinned read from a closed editor landing after a re-opened one is
+  dropped (out-of-order loads settle on the newest), and a table EDIT on the system
+  row whose preset read lands after the user opened an ordinary edit (or the
+  details view) must not reset that draft;
 * zh-CN screenshots of the card and the configure page.
 
     uv run python scripts/ui_system_preset_settings_mock.py --base-url http://127.0.0.1:5199
@@ -95,6 +102,12 @@ class Fixture:
         self.next_post: str = "accept"       # accept | conflict | invalid | slow
         self.kb_mode: str = "ok"             # ok | fail
         self.held: tuple[Route, int, dict] | None = None
+        # held reads for the race scenarios: "first"/"next" holds the next KB catalog
+        # request; hold_next_status holds the next GET /api/system-agents
+        self.kb_hold: str | None = None
+        self.held_kb: list[Route] = []
+        self.hold_next_status = False
+        self.held_status: tuple[Route, str] | None = None
         self.kb_reads: list[str | None] = []
         self.agent_reads: list[str | None] = []   # X-Workspace of GET /api/agents/{preset}
         self.job_reads: list[str | None] = []
@@ -107,6 +120,19 @@ class Fixture:
         route, status, payload = self.held
         self.held = None
         route.fulfill(status=status, content_type="application/json", body=json.dumps(payload))
+
+    def release_kb(self, items: list[dict]) -> None:
+        """Answer the OLDEST held KB catalog request with `items`."""
+        route = self.held_kb.pop(0)
+        route.fulfill(status=200, content_type="application/json",
+                      body=json.dumps({"items": items}))
+
+    def release_status(self) -> None:
+        assert self.held_status is not None, "no held status read"
+        route, ws = self.held_status
+        self.held_status = None
+        route.fulfill(status=200, content_type="application/json",
+                      body=json.dumps(self.status(ws)))
 
     def _row(self, settings: dict | None) -> dict:
         installed = settings is not None
@@ -254,6 +280,10 @@ def install_routes(page, fx: Fixture, unhandled: list[str]) -> None:
             return reply(200, {"workspaces": [WS_A, WS_B], "all_workspaces": fx.role == "admin"})
         if path == "/api/system-agents" and req.method == "GET":
             assert ws in fx.rows, f"status read without a known X-Workspace: {ws!r}"
+            if fx.hold_next_status:
+                fx.hold_next_status = False
+                fx.held_status = (route, ws)
+                return None
             return reply(200, fx.status(ws))
         if path == f"/api/system-agents/{KEY}/install" and req.method == "POST":
             body = req.post_data_json or {}
@@ -267,6 +297,10 @@ def install_routes(page, fx: Fixture, unhandled: list[str]) -> None:
             return reply(status, payload)
         if path == "/api/knowledge-bases":
             fx.kb_reads.append(ws)
+            if fx.kb_hold in ("first", "next"):
+                fx.kb_hold = None
+                fx.held_kb.append(route)
+                return None
             if fx.kb_mode == "fail":
                 return reply(502, {"code": "http.502", "message": "kb catalog upstream down",
                                    "detail": None})
@@ -292,6 +326,10 @@ def install_routes(page, fx: Fixture, unhandled: list[str]) -> None:
             fx.redeploys.append({"workspace": ws, "body": req.post_data_json, "system": True})
             return reply(403, {"code": "agent.system_managed", "message": "protected",
                                "detail": None})
+        if path.endswith("/versions") and path.startswith("/api/agents/"):
+            return reply(200, {"kind": "harness", "resource_id": "xyz", "versions": [],
+                               "endpoints": [], "latest_version": "4", "ledger_version": "4",
+                               "canary_endpoints": []})
         if path.startswith("/api/jobs/") and req.method == "GET":
             fx.job_reads.append(ws)
             job_id = path.rsplit("/", 1)[1]
@@ -651,6 +689,106 @@ def member_scenario(browser, base: str, evidence: Path) -> dict:
     return {"posts": fx.posts, "unhandled": sorted(set(unhandled))}
 
 
+def race_scenario(browser, base: str, evidence: Path) -> dict:
+    """Host review 1: the two async editor regressions, with genuinely held responses."""
+    fx = Fixture("admin")
+    unhandled: list[str] = []
+    ctx = browser.new_context(viewport={"width": 1440, "height": 1100})
+    ctx.add_init_script(f"window.localStorage.setItem('launchpad_workspace', '{WS_A['id']}')")
+    page = ctx.new_page()
+    install_routes(page, fx, unhandled)
+    foreign = [{"kb_id": "KBFOREIGN", "name": "lab-only", "description": "workspace B",
+                "status": "ACTIVE", "type": "MANAGED"}]
+    stale = [{"kb_id": "KBSTALE", "name": "stale-read", "status": "ACTIVE", "type": "MANAGED"}]
+
+    # --- (1) the generic mount-time catalog fetch is held; the pinned preset read lands
+    # first; the late generic response (another tab moved the shared selection to B,
+    # so it carries B's catalog) must NOT replace the preset editor's catalog
+    fx.kb_hold = "first"
+    page.goto(f"{base}/create", wait_until="domcontentloaded")
+    wait_status(page, "active")
+    assert len(fx.held_kb) == 1, fx.kb_reads  # exactly the mount-time generic fetch
+    page.get_by_test_id(f"settings-{KEY}").click()
+    editor(page, "edit")
+    page.get_by_test_id("kb-KB123ABC").wait_for()  # the pinned read landed
+    fx.release_kb(foreign)                          # the generic one lands late
+    page.wait_for_timeout(400)
+    assert page.get_by_test_id("kb-KBFOREIGN").count() == 0, "foreign KB became selectable"
+    assert page.get_by_test_id("kb-KB123ABC").count() == 1
+    shot(page, evidence, "14-race-late-generic-kb")
+
+    # --- (1b) close / reopen with a pinned read from the CLOSED editor landing after the
+    # re-opened editor's own read: out-of-order loads settle on the newest
+    back_to_list(page)
+    fx.kb_hold = "next"
+    page.get_by_test_id(f"settings-{KEY}").click()
+    editor(page, "edit")
+    page.get_by_test_id("preset-settings-kb-loading").wait_for()
+    assert len(fx.held_kb) == 1
+    back_to_list(page)                               # closed while its read is in flight
+    page.get_by_test_id(f"settings-{KEY}").click()  # reopened: a fresh pinned read
+    editor(page, "edit")
+    page.get_by_test_id("kb-KB123ABC").wait_for()
+    fx.release_kb(stale)                             # the closed editor's read lands now
+    page.wait_for_timeout(400)
+    assert page.get_by_test_id("kb-KBSTALE").count() == 0, "stale pinned read applied"
+    assert page.get_by_test_id("kb-KB123ABC").count() == 1
+    assert page.get_by_test_id("preset-settings-kb-loading").count() == 0
+    # the error path still shows + retries, and the stored refs survive a failure
+    back_to_list(page)
+    fx.kb_mode = "fail"
+    page.get_by_test_id(f"settings-{KEY}").click()
+    editor(page, "edit")
+    page.get_by_test_id("preset-settings-kb-error").wait_for()
+    fx.kb_mode = "ok"
+    page.get_by_test_id("preset-settings-kb-retry").click()
+    page.get_by_test_id("kb-KB123ABC").wait_for()
+    assert page.get_by_test_id("preset-settings-kb-error").count() == 0
+    back_to_list(page)
+    assert all(w == WS_A["id"] for w in fx.kb_reads), fx.kb_reads
+
+    # --- (2) table EDIT on the system row: its preset read is held; the user opens an
+    # ORDINARY edit and types; the late system read must not reset that draft
+    fx.hold_next_status = True
+    page.get_by_test_id(f"edit-{KEY}").click()
+    page.wait_for_timeout(200)
+    assert fx.held_status is not None
+    page.get_by_test_id("edit-hr-assistant").click()
+    page.locator('[data-testid="configure-step"]:not([data-system-edit])').wait_for()
+    page.get_by_test_id("agent-prompt").fill("UNSAVED ordinary draft")
+    fx.release_status()
+    page.wait_for_timeout(400)
+    page.locator('[data-testid="configure-step"]:not([data-system-edit])').wait_for()
+    assert page.get_by_test_id("system-edit-note").count() == 0
+    assert page.get_by_test_id("agent-prompt").input_value() == "UNSAVED ordinary draft"
+    assert page.get_by_test_id("agent-max-tokens").input_value() == "4096"
+    shot(page, evidence, "15-race-stale-system-edit")
+    back_to_list(page)
+    # (2b) the same with the DETAILS view opened meanwhile: the launch view stays
+    fx.hold_next_status = True
+    page.get_by_test_id(f"edit-{KEY}").click()
+    page.wait_for_timeout(200)
+    assert fx.held_status is not None
+    page.get_by_test_id(f"details-{KEY}").click()
+    page.get_by_test_id("job-log").wait_for()
+    fx.release_status()
+    page.wait_for_timeout(400)
+    assert page.get_by_test_id("configure-step").count() == 0
+    assert page.get_by_test_id("job-log").count() == 1
+    # (2c) with nothing newer, the held read still opens the editor (no lost click)
+    page.goto(f"{base}/create", wait_until="networkidle")
+    wait_status(page, "active")
+    fx.hold_next_status = True
+    page.get_by_test_id(f"edit-{KEY}").click()
+    page.wait_for_timeout(200)
+    fx.release_status()
+    editor(page, "edit")
+    assert_prefilled(page)
+    assert fx.posts == [] and fx.redeploys == []
+    ctx.close()
+    return {"kb_reads": fx.kb_reads, "unhandled": sorted(set(unhandled))}
+
+
 def zh_screenshots(browser, base: str, evidence: Path) -> None:
     fx = Fixture("admin")
     unhandled: list[str] = []
@@ -690,6 +828,7 @@ def main() -> int:
             results = {
                 "admin": admin_scenario(browser, args.base_url, evidence),
                 "member": member_scenario(browser, args.base_url, evidence),
+                "races": race_scenario(browser, args.base_url, evidence),
             }
             zh_screenshots(browser, args.base_url, evidence)
         finally:

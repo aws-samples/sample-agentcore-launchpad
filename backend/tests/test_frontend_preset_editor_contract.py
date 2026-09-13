@@ -81,6 +81,28 @@ def test_wizard_system_branch_saves_through_maintenance_route_only() -> None:
     assert "void openSystemEdit(a)" in wizard
 
 
+def test_async_editor_races_are_generation_guarded() -> None:
+    """Host review 1: a late generic KB-catalog response must not replace the pinned
+    preset catalog, and a stale table-EDIT preset read must not reset a newer draft.
+    The behaviour itself is exercised with held responses by the mock browser
+    scenario (`race_scenario`); this pins the guards' presence in both writers."""
+    wizard = _src(WIZARD)
+    generic = wizard[wizard.index('fetch("/api/knowledge-bases")') :]
+    generic = generic[: generic.index(".catch(")]
+    assert "kbCatalogGen.current !== catalogGen" in generic
+    pinned = wizard[wizard.index("const loadSystemKbCatalog") :]
+    pinned = pinned[: pinned.index("const submit = async")]
+    assert "++kbCatalogGen.current" in pinned and "kbCatalogGen.current === catalogGen" in pinned
+    opener = wizard[wizard.index("const openSystemEdit = async") :]
+    opener = opener[: opener.index("const startEdit = (agent")]
+    assert "nextEditorIntent()" in opener and "editorGen.current === intent" in opener
+    # every newer intent invalidates a pending open
+    assert wizard.count("nextEditorIntent()") >= 5  # opener, resetForm, startEdit, details, new
+    mock = _src(MOCK)
+    assert "def race_scenario" in mock and "release_kb(foreign)" in mock
+    assert "release_status()" in mock and "UNSAVED ordinary draft" in mock
+
+
 def test_partial_edit_helper_matches_backend_contract() -> None:
     helpers = _src(HELPERS)
     # the same two knobs the backend lets a request `clear`
