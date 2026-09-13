@@ -3143,7 +3143,7 @@ def test_two_explicit_first_installs_with_different_settings_never_both_accept(
     assert codes == [202, 409], [(r.status_code, r.text) for r in results]
     winner = next(r for r in results if r.status_code == 202)
     loser = next(r for r in results if r.status_code == 409)
-    asked = 1111 if winner.request.content == b'{"max_tokens": 1111}' else 2222
+    asked = json.loads(winner.request.content)["max_tokens"]  # parse, never byte-compare
     assert winner.json()["agent"]["spec"]["max_tokens"] == asked
     assert loser.json()["code"] == "system_agent.deploy_in_progress"
     assert loser.json()["detail"]["job_id"] == winner.json()["job_id"]
