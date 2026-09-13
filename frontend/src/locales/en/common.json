@@ -2696,6 +2696,27 @@
         "s3": "SYNC — SYNC TO AWS creates the cloud dataset once, then replaces its DRAFT in place; PUBLISH VERSION snapshots the draft as an immutable numbered version",
         "s4": "RUN — pick the dataset (local or ☁ cloud) as the scope in NEW RUN",
         "note": "kind is inferred from the items and immutable server-side; published cloud versions are immutable — only the draft changes, and only through sync."
+      },
+      "execution": {
+        "title": "EXECUTION PROCEDURE · multi-actor / multi-session",
+        "hint": "This scenario opts into metadata.launchpad_execution: its turns run under synthetic actors and sessions (below, read-only). Turn text stays editable; adding or removing turns is disabled because every step maps to one turn. Use EDIT JSON to change the procedure — the form never drops this metadata.",
+        "repeat": "repeat ×{{count}}",
+        "step": "T{{turn}} → actor {{actor}} · session {{session}}",
+        "checks": "CHECKS",
+        "check": "{{id}}: {{type}} on T{{turn}} · \"{{text}}\"",
+        "dependsOn": "after {{ids}}",
+        "editJson": "EDIT JSON",
+        "backToForm": "BACK TO FORM",
+        "jsonLabel": "SCENARIO JSON — the whole item, saved as-is (validated by the server)",
+        "jsonInvalid": "scenario {{index}}: invalid JSON — {{error}}",
+        "jsonMode": "JSON",
+        "extraKeys": "preserved keys: {{keys}}",
+        "jsonOnly": "JSON only — this item has fields the form cannot represent ({{reason}}); editing it here as a form would drop them. Use the JSON below; BACK TO FORM stays in JSON mode until the item fits the form.",
+        "jsonOnlyReason": {
+          "turnKeys": "turn-level keys such as metadata",
+          "structuredInput": "structured (non-string) turn input",
+          "expected": "non-string expected_response"
+        }
       }
     },
     "evaluatorNames": {
@@ -2793,6 +2814,57 @@
         "empty": "NO EXPERIMENTS YET — START ONE ▸"
       },
       "runningGuard": "An experiment is already running — the shared experiment gateway supports one active A/B test at a time. Wait for its verdict or clean it up first."
+    },
+    "execution": {
+      "title": "PROCEDURE RESULTS — LOCAL DETERMINISTIC CHECKS",
+      "sub": "{{sessions}} sessions · {{steps}} steps · {{checks}} checks — computed locally from actual responses, not by AWS judges",
+      "note": "Multi-actor / multi-session scenarios (metadata.launchpad_execution). Each row is a synthetic actor + session minted for this run; check outcomes compare the agent's actual reply to a literal rule. AWS judge scores for the same sessions are in SESSION RESULTS above.",
+      "status": "CHECK STATUS",
+      "statusValue": {
+        "pending": "PENDING",
+        "none": "NO CHECKS",
+        "pass": "PASS",
+        "fail": "FAIL",
+        "error": "ERROR",
+        "inconclusive": "INCONCLUSIVE"
+      },
+      "calls": "{{done}} / {{planned}} invocations",
+      "sessions": "SESSIONS",
+      "checks": "CHECKS",
+      "steps": "STEPS",
+      "noChecks": "this procedure declares no deterministic checks — only AWS judge results apply",
+      "col": {
+        "scenario": "SCENARIO",
+        "repeat": "REPEAT",
+        "actor": "ACTOR",
+        "session": "SESSION",
+        "sessionId": "RUNTIME SESSION",
+        "turns": "TURNS",
+        "status": "STATUS",
+        "check": "CHECK",
+        "type": "TYPE",
+        "turn": "TURN",
+        "outcome": "OUTCOME",
+        "evidence": "EVIDENCE",
+        "step": "STEP",
+        "response": "RESPONSE",
+        "error": "ERROR"
+      },
+      "sessionStatus": {
+        "ok": "ok",
+        "partial": "partial",
+        "failed": "failed"
+      },
+      "drift": "runtime returned a different session id",
+      "viewSession": "open in observability →",
+      "checksPending": "{{count}} check(s) declared — none recorded yet (procedure pending or interrupted before its first check)",
+      "interrupted": "interrupted — the procedure did not complete, so it cannot pass",
+      "stepStatus": {
+        "ok": "ok",
+        "failed": "failed",
+        "empty": "empty reply"
+      },
+      "returnedSession": "answered in"
     }
   },
   "expPage": {

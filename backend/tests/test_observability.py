@@ -1412,3 +1412,41 @@ def test_evaluate_session_spans_wrapper_shape():
     assert out[0]["evaluatorId"] == "Builtin.Helpfulness"
     with pytest.raises(ValueError):
         ace.evaluate_session_spans(fake, evaluator_id="Builtin.Helpfulness", spans=[])
+
+
+def test_transcript_uses_persisted_synthetic_actor_for_procedure_sessions(monkeypatch):
+    """Multi-actor/multi-session procedure runs persist the synthetic actor each
+    session ran under; the transcript reads Memory with THAT actor, never with
+    the bare default (which would be another user's memory)."""
+    from app.evaluation.models import EvalRun
+
+    agent_id = _seed_agent()
+    sid_a, sid_b = "a" * 64, "b" * 64
+    actor_a = f"{agent_id}__eval__default__run1__gt-abcdef__r1__A"
+    db = SessionLocal()
+    run = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id,
+                  agent_name="hr-assistant", mode="evaluators", evaluators=[],
+                  status="completed", session_ids=[sid_a, sid_b],
+                  execution={"sessions": [
+                      {"session_id": sid_a, "requested_session_id": sid_a, "actor_id": actor_a},
+                      {"session_id": sid_b, "requested_session_id": sid_b, "actor_id": None},
+                  ]})
+    db.add(run)
+    db.commit()
+    seen: list = []
+
+    def fake_events(_ws, actor_id, session_id, max_results=20, memory_id=None):
+        seen.append(actor_id)
+        return [{"eventTimestamp": "2026-09-13T01:00:00", "payload": [
+            {"conversational": {"role": "ASSISTANT", "content": {"text": "Noted — amber."}}},
+        ]}]
+
+    monkeypatch.setattr(obs.memory, "list_events", fake_events)
+    monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [])
+    result = obs.session_transcript(db, sid_a, ws_ctx())
+    assert result["actor_id"] == actor_a and seen == [actor_a]
+    assert result["source"] == "eval" and [t["text"] for t in result["turns"]] == ["Noted — amber."]
+    # a session without a persisted actor falls back to the legacy default
+    result = obs.session_transcript(db, sid_b, ws_ctx())
+    db.close()
+    assert result["actor_id"] == "default" and seen[-1] == "default"

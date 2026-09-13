@@ -77,6 +77,106 @@ interface ScenarioDraft {
   turns: TurnDraft[];
   assertions: string[];
   expected_trajectory: string; // comma-separated tool names
+  // Every other stored key (metadata incl. launchpad_execution, description,
+  // provenance…) — carried through the form untouched and re-emitted on save,
+  // so opening a scenario in the form and saving never strips it.
+  extra: Record<string, unknown>;
+  // Non-null = the scenario is being edited as raw JSON; the text is the whole
+  // item and is saved as-is (the server validates it).
+  json: string | null;
+  // Set when the stored item has fields the form cannot hold (turn-level keys,
+  // structured input…): the item is JSON-only until it fits — the form never
+  // gets a chance to drop them.
+  jsonOnly?: "turnKeys" | "structuredInput" | "expected";
+}
+
+const KNOWN_TURN_KEYS = new Set(["input", "expected_response"]);
+
+/** Why an item cannot be shown in the form without loss, or null when it can. */
+function formLossReason(item: Record<string, unknown>): ScenarioDraft["jsonOnly"] | null {
+  for (const turn of (item.turns as unknown[] | undefined) ?? []) {
+    if (typeof turn !== "object" || turn === null) return "structuredInput";
+    const t = turn as Record<string, unknown>;
+    if (Object.keys(t).some((k) => !KNOWN_TURN_KEYS.has(k))) return "turnKeys";
+    if (typeof t.input !== "string") return "structuredInput";
+    if (t.expected_response !== undefined && typeof t.expected_response !== "string") {
+      return "expected";
+    }
+  }
+  return null;
+}
+
+const KNOWN_SCENARIO_KEYS = new Set(["scenario_id", "turns", "assertions", "expected_trajectory"]);
+
+/** The scenario's opt-in multi-actor / multi-session procedure, if any. */
+function executionOf(draft: ScenarioDraft): Record<string, unknown> | null {
+  const metadata = draft.extra.metadata;
+  if (typeof metadata !== "object" || metadata === null) return null;
+  const block = (metadata as Record<string, unknown>).launchpad_execution;
+  return typeof block === "object" && block !== null ? (block as Record<string, unknown>) : null;
+}
+
+class ScenarioJsonError extends Error {
+  constructor(
+    public index: number,
+    public detail: string,
+  ) {
+    super(detail);
+  }
+}
+
+/** One stored predefined item → draft (shared by the list mapper and the
+ *  JSON-mode "back to form" action). */
+function toDraft(item: Record<string, unknown>, i: number): ScenarioDraft {
+  const extra = Object.fromEntries(
+    Object.entries(item).filter(([key]) => !KNOWN_SCENARIO_KEYS.has(key)),
+  );
+  const lossy = formLossReason(item);
+  if (lossy) {
+    // JSON-only: keep the exact stored document; the form fields below are
+    // placeholders and are never emitted (toItems uses `json`).
+    return {
+      scenario_id: String(item.scenario_id ?? `scenario_${i + 1}`),
+      turns: [{ input: "", expected_response: "" }],
+      assertions: [],
+      expected_trajectory: "",
+      extra,
+      json: JSON.stringify(item, null, 2),
+      jsonOnly: lossy,
+    };
+  }
+  const turns = ((item.turns as Record<string, unknown>[] | undefined) ?? []).map((turn) => ({
+    input: String(turn.input ?? ""),
+    expected_response: String(turn.expected_response ?? ""),
+  }));
+  return {
+    scenario_id: String(item.scenario_id ?? `scenario_${i + 1}`),
+    turns,
+    assertions: ((item.assertions as string[] | undefined) ?? []).map(String),
+    expected_trajectory: ((item.expected_trajectory as string[] | undefined) ?? []).join(", "),
+    extra,
+    json: null,
+  };
+}
+
+function draftToItem(s: ScenarioDraft): Record<string, unknown> {
+  const assertions = s.assertions.map((a) => a.trim()).filter(Boolean);
+  const trajectory = s.expected_trajectory
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  return {
+    scenario_id: s.scenario_id.trim(),
+    turns: s.turns.map((turn) => ({
+      input: turn.input,
+      ...(turn.expected_response.trim()
+        ? { expected_response: turn.expected_response.trim() }
+        : {}),
+    })),
+    ...(assertions.length ? { assertions } : {}),
+    ...(trajectory.length ? { expected_trajectory: trajectory } : {}),
+    ...s.extra,
+  };
 }
 
 interface TraitDraft {
@@ -95,7 +195,16 @@ interface SimScenarioDraft {
   input: string;
   max_turns: string;
   assertions: string[];
+  // stored keys the persona form does not edit (provenance, metadata…) —
+  // carried through and re-emitted so a form save never strips them
+  extra?: Record<string, unknown>;
+  profile_extra?: Record<string, unknown>;
 }
+
+const KNOWN_SIM_KEYS = new Set([
+  "scenario_id", "scenario_description", "actor_profile", "input", "max_turns", "assertions",
+]);
+const KNOWN_PROFILE_KEYS = new Set(["traits", "context", "goal"]);
 
 // Same "cloud:" id encoding as the New Run scope dropdown / runs-list rows.
 const CLOUD_PREFIX = "cloud:";
@@ -110,6 +219,8 @@ const emptyScenario = (index: number): ScenarioDraft => ({
   turns: [{ input: "", expected_response: "" }],
   assertions: [],
   expected_trajectory: "",
+  extra: {},
+  json: null,
 });
 
 const emptySimScenario = (index: number): SimScenarioDraft => ({
@@ -170,6 +281,8 @@ const SAMPLE_SCENARIOS = (): ScenarioDraft[] => [
     turns: [{ input: "What is 17 + 25? Use your calculator tool.", expected_response: "42" }],
     assertions: ["The agent returns the exact sum 42"],
     expected_trajectory: "calculator",
+    extra: {},
+    json: null,
   },
   {
     scenario_id: "multiply_then_add",
@@ -179,38 +292,23 @@ const SAMPLE_SCENARIOS = (): ScenarioDraft[] => [
     ],
     assertions: ["The agent keeps the running result across turns"],
     expected_trajectory: "calculator",
+    extra: {},
+    json: null,
   },
   {
     scenario_id: "plain_greeting",
     turns: [{ input: "Say hello in one short sentence.", expected_response: "" }],
     assertions: [],
     expected_trajectory: "",
+    extra: {},
+    json: null,
   },
 ];
 
 // Any stored item (legacy prompt or devguide scenario) → editor draft.
 function toDrafts(items: Record<string, unknown>[]): ScenarioDraft[] {
   return items.map((item, i) => {
-    if ("turns" in item) {
-      const turns = (item.turns as Record<string, unknown>[]).map((turn) => {
-        const raw = turn.input;
-        const input =
-          typeof raw === "object" && raw !== null
-            ? String(
-                (raw as Record<string, unknown>).content ??
-                  (raw as Record<string, unknown>).prompt ??
-                  "",
-              )
-            : String(raw ?? "");
-        return { input, expected_response: String(turn.expected_response ?? "") };
-      });
-      return {
-        scenario_id: String(item.scenario_id ?? `scenario_${i + 1}`),
-        turns,
-        assertions: ((item.assertions as string[] | undefined) ?? []).map(String),
-        expected_trajectory: ((item.expected_trajectory as string[] | undefined) ?? []).join(", "),
-      };
-    }
+    if ("turns" in item) return toDraft(item, i);
     return {
       scenario_id: `item_${i + 1}`,
       turns: [
@@ -218,15 +316,22 @@ function toDrafts(items: Record<string, unknown>[]): ScenarioDraft[] {
       ],
       assertions: [],
       expected_trajectory: "",
+      // legacy provenance / description keys ride along and are re-emitted
+      extra: Object.fromEntries(
+        Object.entries(item).filter(([key]) => key !== "prompt" && key !== "expected"),
+      ),
+      json: null,
     };
   });
 }
 
 // Editor drafts → items to store. Legacy datasets keep their shape when the
-// content still fits it (kind is immutable server-side).
+// content still fits it (kind is immutable server-side). A scenario in JSON
+// mode is emitted exactly as typed (ScenarioJsonError on a parse failure).
 function toItems(scenarios: ScenarioDraft[], kind: string): Record<string, unknown>[] {
   const fitsLegacy = scenarios.every(
     (s) =>
+      s.json == null &&
       s.turns.length === 1 &&
       !s.assertions.some((a) => a.trim()) &&
       !s.expected_trajectory.trim(),
@@ -237,25 +342,23 @@ function toItems(scenarios: ScenarioDraft[], kind: string): Record<string, unkno
       ...(s.turns[0].expected_response.trim()
         ? { expected: s.turns[0].expected_response.trim() }
         : {}),
+      ...s.extra,
     }));
   }
-  return scenarios.map((s) => {
-    const assertions = s.assertions.map((a) => a.trim()).filter(Boolean);
-    const trajectory = s.expected_trajectory
-      .split(",")
-      .map((x) => x.trim())
-      .filter(Boolean);
-    return {
-      scenario_id: s.scenario_id.trim(),
-      turns: s.turns.map((turn) => ({
-        input: turn.input,
-        ...(turn.expected_response.trim()
-          ? { expected_response: turn.expected_response.trim() }
-          : {}),
-      })),
-      ...(assertions.length ? { assertions } : {}),
-      ...(trajectory.length ? { expected_trajectory: trajectory } : {}),
-    };
+  return scenarios.map((s, i) => {
+    if (s.json != null) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(s.json);
+      } catch (err) {
+        throw new ScenarioJsonError(i + 1, err instanceof Error ? err.message : String(err));
+      }
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new ScenarioJsonError(i + 1, "expected a JSON object");
+      }
+      return parsed as Record<string, unknown>;
+    }
+    return draftToItem(s);
   });
 }
 
@@ -278,6 +381,12 @@ function toSimDrafts(items: Record<string, unknown>[]): SimScenarioDraft[] {
         input: String(item.input ?? ""),
         max_turns: String(item.max_turns ?? 10),
         assertions: ((item.assertions as string[] | undefined) ?? []).map(String),
+        extra: Object.fromEntries(
+          Object.entries(item).filter(([key]) => !KNOWN_SIM_KEYS.has(key)),
+        ),
+        profile_extra: Object.fromEntries(
+          Object.entries(profile).filter(([key]) => !KNOWN_PROFILE_KEYS.has(key)),
+        ),
       };
     });
 }
@@ -300,12 +409,14 @@ function toSimItems(drafts: SimScenarioDraft[]): Record<string, unknown>[] {
         context: s.context,
         goal: s.goal,
         ...(Object.keys(traits).length ? { traits } : {}),
+        ...(s.profile_extra ?? {}),
       },
       input: s.input,
       ...(Number.isFinite(maxTurns) && maxTurns >= 1 && maxTurns !== 10
         ? { max_turns: maxTurns }
         : {}),
       ...(assertions.length ? { assertions } : {}),
+      ...(s.extra ?? {}),
     };
   });
 }
@@ -549,12 +660,23 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
       setFormError(t("evalPage.datasets.nameRequired"));
       return;
     }
-    const items =
-      editorMode === "import"
-        ? importPreview.items
-        : activeType === "simulated"
-          ? toSimItems(simScenarios)
-          : toItems(scenarios, editingId ? editingKind : "predefined");
+    let items: Record<string, unknown>[];
+    try {
+      items =
+        editorMode === "import"
+          ? importPreview.items
+          : activeType === "simulated"
+            ? toSimItems(simScenarios)
+            : toItems(scenarios, editingId ? editingKind : "predefined");
+    } catch (err) {
+      if (err instanceof ScenarioJsonError) {
+        setFormError(
+          t("evalPage.datasets.execution.jsonInvalid", { index: err.index, error: err.detail }),
+        );
+        return;
+      }
+      throw err;
+    }
     if (editorMode === "import" && (importPreview.error || items.length === 0)) {
       setFormError(importPreview.error ?? t("evalPage.datasets.importEmpty"));
       return;
@@ -746,11 +868,105 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
     </div>
   );
 
+  // Switch one scenario to raw-JSON editing (the whole item, metadata included).
+  const openJson = (si: number) =>
+    setScenarios((prev) =>
+      prev.map((s, i) => (i === si ? { ...s, json: JSON.stringify(draftToItem(s), null, 2) } : s)),
+    );
+  // Back to the form: re-parse; an invalid document stays in JSON mode with the error shown.
+  const closeJson = (si: number) => {
+    const current = scenarios[si];
+    if (current.json == null) return;
+    try {
+      const parsed: unknown = JSON.parse(current.json);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new Error("expected a JSON object");
+      }
+      setFormError(null);
+      setScenarios((prev) =>
+        prev.map((s, i) => (i === si ? toDraft(parsed as Record<string, unknown>, si) : s)),
+      );
+    } catch (err) {
+      setFormError(
+        t("evalPage.datasets.execution.jsonInvalid", {
+          index: si + 1,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    }
+  };
+
+  const procedurePreview = (block: Record<string, unknown>) => {
+    const steps = Array.isArray(block.steps) ? (block.steps as Record<string, unknown>[]) : [];
+    const checks = Array.isArray(block.checks) ? (block.checks as Record<string, unknown>[]) : [];
+    return (
+      <div
+        className="note"
+        data-testid="execution-preview"
+        style={{ borderColor: "var(--amber)", marginBottom: 8, display: "block" }}
+      >
+        <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+          <span className="mono" style={{ fontSize: 10, letterSpacing: ".08em", color: "var(--amber)" }}>
+            {t("evalPage.datasets.execution.title")}
+          </span>
+          <span className="mono dim" style={{ fontSize: 10 }}>
+            {t("evalPage.datasets.execution.repeat", { count: Number(block.repeat ?? 1) })}
+          </span>
+        </div>
+        <div className="dim" style={{ fontSize: 10.5, margin: "4px 0 6px" }}>
+          {t("evalPage.datasets.execution.hint")}
+        </div>
+        <ol className="mono" style={{ fontSize: 10.5, margin: 0, paddingLeft: 18 }}>
+          {steps.map((step, i) => (
+            <li key={i}>
+              {t("evalPage.datasets.execution.step", {
+                turn: Number(step.turn) + 1,
+                actor: String(step.actor ?? "?"),
+                session: String(step.session ?? "?"),
+              })}
+            </li>
+          ))}
+        </ol>
+        {checks.length > 0 && (
+          <>
+            <div className="mono dim" style={{ fontSize: 9.5, letterSpacing: ".12em", marginTop: 6 }}>
+              {t("evalPage.datasets.execution.checks")}
+            </div>
+            <ul className="mono" style={{ fontSize: 10.5, margin: 0, paddingLeft: 18 }}>
+              {checks.map((check, i) => (
+                <li key={i}>
+                  {t("evalPage.datasets.execution.check", {
+                    id: String(check.id ?? "?"),
+                    type: String(check.type ?? "?"),
+                    turn: Number(check.turn) + 1,
+                    text: String(check.text ?? ""),
+                  })}
+                  {Array.isArray(check.depends_on) && check.depends_on.length > 0 && (
+                    <span className="dim">
+                      {" "}
+                      ({t("evalPage.datasets.execution.dependsOn", {
+                        ids: (check.depends_on as unknown[]).map(String).join(", "),
+                      })})
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+    );
+  };
+
   const scenarioEditor = (
     <>
-      {scenarios.map((scenario, si) => (
+      {scenarios.map((scenario, si) => {
+        const procedure = executionOf(scenario);
+        const extraKeys = Object.keys(scenario.extra);
+        return (
         <div
           key={si}
+          data-testid="scenario-card"
           style={{
             border: "1px solid rgba(255,255,255,.08)",
             borderRadius: 4,
@@ -764,8 +980,18 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
               value={scenario.scenario_id}
               aria-label={t("evalPage.datasets.scenarioId")}
               style={{ maxWidth: 220 }}
+              disabled={scenario.json != null}
               onChange={(e) => patchScenario(si, { scenario_id: e.target.value })}
             />
+            {scenario.json != null ? (
+              <Btn data-testid="scenario-back-to-form" onClick={() => closeJson(si)}>
+                {t("evalPage.datasets.execution.backToForm")}
+              </Btn>
+            ) : (
+              <Btn data-testid="scenario-edit-json" onClick={() => openJson(si)}>
+                {t("evalPage.datasets.execution.editJson")}
+              </Btn>
+            )}
             <Btn
               disabled={scenarios.length <= 1}
               style={{ marginLeft: "auto" }}
@@ -775,6 +1001,40 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
               ✕
             </Btn>
           </div>
+          {scenario.json != null ? (
+            <div className="field" style={{ marginBottom: 0 }}>
+              {scenario.jsonOnly && (
+                <div
+                  className="note"
+                  data-testid="scenario-json-only"
+                  style={{ borderColor: "var(--warn)", marginBottom: 6 }}
+                >
+                  <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
+                  <span>
+                    {t("evalPage.datasets.execution.jsonOnly", {
+                      reason: t(`evalPage.datasets.execution.jsonOnlyReason.${scenario.jsonOnly}`),
+                    })}
+                  </span>
+                </div>
+              )}
+              <label>{t("evalPage.datasets.execution.jsonLabel")}</label>
+              <textarea
+                className="input mono"
+                data-testid="scenario-json"
+                rows={14}
+                style={{ fontSize: 10.5, lineHeight: 1.5, resize: "vertical" }}
+                value={scenario.json}
+                onChange={(e) => patchScenario(si, { json: e.target.value })}
+              />
+            </div>
+          ) : (
+          <>
+          {procedure && procedurePreview(procedure)}
+          {!procedure && extraKeys.length > 0 && (
+            <div className="mono dim" style={{ fontSize: 10, marginBottom: 6 }}>
+              {t("evalPage.datasets.execution.extraKeys", { keys: extraKeys.join(", ") })}
+            </div>
+          )}
           {scenario.turns.map((turn, ti) => (
             <div key={ti} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
               <span className="mono dim" style={{ fontSize: 9.5, paddingTop: 8 }}>
@@ -808,7 +1068,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
                 }
               />
               <Btn
-                disabled={scenario.turns.length <= 1}
+                disabled={scenario.turns.length <= 1 || procedure != null}
                 title={t("evalPage.datasets.removeTurn")}
                 onClick={() =>
                   patchScenario(si, {
@@ -821,6 +1081,8 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
             </div>
           ))}
           <Btn
+            data-testid="add-turn"
+            disabled={procedure != null}
             onClick={() =>
               patchScenario(si, {
                 turns: [...scenario.turns, { input: "", expected_response: "" }],
@@ -877,8 +1139,11 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
               }
             />
           </div>
+          </>
+          )}
         </div>
-      ))}
+        );
+      })}
       <Btn
         onClick={() => setScenarios((prev) => [...prev, emptyScenario(prev.length + 1)])}
       >

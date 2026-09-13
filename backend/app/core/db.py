@@ -189,6 +189,9 @@ def _migrate(bind) -> None:
                 conn.execute(
                     text("ALTER TABLE eval_runs ADD COLUMN dataset_version VARCHAR(16)")
                 )
+        if "execution" not in existing:
+            with bind.begin() as conn:
+                conn.execute(text("ALTER TABLE eval_runs ADD COLUMN execution JSON"))
     if "experiments" in inspector.get_table_names():
         existing = {c["name"] for c in inspector.get_columns("experiments")}
         additions = {

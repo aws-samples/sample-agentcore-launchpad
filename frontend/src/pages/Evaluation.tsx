@@ -8,6 +8,7 @@ import {
 } from "../components";
 import { EvaluationNav } from "../components/EvaluationNav";
 import { InsightClusters } from "../components/InsightClusters";
+import { RunExecutionPanel } from "../components/RunExecutionPanel";
 import { RunResultsPanel } from "../components/RunResultsPanel";
 import type { AgentInfo } from "../lib/api";
 import { api, errorMessage, responseMessage } from "../lib/api";
@@ -1225,6 +1226,9 @@ export function Evaluation() {
       {/* What the averages above are made of: every judgement with the judge's
           explanation, per session — the same view SCORE NOW gives one session. */}
       <RunResultsPanel run={selectedRun} />
+      {/* Multi-actor / multi-session procedures: the synthetic sessions and the
+          LOCAL deterministic check outcomes — distinct from the AWS judges above. */}
+      {selectedRun?.execution && <RunExecutionPanel execution={selectedRun.execution} />}
 
       <ConfirmDialog
         open={confirmInsights && !!selectedRun}

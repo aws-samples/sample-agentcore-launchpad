@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError, aws_error_code
 from app.evaluation import agentcore_eval as ac
-from app.evaluation import service
+from app.evaluation import execution, service
 from app.evaluation.models import EvalDataset, EvalRun
 from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import available_ground_truth, normalize_scenarios
@@ -113,6 +113,10 @@ def _validate_items(items: list[dict[str, Any]]) -> None:
             raise AppError(
                 "dataset.invalid_item", f"item {idx}: prompt required", status_code=422
             )
+    # opt-in multi-actor/multi-session procedures: strict schema, item size,
+    # unique normalized ids and expanded totals (calls / sessions) — only
+    # datasets that contain an opt-in item are subject to it
+    execution.validate_items(items)
 
 
 def _infer_kind(items: list[dict[str, Any]]) -> str:
@@ -1102,6 +1106,10 @@ def _run_out(run: EvalRun) -> dict[str, Any]:
         "scores": run.scores,
         "insights": run.insights,
         "error": run.error,
+        # additive: multi-actor/multi-session procedure ledger (sessions with
+        # their synthetic actors, steps, local deterministic check results);
+        # null unless the dataset opted in via metadata.launchpad_execution
+        "execution": run.execution,
         # additive: an operator stop is pending on this run (in-memory flag;
         # the row turns `stopped` once the poller/worker observes it)
         "stop_requested": service.stop_requested(run.id),
@@ -1229,6 +1237,15 @@ def create_run(
         # the pinned version travels on its own column, never in this string.
         dataset_name = f"cloud:{cloud_name}"
 
+    # Multi-actor/multi-session procedures: re-validate the stored items (a
+    # local row written before a rule tightened must not reach the queue) and
+    # require an actor envelope on the invoke path — both before any run row,
+    # telemetry lookup or AWS call.
+    if req.dataset_id:
+        execution.validate_items(items)
+    execution.require_actor_envelope(
+        items, method=agent.method, protocol=(agent.spec or {}).get("protocol") or "http"
+    )
     if any("actor_profile" in item for item in items) and not req.actor_model_id:
         raise AppError(
             "run.actor_model_required",
