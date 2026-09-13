@@ -351,9 +351,11 @@ evaluator 映射、AgentCore 优先的取舍、证据分级、不自主执行）
 `model.bedrockModelConfig.maxTokens`，*不是*聚合的 `InvokeHarness.maxTokens`，也不是花费上限；
 `reasoning_effort`（`low | medium | high`）**只接受原生 Bedrock 上的 OpenAI GPT-5.x 模型**
 （`model_source=bedrock`，Converse），通过 `bedrockModelConfig.additionalParams` 以
-`{"additional_request_fields": {"reasoning": {"effort": …}}}` 发送——这是 Harness 转发为
-`Converse.additionalModelRequestFields` 的 Strands `BedrockModel` 配置键，Bedrock 对 GPT-5.6 接受
-`reasoning.effort`（扁平的 `reasoning_effort` 会被当作未知参数拒绝）。其他任何组合（Claude/Nova 模型、
+`{"additionalModelRequestFields": {"reasoning": {"effort": …}}}` 发送——托管 Harness 会把
+`additionalParams` **原样合并进原始 Converse 请求参数**（它*不是* Strands `BedrockModel` 的配置块，
+因此蛇形命名的 `additional_request_fields` 键在真实 InvokeHarness 上会被 botocore 参数校验拒绝），
+Bedrock 在该线上键下对 GPT-5.6 接受 `reasoning.effort`（扁平的 `reasoning_effort` 同样会被当作未知参数拒绝）。
+其他任何组合（Claude/Nova 模型、
 Bedrock Mantle 的 Responses API、非 Harness 方法）由 schema 拒绝，而不是猜测或悄悄丢弃；不带这两个参数的
 spec 发送与以往完全相同的请求。架构师预置的**新安装默认值**为 `us.openai.gpt-5.6-sol`（美国跨区域推理
 配置，原生 Bedrock/Converse——按 Agent 的角色同时授权该配置与底层基础模型）、`max_tokens: 65536` 与

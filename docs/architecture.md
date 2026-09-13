@@ -438,10 +438,12 @@ request body. Two knobs are new on `AgentSpec` and harness-only: `max_tokens` is
 and not a spend cap; `reasoning_effort` (`low | medium | high`) is accepted **only
 for an OpenAI GPT-5.x model on native Bedrock** (`model_source=bedrock`, Converse)
 and is sent through `bedrockModelConfig.additionalParams` as
-`{"additional_request_fields": {"reasoning": {"effort": …}}}` — the Strands
-`BedrockModel` config key the harness forwards as
-`Converse.additionalModelRequestFields`, where Bedrock accepts `reasoning.effort` for
-GPT-5.6 (a flat `reasoning_effort` is rejected as an unknown parameter). Any other
+`{"additionalModelRequestFields": {"reasoning": {"effort": …}}}` — the managed
+harness merges `additionalParams` **verbatim into the raw Converse request kwargs**
+(it is *not* a Strands `BedrockModel` config block, so the snake_case
+`additional_request_fields` key fails botocore parameter validation on the real
+InvokeHarness), and Bedrock accepts `reasoning.effort` for GPT-5.6 under that wire key
+(a flat `reasoning_effort` is likewise rejected as an unknown parameter). Any other
 pairing (a Claude/Nova model, Bedrock Mantle's Responses API, a non-harness method)
 is refused by the schema rather than guessed at or silently dropped; a spec without
 the knobs sends exactly the request it always did. The architect preset's **new-install
