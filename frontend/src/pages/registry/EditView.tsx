@@ -312,6 +312,49 @@ export function EditView({ recordId, onDone, onBack }: EditViewProps) {
   const statusChip = STATUS_CHIP[record.status] ?? STATUS_CHIP.DRAFT;
   const skillMeta = parseSkillDefinition(record);
 
+  // A system-managed Skill (SE-043) has no edit form: its content is published by
+  // the preset pipeline and every PUT/reimport/delete is refused server-side. A deep
+  // link lands on a read-only summary instead of a form that would fail on save.
+  if (record.system) {
+    return (
+      <section>
+        <ViewHead
+          kicker={t("registry.kicker")}
+          title={t("registry.edit.pageTitle", { name: record.name })}
+          meta={`${record.type} · ${t(statusChip.labelKey)}`}
+        />
+        {backBtn}
+        <Panel title={t("registry.edit.systemReadOnlyTitle")} style={{ "--i": 0 } as CSSProperties}>
+          <div className="note" data-testid="edit-system-readonly">
+            <span className="i">◈</span>
+            <span>{t("registry.edit.systemReadOnly", { label: record.system.label })}</span>
+          </div>
+          <div className="kv" style={{ marginTop: 10 }}>
+            <span className="k">{t("registry.drawer.system.version")}</span>
+            <span className="v mono">
+              {record.system.skill_version ?? "—"}
+              {record.system.release_digest ? ` · ${record.system.release_digest}` : ""}
+            </span>
+          </div>
+          <div className="kv">
+            <span className="k">{t("registry.drawer.system.path")}</span>
+            <span className="v mono">{record.system.path ?? "—"}</span>
+          </div>
+          {skillMeta && skillMeta.files.length > 0 && (
+            <>
+              <h4 style={{ marginTop: 10 }}>
+                {t("registry.drawer.files", { n: skillMeta.files.length })}
+              </h4>
+              <div className="code" style={{ maxHeight: 160, overflowY: "auto" }}>
+                {skillMeta.files.join("\n")}
+              </div>
+            </>
+          )}
+        </Panel>
+      </section>
+    );
+  }
+
   return (
     <section>
       <ViewHead

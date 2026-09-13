@@ -265,8 +265,17 @@ def console_search(workspace: WorkspaceContext, query: str) -> list[dict[str, An
 
 
 def console_action(
-    workspace: WorkspaceContext, record_id: str, action: str
+    workspace: WorkspaceContext, record_id: str, action: str, *, is_admin: bool = False
 ) -> dict[str, Any]:
+    """Lifecycle transition. ``is_admin`` gates a **system-managed Skill** record
+    (SE-043): members may view and mount it but never move its status; it defaults
+    to False so an internal caller that omits the identity cannot approve one by
+    accident. Ordinary records keep their member-operable lifecycle."""
+    from app.system_agents.skill_registry import refuse_protected_mutation
+
+    refuse_protected_mutation(
+        workspace.id, record_id, action, is_admin=is_admin, lifecycle=True
+    )
     client = registry_control_client(workspace)
     registry_id = _registry_id(workspace)
     if action == "submit":
@@ -281,6 +290,9 @@ def console_action(
 
 
 def console_delete(workspace: WorkspaceContext, record_id: str) -> None:
+    from app.system_agents.skill_registry import refuse_protected_mutation
+
+    refuse_protected_mutation(workspace.id, record_id, "delete")  # before any AWS client
     reg.delete_record(
         registry_control_client(workspace), _registry_id(workspace), record_id
     )
@@ -958,6 +970,11 @@ def register_skill_bundle(
             f"skill name '{name}' must match ^[a-z][a-z0-9-]{{2,63}}$ "
             "(set it in SKILL.md frontmatter or provide an override)"
         )
+    # A system preset's Skill name is platform-reserved (SE-043) — refused before the
+    # name lookup, the upload and the record create.
+    from app.system_agents.skill_registry import refuse_reserved_skill_name
+
+    refuse_reserved_skill_name(name)
     validate_bundle(bundle)
 
     client = registry_control_client(workspace)
@@ -1094,6 +1111,9 @@ def reimport_skill(workspace: WorkspaceContext, record_id: str) -> dict[str, Any
     git repos have no persisted token, so a private reimport surfaces the (token-
     redacted) clone/download error — accepted by design.
     """
+    from app.system_agents.skill_registry import refuse_protected_mutation
+
+    refuse_protected_mutation(workspace.id, record_id, "reimport")  # before any AWS client
     client = registry_control_client(workspace)
     registry_id = _registry_id(workspace)
     record = reg.get_record(client, registry_id, record_id)
@@ -1229,6 +1249,12 @@ def update_record(
     identity are keyed by it). DEPRECATED records are terminal and A2A records are
     owned by agent deploys — both refuse editing (400 ``registry.not_editable``).
     """
+    from app.system_agents.skill_registry import refuse_protected_mutation
+
+    # A system-managed Skill (SE-043) is never edited here — description or content,
+    # console or Skill Lab publish — whoever the caller is. Guarded before any AWS
+    # client or S3 object is touched.
+    refuse_protected_mutation(workspace.id, record_id, "replace" if bundle else "edit")
     client = registry_control_client(workspace)
     registry_id = _registry_id(workspace)
     record = reg.get_record(client, registry_id, record_id)

@@ -198,7 +198,8 @@ def test_register_stage_log_does_not_claim_a_submit_it_never_made(monkeypatch):
     import app.deployer.registration as registration
 
     logs: list[str] = []
-    row = SimpleNamespace(id="a1", registry_record_id=None)
+    # an ordinary agent: no system_key, so the SE-043 system-skill branch is not taken
+    row = SimpleNamespace(id="a1", registry_record_id=None, system_key=None)
     session = MagicMock()
     session.get.return_value = row
     ctx = SimpleNamespace(session=lambda: session, log=logs.append, workspace=object())
@@ -225,7 +226,8 @@ def test_register_stage_skips_only_explicit_registry_unavailability(monkeypatch)
     from app.services.registry_console import RegistryUnavailableError
 
     logs: list[str] = []
-    row = SimpleNamespace(id="a1", registry_record_id=None)
+    # an ordinary agent: no system_key, so the SE-043 system-skill branch is not taken
+    row = SimpleNamespace(id="a1", registry_record_id=None, system_key=None)
     session = MagicMock()
     session.get.return_value = row
     ctx = SimpleNamespace(session=lambda: session, log=logs.append, workspace=object())

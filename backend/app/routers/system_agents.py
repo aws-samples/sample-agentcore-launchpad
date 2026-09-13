@@ -14,14 +14,15 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.errors import NotFoundError
+from app.core.errors import AppError, NotFoundError
 from app.deployer.pipeline import start_deploy_async
 from app.routers.agents import _agent_out
 from app.routers.auth import require_admin, require_identity
+from app.routers.registry import _invalidate_attachables, _record_out
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import MAX_TOKENS_CEILING, KnowledgeBaseRef, ModelSource, ReasoningEffort
 from app.system_agents import presets as catalogue
-from app.system_agents import service
+from app.system_agents import service, skill_registry
 from app.system_agents.presets import EDITABLE_FIELDS, PresetEdit
 from app.system_agents.uninstall import start_uninstall_async
 
@@ -152,6 +153,68 @@ def install_system_agent(
         "preset": service.preset_status(db, ws.row, preset, is_admin=True),
     }
     return JSONResponse(status_code=outcome.status_code, content=body)
+
+
+@router.post("/{preset_key}/skill-registration")
+def register_system_skill_record(
+    preset_key: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Register — or verify, or roll forward — the installed preset's published Skill
+    release as its own Registry record (SE-043). No request body: the resource is
+    server-selected (the release the stored spec pins, proven against this build and
+    read back from S3). Nothing is uploaded, the Harness is not re-published and the
+    agent's A2A record is untouched. A first registration lands in the normal review
+    queue (submitted, not approved); an identical repeat is a no-op that keeps the
+    record's approval; a newer release updates the descriptor and needs review again.
+    """
+    require_admin(request)  # belt and braces with ROUTE_POLICY
+    preset = _preset(preset_key)
+    agent = service.find_installed(db, ws.id, preset)
+    if agent is None:
+        raise NotFoundError(
+            "system_agent.not_installed", f"'{preset_key}' is not installed in this workspace"
+        )
+    if agent.status != "active":
+        raise AppError(
+            "system_skill.preset_not_active",
+            f"the preset is {agent.status}; the Skill is registered once the preset is active "
+            "(a deploy registers it in its register stage)",
+            {"agent_status": agent.status},
+            status_code=409,
+        )
+    outcome = skill_registry.register_system_skill(db, ws.context, preset, agent)
+    _invalidate_attachables(ws.id)  # a changed or new record must not serve a stale catalog
+    return {
+        "preset_key": preset.key,
+        "record": _record_out(outcome.record, skill_registry.record_projection(outcome.row)),
+        "created": outcome.created,
+        "changed": outcome.changed,
+        "submitted": outcome.submitted,
+        "note": outcome.note,
+        "skill": {
+            "name": preset.name,
+            "version": outcome.row.release_version,
+            "digest": (outcome.row.release_digest or "")[:12],
+            "path": outcome.row.s3_uri,
+            "files": _files_of(outcome.record),
+        },
+        "preset": service.preset_status(db, ws.row, preset, is_admin=True),
+    }
+
+
+def _files_of(record: dict[str, Any]) -> list[str]:
+    import json
+
+    try:
+        definition = json.loads(
+            record["descriptors"]["agentSkills"]["skillDefinition"]["inlineContent"]
+        )
+        return [str(f) for f in definition.get("files") or []]
+    except (KeyError, TypeError, ValueError):
+        return []
 
 
 @router.delete("/{preset_key}")

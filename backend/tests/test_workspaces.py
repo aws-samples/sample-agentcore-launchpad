@@ -50,6 +50,8 @@ def _pre_p2_database(tmp_path):
     with engine.begin() as conn:
         # the system-preset index spans agents.workspace_id and postdates P2 too
         conn.execute(sa.text("DROP INDEX uq_agents_workspace_system_key"))
+        # so does the system-skill registration index (SE-043)
+        conn.execute(sa.text("DROP INDEX uq_system_skill_records_workspace_preset"))
         for table in WORKSPACE_SCOPED_TABLES:
             conn.execute(sa.text(f"DROP INDEX ix_{table}_workspace_id"))
             conn.execute(sa.text(f"ALTER TABLE {table} DROP COLUMN workspace_id"))

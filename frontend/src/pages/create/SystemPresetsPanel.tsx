@@ -28,7 +28,7 @@ const TERMINAL: SystemPresetStatus[] = ["active", "failed", "not_installed"];
 const IN_FLIGHT: SystemPresetStatus[] = ["deploying", "uninstalling"];
 const POLL_MS = 4000;
 
-type Operation = "install" | "repair" | "uninstall";
+type Operation = "install" | "repair" | "uninstall" | "registerSkill";
 
 /**
  * System-managed presets: platform-owned agents an administrator installs on
@@ -155,7 +155,26 @@ export function SystemPresetsPanel({
     const startedIn = scope.current;
     setBusy(preset.key);
     try {
-      if (kind === "uninstall") {
+      if (kind === "registerSkill") {
+        // SE-043: at most one Registry write, no S3 write, no Harness re-publish;
+        // the response says exactly which of created / rolled forward / no-op happened
+        const res = await api.registerSystemPresetSkill(preset.key, startedIn);
+        if (!stillCurrent(startedIn)) return;
+        setPresets((prev) =>
+          (prev ?? []).map((row) => (row.key === preset.key ? res.preset : row)),
+        );
+        toast(
+          t(
+            res.created
+              ? "create.system.skill.registered"
+              : res.changed
+                ? "create.system.skill.updated"
+                : "create.system.skill.verified",
+            { id: res.record.record_id, v: res.skill.version ?? "" },
+          ),
+          "good",
+        );
+      } else if (kind === "uninstall") {
         const res = await api.uninstallSystemPreset(preset.key, startedIn);
         if (!stillCurrent(startedIn)) return;
         // consume the outcome: the row is now `uninstalling` with a job, whatever the
@@ -331,6 +350,34 @@ export function SystemPresetsPanel({
               </div>
             )}
             <div className="dim" style={{ fontSize: 11 }}>{t("create.system.adminOptionsApiOnly")}</div>
+            {installed && (
+              <div
+                className="mono dim"
+                style={{ fontSize: 11, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
+                data-testid="preset-skill-registration"
+                data-record-id={preset.skill_registration?.record_id ?? ""}
+              >
+                <span>
+                  {t("create.system.skill.label")}:{" "}
+                  {preset.skill_registration?.record_id
+                    ? t("create.system.skill.registeredAs", {
+                        id: preset.skill_registration.record_id,
+                        v: preset.skill_registration.release_version ?? "?",
+                      })
+                    : t("create.system.skill.notRegistered")}
+                </span>
+                {preset.skill_registration?.record_id && (
+                  <Link
+                    className="assist-link"
+                    style={{ marginTop: 0 }}
+                    to={`/registry?record=${encodeURIComponent(preset.skill_registration.record_id)}`}
+                    data-testid={`skill-record-link-${preset.key}`}
+                  >
+                    {t("create.system.skill.open")}
+                  </Link>
+                )}
+              </div>
+            )}
             {preset.error && preset.status === "failed" && (
               <div className="note" style={{ borderColor: "var(--crit)" }} data-testid="preset-error">
                 <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
@@ -415,6 +462,21 @@ export function SystemPresetsPanel({
                   {t(preset.update_available ? "create.system.update" : "create.system.repair")}
                 </Btn>
               )}
+              {installed && preset.status === "active" && (
+                <Btn
+                  data-testid={`register-skill-${preset.key}`}
+                  disabled={!preset.can_register_skill || isBusy}
+                  disabledReason={isAdmin ? (blockers ?? undefined) : undefined}
+                  title={isAdmin ? t("create.system.skill.hint") : t("create.system.skill.adminOnly")}
+                  onClick={() => setConfirm({ kind: "registerSkill", preset })}
+                >
+                  {t(
+                    preset.skill_registration?.record_id
+                      ? "create.system.skill.verify"
+                      : "create.system.skill.register",
+                  )}
+                </Btn>
+              )}
               {installed && "model_id" in preset.settings && (
                 <Btn
                   data-testid={`settings-${preset.key}`}
@@ -493,7 +555,15 @@ export function SystemPresetsPanel({
         open={confirm != null}
         title={confirm ? t(`create.system.confirm.${confirm.kind}Title`) : ""}
         body={confirm ? t(`create.system.confirm.${confirm.kind}`, { name: confirm.preset.label }) : ""}
-        confirmLabel={confirm ? t(`create.system.${confirm.kind}`) : ""}
+        confirmLabel={
+          confirm
+            ? t(
+                confirm.kind === "registerSkill"
+                  ? "create.system.skill.register"
+                  : `create.system.${confirm.kind}`,
+              )
+            : ""
+        }
         onConfirm={() => {
           if (confirm) void run(confirm.kind, confirm.preset);
           setConfirm(null);

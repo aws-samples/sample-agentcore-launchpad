@@ -592,6 +592,67 @@ execution never accepts it:
 The prefix family is disjoint from the member-writable `skills/` (registry) and
 `agent-skills/` (wizard staging) prefixes.
 
+**The preset's Skill as its own Registry record (SE-043).** The preset agent's A2A
+record (`Agent.registry_record_id`) describes the *agent*; the versioned Skill it
+loads is registered separately as an `AGENT_SKILLS` record so the Registry lists it
+and APPROVED-catalog consumers (`GET /api/registry/attachables`, the wizard, the
+assistant) can mount it. The record's `skillDefinition` points at the **existing
+immutable release** — `path = s3://<bucket>/system-skills/<name>/<version>-<digest12>/`,
+the real `SKILL.md` as `skillMd`, the five bundle files, `version`, and
+`source = {kind: "system", preset_key, release_version, release_digest, manifest}` —
+nothing is copied to the member-writable `skills/<name>/` prefix, uploaded or deleted:
+registration's only S3 traffic is a read-back proving the published directory is
+exactly the snapshot (manifest, listing, every object's bytes — the package stage's
+final verification without its repair branch). The release is derived from the
+**installed spec** and proven against this build's snapshot; a checkout that is an
+unpublished newer revision (or an older build) is refused with the REPAIR/UPDATE
+instruction (`409 system_skill.release_mismatch`) rather than registered.
+Ownership is a server-owned ledger row — `SystemSkillRecord`
+(`system_skill_records`: workspace, preset key, registry id, record id, client
+token, registered release, content digest), one per workspace and preset, never a
+descriptor field or tag a client could send — and a record is system-protected exactly
+when the caller's workspace maps its id. `POST /api/system-agents/{key}/skill-registration`
+(administrator, no body, workspace pinned like every preset write) registers the Skill
+of an **active** preset; the deploy pipeline's `register` stage does the same for every
+fresh install or repair after the A2A record (a failure fails the stage with the exact
+reason — the job never claims a registration AWS did not confirm). Nothing registers on
+startup or on a read. The write is idempotent and race-safe: the row is the durable
+create intent (its `clientToken`, 33–256 `[A-Za-z0-9-]`, is committed before
+`CreateRegistryRecord`, so a crash between the AWS call and the ledger commit is
+recovered by the same request or by adopting the record whose *metadata* — system
+source, preset key, this workspace's system-skills path — proves it is ours; a
+same-name record that is not is `409 system_skill.foreign_record`, never adopted or
+overwritten); concurrent registrations serialize on an advisory `fcntl` lock per
+(workspace, preset) and the unique row arbitrates across processes, so N racing calls
+converge on one record. A first registration is **submitted for review, never
+approved** — approval is the administrator's explicit action in the Registry. An
+identical repeat is a no-op that issues no `UpdateRegistryRecord`, so an APPROVED
+record stays APPROVED (a bodiless repair, a reinstall, a re-click); a newer release
+updates the descriptor (bumping `recordVersion`, e.g. `1.0.0-skill → 1.1.0-skill`),
+which the service resets to DRAFT — normal review again; an older release can never
+downgrade the registered one (`409 system_skill.stale_release`); a DEPRECATED record
+(terminal) fails clearly instead of being rewritten (`409 system_skill.record_deprecated`,
+recovery documented in the message). Uninstalling the preset keeps the record, the
+mapping and the S3 release (other consumers may mount it); a reinstall reuses the same
+record. **Protection at the service boundary**, before any AWS client or S3 object: the
+console `PUT` (description *and* content, inline or staged replace), `reimport`,
+`DELETE` and Skill Lab's publish (`update_record`) are refused for everyone with the
+maintenance hint (`403 registry.system_skill_protected`); lifecycle actions
+(`submit`/`approve`/`reject`/`disable`) are refused for members and allowed for an
+administrator — the route passes the caller's role explicitly and the service default
+is *not admin*, so an internal caller cannot approve one by omission; the reserved
+Skill name is refused for ordinary register/import/import-with-rename before any S3
+write (`409 registry.name_reserved`; an MCP record may still use the name). Ordinary
+records keep their member-operable lifecycle and edits unchanged. The record API
+projection carries a server-derived `system` member (`{managed, preset_key, label,
+skill_version, release_digest, path, protected_actions, admin_actions} | null`) the
+console renders the SYSTEM chip from, hides edit/re-import/delete on, and shows the
+lifecycle buttons for administrators only; `?view=edit` on such a record is a
+read-only summary; USE IN NEW AGENT keeps its APPROVED gating; `GET /api/system-agents`
+reports `skill_registration` (ledger mapping) and `can_register_skill`, and the System
+presets panel offers REGISTER SKILL / VERIFY SKILL RECORD (explicit confirmation, pinned
+workspace) with a link to the record.
+
 **Constrained tool surface.** The harness exposes `shell` and `file_operations` to
 every session unless `allowedTools` restricts them, so `AgentSpec.allowed_tools`
 (new, harness-only, `None` = API default for every existing agent; each entry

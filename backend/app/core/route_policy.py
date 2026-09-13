@@ -112,6 +112,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # refuse rows that carry Agent.system_key, whatever perm:* the caller holds) ----
     ("GET", "/api/system-agents"): MEMBER,
     ("POST", "/api/system-agents/{preset_key}/install"): ADMIN,
+    # registers / verifies the preset's published Skill release in the Registry
+    # (one Registry write at most, no S3 write) — administrator, like install
+    ("POST", "/api/system-agents/{preset_key}/skill-registration"): ADMIN,
     ("DELETE", "/api/system-agents/{preset_key}"): ADMIN,
     # ---- architect assistant (SE-039): discussion with the preset is member
     # (parity with Chat); approving a proposal deploys a NEW agent and rides the

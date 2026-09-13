@@ -100,7 +100,22 @@ API-key 信任边界的控制台一侧。
 |---|---|---|---|
 | `GET` | `/api/system-agents` | 成员 | `{workspace_id, presets[{key, name, label, description, method, skill_version, installed_skill_version, update_available, status, requirements[{code, message}], name_collision, agent_id, agent_status, error, job_id, deployment_id, deployment_status, model_id, model_source, knowledge_bases[], allowed_tools[], memory, settings{model_id, model_source, max_tokens, reasoning_effort, system_prompt, max_iterations, timeout_seconds, knowledge_bases[]} | {}, defaults{同样成员}, editable_fields[], operation, can_install, can_repair, can_configure, can_uninstall, updated_at}]}`——`status ∈ configuration_required | not_installed | deploying | uninstalling | active | failed`；拆除任务持有该行时 `operation` 为 `{kind: uninstall, job_id, job_status, attempt, error, retryable}`，否则为 `null`；条件 code 为 `bootstrap_not_ready | missing_artifacts_bucket | missing_execution_role | per_agent_roles_disabled | missing_oauth_provider`；`memory` 为 `disabled`；仅读台账 |
 | `POST` | `/api/system-agents/{key}/install` | 管理员 | 必需的 JSON 请求体，为局部编辑：`{model_id?, model_source?, max_tokens?（1–131072，单次模型调用 = bedrockModelConfig.maxTokens）, reasoning_effort?（low|medium|high；仅 model_source=bedrock 上的 OpenAI 模型）, system_prompt?, max_iterations?（1–100）, timeout_seconds?（10–3600）, knowledge_bases?[{kb_id, name?, description?}], reset?[可编辑字段…], clear?["max_tokens"|"reasoning_effort"], force?}`（`{}` = 安装时预置默认值，修复时已存选择；省略 = 保持，`reset` = 构建默认值，`clear` = 不发送；未知成员 → `422`）→ 有任务在途时 `202 {agent, job_id, deployment_id, created, changed, preset}`（对部署中预置的无请求体修复返回其既有任务且 `changed: false`；部署中的显式编辑 → `409 system_agent.deploy_in_progress {job_id}`；竞争安装返回胜出方的任务，但若请求了不同设置则返回 `409 system_agent.deploy_in_progress`；局部编辑在声明事务内针对当前行解析，声明以版本为条件，行变化后重新解析，三次仍失败返回 `409 system_agent.conflict`），运行中的预置已匹配时 `200` 并带上一任务的 ID；不支持的组合（如给 Claude 模型设置推理强度）返回 `422 system_agent.invalid_options`。知识库在 provision 阶段于目标 Workspace 中核验 |
+| `POST` | `/api/system-agents/{key}/skill-registration` | 管理员 | 无请求体（资源由服务端选定：已存 spec 固定的版本，与本构建比对并从 S3 回读）→ `200 {preset_key, record{system, record_id, name, type: AGENT_SKILLS, status, version, descriptors, …}, created, changed, submitted, note, skill{name, version, digest, path, files[]}, preset}`——把**运行中**预置已发布的 Skill 版本注册为独立的 Registry 记录，指向不可变的 `system-skills/<name>/<version>-<digest12>/` 前缀（不写 S3，不重新发布 Harness，Agent 的 A2A 记录不动）。`created` ⇒ 新记录已提交审核（此处绝不批准）；`changed` 而非 `created` ⇒ 描述符前滚到更新版本（DRAFT，重新审核，`recordVersion` 递增）；两者皆否 ⇒ 版本相同、空操作（保留批准）。幂等且竞争安全（持久 `clientToken`、按预置加锁）；部署管道的 register 阶段在安装/修复时执行同样的注册 |
 | `DELETE` | `/api/system-agents/{key}` | 管理员 | `202 {agent, job_id, operation: uninstall, attempt, started, preset}`——在一次提交中声明该行（`uninstalling`，乐观条件更新）并排入拆除任务；同时到达的请求共享一个任务（落败方 `started: false`）；独占（按 Agent 的建议锁，单主机）且带围栏的 worker 核实每个知识库目标、Harness 与专用角色均已消失之前（任务上有含精确资源 ID 的逐步 `progress`，仅在已核实时继承到下一次尝试）该行保留身份；拆除失败则进入第 N+1 次尝试；部署进行中返回 `409 agent.deploy_in_progress` |
+
+`GET /api/system-agents` 另外报告 `skill_registration`（`{record_id, status: creating | registered,
+release_version, release_digest, path, updated_at} | null`，仅读台账）与 `can_register_skill`。
+Registry 记录（`GET /api/registry/records[/{id}]`、搜索、action/update/reimport 的响应）携带服务端
+推导的 `system` 成员——`{managed: true, preset_key, label, skill_version, release_digest, path,
+protected_actions[], admin_actions[]} | null`——当且仅当 Workspace 台账把该记录映射到系统预置的 Skill
+时设置；绝不从描述符或标签读取。对这类记录，`PUT`、`POST …/reimport` 与 `DELETE` 对所有调用方返回
+`403 registry.system_skill_protected`，`POST …/action` 对成员返回同样错误（管理员可提交/批准/驳回/停用），
+以保留名称进行普通 Skill 注册/导入返回 `409 registry.name_reserved`。Skill 注册错误码：
+`system_skill.preset_not_active`（409）、`system_skill.release_mismatch`（409，本构建的技能包不是
+已安装版本）、`system_skill.bundle_unverified`（409，S3 已发布版本与快照不一致；未写入）、
+`system_skill.foreign_record`（409，同名但不属于平台的 Skill 记录）、`system_skill.stale_release`（409）、
+`system_skill.record_deprecated`（409，终态——在 AWS 中删除后重新注册）、
+`system_skill.readback_mismatch`（409）、`registry.unavailable`（503）。
 
 错误码：`system_agent.unknown`（404）、`system_agent.workspace_not_ready`（409，
 `detail.requirements[{code, message}]`）、`system_agent.name_collision`（409，普通 Agent

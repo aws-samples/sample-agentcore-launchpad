@@ -443,6 +443,46 @@ spec 发送与以往完全相同的请求。架构师预置的**新安装默认�
 
 该前缀族与成员可写的 `skills/`（Registry）和 `agent-skills/`（向导暂存）互不相交。
 
+**预置的 Skill 作为独立的 Registry 记录（SE-043）。** 预置 Agent 的 A2A 记录
+（`Agent.registry_record_id`）描述的是 *Agent*；它加载的带版本 Skill 另行注册为一条
+`AGENT_SKILLS` 记录，使 Registry 列出它、APPROVED 目录的消费者（`GET /api/registry/attachables`、
+向导、助手）可以挂载它。记录的 `skillDefinition` 指向**既有的不可变版本目录**——
+`path = s3://<bucket>/system-skills/<name>/<version>-<digest12>/`、真实的 `SKILL.md`（`skillMd`）、
+技能包的五个文件、`version`，以及 `source = {kind: "system", preset_key, release_version,
+release_digest, manifest}`——不会复制到成员可写的 `skills/<name>/` 前缀，也不上传、不删除：
+注册唯一的 S3 流量是一次回读，证明已发布目录与快照完全一致（manifest、列表、每个对象的字节——
+即 package 阶段的最终核验，去掉修复分支）。版本从**已安装的 spec** 推导并与本构建的快照比对；
+若检出是尚未发布的更新修订（或更旧的构建），则拒绝并给出修复/更新的指引
+（`409 system_skill.release_mismatch`），而不是注册。归属由服务端自有的台账行——`SystemSkillRecord`
+（`system_skill_records`：Workspace、预置 key、registry id、record id、client token、已注册版本、
+内容摘要），每个 Workspace 与预置一行——决定，从不依赖客户端可发送的描述符字段或标签；当且仅当调用方
+Workspace 的映射指向某记录 id 时，该记录受系统保护。`POST /api/system-agents/{key}/skill-registration`
+（管理员，无请求体，与其他预置写入一样固定 Workspace）为**运行中**的预置注册 Skill；部署管道的
+`register` 阶段在每次全新安装或修复时于 A2A 记录之后做同样的事（失败会以确切原因使阶段失败——
+任务绝不宣称一次 AWS 未确认的注册）。启动与读取都不会注册。写入是幂等且竞争安全的：该行就是持久的
+创建意图（其 `clientToken`，33–256 位 `[A-Za-z0-9-]`，在 `CreateRegistryRecord` 之前提交，因此
+AWS 调用与台账提交之间崩溃后，由同一请求重放，或采纳其*元数据*——system 来源、预置 key、本 Workspace 的
+system-skills 路径——证明属于平台的记录来恢复；同名却不属于平台的记录返回
+`409 system_skill.foreign_record`，绝不采纳或覆盖）；并发注册在按（Workspace，预置）的 `fcntl`
+建议锁上串行化，唯一行在进程间仲裁，因此 N 个竞争调用收敛到一条记录。首次注册**提交审核、绝不批准**——
+批准是管理员在 Registry 中的显式操作。相同内容的重复注册是空操作，不发出 `UpdateRegistryRecord`，
+所以 APPROVED 的记录保持 APPROVED（无请求体修复、重装、重复点击）；更新的版本会更新描述符
+（递增 `recordVersion`，如 `1.0.0-skill → 1.1.0-skill`），服务会将其重置为 DRAFT——再次走常规审核；
+更旧的版本永远不能降级已注册版本（`409 system_skill.stale_release`）；DEPRECATED（终态）记录会
+明确失败而不是被改写（`409 system_skill.record_deprecated`，消息中给出恢复方法）。卸载预置会保留记录、
+映射与 S3 版本目录（其他消费者可能挂载它）；重装复用同一记录。**服务边界上的保护**在任何 AWS 客户端或
+S3 对象之前生效：控制台 `PUT`（描述*与*内容，内联或暂存替换）、`reimport`、`DELETE` 以及 Skill Lab 的发布
+（`update_record`）对所有人拒绝并给出维护提示（`403 registry.system_skill_protected`）；生命周期动作
+（`submit`/`approve`/`reject`/`disable`）对成员拒绝、对管理员放行——路由显式传入调用方角色，服务默认
+*非管理员*，因此内部调用者无法因遗漏而批准；保留的 Skill 名称在任何 S3 写入之前拒绝普通注册/导入/
+改名导入（`409 registry.name_reserved`；MCP 记录仍可使用该名称）。普通记录的成员可操作生命周期与编辑
+保持不变。记录 API 投影携带服务端推导的 `system` 成员（`{managed, preset_key, label, skill_version,
+release_digest, path, protected_actions, admin_actions} | null`），控制台据此渲染“系统”标签、隐藏
+编辑/重新导入/删除、只为管理员显示生命周期按钮；此类记录的 `?view=edit` 是只读摘要；“在新 Agent 中使用”
+保持 APPROVED 门控；`GET /api/system-agents` 报告 `skill_registration`（台账映射）与
+`can_register_skill`，“系统预置”面板提供“注册 SKILL”/“核验 SKILL 记录”（显式确认、固定 Workspace）
+并链接到该记录。
+
 **受约束的工具面。** Harness 默认向每个会话暴露 `shell` 与 `file_operations`，除非
 `allowedTools` 加以限制，因此新增 harness 专用的 `AgentSpec.allowed_tools`（`None` = 既有
 Agent 保持 API 默认；每项 1–64 字符，匹配服务模型的 `*|@?name(/tool)?`），映射到请求的

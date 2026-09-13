@@ -109,7 +109,10 @@ _STDERR_TAIL_CHARS = 2000
 class SkillSource:
     """Provenance stamped into ``skillDefinition.inlineContent.source``."""
 
-    kind: Literal["inline", "zip", "git", "url", "sample"]
+    # ``system``: a platform preset's published, content-addressed release
+    # (``system-skills/<name>/<version>-<digest12>/``) — registered by the platform,
+    # never uploaded through the member funnel
+    kind: Literal["inline", "zip", "git", "url", "sample", "system"]
     url: str | None = None
     ref: str | None = None
     subdir: str | None = None
