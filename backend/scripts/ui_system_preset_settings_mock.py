@@ -1,23 +1,32 @@
 #!/usr/bin/env python3
-"""Mocked browser scenario for the System presets SETTINGS dialog (SE-040).
+"""Mocked browser scenario for the System presets CONFIGURE flow (SE-040 → SE-044).
 
 Runs against a *frontend-only* dev server: every ``/api/**`` request is intercepted
 in the browser and answered from an in-memory fixture, so no backend, ledger or AWS
-is touched (unlike the ``e2e_*_browser.py`` scripts). Exercises, for the architect
-preset:
+is touched (unlike the ``e2e_*_browser.py`` scripts). Since SE-044 a preset is
+configured on the SAME configure page an existing agent's EDIT uses — there is no
+preset settings dialog, no REPAIR/UPDATE and no Skill-record controls on the card.
+Exercises, for the architect preset:
 
-* administrator: CONFIGURE opens the editor prefilled with the stored settings;
-  cancel posts nothing; a client-side validation problem disables SAVE; a save
-  posts exactly the changed members (+ ``clear`` for a dropped reasoning effort);
-  the 202 outcome swaps the row to DEPLOYING and the poll carries it to ACTIVE with
-  the new values; a 409 (deploy in progress) and a 422 (invalid options) render
-  inline and leave the dialog open;
-* member: VIEW SETTINGS shows the same fields read-only, no SAVE, and no POST;
-* workspace switch: an open editor closes and a late response never lands;
-* residuals (host review): a second TAB switching the shared selection never redirects
-  this tab's reads or saves (pinned ``X-Workspace``); cancel / backdrop / Escape cannot
-  dismiss a save in flight and the delayed 202 lands; a re-click on the selected model
-  source keeps a custom id; a failing KB catalog shows an error with RETRY.
+* card: no Skill record row / Registry link / REGISTER-VERIFY SKILL / REPAIR button;
+  CONFIGURE (admin) and the agent table's EDIT open the shared configure page;
+* administrator: the page is prefilled with the stored settings (Sol / 65536 / high /
+  30 / 900); BACK posts nothing; a client-side validation problem disables the button;
+  a save posts exactly the changed members (+ ``clear`` for a dropped reasoning
+  effort) pinned to the panel's workspace, the 202 lands on the launch view whose
+  poll is pinned too, and the panel shows the new values afterwards; a 409 and a 422
+  render inline and keep the draft; nothing changed ⇒ RE-PUBLISH sends ``force``;
+  a FAILED preset opens the same editor and is retried the same way; USE PRESET
+  DEFAULTS; a custom id survives a re-click on the selected source; a failing KB
+  catalog is an error with RETRY; a slow save locks the page and its late 202 lands;
+* workspace: another TAB switching the shared selection never redirects this tab's
+  reads, save or poll (pinned ``X-Workspace``); a same-tab switch drops the draft and
+  posts nothing;
+* ordinary agent: EDIT still posts to ``/api/agents/{id}/redeploy`` and carries the
+  stored ``max_tokens`` back;
+* member: VIEW SETTINGS is the same page read-only (no save, disabled inputs), the
+  table's EDIT is disabled, and no POST is ever made;
+* zh-CN screenshots of the card and the configure page.
 
     uv run python scripts/ui_system_preset_settings_mock.py --base-url http://127.0.0.1:5199
 """
@@ -35,6 +44,8 @@ from typing import Any
 from playwright.sync_api import Route, sync_playwright
 
 KEY = "aws-agent-solution-architect"
+AGENT_ID = "a" * 32
+ORDINARY_ID = "b" * 32
 WS_A = {"id": "ws000000000000000000000000000a", "name": "default (us-west-2)",
         "account_id": "111122223333", "region": "us-west-2", "cross_account": False,
         "bootstrap_status": "ready", "is_default": True,
@@ -46,6 +57,12 @@ DEFAULTS = {
     "model_id": "us.openai.gpt-5.6-sol", "model_source": "bedrock", "max_tokens": 65536,
     "reasoning_effort": "high", "system_prompt": PROMPT, "max_iterations": 30,
     "timeout_seconds": 900, "knowledge_bases": [],
+}
+CAPS = {
+    "experiment_capability": {"eligible": False, "system_prompt": False,
+                              "tool_descriptions": False, "reason": None, "reason_code": None},
+    "canary_capability": {"eligible": False, "reason": None, "reason_code": None},
+    "invoke_capability": {"eligible": True, "reason": None, "reason_code": None},
 }
 
 
@@ -60,22 +77,32 @@ def auth(role: str) -> dict:
     }
 
 
+def deployment(job_id: str, status: str = "succeeded") -> dict:
+    stage = "succeeded" if status == "succeeded" else "running"
+    return {"id": "d" * 32, "agent_id": AGENT_ID, "job_id": job_id, "status": status,
+            "stages": [{"name": n, "status": stage, "detail": ""}
+                       for n in ("generate", "package", "provision", "deploy", "register")],
+            "started_at": "2026-09-13T00:00:00Z", "ended_at": None}
+
+
 class Fixture:
-    """One preset row per workspace + the install route's state machine."""
+    """One preset row per workspace + the install route's state machine + agents."""
 
     def __init__(self, role: str) -> None:
         self.role = role
-        self.posts: list[dict] = []
-        self.next_post: str = "accept"  # accept | conflict | invalid | slow
-        self.kb_mode: str = "ok"  # ok | fail
-        self.held: tuple[Route, int, dict] | None = None  # a "slow" response not yet sent
+        self.posts: list[dict] = []          # system-agents install POSTs
+        self.redeploys: list[dict] = []      # ordinary /redeploy POSTs
+        self.next_post: str = "accept"       # accept | conflict | invalid | slow
+        self.kb_mode: str = "ok"             # ok | fail
+        self.held: tuple[Route, int, dict] | None = None
         self.kb_reads: list[str | None] = []
+        self.agent_reads: list[str | None] = []   # X-Workspace of GET /api/agents/{preset}
+        self.job_reads: list[str | None] = []
         self.polls = 0
+        self.job_id = "j" * 32
         self.rows = {WS_A["id"]: self._row(dict(DEFAULTS)), WS_B["id"]: self._row(None)}
 
     def release_held(self) -> None:
-        """Send the response the "slow" mode held back (from the test body, never by
-        blocking the route handler — that would stall Playwright's own dispatcher)."""
         assert self.held is not None, "no held response"
         route, status, payload = self.held
         self.held = None
@@ -90,9 +117,9 @@ class Fixture:
             "skill_version": "1.0.0", "installed_skill_version": "1.0.0" if installed else None,
             "update_available": False, "status": "active" if installed else "not_installed",
             "requirements": [], "name_collision": None,
-            "agent_id": "a" * 32 if installed else None,
+            "agent_id": AGENT_ID if installed else None,
             "agent_status": "active" if installed else None, "error": None,
-            "job_id": "j" * 32 if installed else None,
+            "job_id": self.job_id if installed else None,
             "deployment_id": "d" * 32 if installed else None,
             "deployment_status": "succeeded" if installed else None,
             "model_id": settings["model_id"] if installed else None,
@@ -101,21 +128,75 @@ class Fixture:
             "allowed_tools": ["file_*", "@aws_knowledge"], "memory": "disabled",
             "settings": settings or {}, "defaults": dict(DEFAULTS),
             "editable_fields": list(DEFAULTS), "operation": None,
+            "skill_registration": {"record_id": "r" * 32, "release_version": "1.0.0"}
+            if installed else None,
+            "can_register_skill": admin and installed,
             "can_install": admin and not installed, "can_repair": admin and installed,
             "can_configure": admin and installed, "can_uninstall": admin and installed,
             "updated_at": "2026-09-13T00:00:00Z",
         }
 
+    # ── agents (the Existing agents table + the launch view poll) ──────────────
+    def system_agent(self, ws: str) -> dict:
+        row = self.rows[ws]
+        s = row["settings"]
+        return {
+            "id": AGENT_ID, "name": KEY, "method": "harness", "status": row["agent_status"],
+            "arn": "arn:aws:bedrock-agentcore:us-west-2:111:harness/xyz", "resource_id": "xyz",
+            "version": "4", "owner": "system", "error": row["error"],
+            "spec": {"name": KEY, "method": "harness", **{k: s.get(k) for k in DEFAULTS},
+                     "allowed_tools": row["allowed_tools"], "memory": {"short_term": False,
+                                                                       "long_term": False}},
+            "system": {"managed": True, "key": KEY, "label": row["label"],
+                       "skill_version": "1.0.0",
+                       "protected_actions": ["redeploy", "delete", "convert"]},
+            **CAPS, "created_at": "2026-09-01T00:00:00Z", "updated_at": row["updated_at"],
+            "deployment": deployment(row["job_id"], row["deployment_status"] or "succeeded"),
+            "deployments": [deployment(row["job_id"], row["deployment_status"] or "succeeded")],
+            "revision": 4,
+        }
+
+    def ordinary_agent(self) -> dict:
+        return {
+            "id": ORDINARY_ID, "name": "hr-assistant", "method": "harness", "status": "active",
+            "arn": "arn:aws:bedrock-agentcore:us-west-2:111:harness/hr", "resource_id": "hr",
+            "version": "2", "owner": "operator", "error": None,
+            "spec": {"name": "hr-assistant", "method": "harness",
+                     "model_id": "global.anthropic.claude-sonnet-5", "model_source": "bedrock",
+                     "max_tokens": 4096, "reasoning_effort": None, "max_iterations": 12,
+                     "timeout_seconds": 400, "system_prompt": "You help with HR.",
+                     "tools": [], "skills": [], "knowledge_bases": [],
+                     "memory": {"short_term": True, "long_term": True}},
+            "system": None, **CAPS,
+            "created_at": "2026-09-01T00:00:00Z", "updated_at": "2026-09-10T00:00:00Z",
+            "deployment": {**deployment("h" * 32), "agent_id": ORDINARY_ID},
+            "deployments": [{**deployment("h" * 32), "agent_id": ORDINARY_ID}], "revision": 2,
+        }
+
+    def agents(self, ws: str) -> dict:
+        rows = [self.ordinary_agent()]
+        if self.rows[ws]["agent_id"]:
+            rows.insert(0, self.system_agent(ws))
+        return {"agents": rows, "count": len(rows)}
+
+    # ── system-agents ──────────────────────────────────────────────────────────
     def status(self, ws: str) -> dict:
         row = self.rows[ws]
         # a deploying row settles on the second poll after the save
         if row["status"] == "deploying":
             self.polls += 1
             if self.polls >= 2:
-                row["status"] = "active"
-                row["agent_status"] = "active"
+                row["status"] = row["agent_status"] = "active"
+                row["deployment_status"] = "succeeded"
                 row["can_configure"] = row["can_repair"] = self.role == "admin"
         return {"workspace_id": ws, "presets": [copy.deepcopy(row)]}
+
+    def fail_preset(self, ws: str, error: str) -> None:
+        row = self.rows[ws]
+        row["status"] = row["agent_status"] = "failed"
+        row["deployment_status"] = "failed"
+        row["error"] = error
+        row["can_configure"] = row["can_repair"] = self.role == "admin"
 
     def install(self, ws: str | None, body: dict) -> tuple[int, dict]:
         self.posts.append({"workspace": ws, "body": body})
@@ -146,9 +227,12 @@ class Fixture:
         row["model_id"] = settings["model_id"]
         row["knowledge_bases"] = settings["knowledge_bases"]
         row["status"] = row["agent_status"] = "deploying"
+        row["deployment_status"] = "running"
+        row["error"] = None
         row["can_configure"] = row["can_repair"] = False
         self.polls = 0
-        return 202, {"agent": {"id": row["agent_id"]}, "job_id": "k" * 32,
+        self.job_id = row["job_id"] = f"k{len(self.posts):031d}"
+        return 202, {"agent": self.system_agent(ws), "job_id": row["job_id"],
                      "deployment_id": "e" * 32, "created": False, "changed": True,
                      "preset": copy.deepcopy(row)}
 
@@ -192,8 +276,33 @@ def install_routes(page, fx: Fixture, unhandled: list[str]) -> None:
                 {"kb_id": "KB999ZZZ", "name": "creating", "status": "CREATING",
                  "type": "MANAGED"},
             ]})
-        if path == "/api/agents":
-            return reply(200, {"agents": [], "count": 0})
+        if path == "/api/agents" and req.method == "GET":
+            return reply(200, fx.agents(ws if ws in fx.rows else WS_A["id"]))
+        if path == f"/api/agents/{AGENT_ID}" and req.method == "GET":
+            fx.agent_reads.append(ws)
+            assert ws in fx.rows, f"agent poll without a known X-Workspace: {ws!r}"
+            return reply(200, fx.system_agent(ws))
+        if path == f"/api/agents/{ORDINARY_ID}" and req.method == "GET":
+            return reply(200, fx.ordinary_agent())
+        if path == f"/api/agents/{ORDINARY_ID}/redeploy" and req.method == "POST":
+            fx.redeploys.append({"workspace": ws, "body": req.post_data_json})
+            return reply(202, {"agent": fx.ordinary_agent(), "job_id": "h" * 32,
+                               "deployment_id": "d" * 32})
+        if path == f"/api/agents/{AGENT_ID}/redeploy":
+            fx.redeploys.append({"workspace": ws, "body": req.post_data_json, "system": True})
+            return reply(403, {"code": "agent.system_managed", "message": "protected",
+                               "detail": None})
+        if path.startswith("/api/jobs/") and req.method == "GET":
+            fx.job_reads.append(ws)
+            job_id = path.rsplit("/", 1)[1]
+            return reply(200, {"id": job_id, "type": "deploy_agent", "status": "succeeded",
+                               "payload": {}, "log": "", "error": None,
+                               "created_at": "2026-09-13T00:00:00Z",
+                               "updated_at": "2026-09-13T00:00:10Z"})
+        if path == "/api/registry/attachables":
+            return reply(200, {"mcp_servers": [], "skills": []})
+        if path == "/api/memory/resources":
+            return reply(200, {"items": []})
         unhandled.append(f"{req.method} {path}")
         return reply(200, {"items": [], "records": [], "skills": [], "count": 0})
 
@@ -210,6 +319,46 @@ def wait_status(page, status: str, timeout_ms: int = 15000) -> None:
     )
 
 
+def editor(page, mode: str = "edit"):
+    loc = page.locator(f'[data-testid="configure-step"][data-system-edit="{mode}"]')
+    loc.wait_for()
+    return loc
+
+
+def submit_and_confirm(page, label: str) -> None:
+    page.get_by_test_id("launch-submit").click()
+    page.get_by_role("alertdialog").wait_for()
+    page.get_by_role("alertdialog").get_by_role("button", name=label).click()
+
+
+def assert_card_simplified(page) -> None:
+    row = page.get_by_test_id(f"system-preset-{KEY}")
+    assert row.get_by_test_id("preset-skill-registration").count() == 0
+    assert page.get_by_test_id(f"skill-record-link-{KEY}").count() == 0
+    assert page.get_by_test_id(f"register-skill-{KEY}").count() == 0
+    assert page.get_by_test_id(f"repair-{KEY}").count() == 0
+    assert page.get_by_test_id("preset-settings-dialog").count() == 0
+    text = row.inner_text()
+    assert "Skill record:" not in text and "OPEN IN REGISTRY" not in text, text
+    assert page.get_by_test_id(f"details-{KEY}").count() == 1
+    assert page.get_by_test_id(f"uninstall-{KEY}").count() == 1
+    assert page.get_by_test_id("preset-open-assistant").count() == 1
+
+
+def assert_prefilled(page, tokens: str = "65536", effort: str = "high") -> None:
+    assert page.get_by_test_id("model-select").input_value() == "us.openai.gpt-5.6-sol"
+    assert page.get_by_test_id("agent-max-tokens").input_value() == tokens
+    assert page.get_by_test_id("agent-effort").input_value() == effort
+    assert page.get_by_test_id("agent-max-iterations").input_value() == "30"
+    assert page.get_by_test_id("agent-timeout").input_value() == "900"
+    assert page.get_by_test_id("agent-prompt").input_value() == PROMPT
+
+
+def back_to_list(page) -> None:
+    page.get_by_test_id("configure-back").click()
+    page.get_by_test_id(f"system-preset-{KEY}").wait_for()
+
+
 def admin_scenario(browser, base: str, evidence: Path) -> dict:
     fx = Fixture("admin")
     unhandled: list[str] = []
@@ -221,73 +370,70 @@ def admin_scenario(browser, base: str, evidence: Path) -> dict:
     wait_status(page, "active")
     row = page.get_by_test_id(f"system-preset-{KEY}")
     assert "max output/call: 65536 tok" in row.get_by_test_id("preset-inference").inner_text()
-    assert "reasoning effort: high" in row.get_by_test_id("preset-inference").inner_text()
+    assert_card_simplified(page)
     button = page.get_by_test_id(f"settings-{KEY}")
     assert button.inner_text().strip() == "CONFIGURE", button.inner_text()
-    shot(page, evidence, "01-admin-panel")
+    shot(page, evidence, "01-admin-card")
 
-    # --- open: prefilled from the stored settings, nothing posted
+    # --- CONFIGURE opens the shared configure page (no dialog), prefilled, nothing posted
     button.click()
-    dialog = page.get_by_test_id("preset-settings-dialog")
-    dialog.wait_for()
-    assert page.get_by_test_id("preset-settings-model").input_value() == "us.openai.gpt-5.6-sol"
-    assert page.get_by_test_id("preset-settings-max-tokens").input_value() == "65536"
-    assert page.get_by_test_id("preset-settings-effort").input_value() == "high"
-    assert page.get_by_test_id("preset-settings-max-iterations").input_value() == "30"
-    assert page.get_by_test_id("preset-settings-timeout").input_value() == "900"
-    assert page.get_by_test_id("preset-settings-prompt").input_value() == PROMPT
-    assert page.get_by_test_id("preset-settings-save").is_disabled()  # no changes yet
+    editor(page, "edit")
+    assert page.get_by_test_id("preset-settings-dialog").count() == 0
+    assert page.get_by_test_id("system-edit-note").count() == 1
     assert page.get_by_test_id("preset-settings-readonly").count() == 0
+    assert_prefilled(page)
+    assert page.get_by_test_id("preset-protected").count() == 1  # tools/skill/memory read-only
+    assert page.get_by_test_id("memory-select").count() == 0     # no ordinary memory editor
+    assert page.locator('input[type="file"]').count() == 0        # no skill upload for a preset
+    assert page.get_by_test_id("kb-picker").count() == 1
+    assert "RE-PUBLISH" in page.get_by_test_id("launch-submit").inner_text()
+    assert "SAVE" not in page.get_by_test_id("launch-submit").inner_text()  # nothing changed yet
+    assert fx.posts == []
     shot(page, evidence, "02-admin-editor-prefilled")
 
-    # --- cancel: no effect
-    page.get_by_test_id("preset-settings-max-tokens").fill("4096")
-    page.get_by_test_id("preset-settings-cancel").click()
-    assert page.get_by_test_id("preset-settings-dialog").count() == 0
+    # --- BACK: no write, the draft is gone
+    page.get_by_test_id("agent-max-tokens").fill("4096")
+    back_to_list(page)
     assert fx.posts == []
-    button.click()
-    dialog.wait_for()
-    assert page.get_by_test_id("preset-settings-max-tokens").input_value() == "65536"
+    page.get_by_test_id(f"settings-{KEY}").click()
+    editor(page, "edit")
+    assert_prefilled(page)
 
-    # --- client-side validation blocks SAVE
-    page.get_by_test_id("preset-settings-max-tokens").fill("0")
+    # --- client-side validation blocks the button
+    page.get_by_test_id("agent-max-tokens").fill("0")
     page.get_by_test_id("preset-settings-problems").wait_for()
-    assert page.get_by_test_id("preset-settings-save").is_disabled()
+    assert page.get_by_test_id("launch-submit").is_disabled()
     shot(page, evidence, "03-admin-validation")
-    page.get_by_test_id("preset-settings-max-tokens").fill("65536")
+    page.get_by_test_id("agent-max-tokens").fill("65536")
     assert page.get_by_test_id("preset-settings-problems").count() == 0
 
-    # --- switching to Claude disables the effort select; save posts model + clear only
-    page.get_by_test_id("preset-settings-model").select_option("global.anthropic.claude-opus-5")
-    assert page.get_by_test_id("preset-settings-effort").is_disabled()
-    assert "Only OpenAI" in page.get_by_test_id("preset-settings-effort-hint").inner_text()
-    page.get_by_test_id("preset-settings-max-iterations").fill("40")
-    page.get_by_test_id("preset-settings-kb-KB123ABC").click()  # mount an ACTIVE KB
-    assert page.get_by_test_id("preset-settings-kb-KB999ZZZ").count() == 0  # CREATING hidden
+    # --- Claude disables the effort select; the save posts model + clear (+ the rest)
+    page.get_by_test_id("model-select").select_option("global.anthropic.claude-opus-5")
+    assert page.get_by_test_id("agent-effort").is_disabled()
+    assert "Only OpenAI" in page.get_by_test_id("agent-effort-hint").inner_text()
+    page.get_by_test_id("agent-max-iterations").fill("40")
+    page.get_by_test_id("kb-KB123ABC").click()  # mount an ACTIVE KB
+    assert page.get_by_test_id("kb-KB999ZZZ").count() == 0  # CREATING is hidden
+    assert "SAVE & RE-PUBLISH" in page.get_by_test_id("launch-submit").inner_text()
+    assert "change(s) pending" in page.get_by_test_id("system-edit-pending").inner_text()
 
-    # 409 first: the dialog stays open with the reason
+    # 409 first: the page stays with the reason and the draft
     fx.next_post = "conflict"
-    page.get_by_test_id("preset-settings-save").click()
-    page.get_by_role("alertdialog").wait_for()
-    page.get_by_role("alertdialog").get_by_role("button", name="SAVE & RE-PUBLISH").click()
-    page.get_by_test_id("preset-settings-error").wait_for()
-    assert "being deployed" in page.get_by_test_id("preset-settings-error").inner_text()
-    assert page.get_by_test_id("preset-settings-dialog").count() == 1
+    submit_and_confirm(page, "SAVE & RE-PUBLISH")
+    page.get_by_test_id("submit-error").wait_for()
+    assert "being deployed" in page.get_by_test_id("submit-error").inner_text()
+    editor(page, "edit")
+    assert page.get_by_test_id("agent-max-iterations").input_value() == "40"  # draft kept
     shot(page, evidence, "04-admin-409")
     # 422 next: server-side detail rows render
     fx.next_post = "invalid"
-    page.get_by_test_id("preset-settings-save").click()
-    page.get_by_role("alertdialog").get_by_role("button", name="SAVE & RE-PUBLISH").click()
-    page.get_by_test_id("preset-settings-error").wait_for()
-    assert "OpenAI GPT-5.x" in page.get_by_test_id("preset-settings-error").inner_text()
+    submit_and_confirm(page, "SAVE & RE-PUBLISH")
+    page.get_by_test_id("submit-error").wait_for()
+    assert "OpenAI GPT-5.x" in page.get_by_test_id("submit-error").inner_text()
     shot(page, evidence, "05-admin-422")
-    # accepted: partial body, row → deploying → active with the new values
-    page.get_by_test_id("preset-settings-save").click()
-    page.get_by_role("alertdialog").get_by_role("button", name="SAVE & RE-PUBLISH").click()
-    page.get_by_test_id("preset-settings-dialog").wait_for(state="detached")
-    wait_status(page, "deploying")
-    shot(page, evidence, "06-admin-deploying")
-    wait_status(page, "active", timeout_ms=20000)
+    # accepted: partial body, launch view with a pinned poll, then the card converges
+    submit_and_confirm(page, "SAVE & RE-PUBLISH")
+    page.get_by_test_id("job-log").wait_for()
     accepted = fx.posts[-1]["body"]
     assert accepted == {
         "model_id": "global.anthropic.claude-opus-5",
@@ -297,99 +443,130 @@ def admin_scenario(browser, base: str, evidence: Path) -> dict:
         "clear": ["reasoning_effort"],
     }, accepted
     assert all(p["workspace"] == WS_A["id"] for p in fx.posts)
+    assert fx.redeploys == []  # never the ordinary redeploy for a preset
+    page.wait_for_timeout(2500)  # a couple of poll ticks
+    assert fx.agent_reads and all(w == WS_A["id"] for w in fx.agent_reads), fx.agent_reads
+    assert fx.job_reads and all(w == WS_A["id"] for w in fx.job_reads), fx.job_reads
+    shot(page, evidence, "06-admin-launch-view")
+    page.goto(f"{base}/create", wait_until="networkidle")
+    wait_status(page, "active", timeout_ms=20000)
     summary = row.get_by_test_id("preset-inference").inner_text()
     assert "reasoning effort: none" in summary and "40 iterations" in summary, summary
     assert "global.anthropic.claude-opus-5" in row.inner_text()
     shot(page, evidence, "07-admin-after-save")
 
-    # --- reset to defaults from the editor: prompt/knobs come back, KBs kept
-    page.get_by_test_id(f"settings-{KEY}").click()
-    dialog.wait_for()
+    # --- the agent table's EDIT on the system row opens the SAME page
+    page.get_by_test_id(f"edit-{KEY}").click()
+    editor(page, "edit")
+    assert page.get_by_test_id("model-select").input_value() == "global.anthropic.claude-opus-5"
+    assert page.get_by_test_id("agent-max-iterations").input_value() == "40"
     assert page.get_by_test_id("differs-model_id").count() == 1
+    shot(page, evidence, "08-admin-table-edit")
+    # USE PRESET DEFAULTS: prompt/knobs come back, KBs kept
     page.get_by_test_id("preset-settings-defaults").click()
-    assert page.get_by_test_id("preset-settings-model").input_value() == "us.openai.gpt-5.6-sol"
-    assert page.get_by_test_id("preset-settings-effort").input_value() == "high"
-    assert page.get_by_test_id("preset-settings-kb-KB123ABC").count() == 1  # untouched
-    shot(page, evidence, "08-admin-use-defaults")
+    assert page.get_by_test_id("model-select").input_value() == "us.openai.gpt-5.6-sol"
+    assert page.get_by_test_id("agent-effort").input_value() == "high"
+    assert page.get_by_test_id("agent-max-iterations").input_value() == "30"
+    assert page.get_by_test_id("kb-KB123ABC").count() == 1  # untouched
+    shot(page, evidence, "08a-admin-use-defaults")
 
-    # --- residual 3: a custom model id survives a re-click on the selected source
-    page.get_by_test_id("preset-settings-model").select_option("__custom__")
-    page.get_by_test_id("preset-settings-model-custom").fill("us.anthropic.claude-custom-v9")
-    page.get_by_test_id("preset-settings-source-bedrock").click()  # already selected
-    assert page.get_by_test_id("preset-settings-model-custom").input_value() == (
-        "us.anthropic.claude-custom-v9"
-    )
-    assert page.get_by_test_id("preset-settings-model").input_value() == "__custom__"
-    page.get_by_test_id("preset-settings-source-mantle").click()  # a real switch does reset
-    assert page.get_by_test_id("preset-settings-model").input_value() == "openai.gpt-5.6-terra"
-    page.get_by_test_id("preset-settings-cancel").click()
-    page.get_by_test_id("preset-settings-dialog").wait_for(state="detached")
+    # --- a custom model id survives a re-click on the selected source
+    page.get_by_test_id("model-select").select_option("__custom__")
+    page.get_by_test_id("model-custom").fill("us.anthropic.claude-custom-v9")
+    page.get_by_test_id("model-source-bedrock").click()  # already selected
+    assert page.get_by_test_id("model-custom").input_value() == "us.anthropic.claude-custom-v9"
+    assert page.get_by_test_id("model-select").input_value() == "__custom__"
+    page.get_by_test_id("model-source-mantle").click()  # a real switch does reset
+    assert page.get_by_test_id("model-select").input_value() == "openai.gpt-5.6-terra"
+    back_to_list(page)
 
-    # --- residual 4: a failing KB catalog is an error with RETRY, never a silent empty
+    # --- a failing KB catalog is an error with RETRY, never a silent empty catalog
     fx.kb_mode = "fail"
     page.get_by_test_id(f"settings-{KEY}").click()
-    dialog.wait_for()
+    editor(page, "edit")
     page.get_by_test_id("preset-settings-kb-error").wait_for()
     kb_error = page.get_by_test_id("preset-settings-kb-error").inner_text()
     assert "kb catalog upstream down" in kb_error, kb_error
-    assert page.get_by_test_id("preset-settings-kb-KB123ABC").count() == 1  # stored chip kept
-    assert page.get_by_test_id("preset-settings-save").is_disabled()  # nothing changed
+    assert page.get_by_test_id("kb-KB123ABC").count() == 1  # the stored chip is kept
     shot(page, evidence, "08b-admin-kb-error")
     fx.kb_mode = "ok"
     page.get_by_test_id("preset-settings-kb-retry").click()
     page.get_by_test_id("preset-settings-kb-error").wait_for(state="detached")
-    assert page.get_by_test_id("preset-settings-kb-KB123ABC").count() == 1
+    assert page.get_by_test_id("kb-KB123ABC").count() == 1
     assert all(w == WS_A["id"] for w in fx.kb_reads), fx.kb_reads  # pinned reads
-    page.get_by_test_id("preset-settings-cancel").click()
-    page.get_by_test_id("preset-settings-dialog").wait_for(state="detached")
 
-    # --- residual 2: cancel / backdrop / Escape cannot dismiss a save in flight, and
-    # the delayed 202 is consumed by the panel (DEPLOYING → job → ACTIVE)
+    # --- nothing changed ⇒ RE-PUBLISH is a forced repair (the same stored settings)
+    assert "SAVE" not in page.get_by_test_id("launch-submit").inner_text()
+    assert "no changes" in page.get_by_test_id("system-edit-pending").inner_text()
+    before = len(fx.posts)
+    page.get_by_test_id("launch-submit").click()
+    dialog = page.get_by_role("alertdialog")
+    dialog.wait_for()
+    assert "Nothing changed" in dialog.inner_text()
+    shot(page, evidence, "08c-admin-force-confirm")
+    dialog.get_by_role("button", name="RE-PUBLISH").click()
+    page.get_by_test_id("job-log").wait_for()
+    assert fx.posts[-1] == {"workspace": WS_A["id"], "body": {"force": True}}, fx.posts[-1]
+    assert len(fx.posts) == before + 1
+
+    # --- a FAILED preset opens the same editor and is retried the same way
+    fx.fail_preset(WS_A["id"], "deploy stage: UpdateHarness ValidationException")
+    page.goto(f"{base}/create", wait_until="networkidle")
+    wait_status(page, "failed")
+    assert "ValidationException" in page.get_by_test_id("preset-error").inner_text()
+    assert page.get_by_test_id(f"repair-{KEY}").count() == 0
+    shot(page, evidence, "08d-admin-failed-card")
+    page.get_by_test_id(f"settings-{KEY}").click()
+    editor(page, "edit")
+    submit_and_confirm(page, "RE-PUBLISH")
+    page.get_by_test_id("job-log").wait_for()
+    assert fx.posts[-1]["body"] == {"force": True}
+    page.goto(f"{base}/create", wait_until="networkidle")
+    wait_status(page, "active", timeout_ms=20000)
+
+    # --- a slow save locks the page (single-flight) and its late 202 lands
     fx.next_post = "slow"
     page.get_by_test_id(f"settings-{KEY}").click()
-    dialog.wait_for()
-    page.get_by_test_id("preset-settings-max-tokens").fill("1234")
-    page.get_by_test_id("preset-settings-save").click()
-    page.get_by_role("alertdialog").get_by_role("button", name="SAVE & RE-PUBLISH").click()
-    page.locator('[data-testid="preset-settings-dialog"][data-saving="true"]').wait_for()
-    assert page.get_by_test_id("preset-settings-cancel").is_disabled()
-    page.get_by_test_id("preset-settings-cancel").click(force=True)
-    page.mouse.click(5, 5)  # backdrop
-    page.keyboard.press("Escape")
+    editor(page, "edit")
+    page.get_by_test_id("agent-max-tokens").fill("1234")
+    submit_and_confirm(page, "SAVE & RE-PUBLISH")
+    page.get_by_test_id("launch-submit").filter(has_text="SAVING").wait_for()
+    assert page.get_by_test_id("launch-submit").is_disabled()
+    assert page.get_by_test_id("configure-back").is_disabled()
+    page.get_by_test_id("launch-submit").click(force=True)
     page.wait_for_timeout(300)
-    assert page.get_by_test_id("preset-settings-dialog").count() == 1  # still open
     assert fx.held is not None  # the 202 has not been delivered yet
-    shot(page, evidence, "08c-admin-saving-locked")
+    assert len([p for p in fx.posts if p["body"] == {"max_tokens": 1234}]) == 1  # posted once
+    shot(page, evidence, "08e-admin-saving-locked")
     fx.release_held()
-    page.get_by_test_id("preset-settings-dialog").wait_for(state="detached", timeout=10000)
-    wait_status(page, "deploying")
+    page.get_by_test_id("job-log").wait_for(timeout=10000)
+    page.goto(f"{base}/create", wait_until="networkidle")
     wait_status(page, "active", timeout_ms=20000)
-    assert fx.posts[-1]["body"] == {"max_tokens": 1234}, fx.posts[-1]
     assert "max output/call: 1234 tok" in row.get_by_test_id("preset-inference").inner_text()
-    shot(page, evidence, "08d-admin-slow-save-landed")
 
-    # --- residual 1: another TAB switches the shared selection to workspace B while
-    # this tab still displays A; A's polls and A's save stay pinned to A
+    # --- another TAB switches the shared selection to workspace B while this tab
+    # still displays A: A's reads, save and poll stay pinned to A
     tab_b = ctx.new_page()
     install_routes(tab_b, fx, unhandled)
     tab_b.goto(f"{base}/create", wait_until="networkidle")
     tab_b.get_by_test_id("workspace-switcher-btn").click()
     tab_b.get_by_test_id(f"workspace-option-{WS_B['id']}").click()
     tab_b.locator(f'[data-testid="system-preset-{KEY}"][data-status="not_installed"]').wait_for()
-    assert tab_b.evaluate("localStorage.getItem('launchpad_workspace')") == WS_B["id"]
     assert page.evaluate("localStorage.getItem('launchpad_workspace')") == WS_B["id"]  # shared
     page.get_by_test_id(f"settings-{KEY}").click()  # tab A still shows workspace A
-    dialog.wait_for()
-    assert page.get_by_test_id("preset-settings-max-tokens").input_value() == "1234"
-    page.get_by_test_id("preset-settings-max-tokens").fill("4321")
+    editor(page, "edit")
+    assert page.get_by_test_id("agent-max-tokens").input_value() == "1234"
+    page.get_by_test_id("agent-max-tokens").fill("4321")
     before = len(fx.posts)
-    page.get_by_test_id("preset-settings-save").click()
-    page.get_by_role("alertdialog").get_by_role("button", name="SAVE & RE-PUBLISH").click()
-    page.get_by_test_id("preset-settings-dialog").wait_for(state="detached")
-    wait_status(page, "deploying")
-    wait_status(page, "active", timeout_ms=20000)
+    fx.agent_reads.clear()
+    fx.job_reads.clear()
+    submit_and_confirm(page, "SAVE & RE-PUBLISH")
+    page.get_by_test_id("job-log").wait_for()
+    page.wait_for_timeout(2500)
     assert len(fx.posts) == before + 1
     assert fx.posts[-1] == {"workspace": WS_A["id"], "body": {"max_tokens": 4321}}, fx.posts[-1]
+    assert fx.agent_reads and all(w == WS_A["id"] for w in fx.agent_reads), fx.agent_reads
+    assert fx.job_reads and all(w == WS_A["id"] for w in fx.job_reads), fx.job_reads
     assert fx.rows[WS_B["id"]]["status"] == "not_installed"  # B never touched
     assert fx.rows[WS_A["id"]]["settings"]["max_tokens"] == 4321
     tab_b.get_by_test_id("system-presets-reload").click()  # B re-reads: still nothing
@@ -398,21 +575,47 @@ def admin_scenario(browser, base: str, evidence: Path) -> dict:
     shot(tab_b, evidence, "09b-admin-tab-b-untouched")
     tab_b.close()
 
-    # --- same-tab workspace switch (the modal covers the switcher while open, so the
-    # editor is closed first): the panel re-reads B and offers nothing to configure
+    # --- same-tab switch from an open draft: the page remounts on B, nothing posted
+    page.evaluate(f"localStorage.setItem('launchpad_workspace', '{WS_A['id']}')")
+    page.goto(f"{base}/create", wait_until="networkidle")
+    wait_status(page, "active", timeout_ms=20000)
     page.get_by_test_id(f"settings-{KEY}").click()
-    dialog.wait_for()
-    page.get_by_test_id("preset-settings-cancel").click()
-    page.get_by_test_id("preset-settings-dialog").wait_for(state="detached")
+    editor(page, "edit")
+    page.get_by_test_id("agent-max-tokens").fill("999")
+    before = len(fx.posts)
     page.get_by_test_id("workspace-switcher-btn").click()
     page.get_by_test_id(f"workspace-option-{WS_B['id']}").click()
     wait_status(page, "not_installed")
+    assert page.get_by_test_id("configure-step").count() == 0  # the draft is gone
     assert page.get_by_test_id(f"settings-{KEY}").count() == 0  # nothing installed here
+    assert len(fx.posts) == before
     shot(page, evidence, "09c-admin-same-tab-switch")
     posted_ws = {p["workspace"] for p in fx.posts}
     assert posted_ws == {WS_A["id"]}, posted_ws
+
+    # --- an ORDINARY agent's EDIT is unchanged: ordinary redeploy, stored cap carried
+    page.evaluate(f"localStorage.setItem('launchpad_workspace', '{WS_A['id']}')")
+    page.goto(f"{base}/create", wait_until="networkidle")
+    wait_status(page, "active", timeout_ms=20000)
+    page.get_by_test_id("edit-hr-assistant").click()
+    page.locator('[data-testid="configure-step"]:not([data-system-edit])').wait_for()
+    assert page.get_by_test_id("agent-max-tokens").input_value() == "4096"
+    assert page.get_by_test_id("agent-max-iterations").input_value() == "12"
+    assert page.get_by_test_id("agent-timeout").input_value() == "400"
+    assert page.get_by_test_id("memory-select").count() == 1  # the ordinary sections stay
+    assert page.get_by_test_id("preset-protected").count() == 0
+    page.get_by_test_id("agent-prompt").fill("You help with HR. Be brief.")
+    shot(page, evidence, "10-admin-ordinary-edit")
+    submit_and_confirm(page, "RE-PUBLISH")
+    page.get_by_test_id("job-log").wait_for()
+    assert len(fx.redeploys) == 1 and not fx.redeploys[0].get("system"), fx.redeploys
+    sent = fx.redeploys[0]["body"]
+    assert sent["max_tokens"] == 4096 and "reasoning_effort" not in sent, sent
+    assert (sent["max_iterations"], sent["timeout_seconds"]) == (12, 400), sent
+    assert sent["system_prompt"] == "You help with HR. Be brief."
+    assert sent["memory"] == {"short_term": True, "long_term": True}, sent
     ctx.close()
-    return {"posts": fx.posts, "unhandled": sorted(set(unhandled))}
+    return {"posts": fx.posts, "redeploys": fx.redeploys, "unhandled": sorted(set(unhandled))}
 
 
 def member_scenario(browser, base: str, evidence: Path) -> dict:
@@ -424,23 +627,50 @@ def member_scenario(browser, base: str, evidence: Path) -> dict:
     install_routes(page, fx, unhandled)
     page.goto(f"{base}/create", wait_until="networkidle")
     wait_status(page, "active")
+    assert_card_simplified(page)
     button = page.get_by_test_id(f"settings-{KEY}")
     assert button.inner_text().strip() == "VIEW SETTINGS", button.inner_text()
-    assert page.get_by_test_id(f"repair-{KEY}").is_disabled()
+    assert page.get_by_test_id(f"edit-{KEY}").is_disabled()   # the table's EDIT stays off
+    assert not page.get_by_test_id("edit-hr-assistant").is_disabled()  # ordinary rows unchanged
     button.click()
-    page.get_by_test_id("preset-settings-dialog").wait_for()
+    editor(page, "review")
     page.get_by_test_id("preset-settings-readonly").wait_for()
-    assert page.get_by_test_id("preset-settings-save").count() == 0
+    assert page.get_by_test_id("launch-submit").count() == 0
     assert page.get_by_test_id("preset-settings-defaults").count() == 0
-    assert page.get_by_test_id("preset-settings-max-tokens").input_value() == "65536"
-    assert page.get_by_test_id("preset-settings-max-tokens").is_disabled()
-    assert page.get_by_test_id("preset-settings-prompt").is_disabled()
-    shot(page, evidence, "10-member-readonly")
-    page.get_by_test_id("preset-settings-cancel").click()
-    assert page.get_by_test_id("preset-settings-dialog").count() == 0
-    assert fx.posts == []
+    assert page.get_by_test_id("preset-settings-prompt-default").count() == 0
+    assert_prefilled(page)
+    for testid in ("agent-max-tokens", "agent-prompt", "model-select", "agent-max-iterations"):
+        assert page.get_by_test_id(testid).is_disabled(), testid
+    assert page.get_by_test_id("kb-KB123ABC").is_disabled()  # the shared picker, locked
+    assert all(w == WS_A["id"] for w in fx.kb_reads), fx.kb_reads  # never another workspace
+    shot(page, evidence, "11-member-readonly")
+    assert "close" in page.get_by_test_id("configure-back").inner_text().lower()
+    back_to_list(page)
+    assert fx.posts == [] and fx.redeploys == []
     ctx.close()
     return {"posts": fx.posts, "unhandled": sorted(set(unhandled))}
+
+
+def zh_screenshots(browser, base: str, evidence: Path) -> None:
+    fx = Fixture("admin")
+    unhandled: list[str] = []
+    ctx = browser.new_context(viewport={"width": 1440, "height": 1100})
+    ctx.add_init_script(
+        f"window.localStorage.setItem('launchpad_workspace', '{WS_A['id']}');"
+        "window.localStorage.setItem('i18nextLng', 'zh-CN')"
+    )
+    page = ctx.new_page()
+    install_routes(page, fx, unhandled)
+    page.goto(f"{base}/create", wait_until="networkidle")
+    wait_status(page, "active")
+    assert_card_simplified(page)
+    shot(page, evidence, "12-zh-admin-card")
+    page.get_by_test_id(f"settings-{KEY}").click()
+    editor(page, "edit")
+    assert_prefilled(page)
+    shot(page, evidence, "13-zh-admin-editor")
+    assert fx.posts == []
+    ctx.close()
 
 
 def main() -> int:
@@ -461,6 +691,7 @@ def main() -> int:
                 "admin": admin_scenario(browser, args.base_url, evidence),
                 "member": member_scenario(browser, args.base_url, evidence),
             }
+            zh_screenshots(browser, args.base_url, evidence)
         finally:
             browser.close()
     (evidence / "results.json").write_text(json.dumps(results, indent=2))
