@@ -44,6 +44,7 @@ from hashlib import sha256
 from typing import Any
 
 from botocore.exceptions import ClientError
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -575,33 +576,62 @@ def _newer(candidate: str | None, than: str) -> bool:
     return have is not None and want is not None and have > want
 
 
-def _refuse_stale(
-    row: SystemSkillRecord, registration: Registration, current: Agent, agent: Agent
-) -> None:
-    """Three authorities, any of which refuses a registration derived from an older
-    release than the one that is current — a late deploy-job stage, an old build, a
-    worker holding a stale ``Agent`` object:
+Release = tuple[str, str | None]  # (version, digest12)
 
-    1. the CURRENT installed preset row, re-read under the lock: the release the
-       caller's agent object pins must be exactly (version AND digest) what is
-       installed now — a stale object with the same version but another digest is
-       refused too;
-    2. the ledger high-water mark: the last VERIFIED release and the last INTENDED
-       release (committed before the update that may have been accepted with its
-       response lost);
+
+def _current_installed_release(
+    db: Session, workspace_id: str, preset: SystemPreset
+) -> Release | None:
+    """The release the installed preset row pins RIGHT NOW, read as a column value.
+
+    A scalar ``select(Agent.spec)`` goes to the database on every call; loading the
+    ``Agent`` entity would hand back the caller's identity-mapped object — exactly the
+    stale snapshot a paused request already holds — and compare it against itself.
+    """
+    spec = db.execute(
+        select(Agent.spec).where(
+            Agent.workspace_id == workspace_id,
+            Agent.system_key == preset.key,
+            Agent.status != "deleted",
+        )
+    ).scalars().first()
+    if spec is None:
+        return None
+    return catalogue.skill_release_from_spec(spec or {})
+
+
+def _refuse_stale(
+    row: SystemSkillRecord,
+    registration: Registration,
+    installed: Release | None,
+    requested: Release | None,
+) -> None:
+    """Refuse a registration derived from a release that is no longer current — a
+    late deploy-job stage, an old build, a request that loaded the preset row before
+    a concurrent install rolled it forward. ``requested`` is the identity the caller
+    asked for, captured **before** anything is re-read; ``installed`` is what the
+    database pins now. Identity is (version, digest): the same version with another
+    digest is a different release, never "the same".
+
+    1. the caller's release must be exactly the installed one;
+    2. the ledger high-water mark — the last VERIFIED and the last INTENDED release
+       (committed before an update whose response may have been lost) — must not name
+       a newer version, nor a same-version different digest unless the installed row
+       has moved to the caller's release (a legitimate same-version roll-forward);
     3. (in ``_reconcile``) the authoritative remote record's own release.
     """
-    installed = catalogue.skill_release_from_spec(current.spec or {})
-    own = catalogue.skill_release_from_spec(agent.spec or {})
-    if installed != own:
+    if installed is None or requested is None or installed != requested:
         raise _error(
             "stale_release",
-            f"this registration was derived from release {own} but the installed preset "
-            f"now pins {installed}; a stale registration cannot rewrite the record",
-            installed=list(installed or ()), requested=list(own or ()),
+            f"this registration was derived from release {requested} but the installed "
+            f"preset now pins {installed}; a stale registration cannot rewrite the record",
+            installed=list(installed or ()), requested=list(requested or ()),
         )
-    version = registration.snapshot.version
-    for label, mark in (("registered", row.release_version), ("accepted", row.intent_version)):
+    version, digest = registration.snapshot.version, registration.snapshot.digest
+    for label, mark, mark_digest in (
+        ("registered", row.release_version, row.release_digest),
+        ("accepted", row.intent_version, row.intent_digest),
+    ):
         if _newer(mark, version):
             raise _error(
                 "stale_release",
@@ -609,6 +639,14 @@ def _refuse_stale(
                 "registration cannot downgrade the record",
                 registered=row.release_version, intended=row.intent_version,
                 requested=version,
+            )
+        if mark == version and mark_digest and mark_digest != digest and (
+            installed[1] != digest[:12]
+        ):  # pragma: no cover — installed == requested already guarantees this
+            raise _error(
+                "stale_release",
+                f"release v{version}-{digest[:12]} differs from the {label} "
+                f"v{mark}-{mark_digest[:12]} and is not what is installed",
             )
 
 
@@ -818,6 +856,7 @@ def _reconcile(
     registration: Registration,
     workspace: WorkspaceContext,
     sleeper: Any,
+    installed: Release = ("", None),
 ) -> RegistrationOutcome:
     record_id = str(row.record_id)
     try:
@@ -843,14 +882,27 @@ def _reconcile(
             _record_verified(db, row, record, registration)
         return RegistrationOutcome(row=row, record=record, created=False, changed=False,
                                    submitted=False)
-    # authority 3: the remote record's own release is never regressed
-    remote_version, _ = _remote_release(record)
+    # authority 3: the remote record's own release is never regressed — a newer
+    # version, or the release the ledger INTENDED (an accepted update whose response
+    # was lost) when the caller is not bringing the currently installed release.
+    remote_version, remote_digest = _remote_release(record)
     if _newer(remote_version, registration.snapshot.version):
         raise _error(
             "stale_release",
             f"registry record {record_id} already describes release v{remote_version}, newer "
             f"than v{registration.snapshot.version}; a stale registration cannot downgrade it",
             remote=remote_version, requested=registration.snapshot.version,
+        )
+    if (
+        remote_digest
+        and remote_digest == row.intent_digest
+        and remote_digest != registration.snapshot.digest
+        and installed[1] != registration.snapshot.digest[:12]
+    ):  # pragma: no cover — the installed check in register_system_skill refuses first
+        raise _error(
+            "stale_release",
+            f"registry record {record_id} carries the accepted release "
+            f"v{remote_version}-{remote_digest[:12]}; a stale registration cannot overwrite it",
         )
     if record.get("status") == "DEPRECATED":
         raise _error(
@@ -906,18 +958,22 @@ def register_system_skill(
 
     ``agent`` is the installed preset row in ``workspace`` — the caller has already
     decided the row may be registered (an active preset for the admin route; the
-    deploying preset inside its own deploy job). Under the lock the CURRENT installed
-    row is re-read and must pin the same release, so a worker holding a stale object
-    cannot rewrite newer state. Order, all before the first Registry write: registry
+    deploying preset inside its own deploy job). The release the caller asks for is
+    captured from ``agent`` first; under the lock the CURRENT installed release is read
+    as a column value (never through the session's identity map, which would return
+    the caller's own stale object) and must be exactly that identity — version AND
+    digest — so a request that loaded the row before a concurrent install rolled it
+    forward cannot rewrite the newer state. Order, all before the first Registry write: registry
     available → release derived from the stored spec and proven against this build →
     the durable ledger claim → staleness → S3 read-back of the published release →
     then create / verify-pending / no-op / update as described in the module docstring.
     """
     from app.services.registry_console import _registry_id
-    from app.system_agents.service import find_installed
 
     if not agent.system_key or agent.system_key != preset.key:
         raise _error("not_a_preset", f"agent {agent.id} is not the {preset.key} preset", 400)
+    # the requested identity, immutable from here on — whatever is re-read later
+    requested = catalogue.skill_release_from_spec(agent.spec or {})
     registry_id = _registry_id(workspace)  # RegistryUnavailableError (503) when disabled
     bucket = str((workspace.resources or {}).get("artifacts_bucket") or "")
     if not bucket:
@@ -927,15 +983,17 @@ def register_system_skill(
     snapshot, prefix = installed_release(preset, agent, bucket)
     registration = build_registration(preset, snapshot, bucket, prefix)
     with _lock(workspace.id, preset.key):
-        current = find_installed(db, workspace.id, preset)
-        if current is None:
+        installed = _current_installed_release(db, workspace.id, preset)
+        if installed is None:
             raise _error("not_installed", f"'{preset.key}' is not installed in this workspace", 404)
         row = _claim(db, workspace.id, preset, registry_id)
-        _refuse_stale(row, registration, current, agent)
+        _refuse_stale(row, registration, installed, requested)
         verify_published_release(s3 or workspace.client("s3"), bucket, prefix, snapshot)
         client = client or registry_control_client(workspace)
         if row.record_id is not None:
-            return _reconcile(db, client, registry_id, row, registration, workspace, sleeper)
+            return _reconcile(
+                db, client, registry_id, row, registration, workspace, sleeper, installed
+            )
         if row.pending_record_id is not None:
             return _verify_pending(db, client, registry_id, row, registration, workspace, sleeper)
         return _create(db, client, registry_id, row, registration, workspace, sleeper)

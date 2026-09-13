@@ -1196,10 +1196,10 @@ def test_accepted_update_with_lost_response_cannot_be_downgraded_by_a_stale_work
     )
     db = SessionLocal()
     try:
-        current = db.get(Agent, agent_id)
+        installed = skill_registry._current_installed_release(db, DEFAULT_WORKSPACE_ID, ARCHITECT)
         with pytest.raises(AppError) as exc:
             skill_registry._refuse_stale(db.query(SystemSkillRecord).one(), stale_registration,
-                                         current, current)
+                                         installed, installed)
         assert exc.value.code == "system_skill.stale_release"
     finally:
         db.close()
@@ -1304,3 +1304,105 @@ def test_skill_lab_multi_file_publish_is_refused_before_any_bundle_preparation(
     assert (directory / "publish_skill" / "prior.txt").read_text() == "previous publish output"
     assert not (directory / "log.txt").exists()
     assert registry.updates == [] and registry.status_changes == []
+
+
+def _snapshot_same_version_new_digest(monkeypatch):
+    """This build's bundle: same 1.0.0 version, a revised reference file — a different
+    content-addressed release with the same version string."""
+    base = _snapshot()
+    files = dict(base.files)
+    files["references/intake-options.md"] += b"\nRevised same-version content.\n"
+    snapshot = presets.BundleSnapshot(
+        version=base.version, digest=presets._digest_of(files), files=dict(sorted(files.items()))
+    )
+    assert snapshot.digest != base.digest
+    monkeypatch.setattr(presets, "snapshot_bundle", lambda preset: snapshot)
+    return snapshot
+
+
+def test_resident_backfill_request_cannot_downgrade_a_same_version_new_digest_release(
+    client, clouds, monkeypatch
+):
+    """The real route, paused right after it loaded the preset Agent into its session.
+    Meanwhile a same-version/new-digest release is installed and its Registry update is
+    accepted with the response lost. The resumed request must not compare the row it
+    already holds against itself: it is refused, the remote keeps the accepted digest,
+    and the next current registration reconciles without another update."""
+    import threading
+
+    from sqlalchemy import event
+
+    s3, registry = clouds
+    _mark_ready()
+    agent_id = _install_active()
+    rid = client.post(ROUTE).json()["record"]["record_id"]
+    old_digest = _mapping().release_digest
+    loaded, resume = threading.Event(), threading.Event()
+
+    def pause_first_agent_load(target, _context):
+        if target.id == agent_id and not loaded.is_set():
+            loaded.set()
+            assert resume.wait(20), "barrier timed out"
+
+    event.listen(Agent, "load", pause_first_agent_load)
+    try:
+        worker = threading.Thread(target=lambda: results.append(client.post(ROUTE)))
+        results: list = []
+        worker.start()
+        assert loaded.wait(10)
+        # the concurrent install of the same version with a new digest, whose Registry
+        # update AWS accepts and whose response is lost (intent committed first)
+        with pytest.MonkeyPatch.context() as mp:
+            newer = _snapshot_same_version_new_digest(mp)
+            s3.objects.update(_published_objects(newer))
+            _repoint_spec(agent_id, newer)
+            registry.crash_after_update = True
+            db = SessionLocal()
+            try:
+                current = db.get(Agent, agent_id)
+                with pytest.raises(ConnectionError):
+                    skill_registry.register_system_skill(
+                        db, ws_ctx(READY_RESOURCES), ARCHITECT, current
+                    )
+            finally:
+                db.close()
+        accepted = _definition(registry.records[rid])["source"]["release_digest"]
+        assert accepted == newer.digest != old_digest
+        assert _mapping().release_digest == old_digest and _mapping().intent_digest == accepted
+        updates_before = len(registry.updates)
+        resume.set()
+        worker.join(20)
+    finally:
+        resume.set()
+        event.remove(Agent, "load", pause_first_agent_load)
+    response = results[0]
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "system_skill.stale_release"
+    assert _definition(registry.records[rid])["source"]["release_digest"] == accepted
+    assert len(registry.updates) == updates_before  # zero downgrade writes
+    assert _mapping().release_digest == old_digest  # the stale request recorded nothing
+    # recovery: the current release re-registers as a no-op and verifies the accepted update
+    with pytest.MonkeyPatch.context() as mp:
+        newer = _snapshot_same_version_new_digest(mp)
+        s3.objects.update(_published_objects(newer))
+        res = client.post(ROUTE)
+    assert res.status_code == 200, res.text
+    assert res.json()["changed"] is False and len(registry.updates) == updates_before
+    assert _mapping().release_digest == accepted and _mapping().status == "registered"
+
+
+def test_same_version_new_digest_roll_forward_is_still_allowed(client, clouds):
+    """Legitimate: the installed row moved to a same-version new digest and the caller
+    brings exactly that release — updated once, nothing refused."""
+    s3, registry = clouds
+    _mark_ready()
+    agent_id = _install_active()
+    rid = client.post(ROUTE).json()["record"]["record_id"]
+    with pytest.MonkeyPatch.context() as mp:
+        newer = _snapshot_same_version_new_digest(mp)
+        s3.objects.update(_published_objects(newer))
+        _repoint_spec(agent_id, newer)
+        res = client.post(ROUTE)
+    assert res.status_code == 200 and res.json()["changed"] is True, res.text
+    assert _definition(registry.records[rid])["source"]["release_digest"] == newer.digest
+    assert len(registry.updates) == 1 and registry.records[rid]["recordVersion"] == "1.1.0-skill"
