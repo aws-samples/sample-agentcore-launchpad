@@ -2032,8 +2032,12 @@ session. Plain scenarios in the same dataset keep their exact legacy call shape 
 
 **Deterministic checks** run locally over the agent's actual replies (never the prompt,
 description or ground truth) and yield `pass` / `fail` / `error` / `inconclusive`: a missing
-reply — invoke failure, stopped run, or a reply with no text / non-string / blank text (the
-step is recorded as `empty`, not completed) — is `error` even for `not_contains`, an unmet
+reply — invoke failure, stopped run, or a reply with no text / blank text (the step is
+recorded as `empty`, not completed) — is `error` even for `not_contains`; procedure steps
+ask the Runtime decoder for **strict text evidence** (`invoke_runtime_text(strict_text=True)`:
+a raw non-string `text` / `result` / body is a `RuntimeTextProtocolError` that fails the step,
+`null` is no answer, a `text/plain` body is read as text, and legitimate textual `"None"` /
+`"42"` stay text — Chat, the public API and ordinary replays keep the lenient default), an unmet
 `depends_on` makes the dependent check `inconclusive`, and the run-level `check_status` rolls
 up fail-closed (`fail` > `error` > `inconclusive` > `pass`). `pass` additionally requires the
 **whole procedure to have completed**: every planned invocation done with a usable reply,

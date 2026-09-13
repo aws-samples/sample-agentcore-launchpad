@@ -283,7 +283,9 @@ def execute_run(
                 prompt: str, sid: str | None, actor_id: str | None = None
             ) -> dict[str, Any]:
                 # Ordinary replays keep the exact legacy call shape (bare default
-                # actor); only procedure steps pass their synthetic actor.
+                # actor, lenient decoding); only procedure steps pass their
+                # synthetic actor and ask the Runtime decoder for strict text
+                # evidence (raw non-string text = protocol error, null = no answer).
                 actor = {"actor_id": actor_id} if actor_id else {}
                 if method == "harness":  # InvokeHarness, not the runtime data plane
                     return hc.invoke_harness_text(data, agent_arn, prompt, session_id=sid, **actor)
@@ -296,6 +298,7 @@ def execute_run(
                     session_id=sid,
                     runtime_user_id=runtime_user_id,
                     **actor,
+                    **({"strict_text": True} if actor_id else {}),
                 )
 
             _update(run_id, status="invoking", execution=exec_blob)
