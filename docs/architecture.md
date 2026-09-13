@@ -1018,6 +1018,136 @@ real preset conversation with a grounded AWS answer, a valid model-emitted propo
 an authorized approval creating a test Harness, readback and cleanup of the test-owned
 resources. `make verify` alone is not proof that the model follows the protocol.
 
+### Evaluation-assets plan (SE-047) — reviewed materialization of golden tests
+
+A proposal's `golden_tests` / `evaluator_recommendations` stay inert solution content.
+SE-047 adds a **separate, private, versioned plan** on the same conversation that says
+what those recommendations become, and one **administrator-only, idempotent
+materialization** that creates the assets. The Agent proposal, its approval and the
+deployed Agent are never touched; approving an Agent is not permission for cloud
+evaluation resources.
+
+**Four things that are deliberately different from each other.**
+
+| Action | Where | What happens | AWS write? |
+|---|---|---|---|
+| Prepare / edit a plan | `POST …/evaluation-plan/prepare`, `PUT …/evaluation-plan` (member, owner-bound) | a new plan revision row (`assistant_evaluation_plans`), validated against the exact proposal revision + content hash it names | none |
+| Create assets | `POST …/evaluation-plan/materialize` (admin **and** owner; exact plan revision + hash; disclosure acknowledged) | one `evaluation_asset_operations` row → local **Launchpad Dataset** (ledger), **AgentCore evaluators**, and for code rules one **Lambda** + its role/log group/resource policy + an additive execution-role policy | CreateEvaluator, Lambda/IAM/Logs — **never** StartBatchEvaluation, CreateDataset (AWS sync), online evaluation, InvokeHarness/Runtime or a model call |
+| Sync the Dataset to AWS | existing `POST /api/eval/datasets/{id}/sync-to-aws` | unchanged, explicit, separate | CreateDataset/AddDatasetExamples |
+| Run an evaluation | existing `POST /api/eval/runs` (`perm:eval.run`) | unchanged, separate, billable | invokes + StartBatchEvaluation |
+
+**The typed plan** (`backend/app/assistant/evaluation_plan.py`, ≤ 160 000 bytes) is
+bound to `source_revision` + `source_content_hash`, hashed canonically, and carries:
+`scenarios[]` (one standard predefined Dataset item per golden test, with the original
+golden-test id and optionally the SE-046 `launchpad_execution` procedure), `evaluators[]`
+(a discriminated union: `existing` id reference · `judge` with pinned instructions /
+rating scale / model / level · `derived` · `code` with **declarative rules only** ·
+and the non-automatable kinds `orchestration` / `manual_review` / `metric_baseline` /
+`external_control` with their reason and obligation), `recommendations[]` (every prose
+recommendation of the revision exactly once, `mapped` to keys or explicitly
+`unresolved` / `declined`) and `blocked_golden_tests[]`. Validation refuses: a golden
+test that is neither a scenario nor blocked, a recommendation missing or altered, a
+mapped key that is not an evaluator, judge placeholders not documented for the level
+(`{context}` `{assistant_turn}` `{expected_response}` at TRACE; `{context}`
+`{available_tools}` `{actual_tool_trajectory}` `{expected_tool_trajectory}`
+`{assertions}` at SESSION), more than **10** AWS evaluators, TOOL_CALL code evaluators,
+and any dataset item the SE-046 execution gate rejects. Nothing in the plan may carry
+an ARN, a Lambda name, Python or a regex — `extra="forbid"` everywhere. A proposal may
+carry an optional structured `evaluation_plan` seed (validated with the same union; a
+revision without it serializes exactly as before, so old hashes are unchanged); the
+platform draft (`draft_plan`) starts from it, otherwise maps only ids it can identify
+exactly (`Builtin.*` / `ThirdParty.*` named in the prose), drafts **one** clearly
+labelled `draft: true` semantic rubric from the golden tests' pass criteria, drafts a
+`reference_trajectory` code check when golden tests name expected tools, and leaves
+every other recommendation `unresolved`. It never claims a prose recommendation was
+implemented.
+
+**Code evaluators are one reviewed static Lambda + data.** `app/assistant/lambda_runtime/
+handler.py` is stdlib-only (json/os), contains no `eval`/`exec`/`subprocess`/`re`/network
+client, and is shipped byte-identical in every package together with a canonical
+`rules.json` (evaluator **name** → rules; unknown names error). `build_package` produces a
+deterministic ZIP (sorted entries, 1980-01-01 timestamps, fixed permissions, canonical
+JSON) whose sha256 is persisted on the intent and compared with the function's
+`CodeSha256` and the published version's readback. Rules: `tool_count` · `tool_sequence`
+(exact / subsequence) · `tool_set` (allowed / forbidden) · `output_contains` /
+`output_not_contains` / `output_exact` (literal, case-insensitive by default) ·
+`reference_trajectory` (observed tools ⊇ or == `expectedTrajectory.toolNames`) ·
+`reference_response` (final output contains `expectedResponse.text`). Evidence is
+fail-closed: the handler inspects only the target (`evaluationTarget.traceIds` at TRACE,
+all spans at SESSION, TOOL_CALL refused), reads the **last assistant output** of a
+model/agent span (`gen_ai.completion`, `gen_ai.output.messages`, `gen_ai.choice` /
+`gen_ai.assistant.message` events; dict or OTLP list attributes) and tool names
+(`gen_ai.tool.name`, `tool.name`, `execute_tool <name>` spans); user prompts, tool
+inputs and reference inputs are never read as output. No spans, an unmatched target,
+no identifiable output for an output rule, a missing reference input for a reference
+rule, or a tool rule without any model/agent span → `{errorCode, errorMessage}`, never
+PASS. Deterministic rules assert literal text and observed tool counts/sequences only;
+PII solicitation, dependency-inducing language or child safety need a calibrated judge
+and human review — a passing keyword rule is not a safety certificate, and reference
+rules must not score live traffic (the operation flags them `reference_dependent`).
+
+**Durable, single-writer materialization** (`app/assistant/evaluation_assets.py`). The
+operation row is committed **before** any AWS write with the exact plan hash, approver,
+immutable owner principal, target account/region and one intent per resource (unique
+name embedding the operation id, stable `clientToken`, the exact request once composed,
+ids/ARNs/digests read back, status, safe error). `UNIQUE(plan_id)` makes a repeated or
+concurrent approval return the same operation. A worker claims a lease (conditional
+UPDATE; stale after 10 min), re-reads the lease token **and** re-checks that the
+approver is still an active administrator before every mutation, and persists after
+each step. Order: `dataset` (ledger; a retry never overwrites member edits made
+afterwards) → `lambda_role` (trust `lambda.amazonaws.com` with `aws:SourceAccount`; inline
+policy = `logs:CreateLogStream`/`PutLogEvents` on its own log group only) → `log_group`
+(14-day retention) → `lambda_function` (python3.12, 256 MB, timeout = max rule timeout ≤
+300 s, reserved concurrency 5, no provisioned concurrency; wait Active; `PublishVersion`
+pinned to the digest; readback of CodeSha256/Runtime/Handler/Role/Version) →
+`lambda_permission` (`bedrock-agentcore.amazonaws.com` + `SourceAccount` on the
+version; no SourceArn pattern is documented, so none is invented) → `role_grant`
+(optional; the workspace execution role resolved by ARN, its `RoleId` persisted and
+re-compared, trusted only when tagged `launchpad:managed` or `launchpad-`-prefixed; an
+additive inline policy `launchpad-evalop-<op>` granting `lambda:InvokeFunction` +
+`GetFunction` on the exact function + version ARNs; trust and other policies untouched)
+→ every `evaluator:<key>` (CreateEvaluator with the persisted token, GetEvaluator until
+ACTIVE, configuration must equal the request; code evaluators pin the **version** ARN).
+A lost response replays the same token/request; a `Conflict*`/`AlreadyExists` on a fresh
+intent is a **foreign resource** (recorded as `conflict`, never adopted by name or tag;
+a Lambda conflict is accepted as ours only when CodeSha256, Role and the operation tag
+all match the persisted intent). Readback drift is recorded and refused. Retries are
+explicit and bounded (5 attempts); a partial outcome stays `partial` with each
+resource's error — never a READY badge over an error. Startup resumes only `queued` /
+`running` operations. Status reads are ledger-only.
+
+**Cleanup** (`DELETE …/operations/{id}/assets`, admin + owner) deletes exactly the
+recorded owned artifacts in reverse order — evaluators (an evaluator locked by an
+online configuration is recorded as `delete_failed`, not hidden), the additive role
+policy, the function (and its resource policy), the log group, the dedicated role (only
+if its `RoleId` still matches) — and leaves the local Dataset (a member asset removable
+in Evaluation → Datasets) and every foreign resource alone. The ordinary
+`DELETE /api/eval/evaluators/{id}` refuses (`409 evaluator.managed_by_operation`) an
+evaluator an operation owns, so its Lambda/IAM footprint cannot become an undeclared
+orphan.
+
+**Privacy and ownership.** Plans and operations are visible only to the conversation's
+immutable principal (foreign principal / workspace → 404, also for administrators). The
+UI shows a disclosure before creation: the **selected** inputs, expected responses,
+assertions and rubrics of the plan become readable to every workspace member in
+Evaluation → Datasets / Evaluators; the transcript does not. Created Dataset items
+carry `metadata.launchpad_assets` (conversation id, proposal/plan revision + hash,
+operation id, golden-test id, plan-key → kind/golden-tests/blocking/threshold) so the
+Evaluation console can show where an asset came from; the plan-key → evaluator-id map
+lives on the operation. "Created" means registered — not passed, not child-safe, not
+production-ready.
+
+**Live check still required.** `tests/test_evaluation_assets.py` is hermetic (IAM /
+Lambda / Logs / control-plane fakes). Not yet verified against AWS: that
+`bedrock-agentcore.amazonaws.com` is the principal the Evaluations service invokes code
+evaluators with (the devguide documents the execution-role statement, not the resource
+policy), the exact span representation the service passes in `sessionSpans` for this
+platform's Harness/Runtime agents (the handler accepts the documented
+`gen_ai.completion` shape plus the Strands/OTLP variants above), CreateEvaluator's
+acceptance of a **versioned** Lambda ARN, and GetEvaluator's exact `status` value
+(`ACTIVE`/`READY` accepted). ACTIVE registration plus test doubles are not proof that a
+batch run would score.
+
 ### Model source (方式B + 方式C)
 
 `AgentSpec.model_source` selects the model-hosting surface: `mantle` (Bedrock

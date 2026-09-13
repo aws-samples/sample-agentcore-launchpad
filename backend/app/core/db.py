@@ -41,6 +41,8 @@ WORKSPACE_SCOPED_TABLES = (
     "assistant_proposals",
     "agent_name_claims",
     "system_skill_records",
+    "assistant_evaluation_plans",
+    "evaluation_asset_operations",
 )
 
 
@@ -368,6 +370,12 @@ def _migrate_workspace_columns(bind) -> None:
         "agent_name_claims": "ALTER TABLE agent_name_claims ADD COLUMN workspace_id VARCHAR(32)",
         "system_skill_records": (
             "ALTER TABLE system_skill_records ADD COLUMN workspace_id VARCHAR(32)"
+        ),
+        "assistant_evaluation_plans": (
+            "ALTER TABLE assistant_evaluation_plans ADD COLUMN workspace_id VARCHAR(32)"
+        ),
+        "evaluation_asset_operations": (
+            "ALTER TABLE evaluation_asset_operations ADD COLUMN workspace_id VARCHAR(32)"
         ),
     }
     inspector = inspect(bind)

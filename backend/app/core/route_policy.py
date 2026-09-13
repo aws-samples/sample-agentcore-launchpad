@@ -129,6 +129,23 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/proposal/reject"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/proposal/approve"):
         PERM_AGENT_DEPLOY,
+    # ---- SE-047 evaluation-assets plan: preparing/editing the private plan is
+    # discussion (member, owner-bound); materializing creates AWS evaluators + a
+    # Lambda + IAM → admin, owner-bound, exact plan revision/hash; status is a
+    # ledger read; cleanup deletes only operation-owned artifacts → admin ----
+    ("GET", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan"): MEMBER,
+    ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/prepare"):
+        MEMBER,
+    ("PUT", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan"): MEMBER,
+    ("POST",
+     "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/materialize"):
+        ADMIN,
+    ("GET", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/"
+     "{operation_id}"): MEMBER,
+    ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/"
+     "{operation_id}/retry"): ADMIN,
+    ("DELETE", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/"
+     "operations/{operation_id}/assets"): ADMIN,
     # ---- credential minting ----
     ("GET", "/api/apikeys"): MEMBER,
     ("POST", "/api/apikeys"): MEMBER,

@@ -26,7 +26,7 @@ import json
 import re
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.schemas.agent import (
     DEFAULT_MODEL_ID,
@@ -75,6 +75,38 @@ class GoldenTest(BaseModel):
     source: Literal["customer_pain_point", "industry_assumption"] = "industry_assumption"
 
 
+class EvaluationPlanSeed(BaseModel):
+    """The optional structured evaluation recommendation of a proposal. Each entry
+    must be a shape-valid evaluator of the plan contract (kinds existing / judge /
+    derived / code / orchestration / manual_review / metric_baseline /
+    external_control); ``recommendation_keys`` maps a prose recommendation index to
+    the entry keys it corresponds to. Nothing here is executed; the plan draft merely
+    starts from it."""
+
+    model_config = ConfigDict(extra="forbid")
+    evaluators: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
+    recommendation_keys: dict[str, list[str]] = Field(default_factory=dict)
+
+    @field_validator("evaluators")
+    @classmethod
+    def _typed_entries(cls, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        from app.assistant.evaluation_plan import EvaluationPlan
+
+        keys = [e.get("key") for e in entries]
+        if len(set(keys)) != len(keys):
+            raise ValueError("evaluator keys must be unique")
+        probe = {"version": 1, "source_revision": 1, "source_content_hash": "0" * 64,
+                 "dataset": {"name": "seed"}, "evaluators": entries}
+        try:
+            EvaluationPlan.model_validate(probe)
+        except ValidationError as exc:
+            first = exc.errors()[0]
+            raise ValueError(
+                f"{'.'.join(str(p) for p in first['loc'][1:]) or 'entry'}: {first['msg']}"
+            ) from None
+        return entries
+
+
 class ProposalContent(BaseModel):
     """Everything an approval may turn into a new managed Harness. ``extra="forbid"``
     is the allowlist: a member (or model) cannot smuggle ``env``, ``code``,
@@ -103,6 +135,20 @@ class ProposalContent(BaseModel):
     manual_tasks: list[Line] = Field(default_factory=list, max_length=40)
     golden_tests: list[GoldenTest] = Field(default_factory=list, max_length=40)
     evaluator_recommendations: list[Line] = Field(default_factory=list, max_length=40)
+    # Optional structured seed for the SEPARATE evaluation-assets plan (SE-047): a
+    # bounded object the member later reviews/edits; inert here, validated by
+    # ``EvaluationPlanSeed`` below, omitted from the stored content when absent so
+    # every pre-existing revision hashes exactly as before.
+    evaluation_plan: EvaluationPlanSeed | None = None
+
+
+def content_dump(content: ProposalContent) -> dict[str, Any]:
+    """The stored/displayed form: the optional ``evaluation_plan`` member is dropped
+    when absent, so a revision without it serializes exactly as before SE-047."""
+    data = content.model_dump()
+    if data.get("evaluation_plan") is None:
+        data.pop("evaluation_plan", None)
+    return data
 
 
 def serialized_bytes(raw: Any) -> int:
@@ -389,7 +435,7 @@ def validate(
             return None, raw, errors
         return None, {"_rejected": "oversized or unparseable proposal was not stored"}, errors
     errors = reference_errors(content, catalog)
-    display = content.model_dump()
+    display = content_dump(content)
     if not errors:
         try:
             resource_bindings(content, catalog)

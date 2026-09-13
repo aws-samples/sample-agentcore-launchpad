@@ -367,3 +367,188 @@ def approve_proposal(
             "started": outcome.started,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# SE-047 — the reviewed evaluation-assets plan and its materialization
+# ---------------------------------------------------------------------------
+
+from app.assistant import evaluation_assets as assets  # noqa: E402
+from app.routers.auth import require_admin  # noqa: E402
+
+
+class PlanPrepare(RevisionRef):
+    pass
+
+
+class PlanEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    content: dict[str, Any]
+
+
+class PlanMaterialize(BaseModel):
+    plan_revision: int = Field(ge=1)
+    plan_hash: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    # the member saw the disclosure: selected test content / rubrics become visible in
+    # the workspace Evaluation console (the transcript does not)
+    acknowledge_disclosure: bool
+
+
+def _plan_state(db: Session, row) -> dict[str, Any]:
+    ops = {op.plan_id: op for op in assets.operations_of(db, row.id)}
+    plans = assets.plans_of(db, row.id)
+    return {
+        "plans": [assets.plan_out(p, ops.get(p.id)) for p in plans],
+        "operations": [assets.operation_out(op) for op in ops.values()],
+        "disclosure": (
+            "Creating assets publishes the SELECTED golden-test inputs, expected responses, "
+            "assertions and evaluator rubrics of this plan to the workspace Evaluation console "
+            "(Datasets / Evaluators), where every member of the workspace can read them. The "
+            "conversation transcript itself stays private. Nothing is deployed, run, synced to "
+            "AWS Datasets or invoked; created assets are registered — they have not passed."
+        ),
+    }
+
+
+@router.get("/conversations/{conversation_id}/evaluation-plan")
+def get_evaluation_plan(
+    conversation_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Ledger-only: every plan revision of the caller's conversation and the recorded
+    materialization operations (no AWS read, no AWS write)."""
+    identity = _caller(request)
+    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    return _plan_state(db, row)
+
+
+@router.post("/conversations/{conversation_id}/evaluation-plan/prepare", status_code=201)
+def prepare_evaluation_plan(
+    conversation_id: str,
+    req: PlanPrepare,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Draft a plan revision from one proposal revision (any shape-valid revision,
+    including an already-approved one). No resource side effects."""
+    identity = _caller(request)
+    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    plan = assets.prepare_plan(db, row, revision=req.revision, created_by=identity.username)
+    return {"plan": assets.plan_out(plan, None), **_plan_state(db, row)}
+
+
+@router.put("/conversations/{conversation_id}/evaluation-plan")
+def edit_evaluation_plan(
+    conversation_id: str,
+    req: PlanEdit,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """A member edit is a NEW plan revision (draft or invalid with its errors)."""
+    identity = _caller(request)
+    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    plan = assets.edit_plan(db, row, req.content, created_by=identity.username)
+    return {"plan": assets.plan_out(plan, None), **_plan_state(db, row)}
+
+
+@router.post("/conversations/{conversation_id}/evaluation-plan/materialize")
+def materialize_evaluation_plan(
+    conversation_id: str,
+    req: PlanMaterialize,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> Any:
+    """Administrator + conversation owner: claim exactly one plan revision/hash for
+    materialization. 202 when this call created the operation (worker launched), 200
+    with the recorded operation for a repeated / concurrent request. Creates a local
+    Dataset, AgentCore evaluators and — for code rules — one Lambda + its role; never
+    deploys, runs, syncs or invokes anything."""
+    require_admin(request)  # belt and braces with ROUTE_POLICY
+    identity = _caller(request)
+    if not identity.is_admin:
+        raise AppError("auth.admin_required", "administrator role required", status_code=403)
+    if not req.acknowledge_disclosure:
+        raise AppError("assistant.disclosure_required",
+                       "acknowledge that selected test content becomes visible in the "
+                       "workspace Evaluation console", status_code=422)
+    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    # fresh re-resolution of the caller and the workspace grant at the claim boundary
+    if auth_enabled():
+        fresh = resolve_identity(request, db=db)
+        if fresh is None or not fresh.is_admin or principal_of(fresh) != principal_of(identity):
+            raise AppError("auth.required", "Authentication required", status_code=401)
+    ws_row = db.get(Workspace, ws.id)
+    if ws_row is None:
+        raise AppError("workspace.not_found", "workspace not found", status_code=404)
+    _authorize(db, identity, ws_row)
+    outcome = assets.approve_plan(
+        db, row, ws_row, plan_revision=req.plan_revision, plan_hash=req.plan_hash,
+        approved_by=identity.username, approver_user_id=identity.user_id,
+    )
+    if outcome.started or (
+        outcome.operation.status in ("queued", "running")
+        and assets.live_worker(outcome.operation.id) is None
+    ):
+        assets.start_async(outcome.operation.id)
+    return JSONResponse(
+        status_code=202 if outcome.started else 200,
+        content={"operation": assets.operation_out(outcome.operation),
+                 "started": outcome.started},
+    )
+
+
+@router.get("/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}")
+def get_evaluation_operation(
+    conversation_id: str,
+    operation_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Ledger-only status (no AWS call, no mutation)."""
+    identity = _caller(request)
+    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    return {"operation": assets.operation_out(assets.owned_operation(db, row, operation_id))}
+
+
+@router.post("/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}/retry")
+def retry_evaluation_operation(
+    conversation_id: str,
+    operation_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Explicit, bounded retry of a partial/failed operation: resumes the persisted
+    intents (same tokens/requests); never a fresh create."""
+    require_admin(request)
+    identity = _caller(request)
+    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    op = assets.owned_operation(db, row, operation_id)
+    started = assets.retry_operation(db, op)
+    db.expire_all()
+    return {"operation": assets.operation_out(assets.owned_operation(db, row, operation_id)),
+            "started": started}
+
+
+@router.delete("/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}/assets")
+def cleanup_evaluation_operation(
+    conversation_id: str,
+    operation_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Delete exactly the cloud artifacts the operation created (evaluators, Lambda,
+    its role/log group, the additive role policy). The local Dataset stays."""
+    require_admin(request)
+    identity = _caller(request)
+    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    op = assets.owned_operation(db, row, operation_id)
+    op = assets.cleanup_operation(db, op, ws.context)
+    return {"operation": assets.operation_out(op)}

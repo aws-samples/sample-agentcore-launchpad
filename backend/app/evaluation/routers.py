@@ -1060,9 +1060,24 @@ def update_evaluator(
 
 @router.delete("/evaluators/{evaluator_id}")
 def delete_evaluator(
-    evaluator_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    evaluator_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     _reject_managed(evaluator_id)
+    from app.assistant.evaluation_assets import managed_evaluator
+
+    owner = managed_evaluator(db, ws.id, evaluator_id)
+    if owner is not None:
+        # an evaluator created by an evaluation-assets operation has a Lambda / IAM
+        # footprint that only the operation's cleanup removes — deleting the record
+        # alone would leave undeclared orphans
+        raise AppError(
+            "evaluator.managed_by_operation",
+            "this evaluator was created by an assistant evaluation-assets operation; remove it "
+            "through that operation's cleanup so its Lambda/IAM artifacts go with it",
+            owner, status_code=409,
+        )
     ac.delete_evaluator(control_client(ws.context), evaluator_id=evaluator_id)
     return {"deleted": True}
 

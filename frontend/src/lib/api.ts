@@ -741,6 +741,8 @@ export interface AssistantStatus {
   /** workspace prerequisites a proposal may bind to (never created by the assistant) */
   capabilities: { shared_memory: boolean; kb_gateway: boolean };
   is_admin: boolean;
+  /** SE-047: only administrators may create evaluation assets from a plan */
+  can_materialize_evaluation_assets: boolean;
   owner: string;
   /** the immutable principal conversations are bound to */
   principal: string;
@@ -909,6 +911,148 @@ export interface AssistantApproveResult {
   deployment_id: string | null;
   /** true ⇔ this call created the deploy job (202); false = the recorded outcome (200) */
   started: boolean;
+}
+
+/* ── SE-047 evaluation-assets plan ─────────────────────────────────────── */
+
+export type AssistantEvalPlanStatus = "draft" | "invalid" | "approved" | "superseded";
+export type AssistantEvalEvaluatorKind =
+  | "existing"
+  | "judge"
+  | "derived"
+  | "code"
+  | "orchestration"
+  | "manual_review"
+  | "metric_baseline"
+  | "external_control";
+
+export interface AssistantEvalPlanEvaluator {
+  kind: AssistantEvalEvaluatorKind;
+  key: string;
+  title: string;
+  golden_test_ids: string[];
+  blocking: boolean;
+  threshold: number | null;
+  note?: string;
+  evaluator_id?: string;
+  name?: string;
+  level?: string;
+  instructions?: string;
+  model_id?: string;
+  base_evaluator_id?: string;
+  rules?: { version: number; checks: Record<string, unknown>[] };
+  lambda_timeout_s?: number;
+  reason?: string;
+  obligation?: string;
+  draft?: boolean;
+}
+
+export interface AssistantEvalPlanContent {
+  version: number;
+  source_revision: number;
+  source_content_hash: string;
+  dataset: { name: string; locale: string; description: string };
+  scenarios: {
+    scenario_id: string;
+    golden_test_id: string;
+    turns: { input: string; expected_response?: string }[];
+    expected_trajectory?: string[];
+    assertions?: string[];
+    execution?: Record<string, unknown> | null;
+    note?: string;
+  }[];
+  evaluators: AssistantEvalPlanEvaluator[];
+  recommendations: {
+    index: number;
+    text: string;
+    mapped_to: string[];
+    status: "mapped" | "unresolved" | "declined";
+    note?: string;
+  }[];
+  blocked_golden_tests: { golden_test_id: string; reason: string }[];
+  grant_workspace_execution_role: boolean;
+  summary?: string;
+}
+
+export interface AssistantEvalPlanSummary {
+  scenarios: number;
+  blocked_golden_tests: number;
+  evaluators_by_kind: Record<string, number>;
+  cloud_evaluators: number;
+  lambda_functions: number;
+  iam_roles: number;
+  role_grants: number;
+  unresolved_recommendations: number;
+}
+
+export interface AssistantEvalPlan {
+  id: string;
+  conversation_id: string;
+  proposal_id: string;
+  source_revision: number;
+  source_content_hash: string;
+  revision: number;
+  source: "platform" | "member" | "model";
+  status: AssistantEvalPlanStatus;
+  content: Partial<AssistantEvalPlanContent> & Record<string, unknown>;
+  content_hash: string;
+  validation_errors: string[];
+  summary: AssistantEvalPlanSummary | null;
+  created_by: string;
+  created_at: string | null;
+  operation_id: string | null;
+}
+
+export type AssistantEvalOperationStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "partial"
+  | "failed"
+  | "cleaning"
+  | "cleaned";
+
+export interface AssistantEvalResource {
+  kind: string;
+  key: string;
+  plan_key?: string;
+  name: string;
+  status: string;
+  definition?: string;
+  error?: string | null;
+  digest?: string;
+  reference_dependent?: boolean;
+  attempts?: number;
+  result?: Record<string, unknown> | null;
+  cleanup?: { at: string; ok: boolean; note: string | null } | null;
+  link?: string;
+}
+
+export interface AssistantEvalOperation {
+  id: string;
+  conversation_id: string;
+  plan_id: string;
+  plan_revision: number;
+  plan_hash: string;
+  proposal_revision: number;
+  approved_by: string;
+  account_id: string;
+  region: string;
+  status: AssistantEvalOperationStatus;
+  attempts: number;
+  max_attempts: number;
+  dataset_id: string | null;
+  error: string | null;
+  resources: AssistantEvalResource[];
+  created_at: string | null;
+  updated_at: string | null;
+  running: boolean;
+}
+
+export interface AssistantEvalPlanState {
+  plans: AssistantEvalPlan[];
+  operations: AssistantEvalOperation[];
+  disclosure: string;
 }
 
 /* ── governance ────────────────────────────────────────────────────────── */
@@ -3193,6 +3337,50 @@ export const api = {
     request<AssistantApproveResult>(
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}/proposal/approve`,
       { method: "POST", body: JSON.stringify({ revision, content_hash: contentHash }) },
+    ),
+  /* ── SE-047 evaluation-assets plan (private to the conversation owner) ── */
+  assistantEvalPlan: (id: string) =>
+    request<AssistantEvalPlanState>(
+      `/api/assistant/architect/conversations/${encodeURIComponent(id)}/evaluation-plan`,
+    ),
+  /** Draft a plan revision from one proposal revision — no resource side effects. */
+  assistantEvalPlanPrepare: (id: string, revision: number) =>
+    request<{ plan: AssistantEvalPlan } & AssistantEvalPlanState>(
+      `/api/assistant/architect/conversations/${encodeURIComponent(id)}/evaluation-plan/prepare`,
+      { method: "POST", body: JSON.stringify({ revision }) },
+    ),
+  /** A member edit is a NEW plan revision (draft or invalid with its errors). */
+  assistantEvalPlanEdit: (id: string, content: Record<string, unknown>) =>
+    request<{ plan: AssistantEvalPlan } & AssistantEvalPlanState>(
+      `/api/assistant/architect/conversations/${encodeURIComponent(id)}/evaluation-plan`,
+      { method: "PUT", body: JSON.stringify({ content }) },
+    ),
+  /** Admin + owner: create the assets of exactly this plan revision/hash. */
+  assistantEvalPlanMaterialize: (id: string, planRevision: number, planHash: string) =>
+    request<{ operation: AssistantEvalOperation; started: boolean }>(
+      `/api/assistant/architect/conversations/${encodeURIComponent(id)}/evaluation-plan/materialize`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          plan_revision: planRevision,
+          plan_hash: planHash,
+          acknowledge_disclosure: true,
+        }),
+      },
+    ),
+  assistantEvalOperation: (id: string, operationId: string) =>
+    request<{ operation: AssistantEvalOperation }>(
+      `/api/assistant/architect/conversations/${encodeURIComponent(id)}/evaluation-plan/operations/${encodeURIComponent(operationId)}`,
+    ),
+  assistantEvalOperationRetry: (id: string, operationId: string) =>
+    request<{ operation: AssistantEvalOperation; started: boolean }>(
+      `/api/assistant/architect/conversations/${encodeURIComponent(id)}/evaluation-plan/operations/${encodeURIComponent(operationId)}/retry`,
+      { method: "POST" },
+    ),
+  assistantEvalOperationCleanup: (id: string, operationId: string) =>
+    request<{ operation: AssistantEvalOperation }>(
+      `/api/assistant/architect/conversations/${encodeURIComponent(id)}/evaluation-plan/operations/${encodeURIComponent(operationId)}/assets`,
+      { method: "DELETE" },
     ),
   listChatSessions: (agentId: string) =>
     request<{ sessions: ChatSessionInfo[] }>(`/api/chat/${encodeURIComponent(agentId)}/sessions`),

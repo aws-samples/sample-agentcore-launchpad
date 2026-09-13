@@ -221,6 +221,39 @@ through `GET /api/jobs/{id}` and `GET /api/agents/{id}`. The generic invoke entr
 `404 chat.session_not_found` for an assistant turn's `session_id` on a system-managed
 agent.
 
+### Evaluation-assets plan (SE-047)
+
+Private to the conversation owner (foreign principal / workspace → `404
+assistant.conversation_not_found`, administrators included). Preparing/editing is
+`member`; creating and cleaning up is `admin` **and** owner. Reads are ledger-only.
+
+| Method | Path | Role | Result |
+|---|---|---|---|
+| `GET` | `/api/assistant/architect/conversations/{id}/evaluation-plan` | member | `{plans[…], operations[…], disclosure}` |
+| `POST` | `…/evaluation-plan/prepare` | member | body `{revision}` (a shape-valid proposal revision, approved or not) → `201 {plan, plans, operations, disclosure}` — the platform draft as a new plan revision; `409 assistant.proposal_stale` / `409 assistant.evaluation_plan_source_invalid`; no side effects |
+| `PUT` | `…/evaluation-plan` | member | body `{content}` (the plan contract; `content.source_revision` names the proposal revision) → `{plan, …}` — a **new** revision, `draft` or `invalid` with `validation_errors` (never corrected); `413 assistant.evaluation_plan_too_large` above 160 000 bytes |
+| `POST` | `…/evaluation-plan/materialize` | admin | body `{plan_revision, plan_hash, acknowledge_disclosure: true}` → `202 {operation, started: true}` when this call claimed the plan (worker launched), `200 … started: false` for a repeated / concurrent request (same operation). `422 assistant.disclosure_required`, `409 assistant.evaluation_plan_stale` (unknown revision / hash differs), `409 assistant.evaluation_plan_not_approvable` (invalid / superseded), `409 assistant.evaluation_plan_invalid` (no longer validates against its proposal), `409 assistant.workspace_not_ready`; the caller is re-resolved from the database at the claim |
+| `GET` | `…/evaluation-plan/operations/{operation_id}` | member | `{operation}` — ledger only, no AWS call |
+| `POST` | `…/evaluation-plan/operations/{operation_id}/retry` | admin | `{operation, started}` — resumes the persisted intents of a `partial` / `failed` operation (same tokens/requests); `409 assistant.evaluation_assets_exhausted` after 5 attempts |
+| `DELETE` | `…/evaluation-plan/operations/{operation_id}/assets` | admin | `{operation}` — deletes exactly the recorded owned cloud artifacts (evaluators, Lambda + role + log group, additive role policy); the local Dataset stays; `409 assistant.evaluation_assets_running` while a worker is live |
+
+A plan is `{id, conversation_id, proposal_id, source_revision, source_content_hash,
+revision, source: platform|member|model, status: draft|invalid|approved|superseded,
+content, content_hash, validation_errors[], summary{scenarios, blocked_golden_tests,
+evaluators_by_kind, cloud_evaluators, lambda_functions, iam_roles, role_grants,
+unresolved_recommendations} | null, created_by, created_at, operation_id}`. An operation
+is `{id, conversation_id, plan_id, plan_revision, plan_hash, proposal_revision,
+approved_by, account_id, region, status: queued|running|succeeded|partial|failed|
+cleaning|cleaned, attempts, max_attempts, dataset_id, error, resources[{kind: dataset|
+lambda_role|log_group|lambda_function|lambda_permission|role_grant|evaluator|existing,
+key, plan_key?, name, status: pending|accepted|ready|failed|conflict|skipped|deleted|
+delete_failed, definition?, error, digest?, reference_dependent?, attempts, result,
+cleanup?, link?}], created_at, updated_at, running}`. `link` is the existing console
+deep link (`/evaluation?view=datasets&ds=…` / `?view=evaluators&ev=…`). The ordinary
+`DELETE /api/eval/evaluators/{id}` answers `409 evaluator.managed_by_operation`
+(`detail.operation_id`) for an evaluator an operation owns. `GET /api/assistant/architect`
+gained `can_materialize_evaluation_assets` (= administrator).
+
 ## Console Registry API — live agent card
 
 `GET /api/registry/records/{record_id}/live-agent-card` is the LIVE CARD read in
