@@ -29,11 +29,29 @@ import type {
   MemoryResourceRow,
   RuntimeDiscoveryCandidate,
   RuntimeImportResult,
+  SystemPresetInstallInput,
+  SystemPresetSettings,
+  SystemPresetStatus,
   Toolkit,
 } from "../lib/api";
 import { api, ApiError } from "../lib/api";
-import type { ModelSource } from "../lib/models";
+import type { ModelSource, ReasoningEffort } from "../lib/models";
+import { useWorkspace } from "../workspace/workspace-context";
 import { SystemPresetsPanel } from "./create/SystemPresetsPanel";
+import {
+  apiErrorRows,
+  DEFAULT_MAX_ITERATIONS,
+  DEFAULT_TIMEOUT_SECONDS,
+  diffPresetSettings,
+  EFFORT_NONE,
+  effectiveEffort,
+  formFromSettings,
+  intOrNull,
+  isPresetDefault,
+  knobProblems,
+  presetConfigureRequest,
+} from "./create/presetSettings";
+import type { EffortChoice, PresetConfigureRequest, PresetForm } from "./create/presetSettings";
 import {
   CLAUDE_SDK_MODEL_SOURCE,
   CUSTOM_MODEL_OPTION,
@@ -41,6 +59,8 @@ import {
   defaultModelFor,
   isCustomModelId,
   modelOptionsFor,
+  REASONING_EFFORTS,
+  supportsReasoningEffort,
 } from "../lib/models";
 
 const BUILTIN_TOOLS = ["code-interpreter", "browser"] as const;
@@ -93,9 +113,40 @@ type Step = 1 | 2 | 3;
 interface LaunchState {
   agentId: string;
   jobId: string;
+  /** set for a system-preset re-publish: the poll follows the workspace the save
+   * was pinned to, never the shared selection another tab may have moved */
+  workspaceId?: string | null;
 }
 
 type Method = "harness" | "zip_runtime" | "container";
+
+/**
+ * A system-managed preset opened in the shared editor (Create → SYSTEM PRESETS →
+ * CONFIGURE, or Existing agents → EDIT as an administrator). Saving never goes
+ * through `redeploy` (403 for a preset): it posts a PARTIAL edit of the
+ * administrator-editable settings to the maintenance route, pinned to the workspace
+ * the row was read from. Everything else on the preset is catalogue-owned and shown
+ * read-only. `editable: false` is the member's review of the same page: no save.
+ */
+interface SystemEditContext {
+  key: string;
+  label: string;
+  workspaceId: string | null;
+  stored: SystemPresetSettings;
+  defaults: SystemPresetSettings;
+  editable: boolean;
+  readOnlyReason?: string;
+  status: SystemPresetStatus;
+  allowedTools: string[];
+  skillVersion: string | null;
+}
+
+interface EditingTarget {
+  id: string;
+  name: string;
+  method: Method;
+  system?: SystemEditContext;
+}
 
 // Which source a method starts on. The invariant: a method only defaults to
 // mantle once its execution path can actually execute a Mantle model. The
@@ -124,6 +175,12 @@ interface StoredSpec {
   model_id?: string;
   model_source?: ModelSource;
   agent_sdk?: AgentSdk;
+  // harness-only inference knobs (absent on every spec written before they existed)
+  max_tokens?: number | null;
+  reasoning_effort?: ReasoningEffort | null;
+  // agent-loop bounds (backend defaults 10 / 300 when absent)
+  max_iterations?: number;
+  timeout_seconds?: number;
   system_prompt?: string;
   tools?: {
     type: string;
@@ -820,8 +877,10 @@ function CreateAgentWizard() {
   const { t } = useTranslation();
   const toast = useToast();
   const navigate = useNavigate();
-  const { can } = useAuth();
+  const { can, isAdmin } = useAuth();
   const canDeploy = can("agents.deploy");
+  const { current: currentWorkspace } = useWorkspace();
+  const workspaceId = currentWorkspace?.id ?? null;
   const [params] = useSearchParams();
   const prefillGateway = params.get("gateway");
   const prefillSkill = params.get("skill");
@@ -840,6 +899,12 @@ function CreateAgentWizard() {
   // container method only — the "Other Agent SDK" second-level choice
   const [agentSdk, setAgentSdk] = useState<AgentSdk>(DEFAULT_AGENT_SDK);
   const [systemPrompt, setSystemPrompt] = useState("");
+  // Inference / loop knobs (rendered for the harness method). Free text so a
+  // half-typed number is validated, not clamped; "" ⇒ no per-call ceiling.
+  const [maxTokens, setMaxTokens] = useState("");
+  const [reasoningEffort, setReasoningEffort] = useState<EffortChoice>(EFFORT_NONE);
+  const [maxIterations, setMaxIterations] = useState(String(DEFAULT_MAX_ITERATIONS));
+  const [timeoutSeconds, setTimeoutSeconds] = useState(String(DEFAULT_TIMEOUT_SECONDS));
   const [tools, setTools] = useState<string[]>([]);
   // Platform toolkits (zip_runtime only) — local @tool functions the backend
   // inlines into the generated agent, replacing the template's own two tools.
@@ -894,8 +959,23 @@ function CreateAgentWizard() {
   const [protocol, setProtocol] = useState<"http" | "a2a">("http");
   const [a2aSkills, setA2aSkills] = useState<A2aSkillRow[]>([]);
   // when set, the wizard edits an existing agent and the launch button re-publishes it
-  const [editing, setEditing] = useState<{ id: string; name: string; method: Method } | null>(null);
+  const [editing, setEditing] = useState<EditingTarget | null>(null);
   const [detailsMode, setDetailsMode] = useState(false);
+  // one submit at a time (both paths); the outcome of an accepted request is
+  // consumed only while this component is still mounted
+  const [submitting, setSubmitting] = useState(false);
+  const [submitErrorRows, setSubmitErrorRows] = useState<string[]>([]);
+  // system-preset edit: the pinned KB catalog read is an explicit error with RETRY,
+  // never folded into an empty catalog (the stored chips stay either way)
+  const [systemKbLoading, setSystemKbLoading] = useState(false);
+  const [systemKbError, setSystemKbError] = useState<string | null>(null);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     // Mountable assets come from the registry catalog: only APPROVED records
@@ -959,9 +1039,9 @@ function CreateAgentWizard() {
   const poll = useCallback(async () => {
     if (!launch) return;
     try {
-      const agent = await api.getAgent(launch.agentId);
+      const agent = await api.getAgent(launch.agentId, launch.workspaceId);
       setDeployment(agent.deployments?.[0] ?? null);
-      setJob(await api.getJob(launch.jobId));
+      setJob(await api.getJob(launch.jobId, launch.workspaceId));
       if (agent.status === "failed" && !failureToasted.current) {
         failureToasted.current = true;
         const failedStage = (agent.deployments?.[0]?.stages ?? []).find(
@@ -1021,6 +1101,12 @@ const deployLock = !canDeploy
     applyModelSource(sourceForMethod(method));
     setAgentSdk(DEFAULT_AGENT_SDK);
     setSystemPrompt("");
+    setMaxTokens("");
+    setReasoningEffort(EFFORT_NONE);
+    setMaxIterations(String(DEFAULT_MAX_ITERATIONS));
+    setTimeoutSeconds(String(DEFAULT_TIMEOUT_SECONDS));
+    setSystemKbError(null);
+    setSubmitErrorRows([]);
     setTools([]);
     setToolkits([]);
     setSelectedGateway([]);
@@ -1121,6 +1207,13 @@ const deployLock = !canDeploy
       return { type: "gateway", name: n, ...(config ? { config } : {}) };
     });
 
+  // the reasoning effort the ordinary harness form would send (null ⇒ omitted)
+  const ordinaryEffort = effectiveEffort({
+    model_id: modelId,
+    model_source: modelSource,
+    reasoning_effort: reasoningEffort,
+  });
+
   const buildSpec = () => ({
     name,
     method,
@@ -1128,6 +1221,16 @@ const deployLock = !canDeploy
     model_source: modelSource,
     // container only — the other methods have no SDK choice to express
     ...(method === "container" ? { agent_sdk: agentSdk } : {}),
+    // harness-only inference knobs: sent only when set (and, for the effort, only
+    // for a model/source pairing the backend accepts) — never for the other methods,
+    // whose schema refuses them
+    ...(method === "harness" && intOrNull(maxTokens)
+      ? { max_tokens: intOrNull(maxTokens) as number }
+      : {}),
+    ...(method === "harness" && ordinaryEffort ? { reasoning_effort: ordinaryEffort } : {}),
+    // loop bounds round-trip as stored (the form starts on the backend defaults)
+    ...(intOrNull(maxIterations) ? { max_iterations: intOrNull(maxIterations) as number } : {}),
+    ...(intOrNull(timeoutSeconds) ? { timeout_seconds: intOrNull(timeoutSeconds) as number } : {}),
     system_prompt: systemPrompt,
     tools:
       method === "harness"
@@ -1200,13 +1303,128 @@ const deployLock = !canDeploy
       : {}),
   });
 
+  /* ── system-preset edit: the same page, a different save ─────────────── */
+
+  const systemEdit = editing?.system ?? null;
+  // the page is read-only for a member's review (and for an administrator while
+  // the preset is not settled / the workspace lost a prerequisite)
+  const locked = systemEdit ? !systemEdit.editable : false;
+  const presetForm = (): PresetForm => ({
+    model_source: modelSource,
+    model_id: modelId,
+    max_tokens: maxTokens,
+    reasoning_effort: reasoningEffort,
+    system_prompt: systemPrompt,
+    max_iterations: maxIterations,
+    timeout_seconds: timeoutSeconds,
+    knowledge_bases: selectedKbs.map(kbInfo),
+  });
+  // the PARTIAL edit a system save sends: only the members that differ from what
+  // is stored (`{}` ⇒ nothing changed ⇒ an explicit re-publish is a forced repair)
+  const systemBody: SystemPresetInstallInput = systemEdit
+    ? diffPresetSettings(presetForm(), systemEdit.stored)
+    : {};
+  const systemChanged = Object.keys(systemBody).length > 0;
+  const knobIssues =
+    method === "harness"
+      ? knobProblems(
+          { max_tokens: maxTokens, max_iterations: maxIterations, timeout_seconds: timeoutSeconds },
+          t,
+        )
+      : [];
+  const effortAllowed = supportsReasoningEffort(modelId.trim(), modelSource);
+  const applyPresetForm = (form: PresetForm) => {
+    setModelSource(form.model_source);
+    setModelId(form.model_id);
+    setCustomModel(isCustomModelId(form.model_id, form.model_source));
+    setMaxTokens(form.max_tokens);
+    setReasoningEffort(form.reasoning_effort);
+    setSystemPrompt(form.system_prompt);
+    setMaxIterations(form.max_iterations);
+    setTimeoutSeconds(form.timeout_seconds);
+    setSelectedKbs(form.knowledge_bases.map((kb) => kb.kb_id));
+    setSpecKbs(form.knowledge_bases);
+  };
+  // "differs from this build's default" hint next to a label (system edit only)
+  const defaultHint = (key: keyof SystemPresetSettings) => {
+    if (!systemEdit || isPresetDefault(key, presetForm(), systemEdit.defaults)) return null;
+    const defaults = systemEdit.defaults;
+    return (
+      <span className="dim mono" style={{ fontSize: 10 }} data-testid={`differs-${key}`}>
+        {" "}
+        · {t("create.system.settings.differsFromDefault", {
+          value:
+            key === "knowledge_bases"
+              ? t("create.system.settings.kbNoneShort")
+              : key === "system_prompt"
+                ? t("create.system.settings.buildPrompt")
+                : String(defaults[key] ?? t("create.system.settings.effortNone")),
+        })}
+      </span>
+    );
+  };
+  // The KB catalog for a system edit is read through the typed client pinned to the
+  // workspace the row came from (the mount-time fetch follows the shared selection).
+  const loadSystemKbCatalog = (pinned: string | null) => {
+    setSystemKbLoading(true);
+    setSystemKbError(null);
+    void api
+      .listAttachableKnowledgeBases(pinned)
+      .then((d) => {
+        if (!alive.current) return;
+        setKbCatalog(d.items ?? []);
+      })
+      .catch((err: unknown) => {
+        if (!alive.current) return;
+        setSystemKbError(
+          err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err),
+        );
+      })
+      .finally(() => {
+        if (alive.current) setSystemKbLoading(false);
+      });
+  };
+
   const submit = async () => {
+    if (submitting) return; // one request at a time — a double click posts once
     setSubmitError(null);
+    setSubmitErrorRows([]);
+    setSubmitting(true);
     try {
+      if (systemEdit) {
+        if (!systemEdit.editable) return; // a review never posts
+        // pinned to the workspace the row was read from: another tab moving the
+        // shared selection meanwhile cannot redirect this save
+        const res = await api.installSystemPreset(
+          systemEdit.key,
+          systemChanged ? systemBody : { force: true },
+          systemEdit.workspaceId,
+        );
+        if (!alive.current) return;
+        if (!res.job_id) {
+          toast(t("create.system.alreadyCurrent", { name: systemEdit.label }), "good");
+          return;
+        }
+        toast(
+          t(res.changed ? "create.system.settings.saved" : "create.system.alreadyCurrent", {
+            name: systemEdit.label,
+          }),
+          "good",
+        );
+        setDetailKbs(res.preset.knowledge_bases);
+        failureToasted.current = false;
+        setLaunch({ agentId: res.agent.id, jobId: res.job_id, workspaceId: systemEdit.workspaceId });
+        setAgentStatus("deploying");
+        setDetailsMode(false);
+        setStep(3);
+        reloadAgents();
+        return;
+      }
       const spec = buildSpec();
       const res = editing
         ? await api.redeployAgent(editing.id, spec)
         : await api.createAgent(spec);
+      if (!alive.current) return;
       setDetailKbs((spec as { knowledge_bases?: KbRef[] }).knowledge_bases ?? []);
       failureToasted.current = false;
       setLaunch({ agentId: res.agent.id, jobId: res.job_id });
@@ -1215,9 +1433,72 @@ const deployLock = !canDeploy
       setStep(3);
       reloadAgents();
     } catch (err) {
+      if (!alive.current) return;
       setSubmitError(
         err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err),
       );
+      if (err instanceof ApiError) setSubmitErrorRows(apiErrorRows(err.detail));
+    } finally {
+      if (alive.current) setSubmitting(false);
+    }
+  };
+
+  /**
+   * CONFIGURE / VIEW SETTINGS on a system preset (from the panel, or EDIT on its row
+   * in the table): the same configure page as an ordinary edit, prefilled from the
+   * preset's STORED settings (never the wizard defaults) and saved through the
+   * maintenance route. Nothing here reaches the network except the pinned KB
+   * catalog read for an editable session.
+   */
+  const startSystemEdit = ({ preset, workspaceId: pinned, editable, readOnlyReason }:
+    PresetConfigureRequest) => {
+    if (!preset.agent_id || !("model_id" in preset.settings)) return;
+    const stored = preset.settings as SystemPresetSettings;
+    resetForm();
+    setEditing({
+      id: preset.agent_id,
+      name: preset.name,
+      method: "harness",
+      system: {
+        key: preset.key,
+        label: preset.label,
+        workspaceId: pinned,
+        stored,
+        defaults: preset.defaults,
+        editable,
+        readOnlyReason,
+        status: preset.status,
+        allowedTools: preset.allowed_tools,
+        skillVersion: preset.installed_skill_version ?? preset.skill_version,
+      },
+    });
+    setDetailsMode(false);
+    setMethod("harness");
+    setName(preset.name);
+    applyPresetForm(formFromSettings(stored));
+    setAllowedTools(preset.allowed_tools); // display only — never sent from here
+    setLongTerm(false);
+    setSubmitError(null);
+    setStep(2);
+    if (editable) loadSystemKbCatalog(pinned);
+  };
+
+  // EDIT on a system row of the table: fed by a fresh pinned read of the preset row
+  // (stored settings + server verdicts), never by the agent's raw spec
+  const openSystemEdit = async (agent: AgentInfo) => {
+    const startedIn = workspaceId;
+    try {
+      const res = await api.listSystemPresets(startedIn);
+      if (!alive.current) return;
+      const preset = res.presets.find((row) => row.key === agent.system?.key);
+      if (!preset) {
+        toast(t("create.system.settings.rowMissing"));
+        return;
+      }
+      startSystemEdit(presetConfigureRequest(preset, startedIn, isAdmin, t));
+    } catch (err) {
+      if (!alive.current) return;
+      toast(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
     }
   };
 
@@ -1240,6 +1521,13 @@ const deployLock = !canDeploy
     // absent on every container spec written before the SDK choice existed
     setAgentSdk(spec.agent_sdk ?? DEFAULT_AGENT_SDK);
     setSystemPrompt(spec.system_prompt ?? "");
+    // knobs come back exactly as stored — a re-publish must not reset them
+    setMaxTokens(spec.max_tokens == null ? "" : String(spec.max_tokens));
+    setReasoningEffort(spec.reasoning_effort ?? EFFORT_NONE);
+    setMaxIterations(String(spec.max_iterations ?? DEFAULT_MAX_ITERATIONS));
+    setTimeoutSeconds(String(spec.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS));
+    setSystemKbError(null);
+    setSubmitErrorRows([]);
     setTools((spec.tools ?? []).filter((x) => x.type === "builtin").map((x) => x.name));
     const gatewayTools = (spec.tools ?? []).filter((x) => x.type === "gateway");
     setSelectedGateway(gatewayTools.map((x) => x.name));
@@ -1438,6 +1726,7 @@ const deployLock = !canDeploy
     systemPrompt.trim().length > 0 &&
     // catalog picks are always non-empty; guards a cleared "Custom model ID…" input
     modelId.trim().length > 0 &&
+    knobIssues.length === 0 &&
     fsValid &&
     gatewaySelectionsValid;
 
@@ -1557,6 +1846,7 @@ const deployLock = !canDeploy
           <div style={{ height: 18 }} />
           <SystemPresetsPanel
             onChanged={reloadAgents}
+            onConfigure={startSystemEdit}
             onDetails={(agentId) => {
               const target = agents.find((a) => a.id === agentId);
               if (target) {
@@ -1578,9 +1868,14 @@ const deployLock = !canDeploy
           <div style={{ height: 18 }} />
           <AgentList
             agents={agents}
-            onEdit={(a) =>
-              a.method === "studio" ? navigate(`/create/studio?agent=${a.id}`) : startEdit(a)
-            }
+            onEdit={(a) => {
+              if (a.system) {
+                void openSystemEdit(a); // the shared editor, saved through the maintenance route
+                return;
+              }
+              if (a.method === "studio") navigate(`/create/studio?agent=${a.id}`);
+              else startEdit(a);
+            }}
             onDetails={openDetails}
             onDelete={(a) =>
               setConfirm({
@@ -1599,13 +1894,19 @@ const deployLock = !canDeploy
         <div className="cfg-grid">
           <Panel
             brk
-            title={t(
-              method === "harness"
-                ? "create.configure.title"
-                : method === "container"
-                  ? "create.configure.titleContainer"
-                  : "create.configure.titleZip",
-            )}
+            data-testid="configure-step"
+            data-system-edit={systemEdit ? (locked ? "review" : "edit") : undefined}
+            title={
+              systemEdit
+                ? t("create.system.settings.title", { name: systemEdit.label })
+                : t(
+                    method === "harness"
+                      ? "create.configure.title"
+                      : method === "container"
+                        ? "create.configure.titleContainer"
+                        : "create.configure.titleZip",
+                  )
+            }
             sub={
               name
                 ? method === "harness"
@@ -1615,12 +1916,28 @@ const deployLock = !canDeploy
             }
             style={{ "--i": 0 } as CSSProperties}
           >
-            {editing && (
+            {editing && !systemEdit && (
               <div className="note" style={{ borderColor: "var(--amber)", marginBottom: 12 }}>
                 <span className="i" style={{ color: "var(--amber)" }}>
                   [⟳]
                 </span>
                 <span>{t("create.editing", { name: editing.name })}</span>
+              </div>
+            )}
+            {systemEdit && (
+              <div
+                className="note"
+                style={{ borderColor: "var(--amber)", marginBottom: 12 }}
+                data-testid="system-edit-note"
+              >
+                <span className="i" style={{ color: "var(--amber)" }}>◈</span>
+                <span>{t("create.system.settings.editingNote", { label: systemEdit.label })}</span>
+              </div>
+            )}
+            {systemEdit && locked && (
+              <div className="note" style={{ marginBottom: 12 }} data-testid="preset-settings-readonly">
+                <span className="i">[i]</span>
+                <span>{systemEdit.readOnlyReason ?? t("create.system.settings.readOnly")}</span>
               </div>
             )}
             <div className="field">
@@ -1670,8 +1987,10 @@ const deployLock = !canDeploy
                       type="button"
                       data-testid={`model-source-${source}`}
                       className={`selchip${modelSource === source ? " on" : ""}`}
-                      style={{ cursor: "pointer" }}
-                      onClick={() => applyModelSource(source)}
+                      style={{ cursor: locked ? "default" : "pointer" }}
+                      disabled={locked}
+                      // a benign re-click keeps a custom id; a real switch re-seeds
+                      onClick={() => source !== modelSource && applyModelSource(source)}
                     >
                       {t(
                         source === "mantle"
@@ -1695,11 +2014,15 @@ const deployLock = !canDeploy
               </div>
             )}
             <div className="field">
-              <label htmlFor="agent-model-select">{t("create.configure.model")}</label>
+              <label htmlFor="agent-model-select">
+                {t("create.configure.model")}
+                {defaultHint("model_id")}
+              </label>
               <select
                 id="agent-model-select"
                 className="input"
                 data-testid="model-select"
+                disabled={locked}
                 value={customModel ? CUSTOM_MODEL_OPTION : modelId}
                 onChange={(e) => {
                   const picked = e.target.value;
@@ -1729,23 +2052,158 @@ const deployLock = !canDeploy
                   id="agent-model"
                   className="input mono"
                   style={{ marginTop: 8 }}
+                  data-testid="model-custom"
+                  disabled={locked}
                   value={modelId}
                   onChange={(e) => setModelId(e.target.value)}
                   placeholder={t("create.configure.modelCustomPlaceholder")}
                 />
               )}
             </div>
+            {/* Harness inference / loop knobs. Per-call output ceiling and reasoning
+                effort map onto bedrockModelConfig; the loop bounds onto
+                maxIterations / timeoutSeconds. Stored values round-trip untouched. */}
+            {method === "harness" && (
+              <div className="preset-settings-grid" data-testid="inference-knobs">
+                <div className="field">
+                  <label htmlFor="agent-max-tokens">
+                    {t("create.system.settings.maxTokens")}
+                    {defaultHint("max_tokens")}
+                  </label>
+                  <input
+                    id="agent-max-tokens"
+                    className="input mono"
+                    inputMode="numeric"
+                    data-testid="agent-max-tokens"
+                    disabled={locked}
+                    placeholder={t("create.system.settings.maxTokensEmpty")}
+                    value={maxTokens}
+                    onChange={(e) => setMaxTokens(e.target.value)}
+                  />
+                  <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+                    {t("create.system.settings.maxTokensHint")}
+                  </div>
+                </div>
+                <div className="field">
+                  <label htmlFor="agent-effort">
+                    {t("create.system.settings.effort")}
+                    {defaultHint("reasoning_effort")}
+                  </label>
+                  <select
+                    id="agent-effort"
+                    className="input"
+                    data-testid="agent-effort"
+                    disabled={locked || !effortAllowed}
+                    value={effortAllowed ? reasoningEffort : EFFORT_NONE}
+                    onChange={(e) => setReasoningEffort(e.target.value as EffortChoice)}
+                  >
+                    <option value={EFFORT_NONE} style={{ background: "#141816" }}>
+                      {t("create.system.settings.effortNone")}
+                    </option>
+                    {REASONING_EFFORTS.map((effort) => (
+                      <option key={effort} value={effort} style={{ background: "#141816" }}>
+                        {t(`create.system.settings.effortLevels.${effort}`)}
+                      </option>
+                    ))}
+                  </select>
+                  <div
+                    className="dim"
+                    style={{ fontSize: 11, marginTop: 4 }}
+                    data-testid="agent-effort-hint"
+                  >
+                    {effortAllowed
+                      ? t("create.system.settings.effortHint")
+                      : t("create.system.settings.effortUnsupported")}
+                  </div>
+                </div>
+                <div className="field">
+                  <label htmlFor="agent-max-iterations">
+                    {t("create.system.settings.maxIterations")}
+                    {defaultHint("max_iterations")}
+                  </label>
+                  <input
+                    id="agent-max-iterations"
+                    className="input mono"
+                    inputMode="numeric"
+                    data-testid="agent-max-iterations"
+                    disabled={locked}
+                    value={maxIterations}
+                    onChange={(e) => setMaxIterations(e.target.value)}
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="agent-timeout">
+                    {t("create.system.settings.timeout")}
+                    {defaultHint("timeout_seconds")}
+                  </label>
+                  <input
+                    id="agent-timeout"
+                    className="input mono"
+                    inputMode="numeric"
+                    data-testid="agent-timeout"
+                    disabled={locked}
+                    value={timeoutSeconds}
+                    onChange={(e) => setTimeoutSeconds(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
+            {method === "harness" && (
+              <div className="dim" style={{ fontSize: 11, marginBottom: 12 }}>
+                {t("create.system.settings.loopNote")}
+              </div>
+            )}
             <div className="field">
-              <label htmlFor="agent-prompt">{t("create.configure.systemPrompt")}</label>
+              <label htmlFor="agent-prompt">
+                {t("create.configure.systemPrompt")}
+                {defaultHint("system_prompt")}
+              </label>
               <textarea
                 id="agent-prompt"
                 className="input mono"
                 style={{ minHeight: 88, resize: "vertical" }}
+                data-testid="agent-prompt"
+                disabled={locked}
                 value={systemPrompt}
                 onChange={(e) => setSystemPrompt(e.target.value)}
                 placeholder={t("create.configure.systemPromptPlaceholder")}
               />
+              {systemEdit && !locked && systemPrompt !== systemEdit.defaults.system_prompt && (
+                <Btn
+                  className="small"
+                  style={{ marginTop: 6 }}
+                  data-testid="preset-settings-prompt-default"
+                  onClick={() => setSystemPrompt(systemEdit.defaults.system_prompt)}
+                >
+                  {t("create.system.settings.usePromptDefault")}
+                </Btn>
+              )}
             </div>
+            {/* A preset's capabilities are catalogue-owned: shown, never edited, and
+                no skill upload/import or tool attachment is offered for it. */}
+            {systemEdit && (
+              <div className="field" data-testid="preset-protected">
+                <label>{t("create.system.settings.protected")}</label>
+                <div className="selchips">
+                  {systemEdit.allowedTools.map((pattern) => (
+                    <span key={pattern} className="selchip on" style={{ cursor: "default" }}>
+                      {pattern} · {t("create.system.tools")}
+                    </span>
+                  ))}
+                  <span className="selchip on" style={{ cursor: "default" }}>
+                    {t("create.system.settings.skillVersion", { v: systemEdit.skillVersion ?? "?" })}
+                  </span>
+                  <span className="selchip on" style={{ cursor: "default" }}>
+                    {t("create.system.settings.memoryOff")}
+                  </span>
+                </div>
+                <div className="note" style={{ marginTop: 8 }}>
+                  <span className="i">◈</span>
+                  <span>{t("create.system.settings.protectedNote")}</span>
+                </div>
+              </div>
+            )}
+            {!systemEdit && (
             <div className="field">
               <label>
                 {method === "harness"
@@ -1866,6 +2324,7 @@ const deployLock = !canDeploy
                   </div>
                 )}
             </div>
+            )}
             {method === "zip_runtime" && (
               <div className="field">
                 <label>{t("create.configure.protocol")}</label>
@@ -1970,7 +2429,7 @@ const deployLock = !canDeploy
                 />
               </div>
             )}
-            {(method === "harness" || method === "container" || method === "zip_runtime") && (
+            {!systemEdit && (
               <div className="field">
                 <label>{t("create.configure.skills")}</label>
                 <div className="selchips">
@@ -2100,14 +2559,19 @@ const deployLock = !canDeploy
               </div>
             )}
             <div className="field" data-testid="kb-picker">
-              <label>{t("create.configure.kbLabel")}</label>
+              <label>
+                {t("create.configure.kbLabel")}
+                {defaultHint("knowledge_bases")}
+              </label>
               <div className="selchips">
                 {activeKbs.map((kb) => (
                   <button
                     key={kb.kb_id}
                     type="button"
+                    data-testid={`kb-${kb.kb_id}`}
                     className={`selchip${selectedKbs.includes(kb.kb_id) ? " on" : ""}`}
-                    style={{ cursor: "pointer" }}
+                    style={{ cursor: locked ? "default" : "pointer" }}
+                    disabled={locked}
                     title={kb.description || kb.name}
                     onClick={() => toggleKb(kb.kb_id)}
                   >
@@ -2122,8 +2586,10 @@ const deployLock = !canDeploy
                       <button
                         key={id}
                         type="button"
+                        data-testid={`kb-${id}`}
                         className="selchip on"
-                        style={{ cursor: "pointer" }}
+                        style={{ cursor: locked ? "default" : "pointer" }}
+                        disabled={locked}
                         title={info.description || info.name}
                         onClick={() => toggleKb(id)}
                       >
@@ -2137,6 +2603,32 @@ const deployLock = !canDeploy
                   </span>
                 )}
               </div>
+              {systemEdit && systemKbLoading && (
+                <div
+                  className="dim mono"
+                  style={{ fontSize: 11, marginTop: 6 }}
+                  data-testid="preset-settings-kb-loading"
+                >
+                  {t("create.system.settings.kbLoading")}
+                </div>
+              )}
+              {systemEdit && systemKbError && (
+                <div
+                  className="note"
+                  style={{ borderColor: "var(--crit)", marginTop: 6 }}
+                  data-testid="preset-settings-kb-error"
+                >
+                  <span className="i" style={{ color: "var(--crit)" }}>[!]</span>
+                  <span>{t("create.system.settings.kbLoadFailed", { reason: systemKbError })}</span>
+                  <Btn
+                    data-testid="preset-settings-kb-retry"
+                    disabled={submitting}
+                    onClick={() => loadSystemKbCatalog(systemEdit.workspaceId)}
+                  >
+                    {t("create.system.retry")}
+                  </Btn>
+                </div>
+              )}
               <div className="note" style={{ marginTop: 8 }}>
                 <span className="i">[i]</span>
                 <span>
@@ -2257,6 +2749,8 @@ const deployLock = !canDeploy
                 </div>
               </div>
             )}
+            {!systemEdit && (
+            <>
             <div className="field">
               <label>{t("create.configure.memory")}</label>
               <div className="selchips">
@@ -2309,6 +2803,8 @@ const deployLock = !canDeploy
               <span className="i">[i]</span>
               <span>{t("create.configure.note")}</span>
             </div>
+            </>
+            )}
           </Panel>
 
           <div>
@@ -2332,33 +2828,97 @@ const deployLock = !canDeploy
                   {t(editing ? "create.republishPanel.effectV" : "create.launchPanel.onSuccessV")}
                 </span>
               </div>
+              {systemEdit && !locked && (
+                <div className="kv" data-testid="system-edit-pending">
+                  <span className="k">{t("create.system.settings.pendingLabel")}</span>
+                  <span className="v">
+                    {systemChanged ? (
+                      <Chip tone="amber" title={Object.keys(systemBody).join(", ")}>
+                        {t("create.system.settings.pending", { n: Object.keys(systemBody).length })}
+                      </Chip>
+                    ) : (
+                      <span className="dim">{t("create.system.settings.noChangesForce")}</span>
+                    )}
+                  </span>
+                </div>
+              )}
             </Panel>
             <div style={{ height: 14 }} />
+            {knobIssues.length > 0 && (
+              <div
+                className="note"
+                style={{ borderColor: "var(--crit)", marginBottom: 14 }}
+                data-testid="preset-settings-problems"
+              >
+                <span className="i" style={{ color: "var(--crit)" }}>[!]</span>
+                <span className="mono" style={{ fontSize: 11 }}>{knobIssues.join(" · ")}</span>
+              </div>
+            )}
             {submitError && (
-              <div className="note" style={{ borderColor: "var(--crit)", marginBottom: 14 }}>
+              <div
+                className="note"
+                style={{ borderColor: "var(--crit)", marginBottom: 14 }}
+                data-testid="submit-error"
+              >
                 <span className="i" style={{ color: "var(--crit)" }}>
                   [✕]
                 </span>
-                <span>{submitError}</span>
+                <span>
+                  {submitError}
+                  {submitErrorRows.length > 0 && (
+                    <ul className="mono" style={{ fontSize: 11, margin: "6px 0 0", paddingLeft: 16 }}>
+                      {submitErrorRows.map((row, i) => (
+                        <li key={i}>{row}</li>
+                      ))}
+                    </ul>
+                  )}
+                </span>
               </div>
             )}
             <Panel>
-              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
                 <Btn
+                  data-testid="configure-back"
+                  disabled={submitting}
+                  disabledReason={submitting ? t("create.system.settings.saving") : undefined}
                   onClick={() => {
                     setStep(1);
                     resetForm();
                   }}
                 >
-                  ◂ {t("create.back")}
+                  ◂ {t(locked ? "common.close" : "create.back")}
                 </Btn>
-                <Btn
-                  primary
-                  disabled={!configValid || !canDeploy}
-                  onClick={() => (editing ? setConfirm({ kind: "republish" }) : void submit())}
-                >
-                  {editing ? `⟳ ${t("create.republish")}` : `▲ ${t("create.launch")}`}
-                </Btn>
+                {systemEdit && !locked && (
+                  <Btn
+                    data-testid="preset-settings-defaults"
+                    disabled={submitting}
+                    onClick={() =>
+                      applyPresetForm({
+                        ...formFromSettings(systemEdit.defaults),
+                        knowledge_bases: selectedKbs.map(kbInfo), // mounts are kept
+                      })
+                    }
+                  >
+                    {t("create.system.settings.useDefaults")}
+                  </Btn>
+                )}
+                {!locked && (
+                  <Btn
+                    primary
+                    data-testid="launch-submit"
+                    disabled={!configValid || !canDeploy || submitting}
+                    disabledReason={knobIssues[0]}
+                    onClick={() => (editing ? setConfirm({ kind: "republish" }) : void submit())}
+                  >
+                    {submitting
+                      ? t("create.system.settings.saving")
+                      : systemEdit
+                        ? `⟳ ${t(systemChanged ? "create.system.settings.save" : "create.republish")}`
+                        : editing
+                          ? `⟳ ${t("create.republish")}`
+                          : `▲ ${t("create.launch")}`}
+                  </Btn>
+                )}
               </div>
             </Panel>
           </div>
@@ -2436,9 +2996,20 @@ const deployLock = !canDeploy
 
       <ConfirmDialog
         open={confirm?.kind === "republish"}
-        title={t("create.republishConfirm.title")}
-        body={t("create.republishConfirm.body", { name })}
-        confirmLabel={t("create.republish")}
+        title={t(systemEdit ? "create.system.settings.confirmTitle" : "create.republishConfirm.title")}
+        body={
+          systemEdit
+            ? systemChanged
+              ? t("create.system.settings.confirm", {
+                  name: systemEdit.label,
+                  fields: Object.keys(systemBody).join(", "),
+                })
+              : t("create.system.settings.confirmForce", { name: systemEdit.label })
+            : t("create.republishConfirm.body", { name })
+        }
+        confirmLabel={t(
+          systemEdit && systemChanged ? "create.system.settings.save" : "create.republish",
+        )}
         onConfirm={() => {
           setConfirm(null);
           void submit();
@@ -2508,10 +3079,14 @@ function AgentList({
   onConvert: (id: string, name: string) => void;
 }) {
   const { t } = useTranslation();
-  const { can } = useAuth();
+  const { can, isAdmin } = useAuth();
   const permHint = (allowed: boolean) =>
     allowed ? undefined : t("create.permissionRequired");
   const canEdit = can("agents.deploy"); // editing re-publishes
+  // a system row opens the shared editor on the maintenance route — administrators
+  // only (the server refuses everyone else's save whatever `perm:agents.*` they hold)
+  const canEditRow = (a: AgentInfo) =>
+    canEdit && a.status !== "deploying" && (!a.system || isAdmin);
   const canDelete = can("agents.delete");
   const canConvert = can("agents.convert");
 
@@ -2629,13 +3204,16 @@ function AgentList({
                       <button
                         type="button"
                         className="rowact"
-                        disabled={!canEdit || a.status === "deploying" || !!a.system}
-                        style={
-                          !canEdit || a.status === "deploying" || a.system
-                            ? { opacity: 0.35 }
-                            : undefined
+                        data-testid={`edit-${a.name}`}
+                        disabled={!canEditRow(a)}
+                        style={!canEditRow(a) ? { opacity: 0.35 } : undefined}
+                        title={
+                          a.system
+                            ? isAdmin
+                              ? t("create.system.settings.configureHint")
+                              : t("create.system.protected")
+                            : permHint(canEdit)
                         }
-                        title={a.system ? t("create.system.protected") : permHint(canEdit)}
                         onClick={() => onEdit(a)}
                       >
                         {t("create.list.edit")}
