@@ -13,7 +13,11 @@ preset:
   the new values; a 409 (deploy in progress) and a 422 (invalid options) render
   inline and leave the dialog open;
 * member: VIEW SETTINGS shows the same fields read-only, no SAVE, and no POST;
-* workspace switch: an open editor closes and a late response never lands.
+* workspace switch: an open editor closes and a late response never lands;
+* residuals (host review): a second TAB switching the shared selection never redirects
+  this tab's reads or saves (pinned ``X-Workspace``); cancel / backdrop / Escape cannot
+  dismiss a save in flight and the delayed 202 lands; a re-click on the selected model
+  source keeps a custom id; a failing KB catalog shows an error with RETRY.
 
     uv run python scripts/ui_system_preset_settings_mock.py --base-url http://127.0.0.1:5199
 """
@@ -25,7 +29,6 @@ import copy
 import json
 import os
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -64,8 +67,19 @@ class Fixture:
         self.role = role
         self.posts: list[dict] = []
         self.next_post: str = "accept"  # accept | conflict | invalid | slow
+        self.kb_mode: str = "ok"  # ok | fail
+        self.held: tuple[Route, int, dict] | None = None  # a "slow" response not yet sent
+        self.kb_reads: list[str | None] = []
         self.polls = 0
         self.rows = {WS_A["id"]: self._row(dict(DEFAULTS)), WS_B["id"]: self._row(None)}
+
+    def release_held(self) -> None:
+        """Send the response the "slow" mode held back (from the test body, never by
+        blocking the route handler — that would stall Playwright's own dispatcher)."""
+        assert self.held is not None, "no held response"
+        route, status, payload = self.held
+        self.held = None
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(payload))
 
     def _row(self, settings: dict | None) -> dict:
         installed = settings is not None
@@ -103,8 +117,9 @@ class Fixture:
                 row["can_configure"] = row["can_repair"] = self.role == "admin"
         return {"workspace_id": ws, "presets": [copy.deepcopy(row)]}
 
-    def install(self, ws: str, body: dict) -> tuple[int, dict]:
+    def install(self, ws: str | None, body: dict) -> tuple[int, dict]:
         self.posts.append({"workspace": ws, "body": body})
+        assert ws in self.rows, f"POST without a pinned/known X-Workspace header: {ws!r}"
         if self.role != "admin":
             return 403, {"code": "auth.forbidden", "message": "administrator only",
                          "detail": None}
@@ -143,7 +158,7 @@ def install_routes(page, fx: Fixture, unhandled: list[str]) -> None:
         req = route.request
         url = req.url.split("?", 1)[0]
         path = "/" + url.split("/", 3)[3] if url.count("/") >= 3 else url
-        ws = req.headers.get("x-workspace") or WS_A["id"]
+        ws = req.headers.get("x-workspace")  # exactly what the console sent
 
         def reply(status: int, body) -> None:
             route.fulfill(status=status, content_type="application/json",
@@ -154,15 +169,23 @@ def install_routes(page, fx: Fixture, unhandled: list[str]) -> None:
         if path == "/api/workspaces" and req.method == "GET":
             return reply(200, {"workspaces": [WS_A, WS_B], "all_workspaces": fx.role == "admin"})
         if path == "/api/system-agents" and req.method == "GET":
+            assert ws in fx.rows, f"status read without a known X-Workspace: {ws!r}"
             return reply(200, fx.status(ws))
         if path == f"/api/system-agents/{KEY}/install" and req.method == "POST":
             body = req.post_data_json or {}
-            if fx.next_post == "slow":
+            slow = fx.next_post == "slow"
+            if slow:
                 fx.next_post = "accept"
-                time.sleep(1.5)  # a response that arrives after a workspace switch
             status, payload = fx.install(ws, body)
+            if slow:  # accepted server-side, response delivered when the test says so
+                fx.held = (route, status, payload)
+                return None
             return reply(status, payload)
         if path == "/api/knowledge-bases":
+            fx.kb_reads.append(ws)
+            if fx.kb_mode == "fail":
+                return reply(502, {"code": "http.502", "message": "kb catalog upstream down",
+                                   "detail": None})
             return reply(200, {"items": [
                 {"kb_id": "KB123ABC", "name": "aws-whitepapers", "description": "guides",
                  "status": "ACTIVE", "type": "MANAGED"},
@@ -289,23 +312,105 @@ def admin_scenario(browser, base: str, evidence: Path) -> dict:
     assert page.get_by_test_id("preset-settings-kb-KB123ABC").count() == 1  # untouched
     shot(page, evidence, "08-admin-use-defaults")
 
-    # --- workspace switch closes the editor; a late response never lands
+    # --- residual 3: a custom model id survives a re-click on the selected source
+    page.get_by_test_id("preset-settings-model").select_option("__custom__")
+    page.get_by_test_id("preset-settings-model-custom").fill("us.anthropic.claude-custom-v9")
+    page.get_by_test_id("preset-settings-source-bedrock").click()  # already selected
+    assert page.get_by_test_id("preset-settings-model-custom").input_value() == (
+        "us.anthropic.claude-custom-v9"
+    )
+    assert page.get_by_test_id("preset-settings-model").input_value() == "__custom__"
+    page.get_by_test_id("preset-settings-source-mantle").click()  # a real switch does reset
+    assert page.get_by_test_id("preset-settings-model").input_value() == "openai.gpt-5.6-terra"
+    page.get_by_test_id("preset-settings-cancel").click()
+    page.get_by_test_id("preset-settings-dialog").wait_for(state="detached")
+
+    # --- residual 4: a failing KB catalog is an error with RETRY, never a silent empty
+    fx.kb_mode = "fail"
+    page.get_by_test_id(f"settings-{KEY}").click()
+    dialog.wait_for()
+    page.get_by_test_id("preset-settings-kb-error").wait_for()
+    kb_error = page.get_by_test_id("preset-settings-kb-error").inner_text()
+    assert "kb catalog upstream down" in kb_error, kb_error
+    assert page.get_by_test_id("preset-settings-kb-KB123ABC").count() == 1  # stored chip kept
+    assert page.get_by_test_id("preset-settings-save").is_disabled()  # nothing changed
+    shot(page, evidence, "08b-admin-kb-error")
+    fx.kb_mode = "ok"
+    page.get_by_test_id("preset-settings-kb-retry").click()
+    page.get_by_test_id("preset-settings-kb-error").wait_for(state="detached")
+    assert page.get_by_test_id("preset-settings-kb-KB123ABC").count() == 1
+    assert all(w == WS_A["id"] for w in fx.kb_reads), fx.kb_reads  # pinned reads
+    page.get_by_test_id("preset-settings-cancel").click()
+    page.get_by_test_id("preset-settings-dialog").wait_for(state="detached")
+
+    # --- residual 2: cancel / backdrop / Escape cannot dismiss a save in flight, and
+    # the delayed 202 is consumed by the panel (DEPLOYING → job → ACTIVE)
     fx.next_post = "slow"
+    page.get_by_test_id(f"settings-{KEY}").click()
+    dialog.wait_for()
+    page.get_by_test_id("preset-settings-max-tokens").fill("1234")
     page.get_by_test_id("preset-settings-save").click()
     page.get_by_role("alertdialog").get_by_role("button", name="SAVE & RE-PUBLISH").click()
+    page.locator('[data-testid="preset-settings-dialog"][data-saving="true"]').wait_for()
+    assert page.get_by_test_id("preset-settings-cancel").is_disabled()
+    page.get_by_test_id("preset-settings-cancel").click(force=True)
+    page.mouse.click(5, 5)  # backdrop
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)
+    assert page.get_by_test_id("preset-settings-dialog").count() == 1  # still open
+    assert fx.held is not None  # the 202 has not been delivered yet
+    shot(page, evidence, "08c-admin-saving-locked")
+    fx.release_held()
+    page.get_by_test_id("preset-settings-dialog").wait_for(state="detached", timeout=10000)
+    wait_status(page, "deploying")
+    wait_status(page, "active", timeout_ms=20000)
+    assert fx.posts[-1]["body"] == {"max_tokens": 1234}, fx.posts[-1]
+    assert "max output/call: 1234 tok" in row.get_by_test_id("preset-inference").inner_text()
+    shot(page, evidence, "08d-admin-slow-save-landed")
+
+    # --- residual 1: another TAB switches the shared selection to workspace B while
+    # this tab still displays A; A's polls and A's save stay pinned to A
+    tab_b = ctx.new_page()
+    install_routes(tab_b, fx, unhandled)
+    tab_b.goto(f"{base}/create", wait_until="networkidle")
+    tab_b.get_by_test_id("workspace-switcher-btn").click()
+    tab_b.get_by_test_id(f"workspace-option-{WS_B['id']}").click()
+    tab_b.locator(f'[data-testid="system-preset-{KEY}"][data-status="not_installed"]').wait_for()
+    assert tab_b.evaluate("localStorage.getItem('launchpad_workspace')") == WS_B["id"]
+    assert page.evaluate("localStorage.getItem('launchpad_workspace')") == WS_B["id"]  # shared
+    page.get_by_test_id(f"settings-{KEY}").click()  # tab A still shows workspace A
+    dialog.wait_for()
+    assert page.get_by_test_id("preset-settings-max-tokens").input_value() == "1234"
+    page.get_by_test_id("preset-settings-max-tokens").fill("4321")
+    before = len(fx.posts)
+    page.get_by_test_id("preset-settings-save").click()
+    page.get_by_role("alertdialog").get_by_role("button", name="SAVE & RE-PUBLISH").click()
+    page.get_by_test_id("preset-settings-dialog").wait_for(state="detached")
+    wait_status(page, "deploying")
+    wait_status(page, "active", timeout_ms=20000)
+    assert len(fx.posts) == before + 1
+    assert fx.posts[-1] == {"workspace": WS_A["id"], "body": {"max_tokens": 4321}}, fx.posts[-1]
+    assert fx.rows[WS_B["id"]]["status"] == "not_installed"  # B never touched
+    assert fx.rows[WS_A["id"]]["settings"]["max_tokens"] == 4321
+    tab_b.get_by_test_id("system-presets-reload").click()  # B re-reads: still nothing
+    tab_b.locator(f'[data-testid="system-preset-{KEY}"][data-status="not_installed"]').wait_for()
+    shot(page, evidence, "09-admin-tab-a-pinned")
+    shot(tab_b, evidence, "09b-admin-tab-b-untouched")
+    tab_b.close()
+
+    # --- same-tab workspace switch (the modal covers the switcher while open, so the
+    # editor is closed first): the panel re-reads B and offers nothing to configure
+    page.get_by_test_id(f"settings-{KEY}").click()
+    dialog.wait_for()
+    page.get_by_test_id("preset-settings-cancel").click()
+    page.get_by_test_id("preset-settings-dialog").wait_for(state="detached")
     page.get_by_test_id("workspace-switcher-btn").click()
     page.get_by_test_id(f"workspace-option-{WS_B['id']}").click()
-    page.get_by_test_id("preset-settings-dialog").wait_for(state="detached")
     wait_status(page, "not_installed")
-    page.wait_for_timeout(2500)  # the slow response has arrived by now
-    assert page.get_by_test_id(f"system-preset-{KEY}").get_attribute("data-status") == (
-        "not_installed"
-    )
-    assert page.get_by_test_id("preset-settings-dialog").count() == 0
     assert page.get_by_test_id(f"settings-{KEY}").count() == 0  # nothing installed here
-    shot(page, evidence, "09-admin-workspace-switch")
+    shot(page, evidence, "09c-admin-same-tab-switch")
     posted_ws = {p["workspace"] for p in fx.posts}
-    assert posted_ws == {WS_A["id"]}, posted_ws  # the late save was scoped to ws-a only
+    assert posted_ws == {WS_A["id"]}, posted_ws
     ctx.close()
     return {"posts": fx.posts, "unhandled": sorted(set(unhandled))}
 

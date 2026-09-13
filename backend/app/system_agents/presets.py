@@ -6,7 +6,7 @@ knowledge bases); everything else about the agent is fixed here so a client cann
 smuggle changes through a request body.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
@@ -199,6 +199,41 @@ class InstallOptions:
     max_iterations: int | None = None
     timeout_seconds: int | None = None
     knowledge_bases: tuple[KnowledgeBaseRef, ...] = field(default_factory=tuple)
+
+
+CLEARABLE_FIELDS: tuple[str, ...] = ("max_tokens", "reasoning_effort")
+
+
+@dataclass(frozen=True)
+class PresetEdit:
+    """One administrator request as a *partial* edit, not yet resolved.
+
+    ``values`` are the members set explicitly, ``reset`` the members to return to the
+    catalogue defaults, ``clear`` the optional knobs to unset. Resolution against the
+    stored spec happens **inside the claiming transaction** (``service._repair``), on
+    the row as it is at that moment — never on a snapshot the request took earlier —
+    so a member this edit omits always keeps whatever a concurrent, already-accepted
+    edit stored there.
+    """
+
+    values: dict = field(default_factory=dict)
+    reset: tuple[str, ...] = ()
+    clear: tuple[str, ...] = ()
+
+    def is_empty(self) -> bool:
+        return not self.values and not self.reset and not self.clear
+
+    def resolve(self, preset: SystemPreset, stored: dict | None) -> InstallOptions:
+        """Apply this edit to what is stored (repair) or to the preset defaults
+        (first install)."""
+        base = options_from_spec(stored) if stored else preset.default_options()
+        defaults = preset.default_options()
+        changes: dict = {name: getattr(defaults, name) for name in self.reset}
+        changes.update({name: None for name in self.clear})
+        changes.update(self.values)
+        if "knowledge_bases" in changes:
+            changes["knowledge_bases"] = tuple(changes["knowledge_bases"])
+        return replace(base, **changes)
 
 
 def build_spec(

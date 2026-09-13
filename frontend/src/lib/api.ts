@@ -3,6 +3,7 @@
 import i18n from "../i18n";
 import type { EvaluationRunInfo, EvaluationRunResults, InsightTrees } from "./evaluation";
 import type { ModelSource, ReasoningEffort } from "./models";
+import { WORKSPACE_HEADER } from "./workspace-header";
 
 export interface StageInfo {
   name: string;
@@ -133,6 +134,16 @@ export interface SystemPresetInfo {
   can_configure: boolean;
   can_uninstall: boolean;
   updated_at: string | null;
+}
+
+/** One managed KB as `GET /api/knowledge-bases` lists it (the members the preset
+ *  editor needs; only ACTIVE + MANAGED rows are mountable). */
+export interface AttachableKnowledgeBase {
+  kb_id: string;
+  name: string;
+  description?: string;
+  status?: string;
+  type?: string;
 }
 
 export type SystemPresetEditableField =
@@ -572,6 +583,13 @@ async function parseResponse<T>(path: string, res: Response): Promise<T> {
     );
   }
   return body as T;
+}
+
+/** Explicit `X-Workspace` for a request that must target the workspace a surface is
+ *  displaying, whatever the shared selection says by the time it is sent (the fetch
+ *  wrapper keeps a header the caller set). `undefined` ⇒ no pin. */
+function pinnedWorkspace(workspaceId?: string | null): Record<string, string> | undefined {
+  return workspaceId ? { [WORKSPACE_HEADER]: workspaceId } : undefined;
 }
 
 /** `headers` is narrowed to a plain record so the merge below is exhaustive. */
@@ -3014,16 +3032,28 @@ export const api = {
       body: JSON.stringify(spec),
     }),
   listAgents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
-  listSystemPresets: () =>
-    request<{ workspace_id: string; presets: SystemPresetInfo[] }>("/api/system-agents"),
-  installSystemPreset: (key: string, input: SystemPresetInstallInput = {}) =>
+  /**
+   * System presets. Every call takes the workspace the caller is DISPLAYING and
+   * pins it as the request's `X-Workspace` header, so a read or save from this
+   * surface can never follow the shared localStorage selection into a workspace
+   * another tab switched to meanwhile. Omitted ⇒ the global stamp (legacy callers).
+   */
+  listSystemPresets: (workspaceId?: string | null) =>
+    request<{ workspace_id: string; presets: SystemPresetInfo[] }>("/api/system-agents", {
+      headers: pinnedWorkspace(workspaceId),
+    }),
+  installSystemPreset: (
+    key: string,
+    input: SystemPresetInstallInput = {},
+    workspaceId?: string | null,
+  ) =>
     request<SystemPresetInstallResult>(
       `/api/system-agents/${encodeURIComponent(key)}/install`,
-      { method: "POST", body: JSON.stringify(input) },
+      { method: "POST", body: JSON.stringify(input), headers: pinnedWorkspace(workspaceId) },
     ),
   /** 202: claims the row (`uninstalling`) and queues the teardown job; repeated calls
    * return the same live job, a failed teardown gets a new attempt. */
-  uninstallSystemPreset: (key: string) =>
+  uninstallSystemPreset: (key: string, workspaceId?: string | null) =>
     request<{
       agent: AgentInfo;
       job_id: string;
@@ -3031,7 +3061,17 @@ export const api = {
       attempt: number;
       started: boolean;
       preset: SystemPresetInfo;
-    }>(`/api/system-agents/${encodeURIComponent(key)}`, { method: "DELETE" }),
+    }>(`/api/system-agents/${encodeURIComponent(key)}`, {
+      method: "DELETE",
+      headers: pinnedWorkspace(workspaceId),
+    }),
+  /** The managed KB catalog of ONE workspace (`GET /api/knowledge-bases`), typed and
+   * pinned like the preset calls: a failure is an `ApiError` (401 raises the global
+   * unauthorized event), never an empty list. */
+  listAttachableKnowledgeBases: (workspaceId?: string | null) =>
+    request<{ items: AttachableKnowledgeBase[] }>("/api/knowledge-bases", {
+      headers: pinnedWorkspace(workspaceId),
+    }),
   /* ── architect assistant (SE-039) ── */
   assistantStatus: () => request<AssistantStatus>("/api/assistant/architect"),
   assistantConversations: () =>

@@ -4,9 +4,9 @@ import { useTranslation } from "react-i18next";
 
 import { Btn, Chip, ConfirmDialog } from "../../components";
 import type {
+  AttachableKnowledgeBase,
   SystemPresetInfo,
   SystemPresetInstallInput,
-  SystemPresetInstallResult,
   SystemPresetSettings,
 } from "../../lib/api";
 import { api, ApiError } from "../../lib/api";
@@ -22,14 +22,11 @@ import {
 const EFFORT_NONE = "none";
 const MAX_TOKENS_CEILING = 131072;
 
-// A managed KB offered by the catalog (only ACTIVE + MANAGED are selectable).
-interface AttachableKb {
-  kb_id: string;
-  name: string;
-  description?: string;
-  status?: string;
-  type?: string;
-}
+type AttachableKb = AttachableKnowledgeBase;
+type KbCatalog =
+  | { state: "idle" | "loading" }
+  | { state: "ready"; items: AttachableKb[] }
+  | { state: "error"; message: string };
 
 interface Form {
   model_source: ModelSource;
@@ -120,27 +117,33 @@ function validate(form: Form, t: (key: string, opts?: Record<string, unknown>) =
 
 /**
  * Stored settings of one installed system preset. Administrators edit and save
- * (an explicit confirm, then the normal async update job through the maintenance
- * route); everyone else sees the same fields read-only. Opening, editing and
- * cancelling reach neither the backend nor AWS — only SAVE posts, and only the
- * members that changed.
+ * (an explicit confirm, then the parent posts to the maintenance route — pinned to
+ * the workspace this dialog was opened for — and runs the normal async update job);
+ * everyone else sees the same fields read-only. Opening, editing and cancelling reach
+ * neither the backend nor AWS; only SAVE posts, and only the members that changed.
+ * While a save is in flight the dialog cannot be dismissed (cancel, backdrop, Escape),
+ * so an accepted 202 is always consumed by the parent — never dropped on unmount.
  */
 export function PresetSettingsDialog({
   preset,
+  workspaceId,
   editable,
   readOnlyReason,
   onClose,
-  onSaved,
+  onSave,
   apiMessage,
 }: {
   preset: SystemPresetInfo;
+  /** the workspace this dialog shows and saves into (pins every request) */
+  workspaceId: string | null;
   /** the caller is an administrator and the preset is settled */
   editable: boolean;
   /** why the form is read-only (rendered for non-editable callers) */
   readOnlyReason?: string;
   onClose: () => void;
-  /** the maintenance route accepted the edit (202 job / 200 already current) */
-  onSaved: (result: SystemPresetInstallResult) => void;
+  /** the parent owns the request and its completion: resolves once the outcome was
+   * consumed (the parent then closes this dialog), rejects with the error to show */
+  onSave: (body: SystemPresetInstallInput) => Promise<void>;
   apiMessage: (err: unknown) => string;
 }) {
   const { t } = useTranslation();
@@ -149,7 +152,7 @@ export function PresetSettingsDialog({
   const [customModel, setCustomModel] = useState(() =>
     isCustomModelId(stored.model_id, stored.model_source),
   );
-  const [kbCatalog, setKbCatalog] = useState<AttachableKb[] | null>(null);
+  const [kbCatalog, setKbCatalog] = useState<KbCatalog>({ state: "idle" });
   const [confirming, setConfirming] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -161,33 +164,44 @@ export function PresetSettingsDialog({
       alive.current = false;
     };
   }, []);
+  const savingRef = useRef(false);
+  savingRef.current = saving;
+  // dismissal is refused while a save is in flight: the outcome must land
+  const dismiss = () => {
+    if (savingRef.current) return;
+    onClose();
+  };
 
   // Escape closes; the backdrop click too (same contract as ConfirmDialog).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !confirming) onClose();
+      if (e.key === "Escape" && !confirming) dismiss();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dismiss reads refs only
   }, [confirming, onClose]);
 
   // The KB catalog is read only for an administrator who can actually change the
-  // mounts; a failed or absent list leaves the stored chips as they are.
+  // mounts, through the typed client pinned to THIS workspace. A failure is shown
+  // with a retry — never folded into an empty catalog — and the stored chips stay.
+  const [kbAttempt, setKbAttempt] = useState(0);
   useEffect(() => {
     if (!editable) return;
     let cancelled = false;
-    fetch("/api/knowledge-bases")
-      .then((res) => (res.ok ? res.json() : { items: [] }))
-      .then((d: { items: AttachableKb[] }) => {
-        if (!cancelled) setKbCatalog(d.items ?? []);
+    setKbCatalog({ state: "loading" });
+    api
+      .listAttachableKnowledgeBases(workspaceId)
+      .then((d) => {
+        if (!cancelled) setKbCatalog({ state: "ready", items: d.items ?? [] });
       })
-      .catch(() => {
-        if (!cancelled) setKbCatalog([]);
+      .catch((err: unknown) => {
+        if (!cancelled) setKbCatalog({ state: "error", message: apiMessage(err) });
       });
     return () => {
       cancelled = true;
     };
-  }, [editable]);
+  }, [editable, workspaceId, kbAttempt, apiMessage]);
 
   const effortAllowed = supportsReasoningEffort(form.model_id.trim(), form.model_source);
   const body = useMemo(() => diffSettings(form, stored), [form, stored]);
@@ -232,6 +246,7 @@ export function PresetSettingsDialog({
     setForm((prev) => ({ ...prev, ...patch }));
   };
   const applySource = (source: ModelSource) => {
+    if (source === form.model_source) return; // a benign re-click keeps a custom id
     const options = modelOptionsFor(source);
     const keep = options.some((o) => o.model_id === form.model_id);
     update({ model_source: source, model_id: keep ? form.model_id : options[0].model_id });
@@ -259,9 +274,7 @@ export function PresetSettingsDialog({
     setError(null);
     setErrorDetails([]);
     try {
-      const result = await api.installSystemPreset(preset.key, body);
-      if (!alive.current) return;
-      onSaved(result);
+      await onSave(body); // the parent consumes the outcome and closes this dialog
     } catch (err) {
       if (!alive.current) return;
       setError(apiMessage(err));
@@ -287,7 +300,7 @@ export function PresetSettingsDialog({
     }
   };
 
-  const activeKbs = (kbCatalog ?? []).filter(
+  const activeKbs = (kbCatalog.state === "ready" ? kbCatalog.items : []).filter(
     (k) => k.status === "ACTIVE" && (k.type == null || k.type === "MANAGED"),
   );
   const disabled = !editable || saving;
@@ -297,7 +310,12 @@ export function PresetSettingsDialog({
   // fixed backdrop rendered in place would not cover the page (and the agents
   // table below would intercept clicks meant for the dialog).
   return createPortal(
-    <div className="confirm-backdrop" onClick={onClose} data-testid="preset-settings-dialog">
+    <div
+      className="confirm-backdrop"
+      onClick={dismiss}
+      data-testid="preset-settings-dialog"
+      data-saving={saving ? "true" : undefined}
+    >
       <div
         className="confirm-box preset-settings"
         role="dialog"
@@ -529,6 +547,24 @@ export function PresetSettingsDialog({
               </span>
             )}
           </div>
+          {editable && kbCatalog.state === "loading" && (
+            <div className="dim mono" style={{ fontSize: 11, marginTop: 6 }} data-testid="preset-settings-kb-loading">
+              {t("create.system.settings.kbLoading")}
+            </div>
+          )}
+          {editable && kbCatalog.state === "error" && (
+            <div className="note" style={{ borderColor: "var(--crit)", marginTop: 6 }} data-testid="preset-settings-kb-error">
+              <span className="i" style={{ color: "var(--crit)" }}>[!]</span>
+              <span>{t("create.system.settings.kbLoadFailed", { reason: kbCatalog.message })}</span>
+              <Btn
+                data-testid="preset-settings-kb-retry"
+                disabled={saving}
+                onClick={() => setKbAttempt((n) => n + 1)}
+              >
+                {t("create.system.retry")}
+              </Btn>
+            </div>
+          )}
         </div>
         <div className="dim" style={{ fontSize: 11 }}>{t("create.system.settings.loopNote")}</div>
         {editable && problems.length > 0 && (
@@ -553,7 +589,12 @@ export function PresetSettingsDialog({
           </div>
         )}
         <div className="confirm-actions" style={{ flexWrap: "wrap" }}>
-          <Btn onClick={onClose} data-testid="preset-settings-cancel">
+          <Btn
+            onClick={dismiss}
+            disabled={saving}
+            disabledReason={saving ? t("create.system.settings.savingNoDismiss") : undefined}
+            data-testid="preset-settings-cancel"
+          >
             {editable ? t("common.cancel") : t("common.close")}
           </Btn>
           {editable && (

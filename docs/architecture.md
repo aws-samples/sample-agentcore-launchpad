@@ -406,10 +406,18 @@ keeps it; `reset: [...]` returns named members to this build's defaults and
 `allowed_tools`, `memory`, `skills`, `tools`, `system_key`, … — are refused with
 `422` before any row, job or AWS call, as are out-of-range values and unsupported
 pairings (`422 system_agent.invalid_options`, e.g. a `reasoning_effort` on a
-non-OpenAI model). An explicit edit while a deploy job owns the row answers `409
+non-OpenAI model). The partial edit is resolved against the stored spec **inside the claiming
+transaction**, and the repair's compare-and-set is conditioned on the row's status
+*and* its version (`updated_at`) as that resolution read it: a row that changed
+meanwhile (a concurrent edit that was accepted and finished) fails the claim and the
+same partial edit is re-resolved on the new state (up to three attempts, then `409
+system_agent.conflict`), so a member the edit omits is never reverted to a stale
+value. An explicit edit while a deploy job owns the row answers `409
 system_agent.deploy_in_progress` with that job's id instead of coalescing onto it
-(a bodiless repair click still coalesces), so a concurrent save is never dropped
-silently. Maintenance claims are durable
+(a bodiless repair click still coalesces), and so does the unique-index loser of two
+concurrent *first* installs that asked for different settings (identical or bodiless
+twins still coalesce onto the winner's job) — a concurrent save is never dropped or
+falsely accepted. Maintenance claims are durable
 and atomic: a fresh install races into the partial unique index and the loser
 re-reads the winner **and returns the winner's job id**; a repair executes one
 compare-and-set `UPDATE … WHERE status IN (active, failed)` in the same transaction
@@ -452,8 +460,13 @@ with the same fields read-only, and `POST …/install` stays `403` for them what
 `perm:agents.*` they hold) prefills the stored values, shows which differ from the
 defaults, validates bounds client-side, sends only the changed members after an
 explicit confirm, and consumes the `202`/`200`/`409`/`422` outcome like the install
-button does; cancel posts nothing, and a workspace switch closes the dialog so a late
-response can never save into another workspace. Persistent memory stays disabled:
+button does; cancel posts nothing; the dialog cannot be dismissed while a save is in
+flight (the panel owns the request and its completion, so an accepted `202` always
+lands as DEPLOYING + job); and every read and save of this surface — panel polls,
+install/repair/uninstall, the editor's KB catalog and save — pins the workspace the
+panel is displaying as an explicit `X-Workspace` header, so another tab switching the
+shared selection can never redirect them to a different workspace (a same-tab switch
+still closes the dialog). Persistent memory stays disabled:
 that disables AgentCore *memory* only — the Launchpad chat transcript in the ledger
 and the CloudWatch logs are kept, and the system prompt now tells the agent so
 (never "nothing is retained").

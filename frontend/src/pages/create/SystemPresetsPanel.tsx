@@ -7,7 +7,7 @@ import { Btn, Chip, ConfirmDialog, Panel, useToast } from "../../components";
 import type { ChipTone } from "../../components";
 import type {
   SystemPresetInfo,
-  SystemPresetInstallResult,
+  SystemPresetInstallInput,
   SystemPresetSettings,
   SystemPresetStatus,
 } from "../../lib/api";
@@ -118,7 +118,7 @@ export function SystemPresetsPanel({
     const startedIn = scope.current;
     setLoading(true);
     void api
-      .listSystemPresets()
+      .listSystemPresets(startedIn) // pinned: never the shared selection of another tab
       .then((res) => {
         if (!stillCurrent(startedIn)) return;
         applyPresets(res.presets);
@@ -156,7 +156,7 @@ export function SystemPresetsPanel({
     setBusy(preset.key);
     try {
       if (kind === "uninstall") {
-        const res = await api.uninstallSystemPreset(preset.key);
+        const res = await api.uninstallSystemPreset(preset.key, startedIn);
         if (!stillCurrent(startedIn)) return;
         // consume the outcome: the row is now `uninstalling` with a job, whatever the
         // follow-up GET does; the poll below carries it to not_installed or failure
@@ -178,6 +178,7 @@ export function SystemPresetsPanel({
         const res = await api.installSystemPreset(
           preset.key,
           kind === "repair" ? { force: true } : {},
+          startedIn,
         );
         if (!stillCurrent(startedIn)) return;
         // the response already carries the preset's new state — render it now so
@@ -207,19 +208,33 @@ export function SystemPresetsPanel({
     }
   };
 
-  // The editor's save went through the maintenance route: consume the response the
-  // same way an install/repair click does, then let the poll carry the job.
-  const onSettingsSaved = (preset: SystemPresetInfo, res: SystemPresetInstallResult) => {
-    setSettingsFor(null);
-    setPresets((prev) => (prev ?? []).map((row) => (row.key === preset.key ? res.preset : row)));
-    toast(
-      t(res.changed ? "create.system.settings.saved" : "create.system.alreadyCurrent", {
-        name: preset.label,
-      }),
-      "good",
-    );
-    onChangedRef.current?.();
-    load();
+  // The editor's save: this panel owns the request (pinned to the workspace the
+  // dialog was opened for) AND its completion, so a 202 is consumed here — rows
+  // swapped, job announced, poll started — whatever happens to the dialog. A result
+  // arriving after a workspace switch is dropped like every other stale outcome;
+  // the pinned header means it can only ever have changed the workspace it was
+  // started in, whose panel shows the job on the next read.
+  const saveSettings = async (preset: SystemPresetInfo, body: SystemPresetInstallInput) => {
+    const startedIn = scope.current;
+    try {
+      const res = await api.installSystemPreset(preset.key, body, startedIn);
+      if (!stillCurrent(startedIn)) return;
+      setSettingsFor(null);
+      setPresets((prev) =>
+        (prev ?? []).map((row) => (row.key === preset.key ? res.preset : row)),
+      );
+      toast(
+        t(res.changed ? "create.system.settings.saved" : "create.system.alreadyCurrent", {
+          name: preset.label,
+        }),
+        "good",
+      );
+      onChangedRef.current?.();
+      load();
+    } catch (err) {
+      if (!stillCurrent(startedIn)) return; // the dialog is gone with its workspace
+      throw err; // the dialog renders it inline and stays open
+    }
   };
 
   const adminHint = isAdmin ? undefined : t("create.system.adminOnly");
@@ -465,10 +480,11 @@ export function SystemPresetsPanel({
           <PresetSettingsDialog
             key={`${workspaceId ?? ""}:${open.key}:${open.updated_at ?? ""}`}
             preset={open}
+            workspaceId={workspaceId}
             editable={editable}
             readOnlyReason={reason}
             onClose={() => setSettingsFor(null)}
-            onSaved={(res) => onSettingsSaved(open, res)}
+            onSave={(body) => saveSettings(open, body)}
             apiMessage={apiMessage}
           />
         );

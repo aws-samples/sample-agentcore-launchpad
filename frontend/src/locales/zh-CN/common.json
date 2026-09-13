@@ -535,7 +535,10 @@
           "maxIterations": "最大迭代次数必须是 1 到 100 之间的整数",
           "timeout": "超时必须是 10 到 3600 秒之间的整数",
           "prompt": "系统提示词不能为空"
-        }
+        },
+        "kbLoading": "正在加载知识库目录……",
+        "kbLoadFailed": "无法加载知识库目录：{{reason}}。已挂载的知识库按已存值保留。",
+        "savingNoDismiss": "保存中——结果确定后对话框才会关闭。"
       }
     },
     "versions": {
@@ -2083,7 +2086,8 @@
     "observability.session_not_found": "会话不存在。",
     "observability.trace_not_found": "Trace 不存在。",
     "system_agent.deploy_in_progress": "该预置正在部署中；请等当前任务结束后再修改设置。",
-    "system_agent.invalid_options": "请求的预置设置无效。"
+    "system_agent.invalid_options": "请求的预置设置无效。",
+    "system_agent.conflict": "解析该请求期间预置持续变化；请重试。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",

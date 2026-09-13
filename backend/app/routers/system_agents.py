@@ -7,7 +7,6 @@ DELETE admin) plus the same check re-asserted in the handlers, so a table edit a
 cannot open the mutation paths.
 """
 
-from dataclasses import replace
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request
@@ -23,7 +22,7 @@ from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import MAX_TOKENS_CEILING, KnowledgeBaseRef, ModelSource, ReasoningEffort
 from app.system_agents import presets as catalogue
 from app.system_agents import service
-from app.system_agents.presets import EDITABLE_FIELDS, InstallOptions, SystemPreset
+from app.system_agents.presets import EDITABLE_FIELDS, PresetEdit
 from app.system_agents.uninstall import start_uninstall_async
 
 router = APIRouter(prefix="/api/system-agents", tags=["system-agents"])
@@ -88,30 +87,18 @@ class InstallRequest(BaseModel):
             raise ValueError("reset/clear name a member twice")
         return self
 
-    def edits(self) -> dict[str, Any]:
-        """The members this request sets (explicit values only)."""
-        return {
+    def edit(self) -> PresetEdit | None:
+        """The partial edit this body describes; ``None`` ⇔ nothing to change (repair
+        with what is stored / install with the defaults). Resolution against the
+        stored spec is the service's job, inside the claiming transaction."""
+        values = {
             name: getattr(self, name)
             for name in EDITABLE_FIELDS
             if getattr(self, name) is not None
         }
-
-    def options(
-        self, preset: SystemPreset, stored: dict[str, Any] | None
-    ) -> InstallOptions | None:
-        """Resolve the partial edit against what is stored (repair) or the preset
-        defaults (first install). ``None`` ⇔ nothing to change."""
-        edits = self.edits()
-        if not edits and not self.reset and not self.clear:
-            return None  # repair with what is stored / install with defaults
-        base = catalogue.options_from_spec(stored) if stored else preset.default_options()
-        defaults = preset.default_options()
-        changes: dict[str, Any] = {name: getattr(defaults, name) for name in self.reset}
-        changes.update({name: None for name in self.clear})
-        changes.update(edits)
-        if "knowledge_bases" in changes:
-            changes["knowledge_bases"] = tuple(changes["knowledge_bases"])
-        return replace(base, **changes)
+        if not values and not self.reset and not self.clear:
+            return None
+        return PresetEdit(values=values, reset=tuple(self.reset), clear=tuple(self.clear))
 
 
 def _preset(preset_key: str):
@@ -147,9 +134,12 @@ def install_system_agent(
     require_admin(request)  # belt and braces with ROUTE_POLICY
     preset = _preset(preset_key)
     stored = service.find_installed(db, ws.id, preset)
-    options = req.options(preset, stored.spec if stored else None)
-    service.validate_options(preset, options)  # 422 before any row, job or AWS call
-    outcome = service.install_preset(db, ws.row, preset, options, force=req.force)
+    edit = req.edit()
+    if edit is not None:
+        # preflight 422 before any row, job or AWS call; the service re-resolves and
+        # re-validates against the row it actually claims
+        service.validate_options(preset, edit.resolve(preset, stored.spec if stored else None))
+    outcome = service.install_preset(db, ws.row, preset, edit, force=req.force)
     db.commit()
     if outcome.job is not None and outcome.changed:  # only the claim winner launches
         start_deploy_async(outcome.job.id)

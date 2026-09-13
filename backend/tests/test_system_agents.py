@@ -25,7 +25,7 @@ from app.services import users as users_service
 from app.services.agentcore import harness as hc
 from app.services.runtime_discovery import _display_name
 from app.system_agents import presets, service
-from app.system_agents.presets import ARCHITECT, InstallOptions
+from app.system_agents.presets import ARCHITECT, InstallOptions, PresetEdit
 
 from .conftest import ws_ctx
 
@@ -2968,15 +2968,11 @@ def test_concurrent_edits_never_lose_an_accepted_update_silently(client):
     s1, s2 = SessionLocal(), SessionLocal()
     try:
         a1, a2 = s1.get(Agent, agent_id), s2.get(Agent, agent_id)
-        o1 = presets.options_from_spec(dict(a1.spec))
-        o2 = presets.options_from_spec(dict(a2.spec))
-        from dataclasses import replace
-
-        r1 = service._repair(s1, a1, ARCHITECT, BUCKET, replace(o1, max_tokens=1111),
+        r1 = service._repair(s1, a1, ARCHITECT, BUCKET, PresetEdit({"max_tokens": 1111}),
                              force=False)
         s1.commit()
         with pytest.raises(service.AppError) as exc:
-            service._repair(s2, a2, ARCHITECT, BUCKET, replace(o2, max_tokens=2222),
+            service._repair(s2, a2, ARCHITECT, BUCKET, PresetEdit({"max_tokens": 2222}),
                             force=False)
         s2.rollback()
     finally:
@@ -3012,3 +3008,166 @@ def test_member_sees_settings_but_cannot_edit_them_even_with_deploy_permission(g
     # and the admin edit grants no generic lifecycle bypass
     assert admin.delete(f"/api/agents/{agent_id}").status_code == 403
     assert admin.post(f"/api/agents/{agent_id}/convert").status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# SE-040 correction: races through the REAL route, separate DB sessions, exact pauses
+# ---------------------------------------------------------------------------
+
+
+def _pause_before_claim(monkeypatch, marker_prompt: str):
+    """Pause exactly ONE request — the edit whose resolved system prompt is
+    ``marker_prompt`` — inside the release-pin → claim window: on the digest-bearing
+    ``build_spec`` call ``_repair`` makes right after pinning the bundle and right
+    before its compare-and-set. Every other caller is untouched."""
+    real = presets.build_spec
+    resolved, release = threading.Event(), threading.Event()
+
+    def paused(preset, bucket, options, *, digest=None):
+        spec = real(preset, bucket, options, digest=digest)
+        if digest is not None and options.system_prompt == marker_prompt:
+            resolved.set()
+            assert release.wait(timeout=15), "the paused request was never released"
+        return spec
+
+    monkeypatch.setattr(service.catalogue, "build_spec", paused)
+    return resolved, release
+
+
+def _finish_job(res_json: dict, agent_id: str) -> None:
+    """Run the pipeline's own completion for an accepted job (row back to active)."""
+    from app.deployer.pipeline import _finish
+
+    db = SessionLocal()
+    try:
+        _finish(db, res_json["job_id"], res_json["deployment_id"], agent_id, error=None)
+    finally:
+        db.close()
+
+
+def test_delayed_partial_edit_cannot_revert_a_completed_concurrent_edit(client, monkeypatch):
+    """Host reproduction #5: A {system_prompt} is resolved, then B {timeout_seconds}
+    is accepted AND finishes before A claims. A must land on top of B's row (keeping
+    1234) or be refused — never accepted with the timeout reverted to 900."""
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    resolved, release = _pause_before_claim(monkeypatch, "A pending prompt")
+    outcome: dict = {}
+
+    def run_a() -> None:
+        outcome["a"] = client.post(INSTALL, json={"system_prompt": "A pending prompt"})
+
+    thread = threading.Thread(target=run_a)
+    thread.start()
+    assert resolved.wait(timeout=15)
+    b = client.post(INSTALL, json={"timeout_seconds": 1234})
+    assert b.status_code == 202, b.text
+    _finish_job(b.json(), agent_id)  # B's job completes: row active again, version moved
+    assert _agent(agent_id).status == "active"
+    release.set()
+    thread.join(timeout=20)
+    a = outcome["a"]
+    assert a.status_code == 202, a.text  # resolved again on B's row and accepted
+    spec = _spec_of(agent_id)
+    assert spec["system_prompt"] == "A pending prompt"
+    assert spec["timeout_seconds"] == 1234  # the member A omitted keeps B's value
+    assert a.json()["agent"]["spec"]["timeout_seconds"] == 1234
+    assert _job_count() == 3
+
+
+def test_delayed_edit_while_the_other_is_still_deploying_is_refused_not_reverted(
+    client, monkeypatch
+):
+    """Same window, but B has not finished: A is told 409 with B's job, and B's
+    spec is untouched (no silent coalescing onto a job carrying other values)."""
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    resolved, release = _pause_before_claim(monkeypatch, "A pending prompt")
+    outcome: dict = {}
+
+    def run_a() -> None:
+        outcome["a"] = client.post(INSTALL, json={"system_prompt": "A pending prompt"})
+
+    thread = threading.Thread(target=run_a)
+    thread.start()
+    assert resolved.wait(timeout=15)
+    b = client.post(INSTALL, json={"timeout_seconds": 1234})
+    assert b.status_code == 202, b.text
+    release.set()
+    thread.join(timeout=20)
+    a = outcome["a"]
+    assert a.status_code == 409 and a.json()["code"] == "system_agent.deploy_in_progress"
+    assert a.json()["detail"]["job_id"] == b.json()["job_id"]
+    spec = _spec_of(agent_id)
+    assert spec["timeout_seconds"] == 1234 and spec["system_prompt"] == ARCHITECT.system_prompt
+    assert _job_count() == 2
+
+
+def _race_two(client, bodies: list[dict], monkeypatch) -> list:
+    """Two real requests that both pass the pre-claim checks before either claims:
+    a barrier inside ``_release_pin`` holds each until the other arrives."""
+    real = service._release_pin
+    barrier = threading.Barrier(2)
+
+    def together(preset):
+        pin = real(preset)
+        barrier.wait(timeout=15)
+        return pin
+
+    monkeypatch.setattr(service, "_release_pin", together)
+    results: list = [None, None]
+
+    def run(i: int) -> None:
+        results[i] = client.post(INSTALL, json=bodies[i])
+
+    threads = [threading.Thread(target=run, args=(i,)) for i in range(2)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(timeout=30)
+    assert all(r is not None for r in results), "a racing request did not return"
+    return results
+
+
+def test_two_explicit_first_installs_with_different_settings_never_both_accept(
+    client, monkeypatch
+):
+    """Host reproduction #6: the unique-index loser asked for other settings, so it is
+    409 with the winner's job — not a 202 `changed: false` that stored the winner's
+    values under its own request."""
+    _mark_ready()
+    results = _race_two(client, [{"max_tokens": 1111}, {"max_tokens": 2222}], monkeypatch)
+    codes = sorted(r.status_code for r in results)
+    assert codes == [202, 409], [(r.status_code, r.text) for r in results]
+    winner = next(r for r in results if r.status_code == 202)
+    loser = next(r for r in results if r.status_code == 409)
+    asked = 1111 if winner.request.content == b'{"max_tokens": 1111}' else 2222
+    assert winner.json()["agent"]["spec"]["max_tokens"] == asked
+    assert loser.json()["code"] == "system_agent.deploy_in_progress"
+    assert loser.json()["detail"]["job_id"] == winner.json()["job_id"]
+    assert len(_rows(system_key=KEY)) == 1 and _job_count() == 1
+
+
+def test_two_identical_or_bodiless_first_installs_still_coalesce(client, monkeypatch):
+    _mark_ready()
+    results = _race_two(client, [{"max_tokens": 4096}, {"max_tokens": 4096}], monkeypatch)
+    assert sorted(r.status_code for r in results) == [202, 202]
+    assert {r.json()["job_id"] for r in results} == {results[0].json()["job_id"]}
+    assert sorted(r.json()["changed"] for r in results) == [False, True]
+    assert _spec_of(results[0].json()["agent"]["id"])["max_tokens"] == 4096
+    assert len(_rows(system_key=KEY)) == 1 and _job_count() == 1
+
+
+def test_two_explicit_edits_on_an_active_row_refuse_the_loser_honestly(client, monkeypatch):
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    results = _race_two(client, [{"max_tokens": 1111}, {"max_tokens": 2222}], monkeypatch)
+    assert sorted(r.status_code for r in results) == [202, 409], [r.text for r in results]
+    winner = next(r for r in results if r.status_code == 202)
+    loser = next(r for r in results if r.status_code == 409)
+    assert loser.json()["detail"]["job_id"] == winner.json()["job_id"]
+    assert _spec_of(agent_id)["max_tokens"] == winner.json()["agent"]["spec"]["max_tokens"]
+    assert _job_count() == 2
