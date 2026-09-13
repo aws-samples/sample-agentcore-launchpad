@@ -151,15 +151,25 @@ by bootstrap, startup or any page read: an **administrator** installs a preset p
 workspace with the panel's INSTALL button (or `POST
 /api/system-agents/<key>/install`), which is a billable deploy through the normal
 pipeline (~30 s). The workspace must be `ready` (bootstrap done, `artifacts_bucket`
-and `execution_role_arn` present, per-agent execution roles enabled). Optional
-install choices — the model (`model_id`/`model_source`, default = the platform
-default) and existing knowledge bases to mount (`knowledge_bases`, verified in the
-workspace during provision; none is created for you) — are **API-only**: the panel
-installs with `{}`. REPAIR/UPDATE re-publishes in place; UNINSTALL queues a teardown
+and `execution_role_arn` present, per-agent execution roles enabled). A first install
+uses the preset's defaults — for the architect: `us.openai.gpt-5.6-sol` on native
+Bedrock (the US cross-region inference profile; the region must serve it),
+`max_tokens: 65536` per model call and `reasoning_effort: high`. Afterwards an
+administrator changes the stored settings with the panel's **CONFIGURE** dialog (or
+the same install API body): model source/id, max output tokens per model call (the
+Harness `bedrockModelConfig.maxTokens` — one response's ceiling, not a session or
+spend cap), reasoning effort (OpenAI GPT-5.x on native Bedrock only), system prompt,
+max iterations, timeout and existing knowledge bases to mount (verified in the
+workspace during provision; none is created for you). Saving posts only the changed
+fields and runs the normal update job; members see the same values read-only.
+Repairs and bundle updates keep the stored settings — a preset installed by an
+earlier build keeps its model and prompt until you save a change or USE PRESET
+DEFAULTS. REPAIR/UPDATE re-publishes in place; UNINSTALL queues a teardown
 job — the preset shows UNINSTALLING and keeps its identity until the Harness and
 role are gone, a failed teardown shows its reason with RETRY UNINSTALL, and install
-or repair are refused meanwhile. The preset runs with persistent memory disabled and on its own
-restricted execution role (never the shared role). Members can chat with the preset
+or repair are refused meanwhile. The preset runs with persistent memory disabled
+(AgentCore memory only — chat transcripts stay in the ledger and CloudWatch logs are
+kept) and on its own restricted execution role (never the shared role). Members can chat with the preset
 like any agent but see a SYSTEM chip with the edit/re-publish/convert/delete actions
 disabled, and the backend refuses those calls regardless of permissions; a knowledge
 base mounted on the preset cannot be force-deleted until an administrator detaches

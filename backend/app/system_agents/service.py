@@ -39,6 +39,7 @@ from hashlib import sha256
 from typing import Any
 
 from botocore.exceptions import ClientError
+from pydantic import ValidationError
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -51,7 +52,7 @@ from app.schemas.agent import AgentSpec
 from app.services import agent_iam
 from app.services.workspace import WorkspaceContext
 from app.system_agents import presets as catalogue
-from app.system_agents.presets import InstallOptions, SystemPreset
+from app.system_agents.presets import InstallOptions, PresetEdit, SystemPreset
 
 logger = logging.getLogger("launchpad.system_agents")
 
@@ -374,12 +375,20 @@ def preset_status(
         "knowledge_bases": spec.get("knowledge_bases") or [],
         "allowed_tools": spec.get("allowed_tools") or list(preset.allowed_tools),
         "memory": "disabled",
+        # The administrator-editable members: what is stored (``{}`` when not
+        # installed) and what this build would install by default. Members read the
+        # same projection; only the maintenance route (admin) can change it.
+        "settings": catalogue.effective_settings(preset, spec if agent else None),
+        "defaults": catalogue.default_settings(preset),
+        "editable_fields": list(catalogue.EDITABLE_FIELDS),
         # The in-flight or failed maintenance operation, when one owns the row.
         "operation": operation,
         # Operation-specific server verdicts — the console disables on these, the
         # routes re-check them.
         "can_install": is_admin and not installed and not requirements and holder is None,
         "can_repair": is_admin and settled and not requirements,
+        # editing the stored settings = a repair with an explicit body
+        "can_configure": is_admin and settled and not requirements,
         "can_uninstall": is_admin and installed and (
             settled or (agent.status == STATUS_UNINSTALLING and not uninstall_live)
         ),
@@ -442,6 +451,49 @@ def _require_kb_prerequisites(row: Workspace, options: InstallOptions | None) ->
         )
 
 
+def validate_options(preset: SystemPreset, options: InstallOptions | None) -> None:
+    """Prove the administrator's choices produce a valid preset spec — before any
+    row, job or AWS call. The bucket and digest are placeholders: only the spec's
+    own field and cross-field rules (bounds, an OpenAI-only reasoning effort, …) are
+    under test here."""
+    if options is None:
+        return
+    try:
+        catalogue.build_spec(preset, "validation-placeholder", options)
+    except ValidationError as exc:
+        errors = [
+            {"loc": list(e.get("loc") or ()), "msg": str(e.get("msg", ""))}
+            for e in exc.errors()
+        ]
+        raise AppError(
+            "system_agent.invalid_options",
+            "the requested preset settings are not valid: "
+            + "; ".join(e["msg"] for e in errors),
+            {"errors": errors, "preset": preset.key},
+            status_code=422,
+        ) from exc
+
+
+def _refuse_deploy_in_progress(db: Session, agent: Agent, preset: SystemPreset) -> None:
+    """An explicit settings change while a deploy job owns the row is refused, never
+    coalesced: the in-flight job carries the *previous* spec, so answering with its id
+    would silently drop the administrator's accepted-looking update. A bodiless
+    repair click keeps coalescing onto the in-flight job (``_in_flight``)."""
+    deployment, job = _latest_job(db, agent)
+    raise AppError(
+        "system_agent.deploy_in_progress",
+        f"'{preset.key}' is being deployed; retry the settings change once the current "
+        "job has finished",
+        {
+            "agent_id": agent.id,
+            "job_id": job.id if job else None,
+            "job_status": job.status if job else None,
+            "deployment_id": deployment.id if deployment else None,
+        },
+        status_code=409,
+    )
+
+
 def _release_pin(preset: SystemPreset) -> dict[str, Any]:
     """The exact validated snapshot identity, captured BEFORE the queue commit."""
     return {"preset_bundle": catalogue.snapshot_bundle(preset).release()}
@@ -457,23 +509,27 @@ def install_preset(
     db: Session,
     row: Workspace,
     preset: SystemPreset,
-    options: InstallOptions | None,
+    edit: PresetEdit | None,
     *,
     force: bool = False,
 ) -> InstallOutcome:
     """Install, or repair, one preset in one workspace. Idempotent.
 
     * not installed → row + create job (a racing twin collapses onto the winner and
-      returns the winner's job)
-    * deploying → the in-flight job, never a second one
-    * active, same version and same options, not forced → no-op (200, no job)
-    * failed, changed options, newer bundle, or ``force`` → update job (re-publish)
+      returns the winner's job — unless it asked for *different* settings, which is
+      ``409 system_agent.deploy_in_progress`` rather than a false acceptance)
+    * deploying, no explicit edit → the in-flight job, never a second one;
+      deploying with an explicit edit → ``409 system_agent.deploy_in_progress``
+    * active, same version and same settings, not forced → no-op (200, no job)
+    * failed, changed settings, newer bundle, or ``force`` → update job (re-publish)
 
-    The only AWS work this starts is the deploy job on a background thread; the
-    request itself makes no cloud call.
+    ``edit=None`` means "the preset defaults" on a first install and "exactly what is
+    stored" on a repair. The only AWS work this starts is the deploy job on a
+    background thread; the request itself makes no cloud call.
     """
     bucket = _require_ready(row)
-    _require_kb_prerequisites(row, options)
+    if edit is not None and edit.is_empty():
+        edit = None
     holder = find_name_holder(db, row.id, preset)
     if holder is not None:
         raise AppError(
@@ -486,12 +542,13 @@ def install_preset(
 
     existing = find_installed(db, row.id, preset)
     if existing is not None:
-        return _repair(db, existing, preset, bucket, options, force=force)
+        return _repair(db, existing, preset, bucket, edit, force=force)
 
+    options = edit.resolve(preset, None) if edit else preset.default_options()
+    validate_options(preset, options)
+    _require_kb_prerequisites(row, options)
     pin = _release_pin(preset)  # validated snapshot identity, before anything is written
-    spec = catalogue.build_spec(
-        preset, bucket, options or InstallOptions(), digest=pin["preset_bundle"]["digest"]
-    )
+    spec = catalogue.build_spec(preset, bucket, options, digest=pin["preset_bundle"]["digest"])
     agent = Agent(
         workspace_id=row.id,
         name=preset.name,
@@ -507,14 +564,22 @@ def install_preset(
         # row + deployment + job + release pin land in ONE commit
         deployment, job = create_deployment(db, agent, payload_extra=pin)
     except IntegrityError:
-        # A concurrent install won the unique index; hand back its row AND its job.
+        # A concurrent install won the unique index; hand back its row AND its job —
+        # but only when it installed what we asked for. A twin that asked for other
+        # settings must not be told "accepted" while the winner's job carries the
+        # winner's values.
         db.rollback()
         winner = find_installed(db, row.id, preset)
         if winner is None:  # pragma: no cover — the index only fires for a live twin
             raise
+        if edit is not None and _normalized(winner.spec or {}) != spec.model_dump():
+            _refuse_deploy_in_progress(db, winner, preset)
         return _in_flight(db, winner)
     logger.info("system preset %s: install job %s in workspace %s", preset.key, job.id, row.id)
     return InstallOutcome(agent=agent, job=job, deployment=deployment, created=True, changed=True)
+
+
+_CLAIM_ATTEMPTS = 3
 
 
 def _repair(
@@ -522,38 +587,69 @@ def _repair(
     agent: Agent,
     preset: SystemPreset,
     bucket: str,
-    options: InstallOptions | None,
+    edit: PresetEdit | None,
     *,
     force: bool,
 ) -> InstallOutcome:
-    db.refresh(agent)  # never decide on a stale ORM snapshot
-    if agent.status == "deploying":
-        return _in_flight(db, agent)  # repeated clicks while a job runs stack nothing
-    if agent.status == STATUS_UNINSTALLING:
-        _refuse_uninstalling(db, agent, preset)
+    """Re-publish an installed preset, resolving the partial ``edit`` against the row
+    **as it is claimed**.
 
-    stored = agent.spec or {}
-    resolved = options or catalogue.options_from_spec(stored)
-    _require_kb_prerequisites(_workspace_row(db, agent.workspace_id), resolved)
-    pin = _release_pin(preset)  # before the claim, so nothing is claimed for a bad bundle
-    desired = catalogue.build_spec(
-        preset, bucket, resolved, digest=pin["preset_bundle"]["digest"]
-    ).model_dump()
-    if agent.status == "active" and desired == stored and not force:
-        deployment, job = _latest_job(db, agent)
-        return InstallOutcome(agent=agent, job=job, deployment=deployment, created=False,
-                              changed=False)
+    The claim is one UPDATE conditioned on the status being taken over AND on the
+    row version (``updated_at``) this attempt resolved against. A row that changed
+    in between — a concurrent edit that was accepted and then finished (active
+    again, new spec), or anything that moved it while this attempt was pinning the
+    bundle — fails the compare-and-set: the attempt re-reads the row and resolves
+    the same partial edit again on the new state, so a member this edit omits can
+    never be reverted to a stale value. A row that is meanwhile ``deploying`` is a
+    ``409`` for an explicit edit (its job carries someone else's values) and the
+    in-flight job for a bodiless repair.
+    """
+    for _attempt in range(_CLAIM_ATTEMPTS):
+        db.refresh(agent)  # never decide on a stale ORM snapshot
+        if agent.status == "deploying":
+            if edit is not None:
+                _refuse_deploy_in_progress(db, agent, preset)
+            return _in_flight(db, agent)  # repeated clicks while a job runs stack nothing
+        if agent.status == STATUS_UNINSTALLING:
+            _refuse_uninstalling(db, agent, preset)
 
-    # Durable claim: one UPDATE conditioned on the status we are taking over, in the
-    # same transaction as the job row. Two sessions that both loaded an active row
-    # serialize on the write lock; the second sees 0 rows and returns the winner.
-    now = datetime.now(UTC)
-    claimed = db.execute(
-        update(Agent)
-        .where(Agent.id == agent.id, Agent.status.in_(_CLAIMABLE))
-        .values(status="deploying", spec=desired, error=None, updated_at=now)
-    ).rowcount
-    if claimed != 1:
+        stored = dict(agent.spec or {})
+        seen = agent.updated_at  # the row version this resolution is valid for
+        resolved = edit.resolve(preset, stored) if edit else catalogue.options_from_spec(stored)
+        validate_options(preset, resolved)  # against the CURRENT row, not a request snapshot
+        _require_kb_prerequisites(_workspace_row(db, agent.workspace_id), resolved)
+        pin = _release_pin(preset)  # before the claim, so nothing is claimed for a bad bundle
+        desired = catalogue.build_spec(
+            preset, bucket, resolved, digest=pin["preset_bundle"]["digest"]
+        ).model_dump()
+        # Compare through the schema so a row written before a spec member existed
+        # (which simply lacks the key) equals the same choices re-derived today.
+        if agent.status == "active" and not force and desired == _normalized(stored):
+            deployment, job = _latest_job(db, agent)
+            return InstallOutcome(agent=agent, job=job, deployment=deployment, created=False,
+                                  changed=False)
+
+        # Durable claim: status AND version, in the same transaction as the job row.
+        now = datetime.now(UTC)
+        claimed = db.execute(
+            update(Agent)
+            .where(
+                Agent.id == agent.id,
+                Agent.status.in_(_CLAIMABLE),
+                Agent.updated_at == seen,
+            )
+            .values(status="deploying", spec=desired, error=None, updated_at=now)
+        ).rowcount
+        if claimed == 1:
+            db.expire(agent)
+            # claim + deployment + job + release pin commit together
+            deployment, job = create_deployment(db, agent, mode="update", payload_extra=pin)
+            logger.info(
+                "system preset %s: repair job %s for agent %s", preset.key, job.id, agent.id
+            )
+            return InstallOutcome(agent=agent, job=job, deployment=deployment, created=False,
+                                  changed=True)
+
         db.rollback()
         db.expire_all()
         current = db.get(Agent, agent.id)
@@ -563,13 +659,25 @@ def _repair(
             )
         if current.status == STATUS_UNINSTALLING:
             _refuse_uninstalling(db, current, preset)
-        return _in_flight(db, current)
-    db.expire(agent)
-    # claim + deployment + job + release pin commit together
-    deployment, job = create_deployment(db, agent, mode="update", payload_extra=pin)
-    logger.info("system preset %s: repair job %s for agent %s", preset.key, job.id, agent.id)
-    return InstallOutcome(agent=agent, job=job, deployment=deployment, created=False,
-                          changed=True)
+        if current.status == "deploying":
+            if edit is not None:
+                _refuse_deploy_in_progress(db, current, preset)  # a twin claimed first
+            return _in_flight(db, current)
+        # settled again with a different version: resolve the edit on the new state
+        agent = current
+    raise AppError(
+        "system_agent.conflict",
+        f"'{preset.key}' kept changing while this request was being resolved; retry",
+        {"agent_id": agent.id},
+        status_code=409,
+    )
+
+
+def _normalized(stored: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return AgentSpec(**stored).model_dump()
+    except ValidationError:  # an unreadable stored spec is never "already current"
+        return {}
 
 
 def _workspace_row(db: Session, workspace_id: str | None) -> Workspace:

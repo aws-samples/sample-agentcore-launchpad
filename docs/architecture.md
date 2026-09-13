@@ -397,13 +397,80 @@ status.
 | active, same version + options | no-op (`200`, `job_id` = the job that produced the active preset) |
 | failed / options changed / newer bundle / `force: true` | update job = in-place re-publish (`202`) |
 
-The request body is a required JSON object; `{}` means "platform defaults" on a
-first install and "the stored choices" on a repair. Maintenance claims are durable
+The request body is a required JSON object and a **partial edit** (SE-040): `{}`
+means "the preset defaults" on a first install and "exactly the stored choices" on
+a repair; every member given replaces the stored value and every member omitted
+keeps it; `reset: [...]` returns named members to this build's defaults and
+`clear: ["max_tokens" | "reasoning_effort"]` sends nothing for those two knobs
+(JSON `null` means "unchanged", never "clear"). Unknown members — `name`,
+`allowed_tools`, `memory`, `skills`, `tools`, `system_key`, … — are refused with
+`422` before any row, job or AWS call, as are out-of-range values and unsupported
+pairings (`422 system_agent.invalid_options`, e.g. a `reasoning_effort` on a
+non-OpenAI model). The partial edit is resolved against the stored spec **inside the claiming
+transaction**, and the repair's compare-and-set is conditioned on the row's status
+*and* its version (`updated_at`) as that resolution read it: a row that changed
+meanwhile (a concurrent edit that was accepted and finished) fails the claim and the
+same partial edit is re-resolved on the new state (up to three attempts, then `409
+system_agent.conflict`), so a member the edit omits is never reverted to a stale
+value. An explicit edit while a deploy job owns the row answers `409
+system_agent.deploy_in_progress` with that job's id instead of coalescing onto it
+(a bodiless repair click still coalesces), and so does the unique-index loser of two
+concurrent *first* installs that asked for different settings (identical or bodiless
+twins still coalesce onto the winner's job) — a concurrent save is never dropped or
+falsely accepted. Maintenance claims are durable
 and atomic: a fresh install races into the partial unique index and the loser
 re-reads the winner **and returns the winner's job id**; a repair executes one
 compare-and-set `UPDATE … WHERE status IN (active, failed)` in the same transaction
 as the job row it creates, so two sessions that both loaded an active row converge
 on one job (the second sees no claimed row and returns the first's in-flight job).
+**Administrator-editable settings and the architect's inference defaults (SE-040).**
+The preset's *inference* and *loop* settings are stored on its spec and reported by
+`GET /api/system-agents` as `settings` (what is stored, `{}` when not installed),
+`defaults` (this build's catalogue values) and `editable_fields`, plus the verdict
+`can_configure` (administrator + settled + prerequisites met — the same predicate as
+`can_repair`). The editable members are `model_id` / `model_source`, `max_tokens`,
+`reasoning_effort`, `system_prompt`, `max_iterations`, `timeout_seconds` and
+`knowledge_bases`; everything else (name, method, tools, versioned skill, allowed
+tools, disabled memory, dedicated role) stays catalogue-owned and unreachable from a
+request body. Two knobs are new on `AgentSpec` and harness-only: `max_tokens` is the
+**per-model-call** output ceiling — `CreateHarness`/`UpdateHarness`
+`model.bedrockModelConfig.maxTokens`, *not* the aggregate `InvokeHarness.maxTokens`
+and not a spend cap; `reasoning_effort` (`low | medium | high`) is accepted **only
+for an OpenAI GPT-5.x model on native Bedrock** (`model_source=bedrock`, Converse)
+and is sent through `bedrockModelConfig.additionalParams` as
+`{"additional_request_fields": {"reasoning": {"effort": …}}}` — the Strands
+`BedrockModel` config key the harness forwards as
+`Converse.additionalModelRequestFields`, where Bedrock accepts `reasoning.effort` for
+GPT-5.6 (a flat `reasoning_effort` is rejected as an unknown parameter). Any other
+pairing (a Claude/Nova model, Bedrock Mantle's Responses API, a non-harness method)
+is refused by the schema rather than guessed at or silently dropped; a spec without
+the knobs sends exactly the request it always did. The architect preset's **new-install
+defaults** are `us.openai.gpt-5.6-sol` (the US cross-region inference profile, native
+Bedrock/Converse — the per-agent role authorizes the profile plus the underlying
+foundation model), `max_tokens: 65536` and `reasoning_effort: "high"`; the platform
+`DEFAULT_MODEL_ID` and the ordinary wizard defaults are unchanged. Stored rows are
+**not migrated**: a preset installed by an earlier build keeps its model, prompt and
+absent knobs through reads, repairs and bundle updates until an administrator saves
+an explicit change (or `reset`) — `options_from_spec` recovers every editable member
+exactly as stored, including a system prompt that differs from this build's constant,
+so a prompt change in the catalogue reaches an installed preset only through an
+explicit `reset: ["system_prompt"]` (the console offers USE THIS BUILD'S PROMPT).
+The console's **CONFIGURE** dialog (System presets panel; members get VIEW SETTINGS
+with the same fields read-only, and `POST …/install` stays `403` for them whatever
+`perm:agents.*` they hold) prefills the stored values, shows which differ from the
+defaults, validates bounds client-side, sends only the changed members after an
+explicit confirm, and consumes the `202`/`200`/`409`/`422` outcome like the install
+button does; cancel posts nothing; the dialog cannot be dismissed while a save is in
+flight (the panel owns the request and its completion, so an accepted `202` always
+lands as DEPLOYING + job); and every read and save of this surface — panel polls,
+install/repair/uninstall, the editor's KB catalog and save — pins the workspace the
+panel is displaying as an explicit `X-Workspace` header, so another tab switching the
+shared selection can never redirect them to a different workspace (a same-tab switch
+still closes the dialog). Persistent memory stays disabled:
+that disables AgentCore *memory* only — the Launchpad chat transcript in the ledger
+and the CloudWatch logs are kept, and the system prompt now tells the agent so
+(never "nothing is retained").
+
 **Uninstall is a durable, exclusively owned job, not a terminal flag**: `DELETE
 /api/system-agents/{key}` moves the row to the non-terminal `uninstalling` status
 **together with** an `uninstall_system_agent` job (`202 {job_id, attempt, started,

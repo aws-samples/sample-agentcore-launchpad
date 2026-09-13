@@ -19,12 +19,13 @@ from app.deployer.pipeline import StageContext, create_deployment
 from app.main import create_app
 from app.models.ledger import Agent, Job, Workspace
 from app.optimization.service import canary_capability, experiment_capability
-from app.schemas.agent import AgentSpec
+from app.schemas.agent import DEFAULT_MODEL_ID, AgentSpec
 from app.services import agent_iam, aws_clients
 from app.services import users as users_service
+from app.services.agentcore import harness as hc
 from app.services.runtime_discovery import _display_name
 from app.system_agents import presets, service
-from app.system_agents.presets import ARCHITECT, InstallOptions
+from app.system_agents.presets import ARCHITECT, InstallOptions, PresetEdit
 
 from .conftest import ws_ctx
 
@@ -350,7 +351,13 @@ def test_install_on_active_preset_is_a_no_op_unless_changed_or_forced(client, no
     # the stable outcome: the job that produced the active preset, no new one
     assert same.json()["job_id"] == first_job and _job_count() == 1
 
-    changed = client.post(INSTALL, json={"model_id": "global.anthropic.claude-opus-5"})
+    # the stored default carries the OpenAI reasoning effort; moving to Claude without
+    # clearing it is an unsupported pairing and is refused before any job is queued
+    refused = client.post(INSTALL, json={"model_id": "global.anthropic.claude-opus-5"})
+    assert refused.status_code == 422 and refused.json()["code"] == "system_agent.invalid_options"
+    assert _job_count() == 1
+    changed = client.post(INSTALL, json={"model_id": "global.anthropic.claude-opus-5",
+                                         "clear": ["reasoning_effort"]})
     assert changed.status_code == 202 and changed.json()["changed"] is True
     assert _job_count() == 2
     db = SessionLocal()
@@ -2638,3 +2645,557 @@ def test_concurrent_callers_coalesce_on_one_worker(client, monkeypatch):
     uninstall_module._release_lock(holder)
     threads_seen[0].join(timeout=20)
     assert _job(job_id).status == "succeeded" and control.calls.count(("delete", "h1")) == 1
+
+
+# ---------------------------------------------------------------------------
+# SE-040: inference defaults + administrator-editable settings
+# ---------------------------------------------------------------------------
+
+SOL = "us.openai.gpt-5.6-sol"
+OPUS = "global.anthropic.claude-opus-5"
+
+
+def _spec_of(agent_id: str) -> dict:
+    return dict(_agent(agent_id).spec)
+
+
+def _rewrite_spec(agent_id: str, **changes) -> None:
+    """Simulate a row written by an earlier build (e.g. pre-SE-040 defaults)."""
+    db = SessionLocal()
+    try:
+        agent = db.get(Agent, agent_id)
+        spec = dict(agent.spec)
+        for key, value in changes.items():
+            if value is None:
+                spec.pop(key, None)
+            else:
+                spec[key] = value
+        agent.spec = spec
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_architect_defaults_are_gpt_sol_64k_output_high_effort():
+    spec = presets.build_spec(ARCHITECT, BUCKET, ARCHITECT.default_options())
+    assert (spec.model_id, spec.model_source) == (SOL, "bedrock")
+    assert spec.max_tokens == 65536 and spec.reasoning_effort == "high"
+    # the loop limits are separate knobs and unchanged
+    assert (spec.max_iterations, spec.timeout_seconds) == (30, 900)
+    params = build_create_params(spec, "arn:aws:iam::111:role/x", None)
+    model = params["model"]["bedrockModelConfig"]
+    assert model == {
+        "modelId": SOL,
+        "apiFormat": "converse_stream",
+        "maxTokens": 65536,  # per model call — not InvokeHarness.maxTokens
+        "additionalParams": {"additional_request_fields": {"reasoning": {"effort": "high"}}},
+    }
+    assert "maxTokens" not in params and params["maxIterations"] == 30
+    # UpdateHarness carries the identical model block (the live preset is updated in place)
+    update = hc.wrap_params_for_update(params)
+    assert update["model"] == params["model"]
+    # a bare InstallOptions() is the catalogue default too (model/prompt/limits)
+    bare = presets.build_spec(ARCHITECT, BUCKET, InstallOptions())
+    assert (bare.model_id, bare.system_prompt) == (SOL, ARCHITECT.system_prompt)
+    # retention clarification: memory-disabled ≠ nothing retained
+    assert "never tell a customer that nothing is retained" in spec.system_prompt
+    assert "CloudWatch" in spec.system_prompt
+
+
+def test_ordinary_specs_send_exactly_the_request_they_always_did():
+    stored = {"name": "plain-harness", "method": "harness", "system_prompt": "hi",
+              "model_id": DEFAULT_MODEL_ID}
+    spec = AgentSpec(**stored)
+    assert spec.max_tokens is None and spec.reasoning_effort is None
+    model = build_create_params(spec, "arn:aws:iam::111:role/x", None)["model"]
+    assert model == {"bedrockModelConfig": {"modelId": DEFAULT_MODEL_ID,
+                                            "apiFormat": "converse_stream"}}
+
+
+@pytest.mark.parametrize("over", [
+    {"reasoning_effort": "high"},  # Claude on Converse: the knob would leak
+    {"model_id": "openai.gpt-5.6-sol", "model_source": "mantle", "reasoning_effort": "high"},
+    {"model_id": SOL, "method": "zip_runtime", "reasoning_effort": "high"},
+    {"method": "zip_runtime", "max_tokens": 4096},
+    {"max_tokens": 0},
+    {"max_tokens": presets.AgentSpec.model_fields["max_tokens"].metadata[1].le + 1},
+    {"model_id": SOL, "reasoning_effort": "extreme"},
+    {"model_id": SOL, "reasoning_effort": "none"},
+])
+def test_inference_knobs_reject_unsupported_pairings(over):
+    base = {"name": "knobs", "method": "harness", "system_prompt": "hi"}
+    with pytest.raises(ValueError):
+        AgentSpec(**{**base, **over})
+
+
+def test_inference_knobs_accept_openai_on_native_bedrock():
+    spec = AgentSpec(name="knobs", method="harness", system_prompt="hi", model_id=SOL,
+                     max_tokens=65536, reasoning_effort="high")
+    assert spec.reasoning_effort == "high"
+    # max_tokens alone is fine for any harness model
+    assert AgentSpec(name="knobs", method="harness", system_prompt="hi",
+                     max_tokens=8192).max_tokens == 8192
+
+
+def test_execution_role_authorizes_the_us_openai_profile_on_the_dedicated_role():
+    spec = presets.build_spec(ARCHITECT, BUCKET, ARCHITECT.default_options())
+    ctx = agent_iam.role_context(ws_ctx(READY_RESOURCES))
+    doc = agent_iam.policy_document(spec, ctx)
+    models = next(s for s in doc["Statement"] if s["Sid"] == "BedrockModels")
+    assert f"arn:aws:bedrock:{ctx.region}:{ctx.account_id}:inference-profile/{SOL}" in (
+        models["Resource"]
+    )
+    assert "arn:aws:bedrock:*::foundation-model/openai.gpt-5.6-sol" in models["Resource"]
+    assert "arn:aws:bedrock:*::foundation-model/*" not in models["Resource"]
+    # the preset still deploys on its own role, never the shared one
+    settings = get_settings()
+    with pytest.raises(RuntimeError):
+        service.require_dedicated_role(
+            Agent(name=ARCHITECT.name, method="harness", system_key=KEY),
+            READY_RESOURCES["execution_role_arn"], ws_ctx(READY_RESOURCES), settings,
+        )
+
+
+def test_status_exposes_stored_settings_and_build_defaults(client):
+    _mark_ready()
+    before = _status(client)
+    assert before["settings"] == {} and before["defaults"]["model_id"] == SOL
+    assert before["defaults"]["max_tokens"] == 65536
+    assert before["defaults"]["reasoning_effort"] == "high"
+    assert before["editable_fields"] == list(presets.EDITABLE_FIELDS)
+    assert before["can_configure"] is False  # nothing to configure yet
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    status = _status(client)
+    assert status["settings"] == {**status["defaults"], "knowledge_bases": []}
+    assert status["settings"]["system_prompt"] == ARCHITECT.system_prompt
+    assert status["can_configure"] is True
+    assert status["model_id"] == SOL  # legacy top-level members still agree
+
+
+def test_new_install_sends_64k_and_high_effort_and_a_resume_regenerates_them(client):
+    _mark_ready()
+    res = client.post(INSTALL, json={})
+    assert res.status_code == 202
+    spec = AgentSpec(**res.json()["agent"]["spec"])
+    params = build_create_params(spec, "arn:aws:iam::111:role/x", None)
+    model = params["model"]["bedrockModelConfig"]
+    assert model["maxTokens"] == 65536 and model["modelId"] == SOL
+    assert model["additionalParams"]["additional_request_fields"]["reasoning"] == {
+        "effort": "high"
+    }
+    # the ledger round-trip is lossless: a resumed job rebuilds the same request
+    stored = AgentSpec(**_spec_of(res.json()["agent"]["id"]))
+    assert build_create_params(stored, "arn:aws:iam::111:role/x", None)["model"] == (
+        params["model"]
+    )
+
+
+def test_old_spec_is_untouched_until_an_explicit_edit_and_partial_edits_preserve(client):
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    # a row an earlier build wrote: Sonnet, no knobs, an older prompt
+    old_prompt = "You are the previous build's architect prompt."
+    _rewrite_spec(agent_id, model_id=DEFAULT_MODEL_ID, max_tokens=None,
+                  reasoning_effort=None, system_prompt=old_prompt)
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    legacy = _spec_of(agent_id)
+
+    # a read changes nothing; a bodiless repair is a no-op on an unchanged release
+    status = _status(client)
+    assert status["settings"]["model_id"] == DEFAULT_MODEL_ID
+    assert status["settings"]["max_tokens"] is None
+    assert status["settings"]["system_prompt"] == old_prompt
+    same = client.post(INSTALL, json={})
+    assert same.status_code == 200 and same.json()["changed"] is False
+    assert _spec_of(agent_id) == legacy
+
+    # a forced repair re-publishes but keeps every stored choice (prompt included)
+    forced = client.post(INSTALL, json={"force": True})
+    assert forced.status_code == 202
+    after_force = _spec_of(agent_id)
+    assert after_force["system_prompt"] == old_prompt
+    assert after_force["model_id"] == DEFAULT_MODEL_ID and after_force["max_tokens"] is None
+    assert after_force["skills"] == legacy["skills"]  # content-addressed release kept
+
+    # a partial edit changes exactly the named member
+    _set_status(agent_id, "active")
+    edited = client.post(INSTALL, json={"max_tokens": 65536})
+    assert edited.status_code == 202 and edited.json()["changed"] is True
+    partial = _spec_of(agent_id)
+    assert partial["max_tokens"] == 65536
+    assert partial["model_id"] == DEFAULT_MODEL_ID and partial["system_prompt"] == old_prompt
+    assert partial["reasoning_effort"] is None
+    assert edited.json()["preset"]["settings"]["max_tokens"] == 65536
+
+    # an explicit reset returns the named members (only) to this build's defaults
+    _set_status(agent_id, "active")
+    reset = client.post(INSTALL, json={
+        "reset": ["model_id", "model_source", "reasoning_effort", "system_prompt"],
+        "max_iterations": 12,
+    })
+    assert reset.status_code == 202, reset.text
+    restored = _spec_of(agent_id)
+    assert restored["model_id"] == SOL and restored["reasoning_effort"] == "high"
+    assert restored["system_prompt"] == ARCHITECT.system_prompt
+    assert restored["max_tokens"] == 65536 and restored["max_iterations"] == 12
+    # the protected part of the spec never moved
+    for key in ("name", "method", "tools", "allowed_tools", "memory", "skills", "env"):
+        assert restored[key] == legacy[key], key
+
+
+def test_stored_prompt_override_survives_repair_kb_edit_and_bundle_pin(client):
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    custom = "Custom architect prompt written by the administrator."
+    res = client.post(INSTALL, json={"system_prompt": custom, "timeout_seconds": 1200})
+    assert res.status_code == 202
+    assert _spec_of(agent_id)["system_prompt"] == custom
+    for body in ({"force": True},
+                 {"knowledge_bases": [{"kb_id": "KB123ABC", "name": "guide"}]},
+                 {"max_iterations": 40},
+                 {"knowledge_bases": []}):
+        _set_status(agent_id, "active")
+        res = client.post(INSTALL, json=body)
+        assert res.status_code == 202, (body, res.text)
+        spec = _spec_of(agent_id)
+        assert spec["system_prompt"] == custom and spec["timeout_seconds"] == 1200, body
+        assert spec["model_id"] == SOL and spec["max_tokens"] == 65536, body
+        # every repair still pins the content-addressed release and passes the job-entry guard
+        job = _job(res.json()["job_id"])
+        agent = _agent(agent_id)
+        service.assert_job_release_pinned(job.payload, agent, ws_ctx(READY_RESOURCES))
+    assert _spec_of(agent_id)["knowledge_bases"] == []
+
+
+@pytest.mark.parametrize("body", [
+    {"max_tokens": 0},
+    {"max_tokens": 131073},
+    {"max_tokens": "lots"},
+    {"reasoning_effort": "extreme"},
+    {"reasoning_effort": "none"},
+    {"model_source": "openai"},
+    {"model_id": ""},
+    {"max_iterations": 0},
+    {"max_iterations": 101},
+    {"timeout_seconds": 5},
+    {"system_prompt": ""},
+    {"knowledge_bases": [{"kb_id": "not valid!"}]},
+    # protected members are not reachable from the body at all
+    {"name": "other-name"},
+    {"allowed_tools": ["*"]},
+    {"memory": {"short_term": True, "long_term": True}},
+    {"skills": ["s3://elsewhere/x/"]},
+    {"tools": [{"type": "builtin", "name": "code-interpreter"}]},
+    {"system_key": "aws-agent-solution-architect"},
+    {"env": {"X": "1"}},
+    {"reset": ["allowed_tools"]},
+    {"reset": ["max_tokens", "max_tokens"]},
+    {"reset": ["max_tokens"], "max_tokens": 5},
+    {"clear": ["system_prompt"]},
+    {"clear": ["max_tokens"], "max_tokens": 5},
+    {"clear": ["max_tokens"], "reset": ["max_tokens"]},
+    # a valid shape that is an unsupported pairing
+    {"model_id": OPUS},
+    {"model_id": "openai.gpt-5.6-sol", "model_source": "mantle"},
+])
+def test_invalid_edits_fail_before_any_job_or_spec_change(client, body):
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    before, jobs = _spec_of(agent_id), _job_count()
+    res = client.post(INSTALL, json=body)
+    assert res.status_code == 422, (body, res.text)
+    assert res.json()["code"] in ("validation.invalid_request", "system_agent.invalid_options")
+    assert _spec_of(agent_id) == before and _job_count() == jobs
+    assert _status(client)["status"] == "active"
+
+
+def test_switching_to_claude_needs_an_explicit_effort_reset(client):
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    # ``reset`` returns the knob to the catalogue default (high), which Claude refuses
+    still = client.post(INSTALL, json={"model_id": OPUS, "reset": ["reasoning_effort"]})
+    assert still.status_code == 422 and still.json()["code"] == "system_agent.invalid_options"
+    res = client.post(INSTALL, json={"model_id": OPUS, "clear": ["reasoning_effort"]})
+    assert res.status_code == 202, res.text
+    spec = _spec_of(agent_id)
+    assert spec["model_id"] == OPUS and spec["reasoning_effort"] is None
+    assert spec["max_tokens"] == 65536  # unrelated members untouched
+    # clearing max_tokens sends no ceiling at all (the provider default applies again)
+    _set_status(agent_id, "active")
+    cleared = client.post(INSTALL, json={"clear": ["max_tokens"]})
+    assert cleared.status_code == 202 and _spec_of(agent_id)["max_tokens"] is None
+    _set_status(agent_id, "active")
+    spec = _spec_of(agent_id)
+    params = build_create_params(AgentSpec(**spec), "arn:aws:iam::111:role/x", None)
+    assert "additionalParams" not in params["model"]["bedrockModelConfig"]
+    assert "maxTokens" not in params["model"]["bedrockModelConfig"]
+
+
+def test_edit_while_deploying_is_refused_but_a_bodiless_repair_coalesces(client):
+    _mark_ready()
+    first = client.post(INSTALL, json={}).json()
+    agent_id, job_id = first["agent"]["id"], first["job_id"]
+    coalesced = client.post(INSTALL, json={})
+    assert coalesced.status_code == 202 and coalesced.json()["job_id"] == job_id
+    assert coalesced.json()["changed"] is False
+    refused = client.post(INSTALL, json={"max_tokens": 1000})
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["code"] == "system_agent.deploy_in_progress"
+    assert refused.json()["detail"]["job_id"] == job_id
+    assert _spec_of(agent_id)["max_tokens"] == 65536 and _job_count() == 1
+    # a settled row accepts the same edit
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    accepted = client.post(INSTALL, json={"max_tokens": 1000})
+    assert accepted.status_code == 202 and _spec_of(agent_id)["max_tokens"] == 1000
+    # uninstalling refuses the edit too (existing semantics)
+    _set_status(agent_id, service.STATUS_UNINSTALLING)
+    assert client.post(INSTALL, json={"max_tokens": 2000}).status_code == 409
+    assert _spec_of(agent_id)["max_tokens"] == 1000
+
+
+def test_concurrent_edits_never_lose_an_accepted_update_silently(client):
+    """Two administrators save different settings against the same active row: one
+    claims the row and its job carries its spec; the other is told 409 with that job
+    id — never a 2xx whose job silently ignores its values."""
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    before = _job_count()
+    s1, s2 = SessionLocal(), SessionLocal()
+    try:
+        a1, a2 = s1.get(Agent, agent_id), s2.get(Agent, agent_id)
+        r1 = service._repair(s1, a1, ARCHITECT, BUCKET, PresetEdit({"max_tokens": 1111}),
+                             force=False)
+        s1.commit()
+        with pytest.raises(service.AppError) as exc:
+            service._repair(s2, a2, ARCHITECT, BUCKET, PresetEdit({"max_tokens": 2222}),
+                            force=False)
+        s2.rollback()
+    finally:
+        s1.close()
+        s2.close()
+    assert exc.value.code == "system_agent.deploy_in_progress"
+    assert exc.value.detail["job_id"] == r1.job.id
+    assert _job_count() - before == 1
+    assert _spec_of(agent_id)["max_tokens"] == 1111  # the accepted update is the stored one
+    # the loser retries once the winner's job has settled and is accepted
+    _set_status(agent_id, "active")
+    res = client.post(INSTALL, json={"max_tokens": 2222})
+    assert res.status_code == 202 and _spec_of(agent_id)["max_tokens"] == 2222
+
+
+def test_member_sees_settings_but_cannot_edit_them_even_with_deploy_permission(gated):
+    admin, member = gated
+    _mark_ready()
+    agent_id = admin.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    perms = member.get("/api/auth/status").json()["permissions"]
+    assert "agents.deploy" in perms  # the member holds the ordinary deploy right
+    seen = _status(member)
+    assert seen["settings"]["model_id"] == SOL and seen["settings"]["max_tokens"] == 65536
+    assert seen["can_configure"] is False and seen["can_repair"] is False
+    for body in ({"max_tokens": 1000}, {"system_prompt": "mine"}, {"reset": ["model_id"]}):
+        res = member.post(INSTALL, json=body)
+        assert res.status_code == 403 and res.json()["code"] == "auth.forbidden", body
+    assert _spec_of(agent_id)["max_tokens"] == 65536 and _job_count() == 1
+    # the administrator's edit through the same route is accepted
+    assert admin.post(INSTALL, json={"max_tokens": 1000}).status_code == 202
+    assert _status(member)["settings"]["max_tokens"] == 1000
+    # and the admin edit grants no generic lifecycle bypass
+    assert admin.delete(f"/api/agents/{agent_id}").status_code == 403
+    assert admin.post(f"/api/agents/{agent_id}/convert").status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# SE-040 correction: races through the REAL route, separate DB sessions, exact pauses
+# ---------------------------------------------------------------------------
+
+
+def _pause_before_claim(monkeypatch, marker_prompt: str):
+    """Pause exactly ONE request — the edit whose resolved system prompt is
+    ``marker_prompt`` — inside the release-pin → claim window: on the digest-bearing
+    ``build_spec`` call ``_repair`` makes right after pinning the bundle and right
+    before its compare-and-set. Every other caller is untouched."""
+    real = presets.build_spec
+    resolved, release = threading.Event(), threading.Event()
+
+    def paused(preset, bucket, options, *, digest=None):
+        spec = real(preset, bucket, options, digest=digest)
+        if digest is not None and options.system_prompt == marker_prompt:
+            resolved.set()
+            assert release.wait(timeout=15), "the paused request was never released"
+        return spec
+
+    monkeypatch.setattr(service.catalogue, "build_spec", paused)
+    return resolved, release
+
+
+def _finish_job(res_json: dict, agent_id: str) -> None:
+    """Run the pipeline's own completion for an accepted job (row back to active)."""
+    from app.deployer.pipeline import _finish
+
+    db = SessionLocal()
+    try:
+        _finish(db, res_json["job_id"], res_json["deployment_id"], agent_id, error=None)
+    finally:
+        db.close()
+
+
+def test_delayed_partial_edit_cannot_revert_a_completed_concurrent_edit(client, monkeypatch):
+    """Host reproduction #5: A {system_prompt} is resolved, then B {timeout_seconds}
+    is accepted AND finishes before A claims. A must land on top of B's row (keeping
+    1234) or be refused — never accepted with the timeout reverted to 900."""
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    resolved, release = _pause_before_claim(monkeypatch, "A pending prompt")
+    outcome: dict = {}
+
+    def run_a() -> None:
+        outcome["a"] = client.post(INSTALL, json={"system_prompt": "A pending prompt"})
+
+    thread = threading.Thread(target=run_a)
+    thread.start()
+    assert resolved.wait(timeout=15)
+    b = client.post(INSTALL, json={"timeout_seconds": 1234})
+    assert b.status_code == 202, b.text
+    _finish_job(b.json(), agent_id)  # B's job completes: row active again, version moved
+    assert _agent(agent_id).status == "active"
+    release.set()
+    thread.join(timeout=20)
+    a = outcome["a"]
+    assert a.status_code == 202, a.text  # resolved again on B's row and accepted
+    spec = _spec_of(agent_id)
+    assert spec["system_prompt"] == "A pending prompt"
+    assert spec["timeout_seconds"] == 1234  # the member A omitted keeps B's value
+    assert a.json()["agent"]["spec"]["timeout_seconds"] == 1234
+    assert _job_count() == 3
+
+
+def test_delayed_edit_while_the_other_is_still_deploying_is_refused_not_reverted(
+    client, monkeypatch
+):
+    """Same window, but B has not finished: A is told 409 with B's job, and B's
+    spec is untouched (no silent coalescing onto a job carrying other values)."""
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    resolved, release = _pause_before_claim(monkeypatch, "A pending prompt")
+    outcome: dict = {}
+
+    def run_a() -> None:
+        outcome["a"] = client.post(INSTALL, json={"system_prompt": "A pending prompt"})
+
+    thread = threading.Thread(target=run_a)
+    thread.start()
+    assert resolved.wait(timeout=15)
+    b = client.post(INSTALL, json={"timeout_seconds": 1234})
+    assert b.status_code == 202, b.text
+    release.set()
+    thread.join(timeout=20)
+    a = outcome["a"]
+    assert a.status_code == 409 and a.json()["code"] == "system_agent.deploy_in_progress"
+    assert a.json()["detail"]["job_id"] == b.json()["job_id"]
+    spec = _spec_of(agent_id)
+    assert spec["timeout_seconds"] == 1234 and spec["system_prompt"] == ARCHITECT.system_prompt
+    assert _job_count() == 2
+
+
+def _race_two(client, bodies: list[dict], monkeypatch) -> list:
+    """Two real requests that both pass the pre-claim checks before either claims:
+    a barrier inside ``_release_pin`` holds each until the other arrives.
+
+    Both requests are issued inside ONE ``with client:`` context held by the
+    controlling thread. A context-less ``TestClient`` opens a separate AnyIO portal
+    (its own event loop) per concurrent call, and FastAPI 0.139's lazily built
+    ``IncludedRouter`` route-candidate cache is not safe across two loops racing to
+    fill it: one request can be answered 404 before the router matches, leaving the
+    other alone at the barrier (``BrokenBarrierError`` after 15 s). One context ⇒
+    one loop routes both requests; the handlers still run as separate AnyIO service
+    workers with their own SQL sessions, so the claim race itself is unchanged. The
+    app has no lifespan handler — entering the context starts nothing (temp DB and
+    the AWS/network guards stay in force).
+    """
+    real = service._release_pin
+    barrier = threading.Barrier(2)
+    arrivals: list[float] = []
+
+    def together(preset):
+        pin = real(preset)
+        arrivals.append(time.monotonic())
+        barrier.wait(timeout=15)
+        return pin
+
+    monkeypatch.setattr(service, "_release_pin", together)
+    results: list = [None, None]
+    errors: list[str] = [None, None]  # type: ignore[list-item]
+
+    def run(i: int) -> None:
+        try:
+            results[i] = client.post(INSTALL, json=bodies[i])
+        except Exception as exc:  # noqa: BLE001 — surfaced in the assertion below
+            errors[i] = f"{type(exc).__name__}: {exc}"
+
+    threads = [threading.Thread(target=run, args=(i,), name=f"race-{i}") for i in range(2)]
+    with client:  # one portal / event loop for both concurrent requests
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join(timeout=30)
+    diagnostics = {
+        "bodies": bodies,
+        "arrivals_at_barrier": len(arrivals),
+        "errors": errors,
+        "statuses": [r.status_code if r is not None else None for r in results],
+        "responses": [r.text[:300] if r is not None else None for r in results],
+    }
+    assert not any(errors), diagnostics
+    assert all(r is not None for r in results), diagnostics
+    assert len(arrivals) == 2, diagnostics  # both really met at the barrier
+    return results
+
+
+def test_two_explicit_first_installs_with_different_settings_never_both_accept(
+    client, monkeypatch
+):
+    """Host reproduction #6: the unique-index loser asked for other settings, so it is
+    409 with the winner's job — not a 202 `changed: false` that stored the winner's
+    values under its own request."""
+    _mark_ready()
+    results = _race_two(client, [{"max_tokens": 1111}, {"max_tokens": 2222}], monkeypatch)
+    codes = sorted(r.status_code for r in results)
+    assert codes == [202, 409], [(r.status_code, r.text) for r in results]
+    winner = next(r for r in results if r.status_code == 202)
+    loser = next(r for r in results if r.status_code == 409)
+    asked = json.loads(winner.request.content)["max_tokens"]  # parse, never byte-compare
+    assert winner.json()["agent"]["spec"]["max_tokens"] == asked
+    assert loser.json()["code"] == "system_agent.deploy_in_progress"
+    assert loser.json()["detail"]["job_id"] == winner.json()["job_id"]
+    assert len(_rows(system_key=KEY)) == 1 and _job_count() == 1
+
+
+def test_two_identical_or_bodiless_first_installs_still_coalesce(client, monkeypatch):
+    _mark_ready()
+    results = _race_two(client, [{"max_tokens": 4096}, {"max_tokens": 4096}], monkeypatch)
+    assert sorted(r.status_code for r in results) == [202, 202]
+    assert {r.json()["job_id"] for r in results} == {results[0].json()["job_id"]}
+    assert sorted(r.json()["changed"] for r in results) == [False, True]
+    assert _spec_of(results[0].json()["agent"]["id"])["max_tokens"] == 4096
+    assert len(_rows(system_key=KEY)) == 1 and _job_count() == 1
+
+
+def test_two_explicit_edits_on_an_active_row_refuse_the_loser_honestly(client, monkeypatch):
+    _mark_ready()
+    agent_id = client.post(INSTALL, json={}).json()["agent"]["id"]
+    _set_status(agent_id, "active", "arn:aws:bedrock-agentcore:us-west-2:1:harness/h1")
+    results = _race_two(client, [{"max_tokens": 1111}, {"max_tokens": 2222}], monkeypatch)
+    assert sorted(r.status_code for r in results) == [202, 409], [r.text for r in results]
+    winner = next(r for r in results if r.status_code == 202)
+    loser = next(r for r in results if r.status_code == 409)
+    assert loser.json()["detail"]["job_id"] == winner.json()["job_id"]
+    assert _spec_of(agent_id)["max_tokens"] == winner.json()["agent"]["spec"]["max_tokens"]
+    assert _job_count() == 2

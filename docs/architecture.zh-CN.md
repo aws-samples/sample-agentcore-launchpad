@@ -328,10 +328,48 @@ evaluator 映射、AgentCore 优先的取舍、证据分级、不自主执行）
 | 运行中，版本与选项相同 | 无操作（`200`，`job_id` = 产出当前运行中预置的那个任务） |
 | 失败 / 选项变更 / 技能包更新 / `force: true` | 更新任务 = 就地重新发布（`202`） |
 
-请求体是必需的 JSON 对象；`{}` 在首次安装时表示“平台默认值”，在修复时表示“已存选择”。维护
+请求体是必需的 JSON 对象，且是一次**局部编辑**（SE-040）：`{}` 在首次安装时表示“预置默认值”，在修复时
+表示“完全按已存选择”；给出的成员替换已存值，省略的成员保持不变；`reset: [...]` 把指定成员恢复为本构建的
+默认值，`clear: ["max_tokens" | "reasoning_effort"]` 让这两个可选参数不再发送（JSON `null` 表示“不变”，
+绝不表示“清除”）。未知成员——`name`、`allowed_tools`、`memory`、`skills`、`tools`、`system_key` 等——在
+写入任何行、任务或调用 AWS 之前以 `422` 拒绝；越界取值与不支持的组合（例如给非 OpenAI 模型设置
+`reasoning_effort`）返回 `422 system_agent.invalid_options`。局部编辑在**声明事务内部**针对已存 spec 解析，修复的条件更新同时以该行的状态*与*版本（解析时读到的
+`updated_at`）为条件：期间发生变化的行（某个并发编辑已被接受并完成）会让声明失败，同一局部编辑在新状态上
+重新解析（最多三次，随后返回 `409 system_agent.conflict`），因此编辑省略的成员绝不会被回退为陈旧值。部署
+任务持有该行期间的显式编辑返回 `409 system_agent.deploy_in_progress` 并附带该任务 ID，而不是合并到该任务上
+（无请求体的修复点击仍会合并）；两个并发的*首次*安装若请求了不同设置，唯一索引的落败方同样得到 `409`
+（相同或无请求体的孪生请求仍合并到胜出方任务）——并发保存绝不会被悄悄丢弃或被虚假接受。维护
 声明是持久且原子的：新安装在部分唯一索引上竞争，落败方重读胜出方**并返回其任务 ID**；修复在与
 所建任务行相同的事务里执行一次条件更新 `UPDATE … WHERE status IN (active, failed)`，两个都
-加载了运行中行的会话收敛到同一个任务。**卸载是持久、独占持有的任务，不是终态标记**：
+加载了运行中行的会话收敛到同一个任务。**管理员可编辑的设置与架构师预置的推理默认值（SE-040）。** 预置的*推理*与*循环*设置保存在其 spec 上，
+`GET /api/system-agents` 以 `settings`（已存值；未安装时为 `{}`）、`defaults`（本构建的目录默认值）、
+`editable_fields` 以及裁决 `can_configure`（管理员 + 已稳定 + 满足前置条件，与 `can_repair` 同一判定）
+返回。可编辑成员为 `model_id` / `model_source`、`max_tokens`、`reasoning_effort`、`system_prompt`、
+`max_iterations`、`timeout_seconds` 与 `knowledge_bases`；其余（名称、方法、工具、带版本技能、允许的工具、
+关闭的记忆、专用角色）仍由目录持有，请求体无法触及。`AgentSpec` 新增两个仅 Harness 使用的参数：
+`max_tokens` 是**单次模型调用**的输出上限——即 `CreateHarness`/`UpdateHarness` 的
+`model.bedrockModelConfig.maxTokens`，*不是*聚合的 `InvokeHarness.maxTokens`，也不是花费上限；
+`reasoning_effort`（`low | medium | high`）**只接受原生 Bedrock 上的 OpenAI GPT-5.x 模型**
+（`model_source=bedrock`，Converse），通过 `bedrockModelConfig.additionalParams` 以
+`{"additional_request_fields": {"reasoning": {"effort": …}}}` 发送——这是 Harness 转发为
+`Converse.additionalModelRequestFields` 的 Strands `BedrockModel` 配置键，Bedrock 对 GPT-5.6 接受
+`reasoning.effort`（扁平的 `reasoning_effort` 会被当作未知参数拒绝）。其他任何组合（Claude/Nova 模型、
+Bedrock Mantle 的 Responses API、非 Harness 方法）由 schema 拒绝，而不是猜测或悄悄丢弃；不带这两个参数的
+spec 发送与以往完全相同的请求。架构师预置的**新安装默认值**为 `us.openai.gpt-5.6-sol`（美国跨区域推理
+配置，原生 Bedrock/Converse——按 Agent 的角色同时授权该配置与底层基础模型）、`max_tokens: 65536` 与
+`reasoning_effort: "high"`；平台 `DEFAULT_MODEL_ID` 与普通向导默认值不变。已存行**不做迁移**：由早期构建
+安装的预置在读取、修复与技能包更新中保留其模型、提示词与缺省的参数，直到管理员显式保存更改（或 `reset`）——
+`options_from_spec` 原样恢复每个可编辑成员，包括与本构建常量不同的系统提示词，因此目录中的提示词变更只有通过
+显式 `reset: ["system_prompt"]` 才会到达已安装预置（控制台提供“使用本构建的提示词”）。控制台的**“配置”**
+对话框（系统预置面板；成员看到“查看设置”，字段只读，且无论持有哪些 `perm:agents.*`，`POST …/install`
+对成员仍为 `403`）预填已存值、标出与默认值不同的字段、在客户端校验范围、在显式确认后只提交改动的成员，并像
+安装按钮一样消费 `202`/`200`/`409`/`422` 结果；取消不提交任何内容；保存进行中对话框不可关闭（面板持有请求及其
+完成，因此被接受的 `202` 一定落地为“部署中”+ 任务）；该界面的每次读取与保存——面板轮询、安装/修复/卸载、
+编辑器的知识库目录与保存——都把面板正在显示的 Workspace 作为显式 `X-Workspace` 头固定下来，因此另一个标签页
+切换共享选择绝不会把它们导向别的 Workspace（同一标签页内切换仍会关闭对话框）。持久记忆保持关闭：这只关闭 AgentCore *记忆*——Launchpad 台账中的对话记录
+与 CloudWatch 日志仍保留，系统提示词现已明确告知 Agent 这一点（绝不说“什么都不保留”）。
+
+**卸载是持久、独占持有的任务，不是终态标记**：
 `DELETE /api/system-agents/{key}` 把行置为非终态 `uninstalling`，并**同时**创建
 `uninstall_system_agent` 任务（`202 {job_id, attempt, started, preset}`）。声明是对请求读到的行
 `updated_at` 的乐观条件更新，因此两个同时到达的请求——首次的一对，或失败尝试的两次重试——只创建

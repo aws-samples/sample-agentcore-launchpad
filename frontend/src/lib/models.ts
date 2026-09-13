@@ -60,8 +60,29 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
       label: "Nova 2 Lite (global)",
       api_format: "converse_stream",
     },
+    // OpenAI GPT-5.6 Sol through the native Bedrock US cross-region inference
+    // profile (Converse). Listed LAST on purpose: `defaultModelFor` takes entry
+    // [0], so this must not move the ordinary default. It is the system
+    // architect preset's default (backend `system_agents/presets.py`) and the
+    // only catalogue model that accepts a `reasoning_effort`.
+    {
+      model_id: "us.openai.gpt-5.6-sol",
+      label: "GPT-5.6 Sol (US cross-region · Converse)",
+      api_format: "converse_stream",
+    },
   ],
 };
+
+/** Reasoning effort a harness may pass to the model (OpenAI GPT-5.x on native
+ *  Bedrock only — the backend refuses every other pairing). */
+export type ReasoningEffort = "low" | "medium" | "high";
+export const REASONING_EFFORTS: ReasoningEffort[] = ["low", "medium", "high"];
+
+/** Whether `model_id` on `source` may carry a `reasoning_effort` (mirrors
+ *  `AgentSpec._inference_knobs_supported`). */
+export function supportsReasoningEffort(modelId: string, source: ModelSource): boolean {
+  return source === "bedrock" && modelId.includes("openai.");
+}
 
 /** Form default for the methods that can express an arbitrary model. */
 export const DEFAULT_MODEL_SOURCE: ModelSource = "mantle";
