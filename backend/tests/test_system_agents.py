@@ -3107,27 +3107,55 @@ def test_delayed_edit_while_the_other_is_still_deploying_is_refused_not_reverted
 
 def _race_two(client, bodies: list[dict], monkeypatch) -> list:
     """Two real requests that both pass the pre-claim checks before either claims:
-    a barrier inside ``_release_pin`` holds each until the other arrives."""
+    a barrier inside ``_release_pin`` holds each until the other arrives.
+
+    Both requests are issued inside ONE ``with client:`` context held by the
+    controlling thread. A context-less ``TestClient`` opens a separate AnyIO portal
+    (its own event loop) per concurrent call, and FastAPI 0.139's lazily built
+    ``IncludedRouter`` route-candidate cache is not safe across two loops racing to
+    fill it: one request can be answered 404 before the router matches, leaving the
+    other alone at the barrier (``BrokenBarrierError`` after 15 s). One context ⇒
+    one loop routes both requests; the handlers still run as separate AnyIO service
+    workers with their own SQL sessions, so the claim race itself is unchanged. The
+    app has no lifespan handler — entering the context starts nothing (temp DB and
+    the AWS/network guards stay in force).
+    """
     real = service._release_pin
     barrier = threading.Barrier(2)
+    arrivals: list[float] = []
 
     def together(preset):
         pin = real(preset)
+        arrivals.append(time.monotonic())
         barrier.wait(timeout=15)
         return pin
 
     monkeypatch.setattr(service, "_release_pin", together)
     results: list = [None, None]
+    errors: list[str] = [None, None]  # type: ignore[list-item]
 
     def run(i: int) -> None:
-        results[i] = client.post(INSTALL, json=bodies[i])
+        try:
+            results[i] = client.post(INSTALL, json=bodies[i])
+        except Exception as exc:  # noqa: BLE001 — surfaced in the assertion below
+            errors[i] = f"{type(exc).__name__}: {exc}"
 
-    threads = [threading.Thread(target=run, args=(i,)) for i in range(2)]
-    for th in threads:
-        th.start()
-    for th in threads:
-        th.join(timeout=30)
-    assert all(r is not None for r in results), "a racing request did not return"
+    threads = [threading.Thread(target=run, args=(i,), name=f"race-{i}") for i in range(2)]
+    with client:  # one portal / event loop for both concurrent requests
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join(timeout=30)
+    diagnostics = {
+        "bodies": bodies,
+        "arrivals_at_barrier": len(arrivals),
+        "errors": errors,
+        "statuses": [r.status_code if r is not None else None for r in results],
+        "responses": [r.text[:300] if r is not None else None for r in results],
+    }
+    assert not any(errors), diagnostics
+    assert all(r is not None for r in results), diagnostics
+    assert len(arrivals) == 2, diagnostics  # both really met at the barrier
     return results
 
 
