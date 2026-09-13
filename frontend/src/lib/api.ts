@@ -941,6 +941,7 @@ export interface AssistantEvalPlanEvaluator {
   model_id?: string;
   base_evaluator_id?: string;
   rules?: { version: number; checks: Record<string, unknown>[] };
+  rating_scale?: { value: number; label: string; definition: string }[];
   lambda_timeout_s?: number;
   reason?: string;
   obligation?: string;
@@ -960,6 +961,7 @@ export interface AssistantEvalPlanContent {
     assertions?: string[];
     execution?: Record<string, unknown> | null;
     note?: string;
+    review_required?: boolean;
   }[];
   evaluators: AssistantEvalPlanEvaluator[];
   recommendations: {
@@ -1025,6 +1027,8 @@ export interface AssistantEvalResource {
   attempts?: number;
   result?: Record<string, unknown> | null;
   cleanup?: { at: string; ok: boolean; note: string | null } | null;
+  owned?: boolean;
+  recovered?: boolean;
   link?: string;
 }
 
@@ -1038,6 +1042,7 @@ export interface AssistantEvalOperation {
   approved_by: string;
   account_id: string;
   region: string;
+  pinned: Record<string, string | null>;
   status: AssistantEvalOperationStatus;
   attempts: number;
   max_attempts: number;
@@ -3338,25 +3343,37 @@ export const api = {
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}/proposal/approve`,
       { method: "POST", body: JSON.stringify({ revision, content_hash: contentHash }) },
     ),
-  /* ── SE-047 evaluation-assets plan (private to the conversation owner) ── */
-  assistantEvalPlan: (id: string) =>
+  /* ── SE-047 evaluation-assets plan (private to the conversation owner) ──
+     Every call pins the workspace the panel is DISPLAYING (`X-Workspace`), so a
+     workspace switch in another tab can never redirect a prepare/approve/cleanup. */
+  assistantEvalPlan: (id: string, workspaceId: string | null) =>
     request<AssistantEvalPlanState>(
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}/evaluation-plan`,
+      { headers: pinnedWorkspace(workspaceId) },
     ),
   /** Draft a plan revision from one proposal revision — no resource side effects. */
-  assistantEvalPlanPrepare: (id: string, revision: number) =>
+  assistantEvalPlanPrepare: (id: string, revision: number, workspaceId: string | null) =>
     request<{ plan: AssistantEvalPlan } & AssistantEvalPlanState>(
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}/evaluation-plan/prepare`,
-      { method: "POST", body: JSON.stringify({ revision }) },
+      { method: "POST", body: JSON.stringify({ revision }), headers: pinnedWorkspace(workspaceId) },
     ),
   /** A member edit is a NEW plan revision (draft or invalid with its errors). */
-  assistantEvalPlanEdit: (id: string, content: Record<string, unknown>) =>
+  assistantEvalPlanEdit: (
+    id: string,
+    content: Record<string, unknown>,
+    workspaceId: string | null,
+  ) =>
     request<{ plan: AssistantEvalPlan } & AssistantEvalPlanState>(
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}/evaluation-plan`,
-      { method: "PUT", body: JSON.stringify({ content }) },
+      { method: "PUT", body: JSON.stringify({ content }), headers: pinnedWorkspace(workspaceId) },
     ),
   /** Admin + owner: create the assets of exactly this plan revision/hash. */
-  assistantEvalPlanMaterialize: (id: string, planRevision: number, planHash: string) =>
+  assistantEvalPlanMaterialize: (
+    id: string,
+    planRevision: number,
+    planHash: string,
+    workspaceId: string | null,
+  ) =>
     request<{ operation: AssistantEvalOperation; started: boolean }>(
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}/evaluation-plan/materialize`,
       {
@@ -3366,21 +3383,23 @@ export const api = {
           plan_hash: planHash,
           acknowledge_disclosure: true,
         }),
+        headers: pinnedWorkspace(workspaceId),
       },
     ),
-  assistantEvalOperation: (id: string, operationId: string) =>
+  assistantEvalOperation: (id: string, operationId: string, workspaceId: string | null) =>
     request<{ operation: AssistantEvalOperation }>(
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}/evaluation-plan/operations/${encodeURIComponent(operationId)}`,
+      { headers: pinnedWorkspace(workspaceId) },
     ),
-  assistantEvalOperationRetry: (id: string, operationId: string) =>
+  assistantEvalOperationRetry: (id: string, operationId: string, workspaceId: string | null) =>
     request<{ operation: AssistantEvalOperation; started: boolean }>(
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}/evaluation-plan/operations/${encodeURIComponent(operationId)}/retry`,
-      { method: "POST" },
+      { method: "POST", headers: pinnedWorkspace(workspaceId) },
     ),
-  assistantEvalOperationCleanup: (id: string, operationId: string) =>
+  assistantEvalOperationCleanup: (id: string, operationId: string, workspaceId: string | null) =>
     request<{ operation: AssistantEvalOperation }>(
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}/evaluation-plan/operations/${encodeURIComponent(operationId)}/assets`,
-      { method: "DELETE" },
+      { method: "DELETE", headers: pinnedWorkspace(workspaceId) },
     ),
   listChatSessions: (agentId: string) =>
     request<{ sessions: ChatSessionInfo[] }>(`/api/chat/${encodeURIComponent(agentId)}/sessions`),

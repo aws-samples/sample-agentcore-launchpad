@@ -1039,28 +1039,55 @@ evaluation resources.
 **The typed plan** (`backend/app/assistant/evaluation_plan.py`, ≤ 160 000 bytes) is
 bound to `source_revision` + `source_content_hash`, hashed canonically, and carries:
 `scenarios[]` (one standard predefined Dataset item per golden test, with the original
-golden-test id and optionally the SE-046 `launchpad_execution` procedure), `evaluators[]`
+golden-test id, turns/expected responses/assertions/expected trajectory, optionally the
+SE-046 `launchpad_execution` procedure, and a `review_required` flag), `evaluators[]`
 (a discriminated union: `existing` id reference · `judge` with pinned instructions /
 rating scale / model / level · `derived` · `code` with **declarative rules only** ·
 and the non-automatable kinds `orchestration` / `manual_review` / `metric_baseline` /
 `external_control` with their reason and obligation), `recommendations[]` (every prose
 recommendation of the revision exactly once, `mapped` to keys or explicitly
 `unresolved` / `declined`) and `blocked_golden_tests[]`. Validation refuses: a golden
-test that is neither a scenario nor blocked, a recommendation missing or altered, a
-mapped key that is not an evaluator, judge placeholders not documented for the level
-(`{context}` `{assistant_turn}` `{expected_response}` at TRACE; `{context}`
-`{available_tools}` `{actual_tool_trajectory}` `{expected_tool_trajectory}`
-`{assertions}` at SESSION), more than **10** AWS evaluators, TOOL_CALL code evaluators,
-and any dataset item the SE-046 execution gate rejects. Nothing in the plan may carry
-an ARN, a Lambda name, Python or a regex — `extra="forbid"` everywhere. A proposal may
-carry an optional structured `evaluation_plan` seed (validated with the same union; a
-revision without it serializes exactly as before, so old hashes are unchanged); the
-platform draft (`draft_plan`) starts from it, otherwise maps only ids it can identify
-exactly (`Builtin.*` / `ThirdParty.*` named in the prose), drafts **one** clearly
-labelled `draft: true` semantic rubric from the golden tests' pass criteria, drafts a
-`reference_trajectory` code check when golden tests name expected tools, and leaves
-every other recommendation `unresolved`. It never claims a prose recommendation was
-implemented.
+test that is neither a scenario nor blocked, a scenario still `review_required`, a
+recommendation missing or altered, a mapped key that is not an evaluator, judge
+placeholders not documented for the level (`{context}` `{assistant_turn}`
+`{expected_response}` at TRACE; `{context}` `{available_tools}`
+`{actual_tool_trajectory}` `{expected_tool_trajectory}` `{assertions}` at SESSION),
+`reference_response` rules outside TRACE / `reference_trajectory` outside SESSION, more
+than **10** AWS evaluators, TOOL_CALL code evaluators, and any dataset item the SE-046
+execution gate rejects. Nothing in the plan may carry an ARN, a Lambda name, Python or a
+regex — `extra="forbid"` everywhere.
+
+**Per-golden-test scoring is only real through the reference envelope.** A dataset run
+applies one evaluator list to every session, so the plan's `golden_test_ids` mapping is
+enforced, not decorative: an evaluator mapped to a *subset* of golden tests must read a
+reference (`{expected_response}` / `{assertions}` / `{expected_tool_trajectory}`
+placeholders, or `reference_*` code rules) and every mapped scenario must carry that
+reference — otherwise the plan is refused before anything is created; a non-reference
+evaluator is either global (all / none) or refused. The created Dataset item keeps the
+reviewed golden-test facts (`metadata.launchpad_assets.golden_test`: id, input,
+expected response, expected tools, forbidden behaviour, pass criteria, evaluator note,
+source), the plan-key → kind / golden tests / gate / **resolved evaluator id** map
+(filled in once the evaluators exist) and `applies` (the keys that target this
+scenario) — never the transcript. Runs that pick a managed reference-driven code
+evaluator for a scope without that reference are refused up front
+(`run.judge_needs_ground_truth`), and online evaluation refuses such evaluators
+outright, using the owning operation's plan rather than a UI badge.
+
+**Drafts never turn prose into a procedure.** A proposal may carry an optional
+structured `evaluation_plan` seed — typed `scenarios` (turns, references, the SE-046
+procedure for multi-actor / multi-session tests), typed `evaluators` and
+`recommendation_keys` — validated shape-first by the same union (a malformed seed is
+an *invalid* revision, never a 500; a revision without a seed serializes exactly as
+before, so old hashes are unchanged). `draft_plan` uses seeded scenarios as-is; every
+other golden test becomes a single-turn scenario marked `review_required` that the
+member confirms, rewrites as typed steps or blocks. Seeded evaluator keys are
+reserved first; prose recommendations map only to ids identified exactly
+(`Builtin.*` / `ThirdParty.*`, collision-safe keys, never removed by a seed mapping of
+another kind) or to the seed's explicit `recommendation_keys`; everything else stays
+`unresolved`. The single drafted judge is SESSION-level and scores each scenario
+against **its own** `assertions` (pass criteria / forbidden behaviour) via the
+`{assertions}` reference — there is no global rubric mixing golden tests — and it is
+labelled `draft: true`.
 
 **Code evaluators are one reviewed static Lambda + data.** `app/assistant/lambda_runtime/
 handler.py` is stdlib-only (json/os), contains no `eval`/`exec`/`subprocess`/`re`/network
@@ -1086,45 +1113,62 @@ PII solicitation, dependency-inducing language or child safety need a calibrated
 and human review — a passing keyword rule is not a safety certificate, and reference
 rules must not score live traffic (the operation flags them `reference_dependent`).
 
-**Durable, single-writer materialization** (`app/assistant/evaluation_assets.py`). The
-operation row is committed **before** any AWS write with the exact plan hash, approver,
-immutable owner principal, target account/region and one intent per resource (unique
-name embedding the operation id, stable `clientToken`, the exact request once composed,
-ids/ARNs/digests read back, status, safe error). `UNIQUE(plan_id)` makes a repeated or
-concurrent approval return the same operation. A worker claims a lease (conditional
-UPDATE; stale after 10 min), re-reads the lease token **and** re-checks that the
-approver is still an active administrator before every mutation, and persists after
-each step. Order: `dataset` (ledger; a retry never overwrites member edits made
-afterwards) → `lambda_role` (trust `lambda.amazonaws.com` with `aws:SourceAccount`; inline
-policy = `logs:CreateLogStream`/`PutLogEvents` on its own log group only) → `log_group`
-(14-day retention) → `lambda_function` (python3.12, 256 MB, timeout = max rule timeout ≤
-300 s, reserved concurrency 5, no provisioned concurrency; wait Active; `PublishVersion`
-pinned to the digest; readback of CodeSha256/Runtime/Handler/Role/Version) →
-`lambda_permission` (`bedrock-agentcore.amazonaws.com` + `SourceAccount` on the
-version; no SourceArn pattern is documented, so none is invented) → `role_grant`
-(optional; the workspace execution role resolved by ARN, its `RoleId` persisted and
-re-compared, trusted only when tagged `launchpad:managed` or `launchpad-`-prefixed; an
-additive inline policy `launchpad-evalop-<op>` granting `lambda:InvokeFunction` +
-`GetFunction` on the exact function + version ARNs; trust and other policies untouched)
-→ every `evaluator:<key>` (CreateEvaluator with the persisted token, GetEvaluator until
-ACTIVE, configuration must equal the request; code evaluators pin the **version** ARN).
-A lost response replays the same token/request; a `Conflict*`/`AlreadyExists` on a fresh
-intent is a **foreign resource** (recorded as `conflict`, never adopted by name or tag;
-a Lambda conflict is accepted as ours only when CodeSha256, Role and the operation tag
-all match the persisted intent). Readback drift is recorded and refused. Retries are
-explicit and bounded (5 attempts); a partial outcome stays `partial` with each
-resource's error — never a READY badge over an error. Startup resumes only `queued` /
-`running` operations. Status reads are ledger-only.
+**Durable, fenced materialization** (`app/assistant/evaluation_assets.py`). Approval
+is one atomic claim: a conditional UPDATE of the plan row (still `draft`, still this
+hash, still the newest revision) in the same transaction that inserts the operation
+with every intent and the **pinned workspace identity** (account, region, assume-role
+ARN/external id, execution-role ARN and — when a grant is requested — the execution
+role's RoleId, accepted only if the role carries the `launchpad:managed` tag, never by
+name prefix); the caller is re-resolved from the database inside that transaction and
+must still be an administrator who owns the conversation. A superseded / edited /
+already-claimed plan is `409 assistant.evaluation_plan_stale` before any write. One
+host-local `flock` per operation plus a database lease token fence the worker: before
+**every** cloud write it re-reads the token, re-checks the approver and compares the
+workspace row with the pinned identity, and stops (recorded, no effect) on any change.
+A quick restart re-acquires the free lock and resumes at once; a live worker is never
+stolen. Order: `dataset` (ledger; member edits afterwards are never overwritten) →
+`lambda_role` → `log_group` → `lambda_function` (python3.12, 256 MB, timeout = max rule
+timeout ≤ 300 s; wait Active; `PublishVersion` pinned to the digest and reconciled
+against `ListVersionsByFunction` — exactly one published version may carry the digest,
+Lambda does not re-publish unchanged code; reserved concurrency 5, no provisioned
+concurrency; readback of CodeSha256 / Runtime / Handler / Role / Version / Timeout /
+MemorySize / State / reserved concurrency) → `lambda_permission`
+(`bedrock-agentcore.amazonaws.com` + `SourceAccount` on the version; an existing
+statement is accepted only when it equals that exact scope) → `role_grant` (the
+pinned role re-read: ARN, RoleId and tag must match; an additive inline policy
+`launchpad-evalop-<op>` granting `lambda:InvokeFunction` + `GetFunction` on the
+**published version ARN only**, never `$LATEST`; trust and other policies untouched;
+document read back) → every `evaluator:<key>` (CreateEvaluator with the persisted
+token, GetEvaluator until ACTIVE, id/name/level/config must equal the request; code
+evaluators pin the version ARN; an `existing` reference must resolve to the same id
+and be usable). A failure or conflict in the code chain marks the rest of the chain
+and the code evaluators `blocked`; judges, derived and existing evaluators still
+proceed.
 
-**Cleanup** (`DELETE …/operations/{id}/assets`, admin + owner) deletes exactly the
-recorded owned artifacts in reverse order — evaluators (an evaluator locked by an
-online configuration is recorded as `delete_failed`, not hidden), the additive role
-policy, the function (and its resource policy), the log group, the dedicated role (only
-if its `RoleId` still matches) — and leaves the local Dataset (a member asset removable
-in Evaluation → Datasets) and every foreign resource alone. The ordinary
-`DELETE /api/eval/evaluators/{id}` refuses (`409 evaluator.managed_by_operation`) an
-evaluator an operation owns, so its Lambda/IAM footprint cannot become an undeclared
-orphan.
+**Ownership proof for resources without native idempotency.** Each intent persists a
+random *provenance nonce* before its create call: the role description and tag, the
+log-group tag, and the Lambda package itself (`provenance.json` → the digest). After a
+lost response, a resource found under our name is ours only when it carries that nonce
+(role/log group) or that CodeSha256 (function) — something nobody could have produced
+before our call; anything else, including a resource wearing our operation tag, is a
+**foreign collision**: recorded as `conflict`, never adopted, never deleted. Evaluators
+replay the service's own `clientToken`; a name conflict with a different token is
+foreign. Readback drift is `conflict` too — the record stays owned (`owned: true`)
+but is never repaired. Retries are explicit and bounded (5 attempts); a partial
+outcome stays `partial` with each resource's error.
+
+**Cleanup** (`DELETE …/operations/{id}/assets`, admin + owner) runs under the same
+lock, lease, re-authorization and pinned-identity checks, one persisted checkpoint per
+effect, dependency first: owned evaluators are deleted only when their id, name, level
+and configuration still equal the recorded request (a changed one stays a reviewable
+`conflict`; one locked by an online configuration stays `delete_failed`); the additive
+grant, the function (with its resource policy), the log group and the dedicated role
+are removed **only once no owned evaluator remains** and only after their identity
+(RoleId, CodeSha256, provenance tag) still matches — otherwise they are `retained` /
+`conflict` and reported. The local Dataset stays (a member asset removable in
+Evaluation → Datasets) and every foreign resource is left alone; `cleaned` is recorded
+only when nothing owned remains. The ordinary `DELETE /api/eval/evaluators/{id}`
+refuses (`409 evaluator.managed_by_operation`) an evaluator an operation owns.
 
 **Privacy and ownership.** Plans and operations are visible only to the conversation's
 immutable principal (foreign principal / workspace → 404, also for administrators). The
@@ -1146,7 +1190,9 @@ platform's Harness/Runtime agents (the handler accepts the documented
 `gen_ai.completion` shape plus the Strands/OTLP variants above), CreateEvaluator's
 acceptance of a **versioned** Lambda ARN, and GetEvaluator's exact `status` value
 (`ACTIVE`/`READY` accepted). ACTIVE registration plus test doubles are not proof that a
-batch run would score.
+batch run would score. Exclusion is host-local (`flock` under `data/locks/eval-assets`):
+a second console host against the same ledger is not a supported deployment for this
+feature.
 
 ### Model source (方式B + 方式C)
 

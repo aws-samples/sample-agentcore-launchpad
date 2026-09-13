@@ -486,9 +486,23 @@ def materialize_evaluation_plan(
     if ws_row is None:
         raise AppError("workspace.not_found", "workspace not found", status_code=404)
     _authorize(db, identity, ws_row)
+    def recheck(session: Session) -> Identity:
+        # re-resolved from the database INSIDE the claim transaction: a demotion,
+        # disablement or grant removal between the route check and the claim is honoured
+        fresh = resolve_identity(request, db=session) if auth_enabled() else _caller(request)
+        if fresh is None:
+            raise AppError("auth.required", "Authentication required", status_code=401)
+        if not fresh.is_admin:
+            raise AppError("auth.admin_required", "administrator role required", status_code=403)
+        fresh_ws = session.get(Workspace, ws.id)
+        if fresh_ws is None:
+            raise AppError("workspace.not_found", "workspace not found", status_code=404)
+        _authorize(session, fresh, fresh_ws)
+        return fresh if auth_enabled() else replace(fresh, username="river")
+
     outcome = assets.approve_plan(
         db, row, ws_row, plan_revision=req.plan_revision, plan_hash=req.plan_hash,
-        approved_by=identity.username, approver_user_id=identity.user_id,
+        approved_by=identity.username, approver_user_id=identity.user_id, recheck=recheck,
     )
     if outcome.started or (
         outcome.operation.status in ("queued", "running")

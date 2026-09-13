@@ -134,6 +134,26 @@ def _has_ground_truth(items: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _assert_managed_code_ground_truth(
+    db: Session, ws: WorkspaceScope, evaluators: list[str], items: list[dict[str, Any]]
+) -> None:
+    """A code evaluator created by an assistant evaluation-assets operation whose rules
+    read reference inputs (expected_response / expected_trajectory) can only score a
+    dataset scope that carries them — its Lambda answers an error envelope for every
+    session otherwise. Refused up front, like a judge with a ground-truth placeholder."""
+    from app.assistant.evaluation_assets import managed_reference_gap
+
+    gap = managed_reference_gap(db, ws.id, evaluators, available_ground_truth(items))
+    if gap:
+        named = "; ".join(f"{e} needs " + ", ".join(f"{{{p}}}" for p in g) for e, g in gap.items())
+        raise AppError(
+            "run.judge_needs_ground_truth",
+            f"{named} — this run's scope carries no such ground truth (managed code "
+            "evaluator rules read reference inputs). Use the Dataset created with it.",
+            {"evaluators": gap}, status_code=422,
+        )
+
+
 def _assert_judge_ground_truth(
     ws: WorkspaceScope, evaluators: list[str], items: list[dict[str, Any]]
 ) -> None:
@@ -1271,6 +1291,7 @@ def create_run(
 
     if req.mode == "evaluators":
         _assert_judge_ground_truth(ws, req.evaluators, items)
+    _assert_managed_code_ground_truth(db, ws, req.evaluators, items if dataset_scope else [])
 
     # Trajectory*Match evaluators score against expectedTrajectory ground
     # truth — only a dataset run whose scenarios carry it can supply that.

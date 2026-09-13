@@ -96,6 +96,11 @@ class Scenario(BaseModel):
     assertions: list[Line] = Field(default_factory=list, max_length=10)
     execution: dict[str, Any] | None = None
     note: Text = ""
+    # A legacy golden test whose text was NOT supplied as typed steps by the proposal
+    # (no structured seed) is drafted as a single-turn scenario but marked here; the
+    # member must confirm it (``false``) or block the golden test before assets can
+    # be created. Nothing infers a procedure from prose.
+    review_required: bool = False
 
 
 class DatasetSpec(BaseModel):
@@ -169,6 +174,20 @@ def _check_rules(rules: CodeRules) -> list[str]:
             errors.append(f"rules.{c.id}: {c.type} needs text")
         if c.type == "reference_trajectory" and c.mode == "subsequence":
             errors.append(f"rules.{c.id}: reference_trajectory mode must be superset or exact")
+    return errors
+
+
+def _code_level_errors(entry: CodeEvaluator) -> list[str]:
+    """Reference rules must match the level their reference input is scoped to
+    (expectedResponse is trace-scoped, expectedTrajectory session-scoped)."""
+    errors: list[str] = []
+    for c in entry.rules.checks:
+        if c.type == "reference_response" and entry.level != "TRACE":
+            errors.append(f"rules.{c.id}: reference_response needs level TRACE "
+                          "(expectedResponse is trace-scoped)")
+        if c.type == "reference_trajectory" and entry.level != "SESSION":
+            errors.append(f"rules.{c.id}: reference_trajectory needs level SESSION "
+                          "(expectedTrajectory is session-scoped)")
     return errors
 
 
@@ -310,8 +329,21 @@ def serialized_bytes(raw: Any) -> int:
 # ---------------------------------------------------------------------------
 
 
-def dataset_item(scenario: Scenario, plan_provenance: dict[str, Any]) -> dict[str, Any]:
-    """The standard predefined item for one scenario (what the Dataset stores)."""
+def golden_test_snapshot(gt: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The reviewed golden-test facts kept with a Dataset item (never the transcript)."""
+    if not isinstance(gt, dict):
+        return None
+    return {k: gt.get(k) for k in ("id", "input", "expected_response", "expected_tools",
+                                   "forbidden_behavior", "pass_criteria", "evaluator", "source")
+            if gt.get(k) not in (None, "", [])}
+
+
+def dataset_item(
+    scenario: Scenario, plan_provenance: dict[str, Any],
+    golden_test: dict[str, Any] | None = None, applies: list[str] | None = None,
+) -> dict[str, Any]:
+    """The standard predefined item for one scenario (what the Dataset stores).
+    ``applies`` lists the plan keys of the evaluators mapped to this golden test."""
     item: dict[str, Any] = {
         "scenario_id": scenario.scenario_id,
         "turns": [
@@ -324,9 +356,15 @@ def dataset_item(scenario: Scenario, plan_provenance: dict[str, Any]) -> dict[st
         item["expected_trajectory"] = list(scenario.expected_trajectory)
     if scenario.assertions:
         item["assertions"] = list(scenario.assertions)
-    metadata: dict[str, Any] = {
-        "launchpad_assets": {**plan_provenance, "golden_test_id": scenario.golden_test_id},
-    }
+    assets: dict[str, Any] = {**plan_provenance, "golden_test_id": scenario.golden_test_id}
+    snapshot = golden_test_snapshot(golden_test)
+    if snapshot:
+        assets["golden_test"] = snapshot
+    if applies is not None:
+        assets["applies"] = list(applies)
+    if scenario.note:
+        assets["note"] = scenario.note
+    metadata: dict[str, Any] = {"launchpad_assets": assets}
     if scenario.execution is not None:
         metadata[execution.EXECUTION_KEY] = scenario.execution
     item["metadata"] = metadata
@@ -342,6 +380,68 @@ def _judge_errors(entry: JudgeEvaluator) -> list[str]:
         return [f"evaluators.{entry.key}: placeholders {unknown} are not available at level "
                 f"{entry.level} (allowed: {sorted(JUDGE_PLACEHOLDERS[entry.level])})"]
     return []
+
+
+def references_needed(entry: Any) -> set[str]:
+    """Ground-truth fields an evaluator reads: ``expected_response`` / ``assertions`` /
+    ``expected_trajectory`` (judge placeholders or code reference rules)."""
+    if isinstance(entry, JudgeEvaluator):
+        found = set(_PLACEHOLDER_RE.findall(entry.instructions)) & REFERENCE_PLACEHOLDERS
+        return {"expected_trajectory" if p == "expected_tool_trajectory" else p for p in found}
+    if isinstance(entry, CodeEvaluator):
+        out: set[str] = set()
+        for c in entry.rules.checks:
+            if c.type == "reference_trajectory":
+                out.add("expected_trajectory")
+            if c.type == "reference_response":
+                out.add("expected_response")
+        return out
+    return set()
+
+
+def _scenario_references(s: Scenario) -> set[str]:
+    out: set[str] = set()
+    if any(t.expected_response for t in s.turns):
+        out.add("expected_response")
+    if s.assertions:
+        out.add("assertions")
+    if s.expected_trajectory:
+        out.add("expected_trajectory")
+    return out
+
+
+def _routing_errors(plan: EvaluationPlan) -> list[str]:
+    """Per-golden-test scoring is only real through the reference envelope.
+
+    A dataset run applies one evaluator list to EVERY session, so an evaluator
+    mapped to a subset of golden tests either scores every scenario anyway (then it
+    must be mapped to all / none, i.e. global) or it must be reference-driven, in
+    which case every mapped scenario must carry the reference it reads and the
+    unmapped ones are reported as "no reference" by the service/handler, never as a
+    pass. Reference-reading evaluators mapped to a scenario lacking the reference are
+    refused before anything is created."""
+    errors: list[str] = []
+    by_gt = {s.golden_test_id: s for s in plan.scenarios}
+    all_gts = set(by_gt)
+    for e in plan.evaluators:
+        if e.kind not in CLOUD_KINDS and e.kind != "existing":
+            continue
+        needs = references_needed(e)
+        if e.kind == "existing" and e.evaluator_id in ALL_BUILTIN_EVALUATORS:
+            if e.evaluator_id.startswith("Builtin.Trajectory"):
+                needs = {"expected_trajectory"}
+        mapped = [g for g in e.golden_test_ids if g in by_gt]
+        for gt in mapped:
+            missing = sorted(needs - _scenario_references(by_gt[gt]))
+            if missing:
+                errors.append(f"evaluators.{e.key}: golden test '{gt}' has no "
+                              f"{'/'.join(missing)} for this evaluator to score against")
+        if mapped and set(mapped) != all_gts and not needs:
+            errors.append(f"evaluators.{e.key}: targets only {sorted(mapped)} but a dataset "
+                          "run applies every evaluator to every session — map it to all "
+                          "golden tests, or make it reference-driven so the unmapped "
+                          "scenarios carry no reference for it")
+    return errors
 
 
 def reference_dependent(entry: Any) -> bool:
@@ -405,6 +505,7 @@ def validate_plan(
             errors += _judge_errors(e)
         if isinstance(e, CodeEvaluator):
             errors += [f"evaluators.{e.key}: {m}" for m in _check_rules(e.rules)]
+            errors += [f"evaluators.{e.key}: {m}" for m in _code_level_errors(e)]
         if isinstance(e, ExistingEvaluator) and e.evaluator_id.startswith("Builtin.") \
                 and e.evaluator_id not in ALL_BUILTIN_EVALUATORS:
             errors.append(f"evaluators.{e.key}: unknown builtin evaluator '{e.evaluator_id}'")
@@ -423,6 +524,12 @@ def validate_plan(
             errors.append(f"recommendations[{r.index}]: mapped without any evaluator key")
         if r.status != "mapped" and r.mapped_to:
             errors.append(f"recommendations[{r.index}]: carries keys but is not 'mapped'")
+    pending = [s.golden_test_id for s in plan.scenarios if s.review_required]
+    if pending:
+        errors.append("scenarios need review before assets can be created: "
+                      + ", ".join(pending) + " (confirm each as typed steps — "
+                      "review_required: false — or block the golden test)")
+    errors += _routing_errors(plan)
     if not errors and plan.scenarios:
         items = [dataset_item(s, {"plan": "validation"}) for s in plan.scenarios]
         try:
@@ -449,78 +556,95 @@ def _scenario_id(gt_id: str) -> str:
     return (sid or "gt")[:64]
 
 
-def _draft_rubric(content: dict[str, Any]) -> str | None:
-    """One clearly labelled semantic rubric drafted from the golden tests' pass
-    criteria / forbidden behaviour (trace level, uses {context} + {assistant_turn})."""
-    lines: list[str] = []
-    for g in content.get("golden_tests") or []:
-        crit = str(g.get("pass_criteria") or "").strip()
-        forb = str(g.get("forbidden_behavior") or "").strip()
-        if crit:
-            lines.append(f"- [{g.get('id')}] must: {crit}")
-        if forb:
-            lines.append(f"- [{g.get('id')}] must not: {forb}")
-    if not lines:
-        return None
-    head = (
-        "DRAFT rubric generated from the proposal's golden tests — calibrate with domain "
-        "experts before relying on it. Judge ONLY the assistant's reply below against the "
-        "requirements that apply to this turn; ignore requirements about other turns.\n\n"
-        "Conversation so far:\n{context}\n\nAssistant reply under evaluation:\n"
-        "{assistant_turn}\n\nRequirements:\n"
-    )
-    body = "\n".join(lines)
-    text = head + body
-    if len(text) > 3900:
-        text = text[:3880] + "\n- …(truncated)"
-    return text
+def _unique_key(base: str, used: set[str]) -> str:
+    key = base
+    n = 2
+    while key in used:
+        key = f"{base[:28]}_{n}"
+        n += 1
+    used.add(key)
+    return key
+
+
+def _seed_scenarios(seed: dict[str, Any], gts: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Structured scenarios a proposal seed supplies, keyed by golden test id (shape
+    already validated by the proposal contract)."""
+    out: dict[str, dict[str, Any]] = {}
+    ids = {str(g.get("id")) for g in gts}
+    for sc in seed.get("scenarios") or []:
+        if isinstance(sc, dict) and str(sc.get("golden_test_id")) in ids:
+            out[str(sc["golden_test_id"])] = {**sc, "review_required": False}
+    return out
 
 
 def draft_plan(
     content: dict[str, Any], *, revision: int, content_hash: str, agent_name: str
 ) -> dict[str, Any]:
-    """The editable first draft. Uses the proposal's optional structured
-    ``evaluation_plan`` seed when present (validated separately by the proposal
-    contract), otherwise classifies what it can identify exactly and leaves the rest
-    ``unresolved``. Never marks a prose recommendation as implemented."""
-    gts = content.get("golden_tests") or []
+    """The editable first draft.
+
+    * Scenarios: a proposal seed may carry typed scenarios (turns / procedure /
+      references) — those are used as-is. Every other golden test becomes a
+      single-turn scenario marked ``review_required`` (its prose is NOT parsed into a
+      procedure); the member confirms or blocks it before anything is created.
+    * Evaluators: seeded entries first (keys reserved). Prose recommendations are
+      mapped only to ids identified exactly (``Builtin.*`` / ``ThirdParty.*``) or to
+      the seed's explicit ``recommendation_keys``; a seed mapping never removes an
+      entry another recommendation references, and keys are collision-safe.
+    * One clearly labelled SESSION-level draft judge scores each scenario against ITS
+      OWN ``assertions`` (pass criteria / forbidden behaviour) through the
+      ``{assertions}`` reference — no global rubric mixing golden tests.
+    """
+    gts = [g for g in content.get("golden_tests") or [] if isinstance(g, dict) and g.get("id")]
+    seed = content.get("evaluation_plan") if isinstance(content.get("evaluation_plan"), dict) \
+        else {}
+    seeded_scenarios = _seed_scenarios(seed, gts)
     scenarios: list[dict[str, Any]] = []
     for g in gts:
+        gid = str(g["id"])
+        if gid in seeded_scenarios:
+            scenarios.append(seeded_scenarios[gid])
+            continue
         assertions = []
         if g.get("pass_criteria"):
             assertions.append(str(g["pass_criteria"])[:1000])
         if g.get("forbidden_behavior"):
             assertions.append(("Must not: " + str(g["forbidden_behavior"]))[:1000])
         scenarios.append({
-            "scenario_id": _scenario_id(str(g["id"])),
-            "golden_test_id": str(g["id"]),
+            "scenario_id": _scenario_id(gid),
+            "golden_test_id": gid,
             "turns": [{"input": str(g.get("input") or "")[:8000],
                        "expected_response": str(g.get("expected_response") or "")[:2000]}],
             "expected_trajectory": [str(t)[:200] for t in (g.get("expected_tools") or [])][:10],
             "assertions": assertions,
             "execution": None,
-            "note": "",
+            "note": "legacy golden test drafted as ONE user turn — confirm, rewrite as typed "
+                    "steps (metadata procedure) or block it",
+            "review_required": True,
         })
     evaluators: list[dict[str, Any]] = []
-    recommendations: list[dict[str, Any]] = []
-    seed = content.get("evaluation_plan") if isinstance(content.get("evaluation_plan"), dict) \
-        else None
+    used_keys: set[str] = set()
     seeded_keys: set[str] = set()
-    if seed:
-        for e in seed.get("evaluators") or []:
-            if isinstance(e, dict) and isinstance(e.get("key"), str):
-                evaluators.append(dict(e))
-                seeded_keys.add(e["key"])
-    used_keys = set(seeded_keys)
+    for e in seed.get("evaluators") or []:
+        if isinstance(e, dict) and isinstance(e.get("key"), str) and e["key"] not in used_keys:
+            evaluators.append(dict(e))
+            used_keys.add(e["key"])
+            seeded_keys.add(e["key"])
+    existing_keys: dict[str, str] = {
+        e["evaluator_id"]: e["key"] for e in evaluators
+        if e.get("kind") == "existing" and isinstance(e.get("evaluator_id"), str)
+    }
+    recommendations: list[dict[str, Any]] = []
+    rec_keys = (seed.get("recommendation_keys") or {}) if seed else {}
     for i, text in enumerate(content.get("evaluator_recommendations") or []):
         text = str(text)
-        ids = [m for m in _KNOWN_ID_RE.findall(text) if m in ALL_BUILTIN_EVALUATORS
-               or m.startswith("ThirdParty.")]
         mapped: list[str] = []
-        for evaluator_id in dict.fromkeys(ids):
-            key = _slug(evaluator_id.replace(".", "_"), 32)
-            if key not in used_keys:
-                used_keys.add(key)
+        for evaluator_id in dict.fromkeys(m for m in _KNOWN_ID_RE.findall(text)
+                                          if m in ALL_BUILTIN_EVALUATORS
+                                          or m.startswith("ThirdParty.")):
+            key = existing_keys.get(evaluator_id)
+            if key is None:
+                key = _unique_key(_slug(evaluator_id.replace(".", "_"), 28), used_keys)
+                existing_keys[evaluator_id] = key
                 evaluators.append({
                     "kind": "existing", "key": key, "title": evaluator_id,
                     "evaluator_id": evaluator_id, "golden_test_ids": [],
@@ -528,37 +652,31 @@ def draft_plan(
                     "note": f"named in recommendation #{i + 1}",
                 })
             mapped.append(key)
-        seeded = [str(k) for k in ((seed or {}).get("recommendation_keys") or {}).get(str(i), [])
-                  if str(k) in seeded_keys] if seed else []
-        if seeded:  # an explicit structured mapping wins over id spotting in prose
-            for key in mapped:
-                if key not in seeded and key not in seeded_keys:
-                    evaluators[:] = [e for e in evaluators if e.get("key") != key]
-                    used_keys.discard(key)
-            mapped = list(dict.fromkeys(seeded))
-        else:
-            mapped = list(dict.fromkeys(mapped))
+        seeded = [str(k) for k in (rec_keys.get(str(i)) or []) if str(k) in seeded_keys]
+        mapped = list(dict.fromkeys(mapped + seeded))
         recommendations.append({
             "index": i, "text": text, "mapped_to": mapped,
             "status": "mapped" if mapped else "unresolved",
             "note": "" if mapped else "no exact evaluator identified — classify or decline",
         })
-    rubric = _draft_rubric(content)
-    if rubric and "draft_rubric" not in used_keys:
+    if any(sc.get("assertions") for sc in scenarios) and "draft_rubric" not in used_keys:
+        used_keys.add("draft_rubric")
         evaluators.append({
             "kind": "judge", "key": "draft_rubric",
-            "title": "Draft semantic rubric (needs calibration)",
-            "name": _slug(f"{agent_name}_gt_rubric", 48),
-            "instructions": rubric,
+            "title": "Draft per-scenario judge (scores each scenario's own assertions)",
+            "name": _slug(f"{agent_name}_gt_assertions", 48),
+            "instructions": DRAFT_ASSERTION_RUBRIC,
             "rating_scale": [r.model_dump() for r in DEFAULT_RATING_SCALE],
-            "model_id": DEFAULT_JUDGE_MODEL, "level": "TRACE",
-            "description": f"Drafted from golden tests of proposal revision {revision}",
-            "golden_test_ids": [str(g["id"]) for g in gts
-                                if g.get("pass_criteria") or g.get("forbidden_behavior")],
+            "model_id": DEFAULT_JUDGE_MODEL, "level": "SESSION",
+            "description": f"Drafted for proposal revision {revision}: judges a session "
+                           "against the assertions of its own scenario (reference input)",
+            "golden_test_ids": [sc["golden_test_id"] for sc in scenarios if sc.get("assertions")],
             "blocking": False, "threshold": None, "draft": True,
-            "note": "platform draft — review wording, model and level before creating",
+            "note": "platform draft — reference-driven ({assertions}); calibrate wording, "
+                    "model and scale with domain experts before relying on it",
         })
-    if any(g.get("expected_tools") for g in gts) and "expected_tools" not in used_keys:
+    if any(sc.get("expected_trajectory") for sc in scenarios) and "expected_tools" not in used_keys:
+        used_keys.add("expected_tools")
         evaluators.append({
             "kind": "code", "key": "expected_tools",
             "title": "Expected tools observed (deterministic, per session)",
@@ -570,7 +688,8 @@ def draft_plan(
             "lambda_timeout_s": DEFAULT_LAMBDA_TIMEOUT_S,
             "description": "Observed tool calls must include every tool of the scenario's "
                            "expected_trajectory (reference input); missing evidence is an error",
-            "golden_test_ids": [str(g["id"]) for g in gts if g.get("expected_tools")],
+            "golden_test_ids": [sc["golden_test_id"] for sc in scenarios
+                                if sc.get("expected_trajectory")],
             "blocking": False, "threshold": None,
             "note": "deterministic rule — not a semantic or safety judgement",
         })
@@ -590,11 +709,83 @@ def draft_plan(
         "recommendations": recommendations,
         "blocked_golden_tests": [],
         "grant_workspace_execution_role": True,
-        "summary": "Draft prepared by the platform from the proposal's golden tests and "
-                   "evaluator recommendations. Unresolved recommendations are NOT implemented; "
-                   "classify each as an existing/new evaluator, a runner check, a human "
-                   "review, a metric baseline or an external control before creating assets.",
+        "summary": "Draft prepared by the platform. Legacy golden tests are single-turn "
+                   "scenarios that REQUIRE REVIEW (confirm or block each; multi-session "
+                   "procedures must be written as typed steps). Unresolved recommendations "
+                   "are NOT implemented; classify each as an existing/new evaluator, a runner "
+                   "check, a human review, a metric baseline or an external control.",
     }
+
+
+DRAFT_ASSERTION_RUBRIC = (
+    "DRAFT rubric — calibrate with domain experts before relying on it.\n"
+    "You are given one agent session and the assertions that must hold for THIS scenario.\n"
+    "Session:\n{context}\n\nAssertions for this scenario:\n{assertions}\n\n"
+    "Judge only against these assertions. Return pass only if every assertion holds; an "
+    "assertion starting with 'Must not:' fails when the behaviour occurs anywhere in the "
+    "session. If the session evidence is incomplete, fail."
+)
+
+
+def seed_errors(seed: dict[str, Any]) -> list[str]:
+    """Shape + cross-field validation of a proposal's optional ``evaluation_plan`` seed
+    (evaluators / scenarios / recommendation_keys). Pure; never raises on malformed
+    input — every problem is a message, so the proposal becomes an *invalid* revision
+    rather than a server error."""
+    if not isinstance(seed, dict):
+        return ["evaluation_plan must be an object"]
+    unknown = sorted(set(seed) - {"evaluators", "scenarios", "recommendation_keys"})
+    if unknown:
+        return [f"evaluation_plan: unknown members {unknown}"]
+    evaluators = seed.get("evaluators", [])
+    scenarios = seed.get("scenarios", [])
+    rec_keys = seed.get("recommendation_keys", {})
+    if not isinstance(evaluators, list) or not isinstance(scenarios, list) \
+            or not isinstance(rec_keys, dict):
+        return ["evaluation_plan: evaluators/scenarios must be lists and recommendation_keys "
+                "an object"]
+    if len(evaluators) > 20 or len(scenarios) > MAX_SCENARIOS:
+        return ["evaluation_plan: too many evaluators or scenarios"]
+    probe = {"version": 1, "source_revision": 1, "source_content_hash": "0" * 64,
+             "dataset": {"name": "seed"}, "evaluators": evaluators, "scenarios": scenarios}
+    try:
+        plan = EvaluationPlan.model_validate(probe)
+    except ValidationError as exc:
+        return [f"evaluation_plan.{'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
+                for err in exc.errors()][:20]
+    errors: list[str] = []
+    keys = [e.key for e in plan.evaluators]
+    if len(set(keys)) != len(keys):
+        errors.append("evaluation_plan: evaluator keys must be unique")
+    names = [str(getattr(e, "name", "")) for e in plan.evaluators if e.kind in CLOUD_KINDS]
+    if len(set(names)) != len(names):
+        errors.append("evaluation_plan: cloud evaluator names must be unique")
+    gts = [sc.golden_test_id for sc in plan.scenarios]
+    if len(set(gts)) != len(gts):
+        errors.append("evaluation_plan: one scenario per golden test")
+    for e in plan.evaluators:
+        if isinstance(e, JudgeEvaluator):
+            errors += [f"evaluation_plan.{m}" for m in _judge_errors(e)]
+        if isinstance(e, CodeEvaluator):
+            errors += [f"evaluation_plan.evaluators.{e.key}: {m}"
+                       for m in _check_rules(e.rules) + _code_level_errors(e)]
+    for idx, mapped in rec_keys.items():
+        if not (isinstance(idx, str) and idx.isdigit() and int(idx) < 40):
+            errors.append(f"evaluation_plan.recommendation_keys: '{idx}' is not a "
+                          "recommendation index")
+            continue
+        if not isinstance(mapped, list) or not all(isinstance(k, str) for k in mapped):
+            errors.append(f"evaluation_plan.recommendation_keys[{idx}]: must list keys")
+            continue
+        for k in mapped:
+            if k not in keys:
+                errors.append(f"evaluation_plan.recommendation_keys[{idx}]: unknown key '{k}'")
+    if plan.scenarios:
+        try:
+            execution.validate_items([dataset_item(sc, {"plan": "seed"}) for sc in plan.scenarios])
+        except Exception as exc:  # AppError from the dataset gate
+            errors.append(f"evaluation_plan.scenarios: {getattr(exc, 'message', None) or exc}")
+    return errors
 
 
 def plan_summary(plan: dict[str, Any]) -> dict[str, Any]:

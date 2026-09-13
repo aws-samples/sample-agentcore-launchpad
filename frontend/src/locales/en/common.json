@@ -4295,7 +4295,7 @@
     "fixErrors": "Fix the validation errors first.",
     "unresolvedHint": "{{n}} recommendation(s) are unresolved — they will be shown as such, not implemented.",
     "confirmTitle": "Create the assets of plan revision {{n}}?",
-    "confirmBody": "Exact plan hash {{hash}}… · {{cloud}} AgentCore evaluator(s) · {{lambdas}} Lambda function · {{roles}} IAM change(s). This creates and registers resources only — no deployment, no evaluation run, no model call. Retrying later returns these same resources.",
+    "confirmBody": "Workspace {{workspace}} · exact plan hash {{hash}}… · {{cloud}} AgentCore evaluator(s) · {{lambdas}} Lambda function · {{roles}} IAM change(s). This creates and registers resources only — no deployment, no evaluation run, no model call. Retrying later returns these same resources.",
     "confirmCreate": "CREATE",
     "dialogStale": "The plan changed while the confirmation was open; nothing was created.",
     "operation": "CREATION OUTCOME",
@@ -4317,7 +4317,9 @@
       "conflict": "conflict",
       "skipped": "skipped",
       "deleted": "deleted",
-      "delete_failed": "delete failed"
+      "delete_failed": "delete failed",
+      "blocked": "blocked",
+      "retained": "retained"
     },
     "resource": {
       "dataset": "Dataset (local)",
@@ -4333,11 +4335,28 @@
     "retry": "RETRY (same resources)",
     "cleanup": "DELETE OWNED CLOUD ASSETS",
     "cleanupTitle": "Delete the cloud assets this operation created?",
-    "cleanupBody": "Removes exactly the evaluators, the Lambda function, its role and log group and the additive execution-role policy recorded by this operation. The local Dataset stays (delete it in Evaluation → Datasets if unwanted). Foreign resources are never touched.",
+    "cleanupBody": "Removes exactly the evaluators, the Lambda function, its role and log group and the additive execution-role policy recorded by the operation of plan r{{plan}} — each only after its identity still matches what was created. The local Dataset stays (delete it in Evaluation → Datasets if unwanted). Foreign or changed resources are never touched and stay reported.",
     "cleanupConfirm": "DELETE",
     "open": "open",
     "items": "{{n}} item(s)",
     "referenceDependent": "needs ground truth",
-    "retention": "retention {{n}} days"
+    "retention": "retention {{n}} days",
+    "refresh": "REFRESH",
+    "reviewPending": "{{n}} scenario(s) still need review — confirm them as typed steps or block the golden test.",
+    "reviewNote": "Legacy golden tests were drafted as single-turn scenarios. Review each: confirm it as typed steps, rewrite multi-session procedures as steps in the JSON, or block it. Nothing is created until every scenario is confirmed or blocked.",
+    "confirmScenarios": "CONFIRM {{n}} SCENARIO(S) AS TYPED",
+    "reviewRequired": "REVIEW REQUIRED",
+    "confirmed": "confirmed",
+    "turnsCount": "{{n}} turn(s)",
+    "assertions": "assertions",
+    "expectedTrajectory": "expected tools",
+    "step": "turn {{turn}} · actor {{actor}} · session {{session}}",
+    "allGoldenTests": "all",
+    "fullRubric": "full rubric & rating scale",
+    "history": "EARLIER OPERATIONS (other plan revisions)",
+    "historyLine": "plan r{{plan}} · {{status}} · approved by {{by}} · {{hash}}…",
+    "pollError": "Status refresh failed: {{message}} — retrying with backoff.",
+    "recovered": "recovered",
+    "reserved": "reserved concurrency {{n}}"
   }
 }

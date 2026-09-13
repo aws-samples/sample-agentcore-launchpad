@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
@@ -9,6 +9,7 @@ import type {
   AssistantEvalOperation,
   AssistantEvalPlan,
   AssistantEvalPlanContent,
+  AssistantEvalPlanEvaluator,
   AssistantEvalPlanState,
   AssistantEvalResource,
   AssistantProposal,
@@ -19,15 +20,16 @@ import { api } from "../lib/api";
  * SE-047 — the reviewed evaluation-assets plan of one assistant conversation.
  *
  * Prepare (platform draft from a proposal revision) → review the structured mapping
- * (golden tests → scenarios, recommendations → evaluator kinds, human/runner
- * obligations) → edit as JSON (a new plan revision) → an administrator who owns the
- * conversation confirms the disclosure and CREATES the assets (local Dataset, AgentCore
- * evaluators, one Lambda + role for code rules). Creation is separate from testing:
- * nothing here runs an evaluation, deploys an agent, syncs to AWS Datasets or invokes
- * a model. Status is a ledger read; retry/cleanup are explicit administrator actions.
+ * (golden tests → scenarios with their steps and references, recommendations →
+ * evaluator kinds, human/runner obligations) → confirm or block review-required
+ * scenarios / edit as JSON (a new plan revision) → an administrator who owns the
+ * conversation confirms the disclosure and CREATES the assets. Creation is separate
+ * from testing: nothing here runs an evaluation, deploys an agent, syncs to AWS
+ * Datasets or invokes a model. Every request pins the DISPLAYED workspace.
  */
 
 const POLL_MS = 3000;
+const POLL_BACKOFF_MAX_MS = 15000;
 
 const OP_TONE: Record<string, ChipTone> = {
   queued: "muted",
@@ -45,7 +47,9 @@ const RES_TONE: Record<string, ChipTone> = {
   ready: "good",
   failed: "crit",
   conflict: "crit",
+  blocked: "muted",
   skipped: "muted",
+  retained: "warn",
   deleted: "muted",
   delete_failed: "crit",
 };
@@ -59,6 +63,14 @@ const PLAN_TONE: Record<string, ChipTone> = {
 
 const CLOUD_KINDS = new Set(["judge", "derived", "code"]);
 
+function asArray<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
+
+function asRecord(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
 /** A rule without its empty / default members (what a reviewer needs to read). */
 function compactRule(rule: Record<string, unknown>): string {
   const kept = Object.fromEntries(
@@ -69,9 +81,12 @@ function compactRule(rule: Record<string, unknown>): string {
   return JSON.stringify(kept);
 }
 
-function short(text: unknown, n = 90): string {
-  const s = String(text ?? "");
-  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+function Wrap({ children, testid }: { children: ReactNode; testid: string }) {
+  return (
+    <div className="assist-table-wrap" data-testid={testid}>
+      {children}
+    </div>
+  );
 }
 
 export function EvaluationAssetsPanel({
@@ -103,55 +118,77 @@ export function EvaluationAssetsPanel({
   const [confirmPlan, setConfirmPlan] = useState<AssistantEvalPlan | null>(null);
   const [confirmCleanup, setConfirmCleanup] = useState<AssistantEvalOperation | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
+  const [pollFailures, setPollFailures] = useState(0);
 
-  // staleness: a response for another conversation / workspace never lands here
-  const key = useRef(`${workspaceId}:${conversationId}`);
-  key.current = `${workspaceId}:${conversationId}`;
+  // staleness: a generation bumps on every conversation/workspace change and on
+  // unmount, so a late response (even A→B→A) can never land in another context
+  const generation = useRef(0);
+  const alive = useRef(true);
+  const ctx = useRef({ conversationId, workspaceId });
+  ctx.current = { conversationId, workspaceId };
   const stillCurrent = useCallback(
-    (started: string) => key.current === started,
+    (gen: number) => alive.current && generation.current === gen,
     [],
   );
 
   const load = useCallback(() => {
-    const started = key.current;
+    const gen = generation.current;
+    const { conversationId: cid, workspaceId: wid } = ctx.current;
     setLoadError(null);
     void api
-      .assistantEvalPlan(conversationId)
+      .assistantEvalPlan(cid, wid)
       .then((res) => {
-        if (stillCurrent(started)) setState(res);
+        if (stillCurrent(gen)) setState(res);
       })
       .catch((err) => {
-        if (stillCurrent(started)) setLoadError(apiMessage(err));
+        if (stillCurrent(gen)) setLoadError(apiMessage(err));
       });
-  }, [conversationId, apiMessage, stillCurrent]);
+  }, [apiMessage, stillCurrent]);
 
   useEffect(() => {
+    alive.current = true;
+    generation.current += 1;
     setState(null);
     setJsonDraft(null);
     setJsonError(null);
     setActionError(null);
+    setPollError(null);
+    setPollFailures(0);
     setConfirmPlan(null);
     setConfirmCleanup(null);
     load();
+    return () => {
+      alive.current = false;
+      generation.current += 1;
+    };
   }, [conversationId, workspaceId, load]);
 
-  const plans = state?.plans ?? [];
+  const plans = asArray<AssistantEvalPlan>(state?.plans);
   const current = plans.length ? plans[plans.length - 1] : null;
-  const operations = state?.operations ?? [];
-  const operation =
-    operations.find((o) => o.plan_id === current?.id) ??
-    (operations.length ? operations[operations.length - 1] : null);
+  const operations = asArray<AssistantEvalOperation>(state?.operations);
+  // the operation of THIS plan revision only — never a fallback to an older one
+  const operation = current ? operations.find((o) => o.plan_id === current.id) ?? null : null;
+  const history = operations.filter((o) => o.id !== operation?.id);
 
-  // poll a live operation (ledger read only)
+  // poll a live operation (ledger read only), retrying after failures with backoff
+  // and a visible error instead of silently stopping
   useEffect(() => {
-    if (!operation || !(operation.status === "queued" || operation.status === "running")) return;
-    const started = key.current;
+    if (!operation || !(operation.status === "queued" || operation.status === "running")) {
+      setPollError(null);
+      return;
+    }
+    const gen = generation.current;
+    const { conversationId: cid, workspaceId: wid } = ctx.current;
     const opId = operation.id;
+    const delay = Math.min(POLL_MS * 2 ** pollFailures, POLL_BACKOFF_MAX_MS);
     const timer = window.setTimeout(() => {
       void api
-        .assistantEvalOperation(conversationId, opId)
+        .assistantEvalOperation(cid, opId, wid)
         .then((res) => {
-          if (!stillCurrent(started)) return;
+          if (!stillCurrent(gen)) return;
+          setPollError(null);
+          setPollFailures(0);
           setState((prev) =>
             prev
               ? {
@@ -163,23 +200,29 @@ export function EvaluationAssetsPanel({
               : prev,
           );
         })
-        .catch(() => undefined);
-    }, POLL_MS);
+        .catch((err) => {
+          if (!stillCurrent(gen)) return;
+          setPollError(apiMessage(err));
+          setPollFailures((n) => n + 1);
+        });
+    }, delay);
     return () => window.clearTimeout(timer);
-  }, [operation, conversationId, stillCurrent]);
+  }, [operation, pollFailures, apiMessage, stillCurrent]);
 
   const run = useCallback(
-    async (fn: () => Promise<AssistantEvalPlanState | { operation: AssistantEvalOperation }>) => {
-      const started = key.current;
+    async (
+      fn: () => Promise<AssistantEvalPlanState | { operation: AssistantEvalOperation }>,
+      after?: () => void,
+    ) => {
+      const gen = generation.current;
       setBusy(true);
       setActionError(null);
       try {
         const res = await fn();
-        if (!stillCurrent(started)) return;
+        if (!stillCurrent(gen)) return;
+        after?.();
         if ("plans" in res) setState(res);
         else {
-          // the plan's own status (draft → approved) changed too — refetch it
-          load();
           setState((prev) =>
             prev
               ? {
@@ -190,25 +233,25 @@ export function EvaluationAssetsPanel({
                 }
               : prev,
           );
+          load(); // the plan's own status (draft → approved) changed too
         }
       } catch (err) {
-        if (!stillCurrent(started)) return;
+        if (!stillCurrent(gen)) return;
         const message = apiMessage(err);
         setActionError(message);
         onError(message);
       } finally {
-        if (stillCurrent(started)) setBusy(false);
+        if (stillCurrent(gen)) setBusy(false);
       }
     },
     [apiMessage, onError, stillCurrent, load],
   );
 
   const prepare = () =>
-    run(async () => {
-      const res = await api.assistantEvalPlanPrepare(conversationId, sourceRevision);
-      setJsonDraft(null);
-      return res;
-    });
+    run(
+      () => api.assistantEvalPlanPrepare(conversationId, sourceRevision, workspaceId),
+      () => setJsonDraft(null),
+    );
 
   const saveJson = () => {
     if (jsonDraft === null) return;
@@ -220,40 +263,64 @@ export function EvaluationAssetsPanel({
       return;
     }
     setJsonError(null);
-    void run(async () => {
-      const res = await api.assistantEvalPlanEdit(conversationId, parsed);
-      setJsonDraft(null);
-      return res;
-    });
+    void run(
+      () => api.assistantEvalPlanEdit(conversationId, parsed, workspaceId),
+      () => setJsonDraft(null),
+    );
+  };
+
+  /** Confirm every review-required scenario as typed steps (a new revision). */
+  const confirmScenarios = () => {
+    if (!current) return;
+    const content = asRecord(current.content);
+    const scenarios = asArray<Record<string, unknown>>(content.scenarios).map((s) => ({
+      ...s,
+      review_required: false,
+    }));
+    void run(() =>
+      api.assistantEvalPlanEdit(conversationId, { ...content, scenarios }, workspaceId),
+    );
   };
 
   const materialize = (plan: AssistantEvalPlan) =>
     run(() =>
-      api.assistantEvalPlanMaterialize(conversationId, plan.revision, plan.content_hash),
+      api.assistantEvalPlanMaterialize(conversationId, plan.revision, plan.content_hash, workspaceId),
     );
 
-  const content = (current?.content ?? {}) as Partial<AssistantEvalPlanContent>;
-  const evaluators = content.evaluators ?? [];
-  const recommendations = content.recommendations ?? [];
-  const scenarios = content.scenarios ?? [];
-  const blocked = content.blocked_golden_tests ?? [];
+  const content = asRecord(current?.content) as Partial<AssistantEvalPlanContent>;
+  const evaluators = asArray<AssistantEvalPlanEvaluator>(content.evaluators);
+  const recommendations = asArray<NonNullable<AssistantEvalPlanContent["recommendations"]>[number]>(
+    content.recommendations,
+  );
+  const scenarios = asArray<NonNullable<AssistantEvalPlanContent["scenarios"]>[number]>(
+    content.scenarios,
+  );
+  const blocked = asArray<NonNullable<AssistantEvalPlanContent["blocked_golden_tests"]>[number]>(
+    content.blocked_golden_tests,
+  );
+  const invalid = !!current && current.validation_errors.length > 0;
+  const reviewPending = scenarios.filter((s) => s?.review_required).length;
   const summary = current?.summary;
   const canCreate =
-    !!current &&
-    current.status === "draft" &&
-    !current.validation_errors.length &&
-    canMaterialize &&
-    !busy &&
-    !operation;
-  const opResources = operation?.resources ?? [];
+    !!current && current.status === "draft" && !invalid && canMaterialize && !busy && !operation;
+  const createReason = !canMaterialize
+    ? t("assistantEval.adminOnly")
+    : invalid
+      ? reviewPending
+        ? t("assistantEval.reviewPending", { n: reviewPending })
+        : t("assistantEval.fixErrors")
+      : undefined;
+  const opResources = asArray<AssistantEvalResource>(operation?.resources);
 
   return (
     <>
       <Panel
         brk
+        className="assist-span"
         title={t("assistantEval.title")}
         sub={t("assistantEval.sub")}
         data-testid="evaluation-assets"
+        data-workspace={workspaceId ?? ""}
         end={
           current ? (
             <>
@@ -275,11 +342,13 @@ export function EvaluationAssetsPanel({
         {loadError && (
           <div className="note" style={{ borderColor: "var(--crit)" }} data-testid="eval-load-error">
             <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
-            <span>{loadError}</span>
+            <span>
+              {loadError}{" "}
+              <Btn data-testid="eval-reload" onClick={load}>{t("assistantEval.refresh")}</Btn>
+            </span>
           </div>
         )}
 
-        {/* prepare */}
         <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <label className="dim" style={{ fontSize: 11 }}>
             {t("assistantEval.sourceRevision")}
@@ -299,11 +368,7 @@ export function EvaluationAssetsPanel({
                 ))}
             </select>
           </label>
-          <Btn
-            disabled={busy || !proposals.length}
-            data-testid="eval-prepare"
-            onClick={() => void prepare()}
-          >
+          <Btn disabled={busy || !proposals.length} data-testid="eval-prepare" onClick={() => void prepare()}>
             {current ? t("assistantEval.prepareAgain") : t("assistantEval.prepare")}
           </Btn>
           {current && jsonDraft === null && !operation && (
@@ -315,6 +380,11 @@ export function EvaluationAssetsPanel({
               {t("assistantEval.editJson")}
             </Btn>
           )}
+          {current && !operation && reviewPending > 0 && jsonDraft === null && (
+            <Btn disabled={busy} data-testid="eval-confirm-scenarios" onClick={confirmScenarios}>
+              {t("assistantEval.confirmScenarios", { n: reviewPending })}
+            </Btn>
+          )}
         </div>
 
         {!current && (
@@ -323,7 +393,7 @@ export function EvaluationAssetsPanel({
           </div>
         )}
 
-        {current && current.validation_errors.length > 0 && (
+        {invalid && (
           <div
             className="note"
             style={{ borderColor: "var(--crit)", marginTop: 10 }}
@@ -331,17 +401,16 @@ export function EvaluationAssetsPanel({
           >
             <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
             <span>
-              {t("assistantEval.invalidNote")}
+              {reviewPending ? t("assistantEval.reviewNote") : t("assistantEval.invalidNote")}
               <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
-                {current.validation_errors.map((e, i) => (
-                  <li key={i} className="mono" style={{ fontSize: 11 }}>{e}</li>
+                {current!.validation_errors.map((e, i) => (
+                  <li key={i} className="mono" style={{ fontSize: 11, wordBreak: "break-word" }}>{e}</li>
                 ))}
               </ul>
             </span>
           </div>
         )}
 
-        {/* JSON editor */}
         {current && jsonDraft !== null && (
           <div className="assist-section" data-testid="eval-json-editor">
             <h4>{t("assistantEval.jsonTitle")}</h4>
@@ -358,7 +427,7 @@ export function EvaluationAssetsPanel({
               </div>
             )}
             <div className="row" style={{ gap: 8, marginTop: 6 }}>
-              <Btn disabled={busy} data-testid="eval-json-save" onClick={saveJson}>
+              <Btn primary disabled={busy} data-testid="eval-json-save" onClick={saveJson}>
                 {t("assistantEval.saveRevision")}
               </Btn>
               <Btn
@@ -374,7 +443,6 @@ export function EvaluationAssetsPanel({
           </div>
         )}
 
-        {/* structured review */}
         {current && jsonDraft === null && (
           <>
             {summary && (
@@ -391,168 +459,194 @@ export function EvaluationAssetsPanel({
                 <span data-testid="eval-plan-hash">{current.content_hash.slice(0, 12)}</span>
               </div>
             )}
-            <div className="assist-section" data-testid="eval-scenarios">
-              <h4>{t("assistantEval.scenarios")}</h4>
-              <table className="assist-gt">
-                <thead>
-                  <tr>
-                    <th>{t("assistantEval.col.goldenTest")}</th>
-                    <th>{t("assistantEval.col.scenario")}</th>
-                    <th>{t("assistantEval.col.turns")}</th>
-                    <th>{t("assistantEval.col.procedure")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {scenarios.map((s) => (
-                    <tr key={s.scenario_id} data-testid={`eval-scenario-${s.golden_test_id}`}>
-                      <td className="mono">{s.golden_test_id}</td>
-                      <td className="mono">{s.scenario_id}</td>
-                      <td>{s.turns.length}</td>
-                      <td className="mono">
-                        {s.execution
-                          ? t("assistantEval.procedureRunner")
-                          : t("assistantEval.procedureSingle")}
-                      </td>
-                    </tr>
-                  ))}
-                  {blocked.map((b) => (
-                    <tr key={`b-${b.golden_test_id}`} data-testid={`eval-blocked-${b.golden_test_id}`}>
-                      <td className="mono">{b.golden_test_id}</td>
-                      <td colSpan={3}>
-                        <Chip tone="warn">{t("assistantEval.blocked")}</Chip> {b.reason}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="assist-section" data-testid="eval-evaluators">
-              <h4>{t("assistantEval.evaluators")}</h4>
-              <table className="assist-gt">
-                <thead>
-                  <tr>
-                    <th>{t("assistantEval.col.key")}</th>
-                    <th>{t("assistantEval.col.kind")}</th>
-                    <th>{t("assistantEval.col.definition")}</th>
-                    <th>{t("assistantEval.col.goldenTests")}</th>
-                    <th>{t("assistantEval.col.gate")}</th>
-                    <th>{t("assistantEval.col.status")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {evaluators.map((e) => {
-                    const res = opResources.find((r) => r.plan_key === e.key);
-                    return (
-                      <tr key={e.key} data-testid={`eval-evaluator-${e.key}`}>
-                        <td className="mono">{e.key}</td>
-                        <td>
-                          <Chip tone={CLOUD_KINDS.has(e.kind) ? "good" : e.kind === "existing" ? "muted" : "warn"}>
-                            {t(`assistantEval.kind.${e.kind}`)}
-                          </Chip>
-                          {e.draft && <Chip tone="warn">{t("assistantEval.draftRubric")}</Chip>}
-                        </td>
-                        <td style={{ fontSize: 11 }}>
-                          <div>{e.title}</div>
-                          {e.kind === "existing" && <div className="mono">{e.evaluator_id}</div>}
-                          {e.kind === "judge" && (
-                            <div className="mono dim">
-                              {e.name} · {e.level} · {e.model_id}
-                              <div style={{ whiteSpace: "pre-wrap" }}>{short(e.instructions, 240)}</div>
-                            </div>
-                          )}
-                          {e.kind === "derived" && (
-                            <div className="mono dim">{e.name} · {e.base_evaluator_id} · {e.model_id}</div>
-                          )}
-                          {e.kind === "code" && (
-                            <div className="mono dim">
-                              {e.name} · {e.level} · {t("assistantEval.rulesCount", { n: e.rules?.checks.length ?? 0 })}
-                              <div style={{ whiteSpace: "pre-wrap" }}>
-                                {(e.rules?.checks ?? []).map((c) => compactRule(c)).join("\n")}
-                              </div>
-                            </div>
-                          )}
-                          {!CLOUD_KINDS.has(e.kind) && e.kind !== "existing" && (
-                            <div className="dim">
-                              {e.reason}
-                              {e.obligation ? ` — ${e.obligation}` : ""}
-                            </div>
-                          )}
-                          {e.note && <div className="dim">{e.note}</div>}
-                        </td>
-                        <td className="mono">{e.golden_test_ids.join(", ") || "—"}</td>
-                        <td className="mono">
-                          {e.blocking ? t("assistantEval.blocking") : t("assistantEval.informational")}
-                          {e.threshold !== null && e.threshold !== undefined ? ` · ≥ ${e.threshold}` : ""}
-                        </td>
-                        <td>
-                          {res ? (
-                            <ResourceStatus res={res} />
-                          ) : CLOUD_KINDS.has(e.kind) ? (
-                            <Chip tone="muted">{t("assistantEval.notCreated")}</Chip>
-                          ) : e.kind === "existing" ? (
-                            <Chip tone="muted">{t("assistantEval.existingRef")}</Chip>
-                          ) : (
-                            <Chip tone="warn">{t(`assistantEval.obligation.${e.kind}`)}</Chip>
-                          )}
-                        </td>
+            {(scenarios.length > 0 || blocked.length > 0) && (
+              <div className="assist-section" data-testid="eval-scenarios">
+                <h4>{t("assistantEval.scenarios")}</h4>
+                <Wrap testid="eval-scenarios-table">
+                  <table className="assist-gt">
+                    <thead>
+                      <tr>
+                        <th>{t("assistantEval.col.goldenTest")}</th>
+                        <th>{t("assistantEval.col.scenario")}</th>
+                        <th>{t("assistantEval.col.turns")}</th>
+                        <th>{t("assistantEval.col.procedure")}</th>
+                        <th>{t("assistantEval.col.status")}</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <div className="assist-section" data-testid="eval-recommendations">
-              <h4>{t("assistantEval.recommendations")}</h4>
-              <table className="assist-gt">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>{t("assistantEval.col.recommendation")}</th>
-                    <th>{t("assistantEval.col.mappedTo")}</th>
-                    <th>{t("assistantEval.col.status")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recommendations.map((r) => (
-                    <tr key={r.index} data-testid={`eval-recommendation-${r.index}`}>
-                      <td className="mono">{r.index + 1}</td>
-                      <td>{r.text}</td>
-                      <td className="mono">{r.mapped_to.join(", ") || "—"}</td>
-                      <td>
-                        <Chip tone={r.status === "mapped" ? "good" : r.status === "declined" ? "muted" : "warn"}>
-                          {t(`assistantEval.recStatus.${r.status}`)}
-                        </Chip>
-                        {r.note && <div className="dim" style={{ fontSize: 11 }}>{r.note}</div>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                    </thead>
+                    <tbody>
+                      {scenarios.map((s, i) => (
+                        <tr key={`${s?.scenario_id ?? i}`} data-testid={`eval-scenario-${s?.golden_test_id ?? i}`}>
+                          <td className="mono">{String(s?.golden_test_id ?? "")}</td>
+                          <td className="mono">{String(s?.scenario_id ?? "")}</td>
+                          <td>
+                            <details>
+                              <summary>{t("assistantEval.turnsCount", { n: asArray(s?.turns).length })}</summary>
+                              <ol className="assist-steps">
+                                {asArray<{ input?: string; expected_response?: string }>(s?.turns).map((turn, k) => (
+                                  <li key={k}>
+                                    <div>{String(turn?.input ?? "")}</div>
+                                    {turn?.expected_response ? (
+                                      <div className="dim">→ {turn.expected_response}</div>
+                                    ) : null}
+                                  </li>
+                                ))}
+                              </ol>
+                              {asArray<string>(s?.assertions).length > 0 && (
+                                <div className="dim" style={{ fontSize: 11 }}>
+                                  {t("assistantEval.assertions")}: {asArray<string>(s?.assertions).join(" · ")}
+                                </div>
+                              )}
+                              {asArray<string>(s?.expected_trajectory).length > 0 && (
+                                <div className="dim mono" style={{ fontSize: 11 }}>
+                                  {t("assistantEval.expectedTrajectory")}: {asArray<string>(s?.expected_trajectory).join(" → ")}
+                                </div>
+                              )}
+                            </details>
+                          </td>
+                          <td className="mono">
+                            {s?.execution ? (
+                              <details>
+                                <summary>{t("assistantEval.procedureRunner")}</summary>
+                                <ol className="assist-steps">
+                                  {asArray<{ turn: number; actor: string; session: string }>(
+                                    asRecord(s.execution).steps,
+                                  ).map((st, k) => (
+                                    <li key={k}>
+                                      {t("assistantEval.step", { turn: st.turn + 1, actor: st.actor, session: st.session })}
+                                    </li>
+                                  ))}
+                                </ol>
+                                {asArray<Record<string, unknown>>(asRecord(s.execution).checks).map((c, k) => (
+                                  <div key={k} style={{ fontSize: 11 }}>{compactRule(c)}</div>
+                                ))}
+                              </details>
+                            ) : (
+                              t("assistantEval.procedureSingle")
+                            )}
+                          </td>
+                          <td>
+                            {s?.review_required ? (
+                              <Chip tone="warn">{t("assistantEval.reviewRequired")}</Chip>
+                            ) : (
+                              <Chip tone="good">{t("assistantEval.confirmed")}</Chip>
+                            )}
+                            {s?.note ? <div className="dim" style={{ fontSize: 11 }}>{s.note}</div> : null}
+                          </td>
+                        </tr>
+                      ))}
+                      {blocked.map((b, i) => (
+                        <tr key={`b-${b?.golden_test_id ?? i}`} data-testid={`eval-blocked-${b?.golden_test_id ?? i}`}>
+                          <td className="mono">{String(b?.golden_test_id ?? "")}</td>
+                          <td colSpan={4}>
+                            <Chip tone="warn">{t("assistantEval.blocked")}</Chip> {String(b?.reason ?? "")}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </Wrap>
+              </div>
+            )}
+            {evaluators.length > 0 && (
+              <div className="assist-section" data-testid="eval-evaluators">
+                <h4>{t("assistantEval.evaluators")}</h4>
+                <Wrap testid="eval-evaluators-table">
+                  <table className="assist-gt">
+                    <thead>
+                      <tr>
+                        <th>{t("assistantEval.col.key")}</th>
+                        <th>{t("assistantEval.col.kind")}</th>
+                        <th>{t("assistantEval.col.definition")}</th>
+                        <th>{t("assistantEval.col.goldenTests")}</th>
+                        <th>{t("assistantEval.col.gate")}</th>
+                        <th>{t("assistantEval.col.status")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {evaluators.map((e, i) => {
+                        const res = opResources.find((r) => r.plan_key === e?.key);
+                        const kind = String(e?.kind ?? "");
+                        const gts = asArray<string>(e?.golden_test_ids);
+                        return (
+                          <tr key={`${e?.key ?? i}`} data-testid={`eval-evaluator-${e?.key ?? i}`}>
+                            <td className="mono">{String(e?.key ?? "")}</td>
+                            <td>
+                              <Chip tone={CLOUD_KINDS.has(kind) ? "good" : kind === "existing" ? "muted" : "warn"}>
+                                {t(`assistantEval.kind.${kind}`, kind)}
+                              </Chip>
+                              {e?.draft && <Chip tone="warn">{t("assistantEval.draftRubric")}</Chip>}
+                            </td>
+                            <td style={{ fontSize: 11 }}>
+                              <EvaluatorDefinition e={e} />
+                            </td>
+                            <td className="mono">{gts.length ? gts.join(", ") : t("assistantEval.allGoldenTests")}</td>
+                            <td className="mono">
+                              {e?.blocking ? t("assistantEval.blocking") : t("assistantEval.informational")}
+                              {e?.threshold !== null && e?.threshold !== undefined ? ` · ≥ ${e.threshold}` : ""}
+                            </td>
+                            <td>
+                              {res ? (
+                                <ResourceStatus res={res} />
+                              ) : CLOUD_KINDS.has(kind) ? (
+                                <Chip tone="muted">{t("assistantEval.notCreated")}</Chip>
+                              ) : kind === "existing" ? (
+                                <Chip tone="muted">{t("assistantEval.existingRef")}</Chip>
+                              ) : (
+                                <Chip tone="warn">{t(`assistantEval.obligation.${kind}`, kind)}</Chip>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </Wrap>
+              </div>
+            )}
+            {recommendations.length > 0 && (
+              <div className="assist-section" data-testid="eval-recommendations">
+                <h4>{t("assistantEval.recommendations")}</h4>
+                <Wrap testid="eval-recommendations-table">
+                  <table className="assist-gt">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>{t("assistantEval.col.recommendation")}</th>
+                        <th>{t("assistantEval.col.mappedTo")}</th>
+                        <th>{t("assistantEval.col.status")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recommendations.map((r, i) => (
+                        <tr key={r?.index ?? i} data-testid={`eval-recommendation-${r?.index ?? i}`}>
+                          <td className="mono">{Number(r?.index ?? i) + 1}</td>
+                          <td>{String(r?.text ?? "")}</td>
+                          <td className="mono">{asArray<string>(r?.mapped_to).join(", ") || "—"}</td>
+                          <td>
+                            <Chip tone={r?.status === "mapped" ? "good" : r?.status === "declined" ? "muted" : "warn"}>
+                              {t(`assistantEval.recStatus.${r?.status ?? "unresolved"}`)}
+                            </Chip>
+                            {r?.note && <div className="dim" style={{ fontSize: 11 }}>{r.note}</div>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </Wrap>
+              </div>
+            )}
 
-            {/* create */}
             {!operation && (
               <div className="row" style={{ gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
                 <Btn
                   primary
                   disabled={!canCreate}
-                  disabledReason={
-                    !canMaterialize
-                      ? t("assistantEval.adminOnly")
-                      : current.validation_errors.length
-                        ? t("assistantEval.fixErrors")
-                        : undefined
-                  }
+                  disabledReason={createReason}
                   data-testid="eval-create"
                   onClick={() => setConfirmPlan(current)}
                 >
                   {t("assistantEval.create")}
                 </Btn>
-                {!canMaterialize && (
-                  <span className="dim" style={{ fontSize: 11 }} data-testid="eval-admin-only">
-                    {t("assistantEval.adminOnly")}
-                  </span>
-                )}
                 {current.status === "draft" && summary && summary.unresolved_recommendations > 0 && (
                   <span className="dim" style={{ fontSize: 11 }}>
                     {t("assistantEval.unresolvedHint", { n: summary.unresolved_recommendations })}
@@ -570,82 +664,44 @@ export function EvaluationAssetsPanel({
           </div>
         )}
 
-        {/* operation outcome */}
         {operation && (
-          <div className="assist-section" data-testid="eval-operation" data-status={operation.status}>
-            <h4>
-              {t("assistantEval.operation")}{" "}
-              <Chip tone={OP_TONE[operation.status] ?? "muted"}>
-                {t(`assistantEval.opStatus.${operation.status}`)}
-              </Chip>
-            </h4>
-            <div className="dim mono" style={{ fontSize: 11 }}>
-              {t("assistantEval.operationMeta", {
-                by: operation.approved_by,
-                account: operation.account_id,
-                region: operation.region,
-                plan: operation.plan_revision,
-                hash: operation.plan_hash.slice(0, 12),
-                attempts: operation.attempts,
-                max: operation.max_attempts,
-              })}
-            </div>
-            {operation.error && (
-              <div className="mono" style={{ color: "var(--crit)", fontSize: 11, marginTop: 4 }} data-testid="eval-operation-error">
-                {operation.error}
-              </div>
-            )}
-            <table className="assist-gt" style={{ marginTop: 8 }}>
-              <thead>
-                <tr>
-                  <th>{t("assistantEval.col.resource")}</th>
-                  <th>{t("assistantEval.col.name")}</th>
-                  <th>{t("assistantEval.col.status")}</th>
-                  <th>{t("assistantEval.col.details")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {operation.resources.map((r) => (
-                  <tr key={r.key} data-testid={`eval-resource-${r.key}`} data-status={r.status}>
-                    <td className="mono">{t(`assistantEval.resource.${r.kind}`, r.kind)}</td>
-                    <td className="mono">{r.name}</td>
-                    <td><ResourceStatus res={r} /></td>
-                    <td className="mono" style={{ fontSize: 11 }}>
-                      <ResourceDetails res={r} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="note" style={{ marginTop: 8 }} data-testid="eval-registered-note">
-              <span className="i">[i]</span>
-              <span>{t("assistantEval.registeredNote")}</span>
-            </div>
-            {canMaterialize && (
-              <div className="row" style={{ gap: 8, marginTop: 8 }}>
-                {(operation.status === "partial" || operation.status === "failed") &&
-                  operation.attempts < operation.max_attempts && (
-                    <Btn
-                      disabled={busy}
-                      data-testid="eval-retry"
-                      onClick={() => void run(() => api.assistantEvalOperationRetry(conversationId, operation.id))}
-                    >
-                      {t("assistantEval.retry")}
-                    </Btn>
+          <OperationView
+            operation={operation}
+            pollError={pollError}
+            canMaterialize={canMaterialize}
+            busy={busy}
+            onRefresh={() => {
+              setPollFailures(0);
+              load();
+            }}
+            onRetry={() => void run(() => api.assistantEvalOperationRetry(conversationId, operation.id, workspaceId))}
+            onCleanup={() => setConfirmCleanup(operation)}
+          />
+        )}
+
+        {history.length > 0 && (
+          <div className="assist-section" data-testid="eval-operation-history">
+            <h4>{t("assistantEval.history")}</h4>
+            <ul className="mono" style={{ fontSize: 11 }}>
+              {history.map((o) => (
+                <li key={o.id} data-testid={`eval-history-${o.id}`}>
+                  {t("assistantEval.historyLine", {
+                    plan: o.plan_revision,
+                    status: t(`assistantEval.opStatus.${o.status}`),
+                    by: o.approved_by,
+                    hash: o.plan_hash.slice(0, 12),
+                  })}
+                  {canMaterialize && o.status !== "cleaned" && o.status !== "running" && o.status !== "queued" && (
+                    <>
+                      {" "}
+                      <Btn disabled={busy} data-testid={`eval-history-cleanup-${o.id}`} onClick={() => setConfirmCleanup(o)}>
+                        {t("assistantEval.cleanup")}
+                      </Btn>
+                    </>
                   )}
-                {operation.status !== "cleaned" &&
-                  operation.status !== "running" &&
-                  operation.status !== "queued" && (
-                    <Btn
-                      disabled={busy}
-                      data-testid="eval-cleanup"
-                      onClick={() => setConfirmCleanup(operation)}
-                    >
-                      {t("assistantEval.cleanup")}
-                    </Btn>
-                  )}
-              </div>
-            )}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
       </Panel>
@@ -661,13 +717,15 @@ export function EvaluationAssetsPanel({
             cloud: confirmPlan?.summary?.cloud_evaluators ?? 0,
             lambdas: confirmPlan?.summary?.lambda_functions ?? 0,
             roles: (confirmPlan?.summary?.iam_roles ?? 0) + (confirmPlan?.summary?.role_grants ?? 0),
+            workspace: workspaceId ?? "",
           })
         }
         confirmLabel={t("assistantEval.confirmCreate")}
         onConfirm={() => {
           const plan = confirmPlan;
           setConfirmPlan(null);
-          if (plan && current && plan.id === current.id) void materialize(plan);
+          if (plan && current && plan.id === current.id && plan.content_hash === current.content_hash)
+            void materialize(plan);
           else onError(t("assistantEval.dialogStale"));
         }}
         onCancel={() => setConfirmPlan(null)}
@@ -675,16 +733,168 @@ export function EvaluationAssetsPanel({
       <ConfirmDialog
         open={confirmCleanup !== null}
         title={t("assistantEval.cleanupTitle")}
-        body={t("assistantEval.cleanupBody")}
+        body={t("assistantEval.cleanupBody", { plan: confirmCleanup?.plan_revision ?? 0 })}
         confirmLabel={t("assistantEval.cleanupConfirm")}
         onConfirm={() => {
           const op = confirmCleanup;
           setConfirmCleanup(null);
-          if (op) void run(() => api.assistantEvalOperationCleanup(conversationId, op.id));
+          if (op) void run(() => api.assistantEvalOperationCleanup(conversationId, op.id, workspaceId));
         }}
         onCancel={() => setConfirmCleanup(null)}
       />
     </>
+  );
+}
+
+function EvaluatorDefinition({ e }: { e: AssistantEvalPlanEvaluator }) {
+  const { t } = useTranslation();
+  const kind = String(e?.kind ?? "");
+  return (
+    <>
+      <div>{String(e?.title ?? "")}</div>
+      {kind === "existing" && <div className="mono">{String(e?.evaluator_id ?? "")}</div>}
+      {kind === "judge" && (
+        <details className="mono dim">
+          <summary>
+            {e?.name} · {e?.level} · {e?.model_id} · {t("assistantEval.fullRubric")}
+          </summary>
+          <pre className="assist-pre" data-testid={`eval-rubric-${e?.key}`}>{String(e?.instructions ?? "")}</pre>
+          {asArray<{ value: number; label: string; definition: string }>(e?.rating_scale).length > 0 && (
+            <ul>
+              {asArray<{ value: number; label: string; definition: string }>(e?.rating_scale).map((r, k) => (
+                <li key={k}>
+                  {r.value} · {r.label} — {r.definition}
+                </li>
+              ))}
+            </ul>
+          )}
+        </details>
+      )}
+      {kind === "derived" && (
+        <div className="mono dim">{e?.name} · {e?.base_evaluator_id} · {e?.model_id}</div>
+      )}
+      {kind === "code" && (
+        <details className="mono dim">
+          <summary>
+            {e?.name} · {e?.level} · {t("assistantEval.rulesCount", { n: asArray(e?.rules?.checks).length })}
+          </summary>
+          <pre className="assist-pre">
+            {asArray<Record<string, unknown>>(e?.rules?.checks).map((c) => compactRule(c)).join("\n")}
+          </pre>
+        </details>
+      )}
+      {!CLOUD_KINDS.has(kind) && kind !== "existing" && (
+        <div className="dim">
+          {String(e?.reason ?? "")}
+          {e?.obligation ? ` — ${e.obligation}` : ""}
+        </div>
+      )}
+      {e?.note && <div className="dim">{e.note}</div>}
+    </>
+  );
+}
+
+function OperationView({
+  operation,
+  pollError,
+  canMaterialize,
+  busy,
+  onRefresh,
+  onRetry,
+  onCleanup,
+}: {
+  operation: AssistantEvalOperation;
+  pollError: string | null;
+  canMaterialize: boolean;
+  busy: boolean;
+  onRefresh: () => void;
+  onRetry: () => void;
+  onCleanup: () => void;
+}) {
+  const { t } = useTranslation();
+  const live = operation.status === "running" || operation.status === "queued";
+  return (
+    <div className="assist-section" data-testid="eval-operation" data-status={operation.status}>
+      <h4>
+        {t("assistantEval.operation")}{" "}
+        <Chip tone={OP_TONE[operation.status] ?? "muted"}>
+          {t(`assistantEval.opStatus.${operation.status}`)}
+        </Chip>
+      </h4>
+      <div className="dim mono" style={{ fontSize: 11 }}>
+        {t("assistantEval.operationMeta", {
+          by: operation.approved_by,
+          account: operation.account_id,
+          region: operation.region,
+          plan: operation.plan_revision,
+          hash: operation.plan_hash.slice(0, 12),
+          attempts: operation.attempts,
+          max: operation.max_attempts,
+        })}
+      </div>
+      {operation.error && (
+        <div className="mono" style={{ color: "var(--crit)", fontSize: 11, marginTop: 4, whiteSpace: "pre-wrap" }} data-testid="eval-operation-error">
+          {operation.error}
+        </div>
+      )}
+      {pollError && (
+        <div className="note" style={{ borderColor: "var(--crit)", marginTop: 6 }} data-testid="eval-poll-error">
+          <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+          <span>
+            {t("assistantEval.pollError", { message: pollError })}{" "}
+            <Btn data-testid="eval-refresh" onClick={onRefresh}>{t("assistantEval.refresh")}</Btn>
+          </span>
+        </div>
+      )}
+      {live && !pollError && (
+        <div className="row" style={{ marginTop: 6 }}>
+          <Btn data-testid="eval-refresh" onClick={onRefresh}>{t("assistantEval.refresh")}</Btn>
+        </div>
+      )}
+      <Wrap testid="eval-resources-table">
+        <table className="assist-gt" style={{ marginTop: 8 }}>
+          <thead>
+            <tr>
+              <th>{t("assistantEval.col.resource")}</th>
+              <th>{t("assistantEval.col.name")}</th>
+              <th>{t("assistantEval.col.status")}</th>
+              <th>{t("assistantEval.col.details")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {asArray<AssistantEvalResource>(operation.resources).map((r) => (
+              <tr key={r.key} data-testid={`eval-resource-${r.key}`} data-status={r.status}>
+                <td className="mono">{t(`assistantEval.resource.${r.kind}`, r.kind)}</td>
+                <td className="mono" style={{ wordBreak: "break-all" }}>{r.name}</td>
+                <td><ResourceStatus res={r} /></td>
+                <td className="mono" style={{ fontSize: 11, wordBreak: "break-all" }}>
+                  <ResourceDetails res={r} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Wrap>
+      <div className="note" style={{ marginTop: 8 }} data-testid="eval-registered-note">
+        <span className="i">[i]</span>
+        <span>{t("assistantEval.registeredNote")}</span>
+      </div>
+      {canMaterialize && (
+        <div className="row" style={{ gap: 8, marginTop: 8 }}>
+          {(operation.status === "partial" || operation.status === "failed") &&
+            operation.attempts < operation.max_attempts && (
+              <Btn disabled={busy} data-testid="eval-retry" onClick={onRetry}>
+                {t("assistantEval.retry")}
+              </Btn>
+            )}
+          {operation.status !== "cleaned" && !live && operation.status !== "cleaning" && (
+            <Btn disabled={busy} data-testid="eval-cleanup" onClick={onCleanup}>
+              {t("assistantEval.cleanup")}
+            </Btn>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -695,6 +905,7 @@ function ResourceStatus({ res }: { res: AssistantEvalResource }) {
       <Chip tone={RES_TONE[res.status] ?? "muted"}>
         {t(`assistantEval.resStatus.${res.status}`, res.status)}
       </Chip>
+      {res.recovered && <Chip tone="muted">{t("assistantEval.recovered")}</Chip>}
       {res.error && (
         <div className="mono" style={{ color: "var(--crit)", fontSize: 11, whiteSpace: "pre-wrap" }}>
           {res.error}
@@ -706,8 +917,8 @@ function ResourceStatus({ res }: { res: AssistantEvalResource }) {
 
 function ResourceDetails({ res }: { res: AssistantEvalResource }) {
   const { t } = useTranslation();
-  const r = (res.result ?? {}) as Record<string, unknown>;
-  const readback = (r.readback ?? null) as Record<string, unknown> | null;
+  const r = asRecord(res.result);
+  const readback = asRecord(r.readback);
   return (
     <>
       {res.link && (
@@ -731,19 +942,26 @@ function ResourceDetails({ res }: { res: AssistantEvalResource }) {
         <div>
           {r.version_arn ? String(r.version_arn) : String(r.function_arn ?? "")}
           {res.digest ? <div>sha256 {String(res.digest).slice(0, 16)}…</div> : null}
-          {readback ? (
+          {Object.keys(readback).length ? (
             <div>
               {String(readback.Runtime ?? "")} · {String(readback.Handler ?? "")} · v{String(readback.Version ?? "")}
+              {" · "}{String(readback.Timeout ?? "")}s · {String(readback.MemorySize ?? "")}MB
+              {" · "}{t("assistantEval.reserved", { n: Number(readback.ReservedConcurrentExecutions ?? 0) })}
             </div>
           ) : null}
         </div>
       )}
       {res.kind === "lambda_role" && r.role_arn ? <div>{String(r.role_arn)}</div> : null}
       {res.kind === "role_grant" && r.role_arn ? (
-        <div>{String(r.role_arn)} · {String(r.policy_name ?? "")}</div>
+        <div>
+          {String(r.role_arn)} · {String(r.policy_name ?? "")}
+          {asArray<string>(asRecord(asArray<Record<string, unknown>>(asRecord(r.policy_document).Statement)[0]).Resource).map((arn) => (
+            <div key={arn}>→ {arn}</div>
+          ))}
+        </div>
       ) : null}
       {res.kind === "lambda_permission" && r.principal ? (
-        <div>{String(r.principal)} · SourceAccount {String(r.source_account ?? "")}</div>
+        <div>{String(r.principal)} · SourceAccount {String(r.source_account ?? "")} · v{String(r.qualifier ?? "")}</div>
       ) : null}
       {res.kind === "log_group" && r.retention_days ? (
         <div>{t("assistantEval.retention", { n: Number(r.retention_days) })}</div>

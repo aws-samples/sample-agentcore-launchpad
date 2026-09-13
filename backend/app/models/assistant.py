@@ -227,6 +227,10 @@ class EvaluationAssetOperation(Base):
     approver_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
     account_id: Mapped[str] = mapped_column(String(16))
     region: Mapped[str] = mapped_column(String(32))
+    # The workspace identity every mutation is fenced on: {account_id, region, role_arn,
+    # external_id, execution_role_arn, execution_role_id?} as read at approval. A
+    # later change of the workspace row stops the worker/cleanup before any effect.
+    pinned: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     # queued | running | succeeded | partial | failed | cleaning | cleaned
     status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
     worker_token: Mapped[str | None] = mapped_column(String(32), default=None)

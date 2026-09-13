@@ -26,7 +26,7 @@ import json
 import re
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.schemas.agent import (
     DEFAULT_MODEL_ID,
@@ -76,35 +76,28 @@ class GoldenTest(BaseModel):
 
 
 class EvaluationPlanSeed(BaseModel):
-    """The optional structured evaluation recommendation of a proposal. Each entry
-    must be a shape-valid evaluator of the plan contract (kinds existing / judge /
-    derived / code / orchestration / manual_review / metric_baseline /
-    external_control); ``recommendation_keys`` maps a prose recommendation index to
-    the entry keys it corresponds to. Nothing here is executed; the plan draft merely
-    starts from it."""
+    """The optional structured evaluation recommendation of a proposal: typed
+    evaluators (kinds existing / judge / derived / code / orchestration /
+    manual_review / metric_baseline / external_control), typed scenarios (turns,
+    references, and the SE-046 ``execution`` procedure for multi-actor / multi-session
+    tests) and ``recommendation_keys`` mapping a prose recommendation index to entry
+    keys. Validated by the plan contract's ``seed_errors`` — shape first, then rules
+    and references — so a malformed seed is an *invalid* revision, never a 500.
+    Nothing here is executed; the plan draft merely starts from it."""
 
     model_config = ConfigDict(extra="forbid")
     evaluators: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
+    scenarios: list[dict[str, Any]] = Field(default_factory=list, max_length=40)
     recommendation_keys: dict[str, list[str]] = Field(default_factory=dict)
 
-    @field_validator("evaluators")
-    @classmethod
-    def _typed_entries(cls, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        from app.assistant.evaluation_plan import EvaluationPlan
+    @model_validator(mode="after")
+    def _typed(self) -> "EvaluationPlanSeed":
+        from app.assistant.evaluation_plan import seed_errors
 
-        keys = [e.get("key") for e in entries]
-        if len(set(keys)) != len(keys):
-            raise ValueError("evaluator keys must be unique")
-        probe = {"version": 1, "source_revision": 1, "source_content_hash": "0" * 64,
-                 "dataset": {"name": "seed"}, "evaluators": entries}
-        try:
-            EvaluationPlan.model_validate(probe)
-        except ValidationError as exc:
-            first = exc.errors()[0]
-            raise ValueError(
-                f"{'.'.join(str(p) for p in first['loc'][1:]) or 'entry'}: {first['msg']}"
-            ) from None
-        return entries
+        errors = seed_errors(self.model_dump())
+        if errors:
+            raise ValueError(errors[0])
+        return self
 
 
 class ProposalContent(BaseModel):
@@ -167,6 +160,22 @@ def _check_lists(content: ProposalContent) -> list[str]:
             errors.append(f"{field} must not repeat an entry")
     if len({g.id for g in content.golden_tests}) != len(content.golden_tests):
         errors.append("golden_tests ids must be unique")
+    seed = content.evaluation_plan
+    if seed is not None:
+        gt_ids = {g.id for g in content.golden_tests}
+        for idx in seed.recommendation_keys:
+            if int(idx) >= len(content.evaluator_recommendations):
+                errors.append(f"evaluation_plan.recommendation_keys: index {idx} has no "
+                              "evaluator_recommendations entry")
+        for sc in seed.scenarios:
+            if str(sc.get("golden_test_id")) not in gt_ids:
+                errors.append(f"evaluation_plan.scenarios: golden test "
+                              f"'{sc.get('golden_test_id')}' does not exist")
+        for e in seed.evaluators:
+            for gt in e.get("golden_test_ids") or []:
+                if gt not in gt_ids:
+                    errors.append(f"evaluation_plan.evaluators.{e.get('key')}: golden test "
+                                  f"'{gt}' does not exist")
     return errors
 
 

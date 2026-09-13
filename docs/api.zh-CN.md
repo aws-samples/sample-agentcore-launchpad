@@ -179,6 +179,30 @@ Agent 是普通行，可通过 `GET /api/jobs/{id}` 与 `GET /api/agents/{id}` �
 （`POST /api/chat/{id}`、`POST /api/agents/{id}/invoke`、`/v1 …/invoke[-stream]`）对系统托管
 Agent 上助手轮次的 `session_id` 返回 `404 chat.session_not_found`。
 
+### 评估资产计划（SE-047）
+
+仅对话所有者可见（其他主体 / Workspace → `404 assistant.conversation_not_found`，管理员亦然）。准备 / 编辑为
+`member`；创建与清理为 `admin` **且**为所有者。读取仅访问账本。
+
+| 方法 | 路径 | 角色 | 结果 |
+|---|---|---|---|
+| `GET` | `/api/assistant/architect/conversations/{id}/evaluation-plan` | member | `{plans[…], operations[…], disclosure}` |
+| `POST` | `…/evaluation-plan/prepare` | member | `{revision}` → `201 {plan, …}` 平台草稿（旧版黄金测试的场景带 `review_required`，草稿在全部确认或阻止前为 `invalid`）；无副作用 |
+| `PUT` | `…/evaluation-plan` | member | `{content}` → 新修订（`draft` 或带 `validation_errors` 的 `invalid`）；超过 160 000 字节 → `413` |
+| `POST` | `…/evaluation-plan/materialize` | admin | `{plan_revision, plan_hash, acknowledge_disclosure: true}` → `202 {operation, started: true}`（原子声明：仍为 draft、同哈希、最新版本；启动 worker）或 `200 … started: false`（重复 / 并发请求，同一操作）。`422 assistant.disclosure_required`、`409 assistant.evaluation_plan_stale`（版本 / 哈希不符或期间被编辑 / 取代 / 声明）、`409 assistant.evaluation_plan_not_approvable`、`409 assistant.evaluation_plan_invalid`、`409 assistant.workspace_not_ready`、`409 assistant.execution_role_untrusted`（请求授权但执行角色无平台标签）；调用者与 Workspace 身份在声明事务内重新解析并钉在操作上 |
+| `GET` | `…/evaluation-plan/operations/{operation_id}` | member | `{operation}`——仅账本，不调用 AWS |
+| `POST` | `…/operations/{operation_id}/retry` | admin | 恢复持久化意图（同令牌 / 同请求）；5 次后 `409 assistant.evaluation_assets_exhausted` |
+| `DELETE` | `…/operations/{operation_id}/assets` | admin | 按依赖顺序仅删除身份仍匹配的自有云端资产，每次生效后持久化；本地 Dataset 保留；worker 活跃时 `409 assistant.evaluation_assets_running`，批准者或 Workspace 身份变化时 `409 assistant.evaluation_assets_stopped` |
+
+操作为 `{id, plan_id, plan_revision, plan_hash, proposal_revision, approved_by, account_id, region,
+pinned{…}, status: queued|running|succeeded|partial|failed|cleaning|cleaned, attempts, max_attempts,
+dataset_id, error, resources[{kind, key, plan_key?, name, status: pending|accepted|ready|failed|conflict|
+blocked|skipped|retained|deleted|delete_failed, error, digest?, reference_dependent?, owned?, recovered?,
+result, cleanup?, link?}], running}`。`POST /api/eval/runs` 对缺少参考的托管代码评估器返回
+`422 run.judge_needs_ground_truth`；在线评估拒绝此类评估器。普通 `DELETE /api/eval/evaluators/{id}` 对操作拥有
+的评估器返回 `409 evaluator.managed_by_operation`。`GET /api/assistant/architect` 新增
+`can_materialize_evaluation_assets`（= 管理员）。
+
 ## 控制台 Registry API——实时名片 / Console Registry API: live agent card
 
 `GET /api/registry/records/{record_id}/live-agent-card` 是 Registry 抽屉「AGENT 名片」区块中「实时名片」按钮背后的读取：

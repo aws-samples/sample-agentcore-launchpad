@@ -4295,7 +4295,7 @@
     "fixErrors": "请先修正校验错误。",
     "unresolvedHint": "有 {{n}} 条建议未解决——它们会如实显示为未解决，不会被实现。",
     "confirmTitle": "创建计划版本 {{n}} 的资产？",
-    "confirmBody": "精确计划哈希 {{hash}}… · {{cloud}} 个 AgentCore 评估器 · {{lambdas}} 个 Lambda 函数 · {{roles}} 项 IAM 变更。此操作只创建并注册资源——不部署、不运行评估、不调用模型。之后重试会返回同一批资源。",
+    "confirmBody": "Workspace {{workspace}} · 精确计划哈希 {{hash}}… · {{cloud}} 个 AgentCore 评估器 · {{lambdas}} 个 Lambda 函数 · {{roles}} 项 IAM 变更。此操作只创建并注册资源——不部署、不运行评估、不调用模型。之后重试会返回同一批资源。",
     "confirmCreate": "创建",
     "dialogStale": "确认框打开期间计划已变化，未创建任何内容。",
     "operation": "创建结果",
@@ -4317,7 +4317,9 @@
       "conflict": "冲突",
       "skipped": "已跳过",
       "deleted": "已删除",
-      "delete_failed": "删除失败"
+      "delete_failed": "删除失败",
+      "blocked": "已阻止",
+      "retained": "保留"
     },
     "resource": {
       "dataset": "Dataset（本地）",
@@ -4333,11 +4335,28 @@
     "retry": "重试（同一批资源）",
     "cleanup": "删除本操作拥有的云资产",
     "cleanupTitle": "删除本操作创建的云资产？",
-    "cleanupBody": "只删除本操作记录的评估器、Lambda 函数及其角色和日志组，以及附加的执行角色策略。本地 Dataset 会保留（如不需要，请在 评估 → Datasets 中删除）。绝不会触碰外部资源。",
+    "cleanupBody": "只删除计划 r{{plan}} 的操作所记录的评估器、Lambda 函数及其角色和日志组，以及附加的执行角色策略——且每一项都仅在其身份仍与创建时一致时删除。本地 Dataset 会保留（如不需要，请在 评估 → Datasets 中删除）。外部或已被改动的资源绝不会触碰，并保持如实报告。",
     "cleanupConfirm": "删除",
     "open": "打开",
     "items": "{{n}} 条",
     "referenceDependent": "需要 ground truth",
-    "retention": "保留 {{n}} 天"
+    "retention": "保留 {{n}} 天",
+    "refresh": "刷新",
+    "reviewPending": "仍有 {{n}} 个场景需要评审——请将其确认为类型化步骤，或阻止该黄金测试。",
+    "reviewNote": "旧版黄金测试被草拟为单轮场景。请逐一评审：确认为类型化步骤、在 JSON 中把多 session 流程改写为步骤，或将其阻止。在每个场景确认或阻止之前不会创建任何内容。",
+    "confirmScenarios": "确认 {{n}} 个场景为类型化",
+    "reviewRequired": "需要评审",
+    "confirmed": "已确认",
+    "turnsCount": "{{n}} 轮",
+    "assertions": "断言",
+    "expectedTrajectory": "预期工具",
+    "step": "第 {{turn}} 轮 · actor {{actor}} · session {{session}}",
+    "allGoldenTests": "全部",
+    "fullRubric": "完整评分标准与量表",
+    "history": "更早的操作（其他计划版本）",
+    "historyLine": "计划 r{{plan}} · {{status}} · 由 {{by}} 批准 · {{hash}}…",
+    "pollError": "状态刷新失败：{{message}}——将按退避策略重试。",
+    "recovered": "已恢复",
+    "reserved": "预留并发 {{n}}"
   }
 }

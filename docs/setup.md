@@ -229,10 +229,13 @@ members in Observability too. **The live smoke of this flow
 **Evaluation assets from a proposal (SE-047).** Below the proposal panel, EVALUATION
 ASSETS lets the conversation owner prepare a typed plan from any shape-valid proposal
 revision (including an already-approved one), review the mapping table (golden tests →
-Dataset scenarios; recommendations → existing evaluator / new LLM judge / new derived /
-new code rules / runner check / human review / metric baseline / external control),
-edit it as JSON (every save is a new plan revision) and — as an **administrator who owns
-the conversation** — CREATE ASSETS after acknowledging the disclosure. Creation
+Dataset scenarios with their steps and references; recommendations → existing
+evaluator / new LLM judge / new derived / new code rules / runner check / human review /
+metric baseline / external control), confirm or block the review-required scenarios
+(legacy golden tests are drafted as single turns and are never parsed into
+procedures — multi-session tests need typed steps), edit as JSON (every save is a new
+plan revision) and — as an **administrator who owns the conversation** — CREATE ASSETS
+after acknowledging the disclosure. Creation
 registers a local Dataset, AgentCore evaluators and, for code rules, one Lambda with its
 own role; it does not deploy, run, sync to AWS Datasets, enable online evaluation or
 call a model, and "created" does not mean passed. Members can prepare and edit; the

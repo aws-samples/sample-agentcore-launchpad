@@ -927,3 +927,12 @@ footer .sep{color:var(--line-2)}
 .assist-stages{display:flex;gap:6px;flex-wrap:wrap}
 .assist-conv-list{display:flex;gap:6px;flex-wrap:wrap;padding:10px 16px;border-bottom:1px solid var(--line)}
 @media(max-width:1180px){.assist-grid{grid-template-columns:1fr}.assist-thread{height:420px}}
+/* SE-047 evaluation-assets panel: full-width span under the two assistant columns,
+   contained tables with horizontal overflow, readable long rubrics/steps */
+.assist-grid>.assist-span{grid-column:1 / -1}
+.assist-table-wrap{width:100%;max-width:100%;overflow-x:auto}
+.assist-table-wrap .assist-gt{min-width:640px}
+.assist-table-wrap .assist-gt td{white-space:normal;overflow-wrap:anywhere}
+.assist-pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;max-height:320px;overflow:auto;margin:6px 0;padding:6px;border:1px solid var(--line)}
+.assist-steps{margin:4px 0 0;padding-left:18px;font-size:11px}
+.assist-steps li{margin-bottom:2px}
