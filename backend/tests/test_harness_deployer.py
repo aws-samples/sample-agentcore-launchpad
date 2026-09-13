@@ -368,3 +368,27 @@ def test_delete_agent_resources_logs_swallowed_target_failure(monkeypatch, caplo
     assert len(warnings) == 1
     msg = warnings[0].getMessage()
     assert "gw-kb-42" in msg and "hr-assistant-v3" in msg and "ThrottlingException" in msg
+
+
+def test_build_params_sends_max_tokens_and_reasoning_effort_only_when_set():
+    """`maxTokens` is the per-model-call ceiling on bedrockModelConfig (never the
+    aggregate InvokeHarness.maxTokens); `reasoning_effort` rides additionalParams in
+    the Strands `additional_request_fields` → Converse additionalModelRequestFields
+    shape. Neither key appears for a spec that does not set it."""
+    plain = build_create_params(spec(), ROLE_ARN, MEM_ARN)["model"]["bedrockModelConfig"]
+    assert "maxTokens" not in plain and "additionalParams" not in plain
+    s = spec(model_id="us.openai.gpt-5.6-sol", max_tokens=65536, reasoning_effort="high")
+    params = build_create_params(s, ROLE_ARN, MEM_ARN)
+    assert params["model"]["bedrockModelConfig"] == {
+        "modelId": "us.openai.gpt-5.6-sol",
+        "apiFormat": "converse_stream",
+        "maxTokens": 65536,
+        "additionalParams": {"additional_request_fields": {"reasoning": {"effort": "high"}}},
+    }
+    assert "maxTokens" not in params  # no aggregate invoke cap is introduced
+    only_tokens = build_create_params(spec(max_tokens=8192), ROLE_ARN, MEM_ARN)
+    assert only_tokens["model"]["bedrockModelConfig"] == {
+        "modelId": DEFAULT_MODEL_ID, "apiFormat": "converse_stream", "maxTokens": 8192,
+    }
+    with pytest.raises(ValueError):  # the knob never leaks onto a Claude request
+        spec(reasoning_effort="high")

@@ -2,7 +2,7 @@
 
 import i18n from "../i18n";
 import type { EvaluationRunInfo, EvaluationRunResults, InsightTrees } from "./evaluation";
-import type { ModelSource } from "./models";
+import type { ModelSource, ReasoningEffort } from "./models";
 
 export interface StageInfo {
   name: string;
@@ -119,19 +119,64 @@ export interface SystemPresetInfo {
   allowed_tools: string[];
   /** persistent memory contract of the preset (`disabled`) */
   memory: string;
+  /** the administrator-editable members as stored (`{}` when not installed) */
+  settings: SystemPresetSettings | Record<string, never>;
+  /** this build's catalogue defaults for the same members */
+  defaults: SystemPresetSettings;
+  editable_fields: SystemPresetEditableField[];
   /** set while an uninstall job owns the row (status `uninstalling`) */
   operation: SystemPresetOperation | null;
   /** server verdicts per operation: administrator + operation-specific readiness */
   can_install: boolean;
   can_repair: boolean;
+  /** editing the stored settings = a repair with an explicit body (admin + settled) */
+  can_configure: boolean;
   can_uninstall: boolean;
   updated_at: string | null;
 }
 
+export type SystemPresetEditableField =
+  | "model_id"
+  | "model_source"
+  | "max_tokens"
+  | "reasoning_effort"
+  | "system_prompt"
+  | "max_iterations"
+  | "timeout_seconds"
+  | "knowledge_bases";
+
+/** The members an administrator may change on a system preset. `max_tokens` is the
+ *  per-model-call output ceiling (harness `bedrockModelConfig.maxTokens`), not a
+ *  spend cap and not the loop limits `max_iterations` / `timeout_seconds`. */
+export interface SystemPresetSettings {
+  model_id: string;
+  model_source: ModelSource;
+  max_tokens: number | null;
+  reasoning_effort: ReasoningEffort | null;
+  system_prompt: string;
+  max_iterations: number;
+  timeout_seconds: number;
+  knowledge_bases: { kb_id: string; name: string; description: string }[];
+}
+
+/**
+ * `POST /api/system-agents/{key}/install` body — a PARTIAL edit. Every member given
+ * replaces the stored value; omitted members keep it (`{}` = install with the preset
+ * defaults / repair with the stored choices). `reset` returns members to the build
+ * defaults; `clear` sends nothing for the two optional knobs. Unknown members are
+ * refused (422).
+ */
 export interface SystemPresetInstallInput {
   model_id?: string;
   model_source?: ModelSource;
+  max_tokens?: number;
+  reasoning_effort?: ReasoningEffort;
+  system_prompt?: string;
+  max_iterations?: number;
+  timeout_seconds?: number;
   knowledge_bases?: { kb_id: string; name?: string; description?: string }[];
+  reset?: SystemPresetEditableField[];
+  clear?: ("max_tokens" | "reasoning_effort")[];
   force?: boolean;
 }
 

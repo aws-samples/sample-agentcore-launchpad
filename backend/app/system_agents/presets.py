@@ -11,7 +11,13 @@ from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
-from app.schemas.agent import DEFAULT_MODEL_ID, AgentSpec, KnowledgeBaseRef, ToolRef
+from app.schemas.agent import (
+    AgentSpec,
+    KnowledgeBaseRef,
+    ModelSource,
+    ReasoningEffort,
+    ToolRef,
+)
 from app.services.skill_ingest import (
     SKILL_BUNDLE_MAX_BYTES,
     bundle_from_dir,
@@ -47,9 +53,27 @@ class SystemPreset:
     # ``file_operations`` to every session unless restricted; an advisory agent gets the
     # file tools its skills need, its MCP server, and no shell.
     allowed_tools: tuple[str, ...]
+    # Inference defaults for a NEW install. An administrator may change every member
+    # of ``InstallOptions`` afterwards; these are the values ``InstallOptions()`` and
+    # ``default_options`` resolve to, never a constraint on what is stored.
+    model_id: str = "us.openai.gpt-5.6-sol"
+    model_source: ModelSource = "bedrock"
+    # Per model call (``bedrockModelConfig.maxTokens``): 64k output so a full design
+    # proposal is never cut at the provider's 4096-token default. Not a spend cap.
+    max_tokens: int | None = 65536
+    reasoning_effort: ReasoningEffort | None = "high"
     max_iterations: int = 30
     timeout_seconds: int = 900
     skill_dir: str = ""  # directory name under SKILLS_ROOT
+
+    def default_options(self) -> "InstallOptions":
+        """What a first install with an empty body gets."""
+        return InstallOptions(
+            model_id=self.model_id,
+            model_source=self.model_source,
+            max_tokens=self.max_tokens,
+            reasoning_effort=self.reasoning_effort,
+        )
 
     def skill_path(self) -> Path:
         return SKILLS_ROOT / (self.skill_dir or self.name)
@@ -92,6 +116,9 @@ Rules you always follow:
    customer states or re-confirms in this conversation count; earlier conversations,
    persistent memory, old documents and old design contracts never pre-answer a
    question or justify skipping one, even for the same customer and project name.
+   Your AgentCore persistent memory is disabled; that only means you carry nothing
+   between sessions. The platform still keeps the conversation transcript and its
+   CloudWatch logs, so never tell a customer that nothing is retained.
 5. Ask only the missing questions that change architecture, risk or cost; confirm what
    the customer already said instead of re-asking it.
 6. Conclusions separate verified facts, methodology, customer input and assumptions
@@ -138,12 +165,39 @@ def is_reserved_name(name: str) -> bool:
     return name in RESERVED_AGENT_NAMES
 
 
+# The spec members an administrator may set through the maintenance route. Everything
+# else on the spec (name, method, tools, skills, allowed_tools, memory, env, …) is
+# derived from the catalogue and cannot be reached from a request body.
+EDITABLE_FIELDS: tuple[str, ...] = (
+    "model_id",
+    "model_source",
+    "max_tokens",
+    "reasoning_effort",
+    "system_prompt",
+    "max_iterations",
+    "timeout_seconds",
+    "knowledge_bases",
+)
+
+
 @dataclass(frozen=True)
 class InstallOptions:
-    """The administrator's degrees of freedom. Everything not here is fixed."""
+    """The administrator's degrees of freedom. Everything not here is fixed.
 
-    model_id: str = DEFAULT_MODEL_ID
-    model_source: str = "bedrock"
+    ``None`` on a member means "the preset's value" (``build_spec`` resolves it), so a
+    bare ``InstallOptions()`` is the catalogue default. ``max_tokens`` and
+    ``reasoning_effort`` are the exception: ``None`` there means "send nothing", so an
+    administrator can clear them; the preset defaults for those two enter only through
+    ``SystemPreset.default_options``.
+    """
+
+    model_id: str | None = None
+    model_source: ModelSource | None = None
+    max_tokens: int | None = None
+    reasoning_effort: ReasoningEffort | None = None
+    system_prompt: str | None = None
+    max_iterations: int | None = None
+    timeout_seconds: int | None = None
     knowledge_bases: tuple[KnowledgeBaseRef, ...] = field(default_factory=tuple)
 
 
@@ -157,19 +211,26 @@ def build_spec(
     workspace memory carries long-term strategies, and the harness-managed default
     creates one with SEMANTIC + SUMMARIZATION — so the preset opts out of persistent
     memory altogether: a new session's requirement baseline is independent of every
-    earlier one by construction, and the execution role gets no memory grant. The
-    conversation inside one runtime session lives in the harness session itself
-    (memory persists context *across* sessions per the service model); that
-    within-session continuity is part of the pending live smoke. Skills: the
-    versioned S3 prefix, so the role's ``SkillBundle*`` statements scope to exactly
-    this version.
+    earlier one by construction, and the execution role gets no memory grant. This
+    disables AgentCore *persistent memory* only — the Launchpad chat transcript in the
+    ledger and the CloudWatch logs are untouched. The conversation inside one runtime
+    session lives in the harness session itself (memory persists context *across*
+    sessions per the service model). Skills: the versioned S3 prefix, so the role's
+    ``SkillBundle*`` statements scope to exactly this version.
+
+    ``options`` carries the administrator's choices (see ``InstallOptions``); the
+    inference knobs are validated by ``AgentSpec`` itself, so an unsupported pairing
+    (a reasoning effort on a non-OpenAI model, say) raises here — before any row or
+    AWS call — instead of failing inside the deploy job.
     """
     return AgentSpec(
         name=preset.name,
         method="harness",
-        model_id=options.model_id,
-        model_source=options.model_source,  # type: ignore[arg-type]
-        system_prompt=preset.system_prompt,
+        model_id=options.model_id or preset.model_id,
+        model_source=options.model_source or preset.model_source,
+        max_tokens=options.max_tokens,
+        reasoning_effort=options.reasoning_effort,
+        system_prompt=options.system_prompt or preset.system_prompt,
         tools=[
             ToolRef(
                 type="mcp",
@@ -181,20 +242,66 @@ def build_spec(
         allowed_tools=list(preset.allowed_tools),
         memory={"short_term": False, "long_term": False, "memory_id": None},
         knowledge_bases=list(options.knowledge_bases),
-        max_iterations=preset.max_iterations,
-        timeout_seconds=preset.timeout_seconds,
+        max_iterations=options.max_iterations or preset.max_iterations,
+        timeout_seconds=options.timeout_seconds or preset.timeout_seconds,
     )
 
 
 def options_from_spec(spec: dict) -> InstallOptions:
-    """Recover the administrator's choices from a stored preset spec (repair path)."""
+    """Recover the administrator's choices from a stored preset spec (repair path).
+
+    Faithful, not defaulted: every editable member comes back exactly as stored, so a
+    repair with an empty body re-derives the same spec (new bundle release aside) and
+    an administrator's earlier edits — including a system prompt that differs from
+    this build's constant — survive until an explicit change or reset. A knob the
+    stored spec never had (pre-SE-040 rows: ``max_tokens``, ``reasoning_effort``)
+    stays absent rather than jumping to the catalogue default.
+    """
     return InstallOptions(
-        model_id=str(spec.get("model_id") or DEFAULT_MODEL_ID),
-        model_source=str(spec.get("model_source") or "bedrock"),
+        model_id=str(spec.get("model_id") or "") or None,
+        model_source=spec.get("model_source") or None,
+        max_tokens=spec.get("max_tokens"),
+        reasoning_effort=spec.get("reasoning_effort"),
+        system_prompt=spec.get("system_prompt") or None,
+        max_iterations=spec.get("max_iterations"),
+        timeout_seconds=spec.get("timeout_seconds"),
         knowledge_bases=tuple(
             KnowledgeBaseRef(**kb) for kb in (spec.get("knowledge_bases") or [])
         ),
     )
+
+
+def effective_settings(preset: SystemPreset, spec: dict | None) -> dict:
+    """The editable members as stored on one installed preset (``None`` when not
+    installed); what the console shows and prefills."""
+    if not spec:
+        return {}
+    options = options_from_spec(spec)
+    return {
+        "model_id": options.model_id or preset.model_id,
+        "model_source": options.model_source or preset.model_source,
+        "max_tokens": options.max_tokens,
+        "reasoning_effort": options.reasoning_effort,
+        "system_prompt": options.system_prompt or preset.system_prompt,
+        "max_iterations": options.max_iterations or preset.max_iterations,
+        "timeout_seconds": options.timeout_seconds or preset.timeout_seconds,
+        "knowledge_bases": [kb.model_dump() for kb in options.knowledge_bases],
+    }
+
+
+def default_settings(preset: SystemPreset) -> dict:
+    """This build's catalogue defaults for the same members (``knowledge_bases`` is
+    always empty by default)."""
+    return {
+        "model_id": preset.model_id,
+        "model_source": preset.model_source,
+        "max_tokens": preset.max_tokens,
+        "reasoning_effort": preset.reasoning_effort,
+        "system_prompt": preset.system_prompt,
+        "max_iterations": preset.max_iterations,
+        "timeout_seconds": preset.timeout_seconds,
+        "knowledge_bases": [],
+    }
 
 
 def skill_release_from_spec(spec: dict) -> tuple[str, str | None] | None:

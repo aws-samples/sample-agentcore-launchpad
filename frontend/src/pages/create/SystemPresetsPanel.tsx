@@ -5,9 +5,15 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../../auth/auth-context";
 import { Btn, Chip, ConfirmDialog, Panel, useToast } from "../../components";
 import type { ChipTone } from "../../components";
-import type { SystemPresetInfo, SystemPresetStatus } from "../../lib/api";
+import type {
+  SystemPresetInfo,
+  SystemPresetInstallResult,
+  SystemPresetSettings,
+  SystemPresetStatus,
+} from "../../lib/api";
 import { api, ApiError } from "../../lib/api";
 import { useWorkspace } from "../../workspace/workspace-context";
+import { PresetSettingsDialog } from "./PresetSettingsDialog";
 
 const STATUS_TONE: Record<SystemPresetStatus, ChipTone> = {
   configuration_required: "muted",
@@ -57,12 +63,16 @@ export function SystemPresetsPanel({
   const [confirm, setConfirm] = useState<{ kind: Operation; preset: SystemPresetInfo } | null>(
     null,
   );
+  // the preset whose stored settings are open in the editor (admin) / viewer (member)
+  const [settingsFor, setSettingsFor] = useState<string | null>(null);
   // stale-outcome guard: unmounted or a different workspace ⇒ ignore the result
   const alive = useRef(true);
   const scope = useRef(workspaceId);
   useEffect(() => {
     alive.current = true;
     scope.current = workspaceId;
+    // a settings editor opened in another workspace must never save into this one
+    setSettingsFor(null);
     return () => {
       alive.current = false;
     };
@@ -197,6 +207,21 @@ export function SystemPresetsPanel({
     }
   };
 
+  // The editor's save went through the maintenance route: consume the response the
+  // same way an install/repair click does, then let the poll carry the job.
+  const onSettingsSaved = (preset: SystemPresetInfo, res: SystemPresetInstallResult) => {
+    setSettingsFor(null);
+    setPresets((prev) => (prev ?? []).map((row) => (row.key === preset.key ? res.preset : row)));
+    toast(
+      t(res.changed ? "create.system.settings.saved" : "create.system.alreadyCurrent", {
+        name: preset.label,
+      }),
+      "good",
+    );
+    onChangedRef.current?.();
+    load();
+  };
+
   const adminHint = isAdmin ? undefined : t("create.system.adminOnly");
   const requirementText = (preset: SystemPresetInfo) =>
     preset.requirements
@@ -276,6 +301,20 @@ export function SystemPresetsPanel({
                 ? ` · ${t("create.system.kb", { n: preset.knowledge_bases.length })}`
                 : ` · ${t("create.system.kbNone")}`}
             </div>
+            {installed && "model_id" in preset.settings && (
+              <div className="mono dim" style={{ fontSize: 11 }} data-testid="preset-inference">
+                {t("create.system.settings.summary", {
+                  tokens:
+                    (preset.settings as SystemPresetSettings).max_tokens ??
+                    t("create.system.settings.providerDefault"),
+                  effort:
+                    (preset.settings as SystemPresetSettings).reasoning_effort ??
+                    t("create.system.settings.effortNone"),
+                  iterations: (preset.settings as SystemPresetSettings).max_iterations,
+                  timeout: (preset.settings as SystemPresetSettings).timeout_seconds,
+                })}
+              </div>
+            )}
             <div className="dim" style={{ fontSize: 11 }}>{t("create.system.adminOptionsApiOnly")}</div>
             {preset.error && preset.status === "failed" && (
               <div className="note" style={{ borderColor: "var(--crit)" }} data-testid="preset-error">
@@ -361,6 +400,20 @@ export function SystemPresetsPanel({
                   {t(preset.update_available ? "create.system.update" : "create.system.repair")}
                 </Btn>
               )}
+              {installed && "model_id" in preset.settings && (
+                <Btn
+                  data-testid={`settings-${preset.key}`}
+                  disabled={isBusy}
+                  title={isAdmin ? undefined : t("create.system.settings.readOnly")}
+                  onClick={() => setSettingsFor(preset.key)}
+                >
+                  {t(
+                    preset.can_configure
+                      ? "create.system.settings.configure"
+                      : "create.system.settings.view",
+                  )}
+                </Btn>
+              )}
               {installed && preset.status === "active" && preset.agent_id && (
                 <Link className="btn" to={`/chat?agent=${preset.agent_id}`}>
                   {t("create.list.chat")}
@@ -397,6 +450,29 @@ export function SystemPresetsPanel({
           </div>
         );
       })}
+      {(() => {
+        const open = (presets ?? []).find((row) => row.key === settingsFor);
+        if (!open || !("model_id" in open.settings)) return null;
+        const editable = isAdmin && open.can_configure;
+        const reason = !isAdmin
+          ? t("create.system.settings.readOnly")
+          : open.requirements.length > 0
+            ? t("create.system.requirementsInstalled", { list: requirementText(open) })
+            : open.status === "deploying" || open.status === "uninstalling"
+              ? t("create.system.settings.busy", { status: t(`create.system.status.${open.status}`) })
+              : undefined;
+        return (
+          <PresetSettingsDialog
+            key={`${workspaceId ?? ""}:${open.key}:${open.updated_at ?? ""}`}
+            preset={open}
+            editable={editable}
+            readOnlyReason={reason}
+            onClose={() => setSettingsFor(null)}
+            onSaved={(res) => onSettingsSaved(open, res)}
+            apiMessage={apiMessage}
+          />
+        );
+      })()}
       <ConfirmDialog
         open={confirm != null}
         title={confirm ? t(`create.system.confirm.${confirm.kind}Title`) : ""}

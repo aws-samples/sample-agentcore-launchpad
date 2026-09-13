@@ -46,6 +46,30 @@ def _api_format(spec: AgentSpec) -> str:
     return _API_FORMAT[spec.model_source]
 
 
+def model_config(spec: AgentSpec) -> dict[str, Any]:
+    """``HarnessBedrockModelConfig`` for one spec.
+
+    ``maxTokens`` is the per-model-call output ceiling (not the aggregate
+    ``InvokeHarness.maxTokens`` and not ``maxIterations``); it is sent only when the
+    spec sets one, so every existing agent keeps its exact request. ``reasoning_effort``
+    rides ``additionalParams`` — the service passes that document to the provider
+    unchanged. For the Converse path the harness's Strands ``BedrockModel`` reads
+    ``additional_request_fields`` and forwards it as
+    ``Converse.additionalModelRequestFields``, where OpenAI GPT-5.x on Bedrock accepts
+    ``{"reasoning": {"effort": …}}`` (a flat ``reasoning_effort`` is rejected as an
+    unknown parameter). ``AgentSpec`` already refuses the knob for any other
+    model/source pairing, so this function never has to guess a second shape.
+    """
+    config: dict[str, Any] = {"modelId": spec.model_id, "apiFormat": _api_format(spec)}
+    if spec.max_tokens is not None:
+        config["maxTokens"] = spec.max_tokens
+    if spec.reasoning_effort is not None:
+        config["additionalParams"] = {
+            "additional_request_fields": {"reasoning": {"effort": spec.reasoning_effort}}
+        }
+    return config
+
+
 def _kb_prompt(spec: AgentSpec) -> str:
     """System-prompt section mapping mounted KBs to their gateway tool names.
 
@@ -96,12 +120,7 @@ def build_create_params(
     params: dict[str, Any] = {
         "harnessName": spec.name.replace("-", "_"),
         "executionRoleArn": execution_role_arn,
-        "model": {
-            "bedrockModelConfig": {
-                "modelId": spec.model_id,
-                "apiFormat": _api_format(spec),
-            }
-        },
+        "model": {"bedrockModelConfig": model_config(spec)},
         "systemPrompt": [{"text": system_prompt}],
         "maxIterations": spec.max_iterations,
         "timeoutSeconds": spec.timeout_seconds,
