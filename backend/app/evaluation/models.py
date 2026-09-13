@@ -62,6 +62,13 @@ class EvalRun(Base):
     scores: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     insights: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     error: Mapped[str | None] = mapped_column(Text, default=None)
+    # Multi-actor / multi-session procedure ledger (execution.py) — NULL for
+    # every run whose scenarios did not opt into metadata.launchpad_execution:
+    # {version, scenarios[], calls_planned, calls_done, sessions[{scenario_id,
+    #  repeat, actor, actor_id, session, requested_session_id, session_id,
+    #  drift, turns[], status}], steps[], checks[{..., outcome, evidence}],
+    #  check_status: pending|none|pass|fail|error|inconclusive}
+    execution: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now

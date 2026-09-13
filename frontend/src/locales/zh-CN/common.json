@@ -2696,6 +2696,21 @@
         "s3": "同步——「同步 AWS」首次创建云端数据集，之后原地替换其草稿；「发布版本」把草稿快照为不可变的编号版本",
         "s4": "运行——在 NEW RUN 中选择数据集（本地或 ☁ 云端）作为评估范围",
         "note": "kind 由条目内容推断且服务端不可变；已发布的云端版本不可变——只有草稿会变，且仅通过同步变更。"
+      },
+      "execution": {
+        "title": "执行流程 · 多角色 / 多会话",
+        "hint": "该 scenario 启用了 metadata.launchpad_execution：其轮次将在合成角色与会话下执行（下方只读预览）。轮次文本仍可编辑；由于每个步骤对应一个轮次，此处禁用增删轮次。修改流程请使用「编辑 JSON」—— 表单不会丢弃这段元数据。",
+        "repeat": "重复 ×{{count}}",
+        "step": "T{{turn}} → 角色 {{actor}} · 会话 {{session}}",
+        "checks": "检查",
+        "check": "{{id}}：{{type}} 作用于 T{{turn}} · 「{{text}}」",
+        "dependsOn": "依赖 {{ids}}",
+        "editJson": "编辑 JSON",
+        "backToForm": "返回表单",
+        "jsonLabel": "SCENARIO JSON —— 整条条目原样保存（由服务端校验）",
+        "jsonInvalid": "scenario {{index}}：JSON 无效 —— {{error}}",
+        "jsonMode": "JSON",
+        "extraKeys": "保留字段：{{keys}}"
       }
     },
     "evaluatorNames": {
@@ -2793,6 +2808,48 @@
         "empty": "还没有实验——启动一个 ▸"
       },
       "runningGuard": "已有实验在运行——共享实验网关同一时间只支持一个活跃 A/B 测试。请等它出判定，或先清理。"
+    },
+    "execution": {
+      "title": "流程结果 — 本地确定性检查",
+      "sub": "{{sessions}} 个会话 · {{steps}} 个步骤 · {{checks}} 项检查 —— 由实际回复在本地计算，不是 AWS 评审结果",
+      "note": "多角色 / 多会话 scenario（metadata.launchpad_execution）。每一行是为本次运行生成的合成角色 + 会话；检查结论把 agent 的实际回复与字面规则对比。同一批会话的 AWS 评审得分见上方「会话结果」。",
+      "status": "检查状态",
+      "statusValue": {
+        "pending": "进行中",
+        "none": "无检查",
+        "pass": "通过",
+        "fail": "失败",
+        "error": "错误",
+        "inconclusive": "无法判定"
+      },
+      "calls": "{{done}} / {{planned}} 次调用",
+      "sessions": "会话",
+      "checks": "检查",
+      "steps": "步骤",
+      "noChecks": "该流程未声明确定性检查 —— 仅有 AWS 评审结果",
+      "col": {
+        "scenario": "SCENARIO",
+        "repeat": "重复",
+        "actor": "角色",
+        "session": "会话",
+        "sessionId": "运行时会话",
+        "turns": "轮次",
+        "status": "状态",
+        "check": "检查",
+        "type": "类型",
+        "turn": "轮次",
+        "outcome": "结论",
+        "evidence": "证据",
+        "step": "步骤",
+        "response": "回复"
+      },
+      "sessionStatus": {
+        "ok": "正常",
+        "partial": "部分",
+        "failed": "失败"
+      },
+      "drift": "运行时返回了不同的会话 id",
+      "viewSession": "在可观测性中打开 →"
     }
   },
   "expPage": {

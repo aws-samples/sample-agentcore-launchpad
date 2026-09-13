@@ -18,6 +18,7 @@ evaluation-parseable ``strands.telemetry.tracer`` scope (live-probed
 content-log group is discovered by log-group prefix instead of derived.
 """
 
+import copy
 import threading
 import time
 from collections.abc import Callable
@@ -28,7 +29,7 @@ from botocore.exceptions import ClientError
 from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.evaluation import agentcore_eval as ac
-from app.evaluation import simulation, telemetry
+from app.evaluation import execution, simulation, telemetry
 from app.evaluation.models import EvalRun
 from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import (
@@ -214,6 +215,7 @@ def execute_run(
     actor_model_id: str | None = None,
     runtime_user_id: str | None = None,
     online_config_arn: str | None = None,
+    agent_id: str | None = None,
 ) -> None:
     """Drive one evaluation run to completion (runs on a run-queue worker).
 
@@ -253,12 +255,97 @@ def execute_run(
             # sequentially in that session; simulated persona scenarios run the
             # SDK's LLM-actor loop (actor_model_id plays the user). Ground
             # truth (assertions / expected trajectory / expected responses)
-            # rides along as sessionMetadata.
+            # rides along as sessionMetadata. Scenarios that opt into
+            # ``metadata.launchpad_execution`` run through the multi-actor /
+            # multi-session procedure runner instead (execution.py) — several
+            # synthetic actors and sessions per scenario, ground truth split by
+            # the actual session, correlation persisted after every step.
             scenarios = normalize_scenarios(items)
-            _update(run_id, status="invoking")
+            plans = {
+                s["scenario_id"]: execution.parse_plan(s)
+                for s in scenarios
+                if execution.is_executable(s)
+            }
+            if plans and protocol == "a2a" and method != "harness":
+                raise RuntimeError(
+                    "multi-actor/multi-session scenarios cannot run against an A2A "
+                    "agent (no actor envelope)"
+                )
+            exec_blob = execution.empty_execution(list(plans.values())) if plans else None
+            exec_states: list[execution.ScenarioState] = []
+            metadata_entries: list[dict[str, Any]] = []
+            watermark_sid: str | None = None
+
+            def invoke(
+                prompt: str, sid: str | None, actor_id: str | None = None
+            ) -> dict[str, Any]:
+                # Ordinary replays keep the exact legacy call shape (bare default
+                # actor); only procedure steps pass their synthetic actor.
+                actor = {"actor_id": actor_id} if actor_id else {}
+                if method == "harness":  # InvokeHarness, not the runtime data plane
+                    return hc.invoke_harness_text(data, agent_arn, prompt, session_id=sid, **actor)
+                if protocol == "a2a":  # JSON-RPC runtimes reject {prompt}
+                    return rt.invoke_a2a_text(data, agent_arn, prompt, session_id=sid)
+                return rt.invoke_runtime_text(
+                    data,
+                    agent_arn,
+                    prompt,
+                    session_id=sid,
+                    runtime_user_id=runtime_user_id,
+                    **actor,
+                )
+
+            _update(run_id, status="invoking", execution=exec_blob)
             for scenario in scenarios:
                 _check_stop(run_id)
                 sid: str | None = None
+                if scenario["scenario_id"] in plans:
+                    plan = plans[scenario["scenario_id"]]
+                    state = execution.ScenarioState()
+                    exec_states.append(state)
+
+                    def persist(st: execution.ScenarioState, session_id: str) -> None:
+                        nonlocal watermark_sid
+                        watermark_sid = session_id
+                        if session_id not in session_ids:
+                            session_ids.append(session_id)
+                        _update(
+                            run_id,
+                            session_ids=list(session_ids),
+                            execution=execution.merge_state(exec_blob, exec_states, final=False),
+                        )
+
+                    try:
+                        execution.run_scenario(
+                            plan,
+                            invoke=lambda prompt, session_id, actor_id: invoke(
+                                prompt, session_id, actor_id
+                            ),
+                            new_session_id=hc.new_session_id,
+                            actor_for=lambda repeat, alias, _p=plan: execution.synthetic_actor(
+                                workspace_id=workspace.id,
+                                agent_id=agent_id or "",
+                                run_id=run_id,
+                                scenario_id=_p.scenario_id,
+                                repeat=repeat,
+                                alias=alias,
+                            ),
+                            check_stop=lambda: _check_stop(run_id),
+                            on_step=persist,
+                            state=state,
+                        )
+                    finally:
+                        # stopped / failed mid-procedure: the sessions minted so
+                        # far and the checks (missing answers → error) are kept
+                        _update(
+                            run_id,
+                            session_ids=list(session_ids),
+                            execution=execution.merge_state(exec_blob, exec_states, final=True),
+                        )
+                    metadata_entries.extend(
+                        execution.ground_truth_for_sessions(plan, scenario, state)
+                    )
+                    continue
                 if simulation.is_simulated(scenario):
                     sid = simulation.run_simulated_scenario(
                         data,
@@ -272,28 +359,18 @@ def execute_run(
                 else:
                     for prompt in scenario_prompts(scenario):
                         _check_stop(run_id)
-                        if method == "harness":  # InvokeHarness, not the runtime data plane
-                            result = hc.invoke_harness_text(data, agent_arn, prompt, session_id=sid)
-                        elif protocol == "a2a":  # JSON-RPC runtimes reject {prompt}
-                            result = rt.invoke_a2a_text(data, agent_arn, prompt, session_id=sid)
-                        else:
-                            result = rt.invoke_runtime_text(
-                                data,
-                                agent_arn,
-                                prompt,
-                                session_id=sid,
-                                runtime_user_id=runtime_user_id,
-                            )
-                        sid = result["session_id"]
+                        sid = invoke(prompt, sid)["session_id"]
                 session_ids.append(sid)
+                watermark_sid = sid
+                metadata_entries.extend(ground_truth_metadata([scenario], [sid]))
                 _update(run_id, session_ids=list(session_ids))
             if session_metadata is None:
-                session_metadata = ground_truth_metadata(scenarios, session_ids) or None
+                session_metadata = metadata_entries or None
             _check_stop(run_id)
             _update(run_id, status="waiting")
             _wait_for_fresh_telemetry(
                 workspace=workspace,
-                session_id=session_ids[-1],
+                session_id=watermark_sid or session_ids[-1],
                 content_log_group=log_group,
                 start_time_ms=telemetry_start_ms,
                 stability_seconds=wait_seconds,
@@ -603,6 +680,7 @@ def submit_run(
         db.commit()
         run_id = run.id
         agent_arn = agent.arn
+        agent_ledger_id = agent.id
         agent_method = agent.method
         agent_protocol = (agent.spec or {}).get("protocol") or "http"
         # Gateway-tool agents need a runtimeUserId or the Runtime injects no
@@ -621,7 +699,9 @@ def submit_run(
             protocol=agent_protocol,
             service_name=service_name,
             log_group=log_group,
-            items=dataset_items,
+            # a deep copy pins the scenario snapshot: dataset edits while the
+            # run is queued must not change what it replays
+            items=copy.deepcopy(dataset_items),
             evaluators=evaluators,
             mode=mode,
             wait_seconds=wait_seconds,
@@ -632,6 +712,7 @@ def submit_run(
             actor_model_id=actor_model_id,
             runtime_user_id=agent_runtime_user,
             online_config_arn=online_config_arn,
+            agent_id=agent_ledger_id,
         ),
     )
     _update(run_id, queue_position=position)

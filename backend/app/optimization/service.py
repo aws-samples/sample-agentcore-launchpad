@@ -27,6 +27,7 @@ from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.deployer.pipeline import create_deployment, execute_deploy_job
 from app.evaluation import agentcore_eval as ac
+from app.evaluation import execution
 from app.evaluation.models import EvalRun
 from app.evaluation.online_evaluators import (  # noqa: F401 — re-exported
     ONLINE_EVAL_DEFAULT,
@@ -1525,6 +1526,12 @@ def resolve_traffic_prompts(dataset: Any) -> list[str]:
     if dataset.kind == "simulated":
         raise ValueError("simulated datasets need an actor loop — pick a "
                          "predefined or legacy prompt dataset")
+    if execution.any_executable(dataset.items or []):
+        # the traffic stage sends one prompt per session — a cross-actor /
+        # cross-session procedure cannot be flattened into that honestly
+        raise ValueError("this dataset contains multi-actor/multi-session procedures "
+                         "(metadata.launchpad_execution), which the experiment traffic "
+                         "stage cannot replay — pick a plain scenario dataset")
     prompts: list[str] = []
     for item in dataset.items or []:
         if dataset.kind == "predefined":
