@@ -1,6 +1,8 @@
 """Harness method: payload mapping, deploy/poll happy + failure paths, invoke."""
 
+import botocore.session
 import pytest
+from botocore.validate import ParamValidator
 
 from app.deployer.harness import build_create_params
 from app.schemas.agent import DEFAULT_MODEL_ID, AgentSpec
@@ -372,9 +374,10 @@ def test_delete_agent_resources_logs_swallowed_target_failure(monkeypatch, caplo
 
 def test_build_params_sends_max_tokens_and_reasoning_effort_only_when_set():
     """`maxTokens` is the per-model-call ceiling on bedrockModelConfig (never the
-    aggregate InvokeHarness.maxTokens); `reasoning_effort` rides additionalParams in
-    the Strands `additional_request_fields` → Converse additionalModelRequestFields
-    shape. Neither key appears for a spec that does not set it."""
+    aggregate InvokeHarness.maxTokens); `reasoning_effort` rides additionalParams under
+    the raw Converse wire key `additionalModelRequestFields` (the harness merges
+    additionalParams into the Converse kwargs, not into a Strands config). Neither key
+    appears for a spec that does not set it."""
     plain = build_create_params(spec(), ROLE_ARN, MEM_ARN)["model"]["bedrockModelConfig"]
     assert "maxTokens" not in plain and "additionalParams" not in plain
     s = spec(model_id="us.openai.gpt-5.6-sol", max_tokens=65536, reasoning_effort="high")
@@ -383,7 +386,7 @@ def test_build_params_sends_max_tokens_and_reasoning_effort_only_when_set():
         "modelId": "us.openai.gpt-5.6-sol",
         "apiFormat": "converse_stream",
         "maxTokens": 65536,
-        "additionalParams": {"additional_request_fields": {"reasoning": {"effort": "high"}}},
+        "additionalParams": {"additionalModelRequestFields": {"reasoning": {"effort": "high"}}},
     }
     assert "maxTokens" not in params  # no aggregate invoke cap is introduced
     only_tokens = build_create_params(spec(max_tokens=8192), ROLE_ARN, MEM_ARN)
@@ -392,3 +395,53 @@ def test_build_params_sends_max_tokens_and_reasoning_effort_only_when_set():
     }
     with pytest.raises(ValueError):  # the knob never leaks onto a Claude request
         spec(reasoning_effort="high")
+
+
+def _converse_stream_kwargs(model: dict) -> dict:
+    """What the managed harness hands botocore for one model call: the known
+    required members (modelId / messages / inferenceConfig) plus `additionalParams`
+    merged verbatim into the raw request kwargs — the live-observed behaviour."""
+    return {
+        "modelId": model["modelId"],
+        "messages": [{"role": "user", "content": [{"text": "hi"}]}],
+        "inferenceConfig": {"maxTokens": model["maxTokens"]},
+        **model.get("additionalParams", {}),
+    }
+
+
+def test_reasoning_additional_params_validate_as_raw_converse_stream_kwargs():
+    """Regression for the live `Parameter validation failed: Unknown parameter in
+    input: "additional_request_fields"` InvokeHarness error. `additionalParams` is
+    NOT a Strands BedrockModel config block — the harness merges it straight into the
+    Converse kwargs — so the generated document must pass botocore's own
+    `ConverseStream` parameter validator (bundled service model; no client, no
+    network). The old snake_case wrapper is asserted to fail the same validator so
+    a regression to it is caught by the exact error the runtime produced."""
+    op = botocore.session.get_session().get_service_model("bedrock-runtime").operation_model(
+        "ConverseStream"
+    )
+    validator = ParamValidator()
+
+    s = spec(model_id="us.openai.gpt-5.6-sol", max_tokens=65536, reasoning_effort="high")
+    model = build_create_params(s, ROLE_ARN, MEM_ARN)["model"]["bedrockModelConfig"]
+    assert model["additionalParams"] == {
+        "additionalModelRequestFields": {"reasoning": {"effort": "high"}}
+    }
+    report = validator.validate(_converse_stream_kwargs(model), op.input_shape)
+    assert not report.has_errors(), report.generate_report()
+
+    # the shape shipped before this fix reproduces the runtime's rejection verbatim
+    wrong = dict(model)
+    wrong["additionalParams"] = {"additional_request_fields": {"reasoning": {"effort": "high"}}}
+    report = validator.validate(_converse_stream_kwargs(wrong), op.input_shape)
+    assert report.has_errors()
+    text = report.generate_report()
+    assert 'Unknown parameter in input: "additional_request_fields"' in text
+    assert "additionalModelRequestFields" in text
+
+    # a spec without the knob adds nothing to the request at all
+    plain = build_create_params(spec(max_tokens=8192), ROLE_ARN, MEM_ARN)["model"]
+    assert "additionalParams" not in plain["bedrockModelConfig"]
+    assert not validator.validate(
+        _converse_stream_kwargs(plain["bedrockModelConfig"]), op.input_shape
+    ).has_errors()

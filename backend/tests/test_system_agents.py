@@ -2688,7 +2688,7 @@ def test_architect_defaults_are_gpt_sol_64k_output_high_effort():
         "modelId": SOL,
         "apiFormat": "converse_stream",
         "maxTokens": 65536,  # per model call — not InvokeHarness.maxTokens
-        "additionalParams": {"additional_request_fields": {"reasoning": {"effort": "high"}}},
+        "additionalParams": {"additionalModelRequestFields": {"reasoning": {"effort": "high"}}},
     }
     assert "maxTokens" not in params and params["maxIterations"] == 30
     # UpdateHarness carries the identical model block (the live preset is updated in place)
@@ -2781,7 +2781,7 @@ def test_new_install_sends_64k_and_high_effort_and_a_resume_regenerates_them(cli
     params = build_create_params(spec, "arn:aws:iam::111:role/x", None)
     model = params["model"]["bedrockModelConfig"]
     assert model["maxTokens"] == 65536 and model["modelId"] == SOL
-    assert model["additionalParams"]["additional_request_fields"]["reasoning"] == {
+    assert model["additionalParams"]["additionalModelRequestFields"]["reasoning"] == {
         "effort": "high"
     }
     # the ledger round-trip is lossless: a resumed job rebuilds the same request
