@@ -1990,7 +1990,7 @@ items and A2A agents cannot opt in (`backend/app/evaluation/execution.py`).
 | `repeat` | integer 1–5; replays the **whole** procedure with fresh actors and sessions each time |
 | `steps` | exactly one step per `turns[]` index (duplicates, gaps, out-of-range indexes refused), executed in list order; `actor` / `session` are **aliases** (`^[A-Za-z][A-Za-z0-9_-]{0,31}$`, ≤ 10 actors and ≤ 20 sessions per scenario) — never raw ids; a session alias belongs to exactly one actor alias |
 | `checks` | optional, ≤ 20: `{id, type: exact\|contains\|not_contains, turn, text (≤ 2000 chars), depends_on?, case_sensitive? (default false)}`; `depends_on` may only name checks declared earlier (no cycles); no regex, expressions, code or LLM judging |
-| unknown keys | refused anywhere in the block |
+| unknown keys | refused anywhere in the block; `version` must be the integer `1` (no bool/float/string), aliases are full-matched, and a `launchpad_execution` key found at the item's top level or inside a non-object `metadata` is refused rather than silently ignored |
 
 **Identities.** For every (workspace, agent, run, scenario, repeat, actor alias) the platform
 mints one synthetic memory actor — `memory.scoped_actor(agent_id, "eval__<ws>__<run>__<scenario>__r<k>__<alias>")`,
@@ -1998,17 +1998,25 @@ so the per-agent memory partitioning and the Observability actor probes apply �
 runtime session id per (repeat, actor alias, session alias). The same actor alias keeps its
 identity across its session aliases; different aliases never share one; two runs or two
 repeats never share an actor. Harness steps pass it as `InvokeHarness.actorId`, runtime
-steps as the payload `actor_id`; the wrapper echoes the requested session id and any
-deviation is recorded as `drift` and followed honestly. Because A2A runtimes carry no actor
+steps as the payload `actor_id`. The wrappers echo the requested session id; if the runtime
+answers under a different one, both ids are persisted (`requested_session_id` /
+`returned_session_id`, both linkable) and the procedure is **refused** with a
+`SessionDriftError` — following the new id would attribute later turns to the wrong
+session. The actor id ends in a 128-bit SHA-256 digest of the complete scoped identity, so
+scenario ids that share a truncated prefix never collide. Because A2A runtimes carry no actor
 envelope, an opt-in dataset against an A2A agent is refused with
 `run.execution_unsupported_protocol` before a run row or any AWS call exists.
 
 **Bounds, validated before any invoke** — on dataset create / upload / update and again on
-run create for cloud datasets: every opt-in item must parse (`dataset.invalid_execution`),
-and the expanded totals across the dataset must stay within 200 invocations and 500 sessions
-(`dataset.execution_limits`; `sessionMetadata` itself is capped at 500 by the API). A run
-snapshots (deep-copies) its items at submit time, so editing the dataset while the run is
-queued changes nothing it replays.
+run create for local and cloud datasets, and **only for datasets that contain an opt-in
+item** (ordinary datasets keep their old acceptance unchanged): every opt-in item must parse
+and stay within 16 000 serialized characters (`dataset.invalid_execution`), the normalized
+scenario ids must be unique (a legacy prompt item is named `item_<N>`, so an opt-in scenario
+called `item_2` next to one is refused — the runner also dispatches by position, never by
+name), and the expanded totals across the dataset must stay within 200 invocations and 500
+sessions (`dataset.execution_limits`; `sessionMetadata` itself is capped at 500 by the API).
+`submit_run` deep-copies the items **before** enqueueing the callable, so editing the dataset
+while the run is queued changes nothing it replays.
 
 **Runner.** `execute_run` dispatches opt-in scenarios to `execution.run_scenario`; the stop
 flag is checked before every invoke and before evaluating checks, and after **every** step
@@ -2024,19 +2032,28 @@ session. Plain scenarios in the same dataset keep their exact legacy call shape 
 
 **Deterministic checks** run locally over the agent's actual replies (never the prompt,
 description or ground truth) and yield `pass` / `fail` / `error` / `inconclusive`: a missing
-reply (invoke failure, stopped run) is `error`, an unmet `depends_on` makes the dependent
-check `inconclusive`, and the run-level `check_status` rolls up fail-closed (`fail` > `error`
-> `inconclusive` > `pass`; a run that never produced all planned checks cannot be `pass`;
-`none` when no checks are declared). They are **not** AgentCore evaluators: the batch judges
+reply — invoke failure, stopped run, or a reply with no text / non-string / blank text (the
+step is recorded as `empty`, not completed) — is `error` even for `not_contains`, an unmet
+`depends_on` makes the dependent check `inconclusive`, and the run-level `check_status` rolls
+up fail-closed (`fail` > `error` > `inconclusive` > `pass`). `pass` additionally requires the
+**whole procedure to have completed**: every planned invocation done with a usable reply,
+every declared check of every repeat recorded, and no interruption (`interrupted: true` on a
+stop or failure, including a stop that lands on the final invoke — the declared checks are
+still evaluated and kept, but the roll-up becomes `inconclusive` / `error`). `none` only when
+no checks are declared. Evidence text uses the console's 1-based `T<n>` labels while API
+indexes stay zero-based. They are **not** AgentCore evaluators: the batch judges
 score the same sessions independently, a code-based evaluator's Lambda only ever sees one
 session's spans, and tool-call/trace assertions belong to future code evaluators, not to
 this text-level runner. The Runs page renders the ledger under the judge results as a
 separate PROCEDURE RESULTS panel (sessions with alias, actor, runtime session link and
-status; every check with outcome and capped evidence), and the Observability transcript of a
+status; every step with its session, status and reply excerpt or exact invoke error; every
+check with outcome and capped evidence; declared-but-unrecorded checks are shown as pending /
+interrupted, never as "no checks"), and the Observability transcript of a
 procedure session reads Memory with the persisted synthetic actor instead of the bare
-`default`. The dataset editor keeps every unknown scenario key (including this block) through
-form edits, shows the procedure as a read-only preview with add/remove-turn disabled, and
-offers per-scenario JSON editing for changes; the experiment traffic stage refuses such a
+`default`. The dataset editor keeps every unknown scenario key (including this block, legacy and
+persona provenance) through form edits, shows the procedure as a read-only preview with
+add/remove-turn disabled, offers per-scenario JSON editing for changes, and forces JSON-only
+editing for items the form cannot hold without loss (turn-level keys, structured turn input); the experiment traffic stage refuses such a
 dataset (`experiment.dataset_unsupported`) instead of flattening it to first turns.
 
 ## Workspaces — multi-account/multi-region environments

@@ -84,6 +84,26 @@ interface ScenarioDraft {
   // Non-null = the scenario is being edited as raw JSON; the text is the whole
   // item and is saved as-is (the server validates it).
   json: string | null;
+  // Set when the stored item has fields the form cannot hold (turn-level keys,
+  // structured input…): the item is JSON-only until it fits — the form never
+  // gets a chance to drop them.
+  jsonOnly?: "turnKeys" | "structuredInput" | "expected";
+}
+
+const KNOWN_TURN_KEYS = new Set(["input", "expected_response"]);
+
+/** Why an item cannot be shown in the form without loss, or null when it can. */
+function formLossReason(item: Record<string, unknown>): ScenarioDraft["jsonOnly"] | null {
+  for (const turn of (item.turns as unknown[] | undefined) ?? []) {
+    if (typeof turn !== "object" || turn === null) return "structuredInput";
+    const t = turn as Record<string, unknown>;
+    if (Object.keys(t).some((k) => !KNOWN_TURN_KEYS.has(k))) return "turnKeys";
+    if (typeof t.input !== "string") return "structuredInput";
+    if (t.expected_response !== undefined && typeof t.expected_response !== "string") {
+      return "expected";
+    }
+  }
+  return null;
 }
 
 const KNOWN_SCENARIO_KEYS = new Set(["scenario_id", "turns", "assertions", "expected_trajectory"]);
@@ -108,21 +128,27 @@ class ScenarioJsonError extends Error {
 /** One stored predefined item → draft (shared by the list mapper and the
  *  JSON-mode "back to form" action). */
 function toDraft(item: Record<string, unknown>, i: number): ScenarioDraft {
-  const turns = ((item.turns as Record<string, unknown>[] | undefined) ?? []).map((turn) => {
-    const raw = turn.input;
-    const input =
-      typeof raw === "object" && raw !== null
-        ? String(
-            (raw as Record<string, unknown>).content ??
-              (raw as Record<string, unknown>).prompt ??
-              "",
-          )
-        : String(raw ?? "");
-    return { input, expected_response: String(turn.expected_response ?? "") };
-  });
   const extra = Object.fromEntries(
     Object.entries(item).filter(([key]) => !KNOWN_SCENARIO_KEYS.has(key)),
   );
+  const lossy = formLossReason(item);
+  if (lossy) {
+    // JSON-only: keep the exact stored document; the form fields below are
+    // placeholders and are never emitted (toItems uses `json`).
+    return {
+      scenario_id: String(item.scenario_id ?? `scenario_${i + 1}`),
+      turns: [{ input: "", expected_response: "" }],
+      assertions: [],
+      expected_trajectory: "",
+      extra,
+      json: JSON.stringify(item, null, 2),
+      jsonOnly: lossy,
+    };
+  }
+  const turns = ((item.turns as Record<string, unknown>[] | undefined) ?? []).map((turn) => ({
+    input: String(turn.input ?? ""),
+    expected_response: String(turn.expected_response ?? ""),
+  }));
   return {
     scenario_id: String(item.scenario_id ?? `scenario_${i + 1}`),
     turns,
@@ -169,7 +195,16 @@ interface SimScenarioDraft {
   input: string;
   max_turns: string;
   assertions: string[];
+  // stored keys the persona form does not edit (provenance, metadata…) —
+  // carried through and re-emitted so a form save never strips them
+  extra?: Record<string, unknown>;
+  profile_extra?: Record<string, unknown>;
 }
+
+const KNOWN_SIM_KEYS = new Set([
+  "scenario_id", "scenario_description", "actor_profile", "input", "max_turns", "assertions",
+]);
+const KNOWN_PROFILE_KEYS = new Set(["traits", "context", "goal"]);
 
 // Same "cloud:" id encoding as the New Run scope dropdown / runs-list rows.
 const CLOUD_PREFIX = "cloud:";
@@ -281,7 +316,10 @@ function toDrafts(items: Record<string, unknown>[]): ScenarioDraft[] {
       ],
       assertions: [],
       expected_trajectory: "",
-      extra: {},
+      // legacy provenance / description keys ride along and are re-emitted
+      extra: Object.fromEntries(
+        Object.entries(item).filter(([key]) => key !== "prompt" && key !== "expected"),
+      ),
       json: null,
     };
   });
@@ -296,8 +334,7 @@ function toItems(scenarios: ScenarioDraft[], kind: string): Record<string, unkno
       s.json == null &&
       s.turns.length === 1 &&
       !s.assertions.some((a) => a.trim()) &&
-      !s.expected_trajectory.trim() &&
-      Object.keys(s.extra).length === 0,
+      !s.expected_trajectory.trim(),
   );
   if (kind === "legacy" && fitsLegacy) {
     return scenarios.map((s) => ({
@@ -305,6 +342,7 @@ function toItems(scenarios: ScenarioDraft[], kind: string): Record<string, unkno
       ...(s.turns[0].expected_response.trim()
         ? { expected: s.turns[0].expected_response.trim() }
         : {}),
+      ...s.extra,
     }));
   }
   return scenarios.map((s, i) => {
@@ -343,6 +381,12 @@ function toSimDrafts(items: Record<string, unknown>[]): SimScenarioDraft[] {
         input: String(item.input ?? ""),
         max_turns: String(item.max_turns ?? 10),
         assertions: ((item.assertions as string[] | undefined) ?? []).map(String),
+        extra: Object.fromEntries(
+          Object.entries(item).filter(([key]) => !KNOWN_SIM_KEYS.has(key)),
+        ),
+        profile_extra: Object.fromEntries(
+          Object.entries(profile).filter(([key]) => !KNOWN_PROFILE_KEYS.has(key)),
+        ),
       };
     });
 }
@@ -365,12 +409,14 @@ function toSimItems(drafts: SimScenarioDraft[]): Record<string, unknown>[] {
         context: s.context,
         goal: s.goal,
         ...(Object.keys(traits).length ? { traits } : {}),
+        ...(s.profile_extra ?? {}),
       },
       input: s.input,
       ...(Number.isFinite(maxTurns) && maxTurns >= 1 && maxTurns !== 10
         ? { max_turns: maxTurns }
         : {}),
       ...(assertions.length ? { assertions } : {}),
+      ...(s.extra ?? {}),
     };
   });
 }
@@ -957,6 +1003,20 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
           </div>
           {scenario.json != null ? (
             <div className="field" style={{ marginBottom: 0 }}>
+              {scenario.jsonOnly && (
+                <div
+                  className="note"
+                  data-testid="scenario-json-only"
+                  style={{ borderColor: "var(--warn)", marginBottom: 6 }}
+                >
+                  <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
+                  <span>
+                    {t("evalPage.datasets.execution.jsonOnly", {
+                      reason: t(`evalPage.datasets.execution.jsonOnlyReason.${scenario.jsonOnly}`),
+                    })}
+                  </span>
+                </div>
+              )}
               <label>{t("evalPage.datasets.execution.jsonLabel")}</label>
               <textarea
                 className="input mono"

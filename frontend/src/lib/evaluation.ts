@@ -86,6 +86,9 @@ export interface ExecutionSessionRow {
   session: string;
   requested_session_id: string;
   session_id: string;
+  /** set when the runtime answered under another id — the procedure was then
+   *  refused; both ids are real sessions and stay linkable */
+  returned_session_id?: string;
   drift: boolean;
   turns: number[];
   status: "ok" | "partial" | "failed";
@@ -99,7 +102,9 @@ export interface ExecutionStepRow {
   actor: string;
   session: string;
   session_id: string;
-  status: "ok" | "failed";
+  returned_session_id?: string;
+  /** `empty` = the invoke returned but produced no usable text (not a completed step) */
+  status: "ok" | "failed" | "empty";
   error?: string;
   response_excerpt?: string;
 }
@@ -130,6 +135,8 @@ export interface EvaluationRunExecution {
   steps: ExecutionStepRow[];
   checks: ExecutionCheckRow[];
   check_status: ExecutionCheckStatus;
+  /** the procedure was stopped or failed before completing — never a pass */
+  interrupted?: boolean;
 }
 
 export interface EvaluationRunInfo {

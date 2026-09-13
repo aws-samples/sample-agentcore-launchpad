@@ -2710,7 +2710,13 @@
         "jsonLabel": "SCENARIO JSON — the whole item, saved as-is (validated by the server)",
         "jsonInvalid": "scenario {{index}}: invalid JSON — {{error}}",
         "jsonMode": "JSON",
-        "extraKeys": "preserved keys: {{keys}}"
+        "extraKeys": "preserved keys: {{keys}}",
+        "jsonOnly": "JSON only — this item has fields the form cannot represent ({{reason}}); editing it here as a form would drop them. Use the JSON below; BACK TO FORM stays in JSON mode until the item fits the form.",
+        "jsonOnlyReason": {
+          "turnKeys": "turn-level keys such as metadata",
+          "structuredInput": "structured (non-string) turn input",
+          "expected": "non-string expected_response"
+        }
       }
     },
     "evaluatorNames": {
@@ -2841,7 +2847,8 @@
         "outcome": "OUTCOME",
         "evidence": "EVIDENCE",
         "step": "STEP",
-        "response": "RESPONSE"
+        "response": "RESPONSE",
+        "error": "ERROR"
       },
       "sessionStatus": {
         "ok": "ok",
@@ -2849,7 +2856,15 @@
         "failed": "failed"
       },
       "drift": "runtime returned a different session id",
-      "viewSession": "open in observability →"
+      "viewSession": "open in observability →",
+      "checksPending": "{{count}} check(s) declared — none recorded yet (procedure pending or interrupted before its first check)",
+      "interrupted": "interrupted — the procedure did not complete, so it cannot pass",
+      "stepStatus": {
+        "ok": "ok",
+        "failed": "failed",
+        "empty": "empty reply"
+      },
+      "returnedSession": "answered in"
     }
   },
   "expPage": {

@@ -71,8 +71,15 @@ def test_parse_plan_happy_path():
 @pytest.mark.parametrize(
     "patch, fragment",
     [
-        ({"version": 2}, "version must be 1"),
-        ({"version": None}, "version must be 1"),
+        ({"version": 2}, "version must be the integer 1"),
+        ({"version": None}, "version must be the integer 1"),
+        ({"version": True}, "version must be the integer 1"),
+        ({"version": 1.0}, "version must be the integer 1"),
+        ({"version": "1"}, "version must be the integer 1"),
+        # alias with a trailing newline (re.match + $ used to accept it)
+        ({"steps": [{"turn": 0, "actor": "A\n", "session": "a1"},
+                    {"turn": 1, "actor": "A", "session": "a2"},
+                    {"turn": 2, "actor": "B", "session": "b1"}]}, "must be an alias"),
         ({"repeat": 0}, "repeat must be an integer 1..5"),
         ({"repeat": 6}, "repeat must be an integer 1..5"),
         ({"repeat": True}, "repeat must be an integer 1..5"),
@@ -314,3 +321,97 @@ def test_sync_to_aws_forwards_metadata_verbatim(client, monkeypatch):
     assert res.status_code == 200, res.text
     examples = control.create_dataset.call_args.kwargs["source"]["inlineExamples"]["examples"]
     assert examples[0]["metadata"] == ISOLATION_SCENARIO["metadata"]
+
+
+# ─── correction pass 2 regressions ───────────────────────────────────────────
+def test_ordinary_datasets_keep_old_acceptance_without_opt_in(client):
+    """The expanded-call cap applies only to datasets with an opt-in item: a
+    plain 201-turn scenario (and a 101×2 pair) is accepted exactly as before."""
+    big = {"scenario_id": "long", "turns": [{"input": f"t{i}"} for i in range(201)]}
+    res = client.post("/api/eval/datasets", json={"name": "long", "items": [big]})
+    assert res.status_code == 201, res.text
+    pair = [{"scenario_id": f"p{k}", "turns": [{"input": f"t{i}"} for i in range(101)]}
+            for k in range(2)]
+    res = client.post("/api/eval/datasets", json={"name": "pair", "items": pair})
+    assert res.status_code == 201
+    # ... but the same volume next to an opt-in item is budgeted
+    res = client.post("/api/eval/datasets",
+                      json={"name": "mixed", "items": [big, ISOLATION_SCENARIO]})
+    assert res.status_code == 422 and res.json()["code"] == "dataset.execution_limits"
+
+
+def test_misplaced_execution_container_is_refused_not_ignored(client):
+    listed = {**copy.deepcopy(ISOLATION_SCENARIO), "metadata": ["launchpad_execution"]}
+    res = client.post("/api/eval/datasets", json={"name": "list", "items": [listed]})
+    assert res.status_code == 422 and res.json()["code"] == "dataset.invalid_execution"
+    assert "metadata object" in res.json()["message"]
+    # an unrelated non-dict metadata on an ordinary scenario is still accepted
+    odd = {"scenario_id": "odd", "turns": [{"input": "x"}], "metadata": ["tag"]}
+    res = client.post("/api/eval/datasets", json={"name": "odd", "items": [odd]})
+    assert res.status_code == 201
+
+
+@pytest.mark.parametrize("route", ["create", "upload", "update"])
+def test_opt_in_item_size_is_bounded_on_every_ingress(client, route):
+    fat = copy.deepcopy(ISOLATION_SCENARIO)
+    fat["metadata"]["provenance"] = "x" * 17000
+    if route == "create":
+        res = client.post("/api/eval/datasets", json={"name": "fat", "items": [fat]})
+    elif route == "upload":
+        res = client.post("/api/eval/datasets/upload",
+                          json={"name": "fat", "jsonl": json.dumps(fat)})
+    else:
+        ok = client.post("/api/eval/datasets", json={"name": "ok", "items": [ISOLATION_SCENARIO]})
+        res = client.put(f"/api/eval/datasets/{ok.json()['id']}", json={"items": [fat]})
+    assert res.status_code == 422, res.text
+    # create is caught first by DatasetCreate's own item-size validator (generic
+    # 422); upload/update reach the procedure gate and name the bound
+    assert route == "create" or "16000" in res.json()["message"]
+
+
+@pytest.mark.parametrize("order", ["advanced_first", "legacy_first"])
+def test_normalized_id_collision_with_legacy_item_is_refused(client, order):
+    """normalize_scenarios names legacy prompt items item_<N>; an opt-in
+    scenario with that id would alias it. Refused on every ingress."""
+    if order == "advanced_first":
+        items = [dict(copy.deepcopy(ISOLATION_SCENARIO), scenario_id="item_2"), {"prompt": "bye"}]
+    else:
+        items = [{"prompt": "hi"}, dict(copy.deepcopy(ISOLATION_SCENARIO), scenario_id="item_1")]
+    res = client.post("/api/eval/datasets", json={"name": "clash", "items": items})
+    assert res.status_code == 422 and res.json()["code"] == "dataset.invalid_execution"
+    assert "collides" in res.json()["message"]
+    res = client.post("/api/eval/datasets/upload",
+                      json={"name": "clash", "jsonl": "\n".join(json.dumps(i) for i in items)})
+    assert res.status_code == 422
+
+
+def test_local_run_preflight_revalidates_stored_items(client, monkeypatch):
+    """A row written before a rule tightened (repeat 6) never reaches
+    submit_run / telemetry / the queue."""
+    from unittest.mock import MagicMock
+
+    import app.evaluation.service as svc
+    from tests.evaluation.test_runs_flow import make_agent
+
+    db = SessionLocal()
+    agent = make_agent(db, name="stale-agent")
+    ds = EvalDataset(workspace_id=DEFAULT_WORKSPACE_ID, name="stale", kind="predefined",
+                     items=[scenario(repeat=6)])
+    db.add(ds)
+    db.commit()
+    ds_id, agent_id = ds.id, agent.id
+    db.close()
+    submit = MagicMock()
+    monkeypatch.setattr(svc, "submit_run", submit)
+    res = client.post("/api/eval/runs", json={"agent_id": agent_id, "dataset_id": ds_id,
+                                              "evaluators": ["Builtin.Correctness"]})
+    assert res.status_code == 422 and res.json()["code"] == "dataset.invalid_execution"
+    submit.assert_not_called()
+
+
+def test_synthetic_actor_prefix_collision_pair():
+    kw = dict(workspace_id="default", agent_id="a" * 32, run_id="run123456789", repeat=1, alias="A")
+    a = ex.synthetic_actor(**kw, scenario_id="same-scenario-prefix-123-4317")
+    b = ex.synthetic_actor(**kw, scenario_id="same-scenario-prefix-123-5686")
+    assert a != b and len(a) <= 255
+    assert a.split("__")[-1] != b.split("__")[-1] and len(a.split("__")[-1]) == 32

@@ -113,15 +113,9 @@ def _validate_items(items: list[dict[str, Any]]) -> None:
             raise AppError(
                 "dataset.invalid_item", f"item {idx}: prompt required", status_code=422
             )
-        if execution.EXECUTION_KEY in item:
-            raise AppError(
-                "dataset.invalid_execution",
-                f"item {idx}: {execution.EXECUTION_KEY} belongs under metadata, "
-                "not at the item's top level",
-                status_code=422,
-            )
-    # opt-in multi-actor/multi-session procedures: strict schema + expanded
-    # totals (calls / sessions) so the dataset is always runnable
+    # opt-in multi-actor/multi-session procedures: strict schema, item size,
+    # unique normalized ids and expanded totals (calls / sessions) — only
+    # datasets that contain an opt-in item are subject to it
     execution.validate_items(items)
 
 
@@ -1243,8 +1237,12 @@ def create_run(
         # the pinned version travels on its own column, never in this string.
         dataset_name = f"cloud:{cloud_name}"
 
-    # Multi-actor/multi-session procedures need an actor envelope on the
-    # invoke path — refused here, before any run row or AWS call, for A2A.
+    # Multi-actor/multi-session procedures: re-validate the stored items (a
+    # local row written before a rule tightened must not reach the queue) and
+    # require an actor envelope on the invoke path — both before any run row,
+    # telemetry lookup or AWS call.
+    if req.dataset_id:
+        execution.validate_items(items)
     execution.require_actor_envelope(
         items, method=agent.method, protocol=(agent.spec or {}).get("protocol") or "http"
     )

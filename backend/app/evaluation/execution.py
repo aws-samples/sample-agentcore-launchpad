@@ -43,8 +43,11 @@ Schema (version 1) — every key is validated, unknown keys are rejected::
   ``depends_on`` may reference checks declared EARLIER in the list; a dependency
   that did not pass makes the dependent check ``inconclusive``, never ``pass``.
   A missing response (invoke failure / stopped run) makes the check ``error``.
-* Outcomes are aggregated fail-closed: a scenario passes only when every check
-  passes in every repeat.
+* Outcomes are aggregated fail-closed: a run passes only when every planned
+  invocation completed with a usable reply and every check passes in every
+  repeat; a stop, a failed/empty step or a runtime that answers under another
+  session id (drift → the procedure is refused after recording both ids) can
+  never leave a ``pass``.
 
 Persistence: the run row's ``execution`` JSON records every minted session
 (with the actor it ran under), every step and every check result, updated after
@@ -54,6 +57,7 @@ each step so a stopped or failed run still shows exactly which sessions exist.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -77,6 +81,9 @@ MAX_UNIQUE_SESSIONS = 500
 # Evidence stored on the run row is capped; full responses live in memory /
 # content logs, not in the ledger.
 EVIDENCE_MAX_CHARS = 400
+# Same serialized-size ceiling DatasetCreate applies to items, enforced here
+# for opt-in items on EVERY ingress (create / upload / update / local + cloud run).
+MAX_ITEM_SERIALIZED = 16000
 
 CHECK_TYPES = ("exact", "contains", "not_contains")
 CHECK_OUTCOMES = ("pass", "fail", "error", "inconclusive")
@@ -90,6 +97,12 @@ _PLAN_KEYS = {"version", "repeat", "steps", "checks"}
 
 class ExecutionError(ValueError):
     """A scenario's ``launchpad_execution`` block is malformed or out of bounds."""
+
+
+class SessionDriftError(RuntimeError):
+    """The runtime answered under a session id other than the requested one;
+    the procedure stops rather than attributing later turns to the wrong
+    session."""
 
 
 @dataclass(frozen=True)
@@ -151,6 +164,18 @@ def is_executable(scenario: dict[str, Any]) -> bool:
     return isinstance(metadata, dict) and EXECUTION_KEY in metadata
 
 
+def _misplaced_key(item: dict[str, Any]) -> bool:
+    """The key appears somewhere the runner would never read it (a non-object
+    ``metadata`` such as a list, or the item's top level): the author intended
+    a procedure, so refuse rather than silently run the item as ordinary."""
+    if EXECUTION_KEY in item:
+        return True
+    metadata = item.get("metadata")
+    if metadata is None or isinstance(metadata, dict):
+        return False
+    return EXECUTION_KEY in json.dumps(metadata, ensure_ascii=False)
+
+
 def any_executable(items: list[dict[str, Any]]) -> bool:
     return any(is_executable(item) for item in items if isinstance(item, dict))
 
@@ -169,7 +194,7 @@ def _require_keys(scenario_id: str, obj: Any, allowed: set[str], what: str) -> d
 
 
 def _alias(scenario_id: str, value: Any, what: str) -> str:
-    if not isinstance(value, str) or not _ALIAS_RE.match(value):
+    if not isinstance(value, str) or not _ALIAS_RE.fullmatch(value):
         raise _fail(
             scenario_id,
             f"{what} must be an alias matching {_ALIAS_RE.pattern} (got {value!r})",
@@ -202,8 +227,9 @@ def parse_plan(scenario: dict[str, Any]) -> ExecutionPlan:
         raise _fail(scenario_id, "requires a non-empty turns[] list")
     raw = _require_keys(scenario_id, scenario["metadata"][EXECUTION_KEY], _PLAN_KEYS, "block")
 
-    if raw.get("version") != EXECUTION_VERSION:
-        raise _fail(scenario_id, f"version must be {EXECUTION_VERSION}")
+    version = raw.get("version")
+    if type(version) is not int or version != EXECUTION_VERSION:
+        raise _fail(scenario_id, f"version must be the integer {EXECUTION_VERSION}")
     repeat = raw.get("repeat", 1)
     if isinstance(repeat, bool) or not isinstance(repeat, int) or not 1 <= repeat <= MAX_REPEAT:
         raise _fail(scenario_id, f"repeat must be an integer 1..{MAX_REPEAT}")
@@ -306,27 +332,66 @@ def parse_plan(scenario: dict[str, Any]) -> ExecutionPlan:
 
 
 def validate_items(items: list[dict[str, Any]]) -> None:
-    """Dataset-level gate (create / upload / update / cloud run): every opt-in
-    item must parse, non-``turns`` items must not carry the key, and the
-    expanded totals must fit the run caps. Raises ``AppError`` 422."""
+    """Dataset-level gate on every ingress (create / upload / update / local and
+    cloud run preflight). Only datasets that contain at least one opt-in item
+    are subject to it — an ordinary dataset keeps its old acceptance exactly:
+
+    * a misplaced ``launchpad_execution`` (top level / non-object metadata) and
+      any non-``turns`` item carrying the key are refused;
+    * every opt-in item must parse and stay within ``MAX_ITEM_SERIALIZED``;
+    * the normalized scenario ids (legacy prompt items become ``item_<N>``)
+      must be unique across the dataset, so the runner's per-position dispatch
+      and the per-session ``testScenarioId`` correlation can never alias;
+    * the expanded totals must fit the run caps.
+    Raises ``AppError`` 422.
+    """
+    dicts = [item for item in items if isinstance(item, dict)]
+    misplaced = [i for i, item in enumerate(dicts, 1) if _misplaced_key(item)]
+    if misplaced:
+        raise AppError(
+            "dataset.invalid_execution",
+            f"item {misplaced[0]}: {EXECUTION_KEY} must be an object under the item's "
+            "metadata object",
+            status_code=422,
+        )
+    if not any_executable(dicts):
+        return
     calls = 0
     sessions = 0
-    for item in items:
-        if not isinstance(item, dict):
-            continue
+    normalized_ids: dict[str, int] = {}
+    for idx, item in enumerate(dicts, 1):
         if is_executable(item):
             try:
                 plan = parse_plan(item)
             except ExecutionError as exc:
                 raise AppError("dataset.invalid_execution", str(exc), status_code=422) from exc
+            if len(json.dumps(item, ensure_ascii=False)) > MAX_ITEM_SERIALIZED:
+                raise AppError(
+                    "dataset.invalid_execution",
+                    f"scenario '{plan.scenario_id}': item exceeds {MAX_ITEM_SERIALIZED} "
+                    "characters serialized",
+                    status_code=422,
+                )
             calls += plan.expanded_calls
             sessions += plan.expanded_sessions
+            scenario_id = plan.scenario_id
         elif "turns" in item or "actor_profile" in item:
             sessions += 1
             calls += len(item.get("turns") or []) or 1
+            scenario_id = str(item.get("scenario_id") or "")
         else:
             sessions += 1
             calls += 1
+            scenario_id = f"item_{idx}"  # normalize_scenarios' legacy id
+        if scenario_id in normalized_ids:
+            raise AppError(
+                "dataset.invalid_execution",
+                f"item {idx}: scenario id '{scenario_id}' collides with item "
+                f"{normalized_ids[scenario_id]} (legacy prompt items are named item_<N>) — "
+                "procedure datasets need unique scenario ids",
+                status_code=422,
+            )
+        normalized_ids[scenario_id] = idx
     if calls > MAX_EXPANDED_CALLS:
         raise AppError(
             "dataset.execution_limits",
@@ -371,13 +436,19 @@ def synthetic_actor(
 
     Folds the agent id in first (``memory.scoped_actor`` convention, so the
     platform's per-agent partitioning and the Observability actor probes apply),
-    then the workspace, run, scenario and repeat, so no two runs — or two repeats
-    of one run — ever share an identity. Same alias within one repeat → same id
-    across all its sessions; different aliases → different ids. Stays within the
-    AgentCore ``actorId`` charset and its 255-char limit.
+    then readable workspace / run / scenario / repeat / alias segments, and
+    finally a 128-bit SHA-256 digest of the COMPLETE scoped identity — the
+    readable scenario segment is truncated, so two scenario ids that share a
+    prefix must still yield distinct actors. Same alias within one repeat → same
+    id across all its sessions; different aliases, repeats, runs or workspaces →
+    different ids. Stays within the AgentCore ``actorId`` charset and 255 chars.
     """
     from app.services.memory import scoped_actor
 
+    identity = json.dumps(
+        [workspace_id, agent_id, run_id, scenario_id, repeat, alias], ensure_ascii=False
+    )
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
     base = "__".join(
         [
             "eval",
@@ -386,6 +457,7 @@ def synthetic_actor(
             _slug(scenario_id),
             f"r{repeat}",
             alias,
+            digest,
         ]
     )
     return scoped_actor(agent_id, base)
@@ -410,14 +482,31 @@ def _excerpt(text: str) -> str:
     return text if len(text) <= EVIDENCE_MAX_CHARS else text[: EVIDENCE_MAX_CHARS - 1] + "…"
 
 
+def _label(turn: int) -> str:
+    """Operator-facing turn label — the API keeps zero-based indexes, evidence
+    text speaks the console's T1/T2 language."""
+    return f"T{turn + 1}"
+
+
+def response_text(result: Any) -> str | None:
+    """The assistant text of an invoke result, or ``None`` when there is no
+    usable evidence: a missing / non-string / empty / whitespace-only text is
+    never coerced into an answer a negative check could pass on."""
+    text = result.get("text") if isinstance(result, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return text
+
+
 def evaluate_checks(
     plan: ExecutionPlan, repeat: int, responses: dict[int, str | None]
 ) -> list[dict[str, Any]]:
     """Deterministic rule evaluation over the ACTUAL responses of one repeat.
 
-    ``responses`` maps turn index → assistant text (``None`` / missing = no
-    answer). Never passes without evidence: a missing answer is ``error``, an
-    unmet dependency is ``inconclusive``.
+    ``responses`` maps turn index → assistant text; ``None`` / missing /
+    non-string / blank = no answer. Never passes without evidence: a missing
+    answer is ``error`` (also for ``not_contains``), an unmet dependency is
+    ``inconclusive``.
     """
     outcomes: dict[str, str] = {}
     results: list[dict[str, Any]] = []
@@ -432,6 +521,8 @@ def evaluate_checks(
         }
         unmet = [d for d in check.depends_on if outcomes.get(d) != "pass"]
         response = responses.get(check.turn)
+        if not isinstance(response, str) or not response.strip():
+            response = None
         if unmet:
             record["outcome"] = "inconclusive"
             record["evidence"] = "precondition not met: " + ", ".join(
@@ -439,7 +530,7 @@ def evaluate_checks(
             )
         elif response is None:
             record["outcome"] = "error"
-            record["evidence"] = f"no assistant response recorded for turn {check.turn}"
+            record["evidence"] = f"no assistant response recorded for {_label(check.turn)}"
         else:
             haystack = response if check.case_sensitive else response.casefold()
             needle = check.text if check.case_sensitive else check.text.casefold()
@@ -537,17 +628,39 @@ def run_scenario(
                     raise
                 returned = str(result.get("session_id") or session_ids[key])
                 if returned != session_ids[key]:
-                    # The wrapper always echoes the id it was given; record any
-                    # deviation honestly and follow the runtime's id from here.
+                    # The wrappers echo the id they were given; a different id
+                    # means the turn ran in a session this procedure cannot
+                    # attribute. Record BOTH actual ids (the batch and
+                    # Observability can still find them), then refuse to
+                    # continue — following the new id would misassign evidence.
                     row["drift"] = True
-                    row["session_id"] = returned
-                    step_row["session_id"] = returned
-                    session_ids[key] = returned
-                text = str(result.get("text") or "")
-                responses[step.turn] = text
-                step_row["response_excerpt"] = _excerpt(text)
+                    row["returned_session_id"] = returned
+                    row["status"] = "failed"
+                    step_row["status"] = "failed"
+                    step_row["returned_session_id"] = returned
+                    step_row["error"] = (
+                        f"session id drift: runtime answered in session {returned[:24]}… "
+                        f"instead of the requested {session_ids[key][:24]}…"
+                    )
+                    responses[step.turn] = None
+                    on_step(state, session_ids[key])  # the id the turn was sent under
+                    on_step(state, returned)  # the id the runtime answered under
+                    raise SessionDriftError(step_row["error"])
+                text = response_text(result)
+                if text is None:
+                    # invoke succeeded but produced no usable evidence — the
+                    # step is not complete and no check may pass on it
+                    step_row["status"] = "empty"
+                    step_row["error"] = f"empty assistant response for {_label(step.turn)}"
+                    responses[step.turn] = None
+                else:
+                    responses[step.turn] = text
+                    step_row["response_excerpt"] = _excerpt(text)
                 row["turns"].append(step.turn)
                 on_step(state, returned)
+            # a stop that lands on the final invoke still evaluates the
+            # declared checks (below, in the handler) instead of skipping them
+            check_stop()
         except BaseException:
             for step in plan.steps:
                 responses.setdefault(step.turn, None)
@@ -558,7 +671,6 @@ def run_scenario(
                     row["status"] = "partial"
             state.checks.extend(evaluate_checks(plan, repeat, responses))
             raise
-        check_stop()
         state.checks.extend(evaluate_checks(plan, repeat, responses))
     return state
 
@@ -635,14 +747,27 @@ def empty_execution(plans: list[ExecutionPlan]) -> dict[str, Any]:
         "sessions": [],
         "steps": [],
         "checks": [],
+        "interrupted": False,
         "check_status": "none" if not any(p.checks for p in plans) else "pending",
     }
 
 
 def merge_state(
-    blob: dict[str, Any], states: list[ScenarioState], *, final: bool
+    blob: dict[str, Any],
+    states: list[ScenarioState],
+    *,
+    final: bool,
+    interrupted: bool = False,
 ) -> dict[str, Any]:
-    """Project the per-scenario ledgers onto the run row's ``execution`` blob."""
+    """Project the per-scenario ledgers onto the run row's ``execution`` blob.
+
+    ``check_status`` is ``pending`` while the procedure is still running and
+    fail-closed once it is final: ``pass`` requires every planned invocation to
+    have completed with a usable reply AND every declared check of every
+    repeat to have passed; anything short of that (a failed or empty step, a
+    stop, missing checks) becomes ``error`` / ``inconclusive`` even when the
+    checks that were recorded all passed.
+    """
     sessions = [s for st in states for s in st.sessions]
     steps = [s for st in states for s in st.steps]
     checks = [c for st in states for c in st.checks]
@@ -652,19 +777,26 @@ def merge_state(
         "steps": steps,
         "checks": checks,
         "calls_done": sum(1 for s in steps if s.get("status") == "ok"),
+        "interrupted": bool(blob.get("interrupted")) or interrupted,
     }
     planned_checks = sum(s.get("checks", 0) for s in blob.get("scenarios", []))
     if planned_checks == 0:
         blob["check_status"] = "none"
     elif final or blob["calls_done"] >= blob.get("calls_planned", 0):
-        # Fail closed: a run that never produced all its checks (stopped /
-        # failed early) cannot be a pass even if every recorded check passed.
         expected = sum(
             s.get("checks", 0) * s.get("repeat", 1) for s in blob.get("scenarios", [])
         )
-        status = aggregate_outcome(checks)
-        if status == "pass" and len(checks) < expected:
-            status = "inconclusive"
+        # declared checks with none recorded (stopped before the first step)
+        # are inconclusive, never "none"
+        status = aggregate_outcome(checks) if checks else "inconclusive"
+        complete = (
+            blob["calls_done"] >= blob.get("calls_planned", 0)
+            and len(checks) >= expected
+            and not blob["interrupted"]
+        )
+        if status == "pass" and not complete:
+            failed = any(s.get("status") in ("failed", "empty") for s in steps)
+            status = "error" if failed else "inconclusive"
         blob["check_status"] = status
     else:
         blob["check_status"] = "pending"
@@ -677,7 +809,11 @@ def session_actor(execution: dict[str, Any] | None, session_id: str) -> str | No
     if not execution:
         return None
     for row in execution.get("sessions") or []:
-        if row.get("session_id") == session_id or row.get("requested_session_id") == session_id:
+        if session_id in (
+            row.get("session_id"),
+            row.get("requested_session_id"),
+            row.get("returned_session_id"),
+        ):
             actor_id = row.get("actor_id")
             return str(actor_id) if actor_id else None
     return None

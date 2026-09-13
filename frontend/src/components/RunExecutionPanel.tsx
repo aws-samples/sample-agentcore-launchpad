@@ -37,6 +37,7 @@ const sessionLink = (sessionId: string) =>
 export function RunExecutionPanel({ execution }: { execution: EvaluationRunExecution }) {
   const { t } = useTranslation();
   const status = execution.check_status;
+  const declaredChecks = execution.scenarios.reduce((n, sc) => n + sc.checks * sc.repeat, 0);
   return (
     <Panel
       title={t("evalPage.execution.title")}
@@ -59,6 +60,11 @@ export function RunExecutionPanel({ execution }: { execution: EvaluationRunExecu
           <span data-testid="execution-check-status" data-status={status}>
             <Chip tone={statusTone(status)}>{t(`evalPage.execution.statusValue.${status}`)}</Chip>
           </span>
+          {execution.interrupted && (
+            <span className="dim" style={{ fontSize: 10 }} data-testid="execution-interrupted">
+              {t("evalPage.execution.interrupted")}
+            </span>
+          )}
         </span>
       }
       brk
@@ -102,6 +108,19 @@ export function RunExecutionPanel({ execution }: { execution: EvaluationRunExecu
                   {row.drift && (
                     <span className="dim" style={{ fontSize: 10, marginLeft: 6 }}>
                       {t("evalPage.execution.drift")}
+                      {row.returned_session_id && (
+                        <>
+                          {" · "}
+                          {t("evalPage.execution.returnedSession")}{" "}
+                          <Link
+                            to={sessionLink(row.returned_session_id)}
+                            style={{ color: "var(--amber)" }}
+                            title={row.returned_session_id}
+                          >
+                            {row.returned_session_id.slice(0, 16)}…
+                          </Link>
+                        </>
+                      )}
                     </span>
                   )}
                 </td>
@@ -116,10 +135,91 @@ export function RunExecutionPanel({ execution }: { execution: EvaluationRunExecu
         </table>
       </div>
 
+      {/* Every invocation in order: which alias/session it ran in, the actual
+          reply excerpt or the exact invoke error — the evidence the checks are
+          computed from. */}
+      <div className="mono dim" style={{ fontSize: 9.5, letterSpacing: ".12em", margin: "12px 0 6px" }}>
+        {t("evalPage.execution.steps")}
+      </div>
+      {execution.steps.length > 0 && (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ minWidth: 640, tableLayout: "fixed" }} data-testid="execution-steps">
+            <colgroup>
+              <col style={{ width: 140 }} />
+              <col style={{ width: 60 }} />
+              <col style={{ width: 60 }} />
+              <col style={{ width: 60 }} />
+              <col style={{ width: 90 }} />
+              <col style={{ width: 90 }} />
+              <col style={{ width: 130 }} />
+              <col />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>{t("evalPage.execution.col.scenario")}</th>
+                <th>{t("evalPage.execution.col.repeat")}</th>
+                <th>{t("evalPage.execution.col.step")}</th>
+                <th>{t("evalPage.execution.col.turn")}</th>
+                <th>{t("evalPage.execution.col.actor")}</th>
+                <th>{t("evalPage.execution.col.session")}</th>
+                <th>{t("evalPage.execution.col.status")}</th>
+                <th>{t("evalPage.execution.col.response")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {execution.steps.map((st, i) => (
+                <tr
+                  key={`${st.scenario_id}:${st.repeat}:${st.index}:${i}`}
+                  style={{ verticalAlign: "top" }}
+                  data-testid="execution-step"
+                  data-status={st.status}
+                >
+                  <td className="mono">{st.scenario_id}</td>
+                  <td className="mono dim">r{st.repeat}</td>
+                  <td className="mono dim">{st.index + 1}</td>
+                  <td className="mono dim">T{st.turn + 1}</td>
+                  <td className="mono">{st.actor}</td>
+                  <td className="mono" title={st.session_id}>
+                    <Link to={sessionLink(st.session_id)} style={{ color: "var(--amber)" }}>
+                      {st.session}
+                    </Link>
+                  </td>
+                  <td>
+                    <Chip tone={st.status === "ok" ? "good" : "crit"}>
+                      {t(`evalPage.execution.stepStatus.${st.status}`)}
+                    </Chip>
+                  </td>
+                  <td style={{ fontSize: 11, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                    {st.status === "ok" ? (
+                      st.response_excerpt ?? "—"
+                    ) : (
+                      <span style={{ color: "var(--crit)" }} data-testid="execution-step-error">
+                        {st.error ?? t(`evalPage.execution.stepStatus.${st.status}`)}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {execution.steps.length === 0 && (
+        <div className="empty">{t("evalPage.execution.calls", {
+          done: execution.calls_done,
+          planned: execution.calls_planned,
+        })}</div>
+      )}
+
       <div className="mono dim" style={{ fontSize: 9.5, letterSpacing: ".12em", margin: "12px 0 6px" }}>
         {t("evalPage.execution.checks")}
       </div>
-      {execution.checks.length === 0 ? (
+      {execution.checks.length === 0 && declaredChecks > 0 ? (
+        <div className="note" style={{ borderColor: "var(--warn)" }} data-testid="execution-checks-pending">
+          <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
+          <span>{t("evalPage.execution.checksPending", { count: declaredChecks })}</span>
+        </div>
+      ) : execution.checks.length === 0 ? (
         <div className="empty" data-testid="execution-no-checks">
           {t("evalPage.execution.noChecks")}
         </div>

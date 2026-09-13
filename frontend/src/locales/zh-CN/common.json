@@ -2710,7 +2710,13 @@
         "jsonLabel": "SCENARIO JSON —— 整条条目原样保存（由服务端校验）",
         "jsonInvalid": "scenario {{index}}：JSON 无效 —— {{error}}",
         "jsonMode": "JSON",
-        "extraKeys": "保留字段：{{keys}}"
+        "extraKeys": "保留字段：{{keys}}",
+        "jsonOnly": "仅限 JSON —— 该条目包含表单无法呈现的字段（{{reason}}），若按表单编辑会丢失它们。请在下方编辑 JSON；在条目适配表单之前，「返回表单」会保持 JSON 模式。",
+        "jsonOnlyReason": {
+          "turnKeys": "轮次级字段（如 metadata）",
+          "structuredInput": "结构化（非字符串）的轮次输入",
+          "expected": "非字符串的 expected_response"
+        }
       }
     },
     "evaluatorNames": {
@@ -2841,7 +2847,8 @@
         "outcome": "结论",
         "evidence": "证据",
         "step": "步骤",
-        "response": "回复"
+        "response": "回复",
+        "error": "错误"
       },
       "sessionStatus": {
         "ok": "正常",
@@ -2849,7 +2856,15 @@
         "failed": "失败"
       },
       "drift": "运行时返回了不同的会话 id",
-      "viewSession": "在可观测性中打开 →"
+      "viewSession": "在可观测性中打开 →",
+      "checksPending": "已声明 {{count}} 项检查 —— 尚无记录（流程仍在进行，或在首项检查前被中断）",
+      "interrupted": "已中断 —— 流程未完成，因此不可能通过",
+      "stepStatus": {
+        "ok": "正常",
+        "failed": "失败",
+        "empty": "空回复"
+      },
+      "returnedSession": "实际应答会话"
     }
   },
   "expPage": {

@@ -283,22 +283,206 @@ def test_harness_path_passes_actor_id(monkeypatch):
     assert all(c[2].startswith("a" * 32 + "__eval__") for c in fake.calls)
 
 
-def test_session_id_drift_is_tracked(monkeypatch):
+def test_session_id_drift_records_both_ids_then_refuses(monkeypatch):
+    """The runtime answering under another session id is a protocol failure:
+    both actual ids are persisted (batch scope + Observability), the step is
+    failed, correlation of earlier turns is untouched and nothing continues."""
     class DriftingAgent(FakeAgent):
         def __call__(self, client, arn, prompt, session_id=None, **k):
             out = super().__call__(client, arn, prompt, session_id=session_id, **k)
-            if len(self.calls) == 1:
+            if len(self.calls) == 2:  # A's second step (new session a2) drifts
                 out["session_id"] = "runtime-chose-another-id" + "x" * 20
             return out
 
-    run_id, _ = run_items([copy.deepcopy(ISOLATION_SCENARIO)], DriftingAgent(), monkeypatch)
+    fake = DriftingAgent()
+    run_id, data = run_items([copy.deepcopy(ISOLATION_SCENARIO)], fake, monkeypatch)
     run = get_run(run_id)
-    row = run.execution["sessions"][0]
-    assert row["drift"] is True
-    assert row["session_id"].startswith("runtime-chose-another-id")
-    assert row["requested_session_id"] != row["session_id"]
-    assert row["session_id"] in run.session_ids
-    assert row["requested_session_id"] not in run.session_ids
+    assert run.status == "failed" and "session id drift" in run.error
+    assert len(fake.calls) == 2
+    data.start_batch_evaluation.assert_not_called()
+    a1, a2 = run.execution["sessions"]
+    assert a1["drift"] is False and a1["turns"] == [0] and a1["status"] == "ok"
+    assert a2["drift"] is True and a2["status"] == "failed" and a2["turns"] == []
+    assert a2["session_id"] == a2["requested_session_id"] == fake.calls[1][1]
+    assert a2["returned_session_id"].startswith("runtime-chose-another-id")
+    assert run.session_ids == [fake.calls[0][1], fake.calls[1][1], a2["returned_session_id"]]
+    assert ex.session_actor(run.execution, a2["returned_session_id"]) == a2["actor_id"]
+    assert [(c["id"], c["outcome"]) for c in run.execution["checks"]] == [
+        ("seed", "pass"), ("recall", "error"), ("no_leak", "error")]
+    assert run.execution["check_status"] == "error"
+
+
+def test_same_alias_second_shift_never_reassigns_earlier_turns(monkeypatch):
+    two = {"scenario_id": "two", "turns": [{"input": "remember amber"}, {"input": "colour?"}],
+           "metadata": {"launchpad_execution": {"version": 1, "steps": [
+               {"turn": 0, "actor": "A", "session": "s"},
+               {"turn": 1, "actor": "A", "session": "s"}],
+               "checks": [{"id": "c", "type": "not_contains", "turn": 1, "text": "zzz"}]}}}
+
+    class Shift(FakeAgent):
+        def __call__(self, client, arn, prompt, session_id=None, **k):
+            out = super().__call__(client, arn, prompt, session_id=session_id, **k)
+            out["session_id"] = "r2" + "x" * 40 if len(self.calls) == 2 else session_id
+            return out
+
+    run_id, data = run_items([two], Shift(), monkeypatch)
+    run = get_run(run_id)
+    (row,) = run.execution["sessions"]
+    assert row["turns"] == [0] and row["returned_session_id"].startswith("r2")
+    assert run.execution["checks"][0]["outcome"] == "error"  # never a not_contains pass
+    data.start_batch_evaluation.assert_not_called()
+
+
+@pytest.mark.parametrize("text", [None, "", "   \n", 42])
+def test_missing_or_blank_response_never_passes_a_negative_check(monkeypatch, text):
+    class Silent(FakeAgent):
+        def __call__(self, *a, **k):
+            out = super().__call__(*a, **k)
+            if len(self.calls) == 3:  # B's turn: no usable reply
+                out["text"] = text
+                if text is None:
+                    del out["text"]
+            return out
+
+    one = copy.deepcopy(ISOLATION_SCENARIO)
+    one["metadata"]["launchpad_execution"]["repeat"] = 1
+    run_id, data = run_items([one], Silent(), monkeypatch)
+    blob = get_run(run_id).execution
+    assert [(c["id"], c["outcome"]) for c in blob["checks"]] == [
+        ("seed", "pass"), ("recall", "pass"), ("no_leak", "error")]
+    assert blob["checks"][2]["evidence"] == "no assistant response recorded for T3"
+    assert blob["steps"][2]["status"] == "empty" and "T3" in blob["steps"][2]["error"]
+    assert blob["calls_done"] == 2 and blob["check_status"] == "error"
+    assert get_run(run_id).status == "completed"  # the batch still judges the sessions
+    data.start_batch_evaluation.assert_called_once()
+
+
+def test_harness_wrapper_empty_event_stream_is_missing_evidence(monkeypatch):
+    """Through the real harness wrapper: an event stream with no text deltas
+    yields text '' → the step is empty, not a passing not_contains."""
+    from app.services.agentcore import harness as hc_mod
+
+    client = MagicMock()
+    client.invoke_harness.return_value = {"stream": [{"metadata": {}}]}
+    result = hc_mod.invoke_harness_text(client, "arn:h", "hi", session_id="s" * 40, actor_id="a")
+    assert result["text"] == "" and ex.response_text(result) is None
+    assert ex.response_text({"text": "  \t "}) is None and ex.response_text({"text": "ok"}) == "ok"
+
+
+def test_pass_requires_full_procedure_completion(monkeypatch):
+    """Only step 0 is checked; the last invoke of repeat 2 raises. The recorded
+    checks all pass, but the procedure is incomplete → not a pass."""
+    two = {"scenario_id": "two", "turns": [{"input": "remember amber"}, {"input": "colour?"}],
+           "metadata": {"launchpad_execution": {"version": 1, "repeat": 2, "steps": [
+               {"turn": 0, "actor": "A", "session": "s"},
+               {"turn": 1, "actor": "A", "session": "s"}],
+               "checks": [{"id": "seed", "type": "contains", "turn": 0, "text": "amber"}]}}}
+    run_id, _ = run_items([two], FakeAgent(fail_at=4), monkeypatch)
+    run = get_run(run_id)
+    blob = run.execution
+    assert run.status == "failed"
+    assert blob["calls_done"] == 3 and blob["calls_planned"] == 4
+    assert [c["outcome"] for c in blob["checks"]] == ["pass", "pass"]
+    assert blob["check_status"] == "error"
+
+
+def test_stop_on_final_invoke_keeps_declared_checks(monkeypatch):
+    one = copy.deepcopy(ISOLATION_SCENARIO)
+    one["metadata"]["launchpad_execution"]["repeat"] = 1
+    run_id = make_run([one])
+    workspace = ws_ctx()
+
+    class StopAtLast(FakeAgent):
+        def __call__(self, *a, **k):
+            out = super().__call__(*a, **k)
+            if len(self.calls) == 3:
+                svc.request_stop(run_id, workspace=workspace)
+            return out
+
+    _, data = run_items([one], StopAtLast(), monkeypatch, run_id=run_id)
+    run = get_run(run_id)
+    assert run.status == "stopped"
+    data.start_batch_evaluation.assert_not_called()
+    blob = run.execution
+    assert [c["outcome"] for c in blob["checks"]] == ["pass", "pass", "pass"]
+    assert blob["interrupted"] is True and blob["check_status"] == "inconclusive"
+
+
+def test_stop_before_first_step_and_between_repeats(monkeypatch):
+    run_id = make_run([copy.deepcopy(ISOLATION_SCENARIO)])
+    # the operator stops while the first actor is being minted — before invoke #1
+    real_actor = ex.synthetic_actor
+
+    def stopping_actor(**kw):
+        svc.stop_flags.request(run_id)
+        return real_actor(**kw)
+
+    monkeypatch.setattr(svc.execution, "synthetic_actor", stopping_actor)
+    fake = FakeAgent()
+    _, data = run_items([copy.deepcopy(ISOLATION_SCENARIO)], fake, monkeypatch, run_id=run_id)
+    monkeypatch.setattr(svc.execution, "synthetic_actor", real_actor)
+    run = get_run(run_id)
+    assert run.status == "stopped" and fake.calls == [] and run.session_ids == []
+    data.start_batch_evaluation.assert_not_called()
+    # declared checks of the interrupted repeat are recorded (seed has no answer →
+    # error; its dependents → inconclusive), never silently absent
+    assert [c["outcome"] for c in run.execution["checks"]] == [
+        "error", "inconclusive", "inconclusive"]
+    assert run.execution["check_status"] == "error" and run.execution["interrupted"] is True
+
+    run_id = make_run([copy.deepcopy(ISOLATION_SCENARIO)])
+    workspace = ws_ctx()
+
+    class StopAfterRepeat1(FakeAgent):
+        def __call__(self, *a, **k):
+            out = super().__call__(*a, **k)
+            if len(self.calls) == 3:
+                svc.request_stop(run_id, workspace=workspace)
+            return out
+
+    run_items([copy.deepcopy(ISOLATION_SCENARIO)], StopAfterRepeat1(), monkeypatch, run_id=run_id)
+    blob = get_run(run_id).execution
+    assert [c["outcome"] for c in blob["checks"]] == ["pass"] * 3
+    assert blob["check_status"] == "inconclusive" and len(blob["sessions"]) == 3
+
+
+def test_position_keyed_dispatch_survives_normalized_id_collision(monkeypatch):
+    """Direct runner path (the API refuses this shape): an opt-in scenario named
+    item_2 next to a legacy prompt must not make the legacy item run the plan."""
+    adv = dict(copy.deepcopy(ISOLATION_SCENARIO), scenario_id="item_2")
+    adv["metadata"]["launchpad_execution"]["repeat"] = 1
+    fake = FakeAgent()
+    run_id, data = run_items([adv, {"prompt": "bye"}], fake, monkeypatch)
+    run = get_run(run_id)
+    assert run.status == "completed", run.error
+    assert [c[0] for c in fake.calls][-1] == "bye" and fake.calls[-1][2] == "default"
+    assert len(fake.calls) == 4 and len(run.session_ids) == 4
+    meta = data.start_batch_evaluation.call_args.kwargs["evaluationMetadata"]["sessionMetadata"]
+    assert all(m["testScenarioId"].startswith("item_2#") for m in meta)
+
+
+def test_items_are_snapshotted_before_enqueue(monkeypatch):
+    """Mutating the caller's nested list AFTER submit_run returns but BEFORE the
+    queued callable runs must not reach execute_run."""
+    from app.evaluation.queue import run_queue
+
+    db = SessionLocal()
+    agent = make_agent(db, name="snap-agent")
+    db.close()
+    monkeypatch.setattr(svc, "resolve_telemetry", lambda *a, **k: ("svc.DEFAULT", "/lg"))
+    held = {}
+    monkeypatch.setattr(run_queue, "submit", lambda run_id, fn: held.setdefault("fn", fn) and 0)
+    seen = {}
+    monkeypatch.setattr(
+        svc, "execute_run", lambda run_id, **kw: seen.setdefault("items", kw["items"]))
+    items = [copy.deepcopy(ISOLATION_SCENARIO)]
+    svc.submit_run(agent=agent, workspace=ws_ctx(), dataset_items=items, dataset_id="d",
+                   dataset_name="d", evaluators=["Builtin.Correctness"])
+    items[0]["turns"][0]["input"] = "MUTATED"
+    items[0]["metadata"]["launchpad_execution"]["repeat"] = 5
+    held["fn"]()
+    assert seen["items"][0]["turns"][0]["input"].startswith("My favourite")
+    assert seen["items"][0]["metadata"]["launchpad_execution"]["repeat"] == 2
 
 
 def test_evaluate_checks_unit_semantics():
@@ -315,7 +499,10 @@ def test_evaluate_checks_unit_semantics():
     assert [(c["id"], c["outcome"]) for c in out] == [
         ("exact", "pass"), ("cs", "fail"), ("dep", "inconclusive")]
     out = ex.evaluate_checks(plan, 1, {0: None, 1: "fine"})
-    assert out[0]["outcome"] == "error" and "no assistant response" in out[0]["evidence"]
+    assert out[0]["outcome"] == "error" and out[0]["evidence"].endswith("for T1")
+    for blank in ("", "   ", "\n\t", 7):
+        neg = ex.evaluate_checks(plan, 1, {0: "Yes.", 1: blank})
+        assert neg[2]["outcome"] == "error", blank
     assert ex.aggregate_outcome([]) == "none"
     assert ex.aggregate_outcome([{"outcome": "pass"}, {"outcome": "inconclusive"}]) == (
         "inconclusive")

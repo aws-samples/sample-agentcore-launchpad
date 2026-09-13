@@ -261,17 +261,20 @@ def execute_run(
             # synthetic actors and sessions per scenario, ground truth split by
             # the actual session, correlation persisted after every step.
             scenarios = normalize_scenarios(items)
-            plans = {
-                s["scenario_id"]: execution.parse_plan(s)
+            # dispatch is keyed by POSITION, never by scenario_id: a legacy
+            # prompt item is normalized to item_<N>, which may equal an opt-in
+            # scenario's id — a name-keyed lookup would run the wrong plan
+            plans_by_pos = [
+                execution.parse_plan(s) if execution.is_executable(s) else None
                 for s in scenarios
-                if execution.is_executable(s)
-            }
+            ]
+            plans = [p for p in plans_by_pos if p is not None]
             if plans and protocol == "a2a" and method != "harness":
                 raise RuntimeError(
                     "multi-actor/multi-session scenarios cannot run against an A2A "
                     "agent (no actor envelope)"
                 )
-            exec_blob = execution.empty_execution(list(plans.values())) if plans else None
+            exec_blob = execution.empty_execution(plans) if plans else None
             exec_states: list[execution.ScenarioState] = []
             metadata_entries: list[dict[str, Any]] = []
             watermark_sid: str | None = None
@@ -296,26 +299,27 @@ def execute_run(
                 )
 
             _update(run_id, status="invoking", execution=exec_blob)
-            for scenario in scenarios:
-                _check_stop(run_id)
-                sid: str | None = None
-                if scenario["scenario_id"] in plans:
-                    plan = plans[scenario["scenario_id"]]
-                    state = execution.ScenarioState()
-                    exec_states.append(state)
+            try:
+                for scenario, plan in zip(scenarios, plans_by_pos, strict=True):
+                    _check_stop(run_id)
+                    sid: str | None = None
+                    if plan is not None:
+                        state = execution.ScenarioState()
+                        exec_states.append(state)
 
-                    def persist(st: execution.ScenarioState, session_id: str) -> None:
-                        nonlocal watermark_sid
-                        watermark_sid = session_id
-                        if session_id not in session_ids:
-                            session_ids.append(session_id)
-                        _update(
-                            run_id,
-                            session_ids=list(session_ids),
-                            execution=execution.merge_state(exec_blob, exec_states, final=False),
-                        )
+                        def persist(st: execution.ScenarioState, session_id: str) -> None:
+                            nonlocal watermark_sid
+                            watermark_sid = session_id
+                            if session_id not in session_ids:
+                                session_ids.append(session_id)
+                            _update(
+                                run_id,
+                                session_ids=list(session_ids),
+                                execution=execution.merge_state(
+                                    exec_blob, exec_states, final=False
+                                ),
+                            )
 
-                    try:
                         execution.run_scenario(
                             plan,
                             invoke=lambda prompt, session_id, actor_id: invoke(
@@ -334,36 +338,47 @@ def execute_run(
                             on_step=persist,
                             state=state,
                         )
-                    finally:
-                        # stopped / failed mid-procedure: the sessions minted so
-                        # far and the checks (missing answers → error) are kept
-                        _update(
-                            run_id,
-                            session_ids=list(session_ids),
-                            execution=execution.merge_state(exec_blob, exec_states, final=True),
+                        exec_blob.update(
+                            execution.merge_state(exec_blob, exec_states, final=False)
                         )
-                    metadata_entries.extend(
-                        execution.ground_truth_for_sessions(plan, scenario, state)
+                        metadata_entries.extend(
+                            execution.ground_truth_for_sessions(plan, scenario, state)
+                        )
+                        continue
+                    if simulation.is_simulated(scenario):
+                        sid = simulation.run_simulated_scenario(
+                            data,
+                            agent_arn=agent_arn,
+                            method=method,
+                            scenario=scenario,
+                            actor_model_id=actor_model_id or "",
+                            protocol=protocol,
+                            runtime_user_id=runtime_user_id,
+                        )
+                    else:
+                        for prompt in scenario_prompts(scenario):
+                            _check_stop(run_id)
+                            sid = invoke(prompt, sid)["session_id"]
+                    session_ids.append(sid)
+                    watermark_sid = sid
+                    metadata_entries.extend(ground_truth_metadata([scenario], [sid]))
+                    _update(run_id, session_ids=list(session_ids))
+                if exec_blob is not None:
+                    exec_blob.update(execution.merge_state(exec_blob, exec_states, final=True))
+                    _update(run_id, session_ids=list(session_ids), execution=dict(exec_blob))
+            except BaseException:
+                if exec_blob is not None:
+                    # stopped / failed anywhere in the replay — before the first
+                    # step, mid-procedure or between scenarios: the sessions
+                    # minted so far and the checks (missing answers → error) are
+                    # kept and the roll-up can no longer be a pass
+                    exec_blob.update(
+                        execution.merge_state(
+                            exec_blob, exec_states, final=True, interrupted=True
+                        )
                     )
-                    continue
-                if simulation.is_simulated(scenario):
-                    sid = simulation.run_simulated_scenario(
-                        data,
-                        agent_arn=agent_arn,
-                        method=method,
-                        scenario=scenario,
-                        actor_model_id=actor_model_id or "",
-                        protocol=protocol,
-                        runtime_user_id=runtime_user_id,
-                    )
-                else:
-                    for prompt in scenario_prompts(scenario):
-                        _check_stop(run_id)
-                        sid = invoke(prompt, sid)["session_id"]
-                session_ids.append(sid)
-                watermark_sid = sid
-                metadata_entries.extend(ground_truth_metadata([scenario], [sid]))
-                _update(run_id, session_ids=list(session_ids))
+                    _update(run_id, session_ids=list(session_ids), execution=dict(exec_blob))
+                raise
             if session_metadata is None:
                 session_metadata = metadata_entries or None
             _check_stop(run_id)
@@ -689,6 +704,10 @@ def submit_run(
     finally:
         db.close()
 
+    # The snapshot is taken HERE, before the callable is enqueued: a dataset
+    # edit that lands while the run waits in the queue must not change what
+    # it replays, so the queued callable never touches the caller's list.
+    items_snapshot = copy.deepcopy(dataset_items)
     position = run_queue.submit(
         run_id,
         lambda: execute_run(
@@ -699,9 +718,7 @@ def submit_run(
             protocol=agent_protocol,
             service_name=service_name,
             log_group=log_group,
-            # a deep copy pins the scenario snapshot: dataset edits while the
-            # run is queued must not change what it replays
-            items=copy.deepcopy(dataset_items),
+            items=items_snapshot,
             evaluators=evaluators,
             mode=mode,
             wait_seconds=wait_seconds,
