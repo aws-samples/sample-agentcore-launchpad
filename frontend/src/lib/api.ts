@@ -127,12 +127,77 @@ export interface SystemPresetInfo {
   editable_fields: SystemPresetEditableField[];
   /** set while an uninstall job owns the row (status `uninstalling`) */
   operation: SystemPresetOperation | null;
+  /** SE-043: the preset's Skill as its own Registry record — the ledger mapping
+   *  (identifiers + registered release; approval is read in the Registry), `null`
+   *  until an administrator registers it (or a deploy's register stage does). */
+  skill_registration: SystemSkillRegistration | null;
+  /** administrator + active preset + prerequisites: may register/verify the Skill */
+  can_register_skill: boolean;
   /** server verdicts per operation: administrator + operation-specific readiness */
   can_install: boolean;
   can_repair: boolean;
   /** editing the stored settings = a repair with an explicit body (admin + settled) */
   can_configure: boolean;
   can_uninstall: boolean;
+  updated_at: string | null;
+}
+
+/** Ledger-side association of a system preset's published Skill release with its
+ *  Registry record (`GET /api/system-agents[].skill_registration`). */
+export interface SystemSkillRegistration {
+  record_id: string | null;
+  /** `creating` = durable intent, no record id yet; `registered` = record id known */
+  status: "creating" | "registered";
+  release_version: string | null;
+  release_digest: string | null;
+  /** the immutable `system-skills/<name>/<version>-<digest12>/` S3 URI */
+  path: string | null;
+  updated_at: string | null;
+}
+
+/** `POST /api/system-agents/{key}/skill-registration` — one Registry write at most,
+ *  no S3 write, no Harness re-publish. `created` = a new record (submitted for review,
+ *  never approved here); `changed` without `created` = the descriptor rolled forward to
+ *  a newer release (DRAFT, needs review); neither = identical release, no-op. */
+export interface SystemSkillRegistrationResult {
+  preset_key: string;
+  record: RegistryRecordOut;
+  created: boolean;
+  changed: boolean;
+  submitted: boolean;
+  note: string | null;
+  skill: { name: string; version: string | null; digest: string; path: string | null; files: string[] };
+  preset: SystemPresetInfo;
+}
+
+/** The server-owned `system` member of a Registry record (SE-043): present exactly
+ *  when the workspace ledger maps the record to a system preset's Skill. Derived from
+ *  the ledger, never from descriptors or tags — a client cannot claim it. */
+export interface RegistryRecordSystem {
+  managed: true;
+  preset_key: string;
+  label: string;
+  skill_version: string | null;
+  release_digest: string | null;
+  path: string | null;
+  /** content mutations refused for everyone (`edit`, `replace`, `reimport`, `delete`) */
+  protected_actions: string[];
+  /** lifecycle actions an administrator may still run */
+  admin_actions: string[];
+}
+
+/** A Registry record as `GET /api/registry/records[/{id}]` projects it. */
+export interface RegistryRecordOut {
+  system: RegistryRecordSystem | null;
+  record_id: string;
+  name: string;
+  description: string;
+  type: "A2A" | "MCP" | "AGENT_SKILLS";
+  status: string;
+  status_reason?: string | null;
+  version: string | null;
+  descriptors?: Record<string, unknown>;
+  created_at: string | null;
   updated_at: string | null;
 }
 
@@ -3050,6 +3115,14 @@ export const api = {
     request<SystemPresetInstallResult>(
       `/api/system-agents/${encodeURIComponent(key)}/install`,
       { method: "POST", body: JSON.stringify(input), headers: pinnedWorkspace(workspaceId) },
+    ),
+  /** SE-043: register / verify the installed preset's published Skill release as its
+   * own Registry record. Administrator only; the workspace is pinned like every other
+   * preset write. No body — the resource is server-selected. */
+  registerSystemPresetSkill: (key: string, workspaceId?: string | null) =>
+    request<SystemSkillRegistrationResult>(
+      `/api/system-agents/${encodeURIComponent(key)}/skill-registration`,
+      { method: "POST", headers: pinnedWorkspace(workspaceId) },
     ),
   /** 202: claims the row (`uninstalling`) and queues the teardown job; repeated calls
    * return the same live job, a failed teardown gets a new attempt. */

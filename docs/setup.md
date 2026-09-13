@@ -175,6 +175,17 @@ disabled, and the backend refuses those calls regardless of permissions; a knowl
 base mounted on the preset cannot be force-deleted until an administrator detaches
 it through the preset. If an ordinary agent already holds the reserved name, the
 install is refused — delete or rename that agent first; the preset never adopts it.
+The preset's versioned Skill can also be listed in the Registry as its own record:
+once the preset is active, an administrator clicks **REGISTER SKILL** in the panel (or
+`POST /api/system-agents/<key>/skill-registration`). That points a new `AGENT_SKILLS`
+record at the release already published under `system-skills/` (nothing is uploaded
+and the Harness is not re-published), submits it for review, and it becomes mountable
+by other agents only after you **approve it in the Registry**. Repeating the action is
+a no-op (VERIFY SKILL RECORD); after a bundle update it rolls the record forward, which
+needs approval again. The record shows a SYSTEM chip: nobody edits, re-imports or
+deletes it from the console, members can view and mount it, administrators operate its
+approval; uninstalling the preset keeps the record. Installs and repairs made with this
+build register the Skill automatically in the deploy's register stage.
 **Live smoke is still pending** (see architecture.md → *System-managed presets*).
 
 ### Architect assistant / 架构助手

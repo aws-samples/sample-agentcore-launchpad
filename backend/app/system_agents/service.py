@@ -317,6 +317,9 @@ def preset_status(
     db: Session, row: Workspace, preset: SystemPreset, *, is_admin: bool
 ) -> dict[str, Any]:
     """One preset's state in one workspace. Ledger + workspace row only — no AWS."""
+    # resolved here: skill_registry imports this module for the S3 read helpers
+    from app.system_agents import skill_registry
+
     requirements = workspace_requirements(row)
     agent = find_installed(db, row.id, preset)
     holder = find_name_holder(db, row.id, preset)
@@ -391,6 +394,15 @@ def preset_status(
         "can_configure": is_admin and settled and not requirements,
         "can_uninstall": is_admin and installed and (
             settled or (agent.status == STATUS_UNINSTALLING and not uninstall_live)
+        ),
+        # SE-043: the preset's Skill as its own Registry record — the ledger mapping
+        # (identifiers + registered release; approval is read from AWS in the
+        # Registry) and the admin verdict for the register/verify action.
+        "skill_registration": skill_registry.status_projection(
+            db, row.id, (row.resources or {}).get("registry_id"), preset
+        ),
+        "can_register_skill": (
+            is_admin and installed and agent.status == "active" and not requirements
         ),
         "updated_at": agent.updated_at.isoformat() if agent and agent.updated_at else None,
     }

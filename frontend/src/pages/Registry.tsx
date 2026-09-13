@@ -6,8 +6,14 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { Btn, Chip, ConfirmDialog, LoadError, Panel, useToast, ViewHead } from "../components";
 import type { ChipTone } from "../components";
+import { useAuth } from "../auth/auth-context";
 import { api, ApiError, errorMessage, getJson } from "../lib/api";
-import type { AgentInfo, DiscoverableRegistryRecord, LiveAgentCard } from "../lib/api";
+import type {
+  AgentInfo,
+  DiscoverableRegistryRecord,
+  LiveAgentCard,
+  RegistryRecordSystem,
+} from "../lib/api";
 import { A2ADemoView } from "./registry/A2ADemoView";
 import { EditView } from "./registry/EditView";
 import { RegisterView } from "./registry/RegisterView";
@@ -23,6 +29,10 @@ export interface RegistryRecord {
   version: string | null;
   descriptors?: Record<string, unknown>;
   updated_at: string | null;
+  /** SE-043: server-owned; set exactly when the workspace ledger maps this record to
+   *  a system preset's Skill. Content edits are refused server-side for everyone,
+   *  lifecycle actions for members — the UI mirrors that, the backend enforces it. */
+  system?: RegistryRecordSystem | null;
 }
 
 interface SkillSourceMeta {
@@ -132,6 +142,7 @@ export function Registry() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useToast();
+  const { isAdmin } = useAuth();
   // "?view=register" renders a standalone sub-page instead of the list — it is
   // linkable and the browser back button returns to the list (like Evaluation).
   const [searchParams, setSearchParams] = useSearchParams();
@@ -217,6 +228,20 @@ export function Registry() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // `?record=<id>` on the list view (the System presets panel links here): select
+  // that record once the list is known and show its tab. `?view=edit&record=` keeps
+  // its own meaning below.
+  const deepLinked = useRef<string | null>(null);
+  useEffect(() => {
+    const wanted = searchParams.get("record");
+    if (view !== null || !wanted || !records || deepLinked.current === wanted) return;
+    const hit = records.find((r) => r.record_id === wanted);
+    if (!hit) return;
+    deepLinked.current = wanted;
+    setTab(hit.type);
+    void select(hit);
+  }, [records, searchParams, view]);
 
   // Entering the consumer view always reads the data plane afresh.
   useEffect(() => {
@@ -376,6 +401,11 @@ export function Registry() {
       setBusy(false);
     }
   };
+
+  /** A system-managed Skill's lifecycle (submit/approve/reject/disable) is an
+   *  administrator's call; every other record keeps its member-operable lifecycle.
+   *  The server refuses regardless — this only hides what would be refused. */
+  const lifecycleAllowed = (record: RegistryRecord) => !record.system || isAdmin;
 
   const openInWizard = (record: RegistryRecord) => {
     if (record.type === "MCP") {
@@ -708,7 +738,17 @@ export function Registry() {
                             : undefined,
                       }}
                     >
-                      <td className="pri">{record.name}</td>
+                      <td className="pri">
+                        {record.name}
+                        {record.system && (
+                          <>
+                            {" "}
+                            <Chip tone="blue" icon="◈" data-testid="system-skill-chip">
+                              {t("registry.drawer.system.chip")}
+                            </Chip>
+                          </>
+                        )}
+                      </td>
                       <td>
                         {record.type === "A2A" ? (
                           <Chip tone="amber" icon="◇">A2A</Chip>
@@ -766,6 +806,11 @@ export function Registry() {
                 const chip = STATUS_CHIP[selected.status] ?? STATUS_CHIP.DRAFT;
                 return (
                   <>
+                    {selected.system && (
+                      <Chip tone="blue" icon="◈" data-testid="drawer-system-chip">
+                        {t("registry.drawer.system.chip")}
+                      </Chip>
+                    )}
                     <Chip tone={chip.tone} icon={chip.icon}>{t(chip.labelKey)}</Chip>
                     {isHidden(selected) && hiddenChip}
                   </>
@@ -969,6 +1014,38 @@ export function Registry() {
                     </div>
                   );
                 })()}
+                {selected.system && (
+                  <div className="sect" data-testid="system-skill">
+                    <h4>{t("registry.drawer.system.title")}</h4>
+                    <div className="kv">
+                      <span className="k">{t("registry.drawer.system.preset")}</span>
+                      <span className="v">{selected.system.label}</span>
+                    </div>
+                    <div className="kv">
+                      <span className="k">{t("registry.drawer.system.version")}</span>
+                      <span className="v mono" data-testid="system-skill-version">
+                        {selected.system.skill_version ?? "—"}
+                        {selected.system.release_digest ? ` · ${selected.system.release_digest}` : ""}
+                      </span>
+                    </div>
+                    <div className="kv">
+                      <span className="k">{t("registry.drawer.system.path")}</span>
+                      <span className="v mono" data-testid="system-skill-path">
+                        {selected.system.path ?? "—"}
+                      </span>
+                    </div>
+                    <div className="note" style={{ marginTop: 8 }} data-testid="system-skill-note">
+                      <span className="i">◈</span>
+                      <span>
+                        {t(
+                          isAdmin
+                            ? "registry.drawer.system.noteAdmin"
+                            : "registry.drawer.system.noteMember",
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                )}
                 {skillMeta && (
                   <div className="sect" data-testid="skill-bundle">
                     {skillMeta.source && (
@@ -1038,7 +1115,7 @@ export function Registry() {
                       {t("registry.drawer.useInNewAgent")}
                     </Btn>
                   )}
-                  {selected.type !== "A2A" && selected.status !== "DEPRECATED" && (
+                  {selected.type !== "A2A" && selected.status !== "DEPRECATED" && !selected.system && (
                     <Btn
                       onClick={() =>
                         setSearchParams({ view: "edit", record: selected.record_id })
@@ -1063,6 +1140,7 @@ export function Registry() {
                     </Btn>
                   )}
                   {selected.type === "AGENT_SKILLS" &&
+                    !selected.system &&
                     (skillMeta?.source?.kind === "git" || skillMeta?.source?.kind === "url") &&
                     selected.status !== "DEPRECATED" && (
                       <Btn
@@ -1075,34 +1153,59 @@ export function Registry() {
                           : t("registry.drawer.reimport")}
                       </Btn>
                     )}
-                  {selected.status === "DRAFT" && (
-                    <Btn disabled={busy} onClick={() => void action(selected, "submit")}>
+                  {lifecycleAllowed(selected) && selected.status === "DRAFT" && (
+                    <Btn
+                      disabled={busy}
+                      onClick={() => void action(selected, "submit")}
+                      data-testid="submit-btn"
+                    >
                       {t("registry.drawer.submit")}
                     </Btn>
                   )}
-                  {(selected.status === "PENDING_APPROVAL" ||
-                    selected.status === "REJECTED") && (
-                    <Btn disabled={busy} onClick={() => void action(selected, "approve")}>
-                      {t("registry.drawer.approve")}
-                    </Btn>
-                  )}
-                  {selected.status === "PENDING_APPROVAL" && (
-                    <Btn disabled={busy} onClick={() => void action(selected, "reject")}>
+                  {lifecycleAllowed(selected) &&
+                    (selected.status === "PENDING_APPROVAL" ||
+                      selected.status === "REJECTED") && (
+                      <Btn
+                        disabled={busy}
+                        onClick={() => void action(selected, "approve")}
+                        data-testid="approve-btn"
+                      >
+                        {t("registry.drawer.approve")}
+                      </Btn>
+                    )}
+                  {lifecycleAllowed(selected) && selected.status === "PENDING_APPROVAL" && (
+                    <Btn
+                      disabled={busy}
+                      onClick={() => void action(selected, "reject")}
+                      data-testid="reject-btn"
+                    >
                       {t("registry.drawer.reject")}
                     </Btn>
                   )}
-                  {selected.status === "APPROVED" && (
-                    <Btn disabled={busy} onClick={() => setConfirmDisable(selected)}>
+                  {lifecycleAllowed(selected) && selected.status === "APPROVED" && (
+                    <Btn
+                      disabled={busy}
+                      onClick={() => setConfirmDisable(selected)}
+                      data-testid="disable-btn"
+                    >
                       {t("registry.drawer.disable")}
                     </Btn>
                   )}
-                  <Btn
-                    disabled={busy}
-                    style={{ color: "var(--crit)", borderColor: "var(--crit)" }}
-                    onClick={() => setConfirmDelete(selected)}
-                  >
-                    {t("registry.drawer.delete")}
-                  </Btn>
+                  {!selected.system && (
+                    <Btn
+                      disabled={busy}
+                      style={{ color: "var(--crit)", borderColor: "var(--crit)" }}
+                      onClick={() => setConfirmDelete(selected)}
+                      data-testid="delete-btn"
+                    >
+                      {t("registry.drawer.delete")}
+                    </Btn>
+                  )}
+                  {selected.system && !isAdmin && (
+                    <span className="dim mono" style={{ fontSize: 11 }} data-testid="system-skill-readonly">
+                      {t("registry.drawer.system.memberReadOnly")}
+                    </span>
+                  )}
                 </div>
                 {reimportError && (
                   <div className="sect" style={{ borderBottom: 0, paddingTop: 0 }}>

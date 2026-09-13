@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from starlette.datastructures import UploadFile
 
 from app.core.errors import AppError, aws_error_message, mapped_aws_error
+from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import registry_console as console
 from app.services import skill_ingest as si
@@ -100,8 +101,14 @@ def _invalidate_attachables(workspace_id: str) -> None:
     _attachables_cache.pop(workspace_id, None)
 
 
-def _record_out(record: dict[str, Any]) -> dict[str, Any]:
+def _record_out(
+    record: dict[str, Any], system: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """API projection. ``system`` is the server-owned SE-043 member — derived from the
+    workspace's ledger mapping by record id (``_with_system``), never from the
+    record's descriptors or tags, so a client payload cannot claim protection."""
     return {
+        "system": system,
         "record_id": record.get("recordId"),
         "name": record.get("name"),
         "description": record.get("description", ""),
@@ -115,6 +122,19 @@ def _record_out(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _with_system(ws: WorkspaceScope, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Scoped to the workspace AND its current registry identity: a mapping left by a
+    replaced registry never classifies a same-id record in the new one."""
+    from app.system_agents.skill_registry import projections_for
+
+    owned = projections_for(ws.context, [str(r.get("recordId") or "") for r in records])
+    return [_record_out(r, owned.get(str(r.get("recordId") or ""))) for r in records]
+
+
+def _one_with_system(ws: WorkspaceScope, record: dict[str, Any]) -> dict[str, Any]:
+    return _with_system(ws, [record])[0]
+
+
 @router.get("/records")
 def list_records(
     type: str | None = None,
@@ -122,12 +142,12 @@ def list_records(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     records = console.console_list(ws.context, type, status)
-    return {"records": [_record_out(r) for r in records]}
+    return {"records": _with_system(ws, records)}
 
 
 @router.get("/records/search")
 def search(q: str, ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
-    return {"records": [_record_out(r) for r in console.console_search(ws.context, q)]}
+    return {"records": _with_system(ws, console.console_search(ws.context, q))}
 
 
 def _discoverable_out(record: dict[str, Any]) -> dict[str, Any]:
@@ -162,7 +182,7 @@ def list_discoverable(
 def get_record(
     record_id: str, ws: WorkspaceScope = Depends(require_workspace)
 ) -> dict[str, Any]:
-    return _record_out(console.console_get(ws.context, record_id))
+    return _one_with_system(ws, console.console_get(ws.context, record_id))
 
 
 @router.get("/records/{record_id}/live-agent-card")
@@ -238,14 +258,18 @@ class ActionRequest(BaseModel):
 def record_action(
     record_id: str,
     req: ActionRequest,
+    request: Request,
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
+    # The caller's role reaches the service explicitly: a system-managed Skill's
+    # lifecycle is administrator-only, ordinary records stay member-operable.
+    identity = require_identity(request)
     try:
-        console.console_action(ws.context, record_id, req.action)
+        console.console_action(ws.context, record_id, req.action, is_admin=identity.is_admin)
     except ValueError as exc:
         raise AppError("registry.unknown_action", str(exc), status_code=400) from exc
     _invalidate_attachables(ws.id)
-    return _record_out(console.console_get(ws.context, record_id))
+    return _one_with_system(ws, console.console_get(ws.context, record_id))
 
 
 class RegisterRequest(BaseModel):
@@ -512,7 +536,7 @@ def reimport_record(
     failed re-acquire/validation returns 422 ``registry.skill_invalid``."""
     record = console.reimport_skill(ws.context, record_id)
     _invalidate_attachables(ws.id)
-    return _record_out(record)
+    return _one_with_system(ws, record)
 
 
 class UpdateRecordRequest(BaseModel):
@@ -557,6 +581,10 @@ def update_record(
             status_code=400,
         )
 
+    # A system-managed Skill (SE-043) refuses every edit here, before the type read.
+    from app.system_agents.skill_registry import refuse_protected_mutation
+
+    refuse_protected_mutation(ws.context, record_id, "replace" if req.staging_id else "edit")
     rtype = console.console_get(ws.context, record_id).get("descriptorType")
     if req.url is not None and rtype != "MCP":
         raise AppError(
@@ -609,7 +637,7 @@ def update_record(
     if req.staging_id is not None:
         _drop_staging(req.staging_id)
     _invalidate_attachables(ws.id)
-    return _record_out(result)
+    return _one_with_system(ws, result)
 
 
 @router.delete("/records/{record_id}")

@@ -945,6 +945,12 @@ def publish_job(
             status_code=400,
         )
     record_id = str(source["record_id"])
+    # A system-managed Skill (SE-043) is never published onto from here. Refused
+    # BEFORE the record read, before the multi-file split rebuilds publish_skill/
+    # (rmtree + splitter subprocess) and before update_record's own guard.
+    from app.system_agents.skill_registry import refuse_protected_mutation
+
+    refuse_protected_mutation(workspace, record_id, "edit")
     before = registry_console.console_get(workspace, record_id)
     status_before = str(before.get("status") or "")
     trainable = list((row.params or {}).get("trainable_files") or [])

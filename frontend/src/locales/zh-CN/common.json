@@ -459,7 +459,9 @@
         "repairTitle": "重新发布系统预置？",
         "repair": "这会用平台持有的配置和当前技能包就地重新发布“{{name}}”（新的 Harness 版本，ARN 不变）。",
         "uninstallTitle": "卸载系统预置？",
-        "uninstall": "这会排入一个拆除任务，删除“{{name}}”背后的 Harness 与执行角色。拆除完成前预置保留其身份；失败的拆除可以重试。对话历史保留在台账中；之后可以重新安装。"
+        "uninstall": "这会排入一个拆除任务，删除“{{name}}”背后的 Harness 与执行角色。拆除完成前预置保留其身份；失败的拆除可以重试。对话历史保留在台账中；之后可以重新安装。",
+        "registerSkillTitle": "注册预置的 Skill？",
+        "registerSkill": "这会把“{{name}}”已安装版本的 Skill 注册为当前 Workspace Registry 中的 AGENT_SKILLS 记录，指向 S3 中已发布的不可变 system-skills/ 版本目录。最多一次 Registry 写入；不上传任何内容，不重新发布 Harness，批准仍是管理员的独立操作。"
       },
       "loading": "加载中……",
       "reload": "刷新",
@@ -539,6 +541,19 @@
         "kbLoading": "正在加载知识库目录……",
         "kbLoadFailed": "无法加载知识库目录：{{reason}}。已挂载的知识库按已存值保留。",
         "savingNoDismiss": "保存中——结果确定后对话框才会关闭。"
+      },
+      "skill": {
+        "label": "Skill 记录",
+        "registeredAs": "{{id}} · v{{v}}",
+        "notRegistered": "尚未在 Registry 中注册",
+        "open": "在 REGISTRY 中打开",
+        "register": "注册 SKILL",
+        "verify": "核验 SKILL 记录",
+        "hint": "把已安装版本的 Skill 注册为独立的 Registry 记录（最多一次 Registry 写入；不写 S3，不重新发布 Harness）。新记录会提交审核——请在 Registry 中批准。",
+        "adminOnly": "注册预置的 Skill 需要管理员账号。",
+        "registered": "已创建 Skill 记录 {{id}} 并提交审核——在 Registry 中批准后即可挂载。",
+        "updated": "Skill 记录 {{id}} 已更新为 v{{v}} 版本——记录回到 DRAFT，需在 Registry 中重新审核。",
+        "verified": "Skill 记录 {{id}} 已与当前安装版本一致——未做任何变更。"
       }
     },
     "versions": {
@@ -668,7 +683,17 @@
       "liveCardFailed": "实时名片不可用：{{msg}}",
       "liveCardNotLaunchpad": "只有 Launchpad 已部署 Agent 的 A2A 记录才提供实时名片",
       "liveCardNotA2A": "该记录背后的 Agent 不是 A2A 服务器——不提供 Agent 名片",
-      "liveCardNotReady": "该 Agent 处于 {{status}} 状态——读取实时名片需要运行中的运行时"
+      "liveCardNotReady": "该 Agent 处于 {{status}} 状态——读取实时名片需要运行中的运行时",
+      "system": {
+        "chip": "系统",
+        "title": "系统托管 SKILL",
+        "preset": "预置",
+        "version": "版本",
+        "path": "S3 版本路径",
+        "noteAdmin": "平台持有：内容由预置管道发布（“系统预置”面板 → 修复/更新）并从那里重新注册；不提供编辑、重新导入和删除。你可以在此提交、批准、驳回或停用。",
+        "noteMember": "平台持有：成员可查看此 Skill，并在其为 APPROVED 后挂载到新 Agent；其内容与审批由管理员维护。",
+        "memberReadOnly": "成员只读 · 审批为管理员操作"
+      }
     },
     "confirmDisable": {
       "title": "停用记录",
@@ -774,7 +799,9 @@
       "loadFailed": "加载记录失败：{{msg}}",
       "notFound": "未找到该记录。",
       "disabledNoChanges": "没有可保存的更改",
-      "disabledInvalidBundle": "上传的 bundle 未通过校验，请先上传有效的 ZIP"
+      "disabledInvalidBundle": "上传的 bundle 未通过校验，请先上传有效的 ZIP",
+      "systemReadOnlyTitle": "系统托管 SKILL · 只读",
+      "systemReadOnly": "这是 {{label}} 预置的 Skill。其内容由预置管道发布，此处没有可编辑项；任何保存、重新导入或删除都会被服务端拒绝。请在“系统预置”面板中维护。"
     },
     "deleted": "已删除“{{name}}”。",
     "confirmDelete": {
@@ -2087,7 +2114,16 @@
     "observability.trace_not_found": "Trace 不存在。",
     "system_agent.deploy_in_progress": "该预置正在部署中；请等当前任务结束后再修改设置。",
     "system_agent.invalid_options": "请求的预置设置无效。",
-    "system_agent.conflict": "解析该请求期间预置持续变化；请重试。"
+    "system_agent.conflict": "解析该请求期间预置持续变化；请重试。",
+    "registry.system_skill_protected": "这是系统托管 Skill：其内容由预置管道发布，审批为管理员操作。",
+    "registry.name_reserved": "该名称属于系统托管 Skill——请通过“系统预置”面板注册，而不是作为普通 Skill。",
+    "system_skill.preset_not_active": "预置尚未处于运行中；部署完成后才会注册其 Skill。",
+    "system_skill.release_mismatch": "本构建的技能包不是已安装版本——请先对预置执行修复/更新，再注册 Skill。",
+    "system_skill.bundle_unverified": "S3 中已发布的版本与已安装快照不一致——请先修复预置；未写入任何内容。",
+    "system_skill.foreign_record": "已存在同名 Skill 记录且不属于平台——请先在 Registry 中重命名或删除它。",
+    "system_skill.stale_release": "已注册的 Skill 记录描述的是更新的版本；过期的注册不能将其降级。",
+    "system_skill.record_deprecated": "该 Skill 记录已为 DEPRECATED（终态）——请在 AWS 控制台删除后重新注册。",
+    "system_skill.readback_mismatch": "回读的 Registry 记录与写入内容不一致；未将注册报告为完成。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",

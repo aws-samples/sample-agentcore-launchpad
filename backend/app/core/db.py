@@ -40,6 +40,7 @@ WORKSPACE_SCOPED_TABLES = (
     "assistant_messages",
     "assistant_proposals",
     "agent_name_claims",
+    "system_skill_records",
 )
 
 
@@ -216,6 +217,53 @@ def _migrate(bind) -> None:
     _migrate_assistant_columns(bind)
     _migrate_workspace_columns(bind)
     _migrate_system_key_index(bind)
+    _migrate_system_skill_records_columns(bind)
+    _migrate_system_skill_records_index(bind)
+
+
+def _migrate_system_skill_records_columns(bind) -> None:
+    """SE-043 correction: the accepted-but-unverified id, the persisted create request
+    and the update-intent high-water mark on a ledger created by the first candidate."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    if "system_skill_records" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("system_skill_records")}
+    additions = {
+        "pending_record_id": (
+            "ALTER TABLE system_skill_records ADD COLUMN pending_record_id VARCHAR(64)"
+        ),
+        "create_request": "ALTER TABLE system_skill_records ADD COLUMN create_request JSON",
+        "intent_version": (
+            "ALTER TABLE system_skill_records ADD COLUMN intent_version VARCHAR(32)"
+        ),
+        "intent_digest": "ALTER TABLE system_skill_records ADD COLUMN intent_digest VARCHAR(64)",
+        "intent_content_digest": (
+            "ALTER TABLE system_skill_records ADD COLUMN intent_content_digest VARCHAR(64)"
+        ),
+    }
+    for column, ddl in additions.items():
+        if column not in existing:
+            with bind.begin() as conn:
+                conn.execute(text(ddl))
+
+
+def _migrate_system_skill_records_index(bind) -> None:
+    """The unique (workspace, preset) index that arbitrates concurrent system-skill
+    registrations (SE-043). `create_all` builds it with the table on a fresh ledger;
+    this keeps an upgraded ledger whose table predates the index honest."""
+    from sqlalchemy import inspect, text
+
+    if "system_skill_records" not in inspect(bind).get_table_names():
+        return
+    with bind.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_system_skill_records_workspace_preset "
+                "ON system_skill_records (workspace_id, preset_key)"
+            )
+        )
 
 
 def _migrate_system_key_index(bind) -> None:
@@ -315,6 +363,9 @@ def _migrate_workspace_columns(bind) -> None:
             "ALTER TABLE assistant_proposals ADD COLUMN workspace_id VARCHAR(32)"
         ),
         "agent_name_claims": "ALTER TABLE agent_name_claims ADD COLUMN workspace_id VARCHAR(32)",
+        "system_skill_records": (
+            "ALTER TABLE system_skill_records ADD COLUMN workspace_id VARCHAR(32)"
+        ),
     }
     inspector = inspect(bind)
     live_tables = set(inspector.get_table_names())

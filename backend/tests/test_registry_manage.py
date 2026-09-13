@@ -81,7 +81,8 @@ def test_reject_action_routes(client, monkeypatch):
     actions = []
     monkeypatch.setattr(
         registry_router.console, "console_action",
-        lambda _ws, rid, act: actions.append((rid, act)),
+        # the route now passes the caller's role explicitly (SE-043)
+        lambda _ws, rid, act, is_admin=False: actions.append((rid, act)),
     )
     monkeypatch.setattr(
         registry_router.console, "console_get", lambda _ws, rid: RECORD

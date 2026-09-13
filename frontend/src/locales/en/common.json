@@ -459,7 +459,9 @@
         "repairTitle": "Re-publish system preset?",
         "repair": "This re-publishes “{{name}}” in place with the platform-owned spec and current skill bundle (new Harness version, same ARN).",
         "uninstallTitle": "Uninstall system preset?",
-        "uninstall": "This queues a teardown job that deletes the Harness and execution role behind “{{name}}”. The preset keeps its identity until the teardown completes; a failed teardown can be retried. Chat history stays in the ledger; the preset can be installed again later."
+        "uninstall": "This queues a teardown job that deletes the Harness and execution role behind “{{name}}”. The preset keeps its identity until the teardown completes; a failed teardown can be retried. Chat history stays in the ledger; the preset can be installed again later.",
+        "registerSkillTitle": "Register the preset's Skill?",
+        "registerSkill": "This registers the installed release of “{{name}}”'s Skill as an AGENT_SKILLS record in this workspace's Registry, pointing at the immutable system-skills/ release already published in S3. At most one Registry write; nothing is uploaded, the Harness is not re-published and approval stays a separate administrator action."
       },
       "loading": "LOADING…",
       "reload": "RELOAD",
@@ -539,6 +541,19 @@
         "kbLoading": "loading the knowledge base catalog…",
         "kbLoadFailed": "The knowledge base catalog could not be loaded: {{reason}}. Mounted knowledge bases are kept as stored.",
         "savingNoDismiss": "Saving — the dialog closes once the outcome is known."
+      },
+      "skill": {
+        "label": "Skill record",
+        "registeredAs": "{{id}} · v{{v}}",
+        "notRegistered": "not registered in the Registry yet",
+        "open": "OPEN IN REGISTRY",
+        "register": "REGISTER SKILL",
+        "verify": "VERIFY SKILL RECORD",
+        "hint": "Registers the installed release's Skill as its own Registry record (one Registry write at most; no S3 write, no Harness re-publish). A new record is submitted for review — approve it in the Registry.",
+        "adminOnly": "Registering the preset's Skill requires an administrator account.",
+        "registered": "Skill record {{id}} created and submitted for review — approve it in the Registry to make it mountable.",
+        "updated": "Skill record {{id}} now describes release v{{v}} — it is DRAFT again and needs review in the Registry.",
+        "verified": "Skill record {{id}} already describes the installed release — nothing was changed."
       }
     },
     "versions": {
@@ -668,7 +683,17 @@
       "liveCardFailed": "Live card unavailable: {{msg}}",
       "liveCardNotLaunchpad": "Only A2A records of a Launchpad-deployed agent serve a live card",
       "liveCardNotA2A": "The agent behind this record is not an A2A server — it serves no agent card",
-      "liveCardNotReady": "The agent is {{status}} — the live card needs an active runtime"
+      "liveCardNotReady": "The agent is {{status}} — the live card needs an active runtime",
+      "system": {
+        "chip": "SYSTEM",
+        "title": "SYSTEM-MANAGED SKILL",
+        "preset": "PRESET",
+        "version": "RELEASE",
+        "path": "S3 RELEASE PATH",
+        "noteAdmin": "Platform-owned: the content is published by the preset pipeline (System presets panel → REPAIR/UPDATE) and re-registered from there; edit, re-import and delete are not available. You may submit, approve, reject or disable it here.",
+        "noteMember": "Platform-owned: members can view this Skill and mount it in a new agent once it is APPROVED; its content and approval are maintained by administrators.",
+        "memberReadOnly": "read-only for members · approval is an administrator action"
+      }
     },
     "confirmDisable": {
       "title": "Disable record",
@@ -774,7 +799,9 @@
       "loadFailed": "Failed to load record: {{msg}}",
       "notFound": "Record not found.",
       "disabledNoChanges": "No changes to save",
-      "disabledInvalidBundle": "The uploaded bundle failed validation — upload a valid ZIP first"
+      "disabledInvalidBundle": "The uploaded bundle failed validation — upload a valid ZIP first",
+      "systemReadOnlyTitle": "SYSTEM-MANAGED SKILL · READ-ONLY",
+      "systemReadOnly": "This is the {{label}} preset's Skill. Its content is published by the preset pipeline, so there is nothing to edit here; every save, re-import or delete is refused by the server. Maintain it from the System presets panel."
     },
     "deleted": "“{{name}}” deleted.",
     "confirmDelete": {
@@ -2087,7 +2114,16 @@
     "observability.trace_not_found": "Trace not found.",
     "system_agent.deploy_in_progress": "This preset is being deployed; retry the settings change once the current job has finished.",
     "system_agent.invalid_options": "The requested preset settings are not valid.",
-    "system_agent.conflict": "The preset kept changing while this request was being resolved; retry."
+    "system_agent.conflict": "The preset kept changing while this request was being resolved; retry.",
+    "registry.system_skill_protected": "This is a system-managed Skill: its content is published by the preset pipeline and its approval is an administrator action.",
+    "registry.name_reserved": "This name belongs to a system-managed Skill — register it through the System presets panel, not as an ordinary Skill.",
+    "system_skill.preset_not_active": "The preset is not active yet; its Skill is registered once the deploy finishes.",
+    "system_skill.release_mismatch": "This build's bundle is not the installed release — run REPAIR/UPDATE on the preset first, then register the Skill.",
+    "system_skill.bundle_unverified": "The published S3 release does not match the installed snapshot — repair the preset first; nothing was written.",
+    "system_skill.foreign_record": "A Skill record with the reserved name already exists and is not the platform's — rename or delete it in the Registry first.",
+    "system_skill.stale_release": "The registered Skill record already describes a newer release; a stale registration cannot downgrade it.",
+    "system_skill.record_deprecated": "The Skill record is DEPRECATED (terminal) — delete it in the AWS console and register again.",
+    "system_skill.readback_mismatch": "The Registry record read back does not match what was written; the registration is not reported as done."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",
