@@ -1,6 +1,7 @@
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
 
-interface PanelProps {
+/** `data-*` / aria attributes fall through to the panel root (probes, test ids). */
+interface PanelProps extends Omit<HTMLAttributes<HTMLDivElement>, "title" | "className" | "style"> {
   title?: ReactNode;
   sub?: ReactNode;
   end?: ReactNode;
@@ -20,9 +21,14 @@ export function Panel({
   className = "",
   style,
   children,
+  ...rest
 }: PanelProps) {
   return (
-    <div className={["panel", brk ? "brk" : "", className].filter(Boolean).join(" ")} style={style}>
+    <div
+      {...rest}
+      className={["panel", brk ? "brk" : "", className].filter(Boolean).join(" ")}
+      style={style}
+    >
       {(title || sub || end) && (
         <div className="phead">
           {title != null && <h2>{title}</h2>}

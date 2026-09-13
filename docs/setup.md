@@ -155,16 +155,21 @@ and `execution_role_arn` present, per-agent execution roles enabled). A first in
 uses the preset's defaults — for the architect: `us.openai.gpt-5.6-sol` on native
 Bedrock (the US cross-region inference profile; the region must serve it),
 `max_tokens: 65536` per model call and `reasoning_effort: high`. Afterwards an
-administrator changes the stored settings with the panel's **CONFIGURE** dialog (or
-the same install API body): model source/id, max output tokens per model call (the
+administrator changes the stored settings with the panel's **CONFIGURE** button —
+which opens the same configure page an existing agent's EDIT uses (the table's EDIT
+on the preset's row does the same for an administrator) — or the same install API
+body: model source/id, max output tokens per model call (the
 Harness `bedrockModelConfig.maxTokens` — one response's ceiling, not a session or
 spend cap), reasoning effort (OpenAI GPT-5.x on native Bedrock only), system prompt,
 max iterations, timeout and existing knowledge bases to mount (verified in the
-workspace during provision; none is created for you). Saving posts only the changed
-fields and runs the normal update job; members see the same values read-only.
-Repairs and bundle updates keep the stored settings — a preset installed by an
+workspace during provision; none is created for you). SAVE & RE-PUBLISH posts only the changed
+fields to the maintenance route (never the ordinary redeploy) and runs the normal
+update job; members see the same page read-only (VIEW SETTINGS). Re-publishes and
+bundle updates keep the stored settings — a preset installed by an
 earlier build keeps its model and prompt until you save a change or USE PRESET
-DEFAULTS. REPAIR/UPDATE re-publishes in place; UNINSTALL queues a teardown
+DEFAULTS. With nothing changed the same page offers RE-PUBLISH, which re-publishes
+in place with the stored settings — use it to retry a failed deploy or after an
+out-of-band change (there is no separate repair button); UNINSTALL queues a teardown
 job — the preset shows UNINSTALLING and keeps its identity until the Harness and
 role are gone, a failed teardown shows its reason with RETRY UNINSTALL, and install
 or repair are refused meanwhile. The preset runs with persistent memory disabled
@@ -175,17 +180,17 @@ disabled, and the backend refuses those calls regardless of permissions; a knowl
 base mounted on the preset cannot be force-deleted until an administrator detaches
 it through the preset. If an ordinary agent already holds the reserved name, the
 install is refused — delete or rename that agent first; the preset never adopts it.
-The preset's versioned Skill can also be listed in the Registry as its own record:
-once the preset is active, an administrator clicks **REGISTER SKILL** in the panel (or
-`POST /api/system-agents/<key>/skill-registration`). That points a new `AGENT_SKILLS`
-record at the release already published under `system-skills/` (nothing is uploaded
-and the Harness is not re-published), submits it for review, and it becomes mountable
-by other agents only after you **approve it in the Registry**. Repeating the action is
-a no-op (VERIFY SKILL RECORD); after a bundle update it rolls the record forward, which
-needs approval again. The record shows a SYSTEM chip: nobody edits, re-imports or
+The preset's versioned Skill is also listed in the Registry as its own record:
+every install or re-publish made with this build registers it in the deploy's
+register stage (an explicit `POST /api/system-agents/<key>/skill-registration` does
+the same from the API). That points an `AGENT_SKILLS` record at the release already
+published under `system-skills/` (nothing is uploaded and the Harness is not
+re-published), submits it for review, and it becomes mountable by other agents only
+after you **approve it in the Registry** — the Registry is where you manage the
+record; the System presets card shows no Skill-record controls. After a bundle update
+the record rolls forward, which needs approval again. The record shows a SYSTEM chip: nobody edits, re-imports or
 deletes it from the console, members can view and mount it, administrators operate its
-approval; uninstalling the preset keeps the record. Installs and repairs made with this
-build register the Skill automatically in the deploy's register stage.
+approval; uninstalling the preset keeps the record.
 **Live smoke is still pending** (see architecture.md → *System-managed presets*).
 
 ### Architect assistant / 架构助手

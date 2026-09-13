@@ -369,3 +369,58 @@ def test_toolkits_rejected_where_the_template_never_renders(client, overrides):
     )
     assert res.status_code == 422
     assert res.json()["code"] == "validation.invalid_request"
+
+
+# ── inference / loop knobs on the ordinary path (shared configure page) ──────────
+# The wizard's configure page now carries max_tokens / reasoning_effort (harness)
+# and max_iterations / timeout_seconds for ordinary agents too. These pin what the
+# ordinary create/redeploy routes do with them, so the shared form can round-trip
+# a stored value without special-casing.
+
+SOL = "us.openai.gpt-5.6-sol"
+
+
+def test_ordinary_harness_knobs_round_trip_on_create_and_redeploy(client, no_real_deploy):
+    spec = {**SPEC, "model_id": SOL, "model_source": "bedrock", "max_tokens": 65536,
+            "reasoning_effort": "high", "max_iterations": 30, "timeout_seconds": 900}
+    created = client.post("/api/agents", json=spec)
+    assert created.status_code == 202, created.text
+    agent_id = created.json()["agent"]["id"]
+    stored = client.get(f"/api/agents/{agent_id}").json()["spec"]
+    assert (stored["max_tokens"], stored["reasoning_effort"]) == (65536, "high")
+    assert (stored["max_iterations"], stored["timeout_seconds"]) == (30, 900)
+    _activate(agent_id)
+
+    # a redeploy that changes an unrelated field and sends the knobs back as stored
+    # keeps them; one that omits them falls back to the schema defaults (the reason
+    # the configure page must send what it loaded)
+    kept = client.post(f"/api/agents/{agent_id}/redeploy",
+                       json={**spec, "system_prompt": "Answer in French."})
+    assert kept.status_code == 202, kept.text
+    stored = client.get(f"/api/agents/{agent_id}").json()["spec"]
+    assert (stored["max_tokens"], stored["reasoning_effort"]) == (65536, "high")
+    assert (stored["max_iterations"], stored["timeout_seconds"]) == (30, 900)
+    assert stored["system_prompt"] == "Answer in French."
+
+
+def test_ordinary_create_without_knobs_reads_back_schema_defaults(client):
+    created = client.post("/api/agents", json=SPEC)
+    assert created.status_code == 202, created.text
+    stored = client.get(f"/api/agents/{created.json()['agent']['id']}").json()["spec"]
+    assert stored["max_tokens"] is None and stored["reasoning_effort"] is None
+    assert (stored["max_iterations"], stored["timeout_seconds"]) == (10, 300)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"method": "zip_runtime", "max_tokens": 4096},  # harness-only knob
+        {"reasoning_effort": "high"},  # Claude on Converse: the effort has no wire shape
+        {"model_id": "openai.gpt-5.6-sol", "model_source": "mantle", "reasoning_effort": "high"},
+        {"max_iterations": 0},
+        {"timeout_seconds": 5},
+    ],
+)
+def test_ordinary_knob_pairings_the_schema_refuses_are_422(client, overrides):
+    res = client.post("/api/agents", json={**SPEC, **overrides})
+    assert res.status_code == 422, res.text

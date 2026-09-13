@@ -547,7 +547,19 @@ export interface AgentSpecInput {
   model_source?: ModelSource;
   /** container method only. Omitted ⇒ backend defaults to "claude_agent_sdk". */
   agent_sdk?: AgentSdk;
+  /**
+   * Harness-only inference knobs (`AgentSpec.max_tokens` / `reasoning_effort`): the
+   * per-model-call output ceiling and the OpenAI reasoning effort (native Bedrock
+   * OpenAI models only — the backend refuses every other pairing). Omitted ⇒ nothing
+   * is sent to the model, exactly as before the knobs existed.
+   */
+  max_tokens?: number;
+  reasoning_effort?: ReasoningEffort;
   system_prompt: string;
+  /** agent-loop bounds per invocation (harness `maxIterations` / `timeoutSeconds`);
+   * omitted ⇒ the backend defaults (10 / 300) */
+  max_iterations?: number;
+  timeout_seconds?: number;
   tool_description_overrides?: Record<string, string>;
   tools?: { type: string; name: string; config?: Record<string, unknown> }[];
   /**
@@ -3208,9 +3220,14 @@ export const api = {
     ),
   getOverview: () => request<OverviewInfo>("/api/overview"),
   overviewOnlineQuality: () => request<OnlineQuality>("/api/overview/online-quality"),
-  getAgent: (id: string) => request<AgentInfo>(`/api/agents/${id}`),
+  /** `workspaceId` pins the read like the system-preset calls (the shared editor's
+   * deploy poll for a preset must follow the workspace it saved into, not another
+   * tab's later selection); omitted ⇒ the global stamp. */
+  getAgent: (id: string, workspaceId?: string | null) =>
+    request<AgentInfo>(`/api/agents/${id}`, { headers: pinnedWorkspace(workspaceId) }),
   agentVersions: (id: string) => request<AgentVersionsInfo>(`/api/agents/${id}/versions`),
-  getJob: (id: string) => request<JobInfo>(`/api/jobs/${id}`),
+  getJob: (id: string, workspaceId?: string | null) =>
+    request<JobInfo>(`/api/jobs/${id}`, { headers: pinnedWorkspace(workspaceId) }),
   listRuntimeCanaries: () =>
     request<{ canaries: RuntimeCanaryInfo[] }>("/api/runtime-canaries"),
   getRuntimeCanary: (id: string) =>

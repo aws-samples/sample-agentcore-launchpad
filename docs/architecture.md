@@ -457,18 +457,34 @@ an explicit change (or `reset`) — `options_from_spec` recovers every editable 
 exactly as stored, including a system prompt that differs from this build's constant,
 so a prompt change in the catalogue reaches an installed preset only through an
 explicit `reset: ["system_prompt"]` (the console offers USE THIS BUILD'S PROMPT).
-The console's **CONFIGURE** dialog (System presets panel; members get VIEW SETTINGS
-with the same fields read-only, and `POST …/install` stays `403` for them whatever
-`perm:agents.*` they hold) prefills the stored values, shows which differ from the
-defaults, validates bounds client-side, sends only the changed members after an
-explicit confirm, and consumes the `202`/`200`/`409`/`422` outcome like the install
-button does; cancel posts nothing; the dialog cannot be dismissed while a save is in
-flight (the panel owns the request and its completion, so an accepted `202` always
-lands as DEPLOYING + job); and every read and save of this surface — panel polls,
-install/repair/uninstall, the editor's KB catalog and save — pins the workspace the
-panel is displaying as an explicit `X-Workspace` header, so another tab switching the
-shared selection can never redirect them to a different workspace (a same-tab switch
-still closes the dialog). Persistent memory stays disabled:
+The console's **CONFIGURE** (System presets panel; also EDIT on the preset's row in
+the Existing agents table for an administrator) opens the **same configure page an
+existing agent's EDIT uses** — there is no preset-specific settings dialog and no
+standalone REPAIR/UPDATE card button. The page is prefilled from the preset's *stored*
+settings (never the wizard defaults), shows which members differ from this build's
+defaults, validates bounds client-side, and on SAVE & RE-PUBLISH (explicit confirm)
+posts **only the changed members** to `POST /api/system-agents/{key}/install` — never
+to `POST …/redeploy`, which stays `403` for a preset. Emptying the output ceiling or
+moving to a model that takes no reasoning effort sends `clear`; USE PRESET DEFAULTS
+and USE THIS BUILD'S PROMPT remain on the page. With nothing changed the button reads
+RE-PUBLISH and sends `{force: true}`: that is how an administrator retries a failed
+deploy or repairs an out-of-band change, so a failed preset opens the editor like an
+active one (`can_configure`). The protected members — name, method, tools, the
+versioned skill, allowed tools, disabled memory — are rendered read-only and no skill
+upload/import or tool attachment is offered; the `memory`/`tools` the ordinary
+`buildSpec` would compose are never sent for a preset. Members (and an administrator
+while the preset is deploying/uninstalling or the workspace lost a prerequisite) get
+VIEW SETTINGS: the same page read-only with the reason and no save button; the table's
+EDIT stays disabled for them, and `POST …/install` is `403` for a member whatever
+`perm:agents.*` they hold. BACK posts nothing. Every read and save of this path —
+panel polls, install/uninstall, the editor's KB catalog, the save and the deploy poll
+that follows it — pins the workspace the row was read from as an explicit
+`X-Workspace` header, so another tab switching the shared selection can never redirect
+them (a same-tab switch remounts the page and drops the draft). A submit is
+single-flight (BACK and the button lock while it is in flight) and its `202` lands as
+the ordinary launch view (DEPLOYING → stages → job) polling the pinned workspace;
+`409`/`422` render inline with the server's detail rows and keep the draft. Persistent
+memory stays disabled:
 that disables AgentCore *memory* only — the Launchpad chat transcript in the ledger
 and the CloudWatch logs are kept, and the system prompt now tells the agent so
 (never "nothing is retained").
@@ -667,9 +683,11 @@ skill_version, release_digest, path, protected_actions, admin_actions} | null`) 
 console renders the SYSTEM chip from, hides edit/re-import/delete on, and shows the
 lifecycle buttons for administrators only; `?view=edit` on such a record is a
 read-only summary; USE IN NEW AGENT keeps its APPROVED gating; `GET /api/system-agents`
-reports `skill_registration` (ledger mapping) and `can_register_skill`, and the System
-presets panel offers REGISTER SKILL / VERIFY SKILL RECORD (explicit confirmation, pinned
-workspace) with a link to the record.
+reports `skill_registration` (ledger mapping) and `can_register_skill` for API
+callers. The console manages the record **in the Registry**: the System presets card
+carries no Skill-record row, Registry link or REGISTER/VERIFY SKILL button; the record
+is created/rolled forward by the deploy's register stage on every install or
+re-publish, and `POST …/skill-registration` remains for an explicit API registration.
 
 **Constrained tool surface.** The harness exposes `shell` and `file_operations` to
 every session unless `allowedTools` restricts them, so `AgentSpec.allowed_tools`
@@ -726,10 +744,10 @@ says so: with no retrieval tool the agent works from its methodology index and s
 that the original guide was not consulted.
 
 **Administrator choices** are the model (`model_id` + `model_source`, defaulting to
-the platform's `DEFAULT_MODEL_ID`) and the optional knowledge bases. They are
-**API-only** — the console panel installs with `{}` (defaults, or the stored
-choices on repair) and says so; there is no model/KB field in the panel. The
-knowledge-base references are shape-validated at request time and **verified in
+the platform's `DEFAULT_MODEL_ID`) and the optional knowledge bases (plus the SE-040
+inference/loop settings above). The panel's INSTALL sends `{}` (the preset defaults);
+afterwards an administrator changes them on the shared configure page (CONFIGURE) or
+through the install API body. The knowledge-base references are shape-validated at request time and **verified in
 the provision stage** (`GetKnowledgeBase` in the target workspace: exists, MANAGED,
 ACTIVE) before any gateway target is created, failing the stage with an actionable
 reason otherwise. Ordinary use never overwrites version or configuration.

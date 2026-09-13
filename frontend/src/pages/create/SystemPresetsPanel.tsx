@@ -5,15 +5,11 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../../auth/auth-context";
 import { Btn, Chip, ConfirmDialog, Panel, useToast } from "../../components";
 import type { ChipTone } from "../../components";
-import type {
-  SystemPresetInfo,
-  SystemPresetInstallInput,
-  SystemPresetSettings,
-  SystemPresetStatus,
-} from "../../lib/api";
+import type { SystemPresetInfo, SystemPresetSettings, SystemPresetStatus } from "../../lib/api";
 import { api, ApiError } from "../../lib/api";
 import { useWorkspace } from "../../workspace/workspace-context";
-import { PresetSettingsDialog } from "./PresetSettingsDialog";
+import { presetConfigureRequest } from "./presetSettings";
+import type { PresetConfigureRequest } from "./presetSettings";
 
 const STATUS_TONE: Record<SystemPresetStatus, ChipTone> = {
   configuration_required: "muted",
@@ -28,14 +24,16 @@ const TERMINAL: SystemPresetStatus[] = ["active", "failed", "not_installed"];
 const IN_FLIGHT: SystemPresetStatus[] = ["deploying", "uninstalling"];
 const POLL_MS = 4000;
 
-type Operation = "install" | "repair" | "uninstall" | "registerSkill";
-
+type Operation = "install" | "uninstall";
 /**
  * System-managed presets: platform-owned agents an administrator installs on
  * purpose. Reads are ledger-only (`GET /api/system-agents` builds no AWS client),
- * so this panel may poll while a preset deploys; install/repair/uninstall are the
- * only paths that reach AWS and the server refuses them for non-administrators
- * regardless of what this component renders.
+ * so this panel may poll while a preset deploys; install/uninstall are the only
+ * paths this panel drives that reach AWS, and the server refuses them for
+ * non-administrators regardless of what this component renders. Changing or
+ * re-publishing an installed preset (including the retry of a failed deploy) is
+ * the parent's shared agent editor — CONFIGURE hands the row over through
+ * `onConfigure`; the preset's Skill record is managed in the Registry.
  *
  * Every asynchronous outcome is checked against the workspace it was started in
  * and against the mounted state, so an operation finishing after a workspace
@@ -44,12 +42,15 @@ type Operation = "install" | "repair" | "uninstall" | "registerSkill";
 export function SystemPresetsPanel({
   onChanged,
   onDetails,
+  onConfigure,
 }: {
-  /** fired after an install/repair/uninstall changed ledger state AND when a
-   * deploying preset reaches a terminal status, so the parent list converges */
+  /** fired after an install/uninstall changed ledger state AND when a deploying
+   * preset reaches a terminal status, so the parent list converges */
   onChanged?: () => void;
   /** open the deployment detail for the preset's agent */
   onDetails?: (agentId: string) => void;
+  /** open the shared agent editor on the preset's stored settings (edit / review) */
+  onConfigure?: (req: PresetConfigureRequest) => void;
 }) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -63,16 +64,12 @@ export function SystemPresetsPanel({
   const [confirm, setConfirm] = useState<{ kind: Operation; preset: SystemPresetInfo } | null>(
     null,
   );
-  // the preset whose stored settings are open in the editor (admin) / viewer (member)
-  const [settingsFor, setSettingsFor] = useState<string | null>(null);
   // stale-outcome guard: unmounted or a different workspace ⇒ ignore the result
   const alive = useRef(true);
   const scope = useRef(workspaceId);
   useEffect(() => {
     alive.current = true;
     scope.current = workspaceId;
-    // a settings editor opened in another workspace must never save into this one
-    setSettingsFor(null);
     return () => {
       alive.current = false;
     };
@@ -155,26 +152,7 @@ export function SystemPresetsPanel({
     const startedIn = scope.current;
     setBusy(preset.key);
     try {
-      if (kind === "registerSkill") {
-        // SE-043: at most one Registry write, no S3 write, no Harness re-publish;
-        // the response says exactly which of created / rolled forward / no-op happened
-        const res = await api.registerSystemPresetSkill(preset.key, startedIn);
-        if (!stillCurrent(startedIn)) return;
-        setPresets((prev) =>
-          (prev ?? []).map((row) => (row.key === preset.key ? res.preset : row)),
-        );
-        toast(
-          t(
-            res.created
-              ? "create.system.skill.registered"
-              : res.changed
-                ? "create.system.skill.updated"
-                : "create.system.skill.verified",
-            { id: res.record.record_id, v: res.skill.version ?? "" },
-          ),
-          "good",
-        );
-      } else if (kind === "uninstall") {
+      if (kind === "uninstall") {
         const res = await api.uninstallSystemPreset(preset.key, startedIn);
         if (!stillCurrent(startedIn)) return;
         // consume the outcome: the row is now `uninstalling` with a job, whatever the
@@ -194,11 +172,9 @@ export function SystemPresetsPanel({
           "good",
         );
       } else {
-        const res = await api.installSystemPreset(
-          preset.key,
-          kind === "repair" ? { force: true } : {},
-          startedIn,
-        );
+        // a first install with the preset defaults; every later change or
+        // re-publish goes through the shared editor (onConfigure)
+        const res = await api.installSystemPreset(preset.key, {}, startedIn);
         if (!stillCurrent(startedIn)) return;
         // the response already carries the preset's new state — render it now so
         // a failed follow-up GET cannot leave a stale not-installed row behind
@@ -227,40 +203,16 @@ export function SystemPresetsPanel({
     }
   };
 
-  // The editor's save: this panel owns the request (pinned to the workspace the
-  // dialog was opened for) AND its completion, so a 202 is consumed here — rows
-  // swapped, job announced, poll started — whatever happens to the dialog. A result
-  // arriving after a workspace switch is dropped like every other stale outcome;
-  // the pinned header means it can only ever have changed the workspace it was
-  // started in, whose panel shows the job on the next read.
-  const saveSettings = async (preset: SystemPresetInfo, body: SystemPresetInstallInput) => {
-    const startedIn = scope.current;
-    try {
-      const res = await api.installSystemPreset(preset.key, body, startedIn);
-      if (!stillCurrent(startedIn)) return;
-      setSettingsFor(null);
-      setPresets((prev) =>
-        (prev ?? []).map((row) => (row.key === preset.key ? res.preset : row)),
-      );
-      toast(
-        t(res.changed ? "create.system.settings.saved" : "create.system.alreadyCurrent", {
-          name: preset.label,
-        }),
-        "good",
-      );
-      onChangedRef.current?.();
-      load();
-    } catch (err) {
-      if (!stillCurrent(startedIn)) return; // the dialog is gone with its workspace
-      throw err; // the dialog renders it inline and stays open
-    }
-  };
-
   const adminHint = isAdmin ? undefined : t("create.system.adminOnly");
   const requirementText = (preset: SystemPresetInfo) =>
     preset.requirements
       .map((req) => t(`create.system.requirementCodes.${req.code}`, req.message))
       .join("; ");
+  // CONFIGURE / VIEW SETTINGS: the shared editor decides nothing about permissions —
+  // the verdict travels with the row (administrator + settled + prerequisites), and
+  // the server refuses a member's POST regardless.
+  const configure = (preset: SystemPresetInfo) =>
+    onConfigure?.(presetConfigureRequest(preset, scope.current, isAdmin, t));
 
   return (
     <Panel
@@ -350,34 +302,6 @@ export function SystemPresetsPanel({
               </div>
             )}
             <div className="dim" style={{ fontSize: 11 }}>{t("create.system.adminOptionsApiOnly")}</div>
-            {installed && (
-              <div
-                className="mono dim"
-                style={{ fontSize: 11, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
-                data-testid="preset-skill-registration"
-                data-record-id={preset.skill_registration?.record_id ?? ""}
-              >
-                <span>
-                  {t("create.system.skill.label")}:{" "}
-                  {preset.skill_registration?.record_id
-                    ? t("create.system.skill.registeredAs", {
-                        id: preset.skill_registration.record_id,
-                        v: preset.skill_registration.release_version ?? "?",
-                      })
-                    : t("create.system.skill.notRegistered")}
-                </span>
-                {preset.skill_registration?.record_id && (
-                  <Link
-                    className="assist-link"
-                    style={{ marginTop: 0 }}
-                    to={`/registry?record=${encodeURIComponent(preset.skill_registration.record_id)}`}
-                    data-testid={`skill-record-link-${preset.key}`}
-                  >
-                    {t("create.system.skill.open")}
-                  </Link>
-                )}
-              </div>
-            )}
             {preset.error && preset.status === "failed" && (
               <div className="note" style={{ borderColor: "var(--crit)" }} data-testid="preset-error">
                 <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
@@ -451,38 +375,16 @@ export function SystemPresetsPanel({
                   {t("create.system.install")}
                 </Btn>
               )}
-              {installed && preset.status !== "deploying" && preset.status !== "uninstalling" && (
-                <Btn
-                  data-testid={`repair-${preset.key}`}
-                  disabled={!preset.can_repair || isBusy}
-                  disabledReason={isAdmin ? (blockers ?? undefined) : undefined}
-                  title={adminHint}
-                  onClick={() => setConfirm({ kind: "repair", preset })}
-                >
-                  {t(preset.update_available ? "create.system.update" : "create.system.repair")}
-                </Btn>
-              )}
-              {installed && preset.status === "active" && (
-                <Btn
-                  data-testid={`register-skill-${preset.key}`}
-                  disabled={!preset.can_register_skill || isBusy}
-                  disabledReason={isAdmin ? (blockers ?? undefined) : undefined}
-                  title={isAdmin ? t("create.system.skill.hint") : t("create.system.skill.adminOnly")}
-                  onClick={() => setConfirm({ kind: "registerSkill", preset })}
-                >
-                  {t(
-                    preset.skill_registration?.record_id
-                      ? "create.system.skill.verify"
-                      : "create.system.skill.register",
-                  )}
-                </Btn>
-              )}
-              {installed && "model_id" in preset.settings && (
+              {installed && "model_id" in preset.settings && onConfigure && (
                 <Btn
                   data-testid={`settings-${preset.key}`}
                   disabled={isBusy}
-                  title={isAdmin ? undefined : t("create.system.settings.readOnly")}
-                  onClick={() => setSettingsFor(preset.key)}
+                  title={
+                    isAdmin
+                      ? t("create.system.settings.configureHint")
+                      : t("create.system.settings.readOnly")
+                  }
+                  onClick={() => configure(preset)}
                 >
                   {t(
                     preset.can_configure
@@ -527,43 +429,11 @@ export function SystemPresetsPanel({
           </div>
         );
       })}
-      {(() => {
-        const open = (presets ?? []).find((row) => row.key === settingsFor);
-        if (!open || !("model_id" in open.settings)) return null;
-        const editable = isAdmin && open.can_configure;
-        const reason = !isAdmin
-          ? t("create.system.settings.readOnly")
-          : open.requirements.length > 0
-            ? t("create.system.requirementsInstalled", { list: requirementText(open) })
-            : open.status === "deploying" || open.status === "uninstalling"
-              ? t("create.system.settings.busy", { status: t(`create.system.status.${open.status}`) })
-              : undefined;
-        return (
-          <PresetSettingsDialog
-            key={`${workspaceId ?? ""}:${open.key}:${open.updated_at ?? ""}`}
-            preset={open}
-            workspaceId={workspaceId}
-            editable={editable}
-            readOnlyReason={reason}
-            onClose={() => setSettingsFor(null)}
-            onSave={(body) => saveSettings(open, body)}
-            apiMessage={apiMessage}
-          />
-        );
-      })()}
       <ConfirmDialog
         open={confirm != null}
         title={confirm ? t(`create.system.confirm.${confirm.kind}Title`) : ""}
         body={confirm ? t(`create.system.confirm.${confirm.kind}`, { name: confirm.preset.label }) : ""}
-        confirmLabel={
-          confirm
-            ? t(
-                confirm.kind === "registerSkill"
-                  ? "create.system.skill.register"
-                  : `create.system.${confirm.kind}`,
-              )
-            : ""
-        }
+        confirmLabel={confirm ? t(`create.system.${confirm.kind}`) : ""}
         onConfirm={() => {
           if (confirm) void run(confirm.kind, confirm.preset);
           setConfirm(null);
