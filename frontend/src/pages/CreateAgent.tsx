@@ -138,6 +138,8 @@ interface SystemEditContext {
   readOnlyReason?: string;
   status: SystemPresetStatus;
   allowedTools: string[];
+  /** the protected Skill's name = the server-owned preset name (display only) */
+  skillName: string;
   skillVersion: string | null;
 }
 
@@ -1492,6 +1494,7 @@ const deployLock = !canDeploy
         readOnlyReason,
         status: preset.status,
         allowedTools: preset.allowed_tools,
+        skillName: preset.name,
         skillVersion: preset.installed_skill_version ?? preset.skill_version,
       },
     });
@@ -2226,8 +2229,15 @@ const deployLock = !canDeploy
                       {pattern} · {t("create.system.tools")}
                     </span>
                   ))}
-                  <span className="selchip on" style={{ cursor: "default" }}>
-                    {t("create.system.settings.skillVersion", { v: systemEdit.skillVersion ?? "?" })}
+                  <span
+                    className="selchip on"
+                    style={{ cursor: "default" }}
+                    data-testid="preset-protected-skill"
+                  >
+                    {t("create.system.settings.skillVersion", {
+                      name: systemEdit.skillName,
+                      v: systemEdit.skillVersion ?? "?",
+                    })}
                   </span>
                   <span className="selchip on" style={{ cursor: "default" }}>
                     {t("create.system.settings.memoryOff")}
