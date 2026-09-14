@@ -1208,22 +1208,40 @@ outcome stays `partial` with each resource's error.
 
 **Cleanup** (`DELETE …/operations/{id}/assets`, admin + owner) runs under the same
 lock, lease, re-authorization and pinned-identity checks, one persisted checkpoint per
-effect and a fresh fence before every single mutation, dependency first. A persisted
-create intent whose response was lost is reconciled: a role / log group / function is
-ours only through its nonce (role description + tag, log-group tag, CodeSha256); an
-evaluator whose name exists but whose creation cannot be proven becomes an explicit
-`unknown` (identifiers kept for operator recovery) and keeps its dependencies. Owned
-evaluators are deleted only when id, name, level and configuration still equal the
-recorded request (a changed one stays a reviewable `conflict`; one locked by an online
-configuration stays `delete_failed`), and `DeleteEvaluator` counts only once a NotFound
-readback confirms it is gone (`delete_pending` otherwise). The additive grant, the
-function (with its resource policy), the log group and the dedicated role are removed
-**only once every evaluator is confirmed gone** and only after their service-issued
-identity still matches what was recorded (RoleId; the version's CodeSha256, role,
-limits, runtime, handler and ARN; the log group's creationTime plus nonce) — otherwise
-they are `retained` / `conflict` and reported; a function that could not be deleted keeps
-its log group and role. Persisted `conflict` / `unknown` states of the code chain gate
-every later retry (dependents stay `blocked` until the operator resolves them). The local Dataset stays (a member asset removable in
+effect and a fresh fence before every single mutation, dependency first. **A create whose
+response was lost before the service-issued identity was recorded is never adopted or
+deleted afterwards**: a nonce in a role description / tag, a log-group tag or a
+nonce-bearing package digest is copyable content, not ownership, so while a resource with
+our name exists the resource is an explicit `unknown` (worker and cleanup alike; the
+operator reviews it, then retries — a retry re-evaluates without adopting), its
+dependents stay `blocked` / `retained` and the operation is never `cleaned`. A collision
+established at creation (ConflictException, no lost response) is a foreign resource
+(`conflict`, not owned) and does not block `cleaned`. A lost `CreateEvaluator` stays
+`unknown` even when `ListEvaluators` does not show the name (visibility cannot prove the
+create never happened; name, clientToken and any listed candidate id are recorded); a
+worker retry replays the service's idempotency token to recover or create it under our
+ownership — cleanup never creates. A definite 4xx rejection is recorded as such and counts
+as nothing created. Owned evaluators are deleted only when id, name, level, configuration
+and ARN still equal the recorded identity (a changed one stays a reviewable `conflict`; one
+locked by an online configuration stays `delete_failed`), and `DeleteEvaluator` counts only
+once a NotFound readback confirms it is gone (`delete_pending` otherwise). The additive
+grant, the function (with its resource policy), the log group and the dedicated role are
+removed **only once every evaluator is confirmed gone** and only after the identity snapshot
+recorded when their create/readback succeeded still matches exactly: RoleId, ARN, trust
+policy and inline policy of the role; creationTime, ARN and retention of the log group;
+for the function the recorded published version **and** the unqualified `$LATEST`
+(FunctionArn, CodeSha256, role, runtime, handler, limits and RevisionId, captured after
+the platform's last write), the version set and the alias set. A missing published version
+is **not** a missing function; a whole-function delete is confirmed by a bounded unqualified
+`GetFunction` NotFound before the log group and role are touched (`delete_pending` and
+dependencies retained otherwise; a pending delete is re-verified and re-driven on the next
+cleanup); an incomplete snapshot is a review-required `conflict`. Otherwise resources are
+`retained` / `conflict` and reported; a function that could not be deleted keeps its log
+group and role; a lost delete response is a recorded `delete_failed` that the next cleanup
+resolves once the resource is confirmed gone. The delete APIs carry no precondition token
+(installed models), so the check→delete window is one call wide against an external
+administrator. Persisted `conflict` states of the code chain gate every later retry
+(dependents stay `blocked` until the operator resolves them). The local Dataset stays (a member asset removable in
 Evaluation → Datasets) and every foreign resource is left alone; `cleaned` is recorded
 only when nothing owned remains. The ordinary `DELETE /api/eval/evaluators/{id}`
 refuses (`409 evaluator.managed_by_operation`) an evaluator an operation owns.

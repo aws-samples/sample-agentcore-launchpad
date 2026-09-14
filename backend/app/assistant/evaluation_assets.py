@@ -704,6 +704,13 @@ class _Conflict(RuntimeError):
     """A resource this operation cannot prove it owns — recorded, never adopted."""
 
 
+class _Unknown(RuntimeError):
+    """A create call whose response was lost before the service-issued identity was
+    recorded, while a resource with our name now exists. Ownership is UNPROVABLE:
+    a nonce / tag / digest is copyable content, not identity. Recorded as ``unknown``
+    (never adopted, never deleted); re-evaluated on retry, dependents retained."""
+
+
 class _Fence:
     """Lease token + approver + pinned-workspace check before every cloud write."""
 
@@ -752,6 +759,36 @@ class _Fence:
         if rows != 1:
             raise _LeaseLost("lease lost while saving")
         db.expire_all()
+
+
+FUNCTION_IDENTITY_FIELDS = ("FunctionArn", "Version", "CodeSha256", "Role", "Runtime",
+                            "Handler", "Timeout", "MemorySize", "RevisionId")
+
+
+def _function_versions(lam: Any, name: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    marker = None
+    for _ in range(50):
+        kwargs = {"Marker": marker} if marker else {}
+        page = lam.list_versions_by_function(FunctionName=name, **kwargs)
+        out += page.get("Versions") or []
+        marker = page.get("NextMarker")
+        if not marker:
+            break
+    return out
+
+
+def _function_aliases(lam: Any, name: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    marker = None
+    for _ in range(50):
+        kwargs = {"Marker": marker} if marker else {}
+        page = lam.list_aliases(FunctionName=name, **kwargs)
+        out += page.get("Aliases") or []
+        marker = page.get("NextMarker")
+        if not marker:
+            break
+    return out
 
 
 def _resource(resources: list[dict[str, Any]], key: str) -> dict[str, Any]:
@@ -832,15 +869,17 @@ class _Runner:
             self.workspace = workspace_context(db.get(Workspace, op.workspace_id))
             chain_broken: str | None = None
             for r in op.resources or []:
-                if r["kind"] in CODE_CHAIN and r["kind"] != "role_grant" and r.get("status") in (
-                        "conflict", "unknown"):
+                if r["kind"] in CODE_CHAIN and r["kind"] != "role_grant" and r.get(
+                        "status") == "conflict":
                     chain_broken = f"{r['key']} is {r['status']} ({r.get('error')})"
                     break
             for key in [r["key"] for r in op.resources or []]:
                 op = self.fence.guard(db)
                 resources = json.loads(json.dumps(op.resources or []))
                 res = _resource(resources, key)
-                if res.get("status") in ("ready", "skipped", "conflict", "unknown"):
+                # ``unknown`` is re-evaluated (the operator may have removed the resource;
+                # a native idempotency token may recover an evaluator) — never adopted
+                if res.get("status") in ("ready", "skipped", "conflict"):
                     continue
                 if res.get("status") == "blocked" and not chain_broken:
                     pass  # prerequisite repaired earlier in this run: attempt it now
@@ -865,6 +904,12 @@ class _Runner:
                     self.fence.save(db, op, resources, f"{key}:conflict")
                     if res["kind"] in CODE_CHAIN and res["kind"] != "role_grant":
                         chain_broken = f"{key} is a conflict ({exc})"
+                except _Unknown as exc:
+                    res["status"] = "unknown"
+                    res["error"] = str(exc)
+                    self.fence.save(db, op, resources, f"{key}:unknown")
+                    if res["kind"] in CODE_CHAIN and res["kind"] != "role_grant":
+                        chain_broken = f"{key} is unknown ({exc})"
                 except Exception as exc:  # noqa: BLE001 — recorded per resource
                     logger.warning("evaluation assets %s step %s failed: %s", op.id, key, exc)
                     res["status"] = "failed"
@@ -880,7 +925,8 @@ class _Runner:
             else:
                 final = "partial" if any(s == "ready" for s in statuses) else "failed"
                 error = "; ".join(f"{r['key']}: {r.get('error')}" for r in op.resources or []
-                                  if r.get("status") in ("failed", "conflict", "blocked"))[:2000]
+                                  if r.get("status") in ("failed", "conflict", "blocked",
+                                                         "unknown"))[:2000]
             self.fence.save(db, op, op.resources or [], "finished", status=final, error=error,
                             worker_token=None, dataset_id=op.dataset_id)
         except _LeaseLost:
@@ -1001,9 +1047,11 @@ class _Runner:
         stored = res.get("result") or {}
         if stored.get("role_id"):
             current = iam.get_role(RoleName=name)["Role"]
-            if current["RoleId"] != stored["role_id"]:
-                raise _Conflict(f"role {name} was replaced (RoleId differs) — not ours")
+            if current["RoleId"] != stored["role_id"] or current.get("Arn") != stored.get(
+                    "role_arn"):
+                raise _Conflict(f"role {name} was replaced (RoleId / ARN differ) — not ours")
         else:
+            prior = bool(res.get("intent"))  # an earlier attempt already issued a create
             res["intent"] = {"requested_at": _now().isoformat()}
             self.fence.save(db, op, resources, "lambda_role:intent")
             try:
@@ -1014,24 +1062,34 @@ class _Runner:
                           {"Key": TAG_MANAGED, "Value": "true"},
                           {"Key": TAG_PROVENANCE, "Value": nonce}],
                 )["Role"]
-            except ClientError as exc:
-                if _code(exc) not in _CONFLICT_CODES:
+            except (_LeaseLost, _Stop):
+                raise
+            except Exception as exc:  # noqa: BLE001 — classified below
+                if isinstance(exc, ClientError) and _code(exc) not in _CONFLICT_CODES:
+                    raise  # a definite rejection: nothing was created
+                # name taken (collision) or the response was lost: the service-issued
+                # RoleId was never recorded, and a nonce in a description / tag is
+                # copyable content — ownership cannot be proven either way
+                try:
+                    current = iam.get_role(RoleName=name)["Role"]
+                except ClientError as look:
+                    if _code(look) in _NOT_FOUND_CODES and not isinstance(exc, ClientError):
+                        raise exc from look  # transport failure and nothing exists: plain failed
                     raise
-                # lost response? only OUR nonce (persisted before the call, never
-                # published elsewhere) proves the role is the one we created
-                current = iam.get_role(RoleName=name)["Role"]
-                if nonce in str(current.get("Description") or "") \
-                        and _role_tags(current).get(TAG_PROVENANCE) == nonce:
-                    created = current
-                    res["recovered"] = True
-                else:
-                    raise _Conflict(f"an IAM role named {name} already exists and was not "
-                                    "created by this operation") from exc
+                if not isinstance(exc, ClientError) or prior:
+                    raise _Unknown(
+                        f"a CreateRole response was lost and a role named {name} exists; "
+                        "its RoleId was never recorded, so this operation cannot prove it "
+                        "created it (a provenance nonce is copyable) — review it manually, "
+                        "then retry") from exc
+                raise _Conflict(f"an IAM role named {name} already exists and was not "
+                                "created by this operation") from exc
             expected_arn = f"arn:aws:iam::{op.account_id}:role/{name}"
             if created.get("Arn") != expected_arn:
                 raise _Conflict(f"role ARN {created.get('Arn')} is not {expected_arn}")
             res["result"] = {"role_arn": created["Arn"], "role_id": created["RoleId"],
-                             "create_date": str(created.get("CreateDate") or "")}
+                             "create_date": str(created.get("CreateDate") or ""),
+                             "trust_document": trust}
             res["owned"] = True
             self.fence.save(db, op, resources, "lambda_role:accepted")
         self._write(db, iam.put_role_policy, RoleName=name, PolicyName=LOGS_POLICY_NAME,
@@ -1050,19 +1108,32 @@ class _Runner:
         name = res["name"]
         nonce = res["nonce"]
         if not (res.get("result") or {}).get("created"):
+            prior = bool(res.get("intent"))  # an earlier attempt already issued a create
             res["intent"] = {"requested_at": _now().isoformat()}
             self.fence.save(db, op, resources, "log_group:intent")
             try:
                 self._write(db, logs.create_log_group, logGroupName=name,
                             tags={TAG_OPERATION: op.id, TAG_MANAGED: "true",
                                   TAG_PROVENANCE: nonce})
-            except ClientError as exc:
-                if _code(exc) not in _CONFLICT_CODES:
+            except (_LeaseLost, _Stop):
+                raise
+            except Exception as exc:  # noqa: BLE001 — classified below
+                if isinstance(exc, ClientError) and _code(exc) not in _CONFLICT_CODES:
                     raise
-                if not self._log_group_is_ours(logs, name, nonce):
-                    raise _Conflict(f"log group {name} already exists and was not created by "
-                                    "this operation") from exc
-                res["recovered"] = True
+                groups = logs.describe_log_groups(logGroupNamePrefix=name).get("logGroups") or []
+                if not any(g.get("logGroupName") == name for g in groups):
+                    if isinstance(exc, ClientError):
+                        raise
+                    raise exc from None  # transport failure, nothing exists: plain failed
+                if not isinstance(exc, ClientError) or prior:
+                    # the service-issued creationTime was never recorded; a provenance tag
+                    # is copyable content — ownership cannot be proven
+                    raise _Unknown(
+                        f"a CreateLogGroup response was lost and a log group named {name} "
+                        "exists; its creation identity was never recorded, so this operation "
+                        "cannot prove it created it — review it manually, then retry") from exc
+                raise _Conflict(f"log group {name} already exists and was not created by "
+                                "this operation") from exc
             res["result"] = {"created": True}
             res["owned"] = True
             self.fence.save(db, op, resources, "log_group:accepted")
@@ -1109,6 +1180,7 @@ class _Runner:
         name = res["name"]
         stored = res.get("result") or {}
         if not stored.get("function_arn"):
+            prior = bool(res.get("request"))  # an earlier attempt already issued a create
             request = {
                 "FunctionName": name, "Runtime": LAMBDA_RUNTIME, "Role": role_arn,
                 "Handler": LAMBDA_HANDLER,
@@ -1125,23 +1197,33 @@ class _Runner:
                     created = self._write(db, lam.create_function, **request,
                                           Code={"ZipFile": payload})
                     break
-                except ClientError as exc:
-                    code = _code(exc)
-                    if code in _CONFLICT_CODES:
-                        # lost response replay: the digest embeds our persisted nonce, so
-                        # an equal CodeSha256 is proof the bytes came from this intent
-                        cfg = (lam.get_function(FunctionName=name).get("Configuration") or {})
-                        if cfg.get("CodeSha256") == sha_b64 and cfg.get("Role") == role_arn:
-                            created = cfg
-                            res["recovered"] = True
-                            break
-                        raise _Conflict(f"a Lambda function named {name} exists that this "
-                                        "operation cannot prove it created") from exc
-                    if code == "InvalidParameterValueException" and "assumed" in str(exc) \
-                            and attempt < 5:
-                        self.sleep(5)  # IAM propagation of the brand-new role
-                        continue
+                except (_LeaseLost, _Stop):
                     raise
+                except Exception as exc:  # noqa: BLE001 — classified below
+                    code = _code(exc) if isinstance(exc, ClientError) else ""
+                    if isinstance(exc, ClientError) and code not in _CONFLICT_CODES:
+                        if code == "InvalidParameterValueException" and "assumed" in str(exc) \
+                                and attempt < 5:
+                            self.sleep(5)  # IAM propagation of the brand-new role
+                            continue
+                        raise
+                    # name taken or response lost: the package (and its embedded nonce) is
+                    # downloadable content, so an equal CodeSha256 proves nothing about
+                    # WHO created the function — never adopted
+                    try:
+                        lam.get_function(FunctionName=name)
+                    except ClientError as look:
+                        if _code(look) in _NOT_FOUND_CODES and not isinstance(exc, ClientError):
+                            raise exc from look  # nothing exists: plain failed
+                        raise
+                    if not isinstance(exc, ClientError) or prior:
+                        raise _Unknown(
+                            f"a CreateFunction response was lost and a function named {name} "
+                            "exists; its service identity was never recorded, so this "
+                            "operation cannot prove it created it — review it manually, then "
+                            "retry") from exc
+                    raise _Conflict(f"a Lambda function named {name} exists that this "
+                                    "operation cannot prove it created") from exc
             res["result"] = {"function_arn": created["FunctionArn"], "function_name": name}
             res["owned"] = True
             self.fence.save(db, op, resources, "lambda_function:accepted")
@@ -1194,6 +1276,19 @@ class _Runner:
         stored["readback"] = {k: cfg.get(k) for k in expected}
         stored["readback"]["ReservedConcurrentExecutions"] = reserved
         stored["readback"]["RevisionId"] = cfg.get("RevisionId")
+        # the settled whole-function snapshot (after the platform's LAST write): cleanup
+        # deletes the whole function only if $LATEST, the version set and the alias set
+        # are still exactly these — a RevisionId is mutable across legitimate updates,
+        # so it is compared against this final state, never an earlier intermediate one
+        latest = lam.get_function(FunctionName=name).get("Configuration") or {}
+        if latest.get("CodeSha256") != sha_b64 or latest.get("Role") != role_arn:
+            raise _Conflict("$LATEST differs from the reviewed package / role after publish")
+        stored["latest_readback"] = {k: latest.get(k) for k in FUNCTION_IDENTITY_FIELDS}
+        stored["versions"] = sorted(v.get("Version") for v in _function_versions(lam, name))
+        stored["aliases"] = sorted(a.get("Name") for a in _function_aliases(lam, name))
+        if stored["versions"] != sorted(["$LATEST", stored["version"]]) or stored["aliases"]:
+            raise _Conflict("the function carries versions / aliases this operation did not "
+                            f"publish: {stored['versions']} {stored['aliases']}")
 
     def _wait_function_active(self, lam: Any, name: str) -> dict[str, Any]:
         for _ in range(READBACK_ATTEMPTS):
@@ -1357,13 +1452,19 @@ class _Runner:
         elif res["request"] != request:
             raise _Conflict("the persisted create request differs from the plan — refused")
         if not stored.get("evaluator_id"):
+            res.pop("create_outcome", None)
             try:
                 created = self._write(db, control.create_evaluator, **request)
+            except (_LeaseLost, _Stop):
+                raise
             except ClientError as exc:
                 if _code(exc) in _CONFLICT_CODES:
                     raise _Conflict(f"an evaluator named {entry.name} exists that this "
                                     "operation cannot prove it created (token replay refused)"
                                     ) from exc
+                http = (exc.response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
+                if isinstance(http, int) and 400 <= http < 500:
+                    res["create_outcome"] = "rejected"  # the service answered: not created
                 raise
             res["result"] = {"evaluator_id": created["evaluatorId"],
                              "evaluator_arn": created.get("evaluatorArn")}
@@ -1532,7 +1633,7 @@ def retry_operation(db: Session, op: EvaluationAssetOperation) -> bool:
 
 def cleanup_operation(
     db: Session, op: EvaluationAssetOperation, workspace: WorkspaceContext, *,
-    clients: ClientFactory = _default_clients,
+    clients: ClientFactory = _default_clients, sleeper: Callable[[float], None] = time.sleep,
 ) -> EvaluationAssetOperation:
     """Delete exactly the cloud resources this operation proved it owns, dependency
     first, one persisted checkpoint per effect, under the same host lock / lease
@@ -1544,9 +1645,23 @@ def cleanup_operation(
       ``delete_failed``);
     * the additive grant, the function (with its resource policy), the log group and
       the dedicated role are removed ONLY when no owned evaluator remains — and each
-      only after its identity (RoleId / CodeSha256 / provenance tag) still matches;
+      only after the identity snapshot recorded when its create/readback succeeded still
+      matches exactly (RoleId / ARN / trust / inline policy; log-group creationTime / ARN /
+      retention; the published version AND ``$LATEST`` incl. RevisionId, the version set
+      and the alias set). A whole-function delete is confirmed by a bounded unqualified
+      GetFunction NotFound before the log group and role are touched;
+    * a create whose response was lost before the service-issued identity was recorded
+      stays ``unknown`` while a resource with our name exists (a nonce / tag / digest is
+      copyable content, never ownership) — dependents retained, nothing deleted; a lost
+      CreateEvaluator stays ``unknown`` even when ListEvaluators does not show the name
+      (visibility cannot prove the create never happened; a worker retry replays the
+      idempotency token, cleanup never creates);
     * the local Dataset stays (a member asset); foreign resources are never touched;
       ``cleaned`` is recorded only when nothing owned remains.
+
+    Limitation: DeleteFunction / DeleteLogGroup / DeleteRole / DeleteEvaluator carry no
+    precondition token (installed models), so the check→delete window is one API call
+    wide against an external administrator; it cannot be closed atomically.
     """
     if op.status == "cleaned":
         return op  # idempotent: nothing owned remains
@@ -1568,7 +1683,7 @@ def cleanup_operation(
                            f"the operation is {op.status}; nothing to clean up", status_code=409)
         fence = _Fence(op.id, token, status="cleaning")
         try:
-            return _cleanup(db, fence, workspace, clients)
+            return _cleanup(db, fence, workspace, clients, sleeper)
         except _LeaseLost as exc:
             raise AppError("assistant.evaluation_assets_running",
                            "another actor took over the operation", status_code=409) from exc
@@ -1590,7 +1705,7 @@ def _attempted(r: dict[str, Any]) -> bool:
 
 
 def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
-             clients: ClientFactory) -> EvaluationAssetOperation:
+             clients: ClientFactory, sleeper: Callable[[float], None]) -> EvaluationAssetOperation:
     op = fence.guard(db)
     resources = json.loads(json.dumps(op.resources or []))
     by_key = {r["key"]: r for r in resources}
@@ -1604,8 +1719,8 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
         fence.save(db, op, resources, event)
         op = fence.load(db)
 
-    def gone(exc: ClientError) -> bool:
-        return _code(exc) in _NOT_FOUND_CODES
+    def gone(exc: BaseException) -> bool:
+        return isinstance(exc, ClientError) and _code(exc) in _NOT_FOUND_CODES
 
     def unresolved(r: dict[str, Any]) -> bool:
         if r.get("kind") in ("dataset", "existing"):
@@ -1628,23 +1743,30 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
             if not request:
                 mark(r, "deleted", "no create was attempted")
                 continue
-            # a CreateEvaluator may have succeeded with a lost response; the token cannot be
-            # replayed without creating, so look for the unique name — found ⇒ ownership
-            # unprovable ⇒ explicit unknown (dependencies retained); absent ⇒ nothing created
+            if r.get("create_outcome") == "rejected":
+                mark(r, "deleted", "the service rejected the create (4xx) — nothing was created")
+                checkpoint(f"{r['key']}:reconciled")
+                continue
+            # a CreateEvaluator may have succeeded with a lost response. The token cannot
+            # be replayed here without creating, and a listing cannot prove the create
+            # never happened (visibility is eventual) — so the outcome stays UNKNOWN either
+            # way; the name lookup only adds the candidate id for the reviewer.
+            hint = ""
             try:
                 names = {e.get("evaluatorName"): e for e in _list_evaluators(control)}
+                found = names.get(request.get("evaluatorName"))
+                hint = (f"; an evaluator with this name is listed: {found.get('evaluatorId')}"
+                        if found else "; no evaluator with this name is listed right now, "
+                        "which does not prove the create never succeeded")
             except ClientError as exc:
-                mark(r, "unknown", f"could not list evaluators: {_safe_error(exc)}")
-                checkpoint(f"{r['key']}:unknown")
-                continue
-            if request.get("evaluatorName") in names:
-                found = names[request["evaluatorName"]]
-                mark(r, "unknown", "an evaluator with this name exists but this operation "
-                                   "cannot prove it created it — review "
-                                   f"{found.get('evaluatorId')} manually")
-            else:
-                mark(r, "deleted", "no evaluator with this name exists — nothing was created")
-            checkpoint(f"{r['key']}:reconciled")
+                hint = f"; could not list evaluators: {_safe_error(exc)}"
+            mark(r, "unknown", "the CreateEvaluator response was lost before an id was "
+                               f"recorded (name {request.get('evaluatorName')}, clientToken "
+                               f"{request.get('clientToken')}); this operation cannot prove "
+                               f"whether it created one{hint} — retry the operation (the "
+                               "idempotency token recovers or creates it under our "
+                               "ownership), then clean up again")
+            checkpoint(f"{r['key']}:unknown")
             continue
         if r.get("status") == "conflict" and not r.get("owned"):
             continue  # foreign collision: never ours
@@ -1662,9 +1784,12 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
         if detail.get("status") != "DELETING" and (
                 detail.get("evaluatorId") != eid or detail.get("evaluatorName") != request.get(
                 "evaluatorName") or detail.get("evaluatorConfig") != request.get(
-                "evaluatorConfig") or detail.get("level") != request.get("level")):
-            mark(r, "conflict", "owned evaluator was changed after creation — review it before "
-                                "deleting; not removed")
+                "evaluatorConfig") or detail.get("level") != request.get("level")
+                or not result.get("evaluator_arn")
+                or detail.get("evaluatorArn") != result.get("evaluator_arn")):
+            mark(r, "conflict", "owned evaluator was changed after creation (id / name / level "
+                                "/ config / ARN differ from the recorded identity) — review it "
+                                "before deleting; not removed")
             checkpoint(f"{r['key']}:drift")
             continue
         if detail.get("status") != "DELETING":
@@ -1685,7 +1810,7 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
                 if gone(exc):
                     state = "deleted"
                 break
-            time.sleep(READBACK_DELAY_S)
+            sleeper(READBACK_DELAY_S)
         mark(r, state, None if state == "deleted" else
              "DeleteEvaluator accepted but the evaluator is still present — retry later")
         checkpoint(f"{r['key']}:cleanup")
@@ -1721,7 +1846,8 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
                         back = None
                     if back is None:
                         mark(grant, "deleted", "grant not present")
-                    elif current.get("RoleId") != g.get("role_id"):
+                    elif current.get("RoleId") != g.get("role_id") or current.get(
+                            "Arn") != g.get("role_arn"):
                         mark(grant, "conflict",
                              "execution role was replaced — grant left untouched")
                     elif back != g.get("policy_document"):
@@ -1731,57 +1857,23 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
                         iam.delete_role_policy(RoleName=_role_name(g["role_arn"]),
                                                PolicyName=g["policy_name"])
                         mark(grant, "deleted")
-            except ClientError as exc:
+            except (_LeaseLost, _Stop):
+                raise
+            except Exception as exc:  # noqa: BLE001 — incl. a lost delete response
                 mark(grant, "deleted" if gone(exc) else "delete_failed",
                      None if gone(exc) else _safe_error(exc))
             checkpoint("role_grant:cleanup")
         if fn and unresolved(fn):
             lam = clients(workspace, "lambda")
             try:
-                if not fn_result.get("function_arn"):
-                    # a CreateFunction may have succeeded with a lost response: our digest
-                    # embeds the persisted nonce, so an equal CodeSha256 IS ours
-                    try:
-                        cfg = lam.get_function(FunctionName=fn["name"]).get("Configuration") or {}
-                    except ClientError as exc:
-                        if not gone(exc):
-                            raise
-                        cfg = None
-                    if cfg is None:
-                        mark(fn, "deleted", "no function exists — nothing was created")
-                    elif cfg.get("CodeSha256") == code_sha256_b64(fn["digest"]):
-                        fence.guard(db)
-                        lam.delete_function(FunctionName=fn["name"])
-                        mark(fn, "deleted", "recovered from a lost create response and deleted")
-                    else:
-                        mark(fn, "conflict", "a function with our name exists but not our code — "
-                                             "left untouched")
-                else:
-                    snapshot = fn_result.get("readback") or {}
-                    version = fn_result.get("version")
-                    try:
-                        cfg = lam.get_function(FunctionName=fn_result["function_name"],
-                                               Qualifier=version).get("Configuration") or {}
-                    except ClientError as exc:
-                        if not gone(exc):
-                            raise
-                        cfg = None
-                    if cfg is None:
-                        mark(fn, "deleted", "already gone")
-                    elif not snapshot or any(cfg.get(k) != snapshot.get(k) for k in (
-                            "CodeSha256", "Role", "Timeout", "MemorySize", "Runtime", "Handler",
-                            "FunctionArn", "Version")):
-                        mark(fn, "conflict", "function version differs from the recorded "
-                                             "identity/configuration — left untouched")
-                    else:
-                        fence.guard(db)
-                        lam.delete_function(FunctionName=fn_result["function_name"])
-                        mark(fn, "deleted")
+                _cleanup_function(lam, fn, fn_result, lambda: fence.guard(db), mark, sleeper)
                 if fn.get("status") == "deleted":
                     perm = by_key.get("lambda_permission")
                     if perm and perm.get("status") not in ("pending", "blocked"):
                         mark(perm, "deleted", "deleted with the function")
-            except ClientError as exc:
+            except (_LeaseLost, _Stop):
+                raise
+            except Exception as exc:  # noqa: BLE001 — incl. a lost delete response
                 mark(fn, "deleted" if gone(exc) else "delete_failed",
                      None if gone(exc) else _safe_error(exc))
             checkpoint("lambda_function:cleanup")
@@ -1796,22 +1888,31 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
                     groups = logs.describe_log_groups(logGroupNamePrefix=lg["name"]).get(
                         "logGroups") or []
                     mine = [g for g in groups if g.get("logGroupName") == lg["name"]]
-                    recorded = (lg.get("result") or {}).get("creation_time")
+                    rec = lg.get("result") or {}
                     if not mine:
                         mark(lg, "deleted", "already gone")
+                    elif not rec.get("creation_time") or not rec.get("arn"):
+                        # a lost CreateLogGroup response or an incomplete snapshot: the
+                        # provenance tag is copyable, so nothing here proves ownership
+                        mark(lg, "unknown", "a log group with our name exists but its creation "
+                                            "identity was never recorded — this operation "
+                                            "cannot prove it created it; review it manually")
+                    elif (mine[0].get("creationTime") != rec["creation_time"]
+                          or mine[0].get("arn") != rec["arn"]
+                          or mine[0].get("retentionInDays") != rec.get("retention_days")):
+                        mark(lg, "conflict", "log group differs from the recorded identity "
+                                             "(creationTime / ARN / retention) — it was "
+                                             "re-created or changed; left untouched")
                     elif not _Runner._log_group_is_ours(logs, lg["name"], lg["nonce"]):
                         mark(lg, "conflict", "log group no longer carries our provenance — "
                                              "left untouched")
-                    elif recorded is not None and mine[0].get("creationTime") != recorded:
-                        mark(lg, "conflict", "log group was re-created since we made it "
-                                             "(creationTime differs) — left untouched")
-                    elif recorded is None and (lg.get("result") or {}).get("created"):
-                        mark(lg, "conflict", "creation identity was never recorded — review")
                     else:
                         fence.guard(db)
                         logs.delete_log_group(logGroupName=lg["name"])
                         mark(lg, "deleted")
-            except ClientError as exc:
+            except (_LeaseLost, _Stop):
+                raise
+            except Exception as exc:  # noqa: BLE001 — incl. a lost delete response
                 mark(lg, "deleted" if gone(exc) else "delete_failed",
                      None if gone(exc) else _safe_error(exc))
             checkpoint("log_group:cleanup")
@@ -1828,36 +1929,49 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
                         if not gone(exc):
                             raise
                         current = None
-                    recorded = (role.get("result") or {}).get("role_id")
+                    rec = role.get("result") or {}
                     if current is None:
                         mark(role, "deleted", "already gone")
-                    elif recorded is None:
-                        # lost CreateRole response: only our nonce proves it is ours
-                        if role["nonce"] in str(current.get("Description") or "") and \
-                                _role_tags(current).get(TAG_PROVENANCE) == role["nonce"]:
-                            recorded = current["RoleId"]
-                            role["result"] = {"role_arn": current["Arn"], "role_id": recorded}
-                        else:
-                            mark(role, "conflict", "a role with our name exists that this "
-                                                   "operation cannot prove it created — left "
-                                                   "untouched")
-                    if current is not None and recorded is not None and role.get(
-                            "status") != "conflict":
-                        if current["RoleId"] != recorded:
-                            mark(role, "conflict", "RoleId differs — not deleting a role we did "
-                                                   "not create")
+                    elif not rec.get("role_id"):
+                        # lost CreateRole response: the RoleId was never recorded and a nonce
+                        # in the description / tags is copyable — never adopted, never deleted
+                        mark(role, "unknown", "a role with our name exists but its RoleId was "
+                                              "never recorded — this operation cannot prove it "
+                                              "created it; review it manually")
+                    elif (current.get("RoleId") != rec["role_id"]
+                          or current.get("Arn") != rec.get("role_arn")):
+                        mark(role, "conflict", "RoleId / ARN differ from the recorded identity — "
+                                               "not deleting a role we did not create")
+                    elif not rec.get("trust_document") or not rec.get("policy_document"):
+                        mark(role, "conflict", "the role's trust / policy snapshot was never "
+                                               "recorded — review required")
+                    elif _policy_document(current.get("AssumeRolePolicyDocument")) != rec[
+                            "trust_document"]:
+                        mark(role, "conflict", "the role's trust policy differs from the one "
+                                               "this operation wrote — left untouched")
+                    else:
+                        try:
+                            back = _policy_document(iam.get_role_policy(
+                                RoleName=role["name"], PolicyName=LOGS_POLICY_NAME
+                            ).get("PolicyDocument"))
+                        except ClientError as exc:
+                            if not gone(exc):
+                                raise
+                            back = None
+                        if back is not None and back != rec["policy_document"]:
+                            mark(role, "conflict", "the role's inline policy differs from the "
+                                                   "one this operation wrote — left untouched")
                         else:
                             fence.guard(db)
-                            try:
+                            if back is not None:
                                 iam.delete_role_policy(RoleName=role["name"],
                                                        PolicyName=LOGS_POLICY_NAME)
-                            except ClientError as exc:
-                                if not gone(exc):
-                                    raise
                             fence.guard(db)  # a fresh fence for the SECOND mutation too
                             iam.delete_role(RoleName=role["name"])
                             mark(role, "deleted")
-            except ClientError as exc:
+            except (_LeaseLost, _Stop):
+                raise
+            except Exception as exc:  # noqa: BLE001 — incl. a lost delete response
                 mark(role, "deleted" if gone(exc) else "delete_failed",
                      None if gone(exc) else _safe_error(exc))
             checkpoint("lambda_role:cleanup")
@@ -1868,6 +1982,83 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
                worker_token=None)
     db.expire_all()
     return db.get(EvaluationAssetOperation, op.id)
+
+
+def _cleanup_function(lam: Any, fn: dict[str, Any], fn_result: dict[str, Any],
+                      guard: Callable[[], Any], mark: Callable[..., None],
+                      sleeper: Callable[[float], None]) -> None:
+    """Whole-function cleanup with exact identity: the recorded published version AND the
+    unqualified ``$LATEST`` (incl. RevisionId), the version set and the alias set must
+    equal the settled snapshot; a missing version is NOT a missing function; after
+    DeleteFunction only a bounded unqualified GetFunction NotFound marks ``deleted``."""
+    name = fn["name"]
+
+    def get(qualifier: str | None) -> dict[str, Any] | None:
+        try:
+            kwargs = {"Qualifier": qualifier} if qualifier else {}
+            return lam.get_function(FunctionName=name, **kwargs).get("Configuration") or {}
+        except ClientError as exc:
+            if _code(exc) in _NOT_FOUND_CODES:
+                return None
+            raise
+
+    if not fn_result.get("function_arn"):
+        # a CreateFunction may have succeeded with a lost response: the package (and its
+        # nonce) is downloadable content, so an equal CodeSha256 is not ownership
+        if get(None) is None:
+            mark(fn, "deleted", "no function with our name exists — nothing to delete")
+        else:
+            mark(fn, "unknown", "a function with our name exists but its service identity was "
+                                "never recorded — this operation cannot prove it created it; "
+                                "review it manually")
+        return
+    snapshot = fn_result.get("readback") or {}
+    latest_snapshot = fn_result.get("latest_readback") or {}
+    version = fn_result.get("version")
+    if not snapshot or not latest_snapshot or not version or "versions" not in fn_result:
+        mark(fn, "conflict", "the function's identity snapshot is incomplete — review "
+                             "required before any delete")
+        return
+    latest = get(None)
+    if latest is None:
+        mark(fn, "deleted", "already gone")
+        return
+    current_version = get(version)
+    if current_version is None:
+        mark(fn, "conflict", f"our published version {version} is missing but the function "
+                             "still exists — not ours to delete as a whole; review")
+        return
+    drift = sorted(k for k in FUNCTION_IDENTITY_FIELDS
+                   if current_version.get(k) != snapshot.get(k))
+    if drift:
+        mark(fn, "conflict", f"published version {version} differs from the recorded "
+                             f"identity on {drift} — left untouched")
+        return
+    # a pending delete flips $LATEST to State=Pending; everything else must still match
+    latest_drift = sorted(k for k in FUNCTION_IDENTITY_FIELDS
+                          if latest.get(k) != latest_snapshot.get(k))
+    if latest_drift:
+        mark(fn, "conflict", f"$LATEST differs from the recorded identity on {latest_drift} "
+                             "— the function was changed since we made it; left untouched")
+        return
+    versions = sorted(v.get("Version") for v in _function_versions(lam, name))
+    aliases = sorted(a.get("Name") for a in _function_aliases(lam, name))
+    if versions != sorted(fn_result["versions"]) or aliases != sorted(
+            fn_result.get("aliases") or []):
+        mark(fn, "conflict", f"the function carries versions {versions} / aliases {aliases} "
+                             f"beyond the recorded {sorted(fn_result['versions'])} — "
+                             "left untouched")
+        return
+    guard()
+    lam.delete_function(FunctionName=name)  # idempotent re-drive of a pending delete too
+    # DeleteFunction accepted: only an unqualified NotFound proves the function is gone
+    for _ in range(READBACK_ATTEMPTS):
+        if get(None) is None:
+            mark(fn, "deleted")
+            return
+        sleeper(READBACK_DELAY_S)
+    mark(fn, "delete_pending", "DeleteFunction accepted but the function is still present — "
+                               "log group and role retained; retry later")
 
 
 def _list_evaluators(control: Any) -> list[dict[str, Any]]:

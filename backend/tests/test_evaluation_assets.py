@@ -162,7 +162,13 @@ class FakeIAM:
     def get_role(self, RoleName):
         if RoleName not in self.roles:
             raise _err("NoSuchEntity", "GetRole")
-        return {"Role": {**self.roles[RoleName], "CreateDate": "2026-09-14T00:00:00Z"}}
+        role = self.roles[RoleName]
+        try:  # the service returns the trust policy as a (URL-decoded) document
+            trust = json.loads(role["trust"])
+        except (TypeError, ValueError):
+            trust = role["trust"]
+        return {"Role": {**role, "AssumeRolePolicyDocument": trust,
+                         "CreateDate": "2026-09-14T00:00:00Z"}}
 
     def put_role_policy(self, RoleName, PolicyName, PolicyDocument):
         self.calls.append(f"put_role_policy:{RoleName}:{PolicyName}")
@@ -233,6 +239,12 @@ class FakeLambda:
         self.unchanged_publish = "return"
         self.pending_polls = 1
         self.on_get_configuration = None
+        self.revisions = 0
+        self.aliases: dict[str, list] = {}
+
+    def _revision(self) -> str:
+        self.revisions += 1
+        return f"rev-{self.revisions:04d}"
 
     def create_function(self, **kw):
         self.create_calls += 1
@@ -244,7 +256,8 @@ class FakeLambda:
                "Role": kw["Role"], "Handler": kw["Handler"],
                "CodeSha256": _sha(kw["Code"]["ZipFile"]), "Timeout": kw["Timeout"],
                "MemorySize": kw["MemorySize"], "State": "Pending", "Version": "$LATEST",
-               "Description": kw.get("Description", ""), "polls": 0}
+               "Description": kw.get("Description", ""), "polls": 0,
+               "RevisionId": self._revision()}
         self.functions[name] = {"cfg": cfg, "tags": dict(kw.get("Tags", {})), "versions": {}}
         if self.lose_create_response:
             self.lose_create_response = False
@@ -262,9 +275,10 @@ class FakeLambda:
 
     def get_function(self, FunctionName, Qualifier=None):
         f = self.functions.get(FunctionName)
-        if f is None:
+        if f is None or (Qualifier and Qualifier != "$LATEST" and Qualifier not in f["versions"]):
             raise _err("ResourceNotFoundException", "GetFunction")
-        cfg = dict(f["versions"][Qualifier]) if Qualifier else dict(f["cfg"])
+        cfg = dict(f["versions"][Qualifier]) if Qualifier and Qualifier != "$LATEST" \
+            else dict(f["cfg"])
         return {"Configuration": cfg, "Tags": dict(f["tags"])}
 
     def publish_version(self, FunctionName, CodeSha256=None):
@@ -279,7 +293,8 @@ class FakeLambda:
                 return dict(v)
         version = str(len(f["versions"]) + 1)
         cfg = {**f["cfg"], "Version": version, "State": "Active",
-               "FunctionArn": f["cfg"]["FunctionArn"] + ":" + version}
+               "FunctionArn": f["cfg"]["FunctionArn"] + ":" + version,
+               "RevisionId": self._revision()}  # a version is an immutable snapshot
         f["versions"][version] = cfg
         if self.lose_publish_response:
             self.lose_publish_response = False
@@ -309,8 +324,19 @@ class FakeLambda:
     def get_policy(self, FunctionName, Qualifier=None):
         return {"Policy": json.dumps({"Statement": self.policies.get(FunctionName, [])})}
 
-    def delete_function(self, FunctionName):
+    def list_aliases(self, FunctionName, **kw):
+        if FunctionName not in self.functions:
+            raise _err("ResourceNotFoundException", "ListAliases")
+        return {"Aliases": [dict(a) for a in self.aliases.get(FunctionName, [])]}
+
+    def delete_function(self, FunctionName, Qualifier=None):
+        if FunctionName not in self.functions:
+            raise _err("ResourceNotFoundException", "DeleteFunction")
+        if Qualifier:
+            self.functions[FunctionName]["versions"].pop(Qualifier)
+            return
         self.functions.pop(FunctionName)
+        self.policies.pop(FunctionName, None)
 
 
 class FakeControl:
@@ -1184,32 +1210,46 @@ def test_concurrent_approvals_and_workers_converge_on_one_writer(app_ready):
 
 
 def test_lost_responses_recover_exactly_via_provenance_not_names_or_tags(app_ready):
+    """SE-047 C: a lost CreateRole / CreateLogGroup / CreateFunction response leaves the
+    resource UNKNOWN (its service-issued identity was never recorded; a nonce in a tag,
+    description or package is copyable content, never ownership) — nothing is adopted or
+    written to it and the chain is blocked. Only a lost PublishVersion (a version of OUR
+    recorded function, reconciled by digest) and a lost CreateEvaluator (the service's own
+    idempotency token) recover; the operator resolves the unknown, then retries."""
     cid, h = _conversation("local-operator")
     fakes = Fakes()
     op_id, *_ = _approve(cid, h, fakes=fakes)
+    fn = assets.function_name(op_id)
     fakes.iam.lose_create_response = True      # CreateRole succeeded, response lost
-    fakes.logs.lose_create_response = True     # CreateLogGroup succeeded, response lost
-    fakes.lam.lose_create_response = True      # CreateFunction succeeded, response lost
     fakes.lam.lose_publish_response = True     # PublishVersion succeeded, response lost
     fakes.control.lose_response_once = True    # CreateEvaluator succeeded, response lost
     _run(op_id, fakes)
     op = _op(op_id)
-    assert op.status == "partial" and _res(op, "lambda_role")["status"] == "failed"
-    assert _res(op, "lambda_role")["intent"]["requested_at"]
-    _run(op_id, fakes)  # role recovered via nonce; log group creation loses its response
-    _run(op_id, fakes)  # log group recovered; function creation loses its response
-    _run(op_id, fakes)  # function recovered via CodeSha256(nonce); publish loses response
-    op = _op(op_id)
-    assert _res(op, "lambda_role")["recovered"] is True
-    assert _res(op, "log_group")["recovered"] is True
-    assert _res(op, "lambda_function")["recovered"] is True
+    role = _res(op, "lambda_role")
+    assert op.status == "partial" and role["status"] == "unknown", role
+    assert "cannot prove" in role["error"] and role["intent"]["requested_at"]
+    assert not role.get("owned") and not role.get("recovered") and not role.get("result")
+    assert fakes.iam.roles[fn]["policies"] == {}  # never written to
+    for key in ("log_group", "lambda_function", "lambda_permission", "role_grant",
+                "evaluator:tools"):
+        assert _res(op, key)["status"] == "blocked", key
+    # the operator reviews the unknown role and removes it; the retry creates a fresh one
+    fakes.iam.roles.pop(fn)
     while _op(op_id).status != "succeeded" and _op(op_id).attempts < assets.MAX_ATTEMPTS:
         _run(op_id, fakes)
     op = _op(op_id)
     assert op.status == "succeeded", op.error
-    fn = fakes.lam.functions[assets.function_name(op_id)]
-    assert len(fn["versions"]) == 1 and _res(op, "lambda_function")["result"]["version"] == "1"
-    assert fakes.lam.create_calls == 2 and len(fakes.lam.functions) == 1
+    assert not any(r.get("recovered") for r in op.resources)
+    role = _res(op, "lambda_role")
+    assert role["owned"] and role["result"]["role_id"] == fakes.iam.roles[fn]["RoleId"]
+    assert role["result"]["trust_document"]["Statement"][0]["Principal"] == {
+        "Service": "lambda.amazonaws.com"}
+    f = fakes.lam.functions[fn]
+    assert len(f["versions"]) == 1 and _res(op, "lambda_function")["result"]["version"] == "1"
+    assert _res(op, "lambda_function")["result"]["versions"] == ["$LATEST", "1"]
+    assert _res(op, "lambda_function")["result"]["latest_readback"]["RevisionId"] == \
+        f["cfg"]["RevisionId"]
+    assert fakes.lam.create_calls == 1 and len(fakes.lam.functions) == 1
     assert len(fakes.control.evaluators) == 2 and len(fakes.iam.roles) == 2
     assert len(fakes.logs.groups) == 1
     db = SessionLocal()
@@ -1930,10 +1970,12 @@ def test_direct_cleanup_after_lost_create_responses_never_claims_cleaned(app_rea
     try:
         op = assets.cleanup_operation(db, db.get(EvaluationAssetOperation, op_id),
                                       ws_ctx(RESOURCES), clients=fakes)
-        # the role is recovered through its nonce and removed — not left as an orphan
-        assert _res(op, "lambda_role")["status"] == "deleted"
-        assert assets.function_name(op_id) not in fakes.iam.roles
-        assert op.status == "cleaned"
+        # SE-047 C: the RoleId was never recorded — the nonce in the description / tag is
+        # copyable, so the role stays UNKNOWN (never adopted, never deleted), not 'cleaned'
+        assert _res(op, "lambda_role")["status"] == "unknown"
+        assert "cannot prove" in _res(op, "lambda_role")["cleanup"]["note"]
+        assert assets.function_name(op_id) in fakes.iam.roles
+        assert op.status == "partial" and "lambda_role" in op.error
     finally:
         db.close()
     # a lost CreateEvaluator response: the name exists but ownership cannot be proven →

@@ -765,10 +765,18 @@ Agent 从不被触碰；批准 Agent 不等于授权创建云端评估资源。
   的；否则——包括带有我们操作标签的资源——都是**外部冲突**：记录、不接管、不删除。评估器重放服务自身的
   `clientToken`。回读漂移同样记为冲突，从不修复。
 - **清理**在同一锁 / 租约 / 重新授权 / 身份检查下按依赖顺序进行，每次变更前重新围栏，每次生效后持久化检查点；响应
-  丢失的创建意图会被对账（角色 / 日志组 / 函数仅凭 nonce 证明归属；无法证明归属的评估器记为显式 `unknown` 并保留其
-  依赖），DeleteEvaluator 只有在回读 NotFound 后才算完成（否则 `delete_pending`）：先删除身份与配置仍
+  丢失的创建**绝不事后认领或删除**：nonce 写在角色描述 / 标签、日志组标签或可下载的包摘要中，都是可复制的内容而非
+  归属证明，只要同名资源存在就记为显式 `unknown`（worker 与清理一致；操作员评审后重试，重试只重新评估、不认领），
+  其依赖保持 `blocked` / `retained`，操作永不 `cleaned`；创建时即冲突（无响应丢失）的外部资源仍为 `conflict`、不阻止
+  `cleaned`。CreateEvaluator 响应丢失时，即便 ListEvaluators 未列出该名称也保持 `unknown`（可见性不能证明创建未发生；
+  记录名称、clientToken 与候选 id），由 worker 重试回放幂等 token 恢复归属，清理绝不创建；明确的 4xx 拒绝记为未创建。
+  DeleteEvaluator 只有在回读 NotFound 后才算完成（否则 `delete_pending`）：先删除 id / 名称 / 级别 / 配置 / ARN 仍
   一致的自有评估器（已改动的保留为可评审的冲突；被在线配置锁定的记为删除失败）；附加授权 / 函数 / 日志组 /
-  角色**仅在没有任何自有评估器残留**且身份仍匹配时删除，否则标记 `retained` / `conflict`。本地 Dataset 保留，
+  角色**仅在没有任何自有评估器残留**且创建 / 回读成功时记录的身份快照完全一致时删除（角色的 RoleId / ARN /
+  信任策略 / 内联策略；日志组的 creationTime / ARN / 保留期；函数的已发布版本**与**未限定的 `$LATEST`（含 RevisionId）、
+  版本集合与别名集合）；缺少已发布版本不等于函数不存在；整函数删除须经有界的未限定 GetFunction NotFound 确认后才触碰
+  日志组与角色（否则 `delete_pending` 并保留依赖，下次清理重新校验并重发删除）；快照不完整视为需评审的 `conflict`；
+  否则标记 `retained` / `conflict`。删除 API 无前置条件 token，检查到删除之间存在一次调用宽度的窗口。本地 Dataset 保留，
   外部资源不触碰；只有当没有任何自有资源残留时才记录 `cleaned`。普通的 `DELETE /api/eval/evaluators/{id}` 拒绝
   由操作拥有的评估器（`409 evaluator.managed_by_operation`）。
 - **隐私**：计划与操作仅对对话的不可变主体可见（其他主体 / Workspace → 404，管理员也一样）。创建前的披露说明：
