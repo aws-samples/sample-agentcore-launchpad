@@ -72,9 +72,10 @@ function asRecord(v: unknown): Record<string, unknown> {
 }
 
 /** A rule without its empty / default members (what a reviewer needs to read). */
-function compactRule(rule: Record<string, unknown>): string {
+function compactRule(rule: unknown): string {
+  if (!rule || typeof rule !== "object" || Array.isArray(rule)) return JSON.stringify(rule ?? null);
   const kept = Object.fromEntries(
-    Object.entries(rule).filter(
+    Object.entries(rule as Record<string, unknown>).filter(
       ([, v]) => !(v === null || v === "" || v === false || (Array.isArray(v) && v.length === 0)),
     ),
   );
@@ -443,7 +444,15 @@ export function EvaluationAssetsPanel({
           </div>
         )}
 
-        {current && jsonDraft === null && (
+        {current && invalid && jsonDraft === null && (
+          <div className="assist-section" data-testid="eval-invalid-raw">
+            <h4>{t("assistantEval.rawTitle")}</h4>
+            <pre className="assist-pre" data-testid="eval-invalid-raw-json">
+              {JSON.stringify(current.content, null, 2)}
+            </pre>
+          </div>
+        )}
+        {current && !invalid && jsonDraft === null && (
           <>
             {summary && (
               <div className="dim mono" style={{ fontSize: 11, marginTop: 10 }} data-testid="eval-summary">
@@ -551,15 +560,15 @@ export function EvaluationAssetsPanel({
               <div className="assist-section" data-testid="eval-evaluators">
                 <h4>{t("assistantEval.evaluators")}</h4>
                 <Wrap testid="eval-evaluators-table">
-                  <table className="assist-gt">
+                  <table className="assist-gt assist-gt-wide">
                     <thead>
                       <tr>
                         <th>{t("assistantEval.col.key")}</th>
                         <th>{t("assistantEval.col.kind")}</th>
-                        <th>{t("assistantEval.col.definition")}</th>
+                        <th className="col-def">{t("assistantEval.col.definition")}</th>
                         <th>{t("assistantEval.col.goldenTests")}</th>
-                        <th>{t("assistantEval.col.gate")}</th>
-                        <th>{t("assistantEval.col.status")}</th>
+                        <th className="col-gate">{t("assistantEval.col.gate")}</th>
+                        <th className="col-status">{t("assistantEval.col.status")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -576,11 +585,11 @@ export function EvaluationAssetsPanel({
                               </Chip>
                               {e?.draft && <Chip tone="warn">{t("assistantEval.draftRubric")}</Chip>}
                             </td>
-                            <td style={{ fontSize: 11 }}>
+                            <td className="col-def" style={{ fontSize: 11 }}>
                               <EvaluatorDefinition e={e} />
                             </td>
                             <td className="mono">{gts.length ? gts.join(", ") : t("assistantEval.allGoldenTests")}</td>
-                            <td className="mono">
+                            <td className="mono col-gate">
                               {e?.blocking ? t("assistantEval.blocking") : t("assistantEval.informational")}
                               {e?.threshold !== null && e?.threshold !== undefined ? ` · ≥ ${e.threshold}` : ""}
                             </td>

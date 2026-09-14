@@ -931,7 +931,11 @@ footer .sep{color:var(--line-2)}
    contained tables with horizontal overflow, readable long rubrics/steps */
 .assist-grid>.assist-span{grid-column:1 / -1}
 .assist-table-wrap{width:100%;max-width:100%;overflow-x:auto}
-.assist-table-wrap .assist-gt{min-width:640px}
+.assist-table-wrap .assist-gt{min-width:720px}
+.assist-table-wrap .assist-gt-wide{min-width:1040px}
+.assist-gt .col-def{min-width:380px}
+.assist-gt .col-gate{min-width:120px;white-space:nowrap}
+.assist-gt .col-status{min-width:120px}
 .assist-table-wrap .assist-gt td{white-space:normal;overflow-wrap:anywhere}
 .assist-pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;max-height:320px;overflow:auto;margin:6px 0;padding:6px;border:1px solid var(--line)}
 .assist-steps{margin:4px 0 0;padding-left:18px;font-size:11px}

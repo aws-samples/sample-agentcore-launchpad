@@ -1889,6 +1889,23 @@ def evaluate_session(
     """
     hours = RANGE_HOURS[range_key]
     ids = list(dict.fromkeys(evaluator_ids))  # de-dupe, keep order
+    # a managed code evaluator whose rules read reference inputs cannot score a live
+    # session (no ground truth here) — refused before any span read or Evaluate call
+    from app.assistant.evaluation_assets import managed_reference_gap
+    from app.core.db import SessionLocal
+
+    _db = SessionLocal()
+    try:
+        gap = managed_reference_gap(_db, getattr(workspace, "id", None), ids, set())
+    finally:
+        _db.close()
+    if gap:
+        raise AppError(
+            "observability.evaluator_needs_ground_truth",
+            "; ".join(f"{e} reads " + ", ".join(f"{{{p}}}" for p in g) for e, g in gap.items())
+            + " — a live session carries no such reference; run it on its Dataset instead",
+            {"evaluators": gap}, status_code=422,
+        )
     if not ids or len(ids) > MAX_ON_DEMAND_EVALUATORS:
         raise AppError(
             "observability.too_many_evaluators",

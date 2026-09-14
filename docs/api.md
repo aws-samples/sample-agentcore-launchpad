@@ -249,12 +249,14 @@ execution_role_arn, execution_role_id?}, status: queued|running|succeeded|partia
 cleaning|cleaned, attempts, max_attempts, dataset_id, error, resources[{kind: dataset|
 lambda_role|log_group|lambda_function|lambda_permission|role_grant|evaluator|existing,
 key, plan_key?, name, status: pending|accepted|ready|failed|conflict|blocked|skipped|
-retained|deleted|delete_failed, definition?, error, digest?, rules_digest?,
+retained|unknown|delete_pending|deleted|delete_failed, definition?, error, digest?, rules_digest?,
 reference_dependent?, owned?, recovered?, attempts, result, cleanup?, link?}],
 created_at, updated_at, running}`. `POST /api/eval/runs` answers
 `422 run.judge_needs_ground_truth` for a managed reference-driven code evaluator whose
-scope lacks the reference; online evaluation refuses such evaluators
-(`…evaluator_unsupported`). `link` is the existing console
+scope lacks the reference; Observability SCORE NOW answers
+`422 observability.evaluator_needs_ground_truth` before any Evaluate call; online evaluation
+refuses such evaluators (`…evaluator_unsupported`). A cloud/existing evaluator mapped to a
+subset of golden tests is refused at plan validation (selection is global). `link` is the existing console
 deep link (`/evaluation?view=datasets&ds=…` / `?view=evaluators&ev=…`). The ordinary
 `DELETE /api/eval/evaluators/{id}` answers `409 evaluator.managed_by_operation`
 (`detail.operation_id`) for an evaluator an operation owns. `GET /api/assistant/architect`

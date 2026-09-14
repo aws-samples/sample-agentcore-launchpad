@@ -1057,21 +1057,24 @@ than **10** AWS evaluators, TOOL_CALL code evaluators, and any dataset item the 
 execution gate rejects. Nothing in the plan may carry an ARN, a Lambda name, Python or a
 regex — `extra="forbid"` everywhere.
 
-**Per-golden-test scoring is only real through the reference envelope.** A dataset run
-applies one evaluator list to every session, so the plan's `golden_test_ids` mapping is
-enforced, not decorative: an evaluator mapped to a *subset* of golden tests must read a
-reference (`{expected_response}` / `{assertions}` / `{expected_tool_trajectory}`
-placeholders, or `reference_*` code rules) and every mapped scenario must carry that
-reference — otherwise the plan is refused before anything is created; a non-reference
-evaluator is either global (all / none) or refused. The created Dataset item keeps the
-reviewed golden-test facts (`metadata.launchpad_assets.golden_test`: id, input,
-expected response, expected tools, forbidden behaviour, pass criteria, evaluator note,
-source), the plan-key → kind / golden tests / gate / **resolved evaluator id** map
-(filled in once the evaluators exist) and `applies` (the keys that target this
-scenario) — never the transcript. Runs that pick a managed reference-driven code
-evaluator for a scope without that reference are refused up front
-(`run.judge_needs_ground_truth`), and online evaluation refuses such evaluators
-outright, using the owning operation's plan rather than a UI badge.
+**Evaluator selection is global; per-golden-test mapping is refused, not faked.** A
+dataset run applies one evaluator list to every session and the reference envelope does
+not select evaluators, so the platform cannot route an AWS evaluator to a subset of golden
+tests. Validation therefore refuses any cloud/existing evaluator whose `golden_test_ids`
+is a proper subset (actionable: `[]` = all golden tests, or replace it with a runner check /
+manual obligation for those tests). A global reference-driven evaluator (`{expected_response}`
+/ `{assertions}` / `{expected_tool_trajectory}` placeholders, `reference_*` code rules,
+`Builtin.Trajectory*`) is accepted only when EVERY scenario — and, at TRACE, every turn —
+carries that reference, and a SESSION reference evaluator cannot coexist with a multi-session
+procedure scenario (only the outcome session carries references; the seed sessions would all
+error). The created Dataset item keeps the reviewed golden-test facts
+(`metadata.launchpad_assets.golden_test`: id, input, expected response, expected tools,
+forbidden behaviour, pass criteria, evaluator note, source), the plan-key → kind / gate /
+**resolved evaluator id** map and `applies` (all global keys) — never the transcript. Managed
+reference-driven code evaluators are refused for a batch run whose scope lacks the reference
+(`run.judge_needs_ground_truth`), for Observability SCORE NOW
+(`observability.evaluator_needs_ground_truth`, before any span read or Evaluate call) and for
+online evaluation, using the owning operation's plan rather than a UI badge.
 
 **Drafts never turn prose into a procedure.** A proposal may carry an optional
 structured `evaluation_plan` seed — typed `scenarios` (turns, references, the SE-046
@@ -1080,14 +1083,18 @@ procedure for multi-actor / multi-session tests), typed `evaluators` and
 an *invalid* revision, never a 500; a revision without a seed serializes exactly as
 before, so old hashes are unchanged). `draft_plan` uses seeded scenarios as-is; every
 other golden test becomes a single-turn scenario marked `review_required` that the
-member confirms, rewrites as typed steps or blocks. Seeded evaluator keys are
+member confirms, rewrites as typed steps or blocks. The model-facing protocol asks for
+typed scenarios (turns, references, `execution` steps/checks for multi-session tests) and
+global evaluator mappings in the seed, so the normal generated flow does not require
+hand-written schemas. Seeded evaluator keys are
 reserved first; prose recommendations map only to ids identified exactly
 (`Builtin.*` / `ThirdParty.*`, collision-safe keys, never removed by a seed mapping of
 another kind) or to the seed's explicit `recommendation_keys`; everything else stays
-`unresolved`. The single drafted judge is SESSION-level and scores each scenario
-against **its own** `assertions` (pass criteria / forbidden behaviour) via the
-`{assertions}` reference — there is no global rubric mixing golden tests — and it is
-labelled `draft: true`.
+`unresolved`. The single drafted judge is SESSION-level, global, and scores each
+scenario against **its own** `assertions` (pass criteria / forbidden behaviour) via the
+`{assertions}` reference — drafted only when every scenario carries assertions and none is
+a multi-session procedure — and it is labelled `draft: true`; the deterministic
+`expected_tools` rule is drafted only when every scenario names expected tools.
 
 **Code evaluators are one reviewed static Lambda + data.** `app/assistant/lambda_runtime/
 handler.py` is stdlib-only (json/os), contains no `eval`/`exec`/`subprocess`/`re`/network
@@ -1115,7 +1122,9 @@ rules must not score live traffic (the operation flags them `reference_dependent
 
 **Durable, fenced materialization** (`app/assistant/evaluation_assets.py`). Approval
 is one atomic claim: a conditional UPDATE of the plan row (still `draft`, still this
-hash, still the newest revision) in the same transaction that inserts the operation
+hash, still the newest revision, conversation still owned by the approver's principal,
+and — for a registered account — the approver still an active, unexpired administrator,
+all as predicates of that same write) in the same transaction that inserts the operation
 with every intent and the **pinned workspace identity** (account, region, assume-role
 ARN/external id, execution-role ARN and — when a grant is requested — the execution
 role's RoleId, accepted only if the role carries the `launchpad:managed` tag, never by
@@ -1159,13 +1168,22 @@ outcome stays `partial` with each resource's error.
 
 **Cleanup** (`DELETE …/operations/{id}/assets`, admin + owner) runs under the same
 lock, lease, re-authorization and pinned-identity checks, one persisted checkpoint per
-effect, dependency first: owned evaluators are deleted only when their id, name, level
-and configuration still equal the recorded request (a changed one stays a reviewable
-`conflict`; one locked by an online configuration stays `delete_failed`); the additive
-grant, the function (with its resource policy), the log group and the dedicated role
-are removed **only once no owned evaluator remains** and only after their identity
-(RoleId, CodeSha256, provenance tag) still matches — otherwise they are `retained` /
-`conflict` and reported. The local Dataset stays (a member asset removable in
+effect and a fresh fence before every single mutation, dependency first. A persisted
+create intent whose response was lost is reconciled: a role / log group / function is
+ours only through its nonce (role description + tag, log-group tag, CodeSha256); an
+evaluator whose name exists but whose creation cannot be proven becomes an explicit
+`unknown` (identifiers kept for operator recovery) and keeps its dependencies. Owned
+evaluators are deleted only when id, name, level and configuration still equal the
+recorded request (a changed one stays a reviewable `conflict`; one locked by an online
+configuration stays `delete_failed`), and `DeleteEvaluator` counts only once a NotFound
+readback confirms it is gone (`delete_pending` otherwise). The additive grant, the
+function (with its resource policy), the log group and the dedicated role are removed
+**only once every evaluator is confirmed gone** and only after their service-issued
+identity still matches what was recorded (RoleId; the version's CodeSha256, role,
+limits, runtime, handler and ARN; the log group's creationTime plus nonce) — otherwise
+they are `retained` / `conflict` and reported; a function that could not be deleted keeps
+its log group and role. Persisted `conflict` / `unknown` states of the code chain gate
+every later retry (dependents stay `blocked` until the operator resolves them). The local Dataset stays (a member asset removable in
 Evaluation → Datasets) and every foreign resource is left alone; `cleaned` is recorded
 only when nothing owned remains. The ordinary `DELETE /api/eval/evaluators/{id}`
 refuses (`409 evaluator.managed_by_operation`) an evaluator an operation owns.
@@ -1192,7 +1210,9 @@ acceptance of a **versioned** Lambda ARN, and GetEvaluator's exact `status` valu
 (`ACTIVE`/`READY` accepted). ACTIVE registration plus test doubles are not proof that a
 batch run would score. Exclusion is host-local (`flock` under `data/locks/eval-assets`):
 a second console host against the same ledger is not a supported deployment for this
-feature.
+feature. `operation.pinned` is added by the ledger migration; an operation approved
+before identity pinning existed is refused by worker and cleanup (review required — prepare
+a new plan revision) rather than given invented bindings.
 
 ### Model source (方式B + 方式C)
 

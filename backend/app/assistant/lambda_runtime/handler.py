@@ -52,6 +52,9 @@ CONTINUE_FINISH = ("tool_use", "tool_calls", "function_call")
 TRUNCATED_FINISH = ("max_tokens", "length", "content_filtered", "content_filter",
                     "guardrail_intervened", "truncated", "model_length")
 SESSION_KEYS = ("session.id", "gen_ai.conversation.id")
+DETAILS_EVENT = "gen_ai.client.inference.operation.details"
+DROP_KEYS = ("droppedAttributesCount", "droppedEventsCount", "dropped_attributes_count",
+             "dropped_events_count")
 
 _RULES = None
 
@@ -170,14 +173,22 @@ class _Group:
         return self.span is None and any(_is_tool_log(_body(log)) for log in self.logs)
 
     def tool_name(self):
+        names = []
         for key in TOOL_NAME_KEYS:
-            if self.attrs.get(key):
-                return str(self.attrs[key])
+            if key in self.attrs:
+                if not isinstance(self.attrs[key], str) or not self.attrs[key].strip():
+                    raise Unusable("UNKNOWN_TOOL",
+                                   f"tool call {self.span_id} has a non-string name")
+                names.append(self.attrs[key].strip())
         name = str((self.span or {}).get("name") or "")
         for prefix in TOOL_SPAN_PREFIXES:
             if name.startswith(prefix) and name[len(prefix):].strip():
-                return name[len(prefix):].strip()
-        return None
+                names.append(name[len(prefix):].strip())
+        if len(set(names)) > 1:
+            raise Unusable("CONFLICTING_DUPLICATE",
+                           f"tool call {self.span_id} carries conflicting names "
+                           f"{sorted(set(names))}")
+        return names[0] if names else None
 
     def is_model(self):
         if self.is_tool():
@@ -199,7 +210,11 @@ def _group(docs):
     groups = {}
     order = []
     for doc in docs:
+        if _dropped(doc) or any(_dropped(e) for e in _events(doc)):
+            raise Unusable("TRUNCATED_EVIDENCE", "span/event attributes or events were dropped")
         key = (_trace_id(doc), _span_id(doc))
+        if not key[1]:
+            raise Unusable("UNKNOWN_IDENTITY", "a span document has no spanId")
         g = groups.get(key)
         if g is None:
             g = _Group(*key)
@@ -209,7 +224,11 @@ def _group(docs):
             g.logs.append(doc)
         else:
             if g.span is not None:
-                # the same span reported twice: keep one, never count twice
+                # the same span reported twice is fine only when it says the same thing
+                if _attributes(doc) != g.attrs or str(doc.get("name") or "") != str(
+                        g.span.get("name") or ""):
+                    raise Unusable("CONFLICTING_DUPLICATE",
+                                   f"span {key[1]} reported twice with different content")
                 continue
             g.span = doc
             g.attrs = _attributes(doc)
@@ -243,9 +262,24 @@ def _text_parts(node):
     return []
 
 
-def _looks_structured(text):
+def _looks_like_broken_json(text):
+    """A string that starts like a JSON object/array literal (``{"`` / ``[{"`` / ``[]``)
+    but does not parse: serialized content that was cut, not prose such as
+    ``[Notice] safe``."""
     stripped = text.lstrip()
-    return stripped.startswith("[") or stripped.startswith("{")
+    return stripped.startswith(('{"', '[{"', "[]", "{}"))
+
+
+def _parse_serialized(text):
+    """Serialized message fields (Strands ``message`` / ``gen_ai.output.messages`` /
+    ADOT ``content.message``) may be JSON or a genuine plain string. Parsed JSON wins;
+    a broken JSON literal is malformed; anything else is the literal text."""
+    try:
+        return json.loads(text), True
+    except ValueError:
+        if _looks_like_broken_json(text):
+            raise Unusable("MALFORMED_OUTPUT", "assistant output is not valid JSON") from None
+        return text, False
 
 
 def _message_text(message):
@@ -254,13 +288,11 @@ def _message_text(message):
     malformed evidence, not literal output. Returns None when the message has no
     text (e.g. only tool-use blocks)."""
     if isinstance(message, str):
-        if _looks_structured(message):
-            try:
-                message = json.loads(message)
-            except ValueError:
-                raise Unusable("MALFORMED_OUTPUT", "assistant output is not valid JSON") from None
-        else:
+        message, structured = _parse_serialized(message)
+        if not structured:
             return message.strip() or None
+        if not isinstance(message, (list, dict)):
+            return str(message).strip() or None
     if isinstance(message, dict):
         role = str(message.get("role") or "assistant").lower()
         if role != "assistant":
@@ -273,6 +305,30 @@ def _message_text(message):
 
 def _finish(value):
     return str(value or "").strip().lower()
+
+
+def _span_finish(group):
+    """``gen_ai.response.finish_reasons`` (list) on the span, when present."""
+    reasons = group.attrs.get("gen_ai.response.finish_reasons")
+    if isinstance(reasons, str):
+        try:
+            parsed = json.loads(reasons)
+            reasons = parsed if isinstance(parsed, list) else [reasons]
+        except ValueError:
+            reasons = [reasons]
+    if isinstance(reasons, list) and reasons:
+        return _finish(reasons[-1])
+    return ""
+
+
+def _dropped(doc):
+    for key in DROP_KEYS:
+        value = doc.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            return True
+        if isinstance(value, str) and value.strip().isdigit() and int(value) > 0:
+            return True
+    return False
 
 
 def _turn_output(group):
@@ -294,30 +350,36 @@ def _turn_output(group):
         if chosen is None:
             return None, None, True
         content = chosen["content"]
-        return _message_text(content["message"]), _finish(content.get("finish_reason")), True
+        finish = _finish(content.get("finish_reason")) or _span_finish(group)
+        return _message_text(content["message"]), finish, True
     choices = [e for e in _events(group.span or {}) if str(e.get("name") or "") == "gen_ai.choice"]
     if choices:
         attrs = _attributes(choices[-1])
         text = _message_text(attrs.get("message")) if attrs.get("message") else None
-        return text, _finish(attrs.get("finish_reason")), True
-    if "gen_ai.output.messages" in group.attrs:
+        return text, (_finish(attrs.get("finish_reason")) or _span_finish(group)), True
+    details = [e for e in _events(group.span or {}) if str(e.get("name") or "") == DETAILS_EVENT]
+    raw = None
+    if details:
+        raw = _attributes(details[-1]).get("gen_ai.output.messages")
+    elif "gen_ai.output.messages" in group.attrs:
         raw = group.attrs["gen_ai.output.messages"]
+    if raw is not None:
         if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except ValueError:
-                raise Unusable("MALFORMED_OUTPUT",
-                               "gen_ai.output.messages is not valid JSON") from None
+            raw, structured = _parse_serialized(raw)
+            if not structured:
+                raise Unusable("MALFORMED_OUTPUT", "gen_ai.output.messages is not a message list")
         chosen = None
         for m in raw if isinstance(raw, list) else [raw]:
             if isinstance(m, dict) and str(m.get("role") or "assistant") == "assistant":
                 chosen = m
-        finish = _finish(chosen.get("finish_reason")) if isinstance(chosen, dict) else ""
-        return (_message_text(chosen) if chosen is not None else None), finish, True
+        if chosen is None:
+            return None, None, True
+        finish = _finish(chosen.get("finish_reason")) or _span_finish(group)
+        return _message_text(chosen), finish, True
     if "gen_ai.completion" in group.attrs:
         raw = group.attrs["gen_ai.completion"]
         text = _message_text(raw) if isinstance(raw, str) else _message_text(json.dumps(raw))
-        return text, "", True
+        return text, _span_finish(group), True
     return None, None, False
 
 
@@ -375,18 +437,27 @@ def extract_evidence(docs, level, target):
     models = [g for g in groups if g.is_model()]
     if not models:
         raise Unusable("NO_MODEL_TURN", "no model/agent turn with output in the target scope")
+    if len(models) > 1 and any(g.time() is None for g in models):
+        raise Unusable("AMBIGUOUS_ORDER", "model turns without start times cannot be ordered")
+    times = [g.time() for g in models]
+    if len(set(times)) != len(times):
+        raise Unusable("AMBIGUOUS_ORDER", "two model turns share the same start time")
+    models.sort(key=lambda g: g.time() or 0.0)
     turns = []
     for g in models:
         text, finish, found = _turn_output(g)
-        if found:
-            turns.append((g.time(), text, finish))
-    if not turns:
-        raise Unusable("NO_OUTPUT", "no current-turn assistant output in the target scope "
-                                    "(input history is not output)")
-    if len(turns) > 1 and any(t[0] is None for t in turns):
-        raise Unusable("AMBIGUOUS_ORDER", "model turns without start times cannot be ordered")
-    turns.sort(key=lambda t: t[0] or 0.0)
+        turns.append((g.time(), text if found else None, finish or ""))
+    # the LATEST model turn decides completeness — a complete earlier turn followed by a
+    # turn with no output means the trace is incomplete, never "use the earlier reply"
     _, text, finish = turns[-1]
+    if text is None and finish in CONTINUE_FINISH:
+        raise Unusable("INCOMPLETE", f"final turn ended with '{finish}' — the trace is "
+                                     "incomplete (a later turn is missing)")
+    if text is None and finish in TRUNCATED_FINISH:
+        raise Unusable("TRUNCATED", f"final turn ended with '{finish}' — output truncated")
+    if text is None:
+        raise Unusable("NO_OUTPUT", "the latest model turn carries no current-turn assistant "
+                                    "output (input history is not output)")
     if finish in CONTINUE_FINISH:
         raise Unusable("INCOMPLETE", f"final turn ended with '{finish}' — the trace is "
                                      "incomplete (a later turn is missing)")
@@ -397,10 +468,13 @@ def extract_evidence(docs, level, target):
     if not text:
         raise Unusable("NO_OUTPUT", "final turn carries no assistant text")
     ordered = None
-    if all(t[0] is not None for t in tools) or len(tools) <= 1:
+    starts = [t[0] for t in tools]
+    if len(tools) <= 1 or (all(t is not None for t in starts) and len(set(starts)) == len(starts)):
         ordered = [name for _, name in sorted(tools, key=lambda t: t[0] or 0.0)]
+    outputs = [t[1] for t in turns if t[1]]
     return {"tools": ordered, "tool_count": len(tools), "tool_names": [n for _, n in tools],
-            "output": text, "finish": finish, "session_id": session_id, "traces": traces}
+            "output": text, "outputs": outputs, "finish": finish, "session_id": session_id,
+            "traces": traces}
 
 
 def _reference(reference_inputs, level, traces, session_id):
@@ -418,7 +492,12 @@ def _reference(reference_inputs, level, traces, session_id):
             raise Unusable("BAD_REFERENCE", "reference input is not an object")
         ctx = ((entry.get("context") or {}).get("spanContext") or {})
         ref_session = ctx.get("sessionId")
-        if ref_session and session_id and str(ref_session) != session_id:
+        if not ref_session:
+            raise Unusable("BAD_REFERENCE", "reference input has no spanContext.sessionId")
+        if session_id is None:
+            raise Unusable("REFERENCE_UNATTRIBUTABLE",
+                           "spans carry no session id — a reference input cannot be attributed")
+        if str(ref_session) != session_id:
             raise Unusable("REFERENCE_MISMATCH", "reference input belongs to another session")
         tid = ctx.get("traceId")
         if tid:
@@ -502,24 +581,33 @@ def run_check(check, evidence, reference, level):
             text = expected
         else:
             text = str(check.get("text") or "")
-        hay, needle = _norm(output, cs), _norm(text, cs)
+        needle = _norm(text, cs)
+        if kind == "output_not_contains" and level == "SESSION":
+            # whole-session negative rule: EVERY assistant turn of the session
+            hits = [i for i, o in enumerate(evidence["outputs"]) if needle in _norm(o, cs)]
+            return ("pass" if not hits else "fail"), (
+                f"checked all {len(evidence['outputs'])} assistant turn(s); "
+                f"violations in turn(s) {hits}" if hits else
+                f"checked all {len(evidence['outputs'])} assistant turn(s)")
+        hay = _norm(output, cs)
         if kind == "output_exact":
             ok = hay.strip() == needle.strip()
         elif kind == "output_not_contains":
             ok = needle not in hay
         else:
             ok = needle in hay
-        return ("pass" if ok else "fail"), f"output length {len(output)}"
+        return ("pass" if ok else "fail"), f"final turn, output length {len(output)}"
     raise Unusable("BAD_RULE", f"unknown check type {kind!r}")
 
 
 def evaluate(rules, event):
     """Pure evaluation of one event against one evaluator's rules (testable)."""
     try:
-        if str(event.get("schemaVersion") or "") != SCHEMA_VERSION:
-            return _error("BAD_SCHEMA", f"schemaVersion must be {SCHEMA_VERSION}")
-        level = str(event.get("evaluationLevel") or "")
-        if level not in LEVELS:
+        version = event.get("schemaVersion")
+        if not isinstance(version, str) or version != SCHEMA_VERSION:
+            return _error("BAD_SCHEMA", f"schemaVersion must be the string {SCHEMA_VERSION!r}")
+        level = event.get("evaluationLevel")
+        if not isinstance(level, str) or level not in LEVELS:
             return _error("BAD_LEVEL", f"evaluationLevel {level!r} is not one of {LEVELS}")
         spans_in = (event.get("evaluationInput") or {}).get("sessionSpans")
         if not isinstance(spans_in, list) or not spans_in:
@@ -527,16 +615,32 @@ def evaluate(rules, event):
         if not all(isinstance(d, dict) for d in spans_in):
             return _error("MALFORMED_SPAN", "sessionSpans contains a non-object entry")
         target = event.get("evaluationTarget")
-        evidence = extract_evidence(spans_in, level, target)
-        reference = _reference(event.get("evaluationReferenceInputs"), level,
-                               evidence["traces"], evidence["session_id"])
+        if level == "SESSION" and target not in (None, {}):
+            return _error("BAD_TARGET", "SESSION evaluation takes no evaluationTarget")
+        if level == "TRACE" and isinstance(target, dict) and target.get("spanIds"):
+            return _error("BAD_TARGET", "TRACE evaluation does not accept spanIds")
         checks = rules.get("checks") if isinstance(rules, dict) else None
-        if not isinstance(checks, list) or not checks:
+        if not isinstance(checks, list) or not checks or not all(
+                isinstance(c, dict) for c in checks):
             return _error("BAD_RULE", "no checks packaged for this evaluator")
+        # each requested trace is scored on its own complete evidence and its own
+        # references; the verdict aggregates explicitly (any error → error, any fail → FAIL)
+        scopes = [None]
+        if level == "TRACE":
+            ids = target.get("traceIds") if isinstance(target, dict) else None
+            if not isinstance(ids, list) or not ids or not all(isinstance(t, str) for t in ids):
+                return _error("TARGET_UNRESOLVED", "TRACE evaluation without target traceIds")
+            scopes = list(dict.fromkeys(ids))
         results = []
-        for check in checks:
-            outcome, detail = run_check(check, evidence, reference, level)
-            results.append((str(check.get("id")), outcome, detail))
+        for scope in scopes:
+            scoped_target = {"traceIds": [scope]} if scope is not None else None
+            evidence = extract_evidence(spans_in, level, scoped_target)
+            reference = _reference(event.get("evaluationReferenceInputs"), level,
+                                   evidence["traces"], evidence["session_id"])
+            for check in checks:
+                outcome, detail = run_check(check, evidence, reference, level)
+                label = str(check.get("id")) + (f"@{scope}" if scope is not None else "")
+                results.append((label, outcome, detail))
     except Unusable as exc:
         return _error(exc.code, str(exc))
     except Exception as exc:  # noqa: BLE001 — never leak a traceback, never PASS

@@ -4357,6 +4357,7 @@
     "historyLine": "计划 r{{plan}} · {{status}} · 由 {{by}} 批准 · {{hash}}…",
     "pollError": "状态刷新失败：{{message}}——将按退避策略重试。",
     "recovered": "已恢复",
-    "reserved": "预留并发 {{n}}"
+    "reserved": "预留并发 {{n}}",
+    "rawTitle": "原始计划内容（无效——请通过“以 JSON 编辑”修复）"
   }
 }

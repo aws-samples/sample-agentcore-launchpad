@@ -4357,6 +4357,7 @@
     "historyLine": "plan r{{plan}} · {{status}} · approved by {{by}} · {{hash}}…",
     "pollError": "Status refresh failed: {{message}} — retrying with backoff.",
     "recovered": "recovered",
-    "reserved": "reserved concurrency {{n}}"
+    "reserved": "reserved concurrency {{n}}",
+    "rawTitle": "RAW PLAN CONTENT (invalid — repair via EDIT AS JSON)"
   }
 }

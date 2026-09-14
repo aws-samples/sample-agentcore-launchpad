@@ -194,6 +194,13 @@ def _migrate(bind) -> None:
         if "execution" not in existing:
             with bind.begin() as conn:
                 conn.execute(text("ALTER TABLE eval_runs ADD COLUMN execution JSON"))
+    if "evaluation_asset_operations" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("evaluation_asset_operations")}
+        if "pinned" not in existing:
+            # operations approved before identity pinning existed get an EMPTY pin: the
+            # worker/cleanup refuse them (review required) instead of inventing bindings
+            with bind.begin() as conn:
+                conn.execute(text("ALTER TABLE evaluation_asset_operations ADD COLUMN pinned JSON"))
     if "experiments" in inspector.get_table_names():
         existing = {c["name"] for c in inspector.get_columns("experiments")}
         additions = {

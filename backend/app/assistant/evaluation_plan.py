@@ -411,36 +411,51 @@ def _scenario_references(s: Scenario) -> set[str]:
 
 
 def _routing_errors(plan: EvaluationPlan) -> list[str]:
-    """Per-golden-test scoring is only real through the reference envelope.
+    """Only GLOBAL evaluator selection is real at execution time.
 
-    A dataset run applies one evaluator list to EVERY session, so an evaluator
-    mapped to a subset of golden tests either scores every scenario anyway (then it
-    must be mapped to all / none, i.e. global) or it must be reference-driven, in
-    which case every mapped scenario must carry the reference it reads and the
-    unmapped ones are reported as "no reference" by the service/handler, never as a
-    pass. Reference-reading evaluators mapped to a scenario lacking the reference are
-    refused before anything is created."""
+    The shared dataset runner applies one evaluator list to every session, and the
+    reference envelope does not select evaluators. So an evaluator mapped to a proper
+    subset of golden tests is refused before creation (actionable: map it to all
+    golden tests or drop the AWS evaluator for a manual/runner obligation). A global
+    reference-driven evaluator is valid only when EVERY scenario — and, at TRACE, every
+    turn — carries the reference it reads; a SESSION reference evaluator cannot coexist
+    with a multi-session procedure scenario (only the outcome session carries the
+    scenario's references, the seed sessions would all error)."""
     errors: list[str] = []
-    by_gt = {s.golden_test_id: s for s in plan.scenarios}
-    all_gts = set(by_gt)
+    all_gts = {s.golden_test_id for s in plan.scenarios}
     for e in plan.evaluators:
         if e.kind not in CLOUD_KINDS and e.kind != "existing":
             continue
         needs = references_needed(e)
-        if e.kind == "existing" and e.evaluator_id in ALL_BUILTIN_EVALUATORS:
-            if e.evaluator_id.startswith("Builtin.Trajectory"):
-                needs = {"expected_trajectory"}
-        mapped = [g for g in e.golden_test_ids if g in by_gt]
-        for gt in mapped:
-            missing = sorted(needs - _scenario_references(by_gt[gt]))
+        if e.kind == "existing" and e.evaluator_id.startswith("Builtin.Trajectory"):
+            needs = {"expected_trajectory"}
+        mapped = set(e.golden_test_ids)
+        if mapped and mapped != all_gts:
+            errors.append(f"evaluators.{e.key}: targets only {sorted(mapped)} but a dataset run "
+                          "applies every evaluator to every session — the platform cannot "
+                          "route an AWS evaluator per golden test; map it to all golden tests "
+                          "(golden_test_ids: []) or replace it with a runner check / manual "
+                          "obligation for those tests")
+        if not needs:
+            continue
+        level = getattr(e, "level", "SESSION")
+        for s in plan.scenarios:
+            have = _scenario_references(s)
+            missing = sorted(needs - have)
             if missing:
-                errors.append(f"evaluators.{e.key}: golden test '{gt}' has no "
-                              f"{'/'.join(missing)} for this evaluator to score against")
-        if mapped and set(mapped) != all_gts and not needs:
-            errors.append(f"evaluators.{e.key}: targets only {sorted(mapped)} but a dataset "
-                          "run applies every evaluator to every session — map it to all "
-                          "golden tests, or make it reference-driven so the unmapped "
-                          "scenarios carry no reference for it")
+                errors.append(f"evaluators.{e.key}: scenario '{s.golden_test_id}' has no "
+                              f"{'/'.join(missing)} — a reference-driven evaluator is applied "
+                              "to every session, so every scenario must carry it")
+            if level == "TRACE" and "expected_response" in needs and not all(
+                    t.expected_response for t in s.turns):
+                errors.append(f"evaluators.{e.key}: scenario '{s.golden_test_id}' has a turn "
+                              "without expected_response — a TRACE reference evaluator scores "
+                              "every turn")
+            if level == "SESSION" and s.execution is not None:
+                errors.append(f"evaluators.{e.key}: scenario '{s.golden_test_id}' is a "
+                              "multi-session procedure — only its outcome session carries "
+                              "references, the seed sessions would error; block it or use a "
+                              "runner check")
     return errors
 
 
@@ -659,7 +674,9 @@ def draft_plan(
             "status": "mapped" if mapped else "unresolved",
             "note": "" if mapped else "no exact evaluator identified — classify or decline",
         })
-    if any(sc.get("assertions") for sc in scenarios) and "draft_rubric" not in used_keys:
+    all_assertions = bool(scenarios) and all(sc.get("assertions") for sc in scenarios) and not any(
+        sc.get("execution") for sc in scenarios)
+    if all_assertions and "draft_rubric" not in used_keys:
         used_keys.add("draft_rubric")
         evaluators.append({
             "kind": "judge", "key": "draft_rubric",
@@ -670,12 +687,14 @@ def draft_plan(
             "model_id": DEFAULT_JUDGE_MODEL, "level": "SESSION",
             "description": f"Drafted for proposal revision {revision}: judges a session "
                            "against the assertions of its own scenario (reference input)",
-            "golden_test_ids": [sc["golden_test_id"] for sc in scenarios if sc.get("assertions")],
+            "golden_test_ids": [],
             "blocking": False, "threshold": None, "draft": True,
             "note": "platform draft — reference-driven ({assertions}); calibrate wording, "
                     "model and scale with domain experts before relying on it",
         })
-    if any(sc.get("expected_trajectory") for sc in scenarios) and "expected_tools" not in used_keys:
+    all_trajectory = bool(scenarios) and all(sc.get("expected_trajectory") for sc in scenarios) \
+        and not any(sc.get("execution") for sc in scenarios)
+    if all_trajectory and "expected_tools" not in used_keys:
         used_keys.add("expected_tools")
         evaluators.append({
             "kind": "code", "key": "expected_tools",
@@ -688,8 +707,7 @@ def draft_plan(
             "lambda_timeout_s": DEFAULT_LAMBDA_TIMEOUT_S,
             "description": "Observed tool calls must include every tool of the scenario's "
                            "expected_trajectory (reference input); missing evidence is an error",
-            "golden_test_ids": [sc["golden_test_id"] for sc in scenarios
-                                if sc.get("expected_trajectory")],
+            "golden_test_ids": [],
             "blocking": False, "threshold": None,
             "note": "deterministic rule — not a semantic or safety judgement",
         })
