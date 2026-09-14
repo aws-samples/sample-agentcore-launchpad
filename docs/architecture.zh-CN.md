@@ -760,9 +760,15 @@ Agent 从不被触碰；批准 Agent 不等于授权创建云端评估资源。
   立即恢复，活跃 worker 绝不被抢占。`PublishVersion` 依据 `ListVersionsByFunction` 对账（恰好一个已发布版本
   携带摘要）；对执行角色的授权仅限**已发布版本 ARN**，绝不含 `$LATEST`；所有回读（评估器 id / 名称 / 级别 /
   配置、Lambda 角色 / 版本 / 摘要 / 运行时 / 处理器 / 超时 / 内存 / 预留并发）必须精确一致。
-- **所有权证明**：每个意图在创建调用前持久化一个随机来源 nonce，写入角色描述与标签、日志组标签，以及 Lambda
-  包本身（`provenance.json` → 摘要）。响应丢失后，同名资源只有携带该 nonce（或对应 CodeSha256）才被视为我们
-  的；否则——包括带有我们操作标签的资源——都是**外部冲突**：记录、不接管、不删除。评估器重放服务自身的
+- **所有权只来自服务返回给本操作的身份，而非内容**：每次创建调用前都持久化派发记录（intent / request / 评估器的
+  逐次 `create_history`），服务应答的身份在任何后续写入之前立即持久化：CreateRole 的 RoleId / ARN、CreateLogGroup 后
+  立刻读取的 creationTime / ARN（该 API 不返回身份）、CreateFunction 返回的 FunctionArn / RevisionId（先逐字段校验
+  应答）、CreateEvaluator 的 evaluatorId / ARN。随机来源 nonce（角色描述与标签、日志组标签、包内 `provenance.json`
+  → 摘要）只是评审线索：它可被复制，因此响应丢失或在验收检查点之前崩溃后，同名资源记为 **`unknown`**——不接管、
+  不写入、不删除、保留依赖；创建时即冲突的资源是**外部冲突**（`conflict`，不接管、不删除）。带有已派发创建的
+  `pending` / `blocked` 显示状态是可能存在的效果，清理必须计入。发布前 worker 要求 `$LATEST` 仍等于 CreateFunction
+  返回的身份（含 RevisionId），并把该 RevisionId 作为 PublishVersion 的前置条件；每次自身写入（发布、预留并发）之后
+  在其余批准字段仍相等时刻意重新固定 RevisionId，替换品在任何发布 / 并发 / 权限写入之前被拒绝。评估器重放服务自身的
   `clientToken`。回读漂移同样记为冲突，从不修复。
 - **清理**在同一锁 / 租约 / 重新授权 / 身份检查下按依赖顺序进行，每次变更前重新围栏，每次生效后持久化检查点；响应
   丢失的创建**绝不事后认领或删除**：nonce 写在角色描述 / 标签、日志组标签或可下载的包摘要中，都是可复制的内容而非

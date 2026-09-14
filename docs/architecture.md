@@ -1194,13 +1194,25 @@ and be usable). A failure or conflict in the code chain marks the rest of the ch
 and the code evaluators `blocked`; judges, derived and existing evaluators still
 proceed.
 
-**Ownership proof for resources without native idempotency.** Each intent persists a
-random *provenance nonce* before its create call: the role description and tag, the
-log-group tag, and the Lambda package itself (`provenance.json` → the digest). After a
-lost response, a resource found under our name is ours only when it carries that nonce
-(role/log group) or that CodeSha256 (function) — something nobody could have produced
-before our call; anything else, including a resource wearing our operation tag, is a
-**foreign collision**: recorded as `conflict`, never adopted, never deleted. Evaluators
+**Ownership is a service-issued identity returned to this operation, never content.**
+Every dispatched create is recorded durably before the call (intent / request / a
+per-dispatch `create_history` for evaluators), and the identity the service answers with
+is persisted immediately, before any further write: RoleId / ARN from CreateRole, the log
+group's creationTime / ARN read right after CreateLogGroup (the API returns none), the
+FunctionArn / RevisionId returned by CreateFunction (every approved field of the answer is
+verified first), the evaluatorId / ARN from CreateEvaluator. The random *provenance nonce*
+(role description + tag, log-group tag, `provenance.json` in the package → the digest) is
+only a clue for a reviewer: it is copyable, so after a lost response or a crash before the
+acceptance checkpoint a resource found under our name is **`unknown`** — never adopted,
+never written to, never deleted, dependents retained — and a collision established at
+creation time is a **foreign collision**: recorded as `conflict`, never adopted, never
+deleted. A `pending` / `blocked` display status with a dispatched create is an effect that
+may exist and is accounted for by cleanup. Before publishing, the worker requires `$LATEST`
+to still equal the identity CreateFunction returned (RevisionId included) and passes that
+RevisionId as the PublishVersion precondition; it re-pins the RevisionId deliberately right
+after each of its own writes (publish, reserved concurrency) with every other approved field
+still equal, and refuses a replacement before any publish / concurrency / permission write.
+Evaluators
 replay the service's own `clientToken`; a name conflict with a different token is
 foreign. Readback drift is `conflict` too — the record stays owned (`owned: true`)
 but is never repaired. Retries are explicit and bounded (5 attempts); a partial

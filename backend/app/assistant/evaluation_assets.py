@@ -29,12 +29,19 @@ of creating new ones or adopting foreign ones by name or by copyable tags:
                         with a stable ``clientToken`` and read back until ACTIVE with
                         id, name, level and configuration equal to the request.
 
-**Ownership proof.** The nonce is generated when the intent is persisted and travels
-inside the resource (role description + tag, log-group tag, the Lambda package bytes
-→ ``CodeSha256``; evaluators use the service's own ``clientToken`` idempotency). A
-resource found under our name after a lost response is ours only if it carries the
-nonce nobody else could have known before our create call; anything else is a
-**foreign collision** (recorded, never adopted, never deleted).
+**Ownership.** Only a service-issued identity returned to THIS operation proves
+ownership: RoleId / ARN from CreateRole, the log group's creationTime / ARN read right
+after CreateLogGroup, the FunctionArn / RevisionId returned by CreateFunction, the
+evaluatorId / ARN returned by CreateEvaluator (whose ``clientToken`` is natively
+idempotent). The provenance nonce travels inside the resource (role description + tag,
+log-group tag, the Lambda package bytes → ``CodeSha256``) only as a *clue* for a
+reviewer: it is copyable content, so after a lost response a resource found under our
+name is **unknown** (never adopted, never deleted, dependents retained) and a
+collision established at creation time is a **foreign collision** (``conflict``,
+never adopted, never deleted). Every dispatched create is recorded durably BEFORE the
+call (``intent`` / ``request`` / ``create_history``); cleanup reasons from that
+history, never from a display status — ``pending`` / ``blocked`` with a dispatched
+create is an effect that may exist.
 
 **Fencing.** One host-local ``flock`` per operation (worker and cleanup) plus a
 database lease token; before EVERY cloud write the worker re-reads the lease token,
@@ -1052,7 +1059,9 @@ class _Runner:
                 raise _Conflict(f"role {name} was replaced (RoleId / ARN differ) — not ours")
         else:
             prior = bool(res.get("intent"))  # an earlier attempt already issued a create
-            res["intent"] = {"requested_at": _now().isoformat()}
+            res["intent"] = {"requested_at": _now().isoformat(),
+                             "dispatched": int((res.get("intent") or {}).get("dispatched") or 0)
+                             + 1}
             self.fence.save(db, op, resources, "lambda_role:intent")
             try:
                 created = self._write(
@@ -1109,7 +1118,9 @@ class _Runner:
         nonce = res["nonce"]
         if not (res.get("result") or {}).get("created"):
             prior = bool(res.get("intent"))  # an earlier attempt already issued a create
-            res["intent"] = {"requested_at": _now().isoformat()}
+            res["intent"] = {"requested_at": _now().isoformat(),
+                             "dispatched": int((res.get("intent") or {}).get("dispatched") or 0)
+                             + 1}
             self.fence.save(db, op, resources, "log_group:intent")
             try:
                 self._write(db, logs.create_log_group, logGroupName=name,
@@ -1134,24 +1145,51 @@ class _Runner:
                         "cannot prove it created it — review it manually, then retry") from exc
                 raise _Conflict(f"log group {name} already exists and was not created by "
                                 "this operation") from exc
-            res["result"] = {"created": True}
+            # CreateLogGroup returns no identity: read the service-issued creationTime /
+            # ARN NOW, before the acceptance checkpoint and before any further write. Until
+            # this read succeeds the create is a dispatched intent without identity (a
+            # retry that finds the name taken records ``unknown``, never adopts).
+            mine = self._describe_log_group(logs, name)
+            if mine is None:
+                raise RuntimeError(f"log group {name} was created but could not be read back")
+            expected_arn = f"arn:aws:logs:{op.region}:{op.account_id}:log-group:{name}"
+            if str(mine.get("arn") or "").rstrip("*").rstrip(":") != expected_arn \
+                    or not mine.get("creationTime"):
+                raise _Conflict(f"log group identity {mine.get('arn')!r} / "
+                                f"{mine.get('creationTime')!r} is not the expected {expected_arn}")
+            res["result"] = {"created": True, "arn": mine.get("arn"),
+                             "creation_time": mine.get("creationTime")}
             res["owned"] = True
             self.fence.save(db, op, resources, "log_group:accepted")
+        rec = res["result"]
+        # identity FIRST, then the write: a re-created group (creationTime differs) is not
+        # ours and never receives our retention policy
+        mine = self._describe_log_group(logs, name)
+        if mine is None:
+            raise RuntimeError(f"log group {name} disappeared after creation")
+        if not rec.get("creation_time") or not rec.get("arn"):
+            raise _Unknown(f"log group {name}: creation identity was never recorded — "
+                           "ownership cannot be proven; review it manually")
+        if mine.get("creationTime") != rec["creation_time"] or mine.get("arn") != rec["arn"]:
+            raise _Conflict("log group was re-created (creationTime / ARN differ) — not ours")
         self._write(db, logs.put_retention_policy, logGroupName=name,
                     retentionInDays=LOG_RETENTION_DAYS)
-        groups = logs.describe_log_groups(logGroupNamePrefix=name).get("logGroups") or []
-        mine = [g for g in groups if g.get("logGroupName") == name]
-        if not mine or mine[0].get("retentionInDays") != LOG_RETENTION_DAYS:
+        mine = self._describe_log_group(logs, name)
+        if mine is None or mine.get("retentionInDays") != LOG_RETENTION_DAYS:
             raise _Conflict("log group readback differs (retention)")
-        expected_arn = f"arn:aws:logs:{op.region}:{op.account_id}:log-group:{name}"
-        if str(mine[0].get("arn") or "").rstrip("*").rstrip(":") != expected_arn:
-            raise _Conflict(f"log group ARN differs from {expected_arn}")
-        # service-issued creation identity (not copyable like a tag) pinned for cleanup
-        if res["result"].get("creation_time") not in (None, mine[0].get("creationTime")):
-            raise _Conflict("log group was re-created (creationTime differs) — not ours")
-        res["result"]["retention_days"] = LOG_RETENTION_DAYS
-        res["result"]["arn"] = mine[0].get("arn")
-        res["result"]["creation_time"] = mine[0].get("creationTime")
+        if mine.get("creationTime") != rec["creation_time"] or mine.get("arn") != rec["arn"]:
+            raise _Conflict("log group was re-created during the retention write — not ours")
+        rec["retention_days"] = LOG_RETENTION_DAYS
+
+    def _describe_log_group(self, logs: Any, name: str) -> dict[str, Any] | None:
+        for attempt in range(3):
+            groups = logs.describe_log_groups(logGroupNamePrefix=name).get("logGroups") or []
+            mine = [g for g in groups if g.get("logGroupName") == name]
+            if mine:
+                return mine[0]
+            if attempt < 2:
+                self.sleep(READBACK_DELAY_S)
+        return None
 
     @staticmethod
     def _log_group_is_ours(logs: Any, name: str, nonce: str) -> bool:
@@ -1181,6 +1219,8 @@ class _Runner:
         stored = res.get("result") or {}
         if not stored.get("function_arn"):
             prior = bool(res.get("request"))  # an earlier attempt already issued a create
+            dispatched = int(res.get("dispatched") or 0) + 1
+            res["dispatched"] = dispatched
             request = {
                 "FunctionName": name, "Runtime": LAMBDA_RUNTIME, "Role": role_arn,
                 "Handler": LAMBDA_HANDLER,
@@ -1224,20 +1264,42 @@ class _Runner:
                             "retry") from exc
                     raise _Conflict(f"a Lambda function named {name} exists that this "
                                     "operation cannot prove it created") from exc
-            res["result"] = {"function_arn": created["FunctionArn"], "function_name": name}
+            # the service-issued identity returned to THIS call is persisted immediately
+            # and every approved field is verified before acceptance — a response that
+            # does not describe the reviewed function is never our baseline
+            approved = self._approved_latest(op, name, role_arn, sha_b64, int(res["timeout_s"]))
+            bad = sorted(k for k, want in approved.items()
+                         if k != "State" and created.get(k) != want)
+            if bad or not created.get("RevisionId"):
+                raise _Conflict(f"CreateFunction answered with an identity that differs from "
+                                f"the reviewed request on {bad or ['RevisionId']}")
+            res["result"] = {"function_arn": created["FunctionArn"], "function_name": name,
+                             "revision_id": created["RevisionId"],
+                             "created_identity": {k: created.get(k)
+                                                  for k in FUNCTION_IDENTITY_FIELDS}}
             res["owned"] = True
             self.fence.save(db, op, resources, "lambda_function:accepted")
-        cfg = self._wait_function_active(lam, name)
-        if cfg.get("CodeSha256") != sha_b64:
-            raise _Conflict("function code differs from the reviewed package")
         stored = res["result"]
+        if not stored.get("revision_id"):
+            raise _Unknown(f"function {name}: the service identity returned by CreateFunction "
+                           "was never recorded — ownership cannot be proven; review manually")
+        approved = self._approved_latest(op, name, role_arn, sha_b64, int(res["timeout_s"]))
+        cfg = self._wait_function_active(lam, name)
+        # $LATEST must still be exactly what the service returned to us (RevisionId included)
+        # before ANY further write; our own later writes re-pin it deliberately below
+        self._require_latest(cfg, approved, stored["revision_id"], "before publish")
         if not stored.get("version"):
             stored["publish_requested_at"] = _now().isoformat()
             self.fence.save(db, op, resources, "lambda_function:publish_intent")
             try:
+                # RevisionId is a real precondition of PublishVersion (installed model): the
+                # publish fails instead of blessing a function replaced in the window
                 published = self._write(db, lam.publish_version, FunctionName=name,
-                                        CodeSha256=sha_b64)
+                                        CodeSha256=sha_b64, RevisionId=stored["revision_id"])
             except ClientError as exc:
+                if _code(exc) == "PreconditionFailedException":
+                    raise _Conflict("$LATEST changed between our readback and PublishVersion "
+                                    "(RevisionId precondition failed) — not publishing") from exc
                 if _code(exc) not in _CONFLICT_CODES + ("InvalidParameterValueException",):
                     raise
                 published = None
@@ -1254,7 +1316,14 @@ class _Runner:
                                 "— refusing to pick one")
             stored["version"] = versions[0]["Version"]
             stored["version_arn"] = versions[0]["FunctionArn"]
+            # our own publish may legitimately move $LATEST's RevisionId: re-pin it right
+            # after that exact effect, with every other approved field still equal
+            latest = lam.get_function(FunctionName=name).get("Configuration") or {}
+            self._require_latest(latest, approved, None, "after publish")
+            stored["revision_id"] = latest["RevisionId"]
             self.fence.save(db, op, resources, "lambda_function:published")
+        latest = lam.get_function(FunctionName=name).get("Configuration") or {}
+        self._require_latest(latest, approved, stored["revision_id"], "before concurrency")
         self._write(db, lam.put_function_concurrency, FunctionName=name,
                     ReservedConcurrentExecutions=LAMBDA_RESERVED_CONCURRENCY)
         reserved = lam.get_function_concurrency(FunctionName=name).get(
@@ -1273,22 +1342,49 @@ class _Runner:
         mismatch = sorted(k for k, want in expected.items() if cfg.get(k) != want)
         if mismatch:
             raise _Conflict(f"published version readback differs on {mismatch}")
+        if not cfg.get("RevisionId"):
+            raise _Conflict("the published version carries no RevisionId — identity incomplete")
+        # the settled whole-function snapshot (after the platform's LAST write): cleanup
+        # deletes the whole function only if $LATEST (every approved field, RevisionId
+        # included), the reserved concurrency, the version set and the alias set are still
+        # exactly these. Our own concurrency write is the last effect, so the RevisionId is
+        # re-pinned deliberately here and nowhere later.
+        latest = lam.get_function(FunctionName=name).get("Configuration") or {}
+        self._require_latest(latest, approved, None, "after concurrency")
+        versions = sorted(v.get("Version") for v in _function_versions(lam, name))
+        aliases = sorted(a.get("Name") for a in _function_aliases(lam, name))
+        if versions != sorted(["$LATEST", stored["version"]]) or aliases:
+            raise _Conflict("the function carries versions / aliases this operation did not "
+                            f"publish: {versions} {aliases}")
         stored["readback"] = {k: cfg.get(k) for k in expected}
         stored["readback"]["ReservedConcurrentExecutions"] = reserved
         stored["readback"]["RevisionId"] = cfg.get("RevisionId")
-        # the settled whole-function snapshot (after the platform's LAST write): cleanup
-        # deletes the whole function only if $LATEST, the version set and the alias set
-        # are still exactly these — a RevisionId is mutable across legitimate updates,
-        # so it is compared against this final state, never an earlier intermediate one
-        latest = lam.get_function(FunctionName=name).get("Configuration") or {}
-        if latest.get("CodeSha256") != sha_b64 or latest.get("Role") != role_arn:
-            raise _Conflict("$LATEST differs from the reviewed package / role after publish")
         stored["latest_readback"] = {k: latest.get(k) for k in FUNCTION_IDENTITY_FIELDS}
-        stored["versions"] = sorted(v.get("Version") for v in _function_versions(lam, name))
-        stored["aliases"] = sorted(a.get("Name") for a in _function_aliases(lam, name))
-        if stored["versions"] != sorted(["$LATEST", stored["version"]]) or stored["aliases"]:
-            raise _Conflict("the function carries versions / aliases this operation did not "
-                            f"publish: {stored['versions']} {stored['aliases']}")
+        stored["revision_id"] = latest["RevisionId"]
+        stored["versions"] = versions
+        stored["aliases"] = aliases
+
+    @staticmethod
+    def _approved_latest(op, name: str, role_arn: str, sha_b64: str, timeout_s: int
+                         ) -> dict[str, Any]:
+        """Every approved field of the reviewed function's ``$LATEST``."""
+        return {"FunctionName": name,
+                "FunctionArn": f"arn:aws:lambda:{op.region}:{op.account_id}:function:{name}",
+                "Runtime": LAMBDA_RUNTIME, "Handler": LAMBDA_HANDLER, "Role": role_arn,
+                "CodeSha256": sha_b64, "Timeout": timeout_s, "MemorySize": LAMBDA_MEMORY_MB,
+                "Version": "$LATEST", "State": "Active"}
+
+    @staticmethod
+    def _require_latest(cfg: dict[str, Any], approved: dict[str, Any],
+                        revision_id: str | None, when: str) -> None:
+        bad = sorted(k for k, want in approved.items() if cfg.get(k) != want)
+        if not cfg.get("RevisionId"):
+            bad.append("RevisionId")
+        elif revision_id is not None and cfg.get("RevisionId") != revision_id:
+            bad.append("RevisionId")
+        if bad:
+            raise _Conflict(f"$LATEST differs from the approved identity {when} on {bad} — "
+                            "the function was changed or replaced; refusing to continue")
 
     def _wait_function_active(self, lam: Any, name: str) -> dict[str, Any]:
         for _ in range(READBACK_ATTEMPTS):
@@ -1452,20 +1548,39 @@ class _Runner:
         elif res["request"] != request:
             raise _Conflict("the persisted create request differs from the plan — refused")
         if not stored.get("evaluator_id"):
-            res.pop("create_outcome", None)
+            # every dispatch is recorded durably BEFORE the call; an entry that never gets
+            # an outcome (crash) or a lost response is uncertain forever, and no later
+            # rejection can erase it — only the token replay answering with an id can
+            history = res.setdefault("create_history", [])
+            history.append({"at": _now().isoformat(), "outcome": "dispatched"})
+            self.fence.save(db, op, resources, f"{res['key']}:dispatch")
+            uncertain_before = _uncertain_create(res, exclude_last=True)
             try:
                 created = self._write(db, control.create_evaluator, **request)
             except (_LeaseLost, _Stop):
                 raise
             except ClientError as exc:
+                http = (exc.response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
                 if _code(exc) in _CONFLICT_CODES:
+                    history[-1]["outcome"] = "conflict"
+                    if uncertain_before:
+                        raise _Unknown(
+                            f"an evaluator named {entry.name} exists and an earlier create of "
+                            "this operation has no recorded outcome — it may be ours; the "
+                            "token replay did not answer with an id, so ownership stays "
+                            "unproven; review manually") from exc
                     raise _Conflict(f"an evaluator named {entry.name} exists that this "
                                     "operation cannot prove it created (token replay refused)"
                                     ) from exc
-                http = (exc.response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
                 if isinstance(http, int) and 400 <= http < 500:
-                    res["create_outcome"] = "rejected"  # the service answered: not created
+                    history[-1]["outcome"] = "rejected"  # this dispatch: not created
+                else:
+                    history[-1]["outcome"] = "lost"  # 5xx / unknown: may have been created
                 raise
+            except Exception:
+                history[-1]["outcome"] = "lost"
+                raise
+            history[-1]["outcome"] = "created"
             res["result"] = {"evaluator_id": created["evaluatorId"],
                              "evaluator_arn": created.get("evaluatorArn")}
             res["owned"] = True
@@ -1697,11 +1812,43 @@ def cleanup_operation(
             db.commit()
             raise AppError("assistant.evaluation_assets_stopped", f"cleanup stopped: {exc}",
                            status_code=409) from exc
+        except AppError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — never leave the row 'cleaning' with a token
+            logger.exception("evaluation assets %s cleanup failed", op.id)
+            db.rollback()
+            db.execute(update(EvaluationAssetOperation)
+                       .where(EvaluationAssetOperation.id == op.id,
+                              EvaluationAssetOperation.worker_token == token)
+                       .values(status="partial", error=f"cleanup failed: {_safe_error(exc)}",
+                               worker_token=None))
+            db.commit()
+            raise AppError("assistant.evaluation_assets_cleanup_failed",
+                           f"cleanup failed and was recorded as partial: {_safe_error(exc)}",
+                           status_code=502) from exc
 
 
 def _attempted(r: dict[str, Any]) -> bool:
-    """A create call may have gone out: an intent/request/result was persisted."""
-    return bool(r.get("intent") or r.get("request") or r.get("result") or r.get("owned"))
+    """A create call may have gone out: an intent/request/result was persisted. This is
+    decided by the durable dispatch record, never by the display status — ``pending`` or
+    ``blocked`` after a crash still carries the intent of the create that went out."""
+    return bool(r.get("intent") or r.get("request") or r.get("result") or r.get("owned")
+                or r.get("create_history"))
+
+
+def _uncertain_create(r: dict[str, Any], *, exclude_last: bool = False) -> bool:
+    """An evaluator create of this operation whose outcome is unknown (crash before the
+    response, lost response, 5xx) and that no token replay has since resolved into an
+    id. Older records without a history but with a request are uncertain unless they
+    recorded a definite rejection."""
+    if (r.get("result") or {}).get("evaluator_id"):
+        return False
+    history = list(r.get("create_history") or [])
+    if not history:  # a record from before dispatch histories existed
+        return bool(r.get("request")) and r.get("create_outcome") != "rejected"
+    if exclude_last:
+        history = history[:-1]
+    return any(e.get("outcome") in ("dispatched", "lost") for e in history)
 
 
 def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
@@ -1725,26 +1872,34 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
     def unresolved(r: dict[str, Any]) -> bool:
         if r.get("kind") in ("dataset", "existing"):
             return False  # the local Dataset stays by design; references own nothing
+        if r.get("status") in ("deleted", "skipped"):
+            return False
+        if r.get("kind") == "evaluator" and _uncertain_create(r):
+            return True  # a dispatched create with no outcome: an effect may exist
         if r.get("status") == "conflict" and not r.get("owned"):
             return False  # a foreign pre-existing resource: never ours, nothing to delete
-        return r.get("status") not in ("deleted", "skipped", "pending", "blocked") and (
-            _attempted(r) or r.get("status") in ("unknown", "delete_pending", "retained"))
+        # ``pending`` / ``blocked`` count exactly when a create was dispatched
+        return _attempted(r) or r.get("status") in ("unknown", "delete_pending", "retained")
 
     control = clients(workspace, "bedrock-agentcore-control")
     # 1. evaluators — reconcile unknown creates, verify identity, delete, CONFIRM gone
     for r in [x for x in resources if x["kind"] == "evaluator"]:
-        if r.get("status") in ("deleted", "pending", "blocked"):
+        if r.get("status") == "deleted":
             continue
-        if r.get("status") == "conflict" and not r.get("owned"):
-            continue  # foreign collision established at creation: never ours
         result = r.get("result") or {}
         request = r.get("request") or {}
         if not result.get("evaluator_id"):
-            if not request:
+            if not _attempted(r):
+                if r.get("status") in ("pending", "blocked"):
+                    continue  # never dispatched: nothing can exist
                 mark(r, "deleted", "no create was attempted")
                 continue
-            if r.get("create_outcome") == "rejected":
-                mark(r, "deleted", "the service rejected the create (4xx) — nothing was created")
+            if not _uncertain_create(r):
+                # every recorded dispatch was answered with a definite 4xx rejection or a
+                # creation-time collision: nothing of ours was created
+                if r.get("status") == "conflict" and not r.get("owned"):
+                    continue  # foreign collision established at creation: never ours
+                mark(r, "deleted", "the service rejected every create (4xx) — nothing created")
                 checkpoint(f"{r['key']}:reconciled")
                 continue
             # a CreateEvaluator may have succeeded with a lost response. The token cannot
@@ -1760,8 +1915,10 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
                         "which does not prove the create never succeeded")
             except ClientError as exc:
                 hint = f"; could not list evaluators: {_safe_error(exc)}"
-            mark(r, "unknown", "the CreateEvaluator response was lost before an id was "
-                               f"recorded (name {request.get('evaluatorName')}, clientToken "
+            except Exception as exc:  # noqa: BLE001 — transport: still unknown
+                hint = f"; could not list evaluators: {_safe_error(exc)}"
+            mark(r, "unknown", "a CreateEvaluator of this operation has no recorded outcome "
+                               f"(name {request.get('evaluatorName')}, clientToken "
                                f"{request.get('clientToken')}); this operation cannot prove "
                                f"whether it created one{hint} — retry the operation (the "
                                "idempotency token recovers or creates it under our "
@@ -1773,7 +1930,7 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
         eid = result["evaluator_id"]
         try:
             detail = control.get_evaluator(evaluatorId=eid)
-        except ClientError as exc:
+        except Exception as exc:  # noqa: BLE001 — incl. transport: recorded, retryable
             if gone(exc):
                 mark(r, "deleted", "already gone")
                 checkpoint(f"{r['key']}:gone")
@@ -1793,26 +1950,30 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
             checkpoint(f"{r['key']}:drift")
             continue
         if detail.get("status") != "DELETING":
+            fence.guard(db)
             try:
-                fence.guard(db)
                 control.delete_evaluator(evaluatorId=eid)
-            except ClientError as exc:
+            except Exception as exc:  # noqa: BLE001 — a lost delete response is recorded
                 if not gone(exc):
-                    mark(r, "delete_failed", _safe_error(exc))
+                    mark(r, "delete_failed" if isinstance(exc, ClientError) else "delete_pending",
+                         f"DeleteEvaluator did not answer cleanly ({_safe_error(exc)}) — the "
+                         "evaluator may or may not be deleting; retry later")
                     checkpoint(f"{r['key']}:cleanup")
                     continue
         # DeleteEvaluator is accepted asynchronously: only a NotFound readback proves gone
-        state = "delete_pending"
+        state, note = "delete_pending", ("DeleteEvaluator accepted but the evaluator is still "
+                                         "present — retry later")
         for _ in range(READBACK_ATTEMPTS):
             try:
                 control.get_evaluator(evaluatorId=eid)
-            except ClientError as exc:
+            except Exception as exc:  # noqa: BLE001
                 if gone(exc):
                     state = "deleted"
+                else:
+                    note = f"readback after DeleteEvaluator failed ({_safe_error(exc)}) — retry"
                 break
             sleeper(READBACK_DELAY_S)
-        mark(r, state, None if state == "deleted" else
-             "DeleteEvaluator accepted but the evaluator is still present — retry later")
+        mark(r, state, None if state == "deleted" else note)
         checkpoint(f"{r['key']}:cleanup")
     evaluators_left = [r["key"] for r in resources if r["kind"] == "evaluator" and unresolved(r)]
     # 2. the code chain — only once every evaluator is confirmed gone (dependency DAG)
@@ -1874,10 +2035,12 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
             except (_LeaseLost, _Stop):
                 raise
             except Exception as exc:  # noqa: BLE001 — incl. a lost delete response
-                mark(fn, "deleted" if gone(exc) else "delete_failed",
-                     None if gone(exc) else _safe_error(exc))
+                # only the helper's unqualified GetFunction NotFound proves absence; any
+                # other failure (ancillary NotFound included) keeps the dependencies
+                mark(fn, "delete_failed", _safe_error(exc))
             checkpoint("lambda_function:cleanup")
-        fn_gone = fn is None or fn.get("status") in ("deleted", "pending", "blocked")
+        fn_gone = fn is None or fn.get("status") == "deleted" or (
+            fn.get("status") in ("pending", "blocked") and not _attempted(fn))
         lg = by_key.get("log_group")
         if lg and unresolved(lg):
             logs = clients(workspace, "logs")
@@ -2015,9 +2178,15 @@ def _cleanup_function(lam: Any, fn: dict[str, Any], fn_result: dict[str, Any],
     snapshot = fn_result.get("readback") or {}
     latest_snapshot = fn_result.get("latest_readback") or {}
     version = fn_result.get("version")
-    if not snapshot or not latest_snapshot or not version or "versions" not in fn_result:
-        mark(fn, "conflict", "the function's identity snapshot is incomplete — review "
-                             "required before any delete")
+    incomplete = [k for k in FUNCTION_IDENTITY_FIELDS
+                  if snapshot.get(k) in (None, "") or latest_snapshot.get(k) in (None, "")]
+    if not version or not isinstance(fn_result.get("versions"), list) \
+            or not fn_result.get("versions") or not isinstance(fn_result.get("aliases"), list) \
+            or snapshot.get("ReservedConcurrentExecutions") is None:
+        incomplete.append("inventory")
+    if incomplete:
+        mark(fn, "conflict", f"the function's identity snapshot is incomplete ({incomplete}) — "
+                             "review required before any delete")
         return
     latest = get(None)
     if latest is None:
@@ -2041,13 +2210,18 @@ def _cleanup_function(lam: Any, fn: dict[str, Any], fn_result: dict[str, Any],
         mark(fn, "conflict", f"$LATEST differs from the recorded identity on {latest_drift} "
                              "— the function was changed since we made it; left untouched")
         return
+    reserved = lam.get_function_concurrency(FunctionName=name).get("ReservedConcurrentExecutions")
+    if reserved != snapshot.get("ReservedConcurrentExecutions"):
+        mark(fn, "conflict", f"reserved concurrency is {reserved}, recorded "
+                             f"{snapshot.get('ReservedConcurrentExecutions')} — the function "
+                             "was changed since we made it; left untouched")
+        return
     versions = sorted(v.get("Version") for v in _function_versions(lam, name))
     aliases = sorted(a.get("Name") for a in _function_aliases(lam, name))
-    if versions != sorted(fn_result["versions"]) or aliases != sorted(
-            fn_result.get("aliases") or []):
+    if versions != sorted(fn_result["versions"]) or aliases != sorted(fn_result["aliases"]):
         mark(fn, "conflict", f"the function carries versions {versions} / aliases {aliases} "
-                             f"beyond the recorded {sorted(fn_result['versions'])} — "
-                             "left untouched")
+                             f"beyond the recorded {sorted(fn_result['versions'])} / "
+                             f"{sorted(fn_result['aliases'])} — left untouched")
         return
     guard()
     lam.delete_function(FunctionName=name)  # idempotent re-drive of a pending delete too

@@ -13,7 +13,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from app.assistant import evaluation_assets as assets
-from app.core.db import SessionLocal
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.assistant import EvaluationAssetOperation
 from tests.conftest import ws_ctx
 from tests.test_evaluation_assets import (  # noqa: F401 — fixtures by import
@@ -327,7 +327,7 @@ def test_definite_create_rejection_is_not_unknown(app_ready):
     _run(op_id, fakes)
     op = _op(op_id)
     assert _res(op, "evaluator:pii")["status"] == "failed"
-    assert _res(op, "evaluator:pii")["create_outcome"] == "rejected"
+    assert [e["outcome"] for e in _res(op, "evaluator:pii")["create_history"]] == ["rejected"]
     op = _clean(op_id, fakes)
     assert _res(op, "evaluator:pii")["status"] == "deleted"
     assert "rejected" in _res(op, "evaluator:pii")["cleanup"]["note"]
@@ -427,3 +427,420 @@ def test_normal_owned_cleanup_positive_removes_exactly_the_footprint(app_ready):
     assert set(fakes.control.evaluators) == {"independent"}
     assert fakes.iam.roles["launchpad-agent-execution-role"]["policies"] == {
         "launchpad-agent-execution": {"Version": "2012-10-17"}}
+
+
+# ---------------------------------------------------------------------------
+# 7. consolidated correction: intent history, preserved uncertainty, identity capture
+#    before writes, complete snapshots, unqualified-only absence, recorded failures
+# ---------------------------------------------------------------------------
+
+
+class _Crash(BaseException):
+    """A process death right after the remote create succeeded."""
+
+
+def _crash_after(fakes, obj, method, *, only_name=None):
+    original = getattr(obj, method)
+
+    def crash(**kw):
+        out = original(**kw)
+        if only_name is None or kw.get("evaluatorName") == only_name:
+            raise _Crash()
+        return out
+
+    setattr(obj, method, crash)
+    return original
+
+
+def _run_expect_crash(op_id, fakes):
+    with pytest.raises(_Crash):
+        _run(op_id, fakes)
+
+
+def _fence_out_then_restore(op_id, fakes):
+    """A restart fenced by a workspace pin change cannot resolve the pending intent."""
+    with SessionLocal() as db:
+        from app.models.ledger import Workspace
+
+        op = db.get(EvaluationAssetOperation, op_id)
+        region = op.pinned["region"]
+        ws = db.get(Workspace, op.workspace_id)
+        ws.region = "eu-west-1"
+        db.commit()
+    _run(op_id, fakes)
+    with SessionLocal() as db:
+        from app.models.ledger import Workspace
+
+        ws = db.get(Workspace, DEFAULT_WORKSPACE_ID)
+        ws.region = region
+        db.commit()
+
+
+@pytest.mark.parametrize("kind", ["role", "logs", "function", "evaluator"])
+def test_crash_after_remote_create_before_checkpoint_is_an_effect_that_may_exist(
+    app_ready, kind
+):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    fn = assets.function_name(op_id)
+    obj, method, key = {"role": (fakes.iam, "create_role", "lambda_role"),
+                        "logs": (fakes.logs, "create_log_group", "log_group"),
+                        "function": (fakes.lam, "create_function", "lambda_function"),
+                        "evaluator": (fakes.control, "create_evaluator", "evaluator:tools")}[kind]
+    original = _crash_after(fakes, obj, method,
+                            only_name="kid_tools" if kind == "evaluator" else None)
+    _run_expect_crash(op_id, fakes)
+    res = _res(_op(op_id), key)
+    assert res["status"] == "pending" and (res.get("intent") or res.get("request")), res
+    assert assets._attempted(res)
+    setattr(obj, method, original)
+    _fence_out_then_restore(op_id, fakes)
+    op = _clean(op_id, fakes)
+    res = _res(op, key)
+    assert op.status != "cleaned", op.error
+    assert res["status"] in ("unknown", "retained", "conflict"), res
+    if kind == "evaluator":
+        assert res["status"] == "unknown" and "no recorded outcome" in res["cleanup"]["note"]
+        assert [e["outcome"] for e in res["create_history"]] == ["dispatched"]
+    if kind in ("function", "evaluator"):
+        assert fn in fakes.iam.roles and f"/aws/lambda/{fn}" in fakes.logs.groups
+        assert _res(op, "lambda_role")["status"] == "retained"
+    live = {"role": fakes.iam.roles, "logs": fakes.logs.groups, "function": fakes.lam.functions,
+            "evaluator": {e["evaluatorName"] for e in fakes.control.evaluators.values()}}[kind]
+    assert ({"role": fn, "logs": f"/aws/lambda/{fn}", "function": fn,
+             "evaluator": "kid_tools"}[kind]) in live  # the remote effect survives
+
+
+@pytest.mark.parametrize("code, http", [("AccessDeniedException", 403),
+                                        ("ConflictException", 409)])
+def test_uncertain_evaluator_create_survives_a_later_rejection(app_ready, code, http):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    fn = assets.function_name(op_id)
+    original = fakes.control.create_evaluator
+
+    def lost(**kw):
+        if kw["evaluatorName"] == "kid_tools":
+            fakes.control.lose_response_once = True
+        return original(**kw)
+
+    fakes.control.create_evaluator = lost
+    _run(op_id, fakes)
+    ids = set(fakes.control.evaluators)
+    op = _clean(op_id, fakes)
+    assert _res(op, "evaluator:tools")["status"] == "unknown"
+
+    def reject(**kw):
+        raise ClientError({"Error": {"Code": code, "Message": "synthetic"},
+                           "ResponseMetadata": {"HTTPStatusCode": http}}, "CreateEvaluator")
+
+    fakes.control.create_evaluator = reject
+    _run(op_id, fakes)
+    tools = _res(_op(op_id), "evaluator:tools")
+    outcomes = [e["outcome"] for e in tools["create_history"]]
+    assert outcomes[0] == "lost" and outcomes[-1] == (
+        "conflict" if code == "ConflictException" else "rejected"), outcomes
+    assert tools["status"] == ("unknown" if code == "ConflictException" else "failed"), tools
+    assert assets._uncertain_create(tools)
+    op = _clean(op_id, fakes)
+    assert op.status != "cleaned", op.error
+    assert _res(op, "evaluator:tools")["status"] == "unknown"
+    assert set(fakes.control.evaluators) & ids  # the possibly-ours evaluator is alive
+    assert fn in fakes.lam.functions and fn in fakes.iam.roles
+    for k in CHAIN:
+        assert _res(op, k)["status"] == "retained", k
+
+
+def test_created_function_identity_is_captured_before_any_readback_or_write(app_ready):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    fn = assets.function_name(op_id)
+    original = fakes.lam.get_function_configuration
+
+    def lost(**kw):
+        raise ConnectionError("first readback lost")
+
+    fakes.lam.get_function_configuration = lost
+    _run(op_id, fakes)
+    res = _res(_op(op_id), "lambda_function")
+    assert res["status"] == "failed" and res["result"]["revision_id"] == \
+        fakes.lam.functions[fn]["cfg"]["RevisionId"]
+    assert res["result"]["created_identity"]["FunctionArn"].endswith(f":function:{fn}")
+    assert fakes.lam.publish_calls == 0
+    # the function is replaced by one with the same downloadable code but a new RevisionId
+    replacement = copy.deepcopy(fakes.lam.functions[fn])
+    replacement["cfg"]["RevisionId"] = "replacement-service-identity"
+    fakes.lam.functions[fn] = replacement
+    fakes.lam.get_function_configuration = original
+    _run(op_id, fakes)
+    res = _res(_op(op_id), "lambda_function")
+    assert res["status"] == "conflict" and "RevisionId" in res["error"], res
+    assert fakes.lam.publish_calls == 0 and replacement["versions"] == {}
+    assert fakes.lam.functions[fn].get("reserved") is None
+    assert fakes.lam.policies.get(fn) is None  # no permission written either
+    op = _clean(op_id, fakes)
+    assert op.status == "partial" and fn in fakes.lam.functions
+    assert _res(op, "lambda_function")["status"] == "conflict"
+    assert "incomplete" in _res(op, "lambda_function")["cleanup"]["note"]
+    assert _res(op, "log_group")["status"] == "retained"
+
+
+def test_log_group_identity_is_read_before_retention_and_a_recreated_group_is_refused(
+    app_ready
+):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    name = f"/aws/lambda/{assets.function_name(op_id)}"
+    original = fakes.logs.put_retention_policy
+
+    def failing(**kw):
+        raise ConnectionError("retention failed before first identity read")
+
+    fakes.logs.put_retention_policy = failing
+    _run(op_id, fakes)
+    res = _res(_op(op_id), "log_group")
+    assert res["status"] == "failed" and res["result"]["creation_time"] == \
+        fakes.logs.groups[name]["creationTime"]
+    replacement = copy.deepcopy(fakes.logs.groups[name])
+    replacement["creationTime"] = 777777777
+    fakes.logs.groups[name] = replacement
+    fakes.logs.put_retention_policy = original
+    _run(op_id, fakes)
+    res = _res(_op(op_id), "log_group")
+    assert res["status"] == "conflict" and "re-created" in res["error"], res
+    assert "retention" not in fakes.logs.groups[name]  # our retention was never written
+    op = _clean(op_id, fakes)
+    assert op.status == "partial" and name in fakes.logs.groups
+    assert _res(op, "log_group")["status"] == "conflict"
+
+
+def test_publish_precondition_uses_the_recorded_revision(app_ready):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    fn = assets.function_name(op_id)
+    original = fakes.lam.publish_version
+    seen = {}
+
+    def capture(FunctionName, CodeSha256=None, RevisionId=None):
+        seen["RevisionId"] = RevisionId
+        fakes.lam.functions[FunctionName]["cfg"]["RevisionId"] = "changed-in-window"
+        return original(FunctionName, CodeSha256, RevisionId)
+
+    fakes.lam.publish_version = capture
+    _run(op_id, fakes)
+    res = _res(_op(op_id), "lambda_function")
+    assert seen["RevisionId"] and res["status"] == "conflict"
+    assert "precondition" in res["error"].lower(), res
+    assert fakes.lam.functions[fn]["versions"] == {}
+
+
+@pytest.mark.parametrize("field, value", [
+    ("Timeout", 900),
+    ("FunctionArn", "arn:aws:lambda:eu-west-1:999900001111:function:foreign"),
+    ("MemorySize", 10240), ("Handler", "other.handler"),
+])
+def test_first_latest_snapshot_validates_every_approved_field(app_ready, field, value):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    fn = assets.function_name(op_id)
+    original = fakes.lam.get_function
+
+    def drift(FunctionName, Qualifier=None):
+        if not Qualifier and fakes.lam.functions[FunctionName]["versions"]:
+            fakes.lam.functions[FunctionName]["cfg"][field] = value
+        return original(FunctionName, Qualifier)
+
+    fakes.lam.get_function = drift
+    _run(op_id, fakes)
+    res = _res(_op(op_id), "lambda_function")
+    assert res["status"] == "conflict" and field in res["error"], res
+    assert "latest_readback" not in res["result"]
+    op = _clean(op_id, fakes)
+    assert op.status == "partial" and fn in fakes.lam.functions
+    assert _res(op, "lambda_function")["status"] == "conflict"
+    assert _res(op, "log_group")["status"] == "retained"
+    assert _res(op, "lambda_role")["status"] == "retained"
+
+
+def test_missing_service_revision_never_compares_equal(app_ready):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    fn = assets.function_name(op_id)
+    original = fakes.lam.get_function
+
+    def strip(FunctionName, Qualifier=None):
+        d = original(FunctionName, Qualifier)
+        d["Configuration"].pop("RevisionId", None)
+        return d
+
+    fakes.lam.get_function = strip
+    _run(op_id, fakes)
+    res = _res(_op(op_id), "lambda_function")
+    assert res["status"] == "conflict" and "RevisionId" in res["error"]
+    op = _clean(op_id, fakes)
+    assert op.status == "partial" and fn in fakes.lam.functions
+    assert _res(op, "lambda_function")["status"] == "conflict"
+    assert _res(op, "log_group")["status"] == "retained"
+
+
+@pytest.mark.parametrize("field", ["aliases", "versions"])
+def test_missing_recorded_inventory_refuses_delete(app_ready, field):
+    op_id, fakes, fn = _completed()
+    with SessionLocal() as db:
+        op = db.get(EvaluationAssetOperation, op_id)
+        resources = json.loads(json.dumps(op.resources))
+        next(r for r in resources if r["key"] == "lambda_function")["result"].pop(field)
+        op.resources = resources
+        db.commit()
+    op = _clean(op_id, fakes)
+    fnr = _res(op, "lambda_function")
+    assert fnr["status"] == "conflict" and "inventory" in fnr["cleanup"]["note"]
+    assert fn in fakes.lam.functions and op.status == "partial"
+    assert _res(op, "log_group")["status"] == "retained"
+
+
+def test_reserved_concurrency_drift_retains(app_ready):
+    op_id, fakes, fn = _completed()
+    fakes.lam.functions[fn]["reserved"] = 100
+    op = _clean(op_id, fakes)
+    fnr = _res(op, "lambda_function")
+    assert fnr["status"] == "conflict" and "concurrency" in fnr["cleanup"]["note"]
+    assert fn in fakes.lam.functions and op.status == "partial"
+
+
+@pytest.mark.parametrize("failure", ["aliases-notfound", "versions-notfound",
+                                     "qualified-transport", "versions-page-transport"])
+def test_ancillary_failures_never_establish_whole_function_absence(app_ready, failure):
+    op_id, fakes, fn = _completed()
+    if failure == "aliases-notfound":
+        fakes.lam.list_aliases = lambda **kw: (_ for _ in ()).throw(
+            ClientError({"Error": {"Code": "ResourceNotFoundException"}}, "ListAliases"))
+    elif failure == "versions-notfound":
+        fakes.lam.list_versions_by_function = lambda **kw: (_ for _ in ()).throw(
+            ClientError({"Error": {"Code": "ResourceNotFoundException"}}, "ListVersions"))
+    elif failure == "qualified-transport":
+        original = fakes.lam.get_function
+
+        def get(FunctionName, Qualifier=None):
+            if Qualifier:
+                raise ConnectionError("qualified readback lost")
+            return original(FunctionName, Qualifier)
+
+        fakes.lam.get_function = get
+    else:
+        original = fakes.lam.list_versions_by_function
+
+        def pages(FunctionName, Marker=None):
+            if Marker:
+                raise ConnectionError("second page lost")
+            return {**original(FunctionName=FunctionName), "NextMarker": "second"}
+
+        fakes.lam.list_versions_by_function = pages
+    op = _clean(op_id, fakes)
+    fnr = _res(op, "lambda_function")
+    assert fnr["status"] == "delete_failed", fnr
+    assert fn in fakes.lam.functions and fn in fakes.iam.roles
+    assert f"/aws/lambda/{fn}" in fakes.logs.groups
+    assert _res(op, "log_group")["status"] == "retained"
+    assert _res(op, "lambda_role")["status"] == "retained"
+    assert op.status == "partial"
+
+
+@pytest.mark.parametrize("code", ["AccessDeniedException", "ThrottlingException", "transport"])
+def test_readback_error_after_delete_function_keeps_dependencies(app_ready, code):
+    op_id, fakes, fn = _completed()
+    original = fakes.lam.get_function
+    pending = []
+
+    def delete(FunctionName, Qualifier=None):
+        pending.append(FunctionName)
+        return {}
+
+    def get(FunctionName, Qualifier=None):
+        if pending:
+            if code == "transport":
+                raise ConnectionError("lost readback")
+            raise ClientError({"Error": {"Code": code}}, "GetFunction")
+        return original(FunctionName, Qualifier)
+
+    fakes.lam.delete_function = delete
+    fakes.lam.get_function = get
+    op = _clean(op_id, fakes)
+    assert _res(op, "lambda_function")["status"] == "delete_failed"
+    assert _res(op, "log_group")["status"] == "retained"
+    assert _res(op, "lambda_role")["status"] == "retained"
+    assert fn in fakes.lam.functions and fn in fakes.iam.roles and fakes.logs.groups
+    assert op.status == "partial"
+
+
+@pytest.mark.parametrize("where", ["delete", "readback", "poll"])
+def test_evaluator_cleanup_transport_failures_are_recorded_and_retryable(app_ready, where):
+    op_id, fakes, fn = _completed()
+    original_delete, original_get = fakes.control.delete_evaluator, fakes.control.get_evaluator
+    armed = {"on": True}
+
+    def lost_delete(**kw):
+        original_delete(**kw)
+        raise ConnectionError("delete accepted, reply lost")
+
+    def lost_readback(evaluatorId):
+        if armed["on"]:
+            raise ConnectionError("readback lost")
+        return original_get(evaluatorId)
+
+    def lost_poll(evaluatorId):
+        if evaluatorId in fakes.control.deleting and armed["on"]:
+            raise ConnectionError("poll lost")
+        return original_get(evaluatorId)
+
+    if where == "delete":
+        fakes.control.delete_evaluator = lost_delete
+    elif where == "readback":
+        fakes.control.get_evaluator = lost_readback
+    else:
+        fakes.control.get_evaluator = lost_poll
+    op = _clean(op_id, fakes)  # no exception escapes; the row is not left 'cleaning'
+    assert op.status == "partial" and op.worker_token is None, (op.status, op.error)
+    statuses = {_res(op, k)["status"] for k in ("evaluator:pii", "evaluator:tools")}
+    assert statuses <= {"delete_pending", "delete_failed"}, statuses
+    for k in CHAIN + ("role_grant",):
+        assert _res(op, k)["status"] == "retained", k
+    assert fn in fakes.lam.functions and fn in fakes.iam.roles
+    # the transport recovers: the explicit retry finishes without creating anything
+    armed["on"] = False
+    fakes.control.delete_evaluator = original_delete
+    fakes.control.get_evaluator = original_get
+    created = fakes.control.create_calls
+    op = _clean(op_id, fakes)
+    assert op.status == "cleaned", op.error
+    assert fakes.control.create_calls == created
+    assert fakes.control.evaluators == {} and fakes.lam.functions == {}
+
+
+def test_unexpected_cleanup_failure_is_recorded_partial_with_released_token(app_ready):
+    """A failure outside the per-resource boundaries (here: the client factory itself)
+    must not leave the row 'cleaning' with a lease token; it is recorded and retryable."""
+    op_id, fakes, fn = _completed()
+
+    def broken_factory(workspace, service):
+        if service == "bedrock-agentcore-control":
+            raise RuntimeError("synthetic client construction failure")
+        return fakes(workspace, service)
+
+    with SessionLocal() as db, pytest.raises(assets.AppError) as excinfo:
+        assets.cleanup_operation(db, db.get(EvaluationAssetOperation, op_id), ws_ctx(RESOURCES),
+                                 clients=broken_factory, sleeper=lambda s: None)
+    assert excinfo.value.code == "assistant.evaluation_assets_cleanup_failed"
+    op = _op(op_id)
+    assert op.status == "partial" and op.worker_token is None
+    assert "cleanup failed" in op.error
+    assert fn in fakes.lam.functions and len(fakes.control.evaluators) == 2  # nothing touched
+    op = _clean(op_id, fakes)  # retryable once the fault is gone
+    assert op.status == "cleaned", op.error

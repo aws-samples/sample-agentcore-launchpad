@@ -281,9 +281,11 @@ class FakeLambda:
             else dict(f["cfg"])
         return {"Configuration": cfg, "Tags": dict(f["tags"])}
 
-    def publish_version(self, FunctionName, CodeSha256=None):
+    def publish_version(self, FunctionName, CodeSha256=None, RevisionId=None):
         self.publish_calls += 1
         f = self.functions[FunctionName]
+        if RevisionId and RevisionId != f["cfg"]["RevisionId"]:
+            raise _err("PreconditionFailedException", "PublishVersion")
         if CodeSha256 and CodeSha256 != f["cfg"]["CodeSha256"]:
             raise _err("InvalidParameterValueException", "PublishVersion")
         for v in f["versions"].values():
@@ -1277,12 +1279,12 @@ def test_publish_version_conflict_semantics_reconcile_without_minting(app_ready)
     op2, *_ = _approve(cid2, h2, fakes=fakes2)
     original = fakes2.lam.publish_version
 
-    def double_publish(FunctionName, CodeSha256=None):
+    def double_publish(FunctionName, CodeSha256=None, RevisionId=None):
         f = fakes2.lam.functions[FunctionName]
         for n in ("7", "8"):
             f["versions"][n] = {**f["cfg"], "Version": n, "State": "Active",
                                 "FunctionArn": f["cfg"]["FunctionArn"] + ":" + n}
-        return original(FunctionName, CodeSha256)
+        return original(FunctionName, CodeSha256, RevisionId)
 
     fakes2.lam.publish_version = double_publish
     _run(op2, fakes2)
