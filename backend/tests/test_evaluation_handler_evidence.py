@@ -245,3 +245,118 @@ def test_strict_target_presence_and_types():
     noid = [dict(d, traceId="") for d in ok]
     assert run(noid, "TRACE", target={"traceIds": [""]})["errorCode"] == "TARGET_UNRESOLVED"
     assert run(ok, "TRACE", target={"traceIds": ["t1"]})["label"] == "PASS"
+
+
+# ---------------------------------------------------------------- phase A correction
+
+def cycle_span(trace, sid, start, message, tool_result=None):
+    """Strands ``execute_event_loop_cycle`` wrapper (tracer.start/end_event_loop_cycle_span):
+    a gen_ai.choice echoing the cycle's model message (+ tool.result) — structural only."""
+    attrs = {"message": message}
+    if tool_result is not None:
+        attrs["tool.result"] = tool_result
+    return span(trace, sid, "execute_event_loop_cycle",
+                {"gen_ai.operation.name": "execute_event_loop_cycle", "event_loop.cycle_id": sid},
+                start, end=start + 50, events=[{"name": "gen_ai.choice", "attributes": attrs}])
+
+
+def sdk_full_trajectory():
+    """Agent span + two cycle wrappers + tool_use model turns + tools + final model turn,
+    in the order/shape the installed tracer produces (amber only in tool input/results)."""
+    use = json.dumps([{"toolUse": {"name": "weather", "input": {"x": "amber tool input"}}}])
+    res = json.dumps([{"toolResult": {"content": [{"text": "amber tool result"}]}}])
+    agent_choice = {"name": "gen_ai.choice",
+                    "attributes": {"message": "safe", "finish_reason": "end_turn"}}
+    docs = [span("t1", "agent", "invoke_agent kid", {"gen_ai.operation.name": "invoke_agent"}, 1,
+                 end=200, events=[agent_choice])]
+    docs += [cycle_span("t1", "c0", 5, use, res), model_span("t1", "m0", 10, finish="tool_use",
+                                                                message=use),
+             tool("t1", "x", "weather", 20),
+             cycle_span("t1", "c1", 25, use, res), model_span("t1", "m1", 30, finish="tool_use",
+                                                                 message=use),
+             tool("t1", "y", "calendar", 40),
+             cycle_span("t1", "c2", 45, blocks("safe"))]
+    docs += adot_turn("t1", "m2", 50, blocks("safe"))
+    return docs
+
+
+def test_sdk_cycle_wrappers_are_structural_and_the_tool_loop_stays_valid():
+    docs = sdk_full_trajectory()
+    assert run(docs)["label"] == "PASS"                    # whole-session no-leak
+    assert run(docs, name="seq")["label"] == "PASS"       # weather → calendar
+    assert run(docs, name="tools")["label"] == "FAIL"     # two tool calls, max 0
+    # the wrapper's echoed message never becomes the answer, even when it is the latest
+    only_wrapper = [docs[0], cycle_span("t1", "c9", 300, blocks("amber"))]
+    assert run(only_wrapper)["label"] == "PASS"
+
+
+def test_all_finish_sources_are_gathered_and_conflicting_copies_error():
+    raw = blocks("safe")
+    # paired span choice=length + ADOT log end_turn (host case); log alone; consistent pair
+    sp = model_span("t1", "m", 10, finish="length", message=raw)
+    log = adot_turn("t1", "m", 10, raw)[1]
+    assert run([sp, log], "TRACE", target=T1)["errorCode"] == "TRUNCATED"
+    assert run([log], "TRACE", target=T1)["errorCode"] == "INCOMPLETE"
+    good = model_span("t1", "m", 10, message=raw)
+    assert run([good, log], "TRACE", target=T1)["label"] == "PASS"
+    # earlier choice length/tool_use then a stop choice on the same span
+    for reason, code in (("length", "TRUNCATED"), ("tool_use", "INCOMPLETE")):
+        two = model_span("t1", "m", 10, message=raw)
+        two["events"].insert(0, {"name": "gen_ai.choice",
+                                 "attributes": {"message": raw, "finish_reason": reason}})
+        assert run([two])["errorCode"] == code, reason
+        # choice stop hides a DETAILS / attribute contradiction
+        d = model_span("t1", "m", 10, message=raw)
+        details_msgs = json.dumps([{"role": "assistant", "finish_reason": reason,
+                                    "parts": [{"type": "text", "content": "safe"}]}])
+        d["events"].append({"name": "gen_ai.client.inference.operation.details",
+                            "attributes": {"gen_ai.output.messages": details_msgs}})
+        assert run([d])["errorCode"] == code, reason
+        a = model_span("t1", "m", 10, message=raw)
+        a["attributes"]["gen_ai.output.messages"] = json.dumps([
+            {"role": "assistant", "finish_reason": reason,
+             "parts": [{"type": "text", "content": "safe"}]}])
+        assert run([a])["errorCode"] == code, reason
+        # several ADOT output messages: an earlier non-terminal finish is not ignored
+        body = adot_turn("t1", "m", 10, raw)
+        ms = body[1]["body"]["output"]["messages"]
+        ms.insert(0, {"role": "assistant", "content": {"message": raw, "finish_reason": reason}})
+        assert run(body)["errorCode"] == code, reason
+    # two sources reporting different current output text
+    conflict = adot_turn("t1", "m", 10, blocks("safe"))
+    conflict[0]["events"] = [{"name": "gen_ai.choice", "attributes": {
+        "message": blocks("amber"), "finish_reason": "end_turn"}}]
+    assert run(conflict)["errorCode"] == "CONFLICTING_OUTPUT"
+
+
+def test_document_identity_and_exact_nanoseconds():
+    good = adot_turn("t1", "m", 10, blocks("safe"))
+    for bad in (" ", 42, True, ""):
+        d = json.loads(json.dumps(good))
+        d[0]["spanId"] = bad
+        assert run(d)["errorCode"] == "UNKNOWN_IDENTITY", bad
+        d = json.loads(json.dumps(good))
+        d[0]["traceId"] = bad
+        assert run(d)["errorCode"] == "UNKNOWN_IDENTITY", bad
+    absent = json.loads(json.dumps(good))
+    absent[0].pop("traceId")
+    assert run(absent)["errorCode"] == "UNKNOWN_IDENTITY"
+    # the id-less span can satisfy no target; the remaining log has no ended span
+    assert run(absent, "TRACE", target=T1)["errorCode"] == "INCOMPLETE"
+    lone = [dict(absent[0])]
+    assert run(lone, "TRACE", target=T1)["errorCode"] == "TARGET_UNRESOLVED"
+    numeric = json.loads(json.dumps(good))
+    for d in numeric:
+        d["traceId"] = 42
+    assert run(numeric, "TRACE", target={"traceIds": ["42"]})["errorCode"] != "PASS"
+    assert "label" not in run(numeric, "TRACE", target={"traceIds": ["42"]})
+    alias = json.loads(json.dumps(good))
+    alias[0]["trace_id"] = "other"
+    assert run(alias)["errorCode"] == "UNKNOWN_IDENTITY"
+    # one nanosecond backwards is reversed, not equal
+    ns = model_span("t1", "m", 1700000000000000001, message=blocks("safe"),
+                    end=1700000000000000000)
+    assert run([ns])["errorCode"] == "INCOMPLETE"
+    ns_ok = model_span("t1", "m", 1700000000000000000, message=blocks("safe"),
+                       end=1700000000000000001)
+    assert run([ns_ok])["label"] == "PASS"

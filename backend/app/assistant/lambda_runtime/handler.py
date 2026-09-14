@@ -25,7 +25,11 @@ ADOT serializer actually emit, typed by SOURCE (never by punctuation):
     attributes: a JSON list of {role, parts[{type, content}], finish_reason} (SERIALIZED);
   * ``gen_ai.completion`` (devguide example): plain text;
   * ``gen_ai.user/assistant/tool.message`` events and ADOT ``body.input`` are INPUT
-    context — never output.
+    context — never output;
+  * ``execute_event_loop_cycle`` spans are structural wrappers (they echo the cycle's
+    model message and tool results) — neither an answer nor a tool call;
+  * document ids (``traceId`` / ``spanId``, snake_case aliases) must be non-empty
+    strings; timestamps keep exact integer nanoseconds.
 
 Fail-closed evidence rules (every violation is an error envelope, never PASS):
   * strict schema (string "1.0"), level, target shape (TRACE: non-empty string traceIds
@@ -34,8 +38,10 @@ Fail-closed evidence rules (every violation is an error envelope, never PASS):
   * dropped attributes/events on any document, missing span ids, conflicting duplicate
     documents (same id, different content) and repeated OTLP attribute keys with
     different values are errors; exact duplicates are counted once;
-  * the LATEST model turn decides: every finish indication of that turn (event, message,
-    span ``finish_reasons`` list) must agree on a terminal stop; a continuation
+  * the LATEST model turn decides: every finish indication of that turn — every choice
+    event, every ADOT / DETAILS output message, the span ``finish_reasons`` list — is
+    gathered before any output is chosen and must agree on a terminal stop; two sources
+    reporting different current-output text are a conflict; a continuation
     (``tool_use``) or truncation (``length``/``max_tokens``/filter) anywhere in the
     set, no output, or a finished span without a valid end timestamp (≥ start) is not
     a complete answer;
@@ -57,6 +63,10 @@ SCHEMA_VERSION = "1.0"
 LEVELS = ("TRACE", "TOOL_CALL", "SESSION")
 MODEL_OPERATIONS = ("chat", "text_completion", "generate_content", "invoke_model", "converse")
 AGENT_OPERATIONS = ("invoke_agent",)
+# Strands structural wrappers: they re-emit the cycle's model message (tool use or final
+# text) and tool results for correlation — never an assistant answer, never a tool call
+STRUCTURAL_OPERATIONS = ("execute_event_loop_cycle",)
+STRUCTURAL_NAMES = ("execute_event_loop_cycle",)
 TOOL_OPERATION = "execute_tool"
 TOOL_NAME_KEYS = ("gen_ai.tool.name", "tool.name")
 TOOL_SPAN_PREFIXES = ("execute_tool ", "execute_tool:")
@@ -131,23 +141,42 @@ def _attributes(obj):
 
 
 def _time(doc, *keys):
+    """Exact timestamp: JSON integers / digit strings stay integers (nanoseconds are
+    never float-rounded); finite floats are accepted as given; anything else is None."""
     for key in keys:
         value = doc.get(key)
         if isinstance(value, bool):
             continue
-        if isinstance(value, (int, float)):
-            return float(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return value if value == value and value not in (float("inf"), float("-inf")) else None
         if isinstance(value, str) and value.strip().isdigit():
-            return float(value)
+            return int(value.strip())
     return None
 
 
+def _identity(doc, camel, snake):
+    """A raw document id: a non-empty, non-blank STRING (camelCase or the snake_case
+    alias; both present must agree). Numbers, booleans, blanks and absence are not an
+    identity and are never coerced into one."""
+    values = [doc[k] for k in (camel, snake) if k in doc]
+    if not values:
+        raise Unusable("UNKNOWN_IDENTITY", f"a document has no {camel}")
+    if len(values) == 2 and values[0] != values[1]:
+        raise Unusable("UNKNOWN_IDENTITY", f"{camel} and {snake} disagree")
+    value = values[0]
+    if not isinstance(value, str) or not value.strip():
+        raise Unusable("UNKNOWN_IDENTITY", f"{camel} is not a non-empty string")
+    return value.strip()
+
+
 def _trace_id(doc):
-    return str(doc.get("traceId") or doc.get("trace_id") or "")
+    return _identity(doc, "traceId", "trace_id")
 
 
 def _span_id(doc):
-    return str(doc.get("spanId") or doc.get("span_id") or "")
+    return _identity(doc, "spanId", "span_id")
 
 
 def _events(doc):
@@ -232,7 +261,13 @@ class _Group:
     def operation(self):
         return str(self.attrs.get("gen_ai.operation.name") or "")
 
+    def is_structural(self):
+        name = str((self.span or {}).get("name") or "")
+        return self.operation() in STRUCTURAL_OPERATIONS or name in STRUCTURAL_NAMES
+
     def is_tool(self):
+        if self.is_structural():
+            return False
         if self.operation() == TOOL_OPERATION:
             return True
         if any(k in self.attrs for k in TOOL_NAME_KEYS):
@@ -261,7 +296,7 @@ class _Group:
         return names[0] if names else None
 
     def is_model(self):
-        if self.is_tool():
+        if self.is_tool() or self.is_structural():
             return False
         if self.operation() in MODEL_OPERATIONS or self.operation() in AGENT_OPERATIONS:
             return True
@@ -289,8 +324,6 @@ def _group(docs):
         if _dropped(doc) or any(_dropped(e) for e in _events(doc)):
             raise Unusable("TRUNCATED_EVIDENCE", "span/event attributes or events were dropped")
         key = (_trace_id(doc), _span_id(doc))
-        if not key[1]:
-            raise Unusable("UNKNOWN_IDENTITY", "a span document has no spanId")
         g = groups.get(key)
         if g is None:
             g = _Group(*key)
@@ -382,12 +415,16 @@ def _message_text(raw, plain, what):
 
 def _turn_output(group):
     """(text | None, finish indications [..], found) of the group's current-turn output.
-    Sources in order: ADOT conversation log record → gen_ai.choice events → DETAILS /
-    gen_ai.output.messages → gen_ai.completion. Every finish indication of the turn is
-    collected (event, message, span finish_reasons) — none is preferred over another."""
+
+    EVERY present representation is read — ADOT output records (all assistant messages),
+    every ``gen_ai.choice`` event, DETAILS events / ``gen_ai.output.messages`` (all
+    assistant messages), ``gen_ai.completion`` and the span's ``finish_reasons`` — and
+    every finish indication they carry is kept. No source is preferred: two copies of the
+    current output that disagree are a conflict, not a choice."""
     finishes = _finish_list(group.attrs.get("gen_ai.response.finish_reasons"))
     plain = group.plain_output()
-    text, found = None, False
+    texts = []
+    found = False
     for log in group.logs:
         body = _body(log)
         if not body or _is_tool_log(body):
@@ -395,51 +432,50 @@ def _turn_output(group):
         messages = (body.get("output") or {}).get("messages")
         if not isinstance(messages, list):
             continue
-        chosen = None
+        found = True
         for m in messages:
             if isinstance(m, dict) and isinstance(m.get("content"), dict) \
                     and "message" in m["content"] and str(m.get("role") or "") == "assistant":
-                chosen = m
-        found = True
-        if chosen is not None:
-            content = chosen["content"]
-            text = _message_text(content["message"], plain, "body.output message")
-            finishes += _finish_list(content.get("finish_reason"))
-        break
-    if not found:
-        choices = [e for e in _events(group.span or {})
-                   if str(e.get("name") or "") == "gen_ai.choice"]
-        if choices:
+                content = m["content"]
+                texts.append(_message_text(content["message"], plain, "body.output message"))
+                finishes += _finish_list(content.get("finish_reason"))
+    for e in _events(group.span or {}):
+        name = str(e.get("name") or "")
+        attrs = _attributes(e)
+        if name == "gen_ai.choice":
             found = True
-            attrs = _attributes(choices[-1])
             if attrs.get("message") not in (None, ""):
-                text = _message_text(attrs.get("message"), plain, "gen_ai.choice message")
+                texts.append(_message_text(attrs.get("message"), plain, "gen_ai.choice message"))
             finishes += _finish_list(attrs.get("finish_reason"))
-    if not found:
-        details = [e for e in _events(group.span or {})
-                   if str(e.get("name") or "") == DETAILS_EVENT]
-        raw = None
-        if details:
-            raw = _attributes(details[-1]).get("gen_ai.output.messages")
-        elif "gen_ai.output.messages" in group.attrs:
-            raw = group.attrs["gen_ai.output.messages"]
-        if raw is not None:
+        elif name == DETAILS_EVENT and "gen_ai.output.messages" in attrs:
             found = True
-            parsed = _serialized_message(raw, "gen_ai.output.messages")
-            chosen = None
-            for m in parsed if isinstance(parsed, list) else [parsed]:
-                if isinstance(m, dict) and str(m.get("role") or "assistant") == "assistant":
-                    chosen = m
-            if chosen is not None:
-                text = _structured_text(chosen)
-                finishes += _finish_list(chosen.get("finish_reason"))
-    if not found and "gen_ai.completion" in group.attrs:
+            texts += _output_messages(attrs["gen_ai.output.messages"], finishes)
+    if "gen_ai.output.messages" in group.attrs:
+        found = True
+        texts += _output_messages(group.attrs["gen_ai.output.messages"], finishes)
+    if "gen_ai.completion" in group.attrs:
         found = True
         raw = group.attrs["gen_ai.completion"]
         if not isinstance(raw, str):
             raise Unusable("MALFORMED_OUTPUT", "gen_ai.completion is not a string")
-        text = raw.strip() or None
+        texts.append(raw.strip() or None)
+    distinct = {t for t in texts if t is not None}
+    if len(distinct) > 1:
+        raise Unusable("CONFLICTING_OUTPUT",
+                       "the current-turn output is reported differently by two sources")
+    text = next(iter(distinct)) if distinct else None
     return text, finishes, found
+
+
+def _output_messages(raw, finishes):
+    """Assistant texts of a serialized message list; appends every finish indication."""
+    parsed = _serialized_message(raw, "gen_ai.output.messages")
+    out = []
+    for m in parsed if isinstance(parsed, list) else [parsed]:
+        if isinstance(m, dict) and str(m.get("role") or "assistant") == "assistant":
+            out.append(_structured_text(m))
+            finishes += _finish_list(m.get("finish_reason"))
+    return out
 
 
 def _classify(finishes):
@@ -464,11 +500,23 @@ def _select(docs, level, target):
         raise Unusable("TARGET_UNRESOLVED", "TOOL_CALL targets are not supported")
     if level == "TRACE":
         wanted = {str(t) for t in target["traceIds"]}
-        present = {_trace_id(d) for d in docs}
+        present = set()
+        for d in docs:
+            try:
+                present.add(_trace_id(d))
+            except Unusable:
+                continue  # a document without a real identity can satisfy no target
         missing = sorted(wanted - present)
         if missing:
             raise Unusable("TARGET_UNRESOLVED", f"no spans for target trace(s) {missing}")
-        return [d for d in docs if _trace_id(d) in wanted], wanted
+        selected = []
+        for d in docs:
+            try:
+                if _trace_id(d) in wanted:
+                    selected.append(d)
+            except Unusable:
+                continue
+        return selected, wanted
     return list(docs), None
 
 
@@ -535,7 +583,9 @@ def extract_evidence(docs, level, target):
     if last["text"] is None:
         raise Unusable("NO_OUTPUT", "the latest model turn carries no current-turn assistant "
                                     "output (input history is not output)")
-    if last["group"].span is not None and not _valid_end(last["group"]):
+    if last["group"].span is None:
+        raise Unusable("INCOMPLETE", "the final output record has no ended span document")
+    if not _valid_end(last["group"]):
         raise Unusable("INCOMPLETE", "the final model span has no valid end timestamp")
     # whole-scope completeness: every earlier turn is either a complete answer or a
     # legitimate tool-use continuation followed by later turns
@@ -543,8 +593,8 @@ def extract_evidence(docs, level, target):
     for i, t in enumerate(turns[:-1]):
         if t["verdict"] == "continue":
             continue  # intermediate tool trajectory turn
-        if t["verdict"] != "complete" or t["text"] is None or (
-                t["group"].span is not None and not _valid_end(t["group"])):
+        if t["verdict"] != "complete" or t["text"] is None or t["group"].span is None \
+                or not _valid_end(t["group"]):
             complete_scope, gap = False, i
             break
     if any(t["verdict"] == "continue" for t in turns[:-1]) and not tools:
