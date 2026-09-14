@@ -1029,6 +1029,11 @@ export interface AssistantEvalResource {
   cleanup?: { at: string; ok: boolean; note: string | null } | null;
   owned?: boolean;
   recovered?: boolean;
+  /** SE-049: review-required marker of the Lambda first-initialization RevisionId change. */
+  review?: { kind: string; observed_revision_id?: string | null;
+             observed_last_modified?: string | null; resolved_by?: string } | null;
+  /** SE-049: append-only reviewed-recovery audit entries (no CloudTrail actor). */
+  reviews?: Record<string, unknown>[];
   link?: string;
 }
 

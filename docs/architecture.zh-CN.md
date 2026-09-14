@@ -791,6 +791,44 @@ Agent 从不被触碰；批准 Agent 不等于授权创建云端评估资源。
 - **隐私**：计划与操作仅对对话的不可变主体可见（其他主体 / Workspace → 404，管理员也一样）。创建前的披露说明：
   计划中**选定**的输入、预期回复、断言与评分标准会对 Workspace 全体成员在 评估 → Datasets / Evaluators 中可见，
   对话记录不会。"已创建"仅表示已注册——不代表通过、儿童安全或可用于生产。
+- **首次初始化会改变 RevisionId：只审阅，不自动重钉（SE-049）**：`CreateFunction` 在函数仍在配置时即返回
+  （`State = Pending` / `StateReasonCode = Creating`），Lambda 文档把 `RevisionId` 定义为最近一次*更新*的修订而非
+  不变身份：函数变为 `Active` 后 `$LATEST` 可能带新的 RevisionId，其余字段（含 `LastModified`）不变。worker 因此在
+  接受时把**允许列表内的原始 CreateFunction 响应不可变地**保存在意图上（`create_response`：初始 RevisionId、
+  State / StateReasonCode、LastModified、已批准配置、请求 ID；旁边是 `initial_revision_id`），等待
+  `State = Active` **且** `LastUpdateStatus = Successful`（有界；`InProgress` / `Failed` / 缺失状态不能发布，是普通的可
+  重试失败），RevisionId 未变时记录 `settled_revision_id`；当自有、已接受、从未发布的创建**仅** RevisionId 变化时，
+  仍记为 `conflict`，并标记 `review.kind = initial_revision_changed`（附观察到的 RevisionId / LastModified）。不做任何
+  自动重钉：相同摘要与角色只是可下载的内容，被替换的函数在控制台侧与激活后的函数无法区分。**经审阅的恢复**
+  （`POST …/operations/{id}/lambda-revision-review`，管理员**且**所有者，精确的计划哈希、期望的初始与当前 RevisionId、
+  CloudTrail 事件 ID 与原因）通过 Workspace 客户端漏斗在服务端读取指定的 `CreateFunction20150331` 事件（按 `EventId`
+  调用 `LookupEvents`；必须恰好一条格式正确的记录，最终一致的历史失败关闭），要求它就是本操作的成功创建（来源、账号、
+  区域、请求字段、响应中的 FunctionArn / 初始 RevisionId / CodeSha256 / `Pending` / `Creating` / `lastModified`，SE-049
+  之后接受的创建还须与持久化响应一致），再要求当前 `$LATEST` 等于该响应加上仅有的生命周期变化（Active / Successful、恰为
+  期望的当前 RevisionId、同一 LastModified、所有已批准字段与全部可选安全相关成员在统一折叠 SDK 与 CloudTrail 大小写后
+  一致），`$LATEST` 为唯一版本、无别名、无资源策略、无预留并发，且记录的角色 / 日志组身份未变。资格先在账本上判定：
+  操作为 partial / failed、身份已钉住、Lambda 意图是**仅**因发布前 RevisionId 漂移而阻塞的自有已接受创建（丢失的创建是
+  `unknown`，永不可审阅；已发布版本、发布意图或已重钉基线属于普通漂移），且无其他无关的未决结果。写入在主机锁下进行，
+  调用者在锁内重新解析、审批人与钉住的 Workspace 重新校验，并以一次条件 UPDATE（仍为 partial / failed、未被认领、
+  同一哈希）完成：向 `reviews[]` 追加**只增不改**的审阅条目（审阅人、原因、事件 ID / 时间 / 请求 ID、核验字段、新旧快照、
+  计划绑定 —— 从不含 CloudTrail 主体或令牌），`revision_history[]` 记录移动，`revision_id` 与 `settled_revision_id`
+  变为审阅值而 `initial_revision_id` / `created_identity` / `create_response` 保持原样，仅重新排队 Lambda 冲突及其被阻塞
+  的依赖；普通 worker 在提交后才启动（此前崩溃会留下 `queued` 操作，由启动恢复或重试接管），其 `PublishVersion` 仍带两项
+  前置条件，之后的任何变更在那里失败且不可再次审阅（第二次不同的审阅被拒绝；完全相同的请求幂等且不读取任何内容）。
+  SE-049 之前接受的操作只存了身份：只能凭正向的 CloudTrail 事件审阅，绝不能仅凭当前 RevisionId。比较是**无损且由模型驱动**的：
+  CloudTrail 的大小写沿已安装的 Lambda 服务模型重建（仅结构成员名 —— 环境变量、标签等数据映射的键 / 值与空字符串都是内容，
+  唯一的"缺失即为空"等价仅限 `environment: {}` 这类文档记载的信封），记录的请求、不可变的接受响应、事件与当前 `$LATEST`
+  必须逐成员一致（存在、缺失与相等一并比较，多出的 `DurableConfig` / `TenancyConfig` / `CapacityProviderConfig` /
+  `MasterArn` 或平台未知的成员都是差异），响应的每个成员必须由请求固定或属于文档默认值；存在性以显式"缺失"哨兵比较（`null` 或错误类型即差异，绝非缺失），各方比较前按模型做
+  类型校验，信封折叠仅限良构空形态，`CodeSize` 保留并比较。依赖与记录快照重新比对（信任策略、
+  内联策略、标签、保留期 —— `ready` 账本状态不能背书，worker 会跳过 ready 依赖），资源策略只有 `NotFound` 才证明不存在。记录
+  审阅的条件 UPDATE 把审阅依赖的每个值 —— 操作的状态 / 令牌 / 尝试次数 / 计划绑定 / 所有者 / 审批人 / 精确的 pinned 与意图 JSON、
+  含经校验内容精确 JSON 的已批准计划行、对话所有者、含精确 `resources` JSON 的 Workspace 身份、审批人与审阅人的活跃管理员行 ——
+  都绑定为同一语句的谓词，并在主机锁内重新解析调用者。核验状态持久化为 `reviewed_baseline`，恢复的 worker 在首次变更前立即重新校验（配置 + 标签、依赖、清单、策略不存在、
+  无预留并发）：外部发布的同代码版本、他人的别名 / 策略 / 并发或任何漂移都是 `conflict`，永不采纳或覆盖。无论是否经审阅，普通
+  worker 在**首次** `PublishVersion` 派发被拒时都不会采纳同摘要版本（只有自身派发的丢失响应才对账到恰好一个版本），也永不覆盖
+  不是自己设置的预留并发。CloudTrail 仍是供人
+  审阅的证据而非"没有其他写入"的证明，外部管理员的检查→写入窗口保持不变。
 - **仍需实机检查**：`bedrock-agentcore.amazonaws.com` 作为 Lambda 资源策略主体（开发指南只记载执行角色语句）、
   CreateEvaluator 接受带版本的 Lambda ARN、GetEvaluator 的状态字面值、服务传入 `sessionSpans` 的确切表示、
   `python3.12` 运行时可用性。排他为主机本地（`data/locks/eval-assets`），多主机共用账本不是本功能支持的部署。

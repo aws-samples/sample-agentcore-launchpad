@@ -144,6 +144,10 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
      "{operation_id}"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/"
      "{operation_id}/retry"): ADMIN,
+    # SE-049: reviewed recovery of the Lambda first-initialization RevisionId conflict —
+    # admin + owner, reads CloudTrail / Lambda, writes only the ledger review + requeue
+    ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/"
+     "{operation_id}/lambda-revision-review"): ADMIN,
     ("DELETE", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/"
      "operations/{operation_id}/assets"): ADMIN,
     # ---- credential minting ----
