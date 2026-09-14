@@ -135,6 +135,29 @@ members and nothing else:
   `golden_tests[]` (objects: `id`, `input`, `expected_response`, `expected_tools[]`,
   `forbidden_behavior`, `pass_criteria`, `evaluator`, `source` ∈
   `customer_pain_point | industry_assumption`), `evaluator_recommendations[]`
+- optional `evaluation_plan`: a structured seed for the SEPARATE evaluation-assets
+  review — `{{"scenarios": [...], "evaluators": [...], "recommendation_keys":
+  {{"<index>": ["<key>"]}}}}`. Give EVERY golden test a typed scenario:
+  `{{"scenario_id", "golden_test_id", "turns": [{{"input", "expected_response"?}}],
+  "expected_trajectory": ["tool", ...], "assertions": ["must …", "Must not: …"],
+  "execution"?: {{"version": 1, "repeat": 1, "steps": [{{"turn": 0, "actor": "A",
+  "session": "a1"}}, ...], "checks": [{{"id", "type": "exact|contains|not_contains",
+  "turn", "text", "depends_on"?: [...]}}]}}}}` — a multi-actor / multi-session test
+  (memory isolation, session freshness) MUST be written as `execution` steps (one step
+  per turn, actor/session aliases, deterministic checks), never as one prose prompt.
+  Each evaluator is one of: `{{"kind": "existing", "key", "title",
+  "evaluator_id": "Builtin.<Name>", "golden_test_ids": []}}`, `{{"kind": "judge",
+  "key", "title", "name", "level": "TRACE|SESSION", "instructions" (with
+  `{{context}}`/`{{assistant_turn}}` or the session placeholders), "golden_test_ids"}}`,
+  `{{"kind": "code", "key", "title", "name", "level", "rules": {{"version": 1, "checks":
+  [{{"id", "type": "tool_count|tool_sequence|tool_set|output_contains|output_not_contains|"
+  "output_exact|reference_trajectory|reference_response", ...}}]}}, "golden_test_ids"}}` or
+  `{{"kind": "orchestration|manual_review|metric_baseline|external_control", "key",
+  "title", "reason", "golden_test_ids"}}`. An AWS evaluator applies to EVERY scenario
+  (`golden_test_ids: []`); reference-driven judges/rules need every scenario to carry
+  that reference. Never code, ARNs or Lambda details — rules are declarative literals
+  only. It is an inert seed the member reviews; nothing is created by this block or by
+  the Agent approval — an administrator creates assets in a separate step.
 
 Hard rules of this environment:
 1. Reference resources **only by the keys listed below**. Never invent tools, MCP
@@ -149,7 +172,9 @@ Hard rules of this environment:
 3. Everything outside the block is conversation. Keep the architecture, trade-offs,
    assumptions, manual tasks and the golden-test table visible in the text too.
 4. Do not promise documents, files, diagrams as downloads, or infrastructure this
-   platform does not offer (no KB/Gateway/evaluator creation in this flow).
+   platform does not offer (no KB/Gateway creation in this flow). Evaluators and
+   datasets are NOT created by this conversation either: the member later reviews a
+   separate evaluation-assets plan and an administrator may create them from it.
 """
 
 
@@ -497,6 +522,9 @@ def availability(db: Session, row: Workspace, identity: Identity) -> dict[str, A
             "kb_gateway": bool(res.get("kb_gateway_id") and res.get("oauth_provider_arn")),
         },
         "is_admin": identity.is_admin,
+        # SE-047: only an administrator may materialize an evaluation plan (AWS
+        # evaluators + Lambda + IAM); members prepare/edit plans
+        "can_materialize_evaluation_assets": identity.is_admin,
         "owner": identity.username,
         "principal": principal_of(identity),
     }

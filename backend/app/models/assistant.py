@@ -158,3 +158,90 @@ class AgentNameClaim(Base):
     @staticmethod
     def key_for(workspace_id: str, name: str) -> str:
         return f"{workspace_id}:{name}"
+
+
+class AssistantEvaluationPlan(Base):
+    """One revision of the reviewed evaluation-assets plan of a conversation (SE-047).
+
+    Separate from the proposal: a plan names the proposal revision + content hash it
+    was prepared for, is itself versioned (append-only ``revision`` per conversation)
+    and hashed, and is what an administrator's materialization names exactly. A plan
+    is ``draft`` until an operation claims it (``approved``); older drafts become
+    ``superseded`` when a newer revision is written. Content is the validated
+    ``app.assistant.evaluation_plan.EvaluationPlan`` dict (or, for an invalid member
+    edit, the raw object kept for display with its ``validation_errors``).
+    """
+
+    __tablename__ = "assistant_evaluation_plans"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("assistant_conversations.id"), index=True
+    )
+    proposal_id: Mapped[str] = mapped_column(String(32), index=True)
+    source_revision: Mapped[int] = mapped_column(default=1)
+    source_content_hash: Mapped[str] = mapped_column(String(64))
+    revision: Mapped[int] = mapped_column(default=1)
+    source: Mapped[str] = mapped_column(String(16))  # platform | member | model
+    content: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    validation_errors: Mapped[list[str]] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    # draft | invalid | approved | superseded
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "revision", name="uq_assistant_eval_plans_revision"),
+    )
+
+
+class EvaluationAssetOperation(Base):
+    """The durable materialization of exactly one approved plan revision.
+
+    Inserted (committed) BEFORE any AWS write with the exact plan hash, the approver
+    and the immutable owner principal, the target account/region and a per-resource
+    intent list (``resources``: kind, key, name, stable client token, the exact request
+    once composed, the ids/ARNs/digests read back, status and safe error). A worker
+    claims it with a lease token and re-checks that token plus the approver's current
+    authorization before every mutation; a lost response or restart resumes from the
+    persisted intents (same token, same request) — never a fresh create, never an
+    adoption by name. ``UNIQUE(plan_id)``: a second approval of the same plan returns
+    this row.
+    """
+
+    __tablename__ = "evaluation_asset_operations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("assistant_conversations.id"), index=True
+    )
+    plan_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    plan_revision: Mapped[int] = mapped_column(default=1)
+    plan_hash: Mapped[str] = mapped_column(String(64))
+    proposal_revision: Mapped[int] = mapped_column(default=1)
+    owner_principal: Mapped[str] = mapped_column(String(96))
+    approved_by: Mapped[str] = mapped_column(String(64))
+    approver_user_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    account_id: Mapped[str] = mapped_column(String(16))
+    region: Mapped[str] = mapped_column(String(32))
+    # The workspace identity every mutation is fenced on: {account_id, region, role_arn,
+    # external_id, execution_role_arn, execution_role_id?} as read at approval. A
+    # later change of the workspace row stops the worker/cleanup before any effect.
+    pinned: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # queued | running | succeeded | partial | failed | cleaning | cleaned
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    worker_token: Mapped[str | None] = mapped_column(String(32), default=None)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    attempts: Mapped[int] = mapped_column(default=0)
+    # [{kind, key, name, status, client_token, request, result, error, ...}]
+    resources: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    dataset_id: Mapped[str | None] = mapped_column(String(16), default=None)
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    log: Mapped[str] = mapped_column(Text, default="")  # JSONL events
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )

@@ -712,6 +712,90 @@ ref 读取 `t`，因此切换语言只重新渲染而不重跑挂载效果（草
 AWS 回答、有效的模型生成提案、授权批准创建测试 Harness、回读并清理测试所属资源。仅凭
 `make verify` 不能证明模型遵循协议。
 
+### 评估资产计划（SE-047）——从黄金测试到经审阅的资产创建
+
+提案中的 `golden_tests` / `evaluator_recommendations` 仍是惰性的方案内容。SE-047 在同一对话上增加一份
+**独立、私有、带版本的类型化计划**，以及一次**仅限管理员、幂等的资产创建**。Agent 提案、它的批准和已部署的
+Agent 从不被触碰；批准 Agent 不等于授权创建云端评估资源。
+
+- **四件事刻意分开**：准备 / 编辑计划（成员，仅账本写入）；创建资产（管理员且为对话所有者，精确计划版本 +
+  哈希，需确认披露）→ 本地 Launchpad Dataset、AgentCore 评估器，以及代码规则对应的一个 Lambda（含独立角色 /
+  日志组 / 资源策略 / 对执行角色的附加授权）；把 Dataset 同步到 AWS（既有的独立操作）；运行评估（既有的独立、
+  计费操作）。创建过程绝不部署、不运行评估、不同步 Dataset、不启用在线评估、不调用模型。
+- **类型化计划**（`backend/app/assistant/evaluation_plan.py`）绑定提案版本与内容哈希：`scenarios[]`（每个黄金
+  测试一个标准 predefined 条目，可携带 SE-046 的 `launchpad_execution` 流程，带 `review_required` 标记）、
+  `evaluators[]`（`existing` / `judge` / `derived` / `code`（仅声明式规则）以及不可自动化的 `orchestration` /
+  `manual_review` / `metric_baseline` / `external_control`）、`recommendations[]`（每条建议恰好一次：已映射 /
+  未解决 / 已拒绝）与 `blocked_golden_tests[]`。校验拒绝：未成为场景也未阻止的黄金测试、仍需评审的场景、
+  与级别不匹配的评审占位符、超过 10 个 AWS 评估器、TOOL_CALL 代码评估器、任何 ARN / Lambda 名称 / 代码 /
+  正则。
+- **评估器选择只能是全局的；按黄金测试的子集映射会被拒绝而不是假装实现**。批量运行把同一评估器列表应用到每个
+  session，参考输入也不会选择评估器，因此映射到黄金测试子集的云端 / 现有评估器在校验时被拒绝（可操作：`golden_test_ids: []`
+  = 全部，或改为 runner 检查 / 人工义务）。读取参考的全局评估器要求**每个**场景（TRACE 级别还要求每一轮）都携带该参考，
+  且 SESSION 级参考评估器不能与多 session 流程场景共存。Dataset 条目保留经审阅的黄金测试事实、计划键 → 类型 / 门禁 /
+  **已解析的评估器 id** 映射与 `applies`，绝不包含对话记录。读取参考的托管代码评估器在缺少参考的批量范围
+  （`run.judge_needs_ground_truth`）、可观测页面“立即评分”（`observability.evaluator_needs_ground_truth`，在任何 Evaluate
+  调用之前）与在线评估中都被拒绝。运行前检查读不到所选自定义评估器时，其需求视为**未知**而非已验证：返回
+  `422 run.evaluator_unverifiable`（不存在则 `run.evaluator_not_found`），不写运行行、不入队、不读遥测、不调用 agent；
+  模拟人设条目（`actor_profile`）没有预定义轮次，产生一个显式的 `<scenario>/simulated turns` 目标，读取
+  `{expected_response}` 的 TRACE 评估器被拒绝，而已知的 session 级 `assertions` 仍然有效。绑定*现有*评估器引用时，
+  其配置按**已安装的**控制面模型逐成员校验（`RatingScale` / `EvaluatorModelConfig` / `CodeBasedEvaluatorConfig`
+  联合体恰好一个非空分支、每个评分项的 `definition` / `value` / `label`、两个模型分支都必须有 `modelId`、Lambda ARN 模式与
+  1–300 秒超时、任意层级的未知成员均拒绝）；本平台在**同一工作区**创建的代码评估器按其所属计划的规则解析需求
+  （`source: managed`），而非标为“外部未知”。
+- **草稿从不把散文变成流程**。提案可携带可选的结构化 `evaluation_plan` 种子（类型化场景 / 评估器 /
+  `recommendation_keys`，先校验形状，畸形种子成为*无效*修订而非 500；没有种子的修订序列化与以前完全一致）。
+  其他黄金测试草拟为单轮场景并标记 `review_required`，由成员确认、改写为类型化步骤或阻止。唯一草拟的评审器
+  是 SESSION 级别，通过 `{assertions}` 参考对**各自场景**的断言评分，没有混合黄金测试的全局评分标准，并标记
+  `draft: true`。
+- **代码评估器 = 一个经审阅的静态 stdlib Lambda + 数据**（`app/assistant/lambda_runtime/handler.py`）。证据按
+  已安装 SDK 的 ADOT / Strands 线上表示解析：`body.output` / `gen_ai.choice` 是当前轮输出，`body.input` /
+  `gen_ai.assistant.message` 是历史，从不当作输出；取最终模型轮的全部文本片段拼接；`tool_use` 结束 = 不完整，
+  长度 / 内容过滤结束 = 截断，无输出 = 无证据；工具调用按 span id 去重、无名即未知、顺序不明即报错；参考输入
+  必须属于本 session 且不冲突。任何违反都返回错误信封，绝不 PASS。
+- **持久化、带围栏的创建**：批准是一次原子声明（计划行仍为 draft、同哈希、最新版本的条件更新，与插入操作及
+  **钉住的 Workspace 身份**（账号、Region、AssumeRole、执行角色 ARN/RoleId——仅接受带 `launchpad:managed` 标签
+  的角色）同一事务；调用者在事务内重新解析，必须仍是拥有该对话的管理员）。每个操作一把主机本地 `flock` +
+  数据库租约令牌；每次云端写入之前重新读取令牌、重新检查批准者、比对 Workspace 身份，任何变化即停止。快速重启
+  立即恢复，活跃 worker 绝不被抢占。`PublishVersion` 依据 `ListVersionsByFunction` 对账（恰好一个已发布版本
+  携带摘要）；对执行角色的授权仅限**已发布版本 ARN**，绝不含 `$LATEST`；所有回读（评估器 id / 名称 / 级别 /
+  配置、Lambda 角色 / 版本 / 摘要 / 运行时 / 处理器 / 超时 / 内存 / 预留并发）必须精确一致。
+- **所有权只来自服务返回给本操作的身份，而非内容**：每次创建调用前都持久化派发记录（intent / request / 评估器的
+  逐次 `create_history`），服务应答的身份在任何后续写入之前立即持久化：CreateRole 的 RoleId / ARN、CreateLogGroup 后
+  立刻读取的 creationTime / ARN（该 API 不返回身份）、CreateFunction 返回的 FunctionArn / RevisionId（先逐字段校验
+  应答）、CreateEvaluator 的 evaluatorId / ARN。随机来源 nonce（角色描述与标签、日志组标签、包内 `provenance.json`
+  → 摘要）只是评审线索：它可被复制，因此响应丢失或在验收检查点之前崩溃后，同名资源记为 **`unknown`**——不接管、
+  不写入、不删除、保留依赖；创建时即冲突的资源是**外部冲突**（`conflict`，不接管、不删除）。带有已派发创建的
+  `pending` / `blocked` 显示状态是可能存在的效果，清理必须计入。发布前 worker 要求 `$LATEST` 仍等于 CreateFunction
+  返回的身份（含 RevisionId），并把该 RevisionId 作为 PublishVersion 的前置条件；每次自身写入（发布、预留并发）之后
+  在其余批准字段仍相等时刻意重新固定 RevisionId，替换品在任何发布 / 并发 / 权限写入之前被拒绝。评估器重放服务自身的
+  `clientToken`。回读漂移同样记为冲突，从不修复。
+- **清理**在同一锁 / 租约 / 重新授权 / 身份检查下按依赖顺序进行，每次变更前重新围栏，每次生效后持久化检查点；响应
+  丢失的创建**绝不事后认领或删除**：nonce 写在角色描述 / 标签、日志组标签或可下载的包摘要中，都是可复制的内容而非
+  归属证明，只要同名资源存在就记为显式 `unknown`（worker 与清理一致；操作员评审后重试，重试只重新评估、不认领），
+  其依赖保持 `blocked` / `retained`，操作永不 `cleaned`；创建时即冲突（无响应丢失）的外部资源仍为 `conflict`、不阻止
+  `cleaned`。CreateEvaluator 响应丢失时，即便 ListEvaluators 未列出该名称也保持 `unknown`（可见性不能证明创建未发生；
+  记录名称、clientToken 与候选 id），由 worker 重试回放幂等 token 恢复归属，清理绝不创建；明确的 4xx 拒绝记为未创建。
+  DeleteEvaluator 只有在回读 NotFound 后才算完成（否则 `delete_pending`）：先删除 id / 名称 / 级别 / 配置 / ARN 仍
+  一致的自有评估器（已改动的保留为可评审的冲突；被在线配置锁定的记为删除失败）；附加授权 / 函数 / 日志组 /
+  角色**仅在没有任何自有评估器残留**且创建 / 回读成功时记录的身份快照完全一致时删除（角色的 RoleId / ARN /
+  信任策略 / 内联策略；日志组的 creationTime / ARN / 保留期；函数的已发布版本**与**未限定的 `$LATEST`（含 RevisionId）、
+  版本集合与别名集合——两份清单均按真实 `Marker` / `NextMarker` 分页读到结构有效的终止页且受页数预算约束，预算耗尽、
+  重复 / 不可用的标记、缺少 `Versions` / `Aliases` 列表的页或畸形条目都是*不完整*清单（绝非空清单），使创建失败并拒绝
+  清理；无 id 且无已记录拒绝的旧格式评估器请求会在下一次派发记录之前迁移为持久的 `legacy-uncertain` 条目，之后的拒绝
+  无法抹去它）；缺少已发布版本不等于函数不存在；整函数删除须经有界的未限定 GetFunction NotFound 确认后才触碰
+  日志组与角色（否则 `delete_pending` 并保留依赖，下次清理重新校验并重发删除）；快照不完整视为需评审的 `conflict`；
+  否则标记 `retained` / `conflict`。删除 API 无前置条件 token，检查到删除之间存在一次调用宽度的窗口。本地 Dataset 保留，
+  外部资源不触碰；只有当没有任何自有资源残留时才记录 `cleaned`。普通的 `DELETE /api/eval/evaluators/{id}` 拒绝
+  由操作拥有的评估器（`409 evaluator.managed_by_operation`）。
+- **隐私**：计划与操作仅对对话的不可变主体可见（其他主体 / Workspace → 404，管理员也一样）。创建前的披露说明：
+  计划中**选定**的输入、预期回复、断言与评分标准会对 Workspace 全体成员在 评估 → Datasets / Evaluators 中可见，
+  对话记录不会。"已创建"仅表示已注册——不代表通过、儿童安全或可用于生产。
+- **仍需实机检查**：`bedrock-agentcore.amazonaws.com` 作为 Lambda 资源策略主体（开发指南只记载执行角色语句）、
+  CreateEvaluator 接受带版本的 Lambda ARN、GetEvaluator 的状态字面值、服务传入 `sessionSpans` 的确切表示、
+  `python3.12` 运行时可用性。排他为主机本地（`data/locks/eval-assets`），多主机共用账本不是本功能支持的部署。
+
+
 ### 模型来源(方式B + 方式C)
 
 `AgentSpec.model_source` 决定模型的托管面:`mantle`(Bedrock Mantle)或

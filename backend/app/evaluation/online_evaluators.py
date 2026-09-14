@@ -83,7 +83,25 @@ def normalize_online_evaluators(
 
 
 def _assert_no_ground_truth(control: Any, evaluator: str, code: str) -> None:
-    """Reject a custom judge that needs ground truth it will never get online."""
+    """Reject a custom judge — or a managed code evaluator whose rules read reference
+    inputs — that needs ground truth it will never get online."""
+    from app.assistant.evaluation_assets import managed_reference_gap
+    from app.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        gap = managed_reference_gap(db, None, [evaluator], set())
+    finally:
+        db.close()
+    if gap:
+        rendered = ", ".join(f"{{{p}}}" for p in gap[evaluator])
+        raise AppError(
+            code,
+            f"{evaluator} is a managed code evaluator whose rules read {rendered}, which "
+            "online evaluation does not carry — use a batch evaluation run on its Dataset",
+            {"evaluator": evaluator, "placeholders": gap[evaluator]},
+            status_code=400,
+        )
     try:
         detail = ac.get_evaluator(control, evaluator_id=evaluator)
     except Exception as exc:

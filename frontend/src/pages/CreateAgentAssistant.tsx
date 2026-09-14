@@ -38,6 +38,7 @@ import {
 } from "../lib/api";
 import { MODEL_CATALOG, type ModelSource } from "../lib/models";
 import { useWorkspace } from "../workspace/workspace-context";
+import { EvaluationAssetsPanel } from "./EvaluationAssetsPanel";
 
 /**
  * Architect assistant (SE-039): a member conversation with the protected
@@ -1116,6 +1117,17 @@ export function CreateAgentAssistant() {
               </div>
             )}
           </Panel>
+          {conversation && latest && (
+            <EvaluationAssetsPanel
+              conversationId={conversation.id}
+              proposals={conversation.proposals}
+              canMaterialize={status.can_materialize_evaluation_assets}
+              workspaceId={workspaceId}
+              apiMessage={apiMessage}
+              onError={(m) => toast(m)}
+              index={2}
+            />
+          )}
         </div>
       )}
 

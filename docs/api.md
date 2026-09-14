@@ -221,6 +221,51 @@ through `GET /api/jobs/{id}` and `GET /api/agents/{id}`. The generic invoke entr
 `404 chat.session_not_found` for an assistant turn's `session_id` on a system-managed
 agent.
 
+### Evaluation-assets plan (SE-047)
+
+Private to the conversation owner (foreign principal / workspace → `404
+assistant.conversation_not_found`, administrators included). Preparing/editing is
+`member`; creating and cleaning up is `admin` **and** owner. Reads are ledger-only.
+
+| Method | Path | Role | Result |
+|---|---|---|---|
+| `GET` | `/api/assistant/architect/conversations/{id}/evaluation-plan` | member | `{plans[…], operations[…], disclosure}` |
+| `POST` | `…/evaluation-plan/prepare` | member | body `{revision}` (a shape-valid proposal revision, approved or not) → `201 {plan, plans, operations, disclosure}` — the platform draft as a new plan revision; `409 assistant.proposal_stale` / `409 assistant.evaluation_plan_source_invalid`; no side effects |
+| `PUT` | `…/evaluation-plan` | member | body `{content}` (the plan contract; `content.source_revision` names the proposal revision) → `{plan, …}` — a **new** revision, `draft` or `invalid` with `validation_errors` (never corrected); `413 assistant.evaluation_plan_too_large` above 160 000 bytes |
+| `POST` | `…/evaluation-plan/materialize` | admin | body `{plan_revision, plan_hash, acknowledge_disclosure: true}` → `202 {operation, started: true}` when this call atomically claimed the plan (still draft, this hash, newest revision; worker launched), `200 … started: false` for a repeated / concurrent request (same operation). `422 assistant.disclosure_required`, `409 assistant.evaluation_plan_stale` (unknown revision / hash differs / edited, superseded or claimed meanwhile), `409 assistant.evaluation_plan_not_approvable` (invalid / superseded), `409 assistant.evaluation_plan_invalid` (no longer validates against its proposal), `409 assistant.workspace_not_ready`, `409 assistant.execution_role_untrusted` (grant requested but the workspace execution role is not platform-tagged); the caller (admin + owner) and the workspace identity are re-resolved from the database inside the claim and pinned on the operation |
+| `GET` | `…/evaluation-plan/operations/{operation_id}` | member | `{operation}` — ledger only, no AWS call |
+| `POST` | `…/evaluation-plan/operations/{operation_id}/retry` | admin | `{operation, started}` — resumes the persisted intents of a `partial` / `failed` operation (same tokens/requests); `409 assistant.evaluation_assets_exhausted` after 5 attempts |
+| `DELETE` | `…/evaluation-plan/operations/{operation_id}/assets` | admin | `{operation}` — deletes exactly the owned cloud artifacts whose identity still matches (evaluators first; grant / function / log group / role only once no owned evaluator remains), one checkpoint per effect; the local Dataset stays; `409 assistant.evaluation_assets_running` while a worker is live, `409 assistant.evaluation_assets_stopped` when the approver or workspace identity changed |
+
+A plan is `{id, conversation_id, proposal_id, source_revision, source_content_hash,
+revision, source: platform|member|model, status: draft|invalid|approved|superseded,
+content (scenarios carry `review_required`; a legacy draft is `invalid` until every
+scenario is confirmed or blocked), content_hash, validation_errors[], summary{scenarios, blocked_golden_tests,
+evaluators_by_kind, cloud_evaluators, lambda_functions, iam_roles, role_grants,
+unresolved_recommendations} | null, created_by, created_at, operation_id}`. An operation
+is `{id, conversation_id, plan_id, plan_revision, plan_hash, proposal_revision,
+approved_by, account_id, region, pinned{workspace_id, account_id, region, role_arn,
+execution_role_arn, execution_role_id?}, status: queued|running|succeeded|partial|failed|
+cleaning|cleaned, attempts, max_attempts, dataset_id, error, resources[{kind: dataset|
+lambda_role|log_group|lambda_function|lambda_permission|role_grant|evaluator|existing,
+key, plan_key?, name, status: pending|accepted|ready|failed|conflict|blocked|skipped|
+retained|unknown|delete_pending|deleted|delete_failed, definition?, error, digest?, rules_digest?,
+reference_dependent?, owned?, recovered?, attempts, result, cleanup?, link?}],
+created_at, updated_at, running}`. `POST /api/eval/runs` answers
+`422 run.judge_needs_ground_truth` for a managed reference-driven code evaluator whose
+scope lacks the reference (a simulated persona item reports `<scenario>/simulated turns
+lacks expected_response` — its turns are generated at run time), `422
+run.evaluator_unverifiable` when a selected custom evaluator cannot be read (unknown
+needs are never treated as verified; nothing downstream runs) and `422
+run.evaluator_not_found` when it does not exist in the workspace; Observability SCORE NOW answers
+`422 observability.evaluator_needs_ground_truth` before any Evaluate call; online evaluation
+refuses such evaluators (`…evaluator_unsupported`). A cloud/existing evaluator mapped to a
+subset of golden tests is refused at plan validation (selection is global). `link` is the existing console
+deep link (`/evaluation?view=datasets&ds=…` / `?view=evaluators&ev=…`). The ordinary
+`DELETE /api/eval/evaluators/{id}` answers `409 evaluator.managed_by_operation`
+(`detail.operation_id`) for an evaluator an operation owns. `GET /api/assistant/architect`
+gained `can_materialize_evaluation_assets` (= administrator).
+
 ## Console Registry API — live agent card
 
 `GET /api/registry/records/{record_id}/live-agent-card` is the LIVE CARD read in

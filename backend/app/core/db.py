@@ -41,6 +41,8 @@ WORKSPACE_SCOPED_TABLES = (
     "assistant_proposals",
     "agent_name_claims",
     "system_skill_records",
+    "assistant_evaluation_plans",
+    "evaluation_asset_operations",
 )
 
 
@@ -192,6 +194,13 @@ def _migrate(bind) -> None:
         if "execution" not in existing:
             with bind.begin() as conn:
                 conn.execute(text("ALTER TABLE eval_runs ADD COLUMN execution JSON"))
+    if "evaluation_asset_operations" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("evaluation_asset_operations")}
+        if "pinned" not in existing:
+            # operations approved before identity pinning existed get an EMPTY pin: the
+            # worker/cleanup refuse them (review required) instead of inventing bindings
+            with bind.begin() as conn:
+                conn.execute(text("ALTER TABLE evaluation_asset_operations ADD COLUMN pinned JSON"))
     if "experiments" in inspector.get_table_names():
         existing = {c["name"] for c in inspector.get_columns("experiments")}
         additions = {
@@ -368,6 +377,12 @@ def _migrate_workspace_columns(bind) -> None:
         "agent_name_claims": "ALTER TABLE agent_name_claims ADD COLUMN workspace_id VARCHAR(32)",
         "system_skill_records": (
             "ALTER TABLE system_skill_records ADD COLUMN workspace_id VARCHAR(32)"
+        ),
+        "assistant_evaluation_plans": (
+            "ALTER TABLE assistant_evaluation_plans ADD COLUMN workspace_id VARCHAR(32)"
+        ),
+        "evaluation_asset_operations": (
+            "ALTER TABLE evaluation_asset_operations ADD COLUMN workspace_id VARCHAR(32)"
         ),
     }
     inspector = inspect(bind)

@@ -20,7 +20,7 @@ from app.evaluation import agentcore_eval as ac
 from app.evaluation import execution, service
 from app.evaluation.models import EvalDataset, EvalRun
 from app.evaluation.queue import run_queue
-from app.evaluation.scenarios import available_ground_truth, normalize_scenarios
+from app.evaluation.scenarios import normalize_scenarios
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services.agentcore.client import control_client
@@ -134,49 +134,94 @@ def _has_ground_truth(items: list[dict[str, Any]]) -> bool:
     return False
 
 
-def _assert_judge_ground_truth(
-    ws: WorkspaceScope, evaluators: list[str], items: list[dict[str, Any]]
-) -> None:
-    """Reject a custom judge whose prompt wants ground truth this scope lacks.
+def _unverifiable(evaluator: str, exc: Exception) -> AppError:
+    reason = f"{type(exc).__name__}: {exc}"[:300]
+    return AppError(
+        "run.evaluator_unverifiable",
+        f"could not read evaluator {evaluator} ({reason}) — its reference requirements "
+        "are unknown, so the run was not started. Retry when the control plane answers, "
+        "or drop the evaluator.",
+        {"evaluator": evaluator, "reason": reason}, status_code=422,
+    )
 
-    A judge prompt referencing e.g. ``{expected_response}`` gets it from the
-    ``sessionMetadata`` this run derives from the dataset's scenarios. With
-    nothing to fill it, AgentCore throws ``ValueError: Evaluator prompt
-    requires: 'expected_response'`` on EVERY (session x evaluator) pair and the
-    whole batch ends FAILED ~10 minutes later — so the run is refused up front
-    instead. Builtin and ThirdParty ids skip the lookup entirely — neither owns
-    an authored judge prompt (``Builtin.Trajectory*`` has its own gate below). A
-    control-plane error fails OPEN: the service enforces the same constraint,
-    and a listing blip must not block submitting a run.
-    """
-    custom = [e for e in evaluators if not e.startswith(("Builtin.", "ThirdParty."))]
-    if not custom:
-        return
-    available = available_ground_truth(items)
-    control = control_client(ws.context)
-    missing: dict[str, list[str]] = {}
-    for evaluator in custom:
-        try:
-            detail = ac.get_evaluator(control, evaluator_id=evaluator)
-        except Exception:
+
+def _assert_target_references(
+    db: Session, ws: WorkspaceScope, evaluators: list[str], items: list[dict[str, Any]],
+    dataset_scope: bool,
+) -> None:
+    """Every chosen evaluator that reads ground truth must find it on EVERY target it
+    will be applied to — each session (procedure seed sessions included) or each TRACE
+    turn of the CURRENT dataset snapshot — before any run row, invoke or
+    StartBatchEvaluation. Builtins resolve from the canonical catalog, custom judges /
+    derived from their real configuration (one GetEvaluator each — no retries beyond the
+    client's own), managed code evaluators from their owning plan's rules. A custom
+    evaluator that cannot be read has UNKNOWN requirements, not verified ones: the run is
+    refused with an actionable 422 before anything downstream happens (the agent would
+    otherwise already have been invoked by the time the service rejected the batch). A
+    scope without a dataset carries no references at all."""
+    from app.assistant.evaluation_assets import managed_evaluator, managed_rules
+    from app.evaluation import coverage
+
+    problems: dict[str, list[str]] = {}
+    control = None
+    for evaluator in dict.fromkeys(evaluators):
+        if evaluator in coverage.KNOWN_BUILTINS:
+            needs, level = coverage.builtin_needs(evaluator), coverage.KNOWN_BUILTINS[evaluator]
+        elif evaluator.startswith(("Builtin.", "ThirdParty.")):
+            continue  # unknown managed ids are refused by the service itself
+        else:
+            owner = managed_evaluator(db, ws.id, evaluator)
+            if owner and owner.get("evaluator_config"):
+                # created by this platform: its exact request is on record — no control read
+                detail = {"evaluatorConfig": owner["evaluator_config"], "level": owner["level"]}
+            else:
+                control = control or control_client(ws.context)
+                try:
+                    detail = ac.get_evaluator(control, evaluator_id=evaluator)
+                except ClientError as exc:
+                    if aws_error_code(exc) in ("ResourceNotFoundException", "NotFoundException"):
+                        raise AppError(
+                            "run.evaluator_not_found",
+                            f"evaluator {evaluator} does not exist in this workspace — "
+                            "drop it or pick one from the catalog",
+                            {"evaluator": evaluator}, status_code=422,
+                        ) from exc
+                    raise _unverifiable(evaluator, exc) from exc
+                except Exception as exc:  # transport / timeout / SDK failures
+                    raise _unverifiable(evaluator, exc) from exc
+            # the run preflight decodes NEEDS; the complete-shape check belongs to binding an
+            # existing reference at materialization (the service validates its own records)
+            kinds = [k for k in (detail.get("evaluatorConfig") or {}) if k in coverage.CONFIG_KINDS]
+            if len(kinds) != 1:
+                problems[evaluator] = ["unusable configuration: exactly one of llmAsAJudge / "
+                                       "derived / codeBased is required"]
+                continue
+            rules = managed_rules(db, owner) if owner else None
+            needs, _kind = coverage.needs_from_config(detail, rules)
+            level = str(detail.get("level") or "TRACE")
+            if needs is None:
+                continue  # external code evaluator: needs unknown, nothing to assert
+        if not needs:
             continue
-        wanted = ac.ground_truth_placeholders(ac.judge_instructions(detail))
-        gap = [p for p in wanted if p not in available]
-        if gap:
-            missing[evaluator] = gap
-    if not missing:
-        return
-    named = "; ".join(
-        f"{e} needs " + ", ".join(f"{{{p}}}" for p in gap) for e, gap in missing.items()
-    )
-    raise AppError(
-        "run.judge_needs_ground_truth",
-        f"{named} — this run's scope carries no such ground truth. Add it to the "
-        "dataset scenarios (turns[].expected_response / expected_trajectory / "
-        "assertions), or edit the judge prompt to drop the placeholder.",
-        {"evaluators": missing},
-        status_code=422,
-    )
+        if not dataset_scope:
+            problems[evaluator] = [f"needs {', '.join(sorted(needs))} — this scope carries no "
+                                   "ground truth"]
+            continue
+        gaps = coverage.coverage_gaps(items, needs, level)
+        if gaps:
+            problems[evaluator] = gaps
+    if problems:
+        named = "; ".join(f"{e}: " + ", ".join(g[:6]) + (" …" if len(g) > 6 else "")
+                          for e, g in problems.items())
+        only_trajectory = all(e in coverage.TRAJECTORY_EVALUATORS for e in problems)
+        raise AppError(
+            "run.trajectory_needs_ground_truth" if only_trajectory
+            else "run.judge_needs_ground_truth",
+            f"{named} — every session / turn the evaluator is applied to must carry the "
+            "reference it reads (procedure seed sessions carry none). Add the ground truth "
+            "to those scenarios or drop the evaluator.",
+            {"evaluators": problems}, status_code=422,
+        )
 
 
 def _dataset_out(dataset: EvalDataset) -> dict[str, Any]:
@@ -1060,9 +1105,24 @@ def update_evaluator(
 
 @router.delete("/evaluators/{evaluator_id}")
 def delete_evaluator(
-    evaluator_id: str, ws: WorkspaceScope = Depends(require_workspace)
+    evaluator_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     _reject_managed(evaluator_id)
+    from app.assistant.evaluation_assets import managed_evaluator
+
+    owner = managed_evaluator(db, ws.id, evaluator_id)
+    if owner is not None:
+        # an evaluator created by an evaluation-assets operation has a Lambda / IAM
+        # footprint that only the operation's cleanup removes — deleting the record
+        # alone would leave undeclared orphans
+        raise AppError(
+            "evaluator.managed_by_operation",
+            "this evaluator was created by an assistant evaluation-assets operation; remove it "
+            "through that operation's cleanup so its Lambda/IAM artifacts go with it",
+            owner, status_code=409,
+        )
     ac.delete_evaluator(control_client(ws.context), evaluator_id=evaluator_id)
     return {"deleted": True}
 
@@ -1255,21 +1315,7 @@ def create_run(
         )
 
     if req.mode == "evaluators":
-        _assert_judge_ground_truth(ws, req.evaluators, items)
-
-    # Trajectory*Match evaluators score against expectedTrajectory ground
-    # truth — only a dataset run whose scenarios carry it can supply that.
-    if any(e.startswith("Builtin.Trajectory") for e in req.evaluators):
-        has_trajectory_gt = any(
-            s.get("expected_trajectory") for s in normalize_scenarios(items)
-        )
-        if not (dataset_scope and has_trajectory_gt):
-            raise AppError(
-                "run.trajectory_needs_ground_truth",
-                "trajectory evaluators need a dataset whose scenarios define "
-                "expected_trajectory",
-                status_code=422,
-            )
+        _assert_target_references(db, ws, req.evaluators, items, dataset_scope)
 
     if req.lookback_hours:
         now = datetime.now(UTC)

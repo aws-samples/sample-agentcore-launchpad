@@ -1018,6 +1018,279 @@ real preset conversation with a grounded AWS answer, a valid model-emitted propo
 an authorized approval creating a test Harness, readback and cleanup of the test-owned
 resources. `make verify` alone is not proof that the model follows the protocol.
 
+### Evaluation-assets plan (SE-047) — reviewed materialization of golden tests
+
+A proposal's `golden_tests` / `evaluator_recommendations` stay inert solution content.
+SE-047 adds a **separate, private, versioned plan** on the same conversation that says
+what those recommendations become, and one **administrator-only, idempotent
+materialization** that creates the assets. The Agent proposal, its approval and the
+deployed Agent are never touched; approving an Agent is not permission for cloud
+evaluation resources.
+
+**Four things that are deliberately different from each other.**
+
+| Action | Where | What happens | AWS write? |
+|---|---|---|---|
+| Prepare / edit a plan | `POST …/evaluation-plan/prepare`, `PUT …/evaluation-plan` (member, owner-bound) | a new plan revision row (`assistant_evaluation_plans`), validated against the exact proposal revision + content hash it names | none |
+| Create assets | `POST …/evaluation-plan/materialize` (admin **and** owner; exact plan revision + hash; disclosure acknowledged) | one `evaluation_asset_operations` row → local **Launchpad Dataset** (ledger), **AgentCore evaluators**, and for code rules one **Lambda** + its role/log group/resource policy + an additive execution-role policy | CreateEvaluator, Lambda/IAM/Logs — **never** StartBatchEvaluation, CreateDataset (AWS sync), online evaluation, InvokeHarness/Runtime or a model call |
+| Sync the Dataset to AWS | existing `POST /api/eval/datasets/{id}/sync-to-aws` | unchanged, explicit, separate | CreateDataset/AddDatasetExamples |
+| Run an evaluation | existing `POST /api/eval/runs` (`perm:eval.run`) | unchanged, separate, billable | invokes + StartBatchEvaluation |
+
+**The typed plan** (`backend/app/assistant/evaluation_plan.py`, ≤ 160 000 bytes) is
+bound to `source_revision` + `source_content_hash`, hashed canonically, and carries:
+`scenarios[]` (one standard predefined Dataset item per golden test, with the original
+golden-test id, turns/expected responses/assertions/expected trajectory, optionally the
+SE-046 `launchpad_execution` procedure, and a `review_required` flag), `evaluators[]`
+(a discriminated union: `existing` id reference · `judge` with pinned instructions /
+rating scale / model / level · `derived` · `code` with **declarative rules only** ·
+and the non-automatable kinds `orchestration` / `manual_review` / `metric_baseline` /
+`external_control` with their reason and obligation), `recommendations[]` (every prose
+recommendation of the revision exactly once, `mapped` to keys or explicitly
+`unresolved` / `declined`) and `blocked_golden_tests[]`. Validation refuses: a golden
+test that is neither a scenario nor blocked, a scenario still `review_required`, a
+recommendation missing or altered, a mapped key that is not an evaluator, judge
+placeholders not documented for the level (`{context}` `{assistant_turn}`
+`{expected_response}` at TRACE; `{context}` `{available_tools}`
+`{actual_tool_trajectory}` `{expected_tool_trajectory}` `{assertions}` at SESSION),
+`reference_response` rules outside TRACE / `reference_trajectory` outside SESSION, more
+than **10** AWS evaluators, TOOL_CALL code evaluators, and any dataset item the SE-046
+execution gate rejects. Nothing in the plan may carry an ARN, a Lambda name, Python or a
+regex — `extra="forbid"` everywhere.
+
+**Evaluator selection is global; per-golden-test mapping is refused, not faked.** A
+dataset run applies one evaluator list to every session and the reference envelope does
+not select evaluators, so the platform cannot route an AWS evaluator to a subset of golden
+tests. Validation therefore refuses any cloud/existing evaluator whose `golden_test_ids`
+is a proper subset (actionable: `[]` = all golden tests, or replace it with a runner check /
+manual obligation for those tests). A global reference-driven evaluator (`{expected_response}`
+/ `{assertions}` / `{expected_tool_trajectory}` placeholders, `reference_*` code rules,
+`Builtin.Trajectory*`) is accepted only when EVERY scenario — and, at TRACE, every turn —
+carries that reference, and a SESSION reference evaluator cannot coexist with a multi-session
+procedure scenario (only the outcome session carries references; the seed sessions would all
+error). The created Dataset item keeps the reviewed golden-test facts
+(`metadata.launchpad_assets.golden_test`: id, input, expected response, expected tools,
+forbidden behaviour, pass criteria, evaluator note, source), the plan-key → kind / gate /
+**resolved evaluator id** map and `applies` (all global keys) — never the transcript. **Run preflight
+checks the CURRENT dataset, target by target.** `POST /api/eval/runs` resolves every chosen
+evaluator's ground-truth needs from its real definition — canonical builtins (including the
+`Builtin.Trajectory*` catalog), a managed evaluator's recorded create request, or one
+`GetEvaluator` for an unmanaged custom id — and, through the shared pure helper
+`app/evaluation/coverage.py`, requires the reference on every target the evaluator will be
+applied to: every session (procedure seed sessions included; scenario-level assertions /
+trajectory attach only to the outcome session, exactly as the runner's
+`ground_truth_for_sessions` groups them) for SESSION evaluators, every turn for TRACE
+evaluators. Any gap is `422 run.judge_needs_ground_truth` naming the offending targets
+(`GT-003#r1/a1 lacks expected_tool_trajectory`, `GT-002/turn 1 lacks expected_response`)
+before a run row, invoke or StartBatchEvaluation; a dataset edited after materialization is
+therefore re-checked at run time. A custom evaluator the preflight cannot read has
+**unknown** needs, not verified ones: a GetEvaluator failure is `422
+run.evaluator_unverifiable` (NotFound: `422 run.evaluator_not_found`) before any run row,
+queue entry, telemetry read, invoke or batch — the old fail-open ("the service enforces it
+too") would already have invoked the agent for every scenario by the time the service
+rejected the batch. Simulated persona items (`actor_profile`) have no predefined turns: the
+helper emits one explicit `<scenario>/simulated turns` trace target carrying only the
+session-scoped `assertions` / `expected_trajectory` the metadata composer really sends, so
+a TRACE evaluator reading `{expected_response}` is refused (never passed vacuously on an
+empty turn list) while session assertions known upfront stay valid. The same helper binds
+an *existing* evaluator reference at materialization: its configuration is validated
+member by member against the **installed** control-plane model (`EvaluatorConfig` and every
+nested shape — the `RatingScale` / `EvaluatorModelConfig` / `CodeBasedEvaluatorConfig`
+tagged unions need exactly one non-empty branch; every scale entry needs `definition`,
+`value`/`label`; `modelId` is required on both the Bedrock and the Responses branch; typed
+inference options, the Lambda ARN pattern and the 1–300 s timeout are enforced; unknown
+members anywhere are refused, while documented optional provider fields such as
+`inferenceConfig`, document-typed `additionalModelRequestFields` and Responses `reasoning`
+bind), its needs are decoded from that configuration — or, for a code evaluator this
+platform created in the **same workspace**, from its owning plan's recorded rules
+(`source: managed`; another workspace's association is never read) — and a reference the
+plan's scenarios cannot feed leaves the resource `conflict`, never `ready`; a truly external
+code evaluator's needs are unknown and recorded as such. Observability SCORE NOW
+(`observability.evaluator_needs_ground_truth`, before any span read or Evaluate call) and
+online evaluation refuse managed reference-driven code evaluators outright.
+
+**Drafts never turn prose into a procedure.** A proposal may carry an optional
+structured `evaluation_plan` seed — typed `scenarios` (turns, references, the SE-046
+procedure for multi-actor / multi-session tests), typed `evaluators` and
+`recommendation_keys` — validated shape-first by the same union (a malformed seed is
+an *invalid* revision, never a 500; a revision without a seed serializes exactly as
+before, so old hashes are unchanged). `draft_plan` uses seeded scenarios as-is; every
+other golden test becomes a single-turn scenario marked `review_required` that the
+member confirms, rewrites as typed steps or blocks. The model-facing protocol asks for
+typed scenarios (turns, references, `execution` steps/checks for multi-session tests) and
+global evaluator mappings in the seed, so the normal generated flow does not require
+hand-written schemas. Seeded evaluator keys are
+reserved first; prose recommendations map only to ids identified exactly
+(`Builtin.*` / `ThirdParty.*`, collision-safe keys, never removed by a seed mapping of
+another kind) or to the seed's explicit `recommendation_keys`; everything else stays
+`unresolved`. The single drafted judge is SESSION-level, global, and scores each
+scenario against **its own** `assertions` (pass criteria / forbidden behaviour) via the
+`{assertions}` reference — drafted only when every scenario carries assertions and none is
+a multi-session procedure — and it is labelled `draft: true`; the deterministic
+`expected_tools` rule is drafted only when every scenario names expected tools.
+
+**Code evaluators are one reviewed static Lambda + data.** `app/assistant/lambda_runtime/
+handler.py` is stdlib-only (json/os), contains no `eval`/`exec`/`subprocess`/`re`/network
+client, and is shipped byte-identical in every package together with a canonical
+`rules.json` (evaluator **name** → rules; unknown names error). `build_package` produces a
+deterministic ZIP (sorted entries, 1980-01-01 timestamps, fixed permissions, canonical
+JSON) whose sha256 is persisted on the intent and compared with the function's
+`CodeSha256` and the published version's readback. Rules: `tool_count` · `tool_sequence`
+(exact / subsequence) · `tool_set` (allowed / forbidden) · `output_contains` /
+`output_not_contains` / `output_exact` (literal, case-insensitive by default) ·
+`reference_trajectory` (observed tools ⊇ or == `expectedTrajectory.toolNames`) ·
+`reference_response` (final output contains `expectedResponse.text`). Evidence is
+fail-closed: the handler inspects only the target (`evaluationTarget.traceIds` at TRACE,
+all spans at SESSION, TOOL_CALL refused), reads the **last assistant output** of a
+model/agent span (`gen_ai.completion`, `gen_ai.output.messages`, `gen_ai.choice` /
+`gen_ai.assistant.message` events; dict or OTLP list attributes) and tool names
+(`gen_ai.tool.name`, `tool.name`, `execute_tool <name>` spans); user prompts, tool
+inputs and reference inputs are never read as output. No spans, an unmatched target,
+no identifiable output for an output rule, a missing reference input for a reference
+rule, or a tool rule without any model/agent span → `{errorCode, errorMessage}`, never
+PASS. At SESSION level `output_not_contains` is a whole-session claim and is usable only
+when every assistant turn of the session is present and complete (a missing or truncated
+earlier turn is an error, not a pass); `output_contains` / `output_exact` and every
+TRACE rule judge the final turn only. Every finish indication of a turn (event, message,
+span `gen_ai.response.finish_reasons`) must agree on a terminal stop, and a finished span
+needs a valid end timestamp. Output fields are typed by their source (serialized content
+blocks on model spans, plain `str(response)` on agent spans, serialized message lists in
+`operation.details`), never by punctuation. Deterministic rules assert literal text and
+observed tool counts/sequences only;
+PII solicitation, dependency-inducing language or child safety need a calibrated judge
+and human review — a passing keyword rule is not a safety certificate, and reference
+rules must not score live traffic (the operation flags them `reference_dependent`).
+
+**Durable, fenced materialization** (`app/assistant/evaluation_assets.py`). Approval
+is one atomic claim: a conditional UPDATE of the plan row (still `draft`, still this
+hash, still the newest revision, conversation still owned by the approver's principal,
+and — for a registered account — the approver still an active, unexpired administrator,
+all as predicates of that same write) in the same transaction that inserts the operation
+with every intent and the **pinned workspace identity** (account, region, assume-role
+ARN/external id, execution-role ARN and — when a grant is requested — the execution
+role's RoleId, accepted only if the role carries the `launchpad:managed` tag, never by
+name prefix); the caller is re-resolved from the database inside that transaction and
+must still be an administrator who owns the conversation. A superseded / edited /
+already-claimed plan is `409 assistant.evaluation_plan_stale` before any write. One
+host-local `flock` per operation plus a database lease token fence the worker: before
+**every** cloud write it re-reads the token, re-checks the approver and compares the
+workspace row with the pinned identity, and stops (recorded, no effect) on any change.
+A quick restart re-acquires the free lock and resumes at once; a live worker is never
+stolen. Order: `dataset` (ledger; member edits afterwards are never overwritten) →
+`lambda_role` → `log_group` → `lambda_function` (python3.12, 256 MB, timeout = max rule
+timeout ≤ 300 s; wait Active; `PublishVersion` pinned to the digest and reconciled
+against `ListVersionsByFunction` — exactly one published version may carry the digest,
+Lambda does not re-publish unchanged code; reserved concurrency 5, no provisioned
+concurrency; readback of CodeSha256 / Runtime / Handler / Role / Version / Timeout /
+MemorySize / State / reserved concurrency) → `lambda_permission`
+(`bedrock-agentcore.amazonaws.com` + `SourceAccount` on the version; an existing
+statement is accepted only when it equals that exact scope) → `role_grant` (the
+pinned role re-read: ARN, RoleId and tag must match; an additive inline policy
+`launchpad-evalop-<op>` granting `lambda:InvokeFunction` + `GetFunction` on the
+**published version ARN only**, never `$LATEST`; trust and other policies untouched;
+document read back) → every `evaluator:<key>` (CreateEvaluator with the persisted
+token, GetEvaluator until ACTIVE, id/name/level/config must equal the request; code
+evaluators pin the version ARN; an `existing` reference must resolve to the same id
+and be usable). A failure or conflict in the code chain marks the rest of the chain
+and the code evaluators `blocked`; judges, derived and existing evaluators still
+proceed.
+
+**Ownership is a service-issued identity returned to this operation, never content.**
+Every dispatched create is recorded durably before the call (intent / request / a
+per-dispatch `create_history` for evaluators), and the identity the service answers with
+is persisted immediately, before any further write: RoleId / ARN from CreateRole, the log
+group's creationTime / ARN read right after CreateLogGroup (the API returns none), the
+FunctionArn / RevisionId returned by CreateFunction (every approved field of the answer is
+verified first), the evaluatorId / ARN from CreateEvaluator. The random *provenance nonce*
+(role description + tag, log-group tag, `provenance.json` in the package → the digest) is
+only a clue for a reviewer: it is copyable, so after a lost response or a crash before the
+acceptance checkpoint a resource found under our name is **`unknown`** — never adopted,
+never written to, never deleted, dependents retained — and a collision established at
+creation time is a **foreign collision**: recorded as `conflict`, never adopted, never
+deleted. A `pending` / `blocked` display status with a dispatched create is an effect that
+may exist and is accounted for by cleanup. Before publishing, the worker requires `$LATEST`
+to still equal the identity CreateFunction returned (RevisionId included) and passes that
+RevisionId as the PublishVersion precondition; it re-pins the RevisionId deliberately right
+after each of its own writes (publish, reserved concurrency) with every other approved field
+still equal, and refuses a replacement before any publish / concurrency / permission write.
+Evaluators
+replay the service's own `clientToken`; a name conflict with a different token is
+foreign. Readback drift is `conflict` too — the record stays owned (`owned: true`)
+but is never repaired. Retries are explicit and bounded (5 attempts); a partial
+outcome stays `partial` with each resource's error.
+
+**Cleanup** (`DELETE …/operations/{id}/assets`, admin + owner) runs under the same
+lock, lease, re-authorization and pinned-identity checks, one persisted checkpoint per
+effect and a fresh fence before every single mutation, dependency first. **A create whose
+response was lost before the service-issued identity was recorded is never adopted or
+deleted afterwards**: a nonce in a role description / tag, a log-group tag or a
+nonce-bearing package digest is copyable content, not ownership, so while a resource with
+our name exists the resource is an explicit `unknown` (worker and cleanup alike; the
+operator reviews it, then retries — a retry re-evaluates without adopting), its
+dependents stay `blocked` / `retained` and the operation is never `cleaned`. A collision
+established at creation (ConflictException, no lost response) is a foreign resource
+(`conflict`, not owned) and does not block `cleaned`. A lost `CreateEvaluator` stays
+`unknown` even when `ListEvaluators` does not show the name (visibility cannot prove the
+create never happened; name, clientToken and any listed candidate id are recorded); a
+worker retry replays the service's idempotency token to recover or create it under our
+ownership — cleanup never creates. A definite 4xx rejection is recorded as such and counts
+as nothing created. Owned evaluators are deleted only when id, name, level, configuration
+and ARN still equal the recorded identity (a changed one stays a reviewable `conflict`; one
+locked by an online configuration stays `delete_failed`), and `DeleteEvaluator` counts only
+once a NotFound readback confirms it is gone (`delete_pending` otherwise). The additive
+grant, the function (with its resource policy), the log group and the dedicated role are
+removed **only once every evaluator is confirmed gone** and only after the identity snapshot
+recorded when their create/readback succeeded still matches exactly: RoleId, ARN, trust
+policy and inline policy of the role; creationTime, ARN and retention of the log group;
+for the function the recorded published version **and** the unqualified `$LATEST`
+(FunctionArn, CodeSha256, role, runtime, handler, limits and RevisionId, captured after
+the platform's last write), the version set and the alias set — both inventories read with
+the real `Marker` / `NextMarker` pagination to a structurally valid terminal page within a
+bounded page budget; an exhausted budget, a repeated or unusable marker, a page without
+its `Versions` / `Aliases` list or a malformed entry is an *incomplete* inventory (never an
+empty one) that fails provisioning and refuses cleanup. A pre-history evaluator request
+with no id and no recorded rejection is migrated into a durable `legacy-uncertain` entry
+together with the next dispatch record, before the call, so later rejections cannot erase
+it. A missing published version
+is **not** a missing function; a whole-function delete is confirmed by a bounded unqualified
+`GetFunction` NotFound before the log group and role are touched (`delete_pending` and
+dependencies retained otherwise; a pending delete is re-verified and re-driven on the next
+cleanup); an incomplete snapshot is a review-required `conflict`. Otherwise resources are
+`retained` / `conflict` and reported; a function that could not be deleted keeps its log
+group and role; a lost delete response is a recorded `delete_failed` that the next cleanup
+resolves once the resource is confirmed gone. The delete APIs carry no precondition token
+(installed models), so the check→delete window is one call wide against an external
+administrator. Persisted `conflict` states of the code chain gate every later retry
+(dependents stay `blocked` until the operator resolves them). The local Dataset stays (a member asset removable in
+Evaluation → Datasets) and every foreign resource is left alone; `cleaned` is recorded
+only when nothing owned remains. The ordinary `DELETE /api/eval/evaluators/{id}`
+refuses (`409 evaluator.managed_by_operation`) an evaluator an operation owns.
+
+**Privacy and ownership.** Plans and operations are visible only to the conversation's
+immutable principal (foreign principal / workspace → 404, also for administrators). The
+UI shows a disclosure before creation: the **selected** inputs, expected responses,
+assertions and rubrics of the plan become readable to every workspace member in
+Evaluation → Datasets / Evaluators; the transcript does not. Created Dataset items
+carry `metadata.launchpad_assets` (conversation id, proposal/plan revision + hash,
+operation id, golden-test id, plan-key → kind/golden-tests/blocking/threshold) so the
+Evaluation console can show where an asset came from; the plan-key → evaluator-id map
+lives on the operation. "Created" means registered — not passed, not child-safe, not
+production-ready.
+
+**Live check still required.** `tests/test_evaluation_assets.py` is hermetic (IAM /
+Lambda / Logs / control-plane fakes). Not yet verified against AWS: that
+`bedrock-agentcore.amazonaws.com` is the principal the Evaluations service invokes code
+evaluators with (the devguide documents the execution-role statement, not the resource
+policy), the exact span representation the service passes in `sessionSpans` for this
+platform's Harness/Runtime agents (the handler accepts the documented
+`gen_ai.completion` shape plus the Strands/OTLP variants above), CreateEvaluator's
+acceptance of a **versioned** Lambda ARN, and GetEvaluator's exact `status` value
+(`ACTIVE`/`READY` accepted). ACTIVE registration plus test doubles are not proof that a
+batch run would score. Exclusion is host-local (`flock` under `data/locks/eval-assets`):
+a second console host against the same ledger is not a supported deployment for this
+feature. `operation.pinned` is added by the ledger migration; an operation approved
+before identity pinning existed is refused by worker and cleanup (review required — prepare
+a new plan revision) rather than given invented bindings.
+
 ### Model source (方式B + 方式C)
 
 `AgentSpec.model_source` selects the model-hosting surface: `mantle` (Bedrock

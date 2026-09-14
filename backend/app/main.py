@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import app.deployer.container  # noqa: F401 — registers the container (Claude SDK) method
 import app.deployer.harness  # noqa: F401 — registers the harness deploy method
 import app.deployer.zip_runtime  # noqa: F401 — registers zip_runtime + studio methods
+from app.assistant.evaluation_assets import resume_operations as resume_evaluation_assets
 from app.assistant.service import clear_stale_turn_claims
 from app.core.config import get_settings
 from app.core.db import init_db
@@ -163,6 +164,11 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         if resumed:
             logging.getLogger("launchpad").info(
                 "resumed %d interrupted deploy/bootstrap job(s)", len(resumed)
+            )
+        resumed_assets = resume_evaluation_assets()
+        if resumed_assets:
+            logging.getLogger("launchpad").info(
+                "resumed %d interrupted evaluation-asset operation(s)", len(resumed_assets)
             )
         resumed_evals = resume_interrupted_runs()
         if resumed_evals:

@@ -26,7 +26,7 @@ import json
 import re
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.schemas.agent import (
     DEFAULT_MODEL_ID,
@@ -75,6 +75,31 @@ class GoldenTest(BaseModel):
     source: Literal["customer_pain_point", "industry_assumption"] = "industry_assumption"
 
 
+class EvaluationPlanSeed(BaseModel):
+    """The optional structured evaluation recommendation of a proposal: typed
+    evaluators (kinds existing / judge / derived / code / orchestration /
+    manual_review / metric_baseline / external_control), typed scenarios (turns,
+    references, and the SE-046 ``execution`` procedure for multi-actor / multi-session
+    tests) and ``recommendation_keys`` mapping a prose recommendation index to entry
+    keys. Validated by the plan contract's ``seed_errors`` — shape first, then rules
+    and references — so a malformed seed is an *invalid* revision, never a 500.
+    Nothing here is executed; the plan draft merely starts from it."""
+
+    model_config = ConfigDict(extra="forbid")
+    evaluators: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
+    scenarios: list[dict[str, Any]] = Field(default_factory=list, max_length=40)
+    recommendation_keys: dict[str, list[str]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _typed(self) -> "EvaluationPlanSeed":
+        from app.assistant.evaluation_plan import seed_errors
+
+        errors = seed_errors(self.model_dump())
+        if errors:
+            raise ValueError(errors[0])
+        return self
+
+
 class ProposalContent(BaseModel):
     """Everything an approval may turn into a new managed Harness. ``extra="forbid"``
     is the allowlist: a member (or model) cannot smuggle ``env``, ``code``,
@@ -103,6 +128,20 @@ class ProposalContent(BaseModel):
     manual_tasks: list[Line] = Field(default_factory=list, max_length=40)
     golden_tests: list[GoldenTest] = Field(default_factory=list, max_length=40)
     evaluator_recommendations: list[Line] = Field(default_factory=list, max_length=40)
+    # Optional structured seed for the SEPARATE evaluation-assets plan (SE-047): a
+    # bounded object the member later reviews/edits; inert here, validated by
+    # ``EvaluationPlanSeed`` below, omitted from the stored content when absent so
+    # every pre-existing revision hashes exactly as before.
+    evaluation_plan: EvaluationPlanSeed | None = None
+
+
+def content_dump(content: ProposalContent) -> dict[str, Any]:
+    """The stored/displayed form: the optional ``evaluation_plan`` member is dropped
+    when absent, so a revision without it serializes exactly as before SE-047."""
+    data = content.model_dump()
+    if data.get("evaluation_plan") is None:
+        data.pop("evaluation_plan", None)
+    return data
 
 
 def serialized_bytes(raw: Any) -> int:
@@ -121,6 +160,22 @@ def _check_lists(content: ProposalContent) -> list[str]:
             errors.append(f"{field} must not repeat an entry")
     if len({g.id for g in content.golden_tests}) != len(content.golden_tests):
         errors.append("golden_tests ids must be unique")
+    seed = content.evaluation_plan
+    if seed is not None:
+        gt_ids = {g.id for g in content.golden_tests}
+        for idx in seed.recommendation_keys:
+            if int(idx) >= len(content.evaluator_recommendations):
+                errors.append(f"evaluation_plan.recommendation_keys: index {idx} has no "
+                              "evaluator_recommendations entry")
+        for sc in seed.scenarios:
+            if str(sc.get("golden_test_id")) not in gt_ids:
+                errors.append(f"evaluation_plan.scenarios: golden test "
+                              f"'{sc.get('golden_test_id')}' does not exist")
+        for e in seed.evaluators:
+            for gt in e.get("golden_test_ids") or []:
+                if gt not in gt_ids:
+                    errors.append(f"evaluation_plan.evaluators.{e.get('key')}: golden test "
+                                  f"'{gt}' does not exist")
     return errors
 
 
@@ -389,7 +444,7 @@ def validate(
             return None, raw, errors
         return None, {"_rejected": "oversized or unparseable proposal was not stored"}, errors
     errors = reference_errors(content, catalog)
-    display = content.model_dump()
+    display = content_dump(content)
     if not errors:
         try:
             resource_bindings(content, catalog)
