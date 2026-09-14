@@ -12,6 +12,7 @@ from aws_cdk import (
     Duration,
     RemovalPolicy,
     Stack,
+    Tags,
 )
 from aws_cdk import (
     aws_apigateway as apigw,
@@ -198,6 +199,10 @@ class LaunchpadBaseStack(Stack):
             ),
             description="Assumed by AgentCore Runtime/Harness workloads launched by Launchpad",
         )
+        # The platform trusts an execution role for additive grants only when it carries
+        # this marker (workspace roles created by the backend carry it too); scoped to
+        # this one construct so the gateway/KB/build roles stay unmarked.
+        Tags.of(exec_role).add("launchpad:managed", "true")
         exec_role.add_to_policy(
             iam.PolicyStatement(
                 sid="BedrockModels",

@@ -104,6 +104,40 @@ def test_non_legacy_region_uses_isolated_role_names(east_template: Template):
         east_template.has_resource_properties("AWS::IAM::Role", {"RoleName": role_name})
 
 
+MANAGED_TAG = {"Key": "launchpad:managed", "Value": "true"}
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "role_name"),
+    [
+        ("template", "launchpad-agent-execution-role"),
+        ("east_template", "launchpad-agent-execution-role-us-east-1"),
+    ],
+)
+def test_execution_role_carries_managed_marker(request, fixture_name: str, role_name: str):
+    """The backend trusts an execution role for additive grants only by its
+    `launchpad:managed` tag (never by name); workspace roles created by the backend
+    already carry it, so the stack-created default role must too — in both the legacy
+    us-west-2 name and the regional-suffix name."""
+    tpl: Template = request.getfixturevalue(fixture_name)
+    tpl.has_resource_properties(
+        "AWS::IAM::Role",
+        {"RoleName": role_name, "Tags": Match.array_with([MANAGED_TAG])},
+    )
+
+
+def test_managed_marker_is_scoped_to_the_execution_role(template: Template):
+    """No stack-wide tag: the gateway/KB/build roles must not read as managed."""
+    roles = template.find_resources("AWS::IAM::Role")
+    tagged = [
+        props["Properties"]["RoleName"]
+        for props in roles.values()
+        if MANAGED_TAG in props["Properties"].get("Tags", [])
+    ]
+    assert tagged == ["launchpad-agent-execution-role"]
+    assert len(roles) > 1
+
+
 def test_execution_role_can_read_custom_evaluators_for_ab_tests(template: Template):
     """AgentCore assumes this role to resolve customer-owned evaluators."""
     template.has_resource_properties(
