@@ -1082,13 +1082,29 @@ trajectory attach only to the outcome session, exactly as the runner's
 evaluators. Any gap is `422 run.judge_needs_ground_truth` naming the offending targets
 (`GT-003#r1/a1 lacks expected_tool_trajectory`, `GT-002/turn 1 lacks expected_response`)
 before a run row, invoke or StartBatchEvaluation; a dataset edited after materialization is
-therefore re-checked at run time. The same helper binds an *existing* evaluator reference at
-materialization: its configuration must be exactly one complete supported definition
-(`llmAsAJudge{instructions, ratingScale, modelConfig}`, `derived{baseEvaluatorId,
-modelConfig}`, `codeBased{lambdaConfig.lambdaArn}`; null/empty/mixed/unknown members are
-`conflict`), its needs are decoded from that configuration, and a reference the plan's
-scenarios cannot feed leaves the resource `conflict`, never `ready`; an external code
-evaluator's needs are unknown and recorded as such. Observability SCORE NOW
+therefore re-checked at run time. A custom evaluator the preflight cannot read has
+**unknown** needs, not verified ones: a GetEvaluator failure is `422
+run.evaluator_unverifiable` (NotFound: `422 run.evaluator_not_found`) before any run row,
+queue entry, telemetry read, invoke or batch — the old fail-open ("the service enforces it
+too") would already have invoked the agent for every scenario by the time the service
+rejected the batch. Simulated persona items (`actor_profile`) have no predefined turns: the
+helper emits one explicit `<scenario>/simulated turns` trace target carrying only the
+session-scoped `assertions` / `expected_trajectory` the metadata composer really sends, so
+a TRACE evaluator reading `{expected_response}` is refused (never passed vacuously on an
+empty turn list) while session assertions known upfront stay valid. The same helper binds
+an *existing* evaluator reference at materialization: its configuration is validated
+member by member against the **installed** control-plane model (`EvaluatorConfig` and every
+nested shape — the `RatingScale` / `EvaluatorModelConfig` / `CodeBasedEvaluatorConfig`
+tagged unions need exactly one non-empty branch; every scale entry needs `definition`,
+`value`/`label`; `modelId` is required on both the Bedrock and the Responses branch; typed
+inference options, the Lambda ARN pattern and the 1–300 s timeout are enforced; unknown
+members anywhere are refused, while documented optional provider fields such as
+`inferenceConfig`, document-typed `additionalModelRequestFields` and Responses `reasoning`
+bind), its needs are decoded from that configuration — or, for a code evaluator this
+platform created in the **same workspace**, from its owning plan's recorded rules
+(`source: managed`; another workspace's association is never read) — and a reference the
+plan's scenarios cannot feed leaves the resource `conflict`, never `ready`; a truly external
+code evaluator's needs are unknown and recorded as such. Observability SCORE NOW
 (`observability.evaluator_needs_ground_truth`, before any span read or Evaluate call) and
 online evaluation refuse managed reference-driven code evaluators outright.
 

@@ -575,7 +575,12 @@ def test_judge_ground_truth_gate_accepts_dataset_with_expected_response(
     assert res.status_code == 201, res.text
 
 
-def test_judge_ground_truth_gate_skips_builtins_and_fails_open(client, monkeypatch):
+def test_judge_ground_truth_gate_skips_builtins_and_refuses_unreadable_judges(
+    client, monkeypatch
+):
+    """SE-047 B: an unreadable custom evaluator has UNKNOWN reference needs. The old
+    fail-open ('AWS enforces it too') let the agent be invoked for every scenario before
+    the service could reject the batch; the gate now refuses before any run row."""
     db = SessionLocal()
     agent = make_agent(db, name="judge-open-agent")
     plain = EvalDataset(
@@ -595,10 +600,18 @@ def test_judge_ground_truth_gate_skips_builtins_and_fails_open(client, monkeypat
     assert res.status_code == 201, res.text
     stub.get_evaluator.assert_not_called()
 
-    # an unreadable control plane must not block the run (AWS enforces it too)
+    # an unreadable control plane means unknown requirements: refused, no run row
+    from app.evaluation.models import EvalRun
+
+    with SessionLocal() as db:
+        before = db.query(EvalRun).count()
     stub.get_evaluator.side_effect = RuntimeError("control plane unavailable")
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "dataset_id": plain_id,
         "evaluators": ["ref_grounding-abc123"], "wait_seconds": 0,
     })
-    assert res.status_code == 201, res.text
+    assert res.status_code == 422, res.text
+    assert res.json()["code"] == "run.evaluator_unverifiable"
+    assert "ref_grounding-abc123" in res.json()["message"]
+    with SessionLocal() as db:
+        assert db.query(EvalRun).count() == before

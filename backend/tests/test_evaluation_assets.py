@@ -2290,3 +2290,342 @@ def test_actual_run_route_checks_every_target_before_invoking(gated, monkeypatch
         assert resp.json()["code"] == "run.judge_needs_ground_truth"
         assert eid in resp.json()["detail"]["evaluators"]
         assert not data.invocations and not data.batches
+
+
+# ===========================================================================
+# 9. SE-047 phase B — complete nested configuration, managed reference reuse,
+#    fail-closed preflight and simulated persona references
+# ===========================================================================
+
+
+def _config_case(case: str) -> dict:
+    """SDK-shaped positives (documented optional provider fields) and negatives (one
+    nested violation each) around the installed ``EvaluatorConfig`` model."""
+    d = _detail()
+    judge = d["evaluatorConfig"]["llmAsAJudge"]
+    mc = judge["modelConfig"]
+    lambda_arn = f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:external:1"
+    if case == "categorical-positive":
+        judge["ratingScale"] = {"categorical": [{"label": "pass", "definition": "correct"}]}
+    elif case == "responses-positive":
+        judge["modelConfig"] = {"responsesEvaluatorModelConfig": {
+            "modelId": "model-id", "maxOutputTokens": 1000, "temperature": 1.5, "topP": 0.9,
+            "reasoning": {"effort": "high"}}}
+    elif case == "bedrock-options-positive":
+        mc["bedrockEvaluatorModelConfig"].update(
+            inferenceConfig={"maxTokens": 1000, "temperature": 0.5, "topP": 0.9,
+                             "stopSequences": ["END"]},
+            additionalModelRequestFields={"arbitrary_provider_specific": {"enabled": True}})
+    elif case == "derived-positive":
+        d["evaluatorConfig"] = {"derived": {"baseEvaluatorId": "Builtin.Helpfulness",
+                                            "modelConfig": mc}}
+    elif case == "code-positive":
+        d["evaluatorConfig"] = {"codeBased": {"lambdaConfig": {
+            "lambdaArn": lambda_arn, "lambdaTimeoutInSeconds": 60}}}
+    elif case == "numerical-null-entry":
+        judge["ratingScale"] = {"numerical": [None]}
+    elif case == "numerical-empty-entry":
+        judge["ratingScale"] = {"numerical": [{}]}
+    elif case == "numerical-label-object":
+        judge["ratingScale"]["numerical"][0]["label"] = {}
+    elif case == "numerical-value-string":
+        judge["ratingScale"]["numerical"][0]["value"] = "1"
+    elif case == "categorical-missing-definition":
+        judge["ratingScale"] = {"categorical": [{"label": "pass"}]}
+    elif case == "scale-double-union":
+        judge["ratingScale"]["categorical"] = [{"label": "pass", "definition": "correct"}]
+    elif case == "model-double-union":
+        mc["responsesEvaluatorModelConfig"] = {"modelId": "model-id"}
+    elif case == "responses-no-model-id":
+        judge["modelConfig"] = {"responsesEvaluatorModelConfig": {"maxOutputTokens": 10}}
+    elif case == "bedrock-inference-malformed":
+        mc["bedrockEvaluatorModelConfig"]["inferenceConfig"] = {"maxTokens": "many"}
+    elif case == "bedrock-temperature-out-of-range":
+        mc["bedrockEvaluatorModelConfig"]["inferenceConfig"] = {"temperature": 1.5}
+    elif case == "judge-nested-unknown":
+        judge["mystery"] = True
+    elif case == "model-nested-unknown":
+        mc["mystery"] = {}
+    elif case == "derived-base-malformed":
+        d["evaluatorConfig"] = {"derived": {"baseEvaluatorId": "not an id", "modelConfig": mc}}
+    elif case == "code-arn-malformed":
+        d["evaluatorConfig"] = {"codeBased": {"lambdaConfig": {
+            "lambdaArn": "arn:aws:lambda:broken", "lambdaTimeoutInSeconds": 60}}}
+    elif case == "code-timeout-string":
+        d["evaluatorConfig"] = {"codeBased": {"lambdaConfig": {
+            "lambdaArn": lambda_arn, "lambdaTimeoutInSeconds": "sixty"}}}
+    elif case == "code-timeout-out-of-range":
+        d["evaluatorConfig"] = {"codeBased": {"lambdaConfig": {
+            "lambdaArn": lambda_arn, "lambdaTimeoutInSeconds": 301}}}
+    elif case == "code-double-union":
+        d["evaluatorConfig"] = {"codeBased": {"lambdaConfig": {"lambdaArn": lambda_arn},
+                                              "mystery": {}}}
+    return d
+
+
+@pytest.mark.parametrize("case", [
+    "judge-positive", "categorical-positive", "responses-positive", "bedrock-options-positive",
+    "derived-positive", "code-positive", "numerical-null-entry", "numerical-empty-entry",
+    "numerical-label-object", "numerical-value-string", "categorical-missing-definition",
+    "scale-double-union", "model-double-union", "responses-no-model-id",
+    "bedrock-inference-malformed", "bedrock-temperature-out-of-range", "judge-nested-unknown",
+    "model-nested-unknown", "derived-base-malformed", "code-arn-malformed",
+    "code-timeout-string", "code-timeout-out-of-range", "code-double-union",
+])
+def test_existing_config_is_validated_member_by_member_against_the_installed_model(
+    app_ready, case
+):
+    """ACTUAL materialization of an existing reference: every nested SDK union / required
+    member / type / range / pattern violation stays un-bound; documented optional provider
+    fields (inference options, document fields, Responses reasoning) bind."""
+    from botocore.loaders import Loader
+    from botocore.model import ServiceModel
+
+    from app.evaluation import coverage
+
+    d = _config_case(case)
+    problem = coverage.validate_evaluator_config(d["evaluatorConfig"])
+    op, res = _existing_run(d)
+    if case.endswith("positive"):
+        assert problem is None
+        assert op.status == "succeeded" and res["status"] == "ready", res
+        if case == "code-positive":
+            assert res["reference_dependent"] is None and "unknown" in res["result"]["note"]
+        return
+    assert problem, case
+    assert op.status == "partial" and res["status"] == "conflict", res
+    assert "not bindable" in res["error"] and problem in res["error"]
+    if case.endswith("double-union"):  # the installed model states the union
+        model = ServiceModel(Loader().load_service_model("bedrock-agentcore-control",
+                                                         "service-2"))
+        nested = {"scale": "RatingScale", "model": "EvaluatorModelConfig",
+                  "code": "CodeBasedEvaluatorConfig"}[case.split("-")[0]]
+        assert model.shape_for(nested).metadata["union"]
+        assert "exactly one of" in problem or "unknown members" in problem
+
+
+def _second_plan_reusing(cid2, h2, eid, *, referenced: bool) -> dict:
+    raw = _valid_plan(cid2, h2, with_code=False, reference=referenced)
+    raw["evaluators"][1]["name"] = "second_unique_judge"
+    raw["evaluators"][0] = {"kind": "existing", "key": "helpfulness", "title": "managed ref",
+                            "evaluator_id": eid, "golden_test_ids": []}
+    return raw
+
+
+def test_known_managed_code_reference_is_resolved_from_its_plan_rules(app_ready):
+    """A SESSION reference_trajectory code evaluator this platform created is reused as
+    an 'existing' reference by a second plan: its needs come from the owning plan's rules
+    (same workspace), never 'external unknown'. Missing trajectories / procedure seed
+    sessions → conflict; a fully referenced second plan binds as 'managed'."""
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, plan=_valid_plan(cid, h, reference=True), fakes=fakes)
+    _run(op_id, fakes)
+    eid = _res(_op(op_id), "evaluator:tools")["result"]["evaluator_id"]
+    # 1. the second plan has a procedure scenario (seed sessions carry no trajectory)
+    cid2, h2 = _conversation("local-operator")
+    op2_id, *_ = _approve(cid2, h2, plan=_second_plan_reusing(cid2, h2, eid, referenced=False),
+                          fakes=fakes)
+    _run(op2_id, fakes)
+    op2 = _op(op2_id)
+    res = _res(op2, "existing:helpfulness")
+    assert op2.status == "partial" and res["status"] == "conflict", res
+    assert "expected_tool_trajectory" in res["error"] and "GT-003#r1/a1" in res["error"]
+    assert "unknown" not in (res["error"] or "")
+    # 2. every scenario carries a trajectory → bound, labeled managed, reference-dependent
+    cid3, h3 = _conversation("local-operator")
+    op3_id, *_ = _approve(cid3, h3, plan=_second_plan_reusing(cid3, h3, eid, referenced=True),
+                          fakes=fakes)
+    _run(op3_id, fakes)
+    res = _res(_op(op3_id), "existing:helpfulness")
+    assert res["status"] == "ready" and res["reference_dependent"] is True, res
+    assert res["result"]["source"] == "managed"
+    assert res["result"]["reference_needs"] == ["expected_tool_trajectory"]
+    assert op_id in res["result"]["note"]
+    # 3. another workspace's association is private: the same id there is external code
+    with SessionLocal() as db:
+        assert assets.managed_evaluator(db, "other-workspace", eid) is None
+        assert assets.managed_evaluator(db, DEFAULT_WORKSPACE_ID, eid)["definition"] == "code"
+
+
+class _RecordingLogs:
+    def __init__(self):
+        self.calls = []
+
+    def describe_log_groups(self, **kw):
+        self.calls.append("describe")
+        return {"logGroups": [{"logGroupName": kw["logGroupNamePrefix"] + "abc-DEFAULT",
+                               "creationTime": 1}]}
+
+    def filter_log_events(self, **kw):
+        from app.evaluation.telemetry import ROOT_SPAN_NAME
+
+        self.calls.append("filter")
+        sid = json.loads(kw["filterPattern"])
+        doc = {"attributes": {"session.id": sid}, "spanId": "span-latest",
+               "name": ROOT_SPAN_NAME, "body": {"input": "test", "output": "answer"}}
+        return {"events": [{"message": json.dumps(doc), "timestamp": 1, "ingestionTime": 1}]}
+
+
+class _RecordingData:
+    def __init__(self):
+        self.invocations, self.batches = [], []
+
+    def invoke_harness(self, **kw):
+        self.invocations.append(kw)
+        return {"stream": [{"contentBlockDelta": {"delta": {"text": "answer"}}}]}
+
+    def start_batch_evaluation(self, **kw):
+        self.batches.append(kw)
+        return {"batchEvaluationId": "synthetic-batch"}
+
+    def get_batch_evaluation(self, **kw):
+        return {"status": "COMPLETED"}
+
+
+def _route_agent() -> str:
+    with SessionLocal() as db:
+        agent = Agent(name="route-synthetic", workspace_id=DEFAULT_WORKSPACE_ID,
+                      method="harness", status="active", resource_id="route-abc",
+                      arn=f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:harness/route-abc",
+                      spec={"name": "route-synthetic", "method": "harness"}, owner="admin")
+        db.add(agent)
+        db.commit()
+        return agent.id
+
+
+def _post_run(admin, monkeypatch, control, body):
+    """POST /api/eval/runs with every low-level client doubled; returns the response and
+    the observable downstream effects (queue submissions, run rows, invokes, batches)."""
+    from app.evaluation.models import EvalRun
+    from app.evaluation.queue import run_queue
+
+    logs, data = _RecordingLogs(), _RecordingData()
+    monkeypatch.setattr(aws_clients, "client", lambda name, ws, **kw: {
+        "logs": logs, "bedrock-agentcore": data, "bedrock-agentcore-control": control}[name])
+    submitted = []
+    original = run_queue.submit
+    monkeypatch.setattr(run_queue, "submit",
+                        lambda *a, **kw: (submitted.append(a[0]), original(*a, **kw))[1])
+    with SessionLocal() as db:
+        before = db.query(EvalRun).count()
+    resp = admin.post("/api/eval/runs", json={"wait_seconds": 0, **body})
+    run_queue._queue.join()
+    with SessionLocal() as db:
+        rows = db.query(EvalRun).count() - before
+        run = db.get(EvalRun, resp.json()["id"]) if resp.status_code == 201 else None
+        state = (run.status, run.error) if run else None
+    return resp, {"queued": submitted, "rows": rows, "logs": logs.calls,
+                  "invokes": data.invocations, "batches": data.batches, "state": state}
+
+
+def test_unreadable_custom_evaluator_refuses_the_run_before_any_effect(gated, monkeypatch):
+    """A GetEvaluator transport failure = unknown requirements: bounded 422, no run row,
+    no queue entry, no telemetry read, no invoke, no batch. NotFound is its own 422."""
+    admin, _, _ = gated
+    aid = _route_agent()
+    r = admin.post("/api/eval/datasets", json={"name": "missing-ref", "items": [
+        {"scenario_id": "missing", "turns": [{"input": "no reference"}]}]})
+    assert r.status_code == 201, r.text
+    dataset_id = r.json()["id"]
+
+    class Unavailable:
+        def __init__(self):
+            self.calls = 0
+
+        def get_evaluator(self, **kw):
+            self.calls += 1
+            raise ConnectionError("synthetic control-plane unavailable")
+
+    control = Unavailable()
+    resp, effects = _post_run(admin, monkeypatch, control, {
+        "agent_id": aid, "dataset_id": dataset_id, "evaluators": ["custom-x"]})
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["code"] == "run.evaluator_unverifiable"
+    assert "custom-x" in resp.json()["message"] and "ConnectionError" in resp.json()["message"]
+    assert control.calls == 1  # one read, no retry loop of our own
+    assert effects == {"queued": [], "rows": 0, "logs": [], "invokes": [], "batches": [],
+                       "state": None}, effects
+    control = FakeControl()  # exists → NotFound
+    resp, effects = _post_run(admin, monkeypatch, control, {
+        "agent_id": aid, "dataset_id": dataset_id, "evaluators": ["custom-x"]})
+    assert resp.status_code == 422 and resp.json()["code"] == "run.evaluator_not_found"
+    assert effects["queued"] == [] and effects["rows"] == 0 and effects["invokes"] == []
+    # a readable non-reference judge on the same dataset still runs (no fallback removed)
+    monkeypatch.setattr(_ac_eval, "start_batch_evaluation", _ORIG_START_BATCH)
+    control.evaluators["custom-x"] = _detail()
+    resp, effects = _post_run(admin, monkeypatch, control, {
+        "agent_id": aid, "dataset_id": dataset_id, "evaluators": ["custom-x"]})
+    assert resp.status_code == 201, resp.text
+    assert effects["state"] == ("completed", None) and len(effects["batches"]) == 1
+
+
+def test_simulated_persona_references_are_explicit_never_vacuous(gated, monkeypatch):
+    """Persona turns are generated at run time: a TRACE evaluator reading
+    {expected_response} is refused before the actor / agent is ever invoked; session
+    assertions known upfront (which the metadata composer really sends) stay valid."""
+    from app.evaluation import coverage, simulation
+
+    persona = {"scenario_id": "persona-1", "input": "I need to book leave",
+               "actor_profile": {"context": "employee", "goal": "book two days off"},
+               "assertions": ["confirms the dates"]}
+    targets = {t["id"]: t for t in coverage.reference_targets([persona])}
+    assert targets["persona-1"]["fields"] == {"assertions"}
+    assert targets["persona-1/simulated turns"]["simulated"] is True
+    assert coverage.coverage_gaps([persona], {"assertions"}, "TRACE") == []
+    assert coverage.coverage_gaps([persona], {"assertions"}, "SESSION") == []
+    gaps = coverage.coverage_gaps([persona], {"expected_response"}, "TRACE")
+    assert gaps == ["persona-1/simulated turns lacks expected_response "
+                    f"({coverage.SIMULATED_NOTE})"]
+    assert coverage.coverage_gaps([persona], {"expected_tool_trajectory"}, "SESSION") == [
+        "persona-1 lacks expected_tool_trajectory"]
+    assert coverage.coverage_gaps([persona], set(), "TRACE") == []
+
+    admin, _, _ = gated
+    aid = _route_agent()
+    r = admin.post("/api/eval/datasets", json={"name": "persona", "items": [persona]})
+    assert r.status_code == 201, r.text
+    dataset_id = r.json()["id"]
+    simulated: list[dict] = []
+
+    def forbidden_simulation(*a, **kw):
+        raise AssertionError("the actor simulation must not start on a refused run")
+
+    monkeypatch.setattr(simulation, "run_simulated_scenario", forbidden_simulation)
+    control = FakeControl()
+    control.evaluators["ref-judge"] = _detail(
+        eid="ref-judge", instructions="Compare {assistant_turn} with {expected_response}")
+    body = {"agent_id": aid, "dataset_id": dataset_id, "evaluators": ["ref-judge"],
+            "actor_model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0"}
+    resp, effects = _post_run(admin, monkeypatch, control, body)
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["code"] == "run.judge_needs_ground_truth"
+    assert "persona-1/simulated turns lacks expected_response" in resp.json()["message"]
+    assert effects == {"queued": [], "rows": 0, "logs": [], "invokes": [], "batches": [],
+                       "state": None}, effects
+    # the trajectory builtin has no session trajectory here either
+    resp, effects = _post_run(admin, monkeypatch, control, {
+        **body, "evaluators": ["Builtin.TrajectoryExactOrderMatch"]})
+    assert resp.status_code == 422 and effects["rows"] == 0 and effects["invokes"] == []
+    assert resp.json()["code"] == "run.trajectory_needs_ground_truth"
+
+    # positive: a SESSION judge reading {assertions} — the persona carries them and the
+    # (fake) simulation runner's session is judged with exactly those assertions
+    def fake_simulation(data_client, *, scenario, **kw):
+        simulated.append(scenario["scenario_id"])
+        return "a" * 64
+
+    monkeypatch.setattr(simulation, "run_simulated_scenario", fake_simulation)
+    monkeypatch.setattr(_ac_eval, "start_batch_evaluation", _ORIG_START_BATCH)
+    d = _detail(eid="session-judge", instructions="Score {context} against {assertions}")
+    d["level"] = "SESSION"
+    control.evaluators["session-judge"] = d
+    resp, effects = _post_run(admin, monkeypatch, control,
+                              {**body, "evaluators": ["session-judge"]})
+    assert resp.status_code == 201, resp.text
+    assert effects["state"] == ("completed", None) and simulated == ["persona-1"]
+    assert effects["invokes"] == []  # the runner double owns the session; no direct invoke
+    entries = effects["batches"][0]["evaluationMetadata"]["sessionMetadata"]
+    assert entries == [{
+        "sessionId": "a" * 64, "testScenarioId": "persona-1",
+        "groundTruth": {"inline": {"assertions": [{"text": "confirms the dates"}]}}}]

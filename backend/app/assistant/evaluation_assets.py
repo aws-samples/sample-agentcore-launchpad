@@ -1280,8 +1280,10 @@ class _Runner:
     def _step_existing(self, db, op, resources, res) -> None:
         """Bind an EXISTING evaluator reference: canonical builtins (incl. trajectory)
         by catalog; custom ids by exact identity, exactly one complete configuration and
-        — decoded from that real configuration — reference coverage of every target the
-        plan's scenarios produce. A reference the plan cannot feed is never 'ready'."""
+        — decoded from that real configuration, or from the owning plan's rules for a
+        code evaluator this platform created in the same workspace — reference coverage
+        of every target the plan's scenarios produce. A reference the plan cannot feed
+        is never 'ready'."""
         from app.evaluation import coverage
 
         plan = self.plan
@@ -1312,19 +1314,31 @@ class _Runner:
         self._check_evaluator_identity(op, detail, evaluator_id)
         if detail.get("status") not in USABLE_EVALUATOR_STATUSES:
             raise RuntimeError(f"evaluator {evaluator_id} is {detail.get('status')}, not usable")
-        needs, kind = coverage.needs_from_config(detail, None)
+        # A code evaluator this platform created in the SAME workspace has its declarative
+        # rules on record (its owning operation's plan): decode its needs from them and
+        # hold them against every target of THIS plan. Another workspace's association is
+        # never read; a code evaluator nobody here owns keeps its explicit unknown note.
+        owner = managed_evaluator(db, op.workspace_id, evaluator_id)
+        rules = managed_rules(db, owner) if owner and owner.get("definition") == "code" \
+            else None
+        needs, kind = coverage.needs_from_config(detail, rules)
         note = None
+        source = "existing"
         if needs is None:
             note = ("external code evaluator: its reference requirements are unknown to this "
                     "platform — verify them before running it on this Dataset")
         else:
+            if rules is not None:
+                source = "managed"
+                note = (f"managed code evaluator owned by operation {owner['operation_id']}: "
+                        "reference needs decoded from its plan rules")
             gaps = coverage.coverage_gaps(items, needs, str(detail.get("level")))
             if gaps:
                 raise _Conflict(f"{evaluator_id} reads {', '.join(sorted(needs))} but these "
                                 f"targets carry none: {', '.join(gaps[:6])}")
         res["result"] = {"evaluator_id": evaluator_id, "evaluator_arn": detail.get("evaluatorArn"),
                          "level": detail.get("level"), "status": detail.get("status"),
-                         "name": detail.get("evaluatorName"), "source": "existing",
+                         "name": detail.get("evaluatorName"), "source": source,
                          "definition": kind,
                          "reference_needs": sorted(needs) if needs is not None else None,
                          "note": note}

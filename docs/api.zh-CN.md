@@ -199,7 +199,9 @@ pinned{…}, status: queued|running|succeeded|partial|failed|cleaning|cleaned, a
 dataset_id, error, resources[{kind, key, plan_key?, name, status: pending|accepted|ready|failed|conflict|
 blocked|skipped|retained|deleted|delete_failed, error, digest?, reference_dependent?, owned?, recovered?,
 result, cleanup?, link?}], running}`。`POST /api/eval/runs` 对缺少参考的托管代码评估器返回
-`422 run.judge_needs_ground_truth`；在线评估拒绝此类评估器。普通 `DELETE /api/eval/evaluators/{id}` 对操作拥有
+`422 run.judge_needs_ground_truth`（模拟人设条目的轮次在运行时才生成，报告为 `<scenario>/simulated turns
+lacks expected_response`）；所选自定义评估器读取失败时返回 `422 run.evaluator_unverifiable`（需求未知不等于已验证，
+不会启动任何下游步骤），不存在时返回 `422 run.evaluator_not_found`；在线评估拒绝此类评估器。普通 `DELETE /api/eval/evaluators/{id}` 对操作拥有
 的评估器返回 `409 evaluator.managed_by_operation`。`GET /api/assistant/architect` 新增
 `can_materialize_evaluation_assets`（= 管理员）。
 

@@ -735,7 +735,14 @@ Agent 从不被触碰；批准 Agent 不等于授权创建云端评估资源。
   且 SESSION 级参考评估器不能与多 session 流程场景共存。Dataset 条目保留经审阅的黄金测试事实、计划键 → 类型 / 门禁 /
   **已解析的评估器 id** 映射与 `applies`，绝不包含对话记录。读取参考的托管代码评估器在缺少参考的批量范围
   （`run.judge_needs_ground_truth`）、可观测页面“立即评分”（`observability.evaluator_needs_ground_truth`，在任何 Evaluate
-  调用之前）与在线评估中都被拒绝。
+  调用之前）与在线评估中都被拒绝。运行前检查读不到所选自定义评估器时，其需求视为**未知**而非已验证：返回
+  `422 run.evaluator_unverifiable`（不存在则 `run.evaluator_not_found`），不写运行行、不入队、不读遥测、不调用 agent；
+  模拟人设条目（`actor_profile`）没有预定义轮次，产生一个显式的 `<scenario>/simulated turns` 目标，读取
+  `{expected_response}` 的 TRACE 评估器被拒绝，而已知的 session 级 `assertions` 仍然有效。绑定*现有*评估器引用时，
+  其配置按**已安装的**控制面模型逐成员校验（`RatingScale` / `EvaluatorModelConfig` / `CodeBasedEvaluatorConfig`
+  联合体恰好一个非空分支、每个评分项的 `definition` / `value` / `label`、两个模型分支都必须有 `modelId`、Lambda ARN 模式与
+  1–300 秒超时、任意层级的未知成员均拒绝）；本平台在**同一工作区**创建的代码评估器按其所属计划的规则解析需求
+  （`source: managed`），而非标为“外部未知”。
 - **草稿从不把散文变成流程**。提案可携带可选的结构化 `evaluation_plan` 种子（类型化场景 / 评估器 /
   `recommendation_keys`，先校验形状，畸形种子成为*无效*修订而非 500；没有种子的修订序列化与以前完全一致）。
   其他黄金测试草拟为单轮场景并标记 `review_required`，由成员确认、改写为类型化步骤或阻止。唯一草拟的评审器

@@ -134,6 +134,17 @@ def _has_ground_truth(items: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _unverifiable(evaluator: str, exc: Exception) -> AppError:
+    reason = f"{type(exc).__name__}: {exc}"[:300]
+    return AppError(
+        "run.evaluator_unverifiable",
+        f"could not read evaluator {evaluator} ({reason}) — its reference requirements "
+        "are unknown, so the run was not started. Retry when the control plane answers, "
+        "or drop the evaluator.",
+        {"evaluator": evaluator, "reason": reason}, status_code=422,
+    )
+
+
 def _assert_target_references(
     db: Session, ws: WorkspaceScope, evaluators: list[str], items: list[dict[str, Any]],
     dataset_scope: bool,
@@ -142,10 +153,12 @@ def _assert_target_references(
     will be applied to — each session (procedure seed sessions included) or each TRACE
     turn of the CURRENT dataset snapshot — before any run row, invoke or
     StartBatchEvaluation. Builtins resolve from the canonical catalog, custom judges /
-    derived from their real configuration (one GetEvaluator each, fail-open on a
-    control-plane blip: the service enforces the same constraint), managed code
-    evaluators from their owning plan's rules. A scope without a dataset carries no
-    references at all."""
+    derived from their real configuration (one GetEvaluator each — no retries beyond the
+    client's own), managed code evaluators from their owning plan's rules. A custom
+    evaluator that cannot be read has UNKNOWN requirements, not verified ones: the run is
+    refused with an actionable 422 before anything downstream happens (the agent would
+    otherwise already have been invoked by the time the service rejected the batch). A
+    scope without a dataset carries no references at all."""
     from app.assistant.evaluation_assets import managed_evaluator, managed_rules
     from app.evaluation import coverage
 
@@ -165,8 +178,17 @@ def _assert_target_references(
                 control = control or control_client(ws.context)
                 try:
                     detail = ac.get_evaluator(control, evaluator_id=evaluator)
-                except Exception:
-                    continue
+                except ClientError as exc:
+                    if aws_error_code(exc) in ("ResourceNotFoundException", "NotFoundException"):
+                        raise AppError(
+                            "run.evaluator_not_found",
+                            f"evaluator {evaluator} does not exist in this workspace — "
+                            "drop it or pick one from the catalog",
+                            {"evaluator": evaluator}, status_code=422,
+                        ) from exc
+                    raise _unverifiable(evaluator, exc) from exc
+                except Exception as exc:  # transport / timeout / SDK failures
+                    raise _unverifiable(evaluator, exc) from exc
             # the run preflight decodes NEEDS; the complete-shape check belongs to binding an
             # existing reference at materialization (the service validates its own records)
             kinds = [k for k in (detail.get("evaluatorConfig") or {}) if k in coverage.CONFIG_KINDS]

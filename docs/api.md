@@ -253,7 +253,11 @@ retained|unknown|delete_pending|deleted|delete_failed, definition?, error, diges
 reference_dependent?, owned?, recovered?, attempts, result, cleanup?, link?}],
 created_at, updated_at, running}`. `POST /api/eval/runs` answers
 `422 run.judge_needs_ground_truth` for a managed reference-driven code evaluator whose
-scope lacks the reference; Observability SCORE NOW answers
+scope lacks the reference (a simulated persona item reports `<scenario>/simulated turns
+lacks expected_response` — its turns are generated at run time), `422
+run.evaluator_unverifiable` when a selected custom evaluator cannot be read (unknown
+needs are never treated as verified; nothing downstream runs) and `422
+run.evaluator_not_found` when it does not exist in the workspace; Observability SCORE NOW answers
 `422 observability.evaluator_needs_ground_truth` before any Evaluate call; online evaluation
 refuses such evaluators (`…evaluator_unsupported`). A cloud/existing evaluator mapped to a
 subset of golden tests is refused at plan validation (selection is global). `link` is the existing console
