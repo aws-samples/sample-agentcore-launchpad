@@ -59,11 +59,13 @@ from __future__ import annotations
 
 import base64
 import fcntl
+import functools
 import hashlib
 import io
 import json
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -77,6 +79,8 @@ from typing import Any
 from urllib.parse import unquote
 
 from botocore.exceptions import ClientError
+from botocore.loaders import Loader
+from botocore.model import ServiceModel, Shape
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -289,7 +293,7 @@ def plan_out(row: AssistantEvaluationPlan, op: EvaluationAssetOperation | None) 
 
 _PUBLIC_RESOURCE_KEYS = ("kind", "key", "plan_key", "name", "status", "definition", "error",
                          "digest", "rules_digest", "reference_dependent", "attempts", "result",
-                         "cleanup", "owned", "recovered")
+                         "cleanup", "owned", "recovered", "review", "reviews")
 
 
 def operation_out(op: EvaluationAssetOperation) -> dict[str, Any]:
@@ -770,6 +774,32 @@ class _Fence:
 
 FUNCTION_IDENTITY_FIELDS = ("FunctionArn", "Version", "CodeSha256", "Role", "Runtime",
                             "Handler", "Timeout", "MemorySize", "RevisionId")
+# The allowlisted raw CreateFunction answer kept IMMUTABLY on the intent at acceptance
+# (SE-049): the initial RevisionId, the provisioning state and LastModified are what a
+# later review compares the settled function and its CloudTrail create event against.
+# Nothing here is a credential or an actor; ``ResponseMetadata.RequestId`` is stored
+# separately as ``request_id``.
+CREATE_RESPONSE_FIELDS = (
+    "FunctionName", "FunctionArn", "Version", "CodeSha256", "Role", "Runtime", "Handler",
+    "Timeout", "MemorySize", "Description", "RevisionId", "State", "StateReason",
+    "StateReasonCode", "LastUpdateStatus", "LastModified", "PackageType", "Architectures",
+    "EphemeralStorage", "Environment", "Layers", "VpcConfig", "KMSKeyArn",
+    "FileSystemConfigs", "DeadLetterConfig", "SigningProfileVersionArn", "SigningJobArn",
+    "LoggingConfig", "TracingConfig", "SnapStart", "ImageConfigResponse",
+    "RuntimeVersionConfig",
+)
+# Optional, security-relevant configuration that must be EQUAL between the verified
+# CreateFunction answer and the settled ``$LATEST`` for a revision review: equal code and
+# role alone must never bless changed extras. Empty containers count as absent.
+OPTIONAL_CONFIG_FIELDS = (
+    "Description", "PackageType", "Architectures", "EphemeralStorage", "Environment",
+    "Layers", "VpcConfig", "KMSKeyArn", "FileSystemConfigs", "DeadLetterConfig",
+    "SigningProfileVersionArn", "SigningJobArn", "LoggingConfig", "TracingConfig",
+    "SnapStart", "ImageConfigResponse", "RuntimeVersionConfig",
+)
+LAMBDA_CREATE_EVENT_NAMES = ("CreateFunction20150331",)
+LAMBDA_EVENT_SOURCE = "lambda.amazonaws.com"
+CLOUDTRAIL_PAGE_BUDGET = 5
 
 
 INVENTORY_PAGE_BUDGET = 50
@@ -858,6 +888,39 @@ def _statement_matches(stmt: dict[str, Any], expected: dict[str, Any]) -> bool:
     want = {k.lower(): {kk.lower(): vv for kk, vv in v.items()}
             for k, v in expected["Condition"].items()}
     return got == want
+
+
+_LIFECYCLE_FIELDS = ("State", "LastUpdateStatus")
+
+
+def _latest_drift(cfg: dict[str, Any], approved: dict[str, Any],
+                  revision_id: str | None) -> list[str]:
+    bad = sorted(k for k, want in approved.items() if cfg.get(k) != want)
+    if not cfg.get("RevisionId"):
+        bad.append("RevisionId")
+    elif revision_id is not None and cfg.get("RevisionId") != revision_id:
+        bad.append("RevisionId")
+    return bad
+
+
+def initial_revision_conflict_eligible(res: dict[str, Any]) -> bool:
+    """Is this Lambda intent's RevisionId drift the FIRST-initialization transition —
+    an accepted, owned CreateFunction whose ``$LATEST`` was never published, given
+    concurrency or re-pinned by this platform, so the recorded baseline still IS the
+    initial RevisionId the service answered with? Anything else (a re-pinned baseline, a
+    published version, a publish intent, a lost create) is ordinary drift and stays a
+    conflict no review can lift."""
+    stored = res.get("result") or {}
+    initial = stored.get("initial_revision_id") or (stored.get("created_identity") or {}).get(
+        "RevisionId")
+    return bool(
+        res.get("owned") and stored.get("function_arn") and initial
+        and stored.get("revision_id") == initial
+        and not stored.get("version") and not stored.get("version_arn")
+        and not stored.get("publish_requested_at") and not stored.get("readback")
+        and not stored.get("latest_readback")
+        and not (res.get("request") or {}).get("Publish")
+    )
 
 
 class _Runner:
@@ -1294,14 +1357,22 @@ class _Runner:
             # does not describe the reviewed function is never our baseline
             approved = self._approved_latest(op, name, role_arn, sha_b64, int(res["timeout_s"]))
             bad = sorted(k for k, want in approved.items()
-                         if k != "State" and created.get(k) != want)
+                         if k not in _LIFECYCLE_FIELDS and created.get(k) != want)
             if bad or not created.get("RevisionId"):
                 raise _Conflict(f"CreateFunction answered with an identity that differs from "
                                 f"the reviewed request on {bad or ['RevisionId']}")
+            # the raw lifecycle answer (initial RevisionId, State / StateReasonCode,
+            # LastModified, request id) is kept immutably next to the identity: a
+            # revision that moves while the function provisions is reviewed against it
             res["result"] = {"function_arn": created["FunctionArn"], "function_name": name,
                              "revision_id": created["RevisionId"],
+                             "initial_revision_id": created["RevisionId"],
                              "created_identity": {k: created.get(k)
-                                                  for k in FUNCTION_IDENTITY_FIELDS}}
+                                                  for k in FUNCTION_IDENTITY_FIELDS},
+                             "create_response": {k: created[k] for k in CREATE_RESPONSE_FIELDS
+                                                 if k in created},
+                             "request_id": (created.get("ResponseMetadata") or {}).get(
+                                 "RequestId")}
             res["owned"] = True
             self.fence.save(db, op, resources, "lambda_function:accepted")
         stored = res["result"]
@@ -1311,10 +1382,36 @@ class _Runner:
         approved = self._approved_latest(op, name, role_arn, sha_b64, int(res["timeout_s"]))
         cfg = self._wait_function_active(lam, name)
         # $LATEST must still be exactly what the service returned to us (RevisionId included)
-        # before ANY further write; our own later writes re-pin it deliberately below
+        # before ANY further write; our own later writes re-pin it deliberately below. A
+        # RevisionId that ALONE moved during the first initialization is not rebased
+        # automatically: it is recorded as a review-required conflict an administrator
+        # settles with the CreateFunction CloudTrail event (review_lambda_initial_revision).
+        drift = _latest_drift(cfg, approved, stored["revision_id"])
+        if drift == ["RevisionId"] and initial_revision_conflict_eligible(res):
+            res["review"] = {
+                "kind": "initial_revision_changed",
+                "observed_revision_id": cfg.get("RevisionId"),
+                "observed_last_modified": cfg.get("LastModified"),
+                "observed_at": _now().isoformat(),
+                "resolution": "lambda-revision-review",
+            }
+            raise _Conflict("$LATEST differs from the approved identity before publish on "
+                            "['RevisionId'] — the function was changed or replaced; refusing "
+                            "to continue. The RevisionId moved while the function was still "
+                            "provisioning: an administrator may review it against the "
+                            "CreateFunction CloudTrail event (lambda-revision-review)")
         self._require_latest(cfg, approved, stored["revision_id"], "before publish")
+        if not stored.get("settled_revision_id"):
+            stored["settled_revision_id"] = cfg["RevisionId"]  # unchanged since creation
         if not stored.get("version"):
+            # immediately before the FIRST resumed mutation: the function must still be
+            # exactly what was verified (the reviewed baseline when a review re-queued
+            # this intent) and nobody may have published, aliased, given a policy or
+            # reserved concurrency to it meanwhile — those are never adopted or overwritten
+            dispatched = int(stored.get("publish_dispatches") or 0)
+            self._prepublish_guard(lam, op, resources, stored, dispatched)
             stored["publish_requested_at"] = _now().isoformat()
+            stored["publish_dispatches"] = dispatched + 1
             self.fence.save(db, op, resources, "lambda_function:publish_intent")
             try:
                 # RevisionId is a real precondition of PublishVersion (installed model): the
@@ -1327,9 +1424,17 @@ class _Runner:
                                     "(RevisionId precondition failed) — not publishing") from exc
                 if _code(exc) not in _CONFLICT_CODES + ("InvalidParameterValueException",):
                     raise
+                if dispatched == 0:
+                    # our very first PublishVersion was refused: a same-digest version that
+                    # exists now was NOT published by this operation (the digest is
+                    # downloadable content) — never adopted
+                    raise _Conflict("PublishVersion was refused on this operation's first "
+                                    "dispatch; a version carrying the reviewed digest is not "
+                                    "ours to adopt — review required") from exc
                 published = None
             # reconcile against the real version list: exactly ONE published version
-            # may carry our digest (Lambda does not re-publish unchanged code)
+            # may carry our digest (Lambda does not re-publish unchanged code) — and only
+            # because THIS operation dispatched a publish whose answer may have been lost
             versions = [v for v in _function_versions(lam, name)
                         if v.get("Version") != "$LATEST" and v.get("CodeSha256") == sha_b64]
             if published is not None and published.get("Version") not in {
@@ -1348,6 +1453,11 @@ class _Runner:
             self.fence.save(db, op, resources, "lambda_function:published")
         latest = lam.get_function(FunctionName=name).get("Configuration") or {}
         self._require_latest(latest, approved, stored["revision_id"], "before concurrency")
+        reserved = lam.get_function_concurrency(FunctionName=name).get(
+            "ReservedConcurrentExecutions")
+        if reserved is not None and reserved != LAMBDA_RESERVED_CONCURRENCY:
+            raise _Conflict(f"reserved concurrency {reserved} was set by someone else — not "
+                            "overwriting it")
         self._write(db, lam.put_function_concurrency, FunctionName=name,
                     ReservedConcurrentExecutions=LAMBDA_RESERVED_CONCURRENCY)
         reserved = lam.get_function_concurrency(FunctionName=name).get(
@@ -1388,6 +1498,48 @@ class _Runner:
         stored["versions"] = versions
         stored["aliases"] = aliases
 
+    def _prepublish_guard(self, lam: Any, op, resources: list[dict[str, Any]],
+                          stored: dict[str, Any], dispatched: int) -> None:
+        """Before the operation's first mutation of an accepted function: no version this
+        operation did not dispatch, no alias, a proven-absent resource policy, no reserved
+        concurrency; and, after a reviewed recovery, the whole configuration, the tags and
+        the dependencies exactly as the review verified them."""
+        name = stored["function_name"]
+        sha_b64 = (stored.get("created_identity") or {}).get("CodeSha256")
+        baseline = stored.get("reviewed_baseline")
+        if baseline:
+            got = lam.get_function(FunctionName=name)
+            cfg, tags = got.get("Configuration") or {}, got.get("Tags") or {}
+            drift = sorted(k for k in set(cfg) | set(baseline.get("configuration") or {})
+                           if cfg.get(k) != (baseline.get("configuration") or {}).get(k))
+            if drift or tags != (baseline.get("tags") or {}):
+                raise _Conflict(f"$LATEST differs from the reviewed baseline on "
+                                f"{drift or ['Tags']} — refusing to continue")
+            bad, _ = _dependency_drift(self._client("iam"), self._client("logs"), op.id,
+                                       resources)
+            if bad:
+                raise _Conflict(f"the function's dependencies differ from the reviewed "
+                                f"baseline ({bad}) — refusing to continue")
+        versions = sorted(v.get("Version") for v in _function_versions(lam, name)
+                          if v.get("Version") == "$LATEST" or dispatched == 0
+                          or v.get("CodeSha256") != sha_b64)
+        if versions != ["$LATEST"]:
+            raise _Conflict(f"the function carries versions {versions} this operation did not "
+                            "publish — not adopting")
+        aliases = sorted(a.get("Name") for a in _function_aliases(lam, name))
+        if aliases:
+            raise _Conflict(f"the function carries aliases {aliases} this operation did not "
+                            "create — refusing to continue")
+        try:
+            _policy_absent(lam, name)
+        except _ReviewRefused as exc:
+            raise _Conflict(str(exc)) from exc
+        reserved = lam.get_function_concurrency(FunctionName=name).get(
+            "ReservedConcurrentExecutions")
+        if reserved is not None:
+            raise _Conflict(f"reserved concurrency {reserved} is set before this operation's "
+                            "first write — not overwriting it")
+
     @staticmethod
     def _approved_latest(op, name: str, role_arn: str, sha_b64: str, timeout_s: int
                          ) -> dict[str, Any]:
@@ -1396,30 +1548,32 @@ class _Runner:
                 "FunctionArn": f"arn:aws:lambda:{op.region}:{op.account_id}:function:{name}",
                 "Runtime": LAMBDA_RUNTIME, "Handler": LAMBDA_HANDLER, "Role": role_arn,
                 "CodeSha256": sha_b64, "Timeout": timeout_s, "MemorySize": LAMBDA_MEMORY_MB,
-                "Version": "$LATEST", "State": "Active"}
+                "Version": "$LATEST", "State": "Active", "LastUpdateStatus": "Successful"}
 
     @staticmethod
     def _require_latest(cfg: dict[str, Any], approved: dict[str, Any],
                         revision_id: str | None, when: str) -> None:
-        bad = sorted(k for k, want in approved.items() if cfg.get(k) != want)
-        if not cfg.get("RevisionId"):
-            bad.append("RevisionId")
-        elif revision_id is not None and cfg.get("RevisionId") != revision_id:
-            bad.append("RevisionId")
+        bad = _latest_drift(cfg, approved, revision_id)
         if bad:
             raise _Conflict(f"$LATEST differs from the approved identity {when} on {bad} — "
                             "the function was changed or replaced; refusing to continue")
 
     def _wait_function_active(self, lam: Any, name: str) -> dict[str, Any]:
+        """Bounded wait for ``State == Active`` AND ``LastUpdateStatus == Successful``
+        (the documented end of the first initialization). ``Failed`` on either is a
+        failure; ``InProgress`` / a missing status is unknown and cannot be published."""
+        cfg: dict[str, Any] = {}
         for _ in range(READBACK_ATTEMPTS):
             cfg = lam.get_function_configuration(FunctionName=name)
-            state = cfg.get("State")
-            if state == "Active":
+            state, update = cfg.get("State"), cfg.get("LastUpdateStatus")
+            if state == "Active" and update == "Successful":
                 return cfg
-            if state == "Failed":
-                raise RuntimeError(f"function state Failed: {cfg.get('StateReason')}")
+            if state == "Failed" or update == "Failed":
+                raise RuntimeError(f"function state {state} / last update {update}: "
+                                   f"{cfg.get('StateReason') or cfg.get('LastUpdateStatusReason')}")
             self.sleep(READBACK_DELAY_S)
-        raise RuntimeError("function did not become Active in time")
+        raise RuntimeError(f"function did not become Active / Successful in time (State="
+                           f"{cfg.get('State')}, LastUpdateStatus={cfg.get('LastUpdateStatus')})")
 
     # -- resource policy ----------------------------------------------------------
 
@@ -1774,6 +1928,706 @@ def retry_operation(db: Session, op: EvaluationAssetOperation) -> bool:
                .values(status="queued", worker_token=None))
     db.commit()
     return start_async(op.id) is not None
+
+
+# ---------------------------------------------------------------------------
+# SE-049 — reviewed recovery of ONE conflict: the initial Lambda RevisionId moved
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RevisionReview:
+    operation: EvaluationAssetOperation
+    review: dict[str, Any]
+    started: bool  # True ⇔ this call recorded the review and re-queued the worker
+
+
+@functools.lru_cache(maxsize=1)
+def _lambda_model() -> ServiceModel:
+    """The INSTALLED Lambda service model: structure member names decide which keys are
+    casing-normalized between the SDK and CloudTrail renderings; maps (Environment
+    Variables, Tags) and scalars are compared verbatim."""
+    return ServiceModel(Loader().load_service_model("lambda", "service-2"), service_name="lambda")
+
+
+def _from_cloudtrail(value: Any, shape: Shape) -> Any:
+    """Rebuild the SDK casing of a CloudTrail ``requestParameters`` / ``responseElements``
+    value along the installed model: CloudTrail lowers the first character of structure
+    member names (``functionArn``, ``kMSKeyArn``), so a member is matched case-insensitively
+    against the shape's members; an unknown member is kept verbatim (it can never equal an
+    approved member and is refused); map keys and every scalar stay untouched — a data-map
+    key's case or an empty string value is content, never normalized."""
+    if shape.type_name == "structure":
+        if not isinstance(value, dict):
+            return value
+        members = {m.lower(): (m, sub) for m, sub in shape.members.items()}
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            hit = members.get(str(k).lower())
+            out[hit[0] if hit else str(k)] = _from_cloudtrail(v, hit[1]) if hit else v
+        return out
+    if shape.type_name == "list":
+        return [_from_cloudtrail(v, shape.member) for v in value] if isinstance(value, list) \
+            else value
+    if shape.type_name == "map":
+        return {str(k): _from_cloudtrail(v, shape.value) for k, v in value.items()} \
+            if isinstance(value, dict) else value
+    return value
+
+
+def _fold_envelopes(cfg: dict[str, Any]) -> dict[str, Any]:
+    """The ONLY absent-versus-empty equivalences, on documented service envelopes of the
+    function configuration (CloudTrail answers ``environment: {}`` where the SDK omits the
+    member; an unset VPC reads as empty lists): ``Environment`` with no variables and no
+    error, ``Layers`` / ``FileSystemConfigs`` ``[]`` and an all-empty ``VpcConfig``. Nothing
+    inside a data map is touched."""
+    out = dict(cfg)
+    env = out.get("Environment")
+    if isinstance(env, dict) and not env.get("Error") and not (env.get("Variables") or {}) \
+            and set(env) <= {"Variables", "Error"}:
+        out.pop("Environment")
+    for member in ("Layers", "FileSystemConfigs"):
+        if member in out and out[member] == []:
+            out.pop(member)
+    vpc = out.get("VpcConfig")
+    if isinstance(vpc, dict) and not any(vpc.get(k) for k in ("SubnetIds", "SecurityGroupIds",
+                                                               "VpcId")) \
+            and not vpc.get("Ipv6AllowedForDualStack") \
+            and set(vpc) <= {"SubnetIds", "SecurityGroupIds", "VpcId", "Ipv6AllowedForDualStack"}:
+        out.pop("VpcConfig")
+    return out
+
+
+# Lifecycle members that legitimately differ between the CreateFunction answer (Pending)
+# and the settled $LATEST (Active / Successful, new RevisionId); everything else must be
+# identical, member for member.
+_FUNCTION_LIFECYCLE_MEMBERS = ("State", "StateReason", "StateReasonCode", "LastUpdateStatus",
+                               "LastUpdateStatusReason", "LastUpdateStatusReasonCode",
+                               "RevisionId")
+# Members the reviewed request fixes exactly (checked against the recorded request).
+_REQUEST_APPROVED_MEMBERS = ("FunctionName", "Runtime", "Role", "Handler", "Description",
+                             "Timeout", "MemorySize")
+# Documented service defaults for members the reviewed request does NOT set. A member the
+# answer carries must equal the request's value, one of these defaults, or be refused.
+_FUNCTION_DEFAULTS: dict[str, Any] = {
+    "PackageType": "Zip", "Architectures": ["x86_64"], "TracingConfig": {"Mode": "PassThrough"},
+    "EphemeralStorage": {"Size": 512},
+    "SnapStart": {"ApplyOn": "None", "OptimizationStatus": "Off"},
+}
+_RUNTIME_VERSION_ARN = r"^arn:aws:lambda:[a-z0-9-]+::runtime:[0-9a-f]+$"
+
+
+def _unapproved_members(response: dict[str, Any], request: dict[str, Any], *, name: str,
+                        region: str) -> list[str]:
+    """Every member of a (SDK-cased, envelope-folded) CreateFunction answer that is neither
+    fixed by the reviewed request, a documented default, the service-issued identity /
+    lifecycle, or an informational member with a checkable shape — unknown means refused."""
+    bad: list[str] = []
+    identity = {"FunctionArn", "Version", "CodeSha256", "LastModified", "CodeSize",
+                *_FUNCTION_LIFECYCLE_MEMBERS}
+    for member, value in response.items():
+        if member in _REQUEST_APPROVED_MEMBERS:
+            if value != request.get(member):
+                bad.append(member)
+        elif member in identity:
+            if member == "CodeSize" and not (isinstance(value, int) and value > 0):
+                bad.append(member)
+        elif member in _FUNCTION_DEFAULTS:
+            if value != (request[member] if member in request else _FUNCTION_DEFAULTS[member]):
+                bad.append(member)
+        elif member == "LoggingConfig":
+            if value != request.get("LoggingConfig", {"LogFormat": "Text",
+                                                      "LogGroup": f"/aws/lambda/{name}"}):
+                bad.append(member)
+        elif member == "RuntimeVersionConfig":
+            arn = value.get("RuntimeVersionArn") if isinstance(value, dict) else None
+            if set(value or {}) != {"RuntimeVersionArn"} or not isinstance(arn, str) \
+                    or not re.match(_RUNTIME_VERSION_ARN, arn) \
+                    or not arn.startswith(f"arn:aws:lambda:{region}::runtime:"):
+                bad.append(member)
+        elif member in request:
+            if value != request[member]:
+                bad.append(member)
+        else:
+            bad.append(member)  # Environment, Layers, VPC, KMS, DurableConfig, … not approved
+    return bad
+
+
+class _ReviewRefused(AppError):
+    def __init__(self, code: str, message: str, status_code: int = 409, **detail: Any) -> None:
+        super().__init__(code, message, status_code=status_code, detail=detail or None)
+
+
+def _lookup_create_event(cloudtrail: Any, event_id: str) -> dict[str, Any]:
+    """Server-side read of the nominated CloudTrail event (never the client's JSON).
+    Exactly one, well-formed event or the review fails closed."""
+    events: list[dict[str, Any]] = []
+    kwargs: dict[str, Any] = {"LookupAttributes": [{"AttributeKey": "EventId",
+                                                    "AttributeValue": event_id}],
+                              "MaxResults": 50}
+    for _ in range(CLOUDTRAIL_PAGE_BUDGET):
+        page = cloudtrail.lookup_events(**kwargs)
+        events.extend(page.get("Events") or [])
+        token = page.get("NextToken")
+        if not token or len(events) > 1:
+            break
+        kwargs["NextToken"] = token
+    else:
+        raise _ReviewRefused("assistant.lambda_revision_review_unverified",
+                             "CloudTrail event history did not terminate within the page budget")
+    if len(events) != 1:
+        raise _ReviewRefused(
+            "assistant.lambda_revision_review_unverified",
+            f"CloudTrail returned {len(events)} events for the nominated event id (event history "
+            "is eventually consistent; exactly one CreateFunction record is required)")
+    raw = events[0].get("CloudTrailEvent")
+    try:
+        event = json.loads(raw) if isinstance(raw, str) else None
+    except ValueError:
+        event = None
+    if not isinstance(event, dict) or events[0].get("EventId") != event_id \
+            or event.get("eventID") != event_id:
+        raise _ReviewRefused("assistant.lambda_revision_review_unverified",
+                             "the CloudTrail record is malformed or names a different event id")
+    return event
+
+
+def _verify_create_event(event: dict[str, Any], op: EvaluationAssetOperation,
+                         res: dict[str, Any], expected_created: str) -> dict[str, Any]:
+    """The nominated event must be THE successful CreateFunction this operation
+    dispatched: source, operation, account, region; its request must equal the recorded
+    request member for member (an extra member is not approved); its answer must carry the
+    recorded FunctionArn / initial RevisionId / CodeSha256 in the provisioning state, every
+    other member fixed by the request or a documented default (unknown → refused), and —
+    when the acceptance kept the raw answer — equal that immutable snapshot. Returns the
+    answer in SDK casing."""
+    stored = res.get("result") or {}
+    request = res.get("request") or {}
+    bad: list[str] = []
+    if event.get("eventSource") != LAMBDA_EVENT_SOURCE:
+        bad.append("eventSource")
+    if event.get("eventName") not in LAMBDA_CREATE_EVENT_NAMES:
+        bad.append("eventName")
+    if event.get("errorCode") or event.get("errorMessage"):
+        bad.append("errorCode")
+    if event.get("readOnly") not in (False, "false"):
+        bad.append("readOnly")
+    if event.get("awsRegion") != op.region:
+        bad.append("awsRegion")
+    if event.get("recipientAccountId") != op.account_id:
+        bad.append("recipientAccountId")
+    if not event.get("requestID") or not isinstance(event.get("requestID"), str):
+        bad.append("requestID")
+    if stored.get("request_id") and event.get("requestID") != stored["request_id"]:
+        bad.append("requestID")
+    raw_params = event.get("requestParameters")
+    raw_response = event.get("responseElements")
+    if not isinstance(raw_params, dict) or not isinstance(raw_response, dict):
+        raise _ReviewRefused("assistant.lambda_revision_review_unverified",
+                             "the CloudTrail record carries no request / response elements")
+    model = _lambda_model()
+    params = _from_cloudtrail(raw_params, model.shape_for("CreateFunctionRequest"))
+    params.pop("Code", None)  # the package bytes are never rendered; the digest is compared
+    approved_request = {k: v for k, v in request.items() if k != "CodeSha256"}
+    if _fold_envelopes(params) != _fold_envelopes(approved_request):
+        bad += [f"requestParameters.{k}" for k in sorted(
+            set(_fold_envelopes(params)) | set(_fold_envelopes(approved_request)))
+            if _fold_envelopes(params).get(k) != _fold_envelopes(approved_request).get(k)]
+    if request.get("Publish") or params.get("Publish") not in (False, None):
+        bad.append("requestParameters.Publish")
+    response = _fold_envelopes(_from_cloudtrail(raw_response,
+                                                model.shape_for("FunctionConfiguration")))
+    expect_response = {
+        "FunctionName": res.get("name"), "FunctionArn": stored.get("function_arn"),
+        "Version": "$LATEST", "CodeSha256": request.get("CodeSha256"),
+        "RevisionId": expected_created, "State": "Pending", "StateReasonCode": "Creating",
+    }
+    for field, want in expect_response.items():
+        if want in (None, "") or response.get(field) != want:
+            bad.append(f"responseElements.{field}")
+    if not isinstance(response.get("LastModified"), str) or not response.get("LastModified"):
+        bad.append("responseElements.LastModified")
+    bad += [f"responseElements.{m}" for m in _unapproved_members(
+        {k: v for k, v in response.items() if k not in expect_response},
+        request, name=str(res.get("name")), region=op.region)]
+    # a create accepted after SE-049 kept the raw answer: the event must agree with it on
+    # every allowlisted member — present, absent and equal alike
+    snapshot = stored.get("create_response")
+    if isinstance(snapshot, dict):
+        folded = _fold_envelopes(snapshot)
+        for field in CREATE_RESPONSE_FIELDS:
+            if folded.get(field) != response.get(field):
+                bad.append(f"create_response.{field}")
+    if bad:
+        raise _ReviewRefused(
+            "assistant.lambda_revision_review_unverified",
+            "the CloudTrail event is not the successful CreateFunction this operation "
+            f"recorded (differs on {sorted(set(bad))})", fields=sorted(set(bad)))
+    return response
+
+
+def _policy_absent(lam: Any, name: str) -> None:
+    """Complete configured absence of a resource policy is proven ONLY by a NotFound;
+    any returned document — empty, foreign or malformed — is not absence."""
+    try:
+        got = lam.get_policy(FunctionName=name)
+    except ClientError as exc:
+        if _code(exc) in _NOT_FOUND_CODES:
+            return
+        raise
+    doc = _policy_document((got or {}).get("Policy"))
+    if not isinstance(doc, dict):
+        raise _ReviewRefused("assistant.lambda_revision_review_unverified",
+                             "GetPolicy answered with an unreadable document — absence of a "
+                             "resource policy cannot be proven")
+    raise _ReviewRefused("assistant.lambda_revision_review_unverified",
+                         "the function carries a resource policy this operation did not write")
+
+
+def _read_function_inventory(lam: Any, name: str) -> dict[str, Any]:
+    try:
+        versions = sorted(v.get("Version") for v in _function_versions(lam, name))
+        aliases = sorted(a.get("Name") for a in _function_aliases(lam, name))
+    except _IncompleteInventory as exc:
+        raise _ReviewRefused("assistant.lambda_revision_review_unverified", str(exc)) from exc
+    reserved = lam.get_function_concurrency(FunctionName=name).get("ReservedConcurrentExecutions")
+    return {"versions": versions, "aliases": aliases, "reserved_concurrency": reserved}
+
+
+def _verify_settled_function(lam: Any, op: EvaluationAssetOperation, res: dict[str, Any],
+                             response: dict[str, Any], expected_created: str,
+                             expected_current: str) -> dict[str, Any]:
+    """The settled ``$LATEST`` must be the verified create answer plus EXACTLY the lifecycle
+    transition: every non-lifecycle member identical (present, absent and equal alike — an
+    extra member such as a durable / tenancy / capacity / master configuration is a
+    difference), ``Active`` / ``Successful``, the nominated current RevisionId, the approved
+    tags; still ``$LATEST`` only, no alias, a proven-absent resource policy, no reserved
+    concurrency. Returns the strict baseline the resumed worker re-validates."""
+    name = res["name"]
+    request = res.get("request") or {}
+    try:
+        got = lam.get_function(FunctionName=name)
+    except ClientError as exc:
+        if _code(exc) in _NOT_FOUND_CODES:
+            raise _ReviewRefused("assistant.lambda_revision_review_unverified",
+                                 f"function {name} no longer exists") from exc
+        raise
+    cfg = got.get("Configuration") or {}
+    tags = got.get("Tags") or {}
+    left = _fold_envelopes({k: v for k, v in response.items()
+                            if k not in _FUNCTION_LIFECYCLE_MEMBERS})
+    right = _fold_envelopes({k: v for k, v in cfg.items() if k not in _FUNCTION_LIFECYCLE_MEMBERS})
+    bad = sorted(k for k in set(left) | set(right) if left.get(k) != right.get(k))
+    if cfg.get("State") != "Active":
+        bad.append("State")
+    if cfg.get("LastUpdateStatus") != "Successful":
+        bad.append("LastUpdateStatus")
+    if cfg.get("RevisionId") != expected_current or expected_current == expected_created \
+            or cfg.get("RevisionId") == expected_created:
+        bad.append("RevisionId")
+    for member in _REQUEST_APPROVED_MEMBERS:
+        if cfg.get(member) != request.get(member):
+            bad.append(member)
+    if cfg.get("CodeSha256") != request.get("CodeSha256") \
+            or cfg.get("FunctionArn") != (res.get("result") or {}).get("function_arn"):
+        bad.append("CodeSha256/FunctionArn")
+    if tags != (request.get("Tags") or {}):
+        bad.append("Tags")
+    if bad:
+        raise _ReviewRefused(
+            "assistant.lambda_revision_review_unverified",
+            f"$LATEST is not the verified create answer after its first initialization "
+            f"(differs on {sorted(set(bad))}) — not an initialization transition",
+            fields=sorted(set(bad)))
+    inventory = _read_function_inventory(lam, name)
+    if inventory["versions"] != ["$LATEST"] or inventory["aliases"]:
+        raise _ReviewRefused("assistant.lambda_revision_review_unverified",
+                             f"the function carries versions {inventory['versions']} / aliases "
+                             f"{inventory['aliases']} — this operation published nothing; not "
+                             "an initialization state")
+    _policy_absent(lam, name)
+    if inventory["reserved_concurrency"] is not None:
+        raise _ReviewRefused("assistant.lambda_revision_review_unverified",
+                             f"reserved concurrency {inventory['reserved_concurrency']} is set — "
+                             "this operation wrote none")
+    return {"configuration": cfg, "tags": tags, **inventory, "resource_policy": "absent"}
+
+
+def _dependency_drift(iam: Any, logs: Any, op_id: str, resources: list[dict[str, Any]],
+                      ) -> tuple[list[str], dict[str, Any]]:
+    """Compare the role and the log group the function depends on with what this
+    operation recorded when it created them — identity AND configuration (RoleId / ARN /
+    trust / inline policy / tags; creationTime / ARN / retention / tags). A ``ready`` ledger
+    status blesses nothing: the worker skips ready dependencies, so drift is read here.
+    Returns the differing fields and the current snapshot."""
+    bad: list[str] = []
+    role = _resource(resources, "lambda_role")
+    rr = role.get("result") or {}
+    if role.get("status") != "ready" or not rr.get("role_id") or not rr.get("role_arn") \
+            or not rr.get("trust_document") or not rr.get("policy_document"):
+        raise _ReviewRefused("assistant.lambda_revision_review_not_applicable",
+                             "the Lambda role is not a ready, fully recorded resource of this "
+                             "operation")
+    role_name = _role_name(rr["role_arn"])
+    try:
+        current = iam.get_role(RoleName=role_name)["Role"]
+        inline = _policy_document(iam.get_role_policy(
+            RoleName=role_name, PolicyName=LOGS_POLICY_NAME).get("PolicyDocument"))
+    except ClientError as exc:
+        raise _ReviewRefused("assistant.lambda_revision_review_unverified",
+                             f"the Lambda role cannot be read: {_safe_error(exc)}") from exc
+    if current.get("RoleId") != rr["role_id"] or current.get("Arn") != rr["role_arn"]:
+        bad.append("role.identity")
+    if _policy_document(current.get("AssumeRolePolicyDocument")) != rr["trust_document"]:
+        bad.append("role.trust")
+    if inline != rr["policy_document"]:
+        bad.append("role.inline_policy")
+    role_tags = _role_tags(current)
+    if role_tags.get(TAG_OPERATION) != op_id or role_tags.get(TAG_MANAGED) != "true":
+        bad.append("role.tags")
+    group = _resource(resources, "log_group")
+    gr = group.get("result") or {}
+    if group.get("status") != "ready" or not gr.get("creation_time") or not gr.get("arn") \
+            or not gr.get("retention_days"):
+        raise _ReviewRefused("assistant.lambda_revision_review_not_applicable",
+                             "the log group is not a ready, fully recorded resource of this "
+                             "operation")
+    found = [g for g in (logs.describe_log_groups(logGroupNamePrefix=group["name"])
+                         .get("logGroups") or []) if g.get("logGroupName") == group["name"]]
+    mine = found[0] if len(found) == 1 else {}
+    if mine.get("creationTime") != gr["creation_time"] or mine.get("arn") != gr["arn"]:
+        bad.append("log_group.identity")
+    if mine.get("retentionInDays") != gr["retention_days"]:
+        bad.append("log_group.retention")
+    try:
+        group_tags = logs.list_tags_for_resource(
+            resourceArn=str(mine.get("arn") or "").rstrip("*").rstrip(":")).get("tags") or {}
+    except ClientError:
+        group_tags = {}
+    if group_tags.get(TAG_OPERATION) != op_id or group_tags.get(TAG_MANAGED) != "true":
+        bad.append("log_group.tags")
+    trust = _policy_document(current.get("AssumeRolePolicyDocument"))
+    snapshot = {"role": {"role_id": current.get("RoleId"), "role_arn": current.get("Arn"),
+                         "trust_document": trust, "policy_document": inline, "tags": role_tags},
+                "log_group": {"arn": mine.get("arn"), "creation_time": mine.get("creationTime"),
+                              "retention_days": mine.get("retentionInDays"), "tags": group_tags}}
+    return bad, snapshot
+
+
+def _verify_chain_provenance(clients: ClientFactory, workspace: WorkspaceContext,
+                             op_id: str, resources: list[dict[str, Any]]) -> dict[str, Any]:
+    bad, snapshot = _dependency_drift(clients(workspace, "iam"), clients(workspace, "logs"),
+                                      op_id, resources)
+    if bad:
+        raise _ReviewRefused("assistant.lambda_revision_review_unverified",
+                             f"the function's dependencies differ from what this operation "
+                             f"recorded ({bad}) — review required", fields=bad)
+    return snapshot
+
+
+def _bind_operation(db: Session, op: EvaluationAssetOperation, plan_hash: str,
+                    principal: str | None) -> AssistantEvaluationPlan:
+    """Fresh, exact binding of the operation to what the reviewer names: the approved plan
+    row (this id, this revision, this hash column AND the canonical hash of its current
+    content), the conversation's current owner == the operation's recorded owner == the
+    caller, the approver still authorized and the workspace still the pinned identity.
+    Every read here is fresh (the caller expires the session first)."""
+    if op.plan_hash != plan_hash:
+        raise _ReviewRefused("assistant.evaluation_plan_stale",
+                             "plan_hash does not name this operation's approved plan")
+    plan_row = db.get(AssistantEvaluationPlan, op.plan_id)
+    if plan_row is None or plan_row.status != "approved" \
+            or plan_row.revision != op.plan_revision \
+            or plan_row.conversation_id != op.conversation_id \
+            or plan_row.content_hash != plan_hash \
+            or plan_contract.canonical_hash(plan_row.content or {}) != plan_hash:
+        raise _ReviewRefused("assistant.evaluation_plan_stale",
+                             "the approved plan revision no longer matches the operation "
+                             "(row, revision, hash or content changed)")
+    owner = db.execute(select(AssistantConversation.owner_principal)
+                       .where(AssistantConversation.id == op.conversation_id,
+                              AssistantConversation.workspace_id == op.workspace_id)).scalar()
+    if owner is None or owner != op.owner_principal \
+            or (principal is not None and owner != principal):
+        raise NotFoundError("assistant.operation_not_found", "operation not found")
+    stop = approver_authorized(db, op)
+    if stop:
+        raise AppError("assistant.evaluation_assets_stopped", stop, status_code=409)
+    if not op.pinned:
+        raise AppError("assistant.evaluation_assets_stopped",
+                       "operation predates workspace identity pinning — review required; "
+                       "prepare a new plan revision instead", status_code=409)
+    drift = pinned_drift(op.pinned or {}, db.get(Workspace, op.workspace_id))
+    if drift:
+        raise AppError("assistant.evaluation_assets_stopped",
+                       f"workspace identity changed since approval ({', '.join(drift)})",
+                       status_code=409)
+    return plan_row
+
+
+def _review_target(op: EvaluationAssetOperation, plan_hash: str,
+                   expected_created: str) -> dict[str, Any]:
+    """Ledger-only eligibility: the operation is partial/failed on exactly this plan
+    hash, pinned, its Lambda intent is an accepted, owned CreateFunction blocked SOLELY
+    by the first-initialization RevisionId drift, and nothing else unrelated conflicts."""
+    if op.plan_hash != plan_hash:
+        raise _ReviewRefused("assistant.evaluation_plan_stale",
+                             "plan_hash does not name this operation's approved plan")
+    if op.status not in ("partial", "failed"):
+        raise _ReviewRefused("assistant.lambda_revision_review_not_applicable",
+                             f"the operation is {op.status}; only a partial / failed operation "
+                             "can be reviewed")
+    if not op.pinned:
+        raise _ReviewRefused("assistant.evaluation_assets_stopped",
+                             "operation predates workspace identity pinning — review required; "
+                             "prepare a new plan revision instead")
+    res = next((r for r in op.resources or [] if r.get("kind") == "lambda_function"), None)
+    if res is None:
+        raise _ReviewRefused("assistant.lambda_revision_review_not_applicable",
+                             "the operation has no Lambda function intent")
+    stored = res.get("result") or {}
+    initial = stored.get("initial_revision_id") or (stored.get("created_identity") or {}).get(
+        "RevisionId")
+    if res.get("status") != "conflict" or not initial_revision_conflict_eligible(res):
+        raise _ReviewRefused(
+            "assistant.lambda_revision_review_not_applicable",
+            f"the Lambda function is {res.get('status')} and not blocked solely by the "
+            "first-initialization RevisionId change (a lost create, a published version or a "
+            "re-pinned baseline is not reviewable this way)")
+    marker = res.get("review") or {}
+    if marker.get("kind") != "initial_revision_changed" \
+            and "before publish on ['RevisionId']" not in str(res.get("error") or ""):
+        raise _ReviewRefused("assistant.lambda_revision_review_not_applicable",
+                             "the recorded conflict is not the pre-publish RevisionId drift")
+    if initial != expected_created:
+        raise _ReviewRefused("assistant.lambda_revision_review_stale",
+                             "expected_created_revision_id is not the RevisionId CreateFunction "
+                             "answered this operation with")
+    allowed_blocked = {r["key"] for r in op.resources or []
+                       if r.get("kind") in ("lambda_permission", "role_grant")
+                       or r.get("definition") == "code"}
+    for r in op.resources or []:
+        if r is res or r.get("status") in ("ready", "skipped", "pending"):
+            continue
+        if r.get("status") == "blocked" and r["key"] in allowed_blocked:
+            continue
+        raise _ReviewRefused(
+            "assistant.lambda_revision_review_not_applicable",
+            f"{r['key']} is {r.get('status')} — an unrelated open outcome must be resolved "
+            "first; this review lifts only the Lambda initialization conflict")
+    return res
+
+
+def _same_review(entry: dict[str, Any], *, event_id: str, expected_created: str,
+                 expected_current: str, plan_hash: str) -> bool:
+    return (entry.get("event_id") == event_id
+            and entry.get("expected_created_revision_id") == expected_created
+            and entry.get("expected_current_revision_id") == expected_current
+            and entry.get("plan_hash") == plan_hash)
+
+
+def review_lambda_initial_revision(
+    db: Session, op: EvaluationAssetOperation, *, plan_hash: str, expected_created: str,
+    expected_current: str, event_id: str, reason: str, reviewer: str,
+    reviewer_user_id: str | None, recheck: Recheck | None = None,
+    clients: ClientFactory = _default_clients,
+) -> RevisionReview:
+    """Administrator + owner reviewed recovery of exactly one conflict: the RevisionId
+    CreateFunction answered with moved during the function's first initialization
+    (Pending → Active) and the worker refused to publish. Nothing is inferred: the
+    nominated CloudTrail event is read server-side and must be THIS operation's
+    successful CreateFunction; the settled ``$LATEST`` must equal that answer up to the
+    documented lifecycle transition and the nominated current RevisionId; role / log
+    provenance, empty version / alias / policy / concurrency inventories are required.
+    The review is an append-only audit entry (the original create evidence is never
+    overwritten), the baseline moves to the reviewed RevisionId, the Lambda conflict
+    and its blocked dependents are re-queued and the ordinary worker resumes — its
+    PublishVersion still carries both preconditions, so a later change fails there.
+    The exact same request is idempotent (returns the recorded review, no cloud read);
+    a different one after a review is refused. No cloud write happens here."""
+    reason = (reason or "").strip()
+    if not reason:
+        raise _ReviewRefused("assistant.lambda_revision_review_reason_required",
+                             "a non-empty review reason is required", status_code=422)
+    if expected_created == expected_current:
+        raise _ReviewRefused("assistant.lambda_revision_review_stale",
+                             "expected_created_revision_id equals expected_current_revision_id — "
+                             "there is no revision transition to review", status_code=422)
+    # every binding is read fresh, before anything else: the operation, its plan row
+    # (hash column AND canonical content), the conversation owner, the approver, the
+    # pinned workspace. The route's own reads are not trusted here.
+    db.expire_all()
+    fresh = db.get(EvaluationAssetOperation, op.id)
+    if fresh is None:
+        raise NotFoundError("assistant.operation_not_found", "operation not found")
+    op = fresh
+    _bind_operation(db, op, plan_hash, None)
+    res_now = next((r for r in op.resources or [] if r.get("kind") == "lambda_function"), None)
+    prior = [e for e in ((res_now or {}).get("reviews") or [])
+             if e.get("kind") == "initial_revision_changed"]
+    if prior:
+        matched = [e for e in prior if _same_review(
+            e, event_id=event_id, expected_created=expected_created,
+            expected_current=expected_current, plan_hash=plan_hash)]
+        if matched:
+            # the exact same request after the same bindings: the recorded review, no
+            # cloud read, no write, no second launch
+            return RevisionReview(operation=op, review=matched[-1], started=False)
+        raise _ReviewRefused("assistant.lambda_revision_review_stale",
+                             "this Lambda initialization was already reviewed with a different "
+                             "event / revision; a second, different review is refused")
+    if op.attempts >= MAX_ATTEMPTS:
+        raise AppError("assistant.evaluation_assets_exhausted",
+                       f"the operation reached its {MAX_ATTEMPTS} attempts; clean up the owned "
+                       "resources and prepare a new plan revision", status_code=409)
+    if live_worker(op.id) is not None or not _flock_free(op.id):
+        raise AppError("assistant.evaluation_assets_running",
+                       "the operation is still running", status_code=409)
+    res = _review_target(op, plan_hash, expected_created)
+    workspace = workspace_context(db.get(Workspace, op.workspace_id))
+    resources = json.loads(json.dumps(op.resources or []))
+    # positive, server-read evidence: the nominated CloudTrail record IS our create; the
+    # dependencies still are what we recorded; $LATEST is that answer, settled
+    event = _lookup_create_event(clients(workspace, "cloudtrail"), event_id)
+    response = _verify_create_event(event, op, res, expected_created)
+    dependencies = _verify_chain_provenance(clients, workspace, op.id, resources)
+    baseline = _verify_settled_function(clients(workspace, "lambda"), op, res, response,
+                                        expected_created, expected_current)
+    baseline["dependencies"] = dependencies
+    # persist under the host lock, in one conditional write whose predicates are the
+    # CURRENT owner / approver / reviewer authorization, the exact plan row and the
+    # pinned workspace: a change committed by another session up to this statement
+    # makes it a no-op — the caller is re-resolved from the database inside the lock
+    with _flock(op.id) as held:
+        if not held:
+            raise AppError("assistant.evaluation_assets_running",
+                           "the operation is still running", status_code=409)
+        db.rollback()
+        db.expire_all()  # BEFORE the recheck: its reads must not hit cached rows
+        fresh_identity = recheck(db) if recheck else None
+        principal = principal_of(fresh_identity) if fresh_identity else None
+        if fresh_identity is not None and not fresh_identity.is_admin:
+            raise AppError("auth.admin_required", "administrator role required", status_code=403)
+        db.expire_all()
+        op = db.get(EvaluationAssetOperation, op.id)
+        if op is None:
+            raise NotFoundError("assistant.operation_not_found", "operation not found")
+        if op.worker_token is not None:
+            raise AppError("assistant.evaluation_assets_running",
+                           "the operation is still running", status_code=409)
+        plan_row = _bind_operation(db, op, plan_hash, principal)
+        target = _review_target(op, plan_hash, expected_created)
+        if (target.get("result") or {}).get("revision_id") != expected_created \
+                or target.get("reviews"):
+            raise _ReviewRefused("assistant.lambda_revision_review_stale",
+                                 "the operation changed while the review was verified")
+        resources = json.loads(json.dumps(op.resources or []))
+        fn = _resource(resources, "lambda_function")
+        stored = fn["result"]
+        cfg = baseline["configuration"]
+        now = _now().isoformat()
+        review = {
+            "kind": "initial_revision_changed",
+            "id": secrets.token_hex(8),
+            "at": now,
+            "reviewer": fresh_identity.username if fresh_identity else reviewer,
+            "reviewer_user_id": fresh_identity.user_id if fresh_identity else reviewer_user_id,
+            "reason": reason[:1000],
+            "operation_id": op.id, "plan_id": op.plan_id, "plan_revision": op.plan_revision,
+            "plan_hash": op.plan_hash, "owner_principal": op.owner_principal,
+            "event_id": event_id, "event_time": event.get("eventTime"),
+            "event_name": event.get("eventName"), "request_id": event.get("requestID"),
+            "expected_created_revision_id": expected_created,
+            "expected_current_revision_id": expected_current,
+            "verified": {"RevisionId": cfg.get("RevisionId"), "CodeSha256": cfg.get("CodeSha256"),
+                         "LastModified": cfg.get("LastModified"), "State": cfg.get("State"),
+                         "LastUpdateStatus": cfg.get("LastUpdateStatus"),
+                         "create_state": response.get("State"),
+                         "create_state_reason_code": response.get("StateReasonCode")},
+            "old": {"status": fn.get("status"), "error": fn.get("error"),
+                    "revision_id": stored.get("revision_id"),
+                    "review": fn.get("review")},
+            "new": {"status": "pending", "revision_id": expected_current,
+                    "settled_revision_id": expected_current},
+        }
+        # append-only: the create answer, identity and initial RevisionId stay untouched;
+        # the strict reviewed baseline travels with the intent for the worker to re-verify
+        fn.setdefault("reviews", []).append(review)
+        stored.setdefault("revision_history", []).append(
+            {"at": now, "from": stored.get("revision_id"), "to": expected_current,
+             "reason": "initial_activation_reviewed", "review_id": review["id"]})
+        stored["revision_id"] = expected_current
+        stored["settled_revision_id"] = expected_current
+        stored["reviewed_baseline"] = {**baseline, "review_id": review["id"], "at": now}
+        fn["status"], fn["error"] = "pending", None
+        if fn.get("review"):
+            fn["review"] = {**fn["review"], "resolved_by": review["id"]}
+        released = [fn["key"]]
+        for r in resources:
+            if r.get("status") == "blocked" and (
+                    r.get("kind") in ("lambda_permission", "role_grant")
+                    or r.get("definition") == "code"):
+                r["status"], r["error"] = "pending", None
+                released.append(r["key"])
+        line = json.dumps({"at": now, "event": "lambda_function:reviewed",
+                           "review_id": review["id"], "released": released},
+                          ensure_ascii=False)
+        owner_ok = select(AssistantConversation.id).where(
+            AssistantConversation.id == op.conversation_id,
+            AssistantConversation.workspace_id == op.workspace_id,
+            AssistantConversation.owner_principal == op.owner_principal,
+            *([AssistantConversation.owner_principal == principal] if principal else []),
+        ).exists()
+        plan_ok = select(AssistantEvaluationPlan.id).where(
+            AssistantEvaluationPlan.id == plan_row.id,
+            AssistantEvaluationPlan.conversation_id == op.conversation_id,
+            AssistantEvaluationPlan.revision == op.plan_revision,
+            AssistantEvaluationPlan.status == "approved",
+            AssistantEvaluationPlan.content_hash == plan_hash,
+        ).exists()
+        pinned = op.pinned or {}
+        workspace_ok = select(Workspace.id).where(
+            Workspace.id == op.workspace_id,
+            Workspace.account_id == pinned.get("account_id"),
+            Workspace.region == pinned.get("region"),
+            Workspace.role_arn.is_(None) if pinned.get("role_arn") is None
+            else Workspace.role_arn == pinned.get("role_arn"),
+            Workspace.external_id.is_(None) if pinned.get("external_id") is None
+            else Workspace.external_id == pinned.get("external_id"),
+        ).exists()
+        conditions = [
+            EvaluationAssetOperation.id == op.id,
+            EvaluationAssetOperation.status.in_(("partial", "failed")),
+            EvaluationAssetOperation.worker_token.is_(None),
+            EvaluationAssetOperation.plan_id == plan_row.id,
+            EvaluationAssetOperation.plan_hash == plan_hash,
+            EvaluationAssetOperation.owner_principal == op.owner_principal,
+            owner_ok, plan_ok, workspace_ok,
+        ]
+        for user_id in {op.approver_user_id, review["reviewer_user_id"]} - {None}:
+            conditions.append(select(User.id).where(
+                User.id == user_id, User.role == ROLE_ADMIN, User.status == "active",
+                (User.expires_at.is_(None)) | (User.expires_at > _now()),
+            ).exists())
+        rows = db.execute(
+            update(EvaluationAssetOperation)
+            .where(*conditions)
+            .values(resources=resources, status="queued", error=None,
+                    log=(op.log or "") + line + "\n")
+        ).rowcount
+        if rows != 1:
+            db.rollback()
+            raise AppError("assistant.evaluation_assets_stopped",
+                           "the operation's owner, plan, approver, reviewer or workspace changed "
+                           "while the review was recorded — nothing written", status_code=409)
+        db.commit()
+        db.expire_all()
+        op = db.get(EvaluationAssetOperation, op.id)
+    # the worker launches only after the review is committed (a crash here leaves a
+    # ``queued`` operation that startup resume / an explicit retry picks up)
+    started = start_async(op.id, clients=clients) is not None \
+        if clients is not _default_clients else start_async(op.id) is not None
+    return RevisionReview(operation=op, review=review, started=started)
 
 
 # ---------------------------------------------------------------------------

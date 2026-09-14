@@ -241,6 +241,7 @@ class FakeLambda:
         self.on_get_configuration = None
         self.revisions = 0
         self.aliases: dict[str, list] = {}
+        self.activation_revision: str | None = None
 
     def _revision(self) -> str:
         self.revisions += 1
@@ -255,7 +256,12 @@ class FakeLambda:
         cfg = {"FunctionName": name, "FunctionArn": arn, "Runtime": kw["Runtime"],
                "Role": kw["Role"], "Handler": kw["Handler"],
                "CodeSha256": _sha(kw["Code"]["ZipFile"]), "Timeout": kw["Timeout"],
+               "CodeSize": len(kw["Code"]["ZipFile"]),
                "MemorySize": kw["MemorySize"], "State": "Pending", "Version": "$LATEST",
+               "StateReason": "The function is being created.", "StateReasonCode": "Creating",
+               "PackageType": "Zip", "Architectures": ["x86_64"],
+               "TracingConfig": {"Mode": "PassThrough"}, "EphemeralStorage": {"Size": 512},
+               "LastModified": f"2026-09-14T06:21:{self.create_calls:02d}.000+0000",
                "Description": kw.get("Description", ""), "polls": 0,
                "RevisionId": self._revision()}
         self.functions[name] = {"cfg": cfg, "tags": dict(kw.get("Tags", {})), "versions": {}}
@@ -264,22 +270,30 @@ class FakeLambda:
             raise ConnectionError("response lost")
         return dict(cfg)
 
+    @staticmethod
+    def _configuration(cfg):
+        return {k: v for k, v in cfg.items() if k != "polls"}  # the poll counter is test-only
+
     def get_function_configuration(self, FunctionName):
         f = self.functions[FunctionName]
         f["cfg"]["polls"] += 1
         if f["cfg"]["polls"] > self.pending_polls:
             f["cfg"]["State"] = "Active"
+            f["cfg"]["LastUpdateStatus"] = "Successful"  # first initialization complete
+            if self.activation_revision:  # SE-049: the token may move Pending → Active
+                f["cfg"]["RevisionId"] = self.activation_revision
+                self.activation_revision = None
         if self.on_get_configuration:
             self.on_get_configuration()
-        return dict(f["cfg"])
+        return self._configuration(f["cfg"])
 
     def get_function(self, FunctionName, Qualifier=None):
         f = self.functions.get(FunctionName)
         if f is None or (Qualifier and Qualifier != "$LATEST" and Qualifier not in f["versions"]):
             raise _err("ResourceNotFoundException", "GetFunction")
         cfg = dict(f["versions"][Qualifier]) if Qualifier and Qualifier != "$LATEST" \
-            else dict(f["cfg"])
-        return {"Configuration": cfg, "Tags": dict(f["tags"])}
+            else f["cfg"]
+        return {"Configuration": self._configuration(cfg), "Tags": dict(f["tags"])}
 
     def publish_version(self, FunctionName, CodeSha256=None, RevisionId=None):
         self.publish_calls += 1
@@ -324,6 +338,8 @@ class FakeLambda:
                       "Condition": {"StringEquals": {"AWS:SourceAccount": kw["SourceAccount"]}}})
 
     def get_policy(self, FunctionName, Qualifier=None):
+        if not self.policies.get(FunctionName):  # the service answers NotFound, never an empty doc
+            raise _err("ResourceNotFoundException", "GetPolicy")
         return {"Policy": json.dumps({"Statement": self.policies.get(FunctionName, [])})}
 
     def list_aliases(self, FunctionName, **kw):

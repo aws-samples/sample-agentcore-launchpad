@@ -1276,6 +1276,75 @@ Evaluation console can show where an asset came from; the plan-key → evaluator
 lives on the operation. "Created" means registered — not passed, not child-safe, not
 production-ready.
 
+**The first initialization moves the RevisionId; that is reviewed, never rebased (SE-049).**
+`CreateFunction` answers while the function is still provisioning (`State = Pending`,
+`StateReasonCode = Creating`) and Lambda documents `RevisionId` as the latest *updated*
+revision, not an immutable identity: once the function turns `Active` its `$LATEST` may
+carry a new RevisionId with every other field — `LastModified` included — unchanged. The
+worker therefore keeps the **raw allowlisted CreateFunction answer immutably** on the
+intent at acceptance (`create_response`: the initial RevisionId, State / StateReasonCode,
+LastModified, the approved configuration, the request id when present; `initial_revision_id`
+beside it), waits for `State = Active` **and** `LastUpdateStatus = Successful` (bounded;
+`InProgress`, `Failed` or a missing status cannot publish and is a plain retryable failure),
+records `settled_revision_id` when the RevisionId did not move, and — when the RevisionId
+ALONE moved on an owned, accepted, never-published create — still records a `conflict`,
+now tagged `review.kind = initial_revision_changed` with the observed RevisionId /
+LastModified. Nothing rebases automatically: an equal digest and role are downloadable
+content, and a replaced function looks exactly like an activated one from the console's
+side. The **reviewed recovery**
+(`POST …/operations/{id}/lambda-revision-review`, administrator **and** owner, exact plan
+hash, expected created and current RevisionId, the CloudTrail event id and a reason) reads
+the nominated `CreateFunction20150331` event server-side through the workspace client
+funnel (`LookupEvents` by `EventId`; exactly one well-formed record, eventually consistent
+history fails closed), requires it to be THIS operation's successful create (source,
+account, region, request fields, response FunctionArn / initial RevisionId / CodeSha256 /
+`Pending` / `Creating` / `lastModified`, and — for a create accepted after SE-049 — equal to
+the persisted answer), then requires the settled `$LATEST` to be that answer plus only the
+lifecycle transition (Active / Successful, exactly the expected current RevisionId, the same
+LastModified, every approved field and every optional security-relevant member equal after
+folding SDK and CloudTrail casing the same way), `$LATEST` the only version, no alias, no
+resource policy, no reserved concurrency, and the recorded role / log-group identity
+intact. Eligibility is decided on the ledger first: partial / failed operation, pinned
+identity, the Lambda intent an owned accepted create blocked **solely** by the pre-publish
+RevisionId drift (a lost create is `unknown` and never reviewable; a published version, a
+publish intent or a re-pinned baseline is ordinary drift), no other unrelated open outcome.
+The write happens under the host lock with the caller re-resolved inside it, the approver
+and pinned workspace re-checked, and one conditional UPDATE (still partial / failed,
+unclaimed, this hash): an **append-only** review entry (reviewer, reason, event id / time /
+request id, verified fields, old and new snapshot, plan binding — never a CloudTrail actor
+or token) is added to `reviews[]`, `revision_history[]` records the move, `revision_id` and
+`settled_revision_id` become the reviewed value while `initial_revision_id` /
+`created_identity` / `create_response` stay untouched, and only the Lambda conflict plus its
+blocked dependents are re-queued; the ordinary worker launches after the commit (a crash
+before that leaves a `queued` operation that startup resume or retry picks up) and its
+`PublishVersion` still carries both preconditions, so any later change fails there and is
+not reviewable again (a second, different review is refused; the exact same request is
+idempotent and reads nothing). An operation accepted before SE-049 stored only the
+identity: it is reviewable only through the positive CloudTrail event, never from the
+current RevisionId alone. The comparison is **lossless and model-driven**: CloudTrail's
+casing is rebuilt along the installed Lambda service model (structure member names only —
+data-map keys / values such as environment variables and tags, and empty strings, are
+content; the only absent-versus-empty equivalence is a documented envelope such as
+`environment: {}`), the recorded request, the immutable accepted answer, the event and the
+current `$LATEST` must agree member for member (present, absent and equal alike, so an
+extra `DurableConfig` / `TenancyConfig` / `CapacityProviderConfig` / `MasterArn` or a member
+unknown to the platform is a difference), and every answered member must be fixed by the
+request or be a documented default. Dependencies are re-compared with their recorded
+snapshot (trust, inline policy, tags, retention — a `ready` ledger status blesses nothing,
+the worker skips ready dependencies) and a resource policy is proven absent only by a
+`NotFound`. The conditional UPDATE that records the review carries the current owner, the
+approved plan row, the pinned workspace and the approver's and reviewer's active
+administrator rows as predicates, with the caller re-resolved inside the host lock. The
+verified state is persisted as `reviewed_baseline` and the resumed worker re-validates it
+immediately before its first mutation (configuration + tags, dependencies, inventories,
+policy absence, no reserved concurrency): an externally published same-code version, a
+foreign alias / policy / concurrency or any drift is a `conflict`, never adopted or
+overwritten. The ordinary worker, review or not, refuses to adopt a same-digest version
+when its **first** `PublishVersion` dispatch is refused (only a lost answer of its own
+dispatch reconciles to exactly one version) and never overwrites a reserved concurrency it
+did not set. CloudTrail remains evidence for a human, not proof that no other
+write happened, and the external-administrator check→write window is unchanged.
+
 **Live check still required.** `tests/test_evaluation_assets.py` is hermetic (IAM /
 Lambda / Logs / control-plane fakes). Not yet verified against AWS: that
 `bedrock-agentcore.amazonaws.com` is the principal the Evaluations service invokes code

@@ -386,6 +386,19 @@ class PlanEdit(BaseModel):
     content: dict[str, Any]
 
 
+class LambdaRevisionReview(BaseModel):
+    """SE-049 reviewed recovery of the first-initialization RevisionId conflict. Every
+    field names what the administrator verified; the CloudTrail event is read
+    server-side, never trusted from the client."""
+
+    model_config = ConfigDict(extra="forbid")
+    plan_hash: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    expected_created_revision_id: str = Field(min_length=1, max_length=128)
+    expected_current_revision_id: str = Field(min_length=1, max_length=128)
+    cloudtrail_event_id: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 class PlanMaterialize(BaseModel):
     plan_revision: int = Field(ge=1)
     plan_hash: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
@@ -548,6 +561,55 @@ def retry_evaluation_operation(
     db.expire_all()
     return {"operation": assets.operation_out(assets.owned_operation(db, row, operation_id)),
             "started": started}
+
+
+@router.post("/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}"
+             "/lambda-revision-review")
+def review_lambda_revision(
+    conversation_id: str,
+    operation_id: str,
+    req: LambdaRevisionReview,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Administrator + owner reviewed recovery of ONE conflict: the Lambda's RevisionId
+    moved between CreateFunction (Pending) and Active. Reads the nominated CloudTrail
+    CreateFunction event and the settled function server-side, records an append-only
+    review and re-queues the ordinary worker. No cloud write happens in this route."""
+    require_admin(request)
+    identity = _caller(request)
+    if not identity.is_admin:
+        raise AppError("auth.admin_required", "administrator role required", status_code=403)
+    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    op = assets.owned_operation(db, row, operation_id)
+    ws_row = db.get(Workspace, ws.id)
+    if ws_row is None:
+        raise AppError("workspace.not_found", "workspace not found", status_code=404)
+    _authorize(db, identity, ws_row)
+
+    def recheck(session: Session) -> Identity:
+        fresh = resolve_identity(request, db=session) if auth_enabled() else _caller(request)
+        if fresh is None:
+            raise AppError("auth.required", "Authentication required", status_code=401)
+        if not fresh.is_admin or principal_of(fresh) != principal_of(identity):
+            raise AppError("auth.admin_required", "administrator role required", status_code=403)
+        fresh_ws = session.get(Workspace, ws.id)
+        if fresh_ws is None:
+            raise AppError("workspace.not_found", "workspace not found", status_code=404)
+        _authorize(session, fresh, fresh_ws)
+        service.owned_conversation(session, ws.id, principal_of(fresh), conversation_id)
+        return fresh if auth_enabled() else replace(fresh, username="river")
+
+    outcome = assets.review_lambda_initial_revision(
+        db, op, plan_hash=req.plan_hash, expected_created=req.expected_created_revision_id,
+        expected_current=req.expected_current_revision_id, event_id=req.cloudtrail_event_id,
+        reason=req.reason, reviewer=identity.username, reviewer_user_id=identity.user_id,
+        recheck=recheck,
+    )
+    db.expire_all()
+    return {"operation": assets.operation_out(assets.owned_operation(db, row, operation_id)),
+            "review": outcome.review, "started": outcome.started}
 
 
 @router.delete("/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}/assets")
