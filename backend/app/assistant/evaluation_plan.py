@@ -37,7 +37,9 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.evaluation import execution
-from app.evaluation.agentcore_eval import ALL_BUILTIN_EVALUATORS
+from app.evaluation.agentcore_eval import ALL_BUILTIN_EVALUATORS, TRAJECTORY_EVALUATORS
+
+KNOWN_BUILTINS: dict[str, str] = {**ALL_BUILTIN_EVALUATORS, **TRAJECTORY_EVALUATORS}
 
 PLAN_VERSION = 1
 PLAN_MAX_BYTES = 160_000
@@ -427,7 +429,7 @@ def _routing_errors(plan: EvaluationPlan) -> list[str]:
         if e.kind not in CLOUD_KINDS and e.kind != "existing":
             continue
         needs = references_needed(e)
-        if e.kind == "existing" and e.evaluator_id.startswith("Builtin.Trajectory"):
+        if e.kind == "existing" and e.evaluator_id in TRAJECTORY_EVALUATORS:
             needs = {"expected_trajectory"}
         mapped = set(e.golden_test_ids)
         if mapped and mapped != all_gts:
@@ -522,7 +524,7 @@ def validate_plan(
             errors += [f"evaluators.{e.key}: {m}" for m in _check_rules(e.rules)]
             errors += [f"evaluators.{e.key}: {m}" for m in _code_level_errors(e)]
         if isinstance(e, ExistingEvaluator) and e.evaluator_id.startswith("Builtin.") \
-                and e.evaluator_id not in ALL_BUILTIN_EVALUATORS:
+                and e.evaluator_id not in KNOWN_BUILTINS:
             errors.append(f"evaluators.{e.key}: unknown builtin evaluator '{e.evaluator_id}'")
     prose = [str(x) for x in proposal_content.get("evaluator_recommendations") or []]
     indexes = sorted(r.index for r in plan.recommendations)
@@ -654,7 +656,7 @@ def draft_plan(
         text = str(text)
         mapped: list[str] = []
         for evaluator_id in dict.fromkeys(m for m in _KNOWN_ID_RE.findall(text)
-                                          if m in ALL_BUILTIN_EVALUATORS
+                                          if m in KNOWN_BUILTINS
                                           or m.startswith("ThirdParty.")):
             key = existing_keys.get(evaluator_id)
             if key is None:

@@ -1278,10 +1278,25 @@ class _Runner:
     # -- evaluators -----------------------------------------------------------------
 
     def _step_existing(self, db, op, resources, res) -> None:
+        """Bind an EXISTING evaluator reference: canonical builtins (incl. trajectory)
+        by catalog; custom ids by exact identity, exactly one complete configuration and
+        — decoded from that real configuration — reference coverage of every target the
+        plan's scenarios produce. A reference the plan cannot feed is never 'ready'."""
+        from app.evaluation import coverage
+
+        plan = self.plan
+        assert plan is not None
         evaluator_id = res["name"]
-        if evaluator_id in ALL_BUILTIN_EVALUATORS:
-            res["result"] = {"evaluator_id": evaluator_id,
-                             "level": ALL_BUILTIN_EVALUATORS[evaluator_id], "source": "builtin"}
+        items = [plan_contract.dataset_item(sc, {"plan": "coverage"}) for sc in plan.scenarios]
+        if evaluator_id in coverage.KNOWN_BUILTINS:
+            level = coverage.KNOWN_BUILTINS[evaluator_id]
+            gaps = coverage.coverage_gaps(items, coverage.builtin_needs(evaluator_id), level)
+            if gaps:
+                raise _Conflict(f"{evaluator_id} reads expected_tool_trajectory but these targets "
+                                f"carry none: {', '.join(gaps[:6])}")
+            res["result"] = {"evaluator_id": evaluator_id, "level": level, "source": "builtin",
+                             "reference_needs": sorted(coverage.builtin_needs(evaluator_id))}
+            res["reference_dependent"] = bool(coverage.builtin_needs(evaluator_id))
             return
         control = self._client("bedrock-agentcore-control")
         try:
@@ -1297,9 +1312,23 @@ class _Runner:
         self._check_evaluator_identity(op, detail, evaluator_id)
         if detail.get("status") not in USABLE_EVALUATOR_STATUSES:
             raise RuntimeError(f"evaluator {evaluator_id} is {detail.get('status')}, not usable")
+        needs, kind = coverage.needs_from_config(detail, None)
+        note = None
+        if needs is None:
+            note = ("external code evaluator: its reference requirements are unknown to this "
+                    "platform — verify them before running it on this Dataset")
+        else:
+            gaps = coverage.coverage_gaps(items, needs, str(detail.get("level")))
+            if gaps:
+                raise _Conflict(f"{evaluator_id} reads {', '.join(sorted(needs))} but these "
+                                f"targets carry none: {', '.join(gaps[:6])}")
         res["result"] = {"evaluator_id": evaluator_id, "evaluator_arn": detail.get("evaluatorArn"),
                          "level": detail.get("level"), "status": detail.get("status"),
-                         "name": detail.get("evaluatorName"), "source": "existing"}
+                         "name": detail.get("evaluatorName"), "source": "existing",
+                         "definition": kind,
+                         "reference_needs": sorted(needs) if needs is not None else None,
+                         "note": note}
+        res["reference_dependent"] = bool(needs) if needs is not None else None
 
     def _step_evaluator(self, db, op, resources, res) -> None:
         plan = self.plan
@@ -1358,10 +1387,11 @@ class _Runner:
             raise _Conflict(f"evaluator ARN {detail.get('evaluatorArn')!r} is not {expected_arn}")
         if detail.get("level") not in ("TRACE", "TOOL_CALL", "SESSION"):
             raise _Conflict(f"evaluator level {detail.get('level')!r} is not supported")
-        config = detail.get("evaluatorConfig") or {}
-        if not isinstance(config, dict) or not (set(config) & {"llmAsAJudge", "derived",
-                                                               "codeBased"}):
-            raise _Conflict("evaluator configuration kind is unknown — reference not bound")
+        from app.evaluation import coverage
+
+        problem = coverage.validate_evaluator_config(detail.get("evaluatorConfig"))
+        if problem:
+            raise _Conflict(f"evaluator configuration is not bindable: {problem}")
 
     def _evaluator_request(self, entry, res, resources) -> dict[str, Any]:
         base = {"evaluatorName": entry.name, "description": entry.description or entry.title,
@@ -1858,9 +1888,12 @@ def managed_evaluator(
         for r in op.resources or []:
             if r.get("kind") == "evaluator" and (r.get("result") or {}).get(
                     "evaluator_id") == evaluator_id and r.get("status") != "deleted":
+                request = r.get("request") or {}
                 return {"operation_id": op.id, "conversation_id": op.conversation_id,
                         "plan_revision": op.plan_revision, "plan_key": r.get("plan_key"),
                         "definition": r.get("definition"),
+                        "level": request.get("level"),
+                        "evaluator_config": request.get("evaluatorConfig"),
                         "reference_dependent": bool(r.get("reference_dependent"))}
     return None
 
@@ -1873,6 +1906,18 @@ def owned_operation(
             or op.workspace_id != conversation.workspace_id:
         raise NotFoundError("assistant.operation_not_found", "operation not found")
     return op
+
+
+def managed_rules(db: Session, owner: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    """The declarative rule checks of a managed code evaluator (from its owning plan)."""
+    if not owner or owner.get("definition") != "code":
+        return None
+    op = db.get(EvaluationAssetOperation, owner["operation_id"])
+    plan = db.get(AssistantEvaluationPlan, op.plan_id) if op else None
+    for e in (plan.content or {}).get("evaluators") or [] if plan else []:
+        if e.get("kind") == "code" and e.get("key") == owner.get("plan_key"):
+            return list((e.get("rules") or {}).get("checks") or [])
+    return []
 
 
 def managed_reference_gap(

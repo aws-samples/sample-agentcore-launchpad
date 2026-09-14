@@ -1070,11 +1070,27 @@ procedure scenario (only the outcome session carries references; the seed sessio
 error). The created Dataset item keeps the reviewed golden-test facts
 (`metadata.launchpad_assets.golden_test`: id, input, expected response, expected tools,
 forbidden behaviour, pass criteria, evaluator note, source), the plan-key → kind / gate /
-**resolved evaluator id** map and `applies` (all global keys) — never the transcript. Managed
-reference-driven code evaluators are refused for a batch run whose scope lacks the reference
-(`run.judge_needs_ground_truth`), for Observability SCORE NOW
-(`observability.evaluator_needs_ground_truth`, before any span read or Evaluate call) and for
-online evaluation, using the owning operation's plan rather than a UI badge.
+**resolved evaluator id** map and `applies` (all global keys) — never the transcript. **Run preflight
+checks the CURRENT dataset, target by target.** `POST /api/eval/runs` resolves every chosen
+evaluator's ground-truth needs from its real definition — canonical builtins (including the
+`Builtin.Trajectory*` catalog), a managed evaluator's recorded create request, or one
+`GetEvaluator` for an unmanaged custom id — and, through the shared pure helper
+`app/evaluation/coverage.py`, requires the reference on every target the evaluator will be
+applied to: every session (procedure seed sessions included; scenario-level assertions /
+trajectory attach only to the outcome session, exactly as the runner's
+`ground_truth_for_sessions` groups them) for SESSION evaluators, every turn for TRACE
+evaluators. Any gap is `422 run.judge_needs_ground_truth` naming the offending targets
+(`GT-003#r1/a1 lacks expected_tool_trajectory`, `GT-002/turn 1 lacks expected_response`)
+before a run row, invoke or StartBatchEvaluation; a dataset edited after materialization is
+therefore re-checked at run time. The same helper binds an *existing* evaluator reference at
+materialization: its configuration must be exactly one complete supported definition
+(`llmAsAJudge{instructions, ratingScale, modelConfig}`, `derived{baseEvaluatorId,
+modelConfig}`, `codeBased{lambdaConfig.lambdaArn}`; null/empty/mixed/unknown members are
+`conflict`), its needs are decoded from that configuration, and a reference the plan's
+scenarios cannot feed leaves the resource `conflict`, never `ready`; an external code
+evaluator's needs are unknown and recorded as such. Observability SCORE NOW
+(`observability.evaluator_needs_ground_truth`, before any span read or Evaluate call) and
+online evaluation refuse managed reference-driven code evaluators outright.
 
 **Drafts never turn prose into a procedure.** A proposal may carry an optional
 structured `evaluation_plan` seed — typed `scenarios` (turns, references, the SE-046

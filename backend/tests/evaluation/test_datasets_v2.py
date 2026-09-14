@@ -4,6 +4,7 @@ Scenario items follow the devguide predefined schema: {scenario_id,
 turns:[{input, expected_response?}], expected_trajectory?, assertions?}.
 """
 
+import json
 from unittest.mock import MagicMock
 
 from sqlalchemy import create_engine, inspect, text
@@ -554,9 +555,12 @@ def test_judge_ground_truth_gate_accepts_dataset_with_expected_response(
 ):
     db = SessionLocal()
     agent = make_agent(db, name="judge-ok-agent")
+    # a {expected_response} judge is applied to EVERY turn: every turn carries one here
+    referenced = json.loads(json.dumps(SCENARIO))
+    referenced["turns"][1]["expected_response"] = "order 123 refunded"
     ds = EvalDataset(
         workspace_id=DEFAULT_WORKSPACE_ID, name="gt-judge", kind="predefined",
-        items=[SCENARIO])
+        items=[referenced])
     db.add(ds)
     db.commit()
     ds_id = ds.id

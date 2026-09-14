@@ -23,6 +23,7 @@ from app.assistant.lambda_runtime import handler
 from app.core.config import get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError
+from app.evaluation import agentcore_eval as _ac_eval
 from app.evaluation import online_evaluators
 from app.evaluation.models import EvalDataset
 from app.main import create_app
@@ -39,6 +40,7 @@ from app.system_agents.presets import ARCHITECT
 from tests.conftest import ws_ctx
 
 BASE = "/api/assistant/architect"
+_ORIG_START_BATCH = _ac_eval.start_batch_evaluation  # before the autouse guard replaces it
 ACCOUNT = "111122223333"
 REGION = "us-west-2"
 ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/launchpad-agent-execution-role"
@@ -1563,11 +1565,11 @@ def test_managed_reference_code_evaluators_are_refused_online_and_without_ground
         scope = WorkspaceScope(id=DEFAULT_WORKSPACE_ID, row=db.get(Workspace, DEFAULT_WORKSPACE_ID),
                                context=ws_ctx(RESOURCES))
         with pytest.raises(AppError) as exc:
-            eval_routers._assert_managed_code_ground_truth(db, scope, [code_id], [])
+            eval_routers._assert_target_references(db, scope, [code_id], [], False)
         assert exc.value.code == "run.judge_needs_ground_truth"
-        eval_routers._assert_managed_code_ground_truth(
+        eval_routers._assert_target_references(
             db, scope, [code_id], [{"scenario_id": "a", "turns": [{"input": "x"}],
-                                    "expected_trajectory": ["weather"]}])
+                                    "expected_trajectory": ["weather"]}], True)
     finally:
         db.close()
 
@@ -2070,3 +2072,221 @@ def test_retry_keeps_persisted_conflicts_as_prerequisites_and_identity_is_exact(
     op4, *_ = _approve(cid4, h4, plan=plan, fakes=fakes3)
     _run(op4, fakes3)
     assert _res(_op(op4), "existing:helpfulness")["status"] == "conflict"
+
+
+# ===========================================================================
+# 6. phase B — actual target references and existing evaluator configuration
+# ===========================================================================
+
+
+def _detail(eid="custom-x", instructions="Judge {assistant_turn} using {context}"):
+    return {"evaluatorId": eid, "evaluatorName": "custom_x", "status": "ACTIVE", "level": "TRACE",
+            "evaluatorArn": f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:evaluator/{eid}",
+            "evaluatorConfig": {"llmAsAJudge": {
+                "instructions": instructions,
+                "ratingScale": {"numerical": [
+                    {"value": 1.0, "label": "pass", "definition": "meets"},
+                    {"value": 0.0, "label": "fail", "definition": "fails"}]},
+                "modelConfig": {"bedrockEvaluatorModelConfig": {"modelId": "model-id"}}}}}
+
+
+def _existing_run(detail, plan_mutator=None):
+    cid, h = _conversation("local-operator")
+    raw = _valid_plan(cid, h, with_code=False)
+    raw["evaluators"][0] = {"kind": "existing", "key": "helpfulness", "title": "existing",
+                            "evaluator_id": detail["evaluatorId"], "golden_test_ids": []}
+    if plan_mutator:
+        plan_mutator(raw)
+    fakes = Fakes()
+    fakes.control.evaluators[detail["evaluatorId"]] = detail
+    op_id, *_ = _approve(cid, h, plan=raw, fakes=fakes)
+    _run(op_id, fakes)
+    return _op(op_id), _res(_op(op_id), "existing:helpfulness")
+
+
+@pytest.mark.parametrize("config", [
+    {"llmAsAJudge": None}, {"llmAsAJudge": {}}, {"llmAsAJudge": {}, "mystery": {}},
+    {"llmAsAJudge": {}, "codeBased": {}},
+    {"llmAsAJudge": {"instructions": "x {assistant_turn}", "ratingScale": {"numerical": []},
+                     "modelConfig": {"bedrockEvaluatorModelConfig": {"modelId": "m"}}}},
+    {"derived": {"baseEvaluatorId": "Builtin.Helpfulness"}},
+    {"codeBased": {"lambdaConfig": {}}},
+])
+def test_existing_evaluator_needs_exactly_one_complete_configuration(app_ready, config):
+    d = _detail()
+    d["evaluatorConfig"] = config
+    op, res = _existing_run(d)
+    assert res["status"] == "conflict" and "not bindable" in res["error"], res
+    assert op.status == "partial"
+
+
+def test_existing_evaluator_valid_shapes_bind_and_needs_come_from_real_config(app_ready):
+    _, res = _existing_run(_detail())
+    assert res["status"] == "ready" and res["reference_dependent"] is False
+    d = _detail()
+    d["evaluatorConfig"] = {"derived": {
+        "baseEvaluatorId": "Builtin.Helpfulness",
+        "modelConfig": {"bedrockEvaluatorModelConfig": {"modelId": "m"}}}}
+    _, res = _existing_run(d)
+    assert res["status"] == "ready" and res["result"]["definition"] == "derived"
+    d = _detail()
+    d["evaluatorConfig"] = {"codeBased": {"lambdaConfig": {
+        "lambdaArn": f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:external:1"}}}
+    _, res = _existing_run(d)
+    assert res["status"] == "ready" and res["reference_dependent"] is None
+    assert "unknown" in res["result"]["note"]
+    # a reference judge whose {expected_response} some turns cannot feed is NOT ready
+    ref = _detail(instructions="Compare {assistant_turn} with {expected_response}")
+    _, res = _existing_run(ref)
+    assert res["status"] == "conflict" and "GT-002/turn 1" in res["error"]
+
+    def fully_referenced(raw):
+        for sc in raw["scenarios"]:
+            for t in sc["turns"]:
+                t["expected_response"] = "answer"
+
+    _, res = _existing_run(ref, fully_referenced)
+    assert res["status"] == "ready" and res["reference_dependent"] is True
+    # the trajectory builtin is a real catalog entry, bound only with complete trajectories
+    cid, h = _conversation("local-operator")
+    raw = _valid_plan(cid, h, reference=True)
+    raw["evaluators"][0] = {"kind": "existing", "key": "helpfulness", "title": "traj",
+                            "evaluator_id": "Builtin.TrajectoryExactOrderMatch",
+                            "golden_test_ids": []}
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, plan=raw, fakes=fakes)
+    _run(op_id, fakes)
+    res = _res(_op(op_id), "existing:helpfulness")
+    assert res["status"] == "ready" and res["result"]["level"] == "SESSION"
+    bogus = json.loads(json.dumps(raw))
+    bogus["evaluators"][0]["evaluator_id"] = "Builtin.TrajectoryBogus"
+    _, errors = plan_contract.validate_plan(bogus, PROPOSAL, revision=1, content_hash=h)
+    assert any("unknown builtin" in e for e in errors)
+
+
+def test_coverage_targets_follow_the_runner_grouping():
+    from app.evaluation import coverage
+
+    items = _valid_plan("c", "b" * 64)["scenarios"]
+    for it in items:  # plan scenarios → dataset items
+        if it.get("execution"):
+            it["metadata"] = {"launchpad_execution": it.pop("execution")}
+    targets = {t["id"]: t["fields"] for t in coverage.reference_targets(items)}
+    assert targets["GT-001"] == {"assertions", "expected_response"}
+    assert targets["GT-001/turn 1"] == {"assertions", "expected_response"}
+    assert targets["GT-002"] == {"expected_tool_trajectory"}
+    assert targets["GT-003#r1/a1"] == set()          # seed session: no scenario refs
+    assert targets["GT-003#r1/b1"] == set()          # outcome session: scenario has none
+    assert "GT-003#r1/a1/turn 1" in targets and "GT-003#r1/b1/turn 3" in targets
+    gaps = coverage.coverage_gaps(items, {"expected_response"}, "TRACE")
+    assert gaps and all("lacks expected_response" in g for g in gaps)
+    assert coverage.coverage_gaps(items, set(), "TRACE") == []
+    with_traj = json.loads(json.dumps(items))
+    for it in with_traj:
+        it["expected_trajectory"] = ["weather"]
+    gaps = coverage.coverage_gaps(with_traj, {"expected_tool_trajectory"}, "SESSION")
+    assert gaps == ["GT-003#r1/a1 lacks expected_tool_trajectory",
+                    "GT-003#r1/a2 lacks expected_tool_trajectory"]
+    assert coverage.validate_evaluator_config(_detail()["evaluatorConfig"]) is None
+
+
+@pytest.mark.parametrize("case", ["existing-response", "managed-procedure", "managed-mixed",
+                                  "positive"])
+def test_actual_run_route_checks_every_target_before_invoking(gated, monkeypatch, case):
+    """The real POST /api/eval/runs against the CURRENT dataset: a reference the
+    evaluator reads must be present on every session / turn or nothing is invoked."""
+    from app.evaluation.queue import run_queue
+    from app.evaluation.telemetry import ROOT_SPAN_NAME
+
+    admin, _, _ = gated
+    cid, h = _conversation("config-admin", owner="admin")
+    fakes = Fakes()
+    if case == "existing-response":
+        d = _detail(instructions="Compare {assistant_turn} with {expected_response}")
+        fakes.control.evaluators["custom-x"] = d
+        raw = _valid_plan(cid, h, with_code=False)
+        raw["evaluators"][0] = {"kind": "existing", "key": "helpfulness", "title": "existing",
+                                "evaluator_id": "custom-x", "golden_test_ids": []}
+        for sc in raw["scenarios"]:
+            for t in sc["turns"]:
+                t["expected_response"] = "answer"
+        eid = "custom-x"
+    else:
+        raw = _valid_plan(cid, h, reference=True)
+    op_id, *_ = _approve(cid, h, plan=raw, fakes=fakes)
+    _run(op_id, fakes)
+    op = _op(op_id)
+    assert op.status == "succeeded", op.error
+    if case != "existing-response":
+        eid = _res(op, "evaluator:tools")["result"]["evaluator_id"]
+    with SessionLocal() as db:
+        ds = db.get(EvalDataset, op.dataset_id)
+        items = json.loads(json.dumps(ds.items))
+        if case == "existing-response":
+            items[1]["turns"] = [{"input": "seed"}, {"input": "outcome"}]  # edited after creation
+        elif case == "managed-mixed":
+            items[1].pop("expected_trajectory")
+        elif case == "managed-procedure":
+            items[2]["turns"] = [{"input": "seed"}, {"input": "outcome"}]
+            items[2]["metadata"]["launchpad_execution"] = {
+                "version": 1, "steps": [{"turn": 0, "actor": "A", "session": "seed"},
+                                        {"turn": 1, "actor": "B", "session": "outcome"}]}
+        ds.items = items
+        agent = Agent(name="synthetic-eval", workspace_id=DEFAULT_WORKSPACE_ID, method="harness",
+                      status="active", resource_id="synthetic-abc",
+                      arn=f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:harness/synthetic-abc",
+                      spec={"name": "synthetic-eval", "method": "harness"}, owner="admin")
+        db.add(agent)
+        db.commit()
+        aid = agent.id
+
+    class RunLogs:
+        def describe_log_groups(self, **kw):
+            return {"logGroups": [{"logGroupName": kw["logGroupNamePrefix"] + "abc-DEFAULT",
+                                   "creationTime": 1}]}
+
+        def filter_log_events(self, **kw):
+            sid = json.loads(kw["filterPattern"])
+            doc = {"attributes": {"session.id": sid}, "spanId": "span-latest",
+                   "name": ROOT_SPAN_NAME, "body": {"input": "test", "output": "answer"}}
+            return {"events": [{"message": json.dumps(doc), "timestamp": 1, "ingestionTime": 1}]}
+
+    class RunData:
+        def __init__(self):
+            self.invocations, self.batches = [], []
+
+        def invoke_harness(self, **kw):
+            self.invocations.append(kw)
+            return {"stream": [{"contentBlockDelta": {"delta": {"text": "answer"}}}]}
+
+        def start_batch_evaluation(self, **kw):
+            self.batches.append(kw)
+            return {"batchEvaluationId": "synthetic-batch"}
+
+        def get_batch_evaluation(self, **kw):
+            return {"status": "COMPLETED"}
+
+    logs, data = RunLogs(), RunData()
+    if case == "positive":  # a fully referenced run legitimately starts a (fake) batch
+        monkeypatch.setattr(_ac_eval, "start_batch_evaluation", _ORIG_START_BATCH)
+    monkeypatch.setattr(aws_clients, "client", lambda name, ws, **kw: {
+        "logs": logs, "bedrock-agentcore": data, "bedrock-agentcore-control": fakes.control}[name])
+    resp = admin.post("/api/eval/runs", json={"agent_id": aid, "dataset_id": op.dataset_id,
+                                               "evaluators": [eid], "wait_seconds": 0})
+    run_queue._queue.join()
+    if case == "positive":
+        assert resp.status_code == 201, resp.text
+        with SessionLocal() as db:
+            from app.evaluation.models import EvalRun
+
+            run = db.get(EvalRun, resp.json()["id"])
+            run_state = (run.status, run.error)
+        assert data.invocations and len(data.batches) == 1, run_state
+        entries = data.batches[0]["evaluationMetadata"]["sessionMetadata"]
+        assert all(e.get("groundTruth", {}).get("inline", {}).get("expectedTrajectory")
+                   for e in entries)
+    else:
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["code"] == "run.judge_needs_ground_truth"
+        assert eid in resp.json()["detail"]["evaluators"]
+        assert not data.invocations and not data.batches
