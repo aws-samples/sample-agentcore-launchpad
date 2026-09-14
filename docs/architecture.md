@@ -1115,7 +1115,15 @@ model/agent span (`gen_ai.completion`, `gen_ai.output.messages`, `gen_ai.choice`
 inputs and reference inputs are never read as output. No spans, an unmatched target,
 no identifiable output for an output rule, a missing reference input for a reference
 rule, or a tool rule without any model/agent span → `{errorCode, errorMessage}`, never
-PASS. Deterministic rules assert literal text and observed tool counts/sequences only;
+PASS. At SESSION level `output_not_contains` is a whole-session claim and is usable only
+when every assistant turn of the session is present and complete (a missing or truncated
+earlier turn is an error, not a pass); `output_contains` / `output_exact` and every
+TRACE rule judge the final turn only. Every finish indication of a turn (event, message,
+span `gen_ai.response.finish_reasons`) must agree on a terminal stop, and a finished span
+needs a valid end timestamp. Output fields are typed by their source (serialized content
+blocks on model spans, plain `str(response)` on agent spans, serialized message lists in
+`operation.details`), never by punctuation. Deterministic rules assert literal text and
+observed tool counts/sequences only;
 PII solicitation, dependency-inducing language or child safety need a calibrated judge
 and human review — a passing keyword rule is not a safety certificate, and reference
 rules must not score live traffic (the operation flags them `reference_dependent`).

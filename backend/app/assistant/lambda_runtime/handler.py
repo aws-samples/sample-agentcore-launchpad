@@ -7,34 +7,47 @@ opaque nonce that only pins the package digest to its creating operation).
 Contract (devguide "Custom code-based evaluator"):
   event = {schemaVersion: "1.0", evaluatorId, evaluatorName, evaluationLevel,
            evaluationInput: {sessionSpans: [...]}, evaluationReferenceInputs: [...],
-           evaluationTarget: {traceIds?, spanIds?} | None}
+           evaluationTarget: {traceIds} (TRACE) | None (SESSION)}
   return {label, value, explanation} | {errorCode, errorMessage}
 
-Telemetry model (what ``sessionSpans`` carries — the ADOT documents the installed
-``bedrock_agentcore`` serializer emits, plus the raw OTel forms the devguide shows):
+Telemetry model — the representations the installed Strands tracer / bedrock_agentcore
+ADOT serializer actually emit, typed by SOURCE (never by punctuation):
   * span documents: {traceId, spanId, name, startTimeUnixNano, endTimeUnixNano,
-    attributes{gen_ai.operation.name, gen_ai.tool.name, session.id, …}, events?[]};
-  * conversation log records: {traceId, spanId, timeUnixNano, body{input{messages[]},
-    output{messages[{role: assistant, content{message, finish_reason}}]}}} —
-    ``body.output`` is the CURRENT turn's output, ``body.input`` is history;
-  * tool log records: body.input.messages[0].role == "tool" (never output);
-  * raw Strands events: ``gen_ai.choice`` = current output (``message``,
-    ``finish_reason``); ``gen_ai.user/assistant/tool.message`` = INPUT context;
-  * devguide/semconv attributes ``gen_ai.completion`` / ``gen_ai.output.messages``.
+    attributes{gen_ai.operation.name, gen_ai.tool.name, gen_ai.response.finish_reasons,
+    session.id, …}, events?[]} — attributes may be a dict or an OTLP key/value list
+    (stringValue / intValue / arrayValue);
+  * model spans (``gen_ai.operation.name`` = chat/…): ``gen_ai.choice.message`` and the
+    ADOT ``body.output.messages[].content.message`` carry ``serialize(content)`` — a
+    JSON list of content blocks (SERIALIZED envelope; must parse);
+  * agent spans (``invoke_agent``): the same fields carry ``str(response)`` — PLAIN text,
+    whatever punctuation it starts with;
+  * ``gen_ai.client.inference.operation.details`` events / ``gen_ai.output.messages``
+    attributes: a JSON list of {role, parts[{type, content}], finish_reason} (SERIALIZED);
+  * ``gen_ai.completion`` (devguide example): plain text;
+  * ``gen_ai.user/assistant/tool.message`` events and ADOT ``body.input`` are INPUT
+    context — never output.
 
 Fail-closed evidence rules (every violation is an error envelope, never PASS):
-  * schema/level/target validated; TOOL_CALL refused; every target trace needs spans;
-  * the observed output is the FINAL model turn's current-turn assistant message —
-    all of its text parts joined; history, prompts, tool inputs/results and
-    reference inputs are never read as output; a structured field that is not valid
-    JSON is malformed, not literal text;
-  * the final turn must be complete: a ``tool_use``-style finish means the trace is
-    incomplete, a length / content-filter finish means truncated, no output at all
-    means no evidence; tool rules need that same complete final turn;
-  * tool calls are identified by span id (no double counting of span + log record);
-    a tool call without a name is unknown evidence; ordering uses start time and is
-    an error when ambiguous; reference inputs must belong to this session and may not
-    conflict; a missing reference for a reference rule is an error.
+  * strict schema (string "1.0"), level, target shape (TRACE: non-empty string traceIds
+    only, ``spanIds`` forbidden by presence; SESSION: no target); every requested trace
+    is scored independently and aggregated explicitly;
+  * dropped attributes/events on any document, missing span ids, conflicting duplicate
+    documents (same id, different content) and repeated OTLP attribute keys with
+    different values are errors; exact duplicates are counted once;
+  * the LATEST model turn decides: every finish indication of that turn (event, message,
+    span ``finish_reasons`` list) must agree on a terminal stop; a continuation
+    (``tool_use``) or truncation (``length``/``max_tokens``/filter) anywhere in the
+    set, no output, or a finished span without a valid end timestamp (≥ start) is not
+    a complete answer;
+  * a non-final model turn may legitimately end with ``tool_use`` (a tool trajectory);
+    a non-final turn with no output and no continuation is missing evidence;
+  * SESSION ``output_not_contains`` is a WHOLE-SESSION claim: every assistant turn's
+    output must be present and complete, else the rule is unusable;
+    ``output_contains`` / ``output_exact`` / TRACE rules judge the final turn only;
+  * tool calls are identified by span id; a bare ``execute_tool`` without a name is
+    unknown tool evidence (never zero tools); non-string or conflicting names are
+    errors; ordering needs distinct start times (counts/sets do not);
+  * references must carry a sessionId attributable to the spans and may not conflict.
 """
 
 import json
@@ -42,8 +55,8 @@ import os
 
 SCHEMA_VERSION = "1.0"
 LEVELS = ("TRACE", "TOOL_CALL", "SESSION")
-MODEL_OPERATIONS = ("chat", "invoke_agent", "text_completion", "generate_content",
-                    "invoke_model", "converse")
+MODEL_OPERATIONS = ("chat", "text_completion", "generate_content", "invoke_model", "converse")
+AGENT_OPERATIONS = ("invoke_agent",)
 TOOL_OPERATION = "execute_tool"
 TOOL_NAME_KEYS = ("gen_ai.tool.name", "tool.name")
 TOOL_SPAN_PREFIXES = ("execute_tool ", "execute_tool:")
@@ -55,6 +68,7 @@ SESSION_KEYS = ("session.id", "gen_ai.conversation.id")
 DETAILS_EVENT = "gen_ai.client.inference.operation.details"
 DROP_KEYS = ("droppedAttributesCount", "droppedEventsCount", "dropped_attributes_count",
              "dropped_events_count")
+TARGET_KEYS = ("traceIds", "spanIds")
 
 _RULES = None
 
@@ -85,8 +99,20 @@ def _error(code, message):
 # ---------------------------------------------------------------------------
 
 
+def _otlp_value(value):
+    if isinstance(value, dict):
+        for inner in ("stringValue", "intValue", "doubleValue", "boolValue"):
+            if inner in value:
+                return value[inner]
+        if "arrayValue" in value:
+            values = (value.get("arrayValue") or {}).get("values") or []
+            return [_otlp_value(v) for v in values]
+    return value
+
+
 def _attributes(obj):
-    """Flat dict of attributes from a dict or an OTLP list of {key, value}."""
+    """Flat dict of attributes from a dict or an OTLP list of {key, value}. A key
+    repeated with a different value is a conflict, never last-write-wins."""
     raw = obj.get("attributes") if isinstance(obj, dict) else None
     if isinstance(raw, dict):
         return raw
@@ -95,13 +121,12 @@ def _attributes(obj):
         for kv in raw:
             if not isinstance(kv, dict) or "key" not in kv:
                 continue
-            value = kv.get("value")
-            if isinstance(value, dict):
-                for inner in ("stringValue", "intValue", "doubleValue", "boolValue"):
-                    if inner in value:
-                        value = value[inner]
-                        break
-            out[str(kv["key"])] = value
+            key = str(kv["key"])
+            value = _otlp_value(kv.get("value"))
+            if key in out and out[key] != value:
+                raise Unusable("CONFLICTING_DUPLICATE",
+                               f"attribute {key!r} repeated with different values")
+            out[key] = value
     return out
 
 
@@ -140,6 +165,43 @@ def _is_tool_log(body):
     return any(isinstance(m, dict) and m.get("role") == "tool" for m in inputs)
 
 
+def _dropped(doc):
+    for key in DROP_KEYS:
+        value = doc.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            return True
+        if isinstance(value, str) and value.strip().isdigit() and int(value) > 0:
+            return True
+    return False
+
+
+def _canonical(doc):
+    return json.dumps(doc, sort_keys=True, default=str)
+
+
+def _finish(value):
+    return str(value or "").strip().lower()
+
+
+def _finish_list(value):
+    """All finish indications of one field: str, list, or JSON-encoded list."""
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, list):
+                    return [_finish(v) for v in parsed if _finish(v)]
+            except ValueError:
+                pass
+        return [_finish(value)]
+    if isinstance(value, list):
+        return [_finish(v) for v in value if _finish(v)]
+    return [_finish(value)]
+
+
 class _Group:
     """Everything reported under one (traceId, spanId): at most one span document
     plus its log records."""
@@ -151,7 +213,7 @@ class _Group:
         self.attrs = {}
         self.logs = []
 
-    def time(self):
+    def start(self):
         if self.span is not None:
             t = _time(self.span, "startTimeUnixNano", "start_time_unix_nano", "startTime")
             if t is not None:
@@ -162,13 +224,21 @@ class _Group:
                 return t
         return None
 
+    def end(self):
+        if self.span is not None:
+            return _time(self.span, "endTimeUnixNano", "end_time_unix_nano", "endTime")
+        return None
+
+    def operation(self):
+        return str(self.attrs.get("gen_ai.operation.name") or "")
+
     def is_tool(self):
-        if self.attrs.get("gen_ai.operation.name") == TOOL_OPERATION:
+        if self.operation() == TOOL_OPERATION:
             return True
         if any(k in self.attrs for k in TOOL_NAME_KEYS):
             return True
         name = str((self.span or {}).get("name") or "")
-        if any(name.startswith(p) for p in TOOL_SPAN_PREFIXES):
+        if name == TOOL_OPERATION or any(name.startswith(p) for p in TOOL_SPAN_PREFIXES):
             return True
         return self.span is None and any(_is_tool_log(_body(log)) for log in self.logs)
 
@@ -193,17 +263,23 @@ class _Group:
     def is_model(self):
         if self.is_tool():
             return False
-        if self.attrs.get("gen_ai.operation.name") in MODEL_OPERATIONS:
+        if self.operation() in MODEL_OPERATIONS or self.operation() in AGENT_OPERATIONS:
             return True
         if "gen_ai.completion" in self.attrs or "gen_ai.output.messages" in self.attrs:
             return True
-        if any(str(e.get("name") or "") == "gen_ai.choice" for e in _events(self.span or {})):
+        if any(str(e.get("name") or "") in ("gen_ai.choice", DETAILS_EVENT)
+               for e in _events(self.span or {})):
             return True
         for log in self.logs:
             body = _body(log)
             if body is not None and "output" in body and not _is_tool_log(body):
                 return True
         return False
+
+    def plain_output(self):
+        """Whether this span's choice/ADOT ``message`` is plain ``str(response)`` (agent
+        span) rather than a serialized content-block list (model span)."""
+        return self.operation() in AGENT_OPERATIONS
 
 
 def _group(docs):
@@ -221,12 +297,17 @@ def _group(docs):
             groups[key] = g
             order.append(g)
         if _body(doc) is not None and "name" not in doc:
+            if any(_canonical(existing) == _canonical(doc) for existing in g.logs):
+                continue  # exact duplicate record
+            body = _body(doc) or {}
+            if "output" in body and not _is_tool_log(body) and any(
+                    "output" in (_body(x) or {}) and not _is_tool_log(_body(x)) for x in g.logs):
+                raise Unusable("CONFLICTING_DUPLICATE",
+                               f"span {key[1]} has two different output records")
             g.logs.append(doc)
         else:
             if g.span is not None:
-                # the same span reported twice is fine only when it says the same thing
-                if _attributes(doc) != g.attrs or str(doc.get("name") or "") != str(
-                        g.span.get("name") or ""):
+                if _canonical(doc) != _canonical(g.span):
                     raise Unusable("CONFLICTING_DUPLICATE",
                                    f"span {key[1]} reported twice with different content")
                 continue
@@ -236,7 +317,7 @@ def _group(docs):
 
 
 # ---------------------------------------------------------------------------
-# output extraction (current turn only)
+# output extraction (current turn only) — typed by SOURCE
 # ---------------------------------------------------------------------------
 
 
@@ -262,79 +343,51 @@ def _text_parts(node):
     return []
 
 
-def _looks_like_broken_json(text):
-    """A string that starts like a JSON object/array literal (``{"`` / ``[{"`` / ``[]``)
-    but does not parse: serialized content that was cut, not prose such as
-    ``[Notice] safe``."""
-    stripped = text.lstrip()
-    return stripped.startswith(('{"', '[{"', "[]", "{}"))
-
-
-def _parse_serialized(text):
-    """Serialized message fields (Strands ``message`` / ``gen_ai.output.messages`` /
-    ADOT ``content.message``) may be JSON or a genuine plain string. Parsed JSON wins;
-    a broken JSON literal is malformed; anything else is the literal text."""
+def _serialized_message(raw, what):
+    """A field documented as a serialized message/content-block list. Must parse to a
+    JSON list or object; anything else is a malformed envelope."""
+    if isinstance(raw, (list, dict)):
+        return raw
+    if not isinstance(raw, str):
+        raise Unusable("MALFORMED_OUTPUT", f"{what} is not a serialized message")
     try:
-        return json.loads(text), True
+        parsed = json.loads(raw)
     except ValueError:
-        if _looks_like_broken_json(text):
-            raise Unusable("MALFORMED_OUTPUT", "assistant output is not valid JSON") from None
-        return text, False
+        raise Unusable("MALFORMED_OUTPUT", f"{what} is not valid JSON") from None
+    if not isinstance(parsed, (list, dict)):
+        raise Unusable("MALFORMED_OUTPUT", f"{what} is not a message list")
+    return parsed
 
 
-def _message_text(message):
-    """All text parts of ONE assistant message joined. A string that looks like
-    serialized JSON must parse (structured content blocks) — otherwise it is
-    malformed evidence, not literal output. Returns None when the message has no
-    text (e.g. only tool-use blocks)."""
-    if isinstance(message, str):
-        message, structured = _parse_serialized(message)
-        if not structured:
-            return message.strip() or None
-        if not isinstance(message, (list, dict)):
-            return str(message).strip() or None
+def _structured_text(message):
+    """All text parts of ONE structured assistant message joined (None when the message
+    has no text, e.g. only tool-use blocks)."""
     if isinstance(message, dict):
         role = str(message.get("role") or "assistant").lower()
         if role != "assistant":
             return None
-        if isinstance(message.get("content"), dict) and "message" in message["content"]:
-            return _message_text(message["content"]["message"])
     parts = [p for p in _text_parts(message) if isinstance(p, str) and p.strip()]
     return "\n".join(p.strip() for p in parts) or None
 
 
-def _finish(value):
-    return str(value or "").strip().lower()
-
-
-def _span_finish(group):
-    """``gen_ai.response.finish_reasons`` (list) on the span, when present."""
-    reasons = group.attrs.get("gen_ai.response.finish_reasons")
-    if isinstance(reasons, str):
-        try:
-            parsed = json.loads(reasons)
-            reasons = parsed if isinstance(parsed, list) else [reasons]
-        except ValueError:
-            reasons = [reasons]
-    if isinstance(reasons, list) and reasons:
-        return _finish(reasons[-1])
-    return ""
-
-
-def _dropped(doc):
-    for key in DROP_KEYS:
-        value = doc.get(key)
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
-            return True
-        if isinstance(value, str) and value.strip().isdigit() and int(value) > 0:
-            return True
-    return False
+def _message_text(raw, plain, what):
+    """Text of a choice/ADOT ``message`` field: plain ``str(response)`` on agent spans,
+    a serialized content-block list on model spans."""
+    if plain:
+        if not isinstance(raw, str):
+            raise Unusable("MALFORMED_OUTPUT", f"{what} is not a string")
+        return raw.strip() or None
+    return _structured_text(_serialized_message(raw, what))
 
 
 def _turn_output(group):
-    """(text | None, finish_reason | None, found) of the group's current-turn output.
-    Order of evidence: conversation log record → gen_ai.choice events →
-    gen_ai.output.messages → gen_ai.completion. Input history is never consulted."""
+    """(text | None, finish indications [..], found) of the group's current-turn output.
+    Sources in order: ADOT conversation log record → gen_ai.choice events → DETAILS /
+    gen_ai.output.messages → gen_ai.completion. Every finish indication of the turn is
+    collected (event, message, span finish_reasons) — none is preferred over another."""
+    finishes = _finish_list(group.attrs.get("gen_ai.response.finish_reasons"))
+    plain = group.plain_output()
+    text, found = None, False
     for log in group.logs:
         body = _body(log)
         if not body or _is_tool_log(body):
@@ -347,40 +400,58 @@ def _turn_output(group):
             if isinstance(m, dict) and isinstance(m.get("content"), dict) \
                     and "message" in m["content"] and str(m.get("role") or "") == "assistant":
                 chosen = m
-        if chosen is None:
-            return None, None, True
-        content = chosen["content"]
-        finish = _finish(content.get("finish_reason")) or _span_finish(group)
-        return _message_text(content["message"]), finish, True
-    choices = [e for e in _events(group.span or {}) if str(e.get("name") or "") == "gen_ai.choice"]
-    if choices:
-        attrs = _attributes(choices[-1])
-        text = _message_text(attrs.get("message")) if attrs.get("message") else None
-        return text, (_finish(attrs.get("finish_reason")) or _span_finish(group)), True
-    details = [e for e in _events(group.span or {}) if str(e.get("name") or "") == DETAILS_EVENT]
-    raw = None
-    if details:
-        raw = _attributes(details[-1]).get("gen_ai.output.messages")
-    elif "gen_ai.output.messages" in group.attrs:
-        raw = group.attrs["gen_ai.output.messages"]
-    if raw is not None:
-        if isinstance(raw, str):
-            raw, structured = _parse_serialized(raw)
-            if not structured:
-                raise Unusable("MALFORMED_OUTPUT", "gen_ai.output.messages is not a message list")
-        chosen = None
-        for m in raw if isinstance(raw, list) else [raw]:
-            if isinstance(m, dict) and str(m.get("role") or "assistant") == "assistant":
-                chosen = m
-        if chosen is None:
-            return None, None, True
-        finish = _finish(chosen.get("finish_reason")) or _span_finish(group)
-        return _message_text(chosen), finish, True
-    if "gen_ai.completion" in group.attrs:
+        found = True
+        if chosen is not None:
+            content = chosen["content"]
+            text = _message_text(content["message"], plain, "body.output message")
+            finishes += _finish_list(content.get("finish_reason"))
+        break
+    if not found:
+        choices = [e for e in _events(group.span or {})
+                   if str(e.get("name") or "") == "gen_ai.choice"]
+        if choices:
+            found = True
+            attrs = _attributes(choices[-1])
+            if attrs.get("message") not in (None, ""):
+                text = _message_text(attrs.get("message"), plain, "gen_ai.choice message")
+            finishes += _finish_list(attrs.get("finish_reason"))
+    if not found:
+        details = [e for e in _events(group.span or {})
+                   if str(e.get("name") or "") == DETAILS_EVENT]
+        raw = None
+        if details:
+            raw = _attributes(details[-1]).get("gen_ai.output.messages")
+        elif "gen_ai.output.messages" in group.attrs:
+            raw = group.attrs["gen_ai.output.messages"]
+        if raw is not None:
+            found = True
+            parsed = _serialized_message(raw, "gen_ai.output.messages")
+            chosen = None
+            for m in parsed if isinstance(parsed, list) else [parsed]:
+                if isinstance(m, dict) and str(m.get("role") or "assistant") == "assistant":
+                    chosen = m
+            if chosen is not None:
+                text = _structured_text(chosen)
+                finishes += _finish_list(chosen.get("finish_reason"))
+    if not found and "gen_ai.completion" in group.attrs:
+        found = True
         raw = group.attrs["gen_ai.completion"]
-        text = _message_text(raw) if isinstance(raw, str) else _message_text(json.dumps(raw))
-        return text, _span_finish(group), True
-    return None, None, False
+        if not isinstance(raw, str):
+            raise Unusable("MALFORMED_OUTPUT", "gen_ai.completion is not a string")
+        text = raw.strip() or None
+    return text, finishes, found
+
+
+def _classify(finishes):
+    """One verdict from ALL finish indications: truncated > continue > unknown > complete
+    — a stop hidden behind a length or tool_use never counts as complete."""
+    if any(f in TRUNCATED_FINISH for f in finishes):
+        return "truncated"
+    if any(f in CONTINUE_FINISH for f in finishes):
+        return "continue"
+    if any(f not in COMPLETE_FINISH for f in finishes):
+        return "unknown"
+    return "complete"
 
 
 # ---------------------------------------------------------------------------
@@ -392,10 +463,7 @@ def _select(docs, level, target):
     if level == "TOOL_CALL":
         raise Unusable("TARGET_UNRESOLVED", "TOOL_CALL targets are not supported")
     if level == "TRACE":
-        ids = target.get("traceIds") if isinstance(target, dict) else None
-        if not isinstance(ids, list) or not ids:
-            raise Unusable("TARGET_UNRESOLVED", "TRACE evaluation without target traceIds")
-        wanted = {str(t) for t in ids}
+        wanted = {str(t) for t in target["traceIds"]}
         present = {_trace_id(d) for d in docs}
         missing = sorted(wanted - present)
         if missing:
@@ -420,9 +488,15 @@ def _session_id(groups):
     return next(iter(ids)) if ids else None
 
 
+def _valid_end(group):
+    start, end = group.start(), group.end()
+    return end is not None and end > 0 and (start is None or end >= start)
+
+
 def extract_evidence(docs, level, target):
-    """{tools: [names in call order] | None (ambiguous order), tool_count, output,
-    finish} of the target scope. Raises Unusable when evidence cannot be trusted."""
+    """{tools, tool_count, tool_names, output, outputs, complete_scope, finish,
+    session_id, traces} of the target scope. Raises Unusable when evidence cannot be
+    trusted."""
     selected, traces = _select(docs, level, target)
     groups = _group(selected)
     session_id = _session_id(groups)
@@ -433,54 +507,63 @@ def extract_evidence(docs, level, target):
         name = g.tool_name()
         if not name:
             raise Unusable("UNKNOWN_TOOL", f"tool call {g.span_id or '?'} has no tool name")
-        tools.append((g.time(), name))
+        tools.append((g.start(), name))
     models = [g for g in groups if g.is_model()]
     if not models:
         raise Unusable("NO_MODEL_TURN", "no model/agent turn with output in the target scope")
-    if len(models) > 1 and any(g.time() is None for g in models):
+    if len(models) > 1 and any(g.start() is None for g in models):
         raise Unusable("AMBIGUOUS_ORDER", "model turns without start times cannot be ordered")
-    times = [g.time() for g in models]
-    if len(set(times)) != len(times):
+    starts = [g.start() for g in models]
+    if len(set(starts)) != len(starts):
         raise Unusable("AMBIGUOUS_ORDER", "two model turns share the same start time")
-    models.sort(key=lambda g: g.time() or 0.0)
+    models.sort(key=lambda g: g.start() or 0.0)
     turns = []
     for g in models:
-        text, finish, found = _turn_output(g)
-        turns.append((g.time(), text if found else None, finish or ""))
+        text, finishes, found = _turn_output(g)
+        turns.append({"group": g, "text": text if found else None,
+                      "verdict": _classify(finishes), "finishes": finishes})
     # the LATEST model turn decides completeness — a complete earlier turn followed by a
-    # turn with no output means the trace is incomplete, never "use the earlier reply"
-    _, text, finish = turns[-1]
-    if text is None and finish in CONTINUE_FINISH:
-        raise Unusable("INCOMPLETE", f"final turn ended with '{finish}' — the trace is "
+    # turn with no output / a continuation / a truncation is not a complete answer
+    last = turns[-1]
+    if last["verdict"] == "truncated":
+        raise Unusable("TRUNCATED", f"final turn finish {last['finishes']} — output truncated")
+    if last["verdict"] == "continue":
+        raise Unusable("INCOMPLETE", f"final turn finish {last['finishes']} — the trace is "
                                      "incomplete (a later turn is missing)")
-    if text is None and finish in TRUNCATED_FINISH:
-        raise Unusable("TRUNCATED", f"final turn ended with '{finish}' — output truncated")
-    if text is None:
+    if last["verdict"] == "unknown":
+        raise Unusable("UNKNOWN_FINISH", f"final turn finish {last['finishes']} is unknown")
+    if last["text"] is None:
         raise Unusable("NO_OUTPUT", "the latest model turn carries no current-turn assistant "
                                     "output (input history is not output)")
-    if finish in CONTINUE_FINISH:
-        raise Unusable("INCOMPLETE", f"final turn ended with '{finish}' — the trace is "
-                                     "incomplete (a later turn is missing)")
-    if finish in TRUNCATED_FINISH:
-        raise Unusable("TRUNCATED", f"final turn ended with '{finish}' — output truncated")
-    if finish and finish not in COMPLETE_FINISH:
-        raise Unusable("UNKNOWN_FINISH", f"final turn finish reason '{finish}' is unknown")
-    if not text:
-        raise Unusable("NO_OUTPUT", "final turn carries no assistant text")
+    if last["group"].span is not None and not _valid_end(last["group"]):
+        raise Unusable("INCOMPLETE", "the final model span has no valid end timestamp")
+    # whole-scope completeness: every earlier turn is either a complete answer or a
+    # legitimate tool-use continuation followed by later turns
+    complete_scope, gap = True, None
+    for i, t in enumerate(turns[:-1]):
+        if t["verdict"] == "continue":
+            continue  # intermediate tool trajectory turn
+        if t["verdict"] != "complete" or t["text"] is None or (
+                t["group"].span is not None and not _valid_end(t["group"])):
+            complete_scope, gap = False, i
+            break
+    if any(t["verdict"] == "continue" for t in turns[:-1]) and not tools:
+        raise Unusable("INCONSISTENT", "a tool_use turn without any tool call span")
     ordered = None
-    starts = [t[0] for t in tools]
-    if len(tools) <= 1 or (all(t is not None for t in starts) and len(set(starts)) == len(starts)):
+    tool_starts = [t[0] for t in tools]
+    if len(tools) <= 1 or (all(s is not None for s in tool_starts)
+                           and len(set(tool_starts)) == len(tool_starts)):
         ordered = [name for _, name in sorted(tools, key=lambda t: t[0] or 0.0)]
-    outputs = [t[1] for t in turns if t[1]]
     return {"tools": ordered, "tool_count": len(tools), "tool_names": [n for _, n in tools],
-            "output": text, "outputs": outputs, "finish": finish, "session_id": session_id,
-            "traces": traces}
+            "output": last["text"], "outputs": [t["text"] for t in turns if t["text"]],
+            "complete_scope": complete_scope, "scope_gap": gap,
+            "finish": last["finishes"], "session_id": session_id, "traces": traces}
 
 
 def _reference(reference_inputs, level, traces, session_id):
-    """Merged reference fields for this scope: session-level entries (+ trace-level
-    entries of the target at TRACE). Entries of another session or conflicting
-    values for one scope are errors."""
+    """Merged reference fields for this scope: session-level entries (+ the target's
+    trace-level entries at TRACE). Every entry must name this session; conflicting values
+    for one scope are errors."""
     if reference_inputs is None:
         return {}
     if not isinstance(reference_inputs, list):
@@ -500,9 +583,8 @@ def _reference(reference_inputs, level, traces, session_id):
         if str(ref_session) != session_id:
             raise Unusable("REFERENCE_MISMATCH", "reference input belongs to another session")
         tid = ctx.get("traceId")
-        if tid:
-            if level != "TRACE" or str(tid) not in (traces or set()):
-                continue  # another trace's ground truth is not this target's
+        if tid and (level != "TRACE" or str(tid) not in (traces or set())):
+            continue  # another trace's ground truth is not this target's
         for field in ("expectedResponse", "assertions", "expectedTrajectory"):
             if field not in entry:
                 continue
@@ -531,7 +613,8 @@ def _is_subsequence(needle, hay):
 
 def _ordered_tools(evidence):
     if evidence["tools"] is None:
-        raise Unusable("AMBIGUOUS_ORDER", "tool calls without start times cannot be ordered")
+        raise Unusable("AMBIGUOUS_ORDER", "tool calls without distinct start times cannot be "
+                                          "ordered")
     return evidence["tools"]
 
 
@@ -583,7 +666,11 @@ def run_check(check, evidence, reference, level):
             text = str(check.get("text") or "")
         needle = _norm(text, cs)
         if kind == "output_not_contains" and level == "SESSION":
-            # whole-session negative rule: EVERY assistant turn of the session
+            # whole-session negative rule: needs EVERY assistant turn present and complete
+            if not evidence["complete_scope"]:
+                raise Unusable("EVIDENCE_INCOMPLETE",
+                               f"assistant turn {evidence['scope_gap']} of the session has no "
+                               "complete output — a whole-session absence cannot be asserted")
             hits = [i for i, o in enumerate(evidence["outputs"]) if needle in _norm(o, cs)]
             return ("pass" if not hits else "fail"), (
                 f"checked all {len(evidence['outputs'])} assistant turn(s); "
@@ -600,6 +687,28 @@ def run_check(check, evidence, reference, level):
     raise Unusable("BAD_RULE", f"unknown check type {kind!r}")
 
 
+def _validate_target(level, target):
+    """Strict target shape by PRESENCE and type: TRACE = {traceIds: [non-empty str, …]}
+    only; SESSION = no target."""
+    if level == "SESSION":
+        if target is not None:
+            raise Unusable("BAD_TARGET", "SESSION evaluation takes no evaluationTarget")
+        return [None]
+    if not isinstance(target, dict):
+        raise Unusable("TARGET_UNRESOLVED", "TRACE evaluation without target traceIds")
+    if "spanIds" in target:
+        raise Unusable("BAD_TARGET", "TRACE evaluation does not accept spanIds")
+    unknown = sorted(set(target) - set(TARGET_KEYS))
+    if unknown:
+        raise Unusable("BAD_TARGET", f"unknown evaluationTarget members {unknown}")
+    ids = target.get("traceIds")
+    if not isinstance(ids, list) or not ids or not all(
+            isinstance(t, str) and t.strip() for t in ids):
+        raise Unusable("TARGET_UNRESOLVED", "traceIds must be a non-empty list of non-empty "
+                                            "strings")
+    return list(dict.fromkeys(ids))
+
+
 def evaluate(rules, event):
     """Pure evaluation of one event against one evaluator's rules (testable)."""
     try:
@@ -609,28 +718,20 @@ def evaluate(rules, event):
         level = event.get("evaluationLevel")
         if not isinstance(level, str) or level not in LEVELS:
             return _error("BAD_LEVEL", f"evaluationLevel {level!r} is not one of {LEVELS}")
+        if level == "TOOL_CALL":
+            return _error("TARGET_UNRESOLVED", "TOOL_CALL targets are not supported")
         spans_in = (event.get("evaluationInput") or {}).get("sessionSpans")
         if not isinstance(spans_in, list) or not spans_in:
             return _error("NO_SPANS", "evaluationInput.sessionSpans is empty or missing")
         if not all(isinstance(d, dict) for d in spans_in):
             return _error("MALFORMED_SPAN", "sessionSpans contains a non-object entry")
-        target = event.get("evaluationTarget")
-        if level == "SESSION" and target not in (None, {}):
-            return _error("BAD_TARGET", "SESSION evaluation takes no evaluationTarget")
-        if level == "TRACE" and isinstance(target, dict) and target.get("spanIds"):
-            return _error("BAD_TARGET", "TRACE evaluation does not accept spanIds")
         checks = rules.get("checks") if isinstance(rules, dict) else None
         if not isinstance(checks, list) or not checks or not all(
                 isinstance(c, dict) for c in checks):
             return _error("BAD_RULE", "no checks packaged for this evaluator")
+        scopes = _validate_target(level, event.get("evaluationTarget"))
         # each requested trace is scored on its own complete evidence and its own
         # references; the verdict aggregates explicitly (any error → error, any fail → FAIL)
-        scopes = [None]
-        if level == "TRACE":
-            ids = target.get("traceIds") if isinstance(target, dict) else None
-            if not isinstance(ids, list) or not ids or not all(isinstance(t, str) for t in ids):
-                return _error("TARGET_UNRESOLVED", "TRACE evaluation without target traceIds")
-            scopes = list(dict.fromkeys(ids))
         results = []
         for scope in scopes:
             scoped_target = {"traceIds": [scope]} if scope is not None else None

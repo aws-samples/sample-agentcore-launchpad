@@ -748,9 +748,13 @@ def _event(level, spans, refs=None, target=None, name="kid_tools"):
 T1 = {"traceIds": ["t1"]}
 
 
-def _model_turn(trace, span_id, output, start=10, **kw):
+def _model_turn(trace, span_id, output, start=10, raw=False, **kw):
+    """A model span + its ADOT conversation record. The installed tracer serializes a
+    model turn's content blocks, so ``output`` is wrapped as ``[{"text": …}]`` unless
+    ``raw`` hands the envelope over verbatim."""
+    message = output if raw else json.dumps([{"text": output}])
     return [_span(trace, span_id, "chat", {"gen_ai.operation.name": "chat"}, start),
-            _turn_log(trace, span_id, output, time=start + 1, **kw)]
+            _turn_log(trace, span_id, message, time=start + 1, **kw)]
 
 
 BLOCKS = json.dumps([{"text": "amber"}, {"text": "and goodbye"}])
@@ -802,10 +806,11 @@ def test_handler_reads_current_output_joined_never_history():
         "errorCode"] == "NO_OUTPUT"
     # devguide shape (gen_ai.completion) and OTLP list attributes are accepted
     doc = [{"traceId": "t1", "spanId": "m", "name": "Model: claude", "startTimeUnixNano": "5",
+            "endTimeUnixNano": "6",  # a finished span always carries its end time
             "attributes": [{"key": "gen_ai.completion", "value": {"stringValue": "fine"}}]}]
     assert handler.evaluate(LEAK, _event("TRACE", doc, target=T1))["label"] == "PASS"
     # structured-looking output that is not JSON is malformed evidence
-    broken = _model_turn("t1", "m1", '[{"text": "amber"')
+    broken = _model_turn("t1", "m1", '[{"text": "amber"', raw=True)
     assert handler.evaluate(LEAK, _event("TRACE", broken, target=T1))[
         "errorCode"] == "MALFORMED_OUTPUT"
 
@@ -1833,7 +1838,7 @@ def test_handler_wire_positives_operation_details_and_plain_bracket_text():
     plain = _model_turn("t1", "m1", "[Notice] safe")
     assert handler.evaluate(LEAK, _event("TRACE", plain, target=T1))["label"] == "PASS"
     # a cut JSON literal is still malformed evidence
-    broken = _model_turn("t1", "m1", '[{"text": "amber"')
+    broken = _model_turn("t1", "m1", '[{"text": "amber"', raw=True)
     cut = handler.evaluate(LEAK, _event("TRACE", broken, target=T1))
     assert cut["errorCode"] == "MALFORMED_OUTPUT"
     # details event whose final message is tool_use → incomplete
