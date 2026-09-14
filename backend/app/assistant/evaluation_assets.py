@@ -781,7 +781,7 @@ FUNCTION_IDENTITY_FIELDS = ("FunctionArn", "Version", "CodeSha256", "Role", "Run
 # separately as ``request_id``.
 CREATE_RESPONSE_FIELDS = (
     "FunctionName", "FunctionArn", "Version", "CodeSha256", "Role", "Runtime", "Handler",
-    "Timeout", "MemorySize", "Description", "RevisionId", "State", "StateReason",
+    "Timeout", "MemorySize", "Description", "CodeSize", "RevisionId", "State", "StateReason",
     "StateReasonCode", "LastUpdateStatus", "LastModified", "PackageType", "Architectures",
     "EphemeralStorage", "Environment", "Layers", "VpcConfig", "KMSKeyArn",
     "FileSystemConfigs", "DeadLetterConfig", "SigningProfileVersionArn", "SigningJobArn",
@@ -1510,8 +1510,7 @@ class _Runner:
         if baseline:
             got = lam.get_function(FunctionName=name)
             cfg, tags = got.get("Configuration") or {}, got.get("Tags") or {}
-            drift = sorted(k for k in set(cfg) | set(baseline.get("configuration") or {})
-                           if cfg.get(k) != (baseline.get("configuration") or {}).get(k))
+            drift = _members_differ(cfg, baseline.get("configuration") or {})
             if drift or tags != (baseline.get("tags") or {}):
                 raise _Conflict(f"$LATEST differs from the reviewed baseline on "
                                 f"{drift or ['Tags']} — refusing to continue")
@@ -1975,25 +1974,99 @@ def _from_cloudtrail(value: Any, shape: Shape) -> Any:
     return value
 
 
+_MISSING = object()  # "the member is absent" — never equal to null, "" or a wrong type
+
+
+def _members_differ(left: dict[str, Any], right: dict[str, Any]) -> list[str]:
+    """Members that differ between two SDK-cased configurations, presence included: a
+    member present with ``null`` or another type is a difference from an absent one."""
+    return sorted(k for k in set(left) | set(right)
+                  if left.get(k, _MISSING) != right.get(k, _MISSING)
+                  or type(left.get(k, _MISSING)) is not type(right.get(k, _MISSING)))
+
+
+_SCALAR_TYPES: dict[str, tuple[type, ...]] = {
+    "string": (str,), "integer": (int,), "long": (int,), "boolean": (bool,),
+    "double": (int, float), "float": (int, float), "timestamp": (str, datetime),
+    "blob": (bytes, str),
+}
+
+
+def _shape_problems(value: Any, shape: Shape, path: str) -> list[str]:
+    """Type problems of an SDK-cased value against the installed model shape. A modelled
+    member must carry a value of its modelled type (``null`` is never valid); an
+    unmodelled member is kept for the unapproved-member refusal but may not be ``null``."""
+    if shape.type_name == "structure":
+        if not isinstance(value, dict):
+            return [f"{path}: not a structure"]
+        out: list[str] = []
+        for k, v in value.items():
+            member = shape.members.get(str(k))
+            if member is None:
+                if v is None:
+                    out.append(f"{path}.{k}: null")
+                continue
+            out += _shape_problems(v, member, f"{path}.{k}")
+        return out
+    if shape.type_name == "list":
+        if not isinstance(value, list):
+            return [f"{path}: not a list"]
+        return [p for i, v in enumerate(value) for p in _shape_problems(v, shape.member,
+                                                                         f"{path}[{i}]")]
+    if shape.type_name == "map":
+        if not isinstance(value, dict):
+            return [f"{path}: not a map"]
+        out = []
+        for k, v in value.items():
+            if not isinstance(k, str):
+                out.append(f"{path}: non-string key")
+            out += _shape_problems(v, shape.value, f"{path}[{k!r}]")
+        return out
+    allowed = _SCALAR_TYPES.get(shape.type_name)
+    if allowed is None:
+        return []
+    if isinstance(value, bool) and bool not in allowed:
+        return [f"{path}: boolean where {shape.type_name} expected"]
+    if not isinstance(value, allowed):
+        return [f"{path}: {type(value).__name__} where {shape.type_name} expected"]
+    return []
+
+
+def _validated(value: Any, shape_name: str, what: str) -> dict[str, Any]:
+    """Model-validate an SDK-cased configuration and fold its well-formed empty envelopes;
+    a malformed value (``null``, wrong type) is refused, never normalized."""
+    problems = _shape_problems(value, _lambda_model().shape_for(shape_name), what)
+    if problems:
+        raise _ReviewRefused("assistant.lambda_revision_review_unverified",
+                             f"{what} is malformed against the installed Lambda model "
+                             f"({problems[:5]}) — refusing to compare it", fields=problems[:20])
+    return _fold_envelopes(value)
+
+
 def _fold_envelopes(cfg: dict[str, Any]) -> dict[str, Any]:
     """The ONLY absent-versus-empty equivalences, on documented service envelopes of the
     function configuration (CloudTrail answers ``environment: {}`` where the SDK omits the
-    member; an unset VPC reads as empty lists): ``Environment`` with no variables and no
-    error, ``Layers`` / ``FileSystemConfigs`` ``[]`` and an all-empty ``VpcConfig``. Nothing
-    inside a data map is touched."""
+    member; an unset VPC reads as empty lists), and only for their WELL-FORMED empty shape:
+    ``Environment`` ``{}`` / ``{"Variables": {}}``, ``Layers`` / ``FileSystemConfigs`` ``[]``,
+    a ``VpcConfig`` whose lists are empty lists, ``VpcId`` an empty string and
+    ``Ipv6AllowedForDualStack`` false. A ``null``, an empty string or a list where a map is
+    expected is not empty — it is malformed and stays a difference. Nothing inside a data
+    map is touched."""
     out = dict(cfg)
-    env = out.get("Environment")
-    if isinstance(env, dict) and not env.get("Error") and not (env.get("Variables") or {}) \
-            and set(env) <= {"Variables", "Error"}:
+    env = out.get("Environment", _MISSING)
+    if isinstance(env, dict) and set(env) <= {"Variables"} \
+            and env.get("Variables", {}) == {} and isinstance(env.get("Variables", {}), dict):
         out.pop("Environment")
     for member in ("Layers", "FileSystemConfigs"):
-        if member in out and out[member] == []:
+        if member in out and isinstance(out[member], list) and out[member] == []:
             out.pop(member)
-    vpc = out.get("VpcConfig")
-    if isinstance(vpc, dict) and not any(vpc.get(k) for k in ("SubnetIds", "SecurityGroupIds",
-                                                               "VpcId")) \
-            and not vpc.get("Ipv6AllowedForDualStack") \
-            and set(vpc) <= {"SubnetIds", "SecurityGroupIds", "VpcId", "Ipv6AllowedForDualStack"}:
+    vpc = out.get("VpcConfig", _MISSING)
+    if isinstance(vpc, dict) \
+            and set(vpc) <= {"SubnetIds", "SecurityGroupIds", "VpcId", "Ipv6AllowedForDualStack"} \
+            and all(isinstance(vpc.get(k, []), list) and vpc.get(k, []) == []
+                    for k in ("SubnetIds", "SecurityGroupIds")) \
+            and isinstance(vpc.get("VpcId", ""), str) and vpc.get("VpcId", "") == "" \
+            and vpc.get("Ipv6AllowedForDualStack", False) is False:
         out.pop("VpcConfig")
     return out
 
@@ -2128,15 +2201,13 @@ def _verify_create_event(event: dict[str, Any], op: EvaluationAssetOperation,
     model = _lambda_model()
     params = _from_cloudtrail(raw_params, model.shape_for("CreateFunctionRequest"))
     params.pop("Code", None)  # the package bytes are never rendered; the digest is compared
-    approved_request = {k: v for k, v in request.items() if k != "CodeSha256"}
-    if _fold_envelopes(params) != _fold_envelopes(approved_request):
-        bad += [f"requestParameters.{k}" for k in sorted(
-            set(_fold_envelopes(params)) | set(_fold_envelopes(approved_request)))
-            if _fold_envelopes(params).get(k) != _fold_envelopes(approved_request).get(k)]
+    params = _validated(params, "CreateFunctionRequest", "the event's requestParameters")
+    approved_request = _fold_envelopes({k: v for k, v in request.items() if k != "CodeSha256"})
+    bad += [f"requestParameters.{k}" for k in _members_differ(params, approved_request)]
     if request.get("Publish") or params.get("Publish") not in (False, None):
         bad.append("requestParameters.Publish")
-    response = _fold_envelopes(_from_cloudtrail(raw_response,
-                                                model.shape_for("FunctionConfiguration")))
+    response = _validated(_from_cloudtrail(raw_response, model.shape_for("FunctionConfiguration")),
+                          "FunctionConfiguration", "the event's responseElements")
     expect_response = {
         "FunctionName": res.get("name"), "FunctionArn": stored.get("function_arn"),
         "Version": "$LATEST", "CodeSha256": request.get("CodeSha256"),
@@ -2154,10 +2225,10 @@ def _verify_create_event(event: dict[str, Any], op: EvaluationAssetOperation,
     # every allowlisted member — present, absent and equal alike
     snapshot = stored.get("create_response")
     if isinstance(snapshot, dict):
-        folded = _fold_envelopes(snapshot)
-        for field in CREATE_RESPONSE_FIELDS:
-            if folded.get(field) != response.get(field):
-                bad.append(f"create_response.{field}")
+        folded = _validated(snapshot, "FunctionConfiguration", "the accepted create answer")
+        bad += [f"create_response.{field}" for field in _members_differ(
+            {k: v for k, v in folded.items() if k in CREATE_RESPONSE_FIELDS},
+            {k: v for k, v in response.items() if k in CREATE_RESPONSE_FIELDS})]
     if bad:
         raise _ReviewRefused(
             "assistant.lambda_revision_review_unverified",
@@ -2214,10 +2285,14 @@ def _verify_settled_function(lam: Any, op: EvaluationAssetOperation, res: dict[s
         raise
     cfg = got.get("Configuration") or {}
     tags = got.get("Tags") or {}
-    left = _fold_envelopes({k: v for k, v in response.items()
-                            if k not in _FUNCTION_LIFECYCLE_MEMBERS})
-    right = _fold_envelopes({k: v for k, v in cfg.items() if k not in _FUNCTION_LIFECYCLE_MEMBERS})
-    bad = sorted(k for k in set(left) | set(right) if left.get(k) != right.get(k))
+    current = _validated(cfg, "FunctionConfiguration", "the current $LATEST configuration")
+    if not isinstance(tags, dict) or any(not isinstance(k, str) or not isinstance(v, str)
+                                         for k, v in tags.items()):
+        raise _ReviewRefused("assistant.lambda_revision_review_unverified",
+                             "the function's tags are malformed — refusing to compare them")
+    left = {k: v for k, v in response.items() if k not in _FUNCTION_LIFECYCLE_MEMBERS}
+    right = {k: v for k, v in current.items() if k not in _FUNCTION_LIFECYCLE_MEMBERS}
+    bad = _members_differ(left, right)
     if cfg.get("State") != "Active":
         bad.append("State")
     if cfg.get("LastUpdateStatus") != "Successful":
@@ -2578,14 +2653,20 @@ def review_lambda_initial_revision(
             AssistantConversation.owner_principal == op.owner_principal,
             *([AssistantConversation.owner_principal == principal] if principal else []),
         ).exists()
+        # every value the review relied on is a predicate of this one statement — the
+        # exact JSON of the validated plan content, the operation's pinned identity and
+        # intents, and the workspace resources included — so a change committed by another
+        # session up to the write itself makes it a no-op
         plan_ok = select(AssistantEvaluationPlan.id).where(
             AssistantEvaluationPlan.id == plan_row.id,
             AssistantEvaluationPlan.conversation_id == op.conversation_id,
             AssistantEvaluationPlan.revision == op.plan_revision,
             AssistantEvaluationPlan.status == "approved",
             AssistantEvaluationPlan.content_hash == plan_hash,
+            AssistantEvaluationPlan.content == plan_row.content,
         ).exists()
         pinned = op.pinned or {}
+        ws_row = db.get(Workspace, op.workspace_id)
         workspace_ok = select(Workspace.id).where(
             Workspace.id == op.workspace_id,
             Workspace.account_id == pinned.get("account_id"),
@@ -2594,14 +2675,22 @@ def review_lambda_initial_revision(
             else Workspace.role_arn == pinned.get("role_arn"),
             Workspace.external_id.is_(None) if pinned.get("external_id") is None
             else Workspace.external_id == pinned.get("external_id"),
+            Workspace.resources == (ws_row.resources if ws_row is not None else {}),
         ).exists()
         conditions = [
             EvaluationAssetOperation.id == op.id,
+            EvaluationAssetOperation.status == op.status,
             EvaluationAssetOperation.status.in_(("partial", "failed")),
             EvaluationAssetOperation.worker_token.is_(None),
+            EvaluationAssetOperation.attempts == op.attempts,
             EvaluationAssetOperation.plan_id == plan_row.id,
+            EvaluationAssetOperation.plan_revision == op.plan_revision,
             EvaluationAssetOperation.plan_hash == plan_hash,
             EvaluationAssetOperation.owner_principal == op.owner_principal,
+            EvaluationAssetOperation.approver_user_id.is_(None) if op.approver_user_id is None
+            else EvaluationAssetOperation.approver_user_id == op.approver_user_id,
+            EvaluationAssetOperation.pinned == op.pinned,
+            EvaluationAssetOperation.resources == op.resources,
             owner_ok, plan_ok, workspace_ok,
         ]
         for user_id in {op.approver_user_id, review["reviewer_user_id"]} - {None}:

@@ -1329,12 +1329,18 @@ content; the only absent-versus-empty equivalence is a documented envelope such 
 current `$LATEST` must agree member for member (present, absent and equal alike, so an
 extra `DurableConfig` / `TenancyConfig` / `CapacityProviderConfig` / `MasterArn` or a member
 unknown to the platform is a difference), and every answered member must be fixed by the
-request or be a documented default. Dependencies are re-compared with their recorded
+request or be a documented default; presence is compared with an explicit absent
+sentinel (`null` or a wrong type is a difference, never absence), every side is
+type-validated against the model before comparison, envelope folding applies only to
+well-formed empty shapes, and `CodeSize` is retained and compared. Dependencies are re-compared with their recorded
 snapshot (trust, inline policy, tags, retention — a `ready` ledger status blesses nothing,
 the worker skips ready dependencies) and a resource policy is proven absent only by a
-`NotFound`. The conditional UPDATE that records the review carries the current owner, the
-approved plan row, the pinned workspace and the approver's and reviewer's active
-administrator rows as predicates, with the caller re-resolved inside the host lock. The
+`NotFound`. The conditional UPDATE that records the review binds every value the review relied on
+— the operation's status / token / attempts / plan binding / owner / approver / exact
+pinned and intents JSON, the approved plan row including the exact JSON of its
+validated content, the conversation owner, the workspace identity including its exact
+`resources` JSON, and the approver's and reviewer's active administrator rows — as
+predicates of that one statement, with the caller re-resolved inside the host lock. The
 verified state is persisted as `reviewed_baseline` and the resumed worker re-validates it
 immediately before its first mutation (configuration + tags, dependencies, inventories,
 policy absence, no reserved concurrency): an externally published same-code version, a

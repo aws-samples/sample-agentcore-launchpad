@@ -28,6 +28,7 @@ from tests.test_evaluation_assets import (  # noqa: F401 — fixtures by import
     ACCOUNT,
     BASE,
     REGION,
+    ROLE_ARN,
     Fakes,
     _approve,
     _conversation,
@@ -945,7 +946,10 @@ def test_route_binding_changed_during_the_cloud_read_is_refused(gated, monkeypat
             db.commit()
 
 
-@pytest.mark.parametrize("which", ["owner", "reviewer_expired", "plan_status", "workspace"])
+@pytest.mark.parametrize("which", ["owner", "reviewer_expired", "plan_status", "workspace",
+                                   "plan_content", "operation_plan_revision", "operation_pinned",
+                                   "workspace_execution_role", "operation_approver",
+                                   "operation_attempts"])
 def test_conditional_update_carries_owner_admin_plan_and_workspace_predicates(
     gated, monkeypatch, no_threads, which
 ):
@@ -990,6 +994,24 @@ def test_conditional_update_carries_owner_admin_plan_and_workspace_predicates(
                     db.get(AssistantEvaluationPlan, op.plan_id).status = "superseded"
                 if which == "workspace":
                     db.get(Workspace, DEFAULT_WORKSPACE_ID).account_id = "999988887777"
+                op_row = db.get(EvaluationAssetOperation, op_id)
+                if which == "plan_content":  # hash column untouched, content changed
+                    plan = db.get(AssistantEvaluationPlan, op_row.plan_id)
+                    content = json.loads(json.dumps(plan.content))
+                    content["dataset"]["description"] = "changed at the atomic boundary"
+                    plan.content = content
+                if which == "operation_plan_revision":
+                    op_row.plan_revision += 1
+                if which == "operation_pinned":
+                    op_row.pinned = {**op_row.pinned, "execution_role_id": "AROAOTHER"}
+                if which == "workspace_execution_role":
+                    ws = db.get(Workspace, DEFAULT_WORKSPACE_ID)
+                    ws.resources = {**ws.resources,
+                                    "execution_role_arn": f"arn:aws:iam::{ACCOUNT}:role/other"}
+                if which == "operation_approver":
+                    op_row.approver_user_id = member_id  # a member, not an administrator
+                if which == "operation_attempts":
+                    op_row.attempts += 1
                 db.commit()
 
     sa_event.listen(engine, "before_cursor_execute", race)
@@ -998,7 +1020,9 @@ def test_conditional_update_carries_owner_admin_plan_and_workspace_predicates(
     finally:
         sa_event.remove(engine, "before_cursor_execute", race)
         with SessionLocal() as db:
-            db.get(Workspace, DEFAULT_WORKSPACE_ID).account_id = ACCOUNT
+            ws = db.get(Workspace, DEFAULT_WORKSPACE_ID)
+            ws.account_id = ACCOUNT
+            ws.resources = {**ws.resources, "execution_role_arn": ROLE_ARN}
             db.commit()
     assert fired and r.status_code == 409, r.text[:300]
     assert r.json()["code"] == "assistant.evaluation_assets_stopped"
@@ -1102,3 +1126,51 @@ def test_reviewed_recovery_keeps_dataset_items_and_judges_exact(gated, monkeypat
     assert items_after == items_before
     assert all(fakes.control.evaluators[k] == v for k, v in judges_before.items())
     assert len(fakes.control.evaluators) == len(judges_before) + 1
+
+
+@pytest.mark.parametrize("field, value", [
+    ("DurableConfig", None), ("UnmodelledSecurityField", None),
+    ("Environment", {"Variables": None}), ("Environment", {"Variables": ""}),
+    ("Environment", {"Variables": []}), ("Timeout", "60"), ("Architectures", "x86_64"),
+    ("VpcConfig", {"SubnetIds": None, "SecurityGroupIds": []}),
+])
+def test_null_and_wrong_type_are_differences_never_absence(gated, monkeypatch, no_threads,
+                                                          field, value):
+    admin, member, cid, op_id, fakes, event, body = _route_case(gated, monkeypatch)
+    fakes.lam.functions[assets.function_name(op_id)]["cfg"][field] = value
+    _closed(admin, cid, op_id, fakes, body, "assistant.lambda_revision_review_unverified")
+
+
+@pytest.mark.parametrize("which", ["event_and_current_code_size", "snapshot_environment_null",
+                                   "snapshot_code_size", "event_environment_null"])
+def test_four_sides_agree_on_code_size_and_presence(gated, monkeypatch, no_threads, which):
+    admin, member, cid, op_id, fakes, event, body = _route_case(gated, monkeypatch)
+    cfg = fakes.lam.functions[assets.function_name(op_id)]["cfg"]
+    if which == "event_and_current_code_size":  # equal to each other, not to the answer
+        event["responseElements"]["codeSize"] += 1
+        cfg["CodeSize"] += 1
+    if which == "snapshot_environment_null":  # null in the accepted answer vs folded-absent
+        _edit(op_id, lambda op, rs: next(r for r in rs if r["key"] == "lambda_function")["result"]
+              ["create_response"].__setitem__("Environment", None))
+    if which == "snapshot_code_size":
+        _edit(op_id, lambda op, rs: next(r for r in rs if r["key"] == "lambda_function")["result"]
+              ["create_response"].__setitem__("CodeSize", 1))
+    if which == "event_environment_null":
+        event["responseElements"]["environment"] = None
+    _closed(admin, cid, op_id, fakes, body, "assistant.lambda_revision_review_unverified")
+    assert "CodeSize" in _res(_op(op_id), "lambda_function")["result"]["create_response"]
+
+
+def test_fold_envelopes_only_folds_well_formed_empty_shapes():
+    fold = assets._fold_envelopes
+    assert fold({"Environment": {}}) == {} and fold({"Environment": {"Variables": {}}}) == {}
+    assert fold({"VpcConfig": {"SubnetIds": [], "SecurityGroupIds": [], "VpcId": "",
+                               "Ipv6AllowedForDualStack": False}}) == {}
+    for malformed in ({"Variables": None}, {"Variables": ""}, {"Variables": []}, None,
+                      {"Variables": {}, "Error": {}}):
+        assert fold({"Environment": malformed}) == {"Environment": malformed}
+    assert fold({"Layers": None}) == {"Layers": None} and fold({"Layers": [{}]}) == {"Layers": [{}]}
+    assert "VpcConfig" in fold({"VpcConfig": {"SubnetIds": None}})
+    assert assets._members_differ({"A": None}, {}) == ["A"]
+    assert assets._members_differ({"A": 1}, {"A": True}) == ["A"]
+    assert assets._members_differ({"A": ""}, {}) == ["A"] and assets._members_differ({}, {}) == []
