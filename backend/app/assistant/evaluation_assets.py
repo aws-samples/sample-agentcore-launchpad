@@ -772,30 +772,55 @@ FUNCTION_IDENTITY_FIELDS = ("FunctionArn", "Version", "CodeSha256", "Role", "Run
                             "Handler", "Timeout", "MemorySize", "RevisionId")
 
 
-def _function_versions(lam: Any, name: str) -> list[dict[str, Any]]:
+INVENTORY_PAGE_BUDGET = 50
+
+
+class _IncompleteInventory(RuntimeError):
+    """A paginated Lambda inventory that could NOT be read to a valid terminal page:
+    page budget exhausted with a NextMarker remaining, a repeated / unusable marker, a
+    malformed page, a missing or wrong-typed collection, or a malformed entry. Never an
+    empty or complete inventory — the caller records it and refuses ready / delete."""
+
+
+def _paged_inventory(fetch: Callable[..., Any], collection: str, identity: str, what: str,
+                     ) -> list[dict[str, Any]]:
+    """Read a Lambda ``Marker`` / ``NextMarker`` inventory to completion. Returns entries
+    ONLY after a structurally valid terminal page (no ``NextMarker``) — bounded by
+    ``INVENTORY_PAGE_BUDGET`` pages, and explicit about every reason it could not finish."""
     out: list[dict[str, Any]] = []
-    marker = None
-    for _ in range(50):
-        kwargs = {"Marker": marker} if marker else {}
-        page = lam.list_versions_by_function(FunctionName=name, **kwargs)
-        out += page.get("Versions") or []
-        marker = page.get("NextMarker")
-        if not marker:
-            break
-    return out
+    seen: set[str] = set()
+    marker: str | None = None
+    for _ in range(INVENTORY_PAGE_BUDGET):
+        page = fetch(**({"Marker": marker} if marker else {}))
+        if not isinstance(page, dict):
+            raise _IncompleteInventory(f"{what}: page is not an object")
+        entries = page.get(collection)
+        if not isinstance(entries, list):
+            raise _IncompleteInventory(f"{what}: page carries no {collection} list")
+        for e in entries:
+            if not isinstance(e, dict) or not isinstance(e.get(identity), str) \
+                    or not e.get(identity):
+                raise _IncompleteInventory(f"{what}: entry without a usable {identity}")
+        out += entries
+        nxt = page.get("NextMarker")
+        if nxt is None or nxt == "":
+            return out  # the only way out with data: a terminal page
+        if not isinstance(nxt, str) or nxt in seen or nxt == marker:
+            raise _IncompleteInventory(f"{what}: unusable or repeated NextMarker")
+        seen.add(nxt)
+        marker = nxt
+    raise _IncompleteInventory(f"{what}: {INVENTORY_PAGE_BUDGET} pages read and a NextMarker "
+                               "remains — inventory not complete")
+
+
+def _function_versions(lam: Any, name: str) -> list[dict[str, Any]]:
+    return _paged_inventory(lambda **kw: lam.list_versions_by_function(FunctionName=name, **kw),
+                            "Versions", "Version", f"versions of {name}")
 
 
 def _function_aliases(lam: Any, name: str) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    marker = None
-    for _ in range(50):
-        kwargs = {"Marker": marker} if marker else {}
-        page = lam.list_aliases(FunctionName=name, **kwargs)
-        out += page.get("Aliases") or []
-        marker = page.get("NextMarker")
-        if not marker:
-            break
-    return out
+    return _paged_inventory(lambda **kw: lam.list_aliases(FunctionName=name, **kw),
+                            "Aliases", "Name", f"aliases of {name}")
 
 
 def _resource(resources: list[dict[str, Any]], key: str) -> dict[str, Any]:
@@ -1305,8 +1330,7 @@ class _Runner:
                 published = None
             # reconcile against the real version list: exactly ONE published version
             # may carry our digest (Lambda does not re-publish unchanged code)
-            versions = [v for v in (lam.list_versions_by_function(FunctionName=name)
-                                    .get("Versions") or [])
+            versions = [v for v in _function_versions(lam, name)
                         if v.get("Version") != "$LATEST" and v.get("CodeSha256") == sha_b64]
             if published is not None and published.get("Version") not in {
                     v.get("Version") for v in versions}:
@@ -1542,7 +1566,8 @@ class _Runner:
         entry = next(e for e in plan.evaluators if e.key == res["plan_key"])
         request = self._evaluator_request(entry, res, resources)
         stored = res.get("result") or {}
-        if res.get("request") is None:
+        legacy_request = res.get("request") is not None  # persisted by an EARLIER attempt
+        if not legacy_request:
             res["request"] = request
             self.fence.save(db, op, resources, f"{res['key']}:intent")
         elif res["request"] != request:
@@ -1551,7 +1576,17 @@ class _Runner:
             # every dispatch is recorded durably BEFORE the call; an entry that never gets
             # an outcome (crash) or a lost response is uncertain forever, and no later
             # rejection can erase it — only the token replay answering with an id can
-            history = res.setdefault("create_history", [])
+            history = res.get("create_history")
+            if history is None:
+                history = res["create_history"] = []
+                if legacy_request and _uncertain_create(res):
+                    # a request persisted before dispatch histories existed, with no id
+                    # and no recorded definite rejection: an earlier create may have
+                    # succeeded — migrate that uncertainty durably, together with the new
+                    # dispatch record, BEFORE the call (a later 403 / 409 cannot erase it)
+                    history.append({"at": _now().isoformat(), "outcome": "legacy-uncertain",
+                                    "note": "request persisted by an earlier attempt without "
+                                            "an id or a recorded rejection"})
             history.append({"at": _now().isoformat(), "outcome": "dispatched"})
             self.fence.save(db, op, resources, f"{res['key']}:dispatch")
             uncertain_before = _uncertain_create(res, exclude_last=True)
@@ -1836,6 +1871,9 @@ def _attempted(r: dict[str, Any]) -> bool:
                 or r.get("create_history"))
 
 
+UNCERTAIN_OUTCOMES = ("dispatched", "lost", "legacy-uncertain")
+
+
 def _uncertain_create(r: dict[str, Any], *, exclude_last: bool = False) -> bool:
     """An evaluator create of this operation whose outcome is unknown (crash before the
     response, lost response, 5xx) and that no token replay has since resolved into an
@@ -1848,7 +1886,7 @@ def _uncertain_create(r: dict[str, Any], *, exclude_last: bool = False) -> bool:
         return bool(r.get("request")) and r.get("create_outcome") != "rejected"
     if exclude_last:
         history = history[:-1]
-    return any(e.get("outcome") in ("dispatched", "lost") for e in history)
+    return any(e.get("outcome") in UNCERTAIN_OUTCOMES for e in history)
 
 
 def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,

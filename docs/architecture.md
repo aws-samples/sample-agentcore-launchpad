@@ -1243,7 +1243,14 @@ recorded when their create/readback succeeded still matches exactly: RoleId, ARN
 policy and inline policy of the role; creationTime, ARN and retention of the log group;
 for the function the recorded published version **and** the unqualified `$LATEST`
 (FunctionArn, CodeSha256, role, runtime, handler, limits and RevisionId, captured after
-the platform's last write), the version set and the alias set. A missing published version
+the platform's last write), the version set and the alias set — both inventories read with
+the real `Marker` / `NextMarker` pagination to a structurally valid terminal page within a
+bounded page budget; an exhausted budget, a repeated or unusable marker, a page without
+its `Versions` / `Aliases` list or a malformed entry is an *incomplete* inventory (never an
+empty one) that fails provisioning and refuses cleanup. A pre-history evaluator request
+with no id and no recorded rejection is migrated into a durable `legacy-uncertain` entry
+together with the next dispatch record, before the call, so later rejections cannot erase
+it. A missing published version
 is **not** a missing function; a whole-function delete is confirmed by a bounded unqualified
 `GetFunction` NotFound before the log group and role are touched (`delete_pending` and
 dependencies retained otherwise; a pending delete is re-verified and re-driven on the next

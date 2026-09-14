@@ -844,3 +844,247 @@ def test_unexpected_cleanup_failure_is_recorded_partial_with_released_token(app_
     assert fn in fakes.lam.functions and len(fakes.control.evaluators) == 2  # nothing touched
     op = _clean(op_id, fakes)  # retryable once the fault is gone
     assert op.status == "cleaned", op.error
+
+
+# ---------------------------------------------------------------------------
+# 8. final two: demonstrably complete inventories; legacy uncertainty migrated first
+# ---------------------------------------------------------------------------
+
+
+def _pages(key, first, hidden, *, last_page, cycle=False, malformed=None):
+    calls = []
+
+    def fetch(FunctionName, Marker=None):
+        page = int(Marker or 1)
+        calls.append(page)
+        if malformed is not None and page == malformed[0]:
+            return malformed[1]
+        if page == 1:
+            return {key: copy.deepcopy(first), "NextMarker": "2"}
+        if cycle:
+            return {key: [], "NextMarker": "2"}
+        if page < last_page:
+            return {key: [], "NextMarker": str(page + 1)}
+        return {key: copy.deepcopy(hidden)}
+
+    return fetch, calls
+
+
+@pytest.mark.parametrize("kind", ["versions", "aliases"])
+def test_foreign_entry_beyond_the_page_budget_is_an_incomplete_inventory(app_ready, kind):
+    op_id, fakes, fn = _completed()
+    f = fakes.lam.functions[fn]
+    if kind == "versions":
+        hidden = [{**f["versions"]["1"], "Version": "2", "FunctionArn": f["cfg"]["FunctionArn"]
+                   + ":2", "RevisionId": "foreign"}]
+        fetch, calls = _pages("Versions", [f["cfg"], f["versions"]["1"]], hidden, last_page=51)
+        fakes.lam.list_versions_by_function = fetch
+    else:
+        fetch, calls = _pages("Aliases", [], [{"Name": "external", "FunctionVersion": "1"}],
+                              last_page=51)
+        fakes.lam.list_aliases = fetch
+    op = _clean(op_id, fakes)
+    fnr = _res(op, "lambda_function")
+    assert fnr["status"] == "delete_failed" and "not complete" in fnr["cleanup"]["note"], fnr
+    assert len(calls) == assets.INVENTORY_PAGE_BUDGET and fn in fakes.lam.functions
+    assert _res(op, "log_group")["status"] == "retained"
+    assert _res(op, "lambda_role")["status"] == "retained"
+    assert op.status == "partial"
+
+
+@pytest.mark.parametrize("fault", ["cycle", "missing-collection", "wrong-type", "bad-entry",
+                                   "bad-marker", "not-object"])
+def test_malformed_or_cyclic_inventory_pages_never_authorize_delete(app_ready, fault):
+    op_id, fakes, fn = _completed()
+    f = fakes.lam.functions[fn]
+    first = [f["cfg"], f["versions"]["1"]]
+    if fault == "cycle":
+        fetch, _ = _pages("Versions", first, [], last_page=3, cycle=True)
+    elif fault == "missing-collection":
+        fetch, _ = _pages("Versions", first, [], last_page=2, malformed=(2, {}))
+    elif fault == "wrong-type":
+        fetch, _ = _pages("Versions", first, [], last_page=2, malformed=(2, {"Versions": None}))
+    elif fault == "bad-entry":
+        fetch, _ = _pages("Versions", first, [], last_page=2,
+                          malformed=(2, {"Versions": [{"FunctionArn": "x"}]}))
+    elif fault == "bad-marker":
+        fetch, _ = _pages("Versions", first, [], last_page=2,
+                          malformed=(1, {"Versions": first, "NextMarker": 7}))
+    else:
+        fetch, _ = _pages("Versions", first, [], last_page=2, malformed=(2, ["not", "a", "page"]))
+    fakes.lam.list_versions_by_function = fetch
+    op = _clean(op_id, fakes)
+    fnr = _res(op, "lambda_function")
+    assert fnr["status"] == "delete_failed" and "_IncompleteInventory" in fnr["cleanup"]["note"]
+    assert fn in fakes.lam.functions and op.status == "partial"
+    assert _res(op, "log_group")["status"] == "retained"
+
+
+def test_missing_live_aliases_payload_is_not_an_empty_inventory(app_ready):
+    op_id, fakes, fn = _completed()
+    fakes.lam.aliases[fn] = [{"Name": "external", "FunctionVersion": "1"}]
+    fakes.lam.list_aliases = lambda **kw: {}
+    op = _clean(op_id, fakes)
+    fnr = _res(op, "lambda_function")
+    assert fnr["status"] == "delete_failed" and "no Aliases list" in fnr["cleanup"]["note"]
+    assert fn in fakes.lam.functions and op.status == "partial"
+
+
+def test_complete_multipage_inventories_still_provision_and_clean(app_ready):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    orig_versions, orig_aliases = fakes.lam.list_versions_by_function, fakes.lam.list_aliases
+    reads = {"versions": [], "aliases": []}
+
+    def versions(FunctionName, Marker=None):
+        reads["versions"].append(Marker)
+        all_v = orig_versions(FunctionName)["Versions"]
+        if Marker is None:
+            return {"Versions": all_v[:1], "NextMarker": "p2"}
+        return {"Versions": all_v[1:]}  # terminal page, no NextMarker
+
+    def aliases(FunctionName, Marker=None):
+        reads["aliases"].append(Marker)
+        if Marker is None:
+            return {"Aliases": [], "NextMarker": "p2"}
+        return {"Aliases": orig_aliases(FunctionName)["Aliases"]}  # fully read empty list
+
+    fakes.lam.list_versions_by_function, fakes.lam.list_aliases = versions, aliases
+    _run(op_id, fakes)
+    op = _op(op_id)
+    assert op.status == "succeeded", op.error
+    fnr = _res(op, "lambda_function")["result"]
+    assert fnr["versions"] == ["$LATEST", "1"] and fnr["aliases"] == []
+    assert reads["versions"][:2] == [None, "p2"] and reads["aliases"][:2] == [None, "p2"]
+    op = _clean(op_id, fakes)
+    assert op.status == "cleaned", op.error
+    assert fakes.lam.functions == {} and fakes.logs.groups == {}
+
+
+def test_incomplete_inventory_at_provisioning_never_marks_ready(app_ready):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    fn = assets.function_name(op_id)
+    fakes.lam.list_aliases = lambda **kw: {  # never reaches a terminal page
+        "Aliases": [], "NextMarker": str(int(kw.get("Marker") or 0) + 1)}
+    _run(op_id, fakes)
+    op = _op(op_id)
+    fnr = _res(op, "lambda_function")
+    assert fnr["status"] == "failed" and "not complete" in fnr["error"], fnr
+    assert "latest_readback" not in fnr["result"] and op.status == "partial"
+    assert _res(op, "lambda_permission")["status"] == "blocked"
+    assert fn in fakes.lam.functions
+
+
+def _legacy_lost_create(fakes, op_id):
+    """Produce the fc8bdd2-era ledger shape: request persisted, no id, no history, no
+    recorded rejection — by running the worker with a lost response and stripping the
+    history field this version writes (the old worker wrote none)."""
+    original = fakes.control.create_evaluator
+
+    def lost(**kw):
+        if kw["evaluatorName"] == "kid_tools":
+            fakes.control.lose_response_once = True
+        return original(**kw)
+
+    fakes.control.create_evaluator = lost
+    _run(op_id, fakes)
+    fakes.control.create_evaluator = original
+    with SessionLocal() as db:
+        op = db.get(EvaluationAssetOperation, op_id)
+        resources = json.loads(json.dumps(op.resources))
+        r = next(r for r in resources if r["key"] == "evaluator:tools")
+        assert r["request"] and not r.get("result")
+        r.pop("create_history", None)
+        op.resources = resources
+        db.commit()
+    return set(fakes.control.evaluators)
+
+
+@pytest.mark.parametrize("code, http", [("AccessDeniedException", 403),
+                                        ("ConflictException", 409)])
+def test_legacy_uncertain_request_is_migrated_before_the_first_new_dispatch(
+    app_ready, code, http
+):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    fn = assets.function_name(op_id)
+    ids = _legacy_lost_create(fakes, op_id)
+    tokens = []
+
+    def rejected(**kw):
+        tokens.append(kw["clientToken"])
+        raise ClientError({"Error": {"Code": code, "Message": "reject"},
+                           "ResponseMetadata": {"HTTPStatusCode": http}}, "CreateEvaluator")
+
+    fakes.control.create_evaluator = rejected
+    _run(op_id, fakes)
+    tools = _res(_op(op_id), "evaluator:tools")
+    outcomes = [e["outcome"] for e in tools["create_history"]]
+    assert outcomes == ["legacy-uncertain", "conflict" if http == 409 else "rejected"], outcomes
+    assert len(tokens) == 1 and assets._uncertain_create(tools)
+    assert tools["status"] == ("unknown" if http == 409 else "failed")
+    for _ in range(2):  # any number of later rejections / cleanups keep the uncertainty
+        op = _clean(op_id, fakes)
+        assert op.status == "partial" and _res(op, "evaluator:tools")["status"] == "unknown"
+        assert ids & set(fakes.control.evaluators) and fn in fakes.lam.functions
+        for k in CHAIN:
+            assert _res(op, k)["status"] == "retained", k
+        _run(op_id, fakes)
+    assert fakes.control.create_calls == 2  # the legacy create + nothing new was created
+    # the exact token replay answering with a verified identity resolves it
+    def replay(**kw):
+        return fakes.control.__class__.create_evaluator(fakes.control, **kw)
+
+    fakes.control.create_evaluator = replay
+    _run(op_id, fakes)
+    tools = _res(_op(op_id), "evaluator:tools")
+    assert tools["status"] == "ready" and tools["result"]["evaluator_id"] in ids
+    assert op.status != "cleaned"
+    op = _clean(op_id, fakes)
+    assert op.status == "cleaned", op.error
+
+
+def test_legacy_migration_survives_a_crash_before_the_response(app_ready):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    fn = assets.function_name(op_id)
+    ids = _legacy_lost_create(fakes, op_id)
+
+    def crash(**kw):
+        raise _Crash()
+
+    fakes.control.create_evaluator = crash
+    _run_expect_crash(op_id, fakes)
+    tools = _res(_op(op_id), "evaluator:tools")
+    assert [e["outcome"] for e in tools["create_history"]] == ["legacy-uncertain", "dispatched"]
+    _fence_out_then_restore(op_id, fakes)
+    op = _clean(op_id, fakes)
+    assert op.status == "partial" and _res(op, "evaluator:tools")["status"] == "unknown"
+    assert ids & set(fakes.control.evaluators) and fn in fakes.lam.functions
+    assert _res(op, "lambda_role")["status"] == "retained"
+
+
+def test_fresh_first_request_is_not_uncertain(app_ready):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    original = fakes.control.create_evaluator
+
+    def rejected(**kw):
+        if kw["evaluatorName"] != "kid_tools":
+            return original(**kw)
+        raise ClientError({"Error": {"Code": "ConflictException", "Message": "taken"},
+                           "ResponseMetadata": {"HTTPStatusCode": 409}}, "CreateEvaluator")
+
+    fakes.control.create_evaluator = rejected
+    _run(op_id, fakes)
+    tools = _res(_op(op_id), "evaluator:tools")
+    assert [e["outcome"] for e in tools["create_history"]] == ["conflict"]
+    assert tools["status"] == "conflict" and not assets._uncertain_create(tools)
+    op = _clean(op_id, fakes)
+    assert op.status == "cleaned", op.error
