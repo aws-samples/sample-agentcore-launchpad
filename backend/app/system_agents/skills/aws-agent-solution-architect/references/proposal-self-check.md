@@ -21,7 +21,9 @@ fix the block before emitting it. Every rule here is a rule the platform enforce
 - [ ] `name`: `^[a-z][a-z0-9-]{2,47}$`; not starting with `launchpad-`, `harness-`,
       `system-`; not the name of an Agent already in the catalog.
 - [ ] `model_id` / `model_source` (`bedrock` | `mantle`).
-- [ ] `system_prompt`: 1–20,000 chars.
+- [ ] `system_prompt`: 1–20,000 chars — and lean: identity, goal, hard boundaries,
+      escalation, tone, language; aim for 600–1,500 chars. No scenario scripts, no
+      golden tests pasted in; coverage comes from the Evaluation → Optimization loop.
 - [ ] `tools`, `skills`, `knowledge_bases`: catalog keys/ids from the preamble ONLY,
       no repeats, ≤ 20 / 10 / 10. Anything missing from the catalog → `manual_tasks`.
 - [ ] `memory`: `disabled` | `workspace`.
@@ -45,6 +47,12 @@ as a whole — after the member has already read and approved the design.
 
 - [ ] **`golden_test_ids` is `[]` on every evaluator.** Not a subset, not "the tests it
       is meant for". (A list naming every scenario is tolerated but pointless.)
+- [ ] Ready-made first: every `existing` entry uses an `evaluator_id` copied from the
+      preamble's "Evaluators" list (built-in / third-party); every custom `judge` or
+      `code` entry scores something no listed evaluator scores and says so in
+      `description`. Harmfulness, toxicity, bias, PII, refusal, instruction following,
+      helpfulness, relevance, conciseness, task completion → listed evaluators, never a
+      custom judge.
 - [ ] For every judge and code rule, ask: *is it true in EVERY scenario?*
   - Yes (no tool calls; never diagnoses; never claims to have contacted anyone;
     always the customer's language) → keep it as an evaluator.

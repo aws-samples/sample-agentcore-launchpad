@@ -762,6 +762,15 @@ export interface AssistantCatalog {
   tools: AssistantCatalogTool[];
   skills: { key: string; name: string; description: string; content_digest?: string | null }[];
   knowledge_bases: { kb_id: string; name: string; description: string }[];
+  /** Ready-made evaluators a proposal may adopt as `kind: existing` (absent on
+   *  snapshots taken before the list existed). */
+  evaluators?: {
+    evaluator_id: string;
+    level: string;
+    source: "builtin" | "third_party";
+    provider?: string;
+    requires?: string;
+  }[];
   warnings: string[];
   resources?: {
     memory_arn: string | null;

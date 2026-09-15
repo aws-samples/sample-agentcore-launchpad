@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.2.0
+version: 1.3.0
 ---
 
 # AWS Agent Solution Architect
@@ -174,9 +174,11 @@ Define "good" before building. Cover at least:
   items refused by default;
 - **dimensions**: goal completion, tools and actions, safety and PII, cost and latency,
   faithfulness, policy compliance, tone, escalation to a human;
-- **scorers**: code rules first; LLM-as-a-judge only for semantic dimensions and only
-  calibrated against a subject-matter-expert golden set; humans own the gold standard,
-  sampling and arbitration;
+- **scorers**: ready-made evaluators first (built-in, then the account's third-party
+  ones), code rules for exact invariants, a custom LLM-as-a-judge only for a semantic
+  dimension no ready-made evaluator scores and only calibrated against a
+  subject-matter-expert golden set; humans own the gold standard, sampling and
+  arbitration;
 - a **recommended evaluator registry**: for each evaluator its id or name, type
   (code-based, LLM-as-a-judge or human), level (session / trace / span), input signal,
   scoring method, suggested threshold, AWS implementation path, owner and failure
@@ -221,9 +223,33 @@ Before finishing, run the checklist in `references/deliverable-template.md`. If 
 customer only wants a discussion, give the structured design and do not produce the
 formal document early.
 
+### First-version system prompt: lean by design
+
+The `system_prompt` of the proposal is a **baseline, not the finished prompt**. Write it
+short — identity and audience, the goal, the hard boundaries the golden tests enforce
+(never-do list, escalation triggers), tone and language; aim for 600–1,500 characters.
+Do not enumerate scenario scripts, restate every golden test or pre-empt every edge case:
+in Launchpad the prompt is iterated afterwards through Evaluation → Optimization
+(evaluate the deployed Agent against the dataset, take the prompt recommendation, A/B it
+against the baseline), and a long first prompt hides which sentence caused which score.
+Tell the customer this explicitly when handing over the proposal: "v1 prompt is a lean
+baseline; coverage comes from the evaluation loop, not from more prompt text."
+
 ## Evaluator catalogue gate
 
 The evaluation section first layers evaluators as built-in, third-party, custom-derived,
 custom, custom-code and human, then verifies real ids against the current official
 documentation. Business evaluator ids such as `EV-*` are project-defined custom ids and
 must be labelled as such.
+
+In a Launchpad proposal the order is binding, not a preference: **(1)** the ready-made
+evaluators the protocol lists under "Evaluators" — AWS built-ins (`Builtin.*`) and the
+account's read-only third-party evaluators (`ThirdParty.*`) — referenced as
+`kind: existing` by their exact id; **(2)** per-scenario `assertions`, scored by the
+assertions judge; **(3)** a custom `judge` or `code` rule only for a requirement neither
+of the above can score (an exact literal that must never appear, a tool-count invariant,
+a domain rubric no built-in covers), with the `description` naming the listed evaluator
+that was considered and why it falls short. Safety and quality dimensions —
+harmfulness, toxicity, bias, PII leakage, refusal, instruction following, helpfulness,
+relevance, conciseness, task completion — are covered by listed evaluators; do not
+re-implement them as custom judges. An id that is not in the list is rejected.

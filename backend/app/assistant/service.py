@@ -63,6 +63,7 @@ from app.assistant.principal import principal_of
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
 from app.deployer.pipeline import create_deployment
+from app.evaluation import agentcore_eval as ac
 from app.models.assistant import AssistantConversation, AssistantMessage, AssistantProposal
 from app.models.ledger import Agent, Job, Workspace
 from app.routers.auth import Identity
@@ -142,7 +143,15 @@ members and nothing else:
   `launchpad-`, `harness-` or `system-`
 - `model_id` (string) and `model_source` (`"bedrock"` or `"mantle"`); default
   `{proposal_contract.DEFAULT_MODEL_ID}` / `"bedrock"`
-- `system_prompt`: the agent's full system prompt (≤ 20000 chars)
+- `system_prompt`: the agent's FIRST-VERSION system prompt — deliberately lean
+  (aim for 600–1500 characters, hard cap 20000): identity and audience, the goal, the
+  hard boundaries the golden tests enforce (what it must never do, when to escalate),
+  tone and language. Do NOT try to cover every case, enumerate scenario scripts or
+  paste the golden tests into it: the prompt is iterated afterwards through
+  Launchpad's Evaluation → Optimization loop (evaluate against the dataset, take the
+  prompt recommendation, A/B it), so a short baseline that the evaluators can improve
+  is worth more than a long one nobody can attribute regressions to. Say this in the
+  reply when you hand over the proposal.
 - `tools`: list of catalog **tool keys** from the list below (may be empty)
 - `skills`: list of catalog **skill keys** from the list below (may be empty)
 - `knowledge_bases`: list of catalog **knowledge base ids** from the list below
@@ -161,9 +170,18 @@ members and nothing else:
   "expected_response"?}}], "expected_trajectory": ["tool", ...], "assertions":
   ["must …", "Must not: …"]}}` — ONE runtime session whose turns replay in order,
   scored only by AgentCore evaluators — OR blocked: `{{"golden_test_id", "reason"}}`.
+  **Evaluator selection order:** first the ready-made evaluators listed under
+  "Evaluators" below (`kind: existing` — AWS built-ins and the account's third-party
+  evaluators, referenced by their exact `evaluator_id`; `Builtin.Refusal`,
+  `Builtin.Harmfulness`, `Builtin.InstructionFollowing`, `ThirdParty.DeepEval.Toxicity`
+  and friends cover most safety and quality dimensions), then per-scenario
+  `assertions` scored by the assertions judge, and only when neither can score a
+  requirement a custom `judge` or `code` rule — each custom entry states in its
+  `description` which listed evaluator was considered and why it does not suffice. An
+  `evaluator_id` that is not in the list makes the proposal invalid.
   Each evaluator is one of: `{{"kind": "existing", "key", "title",
-  "evaluator_id": "Builtin.<Name>", "golden_test_ids": []}}`, `{{"kind": "judge",
-  "key", "title", "name", "level": "TRACE|SESSION", "instructions" (with
+  "evaluator_id": "<exact id from the Evaluators list>", "golden_test_ids": []}}`,
+  `{{"kind": "judge", "key", "title", "name", "level": "TRACE|SESSION", "instructions" (with
   `{{context}}`/`{{assistant_turn}}` or the session placeholders), "golden_test_ids"}}`
   or `{{"kind": "code", "key", "title", "name", "level", "rules": {{"version": 1, "checks":
   [...]}}, "golden_test_ids"}}`. Each code check is `{{"id", "type", …}}` with EXACTLY the
@@ -255,6 +273,17 @@ def catalog_section(catalog: dict[str, Any]) -> str:
         for k in (catalog.get("knowledge_bases") or [])[:CATALOG_MAX_ENTRIES]
     ] or ["- (none)"]
     lines.append("")
+    evaluators = catalog.get("evaluators")
+    if evaluators is not None:
+        lines.append("Evaluators (`evaluator_id` for `kind: existing` — prefer these; a custom "
+                     "judge/code rule only for what none of them scores):")
+        lines += [
+            f"- `{e['evaluator_id']}` — {e.get('level', '')}"
+            + (f" · {e['provider']}" if e.get("provider") else "")
+            + (f" · needs {e['requires']}" if e.get("requires") else "")
+            for e in evaluators[:CATALOG_MAX_ENTRIES]
+        ] or ["- (none)"]
+        lines.append("")
     lines.append("Memory: " + ("`disabled` or `workspace` (shared memory available)"
                               if resources.get("memory_arn") else
                               "`disabled` only (this workspace has no shared memory)"))
@@ -504,11 +533,13 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
             kb_gateway = gateway_identity(detail)
         except Exception as exc:  # unreadable → not mountable here (never created)
             warnings.append(f"knowledge-base gateway unreadable: {_short(exc)}")
+    evaluators = catalog_evaluators(workspace, warnings)
     return {
         "fetched_at": datetime.now(UTC).isoformat(),
         "tools": tools,
         "skills": skills,
         "knowledge_bases": kbs,
+        "evaluators": evaluators,
         "warnings": warnings,
         "resources": {
             "memory_arn": res.get("memory_arn"),
@@ -524,6 +555,32 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
             "region": workspace.region,
         },
     }
+
+
+def catalog_evaluators(workspace: WorkspaceContext, warnings: list[str]) -> list[dict[str, Any]]:
+    """The ready-made evaluators a proposal may reference as ``kind: existing``: the
+    AWS built-ins (a static list — no call) plus the account's third-party evaluators
+    (one read-only ``ListEvaluators``). Custom evaluators are deliberately absent: the
+    architect proposes new judges/rules explicitly, it never adopts another agent's.
+    A failing listing degrades to the built-ins plus a warning."""
+    out = [
+        {"evaluator_id": eid, "level": level, "source": "builtin"}
+        for eid, level in ac.ALL_BUILTIN_EVALUATORS.items()
+    ] + [
+        {"evaluator_id": eid, "level": level, "source": "builtin",
+         "requires": "expected_trajectory"}
+        for eid, level in ac.TRAJECTORY_EVALUATORS.items()
+    ]
+    try:
+        for ev in ac.list_evaluators(control_client(workspace)):
+            eid = str(ev.get("evaluatorId") or "")
+            if not eid.startswith("ThirdParty.") or ev.get("status") not in (None, "ACTIVE"):
+                continue
+            out.append({"evaluator_id": eid, "level": ev.get("level") or "TRACE",
+                        "source": "third_party", "provider": ev.get("provider") or ""})
+    except Exception as exc:  # the built-ins still stand
+        warnings.append(f"third-party evaluator listing unavailable: {_short(exc)}")
+    return out[:CATALOG_MAX_ENTRIES]
 
 
 # ---------------------------------------------------------------------------

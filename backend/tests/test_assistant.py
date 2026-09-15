@@ -719,6 +719,85 @@ def test_protocol_forbids_subset_routing_and_points_at_the_self_check():
     assert "proposal-self-check.md" in (bundle / "SKILL.md").read_text(encoding="utf-8")
 
 
+def test_protocol_asks_for_a_lean_first_prompt_and_ready_made_evaluators_first():
+    """Two product decisions: v1 prompts are short baselines that the Evaluation →
+    Optimization loop iterates, and evaluators come from the built-in / third-party
+    list before anything custom is drafted."""
+    text = service.PROTOCOL_PREAMBLE
+    assert "FIRST-VERSION system prompt" in text and "600–1500 characters" in text
+    assert "Evaluation → Optimization loop" in text
+    assert "Evaluator selection order" in text and "kind: existing" in text
+    skill = (ARCHITECT.skill_path() / "SKILL.md").read_text(encoding="utf-8")
+    assert "lean by design" in skill and "ready-made evaluators first" in skill
+
+
+def test_catalog_lists_builtin_and_third_party_evaluators_and_gates_existing_ids():
+    """The catalog snapshot carries the evaluators a proposal may adopt as
+    ``kind: existing``: every AWS built-in (static) plus the account's ACTIVE
+    ``ThirdParty.*`` evaluators from one read-only listing; custom evaluators are left
+    out, a failed listing degrades to the built-ins, and the section names them. An
+    ``existing`` id outside the list is a reference error once the snapshot has one."""
+    from app.evaluation import agentcore_eval as ac
+
+    class Control:
+        def __init__(self, fail=False):
+            self.fail = fail
+
+        def list_evaluators(self, **kwargs):
+            if self.fail:
+                raise RuntimeError("AccessDenied")
+            return {"evaluators": [
+                {"evaluatorId": "ThirdParty.DeepEval.Toxicity", "level": "TRACE",
+                 "status": "ACTIVE", "provider": "DeepEval"},
+                {"evaluatorId": "ThirdParty.AutoEval.Humor", "level": "TRACE",
+                 "status": "CREATING", "provider": "AutoEval"},
+                {"evaluatorId": "mine-abc123", "evaluatorType": "Custom", "status": "ACTIVE"},
+                {"evaluatorId": "Builtin.Helpfulness", "level": "TRACE"},
+            ]}
+
+    class WS:
+        pass
+
+    ok, failing = Control(), Control(fail=True)
+    warnings: list[str] = []
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(service, "control_client", lambda workspace: ok)
+        listed = service.catalog_evaluators(WS(), warnings)
+    ids = [e["evaluator_id"] for e in listed]
+    assert set(ac.ALL_BUILTIN_EVALUATORS) <= set(ids)
+    assert set(ac.TRAJECTORY_EVALUATORS) <= set(ids)
+    assert ids.count("Builtin.Helpfulness") == 1  # the live listing does not duplicate it
+    assert "ThirdParty.DeepEval.Toxicity" in ids
+    assert "ThirdParty.AutoEval.Humor" not in ids and "mine-abc123" not in ids
+    assert warnings == []
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(service, "control_client", lambda workspace: failing)
+        degraded = service.catalog_evaluators(WS(), warnings)
+    assert [e["evaluator_id"] for e in degraded] == [
+        e for e in ac.ALL_BUILTIN_EVALUATORS] + list(ac.TRAJECTORY_EVALUATORS)
+    assert warnings and "third-party evaluator listing unavailable" in warnings[0]
+
+    section = service.catalog_section(_catalog(evaluators=listed))
+    assert "Evaluators (`evaluator_id` for `kind: existing`" in section
+    assert "- `ThirdParty.DeepEval.Toxicity` — TRACE · DeepEval" in section
+    assert "- `Builtin.TrajectoryInOrderMatch` — SESSION · needs expected_trajectory" in section
+    assert "Evaluators (" not in service.catalog_section(_catalog())  # older snapshots
+
+    seed = {"evaluators": [{"kind": "existing", "key": "tox", "title": "T",
+                            "evaluator_id": "ThirdParty.DeepEval.Toxicity"}]}
+    content, errors = contract.parse_content({**VALID_PROPOSAL, "evaluation_plan": seed})
+    assert content is not None, errors
+    assert contract.reference_errors(content, _catalog(evaluators=listed)) == []
+    assert contract.reference_errors(content, _catalog()) == []  # no list → not gated
+    bad = {**seed, "evaluators": [{**seed["evaluators"][0],
+                                   "evaluator_id": "ThirdParty.Nope.Missing"}]}
+    content, errors = contract.parse_content({**VALID_PROPOSAL, "evaluation_plan": bad})
+    assert content is not None, errors
+    assert contract.reference_errors(content, _catalog(evaluators=listed)) == [
+        "evaluation_plan.evaluators.tox: 'ThirdParty.Nope.Missing' is not a built-in or "
+        "third-party evaluator available in this workspace"]
+
+
 def test_concurrent_turns_on_one_conversation_admit_exactly_one(client, ready, harness):
     """While turn 1 is streaming, a second request is refused before it opens a stream
     and before any data-plane call; the claim is released when the first completes."""
@@ -1562,6 +1641,11 @@ def test_fetch_catalog_composes_live_identity_from_the_platform_helpers(monkeypa
                     "gatewayUrl": "https://kb.example/mcp", "authorizerType": "CUSTOM_JWT",
                     "authorizerConfiguration": KB_AUTHORIZER, "status": "READY"}
 
+        def list_evaluators(self, **kwargs):
+            return {"evaluators": [{"evaluatorId": "ThirdParty.DeepEval.Toxicity",
+                                    "level": "TRACE", "status": "ACTIVE",
+                                    "provider": "DeepEval"}]}
+
     from app.services import workspace as workspace_mod
 
     monkeypatch.setattr(workspace_mod.WorkspaceContext, "client", lambda self, name, **k: S3())
@@ -1575,6 +1659,7 @@ def test_fetch_catalog_composes_live_identity_from_the_platform_helpers(monkeypa
     assert cat["resources"]["kb_gateway"] == KB_GATEWAY_LIVE
     assert [k["kb_id"] for k in cat["knowledge_bases"]] == ["KB123ABC"]
     assert cat["resources"]["memory_arn"] == RESOURCES["memory_arn"]
+    assert cat["evaluators"][-1]["evaluator_id"] == "ThirdParty.DeepEval.Toxicity"
     assert cat["warnings"] == []
     # a gateway that cannot be resolved is not attachable — never a guessed identity
     monkeypatch.setattr(registry_console, "resolve_gateway_attachments",

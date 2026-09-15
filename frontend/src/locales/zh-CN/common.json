@@ -4091,6 +4091,8 @@
     "catalogTools": "工具",
     "catalogSkills": "技能",
     "catalogKbs": "知识库",
+    "catalogEvaluators": "评估器",
+    "catalogEvaluatorsCount": "{{builtin}} 个内置 + {{third}} 个第三方（只读）——提案优先采用它们，再考虑自定义",
     "catalogNone": "无",
     "catalogWarnings": "目录警告：{{list}}",
     "proposalTitle": "提案",

@@ -388,6 +388,13 @@ def reference_errors(content: ProposalContent, catalog: dict[str, Any]) -> list[
         )
     if content.memory == "workspace" and not resources.get("memory_arn"):
         errors.append("memory: this workspace has no shared AgentCore Memory to bind")
+    known = {e.get("evaluator_id") for e in catalog.get("evaluators") or []}
+    if known and content.evaluation_plan is not None:  # older snapshots carry no list
+        for e in content.evaluation_plan.evaluators:
+            if e.get("kind") == "existing" and e.get("evaluator_id") not in known:
+                errors.append(f"evaluation_plan.evaluators.{e.get('key')}: "
+                              f"'{e.get('evaluator_id')}' is not a built-in or third-party "
+                              "evaluator available in this workspace")
     if is_reserved_name(content.name):
         errors.append(f"name: '{content.name}' is reserved for a system-managed preset")
     if content.name.startswith(_RESERVED_PREFIXES):

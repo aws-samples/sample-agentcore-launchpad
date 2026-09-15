@@ -1455,6 +1455,17 @@ function CatalogSummary({
             : ""}
         </span>
       </div>
+      {catalog.evaluators && (
+        <div className="kv">
+          <span className="k">{t("assistantPage.catalogEvaluators")}</span>
+          <span className="v" data-testid="catalog-evaluators">
+            {t("assistantPage.catalogEvaluatorsCount", {
+              builtin: catalog.evaluators.filter((e) => e.source === "builtin").length,
+              third: catalog.evaluators.filter((e) => e.source === "third_party").length,
+            })}
+          </span>
+        </div>
+      )}
       <div className="kv">
         <span className="k">{t("assistantPage.field.memory")}</span>
         <span className="v">

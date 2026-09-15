@@ -4091,6 +4091,8 @@
     "catalogTools": "tools",
     "catalogSkills": "skills",
     "catalogKbs": "knowledge bases",
+    "catalogEvaluators": "evaluators",
+    "catalogEvaluatorsCount": "{{builtin}} built-in + {{third}} third-party (read-only) — proposals adopt these before drafting custom ones",
     "catalogNone": "none",
     "catalogWarnings": "Catalog warnings: {{list}}",
     "proposalTitle": "PROPOSAL",

@@ -620,7 +620,13 @@ AgentCore Memory 及其全部策略）；“仅短期”的退出无法表达，
 **并包含前置条件**：Gateway 工具需要已解析的 Gateway ARN + 出站认证身份，技能需要可读的包内容，
 挂载知识库需要 Workspace **既有**且就绪的知识库 Gateway + OAuth 提供方（在没有 Gateway 的地方挂载
 知识库属于手动工作——本流程绝不创建 Gateway），`workspace` 记忆需要共享的 `memory_arn`；预置
-保留名与 `launchpad-`/`harness-`/`system-` 前缀被拒绝。`to_agent_spec` 是映射到 `AgentSpec` 的
+保留名与 `launchpad-`/`harness-`/`system-` 前缀被拒绝。快照还列出种子可以按 `kind: existing` 采用的
+**现成评估器**——AWS 内置（静态列表）加上账户中 ACTIVE 的 `ThirdParty.*` 评估器（一次只读
+`ListEvaluators`；自定义评估器不在其列；列举失败时退化为仅内置并附警告）——不在列表中的 `existing`
+id 是引用错误。协议把这份列表定为首选（内置 / 第三方 → 逐场景 `assertions` → 只有二者都无法打分时才
+自定义 judge 或代码规则），并要求**精简的第一版 `system_prompt`**（身份、目标、硬边界、升级触发、
+语气；约 600–1500 字符）：提示词之后通过 Evaluation → Optimization 循环迭代，而不是一开始就写全。
+`to_agent_spec` 是映射到 `AgentSpec` 的
 唯一路径，`resource_bindings` 是映射到**已审阅部署身份**的唯一路径：spec 加上每个资源的 Gateway
 ARN/名称/记录与出站认证身份（提供方 ARN、授权类型、scope——绝非凭据值）、技能记录 ID + S3 路径 +
 内容摘要、知识库 Gateway 前置资源、记忆模式 + ARN。每次模型输出（以及成员通过 `PUT …/proposal`
