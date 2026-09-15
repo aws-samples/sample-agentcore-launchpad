@@ -9,7 +9,7 @@ from unittest.mock import ANY, MagicMock
 
 import app.evaluation.service as svc
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
-from app.evaluation.models import EvalDataset
+from app.evaluation.models import EvalDataset, EvalRun
 from app.models.ledger import Agent
 from app.services import aws_clients
 
@@ -164,6 +164,20 @@ def test_run_failure_recorded(client, monkeypatch):
         time.sleep(0.1)
     assert run["status"] == "failed"
     assert "FAILED" in run["error"]
+    # a failed run can be removed from the ledger; the AWS batch (if any) is left alone
+    # and named in the answer; a completed run is history and is refused
+    res = client.delete(f"/api/eval/runs/{run_id}")
+    assert res.status_code == 200, res.text
+    assert res.json()["deleted"] is True and res.json()["status"] == "failed"
+    assert res.json()["aws_batch_left_in_place"] == run["batch_eval_id"]
+    assert client.get(f"/api/eval/runs/{run_id}").status_code == 404
+    assert client.delete(f"/api/eval/runs/{run_id}").status_code == 404
+    done = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent.id, agent_name=agent.name,
+                   status="completed")
+    db.add(done)
+    db.commit()
+    res = client.delete(f"/api/eval/runs/{done.id}")
+    assert res.status_code == 409 and res.json()["code"] == "run.not_deletable"
     db.close()
 
 

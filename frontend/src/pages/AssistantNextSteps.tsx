@@ -145,6 +145,20 @@ export function AssistantNextSteps({
             ? t("assistantNext.run.oneAtATime")
             : undefined;
 
+  const [removing, setRemoving] = useState<string | null>(null);
+  const removeRun = async (run: EvaluationRunInfo) => {
+    setRemoving(run.id);
+    try {
+      await api.deleteEvaluationRun(run.id);
+      toast(t("assistantNext.run.removedToast", { id: run.id.slice(0, 8) }), "good");
+      setRuns((rs) => (rs ?? []).filter((r) => r.id !== run.id));
+    } catch (err) {
+      toast(t("common.actionFailed", { msg: errorMessage(err) }));
+    } finally {
+      setRemoving(null);
+    }
+  };
+
   const agentIdForRuns = deployed?.agentId ?? null;
   const loadRuns = useCallback(async () => {
     if (!agentIdForRuns || !datasetId) {
@@ -328,6 +342,20 @@ export function AssistantNextSteps({
                     <Link to="/evaluation" style={{ color: "var(--amber)", textDecoration: "none" }}>
                       {t("assistantNext.run.openRuns")} ▸
                     </Link>
+                    {canRun && (run.status === "failed" || run.status === "stopped") && (
+                      <button
+                        type="button"
+                        className="rowact"
+                        title={t("assistantNext.run.remove")}
+                        aria-label={t("assistantNext.run.remove")}
+                        data-testid={`next-run-remove-${run.id}`}
+                        disabled={removing === run.id}
+                        onClick={() => void removeRun(run)}
+                        style={{ marginLeft: 4 }}
+                      >
+                        ✕
+                      </button>
+                    )}
                     {run.error && (
                       <div style={{ color: "var(--crit)", flexBasis: "100%", whiteSpace: "pre-wrap" }}>
                         {run.error}

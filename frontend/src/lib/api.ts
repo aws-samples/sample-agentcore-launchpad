@@ -3185,6 +3185,15 @@ export const api = {
     request<EvaluationRunInfo>(`/api/eval/runs/${encodeURIComponent(runId)}/stop`, {
       method: "POST",
     }),
+  /** `DELETE /api/eval/runs/{id}` — removes the ledger row of a `failed` or `stopped`
+   *  run (no result to keep). Completed runs are history and answer 409
+   *  `run.not_deletable`, as do active runs (stop first). An AWS batch that existed is
+   *  left in place and named in the answer. Needs `eval.run`. */
+  deleteEvaluationRun: (runId: string) =>
+    request<{ deleted: boolean; run_id: string; status: string;
+              aws_batch_left_in_place: string | null }>(
+      `/api/eval/runs/${encodeURIComponent(runId)}`, { method: "DELETE" },
+    ),
   /** `POST /api/eval/runs` — the same request the New Run form sends (dataset
    *  scope, evaluators mode). Needs `eval.run`; invokes the agent and starts a
    *  billable batch evaluation. */

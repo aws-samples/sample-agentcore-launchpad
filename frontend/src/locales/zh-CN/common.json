@@ -2185,6 +2185,10 @@
       "batch": "BATCH ID",
       "applied": "已选评估器",
       "failureReason": "失败原因：",
+      "remove": {
+        "action": "移除",
+        "toast": "{{run}} 已从历史中移除（若存在 AWS 批量评估，保持不动）。"
+      },
       "stop": {
         "action": "停止",
         "confirmTitle": "停止此评估运行？",
@@ -4353,7 +4357,9 @@
       "historyTitle": "该 Agent 在此 Dataset 上的运行（共 {{n}} 次，最新在前）",
       "meanScore": "{{n}} 个评估器均分 {{mean}}",
       "oneAtATime": "该 Agent 在此 Dataset 上仍有一次运行未结束——请等它完成（或在评估页停止），再启动新的运行。",
-      "tooManyEvaluators": "已就绪 {{n}} 个评估器，但一次批量评估最多应用 {{max}} 个——请打开「新建运行」取消勾选重叠的评估器（其余参数完全相同）。"
+      "tooManyEvaluators": "已就绪 {{n}} 个评估器，但一次批量评估最多应用 {{max}} 个——请打开「新建运行」取消勾选重叠的评估器（其余参数完全相同）。",
+      "remove": "从历史中移除这条失败的运行",
+      "removedToast": "已移除运行 {{id}}"
     },
     "iterate": {
       "title": "查看分数与追踪，然后迭代",

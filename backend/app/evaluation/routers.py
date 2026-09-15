@@ -1364,6 +1364,37 @@ def stop_run(
     return _run_out(service.request_stop(run.id, workspace=ws.context))
 
 
+DELETABLE_RUN_STATUSES = ("failed", "stopped")
+
+
+@router.delete("/runs/{run_id}")
+def delete_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Remove the ledger row of a run that produced no result — ``failed`` or
+    ``stopped``. Completed runs are the evaluation history and stay; an active run is
+    stopped first (409 ``run.not_deletable``). Only the row goes: a batch evaluation that
+    reached AWS is left as it is (AWS stays the source of truth; the row was the
+    console's pointer to it, and the response says whether one existed)."""
+    run = db.get(EvalRun, run_id)
+    if run is None or run.workspace_id != ws.id:
+        raise NotFoundError("run.not_found", "run not found")
+    if run.status not in DELETABLE_RUN_STATUSES:
+        raise AppError(
+            "run.not_deletable",
+            f"run {run_id} is {run.status}; only failed or stopped runs can be removed "
+            "(stop an active run first; completed runs are kept as history)",
+            {"status": run.status}, status_code=409,
+        )
+    batch_id = run.batch_eval_id
+    db.delete(run)
+    db.commit()
+    return {"deleted": True, "run_id": run_id, "status": run.status,
+            "aws_batch_left_in_place": batch_id}
+
+
 @router.get("/queue")
 def queue_state(
     db: Session = Depends(get_db),

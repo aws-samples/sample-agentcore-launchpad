@@ -380,6 +380,20 @@ export function Evaluation() {
     }
   };
 
+  const [removeBusy, setRemoveBusy] = useState<string | null>(null);
+  const removeRun = async (run: RunInfo) => {
+    setRemoveBusy(run.id);
+    try {
+      await api.deleteEvaluationRun(run.id);
+      toast(t("evalPage.runs.remove.toast", { run: `run-${run.id.slice(0, 6)}` }));
+      void refresh();
+    } catch (err) {
+      toast(t("common.actionFailed", { msg: errorMessage(err) }));
+    } finally {
+      setRemoveBusy(null);
+    }
+  };
+
   const stopRun = async (run: RunInfo) => {
     setStopBusy(run.id);
     try {
@@ -1010,6 +1024,22 @@ export function Evaluation() {
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                     {statusChip(run)}
                     {isActiveRun(run) && stopButton(run, `run-stop-${run.id}`)}
+                    {(run.status === "failed" || run.status === "stopped") && (
+                      <button
+                        type="button"
+                        className="rowact"
+                        title={t("evalPage.runs.remove.action")}
+                        aria-label={t("evalPage.runs.remove.action")}
+                        data-testid={`run-remove-${run.id}`}
+                        disabled={removeBusy === run.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void removeRun(run);
+                        }}
+                      >
+                        ✕
+                      </button>
+                    )}
                   </span>
                 </td>
               </tr>
