@@ -48,6 +48,10 @@ data/harness-export/
 # Local upstream clone the Skill Lab vendored subset (vendor/skillopt, tracked)
 # is copied from — never part of this public repo.
 SkillEvalOpt_Studio/
+# Kiro/KiroCrew share package of the solution-architect agent (installer, .docx guide,
+# 30 MB internal whitepaper PDF). Launchpad's own copy of that skill is tracked under
+# backend/app/system_agents/skills/; this bundle targets another tool and stays local.
+aws-agent-solution-architect-kirocrew/
 
 # --- security review artifacts (kept local) ---
 # The threat model names still-unmitigated issues with file:line detail, and this
