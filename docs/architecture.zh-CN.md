@@ -836,8 +836,15 @@ Agent 从不被触碰；批准 Agent 不等于授权创建云端评估资源。
   State / StateReasonCode、LastModified、已批准配置、请求 ID；旁边是 `initial_revision_id`），等待
   `State = Active` **且** `LastUpdateStatus = Successful`（有界；`InProgress` / `Failed` / 缺失状态不能发布，是普通的可
   重试失败），RevisionId 未变时记录 `settled_revision_id`；当自有、已接受、从未发布的创建**仅** RevisionId 变化时，
-  仍记为 `conflict`，并标记 `review.kind = initial_revision_changed`（附观察到的 RevisionId / LastModified）。不做任何
-  自动重钉：相同摘要与角色只是可下载的内容，被替换的函数在控制台侧与激活后的函数无法区分。**经审阅的恢复**
+  证据齐全即**凭证据结算**（`initialization_transition_evidence`：接受的响应为 `Pending`、`$LATEST` 为 `Active` /
+  `Successful`、`LastModified` 与响应逐字节相同、除 RevisionId 外的每个身份字段和每个可选配置成员均未变），在任何写入前
+  追加一条 `revision_history` 记录（`initial_activation_settled`、from → to、证据）与 `lambda_function:settled` 事件；
+  任何 `UpdateFunctionCode` / `UpdateFunctionConfiguration` 都会改变 `LastModified`，所以「LastModified 不变」正是区分
+  服务自身状态转换与函数被替换的依据。Lambda 对**每个**新函数都会在这次转换上更换 RevisionId，没有这条规则每个代码
+  评估器都要等管理员。证据不足时（SE-049 之前没有生命周期快照的旧记录、`LastModified` 变了、某成员变了）仍记为
+  `conflict` 并标记 `review.kind = initial_revision_changed`（附观察到的 RevisionId / LastModified），不做任何自动重钉：
+  相同摘要与角色只是可下载的内容。显式重试只重新尝试两类冲突——这种可结算的 Lambda 漂移和只读的 `existing` 绑定——
+  其余冲突保持不变。**经审阅的恢复**
   （`POST …/operations/{id}/lambda-revision-review`，管理员**且**所有者，精确的计划哈希、期望的初始与当前 RevisionId、
   CloudTrail 事件 ID 与原因）通过 Workspace 客户端漏斗在服务端读取指定的 `CreateFunction20150331` 事件（按 `EventId`
   调用 `LookupEvents`；必须恰好一条格式正确的记录，最终一致的历史失败关闭），要求它就是本操作的成功创建（来源、账号、

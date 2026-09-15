@@ -8,6 +8,7 @@ state — no private identifiers. Hermetic guards are the ones of
 refusal, the settled RevisionId + CodeSha256 as PublishVersion preconditions on
 acceptance, unchanged Dataset / evaluators / versions on replay."""
 # ruff: noqa: F811 — the imported fixtures are referenced by test parameters
+import contextlib
 import fcntl
 import json
 import os
@@ -159,14 +160,27 @@ def no_threads(monkeypatch):
     return launched
 
 
+@contextlib.contextmanager
+def _unprovable():
+    """The initialization transition WITHOUT the worker's evidence rule — the state a
+    legacy record (accepted before the lifecycle snapshot existed) or a transition the
+    evidence cannot prove is in: the reviewed recovery is then the only way forward. The
+    provable case settles itself and is covered in ``test_evaluation_assets``."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(assets, "initialization_transition_evidence", lambda stored, cfg: None)
+        yield
+
+
 def _blocked(principal="local-operator", **approve_kw):
-    """An operation whose function's RevisionId moved Pending → Active: review required."""
+    """An operation whose function's RevisionId moved Pending → Active without the
+    evidence that settles it: review required."""
     cid, h = _conversation(principal, **{k: v for k, v in approve_kw.items() if k == "owner"})
     fakes = ReviewFakes()
     fakes.lam.activation_revision = "rev-active-0001"
     op_id, *_ = _approve(cid, h, fakes=fakes,
                          **{k: v for k, v in approve_kw.items() if k != "owner"})
-    assert _run(op_id, fakes)
+    with _unprovable():
+        assert _run(op_id, fakes)
     op = _op(op_id)
     assert op.status == "partial", op.error
     res = _res(op, "lambda_function")
@@ -286,10 +300,14 @@ def test_initial_revision_change_is_a_review_required_conflict_not_a_rebase(app_
     assert {r["key"]: r["status"] for r in op.resources if r["status"] == "blocked"} == {
         "lambda_permission": "blocked", "role_grant": "blocked", "evaluator:tools": "blocked"}
     assert _res(op, "evaluator:pii")["status"] == "ready"  # judges still proceeded
-    # an ordinary retry re-evaluates nothing here: the conflict is durable
-    with SessionLocal() as db:
-        assert assets.retry_operation(db, db.get(EvaluationAssetOperation, op_id)) is not None
-    _run(op_id, fakes)
+    # an ordinary retry re-attempts the settleable conflict, but without the evidence
+    # it lands where it was: the conflict is durable until a review
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(assets, "start_async", lambda op_id, **kw: True)
+        with SessionLocal() as db:
+            assert assets.retry_operation(db, db.get(EvaluationAssetOperation, op_id)) is not None
+    with _unprovable():
+        _run(op_id, fakes)
     assert _res(_op(op_id), "lambda_function")["status"] == "conflict"
     assert fakes.lam.publish_calls == 0
     out = assets.operation_out(_op(op_id))
@@ -588,7 +606,8 @@ def test_review_refuses_live_worker_foreign_lock_revoked_approver_and_drifted_wo
     fakes2 = ReviewFakes()
     fakes2.lam.activation_revision = "rev-active-0002"
     op2, *_ = _approve(cid2, h2, fakes=fakes2, approver_user_id=uid)
-    _run(op2, fakes2)
+    with _unprovable():
+        _run(op2, fakes2)
     assert _res(_op(op2), "lambda_function")["status"] == "conflict"
     _create_event(op2, fakes2)
     with SessionLocal() as db:
@@ -748,7 +767,8 @@ def test_route_admin_owner_reviews_member_and_foreign_are_refused(gated, monkeyp
     fakes2 = ReviewFakes()
     fakes2.lam.activation_revision = "rev-active-0009"
     op2, *_ = _approve(cid2, h2, fakes=fakes2)
-    _run(op2, fakes2)
+    with _unprovable():
+        _run(op2, fakes2)
     assert admin.post(_route(cid2, op2), json=body).status_code == 404
     assert member.post(_route(cid2, op2), json=body).status_code == 403
     assert _res(_op(op2), "lambda_function")["status"] == "conflict"

@@ -571,8 +571,11 @@ def test_created_function_identity_is_captured_before_any_readback_or_write(app_
     assert res["result"]["created_identity"]["FunctionArn"].endswith(f":function:{fn}")
     assert fakes.lam.publish_calls == 0
     # the function is replaced by one with the same downloadable code but a new RevisionId
+    # (a re-created function also carries its own LastModified — which is what tells a
+    # replacement apart from Lambda's own Pending → Active transition, see SE-049)
     replacement = copy.deepcopy(fakes.lam.functions[fn])
     replacement["cfg"]["RevisionId"] = "replacement-service-identity"
+    replacement["cfg"]["LastModified"] = "2026-09-14T09:00:00.000+0000"
     fakes.lam.functions[fn] = replacement
     fakes.lam.get_function_configuration = original
     _run(op_id, fakes)

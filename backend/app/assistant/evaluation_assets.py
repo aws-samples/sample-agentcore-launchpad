@@ -772,6 +772,8 @@ class _Fence:
         db.expire_all()
 
 
+THIRD_PARTY_PREFIX = "ThirdParty."  # AWS-managed partner evaluators (DeepEval, AutoEval…)
+
 FUNCTION_IDENTITY_FIELDS = ("FunctionArn", "Version", "CodeSha256", "Role", "Runtime",
                             "Handler", "Timeout", "MemorySize", "RevisionId")
 # The allowlisted raw CreateFunction answer kept IMMUTABLY on the intent at acceptance
@@ -921,6 +923,54 @@ def initial_revision_conflict_eligible(res: dict[str, Any]) -> bool:
         and not stored.get("latest_readback")
         and not (res.get("request") or {}).get("Publish")
     )
+
+
+def initialization_transition_evidence(stored: dict[str, Any], cfg: dict[str, Any]
+                                       ) -> dict[str, Any] | None:
+    """Is a RevisionId-only drift PROVABLY Lambda's own Pending → Active transition?
+
+    Lambda bumps ``RevisionId`` when a new function leaves ``Pending``; nothing else about
+    the function changes. Any UpdateFunctionCode / UpdateFunctionConfiguration moves
+    ``LastModified`` (and the field it changed), so the evidence is: CreateFunction
+    answered ``Pending``, ``$LATEST`` is now ``Active`` / ``Successful``, ``LastModified``
+    is byte-identical to the accepted answer, and every recorded identity field except
+    ``RevisionId`` — plus every optional configuration member — is unchanged. Returns
+    the evidence that is written to the audit trail, or None when the drift is anything
+    else (which stays a review-required conflict)."""
+    answer = stored.get("create_response") or {}
+    identity = stored.get("created_identity") or {}
+    if answer.get("State") != "Pending":
+        return None
+    if cfg.get("State") != "Active" or cfg.get("LastUpdateStatus") != "Successful":
+        return None
+    if not answer.get("LastModified") or cfg.get("LastModified") != answer.get("LastModified"):
+        return None
+    changed = [k for k in FUNCTION_IDENTITY_FIELDS
+               if k != "RevisionId" and cfg.get(k) != identity.get(k)]
+    changed += [k for k in OPTIONAL_CONFIG_FIELDS
+                if (cfg.get(k) or None) != (answer.get(k) or None)]
+    if changed or not cfg.get("RevisionId"):
+        return None
+    return {"create_state": answer.get("State"),
+            "create_state_reason_code": answer.get("StateReasonCode"),
+            "last_modified": cfg.get("LastModified"), "state": cfg.get("State"),
+            "last_update_status": cfg.get("LastUpdateStatus"),
+            "code_sha256": cfg.get("CodeSha256"), "unchanged": "LastModified and every "
+            "identity / optional configuration member; only RevisionId moved"}
+
+
+def _retryable_conflict(res: dict[str, Any]) -> bool:
+    """Conflicts an explicit retry may re-attempt without adopting anything: a read-only
+    ``existing`` binding (no ownership, no write), and an owned Lambda whose only drift is
+    the initialization transition the worker can settle with evidence."""
+    if res.get("status") != "conflict":
+        return False
+    if res.get("kind") == "existing":
+        return True
+    return (res.get("kind") == "lambda_function"
+            and (res.get("review") or {}).get("kind") == "initial_revision_changed"
+            and not (res.get("review") or {}).get("resolved_by")
+            and initial_revision_conflict_eligible(res))
 
 
 class _Runner:
@@ -1386,6 +1436,25 @@ class _Runner:
         # settles with the CreateFunction CloudTrail event (review_lambda_initial_revision).
         drift = _latest_drift(cfg, approved, stored["revision_id"])
         if drift == ["RevisionId"] and initial_revision_conflict_eligible(res):
+            evidence = initialization_transition_evidence(stored, cfg)
+            if evidence is not None:
+                # Lambda's own Pending → Active transition, proven by an unchanged
+                # LastModified and configuration: settled here with an append-only
+                # audit entry, never a silent rebase. Anything less stays a review.
+                now = _now().isoformat()
+                settle_id = secrets.token_hex(8)
+                stored.setdefault("revision_history", []).append(
+                    {"at": now, "from": stored["revision_id"], "to": cfg["RevisionId"],
+                     "reason": "initial_activation_settled", "settle_id": settle_id,
+                     "evidence": evidence})
+                stored["revision_id"] = cfg["RevisionId"]
+                stored["settled_revision_id"] = cfg["RevisionId"]
+                if res.get("review"):
+                    res["review"] = {**res["review"], "resolved_by": settle_id,
+                                     "resolution": "initial_activation_settled"}
+                self.fence.save(db, op, resources, "lambda_function:settled")
+                drift = []
+        if drift == ["RevisionId"] and initial_revision_conflict_eligible(res):
             res["review"] = {
                 "kind": "initial_revision_changed",
                 "observed_revision_id": cfg.get("RevisionId"),
@@ -1677,6 +1746,22 @@ class _Runner:
         if detail.get("evaluatorId") != evaluator_id:
             raise _Conflict(f"GetEvaluator returned {detail.get('evaluatorId')!r} for "
                             f"{evaluator_id!r} — reference not bound")
+        if evaluator_id.startswith(THIRD_PARTY_PREFIX):
+            # an AWS-managed partner evaluator: a partition-level resource (no region /
+            # account in its ARN), locked, with no evaluatorConfig to bind and no
+            # reference input — bound by exact identity, never by configuration
+            self._check_third_party_identity(detail, evaluator_id)
+            if detail.get("status") not in USABLE_EVALUATOR_STATUSES:
+                raise RuntimeError(f"evaluator {evaluator_id} is {detail.get('status')}, "
+                                   "not usable")
+            res["result"] = {"evaluator_id": evaluator_id,
+                             "evaluator_arn": detail.get("evaluatorArn"),
+                             "level": detail.get("level"), "status": detail.get("status"),
+                             "name": detail.get("evaluatorName"), "source": "third_party",
+                             "provider": detail.get("provider"), "definition": None,
+                             "reference_needs": [], "note": None}
+            res["reference_dependent"] = False
+            return
         self._check_evaluator_identity(op, detail, evaluator_id)
         if detail.get("status") not in USABLE_EVALUATOR_STATUSES:
             raise RuntimeError(f"evaluator {evaluator_id} is {detail.get('status')}, not usable")
@@ -1792,6 +1877,19 @@ class _Runner:
         stored.update({"status": detail.get("status"), "level": detail.get("level"),
                        "name": detail.get("evaluatorName"),
                        "evaluator_arn": detail.get("evaluatorArn") or stored.get("evaluator_arn")})
+
+    @staticmethod
+    def _check_third_party_identity(detail: dict[str, Any], evaluator_id: str) -> None:
+        """Exact AWS-managed identity: the partition-level ARN, the ThirdParty type and a
+        supported level — the same shape ``Builtin.*`` carries."""
+        expected_arn = f"arn:aws:bedrock-agentcore:::evaluator/{evaluator_id}"
+        if detail.get("evaluatorArn") != expected_arn:
+            raise _Conflict(f"evaluator ARN {detail.get('evaluatorArn')!r} is not {expected_arn}")
+        if detail.get("evaluatorType") != "ThirdParty":
+            raise _Conflict(f"evaluator {evaluator_id} is {detail.get('evaluatorType')!r}, "
+                            "not an AWS-managed third-party evaluator")
+        if detail.get("level") not in ("TRACE", "TOOL_CALL", "SESSION"):
+            raise _Conflict(f"evaluator level {detail.get('level')!r} is not supported")
 
     @staticmethod
     def _check_evaluator_identity(op, detail: dict[str, Any], evaluator_id: str) -> None:
@@ -1919,10 +2017,21 @@ def retry_operation(db: Session, op: EvaluationAssetOperation) -> bool:
     if live_worker(op.id) is not None or not _flock_free(op.id):
         raise AppError("assistant.evaluation_assets_running",
                        "the operation is still running", status_code=409)
+    resources = json.loads(json.dumps(op.resources or []))
+    reopened = [r["key"] for r in resources if _retryable_conflict(r)]
+    for r in resources:
+        if r["key"] in reopened:
+            r["status"], r["error"] = "pending", None
+    values: dict[str, Any] = {"status": "queued", "worker_token": None}
+    if reopened:
+        values["resources"] = resources
+        values["log"] = (op.log or "") + json.dumps(
+            {"at": _now().isoformat(), "event": "retry:reopened", "resources": reopened},
+            ensure_ascii=False) + "\n"
     db.execute(update(EvaluationAssetOperation)
                .where(EvaluationAssetOperation.id == op.id,
                       EvaluationAssetOperation.status.in_(("partial", "failed")))
-               .values(status="queued", worker_token=None))
+               .values(**values))
     db.commit()
     return start_async(op.id) is not None
 

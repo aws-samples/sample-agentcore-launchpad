@@ -1346,11 +1346,22 @@ LastModified, the approved configuration, the request id when present; `initial_
 beside it), waits for `State = Active` **and** `LastUpdateStatus = Successful` (bounded;
 `InProgress`, `Failed` or a missing status cannot publish and is a plain retryable failure),
 records `settled_revision_id` when the RevisionId did not move, and — when the RevisionId
-ALONE moved on an owned, accepted, never-published create — still records a `conflict`,
-now tagged `review.kind = initial_revision_changed` with the observed RevisionId /
-LastModified. Nothing rebases automatically: an equal digest and role are downloadable
-content, and a replaced function looks exactly like an activated one from the console's
-side. The **reviewed recovery**
+ALONE moved on an owned, accepted, never-published create — **settles it with evidence**
+when that evidence is complete (`initialization_transition_evidence`: the accepted answer
+said `Pending`, `$LATEST` is `Active` / `Successful`, `LastModified` is byte-identical to
+the answer, every identity field but RevisionId and every optional configuration member is
+unchanged), recording an append-only `revision_history` entry
+(`initial_activation_settled`, from → to, the evidence) and the `lambda_function:settled`
+event before any write; every `UpdateFunctionCode` / `UpdateFunctionConfiguration` moves
+`LastModified`, so an unchanged `LastModified` is what tells the service's own transition
+from a replacement. Lambda bumps the RevisionId on that transition for **every** new
+function, so without this rule every code evaluator needed an administrator. Without the
+evidence (a legacy record without a lifecycle snapshot, a moved `LastModified`, a changed
+member) the drift still records a `conflict` tagged `review.kind = initial_revision_changed`
+with the observed RevisionId / LastModified, and nothing rebases: an equal digest and role
+are downloadable content. An explicit retry re-attempts exactly two kinds of conflict —
+that settleable Lambda drift and a read-only `existing` binding — and leaves every other
+conflict durable. The **reviewed recovery**
 (`POST …/operations/{id}/lambda-revision-review`, administrator **and** owner, exact plan
 hash, expected created and current RevisionId, the CloudTrail event id and a reason) reads
 the nominated `CreateFunction20150331` event server-side through the workspace client

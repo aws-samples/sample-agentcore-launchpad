@@ -242,6 +242,8 @@ class FakeLambda:
         self.revisions = 0
         self.aliases: dict[str, list] = {}
         self.activation_revision: str | None = None
+        # a change that is NOT Lambda's own transition: LastModified moves with it
+        self.activation_last_modified: str | None = None
 
     def _revision(self) -> str:
         self.revisions += 1
@@ -283,6 +285,9 @@ class FakeLambda:
             if self.activation_revision:  # SE-049: the token may move Pending → Active
                 f["cfg"]["RevisionId"] = self.activation_revision
                 self.activation_revision = None
+            if self.activation_last_modified:
+                f["cfg"]["LastModified"] = self.activation_last_modified
+                self.activation_last_modified = None
         if self.on_get_configuration:
             self.on_get_configuration()
         return self._configuration(f["cfg"])
@@ -2340,6 +2345,126 @@ def test_existing_evaluator_valid_shapes_bind_and_needs_come_from_real_config(ap
     bogus["evaluators"][0]["evaluator_id"] = "Builtin.TrajectoryBogus"
     _, errors = plan_contract.validate_plan(bogus, PROPOSAL, revision=1, content_hash=h)
     assert any("unknown builtin" in e for e in errors)
+
+
+def test_third_party_existing_evaluator_binds_by_partition_level_identity(app_ready):
+    """Live failure: ``ThirdParty.DeepEval.PIILeakage`` was treated as an account-scoped
+    custom evaluator and refused because its ARN carries no region / account. AWS-managed
+    partner evaluators are partition-level, locked, config-less and reference-free — bound
+    by exact identity like a builtin; a wrong ARN, type or a non-ACTIVE status refuses."""
+    eid = "ThirdParty.DeepEval.PIILeakage"
+
+    def third_party(**over):
+        return {"evaluatorId": eid, "evaluatorName": eid, "evaluatorType": "ThirdParty",
+                "provider": "DeepEval", "level": "TRACE", "status": "ACTIVE",
+                "lockedForModification": True,
+                "evaluatorArn": f"arn:aws:bedrock-agentcore:::evaluator/{eid}", **over}
+
+    _, res = _existing_run(third_party())
+    assert res["status"] == "ready", res.get("error")
+    assert res["result"]["source"] == "third_party" and res["result"]["provider"] == "DeepEval"
+    assert res["result"]["evaluator_arn"] == f"arn:aws:bedrock-agentcore:::evaluator/{eid}"
+    assert res["result"]["reference_needs"] == [] and res["reference_dependent"] is False
+    _, res = _existing_run(third_party(
+        evaluatorArn=f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:evaluator/{eid}"))
+    assert res["status"] == "conflict" and "is not arn:aws:bedrock-agentcore:::evaluator/" in res[
+        "error"]
+    _, res = _existing_run(third_party(evaluatorType="Custom"))
+    assert res["status"] == "conflict" and "not an AWS-managed third-party" in res["error"]
+    _, res = _existing_run(third_party(status="FAILED"))
+    assert res["status"] == "failed" and "not usable" in res["error"]
+
+
+def test_initialization_revision_transition_is_settled_with_evidence(app_ready):
+    """Lambda bumps RevisionId when a new function leaves Pending. With LastModified and
+    every configuration member unchanged that is provably the service's own transition:
+    the worker settles it, records an append-only history entry with the evidence, and
+    publishes with the settled RevisionId — no review, no admin, nothing rebased silently."""
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    fakes.lam.activation_revision = "rev-active-0001"
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    assert _run(op_id, fakes)
+    op = _op(op_id)
+    assert op.status == "succeeded", op.error
+    res = _res(op, "lambda_function")
+    stored = res["result"]
+    assert res["status"] == "ready" and res.get("review") is None
+    assert stored["initial_revision_id"] != "rev-active-0001"
+    assert stored["settled_revision_id"] == "rev-active-0001"
+    history = stored["revision_history"]
+    assert [(e["reason"], e["from"], e["to"]) for e in history[:1]] == [
+        ("initial_activation_settled", stored["initial_revision_id"], "rev-active-0001")]
+    assert history[0]["evidence"]["create_state"] == "Pending"
+    assert history[0]["evidence"]["last_modified"] == stored["create_response"]["LastModified"]
+    assert "lambda_function:settled" in op.log
+    assert fakes.lam.publish_calls >= 1
+    assert _res(op, "lambda_permission")["status"] == "ready"
+    assert _res(op, "role_grant")["status"] == "ready"
+
+
+def test_revision_drift_with_a_moved_last_modified_stays_a_review_conflict(app_ready,
+                                                                          monkeypatch):
+    """The same RevisionId-only drift without the evidence (LastModified moved: something
+    else touched the function) keeps SE-049's review-required conflict and its blocked
+    dependents; an ordinary retry re-attempts it and, absent evidence, it stays."""
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    fakes.lam.activation_revision = "rev-active-0001"
+    fakes.lam.activation_last_modified = "2026-09-14T09:00:00.000+0000"
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    assert _run(op_id, fakes)
+    op = _op(op_id)
+    assert op.status == "partial"
+    res = _res(op, "lambda_function")
+    assert res["status"] == "conflict" and "lambda-revision-review" in res["error"]
+    assert res["review"]["kind"] == "initial_revision_changed"
+    assert res["result"].get("settled_revision_id") is None
+    assert "revision_history" not in res["result"]
+    assert _res(op, "lambda_permission")["status"] == "blocked"
+    assert fakes.lam.publish_calls == 0
+    assert assets._retryable_conflict(res) is True
+    monkeypatch.setattr(assets, "start_async", lambda op_id, **kw: True)
+    with SessionLocal() as db:
+        assert assets.retry_operation(db, db.get(EvaluationAssetOperation, op_id)) is not None
+    op = _op(op_id)
+    assert "retry:reopened" in op.log
+    _run(op_id, fakes)
+    res = _res(_op(op_id), "lambda_function")
+    assert res["status"] == "conflict" and res["review"]["kind"] == "initial_revision_changed"
+    assert fakes.lam.publish_calls == 0
+
+
+def test_retry_reopens_read_only_existing_conflicts_only(app_ready, monkeypatch):
+    """A conflicting ``existing`` binding is a read-only check the platform never owned:
+    a retry re-evaluates it. Any other conflict stays durable."""
+    eid = "ThirdParty.DeepEval.Toxicity"
+    detail = {"evaluatorId": eid, "evaluatorName": eid, "evaluatorType": "ThirdParty",
+              "provider": "DeepEval", "level": "TRACE", "status": "ACTIVE",
+              "evaluatorArn": f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:evaluator/{eid}"}
+    cid, h = _conversation("local-operator")
+    raw = _valid_plan(cid, h, with_code=False)
+    raw["evaluators"][0] = {"kind": "existing", "key": "helpfulness", "title": "existing",
+                            "evaluator_id": eid, "golden_test_ids": []}
+    fakes = Fakes()
+    fakes.control.evaluators[eid] = detail
+    op_id, *_ = _approve(cid, h, plan=raw, fakes=fakes)
+    _run(op_id, fakes)
+    res = _res(_op(op_id), "existing:helpfulness")
+    assert res["status"] == "conflict"
+    assert assets._retryable_conflict(res) is True
+    assert assets._retryable_conflict({"status": "conflict", "kind": "evaluator"}) is False
+    assert assets._retryable_conflict({"status": "conflict", "kind": "lambda_function",
+                                       "review": {"kind": "initial_revision_changed",
+                                                  "resolved_by": "x"}}) is False
+    fakes.control.evaluators[eid]["evaluatorArn"] = f"arn:aws:bedrock-agentcore:::evaluator/{eid}"
+    monkeypatch.setattr(assets, "start_async", lambda op_id, **kw: True)
+    with SessionLocal() as db:
+        assert assets.retry_operation(db, db.get(EvaluationAssetOperation, op_id)) is not None
+    _run(op_id, fakes)
+    op = _op(op_id)
+    assert _res(op, "existing:helpfulness")["status"] == "ready"
+    assert op.status == "succeeded", op.error
 
 
 def test_coverage_targets_follow_the_runner_grouping():
