@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.4.1
+version: 1.4.2
 ---
 
 # AWS Agent Solution Architect
@@ -189,10 +189,16 @@ Define "good" before building. Cover at least:
   dimension no ready-made evaluator scores and only calibrated against a
   subject-matter-expert golden set; humans own the gold standard, sampling and
   arbitration;
-- a **recommended evaluator registry**: for each evaluator its id or name, type
-  (code-based, LLM-as-a-judge or human), level (session / trace / span), input signal,
-  scoring method, suggested threshold, AWS implementation path, owner and failure
-  response. "Use AgentCore Evaluations" alone is not a registry;
+- a **recommended evaluator registry of at most ten automated evaluators**: for each
+  evaluator its id or name, type (code-based, LLM-as-a-judge or human), level (session /
+  trace / span), input signal, scoring method, suggested threshold, AWS implementation
+  path, owner and failure response. Ten is the number one AgentCore batch evaluation
+  applies to a session set, so a registry that recommends more cannot be run as one
+  regression gate: rank candidates by the risk they cover, keep the ten that matter for
+  THIS agent (safety and hard boundaries first, then the assertions judge, then one
+  quality dimension the customer named), and list anything beyond that under "later
+  candidates" with the trigger that would promote it. Human review is outside the count.
+  "Use AgentCore Evaluations" alone is not a registry;
 - a **golden test → evaluator mapping**: every golden test binds at least one evaluator;
   high-risk tests (facts, authorization, tool parameters, write operations, idempotency,
   cost) also bind a code-based evaluator and never rely on a judge alone. Built-in AWS

@@ -26,9 +26,12 @@ the full golden test set as a **table** — one row per test with `id`, `input`,
 `expected_tools`, evidence + response, `forbidden_behavior`, `pass_criteria`,
 `evaluator_ids` + `evaluation_level` as columns. Section 7 contains two separate tables:
 
-1. **Recommended evaluator registry** — evaluator id / name, code-based / LLM-as-a-judge
-   / human type, session / trace / span level, input signal, scoring method, threshold,
-   AWS implementation, owner and failure response;
+1. **Recommended evaluator registry** — at most ten automated evaluators (one AgentCore
+   batch evaluation applies at most ten; human review does not count), ranked by the
+   risk they cover, with "later candidates" and their promotion trigger listed
+   separately; per evaluator id / name, code-based / LLM-as-a-judge / human type,
+   session / trace / span level, input signal, scoring method, threshold, AWS
+   implementation, owner and failure response;
 2. **Golden test → evaluator mapping** — per test the mandatory evaluators, blocking
    condition and owner. High-risk facts, authorization, tool parameters, write
    operations, idempotency and cost never rely on a judge alone; a code-based evaluator
