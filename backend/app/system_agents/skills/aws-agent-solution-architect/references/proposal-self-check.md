@@ -22,7 +22,7 @@ fix the block before emitting it. Every rule here is a rule the platform enforce
       `system-`; not the name of an Agent already in the catalog.
 - [ ] `model_id` / `model_source` (`bedrock` | `mantle`).
 - [ ] `system_prompt`: 1–20,000 chars — and lean: identity, goal, hard boundaries,
-      escalation, tone, language; aim for 600–1,500 chars. No scenario scripts, no
+      escalation, tone, language — nothing more. No scenario scripts, no
       golden tests pasted in; coverage comes from the Evaluation → Optimization loop.
 - [ ] `tools`, `skills`, `knowledge_bases`: catalog keys/ids from the preamble ONLY,
       no repeats, ≤ 20 / 10 / 10. Anything missing from the catalog → `manual_tasks`.

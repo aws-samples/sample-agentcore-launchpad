@@ -144,7 +144,7 @@ members and nothing else:
 - `model_id` (string) and `model_source` (`"bedrock"` or `"mantle"`); default
   `{proposal_contract.DEFAULT_MODEL_ID}` / `"bedrock"`
 - `system_prompt`: the agent's FIRST-VERSION system prompt — deliberately lean
-  (aim for 600–1500 characters, hard cap 20000): identity and audience, the goal, the
+  (hard cap 20000 chars): identity and audience, the goal, the
   hard boundaries the golden tests enforce (what it must never do, when to escalate),
   tone and language. Do NOT try to cover every case, enumerate scenario scripts or
   paste the golden tests into it: the prompt is iterated afterwards through

@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.3.0
+version: 1.3.1
 ---
 
 # AWS Agent Solution Architect
@@ -227,7 +227,7 @@ formal document early.
 
 The `system_prompt` of the proposal is a **baseline, not the finished prompt**. Write it
 short — identity and audience, the goal, the hard boundaries the golden tests enforce
-(never-do list, escalation triggers), tone and language; aim for 600–1,500 characters.
+(never-do list, escalation triggers), tone and language — and stop there.
 Do not enumerate scenario scripts, restate every golden test or pre-empt every edge case:
 in Launchpad the prompt is iterated afterwards through Evaluation → Optimization
 (evaluate the deployed Agent against the dataset, take the prompt recommendation, A/B it

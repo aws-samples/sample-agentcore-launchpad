@@ -881,7 +881,7 @@ built-ins with a warning) — and an `existing` id outside that list is a refere
 The protocol makes that list the first choice (built-in / third-party → per-scenario
 assertions → custom judge or code rule only for what nothing listed scores) and asks for
 a deliberately **lean first-version `system_prompt`** (identity, goal, hard boundaries,
-escalation, tone; ~600–1500 chars) because the prompt is iterated afterwards through
+escalation, tone) because the prompt is iterated afterwards through
 Evaluation → Optimization rather than written exhaustively up front. `to_agent_spec`
 is the single mapping into an `AgentSpec`, and `resource_bindings` the single mapping
 into the **reviewed deployment identity**: the spec plus, per resource, the gateway

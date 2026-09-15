@@ -724,7 +724,7 @@ def test_protocol_asks_for_a_lean_first_prompt_and_ready_made_evaluators_first()
     Optimization loop iterates, and evaluators come from the built-in / third-party
     list before anything custom is drafted."""
     text = service.PROTOCOL_PREAMBLE
-    assert "FIRST-VERSION system prompt" in text and "600–1500 characters" in text
+    assert "FIRST-VERSION system prompt" in text and "deliberately lean" in text
     assert "Evaluation → Optimization loop" in text
     assert "Evaluator selection order" in text and "kind: existing" in text
     skill = (ARCHITECT.skill_path() / "SKILL.md").read_text(encoding="utf-8")
