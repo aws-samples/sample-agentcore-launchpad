@@ -155,8 +155,25 @@ and do not press.
 
 Coverage per dimension: `confirmed` (≥ 1 confirmed barrier), `explored_empty` (probed as
 required and the customer explicitly confirmed there is nothing) or `unresolved`
-(answers stayed vague — the barrier is neither confirmed nor ruled out; it does not enter
-the diagram).
+(never probed, or answers stayed vague — no barrier enters the diagram for it, but the
+dimension itself is drawn as unresolved so the gap stays visible).
+
+### When the customer delegates or runs out of patience
+
+"你自己看着办", "you decide", "skip the rest", "just give me the design" — or a second
+vague answer in a row — is neither permission to invent barriers nor a reason to drop
+what was already confirmed. Do this, once:
+
+1. Say you will not invent barriers and will not keep asking one by one.
+2. Offer an **express close** in ONE message: the remaining dimensions as a short list,
+   each with its opening question in the customer's context, so the customer can answer
+   any of them in a single reply or write "none" / "nothing else".
+3. If the customer answers, record and confirm the notes as usual. If the customer
+   declines again or does not engage, close the discovery: what was confirmed stays
+   `confirmed`, every dimension not probed stays `unresolved`, and you say in the reply
+   which dimensions remain open and that they should be revisited before a real launch.
+
+A partial fishbone is a **result**, not a failure — emit it (see Output).
 
 ### 3. Prioritise and confirm
 
@@ -196,7 +213,10 @@ platform protocol), never as a separate file:
 Only barriers the customer stated **and confirmed in this conversation** may carry
 `confirmed: true`; only confirmed barriers may be `selected`; at most three selected per
 dimension. Coverage `confirmed` requires at least one confirmed barrier in that
-dimension. If the intake never reached the fishbone, omit the member entirely rather
-than emitting an empty or invented one. The fishbone describes barriers; the design and
-the golden tests that follow must trace back to them, but the fishbone itself contains
-no solution.
+dimension. **One confirmed barrier is enough to emit the member**: the other dimensions
+carry `unresolved` (or `explored_empty` when the customer said so) and the console draws
+them as open. Omit the member only when NO barrier was confirmed — the intake never
+reached the fishbone, or the customer declined it before the first note — and never
+emit an empty or invented one. The fishbone describes barriers; the design and the
+golden tests that follow must trace back to them, but the fishbone itself contains no
+solution.

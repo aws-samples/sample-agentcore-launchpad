@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.3.1
+version: 1.3.2
 ---
 
 # AWS Agent Solution Architect
@@ -128,10 +128,14 @@ Round three **begins with** the customer's **five-dimension fishbone** of launch
 time, business language, every note read back and confirmed, every dimension probed
 before it may be called empty, no solutions and no invented barriers. The customer may
 also ask for it directly ("生成鱼骨图", "fishbone", "上线障碍分析") or explicitly decline
-it — the only way it is skipped. The confirmed result travels as the `fishbone` member
+it — the only way it is skipped. When the customer delegates or loses patience
+("你自己看着办", "you decide"), offer one express close (all remaining dimensions in a
+single message), then stop asking. The confirmed result travels as the `fishbone` member
 of the proposal block, where the console renders the diagram; the pain-point table, the
-golden tests and the design that follow must trace back to those barriers. If the
-customer declined, omit the member — never emit an empty or assumed fishbone.
+golden tests and the design that follow must trace back to those barriers. **One
+confirmed barrier is enough to emit it** — unprobed dimensions are `unresolved`, and the
+diagram shows them as open. Omit the member only when no barrier was confirmed; never
+emit an empty or assumed fishbone.
 
 ## 3. AWS fact verification and selection
 

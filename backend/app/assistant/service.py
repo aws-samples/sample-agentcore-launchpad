@@ -226,8 +226,10 @@ members and nothing else:
   "converted_to"?}}]}}`. The console renders it as the fishbone diagram in the
   proposal. Only barriers the customer stated AND confirmed in this conversation may be
   `confirmed`; only confirmed barriers may be `selected`; at most three selected per
-  dimension; coverage `confirmed` needs a confirmed barrier in that dimension. Omit the
-  member when the discovery did not happen — never an empty or assumed fishbone.
+  dimension; coverage `confirmed` needs a confirmed barrier in that dimension. ONE
+  confirmed barrier is enough to include the member — dimensions you did not get to
+  are `unresolved` and the console draws them as open. Omit the member only when no
+  barrier was confirmed — never an empty or assumed fishbone.
 
 Hard rules of this environment:
 1. Reference resources **only by the keys listed below**. Never invent tools, MCP

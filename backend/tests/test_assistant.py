@@ -731,6 +731,29 @@ def test_protocol_asks_for_a_lean_first_prompt_and_ready_made_evaluators_first()
     assert "lean by design" in skill and "ready-made evaluators first" in skill
 
 
+def test_partial_fishbone_is_emitted_not_dropped():
+    """Live conversation: one barrier confirmed, then "你自己看着办" — the model dropped
+    the whole fishbone as "not fully explored". One confirmed barrier is a result; the
+    protocol and the methodology both say so, and the contract accepts it."""
+    assert "ONE\n  confirmed barrier is enough" in service.PROTOCOL_PREAMBLE
+    method = (ARCHITECT.skill_path() / "references" / "fishbone-methodology.md").read_text(
+        encoding="utf-8")
+    assert "One confirmed barrier is enough to emit the member" in method
+    assert "express close" in method
+    partial = {
+        "version": 1, "customer": "acme", "date": "2026-09-15", "use_case": "elder companion",
+        "service_target": "internal",
+        "coverage": {"cognition": "confirmed", "quality": "unresolved",
+                     "responsibility": "unresolved", "cost": "unresolved",
+                     "performance": "unresolved", "other": "unresolved"},
+        "barriers": {"cognition": [{"sticky_text": "推荐错误的医疗建议", "confirmed": True,
+                                    "selected": True}]},
+        "parking_lot": [],
+    }
+    content, errors = contract.parse_content({**VALID_PROPOSAL, "fishbone": partial})
+    assert content is not None, errors
+
+
 def test_catalog_lists_builtin_and_third_party_evaluators_and_gates_existing_ids():
     """The catalog snapshot carries the evaluators a proposal may adopt as
     ``kind: existing``: every AWS built-in (static) plus the account's ACTIVE

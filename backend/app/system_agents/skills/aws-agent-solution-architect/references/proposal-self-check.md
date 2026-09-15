@@ -112,8 +112,9 @@ as a whole — after the member has already read and approved the design.
 
 ## 6. `fishbone`
 
-Present only when the launch-barrier discovery happened in THIS conversation and the
-customer confirmed the notes; otherwise the member is absent (never `{}` or assumed).
+Present whenever at least ONE barrier was confirmed in THIS conversation — a partial
+fishbone (other dimensions `unresolved`) is emitted, not dropped. Absent only when no
+barrier was confirmed (never `{}` or assumed).
 
 - [ ] `version` 1; `customer` (1–200); `date` `YYYY-MM-DD`; `use_case` (1–500);
       `service_target` ∈ `internal` | `b2b` | `b2c`.
