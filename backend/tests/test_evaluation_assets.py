@@ -799,6 +799,29 @@ def test_proposal_seed_is_validated_before_storage_and_old_hashes_are_unchanged(
     assert content is not None, errors
 
 
+def test_seed_routing_is_refused_at_proposal_time_not_at_asset_creation():
+    """Live failure: a proposal whose code rule targeted two of five golden tests was
+    stored as a valid draft, approved and deployed; the routing rule fired only when an
+    administrator created the assets. The seed now runs the same routing check."""
+    old = json.loads(json.dumps(PROPOSAL))
+    scenarios = [{"scenario_id": f"S{i}", "golden_test_id": gid, "turns": [{"input": "x"}],
+                  "assertions": ["must be polite"]}
+                 for i, gid in enumerate(("GT-001", "GT-002", "GT-003"))]
+    rule = {"kind": "code", "key": "no-tools", "title": "No tools", "name": "no_tools",
+            "level": "TRACE", "rules": {"version": 1, "checks": [
+                {"id": "zero", "type": "tool_count", "max": 0}]}}
+    subset = {**old, "evaluation_plan": {"scenarios": scenarios, "evaluators": [
+        {**rule, "golden_test_ids": ["GT-001", "GT-002"]}]}}
+    content, errors = contract.parse_content(subset)
+    assert content is None
+    assert any("targets only ['GT-001', 'GT-002']" in e and "golden_test_ids: []" in e
+               for e in errors), errors
+    for mapping in ([], ["GT-001", "GT-002", "GT-003"]):
+        content, errors = contract.parse_content({**old, "evaluation_plan": {
+            "scenarios": scenarios, "evaluators": [{**rule, "golden_test_ids": mapping}]}})
+        assert content is not None, (mapping, errors)
+
+
 # ===========================================================================
 # 2. the static Lambda handler — real ADOT / Strands wire shapes
 # ===========================================================================

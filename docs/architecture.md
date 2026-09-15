@@ -1159,7 +1159,16 @@ protocol asks for typed scenarios, global evaluator mappings and explicit blocks
 seed — and forbids seeding multi-actor / multi-session procedures, runner-computed
 checks, human review, metric baselines or external controls as scenarios or evaluators
 (those go to `blocked_golden_tests` + `manual_tasks`) — so the normal generated flow
-does not require hand-written schemas. Seeded evaluator keys are
+does not require hand-written schemas. The seed runs the **same routing rules as the
+plan** (`_routing_errors`: global `golden_test_ids`, every-scenario references), so an
+evaluator aimed at a subset of golden tests makes the proposal *invalid* at proposal time
+rather than surfacing after approval and deployment when an administrator creates the
+assets. A rejected model block also leaves an `error` transcript row named
+`proposal_rejected`, which `compose_messages` replays to the model as the member's side
+of the next turn — the member says "fix it" instead of relaying the errors — and the
+skill bundle carries `references/proposal-self-check.md`, a checklist mirroring every
+contract rule that the model walks before emitting a block (the Harness has no shell, so
+the checklist is the executable form). Seeded evaluator keys are
 reserved first; prose recommendations map only to ids identified exactly
 (`Builtin.*` / `ThirdParty.*`, collision-safe keys, never removed by a seed mapping of
 another kind) or to the seed's explicit `recommendation_keys`; everything else stays

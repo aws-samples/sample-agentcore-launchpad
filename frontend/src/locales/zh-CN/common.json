@@ -4104,6 +4104,7 @@
     "status.approved": "已批准",
     "status.rejected": "已取消",
     "status.superseded": "已被替代",
+    "rejectedNote": "本条回复中的提案块未通过校验，未被保存；下面的错误会在你下一条消息时自动回传给助手，直接说“请修正”即可。",
     "invalidNote": "该修订无法批准。请用“编辑”修正（或让助手更正）— 平台从不自行修改提案内容。",
     "staleNote": "已有更新的修订。只有最新修订可以批准。",
     "field.name": "Agent 名称",

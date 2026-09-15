@@ -772,7 +772,12 @@ Agent 从不被触碰；批准 Agent 不等于授权创建云端评估资源。
   的黄金测试及其原因），先校验形状，畸形种子成为*无效*修订而非 500；没有种子的修订序列化与以前完全一致）。种子里
   的场景与阻止项按原样采用；其他黄金测试草拟为单轮场景并标记 `review_required`，由成员确认、改写或阻止。面向模型的
   协议禁止把多 actor / 多 session 流程、runner 计算的检查、人工评审、指标基线或外部控制作为场景或评估器写入种子——
-  它们进入 `blocked_golden_tests` 与 `manual_tasks`。唯一草拟的评审器
+  它们进入 `blocked_golden_tests` 与 `manual_tasks`。种子与计划共用**同一套路由规则**（`_routing_errors`：
+  `golden_test_ids` 必须全局、参考驱动的评估器要求每个场景都带参考），因此只针对部分黄金测试的评估器会在提案阶段
+  就让修订*无效*，而不是等到批准、部署之后管理员创建资产时才暴露。被拒的模型提案块还会在对话记录里留下一条
+  `proposal_rejected` 的 `error` 行，`compose_messages` 在下一轮把它作为成员一侧的内容回放给模型——成员只需说
+  “请修正”，无需转述错误；技能包同时携带 `references/proposal-self-check.md`，逐条镜像契约规则，模型在输出提案块
+  前逐项核对（Harness 没有 shell，这份清单就是可执行形式）。唯一草拟的评审器
   是 SESSION 级别，通过 `{assertions}` 参考对**各自场景**的断言评分，没有混合黄金测试的全局评分标准，并标记
   `draft: true`。
 - **代码评估器 = 一个经审阅的静态 stdlib Lambda + 数据**（`app/assistant/lambda_runtime/handler.py`）。证据按

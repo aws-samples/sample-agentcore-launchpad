@@ -697,9 +697,17 @@ export function CreateAgentAssistant() {
               }
               return copy;
             });
-        } else if (evt.event === "proposal")
+        } else if (evt.event === "proposal") {
           proposal = data as unknown as AssistantProposal;
-        else if (evt.event === "error") {
+          if (proposal.status === "invalid") {
+            // mirrors the transcript row the backend stored for this rejection
+            const errs = proposal.validation_errors.map((e) => `- ${e}`).join("\n");
+            setMessages((m) => [
+              ...m,
+              { role: "error", name: "proposal_rejected", text: errs },
+            ]);
+          }
+        } else if (evt.event === "error") {
           const code = typeof data.code === "string" ? data.code : null;
           setMessages((m) => [
             ...m.filter(
@@ -1048,7 +1056,23 @@ export function CreateAgentAssistant() {
                     <span className="i" style={{ color: "var(--crit)" }}>
                       [✕]
                     </span>
-                    <span className="mono">{msg.text}</span>
+                    {msg.name === "proposal_rejected" ? (
+                      <span>
+                        {t("assistantPage.rejectedNote")}
+                        <pre
+                          className="mono"
+                          style={{
+                            margin: "6px 0 0",
+                            whiteSpace: "pre-wrap",
+                            fontSize: 11,
+                          }}
+                        >
+                          {msg.text.split("\n").filter((l) => l.startsWith("- ")).join("\n")}
+                        </pre>
+                      </span>
+                    ) : (
+                      <span className="mono">{msg.text}</span>
+                    )}
                   </div>
                 ),
               )}

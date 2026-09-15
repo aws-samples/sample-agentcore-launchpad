@@ -98,6 +98,25 @@ TURN_CLAIM_TTL_S = 1800
 # SSE keep-alive cadence while the upstream is silent; also the longest the turn's
 # consumer ever blocks, so cancellation is observed within one interval.
 HEARTBEAT_S = 1.0
+# ``name`` of the transcript row that records Launchpad's rejection of a model-emitted
+# proposal block; ``compose_messages`` replays it to the model on the next turn.
+PROPOSAL_REJECTED_NAME = "proposal_rejected"
+REJECTION_NOTE_MAX_CHARS = 2400
+
+
+def rejection_note(errors: list[str]) -> str:
+    """The transcript/replay text for a rejected block: every validation error the
+    contract reported, bounded, followed by what the model must do about it."""
+    body = "\n".join(f"- {e}" for e in errors) or "- (no detail)"
+    if len(body) > REJECTION_NOTE_MAX_CHARS:
+        body = body[:REJECTION_NOTE_MAX_CHARS] + "\n- … (more errors omitted)"
+    return (
+        "Launchpad rejected the `launchpad-proposal` block in your previous reply — it was "
+        "NOT stored as a reviewable proposal. Validation errors:\n" + body +
+        "\nEmit exactly one corrected block in your next reply; change only what the "
+        "errors name and keep every confirmed decision."
+    )
+
 
 # ---------------------------------------------------------------------------
 # the model-facing protocol (server-composed, appended to the FIRST user turn)
@@ -164,11 +183,21 @@ members and nothing else:
   controls as scenarios or evaluators: a golden test that needs one of those (memory
   isolation across users, session freshness across sessions, expert sign-off, …) goes
   to `blocked_golden_tests` with the reason, and the obligation is described under
-  `manual_tasks`. An AWS evaluator applies to EVERY scenario (`golden_test_ids: []`);
-  reference-driven judges/rules need every scenario to carry that reference. Never
-  code, ARNs or Lambda details — rules are declarative literals only. It is an inert
-  seed the member reviews; nothing is created by this block or by the Agent approval —
-  an administrator creates assets in a separate step.
+  `manual_tasks`. **`golden_test_ids` is `[]` on EVERY evaluator.** A dataset run scores
+  every session with every evaluator; the platform cannot route an evaluator to some
+  golden tests, and a seed that tries is rejected as a whole. Put what is specific to
+  one scenario into THAT scenario's `assertions` (they are scored per scenario by the
+  SESSION judge that reads `{{assertions}}`); write a judge or code rule only for an
+  invariant that must hold in every scenario (no tool calls; never says X; every reply
+  in the customer's language). A rule such as `output_contains "call emergency
+  services"` is true only for emergency scenarios, so it is an assertion of those
+  scenarios, not an evaluator. Reference-driven judges/rules need every scenario to
+  carry that reference. Never code, ARNs or Lambda details — rules are declarative
+  literals only. Before emitting the block, walk the skill's
+  `references/proposal-self-check.md` — Launchpad runs the same checks and rejects the
+  block on the first failure. It is an inert seed the member reviews; nothing is
+  created by this block or by the Agent approval — an administrator creates assets in
+  a separate step.
 - optional `fishbone`: the customer's Agent-DLC five-dimension launch-barrier fishbone
   (see the skill's `references/fishbone-methodology.md`) — `{{"version": 1, "customer",
   "date": "YYYY-MM-DD", "use_case", "service_target": "internal|b2b|b2c", "coverage":
@@ -954,15 +983,28 @@ def compose_messages(
     """
     by_turn: dict[int, dict[str, list[str]]] = {}
     for m in history:
-        if m.role not in ("user", "assistant") or not m.text:
+        if not m.text:
             continue
-        slot = by_turn.setdefault(m.turn, {"user": [], "assistant": []})
+        if m.role == "error" and m.name == PROPOSAL_REJECTED_NAME:
+            # Launchpad's own verdict on that turn's block, replayed as the member's
+            # side of the NEXT turn (never as words the assistant said)
+            by_turn.setdefault(m.turn, {"user": [], "assistant": [], "verdict": []})
+            by_turn[m.turn]["verdict"].append(m.text)
+            continue
+        if m.role not in ("user", "assistant"):
+            continue
+        slot = by_turn.setdefault(m.turn, {"user": [], "assistant": [], "verdict": []})
         slot[m.role].append(m.text)
-    turns = [
-        ("\n\n".join(slot["user"]), "\n\n".join(slot["assistant"]) or None)
-        for _, slot in sorted(by_turn.items())
-        if slot["user"]
-    ]
+    turns: list[tuple[str, str | None]] = []
+    carried: list[str] = []
+    for _, slot in sorted(by_turn.items()):
+        if slot["user"]:
+            turns.append(("\n\n".join(carried + slot["user"]),
+                          "\n\n".join(slot["assistant"]) or None))
+            carried = []
+        carried += slot["verdict"]
+    if carried:
+        prompt = "\n\n".join(carried + [prompt])
     preamble = _preamble(conversation)
     budget = MAX_REPLAY_CHARS - len(preamble) - len(prompt) - 200
     kept: list[tuple[str, str | None]] = []
@@ -1374,6 +1416,16 @@ def run_turn(
                 db, conversation_id, fresh.catalog or {}, fresh.workspace_id, raw,
                 source="model", created_by=identity.username, extra_errors=block_errors,
             )
+            if revision.status == "invalid":
+                # the rejection becomes part of the transcript: the member sees it in
+                # line and the next turn replays it to the model (``compose_messages``),
+                # so a bad block is corrected without the member relaying the errors
+                db.add(AssistantMessage(
+                    workspace_id=conversation.workspace_id, conversation_id=conversation_id,
+                    turn=turn, role="error", name=PROPOSAL_REJECTED_NAME,
+                    text=rejection_note(revision.validation_errors or []),
+                    runtime_session_id=session_id,
+                ))
             proposal_event = {"event": "proposal", "data": proposal_out(db, revision)}
         db.commit()
         terminal = True

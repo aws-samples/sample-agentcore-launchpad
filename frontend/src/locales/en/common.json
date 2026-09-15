@@ -4104,6 +4104,7 @@
     "status.approved": "APPROVED",
     "status.rejected": "CANCELLED",
     "status.superseded": "SUPERSEDED",
+    "rejectedNote": "The proposal block in this reply failed validation and was not stored; the errors below are replayed to the assistant on your next message, so a plain “please fix it” is enough.",
     "invalidNote": "This revision cannot be approved. Fix it with EDIT (or ask the assistant to correct it) — the platform never changes proposal content on its own.",
     "staleNote": "A newer revision exists. Only the latest revision can be approved.",
     "field.name": "AGENT NAME",

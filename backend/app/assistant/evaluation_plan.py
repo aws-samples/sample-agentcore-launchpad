@@ -823,6 +823,10 @@ def seed_errors(seed: dict[str, Any]) -> list[str]:
         if isinstance(e, CodeEvaluator):
             errors += [f"evaluation_plan.evaluators.{e.key}: {m}"
                        for m in _check_rules(e.rules) + _code_level_errors(e)]
+    # the execution-time routing rules apply to the seed too: a proposal whose
+    # evaluators target a subset of the golden tests used to pass here and fail only
+    # when an administrator tried to create the assets, after the Agent was deployed
+    errors += [f"evaluation_plan.{m}" for m in _routing_errors(plan)]
     for idx, mapped in rec_keys.items():
         if not (isinstance(idx, str) and idx.isdigit() and int(idx) < 40):
             errors.append(f"evaluation_plan.recommendation_keys: '{idx}' is not a "

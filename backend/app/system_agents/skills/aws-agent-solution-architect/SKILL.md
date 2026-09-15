@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.1.1
+version: 1.2.0
 ---
 
 # AWS Agent Solution Architect
@@ -14,7 +14,8 @@ services; connect every choice to a business goal, a risk and a way to verify it
 Read `references/methodology-index.md` when you need the methodology behind a
 recommendation, `references/intake-options.md` before the clarification rounds,
 `references/painpoint-workflow.md` before the pain-point round,
-`references/fishbone-methodology.md` before the launch-barrier (fishbone) discovery, and
+`references/fishbone-methodology.md` before the launch-barrier (fishbone) discovery,
+`references/proposal-self-check.md` before emitting any `launchpad-proposal` block, and
 `references/deliverable-template.md` before writing the formal design document.
 
 ## Evidence discipline
@@ -184,7 +185,12 @@ Define "good" before building. Cover at least:
   high-risk tests (facts, authorization, tool parameters, write operations, idempotency,
   cost) also bind a code-based evaluator and never rely on a judge alone. Built-in AWS
   evaluator names and availability are verified from official material at writing time;
-  when they cannot be confirmed, recommend a custom evaluator and say so;
+  when they cannot be confirmed, recommend a custom evaluator and say so. In the
+  Launchpad `evaluation_plan` this mapping is expressed the only way the platform can
+  run it: every evaluator applies to every scenario (`golden_test_ids: []`), and a
+  requirement that holds for some golden tests only is written into those scenarios'
+  `assertions`, scored per scenario by the assertions judge — never as an evaluator
+  targeted at a subset;
 - **data**: start from roughly 20 representative cases covering common, edge, ambiguous,
   refusal / escalation and adversarial inputs; feed production failures back
   continuously;

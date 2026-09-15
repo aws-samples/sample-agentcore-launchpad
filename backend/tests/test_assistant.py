@@ -677,6 +677,48 @@ def test_tool_call_arguments_are_recorded_on_the_tool_row(client, ready, harness
     assert [k for k, _ in events][-1] == "done"
 
 
+def test_rejected_block_is_recorded_in_the_transcript_and_replayed_to_the_model(
+    client, ready, harness
+):
+    """The member used to relay validation errors by hand. A rejected model block now
+    leaves an ``error`` row named ``proposal_rejected`` (shown in line) and the next
+    turn's replay carries it on the MEMBER's side, ahead of the new message; a valid
+    block leaves no such row."""
+    cid = _open(client)
+    harness.reply(_block({**VALID_PROPOSAL, "name": "Bad Name!"}))
+    events = _turn(client, cid, "propose")
+    proposal = next(d for k, d in events if k == "proposal")
+    assert proposal["status"] == "invalid" and proposal["validation_errors"]
+    detail = _latest(client, cid)
+    rows = [(m["role"], m["name"]) for m in detail["messages"]]
+    assert rows == [("user", None), ("assistant", None),
+                    ("error", service.PROPOSAL_REJECTED_NAME)]
+    note = detail["messages"][-1]["text"]
+    assert note.startswith("Launchpad rejected the `launchpad-proposal` block")
+    assert proposal["validation_errors"][0] in note
+
+    harness.reply("Fixed.")
+    _turn(client, cid, "please fix it")
+    replayed = harness.calls[-1]["messages"]
+    assert [m["role"] for m in replayed] == ["user", "assistant", "user"]
+    last_user = replayed[-1]["content"][0]["text"]
+    assert last_user.startswith("Launchpad rejected") and last_user.endswith("please fix it")
+
+    harness.reply(_block(VALID_PROPOSAL))
+    _turn(client, cid, "propose again")
+    roles = [(m["role"], m["name"]) for m in _latest(client, cid)["messages"]]
+    assert roles.count(("error", service.PROPOSAL_REJECTED_NAME)) == 1  # only the bad one
+
+
+def test_protocol_forbids_subset_routing_and_points_at_the_self_check():
+    text = service.PROTOCOL_PREAMBLE
+    assert "`golden_test_ids` is `[]` on EVERY evaluator" in text
+    assert "references/proposal-self-check.md" in text
+    bundle = ARCHITECT.skill_path()
+    assert (bundle / "references" / "proposal-self-check.md").is_file()
+    assert "proposal-self-check.md" in (bundle / "SKILL.md").read_text(encoding="utf-8")
+
+
 def test_concurrent_turns_on_one_conversation_admit_exactly_one(client, ready, harness):
     """While turn 1 is streaming, a second request is refused before it opens a stream
     and before any data-plane call; the claim is released when the first completes."""
