@@ -197,6 +197,20 @@ def user_authenticated_tools(
     return result
 
 
+TOOL_INPUT_MAX_CHARS = 600
+
+
+def bounded_tool_input(raw: str) -> str:
+    """The recorded form of a tool call's arguments: the joined input JSON, whitespace
+    collapsed, cut at ``TOOL_INPUT_MAX_CHARS`` with an explicit marker. Bounded because
+    it lands in the ledger and on the wire; never parsed, so a partial JSON tail is
+    harmless."""
+    text = " ".join(raw.split())
+    if len(text) <= TOOL_INPUT_MAX_CHARS:
+        return text
+    return text[:TOOL_INPUT_MAX_CHARS] + f"… [+{len(text) - TOOL_INPUT_MAX_CHARS} chars]"
+
+
 def invoke_harness_events(
     client: Any,
     harness_arn: str,
@@ -220,10 +234,18 @@ def invoke_harness_events(
     if on_stream is not None:
         on_stream(stream)  # lets the owner close a blocked read from another thread
     try:
+        # toolUse input arrives as partial-JSON deltas per content block; the joined,
+        # bounded text is emitted once at the block's stop so the ledger can record
+        # *what* a tool was asked (which file was read, what was searched)
+        pending: dict[int, dict[str, Any]] = {}
         for event in stream:
             if "contentBlockStart" in event:
                 tool_use = event["contentBlockStart"].get("start", {}).get("toolUse")
                 if tool_use:
+                    index = event["contentBlockStart"].get("contentBlockIndex")
+                    if index is not None:
+                        pending[index] = {"name": tool_use.get("name", ""),
+                                          "id": tool_use.get("toolUseId"), "chunks": []}
                     yield {
                         "event": "tool",
                         "data": {"name": tool_use.get("name", ""),
@@ -233,6 +255,18 @@ def invoke_harness_events(
                 delta = event["contentBlockDelta"].get("delta", {})
                 if delta.get("text"):
                     yield {"event": "delta", "data": {"text": delta["text"]}}
+                index = event["contentBlockDelta"].get("contentBlockIndex")
+                partial = (delta.get("toolUse") or {}).get("input")
+                if partial and index in pending:
+                    pending[index]["chunks"].append(str(partial))
+            elif "contentBlockStop" in event:
+                done = pending.pop(event["contentBlockStop"].get("contentBlockIndex"), None)
+                if done is not None:
+                    yield {
+                        "event": "tool_input",
+                        "data": {"name": done["name"], "id": done["id"],
+                                 "input": bounded_tool_input("".join(done["chunks"]))},
+                    }
             elif "runtimeClientError" in event or "internalServerException" in event:
                 detail = event.get("runtimeClientError") or event.get("internalServerException")
                 raise RuntimeError(str(detail))

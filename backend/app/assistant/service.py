@@ -147,8 +147,16 @@ members and nothing else:
   "key", "title", "name", "level": "TRACE|SESSION", "instructions" (with
   `{{context}}`/`{{assistant_turn}}` or the session placeholders), "golden_test_ids"}}`
   or `{{"kind": "code", "key", "title", "name", "level", "rules": {{"version": 1, "checks":
-  [{{"id", "type": "tool_count|tool_sequence|tool_set|output_contains|output_not_contains|"
-  "output_exact|reference_trajectory|reference_response", ...}}]}}, "golden_test_ids"}}`.
+  [...]}}, "golden_test_ids"}}`. Each code check is `{{"id", "type", …}}` with EXACTLY the
+  members its type takes — unknown members (`count`, `values`, `match`, …) reject the
+  whole proposal: `tool_count` → `min` and/or `max` (integers; optional `tool` for one
+  tool, omit it for all tools; "no tool calls" is `{{"type": "tool_count", "max": 0}}`);
+  `tool_sequence` → `tools: []`, `mode: "exact"|"subsequence"`; `tool_set` → `allowed: []`
+  and/or `forbidden: []`; `output_contains` / `output_not_contains` / `output_exact` →
+  `text` (ONE literal string, optional `case_sensitive`; several literals are several
+  checks, and every check must pass — "any of these phrases" is a judge, not a rule);
+  `reference_trajectory` (level SESSION) → `mode: "superset"|"exact"`;
+  `reference_response` (level TRACE) → no further members.
   **Every evaluator must be something AgentCore Evaluations can compute on ONE
   session's trace** — an existing built-in / third-party evaluator, a custom LLM judge
   or declarative code rules. Do NOT seed multi-actor / multi-session procedures,
@@ -1248,6 +1256,7 @@ def run_turn(
             # disconnect closes the upstream (unblocking the producer) instead of
             # waiting behind an uncancellable blocked read.
             events: queue.Queue = queue.Queue()
+            tool_rows: dict[str, int] = {}  # toolUseId -> ledger row awaiting its input
 
             def produce() -> None:
                 try:
@@ -1291,12 +1300,31 @@ def run_turn(
                     if not _holds_claim(db, conversation_id, turn, token):
                         db.rollback()
                         raise _ClaimLost()
-                    db.add(AssistantMessage(
+                    tool_row = AssistantMessage(
                         workspace_id=conversation.workspace_id, conversation_id=conversation_id,
                         turn=turn, role="tool", text="", name=event["data"].get("name"),
                         runtime_session_id=session_id,
-                    ))
+                    )
+                    db.add(tool_row)
                     db.commit()
+                    tool_id = event["data"].get("id")
+                    if tool_id is not None:
+                        tool_rows[tool_id] = tool_row.id
+                elif event["event"] == "tool_input":
+                    # the call's arguments, bounded upstream — recorded on the row the
+                    # ``tool`` event created so the transcript shows WHAT was asked
+                    row_id = tool_rows.pop(event["data"].get("id"), None)
+                    if row_id is not None and event["data"].get("input"):
+                        _lock_conversation(db, conversation_id)
+                        if not _holds_claim(db, conversation_id, turn, token):
+                            db.rollback()
+                            raise _ClaimLost()
+                        db.execute(
+                            update(AssistantMessage)
+                            .where(AssistantMessage.id == row_id)
+                            .values(text=event["data"]["input"])
+                        )
+                        db.commit()
                 elif event["event"] == "delta":
                     parts.append(event["data"].get("text", ""))
                 yield event

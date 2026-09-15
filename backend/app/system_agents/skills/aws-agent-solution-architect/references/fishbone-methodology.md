@@ -5,7 +5,8 @@ scenario — never the facilitator's architecture ideas. It belongs to the DEFIN
 discover problems first, discuss implementation afterwards. Use it
 
 - before or during a Workshop to surface the target team's barriers,
-- in round three of the intake (pain points) to structure what the customer says, and
+- at the start of round three of the intake, for every project stage (greenfield
+  included), before the pain-point list it then seeds, and
 - whenever the customer asks for it ("生成鱼骨图", "fishbone", "上线障碍分析",
   "五维鱼骨图", "agent-dlc").
 

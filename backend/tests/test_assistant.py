@@ -293,6 +293,25 @@ def _bindings(content=VALID_PROPOSAL, catalog=None):
 # ---------------------------------------------------------------------------
 
 
+def test_protocol_spells_out_every_code_check_member():
+    """A live proposal died on ``checks.0.count: Extra inputs are not permitted``: the
+    preamble named the check types but elided their members, so the model invented
+    ``count`` / ``values`` / ``match``. The protocol must name every accepted member of
+    ``CodeCheck`` (the contract is ``extra="forbid"``) and every check type."""
+    from app.assistant.evaluation_plan import CODE_CHECK_TYPES, CodeCheck
+
+    text = service.PROTOCOL_PREAMBLE
+    for check_type in CODE_CHECK_TYPES:
+        assert f"`{check_type}`" in text, check_type
+    for member in CodeCheck.model_fields:
+        if member in ("id", "type"):
+            continue
+        assert f"`{member}" in text, member
+    # the three members the model invented are called out as rejected
+    for invented in ("`count`", "`values`", "`match`"):
+        assert invented in text
+
+
 def test_extract_block_requires_exactly_one_fence():
     assert contract.extract_block("plain talk") == (None, [])
     body, errors = contract.extract_block("intro\n" + _block({"a": 1}) + "\noutro")
@@ -619,6 +638,43 @@ def test_private_session_id_is_reserved_on_the_ledger_before_the_data_plane_call
     assert seen == [True] and events[-1][0] == "error"
     assert sessions_mod.is_assistant_session(events[0][1]["session_id"])
     assert _latest(client, cid)["turn_in_progress"] is None  # claim released after failure
+
+
+def test_tool_call_arguments_are_recorded_on_the_tool_row(client, ready, harness):
+    """A tool row used to carry only the tool's name, so "did the model read
+    fishbone-methodology.md?" was unanswerable from the transcript. The toolUse input
+    deltas are joined at the block's stop, bounded, streamed as ``tool_input`` and
+    written onto the row the ``tool`` event created."""
+    from app.services.agentcore import harness as hc
+
+    long_query = "q" * (hc.TOOL_INPUT_MAX_CHARS + 40)
+    harness.script = [
+        {"contentBlockStart": {"contentBlockIndex": 0, "start": {
+            "toolUse": {"name": "file_operations", "toolUseId": "t-0"}}}},
+        {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {
+            "toolUse": {"input": '{"operation": "read",\n  '}}}},
+        {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {
+            "toolUse": {"input": '"path": "references/fishbone-methodology.md"}'}}}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        {"contentBlockStart": {"contentBlockIndex": 1, "start": {
+            "toolUse": {"name": "aws_knowledge", "toolUseId": "t-1"}}}},
+        {"contentBlockDelta": {"contentBlockIndex": 1, "delta": {
+            "toolUse": {"input": '{"search_phrase": "' + long_query + '"}'}}}},
+        {"contentBlockStop": {"contentBlockIndex": 1}},
+        {"contentBlockDelta": {"contentBlockIndex": 2, "delta": {"text": "Read it."}}},
+        {"contentBlockStop": {"contentBlockIndex": 2}},
+    ]
+    cid = _open(client)
+    events = _turn(client, cid, "did you read the methodology?")
+    inputs = [d for k, d in events if k == "tool_input"]
+    assert [d["id"] for d in inputs] == ["t-0", "t-1"]
+    expected = '{"operation": "read", "path": "references/fishbone-methodology.md"}'
+    assert inputs[0]["input"] == expected
+    assert len(inputs[1]["input"]) < len(long_query) and "… [+" in inputs[1]["input"]
+    rows = [m for m in _latest(client, cid)["messages"] if m["role"] == "tool"]
+    assert (rows[0]["name"], rows[0]["text"]) == ("file_operations", expected)
+    assert rows[1]["text"].startswith('{"search_phrase": "qqq') and "… [+" in rows[1]["text"]
+    assert [k for k, _ in events][-1] == "done"
 
 
 def test_concurrent_turns_on_one_conversation_admit_exactly_one(client, ready, harness):

@@ -682,6 +682,21 @@ export function CreateAgentAssistant() {
             );
             return copy;
           });
+        } else if (evt.event === "tool_input") {
+          // fills the arguments of the most recent tool card still waiting for them
+          const input = String(data.input ?? "");
+          if (input)
+            setMessages((m) => {
+              const copy = [...m];
+              for (let k = copy.length - 1; k >= 0; k--) {
+                const row = copy[k];
+                if (row.role === "tool" && !row.text) {
+                  copy[k] = { ...row, text: input };
+                  break;
+                }
+              }
+              return copy;
+            });
         } else if (evt.event === "proposal")
           proposal = data as unknown as AssistantProposal;
         else if (evt.event === "error") {
@@ -1010,6 +1025,18 @@ export function CreateAgentAssistant() {
                     <Chip tone="good" icon="✓" style={{ marginLeft: "auto" }}>
                       {t("assistantPage.toolCalled")}
                     </Chip>
+                    {msg.text && (
+                      <span
+                        className="args"
+                        style={{ flexBasis: "100%", wordBreak: "break-all" }}
+                        title={msg.text}
+                        data-testid="tool-args"
+                      >
+                        {msg.text.length > 220
+                          ? msg.text.slice(0, 220) + "…"
+                          : msg.text}
+                      </span>
+                    )}
                   </div>
                 ) : (
                   <div

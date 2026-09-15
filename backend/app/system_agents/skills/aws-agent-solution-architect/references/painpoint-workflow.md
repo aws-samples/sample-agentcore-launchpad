@@ -16,6 +16,27 @@ Ask, as a numbered list with a free-text option:
 - Not built yet — greenfield, no real run data
 - Not sure yet — build the baseline from industry assumptions
 
+## A2. Launch-barrier fishbone — every project stage, before the pain-point list
+
+Whatever the customer answered in A — including "not built yet" and "not sure yet" —
+run the guided discovery in `references/fishbone-methodology.md` now, before any
+pain-point menu, conversion table or industry assumption. The fishbone asks what would
+stop this agent from *launching*, not which failures already happened, so a greenfield
+project has as many barriers as a live one (an unclear scope is a cognition barrier, an
+unnamed owner of the medical-risk decision is a responsibility barrier, an unknown token
+budget is a cost barrier). Start with the scenario sentence and service target, ask one
+question at a time, read every note back, probe every dimension before it may be called
+empty, and let the customer select the barriers that matter most.
+
+Skip it only when the customer explicitly declines ("跳过鱼骨", "no fishbone", "just
+give me the design") — record the refusal in the reply and omit the `fishbone` member of
+the proposal. A stage answer, rich earlier rounds or time pressure never skip it.
+
+The confirmed, selected barriers are the input of B and C: they seed the pain-point
+list, every row of the conversion table names the barrier it traces to, and industry
+assumptions (E) fill the *tests* under those barriers — they never add barriers the
+customer did not confirm.
+
 ## B. Pain-point collection
 
 If an agent, a pilot or a legacy system exists, continue with a multi-select list:
