@@ -82,9 +82,10 @@ Which delivery rhythm is closest to the plan?
 ## Round three: current state and pain points (mandatory, never skipped)
 
 After rounds one and two, read `painpoint-workflow.md`. Confirm whether a production
-agent, a pilot or a legacy service process exists, and collect real obstacles, failure
-cases and evidence sources. The customer may pick default pain-point categories and add
-concrete cases in free text.
+agent, a pilot or a legacy service process exists, then run the launch-barrier fishbone
+(`fishbone-methodology.md`) starting from what rounds one and two already established —
+their answers are read back as candidate barriers, never asked again — and collect
+concrete failure cases and evidence sources per confirmed barrier.
 
 After this round, generate the `pain point → metric → golden test` conversion table and
 ask for confirmation. No final architecture or formal document before confirmation. With

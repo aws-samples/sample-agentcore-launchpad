@@ -58,23 +58,57 @@ primary dimension; cross-dimension impact goes into its `evidence`, never a dupl
 
 ## Workflow
 
-### 1. Define the scenario (before any barrier)
+### 0. Start from the baseline — never re-ask rounds one and two
 
-Ask one at a time, adapting the follow-ups: who uses the agent; if it could only do one
-thing well, which task; which systems, documents or data it must consult before it
-answers or acts; whether it only answers or also queries / creates / changes / approves /
-notifies; which single error would stop the launch immediately. Summarise the scenario in
-one sentence and get it confirmed. Record `use_case` (the scenario), `service_target`
-(`internal`, `b2b` or `b2c` — it decides how strict accuracy and safety must be) and
-`customer` (the organisation name the customer uses; never an account id).
+Inside the intake the fishbone runs AFTER rounds one and two, and those rounds already
+answered most of what a Workshop facilitator would open with: who uses the agent and
+where (scope, scale, channels), what it reads or operates (systems), what it must never
+do (the customer's forbidden list), data classes and residency, the delivery rhythm. Do
+not ask any of that again. Before the first fishbone message:
+
+1. **Derive the scenario sentence** from the baseline — one sentence: users, the one job,
+   what it consults, whether it only answers or also acts, the forbidden list. Derive
+   `service_target` from the users (staff → `internal`, business customers → `b2b`,
+   consumers → `b2c`) and `customer` from what the customer called their organisation.
+2. **Harvest candidate notes** from the baseline answers — every statement that is a
+   barrier in disguise, in the customer's own words: a forbidden action ("must never
+   diagnose") → responsibility; sensitive data or an open residency question →
+   responsibility; a peak or latency expectation → performance; systems it must
+   integrate with → other; "cost first, 4 weeks" → cost; "not sure yet" answers →
+   the dimension they belong to, as `unresolved` candidates. Do not add anything the
+   customer did not say.
+
+Your FIRST fishbone message then contains exactly two things: the scenario sentence
+("这句话是否准确？") and the candidate notes as a short read-back list per dimension,
+asking the customer to confirm, reword or strike each. A confirmed candidate is a
+confirmed barrier; nothing here is asked as an open question.
+
+### 1. Define the scenario (only outside the intake)
+
+When the fishbone runs on its own — a Workshop, or a customer who asks for it before any
+baseline exists — ask one at a time, adapting the follow-ups: who uses the agent; if it
+could only do one thing well, which task; which systems, documents or data it must
+consult before it answers or acts; whether it only answers or also queries / creates /
+changes / approves / notifies. Summarise the scenario in one sentence and get it
+confirmed. Record `use_case`, `service_target` and `customer` as above.
 
 ### 2. Discover barriers, dimension by dimension
 
-Rhythm for every dimension: **opening question → listen → probe** (pick a direction from
-the table, phrase it in the customer's language) **→ distil** (one sticky note, ≤ 50
-characters, one barrier per note, facts not solutions, numbers and system names kept)
-**→ confirm → move on** when the dimension is exhausted or has three strong barriers.
-The tables give probing *directions*, not scripts; never read them out.
+Open with the one question no baseline answers and the pain-point workflow shares:
+**"If this agent made only one kind of mistake, which one would make you stop the launch
+at once? One concrete example."** Ask it once; its answer is the top barrier AND the
+first golden test — the pain-point round must not ask it again.
+
+Then, for each dimension that still has no confirmed note, use the rhythm **opening
+question → listen → probe** (pick a direction from the table, phrase it in the
+customer's language) **→ distil** (one sticky note, ≤ 50 characters, one barrier per
+note, facts not solutions, numbers and system names kept) **→ confirm → move on** when
+the dimension is exhausted or has three strong barriers. A dimension that already holds
+a confirmed candidate from the baseline gets at most one probe, not its opening
+question. Skip any opener the baseline already answered — e.g. do not ask "how many use
+it at the same time?" after the customer chose a scale in round one; ask instead what
+happens at that scale. The tables give probing *directions*, not scripts; never read
+them out.
 
 **认知 Cognition** — opening: "What is this agent most likely to get wrong or not
 understand? Can you give one real example?"

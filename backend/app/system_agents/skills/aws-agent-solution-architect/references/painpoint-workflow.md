@@ -32,6 +32,11 @@ Skip it only when the customer explicitly declines ("跳过鱼骨", "no fishbone
 give me the design") — record the refusal in the reply and omit the `fishbone` member of
 the proposal. A stage answer, rich earlier rounds or time pressure never skip it.
 
+The fishbone starts from the baseline (its §0): the scenario sentence and candidate
+notes are derived from rounds one and two and only read back for confirmation — nothing
+from those rounds is asked again — and its single opener ("which one mistake would stop
+the launch?") is asked once, there, never repeated in B.
+
 The confirmed, selected barriers are the input of B and C: they seed the pain-point
 list, every row of the conversion table names the barrier it traces to, and industry
 assumptions (E) fill the *tests* under those barriers — they never add barriers the
@@ -39,7 +44,15 @@ customer did not confirm.
 
 ## B. Pain-point collection
 
-If an agent, a pilot or a legacy system exists, continue with a multi-select list:
+When the fishbone produced confirmed barriers, B does NOT present a category menu — the
+six categories below are the fishbone's dimensions under other names. Take the selected
+barriers as the pain-point list and ask only what the fishbone did not: for each barrier,
+one to three concrete failure cases (real or, for a greenfield project, the case the
+customer fears), and the evidence sources (production traces / logs, tickets, user
+feedback, monitoring, staff experience, none yet).
+
+Only when the fishbone was declined or confirmed nothing, and an agent, a pilot or a
+legacy system exists, fall back to the multi-select list:
 - Knowledge and retrieval — not found, wrong citation, stale content, inconsistent answers
 - Answer quality — incomplete, factual errors, hallucination, wrong tone or policy boundary
 - Tools and process — wrong tool, wrong parameters, API failures, duplicate execution, inconsistent state
