@@ -429,6 +429,7 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 | 方法 | 路径 | 结果 |
 |---|---|---|
 | `GET` | `/api/agents/{agent_id}/versions` | `{kind: runtime\|harness, resource_id, versions[{version, status, description, last_updated_at}], endpoints[{name, live_version, target_version, status, description, created_at, last_updated_at, failure_reason}], latest_version, ledger_version, canary_endpoints[]}`——`versions` 最新在前;`endpoints` 先 `DEFAULT` 再按名称;`latest_version` 是 AWS 报告的最高版本,`ledger_version` 是最近一次 Launchpad 部署记录的版本(`Agent.version`),带外更新或金丝雀候选版本铸造后二者可能不同;`canary_endpoints` 列出仍然存在的 `stable`/`treatment` 端点名。资源族:`zip_runtime`/`studio`/`container` 以及 `spec.discovery.resource_type` 缺省或为 `runtime` 的导入行 → `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints`;`harness` 以及 `resource_type == "harness"` 的导入行 → `ListHarnessVersions` + `ListHarnessEndpoints`(harness 版本没有描述字段)。不改变任何状态 |
+| `GET` | `/api/agents/{agent_id}/conversions` | 成员——`{source: {id, name, method, status}, conversions: [agent…]}`：由该 Agent 转换出的 **Runtime 孪生**（`POST …/convert` 会在新的 `-rt` Agent 上标记 `spec.source_harness.agent_id`），最新在前，每行是普通的 Agent 投影加上它最近一次的 `deployment`。纯账本读取（不调用 AWS）；已删除的孪生不列出；来源不存在或已删除 → 404 `agent.not_found`。助手的 NEXT STEPS 用它在孪生 `active` 后切换目标，并在刷新页面后重新找到孪生 |
 
 错误码:`agent.not_found`(404,未知 id 或其他 workspace 的 Agent)、`agent.no_resource`(409,该行没有可查询的
 AWS 资源——部署仍在进行、首次部署失败、已删除,或既非 Runtime 也非 Harness 的形态;`message` 即面板展示的

@@ -4366,6 +4366,38 @@
       "body": "A low score usually points at the system prompt or a missing tool. Open the run's sessions in Observability to see the exact turns, edit the Agent in Agent management and redeploy, then run the same Dataset again to compare revisions.",
       "openObs": "OPEN OBSERVABILITY"
     },
+    "ab": {
+      "title": "CONFIG-BUNDLE A/B EXPERIMENT",
+      "body": "Instead of editing and redeploying by hand, let an experiment recommend a new system prompt (and tool descriptions) from the traces, route half of the traffic to each variant through a configuration bundle and settle the verdict with the same evaluators. A managed Harness cannot consume a routed bundle, so the experiment runs on a Runtime twin of this Agent:",
+      "target": "TARGET: {{name}} · runtime twin",
+      "convert": {
+        "label": "a · runtime twin",
+        "none": "not converted yet",
+        "start": "CONVERT TO RUNTIME",
+        "retry": "RETRY CONVERSION",
+        "starting": "CONVERTING…",
+        "deploying": "deploying — the steps above switch to the twin once it is active",
+        "main": "active — the main version now: Chat, runs and the experiment target it (the Harness stays deployed)",
+        "noPermission": "Your account lacks the agents.convert permission.",
+        "confirmTitle": "Convert the Harness into a Runtime twin?",
+        "confirmBody": "Launchpad exports the code of “{{name}}”, grafts the Launchpad configuration-bundle contract onto it and deploys a NEW AgentCore Runtime agent “{{twin}}” (own execution role, a few minutes) in {{account}} / {{region}} — real, billable AWS resources. The Harness is left untouched, but once the twin is active it becomes the main version of these steps: Chat, evaluation runs and the experiment target it. Note that memory is partitioned per Agent, so the twin starts with an empty long-term memory of its own.",
+        "confirm": "CONVERT TO RUNTIME",
+        "startedToast": "Conversion started — “{{name}}” is deploying."
+      },
+      "baseline": {
+        "label": "b · baseline",
+        "waiting": "the twin's first completed run in step 02 becomes the baseline",
+        "missing": "no completed run of “{{name}}” on this Dataset yet — START EVALUATION in step 02 records the baseline and gives the experiment the traces it reads"
+      },
+      "experiment": {
+        "label": "c · experiment",
+        "open": "OPEN EXPERIMENT",
+        "waiting": "available once the twin is active",
+        "noBaseline": "recommended: run the baseline first — the experiment page reports trace readiness either way",
+        "running": "an experiment ({{name}}) is already running in this workspace — one at a time; wait for its verdict or clean it up first.",
+        "openRunning": "open it"
+      }
+    },
     "manual": {
       "title": "Implement what the proposal left to you",
       "body": "The proposal listed these items as manual work — the platform never creates them:"
@@ -4375,7 +4407,7 @@
       "body": "Online evaluation samples live sessions with the same evaluators — leave the reference-dependent ones off there. Turn it on only once the offline run is stable, and start with a low sampling rate.",
       "open": "OPEN ONLINE EVALUATION"
     },
-    "note": "Guidance only, with one exception: START EVALUATION submits a real run (the same request as New Run) after you confirm. Every other link just opens an existing console page with the resources pre-selected — nothing else here invokes the Agent or changes AWS."
+    "note": "Guidance only, with two exceptions: START EVALUATION submits a real run (the same request as New Run) and CONVERT TO RUNTIME deploys a new Runtime agent — both after you confirm. Every other link just opens an existing console page with the resources pre-selected — nothing else here invokes the Agent or changes AWS."
   },
   "fishbone": {
     "title": "Agent-DLC five-dimension fishbone · launch barriers",

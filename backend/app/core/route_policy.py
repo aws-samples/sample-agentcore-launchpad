@@ -101,6 +101,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/agents/discovery/import"): PERM_AGENT_IMPORT,
     ("GET", "/api/agents/{agent_id}"): MEMBER,
     ("GET", "/api/agents/{agent_id}/versions"): MEMBER,  # read-only AWS view
+    ("GET", "/api/agents/{agent_id}/conversions"): MEMBER,  # ledger read: runtime twins
     ("DELETE", "/api/agents/{agent_id}"): PERM_AGENT_DELETE,
     ("POST", "/api/agents/{agent_id}/convert"): PERM_AGENT_CONVERT,
     ("POST", "/api/agents/{agent_id}/redeploy"): PERM_AGENT_DEPLOY,

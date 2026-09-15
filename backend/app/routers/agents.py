@@ -246,6 +246,43 @@ def get_agent(
     return out
 
 
+@router.get("/agents/{agent_id}/conversions")
+def list_agent_conversions(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """The runtime twins converted from this agent, newest first.
+
+    A conversion stamps ``spec.source_harness.agent_id`` on the new ``-rt`` agent
+    and never touches the source, so the ledger already holds the relation; this
+    read projects it (with each twin's latest deployment) for the assistant's
+    NEXT STEPS, which switches to the twin once it is active and needs to find it
+    again after a reload — or when the operator converted from the Agents page.
+    Pure ledger read; nothing on AWS is called.
+    """
+    source = _agent_in(db, ws, agent_id)
+    if source is None or source.status == "deleted":
+        raise NotFoundError("agent.not_found", "agent not found")
+    twins = [
+        a
+        for a in db.query(Agent)
+        .filter(Agent.workspace_id == ws.id, Agent.status != "deleted")
+        .all()
+        if ((a.spec or {}).get("source_harness") or {}).get("agent_id") == agent_id
+    ]
+    twins.sort(key=lambda a: a.created_at or datetime.min.replace(tzinfo=UTC), reverse=True)
+    return {
+        "source": {
+            "id": source.id,
+            "name": source.name,
+            "method": source.method,
+            "status": source.status,
+        },
+        "conversions": [_agent_out(a, _latest_deployment(db, a.id)) for a in twins],
+    }
+
+
 @router.get("/agents/{agent_id}/versions")
 def get_agent_versions(
     agent_id: str,

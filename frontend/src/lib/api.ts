@@ -74,6 +74,23 @@ export interface SystemAgentIdentity {
   protected_actions: string[];
 }
 
+/** `GET /api/agents/{id}/conversions` — the runtime twins a harness was converted into. */
+export interface AgentConversionsResult {
+  source: { id: string; name: string; method: AgentInfo["method"]; status: AgentInfo["status"] };
+  /** newest first; each carries its latest `deployment` */
+  conversions: AgentInfo[];
+}
+
+/** The fields of an experiment row the assistant's NEXT STEPS reads (`GET /api/experiments`). */
+export interface ExperimentSummary {
+  id: string;
+  name: string;
+  agent_id: string;
+  agent_name: string;
+  status: string;
+  stage: string;
+}
+
 export type SystemPresetStatus =
   | "configuration_required"
   | "not_installed"
@@ -3547,6 +3564,12 @@ export const api = {
       `/api/agents/${id}/convert`,
       { method: "POST" },
     ),
+  /** Runtime twins converted from this agent (ledger read, newest first). */
+  listAgentConversions: (id: string) =>
+    request<AgentConversionsResult>(`/api/agents/${id}/conversions`),
+  /** Config-bundle experiments of the workspace (summary projection). */
+  listExperiments: () =>
+    request<{ experiments: ExperimentSummary[] }>("/api/experiments"),
   redeployAgent: (id: string, spec: AgentSpecInput) =>
     request<{ agent: AgentInfo; job_id: string; deployment_id: string }>(
       `/api/agents/${id}/redeploy`,

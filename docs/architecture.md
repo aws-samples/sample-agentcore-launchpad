@@ -1164,6 +1164,26 @@ code evaluator's needs are unknown and recorded as such. Observability SCORE NOW
 (`observability.evaluator_needs_ground_truth`, before any span read or Evaluate call) and
 online evaluation refuse managed reference-driven code evaluators outright.
 
+**NEXT STEPS carries the agent into a config-bundle A/B on a Runtime twin.** Step 03 of
+the panel under the Evaluation Assets adds a three-rung ladder: **a · runtime twin** —
+CONVERT TO RUNTIME posts the existing `POST /api/agents/{id}/convert` (perm
+`agents.convert`, behind a confirm dialog naming the billable resources and the per-agent
+memory partition) because a managed Harness cannot consume a routed configuration bundle
+and `experiment_capability` reports it `not-http-runtime`; **b · baseline** — the twin's
+newest `completed` run on the created Dataset, which step 02's START EVALUATION now
+produces because, once the twin is `active`, it is the **main version** of the panel (Chat,
+runs and the experiment all target it; the Harness stays deployed and untouched); **c ·
+experiment** — a deep link to `/evaluation?view=experiment&exp=new&agent=<twin>` with
+`baselineRun=<id>` when a baseline exists. The baseline is recommended, not gated: the
+link stays live without one (amber hint), and the experiment page reports trace readiness
+itself. The relation is read back from the ledger through
+`GET /api/agents/{id}/conversions` (the `-rt` agents whose `spec.source_harness.agent_id`
+is this agent, newest first, each with its latest deployment) rather than stored on the
+conversation, so a reload — or a conversion started from the Agents page — lands in the
+same state; the panel polls it while a twin is `deploying`. A workspace allows one running
+experiment, so the ladder names a running one and links to it instead of letting the
+start 409.
+
 **Drafts never turn prose into a scenario the model did not type.** A proposal may carry
 an optional structured `evaluation_plan` seed — typed single-session `scenarios` (turns,
 references), typed AgentCore `evaluators`, `recommendation_keys` and

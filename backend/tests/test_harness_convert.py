@@ -645,6 +645,48 @@ def test_convert_happy_path_and_in_flight_guard(client, monkeypatch):
     assert res.json()["code"] == "agent.convert_in_flight"
 
 
+def test_conversions_lists_runtime_twins_of_the_source(client, monkeypatch):
+    """GET …/conversions projects the ledger relation the convert stamped
+    (spec.source_harness.agent_id), newest first, with each twin's latest
+    deployment — and only for THIS source."""
+    source = _mk_agent(name="twin-src")
+    other = _mk_agent(name="twin-other")
+    monkeypatch.setattr(
+        hc, "export_harness",
+        lambda arn: {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT},
+    )
+    monkeypatch.setattr(agents_router, "start_deploy_async", lambda job_id: None)
+
+    # nothing converted yet → empty, but the source is named
+    res = client.get(f"/api/agents/{source.id}/conversions")
+    assert res.status_code == 200
+    assert res.json() == {
+        "source": {"id": source.id, "name": "twin-src", "method": "harness", "status": "active"},
+        "conversions": [],
+    }
+
+    twin = client.post(f"/api/agents/{source.id}/convert").json()["agent"]
+    client.post(f"/api/agents/{other.id}/convert")
+
+    res = client.get(f"/api/agents/{source.id}/conversions")
+    body = res.json()
+    assert [c["id"] for c in body["conversions"]] == [twin["id"]]
+    row = body["conversions"][0]
+    assert row["name"] == "twin-src-rt"
+    assert row["status"] == "deploying"
+    assert row["deployment"]["status"] == "running"
+    # the capability the NEXT STEPS ladder gates the experiment link on
+    assert "experiment_capability" in row
+
+    # a deleted twin drops out; an unknown source is a 404
+    db = SessionLocal()
+    db.get(Agent, twin["id"]).status = "deleted"
+    db.commit()
+    db.close()
+    assert client.get(f"/api/agents/{source.id}/conversions").json()["conversions"] == []
+    assert client.get("/api/agents/nope/conversions").status_code == 404
+
+
 def test_convert_happy_path_persists_direct_kb_bundle(client, monkeypatch):
     source = _mk_agent(
         name="kb-support",
