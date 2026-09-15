@@ -1106,6 +1106,15 @@ that is not an evaluator, judge placeholders not documented for the level (`{con
 than **10** AWS evaluators and TOOL_CALL code evaluators. Nothing in the plan may carry
 an ARN, a Lambda name, Python or a regex — `extra="forbid"` everywhere.
 
+**A plan applies at most ten evaluators.** `StartBatchEvaluation` accepts ten evaluators
+per batch (a service limit, `MAX_BATCH_EVALUATORS`), and a dataset run applies every
+evaluator of the plan — existing and created — in one batch, so the plan and its proposal
+seed refuse the eleventh (`MAX_RUN_EVALUATORS`), the run route refuses an over-long
+selection with `422 run.too_many_evaluators` **before** any replay, and the assistant's
+NEXT STEPS panel disables one-click start for a legacy operation that exceeds it and points
+at New Run to deselect. The protocol tells the model to pick the built-ins that matter for
+this agent rather than list them all.
+
 **Evaluator selection is global; per-golden-test mapping is refused, not faked.** A
 dataset run applies one evaluator list to every session and the reference envelope does
 not select evaluators, so the platform cannot route an AWS evaluator to a subset of golden

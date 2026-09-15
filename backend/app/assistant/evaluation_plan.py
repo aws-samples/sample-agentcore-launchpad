@@ -36,13 +36,28 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.evaluation.agentcore_eval import ALL_BUILTIN_EVALUATORS, TRAJECTORY_EVALUATORS
+from app.evaluation.agentcore_eval import (
+    ALL_BUILTIN_EVALUATORS,
+    MAX_BATCH_EVALUATORS,
+    TRAJECTORY_EVALUATORS,
+)
 
 KNOWN_BUILTINS: dict[str, str] = {**ALL_BUILTIN_EVALUATORS, **TRAJECTORY_EVALUATORS}
 
 PLAN_VERSION = 1
 PLAN_MAX_BYTES = 160_000
 MAX_CLOUD_EVALUATORS = 10  # judge + derived + code per plan (AWS records the operation creates)
+# Every evaluator of a plan — existing AND created — is applied to the dataset run in ONE
+# StartBatchEvaluation, which accepts at most MAX_BATCH_EVALUATORS; a plan listing more
+# can never run and is refused at proposal time.
+MAX_RUN_EVALUATORS = MAX_BATCH_EVALUATORS
+
+
+def _run_size_error(count: int) -> str:
+    return (f"the plan applies {count} evaluators to every dataset run, but one batch "
+            f"evaluation accepts at most {MAX_RUN_EVALUATORS} — drop the ones that overlap "
+            "(one quality judge, one safety judge, the assertions judge and the exact "
+            "invariants usually suffice) or block golden tests the rest would cover")
 MAX_SCENARIOS = 40
 MAX_CODE_CHECKS = 20
 DEFAULT_JUDGE_MODEL = "global.anthropic.claude-sonnet-5"  # the platform's judge default
@@ -524,6 +539,8 @@ def validate_plan(
     if len(names) > MAX_CLOUD_EVALUATORS:
         errors.append(f"the plan creates {len(names)} AWS evaluators (max {MAX_CLOUD_EVALUATORS})"
                       " — split it or mark some entries manual/existing")
+    if len(plan.evaluators) > MAX_RUN_EVALUATORS:
+        errors.append(_run_size_error(len(plan.evaluators)))
     for e in plan.evaluators:
         for gt in e.golden_test_ids:
             if gt not in gts:
@@ -811,6 +828,8 @@ def seed_errors(seed: dict[str, Any]) -> list[str]:
     keys = [e.key for e in plan.evaluators]
     if len(set(keys)) != len(keys):
         errors.append("evaluation_plan: evaluator keys must be unique")
+    if len(plan.evaluators) > MAX_RUN_EVALUATORS:
+        errors.append("evaluation_plan: " + _run_size_error(len(plan.evaluators)))
     names = [str(getattr(e, "name", "")) for e in plan.evaluators if e.kind in CLOUD_KINDS]
     if len(set(names)) != len(names):
         errors.append("evaluation_plan: cloud evaluator names must be unique")

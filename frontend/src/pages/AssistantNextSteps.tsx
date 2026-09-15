@@ -11,6 +11,8 @@ import { api, errorMessage } from "../lib/api";
 import type { EvaluationRunInfo } from "../lib/evaluation";
 import { RUN_TERMINAL_STATUSES } from "../lib/evaluation";
 
+const MAX_BATCH_EVALUATORS = 10;
+
 /**
  * NEXT STEPS — shown under the Evaluation Assets panel once the creation
  * operation has SUCCEEDED. Guidance with deep links into the existing pages, plus
@@ -123,7 +125,10 @@ export function AssistantNextSteps({
 
   // One-click start: identical payload to New Run (dataset scope, evaluators mode).
   const canRun = can("eval.run");
-  const startable = agentReady && !!deployed?.agentId && !!datasetId && evaluators.length > 0;
+  // StartBatchEvaluation applies at most this many evaluators per run (service limit).
+  const tooMany = evaluators.length > MAX_BATCH_EVALUATORS;
+  const startable =
+    agentReady && !!deployed?.agentId && !!datasetId && evaluators.length > 0 && !tooMany;
   const runLive = (runs ?? []).some((r) => !RUN_TERMINAL_STATUSES.has(r.status));
   const startReason = !canRun
     ? t("assistantNext.run.noPermission")
@@ -131,9 +136,14 @@ export function AssistantNextSteps({
       ? t("assistantNext.run.agentNotReady")
       : !datasetId || evaluators.length === 0
         ? t("assistantNext.run.assetsMissing")
-        : runLive
-          ? t("assistantNext.run.oneAtATime")
-          : undefined;
+        : tooMany
+          ? t("assistantNext.run.tooManyEvaluators", {
+              n: evaluators.length,
+              max: MAX_BATCH_EVALUATORS,
+            })
+          : runLive
+            ? t("assistantNext.run.oneAtATime")
+            : undefined;
 
   const agentIdForRuns = deployed?.agentId ?? null;
   const loadRuns = useCallback(async () => {

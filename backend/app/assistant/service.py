@@ -178,7 +178,11 @@ members and nothing else:
   `assertions` scored by the assertions judge, and only when neither can score a
   requirement a custom `judge` or `code` rule — each custom entry states in its
   `description` which listed evaluator was considered and why it does not suffice. An
-  `evaluator_id` that is not in the list makes the proposal invalid.
+  `evaluator_id` that is not in the list makes the proposal invalid. **At most 10
+  evaluators in total** (existing + judge + code): every dataset run applies all of them
+  in one batch evaluation and AWS accepts no more — pick the built-ins that matter for
+  THIS agent (e.g. Harmfulness, Refusal, InstructionFollowing, one quality judge) instead
+  of listing every one you know; a seed with more is rejected.
   Each evaluator is one of: `{{"kind": "existing", "key", "title",
   "evaluator_id": "<exact id from the Evaluators list>", "golden_test_ids": []}}`,
   `{{"kind": "judge", "key", "title", "name", "level": "TRACE|SESSION", "instructions" (with

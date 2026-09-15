@@ -4352,7 +4352,8 @@
       "openRuns": "open in Evaluation",
       "historyTitle": "RUNS OF THIS AGENT ON THIS DATASET ({{n}}, newest first)",
       "meanScore": "mean {{mean}} over {{n}} evaluator(s)",
-      "oneAtATime": "A run of this agent on this Dataset is still active — wait for it to finish (or stop it on the Evaluation page) before starting another."
+      "oneAtATime": "A run of this agent on this Dataset is still active — wait for it to finish (or stop it on the Evaluation page) before starting another.",
+      "tooManyEvaluators": "{{n}} evaluators are ready but one batch evaluation applies at most {{max}} — open New Run and deselect the ones that overlap (the run is otherwise identical)."
     },
     "iterate": {
       "title": "Read the scores and the traces, then iterate",

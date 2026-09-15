@@ -316,6 +316,25 @@ def test_run_on_simulated_dataset_requires_actor_model(client, monkeypatch):
     assert res.json()["code"] == "run.actor_model_required"
 
 
+def test_run_refuses_more_than_ten_evaluators_before_any_replay(client, monkeypatch):
+    """StartBatchEvaluation accepts at most ten evaluators; the route refuses an
+    over-long selection up front instead of replaying every scenario first."""
+    from app.evaluation.agentcore_eval import ALL_BUILTIN_EVALUATORS
+
+    db = SessionLocal()
+    agent = make_agent(db, name="cloud-too-many")
+    db.close()
+    stub_environment(monkeypatch)
+    stub_cloud_run(monkeypatch)
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "cloud_dataset_id": "cloudds-7", "wait_seconds": 0,
+        "evaluators": list(ALL_BUILTIN_EVALUATORS)[:11],
+    })
+    assert res.status_code == 422, res.text
+    body = res.json()
+    assert body["code"] == "run.too_many_evaluators" and body["detail"]["selected"] == 11
+
+
 def test_run_on_simulated_cloud_dataset_with_actor_model(client, monkeypatch):
     db = SessionLocal()
     agent = make_agent(db, name="cloud-sim-ok-agent")

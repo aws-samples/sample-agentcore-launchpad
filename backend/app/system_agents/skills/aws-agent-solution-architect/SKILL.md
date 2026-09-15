@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.4.0
+version: 1.4.1
 ---
 
 # AWS Agent Solution Architect
@@ -262,4 +262,7 @@ a domain rubric no built-in covers), with the `description` naming the listed ev
 that was considered and why it falls short. Safety and quality dimensions —
 harmfulness, toxicity, bias, PII leakage, refusal, instruction following, helpfulness,
 relevance, conciseness, task completion — are covered by listed evaluators; do not
-re-implement them as custom judges. An id that is not in the list is rejected.
+re-implement them as custom judges. An id that is not in the list is rejected, and so is a
+plan with more than **ten evaluators in total**: one batch evaluation applies every one of
+them to every session and AWS accepts at most ten, so choose the built-ins that matter for
+this agent instead of listing all of them.

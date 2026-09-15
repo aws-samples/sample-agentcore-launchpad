@@ -804,6 +804,36 @@ def test_proposal_seed_is_validated_before_storage_and_old_hashes_are_unchanged(
     assert content is not None, errors
 
 
+def test_more_than_ten_evaluators_are_refused_at_seed_and_plan_time():
+    """Live failure: a plan with 12 evaluators (8 builtins + 2 third-party + 2 custom)
+    materialized fine and then StartBatchEvaluation refused the run — after the agent had
+    been replayed against every scenario. One batch applies every evaluator of the plan
+    and accepts at most ten, so the plan and its seed refuse the eleventh."""
+    from app.evaluation.agentcore_eval import ALL_BUILTIN_EVALUATORS
+
+    ids = list(ALL_BUILTIN_EVALUATORS)[:11]
+    evaluators = [{"kind": "existing", "key": f"e{i}", "title": eid, "evaluator_id": eid,
+                   "golden_test_ids": []} for i, eid in enumerate(ids)]
+    old = json.loads(json.dumps(PROPOSAL))
+    content, errors = contract.parse_content({**old, "evaluation_plan": {"evaluators": evaluators}})
+    assert content is None and any("at most 10" in e and "applies 11 evaluators" in e
+                                   for e in errors), errors
+    content, errors = contract.parse_content(
+        {**old, "evaluation_plan": {"evaluators": evaluators[:10]}})
+    assert content is not None, errors
+    cid, h = _conversation("local-operator")
+    raw = _valid_plan(cid, h, with_code=False)
+    extra = [e for e in evaluators if e["evaluator_id"] not in
+             {x.get("evaluator_id") for x in raw["evaluators"]}]
+    raw["evaluators"] += extra[:11 - len(raw["evaluators"])]
+    assert len(raw["evaluators"]) == 11
+    _, errors = plan_contract.validate_plan(raw, PROPOSAL, revision=1, content_hash=h)
+    assert any("at most 10" in e for e in errors), errors
+    raw["evaluators"].pop()
+    plan, errors = plan_contract.validate_plan(raw, PROPOSAL, revision=1, content_hash=h)
+    assert plan is not None, errors
+
+
 def test_seed_routing_is_refused_at_proposal_time_not_at_asset_creation():
     """Live failure: a proposal whose code rule targeted two of five golden tests was
     stored as a valid draft, approved and deployed; the routing rule fired only when an

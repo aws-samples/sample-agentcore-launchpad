@@ -16,6 +16,11 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+# StartBatchEvaluation accepts at most this many evaluators (and insights) per batch —
+# a service limit ("Maximum of 10 evaluators"), enforced before any replay so a run never
+# invokes the agent for every scenario only to be refused at the batch call.
+MAX_BATCH_EVALUATORS = 10
+
 # Default built-in evaluators used across batch + online evaluation.
 BUILTIN_EVALUATORS = [
     "Builtin.GoalSuccessRate",

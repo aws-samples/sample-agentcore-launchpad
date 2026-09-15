@@ -1302,6 +1302,16 @@ def create_run(
             status_code=422,
         )
 
+    applied_ids = req.evaluators if req.mode == "evaluators" else (req.insights or [])
+    if len(set(applied_ids)) > ac.MAX_BATCH_EVALUATORS:
+        raise AppError(
+            "run.too_many_evaluators",
+            f"a batch evaluation applies at most {ac.MAX_BATCH_EVALUATORS} "
+            f"{'evaluators' if req.mode == 'evaluators' else 'insights'}; {len(set(applied_ids))} "
+            "were selected — drop the ones that overlap or start a second run for the rest",
+            {"max": ac.MAX_BATCH_EVALUATORS, "selected": len(set(applied_ids))},
+            status_code=422,
+        )
     if req.mode == "evaluators":
         _assert_target_references(db, ws, req.evaluators, items, dataset_scope)
 

@@ -76,8 +76,10 @@ as a whole — after the member has already read and approved the design.
 
 ## 5. `evaluation_plan` — shapes
 
-- [ ] ≤ 20 evaluators, ≤ 10 of kind `judge`/`derived`/`code`; ≤ 40 scenarios; ≤ 40
-      blocked golden tests. Evaluator `key`s unique (`^[A-Za-z][A-Za-z0-9_-]{0,31}$`);
+- [ ] **≤ 10 evaluators in total** (existing + judge + derived + code — one batch
+      evaluation applies all of them and AWS accepts no more); ≤ 10 of kind
+      `judge`/`derived`/`code`; ≤ 40 scenarios; ≤ 40 blocked golden tests. Fewer, chosen
+      for this agent, beats the whole built-in list. Evaluator `key`s unique (`^[A-Za-z][A-Za-z0-9_-]{0,31}$`);
       cloud evaluator `name`s unique (`^[a-zA-Z][a-zA-Z0-9_]{0,47}$`).
 - [ ] Every entry has ONLY the members of its kind:
   - `existing`: `kind, key, title, evaluator_id ("Builtin.<Name>" / "ThirdParty.<Name>"),
