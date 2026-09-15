@@ -628,3 +628,42 @@ def cleanup_evaluation_operation(
     op = assets.owned_operation(db, row, operation_id)
     op = assets.cleanup_operation(db, op, ws.context)
     return {"operation": assets.operation_out(op)}
+
+
+# ---------------------------------------------------------------------------
+# clearing a conversation together with what it created (History panel → CLEAR)
+# ---------------------------------------------------------------------------
+
+from app.assistant import purge as purge_mod  # noqa: E402
+
+
+@router.get("/conversations/{conversation_id}/footprint")
+def conversation_footprint(
+    conversation_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """What CLEAR would remove for this conversation (Agents deployed from its
+    approvals, evaluation-assets operations with their cloud resources, the local
+    Datasets they created) and what currently blocks it. Ledger read only; owner-bound."""
+    row = service.owned_conversation(db, ws.id, principal_of(_caller(request)), conversation_id)
+    return purge_mod.footprint(db, row)
+
+
+@router.delete("/conversations/{conversation_id}")
+def delete_conversation(
+    conversation_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Delete the conversation and everything it created: fenced cleanup of every
+    evaluation-assets operation, the local Datasets, every deployed Agent (the same
+    teardown as DELETE /api/agents/{id}), then the ledger rows. Owner-bound; an
+    administrator is required as soon as cloud assets or an Agent are involved.
+    Refuses (409, nothing deleted) while a turn, an operation or a deployment job is
+    still running, and stops (409) if an operation cannot be fully cleaned."""
+    identity = _caller(request)
+    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    return purge_mod.purge(db, row, ws.context, is_admin=identity.is_admin)

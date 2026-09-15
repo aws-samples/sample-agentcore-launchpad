@@ -358,6 +358,67 @@ def test_validate_accepts_the_reference_proposal_and_reports_unknown_references(
     assert errors == ["proposal must be a JSON object"]
 
 
+FISHBONE = {
+    "version": 1, "customer": "Acme HR", "date": "2026-09-15",
+    "use_case": "HR policy helpdesk for employees", "service_target": "internal",
+    "coverage": {"cognition": "confirmed", "quality": "explored_empty",
+                 "responsibility": "confirmed", "cost": "unresolved",
+                 "performance": "explored_empty", "other": "explored_empty"},
+    "barriers": {
+        "cognition": [{"sticky_text": "200+ policy clauses spread over 3 systems",
+                       "evidence": "customer counted the clauses", "confirmed": True,
+                       "selected": True},
+                      {"sticky_text": "regional variants not documented", "confirmed": True,
+                       "selected": False}],
+        "quality": [], "cost": [], "performance": [], "other": [],
+        "responsibility": [{"sticky_text": "must never reveal another employee's salary",
+                            "customer_quote": "salary data is [REDACTED]", "confirmed": True,
+                            "selected": True}],
+    },
+    "parking_lot": [{"original": "add a review step", "converted_to": "responsibility[0]"}],
+}
+
+
+def test_fishbone_is_optional_validated_and_hash_neutral_when_absent():
+    """The Agent-DLC fishbone rides on the proposal as an inert, bounded member: a
+    revision without it serializes exactly as before; a present one must follow the
+    methodology (six dimensions, ≤ 3 selected, selected ⇒ confirmed, coverage matches
+    the notes) or the revision is invalid — never a 500."""
+    content, errors = contract.parse_content(VALID_PROPOSAL)
+    assert content is not None and "fishbone" not in contract.content_dump(content)
+    content, errors = contract.parse_content({**VALID_PROPOSAL, "fishbone": FISHBONE})
+    assert content is not None, errors
+    dumped = contract.content_dump(content)["fishbone"]
+    assert dumped["barriers"]["cognition"][0]["selected"] is True
+    assert dumped["parking_lot"][0]["converted_to"] == "responsibility[0]"
+    bad_cases = {
+        "coverage says confirmed, no confirmed barrier": {
+            **FISHBONE, "coverage": {**FISHBONE["coverage"], "quality": "confirmed"}},
+        "selected but not confirmed": {
+            **FISHBONE, "barriers": {**FISHBONE["barriers"],
+                                     "quality": [{"sticky_text": "x", "selected": True}]},
+            "coverage": {**FISHBONE["coverage"], "quality": "unresolved"}},
+        "four selected in one dimension": {
+            **FISHBONE, "coverage": {**FISHBONE["coverage"], "cost": "confirmed"},
+            "barriers": {**FISHBONE["barriers"],
+                         "cost": [{"sticky_text": f"c{i}", "confirmed": True, "selected": True}
+                                  for i in range(4)]}},
+        "unknown dimension": {
+            **FISHBONE, "barriers": {**FISHBONE["barriers"], "security": []}},
+        "missing coverage": {
+            **FISHBONE, "coverage": {k: v for k, v in FISHBONE["coverage"].items()
+                                     if k != "other"}},
+        "empty dimension marked explored_empty but a note is confirmed": {
+            **FISHBONE, "coverage": {**FISHBONE["coverage"], "cognition": "explored_empty"}},
+        "smuggled member": {**FISHBONE, "aws_services": ["Bedrock"]},
+        "bad date": {**FISHBONE, "date": "15/09/2026"},
+        "bad service target": {**FISHBONE, "service_target": "public"},
+    }
+    for label, bad in bad_cases.items():
+        content, errors = contract.parse_content({**VALID_PROPOSAL, "fishbone": bad})
+        assert content is None and errors and "fishbone" in errors[0], (label, errors)
+
+
 def test_prerequisites_are_part_of_reference_validation():
     """KB mount needs an EXISTING ready KB gateway; shared memory needs the ARN;
     a gateway tool needs a resolved ARN + auth identity; a skill needs readable

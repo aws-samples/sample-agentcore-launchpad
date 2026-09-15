@@ -630,6 +630,26 @@ ARN/名称/记录与出站认证身份（提供方 ARN、授权类型、scope—
 草稿变为 `superseded`。`content_hash` 同时覆盖内容**与**绑定，因此批准所指即所渲染的内容。提示词
 或回复中的“approved”之类文字不改变任何事：一轮对话只在记录与提案表中创建行，别无其他。
 
+**上线障碍鱼骨图（Agent-DLC DEFINE）。** 预置的技能包携带 Agent-DLC 五维鱼骨图方法论
+（`references/fishbone-methodology.md`：认知 / 质量 / 责任 / 成本 / 性能 + 其他，一次一问、业务语言、
+每条便签读回确认、每个维度探测后才可称为空、方案进 parking lot、绝不编造）。其产物是提案块中一个可选、有界的
+`fishbone` 成员——元数据（客户、日期、场景、`internal|b2b|b2c`）、各维度覆盖状态
+（`confirmed|explored_empty|unresolved`）、障碍（`sticky_text`、证据、脱敏原话、`confirmed`、`selected`）
+与 parking lot——与契约其余部分一样做跨字段校验（恰好六个维度、每维度最多 3 条 selected、selected ⇒ confirmed、
+覆盖状态与便签一致；违反即为 *invalid* 修订），缺省时不写入存储内容，旧修订的哈希不变。它是惰性的：
+控制台在「提案」面板中把它渲染为 SVG 鱼骨图（`FishboneDiagram`，自包含标记，提供下载 SVG / JSON；JSON 与该
+skill 的 `fishbone-data.json` 同构），成员编辑原样携带它，AWS 侧不读取它。不依赖 draw.io 模板。
+
+**清除会话即清除它创建的一切。** 历史会话面板的「清除」（`GET …/footprint` → 二次确认 →
+`DELETE …/conversations/{id}`，`app/assistant/purge.py`）从不只删对话记录：footprint 列出每个由批准部署的
+Agent、每次评估资产操作及其仍存活的云端资源、这些操作创建的本地 Dataset，以及阻塞项（正在流式的轮次、排队 /
+运行 / 清理中的操作、进行中的部署任务）。有任一阻塞项则拒绝且不删除任何内容；否则按依赖顺序复用已有的单资源路径——
+对每次操作执行带围栏的 `cleanup_operation`（未达到 `cleaned` 的操作以 `409 assistant.conversation_assets_remain`
+中止清除，会话保留以便剩余资源仍可归属）、删除本地 Dataset 行（成员手动同步到 AWS 的副本属于该成员，保留）、
+对每个 Agent 执行共享的 `delete_agent_row` 拆除（预置拒绝、资源、角色、账本、名称占用），最后才删账本行。
+按所有者绑定；成员可以清除只有对话记录的会话，涉及云端资产或 Agent 时必须是管理员
+（`403 assistant.conversation_purge_admin`）——与单独的清理 / 部署路由同一门槛。已记录的评估运行保留。
+
 **批准——唯一的执行者。** `POST …/proposal/approve`（`perm:agents.deploy`，与 `POST /api/agents`
 同一权限，处理器内再次断言）指定 `{revision, content_hash}`。首先解析**请求的确切修订**：已批准的
 修订返回其已记录结果（`200 started:false`），即使已有更新的修订——这就是幂等重试；哈希不匹配或

@@ -806,6 +806,45 @@ export interface AssistantProposalContent {
   manual_tasks?: string[];
   golden_tests?: AssistantGoldenTest[];
   evaluator_recommendations?: string[];
+  /** Agent-DLC launch-barrier fishbone the customer confirmed during intake (rendered
+   *  in the proposal panel; inert). Absent when the discovery did not happen. */
+  fishbone?: AssistantFishbone;
+}
+
+export type FishboneDimension =
+  | "cognition"
+  | "quality"
+  | "responsibility"
+  | "cost"
+  | "performance"
+  | "other";
+export const FISHBONE_DIMENSIONS: readonly FishboneDimension[] = [
+  "cognition",
+  "quality",
+  "responsibility",
+  "cost",
+  "performance",
+  "other",
+];
+export type FishboneCoverage = "confirmed" | "explored_empty" | "unresolved";
+
+export interface FishboneBarrier {
+  sticky_text: string;
+  evidence?: string;
+  customer_quote?: string;
+  confirmed: boolean;
+  selected: boolean;
+}
+
+export interface AssistantFishbone {
+  version: 1;
+  customer: string;
+  date: string;
+  use_case: string;
+  service_target: "internal" | "b2b" | "b2c";
+  coverage: Partial<Record<FishboneDimension, FishboneCoverage>>;
+  barriers: Partial<Record<FishboneDimension, FishboneBarrier[]>>;
+  parking_lot?: { original: string; converted_to?: string }[];
 }
 
 export interface AssistantBindings {
@@ -902,6 +941,34 @@ export interface AssistantConversationDetail extends AssistantConversationSummar
   catalog: AssistantCatalog;
   messages: AssistantMessage[];
   proposals: AssistantProposal[];
+}
+
+/** `GET …/conversations/{id}/footprint` — what CLEAR would remove and what blocks it. */
+export interface AssistantConversationFootprint {
+  conversation_id: string;
+  title: string;
+  turns: number;
+  proposals: number;
+  agents: { id: string; name: string; status: string; method: string }[];
+  operations: {
+    id: string;
+    status: string;
+    plan_revision: number;
+    dataset_id: string | null;
+    cloud_resources: number;
+  }[];
+  datasets: { id: string; name: string; item_count: number; cloud: boolean }[];
+  blockers: { kind: "turn" | "operation" | "job"; id: string; reason: string }[];
+  /** cloud assets or an Agent are involved → only an administrator may clear */
+  requires_admin: boolean;
+}
+
+export interface AssistantConversationPurgeResult {
+  deleted: true;
+  conversation_id: string;
+  operations_cleaned: string[];
+  datasets: { id: string; name: string }[];
+  agents: { id: string; name: string; aws_resource_deleted: boolean }[];
 }
 
 export interface AssistantApproveResult {
@@ -3348,6 +3415,20 @@ export const api = {
   assistantConversation: (id: string) =>
     request<AssistantConversationDetail>(
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}`,
+    ),
+  /** What CLEAR would remove for a conversation (deployed Agents, evaluation-assets
+   *  operations with their cloud resources, local Datasets) and what blocks it. */
+  assistantConversationFootprint: (id: string) =>
+    request<AssistantConversationFootprint>(
+      `/api/assistant/architect/conversations/${encodeURIComponent(id)}/footprint`,
+    ),
+  /** Delete the conversation AND everything it created (fenced asset cleanup, local
+   *  Datasets, deployed Agents, then the ledger rows). 409 while busy / when a cleanup
+   *  stalls; 403 for a member when cloud assets or an Agent are involved. */
+  assistantDeleteConversation: (id: string) =>
+    request<AssistantConversationPurgeResult>(
+      `/api/assistant/architect/conversations/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
     ),
   assistantRefreshCatalog: (id: string) =>
     request<{ catalog: AssistantCatalog }>(

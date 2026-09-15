@@ -427,18 +427,27 @@ def delete_agent(
     agent = _agent_in(db, ws, agent_id)
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
-    # Before the AWS teardown: a refused delete must leave the harness untouched.
-    system_agents.refuse_system_mutation(agent, "delete")
-    aws_resource_deleted = _delete_agent_resources(agent, ws.context)
-    agent.status = "deleted"
-    agent.updated_at = datetime.now(UTC)
-    agent_names.release_agent_name(db, agent.workspace_id, agent.name, agent.id)
-    db.commit()
+    aws_resource_deleted = delete_agent_row(db, agent, ws.context)
     return {
         "deleted": True,
         "agent_id": agent_id,
         "aws_resource_deleted": aws_resource_deleted,
     }
+
+
+def delete_agent_row(db: Session, agent: Agent, workspace: WorkspaceContext) -> bool:
+    """The one agent teardown: refuse a protected preset BEFORE any AWS call, delete the
+    method-specific resource + execution role, mark the ledger row deleted and release
+    its name claim. Shared by the route above and the architect assistant's
+    conversation purge, so both delete an agent the same way."""
+    # Before the AWS teardown: a refused delete must leave the harness untouched.
+    system_agents.refuse_system_mutation(agent, "delete")
+    aws_resource_deleted = _delete_agent_resources(agent, workspace)
+    agent.status = "deleted"
+    agent.updated_at = datetime.now(UTC)
+    agent_names.release_agent_name(db, agent.workspace_id, agent.name, agent.id)
+    db.commit()
+    return aws_resource_deleted
 
 
 @router.get("/jobs/{job_id}")

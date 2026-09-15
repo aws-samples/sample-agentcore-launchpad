@@ -150,6 +150,12 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
      "{operation_id}/lambda-revision-review"): ADMIN,
     ("DELETE", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/"
      "operations/{operation_id}/assets"): ADMIN,
+    # ---- clearing a conversation (History panel): the footprint is a ledger read;
+    # the purge is owner-bound and MEMBER at the policy layer — the handler escalates
+    # to administrator as soon as the footprint holds cloud assets or an Agent
+    # (cleanup / deploy parity), so a plain transcript stays the member's to delete ----
+    ("GET", "/api/assistant/architect/conversations/{conversation_id}/footprint"): MEMBER,
+    ("DELETE", "/api/assistant/architect/conversations/{conversation_id}"): MEMBER,
     # ---- credential minting ----
     ("GET", "/api/apikeys"): MEMBER,
     ("POST", "/api/apikeys"): MEMBER,

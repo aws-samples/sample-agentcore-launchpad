@@ -12,6 +12,7 @@ export { LoadError } from "./LoadError";
 export { StaleLink } from "./StaleLink";
 export { useStaleParam } from "./useStaleParam";
 export { Markdown } from "./Markdown";
+export { FishboneDiagram } from "./FishboneDiagram";
 export { MethodChip } from "./MethodChip";
 export { methodLabel } from "./methodChipMeta";
 export { DEFAULT_PAGE_SIZE, EVAL_PAGE_SIZE, PAGE_SIZES, Pager, TABLE_PAGE_SIZE } from "./Pager";

@@ -8,6 +8,7 @@ import {
   Btn,
   Chip,
   ConfirmDialog,
+  FishboneDiagram,
   LoadError,
   Markdown,
   Panel,
@@ -20,7 +21,9 @@ import type {
   AssistantApproval,
   AssistantCatalog,
   AssistantConversationDetail,
+  AssistantConversationFootprint,
   AssistantConversationSummary,
+  AssistantFishbone,
   AssistantMemoryMode,
   AssistantMessage,
   AssistantProposal,
@@ -150,6 +153,19 @@ function draftFrom(content: AssistantProposal["content"]): EditDraft {
   };
 }
 
+/** Shape guard for the optional fishbone member (the content type is a loose record;
+ *  an invalid revision may carry anything). */
+function isFishbone(v: unknown): v is AssistantFishbone {
+  if (!v || typeof v !== "object") return false;
+  const f = v as Record<string, unknown>;
+  return (
+    typeof f.use_case === "string" &&
+    typeof f.customer === "string" &&
+    !!f.coverage && typeof f.coverage === "object" &&
+    !!f.barriers && typeof f.barriers === "object"
+  );
+}
+
 const isUnauthorized = (err: unknown) =>
   err instanceof ApiError &&
   (err.code === "http.401" ||
@@ -185,6 +201,14 @@ export function CreateAgentAssistant() {
     | { kind: "reject"; revision: number }
     | null
   >(null);
+  // CLEAR on a history row: the footprint is read first and shown in the confirm;
+  // `deleting` while the purge runs (it may take a while — fenced cleanups + teardown)
+  const [clearing, setClearing] = useState<{
+    id: string;
+    title: string;
+    footprint: AssistantConversationFootprint | null;
+    deleting: boolean;
+  } | null>(null);
   // outcome state is keyed by the approval it was polled for
   const [polled, setPolled] = useState<{
     jobId: string;
@@ -495,6 +519,99 @@ export function CreateAgentAssistant() {
     }
   };
 
+  /** CLEAR (history row): read the footprint, then open the confirm dialog with it. */
+  const askClear = async (c: AssistantConversationSummary) => {
+    const title = c.title || c.id.slice(0, 8);
+    setClearing({ id: c.id, title, footprint: null, deleting: false });
+    try {
+      const footprint = await api.assistantConversationFootprint(c.id);
+      setClearing((cur) => (cur?.id === c.id ? { ...cur, footprint } : cur));
+    } catch (err) {
+      setClearing(null);
+      toast(apiMessage(err));
+    }
+  };
+
+  const doClear = async () => {
+    if (!clearing || clearing.deleting) return;
+    const { id, title } = clearing;
+    setClearing({ ...clearing, deleting: true });
+    try {
+      const res = await api.assistantDeleteConversation(id);
+      toast(
+        t("assistantPage.clear.doneToast", {
+          title,
+          agents: res.agents.length,
+          operations: res.operations_cleaned.length,
+          datasets: res.datasets.length,
+        }),
+        "good",
+      );
+      if (conversation?.id === id) {
+        setLinked(null);
+        setConversation(null);
+        setMessages([]);
+        setEditing(null);
+        setConfirm(null);
+      }
+      loadConversations();
+    } catch (err) {
+      toast(apiMessage(err));
+    } finally {
+      setClearing(null);
+    }
+  };
+
+  /** The confirm text: exactly what the purge would remove, and what blocks it. */
+  const clearBody = (fp: AssistantConversationFootprint): string => {
+    const lines: string[] = [
+      t("assistantPage.clear.intro", { turns: fp.turns, proposals: fp.proposals }),
+    ];
+    if (fp.agents.length) {
+      lines.push(
+        t("assistantPage.clear.agents", {
+          list: fp.agents.map((a) => `${a.name} (${a.status})`).join(", "),
+        }),
+      );
+    }
+    const cloud = fp.operations.filter((o) => o.status !== "cleaned");
+    if (cloud.length) {
+      lines.push(
+        t("assistantPage.clear.operations", {
+          n: cloud.length,
+          resources: cloud.reduce((acc, o) => acc + o.cloud_resources, 0),
+        }),
+      );
+    }
+    if (fp.datasets.length) {
+      lines.push(
+        t("assistantPage.clear.datasets", {
+          list: fp.datasets
+            .map((d) => `${d.name} (${t("assistantEval.items", { n: d.item_count })})`)
+            .join(", "),
+        }),
+      );
+      if (fp.datasets.some((d) => d.cloud)) lines.push(t("assistantPage.clear.datasetCloud"));
+    }
+    if (!fp.agents.length && !cloud.length && !fp.datasets.length) {
+      lines.push(t("assistantPage.clear.onlyTranscript"));
+    }
+    if (fp.blockers.length) {
+      lines.push(
+        t("assistantPage.clear.blockers", {
+          list: fp.blockers.map((b) => b.reason).join("; "),
+        }),
+      );
+    } else if (fp.requires_admin && !isAdmin) {
+      lines.push(t("assistantPage.clear.adminOnly"));
+    } else if (fp.agents.length || cloud.length) {
+      lines.push(t("assistantPage.clear.irreversible"));
+    } else {
+      lines.push(t("assistantPage.clear.irreversibleLocal"));
+    }
+    return lines.join("\n\n");
+  };
+
   const send = async () => {
     if (!conversation || !input.trim() || busy) return;
     const startedIn = scope.current;
@@ -709,6 +826,8 @@ export function CreateAgentAssistant() {
       evaluator_recommendations: Array.isArray(base.evaluator_recommendations)
         ? base.evaluator_recommendations
         : [],
+      // solution content the form does not edit travels with the revision unchanged
+      ...(isFishbone(base.fishbone) ? { fishbone: base.fishbone } : {}),
     };
     try {
       const res = await api.assistantEditProposal(conversationId, content);
@@ -751,6 +870,7 @@ export function CreateAgentAssistant() {
         kicker={t("assistantPage.kicker")}
         title={t("assistantPage.title")}
         meta={meta}
+        description={t("assistantPage.description")}
       />
       <div style={{ marginBottom: 12 }}>
         <Link className="assist-link" to="/create" data-testid="assistant-back">
@@ -1129,21 +1249,33 @@ export function CreateAgentAssistant() {
               {conversations.length > 0 && (
                 <div className="assist-conv-list" data-testid="conversation-list">
                   {conversations.map((c) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      className={`selchip${conversation?.id === c.id ? " on" : ""}`}
-                      onClick={() => selectConversation(c.id)}
-                      data-testid={`conversation-${c.id}`}
-                      data-selected={conversation?.id === c.id ? "true" : "false"}
-                    >
-                      <span className="assist-conv-title">
-                        {c.title || c.id.slice(0, 8)}
-                      </span>
-                      {c.proposal_status && (
-                        <span className="dim">r{c.proposal_revision}</span>
-                      )}
-                    </button>
+                    <div key={c.id} className="assist-conv-row">
+                      <button
+                        type="button"
+                        className={`selchip${conversation?.id === c.id ? " on" : ""}`}
+                        onClick={() => selectConversation(c.id)}
+                        data-testid={`conversation-${c.id}`}
+                        data-selected={conversation?.id === c.id ? "true" : "false"}
+                      >
+                        <span className="assist-conv-title">
+                          {c.title || c.id.slice(0, 8)}
+                        </span>
+                        {c.proposal_status && (
+                          <span className="dim">r{c.proposal_revision}</span>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        className="rowact assist-conv-clear"
+                        title={t("assistantPage.clear.action")}
+                        aria-label={t("assistantPage.clear.action")}
+                        disabled={busy || clearing !== null}
+                        onClick={() => void askClear(c)}
+                        data-testid={`conversation-clear-${c.id}`}
+                      >
+                        ✕
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}
@@ -1191,6 +1323,32 @@ export function CreateAgentAssistant() {
           if (confirm?.kind === "reject") void reject(confirm.revision);
         }}
         onCancel={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={clearing !== null && clearing.footprint !== null}
+        title={t("assistantPage.clear.title", { title: clearing?.title ?? "" })}
+        body={clearing?.footprint ? clearBody(clearing.footprint) : ""}
+        confirmLabel={
+          clearing?.deleting
+            ? t("assistantPage.clear.working")
+            : t("assistantPage.clear.confirm")
+        }
+        onConfirm={() => {
+          const fp = clearing?.footprint;
+          if (!fp || clearing?.deleting) return;
+          if (fp.blockers.length > 0) {
+            toast(t("assistantPage.clear.blocked"));
+            return;
+          }
+          if (fp.requires_admin && !isAdmin) {
+            toast(t("assistantPage.clear.adminOnly"));
+            return;
+          }
+          void doClear();
+        }}
+        onCancel={() => {
+          if (!clearing?.deleting) setClearing(null);
+        }}
       />
     </section>
   );
@@ -1442,6 +1600,15 @@ function ProposalView({
         <div className="assist-section">
           <h4>{t("assistantPage.summary")}</h4>
           <p style={{ margin: 0, fontSize: 12.5 }}>{c.summary}</p>
+        </div>
+      )}
+      {isFishbone(c.fishbone) && (
+        <div className="assist-section" data-testid="proposal-fishbone">
+          <h4>{t("assistantPage.fishbone")}</h4>
+          <div className="dim" style={{ fontSize: 11, marginBottom: 8 }}>
+            {t("assistantPage.fishboneNote")}
+          </div>
+          <FishboneDiagram fishbone={c.fishbone} />
         </div>
       )}
       {list(c.requirements_baseline).length > 0 && (

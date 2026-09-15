@@ -2775,3 +2775,152 @@ def test_simulated_persona_references_are_explicit_never_vacuous(gated, monkeypa
     assert entries == [{
         "sessionId": "a" * 64, "testScenarioId": "persona-1",
         "groundTruth": {"inline": {"assertions": [{"text": "confirms the dates"}]}}}]
+
+
+# ===========================================================================
+# 3. clearing a conversation together with what it created (History panel → CLEAR)
+# ===========================================================================
+
+
+def _deployed_agent(cid: str) -> str:
+    """Give the conversation's approved proposal a real, active Agent row."""
+    db = SessionLocal()
+    try:
+        agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="kid-companion-poc",
+                      method="harness", status="active", owner="river",
+                      spec={"name": "kid-companion-poc", "method": "harness"},
+                      arn=f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:harness/kid",
+                      resource_id="kid")
+        db.add(agent)
+        db.flush()
+        prop = db.query(AssistantProposal).filter_by(conversation_id=cid).one()
+        prop.agent_id = agent.id
+        db.commit()
+        return agent.id
+    finally:
+        db.close()
+
+
+def test_conversation_purge_removes_assets_datasets_agents_then_rows(app_ready, monkeypatch):
+    """CLEAR on a conversation: the footprint names every asset first; the purge cleans
+    the operation's cloud resources through the fenced cleanup, deletes the local
+    Dataset, tears down the deployed Agent through the shared agent teardown and only
+    then removes the ledger rows. Nothing foreign is touched."""
+    from app.assistant import purge
+    from app.routers import agents as agents_router
+
+    cid, h = _conversation("local-operator")
+    agent_id = _deployed_agent(cid)
+    fakes = Fakes()
+    fakes.control.evaluators["independent"] = {
+        "evaluatorName": "independent", "status": "ACTIVE", "evaluatorArn": "arn:i",
+        "evaluatorId": "independent"}
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    _run(op_id, fakes)
+    dataset_id = _op(op_id).dataset_id
+    torn_down: list[str] = []
+    monkeypatch.setattr(agents_router, "_delete_agent_resources",
+                        lambda agent, ws: torn_down.append(agent.id) or True)
+
+    db = SessionLocal()
+    try:
+        row = db.get(AssistantConversation, cid)
+        fp = purge.footprint(db, row)
+        assert [a["id"] for a in fp["agents"]] == [agent_id]
+        assert [o["id"] for o in fp["operations"]] == [op_id]
+        assert fp["operations"][0]["status"] == "succeeded"
+        assert fp["operations"][0]["cloud_resources"] >= 6  # evaluators + Lambda chain
+        assert [d["id"] for d in fp["datasets"]] == [dataset_id]
+        assert fp["blockers"] == [] and fp["requires_admin"] is True
+
+        # a member may not purge cloud assets / an Agent
+        with pytest.raises(AppError) as exc:
+            purge.purge(db, row, ws_ctx(RESOURCES), is_admin=False, clients=fakes)
+        assert exc.value.status_code == 403
+        assert db.get(EvaluationAssetOperation, op_id).status == "succeeded"  # untouched
+
+        result = purge.purge(db, row, ws_ctx(RESOURCES), is_admin=True, clients=fakes)
+    finally:
+        db.close()
+    assert result["deleted"] is True
+    assert result["operations_cleaned"] == [op_id]
+    assert [d["id"] for d in result["datasets"]] == [dataset_id]
+    assert result["agents"] == [{"id": agent_id, "name": "kid-companion-poc",
+                                 "aws_resource_deleted": True}]
+    assert torn_down == [agent_id]
+    # cloud: only the operation's own resources are gone, the foreign evaluator stays
+    assert set(fakes.iam.roles) == {"launchpad-agent-execution-role"}
+    assert fakes.lam.functions == {}
+    assert set(fakes.control.evaluators) == {"independent"}
+    db = SessionLocal()
+    try:
+        assert db.get(AssistantConversation, cid) is None
+        assert db.query(AssistantProposal).filter_by(conversation_id=cid).count() == 0
+        assert db.query(AssistantEvaluationPlan).filter_by(conversation_id=cid).count() == 0
+        assert db.query(EvaluationAssetOperation).filter_by(conversation_id=cid).count() == 0
+        assert db.get(EvalDataset, dataset_id) is None
+        assert db.get(Agent, agent_id).status == "deleted"
+    finally:
+        db.close()
+
+
+def test_conversation_purge_refuses_while_busy_and_keeps_rows_when_cleanup_stalls(app_ready):
+    """A running operation or deployment job blocks the purge before anything is
+    deleted; an operation whose cleanup cannot finish (an evaluator locked by an online
+    configuration) stops the purge with 409 and the conversation stays reviewable."""
+    from app.assistant import purge
+
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    db = SessionLocal()
+    try:
+        row = db.get(AssistantConversation, cid)
+        fp = purge.footprint(db, row)  # queued, not run yet → blocked
+        assert [b["kind"] for b in fp["blockers"]] == ["operation"]
+        with pytest.raises(AppError) as exc:
+            purge.purge(db, row, ws_ctx(RESOURCES), is_admin=True, clients=fakes)
+        assert exc.value.code == "assistant.conversation_busy" and exc.value.status_code == 409
+    finally:
+        db.close()
+    _run(op_id, fakes)
+    code_id = _res(_op(op_id), "evaluator:tools")["result"]["evaluator_id"]
+    fakes.control.evaluators[code_id]["locked"] = True  # in use by an online config
+    db = SessionLocal()
+    try:
+        row = db.get(AssistantConversation, cid)
+        with pytest.raises(AppError) as exc:
+            purge.purge(db, row, ws_ctx(RESOURCES), is_admin=True, clients=fakes)
+        assert exc.value.code == "assistant.conversation_assets_remain"
+        assert exc.value.status_code == 409
+        assert any(r["status"] == "delete_failed" for r in exc.value.detail["remaining"])
+        # nothing beyond the fenced partial cleanup happened: rows and Dataset remain
+        assert db.get(AssistantConversation, cid) is not None
+        assert db.get(EvaluationAssetOperation, op_id).status == "partial"
+        assert db.get(EvalDataset, _op(op_id).dataset_id) is not None
+    finally:
+        db.close()
+
+
+def test_conversation_purge_routes_are_owner_bound_and_a_bare_transcript_is_a_member_delete(
+        app_ready):
+    """Over HTTP: the footprint of a transcript-only conversation says no admin is
+    needed and the owner deletes it; another principal sees 404, never 403 (the
+    conversation must not be discoverable)."""
+    client = TestClient(app_ready)
+    cid, _ = _conversation("local-operator", status="draft")
+    base = f"/api/assistant/architect/conversations/{cid}"
+    fp = client.get(base + "/footprint").json()
+    assert fp["requires_admin"] is False and fp["agents"] == [] and fp["operations"] == []
+    other, _ = _conversation("user:someone-else", status="draft")
+    foreign = f"/api/assistant/architect/conversations/{other}"
+    assert client.get(foreign + "/footprint").status_code == 404
+    assert client.delete(foreign).status_code == 404
+    res = client.delete(base)
+    assert res.status_code == 200 and res.json()["deleted"] is True
+    assert client.get(base).status_code == 404
+    db = SessionLocal()
+    try:
+        assert db.get(AssistantConversation, other) is not None  # untouched
+    finally:
+        db.close()

@@ -52,6 +52,12 @@ SkillEvalOpt_Studio/
 # 30 MB internal whitepaper PDF). Launchpad's own copy of that skill is tracked under
 # backend/app/system_agents/skills/; this bundle targets another tool and stays local.
 aws-agent-solution-architect-kirocrew/
+# Original Agent-DLC fishbone skill bundle (Amazon Quick skill + draw.io script). Its
+# methodology is adapted into the tracked architect skill
+# (backend/app/system_agents/skills/aws-agent-solution-architect/references/
+# fishbone-methodology.md); the bundle itself targets another tool and stays local.
+ADLC-FISHBONE-GENERATE-SKILL-main/
+ADLC-FISHBONE-GENERATE-SKILL-main.tar.gz
 
 # --- security review artifacts (kept local) ---
 # The threat model names still-unmitigated issues with file:line detail, and this

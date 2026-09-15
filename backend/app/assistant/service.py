@@ -161,6 +161,18 @@ members and nothing else:
   code, ARNs or Lambda details — rules are declarative literals only. It is an inert
   seed the member reviews; nothing is created by this block or by the Agent approval —
   an administrator creates assets in a separate step.
+- optional `fishbone`: the customer's Agent-DLC five-dimension launch-barrier fishbone
+  (see the skill's `references/fishbone-methodology.md`) — `{{"version": 1, "customer",
+  "date": "YYYY-MM-DD", "use_case", "service_target": "internal|b2b|b2c", "coverage":
+  {{"cognition|quality|responsibility|cost|performance|other":
+  "confirmed|explored_empty|unresolved"}}, "barriers": {{"<dimension>": [{{"sticky_text"
+  (≤ 50 chars, one barrier, facts not solutions), "evidence"?, "customer_quote"?
+  (redacted), "confirmed": true, "selected": bool}}]}}, "parking_lot": [{{"original",
+  "converted_to"?}}]}}`. The console renders it as the fishbone diagram in the
+  proposal. Only barriers the customer stated AND confirmed in this conversation may be
+  `confirmed`; only confirmed barriers may be `selected`; at most three selected per
+  dimension; coverage `confirmed` needs a confirmed barrier in that dimension. Omit the
+  member when the discovery did not happen — never an empty or assumed fishbone.
 
 Hard rules of this environment:
 1. Reference resources **only by the keys listed below**. Never invent tools, MCP

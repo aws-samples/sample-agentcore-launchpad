@@ -32,6 +32,7 @@ from .conftest import ws_ctx
 KEY = ARCHITECT.key
 INSTALL = f"/api/system-agents/{KEY}/install"
 BUCKET = "launchpad-artifacts-test"
+VER = ARCHITECT.skill_version  # the catalogue version this build ships
 OAUTH_PROVIDER = ("arn:aws:bedrock-agentcore:us-west-2:111122223333:token-vault/default/"
                   "oauth2credentialprovider/launchpad-gw-m2m")
 READY_RESOURCES = {
@@ -186,11 +187,11 @@ def test_load_bundle_refuses_a_version_drift(monkeypatch):
 def test_build_spec_is_server_owned_and_constrained():
     spec = presets.build_spec(ARCHITECT, BUCKET, InstallOptions())
     assert spec.name == ARCHITECT.name and spec.method == "harness"
-    assert spec.skills == [f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/1.0.0/"]
+    assert spec.skills == [f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/{VER}/"]
     addressed = presets.build_spec(ARCHITECT, BUCKET, InstallOptions(), digest="ab" * 32)
-    assert addressed.skills == [f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/1.0.0-abababababab/"]
-    assert presets.skill_release_from_spec(addressed.model_dump()) == ("1.0.0", "abababababab")
-    assert presets.skill_version_from_spec(spec.model_dump()) == "1.0.0"
+    assert addressed.skills == [f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/{VER}-abababababab/"]
+    assert presets.skill_release_from_spec(addressed.model_dump()) == (VER, "abababababab")
+    assert presets.skill_version_from_spec(spec.model_dump()) == VER
     assert spec.allowed_tools == ["file_*", "@aws_knowledge"]
     assert "shell" not in spec.allowed_tools and "*" not in spec.allowed_tools
     assert [t.type for t in spec.tools] == ["mcp"]
@@ -237,7 +238,7 @@ def test_execution_role_grants_only_the_versioned_skill_prefix_and_no_broad_tool
                     "Telemetry", "TelemetryTracing"}
     objects = next(s for s in doc["Statement"] if s["Sid"] == "SkillBundleObjects")
     assert objects["Resource"] == [
-        f"arn:aws:s3:::{BUCKET}/system-skills/{ARCHITECT.name}/1.0.0/*"
+        f"arn:aws:s3:::{BUCKET}/system-skills/{ARCHITECT.name}/{VER}/*"
     ]  # the install itself scopes to the content-addressed release directory
     # member-writable prefixes are never readable by the preset's role
     assert not any("/skills/" in r or "/agent-skills/" in r for r in objects["Resource"])
@@ -315,7 +316,7 @@ def test_install_is_explicit_and_idempotent_while_deploying(client, no_real_depl
     agent = body["agent"]
     assert agent["name"] == ARCHITECT.name
     assert agent["system"] == {
-        "managed": True, "key": KEY, "label": ARCHITECT.label, "skill_version": "1.0.0",
+        "managed": True, "key": KEY, "label": ARCHITECT.label, "skill_version": VER,
         "protected_actions": ["redeploy", "delete", "convert", "experiment", "canary"],
     }
     assert agent["spec"]["allowed_tools"] == ["file_*", "@aws_knowledge"]
@@ -1179,7 +1180,7 @@ import app.deployer.pipeline as pipeline_module  # noqa: E402
 from app.system_agents import uninstall as uninstall_module  # noqa: E402
 
 DIGEST12 = presets.snapshot_bundle(ARCHITECT).digest[:12]
-PREFIX = f"system-skills/{ARCHITECT.name}/1.0.0-{DIGEST12}/"
+PREFIX = f"system-skills/{ARCHITECT.name}/{VER}-{DIGEST12}/"
 MANIFEST = f"{PREFIX}{service.MANIFEST_KEY}"
 
 
@@ -1250,7 +1251,7 @@ def _pinned_preset(monkeypatch, fake: _S3, *, spec=None, pin="valid"):
     elif pin == "missing":
         payload.pop("preset_bundle", None)
     elif pin == "malformed":
-        payload["preset_bundle"] = {"version": "1.0.0"}  # no digest, no files
+        payload["preset_bundle"] = {"version": VER}  # no digest, no files
     elif pin == "stale":
         payload["preset_bundle"] = {**_snapshot().release(), "digest": "f" * 64}
     job.payload = payload
@@ -1273,11 +1274,11 @@ def test_install_pins_the_validated_snapshot_in_the_same_commit_as_the_job(clien
     finally:
         db.close()
     snap = _snapshot()
-    assert pin == {"version": "1.0.0", "digest": snap.digest, "files": snap.file_digests()}
+    assert pin == {"version": VER, "digest": snap.digest, "files": snap.file_digests()}
     assert "SKILL.md" in pin["files"] and len(pin["files"]) == len(snap.files)
     # the spec loads exactly this snapshot's content-addressed release directory
     assert body["agent"]["spec"]["skills"] == [
-        f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/1.0.0-{snap.digest[:12]}/"
+        f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/{VER}-{snap.digest[:12]}/"
     ]
 
 
@@ -1434,7 +1435,7 @@ def test_competing_manifest_with_different_content_fails(monkeypatch):
 
     def racer(s3: _S3, kwargs):
         if kwargs["Key"] == MANIFEST and MANIFEST not in s3.objects:
-            s3.objects[MANIFEST] = json.dumps({"version": "1.0.0", "digest": "0" * 64,
+            s3.objects[MANIFEST] = json.dumps({"version": VER, "digest": "0" * 64,
                                                "files": {}}).encode()
 
     fake.before_put = racer
@@ -1444,8 +1445,8 @@ def test_competing_manifest_with_different_content_fails(monkeypatch):
 
 
 @pytest.mark.parametrize("manifest", [
-    b"not json", json.dumps({"version": "1.0.0"}).encode(),
-    json.dumps({"version": "1.0.0", "digest": "0" * 64, "files": {}}).encode(),
+    b"not json", json.dumps({"version": VER}).encode(),
+    json.dumps({"version": VER, "digest": "0" * 64, "files": {}}).encode(),
 ])
 def test_malformed_or_conflicting_manifest_fails_before_any_write(monkeypatch, manifest):
     fake = _S3({MANIFEST: manifest})
@@ -1983,12 +1984,12 @@ def _legacy_uri_spec(skills):
     ("missing", None, "succeeded"),
     ("malformed", None, "skipped"),
     ("stale", None, "succeeded"),
-    ("valid", [f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/1.0.0/"], "succeeded"),  # legacy dir
-    ("valid", [f"s3://other-bucket/system-skills/{ARCHITECT.name}/1.0.0-{DIGEST12}/"], "skipped"),
-    ("valid", [f"s3://{BUCKET}/system-skills/other-preset/1.0.0-{DIGEST12}/"], "succeeded"),
-    ("valid", [f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/1.0.0-{DIGEST12}/",
+    ("valid", [f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/{VER}/"], "succeeded"),  # legacy dir
+    ("valid", [f"s3://other-bucket/system-skills/{ARCHITECT.name}/{VER}-{DIGEST12}/"], "skipped"),
+    ("valid", [f"s3://{BUCKET}/system-skills/other-preset/{VER}-{DIGEST12}/"], "succeeded"),
+    ("valid", [f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/{VER}-{DIGEST12}/",
                f"s3://{BUCKET}/skills/member-skill/"], "succeeded"),  # extra skill
-    ("valid", [f"s3://{BUCKET}/agent-skills/x/{ARCHITECT.name}/1.0.0-{DIGEST12}/"], "skipped"),
+    ("valid", [f"s3://{BUCKET}/agent-skills/x/{ARCHITECT.name}/{VER}-{DIGEST12}/"], "skipped"),
 ])
 def test_resumed_job_fails_closed_at_entry_on_bad_pin_or_wrong_release_uri(
     monkeypatch, pin, skills, package_state
@@ -2022,7 +2023,7 @@ def test_entry_guard_accepts_exactly_the_expected_uri_and_names_it(monkeypatch):
     fake = _S3()
     ctx, agent = _pinned_preset(monkeypatch, fake)
     verdict = service.assert_job_release_pinned(_job(ctx.job_id).payload, agent, ctx.workspace)
-    assert verdict["expected_uri"] == f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/1.0.0-{DIGEST12}/"
+    assert verdict["expected_uri"] == f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/{VER}-{DIGEST12}/"
     with pytest.raises(RuntimeError, match="artifacts_bucket missing"):
         service.assert_job_release_pinned(_job(ctx.job_id).payload, agent,
                                           ws_ctx({"execution_role_arn": "x"}))
@@ -2034,7 +2035,7 @@ def test_entry_guard_accepts_exactly_the_expected_uri_and_names_it(monkeypatch):
 def test_valid_superset_snapshot_cannot_add_bytes_to_the_winners_release_directory(
     monkeypatch, tmp_path
 ):
-    """Two VALID snapshots of v1.0.0 (B = A + one reference file) publish to two
+    """Two VALID snapshots of the same version (B = A + one reference file) publish to two
     content-addressed directories; B can never place a file the Harness would load
     under A's directory, and A's repair verifies the exact directory."""
     fake = _S3()

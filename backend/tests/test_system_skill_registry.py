@@ -31,6 +31,9 @@ from tests.conftest import ws_ctx
 
 KEY = ARCHITECT.key
 BUCKET = "launchpad-artifacts-test"
+VER = ARCHITECT.skill_version  # the catalogue version this build ships
+NEXT = "9.1.0"  # a strictly newer release another build could publish
+LATER = "9.2.0"  # newer still
 REGISTRY_ID = "launchpad-registry-test"
 ROUTE = f"/api/system-agents/{KEY}/skill-registration"
 READY_RESOURCES = {
@@ -343,7 +346,8 @@ def test_first_registration_describes_the_published_release_exactly(client, clou
     assert body["record"]["status"] == "PENDING_APPROVAL"  # submitted, never approved
     assert body["record"]["system"]["managed"] is True
     assert body["record"]["system"]["preset_key"] == KEY
-    assert body["skill"]["files"] == sorted(snapshot.files) and len(body["skill"]["files"]) == 5
+    assert body["skill"]["files"] == sorted(snapshot.files)
+    assert len(body["skill"]["files"]) == len(snapshot.files) >= 6
     assert body["skill"]["path"] == ARCHITECT.skill_uri(BUCKET, snapshot.digest)
     assert body["skill"]["digest"] == snapshot.digest[:12]
     assert body["preset"]["skill_registration"]["record_id"] == body["record"]["record_id"]
@@ -356,7 +360,7 @@ def test_first_registration_describes_the_published_release_exactly(client, clou
     assert stored["tags"] == {"launchpad:system-preset": KEY, "launchpad:workspace": "default"}
     definition = _definition(stored)
     assert definition["name"] == ARCHITECT.name
-    assert definition["version"] == ARCHITECT.skill_version == "1.0.0"
+    assert definition["version"] == ARCHITECT.skill_version == VER
     assert definition["path"] == ARCHITECT.skill_uri(BUCKET, snapshot.digest)
     assert definition["files"] == sorted(snapshot.files)
     assert definition["source"]["kind"] == "system"
@@ -391,7 +395,7 @@ def test_registration_is_ledger_read_on_get_and_projects_onto_registry_records(c
     listed = client.get("/api/registry/records?type=AGENT_SKILLS").json()["records"]
     assert [r["record_id"] for r in listed] == [rid]
     assert listed[0]["system"]["managed"] is True
-    assert listed[0]["system"]["skill_version"] == "1.0.0"
+    assert listed[0]["system"]["skill_version"] == VER
     assert listed[0]["system"]["path"] == ARCHITECT.skill_uri(BUCKET, _snapshot().digest)
     assert "edit" in listed[0]["system"]["protected_actions"]
     detail = client.get(f"/api/registry/records/{rid}").json()
@@ -446,8 +450,8 @@ def test_a_newer_release_updates_the_descriptor_and_needs_review_again(client, c
     rid = client.post(ROUTE).json()["record"]["record_id"]
     client.post(f"/api/registry/records/{rid}/action", json={"action": "approve"})
 
-    # a new build ships v1.1.0 and the preset was re-published with it
-    newer = _snapshot_with_version("1.1.0", monkeypatch)
+    # a new build ships a newer version and the preset was re-published with it
+    newer = _snapshot_with_version(NEXT, monkeypatch)
     s3.objects.update(_published_objects(newer))
     _repoint_spec(agent_id, newer)
 
@@ -459,12 +463,12 @@ def test_a_newer_release_updates_the_descriptor_and_needs_review_again(client, c
     assert body["record"]["status"] == "DRAFT"  # review again — never auto-approved
     assert body["record"]["version"] == "1.1.0-skill"
     stored = registry.records[rid]
-    assert _definition(stored)["version"] == "1.1.0"
+    assert _definition(stored)["version"] == NEXT
     assert _definition(stored)["path"] == f"s3://{BUCKET}/{_release_prefix(newer)}"
     assert len(registry.creates) == 1 and len(registry.updates) == 1
     assert registry.status_changes == [(rid, "APPROVED")]  # only the human's approval
     row = _mapping()
-    assert row.release_version == "1.1.0" and row.release_digest == newer.digest
+    assert row.release_version == NEXT and row.release_digest == newer.digest
 
 
 def _snapshot_with_version(version: str, monkeypatch):
@@ -505,7 +509,7 @@ def test_a_stale_registration_cannot_downgrade_the_registered_release(client, cl
     db = SessionLocal()
     try:  # the record already describes a newer release than this build/install
         row = db.query(SystemSkillRecord).one()
-        row.release_version = "1.2.0"
+        row.release_version = LATER
         row.content_digest = "x"
         db.commit()
     finally:
@@ -526,8 +530,8 @@ def test_checkout_that_is_not_the_installed_release_is_refused_before_any_aws_ca
 ):
     s3, registry = clouds
     _mark_ready()
-    _install_active()  # spec pins the published 1.0.0 release …
-    _snapshot_with_version("1.1.0", monkeypatch)  # … but this checkout is an unpublished 1.1.0
+    _install_active()  # spec pins the published current release …
+    _snapshot_with_version(NEXT, monkeypatch)  # … but this checkout is an unpublished newer release
     res = client.post(ROUTE)
     assert res.status_code == 409, res.text
     assert res.json()["code"] == "system_skill.release_mismatch"
@@ -960,7 +964,7 @@ def test_deprecated_record_fails_clearly_instead_of_being_rewritten(client, clou
     agent_id = _install_active()
     rid = client.post(ROUTE).json()["record"]["record_id"]
     registry.records[rid]["status"] = "DEPRECATED"
-    newer = _snapshot_with_version("1.1.0", monkeypatch)
+    newer = _snapshot_with_version(NEXT, monkeypatch)
     s3.objects.update(_published_objects(newer))
     _repoint_spec(agent_id, newer)
     res = client.post(ROUTE)
@@ -1162,18 +1166,18 @@ def test_accepted_update_with_lost_response_cannot_be_downgraded_by_a_stale_work
     client.post(f"/api/registry/records/{rid}/action", json={"action": "approve"})
     stale_agent = _detached_copy(agent_id)  # what an old worker still holds
 
-    with pytest.MonkeyPatch.context() as mp:  # the new build publishes v1.1.0
-        newer = _snapshot_with_version("1.1.0", mp)
+    with pytest.MonkeyPatch.context() as mp:  # the new build publishes a newer version
+        newer = _snapshot_with_version(NEXT, mp)
         s3.objects.update(_published_objects(newer))
         _repoint_spec(agent_id, newer)
         registry.crash_after_update = True
         with pytest.raises(ConnectionError):
             client.post(ROUTE)
     remote = registry.records[rid]
-    assert _definition(remote)["version"] == "1.1.0"  # AWS accepted the update
+    assert _definition(remote)["version"] == NEXT  # AWS accepted the update
     row = _mapping()
-    assert row.release_version == "1.0.0"  # the response never arrived …
-    assert row.intent_version == "1.1.0"  # … but the intent was committed first
+    assert row.release_version == VER  # the response never arrived …
+    assert row.intent_version == NEXT  # … but the intent was committed first
 
     # the old build's worker, with its stale agent object: refused, remote untouched
     from app.core.errors import AppError
@@ -1187,7 +1191,7 @@ def test_accepted_update_with_lost_response_cannot_be_downgraded_by_a_stale_work
     finally:
         db.close()
     assert exc.value.code == "system_skill.stale_release"
-    assert _definition(registry.records[rid])["version"] == "1.1.0"
+    assert _definition(registry.records[rid])["version"] == NEXT
     assert len(registry.updates) == 1
     # the high-water mark alone also refuses a v1.0 registration
     snapshot = _snapshot()
@@ -1205,14 +1209,14 @@ def test_accepted_update_with_lost_response_cannot_be_downgraded_by_a_stale_work
         db.close()
 
     with pytest.MonkeyPatch.context() as mp:  # the new build's retry reconciles
-        newer = _snapshot_with_version("1.1.0", mp)
+        newer = _snapshot_with_version(NEXT, mp)
         s3.objects.update(_published_objects(newer))
         res = client.post(ROUTE)
     assert res.status_code == 200, res.text
     assert res.json()["created"] is False and res.json()["changed"] is False
     assert len(registry.updates) == 1  # the accepted update was not repeated
     row = _mapping()
-    assert row.release_version == "1.1.0" and row.status == "registered"
+    assert row.release_version == NEXT and row.status == "registered"
     assert registry.records[rid]["status"] == "DRAFT"  # a new release still needs review
 
 
@@ -1307,7 +1311,7 @@ def test_skill_lab_multi_file_publish_is_refused_before_any_bundle_preparation(
 
 
 def _snapshot_same_version_new_digest(monkeypatch):
-    """This build's bundle: same 1.0.0 version, a revised reference file — a different
+    """This build's bundle: same version, a revised reference file — a different
     content-addressed release with the same version string."""
     base = _snapshot()
     files = dict(base.files)

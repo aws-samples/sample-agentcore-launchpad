@@ -889,6 +889,40 @@ bindings, so an approval names exactly what was rendered. Words like "approved" 
 the prompt or reply change nothing: a turn creates rows in the transcript and proposal
 tables and nothing else.
 
+**Launch-barrier fishbone (Agent-DLC DEFINE).** The preset's skill bundle carries the
+Agent-DLC five-dimension fishbone methodology (`references/fishbone-methodology.md`:
+认知 / 质量 / 责任 / 成本 / 性能 + 其他, one question at a time, business language,
+every note read back and confirmed, every dimension probed before it may be called
+empty, solutions parked, nothing invented). Its product is an optional, bounded
+`fishbone` member of the proposal block — metadata (customer, date, scenario,
+`internal|b2b|b2c`), per-dimension coverage (`confirmed|explored_empty|unresolved`),
+barriers (`sticky_text`, evidence, redacted quote, `confirmed`, `selected`) and a
+parking lot — validated cross-field like the rest of the contract (exactly the six
+dimensions, ≤ 3 selected per dimension, selected ⇒ confirmed, coverage consistent with
+the notes; a violation is an *invalid* revision) and omitted from the stored content
+when absent, so older revisions hash unchanged. It is inert: the console renders it as
+an SVG fishbone in the Proposal panel (`FishboneDiagram`, self-contained markup with
+DOWNLOAD SVG / JSON; the JSON has the shape of the skill's `fishbone-data.json`), a
+member edit carries it through unchanged, and nothing on AWS reads it. There is no
+draw.io template dependency.
+
+**Clearing a conversation clears what it created.** The History panel's CLEAR
+(`GET …/footprint` → confirm → `DELETE …/conversations/{id}`, `app/assistant/purge.py`)
+never deletes only the transcript: the footprint lists every Agent an approval deployed,
+every evaluation-assets operation with its live cloud resources and the local Datasets
+those operations created, plus what blocks the purge (a streaming turn, a queued /
+running / cleaning operation, a live deployment job). The purge refuses on any blocker
+with nothing deleted, then composes the existing single-resource paths in dependency
+order — the fenced `cleanup_operation` per operation (an operation that does not reach
+`cleaned` stops the purge with `409 assistant.conversation_assets_remain`; the
+conversation stays so the remaining resources stay attributable), the local Dataset
+rows (an AWS copy a member synced by hand is that member's asset and stays), the
+shared `delete_agent_row` teardown per Agent (preset refusal, resource, role, ledger,
+name claim), and only then the ledger rows. Owner-bound; a member may clear a bare
+transcript, while anything involving cloud assets or an Agent requires an administrator
+(`403 assistant.conversation_purge_admin`) — the same bar as the individual cleanup /
+deploy routes. Evaluation runs already recorded keep their rows.
+
 **Approval — the only executor.** `POST …/proposal/approve` (`perm:agents.deploy`,
 the same permission as `POST /api/agents`, re-asserted in the handler) names
 `{revision, content_hash}`. The **exact requested revision** is resolved first: an

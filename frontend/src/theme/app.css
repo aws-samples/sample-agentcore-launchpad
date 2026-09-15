@@ -184,6 +184,7 @@ main{padding:26px 28px 60px;max-width:1460px;width:100%;min-width:0;margin:0 aut
 .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.24em;color:var(--amber)}
 .vhead h1{font-stretch:118%;font-weight:800;font-size:26px;letter-spacing:.01em}
 .vhead .meta{font-family:var(--mono);font-size:10.5px;color:var(--ink-3);margin-left:auto}
+.vhead .vhead-desc{flex-basis:100%;margin:2px 0 0;font-size:13px;line-height:1.6;color:var(--ink-2);max-width:960px}
 
 .panel{background:var(--panel);border:1px solid var(--line);position:relative}
 .panel.brk::before,.panel.brk::after{content:"";position:absolute;width:11px;height:11px;pointer-events:none}
@@ -775,7 +776,7 @@ tr.rowlink{cursor:pointer}
 .preset-settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 18px}
 @media (max-width:760px){.preset-settings-grid{grid-template-columns:1fr}}
 .confirm-title{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--amber);margin-bottom:10px}
-.confirm-body{font-size:13px;color:var(--ink-2);line-height:1.6;margin-bottom:16px}
+.confirm-body{font-size:13px;color:var(--ink-2);line-height:1.6;margin-bottom:16px;white-space:pre-line}
 .confirm-actions{display:flex;justify-content:flex-end;gap:8px}
 
 /* ================= keyboard focus ================= */
@@ -930,7 +931,12 @@ footer .sep{color:var(--line-2)}
    panels below it span both columns (.assist-span). */
 .assist-side{display:flex;flex-direction:column;gap:14px;min-width:0;grid-column:2;grid-row:1}
 .assist-conv-list{display:flex;flex-direction:column;gap:6px;padding:10px 16px;max-height:220px;overflow-y:auto}
-.assist-conv-list .selchip{cursor:pointer;letter-spacing:0;justify-content:space-between;text-align:left;width:100%}
+.assist-conv-list .selchip{cursor:pointer;letter-spacing:0;justify-content:space-between;text-align:left;width:100%;min-width:0}
+.assist-conv-row{display:flex;gap:6px;align-items:stretch}
+.assist-conv-row .selchip{flex:1}
+.assist-conv-clear{padding:0 9px;color:var(--ink-3)}
+.assist-conv-clear:hover:not(:disabled){color:var(--crit-text);border-color:var(--crit)}
+.assist-conv-clear:disabled{opacity:.35;cursor:default}
 .assist-conv-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:1180px){.assist-grid{grid-template-columns:1fr}.assist-thread{height:420px}.assist-side{grid-column:auto;grid-row:auto}}
 /* SE-047 evaluation-assets panel: full-width span under the two assistant columns,
@@ -958,3 +964,8 @@ footer .sep{color:var(--line-2)}
 .assist-next-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 .assist-next-run{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px;padding:8px 10px;border:1px solid var(--line-2);font-size:11px;color:var(--ink-2)}
 .assist-next-runs{margin-top:10px}
+/* Agent-DLC fishbone in the proposal panel */
+.fishbone svg{max-height:560px}
+.fishbone-details{margin-top:10px}
+.fishbone-details summary{cursor:pointer;font-size:10.5px;letter-spacing:.1em}
+.fishbone-details table{margin-top:8px}

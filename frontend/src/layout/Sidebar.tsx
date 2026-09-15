@@ -1,15 +1,20 @@
 import { useTranslation } from "react-i18next";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 
 import { useAuth } from "../auth/auth-context";
 import { useWorkspace } from "../workspace/workspace-context";
-import { ADMIN_NAV_ENTRIES, NAV_ENTRIES, PLATFORM_COUNT, type NavEntry } from "./nav";
+import {
+  ADMIN_NAV_ENTRIES, NAV_ENTRIES, navEntryFor, PLATFORM_COUNT, type NavEntry,
+} from "./nav";
 import type { HealthInfo } from "./useHealth";
 
 export function Sidebar({ health }: { health: HealthInfo | null }) {
   const { t } = useTranslation();
   const { isAdmin } = useAuth();
   const { current } = useWorkspace();
+  const { pathname } = useLocation();
+  // Longest-prefix match, so /create/assistant lights its own entry and not /create.
+  const activeTo = pathname === "/" ? "/" : navEntryFor(pathname)?.to ?? null;
 
   const renderLink = (entry: NavEntry) =>
     entry.adminOnly && !isAdmin ? (
@@ -24,7 +29,9 @@ export function Sidebar({ health }: { health: HealthInfo | null }) {
         key={entry.to}
         to={entry.to}
         end={entry.end}
-        className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
+        // a function form: react-router then adds no "active" of its own, and the
+        // longest-prefix rule above decides (so /create is not lit on /create/assistant)
+        className={() => `nav-item${activeTo === entry.to ? " active" : ""}`}
       >
         <span className="idx">{entry.idx}</span>
         {t(entry.labelKey)}
@@ -44,13 +51,13 @@ export function Sidebar({ health }: { health: HealthInfo | null }) {
         </>
       ) : null}
       <div className="label">{t("nav.phase02")}</div>
-      {/* 09 belongs to Skill Lab since 2026-08-18; the placeholders moved up */}
+      {/* placeholders follow the numbered flow; 02 became the architect assistant */}
       <div className="nav-item dim">
-        <span className="idx">13</span>
+        <span className="idx">14</span>
         {t("nav.payments")}
       </div>
       <div className="nav-item dim">
-        <span className="idx">14</span>
+        <span className="idx">15</span>
         {t("nav.settings")}
       </div>
       <div className="sys" data-testid="sidebar-region">

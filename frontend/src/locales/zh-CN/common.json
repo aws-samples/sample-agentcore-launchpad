@@ -4043,6 +4043,7 @@
     "kicker": "创建 · 架构助手",
     "title": "架构助手",
     "meta": "{{label}} · Workspace {{workspace}} · {{region}}",
+    "description": "输入你的需求，与 AWS Agent 解决方案架构师对话：它会确认需求基线，只追问会影响设计的问题，用五维鱼骨图梳理上线障碍，把痛点转成黄金测试，并基于本 Workspace 现有的工具、技能与知识库提出一个托管 Harness 方案。在你审阅并批准之前不会创建任何东西——批准后它部署 Agent、创建 AgentCore 评估器，并引导你完成第一次评估运行。",
     "backToCreate": "◂ Agent 管理",
     "unavailableTitle": "助手不可用",
     "unavailableBody": "{{label}} 预置在本 Workspace 中未处于运行中（状态：{{status}}）。助手运行在该受保护预置之上，没有它无法启动。",
@@ -4055,6 +4056,24 @@
     "historyTitle": "历史会话",
     "historySub": "本 Workspace 共 {{n}} 个会话",
     "historyEmpty": "暂无历史会话 — 新建一个会话后会显示在这里",
+    "clear": {
+      "action": "清除该会话及其创建的全部资产",
+      "title": "清除“{{title}}”及其资产？",
+      "intro": "将删除对话记录（{{turns}} 轮）和 {{proposals}} 个提案修订。",
+      "agents": "已部署的 Agent 将从 AWS 删除（Harness + 执行角色）：{{list}}。",
+      "operations": "{{n}} 次评估资产创建将被清理：{{resources}} 个云端资源（AgentCore 评估器、Lambda 及其角色、日志组与策略）在逐一核对身份后删除。",
+      "datasets": "将删除本地 Dataset：{{list}}。",
+      "datasetCloud": "其中有 Dataset 曾被手动同步到 AWS；该 AWS Dataset 会保留（如不需要，请在 评估 → Datasets 中删除）。",
+      "onlyTranscript": "该会话没有创建 Agent、云端资产或 Dataset。",
+      "blockers": "暂时无法清除：{{list}}。请等待其完成（或停止）后重试。",
+      "adminOnly": "该会话创建了云端资产或 Agent；只有管理员才能连同这些资产一起清除。",
+      "irreversible": "此操作会删除真实的 AWS 资源且无法撤销。已记录的评估运行仍会保留在评估页列表中。",
+      "irreversibleLocal": "此操作无法撤销；不会改动任何 AWS 资源。",
+      "confirm": "清除会话与资产",
+      "working": "清除中……",
+      "blocked": "该会话仍有任务在进行 — 未删除任何内容。",
+      "doneToast": "已清除“{{title}}” — 移除了 {{agents}} 个 Agent、{{operations}} 次资产操作、{{datasets}} 个 Dataset。"
+    },
     "noConversation": "先新建一个会话，再把 Workshop 产出粘贴到下方。",
     "emptyThread": "粘贴 Workshop 产出 — 助手会确认需求基线，只追问缺失且影响架构的问题",
     "composerLabel": "你的消息 · Workshop 产出、回答、要求",
@@ -4100,6 +4119,8 @@
     "field.target": "目标",
     "none": "—",
     "summary": "摘要",
+    "fishbone": "上线障碍鱼骨图（Agent-DLC · DEFINE）",
+    "fishboneNote": "客户在需求采集中亲口提出并确认的上线障碍，每条只归一个主维度，图上每个维度最多三条。只记录事实，不含方案——下方的黄金测试与设计都应能追溯到这些障碍。",
     "baseline": "需求基线",
     "assumptions": "假设",
     "manualTasks": "需手动实现（此处不会创建）",
@@ -4345,5 +4366,42 @@
       "open": "打开在线评估"
     },
     "note": "本面板以指引为主，只有一个例外：“一键启动评估”会在你确认后提交一次真实的运行（与“新建运行”相同的请求）。其余链接都只是打开已有的控制台页面并预选好资源 — 这里不会再有其他操作调用 Agent 或改动 AWS。"
+  },
+  "fishbone": {
+    "title": "Agent-DLC 五维鱼骨图 · 上线障碍",
+    "head": "Agent 场景",
+    "footer": "便签是客户确认过的障碍（每个维度最多 3 条）——只记事实，不记方案。已探测且确认为空的维度会标注；未确认的维度不入图。",
+    "dim": {
+      "cognition": "认知 Cognition",
+      "quality": "质量 Quality",
+      "responsibility": "责任 Responsibility",
+      "cost": "成本 Cost",
+      "performance": "性能 Performance",
+      "other": "其他 Other"
+    },
+    "coverage": {
+      "confirmed": "已确认",
+      "explored_empty": "已探测 · 为空",
+      "unresolved": "未确认"
+    },
+    "target": {
+      "internal": "对内使用",
+      "b2b": "企业客户（B2B）",
+      "b2c": "消费者（B2C）"
+    },
+    "downloadSvg": "下载 SVG",
+    "downloadJson": "下载 JSON",
+    "downloadHint": "SVG 即当前显示的图；JSON 是结构化的原始数据（与 Agent-DLC skill 的 fishbone-data.json 同构）。",
+    "allBarriers": "全部障碍（{{n}}）——含未选入图中的条目",
+    "parkingLot": "Parking lot（{{n}}）——客户提出的方案，与障碍分开保存",
+    "col": {
+      "dimension": "维度",
+      "sticky": "便签",
+      "evidence": "证据 / 原话",
+      "status": "状态"
+    },
+    "confirmed": "已确认",
+    "unconfirmed": "未确认",
+    "selected": "已入图"
   }
 }

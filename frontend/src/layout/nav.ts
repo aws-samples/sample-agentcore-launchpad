@@ -9,20 +9,23 @@ export interface NavEntry {
 
 export const NAV_ENTRIES: NavEntry[] = [
   { idx: "01", to: "/", labelKey: "nav.overview", end: true },
+  // The architect assistant gets its own slot: it is the guided entrance to agent
+  // creation, not a sub-view of the management page.
+  { idx: "02", to: "/create/assistant", labelKey: "nav.assistant" },
   // members reach it too since 2026-08-07: reads are open, and the mutating
   // actions are gated per user by agent-management permissions (auth `can()`)
-  { idx: "02", to: "/create", labelKey: "nav.createAgent" },
-  { idx: "03", to: "/registry", labelKey: "nav.registry" },
-  { idx: "04", to: "/knowledge-bases", labelKey: "nav.knowledgeBases" },
-  { idx: "05", to: "/memory", labelKey: "nav.memory" },
-  { idx: "06", to: "/chat", labelKey: "nav.chat" },
-  { idx: "07", to: "/observability", labelKey: "nav.observability" },
-  { idx: "08", to: "/evaluation", labelKey: "nav.evaluation" },
-  { idx: "09", to: "/skill-lab", labelKey: "nav.skillLab" },
-  { idx: "10", to: "/governance", labelKey: "nav.governance" },
+  { idx: "03", to: "/create", labelKey: "nav.createAgent" },
+  { idx: "04", to: "/registry", labelKey: "nav.registry" },
+  { idx: "05", to: "/knowledge-bases", labelKey: "nav.knowledgeBases" },
+  { idx: "06", to: "/memory", labelKey: "nav.memory" },
+  { idx: "07", to: "/chat", labelKey: "nav.chat" },
+  { idx: "08", to: "/observability", labelKey: "nav.observability" },
+  { idx: "09", to: "/evaluation", labelKey: "nav.evaluation" },
+  { idx: "10", to: "/skill-lab", labelKey: "nav.skillLab" },
+  { idx: "11", to: "/governance", labelKey: "nav.governance" },
 ];
 
-export const PLATFORM_COUNT = 6;
+export const PLATFORM_COUNT = 7;
 
 /**
  * Admin-only entries: rendered by the sidebar only for an administrator.
@@ -33,12 +36,28 @@ export const PLATFORM_COUNT = 6;
  * console for members).
  */
 export const ADMIN_NAV_ENTRIES: NavEntry[] = [
-  { idx: "11", to: "/users", labelKey: "nav.users" },
-  { idx: "12", to: "/workspaces", labelKey: "nav.workspaces" },
+  { idx: "12", to: "/users", labelKey: "nav.users" },
+  { idx: "13", to: "/workspaces", labelKey: "nav.workspaces" },
 ];
 
 /** Every routable entry, for breadcrumb resolution. */
 export const ALL_NAV_ENTRIES: NavEntry[] = [...NAV_ENTRIES, ...ADMIN_NAV_ENTRIES];
+
+/**
+ * The entry a pathname belongs to: the LONGEST `to` that prefixes it, so
+ * `/create/assistant` resolves to the assistant entry and `/create/studio` to
+ * Agent management. `null` for the index route and for unrouted paths.
+ */
+export function navEntryFor(pathname: string): NavEntry | null {
+  let best: NavEntry | null = null;
+  for (const entry of ALL_NAV_ENTRIES) {
+    if (entry.to === "/") continue;
+    if (pathname === entry.to || pathname.startsWith(`${entry.to}/`)) {
+      if (!best || entry.to.length > best.to.length) best = entry;
+    }
+  }
+  return best;
+}
 
 /**
  * Every path the router in `App.tsx` matches, in react-router pattern form.

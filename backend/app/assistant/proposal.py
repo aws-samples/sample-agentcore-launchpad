@@ -102,6 +102,92 @@ class EvaluationPlanSeed(BaseModel):
         return self
 
 
+# ── Agent-DLC five-dimension fishbone (launch barriers the customer confirmed) ─────
+
+FISHBONE_DIMENSIONS: tuple[str, ...] = (
+    "cognition", "quality", "responsibility", "cost", "performance", "other",
+)
+FISHBONE_SLOTS_PER_DIMENSION = 3
+FishboneCoverage = Literal["confirmed", "explored_empty", "unresolved"]
+
+
+class FishboneBarrier(BaseModel):
+    """One sticky note: a barrier the customer stated, in the customer's terms."""
+
+    model_config = ConfigDict(extra="forbid")
+    sticky_text: Annotated[str, Field(min_length=1, max_length=120)]
+    evidence: Annotated[str, Field(max_length=1000)] = ""
+    customer_quote: Annotated[str, Field(max_length=1000)] = ""
+    confirmed: bool = False
+    selected: bool = False
+
+
+class FishboneParkingLotItem(BaseModel):
+    """A solution the customer proposed during discovery, kept apart from the barriers."""
+
+    model_config = ConfigDict(extra="forbid")
+    original: Annotated[str, Field(min_length=1, max_length=1000)]
+    converted_to: Annotated[str, Field(max_length=200)] = ""
+
+
+class Fishbone(BaseModel):
+    """The structured fishbone the console renders (mirrors the Agent-DLC skill's
+    ``fishbone-data.json``): metadata, per-dimension coverage, barriers and the parking
+    lot. Validated cross-field by ``fishbone_errors`` — a violation makes the proposal
+    an *invalid* revision, never a 500. Inert: nothing is executed from it."""
+
+    model_config = ConfigDict(extra="forbid")
+    version: Literal[1] = 1
+    customer: Annotated[str, Field(min_length=1, max_length=200)]
+    date: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")]
+    use_case: Annotated[str, Field(min_length=1, max_length=500)]
+    service_target: Literal["internal", "b2b", "b2c"]
+    coverage: dict[str, FishboneCoverage]
+    barriers: dict[str, list[FishboneBarrier]]
+    parking_lot: list[FishboneParkingLotItem] = Field(default_factory=list, max_length=40)
+
+    @model_validator(mode="after")
+    def _typed(self) -> "Fishbone":
+        errors = fishbone_errors(self)
+        if errors:
+            raise ValueError(errors[0])
+        return self
+
+
+def fishbone_errors(fb: Fishbone) -> list[str]:
+    """Cross-field rules of the methodology: exactly the six dimensions, at most three
+    selected notes per dimension, a selected note is confirmed, and coverage
+    ``confirmed`` needs a confirmed barrier while an empty/unresolved dimension carries
+    none. Pure — every problem is a message."""
+    errors: list[str] = []
+    dims = set(FISHBONE_DIMENSIONS)
+    unknown = sorted((set(fb.coverage) | set(fb.barriers)) - dims)
+    if unknown:
+        errors.append(f"fishbone: unknown dimensions {unknown}")
+    missing = sorted(dims - set(fb.coverage))
+    if missing:
+        errors.append(f"fishbone.coverage: missing dimensions {missing}")
+    for dim in FISHBONE_DIMENSIONS:
+        notes = fb.barriers.get(dim, [])
+        if len(notes) > 20:
+            errors.append(f"fishbone.barriers.{dim}: more than 20 barriers")
+        selected = [b for b in notes if b.selected]
+        if len(selected) > FISHBONE_SLOTS_PER_DIMENSION:
+            errors.append(f"fishbone.barriers.{dim}: {len(selected)} selected barriers "
+                          f"(max {FISHBONE_SLOTS_PER_DIMENSION})")
+        for b in selected:
+            if not b.confirmed:
+                errors.append(f"fishbone.barriers.{dim}: selected barrier is not confirmed: "
+                              f"{b.sticky_text!r}")
+        confirmed = any(b.confirmed for b in notes)
+        state = fb.coverage.get(dim)
+        if state == "confirmed" and not confirmed:
+            errors.append(f"fishbone.coverage.{dim}: 'confirmed' without a confirmed barrier")
+        if state in ("explored_empty", "unresolved") and confirmed:
+            errors.append(f"fishbone.coverage.{dim}: '{state}' but a barrier is confirmed")
+    return errors
+
+
 class ProposalContent(BaseModel):
     """Everything an approval may turn into a new managed Harness. ``extra="forbid"``
     is the allowlist: a member (or model) cannot smuggle ``env``, ``code``,
@@ -135,14 +221,20 @@ class ProposalContent(BaseModel):
     # ``EvaluationPlanSeed`` below, omitted from the stored content when absent so
     # every pre-existing revision hashes exactly as before.
     evaluation_plan: EvaluationPlanSeed | None = None
+    # Optional Agent-DLC launch-barrier fishbone the customer confirmed during intake:
+    # rendered by the console in the proposal panel, never executed; omitted from the
+    # stored content when absent (same hash-stability rule as ``evaluation_plan``).
+    fishbone: Fishbone | None = None
 
 
 def content_dump(content: ProposalContent) -> dict[str, Any]:
-    """The stored/displayed form: the optional ``evaluation_plan`` member is dropped
-    when absent, so a revision without it serializes exactly as before SE-047."""
+    """The stored/displayed form: the optional ``evaluation_plan`` and ``fishbone``
+    members are dropped when absent, so a revision without them serializes exactly as
+    before they existed."""
     data = content.model_dump()
-    if data.get("evaluation_plan") is None:
-        data.pop("evaluation_plan", None)
+    for optional in ("evaluation_plan", "fishbone"):
+        if data.get(optional) is None:
+            data.pop(optional, None)
     return data
 
 

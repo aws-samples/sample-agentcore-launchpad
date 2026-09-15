@@ -4043,6 +4043,7 @@
     "kicker": "CREATE · ARCHITECT ASSISTANT",
     "title": "Architect assistant",
     "meta": "{{label}} · workspace {{workspace}} · {{region}}",
+    "description": "Describe your requirement and talk it through with the AWS Agent Solution Architect: it confirms the requirement baseline, asks only the questions that change the design, maps launch barriers on a five-dimension fishbone, turns pain points into golden tests, and proposes one managed Harness built from this workspace's tools, skills and knowledge bases. Nothing is created until you review and approve — then it deploys the Agent, creates the AgentCore evaluators, and guides you to the first evaluation run.",
     "backToCreate": "◂ AGENT MANAGEMENT",
     "unavailableTitle": "ASSISTANT UNAVAILABLE",
     "unavailableBody": "The {{label}} preset is not active in this workspace (status: {{status}}). The assistant runs on that protected preset and cannot start without it.",
@@ -4055,6 +4056,24 @@
     "historyTitle": "HISTORY",
     "historySub": "{{n}} conversation(s) in this workspace",
     "historyEmpty": "NO CONVERSATIONS YET — START ONE TO SEE IT HERE",
+    "clear": {
+      "action": "Clear this conversation and everything it created",
+      "title": "Clear “{{title}}” and its assets?",
+      "intro": "The transcript ({{turns}} turn(s)) and {{proposals}} proposal revision(s) are deleted.",
+      "agents": "Deployed Agent(s) deleted from AWS (Harness + execution role): {{list}}.",
+      "operations": "{{n}} evaluation-assets operation(s) cleaned: {{resources}} cloud resource(s) — AgentCore evaluators, the Lambda with its role, log group and policies — are deleted after their identity is re-checked.",
+      "datasets": "Local Dataset(s) deleted: {{list}}.",
+      "datasetCloud": "A copy of a Dataset was synced to AWS by hand; that AWS Dataset stays (delete it in Evaluation → Datasets if unwanted).",
+      "onlyTranscript": "No Agent, cloud asset or Dataset was created from it.",
+      "blockers": "Cannot clear yet: {{list}}. Wait for it to finish (or stop it) and try again.",
+      "adminOnly": "This conversation created cloud assets or an Agent; only an administrator can clear it together with them.",
+      "irreversible": "This deletes real AWS resources and cannot be undone. Evaluation runs already recorded stay in the Evaluation list.",
+      "irreversibleLocal": "This cannot be undone; nothing on AWS is touched.",
+      "confirm": "CLEAR CONVERSATION & ASSETS",
+      "working": "CLEARING…",
+      "blocked": "The conversation still has work in flight — nothing was deleted.",
+      "doneToast": "Cleared “{{title}}” — {{agents}} Agent(s), {{operations}} asset operation(s), {{datasets}} Dataset(s) removed."
+    },
     "noConversation": "Start a conversation, then paste your Workshop output below.",
     "emptyThread": "PASTE YOUR WORKSHOP OUTPUT — THE ASSISTANT CONFIRMS THE BASELINE AND ASKS ONLY WHAT IS MISSING",
     "composerLabel": "YOUR MESSAGE · WORKSHOP OUTPUT, ANSWERS, REQUESTS",
@@ -4100,6 +4119,8 @@
     "field.target": "TARGET",
     "none": "—",
     "summary": "SUMMARY",
+    "fishbone": "LAUNCH-BARRIER FISHBONE (AGENT-DLC · DEFINE)",
+    "fishboneNote": "Barriers the customer stated and confirmed during intake, one primary dimension each, at most three on the diagram per dimension. Facts, not solutions — the golden tests and the design below trace back to them.",
     "baseline": "REQUIREMENTS BASELINE",
     "assumptions": "ASSUMPTIONS",
     "manualTasks": "MANUAL IMPLEMENTATION (NOT CREATED HERE)",
@@ -4345,5 +4366,42 @@
       "open": "OPEN ONLINE EVALUATION"
     },
     "note": "Guidance only, with one exception: START EVALUATION submits a real run (the same request as New Run) after you confirm. Every other link just opens an existing console page with the resources pre-selected — nothing else here invokes the Agent or changes AWS."
+  },
+  "fishbone": {
+    "title": "Agent-DLC five-dimension fishbone · launch barriers",
+    "head": "Agent scenario",
+    "footer": "Sticky notes are the customer's confirmed barriers (max 3 per dimension) — facts, not solutions. Dimensions probed and confirmed empty are labelled; unresolved ones are not drawn.",
+    "dim": {
+      "cognition": "认知 Cognition",
+      "quality": "质量 Quality",
+      "responsibility": "责任 Responsibility",
+      "cost": "成本 Cost",
+      "performance": "性能 Performance",
+      "other": "其他 Other"
+    },
+    "coverage": {
+      "confirmed": "confirmed",
+      "explored_empty": "probed · empty",
+      "unresolved": "unresolved"
+    },
+    "target": {
+      "internal": "internal users",
+      "b2b": "business customers (B2B)",
+      "b2c": "consumers (B2C)"
+    },
+    "downloadSvg": "DOWNLOAD SVG",
+    "downloadJson": "DOWNLOAD JSON",
+    "downloadHint": "The SVG is the diagram as shown; the JSON is the structured source of truth (same shape as the Agent-DLC skill's fishbone-data.json).",
+    "allBarriers": "ALL BARRIERS ({{n}}) — including those not selected for the diagram",
+    "parkingLot": "PARKING LOT ({{n}}) — solutions the customer raised, kept apart from the barriers",
+    "col": {
+      "dimension": "Dimension",
+      "sticky": "Sticky note",
+      "evidence": "Evidence / quote",
+      "status": "Status"
+    },
+    "confirmed": "confirmed",
+    "unconfirmed": "not confirmed",
+    "selected": "on diagram"
   }
 }

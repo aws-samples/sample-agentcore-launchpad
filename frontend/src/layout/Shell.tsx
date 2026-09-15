@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import { matchPath, Outlet, useLocation } from "react-router-dom";
 
 import { useWorkspace } from "../workspace/workspace-context";
-import { ALL_NAV_ENTRIES, NAV_ENTRIES, ROUTE_PATHS } from "./nav";
+import { NAV_ENTRIES, navEntryFor, ROUTE_PATHS } from "./nav";
 import { RouteChunk } from "./RouteChunk";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
@@ -12,10 +12,9 @@ function crumbKeyFor(pathname: string): string {
   // An unrouted path (typo, stale bookmark) renders the catch-all NotFound
   // view; label it as such instead of the nearest prefix match's module.
   if (!ROUTE_PATHS.some((pattern) => matchPath(pattern, pathname))) return "nav.notFound";
-  const entry =
-    ALL_NAV_ENTRIES.find((e) => e.to !== "/" && pathname.startsWith(e.to)) ??
-    NAV_ENTRIES[0];
-  return entry.labelKey;
+  // longest prefix wins: /create/assistant is the assistant, /create/studio is
+  // Agent management
+  return (navEntryFor(pathname) ?? NAV_ENTRIES[0]).labelKey;
 }
 
 export function Shell() {
