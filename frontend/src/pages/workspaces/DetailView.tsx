@@ -8,8 +8,8 @@ import {
   ConfirmDialog,
   DataTable,
   Pager,
-  PAGE_SIZES,
   Panel,
+  TABLE_PAGE_SIZE,
   useToast,
   ViewHead,
 } from "../../components";
@@ -126,7 +126,7 @@ export function WorkspaceDetailView({
   const filter: WorkspaceGrantFilter =
     filterParam === "granted" || filterParam === "ungranted" ? filterParam : "all";
   const pageNo = Math.max(1, Number(params.get("gpage") ?? "1") || 1);
-  const [size, setSize] = useState<number>(PAGE_SIZES[0]);
+  const [size, setSize] = useState<number>(TABLE_PAGE_SIZE);
   const [grants, setGrants] = useState<WorkspaceGrants | null>(null);
   const [grantsLoading, setGrantsLoading] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());

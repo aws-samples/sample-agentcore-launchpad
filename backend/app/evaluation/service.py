@@ -29,7 +29,7 @@ from botocore.exceptions import ClientError
 from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.evaluation import agentcore_eval as ac
-from app.evaluation import execution, simulation, telemetry
+from app.evaluation import simulation, telemetry
 from app.evaluation.models import EvalRun
 from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import (
@@ -255,40 +255,14 @@ def execute_run(
             # sequentially in that session; simulated persona scenarios run the
             # SDK's LLM-actor loop (actor_model_id plays the user). Ground
             # truth (assertions / expected trajectory / expected responses)
-            # rides along as sessionMetadata. Scenarios that opt into
-            # ``metadata.launchpad_execution`` run through the multi-actor /
-            # multi-session procedure runner instead (execution.py) — several
-            # synthetic actors and sessions per scenario, ground truth split by
-            # the actual session, correlation persisted after every step.
+            # rides along as sessionMetadata.
             scenarios = normalize_scenarios(items)
-            # dispatch is keyed by POSITION, never by scenario_id: a legacy
-            # prompt item is normalized to item_<N>, which may equal an opt-in
-            # scenario's id — a name-keyed lookup would run the wrong plan
-            plans_by_pos = [
-                execution.parse_plan(s) if execution.is_executable(s) else None
-                for s in scenarios
-            ]
-            plans = [p for p in plans_by_pos if p is not None]
-            if plans and protocol == "a2a" and method != "harness":
-                raise RuntimeError(
-                    "multi-actor/multi-session scenarios cannot run against an A2A "
-                    "agent (no actor envelope)"
-                )
-            exec_blob = execution.empty_execution(plans) if plans else None
-            exec_states: list[execution.ScenarioState] = []
             metadata_entries: list[dict[str, Any]] = []
             watermark_sid: str | None = None
 
-            def invoke(
-                prompt: str, sid: str | None, actor_id: str | None = None
-            ) -> dict[str, Any]:
-                # Ordinary replays keep the exact legacy call shape (bare default
-                # actor, lenient decoding); only procedure steps pass their
-                # synthetic actor and ask the Runtime decoder for strict text
-                # evidence (raw non-string text = protocol error, null = no answer).
-                actor = {"actor_id": actor_id} if actor_id else {}
+            def invoke(prompt: str, sid: str | None) -> dict[str, Any]:
                 if method == "harness":  # InvokeHarness, not the runtime data plane
-                    return hc.invoke_harness_text(data, agent_arn, prompt, session_id=sid, **actor)
+                    return hc.invoke_harness_text(data, agent_arn, prompt, session_id=sid)
                 if protocol == "a2a":  # JSON-RPC runtimes reject {prompt}
                     return rt.invoke_a2a_text(data, agent_arn, prompt, session_id=sid)
                 return rt.invoke_runtime_text(
@@ -297,91 +271,30 @@ def execute_run(
                     prompt,
                     session_id=sid,
                     runtime_user_id=runtime_user_id,
-                    **actor,
-                    **({"strict_text": True} if actor_id else {}),
                 )
 
-            _update(run_id, status="invoking", execution=exec_blob)
-            try:
-                for scenario, plan in zip(scenarios, plans_by_pos, strict=True):
-                    _check_stop(run_id)
-                    sid: str | None = None
-                    if plan is not None:
-                        state = execution.ScenarioState()
-                        exec_states.append(state)
-
-                        def persist(st: execution.ScenarioState, session_id: str) -> None:
-                            nonlocal watermark_sid
-                            watermark_sid = session_id
-                            if session_id not in session_ids:
-                                session_ids.append(session_id)
-                            _update(
-                                run_id,
-                                session_ids=list(session_ids),
-                                execution=execution.merge_state(
-                                    exec_blob, exec_states, final=False
-                                ),
-                            )
-
-                        execution.run_scenario(
-                            plan,
-                            invoke=lambda prompt, session_id, actor_id: invoke(
-                                prompt, session_id, actor_id
-                            ),
-                            new_session_id=hc.new_session_id,
-                            actor_for=lambda repeat, alias, _p=plan: execution.synthetic_actor(
-                                workspace_id=workspace.id,
-                                agent_id=agent_id or "",
-                                run_id=run_id,
-                                scenario_id=_p.scenario_id,
-                                repeat=repeat,
-                                alias=alias,
-                            ),
-                            check_stop=lambda: _check_stop(run_id),
-                            on_step=persist,
-                            state=state,
-                        )
-                        exec_blob.update(
-                            execution.merge_state(exec_blob, exec_states, final=False)
-                        )
-                        metadata_entries.extend(
-                            execution.ground_truth_for_sessions(plan, scenario, state)
-                        )
-                        continue
-                    if simulation.is_simulated(scenario):
-                        sid = simulation.run_simulated_scenario(
-                            data,
-                            agent_arn=agent_arn,
-                            method=method,
-                            scenario=scenario,
-                            actor_model_id=actor_model_id or "",
-                            protocol=protocol,
-                            runtime_user_id=runtime_user_id,
-                        )
-                    else:
-                        for prompt in scenario_prompts(scenario):
-                            _check_stop(run_id)
-                            sid = invoke(prompt, sid)["session_id"]
-                    session_ids.append(sid)
-                    watermark_sid = sid
-                    metadata_entries.extend(ground_truth_metadata([scenario], [sid]))
-                    _update(run_id, session_ids=list(session_ids))
-                if exec_blob is not None:
-                    exec_blob.update(execution.merge_state(exec_blob, exec_states, final=True))
-                    _update(run_id, session_ids=list(session_ids), execution=dict(exec_blob))
-            except BaseException:
-                if exec_blob is not None:
-                    # stopped / failed anywhere in the replay — before the first
-                    # step, mid-procedure or between scenarios: the sessions
-                    # minted so far and the checks (missing answers → error) are
-                    # kept and the roll-up can no longer be a pass
-                    exec_blob.update(
-                        execution.merge_state(
-                            exec_blob, exec_states, final=True, interrupted=True
-                        )
+            _update(run_id, status="invoking")
+            for scenario in scenarios:
+                _check_stop(run_id)
+                sid: str | None = None
+                if simulation.is_simulated(scenario):
+                    sid = simulation.run_simulated_scenario(
+                        data,
+                        agent_arn=agent_arn,
+                        method=method,
+                        scenario=scenario,
+                        actor_model_id=actor_model_id or "",
+                        protocol=protocol,
+                        runtime_user_id=runtime_user_id,
                     )
-                    _update(run_id, session_ids=list(session_ids), execution=dict(exec_blob))
-                raise
+                else:
+                    for prompt in scenario_prompts(scenario):
+                        _check_stop(run_id)
+                        sid = invoke(prompt, sid)["session_id"]
+                session_ids.append(sid)
+                watermark_sid = sid
+                metadata_entries.extend(ground_truth_metadata([scenario], [sid]))
+                _update(run_id, session_ids=list(session_ids))
             if session_metadata is None:
                 session_metadata = metadata_entries or None
             _check_stop(run_id)

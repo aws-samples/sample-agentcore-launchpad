@@ -1529,21 +1529,3 @@ def test_recommend_action_threads_a_valid_source(client, monkeypatch):
     assert res.status_code == 202
     assert captured["source"]["run_id"] == run_id
     assert captured["source"]["kind"] == "batch_evaluation"
-
-
-def test_resolve_traffic_prompts_refuses_multi_actor_procedures():
-    """A cross-actor / cross-session procedure cannot be flattened into the
-    traffic stage's one-prompt-per-session replay — refused, not silently
-    reduced to its first turn."""
-    from types import SimpleNamespace
-
-    import pytest
-
-    dataset = SimpleNamespace(kind="predefined", items=[{
-        "scenario_id": "iso", "turns": [{"input": "remember amber"}, {"input": "colour?"}],
-        "metadata": {"launchpad_execution": {"version": 1, "steps": [
-            {"turn": 0, "actor": "A", "session": "a1"}, {"turn": 1, "actor": "B", "session": "b1"},
-        ]}},
-    }])
-    with pytest.raises(ValueError, match="multi-actor/multi-session"):
-        svc.resolve_traffic_prompts(dataset)

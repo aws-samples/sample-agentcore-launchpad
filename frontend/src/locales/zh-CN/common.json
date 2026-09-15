@@ -2698,18 +2698,10 @@
         "note": "kind 由条目内容推断且服务端不可变；已发布的云端版本不可变——只有草稿会变，且仅通过同步变更。"
       },
       "execution": {
-        "title": "执行流程 · 多角色 / 多会话",
-        "hint": "该 scenario 启用了 metadata.launchpad_execution：其轮次将在合成角色与会话下执行（下方只读预览）。轮次文本仍可编辑；由于每个步骤对应一个轮次，此处禁用增删轮次。修改流程请使用「编辑 JSON」—— 表单不会丢弃这段元数据。",
-        "repeat": "重复 ×{{count}}",
-        "step": "T{{turn}} → 角色 {{actor}} · 会话 {{session}}",
-        "checks": "检查",
-        "check": "{{id}}：{{type}} 作用于 T{{turn}} · 「{{text}}」",
-        "dependsOn": "依赖 {{ids}}",
         "editJson": "编辑 JSON",
         "backToForm": "返回表单",
         "jsonLabel": "SCENARIO JSON —— 整条条目原样保存（由服务端校验）",
         "jsonInvalid": "scenario {{index}}：JSON 无效 —— {{error}}",
-        "jsonMode": "JSON",
         "extraKeys": "保留字段：{{keys}}",
         "jsonOnly": "仅限 JSON —— 该条目包含表单无法呈现的字段（{{reason}}），若按表单编辑会丢失它们。请在下方编辑 JSON；在条目适配表单之前，「返回表单」会保持 JSON 模式。",
         "jsonOnlyReason": {
@@ -2814,57 +2806,6 @@
         "empty": "还没有实验——启动一个 ▸"
       },
       "runningGuard": "已有实验在运行——共享实验网关同一时间只支持一个活跃 A/B 测试。请等它出判定，或先清理。"
-    },
-    "execution": {
-      "title": "流程结果 — 本地确定性检查",
-      "sub": "{{sessions}} 个会话 · {{steps}} 个步骤 · {{checks}} 项检查 —— 由实际回复在本地计算，不是 AWS 评审结果",
-      "note": "多角色 / 多会话 scenario（metadata.launchpad_execution）。每一行是为本次运行生成的合成角色 + 会话；检查结论把 agent 的实际回复与字面规则对比。同一批会话的 AWS 评审得分见上方「会话结果」。",
-      "status": "检查状态",
-      "statusValue": {
-        "pending": "进行中",
-        "none": "无检查",
-        "pass": "通过",
-        "fail": "失败",
-        "error": "错误",
-        "inconclusive": "无法判定"
-      },
-      "calls": "{{done}} / {{planned}} 次调用",
-      "sessions": "会话",
-      "checks": "检查",
-      "steps": "步骤",
-      "noChecks": "该流程未声明确定性检查 —— 仅有 AWS 评审结果",
-      "col": {
-        "scenario": "SCENARIO",
-        "repeat": "重复",
-        "actor": "角色",
-        "session": "会话",
-        "sessionId": "运行时会话",
-        "turns": "轮次",
-        "status": "状态",
-        "check": "检查",
-        "type": "类型",
-        "turn": "轮次",
-        "outcome": "结论",
-        "evidence": "证据",
-        "step": "步骤",
-        "response": "回复",
-        "error": "错误"
-      },
-      "sessionStatus": {
-        "ok": "正常",
-        "partial": "部分",
-        "failed": "失败"
-      },
-      "drift": "运行时返回了不同的会话 id",
-      "viewSession": "在可观测性中打开 →",
-      "checksPending": "已声明 {{count}} 项检查 —— 尚无记录（流程仍在进行，或在首项检查前被中断）",
-      "interrupted": "已中断 —— 流程未完成，因此不可能通过",
-      "stepStatus": {
-        "ok": "正常",
-        "failed": "失败",
-        "empty": "空回复"
-      },
-      "returnedSession": "实际应答会话"
     }
   },
   "expPage": {
@@ -4111,6 +4052,9 @@
     "requirements": "Workspace 阻塞项：{{list}}",
     "conversations": "会话",
     "newConversation": "新建会话",
+    "historyTitle": "历史会话",
+    "historySub": "本 Workspace 共 {{n}} 个会话",
+    "historyEmpty": "暂无历史会话 — 新建一个会话后会显示在这里",
     "noConversation": "先新建一个会话，再把 Workshop 产出粘贴到下方。",
     "emptyThread": "粘贴 Workshop 产出 — 助手会确认需求基线，只追问缺失且影响架构的问题",
     "composerLabel": "你的消息 · Workshop 产出、回答、要求",
@@ -4222,7 +4166,7 @@
   "assistantEval": {
     "title": "评估资产",
     "sub": "已评审的计划 · 独立于 Agent 批准",
-    "scopeNote": "在管理员据此创建资产之前，该计划仅对你可见。创建资产会注册一个本地 Dataset、若干 AgentCore 评估器，以及（针对声明式代码规则）一个带独立角色的 Lambda。它不会部署 Agent、不会运行评估、不会把 Dataset 同步到 AWS、不会启用在线评估，也不会调用模型。人工与 runner 的义务仍列在此处，它们不是评估器记录。",
+    "scopeNote": "在管理员据此创建资产之前，该计划仅对你可见。创建资产会注册一个本地 Dataset、若干 AgentCore 评估器，以及（针对声明式代码规则）一个带独立角色的 Lambda。它不会部署 Agent、不会运行评估、不会把 Dataset 同步到 AWS、不会启用在线评估，也不会调用模型。这里的每个评估器都是 AgentCore 评估器；AgentCore 无法打分的黄金测试会连同原因一起被阻止，并保留为手动任务。",
     "sourceRevision": "来源提案版本",
     "prepare": "准备计划",
     "prepareAgain": "重新准备（新版本）",
@@ -4241,13 +4185,12 @@
       "superseded": "已被取代"
     },
     "scenarios": "黄金测试 → Dataset 场景",
-    "evaluators": "评估器与义务",
+    "evaluators": "AgentCore 评估器",
     "recommendations": "来自提案的建议",
     "col": {
       "goldenTest": "黄金测试",
       "scenario": "场景 id",
       "turns": "轮次",
-      "procedure": "流程",
       "key": "键",
       "kind": "类型",
       "definition": "定义",
@@ -4260,24 +4203,12 @@
       "name": "名称",
       "details": "详情"
     },
-    "procedureRunner": "多 actor / 多 session（runner）",
-    "procedureSingle": "单 session",
     "blocked": "已阻止",
     "kind": {
       "existing": "现有评估器",
       "judge": "LLM 评审（新建）",
       "derived": "派生（新建）",
-      "code": "代码规则（新建 Lambda）",
-      "orchestration": "runner 检查",
-      "manual_review": "人工评审",
-      "metric_baseline": "指标基线",
-      "external_control": "外部控制"
-    },
-    "obligation": {
-      "orchestration": "由本地 runner 计算",
-      "manual_review": "人工 / 专家",
-      "metric_baseline": "需手动度量",
-      "external_control": "在本平台之外"
+      "code": "代码规则（新建 Lambda）"
     },
     "draftRubric": "草稿——需校准",
     "rulesCount": "{{n}} 条规则",
@@ -4342,15 +4273,21 @@
     "referenceDependent": "需要 ground truth",
     "retention": "保留 {{n}} 天",
     "refresh": "刷新",
-    "reviewPending": "仍有 {{n}} 个场景需要评审——请将其确认为类型化步骤，或阻止该黄金测试。",
-    "reviewNote": "旧版黄金测试被草拟为单轮场景。请逐一评审：确认为类型化步骤、在 JSON 中把多 session 流程改写为步骤，或将其阻止。在每个场景确认或阻止之前不会创建任何内容。",
-    "confirmScenarios": "确认 {{n}} 个场景为类型化",
+    "reviewPending": "仍有 {{n}} 个场景需要评审——请确认其轮次，或阻止该黄金测试。",
+    "reviewNote": "旧版黄金测试被草拟为单轮场景。请逐行评审：「确认」保留其轮次；「阻止」把它从 Dataset 中移除并记录原因（需要多个用户或多个会话、专家签核或指标基线的测试无法由 AgentCore 评估器打分——请阻止并保留为手动任务）；也可以用「以 JSON 编辑」改写轮次。每个操作都会保存为新的计划版本；在每个场景确认或阻止之前不会创建任何内容。",
+    "confirmScenarios": "确认全部 {{n}} 个场景",
+    "confirmOne": "确认",
+    "block": "阻止……",
+    "blockReasonPlaceholder": "为什么 AgentCore 评估器无法为该测试打分（会随计划保存）",
+    "blockReasonRequired": "必须填写原因——它会保存在计划里并显示在资产表中。",
+    "blockConfirm": "阻止该黄金测试",
+    "unblock": "取消阻止",
+    "unblockMissing": "黄金测试 {{id}} 不在该计划绑定的提案版本上——请改用 JSON 编辑。",
     "reviewRequired": "需要评审",
     "confirmed": "已确认",
     "turnsCount": "{{n}} 轮",
     "assertions": "断言",
     "expectedTrajectory": "预期工具",
-    "step": "第 {{turn}} 轮 · actor {{actor}} · session {{session}}",
     "allGoldenTests": "全部",
     "fullRubric": "完整评分标准与量表",
     "history": "更早的操作（其他计划版本）",
@@ -4359,5 +4296,54 @@
     "recovered": "已恢复",
     "reserved": "预留并发 {{n}}",
     "rawTitle": "原始计划内容（无效——请通过“以 JSON 编辑”修复）"
+  },
+  "assistantNext": {
+    "title": "下一步",
+    "sub": "Agent 已部署、评估资产已创建 — 接下来该做什么",
+    "agents": "Agent 管理",
+    "chat": {
+      "title": "在对话演练场中试跑 Agent",
+      "body": "先手动把两三条黄金测试的输入发给“{{name}}”，检查语气、工具调用和拒答是否正常，再消耗评估预算。",
+      "waiting": "“{{name}}”的部署尚未完成（{{status}}）。请在 Agent 管理页跟踪该任务，完成后再回来 — 下方链接始终有效。",
+      "failed": "“{{name}}”的部署失败了。请先在 Agent 管理页修复（或与助手商定一个新提案），再运行评估。",
+      "open": "打开对话"
+    },
+    "run": {
+      "title": "运行第一次离线评估",
+      "body": "“一键启动评估”会用这里创建的 {{n}} 个评估器，对 Dataset“{{dataset}}”（{{items}} 个场景）上的“{{agent}}”提交一次运行 — 与“新建运行”发送的请求完全一致。若想先调整选择，请改为打开“新建运行”。",
+      "referenceDependent": "其中 {{n}} 个评估器依赖参考答案（橙色）：它们只对带有标准答案的场景打分，不能用于线上流量。",
+      "start": "一键启动评估",
+      "startAgain": "再启动一次运行",
+      "starting": "提交中……",
+      "open": "打开新建运行",
+      "noPermission": "你的账号缺少 eval.run 权限；可以打开“新建运行”查看，但无法启动运行。",
+      "agentNotReady": "Agent 尚未处于运行中 — 只有部署成功后才能启动运行。",
+      "assetsMissing": "本次创建结果中没有就绪的 Dataset 或评估器 — 没有可运行的对象。",
+      "confirmTitle": "现在启动评估运行？",
+      "confirmBody": "Launchpad 将对 Dataset“{{dataset}}”的每个场景（共 {{items}} 个）各调用一次“{{agent}}”，并在 {{account}} / {{region}} 中以批量评估的方式用 {{n}} 个评估器为这些会话打分。此操作会产生真实且计费的 AWS 工作，且无法在此撤销；你可以在评估页停止该运行。",
+      "confirm": "启动评估",
+      "startedToast": "运行 {{id}} 已提交 — 进展会显示在评估页的列表中。",
+      "runLine": "运行 {{id}}",
+      "queued": "队列位置 {{n}}",
+      "openRuns": "在评估页打开",
+      "historyTitle": "该 Agent 在此 Dataset 上的运行（共 {{n}} 次，最新在前）",
+      "meanScore": "{{n}} 个评估器均分 {{mean}}",
+      "oneAtATime": "该 Agent 在此 Dataset 上仍有一次运行未结束——请等它完成（或在评估页停止），再启动新的运行。"
+    },
+    "iterate": {
+      "title": "查看分数与追踪，然后迭代",
+      "body": "分数偏低通常指向系统提示词或缺失的工具。到可观测性页打开该运行的会话查看每一轮的具体内容，在 Agent 管理页修改 Agent 并重新部署，然后用同一个 Dataset 再跑一次以对比版本。",
+      "openObs": "打开可观测性"
+    },
+    "manual": {
+      "title": "完成提案中留给你手动实现的部分",
+      "body": "提案把以下内容列为需手动实现 — 平台不会代为创建："
+    },
+    "online": {
+      "title": "离线分数稳定后，开启在线评估",
+      "body": "在线评估会用同一批评估器对线上会话抽样打分 — 依赖参考答案的评估器请不要在那里启用。请在离线运行稳定之后再开启，并从较低的采样率开始。",
+      "open": "打开在线评估"
+    },
+    "note": "本面板以指引为主，只有一个例外：“一键启动评估”会在你确认后提交一次真实的运行（与“新建运行”相同的请求）。其余链接都只是打开已有的控制台页面并预选好资源 — 这里不会再有其他操作调用 Agent 或改动 AWS。"
   }
 }

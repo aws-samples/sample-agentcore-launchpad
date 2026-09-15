@@ -204,6 +204,32 @@ def test_runs_list_filters_by_agent_for_the_recommend_source_picker(client):
     assert {r["id"] for r in combined["runs"]} == set(mine)
 
 
+def test_runs_list_filters_by_dataset_for_the_assistant_next_steps_panel(client):
+    """The architect assistant's NEXT STEPS panel lists the runs of ONE agent on the
+    Dataset its evaluation-assets operation created — across reloads, so a run started
+    from the panel keeps its history; other datasets' runs of the same agent stay out."""
+    db = SessionLocal()
+    on_ds, other = [], []
+    for index in range(2):
+        for dataset_id, bucket in (("ds-golden-1", on_ds), ("ds-other-99", other)):
+            run = EvalRun(
+                workspace_id=DEFAULT_WORKSPACE_ID, agent_id="ds-agent", agent_name="ds-agent",
+                mode="evaluators", dataset_id=dataset_id, dataset_name=dataset_id,
+                status="completed" if index else "queued",
+            )
+            db.add(run)
+            db.commit()
+            bucket.append(run.id)
+    db.close()
+
+    listed = client.get("/api/eval/runs?agent_id=ds-agent&dataset_id=ds-golden-1&limit=200").json()
+    assert {r["id"] for r in listed["runs"]} == set(on_ds)
+    assert not ({r["id"] for r in listed["runs"]} & set(other))
+    assert listed["total"] == 2
+    assert [r["id"] for r in listed["runs"]] == list(reversed(on_ds))  # newest first
+    assert client.get("/api/eval/runs?dataset_id=" + "x" * 17).status_code == 422
+
+
 def test_runs_list_rejects_out_of_range_paging(client):
     assert client.get("/api/eval/runs?limit=0").status_code == 422
     assert client.get("/api/eval/runs?limit=500").status_code == 422

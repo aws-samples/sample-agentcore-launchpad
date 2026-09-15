@@ -1,7 +1,12 @@
 import { useTranslation } from "react-i18next";
 
-export const PAGE_SIZES = [20, 50, 100, 200] as const;
-export const DEFAULT_PAGE_SIZE: number = PAGE_SIZES[1];
+export const PAGE_SIZES = [10, 20, 50, 100, 200] as const;
+/** Evaluation module tables (runs, experiments, online configs, datasets, evaluators). */
+export const EVAL_PAGE_SIZE: number = PAGE_SIZES[0];
+/** Client-paged tables elsewhere (`useTablePage` default, workspace detail). */
+export const TABLE_PAGE_SIZE: number = PAGE_SIZES[1];
+/** Observability tabs and the discovery tables (pages come from AWS). */
+export const DEFAULT_PAGE_SIZE: number = PAGE_SIZES[2];
 
 interface PagerProps {
   total: number;

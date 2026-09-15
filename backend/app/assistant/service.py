@@ -137,27 +137,30 @@ members and nothing else:
   `customer_pain_point | industry_assumption`), `evaluator_recommendations[]`
 - optional `evaluation_plan`: a structured seed for the SEPARATE evaluation-assets
   review — `{{"scenarios": [...], "evaluators": [...], "recommendation_keys":
-  {{"<index>": ["<key>"]}}}}`. Give EVERY golden test a typed scenario:
-  `{{"scenario_id", "golden_test_id", "turns": [{{"input", "expected_response"?}}],
-  "expected_trajectory": ["tool", ...], "assertions": ["must …", "Must not: …"],
-  "execution"?: {{"version": 1, "repeat": 1, "steps": [{{"turn": 0, "actor": "A",
-  "session": "a1"}}, ...], "checks": [{{"id", "type": "exact|contains|not_contains",
-  "turn", "text", "depends_on"?: [...]}}]}}}}` — a multi-actor / multi-session test
-  (memory isolation, session freshness) MUST be written as `execution` steps (one step
-  per turn, actor/session aliases, deterministic checks), never as one prose prompt.
+  {{"<index>": ["<key>"]}}, "blocked_golden_tests": [...]}}`. Every golden test is
+  EITHER a typed scenario `{{"scenario_id", "golden_test_id", "turns": [{{"input",
+  "expected_response"?}}], "expected_trajectory": ["tool", ...], "assertions":
+  ["must …", "Must not: …"]}}` — ONE runtime session whose turns replay in order,
+  scored only by AgentCore evaluators — OR blocked: `{{"golden_test_id", "reason"}}`.
   Each evaluator is one of: `{{"kind": "existing", "key", "title",
   "evaluator_id": "Builtin.<Name>", "golden_test_ids": []}}`, `{{"kind": "judge",
   "key", "title", "name", "level": "TRACE|SESSION", "instructions" (with
-  `{{context}}`/`{{assistant_turn}}` or the session placeholders), "golden_test_ids"}}`,
-  `{{"kind": "code", "key", "title", "name", "level", "rules": {{"version": 1, "checks":
+  `{{context}}`/`{{assistant_turn}}` or the session placeholders), "golden_test_ids"}}`
+  or `{{"kind": "code", "key", "title", "name", "level", "rules": {{"version": 1, "checks":
   [{{"id", "type": "tool_count|tool_sequence|tool_set|output_contains|output_not_contains|"
-  "output_exact|reference_trajectory|reference_response", ...}}]}}, "golden_test_ids"}}` or
-  `{{"kind": "orchestration|manual_review|metric_baseline|external_control", "key",
-  "title", "reason", "golden_test_ids"}}`. An AWS evaluator applies to EVERY scenario
-  (`golden_test_ids: []`); reference-driven judges/rules need every scenario to carry
-  that reference. Never code, ARNs or Lambda details — rules are declarative literals
-  only. It is an inert seed the member reviews; nothing is created by this block or by
-  the Agent approval — an administrator creates assets in a separate step.
+  "output_exact|reference_trajectory|reference_response", ...}}]}}, "golden_test_ids"}}`.
+  **Every evaluator must be something AgentCore Evaluations can compute on ONE
+  session's trace** — an existing built-in / third-party evaluator, a custom LLM judge
+  or declarative code rules. Do NOT seed multi-actor / multi-session procedures,
+  runner-computed checks, human or expert review, metric baselines or external
+  controls as scenarios or evaluators: a golden test that needs one of those (memory
+  isolation across users, session freshness across sessions, expert sign-off, …) goes
+  to `blocked_golden_tests` with the reason, and the obligation is described under
+  `manual_tasks`. An AWS evaluator applies to EVERY scenario (`golden_test_ids: []`);
+  reference-driven judges/rules need every scenario to carry that reference. Never
+  code, ARNs or Lambda details — rules are declarative literals only. It is an inert
+  seed the member reviews; nothing is created by this block or by the Agent approval —
+  an administrator creates assets in a separate step.
 
 Hard rules of this environment:
 1. Reference resources **only by the keys listed below**. Never invent tools, MCP

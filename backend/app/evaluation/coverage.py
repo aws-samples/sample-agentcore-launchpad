@@ -5,12 +5,9 @@ reference and the run preflight, so the same question is answered the same way
 everywhere: *for this evaluator's level and the ground-truth fields it reads, does every
 target it will be applied to carry that reference?*
 
-Targets follow the runner's own grouping (``execution.ground_truth_for_sessions``): an
-ordinary scenario is one session whose turns are its traces; an opt-in procedure
-scenario expands to one session per (repeat, actor alias, session alias), each session
-carrying the ``expectedResponse`` of the turns it replays, and the scenario-level
-``assertions`` / ``expectedTrajectory`` attach ONLY to the outcome session (the one that
-ran the last step) — seed sessions have none of them.
+Targets follow the runner's grouping: a scenario is one session whose turns are its
+traces; the scenario-level ``assertions`` / ``expectedTrajectory`` attach to that
+session and every ``expectedResponse`` to its turn.
 
 Evaluator needs come from real configuration, never from a plan kind: judge placeholders
 (``{expected_response}`` / ``{assertions}`` / ``{expected_tool_trajectory}``), the base
@@ -35,7 +32,6 @@ from botocore.loaders import Loader
 from botocore.model import ServiceModel, Shape
 from botocore.validate import ParamValidator
 
-from app.evaluation import execution
 from app.evaluation.agentcore_eval import (
     ALL_BUILTIN_EVALUATORS,
     TRAJECTORY_EVALUATORS,
@@ -64,30 +60,6 @@ def reference_targets(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
             session_fields.add("assertions")
         if scenario.get("expected_trajectory"):
             session_fields.add("expected_tool_trajectory")
-        if execution.is_executable(scenario):
-            plan = execution.parse_plan(scenario)
-            last = plan.steps[-1]
-            keys = plan.session_keys
-            keys = keys() if callable(keys) else keys
-            for repeat in range(1, plan.repeat + 1):
-                for actor, session in keys:
-                    steps = [s for s in plan.steps if (s.actor, s.session) == (actor, session)]
-                    label = f"{sid}#r{repeat}/{session}"
-                    responses = [bool((turns[s.turn] or {}).get("expected_response"))
-                                 for s in steps]
-                    fields = set(session_fields) if (actor, session) == (
-                        last.actor, last.session) else set()
-                    if responses and all(responses):
-                        fields.add("expected_response")
-                    out.append({"id": label, "kind": "session", "scenario_id": sid,
-                                "fields": fields})
-                    for s in steps:
-                        t_fields = set(fields) - {"expected_response"}
-                        if responses[steps.index(s)]:
-                            t_fields.add("expected_response")
-                        out.append({"id": f"{label}/turn {s.turn + 1}", "kind": "trace",
-                                    "scenario_id": sid, "fields": t_fields})
-            continue
         if "actor_profile" in scenario:
             out.append({"id": sid, "kind": "session", "scenario_id": sid,
                         "fields": set(session_fields)})

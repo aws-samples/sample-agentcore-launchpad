@@ -191,9 +191,9 @@ def _migrate(bind) -> None:
                 conn.execute(
                     text("ALTER TABLE eval_runs ADD COLUMN dataset_version VARCHAR(16)")
                 )
-        if "execution" not in existing:
-            with bind.begin() as conn:
-                conn.execute(text("ALTER TABLE eval_runs ADD COLUMN execution JSON"))
+        # The former multi-actor/multi-session procedure ledger column (`execution`,
+        # SE-046) is no longer mapped; an existing column is simply left in place and
+        # ignored — SQLite needs no drop for the model to load.
     if "evaluation_asset_operations" in inspector.get_table_names():
         existing = {c["name"] for c in inspector.get_columns("evaluation_asset_operations")}
         if "pinned" not in existing:

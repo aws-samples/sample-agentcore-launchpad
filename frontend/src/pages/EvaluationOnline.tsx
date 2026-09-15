@@ -7,6 +7,7 @@ import {
   Btn,
   Chip,
   ConfirmDialog,
+  EVAL_PAGE_SIZE,
   Pager,
   Panel,
   StaleLink,
@@ -419,6 +420,7 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
   const { rows: pageRows, pagerProps } = useTablePage(
     rows,
     rows.findIndex((r) => r.config_id === selected?.config_id),
+    EVAL_PAGE_SIZE,
   );
 
   const eligibleAgents = agents.filter(

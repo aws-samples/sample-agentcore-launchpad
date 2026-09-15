@@ -916,15 +916,10 @@ export interface AssistantApproveResult {
 /* ── SE-047 evaluation-assets plan ─────────────────────────────────────── */
 
 export type AssistantEvalPlanStatus = "draft" | "invalid" | "approved" | "superseded";
-export type AssistantEvalEvaluatorKind =
-  | "existing"
-  | "judge"
-  | "derived"
-  | "code"
-  | "orchestration"
-  | "manual_review"
-  | "metric_baseline"
-  | "external_control";
+/** Every plan evaluator is an AgentCore evaluator: an existing id, or a judge /
+ *  derived / code record the operation creates. Tests nothing in AgentCore can
+ *  compute are `blocked_golden_tests`, never evaluator entries. */
+export type AssistantEvalEvaluatorKind = "existing" | "judge" | "derived" | "code";
 
 export interface AssistantEvalPlanEvaluator {
   kind: AssistantEvalEvaluatorKind;
@@ -943,8 +938,6 @@ export interface AssistantEvalPlanEvaluator {
   rules?: { version: number; checks: Record<string, unknown>[] };
   rating_scale?: { value: number; label: string; definition: string }[];
   lambda_timeout_s?: number;
-  reason?: string;
-  obligation?: string;
   draft?: boolean;
 }
 
@@ -959,7 +952,6 @@ export interface AssistantEvalPlanContent {
     turns: { input: string; expected_response?: string }[];
     expected_trajectory?: string[];
     assertions?: string[];
-    execution?: Record<string, unknown> | null;
     note?: string;
     review_required?: boolean;
   }[];
@@ -3117,6 +3109,37 @@ export const api = {
     request<EvaluationRunInfo>(`/api/eval/runs/${encodeURIComponent(runId)}/stop`, {
       method: "POST",
     }),
+  /** `POST /api/eval/runs` — the same request the New Run form sends (dataset
+   *  scope, evaluators mode). Needs `eval.run`; invokes the agent and starts a
+   *  billable batch evaluation. */
+  createEvaluationRun: (input: {
+    agent_id: string;
+    dataset_id: string;
+    evaluators: string[];
+    wait_seconds?: number;
+  }) =>
+    request<EvaluationRunInfo>("/api/eval/runs", {
+      method: "POST",
+      body: JSON.stringify({ mode: "evaluators", wait_seconds: 180, ...input }),
+    }),
+  /** `GET /api/eval/runs/{id}` — one run's ledger row (status, scores, error). */
+  getEvaluationRun: (runId: string) =>
+    request<EvaluationRunInfo>(`/api/eval/runs/${encodeURIComponent(runId)}`),
+  /** `GET /api/eval/runs` — newest-first page, optionally narrowed to one agent and/or
+   *  one local Dataset (the NEXT STEPS run history). */
+  listEvaluationRuns: (params: {
+    agent_id?: string;
+    dataset_id?: string;
+    mode?: "evaluators" | "insights";
+    limit?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params.agent_id) q.set("agent_id", params.agent_id);
+    if (params.dataset_id) q.set("dataset_id", params.dataset_id);
+    if (params.mode) q.set("mode", params.mode);
+    if (params.limit) q.set("limit", String(params.limit));
+    return request<{ runs: EvaluationRunInfo[]; total: number }>(`/api/eval/runs?${q.toString()}`);
+  },
   /** `GET /api/eval/runs/{id}/results` — per-session scores + judge explanations
    *  of a terminal evaluators run, read on demand from the batch's results log
    *  stream (never persisted). `available=false` + `reason` when there is

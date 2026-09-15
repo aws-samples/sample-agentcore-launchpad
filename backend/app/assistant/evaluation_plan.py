@@ -5,16 +5,16 @@ content. This module adds the separate, versioned, typed plan that says what tho
 recommendations become **if** an administrator later materializes it:
 
 * ``scenarios``   — the Launchpad Dataset items (one per golden test, standard
-  predefined shape, optionally carrying the SE-046 ``launchpad_execution`` procedure);
-* ``evaluators``  — every recommendation classified into exactly one kind:
-  ``existing`` (a Builtin/ThirdParty/custom evaluator id that already exists),
-  ``judge`` / ``derived`` / ``code`` (AgentCore evaluators the operation creates —
-  the code kind is *declarative rules only*, executed by the reviewed static Lambda
-  in ``app/assistant/lambda_runtime``), and the four non-automatable kinds
-  ``orchestration`` (cross-session predicates the local runner computes),
-  ``manual_review`` (human / expert judgement), ``metric_baseline`` and
-  ``external_control`` — which are shown with their obligation and are NEVER turned
-  into evaluator records;
+  predefined shape; every scenario is ONE runtime session — no multi-actor /
+  multi-session procedure, no locally computed check);
+* ``evaluators``  — every recommendation classified into exactly one kind, all of
+  them **AgentCore evaluators**: ``existing`` (a Builtin/ThirdParty/custom evaluator
+  id that already exists) or ``judge`` / ``derived`` / ``code`` (AgentCore evaluators
+  the operation creates — the code kind is *declarative rules only*, executed by the
+  reviewed static Lambda in ``app/assistant/lambda_runtime``). Anything an AgentCore
+  evaluator cannot compute (cross-session predicates, human review, metric baselines,
+  external controls) is NOT a plan entry: the golden test is blocked with a reason and
+  the obligation lives in the proposal's ``manual_tasks``;
 * ``recommendations`` — every prose recommendation of the source revision, with the
   plan keys it maps to or an explicit ``unresolved`` / ``declined`` status;
 * ``blocked_golden_tests`` — golden tests deliberately not turned into a scenario.
@@ -36,7 +36,6 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.evaluation import execution
 from app.evaluation.agentcore_eval import ALL_BUILTIN_EVALUATORS, TRAJECTORY_EVALUATORS
 
 KNOWN_BUILTINS: dict[str, str] = {**ALL_BUILTIN_EVALUATORS, **TRAJECTORY_EVALUATORS}
@@ -87,8 +86,10 @@ class ScenarioTurn(BaseModel):
 
 
 class Scenario(BaseModel):
-    """One predefined dataset item. ``execution`` is the SE-046 procedure object
-    (validated by ``execution.parse_plan`` on the assembled item)."""
+    """One predefined dataset item: ONE runtime session whose turns replay in order.
+    Multi-actor / multi-session procedures with locally computed checks are not
+    representable here — every check the plan produces must be an AgentCore
+    evaluator."""
 
     model_config = ConfigDict(extra="forbid")
     scenario_id: str = Field(pattern=_SCENARIO_ID_RE)
@@ -96,12 +97,11 @@ class Scenario(BaseModel):
     turns: list[ScenarioTurn] = Field(min_length=1, max_length=20)
     expected_trajectory: list[Short] = Field(default_factory=list, max_length=10)
     assertions: list[Line] = Field(default_factory=list, max_length=10)
-    execution: dict[str, Any] | None = None
     note: Text = ""
-    # A legacy golden test whose text was NOT supplied as typed steps by the proposal
-    # (no structured seed) is drafted as a single-turn scenario but marked here; the
-    # member must confirm it (``false``) or block the golden test before assets can
-    # be created. Nothing infers a procedure from prose.
+    # A legacy golden test whose text was NOT supplied as a typed scenario by the
+    # proposal (no structured seed) is drafted as a single-turn scenario but marked
+    # here; the member must confirm it (``false``) or block the golden test before
+    # assets can be created. Nothing infers turns from prose.
     review_required: bool = False
 
 
@@ -262,20 +262,40 @@ class CodeEvaluator(_Entry):
     description: str = Field(default="", max_length=1000)
 
 
-class NonAutomated(_Entry):
-    """A recommendation that is NOT an evaluator record: who does what instead."""
-
-    kind: Literal["orchestration", "manual_review", "metric_baseline", "external_control"]
-    reason: str = Field(min_length=1, max_length=1000)
-    obligation: str = Field(default="", max_length=1000)
-
-
 Evaluator = Annotated[
-    ExistingEvaluator | JudgeEvaluator | DerivedEvaluator | CodeEvaluator | NonAutomated,
+    ExistingEvaluator | JudgeEvaluator | DerivedEvaluator | CodeEvaluator,
     Field(discriminator="kind"),
 ]
 CLOUD_KINDS = ("judge", "derived", "code")
-NON_AUTOMATED_KINDS = ("orchestration", "manual_review", "metric_baseline", "external_control")
+# Kinds an earlier contract accepted as "obligations" (runner-computed cross-session
+# predicates, human review, metric baselines, external controls). They are no plan
+# entries any more: a golden test that needs one is blocked with a reason and the
+# obligation is stated in the proposal's ``manual_tasks``. Kept only to turn legacy
+# input into an actionable message instead of a bare "unknown kind".
+LEGACY_NON_AUTOMATED_KINDS = ("orchestration", "manual_review", "metric_baseline",
+                              "external_control")
+
+
+def _legacy_errors(raw: dict[str, Any], prefix: str = "") -> list[str]:
+    """Actionable messages for the two members the contract no longer has: a
+    ``scenarios[].execution`` procedure and a non-AgentCore evaluator kind."""
+    errors: list[str] = []
+    for sc in raw.get("scenarios") or []:
+        if isinstance(sc, dict) and sc.get("execution") is not None:
+            sid = sc.get("golden_test_id") or sc.get("scenario_id") or "?"
+            errors.append(
+                f"{prefix}scenarios.{sid}: 'execution' procedures (multi-actor / multi-session "
+                "steps with local checks) are not supported — every scenario is one runtime "
+                "session scored by AgentCore evaluators; rewrite it as single-session turns "
+                "or block the golden test and describe the test under manual_tasks")
+    for e in raw.get("evaluators") or []:
+        if isinstance(e, dict) and e.get("kind") in LEGACY_NON_AUTOMATED_KINDS:
+            errors.append(
+                f"{prefix}evaluators.{e.get('key') or '?'}: kind '{e['kind']}' is not an "
+                "AgentCore evaluator — only existing / judge / derived / code entries are "
+                "allowed; drop it, block the golden tests it covered (with a reason) and "
+                "list the obligation under manual_tasks")
+    return errors
 
 
 class Recommendation(BaseModel):
@@ -366,10 +386,7 @@ def dataset_item(
         assets["applies"] = list(applies)
     if scenario.note:
         assets["note"] = scenario.note
-    metadata: dict[str, Any] = {"launchpad_assets": assets}
-    if scenario.execution is not None:
-        metadata[execution.EXECUTION_KEY] = scenario.execution
-    item["metadata"] = metadata
+    item["metadata"] = {"launchpad_assets": assets}
     return item
 
 
@@ -418,16 +435,12 @@ def _routing_errors(plan: EvaluationPlan) -> list[str]:
     The shared dataset runner applies one evaluator list to every session, and the
     reference envelope does not select evaluators. So an evaluator mapped to a proper
     subset of golden tests is refused before creation (actionable: map it to all
-    golden tests or drop the AWS evaluator for a manual/runner obligation). A global
-    reference-driven evaluator is valid only when EVERY scenario — and, at TRACE, every
-    turn — carries the reference it reads; a SESSION reference evaluator cannot coexist
-    with a multi-session procedure scenario (only the outcome session carries the
-    scenario's references, the seed sessions would all error)."""
+    golden tests or block the tests it cannot cover). A global reference-driven
+    evaluator is valid only when EVERY scenario — and, at TRACE, every turn — carries
+    the reference it reads."""
     errors: list[str] = []
     all_gts = {s.golden_test_id for s in plan.scenarios}
     for e in plan.evaluators:
-        if e.kind not in CLOUD_KINDS and e.kind != "existing":
-            continue
         needs = references_needed(e)
         if e.kind == "existing" and e.evaluator_id in TRAJECTORY_EVALUATORS:
             needs = {"expected_trajectory"}
@@ -436,8 +449,7 @@ def _routing_errors(plan: EvaluationPlan) -> list[str]:
             errors.append(f"evaluators.{e.key}: targets only {sorted(mapped)} but a dataset run "
                           "applies every evaluator to every session — the platform cannot "
                           "route an AWS evaluator per golden test; map it to all golden tests "
-                          "(golden_test_ids: []) or replace it with a runner check / manual "
-                          "obligation for those tests")
+                          "(golden_test_ids: []) or block the golden tests it cannot cover")
         if not needs:
             continue
         level = getattr(e, "level", "SESSION")
@@ -453,11 +465,6 @@ def _routing_errors(plan: EvaluationPlan) -> list[str]:
                 errors.append(f"evaluators.{e.key}: scenario '{s.golden_test_id}' has a turn "
                               "without expected_response — a TRACE reference evaluator scores "
                               "every turn")
-            if level == "SESSION" and s.execution is not None:
-                errors.append(f"evaluators.{e.key}: scenario '{s.golden_test_id}' is a "
-                              "multi-session procedure — only its outcome session carries "
-                              "references, the seed sessions would error; block it or use a "
-                              "runner check")
     return errors
 
 
@@ -478,12 +485,15 @@ def validate_plan(
     Every golden test of the proposal is either a scenario or explicitly blocked;
     every prose recommendation appears exactly once; mapped keys exist; cloud
     evaluator names and keys are unique; code rules are coherent; ≤ 10 cloud
-    evaluators; every assembled dataset item passes the Dataset/execution gates.
+    evaluators; every assembled dataset item passes the Dataset ingress gate.
     """
     if serialized_bytes(raw) > PLAN_MAX_BYTES:
         return None, [f"plan exceeds {PLAN_MAX_BYTES} bytes"]
     if not isinstance(raw, dict):
         return None, ["plan must be a JSON object"]
+    legacy = _legacy_errors(raw)
+    if legacy:
+        return None, legacy
     try:
         plan = EvaluationPlan.model_validate(raw)
     except ValidationError as exc:
@@ -544,15 +554,9 @@ def validate_plan(
     pending = [s.golden_test_id for s in plan.scenarios if s.review_required]
     if pending:
         errors.append("scenarios need review before assets can be created: "
-                      + ", ".join(pending) + " (confirm each as typed steps — "
+                      + ", ".join(pending) + " (confirm each as typed turns — "
                       "review_required: false — or block the golden test)")
     errors += _routing_errors(plan)
-    if not errors and plan.scenarios:
-        items = [dataset_item(s, {"plan": "validation"}) for s in plan.scenarios]
-        try:
-            execution.validate_items(items)
-        except Exception as exc:  # AppError from the dataset gate → plain plan error
-            errors.append(f"scenarios: {getattr(exc, 'message', None) or exc}")
     return (plan if not errors else None), errors
 
 
@@ -594,15 +598,29 @@ def _seed_scenarios(seed: dict[str, Any], gts: list[dict[str, Any]]) -> dict[str
     return out
 
 
+def _seed_blocked(seed: dict[str, Any], gts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Golden tests a proposal seed deliberately blocks (with the reason) — the way a
+    test that no AgentCore evaluator can compute stays visible without becoming a
+    scenario. Shape already validated by the proposal contract."""
+    ids = {str(g.get("id")) for g in gts}
+    out: list[dict[str, Any]] = []
+    for b in seed.get("blocked_golden_tests") or []:
+        if isinstance(b, dict) and str(b.get("golden_test_id")) in ids and b.get("reason"):
+            out.append({"golden_test_id": str(b["golden_test_id"]),
+                        "reason": str(b["reason"])[:1000]})
+    return out
+
+
 def draft_plan(
     content: dict[str, Any], *, revision: int, content_hash: str, agent_name: str
 ) -> dict[str, Any]:
     """The editable first draft.
 
-    * Scenarios: a proposal seed may carry typed scenarios (turns / procedure /
-      references) — those are used as-is. Every other golden test becomes a
-      single-turn scenario marked ``review_required`` (its prose is NOT parsed into a
-      procedure); the member confirms or blocks it before anything is created.
+    * Scenarios: a proposal seed may carry typed scenarios (turns / references) — those
+      are used as-is — and may block golden tests it cannot express as one session
+      scored by AgentCore evaluators (the reason is kept). Every other golden test
+      becomes a single-turn scenario marked ``review_required``; the member confirms or
+      blocks it before anything is created.
     * Evaluators: seeded entries first (keys reserved). Prose recommendations are
       mapped only to ids identified exactly (``Builtin.*`` / ``ThirdParty.*``) or to
       the seed's explicit ``recommendation_keys``; a seed mapping never removes an
@@ -615,9 +633,13 @@ def draft_plan(
     seed = content.get("evaluation_plan") if isinstance(content.get("evaluation_plan"), dict) \
         else {}
     seeded_scenarios = _seed_scenarios(seed, gts)
+    blocked = _seed_blocked(seed, gts)
+    blocked_ids = {b["golden_test_id"] for b in blocked}
     scenarios: list[dict[str, Any]] = []
     for g in gts:
         gid = str(g["id"])
+        if gid in blocked_ids:
+            continue
         if gid in seeded_scenarios:
             scenarios.append(seeded_scenarios[gid])
             continue
@@ -633,9 +655,8 @@ def draft_plan(
                        "expected_response": str(g.get("expected_response") or "")[:2000]}],
             "expected_trajectory": [str(t)[:200] for t in (g.get("expected_tools") or [])][:10],
             "assertions": assertions,
-            "execution": None,
-            "note": "legacy golden test drafted as ONE user turn — confirm, rewrite as typed "
-                    "steps (metadata procedure) or block it",
+            "note": "legacy golden test drafted as ONE user turn — confirm, rewrite the turns "
+                    "or block it",
             "review_required": True,
         })
     evaluators: list[dict[str, Any]] = []
@@ -676,8 +697,7 @@ def draft_plan(
             "status": "mapped" if mapped else "unresolved",
             "note": "" if mapped else "no exact evaluator identified — classify or decline",
         })
-    all_assertions = bool(scenarios) and all(sc.get("assertions") for sc in scenarios) and not any(
-        sc.get("execution") for sc in scenarios)
+    all_assertions = bool(scenarios) and all(sc.get("assertions") for sc in scenarios)
     if all_assertions and "draft_rubric" not in used_keys:
         used_keys.add("draft_rubric")
         evaluators.append({
@@ -694,8 +714,7 @@ def draft_plan(
             "note": "platform draft — reference-driven ({assertions}); calibrate wording, "
                     "model and scale with domain experts before relying on it",
         })
-    all_trajectory = bool(scenarios) and all(sc.get("expected_trajectory") for sc in scenarios) \
-        and not any(sc.get("execution") for sc in scenarios)
+    all_trajectory = bool(scenarios) and all(sc.get("expected_trajectory") for sc in scenarios)
     if all_trajectory and "expected_tools" not in used_keys:
         used_keys.add("expected_tools")
         evaluators.append({
@@ -727,13 +746,15 @@ def draft_plan(
         "scenarios": scenarios,
         "evaluators": evaluators,
         "recommendations": recommendations,
-        "blocked_golden_tests": [],
+        "blocked_golden_tests": blocked,
         "grant_workspace_execution_role": True,
         "summary": "Draft prepared by the platform. Legacy golden tests are single-turn "
-                   "scenarios that REQUIRE REVIEW (confirm or block each; multi-session "
-                   "procedures must be written as typed steps). Unresolved recommendations "
-                   "are NOT implemented; classify each as an existing/new evaluator, a runner "
-                   "check, a human review, a metric baseline or an external control.",
+                   "scenarios that REQUIRE REVIEW (confirm or block each). Every evaluator is "
+                   "an AgentCore evaluator (existing, LLM judge, derived or declarative code "
+                   "rules); a test no AgentCore evaluator can compute is blocked with its "
+                   "reason and stays a manual task. Unresolved recommendations are NOT "
+                   "implemented; classify each as an existing/new AgentCore evaluator or "
+                   "decline it.",
     }
 
 
@@ -749,31 +770,44 @@ DRAFT_ASSERTION_RUBRIC = (
 
 def seed_errors(seed: dict[str, Any]) -> list[str]:
     """Shape + cross-field validation of a proposal's optional ``evaluation_plan`` seed
-    (evaluators / scenarios / recommendation_keys). Pure; never raises on malformed
-    input — every problem is a message, so the proposal becomes an *invalid* revision
-    rather than a server error."""
+    (evaluators / scenarios / recommendation_keys / blocked_golden_tests). Pure; never
+    raises on malformed input — every problem is a message, so the proposal becomes an
+    *invalid* revision rather than a server error."""
     if not isinstance(seed, dict):
         return ["evaluation_plan must be an object"]
-    unknown = sorted(set(seed) - {"evaluators", "scenarios", "recommendation_keys"})
+    unknown = sorted(set(seed) - {"evaluators", "scenarios", "recommendation_keys",
+                                  "blocked_golden_tests"})
     if unknown:
         return [f"evaluation_plan: unknown members {unknown}"]
     evaluators = seed.get("evaluators", [])
     scenarios = seed.get("scenarios", [])
     rec_keys = seed.get("recommendation_keys", {})
+    blocked = seed.get("blocked_golden_tests", [])
     if not isinstance(evaluators, list) or not isinstance(scenarios, list) \
-            or not isinstance(rec_keys, dict):
-        return ["evaluation_plan: evaluators/scenarios must be lists and recommendation_keys "
-                "an object"]
-    if len(evaluators) > 20 or len(scenarios) > MAX_SCENARIOS:
-        return ["evaluation_plan: too many evaluators or scenarios"]
+            or not isinstance(rec_keys, dict) or not isinstance(blocked, list):
+        return ["evaluation_plan: evaluators/scenarios/blocked_golden_tests must be lists and "
+                "recommendation_keys an object"]
+    if len(evaluators) > 20 or len(scenarios) > MAX_SCENARIOS or len(blocked) > MAX_SCENARIOS:
+        return ["evaluation_plan: too many evaluators, scenarios or blocked golden tests"]
+    legacy = _legacy_errors({"evaluators": evaluators, "scenarios": scenarios},
+                            prefix="evaluation_plan.")
+    if legacy:
+        return legacy
     probe = {"version": 1, "source_revision": 1, "source_content_hash": "0" * 64,
-             "dataset": {"name": "seed"}, "evaluators": evaluators, "scenarios": scenarios}
+             "dataset": {"name": "seed"}, "evaluators": evaluators, "scenarios": scenarios,
+             "blocked_golden_tests": blocked}
     try:
         plan = EvaluationPlan.model_validate(probe)
     except ValidationError as exc:
         return [f"evaluation_plan.{'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
                 for err in exc.errors()][:20]
     errors: list[str] = []
+    blocked_ids = [b.golden_test_id for b in plan.blocked_golden_tests]
+    if len(set(blocked_ids)) != len(blocked_ids):
+        errors.append("evaluation_plan: a golden test is blocked twice")
+    both = sorted(set(blocked_ids) & {sc.golden_test_id for sc in plan.scenarios})
+    if both:
+        errors.append(f"evaluation_plan: golden tests {both} are both a scenario and blocked")
     keys = [e.key for e in plan.evaluators]
     if len(set(keys)) != len(keys):
         errors.append("evaluation_plan: evaluator keys must be unique")
@@ -800,11 +834,6 @@ def seed_errors(seed: dict[str, Any]) -> list[str]:
         for k in mapped:
             if k not in keys:
                 errors.append(f"evaluation_plan.recommendation_keys[{idx}]: unknown key '{k}'")
-    if plan.scenarios:
-        try:
-            execution.validate_items([dataset_item(sc, {"plan": "seed"}) for sc in plan.scenarios])
-        except Exception as exc:  # AppError from the dataset gate
-            errors.append(f"evaluation_plan.scenarios: {getattr(exc, 'message', None) or exc}")
     return errors
 
 

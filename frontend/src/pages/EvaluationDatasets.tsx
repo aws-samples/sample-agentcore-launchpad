@@ -7,6 +7,7 @@ import {
   Btn,
   Chip,
   ConfirmDialog,
+  EVAL_PAGE_SIZE,
   Pager,
   Panel,
   StaleLink,
@@ -77,9 +78,9 @@ interface ScenarioDraft {
   turns: TurnDraft[];
   assertions: string[];
   expected_trajectory: string; // comma-separated tool names
-  // Every other stored key (metadata incl. launchpad_execution, description,
-  // provenance…) — carried through the form untouched and re-emitted on save,
-  // so opening a scenario in the form and saving never strips it.
+  // Every other stored key (metadata, description, provenance…) — carried
+  // through the form untouched and re-emitted on save, so opening a scenario in
+  // the form and saving never strips it.
   extra: Record<string, unknown>;
   // Non-null = the scenario is being edited as raw JSON; the text is the whole
   // item and is saved as-is (the server validates it).
@@ -107,14 +108,6 @@ function formLossReason(item: Record<string, unknown>): ScenarioDraft["jsonOnly"
 }
 
 const KNOWN_SCENARIO_KEYS = new Set(["scenario_id", "turns", "assertions", "expected_trajectory"]);
-
-/** The scenario's opt-in multi-actor / multi-session procedure, if any. */
-function executionOf(draft: ScenarioDraft): Record<string, unknown> | null {
-  const metadata = draft.extra.metadata;
-  if (typeof metadata !== "object" || metadata === null) return null;
-  const block = (metadata as Record<string, unknown>).launchpad_execution;
-  return typeof block === "object" && block !== null ? (block as Record<string, unknown>) : null;
-}
 
 class ScenarioJsonError extends Error {
   constructor(
@@ -558,7 +551,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
       ? entry.row.id === local?.id
       : entry.row.datasetId === cloud?.datasetId,
   );
-  const { rows: pageEntries, pagerProps } = useTablePage(entries, selectedEntry);
+  const { rows: pageEntries, pagerProps } = useTablePage(entries, selectedEntry, EVAL_PAGE_SIZE);
 
   // kind=simulated with non-actor items can only come from import — the form
   // editor cannot represent those rows, so degrade to a warning (no save).
@@ -896,72 +889,9 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
     }
   };
 
-  const procedurePreview = (block: Record<string, unknown>) => {
-    const steps = Array.isArray(block.steps) ? (block.steps as Record<string, unknown>[]) : [];
-    const checks = Array.isArray(block.checks) ? (block.checks as Record<string, unknown>[]) : [];
-    return (
-      <div
-        className="note"
-        data-testid="execution-preview"
-        style={{ borderColor: "var(--amber)", marginBottom: 8, display: "block" }}
-      >
-        <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
-          <span className="mono" style={{ fontSize: 10, letterSpacing: ".08em", color: "var(--amber)" }}>
-            {t("evalPage.datasets.execution.title")}
-          </span>
-          <span className="mono dim" style={{ fontSize: 10 }}>
-            {t("evalPage.datasets.execution.repeat", { count: Number(block.repeat ?? 1) })}
-          </span>
-        </div>
-        <div className="dim" style={{ fontSize: 10.5, margin: "4px 0 6px" }}>
-          {t("evalPage.datasets.execution.hint")}
-        </div>
-        <ol className="mono" style={{ fontSize: 10.5, margin: 0, paddingLeft: 18 }}>
-          {steps.map((step, i) => (
-            <li key={i}>
-              {t("evalPage.datasets.execution.step", {
-                turn: Number(step.turn) + 1,
-                actor: String(step.actor ?? "?"),
-                session: String(step.session ?? "?"),
-              })}
-            </li>
-          ))}
-        </ol>
-        {checks.length > 0 && (
-          <>
-            <div className="mono dim" style={{ fontSize: 9.5, letterSpacing: ".12em", marginTop: 6 }}>
-              {t("evalPage.datasets.execution.checks")}
-            </div>
-            <ul className="mono" style={{ fontSize: 10.5, margin: 0, paddingLeft: 18 }}>
-              {checks.map((check, i) => (
-                <li key={i}>
-                  {t("evalPage.datasets.execution.check", {
-                    id: String(check.id ?? "?"),
-                    type: String(check.type ?? "?"),
-                    turn: Number(check.turn) + 1,
-                    text: String(check.text ?? ""),
-                  })}
-                  {Array.isArray(check.depends_on) && check.depends_on.length > 0 && (
-                    <span className="dim">
-                      {" "}
-                      ({t("evalPage.datasets.execution.dependsOn", {
-                        ids: (check.depends_on as unknown[]).map(String).join(", "),
-                      })})
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
-      </div>
-    );
-  };
-
   const scenarioEditor = (
     <>
       {scenarios.map((scenario, si) => {
-        const procedure = executionOf(scenario);
         const extraKeys = Object.keys(scenario.extra);
         return (
         <div
@@ -1029,8 +959,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
             </div>
           ) : (
           <>
-          {procedure && procedurePreview(procedure)}
-          {!procedure && extraKeys.length > 0 && (
+          {extraKeys.length > 0 && (
             <div className="mono dim" style={{ fontSize: 10, marginBottom: 6 }}>
               {t("evalPage.datasets.execution.extraKeys", { keys: extraKeys.join(", ") })}
             </div>
@@ -1068,7 +997,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
                 }
               />
               <Btn
-                disabled={scenario.turns.length <= 1 || procedure != null}
+                disabled={scenario.turns.length <= 1}
                 title={t("evalPage.datasets.removeTurn")}
                 onClick={() =>
                   patchScenario(si, {
@@ -1082,7 +1011,6 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
           ))}
           <Btn
             data-testid="add-turn"
-            disabled={procedure != null}
             onClick={() =>
               patchScenario(si, {
                 turns: [...scenario.turns, { input: "", expected_response: "" }],

@@ -14,7 +14,7 @@ export { useStaleParam } from "./useStaleParam";
 export { Markdown } from "./Markdown";
 export { MethodChip } from "./MethodChip";
 export { methodLabel } from "./methodChipMeta";
-export { DEFAULT_PAGE_SIZE, PAGE_SIZES, Pager } from "./Pager";
+export { DEFAULT_PAGE_SIZE, EVAL_PAGE_SIZE, PAGE_SIZES, Pager, TABLE_PAGE_SIZE } from "./Pager";
 export { useTablePage } from "./useTablePage";
 export { Panel } from "./Panel";
 export { StatTile } from "./StatTile";

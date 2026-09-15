@@ -10,6 +10,7 @@ import {
   Chip,
   ConfirmDialog,
   DiffPanes,
+  EVAL_PAGE_SIZE,
   LoadError,
   Pager,
   Panel,
@@ -727,6 +728,7 @@ function ConfigurationExperimentView() {
   const { rows: pageExperiments, pagerProps } = useTablePage(
     experiments,
     experiments.findIndex((e) => e.id === exp?.id),
+    EVAL_PAGE_SIZE,
   );
   const readinessMatchesAgent = readiness?.agent_id === startAgentId;
   const readinessAllowsCreate = readinessMatchesAgent && (

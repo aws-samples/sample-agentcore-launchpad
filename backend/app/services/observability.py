@@ -1758,16 +1758,12 @@ def session_transcript(
         mem_actor = memory.scoped_actor(row.agent_id, row.actor_id)
         agent_id, actor_display = row.agent_id, row.actor_id
     else:
-        # Eval-run sessions: ordinary replays pass the BARE "default" actor
-        # straight to the runtime — harness runtimes persist the conversation
-        # under it (runtime-backed agents write no memory events, so turns come
-        # back empty for them). Multi-actor/multi-session procedures persist the
-        # synthetic actor each session ran under on the run row — read with
-        # that one, never with another user's default.
-        from app.evaluation import execution as eval_execution
-
+        # Eval-run sessions: replays pass the BARE "default" actor straight to
+        # the runtime — harness runtimes persist the conversation under it
+        # (runtime-backed agents write no memory events, so turns come back
+        # empty for them).
         agent = db.get(Agent, run.agent_id)
-        mem_actor = eval_execution.session_actor(run.execution, session_id) or "default"
+        mem_actor = "default"
         agent_id, actor_display = run.agent_id, mem_actor
     memory_error = None
     # an agent whose spec pins its own memory writes its turns there

@@ -2698,18 +2698,10 @@
         "note": "kind is inferred from the items and immutable server-side; published cloud versions are immutable — only the draft changes, and only through sync."
       },
       "execution": {
-        "title": "EXECUTION PROCEDURE · multi-actor / multi-session",
-        "hint": "This scenario opts into metadata.launchpad_execution: its turns run under synthetic actors and sessions (below, read-only). Turn text stays editable; adding or removing turns is disabled because every step maps to one turn. Use EDIT JSON to change the procedure — the form never drops this metadata.",
-        "repeat": "repeat ×{{count}}",
-        "step": "T{{turn}} → actor {{actor}} · session {{session}}",
-        "checks": "CHECKS",
-        "check": "{{id}}: {{type}} on T{{turn}} · \"{{text}}\"",
-        "dependsOn": "after {{ids}}",
         "editJson": "EDIT JSON",
         "backToForm": "BACK TO FORM",
         "jsonLabel": "SCENARIO JSON — the whole item, saved as-is (validated by the server)",
         "jsonInvalid": "scenario {{index}}: invalid JSON — {{error}}",
-        "jsonMode": "JSON",
         "extraKeys": "preserved keys: {{keys}}",
         "jsonOnly": "JSON only — this item has fields the form cannot represent ({{reason}}); editing it here as a form would drop them. Use the JSON below; BACK TO FORM stays in JSON mode until the item fits the form.",
         "jsonOnlyReason": {
@@ -2814,57 +2806,6 @@
         "empty": "NO EXPERIMENTS YET — START ONE ▸"
       },
       "runningGuard": "An experiment is already running — the shared experiment gateway supports one active A/B test at a time. Wait for its verdict or clean it up first."
-    },
-    "execution": {
-      "title": "PROCEDURE RESULTS — LOCAL DETERMINISTIC CHECKS",
-      "sub": "{{sessions}} sessions · {{steps}} steps · {{checks}} checks — computed locally from actual responses, not by AWS judges",
-      "note": "Multi-actor / multi-session scenarios (metadata.launchpad_execution). Each row is a synthetic actor + session minted for this run; check outcomes compare the agent's actual reply to a literal rule. AWS judge scores for the same sessions are in SESSION RESULTS above.",
-      "status": "CHECK STATUS",
-      "statusValue": {
-        "pending": "PENDING",
-        "none": "NO CHECKS",
-        "pass": "PASS",
-        "fail": "FAIL",
-        "error": "ERROR",
-        "inconclusive": "INCONCLUSIVE"
-      },
-      "calls": "{{done}} / {{planned}} invocations",
-      "sessions": "SESSIONS",
-      "checks": "CHECKS",
-      "steps": "STEPS",
-      "noChecks": "this procedure declares no deterministic checks — only AWS judge results apply",
-      "col": {
-        "scenario": "SCENARIO",
-        "repeat": "REPEAT",
-        "actor": "ACTOR",
-        "session": "SESSION",
-        "sessionId": "RUNTIME SESSION",
-        "turns": "TURNS",
-        "status": "STATUS",
-        "check": "CHECK",
-        "type": "TYPE",
-        "turn": "TURN",
-        "outcome": "OUTCOME",
-        "evidence": "EVIDENCE",
-        "step": "STEP",
-        "response": "RESPONSE",
-        "error": "ERROR"
-      },
-      "sessionStatus": {
-        "ok": "ok",
-        "partial": "partial",
-        "failed": "failed"
-      },
-      "drift": "runtime returned a different session id",
-      "viewSession": "open in observability →",
-      "checksPending": "{{count}} check(s) declared — none recorded yet (procedure pending or interrupted before its first check)",
-      "interrupted": "interrupted — the procedure did not complete, so it cannot pass",
-      "stepStatus": {
-        "ok": "ok",
-        "failed": "failed",
-        "empty": "empty reply"
-      },
-      "returnedSession": "answered in"
     }
   },
   "expPage": {
@@ -4111,6 +4052,9 @@
     "requirements": "Workspace blockers: {{list}}",
     "conversations": "CONVERSATIONS",
     "newConversation": "NEW CONVERSATION",
+    "historyTitle": "HISTORY",
+    "historySub": "{{n}} conversation(s) in this workspace",
+    "historyEmpty": "NO CONVERSATIONS YET — START ONE TO SEE IT HERE",
     "noConversation": "Start a conversation, then paste your Workshop output below.",
     "emptyThread": "PASTE YOUR WORKSHOP OUTPUT — THE ASSISTANT CONFIRMS THE BASELINE AND ASKS ONLY WHAT IS MISSING",
     "composerLabel": "YOUR MESSAGE · WORKSHOP OUTPUT, ANSWERS, REQUESTS",
@@ -4222,7 +4166,7 @@
   "assistantEval": {
     "title": "EVALUATION ASSETS",
     "sub": "reviewed plan · separate from the Agent approval",
-    "scopeNote": "This plan is private to you until an administrator creates assets from it. Creating assets registers a local Dataset, AgentCore evaluators and — for declarative code rules — one Lambda with its own role. It never deploys the Agent, runs an evaluation, syncs the Dataset to AWS, enables online evaluation or invokes a model. Human and runner obligations stay listed here; they are not evaluator records.",
+    "scopeNote": "This plan is private to you until an administrator creates assets from it. Creating assets registers a local Dataset, AgentCore evaluators and — for declarative code rules — one Lambda with its own role. It never deploys the Agent, runs an evaluation, syncs the Dataset to AWS, enables online evaluation or invokes a model. Every evaluator here is an AgentCore evaluator; a golden test nothing in AgentCore can score is blocked with its reason and stays a manual task.",
     "sourceRevision": "From proposal revision",
     "prepare": "PREPARE PLAN",
     "prepareAgain": "PREPARE AGAIN (new revision)",
@@ -4241,13 +4185,12 @@
       "superseded": "SUPERSEDED"
     },
     "scenarios": "GOLDEN TESTS → DATASET SCENARIOS",
-    "evaluators": "EVALUATORS & OBLIGATIONS",
+    "evaluators": "AGENTCORE EVALUATORS",
     "recommendations": "RECOMMENDATIONS FROM THE PROPOSAL",
     "col": {
       "goldenTest": "Golden test",
       "scenario": "Scenario id",
       "turns": "Turns",
-      "procedure": "Procedure",
       "key": "Key",
       "kind": "Kind",
       "definition": "Definition",
@@ -4260,24 +4203,12 @@
       "name": "Name",
       "details": "Details"
     },
-    "procedureRunner": "multi-actor / multi-session (runner)",
-    "procedureSingle": "single session",
     "blocked": "BLOCKED",
     "kind": {
       "existing": "existing evaluator",
       "judge": "LLM judge (new)",
       "derived": "derived (new)",
-      "code": "code rules (new Lambda)",
-      "orchestration": "runner check",
-      "manual_review": "human review",
-      "metric_baseline": "metric baseline",
-      "external_control": "external control"
-    },
-    "obligation": {
-      "orchestration": "computed by the local runner",
-      "manual_review": "human / expert",
-      "metric_baseline": "measure manually",
-      "external_control": "outside this platform"
+      "code": "code rules (new Lambda)"
     },
     "draftRubric": "DRAFT — calibrate",
     "rulesCount": "{{n}} rule(s)",
@@ -4342,15 +4273,21 @@
     "referenceDependent": "needs ground truth",
     "retention": "retention {{n}} days",
     "refresh": "REFRESH",
-    "reviewPending": "{{n}} scenario(s) still need review — confirm them as typed steps or block the golden test.",
-    "reviewNote": "Legacy golden tests were drafted as single-turn scenarios. Review each: confirm it as typed steps, rewrite multi-session procedures as steps in the JSON, or block it. Nothing is created until every scenario is confirmed or blocked.",
-    "confirmScenarios": "CONFIRM {{n}} SCENARIO(S) AS TYPED",
+    "reviewPending": "{{n}} scenario(s) still need review — confirm their turns or block the golden test.",
+    "reviewNote": "Legacy golden tests were drafted as single-turn scenarios. Review each row: CONFIRM keeps its turns, BLOCK removes it from the Dataset with a reason (a test that needs several users or sessions, expert sign-off or a metric baseline cannot be scored by an AgentCore evaluator — block it and keep it as a manual task), or rewrite the turns via EDIT AS JSON. Each action saves a new plan revision; nothing is created until every scenario is confirmed or blocked.",
+    "confirmScenarios": "CONFIRM ALL {{n}} SCENARIO(S)",
+    "confirmOne": "CONFIRM",
+    "block": "BLOCK…",
+    "blockReasonPlaceholder": "Why no AgentCore evaluator can score this test (kept with the plan)",
+    "blockReasonRequired": "A reason is required — it is stored with the plan and shown in the assets table.",
+    "blockConfirm": "BLOCK GOLDEN TEST",
+    "unblock": "UNBLOCK",
+    "unblockMissing": "Golden test {{id}} is not on the proposal revision this plan is bound to — edit the JSON instead.",
     "reviewRequired": "REVIEW REQUIRED",
     "confirmed": "confirmed",
     "turnsCount": "{{n}} turn(s)",
     "assertions": "assertions",
     "expectedTrajectory": "expected tools",
-    "step": "turn {{turn}} · actor {{actor}} · session {{session}}",
     "allGoldenTests": "all",
     "fullRubric": "full rubric & rating scale",
     "history": "EARLIER OPERATIONS (other plan revisions)",
@@ -4359,5 +4296,54 @@
     "recovered": "recovered",
     "reserved": "reserved concurrency {{n}}",
     "rawTitle": "RAW PLAN CONTENT (invalid — repair via EDIT AS JSON)"
+  },
+  "assistantNext": {
+    "title": "NEXT STEPS",
+    "sub": "the Agent is deployed and its evaluation assets exist — what to do now",
+    "agents": "AGENT MANAGEMENT",
+    "chat": {
+      "title": "Smoke-test the Agent in the Chat Playground",
+      "body": "Send two or three golden-test inputs to “{{name}}” by hand and check the tone, the tool calls and the refusals before you spend evaluation budget.",
+      "waiting": "The deployment of “{{name}}” has not finished yet ({{status}}). Follow the job in Agent management, then come back — the links below stay valid.",
+      "failed": "The deployment of “{{name}}” failed. Fix it in Agent management (or agree a new proposal with the assistant) before running an evaluation.",
+      "open": "OPEN CHAT"
+    },
+    "run": {
+      "title": "Run the first offline evaluation",
+      "body": "START EVALUATION submits a run for “{{agent}}” on Dataset “{{dataset}}” ({{items}} scenario(s)) with the {{n}} evaluator(s) created here — exactly what New Run would send. Open New Run instead if you want to change the selection first.",
+      "referenceDependent": "{{n}} evaluator(s) are reference-dependent (amber): they only score scenarios that carry ground truth and must not be used on live traffic.",
+      "start": "START EVALUATION",
+      "startAgain": "START ANOTHER RUN",
+      "starting": "SUBMITTING…",
+      "open": "OPEN NEW RUN",
+      "noPermission": "Your account lacks the eval.run permission; open New Run to review, but starting a run is refused.",
+      "agentNotReady": "The Agent is not active yet — a run can only start once the deployment has succeeded.",
+      "assetsMissing": "No ready Dataset or evaluator in this operation — nothing to run against.",
+      "confirmTitle": "Start the evaluation run now?",
+      "confirmBody": "Launchpad will invoke “{{agent}}” once per scenario of Dataset “{{dataset}}” ({{items}} scenario(s)) and score the sessions with {{n}} evaluator(s) as a batch evaluation in {{account}} / {{region}}. This creates real, billable AWS work and cannot be undone here; you can stop the run from the Evaluation page.",
+      "confirm": "START EVALUATION",
+      "startedToast": "Run {{id}} submitted — it appears in the Evaluation list as it progresses.",
+      "runLine": "run {{id}}",
+      "queued": "queue position {{n}}",
+      "openRuns": "open in Evaluation",
+      "historyTitle": "RUNS OF THIS AGENT ON THIS DATASET ({{n}}, newest first)",
+      "meanScore": "mean {{mean}} over {{n}} evaluator(s)",
+      "oneAtATime": "A run of this agent on this Dataset is still active — wait for it to finish (or stop it on the Evaluation page) before starting another."
+    },
+    "iterate": {
+      "title": "Read the scores and the traces, then iterate",
+      "body": "A low score usually points at the system prompt or a missing tool. Open the run's sessions in Observability to see the exact turns, edit the Agent in Agent management and redeploy, then run the same Dataset again to compare revisions.",
+      "openObs": "OPEN OBSERVABILITY"
+    },
+    "manual": {
+      "title": "Implement what the proposal left to you",
+      "body": "The proposal listed these items as manual work — the platform never creates them:"
+    },
+    "online": {
+      "title": "When the offline scores hold, enable online evaluation",
+      "body": "Online evaluation samples live sessions with the same evaluators — leave the reference-dependent ones off there. Turn it on only once the offline run is stable, and start with a low sampling rate.",
+      "open": "OPEN ONLINE EVALUATION"
+    },
+    "note": "Guidance only, with one exception: START EVALUATION submits a real run (the same request as New Run) after you confirm. Every other link just opens an existing console page with the resources pre-selected — nothing else here invokes the Agent or changes AWS."
   }
 }

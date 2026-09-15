@@ -380,40 +380,11 @@ def _sse_payloads(lines: Iterable[bytes | str]) -> Iterator[Any]:
             yield data
 
 
-class RuntimeTextProtocolError(RuntimeError):
-    """Strict text evidence: the runtime put a non-string value where the
-    contract expects assistant text. Carries the field and the value's type,
-    never the value itself."""
-
-    def __init__(self, field: str, value: Any) -> None:
-        super().__init__(
-            f"runtime returned non-text {type(value).__name__} in '{field}' "
-            "where assistant text was expected"
-        )
-
-
-def _strict_text(value: Any, field: str) -> str | None:
-    """Strict evidence rule, applied to the RAW value before any ``str()``:
-    a string is text (``"None"`` / ``"42"`` stay text), ``None`` is "no
-    answer", anything else is a protocol error."""
-    if value is None or isinstance(value, str):
-        return value
-    raise RuntimeTextProtocolError(field, value)
-
-
-def _runtime_payload_events(payload: Any, *, strict: bool = False) -> Iterator[dict[str, Any]]:
-    """Normalize one runtime payload to Chat's tool/delta/complete contract.
-
-    ``strict`` is the evaluation procedure runner's text-evidence mode: raw
-    non-string text fields raise ``RuntimeTextProtocolError`` and null/absent
-    ones emit nothing, instead of the default lenient ``str()`` coercion that
-    Chat / the public API / ordinary evaluation replays keep unchanged."""
+def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
+    """Normalize one runtime payload to Chat's tool/delta/complete contract
+    (lenient ``str()`` coercion of text fields, shared by Chat, the public API
+    and evaluation replays)."""
     if not isinstance(payload, dict):
-        if strict:
-            text = _strict_text(payload, "body")
-            if text:
-                yield {"event": "complete", "data": {"text": text}}
-            return
         text = str(payload)
         if text:
             yield {"event": "complete", "data": {"text": text}}
@@ -425,7 +396,7 @@ def _runtime_payload_events(payload: Any, *, strict: bool = False) -> Iterator[d
     kind = payload.get("event")
     if isinstance(kind, str):
         if kind == "delta":
-            text = _strict_text(payload.get("text"), "text") if strict else payload.get("text")
+            text = payload.get("text")
             if text:
                 yield {"event": "delta", "data": {"text": str(text)}}
         elif kind == "heartbeat":
@@ -436,12 +407,7 @@ def _runtime_payload_events(payload: Any, *, strict: bool = False) -> Iterator[d
                 "data": {"name": str(payload.get("name", "")), "id": payload.get("id")},
             }
         elif kind == "complete":
-            if strict:
-                text = _strict_text(payload.get("result"), "result")
-                if text:
-                    yield {"event": "complete", "data": {"text": text}}
-            else:
-                yield {"event": "complete", "data": {"text": str(payload.get("result", ""))}}
+            yield {"event": "complete", "data": {"text": str(payload.get("result", ""))}}
         elif kind == "error":
             raise RuntimeError(str(payload.get("message", "runtime stream failed")))
         return
@@ -458,27 +424,18 @@ def _runtime_payload_events(payload: Any, *, strict: bool = False) -> Iterator[d
         }
     delta = inner.get("contentBlockDelta", {}).get("delta", {})
     if isinstance(delta, dict):
-        text = _strict_text(delta.get("text"), "contentBlockDelta.delta.text") if strict else (
-            delta.get("text")
-        )
+        text = delta.get("text")
         if text:
             yield {"event": "delta", "data": {"text": str(text)}}
     if "result" in payload:
-        if strict:
-            text = _strict_text(payload.get("result"), "result")
-            if text:
-                yield {"event": "complete", "data": {"text": text}}
-        else:
-            yield {"event": "complete", "data": {"text": str(payload.get("result", ""))}}
+        yield {"event": "complete", "data": {"text": str(payload.get("result", ""))}}
 
 
-def _normalized_runtime_events(
-    payloads: Iterable[Any], *, strict: bool = False
-) -> Iterator[dict[str, Any]]:
+def _normalized_runtime_events(payloads: Iterable[Any]) -> Iterator[dict[str, Any]]:
     """Suppress a final full result when real deltas were already emitted."""
     saw_delta = False
     for payload in payloads:
-        for event in _runtime_payload_events(payload, strict=strict):
+        for event in _runtime_payload_events(payload):
             if event["event"] == "delta":
                 saw_delta = True
                 yield event
@@ -531,14 +488,8 @@ def stream_runtime_events(
     qualifier: str | None = None,
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
-    strict_text: bool = False,
 ) -> Iterator[dict[str, Any]]:
-    """Invoke a runtime and yield normalized tool/text events as bytes arrive.
-
-    ``strict_text`` (procedure evaluation only) validates raw text fields
-    before any conversion — see ``_runtime_payload_events`` — and reads a
-    ``text/plain`` body as text rather than trying JSON on it first, so a plain
-    ``42`` stays the text "42" while a JSON number 42 is a protocol error."""
+    """Invoke a runtime and yield normalized tool/text events as bytes arrive."""
     session_id = session_id or new_session_id()
     response = client.invoke_agent_runtime(
         **_runtime_invoke_params(
@@ -559,27 +510,20 @@ def stream_runtime_events(
             if hasattr(body, "iter_lines")
             else body.read().splitlines()
         )
-        yield from _normalized_runtime_events(_sse_payloads(lines), strict=strict_text)
+        yield from _normalized_runtime_events(_sse_payloads(lines))
         return
 
     raw = body.read()
-    if strict_text and content_type.startswith("text/plain"):
-        decoded = raw.decode("utf-8", errors="replace") if raw else ""
-        if decoded:
-            yield from _normalized_runtime_events([decoded], strict=True)
-        return
     try:
         payload = json.loads(raw)
     except (ValueError, TypeError):
         decoded = raw.decode("utf-8", errors="replace") if raw else ""
         if decoded.lstrip().startswith("data:"):
-            yield from _normalized_runtime_events(
-                _sse_payloads(decoded.splitlines()), strict=strict_text
-            )
+            yield from _normalized_runtime_events(_sse_payloads(decoded.splitlines()))
         elif decoded:
-            yield from _normalized_runtime_events([decoded], strict=strict_text)
+            yield from _normalized_runtime_events([decoded])
     else:
-        yield from _normalized_runtime_events([payload], strict=strict_text)
+        yield from _normalized_runtime_events([payload])
 
 
 def invoke_runtime_text(
@@ -591,7 +535,6 @@ def invoke_runtime_text(
     qualifier: str | None = None,
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
-    strict_text: bool = False,
 ) -> dict[str, Any]:
     """Synchronous InvokeAgentRuntime, joining native streaming responses."""
     session_id = session_id or new_session_id()
@@ -606,7 +549,6 @@ def invoke_runtime_text(
             qualifier=qualifier,
             runtime_user_id=runtime_user_id,
             gateway_access_token=gateway_access_token,
-            strict_text=strict_text,
         )
         if event["event"] == "delta"
     ]

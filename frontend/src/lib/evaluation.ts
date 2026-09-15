@@ -74,71 +74,6 @@ export const RUN_TERMINAL_STATUSES: ReadonlySet<EvaluationRunStatus> = new Set([
 export const isActiveRun = (run: { status: EvaluationRunStatus }): boolean =>
   !RUN_TERMINAL_STATUSES.has(run.status);
 
-/** One synthetic session of a multi-actor / multi-session procedure run
- *  (`metadata.launchpad_execution`) — `actor` / `session` are the scenario's
- *  aliases, `actor_id` the identity minted for this run, `session_id` the
- *  runtime session actually used (`drift` when the runtime returned another). */
-export interface ExecutionSessionRow {
-  scenario_id: string;
-  repeat: number;
-  actor: string;
-  actor_id: string;
-  session: string;
-  requested_session_id: string;
-  session_id: string;
-  /** set when the runtime answered under another id — the procedure was then
-   *  refused; both ids are real sessions and stay linkable */
-  returned_session_id?: string;
-  drift: boolean;
-  turns: number[];
-  status: "ok" | "partial" | "failed";
-}
-
-export interface ExecutionStepRow {
-  scenario_id: string;
-  repeat: number;
-  index: number;
-  turn: number;
-  actor: string;
-  session: string;
-  session_id: string;
-  returned_session_id?: string;
-  /** `empty` = the invoke returned but produced no usable text (not a completed step) */
-  status: "ok" | "failed" | "empty";
-  error?: string;
-  response_excerpt?: string;
-}
-
-export type ExecutionCheckOutcome = "pass" | "fail" | "error" | "inconclusive";
-
-/** A LOCAL deterministic rule result (exact / contains / not_contains on the
- *  agent's actual reply) — never an AWS judge score. */
-export interface ExecutionCheckRow {
-  scenario_id: string;
-  repeat: number;
-  id: string;
-  type: "exact" | "contains" | "not_contains";
-  turn: number;
-  text: string;
-  outcome: ExecutionCheckOutcome;
-  evidence: string;
-}
-
-export type ExecutionCheckStatus = "pending" | "none" | ExecutionCheckOutcome;
-
-export interface EvaluationRunExecution {
-  version: number;
-  scenarios: { scenario_id: string; repeat: number; steps: number; checks: number }[];
-  calls_planned: number;
-  calls_done: number;
-  sessions: ExecutionSessionRow[];
-  steps: ExecutionStepRow[];
-  checks: ExecutionCheckRow[];
-  check_status: ExecutionCheckStatus;
-  /** the procedure was stopped or failed before completing — never a pass */
-  interrupted?: boolean;
-}
-
 export interface EvaluationRunInfo {
   id: string;
   agent_id: string;
@@ -162,9 +97,6 @@ export interface EvaluationRunInfo {
    *  never started one. Required to pin RECOMMEND to this run's sessions. */
   batch_eval_id?: string | null;
   error: string | null;
-  /** Multi-actor / multi-session procedure ledger; null unless the dataset
-   *  opted in via `metadata.launchpad_execution`. Absent on older backends. */
-  execution?: EvaluationRunExecution | null;
   created_at?: string | null;
 }
 

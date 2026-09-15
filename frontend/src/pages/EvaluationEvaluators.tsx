@@ -7,6 +7,7 @@ import {
   Btn,
   Chip,
   ConfirmDialog,
+  EVAL_PAGE_SIZE,
   Pager,
   Panel,
   StaleLink,
@@ -221,6 +222,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
   const { rows: pageRows, pagerProps } = useTablePage(
     ordered,
     ordered.findIndex((row) => row.id === selected?.id),
+    EVAL_PAGE_SIZE,
   );
 
   // The three definitions share the create/edit form. Derived swaps the

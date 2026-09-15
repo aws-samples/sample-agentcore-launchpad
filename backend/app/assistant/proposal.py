@@ -77,18 +77,20 @@ class GoldenTest(BaseModel):
 
 class EvaluationPlanSeed(BaseModel):
     """The optional structured evaluation recommendation of a proposal: typed
-    evaluators (kinds existing / judge / derived / code / orchestration /
-    manual_review / metric_baseline / external_control), typed scenarios (turns,
-    references, and the SE-046 ``execution`` procedure for multi-actor / multi-session
-    tests) and ``recommendation_keys`` mapping a prose recommendation index to entry
-    keys. Validated by the plan contract's ``seed_errors`` — shape first, then rules
-    and references — so a malformed seed is an *invalid* revision, never a 500.
-    Nothing here is executed; the plan draft merely starts from it."""
+    evaluators (kinds existing / judge / derived / code — every one an AgentCore
+    evaluator), typed single-session scenarios (turns, references),
+    ``recommendation_keys`` mapping a prose recommendation index to entry keys, and
+    ``blocked_golden_tests`` for tests no AgentCore evaluator can compute (kept with
+    their reason; the obligation is described under ``manual_tasks``). Validated by the
+    plan contract's ``seed_errors`` — shape first, then rules and references — so a
+    malformed seed is an *invalid* revision, never a 500. Nothing here is executed;
+    the plan draft merely starts from it."""
 
     model_config = ConfigDict(extra="forbid")
     evaluators: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
     scenarios: list[dict[str, Any]] = Field(default_factory=list, max_length=40)
     recommendation_keys: dict[str, list[str]] = Field(default_factory=dict)
+    blocked_golden_tests: list[dict[str, Any]] = Field(default_factory=list, max_length=40)
 
     @model_validator(mode="after")
     def _typed(self) -> "EvaluationPlanSeed":
@@ -171,6 +173,10 @@ def _check_lists(content: ProposalContent) -> list[str]:
             if str(sc.get("golden_test_id")) not in gt_ids:
                 errors.append(f"evaluation_plan.scenarios: golden test "
                               f"'{sc.get('golden_test_id')}' does not exist")
+        for b in seed.blocked_golden_tests:
+            if str(b.get("golden_test_id")) not in gt_ids:
+                errors.append(f"evaluation_plan.blocked_golden_tests: golden test "
+                              f"'{b.get('golden_test_id')}' does not exist")
         for e in seed.evaluators:
             for gt in e.get("golden_test_ids") or []:
                 if gt not in gt_ids:

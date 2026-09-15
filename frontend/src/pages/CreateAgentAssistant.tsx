@@ -382,6 +382,18 @@ export function CreateAgentAssistant() {
   const olderApprovals = approvedRevisions.filter(
     (p) => p.id !== shownApproved?.id,
   );
+  // Live snapshot of the deployed Agent for the NEXT STEPS guidance: the polled
+  // job/agent when they belong to this approval, else the ledger's last record.
+  const deployed = useMemo(() => {
+    if (!approval) return null;
+    const live = polled.jobId === approval.job_id;
+    return {
+      agentId: approval.agent_id,
+      agentName: approval.agent_name ?? (live ? polled.agent?.name : null) ?? null,
+      agentStatus: (live ? polled.agent?.status : null) ?? approval.agent_status,
+      jobStatus: (live ? polled.job?.status : null) ?? approval.job_status,
+    };
+  }, [approval, polled]);
 
   // A dialog opened on revision N is invalidated the moment the latest revision or
   // its hash changes (a turn completed, an edit landed): never approve a different
@@ -828,25 +840,6 @@ export function CreateAgentAssistant() {
             }
             style={{ "--i": 0 } as CSSProperties}
           >
-            {conversations.length > 0 && (
-              <div className="assist-conv-list" data-testid="conversation-list">
-                {conversations.slice(0, 8).map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    className={`selchip${conversation?.id === c.id ? " on" : ""}`}
-                    onClick={() => selectConversation(c.id)}
-                    data-testid={`conversation-${c.id}`}
-                    data-selected={conversation?.id === c.id ? "true" : "false"}
-                  >
-                    {(c.title || c.id.slice(0, 8)).slice(0, 40)}
-                    {c.proposal_status && (
-                      <span className="dim"> · r{c.proposal_revision}</span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
             <div
               className="thread assist-thread"
               ref={threadRef}
@@ -954,6 +947,7 @@ export function CreateAgentAssistant() {
 
           <Panel
             brk
+            className="assist-span"
             title={t("assistantPage.proposalTitle")}
             sub={t("assistantPage.proposalSub")}
             end={
@@ -1117,6 +1111,44 @@ export function CreateAgentAssistant() {
               </div>
             )}
           </Panel>
+
+          <div className="assist-side">
+            <Panel
+              brk
+              pad={false}
+              title={t("assistantPage.historyTitle")}
+              sub={t("assistantPage.historySub", { n: conversations.length })}
+              style={{ "--i": 2 } as CSSProperties}
+              data-testid="conversation-history"
+            >
+              {conversations.length === 0 && (
+                <div className="empty" data-testid="conversation-list-empty">
+                  {t("assistantPage.historyEmpty")}
+                </div>
+              )}
+              {conversations.length > 0 && (
+                <div className="assist-conv-list" data-testid="conversation-list">
+                  {conversations.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={`selchip${conversation?.id === c.id ? " on" : ""}`}
+                      onClick={() => selectConversation(c.id)}
+                      data-testid={`conversation-${c.id}`}
+                      data-selected={conversation?.id === c.id ? "true" : "false"}
+                    >
+                      <span className="assist-conv-title">
+                        {c.title || c.id.slice(0, 8)}
+                      </span>
+                      {c.proposal_status && (
+                        <span className="dim">r{c.proposal_revision}</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </Panel>
+          </div>
           {conversation && latest && (
             <EvaluationAssetsPanel
               conversationId={conversation.id}
@@ -1125,7 +1157,8 @@ export function CreateAgentAssistant() {
               workspaceId={workspaceId}
               apiMessage={apiMessage}
               onError={(m) => toast(m)}
-              index={2}
+              index={3}
+              deployed={deployed}
             />
           )}
         </div>

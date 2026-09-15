@@ -925,8 +925,14 @@ footer .sep{color:var(--line-2)}
 .assist-gt th{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--ink-3)}
 .assist-outcome{display:grid;gap:6px}
 .assist-stages{display:flex;gap:6px;flex-wrap:wrap}
-.assist-conv-list{display:flex;gap:6px;flex-wrap:wrap;padding:10px 16px;border-bottom:1px solid var(--line)}
-@media(max-width:1180px){.assist-grid{grid-template-columns:1fr}.assist-thread{height:420px}}
+/* Right column of the first row: the conversation history beside the thread. The DOM
+   keeps thread → proposal → history so one column reads in order; the proposal and the
+   panels below it span both columns (.assist-span). */
+.assist-side{display:flex;flex-direction:column;gap:14px;min-width:0;grid-column:2;grid-row:1}
+.assist-conv-list{display:flex;flex-direction:column;gap:6px;padding:10px 16px;max-height:220px;overflow-y:auto}
+.assist-conv-list .selchip{cursor:pointer;letter-spacing:0;justify-content:space-between;text-align:left;width:100%}
+.assist-conv-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:1180px){.assist-grid{grid-template-columns:1fr}.assist-thread{height:420px}.assist-side{grid-column:auto;grid-row:auto}}
 /* SE-047 evaluation-assets panel: full-width span under the two assistant columns,
    contained tables with horizontal overflow, readable long rubrics/steps */
 .assist-grid>.assist-span{grid-column:1 / -1}
@@ -937,6 +943,18 @@ footer .sep{color:var(--line-2)}
 .assist-gt .col-gate{min-width:120px;white-space:nowrap}
 .assist-gt .col-status{min-width:120px}
 .assist-table-wrap .assist-gt td{white-space:normal;overflow-wrap:anywhere}
+.assist-row-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;min-width:180px}
 .assist-pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;max-height:320px;overflow:auto;margin:6px 0;padding:6px;border:1px solid var(--line)}
 .assist-steps{margin:4px 0 0;padding-left:18px;font-size:11px}
 .assist-steps li{margin-bottom:2px}
+/* NEXT STEPS guidance under the evaluation-assets panel */
+.assist-next{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.assist-next-step{display:grid;grid-template-columns:34px minmax(0,1fr);gap:12px;padding:12px 14px;border:1px solid var(--line);background:#0E1210}
+.assist-next-n{font-size:12px;color:var(--amber);letter-spacing:.08em;padding-top:1px}
+.assist-next-body{min-width:0}
+.assist-next-body h4{margin:0 0 4px;font-size:13px;font-weight:600;color:var(--ink)}
+.assist-next-text{font-size:12px;line-height:1.55;color:var(--ink-2)}
+.assist-next-text .assist-steps{font-size:12px;color:var(--ink-2)}
+.assist-next-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.assist-next-run{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px;padding:8px 10px;border:1px solid var(--line-2);font-size:11px;color:var(--ink-2)}
+.assist-next-runs{margin-top:10px}

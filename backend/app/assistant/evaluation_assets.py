@@ -1081,11 +1081,9 @@ class _Runner:
                                        applies=self._applies(s.golden_test_id))
             for s in plan.scenarios
         ]
-        from app.evaluation.execution import validate_items
         from app.evaluation.routers import _validate_items  # dataset ingress gate
 
         _validate_items(items)
-        validate_items(items)
         dataset = EvalDataset(
             workspace_id=op.workspace_id, name=plan.dataset.name, locale=plan.dataset.locale,
             description=plan.dataset.description, items=items, kind="predefined",

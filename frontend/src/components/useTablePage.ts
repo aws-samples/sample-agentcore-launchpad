@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { PAGE_SIZES } from "./Pager";
+import { TABLE_PAGE_SIZE } from "./Pager";
 
 /**
  * Client-side paging for a table whose rows are already fully loaded.
@@ -13,7 +13,7 @@ import { PAGE_SIZES } from "./Pager";
 export function useTablePage<T>(
   items: T[],
   selectedIndex = -1,
-  initialSize: number = PAGE_SIZES[0],
+  initialSize: number = TABLE_PAGE_SIZE,
 ) {
   const [size, setSize] = useState(initialSize);
   const [page, setPage] = useState(1);

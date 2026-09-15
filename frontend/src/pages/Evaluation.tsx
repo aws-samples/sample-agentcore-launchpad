@@ -4,11 +4,10 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import {
-  Btn, Chip, ConfirmDialog, LoadError, PAGE_SIZES, Pager, Panel, useToast, ViewHead,
+  Btn, Chip, ConfirmDialog, EVAL_PAGE_SIZE, LoadError, Pager, Panel, useToast, ViewHead,
 } from "../components";
 import { EvaluationNav } from "../components/EvaluationNav";
 import { InsightClusters } from "../components/InsightClusters";
-import { RunExecutionPanel } from "../components/RunExecutionPanel";
 import { RunResultsPanel } from "../components/RunResultsPanel";
 import type { AgentInfo } from "../lib/api";
 import { api, errorMessage, responseMessage } from "../lib/api";
@@ -104,6 +103,10 @@ export function Evaluation() {
   const view = searchParams.get("view");
   const creating = view === "new";
   const requestedAgentId = searchParams.get("agent");
+  // Deep-links from the architect assistant's NEXT STEPS panel prefill the
+  // New Run form: `dataset=<local id>` and `evaluators=<id,id,…>`.
+  const requestedDatasetId = searchParams.get("dataset");
+  const requestedEvaluators = searchParams.get("evaluators");
   const returnToExperiment = searchParams.get("return") === "experiment";
   const returnLookback = searchParams.get("lookback");
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -118,9 +121,9 @@ export function Evaluation() {
   const [runs, setRuns] = useState<RunInfo[]>([]);
   const [runTotal, setRunTotal] = useState(0);
   const [runPage, setRunPage] = useState(1);
-  // 20/page like the other Evaluation tables (the hook's default); the
+  // 10/page like the other Evaluation tables (EVAL_PAGE_SIZE); the
   // Observability tabs keep their larger 50 because their pages come from AWS
-  const [runSize, setRunSize] = useState<number>(PAGE_SIZES[0]);
+  const [runSize, setRunSize] = useState<number>(EVAL_PAGE_SIZE);
   // The runs table is server-paged, but the insights duplicate guards must see
   // insights runs beyond the displayed page — a missed duplicate costs a real
   // AWS analysis. This page-independent list is what they read.
@@ -134,7 +137,10 @@ export function Evaluation() {
   const [mode, setMode] = useState<"evaluators" | "insights">("evaluators");
   const [scope, setScope] = useState<"dataset" | "window">("dataset");
   const [lookbackHours, setLookbackHours] = useState(24);
-  const [chosenEvaluators, setChosenEvaluators] = useState<string[]>(DEFAULT_EVALUATORS);
+  const [chosenEvaluators, setChosenEvaluators] = useState<string[]>(() => {
+    const ids = (requestedEvaluators ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    return ids.length ? ids : DEFAULT_EVALUATORS;
+  });
   const availableChosenEvaluators = chosenEvaluators.filter(
     (id) => !TEMPORARILY_UNAVAILABLE_EVALUATORS.has(id),
   );
@@ -215,7 +221,9 @@ export function Evaluation() {
       .then((res) => res.json())
       .then((d: { datasets: Dataset[] }) => {
         setDatasets(d.datasets);
-        if (d.datasets.length) setDatasetId(d.datasets[0].id);
+        const requested = d.datasets.find((ds) => ds.id === requestedDatasetId);
+        if (requested) setDatasetId(requested.id);
+        else if (d.datasets.length) setDatasetId(d.datasets[0].id);
       })
       .catch(() => {});
     fetch("/api/eval/datasets/cloud")
@@ -239,7 +247,7 @@ export function Evaluation() {
   // Query-param sub-pages keep this component mounted. Reload the form options
   // when the view changes so datasets created in DatasetsView are immediately
   // available when the operator opens New Run.
-  }, [refresh, requestedAgentId, view]);
+  }, [refresh, requestedAgentId, requestedDatasetId, view]);
 
   // Trajectory matchers score against expected_trajectory ground truth — only
   // dataset runs whose selected dataset carries it can use them. Cloud
@@ -1226,9 +1234,6 @@ export function Evaluation() {
       {/* What the averages above are made of: every judgement with the judge's
           explanation, per session — the same view SCORE NOW gives one session. */}
       <RunResultsPanel run={selectedRun} />
-      {/* Multi-actor / multi-session procedures: the synthetic sessions and the
-          LOCAL deterministic check outcomes — distinct from the AWS judges above. */}
-      {selectedRun?.execution && <RunExecutionPanel execution={selectedRun.execution} />}
 
       <ConfirmDialog
         open={confirmInsights && !!selectedRun}

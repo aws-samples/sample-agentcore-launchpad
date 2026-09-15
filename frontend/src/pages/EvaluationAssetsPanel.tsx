@@ -15,17 +15,19 @@ import type {
   AssistantProposal,
 } from "../lib/api";
 import { api } from "../lib/api";
+import { AssistantNextSteps } from "./AssistantNextSteps";
+import type { DeployedAgent } from "./AssistantNextSteps";
 
 /**
  * SE-047 — the reviewed evaluation-assets plan of one assistant conversation.
  *
  * Prepare (platform draft from a proposal revision) → review the structured mapping
- * (golden tests → scenarios with their steps and references, recommendations →
- * evaluator kinds, human/runner obligations) → confirm or block review-required
- * scenarios / edit as JSON (a new plan revision) → an administrator who owns the
- * conversation confirms the disclosure and CREATES the assets. Creation is separate
- * from testing: nothing here runs an evaluation, deploys an agent, syncs to AWS
- * Datasets or invokes a model. Every request pins the DISPLAYED workspace.
+ * (golden tests → single-session scenarios with their turns and references, or blocked
+ * with a reason; recommendations → AgentCore evaluator kinds) → confirm or block
+ * review-required scenarios / edit as JSON (a new plan revision) → an administrator who
+ * owns the conversation confirms the disclosure and CREATES the assets. Creation is
+ * separate from testing: nothing here runs an evaluation, deploys an agent, syncs to
+ * AWS Datasets or invokes a model. Every request pins the DISPLAYED workspace.
  */
 
 const POLL_MS = 3000;
@@ -98,6 +100,7 @@ export function EvaluationAssetsPanel({
   apiMessage,
   onError,
   index,
+  deployed = null,
 }: {
   conversationId: string;
   proposals: AssistantProposal[];
@@ -106,6 +109,8 @@ export function EvaluationAssetsPanel({
   apiMessage: (err: unknown) => string;
   onError: (message: string) => void;
   index: number;
+  /** live status of the Agent deployed from this conversation (for NEXT STEPS) */
+  deployed?: DeployedAgent | null;
 }) {
   const { t } = useTranslation();
   const [state, setState] = useState<AssistantEvalPlanState | null>(null);
@@ -119,6 +124,8 @@ export function EvaluationAssetsPanel({
   const [confirmPlan, setConfirmPlan] = useState<AssistantEvalPlan | null>(null);
   const [confirmCleanup, setConfirmCleanup] = useState<AssistantEvalOperation | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  // per-row BLOCK: the golden test whose reason is being typed (inline, one at a time)
+  const [blocking, setBlocking] = useState<{ goldenTestId: string; reason: string } | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [pollFailures, setPollFailures] = useState(0);
 
@@ -283,6 +290,97 @@ export function EvaluationAssetsPanel({
     );
   };
 
+  /** Confirm ONE review-required scenario (a new revision). */
+  const confirmOne = (goldenTestId: string) => {
+    if (!current) return;
+    const content = asRecord(current.content);
+    const scenarios = asArray<Record<string, unknown>>(content.scenarios).map((s) =>
+      String(s.golden_test_id) === goldenTestId ? { ...s, review_required: false } : s,
+    );
+    void run(() =>
+      api.assistantEvalPlanEdit(conversationId, { ...content, scenarios }, workspaceId),
+    );
+  };
+
+  /** BLOCK one golden test: it leaves `scenarios`, lands in `blocked_golden_tests` with
+   *  the member's reason, and is dropped from every evaluator's `golden_test_ids` (an
+   *  evaluator may only target all remaining tests). A new plan revision — nothing on
+   *  AWS changes; the test stays visible in the proposal as a manual task. */
+  const blockOne = (goldenTestId: string, reason: string) => {
+    if (!current) return;
+    const content = asRecord(current.content);
+    const scenarios = asArray<Record<string, unknown>>(content.scenarios).filter(
+      (s) => String(s.golden_test_id) !== goldenTestId,
+    );
+    const blockedList = asArray<Record<string, unknown>>(content.blocked_golden_tests).filter(
+      (b) => String(b.golden_test_id) !== goldenTestId,
+    );
+    const evaluators = asArray<Record<string, unknown>>(content.evaluators).map((e) => ({
+      ...e,
+      golden_test_ids: asArray<string>(e.golden_test_ids).filter((g) => g !== goldenTestId),
+    }));
+    setBlocking(null);
+    void run(() =>
+      api.assistantEvalPlanEdit(
+        conversationId,
+        {
+          ...content,
+          scenarios,
+          evaluators,
+          blocked_golden_tests: [...blockedList, { golden_test_id: goldenTestId, reason }],
+        },
+        workspaceId,
+      ),
+    );
+  };
+
+  /** UNBLOCK: draft the golden test again as ONE single-turn scenario marked
+   *  review-required — the same shape the platform draft uses — from the proposal
+   *  revision this plan is bound to. */
+  const unblockOne = (goldenTestId: string) => {
+    if (!current) return;
+    const content = asRecord(current.content);
+    const source = proposals.find((p) => p.revision === Number(content.source_revision));
+    const gt = asArray<Record<string, unknown>>(source?.content.golden_tests).find(
+      (g) => String(g.id) === goldenTestId,
+    );
+    if (!gt) {
+      onError(t("assistantEval.unblockMissing", { id: goldenTestId }));
+      return;
+    }
+    const assertions: string[] = [];
+    if (gt.pass_criteria) assertions.push(String(gt.pass_criteria).slice(0, 1000));
+    if (gt.forbidden_behavior) {
+      assertions.push(`Must not: ${String(gt.forbidden_behavior)}`.slice(0, 1000));
+    }
+    const scenario = {
+      scenario_id: goldenTestId.replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "") || "gt",
+      golden_test_id: goldenTestId,
+      turns: [{
+        input: String(gt.input ?? "").slice(0, 8000),
+        expected_response: String(gt.expected_response ?? "").slice(0, 2000),
+      }],
+      expected_trajectory: asArray<unknown>(gt.expected_tools).map((x) => String(x).slice(0, 200)),
+      assertions,
+      note: "re-drafted from the golden test after unblocking — confirm, rewrite or block it",
+      review_required: true,
+    };
+    const blockedList = asArray<Record<string, unknown>>(content.blocked_golden_tests).filter(
+      (b) => String(b.golden_test_id) !== goldenTestId,
+    );
+    void run(() =>
+      api.assistantEvalPlanEdit(
+        conversationId,
+        {
+          ...content,
+          scenarios: [...asArray<Record<string, unknown>>(content.scenarios), scenario],
+          blocked_golden_tests: blockedList,
+        },
+        workspaceId,
+      ),
+    );
+  };
+
   const materialize = (plan: AssistantEvalPlan) =>
     run(() =>
       api.assistantEvalPlanMaterialize(conversationId, plan.revision, plan.content_hash, workspaceId),
@@ -301,6 +399,12 @@ export function EvaluationAssetsPanel({
   );
   const invalid = !!current && current.validation_errors.length > 0;
   const reviewPending = scenarios.filter((s) => s?.review_required).length;
+  // A plan whose members have the expected shape is shown as tables even while it
+  // does not validate yet (a fresh draft always needs review; a routing error names
+  // an evaluator): the row actions ARE the way to fix it. Only a malformed plan
+  // (JSON edited into another shape) falls back to the raw dump.
+  const structured =
+    !!current && Array.isArray(content.scenarios) && Array.isArray(content.evaluators);
   const summary = current?.summary;
   const canCreate =
     !!current && current.status === "draft" && !invalid && canMaterialize && !busy && !operation;
@@ -354,8 +458,8 @@ export function EvaluationAssetsPanel({
           <label className="dim" style={{ fontSize: 11 }}>
             {t("assistantEval.sourceRevision")}
             <select
-              className="mono"
-              style={{ marginLeft: 6 }}
+              className="input mono"
+              style={{ marginLeft: 6, width: "auto", padding: "6px 10px", cursor: "pointer" }}
               value={sourceRevision}
               data-testid="eval-source-revision"
               onChange={(e) => setSourceRevision(Number(e.target.value))}
@@ -444,7 +548,7 @@ export function EvaluationAssetsPanel({
           </div>
         )}
 
-        {current && invalid && jsonDraft === null && (
+        {current && !structured && jsonDraft === null && (
           <div className="assist-section" data-testid="eval-invalid-raw">
             <h4>{t("assistantEval.rawTitle")}</h4>
             <pre className="assist-pre" data-testid="eval-invalid-raw-json">
@@ -452,7 +556,7 @@ export function EvaluationAssetsPanel({
             </pre>
           </div>
         )}
-        {current && !invalid && jsonDraft === null && (
+        {current && structured && jsonDraft === null && (
           <>
             {summary && (
               <div className="dim mono" style={{ fontSize: 11, marginTop: 10 }} data-testid="eval-summary">
@@ -478,7 +582,6 @@ export function EvaluationAssetsPanel({
                         <th>{t("assistantEval.col.goldenTest")}</th>
                         <th>{t("assistantEval.col.scenario")}</th>
                         <th>{t("assistantEval.col.turns")}</th>
-                        <th>{t("assistantEval.col.procedure")}</th>
                         <th>{t("assistantEval.col.status")}</th>
                       </tr>
                     </thead>
@@ -512,27 +615,6 @@ export function EvaluationAssetsPanel({
                               )}
                             </details>
                           </td>
-                          <td className="mono">
-                            {s?.execution ? (
-                              <details>
-                                <summary>{t("assistantEval.procedureRunner")}</summary>
-                                <ol className="assist-steps">
-                                  {asArray<{ turn: number; actor: string; session: string }>(
-                                    asRecord(s.execution).steps,
-                                  ).map((st, k) => (
-                                    <li key={k}>
-                                      {t("assistantEval.step", { turn: st.turn + 1, actor: st.actor, session: st.session })}
-                                    </li>
-                                  ))}
-                                </ol>
-                                {asArray<Record<string, unknown>>(asRecord(s.execution).checks).map((c, k) => (
-                                  <div key={k} style={{ fontSize: 11 }}>{compactRule(c)}</div>
-                                ))}
-                              </details>
-                            ) : (
-                              t("assistantEval.procedureSingle")
-                            )}
-                          </td>
                           <td>
                             {s?.review_required ? (
                               <Chip tone="warn">{t("assistantEval.reviewRequired")}</Chip>
@@ -540,14 +622,79 @@ export function EvaluationAssetsPanel({
                               <Chip tone="good">{t("assistantEval.confirmed")}</Chip>
                             )}
                             {s?.note ? <div className="dim" style={{ fontSize: 11 }}>{s.note}</div> : null}
+                            {!operation && jsonDraft === null && (
+                              blocking?.goldenTestId === String(s?.golden_test_id) ? (
+                                <div className="assist-row-actions" data-testid={`eval-block-form-${s?.golden_test_id}`}>
+                                  <input
+                                    className="input mono"
+                                    style={{ width: "100%", padding: "6px 8px" }}
+                                    value={blocking.reason}
+                                    placeholder={t("assistantEval.blockReasonPlaceholder")}
+                                    onChange={(e) => setBlocking({ ...blocking, reason: e.target.value })}
+                                    data-testid="eval-block-reason"
+                                  />
+                                  <div className="row" style={{ gap: 6, marginTop: 6 }}>
+                                    <Btn
+                                      primary
+                                      disabled={busy || !blocking.reason.trim()}
+                                      disabledReason={t("assistantEval.blockReasonRequired")}
+                                      onClick={() => blockOne(blocking.goldenTestId, blocking.reason.trim())}
+                                      data-testid="eval-block-confirm"
+                                    >
+                                      {t("assistantEval.blockConfirm")}
+                                    </Btn>
+                                    <Btn disabled={busy} onClick={() => setBlocking(null)} data-testid="eval-block-cancel">
+                                      {t("assistantEval.cancel")}
+                                    </Btn>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="assist-row-actions">
+                                  {s?.review_required && (
+                                    <button
+                                      type="button"
+                                      className="rowact"
+                                      disabled={busy}
+                                      onClick={() => confirmOne(String(s?.golden_test_id))}
+                                      data-testid={`eval-confirm-${s?.golden_test_id}`}
+                                    >
+                                      {t("assistantEval.confirmOne")}
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="rowact"
+                                    disabled={busy}
+                                    onClick={() => setBlocking({ goldenTestId: String(s?.golden_test_id), reason: "" })}
+                                    data-testid={`eval-block-${s?.golden_test_id}`}
+                                  >
+                                    {t("assistantEval.block")}
+                                  </button>
+                                </div>
+                              )
+                            )}
                           </td>
                         </tr>
                       ))}
                       {blocked.map((b, i) => (
                         <tr key={`b-${b?.golden_test_id ?? i}`} data-testid={`eval-blocked-${b?.golden_test_id ?? i}`}>
                           <td className="mono">{String(b?.golden_test_id ?? "")}</td>
-                          <td colSpan={4}>
+                          <td colSpan={3}>
                             <Chip tone="warn">{t("assistantEval.blocked")}</Chip> {String(b?.reason ?? "")}
+                            {!operation && jsonDraft === null && (
+                              <>
+                                {" "}
+                                <button
+                                  type="button"
+                                  className="rowact"
+                                  disabled={busy}
+                                  onClick={() => unblockOne(String(b?.golden_test_id))}
+                                  data-testid={`eval-unblock-${b?.golden_test_id}`}
+                                >
+                                  {t("assistantEval.unblock")}
+                                </button>
+                              </>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -580,7 +727,7 @@ export function EvaluationAssetsPanel({
                           <tr key={`${e?.key ?? i}`} data-testid={`eval-evaluator-${e?.key ?? i}`}>
                             <td className="mono">{String(e?.key ?? "")}</td>
                             <td>
-                              <Chip tone={CLOUD_KINDS.has(kind) ? "good" : kind === "existing" ? "muted" : "warn"}>
+                              <Chip tone={CLOUD_KINDS.has(kind) ? "good" : "muted"}>
                                 {t(`assistantEval.kind.${kind}`, kind)}
                               </Chip>
                               {e?.draft && <Chip tone="warn">{t("assistantEval.draftRubric")}</Chip>}
@@ -598,10 +745,8 @@ export function EvaluationAssetsPanel({
                                 <ResourceStatus res={res} />
                               ) : CLOUD_KINDS.has(kind) ? (
                                 <Chip tone="muted">{t("assistantEval.notCreated")}</Chip>
-                              ) : kind === "existing" ? (
-                                <Chip tone="muted">{t("assistantEval.existingRef")}</Chip>
                               ) : (
-                                <Chip tone="warn">{t(`assistantEval.obligation.${kind}`, kind)}</Chip>
+                                <Chip tone="muted">{t("assistantEval.existingRef")}</Chip>
                               )}
                             </td>
                           </tr>
@@ -715,6 +860,15 @@ export function EvaluationAssetsPanel({
         )}
       </Panel>
 
+      {operation && operation.status === "succeeded" && (
+        <AssistantNextSteps
+          operation={operation}
+          proposal={proposals.find((p) => p.revision === operation.proposal_revision) ?? null}
+          deployed={deployed}
+          index={index + 1}
+        />
+      )}
+
       <ConfirmDialog
         open={confirmPlan !== null}
         title={t("assistantEval.confirmTitle", { n: confirmPlan?.revision ?? 0 })}
@@ -791,12 +945,6 @@ function EvaluatorDefinition({ e }: { e: AssistantEvalPlanEvaluator }) {
             {asArray<Record<string, unknown>>(e?.rules?.checks).map((c) => compactRule(c)).join("\n")}
           </pre>
         </details>
-      )}
-      {!CLOUD_KINDS.has(kind) && kind !== "existing" && (
-        <div className="dim">
-          {String(e?.reason ?? "")}
-          {e?.obligation ? ` — ${e.obligation}` : ""}
-        </div>
       )}
       {e?.note && <div className="dim">{e.note}</div>}
     </>
@@ -932,7 +1080,12 @@ function ResourceDetails({ res }: { res: AssistantEvalResource }) {
     <>
       {res.link && (
         <div>
-          <Link to={res.link} data-testid={`eval-link-${res.key}`}>
+          <Link
+            to={res.link}
+            className="mono"
+            style={{ color: "var(--amber)", textDecoration: "none" }}
+            data-testid={`eval-link-${res.key}`}
+          >
             {t("assistantEval.open")} ▸
           </Link>
         </div>

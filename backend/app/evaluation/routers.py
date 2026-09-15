@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError, aws_error_code
 from app.evaluation import agentcore_eval as ac
-from app.evaluation import execution, service
+from app.evaluation import service
 from app.evaluation.models import EvalDataset, EvalRun
 from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import normalize_scenarios
@@ -113,10 +113,6 @@ def _validate_items(items: list[dict[str, Any]]) -> None:
             raise AppError(
                 "dataset.invalid_item", f"item {idx}: prompt required", status_code=422
             )
-    # opt-in multi-actor/multi-session procedures: strict schema, item size,
-    # unique normalized ids and expanded totals (calls / sessions) — only
-    # datasets that contain an opt-in item are subject to it
-    execution.validate_items(items)
 
 
 def _infer_kind(items: list[dict[str, Any]]) -> str:
@@ -150,8 +146,8 @@ def _assert_target_references(
     dataset_scope: bool,
 ) -> None:
     """Every chosen evaluator that reads ground truth must find it on EVERY target it
-    will be applied to — each session (procedure seed sessions included) or each TRACE
-    turn of the CURRENT dataset snapshot — before any run row, invoke or
+    will be applied to — each session or each TRACE turn of the CURRENT dataset
+    snapshot — before any run row, invoke or
     StartBatchEvaluation. Builtins resolve from the canonical catalog, custom judges /
     derived from their real configuration (one GetEvaluator each — no retries beyond the
     client's own), managed code evaluators from their owning plan's rules. A custom
@@ -218,8 +214,8 @@ def _assert_target_references(
             "run.trajectory_needs_ground_truth" if only_trajectory
             else "run.judge_needs_ground_truth",
             f"{named} — every session / turn the evaluator is applied to must carry the "
-            "reference it reads (procedure seed sessions carry none). Add the ground truth "
-            "to those scenarios or drop the evaluator.",
+            "reference it reads. Add the ground truth to those scenarios or drop the "
+            "evaluator.",
             {"evaluators": problems}, status_code=422,
         )
 
@@ -1166,10 +1162,6 @@ def _run_out(run: EvalRun) -> dict[str, Any]:
         "scores": run.scores,
         "insights": run.insights,
         "error": run.error,
-        # additive: multi-actor/multi-session procedure ledger (sessions with
-        # their synthetic actors, steps, local deterministic check results);
-        # null unless the dataset opted in via metadata.launchpad_execution
-        "execution": run.execution,
         # additive: an operator stop is pending on this run (in-memory flag;
         # the row turns `stopped` once the poller/worker observes it)
         "stop_requested": service.stop_requested(run.id),
@@ -1184,6 +1176,7 @@ def list_runs(
     offset: int = Query(0, ge=0),
     mode: str | None = Query(None, pattern="^(evaluators|insights)$"),
     agent_id: str | None = Query(None, min_length=1, max_length=32),
+    dataset_id: str | None = Query(None, min_length=1, max_length=16),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Newest-first page of runs plus the unpaginated `total`.
@@ -1193,13 +1186,17 @@ def list_runs(
     duplicate guard, which must see insights runs beyond the displayed page;
     `agent_id` for the experiment RECOMMEND card, which offers one agent's own
     completed runs as a trace source and must not miss them behind other agents'
-    newer runs.
+    newer runs; `dataset_id` (a local Dataset id) for the architect assistant's
+    NEXT STEPS panel, which lists the runs of one agent on the Dataset the
+    evaluation-assets operation created.
     """
     query = db.query(EvalRun).filter(EvalRun.workspace_id == ws.id)
     if mode:
         query = query.filter(EvalRun.mode == mode)
     if agent_id:
         query = query.filter(EvalRun.agent_id == agent_id)
+    if dataset_id:
+        query = query.filter(EvalRun.dataset_id == dataset_id)
     total = query.count()
     rows = (
         query.order_by(EvalRun.created_at.desc()).offset(offset).limit(limit).all()
@@ -1297,15 +1294,6 @@ def create_run(
         # the pinned version travels on its own column, never in this string.
         dataset_name = f"cloud:{cloud_name}"
 
-    # Multi-actor/multi-session procedures: re-validate the stored items (a
-    # local row written before a rule tightened must not reach the queue) and
-    # require an actor envelope on the invoke path — both before any run row,
-    # telemetry lookup or AWS call.
-    if req.dataset_id:
-        execution.validate_items(items)
-    execution.require_actor_envelope(
-        items, method=agent.method, protocol=(agent.spec or {}).get("protocol") or "http"
-    )
     if any("actor_profile" in item for item in items) and not req.actor_model_id:
         raise AppError(
             "run.actor_model_required",
