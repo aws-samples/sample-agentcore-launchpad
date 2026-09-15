@@ -95,6 +95,88 @@ def run(spans, level="SESSION", name="ev", **kw):
     return handler.lambda_handler(event(level, spans, name=name, **kw), None)
 
 
+def batch_turn(trace="t1", sid="m", text="safe", *, plain=False, finish="end_turn"):
+    """Live batch Lambda envelope: ADOT logs nested under span_events (2026-09-14)."""
+    doc, log = adot_turn(trace, sid, 10, text if plain else blocks(text), finish=finish,
+                        history=["amber"])
+    if plain:
+        doc["attributes"]["gen_ai.operation.name"] = "invoke_agent"
+    doc.update(trace_id=trace, span_id=sid, events=[], span_events=[{
+        "event_name": "strands.telemetry.tracer", "span_id": sid,
+        "time_unix_nano": 11, "observed_time_unix_nano": 12,
+        "attributes": log["attributes"], "body": log["body"],
+    }])
+    return doc
+
+
+@pytest.mark.parametrize("level", ["TRACE", "SESSION"])
+@pytest.mark.parametrize("plain", [False, True])
+def test_batch_embedded_output_scores_without_evaluator_identity(monkeypatch, level, plain):
+    monkeypatch.setattr(handler, "_RULES", {"version": 1, "evaluators": {"only": LEAK}})
+    for text, expected in (("safe", "PASS"), ("amber", "FAIL")):
+        evt = event(level, [batch_turn(text=text, plain=plain)],
+                    target=T1 if level == "TRACE" else None)
+        del evt["evaluatorName"]
+        del evt["evaluatorId"]
+        assert handler.lambda_handler(evt, None)["label"] == expected
+
+
+def test_batch_embedded_output_keeps_tool_counts_and_exact_duplicates():
+    doc = batch_turn()
+    assert run([doc, json.loads(json.dumps(doc))], name="tools")["label"] == "PASS"
+    doc["span_events"].append(json.loads(json.dumps(doc["span_events"][0])))
+    assert run([doc], name="tools")["label"] == "PASS"
+    assert run([doc, tool("t1", "x", "weather", 5)], name="tools")["label"] == "FAIL"
+
+
+@pytest.mark.parametrize("finish,expected", [
+    ("max_tokens", "TRUNCATED"), ("tool_use", "INCOMPLETE"), ("unknown", "UNKNOWN_FINISH"),
+])
+def test_batch_embedded_finish_guards(finish, expected):
+    assert run([batch_turn(finish=finish)])["errorCode"] == expected
+
+
+@pytest.mark.parametrize("field,value", [("span_id", "other"), ("trace_id", "t2"),
+                                         ("spanId", "other"), ("traceId", "t2")])
+def test_batch_embedded_foreign_identity_is_rejected(field, value):
+    doc = batch_turn()
+    doc["span_events"][0][field] = value
+    assert run([doc])["errorCode"] == "UNKNOWN_IDENTITY"
+
+
+@pytest.mark.parametrize("bad", [None, {}, "invalid", ["invalid"], [{"body": "invalid"}]])
+def test_batch_embedded_malformed_collection_is_rejected(bad):
+    doc = batch_turn()
+    doc["span_events"] = bad
+    assert run([doc])["errorCode"] == "MALFORMED_SPAN_EVENT"
+
+
+def test_batch_embedded_evidence_does_not_bypass_existing_guards():
+    doc = batch_turn()
+    doc["span_events"][0]["body"].pop("output")
+    assert run([doc])["errorCode"] == "NO_OUTPUT"  # history is never output
+    doc = batch_turn()
+    doc.pop("endTimeUnixNano")
+    assert run([doc])["errorCode"] == "INCOMPLETE"
+    doc = batch_turn()
+    doc["span_events"][0]["dropped_attributes_count"] = 1
+    assert run([doc])["errorCode"] == "TRUNCATED_EVIDENCE"
+    doc = batch_turn()
+    doc["span_events"][0]["attributes"]["session.id"] = "foreign-session"
+    assert run([doc])["errorCode"] == "MIXED_SESSIONS"
+    doc = batch_turn()
+    doc["attributes"]["gen_ai.completion"] = "other output"
+    assert run([doc])["errorCode"] == "CONFLICTING_OUTPUT"
+    doc = batch_turn()
+    extra = json.loads(json.dumps(doc["span_events"][0]))
+    extra["body"]["output"]["messages"][0]["content"]["message"] = blocks("other")
+    doc["span_events"].append(extra)
+    assert run([doc])["errorCode"] == "CONFLICTING_DUPLICATE"
+    doc = batch_turn()
+    doc["span_events"][0]["timeUnixNano"] = 99
+    assert run([doc])["errorCode"] == "CONFLICTING_DUPLICATE"
+
+
 # ---------------------------------------------------------------- positives
 
 def test_positive_legacy_adot_new_details_and_tool_trajectory():

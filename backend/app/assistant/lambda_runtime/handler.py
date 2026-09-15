@@ -9,6 +9,9 @@ Contract (devguide "Custom code-based evaluator"):
            evaluationInput: {sessionSpans: [...]}, evaluationReferenceInputs: [...],
            evaluationTarget: {traceIds} (TRACE) | None (SESSION)}
   return {label, value, explanation} | {errorCode, errorMessage}
+  Live AgentCore requests can omit both evaluator identity fields (2026-09-14).
+  Only a single-evaluator package can resolve that envelope unambiguously; explicit
+  unknown/malformed identities and identityless multi-evaluator packages fail closed.
 
 Telemetry model — the representations the installed Strands tracer / bedrock_agentcore
 ADOT serializer actually emit, typed by SOURCE (never by punctuation):
@@ -16,6 +19,9 @@ ADOT serializer actually emit, typed by SOURCE (never by punctuation):
     attributes{gen_ai.operation.name, gen_ai.tool.name, gen_ai.response.finish_reasons,
     session.id, …}, events?[]} — attributes may be a dict or an OTLP key/value list
     (stringValue / intValue / arrayValue);
+  * batch Evaluation also embeds ADOT log records in ``span_events`` on each span
+    (snake_case log ids/timestamps, inherited trace id); bind these to the outer span
+    before the same completeness, duplicate, conflict and truncation checks;
   * model spans (``gen_ai.operation.name`` = chat/…): ``gen_ai.choice.message`` and the
     ADOT ``body.output.messages[].content.message`` carry ``serialize(content)`` — a
     JSON list of content blocks (SERIALIZED envelope; must parse);
@@ -317,10 +323,45 @@ class _Group:
         return self.operation() in AGENT_OPERATIONS
 
 
+def _with_span_events(docs):
+    """Batch Evaluation nests ADOT log records in span_events, not OTel events.
+
+    The outer span supplies the trace identity; a nested record's explicit ids
+    must agree. Keep the existing grouping/duplicate/drop checks for these logs
+    rather than treating input history or any arbitrary event as output.
+    """
+    for doc in docs:
+        yield doc
+        if "span_events" not in doc:
+            continue
+        events = doc["span_events"]
+        if not isinstance(events, list) or not all(isinstance(e, dict) for e in events):
+            raise Unusable("MALFORMED_SPAN_EVENT", "span_events must be a list of log records")
+        trace_id, span_id = _trace_id(doc), _span_id(doc)
+        for event in events:
+            if not isinstance(event.get("body"), dict) or "name" in event:
+                raise Unusable("MALFORMED_SPAN_EVENT",
+                               "span_events entry is not an ADOT log record")
+            if any(k in event for k in ("traceId", "trace_id")) and _trace_id(event) != trace_id:
+                raise Unusable("UNKNOWN_IDENTITY",
+                               "span_events trace identity differs from its span")
+            if any(k in event for k in ("spanId", "span_id")) and _span_id(event) != span_id:
+                raise Unusable("UNKNOWN_IDENTITY",
+                               "span_events span identity differs from its span")
+            log = {**event, "traceId": trace_id, "spanId": span_id}
+            for camel, snake in (("timeUnixNano", "time_unix_nano"),
+                                 ("observedTimeUnixNano", "observed_time_unix_nano")):
+                if snake in log:
+                    if camel in log and log[camel] != log[snake]:
+                        raise Unusable("CONFLICTING_DUPLICATE", f"{camel} and {snake} disagree")
+                    log[camel] = log[snake]
+            yield log
+
+
 def _group(docs):
     groups = {}
     order = []
-    for doc in docs:
+    for doc in _with_span_events(docs):
         if _dropped(doc) or any(_dropped(e) for e in _events(doc)):
             raise Unusable("TRUNCATED_EVIDENCE", "span/event attributes or events were dropped")
         key = (_trace_id(doc), _span_id(doc))
@@ -809,8 +850,15 @@ def lambda_handler(event, context):
         rules_by_name = _load_rules().get("evaluators") or {}
     except (OSError, ValueError) as exc:
         return _error("RULES_UNAVAILABLE", f"rules.json unreadable: {exc}")
-    name = str(event.get("evaluatorName") or "")
-    rules = rules_by_name.get(name)
+    name = event.get("evaluatorName")
+    if "evaluatorName" not in event and "evaluatorId" not in event:
+        # The live service omits both documented identities. Never guess between
+        # rule sets, nor ignore an explicitly supplied but unrecognized identity.
+        if len(rules_by_name) != 1:
+            return _error("UNKNOWN_EVALUATOR", "event has no evaluator identity; "
+                          "exactly one packaged evaluator is required")
+        name = next(iter(rules_by_name))
+    rules = rules_by_name.get(name) if isinstance(name, str) and name else None
     if rules is None:
         return _error("UNKNOWN_EVALUATOR", f"no rules packaged for evaluator name {name!r}")
     return evaluate(rules, event)
