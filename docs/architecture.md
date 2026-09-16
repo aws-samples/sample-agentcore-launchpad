@@ -1385,12 +1385,14 @@ and be usable). A failure or conflict in a code chain marks its remaining resour
 and owning code evaluator `blocked`; other code chains, judges, derived and existing evaluators still
 proceed.
 
-`AddPermission` can advance the published version's `RevisionId`. The permission
-step checks the recorded identities and inventory before writing, uses the existing
-policy's own revision as a CAS token when present, and verifies the whole resulting
-policy and function state. Only a successful write with an otherwise unchanged
-published configuration can advance its cleanup snapshot; an audit entry retains
-both revisions and the request ID. `$LATEST`, concurrency and the version/alias
+`AddPermission` can advance the published version's `RevisionId` and `LastModified`.
+The permission step checks the recorded identities and inventory before writing,
+uses the existing policy's own revision as a CAS token when present, and verifies
+the whole resulting policy and function state. Only a successful write may advance
+its cleanup snapshot. Every other published configuration field must remain equal,
+and a changed `LastModified` must fall within the call's time window, allowing five
+seconds of clock skew. An audit entry retains both revisions, modification times
+and the request ID. `$LATEST`, concurrency and the version/alias
 inventory must remain unchanged. A lost response, unexplained drift or a historical
 pre-permission snapshot cannot be repaired merely by finding a matching statement.
 Cleanup continues to require the recorded identities exactly.

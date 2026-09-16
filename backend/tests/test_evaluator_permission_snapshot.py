@@ -60,6 +60,9 @@ class PermissionLambda(FakeLambda):
         super().add_permission(**kw)
         revision = self._revision()
         self.functions[name]["versions"][kw["Qualifier"]]["RevisionId"] = revision
+        self.functions[name]["versions"][kw["Qualifier"]]["LastModified"] = (
+            assets._now().isoformat()
+        )
         self.policy_revisions[name] = revision
         if self.after_add:
             self.after_add(name)
@@ -155,6 +158,8 @@ def test_own_permission_revision_is_checkpointed_and_cleanup_succeeds(app_ready,
             "qualifier": "1", "statement_id": assets.PERMISSION_SID,
             "policy_revision_before": None, "policy_revision_after": published["RevisionId"],
             "request_id": f"add-{fn['name']}",
+            "last_modified_before": fakes.lam.functions[fn["name"]]["cfg"]["LastModified"],
+            "last_modified_after": published["LastModified"],
         }
     assert all("RevisionId" not in call for call in fakes.lam.add_calls)
     assert _clean(op_id, fakes).status == "cleaned"
@@ -213,6 +218,9 @@ def test_missing_recorded_identity_never_authorizes_write(app_ready, field):
     ("published", "Timeout", 299),
     ("published", "Environment", {"Variables": {"INJECTED": "yes"}}),
     ("published", "LastModified", "externally-changed"),
+    ("published", "LastModified", "2026-01-01T00:00:00+00:00"),
+    ("published", "LastModified", "2099-01-01T00:00:00+00:00"),
+    ("published", "LastModified", "2026-09-16T00:00:00"),
     ("published", "RevisionId", None),
     ("latest", "RevisionId", "externally-changed"),
     ("latest", "Timeout", 299),

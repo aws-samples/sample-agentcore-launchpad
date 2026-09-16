@@ -73,7 +73,7 @@ import zipfile
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -1792,11 +1792,13 @@ class _Runner:
         if len(ours) > 1:
             raise _Conflict("resource policy carries duplicate permission statements")
         wrote, answer = False, None
+        write_started = write_finished = None
         if not ours:
             if baseline is not None and not policy_revision:
                 raise _Conflict("resource policy has no RevisionId for the permission CAS")
             wanted = {**wanted, "Statement": [*wanted["Statement"], expected]}
             try:
+                write_started = _now()
                 answer = self._write(
                     db, lam.add_permission, FunctionName=stored["function_name"],
                     StatementId=PERMISSION_SID, Action="lambda:InvokeFunction",
@@ -1804,6 +1806,7 @@ class _Runner:
                     Qualifier=stored["version"],
                     **({"RevisionId": policy_revision} if baseline is not None else {}),
                 )
+                write_finished = _now()
                 wrote = True
             except ClientError as exc:
                 if _code(exc) == "PreconditionFailedException":
@@ -1821,12 +1824,31 @@ class _Runner:
         after = self._permission_function_snapshot(lam, stored)
         old_revision = before["published"].get("RevisionId")
         new_revision = after["published"].get("RevisionId")
-        allowed = {"RevisionId"} if wrote else set()
+        allowed = {"RevisionId", "LastModified"} if wrote else set()
         old_config = {k: v for k, v in before["published"].items() if k not in allowed}
         new_config = {k: v for k, v in after["published"].items() if k not in allowed}
         if not new_revision or old_config != new_config:
             raise _Conflict("published configuration differs after permission beyond the "
-                            "revision of our successful write")
+                            "lifecycle fields of our successful write")
+        old_modified = before["published"].get("LastModified")
+        new_modified = after["published"].get("LastModified")
+        if wrote and old_modified != new_modified:
+            # Live Lambda updates both qualified fields for AddPermission. Accept its
+            # timestamp only inside our successful call, allowing five seconds of
+            # service/host clock skew; arbitrary or historical drift is still refused.
+            try:
+                old_time = datetime.fromisoformat(old_modified)
+                new_time = datetime.fromisoformat(new_modified)
+                timestamp_matches = (
+                    old_time.tzinfo is not None and new_time.tzinfo is not None
+                    and new_time >= old_time
+                    and write_started - timedelta(seconds=5) <= new_time
+                    <= write_finished + timedelta(seconds=5)
+                )
+            except (TypeError, ValueError):
+                timestamp_matches = False
+            if not timestamp_matches:
+                raise _Conflict("published LastModified is outside our permission write")
         if any(before[k] != after[k] for k in ("latest", "concurrency", "versions", "aliases")):
             raise _Conflict("$LATEST / concurrency / inventory changed during permission")
         if not wrote and policy_revision != after_policy_revision:
@@ -1842,6 +1864,8 @@ class _Runner:
                 "policy_revision_before": policy_revision,
                 "policy_revision_after": after_policy_revision,
                 "request_id": ((answer or {}).get("ResponseMetadata") or {}).get("RequestId"),
+                "last_modified_before": old_modified,
+                "last_modified_after": new_modified,
             })
             stored["readback"]["RevisionId"] = new_revision
         res["result"] = {"principal": AGENTCORE_PRINCIPAL, "source_account": op.account_id,

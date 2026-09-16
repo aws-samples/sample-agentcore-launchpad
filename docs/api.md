@@ -297,7 +297,7 @@ initialization is settled, and `revision_history[]`; `review` is the review-requ
 the append-only audit entries — no CloudTrail actor or token is ever stored or returned.
 `revision_history` also records `lambda_permission_added` after a successful, verified
 permission write advances the published version's cleanup snapshot. It retains the
-before/after configuration revisions, policy revisions and request ID; `$LATEST`
+before/after configuration revisions and modification times, policy revisions and request ID; `$LATEST`
 and original creation evidence remain unchanged. Historical mismatches and lost
 write responses remain review-required rather than being silently adopted.
 `POST /api/eval/runs` answers
