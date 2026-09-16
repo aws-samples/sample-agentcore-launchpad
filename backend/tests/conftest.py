@@ -1,5 +1,6 @@
 import os
 import tempfile
+from pathlib import Path
 
 # Isolate tests from data/launchpad.db BEFORE any app import binds the engine.
 _TEST_DB = os.path.join(tempfile.mkdtemp(prefix="launchpad-test-"), "test.db")
@@ -10,6 +11,23 @@ os.environ["LAUNCHPAD_DATABASE_URL"] = f"sqlite:///{_TEST_DB}"
 # open-console guard would refuse them all. The suite accepts an open console on
 # purpose; test_open_console.py clears this to assert the guard itself.
 os.environ["LAUNCHPAD_ALLOW_OPEN_CONSOLE"] = "true"
+
+# Isolate configuration reads before db/main bind settings or seed the default
+# workspace. Host YAML may select another Region or Docker execution in production.
+# Tests that exercise YAML precedence still repoint this late-bound path themselves.
+import app.core.config as config_mod  # noqa: E402
+
+config_mod.CONFIG_FILE = Path(_TEST_DB).with_name("launchpad.yaml")
+# API happy paths require a bootstrapped default workspace. Supply only a small,
+# explicit fake baseline; feature tests replace the resource map they exercise.
+config_mod.CONFIG_FILE.write_text(
+    "account_id: '111122223333'\n"
+    "resources:\n"
+    "  execution_role_arn: arn:aws:iam::111122223333:role/launchpad-test-execution\n"
+    "  artifacts_bucket: launchpad-artifacts-test\n",
+    encoding="utf-8",
+)
+config_mod.get_settings.cache_clear()
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

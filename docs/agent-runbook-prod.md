@@ -82,6 +82,11 @@ git merge --ff-only origin/main
 sudo systemctl restart launchpad-backend   # + launchpad-frontend if rebuilt
 ```
 
+Run `env -u AWS_REGION -u AWS_DEFAULT_REGION -u LAUNCHPAD_REGION make verify`
+before restarting. The backend test bootstrap isolates both SQLite and YAML reads
+before importing the application; verification must not inherit this host's Region
+or Docker execution settings, and never requires changing production configuration.
+
 ### Remote-box gotchas (they will bite a naive agent)
 
 - Non-interactive SSH lands in `$HOME`, not the repo — start every remote
