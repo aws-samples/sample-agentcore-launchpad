@@ -16,6 +16,9 @@ from app.services import kb_gateway, mcp_client
 MAX_TOOL_PAGES = 5
 MAX_TOOLS = 250
 SELECTOR_PREFIXES = ("mcp:", "gateway:", "builtin:")
+# Managed Harness exposes these without an attachment. They are optional in an
+# evaluation allowlist, never silently added to an already reviewed rule.
+NATIVE_HARNESS_TOOLS = ("shell", "file_operations")
 
 
 def remote_tool_names(name: str, url: str) -> list[str]:
@@ -101,6 +104,8 @@ def rule_catalog_errors(
     if not allowlists:
         return []
     known = support_tool_names(content, catalog)
+    if content.get("method", "harness") == "harness":
+        known.update(NATIVE_HARNESS_TOOLS)
     missing: list[str] = []
     by_key = {tool["key"]: tool for tool in catalog.get("tools") or []}
     for key in content.get("tools") or []:

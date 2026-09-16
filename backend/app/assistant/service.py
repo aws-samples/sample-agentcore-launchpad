@@ -280,6 +280,11 @@ MCP/Gateway's runtime catalog is unavailable, leave the allowlist unresolved and
 for a catalog refresh; do not invent names. Do not put "must not call any tool" in
 refusal assertions when the Agent needs Skill loading or KB retrieval. Specify the
 prohibited business action instead.
+Managed Harness also exposes native `shell` and `file_operations` by default.
+Their availability does not automatically authorize them in an evaluation rule:
+decide explicitly whether the proposed behavior needs them. A name-only allowlist
+cannot distinguish a read-only shell command from a write; use behavior assertions
+for business-write boundaries. Never add a tool merely because it appeared in a trace.
 
 Hard rules of this environment:
 1. Reference resources **only by the keys listed below**. Never invent tools, MCP
@@ -306,6 +311,10 @@ Hard rules of this environment:
 
 def catalog_section(catalog: dict[str, Any]) -> str:
     lines = ["## Available resources in this workspace (reference by key)", ""]
+    lines.append(
+        "Native Harness runtime tools: `shell`, `file_operations` (available by default; "
+        "choose explicitly in evaluation allowlists, not in resource `tools` keys)."
+    )
     tools = [t for t in catalog.get("tools") or [] if t.get("attachable", True)]
     lines.append("Tools (`tools` keys):")
     lines += [
@@ -506,7 +515,7 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
     execution role). A failing source degrades to an empty list plus a warning.
     """
     warnings: list[str] = []
-    from app.assistant.tool_catalog import enrich_tool
+    from app.assistant.tool_catalog import NATIVE_HARNESS_TOOLS, enrich_tool
 
     tools: list[dict[str, Any]] = []
     skills: list[dict[str, Any]] = []
@@ -622,6 +631,7 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
     evaluators = catalog_evaluators(workspace, warnings)
     return {
         "fetched_at": datetime.now(UTC).isoformat(),
+        "runtime_builtin_tools": list(NATIVE_HARNESS_TOOLS),
         "tools": tools,
         "skills": skills,
         "knowledge_bases": kbs,

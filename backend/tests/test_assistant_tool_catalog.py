@@ -422,6 +422,17 @@ def test_rule_catalog_checks_every_positive_allowlist(catalog):
     assert len(errors) == 1 and "evaluators.boundary.rules.second" in errors[0]
 
 
+@pytest.mark.parametrize("native", ["shell", "file_operations"])
+def test_native_harness_tools_can_be_explicitly_allowed_but_are_never_added(catalog, native):
+    narrow = _evaluators(_allowlist({REPORT_TOOL, *SUPPORT_TOOLS}))
+    before = deepcopy(narrow)
+    assert tool_catalog.rule_catalog_errors(narrow, _mounted_content(), catalog) == []
+    assert narrow == before and native not in narrow[0].rules.checks[0].allowed
+    expanded = _evaluators(_allowlist({REPORT_TOOL, native, *SUPPORT_TOOLS}))
+    assert tool_catalog.rule_catalog_errors(expanded, _mounted_content(), catalog) == []
+    assert native not in tool_catalog.support_tool_names(_mounted_content(), catalog)
+
+
 @pytest.mark.parametrize("rule", [
     {"id": "no-write", "type": "tool_count", "tool": WRITE_TOOL, "max": 0},
     {"id": "no-write", "type": "tool_set", "forbidden": [WRITE_TOOL]},

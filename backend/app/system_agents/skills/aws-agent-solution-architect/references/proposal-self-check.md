@@ -112,6 +112,8 @@ as a whole — after the member has already read and approved the design.
     runtime catalog, never `mcp:` / `gateway:` attachment selectors. A positive
     allowlist includes mounted `skills` and KB retrieval support names. Missing
     catalogs remain unresolved; do not guess names or copy arbitrary observed calls.
+    Native Harness `shell` / `file_operations` may be listed explicitly when intended;
+    do not silently add them. Tool names cannot enforce read-only shell commands.
   - `output_contains` / `output_not_contains` / `output_exact` → `text` (ONE literal,
     non-empty) + optional `case_sensitive`. Several literals = several checks, and all
     must pass; "any of these phrases" cannot be a rule — make it a judge or an assertion.

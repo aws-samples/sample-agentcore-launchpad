@@ -1797,30 +1797,32 @@ function ProposalView({
       {golden.length > 0 && (
         <div className="assist-section" data-testid="golden-tests">
           <h4>{t("assistantPage.goldenTests")}</h4>
-          <table className="assist-gt">
-            <thead>
-              <tr>
-                <th>{t("assistantPage.gt.id")}</th>
-                <th>{t("assistantPage.gt.input")}</th>
-                <th>{t("assistantPage.gt.expected")}</th>
-                <th>{t("assistantPage.gt.forbidden")}</th>
-                <th>{t("assistantPage.gt.evaluator")}</th>
-                <th>{t("assistantPage.gt.source")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {golden.map((g) => (
-                <tr key={g.id}>
-                  <td className="mono">{g.id}</td>
-                  <td>{g.input}</td>
-                  <td>{g.expected_response ?? ""}</td>
-                  <td>{g.forbidden_behavior ?? ""}</td>
-                  <td className="mono">{g.evaluator ?? ""}</td>
-                  <td className="mono">{g.source ?? ""}</td>
+          <div className="table-scroll">
+            <table className="assist-gt">
+              <thead>
+                <tr>
+                  <th>{t("assistantPage.gt.id")}</th>
+                  <th>{t("assistantPage.gt.input")}</th>
+                  <th>{t("assistantPage.gt.expected")}</th>
+                  <th>{t("assistantPage.gt.forbidden")}</th>
+                  <th>{t("assistantPage.gt.evaluator")}</th>
+                  <th>{t("assistantPage.gt.source")}</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {golden.map((g) => (
+                  <tr key={g.id}>
+                    <td className="mono">{g.id}</td>
+                    <td>{g.input}</td>
+                    <td>{g.expected_response ?? ""}</td>
+                    <td>{g.forbidden_behavior ?? ""}</td>
+                    <td className="mono">{g.evaluator ?? ""}</td>
+                    <td className="mono">{g.source ?? ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
       {list(c.evaluator_recommendations).length > 0 && (

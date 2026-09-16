@@ -73,8 +73,12 @@ def consume(client, mode):
     ("Timeout exceeded: 30s (elapsed 30.1s)", "harness.execution_timeout", 504),
     ("cancelled", "harness.execution_cancelled", 502),
     ("canceled", "harness.execution_cancelled", 502),
+    ("interrupted", "harness.execution_cancelled", 502),
     ("max_tokens", "harness.execution_limit", 502),
     ("max_iterations", "harness.execution_limit", 502),
+    ("max_iterations_exceeded", "harness.execution_limit", 502),
+    ("max_output_tokens_exceeded", "harness.execution_limit", 502),
+    ("model_context_window_exceeded", "harness.execution_limit", 502),
     ("limit_turns", "harness.execution_limit", 502),
     ("limit_output_tokens", "harness.execution_limit", 502),
     ("limit_total_tokens", "harness.execution_limit", 502),
@@ -97,6 +101,38 @@ def test_late_failure_after_text_and_model_end_turn(mode, reason, code, status):
     assert error.value.status_code == status
     assert error.value.detail == {"stop_reason": reason}
     assert stream.drained and stream.closed == 1
+
+
+def test_second_scenario_failure_identifies_attempt_without_marking_it_completed(monkeypatch):
+    completed = Stream([text("complete answer"), stop("end_turn")])
+    truncated = Stream([text("partial"), stop("max_tokens")])
+    client = MagicMock()
+    client.invoke_harness.side_effect = [{"stream": completed}, {"stream": truncated}]
+    monkeypatch.setattr(evaluation, "data_client", lambda _ws: client)
+    with SessionLocal() as db:
+        row = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id="agent-harness",
+                      agent_name="test-harness", status="queued", evaluators=[])
+        db.add(row)
+        db.commit()
+        run_id = row.id
+    evaluation.execute_run(
+        run_id, workspace=ws_ctx(), agent_arn=ARN, method="harness",
+        service_name="harness_test.DEFAULT", log_group="/test",
+        items=[{"scenario_id": "first", "turns": [{"input": "first"}]},
+               {"scenario_id": "second", "turns": [{"input": "second"}]}],
+        evaluators=[], mode="evaluators", wait_seconds=0,
+    )
+    first, second = [call.kwargs["runtimeSessionId"]
+                     for call in client.invoke_harness.call_args_list]
+    with SessionLocal() as db:
+        row = db.get(EvalRun, run_id)
+        assert row.status == "failed" and row.session_ids == [first]
+        assert "harness.execution_limit" in row.error
+        assert "stop_reason='max_tokens'" in row.error
+        assert "scenario_id=second" in row.error and f"session_id={second}" in row.error
+        assert first not in row.error and row.batch_eval_id is None
+    client.start_batch_evaluation.assert_not_called()
+    assert completed.closed == truncated.closed == 1
 
 
 @pytest.mark.parametrize("mode", ["sync", "stream"])
@@ -258,6 +294,9 @@ def test_failed_replay_never_waits_for_telemetry_or_starts_batch(monkeypatch, re
         run = db.get(EvalRun, run_id)
         assert run.status == "failed"
         assert "Harness execution" in run.error
+        assert f"stop_reason={reason!r}" in run.error
+        assert "scenario_id=" in run.error
+        assert client.invoke_harness.call_args.kwargs["runtimeSessionId"] in run.error
         assert run.batch_eval_id is None
         assert not run.session_ids
     client.invoke_harness.assert_called_once()

@@ -228,10 +228,11 @@ def _stop_error(reason: Any) -> AppError | None:
         code, message, status = (
             "harness.execution_timeout", "Harness execution timed out", 504,
         )
-    elif normalized in {"cancelled", "canceled"}:
+    elif normalized in {"cancelled", "canceled", "interrupted"}:
         code, message = "harness.execution_cancelled", "Harness execution was cancelled"
     elif normalized in {
         "max_tokens", "max_iterations", "execution_limit_exceeded",
+        "max_iterations_exceeded", "max_output_tokens_exceeded", "model_context_window_exceeded",
         "limit_turns", "limit_output_tokens", "limit_total_tokens",
     } or normalized.startswith(("max iterations exceeded:", "max output tokens exceeded:")):
         code, message = "harness.execution_limit", "Harness execution reached its limit"

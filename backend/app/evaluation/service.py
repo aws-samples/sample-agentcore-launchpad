@@ -226,6 +226,7 @@ def execute_run(
     on-demand report over the sessions that config sampled, where the batch
     inherits the config's insights/evaluators (passing them is rejected)."""
     telemetry_start_ms = int(time.time() * 1000) - TELEMETRY_QUERY_LOOKBACK_MS
+    attempt: dict[str, str] = {}
     try:
         _check_stop(run_id)
         data = data_client(workspace)
@@ -262,7 +263,10 @@ def execute_run(
 
             def invoke(prompt: str, sid: str | None) -> dict[str, Any]:
                 if method == "harness":  # InvokeHarness, not the runtime data plane
-                    return hc.invoke_harness_text(data, agent_arn, prompt, session_id=sid)
+                    attempt["session_id"] = sid or hc.new_session_id()
+                    return hc.invoke_harness_text(
+                        data, agent_arn, prompt, session_id=attempt["session_id"],
+                    )
                 if protocol == "a2a":  # JSON-RPC runtimes reject {prompt}
                     return rt.invoke_a2a_text(data, agent_arn, prompt, session_id=sid)
                 return rt.invoke_runtime_text(
@@ -276,6 +280,8 @@ def execute_run(
             _update(run_id, status="invoking")
             for scenario in scenarios:
                 _check_stop(run_id)
+                attempt.clear()
+                attempt["scenario_id"] = str(scenario.get("scenario_id") or "unknown")
                 sid: str | None = None
                 if simulation.is_simulated(scenario):
                     sid = simulation.run_simulated_scenario(
@@ -350,6 +356,12 @@ def execute_run(
         _finish_from_result(run_id, mode, result, workspace=workspace)
     except RunStopped:
         _update(run_id, status="stopped", error=STOP_REASON)
+    except AppError as exc:
+        parts = [f"{exc.code}: {exc.message}"]
+        if isinstance(exc.detail, dict) and "stop_reason" in exc.detail:
+            parts.append(f"stop_reason={exc.detail['stop_reason']!r}")
+        parts.extend(f"{key}={value}" for key, value in attempt.items())
+        _update(run_id, status="failed", error=" · ".join(parts)[:500])
     except Exception as exc:
         _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
     finally:

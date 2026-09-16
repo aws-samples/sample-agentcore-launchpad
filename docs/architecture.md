@@ -923,6 +923,9 @@ Proposal/plan validation rejects attachment selectors such as `mcp:aws-knowledge
 inside literal tool-rule fields and positive allowlists that omit mounted support
 tools. Saving and approving a plan additionally check its allowed names against the selected
 conversation catalog. Named business-write bans remain independent of discovery.
+Native Harness `shell` and `file_operations` are disclosed separately and may be
+explicitly included in an allowlist. They are not implicitly appended to reviewed
+rules; a tool-name check cannot distinguish read-only shell commands from writes.
 
 Ordinary Agent and assistant-proposal execution budgets default to **180 seconds**.
 Explicit user budgets and preset-specific defaults remain explicit. For Harness,
@@ -931,7 +934,10 @@ enforces it independently of the console SDK's socket-read timeout. Sync invocat
 chat, public streaming and architect discussion share Harness stop validation.
 `timeout_exceeded`, cancellation and execution limits are errors even after partial
 text or an earlier model `end_turn`; ordinary `tool_use` / `tool_result` cycles
-continue. Failed replay stops before `StartBatchEvaluation`. The evaluator handler
+continue. Failed replay stops before `StartBatchEvaluation`; the run error retains
+the service error code, stop reason, scenario ID and attempted Harness session ID,
+even when that failed scenario was not appended to the completed-session list.
+The evaluator handler
 classifies cancelled/timed-out trace evidence as `INTERRUPTED`, never a completed
 answer. Historical AWS `COMPLETED_WITH_ERRORS` runs retain ledger status `completed`
 plus their error, but the console presents them as **completed with errors**, keeps

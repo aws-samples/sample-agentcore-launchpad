@@ -232,6 +232,9 @@ cannot be verified. Resource selectors (`mcp:…`, `gateway:…`, `builtin:…`)
 rejected inside code-rule tool fields. Positive allowlists must include mounted
 Skill/KB support calls; plan save and approval also reject names outside the selected
 catalog. Refresh the conversation catalog before preparing a replacement draft.
+The catalog also exposes `runtime_builtin_tools` for native Harness `shell` and
+`file_operations`. Their availability allows explicit rule review, never automatic
+expansion of an approved allowlist.
 
 A proposal is `{id, conversation_id, revision, source: model|member, status: draft|invalid|
 approved|rejected|superseded, content, content_hash, bindings, validation_errors[],

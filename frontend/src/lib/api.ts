@@ -814,6 +814,7 @@ export interface AssistantCatalogTool {
 
 export interface AssistantCatalog {
   fetched_at: string;
+  runtime_builtin_tools?: string[];
   tools: AssistantCatalogTool[];
   skills: { key: string; name: string; description: string; content_digest?: string | null }[];
   knowledge_bases: { kb_id: string; name: string; description: string }[];
