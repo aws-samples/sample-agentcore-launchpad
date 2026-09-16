@@ -348,6 +348,166 @@
           }
         }
       ]
+    },
+    {
+      "id": "registry",
+      "title": {
+        "en": "Registry: register, discover, and reuse assets",
+        "zh-CN": "注册中心：资产登记、发现与复用"
+      },
+      "description": {
+        "en": "Explore A2A, MCP, and Skill records, approval states, consumer discovery, and capability search. Includes a live Agent Card difference, a real expert-routing invocation, ZIP Skill inspection, and handoffs to Agent configuration and Skill evaluation. Registration and maintenance controls are reviewed without changing existing records.",
+        "zh-CN": "实录 A2A、MCP 与 Skill 三类资产、审批状态、消费者视图和能力搜索。包含实时名片差异、一次真实专家路由、ZIP 技能包检查，以及进入 Agent 配置和技能评估的操作。注册和维护以预览讲解为主，不更改现有记录。"
+      },
+      "publishedAt": "2026-09-16",
+      "durationSeconds": 307.121333,
+      "language": "zh-CN",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/registry/20260916/poster.jpg",
+      "sources": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/registry/20260916/registry.zh-CN.mp4",
+          "type": "video/mp4"
+        },
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/registry/20260916/registry.zh-CN.webm",
+          "type": "video/webm"
+        }
+      ],
+      "captions": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/registry/20260916/registry.zh-CN.vtt",
+          "language": "zh-CN",
+          "label": "简体中文"
+        }
+      ],
+      "chapters": [
+        {
+          "startSeconds": 0,
+          "title": {
+            "en": "Registry: register, discover, and reuse assets",
+            "zh-CN": "注册中心：资产登记、发现与复用"
+          }
+        },
+        {
+          "startSeconds": 13.8,
+          "title": {
+            "en": "Explore the three asset types",
+            "zh-CN": "认识三类注册资产"
+          }
+        },
+        {
+          "startSeconds": 30.6,
+          "title": {
+            "en": "Understand registration and approval states",
+            "zh-CN": "看懂登记与审批状态"
+          }
+        },
+        {
+          "startSeconds": 48.4,
+          "title": {
+            "en": "See what consumers can discover",
+            "zh-CN": "切换到消费者视图"
+          }
+        },
+        {
+          "startSeconds": 66.1,
+          "title": {
+            "en": "Search for assets by capability",
+            "zh-CN": "按能力描述搜索资产"
+          }
+        },
+        {
+          "startSeconds": 81.9,
+          "title": {
+            "en": "Inspect an Agent Card",
+            "zh-CN": "读取 Agent 名片"
+          }
+        },
+        {
+          "startSeconds": 98.3,
+          "title": {
+            "en": "Compare registered and live Agent Cards",
+            "zh-CN": "比较登记名片与实时名片"
+          }
+        },
+        {
+          "startSeconds": 116.8,
+          "title": {
+            "en": "Ask the routing agent a real question",
+            "zh-CN": "发起一次真实专家路由"
+          }
+        },
+        {
+          "startSeconds": 133.3,
+          "title": {
+            "en": "Read the routing decision and transport",
+            "zh-CN": "读取路由选择与实际调用通道"
+          }
+        },
+        {
+          "startSeconds": 152.7,
+          "title": {
+            "en": "Inspect an MCP server record",
+            "zh-CN": "检查 MCP 工具服务器"
+          }
+        },
+        {
+          "startSeconds": 169,
+          "title": {
+            "en": "Review MCP registration",
+            "zh-CN": "登记一个远程 MCP 入口"
+          }
+        },
+        {
+          "startSeconds": 186.8,
+          "title": {
+            "en": "Choose a Skill source",
+            "zh-CN": "选择技能来源"
+          }
+        },
+        {
+          "startSeconds": 204.1,
+          "title": {
+            "en": "Inspect a ZIP Skill bundle before registration",
+            "zh-CN": "先预览 ZIP 技能包"
+          }
+        },
+        {
+          "startSeconds": 221.8,
+          "title": {
+            "en": "Review Skill provenance and files",
+            "zh-CN": "检查来源信息与文件清单"
+          }
+        },
+        {
+          "startSeconds": 239.9,
+          "title": {
+            "en": "Reuse an approved Skill in a new agent",
+            "zh-CN": "把已发布技能用于新 Agent"
+          }
+        },
+        {
+          "startSeconds": 256.2,
+          "title": {
+            "en": "Open Skill evaluation from a record",
+            "zh-CN": "从记录进入技能评估"
+          }
+        },
+        {
+          "startSeconds": 272.1,
+          "title": {
+            "en": "Review maintenance actions before confirming",
+            "zh-CN": "审阅维护操作后再确认"
+          }
+        },
+        {
+          "startSeconds": 288.7,
+          "title": {
+            "en": "Connect asset discovery to reuse",
+            "zh-CN": "让可用能力进入复用流程"
+          }
+        }
+      ]
     }
   ]
 }
