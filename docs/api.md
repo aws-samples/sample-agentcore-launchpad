@@ -249,6 +249,12 @@ Private to the conversation owner (foreign principal / workspace → `404
 assistant.conversation_not_found`, administrators included). Preparing/editing is
 `member`; creating and cleaning up is `admin` **and** owner. Reads are ledger-only.
 
+Each newly created code evaluator receives a single-rule Lambda package and its own
+resource chain. Operation resources may carry `code_group`, identifying the evaluator
+key that owns the Lambda/role/log group/permission/grant. New plan summaries count
+these chains individually; materialized historical plans use their recorded resource
+counts. Existing single-function operation keys remain readable.
+
 | Method | Path | Role | Result |
 |---|---|---|---|
 | `GET` | `/api/assistant/architect/conversations/{id}/evaluation-plan` | member | `{plans[…], operations[…], disclosure}` |
@@ -607,6 +613,13 @@ function, and the function's resource policy must allow the
 `bedrock-agentcore.amazonaws.com` principal (scope it with `aws:SourceAccount` /
 `aws:SourceArn`). Neither is checked at create time — a run against a function the
 role cannot invoke fails per session, like any evaluator error.
+
+Live callbacks can omit both documented evaluator identity fields. Assistant-created
+code evaluators therefore use one rule set per published Lambda package; they never
+choose an arbitrary rule from a shared package. Selecting a known managed legacy
+package with zero or multiple rule sets returns `422 run.evaluator_package_ambiguous`
+before a new run, invocation or batch is created. The response identifies the
+evaluator, owning operation and packaged rule-set count.
 
 ## Console Evaluation Runs API
 

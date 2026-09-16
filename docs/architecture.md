@@ -1139,7 +1139,7 @@ evaluation resources.
 |---|---|---|---|
 | Prepare / edit a plan | `POST …/evaluation-plan/prepare`, `PUT …/evaluation-plan` (member, owner-bound) | a new plan revision row (`assistant_evaluation_plans`), validated against the exact proposal revision + content hash it names | none |
 | Ask the assistant to fix an invalid plan | `POST …/turns` with `evaluation_plan_repair: {plan_revision, plan_hash}` (member, owner-bound) | an ordinary discussion turn with server-resolved plan/errors and proposal context → a new inert proposal; the console then prepares a plan from that exact new revision for validation and review | one ordinary preset invocation; no resource creation |
-| Create assets | `POST …/evaluation-plan/materialize` (admin **and** owner; exact plan revision + hash; disclosure acknowledged) | one `evaluation_asset_operations` row → local **Launchpad Dataset** (ledger), **AgentCore evaluators**, and for code rules one **Lambda** + its role/log group/resource policy + an additive execution-role policy | CreateEvaluator, Lambda/IAM/Logs — **never** StartBatchEvaluation, CreateDataset (AWS sync), online evaluation, InvokeHarness/Runtime or a model call |
+| Create assets | `POST …/evaluation-plan/materialize` (admin **and** owner; exact plan revision + hash; disclosure acknowledged) | one `evaluation_asset_operations` row → local **Launchpad Dataset** (ledger), **AgentCore evaluators**, and one **Lambda** per code evaluator, each with its own role/log group/resource policy and additive execution-role policy | CreateEvaluator, Lambda/IAM/Logs — **never** StartBatchEvaluation, CreateDataset (AWS sync), online evaluation, InvokeHarness/Runtime or a model call |
 | Sync the Dataset to AWS | existing `POST /api/eval/datasets/{id}/sync-to-aws` | unchanged, explicit, separate | CreateDataset/AddDatasetExamples |
 | Run an evaluation | existing `POST /api/eval/runs` (`perm:eval.run`) | unchanged, separate, billable | invokes + StartBatchEvaluation |
 
@@ -1299,10 +1299,18 @@ scenario against **its own** `assertions` (pass criteria / forbidden behaviour) 
 labelled `draft: true`; the deterministic
 `expected_tools` rule is drafted only when every scenario names expected tools.
 
-**Code evaluators are one reviewed static Lambda + data.** `app/assistant/lambda_runtime/
+**Code evaluators use isolated packages with a shared reviewed handler.** `app/assistant/lambda_runtime/
 handler.py` is stdlib-only (json/os), contains no `eval`/`exec`/`subprocess`/`re`/network
 client, and is shipped byte-identical in every package together with a canonical
-`rules.json` (evaluator **name** → rules; unknown names error). `build_package` produces a
+`rules.json` containing exactly one evaluator **name** → rules entry. Each new code
+evaluator binds to its own published Lambda version, with independently scoped
+role, log group, invocation permission and execution-role grant. AgentCore callbacks
+can omit the documented `evaluatorName` and `evaluatorId`; a single-rule package
+resolves that input without guessing. An identityless multi-rule package is rejected
+before scoring, and known legacy ambiguous packages are refused when reused or
+selected for a new run. Historical shared packages remain auditable and cleanable.
+New-plan review counts reflect one chain per code evaluator; historical operation
+counts come from its actual recorded resources. `build_package` produces a
 deterministic ZIP (sorted entries, 1980-01-01 timestamps, fixed permissions, canonical
 JSON) whose sha256 is persisted on the intent and compared with the function's
 `CodeSha256` and the published version's readback. Rules: `tool_count` · `tool_sequence`
@@ -1315,7 +1323,13 @@ all spans at SESSION, TOOL_CALL refused), reads the **last assistant output** of
 model/agent span (`gen_ai.completion`, `gen_ai.output.messages`, `gen_ai.choice` /
 `gen_ai.assistant.message` events; dict or OTLP list attributes) and tool names
 (`gen_ai.tool.name`, `tool.name`, `execute_tool <name>` spans); user prompts, tool
-inputs and reference inputs are never read as output. No spans, an unmatched target,
+inputs and reference inputs are never read as output. A model's input history may
+contain tool messages without making its current output a tool result. A Strands
+chat wrapper and its single direct provider child are one logical model call when
+their trace, explicit parentage, source kinds and nested time bounds agree; the
+wrapper's output and both finish indicators are checked together. Conflicting
+outputs, truncated/unfinished children and ambiguous relationships remain errors.
+No spans, an unmatched target,
 no identifiable output for an output rule, a missing reference input for a reference
 rule, or a tool rule without any model/agent span → `{errorCode, errorMessage}`, never
 PASS. At SESSION level `output_not_contains` is a whole-session claim and is usable only
@@ -1361,8 +1375,8 @@ pinned role re-read: ARN, RoleId and tag must match; an additive inline policy
 document read back) → every `evaluator:<key>` (CreateEvaluator with the persisted
 token, GetEvaluator until ACTIVE, id/name/level/config must equal the request; code
 evaluators pin the version ARN; an `existing` reference must resolve to the same id
-and be usable). A failure or conflict in the code chain marks the rest of the chain
-and the code evaluators `blocked`; judges, derived and existing evaluators still
+and be usable). A failure or conflict in a code chain marks its remaining resources
+and owning code evaluator `blocked`; other code chains, judges, derived and existing evaluators still
 proceed.
 
 **Ownership is a service-issued identity returned to this operation, never content.**
@@ -1409,7 +1423,8 @@ and ARN still equal the recorded identity (a changed one stays a reviewable `con
 locked by an online configuration stays `delete_failed`), and `DeleteEvaluator` counts only
 once a NotFound readback confirms it is gone (`delete_pending` otherwise). The additive
 grant, the function (with its resource policy), the log group and the dedicated role are
-removed **only once every evaluator is confirmed gone** and only after the identity snapshot
+removed **only once that chain's evaluators are confirmed gone** (historical ungrouped
+operations retain their original shared barrier) and only after the identity snapshot
 recorded when their create/readback succeeded still matches exactly: RoleId, ARN, trust
 policy and inline policy of the role; creationTime, ARN and retention of the log group;
 for the function the recorded published version **and** the unqualified `$LATEST`

@@ -518,7 +518,7 @@ def materialize_evaluation_plan(
     """Administrator + conversation owner: claim exactly one plan revision/hash for
     materialization. 202 when this call created the operation (worker launched), 200
     with the recorded operation for a repeated / concurrent request. Creates a local
-    Dataset, AgentCore evaluators and — for code rules — one Lambda + its role; never
+    Dataset, AgentCore evaluators and one Lambda + role per code evaluator; never
     deploys, runs, syncs or invokes anything."""
     require_admin(request)  # belt and braces with ROUTE_POLICY
     identity = _caller(request)

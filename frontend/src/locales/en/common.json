@@ -2140,7 +2140,8 @@
     "system_skill.record_deprecated": "The Skill record is DEPRECATED (terminal) — delete it in the AWS console and register again.",
     "system_skill.readback_mismatch": "The Registry record read back does not match what was written; the registration is not reported as done.",
     "announcements.conflict": "This announcement has changed since you loaded it. Your changes were not applied.",
-    "announcements.not_found": "This announcement no longer exists. It may have been deleted by another administrator."
+    "announcements.not_found": "This announcement no longer exists. It may have been deleted by another administrator.",
+    "run.evaluator_package_ambiguous": "This evaluator uses a legacy Lambda package with multiple rule sets. Create a replacement code evaluator with its own single-rule package before running it."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",
@@ -4225,7 +4226,7 @@
   "assistantEval": {
     "title": "EVALUATION ASSETS",
     "sub": "reviewed plan · separate from the Agent approval",
-    "scopeNote": "This plan is private to you until an administrator creates assets from it. Creating assets registers a local Dataset, AgentCore evaluators and — for declarative code rules — one Lambda with its own role. It never deploys the Agent, runs an evaluation, syncs the Dataset to AWS, enables online evaluation or invokes a model. Every evaluator here is an AgentCore evaluator; a golden test nothing in AgentCore can score is blocked with its reason and stays a manual task.",
+    "scopeNote": "This plan is private to you until an administrator creates assets from it. Creating assets registers a local Dataset, AgentCore evaluators and — for each code evaluator — a separate Lambda with its own role. It never deploys the Agent, runs an evaluation, syncs the Dataset to AWS, enables online evaluation or invokes a model. Every evaluator here is an AgentCore evaluator; a golden test nothing in AgentCore can score is blocked with its reason and stays a manual task.",
     "sourceRevision": "From proposal revision",
     "prepare": "PREPARE PLAN",
     "prepareAgain": "PREPARE AGAIN (new revision)",
@@ -4370,7 +4371,8 @@
     "pollError": "Status refresh failed: {{message}} — retrying with backoff.",
     "recovered": "recovered",
     "reserved": "reserved concurrency {{n}}",
-    "rawTitle": "RAW PLAN CONTENT (invalid — repair via EDIT AS JSON)"
+    "rawTitle": "RAW PLAN CONTENT (invalid — repair via EDIT AS JSON)",
+    "forEvaluator": "Evaluator: {{name}}"
   },
   "assistantNext": {
     "title": "NEXT STEPS",

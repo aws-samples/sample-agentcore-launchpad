@@ -1121,7 +1121,12 @@ function OperationView({
             {asArray<AssistantEvalResource>(operation.resources).map((r) => (
               <tr key={r.key} data-testid={`eval-resource-${r.key}`} data-status={r.status}>
                 <td className="mono">{t(`assistantEval.resource.${r.kind}`, r.kind)}</td>
-                <td className="mono" style={{ wordBreak: "break-all" }}>{r.name}</td>
+                <td className="mono" style={{ wordBreak: "break-all" }}>
+                  {r.name}
+                  {r.code_group && <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+                    {t("assistantEval.forEvaluator", { name: r.code_group })}
+                  </div>}
+                </td>
                 <td><ResourceStatus res={r} /></td>
                 <td className="mono" style={{ fontSize: 11, wordBreak: "break-all" }}>
                   <ResourceDetails res={r} />

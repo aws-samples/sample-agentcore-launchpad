@@ -1168,6 +1168,8 @@ export interface AssistantEvalResource {
   kind: string;
   key: string;
   plan_key?: string;
+  /** The code evaluator that owns this resource chain; absent on legacy operations. */
+  code_group?: string;
   name: string;
   status: string;
   definition?: string;

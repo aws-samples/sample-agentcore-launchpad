@@ -155,7 +155,11 @@ def _assert_target_references(
     refused with an actionable 422 before anything downstream happens (the agent would
     otherwise already have been invoked by the time the service rejected the batch). A
     scope without a dataset carries no references at all."""
-    from app.assistant.evaluation_assets import managed_evaluator, managed_rules
+    from app.assistant.evaluation_assets import (
+        managed_evaluator,
+        managed_package_evaluator_count,
+        managed_rules,
+    )
     from app.assistant.evaluation_plan import CodeCheck, code_rule_capability_conflict_errors
     from app.evaluation import coverage
 
@@ -203,6 +207,17 @@ def _assert_target_references(
                     raise AppError(
                         "run.evaluator_capability_conflict", "; ".join(conflicts),
                         {"evaluators": {evaluator: conflicts}}, status_code=422,
+                    )
+                packaged = managed_package_evaluator_count(db, owner)
+                if packaged is not None and packaged != 1:
+                    raise AppError(
+                        "run.evaluator_package_ambiguous",
+                        f"evaluator {evaluator} uses a legacy Lambda package containing "
+                        f"{packaged} rule sets; AgentCore callbacks can omit evaluator identity. "
+                        "Create a replacement code evaluator with its own single-rule package.",
+                        {"evaluator": evaluator, "packaged_evaluators": packaged,
+                         "operation_id": owner["operation_id"]},
+                        status_code=422,
                     )
             needs, _kind = coverage.needs_from_config(detail, rules)
             level = str(detail.get("level") or "TRACE")

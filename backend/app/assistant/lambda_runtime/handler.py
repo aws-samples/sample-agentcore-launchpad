@@ -22,6 +22,11 @@ ADOT serializer actually emit, typed by SOURCE (never by punctuation):
   * batch Evaluation also embeds ADOT log records in ``span_events`` on each span
     (snake_case log ids/timestamps, inherited trace id); bind these to the outer span
     before the same completeness, duplicate, conflict and truncation checks;
+  * a Strands chat wrapper and its one direct provider child describe one model call:
+    current output may live only on the wrapper; merge only with proven parentage,
+    source kinds and contained time bounds, retaining every finish indication;
+  * tool messages in a model's input history do not turn its current output record
+    into a tool result; only the canonical output fields supply answer text;
   * model spans (``gen_ai.operation.name`` = chat/…): ``gen_ai.choice.message`` and the
     ADOT ``body.output.messages[].content.message`` carry ``serialize(content)`` — a
     JSON list of content blocks (SERIALIZED envelope; must parse);
@@ -197,7 +202,18 @@ def _body(doc):
 
 def _is_tool_log(body):
     inputs = ((body.get("input") or {}).get("messages") or []) if body else []
-    return any(isinstance(m, dict) and m.get("role") == "tool" for m in inputs)
+    # A model's input history commonly includes tool results. Only a tool-only
+    # input without a canonical current assistant completion identifies a tool log.
+    if not inputs or not all(isinstance(m, dict) and m.get("role") == "tool" for m in inputs):
+        return False
+    outputs = (body.get("output") or {}).get("messages") or []
+    for message in outputs:
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(message, dict) and message.get("role") == "assistant" \
+                and isinstance(content, dict) \
+                and "message" in content and "finish_reason" in content:
+            return False
+    return True
 
 
 def _dropped(doc):
@@ -582,6 +598,66 @@ def _valid_end(group):
     return end is not None and end > 0 and (start is None or end >= start)
 
 
+def _model_turns(models):
+    """Coalesce one Strands call wrapper and its direct provider instrumentation.
+
+    The wrapper owns the current output log; its provider child may carry only
+    usage/finish metadata. Parentage, source kinds and contained time intervals
+    must prove they are the same invocation. Independent calls remain independent.
+    """
+    by_id = {(g.trace_id, g.span_id): g for g in models}
+    children = {}
+    for child in models:
+        if child.operation() not in MODEL_OPERATIONS or not child.span:
+            continue
+        system = child.attrs.get("gen_ai.system")
+        if not isinstance(system, str) or not system.strip() or system == "strands-agents":
+            continue
+        if all(child.span.get(k) in (None, "") for k in ("parentSpanId", "parent_span_id")):
+            continue
+        parent_id = _identity(child.span, "parentSpanId", "parent_span_id")
+        parent = by_id.get((child.trace_id, parent_id))
+        if parent and parent.operation() in MODEL_OPERATIONS \
+                and parent.attrs.get("gen_ai.system") == "strands-agents":
+            children.setdefault((parent.trace_id, parent.span_id), []).append(child)
+    paired_children = {}
+    provider_keys = set()
+    for key, candidates in children.items():
+        if len(candidates) != 1:
+            continue  # multiple invocations/retries cannot be silently collapsed
+        parent, child = by_id[key], candidates[0]
+        bounds = parent.start(), child.start(), child.end(), parent.end()
+        if any(value is None for value in bounds) or not (
+                bounds[0] <= bounds[1] < bounds[2] <= bounds[3]):
+            raise Unusable("INCOMPLETE", "model wrapper/provider intervals do not prove one call")
+        if any((g.span.get("status") or {}).get("code") in ("ERROR", 2, "2")
+               for g in (parent, child)):
+            raise Unusable("INCOMPLETE", "model wrapper/provider span reports an error")
+        paired_children[key] = child
+        provider_keys.add((child.trace_id, child.span_id))
+    turns = []
+    for group in models:
+        key = group.trace_id, group.span_id
+        if key in provider_keys:
+            continue
+        members = [group]
+        if key in paired_children:
+            members.append(paired_children[key])
+        texts, finishes = set(), []
+        for member in members:
+            text, reasons, found = _turn_output(member)
+            if found and text is not None:
+                texts.add(text)
+            finishes += reasons
+        if len(texts) > 1:
+            raise Unusable("CONFLICTING_OUTPUT",
+                           "model wrapper and provider report different current outputs")
+        turns.append({"group": group, "members": members,
+                      "text": next(iter(texts)) if texts else None,
+                      "verdict": _classify(finishes), "finishes": finishes})
+    return turns
+
+
 def extract_evidence(docs, level, target):
     """{tools, tool_count, tool_names, output, outputs, complete_scope, finish,
     session_id, traces} of the target scope. Raises Unusable when evidence cannot be
@@ -600,17 +676,13 @@ def extract_evidence(docs, level, target):
     models = [g for g in groups if g.is_model()]
     if not models:
         raise Unusable("NO_MODEL_TURN", "no model/agent turn with output in the target scope")
-    if len(models) > 1 and any(g.start() is None for g in models):
+    turns = _model_turns(models)
+    if len(turns) > 1 and any(t["group"].start() is None for t in turns):
         raise Unusable("AMBIGUOUS_ORDER", "model turns without start times cannot be ordered")
-    starts = [g.start() for g in models]
+    starts = [t["group"].start() for t in turns]
     if len(set(starts)) != len(starts):
         raise Unusable("AMBIGUOUS_ORDER", "two model turns share the same start time")
-    models.sort(key=lambda g: g.start() or 0.0)
-    turns = []
-    for g in models:
-        text, finishes, found = _turn_output(g)
-        turns.append({"group": g, "text": text if found else None,
-                      "verdict": _classify(finishes), "finishes": finishes})
+    turns.sort(key=lambda t: t["group"].start() or 0.0)
     # the LATEST model turn decides completeness — a complete earlier turn followed by a
     # turn with no output / a continuation / a truncation is not a complete answer
     last = turns[-1]
@@ -626,7 +698,7 @@ def extract_evidence(docs, level, target):
                                     "output (input history is not output)")
     if last["group"].span is None:
         raise Unusable("INCOMPLETE", "the final output record has no ended span document")
-    if not _valid_end(last["group"]):
+    if not all(_valid_end(g) for g in last["members"]):
         raise Unusable("INCOMPLETE", "the final model span has no valid end timestamp")
     # whole-scope completeness: every earlier turn is either a complete answer or a
     # legitimate tool-use continuation followed by later turns
@@ -634,8 +706,8 @@ def extract_evidence(docs, level, target):
     for i, t in enumerate(turns[:-1]):
         if t["verdict"] == "continue":
             continue  # intermediate tool trajectory turn
-        if t["verdict"] != "complete" or t["text"] is None or t["group"].span is None \
-                or not _valid_end(t["group"]):
+        if t["verdict"] != "complete" or t["text"] is None \
+                or not all(g.span is not None and _valid_end(g) for g in t["members"]):
             complete_scope, gap = False, i
             break
     if any(t["verdict"] == "continue" for t in turns[:-1]) and not tools:

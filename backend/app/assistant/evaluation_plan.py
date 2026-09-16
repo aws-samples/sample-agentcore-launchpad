@@ -950,21 +950,30 @@ def seed_errors(
     return errors
 
 
-def plan_summary(plan: dict[str, Any]) -> dict[str, Any]:
-    """Counts for the review table / disclosure (works on any validated plan dict)."""
+def plan_summary(
+    plan: dict[str, Any], *, resources: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Review counts; recorded operations retain their actual historical topology."""
     evaluators = plan.get("evaluators") or []
     by_kind: dict[str, int] = {}
     for e in evaluators:
         by_kind[str(e.get("kind"))] = by_kind.get(str(e.get("kind")), 0) + 1
     code = [e for e in evaluators if e.get("kind") == "code"]
+    functions = roles = len(code)
+    grants = len(code) if plan.get("grant_workspace_execution_role", True) else 0
+    if resources is not None:
+        functions = sum(r.get("kind") == "lambda_function" for r in resources)
+        roles = sum(r.get("kind") == "lambda_role" for r in resources)
+        grants = sum(r.get("kind") == "role_grant" and r.get("status") != "skipped"
+                     for r in resources)
     return {
         "scenarios": len(plan.get("scenarios") or []),
         "blocked_golden_tests": len(plan.get("blocked_golden_tests") or []),
         "evaluators_by_kind": by_kind,
         "cloud_evaluators": sum(by_kind.get(k, 0) for k in CLOUD_KINDS),
-        "lambda_functions": 1 if code else 0,
-        "iam_roles": 1 if code else 0,
-        "role_grants": 1 if code and plan.get("grant_workspace_execution_role", True) else 0,
+        "lambda_functions": functions,
+        "iam_roles": roles,
+        "role_grants": grants,
         "unresolved_recommendations": sum(
             1 for r in plan.get("recommendations") or [] if r.get("status") == "unresolved"
         ),

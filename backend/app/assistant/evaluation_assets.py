@@ -11,9 +11,9 @@ of creating new ones or adopting foreign ones by name or by copyable tags:
                         here; edits made afterwards in the Evaluation console are the
                         member's and are not overwritten by a retry);
 2. ``lambda_role``    — a dedicated Lambda execution role with ONLY log rights on its
-                        own log group (only when the plan has code evaluators);
+                        own log group (one independent chain per code evaluator);
 3. ``log_group``      — ``/aws/lambda/<function>`` with bounded retention;
-4. ``lambda_function``— the reviewed static handler + canonical ``rules.json`` +
+4. ``lambda_function``— the reviewed static handler + single-evaluator ``rules.json`` +
                         ``provenance.json`` (the nonce) as a deterministic ZIP; one
                         immutable published version whose ``CodeSha256`` must equal
                         the persisted digest; bounded timeout/memory/reserved
@@ -213,8 +213,9 @@ def code_sha256_b64(digest_hex: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def function_name(op_id: str) -> str:
-    return f"launchpad-evalfn-{op_id}"
+def function_name(op_id: str, code_group: str | None = None) -> str:
+    suffix = "-" + hashlib.sha256(code_group.encode()).hexdigest()[:12] if code_group else ""
+    return f"launchpad-evalfn-{op_id}{suffix}"
 
 
 def _token(op_id: str, key: str) -> str:
@@ -223,17 +224,21 @@ def _token(op_id: str, key: str) -> str:
 
 
 def compose_intents(plan: plan_contract.EvaluationPlan, op_id: str) -> list[dict[str, Any]]:
-    fn = function_name(op_id)
     intents: list[dict[str, Any]] = [
         {"kind": "dataset", "key": "dataset", "name": plan.dataset.name, "status": "pending"},
     ]
     code = [e for e in plan.evaluators if isinstance(e, plan_contract.CodeEvaluator)]
-    if code:
-        rules = canonical_rules(plan)
+    for entry in code:
+        # Bare keys/names remain compatible with existing single-code operations.
+        scoped = len(code) > 1
+        fn = function_name(op_id, entry.key if scoped else None)
+        rules = {"version": 1, "evaluators": {
+            entry.name: entry.rules.model_dump(exclude_none=True),
+        }}
         nonce = _nonce()
         _, digest = build_package(rules, nonce)
         _, rules_digest = build_package(rules)
-        intents += [
+        chain = [
             {"kind": "lambda_role", "key": "lambda_role", "name": fn, "status": "pending",
              "nonce": _nonce()},
             {"kind": "log_group", "key": "log_group", "name": f"/aws/lambda/{fn}",
@@ -241,14 +246,20 @@ def compose_intents(plan: plan_contract.EvaluationPlan, op_id: str) -> list[dict
             {"kind": "lambda_function", "key": "lambda_function", "name": fn,
              "status": "pending", "nonce": nonce, "digest": digest, "rules_digest": rules_digest,
              "rules": rules,
-             "timeout_s": min(max(e.lambda_timeout_s for e in code), LAMBDA_TIMEOUT_CAP_S)},
+             "timeout_s": min(entry.lambda_timeout_s, LAMBDA_TIMEOUT_CAP_S)},
             {"kind": "lambda_permission", "key": "lambda_permission", "name": PERMISSION_SID,
              "status": "pending"},
-            {"kind": "role_grant", "key": "role_grant", "name": f"launchpad-evalop-{op_id}",
+            {"kind": "role_grant", "key": "role_grant",
+             "name": fn.replace("launchpad-evalfn-", "launchpad-evalop-", 1),
              "status": "pending" if plan.grant_workspace_execution_role else "skipped",
              "error": None if plan.grant_workspace_execution_role
              else "not requested by the plan"},
         ]
+        for res in chain:
+            if scoped:
+                res["code_group"] = entry.key
+                res["key"] = f"{res['kind']}:{entry.key}"
+        intents.extend(chain)
     for e in plan.evaluators:
         if e.kind in plan_contract.CLOUD_KINDS:
             intents.append({
@@ -256,6 +267,7 @@ def compose_intents(plan: plan_contract.EvaluationPlan, op_id: str) -> list[dict
                 "name": getattr(e, "name", ""), "definition": e.kind, "status": "pending",
                 "client_token": _token(op_id, e.key),
                 "reference_dependent": plan_contract.reference_dependent(e),
+                **({"code_group": e.key} if e.kind == "code" and len(code) > 1 else {}),
             })
         elif e.kind == "existing":
             intents.append({
@@ -284,16 +296,17 @@ def plan_out(row: AssistantEvaluationPlan, op: EvaluationAssetOperation | None) 
         "content": row.content,
         "content_hash": row.content_hash,
         "validation_errors": row.validation_errors or [],
-        "summary": plan_contract.plan_summary(row.content) if valid else None,
+        "summary": plan_contract.plan_summary(
+            row.content, resources=op.resources if op is not None else None) if valid else None,
         "created_by": row.created_by,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "operation_id": op.id if op else None,
     }
 
 
-_PUBLIC_RESOURCE_KEYS = ("kind", "key", "plan_key", "name", "status", "definition", "error",
-                         "digest", "rules_digest", "reference_dependent", "attempts", "result",
-                         "cleanup", "owned", "recovered", "review", "reviews")
+_PUBLIC_RESOURCE_KEYS = ("kind", "key", "plan_key", "code_group", "name", "status", "definition",
+                         "error", "digest", "rules_digest", "reference_dependent", "attempts",
+                         "result", "cleanup", "owned", "recovered", "review", "reviews")
 
 
 def operation_out(op: EvaluationAssetOperation) -> dict[str, Any]:
@@ -855,11 +868,56 @@ def _function_aliases(lam: Any, name: str) -> list[dict[str, Any]]:
                             "Aliases", "Name", f"aliases of {name}")
 
 
-def _resource(resources: list[dict[str, Any]], key: str) -> dict[str, Any]:
-    for r in resources:
-        if r.get("key") == key:
-            return r
-    raise KeyError(key)
+def _resource(resources: list[dict[str, Any]], key: str, *,
+              code_group: str | None = None) -> dict[str, Any]:
+    matches = [r for r in resources if (
+        r.get("kind") == key and r.get("code_group") == code_group
+        if code_group is not None else r.get("key") == key
+    )]
+    if len(matches) != 1:
+        raise KeyError((key, code_group))
+    return matches[0]
+
+
+def _approved_package_rules(
+    plan: plan_contract.EvaluationPlan, resource: dict[str, Any],
+) -> dict[str, Any]:
+    group = resource.get("code_group")
+    entries = [entry for entry in plan.evaluators
+               if isinstance(entry, plan_contract.CodeEvaluator)
+               and (group is None or entry.key == group)]
+    if len(entries) != 1:
+        raise _Stop(f"{resource['key']} does not identify exactly one approved code evaluator")
+    entry = entries[0]
+    expected = {"version": 1, "evaluators": {
+        entry.name: entry.rules.model_dump(exclude_none=True),
+    }}
+    if resource.get("rules") != expected:
+        raise _Stop(f"{resource['key']} rules differ from approved evaluator {entry.key}; "
+                    "prepare a new plan revision instead of changing its package")
+    return expected
+
+
+def _require_isolated_packages(
+    resources: list[dict[str, Any]], plan: plan_contract.EvaluationPlan,
+) -> None:
+    """Historical shared packages stay immutable, even on a pending/restarted job."""
+    for res in resources:
+        if res.get("kind") != "lambda_function":
+            continue
+        rules = (res.get("rules") or {}).get("evaluators")
+        if not isinstance(rules, dict) or len(rules) != 1:
+            raise _Stop(
+                f"{res['key']} has a legacy shared or unknown Lambda rules package; "
+                "identityless callbacks require exactly one evaluator per package. "
+                "Prepare and approve a new evaluation-plan revision to create isolated "
+                "replacement evaluators; historical Lambda versions are not republished.")
+        _approved_package_rules(plan, res)
+    functions = [r for r in resources if r.get("kind") == "lambda_function"]
+    code = [entry for entry in plan.evaluators if isinstance(entry, plan_contract.CodeEvaluator)]
+    if len(functions) != len(code) or len({r.get("code_group") for r in functions}) != len(code):
+        raise _Stop("Lambda chains do not match the approved code evaluators; "
+                    "prepare a new evaluation-plan revision")
 
 
 def _policy_document(raw: Any) -> Any:
@@ -1009,19 +1067,22 @@ class _Runner:
                 raise _Stop("plan no longer validates: " + "; ".join(errors[:3]))
             self.plan = plan
             self.proposal_content = dict(proposal.content)
+            _require_isolated_packages(op.resources or [], plan)
             # the client context is built from the workspace row that the fence has
             # just proven equal to the pinned identity (never from mutable defaults)
             self.workspace = workspace_context(db.get(Workspace, op.workspace_id))
-            chain_broken: str | None = None
+            broken_groups: dict[str | None, str] = {}
             for r in op.resources or []:
                 if r["kind"] in CODE_CHAIN and r["kind"] != "role_grant" and r.get(
                         "status") == "conflict":
-                    chain_broken = f"{r['key']} is {r['status']} ({r.get('error')})"
-                    break
+                    broken_groups[r.get("code_group")] = (
+                        f"{r['key']} is {r['status']} ({r.get('error')})")
             for key in [r["key"] for r in op.resources or []]:
                 op = self.fence.guard(db)
                 resources = json.loads(json.dumps(op.resources or []))
                 res = _resource(resources, key)
+                group = res.get("code_group")
+                chain_broken = broken_groups.get(group)
                 # ``unknown`` is re-evaluated (the operator may have removed the resource;
                 # a native idempotency token may recover an evaluator) — never adopted
                 if res.get("status") in ("ready", "skipped", "conflict"):
@@ -1029,6 +1090,8 @@ class _Runner:
                 if res.get("status") == "blocked" and not chain_broken:
                     pass  # prerequisite repaired earlier in this run: attempt it now
                 if res.get("status") == "failed" and int(res.get("attempts") or 0) >= MAX_ATTEMPTS:
+                    if res["kind"] in CODE_CHAIN and res["kind"] != "role_grant":
+                        broken_groups[group] = f"{key} exhausted its attempts"
                     continue
                 if chain_broken and (res["kind"] in CODE_CHAIN or res.get("definition") == "code"):
                     res["status"] = "blocked"
@@ -1048,20 +1111,20 @@ class _Runner:
                     res["error"] = str(exc)
                     self.fence.save(db, op, resources, f"{key}:conflict")
                     if res["kind"] in CODE_CHAIN and res["kind"] != "role_grant":
-                        chain_broken = f"{key} is a conflict ({exc})"
+                        broken_groups[group] = f"{key} is a conflict ({exc})"
                 except _Unknown as exc:
                     res["status"] = "unknown"
                     res["error"] = str(exc)
                     self.fence.save(db, op, resources, f"{key}:unknown")
                     if res["kind"] in CODE_CHAIN and res["kind"] != "role_grant":
-                        chain_broken = f"{key} is unknown ({exc})"
+                        broken_groups[group] = f"{key} is unknown ({exc})"
                 except Exception as exc:  # noqa: BLE001 — recorded per resource
                     logger.warning("evaluation assets %s step %s failed: %s", op.id, key, exc)
                     res["status"] = "failed"
                     res["error"] = _safe_error(exc)
                     self.fence.save(db, op, resources, f"{key}:failed")
                     if res["kind"] in CODE_CHAIN and res["kind"] != "role_grant":
-                        chain_broken = f"{key} failed ({_safe_error(exc)})"
+                        broken_groups[group] = f"{key} failed ({_safe_error(exc)})"
             op = self.fence.load(db)
             self._finalize_dataset(db, op)
             statuses = [r.get("status") for r in op.resources or []]
@@ -1174,7 +1237,7 @@ class _Runner:
         iam = self._client("iam")
         name = res["name"]
         nonce = res["nonce"]
-        fn = function_name(op.id)
+        fn = _resource(resources, "lambda_function", code_group=res.get("code_group"))["name"]
         trust = {"Version": "2012-10-17", "Statement": [{
             "Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"},
             "Action": "sts:AssumeRole",
@@ -1198,7 +1261,7 @@ class _Runner:
             res["intent"] = {"requested_at": _now().isoformat(),
                              "dispatched": int((res.get("intent") or {}).get("dispatched") or 0)
                              + 1}
-            self.fence.save(db, op, resources, "lambda_role:intent")
+            self.fence.save(db, op, resources, f"{res['key']}:intent")
             try:
                 created = self._write(
                     db, iam.create_role, RoleName=name,
@@ -1236,7 +1299,7 @@ class _Runner:
                              "create_date": str(created.get("CreateDate") or ""),
                              "trust_document": trust}
             res["owned"] = True
-            self.fence.save(db, op, resources, "lambda_role:accepted")
+            self.fence.save(db, op, resources, f"{res['key']}:accepted")
         self._write(db, iam.put_role_policy, RoleName=name, PolicyName=LOGS_POLICY_NAME,
                     PolicyDocument=json.dumps(policy))
         back = _policy_document(iam.get_role_policy(RoleName=name, PolicyName=LOGS_POLICY_NAME)
@@ -1257,7 +1320,7 @@ class _Runner:
             res["intent"] = {"requested_at": _now().isoformat(),
                              "dispatched": int((res.get("intent") or {}).get("dispatched") or 0)
                              + 1}
-            self.fence.save(db, op, resources, "log_group:intent")
+            self.fence.save(db, op, resources, f"{res['key']}:intent")
             try:
                 self._write(db, logs.create_log_group, logGroupName=name,
                             tags={TAG_OPERATION: op.id, TAG_MANAGED: "true",
@@ -1296,7 +1359,7 @@ class _Runner:
             res["result"] = {"created": True, "arn": mine.get("arn"),
                              "creation_time": mine.get("creationTime")}
             res["owned"] = True
-            self.fence.save(db, op, resources, "log_group:accepted")
+            self.fence.save(db, op, resources, f"{res['key']}:accepted")
         rec = res["result"]
         # identity FIRST, then the write: a re-created group (creationTime differs) is not
         # ours and never receives our retention policy
@@ -1343,11 +1406,11 @@ class _Runner:
         plan = self.plan
         assert plan is not None
         lam = self._client("lambda")
-        role = _resource(resources, "lambda_role")
+        role = _resource(resources, "lambda_role", code_group=res.get("code_group"))
         role_arn = (role.get("result") or {}).get("role_arn")
         if not role_arn:
             raise RuntimeError("lambda role not ready")
-        payload, digest = build_package(canonical_rules(plan), res["nonce"])
+        payload, digest = build_package(_approved_package_rules(plan, res), res["nonce"])
         if digest != res.get("digest"):
             raise RuntimeError("package digest differs from the persisted intent")
         sha_b64 = code_sha256_b64(digest)
@@ -1366,7 +1429,7 @@ class _Runner:
                 "Tags": {TAG_OPERATION: op.id, TAG_MANAGED: "true"},
             }
             res["request"] = {**request, "CodeSha256": sha_b64}
-            self.fence.save(db, op, resources, "lambda_function:intent")
+            self.fence.save(db, op, resources, f"{res['key']}:intent")
             created = None
             for attempt in range(6):
                 try:
@@ -1422,7 +1485,7 @@ class _Runner:
                              "request_id": (created.get("ResponseMetadata") or {}).get(
                                  "RequestId")}
             res["owned"] = True
-            self.fence.save(db, op, resources, "lambda_function:accepted")
+            self.fence.save(db, op, resources, f"{res['key']}:accepted")
         stored = res["result"]
         if not stored.get("revision_id"):
             raise _Unknown(f"function {name}: the service identity returned by CreateFunction "
@@ -1452,7 +1515,7 @@ class _Runner:
                 if res.get("review"):
                     res["review"] = {**res["review"], "resolved_by": settle_id,
                                      "resolution": "initial_activation_settled"}
-                self.fence.save(db, op, resources, "lambda_function:settled")
+                self.fence.save(db, op, resources, f"{res['key']}:settled")
                 drift = []
         if drift == ["RevisionId"] and initial_revision_conflict_eligible(res):
             res["review"] = {
@@ -1476,10 +1539,10 @@ class _Runner:
             # this intent) and nobody may have published, aliased, given a policy or
             # reserved concurrency to it meanwhile — those are never adopted or overwritten
             dispatched = int(stored.get("publish_dispatches") or 0)
-            self._prepublish_guard(lam, op, resources, stored, dispatched)
+            self._prepublish_guard(lam, op, resources, res, dispatched)
             stored["publish_requested_at"] = _now().isoformat()
             stored["publish_dispatches"] = dispatched + 1
-            self.fence.save(db, op, resources, "lambda_function:publish_intent")
+            self.fence.save(db, op, resources, f"{res['key']}:publish_intent")
             try:
                 # RevisionId is a real precondition of PublishVersion (installed model): the
                 # publish fails instead of blessing a function replaced in the window
@@ -1517,7 +1580,7 @@ class _Runner:
             latest = lam.get_function(FunctionName=name).get("Configuration") or {}
             self._require_latest(latest, approved, None, "after publish")
             stored["revision_id"] = latest["RevisionId"]
-            self.fence.save(db, op, resources, "lambda_function:published")
+            self.fence.save(db, op, resources, f"{res['key']}:published")
         latest = lam.get_function(FunctionName=name).get("Configuration") or {}
         self._require_latest(latest, approved, stored["revision_id"], "before concurrency")
         reserved = lam.get_function_concurrency(FunctionName=name).get(
@@ -1566,11 +1629,12 @@ class _Runner:
         stored["aliases"] = aliases
 
     def _prepublish_guard(self, lam: Any, op, resources: list[dict[str, Any]],
-                          stored: dict[str, Any], dispatched: int) -> None:
+                          res: dict[str, Any], dispatched: int) -> None:
         """Before the operation's first mutation of an accepted function: no version this
         operation did not dispatch, no alias, a proven-absent resource policy, no reserved
         concurrency; and, after a reviewed recovery, the whole configuration, the tags and
         the dependencies exactly as the review verified them."""
+        stored = res["result"]
         name = stored["function_name"]
         sha_b64 = (stored.get("created_identity") or {}).get("CodeSha256")
         baseline = stored.get("reviewed_baseline")
@@ -1582,7 +1646,7 @@ class _Runner:
                 raise _Conflict(f"$LATEST differs from the reviewed baseline on "
                                 f"{drift or ['Tags']} — refusing to continue")
             bad, _ = _dependency_drift(self._client("iam"), self._client("logs"), op.id,
-                                       resources)
+                                       resources, code_group=res.get("code_group"))
             if bad:
                 raise _Conflict(f"the function's dependencies differ from the reviewed "
                                 f"baseline ({bad}) — refusing to continue")
@@ -1653,7 +1717,7 @@ class _Runner:
 
     def _step_lambda_permission(self, db, op, resources, res) -> None:
         lam = self._client("lambda")
-        fn = _resource(resources, "lambda_function")
+        fn = _resource(resources, "lambda_function", code_group=res.get("code_group"))
         stored = fn.get("result") or {}
         if not stored.get("version"):
             raise RuntimeError("function version not published")
@@ -1680,7 +1744,7 @@ class _Runner:
 
     def _step_role_grant(self, db, op, resources, res) -> None:
         iam = self._client("iam")
-        fn = _resource(resources, "lambda_function")
+        fn = _resource(resources, "lambda_function", code_group=res.get("code_group"))
         stored = fn.get("result") or {}
         if not stored.get("version_arn"):
             raise RuntimeError("function version not published")
@@ -1701,7 +1765,7 @@ class _Runner:
         }]}
         res["result"] = {"role_arn": role_arn, "role_id": role_id, "policy_name": res["name"],
                          "policy_document": document}
-        self.fence.save(db, op, resources, "role_grant:intent")
+        self.fence.save(db, op, resources, f"{res['key']}:intent")
         self._write(db, iam.put_role_policy, RoleName=_role_name(role_arn),
                     PolicyName=res["name"], PolicyDocument=json.dumps(document))
         back = _policy_document(iam.get_role_policy(RoleName=_role_name(role_arn),
@@ -1770,6 +1834,13 @@ class _Runner:
         # hold them against every target of THIS plan. Another workspace's association is
         # never read; a code evaluator nobody here owns keeps its explicit unknown note.
         owner = managed_evaluator(db, op.workspace_id, evaluator_id)
+        package_count = managed_package_evaluator_count(db, owner)
+        if package_count is not None and package_count != 1:
+            raise _Conflict(
+                f"{evaluator_id} belongs to a managed Lambda package containing "
+                f"{package_count} evaluators. Identityless callbacks require exactly one; "
+                "prepare a new plan revision with a newly created code evaluator to "
+                "materialize an isolated replacement instead of reusing this evaluator.")
         rules = managed_rules(db, owner) if owner and owner.get("definition") == "code" \
             else None
         if rules is not None:
@@ -1932,7 +2003,7 @@ class _Runner:
                 "baseEvaluatorId": entry.base_evaluator_id,
                 "modelConfig": {"bedrockEvaluatorModelConfig": {"modelId": entry.model_id}},
             }}}
-        fn = _resource(resources, "lambda_function")
+        fn = _resource(resources, "lambda_function", code_group=res.get("code_group"))
         version_arn = (fn.get("result") or {}).get("version_arn")
         if not version_arn:
             raise RuntimeError("code evaluator needs the published Lambda version")
@@ -2442,7 +2513,8 @@ def _verify_settled_function(lam: Any, op: EvaluationAssetOperation, res: dict[s
     return {"configuration": cfg, "tags": tags, **inventory, "resource_policy": "absent"}
 
 
-def _dependency_drift(iam: Any, logs: Any, op_id: str, resources: list[dict[str, Any]],
+def _dependency_drift(iam: Any, logs: Any, op_id: str, resources: list[dict[str, Any]], *,
+                      code_group: str | None = None,
                       ) -> tuple[list[str], dict[str, Any]]:
     """Compare the role and the log group the function depends on with what this
     operation recorded when it created them — identity AND configuration (RoleId / ARN /
@@ -2450,7 +2522,7 @@ def _dependency_drift(iam: Any, logs: Any, op_id: str, resources: list[dict[str,
     status blesses nothing: the worker skips ready dependencies, so drift is read here.
     Returns the differing fields and the current snapshot."""
     bad: list[str] = []
-    role = _resource(resources, "lambda_role")
+    role = _resource(resources, "lambda_role", code_group=code_group)
     rr = role.get("result") or {}
     if role.get("status") != "ready" or not rr.get("role_id") or not rr.get("role_arn") \
             or not rr.get("trust_document") or not rr.get("policy_document"):
@@ -2474,7 +2546,7 @@ def _dependency_drift(iam: Any, logs: Any, op_id: str, resources: list[dict[str,
     role_tags = _role_tags(current)
     if role_tags.get(TAG_OPERATION) != op_id or role_tags.get(TAG_MANAGED) != "true":
         bad.append("role.tags")
-    group = _resource(resources, "log_group")
+    group = _resource(resources, "log_group", code_group=code_group)
     gr = group.get("result") or {}
     if group.get("status") != "ready" or not gr.get("creation_time") or not gr.get("arn") \
             or not gr.get("retention_days"):
@@ -2504,9 +2576,10 @@ def _dependency_drift(iam: Any, logs: Any, op_id: str, resources: list[dict[str,
 
 
 def _verify_chain_provenance(clients: ClientFactory, workspace: WorkspaceContext,
-                             op_id: str, resources: list[dict[str, Any]]) -> dict[str, Any]:
+                             op_id: str, resources: list[dict[str, Any]], *,
+                             code_group: str | None = None) -> dict[str, Any]:
     bad, snapshot = _dependency_drift(clients(workspace, "iam"), clients(workspace, "logs"),
-                                      op_id, resources)
+                                      op_id, resources, code_group=code_group)
     if bad:
         raise _ReviewRefused("assistant.lambda_revision_review_unverified",
                              f"the function's dependencies differ from what this operation "
@@ -2554,6 +2627,25 @@ def _bind_operation(db: Session, op: EvaluationAssetOperation, plan_hash: str,
     return plan_row
 
 
+def _initial_revision_target(op: EvaluationAssetOperation, expected_created: str
+                             ) -> dict[str, Any]:
+    functions = [r for r in op.resources or [] if r.get("kind") == "lambda_function"]
+    if not functions:
+        raise _ReviewRefused("assistant.lambda_revision_review_not_applicable",
+                             "the operation has no Lambda function intent")
+    matches = [r for r in functions if (
+        (r.get("result") or {}).get("initial_revision_id")
+        or ((r.get("result") or {}).get("created_identity") or {}).get("RevisionId")
+    ) == expected_created]
+    if len(matches) == 1:
+        return matches[0]
+    if len(functions) == 1:
+        return functions[0]  # preserve single-function eligibility/staleness diagnostics
+    raise _ReviewRefused("assistant.lambda_revision_review_stale",
+                         "expected_created_revision_id must identify exactly one Lambda "
+                         "CreateFunction response in this operation")
+
+
 def _review_target(op: EvaluationAssetOperation, plan_hash: str,
                    expected_created: str) -> dict[str, Any]:
     """Ledger-only eligibility: the operation is partial/failed on exactly this plan
@@ -2570,10 +2662,7 @@ def _review_target(op: EvaluationAssetOperation, plan_hash: str,
         raise _ReviewRefused("assistant.evaluation_assets_stopped",
                              "operation predates workspace identity pinning — review required; "
                              "prepare a new plan revision instead")
-    res = next((r for r in op.resources or [] if r.get("kind") == "lambda_function"), None)
-    if res is None:
-        raise _ReviewRefused("assistant.lambda_revision_review_not_applicable",
-                             "the operation has no Lambda function intent")
+    res = _initial_revision_target(op, expected_created)
     stored = res.get("result") or {}
     initial = stored.get("initial_revision_id") or (stored.get("created_identity") or {}).get(
         "RevisionId")
@@ -2593,8 +2682,9 @@ def _review_target(op: EvaluationAssetOperation, plan_hash: str,
                              "expected_created_revision_id is not the RevisionId CreateFunction "
                              "answered this operation with")
     allowed_blocked = {r["key"] for r in op.resources or []
-                       if r.get("kind") in ("lambda_permission", "role_grant")
-                       or r.get("definition") == "code"}
+                       if r.get("code_group") == res.get("code_group")
+                       and (r.get("kind") in ("lambda_permission", "role_grant")
+                            or r.get("definition") == "code")}
     for r in op.resources or []:
         if r is res or r.get("status") in ("ready", "skipped", "pending"):
             continue
@@ -2651,7 +2741,7 @@ def review_lambda_initial_revision(
         raise NotFoundError("assistant.operation_not_found", "operation not found")
     op = fresh
     _bind_operation(db, op, plan_hash, None)
-    res_now = next((r for r in op.resources or [] if r.get("kind") == "lambda_function"), None)
+    res_now = _initial_revision_target(op, expected_created)
     prior = [e for e in ((res_now or {}).get("reviews") or [])
              if e.get("kind") == "initial_revision_changed"]
     if prior:
@@ -2679,7 +2769,8 @@ def review_lambda_initial_revision(
     # dependencies still are what we recorded; $LATEST is that answer, settled
     event = _lookup_create_event(clients(workspace, "cloudtrail"), event_id)
     response = _verify_create_event(event, op, res, expected_created)
-    dependencies = _verify_chain_provenance(clients, workspace, op.id, resources)
+    dependencies = _verify_chain_provenance(
+        clients, workspace, op.id, resources, code_group=res.get("code_group"))
     baseline = _verify_settled_function(clients(workspace, "lambda"), op, res, response,
                                         expected_created, expected_current)
     baseline["dependencies"] = dependencies
@@ -2711,7 +2802,7 @@ def review_lambda_initial_revision(
             raise _ReviewRefused("assistant.lambda_revision_review_stale",
                                  "the operation changed while the review was verified")
         resources = json.loads(json.dumps(op.resources or []))
-        fn = _resource(resources, "lambda_function")
+        fn = _resource(resources, target["key"])
         stored = fn["result"]
         cfg = baseline["configuration"]
         now = _now().isoformat()
@@ -2753,12 +2844,12 @@ def review_lambda_initial_revision(
             fn["review"] = {**fn["review"], "resolved_by": review["id"]}
         released = [fn["key"]]
         for r in resources:
-            if r.get("status") == "blocked" and (
+            if r.get("code_group") == fn.get("code_group") and r.get("status") == "blocked" and (
                     r.get("kind") in ("lambda_permission", "role_grant")
                     or r.get("definition") == "code"):
                 r["status"], r["error"] = "pending", None
                 released.append(r["key"])
-        line = json.dumps({"at": now, "event": "lambda_function:reviewed",
+        line = json.dumps({"at": now, "event": f"{fn['key']}:reviewed",
                            "review_id": review["id"], "released": released},
                           ensure_ascii=False)
         owner_ok = select(AssistantConversation.id).where(
@@ -2950,7 +3041,6 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
              clients: ClientFactory, sleeper: Callable[[float], None]) -> EvaluationAssetOperation:
     op = fence.guard(db)
     resources = json.loads(json.dumps(op.resources or []))
-    by_key = {r["key"]: r for r in resources}
 
     def mark(r: dict[str, Any], status: str, note: str | None = None) -> None:
         r["cleanup"] = {"at": _now().isoformat(), "ok": status == "deleted", "note": note}
@@ -3070,17 +3160,21 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
             sleeper(READBACK_DELAY_S)
         mark(r, state, None if state == "deleted" else note)
         checkpoint(f"{r['key']}:cleanup")
-    evaluators_left = [r["key"] for r in resources if r["kind"] == "evaluator" and unresolved(r)]
-    # 2. the code chain — only once every evaluator is confirmed gone (dependency DAG)
-    chain = [by_key[k] for k in ("role_grant", "lambda_permission", "lambda_function",
-                                 "log_group", "lambda_role") if k in by_key]
-    if evaluators_left:
-        for r in chain:
-            if unresolved(r):
-                mark(r, "retained", "kept: evaluator(s) still present or unresolved: "
-                                    + ", ".join(evaluators_left))
-        checkpoint("chain:retained")
-    else:
+    # 2. each code chain waits only for its own evaluators. Ungrouped historical
+    # operations keep their original shared dependency DAG and ownership evidence.
+    groups = dict.fromkeys(r.get("code_group") for r in resources if r["kind"] in CODE_CHAIN)
+    for group in groups:
+        by_key = {r["kind"]: r for r in resources
+                  if r["kind"] in CODE_CHAIN and r.get("code_group") == group}
+        evaluators_left = [r["key"] for r in resources if r["kind"] == "evaluator"
+                           and r.get("code_group") == group and unresolved(r)]
+        if evaluators_left:
+            for r in by_key.values():
+                if unresolved(r):
+                    mark(r, "retained", "kept: evaluator(s) still present or unresolved: "
+                                        + ", ".join(evaluators_left))
+            checkpoint(f"chain:{group}:retained" if group is not None else "chain:retained")
+            continue
         fn = by_key.get("lambda_function")
         fn_result = (fn or {}).get("result") or {}
         grant = by_key.get("role_grant")
@@ -3118,7 +3212,7 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
             except Exception as exc:  # noqa: BLE001 — incl. a lost delete response
                 mark(grant, "deleted" if gone(exc) else "delete_failed",
                      None if gone(exc) else _safe_error(exc))
-            checkpoint("role_grant:cleanup")
+            checkpoint(f"{grant['key']}:cleanup")
         if fn and unresolved(fn):
             lam = clients(workspace, "lambda")
             try:
@@ -3133,7 +3227,7 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
                 # only the helper's unqualified GetFunction NotFound proves absence; any
                 # other failure (ancillary NotFound included) keeps the dependencies
                 mark(fn, "delete_failed", _safe_error(exc))
-            checkpoint("lambda_function:cleanup")
+            checkpoint(f"{fn['key']}:cleanup")
         fn_gone = fn is None or fn.get("status") == "deleted" or (
             fn.get("status") in ("pending", "blocked") and not _attempted(fn))
         lg = by_key.get("log_group")
@@ -3173,7 +3267,7 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
             except Exception as exc:  # noqa: BLE001 — incl. a lost delete response
                 mark(lg, "deleted" if gone(exc) else "delete_failed",
                      None if gone(exc) else _safe_error(exc))
-            checkpoint("log_group:cleanup")
+            checkpoint(f"{lg['key']}:cleanup")
         role = by_key.get("lambda_role")
         if role and unresolved(role):
             iam = clients(workspace, "iam")
@@ -3232,7 +3326,7 @@ def _cleanup(db: Session, fence: _Fence, workspace: WorkspaceContext,
             except Exception as exc:  # noqa: BLE001 — incl. a lost delete response
                 mark(role, "deleted" if gone(exc) else "delete_failed",
                      None if gone(exc) else _safe_error(exc))
-            checkpoint("lambda_role:cleanup")
+            checkpoint(f"{role['key']}:cleanup")
     remaining = [r["key"] for r in resources if unresolved(r)]
     final = "cleaned" if not remaining else "partial"
     error = None if not remaining else "cleanup incomplete: " + ", ".join(remaining)
@@ -3365,11 +3459,42 @@ def managed_evaluator(
                 request = r.get("request") or {}
                 return {"operation_id": op.id, "conversation_id": op.conversation_id,
                         "plan_revision": op.plan_revision, "plan_key": r.get("plan_key"),
+                        "code_group": r.get("code_group"),
                         "definition": r.get("definition"),
                         "level": request.get("level"),
                         "evaluator_config": request.get("evaluatorConfig"),
                         "reference_dependent": bool(r.get("reference_dependent"))}
     return None
+
+
+def managed_package_evaluator_count(
+    db: Session, owner: dict[str, Any] | None,
+) -> int | None:
+    """Count the saved package's rule sets, never the owning proposal's evaluators.
+
+    Published ARN is authoritative when recorded. Explicit groups can resolve
+    newer resources before publication; unresolvable external/old metadata stays
+    unknown rather than guessing from evaluator names or logical plan counts.
+    """
+    if not owner or owner.get("definition") != "code":
+        return None
+    op = db.get(EvaluationAssetOperation, owner["operation_id"])
+    if op is None:
+        return None
+    arn = (((owner.get("evaluator_config") or {}).get("codeBased") or {}).get(
+        "lambdaConfig") or {}).get("lambdaArn")
+    functions = [r for r in op.resources or [] if r.get("kind") == "lambda_function"]
+    if arn:
+        functions = [r for r in functions
+                     if (r.get("result") or {}).get("version_arn") == arn]
+    elif owner.get("code_group") is not None:
+        functions = [r for r in functions if r.get("code_group") == owner["code_group"]]
+    else:
+        return None
+    if len(functions) != 1:
+        return None
+    evaluators = (functions[0].get("rules") or {}).get("evaluators")
+    return len(evaluators) if isinstance(evaluators, dict) else None
 
 
 def owned_operation(

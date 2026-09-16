@@ -2140,7 +2140,8 @@
     "system_skill.record_deprecated": "该 Skill 记录已为 DEPRECATED（终态）——请在 AWS 控制台删除后重新注册。",
     "system_skill.readback_mismatch": "回读的 Registry 记录与写入内容不一致；未将注册报告为完成。",
     "announcements.conflict": "此公告在加载后已发生变化，你的修改尚未应用。",
-    "announcements.not_found": "此公告已不存在，可能已被其他管理员删除。"
+    "announcements.not_found": "此公告已不存在，可能已被其他管理员删除。",
+    "run.evaluator_package_ambiguous": "该评估器使用包含多套规则的旧版 Lambda 包。请先创建使用独立单规则包的替代评估器，再运行评估。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",
@@ -4225,7 +4226,7 @@
   "assistantEval": {
     "title": "评估资产",
     "sub": "已评审的计划 · 独立于 Agent 批准",
-    "scopeNote": "在管理员据此创建资产之前，该计划仅对你可见。创建资产会注册一个本地 Dataset、若干 AgentCore 评估器，以及（针对声明式代码规则）一个带独立角色的 Lambda。它不会部署 Agent、不会运行评估、不会把 Dataset 同步到 AWS、不会启用在线评估，也不会调用模型。这里的每个评估器都是 AgentCore 评估器；AgentCore 无法打分的黄金测试会连同原因一起被阻止，并保留为手动任务。",
+    "scopeNote": "在管理员据此创建资产之前，该计划仅对你可见。创建资产会注册一个本地 Dataset、若干 AgentCore 评估器，以及为每个代码评估器分别创建一个带独立角色的 Lambda。它不会部署 Agent、不会运行评估、不会把 Dataset 同步到 AWS、不会启用在线评估，也不会调用模型。这里的每个评估器都是 AgentCore 评估器；AgentCore 无法打分的黄金测试会连同原因一起被阻止，并保留为手动任务。",
     "sourceRevision": "来源提案版本",
     "prepare": "准备计划",
     "prepareAgain": "重新准备（新版本）",
@@ -4370,7 +4371,8 @@
     "pollError": "状态刷新失败：{{message}}——将按退避策略重试。",
     "recovered": "已恢复",
     "reserved": "预留并发 {{n}}",
-    "rawTitle": "原始计划内容（无效——请通过“以 JSON 编辑”修复）"
+    "rawTitle": "原始计划内容（无效——请通过“以 JSON 编辑”修复）",
+    "forEvaluator": "所属评估器：{{name}}"
   },
   "assistantNext": {
     "title": "下一步",
