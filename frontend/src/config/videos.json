@@ -510,6 +510,159 @@
       ]
     },
     {
+      "id": "memory",
+      "title": {
+        "en": "Memory: from session events to long-term knowledge",
+        "zh-CN": "记忆：从会话事件到长期知识"
+      },
+      "description": {
+        "en": "Tour the real Memory console: resource status and retention, four extraction strategies, actor and session partitions, raw events, Chat deep links, long-term facts and structured preferences, and semantic retrieval. Includes a real conversation and resource creation/edit previews.",
+        "zh-CN": "实录记忆资源状态与保留时间、四种提取策略、参与者与会话分区、原始事件、对话跳转、长期事实、结构化偏好和语义检索。包含一次真实对话，以及资源创建和编辑的配置预览。"
+      },
+      "publishedAt": "2026-09-16",
+      "durationSeconds": 321.921333,
+      "language": "zh-CN",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/memory/20260916/poster.jpg",
+      "sources": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/memory/20260916/memory.zh-CN.mp4",
+          "type": "video/mp4"
+        },
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/memory/20260916/memory.zh-CN.webm",
+          "type": "video/webm"
+        }
+      ],
+      "captions": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/memory/20260916/memory.zh-CN.vtt",
+          "language": "zh-CN",
+          "label": "简体中文"
+        }
+      ],
+      "chapters": [
+        {
+          "startSeconds": 0,
+          "title": {
+            "en": "Memory: from session events to long-term knowledge",
+            "zh-CN": "记忆：从会话事件到长期知识"
+          }
+        },
+        {
+          "startSeconds": 13.5,
+          "title": {
+            "en": "Check resource status and event retention",
+            "zh-CN": "先确认资源状态与保留时间"
+          }
+        },
+        {
+          "startSeconds": 33.2,
+          "title": {
+            "en": "Understand the four long-term strategies",
+            "zh-CN": "四种策略，各自保存什么"
+          }
+        },
+        {
+          "startSeconds": 52.3,
+          "title": {
+            "en": "Send a real demonstration message",
+            "zh-CN": "发送一条真实演示消息"
+          }
+        },
+        {
+          "startSeconds": 68.1,
+          "title": {
+            "en": "Locate events by actor and session",
+            "zh-CN": "按参与者和会话定位事件"
+          }
+        },
+        {
+          "startSeconds": 84.5,
+          "title": {
+            "en": "Inspect inputs, responses, and state snapshots",
+            "zh-CN": "读取完整输入、回答与状态"
+          }
+        },
+        {
+          "startSeconds": 106.5,
+          "title": {
+            "en": "Open the matching memory from Chat",
+            "zh-CN": "从对话侧栏直达对应记忆"
+          }
+        },
+        {
+          "startSeconds": 124.5,
+          "title": {
+            "en": "Browse long-term facts from an existing example",
+            "zh-CN": "选择已有案例的长期事实"
+          }
+        },
+        {
+          "startSeconds": 143.4,
+          "title": {
+            "en": "Inspect record content and namespace",
+            "zh-CN": "核对记录内容与命名空间"
+          }
+        },
+        {
+          "startSeconds": 160.6,
+          "title": {
+            "en": "Retrieve relevant memories with natural language",
+            "zh-CN": "用自然语言检索相关记忆"
+          }
+        },
+        {
+          "startSeconds": 183.6,
+          "title": {
+            "en": "Read structured user preferences",
+            "zh-CN": "查看用户偏好的结构化内容"
+          }
+        },
+        {
+          "startSeconds": 201.6,
+          "title": {
+            "en": "Browse session summaries and episodic memory",
+            "zh-CN": "查看会话摘要与情景记忆"
+          }
+        },
+        {
+          "startSeconds": 222.6,
+          "title": {
+            "en": "Compare memory partitions across agents",
+            "zh-CN": "切换 Agent，核对分区隔离"
+          }
+        },
+        {
+          "startSeconds": 240.2,
+          "title": {
+            "en": "Distinguish the platform default from other resources",
+            "zh-CN": "区分平台默认与独立资源"
+          }
+        },
+        {
+          "startSeconds": 259.5,
+          "title": {
+            "en": "Preview the memory creation settings",
+            "zh-CN": "预览创建记忆的配置"
+          }
+        },
+        {
+          "startSeconds": 283.5,
+          "title": {
+            "en": "Review the impact before editing a resource",
+            "zh-CN": "编辑前确认影响范围"
+          }
+        },
+        {
+          "startSeconds": 304.5,
+          "title": {
+            "en": "Connect events, records, and resource configuration",
+            "zh-CN": "把事件、记录与资源串起来"
+          }
+        }
+      ]
+    },
+    {
       "id": "observability",
       "title": {
         "en": "08 Observability: from overview to individual calls",
