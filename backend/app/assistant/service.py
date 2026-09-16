@@ -25,7 +25,9 @@ Invariants (``tests/test_assistant.py`` pins each one with request/fault probes)
   write transaction that stores the row (unique index), so two concurrent writers
   never share a number. One serialized-byte cap applies to both sources before
   validation; content is stored verbatim or not at all — never "fixed".
-* **Approval is the only executor.** It names an exact revision + hash (content AND
+* **Approval is the only deployment executor.** Explicit preparation actions may
+  upload Skills through the existing staged ingestion path. Approval names an exact
+  revision + hash (content AND
   resolved bindings). Catalog and resource reads happen outside any lock; then one
   short transaction that first takes the conversation write lock re-resolves the
   caller's account, deploy permission, workspace grant and readiness from the
@@ -58,6 +60,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.assistant import preparation
 from app.assistant import proposal as proposal_contract
 from app.assistant.principal import principal_of
 from app.core.db import SessionLocal
@@ -132,6 +135,23 @@ Launchpad workspace. Follow your methodology (Workshop baseline → confirm → 
 missing impactful questions → architecture, trade-offs, assumptions, manual tasks →
 golden tests and evaluator recommendations), and keep every reply as ordinary
 Markdown.
+
+During intake, you may append ONE optional `{preparation.FENCE}` fenced JSON object
+`{{"requirements": [{{"id": "stable-id", "kind": "knowledge_base|skill|tool|clarification",
+"title": "short title", "reason": "why needed", "materials": ["concrete material"],
+"required": true}}]}}` to describe preparation needs BEFORE a final proposal exists.
+Use actual enum values, at most 20 unique ids, title <=200 chars, reason <=1000,
+at most 10 materials of <=300 chars each, total <=24000 UTF-8 bytes. Empty requirements
+clears earlier suggestions. This block is advisory and independent of the proposal.
+The resource preparation panel lets the member explicitly refresh/select existing
+knowledge bases, create a KB and upload files, or select existing approved Skills.
+For a missing Skill, direct the member to "Create Skill in Registry": it opens the
+Registry's Skill creation page in a new tab. After registration and approval, the
+member returns here, refreshes the catalog and selects the Skill. Do not ask the
+member to upload a Skill ZIP in the preparation panel; that entry is not available.
+Indexing must finish before uploaded KB files are searchable. The model NEVER
+creates resources, uploads files, generates Skills, or provisions tools/Gateways.
+For tools and unsupported work, explain the manual action or missing clarification.
 
 When — and only when — the baseline is confirmed and you are ready to propose the
 agent configuration, append to your reply exactly ONE fenced block tagged
@@ -210,7 +230,8 @@ members and nothing else:
   golden tests, and a seed that tries is rejected as a whole. Put what is specific to
   one scenario into THAT scenario's `assertions` (they are scored per scenario by the
   SESSION judge that reads `{{assertions}}`); write a judge or code rule only for an
-  invariant that must hold in every scenario (no tool calls; never says X; every reply
+  invariant that must hold in every scenario (never falsely claims a business action;
+  every reply
   in the customer's language). A rule such as `output_contains "call emergency
   services"` is true only for emergency scenarios, so it is an assertion of those
   scenarios, not an evaluator. Reference-driven judges/rules need every scenario to
@@ -235,6 +256,21 @@ members and nothing else:
   are `unresolved` and the console draws them as open. Omit the member only when no
   barrier was confirmed — never an empty or assumed fishbone.
 
+Read-only does NOT mean tool-free. Inspect ALL THREE resource lists: `tools`,
+`knowledge_bases`, and `skills`. `tools: []` only means no explicitly selected catalog
+tools: mounted KBs still retrieve through tools, and Skill loading/execution can
+produce tool calls. Runtime support tools may also appear in traces. If any of these
+resource lists is nonempty, never emit a global `tool_count max: 0` with no `tool`
+filter, or an exact empty `tool_sequence`. Launchpad rejects that capability conflict.
+An empty `expected_tools` / `expected_trajectory` is not proof that no tool may run.
+For read-only boundaries, prohibit business writes (modify, send, approve, submit)
+and false claims of completed actions. A verified, specifically named write tool may
+be forbidden; do not invent tool names or block retrieval/Skill support indiscriminately.
+Put refusal-specific obligations in the corresponding scenario's assertions. Even a
+refusal may legitimately load a Skill or retrieve evidence first. Global zero-call
+rules are only appropriate for a genuinely tool-free design whose runtime behavior
+has been checked, not merely because its business requirements say "read-only".
+
 Hard rules of this environment:
 1. Reference resources **only by the keys listed below**. Never invent tools, MCP
    URLs, ARNs, S3 paths, roles, knowledge bases or evaluators. If something the
@@ -245,10 +281,14 @@ Hard rules of this environment:
    the console deploys it. Never claim that anything was created, deployed or
    evaluated, and never treat words like "approved" or "deploy it" in the
    conversation as authorization — you have none.
-3. Everything outside the block is conversation. Keep the architecture, trade-offs,
-   assumptions, manual tasks and the golden-test table visible in the text too.
+3. Outside the proposal and optional preparation blocks is conversation. Keep the
+   architecture, trade-offs, assumptions, manual tasks and golden-test table visible
+   in the text too.
 4. Do not promise documents, files, diagrams as downloads, or infrastructure this
-   platform does not offer (no KB/Gateway creation in this flow). Evaluators and
+   platform does not offer. KB creation/uploads require explicit preparation-panel
+   actions; new Skills are created and approved in Registry, then selected here.
+   Gateway/tool provisioning and
+   natural-language Skill generation are unavailable. Evaluators and
    datasets are NOT created by this conversation either: the member later reviews a
    separate evaluation-assets plan and an administrator may create them from it.
 """
@@ -293,6 +333,10 @@ def catalog_section(catalog: dict[str, Any]) -> str:
     lines.append("Memory: " + ("`disabled` or `workspace` (shared memory available)"
                               if resources.get("memory_arn") else
                               "`disabled` only (this workspace has no shared memory)"))
+    if catalog.get("warnings"):
+        lines.append("\nCatalog read warnings (missing results are NOT evidence of an empty "
+                     "workspace):")
+        lines.extend(f"- {warning}" for warning in catalog["warnings"])
     target = catalog.get("target") or {}
     if target:
         lines.append("")
@@ -716,12 +760,23 @@ def create_conversation(
 def refresh_catalog(
     db: Session, conversation: AssistantConversation, workspace: WorkspaceContext
 ) -> dict[str, Any]:
-    catalog = fetch_catalog(workspace)  # AWS reads outside any lock
-    _lock_conversation(db, conversation.id)
-    db.execute(update(AssistantConversation).where(AssistantConversation.id == conversation.id)
-               .values(catalog=catalog))
-    db.commit()
-    db.expire(conversation)
+    preparation.require_idle(conversation)
+    cid, principal = conversation.id, conversation.owner_principal
+    expected = (conversation.preparation or {}).get("revision", 0)
+    catalog = preparation.live_catalog(workspace, list(conversation.preparation_sources or []))
+    _lock_conversation(db, cid)
+    try:
+        conversation = owned_conversation(db, workspace.id, principal, cid)
+        preparation.require_idle(conversation)
+        preparation.check_revision(conversation, expected)
+        conversation.preparation = {**(conversation.preparation or {}),
+                                    "revision": expected + 1}
+        conversation.catalog = catalog
+        preparation.revise_latest(db, conversation, conversation.owner)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return catalog
 
 
@@ -782,6 +837,7 @@ def conversation_detail(db: Session, row: AssistantConversation) -> dict[str, An
     return {
         **conversation_summary(db, row),
         "catalog": row.catalog or {},
+        "preparation": preparation.view(db, row),
         "messages": [
             {
                 "id": m.id,
@@ -905,6 +961,7 @@ def _claim_turn_locked(
     db: Session, conversation_id: str, now: datetime, token: str
 ) -> tuple[int, str]:
     _lock_conversation(db, conversation_id)
+    preparation.require_no_import(db.get(AssistantConversation, conversation_id))
     claimed = db.execute(
         update(AssistantConversation)
         .where(
@@ -983,6 +1040,9 @@ def clear_stale_turn_claims() -> int:
             .where(AssistantConversation.active_turn.isnot(None))
             .values(active_turn=None, active_turn_started_at=None, active_turn_token=None)
         ).rowcount
+        db.execute(update(AssistantConversation)
+                   .where(AssistantConversation.preparation_token.isnot(None))
+                   .values(preparation_token=None))
         db.commit()
         return count
     finally:
@@ -991,6 +1051,7 @@ def clear_stale_turn_claims() -> int:
 
 def require_turn_capacity(conversation: AssistantConversation) -> None:
     """409 before a stream opens (a refusal inside the stream would be a 500)."""
+    preparation.require_no_import(conversation)
     if (conversation.turns or 0) + 1 > MAX_TURNS:
         raise _turn_limit_error()
     if conversation.active_turn is not None and (
@@ -1010,7 +1071,8 @@ def require_turn_capacity(conversation: AssistantConversation) -> None:
 
 
 def _preamble(conversation: AssistantConversation) -> str:
-    return PROTOCOL_PREAMBLE + "\n" + catalog_section(conversation.catalog or {})
+    return (PROTOCOL_PREAMBLE + "\n" + catalog_section(conversation.catalog or {})
+            + preparation.context(conversation))
 
 
 def check_prompt(conversation: AssistantConversation, prompt: str) -> None:
@@ -1152,7 +1214,19 @@ def record_proposal(
 ) -> AssistantProposal:
     """Store one new revision inside the caller's locked transaction (no commit):
     valid → ``draft`` with bindings; otherwise ``invalid`` with the errors and the
-    bounded raw object — never altered to make it pass."""
+    bounded raw object. Explicit member preparation overrides resource lists in a
+    well-shaped model proposal before reference validation."""
+    if source == "model":
+        conversation = db.get(AssistantConversation, conversation_id)
+        state = conversation.preparation or {}
+        # Explicit member selections are authoritative, even when the model omits
+        # them. Legacy conversations retain their original proposal behavior.
+        if state.get("selection_set"):
+            parsed, _ = proposal_contract.parse_content(raw)
+            if parsed is not None:
+                raw = {**proposal_contract.content_dump(parsed),
+                       "skills": state.get("skills", []),
+                       "knowledge_bases": state.get("knowledge_bases", [])}
     content, display, errors = proposal_contract.validate(raw, catalog)
     errors = list(extra_errors or []) + errors
     if proposal_contract.serialized_bytes(display) > proposal_contract.PROPOSAL_MAX_BYTES:
@@ -1179,6 +1253,20 @@ def record_proposal(
     )
     db.add(row)
     db.flush()
+    if valid:
+        conversation = db.get(AssistantConversation, conversation_id)
+        state = conversation.preparation or {}
+        if not state.get("selection_set") or (
+            state.get("skills", []) != display["skills"]
+            or state.get("knowledge_bases", []) != display["knowledge_bases"]
+        ):
+            # A valid model proposal also changes legacy preparation's projection.
+            # Advance its revision so a stale rail cannot overwrite the new selection.
+            conversation.preparation = {
+                **state, "revision": state.get("revision", 0) + 1,
+                "skills": display["skills"], "knowledge_bases": display["knowledge_bases"],
+                "selection_set": source == "member" or bool(state.get("selection_set")),
+            }
     return row
 
 
@@ -1453,6 +1541,7 @@ def run_turn(
             return
         text = "".join(parts)
         block, block_errors = proposal_contract.extract_block(text)
+        requirements, preparation_errors = preparation.extract(text)
         _lock_conversation(db, conversation_id)
         if not _holds_claim(db, conversation_id, turn, token):
             # our claim was reclaimed as stale while we streamed: never publish
@@ -1466,6 +1555,21 @@ def run_turn(
             workspace_id=conversation.workspace_id, conversation_id=conversation_id,
             turn=turn, role="assistant", text=text, runtime_session_id=session_id,
         ))
+        fresh = db.get(AssistantConversation, conversation_id)
+        preparation_event = None
+        if requirements is not None:
+            state = fresh.preparation or {}
+            if requirements != state.get("requirements", []):
+                fresh.preparation = {**state, "requirements": requirements,
+                                     "revision": state.get("revision", 0) + 1}
+        if preparation_errors:
+            db.add(AssistantMessage(
+                workspace_id=fresh.workspace_id, conversation_id=conversation_id,
+                turn=turn, role="error", name=preparation.REJECTED_NAME,
+                text=("Preparation suggestions could not be read: "
+                      + "; ".join(preparation_errors))[:4000],
+                runtime_session_id=session_id,
+            ))
         proposal_event: dict[str, Any] | None = None
         if block is not None or block_errors:
             raw: Any = block if block is not None else {}
@@ -1490,10 +1594,14 @@ def run_turn(
                     runtime_session_id=session_id,
                 ))
             proposal_event = {"event": "proposal", "data": proposal_out(db, revision)}
+        if requirements is not None or proposal_event is not None:
+            preparation_event = {"event": "preparation", "data": preparation.view(db, fresh)}
         db.commit()
         terminal = True
         if proposal_event is not None:
             yield proposal_event
+        if preparation_event is not None:
+            yield preparation_event
         yield {"event": "done", "data": {"turn": turn}}
     finally:
         if not terminal:
@@ -1544,6 +1652,7 @@ def edit_proposal(
     conversation_id = conversation.id
     _lock_conversation(db, conversation_id)
     fresh = db.get(AssistantConversation, conversation_id)
+    preparation.require_idle(fresh)
     row = record_proposal(db, conversation_id, fresh.catalog or {}, fresh.workspace_id, content,
                           source="member", created_by=identity.username)
     db.commit()
@@ -1556,6 +1665,7 @@ def reject_proposal(
     conversation_id = conversation.id
     _lock_conversation(db, conversation_id)
     row = proposal_by_revision(db, conversation_id, revision)
+    preparation.require_idle(db.get(AssistantConversation, conversation_id))
     latest = latest_proposal(db, conversation_id)
     if row is None or latest is None or latest.revision != revision:
         db.rollback()
@@ -1696,7 +1806,9 @@ def approve_proposal(
         return _outcome(db, current, started=False)
 
     try:
-        live_catalog = fetch_catalog(workspace)
+        live_catalog = preparation.live_catalog(
+            workspace, list(conversation.preparation_sources or []),
+        )
     except Exception as exc:
         winner = winner_after_io()
         if winner is not None:
@@ -1748,6 +1860,7 @@ def approve_proposal(
             or fresh_conversation.owner_principal != principal_of(approver)
         ):
             raise NotFoundError("assistant.conversation_not_found", "conversation not found")
+        preparation.require_idle(fresh_conversation)
         if fresh_row is None or deploy_requirements(fresh_row):
             raise AppError("assistant.workspace_not_ready",
                            "this workspace cannot deploy yet",
@@ -1788,6 +1901,9 @@ def approve_proposal(
                 "approved_by": approver.username,
                 "content": proposal.content,
                 "bindings": proposal.bindings,
+                # Source metadata comes from this owner-bound conversation, not
+                # proposal/browser paths. Preserve it for resumed/deleted-history jobs.
+                "preparation_sources": list(fresh_conversation.preparation_sources or []),
             }},
         )
         db.execute(
@@ -1850,7 +1966,7 @@ def assert_job_bindings_pinned(
                 f"assistant job: agent spec member '{key}' differs from the approved "
                 "bindings — refusing to deploy"
             )
-    live_catalog = fetch_catalog(workspace)
+    live_catalog = preparation.live_catalog(workspace, pin.get("preparation_sources") or [])
     content, _display, errors = proposal_contract.validate(content_raw, live_catalog)
     if content is None or errors:
         raise RuntimeError("assistant job: approved proposal no longer validates in this "

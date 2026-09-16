@@ -48,6 +48,13 @@ class AssistantConversation(Base):
     title: Mapped[str] = mapped_column(String(200), default="")
     # {fetched_at, tools[], skills[], knowledge_bases[], warnings[]}
     catalog: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Preparation is mutable intake state, separate from immutable proposals.
+    # Empty/legacy state inherits the latest valid proposal until an explicit save.
+    preparation: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Server-owned imported sources; never accepted from or projected to the browser.
+    preparation_sources: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    # A short-lived import claim fences turns/edits during S3 I/O without a DB lock.
+    preparation_token: Mapped[str | None] = mapped_column(String(32), default=None)
     turns: Mapped[int] = mapped_column(default=0)
     # One in-flight turn per conversation: the turn number a request claimed
     # (atomic conditional UPDATE) and when, so an interrupted claim can be reclaimed

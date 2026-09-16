@@ -44,6 +44,7 @@ import { MODEL_CATALOG, type ModelSource } from "../lib/models";
 import { WORKSPACE_HEADER } from "../lib/workspace-header";
 import { useWorkspace } from "../workspace/workspace-context";
 import { EvaluationAssetsPanel } from "./EvaluationAssetsPanel";
+import { PreparationPanel } from "./assistant/PreparationPanel";
 
 /**
  * Architect assistant (SE-039): a member conversation with the protected
@@ -121,7 +122,8 @@ function toLive(rows: AssistantMessage[]): LiveMessage[] {
 
 /** The typed proposal pane shows the block; the transcript shows a pointer instead. */
 function stripProposalBlock(text: string, marker: string): string {
-  return text.replace(PROPOSAL_FENCE_RE, `> ${marker}`);
+  return text.replace(PROPOSAL_FENCE_RE, `> ${marker}`)
+    .replace(/```launchpad-preparation[ \t]*\r?\n[\s\S]*?\r?\n[ \t]*```/g, "");
 }
 
 type EditDraft = Pick<
@@ -197,6 +199,7 @@ export function CreateAgentAssistant() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [preparing, setPreparing] = useState(false);
   const [editing, setEditing] = useState<EditDraft | null>(null);
   const [confirm, setConfirm] = useState<
     | { kind: "approve"; pin: PinnedApproval }
@@ -494,6 +497,7 @@ export function CreateAgentAssistant() {
     setConversation(null);
     setMessages([]);
     setApproving(false);
+    setPreparing(false);
     setBusy(true);
     try {
       const detail = await api.assistantCreateConversation();
@@ -627,7 +631,7 @@ export function CreateAgentAssistant() {
   const send = async (request: AssistantTurnRequest): Promise<AssistantProposal | null> => {
     const repairing = !!request.evaluation_plan_repair;
     if (
-      !conversation || !request.prompt.trim() || busy || abortRef.current ||
+      !conversation || !request.prompt.trim() || busy || preparing || abortRef.current ||
       !status?.available || conversation.turn_in_progress !== null ||
       (repairing && repairDisabledReason)
     ) {
@@ -799,10 +803,10 @@ export function CreateAgentAssistant() {
     const gen = generation.current;
     const conversationId = conversation.id;
     try {
-      const res = await api.assistantRefreshCatalog(conversationId);
+      const res = await api.assistantRefreshCatalog(conversationId, startedIn);
       if (!stillCurrent(startedIn, gen)) return;
       setConversation((c) =>
-        c && c.id === conversationId ? { ...c, catalog: res.catalog } : c,
+        c && c.id === conversationId ? res.conversation ?? { ...c, catalog: res.catalog } : c,
       );
       toast(t("assistantPage.catalogChanged"), "good");
     } catch (err) {
@@ -1149,7 +1153,7 @@ export function CreateAgentAssistant() {
                 <Btn
                   primary
                   onClick={() => void send({ prompt: input })}
-                  disabled={!conversation || busy || !input.trim() || conversation.turn_in_progress !== null}
+                  disabled={!conversation || busy || preparing || !input.trim() || conversation.turn_in_progress !== null}
                   data-testid="assistant-send"
                 >
                   {busy ? t("assistantPage.sending") : t("assistantPage.send")}
@@ -1252,7 +1256,7 @@ export function CreateAgentAssistant() {
                       {(latest.status === "draft" ||
                         latest.status === "invalid") && (
                         <Btn
-                          disabled={busy}
+                          disabled={busy || preparing}
                           onClick={() => setEditing(draftFrom(latest.content))}
                           data-testid="proposal-edit"
                         >
@@ -1262,7 +1266,7 @@ export function CreateAgentAssistant() {
                       {(latest.status === "draft" ||
                         latest.status === "invalid") && (
                         <Btn
-                          disabled={busy}
+                          disabled={busy || preparing}
                           onClick={() =>
                             setConfirm({
                               kind: "reject",
@@ -1278,7 +1282,7 @@ export function CreateAgentAssistant() {
                       {latest.status === "draft" && conversation && (
                         <Btn
                           primary
-                          disabled={!canDeploy || approving || busy}
+                          disabled={!canDeploy || approving || busy || preparing}
                           disabledReason={deployReason}
                           onClick={() =>
                             setConfirm({
@@ -1334,6 +1338,35 @@ export function CreateAgentAssistant() {
           </Panel>
 
           <div className="assist-side">
+            {conversation && workspaceId ? (
+              <PreparationPanel key={`${workspaceId}:${conversation.id}`}
+                conversation={conversation} workspaceId={workspaceId}
+                disabled={busy || approving || editing !== null || conversation.turn_in_progress !== null}
+                onWorking={setPreparing}
+                onUpdated={(detail) => {
+                  if (scope.current !== workspaceId) return;
+                  setConversation((current) => current?.id === detail.id ? detail : current);
+                  setEditing(null);
+                  setConfirm(null);
+                  loadConversations();
+                }}
+                onCatalog={(catalog) => {
+                  if (scope.current !== workspaceId) return;
+                  setConversation((current) => current?.id === conversation.id
+                    ? { ...current, catalog } : current);
+                }}
+                onDiscuss={(text) => {
+                  setInput(text);
+                  document.getElementById("assistant-input")?.focus();
+                }} />
+            ) : (
+              <Panel brk title={t("assistantPreparation.title")}
+                sub={t("assistantPreparation.subtitle")}>
+                <p className="dim">{t("assistantPreparation.startConversation")}</p>
+              </Panel>
+            )}
+            <details className="assist-history" open={conversation ? undefined : true}>
+              <summary>{t("assistantPage.historyTitle")} · {conversations.length}</summary>
             <Panel
               brk
               pad={false}
@@ -1381,6 +1414,7 @@ export function CreateAgentAssistant() {
                 </div>
               )}
             </Panel>
+            </details>
           </div>
           {conversation && latest && (
             <EvaluationAssetsPanel

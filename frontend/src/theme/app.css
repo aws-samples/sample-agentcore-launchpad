@@ -926,10 +926,30 @@ footer .sep{color:var(--line-2)}
 .assist-gt th{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--ink-3)}
 .assist-outcome{display:grid;gap:6px}
 .assist-stages{display:flex;gap:6px;flex-wrap:wrap}
-/* Right column of the first row: the conversation history beside the thread. The DOM
-   keeps thread → proposal → history so one column reads in order; the proposal and the
-   panels below it span both columns (.assist-span). */
+/* Preparation beside the thread; full-width proposal and next steps follow it. */
 .assist-side{display:flex;flex-direction:column;gap:14px;min-width:0;grid-column:2;grid-row:1}
+.assist-preparation{display:flex;flex-direction:column;gap:20px}
+.assist-preparation section+section{border-top:1px solid var(--line);padding-top:18px}
+.assist-preparation h3{font-size:14px;margin:0 0 8px}
+.assist-preparation p{font-size:12px;line-height:1.6;margin:8px 0}
+.assist-preparation a{color:var(--amber);text-underline-offset:3px}
+.assist-preparation .row{flex-wrap:wrap;gap:8px}
+.assist-prep-options{display:flex;flex-direction:column;gap:6px;max-height:240px;overflow:auto;margin:10px 0}
+.assist-prep-option{display:flex;align-items:flex-start;gap:10px;padding:10px;border:1px solid var(--line);cursor:pointer;min-width:0}
+.assist-prep-option.selected{border-color:var(--amber);background:var(--amber-soft)}
+.assist-prep-option>input{margin:3px 0 0;flex-shrink:0;accent-color:var(--amber)}
+.assist-prep-option>span:first-of-type{flex:1;min-width:0;overflow-wrap:anywhere;font-size:12px}
+.assist-prep-option>span:first-of-type>span{display:block;font-size:11px;margin-top:4px}
+.assist-prep-option:has(input:disabled){cursor:default}
+.assist-prep-option:has(input:disabled:not(:checked)){opacity:.65}
+.assist-prep-requirements{display:flex;flex-direction:column;gap:10px;max-height:260px;overflow:auto}
+.assist-prep-requirement{border-left:2px solid var(--amber);padding:0 0 0 12px;font-size:12px;overflow-wrap:anywhere}
+.assist-prep-requirement ul{padding-left:18px;line-height:1.7}
+.assist-prep-save{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid var(--line);padding-top:14px;font-size:11px}
+.assist-prep-error{color:var(--crit-text);white-space:pre-wrap;overflow-wrap:anywhere}
+.assist-history>summary{cursor:pointer;padding:12px 16px;border:1px solid var(--line);font-size:12px;color:var(--ink-3)}
+.assist-history[open]>summary{margin-bottom:8px}
+.assist-kb-readiness{margin:4px 0 12px;font-size:11px;color:var(--ink-3)}
 .assist-conv-list{display:flex;flex-direction:column;gap:6px;padding:10px 16px;max-height:220px;overflow-y:auto}
 .assist-conv-list .selchip{cursor:pointer;letter-spacing:0;justify-content:space-between;text-align:left;width:100%;min-width:0}
 .assist-conv-row{display:flex;gap:6px;align-items:stretch}
@@ -938,7 +958,7 @@ footer .sep{color:var(--line-2)}
 .assist-conv-clear:hover:not(:disabled){color:var(--crit-text);border-color:var(--crit)}
 .assist-conv-clear:disabled{opacity:.35;cursor:default}
 .assist-conv-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@media(max-width:1180px){.assist-grid{grid-template-columns:1fr}.assist-thread{height:420px}.assist-side{grid-column:auto;grid-row:auto}}
+@media(max-width:1180px){.assist-grid{grid-template-columns:1fr}.assist-thread{height:420px}.assist-side{grid-column:1;grid-row:2}.assist-prep-save{flex-wrap:wrap}.assist-prep-option{flex-wrap:wrap}}
 /* SE-047 evaluation-assets panel: full-width span under the two assistant columns,
    contained tables with horizontal overflow, readable long rubrics/steps */
 .assist-grid>.assist-span{grid-column:1 / -1}

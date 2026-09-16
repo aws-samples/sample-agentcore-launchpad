@@ -182,13 +182,21 @@ another member, an administrator, or a re-registered account with the same usern
 answers `404 assistant.conversation_not_found`. Reads are ledger-only except where
 noted.
 
+Conversation detail additionally contains `preparation: {revision, knowledge_bases,
+skills, requirements}`. Each advisory requirement has `id`, `kind`
+(`knowledge_base | skill | tool | clarification`), `title`, `reason`,
+`materials: string[]`, and `required: boolean`. Selections and requirements are private
+to the conversation owner; they do not grant resource access or approve deployment.
+
 | Method | Path | Role | Result |
 |---|---|---|---|
 | `GET` | `/api/assistant/architect` | member | `{workspace_id, account_id, region, available, reasons[], preset{key, label, status, agent_id, requirements[], can_install}, can_deploy, deploy_requirements[{code, message}], capabilities{shared_memory, kb_gateway}, is_admin, owner, principal}` — `available` ⇔ the preset is `active`; `capabilities` says which prerequisites a proposal may bind to (never created here); ledger-only |
 | `GET` | `/api/assistant/architect/conversations` | member | `{conversations[{id, title, turns, turn_in_progress, status, proposal_status, proposal_revision, created_at, updated_at}]}` — the caller's own, newest first (≤ 50) |
 | `POST` | `/api/assistant/architect/conversations` | member | body `{title?}` → `201` conversation detail (below); snapshots the workspace **catalog** (registry attachables, live gateway ARN + outbound-auth identity per gateway record, S3 content digest per skill, ACTIVE managed KBs, workspace prerequisites — the only AWS reads); `409 assistant.unavailable` (`detail.preset_status`) while the preset is not active |
 | `GET` | `/api/assistant/architect/conversations/{id}` | member | `{…summary, catalog{fetched_at, tools[{key, kind, name, description, attachable, reason, gateway_arn?, auth_type?, outbound_auth?, url?, record_id}], skills[{key, name, description, path, record_id, content_digest, object_count}], knowledge_bases[{kb_id, name, description}], warnings[], resources{memory_arn, kb_gateway_id, kb_gateway_arn, oauth_provider_arn, execution_role_arn}, target{workspace_id, account_id, region}}, messages[{id, turn, role: user|assistant|tool|error, text, name, at}], proposals[…]}` |
-| `POST` | `/api/assistant/architect/conversations/{id}/catalog` | member | re-reads the catalog → `{catalog}` |
+| `POST` | `/api/assistant/architect/conversations/{id}/catalog` | member | re-reads the catalog → `{catalog, conversation}`; consume the returned conversation because refreshed bindings can advance preparation and proposal revisions |
+| `PUT` | `/api/assistant/architect/conversations/{id}/preparation` | member | `{expected_revision, knowledge_bases: [kb_id], skills: [catalog_key]}` → full conversation detail, including `preparation`. Validates live resource bindings and creates a new reviewable proposal revision when applicable. Refuses a stale preparation revision or an in-flight turn. |
+| `POST` | `/api/assistant/architect/conversations/{id}/preparation/skills` | `perm:agents.deploy` | `{expected_revision, staging_id, selections: [{index}]}` → `{conversation, results: [{name, ok, key?, error?}]}`. Compatibility endpoint for earlier assistant imports; the current console creates new Skills in Registry. Imports server-validated staged bundles into conversation-owned sources and selects successful imports; never accepts a client S3 path. |
 | `POST` | `/api/assistant/architect/conversations/{id}/turns` | member | body `{prompt}` (≤ 100k chars / 300k bytes, and it must fit the request budget with the preamble) → SSE `meta{conversation_id, turn, session_id, agent, omitted_turns} → (tool|delta)* → proposal? → done` or `error{code?, message}` (kept on the transcript; a stream closed by the client leaves the partial answer + an `interrupted` error row and no proposal). One `InvokeHarness` on the preset with the bounded replayed transcript (paired by turn, ≤ 12 turns / 160k chars incl. preamble); a `launchpad-proposal` block (≤ 64 000 bytes) becomes a new revision (`draft` or `invalid`); **no other write**. Before the stream opens: `409 assistant.unavailable`, `409 assistant.turn_in_progress` (`detail.active_turn` — one in-flight turn per conversation), `409 assistant.conversation_full` (200 turns), `413 assistant.prompt_too_large` |
 | `PUT` | `/api/assistant/architect/conversations/{id}/proposal` | member | body `{content}` (the proposal allowlist; unknown outer members → 422) → `{proposal}` — a **new** revision (`source: member`, unique monotonic number), never a mutation; invalid content is stored as `invalid` with `validation_errors`, never corrected; `413 assistant.proposal_too_large` above 64 000 serialized bytes (nothing stored; the normalized stored content is re-checked against the same cap); `409 assistant.conversation_full` at 50 revisions. Every assistant write is also bounded at ingress: `413 assistant.request_too_large` above 512 000 received bytes |
 | `POST` | `/api/assistant/architect/conversations/{id}/proposal/reject` | member | body `{revision}` → `{proposal}` with `status: rejected` (non-executable); a conditional transition — `409 assistant.proposal_stale` for a non-current revision, `409 assistant.proposal_already_approved` (`detail.approval`) when the revision was executed meanwhile |
@@ -607,6 +615,14 @@ run queue (`eval_max_concurrent_runs`, capped at the 5 active-batch-evaluations
 account quota). Run status: `queued → invoking → waiting → evaluating → completed |
 failed | stopped`. Every row carries `stop_requested` (an operator stop is pending
 on a run whose batch is still STOPPING).
+
+Before creating a run or invoking an agent, known managed code rules are compared
+with the target Agent's actual `tools`, `knowledge_bases` and `skills`. An
+unqualified zero-call rule or exact empty tool sequence against mounted resources
+returns `422 run.evaluator_capability_conflict`, with evaluator/rule identifiers and
+an explanation in `detail.evaluators`. A named forbidden write tool remains valid.
+External code evaluators whose rule definitions are unknown are not classified by
+their display names.
 
 | Method | Path | Purpose |
 |---|---|---|

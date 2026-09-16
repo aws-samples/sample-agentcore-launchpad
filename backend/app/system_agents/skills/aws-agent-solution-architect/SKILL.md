@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.4.2
+version: 1.4.3
 ---
 
 # AWS Agent Solution Architect
@@ -175,6 +175,34 @@ fill a section.
   session lifecycle) and what it fixes (loop behavior, tool surface, framework choice).
 
 ## 4. Evaluation-first design
+
+### Read-only is not tool-free
+
+Inventory `tools`, `knowledge_bases` and `skills` together before defining a tool
+constraint. An empty `tools` list means no explicitly selected catalog tools; it
+does not remove KB retrieval tools, Skill loading/execution, or runtime support
+tools. In managed Harness, a mounted KB is accessed through the KB Gateway.
+These legitimate calls can appear as tool spans in evaluation.
+
+For a read-only assistant, enforce **no business writes and no false execution
+claims**: no modifying source records, sending messages, approving or submitting
+business content. Preserve the reads needed to answer from approved evidence and
+follow the selected Skill. Do not convert "read-only", "no additional business
+tools" or an empty expected trajectory into a global zero-tool requirement.
+
+Launchpad rejects a global `tool_count` with `max: 0` and no specific `tool`, or an
+exact empty `tool_sequence`, when the proposal mounts tools, KBs or Skills. A
+verified named business-write tool can be prohibited without banning all tools.
+Use scenario assertions for refusal-specific behavior; even a refusal may load a
+Skill or retrieve evidence first. A global zero-call evaluator is appropriate only
+for a truly tool-free design with verified runtime behavior.
+
+Example: a financial-report assistant using a KB and an answering Skill must be
+allowed to retrieve financial evidence. "Do not edit this report or email it" should
+be scored by the corresponding action/claim assertions, never by a `NoToolCalls`
+evaluator applied to every question. Include ordinary successful retrieval cases
+as well as refusals; if the gold financial values are not verified yet, keep those
+cases explicitly blocked rather than inventing values.
 
 Define "good" before building. Cover at least:
 

@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.assistant import evaluation_repair, service
+from app.assistant import evaluation_repair, preparation, service
 from app.assistant import proposal as proposal_contract
 from app.assistant.principal import principal_of
 from app.core.db import SessionLocal, get_db
@@ -249,7 +249,8 @@ def refresh_catalog(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     row = service.owned_conversation(db, ws.id, principal_of(_caller(request)), conversation_id)
-    return {"catalog": service.refresh_catalog(db, row, ws.context)}
+    catalog = service.refresh_catalog(db, row, ws.context)
+    return {"catalog": catalog, "conversation": service.conversation_detail(db, row)}
 
 
 @router.post("/conversations/{conversation_id}/turns")
@@ -302,6 +303,30 @@ def turn(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.put("/conversations/{conversation_id}/preparation")
+def update_preparation(
+    conversation_id: str, req: preparation.SelectionRequest, request: Request,
+    db: Session = Depends(get_db), ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    identity = _caller(request)
+    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = preparation.save_selection(db, row, ws.context, identity, req)
+    return service.conversation_detail(db, row)
+
+
+@router.post("/conversations/{conversation_id}/preparation/skills")
+def import_preparation_skills(
+    conversation_id: str, req: preparation.ImportRequest, request: Request,
+    db: Session = Depends(get_db), ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    identity = _caller(request)
+    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row, results = preparation.import_skills(
+        db, row, ws.context, identity, req, recheck=_recheck_factory(request, ws),
+    )
+    return {"conversation": service.conversation_detail(db, row), "results": results}
 
 
 @router.put("/conversations/{conversation_id}/proposal")

@@ -842,9 +842,9 @@ def test_seed_routing_is_refused_at_proposal_time_not_at_asset_creation():
     scenarios = [{"scenario_id": f"S{i}", "golden_test_id": gid, "turns": [{"input": "x"}],
                   "assertions": ["must be polite"]}
                  for i, gid in enumerate(("GT-001", "GT-002", "GT-003"))]
-    rule = {"kind": "code", "key": "no-tools", "title": "No tools", "name": "no_tools",
+    rule = {"kind": "code", "key": "no-writes", "title": "No writes", "name": "no_writes",
             "level": "TRACE", "rules": {"version": 1, "checks": [
-                {"id": "zero", "type": "tool_count", "max": 0}]}}
+                {"id": "zero", "type": "tool_count", "tool": "send_email", "max": 0}]}}
     subset = {**old, "evaluation_plan": {"scenarios": scenarios, "evaluators": [
         {**rule, "golden_test_ids": ["GT-001", "GT-002"]}]}}
     content, errors = contract.parse_content(subset)
@@ -936,6 +936,18 @@ def test_handler_positive_adot_session_with_tool_and_reference():
     assert handler.evaluate(RULES, _event("SESSION", spans, []))["errorCode"] == "REFERENCE_MISSING"
     shell = spans + _tool("t1", "sp-shell", "shell", 5)
     assert handler.evaluate(RULES, _event("SESSION", shell, REF_TRAJ))["label"] == "FAIL"
+
+
+def test_handler_zero_call_and_named_write_ban_semantics():
+    empty = {"checks": [{"id": "empty", "type": "tool_sequence", "mode": "exact", "tools": []}]}
+    ban = {"checks": [{"id": "write", "type": "tool_count", "tool": "send_email", "max": 0}]}
+    spans = _model_turn("t1", "m", "Revenue was 10.", start=10)
+    assert handler.evaluate(empty, _event("SESSION", spans))["label"] == "PASS"
+    spans += _tool("t1", "retrieve", "Retrieve", 3)
+    assert handler.evaluate(empty, _event("SESSION", spans))["label"] == "FAIL"
+    assert handler.evaluate(ban, _event("SESSION", spans))["label"] == "PASS"
+    spans += _tool("t1", "write", "send_email", 4)
+    assert handler.evaluate(ban, _event("SESSION", spans))["label"] == "FAIL"
 
 
 def test_handler_reads_current_output_joined_never_history():
@@ -1934,6 +1946,55 @@ def test_plan_revisions_are_append_only_and_hash_bound(app_ready):
         db.close()
 
 
+@pytest.mark.parametrize("capabilities", [
+    {"knowledge_bases": ["earnings-kb"]}, {"skills": ["earnings-skill"]},
+    {"tools": ["mcp:reports"]},
+])
+def test_readonly_plan_prepare_edit_and_legacy_materialization_are_guarded(app_ready, capabilities):
+    from tests.test_assistant_readonly_evaluation import ZERO_CALL_RULES, _source
+
+    source = _source(ZERO_CALL_RULES[0], capabilities)
+    # Direct insertion represents a proposal approved before this semantic guard.
+    cid, h = _conversation("local-operator", proposal=source)
+    before = _snapshot_proposal(cid)
+    with TestClient(app_ready) as client:
+        prepared = client.post(_url(cid, "/prepare"), json={"revision": 1})
+        assert prepared.status_code == 201, prepared.text
+        plan = prepared.json()["plan"]
+        assert plan["status"] == "invalid"
+        assert any("Read-only does not mean zero tool calls" in e
+                   for e in plan["validation_errors"])
+        raw = plan["content"]
+        edited = client.put(_url(cid), json={"content": raw})
+        assert edited.status_code == 200, edited.text
+        assert edited.json()["plan"]["status"] == "invalid"
+
+        # A historical draft may have no saved errors. The materialize preflight
+        # must revalidate it without changing its content/hash or the approved Agent.
+        with SessionLocal() as db:
+            legacy = AssistantEvaluationPlan(
+                workspace_id=DEFAULT_WORKSPACE_ID, conversation_id=cid,
+                proposal_id=db.query(AssistantProposal).filter_by(conversation_id=cid).one().id,
+                source_revision=1, source_content_hash=h, revision=3, source="member",
+                content=raw, content_hash=plan_contract.canonical_hash(raw), status="draft",
+                created_by="river",
+            )
+            db.add(legacy)
+            db.commit()
+            legacy_id, legacy_hash = legacy.id, legacy.content_hash
+        response = client.post(_url(cid, "/materialize"), json={
+            "plan_revision": 3, "plan_hash": legacy_hash, "acknowledge_disclosure": True,
+        })
+        assert response.status_code == 409, response.text
+        assert response.json()["code"] == "assistant.evaluation_plan_invalid"
+        assert "Read-only does not mean zero tool calls" in response.text
+        with SessionLocal() as db:
+            assert db.query(EvaluationAssetOperation).count() == 0
+            saved = db.get(AssistantEvaluationPlan, legacy_id)
+            assert (saved.content, saved.content_hash, saved.status) == (raw, legacy_hash, "draft")
+    assert _snapshot_proposal(cid) == before
+
+
 # ===========================================================================
 # 5. residual matrix (pass 4)
 # ===========================================================================
@@ -2772,6 +2833,69 @@ def test_known_managed_code_reference_is_resolved_from_its_plan_rules(app_ready)
         assert assets.managed_evaluator(db, DEFAULT_WORKSPACE_ID, eid)["definition"] == "code"
 
 
+def _materialize_readonly_rule(rule, fakes):
+    from tests.test_assistant_readonly_evaluation import _source
+
+    # A valid tool-free owner gives us real managed metadata without weakening the
+    # guard. Its evaluator may remain in AWS when a different agent mounts resources.
+    source = _source(rule, {})
+    cid, h = _conversation("config-admin", owner="admin", proposal=source)
+    raw = plan_contract.draft_plan(source, revision=1, content_hash=h, agent_name=source["name"])
+    op_id, *_ = _approve(cid, h, plan=raw, fakes=fakes)
+    _run(op_id, fakes)
+    op = _op(op_id)
+    assert op.status == "succeeded", op.error
+    eid = _res(op, "evaluator:readonly")["result"]["evaluator_id"]
+    return op, eid
+
+
+@pytest.mark.parametrize("capabilities", [
+    {"knowledge_bases": ["earnings-kb"]}, {"skills": ["earnings-skill"]},
+    {"tools": ["mcp:reports"]},
+])
+@pytest.mark.parametrize("named_ban", [False, True])
+def test_existing_managed_readonly_rule_checks_new_source_and_preserves_owner(
+    app_ready, capabilities, named_ban,
+):
+    from tests.test_assistant_readonly_evaluation import _source
+
+    rule = {"id": "write-ban", "type": "tool_count", "max": 0,
+            **({"tool": "send_email"} if named_ban else {})}
+    fakes = Fakes()
+    first, eid = _materialize_readonly_rule(rule, fakes)
+    first_proposal = _snapshot_proposal(first.conversation_id)
+    with SessionLocal() as db:
+        first_plan = db.get(AssistantEvaluationPlan, first.plan_id)
+        first_content, first_hash = first_plan.content, first_plan.content_hash
+    source = _source(rule, capabilities)
+    source["evaluation_plan"]["evaluators"] = [{
+        "kind": "existing", "key": "readonly", "title": "Existing rule", "evaluator_id": eid,
+    }]
+    cid, h = _conversation("config-admin", owner="admin", proposal=source)
+    raw = plan_contract.draft_plan(source, revision=1, content_hash=h, agent_name=source["name"])
+    # Keep the second materialization focused on binding the existing evaluator.
+    raw["evaluators"] = [e for e in raw["evaluators"] if e["kind"] == "existing"]
+    op_id, *_ = _approve(cid, h, plan=raw, fakes=fakes)
+    _run(op_id, fakes)
+    second = _op(op_id)
+    reused = _res(second, "existing:readonly")
+    if named_ban:
+        assert second.status == "succeeded" and reused["status"] == "ready", second.error
+    else:
+        assert reused["status"] == "conflict", reused
+        assert eid in reused["error"] and "write-ban" in reused["error"]
+        assert "Read-only does not mean zero tool calls" in reused["error"]
+    assert _snapshot_proposal(first.conversation_id) == first_proposal
+    assert _op(first.id).resources == first.resources
+    with SessionLocal() as db:
+        saved = db.get(AssistantEvaluationPlan, first.plan_id)
+        assert (saved.content, saved.content_hash, saved.status) == (
+            first_content, first_hash, "approved",
+        )
+    assert eid in fakes.control.evaluators
+    assert _res(first, "lambda_function")["name"] in fakes.lam.functions
+
+
 class _RecordingLogs:
     def __init__(self):
         self.calls = []
@@ -2841,6 +2965,75 @@ def _post_run(admin, monkeypatch, control, body):
         state = (run.status, run.error) if run else None
     return resp, {"queued": submitted, "rows": rows, "logs": logs.calls,
                   "invokes": data.invocations, "batches": data.batches, "state": state}
+
+
+@pytest.mark.parametrize("capabilities", [
+    {"knowledge_bases": [{"kb_id": "earnings-kb", "name": "Earnings"}]},
+    {"skills": ["s3://test-bucket/earnings-skill/"]},
+    {"tools": [{"type": "mcp", "name": "reports", "config": {"url": "https://example.test"}}]},
+])
+@pytest.mark.parametrize("scope", ["dataset", "sessions", "window"])
+def test_run_refuses_managed_zero_calls_against_actual_agent_before_any_effect(
+    gated, monkeypatch, capabilities, scope,
+):
+    admin, _, _ = gated
+    fakes = Fakes()
+    op, eid = _materialize_readonly_rule(
+        {"id": "zero", "type": "tool_count", "max": 0}, fakes,
+    )
+    aid = _route_agent()
+    with SessionLocal() as db:
+        agent = db.get(Agent, aid)
+        agent.spec = {**agent.spec, **capabilities}
+        db.commit()
+    selection = {
+        "dataset": {"dataset_id": op.dataset_id},
+        "sessions": {"session_ids": ["prior-session"]},
+        "window": {"lookback_hours": 1},
+    }[scope]
+    response, effects = _post_run(admin, monkeypatch, fakes.control, {
+        "agent_id": aid, "evaluators": [eid], **selection,
+    })
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "run.evaluator_capability_conflict"
+    assert eid in response.json()["detail"]["evaluators"]
+    assert "rules.zero" in response.text
+    assert next(iter(capabilities)) in response.text
+    assert effects == {"queued": [], "rows": 0, "logs": [], "invokes": [], "batches": [],
+                       "state": None}
+    assert _op(op.id).resources == op.resources
+
+
+@pytest.mark.parametrize("case", ["tool-free", "named-ban", "exact-empty", "external"])
+def test_run_accepts_compatible_rules_and_does_not_guess_external_code(
+    gated, monkeypatch, case,
+):
+    admin, _, _ = gated
+    fakes = Fakes()
+    rule = ({"id": "empty", "type": "tool_sequence", "mode": "exact", "tools": []}
+            if case == "exact-empty" else
+            {"id": "zero", "type": "tool_count", "max": 0,
+             **({"tool": "send_email"} if case == "named-ban" else {})})
+    op, eid = _materialize_readonly_rule(rule, fakes)
+    aid = _route_agent()
+    if case in ("named-ban", "external"):
+        with SessionLocal() as db:
+            agent = db.get(Agent, aid)
+            agent.spec = {**agent.spec, "knowledge_bases": [{"kb_id": "earnings-kb"}]}
+            db.commit()
+    if case == "external":
+        # Same display name, no managed association: behavior is deliberately unknown.
+        detail = json.loads(json.dumps(fakes.control.evaluators[eid]))
+        eid = "external-no-tools"
+        detail["evaluatorId"] = eid
+        fakes.control.evaluators[eid] = detail
+    monkeypatch.setattr(_ac_eval, "start_batch_evaluation", _ORIG_START_BATCH)
+    response, effects = _post_run(admin, monkeypatch, fakes.control, {
+        "agent_id": aid, "dataset_id": op.dataset_id, "evaluators": [eid],
+    })
+    assert response.status_code == 201, response.text
+    assert effects["state"] == ("completed", None)
+    assert effects["rows"] == 1 and len(effects["batches"]) == 1
 
 
 def test_unreadable_custom_evaluator_refuses_the_run_before_any_effect(gated, monkeypatch):

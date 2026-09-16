@@ -53,16 +53,26 @@ as a whole — after the member has already read and approved the design.
       `description`. Harmfulness, toxicity, bias, PII, refusal, instruction following,
       helpfulness, relevance, conciseness, task completion → listed evaluators, never a
       custom judge.
+- [ ] Before writing a tool constraint, inspect `tools`, `knowledge_bases` and `skills`
+      together. `tools: []` does not mean the Harness is tool-free: KB retrieval and
+      Skill loading/execution can still produce tool spans. Read-only means no
+      business writes or false execution claims, not no reads or no support tools.
+- [ ] A global `tool_count` with `max: 0` and no specific `tool`, or an exact empty
+      `tool_sequence`, conflicts with any mounted tool, KB or Skill and is rejected.
+      A verified named write-tool prohibition remains valid. Do not invent tool names.
+      Empty expected trajectories do not authorize a global zero-call constraint.
 - [ ] For every judge and code rule, ask: *is it true in EVERY scenario?*
-  - Yes (no tool calls; never diagnoses; never claims to have contacted anyone;
+  - Yes (never diagnoses; never claims to have contacted anyone;
     always the customer's language) → keep it as an evaluator.
   - No (only emergency scenarios must contain "call emergency services"; only
     medication scenarios must refer to a pharmacist) → it is NOT an evaluator. Move
     the requirement into the `assertions` of the scenarios it belongs to; the
     per-scenario SESSION judge that reads `{assertions}` scores it there. Delete the
     evaluator or generalise it into an invariant.
-  - `output_contains` is almost never a global invariant; `output_not_contains`,
-    `tool_count max 0`, `tool_set forbidden` usually are.
+  - `output_contains` is almost never a global invariant. `output_not_contains`
+    and named `tool_set forbidden` checks still need scenario and capability review.
+    Global zero-call checks require a genuinely tool-free design and verified
+    runtime behavior; even refusal scenarios may need retrieval or Skill loading.
 - [ ] A reference-driven evaluator (a judge using `{expected_response}`,
       `{expected_tool_trajectory}` or `{assertions}`; a `reference_*` rule;
       `Builtin.ToolSelectionAccuracy`-style trajectory evaluators) is applied to every

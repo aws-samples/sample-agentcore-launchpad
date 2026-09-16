@@ -256,6 +256,9 @@ def _check_lists(content: ProposalContent) -> list[str]:
         errors.append("golden_tests ids must be unique")
     seed = content.evaluation_plan
     if seed is not None:
+        from app.assistant.evaluation_plan import seed_errors
+
+        errors += seed_errors(seed.model_dump(), proposal_content=content.model_dump())
         gt_ids = {g.id for g in content.golden_tests}
         for idx in seed.recommendation_keys:
             if int(idx) >= len(content.evaluator_recommendations):

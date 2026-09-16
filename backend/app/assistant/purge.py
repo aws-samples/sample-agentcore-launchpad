@@ -104,6 +104,9 @@ def footprint(db: Session, row: AssistantConversation) -> dict[str, Any]:
     if row.active_turn is not None:
         blockers.append({"kind": "turn", "id": str(row.active_turn),
                          "reason": "a turn is still streaming"})
+    if row.preparation_token:
+        blockers.append({"kind": "preparation", "id": row.id,
+                         "reason": "Skill import is still running"})
     for op in operations:
         if op.status in LIVE_OPERATION_STATUSES:
             blockers.append({"kind": "operation", "id": op.id,

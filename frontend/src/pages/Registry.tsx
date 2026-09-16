@@ -450,9 +450,13 @@ export function Registry() {
 
   // ── Register sub-page (?view=register) ────────────────────────────────────
   if (view === "register") {
+    const requestedType = searchParams.get("type");
+    const initialType = requestedType === "AGENT_SKILLS" || (
+      requestedType !== "MCP" && tab === "AGENT_SKILLS"
+    ) ? "AGENT_SKILLS" : "MCP";
     return (
       <RegisterView
-        initialType={tab === "AGENT_SKILLS" ? "AGENT_SKILLS" : "MCP"}
+        initialType={initialType}
         onBack={() => setSearchParams({}, { replace: true })}
         onDone={(record, name) => void handleRegistered(record, name)}
       />

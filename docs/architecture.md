@@ -792,18 +792,45 @@ entrance card and from the SYSTEM PRESETS panel once the preset is active) is a 
 conversation with the protected `aws-agent-solution-architect` preset that ends in an
 **inert, reviewable proposal for ONE new managed-Harness business agent**. It is a
 creation assistant, not an administration bot: it never edits or deletes an existing
-agent, never creates a knowledge base, gateway or evaluator, and never runs anything
-by itself.
+agent and never creates resources from conversation text alone. Explicit console
+actions prepare resources, approve deployment and materialize evaluation assets.
 
 **Scope of what is supported here.** The proposal may name the agent, pick a model
 (`model_id` + `model_source`), write the system prompt, choose memory flags, iteration
 and timeout controls, and reference **existing** workspace resources by catalog key:
 APPROVED registry MCP records (`gateway:<name>` / `mcp:<name>`), APPROVED registry
-`AGENT_SKILLS` records (S3 skill paths) and ACTIVE managed knowledge bases. Painpoint →
+`AGENT_SKILLS` records (S3 skill paths), privately imported Skill bundles and ACTIVE
+managed knowledge bases. Painpoint →
 metric → golden-test tables, evaluator recommendations, assumptions and *manual tasks*
 are carried as **solution content** on the revision and rendered for review; the
-console labels them "not created here" and nothing provisions them. No DOCX/PDF
-upload, no Word/draw.io export.
+console renders them for review. Missing resources can be prepared through the
+**Creation preparation** rail; no resource is provisioned just because the model
+mentions it. Document upload belongs to KB creation, not transcript attachments.
+Word/draw.io export is not supported.
+
+**Preparation during intake.** The right rail offers a live, refreshable managed
+KB list, multi-selection, and an inline name/description/file-upload window. KB
+creation and upload reuse `/api/knowledge-bases`; failed uploads retry against the
+created KB, and creation, upload and ingestion have distinct states. `ACTIVE`
+alone does not prove that documents are indexed or that the workspace has the
+ready KB Gateway needed by Harness. Existing KB selection reads indexing status
+without starting ingestion. New KB upload explicitly starts its first ingestion
+when the source becomes available. Closing the window retains the workspace KB;
+its details page can finish setup, upload or indexing.
+
+The same rail selects approved catalog Skills. **Create Skill in Registry** opens
+`/registry?view=register&type=AGENT_SKILLS` in a new tab with the Skill form selected.
+After registration and approval, the member returns and explicitly refreshes the
+catalog; their conversation and unsaved selections remain intact. New Skill ZIP
+uploads happen in Registry, not in this rail. Previously imported private Skill
+sources remain supported. Natural-language Skill authoring is not supported. Preparation
+selections persist on the private conversation and enter later turn context.
+Changing selections creates a new reviewable proposal revision when applicable,
+without changing an approved revision or deploying an Agent. A bounded optional
+`launchpad-preparation` block supplies advisory requirement cards before a proposal
+exists; its business explanations never establish AWS resource readiness.
+Imported Skill paths are resolved server-side, remain private to the conversation,
+and participate in the same live content-digest checks as catalog Skills.
 
 **Conversation model.** `POST /api/assistant/architect/conversations` opens a
 conversation bound to `(workspace, owner principal)` and snapshots the workspace
@@ -875,6 +902,17 @@ or is closed by the client before the reply completed persists the partial answe
 plus an `error` row (`interrupted …`), never derives a proposal from the incomplete
 output, releases the claim and closes the upstream event stream (closing the
 transport does not claim the service-side computation stopped).
+
+**Read-only evaluation semantics.** A proposal's `tools`, `knowledge_bases` and
+`skills` together describe its tool capabilities. KB retrieval and Skill loading
+can produce tool spans even when `tools` is empty. Proposal-seed and evaluation-plan
+validation reject a global unqualified `tool_count max=0` or exact empty
+`tool_sequence` against those capabilities or explicit expected tool trajectories.
+Named business-write prohibitions remain valid; refusal-specific requirements belong
+in scenario assertions. Known managed code evaluators are checked again when bound
+as existing references and before an ordinary evaluation run, so historical
+zero-call evaluators cannot silently score a tool-enabled agent. These checks do not
+rewrite prior approvals, results or Lambda versions.
 
 **Inert proposals.** After an ordinary model turn the reply is scanned for exactly
 one fenced block tagged `launchpad-proposal` (`app/assistant/proposal.py`). The block

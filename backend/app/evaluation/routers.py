@@ -143,7 +143,7 @@ def _unverifiable(evaluator: str, exc: Exception) -> AppError:
 
 def _assert_target_references(
     db: Session, ws: WorkspaceScope, evaluators: list[str], items: list[dict[str, Any]],
-    dataset_scope: bool,
+    dataset_scope: bool, *, agent_spec: dict[str, Any] | None = None,
 ) -> None:
     """Every chosen evaluator that reads ground truth must find it on EVERY target it
     will be applied to — each session or each TRACE turn of the CURRENT dataset
@@ -156,6 +156,7 @@ def _assert_target_references(
     otherwise already have been invoked by the time the service rejected the batch). A
     scope without a dataset carries no references at all."""
     from app.assistant.evaluation_assets import managed_evaluator, managed_rules
+    from app.assistant.evaluation_plan import CodeCheck, code_rule_capability_conflict_errors
     from app.evaluation import coverage
 
     problems: dict[str, list[str]] = {}
@@ -193,6 +194,16 @@ def _assert_target_references(
                                        "derived / codeBased is required"]
                 continue
             rules = managed_rules(db, owner) if owner else None
+            if rules is not None:
+                conflicts = code_rule_capability_conflict_errors(
+                    [CodeCheck.model_validate(check) for check in rules],
+                    agent_spec or {}, evaluator_key=evaluator,
+                )
+                if conflicts:
+                    raise AppError(
+                        "run.evaluator_capability_conflict", "; ".join(conflicts),
+                        {"evaluators": {evaluator: conflicts}}, status_code=422,
+                    )
             needs, _kind = coverage.needs_from_config(detail, rules)
             level = str(detail.get("level") or "TRACE")
             if needs is None:
@@ -1313,7 +1324,9 @@ def create_run(
             status_code=422,
         )
     if req.mode == "evaluators":
-        _assert_target_references(db, ws, req.evaluators, items, dataset_scope)
+        _assert_target_references(
+            db, ws, req.evaluators, items, dataset_scope, agent_spec=agent.spec
+        )
 
     if req.lookback_hours:
         now = datetime.now(UTC)

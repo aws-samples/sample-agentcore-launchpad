@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from starlette.datastructures import UploadFile
 
+from app.assistant.principal import principal_of
 from app.core.errors import AppError, aws_error_message, mapped_aws_error
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
@@ -348,7 +349,9 @@ def _skill_out(bundle: SkillBundle, errors: list[str], index: int) -> dict[str, 
 
 
 @router.post("/skills/inspect")
-async def inspect_skill(request: Request) -> dict[str, Any]:
+async def inspect_skill(
+    request: Request, ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
     """Acquire + validate skill bundles from a source without touching S3, park
     them in staging, and return the parsed skills for preview. Accepts either a
     multipart ``.zip`` upload or a JSON ``{"source": {...}}`` body (git for now);
@@ -375,7 +378,13 @@ async def inspect_skill(request: Request) -> dict[str, Any]:
             "expected a multipart .zip upload or a JSON source",
             status_code=400,
         )
-    return _stage_and_respond(bundles)
+    response = _stage_and_respond(bundles)
+    # Assistant imports require the same immutable principal and workspace that
+    # inspected the source. No client-supplied source paths cross this boundary.
+    _staging[response["staging_id"]].update(
+        owner_principal=principal_of(require_identity(request)), workspace_id=ws.id,
+    )
+    return response
 
 
 async def _acquire_zip(request: Request) -> list[SkillBundle]:

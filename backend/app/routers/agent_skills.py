@@ -30,6 +30,7 @@ from app.services.skill_ingest import (
     SkillValidationError,
     validate_bundle,
 )
+from app.services.workspace import WorkspaceContext
 
 router = APIRouter(prefix="/api/agent-skills", tags=["agent-skills"])
 
@@ -48,26 +49,34 @@ def import_for_agent(
     attachable ``{name, path}`` entries. Mirrors the registry import semantics:
     per-item failures never abort the batch; staging survives any failure so
     the user can retry without re-uploading."""
+    return import_staged_skills(req.staging_id, req.selections, ws.context)
+
+
+def import_staged_skills(
+    staging_id: str, selections: list[ImportSelection], workspace: WorkspaceContext,
+    *, consume: bool = True,
+) -> dict[str, Any]:
+    """Shared validated upload path for the create wizard and assistant preparation."""
     _sweep_staging()
-    entry = _staging.get(req.staging_id)
+    entry = _staging.get(staging_id)
     if entry is None:
         raise AppError(
             "registry.staging_expired",
             "staging session expired or unknown — re-inspect the source",
             status_code=410,
         )
-    bucket = ws.context.resources.get("artifacts_bucket")
+    bucket = workspace.resources.get("artifacts_bucket")
     if not bucket:
         raise RuntimeError(
             "artifacts_bucket missing from this workspace's resource map — run its bootstrap"
         )
-    s3 = ws.context.client("s3")
+    s3 = workspace.client("s3")
 
     bundles: list[SkillBundle] = entry["bundles"]
     uid = uuid.uuid4().hex[:8]
     skills: list[dict[str, Any]] = []
     taken: set[str] = set()
-    for sel in req.selections:
+    for sel in selections:
         label = sel.name_override or sel.name or f"#{sel.index}"
         bundle = _match_bundle(bundles, sel)
         if bundle is None:
@@ -104,6 +113,6 @@ def import_for_agent(
         except Exception as exc:  # never let one bad skill abort the batch
             skills.append({"name": label, "ok": False,
                            "error": str(exc), "error_code": "agents.skill_attach_failed"})
-    if skills and all(s["ok"] for s in skills):
-        _drop_staging(req.staging_id)
+    if consume and skills and all(s["ok"] for s in skills):
+        _drop_staging(staging_id)
     return {"skills": skills}

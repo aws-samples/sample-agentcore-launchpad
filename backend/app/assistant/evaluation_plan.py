@@ -32,6 +32,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterable
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -181,8 +182,8 @@ def _check_rules(rules: CodeRules) -> list[str]:
             errors.append(f"rules.{c.id}: tool_count needs min and/or max")
         if c.type == "tool_count" and c.min is not None and c.max is not None and c.min > c.max:
             errors.append(f"rules.{c.id}: min exceeds max")
-        if c.type == "tool_sequence" and not c.tools:
-            errors.append(f"rules.{c.id}: tool_sequence needs tools[]")
+        if c.type == "tool_sequence" and not c.tools and c.mode != "exact":
+            errors.append(f"rules.{c.id}: tool_sequence needs tools[] unless mode is exact")
         if c.type == "tool_sequence" and c.mode == "superset":
             errors.append(f"rules.{c.id}: tool_sequence mode must be exact or subsequence")
         if c.type == "tool_set" and not (c.allowed or c.forbidden):
@@ -282,6 +283,83 @@ Evaluator = Annotated[
     Field(discriminator="kind"),
 ]
 CLOUD_KINDS = ("judge", "derived", "code")
+
+
+def capability_conflict_errors(
+    evaluators: Iterable[Evaluator],
+    proposal_content: dict[str, Any],
+    *,
+    scenarios: Iterable[Scenario] = (),
+) -> list[str]:
+    """Validate each declared code evaluator against its source capabilities."""
+    scenarios = tuple(scenarios)
+    return [
+        error
+        for evaluator in evaluators
+        if isinstance(evaluator, CodeEvaluator)
+        for error in code_rule_capability_conflict_errors(
+            evaluator.rules.checks, proposal_content, evaluator_key=evaluator.key,
+            scenarios=scenarios,
+        )
+    ]
+
+
+def code_rule_capability_conflict_errors(
+    checks: Iterable[CodeCheck],
+    proposal_content: dict[str, Any],
+    *,
+    evaluator_key: str,
+    scenarios: Iterable[Scenario] = (),
+) -> list[str]:
+    """Reject global zero-call rules against mounted or explicitly expected tools.
+
+    KB retrieval and Skill loading mount tools independently of ``tools``. Empty
+    golden/scenario trajectories are unspecified, never proof of tool-free execution.
+    Every plan evaluator applies globally; golden_test_ids cannot narrow a rule.
+    This check is pure and never rewrites historical content or hashes.
+    """
+    conflicts = [
+        f"{field}={proposal_content[field]!r}"
+        for field in ("knowledge_bases", "skills", "tools")
+        if proposal_content.get(field)
+    ]
+    # Typed scenarios say which golden tests actually run (blocked tests do not).
+    golden_tools = {
+        str(g.get("id")): g["expected_tools"]
+        for g in proposal_content.get("golden_tests") or []
+        if g.get("expected_tools")
+    }
+    for scenario in scenarios:
+        if scenario.expected_trajectory:
+            conflicts.append(
+                f"scenarios.{scenario.scenario_id}.expected_trajectory="
+                f"{scenario.expected_trajectory!r}"
+            )
+        elif scenario.golden_test_id in golden_tools:
+            conflicts.append(
+                f"golden_tests.{scenario.golden_test_id}.expected_tools="
+                f"{golden_tools[scenario.golden_test_id]!r}"
+            )
+    if not conflicts:
+        return []
+    errors: list[str] = []
+    for check in checks:
+        if check.type == "tool_count" and not check.tool and check.max == 0:
+            rule = "unqualified tool_count max=0"
+        elif check.type == "tool_sequence" and check.mode == "exact" and not check.tools:
+            rule = "exact empty tool_sequence"
+        else:
+            continue
+        errors.append(
+            f"evaluators.{evaluator_key}.rules.{check.id}: {rule} forbids all tool calls "
+            f"globally and conflicts with {'; '.join(conflicts)}. Read-only does not mean "
+            "zero tool calls: retrieval and Skill-loading calls are allowed. Forbid named "
+            "business-write tools (tool_count with tool, max=0 or tool_set.forbidden), "
+            "or use scenario assertions for refusals and false execution claims."
+        )
+    return errors
+
+
 # Kinds an earlier contract accepted as "obligations" (runner-computed cross-session
 # predicates, human review, metric baselines, external controls). They are no plan
 # entries any more: a golden test that needs one is blocked with a reason and the
@@ -574,6 +652,9 @@ def validate_plan(
                       + ", ".join(pending) + " (confirm each as typed turns — "
                       "review_required: false — or block the golden test)")
     errors += _routing_errors(plan)
+    errors += capability_conflict_errors(
+        plan.evaluators, proposal_content, scenarios=plan.scenarios
+    )
     return (plan if not errors else None), errors
 
 
@@ -785,7 +866,9 @@ DRAFT_ASSERTION_RUBRIC = (
 )
 
 
-def seed_errors(seed: dict[str, Any]) -> list[str]:
+def seed_errors(
+    seed: dict[str, Any], *, proposal_content: dict[str, Any] | None = None
+) -> list[str]:
     """Shape + cross-field validation of a proposal's optional ``evaluation_plan`` seed
     (evaluators / scenarios / recommendation_keys / blocked_golden_tests). Pure; never
     raises on malformed input — every problem is a message, so the proposal becomes an
@@ -846,6 +929,13 @@ def seed_errors(seed: dict[str, Any]) -> list[str]:
     # evaluators target a subset of the golden tests used to pass here and fail only
     # when an administrator tried to create the assets, after the Agent was deployed
     errors += [f"evaluation_plan.{m}" for m in _routing_errors(plan)]
+    if proposal_content is not None:
+        errors += [
+            f"evaluation_plan.{m}"
+            for m in capability_conflict_errors(
+                plan.evaluators, proposal_content, scenarios=plan.scenarios
+            )
+        ]
     for idx, mapped in rec_keys.items():
         if not (isinstance(idx, str) and idx.isdigit() and int(idx) < 40):
             errors.append(f"evaluation_plan.recommendation_keys: '{idx}' is not a "

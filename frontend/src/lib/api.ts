@@ -1,6 +1,7 @@
 /** Typed client for the Launchpad backend. */
 
 import i18n from "../i18n";
+import type { KBSourceBody, KnowledgeBaseDetail } from "../pages/KnowledgeBases";
 import type { EvaluationRunInfo, EvaluationRunResults, InsightTrees } from "./evaluation";
 import type { ModelSource, ReasoningEffort } from "./models";
 import { WORKSPACE_HEADER } from "./workspace-header";
@@ -731,8 +732,12 @@ async function request<T>(path: string, init?: RequestInitJson): Promise<T> {
 }
 
 /** multipart POST — the browser sets the boundary Content-Type itself. */
-async function requestForm<T>(path: string, form: FormData): Promise<T> {
-  const res = await fetch(path, { method: "POST", body: form });
+async function requestForm<T>(
+  path: string, form: FormData, workspaceId?: string | null,
+): Promise<T> {
+  const res = await fetch(path, {
+    method: "POST", body: form, headers: pinnedWorkspace(workspaceId),
+  });
   return parseResponse<T>(path, res);
 }
 
@@ -826,6 +831,7 @@ export interface AssistantCatalog {
     kb_gateway_arn: string | null;
     oauth_provider_arn: string | null;
     execution_role_arn: string | null;
+    kb_gateway?: { status?: string; url?: string } | null;
   };
   target?: { workspace_id: string; account_id: string; region: string };
 }
@@ -998,6 +1004,23 @@ export interface AssistantConversationDetail extends AssistantConversationSummar
   catalog: AssistantCatalog;
   messages: AssistantMessage[];
   proposals: AssistantProposal[];
+  preparation?: AssistantPreparation;
+}
+
+export interface AssistantPreparationRequirement {
+  id: string;
+  kind: "knowledge_base" | "skill" | "tool" | "clarification";
+  title: string;
+  reason: string;
+  materials: string[];
+  required: boolean;
+}
+
+export interface AssistantPreparation {
+  revision: number;
+  knowledge_bases: string[];
+  skills: string[];
+  requirements: AssistantPreparationRequirement[];
 }
 
 /** The server resolves the saved invalid plan and its authoritative repair context. */
@@ -3509,6 +3532,32 @@ export const api = {
     request<{ items: AttachableKnowledgeBase[] }>("/api/knowledge-bases", {
       headers: pinnedWorkspace(workspaceId),
     }),
+  createKnowledgeBase: (
+    input: { name: string; description: string; source: KBSourceBody }, workspaceId: string,
+  ) => request<KnowledgeBaseDetail>("/api/knowledge-bases", {
+    method: "POST", body: JSON.stringify(input), headers: pinnedWorkspace(workspaceId),
+  }),
+  getKnowledgeBase: (id: string, workspaceId: string) =>
+    request<KnowledgeBaseDetail>(`/api/knowledge-bases/${encodeURIComponent(id)}`, {
+      headers: pinnedWorkspace(workspaceId),
+    }),
+  uploadKnowledgeBaseFiles: (id: string, files: File[], workspaceId: string) => {
+    const form = new FormData();
+    for (const file of files) form.append("files", file);
+    return requestForm<{ keys: string[] }>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}/files`, form, workspaceId,
+    );
+  },
+  syncKnowledgeBase: (id: string, sourceId: string, workspaceId: string) =>
+    request<Record<string, unknown>>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}/data-sources/${encodeURIComponent(sourceId)}/sync`,
+      { method: "POST", headers: pinnedWorkspace(workspaceId) },
+    ),
+  addKnowledgeBaseSource: (id: string, source: KBSourceBody, workspaceId: string) =>
+    request<Record<string, unknown>>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}/data-sources`,
+      { method: "POST", body: JSON.stringify(source), headers: pinnedWorkspace(workspaceId) },
+    ),
   /* ── architect assistant (SE-039) ── */
   assistantStatus: () => request<AssistantStatus>("/api/assistant/architect"),
   assistantConversations: () =>
@@ -3539,11 +3588,29 @@ export const api = {
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}`,
       { method: "DELETE" },
     ),
-  assistantRefreshCatalog: (id: string) =>
-    request<{ catalog: AssistantCatalog }>(
+  assistantRefreshCatalog: (id: string, workspaceId?: string | null) =>
+    request<{ catalog: AssistantCatalog; conversation?: AssistantConversationDetail }>(
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}/catalog`,
-      { method: "POST" },
+      { method: "POST", headers: pinnedWorkspace(workspaceId) },
     ),
+  assistantSavePreparation: (
+    id: string, input: { expected_revision: number; knowledge_bases: string[]; skills: string[] },
+    workspaceId: string,
+  ) => request<AssistantConversationDetail>(
+    `/api/assistant/architect/conversations/${encodeURIComponent(id)}/preparation`,
+    { method: "PUT", body: JSON.stringify(input), headers: pinnedWorkspace(workspaceId) },
+  ),
+  assistantImportSkills: (
+    id: string,
+    input: { expected_revision: number; staging_id: string; selections: { index: number }[] },
+    workspaceId: string,
+  ) => request<{
+    conversation: AssistantConversationDetail;
+    results: { name: string; ok: boolean; key?: string; error?: string }[];
+  }>(
+    `/api/assistant/architect/conversations/${encodeURIComponent(id)}/preparation/skills`,
+    { method: "POST", body: JSON.stringify(input), headers: pinnedWorkspace(workspaceId) },
+  ),
   /** A member edit is a NEW revision that needs its own approval. */
   assistantEditProposal: (id: string, content: AssistantProposalContent) =>
     request<{ proposal: AssistantProposal }>(
@@ -3698,12 +3765,13 @@ export const api = {
       `/api/agents/${id}`,
       { method: "DELETE" },
     ),
-  inspectSkillZip: (file: File) => {
+  inspectSkillZip: (file: File, workspaceId?: string | null) => {
     const form = new FormData();
     form.append("file", file);
     return requestForm<{ staging_id: string; skills: InspectedSkill[] }>(
       "/api/registry/skills/inspect",
       form,
+      workspaceId,
     );
   },
   inspectSkillGit: (url: string, ref?: string, subdir?: string) =>

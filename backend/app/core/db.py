@@ -321,6 +321,16 @@ def _migrate_assistant_columns(bind) -> None:
             "active_turn_token": (
                 "ALTER TABLE assistant_conversations ADD COLUMN active_turn_token VARCHAR(32)"
             ),
+            "preparation": (
+                "ALTER TABLE assistant_conversations ADD COLUMN preparation JSON DEFAULT '{}'"
+            ),
+            "preparation_sources": (
+                "ALTER TABLE assistant_conversations ADD COLUMN preparation_sources "
+                "JSON DEFAULT '[]'"
+            ),
+            "preparation_token": (
+                "ALTER TABLE assistant_conversations ADD COLUMN preparation_token VARCHAR(32)"
+            ),
         },
         "assistant_proposals": {
             "bindings": "ALTER TABLE assistant_proposals ADD COLUMN bindings JSON",

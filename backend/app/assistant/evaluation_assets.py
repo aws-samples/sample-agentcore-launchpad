@@ -1772,6 +1772,13 @@ class _Runner:
         owner = managed_evaluator(db, op.workspace_id, evaluator_id)
         rules = managed_rules(db, owner) if owner and owner.get("definition") == "code" \
             else None
+        if rules is not None:
+            conflicts = plan_contract.code_rule_capability_conflict_errors(
+                [plan_contract.CodeCheck.model_validate(check) for check in rules],
+                self.proposal_content, evaluator_key=evaluator_id, scenarios=plan.scenarios,
+            )
+            if conflicts:
+                raise _Conflict("; ".join(conflicts))
         needs, kind = coverage.needs_from_config(detail, rules)
         note = None
         source = "existing"
