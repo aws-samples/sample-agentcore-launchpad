@@ -202,6 +202,152 @@
           }
         }
       ]
+    },
+    {
+      "id": "agent-management",
+      "title": {
+        "en": "Agent Management: create, maintain, and validate",
+        "zh-CN": "Agent 管理：创建、维护与运行验证"
+      },
+      "description": {
+        "en": "Tour the live Agent Management console: creation methods, model and capability configuration, agent filtering, deployment logs, AWS versions and endpoints, Harness-to-Runtime conversion, resource discovery, external ownership, system presets, and a real Chat Playground invocation. Configuration and lifecycle actions are explained without submitting new deployments or deletions.",
+        "zh-CN": "实录 Agent 管理模块：创建方式、模型与能力配置、列表筛选、部署日志、AWS 版本与端点、Harness 转换、资源发现、外部资源与系统预置，以及一次真实对话验证。配置和维护入口以审阅讲解为主，不提交新部署或删除。"
+      },
+      "publishedAt": "2026-09-16",
+      "durationSeconds": 292.122,
+      "language": "zh-CN",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/agent-management/20260916/poster.jpg",
+      "sources": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/agent-management/20260916/agent-management.zh-CN.mp4",
+          "type": "video/mp4"
+        },
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/agent-management/20260916/agent-management.zh-CN.webm",
+          "type": "video/webm"
+        }
+      ],
+      "captions": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/agent-management/20260916/agent-management.zh-CN.vtt",
+          "language": "zh-CN",
+          "label": "简体中文"
+        }
+      ],
+      "chapters": [
+        {
+          "startSeconds": 0,
+          "title": {
+            "en": "Agent Management: from creation to operation",
+            "zh-CN": "Agent 管理：从创建到运行"
+          }
+        },
+        {
+          "startSeconds": 13.5,
+          "title": {
+            "en": "Choose a creation method",
+            "zh-CN": "选择适合的创建方式"
+          }
+        },
+        {
+          "startSeconds": 35.4,
+          "title": {
+            "en": "Configure the model and system prompt",
+            "zh-CN": "配置模型与系统提示词"
+          }
+        },
+        {
+          "startSeconds": 55.3,
+          "title": {
+            "en": "Attach tools, skills, knowledge and memory",
+            "zh-CN": "按任务挂载工具、技能与记忆"
+          }
+        },
+        {
+          "startSeconds": 74.9,
+          "title": {
+            "en": "Filter and locate existing agents",
+            "zh-CN": "筛选并定位现有 Agent"
+          }
+        },
+        {
+          "startSeconds": 93.7,
+          "title": {
+            "en": "Inspect deployment stages and job logs",
+            "zh-CN": "检查部署阶段与任务日志"
+          }
+        },
+        {
+          "startSeconds": 112.2,
+          "title": {
+            "en": "Compare AWS versions and endpoints",
+            "zh-CN": "对照 AWS 版本与端点"
+          }
+        },
+        {
+          "startSeconds": 130.8,
+          "title": {
+            "en": "Edit and republish an existing agent",
+            "zh-CN": "编辑与重新发布"
+          }
+        },
+        {
+          "startSeconds": 150,
+          "title": {
+            "en": "Convert a Harness into a Runtime twin",
+            "zh-CN": "Harness 转换为 Runtime"
+          }
+        },
+        {
+          "startSeconds": 167.8,
+          "title": {
+            "en": "Discover existing Runtimes and Harnesses",
+            "zh-CN": "发现已有 Runtime 与 Harness"
+          }
+        },
+        {
+          "startSeconds": 188.2,
+          "title": {
+            "en": "Check import and invocation eligibility",
+            "zh-CN": "先看导入与调用条件"
+          }
+        },
+        {
+          "startSeconds": 208.1,
+          "title": {
+            "en": "Understand externally owned resources",
+            "zh-CN": "区分外部资源与平台托管资源"
+          }
+        },
+        {
+          "startSeconds": 225.6,
+          "title": {
+            "en": "Open the Chat Playground for an agent",
+            "zh-CN": "从 Agent 行进入对话演练场"
+          }
+        },
+        {
+          "startSeconds": 241.7,
+          "title": {
+            "en": "Review the real response and next steps",
+            "zh-CN": "查看真实回答与后续入口"
+          }
+        },
+        {
+          "startSeconds": 259.6,
+          "title": {
+            "en": "Maintain system presets as an administrator",
+            "zh-CN": "系统预置由管理员维护"
+          }
+        },
+        {
+          "startSeconds": 276.4,
+          "title": {
+            "en": "Connect creation, management and validation",
+            "zh-CN": "把创建、管理与验证串起来"
+          }
+        }
+      ]
     }
   ]
 }
