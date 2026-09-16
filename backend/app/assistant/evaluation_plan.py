@@ -340,9 +340,30 @@ def code_rule_capability_conflict_errors(
                 f"golden_tests.{scenario.golden_test_id}.expected_tools="
                 f"{golden_tools[scenario.golden_test_id]!r}"
             )
-    if not conflicts:
-        return []
+    from app.assistant.tool_catalog import SELECTOR_PREFIXES, support_tool_names
+
     errors: list[str] = []
+    checks = tuple(checks)
+    for check in checks:
+        literal_names = [*check.tools, *check.allowed, *check.forbidden]
+        if check.tool:
+            literal_names.append(check.tool)
+        selectors = sorted({name for name in literal_names if name.startswith(SELECTOR_PREFIXES)})
+        if selectors:
+            errors.append(
+                f"evaluators.{evaluator_key}.rules.{check.id}: {selectors} are attachment "
+                "selectors, not runtime tool names. Use the exact callable names from the "
+                "selected MCP, Skill and knowledge-base catalog."
+            )
+        if check.type == "tool_set" and check.allowed:
+            omitted = sorted(support_tool_names(proposal_content) - set(check.allowed))
+            if omitted:
+                errors.append(
+                    f"evaluators.{evaluator_key}.rules.{check.id}: allowed omits mounted "
+                    f"Skill/knowledge-base support tools: {omitted}"
+                )
+    if not conflicts:
+        return errors
     for check in checks:
         if check.type == "tool_count" and not check.tool and check.max == 0:
             rule = "unqualified tool_count max=0"

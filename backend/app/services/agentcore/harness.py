@@ -7,7 +7,10 @@ kwargs. Payload shapes follow bedrock-agentcore-control 1.43.x.
 import time
 import uuid
 from collections.abc import Iterator, Mapping
+from contextlib import closing
 from typing import Any
+
+from app.core.errors import AppError
 
 TERMINAL_FAILURES = {"CREATE_FAILED", "UPDATE_FAILED", "DELETE_FAILED"}
 BUILTIN_TOOL_TYPES = {
@@ -211,6 +214,84 @@ def bounded_tool_input(raw: str) -> str:
     return text[:TOOL_INPUT_MAX_CHARS] + f"… [+{len(text) - TOOL_INPUT_MAX_CHARS} chars]"
 
 
+def _stop_error(reason: Any) -> AppError | None:
+    """Decode service stops, including the exported ExecutionLimitsHook messages."""
+    normalized = reason.strip().lower() if isinstance(reason, str) else ""
+    if normalized in {"end_turn", "stop_sequence", "tool_use", "tool_result"}:
+        return None
+    code, message, status = (
+        "harness.incomplete_response",
+        "Harness execution stopped without a complete response",
+        502,
+    )
+    if normalized == "timeout_exceeded" or normalized.startswith("timeout exceeded:"):
+        code, message, status = (
+            "harness.execution_timeout", "Harness execution timed out", 504,
+        )
+    elif normalized in {"cancelled", "canceled"}:
+        code, message = "harness.execution_cancelled", "Harness execution was cancelled"
+    elif normalized in {
+        "max_tokens", "max_iterations", "execution_limit_exceeded",
+        "limit_turns", "limit_output_tokens", "limit_total_tokens",
+    } or normalized.startswith(("max iterations exceeded:", "max output tokens exceeded:")):
+        code, message = "harness.execution_limit", "Harness execution reached its limit"
+    return AppError(code, message, {"stop_reason": reason}, status_code=status)
+
+
+def iter_harness_stream(stream: Any, *, on_stream: Any = None) -> Iterator[dict[str, Any]]:
+    """Drain and validate raw Harness events, always releasing the transport.
+
+    A model's end_turn can precede a watchdog timeout. Cancellation can likewise
+    precede the outer timeout_exceeded stop. Keep reading to preserve that final
+    diagnosis; once a failure is seen, later text cannot make the call successful.
+    """
+    failure: AppError | None = None
+    last_stop: Any = None
+    has_text = False
+    try:
+        if on_stream is not None:
+            on_stream(stream)
+        for event in stream:
+            if "messageStop" in event:
+                last_stop = event["messageStop"].get("stopReason")
+                error = _stop_error(last_stop)
+                if error is not None and (
+                    failure is None or error.code == "harness.execution_timeout"
+                ):
+                    failure = error
+            elif "runtimeClientError" in event:
+                raise RuntimeError(f"runtime client error: {event['runtimeClientError']}")
+            elif "internalServerException" in event:
+                raise RuntimeError(f"internal server error: {event['internalServerException']}")
+            text = event.get("contentBlockDelta", {}).get("delta", {}).get("text")
+            if isinstance(text, str) and text.strip():
+                has_text = True
+            if failure is None:
+                yield event
+        if failure is not None:
+            raise failure
+        # Preserve the existing text-only stream form when there is no stop event;
+        # an empty stream or an explicitly unfinished tool cycle is never success.
+        if not has_text or last_stop in {"tool_use", "tool_result"}:
+            raise AppError(
+                "harness.incomplete_response",
+                "Harness execution ended without a complete text response",
+                {"stop_reason": last_stop},
+                status_code=502,
+            )
+    except Exception as exc:
+        if failure is not None and exc is not failure:
+            raise failure from exc
+        raise
+    finally:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:  # pragma: no cover - best effort on teardown
+                pass
+
+
 def invoke_harness_events(
     client: Any,
     harness_arn: str,
@@ -230,15 +311,12 @@ def invoke_harness_events(
         actorId=actor_id,
         messages=messages,
     )
-    stream = response["stream"]
-    if on_stream is not None:
-        on_stream(stream)  # lets the owner close a blocked read from another thread
-    try:
+    with closing(iter_harness_stream(response["stream"], on_stream=on_stream)) as events:
         # toolUse input arrives as partial-JSON deltas per content block; the joined,
         # bounded text is emitted once at the block's stop so the ledger can record
         # *what* a tool was asked (which file was read, what was searched)
         pending: dict[int, dict[str, Any]] = {}
-        for event in stream:
+        for event in events:
             if "contentBlockStart" in event:
                 tool_use = event["contentBlockStart"].get("start", {}).get("toolUse")
                 if tool_use:
@@ -267,19 +345,6 @@ def invoke_harness_events(
                         "data": {"name": done["name"], "id": done["id"],
                                  "input": bounded_tool_input("".join(done["chunks"]))},
                     }
-            elif "runtimeClientError" in event or "internalServerException" in event:
-                detail = event.get("runtimeClientError") or event.get("internalServerException")
-                raise RuntimeError(str(detail))
-    finally:
-        # A consumer that stops early (client disconnect -> GeneratorExit) must not
-        # leave the HTTP event stream open. Closing the transport does NOT claim the
-        # service-side computation stopped, only that this process released it.
-        close = getattr(stream, "close", None)
-        if callable(close):
-            try:
-                close()
-            except Exception:  # pragma: no cover - best effort on teardown
-                pass
 
 
 def invoke_harness_text(
@@ -292,19 +357,12 @@ def invoke_harness_text(
     """Synchronous invoke: send one user message, drain the event stream,
     return the concatenated assistant text plus session id."""
     session_id = session_id or new_session_id()
-    response = client.invoke_harness(
-        harnessArn=harness_arn,
-        runtimeSessionId=session_id,
-        actorId=actor_id,
-        messages=[{"role": "user", "content": [{"text": prompt}]}],
-    )
     text_parts: list[str] = []
-    for event in response["stream"]:
-        delta = event.get("contentBlockDelta", {}).get("delta", {})
-        if "text" in delta:
-            text_parts.append(delta["text"])
-        if "runtimeClientError" in event:
-            raise RuntimeError(f"runtime client error: {event['runtimeClientError']}")
-        if "internalServerException" in event:
-            raise RuntimeError(f"internal server error: {event['internalServerException']}")
+    with closing(invoke_harness_events(
+        client, harness_arn, [{"role": "user", "content": [{"text": prompt}]}],
+        session_id=session_id, actor_id=actor_id,
+    )) as events:
+        for event in events:
+            if event["event"] == "delta":
+                text_parts.append(event["data"]["text"])
     return {"text": "".join(text_parts), "session_id": session_id}

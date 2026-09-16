@@ -2005,6 +2005,10 @@
     }
   },
   "apiErrors": {
+    "harness.execution_timeout": "Harness 执行超时，未能完成。",
+    "harness.execution_cancelled": "Harness 执行已取消，未能完成。",
+    "harness.execution_limit": "Harness 执行达到限制，已停止。",
+    "harness.incomplete_response": "Harness 响应不完整。",
     "observability.session_spans_missing": "所选时间范围内尚未找到该会话的 span 记录。",
     "observability.too_many_evaluators": "请选择 1 到 5 个 evaluator。",
     "skill_lab.taskset_invalid": "任务校验器拒绝了该任务集——参见各分割的提示信息。",
@@ -2218,6 +2222,7 @@
       "batch": "BATCH ID",
       "applied": "已选评估器",
       "failureReason": "失败原因：",
+      "partialResults": "本次评估部分失败，已有结果并不完整。请检查以下错误：",
       "remove": {
         "action": "移除",
         "toast": "{{run}} 已从历史中移除（若存在 AWS 批量评估，保持不动）。"
@@ -2242,6 +2247,7 @@
     },
     "status": {
       "completed": "已完成",
+      "completed_with_errors": "部分失败",
       "failed": "失败",
       "queued": "排队中 · 等待空闲名额",
       "stopped": "已停止",
@@ -2895,7 +2901,9 @@
         "waiting": "等待遥测",
         "evaluating": "评估中",
         "completed": "已完成",
-        "failed": "失败"
+        "completed_with_errors": "部分失败",
+        "failed": "失败",
+        "stopped": "已停止"
       }
     },
     "promote": "晋级",
@@ -4441,8 +4449,8 @@
       },
       "baseline": {
         "label": "b · 基线",
-        "waiting": "孪生在第 02 步完成的第一次运行即为基线",
-        "missing": "“{{name}}”在这个 Dataset 上还没有完成的运行——在第 02 步一键启动评估即可记录基线，并给实验提供它要读取的追踪"
+        "waiting": "孪生在第 02 步首次无错误完成的运行将作为基线",
+        "missing": "“{{name}}”在这个 Dataset 上还没有无错误完成的运行——请在第 02 步启动评估以记录基线"
       },
       "experiment": {
         "label": "c · 实验",

@@ -178,7 +178,9 @@ members and nothing else:
 - `memory`: `"disabled"` (no memory at all) or `"workspace"` (the workspace's
   existing shared AgentCore Memory with all of its configured strategies) — these
   are the only two choices the platform can enforce
-- `max_iterations` (1–100), `timeout_seconds` (10–3600)
+- `max_iterations` (1–100), `timeout_seconds` (10–3600, default 180 seconds).
+  Use 180 unless the user explicitly requests another execution budget. This is the
+  managed Harness agent-loop limit, not a latency objective or a socket timeout.
 - `summary`, `requirements_baseline[]`, `assumptions[]`, `manual_tasks[]`,
   `golden_tests[]` (objects: `id`, `input`, `expected_response`, `expected_tools[]`,
   `forbidden_behavior`, `pass_criteria`, `evaluator`, `source` ∈
@@ -270,6 +272,14 @@ Put refusal-specific obligations in the corresponding scenario's assertions. Eve
 refusal may legitimately load a Skill or retrieve evidence first. Global zero-call
 rules are only appropriate for a genuinely tool-free design whose runtime behavior
 has been checked, not merely because its business requirements say "read-only".
+Tool-rule names are exact runtime callable names, not resource selectors:
+`mcp:aws-knowledge` selects an attachment and is invalid in `allowed`, `forbidden`,
+`tools` or `tool`. Use the runtime callable names listed in the catalog. A positive
+allowlist must include mounted Skill (`skills`) and KB support tools. If a selected
+MCP/Gateway's runtime catalog is unavailable, leave the allowlist unresolved and ask
+for a catalog refresh; do not invent names. Do not put "must not call any tool" in
+refusal assertions when the Agent needs Skill loading or KB retrieval. Specify the
+prohibited business action instead.
 
 Hard rules of this environment:
 1. Reference resources **only by the keys listed below**. Never invent tools, MCP
@@ -302,12 +312,22 @@ def catalog_section(catalog: dict[str, Any]) -> str:
         f"- `{t['key']}` — {t['kind']} · {t.get('description') or t['name']}"
         for t in tools[:CATALOG_MAX_ENTRIES]
     ] or ["- (none)"]
+    for tool in tools[:CATALOG_MAX_ENTRIES]:
+        names = tool.get("runtime_tools")
+        if isinstance(names, list):
+            lines.append(f"  Runtime callable names for `{tool['key']}`: "
+                         + ", ".join(f"`{name}`" for name in names[:50]))
+        else:
+            lines.append(f"  Runtime callable names for `{tool['key']}` are unavailable; "
+                         "do not invent a literal tool allowlist.")
     lines.append("")
     lines.append("Skills (`skills` keys):")
     lines += [
         f"- `{s['key']}` — {s.get('description') or s['name']}"
         for s in (catalog.get("skills") or [])[:CATALOG_MAX_ENTRIES]
     ] or ["- (none)"]
+    if catalog.get("skills"):
+        lines.append("  Mounted Skills expose the runtime callable `skills`.")
     lines.append("")
     resources = catalog.get("resources") or {}
     kb_ready = bool(resources.get("kb_gateway_id") and resources.get("oauth_provider_arn"))
@@ -318,6 +338,17 @@ def catalog_section(catalog: dict[str, Any]) -> str:
         + (f" · {k['description']}" if k.get("description") else "")
         for k in (catalog.get("knowledge_bases") or [])[:CATALOG_MAX_ENTRIES]
     ] or ["- (none)"]
+    if catalog.get("knowledge_bases"):
+        from app.services import kb_gateway
+
+        for kb in (catalog.get("knowledge_bases") or [])[:CATALOG_MAX_ENTRIES]:
+            name = kb_gateway.retrieve_target_name(kb["kb_id"], kb.get("name") or "")
+            lines.append(f"  KB `{kb['kb_id']}` runtime callable: `{name}___Retrieve`.")
+        lines.append(
+            "  Mounted KBs also expose `agentic-<agent-name>___AgenticRetrieveStream`; "
+            "use the proposed Agent name lowercased with non-alphanumeric runs replaced "
+            "by a single hyphen (trim leading/trailing hyphens; maximum 60 characters)."
+        )
     lines.append("")
     evaluators = catalog.get("evaluators")
     if evaluators is not None:
@@ -475,6 +506,8 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
     execution role). A failing source degrades to an empty list plus a warning.
     """
     warnings: list[str] = []
+    from app.assistant.tool_catalog import enrich_tool
+
     tools: list[dict[str, Any]] = []
     skills: list[dict[str, Any]] = []
     kbs: list[dict[str, Any]] = []
@@ -498,6 +531,7 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
                     "outbound_auth": None,
                     "attachable": bool(server.get("attachable", True)),
                     "reason": server.get("attachability_reason"),
+                    "runtime_tools": server.get("runtime_tools"),
                 }
                 tools.append(entry)
                 if entry["attachable"]:
@@ -544,6 +578,8 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
                     if entry["kind"] == "gateway":
                         entry["attachable"] = False
                         entry["reason"] = "gateway could not be resolved"
+        for entry in tools:
+            enrich_tool(entry, warnings)
         for skill in records.get("skills") or []:
             if not skill.get("path"):
                 continue

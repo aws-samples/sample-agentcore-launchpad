@@ -27,7 +27,9 @@ fix the block before emitting it. Every rule here is a rule the platform enforce
 - [ ] `tools`, `skills`, `knowledge_bases`: catalog keys/ids from the preamble ONLY,
       no repeats, ≤ 20 / 10 / 10. Anything missing from the catalog → `manual_tasks`.
 - [ ] `memory`: `disabled` | `workspace`.
-- [ ] `max_iterations` 1–100; `timeout_seconds` 10–3600.
+- [ ] `max_iterations` 1–100; `timeout_seconds` 10–3600, default 180 unless the user
+      explicitly chooses a different execution budget. Do not turn a latency goal
+      into an unreviewed hard cancellation limit.
 - [ ] `summary` ≤ 4,000 chars; `requirements_baseline`, `assumptions`, `manual_tasks`,
       `evaluator_recommendations`: lists of non-empty strings ≤ 1,000 chars, ≤ 40 each.
 
@@ -106,7 +108,10 @@ as a whole — after the member has already read and approved the design.
   - `tool_count` → `min` and/or `max` (0–1000, min ≤ max); optional `tool` (omit = all
     tools; never `"*"`). "No tool calls" = `{"type": "tool_count", "max": 0}`.
   - `tool_sequence` → `tools` (1–20) + `mode` `exact` | `subsequence`.
-  - `tool_set` → `allowed` and/or `forbidden`.
+  - `tool_set` → `allowed` and/or `forbidden`. Use exact names from the selected
+    runtime catalog, never `mcp:` / `gateway:` attachment selectors. A positive
+    allowlist includes mounted `skills` and KB retrieval support names. Missing
+    catalogs remain unresolved; do not guess names or copy arbitrary observed calls.
   - `output_contains` / `output_not_contains` / `output_exact` → `text` (ONE literal,
     non-empty) + optional `case_sensitive`. Several literals = several checks, and all
     must pass; "any of these phrases" cannot be a rule — make it a judge or an assertion.

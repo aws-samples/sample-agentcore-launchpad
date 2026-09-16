@@ -408,7 +408,7 @@ def test_ordinary_create_without_knobs_reads_back_schema_defaults(client):
     assert created.status_code == 202, created.text
     stored = client.get(f"/api/agents/{created.json()['agent']['id']}").json()["spec"]
     assert stored["max_tokens"] is None and stored["reasoning_effort"] is None
-    assert (stored["max_iterations"], stored["timeout_seconds"]) == (10, 300)
+    assert (stored["max_iterations"], stored["timeout_seconds"]) == (10, 180)
 
 
 @pytest.mark.parametrize(

@@ -82,6 +82,8 @@ TOOL_OPERATION = "execute_tool"
 TOOL_NAME_KEYS = ("gen_ai.tool.name", "tool.name")
 TOOL_SPAN_PREFIXES = ("execute_tool ", "execute_tool:")
 COMPLETE_FINISH = ("end_turn", "stop", "stop_sequence", "completed", "end", "eos")
+INTERRUPTED_FINISH = ("cancelled", "canceled", "timeout_exceeded", "max_iterations",
+                      "max_iterations_exceeded")
 CONTINUE_FINISH = ("tool_use", "tool_calls", "function_call")
 TRUNCATED_FINISH = ("max_tokens", "length", "content_filtered", "content_filter",
                     "guardrail_intervened", "truncated", "model_length")
@@ -536,8 +538,10 @@ def _output_messages(raw, finishes):
 
 
 def _classify(finishes):
-    """One verdict from ALL finish indications: truncated > continue > unknown > complete
+    """Verdict: interrupted > truncated > continue > unknown > complete.
     — a stop hidden behind a length or tool_use never counts as complete."""
+    if any(f in INTERRUPTED_FINISH for f in finishes):
+        return "interrupted"
     if any(f in TRUNCATED_FINISH for f in finishes):
         return "truncated"
     if any(f in CONTINUE_FINISH for f in finishes):
@@ -686,6 +690,9 @@ def extract_evidence(docs, level, target):
     # the LATEST model turn decides completeness — a complete earlier turn followed by a
     # turn with no output / a continuation / a truncation is not a complete answer
     last = turns[-1]
+    if last["verdict"] == "interrupted":
+        raise Unusable("INTERRUPTED", f"final turn finish {last['finishes']} — agent execution "
+                                     "was interrupted; this is not a completed answer")
     if last["verdict"] == "truncated":
         raise Unusable("TRUNCATED", f"final turn finish {last['finishes']} — output truncated")
     if last["verdict"] == "continue":

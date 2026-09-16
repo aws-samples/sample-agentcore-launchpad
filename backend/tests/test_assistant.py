@@ -1625,13 +1625,17 @@ def test_job_entry_guard_deploys_exactly_the_reviewed_bindings_or_fails_closed(
 
 
 def test_fetch_catalog_composes_live_identity_from_the_platform_helpers(monkeypatch, workspace):
+    from app.assistant import tool_catalog
     from app.services import knowledge, registry_console
 
+    monkeypatch.setattr(tool_catalog, "remote_tool_names",
+                        lambda name, url: [f"{name}_search"])
     monkeypatch.setattr(registry_console, "attachable_records", lambda ws: {
         "mcp_servers": [
             {"name": "hr-tools", "description": "HR", "url": "https://gw.example/mcp",
              "gateway": True, "record_id": "rec-1", "gateway_id": "gw-1", "gateway_arn": GW_ARN,
-             "attachable": True, "attachability_reason": None, "auth_type": "oauth"},
+             "attachable": True, "attachability_reason": None, "auth_type": "oauth",
+             "runtime_tools": ["hr___lookup"]},
             {"name": "deepwiki", "description": "docs", "url": "https://mcp.deepwiki.example/mcp",
              "gateway": False, "record_id": "rec-2", "gateway_id": None, "gateway_arn": None,
              "attachable": True, "attachability_reason": None, "auth_type": "none"},
@@ -1677,6 +1681,10 @@ def test_fetch_catalog_composes_live_identity_from_the_platform_helpers(monkeypa
     cat = service.fetch_catalog(ws)
     gw = next(t for t in cat["tools"] if t["kind"] == "gateway")
     assert gw["outbound_auth"] == OAUTH and gw["gateway_arn"] == GW_ARN
+    assert gw["runtime_tools"] == ["hr___lookup"]
+    assert next(t for t in cat["tools"] if t["kind"] == "mcp")["runtime_tools"] == [
+        "deepwiki_search",
+    ]
     assert cat["skills"][0]["content_digest"] and cat["skills"][0]["object_count"] == 1
     assert cat["skills"][0]["source_prefix"] == "s3://bucket/skills/meeting-summarizer/1.0.0/"
     assert cat["resources"]["kb_gateway"] == KB_GATEWAY_LIVE

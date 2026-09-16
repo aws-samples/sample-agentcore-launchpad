@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.4.3
+version: 1.4.4
 ---
 
 # AWS Agent Solution Architect
@@ -203,6 +203,22 @@ be scored by the corresponding action/claim assertions, never by a `NoToolCalls`
 evaluator applied to every question. Include ordinary successful retrieval cases
 as well as refusals; if the gold financial values are not verified yet, keep those
 cases explicitly blocked rather than inventing values.
+
+Tool allowlists compare exact runtime callable names. Attachment selectors such as
+`mcp:aws-knowledge` are not callable names. Read the supplied runtime tool catalog:
+external MCP names are namespaced (for example,
+`aws-knowledge_aws___search_documentation`); Skill loading uses `skills`, and KB
+retrieval has its own `…___Retrieve` and per-agent `…___AgenticRetrieveStream` names.
+Include mounted Skill and KB support in any positive allowlist. If names cannot be
+resolved, keep the rule unresolved and request a catalog refresh. Apply the same
+business-read distinction to natural-language assertions: do not forbid all tool
+calls in a refusal scenario that can legitimately load a Skill.
+
+Use 180 seconds as the default agent execution budget unless the user explicitly
+chooses another value. A response-time objective is not automatically an execution
+cutoff: a 30-second Harness limit can cancel multi-step retrieval before a final
+answer. Record latency goals separately and explain any shorter execution budget.
+Cancelled or timed-out evidence is incomplete and must never count as a passed test.
 
 Define "good" before building. Cover at least:
 

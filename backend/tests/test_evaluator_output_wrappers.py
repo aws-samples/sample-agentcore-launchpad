@@ -91,6 +91,22 @@ def test_identityless_lambda_callback_uses_the_same_wrapper_evidence(monkeypatch
     assert handler.lambda_handler(event, None)["label"] == "PASS"
 
 
+@pytest.mark.parametrize("level", ["SESSION", "TRACE"])
+@pytest.mark.parametrize("finish", ["cancelled", "canceled", "timeout_exceeded",
+                                  "max_iterations_exceeded"])
+@pytest.mark.parametrize("rules", [
+    EXACT,
+    {"version": 1, "checks": [{"id": "tools", "type": "tool_set", "allowed": ["skills"]}]},
+])
+def test_cancelled_wrapper_is_interrupted_even_with_provider_stop_and_output(level, finish, rules):
+    wrapper, provider, log = _pair()
+    log["body"]["output"]["messages"][0]["content"]["finish_reason"] = finish
+    result = _evaluate([wrapper, provider, log], level, rules)
+    assert result["errorCode"] == "INTERRUPTED", result
+    assert "interrupted" in result["errorMessage"]
+    assert "label" not in result and "value" not in result
+
+
 @pytest.mark.parametrize("finish,error", [
     ("length", "TRUNCATED"), ("max_tokens", "TRUNCATED"),
     ("tool_use", "INCOMPLETE"), ("tool_calls", "INCOMPLETE"),

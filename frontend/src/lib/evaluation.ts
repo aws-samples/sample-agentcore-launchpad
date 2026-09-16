@@ -100,6 +100,27 @@ export interface EvaluationRunInfo {
   created_at?: string | null;
 }
 
+type EvaluationRunDisplayStatus = EvaluationRunStatus | "completed_with_errors";
+
+const RUN_TONES = {
+  queued: "muted",
+  invoking: "warn",
+  waiting: "warn",
+  evaluating: "warn",
+  completed: "good",
+  completed_with_errors: "warn",
+  failed: "crit",
+  stopped: "muted",
+} as const;
+
+/** Display-only projection: partial completion remains a terminal `completed`
+ *  ledger run, with available results and its original error retained. */
+export function evaluationRunPresentation(run: Pick<EvaluationRunInfo, "status" | "error">) {
+  const status: EvaluationRunDisplayStatus =
+    run.status === "completed" && run.error?.trim() ? "completed_with_errors" : run.status;
+  return { status, tone: RUN_TONES[status] };
+}
+
 /** One judge record of a batch run (`GET /api/eval/runs/{id}/results`) — the
  *  same columns SCORE NOW shows on the Observability session detail, plus the
  *  evaluation level: a span-level evaluator writes one record per tool call, so

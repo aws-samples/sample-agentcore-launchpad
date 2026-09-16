@@ -19,6 +19,7 @@ import {
   type CloudDatasetInfo as CloudDataset,
   type EvaluationDatasetInfo as Dataset,
   type EvaluationRunInfo as RunInfo,
+  evaluationRunPresentation,
   isActiveRun,
   hasInsightTrees,
 } from "../lib/evaluation";
@@ -462,6 +463,9 @@ export function Evaluation() {
   };
 
   const statusChip = (run: RunInfo) => {
+    const presentation = evaluationRunPresentation(run);
+    if (presentation.status === "completed_with_errors")
+      return <Chip tone={presentation.tone} icon="!">{t("evalPage.status.completed_with_errors")}</Chip>;
     if (run.status === "completed")
       return <Chip tone="good" icon="●">{t("evalPage.status.completed")}</Chip>;
     if (run.status === "failed")
@@ -929,6 +933,8 @@ export function Evaluation() {
   }
 
   // ── Dashboard: runs list + selected-run results ───────────────────────────
+  const selectedPartial = selectedRun
+    && evaluationRunPresentation(selectedRun).status === "completed_with_errors";
   return (
     <section>
       <ViewHead
@@ -1013,7 +1019,10 @@ export function Evaluation() {
                 </td>
                 <td
                   className="mono"
-                  style={{ color: run.scores.length ? "var(--good)" : "var(--ink-3)" }}
+                  style={{ color: run.scores.length
+                    ? evaluationRunPresentation(run).status === "completed_with_errors"
+                      ? "var(--warn)" : "var(--good)"
+                    : "var(--ink-3)" }}
                 >
                   {average(run)}
                 </td>
@@ -1108,6 +1117,22 @@ export function Evaluation() {
           }
           style={{ "--i": 1 } as CSSProperties}
         >
+          {selectedPartial && (
+            <div
+              className="note"
+              style={{ borderColor: "var(--warn)", marginBottom: 10 }}
+              data-testid="run-completed-with-errors"
+            >
+              <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
+              <span>
+                {t("evalPage.runs.partialResults")}{" "}
+                <span className="mono" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+                      data-testid="run-error">
+                  {selectedRun.error}
+                </span>
+              </span>
+            </div>
+          )}
           {selectedRun?.scores.length ? (
             <>
               {selectedRun.scores.map((score) => (
@@ -1193,7 +1218,7 @@ export function Evaluation() {
                     </span>
                   </span>
                 </div>
-              ) : selectedRun.error ? (
+              ) : selectedPartial ? null : selectedRun.error ? (
                 <div className="note" style={{ borderColor: "var(--crit)" }}>
                   <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
                   <span>
@@ -1243,7 +1268,7 @@ export function Evaluation() {
             <div style={{ maxHeight: 460, overflowY: "auto" }}>
               <InsightClusters insights={selectedRun.insights} />
             </div>
-          ) : selectedRun?.error && selectedRun.status === "completed" ? (
+          ) : selectedPartial ? (
             // COMPLETED_WITH_ERRORS: the run finished but the service returned
             // no trees (e.g. under 3 sessions — clustering minimum). Show why.
             // A FAILED run is not a partial result — its reason belongs to the

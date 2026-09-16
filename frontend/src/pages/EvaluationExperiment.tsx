@@ -28,6 +28,7 @@ import { CUSTOM_MODEL_OPTION } from "../lib/models";
 import {
   ACTIVE_RUN_STATUSES,
   DEFAULT_EVALUATORS,
+  evaluationRunPresentation,
   type EvaluationDatasetInfo as DatasetInfo,
   type EvaluationRunInfo,
   type ExperimentReadiness,
@@ -560,8 +561,13 @@ function ConfigurationExperimentView() {
   }, [loadReadiness]);
 
   const trackedRunId = baselineRunId ?? sourceRunId;
+  // Readiness carries only a ledger status. Read the ordinary run detail to
+  // distinguish partial completion without changing the readiness contract.
+  const displayedRunId = trackedRunId ?? readiness?.latest_run?.id;
+  const displayedRun = trackedRun?.id === displayedRunId ? trackedRun : null;
+  const runPresentation = displayedRun ? evaluationRunPresentation(displayedRun) : null;
   useEffect(() => {
-    if (!trackedRunId) {
+    if (!displayedRunId) {
       setTrackedRun(null);
       setTrackedRunError(null);
       return;
@@ -571,7 +577,7 @@ function ConfigurationExperimentView() {
     let priorStatus: string | null = null;
     const poll = async () => {
       try {
-        const res = await fetch(`/api/eval/runs/${trackedRunId}`);
+        const res = await fetch(`/api/eval/runs/${encodeURIComponent(displayedRunId)}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const run = (await res.json()) as EvaluationRunInfo;
         if (cancelled) return;
@@ -581,7 +587,7 @@ function ConfigurationExperimentView() {
           priorStatus = run.status;
           void loadReadiness(true);
         }
-        if (baselineRunId && ACTIVE_RUN_STATUSES.has(run.status)) {
+        if (ACTIVE_RUN_STATUSES.has(run.status)) {
           timer = setTimeout(() => void poll(), 2500);
         }
       } catch (error) {
@@ -598,7 +604,7 @@ function ConfigurationExperimentView() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [baselineRunId, loadReadiness, trackedRunId]);
+  }, [baselineRunId, loadReadiness, displayedRunId]);
 
   const agents = activeAgents.filter((a) => a.experiment_capability.eligible);
   const unsupportedAgents = activeAgents.filter(
@@ -1016,7 +1022,11 @@ function ConfigurationExperimentView() {
                 <span className="v mono">
                   run-{readiness.latest_run.id.slice(0, 6)}
                   {" · "}
-                  {t(`expPage.readiness.runStatus.${readiness.latest_run.status}`)}
+                  {runPresentation ? (
+                    <Chip tone={runPresentation.tone}>
+                      {t(`expPage.readiness.runStatus.${runPresentation.status}`)}
+                    </Chip>
+                  ) : "—"}
                   {" · "}
                   {t("expPage.readiness.runSessions", {
                     count: readiness.latest_run.session_count,
@@ -1082,14 +1092,16 @@ function ConfigurationExperimentView() {
                 : t("expPage.readiness.baselineRun", {
                     id: baselineRunId?.slice(0, 6) ?? "",
                   })}
-              {trackedRun && (
+              {displayedRun && runPresentation && (
                 <>
                   {" · "}
                   <span className="mono">
-                    {t(`expPage.readiness.runStatus.${trackedRun.status}`)}
+                    <Chip tone={runPresentation.tone}>
+                      {t(`expPage.readiness.runStatus.${runPresentation.status}`)}
+                    </Chip>
                     {" · "}
                     {t("expPage.readiness.runSessions", {
-                      count: trackedRun.session_ids.length,
+                      count: displayedRun.session_ids.length,
                     })}
                   </span>
                 </>
@@ -1097,10 +1109,21 @@ function ConfigurationExperimentView() {
             </span>
           </div>
         )}
-        {trackedRun?.error && (
-          <div className="note" style={{ borderColor: "var(--crit)", marginTop: 8 }}>
-            <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
-            <span>{trackedRun.error}</span>
+        {displayedRun?.error && (
+          <div className="note" style={{
+            borderColor: runPresentation?.status === "completed_with_errors"
+              ? "var(--warn)" : "var(--crit)",
+            marginTop: 8,
+          }}>
+            <span className="i" style={{
+              color: runPresentation?.status === "completed_with_errors"
+                ? "var(--warn)" : "var(--crit)",
+            }}>
+              {runPresentation?.status === "completed_with_errors" ? "[!]" : "[✕]"}
+            </span>
+            <span style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+              {displayedRun.error}
+            </span>
           </div>
         )}
         {trackedRunError && (
@@ -1303,6 +1326,9 @@ function ConfigurationExperimentView() {
 
   // trace-source picker — shown before the first generation and again next to
   // the regenerate buttons: a re-run must be able to pin (or re-pin) its run
+  const recSourceRun = recSourceRuns.find((run) => run.id === recSourceRunId);
+  const recSourcePartial = recSourceRun
+    && evaluationRunPresentation(recSourceRun).status === "completed_with_errors";
   const sourceControls = (
       <div className="field" style={{ marginBottom: 8 }}>
         <label htmlFor="rec-source">{t("expPage.recSource")}</label>
@@ -1326,6 +1352,9 @@ function ConfigurationExperimentView() {
                 : t("expPage.recSourceEval")}
               {" · "}
               {run.dataset_name ?? run.id}
+              {evaluationRunPresentation(run).status === "completed_with_errors"
+                ? ` · ${t("expPage.readiness.runStatus.completed_with_errors")}`
+                : ""}
               {/* A window-scoped run records no session ids, so several runs of
                   the same shape would otherwise be indistinguishable here — the
                   timestamp is what lets a user pick the analysis they just ran. */}
@@ -1339,6 +1368,17 @@ function ConfigurationExperimentView() {
             </option>
           ))}
         </select>
+        {recSourcePartial && (
+          <div className="note" style={{ borderColor: "var(--warn)", marginTop: 6 }}>
+            <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
+            <span>
+              {t("evalPage.runs.partialResults")}{" "}
+              <span className="mono" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                {recSourceRun.error}
+              </span>
+            </span>
+          </div>
+        )}
         <div className="note" style={{ marginTop: 6 }}>
           <span className="i">[i]</span>
           <span>

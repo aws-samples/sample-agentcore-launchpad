@@ -37,6 +37,15 @@ curl -N -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke-stream \
 Pass the returned `session_id` on the next call to continue the conversation
 (session context + AgentCore Memory ride on it).
 
+Ordinary Agent/proposal `timeout_seconds` defaults to **180 seconds**; explicit
+values are retained. Harness executes the corresponding native `timeoutSeconds`
+budget. A timeout returns `504 harness.execution_timeout`; cancellation returns
+`502 harness.execution_cancelled`; exhausted execution limits return
+`502 harness.execution_limit`; an otherwise unfinished response returns
+`502 harness.incomplete_response`. Each carries `detail.stop_reason`. An already-open
+SSE stream reports the error event instead of completing successfully. These are
+execution outcomes, separate from the SDK/network read timeout.
+
 ## Python
 
 ```python
@@ -214,6 +223,15 @@ and `413 assistant.evaluation_repair_too_large` when the complete context exceed
 ordinary prompt/replay budgets. No evidence is truncated. The console explicitly prepares
 a plan from the returned usable new proposal and displays its validation result for review;
 repair creates no evaluation assets and does not approve or deploy the proposal.
+
+Catalog tool entries optionally carry `runtime_tools: string[] | null`, the exact
+Harness names usable in evaluation rules. Remote MCP names come from complete,
+bounded read-only `tools/list` discovery; Gateway names come from approved Registry
+descriptors. `null` means discovery is unavailable and a literal positive allowlist
+cannot be verified. Resource selectors (`mcp:…`, `gateway:…`, `builtin:…`) are
+rejected inside code-rule tool fields. Positive allowlists must include mounted
+Skill/KB support calls; plan save and approval also reject names outside the selected
+catalog. Refresh the conversation catalog before preparing a replacement draft.
 
 A proposal is `{id, conversation_id, revision, source: model|member, status: draft|invalid|
 approved|rejected|superseded, content, content_hash, bindings, validation_errors[],

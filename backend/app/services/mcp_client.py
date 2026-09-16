@@ -86,7 +86,10 @@ def get_cognito_token(workspace: WorkspaceContext, username: str = "admin") -> s
     return resp["AccessToken"]
 
 
-def _rpc(gateway_url: str, token: str | None, method: str, params: dict | None = None) -> dict:
+def _rpc(
+    gateway_url: str, token: str | None, method: str, params: dict | None = None,
+    *, timeout: float = 60,
+) -> dict:
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
@@ -94,7 +97,7 @@ def _rpc(gateway_url: str, token: str | None, method: str, params: dict | None =
     if token:
         headers["Authorization"] = f"Bearer {token}"
     payload = {"jsonrpc": "2.0", "id": next(_rpc_id), "method": method, "params": params or {}}
-    response = httpx.post(gateway_url, json=payload, headers=headers, timeout=60)
+    response = httpx.post(gateway_url, json=payload, headers=headers, timeout=timeout)
     if response.status_code in (401, 403):
         raise AppError(
             "gateway.unauthorized",

@@ -2005,6 +2005,10 @@
     }
   },
   "apiErrors": {
+    "harness.execution_timeout": "The Harness execution timed out before completing.",
+    "harness.execution_cancelled": "The Harness execution was cancelled before completing.",
+    "harness.execution_limit": "The Harness execution stopped after reaching an execution limit.",
+    "harness.incomplete_response": "The Harness response was incomplete.",
     "observability.session_spans_missing": "No span records found for this session in the selected time range yet.",
     "observability.too_many_evaluators": "Choose between 1 and 5 evaluators.",
     "skill_lab.taskset_invalid": "The task set was refused by the task validator — see the per-split messages.",
@@ -2218,6 +2222,7 @@
       "batch": "BATCH ID",
       "applied": "APPLIED EVALUATORS",
       "failureReason": "Failure reason:",
+      "partialResults": "This run completed with errors. Any available results are incomplete. Review the reported error:",
       "remove": {
         "action": "REMOVE",
         "toast": "{{run}} removed from the history (the AWS batch, if one existed, is untouched)."
@@ -2242,6 +2247,7 @@
     },
     "status": {
       "completed": "COMPLETE",
+      "completed_with_errors": "COMPLETED WITH ERRORS",
       "failed": "FAILED",
       "queued": "QUEUED · waiting for a slot",
       "stopped": "STOPPED",
@@ -2895,7 +2901,9 @@
         "waiting": "WAITING FOR TELEMETRY",
         "evaluating": "EVALUATING",
         "completed": "COMPLETED",
-        "failed": "FAILED"
+        "completed_with_errors": "COMPLETED WITH ERRORS",
+        "failed": "FAILED",
+        "stopped": "STOPPED"
       }
     },
     "promote": "PROMOTE",
@@ -4441,8 +4449,8 @@
       },
       "baseline": {
         "label": "b · baseline",
-        "waiting": "the twin's first completed run in step 02 becomes the baseline",
-        "missing": "no completed run of “{{name}}” on this Dataset yet — START EVALUATION in step 02 records the baseline and gives the experiment the traces it reads"
+        "waiting": "the twin's first run completed without errors in step 02 becomes the baseline",
+        "missing": "no run of “{{name}}” on this Dataset has completed without errors yet — START EVALUATION in step 02 to record a baseline"
       },
       "experiment": {
         "label": "c · experiment",

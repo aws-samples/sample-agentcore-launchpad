@@ -15,7 +15,7 @@ import type {
 } from "../lib/api";
 import { api, errorMessage } from "../lib/api";
 import type { EvaluationRunInfo } from "../lib/evaluation";
-import { RUN_TERMINAL_STATUSES } from "../lib/evaluation";
+import { evaluationRunPresentation, RUN_TERMINAL_STATUSES } from "../lib/evaluation";
 
 const MAX_BATCH_EVALUATORS = 10;
 
@@ -31,16 +31,6 @@ const MAX_BATCH_EVALUATORS = 10;
 const RUN_POLL_MS = 5000;
 const TWIN_POLL_MS = 5000;
 const RUN_HISTORY_LIMIT = 10;
-
-const RUN_TONE: Record<string, ChipTone> = {
-  queued: "muted",
-  invoking: "warn",
-  waiting: "warn",
-  evaluating: "warn",
-  completed: "good",
-  failed: "crit",
-  stopped: "muted",
-};
 
 const AGENT_TONE: Record<string, ChipTone> = {
   deploying: "warn",
@@ -304,10 +294,12 @@ export function AssistantNextSteps({
     return () => window.clearInterval(timer);
   }, [runLive, loadRuns]);
 
-  // Baseline for the A/B: the newest completed run of the TWIN on this Dataset
+  // Baseline for the A/B: the newest cleanly completed run of the TWIN on this Dataset
   // (`runs` already targets the twin once it is active). Recommended, not
   // required — the experiment link stays live and the page reports readiness.
-  const baseline = twinActive ? (runs ?? []).find((r) => r.status === "completed") ?? null : null;
+  const baseline = twinActive
+    ? (runs ?? []).find((r) => evaluationRunPresentation(r).status === "completed") ?? null
+    : null;
   const baselineMean =
     baseline && baseline.scores.length > 0
       ? baseline.scores.reduce((acc, s) => acc + (s.score ?? 0), 0) / baseline.scores.length
@@ -402,7 +394,12 @@ export function AssistantNextSteps({
           {evaluators.length > 0 && (
             <div className="assist-next-chips" data-testid="next-evaluators">
               {evaluators.map((e) => (
-                <Chip key={e.id} tone={e.referenceDependent ? "warn" : "muted"} className="mono">
+                <Chip
+                  key={e.id}
+                  tone={e.referenceDependent ? "warn" : "muted"}
+                  className="mono"
+                  style={{ whiteSpace: "normal", overflowWrap: "anywhere", maxWidth: "100%" }}
+                >
                   {e.name}
                 </Chip>
               ))}
@@ -420,6 +417,7 @@ export function AssistantNextSteps({
               </div>
               {runs.map((run) => {
                 const live = !RUN_TERMINAL_STATUSES.has(run.status);
+                const presentation = evaluationRunPresentation(run);
                 const mean =
                   run.scores.length > 0
                     ? run.scores.reduce((acc, s) => acc + (s.score ?? 0), 0) / run.scores.length
@@ -430,10 +428,11 @@ export function AssistantNextSteps({
                     className="assist-next-run mono"
                     data-testid={`next-run-${run.id}`}
                     data-run-status={run.status}
+                    data-run-display-status={presentation.status}
                   >
                     <span>{t("assistantNext.run.runLine", { id: run.id.slice(0, 8) })}</span>
-                    <Chip tone={RUN_TONE[run.status] ?? "muted"}>
-                      {t(`expPage.readiness.runStatus.${run.status}`, run.status.toUpperCase())}
+                    <Chip tone={presentation.tone}>
+                      {t(`expPage.readiness.runStatus.${presentation.status}`)}
                     </Chip>
                     {run.created_at && (
                       <span className="dim">{new Date(run.created_at).toLocaleString()}</span>
@@ -469,7 +468,13 @@ export function AssistantNextSteps({
                       </button>
                     )}
                     {run.error && (
-                      <div style={{ color: "var(--crit)", flexBasis: "100%", whiteSpace: "pre-wrap" }}>
+                      <div style={{
+                        color: presentation.status === "completed_with_errors"
+                          ? "var(--warn)" : "var(--crit)",
+                        flexBasis: "100%",
+                        whiteSpace: "pre-wrap",
+                        overflowWrap: "anywhere",
+                      }}>
                         {run.error}
                       </div>
                     )}
@@ -555,7 +560,7 @@ export function AssistantNextSteps({
                 )}
               </div>
 
-              {/* b · baseline = the newest completed run of the twin on this Dataset */}
+              {/* b · baseline = the newest cleanly completed run of the twin on this Dataset */}
               <div className="assist-next-run mono" data-testid="next-ab-baseline">
                 <span>{t("assistantNext.ab.baseline.label")}</span>
                 {baseline ? (

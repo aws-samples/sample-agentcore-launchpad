@@ -808,6 +808,8 @@ export interface AssistantCatalogTool {
   description: string;
   attachable: boolean;
   reason?: string | null;
+  /** Exact Harness callable names; null means discovery is unavailable. */
+  runtime_tools?: string[] | null;
 }
 
 export interface AssistantCatalog {

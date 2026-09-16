@@ -243,7 +243,7 @@ class AgentSpec(BaseModel):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     env: dict[str, str] = Field(default_factory=dict)
     max_iterations: int = Field(default=10, ge=1, le=100)
-    timeout_seconds: int = Field(default=300, ge=10, le=3600)
+    timeout_seconds: int = Field(default=180, ge=10, le=3600)
     # AgentCore Runtime persistent storage — consumed by the container method only
     filesystem: FilesystemConfig = Field(default_factory=FilesystemConfig)
     # VPC networkModeConfig; mandatory whenever a BYO file system is mounted

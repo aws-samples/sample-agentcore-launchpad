@@ -41,6 +41,7 @@ import {
   errorMessage,
 } from "../lib/api";
 import { MODEL_CATALOG, type ModelSource } from "../lib/models";
+import { DEFAULT_TIMEOUT_SECONDS } from "../lib/agent-defaults";
 import { WORKSPACE_HEADER } from "../lib/workspace-header";
 import { useWorkspace } from "../workspace/workspace-context";
 import { EvaluationAssetsPanel } from "./EvaluationAssetsPanel";
@@ -153,7 +154,7 @@ function draftFrom(content: AssistantProposal["content"]): EditDraft {
       : [],
     memory: content.memory === "workspace" ? "workspace" : "disabled",
     max_iterations: Number(content.max_iterations ?? 10),
-    timeout_seconds: Number(content.timeout_seconds ?? 300),
+    timeout_seconds: Number(content.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS),
   };
 }
 

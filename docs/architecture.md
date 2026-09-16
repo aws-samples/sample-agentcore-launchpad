@@ -914,6 +914,29 @@ as existing references and before an ordinary evaluation run, so historical
 zero-call evaluators cannot silently score a tool-enabled agent. These checks do not
 rewrite prior approvals, results or Lambda versions.
 
+Positive tool allowlists use exact runtime callable names. The assistant catalog
+reads bounded, paginated `tools/list` results for approved remote MCP attachments
+and exposes the Harness namespace (`<attachment-name>_<tool-name>`); Gateway names
+come from the approved Registry tool descriptor. Missing catalogs are explicit,
+not guessed. KB and Skill support names follow the same platform helpers as deployment.
+Proposal/plan validation rejects attachment selectors such as `mcp:aws-knowledge`
+inside literal tool-rule fields and positive allowlists that omit mounted support
+tools. Saving and approving a plan additionally check its allowed names against the selected
+conversation catalog. Named business-write bans remain independent of discovery.
+
+Ordinary Agent and assistant-proposal execution budgets default to **180 seconds**.
+Explicit user budgets and preset-specific defaults remain explicit. For Harness,
+Launchpad sends `timeout_seconds` as the native `timeoutSeconds` parameter; AWS
+enforces it independently of the console SDK's socket-read timeout. Sync invocation,
+chat, public streaming and architect discussion share Harness stop validation.
+`timeout_exceeded`, cancellation and execution limits are errors even after partial
+text or an earlier model `end_turn`; ordinary `tool_use` / `tool_result` cycles
+continue. Failed replay stops before `StartBatchEvaluation`. The evaluator handler
+classifies cancelled/timed-out trace evidence as `INTERRUPTED`, never a completed
+answer. Historical AWS `COMPLETED_WITH_ERRORS` runs retain ledger status `completed`
+plus their error, but the console presents them as **completed with errors**, keeps
+partial scores and does not recommend them as a clean experiment baseline.
+
 **Inert proposals.** After an ordinary model turn the reply is scanned for exactly
 one fenced block tagged `launchpad-proposal` (`app/assistant/proposal.py`). The block
 is untrusted: every assistant write is first bounded at ingress (`AssistantBodyCap`, a

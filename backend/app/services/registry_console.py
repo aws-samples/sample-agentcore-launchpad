@@ -880,6 +880,20 @@ def attachable_records(
                         "auth_type": "none" if not matches else None,
                     }
                 )
+                declared_tools = None
+                if gateway:
+                    raw_tools = (record.get("descriptors", {}).get("mcp", {})
+                                 .get("tools", {}).get("inlineContent"))
+                    if raw_tools:
+                        try:
+                            entries = json.loads(raw_tools).get("tools")
+                            if isinstance(entries, list) and all(
+                                isinstance(t, dict) and isinstance(t.get("name"), str)
+                                and t["name"].strip() for t in entries
+                            ):
+                                declared_tools = sorted({t["name"] for t in entries})
+                        except (ValueError, AttributeError):
+                            pass  # attachment remains usable; rule review needs a catalog
                 mcp_servers.append(
                     {
                         "name": record["name"],
@@ -887,6 +901,7 @@ def attachable_records(
                         "url": url,
                         "gateway": gateway is not None or bool(matches),
                         "record_id": record["recordId"],
+                        **({"runtime_tools": declared_tools} if gateway else {}),
                         **{
                             key: value
                             for key, value in capability.items()

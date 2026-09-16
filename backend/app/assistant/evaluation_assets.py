@@ -443,6 +443,12 @@ def _store_plan(
         raw, proposal.content, revision=proposal.revision, content_hash=proposal.content_hash
     )
     content = plan.model_dump() if plan else (raw if isinstance(raw, dict) else {})
+    if plan is not None:
+        from app.assistant.tool_catalog import rule_catalog_errors
+
+        errors += rule_catalog_errors(plan.evaluators, proposal.content, conversation.catalog or {})
+        if errors:
+            plan = None
     for _attempt in range(5):
         db.rollback()
         db.execute(
@@ -624,6 +630,16 @@ def approve_plan(
         raise AppError("assistant.evaluation_plan_invalid",
                        "the plan no longer validates against its proposal revision",
                        {"errors": errors}, status_code=409)
+    from app.assistant.tool_catalog import rule_catalog_errors
+
+    catalog_errors = rule_catalog_errors(
+        plan.evaluators, _proposal(db, conversation.id, plan_row.source_revision).content,
+        conversation.catalog or {},
+    )
+    if catalog_errors:
+        raise AppError("assistant.evaluation_plan_invalid",
+                       "the tool allowlist no longer validates against the selected catalog",
+                       {"errors": catalog_errors}, status_code=409)
     fresh_row = db.get(Workspace, row.id)
     if fresh_row is None or fresh_row.bootstrap_status != "ready" or not (
             fresh_row.resources or {}).get("execution_role_arn"):

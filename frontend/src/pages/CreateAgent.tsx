@@ -35,13 +35,13 @@ import type {
   Toolkit,
 } from "../lib/api";
 import { api, ApiError } from "../lib/api";
+import { DEFAULT_TIMEOUT_SECONDS } from "../lib/agent-defaults";
 import type { ModelSource, ReasoningEffort } from "../lib/models";
 import { useWorkspace } from "../workspace/workspace-context";
 import { SystemPresetsPanel } from "./create/SystemPresetsPanel";
 import {
   apiErrorRows,
   DEFAULT_MAX_ITERATIONS,
-  DEFAULT_TIMEOUT_SECONDS,
   diffPresetSettings,
   EFFORT_NONE,
   effectiveEffort,
@@ -180,7 +180,7 @@ interface StoredSpec {
   // harness-only inference knobs (absent on every spec written before they existed)
   max_tokens?: number | null;
   reasoning_effort?: ReasoningEffort | null;
-  // agent-loop bounds (backend defaults 10 / 300 when absent)
+  // agent-loop bounds (backend defaults 10 / 180 when absent)
   max_iterations?: number;
   timeout_seconds?: number;
   system_prompt?: string;

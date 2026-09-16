@@ -208,7 +208,7 @@ class ProposalContent(BaseModel):
     knowledge_bases: list[Key] = Field(default_factory=list, max_length=10)
     memory: MemoryMode = "disabled"
     max_iterations: int = Field(default=10, ge=1, le=100)
-    timeout_seconds: int = Field(default=300, ge=10, le=3600)
+    timeout_seconds: int = Field(default=180, ge=10, le=3600)
     # Solution content, shown for review and kept with the revision.
     summary: Annotated[str, Field(max_length=4000)] = ""
     requirements_baseline: list[Line] = Field(default_factory=list, max_length=40)

@@ -8,9 +8,11 @@ compatibility path.
 import json
 import time
 from collections.abc import Iterator
+from contextlib import closing
 from typing import Any
 
 from app.assistant.sessions import refuse_assistant_session
+from app.core.errors import AppError, envelope
 from app.models.ledger import Agent
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import data_client
@@ -72,6 +74,9 @@ def chat_stream(
                 workspace=workspace,
                 **invoke_kwargs,
             )
+    except AppError as exc:
+        yield {"event": "error", "data": envelope(exc.code, exc.message, exc.detail)}
+        return
     except Exception as exc:
         yield {"event": "error", "data": {"message": f"{type(exc).__name__}: {exc}"}}
         return
@@ -108,21 +113,19 @@ def _harness_events(
     response = data_client(workspace).invoke_harness(
         **params,
     )
-    for event in response["stream"]:
-        if "contentBlockStart" in event:
-            tool_use = event["contentBlockStart"].get("start", {}).get("toolUse")
-            if tool_use:
-                yield {
-                    "event": "tool",
-                    "data": {"name": tool_use.get("name", ""), "id": tool_use.get("toolUseId")},
-                }
-        elif "contentBlockDelta" in event:
-            delta = event["contentBlockDelta"].get("delta", {})
-            if delta.get("text"):
-                yield {"event": "delta", "data": {"text": delta["text"]}}
-        elif "runtimeClientError" in event or "internalServerException" in event:
-            detail = event.get("runtimeClientError") or event.get("internalServerException")
-            raise RuntimeError(str(detail))
+    with closing(hc.iter_harness_stream(response["stream"])) as events:
+        for event in events:
+            if "contentBlockStart" in event:
+                tool_use = event["contentBlockStart"].get("start", {}).get("toolUse")
+                if tool_use:
+                    yield {
+                        "event": "tool",
+                        "data": {"name": tool_use.get("name", ""), "id": tool_use.get("toolUseId")},
+                    }
+            elif "contentBlockDelta" in event:
+                delta = event["contentBlockDelta"].get("delta", {})
+                if delta.get("text"):
+                    yield {"event": "delta", "data": {"text": delta["text"]}}
 
 
 def sse_encode(event: dict[str, Any]) -> str:
