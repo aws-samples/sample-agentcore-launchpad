@@ -508,6 +508,152 @@
           }
         }
       ]
+    },
+    {
+      "id": "observability",
+      "title": {
+        "en": "08 Observability: from overview to individual calls",
+        "zh-CN": "08 可观测性：从运行概况到调用细节"
+      },
+      "description": {
+        "en": "Explore the live dashboard, time windows, model usage and estimated cost, session and error filters, Chat cross-links, trace waterfalls, model messages, tools, and memory operations. Includes one real Conciseness evaluation and its explanation; online evaluation and score persistence are explained.",
+        "zh-CN": "实录仪表盘、时间范围、模型用量与费用估算、会话和错误筛选、对话跳转、追踪瀑布图、模型消息、工具与记忆操作。包含一次真实简洁性评分及解释，并说明在线评估与评分留档的区别。"
+      },
+      "publishedAt": "2026-09-16",
+      "durationSeconds": 276.521333,
+      "language": "zh-CN",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/observability/20260916/poster.jpg",
+      "sources": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/observability/20260916/observability.zh-CN.mp4",
+          "type": "video/mp4"
+        },
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/observability/20260916/observability.zh-CN.webm",
+          "type": "video/webm"
+        }
+      ],
+      "captions": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/observability/20260916/observability.zh-CN.vtt",
+          "language": "zh-CN",
+          "label": "简体中文"
+        }
+      ],
+      "chapters": [
+        {
+          "startSeconds": 0,
+          "title": {
+            "en": "Observability: from overview to individual calls",
+            "zh-CN": "可观测性：从运行概况到调用细节"
+          }
+        },
+        {
+          "startSeconds": 13.7,
+          "title": {
+            "en": "Choose a time range and inspect the dashboard",
+            "zh-CN": "选择时间范围，读取运行概况"
+          }
+        },
+        {
+          "startSeconds": 32.4,
+          "title": {
+            "en": "Read traffic, errors, and latency",
+            "zh-CN": "从流量、错误率和延迟发现线索"
+          }
+        },
+        {
+          "startSeconds": 48.9,
+          "title": {
+            "en": "Compare model usage and popular tools",
+            "zh-CN": "对照模型用量与热门工具"
+          }
+        },
+        {
+          "startSeconds": 65.8,
+          "title": {
+            "en": "Filter sessions by agent",
+            "zh-CN": "按 Agent 筛选会话"
+          }
+        },
+        {
+          "startSeconds": 81.5,
+          "title": {
+            "en": "Read the conversation alongside its traces",
+            "zh-CN": "把回答与执行记录放在一起看"
+          }
+        },
+        {
+          "startSeconds": 98.3,
+          "title": {
+            "en": "Move between Chat and Observability",
+            "zh-CN": "在对话与可观测之间跳转"
+          }
+        },
+        {
+          "startSeconds": 114.4,
+          "title": {
+            "en": "Narrow investigation with the error filter",
+            "zh-CN": "用错误筛选缩小排查范围"
+          }
+        },
+        {
+          "startSeconds": 131.7,
+          "title": {
+            "en": "Open the waterfall for expert routing",
+            "zh-CN": "沿专家路由追踪展开瀑布图"
+          }
+        },
+        {
+          "startSeconds": 148.4,
+          "title": {
+            "en": "Inspect model inputs, outputs, and usage",
+            "zh-CN": "读取模型调用的输入、输出与用量"
+          }
+        },
+        {
+          "startSeconds": 165.1,
+          "title": {
+            "en": "Inspect discovery and expert invocation tools",
+            "zh-CN": "定位工具选择与专家调用"
+          }
+        },
+        {
+          "startSeconds": 183.3,
+          "title": {
+            "en": "Inspect memory and underlying requests",
+            "zh-CN": "查看记忆和底层请求"
+          }
+        },
+        {
+          "startSeconds": 202,
+          "title": {
+            "en": "Run an on-demand evaluation",
+            "zh-CN": "对已有会话运行即时评分"
+          }
+        },
+        {
+          "startSeconds": 218.5,
+          "title": {
+            "en": "Read the score together with its explanation",
+            "zh-CN": "结合评分解释判断结果"
+          }
+        },
+        {
+          "startSeconds": 236.7,
+          "title": {
+            "en": "Distinguish online and on-demand evaluation",
+            "zh-CN": "区分在线评分和即时评分"
+          }
+        },
+        {
+          "startSeconds": 258.3,
+          "title": {
+            "en": "Complete an evidence-based investigation",
+            "zh-CN": "完成一次有证据的排查"
+          }
+        }
+      ]
     }
   ]
 }
