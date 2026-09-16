@@ -7,6 +7,7 @@ import json
 import zipfile
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.assistant import evaluation_assets as assets
 from app.assistant import evaluation_plan as plan_contract
@@ -371,6 +372,78 @@ def test_legacy_pending_shared_package_refuses_every_new_write(app_ready):
     assert op.resources == before and op.dataset_id is None
     assert not fakes.lam.functions and not fakes.logs.groups and not fakes.control.evaluators
     assert not fakes.iam.calls
+
+
+def test_legacy_retry_requires_replacement_without_consuming_an_attempt(app_ready, monkeypatch):
+    op_id, fakes = _setup()
+    _save_legacy_shared_intents(op_id)
+    _run(op_id, fakes)
+    before = _op(op_id)
+    assert assets.operation_out(before)["requires_new_plan"] is True
+
+    def no_worker(*args):
+        pytest.fail("a legacy-package retry must not dispatch a worker")
+
+    monkeypatch.setattr(assets, "start_async", no_worker)
+    with SessionLocal() as db:
+        with pytest.raises(AppError) as error:
+            assets.retry_operation(db, db.get(EvaluationAssetOperation, op_id))
+    assert error.value.code == "assistant.evaluation_assets_new_plan_required"
+    assert error.value.status_code == 409
+    after = _op(op_id)
+    assert (after.status, after.attempts, after.resources, after.log) == (
+        before.status, before.attempts, before.resources, before.log,
+    )
+    client = TestClient(app_ready)
+    path = (f"/api/assistant/architect/conversations/{before.conversation_id}"
+            f"/evaluation-plan/operations/{op_id}")
+    response = client.get(path)
+    assert response.status_code == 200
+    assert response.json()["operation"]["requires_new_plan"] is True
+    response = client.post(f"{path}/retry")
+    assert response.status_code == 409
+    assert response.json()["code"] == "assistant.evaluation_assets_new_plan_required"
+    assert _op(op_id).attempts == before.attempts
+
+
+def test_replacement_draft_preserves_saved_plan_and_materializes_isolated_packages(app_ready):
+    from app.models.assistant import AssistantConversation
+    from app.models.ledger import Workspace
+
+    op_id, fakes = _setup()
+    _save_legacy_shared_intents(op_id)
+    _run(op_id, fakes)
+    before = _op(op_id)
+    with SessionLocal() as db:
+        original = db.get(AssistantEvaluationPlan, before.plan_id)
+        content = copy.deepcopy(original.content)
+        conversation = db.get(AssistantConversation, before.conversation_id)
+        draft = assets.edit_plan(db, conversation, content, created_by="operator")
+        assert draft.status == "draft"
+        assert draft.revision == original.revision + 1
+        assert draft.content == content
+        assert draft.source_revision == original.source_revision
+        assert draft.source_content_hash == original.source_content_hash
+        assert not fakes.lam.functions and not fakes.control.evaluators
+        replacement_id = draft.id
+    # The ordinary approval still binds the exact saved revision/hash.
+    with SessionLocal() as db:
+        draft = db.get(AssistantEvaluationPlan, replacement_id)
+        conversation = db.get(AssistantConversation, before.conversation_id)
+        outcome = assets.approve_plan(
+            db, conversation, db.get(Workspace, DEFAULT_WORKSPACE_ID),
+            plan_revision=draft.revision, plan_hash=draft.content_hash,
+            approved_by="admin", approver_user_id=None, clients=fakes,
+        )
+        replacement_op_id = outcome.operation.id
+    _run(replacement_op_id, fakes)
+    result = _op(replacement_op_id)
+    assert result.status == "succeeded", result.error
+    assert assets.operation_out(result)["requires_new_plan"] is False
+    assert len(fakes.lam.functions) == 2
+    assert all(len(r["rules"]["evaluators"]) == 1 for r in result.resources
+               if r["kind"] == "lambda_function")
+    assert _op(op_id).resources == before.resources
 
 
 def test_historical_shared_packages_are_inspected_refused_for_reuse_and_cleanable(

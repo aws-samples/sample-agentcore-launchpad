@@ -333,6 +333,7 @@ def operation_out(op: EvaluationAssetOperation) -> dict[str, Any]:
         "status": op.status,
         "attempts": op.attempts,
         "max_attempts": MAX_ATTEMPTS,
+        "requires_new_plan": any(_ambiguous_lambda_package(r) for r in op.resources or []),
         "dataset_id": op.dataset_id,
         "error": op.error,
         "resources": resources,
@@ -898,6 +899,15 @@ def _approved_package_rules(
     return expected
 
 
+def _ambiguous_lambda_package(resource: dict[str, Any]) -> bool:
+    """Persisted package shape, shared by recovery projection and write guards."""
+    if resource.get("kind") != "lambda_function":
+        return False
+    package = resource.get("rules")
+    rules = package.get("evaluators") if isinstance(package, dict) else None
+    return not isinstance(rules, dict) or len(rules) != 1
+
+
 def _require_isolated_packages(
     resources: list[dict[str, Any]], plan: plan_contract.EvaluationPlan,
 ) -> None:
@@ -905,8 +915,7 @@ def _require_isolated_packages(
     for res in resources:
         if res.get("kind") != "lambda_function":
             continue
-        rules = (res.get("rules") or {}).get("evaluators")
-        if not isinstance(rules, dict) or len(rules) != 1:
+        if _ambiguous_lambda_package(res):
             raise _Stop(
                 f"{res['key']} has a legacy shared or unknown Lambda rules package; "
                 "identityless callbacks require exactly one evaluator per package. "
@@ -1608,11 +1617,11 @@ class _Runner:
             raise _Conflict(f"published version readback differs on {mismatch}")
         if not cfg.get("RevisionId"):
             raise _Conflict("the published version carries no RevisionId — identity incomplete")
-        # the settled whole-function snapshot (after the platform's LAST write): cleanup
+        # the settled whole-function snapshot before the permission step: cleanup
         # deletes the whole function only if $LATEST (every approved field, RevisionId
         # included), the reserved concurrency, the version set and the alias set are still
-        # exactly these. Our own concurrency write is the last effect, so the RevisionId is
-        # re-pinned deliberately here and nowhere later.
+        # exactly these. After its own successful, verified AddPermission, the permission
+        # step may deliberately advance only the qualified RevisionId; $LATEST stays pinned.
         latest = lam.get_function(FunctionName=name).get("Configuration") or {}
         self._require_latest(latest, approved, None, "after concurrency")
         versions = sorted(v.get("Version") for v in _function_versions(lam, name))
@@ -1715,27 +1724,126 @@ class _Runner:
             "Condition": {"StringEquals": {"AWS:SourceAccount": op.account_id}},
         }
 
+    @staticmethod
+    def _permission_function_snapshot(lam, stored) -> dict[str, Any]:
+        name = stored["function_name"]
+        return {
+            "published": lam.get_function(FunctionName=name, Qualifier=stored["version"])[
+                "Configuration"],
+            "latest": lam.get_function(FunctionName=name)["Configuration"],
+            "concurrency": lam.get_function_concurrency(FunctionName=name).get(
+                "ReservedConcurrentExecutions"),
+            "versions": sorted(v["Version"] for v in _function_versions(lam, name)),
+            "aliases": sorted(a["Name"] for a in _function_aliases(lam, name)),
+        }
+
+    @staticmethod
+    def _permission_policy(lam, stored, expected) -> tuple[dict[str, Any] | None, str | None]:
+        try:
+            response = lam.get_policy(FunctionName=stored["function_name"],
+                                      Qualifier=stored["version"])
+        except ClientError as exc:
+            if _code(exc) in _NOT_FOUND_CODES:
+                return None, None
+            raise
+        policy = json.loads(response["Policy"])
+        if not isinstance(policy, dict) or not isinstance(policy.get("Statement"), list) \
+                or any(not isinstance(s, dict) for s in policy["Statement"]):
+            raise _Conflict("resource policy readback is incomplete")
+        # Normalize only equivalent AWS spellings; keep every statement and envelope
+        # member so an extra grant, condition or unexpected policy edit cannot be blessed.
+        for index, statement in enumerate(policy["Statement"]):
+            if statement.get("Sid") == PERMISSION_SID:
+                if statement.keys() != expected.keys() or not _statement_matches(
+                        statement, expected):
+                    raise _Conflict("resource policy statement differs from the reviewed scope "
+                                    "(principal / action / version / account)")
+                policy["Statement"][index] = expected
+        policy.setdefault("Version", "2012-10-17")
+        policy.setdefault("Id", "default")
+        return policy, response.get("RevisionId")
+
     def _step_lambda_permission(self, db, op, resources, res) -> None:
         lam = self._client("lambda")
         fn = _resource(resources, "lambda_function", code_group=res.get("code_group"))
         stored = fn.get("result") or {}
         if not stored.get("version"):
             raise RuntimeError("function version not published")
+        before = self._permission_function_snapshot(lam, stored)
+        # A permission retry must not repair an older snapshot. In particular, a lost
+        # AddPermission response cannot prove that a moved revision belongs to our write.
+        for key, recorded in (("published", stored.get("readback") or {}),
+                              ("latest", stored.get("latest_readback") or {})):
+            incomplete = [k for k in FUNCTION_IDENTITY_FIELDS if recorded.get(k) in (None, "")]
+            drift = [k for k, value in recorded.items()
+                     if k != "ReservedConcurrentExecutions" and before[key].get(k) != value]
+            if incomplete or drift:
+                raise _Conflict(f"{key} identity differs before permission on "
+                                f"{sorted(set(incomplete + drift))} — review required")
+        if before["concurrency"] != stored["readback"].get("ReservedConcurrentExecutions") \
+                or before["concurrency"] is None \
+                or before["versions"] != stored.get("versions") \
+                or before["aliases"] != stored.get("aliases"):
+            raise _Conflict("function concurrency / inventory differs before permission")
         expected = self._permission_statement(op, stored)
-        try:
-            self._write(db, lam.add_permission, FunctionName=stored["function_name"],
-                        StatementId=PERMISSION_SID, Action="lambda:InvokeFunction",
-                        Principal=AGENTCORE_PRINCIPAL, SourceAccount=op.account_id,
-                        Qualifier=stored["version"])
-        except ClientError as exc:
-            if _code(exc) not in _CONFLICT_CODES:
-                raise
-        policy = json.loads(lam.get_policy(FunctionName=stored["function_name"],
-                                           Qualifier=stored["version"])["Policy"])
-        ours = [s for s in policy.get("Statement", []) if s.get("Sid") == PERMISSION_SID]
-        if len(ours) != 1 or not _statement_matches(ours[0], expected):
-            raise _Conflict("resource policy statement differs from the reviewed scope "
-                            "(principal / action / version / account)")
+        baseline, policy_revision = self._permission_policy(lam, stored, expected)
+        wanted = baseline or {"Version": "2012-10-17", "Id": "default", "Statement": []}
+        ours = [s for s in wanted["Statement"] if s.get("Sid") == PERMISSION_SID]
+        if len(ours) > 1:
+            raise _Conflict("resource policy carries duplicate permission statements")
+        wrote, answer = False, None
+        if not ours:
+            if baseline is not None and not policy_revision:
+                raise _Conflict("resource policy has no RevisionId for the permission CAS")
+            wanted = {**wanted, "Statement": [*wanted["Statement"], expected]}
+            try:
+                answer = self._write(
+                    db, lam.add_permission, FunctionName=stored["function_name"],
+                    StatementId=PERMISSION_SID, Action="lambda:InvokeFunction",
+                    Principal=AGENTCORE_PRINCIPAL, SourceAccount=op.account_id,
+                    Qualifier=stored["version"],
+                    **({"RevisionId": policy_revision} if baseline is not None else {}),
+                )
+                wrote = True
+            except ClientError as exc:
+                if _code(exc) == "PreconditionFailedException":
+                    raise _Conflict("resource policy changed before AddPermission (CAS)") from exc
+                if _code(exc) not in _CONFLICT_CODES:
+                    raise
+        policy, after_policy_revision = self._permission_policy(lam, stored, expected)
+        # Policy statement order has no authorization meaning; all contents must match.
+        def ordered(document):
+            return {**document, "Statement": sorted(document["Statement"],
+                                                   key=lambda s: json.dumps(s, sort_keys=True))}
+
+        if policy is None or ordered(policy) != ordered(wanted):
+            raise _Conflict("entire resource policy differs after permission")
+        after = self._permission_function_snapshot(lam, stored)
+        old_revision = before["published"].get("RevisionId")
+        new_revision = after["published"].get("RevisionId")
+        allowed = {"RevisionId"} if wrote else set()
+        old_config = {k: v for k, v in before["published"].items() if k not in allowed}
+        new_config = {k: v for k, v in after["published"].items() if k not in allowed}
+        if not new_revision or old_config != new_config:
+            raise _Conflict("published configuration differs after permission beyond the "
+                            "revision of our successful write")
+        if any(before[k] != after[k] for k in ("latest", "concurrency", "versions", "aliases")):
+            raise _Conflict("$LATEST / concurrency / inventory changed during permission")
+        if not wrote and policy_revision != after_policy_revision:
+            raise _Conflict("resource policy revision changed without our successful write")
+        # The runner checkpoints the entire resources array with permission readiness.
+        # Only this successful, checked write may move the published cleanup baseline;
+        # initial creation evidence and the exact $LATEST snapshot remain untouched.
+        if wrote:
+            stored.setdefault("revision_history", []).append({
+                "at": _now().isoformat(), "reason": "lambda_permission_added",
+                "from": old_revision, "to": new_revision, "qualifier": stored["version"],
+                "statement_id": PERMISSION_SID,
+                "policy_revision_before": policy_revision,
+                "policy_revision_after": after_policy_revision,
+                "request_id": ((answer or {}).get("ResponseMetadata") or {}).get("RequestId"),
+            })
+            stored["readback"]["RevisionId"] = new_revision
         res["result"] = {"principal": AGENTCORE_PRINCIPAL, "source_account": op.account_id,
                          "qualifier": stored["version"], "statement": expected}
         res["owned"] = True
@@ -2095,6 +2203,15 @@ def retry_operation(db: Session, op: EvaluationAssetOperation) -> bool:
     if live_worker(op.id) is not None or not _flock_free(op.id):
         raise AppError("assistant.evaluation_assets_running",
                        "the operation is still running", status_code=409)
+    if any(_ambiguous_lambda_package(r) for r in op.resources or []):
+        raise AppError(
+            "assistant.evaluation_assets_new_plan_required",
+            "This operation contains a legacy shared or unknown Lambda rules package. "
+            "Prepare a replacement plan from the saved plan, review it, and approve "
+            "independent evaluators; retrying the original operation cannot repair it.",
+            {"operation_id": op.id, "plan_revision": op.plan_revision},
+            status_code=409,
+        )
     resources = json.loads(json.dumps(op.resources or []))
     reopened = [r["key"] for r in resources if _retryable_conflict(r)]
     for r in resources:

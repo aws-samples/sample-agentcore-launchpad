@@ -193,6 +193,15 @@ export function EvaluationAssetsPanel({
   // the operation of THIS plan revision only — never a fallback to an older one
   const operation = current ? operations.find((o) => o.plan_id === current.id) ?? null : null;
   const history = operations.filter((o) => o.id !== operation?.id);
+  const requiresNewPlan = operation?.requires_new_plan === true;
+  const operationPending = operations.some((o) =>
+    o.running || o.status === "queued" || o.status === "running" || o.status === "cleaning",
+  );
+  const replacementReason = jsonDraft !== null
+    ? t("assistantEval.replacementJsonOpen")
+    : busy || operationPending || confirmPlan || confirmCleanup || repairDisabledReason
+      ? t("assistantEval.replacementPending")
+      : undefined;
 
   // poll a live operation (ledger read only), retrying after failures with backoff
   // and a visible error instead of silently stopping
@@ -266,6 +275,10 @@ export function EvaluationAssetsPanel({
         const message = apiMessage(err);
         setActionError(message);
         onError(message);
+        if (
+          err instanceof ApiError &&
+          err.code === "assistant.evaluation_assets_new_plan_required"
+        ) load();
       } finally {
         if (stillCurrent(gen)) {
           busyRef.current = false;
@@ -281,6 +294,12 @@ export function EvaluationAssetsPanel({
       () => api.assistantEvalPlanPrepare(conversationId, sourceRevision, workspaceId),
       () => setJsonDraft(null),
     );
+
+  const prepareReplacement = () => {
+    if (!current || !requiresNewPlan || busyRef.current || replacementReason) return;
+    // Copy the saved plan exactly: preparing from a proposal would discard member edits.
+    void run(() => api.assistantEvalPlanEdit(conversationId, current.content, workspaceId));
+  };
 
   const repairReason = jsonDraft !== null
     ? t("assistantEval.repairJsonOpen")
@@ -917,6 +936,30 @@ export function EvaluationAssetsPanel({
           </>
         )}
 
+        {requiresNewPlan && (
+          <div
+            className="note"
+            role="status"
+            style={{ borderColor: "var(--warn)", marginTop: 10 }}
+            data-testid="eval-new-plan-required"
+          >
+            <span className="i">[!]</span>
+            <div>
+              <strong>{t("assistantEval.newPlanTitle")}</strong>
+              <p style={{ margin: "6px 0" }}>{t("assistantEval.newPlanNotice")}</p>
+              <Btn
+                primary
+                disabled={!!replacementReason}
+                disabledReason={replacementReason}
+                data-testid="eval-prepare-replacement"
+                onClick={prepareReplacement}
+              >
+                {t("assistantEval.prepareReplacement")}
+              </Btn>
+            </div>
+          </div>
+        )}
+
         {operation && (
           <OperationView
             operation={operation}
@@ -927,7 +970,10 @@ export function EvaluationAssetsPanel({
               setPollFailures(0);
               load();
             }}
-            onRetry={() => void run(() => api.assistantEvalOperationRetry(conversationId, operation.id, workspaceId))}
+            onRetry={() => {
+              if (!requiresNewPlan)
+                void run(() => api.assistantEvalOperationRetry(conversationId, operation.id, workspaceId));
+            }}
             onCleanup={() => setConfirmCleanup(operation)}
           />
         )}
@@ -959,7 +1005,7 @@ export function EvaluationAssetsPanel({
         )}
       </Panel>
 
-      {operation && operation.status === "succeeded" && (
+      {operation && operation.status === "succeeded" && !requiresNewPlan && (
         <AssistantNextSteps
           operation={operation}
           proposal={proposals.find((p) => p.revision === operation.proposal_revision) ?? null}
@@ -1142,7 +1188,8 @@ function OperationView({
       </div>
       {canMaterialize && (
         <div className="row" style={{ gap: 8, marginTop: 8 }}>
-          {(operation.status === "partial" || operation.status === "failed") &&
+          {!operation.requires_new_plan &&
+            (operation.status === "partial" || operation.status === "failed") &&
             operation.attempts < operation.max_attempts && (
               <Btn disabled={busy} data-testid="eval-retry" onClick={onRetry}>
                 {t("assistantEval.retry")}

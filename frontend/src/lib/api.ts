@@ -1209,6 +1209,8 @@ export interface AssistantEvalOperation {
   created_at: string | null;
   updated_at: string | null;
   running: boolean;
+  /** Legacy shared or unknown Lambda rules require a new reviewed plan revision. */
+  requires_new_plan: boolean;
 }
 
 export interface AssistantEvalPlanState {

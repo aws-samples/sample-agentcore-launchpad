@@ -10,6 +10,25 @@ from app.core.errors import AppError
 from app.evaluation.routers import _assert_target_references
 
 
+@pytest.mark.parametrize("package", [
+    None, [], "unknown", {}, {"evaluators": []}, {"evaluators": {}},
+    {"evaluators": {"one": {}, "two": {}}},
+])
+def test_unknown_or_shared_saved_packages_require_new_plan(package):
+    assert evaluation_assets._ambiguous_lambda_package({
+        "kind": "lambda_function", "rules": package,
+    })
+    assert not evaluation_assets._ambiguous_lambda_package({
+        "kind": "evaluator", "rules": package,
+    })
+
+
+def test_single_saved_package_does_not_require_migration():
+    assert not evaluation_assets._ambiguous_lambda_package({
+        "kind": "lambda_function", "rules": {"evaluators": {"one": {}}},
+    })
+
+
 @pytest.mark.parametrize("count", [0, 1, 3])
 @pytest.mark.parametrize("grant", [False, True])
 def test_review_counts_one_resource_chain_per_code_evaluator(count, grant):
