@@ -362,20 +362,20 @@
       "publishedAt": "2026-09-16",
       "durationSeconds": 307.121333,
       "language": "zh-CN",
-      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/registry/20260916/poster.jpg",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/registry/20260916-alignment/poster.jpg",
       "sources": [
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/registry/20260916/registry.zh-CN.mp4",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/registry/20260916-alignment/registry.zh-CN.mp4",
           "type": "video/mp4"
         },
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/registry/20260916/registry.zh-CN.webm",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/registry/20260916-alignment/registry.zh-CN.webm",
           "type": "video/webm"
         }
       ],
       "captions": [
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/registry/20260916/registry.zh-CN.vtt",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/registry/20260916-alignment/registry.zh-CN.vtt",
           "language": "zh-CN",
           "label": "简体中文"
         }

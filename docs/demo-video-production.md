@@ -44,6 +44,13 @@
   implying instantaneous cloud work. Use ASS/libass with a verified Chinese font
   for overlays/subtitles; the previous `drawtext` + TTC font attempt failed. Export
   an H.264/AAC MP4 with `+faststart` and a WebM fallback for browsers lacking H.264.
+- **Anchor guidance to the actual element.** Prefer a temporary CSS outline on
+  the target, restoring its previous outline before clicking or navigating.
+  Viewport coordinates from `boundingBox()` must not be reused as absolute CSS
+  coordinates inside a zoomed overlay: at `zoom: 1.2`, that scales the callout a
+  second time. Static overlays can also linger after their target moves. Verify
+  visible outlines against the target in captured and encoded frames, including
+  scrolling and any final crop/zoom; an API-success check alone misses this drift.
 - **Verify the delivered media.** Decode the final files, check duration and exactly
   one audio stream, and verify zero left/right narration offset. Inspect the opening,
   changed chapters, joins, and ending in a real browser, including seeking and
