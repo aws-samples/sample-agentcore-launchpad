@@ -66,7 +66,7 @@ def test_agentcore_read_timeout_from_environment(monkeypatch):
 
 def test_test_bootstrap_does_not_inherit_host_yaml_or_cached_settings(tmp_path):
     host = tmp_path / "host-launchpad.yaml"
-    content = ("region: us-east-1\nstudio_exec_backend: docker\n"
+    content = ("region: us-east-1\nstudio_exec_backend: docker\nmodel_prices_refresh_hours: 1\n"
                "resources:\n  artifacts_bucket: host-production-bucket\n")
     host.write_text(content)
     script = """
@@ -86,6 +86,9 @@ assert config.CONFIG_FILE != host
 assert config.get_settings().region == "us-west-2"
 assert config.get_settings().studio_exec_backend == "subprocess"
 assert config.get_settings().resources["artifacts_bucket"] == "launchpad-artifacts-test"
+from app.services.model_prices import start_auto_refresh
+assert config.get_settings().model_prices_refresh_hours == 0
+assert start_auto_refresh() is None
 assert str(engine.url) == config.get_settings().database_url
 assert "launchpad-test-" in str(engine.url)
 """
