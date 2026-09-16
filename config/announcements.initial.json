@@ -1,0 +1,20 @@
+[
+  {
+    "title": "动手实验：跟随指南体验 AgentCore Launchpad",
+    "body": "动手实验入口已移至公告区。打开实验指南，按步骤体验智能体创建、部署、调用、评估与观测。",
+    "link_url": "https://catalog.us-east-1.prod.workshops.aws/workshops/3f18b2a3-fe79-4559-9efd-7c627088f601",
+    "link_label": "打开实验指南"
+  },
+  {
+    "title": "视频介绍上线：在 Launchpad 内观看功能演示",
+    "body": "视频介绍现已上线，首个视频以老人陪伴 AI 应用为例，演示从新建架构设计会话、方案部署和评估，到完成一次 A/B 实验的完整流程。支持按章节跳转、字幕和全屏观看，后续将继续补充更多功能介绍。",
+    "link_url": "/videos?video=architect-assistant",
+    "link_label": "观看架构助手介绍"
+  },
+  {
+    "title": "访问域名即将调整",
+    "body": "Launchpad 的访问域名将调整为 https://launchpad.jugglehub.top。切换完成后，请使用新域名访问。",
+    "link_url": null,
+    "link_label": null
+  }
+]

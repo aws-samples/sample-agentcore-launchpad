@@ -10,11 +10,12 @@ import type {
   AssistantEvalPlan,
   AssistantEvalPlanContent,
   AssistantEvalPlanEvaluator,
+  AssistantEvalPlanRepair,
   AssistantEvalPlanState,
   AssistantEvalResource,
   AssistantProposal,
 } from "../lib/api";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { AssistantNextSteps } from "./AssistantNextSteps";
 import type { DeployedAgent } from "./AssistantNextSteps";
 
@@ -27,7 +28,9 @@ import type { DeployedAgent } from "./AssistantNextSteps";
  * review-required scenarios / edit as JSON (a new plan revision) → an administrator who
  * owns the conversation confirms the disclosure and CREATES the assets. Creation is
  * separate from testing: nothing here runs an evaluation, deploys an agent, syncs to
- * AWS Datasets or invokes a model. Every request pins the DISPLAYED workspace.
+ * AWS Datasets. Asking the assistant to repair an invalid plan explicitly invokes
+ * one discussion turn, then prepares the returned proposal revision for review.
+ * Every request pins the DISPLAYED workspace.
  */
 
 const POLL_MS = 3000;
@@ -101,6 +104,8 @@ export function EvaluationAssetsPanel({
   onError,
   index,
   deployed = null,
+  onRepair,
+  repairDisabledReason,
 }: {
   conversationId: string;
   proposals: AssistantProposal[];
@@ -111,11 +116,18 @@ export function EvaluationAssetsPanel({
   index: number;
   /** live status of the Agent deployed from this conversation (for NEXT STEPS) */
   deployed?: DeployedAgent | null;
+  /** Resolves only after the shared turn finishes and its new proposal is read back. */
+  onRepair: (repair: AssistantEvalPlanRepair) => Promise<AssistantProposal | null>;
+  repairDisabledReason?: string;
 }) {
   const { t } = useTranslation();
   const [state, setState] = useState<AssistantEvalPlanState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const [repairStatus, setRepairStatus] = useState<
+    "asking" | "preparing" | "ready" | "invalid" | null
+  >(null);
   const [sourceRevision, setSourceRevision] = useState<number>(
     proposals.length ? proposals[proposals.length - 1].revision : 1,
   );
@@ -161,6 +173,9 @@ export function EvaluationAssetsPanel({
     setJsonDraft(null);
     setJsonError(null);
     setActionError(null);
+    setBusy(false);
+    busyRef.current = false;
+    setRepairStatus(null);
     setPollError(null);
     setPollFailures(0);
     setConfirmPlan(null);
@@ -222,9 +237,12 @@ export function EvaluationAssetsPanel({
       fn: () => Promise<AssistantEvalPlanState | { operation: AssistantEvalOperation }>,
       after?: () => void,
     ) => {
+      if (busyRef.current) return;
       const gen = generation.current;
+      busyRef.current = true;
       setBusy(true);
       setActionError(null);
+      setRepairStatus(null);
       try {
         const res = await fn();
         if (!stillCurrent(gen)) return;
@@ -249,7 +267,10 @@ export function EvaluationAssetsPanel({
         setActionError(message);
         onError(message);
       } finally {
-        if (stillCurrent(gen)) setBusy(false);
+        if (stillCurrent(gen)) {
+          busyRef.current = false;
+          setBusy(false);
+        }
       }
     },
     [apiMessage, onError, stillCurrent, load],
@@ -260,6 +281,55 @@ export function EvaluationAssetsPanel({
       () => api.assistantEvalPlanPrepare(conversationId, sourceRevision, workspaceId),
       () => setJsonDraft(null),
     );
+
+  const repairReason = jsonDraft !== null
+    ? t("assistantEval.repairJsonOpen")
+    : busy
+      ? t("assistantEval.repairBusy")
+      : repairDisabledReason;
+
+  const repair = async () => {
+    if (!current || current.status !== "invalid" || busyRef.current || repairReason) return;
+    const gen = generation.current;
+    const { conversationId: cid, workspaceId: wid } = ctx.current;
+    busyRef.current = true;
+    setBusy(true);
+    setActionError(null);
+    setRepairStatus("asking");
+    try {
+      const proposal = await onRepair({
+        plan_revision: current.revision,
+        plan_hash: current.content_hash,
+      });
+      if (!stillCurrent(gen)) return;
+      if (!proposal) throw new Error(t("assistantEval.repairNoProposal"));
+      // Use the exact returned revision, never a possibly stale dropdown selection.
+      setSourceRevision(proposal.revision);
+      setRepairStatus("preparing");
+      const res = await api.assistantEvalPlanPrepare(cid, proposal.revision, wid);
+      if (!stillCurrent(gen)) return;
+      setState(res);
+      setRepairStatus(
+        res.plan.status === "invalid" || res.plan.validation_errors.length > 0 ? "invalid" : "ready",
+      );
+    } catch (err) {
+      if (!stillCurrent(gen)) return;
+      setRepairStatus(null);
+      const message = apiMessage(err);
+      setActionError(message);
+      onError(message);
+      if (
+        err instanceof ApiError &&
+        (err.code === "assistant.evaluation_repair_stale" ||
+          err.code === "assistant.evaluation_repair_not_needed")
+      ) load();
+    } finally {
+      if (stillCurrent(gen)) {
+        busyRef.current = false;
+        setBusy(false);
+      }
+    }
+  };
 
   const saveJson = () => {
     if (jsonDraft === null) return;
@@ -461,6 +531,7 @@ export function EvaluationAssetsPanel({
               className="input mono"
               style={{ marginLeft: 6, width: "auto", padding: "6px 10px", cursor: "pointer" }}
               value={sourceRevision}
+              disabled={busy}
               data-testid="eval-source-revision"
               onChange={(e) => setSourceRevision(Number(e.target.value))}
             >
@@ -512,7 +583,42 @@ export function EvaluationAssetsPanel({
                   <li key={i} className="mono" style={{ fontSize: 11, wordBreak: "break-word" }}>{e}</li>
                 ))}
               </ul>
+              {current?.status === "invalid" && (
+                <div style={{ marginTop: 10 }} data-testid="eval-repair-actions">
+                  <Btn
+                    disabled={!!repairReason}
+                    disabledReason={repairReason}
+                    data-testid="eval-repair"
+                    onClick={() => void repair()}
+                  >
+                    {t("assistantEval.repair")}
+                  </Btn>
+                  <div className="dim" style={{ fontSize: 11, marginTop: 6 }} data-testid="eval-repair-hint">
+                    {t("assistantEval.repairHint")}
+                  </div>
+                </div>
+              )}
             </span>
+          </div>
+        )}
+
+        {repairStatus && (
+          <div
+            className="note"
+            role="status"
+            aria-live="polite"
+            style={{ marginTop: 10 }}
+            data-testid="eval-repair-status"
+            data-status={repairStatus}
+          >
+            <span>{t(`assistantEval.repairStatus.${repairStatus}`)}</span>
+          </div>
+        )}
+
+        {actionError && (
+          <div className="note" role="alert" style={{ borderColor: "var(--crit)", marginTop: 10 }} data-testid="eval-action-error">
+            <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+            <span>{actionError}</span>
           </div>
         )}
 
@@ -809,13 +915,6 @@ export function EvaluationAssetsPanel({
               </div>
             )}
           </>
-        )}
-
-        {actionError && (
-          <div className="note" style={{ borderColor: "var(--crit)", marginTop: 10 }} data-testid="eval-action-error">
-            <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
-            <span>{actionError}</span>
-          </div>
         )}
 
         {operation && (

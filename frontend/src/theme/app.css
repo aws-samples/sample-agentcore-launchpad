@@ -159,7 +159,7 @@ a.syschip.link:hover{border-color:var(--amber);color:var(--amber)}
 .layout{display:grid;grid-template-columns:216px minmax(0,1fr);min-height:calc(100vh - 52px)}
 
 /* sidebar */
-.side{border-right:1px solid var(--line);padding:18px 0;display:flex;flex-direction:column;gap:2px;position:sticky;top:52px;height:calc(100vh - 52px)}
+.side{border-right:1px solid var(--line);padding:18px 0;display:flex;flex-direction:column;gap:2px;position:sticky;top:52px;height:calc(100vh - 52px);overflow-y:auto}
 .side .label{font-family:var(--mono);font-size:9.5px;letter-spacing:.22em;color:var(--ink-3);padding:8px 20px 6px}
 .nav-item{
   display:flex;align-items:center;gap:11px;padding:9px 20px;cursor:pointer;color:var(--ink-2);

@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/auth-context";
 import { Panel, ViewHead } from "../components";
+import { AnnouncementFeed } from "../components/AnnouncementFeed";
 import { LangSwitcher } from "../layout/LangSwitcher";
 import { api, AUTH_UNAUTHORIZED_EVENT, type Workspace } from "../lib/api";
 import { storedWorkspaceId, storeWorkspaceId } from "../lib/workspace-header";
@@ -149,13 +150,14 @@ function WorkspaceLoading() {
  * A member whose account has no grant yet. Every workspace-scoped route would
  * answer 403, so the console says who can fix it instead of rendering pages that
  * all fail. Wearing the login page's chrome, because it is the same kind of
- * dead end: no navigation is useful, and signing out has to stay reachable.
+ * dead end for workspace operations: signing out stays reachable, while
+ * installation-wide announcements can still be read below the access message.
  */
 function NoWorkspaceGranted() {
   const { t } = useTranslation();
   const { authRequired, username, logout } = useAuth();
   return (
-    <div className="auth-page">
+    <div className="auth-page no-workspace-page">
       <header className="auth-topbar">
         <div className="brand">
           <span className="glyph" aria-hidden="true" />
@@ -189,6 +191,9 @@ function NoWorkspaceGranted() {
               {t("workspacesPage.noneBody")}
             </div>
           </Panel>
+          {/* Notices are hub-global, so they remain useful before a member has
+              any workspace grant. No workspace APIs are mounted by this feed. */}
+          <AnnouncementFeed />
         </div>
       </main>
     </div>

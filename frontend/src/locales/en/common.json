@@ -90,7 +90,32 @@
     "workspaces": "Workspaces",
     "notFound": "Not found",
     "administration": "ADMINISTRATION",
-    "assistant": "Architect assistant"
+    "assistant": "Architect assistant",
+    "learn": "LEARN",
+    "videos": "Video introductions",
+    "announcements": "Announcements"
+  },
+  "videos": {
+    "kicker": "// LEARN",
+    "title": "Video introductions",
+    "description": "Watch Launchpad walkthroughs and jump to the steps you want to try.",
+    "count_one": "{{count}} video",
+    "count_other": "{{count}} videos",
+    "library": "ALL VIDEOS",
+    "player": "WATCH",
+    "selected": "SELECTED",
+    "duration": "Duration {{duration}}",
+    "published": "Published {{date}}",
+    "chapters": "CHAPTERS",
+    "chapterHint": "Select a chapter to play from that point.",
+    "empty": "No videos published yet.",
+    "emptyHint": "New walkthroughs will appear here.",
+    "loadFailed": "This video could not be loaded.",
+    "loadFailedHint": "Check your connection and retry. If it still fails, try another browser.",
+    "retry": "RETRY",
+    "playBlocked": "Playback could not start. Press Play in the video controls to continue.",
+    "captionFailed": "Subtitles could not be loaded. You can continue watching the video.",
+    "unsupported": "Your browser does not support this video player."
   },
   "notFound": {
     "kicker": "CONSOLE // 404",
@@ -2096,6 +2121,10 @@
     "assistant.turn_in_progress": "Another turn of this conversation is still streaming — wait for it to finish.",
     "assistant.prompt_too_large": "The message is too large for one turn — shorten it or split it.",
     "assistant.proposal_too_large": "The proposal exceeds the size limit.",
+    "assistant.evaluation_repair_stale": "The evaluation plan changed. Reload the plan and review its latest errors before asking for another repair.",
+    "assistant.evaluation_repair_not_needed": "The latest evaluation plan is no longer invalid. Reload it to review its current state.",
+    "assistant.evaluation_repair_too_large": "The saved repair context is too large for an assistant turn. Use EDIT AS JSON to correct the plan manually.",
+    "assistant.evaluation_plan_source_invalid": "The source proposal is invalid or unavailable. Revise the proposal before preparing a new evaluation plan.",
     "observability.session_not_found": "Session not found.",
     "observability.trace_not_found": "Trace not found.",
     "system_agent.deploy_in_progress": "This preset is being deployed; retry the settings change once the current job has finished.",
@@ -2109,7 +2138,9 @@
     "system_skill.foreign_record": "A Skill record with the reserved name already exists and is not the platform's — rename or delete it in the Registry first.",
     "system_skill.stale_release": "The registered Skill record already describes a newer release; a stale registration cannot downgrade it.",
     "system_skill.record_deprecated": "The Skill record is DEPRECATED (terminal) — delete it in the AWS console and register again.",
-    "system_skill.readback_mismatch": "The Registry record read back does not match what was written; the registration is not reported as done."
+    "system_skill.readback_mismatch": "The Registry record read back does not match what was written; the registration is not reported as done.",
+    "announcements.conflict": "This announcement has changed since you loaded it. Your changes were not applied.",
+    "announcements.not_found": "This announcement no longer exists. It may have been deleted by another administrator."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",
@@ -4200,7 +4231,23 @@
     "prepareAgain": "PREPARE AGAIN (new revision)",
     "editJson": "EDIT AS JSON",
     "empty": "No evaluation plan yet. Prepare one from a proposal revision: every golden test becomes a scenario and every recommendation is classified — exact evaluator ids are mapped, everything else stays unresolved until you decide.",
-    "invalidNote": "This plan revision does not validate and cannot be created. Fix it via EDIT AS JSON (a new revision):",
+    "invalidNote": "This plan revision failed validation, so evaluation assets cannot be created. ASK ASSISTANT TO FIX requests a revised proposal and then prepares a new plan for review. You can also EDIT AS JSON to correct the plan manually, or PREPARE AGAIN from the selected proposal. Preparing the same proposal may produce the same errors:",
+    "repair": "ASK ASSISTANT TO FIX",
+    "repairHint": "The assistant receives the saved plan and validation errors, generates a new proposal, then prepares a new plan. Review the result: it may still need corrections. This does not create evaluation assets.",
+    "repairPrompt": "Please revise the proposal to address the saved evaluation plan's validation errors. Use the supplied plan, findings and proposal context, preserve unrelated requirements, and return a complete new launchpad-proposal for review. Do not approve or deploy an agent, or create evaluation assets.",
+    "repairJsonOpen": "Save or cancel the open plan JSON draft before asking the assistant to repair it.",
+    "repairProposalEditorOpen": "Save or cancel the open proposal editor before asking the assistant to repair the plan.",
+    "repairBusy": "Wait for the current turn or operation to finish before asking for a repair.",
+    "repairUnavailable": "The architect assistant is unavailable in this conversation or workspace.",
+    "repairFailed": "The assistant repair turn failed. Review the conversation and try again, or edit the plan JSON.",
+    "repairIncomplete": "The assistant stream ended without a successful completion. No new plan was prepared. Review the conversation before retrying.",
+    "repairNoProposal": "The assistant did not return a usable new proposal. No new plan was prepared. Review the reply and proposal errors, continue the conversation, or edit the plan JSON.",
+    "repairStatus": {
+      "asking": "Asking the assistant to revise the proposal… Your unsent message is kept.",
+      "preparing": "New proposal received. Preparing a plan from that exact revision…",
+      "ready": "A new plan passed validation. Review it before choosing whether to create evaluation assets. No assets have been created.",
+      "invalid": "A new plan was prepared, but it still has validation errors. Review the findings, continue with the assistant, or edit the JSON. No assets have been created."
+    },
     "jsonTitle": "PLAN JSON (saving creates a new revision)",
     "saveRevision": "SAVE AS NEW REVISION",
     "cancel": "CANCEL",
@@ -4445,5 +4492,91 @@
     "confirmed": "confirmed",
     "unconfirmed": "not confirmed",
     "selected": "on diagram"
+  },
+  "announcements": {
+    "kicker": "// ADMINISTRATION",
+    "title": "Announcements",
+    "description": "Publish updates to everyone using this Launchpad, across all workspaces.",
+    "feedTitle": "ANNOUNCEMENTS",
+    "manage": "Manage announcements",
+    "publicEmpty": "No announcements have been published yet.",
+    "listTitle": "ALL ANNOUNCEMENTS",
+    "new": "New announcement",
+    "newDraft": "New draft",
+    "manageEmpty": "No announcements yet. Create a draft to get started.",
+    "pick": "Select an announcement to edit, or create a new draft.",
+    "editorTitle": "EDITABLE DRAFT",
+    "publishedTitle": "CURRENTLY PUBLIC",
+    "publishedHint": "This is the version everyone sees on the Overview.",
+    "notPublic": "This announcement is not visible on the Overview.",
+    "draftHint": "Saving updates the draft only. Publish the saved draft to make it visible to everyone.",
+    "contentHint": "Plain text, up to 6,000 characters. Content stays in the language you write; HTML and Markdown are not rendered.",
+    "linkHint": "Optional. Use an app path such as /videos, or a full https:// URL. Include a link label.",
+    "newTab": "(opens in a new tab)",
+    "pagination": "Announcement pages",
+    "status": {
+      "draft": "DRAFT",
+      "published": "PUBLISHED"
+    },
+    "unpublishedChanges": "UNPUBLISHED CHANGES",
+    "unsaved": "UNSAVED",
+    "buffers": "Drafts kept in this page. Select one to continue editing.",
+    "working": "Working…",
+    "needsAttention": "Action failed",
+    "updated": "Updated {{date}}",
+    "editedBy": "Last saved by {{user}} · {{date}}",
+    "publishedAt": "Published {{date}}",
+    "revision": "Revision {{revision}}",
+    "noChanges": "The draft has no unsaved changes.",
+    "saveFirst": "Save your changes before publishing.",
+    "createFirst": "Save the new draft before publishing.",
+    "alreadyPublished": "The saved draft is already public.",
+    "preserved": "Your text has been kept. Check the error and try again.",
+    "conflictHint": "Another change was saved first. Your text is still here. Copy any edits you want to keep, then load the latest draft before trying again.",
+    "clearSelection": "Back to the list",
+    "saving": "Saving draft…",
+    "publishing": "Publishing…",
+    "fields": {
+      "title": "Title (required, up to 160 characters)",
+      "body": "Body (required)",
+      "linkUrl": "Link URL (optional)",
+      "linkLabel": "Link label (up to 80 characters)"
+    },
+    "actions": {
+      "save": "Save draft",
+      "publish": "Publish saved draft",
+      "unpublish": "Withdraw",
+      "delete": "Delete announcement",
+      "reload": "Load latest draft"
+    },
+    "validation": {
+      "required": "Enter a title and body.",
+      "linkPair": "Provide both a link URL and its label, or leave both empty.",
+      "linkUrl": "Use an app-relative path starting with / or an HTTPS URL, without credentials, spaces, or backslashes."
+    },
+    "success": {
+      "save": "Draft saved. Publish it when you are ready.",
+      "publish": "Published. Everyone can now see this version on the Overview.",
+      "unpublish": "Withdrawn from the Overview. The draft is still available.",
+      "reload": "Latest draft loaded."
+    },
+    "confirm": {
+      "publish": {
+        "title": "Publish saved draft?",
+        "body": "Publish “{{title}}” to everyone in this Launchpad? This replaces its current public version with the saved draft."
+      },
+      "unpublish": {
+        "title": "Withdraw announcement?",
+        "body": "Remove “{{title}}” from everyone’s Overview? Its draft is kept and can be published again."
+      },
+      "delete": {
+        "title": "Delete announcement?",
+        "body": "Permanently delete “{{title}}”, including its draft, public version, and any unsaved edits? It will disappear from everyone’s Overview. This cannot be undone."
+      },
+      "reload": {
+        "title": "Load the latest draft?",
+        "body": "Replace your local edits to “{{title}}” with the latest saved draft? Unsaved text will be discarded. Copy any edits you want to keep first."
+      }
+    }
   }
 }

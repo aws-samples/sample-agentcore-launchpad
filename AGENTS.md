@@ -124,6 +124,12 @@ wherever a mark touches CJK text; `scripts/i18n_zh_punct.py --check` gates it an
 converts mechanically (placeholders, backticks, URLs, ARNs and Latin-only fragments are
 never touched).
 
+## Demo video production
+
+Before recording, editing, generating narration for, or publishing demo videos, read
+[Demo video production](docs/demo-video-production.md) for the requirements and
+lessons learned. Load this guide only when working on videos.
+
 ## Conventions & gotchas
 
 - **All documentation is written in English** (per the launchpad spec index), even

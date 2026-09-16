@@ -33,10 +33,11 @@ export function Shell() {
       <div className="layout">
         <Sidebar health={health} />
         <main>
-          {/* Keyed on the workspace: switching discards every page's state in
-              one place, so the ~20 mount-only loaders refetch against the new
-              environment instead of showing the old one's rows. */}
-          <div className="view" key={current?.id ?? "none"}>
+          {/* Workspace-bound pages refetch on selection. Announcement drafts
+              belong to the installation and must survive a workspace switch. */}
+          <div className="view" key={
+            location.pathname === "/announcements" ? "announcements" : current?.id ?? "none"
+          }>
             {/* Pages are lazily loaded (see App.tsx): the pending line and the
                 chunk-load failure state belong inside the content area, and the
                 boundary is keyed on the route so navigating away clears a

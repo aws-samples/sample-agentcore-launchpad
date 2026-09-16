@@ -194,6 +194,19 @@ noted.
 | `POST` | `/api/assistant/architect/conversations/{id}/proposal/reject` | member | body `{revision}` → `{proposal}` with `status: rejected` (non-executable); a conditional transition — `409 assistant.proposal_stale` for a non-current revision, `409 assistant.proposal_already_approved` (`detail.approval`) when the revision was executed meanwhile |
 | `POST` | `/api/assistant/architect/conversations/{id}/proposal/approve` | `perm:agents.deploy` | body `{revision, content_hash}` → `202 {proposal, agent, job_id, deployment_id, started: true}` when this call claimed the revision, claimed the agent name (shared with `POST /api/agents`) and created the ordinary agent + deployment + `deploy_agent` job with their ids on the proposal in one commit; `200 … started: false` with the recorded outcome for a repeated, concurrent or historical (already approved, even if newer revisions exist) request — and a still-`queued` job with no live worker is re-woken. Refusals, all before any write: `401 auth.required` / `403 auth.permission_required` / `403 workspace.forbidden` (re-resolved from the database at the claim, after the live catalog read), `409 assistant.proposal_stale` (unknown revision / hash differs / changed while approving), `409 assistant.proposal_not_approvable` (invalid, rejected, superseded), `409 assistant.workspace_not_ready`, `409 assistant.proposal_invalid` (live catalog no longer has a referenced resource or prerequisite — e.g. the KB gateway), `409 agent.name_reserved`, `409 agent.name_exists` (atomic — one of two racing creators), `409 assistant.bindings_changed` (`detail.changed[]` — a key resolves to a different URL, gateway auth identity, skill content, memory or KB gateway than reviewed), `502 assistant.catalog_unavailable` (live catalog unreadable and no winner exists); every already-approved answer re-validates the caller first |
 
+The turns body also accepts
+`evaluation_plan_repair: {plan_revision: <positive integer>, plan_hash: <64 lowercase hex>}`.
+The reference is strict and resolves the current saved invalid plan within the owned
+conversation/workspace. The server appends its validation errors, content and source/latest
+proposal context to the prompt; the ordinary SSE and inert revision lifecycle is unchanged.
+Before streaming: `409 assistant.evaluation_repair_stale` for a changed reference/source,
+`409 assistant.evaluation_repair_not_needed` for a plan that is no longer invalid,
+`409 assistant.evaluation_plan_source_invalid` when the latest proposal needs correction,
+and `413 assistant.evaluation_repair_too_large` when the complete context exceeds the
+ordinary prompt/replay budgets. No evidence is truncated. The console explicitly prepares
+a plan from the returned usable new proposal and displays its validation result for review;
+repair creates no evaluation assets and does not approve or deploy the proposal.
+
 A proposal is `{id, conversation_id, revision, source: model|member, status: draft|invalid|
 approved|rejected|superseded, content, content_hash, bindings, validation_errors[],
 created_by, created_at, approval, rejected_by, rejected_at}`. `content` is the

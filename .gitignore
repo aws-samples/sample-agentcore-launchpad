@@ -2,6 +2,7 @@
 /.claude/
 /self-evolution/
 /.codegraph/
+/.agents/
 /.trellis/
 /.supergoal/
 /.mcp.json
@@ -43,6 +44,7 @@ config/launchpad.yaml
 .env
 .env.*
 cdk.out/
+cdk.out-videos/
 vendor-src/
 data/harness-export/
 # Local upstream clone the Skill Lab vendored subset (vendor/skillopt, tracked)

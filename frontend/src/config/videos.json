@@ -1,0 +1,207 @@
+{
+  "schemaVersion": 1,
+  "videos": [
+    {
+      "id": "architect-assistant",
+      "title": {
+        "en": "Architect assistant: from requirements to A/B testing",
+        "zh-CN": "架构助手：从需求到 A/B 实验"
+      },
+      "description": {
+        "en": "Follow an elder-care AI application from a new conversation through architecture, deployment, evaluation, and a complete configuration-bundle A/B experiment. Includes real scores, trace investigation, and resource cleanup.",
+        "zh-CN": "以老人陪伴 AI 应用为例，从新建会话、梳理需求到方案部署、一键评估，再完成一次配置包 A/B 实验。包含真实评分、追踪排查、实验结论与资源清理。"
+      },
+      "publishedAt": "2026-09-16",
+      "durationSeconds": 312.821,
+      "language": "zh-CN",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260916/poster.jpg",
+      "sources": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260916/architect-assistant.zh-CN.mp4",
+          "type": "video/mp4"
+        },
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260916/architect-assistant.zh-CN.webm",
+          "type": "video/webm"
+        }
+      ],
+      "captions": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260916/architect-assistant.zh-CN.vtt",
+          "language": "zh-CN",
+          "label": "简体中文"
+        }
+      ],
+      "chapters": [
+        {
+          "startSeconds": 0,
+          "title": {
+            "en": "From requirements to a validated architecture",
+            "zh-CN": "AgentCore LaunchPad 架构助手从需求到可验证的方案"
+          }
+        },
+        {
+          "startSeconds": 16.4,
+          "title": {
+            "en": "Start a conversation and enter requirements",
+            "zh-CN": "新建会话并输入需求"
+          }
+        },
+        {
+          "startSeconds": 26.7,
+          "title": {
+            "en": "Open an existing elder-care application",
+            "zh-CN": "打开已有的老人陪伴案例"
+          }
+        },
+        {
+          "startSeconds": 39.6,
+          "title": {
+            "en": "Clarify requirements through conversation",
+            "zh-CN": "用对话澄清需求"
+          }
+        },
+        {
+          "startSeconds": 51.7,
+          "title": {
+            "en": "Map launch obstacles with a fishbone diagram",
+            "zh-CN": "用鱼骨图梳理上线障碍"
+          }
+        },
+        {
+          "startSeconds": 64.5,
+          "title": {
+            "en": "Turn obstacles into golden tests",
+            "zh-CN": "把障碍转成黄金测试"
+          }
+        },
+        {
+          "startSeconds": 78.1,
+          "title": {
+            "en": "Review the model and system prompt",
+            "zh-CN": "审阅模型与系统提示词"
+          }
+        },
+        {
+          "startSeconds": 91.4,
+          "title": {
+            "en": "Approve and deploy the agent",
+            "zh-CN": "批准后，进入部署流程"
+          }
+        },
+        {
+          "startSeconds": 101.7,
+          "title": {
+            "en": "Generate evaluation assets",
+            "zh-CN": "生成可执行的评估资产"
+          }
+        },
+        {
+          "startSeconds": 114.9,
+          "title": {
+            "en": "Move from evaluation to configuration A/B testing",
+            "zh-CN": "从评估走向配置包 A/B"
+          }
+        },
+        {
+          "startSeconds": 126.3,
+          "title": {
+            "en": "Create a Runtime twin",
+            "zh-CN": "创建 Runtime 孪生"
+          }
+        },
+        {
+          "startSeconds": 138.9,
+          "title": {
+            "en": "Switch operations to the Runtime twin",
+            "zh-CN": "让孪生成为操作目标"
+          }
+        },
+        {
+          "startSeconds": 150.6,
+          "title": {
+            "en": "Establish a baseline for the twin",
+            "zh-CN": "为孪生建立基线"
+          }
+        },
+        {
+          "startSeconds": 163.2,
+          "title": {
+            "en": "Inspect baseline scores and traces",
+            "zh-CN": "核对基线结果与追踪"
+          }
+        },
+        {
+          "startSeconds": 183.2,
+          "title": {
+            "en": "Open an experiment with the baseline",
+            "zh-CN": "带着基线打开实验"
+          }
+        },
+        {
+          "startSeconds": 196.2,
+          "title": {
+            "en": "Generate recommendations from baseline evidence",
+            "zh-CN": "从基线证据生成建议"
+          }
+        },
+        {
+          "startSeconds": 209.5,
+          "title": {
+            "en": "Review the candidate prompt",
+            "zh-CN": "审阅候选提示词"
+          }
+        },
+        {
+          "startSeconds": 225.4,
+          "title": {
+            "en": "Create the A and B configuration bundles",
+            "zh-CN": "固化 A / B 配置包"
+          }
+        },
+        {
+          "startSeconds": 237.2,
+          "title": {
+            "en": "Choose shared evaluators",
+            "zh-CN": "设置两组共同的评估器"
+          }
+        },
+        {
+          "startSeconds": 248.9,
+          "title": {
+            "en": "Start a 50/50 experiment",
+            "zh-CN": "启动 50/50 对照实验"
+          }
+        },
+        {
+          "startSeconds": 260.9,
+          "title": {
+            "en": "Replay golden scenarios and collect scores",
+            "zh-CN": "回放黄金集并收集评分"
+          }
+        },
+        {
+          "startSeconds": 273.2,
+          "title": {
+            "en": "Read the experiment verdict",
+            "zh-CN": "读取实验结论"
+          }
+        },
+        {
+          "startSeconds": 288.3,
+          "title": {
+            "en": "Finish the experiment and clean up resources",
+            "zh-CN": "结束实验并清理资源"
+          }
+        },
+        {
+          "startSeconds": 302.1,
+          "title": {
+            "en": "From design to a completed experiment",
+            "zh-CN": "从设计走到一次完整实验"
+          }
+        }
+      ]
+    }
+  ]
+}

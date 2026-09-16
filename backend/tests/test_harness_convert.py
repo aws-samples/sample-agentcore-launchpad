@@ -88,6 +88,47 @@ def test_graft_supports_skill_plugin_agent_factory_call():
     assert f"{assignment}\n    _launchpad_apply_tool_descriptions(agent)" in grafted
 
 
+def test_graft_supports_real_export_without_memory_or_skills():
+    source = (FIXTURES / "harness_export_nomemory_main.py").read_text()
+
+    grafted = hc.graft_config_bundle(source)
+
+    compile(grafted, "main.py", "exec")
+    assert "agent = get_or_create_agent()\n    _launchpad_apply_tool_descriptions(agent)" in grafted
+    assert "system_prompt=resolve_system_prompt()" in grafted
+    assert "system_prompt=DEFAULT_SYSTEM_PROMPT" not in grafted
+    assert hc.graft_config_bundle(grafted) == grafted
+
+
+@pytest.mark.parametrize("gateway_attached", [False, True])
+def test_build_tool_free_export_with_unused_gateway_scaffold(gateway_attached):
+    source = _source_agent()
+    source.spec = {
+        **source.spec,
+        "memory": {"short_term": False, "long_term": False},
+        "tools": [{"type": "gateway", "name": "hr-database"}] if gateway_attached else [],
+    }
+    files = {
+        "main.py": (FIXTURES / "harness_export_nomemory_main.py").read_text(),
+        "mcp_client/client.py": "def get_all_gateway_mcp_clients():\n    return []\n",
+        "pyproject.toml": PYPROJECT,
+    }
+    if gateway_attached:
+        with pytest.raises(hc.ConversionError, match="module-scope"):
+            hc.build_conversion_spec(
+                source, files, ["bedrock-agentcore==1.17.*"], "no-tools-rt", ws_ctx({}),
+            )
+        return
+    spec = hc.build_conversion_spec(
+        source, files, ["bedrock-agentcore==1.17.*"], "no-tools-rt", ws_ctx({}),
+    )
+    assert not spec.memory.short_term and not spec.memory.long_term
+    assert spec.tools == []
+    assert hc.GRAFT_START in spec.code_bundle["main.py"]
+    assert hc.GW_SOFTFAIL_START not in spec.code_bundle["main.py"]
+    assert spec.code_bundle["mcp_client/client.py"] == files["mcp_client/client.py"]
+
+
 def test_graft_is_idempotent_and_upgrades_promoted_defaults():
     first = hc.graft_config_bundle(MAIN_PY)
     upgraded = hc.graft_config_bundle(
@@ -138,6 +179,7 @@ def test_graft_fails_without_anchors():
         "other = get_or_create_agent(session_id, user_id)",
         "agent = get_or_create_agent(other_session, user_id)",
         "agent = make_agent(session_id, user_id)",
+        "agent = get_or_create_agent(session_id)",
         "agent = get_or_create_agent(session_id, user_id, other_plugins)",
         "agent = get_or_create_agent(session_id, user_id, _skill_plugins, extra)",
         "agent = get_or_create_agent(session_id=session_id, user_id=user_id)",

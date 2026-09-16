@@ -14,7 +14,7 @@ import {
 } from "../components";
 import type { AgentInfo, OnlineQuality, OverviewInfo } from "../lib/api";
 import { api, errorMessage } from "../lib/api";
-import { LAB_GUIDE_URL } from "../lib/links";
+import { AnnouncementFeed } from "../components/AnnouncementFeed";
 
 // Two kinds of health row, and they need different empty states:
 //   "bootstrap" — the resource comes from `make bootstrap` (config ids, or the
@@ -189,20 +189,7 @@ export function Overview() {
         meta={t("overview.meta")}
       />
 
-      <a
-        className="labcta"
-        href={LAB_GUIDE_URL}
-        target="_blank"
-        rel="noreferrer"
-        data-testid="lab-guide-cta"
-      >
-        <span className="ic">⧉</span>
-        <span className="tx">
-          <b>{t("overview.lab.title")}</b>
-          <span className="sub">{t("overview.lab.sub")}</span>
-        </span>
-        <span className="go">{t("overview.lab.open")} ↗</span>
-      </a>
+      <AnnouncementFeed />
 
       <div className="tiles five">
         <StatTile

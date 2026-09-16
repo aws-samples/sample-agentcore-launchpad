@@ -44,6 +44,10 @@ const Observability = lazy(() =>
 const Registry = lazy(() => import("./pages/Registry").then((m) => ({ default: m.Registry })));
 const SkillLab = lazy(() => import("./pages/SkillLab").then((m) => ({ default: m.SkillLab })));
 const Users = lazy(() => import("./pages/Users").then((m) => ({ default: m.Users })));
+const Announcements = lazy(() =>
+  import("./pages/Announcements").then((m) => ({ default: m.Announcements })),
+);
+const Videos = lazy(() => import("./pages/Videos").then((m) => ({ default: m.Videos })));
 const Workspaces = lazy(() =>
   import("./pages/Workspaces").then((m) => ({ default: m.Workspaces })),
 );
@@ -68,6 +72,8 @@ export default function App() {
               <Route path="skill-lab" element={<SkillLab />} />
               <Route path="governance" element={<Governance />} />
               <Route path="users" element={<Users />} />
+              <Route path="announcements" element={<Announcements />} />
+              <Route path="videos" element={<Videos />} />
               <Route path="workspaces" element={<Workspaces />} />
               {/* Catch-all stays INSIDE the Shell group so an unknown URL keeps
                   the sidebar/topbar/footer instead of a bare background grid. */}

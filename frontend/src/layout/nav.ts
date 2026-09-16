@@ -38,10 +38,18 @@ export const PLATFORM_COUNT = 7;
 export const ADMIN_NAV_ENTRIES: NavEntry[] = [
   { idx: "12", to: "/users", labelKey: "nav.users" },
   { idx: "13", to: "/workspaces", labelKey: "nav.workspaces" },
+  { idx: "◉", to: "/announcements", labelKey: "nav.announcements", adminOnly: true },
+];
+
+/** Learning resources sit outside the console's numbered operation sequence. */
+export const LEARN_NAV_ENTRIES: NavEntry[] = [
+  { idx: "▶", to: "/videos", labelKey: "nav.videos" },
 ];
 
 /** Every routable entry, for breadcrumb resolution. */
-export const ALL_NAV_ENTRIES: NavEntry[] = [...NAV_ENTRIES, ...ADMIN_NAV_ENTRIES];
+export const ALL_NAV_ENTRIES: NavEntry[] = [
+  ...NAV_ENTRIES, ...ADMIN_NAV_ENTRIES, ...LEARN_NAV_ENTRIES,
+];
 
 /**
  * The entry a pathname belongs to: the LONGEST `to` that prefixes it, so
@@ -79,5 +87,7 @@ export const ROUTE_PATHS: string[] = [
   "/skill-lab",
   "/governance",
   "/users",
+  "/announcements",
   "/workspaces",
+  "/videos",
 ];

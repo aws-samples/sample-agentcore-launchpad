@@ -20,8 +20,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from app.assistant import evaluation_repair, service
 from app.assistant import proposal as proposal_contract
-from app.assistant import service
 from app.assistant.principal import principal_of
 from app.core.db import SessionLocal, get_db
 from app.core.errors import AppError
@@ -170,8 +170,15 @@ class NewConversation(BaseModel):
     title: str = Field(default="", max_length=200)
 
 
+class EvaluationPlanRepair(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    plan_revision: int = Field(ge=1, strict=True)
+    plan_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class TurnRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=service.MAX_PROMPT_CHARS)
+    evaluation_plan_repair: EvaluationPlanRepair | None = None
 
 
 class ProposalEdit(BaseModel):
@@ -262,6 +269,13 @@ def turn(
     service._require_available(db, ws.row)
     service.require_turn_capacity(conversation)
     service.check_prompt(conversation, req.prompt)
+    prompt = req.prompt
+    if req.evaluation_plan_repair is not None:
+        prompt = evaluation_repair.repair_prompt(
+            db, conversation, prompt,
+            plan_revision=req.evaluation_plan_repair.plan_revision,
+            plan_hash=req.evaluation_plan_repair.plan_hash,
+        )
     workspace_row, workspace = ws.row, ws.context
     run = service.TurnRun()
 
@@ -271,7 +285,7 @@ def turn(
         try:
             conversation = service.owned_conversation(session, ws.id, principal, conversation_id)
             run.inner = service.run_turn(
-                session, conversation, workspace_row, workspace, identity, req.prompt, run=run
+                session, conversation, workspace_row, workspace, identity, prompt, run=run
             )
             for event in run.inner:
                 yield sse_encode(event)

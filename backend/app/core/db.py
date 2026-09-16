@@ -19,7 +19,7 @@ class Base(DeclarativeBase):
 DEFAULT_WORKSPACE_ID = "default"
 
 # Every table whose rows belong to one (account, region) environment. `users`,
-# `workspaces` and `user_workspaces` are hub-global and stay off this list.
+# `workspaces`, `user_workspaces`, and `announcements` are hub-global and stay off this list.
 WORKSPACE_SCOPED_TABLES = (
     "agents",
     "deployments",

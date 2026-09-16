@@ -30,6 +30,7 @@ import type {
   AssistantProposalContent,
   AssistantProposalStatus,
   AssistantStatus,
+  AssistantTurnRequest,
   JobInfo,
   StageInfo,
 } from "../lib/api";
@@ -40,6 +41,7 @@ import {
   errorMessage,
 } from "../lib/api";
 import { MODEL_CATALOG, type ModelSource } from "../lib/models";
+import { WORKSPACE_HEADER } from "../lib/workspace-header";
 import { useWorkspace } from "../workspace/workspace-context";
 import { EvaluationAssetsPanel } from "./EvaluationAssetsPanel";
 
@@ -475,7 +477,7 @@ export function CreateAgentAssistant() {
     startedIn: string | null,
     gen: number,
   ) => {
-    const detail = await api.assistantConversation(conversationId);
+    const detail = await api.assistantConversation(conversationId, startedIn);
     if (!stillCurrent(startedIn, gen) || detail.id !== conversationId)
       return null;
     setConversation(detail);
@@ -612,13 +614,31 @@ export function CreateAgentAssistant() {
     return lines.join("\n\n");
   };
 
-  const send = async () => {
-    if (!conversation || !input.trim() || busy) return;
+  const repairDisabledReason = !conversation || !status?.available
+    ? t("assistantEval.repairUnavailable")
+    : editing
+      ? t("assistantEval.repairProposalEditorOpen")
+      : busy || approving || confirm || clearing || conversation.turn_in_progress !== null
+        ? t("assistantEval.repairBusy")
+        : undefined;
+
+  // Both the composer and evaluation repair own the same stream and generation.
+  // The controller is also a synchronous claim, before React renders `busy`.
+  const send = async (request: AssistantTurnRequest): Promise<AssistantProposal | null> => {
+    const repairing = !!request.evaluation_plan_repair;
+    if (
+      !conversation || !request.prompt.trim() || busy || abortRef.current ||
+      !status?.available || conversation.turn_in_progress !== null ||
+      (repairing && repairDisabledReason)
+    ) {
+      if (repairing) throw new Error(repairDisabledReason ?? t("assistantEval.repairBusy"));
+      return null;
+    }
     const startedIn = scope.current;
     const gen = generation.current;
     const conversationId = conversation.id;
-    const prompt = input;
-    setInput("");
+    const { prompt } = request;
+    if (!repairing) setInput("");
     setBusy(true);
     setMessages((m) => [
       ...m,
@@ -641,8 +661,11 @@ export function CreateAgentAssistant() {
         `/api/assistant/architect/conversations/${encodeURIComponent(conversationId)}/turns`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt }),
+          headers: {
+            "Content-Type": "application/json",
+            ...(startedIn ? { [WORKSPACE_HEADER]: startedIn } : {}),
+          },
+          body: JSON.stringify(request),
           signal: controller.signal,
         },
       );
@@ -661,8 +684,10 @@ export function CreateAgentAssistant() {
         );
       }
       let proposal: AssistantProposal | null = null;
+      let completed = false;
+      let turnError: ApiError | null = null;
       for await (const evt of sseEvents(res)) {
-        if (!stillCurrent(startedIn, gen)) return;
+        if (!stillCurrent(startedIn, gen)) return null;
         const data = evt.data as Record<string, unknown>;
         if (evt.event === "delta") append(String(data.text ?? ""));
         else if (evt.event === "tool") {
@@ -709,6 +734,11 @@ export function CreateAgentAssistant() {
           }
         } else if (evt.event === "error") {
           const code = typeof data.code === "string" ? data.code : null;
+          turnError = new ApiError(
+            code ?? "assistant.turn_failed",
+            String(data.message ?? t("assistantEval.repairFailed")),
+            null,
+          );
           setMessages((m) => [
             ...m.filter(
               (x) => !(x.role === "assistant" && x.streaming && !x.text),
@@ -720,15 +750,31 @@ export function CreateAgentAssistant() {
                 : String(data.message ?? ""),
             },
           ]);
-        }
+        } else if (evt.event === "done") completed = true;
       }
-      if (!stillCurrent(startedIn, gen)) return;
+      if (!stillCurrent(startedIn, gen)) return null;
       setMessages((m) => m.map((x) => ({ ...x, streaming: false })));
       // re-read the server's transcript + proposals: the ledger is the truth
-      await reload(conversationId, startedIn, gen);
+      const detail = await reload(conversationId, startedIn, gen);
+      if (!detail || !stillCurrent(startedIn, gen)) return null;
+      if (repairing) {
+        if (turnError) throw turnError;
+        if (!completed) throw new Error(t("assistantEval.repairIncomplete"));
+        const saved = detail.proposals.find((p) =>
+          p.id === proposal?.id && p.revision === proposal.revision &&
+          p.content_hash === proposal.content_hash,
+        );
+        if (
+          !saved || saved.conversation_id !== conversationId || saved.source !== "model" ||
+          saved.revision <= (latest?.revision ?? 0) || saved.status !== "draft" ||
+          saved.validation_errors.length > 0
+        ) throw new Error(t("assistantEval.repairNoProposal"));
+        return saved;
+      }
       if (proposal && stillCurrent(startedIn, gen)) setEditing(null);
+      return null;
     } catch (err) {
-      if (!stillCurrent(startedIn, gen) || controller.signal.aborted) return;
+      if (!stillCurrent(startedIn, gen) || controller.signal.aborted) return null;
       setMessages((m) => [
         ...m.filter((x) => !(x.role === "assistant" && x.streaming && !x.text)),
         {
@@ -739,6 +785,8 @@ export function CreateAgentAssistant() {
       if (isUnauthorized(err)) toast(t("assistantPage.expiredSession"));
       else if (err instanceof ApiError && err.code === "assistant.unavailable")
         loadStatus();
+      if (repairing) throw err;
+      return null;
     } finally {
       if (stillCurrent(startedIn, gen)) setBusy(false);
       if (abortRef.current === controller) abortRef.current = null;
@@ -1100,8 +1148,8 @@ export function CreateAgentAssistant() {
                 </span>
                 <Btn
                   primary
-                  onClick={() => void send()}
-                  disabled={!conversation || busy || !input.trim()}
+                  onClick={() => void send({ prompt: input })}
+                  disabled={!conversation || busy || !input.trim() || conversation.turn_in_progress !== null}
                   data-testid="assistant-send"
                 >
                   {busy ? t("assistantPage.sending") : t("assistantPage.send")}
@@ -1204,6 +1252,7 @@ export function CreateAgentAssistant() {
                       {(latest.status === "draft" ||
                         latest.status === "invalid") && (
                         <Btn
+                          disabled={busy}
                           onClick={() => setEditing(draftFrom(latest.content))}
                           data-testid="proposal-edit"
                         >
@@ -1213,6 +1262,7 @@ export function CreateAgentAssistant() {
                       {(latest.status === "draft" ||
                         latest.status === "invalid") && (
                         <Btn
+                          disabled={busy}
                           onClick={() =>
                             setConfirm({
                               kind: "reject",
@@ -1228,7 +1278,7 @@ export function CreateAgentAssistant() {
                       {latest.status === "draft" && conversation && (
                         <Btn
                           primary
-                          disabled={!canDeploy || approving}
+                          disabled={!canDeploy || approving || busy}
                           disabledReason={deployReason}
                           onClick={() =>
                             setConfirm({
@@ -1334,6 +1384,7 @@ export function CreateAgentAssistant() {
           </div>
           {conversation && latest && (
             <EvaluationAssetsPanel
+              key={`${workspaceId}:${conversation.id}`}
               conversationId={conversation.id}
               proposals={conversation.proposals}
               canMaterialize={status.can_materialize_evaluation_assets}
@@ -1342,6 +1393,11 @@ export function CreateAgentAssistant() {
               onError={(m) => toast(m)}
               index={3}
               deployed={deployed}
+              repairDisabledReason={repairDisabledReason}
+              onRepair={(repair) => send({
+                prompt: t("assistantEval.repairPrompt"),
+                evaluation_plan_repair: repair,
+              })}
             />
           )}
         </div>

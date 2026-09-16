@@ -38,6 +38,31 @@ unified create → deploy → invoke → observe experience, not to reimplement 
  └───────────────────────────────────────────────────────────────┘
 ```
 
+## Overview announcements
+
+The overview announcement panel replaces the static lab-guide banner.
+`/announcements` provides administrator-only draft editing, publication,
+withdrawal, and deletion. The hub-global `announcements` ledger table stores
+separate editable and published snapshots with optimistic revisions; ordinary
+members see only the published projection through `GET /api/announcements`.
+The central route-policy table marks management endpoints `ADMIN` and exempts
+all announcement routes from workspace resolution. These are platform-authored
+messages, not AWS resource state. No content is published on startup or reads.
+See [Announcements](announcements.md) for the lifecycle and explicit initial
+publication workflow.
+
+## Shared tutorial videos
+
+The console's **Learn → Videos** page (`/videos?video=<id>`) is a lazy-loaded,
+read-only media library. Its bilingual catalog, `frontend/src/config/videos.json`,
+holds permanent CloudFront URLs and chapter offsets shared by every environment.
+Video playback goes directly from browser to CDN; it does not use workspace APIs,
+the ledger, or AgentCore. The separately deployed `launchpad-videos` CDK stack
+owns a private, versioned S3 origin and an OAC-restricted CloudFront distribution
+with anonymous cross-origin media headers. It is independent of `launchpad-base`
+and ordinary bootstrap. See [Video library](video-library.md) for resource ownership,
+catalog updates, and the immutable media publication workflow.
+
 ## The four-layer mapping (from prompt.md)
 
 The brief organizes AgentCore capabilities into four layers; each is backed by
@@ -1070,14 +1095,34 @@ materialization** that creates the assets. The Agent proposal, its approval and 
 deployed Agent are never touched; approving an Agent is not permission for cloud
 evaluation resources.
 
-**Four things that are deliberately different from each other.**
+**Separate actions and their effects.**
 
 | Action | Where | What happens | AWS write? |
 |---|---|---|---|
 | Prepare / edit a plan | `POST …/evaluation-plan/prepare`, `PUT …/evaluation-plan` (member, owner-bound) | a new plan revision row (`assistant_evaluation_plans`), validated against the exact proposal revision + content hash it names | none |
+| Ask the assistant to fix an invalid plan | `POST …/turns` with `evaluation_plan_repair: {plan_revision, plan_hash}` (member, owner-bound) | an ordinary discussion turn with server-resolved plan/errors and proposal context → a new inert proposal; the console then prepares a plan from that exact new revision for validation and review | one ordinary preset invocation; no resource creation |
 | Create assets | `POST …/evaluation-plan/materialize` (admin **and** owner; exact plan revision + hash; disclosure acknowledged) | one `evaluation_asset_operations` row → local **Launchpad Dataset** (ledger), **AgentCore evaluators**, and for code rules one **Lambda** + its role/log group/resource policy + an additive execution-role policy | CreateEvaluator, Lambda/IAM/Logs — **never** StartBatchEvaluation, CreateDataset (AWS sync), online evaluation, InvokeHarness/Runtime or a model call |
 | Sync the Dataset to AWS | existing `POST /api/eval/datasets/{id}/sync-to-aws` | unchanged, explicit, separate | CreateDataset/AddDatasetExamples |
 | Run an evaluation | existing `POST /api/eval/runs` (`perm:eval.run`) | unchanged, separate, billable | invokes + StartBatchEvaluation |
+
+**Repair works on the source proposal.** The invalid-plan notice offers **ASK
+ASSISTANT TO FIX**, alongside manual preparation and JSON editing. The client names
+the current plan revision/hash; `assistant/evaluation_repair.py` resolves the saved
+plan and its validation errors inside the owned conversation and workspace. The
+prompt includes the latest proposal as the baseline and, when different, the plan's
+older source proposal, so later configuration changes are preserved rather than
+silently replaced by old content. The assistant is asked to repair the proposal's
+`evaluation_plan` seed and related golden tests/recommendations, using actual tool
+names rather than invented trajectories. Unsupported global evaluator coverage
+must be corrected in the design. Ordinary prompt/replay limits remain enforced:
+oversized context is refused with a JSON-editing fallback, never silently truncated.
+
+The same turn claim, SSE cancellation and inert proposal validation are used as
+ordinary discussion. Only a successfully completed turn with a new usable proposal
+triggers preparation from that exact revision. The console shows the resulting
+validation state, including remaining errors; there is no automatic retry or asset
+creation. Unsent composer text is preserved, open JSON/proposal edits block repair,
+and responses arriving after a conversation/workspace switch are discarded.
 
 **The typed plan** (`backend/app/assistant/evaluation_plan.py`, ≤ 160 000 bytes) is
 bound to `source_revision` + `source_content_hash`, hashed canonically, and carries:
@@ -1681,7 +1726,11 @@ Launchpad config-bundle contract onto the exported `main.py`, which is mandatory
 rather than cosmetic: the export bakes `DEFAULT_SYSTEM_PROMPT` as a constant, so an
 ungrafted conversion would no-op A/B experiments exactly as the harness does, and a
 missing graft anchor therefore fails the conversion instead of shipping a silently
-non-A/B-able agent. The emitted `zip_runtime` spec carries the harness's gateway
+non-A/B-able agent. The factory anchor accepts the CLI's zero-argument form when
+Memory and Skills are disabled, the session/user form, and the session/user/Skills
+form. Tool-free exports can carry an unused gateway-client scaffold; only that
+inert case skips the gateway grafts, while configured or constructed clients must
+still pass their anchors. The emitted `zip_runtime` spec carries the harness's gateway
 `ToolRef`s, skill prefixes, memory and KB configuration forward, records what was
 wired in `conversion_notes`, and stamps `source_harness` so `experiment_capability`
 reports the new agent eligible. The v1 "gateway MCP not wired" caveat is gone, not

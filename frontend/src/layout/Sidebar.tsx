@@ -4,7 +4,8 @@ import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/auth-context";
 import { useWorkspace } from "../workspace/workspace-context";
 import {
-  ADMIN_NAV_ENTRIES, NAV_ENTRIES, navEntryFor, PLATFORM_COUNT, type NavEntry,
+  ADMIN_NAV_ENTRIES, LEARN_NAV_ENTRIES, NAV_ENTRIES, navEntryFor, PLATFORM_COUNT,
+  type NavEntry,
 } from "./nav";
 import type { HealthInfo } from "./useHealth";
 
@@ -50,6 +51,8 @@ export function Sidebar({ health }: { health: HealthInfo | null }) {
           {ADMIN_NAV_ENTRIES.map(renderLink)}
         </>
       ) : null}
+      <div className="label">{t("nav.learn")}</div>
+      {LEARN_NAV_ENTRIES.map(renderLink)}
       <div className="label">{t("nav.phase02")}</div>
       {/* placeholders follow the numbered flow; 02 became the architect assistant */}
       <div className="nav-item dim">

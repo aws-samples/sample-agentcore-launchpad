@@ -362,18 +362,12 @@ def _agent_assignment(main_py: str) -> tuple[ast.Assign, bool]:
             and isinstance(call, ast.Call)
             and isinstance(call.func, ast.Name)
             and call.func.id == "get_or_create_agent"
-            and len(call.args) in (2, 3)
             and not call.keywords
-            and isinstance(call.args[0], ast.Name)
-            and call.args[0].id == "session_id"
-            and isinstance(call.args[1], ast.Name)
-            and call.args[1].id == "user_id"
-            and (
-                len(call.args) == 2
-                or (
-                    isinstance(call.args[2], ast.Name)
-                    and call.args[2].id == "_skill_plugins"
-                )
+            and all(isinstance(arg, ast.Name) for arg in call.args)
+            and tuple(arg.id for arg in call.args) in (
+                (),  # CLI export without Memory or Skills.
+                ("session_id", "user_id"),
+                ("session_id", "user_id", "_skill_plugins"),
             )
         ):
             continue
@@ -382,8 +376,8 @@ def _agent_assignment(main_py: str) -> tuple[ast.Assign, bool]:
     if len(matches) != 1:
         raise ConversionError(
             "graft anchor missing: expected exactly one "
-            "supported agent = get_or_create_agent(session_id, user_id"
-            "[, _skill_plugins]) assignment "
+            "supported agent = get_or_create_agent(...) assignment "
+            "(no arguments, session_id/user_id, or session_id/user_id/_skill_plugins) "
             "(agentcore CLI codegen changed?)"
         )
     assignment = matches[0]
@@ -752,10 +746,15 @@ def build_conversion_spec(
         default_system_prompt=prompt_default,
         tool_description_overrides=tool_defaults,
     )
-    if "mcp_client/client.py" in grafted:
-        # Only when the export actually carries a gateway client. Its absence is
-        # benign (no gateway attached); the anchors missing while the client IS
-        # present means the codegen changed, which both grafts reject.
+    client_py = grafted.get("mcp_client/client.py")
+    if client_py is not None and (
+        gateway_tools
+        or "MCPClient(" in client_py
+        or "get_all_gateway_mcp_clients" in grafted["main.py"]
+    ):
+        # A tool-free export also carries an unused client.py scaffold returning
+        # no clients. Only that inert case may omit the main.py call; configured
+        # tools or actual client construction must still pass both graft guards.
         grafted["mcp_client/client.py"] = graft_lazy_gateway_token(
             grafted["mcp_client/client.py"]
         )

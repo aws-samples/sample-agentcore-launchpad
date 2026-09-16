@@ -5,6 +5,37 @@ import type { EvaluationRunInfo, EvaluationRunResults, InsightTrees } from "./ev
 import type { ModelSource, ReasoningEffort } from "./models";
 import { WORKSPACE_HEADER } from "./workspace-header";
 
+export interface AnnouncementContent {
+  title: string;
+  body: string;
+  link_url: string | null;
+  link_label: string | null;
+}
+
+export interface PublicAnnouncement extends AnnouncementContent {
+  id: string;
+  published_at: string;
+}
+
+export interface Announcement {
+  id: string;
+  content: AnnouncementContent;
+  published_content: AnnouncementContent | null;
+  status: "draft" | "published";
+  has_unpublished_changes: boolean;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+  published_at: string | null;
+  created_by: string;
+  updated_by: string;
+}
+
+export interface AnnouncementPage<T> {
+  announcements: T[];
+  total: number;
+}
+
 export interface StageInfo {
   name: string;
   status: "pending" | "running" | "succeeded" | "skipped" | "failed";
@@ -967,6 +998,17 @@ export interface AssistantConversationDetail extends AssistantConversationSummar
   catalog: AssistantCatalog;
   messages: AssistantMessage[];
   proposals: AssistantProposal[];
+}
+
+/** The server resolves the saved invalid plan and its authoritative repair context. */
+export interface AssistantEvalPlanRepair {
+  plan_revision: number;
+  plan_hash: string;
+}
+
+export interface AssistantTurnRequest {
+  prompt: string;
+  evaluation_plan_repair?: AssistantEvalPlanRepair;
 }
 
 /** `GET …/conversations/{id}/footprint` — what CLEAR would remove and what blocks it. */
@@ -3184,6 +3226,37 @@ export interface DiscoverableRegistryRecord {
 }
 
 export const api = {
+  listAnnouncements: (limit = 3, offset = 0, signal?: AbortSignal) =>
+    request<AnnouncementPage<PublicAnnouncement>>(
+      `/api/announcements?limit=${limit}&offset=${offset}`, { signal },
+    ),
+  manageAnnouncements: (limit = 20, offset = 0, signal?: AbortSignal) =>
+    request<AnnouncementPage<Announcement>>(
+      `/api/announcements/manage?limit=${limit}&offset=${offset}`, { signal },
+    ),
+  getAnnouncement: (id: string, signal?: AbortSignal) =>
+    request<Announcement>(`/api/announcements/${encodeURIComponent(id)}`, { signal }),
+  createAnnouncement: (content: AnnouncementContent) =>
+    request<Announcement>("/api/announcements", {
+      method: "POST", body: JSON.stringify(content),
+    }),
+  saveAnnouncement: (id: string, content: AnnouncementContent, expectedRevision: number) =>
+    request<Announcement>(`/api/announcements/${encodeURIComponent(id)}`, {
+      method: "PUT", body: JSON.stringify({ ...content, expected_revision: expectedRevision }),
+    }),
+  publishAnnouncement: (id: string, expectedRevision: number) =>
+    request<Announcement>(`/api/announcements/${encodeURIComponent(id)}/publish`, {
+      method: "POST", body: JSON.stringify({ expected_revision: expectedRevision }),
+    }),
+  unpublishAnnouncement: (id: string, expectedRevision: number) =>
+    request<Announcement>(`/api/announcements/${encodeURIComponent(id)}/unpublish`, {
+      method: "POST", body: JSON.stringify({ expected_revision: expectedRevision }),
+    }),
+  deleteAnnouncement: (id: string, expectedRevision: number) =>
+    request<{ deleted: true }>(
+      `/api/announcements/${encodeURIComponent(id)}?expected_revision=${expectedRevision}`,
+      { method: "DELETE" },
+    ),
   /** Consumer view of the registry; `type` is optional (`A2A` / `MCP` / `AGENT_SKILLS`). */
   registryDiscoverable: (type?: string) =>
     request<{ records: DiscoverableRegistryRecord[]; count: number }>(
@@ -3447,9 +3520,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ title }),
     }),
-  assistantConversation: (id: string) =>
+  assistantConversation: (id: string, workspaceId?: string | null) =>
     request<AssistantConversationDetail>(
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}`,
+      { headers: pinnedWorkspace(workspaceId) },
     ),
   /** What CLEAR would remove for a conversation (deployed Agents, evaluation-assets
    *  operations with their cloud resources, local Datasets) and what blocks it. */

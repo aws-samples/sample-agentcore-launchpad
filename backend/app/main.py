@@ -26,6 +26,7 @@ from app.optimization.routers import router as experiments_router
 from app.optimization.service import clear_stale_running_actions
 from app.routers.agent_skills import router as agent_skills_router
 from app.routers.agents import router as agents_router
+from app.routers.announcements import router as announcements_router
 from app.routers.apikeys import router as apikeys_router
 from app.routers.assistant import AssistantBodyCap
 from app.routers.assistant import router as assistant_router
@@ -134,6 +135,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     init_db()
     app.include_router(auth_router)
     app.include_router(overview_router)
+    app.include_router(announcements_router)
     app.include_router(agents_router)
     app.include_router(agent_skills_router)  # attach-without-registering skill sources
     app.include_router(tools_router)

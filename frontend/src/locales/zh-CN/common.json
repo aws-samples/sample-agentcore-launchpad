@@ -90,7 +90,32 @@
     "workspaces": "工作区",
     "notFound": "页面不存在",
     "administration": "管理",
-    "assistant": "架构助手"
+    "assistant": "架构助手",
+    "learn": "学习",
+    "videos": "视频介绍",
+    "announcements": "公告管理"
+  },
+  "videos": {
+    "kicker": "// 学习",
+    "title": "视频介绍",
+    "description": "观看 Launchpad 操作演示，按章节跳转到想要尝试的步骤。",
+    "count_one": "{{count}} 个视频",
+    "count_other": "{{count}} 个视频",
+    "library": "全部视频",
+    "player": "观看视频",
+    "selected": "已选择",
+    "duration": "时长 {{duration}}",
+    "published": "发布于 {{date}}",
+    "chapters": "章节",
+    "chapterHint": "选择章节，从对应位置开始播放。",
+    "empty": "暂无已发布的视频。",
+    "emptyHint": "新的操作演示会显示在这里。",
+    "loadFailed": "无法加载此视频。",
+    "loadFailedHint": "请检查网络后重试。如果仍然失败，请尝试其他浏览器。",
+    "retry": "重试",
+    "playBlocked": "未能开始播放，请点击播放器中的播放按钮继续。",
+    "captionFailed": "无法加载字幕，视频仍可继续观看。",
+    "unsupported": "您的浏览器不支持此视频播放器。"
   },
   "notFound": {
     "kicker": "控制台 // 404",
@@ -2096,6 +2121,10 @@
     "assistant.turn_in_progress": "该会话的另一轮对话仍在流式返回 — 请等待其完成。",
     "assistant.prompt_too_large": "消息过大，无法在一轮内发送 — 请缩短或拆分。",
     "assistant.proposal_too_large": "提案超过大小上限。",
+    "assistant.evaluation_repair_stale": "评估计划已发生变化。请重新加载计划，查看最新错误后再请求修复。",
+    "assistant.evaluation_repair_not_needed": "最新评估计划已不再处于无效状态。请重新加载，查看当前结果。",
+    "assistant.evaluation_repair_too_large": "保存的修复上下文超出助手单轮对话的大小限制。请使用“以 JSON 编辑”手动修正计划。",
+    "assistant.evaluation_plan_source_invalid": "来源提案无效或不可用。请先修改提案，再准备新的评估计划。",
     "observability.session_not_found": "会话不存在。",
     "observability.trace_not_found": "Trace 不存在。",
     "system_agent.deploy_in_progress": "该预置正在部署中；请等当前任务结束后再修改设置。",
@@ -2109,7 +2138,9 @@
     "system_skill.foreign_record": "已存在同名 Skill 记录且不属于平台——请先在 Registry 中重命名或删除它。",
     "system_skill.stale_release": "已注册的 Skill 记录描述的是更新的版本；过期的注册不能将其降级。",
     "system_skill.record_deprecated": "该 Skill 记录已为 DEPRECATED（终态）——请在 AWS 控制台删除后重新注册。",
-    "system_skill.readback_mismatch": "回读的 Registry 记录与写入内容不一致；未将注册报告为完成。"
+    "system_skill.readback_mismatch": "回读的 Registry 记录与写入内容不一致；未将注册报告为完成。",
+    "announcements.conflict": "此公告在加载后已发生变化，你的修改尚未应用。",
+    "announcements.not_found": "此公告已不存在，可能已被其他管理员删除。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",
@@ -4200,7 +4231,23 @@
     "prepareAgain": "重新准备（新版本）",
     "editJson": "以 JSON 编辑",
     "empty": "尚无评估计划。请从某个提案版本准备一份：每个黄金测试成为一个场景，每条建议都会被归类——能精确识别的评估器 id 会被映射，其余保持“未解决”，直到你做出决定。",
-    "invalidNote": "该计划版本未通过校验，无法创建。请通过“以 JSON 编辑”修正（会生成新版本）：",
+    "invalidNote": "该计划版本未通过校验，无法创建评估资产。点击“让助手修复”可请求修改提案，再准备新计划供你检查。也可以通过“以 JSON 编辑”手动修正，或从所选提案“重新准备”。重复准备同一提案可能仍会出现相同错误：",
+    "repair": "让助手修复",
+    "repairHint": "助手会根据保存的计划和校验错误生成新提案，再准备新计划。结果仍需检查，也可能需要继续修正。此操作不会创建评估资产。",
+    "repairPrompt": "请根据保存的评估计划及其校验错误修改提案。结合提供的计划、错误和提案上下文，保留无关需求，返回完整的新 launchpad-proposal 供审核。不要批准或部署 Agent，也不要创建评估资产。",
+    "repairJsonOpen": "请先保存或取消已打开的计划 JSON 草稿，再让助手修复。",
+    "repairProposalEditorOpen": "请先保存或取消正在编辑的提案，再让助手修复计划。",
+    "repairBusy": "请等待当前对话或操作完成后，再请求修复。",
+    "repairUnavailable": "架构助手在当前会话或工作区中不可用。",
+    "repairFailed": "助手修复失败。请查看对话后重试，或编辑计划 JSON。",
+    "repairIncomplete": "助手流式回复结束，但未收到成功完成的结果。尚未准备新计划，请查看对话后再重试。",
+    "repairNoProposal": "助手未返回可用的新提案，尚未准备新计划。请查看回复及提案错误，继续对话或编辑计划 JSON。",
+    "repairStatus": {
+      "asking": "正在让助手修改提案… 你尚未发送的消息会保留。",
+      "preparing": "已收到新提案，正在根据该版本准备计划…",
+      "ready": "新计划已通过校验。请检查后再决定是否创建评估资产，目前尚未创建任何资产。",
+      "invalid": "已准备新计划，但仍有校验错误。请查看错误信息，继续与助手讨论或编辑 JSON。目前尚未创建任何资产。"
+    },
     "jsonTitle": "计划 JSON（保存即生成新版本）",
     "saveRevision": "保存为新版本",
     "cancel": "取消",
@@ -4445,5 +4492,91 @@
     "confirmed": "已确认",
     "unconfirmed": "未确认",
     "selected": "已入图"
+  },
+  "announcements": {
+    "kicker": "// 管理",
+    "title": "公告管理",
+    "description": "向此 Launchpad 的所有用户发布通知，适用于所有工作区。",
+    "feedTitle": "公告",
+    "manage": "管理公告",
+    "publicEmpty": "暂无已发布的公告。",
+    "listTitle": "全部公告",
+    "new": "新建公告",
+    "newDraft": "新草稿",
+    "manageEmpty": "暂无公告，可先创建一份草稿。",
+    "pick": "选择一条公告进行编辑，或创建新草稿。",
+    "editorTitle": "编辑草稿",
+    "publishedTitle": "当前公开版本",
+    "publishedHint": "这是所有用户目前在概览页看到的版本。",
+    "notPublic": "此公告尚未在概览页公开。",
+    "draftHint": "保存只更新草稿。发布已保存的草稿后，所有用户才能看到新内容。",
+    "contentHint": "纯文本，最多 6,000 个字符。内容保留撰写时的语言，不渲染 HTML 或 Markdown。",
+    "linkHint": "选填。使用 /videos 等应用路径或完整的 https:// 链接，并填写链接文字。",
+    "newTab": "（在新标签页中打开）",
+    "pagination": "公告分页",
+    "status": {
+      "draft": "草稿",
+      "published": "已发布"
+    },
+    "unpublishedChanges": "有未发布的修改",
+    "unsaved": "未保存",
+    "buffers": "本页保留的草稿，点击可继续编辑。",
+    "working": "处理中…",
+    "needsAttention": "操作失败",
+    "updated": "更新于 {{date}}",
+    "editedBy": "最近保存：{{user}} · {{date}}",
+    "publishedAt": "发布于 {{date}}",
+    "revision": "修订版本 {{revision}}",
+    "noChanges": "草稿没有未保存的修改。",
+    "saveFirst": "请先保存修改，再发布草稿。",
+    "createFirst": "请先保存新草稿，再发布。",
+    "alreadyPublished": "已保存的草稿与当前公开版本一致。",
+    "preserved": "输入的内容已保留，请检查错误后重试。",
+    "conflictHint": "此公告已被其他操作修改。你的输入仍然保留，请先复制需要保留的内容，再加载最新草稿并重新编辑。",
+    "clearSelection": "返回列表",
+    "saving": "正在保存草稿…",
+    "publishing": "正在发布…",
+    "fields": {
+      "title": "标题（必填，最多 160 个字符）",
+      "body": "正文（必填）",
+      "linkUrl": "链接地址（选填）",
+      "linkLabel": "链接文字（最多 80 个字符）"
+    },
+    "actions": {
+      "save": "保存草稿",
+      "publish": "发布已保存的草稿",
+      "unpublish": "撤回公告",
+      "delete": "删除公告",
+      "reload": "加载最新草稿"
+    },
+    "validation": {
+      "required": "请填写标题和正文。",
+      "linkPair": "链接地址和链接文字需要同时填写，或同时留空。",
+      "linkUrl": "请使用以 / 开头的应用路径或 HTTPS 链接，不得包含凭据、空格或反斜杠。"
+    },
+    "success": {
+      "save": "草稿已保存，可在确认后发布。",
+      "publish": "已发布，所有用户现在都能在概览页看到此版本。",
+      "unpublish": "已从概览页撤回，草稿仍然保留。",
+      "reload": "已加载最新草稿。"
+    },
+    "confirm": {
+      "publish": {
+        "title": "发布已保存的草稿？",
+        "body": "将“{{title}}”发布给此 Launchpad 的所有用户？已保存的草稿将替换当前公开版本。"
+      },
+      "unpublish": {
+        "title": "撤回公告？",
+        "body": "将“{{title}}”从所有用户的概览页移除？草稿会保留，之后可再次发布。"
+      },
+      "delete": {
+        "title": "删除公告？",
+        "body": "永久删除“{{title}}”的草稿、公开版本及未保存的修改？此公告将从所有用户的概览页消失，且无法恢复。"
+      },
+      "reload": {
+        "title": "加载最新草稿？",
+        "body": "用最新保存的草稿替换你对“{{title}}”的本地修改？未保存的文字将被丢弃，请先复制需要保留的内容。"
+      }
+    }
   }
 }

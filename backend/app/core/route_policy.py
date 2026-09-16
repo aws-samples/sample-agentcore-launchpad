@@ -45,8 +45,8 @@ Consequences worth knowing before editing this table:
   member still sees and can mutate the same shared agents, records, datasets and
   gateways, but a member only reaches the workspaces an admin granted them
   (`user_workspaces`), and a resource id belonging to another workspace answers
-  404. `ADMIN` marks user + workspace management; it no longer marks "state
-  changes".
+  404. `ADMIN` marks user/workspace management and announcement publication;
+  it does not generically mark "state changes".
 * The studio local-exec surface (`/api/execute*`, conversations writes) stays safe
   in production through its own handler guard (`local_exec`, refused outright in
   prod unless explicitly opted in) — that guard, not this table, is the real
@@ -338,6 +338,15 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # ---- read-only consoles ----
     ("GET", "/api/overview"): MEMBER,
     ("GET", "/api/overview/online-quality"): MEMBER,
+    # ---- hub-global notices: members read published snapshots only ----
+    ("GET", "/api/announcements"): MEMBER,
+    ("GET", "/api/announcements/manage"): ADMIN,
+    ("GET", "/api/announcements/{announcement_id}"): ADMIN,
+    ("POST", "/api/announcements"): ADMIN,
+    ("PUT", "/api/announcements/{announcement_id}"): ADMIN,
+    ("POST", "/api/announcements/{announcement_id}/publish"): ADMIN,
+    ("POST", "/api/announcements/{announcement_id}/unpublish"): ADMIN,
+    ("DELETE", "/api/announcements/{announcement_id}"): ADMIN,
     ("GET", "/api/memory/overview"): MEMBER,
     ("GET", "/api/memory/actors"): MEMBER,
     ("GET", "/api/memory/events"): MEMBER,
@@ -360,7 +369,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/observability/traces/{trace_id}"): MEMBER,
     ("GET", "/api/observability/prices"): MEMBER,
     ("POST", "/api/observability/prices/refresh"): MEMBER,  # rewrites shared config
-    # ---- console account management: the one surface that stays admin ----
+    # ---- console account management ----
     ("GET", "/api/users"): ADMIN,
     ("GET", "/api/users/stats"): ADMIN,
     ("PATCH", "/api/users/{user_id}"): ADMIN,
@@ -384,7 +393,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
 }
 
 # Hub-global route prefixes: nothing under them operates inside a workspace.
-HUB_GLOBAL_PREFIXES = ("/api/auth", "/api/users", "/api/workspaces")
+HUB_GLOBAL_PREFIXES = ("/api/auth", "/api/users", "/api/workspaces", "/api/announcements")
 
 
 def is_hub_global(path_format: str) -> bool:
@@ -412,6 +421,14 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/auth/login"),
         ("POST", "/api/auth/register"),
         ("POST", "/api/auth/logout"),
+        ("GET", "/api/announcements"),
+        ("GET", "/api/announcements/manage"),
+        ("GET", "/api/announcements/{announcement_id}"),
+        ("POST", "/api/announcements"),
+        ("PUT", "/api/announcements/{announcement_id}"),
+        ("POST", "/api/announcements/{announcement_id}/publish"),
+        ("POST", "/api/announcements/{announcement_id}/unpublish"),
+        ("DELETE", "/api/announcements/{announcement_id}"),
         ("GET", "/api/users"),
         ("GET", "/api/users/stats"),
         ("PATCH", "/api/users/{user_id}"),
