@@ -12,7 +12,7 @@ import pytest
 
 from app.assistant import preparation, service
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
-from app.models.assistant import AssistantConversation
+from app.models.assistant import AssistantConversation, AssistantProposal
 from app.models.ledger import Agent, Job, Workspace
 from app.services.workspace import WorkspaceContext, workspace_context
 
@@ -134,24 +134,21 @@ def test_empty_and_legacy_projection_preserve_proposal_hash(client, ready, harne
     assert _latest(client, cid)["preparation"]["skills"] == proposal["content"]["skills"]
 
 
-def test_selection_creates_member_revision_and_keeps_approval(client, ready, harness):
+def test_selection_creates_member_revision_before_approval(client, ready, harness):
     cid = _open(client)
     original = _propose(client, harness, cid)
-    approved = _approve(client, cid, original)
-    assert approved.status_code == 202, approved.text
     result = _save(client, cid, kbs=["KB123ABC"])
     assert result.status_code == 200, result.text
     detail = result.json()
     assert detail["preparation"]["skills"] == []
     first, latest = detail["proposals"]
-    assert first["status"] == "approved"
+    assert first["status"] == "superseded"
     assert first["content_hash"] == original["content_hash"]
-    assert first["approval"]["agent_id"] == approved.json()["agent"]["id"]
     assert latest["revision"] == first["revision"] + 1
     assert latest["status"] == "draft" and latest["source"] == "member"
     assert latest["content"]["skills"] == []
     assert latest["content"]["system_prompt"] == original["content"]["system_prompt"]
-    assert _count(Job) == 1  # selection never starts another deployment
+    assert _count(Job) == 0  # selection never starts a deployment
 
 
 def test_model_preserves_explicit_selection_and_member_edit_updates_it(client, ready, harness):
@@ -203,14 +200,233 @@ def test_mcp_selection_is_authoritative_and_deploys_only_selected_attachments(
         agent = db.get(Agent, approved.json()["agent"]["id"])
         assert [tool["name"] for tool in agent.spec["tools"]] == ["deepwiki"]
         assert agent.spec["native_tools"] == []
-    # Removing the MCP makes a new review, while the approved Agent/hash stay intact.
+    # Approval locks the mounted resources even while the deployment is queued.
     cleared = _save(client, cid, tools=[])
-    assert cleared.status_code == 200, cleared.text
-    first, latest = cleared.json()["proposals"]
+    assert cleared.status_code == 409, cleared.text
+    assert cleared.json()["code"] == "assistant.resources_locked"
+    first = _latest(client, cid)["proposals"][0]
     assert first["content_hash"] == proposed["content_hash"]
     assert first["status"] == "approved"
-    assert latest["status"] == "draft" and latest["content"]["tools"] == []
-    assert _propose(client, harness, cid)["content"]["tools"] == []
+    assert _propose(client, harness, cid)["content"]["tools"] == ["mcp:deepwiki"]
+    assert _count(Job) == 1
+
+
+@pytest.mark.parametrize("action", ["save", "unchanged-save", "import"])
+@pytest.mark.parametrize("status", ["deploying", "active", "failed", "deleted"])
+def test_approval_locks_preparation_before_catalog_or_upload(
+    client, ready, harness, s3, monkeypatch, action, status,
+):
+    cid, sid = _open(client), _inspect(client)
+    original = _propose(client, harness, cid)
+    outcome = _approve(client, cid, original)
+    assert outcome.status_code == 202, outcome.text
+    with SessionLocal() as db:
+        agent = db.get(Agent, outcome.json()["agent"]["id"])
+        agent.status = status
+        db.commit()
+    before = _latest(client, cid)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("locked preparation must refuse before resource I/O")
+
+    monkeypatch.setattr(preparation, "live_catalog", forbidden)
+    monkeypatch.setattr(service, "_lock_conversation", forbidden)
+    if action == "import":
+        response = _import(client, cid, sid, revision=0)
+    elif action == "unchanged-save":
+        response = _save(
+            client, cid, kbs=original["content"]["knowledge_bases"],
+            skills=original["content"]["skills"], tools=original["content"]["tools"],
+        )
+    else:
+        response = _save(client, cid, revision=0)
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "assistant.resources_locked"
+    assert _latest(client, cid) == before
+    assert s3.uploaded == []
+    assert _count(Job) == 1
+
+
+@pytest.mark.parametrize("field", ["knowledge_bases", "skills", "tools"])
+@pytest.mark.parametrize("change", ["remove", "replace", "omit"])
+def test_member_cannot_change_approved_resources_even_in_invalid_proposal(
+    client, ready, harness, field, change,
+):
+    cid = _open(client)
+    original = _propose(client, harness, cid)
+    assert _approve(client, cid, original).status_code == 202
+    before = _latest(client, cid)
+    content = deepcopy(original["content"])
+    content["system_prompt"] = ""  # Resource guard also applies to invalid content.
+    if change == "omit":
+        content.pop(field)
+    else:
+        content[field] = [] if change == "remove" else ["unknown-resource"]
+    result = client.put(f"{BASE}/conversations/{cid}/proposal", json={"content": content})
+    assert result.status_code == 409, result.text
+    assert result.json()["code"] == "assistant.resources_locked"
+    assert _latest(client, cid)["proposals"] == before["proposals"]
+    assert _latest(client, cid)["preparation"] == before["preparation"]
+    assert _count(Job) == 1
+
+
+def test_member_evaluation_edit_preserves_approval_and_preparation(client, ready, harness):
+    from .test_assistant_evaluation_repair import _fixed
+
+    cid = _open(client)
+    original = _propose(client, harness, cid)
+    assert _approve(client, cid, original).status_code == 202
+    before = _latest(client, cid)
+    content = _fixed(original["content"])
+    content["tools"].reverse()  # Same resource set remains legal.
+    result = client.put(f"{BASE}/conversations/{cid}/proposal", json={"content": content})
+    assert result.status_code == 200, result.text
+    revised = result.json()["proposal"]
+    assert revised["status"] == "draft"
+    assert revised["content"]["evaluation_plan"] == content["evaluation_plan"]
+    for field in preparation.RESOURCE_FIELDS:
+        assert set(revised["content"][field]) == set(original["content"][field])
+    detail = _latest(client, cid)
+    assert detail["proposals"][0] == before["proposals"][0]
+    assert detail["preparation"] == before["preparation"]
+    prepared = client.post(f"{BASE}/conversations/{cid}/evaluation-plan/prepare",
+                           json={"revision": revised["revision"]})
+    assert prepared.status_code == 201, prepared.text
+    assert prepared.json()["plan"]["status"] == "draft"
+    assert _count(Job) == 1
+
+
+@pytest.mark.parametrize("invalid_field", ["system_prompt", "tools"])
+def test_member_edit_retaining_resources_still_receives_ordinary_validation(
+    client, ready, harness, invalid_field,
+):
+    cid = _open(client)
+    original = _propose(client, harness, cid)
+    assert _approve(client, cid, original).status_code == 202
+    before = _latest(client, cid)
+    content = deepcopy(original["content"])
+    if invalid_field == "tools":
+        content["tools"].append(content["tools"][0])  # Same set, invalid duplicate.
+    else:
+        content["system_prompt"] = ""
+    result = client.put(f"{BASE}/conversations/{cid}/proposal", json={"content": content})
+    assert result.status_code == 200, result.text
+    invalid = result.json()["proposal"]
+    assert invalid["status"] == "invalid"
+    assert any(invalid_field in error for error in invalid["validation_errors"])
+    repaired = client.put(f"{BASE}/conversations/{cid}/proposal",
+                          json={"content": original["content"]})
+    assert repaired.status_code == 200 and repaired.json()["proposal"]["status"] == "draft"
+    detail = _latest(client, cid)
+    assert detail["preparation"] == before["preparation"]
+    assert detail["proposals"][0] == before["proposals"][0]
+    assert _count(Job) == 1
+
+
+@pytest.mark.parametrize("newer_revision", [False, True])
+def test_refresh_after_approval_reads_drift_without_minting_proposal(
+    client, ready, harness, monkeypatch, newer_revision,
+):
+    cid = _open(client)
+    original = _propose(client, harness, cid)
+    assert _approve(client, cid, original).status_code == 202
+    if newer_revision:
+        _propose(client, harness, cid, {**original["content"], "summary": "Evaluation review"})
+    before = _latest(client, cid)
+    catalog = _catalog(skills=[], tools=[], knowledge_bases=[], warnings=["resources unavailable"])
+    monkeypatch.setattr(service, "fetch_catalog", lambda ws: catalog)
+    result = client.post(f"{BASE}/conversations/{cid}/catalog")
+    assert result.status_code == 200, result.text
+    detail = result.json()["conversation"]
+    assert detail["catalog"] == catalog
+    assert detail["proposals"] == before["proposals"]
+    for field in preparation.RESOURCE_FIELDS:
+        assert detail["preparation"][field] == original["content"][field]
+    assert detail["preparation"]["revision"] == before["preparation"]["revision"] + 1
+    assert _count(Job) == 1
+
+
+@pytest.mark.parametrize("explicit_selection", [False, True])
+def test_model_evaluation_repair_preserves_approved_resources(
+    client, ready, harness, explicit_selection,
+):
+    from .test_assistant import _sse
+    from .test_assistant_evaluation_repair import _fixed, _repair, _seed
+
+    cid, source, plan = _seed(client)
+    assert _approve(client, cid, source).status_code == 202
+    if not explicit_selection:
+        with SessionLocal() as db:
+            db.get(AssistantConversation, cid).preparation = {}
+            db.commit()
+    before = _latest(client, cid)
+    fixed = _fixed(source["content"])
+    fixed.update(knowledge_bases=[], skills=[], tools=["mcp:missing"])
+    harness.reply(_block(fixed))
+    result = _repair(client, cid, plan)
+    assert result.status_code == 200, result.text
+    events = _sse(result)
+    assert events[-1][0] == "done" and not any(kind == "error" for kind, _ in events)
+    revised = next(data for kind, data in events if kind == "proposal")
+    assert revised["status"] == "draft", revised["validation_errors"]
+    assert revised["content"]["evaluation_plan"] == fixed["evaluation_plan"]
+    for field in preparation.RESOURCE_FIELDS:
+        assert revised["content"][field] == source["content"][field]
+    context = harness.calls[-1]["messages"][0]["content"][0]["text"]
+    assert "Approved resources (locked)" in context and "/create" in context
+    detail = _latest(client, cid)
+    assert detail["preparation"] == before["preparation"]
+    assert detail["proposals"][0] == before["proposals"][0]
+    prepared = client.post(f"{BASE}/conversations/{cid}/evaluation-plan/prepare",
+                           json={"revision": revised["revision"]})
+    assert prepared.status_code == 201, prepared.text
+    assert prepared.json()["plan"]["status"] == "draft"
+    assert _save(client, cid).json()["code"] == "assistant.resources_locked"
+    assert _count(Job) == 1
+
+
+def test_latest_historical_approval_overrides_newer_draft_and_saved_selections(
+    client, ready, harness,
+):
+    cid = _open(client)
+    first = _propose(client, harness, cid)
+    second = _propose(client, harness, cid, {
+        **VALID_PROPOSAL, "tools": [], "skills": [], "knowledge_bases": [],
+    })
+    assert _approve(client, cid, second).status_code == 202
+    # Reproduce a conversation saved before resource locking, including an older
+    # approval and a newer, unapproved revision with different preparation state.
+    with SessionLocal() as db:
+        old = db.get(AssistantProposal, first["id"])
+        old.status, old.approved_by, old.approved_at = "approved", "operator", old.created_at
+        db.add(AssistantProposal(
+            workspace_id=DEFAULT_WORKSPACE_ID, conversation_id=cid, revision=3,
+            content=first["content"], content_hash=first["content_hash"],
+            bindings=old.bindings, validation_errors=[], status="draft", source="member",
+            created_by="operator",
+        ))
+        row = db.get(AssistantConversation, cid)
+        row.revision_seq = 3
+        row.preparation = {**row.preparation, "selection_set": True, "tools_selection_set": True,
+                           **{field: first["content"][field]
+                              for field in preparation.RESOURCE_FIELDS}}
+        db.commit()
+    before = _latest(client, cid)
+    for field in preparation.RESOURCE_FIELDS:
+        assert before["preparation"][field] == []
+    blocked = _approve(client, cid, before["proposals"][-1])
+    assert blocked.status_code == 409 and blocked.json()["code"] == "assistant.resources_locked"
+    # The historical approval keeps its idempotent outcome, despite the newer draft.
+    assert _approve(client, cid, second).status_code == 200
+    revised = _propose(client, harness, cid)
+    assert revised["revision"] == 4 and revised["status"] == "draft"
+    for field in preparation.RESOURCE_FIELDS:
+        assert revised["content"][field] == []
+    assert _latest(client, cid)["preparation"] == before["preparation"]
+    result = client.put(f"{BASE}/conversations/{cid}/proposal",
+                        json={"content": first["content"]})
+    assert result.status_code == 409 and result.json()["code"] == "assistant.resources_locked"
+    assert _save(client, cid).json()["code"] == "assistant.resources_locked"
     assert _count(Job) == 1
 
 
@@ -614,8 +830,11 @@ def test_import_staging_cannot_cross_workspace(client, ready, s3):
     assert not s3.uploaded
 
 
-def test_import_claim_blocks_turn_refresh_selection_edit_and_purge(client, ready, s3):
+def test_import_claim_blocks_turn_refresh_selection_edit_approval_and_purge(
+    client, ready, harness, s3,
+):
     cid = _open(client)
+    proposal = _propose(client, harness, cid)
     sid = _inspect(client)
     observed = []
 
@@ -625,6 +844,7 @@ def test_import_claim_blocks_turn_refresh_selection_edit_and_purge(client, ready
             client.post(f"{BASE}/conversations/{cid}/catalog"),
             _save(client, cid, revision=0),
             client.put(f"{BASE}/conversations/{cid}/proposal", json={"content": VALID_PROPOSAL}),
+            _approve(client, cid, proposal),
             client.delete(f"{BASE}/conversations/{cid}"),
         ]
         observed.extend(res.status_code for res in responses)
@@ -633,6 +853,7 @@ def test_import_claim_blocks_turn_refresh_selection_edit_and_purge(client, ready
     res = _import(client, cid, sid)
     assert res.status_code == 200, res.text
     assert observed and set(observed) == {409}
+    assert _count(Job) == 0
     with SessionLocal() as db:
         assert db.get(AssistantConversation, cid).preparation_token is None
 
@@ -667,6 +888,69 @@ def test_racing_selection_writes_only_one_revision_wins(client, ready, monkeypat
         results = [future.result(timeout=10) for future in futures]
     assert sorted(r.status_code for r in results) == [200, 409]
     assert _latest(client, cid)["preparation"]["revision"] == 1
+
+
+@pytest.mark.parametrize("action", ["save", "invalid-save", "import", "edit", "refresh"])
+def test_approval_winning_resource_mutation_race_is_rechecked_under_lock(
+    client, ready, harness, s3, monkeypatch, action,
+):
+    cid, sid = _open(client), _inspect(client)
+    proposal = _propose(client, harness, cid)
+    before = _latest(client, cid)
+    entered, release = threading.Event(), threading.Event()
+    if action in ("save", "invalid-save", "refresh"):
+        target, method = preparation, "live_catalog"
+    else:
+        target, method = service, "_lock_conversation"
+    original = getattr(target, method)
+    calls = 0
+
+    def pause_first(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            assert release.wait(timeout=10)
+            if action == "refresh":
+                return _catalog(skills=[], tools=[], knowledge_bases=[])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(target, method, pause_first)
+
+    def mutate():
+        if action in ("save", "invalid-save"):
+            return _save(client, cid, skills=["missing"] if action == "invalid-save" else [])
+        if action == "import":
+            return _import(client, cid, sid)
+        if action == "edit":
+            return client.put(f"{BASE}/conversations/{cid}/proposal",
+                              json={"content": {**proposal["content"], "skills": []}})
+        return client.post(f"{BASE}/conversations/{cid}/catalog")
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(mutate)
+        try:
+            assert entered.wait(timeout=10)
+            approved = _approve(client, cid, proposal)
+            assert approved.status_code == 202, approved.text
+        finally:
+            release.set()
+        result = future.result(timeout=10)
+    if action == "refresh":
+        assert result.status_code == 200, result.text
+    else:
+        assert result.status_code == 409, result.text
+        assert result.json()["code"] == "assistant.resources_locked"
+    detail = _latest(client, cid)
+    assert len(detail["proposals"]) == 1
+    assert detail["proposals"][0]["status"] == "approved"
+    assert detail["proposals"][0]["content_hash"] == proposal["content_hash"]
+    for field in preparation.RESOURCE_FIELDS:
+        assert detail["preparation"][field] == before["preparation"][field]
+    assert s3.uploaded == [] and _count(Job) == 1
+    with SessionLocal() as db:
+        row = db.get(AssistantConversation, cid)
+        assert row.preparation_token is None and not row.preparation_sources
 
 
 def test_late_refresh_cannot_overwrite_new_selection(client, ready, monkeypatch):

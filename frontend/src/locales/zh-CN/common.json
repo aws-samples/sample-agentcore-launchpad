@@ -2182,7 +2182,8 @@
     "system_skill.readback_mismatch": "回读的 Registry 记录与写入内容不一致；未将注册报告为完成。",
     "announcements.conflict": "此公告在加载后已发生变化，你的修改尚未应用。",
     "announcements.not_found": "此公告已不存在，可能已被其他管理员删除。",
-    "run.evaluator_package_ambiguous": "该评估器使用包含多套规则的旧版 Lambda 包。请先创建使用独立单规则包的替代评估器，再运行评估。"
+    "run.evaluator_package_ambiguous": "该评估器使用包含多套规则的旧版 Lambda 包。请先创建使用独立单规则包的替代评估器，再运行评估。",
+    "assistant.resources_locked": "批准创建后，资源选择已锁定。请到 Agent 管理页修改现有 Agent 的配置并重新部署。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",
@@ -4124,7 +4125,7 @@
     "kicker": "创建 · 架构助手",
     "title": "架构助手",
     "meta": "{{label}} · Workspace {{workspace}} · {{region}}",
-    "description": "输入需求，与架构助手一起明确目标、准备知识库和 Skill，并审阅托管 Harness 方案。你可以选择已有资源，在这里新建知识库，或前往注册中心创建 Skill。确认方案后再单独批准部署 Agent，随后准备评估器并完成首次评估。",
+    "description": "基于 ADLC（Agent Development Lifecycle，Agent 开发生命周期）方法论，从定义成功标准、配置资源到创建 Agent，再通过评估、质量门禁和生产反馈持续改进。",
     "backToCreate": "◂ Agent 管理",
     "unavailableTitle": "助手不可用",
     "unavailableBody": "{{label}} 预置在本 Workspace 中未处于运行中（状态：{{status}}）。助手运行在该受保护预置之上，没有它无法启动。",
@@ -4733,6 +4734,86 @@
       "closeHint": "关闭后，知识库仍保留在当前工作区。AWS 上的创建和索引任务可能继续运行，之后可从知识库详情页继续上传或启动索引。"
     },
     "createSkill": "去注册中心创建 Skill ↗",
-    "registryHint": "将在新标签页打开 Skill 创建页。注册并通过审批后，回到这里刷新即可选择；当前对话和未保存的选择会保留。"
+    "registryHint": "将在新标签页打开 Skill 创建页。注册并通过审批后，回到这里刷新即可选择；当前对话和未保存的选择会保留。",
+    "beforeCreateTitle": "创建前选择并确认资源",
+    "beforeCreateHint": "按业务需要手动勾选，各类资源均可不选。更改后请保存并重新审阅方案；批准创建后，本对话的资源选择将锁定。",
+    "lockedTitle": "已批准创建，资源选择已锁定",
+    "lockedHint": "这里展示的是已批准创建方案的资源。若需修改现有 Agent，请到 Agent 管理页编辑配置并重新部署。本对话仍可用于准备或修正评估方案。",
+    "manageAgent": "前往 Agent 管理 →",
+    "reviewOnly": "本对话已批准创建 Agent，后续修订用于方案与评估审阅。若要将配置变更应用到 Agent，请在 Agent 管理页编辑并重新部署。"
+  },
+  "assistantAdlc": {
+    "title": "评估驱动开发，生产反馈持续改进",
+    "expand": "查看六阶段方法论",
+    "description": "定义成功标准 → 构建 → 评估 → 质量门禁与发布 → 生产观测 → 挖掘失败案例，生产证据回流下一轮开发。",
+    "feedback": "生产轨迹 → 失败案例 → 评估数据 → 优化／训练数据",
+    "principle": "评估贯穿成功标准、发布门禁与生产监控。将真实失败案例回流评估集，持续改进 Agent。",
+    "stages": {
+      "define": {
+        "title": "定义“好”",
+        "detail": "业务目标与约束",
+        "extra": "评估与奖励标准"
+      },
+      "build": {
+        "title": "构建",
+        "detail": "提示词 · 工具 · 上下文",
+        "extra": "模型与资源配置"
+      },
+      "evaluate": {
+        "title": "评估",
+        "detail": "黄金测试集",
+        "extra": "得分与工具调用轨迹"
+      },
+      "release": {
+        "title": "质量门禁与发布",
+        "detail": "质量阈值",
+        "extra": "金丝雀／A/B 测试"
+      },
+      "observe": {
+        "title": "生产环境观测",
+        "detail": "链路追踪与监控",
+        "extra": "在线评估"
+      },
+      "learn": {
+        "title": "挖掘失败案例",
+        "detail": "识别失败原因",
+        "extra": "回流评估集"
+      }
+    },
+    "swipe": "左右滑动，查看完整六阶段 →"
+  },
+  "assistantProgress": {
+    "title": "创建 Agent 需完成 4 个必做步骤",
+    "count": "已完成 {{done}}／{{total}} 步",
+    "steps": {
+      "goals": "明确目标",
+      "resources": "配置资源",
+      "review": "审阅并批准",
+      "deploy": "创建 Harness"
+    },
+    "states": {
+      "done": "已完成",
+      "current": "当前步骤 · 必做",
+      "pending": "必做",
+      "failed": "失败 · 待处理"
+    },
+    "hints": {
+      "goals": "下一步：描述业务目标与成功标准，与助手一起形成方案。",
+      "resources": "下一步：按需选择知识库、Skill 和 MCP 工具，保存资源选择。",
+      "review": "下一步：审阅提示词、模型与资源配置，确认后批准创建。",
+      "unsaved": "资源勾选尚未保存。请先保存或取消更改，再批准创建。",
+      "editing": "请先完成并保存方案修改，再审阅批准。",
+      "invalid": "方案仍有校验问题。请先根据下方提示修正，再批准创建。",
+      "rejected": "当前方案已拒绝。请继续讨论，生成新的可审阅方案。",
+      "deploying": "正在创建，请等待部署结果。已批准不代表 Agent 已就绪。",
+      "failed": "创建失败。请查看部署错误，并到 Agent 管理页处理后重试。",
+      "ready": "Harness 已就绪，可以开始使用。评估、A/B 测试和生产反馈可后续完成。",
+      "unavailable": "尚未确认已批准的 Agent 处于就绪状态，请到 Agent 管理页查看当前状态。"
+    },
+    "manage": "前往 Agent 管理 →",
+    "later": "后续 3 项 · 可延后完成",
+    "evaluate": "5 · 评估",
+    "experiment": "6 · A/B 测试",
+    "feedback": "7 · 生产反馈"
   }
 }

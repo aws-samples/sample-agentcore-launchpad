@@ -48,6 +48,8 @@ import { WORKSPACE_HEADER } from "../lib/workspace-header";
 import { useWorkspace } from "../workspace/workspace-context";
 import { EvaluationAssetsPanel } from "./EvaluationAssetsPanel";
 import { PreparationPanel } from "./assistant/PreparationPanel";
+import { AdlcMethodology } from "./assistant/AdlcMethodology";
+import { CreationProgress } from "./assistant/CreationProgress";
 
 /**
  * Architect assistant (SE-039): a member conversation with the protected
@@ -207,6 +209,7 @@ export function CreateAgentAssistant() {
   const [busy, setBusy] = useState(false);
   const [approving, setApproving] = useState(false);
   const [preparing, setPreparing] = useState(false);
+  const [resourceDraft, setResourceDraft] = useState<{ conversationId: string; dirty: boolean } | null>(null);
   const [editing, setEditing] = useState<EditDraft | null>(null);
   const [confirm, setConfirm] = useState<
     | { kind: "approve"; pin: PinnedApproval }
@@ -415,6 +418,8 @@ export function CreateAgentAssistant() {
       : null;
   }, [approvedRevisions, latest]);
   const approval: AssistantApproval | null = shownApproved?.approval ?? null;
+  const resourcesLocked = approvedRevisions.length > 0;
+  const resourcesDirty = resourceDraft?.conversationId === conversation?.id && resourceDraft?.dirty === true;
   const olderApprovals = approvedRevisions.filter(
     (p) => p.id !== shownApproved?.id,
   );
@@ -822,6 +827,7 @@ export function CreateAgentAssistant() {
   };
 
   const approve = async (pin: PinnedApproval) => {
+    if (resourcesDirty || resourcesLocked) return;
     const startedIn = scope.current;
     const gen = generation.current;
     setConfirm(null);
@@ -959,6 +965,11 @@ export function CreateAgentAssistant() {
           {t("assistantPage.backToCreate")}
         </Link>
       </div>
+      {status?.available && (
+        <CreationProgress conversation={conversation} latest={latest} deployed={deployed}
+          resourcesDirty={resourcesDirty} editing={editing !== null} />
+      )}
+      <AdlcMethodology key={conversation ? "conversation" : "intro"} compact={Boolean(conversation)} />
 
       {statusError && (
         <LoadError
@@ -1022,6 +1033,7 @@ export function CreateAgentAssistant() {
       {status?.available && (
         <div className="assist-grid">
           <Panel
+            id="assistant-discussion"
             brk
             pad={false}
             title={t("assistantPage.conversations")}
@@ -1178,6 +1190,7 @@ export function CreateAgentAssistant() {
           <Panel
             brk
             className="assist-span"
+            id="assistant-proposal"
             title={t("assistantPage.proposalTitle")}
             sub={t("assistantPage.proposalSub")}
             end={
@@ -1214,6 +1227,7 @@ export function CreateAgentAssistant() {
                 capabilities={status.capabilities}
                 errors={editErrors(editing)}
                 onChange={setEditing}
+                resourcesLocked={resourcesLocked}
               />
             )}
             {latest && (
@@ -1224,9 +1238,9 @@ export function CreateAgentAssistant() {
                   data-testid="supported-here"
                 >
                   <span className="i">[i]</span>
-                  <span>{t("assistantPage.supportedHere")}</span>
+                  <span>{t(resourcesLocked ? "assistantPreparation.reviewOnly" : "assistantPage.supportedHere")}</span>
                 </div>
-                {latest.status === "draft" && (
+                {latest.status === "draft" && !resourcesLocked && (
                   <div
                     className="note"
                     style={{ marginTop: 8, borderColor: "var(--amber)" }}
@@ -1264,7 +1278,12 @@ export function CreateAgentAssistant() {
                         latest.status === "invalid") && (
                         <Btn
                           disabled={busy || preparing}
-                          onClick={() => setEditing(draftFrom(latest.content))}
+                          onClick={() => setEditing(draftFrom(resourcesLocked && conversation?.preparation
+                            ? { ...latest.content,
+                              knowledge_bases: conversation.preparation.knowledge_bases,
+                              skills: conversation.preparation.skills,
+                              tools: conversation.preparation.tools ?? [],
+                            } : latest.content))}
                           data-testid="proposal-edit"
                         >
                           {t("assistantPage.edit")}
@@ -1286,11 +1305,11 @@ export function CreateAgentAssistant() {
                         </Btn>
                       )}
                       <span className="spacer" />
-                      {latest.status === "draft" && conversation && (
+                      {latest.status === "draft" && conversation && !resourcesLocked && (
                         <Btn
                           primary
-                          disabled={!canDeploy || approving || busy || preparing}
-                          disabledReason={deployReason}
+                          disabled={!canDeploy || approving || busy || preparing || resourcesDirty}
+                          disabledReason={resourcesDirty ? t("assistantProgress.hints.unsaved") : deployReason}
                           onClick={() =>
                             setConfirm({
                               kind: "approve",
@@ -1350,6 +1369,8 @@ export function CreateAgentAssistant() {
                 conversation={conversation} workspaceId={workspaceId}
                 disabled={busy || approving || editing !== null || conversation.turn_in_progress !== null}
                 onWorking={setPreparing}
+                locked={resourcesLocked}
+                onDirty={(dirty) => setResourceDraft({ conversationId: conversation.id, dirty })}
                 onUpdated={(detail) => {
                   if (scope.current !== workspaceId) return;
                   setConversation((current) => current?.id === detail.id ? detail : current);
@@ -1367,7 +1388,7 @@ export function CreateAgentAssistant() {
                   document.getElementById("assistant-input")?.focus();
                 }} />
             ) : (
-              <Panel brk title={t("assistantPreparation.title")}
+              <Panel brk id="assistant-resources" title={t("assistantPreparation.title")}
                 sub={t("assistantPreparation.subtitle")}>
                 <p className="dim">{t("assistantPreparation.startConversation")}</p>
               </Panel>
@@ -1884,12 +1905,14 @@ function ProposalEditor({
   capabilities,
   errors,
   onChange,
+  resourcesLocked,
 }: {
   draft: EditDraft;
   catalog: AssistantCatalog;
   capabilities: AssistantStatus["capabilities"];
   errors: Record<string, boolean>;
   onChange: (next: EditDraft) => void;
+  resourcesLocked: boolean;
 }) {
   const { t } = useTranslation();
   const set = <K extends keyof EditDraft>(key: K, value: EditDraft[K]) =>
@@ -1898,6 +1921,7 @@ function ProposalEditor({
     key: "tools" | "skills" | "knowledge_bases",
     value: string,
   ) => {
+    if (resourcesLocked) return;
     const has = draft[key].includes(value);
     set(
       key,
@@ -1913,6 +1937,7 @@ function ProposalEditor({
       <div className="dim" style={{ fontSize: 11, marginBottom: 10 }}>
         {t("assistantPage.editHint")}
       </div>
+      {resourcesLocked && <p className="note">{t("assistantPreparation.lockedHint")}</p>}
       <div className="field">
         <label htmlFor="pe-name">{t("assistantPage.field.name")}</label>
         <input
@@ -1986,6 +2011,7 @@ function ProposalEditor({
                 type="button"
                 className={`selchip${draft.tools.includes(x.key) ? " on" : ""}`}
                 onClick={() => toggle("tools", x.key)}
+                disabled={resourcesLocked}
                 data-testid={`edit-tool-${x.name}`}
               >
                 {x.name}
@@ -2033,6 +2059,7 @@ function ProposalEditor({
               type="button"
               className={`selchip${draft.skills.includes(x.key) ? " on" : ""}`}
               onClick={() => toggle("skills", x.key)}
+              disabled={resourcesLocked}
             >
               {x.name}
             </button>
@@ -2051,7 +2078,7 @@ function ProposalEditor({
               type="button"
               className={`selchip${draft.knowledge_bases.includes(x.kb_id) ? " on" : ""}`}
               onClick={() => toggle("knowledge_bases", x.kb_id)}
-              disabled={!capabilities.kb_gateway}
+              disabled={resourcesLocked || !capabilities.kb_gateway}
               title={
                 capabilities.kb_gateway
                   ? undefined

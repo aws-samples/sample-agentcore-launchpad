@@ -15,6 +15,8 @@ interface Props {
   conversation: AssistantConversationDetail;
   workspaceId: string;
   disabled: boolean;
+  locked: boolean;
+  onDirty: (dirty: boolean) => void;
   onUpdated: (detail: AssistantConversationDetail) => void;
   onCatalog: (catalog: AssistantCatalog) => void;
   onWorking: (working: boolean) => void;
@@ -27,7 +29,7 @@ const sameKeys = (a: string[], b: string[]) =>
 const MAX_TOOLS = 20;
 
 export function PreparationPanel({
-  conversation, workspaceId, disabled, onUpdated, onCatalog, onWorking, onDiscuss,
+  conversation, workspaceId, disabled, locked, onDirty, onUpdated, onCatalog, onWorking, onDiscuss,
 }: Props) {
   const { t } = useTranslation();
   const prep = conversation.preparation;
@@ -56,9 +58,10 @@ export function PreparationPanel({
   const previousPreparation = useRef(prep);
   const previousTools = useRef(savedTools);
   const alive = useRef(true);
-  const callbacks = useRef({ onCatalog, onUpdated, onWorking });
-  callbacks.current = { onCatalog, onUpdated, onWorking };
+  const callbacks = useRef({ onCatalog, onUpdated, onWorking, onDirty });
+  callbacks.current = { onCatalog, onUpdated, onWorking, onDirty };
   const busy = disabled || working || refreshing;
+  const selectionDisabled = busy || locked;
   const catalog = conversation.catalog;
   const resources = catalog.resources;
   const gatewayReady = Boolean(
@@ -84,18 +87,25 @@ export function PreparationPanel({
     err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : errorMessage(err);
 
   useEffect(() => {
+    callbacks.current.onDirty(changed && !locked);
+    return () => callbacks.current.onDirty(false);
+  }, [changed, locked]);
+
+  useEffect(() => {
     // A catalog refresh may advance server revisions. Preserve unsaved choices;
     // adopt new server selections only where the local selection was untouched.
+    // Approval in another tab wins over a local draft: the locked view must show
+    // the approved resources, never unsaved choices that cannot be applied.
     const previous = previousPreparation.current;
-    setSelectedKbs((current) => sameKeys(current, previous?.knowledge_bases ?? [])
+    setSelectedKbs((current) => locked || sameKeys(current, previous?.knowledge_bases ?? [])
       ? prep?.knowledge_bases ?? [] : current);
-    setSelectedSkills((current) => sameKeys(current, previous?.skills ?? [])
+    setSelectedSkills((current) => locked || sameKeys(current, previous?.skills ?? [])
       ? prep?.skills ?? [] : current);
     const priorTools = previousTools.current;
-    setSelectedTools((current) => sameKeys(current, priorTools) ? savedTools : current);
+    setSelectedTools((current) => locked || sameKeys(current, priorTools) ? savedTools : current);
     previousPreparation.current = prep;
     previousTools.current = savedTools;
-  }, [prep, savedTools]);
+  }, [prep, savedTools, locked]);
 
   useEffect(() => {
     alive.current = true;
@@ -154,7 +164,7 @@ export function PreparationPanel({
   const recoverConflict = async (err: unknown) => {
     if (!alive.current) return;
     setActionError(describeError(err));
-    if (err instanceof ApiError && err.code.includes("stale")) {
+    if (err instanceof ApiError && (err.code.includes("stale") || err.code === "assistant.resources_locked")) {
       try {
         const detail = await api.assistantConversation(conversation.id, workspaceId);
         if (alive.current) callbacks.current.onUpdated(detail);
@@ -162,6 +172,7 @@ export function PreparationPanel({
     }
   };
   const save = async () => {
+    if (selectionDisabled) return;
     start();
     try {
       const detail = await api.assistantSavePreparation(conversation.id, {
@@ -201,13 +212,20 @@ export function PreparationPanel({
   ];
 
   return (
-    <Panel brk title={t("assistantPreparation.title")} sub={t("assistantPreparation.subtitle")}
+    <Panel brk id="assistant-resources" title={t("assistantPreparation.title")} sub={t("assistantPreparation.subtitle")}
       data-testid="assistant-preparation"
       end={<Btn disabled={busy} onClick={() => void refresh()} data-testid="preparation-refresh">
         {t(refreshing ? "assistantPreparation.refreshing" : "assistantPreparation.refresh")}
       </Btn>}>
       <div className="assist-preparation">
-        {(prep?.requirements ?? []).length > 0 && (
+        <div className="assist-resource-lifecycle" data-testid="preparation-lifecycle" role="status">
+          <strong>{t(locked ? "assistantPreparation.lockedTitle" : "assistantPreparation.beforeCreateTitle")}</strong>
+          <p>{t(locked ? "assistantPreparation.lockedHint" : "assistantPreparation.beforeCreateHint")}</p>
+          {locked && <Link className="btn" to="/create" data-testid="preparation-edit-agent">
+            {t("assistantPreparation.manageAgent")}
+          </Link>}
+        </div>
+        {!locked && (prep?.requirements ?? []).length > 0 && (
           <div className="assist-prep-requirements" data-testid="preparation-requirements">
             <div className="dim">{t("assistantPreparation.requirements")}</div>
             {prep!.requirements.map((item) => (
@@ -248,7 +266,7 @@ export function PreparationPanel({
               return (
                 <label className={`assist-prep-option${selected ? " selected" : ""}`} key={kb.kb_id}>
                   <input type="checkbox" checked={selected}
-                    disabled={busy || (!selected && !available)}
+                    disabled={selectionDisabled || (!selected && !available)}
                     onChange={() => setSelectedKbs(toggle(selectedKbs, kb.kb_id))} />
                   <span><b>{kb.name}</b>
                     {kb.description && <span className="dim">{kb.description}</span>}
@@ -269,15 +287,15 @@ export function PreparationPanel({
             name={kbRows.find((kb) => kb.kb_id === kbId)?.name ?? kbId}
             workspaceId={workspaceId} />)}
           <p className="dim">{t("assistantPreparation.indexHint")}</p>
-          <div className="row">
+          {!locked && <div className="row">
             <Btn disabled={busy || creating} onClick={() => setCreating(true)}
               data-testid="preparation-create-kb">{t("assistantPreparation.newKb")}</Btn>
             <Link className="btn" to="/knowledge-bases"
               target="_blank" rel="noopener noreferrer" data-testid="preparation-manage-kbs">
               {t("assistantPreparation.manageKbs")}
             </Link>
-          </div>
-          {creating && <KnowledgeBaseCreate workspaceId={workspaceId}
+          </div>}
+          {!locked && creating && <KnowledgeBaseCreate workspaceId={workspaceId}
             onCreated={() => { if (alive.current) void refresh(); }}
             onClose={() => setCreating(false)} />}
         </section>
@@ -293,7 +311,7 @@ export function PreparationPanel({
               return (
                 <label className={`assist-prep-option${selected ? " selected" : ""}`} key={skill.key}>
                   <input type="checkbox" checked={selected}
-                    disabled={busy || (!selected && !available)}
+                    disabled={selectionDisabled || (!selected && !available)}
                     onChange={() => setSelectedSkills(toggle(selectedSkills, skill.key))} />
                   <span><b>{skill.name}</b><span className="dim">{skill.description}</span></span>
                   {!available && <Chip tone="warn">{t("assistantPreparation.unavailable")}</Chip>}
@@ -301,15 +319,15 @@ export function PreparationPanel({
               );
             })}
           </div>
-          <div className="row">
+          {!locked && <div className="row">
             <Btn disabled={busy} onClick={() => void refresh()}
               data-testid="preparation-refresh-skills">{t("assistantPreparation.refresh")}</Btn>
             <Link className="btn" to="/registry?view=register&type=AGENT_SKILLS"
               target="_blank" rel="noopener noreferrer" data-testid="preparation-create-skill">
               {t("assistantPreparation.createSkill")}
             </Link>
-          </div>
-          <p className="dim">{t("assistantPreparation.registryHint")}</p>
+          </div>}
+          {!locked && <p className="dim">{t("assistantPreparation.registryHint")}</p>}
         </section>
         <section id="preparation-tools" aria-labelledby="preparation-tools-title">
           <h3 id="preparation-tools-title">{t("assistantPreparation.toolsTitle")}</h3>
@@ -324,7 +342,7 @@ export function PreparationPanel({
                 <div className="assist-prep-tool" key={tool.key}>
                   <label className={`assist-prep-option${selected ? " selected" : ""}`}>
                     <input type="checkbox" checked={selected} aria-label={tool.name}
-                      disabled={busy || (!selected && (!tool.attachable || selectedTools.length >= MAX_TOOLS))}
+                      disabled={selectionDisabled || (!selected && (!tool.attachable || selectedTools.length >= MAX_TOOLS))}
                       onChange={() => setSelectedTools((current) => toggle(current, tool.key))} />
                     <span><b>{tool.name}</b>
                       {tool.description && <span className="dim">{tool.description}</span>}
@@ -351,15 +369,15 @@ export function PreparationPanel({
             })}
           </div>
           <p className="dim">{t("assistantPreparation.toolsLimit", { count: selectedTools.length, max: MAX_TOOLS })}</p>
-          <div className="row">
+          {!locked && <div className="row">
             <Btn disabled={busy} onClick={() => void refresh()}
               data-testid="preparation-refresh-tools">{t("assistantPreparation.refresh")}</Btn>
             <Link className="btn" to="/registry?view=register&type=MCP"
               target="_blank" rel="noopener noreferrer" data-testid="preparation-create-tool">
               {t("assistantPreparation.createTool")}
             </Link>
-          </div>
-          <p className="dim">{t("assistantPreparation.toolRegistryHint")}</p>
+          </div>}
+          {!locked && <p className="dim">{t("assistantPreparation.toolRegistryHint")}</p>}
           <p className="note" data-testid="preparation-tool-evaluation-hint">
             {t("assistantPreparation.toolEvaluationHint")}
           </p>
@@ -370,7 +388,7 @@ export function PreparationPanel({
         </div>}
         {actionError && <div className="note assist-prep-error" role="alert">{actionError}</div>}
         {notice && <div className="note" role="status">{notice}</div>}
-        <div className="assist-prep-save">
+        {!locked && <div className="assist-prep-save">
           <span className="dim">{t(changed ? "assistantPreparation.unsaved" : "assistantPreparation.savedHint")}</span>
           {changed && <Btn disabled={busy} onClick={() => {
             setSelectedKbs(prep?.knowledge_bases ?? []);
@@ -385,7 +403,7 @@ export function PreparationPanel({
             onClick={() => void save()} data-testid="preparation-save">
             {t(working ? "assistantPreparation.saving" : "assistantPreparation.save")}
           </Btn>
-        </div>
+        </div>}
       </div>
     </Panel>
   );

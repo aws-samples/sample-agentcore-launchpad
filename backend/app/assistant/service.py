@@ -1278,7 +1278,18 @@ def record_proposal(
     valid → ``draft`` with bindings; otherwise ``invalid`` with the errors and the
     bounded raw object. Explicit member preparation overrides resource lists in a
     well-shaped model proposal before reference validation."""
-    if source == "model":
+    approved = preparation.approved_resources(db, conversation_id)
+    if approved is not None:
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except ValueError:
+                pass  # ordinary validation still reports malformed model output
+        if source == "member":
+            preparation.require_matching_resources(raw, approved)
+        elif isinstance(raw, dict):
+            raw = {**raw, **approved}
+    elif source == "model":
         conversation = db.get(AssistantConversation, conversation_id)
         state = conversation.preparation or {}
         # Explicit member selections are authoritative, even when the model omits
@@ -1317,7 +1328,7 @@ def record_proposal(
     )
     db.add(row)
     db.flush()
-    if valid:
+    if valid and approved is None:
         conversation = db.get(AssistantConversation, conversation_id)
         state = conversation.preparation or {}
         if not state.get("selection_set") or (
@@ -1860,6 +1871,10 @@ def approve_proposal(
                        "this workspace cannot deploy yet: "
                        + "; ".join(m["message"] for m in requirements),
                        {"requirements": requirements}, status_code=409)
+    approved = preparation.approved_resources(db, conversation_id)
+    if approved is not None:
+        # Old conversations may already contain a resource-changing unapproved draft.
+        preparation.require_matching_resources(proposal.content, approved)
     # 3. LIVE catalog + resource identity — network I/O, outside every lock
     def winner_after_io() -> ApprovalOutcome | None:
         """A twin may have executed this exact revision while we were reading: its
@@ -1942,6 +1957,9 @@ def approve_proposal(
         if current.status != "draft" or current.content_hash != content_hash:
             raise _stale(latest_proposal(db, conversation_id),
                          "the proposal changed while it was being approved — review the latest")
+        approved = preparation.approved_resources(db, conversation_id)
+        if approved is not None:
+            preparation.require_matching_resources(current.content, approved)
         now = datetime.now(UTC)
         claimed = db.execute(
             update(AssistantProposal)

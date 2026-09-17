@@ -906,6 +906,56 @@ footer .sep{color:var(--line-2)}
 }
 
 /* ================= architect assistant (create/assistant) ================= */
+.assist-progress{position:sticky;top:60px;z-index:30;margin-bottom:14px;padding:14px 18px 10px;background:var(--panel);border:1px solid var(--amber);box-shadow:0 8px 24px rgba(0,0,0,.22)}
+.assist-progress-head{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:13px}
+.assist-progress-head>span{font-family:var(--mono);font-size:12px;color:var(--amber)}
+.assist-progress-meter{display:flex;gap:5px;margin:10px 0 12px}
+.assist-progress-meter>span{flex:1;height:5px;background:repeating-linear-gradient(90deg,var(--line-2) 0 5px,transparent 5px 8px)}
+.assist-progress-meter>span.done{background:repeating-linear-gradient(90deg,var(--good) 0 5px,transparent 5px 8px)}
+.assist-progress-steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));list-style:none;gap:12px}
+.assist-progress-steps a{display:flex;gap:10px;align-items:center;color:var(--ink-3);text-decoration:none}
+.assist-progress-steps a:hover strong{text-decoration:underline;text-underline-offset:3px}
+.assist-progress-number{display:grid;place-items:center;flex-shrink:0;width:30px;height:30px;border:1px solid var(--line-2);border-radius:50%;font-family:var(--mono);font-size:14px}
+.assist-progress-steps strong{display:block;font-size:13px;font-weight:600}
+.assist-progress-steps small{font-size:10px}
+.assist-progress-steps [data-state="current"] a{color:var(--amber)}
+.assist-progress-steps [data-state="current"] .assist-progress-number{background:var(--amber);border-color:var(--amber);color:#141210}
+.assist-progress-steps [data-state="done"] a{color:var(--good)}
+.assist-progress-steps [data-state="done"] .assist-progress-number{border-color:var(--good)}
+.assist-progress-steps [data-state="failed"] a,.assist-progress-next.failed{color:var(--crit-text)}
+.assist-progress-steps [data-state="failed"] .assist-progress-number{border-color:var(--crit)}
+.assist-progress-next{font-size:12px;color:var(--ink-2);margin-top:12px;line-height:1.6}
+.assist-progress-next a{margin-left:10px;color:var(--amber);white-space:nowrap}
+.assist-progress-later{display:flex;align-items:center;flex-wrap:wrap;gap:6px 16px;border-top:1px solid var(--line);padding-top:8px;margin-top:10px;font-size:11px;color:var(--ink-3)}
+.assist-progress-later a{color:var(--ink-2);text-underline-offset:3px}
+.assist-adlc{border:1px solid var(--line);background:var(--panel);margin-bottom:18px}
+.assist-adlc summary{display:flex;align-items:center;flex-wrap:wrap;gap:12px;padding:12px 18px;cursor:pointer;font-size:13px}
+.assist-adlc summary::before{content:"▸";color:var(--amber)}
+.assist-adlc[open] summary::before{content:"▾"}
+.assist-adlc summary>.mono{color:var(--amber);font-size:11px}
+.assist-adlc summary>.dim{font-size:11px;margin-left:auto}
+.assist-adlc-scroll{overflow-x:auto}
+.assist-adlc-mobile-hint{display:none}
+.assist-adlc svg{display:block;width:100%;min-width:1050px;font-family:var(--sans)}
+.assist-adlc figcaption{border-top:1px solid var(--line);padding:10px 18px;font-size:12px;color:var(--ink-2)}
+.assist-resource-lifecycle{border-left:3px solid var(--amber);padding:10px 12px;background:var(--amber-soft);font-size:13px}
+#assistant-discussion,#assistant-resources,#assistant-proposal,#assistant-evaluation{scroll-margin-top:290px}
+@media(max-width:720px){
+  .assist-progress{top:90px;padding:10px;margin-bottom:10px}
+  .assist-progress-head{font-size:12px;gap:6px}
+  .assist-progress-head>span{font-size:10px}
+  .assist-progress-steps{gap:6px}
+  .assist-progress-steps a{flex-direction:column;align-items:flex-start;gap:4px}
+  .assist-progress-steps strong{font-size:11px}
+  .assist-progress-number{width:24px;height:24px;font-size:12px}
+  .assist-progress-next{font-size:11px}
+  .assist-progress-later{gap:5px 10px;font-size:10px}
+  .assist-progress-later>span{flex-basis:100%}
+  .assist-adlc summary{padding:10px;gap:8px}
+  .assist-adlc summary>.dim{display:none}
+  .assist-adlc-mobile-hint{display:block;padding:0 10px;font-size:11px;color:var(--ink-2)}
+  #assistant-discussion,#assistant-resources,#assistant-proposal,#assistant-evaluation{scroll-margin-top:360px}
+}
 .assist-link{display:inline-block;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;color:var(--amber);border:1px solid var(--amber);padding:5px 10px;text-decoration:none;transition:background .2s}
 .assist-link:hover{background:var(--amber-soft)}
 .assist-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:14px;align-items:start}

@@ -804,6 +804,25 @@ creation assistant, not an administration bot: it never edits or deletes an exis
 agent and never creates resources from conversation text alone. Explicit console
 actions prepare resources, approve deployment and materialize evaluation assets.
 
+The landing page explains **ADLC (Agent Development Lifecycle)** with a translated
+six-stage diagram: define success, build, evaluate, gate/release, observe production,
+and feed failure cases back into evaluation. A sticky creation rail distinguishes
+four required steps (goals, resources, review/approval, Harness creation) from three
+optional follow-up activities (evaluation, A/B testing, production feedback).
+The rail derives progress from the proposal and deployment outcome, never from
+elapsed time or opening a link. Only a succeeded job plus an active Agent completes
+creation. Unsaved resource choices block approval until saved or cancelled.
+
+Resource choices are editable **before the first approval**. Afterwards, the latest
+approved proposal owns the conversation's KB/Skill/MCP selections, including during
+deployment or after a failed job. The UI shows a read-only explanation and links to
+Agent management for editing and redeployment. It no longer offers another creation
+approval in that conversation. Preparation saves/imports and resource-changing
+proposal edits return `409 assistant.resources_locked`; catalog refresh remains
+available without minting resource revisions. Model revisions retain the approved
+resource lists, so evaluation-plan repair can continue without changing the deployed
+Agent. Historical approvals and their idempotent outcomes remain intact.
+
 **Scope of what is supported here.** The proposal may name the agent, pick a model
 (`model_id` + `model_source`), write the system prompt, choose memory flags, iteration
 and timeout controls, and reference **existing** workspace resources by catalog key:
@@ -834,7 +853,7 @@ catalog; their conversation and unsaved selections remain intact. New Skill ZIP
 uploads happen in Registry, not in this rail. Previously imported private Skill
 sources remain supported. Natural-language Skill authoring is not supported. Preparation
 selections persist on the private conversation and enter later turn context.
-Changing selections creates a new reviewable proposal revision when applicable,
+Before approval, changing selections creates a new reviewable proposal revision when applicable,
 without changing an approved revision or deploying an Agent. A bounded optional
 `launchpad-preparation` block supplies advisory requirement cards before a proposal
 exists; its business explanations never establish AWS resource readiness.

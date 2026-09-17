@@ -2182,7 +2182,8 @@
     "system_skill.readback_mismatch": "The Registry record read back does not match what was written; the registration is not reported as done.",
     "announcements.conflict": "This announcement has changed since you loaded it. Your changes were not applied.",
     "announcements.not_found": "This announcement no longer exists. It may have been deleted by another administrator.",
-    "run.evaluator_package_ambiguous": "This evaluator uses a legacy Lambda package with multiple rule sets. Create a replacement code evaluator with its own single-rule package before running it."
+    "run.evaluator_package_ambiguous": "This evaluator uses a legacy Lambda package with multiple rule sets. Create a replacement code evaluator with its own single-rule package before running it.",
+    "assistant.resources_locked": "Resource selection is locked after approval. Edit and redeploy the existing Agent from Agent management."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",
@@ -4124,7 +4125,7 @@
     "kicker": "CREATE · ARCHITECT ASSISTANT",
     "title": "Architect assistant",
     "meta": "{{label}} · workspace {{workspace}} · {{region}}",
-    "description": "Describe your requirement and work with the architect to clarify scope, prepare knowledge bases and Skills, and review a managed Harness proposal. Choose existing resources, create a knowledge base here, or open Registry to create a Skill. Review and approve Agent deployment separately, then prepare evaluators and run your first evaluation.",
+    "description": "Build with ADLC (Agent Development Lifecycle): define success, configure and create your Agent, then improve it through evaluation, release gates and production feedback.",
     "backToCreate": "◂ AGENT MANAGEMENT",
     "unavailableTitle": "ASSISTANT UNAVAILABLE",
     "unavailableBody": "The {{label}} preset is not active in this workspace (status: {{status}}). The assistant runs on that protected preset and cannot start without it.",
@@ -4733,6 +4734,86 @@
       "closeHint": "Closing keeps the knowledge base in your workspace. AWS creation and indexing may continue; you can finish uploads or start indexing from its details later."
     },
     "createSkill": "Create Skill in Registry ↗",
-    "registryHint": "Opens the Skill creation page in a new tab. After registration and approval, return here and refresh to select the Skill. Your conversation and unsaved choices stay here."
+    "registryHint": "Opens the Skill creation page in a new tab. After registration and approval, return here and refresh to select the Skill. Your conversation and unsaved choices stay here.",
+    "beforeCreateTitle": "Choose resources before creation",
+    "beforeCreateHint": "Select only what this Agent needs; each resource type is optional. Save changes and review the new proposal before approving. Approval locks these selections for this conversation.",
+    "lockedTitle": "Resources locked after approval",
+    "lockedHint": "These resources belong to the approved creation plan. To change the existing Agent, open Agent management, edit its configuration and redeploy. This conversation can still prepare or repair evaluation plans.",
+    "manageAgent": "Open Agent management →",
+    "reviewOnly": "An Agent has already been created from this conversation. Further revisions are for proposal and evaluation review. To apply configuration changes to the Agent, edit and redeploy it from Agent management."
+  },
+  "assistantAdlc": {
+    "title": "Agent Development Lifecycle",
+    "expand": "Explore the six stages",
+    "description": "Define success → build → evaluate → gate and release → observe production → learn from failures. Production evidence feeds the next development cycle.",
+    "feedback": "Production traces → failure cases → evaluation data → optimization / training data",
+    "principle": "Evaluation connects success criteria, release gates and production monitoring. Use real failures to improve the next iteration.",
+    "stages": {
+      "define": {
+        "title": "Define success",
+        "detail": "Goals and constraints",
+        "extra": "Evaluation criteria"
+      },
+      "build": {
+        "title": "Build",
+        "detail": "Prompt · tools · context",
+        "extra": "Model and resources"
+      },
+      "evaluate": {
+        "title": "Evaluate",
+        "detail": "Golden test cases",
+        "extra": "Scores and trajectories"
+      },
+      "release": {
+        "title": "Gate & release",
+        "detail": "Quality thresholds",
+        "extra": "Canary / A/B testing"
+      },
+      "observe": {
+        "title": "Observe",
+        "detail": "Traces and monitoring",
+        "extra": "Online evaluation"
+      },
+      "learn": {
+        "title": "Learn from failures",
+        "detail": "Find failure cases",
+        "extra": "Feed the evaluation set"
+      }
+    },
+    "swipe": "Scroll horizontally to explore all six stages →"
+  },
+  "assistantProgress": {
+    "title": "4 required steps to create an Agent",
+    "count": "{{done}} / {{total}} complete",
+    "steps": {
+      "goals": "Define goals",
+      "resources": "Configure resources",
+      "review": "Review & approve",
+      "deploy": "Create Harness"
+    },
+    "states": {
+      "done": "Complete",
+      "current": "Current step · required",
+      "pending": "Required",
+      "failed": "Failed · action needed"
+    },
+    "hints": {
+      "goals": "Next: describe your goals and success criteria to produce a proposal.",
+      "resources": "Next: choose any needed KBs, Skills and MCP tools, then save the selection.",
+      "review": "Next: review the prompt, model and resources, then approve creation.",
+      "unsaved": "Resource choices are not saved. Save or cancel them before approving creation.",
+      "editing": "Finish and save the proposal edits before approval.",
+      "invalid": "The proposal needs corrections. Resolve the listed validation errors before approval.",
+      "rejected": "This proposal was rejected. Continue the discussion to prepare a new proposal.",
+      "deploying": "Creation is running. Wait for the deployment result; approval alone does not mean the Agent is ready.",
+      "failed": "Creation failed. Check the deployment error and retry from Agent management.",
+      "ready": "Harness is ready. You can use it now; evaluation, A/B testing and production feedback can follow.",
+      "unavailable": "The approved Agent is not confirmed ready. Check its current status in Agent management."
+    },
+    "manage": "Agent management →",
+    "later": "3 follow-up activities · can wait",
+    "evaluate": "5 · Evaluation",
+    "experiment": "6 · A/B testing",
+    "feedback": "7 · Production feedback"
   }
 }

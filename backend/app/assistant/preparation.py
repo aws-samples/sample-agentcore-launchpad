@@ -23,6 +23,7 @@ from app.services.workspace import WorkspaceContext
 FENCE = "launchpad-preparation"
 MAX_BYTES = 24_000
 REJECTED_NAME = "preparation_rejected"
+RESOURCE_FIELDS = ("knowledge_bases", "skills", "tools")
 _OPEN = re.compile(r"```" + FENCE + r"(?=[ \t\r\n]|$)")
 _BLOCK = re.compile(r"```" + FENCE + r"[ \t]*\r?\n(.*?)\r?\n[ \t]*```", re.DOTALL)
 
@@ -101,8 +102,49 @@ def extract(text: str) -> tuple[list[dict[str, Any]] | None, list[str]]:
         return None, [f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors()][:20]
 
 
+def approved_resources(db: Session, conversation_id: str) -> dict[str, list[str]] | None:
+    """The latest historical approval owns resource selections for this conversation."""
+    approved = (
+        db.query(AssistantProposal)
+        .filter(AssistantProposal.conversation_id == conversation_id,
+                AssistantProposal.status == "approved")
+        .order_by(AssistantProposal.revision.desc())
+        .first()
+    )
+    if approved is None:
+        return None
+    return {field: list(approved.content.get(field) or []) for field in RESOURCE_FIELDS}
+
+
+def resources_locked() -> AppError:
+    return AppError(
+        "assistant.resources_locked",
+        "resources are locked after approval; manage the Agent and redeploy from /create",
+        status_code=409,
+    )
+
+
+def require_unlocked(db: Session, conversation_id: str) -> None:
+    if approved_resources(db, conversation_id) is not None:
+        raise resources_locked()
+
+
+def require_matching_resources(raw: Any, approved: dict[str, list[str]]) -> None:
+    """Compare sets independently of evaluation errors; harmless reordering is allowed."""
+    for field, keys in approved.items():
+        values = raw.get(field, []) if isinstance(raw, dict) else None
+        if (not isinstance(values, list)
+                or not all(isinstance(value, str) for value in values)
+                or set(values) != set(keys)):
+            raise resources_locked()
+
+
 def view(db: Session, row: AssistantConversation) -> dict[str, Any]:
     state = row.preparation or {}
+    approved = approved_resources(db, row.id)
+    if approved is not None:
+        return {"revision": state.get("revision", 0), **approved,
+                "requirements": state.get("requirements") or []}
     kbs, skills = state.get("knowledge_bases", []), state.get("skills", [])
     tools = state.get("tools", [])
     if not state.get("selection_set") or not state.get("tools_selection_set"):
@@ -174,11 +216,13 @@ def live_catalog(
 
 
 def revise_latest(db: Session, row: AssistantConversation, created_by: str) -> None:
-    """A changed selection/binding yields a fresh review; approvals remain untouched."""
+    """Before approval, changed selections/bindings yield a fresh review."""
     from app.assistant import service
 
+    if approved_resources(db, row.id) is not None:
+        return
     latest = service.latest_proposal(db, row.id)
-    if latest is None or latest.status not in ("draft", "approved", "invalid"):
+    if latest is None or latest.status not in ("draft", "invalid"):
         return
     # Check shape without rejecting old capability conflicts: applying the new
     # selections below can repair them (for example, removing an MCP from a
@@ -209,6 +253,7 @@ def save_selection(
 ) -> AssistantConversation:
     from app.assistant import service
 
+    require_unlocked(db, row.id)
     require_idle(row)
     check_revision(row, request.expected_revision)
     cid, principal = row.id, principal_of(identity)
@@ -221,14 +266,15 @@ def save_selection(
         knowledge_bases=request.knowledge_bases, skills=request.skills, tools=selected_tools,
     )
     errors = proposal.reference_errors(candidate, catalog)
-    if errors:
-        raise AppError("assistant.preparation_invalid", "; ".join(errors),
-                       {"errors": errors}, status_code=409)
     service._lock_conversation(db, cid)
     try:
         row = service.owned_conversation(db, workspace.id, principal, cid)
+        require_unlocked(db, cid)
         require_idle(row)
         check_revision(row, request.expected_revision)
+        if errors:
+            raise AppError("assistant.preparation_invalid", "; ".join(errors),
+                           {"errors": errors}, status_code=409)
         state = view(db, row)
         row.preparation = {**(row.preparation or {}), **state, "selection_set": True,
                            "tools_selection_set": request.tools is not None
@@ -260,10 +306,12 @@ def import_skills(
     if not identity.can(service.PERMISSION_DEPLOY):
         raise AppError("auth.permission_required", "Skill import requires agents.deploy",
                        {"permission": service.PERMISSION_DEPLOY}, status_code=403)
+    require_unlocked(db, row.id)
     cid, principal, token = row.id, principal_of(identity), uuid.uuid4().hex
     service._lock_conversation(db, cid)
     try:
         row = service.owned_conversation(db, workspace.id, principal, cid)
+        require_unlocked(db, cid)
         require_idle(row)
         check_revision(row, request.expected_revision)
         state = view(db, row)
@@ -325,6 +373,7 @@ def import_skills(
         catalog = live_catalog(workspace, sources)
         service._lock_conversation(db, cid)
         row = service.owned_conversation(db, workspace.id, principal, cid)
+        require_unlocked(db, cid)
         require_idle(row, token=token)
         check_revision(row, request.expected_revision)
         if row.preparation_token != token:
@@ -362,7 +411,15 @@ def context(row: AssistantConversation) -> str:
     state = row.preparation or {}
     db = object_session(row)
     selected = view(db, row) if db is not None else state
-    values = {k: selected.get(k, []) for k in ("knowledge_bases", "skills", "tools")}
+    values = {k: selected.get(k, []) for k in RESOURCE_FIELDS}
+    if db is not None and approved_resources(db, row.id) is not None:
+        return (
+            "\n\n## Approved resources (locked)\n"
+            "Preserve these resource lists in every proposal, including evaluation repairs. "
+            "Resource changes require Agent management and redeployment at /create; "
+            "this conversation cannot change them.\n"
+            + json.dumps(values, ensure_ascii=False)
+        )
     if not state.get("selection_set"):
         if not any(values.values()):
             return ""

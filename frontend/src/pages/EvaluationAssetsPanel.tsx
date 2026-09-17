@@ -514,6 +514,7 @@ export function EvaluationAssetsPanel({
         title={t("assistantEval.title")}
         sub={t("assistantEval.sub")}
         data-testid="evaluation-assets"
+        id="assistant-evaluation"
         data-workspace={workspaceId ?? ""}
         end={
           current ? (
