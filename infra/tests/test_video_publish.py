@@ -78,6 +78,11 @@ def publication(tmp_path):
         "captions": [{"url": base + "video.vtt", "language": "zh-CN", "label": "中文"}],
         "chapters": [{"startSeconds": 0, "title": text}],
     }]}
+    catalog["categories"] = [{"id": "platform", "title": text}]
+    catalog["collections"] = [{
+        "id": "tutorial", "categoryId": "platform", "title": text,
+        "description": text, "videoIds": ["tutorial"],
+    }]
     catalog_path.write_text(json.dumps(catalog))
     media = tmp_path / "media"
     media.mkdir()
@@ -159,4 +164,38 @@ def test_catalog_rejects_nonexistent_calendar_date(publication):
     result = publish(dry_run=True)
     assert result.returncode != 0
     assert "invalid date" in result.stderr
+    assert not log.exists()
+
+
+@pytest.mark.parametrize(("mutation", "message"), [
+    (lambda c: c["collections"][0].update(categoryId="missing"), "unknown category"),
+    (lambda c: c["collections"][0].update(videoIds=["missing"]), "unknown video"),
+    (lambda c: c["collections"][0]["videoIds"].append("tutorial"), "exactly one collection"),
+    (lambda c: c["collections"].clear(), "every video must belong"),
+    (lambda c: c["collections"][0].update(videoIds=[]), "collection must contain videos"),
+    (lambda c: c["collections"][0].update(title={"en": "Title"}), "title.zh-CN is required"),
+    (lambda c: c["categories"].append(c["categories"][0]), "category: IDs must be unique"),
+    (lambda c: c["collections"].append(c["collections"][0]), "collection: IDs must be unique"),
+])
+def test_catalog_rejects_broken_library_before_publication(publication, mutation, message):
+    publish, _, log, catalog_path = publication
+    catalog = json.loads(catalog_path.read_text())
+    mutation(catalog)
+    catalog_path.write_text(json.dumps(catalog))
+    result = publish(dry_run=True)
+    assert result.returncode != 0
+    assert message in result.stderr
+    assert not log.exists()
+
+
+def test_catalog_accepts_an_empty_library(publication):
+    _, _, log, catalog_path = publication
+    catalog = json.loads(catalog_path.read_text())
+    catalog.update(videos=[], collections=[])
+    catalog_path.write_text(json.dumps(catalog))
+    result = subprocess.run(
+        ["node", str(catalog_path.parents[3] / "scripts/validate_video_catalog.mjs")],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
     assert not log.exists()

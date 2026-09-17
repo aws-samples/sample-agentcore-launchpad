@@ -1,9 +1,8 @@
 # Shared video library
 
-The console's **Learn → Videos** entry (`/videos`) plays tutorials directly from
-CloudFront. The initial entry is the September 16, 2026 architect assistant
-recording: starting a conversation, reviewing an elder-care application, deploying,
-evaluating, and completing a configuration-bundle A/B experiment.
+The console's **Learn → Videos** entry (`/videos`) opens a module library.
+Architecture Assistant and Evaluation are ordered series; standalone modules have
+one recording each. Selecting a card opens a native player backed by CloudFront.
 
 ## Shared configuration
 
@@ -19,7 +18,28 @@ duration in seconds, narration language, JPEG poster, MP4/WebM sources, optional
 WebVTT captions, and ordered chapter offsets with bilingual titles. Link to a
 specific entry with `/videos?video=architect-assistant`.
 
-The page loads only the selected video's metadata and does not autoplay. Native
+The catalog also defines localized `categories` and `collections`. Each collection
+has a stable `id`, `categoryId`, bilingual title/description, and ordered `videoIds`.
+Every recording belongs to exactly one collection. Collection order controls the
+library; `videoIds` order controls the playlist and previous/next navigation.
+The existing `videos` array and media publisher remain compatible.
+
+The library groups recordings into collection cards, showing episode counts and
+total duration. Category filters and title search use the `category` and `q` query
+parameters. Searches return individual matching recordings, linking directly to
+the relevant episode. These parameters survive entry into and return from the
+watch view, as well as refresh and browser navigation. A missing `video` parameter
+opens the library; an invalid one shows a notice without selecting a substitute.
+
+The watch view lists only the current collection. Multi-episode collections have
+keyboard-accessible Series/Chapters tabs; standalone recordings expose chapters
+directly. The directory scrolls independently within a bounded height, and the
+full description is collapsed initially. Switching directory tabs does not remount
+the player. Previous/next links follow the collection's explicit order, and return
+navigation opens the library with its filters intact.
+
+The library mounts no player. The watch view loads only the selected video's
+metadata and does not autoplay. Native
 controls provide seeking, volume, playback speed (browser dependent), and full
 screen. The recording already has visible Chinese subtitles; the optional text
 track starts off to avoid duplicate subtitles. WebM supports browsers whose builds
@@ -28,7 +48,8 @@ state.
 
 `scripts/validate_video_catalog.mjs` runs before every frontend build and rejects
 duplicate IDs, incomplete translations, unsupported media types, temporary URLs,
-and unordered/out-of-range chapter offsets.
+unordered/out-of-range chapter offsets, unknown collection/category references,
+and missing or duplicate collection membership.
 
 ## Infrastructure
 
@@ -82,7 +103,8 @@ environments should reuse the checked-in catalog, not deploy another media stack
 2. Add an entry to the catalog (or revise one), using the shared `BaseUrl` and a
    new revision directory. File names in URLs must match local basenames. Include
    both languages for title, description, and chapter labels; language identifies
-   the actual narration.
+   the actual narration. Add the video ID to exactly one collection at its intended
+   episode position, or create a localized collection for a new module.
 3. Validate and preview the exact upload set from the repository root:
 
    ```bash

@@ -1,5 +1,125 @@
 {
   "schemaVersion": 1,
+  "categories": [
+    {
+      "id": "architect",
+      "title": {
+        "en": "Architect Assistant",
+        "zh-CN": "架构助手"
+      }
+    },
+    {
+      "id": "platform",
+      "title": {
+        "en": "Platform features",
+        "zh-CN": "平台功能"
+      }
+    },
+    {
+      "id": "evaluation",
+      "title": {
+        "en": "09 Evaluation",
+        "zh-CN": "09 评估"
+      }
+    }
+  ],
+  "collections": [
+    {
+      "id": "architect-assistant",
+      "categoryId": "architect",
+      "title": {
+        "en": "Architect Assistant",
+        "zh-CN": "架构助手"
+      },
+      "description": {
+        "en": "Prepare resources, deploy a drone assistant, and continue with Runtime and A/B evaluation.",
+        "zh-CN": "准备资源、部署无人机助手，继续学习 Runtime 转换与 A/B 实验。"
+      },
+      "videoIds": [
+        "architect-assistant",
+        "architect-assistant-runtime-ab"
+      ]
+    },
+    {
+      "id": "agent-management",
+      "categoryId": "platform",
+      "title": {
+        "en": "Agent management",
+        "zh-CN": "Agent 管理"
+      },
+      "description": {
+        "en": "Create, maintain, and verify running agents.",
+        "zh-CN": "创建、维护 Agent，并验证运行结果。"
+      },
+      "videoIds": [
+        "agent-management"
+      ]
+    },
+    {
+      "id": "registry",
+      "categoryId": "platform",
+      "title": {
+        "en": "Registry",
+        "zh-CN": "注册中心"
+      },
+      "description": {
+        "en": "Register, discover, and reuse assets.",
+        "zh-CN": "登记、发现并复用平台资产。"
+      },
+      "videoIds": [
+        "registry"
+      ]
+    },
+    {
+      "id": "memory",
+      "categoryId": "platform",
+      "title": {
+        "en": "Memory",
+        "zh-CN": "记忆"
+      },
+      "description": {
+        "en": "Follow conversation events into long-term knowledge.",
+        "zh-CN": "从会话事件了解长期记忆的形成与使用。"
+      },
+      "videoIds": [
+        "memory"
+      ]
+    },
+    {
+      "id": "observability",
+      "categoryId": "platform",
+      "title": {
+        "en": "08 Observability",
+        "zh-CN": "08 可观测性"
+      },
+      "description": {
+        "en": "Explore runtime overviews, sessions, and invocation details.",
+        "zh-CN": "从运行概况逐步查看会话和调用细节。"
+      },
+      "videoIds": [
+        "observability"
+      ]
+    },
+    {
+      "id": "evaluation",
+      "categoryId": "evaluation",
+      "title": {
+        "en": "09 Evaluation",
+        "zh-CN": "09 评估"
+      },
+      "description": {
+        "en": "Datasets, evaluation runs, A/B experiments, online evaluation, and evaluators.",
+        "zh-CN": "数据集、新建评估、A/B 实验、在线评估与评估器。"
+      },
+      "videoIds": [
+        "evaluation-datasets",
+        "evaluation-runs",
+        "evaluation-ab",
+        "evaluation-online",
+        "evaluation-evaluators"
+      ]
+    }
+  ],
   "videos": [
     {
       "id": "architect-assistant",

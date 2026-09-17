@@ -67,4 +67,32 @@ for (const video of catalog.videos) {
     previous = chapter.startSeconds;
   }
 }
-console.log(`Video catalog: ${catalog.videos.length} entries validated`);
+requireValue(Array.isArray(catalog.categories) && Array.isArray(catalog.collections),
+  "categories and collections are required");
+const categories = new Set();
+const collections = new Set();
+const assigned = new Set();
+function uniqueId(id, seen, field) {
+  requireValue(typeof id === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id) && !seen.has(id),
+    `${field}: IDs must be unique lowercase slugs`);
+  seen.add(id);
+}
+for (const category of catalog.categories) {
+  uniqueId(category.id, categories, "category");
+  localized(category.title, `${category.id}.title`);
+}
+for (const collection of catalog.collections) {
+  uniqueId(collection.id, collections, "collection");
+  localized(collection.title, `${collection.id}.title`);
+  localized(collection.description, `${collection.id}.description`);
+  requireValue(categories.has(collection.categoryId), `${collection.id}: unknown category`);
+  requireValue(Array.isArray(collection.videoIds) && collection.videoIds.length > 0,
+    `${collection.id}: collection must contain videos`);
+  for (const id of collection.videoIds) {
+    requireValue(ids.has(id), `${collection.id}: unknown video ${id}`);
+    requireValue(!assigned.has(id), `${id}: video must belong to exactly one collection`);
+    assigned.add(id);
+  }
+}
+requireValue(assigned.size === ids.size, "every video must belong to a collection");
+console.log(`Video catalog: ${catalog.videos.length} entries in ${collections.size} collections validated`);

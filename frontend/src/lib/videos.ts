@@ -18,11 +18,35 @@ export interface LibraryVideo {
 
 interface VideoCatalog {
   schemaVersion: number;
+  categories: { id: string; title: VideoText }[];
+  collections: {
+    id: string;
+    categoryId: string;
+    title: VideoText;
+    description: VideoText;
+    videoIds: string[];
+  }[];
+  videos: LibraryVideo[];
+}
+
+export interface VideoCollection {
+  id: string;
+  categoryId: string;
+  title: VideoText;
+  description: VideoText;
   videos: LibraryVideo[];
 }
 
 // Imported only by the lazy Videos route; no environment or workspace lookup.
 export const videoCatalog: VideoCatalog = catalog;
+
+// Membership and ordering are validated before every frontend build.
+export const videoCollections: VideoCollection[] = videoCatalog.collections.map(
+  ({ videoIds, ...collection }) => ({
+    ...collection,
+    videos: videoIds.flatMap((id) => videoCatalog.videos.filter((video) => video.id === id)),
+  }),
+);
 
 export function videoTimestamp(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds));

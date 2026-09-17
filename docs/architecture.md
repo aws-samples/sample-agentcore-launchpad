@@ -53,9 +53,12 @@ publication workflow.
 
 ## Shared tutorial videos
 
-The console's **Learn → Videos** page (`/videos?video=<id>`) is a lazy-loaded,
-read-only media library. Its bilingual catalog, `frontend/src/config/videos.json`,
-holds permanent CloudFront URLs and chapter offsets shared by every environment.
+The console's **Learn → Videos** page (`/videos`) is a lazy-loaded, read-only
+module library with category filters and title search. `/videos?video=<id>` opens
+a recording with its collection playlist and chapter directory; navigation retains
+the library's `category` and `q` filters. Its bilingual catalog,
+`frontend/src/config/videos.json`, holds categories, ordered collections, permanent
+CloudFront URLs, and chapter offsets shared by every environment.
 Video playback goes directly from browser to CDN; it does not use workspace APIs,
 the ledger, or AgentCore. The separately deployed `launchpad-videos` CDK stack
 owns a private, versioned S3 origin and an OAC-restricted CloudFront distribution
