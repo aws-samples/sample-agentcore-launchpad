@@ -4,30 +4,30 @@
     {
       "id": "architect-assistant",
       "title": {
-        "en": "Architect assistant: prepare resources and create a DJI drone assistant",
-        "zh-CN": "架构助手：准备知识库与 Skill，创建无人机助手"
+        "en": "Architect assistant I: prepare resources and deploy a drone assistant",
+        "zh-CN": "架构助手（一）：准备资源与部署无人机助手"
       },
       "description": {
-        "en": "Operate the updated creation preparation panel in a fresh DJI drone assistant example. Select the existing DJI-drones knowledge base, register and approve a manual-answering Skill, review and deploy the proposal, ask real questions, and run six evaluation scenarios producing 68 judgments. Records the evaluator-limit correction and an actual Runtime conversion failure; no A/B experiment was run.",
-        "zh-CN": "以新建 DJI 无人机产品使用助手为例，实录新版创建准备面板：选择 DJI-drones 知识库，注册并审批手册问答 Skill，返回保存资源选择，审阅并部署方案，进行两款机型的真实问答，再运行六场景评估并解读 68 条评审记录。包含评估器去重和本次 Runtime 转换失败，未执行 A/B 实验。"
+        "en": "The original first 8:07, preserved: prepare DJI-drones and a manual-answering Skill, review the proposal, deploy, ask Mavic 4 Pro and Lito X1 questions, and start the first evaluation. Continue with Runtime and experiments in part two.",
+        "zh-CN": "保留原视频前 8:07：选择 DJI-drones，创建并挂载手册问答 Skill，审阅部署方案，实测两款机型问答，并启动首次评估。Runtime 转换及实验流程请继续观看第二集。"
       },
       "publishedAt": "2026-09-17",
-      "durationSeconds": 578.021333,
+      "durationSeconds": 487.021333,
       "language": "zh-CN",
-      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-drones/poster.jpg",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-part1/poster.jpg",
       "sources": [
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-drones/architect-assistant.zh-CN.mp4",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-part1/architect-assistant.zh-CN.mp4",
           "type": "video/mp4"
         },
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-drones/architect-assistant.zh-CN.webm",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-part1/architect-assistant.zh-CN.webm",
           "type": "video/webm"
         }
       ],
       "captions": [
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-drones/architect-assistant.zh-CN.vtt",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-part1/architect-assistant.zh-CN.vtt",
           "language": "zh-CN",
           "label": "简体中文"
         }
@@ -200,33 +200,179 @@
             "en": "Start the first six-scenario evaluation",
             "zh-CN": "启动六场景首次评估"
           }
+        }
+      ]
+    },
+    {
+      "id": "architect-assistant-runtime-ab",
+      "title": {
+        "en": "Architect assistant II: Runtime conversion, baseline and A/B experiment",
+        "zh-CN": "架构助手（二）：Runtime 转换、基线与 A/B 实验"
+      },
+      "description": {
+        "en": "Freshly recorded continuation after the Runtime conversion fix. Verify the inherited knowledge base and Skill, establish a Runtime-specific baseline, review a candidate prompt, run a real configuration-bundle A/B comparison, repair the experiment sampling sources, interpret 48 judgments from 12 sessions, and clean up temporary resources without promotion.",
+        "zh-CN": "转换修复后重新实录：验证知识库与 Skill 继承，为 Runtime 建立基线，审阅候选提示词，执行配置包 A/B 对照，补齐本实验采样日志来源，解读 12 个会话的 48 条评审记录，并清理临时资源；未推广候选配置。"
+      },
+      "publishedAt": "2026-09-17",
+      "durationSeconds": 431.021333,
+      "language": "zh-CN",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-runtime-ab/20260917-part2/poster.jpg",
+      "sources": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-runtime-ab/20260917-part2/architect-assistant-runtime-ab.zh-CN.mp4",
+          "type": "video/mp4"
         },
         {
-          "startSeconds": 487,
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-runtime-ab/20260917-part2/architect-assistant-runtime-ab.zh-CN.webm",
+          "type": "video/webm"
+        }
+      ],
+      "captions": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-runtime-ab/20260917-part2/architect-assistant-runtime-ab.zh-CN.vtt",
+          "language": "zh-CN",
+          "label": "简体中文"
+        }
+      ],
+      "chapters": [
+        {
+          "startSeconds": 0,
           "title": {
-            "en": "Inspect the actual Runtime conversion outcome",
-            "zh-CN": "检查 Runtime 转换的实际结果"
+            "en": "Part two: Runtime and A/B validation",
+            "zh-CN": "架构助手第二集：Runtime 与 A/B 实验"
           }
         },
         {
-          "startSeconds": 513,
+          "startSeconds": 20,
           "title": {
-            "en": "Read the results of this evaluation",
-            "zh-CN": "读取本次评估的真实结果"
+            "en": "Run the repaired Runtime conversion",
+            "zh-CN": "重新执行 Runtime 转换"
           }
         },
         {
-          "startSeconds": 534,
+          "startSeconds": 47,
           "title": {
-            "en": "Use a judgment explanation to guide iteration",
-            "zh-CN": "从评分解释找到迭代方向"
+            "en": "Verify the twin and retained resources",
+            "zh-CN": "核对孪生及其资源"
           }
         },
         {
-          "startSeconds": 557,
+          "startSeconds": 67,
           "title": {
-            "en": "Keep the resources, proposal and evaluation evidence",
-            "zh-CN": "保留资料、方案与验证证据"
+            "en": "Ask the new Runtime a real question",
+            "zh-CN": "在新 Runtime 上提问"
+          }
+        },
+        {
+          "startSeconds": 87,
+          "title": {
+            "en": "Inspect Skill and direct retrieval results",
+            "zh-CN": "确认 Skill 和直接检索结果"
+          }
+        },
+        {
+          "startSeconds": 106,
+          "title": {
+            "en": "Choose evaluators appropriate for the Runtime",
+            "zh-CN": "为 Runtime 选择适用的评估器"
+          }
+        },
+        {
+          "startSeconds": 127,
+          "title": {
+            "en": "Submit the twin baseline evaluation",
+            "zh-CN": "提交孪生基线评估"
+          }
+        },
+        {
+          "startSeconds": 146,
+          "title": {
+            "en": "Read the Runtime baseline and explanations",
+            "zh-CN": "读取 Runtime 基线与评审理由"
+          }
+        },
+        {
+          "startSeconds": 167,
+          "title": {
+            "en": "Start a configuration-bundle experiment from the baseline",
+            "zh-CN": "带着基线启动配置包实验"
+          }
+        },
+        {
+          "startSeconds": 189,
+          "title": {
+            "en": "Generate a candidate prompt from the fixed baseline",
+            "zh-CN": "固定基线，生成候选提示词"
+          }
+        },
+        {
+          "startSeconds": 212,
+          "title": {
+            "en": "Review and tighten the candidate prompt",
+            "zh-CN": "审阅并收紧候选提示词"
+          }
+        },
+        {
+          "startSeconds": 237,
+          "title": {
+            "en": "Create control and treatment bundles",
+            "zh-CN": "固化对照组与实验组配置"
+          }
+        },
+        {
+          "startSeconds": 256,
+          "title": {
+            "en": "Set the shared online evaluators",
+            "zh-CN": "设置两组共用的在线评估器"
+          }
+        },
+        {
+          "startSeconds": 279,
+          "title": {
+            "en": "Start the 50/50 configuration comparison",
+            "zh-CN": "启动 50/50 配置包对照"
+          }
+        },
+        {
+          "startSeconds": 299,
+          "title": {
+            "en": "Replay the dataset and collect online evaluations",
+            "zh-CN": "回放数据集并等待评分"
+          }
+        },
+        {
+          "startSeconds": 321,
+          "title": {
+            "en": "Aggregate the real online evaluation results",
+            "zh-CN": "请求聚合真实在线评分"
+          }
+        },
+        {
+          "startSeconds": 340,
+          "title": {
+            "en": "Include both telemetry sources and replay the tests",
+            "zh-CN": "补齐采样日志来源后重新回放"
+          }
+        },
+        {
+          "startSeconds": 365,
+          "title": {
+            "en": "Read all results and keep the current version",
+            "zh-CN": "读取完整结果，保留当前版本"
+          }
+        },
+        {
+          "startSeconds": 389,
+          "title": {
+            "en": "Clean up this experiment’s temporary resources",
+            "zh-CN": "清理本次实验的临时资源"
+          }
+        },
+        {
+          "startSeconds": 411,
+          "title": {
+            "en": "Keep the reusable twin and reviewable evidence",
+            "zh-CN": "留下可复用的孪生与验证证据"
           }
         }
       ]
