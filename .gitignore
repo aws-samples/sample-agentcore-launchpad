@@ -24,7 +24,7 @@ __pycache__/
 .coverage
 htmlcov/
 /issues/
-design/
+design/ 
 # --- node ---
 node_modules/
 dist/
