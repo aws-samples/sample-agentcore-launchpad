@@ -124,30 +124,30 @@
     {
       "id": "architect-assistant",
       "title": {
-        "en": "Architect assistant I: prepare resources and deploy a drone assistant",
-        "zh-CN": "架构助手（一）：准备资源与部署无人机助手"
+        "en": "Architect Assistant (1): ADLC and creating a drone assistant",
+        "zh-CN": "架构助手（一）：ADLC 导览与无人机助手创建"
       },
       "description": {
-        "en": "The original first 8:07, preserved: prepare DJI-drones and a manual-answering Skill, review the proposal, deploy, ask Mavic 4 Pro and Lito X1 questions, and start the first evaluation. Continue with Runtime and experiments in part two.",
-        "zh-CN": "保留原视频前 8:07：选择 DJI-drones，创建并挂载手册问答 Skill，审阅部署方案，实测两款机型问答，并启动首次评估。Runtime 转换及实验流程请继续观看第二集。"
+        "en": "Introduce the six-stage Agent Development Lifecycle, its production-feedback loop, and the pinned four-step creation progress bar. Then select DJI-drones, register and attach a manual-answering Skill, review and deploy the proposal, verify two drone models, and start the first evaluation. Continue with Runtime conversion, a baseline, and A/B experiments in part two.",
+        "zh-CN": "先了解 ADLC 六阶段、评估与生产反馈闭环，以及置顶的四步创建进度。随后选择 DJI-drones 知识库，创建并挂载手册问答 Skill，审阅并部署方案，验证两款机型的问答，并启动首次评估。Runtime 转换、基线与 A/B 实验继续观看第二集。"
       },
       "publishedAt": "2026-09-17",
-      "durationSeconds": 487.021333,
+      "durationSeconds": 618.1,
       "language": "zh-CN",
-      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-part1/poster.jpg",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-adlc/poster.jpg",
       "sources": [
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-part1/architect-assistant.zh-CN.mp4",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-adlc/architect-assistant.zh-CN.mp4",
           "type": "video/mp4"
         },
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-part1/architect-assistant.zh-CN.webm",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-adlc/architect-assistant.zh-CN.webm",
           "type": "video/webm"
         }
       ],
       "captions": [
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-part1/architect-assistant.zh-CN.vtt",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-adlc/architect-assistant.zh-CN.vtt",
           "language": "zh-CN",
           "label": "简体中文"
         }
@@ -156,166 +156,208 @@
         {
           "startSeconds": 0,
           "title": {
-            "en": "Create a DJI drone usage assistant",
-            "zh-CN": "架构助手：创建无人机产品使用助手"
+            "en": "ADLC and the drone assistant walkthrough",
+            "zh-CN": "架构助手：ADLC 方法与无人机助手实操"
           }
         },
         {
-          "startSeconds": 15,
+          "startSeconds": 16.1,
+          "title": {
+            "en": "An evaluation-driven development lifecycle",
+            "zh-CN": "ADLC：评估驱动的开发方法"
+          }
+        },
+        {
+          "startSeconds": 34.1,
+          "title": {
+            "en": "Define success, build, and evaluate",
+            "zh-CN": "定义标准、构建与评估"
+          }
+        },
+        {
+          "startSeconds": 56.1,
+          "title": {
+            "en": "Release gates, production observation, and failure analysis",
+            "zh-CN": "质量门禁、生产观测与失败分析"
+          }
+        },
+        {
+          "startSeconds": 79.1,
+          "title": {
+            "en": "Feed production evidence into the next development cycle",
+            "zh-CN": "让生产证据回流下一轮开发"
+          }
+        },
+        {
+          "startSeconds": 100.1,
+          "title": {
+            "en": "Four required creation steps in the pinned progress bar",
+            "zh-CN": "置顶进度条：四个必做步骤"
+          }
+        },
+        {
+          "startSeconds": 123.1,
+          "title": {
+            "en": "Navigate creation steps and begin the drone walkthrough",
+            "zh-CN": "定位当前步骤，进入无人机实操"
+          }
+        },
+        {
+          "startSeconds": 146.1,
           "title": {
             "en": "Start a new conversation",
             "zh-CN": "新建会话，打开创建准备"
           }
         },
         {
-          "startSeconds": 34,
+          "startSeconds": 165.1,
           "title": {
             "en": "Describe users, products and scope",
             "zh-CN": "说明产品、用户和回答边界"
           }
         },
         {
-          "startSeconds": 55,
+          "startSeconds": 186.1,
           "title": {
             "en": "Review preparation requirements",
             "zh-CN": "把缺少的准备项放到右侧"
           }
         },
         {
-          "startSeconds": 73,
+          "startSeconds": 204.1,
           "title": {
             "en": "Select DJI-drones and inspect indexing",
             "zh-CN": "选择 DJI-drones 并核对索引"
           }
         },
         {
-          "startSeconds": 94,
+          "startSeconds": 225.1,
           "title": {
             "en": "Open Skill registration from preparation",
             "zh-CN": "从准备面板进入 Skill 注册"
           }
         },
         {
-          "startSeconds": 109,
+          "startSeconds": 240.1,
           "title": {
             "en": "Upload the prepared manual-answering Skill",
             "zh-CN": "上传预先编写的手册问答 Skill"
           }
         },
         {
-          "startSeconds": 130,
+          "startSeconds": 261.1,
           "title": {
             "en": "Submit and approve the Skill",
             "zh-CN": "提交并审批 Skill"
           }
         },
         {
-          "startSeconds": 151,
+          "startSeconds": 282.1,
           "title": {
             "en": "Refresh and select the new Skill",
             "zh-CN": "返回并选择新的 Skill"
           }
         },
         {
-          "startSeconds": 171,
+          "startSeconds": 302.1,
           "title": {
             "en": "Review optional MCP resources",
             "zh-CN": "查看 MCP 资源与当前选择"
           }
         },
         {
-          "startSeconds": 189,
+          "startSeconds": 320.1,
           "title": {
             "en": "Confirm requirements, resources and the initial scope",
             "zh-CN": "确认需求、资源和首版范围"
           }
         },
         {
-          "startSeconds": 213,
+          "startSeconds": 344.1,
           "title": {
             "en": "Review requirements and launch barriers",
             "zh-CN": "从需求基线看上线障碍"
           }
         },
         {
-          "startSeconds": 232,
+          "startSeconds": 363.1,
           "title": {
             "en": "Turn requirements into six golden tests",
             "zh-CN": "把要求转成六个黄金测试"
           }
         },
         {
-          "startSeconds": 252,
+          "startSeconds": 383.1,
           "title": {
             "en": "Review exact bindings and the system prompt",
             "zh-CN": "核对将要部署的资源和提示词"
           }
         },
         {
-          "startSeconds": 273,
+          "startSeconds": 404.1,
           "title": {
             "en": "Approve the reviewed revision and deploy",
             "zh-CN": "批准当前修订并开始部署"
           }
         },
         {
-          "startSeconds": 296,
+          "startSeconds": 427.1,
           "title": {
             "en": "Inspect the deployment and open Chat",
             "zh-CN": "查看部署结果并进入对话"
           }
         },
         {
-          "startSeconds": 314,
+          "startSeconds": 445.1,
           "title": {
             "en": "Ask about Mavic 4 Pro setup",
             "zh-CN": "向 Mavic 4 Pro 助手提问"
           }
         },
         {
-          "startSeconds": 333,
+          "startSeconds": 464.1,
           "title": {
             "en": "Inspect Skill calls, retrieval and citations",
             "zh-CN": "核对 Skill、检索和手册引用"
           }
         },
         {
-          "startSeconds": 354,
+          "startSeconds": 485.1,
           "title": {
             "en": "Ask about a different drone model",
             "zh-CN": "切换到另一款机型"
           }
         },
         {
-          "startSeconds": 373,
+          "startSeconds": 504.1,
           "title": {
             "en": "Inspect the Lito X1 answer and references",
             "zh-CN": "核对 Lito X1 的资料与回答"
           }
         },
         {
-          "startSeconds": 392,
+          "startSeconds": 523.1,
           "title": {
             "en": "Prepare an evaluation plan from the proposal",
             "zh-CN": "从当前方案准备评估计划"
           }
         },
         {
-          "startSeconds": 413,
+          "startSeconds": 544.1,
           "title": {
             "en": "Review and remove overlapping checks",
             "zh-CN": "审阅并去掉重复检查"
           }
         },
         {
-          "startSeconds": 436,
+          "startSeconds": 567.1,
           "title": {
             "en": "Approve evaluation asset creation",
             "zh-CN": "明确批准评估资产创建"
           }
         },
         {
-          "startSeconds": 461,
+          "startSeconds": 592.1,
           "title": {
             "en": "Start the first six-scenario evaluation",
             "zh-CN": "启动六场景首次评估"
