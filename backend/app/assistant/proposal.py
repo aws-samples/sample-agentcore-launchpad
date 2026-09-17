@@ -202,6 +202,10 @@ class ProposalContent(BaseModel):
     system_prompt: str = Field(min_length=1, max_length=20000)
     # Catalog keys (``gateway:<name>`` / ``mcp:<name>``), never URLs or ARNs.
     tools: list[Key] = Field(default_factory=list, max_length=20)
+    # Explicit opt-in to native command/filesystem tools; these are not attachments.
+    native_tools: list[Literal["shell", "file_operations"]] = Field(
+        default_factory=list, max_length=2,
+    )
     # Catalog skill names (registry AGENT_SKILLS records), never S3 paths.
     skills: list[Key] = Field(default_factory=list, max_length=10)
     # Managed knowledge base ids present in the catalog.
@@ -228,9 +232,8 @@ class ProposalContent(BaseModel):
 
 
 def content_dump(content: ProposalContent) -> dict[str, Any]:
-    """The stored/displayed form: the optional ``evaluation_plan`` and ``fishbone``
-    members are dropped when absent, so a revision without them serializes exactly as
-    before they existed."""
+    """New revisions include explicit selection defaults. Optional seed/fishbone
+    members are omitted when absent; historical rows are returned as stored."""
     data = content.model_dump()
     for optional in ("evaluation_plan", "fishbone"):
         if data.get(optional) is None:
@@ -248,7 +251,7 @@ def serialized_bytes(raw: Any) -> int:
 
 def _check_lists(content: ProposalContent) -> list[str]:
     errors: list[str] = []
-    for field in ("tools", "skills", "knowledge_bases"):
+    for field in ("tools", "skills", "knowledge_bases", "native_tools"):
         values = getattr(content, field)
         if len(values) != len(set(values)):
             errors.append(f"{field} must not repeat an entry")
@@ -440,6 +443,7 @@ def to_agent_spec(content: ProposalContent, catalog: dict[str, Any]) -> AgentSpe
         model_source=content.model_source,
         system_prompt=content.system_prompt,
         tools=tools,
+        native_tools=content.native_tools,
         skills=skills,
         knowledge_bases=kbs,
         # ``workspace`` = the shared memory with every strategy it carries; the
@@ -511,6 +515,7 @@ def resource_bindings(content: ProposalContent, catalog: dict[str, Any]) -> dict
             "kb_gateway": kb_gateway,
             "memory": memory,
             "execution_role_arn": resources.get("execution_role_arn"),
+            "tool_access_policy": "selected-v1",
         },
     }
 
@@ -526,7 +531,8 @@ def binding_diff(before: dict[str, Any] | None, after: dict[str, Any]) -> list[s
 
 
 _VIEW_FIELDS = ("name", "method", "model_id", "model_source", "tools", "skills",
-                "knowledge_bases", "memory", "max_iterations", "timeout_seconds", "resources")
+                "native_tools", "allowed_tools", "knowledge_bases", "memory",
+                "max_iterations", "timeout_seconds", "resources")
 
 
 def bindings_view(bindings: dict[str, Any] | None) -> dict[str, Any] | None:

@@ -14,6 +14,7 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.deployer.pipeline import StageContext, StageResult, register_method
+from app.harness_tool_access import selected_tool_patterns
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
 from app.services import agent_iam, registry_console
@@ -223,7 +224,9 @@ def build_create_params(
         params["tools"] = tools
     if spec.skills:
         params["skills"] = [_skill_source(path) for path in spec.skills]
-    if spec.allowed_tools is not None:
+    if spec.allowed_tools is None:
+        allowed = selected_tool_patterns(tools, bool(spec.skills), spec.native_tools)
+    else:
         # Restricts LLM tool selection only (InvokeHarness); IAM is unaffected, which is
         # why the per-agent role stays the real boundary (services/agent_iam.py). A
         # mounted KB's gateway tool is added as ``@<tool name>`` (the service model's
@@ -232,7 +235,7 @@ def build_create_params(
         for name in kb_tool_names:
             if spec.knowledge_bases and f"@{name}" not in allowed:
                 allowed.append(f"@{name}")
-        params["allowedTools"] = allowed
+    params["allowedTools"] = allowed
     if spec.env:
         params["environmentVariables"] = dict(spec.env)
     if (spec.memory.short_term or spec.memory.long_term) and memory_arn:

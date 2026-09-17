@@ -221,10 +221,13 @@ class AgentSpec(BaseModel):
     # experiment_capability to "custom-source-unverified".
     toolkits: list[Toolkit] = Field(default_factory=list, max_length=2)
     skills: list[str] = Field(default_factory=list)
+    # Native Harness capabilities are opt-in, independently of ToolConfig attachments.
+    native_tools: list[Literal["shell", "file_operations"]] = Field(
+        default_factory=list, max_length=2
+    )
     # Harness ``allowedTools`` patterns (harness method only; the other methods ignore
-    # it). None ⇒ omit the member, which AgentCore reads as "all tools" — including the
-    # default ``shell`` and ``file_operations`` builtins every session gets. A list
-    # restricts the model's tool selection to the matching builtins / MCP servers.
+    # it). None derives access from final attachments, Skills and native_tools.
+    # An explicit list overrides derivation, including "*" and the empty list.
     # Pattern per the service model: ``*`` or ``@?[^/]+(/[^/]+)?``, ≤ 64 chars.
     allowed_tools: list[str] | None = Field(default=None, max_length=50)
     # extra pip requirements for zip_runtime/studio agents (on top of the template base set)
@@ -309,6 +312,14 @@ class AgentSpec(BaseModel):
                 "(model_source=bedrock, Converse) only — the Bedrock Mantle Responses "
                 "pass-through shape is not verified, so it is refused rather than guessed"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _native_tools_supported(self) -> "AgentSpec":
+        if self.native_tools and self.method != "harness":
+            raise ValueError("native_tools is supported by the harness method only")
+        if len(self.native_tools) != len(set(self.native_tools)):
+            raise ValueError("native_tools must be unique")
         return self
 
     @model_validator(mode="after")

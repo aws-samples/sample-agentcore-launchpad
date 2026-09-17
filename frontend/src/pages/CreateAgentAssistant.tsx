@@ -31,6 +31,7 @@ import type {
   AssistantProposalStatus,
   AssistantStatus,
   AssistantTurnRequest,
+  HarnessNativeTool,
   JobInfo,
   StageInfo,
 } from "../lib/api";
@@ -39,6 +40,7 @@ import {
   ApiError,
   AUTH_UNAUTHORIZED_EVENT,
   errorMessage,
+  HARNESS_NATIVE_TOOLS,
 } from "../lib/api";
 import { MODEL_CATALOG, type ModelSource } from "../lib/models";
 import { DEFAULT_TIMEOUT_SECONDS } from "../lib/agent-defaults";
@@ -139,7 +141,7 @@ type EditDraft = Pick<
   | "memory"
   | "max_iterations"
   | "timeout_seconds"
->;
+> & { native_tools: HarnessNativeTool[] };
 
 function draftFrom(content: AssistantProposal["content"]): EditDraft {
   return {
@@ -148,6 +150,10 @@ function draftFrom(content: AssistantProposal["content"]): EditDraft {
     model_source: (content.model_source as ModelSource) ?? "bedrock",
     system_prompt: String(content.system_prompt ?? ""),
     tools: Array.isArray(content.tools) ? content.tools.map(String) : [],
+    native_tools: Array.isArray(content.native_tools)
+      ? content.native_tools.filter((tool): tool is HarnessNativeTool =>
+        HARNESS_NATIVE_TOOLS.some((name) => name === tool))
+      : [],
     skills: Array.isArray(content.skills) ? content.skills.map(String) : [],
     knowledge_bases: Array.isArray(content.knowledge_bases)
       ? content.knowledge_bases.map(String)
@@ -1619,6 +1625,9 @@ function ProposalView({
     );
   const golden = Array.isArray(c.golden_tests) ? c.golden_tests : [];
   const b = proposal.bindings;
+  const nativeChoices = list(c.native_tools);
+  const toolsOverride = b?.allowed_tools;
+  const selectedToolPolicy = b?.resources?.tool_access_policy === "selected-v1";
   const authLabel = (auth: Record<string, unknown> | null) => {
     const oauth = (auth?.oauth ?? null) as {
       providerArn?: string;
@@ -1676,6 +1685,34 @@ function ProposalView({
         <span className="k">{t("assistantPage.field.tools")}</span>
         {chips(list(c.tools), "proposal-tools")}
       </div>
+      <div className="kv">
+        <span className="k">{t("create.nativeTools.title")}</span>
+        <span className="v" data-testid="proposal-native-tools">
+          {nativeChoices.length
+            ? nativeChoices.map((tool) =>
+              t(`create.nativeTools.${tool}`, { defaultValue: tool })).join(" · ")
+            : t(selectedToolPolicy && toolsOverride == null
+              ? "create.nativeTools.unavailable"
+              : "create.nativeTools.none")}
+        </span>
+      </div>
+      {Array.isArray(toolsOverride) ? (
+        <div className="note" data-testid="proposal-tools-override">
+          <span className="i">[!]</span>
+          <div>
+            <strong>{t("create.nativeTools.overrideTitle")}</strong>
+            <pre className="mono" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+              {JSON.stringify(toolsOverride)}
+            </pre>
+            <p>{t("create.nativeTools.overrideSummary")}</p>
+          </div>
+        </div>
+      ) : b && !selectedToolPolicy ? (
+        <div className="note" data-testid="proposal-native-tools-legacy">
+          <span className="i">[i]</span>
+          <span>{t("create.nativeTools.legacyHint")}</span>
+        </div>
+      ) : null}
       <div className="kv">
         <span className="k">{t("assistantPage.field.skills")}</span>
         {chips(list(c.skills), "proposal-skills")}
@@ -1958,6 +1995,34 @@ function ProposalEditor({
             <span className="dim mono">{t("assistantPage.catalogNone")}</span>
           )}
         </div>
+      </div>
+      <div className="field" data-testid="proposal-native-tool-choices">
+        <label>{t("create.nativeTools.title")}</label>
+        <p className="dim" style={{ fontSize: 11 }}>
+          {t("create.nativeTools.selectedHint")}
+        </p>
+        {draft.native_tools.length === 0 && (
+          <p data-testid="edit-native-tools-unavailable">{t("create.nativeTools.unavailable")}</p>
+        )}
+        {HARNESS_NATIVE_TOOLS.map((tool) => (
+          <label
+            key={tool}
+            style={{
+              display: "block", marginTop: 8, fontSize: 12,
+              letterSpacing: 0, color: "var(--ink-2)",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={draft.native_tools.includes(tool)}
+              data-testid={`edit-native-tool-${tool}`}
+              onChange={(e) => set("native_tools", e.target.checked
+                ? [...draft.native_tools, tool]
+                : draft.native_tools.filter((value) => value !== tool))}
+            />{" "}
+            {t(`create.nativeTools.${tool}`)}
+          </label>
+        ))}
       </div>
       <div className="field">
         <label>{t("assistantPage.field.skills")}</label>

@@ -176,6 +176,14 @@ and `POST /api/agents` with a reserved name answers `agent.name_reserved` (409).
 Every agent projection carries `system: {managed, key, label, skill_version,
 protected_actions} | null`. `AgentSpec.allowed_tools` (harness only) accepts 1–64
 character entries matching `*|@?name(/tool)?`.
+`AgentSpec.native_tools` is a unique list drawn from `shell` and `file_operations`,
+defaults to `[]`, and is only supported for Harness. `allowed_tools: null` derives
+runtime selectors from the resolved attachments, Skills and native selections;
+deployment always sends `allowedTools`, including `[]` for an empty selection.
+Explicit patterns remain expert overrides with the existing mounted-KB support.
+The console shows preserved overrides and requires an explicit switch back to
+selection-derived access before native checkboxes take effect. Presets retain
+their server-owned overrides.
 
 ## Console Architect Assistant API — reviewed Harness proposals
 
@@ -233,8 +241,10 @@ rejected inside code-rule tool fields. Positive allowlists must include mounted
 Skill/KB support calls; plan save and approval also reject names outside the selected
 catalog. Refresh the conversation catalog before preparing a replacement draft.
 The catalog also exposes `runtime_builtin_tools` for native Harness `shell` and
-`file_operations`. Their availability allows explicit rule review, never automatic
-expansion of an approved allowlist.
+`file_operations`. A proposal's optional `native_tools` list selects these capabilities;
+omission means no native tools. The selection is visible in review and bound to the
+approval hash (`resources.tool_access_policy=selected-v1`). Evaluation rules cannot
+grant an unselected native capability or silently expand an approved allowlist.
 
 A proposal is `{id, conversation_id, revision, source: model|member, status: draft|invalid|
 approved|rejected|superseded, content, content_hash, bindings, validation_errors[],

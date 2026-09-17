@@ -17,7 +17,11 @@ from app.models.ledger import Agent
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import data_client
 from app.services.agentcore.harness import new_session_id
-from app.services.invoke import NATIVE_STREAM_METHODS, invoke_agent_events
+from app.services.invoke import (
+    NATIVE_STREAM_METHODS,
+    harness_user_overrides,
+    invoke_agent_events,
+)
 from app.services.runtime_discovery import is_discovered_harness
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
@@ -105,11 +109,7 @@ def _harness_events(
     if runtime_user_id:
         params["runtimeUserId"] = runtime_user_id
     if gateway_access_token:
-        params["tools"] = hc.user_authenticated_tools(
-            agent.spec or {},
-            workspace.resources,
-            gateway_access_token,
-        )
+        params.update(harness_user_overrides(agent, workspace, gateway_access_token))
     response = data_client(workspace).invoke_harness(
         **params,
     )

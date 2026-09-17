@@ -429,8 +429,50 @@ def test_native_harness_tools_can_be_explicitly_allowed_but_are_never_added(cata
     assert tool_catalog.rule_catalog_errors(narrow, _mounted_content(), catalog) == []
     assert narrow == before and native not in narrow[0].rules.checks[0].allowed
     expanded = _evaluators(_allowlist({REPORT_TOOL, native, *SUPPORT_TOOLS}))
-    assert tool_catalog.rule_catalog_errors(expanded, _mounted_content(), catalog) == []
+    assert tool_catalog.rule_catalog_errors(expanded, _mounted_content(), catalog)
+    selected = {**_mounted_content(), "native_tools": [native]}
+    assert tool_catalog.rule_catalog_errors(expanded, selected, catalog) == []
     assert native not in tool_catalog.support_tool_names(_mounted_content(), catalog)
+
+
+@pytest.mark.parametrize("native", ["shell", "file_operations"])
+def test_native_permission_is_bound_to_proposal_and_cannot_be_granted_by_evaluator(native):
+    rule = {"id": "native", "type": "tool_set", "allowed": [native]}
+    raw = _source(rule, {})
+    for parsed, errors in (proposals.parse_content(raw), _validate_plan(raw)):
+        assert parsed is None
+        assert any("not selected for this Harness runtime" in e for e in errors)
+    raw["native_tools"] = [native]
+    parsed, errors = proposals.parse_content(raw)
+    assert parsed is not None and errors == []
+    spec = proposals.to_agent_spec(parsed, {})
+    assert spec.native_tools == [native]
+    selected_bindings = proposals.resource_bindings(parsed, {})
+    no_native = parsed.model_copy(update={"native_tools": []})
+    old_bindings = proposals.resource_bindings(no_native, {})
+    assert selected_bindings["resources"]["tool_access_policy"] == "selected-v1"
+    assert "native_tools" in proposals.binding_diff(old_bindings, selected_bindings)
+    assert proposals.revision_hash(proposals.content_dump(parsed), selected_bindings) != (
+        proposals.revision_hash(proposals.content_dump(no_native), old_bindings)
+    )
+
+
+@pytest.mark.parametrize("native", ["shell", "file_operations"])
+def test_native_selection_rejects_duplicate_entries(native):
+    parsed, errors = proposals.parse_content({
+        "name": "selection-test", "system_prompt": "Answer safely.",
+        "native_tools": [native, native],
+    })
+    assert parsed is None and "native_tools must not repeat an entry" in errors
+
+
+@pytest.mark.parametrize("patterns", [["*"], ["@builtin"], ["@builtin/shell"], ["shell"]])
+def test_explicit_legacy_runtime_override_is_respected_in_rule_validation(patterns):
+    checks = plans.CodeRules(checks=[{"id": "native", "type": "tool_set",
+                                      "allowed": ["shell"]}]).checks
+    assert plans.code_rule_capability_conflict_errors(
+        checks, {"method": "harness", "allowed_tools": patterns}, evaluator_key="native",
+    ) == []
 
 
 @pytest.mark.parametrize("rule", [

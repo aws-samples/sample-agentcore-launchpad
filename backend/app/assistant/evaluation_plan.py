@@ -320,7 +320,7 @@ def code_rule_capability_conflict_errors(
     """
     conflicts = [
         f"{field}={proposal_content[field]!r}"
-        for field in ("knowledge_bases", "skills", "tools")
+        for field in ("knowledge_bases", "skills", "tools", "native_tools")
         if proposal_content.get(field)
     ]
     # Typed scenarios say which golden tests actually run (blocked tests do not).
@@ -341,9 +341,11 @@ def code_rule_capability_conflict_errors(
                 f"{golden_tools[scenario.golden_test_id]!r}"
             )
     from app.assistant.tool_catalog import SELECTOR_PREFIXES, support_tool_names
+    from app.harness_tool_access import NATIVE_HARNESS_TOOLS, selected_native_tools
 
     errors: list[str] = []
     checks = tuple(checks)
+    available_native = selected_native_tools(proposal_content)
     for check in checks:
         literal_names = [*check.tools, *check.allowed, *check.forbidden]
         if check.tool:
@@ -354,6 +356,21 @@ def code_rule_capability_conflict_errors(
                 f"evaluators.{evaluator_key}.rules.{check.id}: {selectors} are attachment "
                 "selectors, not runtime tool names. Use the exact callable names from the "
                 "selected MCP, Skill and knowledge-base catalog."
+            )
+        required_names = (
+            check.allowed if check.type == "tool_set"
+            else check.tools if check.type == "tool_sequence"
+            else [check.tool] if check.type == "tool_count" and (check.min or 0) > 0
+            else []
+        )
+        unavailable_native = sorted(
+            set(required_names).intersection(NATIVE_HARNESS_TOOLS) - available_native
+        )
+        if unavailable_native and proposal_content.get("method", "harness") == "harness":
+            errors.append(
+                f"evaluators.{evaluator_key}.rules.{check.id}: native tools "
+                f"{unavailable_native} are not selected for this Harness runtime; "
+                "select them explicitly in native_tools before allowing or requiring them"
             )
         if check.type == "tool_set" and check.allowed:
             omitted = sorted(support_tool_names(proposal_content) - set(check.allowed))

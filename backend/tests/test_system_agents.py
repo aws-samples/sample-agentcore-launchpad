@@ -211,11 +211,11 @@ def test_build_spec_is_server_owned_and_constrained():
     assert params["clientToken"] if "clientToken" in params else True
 
 
-def test_ordinary_harness_spec_sends_no_allowed_tools():
-    """Parity: existing generic Harness agents keep the API default (all tools)."""
+def test_ordinary_harness_spec_sends_empty_allowed_tools():
+    """An empty ordinary selection cannot expose Harness native tools."""
     spec = AgentSpec(name="plain-harness", method="harness", system_prompt="hi")
     assert spec.allowed_tools is None
-    assert "allowedTools" not in build_create_params(spec, "arn:aws:iam::111:role/x", None)
+    assert build_create_params(spec, "arn:aws:iam::111:role/x", None)["allowedTools"] == []
 
 
 def test_allowed_tools_shape_is_validated():
@@ -817,7 +817,7 @@ def test_ordinary_harness_also_gets_its_provisioned_role_on_create(monkeypatch):
     STAGES["provision"](ctx, a)
     STAGES["deploy"](ctx, a)
     assert control.creates[0]["executionRoleArn"] == DEDICATED
-    assert "allowedTools" not in control.creates[0]  # generic agents keep the API default
+    assert control.creates[0]["allowedTools"] == []
 
 
 def test_preset_fails_closed_when_per_agent_roles_are_disabled(monkeypatch):
@@ -900,13 +900,15 @@ def test_mounted_kb_adds_only_its_gateway_tool_to_allowed_tools():
     params = build_create_params(spec, DEDICATED, None, kb_gateway=KB_GW)
     assert [t["name"] for t in params["tools"]] == ["aws_knowledge", "launchpad_kb_gw"]
     assert params["allowedTools"] == ["file_*", "@aws_knowledge", "@launchpad_kb_gw"]
-    # without a mount nothing is added; ordinary unrestricted specs stay unrestricted
+    # Without a mount nothing is added to the preset's explicit override.
     plain = build_create_params(presets.build_spec(ARCHITECT, BUCKET, InstallOptions()),
                                 DEDICATED, None, kb_gateway=KB_GW)
     assert plain["allowedTools"] == ["file_*", "@aws_knowledge"]
     generic = AgentSpec(name="plain", method="harness", system_prompt="x",
                         knowledge_bases=[KB_REF])
-    assert "allowedTools" not in build_create_params(generic, DEDICATED, None, kb_gateway=KB_GW)
+    assert build_create_params(generic, DEDICATED, None, kb_gateway=KB_GW)["allowedTools"] == [
+        "@launchpad_kb_gw",
+    ]
     # the KB mode needs the gateway's OAuth path, and only that
     doc = agent_iam.policy_document(spec, agent_iam.role_context(ws_ctx(READY_RESOURCES)))
     sids = {s["Sid"] for s in doc["Statement"]}

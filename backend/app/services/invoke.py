@@ -13,12 +13,13 @@ from botocore.exceptions import ClientError
 
 from app.assistant.sessions import refuse_assistant_session
 from app.core.errors import AppError, aws_error_code
+from app.harness_tool_access import remap_tool_patterns, selected_tool_patterns
 from app.models.ledger import Agent
 from app.optimization import canary_service
 from app.services.agentcore import gateway
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
-from app.services.agentcore.client import data_client
+from app.services.agentcore.client import control_client, data_client
 from app.services.runtime_discovery import (
     DISCOVERED_METHOD,
     is_discovered_harness,
@@ -74,6 +75,50 @@ def _agent_workspace(
     an extra ledger read per turn.
     """
     return workspace if workspace is not None else context_for_workspace(agent.workspace_id)
+
+
+def harness_user_overrides(
+    agent: Agent, workspace: WorkspaceContext, access_token: str,
+) -> dict[str, Any]:
+    """Pair invocation ToolConfigs with selectors using their actual names."""
+    spec = agent.spec or {}
+    explicit = spec.get("allowed_tools")
+    configured: list[dict[str, Any]] | None = None
+    has_gateways = any(tool.get("type") == "gateway" for tool in spec.get("tools") or [])
+    if has_gateways or (
+        explicit is not None and any(p.startswith("@") or "/" in p for p in explicit)
+    ):
+        # The spec's Gateway label is not its resolved Harness alias. Read the
+        # deployed aliases and preserve other Gateways' resolved auth configs.
+        detail = hc.get_harness(control_client(workspace), agent.resource_id)
+        configured = detail.get("tools") or []
+        tools = hc.user_authenticated_tools(
+            spec, workspace.resources, access_token, configured_tools=configured,
+        )
+    else:
+        tools = hc.user_authenticated_tools(spec, workspace.resources, access_token)
+    if len({tool["name"] for tool in tools}) != len(tools):
+        raise ValueError("authenticated Gateway alias conflicts with another configured tool")
+    if explicit is None:
+        allowed = selected_tool_patterns(
+            tools, bool(spec.get("skills")), spec.get("native_tools") or [],
+        )
+    else:
+        names = {
+            before["name"]: after["name"]
+            for before, after in zip(configured or [], tools, strict=configured is not None)
+        }
+        allowed = remap_tool_patterns(explicit, names)
+        # Retain deployment's mounted-KB support even under an explicit override.
+        if spec.get("knowledge_bases"):
+            kb_arn = workspace.resources.get("kb_gateway_arn")
+            for tool in tools:
+                gateway = tool.get("config", {}).get("agentCoreGateway") or {}
+                if kb_arn and gateway.get("gatewayArn") == kb_arn:
+                    pattern = f"@{tool['name']}"
+                    if pattern not in allowed:
+                        allowed.append(pattern)
+    return {"tools": tools, "allowedTools": allowed}
 
 
 def _invoke_via_stable_endpoint(
@@ -177,12 +222,20 @@ def invoke_agent_text(
     # An imported harness carries the harness ARN, so it invokes exactly like a
     # launchpad-deployed one — InvokeHarness, never InvokeAgentRuntime.
     if agent.method == "harness" or is_discovered_harness(agent):
+        harness_kwargs: dict[str, Any] = {}
+        if runtime_user_id:
+            harness_kwargs["runtime_user_id"] = runtime_user_id
+        if gateway_access_token:
+            overrides = harness_user_overrides(agent, workspace, gateway_access_token)
+            harness_kwargs["tools"] = overrides["tools"]
+            harness_kwargs["allowed_tools"] = overrides["allowedTools"]
         return hc.invoke_harness_text(
             data_client(workspace),
             agent.arn,
             prompt,
             session_id=session_id,
             actor_id=actor_id,
+            **harness_kwargs,
         )
     if agent.method in ("zip_runtime", "studio", "container", DISCOVERED_METHOD):
         # A2A-protocol runtimes speak JSON-RPC; the A2A server owns

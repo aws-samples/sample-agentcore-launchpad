@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.4.5
+version: 1.4.6
 ---
 
 # AWS Agent Solution Architect
@@ -213,11 +213,16 @@ Include mounted Skill and KB support in any positive allowlist. If names cannot 
 resolved, keep the rule unresolved and request a catalog refresh. Apply the same
 business-read distinction to natural-language assertions: do not forbid all tool
 calls in a refusal scenario that can legitimately load a Skill.
-Managed Harness additionally exposes native `shell` and `file_operations` by default.
-Decide explicitly whether an evaluation allowlist permits them; availability is not
-an instruction to allow them. A tool-name rule cannot constrain shell command contents.
-Use business-behavior assertions for read-only obligations, and never expand a rule
-just because an unlisted tool appeared in a trace.
+AWS Harness includes native `shell` and `file_operations`, but Launchpad now closes
+them by default using explicit runtime `allowedTools`. Proposals opt in through
+`native_tools: ["shell"]` and/or `"file_operations"`; the default is an empty list.
+Only propose these when the user explicitly asks for their command/file capability,
+and disclose the choice for review. The runtime filter also keeps the selected
+MCP/Gateway/KB tools and Skill loading available. Extra Skill files or scripts may
+require an explicitly selected native tool; do not silently enable it.
+An evaluation allowlist cannot permit an unselected native tool. Tool-name rules
+cannot constrain shell command contents, so keep business-write assertions separate.
+Never broaden access merely because a previous trace contains an unlisted tool.
 
 Use 180 seconds as the default agent execution budget unless the user explicitly
 chooses another value. A response-time objective is not automatically an execution

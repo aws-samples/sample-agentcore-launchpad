@@ -715,10 +715,13 @@ is created/rolled forward by the deploy's register stage on every install or
 re-publish, and `POST …/skill-registration` remains for an explicit API registration.
 
 **Constrained tool surface.** The harness exposes `shell` and `file_operations` to
-every session unless `allowedTools` restricts them, so `AgentSpec.allowed_tools`
-(new, harness-only, `None` = API default for every existing agent; each entry
-1–64 chars matching the service model's `*|@?name(/tool)?`) maps to the request's
-`allowedTools`, and the preset sends `["file_*", "@aws_knowledge"]`: the file tools
+every session unless `allowedTools` restricts them. Launchpad always sends that
+member on deployment: `AgentSpec.allowed_tools=None` derives exact selectors from
+the final resolved tool configurations, Skill loading and explicit `native_tools`
+choices. Native choices default to empty; a completely empty selection sends `[]`.
+An explicit `allowed_tools` list remains an expert override (entries are 1–64 chars
+matching `*|@?name(/tool)?`). The preset retains its explicit
+`["file_*", "@aws_knowledge"]` override: the file tools
 its skill needs, the public AWS Knowledge MCP server
 (`https://knowledge-mcp.global.api.aws`, a `remote_mcp` tool, no credential), and no
 shell. When knowledge bases are mounted, the deployer appends `@<kb gateway tool
@@ -742,11 +745,14 @@ no direct `bedrock:Retrieve` / `AgenticRetrieveStream` — a harness reaches the
 through the gateway, whose connector role performs the retrieval. Installing with a
 KB is refused (`409`, requirement `missing_oauth_provider`) when the workspace has
 no provider to scope to. Ordinary agents keep their historical policy shape. The
-wizard round-trips a stored `allowed_tools` untouched on edit/re-publish (typed
-in `AgentSpecInput`), so a console re-publish can never widen an agent's tool
-surface — note that omitting `allowedTools` on UpdateHarness keeps the live
-restriction per the service model, so the risk was lost ledger intent on a later
-recreate, not immediate widening.
+wizard displays and preserves a stored expert override until the operator explicitly
+switches to selection-derived access. Native checkboxes do not falsely claim to
+override a preserved wildcard. New architect proposals expose only the bounded
+`native_tools` choices, bind them and `resources.tool_access_policy=selected-v1` to
+approval, and cannot submit arbitrary allowedTools patterns. Historical records are
+not rewritten; old approval bindings require a fresh review if their meaning differs.
+User-authenticated Gateway invocations read the deployed aliases and remap narrow
+selectors to the request's Gateway name without broadening their tool suffixes.
 
 **Memory.** The `short_term`/`long_term` flags cannot express "short-term only"
 against the real API: the shared workspace memory carries long-term strategies,
@@ -923,9 +929,12 @@ Proposal/plan validation rejects attachment selectors such as `mcp:aws-knowledge
 inside literal tool-rule fields and positive allowlists that omit mounted support
 tools. Saving and approving a plan additionally check its allowed names against the selected
 conversation catalog. Named business-write bans remain independent of discovery.
-Native Harness `shell` and `file_operations` are disclosed separately and may be
-explicitly included in an allowlist. They are not implicitly appended to reviewed
-rules; a tool-name check cannot distinguish read-only shell commands from writes.
+Native Harness `shell` and `file_operations` must first be explicitly selected in
+`native_tools` (or admitted by an explicit expert runtime override) before an
+evaluation rule can permit or require them. Availability in the catalog does not
+grant runtime access. A tool-name check cannot distinguish read-only shell commands
+from writes. Skill loading is retained automatically; additional Skill files or
+scripts may require explicitly reviewed file/command capabilities.
 
 Ordinary Agent and assistant-proposal execution budgets default to **180 seconds**.
 Explicit user budgets and preset-specific defaults remain explicit. For Harness,

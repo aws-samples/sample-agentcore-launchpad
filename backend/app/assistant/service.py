@@ -173,6 +173,11 @@ members and nothing else:
   is worth more than a long one nobody can attribute regressions to. Say this in the
   reply when you hand over the proposal.
 - `tools`: list of catalog **tool keys** from the list below (may be empty)
+- `native_tools`: optional list containing only `"shell"` and/or `"file_operations"`.
+  Default is empty: Launchpad does not expose these native tools unless explicitly
+  selected and reviewed. Do not add shell just to calculate a number or read a date.
+  Propose a native tool only when the user explicitly requests that capability and
+  explain its command/file access in the readable proposal.
 - `skills`: list of catalog **skill keys** from the list below (may be empty)
 - `knowledge_bases`: list of catalog **knowledge base ids** from the list below
 - `memory`: `"disabled"` (no memory at all) or `"workspace"` (the workspace's
@@ -280,11 +285,14 @@ MCP/Gateway's runtime catalog is unavailable, leave the allowlist unresolved and
 for a catalog refresh; do not invent names. Do not put "must not call any tool" in
 refusal assertions when the Agent needs Skill loading or KB retrieval. Specify the
 prohibited business action instead.
-Managed Harness also exposes native `shell` and `file_operations` by default.
-Their availability does not automatically authorize them in an evaluation rule:
-decide explicitly whether the proposed behavior needs them. A name-only allowlist
-cannot distinguish a read-only shell command from a write; use behavior assertions
-for business-write boundaries. Never add a tool merely because it appeared in a trace.
+Although AWS Harness provides native `shell` and `file_operations`, Launchpad sends
+an explicit runtime allowedTools filter derived from the selected attachments,
+Skill loading and `native_tools`. Empty native_tools means neither native tool is
+exposed. Evaluation allowlists must not allow native tools absent from that selection.
+A tool-name rule cannot distinguish a read-only shell command from a write. Loading
+a Skill's main instructions is included; using additional files or scripts may need
+an explicitly reviewed native file/command capability. Never add a tool merely
+because it appeared in a trace.
 
 Hard rules of this environment:
 1. Reference resources **only by the keys listed below**. Never invent tools, MCP
@@ -312,8 +320,8 @@ Hard rules of this environment:
 def catalog_section(catalog: dict[str, Any]) -> str:
     lines = ["## Available resources in this workspace (reference by key)", ""]
     lines.append(
-        "Native Harness runtime tools: `shell`, `file_operations` (available by default; "
-        "choose explicitly in evaluation allowlists, not in resource `tools` keys)."
+        "Optional native Harness tools: `shell`, `file_operations` (disabled unless "
+        "explicitly selected in `native_tools`; not resource `tools` keys)."
     )
     tools = [t for t in catalog.get("tools") or [] if t.get("attachable", True)]
     lines.append("Tools (`tools` keys):")
@@ -515,7 +523,8 @@ def fetch_catalog(workspace: WorkspaceContext) -> dict[str, Any]:
     execution role). A failing source degrades to an empty list plus a warning.
     """
     warnings: list[str] = []
-    from app.assistant.tool_catalog import NATIVE_HARNESS_TOOLS, enrich_tool
+    from app.assistant.tool_catalog import enrich_tool
+    from app.harness_tool_access import NATIVE_HARNESS_TOOLS
 
     tools: list[dict[str, Any]] = []
     skills: list[dict[str, Any]] = []

@@ -306,6 +306,19 @@
       "noMatch": "没有匹配当前筛选条件的资源",
       "reimportHint": "再次导入会刷新已导入的记录。"
     },
+    "nativeTools": {
+      "title": "Harness 原生工具",
+      "shell": "shell：在 Agent 运行环境中执行命令",
+      "file_operations": "file_operations：读写 Agent 运行环境中的文件",
+      "none": "未选择",
+      "unavailable": "未选择原生工具；按当前方案发布后，shell 和 file_operations 均不可用。",
+      "selectedHint": "仅允许使用所选的挂载工具、技能和原生工具。原生工具默认不勾选；需要执行命令时启用 shell，需要读写文件时启用 file_operations。",
+      "overrideTitle": "专家工具覆盖规则已生效",
+      "overrideHint": "当前由这些 allowed_tools 规则决定工具权限，下方选择不控制权限。“*”允许所有工具，包括 shell 和 file_operations；空列表不开放原生工具，但已挂载的知识库支持工具仍会保留。切换为使用所选工具后，才能修改原生工具选项。",
+      "overrideSummary": "当前由保存的 allowed_tools 规则决定工具权限，原生工具选择不控制权限。“*”允许所有工具，包括 shell 和 file_operations；空列表不开放原生工具，但已挂载的知识库支持工具仍会保留。",
+      "legacyHint": "此历史绑定早于原生工具显式选择功能。选择为空，并不代表其运行环境中的 shell 或 file_operations 已禁用。如需更改权限，请检查 Agent 的工具选择并重新发布。",
+      "useSelected": "使用所选工具"
+    },
     "configure": {
       "title": "配置 — 托管 HARNESS",
       "name": "AGENT 名称",

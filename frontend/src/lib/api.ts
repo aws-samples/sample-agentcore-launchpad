@@ -588,6 +588,9 @@ export type AgentSdk = "claude_agent_sdk";
  */
 export type Toolkit = "hr_assistant";
 
+export const HARNESS_NATIVE_TOOLS = ["shell", "file_operations"] as const;
+export type HarnessNativeTool = (typeof HARNESS_NATIVE_TOOLS)[number];
+
 export interface AgentSpecInput {
   name: string;
   method: string;
@@ -606,7 +609,7 @@ export interface AgentSpecInput {
   reasoning_effort?: ReasoningEffort;
   system_prompt: string;
   /** agent-loop bounds per invocation (harness `maxIterations` / `timeoutSeconds`);
-   * omitted ⇒ the backend defaults (10 / 300) */
+   * omitted ⇒ the backend defaults (10 / 180) */
   max_iterations?: number;
   timeout_seconds?: number;
   tool_description_overrides?: Record<string, string>;
@@ -618,11 +621,13 @@ export interface AgentSpecInput {
   toolkits?: Toolkit[];
   skills?: string[];
   /**
-   * Harness `allowedTools` patterns (harness method only). Omitted/null keeps the
-   * API default (every tool, incl. the built-in shell). The wizard round-trips a
-   * stored value untouched so a re-publish never widens an agent's tool surface.
+   * Harness `allowedTools` expert override. Omitted/null derives the allowlist
+   * from attachments, Skills and native_tools. Explicit patterns take precedence,
+   * including "*" (all tools) and [] (no tools).
    */
   allowed_tools?: string[] | null;
+  /** Harness only. Native execution/file access is opt-in; omitted defaults to []. */
+  native_tools?: HarnessNativeTool[];
   // Managed KB references mounted onto the agent (harness method only).
   knowledge_bases?: { kb_id: string; name: string; description: string }[];
   memory?: { short_term: boolean; long_term: boolean };
@@ -861,6 +866,7 @@ export interface AssistantProposalContent {
   model_source: ModelSource;
   system_prompt: string;
   tools: string[];
+  native_tools?: HarnessNativeTool[];
   skills: string[];
   knowledge_bases: string[];
   memory: AssistantMemoryMode;
@@ -919,6 +925,9 @@ export interface AssistantBindings {
   model_id: string;
   model_source: ModelSource;
   tools: { type: "gateway" | "mcp"; name: string; config: Record<string, string> }[];
+  /** Absent/null on historical bindings written before explicit native selection. */
+  native_tools?: HarnessNativeTool[] | null;
+  allowed_tools?: string[] | null;
   skills: string[];
   knowledge_bases: { kb_id: string; name: string; description: string }[];
   memory: { short_term: boolean; long_term: boolean; memory_id: string | null };
@@ -926,6 +935,8 @@ export interface AssistantBindings {
   timeout_seconds: number;
   /** deployment-relevant identity of every referenced resource (no secret values) */
   resources: {
+    /** selected-v1 derives access from attachments, Skills and native_tools. */
+    tool_access_policy?: string;
     gateways: Record<
       string,
       {

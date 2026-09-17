@@ -452,6 +452,7 @@ def test_chat_stream_keeps_invocation_scoped_gateway_identity(monkeypatch):
     assert data.invoke_harness.call_args.kwargs == {
         "harnessArn": ARN, "runtimeSessionId": SID, "actorId": "agent__operator",
         "runtimeUserId": "operator", "tools": tools,
+        "allowedTools": ["@approved-gateway"],
         "messages": [{"role": "user", "content": [{"text": "hello"}]}],
     }
     assert stream.closed == 1

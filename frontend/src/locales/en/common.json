@@ -306,6 +306,19 @@
       "noMatch": "NO RESOURCES MATCH THE CURRENT FILTERS",
       "reimportHint": "Re-importing refreshes the imported record."
     },
+    "nativeTools": {
+      "title": "Harness native tools",
+      "shell": "shell — execute commands in the agent runtime",
+      "file_operations": "file_operations — read and write files in the agent runtime",
+      "none": "None selected",
+      "unavailable": "None selected — publishing this configuration leaves shell and file_operations unavailable.",
+      "selectedHint": "Only selected attachments, Skills and native tools are allowed. Native tools start unselected. Enable shell only when command execution is required, and file_operations only when file access is required.",
+      "overrideTitle": "Expert tool override is active",
+      "overrideHint": "These allowed_tools patterns control access instead of the selections below. \"*\" allows all tools, including shell and file_operations; an empty list exposes no native tools, while mounted knowledge-base support is retained. Native checkboxes are disabled until you switch to selected tools.",
+      "overrideSummary": "These saved allowed_tools patterns control access instead of native selections. \"*\" allows all tools, including shell and file_operations; an empty list exposes no native tools, while mounted knowledge-base support is retained.",
+      "legacyHint": "This historical binding predates explicit native-tool selection. An empty selection does not establish that shell or file_operations is unavailable on its runtime. Review and republish the agent with selected tools to change its access.",
+      "useSelected": "Use selected tools"
+    },
     "configure": {
       "title": "CONFIGURE — MANAGED HARNESS",
       "name": "AGENT NAME",

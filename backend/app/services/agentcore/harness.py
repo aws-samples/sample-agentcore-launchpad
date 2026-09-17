@@ -129,6 +129,8 @@ def user_authenticated_tools(
     spec: Mapping[str, Any],
     resources: Mapping[str, Any],
     access_token: str,
+    *,
+    configured_tools: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Harness invocation tools with launchpad-gw authenticated as one user.
 
@@ -137,6 +139,32 @@ def user_authenticated_tools(
     The user token is accepted only for the bootstrapped shared Gateway whose
     Cognito authorizer issued it.
     """
+    if configured_tools is not None:
+        # Use the authoritative configuration when replacing the authenticated
+        # Gateway, preserving all other resolved Gateway aliases/auth settings.
+        result = []
+        for tool in configured_tools:
+            gateway_arn = (tool.get("config", {}).get("agentCoreGateway") or {}).get(
+                "gatewayArn"
+            )
+            if (
+                tool.get("type") == "agentcore_gateway"
+                and gateway_arn
+                and gateway_arn == resources.get("gateway_arn")
+            ):
+                if not resources.get("gateway_url"):
+                    raise ValueError("authenticated user Gateway URL is missing")
+                result.append({
+                    "type": "remote_mcp",
+                    "name": "launchpad_gw_user",
+                    "config": {"remoteMcp": {
+                        "url": str(resources["gateway_url"]),
+                        "headers": {"Authorization": f"Bearer {access_token}"},
+                    }},
+                })
+            else:
+                result.append(tool)
+        return result
 
     result: list[dict[str, Any]] = []
     attached_user_gateway = False
@@ -301,16 +329,27 @@ def invoke_harness_events(
     session_id: str,
     actor_id: str,
     on_stream: Any = None,
+    runtime_user_id: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    allowed_tools: list[str] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Stream one ``InvokeHarness`` call whose ``messages`` carries a bounded
     replayed conversation (``[{role: user|assistant, content: [{text}]}]``, the
     2023-06-05 model's ``ConversationMessage`` list). Yields the same ``tool`` /
     ``delta`` events the chat chain uses; runtime errors raise."""
+    overrides: dict[str, Any] = {}
+    if runtime_user_id:
+        overrides["runtimeUserId"] = runtime_user_id
+    if tools is not None:
+        overrides["tools"] = tools
+    if allowed_tools is not None:
+        overrides["allowedTools"] = allowed_tools
     response = client.invoke_harness(
         harnessArn=harness_arn,
         runtimeSessionId=session_id,
         actorId=actor_id,
         messages=messages,
+        **overrides,
     )
     with closing(iter_harness_stream(response["stream"], on_stream=on_stream)) as events:
         # toolUse input arrives as partial-JSON deltas per content block; the joined,
@@ -354,14 +393,26 @@ def invoke_harness_text(
     prompt: str,
     session_id: str | None = None,
     actor_id: str = "default",
+    *,
+    runtime_user_id: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    allowed_tools: list[str] | None = None,
 ) -> dict[str, Any]:
     """Synchronous invoke: send one user message, drain the event stream,
     return the concatenated assistant text plus session id."""
     session_id = session_id or new_session_id()
     text_parts: list[str] = []
+    overrides: dict[str, Any] = {}
+    if runtime_user_id:
+        overrides["runtime_user_id"] = runtime_user_id
+    if tools is not None:
+        overrides["tools"] = tools
+    if allowed_tools is not None:
+        overrides["allowed_tools"] = allowed_tools
     with closing(invoke_harness_events(
         client, harness_arn, [{"role": "user", "content": [{"text": prompt}]}],
         session_id=session_id, actor_id=actor_id,
+        **overrides,
     )) as events:
         for event in events:
             if event["event"] == "delta":

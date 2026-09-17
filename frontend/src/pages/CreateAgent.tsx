@@ -24,6 +24,7 @@ import type {
   AgentSdk,
   DeploymentInfo,
   HarnessDiscoveryCandidate,
+  HarnessNativeTool,
   InspectedSkill,
   JobInfo,
   MemoryResourceRow,
@@ -34,7 +35,7 @@ import type {
   SystemPresetStatus,
   Toolkit,
 } from "../lib/api";
-import { api, ApiError } from "../lib/api";
+import { api, ApiError, HARNESS_NATIVE_TOOLS } from "../lib/api";
 import { DEFAULT_TIMEOUT_SECONDS } from "../lib/agent-defaults";
 import type { ModelSource, ReasoningEffort } from "../lib/models";
 import { useWorkspace } from "../workspace/workspace-context";
@@ -192,6 +193,7 @@ interface StoredSpec {
   toolkits?: Toolkit[];
   skills?: string[];
   allowed_tools?: string[] | null;
+  native_tools?: HarnessNativeTool[];
   knowledge_bases?: KbRef[];
   memory?: { long_term?: boolean; memory_id?: string | null };
   protocol?: "http" | "a2a";
@@ -889,10 +891,9 @@ function CreateAgentWizard() {
   const [step, setStep] = useState<Step>(prefillGateway || prefillSkill ? 2 : 1);
   const [method, setMethod] = useState<Method>("harness");
   const [skills, setSkills] = useState<string[]>(prefillSkill ? [prefillSkill] : []);
-  // Harness allowedTools carried through an edit untouched (the wizard has no
-  // editor for it yet); null = API default. Dropping it on re-publish would lose
-  // the stored restriction.
+  // Preserve expert overrides until the member explicitly opts into derivation.
   const [allowedTools, setAllowedTools] = useState<string[] | null>(null);
+  const [nativeTools, setNativeTools] = useState<HarnessNativeTool[]>([]);
   const [name, setName] = useState("");
   const [modelId, setModelId] = useState(defaultModelFor(DEFAULT_MODEL_SOURCE));
   const [modelSource, setModelSource] = useState<ModelSource>(DEFAULT_MODEL_SOURCE);
@@ -1138,6 +1139,7 @@ const deployLock = !canDeploy
     setDetailKbs([]);
     setSkills([]);
     setAllowedTools(null);
+    setNativeTools([]);
     setLongTerm(true);
     setMcpServers("");
     setCustomSkills([]);
@@ -1306,7 +1308,7 @@ const deployLock = !canDeploy
     skills.length
       ? { skills }
       : {}),
-    ...(method === "harness" && allowedTools ? { allowed_tools: allowedTools } : {}),
+    ...(method === "harness" ? { allowed_tools: allowedTools, native_tools: nativeTools } : {}),
     ...(method === "container" && mcpServers.trim()
       ? { env: { LAUNCHPAD_MCP_SERVERS: mcpServers.trim() } }
       : {}),
@@ -1584,6 +1586,7 @@ const deployLock = !canDeploy
     setSpecKbs(spec.knowledge_bases ?? []);
     setSkills(spec.skills ?? []);
     setAllowedTools(spec.allowed_tools ?? null);
+    setNativeTools(agent.method === "harness" ? spec.native_tools ?? [] : []);
     setLongTerm(spec.memory?.long_term ?? true);
     setMemoryId(spec.memory?.memory_id ?? "");
     setMcpServers(spec.env?.LAUNCHPAD_MCP_SERVERS ?? "");
@@ -2370,6 +2373,62 @@ const deployLock = !canDeploy
                   </div>
                 )}
             </div>
+            )}
+            {method === "harness" && !systemEdit && (
+              <div className="field" data-testid="harness-native-tools">
+                <label>{t("create.nativeTools.title")}</label>
+                {allowedTools !== null ? (
+                  <div className="note" style={{ marginBottom: 8 }}>
+                    <span className="i">[!]</span>
+                    <div>
+                      <strong>{t("create.nativeTools.overrideTitle")}</strong>
+                      <pre
+                        className="mono"
+                        style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+                        data-testid="harness-tools-override"
+                      >
+                        {JSON.stringify(allowedTools)}
+                      </pre>
+                      <p>{t("create.nativeTools.overrideHint")}</p>
+                      <Btn
+                        data-testid="harness-tools-reset"
+                        onClick={() => setAllowedTools(null)}
+                      >
+                        {t("create.nativeTools.useSelected")}
+                      </Btn>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="dim" style={{ fontSize: 11 }}>
+                    {t("create.nativeTools.selectedHint")}
+                  </p>
+                )}
+                {allowedTools === null && nativeTools.length === 0 && (
+                  <p data-testid="native-tools-unavailable">{t("create.nativeTools.unavailable")}</p>
+                )}
+                {HARNESS_NATIVE_TOOLS.map((tool) => (
+                  <label
+                    key={tool}
+                    style={{
+                      display: "block", marginTop: 8, fontSize: 12,
+                      letterSpacing: 0, color: "var(--ink-2)",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={nativeTools.includes(tool)}
+                      disabled={allowedTools !== null}
+                      data-testid={`native-tool-${tool}`}
+                      onChange={(e) => setNativeTools((current) =>
+                        e.target.checked
+                          ? [...current, tool]
+                          : current.filter((value) => value !== tool),
+                      )}
+                    />{" "}
+                    {t(`create.nativeTools.${tool}`)}
+                  </label>
+                ))}
+              </div>
             )}
             {method === "zip_runtime" && (
               <div className="field">
