@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { Btn, Chip, LoadError, Panel } from "../../components";
 import {
   api, ApiError, errorMessage,
-  type AssistantCatalog, type AssistantConversationDetail,
+  type AssistantCatalog, type AssistantCatalogTool, type AssistantConversationDetail,
   type AttachableKnowledgeBase,
 } from "../../lib/api";
 import { KnowledgeBaseCreate } from "./KnowledgeBaseCreate";
@@ -24,11 +24,25 @@ interface Props {
 const sameKeys = (a: string[], b: string[]) =>
   a.length === b.length && a.every((key) => b.includes(key));
 
+const MAX_TOOLS = 20;
+
 export function PreparationPanel({
   conversation, workspaceId, disabled, onUpdated, onCatalog, onWorking, onDiscuss,
 }: Props) {
   const { t } = useTranslation();
   const prep = conversation.preparation;
+  const savedTools = useMemo(() => {
+    if (prep?.tools !== undefined) return prep.tools;
+    // Legacy preparation did not project tools. Match the server's latest valid
+    // proposal fallback, including superseded revisions with valid bindings.
+    const latest = conversation.proposals.reduce<AssistantConversationDetail["proposals"][number] | null>(
+      (found, proposal) => proposal.bindings && proposal.validation_errors.length === 0
+        && (!found || proposal.revision > found.revision) ? proposal : found,
+      null,
+    );
+    const tools = latest?.content.tools;
+    return Array.isArray(tools) && tools.every((key) => typeof key === "string") ? tools : [];
+  }, [prep?.tools, conversation.proposals]);
   const [kbs, setKbs] = useState<AttachableKnowledgeBase[] | null>(null);
   const [kbError, setKbError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -38,7 +52,9 @@ export function PreparationPanel({
   const [creating, setCreating] = useState(false);
   const [selectedKbs, setSelectedKbs] = useState(prep?.knowledge_bases ?? []);
   const [selectedSkills, setSelectedSkills] = useState(prep?.skills ?? []);
+  const [selectedTools, setSelectedTools] = useState(savedTools);
   const previousPreparation = useRef(prep);
+  const previousTools = useRef(savedTools);
   const alive = useRef(true);
   const callbacks = useRef({ onCatalog, onUpdated, onWorking });
   callbacks.current = { onCatalog, onUpdated, onWorking };
@@ -53,11 +69,17 @@ export function PreparationPanel({
   const availableSkillKeys = new Set(
     catalog.skills.filter((skill) => skill.content_digest).map((skill) => skill.key),
   );
+  const availableToolKeys = new Set(
+    catalog.tools.filter((tool) => tool.attachable).map((tool) => tool.key),
+  );
   const changed = !sameKeys(selectedKbs, prep?.knowledge_bases ?? [])
-    || !sameKeys(selectedSkills, prep?.skills ?? []);
+    || !sameKeys(selectedSkills, prep?.skills ?? [])
+    || !sameKeys(selectedTools, savedTools);
   const invalidSelection = selectedKbs.some((id) => !availableKbIds.has(id))
     || (selectedKbs.length > 0 && !gatewayReady)
-    || selectedSkills.some((key) => !availableSkillKeys.has(key));
+    || selectedSkills.some((key) => !availableSkillKeys.has(key))
+    || selectedTools.some((key) => !availableToolKeys.has(key))
+    || selectedTools.length > MAX_TOOLS;
   const describeError = (err: unknown) =>
     err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : errorMessage(err);
 
@@ -69,8 +91,11 @@ export function PreparationPanel({
       ? prep?.knowledge_bases ?? [] : current);
     setSelectedSkills((current) => sameKeys(current, previous?.skills ?? [])
       ? prep?.skills ?? [] : current);
+    const priorTools = previousTools.current;
+    setSelectedTools((current) => sameKeys(current, priorTools) ? savedTools : current);
     previousPreparation.current = prep;
-  }, [prep]);
+    previousTools.current = savedTools;
+  }, [prep, savedTools]);
 
   useEffect(() => {
     alive.current = true;
@@ -143,6 +168,7 @@ export function PreparationPanel({
         expected_revision: prep?.revision ?? 0,
         knowledge_bases: selectedKbs,
         skills: selectedSkills,
+        tools: selectedTools,
       }, workspaceId);
       if (!alive.current) return;
       callbacks.current.onUpdated(detail);
@@ -164,6 +190,14 @@ export function PreparationPanel({
     ...catalog.skills,
     ...selectedSkills.filter((key) => !catalog.skills.some((skill) => skill.key === key))
       .map((key) => ({ key, name: key, description: "", content_digest: null })),
+  ];
+  const toolRows: AssistantCatalogTool[] = [
+    ...catalog.tools,
+    ...selectedTools.filter((key) => !catalog.tools.some((tool) => tool.key === key))
+      .map((key): AssistantCatalogTool => ({
+        key, kind: "mcp", name: key, description: "", attachable: false,
+        reason: t("assistantPreparation.toolMissing"),
+      })),
   ];
 
   return (
@@ -188,11 +222,12 @@ export function PreparationPanel({
                 {item.materials.length > 0 && <ul>{item.materials.map((material, index) =>
                   <li key={index}>{material}</li>)}</ul>}
                 <a href={item.kind === "knowledge_base" ? "#preparation-kbs"
-                  : item.kind === "skill" ? "#preparation-skills" : "#assistant-input"}
+                  : item.kind === "skill" ? "#preparation-skills"
+                    : item.kind === "tool" ? "#preparation-tools" : "#assistant-input"}
                 onClick={() => {
-                  if (item.kind === "tool" || item.kind === "clarification")
+                  if (item.kind === "clarification")
                     onDiscuss(t("assistantPreparation.discussPrompt", { title: item.title }));
-                }}>{t(item.kind === "knowledge_base" || item.kind === "skill"
+                }}>{t(item.kind !== "clarification"
                   ? "assistantPreparation.prepare" : "assistantPreparation.discuss")}</a>
               </div>
             ))}
@@ -276,6 +311,59 @@ export function PreparationPanel({
           </div>
           <p className="dim">{t("assistantPreparation.registryHint")}</p>
         </section>
+        <section id="preparation-tools" aria-labelledby="preparation-tools-title">
+          <h3 id="preparation-tools-title">{t("assistantPreparation.toolsTitle")}</h3>
+          <p className="dim">{t("assistantPreparation.toolsHint")}</p>
+          {toolRows.length === 0 && catalog.warnings.length === 0
+            && <p>{t("assistantPreparation.noTools")}</p>}
+          <div className="assist-prep-options" data-testid="preparation-tool-options">
+            {toolRows.map((tool) => {
+              const selected = selectedTools.includes(tool.key);
+              const knownTools = tool.runtime_tools;
+              return (
+                <div className="assist-prep-tool" key={tool.key}>
+                  <label className={`assist-prep-option${selected ? " selected" : ""}`}>
+                    <input type="checkbox" checked={selected} aria-label={tool.name}
+                      disabled={busy || (!selected && (!tool.attachable || selectedTools.length >= MAX_TOOLS))}
+                      onChange={() => setSelectedTools((current) => toggle(current, tool.key))} />
+                    <span><b>{tool.name}</b>
+                      {tool.description && <span className="dim">{tool.description}</span>}
+                      {!tool.attachable && <span className="dim">
+                        {tool.reason || t("assistantPreparation.toolUnavailable")}
+                      </span>}
+                    </span>
+                    <Chip tone={tool.attachable ? "good" : "warn"}>
+                      {t(tool.attachable ? "assistantPreparation.mountable" : "assistantPreparation.unavailable")}
+                    </Chip>
+                  </label>
+                  {knownTools != null ? (
+                    <details className="assist-pre" data-testid="preparation-tool-names">
+                      <summary>{t("assistantPreparation.callableNames", { count: knownTools.length })}</summary>
+                      {knownTools.length > 0
+                        ? <ul>{knownTools.map((name) => <li key={name}><code>{name}</code></li>)}</ul>
+                        : <p>{t("assistantPreparation.noCallableTools")}</p>}
+                    </details>
+                  ) : tool.attachable ? (
+                    <p className="note">{t("assistantPreparation.toolDiscoveryUnknown")}</p>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+          <p className="dim">{t("assistantPreparation.toolsLimit", { count: selectedTools.length, max: MAX_TOOLS })}</p>
+          <div className="row">
+            <Btn disabled={busy} onClick={() => void refresh()}
+              data-testid="preparation-refresh-tools">{t("assistantPreparation.refresh")}</Btn>
+            <Link className="btn" to="/registry?view=register&type=MCP"
+              target="_blank" rel="noopener noreferrer" data-testid="preparation-create-tool">
+              {t("assistantPreparation.createTool")}
+            </Link>
+          </div>
+          <p className="dim">{t("assistantPreparation.toolRegistryHint")}</p>
+          <p className="note" data-testid="preparation-tool-evaluation-hint">
+            {t("assistantPreparation.toolEvaluationHint")}
+          </p>
+        </section>
         {catalog.warnings.length > 0 && <div className="note" role="status">
           {t("assistantPreparation.catalogWarning")}
           <ul>{catalog.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>
@@ -287,8 +375,13 @@ export function PreparationPanel({
           {changed && <Btn disabled={busy} onClick={() => {
             setSelectedKbs(prep?.knowledge_bases ?? []);
             setSelectedSkills(prep?.skills ?? []);
+            setSelectedTools(savedTools);
+            setActionError(null);
+            setNotice(null);
           }}>{t("common.cancel")}</Btn>}
           <Btn primary disabled={busy || !changed || invalidSelection}
+            disabledReason={!busy && changed && invalidSelection
+              ? t("assistantPreparation.selectionUnavailable") : undefined}
             onClick={() => void save()} data-testid="preparation-save">
             {t(working ? "assistantPreparation.saving" : "assistantPreparation.save")}
           </Btn>

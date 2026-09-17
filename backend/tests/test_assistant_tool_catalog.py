@@ -413,6 +413,31 @@ def test_rule_catalog_accepts_selected_exact_names_without_expanding_business_al
     assert (content, catalog, evaluators) == before
 
 
+@pytest.mark.parametrize("check", [
+    {"id": "required", "type": "tool_count", "tool": GATEWAY_TOOL, "min": 1},
+    {"id": "required", "type": "tool_sequence", "tools": [GATEWAY_TOOL], "mode": "subsequence"},
+])
+def test_required_mcp_calls_must_belong_to_selected_attachments(catalog, check):
+    content = _mounted_content()
+    rules = _evaluators(check)
+    before = deepcopy(rules)
+    errors = tool_catalog.rule_catalog_errors(rules, content, catalog)
+    assert any(GATEWAY_TOOL in err and "selected runtime catalog" in err for err in errors)
+    content["tools"].append("gateway:finance")
+    assert tool_catalog.rule_catalog_errors(rules, content, catalog) == []
+    content["tools"].remove("gateway:finance")
+    assert tool_catalog.rule_catalog_errors(rules, content, catalog)
+    assert rules == before
+
+
+def test_named_mcp_write_bans_do_not_require_attaching_the_forbidden_tool(catalog):
+    rules = _evaluators(
+        {"id": "no_write", "type": "tool_count", "tool": GATEWAY_TOOL, "max": 0},
+        {"id": "forbidden", "type": "tool_set", "forbidden": [GATEWAY_TOOL]},
+    )
+    assert tool_catalog.rule_catalog_errors(rules, _mounted_content(), catalog) == []
+
+
 def test_rule_catalog_checks_every_positive_allowlist(catalog):
     evaluators = _evaluators(
         _allowlist({REPORT_TOOL, *SUPPORT_TOOLS}),
@@ -548,10 +573,15 @@ def test_proposal_and_plan_keep_exact_names_and_named_write_bans_valid(rule):
     assert source == before
 
 
+@pytest.mark.parametrize("rule", [
+    _allowlist({REPORT_TOOL, *SUPPORT_TOOLS}),
+    {"id": "allow", "type": "tool_count", "tool": REPORT_TOOL, "min": 1},
+    {"id": "allow", "type": "tool_sequence", "tools": [REPORT_TOOL], "mode": "subsequence"},
+])
 def test_store_plan_route_uses_saved_catalog_and_preserves_review_history(
-    app_ready, catalog, monkeypatch,  # noqa: F811 -- shared fixture
+    app_ready, catalog, monkeypatch, rule,  # noqa: F811 -- shared fixture
 ):
-    source = _source(_allowlist({REPORT_TOOL, *SUPPORT_TOOLS}), _mounted_content())
+    source = _source(rule, _mounted_content())
     cid, digest = _conversation("local-operator", proposal=source)
     before = _snapshot_proposal(cid)
     raw = plans.draft_plan(source, revision=1, content_hash=digest, agent_name=source["name"])
@@ -570,7 +600,11 @@ def test_store_plan_route_uses_saved_catalog_and_preserves_review_history(
             db.get(AssistantConversation, cid).catalog = deepcopy(catalog)
             db.commit()
         invalid = deepcopy(raw)
-        invalid["evaluators"][0]["rules"]["checks"][0]["allowed"].append(GATEWAY_TOOL)
+        check = invalid["evaluators"][0]["rules"]["checks"][0]
+        if check["type"] == "tool_count":
+            check["tool"] = GATEWAY_TOOL
+        else:
+            check["allowed" if check["type"] == "tool_set" else "tools"].append(GATEWAY_TOOL)
         response = client.put(_url(cid), json={"content": invalid})
         assert response.status_code == 200, response.text
         unselected = response.json()["plan"]
@@ -597,6 +631,11 @@ def test_store_plan_route_uses_saved_catalog_and_preserves_review_history(
     assert _snapshot_proposal(cid) == before
 
 
+@pytest.mark.parametrize("rule", [
+    _allowlist({REPORT_TOOL, *SUPPORT_TOOLS}),
+    {"id": "allow", "type": "tool_count", "tool": REPORT_TOOL, "min": 1},
+    {"id": "allow", "type": "tool_sequence", "tools": [REPORT_TOOL], "mode": "subsequence"},
+])
 @pytest.mark.parametrize("change,expected_error", [
     ("changed-names", "not in the selected runtime catalog"),
     ("unavailable-names", "catalog unavailable"),
@@ -604,9 +643,9 @@ def test_store_plan_route_uses_saved_catalog_and_preserves_review_history(
     ("missing-catalog", "catalog unavailable"),
 ])
 def test_materialize_rechecks_catalog_for_saved_draft_before_any_effect(
-    app_ready, catalog, monkeypatch, change, expected_error,  # noqa: F811 -- shared fixture
+    app_ready, catalog, monkeypatch, change, expected_error, rule,  # noqa: F811 -- shared fixture
 ):
-    source = _source(_allowlist({REPORT_TOOL, *SUPPORT_TOOLS}), _mounted_content())
+    source = _source(rule, _mounted_content())
     cid, digest = _conversation("local-operator", proposal=source)
     proposal_before = _snapshot_proposal(cid)
     with SessionLocal() as db:
@@ -681,3 +720,161 @@ def test_materialize_rechecks_catalog_for_saved_draft_before_any_effect(
     cloud_access.assert_not_called()
     starter.assert_not_called()
     assert _snapshot_proposal(cid) == proposal_before
+
+
+def _trajectory_source(kind, trajectory):
+    source = _source(
+        {"id": "trajectory", "type": "reference_trajectory", "mode": "exact"},
+        _mounted_content(),
+    )
+    if kind == "judge":
+        source["evaluation_plan"]["evaluators"] = [{
+            "kind": "judge", "key": "trajectory", "title": "Expected calls",
+            "name": "expected_calls", "level": "SESSION",
+            "instructions": "Compare {actual_tool_trajectory} to {expected_tool_trajectory}.",
+        }]
+    elif kind == "builtin":
+        source["evaluation_plan"]["evaluators"] = [{
+            "kind": "existing", "key": "trajectory", "title": "Expected calls",
+            "evaluator_id": "Builtin.TrajectoryExactOrderMatch",
+        }]
+    source["evaluation_plan"]["scenarios"][0]["expected_trajectory"] = list(trajectory)
+    return source
+
+
+@pytest.mark.parametrize("kind", ["code", "judge", "builtin"])
+@pytest.mark.parametrize("unknown", [
+    GATEWAY_TOOL, REPORT_TOOL, "read_report", "made_up", "shell", "file_operations",
+    "mcp:reports", "gateway:finance", "builtin:shell",
+])
+def test_plan_routes_reject_unselected_trajectory_names_and_keep_history(
+    app_ready, catalog, kind, unknown,  # noqa: F811 -- shared fixture
+):
+    source = _trajectory_source(kind, [unknown])
+    if unknown == REPORT_TOOL:
+        source["tools"] = []  # the previously expected MCP was removed from the proposal
+    cid, digest = _conversation("local-operator", proposal=source)
+    before = _snapshot_proposal(cid)
+    with SessionLocal() as db:
+        db.get(AssistantConversation, cid).catalog = deepcopy(catalog)
+        db.commit()
+    with TestClient(app_ready) as client:
+        response = client.post(_url(cid, "/prepare"), json={"revision": 1})
+        assert response.status_code == 201, response.text
+        invalid = response.json()["plan"]
+        assert invalid["status"] == "invalid"
+        assert any("scenarios.facts.expected_trajectory" in err and unknown in err
+                   for err in invalid["validation_errors"])
+        corrected = deepcopy(invalid["content"])
+        corrected["scenarios"][0]["expected_trajectory"] = (
+            [REPORT_TOOL] if source["tools"] else ["skills"]
+        )
+        response = client.put(_url(cid), json={"content": corrected})
+        assert response.status_code == 200, response.text
+        valid = response.json()["plan"]
+        assert valid["status"] == "draft" and valid["validation_errors"] == []
+        assert valid["source_revision"] == 1 and valid["source_content_hash"] == digest
+        assert valid["revision"] == invalid["revision"] + 1
+        assert valid["content"]["evaluators"] == invalid["content"]["evaluators"]
+    with SessionLocal() as db:
+        old = db.query(AssistantEvaluationPlan).filter_by(
+            conversation_id=cid, revision=invalid["revision"],
+        ).one()
+        assert old.content == invalid["content"]
+        assert old.content_hash == invalid["content_hash"]
+        assert old.validation_errors == invalid["validation_errors"]
+        assert db.query(EvaluationAssetOperation).count() == 0
+    assert _snapshot_proposal(cid) == before
+
+
+@pytest.mark.parametrize("kind", ["code", "judge", "builtin"])
+def test_plan_trajectory_accepts_selected_native_mcp_and_support_names_without_rewriting(
+    app_ready, catalog, kind,  # noqa: F811 -- shared fixture
+):
+    trajectory = [REPORT_TOOL, GATEWAY_TOOL, "skills", RETRIEVE_TOOL, AGENTIC_TOOL,
+                  REPORT_TOOL, "shell"]
+    source = _trajectory_source(kind, trajectory)
+    source["tools"].append("gateway:finance")
+    source["native_tools"] = ["shell"]
+    cid, _ = _conversation("local-operator", proposal=source)
+    with SessionLocal() as db:
+        db.get(AssistantConversation, cid).catalog = deepcopy(catalog)
+        db.commit()
+    with TestClient(app_ready) as client:
+        response = client.post(_url(cid, "/prepare"), json={"revision": 1})
+        assert response.status_code == 201, response.text
+        plan = response.json()["plan"]
+        assert plan["status"] == "draft", plan["validation_errors"]
+        assert plan["content"]["scenarios"][0]["expected_trajectory"] == trajectory
+
+
+def test_empty_trajectories_and_blocked_golden_tools_need_no_catalog(
+    app_ready,  # noqa: F811 -- shared fixture
+):
+    source = _source(
+        {"id": "no-write", "type": "tool_count", "tool": WRITE_TOOL, "max": 0},
+        _mounted_content(),
+    )
+    source["golden_tests"].append({
+        "id": "blocked", "input": "Do unavailable work", "expected_tools": ["mcp:removed"],
+    })
+    source["evaluation_plan"]["blocked_golden_tests"] = [{
+        "golden_test_id": "blocked", "reason": "Required integration is unavailable.",
+    }]
+    cid, _ = _conversation("local-operator", proposal=source)
+    with TestClient(app_ready) as client:
+        response = client.post(_url(cid, "/prepare"), json={"revision": 1})
+        assert response.status_code == 201, response.text
+        plan = response.json()["plan"]
+        assert plan["status"] == "draft", plan["validation_errors"]
+        assert [s["expected_trajectory"] for s in plan["content"]["scenarios"]] == [[]]
+        assert plan["content"]["blocked_golden_tests"] == (
+            source["evaluation_plan"]["blocked_golden_tests"]
+        )
+
+
+@pytest.mark.parametrize("kind", ["code", "judge", "builtin"])
+@pytest.mark.parametrize("change", ["removed-tool", "missing-catalog", "missing-entry"])
+def test_materialize_rechecks_trajectory_catalog_without_changing_approved_history(
+    app_ready, catalog, monkeypatch, kind, change,  # noqa: F811 -- shared fixture
+):
+    source = _trajectory_source(kind, [REPORT_TOOL])
+    cid, digest = _conversation("local-operator", proposal=source)
+    before = _snapshot_proposal(cid)
+    with SessionLocal() as db:
+        db.get(AssistantConversation, cid).catalog = deepcopy(catalog)
+        db.commit()
+    starter = Mock(side_effect=AssertionError("invalid trajectory must not start asset work"))
+    monkeypatch.setattr(assets, "start_async", starter)
+    raw = plans.draft_plan(source, revision=1, content_hash=digest, agent_name=source["name"])
+    raw["grant_workspace_execution_role"] = True
+    with TestClient(app_ready) as client:
+        response = client.put(_url(cid), json={"content": raw})
+        assert response.status_code == 200, response.text
+        draft = response.json()["plan"]
+        assert draft["status"] == "draft", draft["validation_errors"]
+        history = client.get(_url(cid)).json()["plans"]
+        changed = deepcopy(catalog)
+        if change == "removed-tool":
+            changed["tools"][0]["runtime_tools"] = [WRITE_TOOL]
+            changed["tools"][1]["runtime_tools"].append(REPORT_TOOL)
+        elif change == "missing-catalog":
+            changed["tools"][0]["runtime_tools"] = None
+        else:
+            changed["tools"] = changed["tools"][1:]
+        with SessionLocal() as db:
+            db.get(AssistantConversation, cid).catalog = changed
+            db.commit()
+        response = client.post(_url(cid, "/materialize"), json={
+            "plan_revision": draft["revision"], "plan_hash": draft["content_hash"],
+            "acknowledge_disclosure": True,
+        })
+        assert response.status_code == 409, response.text
+        assert response.json()["code"] == "assistant.evaluation_plan_invalid"
+        assert any("scenarios.facts.expected_trajectory" in err
+                   for err in response.json()["detail"]["errors"])
+        assert client.get(_url(cid)).json()["plans"] == history
+    with SessionLocal() as db:
+        assert db.query(EvaluationAssetOperation).count() == 0
+    starter.assert_not_called()
+    assert _snapshot_proposal(cid) == before

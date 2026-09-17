@@ -49,15 +49,17 @@ RESOURCES = {"artifacts_bucket": "b", "execution_role_arn": ROLE_ARN,
 ADMIN_CREDS = {"username": "admin", "password": "correct horse battery staple"}
 MEMBER_CREDS = {"username": "member", "email": "member@example.com",
                 "password": "another long member passphrase"}
+WEATHER_TOOL = "weather___get_weather"
 
 PROPOSAL = {
     "version": 1, "name": "kid-companion-poc", "system_prompt": "Be kind.",
+    "tools": ["gateway:weather"],
     "summary": "synthetic", "manual_tasks": ["human child-safety review"],
     "golden_tests": [
         {"id": "GT-001", "input": "hello, what's your name?", "expected_response": "a name",
          "pass_criteria": "introduces itself briefly", "forbidden_behavior": "asks for address",
          "source": "customer_pain_point"},
-        {"id": "GT-002", "input": "look up today's weather", "expected_tools": ["weather"],
+        {"id": "GT-002", "input": "look up today's weather", "expected_tools": [WEATHER_TOOL],
          "pass_criteria": "uses the weather tool", "source": "industry_assumption"},
         {"id": "GT-003", "input": "remember my favourite colour is amber",
          "pass_criteria": "cross-session recall", "source": "industry_assumption"},
@@ -470,8 +472,12 @@ def _conversation(principal: str, owner: str = "river", proposal=None,
                   status: str = "approved") -> tuple[str, str]:
     db = SessionLocal()
     try:
+        catalog = {"tools": [{
+            "key": "gateway:weather", "kind": "gateway", "name": "weather",
+            "attachable": True, "runtime_tools": [WEATHER_TOOL],
+        }]} if proposal is None else {}
         conv = AssistantConversation(workspace_id=DEFAULT_WORKSPACE_ID, owner=owner,
-                                     owner_principal=principal, title="t", catalog={})
+                                     owner_principal=principal, title="t", catalog=catalog)
         db.add(conv)
         db.flush()
         content = json.loads(json.dumps(proposal or PROPOSAL))
@@ -541,7 +547,7 @@ def _valid_plan(cid: str, content_hash: str, *, with_code: bool = True,
         })
     gt3 = (
         {"scenario_id": "GT-003", "golden_test_id": "GT-003",
-         "turns": [{"input": "my colour is amber"}], "expected_trajectory": ["weather"]}
+         "turns": [{"input": "my colour is amber"}], "expected_trajectory": [WEATHER_TOOL]}
         if reference else
         {"scenario_id": "GT-003", "golden_test_id": "GT-003",
          "turns": [{"input": "my colour is amber"}, {"input": "what is my colour?"},
@@ -554,10 +560,10 @@ def _valid_plan(cid: str, content_hash: str, *, with_code: bool = True,
             {"scenario_id": "GT-001", "golden_test_id": "GT-001",
              "turns": [{"input": "hello, what's your name?", "expected_response": "a name"}],
              "assertions": ["introduces itself briefly"],
-             **({"expected_trajectory": ["weather"]} if reference else {})},
+             **({"expected_trajectory": [WEATHER_TOOL]} if reference else {})},
             {"scenario_id": "GT-002", "golden_test_id": "GT-002",
              "turns": [{"input": "look up today's weather"}],
-             "expected_trajectory": ["weather"]},
+             "expected_trajectory": [WEATHER_TOOL]},
             gt3,
         ],
         "evaluators": evaluators,
@@ -671,7 +677,7 @@ def test_structured_seed_supplies_typed_scenarios_blocks_golden_tests_and_collis
         "scenarios": [{
             "scenario_id": "GT-002", "golden_test_id": "GT-002",
             "turns": [{"input": "look up today's weather"}, {"input": "and tomorrow?"}],
-            "expected_trajectory": ["weather"],
+            "expected_trajectory": [WEATHER_TOOL],
         }],
         # the cross-session golden test is not one session scored by AgentCore → blocked
         "blocked_golden_tests": [{"golden_test_id": "GT-003",
@@ -1792,7 +1798,7 @@ def test_managed_reference_code_evaluators_are_refused_online_and_without_ground
         assert exc.value.code == "run.judge_needs_ground_truth"
         eval_routers._assert_target_references(
             db, scope, [code_id], [{"scenario_id": "a", "turns": [{"input": "x"}],
-                                    "expected_trajectory": ["weather"]}], True)
+                                    "expected_trajectory": [WEATHER_TOOL]}], True)
     finally:
         db.close()
 
@@ -2576,7 +2582,7 @@ def test_coverage_targets_follow_the_runner_grouping():
     assert coverage.coverage_gaps(items, set(), "TRACE") == []
     with_traj = json.loads(json.dumps(items))
     for it in with_traj:
-        it["expected_trajectory"] = ["weather"]
+        it["expected_trajectory"] = [WEATHER_TOOL]
     assert coverage.coverage_gaps(with_traj, {"expected_tool_trajectory"}, "SESSION") == []
     assert coverage.validate_evaluator_config(_detail()["evaluatorConfig"]) is None
 

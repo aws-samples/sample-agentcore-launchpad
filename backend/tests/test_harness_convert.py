@@ -23,6 +23,7 @@ from .conftest import ws_ctx
 
 FIXTURES = Path(__file__).parent / "fixtures"
 MAIN_PY = (FIXTURES / "harness_export_main.py").read_text()
+SKILLS_NOMEMORY_MAIN_PY = (FIXTURES / "harness_export_skills_nomemory_main.py").read_text()
 PYPROJECT = (FIXTURES / "harness_export_pyproject.toml").read_text()
 MCP_CLIENT_PY = (FIXTURES / "harness_export_mcp_client.py").read_text()
 
@@ -76,16 +77,29 @@ def test_graft_inserts_bundle_contract_on_real_export():
     assert grafted.count("def resolve_system_prompt") == 1
 
 
-def test_graft_supports_skill_plugin_agent_factory_call():
-    skill_export = MAIN_PY.replace(
-        "agent = get_or_create_agent(session_id, user_id)",
-        "agent = get_or_create_agent(session_id, user_id, _skill_plugins)",
-    )
-
+@pytest.mark.parametrize(
+    ("skill_export", "arguments"),
+    [
+        pytest.param(
+            MAIN_PY.replace(
+                "agent = get_or_create_agent(session_id, user_id)",
+                "agent = get_or_create_agent(session_id, user_id, _skill_plugins)",
+            ),
+            "session_id, user_id, _skill_plugins",
+            id="skills-with-memory",
+        ),
+        pytest.param(SKILLS_NOMEMORY_MAIN_PY, "_skill_plugins", id="skills-without-memory"),
+    ],
+)
+def test_graft_supports_skill_plugin_agent_factory_call(skill_export, arguments):
     grafted = hc.graft_config_bundle(skill_export)
 
-    assignment = "agent = get_or_create_agent(session_id, user_id, _skill_plugins)"
+    compile(grafted, "main.py", "exec")
+    assignment = f"agent = get_or_create_agent({arguments})"
     assert f"{assignment}\n    _launchpad_apply_tool_descriptions(agent)" in grafted
+    assert "system_prompt=resolve_system_prompt()" in grafted
+    assert "system_prompt=DEFAULT_SYSTEM_PROMPT" not in grafted
+    assert hc.graft_config_bundle(grafted) == grafted
 
 
 def test_graft_supports_real_export_without_memory_or_skills():
@@ -180,6 +194,13 @@ def test_graft_fails_without_anchors():
         "agent = get_or_create_agent(other_session, user_id)",
         "agent = make_agent(session_id, user_id)",
         "agent = get_or_create_agent(session_id)",
+        "agent = get_or_create_agent(user_id)",
+        "agent = get_or_create_agent(skill_plugins)",
+        "agent = get_or_create_agent(other_plugins)",
+        "agent = get_or_create_agent(skill_plugins=_skill_plugins)",
+        "agent = get_or_create_agent(_skill_plugins=_skill_plugins)",
+        "agent = get_or_create_agent(_skill_plugins, user_id=user_id)",
+        "agent = get_or_create_agent(*_skill_plugins)",
         "agent = get_or_create_agent(session_id, user_id, other_plugins)",
         "agent = get_or_create_agent(session_id, user_id, _skill_plugins, extra)",
         "agent = get_or_create_agent(session_id=session_id, user_id=user_id)",
@@ -482,6 +503,71 @@ def test_build_conversion_spec_carries_model_source(monkeypatch):
 
 
 SKILL_URI = "s3://launchpad-artifacts-1-us-west-2/skills/lab-quota-answering/"
+
+
+@pytest.mark.parametrize("with_kb", [False, True], ids=["skills", "skills-and-kb"])
+def test_build_skills_without_memory_preserves_resources_and_bundle(with_kb):
+    source = _source_agent()
+    source.spec = {
+        **source.spec,
+        "memory": {"short_term": False, "long_term": False},
+        "skills": [SKILL_URI],
+        "knowledge_bases": [
+            {"kb_id": "KB111", "name": "product-docs", "description": "Product manuals"},
+        ] if with_kb else [],
+        "tool_description_overrides": {"kb_search": "Reviewed product search"} if with_kb else {},
+    }
+    original_spec = json.loads(json.dumps(source.spec))
+    files = {"main.py": SKILLS_NOMEMORY_MAIN_PY, "pyproject.toml": PYPROJECT}
+    # Even when the workspace has Memory, this export must remain Memory-free.
+    spec = hc.build_conversion_spec(
+        source, files, ["bedrock-agentcore==1.17.*"], "product-support-rt",
+        ws_ctx({"memory_id": "mem-1"}),
+    )
+
+    assert spec.method == "zip_runtime"
+    assert not spec.memory.short_term and not spec.memory.long_term
+    assert not any(key.startswith("MEMORY_") for key in spec.env)
+    assert "memory" not in spec.conversion_notes
+    assert spec.skills == sorted([SKILL_URI, "s3://example-artifacts/skills/product-support/"])
+    assert spec.conversion_notes["skills"].startswith("wired (2 bundle(s)")
+    assert spec.source_harness["agent_id"] == source.id
+    assert [kb.model_dump() for kb in spec.knowledge_bases] == source.spec["knowledge_bases"]
+    assert source.spec == original_spec
+    assert files["main.py"] == SKILLS_NOMEMORY_MAIN_PY
+
+    assert spec.code_bundle and "pyproject.toml" not in spec.code_bundle
+    for path, content in spec.code_bundle.items():
+        compile(content, path, "exec")
+    main_py = spec.code_bundle["main.py"]
+    assert (
+        "agent = get_or_create_agent(_skill_plugins)\n"
+        "    _launchpad_apply_tool_descriptions(agent)"
+    ) in main_py
+    assert "plugins=skill_plugins or None" in main_py
+    assert "asyncio.to_thread(resolve_s3_skills, s3_skill_sources, None)" in main_py
+    assert "system_prompt=resolve_system_prompt()" in main_py
+    assert hc.graft_config_bundle(
+        main_py,
+        default_system_prompt=spec.system_prompt,
+        tool_description_overrides=spec.tool_description_overrides,
+    ) == main_py
+
+    if with_kb:
+        assert set(spec.code_bundle) == {"main.py", "launchpad_kb_tools.py"}
+        assert "KB111" in spec.code_bundle["launchpad_kb_tools.py"]
+        assert "tools.extend([kb_search, kb_deep_search])" in main_py
+        assert spec.system_prompt.startswith(source.spec["system_prompt"])
+        assert "`kb_search`" in spec.system_prompt and "`kb_deep_search`" in spec.system_prompt
+        assert spec.tool_description_overrides["kb_search"] == "Reviewed product search"
+        assert spec.tool_description_overrides["kb_deep_search"].startswith("Deep-search")
+        assert spec.conversion_notes["knowledge_bases"].startswith("wired (direct")
+        assert hc.graft_direct_kb_tools(main_py) == main_py
+    else:
+        assert set(spec.code_bundle) == {"main.py"}
+        assert spec.system_prompt == source.spec["system_prompt"]
+        assert hc.KB_GRAFT_START not in main_py
+        assert "knowledge_bases" not in spec.conversion_notes
 
 
 def test_discover_skills_reads_the_exported_source_lists():

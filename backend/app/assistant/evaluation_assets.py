@@ -446,7 +446,9 @@ def _store_plan(
     if plan is not None:
         from app.assistant.tool_catalog import rule_catalog_errors
 
-        errors += rule_catalog_errors(plan.evaluators, proposal.content, conversation.catalog or {})
+        errors += rule_catalog_errors(
+            plan.evaluators, proposal.content, conversation.catalog or {}, scenarios=plan.scenarios,
+        )
         if errors:
             plan = None
     for _attempt in range(5):
@@ -634,7 +636,7 @@ def approve_plan(
 
     catalog_errors = rule_catalog_errors(
         plan.evaluators, _proposal(db, conversation.id, plan_row.source_revision).content,
-        conversation.catalog or {},
+        conversation.catalog or {}, scenarios=plan.scenarios,
     )
     if catalog_errors:
         raise AppError("assistant.evaluation_plan_invalid",

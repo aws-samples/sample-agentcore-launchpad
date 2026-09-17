@@ -942,6 +942,9 @@ footer .sep{color:var(--line-2)}
 .assist-prep-option>span:first-of-type>span{display:block;font-size:11px;margin-top:4px}
 .assist-prep-option:has(input:disabled){cursor:default}
 .assist-prep-option:has(input:disabled:not(:checked)){opacity:.65}
+.assist-prep-tool{min-width:0;overflow-wrap:anywhere}
+.assist-prep-tool summary{cursor:pointer}
+.assist-prep-tool ul{padding-left:18px;white-space:normal}
 .assist-prep-requirements{display:flex;flex-direction:column;gap:10px;max-height:260px;overflow:auto}
 .assist-prep-requirement{border-left:2px solid var(--amber);padding:0 0 0 12px;font-size:12px;overflow-wrap:anywhere}
 .assist-prep-requirement ul{padding-left:18px;line-height:1.7}

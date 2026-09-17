@@ -49,12 +49,13 @@ def _requirements(requirements=None):
     ) + "\n```"
 
 
-def _save(client, cid, *, kbs=(), skills=(), revision=None, **kwargs):
+def _save(client, cid, *, kbs=(), skills=(), tools=None, revision=None, **kwargs):
     if revision is None:
         revision = _latest(client, cid)["preparation"]["revision"]
     return client.put(f"{BASE}/conversations/{cid}/preparation",
                       json={"expected_revision": revision,
-                            "knowledge_bases": list(kbs), "skills": list(skills)}, **kwargs)
+                            "knowledge_bases": list(kbs), "skills": list(skills),
+                            **({"tools": list(tools)} if tools is not None else {})}, **kwargs)
 
 
 def _import(client, cid, sid, indexes=(0,), *, revision=None, **kwargs):
@@ -111,7 +112,7 @@ def s3(monkeypatch):
 def test_empty_and_legacy_projection_preserve_proposal_hash(client, ready, harness):
     cid = _open(client)
     assert _latest(client, cid)["preparation"] == {
-        "revision": 0, "knowledge_bases": [], "skills": [], "requirements": [],
+        "revision": 0, "knowledge_bases": [], "skills": [], "tools": [], "requirements": [],
     }
     proposal = _propose(client, harness, cid)
     with SessionLocal() as db:
@@ -121,6 +122,7 @@ def test_empty_and_legacy_projection_preserve_proposal_hash(client, ready, harne
     detail = _latest(client, cid)
     assert detail["preparation"]["knowledge_bases"] == proposal["content"]["knowledge_bases"]
     assert detail["preparation"]["skills"] == proposal["content"]["skills"]
+    assert detail["preparation"]["tools"] == proposal["content"]["tools"]
     assert detail["proposals"][0]["content_hash"] == proposal["content_hash"]
     assert "preparation_sources" not in detail
     with SessionLocal() as db:
@@ -172,6 +174,8 @@ def test_model_preserves_explicit_selection_and_member_edit_updates_it(client, r
 @pytest.mark.parametrize("mutate", [
     {"expected_revision": True}, {"expected_revision": -1},
     {"knowledge_bases": ["KB123ABC", "KB123ABC"]},
+    {"tools": ["mcp:deepwiki", "mcp:deepwiki"]},
+    {"tools": [f"mcp:server-{i}" for i in range(21)]},
     {"skills": ["s"] * 11}, {"sources": [{"path": "s3://private/arbitrary/"}]},
 ])
 def test_selection_request_rejects_unsafe_or_unbounded_shape(client, ready, mutate):
@@ -180,6 +184,152 @@ def test_selection_request_rejects_unsafe_or_unbounded_shape(client, ready, muta
                      json={"expected_revision": 0, "knowledge_bases": [], "skills": [], **mutate})
     assert res.status_code == 422
     assert _latest(client, cid)["preparation"]["revision"] == 0
+
+
+def test_mcp_selection_is_authoritative_and_deploys_only_selected_attachments(
+    client, ready, harness,
+):
+    cid = _open(client)
+    result = _save(client, cid, tools=["mcp:deepwiki"])
+    assert result.status_code == 200, result.text
+    assert result.json()["preparation"]["tools"] == ["mcp:deepwiki"]
+    proposed = _propose(client, harness, cid, {**VALID_PROPOSAL, "tools": []})
+    assert proposed["status"] == "draft", proposed["validation_errors"]
+    assert proposed["content"]["tools"] == ["mcp:deepwiki"]
+    assert '"tools": ["mcp:deepwiki"]' in harness.calls[-1]["messages"][0]["content"][0]["text"]
+    approved = _approve(client, cid, proposed)
+    assert approved.status_code == 202, approved.text
+    with SessionLocal() as db:
+        agent = db.get(Agent, approved.json()["agent"]["id"])
+        assert [tool["name"] for tool in agent.spec["tools"]] == ["deepwiki"]
+        assert agent.spec["native_tools"] == []
+    # Removing the MCP makes a new review, while the approved Agent/hash stay intact.
+    cleared = _save(client, cid, tools=[])
+    assert cleared.status_code == 200, cleared.text
+    first, latest = cleared.json()["proposals"]
+    assert first["content_hash"] == proposed["content_hash"]
+    assert first["status"] == "approved"
+    assert latest["status"] == "draft" and latest["content"]["tools"] == []
+    assert _propose(client, harness, cid)["content"]["tools"] == []
+    assert _count(Job) == 1
+
+
+def test_legacy_kb_skill_selection_and_old_client_preserve_proposal_mcps(
+    client, ready, harness,
+):
+    cid = _open(client)
+    original = _propose(client, harness, cid)
+    with SessionLocal() as db:
+        row = db.get(AssistantConversation, cid)
+        row.preparation = {
+            "selection_set": True, "skills": ["meeting-summarizer"],
+            "knowledge_bases": [], "revision": 2,
+        }
+        db.commit()
+    assert _latest(client, cid)["preparation"]["tools"] == original["content"]["tools"]
+    res = _save(client, cid, kbs=["KB123ABC"], revision=2)
+    assert res.status_code == 200, res.text
+    assert res.json()["preparation"]["tools"] == original["content"]["tools"]
+    assert res.json()["proposals"][-1]["content"]["tools"] == original["content"]["tools"]
+    # Explicit [] is distinct from a missing field.
+    res = _save(client, cid, tools=[])
+    assert res.status_code == 200
+    assert res.json()["preparation"]["tools"] == []
+
+
+@pytest.mark.parametrize("action", ["old-client-save", "refresh"])
+def test_inherited_mcp_selection_stays_implicit_until_member_edits_tools(
+    client, ready, harness, monkeypatch, action,
+):
+    cid = _open(client)
+    original = _propose(client, harness, cid)
+    with SessionLocal() as db:
+        db.get(AssistantConversation, cid).preparation = {
+            "selection_set": True, "skills": original["content"]["skills"],
+            "knowledge_bases": original["content"]["knowledge_bases"], "revision": 2,
+        }
+        db.commit()
+    if action == "old-client-save":
+        result = _save(client, cid, kbs=["KB123ABC"])
+    else:
+        catalog = _catalog()
+        catalog["skills"][0]["content_digest"] = "e" * 64
+        monkeypatch.setattr(service, "fetch_catalog", lambda ws: catalog)
+        result = client.post(f"{BASE}/conversations/{cid}/catalog")
+    assert result.status_code == 200, result.text
+    detail = _latest(client, cid)
+    assert detail["proposals"][-1]["revision"] == original["revision"] + 1
+    assert detail["preparation"]["tools"] == original["content"]["tools"]
+    with SessionLocal() as db:
+        assert not db.get(AssistantConversation, cid).preparation.get("tools_selection_set")
+    # A manual proposal edit is an explicit MCP selection, including an empty list.
+    edited = client.put(f"{BASE}/conversations/{cid}/proposal",
+                        json={"content": {**detail["proposals"][-1]["content"], "tools": []}})
+    assert edited.status_code == 200, edited.text
+    assert _latest(client, cid)["preparation"]["tools"] == []
+    with SessionLocal() as db:
+        assert db.get(AssistantConversation, cid).preparation["tools_selection_set"] is True
+    assert _propose(client, harness, cid)["content"]["tools"] == []
+
+
+@pytest.mark.parametrize("key", ["mcp:dup", "mcp:missing", "builtin:shell"])
+def test_unavailable_mcp_cannot_be_selected(client, ready, key):
+    cid = _open(client)
+    before = _latest(client, cid)["preparation"]
+    res = _save(client, cid, tools=[key])
+    assert res.status_code == 409 and res.json()["code"] == "assistant.preparation_invalid"
+    assert _latest(client, cid)["preparation"] == before
+    assert _count(Job) == 0
+
+
+def test_mcp_refresh_retains_disappeared_selection_and_requires_new_review(
+    client, ready, harness, monkeypatch,
+):
+    cid = _open(client)
+    assert _save(client, cid, tools=["mcp:deepwiki"]).status_code == 200
+    original = _propose(client, harness, cid)
+    monkeypatch.setattr(service, "fetch_catalog", lambda ws: _catalog(
+        tools=[], warnings=["registry unavailable"]))
+    res = client.post(f"{BASE}/conversations/{cid}/catalog")
+    assert res.status_code == 200, res.text
+    detail = res.json()["conversation"]
+    assert detail["preparation"]["tools"] == ["mcp:deepwiki"]
+    assert detail["proposals"][0]["content_hash"] == original["content_hash"]
+    assert detail["proposals"][-1]["status"] == "invalid"
+    assert any("deepwiki" in err for err in detail["proposals"][-1]["validation_errors"])
+    assert _count(Job) == 0
+
+
+def test_adding_mcp_invalidates_zero_call_seed_without_rewriting_rules(
+    client, ready, harness,
+):
+    cid = _open(client)
+    rule = {"id": "zero", "type": "tool_count", "max": 0}
+    raw = {**VALID_PROPOSAL, "tools": [], "skills": [], "knowledge_bases": [],
+           "evaluation_plan": {"evaluators": [{
+               "kind": "code", "key": "zero", "name": "zero_calls", "level": "SESSION",
+               "title": "No tool calls",
+               "rules": {"version": 1, "checks": [rule]},
+           }]}}
+    original = _propose(client, harness, cid, raw)
+    assert original["status"] == "draft", original["validation_errors"]
+    changed = _save(client, cid, tools=["mcp:deepwiki"])
+    assert changed.status_code == 200, changed.text
+    latest = changed.json()["proposals"][-1]
+    assert latest["status"] == "invalid"
+    assert any("forbids all tool calls" in err for err in latest["validation_errors"])
+    assert latest["content"]["evaluation_plan"]["evaluators"][0]["rules"]["checks"][0]["max"] == 0
+    assert changed.json()["proposals"][0]["content_hash"] == original["content_hash"]
+    assert _count(Job) == 0
+    # Undoing the incompatible selection repairs the proposal without editing its rules.
+    restored = _save(client, cid, tools=[])
+    assert restored.status_code == 200, restored.text
+    recovered = restored.json()["proposals"][-1]
+    assert recovered["revision"] == latest["revision"] + 1
+    assert recovered["status"] == "draft"
+    assert recovered["content"]["tools"] == []
+    assert recovered["content"]["evaluation_plan"] == original["content"]["evaluation_plan"]
+    assert restored.json()["proposals"][-2]["content_hash"] == latest["content_hash"]
 
 
 def test_stale_revision_and_unavailable_catalog_do_not_change_selection(client, ready, monkeypatch):

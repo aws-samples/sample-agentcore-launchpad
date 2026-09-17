@@ -1034,6 +1034,8 @@ export interface AssistantPreparation {
   revision: number;
   knowledge_bases: string[];
   skills: string[];
+  /** Absent in historical preparation; inherit the latest valid proposal's tools. */
+  tools?: string[];
   requirements: AssistantPreparationRequirement[];
 }
 
@@ -3612,7 +3614,12 @@ export const api = {
       { method: "POST", headers: pinnedWorkspace(workspaceId) },
     ),
   assistantSavePreparation: (
-    id: string, input: { expected_revision: number; knowledge_bases: string[]; skills: string[] },
+    id: string,
+    input: {
+      expected_revision: number; knowledge_bases: string[]; skills: string[];
+      /** Omitted preserves prior choices; an explicit empty list clears them. */
+      tools?: string[];
+    },
     workspaceId: string,
   ) => request<AssistantConversationDetail>(
     `/api/assistant/architect/conversations/${encodeURIComponent(id)}/preparation`,

@@ -3,8 +3,12 @@ the real transitions were probed live: DEPRECATED is terminal, REJECTED can
 still be approved, delete works from any settled state)."""
 
 import json
+from unittest.mock import Mock
+
+import pytest
 
 import app.routers.registry as registry_router
+from app.core.errors import AppError
 from app.services.agentcore import registry as reg
 from tests.conftest import ws_ctx
 
@@ -173,3 +177,84 @@ def test_mcp_descriptors_without_tools():
     assert "tools" not in desc["mcp"]
     server = json.loads(desc["mcp"]["server"]["inlineContent"])
     assert server["remotes"][0]["url"] == "https://mcp.internal/sse"
+
+
+@pytest.mark.parametrize("failure", [None, "missing", "ambiguous", "unavailable", "external"])
+def test_legacy_gateway_catalog_uses_verified_names_without_widening(monkeypatch, failure):
+    from copy import deepcopy
+
+    from app.services import registry_console as console
+
+    url = "https://shared.example/mcp"
+    records = {
+        target: {
+            "recordId": target, "name": target, "description": f"Gateway target {target}",
+            "descriptors": reg.build_mcp_descriptors(
+                target=target, description="", gateway_url=url,
+                tools=[{"name": "read"}, {"name": f"{target}___lookup"}],
+            ),
+        }
+        for target in ("hr", "office")
+    }
+    original = deepcopy(records)
+    monkeypatch.setattr(console.reg, "list_records", lambda *args: [
+        {"recordId": key, "descriptorType": "MCP"} for key in records
+    ])
+    monkeypatch.setattr(console.reg, "get_record", lambda c, r, key: records[key])
+    names = ["hr___read", "hr___lookup", "office___read", "office___lookup", "secret___write"]
+    if failure == "missing":
+        names.remove("hr___read")
+    if failure == "ambiguous":
+        names.append("read")
+    discover = Mock(return_value=[{"name": name} for name in names])
+    if failure == "unavailable":
+        discover.side_effect = AppError("gateway.unauthorized", "denied", status_code=403)
+    monkeypatch.setattr(console.mcp_client, "tools_list", discover)
+    gateway = {
+        "gatewayId": "shared", "gatewayArn": "arn:gateway:shared", "gatewayUrl": url,
+        "name": "launchpad-gw", "protocolType": "MCP", "authorizerType": "NONE",
+    }
+    result = console.attachable_records(
+        ws_ctx({"gateway_url": "https://other.example/mcp" if failure == "external" else url}),
+        registry_client=object(), registry_id="r", gateways=[gateway],
+    )
+    by_name = {item["name"]: item for item in result["mcp_servers"]}
+    assert all(item["attachable"] for item in by_name.values())
+    if failure:
+        assert by_name["hr"]["runtime_tools"] is None
+    else:
+        assert by_name["hr"]["runtime_tools"] == ["hr___lookup", "hr___read"]
+        assert by_name["office"]["runtime_tools"] == ["office___lookup", "office___read"]
+    if failure == "external":
+        discover.assert_not_called()
+    else:
+        assert discover.call_count == 1
+    assert records == original  # read-only normalization, no Registry rewrite
+    assert all("secret___write" not in (item["runtime_tools"] or []) for item in by_name.values())
+
+
+def test_gateway_catalog_preserves_full_names_without_legacy_discovery(monkeypatch):
+    from app.services import registry_console as console
+
+    names = ["hr___read", "office___lookup", "x_amz_bedrock_agentcore_search"]
+    record = {
+        "recordId": "r", "name": "whole-gateway",
+        "descriptors": reg.build_mcp_descriptors(
+            target="whole-gateway", description="", gateway_url="https://gateway.example/mcp",
+            tools=[{"name": name} for name in names],
+        ),
+    }
+    monkeypatch.setattr(console.reg, "list_records", lambda *args: [
+        {"recordId": "r", "descriptorType": "MCP"},
+    ])
+    monkeypatch.setattr(console.reg, "get_record", lambda *args: record)
+    discover = Mock(side_effect=AssertionError("fully qualified catalog needs no legacy lookup"))
+    monkeypatch.setattr(console.mcp_client, "tools_list", discover)
+    result = console.attachable_records(
+        ws_ctx(), registry_client=object(), registry_id="registry",
+        gateways=[{"gatewayId": "g", "gatewayArn": "arn:g",
+                   "gatewayUrl": "https://gateway.example/mcp", "name": "gateway",
+                   "protocolType": "MCP", "authorizerType": "NONE"}],
+    )
+    assert result["mcp_servers"][0]["runtime_tools"] == names
+    discover.assert_not_called()

@@ -10,6 +10,8 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
+
 from app.core.config import REPO_ROOT
 from app.core.errors import AppError
 from app.models.ledger import Agent
@@ -156,10 +158,10 @@ def ensure_default_records(workspace: WorkspaceContext) -> list[dict[str, Any]]:
     by_target: dict[str, list[dict[str, Any]]] = {}
     for tool in tools:
         if "___" in tool["name"]:
-            target, short = tool["name"].split("___", 1)
+            target = tool["name"].split("___", 1)[0]
             by_target.setdefault(target, []).append(
                 {
-                    "name": short,
+                    "name": tool["name"],
                     "description": tool.get("description", ""),
                     "inputSchema": tool.get("inputSchema", {}),
                 }
@@ -850,6 +852,10 @@ def attachable_records(
             gateways_by_url.setdefault(gateway["gatewayUrl"], []).append(gateway)
     mcp_servers: list[dict[str, Any]] = []
     skills: list[dict[str, Any]] = []
+    # Old default records stripped the Gateway target prefix. Restore only names
+    # confirmed by live discovery, once per catalog read; never rewrite records.
+    shared_names: set[str] | None = None
+    shared_names_read = False
     for summary in reg.list_records(registry_client, registry_id, None, "APPROVED"):
         kind = summary.get("descriptorType")
         if kind not in ("MCP", "AGENT_SKILLS"):
@@ -894,6 +900,36 @@ def attachable_records(
                                 declared_tools = sorted({t["name"] for t in entries})
                         except (ValueError, AttributeError):
                             pass  # attachment remains usable; rule review needs a catalog
+                    if declared_tools and any(
+                        "___" not in name and name != "x_amz_bedrock_agentcore_search"
+                        for name in declared_tools
+                    ):
+                        if url == resources.get("gateway_url"):
+                            if not shared_names_read:
+                                shared_names_read = True
+                                try:
+                                    shared_names = {
+                                        tool["name"] for tool in mcp_client.tools_list(workspace)
+                                        if isinstance(tool, dict)
+                                        and isinstance(tool.get("name"), str)
+                                    }
+                                except (AppError, httpx.HTTPError, KeyError, TypeError, ValueError):
+                                    pass  # no verified names; do not guess a rule catalog
+                            resolved = []
+                            for name in declared_tools:
+                                candidates = {name, f"{record['name']}___{name}"}
+                                callable_matches = candidates & (shared_names or set())
+                                if len(callable_matches) != 1:
+                                    break
+                                resolved.append(next(iter(callable_matches)))
+                            declared_tools = (
+                                sorted(set(resolved)) if len(resolved) == len(declared_tools)
+                                else None
+                            )
+                        else:
+                            # The shared-Gateway credential must never be sent
+                            # to an unrelated endpoint.
+                            declared_tools = None
                 mcp_servers.append(
                     {
                         "name": record["name"],

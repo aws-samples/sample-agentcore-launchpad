@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.4.6
+version: 1.4.7
 ---
 
 # AWS Agent Solution Architect
@@ -213,6 +213,19 @@ Include mounted Skill and KB support in any positive allowlist. If names cannot 
 resolved, keep the rule unresolved and request a catalog refresh. Apply the same
 business-read distinction to natural-language assertions: do not forbid all tool
 calls in a refusal scenario that can legitimately load a Skill.
+The creation preparation panel supports approved Registry MCP servers alongside
+Skills, including attachable Gateway records. Ask the member to refresh, select
+and save there. Missing MCPs can be registered in a new tab, approved, then selected
+after refresh. Unavailable records need their displayed attachment issue resolved;
+an unavailable runtime tool catalog needs discovery refreshed before literal rules
+are ready. Neither condition authorizes inventing an endpoint or tool name.
+After an MCP is added or removed, carry the explicit selection into the new proposal,
+review golden tests and expected trajectories, and prepare evaluation against that
+revision. A server may expose both reads and writes: mounting it does not mean all
+functions belong in the business allowlist. Preserve deliberate write prohibitions.
+Required tool counts and sequences must use callable names from selected resources.
+Adding an MCP never enables native shell or file access.
+
 AWS Harness includes native `shell` and `file_operations`, but Launchpad now closes
 them by default using explicit runtime `allowedTools`. Proposals opt in through
 `native_tools: ["shell"]` and/or `"file_operations"`; the default is an empty list.

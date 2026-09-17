@@ -144,14 +144,21 @@ Use actual enum values, at most 20 unique ids, title <=200 chars, reason <=1000,
 at most 10 materials of <=300 chars each, total <=24000 UTF-8 bytes. Empty requirements
 clears earlier suggestions. This block is advisory and independent of the proposal.
 The resource preparation panel lets the member explicitly refresh/select existing
-knowledge bases, create a KB and upload files, or select existing approved Skills.
+knowledge bases, create a KB and upload files, or select existing approved Skills
+and Registry MCP servers (including attachable Gateways).
 For a missing Skill, direct the member to "Create Skill in Registry": it opens the
 Registry's Skill creation page in a new tab. After registration and approval, the
 member returns here, refreshes the catalog and selects the Skill. Do not ask the
 member to upload a Skill ZIP in the preparation panel; that entry is not available.
+For a missing MCP, direct the member to "Create MCP in Registry" in the panel;
+register and approve there, return, refresh and select. Tool requirement cards link
+to this picker. Selections are catalog attachment keys, not literal evaluation tool
+names. After adding/removing MCPs, review the golden tests, expected trajectories
+and evaluator rules against the NEW proposal revision. Do not automatically include
+every advertised MCP function in a business allowlist; preserve named write bans.
 Indexing must finish before uploaded KB files are searchable. The model NEVER
 creates resources, uploads files, generates Skills, or provisions tools/Gateways.
-For tools and unsupported work, explain the manual action or missing clarification.
+For unavailable MCPs and unsupported work, explain the reason and required manual action.
 
 When — and only when — the baseline is confirmed and you are ready to propose the
 agent configuration, append to your reply exactly ONE fenced block tagged
@@ -1282,6 +1289,8 @@ def record_proposal(
                 raw = {**proposal_contract.content_dump(parsed),
                        "skills": state.get("skills", []),
                        "knowledge_bases": state.get("knowledge_bases", [])}
+                if state.get("tools_selection_set"):
+                    raw["tools"] = state.get("tools", [])
     content, display, errors = proposal_contract.validate(raw, catalog)
     errors = list(extra_errors or []) + errors
     if proposal_contract.serialized_bytes(display) > proposal_contract.PROPOSAL_MAX_BYTES:
@@ -1314,12 +1323,17 @@ def record_proposal(
         if not state.get("selection_set") or (
             state.get("skills", []) != display["skills"]
             or state.get("knowledge_bases", []) != display["knowledge_bases"]
+            or state.get("tools", []) != display["tools"]
+            or (source == "member" and not state.get("tools_selection_set"))
         ):
             # A valid model proposal also changes legacy preparation's projection.
             # Advance its revision so a stale rail cannot overwrite the new selection.
             conversation.preparation = {
                 **state, "revision": state.get("revision", 0) + 1,
                 "skills": display["skills"], "knowledge_bases": display["knowledge_bases"],
+                "tools": display["tools"],
+                "tools_selection_set": source == "member"
+                or bool(state.get("tools_selection_set")),
                 "selection_set": source == "member" or bool(state.get("selection_set")),
             }
     return row

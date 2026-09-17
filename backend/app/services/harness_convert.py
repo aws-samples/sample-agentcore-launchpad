@@ -366,6 +366,7 @@ def _agent_assignment(main_py: str) -> tuple[ast.Assign, bool]:
             and all(isinstance(arg, ast.Name) for arg in call.args)
             and tuple(arg.id for arg in call.args) in (
                 (),  # CLI export without Memory or Skills.
+                ("_skill_plugins",),  # Skills enabled, Memory disabled.
                 ("session_id", "user_id"),
                 ("session_id", "user_id", "_skill_plugins"),
             )
@@ -377,7 +378,8 @@ def _agent_assignment(main_py: str) -> tuple[ast.Assign, bool]:
         raise ConversionError(
             "graft anchor missing: expected exactly one "
             "supported agent = get_or_create_agent(...) assignment "
-            "(no arguments, session_id/user_id, or session_id/user_id/_skill_plugins) "
+            "(no arguments, _skill_plugins, session_id/user_id, "
+            "or session_id/user_id/_skill_plugins) "
             "(agentcore CLI codegen changed?)"
         )
     assignment = matches[0]

@@ -838,6 +838,32 @@ exists; its business explanations never establish AWS resource readiness.
 Imported Skill paths are resolved server-side, remain private to the conversation,
 and participate in the same live content-digest checks as catalog Skills.
 
+The rail also selects approved Registry **MCP servers**, including attachable
+Gateway records. It shows attachment failures separately from unavailable runtime
+tool discovery, and exposes the exact callable names for evaluation review.
+**Create MCP in Registry** opens the MCP form in a new tab; members register and
+approve there, then return and refresh. Saved `tools` keys participate in the same
+proposal bindings and derived Harness `allowedTools` as other selected resources.
+Explicit `[]` clears MCP choices; older preparation requests that omit `tools`
+preserve existing choices. Historical KB/Skill-only preparation inherits MCPs from
+the latest valid proposal until explicitly changed.
+
+An MCP change requires a fresh proposal/evaluation review. Incompatible global
+zero-call rules are rejected, and positive tool allowlists, required counts and
+sequences are checked against the selected runtime catalog at plan save and
+materialization, as are scenario expected tool trajectories. Unknown catalogs
+remain unresolved. A deliberately narrow
+business allowlist may omit MCP write functions; the platform never expands it
+automatically. Existing evaluator assets and results remain bound to their
+original review, and adding an MCP does not enable native tools.
+
+Legacy shared-Gateway Registry records stored short names such as `get_employee`.
+Catalog reads restore `hr-database___get_employee` only when shared-Gateway
+discovery verifies that exact callable name; missing or ambiguous names make
+the evaluation catalog unavailable without preventing ordinary attachment.
+This is a read-only projection and never widens a record to all tools of the
+Gateway. New default Registry descriptors retain the full names from discovery.
+
 **Conversation model.** `POST /api/assistant/architect/conversations` opens a
 conversation bound to `(workspace, owner principal)` and snapshots the workspace
 catalog: the registry-attachables + KB reads the create wizard performs, **plus** the
@@ -1836,7 +1862,8 @@ rather than cosmetic: the export bakes `DEFAULT_SYSTEM_PROMPT` as a constant, so
 ungrafted conversion would no-op A/B experiments exactly as the harness does, and a
 missing graft anchor therefore fails the conversion instead of shipping a silently
 non-A/B-able agent. The factory anchor accepts the CLI's zero-argument form when
-Memory and Skills are disabled, the session/user form, and the session/user/Skills
+Memory and Skills are disabled, the Skills-only form when Memory is disabled,
+the session/user form, and the session/user/Skills
 form. Tool-free exports can carry an unused gateway-client scaffold; only that
 inert case skips the gateway grafts, while configured or constructed clients must
 still pass their anchors. The emitted `zip_runtime` spec carries the harness's gateway

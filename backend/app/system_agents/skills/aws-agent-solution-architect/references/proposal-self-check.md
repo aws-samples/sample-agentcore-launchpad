@@ -115,6 +115,12 @@ as a whole — after the member has already read and approved the design.
     Native Harness `shell` / `file_operations` must first be selected in `native_tools`
     and disclosed for review; they are off by default. Evaluation rules cannot grant
     runtime access. Tool names cannot enforce read-only shell commands.
+  - Required `tool_count min > 0` and nonempty `tool_sequence` names must also
+    belong to the selected runtime catalog. After MCP preparation changes, review
+    scenarios, expected trajectories and rules on the new proposal revision; never
+    broaden the allowlist to every function of a newly selected MCP.
+  - Scenario `expected_trajectory` must use the same selected runtime catalog,
+    including the Gateway target prefix. Empty trajectories remain unspecified.
   - `output_contains` / `output_not_contains` / `output_exact` → `text` (ONE literal,
     non-empty) + optional `case_sensitive`. Several literals = several checks, and all
     must pass; "any of these phrases" cannot be a rule — make it a judge or an assertion.

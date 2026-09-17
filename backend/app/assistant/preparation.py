@@ -55,11 +55,13 @@ class SelectionRequest(BaseModel):
     expected_revision: int = Field(ge=0, strict=True)
     knowledge_bases: list[proposal.Key] = Field(max_length=10)
     skills: list[proposal.Key] = Field(max_length=10)
+    # Older clients only edit KB/Skill selections. Omission must not detach MCPs.
+    tools: list[proposal.Key] | None = Field(default=None, max_length=20)
 
     @model_validator(mode="after")
     def unique_keys(self) -> "SelectionRequest":
-        for field in ("knowledge_bases", "skills"):
-            keys = getattr(self, field)
+        for field in ("knowledge_bases", "skills", "tools"):
+            keys = getattr(self, field) or []
             if len(keys) != len(set(keys)):
                 raise ValueError(f"{field} must not repeat an entry")
         return self
@@ -102,7 +104,8 @@ def extract(text: str) -> tuple[list[dict[str, Any]] | None, list[str]]:
 def view(db: Session, row: AssistantConversation) -> dict[str, Any]:
     state = row.preparation or {}
     kbs, skills = state.get("knowledge_bases", []), state.get("skills", [])
-    if not state.get("selection_set"):
+    tools = state.get("tools", [])
+    if not state.get("selection_set") or not state.get("tools_selection_set"):
         latest = (
             db.query(AssistantProposal)
             .filter(AssistantProposal.conversation_id == row.id,
@@ -112,10 +115,14 @@ def view(db: Session, row: AssistantConversation) -> dict[str, Any]:
             .first()
         )
         if latest is not None and not latest.validation_errors:
-            kbs = latest.content.get("knowledge_bases") or []
-            skills = latest.content.get("skills") or []
+            if not state.get("selection_set"):
+                kbs = latest.content.get("knowledge_bases") or []
+                skills = latest.content.get("skills") or []
+            if not state.get("tools_selection_set"):
+                tools = latest.content.get("tools") or []
     return {"revision": state.get("revision", 0), "knowledge_bases": list(kbs),
-            "skills": list(skills), "requirements": state.get("requirements") or []}
+            "skills": list(skills), "tools": list(tools),
+            "requirements": state.get("requirements") or []}
 
 
 def require_idle(row: AssistantConversation, *, token: str | None = None) -> None:
@@ -173,21 +180,27 @@ def revise_latest(db: Session, row: AssistantConversation, created_by: str) -> N
     latest = service.latest_proposal(db, row.id)
     if latest is None or latest.status not in ("draft", "approved", "invalid"):
         return
-    # Resource preparation can repair a proposal whose shape was valid but whose
-    # references stopped resolving. Malformed proposals still need an explicit edit.
-    parsed, _ = proposal.parse_content(latest.content)
-    if parsed is None:
+    # Check shape without rejecting old capability conflicts: applying the new
+    # selections below can repair them (for example, removing an MCP from a
+    # zero-call proposal). The merged content still receives full validation.
+    try:
+        proposal.ProposalContent.model_validate(latest.content)
+    except ValidationError:
         return
     selected = view(db, row)
     raw = {**latest.content, "knowledge_bases": selected["knowledge_bases"],
-           "skills": selected["skills"]}
+           "skills": selected["skills"], "tools": selected["tools"]}
     content, display, _errors = proposal.validate(raw, row.catalog or {})
     bindings = proposal.resource_bindings(content, row.catalog or {}) if content else None
     if proposal.revision_hash(display, bindings) == latest.content_hash:
         return
     # record_proposal also preserves failures as an explicitly invalid new revision.
+    tools_selection_set = bool((row.preparation or {}).get("tools_selection_set"))
     service.record_proposal(db, row.id, row.catalog or {}, row.workspace_id, raw,
                             source="member", created_by=created_by)
+    # Refreshes and old-client KB/Skill saves create member revisions, but are not
+    # explicit MCP edits. Preserve inheritance until tools are actually selected.
+    row.preparation = {**(row.preparation or {}), "tools_selection_set": tools_selection_set}
 
 
 def save_selection(
@@ -200,11 +213,12 @@ def save_selection(
     check_revision(row, request.expected_revision)
     cid, principal = row.id, principal_of(identity)
     sources = list(row.preparation_sources or [])
+    selected_tools = request.tools if request.tools is not None else view(db, row)["tools"]
     catalog = live_catalog(workspace, sources)  # no write lock across AWS reads
     # Reuse the exact Harness mount contract; no invented paths or gateway provisioning.
     candidate = proposal.ProposalContent(
         name="prepared-agent", system_prompt="Resource preparation",
-        knowledge_bases=request.knowledge_bases, skills=request.skills,
+        knowledge_bases=request.knowledge_bases, skills=request.skills, tools=selected_tools,
     )
     errors = proposal.reference_errors(candidate, catalog)
     if errors:
@@ -216,9 +230,12 @@ def save_selection(
         require_idle(row)
         check_revision(row, request.expected_revision)
         state = view(db, row)
-        row.preparation = {**state, "selection_set": True,
+        row.preparation = {**(row.preparation or {}), **state, "selection_set": True,
+                           "tools_selection_set": request.tools is not None
+                           or bool((row.preparation or {}).get("tools_selection_set")),
                            "revision": state["revision"] + 1,
-                           "knowledge_bases": request.knowledge_bases, "skills": request.skills}
+                           "knowledge_bases": request.knowledge_bases, "skills": request.skills,
+                           "tools": selected_tools}
         row.catalog = catalog
         revise_latest(db, row, identity.username)
         db.commit()
@@ -323,7 +340,8 @@ def import_skills(
                 )
         added = [r["key"] for r in results if r["ok"] and r["key"] in readable]
         state["skills"] = list(dict.fromkeys(state["skills"] + added))
-        row.preparation = {**state, "selection_set": True, "revision": state["revision"] + 1}
+        row.preparation = {**(row.preparation or {}), **state,
+                           "selection_set": True, "revision": state["revision"] + 1}
         row.catalog = catalog
         revise_latest(db, row, identity.username)
         row.preparation_token = None
@@ -344,7 +362,7 @@ def context(row: AssistantConversation) -> str:
     state = row.preparation or {}
     db = object_session(row)
     selected = view(db, row) if db is not None else state
-    values = {k: selected.get(k, []) for k in ("knowledge_bases", "skills")}
+    values = {k: selected.get(k, []) for k in ("knowledge_bases", "skills", "tools")}
     if not state.get("selection_set"):
         if not any(values.values()):
             return ""
@@ -355,8 +373,11 @@ def context(row: AssistantConversation) -> str:
         )
     return (
         "\n\n## Member-selected preparation resources\n"
-        "These are the member's current explicit selections. Preserve these exact lists "
+        "These are the member's current resource selections. Preserve the explicit lists "
         "in every proposal. Discuss changes and ask the member to update the preparation "
         "panel; never silently drop or replace a selected resource.\n"
+        + ("MCP tools are explicitly selected, including an empty list.\n"
+           if state.get("tools_selection_set")
+           else "MCP tools inherit the latest valid proposal; change them only on request.\n")
         + json.dumps(values, ensure_ascii=False)
     )

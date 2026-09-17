@@ -6,13 +6,17 @@ contribute names; observed calls cannot expand this catalog.
 """
 
 import re
-from typing import Any
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from app.core.errors import AppError
 from app.harness_tool_access import selected_native_tools
 from app.services import kb_gateway, mcp_client
+
+if TYPE_CHECKING:
+    from app.assistant.evaluation_plan import Scenario
 
 MAX_TOOL_PAGES = 5
 MAX_TOOLS = 250
@@ -93,13 +97,37 @@ def support_tool_names(
 
 def rule_catalog_errors(
     evaluators: list[Any], content: dict[str, Any], catalog: dict[str, Any],
+    *, scenarios: Iterable["Scenario"] = (),
 ) -> list[str]:
-    """Check literal positive allowlists against selected catalog capabilities."""
-    allowlists = [
-        (entry.key, check) for entry in evaluators if entry.kind == "code"
-        for check in entry.rules.checks if check.type == "tool_set" and check.allowed
-    ]
-    if not allowlists:
+    """Check positive rules and scenario trajectories against selected callables.
+
+    A mounted MCP can expose both reads and writes: narrow allowlists and named
+    prohibitions remain valid. Never broaden rules to all advertised functions.
+    Scenarios are the runnable plan inputs; blocked golden tests are excluded.
+    A nonempty trajectory is an expectation regardless of which evaluator uses it.
+    """
+    positive_rules: list[tuple[str, list[str], bool]] = []
+    for entry in evaluators:
+        if entry.kind != "code":
+            continue
+        for check in entry.rules.checks:
+            names = (
+                check.allowed if check.type == "tool_set"
+                else check.tools if check.type == "tool_sequence"
+                else [check.tool] if check.type == "tool_count" and check.tool
+                and (check.min or 0) > 0
+                else []
+            )
+            if names:
+                positive_rules.append((
+                    f"evaluators.{entry.key}.rules.{check.id}", names, check.type == "tool_set",
+                ))
+    positive_rules.extend(
+        (f"scenarios.{scenario.scenario_id}.expected_trajectory",
+         scenario.expected_trajectory, False)
+        for scenario in scenarios if scenario.expected_trajectory
+    )
+    if not positive_rules:
         return []
     known = support_tool_names(content, catalog)
     if content.get("method", "harness") == "harness":
@@ -120,19 +148,23 @@ def rule_catalog_errors(
         ):
             missing.append(f"knowledge_base:{ref}")
     errors = []
-    for key, check in allowlists:
-        prefix = f"evaluators.{key}.rules.{check.id}"
+    for prefix, names, is_allowlist in positive_rules:
         if missing:
             errors.append(
                 f"{prefix}: runtime tool catalog unavailable for {', '.join(missing)}; "
                 "refresh the conversation catalog and review the exact callable names"
             )
             continue
-        unknown = sorted(set(check.allowed) - known)
-        omitted = sorted(support_tool_names(content, catalog) - set(check.allowed))
+        unknown = sorted({name for name in names
+                          if name not in known or name.startswith(SELECTOR_PREFIXES)})
+        omitted = (
+            sorted(support_tool_names(content, catalog) - set(names))
+            if is_allowlist else []
+        )
         if unknown:
+            field = "allowed" if is_allowlist else "required tools"
             errors.append(
-                f"{prefix}: allowed contains tools not in the selected runtime catalog: "
+                f"{prefix}: {field} contains tools not in the selected runtime catalog: "
                 f"{unknown}; use exact callable names, not attachment keys"
             )
         if omitted:
