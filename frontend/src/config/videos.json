@@ -4,30 +4,30 @@
     {
       "id": "architect-assistant",
       "title": {
-        "en": "Architect assistant: from requirements to A/B testing",
-        "zh-CN": "架构助手：从需求到 A/B 实验"
+        "en": "Architect assistant: prepare resources and create a DJI drone assistant",
+        "zh-CN": "架构助手：准备知识库与 Skill，创建无人机助手"
       },
       "description": {
-        "en": "Follow an elder-care AI application from a new conversation through architecture, deployment, evaluation, and a complete configuration-bundle A/B experiment. Includes real scores, trace investigation, and resource cleanup.",
-        "zh-CN": "以老人陪伴 AI 应用为例，从新建会话、梳理需求到方案部署、一键评估，再完成一次配置包 A/B 实验。包含真实评分、追踪排查、实验结论与资源清理。"
+        "en": "Operate the updated creation preparation panel in a fresh DJI drone assistant example. Select the existing DJI-drones knowledge base, register and approve a manual-answering Skill, review and deploy the proposal, ask real questions, and run six evaluation scenarios producing 68 judgments. Records the evaluator-limit correction and an actual Runtime conversion failure; no A/B experiment was run.",
+        "zh-CN": "以新建 DJI 无人机产品使用助手为例，实录新版创建准备面板：选择 DJI-drones 知识库，注册并审批手册问答 Skill，返回保存资源选择，审阅并部署方案，进行两款机型的真实问答，再运行六场景评估并解读 68 条评审记录。包含评估器去重和本次 Runtime 转换失败，未执行 A/B 实验。"
       },
-      "publishedAt": "2026-09-16",
-      "durationSeconds": 312.821,
+      "publishedAt": "2026-09-17",
+      "durationSeconds": 578.021333,
       "language": "zh-CN",
-      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260916/poster.jpg",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-drones/poster.jpg",
       "sources": [
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260916/architect-assistant.zh-CN.mp4",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-drones/architect-assistant.zh-CN.mp4",
           "type": "video/mp4"
         },
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260916/architect-assistant.zh-CN.webm",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-drones/architect-assistant.zh-CN.webm",
           "type": "video/webm"
         }
       ],
       "captions": [
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260916/architect-assistant.zh-CN.vtt",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-drones/architect-assistant.zh-CN.vtt",
           "language": "zh-CN",
           "label": "简体中文"
         }
@@ -36,169 +36,197 @@
         {
           "startSeconds": 0,
           "title": {
-            "en": "From requirements to a validated architecture",
-            "zh-CN": "AgentCore LaunchPad 架构助手从需求到可验证的方案"
+            "en": "Create a DJI drone usage assistant",
+            "zh-CN": "架构助手：创建无人机产品使用助手"
           }
         },
         {
-          "startSeconds": 16.4,
+          "startSeconds": 15,
           "title": {
-            "en": "Start a conversation and enter requirements",
-            "zh-CN": "新建会话并输入需求"
+            "en": "Start a new conversation",
+            "zh-CN": "新建会话，打开创建准备"
           }
         },
         {
-          "startSeconds": 26.7,
+          "startSeconds": 34,
           "title": {
-            "en": "Open an existing elder-care application",
-            "zh-CN": "打开已有的老人陪伴案例"
+            "en": "Describe users, products and scope",
+            "zh-CN": "说明产品、用户和回答边界"
           }
         },
         {
-          "startSeconds": 39.6,
+          "startSeconds": 55,
           "title": {
-            "en": "Clarify requirements through conversation",
-            "zh-CN": "用对话澄清需求"
+            "en": "Review preparation requirements",
+            "zh-CN": "把缺少的准备项放到右侧"
           }
         },
         {
-          "startSeconds": 51.7,
+          "startSeconds": 73,
           "title": {
-            "en": "Map launch obstacles with a fishbone diagram",
-            "zh-CN": "用鱼骨图梳理上线障碍"
+            "en": "Select DJI-drones and inspect indexing",
+            "zh-CN": "选择 DJI-drones 并核对索引"
           }
         },
         {
-          "startSeconds": 64.5,
+          "startSeconds": 94,
           "title": {
-            "en": "Turn obstacles into golden tests",
-            "zh-CN": "把障碍转成黄金测试"
+            "en": "Open Skill registration from preparation",
+            "zh-CN": "从准备面板进入 Skill 注册"
           }
         },
         {
-          "startSeconds": 78.1,
+          "startSeconds": 109,
           "title": {
-            "en": "Review the model and system prompt",
-            "zh-CN": "审阅模型与系统提示词"
+            "en": "Upload the prepared manual-answering Skill",
+            "zh-CN": "上传预先编写的手册问答 Skill"
           }
         },
         {
-          "startSeconds": 91.4,
+          "startSeconds": 130,
           "title": {
-            "en": "Approve and deploy the agent",
-            "zh-CN": "批准后，进入部署流程"
+            "en": "Submit and approve the Skill",
+            "zh-CN": "提交并审批 Skill"
           }
         },
         {
-          "startSeconds": 101.7,
+          "startSeconds": 151,
           "title": {
-            "en": "Generate evaluation assets",
-            "zh-CN": "生成可执行的评估资产"
+            "en": "Refresh and select the new Skill",
+            "zh-CN": "返回并选择新的 Skill"
           }
         },
         {
-          "startSeconds": 114.9,
+          "startSeconds": 171,
           "title": {
-            "en": "Move from evaluation to configuration A/B testing",
-            "zh-CN": "从评估走向配置包 A/B"
+            "en": "Review optional MCP resources",
+            "zh-CN": "查看 MCP 资源与当前选择"
           }
         },
         {
-          "startSeconds": 126.3,
+          "startSeconds": 189,
           "title": {
-            "en": "Create a Runtime twin",
-            "zh-CN": "创建 Runtime 孪生"
+            "en": "Confirm requirements, resources and the initial scope",
+            "zh-CN": "确认需求、资源和首版范围"
           }
         },
         {
-          "startSeconds": 138.9,
+          "startSeconds": 213,
           "title": {
-            "en": "Switch operations to the Runtime twin",
-            "zh-CN": "让孪生成为操作目标"
+            "en": "Review requirements and launch barriers",
+            "zh-CN": "从需求基线看上线障碍"
           }
         },
         {
-          "startSeconds": 150.6,
+          "startSeconds": 232,
           "title": {
-            "en": "Establish a baseline for the twin",
-            "zh-CN": "为孪生建立基线"
+            "en": "Turn requirements into six golden tests",
+            "zh-CN": "把要求转成六个黄金测试"
           }
         },
         {
-          "startSeconds": 163.2,
+          "startSeconds": 252,
           "title": {
-            "en": "Inspect baseline scores and traces",
-            "zh-CN": "核对基线结果与追踪"
+            "en": "Review exact bindings and the system prompt",
+            "zh-CN": "核对将要部署的资源和提示词"
           }
         },
         {
-          "startSeconds": 183.2,
+          "startSeconds": 273,
           "title": {
-            "en": "Open an experiment with the baseline",
-            "zh-CN": "带着基线打开实验"
+            "en": "Approve the reviewed revision and deploy",
+            "zh-CN": "批准当前修订并开始部署"
           }
         },
         {
-          "startSeconds": 196.2,
+          "startSeconds": 296,
           "title": {
-            "en": "Generate recommendations from baseline evidence",
-            "zh-CN": "从基线证据生成建议"
+            "en": "Inspect the deployment and open Chat",
+            "zh-CN": "查看部署结果并进入对话"
           }
         },
         {
-          "startSeconds": 209.5,
+          "startSeconds": 314,
           "title": {
-            "en": "Review the candidate prompt",
-            "zh-CN": "审阅候选提示词"
+            "en": "Ask about Mavic 4 Pro setup",
+            "zh-CN": "向 Mavic 4 Pro 助手提问"
           }
         },
         {
-          "startSeconds": 225.4,
+          "startSeconds": 333,
           "title": {
-            "en": "Create the A and B configuration bundles",
-            "zh-CN": "固化 A / B 配置包"
+            "en": "Inspect Skill calls, retrieval and citations",
+            "zh-CN": "核对 Skill、检索和手册引用"
           }
         },
         {
-          "startSeconds": 237.2,
+          "startSeconds": 354,
           "title": {
-            "en": "Choose shared evaluators",
-            "zh-CN": "设置两组共同的评估器"
+            "en": "Ask about a different drone model",
+            "zh-CN": "切换到另一款机型"
           }
         },
         {
-          "startSeconds": 248.9,
+          "startSeconds": 373,
           "title": {
-            "en": "Start a 50/50 experiment",
-            "zh-CN": "启动 50/50 对照实验"
+            "en": "Inspect the Lito X1 answer and references",
+            "zh-CN": "核对 Lito X1 的资料与回答"
           }
         },
         {
-          "startSeconds": 260.9,
+          "startSeconds": 392,
           "title": {
-            "en": "Replay golden scenarios and collect scores",
-            "zh-CN": "回放黄金集并收集评分"
+            "en": "Prepare an evaluation plan from the proposal",
+            "zh-CN": "从当前方案准备评估计划"
           }
         },
         {
-          "startSeconds": 273.2,
+          "startSeconds": 413,
           "title": {
-            "en": "Read the experiment verdict",
-            "zh-CN": "读取实验结论"
+            "en": "Review and remove overlapping checks",
+            "zh-CN": "审阅并去掉重复检查"
           }
         },
         {
-          "startSeconds": 288.3,
+          "startSeconds": 436,
           "title": {
-            "en": "Finish the experiment and clean up resources",
-            "zh-CN": "结束实验并清理资源"
+            "en": "Approve evaluation asset creation",
+            "zh-CN": "明确批准评估资产创建"
           }
         },
         {
-          "startSeconds": 302.1,
+          "startSeconds": 461,
           "title": {
-            "en": "From design to a completed experiment",
-            "zh-CN": "从设计走到一次完整实验"
+            "en": "Start the first six-scenario evaluation",
+            "zh-CN": "启动六场景首次评估"
+          }
+        },
+        {
+          "startSeconds": 487,
+          "title": {
+            "en": "Inspect the actual Runtime conversion outcome",
+            "zh-CN": "检查 Runtime 转换的实际结果"
+          }
+        },
+        {
+          "startSeconds": 513,
+          "title": {
+            "en": "Read the results of this evaluation",
+            "zh-CN": "读取本次评估的真实结果"
+          }
+        },
+        {
+          "startSeconds": 534,
+          "title": {
+            "en": "Use a judgment explanation to guide iteration",
+            "zh-CN": "从评分解释找到迭代方向"
+          }
+        },
+        {
+          "startSeconds": 557,
+          "title": {
+            "en": "Keep the resources, proposal and evaluation evidence",
+            "zh-CN": "保留资料、方案与验证证据"
           }
         }
       ]
@@ -804,6 +832,512 @@
           "title": {
             "en": "Complete an evidence-based investigation",
             "zh-CN": "完成一次有证据的排查"
+          }
+        }
+      ]
+    },
+    {
+      "id": "evaluation-datasets",
+      "title": {
+        "en": "09-01 Datasets",
+        "zh-CN": "09-01 数据集：把测试要求写成可复用的场景"
+      },
+      "description": {
+        "en": "Real AgentCore Launchpad Evaluation tutorial. Open datasets from Evaluation; Author turns and ground truth; Import prepared scenarios; Review saved scenarios. Mandarin narration, subtitles and chapters.",
+        "zh-CN": "编写输入、轮次和判定依据；导入 JSON，保存本地数据集；同步云端并发布固定版本；在评估中选择数据集。包含真实界面操作、云扬解说与中文字幕。"
+      },
+      "publishedAt": "2026-09-16",
+      "durationSeconds": 134.921333,
+      "language": "zh-CN",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-datasets/20260916/poster.jpg",
+      "sources": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-datasets/20260916/evaluation-datasets.zh-CN.mp4",
+          "type": "video/mp4"
+        },
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-datasets/20260916/evaluation-datasets.zh-CN.webm",
+          "type": "video/webm"
+        }
+      ],
+      "captions": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-datasets/20260916/evaluation-datasets.zh-CN.vtt",
+          "language": "zh-CN",
+          "label": "简体中文"
+        }
+      ],
+      "chapters": [
+        {
+          "startSeconds": 0,
+          "title": {
+            "en": "From test requirements to evaluation inputs",
+            "zh-CN": "数据集：从测试要求到评估输入"
+          }
+        },
+        {
+          "startSeconds": 12.6,
+          "title": {
+            "en": "Open datasets from Evaluation",
+            "zh-CN": "从评估进入数据集"
+          }
+        },
+        {
+          "startSeconds": 27.2,
+          "title": {
+            "en": "Author turns and ground truth",
+            "zh-CN": "编写多轮输入与真值"
+          }
+        },
+        {
+          "startSeconds": 46.2,
+          "title": {
+            "en": "Import prepared scenarios",
+            "zh-CN": "导入准备好的测试场景"
+          }
+        },
+        {
+          "startSeconds": 60.2,
+          "title": {
+            "en": "Review saved scenarios",
+            "zh-CN": "核对保存后的场景"
+          }
+        },
+        {
+          "startSeconds": 75,
+          "title": {
+            "en": "Synchronize the local dataset to AWS",
+            "zh-CN": "把本地数据同步到 AWS"
+          }
+        },
+        {
+          "startSeconds": 89.6,
+          "title": {
+            "en": "Publish an immutable dataset version",
+            "zh-CN": "发布不可变的数据集版本"
+          }
+        },
+        {
+          "startSeconds": 103.6,
+          "title": {
+            "en": "Select a cloud version for evaluation",
+            "zh-CN": "在新建评估中选择云端版本"
+          }
+        },
+        {
+          "startSeconds": 117.9,
+          "title": {
+            "en": "Preview simulated personas",
+            "zh-CN": "认识模拟用户数据集"
+          }
+        }
+      ]
+    },
+    {
+      "id": "evaluation-runs",
+      "title": {
+        "en": "09-02 New evaluations",
+        "zh-CN": "09-02 新建评估：从配置范围到逐条解释结果"
+      },
+      "description": {
+        "en": "Submit a real dataset run, diagnose its telemetry-readiness failure, then explicitly review a separate existing earnings-assistant run with seven sessions and 63 judgments. Learn scopes, evaluators, explanations, and trace navigation.",
+        "zh-CN": "实际提交数据集运行，定位本次遥测就绪失败，再明确切换到已有财报助手运行，查看 7 个会话和 63 条评审记录。讲解评估范围、评估器、评分解释与追踪跳转。"
+      },
+      "publishedAt": "2026-09-16",
+      "durationSeconds": 156.521333,
+      "language": "zh-CN",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-runs/20260916/poster.jpg",
+      "sources": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-runs/20260916/evaluation-runs.zh-CN.mp4",
+          "type": "video/mp4"
+        },
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-runs/20260916/evaluation-runs.zh-CN.webm",
+          "type": "video/webm"
+        }
+      ],
+      "captions": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-runs/20260916/evaluation-runs.zh-CN.vtt",
+          "language": "zh-CN",
+          "label": "简体中文"
+        }
+      ],
+      "chapters": [
+        {
+          "startSeconds": 0,
+          "title": {
+            "en": "Create an evaluation with reviewable results",
+            "zh-CN": "新建评估：让结果可以复核"
+          }
+        },
+        {
+          "startSeconds": 15.5,
+          "title": {
+            "en": "Select an agent and dataset",
+            "zh-CN": "选择 Agent 与数据集"
+          }
+        },
+        {
+          "startSeconds": 30.5,
+          "title": {
+            "en": "Distinguish replay from a time window",
+            "zh-CN": "区分数据集与时间窗口"
+          }
+        },
+        {
+          "startSeconds": 45.5,
+          "title": {
+            "en": "Choose evaluators and mode",
+            "zh-CN": "选择评估器并检查模式"
+          }
+        },
+        {
+          "startSeconds": 60.5,
+          "title": {
+            "en": "Submit a real evaluation run",
+            "zh-CN": "提交一次真实运行"
+          }
+        },
+        {
+          "startSeconds": 78,
+          "title": {
+            "en": "Identify a telemetry-readiness failure",
+            "zh-CN": "识别遥测准备阶段的失败"
+          }
+        },
+        {
+          "startSeconds": 94.1,
+          "title": {
+            "en": "Review aggregate scores from an existing run",
+            "zh-CN": "回顾已有运行的汇总分数"
+          }
+        },
+        {
+          "startSeconds": 112.5,
+          "title": {
+            "en": "Expand per-session judgments",
+            "zh-CN": "展开逐会话评分解释"
+          }
+        },
+        {
+          "startSeconds": 127.8,
+          "title": {
+            "en": "Follow a result to its execution trace",
+            "zh-CN": "从评分定位执行追踪"
+          }
+        },
+        {
+          "startSeconds": 142.3,
+          "title": {
+            "en": "Use the run as a baseline",
+            "zh-CN": "从一次运行建立迭代基线"
+          }
+        }
+      ]
+    },
+    {
+      "id": "evaluation-ab",
+      "title": {
+        "en": "09-03 A/B experiments",
+        "zh-CN": "09-03 A/B 实验：用同一批证据比较两个配置"
+      },
+      "description": {
+        "en": "Real AgentCore Launchpad Evaluation tutorial. Distinguish configuration and target experiments; Review creation and evidence readiness; Generate recommendations from baseline evidence; Review the candidate system prompt. Mandarin narration, subtitles and chapters.",
+        "zh-CN": "确认基线与实验类型；审阅建议，固化 A/B 配置；分配流量并收集在线评分；根据证据判断并清理资源。包含真实界面操作、云扬解说与中文字幕。A/B 流程使用已完成的真实实验录像，展示无显著差异与资源清理。"
+      },
+      "publishedAt": "2026-09-16",
+      "durationSeconds": 164.021333,
+      "language": "zh-CN",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-ab/20260916/poster.jpg",
+      "sources": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-ab/20260916/evaluation-ab.zh-CN.mp4",
+          "type": "video/mp4"
+        },
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-ab/20260916/evaluation-ab.zh-CN.webm",
+          "type": "video/webm"
+        }
+      ],
+      "captions": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-ab/20260916/evaluation-ab.zh-CN.vtt",
+          "language": "zh-CN",
+          "label": "简体中文"
+        }
+      ],
+      "chapters": [
+        {
+          "startSeconds": 0,
+          "title": {
+            "en": "Validate the effect of a configuration change",
+            "zh-CN": "A/B 实验：验证配置改变的效果"
+          }
+        },
+        {
+          "startSeconds": 13.2,
+          "title": {
+            "en": "Distinguish configuration and target experiments",
+            "zh-CN": "区分配置包与目标 A/B"
+          }
+        },
+        {
+          "startSeconds": 28.2,
+          "title": {
+            "en": "Review creation and evidence readiness",
+            "zh-CN": "检查新建入口和数据就绪度"
+          }
+        },
+        {
+          "startSeconds": 43.5,
+          "title": {
+            "en": "Generate recommendations from baseline evidence",
+            "zh-CN": "从基线证据生成建议"
+          }
+        },
+        {
+          "startSeconds": 56.8,
+          "title": {
+            "en": "Review the candidate system prompt",
+            "zh-CN": "审阅候选提示词"
+          }
+        },
+        {
+          "startSeconds": 72.7,
+          "title": {
+            "en": "Create the control and treatment bundles",
+            "zh-CN": "固化 A / B 配置包"
+          }
+        },
+        {
+          "startSeconds": 84.5,
+          "title": {
+            "en": "Choose shared online evaluators",
+            "zh-CN": "设置两组共同的评估器"
+          }
+        },
+        {
+          "startSeconds": 96.2,
+          "title": {
+            "en": "Start a 50/50 experiment",
+            "zh-CN": "启动 50/50 对照实验"
+          }
+        },
+        {
+          "startSeconds": 108.2,
+          "title": {
+            "en": "Replay inputs and collect online scores",
+            "zh-CN": "回放黄金集并收集评分"
+          }
+        },
+        {
+          "startSeconds": 120.5,
+          "title": {
+            "en": "Interpret the experimental verdict",
+            "zh-CN": "读取实验结论"
+          }
+        },
+        {
+          "startSeconds": 135.6,
+          "title": {
+            "en": "Clean up temporary experiment resources",
+            "zh-CN": "结束实验并清理资源"
+          }
+        },
+        {
+          "startSeconds": 149.4,
+          "title": {
+            "en": "Review the retained experiment record",
+            "zh-CN": "回到实验记录复核结论"
+          }
+        }
+      ]
+    },
+    {
+      "id": "evaluation-online",
+      "title": {
+        "en": "09-04 Online evaluation",
+        "zh-CN": "09-04 在线评估：持续抽样，观察真实会话质量"
+      },
+      "description": {
+        "en": "Create a temporary online configuration, collect actual scores for three sessions, interpret six successful judgments and one evaluation error, preview insights, then pause and delete the temporary configuration.",
+        "zh-CN": "创建临时在线配置，采集三个真实会话的评分，解读六个有效分数与一条评估错误，预览洞察模式，最后暂停并删除本次临时配置。"
+      },
+      "publishedAt": "2026-09-16",
+      "durationSeconds": 148.621333,
+      "language": "zh-CN",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-online/20260916/poster.jpg",
+      "sources": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-online/20260916/evaluation-online.zh-CN.mp4",
+          "type": "video/mp4"
+        },
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-online/20260916/evaluation-online.zh-CN.webm",
+          "type": "video/webm"
+        }
+      ],
+      "captions": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-online/20260916/evaluation-online.zh-CN.vtt",
+          "language": "zh-CN",
+          "label": "简体中文"
+        }
+      ],
+      "chapters": [
+        {
+          "startSeconds": 0,
+          "title": {
+            "en": "Continuously evaluate sampled sessions",
+            "zh-CN": "在线评估：持续观察会话质量"
+          }
+        },
+        {
+          "startSeconds": 13.2,
+          "title": {
+            "en": "Identify ownership and execution status",
+            "zh-CN": "辨认配置的归属与状态"
+          }
+        },
+        {
+          "startSeconds": 28.2,
+          "title": {
+            "en": "Select a target and online evaluators",
+            "zh-CN": "选择目标和在线评分维度"
+          }
+        },
+        {
+          "startSeconds": 46.2,
+          "title": {
+            "en": "Set sampling and idle timeout",
+            "zh-CN": "设置抽样率和会话超时"
+          }
+        },
+        {
+          "startSeconds": 61.2,
+          "title": {
+            "en": "Create and enable the temporary configuration",
+            "zh-CN": "创建并启用临时配置"
+          }
+        },
+        {
+          "startSeconds": 76.6,
+          "title": {
+            "en": "Read the newly collected online scores",
+            "zh-CN": "读取本次在线评分"
+          }
+        },
+        {
+          "startSeconds": 93.3,
+          "title": {
+            "en": "Read judgments alongside evaluation errors",
+            "zh-CN": "结合评审理由与错误记录解读"
+          }
+        },
+        {
+          "startSeconds": 111.9,
+          "title": {
+            "en": "Preview insights and filtering",
+            "zh-CN": "预览洞察模式和过滤条件"
+          }
+        },
+        {
+          "startSeconds": 128.9,
+          "title": {
+            "en": "Pause and remove the temporary demo configuration",
+            "zh-CN": "暂停并清理本次演示配置"
+          }
+        }
+      ]
+    },
+    {
+      "id": "evaluation-evaluators",
+      "title": {
+        "en": "09-05 Evaluators",
+        "zh-CN": "09-05 评估器：把质量标准变成可执行的判断"
+      },
+      "description": {
+        "en": "Real AgentCore Launchpad Evaluation tutorial. Browse the catalog and evaluation levels; Inspect a managed evaluator definition; Draft an LLM judge prompt; Define a rating scale and reference input. Mandarin narration, subtitles and chapters.",
+        "zh-CN": "浏览目录和评估级别；设计 LLM 评审与评分量表；了解派生和代码评估器；在运行中选择合适的指标。包含真实界面操作、云扬解说与中文字幕。"
+      },
+      "publishedAt": "2026-09-16",
+      "durationSeconds": 121.121333,
+      "language": "zh-CN",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-evaluators/20260916/poster.jpg",
+      "sources": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-evaluators/20260916/evaluation-evaluators.zh-CN.mp4",
+          "type": "video/mp4"
+        },
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-evaluators/20260916/evaluation-evaluators.zh-CN.webm",
+          "type": "video/webm"
+        }
+      ],
+      "captions": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/evaluation-evaluators/20260916/evaluation-evaluators.zh-CN.vtt",
+          "language": "zh-CN",
+          "label": "简体中文"
+        }
+      ],
+      "chapters": [
+        {
+          "startSeconds": 0,
+          "title": {
+            "en": "Define what the evaluator should judge",
+            "zh-CN": "评估器：明确你要判断什么"
+          }
+        },
+        {
+          "startSeconds": 13.6,
+          "title": {
+            "en": "Browse the catalog and evaluation levels",
+            "zh-CN": "浏览目录与评估级别"
+          }
+        },
+        {
+          "startSeconds": 28.6,
+          "title": {
+            "en": "Inspect a managed evaluator definition",
+            "zh-CN": "查看内置评估器的定义"
+          }
+        },
+        {
+          "startSeconds": 42.8,
+          "title": {
+            "en": "Draft an LLM judge prompt",
+            "zh-CN": "编写模型评审提示词"
+          }
+        },
+        {
+          "startSeconds": 59.7,
+          "title": {
+            "en": "Define a rating scale and reference input",
+            "zh-CN": "定义评分量表与真值输入"
+          }
+        },
+        {
+          "startSeconds": 75.2,
+          "title": {
+            "en": "Derive a judge from an existing evaluator",
+            "zh-CN": "从已有评估器派生"
+          }
+        },
+        {
+          "startSeconds": 89.9,
+          "title": {
+            "en": "Inspect a code evaluator Lambda configuration",
+            "zh-CN": "查看代码评估器的 Lambda 配置"
+          }
+        },
+        {
+          "startSeconds": 105.1,
+          "title": {
+            "en": "Choose evaluators that match the run inputs",
+            "zh-CN": "在运行中选择与输入匹配的评估器"
           }
         }
       ]
