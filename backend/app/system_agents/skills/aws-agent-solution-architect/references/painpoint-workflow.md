@@ -88,8 +88,13 @@ Golden tests use structured fields: `id`, `input`, `preconditions`, `expected_to
 `expected_evidence`, `expected_response`, `forbidden_behavior`, `pass_criteria`,
 `source`, `evaluator_ids`, `evaluation_level`. `source` is `customer_pain_point` or
 `industry_assumption` only; `evaluation_level` contains only `session`, `trace`, `span`.
-Every test binds at least one evaluator; high-risk fact, authorization, parameter, write
-and idempotency tests bind a code-based evaluator and never only an LLM-as-a-judge.
+Every test binds at least one evaluator. Follow the Skill's "Choose scorers by evidence"
+guidance: semantic response requirements use a listed evaluator, scenario assertions or
+a suitable judge. `expected_response` may describe the desired meaning; it is not an
+instruction to compare literal strings. Only observable invariants or explicitly
+required / forbidden literals use code checks. High-risk cases add expert review and
+independent controls where available; missing evidence is a verification gap, not a
+reason to invent a code rule.
 
 ## D. Visibility and confirmation gate
 

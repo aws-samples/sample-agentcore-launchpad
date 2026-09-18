@@ -33,10 +33,14 @@ the full golden test set as a **table** — one row per test with `id`, `input`,
    session / trace / span level, input signal, scoring method, threshold, AWS
    implementation, owner and failure response;
 2. **Golden test → evaluator mapping** — per test the mandatory evaluators, blocking
-   condition and owner. High-risk facts, authorization, tool parameters, write
-   operations, idempotency and cost never rely on a judge alone; a code-based evaluator
-   is mandatory. Built-in AWS evaluator names are verified from official material when
-   writing; if unverifiable, mark the evaluator as custom.
+   condition and owner. Follow the Skill's "Choose scorers by evidence" guidance:
+   natural-language acceptance uses semantic evaluators / scenario assertions;
+   code checks cover only observable invariants or explicitly required / forbidden
+   literals. High-risk cases add expert review and independent controls where
+   available, without forcing prose requirements into code. Name unavailable evidence
+   and external verification obligations explicitly. Built-in AWS evaluator names are
+   verified from official material when writing; if unverifiable, mark the evaluator
+   as custom.
 
 Every section opens with a one-sentence conclusion; the body prefers decision tables,
 data flows and acceptance criteria over generic introductions.
@@ -68,6 +72,7 @@ data flows and acceptance criteria over generic introductions.
 - [ ] Current AWS capabilities, models, Regions and prices carry a source and a verification date
 - [ ] Security covers least privilege, encryption, secrets, audit, data boundaries, prompt injection and tool misuse
 - [ ] Evaluation covers session / trace / span, the three evidence layers, the golden set, offline gates and online drift
+- [ ] Scorer choice follows the evidence: no natural-language rubric is scored by literal code checks
 - [ ] Metrics have a measurement rule, data source, threshold rationale, frequency, owner and response
 - [ ] High-risk actions have confirmation, idempotency, rollback, human escalation or a circuit breaker
 - [ ] Cost assumptions can be recomputed; unverified numbers are labelled

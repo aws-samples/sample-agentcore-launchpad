@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.4.7
+version: 1.4.8
 ---
 
 # AWS Agent Solution Architect
@@ -176,6 +176,39 @@ fill a section.
 
 ## 4. Evaluation-first design
 
+### Choose scorers by evidence
+
+Natural-language acceptance criteria MUST be evaluated semantically: use a suitable
+listed evaluator, per-scenario `assertions` scored by the assertions judge, or a custom
+LLM-as-a-judge for a remaining domain-specific requirement. This includes factual
+correctness, manual-grounded steps, equivalent answers, refusals, escalation and false
+execution claims. A higher risk level or a desire for deterministic regression does not
+make these requirements suitable for code.
+
+Never score these criteria with `reference_response`, `output_contains`,
+`output_not_contains`, `output_exact`, or lists of keywords and fixed phrases. Code
+cannot establish that an answer satisfies a natural-language rubric. Splitting the
+rubric into smaller literals or rewriting it as a sample answer does not fix this.
+`reference_response` only checks whether the final answer contains the entire
+`expected_response` text, ignoring case by default; it does not compare meaning.
+
+For example, "Identify Lito X1 and give manual-supported pre-flight checks and observable
+results" is a rubric. Put its requirements into that scenario's `assertions`; a correct
+answer may use different words and formatting. A TRACE judge comparing a reference
+answer uses `{context}`, `{assistant_turn}` and `{expected_response}` and accepts
+semantically equivalent answers supported by the evidence. Do not add a duplicate judge
+when the listed evaluators or assertions judge already cover the requirement.
+
+Code checks are for directly observable invariants such as exact runtime tool names,
+call counts or ordered tool trajectories. Literal output checks are appropriate only
+when the acceptance contract explicitly requires or forbids that exact text, such as a
+fixed protocol marker or a known synthetic secret; they prove only its presence or
+absence. Structured values, authorization decisions and business side effects require
+their own observable evidence and a supported check. When that evidence or check is
+unavailable, record the external verification under `manual_tasks` and block tests that
+depend on it. High-risk semantic judgments need expert calibration and review, not a
+code evaluator added merely to fill the mapping.
+
 ### Read-only is not tool-free
 
 Inventory `tools`, `knowledge_bases` and `skills` together before defining a tool
@@ -267,8 +300,9 @@ Define "good" before building. Cover at least:
   candidates" with the trigger that would promote it. Human review is outside the count.
   "Use AgentCore Evaluations" alone is not a registry;
 - a **golden test → evaluator mapping**: every golden test binds at least one evaluator;
-  high-risk tests (facts, authorization, tool parameters, write operations, idempotency,
-  cost) also bind a code-based evaluator and never rely on a judge alone. Built-in AWS
+  choose the scorer by evidence as described above. For high-risk tests, supplement
+  semantic judges with expert review and independently verifiable controls where
+  available; bind code checks only to the mechanically observable parts. Built-in AWS
   evaluator names and availability are verified from official material at writing time;
   when they cannot be confirmed, recommend a custom evaluator and say so. In the
   Launchpad `evaluation_plan` this mapping is expressed the only way the platform can

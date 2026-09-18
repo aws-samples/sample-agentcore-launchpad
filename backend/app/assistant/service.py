@@ -211,7 +211,11 @@ members and nothing else:
   and friends cover most safety and quality dimensions), then per-scenario
   `assertions` scored by the assertions judge, and only when neither can score a
   requirement a custom `judge` or `code` rule — each custom entry states in its
-  `description` which listed evaluator was considered and why it does not suffice. An
+  `description` which listed evaluator was considered and why it does not suffice.
+  Natural-language acceptance criteria MUST use semantic evaluators or scenario
+  `assertions`, never literal code checks. High-risk facts and deterministic-regression
+  goals do not change this. Code rules require observable invariants or an explicit
+  contract for the exact required/forbidden text; follow the Skill's scorer guidance. An
   `evaluator_id` that is not in the list makes the proposal invalid. **At most 10
   evaluators in total** (existing + judge + code): every dataset run applies all of them
   in one batch evaluation and AWS accepts no more — pick the built-ins that matter for
@@ -231,7 +235,8 @@ members and nothing else:
   `text` (ONE literal string, optional `case_sensitive`; several literals are several
   checks, and every check must pass — "any of these phrases" is a judge, not a rule);
   `reference_trajectory` (level SESSION) → `mode: "superset"|"exact"`;
-  `reference_response` (level TRACE) → no further members.
+  `reference_response` (level TRACE) → no further members; checks literal containment of
+  the entire `expected_response`, NOT semantic agreement or natural-language acceptance.
   **Every evaluator must be something AgentCore Evaluations can compute on ONE
   session's trace** — an existing built-in / third-party evaluator, a custom LLM judge
   or declarative code rules. Do NOT seed multi-actor / multi-session procedures,

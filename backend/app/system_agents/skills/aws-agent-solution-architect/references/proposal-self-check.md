@@ -5,7 +5,9 @@ names, limits, cross-field rules). A block that fails is stored as an **invalid*
 revision: the member sees the errors, nothing can be approved, and the rejection is
 replayed to you on the next turn. You have no shell in this Harness, so this file IS the
 script: walk every check below, in order, against the JSON you are about to emit, and
-fix the block before emitting it. Every rule here is a rule the platform enforces.
+fix the block before emitting it. The platform validates shapes and routing; you must
+also review whether each scorer can judge the intended requirement. A valid schema
+does not prove that a code rule can evaluate natural-language acceptance criteria.
 
 ## 1. Block
 
@@ -55,6 +57,17 @@ as a whole — after the member has already read and approved the design.
       `description`. Harmfulness, toxicity, bias, PII, refusal, instruction following,
       helpfulness, relevance, conciseness, task completion → listed evaluators, never a
       custom judge.
+- [ ] **Natural-language acceptance uses semantic evaluation.** Apply the Skill's
+      "Choose scorers by evidence" guidance: domain requirements belong in scenario
+      `assertions` or a suitable judge, never in literal code checks. An
+      `expected_response` describing what a reply should accomplish is a rubric,
+      not text the answer must contain. Equivalent wording must remain acceptable.
+      High-risk facts and deterministic-regression goals do not justify a code scorer.
+- [ ] Every code rule identifies an observable invariant or an explicitly required /
+      forbidden literal. `reference_response` is allowed only for a contract requiring
+      that entire literal reference text in the output of every applicable turn.
+      If any scenario's reference needs interpretation, use semantic evaluation.
+      Do not turn semantic requirements into keyword lists to satisfy this check.
 - [ ] Before writing a tool constraint, inspect `tools`, `knowledge_bases` and `skills`
       together. `tools: []` does not mean the Harness is tool-free: KB retrieval and
       Skill loading/execution can still produce tool spans. Read-only means no
@@ -124,8 +137,10 @@ as a whole — after the member has already read and approved the design.
   - `output_contains` / `output_not_contains` / `output_exact` → `text` (ONE literal,
     non-empty) + optional `case_sensitive`. Several literals = several checks, and all
     must pass; "any of these phrases" cannot be a rule — make it a judge or an assertion.
+    These checks prove literal presence/absence/equality only, never semantic compliance.
   - `reference_trajectory` → level SESSION, `mode` `superset` | `exact`.
-  - `reference_response` → level TRACE, no further members.
+  - `reference_response` → level TRACE, no further members. Literal containment of the
+    entire `expected_response`, not semantic similarity or rubric satisfaction.
 - [ ] Every scenario: `scenario_id` (`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`, unique),
       `golden_test_id` (exists; one scenario per golden test; not also blocked),
       `turns` 1–20 of `{input (1–8,000), expected_response? (≤ 2,000)}`,
