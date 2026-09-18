@@ -190,6 +190,33 @@ def artifacts_excerpts(
     return "\n\n".join(blocks)
 
 
+def _chat_artifact_evidence(item: dict, result: dict) -> str:
+    """Bounded text evidence, including outputs that replaced seeded files."""
+    # LAUNCHPAD PATCH: a seeded report can be a task's required output. The
+    # rollout manifest records both new and modified files; excluding every
+    # input path would hide a correctly rewritten report from the judge.
+    produced = {
+        os.path.normpath(str(artifact["path"]))
+        for artifact in result.get("artifacts", [])
+        if isinstance(artifact, dict) and artifact.get("path")
+    }
+    excluded = {
+        os.path.normpath(str(name))
+        for name in (item.get("files") or {})
+    } - produced
+    work_dir = result.get("work_dir", "")
+    listing = artifacts_listing(work_dir)
+    # Keep prompt size bounded while allowing ordinary multi-section reports
+    # and their parser evidence to fit. Larger files remain explicitly marked.
+    excerpts = artifacts_excerpts(
+        work_dir, exclude_rel=excluded,
+        per_file_chars=16000, max_total_chars=64000,
+    )
+    if excerpts:
+        listing = f"{listing}\n\nContents of agent-produced text files:\n{excerpts}"
+    return listing
+
+
 def merge_scores(items: list[dict], rollout_results: list[dict], judge_fn) -> list[dict]:
     """Merge rollout results with judge verdicts; errored tasks skip the judge."""
     merged = []
@@ -205,12 +232,7 @@ def merge_scores(items: list[dict], rollout_results: list[dict], judge_fn) -> li
         elif result.get("error"):
             result.update({"hard": 0, "soft": 0.0, "judge_reason": ""})
         else:
-            work_dir = result.get("work_dir", "")
-            listing = artifacts_listing(work_dir)
-            excerpts = artifacts_excerpts(work_dir, exclude_rel=(item.get("files") or {}).keys())
-            if excerpts:
-                listing = (f"{listing}\n\n"
-                           f"Contents of agent-produced text files:\n{excerpts}")
+            listing = _chat_artifact_evidence(item, result)
             verdict = judge_fn(item, result.get("response", ""), listing)
             result.update(verdict)
         merged.append(result)
@@ -366,11 +388,7 @@ def _run_chat_judge(item: dict, result: dict, chat_judge) -> dict:
     ``evaluation_error`` fragments with ``score_valid=False`` -- never the
     legacy zero score a failed rubric would produce.
     """
-    work_dir = result.get("work_dir", "")
-    listing = artifacts_listing(work_dir)
-    excerpts = artifacts_excerpts(work_dir, exclude_rel=(item.get("files") or {}).keys())
-    if excerpts:
-        listing = f"{listing}\n\nContents of agent-produced text files:\n{excerpts}"
+    listing = _chat_artifact_evidence(item, result)
     try:
         verdict = chat_judge(item, result.get("response", ""), listing)
     except Exception as exc:  # noqa: BLE001 — the chat judge must never crash evaluate_rollouts

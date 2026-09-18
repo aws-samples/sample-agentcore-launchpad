@@ -110,6 +110,18 @@ report "Artifact MCP inventory 调用被取消" with zero evidence (live-reprodu
 2026-08-19). "approve" is codex's pre-approved mode; the server is required,
 networkless and bwrap-sandboxed, so the prompt protects nothing here.
 
+### 6. `skillopt/envs/skilleval/evaluator.py` — text-judge output evidence
+
+Both chat-judge entry points include modified seeded files when the rollout
+manifest identifies them as outputs. Previously, a task that rewrote a supplied
+report lost that report's body because every input path was excluded. Unchanged
+inputs remain excluded. Text evidence permits 16,000 characters per file and
+64,000 total (still at most eight files), with explicit truncation markers.
+This lets ordinary reports include their findings and next actions beyond the
+old 2,000-character preview. Scoring instructions and verdict parsing are unchanged.
+Markdown task outputs should use chat/auto judging; the binary artifact inspector
+does not support reading Markdown bodies.
+
 ## Known v1 limitations (deliberate)
 
 - ~~Chat judge only~~ (lifted 2026-08-18): the host provisions `bwrap` and the
