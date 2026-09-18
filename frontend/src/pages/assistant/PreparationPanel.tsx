@@ -221,7 +221,7 @@ export function PreparationPanel({
         <div className="assist-resource-lifecycle" data-testid="preparation-lifecycle" role="status">
           <strong>{t(locked ? "assistantPreparation.lockedTitle" : "assistantPreparation.beforeCreateTitle")}</strong>
           <p>{t(locked ? "assistantPreparation.lockedHint" : "assistantPreparation.beforeCreateHint")}</p>
-          {locked && <Link className="btn" to="/create" data-testid="preparation-edit-agent">
+          {locked && <Link className="btn" to="/agents" data-testid="preparation-edit-agent">
             {t("assistantPreparation.manageAgent")}
           </Link>}
         </div>

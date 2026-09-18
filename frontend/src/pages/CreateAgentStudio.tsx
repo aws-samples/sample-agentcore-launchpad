@@ -206,7 +206,7 @@ export function CreateAgentStudio() {
         if (cancelled) return;
         if (agent.method !== "studio") {
           toast(t("studio.toast.notStudioAgent"));
-          navigate("/create");
+          navigate("/agents");
           return;
         }
         setEditAgent(agent);
@@ -229,7 +229,7 @@ export function CreateAgentStudio() {
       .catch(() => {
         if (cancelled) return;
         toast(t("studio.toast.loadFailed"));
-        navigate("/create");
+        navigate("/agents");
       });
     return () => {
       cancelled = true;
@@ -423,7 +423,7 @@ export function CreateAgentStudio() {
           job={job}
           agentStatus={agentStatus}
           detailsMode={false}
-          onRestart={() => navigate("/create")}
+          onRestart={() => navigate("/agents")}
         />
         {agentStatus === "active" && (
           <>
@@ -433,7 +433,7 @@ export function CreateAgentStudio() {
                 <Link className="btn primary" to={`/chat?agent=${launch.agentId}`}>
                   {t("studio.published.openChat")} ▸
                 </Link>
-                <Link className="btn" to="/create">
+                <Link className="btn" to="/agents">
                   {t("studio.published.backToAgents")}
                 </Link>
               </div>
@@ -476,7 +476,7 @@ export function CreateAgentStudio() {
           flexWrap: "wrap",
         }}
       >
-        <Link className="btn" to="/create">
+        <Link className="btn" to="/agents">
           ◂ {t("studio.toolbar.agents")}
         </Link>
         {editing && (

@@ -513,7 +513,7 @@
       "details": "DETAILS",
       "delete": "DELETE",
       "remove": "REMOVE",
-      "empty": "No agents yet — create one above.",
+      "empty": "No agents yet — use “+ New Agent” to create one.",
       "deleted": "Agent deleted.",
       "confirmDeleteTitle": "Delete agent?",
       "confirmDelete": "This removes “{{name}}” and its AWS resource. This cannot be undone.",
@@ -4871,5 +4871,40 @@
     "evaluate": "5 · Evaluation",
     "experiment": "6 · A/B testing",
     "feedback": "7 · Production feedback"
+  },
+  "agents": {
+    "meta": "LIST · STATUS · RE-PUBLISH — CREATE ON ITS OWN PAGE",
+    "newAgent": "New Agent",
+    "importRuntime": "Import existing Runtime",
+    "breadcrumb": "Agent management breadcrumb",
+    "crumbNew": "New",
+    "crumbEdit": "Edit {{name}}",
+    "crumbDetail": "Details",
+    "noDetails": "“{{name}}” has no deployment to show.",
+    "stats": {
+      "total": "AGENTS",
+      "active": "RUNNING",
+      "deploying": "DEPLOYING",
+      "failed": "FAILED"
+    },
+    "empty": {
+      "title": "No agents yet",
+      "cta": "Create your first Agent"
+    },
+    "moreActions": "More actions for {{name}}",
+    "viewReason": "VIEW REASON",
+    "time": {
+      "justNow": "just now",
+      "minutes_one": "{{count}} min ago",
+      "minutes_other": "{{count}} min ago",
+      "hours_one": "{{count}} hour ago",
+      "hours_other": "{{count}} hours ago",
+      "days_one": "{{count}} day ago",
+      "days_other": "{{count}} days ago"
+    },
+    "detail": {
+      "chat": "OPEN CHAT",
+      "observability": "OBSERVABILITY"
+    }
   }
 }

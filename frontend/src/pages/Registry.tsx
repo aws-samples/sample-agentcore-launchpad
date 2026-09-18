@@ -409,7 +409,7 @@ export function Registry() {
 
   const openInWizard = (record: RegistryRecord) => {
     if (record.type === "MCP") {
-      navigate(`/create?gateway=${encodeURIComponent(record.name)}`);
+      navigate(`/agents/new?gateway=${encodeURIComponent(record.name)}`);
       return;
     }
     if (record.type === "AGENT_SKILLS") {
@@ -425,7 +425,7 @@ export function Registry() {
       } catch {
         /* fall back to the record name */
       }
-      navigate(`/create?skill=${encodeURIComponent(path)}`);
+      navigate(`/agents/new?skill=${encodeURIComponent(path)}`);
     }
   };
 

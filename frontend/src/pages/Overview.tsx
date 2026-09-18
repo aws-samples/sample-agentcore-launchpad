@@ -299,7 +299,7 @@ export function Overview() {
                   {t("common.loading")}
                 </span>
               ) : (
-                <Link to="/create" style={{ color: "var(--ink-3)" }}>
+                <Link to="/agents" style={{ color: "var(--ink-3)" }}>
                   {t("overview.feed.empty")}
                 </Link>
               )

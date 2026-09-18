@@ -38,7 +38,7 @@ zip -r hello-container.zip hello-container/  # container_source：Dockerfile 构
 
 ## 13.2 控制台部署（code_zip）
 
-1. 打开 **Create**，选第 4 张卡片 **自带代码**，点 **NEXT**。
+1. 打开 **Agent 管理**（`/agents`）→ **新建 Agent**（`/agents/new`），选第 4 张卡片 **自带代码**，点 **NEXT**。
 2. 构件类型保持 **代码 zip**；把 `hello-http.zip` 拖进上传框。
 3. 上传完成后会显示检测摘要：入口候选（`main.py`）、requirements.txt、
    AgentCore SDK 标记。若没有检测到 SDK 标记，会出现黄色提示——确认你的代码

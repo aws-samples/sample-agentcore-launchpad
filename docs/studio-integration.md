@@ -233,7 +233,7 @@ disabled until a flow exists.
 | full code > 200000 chars | toast error, no POST |
 | invalid canvas connection | `onInvalidConnection` callback → toast (never `alert()`) |
 | redeploy with changed name/method | backend 400 (client locks name field instead) |
-| `?agent=` id missing/non-studio | toast + redirect `/create` |
+| `?agent=` id missing/non-studio | toast + redirect `/agents` |
 
 ### 5. Good/Base/Bad Cases
 

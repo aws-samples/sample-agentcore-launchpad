@@ -1,7 +1,9 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Download, RefreshCw, Search } from "lucide-react";
 
 import { useAuth } from "../auth/auth-context";
@@ -15,6 +17,7 @@ import {
   methodLabel,
   Pager,
   Panel,
+  StatTile,
   useToast,
   VersionsPanel,
   ViewHead,
@@ -296,13 +299,27 @@ const mergeDiscoveryRows = (
   return rows.sort((a, b) => rowName(a).localeCompare(rowName(b)));
 };
 
-export function CreateAgent() {
-  const [params] = useSearchParams();
+/**
+ * Agent management is one module on five routes (since 2026-09-18; `/create`
+ * redirects here):
+ *   list   `/agents`            — the landing page: stats, presets, the table
+ *   new    `/agents/new`        — the 3-step wizard as a page of its own
+ *   import `/agents/import`     — discovery of existing Runtime/Harness resources
+ *   detail `/agents/:agentId`   — the step-3 view of one agent (live while deploying)
+ *   edit   `/agents/:agentId/edit` — the wizard preloaded for a re-publish
+ * The wizard keeps its state machine; the mode only decides what step 1 shows
+ * and where "back"/"done" go.
+ */
+export type AgentsMode = "list" | "new" | "import" | "detail" | "edit";
+
+export function CreateAgent({ mode }: { mode: AgentsMode }) {
+  const { agentId } = useParams();
   // Members reach the whole module: the list, details and the discovery scan
   // are reads. Each mutating action gates itself on the caller's granted
   // agent-management permissions (default granted, revocable per user in the
   // Users console — mirrors route_policy's perm:agents.*).
-  return params.get("view") === "discover" ? <RuntimeDiscovery /> : <CreateAgentWizard />;
+  if (mode === "import") return <RuntimeDiscovery />;
+  return <CreateAgentWizard key={`${mode}:${agentId ?? ""}`} mode={mode} agentId={agentId} />;
 }
 
 function RuntimeDiscovery() {
@@ -483,7 +500,7 @@ function RuntimeDiscovery() {
         meta={region ? t("create.discovery.region", { region }) : undefined}
       />
       <div className="discovery-toolbar">
-        <Btn onClick={() => navigate("/create")}>
+        <Btn onClick={() => navigate("/agents")}>
           <ArrowLeft size={14} aria-hidden="true" />
           {t("create.discovery.back")}
         </Btn>
@@ -730,7 +747,7 @@ function HarnessRow({
             <span>{t("create.discovery.reimportHint")}</span>
           </>
         ) : harness.managed_agent_id ? (
-          <button type="button" className="rowact" onClick={() => navigate("/create")}>
+          <button type="button" className="rowact" onClick={() => navigate(`/agents/${harness.managed_agent_id}`)}>
             {t("create.discovery.alreadyManaged", {
               name: harness.managed_agent_name ?? harness.name,
             })}
@@ -806,7 +823,7 @@ function RuntimeRow({
             <span>{t("create.discovery.reimportHint")}</span>
           </>
         ) : runtime.managed_agent_id ? (
-          <button type="button" className="rowact" onClick={() => navigate("/create")}>
+          <button type="button" className="rowact" onClick={() => navigate(`/agents/${runtime.managed_agent_id}`)}>
             {t("create.discovery.alreadyManaged", {
               name: runtime.managed_agent_name ?? runtime.name,
             })}
@@ -890,10 +907,11 @@ interface KbRef {
   description: string;
 }
 
-function CreateAgentWizard() {
+function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: string }) {
   const { t } = useTranslation();
   const toast = useToast();
   const navigate = useNavigate();
+  const isList = mode === "list";
   const { can, isAdmin } = useAuth();
   const canDeploy = can("agents.deploy");
   const { current: currentWorkspace } = useWorkspace();
@@ -1783,6 +1801,53 @@ const deployLock = !canDeploy
     setStep(3);
   };
 
+  // `/agents/:agentId` and `/agents/:agentId/edit` open one agent straight from
+  // the URL. Read the row directly rather than waiting for the list (a fresh
+  // deploy may not be in it yet); an unknown id falls back to the list.
+  const routeOpened = useRef<string | null>(null);
+  useEffect(() => {
+    if (!agentId || (mode !== "detail" && mode !== "edit")) return;
+    const key = `${mode}:${agentId}`;
+    if (routeOpened.current === key) return;
+    routeOpened.current = key;
+    void api
+      .getAgent(agentId)
+      .then((fresh) => {
+        if (!alive.current) return;
+        const info: AgentInfo = { ...fresh, deployment: fresh.deployments?.[0] };
+        if (mode === "edit") {
+          if (info.system) void openSystemEdit(info);
+          else if (info.method === "studio")
+            navigate(`/create/studio?agent=${info.id}`, { replace: true });
+          else startEdit(info);
+          return;
+        }
+        if (!info.deployment?.job_id) {
+          // nothing to show for a row that never deployed (e.g. an imported
+          // runtime) — the list carries what is known about it
+          toast(t("agents.noDetails", { name: info.name }));
+          navigate("/agents", { replace: true });
+          return;
+        }
+        openDetails(info);
+      })
+      .catch((err) => {
+        if (!alive.current) return;
+        toast(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
+        navigate("/agents", { replace: true });
+      });
+    // openDetails/startEdit/openSystemEdit are stable per mount for this purpose
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, agentId]);
+
+  // A deploy started from `/agents/new` hands over to the agent's own page once
+  // it succeeds (a failed one stays on the wizard with its error and RESTART).
+  // System-preset saves are pinned to another workspace and stay put.
+  useEffect(() => {
+    if (mode !== "new" || detailsMode || !launch || launch.workspaceId) return;
+    if (agentStatus === "active") navigate(`/agents/${launch.agentId}`, { replace: true });
+  }, [mode, detailsMode, launch, agentStatus, navigate]);
+
   const doDelete = async (id: string) => {
     try {
       await api.deleteAgent(id);
@@ -1941,18 +2006,67 @@ const deployLock = !canDeploy
 
   return (
     <section>
-      <ViewHead kicker={t("create.kicker")} title={t("create.title")} meta={t("create.meta")} />
-
-      <div className="steps">
-        {([1, 2, 3] as const).map((n) => (
-          <div key={n} className={`step${step === n ? " now" : step > n ? " done" : ""}`}>
-            <span className="n">{step > n ? "✓" : `0${n}`}</span>
-            <b>{t(`create.steps.${n}`)}</b>
+      {isList && step === 1 ? (
+        <>
+          <div className="agents-head">
+            <ViewHead kicker={t("create.kicker")} title={t("create.title")} meta={t("agents.meta")} />
+            <div className="agents-head-actions">
+              <Btn onClick={() => navigate("/agents/import")} data-testid="agents-import">
+                <Search size={14} aria-hidden="true" />
+                {t("agents.importRuntime")}
+              </Btn>
+              <span title={canDeploy ? undefined : t("create.permissionRequired")}>
+                <Btn
+                  primary
+                  disabled={!canDeploy}
+                  onClick={() => navigate("/agents/new")}
+                  data-testid="agents-new"
+                >
+                  + {t("agents.newAgent")}
+                </Btn>
+              </span>
+            </div>
           </div>
-        ))}
-      </div>
+          <div className="tiles" data-testid="agents-stats">
+            {(["total", "active", "deploying", "failed"] as const).map((k) => (
+              <StatTile
+                key={k}
+                label={t(`agents.stats.${k}`)}
+                value={k === "total" ? agents.length : agents.filter((a) => a.status === k).length}
+              />
+            ))}
+          </div>
+        </>
+      ) : (
+        <>
+          {!isList && (
+            <nav className="agents-crumb" aria-label={t("agents.breadcrumb")}>
+              <Link to="/agents">{t("create.title")}</Link>
+              <span aria-hidden="true"> / </span>
+              <span>
+                {mode === "new"
+                  ? t("agents.crumbNew")
+                  : mode === "edit"
+                    ? t("agents.crumbEdit", { name: editing?.name ?? "" })
+                    : (launch && agents.find((a) => a.id === launch.agentId)?.name) ||
+                      t("agents.crumbDetail")}
+              </span>
+            </nav>
+          )}
+          <ViewHead kicker={t("create.kicker")} title={t("create.title")} meta={t("create.meta")} />
 
-      {step === 1 && (
+          <div className="steps">
+            {([1, 2, 3] as const).map((n) => (
+              <div key={n} className={`step${step === n ? " now" : step > n ? " done" : ""}`}>
+                <span className="n">{step > n ? "✓" : `0${n}`}</span>
+                <b>{t(`create.steps.${n}`)}</b>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {step === 1 && !isList && (
         <>
           {!canDeploy && (
             <div className="note" style={{ marginBottom: 14 }}>
@@ -2040,27 +2154,12 @@ const deployLock = !canDeploy
                 <span>{t("create.methods.byoc.spec3")}</span>
               </div>
             </div>
-            <button
-              type="button"
-              className="method discovery-method"
-              style={{ "--i": 4 } as CSSProperties}
-              onClick={() => navigate("/create?view=discover")}
-              data-method="discovery"
-            >
-              <div className="m-badge plain">{t("create.methods.discovery.badge")}</div>
-              <div className="m-icon">
-                <Search size={20} aria-hidden="true" />
-              </div>
-              <h3>{t("create.methods.discovery.title")}</h3>
-              <p>{t("create.methods.discovery.desc")}</p>
-              <div className="m-specs">
-                <span>ListAgentRuntimes · GetAgentRuntime</span>
-                <span>{t("create.methods.discovery.spec2")}</span>
-                <span>{t("create.methods.discovery.spec3")}</span>
-              </div>
-            </button>
           </div>
-          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+            <Btn onClick={() => navigate("/agents/import")}>
+              <Search size={14} aria-hidden="true" />
+              {t("create.methods.discovery.title")}
+            </Btn>
             <span title={canDeploy ? undefined : t("create.permissionRequired")}>
               <Btn
                 primary
@@ -2075,28 +2174,20 @@ const deployLock = !canDeploy
             </span>
           </div>
 
+          {/* System presets install from the create page (below the method cards),
+              as they did before the list split — configure opens the shared editor
+              on step 2 right here; details go to the agent's page. */}
           <div style={{ height: 18 }} />
           <SystemPresetsPanel
             onChanged={reloadAgents}
             onConfigure={startSystemEdit}
-            onDetails={(agentId) => {
-              const target = agents.find((a) => a.id === agentId);
-              if (target) {
-                openDetails(target);
-                return;
-              }
-              // the list may lag the panel's own poll — read the row directly
-              void api
-                .getAgent(agentId)
-                .then((fresh) => {
-                  openDetails({ ...fresh, deployment: fresh.deployments?.[0] });
-                  reloadAgents();
-                })
-                .catch((err) => {
-                  toast(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
-                });
-            }}
+            onDetails={(id) => navigate(`/agents/${id}`)}
           />
+        </>
+      )}
+
+      {step === 1 && isList && (
+        <>
           <div style={{ height: 18 }} />
           <AgentList
             agents={agents}
@@ -2106,9 +2197,9 @@ const deployLock = !canDeploy
                 return;
               }
               if (a.method === "studio") navigate(`/create/studio?agent=${a.id}`);
-              else startEdit(a);
+              else navigate(`/agents/${a.id}/edit`);
             }}
-            onDetails={openDetails}
+            onDetails={(a) => navigate(`/agents/${a.id}`)}
             onDelete={(a) =>
               setConfirm({
                 kind: "delete",
@@ -2118,6 +2209,7 @@ const deployLock = !canDeploy
               })
             }
             onConvert={(id, name) => setConfirm({ kind: "convert", id, name })}
+            onCreate={canDeploy ? () => navigate("/agents/new") : undefined}
           />
         </>
       )}
@@ -3581,6 +3673,10 @@ const deployLock = !canDeploy
                   disabled={submitting}
                   disabledReason={submitting ? t("create.system.settings.saving") : undefined}
                   onClick={() => {
+                    if (mode === "edit") {
+                      navigate("/agents");
+                      return;
+                    }
                     setStep(1);
                     resetForm();
                   }}
@@ -3632,6 +3728,10 @@ const deployLock = !canDeploy
             agentStatus={agentStatus}
             detailsMode={detailsMode}
             onRestart={() => {
+              if (!isList) {
+                navigate("/agents");
+                return;
+              }
               setStep(1);
               setLaunch(null);
               setDeployment(null);
@@ -3656,6 +3756,30 @@ const deployLock = !canDeploy
           )}
           {detailsMode && launch && (
             <>
+              {mode === "detail" && (
+                <div className="agents-detail-actions" data-testid="detail-actions">
+                  {(() => {
+                    const row = agents.find((a) => a.id === launch.agentId);
+                    return (
+                      <>
+                        {row?.invoke_capability.eligible && (
+                          <Link className="btn" to={`/chat?agent=${launch.agentId}`}>
+                            {t("agents.detail.chat")}
+                          </Link>
+                        )}
+                        <Link className="btn" to="/observability">
+                          {t("agents.detail.observability")}
+                        </Link>
+                        {row && row.method !== "discovered_runtime" && !row.system && (
+                          <Link className="btn" to={`/agents/${launch.agentId}/edit`}>
+                            {t("create.list.edit")}
+                          </Link>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
               <div style={{ height: 14 }} />
               <VersionsPanel agentId={launch.agentId} />
             </>
@@ -3840,18 +3964,114 @@ const STATUS_TONE: Record<string, "good" | "warn" | "crit" | "muted"> = {
   failed: "crit",
 };
 
+/** "3 min ago"-style label for the UPDATED column; the absolute stamp rides on `title`. */
+function relativeTime(iso: string | null | undefined, t: TFunction) {
+  if (!iso) return "—";
+  const then = Date.parse(iso.endsWith("Z") || /[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`);
+  if (Number.isNaN(then)) return iso.replace("T", " ").slice(0, 16);
+  const s = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (s < 45) return t("agents.time.justNow");
+  const m = Math.round(s / 60);
+  if (m < 60) return t("agents.time.minutes", { count: m });
+  const h = Math.round(m / 60);
+  if (h < 24) return t("agents.time.hours", { count: h });
+  const d = Math.round(h / 24);
+  if (d < 30) return t("agents.time.days", { count: d });
+  return iso.replace("T", " ").slice(0, 10);
+}
+
+/** The "···" per-row menu: Edit / Convert / Delete live here so a row shows two
+ * buttons. The pop-over is portalled to <body> with fixed coordinates: the
+ * table sits in `.table-scroll` (overflow-x:auto ⇒ overflow-y clips too), so an
+ * in-flow absolute menu on the last row was cut off (reported 2026-09-18). It
+ * opens upward when there is no room below. */
+function RowMenu({ name, children }: { name: string; children: ReactNode }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const MENU_H = 140; // generous upper bound: 3 items + padding
+  const place = () => {
+    const r = btn.current?.getBoundingClientRect();
+    if (!r) return;
+    const below = window.innerHeight - r.bottom;
+    setPos({
+      top: below >= MENU_H ? r.bottom + 4 : Math.max(8, r.top - 4 - MENU_H),
+      right: Math.max(8, window.innerWidth - r.right),
+    });
+  };
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (btn.current?.contains(target) || pop.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    const onMove = () => place();
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onMove);
+    };
+  }, [open]);
+  return (
+    <div className="rowmenu">
+      <button
+        ref={btn}
+        type="button"
+        className="rowact"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={t("agents.moreActions", { name })}
+        data-testid={`menu-${name}`}
+        onClick={() => {
+          if (!open) place();
+          setOpen((v) => !v);
+        }}
+      >
+        ···
+      </button>
+      {open &&
+        pos &&
+        createPortal(
+          <div
+            ref={pop}
+            className="rowmenu-pop"
+            role="menu"
+            style={{ position: "fixed", top: pos.top, right: pos.right }}
+            onClick={() => setOpen(false)}
+          >
+            {children}
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+}
+
 function AgentList({
   agents,
   onEdit,
   onDetails,
   onDelete,
   onConvert,
+  onCreate,
 }: {
   agents: AgentInfo[];
   onEdit: (a: AgentInfo) => void;
   onDetails: (a: AgentInfo) => void;
   onDelete: (a: AgentInfo) => void;
   onConvert: (id: string, name: string) => void;
+  onCreate?: () => void;
 }) {
   const { t } = useTranslation();
   const { can, isAdmin } = useAuth();
@@ -3938,7 +4158,13 @@ function AgentList({
               <tr key={a.id} data-system={a.system ? "true" : undefined}>
                 <td className="pri">
                   <div className="agent-method-cell">
-                    {a.name}
+                    {a.deployment ? (
+                      <Link className="agent-name-link" to={`/agents/${a.id}`}>
+                        {a.name}
+                      </Link>
+                    ) : (
+                      a.name
+                    )}
                     {a.system && (
                       <Chip
                         tone="blue"
@@ -3962,76 +4188,94 @@ function AgentList({
                   </div>
                 </td>
                 <td>
-                  <Chip
-                    tone={STATUS_TONE[a.status] ?? "muted"}
-                    icon={a.status === "active" ? "●" : a.status === "failed" ? "✕" : "◐"}
-                  >
-                    {t(`status.${a.status}`, a.status.toUpperCase())}
-                  </Chip>
+                  <div className="agent-method-cell">
+                    <Chip
+                      tone={STATUS_TONE[a.status] ?? "muted"}
+                      icon={a.status === "active" ? "●" : a.status === "failed" ? "✕" : "◐"}
+                      title={a.status === "failed" && a.error ? a.error : undefined}
+                    >
+                      {t(`status.${a.status}`, a.status.toUpperCase())}
+                    </Chip>
+                    {a.status === "failed" && a.deployment && (
+                      <button
+                        type="button"
+                        className="rowact"
+                        data-testid={`reason-${a.name}`}
+                        title={a.error ?? undefined}
+                        onClick={() => onDetails(a)}
+                      >
+                        {t("agents.viewReason")}
+                      </button>
+                    )}
+                  </div>
                 </td>
                 <td className="mono">
                   {a.method === "discovered_runtime" ? `v${a.version ?? "—"}` : (a.revision ?? "—")}
                 </td>
-                <td className="mono dim">{(a.updated_at ?? "").replace("T", " ").slice(0, 16)}</td>
+                <td className="mono dim" title={(a.updated_at ?? "").replace("T", " ").slice(0, 19)}>
+                  {relativeTime(a.updated_at, t)}
+                </td>
                 <td>
                   <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                    {a.method !== "discovered_runtime" && (
-                      <button
-                        type="button"
-                        className="rowact"
-                        data-testid={`edit-${a.name}`}
-                        disabled={!canEditRow(a)}
-                        style={!canEditRow(a) ? { opacity: 0.35 } : undefined}
-                        title={
-                          a.system
-                            ? isAdmin
-                              ? t("create.system.settings.configureHint")
-                              : t("create.system.protected")
-                            : permHint(canEdit)
-                        }
-                        onClick={() => onEdit(a)}
-                      >
-                        {t("create.list.edit")}
-                      </button>
-                    )}
                     {a.invoke_capability.eligible && (
                       <Link className="rowact" to={`/chat?agent=${a.id}`}>
                         {t("create.list.chat")}
                       </Link>
-                    )}
-                    {a.method === "harness" && a.status === "active" && (
-                      <button
-                        type="button"
-                        className="rowact"
-                        data-testid={`convert-${a.name}`}
-                        disabled={!canConvert || !!a.system}
-                        style={!canConvert || a.system ? { opacity: 0.35 } : undefined}
-                        title={a.system ? t("create.system.protected") : permHint(canConvert)}
-                        onClick={() => onConvert(a.id, a.name)}
-                      >
-                        {t("create.list.convert")}
-                      </button>
                     )}
                     {a.deployment && (
                       <button type="button" className="rowact" onClick={() => onDetails(a)}>
                         {t("create.list.details")}
                       </button>
                     )}
-                    <button
-                      type="button"
-                      className="rowact"
-                      data-testid={`delete-${a.name}`}
-                      disabled={!canDelete || !!a.system}
-                      style={!canDelete || a.system ? { opacity: 0.35 } : undefined}
-                      title={a.system ? t("create.system.protected") : permHint(canDelete)}
-                      onClick={() => onDelete(a)}
-                    >
-                      {t(
-                        a.method === "discovered_runtime"
-                          ? "create.list.remove"
-                          : "create.list.delete",
+                    <RowMenu name={a.name}>
+                      {a.method !== "discovered_runtime" && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="rowmenu-item"
+                          data-testid={`edit-${a.name}`}
+                          disabled={!canEditRow(a)}
+                          title={
+                            a.system
+                              ? isAdmin
+                                ? t("create.system.settings.configureHint")
+                                : t("create.system.protected")
+                              : permHint(canEdit)
+                          }
+                          onClick={() => onEdit(a)}
+                        >
+                          {t("create.list.edit")}
+                        </button>
                       )}
-                    </button>
+                      {a.method === "harness" && a.status === "active" && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="rowmenu-item"
+                          data-testid={`convert-${a.name}`}
+                          disabled={!canConvert || !!a.system}
+                          title={a.system ? t("create.system.protected") : permHint(canConvert)}
+                          onClick={() => onConvert(a.id, a.name)}
+                        >
+                          {t("create.list.convert")}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="rowmenu-item danger"
+                        data-testid={`delete-${a.name}`}
+                        disabled={!canDelete || !!a.system}
+                        title={a.system ? t("create.system.protected") : permHint(canDelete)}
+                        onClick={() => onDelete(a)}
+                      >
+                        {t(
+                          a.method === "discovered_runtime"
+                            ? "create.list.remove"
+                            : "create.list.delete",
+                        )}
+                      </button>
+                    </RowMenu>
                   </div>
                 </td>
               </tr>
@@ -4039,7 +4283,19 @@ function AgentList({
             {rows.length === 0 && (
               <tr>
                 <td colSpan={6} className="dim mono" style={{ textAlign: "center" }}>
-                  {t(agents.length ? "create.list.noMatch" : "create.list.empty")}
+                  {agents.length ? (
+                    t("create.list.noMatch")
+                  ) : (
+                    <div className="agents-empty" data-testid="agents-empty">
+                      <b>{t("agents.empty.title")}</b>
+                      <span>{t("create.list.empty")}</span>
+                      {onCreate && (
+                        <Btn primary onClick={onCreate}>
+                          + {t("agents.empty.cta")}
+                        </Btn>
+                      )}
+                    </div>
+                  )}
                 </td>
               </tr>
             )}

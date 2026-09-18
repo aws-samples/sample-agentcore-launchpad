@@ -14,7 +14,7 @@ export const NAV_ENTRIES: NavEntry[] = [
   { idx: "02", to: "/create/assistant", labelKey: "nav.assistant" },
   // members reach it too since 2026-08-07: reads are open, and the mutating
   // actions are gated per user by agent-management permissions (auth `can()`)
-  { idx: "03", to: "/create", labelKey: "nav.createAgent" },
+  { idx: "03", to: "/agents", labelKey: "nav.createAgent" },
   { idx: "04", to: "/registry", labelKey: "nav.registry" },
   { idx: "05", to: "/knowledge-bases", labelKey: "nav.knowledgeBases" },
   { idx: "06", to: "/memory", labelKey: "nav.memory" },
@@ -32,7 +32,7 @@ export const PLATFORM_COUNT = 7;
  *
  * Distinct from `adminOnly` on a NAV_ENTRY — these are whole modules that only
  * exist for administrators, whereas an `adminOnly` platform entry keeps its place
- * in the numbered flow (dropping `/create` from the list would renumber the
+ * in the numbered flow (dropping `/agents` from the list would renumber the
  * console for members).
  */
 export const ADMIN_NAV_ENTRIES: NavEntry[] = [
@@ -75,6 +75,11 @@ export function navEntryFor(pathname: string): NavEntry | null {
  */
 export const ROUTE_PATHS: string[] = [
   "/",
+  "/agents",
+  "/agents/new",
+  "/agents/import",
+  "/agents/:agentId",
+  "/agents/:agentId/edit",
   "/create",
   "/create/studio",
   "/create/assistant",

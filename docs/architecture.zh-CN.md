@@ -184,9 +184,22 @@ agent 全部卡死。而读不到的扫描——未启用扫描、API 报错、�
 未覆盖:SBOM 生成、provenance/attestation、签名、受信镜像源强制,以及 skill **内容**
 审查。不可变不等于可信。
 
+### Agent 管理路由
+
+自 2026-09-18 起该模块以列表为首页(`/create` 与 `/create?view=discover` 重定向;
+查询串保留,注册表的 `?gateway=` / `?skill=` 预填仍落到向导):
+
+| 路由 | 视图 |
+|---|---|
+| `/agents` | 首页:「新建 Agent」/「导入现有 Runtime」按钮、统计条(总数 / 运行中 / 部署中 / 失败,由已加载列表推导)与 Agent 表格(名称链接到详情,CHAT + DETAILS 可见,编辑 / 转换 / 删除收进每行的「···」菜单,失败行以悬浮显示错误并提供「查看原因」) |
+| `/agents/new` | 三步向导;第一步是下文四张方法卡、一个通往导入页的按钮,以及系统预设卡片(安装 / 配置方式不变,位于方法卡下方) |
+| `/agents/import` | 发现现有 Runtime / Harness 资源 |
+| `/agents/:id` | Agent 详情(向导第三步视图:启动序列、版本、BYOC 来源、转换说明;部署中实时轮询;打开对话 / 可观测性 / 编辑链接)。在 `/agents/new` 发起的部署转为 active 后自动跳到这里 |
+| `/agents/:id/edit` | 预载该 Agent 的向导用于重新发布(系统预设打开共享编辑器,Studio Agent 转到 `/create/studio?agent=`) |
+
 ### 创建入口
 
-`/create` 的入口卡片共五张,顺序如下:
+`/agents/new` 的入口卡片共四张,顺序如下:
 
 | # | 卡片 | `AgentSpec.method` | 说明 |
 |---|---|---|---|
@@ -194,7 +207,9 @@ agent 全部卡死。而读不到的扫描——未启用扫描、API 报错、�
 | 2 | **Strands Studio** | `zip_runtime` | 方式C —— Strands 模板走 zip 快速通道;卡片内嵌链接进入 `/create/studio` 画布,画布以 `studio` 方式部署 |
 | 3 | **其他 Agent SDK** | `container` | 方式A —— 自带 Agent SDK,经 CodeBuild 打包为 ARM64 容器 |
 | 4 | **自带代码** | `byoc` | 开发者自己编写的 Agent 代码——上传 zip(直连代码运行时或 Dockerfile → CodeBuild),或引用本账户私有 ECR 中的现有镜像——见下文 BYOC 小节 |
-| 5 | **发现现有 Runtime 与 Harness** | — | 不是部署方式(见下文) |
+
+发现现有 Runtime 与 Harness 不是部署方式:它有独立页面 `/agents/import`(见下文),
+可从列表页头部和第一步 NEXT 旁的按钮进入。
 
 第三张卡片是一个**类别**,而不是某一个 SDK。`AgentSpec.agent_sdk` 记录容器
 Agent 打包的是哪个 SDK,向导把它作为配置步骤上的二级选项。它是只有一个成员的
@@ -1018,7 +1033,7 @@ A2A zip Agent 使用另一个没有 Mantle 分支的模板,因此向导会将其
 
 ### 发现既有 Runtime 与 Harness
 
-`/create?view=discover` 是与三种创建方式并列的一条接入路径，而不是一种部署方式。
+`/agents/import` 是与三种创建方式并列的一条接入路径，而不是一种部署方式。
 `GET /api/agents/discovery` 会跟完所配置 Region 中 Runtime 列表的每一页，并对每个资源做一次
 详情读取。后端只返回白名单投影:Runtime 标识、名称、描述、协议、制品类型、authorizer 类型、
 AWS 状态/版本以及最近更新时间。环境变量值、制品位置、执行角色与 authorizer 配置从不离开
@@ -1061,7 +1076,7 @@ harness 的后端 runtime 通过既有的 ARN 联接解析出它的归属，重�
 
 每次 `UpdateAgentRuntime` / `UpdateHarness` 都会发布一个不可变的新版本;`DEFAULT` 端点
 自动跟随最新版本,而命名端点(目标金丝雀的 `stable`/`treatment`)固定在某一版本。台账只记得
-Launchpad 部署时铸造的那个版本(`Agent.version`),所以 `/create` 的 Agent 详情(details 模式)
+Launchpad 部署时铸造的那个版本(`Agent.version`),所以 `/agents/:id` 的 Agent 详情
 带有一个由 `GET /api/agents/{agent_id}/versions` 支撑的**版本与端点**面板。该路由把台账行解析到
 唯一一个资源族——`zip_runtime`/`studio`/`container` 以及 `spec.discovery.resource_type` 缺省或为
 `runtime` 的导入行 → `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints`;`harness` 以及
@@ -1422,7 +1437,7 @@ localhost"更窄:uvicorn 的 proxy-header 中间件(默认 `forwarded_allow_ips=
 
 实际效果是 `member` 接近只读。在数据**尚未**按用户隔离的前提下这是有意为之:所有已登录
 账户看到同一批 agent、知识库与链路,因此一个能部署的成员同时也能修改其他人的资源。
-仅管理员可用的模块(`/users`、`/create`、Studio 画布、注册表的注册/编辑)会渲染"需要
+仅管理员可用的模块(`/users`、`/agents`、Studio 画布、注册表的注册/编辑)会渲染"需要
 管理员权限"面板而不是发出请求;`auth.forbidden` 也映射进了 `apiErrors` i18n 块,因此
 任何漏加门禁的界面仍会显示本地化的原因。
 

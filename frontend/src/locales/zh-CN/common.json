@@ -513,7 +513,7 @@
       "details": "详情",
       "delete": "删除",
       "remove": "移除",
-      "empty": "还没有 Agent——请在上方创建。",
+      "empty": "还没有 Agent——点击「新建 Agent」创建。",
       "deleted": "已删除 Agent。",
       "confirmDeleteTitle": "删除该 Agent？",
       "confirmDelete": "这会移除“{{name}}”及其 AWS 资源，且不可撤销。",
@@ -4871,5 +4871,40 @@
     "evaluate": "5 · 评估",
     "experiment": "6 · A/B 测试",
     "feedback": "7 · 生产反馈"
+  },
+  "agents": {
+    "meta": "列表 · 状态 · 重新发布 — 创建流程已移至独立页面",
+    "newAgent": "新建 Agent",
+    "importRuntime": "导入现有 Runtime",
+    "breadcrumb": "Agent 管理路径",
+    "crumbNew": "新建",
+    "crumbEdit": "编辑 {{name}}",
+    "crumbDetail": "详情",
+    "noDetails": "「{{name}}」没有可展示的部署。",
+    "stats": {
+      "total": "AGENT 总数",
+      "active": "运行中",
+      "deploying": "部署中",
+      "failed": "失败"
+    },
+    "empty": {
+      "title": "还没有 Agent",
+      "cta": "创建第一个 Agent"
+    },
+    "moreActions": "{{name}} 的更多操作",
+    "viewReason": "查看原因",
+    "time": {
+      "justNow": "刚刚",
+      "minutes_one": "{{count}} 分钟前",
+      "minutes_other": "{{count}} 分钟前",
+      "hours_one": "{{count}} 小时前",
+      "hours_other": "{{count}} 小时前",
+      "days_one": "{{count}} 天前",
+      "days_other": "{{count}} 天前"
+    },
+    "detail": {
+      "chat": "打开对话",
+      "observability": "可观测性"
+    }
   }
 }

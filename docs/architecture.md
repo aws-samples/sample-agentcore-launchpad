@@ -241,9 +241,23 @@ tag policy so this cannot drift into a broken re-publish.
 Not covered: SBOM generation, provenance/attestation, signing, approved-mirror
 enforcement, and skill *content* review. Immutable is not the same as trusted.
 
+### Agent management routes
+
+Since 2026-09-18 the module is list-first (`/create` and `/create?view=discover`
+redirect; the query string is kept so Registry's `?gateway=` / `?skill=` prefill
+still lands on the wizard):
+
+| Route | View |
+|---|---|
+| `/agents` | landing: `+ New Agent` / `Import existing Runtime`, a stats strip (total / running / deploying / failed, derived from the loaded list) and the agent table (name → detail, CHAT + DETAILS visible, EDIT / CONVERT / DELETE in a per-row `···` menu, FAILED rows carry the error as tooltip + VIEW REASON) |
+| `/agents/new` | the 3-step wizard; step 1 is the four method cards below, a button to the import page, and the system-preset cards (install / configure stay where they were, under the cards) |
+| `/agents/import` | discovery of existing Runtime / Harness resources |
+| `/agents/:id` | the agent's detail (the wizard's step-3 view: launch sequence, versions, BYOC provenance, conversion notes; live polling while deploying; OPEN CHAT / OBSERVABILITY / EDIT links). A deploy started on `/agents/new` navigates here when it goes active |
+| `/agents/:id/edit` | the wizard preloaded for a re-publish (system presets open the shared editor, Studio agents go to `/create/studio?agent=`) |
+
 ### Creation entrances
 
-The `/create` picker shows five cards, in this order:
+The `/agents/new` picker shows four cards, in this order:
 
 | # | Card | `AgentSpec.method` | What it is |
 |---|---|---|---|
@@ -251,7 +265,10 @@ The `/create` picker shows five cards, in this order:
 | 2 | **Strands Studio** | `zip_runtime` | 方式C — Strands template on the zip fast path; the card's nested link opens the `/create/studio` canvas, which deploys as method `studio` |
 | 3 | **Other Agent SDK** | `container` | 方式A — bring your own agent SDK, packaged as an ARM64 container via CodeBuild |
 | 4 | **Bring Your Own Code** | `byoc` | user-written agent code uploaded as a zip (direct-code runtime or Dockerfile → CodeBuild) or referenced as an existing private-ECR image — see [BYOC](#byoc--bring-your-own-code) |
-| 5 | **Discover existing runtimes and harnesses** | — | not a deploy method (see below) |
+
+Discovery of existing runtimes and harnesses is not a deploy method: it has its
+own page at `/agents/import` (see below), reachable from the list header and
+from a button next to NEXT on step 1.
 
 The third card is a **category**, not one SDK. `AgentSpec.agent_sdk` records
 which SDK a container agent packages, and the wizard exposes it as a
@@ -1828,7 +1845,7 @@ the wizard shows it the SDK choice in place of the Model source control.
 
 ### Existing Runtime and Harness discovery
 
-`/create?view=discover` is an onboarding path alongside the three creation
+`/agents/import` is an onboarding path alongside the three creation
 methods, not a deploy method. `GET /api/agents/discovery` follows every Runtime
 list page in the configured Region and performs one detail read per resource.
 The backend returns only an allow-listed projection: Runtime identity, name,
@@ -1886,7 +1903,7 @@ Evaluation, experiments, and harness→zip conversion stay keyed on
 Every `UpdateAgentRuntime` / `UpdateHarness` publishes an immutable new version;
 the `DEFAULT` endpoint auto-follows the latest while named endpoints (the target
 canary's `stable`/`treatment`) pin one. The ledger only remembers the version a
-Launchpad deploy minted (`Agent.version`), so the agent detail on `/create`
+Launchpad deploy minted (`Agent.version`), so the agent detail on `/agents/:id`
 (details mode) carries a **VERSIONS & ENDPOINTS** panel backed by
 `GET /api/agents/{agent_id}/versions`. The route resolves the row to one resource
 family — `zip_runtime`/`studio`/`container` and imported rows whose
