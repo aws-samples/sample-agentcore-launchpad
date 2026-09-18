@@ -99,6 +99,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/agents"): PERM_AGENT_DEPLOY,
     ("GET", "/api/agents/discovery"): MEMBER,
     ("POST", "/api/agents/discovery/import"): PERM_AGENT_IMPORT,
+    # BYOC artifact staging is one half of a deploy, so it carries deploy perms
+    ("POST", "/api/agents/uploads"): PERM_AGENT_DEPLOY,
+    ("GET", "/api/agents/uploads/{upload_id}"): MEMBER,
     ("GET", "/api/agents/{agent_id}"): MEMBER,
     ("GET", "/api/agents/{agent_id}/versions"): MEMBER,  # read-only AWS view
     ("GET", "/api/agents/{agent_id}/conversions"): MEMBER,  # ledger read: runtime twins

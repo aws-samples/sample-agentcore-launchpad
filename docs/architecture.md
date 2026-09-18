@@ -97,7 +97,7 @@ real, runnable code in this repo.
 
 ## The unified five-stage deploy pipeline
 
-All three creation methods converge into the same ordered stages, defined in
+All creation methods converge into the same ordered stages, defined in
 `backend/app/deployer/pipeline.py`:
 
 ```
@@ -109,13 +109,13 @@ progress is persisted on the `Deployment` row and mirrored as JSONL events into
 the `Job` log, so a restarted backend resumes from the first non-succeeded
 stage (`resume_pending_jobs()` runs on startup).
 
-| Stage | 方式B — harness | zip_runtime / 方式C — studio | 方式A — container |
-|---|---|---|---|
-| **generate** | Build `CreateHarness` request from the AgentSpec | Render the Strands template (studio: adapt user code verbatim) | Assemble ARM64 build context (Dockerfile + `main.py` + `.claude` scaffold) |
-| **package** | *skipped* (no artifact) | resolve → hashed lock → `--require-hashes` install of ARM64 wheels → zip → S3 | zip context → S3 → CodeBuild (docker build+push) → ECR → resolve digest → scan gate |
-| **provision** | Reuse the shared execution role | Reuse the shared execution role | Reuse the shared execution role |
-| **deploy** | `CreateHarness` + poll READY | `CreateAgentRuntime` + poll READY | `CreateAgentRuntime(containerConfiguration)` + poll READY |
-| **register** | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap |
+| Stage | 方式B — harness | zip_runtime / 方式C — studio | 方式A — container | byoc — bring your own code |
+|---|---|---|---|---|
+| **generate** | Build `CreateHarness` request from the AgentSpec | Render the Strands template (studio: adapt user code verbatim) | Assemble ARM64 build context (Dockerfile + `main.py` + `.claude` scaffold) | *No code generated.* Verify the staged upload (or the ECR image) and stamp server-verified provenance (sha256, uploader, timestamp) onto the spec |
+| **package** | *skipped* (no artifact) | resolve → hashed lock → `--require-hashes` install of ARM64 wheels → zip → S3 | zip context → S3 → CodeBuild (docker build+push) → ECR → resolve digest → scan gate | `code_zip`: download → safe-extract → verify entrypoint → resolve the zip's `requirements.txt` for linux/aarch64 (hashed lock) → zip → S3. `container_source`: verify Dockerfile → same CodeBuild → ECR → digest → scan gate as 方式A. `container_image`: *skipped* |
+| **provision** | Reuse the shared execution role | Reuse the shared execution role | Reuse the shared execution role | Per-agent least-privilege role (same machinery) |
+| **deploy** | `CreateHarness` + poll READY | `CreateAgentRuntime` + poll READY | `CreateAgentRuntime(containerConfiguration)` + poll READY | `CreateAgentRuntime` — `codeConfiguration` (user's Python version + entrypoint, no ADOT launcher) or `containerConfiguration` — + poll READY |
+| **register** | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap | Same shared register stage — byoc agents are runtime-backed for chat/versions/observability |
 
 Typical timings: harness ≈ 30 s, zip ≈ 1–3 min (incl. pip), container ≈ 2–4 min (observed: 1.7 min CodeBuild + seconds to READY)
 (via CodeBuild). See [troubleshooting.md](troubleshooting.md).
@@ -230,14 +230,15 @@ enforcement, and skill *content* review. Immutable is not the same as trusted.
 
 ### Creation entrances
 
-The `/create` picker shows four cards, in this order:
+The `/create` picker shows five cards, in this order:
 
 | # | Card | `AgentSpec.method` | What it is |
 |---|---|---|---|
 | 1 | **Managed Harness** | `harness` | 方式B — declarative, no build artifact |
 | 2 | **Strands Studio** | `zip_runtime` | 方式C — Strands template on the zip fast path; the card's nested link opens the `/create/studio` canvas, which deploys as method `studio` |
 | 3 | **Other Agent SDK** | `container` | 方式A — bring your own agent SDK, packaged as an ARM64 container via CodeBuild |
-| 4 | **Discover existing runtimes and harnesses** | — | not a deploy method (see below) |
+| 4 | **Bring Your Own Code** | `byoc` | user-written agent code uploaded as a zip (direct-code runtime or Dockerfile → CodeBuild) or referenced as an existing private-ECR image — see [BYOC](#byoc--bring-your-own-code) |
+| 5 | **Discover existing runtimes and harnesses** | — | not a deploy method (see below) |
 
 The third card is a **category**, not one SDK. `AgentSpec.agent_sdk` records
 which SDK a container agent packages, and the wizard exposes it as a
@@ -247,6 +248,55 @@ before the field existed read back unambiguously and adding a second SDK needs
 no stored-spec migration. There is deliberately **no dispatch** on the field yet:
 `app/deployer/container.py` and `app/templates/claude_sdk_agent/` stay
 unconditional until the category has a second member.
+
+### BYOC — bring your own code
+
+The fourth card deploys code the member's developers wrote themselves — already
+wrapped with the AgentCore SDK (`BedrockAgentCoreApp` + `@app.entrypoint`) or
+any HTTP server satisfying the runtime contract (ARM64, port 8080,
+`POST /invocations` + `GET /ping`, payload `{"prompt", "actor_id"}`). Three
+artifact kinds, one `spec.byoc` block (`backend/app/schemas/agent.py::ByocConfig`):
+
+| `artifact_kind` | Input | Path to Runtime |
+|---|---|---|
+| `code_zip` | zip of Python source (staged via `POST /api/agents/uploads`) | S3 → `CreateAgentRuntime(codeConfiguration)` with the member's Python version + entrypoint; the platform resolves the zip's `requirements.txt` into the bundle for linux/aarch64 (hashed lock, wheels only — nothing is executed) |
+| `container_source` | zip carrying a Dockerfile | the shared `launchpad-agent-builder` CodeBuild project (ARM64) → ECR `launchpad-agents:{name}-v{version}` → `containerConfiguration`, including the digest pin and image-scan gate the container method uses |
+| `container_image` | an existing image URI | verified with `ecr.describe_images` — must live in this workspace's account+region; public registries and other accounts are refused — then deployed as-is |
+
+**Security model.** Developers need no IAM: they hand a zip to whoever holds the
+`perm:agents.deploy` console permission (uploads carry the same permission).
+Each agent gets its own least-privilege execution role (`services/agent_iam.py`);
+BYOC container kinds additionally get `ecr:BatchGetImage`/`GetDownloadUrlForLayer`
+scoped to the image's repository. The role's `bedrock:InvokeModel` statement
+covers exactly `spec.byoc.allowed_models` (1–20 ids; absent ⇒ `[spec.model_id]`)
+— the union of each entry's foundation-model + inference-profile ARNs, deduped,
+never a wildcard. Entry `[0]` is the primary (= `spec.model_id`); the deployer
+injects it as env `MODEL_ID` and the full list as `ALLOWED_MODEL_IDS`
+(comma-separated) so the code knows what it may call — `spec.env` values win.
+Re-publish rewrites the role policy, so an edited list lands with the deploy. Uploads are workspace-scoped under
+`byoc/{workspace_id}/{upload_id}/` in the artifacts bucket, and the server stamps
+provenance (sha256, size, filename, uploader, time) onto the spec — the console
+renders it on the agent detail view.
+
+**What is validated / what is not.** The upload gate enforces archive safety
+(zip-slip, absolute paths, symlinks, ≤250 MiB zip / ≤750 MiB uncompressed /
+≤20k entries — the AgentCore direct-code caps) and *reports* detection
+(entrypoint candidates, requirements.txt, Dockerfile, AgentCore-SDK markers).
+The platform does **not** review or scan the code itself; `container_source`
+images do pass the existing ECR scan gate. User code is never executed on the
+Launchpad host — package-time work is extraction and a wheels-only pip install
+into the bundle directory. For `container_source`, the platform's own
+`buildspec.yml` is always injected into the CodeBuild source zip, **overwriting
+any buildspec the upload carries** — the member controls the Dockerfile only,
+never the build recipe.
+
+**v1 scope.** HTTP protocol only (no A2A); no toolkits/skills/knowledge
+bases/tools on the spec (the platform does not generate this code, so it cannot
+wire them — configure capabilities inside your own code); `system_prompt` is
+optional and serves as a description. Config-bundle experiments and canary
+candidates degrade with `custom-source-unverified`, exactly like other
+custom-source runtimes. Samples: [`samples/byoc/`](../samples/byoc/README.md);
+lab walkthrough: [docs/lab/13-byoc.md](lab/13-byoc.md).
 
 ### Recommendation trace source
 

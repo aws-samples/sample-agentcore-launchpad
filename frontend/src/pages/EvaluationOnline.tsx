@@ -95,6 +95,7 @@ const ELIGIBLE_METHODS = new Set<AgentInfo["method"]>([
   "studio",
   "container",
   "harness",
+  "byoc",
 ]);
 const TRANSIENT = new Set(["CREATING", "UPDATING", "DELETING"]);
 const FAILED = new Set(["CREATE_FAILED", "UPDATE_FAILED", "ERROR"]);

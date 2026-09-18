@@ -39,17 +39,20 @@ def create_code_runtime(
     role_arn: str,
     environment: dict[str, str] | None = None,
     protocol: str | None = None,
+    python_version: str | None = None,
+    entrypoint: str | None = None,
+    instrument: bool = True,
 ) -> dict[str, Any]:
-    """CreateAgentRuntime from a zip on S3, instrumented via ADOT."""
+    """CreateAgentRuntime from a zip on S3, instrumented via ADOT.
+
+    ``python_version``/``entrypoint`` default to the platform artifact contract
+    (PYTHON_3_13, main.py); BYOC passes the user's choices through and disables
+    the ADOT launcher (user zips don't necessarily vendor the distro)."""
     params: dict[str, Any] = {
         "agentRuntimeName": runtime_name,
-        "agentRuntimeArtifact": {
-            "codeConfiguration": {
-                "code": {"s3": {"bucket": s3_bucket, "prefix": s3_key}},
-                "runtime": "PYTHON_3_13",
-                "entryPoint": ["opentelemetry-instrument", "main.py"],
-            }
-        },
+        "agentRuntimeArtifact": _code_artifact(
+            s3_bucket, s3_key, python_version, entrypoint, instrument
+        ),
         "networkConfiguration": {"networkMode": "PUBLIC"},
         "roleArn": role_arn,
     }
@@ -107,12 +110,24 @@ def create_container_runtime(
     return client.create_agent_runtime(**params)
 
 
-def _code_artifact(s3_bucket: str, s3_key: str) -> dict[str, Any]:
+def _code_artifact(
+    s3_bucket: str,
+    s3_key: str,
+    python_version: str | None = None,
+    entrypoint: str | None = None,
+    instrument: bool = True,
+) -> dict[str, Any]:
+    """``instrument=False`` drops the opentelemetry-instrument launcher — BYOC
+    zips only carry it when the member's own requirements install the distro,
+    and an absent launcher fails the runtime at start."""
+    entry = [entrypoint or "main.py"]
+    if instrument:
+        entry.insert(0, "opentelemetry-instrument")
     return {
         "codeConfiguration": {
             "code": {"s3": {"bucket": s3_bucket, "prefix": s3_key}},
-            "runtime": "PYTHON_3_13",
-            "entryPoint": ["opentelemetry-instrument", "main.py"],
+            "runtime": python_version or "PYTHON_3_13",
+            "entryPoint": entry,
         }
     }
 
@@ -126,6 +141,9 @@ def update_code_runtime(
     role_arn: str,
     environment: dict[str, str] | None = None,
     protocol: str | None = None,
+    python_version: str | None = None,
+    entrypoint: str | None = None,
+    instrument: bool = True,
 ) -> dict[str, Any]:
     """UpdateAgentRuntime with a new zip artifact — publishes a new version in
     place (same agentRuntimeId/ARN; the DEFAULT endpoint auto-rolls to it).
@@ -134,7 +152,9 @@ def update_code_runtime(
     resets an omitted protocolConfiguration back to HTTP (probed live)."""
     params: dict[str, Any] = {
         "agentRuntimeId": runtime_id,
-        "agentRuntimeArtifact": _code_artifact(s3_bucket, s3_key),
+        "agentRuntimeArtifact": _code_artifact(
+            s3_bucket, s3_key, python_version, entrypoint, instrument
+        ),
         "networkConfiguration": {"networkMode": "PUBLIC"},
         "roleArn": role_arn,
     }

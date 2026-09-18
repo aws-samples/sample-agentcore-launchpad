@@ -27,7 +27,7 @@ from app.services.runtime_discovery import DISCOVERED_METHOD, HARNESS_RESOURCE_T
 
 ResourceKind = Literal["runtime", "harness"]
 
-RUNTIME_METHODS = {"zip_runtime", "studio", "container"}
+RUNTIME_METHODS = {"zip_runtime", "studio", "container", "byoc"}
 DEFAULT_ENDPOINT = "DEFAULT"
 CANARY_ENDPOINTS = ("stable", "treatment")
 

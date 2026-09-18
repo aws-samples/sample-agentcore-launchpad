@@ -273,6 +273,13 @@
         "desc": "Scan AgentCore Runtime and managed Harness resources in this Region and add agent-like resources to Launchpad without redeploying them.",
         "spec2": "HTTP + A2A + Harness inventory import",
         "spec3": "externally owned · no AWS mutation"
+      },
+      "byoc": {
+        "badge": "YOUR CODE · NO IAM NEEDED",
+        "title": "Bring Your Own Code",
+        "desc": "Upload agent code your developers wrote — a zip for the direct-code runtime or a Dockerfile build context. The platform packages, deploys and operates it.",
+        "spec2": "SDK contract: BedrockAgentCoreApp / POST /invocations",
+        "spec3": "per-agent execution role · developers need no AWS access"
       }
     },
     "discovery": {
@@ -412,7 +419,46 @@
       "a2aSkillName": "skill name",
       "a2aSkillDesc": "what this skill does — the routing surface other agents match on",
       "a2aSkillTags": "tags, comma-separated",
-      "a2aSkillAdd": "add skill"
+      "a2aSkillAdd": "add skill",
+      "titleByoc": "Configure — Bring Your Own Code",
+      "byocKind": "Artifact kind",
+      "byocKindName": {
+        "code_zip": "Code zip",
+        "container_source": "Dockerfile build",
+        "container_image": "Existing ECR image"
+      },
+      "byocKindDesc": {
+        "code_zip": "A zip of Python source; deployed on the direct-code runtime (S3 → CreateAgentRuntime).",
+        "container_source": "A zip carrying a Dockerfile; built ARM64 on CodeBuild and pushed to ECR.",
+        "container_image": "An image already in this account's private ECR; no build."
+      },
+      "byocUpload": "Source zip",
+      "byocDrop": "Drop a .zip here or click to choose (≤250 MiB)",
+      "byocUploading": "Uploading and validating…",
+      "byocEntries": "entries",
+      "byocNoSdkWarn": "No BedrockAgentCoreApp/@app.entrypoint marker detected — your entrypoint must serve POST /invocations + GET /ping on :8080 itself.",
+      "byocNoDockerfileWarn": "No Dockerfile detected at the zip root — a Dockerfile build needs one.",
+      "byocImageUri": "ECR image URI",
+      "byocImageHint": "A private ECR image in this account and region (ARM64). Public registries are refused.",
+      "byocEntrypoint": "Entrypoint",
+      "byocPython": "Python version",
+      "byocInstallReqs": "resolve requirements.txt (linux/aarch64)",
+      "byocRaw": "raw invoke contract",
+      "byocRawHint": "Acknowledges that your code handles the invoke payload itself; the platform still sends {prompt, actor_id}.",
+      "byocModels": "Allowed models",
+      "byocModelPrimary": "primary → MODEL_ID",
+      "byocModelMakePrimary": "set as primary",
+      "byocModelAdd": "Add a model from the catalog…",
+      "byocModelAddCustom": "Add custom ID",
+      "byocModelsHint": "The agent's execution role permits invoking exactly these models — your code gets AccessDenied on any other id. The platform passes the primary (first) model to your runtime as env MODEL_ID and the full list as ALLOWED_MODEL_IDS (comma-separated); values you set yourself in the environment variables win.",
+      "byocDescription": "Description",
+      "byocDescriptionPlaceholder": "What this agent does (shown in registry/chat)",
+      "byocEnv": "Environment variables",
+      "byocEnvKey": "Variable name",
+      "byocEnvValue": "Value",
+      "byocEnvAdd": "Add variable",
+      "byocContract": "Runtime contract",
+      "byocContractBody": "ARM64 (aarch64) · listens on port 8080 · POST /invocations + GET /ping\nInvoke payload: {\"prompt\": \"...\", \"actor_id\": \"...\"}\nZip ≤ 250 MiB (≤ 750 MiB uncompressed) · code zip runs on the managed Python runtime\nThe bedrock-agentcore SDK (BedrockAgentCoreApp + @app.entrypoint) satisfies all of this."
     },
     "launchPanel": {
       "title": "LAUNCH PLAN",
@@ -480,7 +526,15 @@
       "filterMethodAll": "ALL METHODS",
       "filterStatusAll": "ALL STATUSES",
       "searchPlaceholder": "Search agent name / ID…",
-      "noMatch": "NO AGENTS MATCH THE CURRENT FILTERS"
+      "noMatch": "NO AGENTS MATCH THE CURRENT FILTERS",
+      "byocTitle": "BYOC artifact",
+      "byocKind": "kind",
+      "byocModels": "allowed models",
+      "byocModelPrimary": "primary → MODEL_ID",
+      "byocImage": "image",
+      "byocEntrypoint": "entrypoint",
+      "byocSize": "size",
+      "byocUploadedBy": "uploaded by"
     },
     "system": {
       "title": "SYSTEM PRESETS",

@@ -68,7 +68,7 @@ English: [architecture.md](architecture.md)
 
 ## 统一的五阶段部署管道
 
-三种创建方式统一收敛到同一组有序阶段,定义在 `backend/app/deployer/pipeline.py`:
+所有创建方式统一收敛到同一组有序阶段,定义在 `backend/app/deployer/pipeline.py`:
 
 ```
 generate → package → provision → deploy → register
@@ -78,13 +78,13 @@ generate → package → provision → deploy → register
 `Deployment` 行上,并作为 JSONL 事件镜像进 `Job` 日志,因此重启后的后端会从第一个
 未成功的阶段继续(启动时执行 `resume_pending_jobs()`)。
 
-| 阶段 | 方式B — harness | zip_runtime / 方式C — studio | 方式A — container |
-|---|---|---|---|
-| **generate** | 从 AgentSpec 构建 `CreateHarness` 请求 | 渲染 Strands 模板(studio:原样适配用户代码) | 组装 ARM64 构建上下文(Dockerfile + `main.py` + `.claude` 脚手架) |
-| **package** | *跳过*(无产物) | 解析 → 带 hash 的 lock → `--require-hashes` 安装 ARM64 wheels → zip → S3 | zip 上下文 → S3 → CodeBuild(docker build+push)→ ECR → 解析 digest → 扫描闸门 |
-| **provision** | 复用共享执行角色 | 复用共享执行角色 | 复用共享执行角色 |
-| **deploy** | `CreateHarness` + 轮询 READY | `CreateAgentRuntime` + 轮询 READY | `CreateAgentRuntime(containerConfiguration)` + 轮询 READY |
-| **register** | A2A 注册记录,自动提交 | A2A 注册记录,自动提交 | A2A 注册记录,自动提交 |
+| 阶段 | 方式B — harness | zip_runtime / 方式C — studio | 方式A — container | byoc — 自带代码 |
+|---|---|---|---|---|
+| **generate** | 从 AgentSpec 构建 `CreateHarness` 请求 | 渲染 Strands 模板(studio:原样适配用户代码) | 组装 ARM64 构建上下文(Dockerfile + `main.py` + `.claude` 脚手架) | *不生成代码。* 校验已暂存的上传(或 ECR 镜像),并把服务端核验的溯源信息(sha256、上传者、时间)写入 spec |
+| **package** | *跳过*(无产物) | 解析 → 带 hash 的 lock → `--require-hashes` 安装 ARM64 wheels → zip → S3 | zip 上下文 → S3 → CodeBuild(docker build+push)→ ECR → 解析 digest → 扫描闸门 | `code_zip`:下载 → 安全解压 → 校验入口文件 → 为 linux/aarch64 解析 zip 内的 `requirements.txt`(带 hash 锁定)→ zip → S3;`container_source`:校验 Dockerfile → 与方式A 相同的 CodeBuild → ECR → digest → 扫描闸门;`container_image`:*跳过* |
+| **provision** | 复用共享执行角色 | 复用共享执行角色 | 复用共享执行角色 | 按 Agent 的最小权限角色(同一套机制) |
+| **deploy** | `CreateHarness` + 轮询 READY | `CreateAgentRuntime` + 轮询 READY | `CreateAgentRuntime(containerConfiguration)` + 轮询 READY | `CreateAgentRuntime`——`codeConfiguration`(用户选择的 Python 版本与入口,不带 ADOT 启动器)或 `containerConfiguration`——+ 轮询 READY |
+| **register** | A2A 注册记录,自动提交 | A2A 注册记录,自动提交 | A2A 注册记录,自动提交 | 同一个共享 register 阶段——byoc Agent 是 Runtime 型,聊天/版本/可观测按 Runtime 处理 |
 
 典型耗时:harness ≈ 30 秒,zip ≈ 1–3 分钟(含 pip),container ≈ 2–4 分钟(实测:CodeBuild 1.7 分钟 + 数秒即 READY)
 (经 CodeBuild)。见 [troubleshooting.zh-CN.md](troubleshooting.zh-CN.md)。
@@ -175,14 +175,15 @@ agent 全部卡死。而读不到的扫描——未启用扫描、API 报错、�
 
 ### 创建入口
 
-`/create` 的入口卡片共四张,顺序如下:
+`/create` 的入口卡片共五张,顺序如下:
 
 | # | 卡片 | `AgentSpec.method` | 说明 |
 |---|---|---|---|
 | 1 | **托管 Harness** | `harness` | 方式B —— 声明式,无构建产物 |
 | 2 | **Strands Studio** | `zip_runtime` | 方式C —— Strands 模板走 zip 快速通道;卡片内嵌链接进入 `/create/studio` 画布,画布以 `studio` 方式部署 |
 | 3 | **其他 Agent SDK** | `container` | 方式A —— 自带 Agent SDK,经 CodeBuild 打包为 ARM64 容器 |
-| 4 | **发现现有 Runtime 与 Harness** | — | 不是部署方式(见下文) |
+| 4 | **自带代码** | `byoc` | 开发者自己编写的 Agent 代码——上传 zip(直连代码运行时或 Dockerfile → CodeBuild),或引用本账户私有 ECR 中的现有镜像——见下文 BYOC 小节 |
+| 5 | **发现现有 Runtime 与 Harness** | — | 不是部署方式(见下文) |
 
 第三张卡片是一个**类别**,而不是某一个 SDK。`AgentSpec.agent_sdk` 记录容器
 Agent 打包的是哪个 SDK,向导把它作为配置步骤上的二级选项。它是只有一个成员的
@@ -190,6 +191,48 @@ Agent 打包的是哪个 SDK,向导把它作为配置步骤上的二级选项。
 spec 也能被无歧义地读回,将来新增第二个 SDK 无需迁移已存 spec。目前**故意不对
 该字段做分派**:在类别出现第二个成员之前,`app/deployer/container.py` 与
 `app/templates/claude_sdk_agent/` 保持无条件实现。
+
+### BYOC —— 自带代码
+
+第四张卡片部署成员开发者自己编写的代码——已用 AgentCore SDK
+(`BedrockAgentCoreApp` + `@app.entrypoint`)包装,或任何满足运行时契约的 HTTP
+服务(ARM64、8080 端口、`POST /invocations` + `GET /ping`、负载
+`{"prompt", "actor_id"}`)。三种构件类型,同一个 `spec.byoc` 配置块
+(`backend/app/schemas/agent.py::ByocConfig`):
+
+| `artifact_kind` | 输入 | 到 Runtime 的路径 |
+|---|---|---|
+| `code_zip` | Python 源码 zip(经 `POST /api/agents/uploads` 暂存) | S3 → `CreateAgentRuntime(codeConfiguration)`,使用成员选择的 Python 版本与入口文件;平台把 zip 内的 `requirements.txt` 按 linux/aarch64 解析进包内(带 hash 锁定,只装 wheel——不执行任何用户代码) |
+| `container_source` | 含 Dockerfile 的 zip | 共享的 `launchpad-agent-builder` CodeBuild 项目(ARM64)→ ECR `launchpad-agents:{name}-v{version}` → `containerConfiguration`,含与容器方式相同的 digest 固定与镜像扫描闸门 |
+| `container_image` | 现有镜像 URI | 用 `ecr.describe_images` 核验——必须位于本工作区的账户+区域;公共镜像仓库与其他账户会被拒绝——然后按原样部署 |
+
+**安全模型。** 开发者无需任何 IAM:他们把 zip 交给持有 `perm:agents.deploy`
+控制台权限的人(上传接口使用同一权限)。每个 Agent 拥有独立的最小权限执行角色
+(`services/agent_iam.py`);BYOC 容器类型额外获得按镜像仓库收敛的
+`ecr:BatchGetImage`/`GetDownloadUrlForLayer`。角色的 `bedrock:InvokeModel`
+语句精确覆盖 `spec.byoc.allowed_models`(1–20 个 ID;缺省 ⇒ `[spec.model_id]`)
+——即每个条目的基础模型 + 推理配置文件 ARN 的并集,去重,绝不使用通配符。第
+`[0]` 个条目是主模型(= `spec.model_id`);部署器把它以环境变量 `MODEL_ID`、完整
+列表以 `ALLOWED_MODEL_IDS`(逗号分隔)注入运行时,让代码知道自己可以调用什么——
+`spec.env` 中的用户值优先。重新发布会重写角色策略,编辑后的列表随部署生效。上传对象按工作区隔离,存放在制品桶的
+`byoc/{workspace_id}/{upload_id}/` 前缀下;服务端把溯源信息(sha256、大小、文件名、
+上传者、时间)写入 spec,控制台在 Agent 详情页展示。
+
+**校验什么/不校验什么。** 上传闸门强制归档安全(zip-slip、绝对路径、符号链接、
+zip ≤250 MiB/解压后 ≤750 MiB/条目 ≤2 万——即 AgentCore 直连代码上限),并*报告*
+检测结果(候选入口、requirements.txt、Dockerfile、AgentCore SDK 标记)。平台
+**不**审查、不扫描代码本身;`container_source` 的镜像仍会经过现有的 ECR 扫描闸门。
+用户代码永远不会在 Launchpad 主机上执行——打包阶段只做解压和 wheel-only 的 pip
+安装到包目录。对于 `container_source`,平台始终把自己的 `buildspec.yml` 注入
+CodeBuild 源码包,**覆盖上传中自带的任何 buildspec**——成员只控制 Dockerfile,
+永远不控制构建配方。
+
+**v1 范围。** 仅 HTTP 协议(不支持 A2A);spec 上不支持
+toolkits/skills/knowledge_bases/tools(平台不生成这份代码,无法接线——请在你自己的
+代码里配置能力);`system_prompt` 可选,作为描述使用。配置包实验与金丝雀候选按
+`custom-source-unverified` 降级,与其他自带源码的运行时一致。示例见
+[`samples/byoc/`](../samples/byoc/README.md);实验手册见
+[docs/lab/13-byoc.md](lab/13-byoc.md)。
 
 ### 推荐的 trace 来源
 

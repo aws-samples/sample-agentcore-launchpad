@@ -102,6 +102,47 @@ denied`, `AWS is throttling this request`, `AWS resource conflict`) and `detail`
 carries only `aws_error_code` — the raw AWS text names the deployment's role ARN,
 instance id and operation, which stay on the console side of the API-key boundary.
 
+## Console Agents API — BYOC uploads
+
+The `byoc` creation method deploys member-written code. The two zip artifact
+kinds (`code_zip`, `container_source`) stage their archive here first; the
+returned `upload_id` goes into the create body's `spec.byoc`.
+
+| Method | Path | Result |
+|---|---|---|
+| `POST` | `/api/agents/uploads` | `perm:agents.deploy` — `multipart/form-data`, single part `file`, `.zip` only, ≤250 MiB (≤750 MiB uncompressed, ≤20k entries; zip-slip/absolute paths/symlinks refused). Stores `byoc/{workspace_id}/{upload_id}/source.zip` + `manifest.json` in the artifacts bucket → `201` `{upload_id, sha256, size_bytes, original_filename, uploaded_by, uploaded_at, entries_count, uncompressed_bytes, detected: {entrypoint_candidates[], has_requirements, has_dockerfile, agentcore_sdk_detected}}` |
+| `GET` | `/api/agents/uploads/{upload_id}` | member — the stored manifest (same shape); another workspace's upload_id answers 404 |
+
+Error codes: `byoc.invalid_upload` (400, missing/non-zip part or empty file),
+`byoc.upload_too_large` / `byoc.upload_request_too_large` (413),
+`byoc.zip_invalid`, `byoc.zip_empty`, `byoc.zip_entry_unsafe`,
+`byoc.zip_too_many_entries`, `byoc.zip_uncompressed_too_large` (422),
+`byoc.upload_not_found` (404).
+
+`POST /api/agents` with `method: "byoc"` takes `spec.byoc`:
+`{artifact_kind: code_zip|container_source|container_image, upload_id?,
+image_uri?, entrypoint? (code_zip, default main.py), python_version?
+(PYTHON_3_10…PYTHON_3_13, default PYTHON_3_13), install_requirements? (default
+true), invoke_contract? (launchpad_prompt|raw), allowed_models? (1–20 unique
+Bedrock foundation-model or inference-profile ids)}` — the zip kinds require
+`upload_id`, `container_image` requires a private-ECR `image_uri` in the
+workspace's account+region. `system_prompt` is optional for this method (it
+serves as a description); tools/toolkits/skills/knowledge_bases and protocol
+`a2a` are refused in v1. The server stamps `spec.byoc.provenance` from the
+upload manifest during deploy.
+
+**Allowed models.** The per-agent execution role scopes `bedrock:InvokeModel`
+to exactly `byoc.allowed_models`, so user code calling any other model gets
+`AccessDeniedException` at runtime. Entry `[0]` is the **primary** model and
+must equal `spec.model_id`: send only `allowed_models` and the server sets
+`model_id` to the first entry; send both and `model_id` must be in the list (it
+is moved to the front). A spec without `allowed_models` — including every spec
+written before the field existed — behaves as `[spec.model_id]`. Re-publish
+rewrites the role policy, so an edited list takes effect on the next deploy.
+The deployer passes the primary id to the runtime as env `MODEL_ID` and the
+full list as env `ALLOWED_MODEL_IDS` (comma-separated, primary first) — for
+either variable, a value already in `spec.env` wins.
+
 ## Console Agents API — versions and endpoints
 
 `GET /api/agents/{agent_id}/versions` is the read-only AWS view behind the agent

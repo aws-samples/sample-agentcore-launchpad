@@ -273,6 +273,13 @@
         "desc": "扫描当前区域的 AgentCore Runtime 与托管 Harness 资源，将 Agent 类型的资源纳入 Launchpad，不会重新部署。",
         "spec2": "导入 HTTP + A2A + Harness 资源清单",
         "spec3": "外部所有 · 不修改 AWS 资源"
+      },
+      "byoc": {
+        "badge": "自带代码 · 无需 IAM",
+        "title": "自带代码",
+        "desc": "上传开发者自己编写的 Agent 代码——直连代码运行时的 zip 包，或含 Dockerfile 的构建上下文。平台负责打包、部署与运维。",
+        "spec2": "SDK 契约：BedrockAgentCoreApp / POST /invocations",
+        "spec3": "按 Agent 独立执行角色·开发者无需 AWS 权限"
       }
     },
     "discovery": {
@@ -412,7 +419,46 @@
       "a2aSkillName": "技能名称",
       "a2aSkillDesc": "技能说明——其他 Agent 据此匹配路由",
       "a2aSkillTags": "标签，逗号分隔",
-      "a2aSkillAdd": "添加技能"
+      "a2aSkillAdd": "添加技能",
+      "titleByoc": "配置——自带代码",
+      "byocKind": "构件类型",
+      "byocKindName": {
+        "code_zip": "代码 zip",
+        "container_source": "Dockerfile 构建",
+        "container_image": "现有 ECR 镜像"
+      },
+      "byocKindDesc": {
+        "code_zip": "Python 源码 zip 包；部署到直连代码运行时（S3 → CreateAgentRuntime）。",
+        "container_source": "含 Dockerfile 的 zip 包；在 CodeBuild 上构建 ARM64 镜像并推送到 ECR。",
+        "container_image": "本账户私有 ECR 中已有的镜像；无需构建。"
+      },
+      "byocUpload": "源码 zip",
+      "byocDrop": "拖放 .zip 到此处，或点击选择（≤250 MiB）",
+      "byocUploading": "正在上传并校验……",
+      "byocEntries": "个条目",
+      "byocNoSdkWarn": "未检测到 BedrockAgentCoreApp/@app.entrypoint 标记——你的入口必须自行在 :8080 端口提供 POST /invocations 与 GET /ping。",
+      "byocNoDockerfileWarn": "未在 zip 根目录检测到 Dockerfile——Dockerfile 构建需要它。",
+      "byocImageUri": "ECR 镜像 URI",
+      "byocImageHint": "本账户本区域的私有 ECR 镜像（ARM64）。公共镜像仓库会被拒绝。",
+      "byocEntrypoint": "入口文件",
+      "byocPython": "Python 版本",
+      "byocInstallReqs": "解析 requirements.txt（linux/aarch64）",
+      "byocRaw": "raw 调用契约",
+      "byocRawHint": "表示你的代码自行处理调用负载；平台仍发送 {prompt, actor_id}。",
+      "byocModels": "允许的模型",
+      "byocModelPrimary": "主模型 → MODEL_ID",
+      "byocModelMakePrimary": "设为主模型",
+      "byocModelAdd": "从目录添加模型…",
+      "byocModelAddCustom": "添加自定义 ID",
+      "byocModelsHint": "该 Agent 的执行角色仅允许调用这些模型——你的代码调用其他模型 ID 会收到 AccessDenied。平台会把主模型（第一个）以环境变量 MODEL_ID、完整列表以 ALLOWED_MODEL_IDS（逗号分隔）传入你的运行时；如果你在环境变量中自行设置了同名变量，则以你的值为准。",
+      "byocDescription": "描述",
+      "byocDescriptionPlaceholder": "该 Agent 的用途（展示在注册表/聊天中）",
+      "byocEnv": "环境变量",
+      "byocEnvKey": "变量名",
+      "byocEnvValue": "值",
+      "byocEnvAdd": "添加变量",
+      "byocContract": "运行时契约",
+      "byocContractBody": "ARM64（aarch64）·监听 8080 端口·POST /invocations + GET /ping\n调用负载：{\"prompt\": \"...\", \"actor_id\": \"...\"}\nzip ≤ 250 MiB（解压后 ≤ 750 MiB）·代码 zip 运行在托管 Python 运行时上\n使用 bedrock-agentcore SDK（BedrockAgentCoreApp + @app.entrypoint）即可满足以上全部要求。"
     },
     "launchPanel": {
       "title": "部署计划",
@@ -480,7 +526,15 @@
       "filterMethodAll": "全部创建方式",
       "filterStatusAll": "全部状态",
       "searchPlaceholder": "搜索 Agent 名称 / ID……",
-      "noMatch": "没有匹配当前筛选条件的 Agent"
+      "noMatch": "没有匹配当前筛选条件的 Agent",
+      "byocTitle": "BYOC 构件",
+      "byocKind": "类型",
+      "byocModels": "允许的模型",
+      "byocModelPrimary": "主模型 → MODEL_ID",
+      "byocImage": "镜像",
+      "byocEntrypoint": "入口",
+      "byocSize": "大小",
+      "byocUploadedBy": "上传者"
     },
     "system": {
       "title": "系统预置",

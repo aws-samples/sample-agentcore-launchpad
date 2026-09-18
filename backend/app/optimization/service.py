@@ -263,6 +263,18 @@ def experiment_capability(agent_row: Any) -> dict[str, Any]:
             "reason_code": "system-managed",
             "reason": "System-managed presets cannot be modified by an experiment.",
         }
+    if agent_row.method == "byoc":
+        # Same verdict as spec.code/code_bundle below — BYOC is user source by
+        # definition, and it never reaches that branch because the method gate
+        # right after this would answer "not-http-runtime" instead.
+        return {
+            **base,
+            "reason_code": "custom-source-unverified",
+            "reason": (
+                "Custom runtime source is not verified to consume "
+                "Launchpad configuration bundles."
+            ),
+        }
     if agent_row.method != "zip_runtime":
         return {
             **base,
@@ -332,7 +344,7 @@ def canary_capability(agent_row: Any) -> dict[str, Any]:
             "reason_code": "not-active",
             "reason": "Canary agent must be active.",
         }
-    if agent_row.method not in {"zip_runtime", "container", "studio"}:
+    if agent_row.method not in {"zip_runtime", "container", "studio", "byoc"}:
         return {
             **base,
             "reason_code": "not-runtime",
@@ -343,6 +355,14 @@ def canary_capability(agent_row: Any) -> dict[str, Any]:
             **base,
             "reason_code": "container-followup",
             "reason": "Container canary candidate minting via CodeBuild is a follow-up.",
+        }
+    if agent_row.method == "byoc":
+        # candidate minting rebuilds the artifact from an edited spec, which the
+        # platform cannot do for user-owned source
+        return {
+            **base,
+            "reason_code": "custom-source-unverified",
+            "reason": "BYOC candidates cannot be minted from an edited spec.",
         }
     if (agent_row.spec or {}).get("protocol", "http") != "http":
         return {

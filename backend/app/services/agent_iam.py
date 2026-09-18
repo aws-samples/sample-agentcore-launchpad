@@ -194,6 +194,17 @@ def model_resources(model_id: str, ctx: RoleContext) -> list[str]:
     return ["arn:aws:bedrock:*::foundation-model/*"]
 
 
+def allowed_model_resources(spec: AgentSpec, ctx: RoleContext) -> list[str]:
+    """Union of `model_resources` over every model the spec permits, deduped in
+    order. One entry for every method except byoc, whose ``allowed_models`` list
+    may authorize several — each still scoped to its exact id, never widened."""
+    return list(dict.fromkeys(
+        arn
+        for model_id in spec.allowed_model_ids
+        for arn in model_resources(model_id, ctx)
+    ))
+
+
 def _uses_gateway(spec: AgentSpec) -> bool:
     """Whether anything in the spec needs an AgentCore workload token.
 
@@ -275,12 +286,12 @@ def policy_document(spec: AgentSpec, ctx: RoleContext, *, system_preset: bool = 
     """
     statements: list[dict[str, Any]] = []
 
-    # ---- models: always needed, scoped to the configured id ----
+    # ---- models: always needed, scoped to the configured id(s) ----
     statements.append({
         "Sid": "BedrockModels",
         "Effect": "Allow",
         "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-        "Resource": model_resources(spec.model_id, ctx),
+        "Resource": allowed_model_resources(spec, ctx),
     })
 
     if spec.model_source == "mantle":
@@ -403,12 +414,23 @@ def policy_document(spec: AgentSpec, ctx: RoleContext, *, system_preset: bool = 
         })
 
     # ---- container image pull ----
-    if spec.method == "container":
+    byoc_kind = spec.byoc.artifact_kind if spec.byoc else None
+    if spec.method == "container" or byoc_kind in ("container_source", "container_image"):
+        # byoc container_image may name any repo in this account; scope to it
+        # rather than the shared launchpad-agents repo
+        if byoc_kind == "container_image" and spec.byoc and spec.byoc.image_uri:
+            repo_name = spec.byoc.image_uri.split(".amazonaws.com/", 1)[1]
+            repo_name = repo_name.split("@", 1)[0].rsplit(":", 1)[0]
+            repo_arn = (
+                f"arn:aws:ecr:{ctx.region}:{ctx.account_id}:repository/{repo_name}"
+            )
+        else:
+            repo_arn = ctx.ecr_repo_arn
         statements.append({
             "Sid": "EcrPull",
             "Effect": "Allow",
             "Action": ["ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"],
-            "Resource": [ctx.ecr_repo_arn],
+            "Resource": [repo_arn],
         })
         statements.append({
             # UNSCOPABLE: ecr:GetAuthorizationToken takes no resource by design.
