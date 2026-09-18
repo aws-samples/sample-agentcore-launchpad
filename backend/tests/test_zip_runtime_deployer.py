@@ -83,7 +83,7 @@ def test_build_zip_resolves_a_hashed_lock_for_the_deploy_target(tmp_path: Path):
     )
     cmd = fake_pip_ok.compile_cmd
     assert "--generate-hashes" in cmd
-    assert "aarch64-manylinux2014" in cmd
+    assert "aarch64-manylinux_2_28" in cmd  # runtime_target default
     assert "3.13" in cmd
     assert "--only-binary=:all:" in cmd
 

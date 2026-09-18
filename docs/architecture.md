@@ -189,14 +189,27 @@ whether what runs is still what was built. Both live in the `package` stage.
 over the declared list — which is what this used to be — installs whatever the
 index serves at that moment, including for the platform's own ranged pins, and
 leaves no record. The stage now runs `uv pip compile --generate-hashes` for the
-deploy target (aarch64, Python 3.13, named once in `zip_runtime.py` so the resolve
-and the install cannot disagree) with `--only-binary=:all:`, then installs those
-same wheel-only candidates with `--require-hashes`. Without the matching binary
-constraint, the resolver can lock an sdist-only release that the Runtime's
-ARM64/manylinux2014 binary-only install rejects. A substituted or re-uploaded
-distribution fails the build. The lock ships inside the zip as
-`requirements.lock`, so the artifact carries its own bill of materials. There
-is deliberately no fallback: a resolve failure fails the stage.
+deploy target (aarch64, Python 3.13, defined once in
+`app/core/runtime_target.py` so the resolve and the install cannot disagree)
+with `--only-binary=:all:`, then installs those same wheel-only candidates with
+`--require-hashes`. Without the matching binary constraint, the resolver can
+lock an sdist-only release that the Runtime's ARM64 binary-only install
+rejects. A substituted or re-uploaded distribution fails the build. The lock
+ships inside the zip as `requirements.lock`, so the artifact carries its own
+bill of materials. There is deliberately no fallback: a resolve failure fails
+the stage.
+
+The resolution target is **`manylinux_2_28` / aarch64** by default. The
+AgentCore Runtime direct-code environment was measured (2026-09-18, from inside
+a deployed PYTHON_3_13 agent) as Amazon Linux 2023 on aarch64 with glibc 2.34,
+so it loads any manylinux wheel up to `manylinux_2_34`; the official docs'
+`manylinux2014` recommendation is safe but rejects packages that only publish
+`manylinux_2_26`/`2_28` aarch64 wheels (e.g. `google-re2`, a `chromadb`
+dependency). The level is configurable via `runtime_python_platform`
+(`LAUNCHPAD_RUNTIME_PYTHON_PLATFORM`); `manylinux2014` is the documented
+fallback should a runtime image ever report an older glibc. Because pip treats
+`--platform` tags as exact strings, the install passes the whole tag ladder
+from the configured level down to `manylinux2014`.
 
 Caller-supplied `spec.requirements` must additionally be pinned at *schema*
 validation (`app/schemas/requirements.py`), so the console rejects a range before a
@@ -282,6 +295,27 @@ renders it on the agent detail view.
 (zip-slip, absolute paths, symlinks, ≤250 MiB zip / ≤750 MiB uncompressed /
 ≤20k entries — the AgentCore direct-code caps) and *reports* detection
 (entrypoint candidates, requirements.txt, Dockerfile, AgentCore-SDK markers).
+When the zip carries a `requirements.txt`, the upload also dry-resolves it
+against the deploy target for the selected Python version (`?python_version=`)
+and reports `detected.requirements: {status: ok|failed|skipped, package_count,
+error}` — so the wizard flags an unresolvable file before a deploy is
+attempted. `skipped` (resolver timeout, `uv` unavailable) says nothing either
+way; the deploy still runs the authoritative resolve.
+
+**requirements.txt rules (`code_zip`).** The file is parsed per the pip
+requirements-file format — backslash continuations, inline comments, blank
+lines and environment markers are all honoured. `--hash=` options are dropped:
+the platform re-locks the file against its own deploy target and generates
+fresh hashes (`requirements.lock` inside the artifact). List direct
+dependencies from the package index only; pins are optional (the hashed lock is
+what makes the build reproducible). Refused with a clear error, because a
+requirements file must not widen the platform-index-only supply-chain boundary:
+`-r`/`-c` includes, `-e`/editable, local paths, direct URLs and VCS references,
+`--index-url`/`--extra-index-url`/`--find-links`, and more than 500 entries.
+When a dependency ships no compatible aarch64 wheel, the error names the
+package and the alternatives: pin a release that does, use the Dockerfile
+(`container_source`) path, or vendor the packages inside the zip with
+`install_requirements=false`.
 The platform does **not** review or scan the code itself; `container_source`
 images do pass the existing ECR scan gate. User code is never executed on the
 Launchpad host — package-time work is extraction and a wheels-only pip install

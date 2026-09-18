@@ -215,7 +215,7 @@ class TestResolvePins:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
         resolve_pins(["x>=1"], [], runner=capture)
-        assert "aarch64-manylinux2014" in seen["cmd"]
+        assert "aarch64-manylinux_2_28" in seen["cmd"]  # runtime_target default
         assert "3.13" in seen["cmd"]
         assert "--only-binary=:all:" in seen["cmd"]
 

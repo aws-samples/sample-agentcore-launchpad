@@ -41,7 +41,10 @@ zip -r hello-container.zip hello-container/  # container_source：Dockerfile 构
 2. 构件类型保持 **代码 zip**；把 `hello-http.zip` 拖进上传框。
 3. 上传完成后会显示检测摘要：入口候选（`main.py`）、requirements.txt、
    AgentCore SDK 标记。若没有检测到 SDK 标记，会出现黄色提示——确认你的代码
-   自行实现了 `POST /invocations`。
+   自行实现了 `POST /invocations`。若 zip 带有 requirements.txt，上传时还会
+   针对运行时目标做一次**干跑解析**：绿色表示可解析（并显示包数量），红色则
+   给出具体原因（哪个包、为什么）——这样无需等到部署失败才发现依赖问题。
+   切换 Python 版本会自动重新检查。
 4. 入口文件选 `main.py`，Python 版本保持 3.13；可按需添加环境变量。
 5. 在 **允许的模型** 列表里添加你的代码要调用的模型（1–20 个，可从目录选择
    或输入自定义 ID）。执行角色只允许调用列表中的这些模型 ID——你的代码调用
@@ -54,6 +57,25 @@ zip -r hello-container.zip hello-container/  # container_source：Dockerfile 构
    provision（按 Agent 角色）→ deploy（CreateAgentRuntime）→ register。
 7. 部署完成后到 **Chat** 发一句话验证；**Observability** 与 **VERSIONS &
    ENDPOINTS** 面板与其他 Runtime 型 Agent 一致。
+
+### requirements.txt 怎么写
+
+- 只列**直接依赖**、且只来自公共软件包索引；固定版本（`==`）可选——平台会把
+  文件解析成带 hash 的锁定清单（`requirements.lock`，随产物下发），可复现性由
+  锁提供，不要求你手工固定。
+- 按 pip 文件格式解析：反斜杠续行、行内注释、空行、环境标记（`; python_version
+  < "3.12"`）都被支持。**`--hash=` 选项会被丢弃**：平台针对自己的部署目标重新
+  锁定并生成新的 hash，别的平台算出的 wheel hash 只会让构建失败。
+- 会被明确报错拒绝（供应链边界——平台只从自己的索引安装）：`-r`/`-c` 引用、
+  `-e`/可编辑安装、本地路径、直接 URL 与 VCS 引用（`git+…`）、
+  `--index-url`/`--extra-index-url`/`--find-links`，以及超过 500 条的清单。
+- 解析目标默认是 **linux/aarch64 + `manylinux_2_28`**（实测运行时为 Amazon
+  Linux 2023、glibc 2.34，2026-09-18；官方文档推荐的 `manylinux2014` 是保守
+  回退值，可用 `LAUNCHPAD_RUNTIME_PYTHON_PLATFORM` 配置）。平台**从不构建源码
+  包**——某个依赖如果没有兼容的 aarch64 wheel，错误会点名它并给出三条出路：
+  换一个发布了对应 wheel 的版本；改走 Dockerfile（`container_source`）路径，
+  在镜像里自行安装；或把依赖直接打进 zip 并关闭「解析 requirements.txt」
+  （`install_requirements=false`）。
 
 ## 13.3 Dockerfile 构建（container_source）
 

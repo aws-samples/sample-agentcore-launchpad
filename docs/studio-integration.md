@@ -54,7 +54,7 @@ studio canvas ──generate code──▶ Deploy via Launchpad
       ▼
 platform pipeline (zip fast path)
       generate  – adapt_studio_code(): verbatim module + entrypoint wrapper
-      package   – pip (manylinux2014_aarch64) → zip → S3
+      package   – pip (aarch64 manylinux wheels) → zip → S3
       provision – shared execution role
       deploy    – CreateAgentRuntime → poll READY
       register  – A2A registry record, auto-submitted

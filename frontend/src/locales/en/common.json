@@ -438,6 +438,8 @@
       "byocEntries": "entries",
       "byocNoSdkWarn": "No BedrockAgentCoreApp/@app.entrypoint marker detected — your entrypoint must serve POST /invocations + GET /ping on :8080 itself.",
       "byocNoDockerfileWarn": "No Dockerfile detected at the zip root — a Dockerfile build needs one.",
+      "byocReqsOk": "requirements.txt resolves for the runtime target — {{count}} packages.",
+      "byocReqsFailed": "requirements.txt does not resolve for the runtime target — the deploy would fail at the package stage:",
       "byocImageUri": "ECR image URI",
       "byocImageHint": "A private ECR image in this account and region (ARM64). Public registries are refused.",
       "byocEntrypoint": "Entrypoint",

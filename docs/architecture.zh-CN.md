@@ -146,9 +146,20 @@ Canary 与 A/B 候选版本沿用**生产当前所在的角色**,取自 `GetAgen
 **依赖先解析、再锁定、再校验安装。** 过去这里只有一次针对声明列表的 `pip install`,它
 装的是那一刻索引提供的任何版本(平台自带的范围写法也一样),而且不留任何记录。现在该
 阶段先用 `uv pip compile --generate-hashes` 针对部署目标解析(aarch64、Python 3.13,在
-`zip_runtime.py` 里只写一次,以保证解析与安装不会各说各话),再用 `--require-hashes`
-安装。被替换或重新上传过的发行包会让构建失败。lock 以 `requirements.lock` 随 zip 下发,
-产物自带物料清单。这里刻意没有回退路径:解析失败就是阶段失败。
+`app/core/runtime_target.py` 里只写一次,以保证解析与安装不会各说各话),再用
+`--require-hashes` 安装。被替换或重新上传过的发行包会让构建失败。lock 以
+`requirements.lock` 随 zip 下发,产物自带物料清单。这里刻意没有回退路径:解析失败就是
+阶段失败。
+
+解析目标默认是 **`manylinux_2_28` / aarch64**。实测(2026-09-18,在一个已部署的
+PYTHON_3_13 直连代码 Agent 内部)AgentCore Runtime 环境为 Amazon Linux 2023、
+aarch64、glibc 2.34,因此最高可加载 `manylinux_2_34` 的 wheel;官方文档推荐的
+`manylinux2014` 安全但更窄——只发布 `manylinux_2_26`/`2_28` aarch64 wheel 的包
+(如 `chromadb` 依赖的 `google-re2`)在该目标下无解。级别可经
+`runtime_python_platform`(`LAUNCHPAD_RUNTIME_PYTHON_PLATFORM`)配置;若未来某个
+运行时镜像报告更旧的 glibc,`manylinux2014` 是文档化的回退值。由于 pip 把
+`--platform` 标签当作精确字符串处理,安装时会传入从配置级别一路降到
+`manylinux2014` 的完整标签阶梯。
 
 调用方提供的 `spec.requirements` 还会在 **schema** 校验阶段被要求固定版本
 (`app/schemas/requirements.py`),因此控制台会在构建启动前就拒掉范围写法。平台自带的
@@ -220,7 +231,21 @@ spec 也能被无歧义地读回,将来新增第二个 SDK 无需迁移已存 sp
 
 **校验什么/不校验什么。** 上传闸门强制归档安全(zip-slip、绝对路径、符号链接、
 zip ≤250 MiB/解压后 ≤750 MiB/条目 ≤2 万——即 AgentCore 直连代码上限),并*报告*
-检测结果(候选入口、requirements.txt、Dockerfile、AgentCore SDK 标记)。平台
+检测结果(候选入口、requirements.txt、Dockerfile、AgentCore SDK 标记)。当 zip 带有
+`requirements.txt` 时,上传还会按所选 Python 版本(`?python_version=`)对部署目标做一次
+干跑解析,并报告 `detected.requirements: {status: ok|failed|skipped, package_count,
+error}`——向导因此能在部署前就标出无法解析的文件。`skipped`(解析超时、`uv` 不可用)
+不代表任何结论;部署仍会执行权威解析。
+
+**requirements.txt 规则(`code_zip`)。** 文件按 pip requirements 文件格式解析——
+反斜杠续行、行内注释、空行与环境标记都被支持。`--hash=` 选项会被丢弃:平台针对自己的
+部署目标重新锁定并生成新的 hash(产物内的 `requirements.lock`)。只列出来自软件包索引
+的直接依赖;固定版本可选(可复现性由 hash 锁提供)。以下内容会被明确报错拒绝,因为
+requirements 文件不能扩大"仅平台索引"这一供应链边界:`-r`/`-c` 引用、`-e`/可编辑安装、
+本地路径、直接 URL 与 VCS 引用、`--index-url`/`--extra-index-url`/`--find-links`,以及
+超过 500 条的清单。当某个依赖没有兼容的 aarch64 wheel 时,错误会点名该包并给出出路:
+换一个发布了对应 wheel 的版本、改走 Dockerfile(`container_source`)路径,或把依赖直接
+打进 zip 并设 `install_requirements=false`。平台
 **不**审查、不扫描代码本身;`container_source` 的镜像仍会经过现有的 ECR 扫描闸门。
 用户代码永远不会在 Launchpad 主机上执行——打包阶段只做解压和 wheel-only 的 pip
 安装到包目录。对于 `container_source`,平台始终把自己的 `buildspec.yml` 注入

@@ -339,6 +339,20 @@ def stub_s3(monkeypatch):
     return s3
 
 
+@pytest.fixture(autouse=True)
+def stub_preresolve(monkeypatch):
+    """Keep the suite hermetic: the upload-time requirements pre-resolve runs
+    the real uv against the package index; stand in a canned success. Tests of
+    the check itself use `requirements_txt.preresolve` with a stub runner."""
+    monkeypatch.setattr(
+        byoc_uploads,
+        "check_requirements",
+        lambda path, root, python_version="PYTHON_3_13": {
+            "status": "ok", "package_count": 1, "error": None
+        },
+    )
+
+
 def test_upload_endpoint_stages_and_reads_back(client, stub_s3):
     data = zip_bytes({"main.py": SDK_MAIN, "requirements.txt": b"requests==2.32.3\n"})
     res = client.post(
@@ -357,6 +371,47 @@ def test_upload_endpoint_stages_and_reads_back(client, stub_s3):
     detail = client.get(f"/api/agents/uploads/{body['upload_id']}")
     assert detail.status_code == 200
     assert detail.json()["sha256"] == body["sha256"]
+
+
+def test_upload_endpoint_reports_the_requirements_check(client, stub_s3, monkeypatch):
+    """The manifest carries the pre-resolve verdict, keyed to the python_version
+    the wizard sent — a failed resolve surfaces before any deploy is attempted."""
+    seen = {}
+
+    def fake_check(path, root, python_version="PYTHON_3_13"):
+        seen["python_version"] = python_version
+        return {"status": "failed", "package_count": None,
+                "error": "google-re2 publishes no wheel installable …"}
+
+    monkeypatch.setattr(byoc_uploads, "check_requirements", fake_check)
+    data = zip_bytes({"main.py": SDK_MAIN, "requirements.txt": b"google-re2==1.0\n"})
+    res = client.post(
+        "/api/agents/uploads?python_version=PYTHON_3_11",
+        files={"file": ("agent.zip", data, "application/zip")},
+    )
+    assert res.status_code == 201, res.text
+    assert seen["python_version"] == "PYTHON_3_11"
+    reqs = res.json()["detected"]["requirements"]
+    assert reqs["status"] == "failed"
+    assert "google-re2" in reqs["error"]
+
+
+def test_upload_endpoint_skips_the_check_without_requirements(client, stub_s3):
+    data = zip_bytes({"main.py": SDK_MAIN})
+    res = client.post(
+        "/api/agents/uploads", files={"file": ("agent.zip", data, "application/zip")}
+    )
+    assert res.status_code == 201
+    assert res.json()["detected"]["requirements"]["status"] == "skipped"
+
+
+def test_upload_endpoint_refuses_unknown_python_version(client, stub_s3):
+    res = client.post(
+        "/api/agents/uploads?python_version=PYTHON_2_7",
+        files={"file": ("agent.zip", zip_bytes({"main.py": SDK_MAIN}), "application/zip")},
+    )
+    assert res.status_code == 422
+    assert res.json()["code"] == "byoc.invalid_python_version"
 
 
 def test_upload_endpoint_refuses_non_zip(client, stub_s3):
@@ -618,11 +673,33 @@ def test_resolve_requirements_pip_args(tmp_path):
         src, build, "PYTHON_3_11", lambda _m: None, pip_runner=runner
     )
     assert count == 1
+    compile_cmd = commands[0]
+    # the resolve targets the member's python and the configured platform…
+    assert compile_cmd[compile_cmd.index("--python-version") + 1] == "3.11"
+    assert "aarch64-manylinux_2_28" in compile_cmd
     install = commands[-1]
     assert "--require-hashes" in install
+    # …and the install carries the full tag ladder down to manylinux2014: pip
+    # does not widen --platform itself, and most wheels are tagged 2_17.
+    assert "manylinux_2_28_aarch64" in install
     assert "manylinux2014_aarch64" in install
     assert install[install.index("--python-version") + 1] == "3.11"
     assert (src / "requirements.lock").exists()
+
+
+def test_resolve_requirements_refuses_boundary_violations(tmp_path):
+    """An uploaded requirements.txt cannot pull from outside the platform index."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "requirements.txt").write_text("--extra-index-url https://mirror.example\n")
+
+    def never(args, **_kw):  # pragma: no cover - must not be reached
+        raise AssertionError("no subprocess may run for a refused file")
+
+    with pytest.raises(RuntimeError, match="requirements.txt was refused"):
+        byoc_dep.resolve_requirements_into(
+            src, tmp_path / "build", "PYTHON_3_13", lambda _m: None, pip_runner=never
+        )
 
 
 def test_package_stage_container_source_uses_codebuild(monkeypatch):

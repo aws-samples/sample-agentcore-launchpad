@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.runtime_target import pip_platform_args
 from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
@@ -33,6 +34,13 @@ from app.schemas.agent import AgentSpec, ByocConfig, parse_ecr_image_uri
 from app.services import agent_iam, byoc_uploads
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
+from app.services.requirements_txt import (
+    RESOLVE_FIX_HINTS,
+    RequirementsFileError,
+    parse_requirements_txt,
+    pip_python_version,
+    summarize_resolver_failure,
+)
 from app.services.workspace import WorkspaceContext
 
 from .container import (
@@ -41,7 +49,7 @@ from .container import (
     build_and_push_image,
     platform_buildspec_path,
 )
-from .zip_runtime import TARGET_PIP_PLATFORM, _compile_lock, sanitize_runtime_name
+from .zip_runtime import _compile_lock, sanitize_runtime_name
 
 PACKAGE_KEY_TMPL = "agents/{name}/byoc_package.zip"
 
@@ -52,18 +60,20 @@ def _config(spec: AgentSpec) -> ByocConfig:
     return spec.byoc
 
 
-def _pip_python_version(python_version: str) -> str:
-    """PYTHON_3_13 → 3.13 (the shape pip/uv take)."""
-    return python_version.removeprefix("PYTHON_").replace("_", ".")
+# PYTHON_3_13 → 3.13 (the shape pip/uv take); shared with the upload pre-resolve
+_pip_python_version = pip_python_version
 
 
 def _requirements_lines(path: Path) -> list[str]:
-    lines = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if line and not line.startswith("#"):
-            lines.append(line)
-    return lines
+    """The zip's requirements entries, per the pip file format (continuations,
+    comments, markers) and the platform's supply-chain boundary (no includes,
+    no URLs/VCS/paths, no index options — see `services/requirements_txt`).
+    `--hash` options are dropped: the platform re-locks against its own deploy
+    target and generates fresh hashes."""
+    try:
+        return parse_requirements_txt(path.read_text(encoding="utf-8"))
+    except RequirementsFileError as exc:
+        raise RuntimeError(f"the zip's requirements.txt was refused — {exc}") from exc
 
 
 def _stamp_provenance(ctx: StageContext, agent: Agent, provenance: dict[str, Any]) -> None:
@@ -174,19 +184,21 @@ def resolve_requirements_into(
     requirements = _requirements_lines(req_file)
     if not requirements:
         return 0
-    lock = _compile_lock(requirements, build_dir, compile_runner or pip_runner)
+    pip_version = _pip_python_version(python_version)
+    lock = _compile_lock(
+        requirements, build_dir, compile_runner or pip_runner, python_version=pip_version
+    )
     locked = [
         line for line in lock.read_text(encoding="utf-8").splitlines()
         if "==" in line and not line.lstrip().startswith("#")
     ]
     log(f"requirements locked · {len(locked)} packages pinned with hashes")
-    pip_version = _pip_python_version(python_version)
     proc = pip_runner(
         [
             sys.executable, "-m", "pip", "install",
             "--require-hashes", "-r", str(lock),
             "-t", str(src_root),
-            "--platform", TARGET_PIP_PLATFORM,
+            *pip_platform_args(),
             "--only-binary=:all:",
             "--python-version", pip_version,
             "--quiet",
@@ -195,8 +207,12 @@ def resolve_requirements_into(
         text=True,
     )
     if proc.returncode != 0:
-        stderr = (proc.stderr or "").strip()[-2000:]
-        raise RuntimeError(f"pip install failed for the zip's requirements.txt: {stderr}")
+        raise RuntimeError(
+            "pip install of the zip's locked requirements failed: "
+            + summarize_resolver_failure(
+                proc.stderr or "", python_version=pip_version, hints=RESOLVE_FIX_HINTS
+            )
+        )
     # the lock ships inside the artifact — the record of what was installed
     shutil.copy2(lock, src_root / "requirements.lock")
     return len(locked)

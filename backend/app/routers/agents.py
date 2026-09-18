@@ -7,9 +7,10 @@ import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
@@ -24,7 +25,13 @@ from app.deployer.pipeline import create_deployment, start_deploy_async
 from app.models.ledger import Agent, Deployment, Job
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.schemas.agent import AgentSpec, InvokeRequest, InvokeResponse, RuntimeImportRequest
+from app.schemas.agent import (
+    AgentSpec,
+    ByocPythonVersion,
+    InvokeRequest,
+    InvokeResponse,
+    RuntimeImportRequest,
+)
 from app.services import agent_iam, agent_names, byoc_uploads
 from app.services.agent_versions import list_agent_versions
 from app.services.agentcore.client import control_client
@@ -48,6 +55,7 @@ logger = logging.getLogger("launchpad.agents")
 router = APIRouter(prefix="/api", tags=["agents"])
 
 SUPPORTED_METHODS = {"harness", "zip_runtime", "container", "studio", "byoc"}
+BYOC_PYTHON_VERSIONS = set(get_args(ByocPythonVersion))
 
 
 def _agent_out(agent: Agent, deployment: Deployment | None = None) -> dict[str, Any]:
@@ -237,6 +245,7 @@ def import_discovered_runtimes(
 @router.post("/agents/uploads", status_code=201)
 async def upload_byoc_artifact(
     request: Request,
+    python_version: str = "PYTHON_3_13",
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Stage a BYOC source zip (multipart, single part ``file``, .zip only).
@@ -245,9 +254,19 @@ async def upload_byoc_artifact(
     guard in ``byoc_uploads.upload_body_limit_middleware`` already refused
     known-oversize bodies before the parser ran), validates the archive without
     executing anything in it, stores zip + manifest to the artifacts bucket under
-    ``byoc/{workspace_id}/{upload_id}/`` and returns the detection summary.
+    ``byoc/{workspace_id}/{upload_id}/`` and returns the detection summary —
+    including a dry resolve of the zip's requirements.txt against the deploy
+    target for ``python_version``, so the wizard can flag an unresolvable file
+    before deploy. Staging runs in the threadpool: the resolve may take tens of
+    seconds and must not stall the event loop.
     """
     identity = require_identity(request)
+    if python_version not in BYOC_PYTHON_VERSIONS:
+        raise AppError(
+            "byoc.invalid_python_version",
+            f"python_version must be one of {sorted(BYOC_PYTHON_VERSIONS)}",
+            status_code=422,
+        )
     form = await request.form()
     upload = form.get("file")
     if not isinstance(upload, UploadFile):
@@ -275,7 +294,8 @@ async def upload_byoc_artifact(
         if size == 0:
             raise AppError("byoc.invalid_upload", "the uploaded file is empty",
                            status_code=400)
-        manifest = byoc_uploads.stage_upload(
+        manifest = await run_in_threadpool(
+            byoc_uploads.stage_upload,
             ws.context,
             filename=filename,
             tmp_zip=tmp_zip,
@@ -283,6 +303,7 @@ async def upload_byoc_artifact(
             size_bytes=size,
             uploaded_by=identity.username,
             uploaded_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            python_version=python_version,
         )
     logger.info(
         "byoc upload %s staged by %s (%s, %d bytes, sha256 %s)",

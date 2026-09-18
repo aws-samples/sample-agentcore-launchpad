@@ -24,6 +24,23 @@ that switches models at runtime should pick from `ALLOWED_MODEL_IDS`.
 Python source + `requirements.txt`; Launchpad resolves the requirements for
 linux/aarch64 at deploy time and runs the zip on the managed Python runtime.
 
+**requirements.txt guidance.** List direct index dependencies only; version
+pins are optional — Launchpad compiles the file into a hashed lock
+(`requirements.lock`, shipped in the artifact), which is what makes the build
+reproducible. The pip file format is honoured (continuations, comments,
+environment markers), but `--hash=` options are dropped: the platform re-locks
+against its own deploy target — linux/aarch64, `manylinux_2_28` by default (the
+runtime is Amazon Linux 2023 / glibc 2.34, measured 2026-09-18; the docs'
+`manylinux2014` remains the conservative fallback via
+`LAUNCHPAD_RUNTIME_PYTHON_PLATFORM`) — and generates fresh hashes. Refused, so
+the file cannot reach outside the platform's package index: `-r`/`-c` includes,
+editable installs, local paths, direct URL/VCS entries, and
+`--index-url`/`--extra-index-url`/`--find-links`. Source builds never run: a
+dependency with no compatible aarch64 wheel fails with the package named — pin
+a release that ships one, switch to the `container_source` path, or vendor the
+packages in the zip and set `install_requirements=false`. The upload response
+(`detected.requirements`) reports the resolve verdict before you deploy.
+
 ```bash
 cd samples/byoc/hello-http
 zip -r ../hello-http.zip .        # zip the directory CONTENTS

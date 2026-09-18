@@ -110,14 +110,23 @@ returned `upload_id` goes into the create body's `spec.byoc`.
 
 | Method | Path | Result |
 |---|---|---|
-| `POST` | `/api/agents/uploads` | `perm:agents.deploy` — `multipart/form-data`, single part `file`, `.zip` only, ≤250 MiB (≤750 MiB uncompressed, ≤20k entries; zip-slip/absolute paths/symlinks refused). Stores `byoc/{workspace_id}/{upload_id}/source.zip` + `manifest.json` in the artifacts bucket → `201` `{upload_id, sha256, size_bytes, original_filename, uploaded_by, uploaded_at, entries_count, uncompressed_bytes, detected: {entrypoint_candidates[], has_requirements, has_dockerfile, agentcore_sdk_detected}}` |
+| `POST` | `/api/agents/uploads?python_version=PYTHON_3_13` | `perm:agents.deploy` — `multipart/form-data`, single part `file`, `.zip` only, ≤250 MiB (≤750 MiB uncompressed, ≤20k entries; zip-slip/absolute paths/symlinks refused). Stores `byoc/{workspace_id}/{upload_id}/source.zip` + `manifest.json` in the artifacts bucket → `201` `{upload_id, sha256, size_bytes, original_filename, uploaded_by, uploaded_at, entries_count, uncompressed_bytes, detected: {entrypoint_candidates[], has_requirements, has_dockerfile, agentcore_sdk_detected, requirements: {status: ok\|failed\|skipped, package_count, error}}}` — `requirements` is an upload-time dry resolve of the zip's requirements.txt against the deploy target (linux/aarch64 + the optional `python_version`, default PYTHON_3_13); `failed` means the deploy's package stage would fail the same way, `skipped` (no requirements.txt, resolver timeout ~90 s, `uv` unavailable) says nothing either way |
 | `GET` | `/api/agents/uploads/{upload_id}` | member — the stored manifest (same shape); another workspace's upload_id answers 404 |
 
 Error codes: `byoc.invalid_upload` (400, missing/non-zip part or empty file),
+`byoc.invalid_python_version` (422),
 `byoc.upload_too_large` / `byoc.upload_request_too_large` (413),
 `byoc.zip_invalid`, `byoc.zip_empty`, `byoc.zip_entry_unsafe`,
 `byoc.zip_too_many_entries`, `byoc.zip_uncompressed_too_large` (422),
 `byoc.upload_not_found` (404).
+
+The zip's `requirements.txt` follows the pip file format (backslash
+continuations, inline comments, environment markers all honoured); `--hash=`
+options are dropped because the platform re-locks the file against its own
+deploy target with fresh hashes. Refused with a clear error: `-r`/`-c`
+includes, `-e`/editable installs, local paths, direct URL/VCS entries, index
+options (`--index-url`/`--extra-index-url`/`--find-links` — the platform
+installs from its own index only), and more than 500 entries.
 
 `POST /api/agents` with `method: "byoc"` takes `spec.byoc`:
 `{artifact_kind: code_zip|container_source|container_image, upload_id?,

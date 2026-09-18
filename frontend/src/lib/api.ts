@@ -635,6 +635,18 @@ export interface ByocUploadInfo {
     has_requirements: boolean;
     has_dockerfile: boolean;
     agentcore_sdk_detected: boolean;
+    /**
+     * Upload-time dry resolve of the zip's requirements.txt against the deploy
+     * target (linux/aarch64 + the selected Python). `failed` means the deploy's
+     * package stage would fail the same way; `skipped` = the check could not
+     * run (no requirements.txt, resolver timeout) and says nothing either way.
+     * Absent on manifests staged before the check existed.
+     */
+    requirements?: {
+      status: "ok" | "failed" | "skipped";
+      package_count: number | null;
+      error: string | null;
+    };
   };
 }
 
@@ -3548,10 +3560,11 @@ export const api = {
   deleteUser: (id: string) =>
     request<{ ok: boolean }>(`/api/users/${id}`, { method: "DELETE" }),
   /** Stage a BYOC source zip; the returned upload_id goes into spec.byoc. */
-  uploadByocArtifact: (file: File) => {
+  uploadByocArtifact: (file: File, pythonVersion?: ByocPythonVersion) => {
     const form = new FormData();
     form.append("file", file);
-    return requestForm<ByocUploadInfo>("/api/agents/uploads", form);
+    const query = pythonVersion ? `?python_version=${pythonVersion}` : "";
+    return requestForm<ByocUploadInfo>(`/api/agents/uploads${query}`, form);
   },
   getByocUpload: (uploadId: string) =>
     request<ByocUploadInfo>(`/api/agents/uploads/${encodeURIComponent(uploadId)}`),

@@ -428,14 +428,21 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 
 | Method | Path | Result |
 |---|---|---|
-| `POST` | `/api/agents/uploads` | `perm:agents.deploy`——`multipart/form-data`，单个名为 `file` 的部件，仅限 `.zip`，≤250 MiB（解压后 ≤750 MiB、条目 ≤2 万；zip-slip/绝对路径/符号链接会被拒绝）。存入制品桶 `byoc/{workspace_id}/{upload_id}/source.zip` + `manifest.json` → `201` `{upload_id, sha256, size_bytes, original_filename, uploaded_by, uploaded_at, entries_count, uncompressed_bytes, detected: {entrypoint_candidates[], has_requirements, has_dockerfile, agentcore_sdk_detected}}` |
+| `POST` | `/api/agents/uploads?python_version=PYTHON_3_13` | `perm:agents.deploy`——`multipart/form-data`，单个名为 `file` 的部件，仅限 `.zip`，≤250 MiB（解压后 ≤750 MiB、条目 ≤2 万；zip-slip/绝对路径/符号链接会被拒绝）。存入制品桶 `byoc/{workspace_id}/{upload_id}/source.zip` + `manifest.json` → `201` `{upload_id, sha256, size_bytes, original_filename, uploaded_by, uploaded_at, entries_count, uncompressed_bytes, detected: {entrypoint_candidates[], has_requirements, has_dockerfile, agentcore_sdk_detected, requirements: {status: ok\|failed\|skipped, package_count, error}}}`——`requirements` 是对 zip 内 requirements.txt 针对部署目标（linux/aarch64 + 可选 `python_version`，默认 PYTHON_3_13）的上传期干跑解析；`failed` 表示部署的 package 阶段会以同样方式失败，`skipped`（无 requirements.txt、解析超时约 90 秒、`uv` 不可用）不代表任何结论 |
 | `GET` | `/api/agents/uploads/{upload_id}` | member——已存储的清单（同一形状）；其他工作区的 upload_id 返回 404 |
 
 错误码：`byoc.invalid_upload`（400，缺少部件/非 zip/空文件）、
+`byoc.invalid_python_version`（422）、
 `byoc.upload_too_large` / `byoc.upload_request_too_large`（413）、
 `byoc.zip_invalid`、`byoc.zip_empty`、`byoc.zip_entry_unsafe`、
 `byoc.zip_too_many_entries`、`byoc.zip_uncompressed_too_large`（422）、
 `byoc.upload_not_found`（404）。
+
+zip 内的 `requirements.txt` 按 pip 文件格式解析（反斜杠续行、行内注释、环境标记
+均被支持）；`--hash=` 选项会被丢弃——平台会针对自己的部署目标重新锁定并生成新的
+hash。以下内容会被明确报错拒绝：`-r`/`-c` 引用、`-e`/可编辑安装、本地路径、直接
+URL/VCS 条目、索引选项（`--index-url`/`--extra-index-url`/`--find-links`——平台
+只从自己的索引安装），以及超过 500 条的清单。
 
 `POST /api/agents` 使用 `method: "byoc"` 时携带 `spec.byoc`：
 `{artifact_kind: code_zip|container_source|container_image, upload_id?,

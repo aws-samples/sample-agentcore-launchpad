@@ -27,6 +27,8 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from app.core.errors import AppError, NotFoundError
+from app.core.runtime_target import TARGET_PYTHON
+from app.services import requirements_txt
 from app.services.workspace import WorkspaceContext
 
 # AgentCore direct-code artifact limits (also enforced for container_source zips
@@ -43,6 +45,8 @@ UPLOAD_PATH = "/api/agents/uploads"
 UPLOAD_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 _CHUNK = 1024 * 1024
+# requirements.txt larger than this is not a requirements file
+_REQUIREMENTS_MAX_BYTES = 256 * 1024
 # Only .py members this size or smaller are content-scanned for the SDK markers;
 # bigger ones are almost certainly vendored artifacts, not the user's entrypoint.
 _SDK_SCAN_MAX_BYTES = 1024 * 1024
@@ -174,6 +178,36 @@ def validate_and_detect(path: Path) -> dict[str, Any]:
         }
 
 
+def _requirements_text(path: Path, root: str) -> str | None:
+    """The zip's root requirements.txt content, or None (absent / oversized)."""
+    with zipfile.ZipFile(path) as zf:
+        try:
+            info = zf.getinfo(f"{root}requirements.txt")
+        except KeyError:
+            return None
+        if info.file_size > _REQUIREMENTS_MAX_BYTES:
+            return None
+        return zf.read(info).decode("utf-8", errors="replace")
+
+
+def check_requirements(
+    path: Path, root: str, python_version: str = "PYTHON_3_13"
+) -> dict[str, Any]:
+    """Dry-resolve the zip's requirements.txt against the deploy target, so the
+    wizard surfaces an unresolvable file before a deploy is even attempted:
+    ``{status: ok|failed|skipped, package_count, error}``. Nothing from the zip
+    is executed — the resolver only reads index metadata."""
+    text = _requirements_text(path, root)
+    if text is None:
+        return {"status": "skipped", "package_count": None,
+                "error": "no requirements.txt in the zip"}
+    return requirements_txt.preresolve(
+        text,
+        python_version=requirements_txt.pip_python_version(python_version or TARGET_PYTHON),
+        hints=requirements_txt.RESOLVE_FIX_HINTS,
+    )
+
+
 def _scan_for_sdk(zf: zipfile.ZipFile, root: str, rel_names: list[str]) -> bool:
     """True when any small root-adjacent .py member mentions the AgentCore SDK
     entrypoint contract. A *reading* scan only — nothing is imported or run."""
@@ -202,6 +236,7 @@ def stage_upload(
     size_bytes: int,
     uploaded_by: str,
     uploaded_at: str,
+    python_version: str = "PYTHON_3_13",
     s3_client: Any = None,
 ) -> dict[str, Any]:
     """Validate the staged temp zip, store object + manifest to S3, return the
@@ -213,6 +248,15 @@ def stage_upload(
             "artifacts_bucket missing from this workspace's resource map — run its bootstrap"
         )
     report = validate_and_detect(tmp_zip)
+    if report["detected"]["has_requirements"]:
+        report["detected"]["requirements"] = check_requirements(
+            tmp_zip, report["root_prefix"], python_version
+        )
+    else:
+        report["detected"]["requirements"] = {
+            "status": "skipped", "package_count": None,
+            "error": "no requirements.txt in the zip",
+        }
     upload_id = new_upload_id()
     manifest = {
         "upload_id": upload_id,

@@ -995,6 +995,9 @@ function CreateAgentWizard() {
   const [byocContractOpen, setByocContractOpen] = useState(false);
   const [byocDescription, setByocDescription] = useState("");
   const byocFileRef = useRef<HTMLInputElement>(null);
+  // the staged zip, kept so a Python-version change can re-run the
+  // requirements pre-resolve (re-staging the same bytes under the new target)
+  const byocLastFile = useRef<File | null>(null);
   // BYOC provenance shown on the step-3 details view of an existing agent
   const [detailByoc, setDetailByoc] = useState<ByocConfigInput | null>(null);
   // the models that agent's execution role permits; [0] is the primary (MODEL_ID)
@@ -1832,11 +1835,12 @@ const deployLock = !canDeploy
     [toast],
   );
 
-  const uploadByocZip = async (file: File) => {
+  const uploadByocZip = async (file: File, pythonVersion?: ByocPythonVersion) => {
     setByocUploading(true);
     try {
-      const info = await api.uploadByocArtifact(file);
+      const info = await api.uploadByocArtifact(file, pythonVersion ?? byocPython);
       if (!alive.current) return;
+      byocLastFile.current = file;
       setByocUpload(info);
       const candidates = info.detected.entrypoint_candidates;
       if (candidates.length && !candidates.includes(byocEntrypoint)) {
@@ -1846,6 +1850,14 @@ const deployLock = !canDeploy
       if (alive.current) toast(apiMsg(err));
     } finally {
       if (alive.current) setByocUploading(false);
+    }
+  };
+
+  const changeByocPython = (version: ByocPythonVersion) => {
+    setByocPython(version);
+    // the pre-resolve result is per-Python-version — re-check the staged zip
+    if (byocLastFile.current && byocUpload?.detected.has_requirements) {
+      void uploadByocZip(byocLastFile.current, version);
     }
   };
 
@@ -2256,6 +2268,38 @@ const deployLock = !canDeploy
                           <span>{t("create.configure.byocNoDockerfileWarn")}</span>
                         </div>
                       )}
+                    {byocUpload && byocKind === "code_zip" && byocInstallReqs &&
+                      byocUpload.detected.requirements &&
+                      byocUpload.detected.requirements.status !== "skipped" && (
+                        byocUpload.detected.requirements.status === "ok" ? (
+                          <div
+                            className="note"
+                            style={{ borderColor: "var(--good)" }}
+                            data-testid="byoc-reqs-ok"
+                          >
+                            <span className="i" style={{ color: "var(--good)" }}>✓</span>
+                            <span>
+                              {t("create.configure.byocReqsOk", {
+                                count: byocUpload.detected.requirements.package_count ?? 0,
+                              })}
+                            </span>
+                          </div>
+                        ) : (
+                          <div
+                            className="note"
+                            style={{ borderColor: "var(--crit-text)" }}
+                            data-testid="byoc-reqs-failed"
+                          >
+                            <span className="i" style={{ color: "var(--crit-text)" }}>[✗]</span>
+                            <span>
+                              {t("create.configure.byocReqsFailed")}{" "}
+                              <span className="mono" style={{ fontSize: 11 }}>
+                                {byocUpload.detected.requirements.error}
+                              </span>
+                            </span>
+                          </div>
+                        )
+                      )}
                   </div>
                 )}
                 {byocKind === "container_image" && (
@@ -2319,7 +2363,7 @@ const deployLock = !canDeploy
                         className="input mono"
                         data-testid="byoc-python"
                         value={byocPython}
-                        onChange={(e) => setByocPython(e.target.value as ByocPythonVersion)}
+                        onChange={(e) => changeByocPython(e.target.value as ByocPythonVersion)}
                       >
                         {(["PYTHON_3_13", "PYTHON_3_12", "PYTHON_3_11", "PYTHON_3_10"] as const)
                           .map((v) => (

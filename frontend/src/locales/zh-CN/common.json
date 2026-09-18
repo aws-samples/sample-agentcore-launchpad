@@ -438,6 +438,8 @@
       "byocEntries": "个条目",
       "byocNoSdkWarn": "未检测到 BedrockAgentCoreApp/@app.entrypoint 标记——你的入口必须自行在 :8080 端口提供 POST /invocations 与 GET /ping。",
       "byocNoDockerfileWarn": "未在 zip 根目录检测到 Dockerfile——Dockerfile 构建需要它。",
+      "byocReqsOk": "requirements.txt 可为运行时目标解析——共 {{count}} 个包。",
+      "byocReqsFailed": "requirements.txt 无法为运行时目标解析——部署将在 package 阶段失败：",
       "byocImageUri": "ECR 镜像 URI",
       "byocImageHint": "本账户本区域的私有 ECR 镜像（ARM64）。公共镜像仓库会被拒绝。",
       "byocEntrypoint": "入口文件",
