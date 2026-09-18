@@ -806,9 +806,10 @@ actions prepare resources, approve deployment and materialize evaluation assets.
 
 The landing page explains **ADLC (Agent Development Lifecycle)** with a translated
 six-stage diagram: define success, build, evaluate, gate/release, observe production,
-and feed failure cases back into evaluation. A sticky creation rail distinguishes
-four required steps (goals, resources, review/approval, Harness creation) from three
-optional follow-up activities (evaluation, A/B testing, production feedback).
+and feed failure cases back into evaluation. A creation rail in normal document
+flow distinguishes four required steps (goals, resources, review/approval, Harness
+creation) from three optional follow-up activities (evaluation, A/B testing,
+production feedback).
 The rail derives progress from the proposal and deployment outcome, never from
 elapsed time or opening a link. Only a succeeded job plus an active Agent completes
 creation. Unsaved resource choices block approval until saved or cancelled.

@@ -906,7 +906,7 @@ footer .sep{color:var(--line-2)}
 }
 
 /* ================= architect assistant (create/assistant) ================= */
-.assist-progress{position:sticky;top:60px;z-index:30;margin-bottom:14px;padding:14px 18px 10px;background:var(--panel);border:1px solid var(--amber);box-shadow:0 8px 24px rgba(0,0,0,.22)}
+.assist-progress{margin-bottom:14px;padding:14px 18px 10px;background:var(--panel);border:1px solid var(--amber);box-shadow:0 8px 24px rgba(0,0,0,.22)}
 .assist-progress-head{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:13px}
 .assist-progress-head>span{font-family:var(--mono);font-size:12px;color:var(--amber)}
 .assist-progress-meter{display:flex;gap:5px;margin:10px 0 12px}
@@ -939,9 +939,9 @@ footer .sep{color:var(--line-2)}
 .assist-adlc svg{display:block;width:100%;min-width:1050px;font-family:var(--sans)}
 .assist-adlc figcaption{border-top:1px solid var(--line);padding:10px 18px;font-size:12px;color:var(--ink-2)}
 .assist-resource-lifecycle{border-left:3px solid var(--amber);padding:10px 12px;background:var(--amber-soft);font-size:13px}
-#assistant-discussion,#assistant-resources,#assistant-proposal,#assistant-evaluation{scroll-margin-top:290px}
+#assistant-discussion,#assistant-resources,#assistant-proposal,#assistant-evaluation{scroll-margin-top:60px}
 @media(max-width:720px){
-  .assist-progress{top:90px;padding:10px;margin-bottom:10px}
+  .assist-progress{padding:10px;margin-bottom:10px}
   .assist-progress-head{font-size:12px;gap:6px}
   .assist-progress-head>span{font-size:10px}
   .assist-progress-steps{gap:6px}
@@ -954,7 +954,7 @@ footer .sep{color:var(--line-2)}
   .assist-adlc summary{padding:10px;gap:8px}
   .assist-adlc summary>.dim{display:none}
   .assist-adlc-mobile-hint{display:block;padding:0 10px;font-size:11px;color:var(--ink-2)}
-  #assistant-discussion,#assistant-resources,#assistant-proposal,#assistant-evaluation{scroll-margin-top:360px}
+  #assistant-discussion,#assistant-resources,#assistant-proposal,#assistant-evaluation{scroll-margin-top:90px}
 }
 .assist-link{display:inline-block;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;color:var(--amber);border:1px solid var(--amber);padding:5px 10px;text-decoration:none;transition:background .2s}
 .assist-link:hover{background:var(--amber-soft)}
