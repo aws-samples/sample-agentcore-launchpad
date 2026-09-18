@@ -208,7 +208,15 @@ spec 也能被无歧义地读回,将来新增第二个 SDK 无需迁移已存 sp
 第四张卡片部署成员开发者自己编写的代码——已用 AgentCore SDK
 (`BedrockAgentCoreApp` + `@app.entrypoint`)包装,或任何满足运行时契约的 HTTP
 服务(ARM64、8080 端口、`POST /invocations` + `GET /ping`、负载
-`{"prompt", "actor_id"}`)。三种构件类型,同一个 `spec.byoc` 配置块
+`{"prompt", "actor_id"}`)。**响应**由代码自行决定——Runtime HTTP 契约只要求
+JSON 或 SSE,并不规定键名。对话、公开 `/v1` API 与评估回放共用同一个解析器
+(`services/agentcore/runtime.py::_runtime_payload_events`):`{"result": …}`
+(BedrockAgentCoreApp 的约定,推荐)或 delta/tool/complete SSE 信封按真流式处理;
+其他 JSON 体取第一个常见文本键(`response`、`answer`、`output`、`text`、
+`message`、`content`、`completion`、`reply`,其下嵌套的 `{"text"}` 块同样算)
+显示;一个都没有的则原样渲染为紧凑 JSON,而不是空白一轮(2026-09-18 实测:
+CrewAI agent 返回 `{"answer", "session_id", "turns"}` 曾显示为空回复且无报错)。
+`{"error": …}` 作为失败轮次呈现。三种构件类型,同一个 `spec.byoc` 配置块
 (`backend/app/schemas/agent.py::ByocConfig`):
 
 | `artifact_kind` | 输入 | 到 Runtime 的路径 |

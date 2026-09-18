@@ -449,6 +449,74 @@ def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
             yield {"event": "delta", "data": {"text": str(text)}}
     if "result" in payload:
         yield {"event": "complete", "data": {"text": str(payload.get("result", ""))}}
+    elif not (payload.keys() & _KNOWN_PAYLOAD_KEYS):
+        text = _free_form_payload_text(payload)
+        if text:
+            yield {"event": "complete", "data": {"text": text}}
+
+
+# Keys that mark a payload as one of the shapes handled above (Launchpad's own
+# delta/tool/complete envelope, BedrockAgentCoreApp's {"result"} body, Converse
+# stream events, runtime error wrappers). Anything else is user code answering
+# its own JSON — the Runtime HTTP contract only requires JSON or SSE and never
+# names a key (the devguide's own example is {"response", "status"}).
+_KNOWN_PAYLOAD_KEYS = frozenset(
+    {
+        "result",
+        "event",
+        "error",
+        "contentBlockStart",
+        "contentBlockDelta",
+        "contentBlockStop",
+        "messageStart",
+        "messageStop",
+        "metadata",
+        "runtimeClientError",
+        "internalServerException",
+    }
+)
+# Conventional text keys, in preference order: the devguide example, then the
+# names BYOC code in the wild actually uses (measured 2026-09-18: a CrewAI
+# agent answering {"answer", "session_id", "turns", "latency_ms"} rendered as
+# an empty reply with no error).
+_FREE_FORM_TEXT_KEYS = (
+    "response",
+    "answer",
+    "output",
+    "output_text",
+    "text",
+    "message",
+    "content",
+    "completion",
+    "reply",
+)
+_FREE_FORM_DUMP_LIMIT = 4000
+
+
+def _free_form_payload_text(payload: dict[str, Any]) -> str:
+    """Text for a JSON body that follows none of the known shapes.
+
+    Takes the first conventional key holding a non-empty string; a nested
+    ``{"text": ...}`` block (Converse content-block style) under such a key
+    also counts. Otherwise the whole body is shown as compact JSON so the
+    operator sees exactly what the agent answered instead of a blank turn.
+    """
+    for key in _FREE_FORM_TEXT_KEYS:
+        value = payload.get(key)
+        if isinstance(value, dict):
+            value = value.get("text")
+        if isinstance(value, str) and value.strip():
+            return value
+    if not payload:
+        return ""
+    logger.warning(
+        "runtime answered JSON with no conventional text key; showing raw body (keys=%s)",
+        sorted(payload.keys()),
+    )
+    dumped = json.dumps(payload, ensure_ascii=False)
+    if len(dumped) > _FREE_FORM_DUMP_LIMIT:
+        dumped = dumped[:_FREE_FORM_DUMP_LIMIT] + "…"
+    return dumped
 
 
 def _normalized_runtime_events(payloads: Iterable[Any]) -> Iterator[dict[str, Any]]:

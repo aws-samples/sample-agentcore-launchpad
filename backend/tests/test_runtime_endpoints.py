@@ -226,3 +226,51 @@ def test_sigv4_post_omits_session_header_when_absent(monkeypatch):
         poster=poster, signer=lambda *a: None,
     )
     assert gw.SESSION_HEADER not in captured["headers"]
+
+
+# ─── free-form JSON bodies (Runtime contract names no key) ───────────────────
+def test_invoke_runtime_text_reads_conventional_text_keys():
+    # The devguide's own example body and a measured BYOC body (CrewAI agent,
+    # 2026-09-18) both rendered as an empty turn before this fallback existed.
+    for body, expected in [
+        (b'{"response": "devguide example", "status": "success"}', "devguide example"),
+        (
+            b'{"answer": "\xe6\x82\xa8\xe5\xa5\xbd", "session_id": "s", "turns": 1, '
+            b'"latency_ms": 8630}',
+            "您好",
+        ),
+        (b'{"output": {"text": "nested block"}}', "nested block"),
+    ]:
+        out = rt.invoke_runtime_text(StubDataPlane(body), "arn:rt-1", "hi")
+        assert out["text"] == expected, body
+
+
+def test_invoke_runtime_text_prefers_result_over_other_keys():
+    stub = StubDataPlane(b'{"result": "primary", "answer": "ignored"}')
+    assert rt.invoke_runtime_text(stub, "arn:rt-1", "hi")["text"] == "primary"
+
+
+def test_invoke_runtime_text_shows_unknown_json_instead_of_blank():
+    stub = StubDataPlane(b'{"summary": "abc", "rows": [1, 2]}')
+    out = rt.invoke_runtime_text(stub, "arn:rt-1", "hi")
+    assert out["text"] == '{"summary": "abc", "rows": [1, 2]}'
+
+
+def test_invoke_runtime_text_free_form_error_key_still_raises():
+    with pytest.raises(RuntimeError, match="缺少 prompt"):
+        rt.invoke_runtime_text(
+            StubDataPlane(b'{"error": "\xe7\xbc\xba\xe5\xb0\x91 prompt", "session_id": "s"}'),
+            "arn:rt-1",
+            "hi",
+        )
+
+
+def test_runtime_payload_events_ignores_converse_bookkeeping_events():
+    # Converse stream events without text must not be dumped as JSON.
+    for payload in [
+        {"messageStart": {"role": "assistant"}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        {"messageStop": {"stopReason": "end_turn"}},
+        {"metadata": {"usage": {"inputTokens": 1}}},
+    ]:
+        assert list(rt._runtime_payload_events(payload)) == [], payload

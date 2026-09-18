@@ -4,6 +4,10 @@ Two minimal agents that satisfy the Launchpad BYOC runtime contract:
 
 - ARM64 (aarch64) · port **8080** · `POST /invocations` + `GET /ping`
 - invoke payload: `{"prompt": "...", "actor_id": "..."}`
+- response: any JSON (or SSE). `{"result": "..."}` is the convention the
+  samples follow; `response` / `answer` / `output` / `text` / `message` /
+  `content` are read too, a body with none of them is shown verbatim as JSON,
+  and `{"error": "..."}` renders as a failed turn.
 - the `bedrock-agentcore` SDK (`BedrockAgentCoreApp` + `@app.entrypoint`)
   implements all of the above.
 

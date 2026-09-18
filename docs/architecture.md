@@ -267,7 +267,18 @@ unconditional until the category has a second member.
 The fourth card deploys code the member's developers wrote themselves — already
 wrapped with the AgentCore SDK (`BedrockAgentCoreApp` + `@app.entrypoint`) or
 any HTTP server satisfying the runtime contract (ARM64, port 8080,
-`POST /invocations` + `GET /ping`, payload `{"prompt", "actor_id"}`). Three
+`POST /invocations` + `GET /ping`, payload `{"prompt", "actor_id"}`). The
+**response** is whatever the code answers — the Runtime HTTP contract requires
+JSON or SSE and names no key. Chat, the public `/v1` API and evaluation replays
+all read it through one parser (`services/agentcore/runtime.py::_runtime_payload_events`):
+`{"result": …}` (BedrockAgentCoreApp's convention, preferred) or the
+delta/tool/complete SSE envelope stream for real; any other JSON body is shown
+by its first conventional text key (`response`, `answer`, `output`, `text`,
+`message`, `content`, `completion`, `reply` — a nested `{"text"}` block under
+one of them also counts), and a body with none of those is rendered as compact
+JSON rather than a blank turn (measured 2026-09-18: a CrewAI agent answering
+`{"answer", "session_id", "turns"}` produced an empty reply with no error).
+`{"error": …}` is surfaced as a failed turn. Three
 artifact kinds, one `spec.byoc` block (`backend/app/schemas/agent.py::ByocConfig`):
 
 | `artifact_kind` | Input | Path to Runtime |

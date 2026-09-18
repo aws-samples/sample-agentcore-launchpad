@@ -23,6 +23,7 @@ Agent——用 `bedrock-agentcore` SDK（`BedrockAgentCoreApp` + `@app.entrypoin
 | 端口 | 8080 |
 | 路由 | `POST /invocations` + `GET /ping` |
 | 调用负载 | `{"prompt": "...", "actor_id": "..."}` |
+| 响应 | JSON 或 SSE,键名不限。推荐 `{"result": "..."}`;`response` / `answer` / `output` / `text` / `message` / `content` 等常见键同样能显示;都没有时对话框原样显示 JSON;`{"error": "..."}` 显示为失败 |
 | zip 上限 | ≤250 MiB（解压后 ≤750 MiB） |
 
 ## 13.1 准备示例代码
