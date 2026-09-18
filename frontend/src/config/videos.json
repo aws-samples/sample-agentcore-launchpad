@@ -127,10 +127,11 @@
         "zh-CN": "10 技能实验室"
       },
       "description": {
-        "en": "Evaluate Skill quality, inspect optimization candidates, and apply validation gates before publication.",
-        "zh-CN": "评估 Skill 质量，检查优化候选，并通过验证门控决定是否发布。"
+        "en": "Create a 60-task data set, establish a Skill baseline, and inspect candidate changes with separate validation and held-out results.",
+        "zh-CN": "创建 60 题任务集、建立 Skill 基线，检查候选修改，并分别解读验证集与独立测试结果。"
       },
       "videoIds": [
+        "skill-tasksets",
         "skill-evaluation",
         "skill-optimization"
       ]
@@ -1669,30 +1670,30 @@
     {
       "id": "skill-evaluation",
       "title": {
-        "en": "10-01 Skill evaluation",
-        "zh-CN": "10-01 Skill 评估：从任务与评分标准，读懂 Skill 的真实表现"
+        "en": "10-02 Skill evaluation",
+        "zh-CN": "10-02 Skill 评估：固定任务与评分规则，记录可比较的基线"
       },
       "description": {
-        "en": "Configure a Skill evaluation and review a completed five-task log-triage run: 20% pass rate, 0.754 soft score, judge explanations, artifacts and reported token usage. Configuration is demonstrated without submitting a new cloud job.",
-        "zh-CN": "演示任务集、Skill 和评审配置，回看已完成的日志排障评估：五题通过一题，软分 0.754。解读逐题判分、产物与 Token 用量。配置演示未提交新的云端任务。"
+        "en": "Evaluate the frozen 15-task test split with the original Skill. Inspect the standalone baseline of 14/15 passes and a 0.992 soft score, text judgments, actual reports and reported token usage.",
+        "zh-CN": "用原始 Skill 评估固定的 15 道测试题，查看独立基线的 14／15 通过、软分 0.992，以及文本判分、实际报告和已上报用量。"
       },
       "publishedAt": "2026-09-18",
-      "durationSeconds": 218.221333,
+      "durationSeconds": 136.321333,
       "language": "zh-CN",
-      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-evaluation/20260918/poster.jpg",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-evaluation/20260918-case2/poster.jpg",
       "sources": [
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-evaluation/20260918/skill-evaluation.zh-CN.mp4",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-evaluation/20260918-case2/skill-evaluation.zh-CN.mp4",
           "type": "video/mp4"
         },
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-evaluation/20260918/skill-evaluation.zh-CN.webm",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-evaluation/20260918-case2/skill-evaluation.zh-CN.webm",
           "type": "video/webm"
         }
       ],
       "captions": [
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-evaluation/20260918/skill-evaluation.zh-CN.vtt",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-evaluation/20260918-case2/skill-evaluation.zh-CN.vtt",
           "language": "zh-CN",
           "label": "简体中文"
         }
@@ -1706,66 +1707,52 @@
           }
         },
         {
-          "startSeconds": 16.6,
+          "startSeconds": 13.5,
           "title": {
-            "en": "Open Skill Lab",
-            "zh-CN": "进入技能实验室"
+            "en": "Select the frozen test split",
+            "zh-CN": "选择固定的测试集"
           }
         },
         {
-          "startSeconds": 35.1,
+          "startSeconds": 31.3,
           "title": {
-            "en": "Inspect task inputs and rubrics",
-            "zh-CN": "检查任务与评分标准"
+            "en": "Submit the baseline run",
+            "zh-CN": "提交本次基线评估"
           }
         },
         {
-          "startSeconds": 57.9,
+          "startSeconds": 43,
           "title": {
-            "en": "Ways to prepare a task set",
-            "zh-CN": "任务集准备方式"
+            "en": "Read the baseline scores",
+            "zh-CN": "解读基线结果"
           }
         },
         {
-          "startSeconds": 79.6,
+          "startSeconds": 60.9,
           "title": {
-            "en": "Select a Skill and task set",
-            "zh-CN": "选择被测 Skill"
+            "en": "Inspect the failed task",
+            "zh-CN": "查看未通过题目的解释"
           }
         },
         {
-          "startSeconds": 97.6,
+          "startSeconds": 82,
           "title": {
-            "en": "Configure execution and judging",
-            "zh-CN": "配置执行与评审"
+            "en": "Check the actual report",
+            "zh-CN": "核对实际生成的报告"
           }
         },
         {
-          "startSeconds": 123.3,
+          "startSeconds": 102.6,
           "title": {
-            "en": "Read the completed evaluation",
-            "zh-CN": "读取真实评估结果"
+            "en": "Read reported token usage",
+            "zh-CN": "查看已上报的用量"
           }
         },
         {
-          "startSeconds": 145.9,
+          "startSeconds": 120.2,
           "title": {
-            "en": "Inspect individual judgments",
-            "zh-CN": "逐题定位失败原因"
-          }
-        },
-        {
-          "startSeconds": 168,
-          "title": {
-            "en": "Review reports and artifacts",
-            "zh-CN": "查看报告与原始产物"
-          }
-        },
-        {
-          "startSeconds": 194.7,
-          "title": {
-            "en": "Read usage and choose next steps",
-            "zh-CN": "用量与下一步"
+            "en": "Continue with the baseline preserved",
+            "zh-CN": "带着基线进入优化"
           }
         }
       ]
@@ -1773,30 +1760,30 @@
     {
       "id": "skill-optimization",
       "title": {
-        "en": "10-02 Skill optimization",
-        "zh-CN": "10-02 Skill 优化：比较候选改动，让验证结果决定是否保留"
+        "en": "10-03 Skill optimization",
+        "zh-CN": "10-03 Skill 优化：查看候选改动，用固定任务验证效果"
       },
       "description": {
-        "en": "Configure multi-file Skill optimization, then review a completed log-triage run with two rejected candidates. Inspect the soft-score gate, candidate artifacts, unchanged best version, held-out test and disabled publication. No improvement or publication is claimed.",
-        "zh-CN": "配置多文件 Skill 优化，回看两个候选均被拒绝的真实运行。讲解软分门控、候选产物、未改变的最佳版本、留出测试和发布条件。本例没有效果提升，也未发布新版本。"
+        "en": "Review the accepted Skill candidate: validation pass rate rises from 73.33% to 100%. The same experiment’s held-out pass rate stays at 80%, while its soft score changes from 0.985667 to 0.977. The video distinguishes validation improvement from unchanged generalization and retains the candidate for review.",
+        "zh-CN": "查看被接受的 Skill 候选：验证通过率从 73.33% 提高到 100%。同次实验的留出测试通过率保持 80%，软分从约 0.986 变为 0.977。视频区分验证提升与测试未改善，候选保留供审阅。"
       },
       "publishedAt": "2026-09-18",
-      "durationSeconds": 221.521333,
+      "durationSeconds": 162.421333,
       "language": "zh-CN",
-      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-optimization/20260918/poster.jpg",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-optimization/20260918-case2/poster.jpg",
       "sources": [
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-optimization/20260918/skill-optimization.zh-CN.mp4",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-optimization/20260918-case2/skill-optimization.zh-CN.mp4",
           "type": "video/mp4"
         },
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-optimization/20260918/skill-optimization.zh-CN.webm",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-optimization/20260918-case2/skill-optimization.zh-CN.webm",
           "type": "video/webm"
         }
       ],
       "captions": [
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-optimization/20260918/skill-optimization.zh-CN.vtt",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-optimization/20260918-case2/skill-optimization.zh-CN.vtt",
           "language": "zh-CN",
           "label": "简体中文"
         }
@@ -1810,66 +1797,149 @@
           }
         },
         {
-          "startSeconds": 17.8,
+          "startSeconds": 15.1,
           "title": {
-            "en": "Choose an optimization starting point",
-            "zh-CN": "选择优化起点"
+            "en": "Submit the optimization run",
+            "zh-CN": "提交本次优化"
           }
         },
         {
-          "startSeconds": 38.5,
+          "startSeconds": 28.8,
           "title": {
-            "en": "Limit which files may change",
-            "zh-CN": "限定可训练文件"
+            "en": "Distinguish validation and test baselines",
+            "zh-CN": "区分验证基线和测试基线"
           }
         },
         {
-          "startSeconds": 57.7,
+          "startSeconds": 45.8,
           "title": {
-            "en": "Separate training, validation and test data",
-            "zh-CN": "拆分训练、验证和测试"
+            "en": "First candidate improves validation",
+            "zh-CN": "第一个候选获得提升"
           }
         },
         {
-          "startSeconds": 78.9,
+          "startSeconds": 63.5,
           "title": {
-            "en": "Configure iteration and gating",
-            "zh-CN": "设置迭代与门控"
+            "en": "Inspect what the candidate changed",
+            "zh-CN": "查看候选到底改了什么"
           }
         },
         {
-          "startSeconds": 103.8,
+          "startSeconds": 82.4,
           "title": {
-            "en": "Open the completed optimization",
-            "zh-CN": "回看真实优化运行"
+            "en": "The gate retains the better version",
+            "zh-CN": "门控保留更好的版本"
           }
         },
         {
-          "startSeconds": 128.7,
+          "startSeconds": 100,
           "title": {
-            "en": "Read score curves and gate decisions",
-            "zh-CN": "解读曲线和拒绝决策"
+            "en": "Compare seed and best files",
+            "zh-CN": "核对种子与最佳文件"
           }
         },
         {
-          "startSeconds": 152.3,
+          "startSeconds": 117.7,
           "title": {
-            "en": "Inspect the candidate text",
-            "zh-CN": "检查候选修改内容"
+            "en": "Review the held-out test",
+            "zh-CN": "查看独立测试结果"
           }
         },
         {
-          "startSeconds": 175.9,
+          "startSeconds": 140.6,
           "title": {
-            "en": "Check the best version and held-out test",
-            "zh-CN": "核对最佳版本与留出测试"
+            "en": "Keep the best candidate for review",
+            "zh-CN": "保存最佳候选供审阅"
+          }
+        }
+      ]
+    },
+    {
+      "id": "skill-tasksets",
+      "title": {
+        "en": "10-01 Create a task set",
+        "zh-CN": "10-01 创建任务集：AI 生成、人工审阅与固定划分"
+      },
+      "description": {
+        "en": "Generate two batches of 30 tasks for sample-logtriage-v2, review numeric facts and rubrics, and freeze a 30/15/15 training, validation and test split.",
+        "zh-CN": "为 sample-logtriage-v2 分两批生成 60 道任务，审阅数字与评分规则，固定训练 30、验证 15、测试 15 的分组。"
+      },
+      "publishedAt": "2026-09-18",
+      "durationSeconds": 139.021333,
+      "language": "zh-CN",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-tasksets/20260918-case2/poster.jpg",
+      "sources": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-tasksets/20260918-case2/skill-tasksets.zh-CN.mp4",
+          "type": "video/mp4"
+        },
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-tasksets/20260918-case2/skill-tasksets.zh-CN.webm",
+          "type": "video/webm"
+        }
+      ],
+      "captions": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-tasksets/20260918-case2/skill-tasksets.zh-CN.vtt",
+          "language": "zh-CN",
+          "label": "简体中文"
+        }
+      ],
+      "chapters": [
+        {
+          "startSeconds": 0,
+          "title": {
+            "en": "Create a task set",
+            "zh-CN": "创建任务集"
           }
         },
         {
-          "startSeconds": 196.5,
+          "startSeconds": 13.3,
           "title": {
-            "en": "Publication conditions and next experiment",
-            "zh-CN": "发布条件与下一轮实验"
+            "en": "Define evaluation scope",
+            "zh-CN": "从 Skill 确定评估范围"
+          }
+        },
+        {
+          "startSeconds": 32.5,
+          "title": {
+            "en": "Configure task generation",
+            "zh-CN": "配置生成数量和要求"
+          }
+        },
+        {
+          "startSeconds": 51.9,
+          "title": {
+            "en": "Review generated tasks",
+            "zh-CN": "审阅 AI 生成结果"
+          }
+        },
+        {
+          "startSeconds": 72.6,
+          "title": {
+            "en": "Expand an existing task set",
+            "zh-CN": "扩充已有任务集"
+          }
+        },
+        {
+          "startSeconds": 92.4,
+          "title": {
+            "en": "Create the split task set",
+            "zh-CN": "创建分割结构任务集"
+          }
+        },
+        {
+          "startSeconds": 105.6,
+          "title": {
+            "en": "Verify and freeze the splits",
+            "zh-CN": "核对并固定三个分组"
+          }
+        },
+        {
+          "startSeconds": 124.3,
+          "title": {
+            "en": "Continue to baseline evaluation",
+            "zh-CN": "进入基线评估"
           }
         }
       ]
