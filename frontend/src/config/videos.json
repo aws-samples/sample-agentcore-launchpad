@@ -118,6 +118,22 @@
         "evaluation-online",
         "evaluation-evaluators"
       ]
+    },
+    {
+      "id": "skill-lab",
+      "categoryId": "platform",
+      "title": {
+        "en": "10 Skill Lab",
+        "zh-CN": "10 技能实验室"
+      },
+      "description": {
+        "en": "Evaluate Skill quality, inspect optimization candidates, and apply validation gates before publication.",
+        "zh-CN": "评估 Skill 质量，检查优化候选，并通过验证门控决定是否发布。"
+      },
+      "videoIds": [
+        "skill-evaluation",
+        "skill-optimization"
+      ]
     }
   ],
   "videos": [
@@ -1646,6 +1662,214 @@
           "title": {
             "en": "Choose evaluators that match the run inputs",
             "zh-CN": "在运行中选择与输入匹配的评估器"
+          }
+        }
+      ]
+    },
+    {
+      "id": "skill-evaluation",
+      "title": {
+        "en": "10-01 Skill evaluation",
+        "zh-CN": "10-01 Skill 评估：从任务与评分标准，读懂 Skill 的真实表现"
+      },
+      "description": {
+        "en": "Configure a Skill evaluation and review a completed five-task log-triage run: 20% pass rate, 0.754 soft score, judge explanations, artifacts and reported token usage. Configuration is demonstrated without submitting a new cloud job.",
+        "zh-CN": "演示任务集、Skill 和评审配置，回看已完成的日志排障评估：五题通过一题，软分 0.754。解读逐题判分、产物与 Token 用量。配置演示未提交新的云端任务。"
+      },
+      "publishedAt": "2026-09-18",
+      "durationSeconds": 218.221333,
+      "language": "zh-CN",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-evaluation/20260918/poster.jpg",
+      "sources": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-evaluation/20260918/skill-evaluation.zh-CN.mp4",
+          "type": "video/mp4"
+        },
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-evaluation/20260918/skill-evaluation.zh-CN.webm",
+          "type": "video/webm"
+        }
+      ],
+      "captions": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-evaluation/20260918/skill-evaluation.zh-CN.vtt",
+          "language": "zh-CN",
+          "label": "简体中文"
+        }
+      ],
+      "chapters": [
+        {
+          "startSeconds": 0,
+          "title": {
+            "en": "Skill evaluation",
+            "zh-CN": "Skill 评估"
+          }
+        },
+        {
+          "startSeconds": 16.6,
+          "title": {
+            "en": "Open Skill Lab",
+            "zh-CN": "进入技能实验室"
+          }
+        },
+        {
+          "startSeconds": 35.1,
+          "title": {
+            "en": "Inspect task inputs and rubrics",
+            "zh-CN": "检查任务与评分标准"
+          }
+        },
+        {
+          "startSeconds": 57.9,
+          "title": {
+            "en": "Ways to prepare a task set",
+            "zh-CN": "任务集准备方式"
+          }
+        },
+        {
+          "startSeconds": 79.6,
+          "title": {
+            "en": "Select a Skill and task set",
+            "zh-CN": "选择被测 Skill"
+          }
+        },
+        {
+          "startSeconds": 97.6,
+          "title": {
+            "en": "Configure execution and judging",
+            "zh-CN": "配置执行与评审"
+          }
+        },
+        {
+          "startSeconds": 123.3,
+          "title": {
+            "en": "Read the completed evaluation",
+            "zh-CN": "读取真实评估结果"
+          }
+        },
+        {
+          "startSeconds": 145.9,
+          "title": {
+            "en": "Inspect individual judgments",
+            "zh-CN": "逐题定位失败原因"
+          }
+        },
+        {
+          "startSeconds": 168,
+          "title": {
+            "en": "Review reports and artifacts",
+            "zh-CN": "查看报告与原始产物"
+          }
+        },
+        {
+          "startSeconds": 194.7,
+          "title": {
+            "en": "Read usage and choose next steps",
+            "zh-CN": "用量与下一步"
+          }
+        }
+      ]
+    },
+    {
+      "id": "skill-optimization",
+      "title": {
+        "en": "10-02 Skill optimization",
+        "zh-CN": "10-02 Skill 优化：比较候选改动，让验证结果决定是否保留"
+      },
+      "description": {
+        "en": "Configure multi-file Skill optimization, then review a completed log-triage run with two rejected candidates. Inspect the soft-score gate, candidate artifacts, unchanged best version, held-out test and disabled publication. No improvement or publication is claimed.",
+        "zh-CN": "配置多文件 Skill 优化，回看两个候选均被拒绝的真实运行。讲解软分门控、候选产物、未改变的最佳版本、留出测试和发布条件。本例没有效果提升，也未发布新版本。"
+      },
+      "publishedAt": "2026-09-18",
+      "durationSeconds": 221.521333,
+      "language": "zh-CN",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-optimization/20260918/poster.jpg",
+      "sources": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-optimization/20260918/skill-optimization.zh-CN.mp4",
+          "type": "video/mp4"
+        },
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-optimization/20260918/skill-optimization.zh-CN.webm",
+          "type": "video/webm"
+        }
+      ],
+      "captions": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/skill-optimization/20260918/skill-optimization.zh-CN.vtt",
+          "language": "zh-CN",
+          "label": "简体中文"
+        }
+      ],
+      "chapters": [
+        {
+          "startSeconds": 0,
+          "title": {
+            "en": "Skill optimization",
+            "zh-CN": "Skill 优化"
+          }
+        },
+        {
+          "startSeconds": 17.8,
+          "title": {
+            "en": "Choose an optimization starting point",
+            "zh-CN": "选择优化起点"
+          }
+        },
+        {
+          "startSeconds": 38.5,
+          "title": {
+            "en": "Limit which files may change",
+            "zh-CN": "限定可训练文件"
+          }
+        },
+        {
+          "startSeconds": 57.7,
+          "title": {
+            "en": "Separate training, validation and test data",
+            "zh-CN": "拆分训练、验证和测试"
+          }
+        },
+        {
+          "startSeconds": 78.9,
+          "title": {
+            "en": "Configure iteration and gating",
+            "zh-CN": "设置迭代与门控"
+          }
+        },
+        {
+          "startSeconds": 103.8,
+          "title": {
+            "en": "Open the completed optimization",
+            "zh-CN": "回看真实优化运行"
+          }
+        },
+        {
+          "startSeconds": 128.7,
+          "title": {
+            "en": "Read score curves and gate decisions",
+            "zh-CN": "解读曲线和拒绝决策"
+          }
+        },
+        {
+          "startSeconds": 152.3,
+          "title": {
+            "en": "Inspect the candidate text",
+            "zh-CN": "检查候选修改内容"
+          }
+        },
+        {
+          "startSeconds": 175.9,
+          "title": {
+            "en": "Check the best version and held-out test",
+            "zh-CN": "核对最佳版本与留出测试"
+          }
+        },
+        {
+          "startSeconds": 196.5,
+          "title": {
+            "en": "Publication conditions and next experiment",
+            "zh-CN": "发布条件与下一轮实验"
           }
         }
       ]
