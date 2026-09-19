@@ -143,7 +143,7 @@ Hooks、MCP 服务器），经 CodeBuild 打成 **ARM64** 镜像推到 ECR，再
 
 ## 3.3 三种方式对照
 
-列序与 `/create` 页上的卡片顺序一致：
+列序与 `/agents/new` 页上的卡片顺序一致：
 
 | | 方式B 托管 Harness | 方式C Strands ZIP | 方式A 其他 Agent SDK · 容器 |
 |---|---|---|---|

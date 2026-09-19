@@ -73,6 +73,20 @@ CAPS = {
 }
 
 
+
+# Since 2026-09-18 the system-preset cards sit on the create page (/agents/new,
+# under the four method cards) while the agent table is the list (/agents).
+PRESETS_URL = "/agents/new"
+LIST_URL = "/agents"
+
+
+def row_action(page, name: str, action: str):
+    """Row actions Edit/Convert/Delete live in the row's "···" menu since
+    2026-09-18 (list-first /agents page); open it, then return the item."""
+    page.get_by_test_id(f"menu-{name}").click()
+    return page.get_by_test_id(f"{action}-{name}")
+
+
 def auth(role: str) -> dict:
     return {
         "auth_required": True, "authenticated": True, "registration_enabled": False,
@@ -404,7 +418,7 @@ def admin_scenario(browser, base: str, evidence: Path) -> dict:
     ctx.add_init_script(f"window.localStorage.setItem('launchpad_workspace', '{WS_A['id']}')")
     page = ctx.new_page()
     install_routes(page, fx, unhandled)
-    page.goto(f"{base}/create", wait_until="networkidle")
+    page.goto(f"{base}{PRESETS_URL}", wait_until="networkidle")
     wait_status(page, "active")
     row = page.get_by_test_id(f"system-preset-{KEY}")
     assert "max output/call: 65536 tok" in row.get_by_test_id("preset-inference").inner_text()
@@ -489,15 +503,16 @@ def admin_scenario(browser, base: str, evidence: Path) -> dict:
     assert fx.agent_reads and all(w == WS_A["id"] for w in fx.agent_reads), fx.agent_reads
     assert fx.job_reads and all(w == WS_A["id"] for w in fx.job_reads), fx.job_reads
     shot(page, evidence, "06-admin-launch-view")
-    page.goto(f"{base}/create", wait_until="networkidle")
+    page.goto(f"{base}{PRESETS_URL}", wait_until="networkidle")
     wait_status(page, "active", timeout_ms=20000)
     summary = row.get_by_test_id("preset-inference").inner_text()
     assert "reasoning effort: none" in summary and "40 iterations" in summary, summary
     assert "global.anthropic.claude-opus-5" in row.inner_text()
     shot(page, evidence, "07-admin-after-save")
 
-    # --- the agent table's EDIT on the system row opens the SAME page
-    page.get_by_test_id(f"edit-{KEY}").click()
+    # --- the agent table's EDIT on the system row opens the SAME editor
+    page.goto(f"{base}{LIST_URL}", wait_until="networkidle")
+    row_action(page, KEY, "edit").click()
     editor(page, "edit")
     assert page.get_by_test_id("model-select").input_value() == "global.anthropic.claude-opus-5"
     assert page.get_by_test_id("agent-max-iterations").input_value() == "40"
@@ -552,7 +567,7 @@ def admin_scenario(browser, base: str, evidence: Path) -> dict:
 
     # --- a FAILED preset opens the same editor and is retried the same way
     fx.fail_preset(WS_A["id"], "deploy stage: UpdateHarness ValidationException")
-    page.goto(f"{base}/create", wait_until="networkidle")
+    page.goto(f"{base}{PRESETS_URL}", wait_until="networkidle")
     wait_status(page, "failed")
     assert "ValidationException" in page.get_by_test_id("preset-error").inner_text()
     assert page.get_by_test_id(f"repair-{KEY}").count() == 0
@@ -562,7 +577,7 @@ def admin_scenario(browser, base: str, evidence: Path) -> dict:
     submit_and_confirm(page, "RE-PUBLISH")
     page.get_by_test_id("job-log").wait_for()
     assert fx.posts[-1]["body"] == {"force": True}
-    page.goto(f"{base}/create", wait_until="networkidle")
+    page.goto(f"{base}{PRESETS_URL}", wait_until="networkidle")
     wait_status(page, "active", timeout_ms=20000)
 
     # --- a slow save locks the page (single-flight) and its late 202 lands
@@ -581,7 +596,7 @@ def admin_scenario(browser, base: str, evidence: Path) -> dict:
     shot(page, evidence, "08e-admin-saving-locked")
     fx.release_held()
     page.get_by_test_id("job-log").wait_for(timeout=10000)
-    page.goto(f"{base}/create", wait_until="networkidle")
+    page.goto(f"{base}{PRESETS_URL}", wait_until="networkidle")
     wait_status(page, "active", timeout_ms=20000)
     assert "max output/call: 1234 tok" in row.get_by_test_id("preset-inference").inner_text()
 
@@ -589,7 +604,7 @@ def admin_scenario(browser, base: str, evidence: Path) -> dict:
     # still displays A: A's reads, save and poll stay pinned to A
     tab_b = ctx.new_page()
     install_routes(tab_b, fx, unhandled)
-    tab_b.goto(f"{base}/create", wait_until="networkidle")
+    tab_b.goto(f"{base}{PRESETS_URL}", wait_until="networkidle")
     tab_b.get_by_test_id("workspace-switcher-btn").click()
     tab_b.get_by_test_id(f"workspace-option-{WS_B['id']}").click()
     tab_b.locator(f'[data-testid="system-preset-{KEY}"][data-status="not_installed"]').wait_for()
@@ -618,7 +633,7 @@ def admin_scenario(browser, base: str, evidence: Path) -> dict:
 
     # --- same-tab switch from an open draft: the page remounts on B, nothing posted
     page.evaluate(f"localStorage.setItem('launchpad_workspace', '{WS_A['id']}')")
-    page.goto(f"{base}/create", wait_until="networkidle")
+    page.goto(f"{base}{PRESETS_URL}", wait_until="networkidle")
     wait_status(page, "active", timeout_ms=20000)
     page.get_by_test_id(f"settings-{KEY}").click()
     editor(page, "edit")
@@ -636,9 +651,8 @@ def admin_scenario(browser, base: str, evidence: Path) -> dict:
 
     # --- an ORDINARY agent's EDIT is unchanged: ordinary redeploy, stored cap carried
     page.evaluate(f"localStorage.setItem('launchpad_workspace', '{WS_A['id']}')")
-    page.goto(f"{base}/create", wait_until="networkidle")
-    wait_status(page, "active", timeout_ms=20000)
-    page.get_by_test_id("edit-hr-assistant").click()
+    page.goto(f"{base}{LIST_URL}", wait_until="networkidle")
+    row_action(page, "hr-assistant", "edit").click()
     page.locator('[data-testid="configure-step"]:not([data-system-edit])').wait_for()
     assert page.get_by_test_id("agent-max-tokens").input_value() == "4096"
     assert page.get_by_test_id("agent-max-iterations").input_value() == "12"
@@ -666,13 +680,18 @@ def member_scenario(browser, base: str, evidence: Path) -> dict:
     ctx.add_init_script(f"window.localStorage.setItem('launchpad_workspace', '{WS_A['id']}')")
     page = ctx.new_page()
     install_routes(page, fx, unhandled)
-    page.goto(f"{base}/create", wait_until="networkidle")
+    page.goto(f"{base}{PRESETS_URL}", wait_until="networkidle")
     wait_status(page, "active")
     assert_card_simplified(page)
     button = page.get_by_test_id(f"settings-{KEY}")
     assert button.inner_text().strip() == "VIEW SETTINGS", button.inner_text()
-    assert page.get_by_test_id(f"edit-{KEY}").is_disabled()   # the table's EDIT stays off
-    assert not page.get_by_test_id("edit-hr-assistant").is_disabled()  # ordinary rows unchanged
+    list_page = ctx.new_page()
+    install_routes(list_page, fx, unhandled)
+    list_page.goto(f"{base}{LIST_URL}", wait_until="networkidle")
+    assert row_action(list_page, KEY, "edit").is_disabled()   # the table's EDIT stays off
+    # ordinary rows unchanged
+    assert not row_action(list_page, "hr-assistant", "edit").is_disabled()
+    list_page.close()
     button.click()
     editor(page, "review")
     page.get_by_test_id("preset-settings-readonly").wait_for()
@@ -708,7 +727,7 @@ def race_scenario(browser, base: str, evidence: Path) -> dict:
     # first; the late generic response (another tab moved the shared selection to B,
     # so it carries B's catalog) must NOT replace the preset editor's catalog
     fx.kb_hold = "first"
-    page.goto(f"{base}/create", wait_until="domcontentloaded")
+    page.goto(f"{base}{PRESETS_URL}", wait_until="domcontentloaded")
     wait_status(page, "active")
     assert len(fx.held_kb) == 1, fx.kb_reads  # exactly the mount-time generic fetch
     page.get_by_test_id(f"settings-{KEY}").click()
@@ -753,10 +772,10 @@ def race_scenario(browser, base: str, evidence: Path) -> dict:
     # --- (2) table EDIT on the system row: its preset read is held; the user opens an
     # ORDINARY edit and types; the late system read must not reset that draft
     fx.hold_next_status = True
-    page.get_by_test_id(f"edit-{KEY}").click()
+    row_action(page, KEY, "edit").click()
     page.wait_for_timeout(200)
     assert fx.held_status is not None
-    page.get_by_test_id("edit-hr-assistant").click()
+    row_action(page, "hr-assistant", "edit").click()
     page.locator('[data-testid="configure-step"]:not([data-system-edit])').wait_for()
     page.get_by_test_id("agent-prompt").fill("UNSAVED ordinary draft")
     fx.release_status()
@@ -769,7 +788,7 @@ def race_scenario(browser, base: str, evidence: Path) -> dict:
     back_to_list(page)
     # (2b) the same with the DETAILS view opened meanwhile: the launch view stays
     fx.hold_next_status = True
-    page.get_by_test_id(f"edit-{KEY}").click()
+    row_action(page, KEY, "edit").click()
     page.wait_for_timeout(200)
     assert fx.held_status is not None
     page.get_by_test_id(f"details-{KEY}").click()
@@ -779,10 +798,10 @@ def race_scenario(browser, base: str, evidence: Path) -> dict:
     assert page.get_by_test_id("configure-step").count() == 0
     assert page.get_by_test_id("job-log").count() == 1
     # (2c) with nothing newer, the held read still opens the editor (no lost click)
-    page.goto(f"{base}/create", wait_until="networkidle")
+    page.goto(f"{base}{PRESETS_URL}", wait_until="networkidle")
     wait_status(page, "active")
     fx.hold_next_status = True
-    page.get_by_test_id(f"edit-{KEY}").click()
+    row_action(page, KEY, "edit").click()
     page.wait_for_timeout(200)
     fx.release_status()
     editor(page, "edit")
@@ -802,7 +821,7 @@ def zh_screenshots(browser, base: str, evidence: Path) -> None:
     )
     page = ctx.new_page()
     install_routes(page, fx, unhandled)
-    page.goto(f"{base}/create", wait_until="networkidle")
+    page.goto(f"{base}{PRESETS_URL}", wait_until="networkidle")
     wait_status(page, "active")
     assert_card_simplified(page)
     shot(page, evidence, "12-zh-admin-card")

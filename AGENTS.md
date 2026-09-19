@@ -55,13 +55,15 @@ These are the abstractions that span many files; understanding them is what make
 productive here. The per-feature detail lives in `docs/architecture.md` and the specs
 under `.trellis/spec/launchpad/`.
 
-- **Three creation methods, one pipeline.** 方式A (Claude Agent SDK → ARM64 container),
-  方式B (managed Harness, no build), 方式C (Strands Studio canvas), plus `zip_runtime`,
+- **Four creation methods, one pipeline.** 方式A (Claude Agent SDK → ARM64 container),
+  方式B (managed Harness, no build), 方式C (Strands Studio canvas), `byoc` (member-
+  uploaded code zip / Dockerfile context / existing ECR image), plus `zip_runtime`,
   all converge into the ordered stages `generate → package → provision → deploy →
   register` in `backend/app/deployer/pipeline.py`. Each method registers one callable
   per stage (or omits it) via `register_method()`; the method modules
-  (`deployer/harness.py`, `zip_runtime.py`, `container.py`) are imported **for their
-  side effects** in `app/main.py`, so a new method must be imported there to exist.
+  (`deployer/harness.py`, `zip_runtime.py`, `container.py`, `byoc.py`) are imported
+  **for their side effects** in `app/main.py`, so a new method must be imported there
+  to exist.
 
 - **Deploy is an async, resumable job.** `POST /api/agents` returns `202` with a
   `job_id`; the job runs on a background thread, persisting per-stage status onto the

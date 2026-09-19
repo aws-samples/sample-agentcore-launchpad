@@ -31,6 +31,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from app.core.runtime_target import TARGET_PYTHON as _TARGET_PYTHON
+from app.core.runtime_target import uv_platform as _uv_platform
+
 # name[extra1,extra2]==version, optionally followed by ; markers
 _PINNED_RE = re.compile(
     r"""^
@@ -116,9 +119,9 @@ def assert_all_pinned(entries: list[str]) -> None:
 # the option that keeps the feature and the guarantee.
 # ---------------------------------------------------------------------------
 
-# The target the deploy pipeline installs for (mirrors zip_runtime.build_zip).
-_TARGET_PYTHON = "3.13"
-_TARGET_PLATFORM = "aarch64-manylinux2014"
+# The target the deploy pipeline installs for is the same single definition
+# `zip_runtime.build_zip` resolves against: `_TARGET_PYTHON` / `_uv_platform`
+# from app/core/runtime_target.py, imported above.
 
 _NAME_EXTRAS_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[(?P<extras>[^\]]+)\])?"
@@ -185,7 +188,7 @@ def resolve_pins(
             [
                 "uv", "pip", "compile", str(src), "--quiet",
                 "--python-version", _TARGET_PYTHON,
-                "--python-platform", _TARGET_PLATFORM,
+                "--python-platform", _uv_platform(),
                 # Keep conversion-time pins inside the same wheel-only artifact
                 # set the package stage can install for AgentCore Runtime.
                 "--only-binary=:all:",

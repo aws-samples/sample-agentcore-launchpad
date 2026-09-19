@@ -97,7 +97,7 @@ real, runnable code in this repo.
 
 ## The unified five-stage deploy pipeline
 
-All three creation methods converge into the same ordered stages, defined in
+All creation methods converge into the same ordered stages, defined in
 `backend/app/deployer/pipeline.py`:
 
 ```
@@ -109,13 +109,13 @@ progress is persisted on the `Deployment` row and mirrored as JSONL events into
 the `Job` log, so a restarted backend resumes from the first non-succeeded
 stage (`resume_pending_jobs()` runs on startup).
 
-| Stage | 方式B — harness | zip_runtime / 方式C — studio | 方式A — container |
-|---|---|---|---|
-| **generate** | Build `CreateHarness` request from the AgentSpec | Render the Strands template (studio: adapt user code verbatim) | Assemble ARM64 build context (Dockerfile + `main.py` + `.claude` scaffold) |
-| **package** | *skipped* (no artifact) | resolve → hashed lock → `--require-hashes` install of ARM64 wheels → zip → S3 | zip context → S3 → CodeBuild (docker build+push) → ECR → resolve digest → scan gate |
-| **provision** | Reuse the shared execution role | Reuse the shared execution role | Reuse the shared execution role |
-| **deploy** | `CreateHarness` + poll READY | `CreateAgentRuntime` + poll READY | `CreateAgentRuntime(containerConfiguration)` + poll READY |
-| **register** | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap |
+| Stage | 方式B — harness | zip_runtime / 方式C — studio | 方式A — container | byoc — bring your own code |
+|---|---|---|---|---|
+| **generate** | Build `CreateHarness` request from the AgentSpec | Render the Strands template (studio: adapt user code verbatim) | Assemble ARM64 build context (Dockerfile + `main.py` + `.claude` scaffold) | *No code generated.* Verify the staged upload (or the ECR image) and stamp server-verified provenance (sha256, uploader, timestamp) onto the spec |
+| **package** | *skipped* (no artifact) | resolve → hashed lock → `--require-hashes` install of ARM64 wheels → zip → S3 | zip context → S3 → CodeBuild (docker build+push) → ECR → resolve digest → scan gate | `code_zip`: download → safe-extract → verify entrypoint → resolve the zip's `requirements.txt` for linux/aarch64 (hashed lock) → zip → S3. `container_source`: verify Dockerfile → same CodeBuild → ECR → digest → scan gate as 方式A. `container_image`: *skipped* |
+| **provision** | Reuse the shared execution role | Reuse the shared execution role | Reuse the shared execution role | Per-agent least-privilege role (same machinery) |
+| **deploy** | `CreateHarness` + poll READY | `CreateAgentRuntime` + poll READY | `CreateAgentRuntime(containerConfiguration)` + poll READY | `CreateAgentRuntime` — `codeConfiguration` (user's Python version + entrypoint, no ADOT launcher) or `containerConfiguration` — + poll READY |
+| **register** | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap | A2A registry record, auto-submitted; skipped when Registry was explicitly unavailable at bootstrap | Same shared register stage — byoc agents are runtime-backed for chat/versions/observability |
 
 Typical timings: harness ≈ 30 s, zip ≈ 1–3 min (incl. pip), container ≈ 2–4 min (observed: 1.7 min CodeBuild + seconds to READY)
 (via CodeBuild). See [troubleshooting.md](troubleshooting.md).
@@ -189,14 +189,27 @@ whether what runs is still what was built. Both live in the `package` stage.
 over the declared list — which is what this used to be — installs whatever the
 index serves at that moment, including for the platform's own ranged pins, and
 leaves no record. The stage now runs `uv pip compile --generate-hashes` for the
-deploy target (aarch64, Python 3.13, named once in `zip_runtime.py` so the resolve
-and the install cannot disagree) with `--only-binary=:all:`, then installs those
-same wheel-only candidates with `--require-hashes`. Without the matching binary
-constraint, the resolver can lock an sdist-only release that the Runtime's
-ARM64/manylinux2014 binary-only install rejects. A substituted or re-uploaded
-distribution fails the build. The lock ships inside the zip as
-`requirements.lock`, so the artifact carries its own bill of materials. There
-is deliberately no fallback: a resolve failure fails the stage.
+deploy target (aarch64, Python 3.13, defined once in
+`app/core/runtime_target.py` so the resolve and the install cannot disagree)
+with `--only-binary=:all:`, then installs those same wheel-only candidates with
+`--require-hashes`. Without the matching binary constraint, the resolver can
+lock an sdist-only release that the Runtime's ARM64 binary-only install
+rejects. A substituted or re-uploaded distribution fails the build. The lock
+ships inside the zip as `requirements.lock`, so the artifact carries its own
+bill of materials. There is deliberately no fallback: a resolve failure fails
+the stage.
+
+The resolution target is **`manylinux_2_28` / aarch64** by default. The
+AgentCore Runtime direct-code environment was measured (2026-09-18, from inside
+a deployed PYTHON_3_13 agent) as Amazon Linux 2023 on aarch64 with glibc 2.34,
+so it loads any manylinux wheel up to `manylinux_2_34`; the official docs'
+`manylinux2014` recommendation is safe but rejects packages that only publish
+`manylinux_2_26`/`2_28` aarch64 wheels (e.g. `google-re2`, a `chromadb`
+dependency). The level is configurable via `runtime_python_platform`
+(`LAUNCHPAD_RUNTIME_PYTHON_PLATFORM`); `manylinux2014` is the documented
+fallback should a runtime image ever report an older glibc. Because pip treats
+`--platform` tags as exact strings, the install passes the whole tag ladder
+from the configured level down to `manylinux2014`.
 
 Caller-supplied `spec.requirements` must additionally be pinned at *schema*
 validation (`app/schemas/requirements.py`), so the console rejects a range before a
@@ -228,16 +241,34 @@ tag policy so this cannot drift into a broken re-publish.
 Not covered: SBOM generation, provenance/attestation, signing, approved-mirror
 enforcement, and skill *content* review. Immutable is not the same as trusted.
 
+### Agent management routes
+
+Since 2026-09-18 the module is list-first (`/create` and `/create?view=discover`
+redirect; the query string is kept so Registry's `?gateway=` / `?skill=` prefill
+still lands on the wizard):
+
+| Route | View |
+|---|---|
+| `/agents` | landing: `+ New Agent` / `Import existing Runtime`, a stats strip (total / running / deploying / failed, derived from the loaded list) and the agent table (name → detail, CHAT + DETAILS visible, EDIT / CONVERT / DELETE in a per-row `···` menu, FAILED rows carry the error as tooltip + VIEW REASON) |
+| `/agents/new` | the 3-step wizard; step 1 is the four method cards below, a button to the import page, and the system-preset cards (install / configure stay where they were, under the cards) |
+| `/agents/import` | discovery of existing Runtime / Harness resources |
+| `/agents/:id` | the agent's detail (the wizard's step-3 view: launch sequence, versions, BYOC provenance, conversion notes; live polling while deploying; OPEN CHAT / OBSERVABILITY / EDIT links). A deploy started on `/agents/new` navigates here when it goes active |
+| `/agents/:id/edit` | the wizard preloaded for a re-publish (system presets open the shared editor, Studio agents go to `/create/studio?agent=`) |
+
 ### Creation entrances
 
-The `/create` picker shows four cards, in this order:
+The `/agents/new` picker shows four cards, in this order:
 
 | # | Card | `AgentSpec.method` | What it is |
 |---|---|---|---|
 | 1 | **Managed Harness** | `harness` | 方式B — declarative, no build artifact |
 | 2 | **Strands Studio** | `zip_runtime` | 方式C — Strands template on the zip fast path; the card's nested link opens the `/create/studio` canvas, which deploys as method `studio` |
 | 3 | **Other Agent SDK** | `container` | 方式A — bring your own agent SDK, packaged as an ARM64 container via CodeBuild |
-| 4 | **Discover existing runtimes and harnesses** | — | not a deploy method (see below) |
+| 4 | **Bring Your Own Code** | `byoc` | user-written agent code uploaded as a zip (direct-code runtime or Dockerfile → CodeBuild) or referenced as an existing private-ECR image — see [BYOC](#byoc--bring-your-own-code) |
+
+Discovery of existing runtimes and harnesses is not a deploy method: it has its
+own page at `/agents/import` (see below), reachable from the list header and
+from a button next to NEXT on step 1.
 
 The third card is a **category**, not one SDK. `AgentSpec.agent_sdk` records
 which SDK a container agent packages, and the wizard exposes it as a
@@ -247,6 +278,87 @@ before the field existed read back unambiguously and adding a second SDK needs
 no stored-spec migration. There is deliberately **no dispatch** on the field yet:
 `app/deployer/container.py` and `app/templates/claude_sdk_agent/` stay
 unconditional until the category has a second member.
+
+### BYOC — bring your own code
+
+The fourth card deploys code the member's developers wrote themselves — already
+wrapped with the AgentCore SDK (`BedrockAgentCoreApp` + `@app.entrypoint`) or
+any HTTP server satisfying the runtime contract (ARM64, port 8080,
+`POST /invocations` + `GET /ping`, payload `{"prompt", "actor_id"}`). The
+**response** is whatever the code answers — the Runtime HTTP contract requires
+JSON or SSE and names no key. Chat, the public `/v1` API and evaluation replays
+all read it through one parser (`services/agentcore/runtime.py::_runtime_payload_events`):
+`{"result": …}` (BedrockAgentCoreApp's convention, preferred) or the
+delta/tool/complete SSE envelope stream for real; any other JSON body is shown
+by its first conventional text key (`response`, `answer`, `output`, `text`,
+`message`, `content`, `completion`, `reply` — a nested `{"text"}` block under
+one of them also counts), and a body with none of those is rendered as compact
+JSON rather than a blank turn (measured 2026-09-18: a CrewAI agent answering
+`{"answer", "session_id", "turns"}` produced an empty reply with no error).
+`{"error": …}` is surfaced as a failed turn. Three
+artifact kinds, one `spec.byoc` block (`backend/app/schemas/agent.py::ByocConfig`):
+
+| `artifact_kind` | Input | Path to Runtime |
+|---|---|---|
+| `code_zip` | zip of Python source (staged via `POST /api/agents/uploads`) | S3 → `CreateAgentRuntime(codeConfiguration)` with the member's Python version + entrypoint; the platform resolves the zip's `requirements.txt` into the bundle for linux/aarch64 (hashed lock, wheels only — nothing is executed) |
+| `container_source` | zip carrying a Dockerfile | the shared `launchpad-agent-builder` CodeBuild project (ARM64) → ECR `launchpad-agents:{name}-v{version}` → `containerConfiguration`, including the digest pin and image-scan gate the container method uses |
+| `container_image` | an existing image URI | verified with `ecr.describe_images` — must live in this workspace's account+region; public registries and other accounts are refused — then deployed as-is |
+
+**Security model.** Developers need no IAM: they hand a zip to whoever holds the
+`perm:agents.deploy` console permission (uploads carry the same permission).
+Each agent gets its own least-privilege execution role (`services/agent_iam.py`);
+BYOC container kinds additionally get `ecr:BatchGetImage`/`GetDownloadUrlForLayer`
+scoped to the image's repository. The role's `bedrock:InvokeModel` statement
+covers exactly `spec.byoc.allowed_models` (1–20 ids; absent ⇒ `[spec.model_id]`)
+— the union of each entry's foundation-model + inference-profile ARNs, deduped,
+never a wildcard. Entry `[0]` is the primary (= `spec.model_id`); the deployer
+injects it as env `MODEL_ID` and the full list as `ALLOWED_MODEL_IDS`
+(comma-separated) so the code knows what it may call — `spec.env` values win.
+Re-publish rewrites the role policy, so an edited list lands with the deploy. Uploads are workspace-scoped under
+`byoc/{workspace_id}/{upload_id}/` in the artifacts bucket, and the server stamps
+provenance (sha256, size, filename, uploader, time) onto the spec — the console
+renders it on the agent detail view.
+
+**What is validated / what is not.** The upload gate enforces archive safety
+(zip-slip, absolute paths, symlinks, ≤250 MiB zip / ≤750 MiB uncompressed /
+≤20k entries — the AgentCore direct-code caps) and *reports* detection
+(entrypoint candidates, requirements.txt, Dockerfile, AgentCore-SDK markers).
+When the zip carries a `requirements.txt`, the upload also dry-resolves it
+against the deploy target for the selected Python version (`?python_version=`)
+and reports `detected.requirements: {status: ok|failed|skipped, package_count,
+error}` — so the wizard flags an unresolvable file before a deploy is
+attempted. `skipped` (resolver timeout, `uv` unavailable) says nothing either
+way; the deploy still runs the authoritative resolve.
+
+**requirements.txt rules (`code_zip`).** The file is parsed per the pip
+requirements-file format — backslash continuations, inline comments, blank
+lines and environment markers are all honoured. `--hash=` options are dropped:
+the platform re-locks the file against its own deploy target and generates
+fresh hashes (`requirements.lock` inside the artifact). List direct
+dependencies from the package index only; pins are optional (the hashed lock is
+what makes the build reproducible). Refused with a clear error, because a
+requirements file must not widen the platform-index-only supply-chain boundary:
+`-r`/`-c` includes, `-e`/editable, local paths, direct URLs and VCS references,
+`--index-url`/`--extra-index-url`/`--find-links`, and more than 500 entries.
+When a dependency ships no compatible aarch64 wheel, the error names the
+package and the alternatives: pin a release that does, use the Dockerfile
+(`container_source`) path, or vendor the packages inside the zip with
+`install_requirements=false`.
+The platform does **not** review or scan the code itself; `container_source`
+images do pass the existing ECR scan gate. User code is never executed on the
+Launchpad host — package-time work is extraction and a wheels-only pip install
+into the bundle directory. For `container_source`, the platform's own
+`buildspec.yml` is always injected into the CodeBuild source zip, **overwriting
+any buildspec the upload carries** — the member controls the Dockerfile only,
+never the build recipe.
+
+**v1 scope.** HTTP protocol only (no A2A); no toolkits/skills/knowledge
+bases/tools on the spec (the platform does not generate this code, so it cannot
+wire them — configure capabilities inside your own code); `system_prompt` is
+optional and serves as a description. Config-bundle experiments and canary
+candidates degrade with `custom-source-unverified`, exactly like other
+custom-source runtimes. Samples: [`samples/byoc/`](../samples/byoc/README.md);
+lab walkthrough: [docs/lab/13-byoc.md](lab/13-byoc.md).
 
 ### Recommendation trace source
 
@@ -1733,7 +1845,7 @@ the wizard shows it the SDK choice in place of the Model source control.
 
 ### Existing Runtime and Harness discovery
 
-`/create?view=discover` is an onboarding path alongside the three creation
+`/agents/import` is an onboarding path alongside the three creation
 methods, not a deploy method. `GET /api/agents/discovery` follows every Runtime
 list page in the configured Region and performs one detail read per resource.
 The backend returns only an allow-listed projection: Runtime identity, name,
@@ -1791,7 +1903,7 @@ Evaluation, experiments, and harness→zip conversion stay keyed on
 Every `UpdateAgentRuntime` / `UpdateHarness` publishes an immutable new version;
 the `DEFAULT` endpoint auto-follows the latest while named endpoints (the target
 canary's `stable`/`treatment`) pin one. The ledger only remembers the version a
-Launchpad deploy minted (`Agent.version`), so the agent detail on `/create`
+Launchpad deploy minted (`Agent.version`), so the agent detail on `/agents/:id`
 (details mode) carries a **VERSIONS & ENDPOINTS** panel backed by
 `GET /api/agents/{agent_id}/versions`. The route resolves the row to one resource
 family — `zip_runtime`/`studio`/`container` and imported rows whose

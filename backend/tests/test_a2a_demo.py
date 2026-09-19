@@ -158,7 +158,10 @@ def test_frontdesk_a2a_message_carries_context_and_request_state_is_isolated():
     assert isinstance(h["_SESSION_ID"], ContextVar)
 
 
-def test_frontdesk_memory_manager_scopes_actor_and_session():
+def test_frontdesk_memory_manager_scopes_actor_and_session(monkeypatch):
+    # REGION is read from AWS_REGION at module load — pin the default so the
+    # assertion doesn't track whatever region the host happens to export
+    monkeypatch.delenv("AWS_REGION", raising=False)
     h = _load_helpers()
     captured = {}
 

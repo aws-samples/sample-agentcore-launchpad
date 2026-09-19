@@ -103,6 +103,85 @@ class TestModelResources:
         assert agent_iam.model_resources("", CTX) == ["*"]
 
 
+class TestAllowedModelResources:
+    """byoc `allowed_models`: the BedrockModels statement covers the UNION of the
+    per-model resources — each entry still scoped to its exact id, no wildcard."""
+
+    def _byoc(self, models, **over):
+        return _spec(
+            method="byoc", system_prompt="",
+            byoc={"artifact_kind": "code_zip", "upload_id": "u1",
+                  "allowed_models": models},
+            **over,
+        )
+
+    def test_union_over_every_entry(self):
+        spec = self._byoc(["global.anthropic.claude-sonnet-5",
+                           "amazon.nova-2-lite-v1:0"])
+        resources = agent_iam.allowed_model_resources(spec, CTX)
+        assert resources == [
+            "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5",
+            "arn:aws:bedrock:us-west-2:123456789012:inference-profile/"
+            "global.anthropic.claude-sonnet-5",
+            "arn:aws:bedrock:*::foundation-model/amazon.nova-2-lite-v1:0",
+        ]
+
+    def test_overlapping_entries_dedupe(self):
+        # a profile and the bare model it fronts share a foundation-model ARN
+        spec = self._byoc(["global.anthropic.claude-sonnet-5",
+                           "anthropic.claude-sonnet-5"])
+        resources = agent_iam.allowed_model_resources(spec, CTX)
+        assert len(resources) == len(set(resources)) == 2
+
+    def test_policy_statement_carries_the_union(self):
+        spec = self._byoc(["global.anthropic.claude-sonnet-5",
+                           "amazon.nova-2-lite-v1:0"])
+        statement = _statement(spec, "BedrockModels")
+        assert "arn:aws:bedrock:*::foundation-model/amazon.nova-2-lite-v1:0" in (
+            statement["Resource"])
+        assert "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5" in (
+            statement["Resource"])
+        assert "arn:aws:bedrock:*::foundation-model/*" not in statement["Resource"]
+
+    def test_single_model_specs_are_unchanged(self):
+        assert agent_iam.allowed_model_resources(_spec(), CTX) == (
+            agent_iam.model_resources(_spec().model_id, CTX))
+
+    def test_republish_updates_the_role_policy_with_the_new_union(self):
+        """`ensure_role` put_role_policy's the capability policy on every provision
+        run — a changed allowed_models list lands on re-publish, not only create."""
+        import json
+        from types import SimpleNamespace
+
+        put_docs = []
+
+        class StubIam:
+            def create_role(self, **kw):
+                return {"Role": {"Arn": "arn:aws:iam::123456789012:role/x"}}
+
+            def put_role_policy(self, RoleName, PolicyName, PolicyDocument):
+                put_docs.append(json.loads(PolicyDocument))
+
+            def delete_role_policy(self, **kw):
+                pass
+
+        agent = SimpleNamespace(id="abcdef1234567890", name="probe", system_key=None)
+        for models in (["us.model.one"], ["us.model.one", "us.model.two"]):
+            agent_iam.ensure_role(StubIam(), agent, self._byoc(models), CTX)
+        first, second = (
+            next(s for s in doc["Statement"] if s["Sid"] == "BedrockModels")
+            for doc in put_docs
+        )
+        assert first["Resource"] == [
+            "arn:aws:bedrock:*::foundation-model/model.one",
+            "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.model.one",
+        ]
+        assert second["Resource"] == first["Resource"] + [
+            "arn:aws:bedrock:*::foundation-model/model.two",
+            "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.model.two",
+        ]
+
+
 # ─── what a plain agent gets, and what it does not ───────────────────────────
 
 class TestBaselineAgent:

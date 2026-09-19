@@ -1405,7 +1405,9 @@ def _eval_run_for_session(
 # Runtime methods write no memory events during eval runs, but their ADOT
 # sidecar streams per-span gen_ai content records into the runtime log group
 # (stream otel-rt-logs) — the same content StartBatchEvaluation reads.
-RUNTIME_LOG_METHODS = {"zip_runtime", "studio", "container"}
+# byoc included: its runtime writes the same log group; whether the member's own
+# code emits gen_ai content records is up to their instrumentation.
+RUNTIME_LOG_METHODS = {"zip_runtime", "studio", "container", "byoc"}
 
 
 def _part_list_text(raw: Any) -> str | None:

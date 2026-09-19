@@ -247,6 +247,18 @@ Resources:
                   - ecr:DescribeRepositories
                 Resource: "*"
 
+              # BYOC `container_image` deploys an image the member already pushed
+              # to ANY private repository of this account (the deployer verifies
+              # it with DescribeImages before CreateAgentRuntime and refuses other
+              # accounts / public registries). Read-only; the agent's own
+              # execution role receives the pull grant, scoped to that repository.
+              - Sid: EcrDescribeImagesForByoc
+                Effect: Allow
+                Action:
+                  - ecr:DescribeImages
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/*"
+
               # ── CodeBuild ──────────────────────────────────────────────────
               - Sid: CodeBuildLaunchpad
                 Effect: Allow

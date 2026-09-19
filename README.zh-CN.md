@@ -12,13 +12,15 @@ AgentCore Launchpad 是一套基于 Amazon Bedrock AgentCore 的**企业 Agent O
 Launchpad 由 React 控制台、FastAPI 后端和一套 CDK 共享基础设施组成，另带一个
 vendored Strands Studio 子应用。主要能力包括：
 
-- **三种创建方式，共用一条部署流水线。** 用户可以选择**方式B（Managed Harness）**，
+- **四种创建方式，共用一条部署流水线。** 用户可以选择**方式B（Managed Harness）**，
   通过模型、提示词、工具、技能和记忆创建 Harness，无需编写代码或构建产物；
   选择**方式C（Strands Studio）**，在可视化画布中生成 Strands 代码；
-  也可以选择**方式A（其他 Agent SDK）**，自带 Agent SDK（目前为 Claude Agent
-  SDK）并打包成 ARM64 容器镜像。
-  三种方式都进入同一条五阶段流水线，最终部署到 AgentCore Runtime（方式A/C）
-  或托管 Harness 服务（方式B）。
+  选择**方式A（其他 Agent SDK）**，自带 Agent SDK（目前为 Claude Agent
+  SDK）并打包成 ARM64 容器镜像；也可以选择**自带代码（BYOC）**，上传自己编写的
+  Agent 代码 zip 或 Dockerfile 构建上下文，或引用本账户私有 ECR 中的现有镜像，
+  开发者无需任何 AWS 权限。
+  所有方式都进入同一条五阶段流水线，最终部署到 AgentCore Runtime
+  （方式A/C/BYOC）或托管 Harness 服务（方式B）。
 - **注册中心。** 通过 AgentCore Registry 登记和查找三类资产：Agent（A2A）、
   MCP 工具和 Skill，并支持提交、审批等生命周期操作。
 - **知识库。** 托管 Bedrock 知识库——全托管 RAG，向量库、嵌入与重排都由服务负责。
@@ -220,7 +222,7 @@ export LAUNCHPAD_AUTH_ALLOWED_EMAIL_DOMAINS='["your-company.com"]'   # 白名单
 |---|---|
 | `backend/` | FastAPI 后端：部署流水线、调用链、评估与优化、SQLite 台账 |
 | `backend/app/routers/` | 控制台 `/api` + 公开 `/v1` 接口 |
-| `backend/app/deployer/` | 统一流水线 + 各方式的阶段实现（harness、zip_runtime、container、studio） |
+| `backend/app/deployer/` | 统一流水线 + 各方式的阶段实现（harness、zip_runtime、container、studio、byoc） |
 | `frontend/` | React 控制台（Vite）：Overview、Create Agent、Registry、Chat、Governance、Evaluation |
 | `infra/` | AWS CDK 应用：`launchpad-base` 共享栈 |
 | `apps/studio/` | vendored Strands Studio 子应用（方式C），已接入平台流水线 |

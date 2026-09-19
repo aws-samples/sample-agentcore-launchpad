@@ -44,7 +44,9 @@ from app.services.agentcore.client import control_client, data_client
 from app.services.workspace import WorkspaceContext, context_for_workspace
 from app.templates import gateway_support
 
-EVAL_SUPPORTED_METHODS = {"zip_runtime", "studio", "container", "harness"}
+# byoc: telemetry identity derivation is method-agnostic for runtimes; whether
+# the user's code emits gen_ai spans for the evaluator to read is theirs.
+EVAL_SUPPORTED_METHODS = {"zip_runtime", "studio", "container", "harness", "byoc"}
 TELEMETRY_READY_GRACE_SECONDS = 120
 TELEMETRY_QUERY_LOOKBACK_MS = 60_000
 

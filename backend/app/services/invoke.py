@@ -33,12 +33,17 @@ BUFFERED_CHUNK_CHARS = 60
 # Runtime methods whose generated entrypoint emits the delta/tool/complete
 # envelope over SSE (see `rt._runtime_payload_events`). Shared with chat so the
 # advertised `mode` and the actual invoke path can't drift apart.
-NATIVE_STREAM_METHODS = frozenset({"container", "zip_runtime"})
+# byoc is included on the strength of the parser's documented fallback: user
+# code that answers a JSON {"result": ...} body (BedrockAgentCoreApp's default)
+# is folded into one delta, and code that streams SSE streams for real.
+NATIVE_STREAM_METHODS = frozenset({"container", "zip_runtime", "byoc"})
 # Methods whose agent ARN is an AgentCore *Runtime* — the only resource with a
 # session-stop operation. A managed Harness (deployed or imported) has none:
 # neither `bedrock-agentcore` nor `bedrock-agentcore-control` models an
 # operation that names both Harness and Session.
-RUNTIME_SESSION_METHODS = frozenset({"zip_runtime", "studio", "container", DISCOVERED_METHOD})
+RUNTIME_SESSION_METHODS = frozenset(
+    {"zip_runtime", "studio", "container", "byoc", DISCOVERED_METHOD}
+)
 
 
 def _runtime_user_id(
@@ -237,7 +242,7 @@ def invoke_agent_text(
             actor_id=actor_id,
             **harness_kwargs,
         )
-    if agent.method in ("zip_runtime", "studio", "container", DISCOVERED_METHOD):
+    if agent.method in ("zip_runtime", "studio", "container", "byoc", DISCOVERED_METHOD):
         # A2A-protocol runtimes speak JSON-RPC; the A2A server owns
         # conversation state (no actor_id/memory envelope) and can't be canaried
         if (agent.spec or {}).get("protocol") == "a2a":

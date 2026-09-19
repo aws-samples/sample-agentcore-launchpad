@@ -68,7 +68,7 @@ English: [architecture.md](architecture.md)
 
 ## 统一的五阶段部署管道
 
-三种创建方式统一收敛到同一组有序阶段,定义在 `backend/app/deployer/pipeline.py`:
+所有创建方式统一收敛到同一组有序阶段,定义在 `backend/app/deployer/pipeline.py`:
 
 ```
 generate → package → provision → deploy → register
@@ -78,13 +78,13 @@ generate → package → provision → deploy → register
 `Deployment` 行上,并作为 JSONL 事件镜像进 `Job` 日志,因此重启后的后端会从第一个
 未成功的阶段继续(启动时执行 `resume_pending_jobs()`)。
 
-| 阶段 | 方式B — harness | zip_runtime / 方式C — studio | 方式A — container |
-|---|---|---|---|
-| **generate** | 从 AgentSpec 构建 `CreateHarness` 请求 | 渲染 Strands 模板(studio:原样适配用户代码) | 组装 ARM64 构建上下文(Dockerfile + `main.py` + `.claude` 脚手架) |
-| **package** | *跳过*(无产物) | 解析 → 带 hash 的 lock → `--require-hashes` 安装 ARM64 wheels → zip → S3 | zip 上下文 → S3 → CodeBuild(docker build+push)→ ECR → 解析 digest → 扫描闸门 |
-| **provision** | 复用共享执行角色 | 复用共享执行角色 | 复用共享执行角色 |
-| **deploy** | `CreateHarness` + 轮询 READY | `CreateAgentRuntime` + 轮询 READY | `CreateAgentRuntime(containerConfiguration)` + 轮询 READY |
-| **register** | A2A 注册记录,自动提交 | A2A 注册记录,自动提交 | A2A 注册记录,自动提交 |
+| 阶段 | 方式B — harness | zip_runtime / 方式C — studio | 方式A — container | byoc — 自带代码 |
+|---|---|---|---|---|
+| **generate** | 从 AgentSpec 构建 `CreateHarness` 请求 | 渲染 Strands 模板(studio:原样适配用户代码) | 组装 ARM64 构建上下文(Dockerfile + `main.py` + `.claude` 脚手架) | *不生成代码。* 校验已暂存的上传(或 ECR 镜像),并把服务端核验的溯源信息(sha256、上传者、时间)写入 spec |
+| **package** | *跳过*(无产物) | 解析 → 带 hash 的 lock → `--require-hashes` 安装 ARM64 wheels → zip → S3 | zip 上下文 → S3 → CodeBuild(docker build+push)→ ECR → 解析 digest → 扫描闸门 | `code_zip`:下载 → 安全解压 → 校验入口文件 → 为 linux/aarch64 解析 zip 内的 `requirements.txt`(带 hash 锁定)→ zip → S3;`container_source`:校验 Dockerfile → 与方式A 相同的 CodeBuild → ECR → digest → 扫描闸门;`container_image`:*跳过* |
+| **provision** | 复用共享执行角色 | 复用共享执行角色 | 复用共享执行角色 | 按 Agent 的最小权限角色(同一套机制) |
+| **deploy** | `CreateHarness` + 轮询 READY | `CreateAgentRuntime` + 轮询 READY | `CreateAgentRuntime(containerConfiguration)` + 轮询 READY | `CreateAgentRuntime`——`codeConfiguration`(用户选择的 Python 版本与入口,不带 ADOT 启动器)或 `containerConfiguration`——+ 轮询 READY |
+| **register** | A2A 注册记录,自动提交 | A2A 注册记录,自动提交 | A2A 注册记录,自动提交 | 同一个共享 register 阶段——byoc Agent 是 Runtime 型,聊天/版本/可观测按 Runtime 处理 |
 
 典型耗时:harness ≈ 30 秒,zip ≈ 1–3 分钟(含 pip),container ≈ 2–4 分钟(实测:CodeBuild 1.7 分钟 + 数秒即 READY)
 (经 CodeBuild)。见 [troubleshooting.zh-CN.md](troubleshooting.zh-CN.md)。
@@ -146,9 +146,20 @@ Canary 与 A/B 候选版本沿用**生产当前所在的角色**,取自 `GetAgen
 **依赖先解析、再锁定、再校验安装。** 过去这里只有一次针对声明列表的 `pip install`,它
 装的是那一刻索引提供的任何版本(平台自带的范围写法也一样),而且不留任何记录。现在该
 阶段先用 `uv pip compile --generate-hashes` 针对部署目标解析(aarch64、Python 3.13,在
-`zip_runtime.py` 里只写一次,以保证解析与安装不会各说各话),再用 `--require-hashes`
-安装。被替换或重新上传过的发行包会让构建失败。lock 以 `requirements.lock` 随 zip 下发,
-产物自带物料清单。这里刻意没有回退路径:解析失败就是阶段失败。
+`app/core/runtime_target.py` 里只写一次,以保证解析与安装不会各说各话),再用
+`--require-hashes` 安装。被替换或重新上传过的发行包会让构建失败。lock 以
+`requirements.lock` 随 zip 下发,产物自带物料清单。这里刻意没有回退路径:解析失败就是
+阶段失败。
+
+解析目标默认是 **`manylinux_2_28` / aarch64**。实测(2026-09-18,在一个已部署的
+PYTHON_3_13 直连代码 Agent 内部)AgentCore Runtime 环境为 Amazon Linux 2023、
+aarch64、glibc 2.34,因此最高可加载 `manylinux_2_34` 的 wheel;官方文档推荐的
+`manylinux2014` 安全但更窄——只发布 `manylinux_2_26`/`2_28` aarch64 wheel 的包
+(如 `chromadb` 依赖的 `google-re2`)在该目标下无解。级别可经
+`runtime_python_platform`(`LAUNCHPAD_RUNTIME_PYTHON_PLATFORM`)配置;若未来某个
+运行时镜像报告更旧的 glibc,`manylinux2014` 是文档化的回退值。由于 pip 把
+`--platform` 标签当作精确字符串处理,安装时会传入从配置级别一路降到
+`manylinux2014` 的完整标签阶梯。
 
 调用方提供的 `spec.requirements` 还会在 **schema** 校验阶段被要求固定版本
 (`app/schemas/requirements.py`),因此控制台会在构建启动前就拒掉范围写法。平台自带的
@@ -173,16 +184,32 @@ agent 全部卡死。而读不到的扫描——未启用扫描、API 报错、�
 未覆盖:SBOM 生成、provenance/attestation、签名、受信镜像源强制,以及 skill **内容**
 审查。不可变不等于可信。
 
+### Agent 管理路由
+
+自 2026-09-18 起该模块以列表为首页(`/create` 与 `/create?view=discover` 重定向;
+查询串保留,注册表的 `?gateway=` / `?skill=` 预填仍落到向导):
+
+| 路由 | 视图 |
+|---|---|
+| `/agents` | 首页:「新建 Agent」/「导入现有 Runtime」按钮、统计条(总数 / 运行中 / 部署中 / 失败,由已加载列表推导)与 Agent 表格(名称链接到详情,CHAT + DETAILS 可见,编辑 / 转换 / 删除收进每行的「···」菜单,失败行以悬浮显示错误并提供「查看原因」) |
+| `/agents/new` | 三步向导;第一步是下文四张方法卡、一个通往导入页的按钮,以及系统预设卡片(安装 / 配置方式不变,位于方法卡下方) |
+| `/agents/import` | 发现现有 Runtime / Harness 资源 |
+| `/agents/:id` | Agent 详情(向导第三步视图:启动序列、版本、BYOC 来源、转换说明;部署中实时轮询;打开对话 / 可观测性 / 编辑链接)。在 `/agents/new` 发起的部署转为 active 后自动跳到这里 |
+| `/agents/:id/edit` | 预载该 Agent 的向导用于重新发布(系统预设打开共享编辑器,Studio Agent 转到 `/create/studio?agent=`) |
+
 ### 创建入口
 
-`/create` 的入口卡片共四张,顺序如下:
+`/agents/new` 的入口卡片共四张,顺序如下:
 
 | # | 卡片 | `AgentSpec.method` | 说明 |
 |---|---|---|---|
 | 1 | **托管 Harness** | `harness` | 方式B —— 声明式,无构建产物 |
 | 2 | **Strands Studio** | `zip_runtime` | 方式C —— Strands 模板走 zip 快速通道;卡片内嵌链接进入 `/create/studio` 画布,画布以 `studio` 方式部署 |
 | 3 | **其他 Agent SDK** | `container` | 方式A —— 自带 Agent SDK,经 CodeBuild 打包为 ARM64 容器 |
-| 4 | **发现现有 Runtime 与 Harness** | — | 不是部署方式(见下文) |
+| 4 | **自带代码** | `byoc` | 开发者自己编写的 Agent 代码——上传 zip(直连代码运行时或 Dockerfile → CodeBuild),或引用本账户私有 ECR 中的现有镜像——见下文 BYOC 小节 |
+
+发现现有 Runtime 与 Harness 不是部署方式:它有独立页面 `/agents/import`(见下文),
+可从列表页头部和第一步 NEXT 旁的按钮进入。
 
 第三张卡片是一个**类别**,而不是某一个 SDK。`AgentSpec.agent_sdk` 记录容器
 Agent 打包的是哪个 SDK,向导把它作为配置步骤上的二级选项。它是只有一个成员的
@@ -190,6 +217,70 @@ Agent 打包的是哪个 SDK,向导把它作为配置步骤上的二级选项。
 spec 也能被无歧义地读回,将来新增第二个 SDK 无需迁移已存 spec。目前**故意不对
 该字段做分派**:在类别出现第二个成员之前,`app/deployer/container.py` 与
 `app/templates/claude_sdk_agent/` 保持无条件实现。
+
+### BYOC —— 自带代码
+
+第四张卡片部署成员开发者自己编写的代码——已用 AgentCore SDK
+(`BedrockAgentCoreApp` + `@app.entrypoint`)包装,或任何满足运行时契约的 HTTP
+服务(ARM64、8080 端口、`POST /invocations` + `GET /ping`、负载
+`{"prompt", "actor_id"}`)。**响应**由代码自行决定——Runtime HTTP 契约只要求
+JSON 或 SSE,并不规定键名。对话、公开 `/v1` API 与评估回放共用同一个解析器
+(`services/agentcore/runtime.py::_runtime_payload_events`):`{"result": …}`
+(BedrockAgentCoreApp 的约定,推荐)或 delta/tool/complete SSE 信封按真流式处理;
+其他 JSON 体取第一个常见文本键(`response`、`answer`、`output`、`text`、
+`message`、`content`、`completion`、`reply`,其下嵌套的 `{"text"}` 块同样算)
+显示;一个都没有的则原样渲染为紧凑 JSON,而不是空白一轮(2026-09-18 实测:
+CrewAI agent 返回 `{"answer", "session_id", "turns"}` 曾显示为空回复且无报错)。
+`{"error": …}` 作为失败轮次呈现。三种构件类型,同一个 `spec.byoc` 配置块
+(`backend/app/schemas/agent.py::ByocConfig`):
+
+| `artifact_kind` | 输入 | 到 Runtime 的路径 |
+|---|---|---|
+| `code_zip` | Python 源码 zip(经 `POST /api/agents/uploads` 暂存) | S3 → `CreateAgentRuntime(codeConfiguration)`,使用成员选择的 Python 版本与入口文件;平台把 zip 内的 `requirements.txt` 按 linux/aarch64 解析进包内(带 hash 锁定,只装 wheel——不执行任何用户代码) |
+| `container_source` | 含 Dockerfile 的 zip | 共享的 `launchpad-agent-builder` CodeBuild 项目(ARM64)→ ECR `launchpad-agents:{name}-v{version}` → `containerConfiguration`,含与容器方式相同的 digest 固定与镜像扫描闸门 |
+| `container_image` | 现有镜像 URI | 用 `ecr.describe_images` 核验——必须位于本工作区的账户+区域;公共镜像仓库与其他账户会被拒绝——然后按原样部署 |
+
+**安全模型。** 开发者无需任何 IAM:他们把 zip 交给持有 `perm:agents.deploy`
+控制台权限的人(上传接口使用同一权限)。每个 Agent 拥有独立的最小权限执行角色
+(`services/agent_iam.py`);BYOC 容器类型额外获得按镜像仓库收敛的
+`ecr:BatchGetImage`/`GetDownloadUrlForLayer`。角色的 `bedrock:InvokeModel`
+语句精确覆盖 `spec.byoc.allowed_models`(1–20 个 ID;缺省 ⇒ `[spec.model_id]`)
+——即每个条目的基础模型 + 推理配置文件 ARN 的并集,去重,绝不使用通配符。第
+`[0]` 个条目是主模型(= `spec.model_id`);部署器把它以环境变量 `MODEL_ID`、完整
+列表以 `ALLOWED_MODEL_IDS`(逗号分隔)注入运行时,让代码知道自己可以调用什么——
+`spec.env` 中的用户值优先。重新发布会重写角色策略,编辑后的列表随部署生效。上传对象按工作区隔离,存放在制品桶的
+`byoc/{workspace_id}/{upload_id}/` 前缀下;服务端把溯源信息(sha256、大小、文件名、
+上传者、时间)写入 spec,控制台在 Agent 详情页展示。
+
+**校验什么/不校验什么。** 上传闸门强制归档安全(zip-slip、绝对路径、符号链接、
+zip ≤250 MiB/解压后 ≤750 MiB/条目 ≤2 万——即 AgentCore 直连代码上限),并*报告*
+检测结果(候选入口、requirements.txt、Dockerfile、AgentCore SDK 标记)。当 zip 带有
+`requirements.txt` 时,上传还会按所选 Python 版本(`?python_version=`)对部署目标做一次
+干跑解析,并报告 `detected.requirements: {status: ok|failed|skipped, package_count,
+error}`——向导因此能在部署前就标出无法解析的文件。`skipped`(解析超时、`uv` 不可用)
+不代表任何结论;部署仍会执行权威解析。
+
+**requirements.txt 规则(`code_zip`)。** 文件按 pip requirements 文件格式解析——
+反斜杠续行、行内注释、空行与环境标记都被支持。`--hash=` 选项会被丢弃:平台针对自己的
+部署目标重新锁定并生成新的 hash(产物内的 `requirements.lock`)。只列出来自软件包索引
+的直接依赖;固定版本可选(可复现性由 hash 锁提供)。以下内容会被明确报错拒绝,因为
+requirements 文件不能扩大"仅平台索引"这一供应链边界:`-r`/`-c` 引用、`-e`/可编辑安装、
+本地路径、直接 URL 与 VCS 引用、`--index-url`/`--extra-index-url`/`--find-links`,以及
+超过 500 条的清单。当某个依赖没有兼容的 aarch64 wheel 时,错误会点名该包并给出出路:
+换一个发布了对应 wheel 的版本、改走 Dockerfile(`container_source`)路径,或把依赖直接
+打进 zip 并设 `install_requirements=false`。平台
+**不**审查、不扫描代码本身;`container_source` 的镜像仍会经过现有的 ECR 扫描闸门。
+用户代码永远不会在 Launchpad 主机上执行——打包阶段只做解压和 wheel-only 的 pip
+安装到包目录。对于 `container_source`,平台始终把自己的 `buildspec.yml` 注入
+CodeBuild 源码包,**覆盖上传中自带的任何 buildspec**——成员只控制 Dockerfile,
+永远不控制构建配方。
+
+**v1 范围。** 仅 HTTP 协议(不支持 A2A);spec 上不支持
+toolkits/skills/knowledge_bases/tools(平台不生成这份代码,无法接线——请在你自己的
+代码里配置能力);`system_prompt` 可选,作为描述使用。配置包实验与金丝雀候选按
+`custom-source-unverified` 降级,与其他自带源码的运行时一致。示例见
+[`samples/byoc/`](../samples/byoc/README.md);实验手册见
+[docs/lab/13-byoc.md](lab/13-byoc.md)。
 
 ### 推荐的 trace 来源
 
@@ -942,7 +1033,7 @@ A2A zip Agent 使用另一个没有 Mantle 分支的模板,因此向导会将其
 
 ### 发现既有 Runtime 与 Harness
 
-`/create?view=discover` 是与三种创建方式并列的一条接入路径，而不是一种部署方式。
+`/agents/import` 是与三种创建方式并列的一条接入路径，而不是一种部署方式。
 `GET /api/agents/discovery` 会跟完所配置 Region 中 Runtime 列表的每一页，并对每个资源做一次
 详情读取。后端只返回白名单投影:Runtime 标识、名称、描述、协议、制品类型、authorizer 类型、
 AWS 状态/版本以及最近更新时间。环境变量值、制品位置、执行角色与 authorizer 配置从不离开
@@ -985,7 +1076,7 @@ harness 的后端 runtime 通过既有的 ARN 联接解析出它的归属，重�
 
 每次 `UpdateAgentRuntime` / `UpdateHarness` 都会发布一个不可变的新版本;`DEFAULT` 端点
 自动跟随最新版本,而命名端点(目标金丝雀的 `stable`/`treatment`)固定在某一版本。台账只记得
-Launchpad 部署时铸造的那个版本(`Agent.version`),所以 `/create` 的 Agent 详情(details 模式)
+Launchpad 部署时铸造的那个版本(`Agent.version`),所以 `/agents/:id` 的 Agent 详情
 带有一个由 `GET /api/agents/{agent_id}/versions` 支撑的**版本与端点**面板。该路由把台账行解析到
 唯一一个资源族——`zip_runtime`/`studio`/`container` 以及 `spec.discovery.resource_type` 缺省或为
 `runtime` 的导入行 → `ListAgentRuntimeVersions` + `ListAgentRuntimeEndpoints`;`harness` 以及
@@ -1346,7 +1437,7 @@ localhost"更窄:uvicorn 的 proxy-header 中间件(默认 `forwarded_allow_ips=
 
 实际效果是 `member` 接近只读。在数据**尚未**按用户隔离的前提下这是有意为之:所有已登录
 账户看到同一批 agent、知识库与链路,因此一个能部署的成员同时也能修改其他人的资源。
-仅管理员可用的模块(`/users`、`/create`、Studio 画布、注册表的注册/编辑)会渲染"需要
+仅管理员可用的模块(`/users`、`/agents`、Studio 画布、注册表的注册/编辑)会渲染"需要
 管理员权限"面板而不是发出请求;`auth.forbidden` 也映射进了 `apiErrors` i18n 块,因此
 任何漏加门禁的界面仍会显示本地化的原因。
 

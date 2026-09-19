@@ -24,9 +24,21 @@ from app.services.agentcore import codebuild as cb
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
 from app.services.workspace import WorkspaceContext
-from app.templates.claude_sdk_agent import assemble_build_context
+from app.templates.claude_sdk_agent import TEMPLATE_DIR, assemble_build_context
 
 from .zip_runtime import bundle_skill_paths_into, sanitize_runtime_name
+
+
+def platform_buildspec_path() -> Path:
+    """The platform-owned CodeBuild recipe (docker build + push, ARM64).
+
+    The launchpad-agent-builder project has no inline buildspec — it reads
+    buildspec.yml from the source zip, so every build context this platform
+    submits must ship this exact file. Callers that accept user-supplied build
+    contexts (BYOC container_source) must copy it in OVERWRITING any
+    buildspec.yml in the upload: the member controls the Dockerfile only,
+    never the build recipe."""
+    return TEMPLATE_DIR / "buildspec.yml"
 
 
 def _image_ref(workspace: WorkspaceContext, agent: Agent) -> tuple[str, str, str]:
@@ -56,7 +68,16 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     return StageResult(detail=f"container context · {len(files)} files")
 
 
-def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
+def build_and_push_image(ctx: StageContext, agent: Agent, archive: str) -> tuple[str, float]:
+    """Upload one build-context archive → CodeBuild (ARM64) → ECR; pin + gate.
+
+    The build/wait/digest/scan sequence shared by the container method and BYOC
+    ``container_source``: uploads ``archive`` to ``builds/{agent.name}/source.zip``,
+    runs the workspace's ``launchpad-agent-builder`` project, resolves the pushed
+    tag to its immutable digest (recorded on the Deployment row so a resumed job
+    re-uses the same image) and runs the scan gate. Returns
+    ``(tag, minutes)`` and leaves ``image_digest``/``image_uri`` in scratch.
+    """
     settings = get_settings()
     workspace = ctx.workspace
     bucket = workspace.resources.get("artifacts_bucket")
@@ -67,12 +88,6 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
             "resource map — run its bootstrap"
         )
 
-    spec = AgentSpec(**agent.spec)
-    context_dir = Path(
-        ctx.scratch.get("context_dir")
-        or assemble_build_context(spec, Path(f"/tmp/launchpad_ctx_{agent.name}"))
-    )
-    archive = shutil.make_archive(str(context_dir) + "_src", "zip", context_dir)
     s3_key = f"builds/{agent.name}/source.zip"
     workspace.client("s3").upload_file(archive, bucket, s3_key)
     ctx.log(f"source zip uploaded → s3://{bucket}/{s3_key}")
@@ -105,6 +120,18 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     ctx.log(f"image pushed · {registry}/{repo}:{tag} · {digest}")
 
     _run_scan_gate(ctx, ecr_client, repo, digest, settings)
+    return tag, mins
+
+
+def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
+    spec = AgentSpec(**agent.spec)
+    context_dir = Path(
+        ctx.scratch.get("context_dir")
+        or assemble_build_context(spec, Path(f"/tmp/launchpad_ctx_{agent.name}"))
+    )
+    archive = shutil.make_archive(str(context_dir) + "_src", "zip", context_dir)
+    tag, mins = build_and_push_image(ctx, agent, archive)
+    digest = ctx.scratch["image_digest"]
     return StageResult(detail=f"codebuild · arm64 · {mins:.1f}m → :{tag} @ {digest[:19]}…")
 
 

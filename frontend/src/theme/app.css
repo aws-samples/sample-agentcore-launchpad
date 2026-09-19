@@ -1042,3 +1042,27 @@ footer .sep{color:var(--line-2)}
 .fishbone-details{margin-top:10px}
 .fishbone-details summary{cursor:pointer;font-size:10.5px;letter-spacing:.1em}
 .fishbone-details table{margin-top:8px}
+
+/* Agent management — list landing (/agents) and wizard/detail breadcrumb */
+.agents-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.agents-head .vhead{flex:1 1 320px;min-width:0}
+.agents-head-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding-top:6px}
+.agents-head-actions .btn{display:inline-flex;align-items:center;gap:6px}
+.agents-crumb{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin-bottom:10px}
+.agents-crumb a{color:var(--ink-2);text-decoration:none}
+.agents-crumb a:hover{color:var(--amber)}
+.agent-name-link{color:inherit;text-decoration:none;border-bottom:1px dotted var(--line-2)}
+.agent-name-link:hover{color:var(--amber);border-bottom-color:var(--amber)}
+.rowmenu{position:relative;display:inline-block}
+.rowmenu-pop{z-index:60;min-width:150px;background:var(--panel);border:1px solid var(--line-2);box-shadow:0 12px 32px -12px rgba(0,0,0,.6);display:flex;flex-direction:column;padding:4px}
+.rowmenu-item{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-align:left;color:var(--ink);background:transparent;border:0;padding:7px 10px;cursor:pointer;white-space:nowrap}
+.rowmenu-item:hover:not(:disabled){background:var(--amber-soft);color:var(--amber)}
+.rowmenu-item:disabled{opacity:.35;cursor:not-allowed}
+.rowmenu-item.danger:hover:not(:disabled){color:var(--red,#ff6b6b)}
+.agents-empty{display:flex;flex-direction:column;align-items:center;gap:10px;padding:28px 0}
+.agents-empty b{font-family:var(--sans,inherit);font-size:14px;letter-spacing:0;text-transform:none;color:var(--ink)}
+.agents-detail-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.agents-detail-actions .btn{text-decoration:none}
+/* method cards: equal height, spec list pinned to the bottom so the four align */
+.method{display:flex;flex-direction:column}
+.method .m-specs{margin-top:auto}

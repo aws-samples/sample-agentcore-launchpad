@@ -58,7 +58,7 @@ export interface DeploymentInfo {
 export interface AgentInfo {
   id: string;
   name: string;
-  method: "harness" | "zip_runtime" | "container" | "studio" | "discovered_runtime";
+  method: "harness" | "zip_runtime" | "container" | "studio" | "byoc" | "discovered_runtime";
   status: "draft" | "deploying" | "active" | "failed" | "deleted";
   arn: string | null;
   resource_id: string | null;
@@ -591,6 +591,65 @@ export type Toolkit = "hr_assistant";
 export const HARNESS_NATIVE_TOOLS = ["shell", "file_operations"] as const;
 export type HarnessNativeTool = (typeof HARNESS_NATIVE_TOOLS)[number];
 
+/** BYOC (bring your own code) artifact reference — mirrors `ByocConfig`. */
+export type ByocArtifactKind = "code_zip" | "container_source" | "container_image";
+export type ByocPythonVersion = "PYTHON_3_10" | "PYTHON_3_11" | "PYTHON_3_12" | "PYTHON_3_13";
+
+export interface ByocConfigInput {
+  artifact_kind: ByocArtifactKind;
+  upload_id?: string;
+  image_uri?: string;
+  entrypoint?: string;
+  python_version?: ByocPythonVersion;
+  install_requirements?: boolean;
+  invoke_contract?: "launchpad_prompt" | "raw";
+  /**
+   * Every Bedrock model the execution role lets the code invoke (1–20, unique).
+   * Entry [0] is the primary (= spec.model_id, injected as env MODEL_ID); the
+   * whole list reaches the runtime as env ALLOWED_MODEL_IDS (comma-separated).
+   * Omitted ⇒ the backend treats it as [spec.model_id].
+   */
+  allowed_models?: string[];
+  /** server-stamped after upload/deploy; rendered on the detail view only */
+  provenance?: {
+    sha256?: string;
+    size_bytes?: number;
+    original_filename?: string;
+    uploaded_by?: string;
+    uploaded_at?: string;
+  };
+}
+
+/** POST /api/agents/uploads response — staged BYOC zip + detection summary. */
+export interface ByocUploadInfo {
+  upload_id: string;
+  sha256: string;
+  size_bytes: number;
+  original_filename: string;
+  uploaded_by: string;
+  uploaded_at: string;
+  entries_count: number;
+  uncompressed_bytes: number;
+  detected: {
+    entrypoint_candidates: string[];
+    has_requirements: boolean;
+    has_dockerfile: boolean;
+    agentcore_sdk_detected: boolean;
+    /**
+     * Upload-time dry resolve of the zip's requirements.txt against the deploy
+     * target (linux/aarch64 + the selected Python). `failed` means the deploy's
+     * package stage would fail the same way; `skipped` = the check could not
+     * run (no requirements.txt, resolver timeout) and says nothing either way.
+     * Absent on manifests staged before the check existed.
+     */
+    requirements?: {
+      status: "ok" | "failed" | "skipped";
+      package_count: number | null;
+      error: string | null;
+    };
+  };
+}
+
 export interface AgentSpecInput {
   name: string;
   method: string;
@@ -637,6 +696,8 @@ export interface AgentSpecInput {
   studio_flow?: { nodes: unknown[]; edges: unknown[]; graphMode: boolean };
   filesystem?: FilesystemInput;
   network?: VpcNetworkInput;
+  /** required iff method="byoc" */
+  byoc?: ByocConfigInput;
 }
 
 /** One skill discovered by /api/registry/skills/inspect (zip or git source). */
@@ -3498,6 +3559,15 @@ export const api = {
     }),
   deleteUser: (id: string) =>
     request<{ ok: boolean }>(`/api/users/${id}`, { method: "DELETE" }),
+  /** Stage a BYOC source zip; the returned upload_id goes into spec.byoc. */
+  uploadByocArtifact: (file: File, pythonVersion?: ByocPythonVersion) => {
+    const form = new FormData();
+    form.append("file", file);
+    const query = pythonVersion ? `?python_version=${pythonVersion}` : "";
+    return requestForm<ByocUploadInfo>(`/api/agents/uploads${query}`, form);
+  },
+  getByocUpload: (uploadId: string) =>
+    request<ByocUploadInfo>(`/api/agents/uploads/${encodeURIComponent(uploadId)}`),
   createAgent: (spec: AgentSpecInput) =>
     request<{ agent: AgentInfo; job_id: string; deployment_id: string }>("/api/agents", {
       method: "POST",
