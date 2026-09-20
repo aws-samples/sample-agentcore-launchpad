@@ -147,6 +147,33 @@ class TestAllowedModelResources:
         assert agent_iam.allowed_model_resources(_spec(), CTX) == (
             agent_iam.model_resources(_spec().model_id, CTX))
 
+    def test_foundation_model_arn_is_scoped_exactly(self):
+        model = "arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-pro-v1:0"
+        assert _statement(self._byoc([model]), "BedrockModels")["Resource"] == [model]
+
+    def test_profile_arn_includes_only_its_foundation_model(self):
+        profile = (
+            "arn:aws:bedrock:us-east-1:123456789012:"
+            "inference-profile/us.amazon.nova-pro-v1:0"
+        )
+        assert _statement(self._byoc([profile]), "BedrockModels")["Resource"] == [
+            "arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0", profile,
+        ]
+
+    def test_custom_id_stays_literal_instead_of_using_the_legacy_fallback(self):
+        spec = self._byoc(["my-private-endpoint"])
+        assert _statement(spec, "BedrockModels")["Resource"] == [
+            "arn:aws:bedrock:*::foundation-model/my-private-endpoint",
+        ]
+
+    def test_omitted_allowlist_keeps_the_primary_arn_scoped(self):
+        model = "arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-pro-v1:0"
+        spec = _spec(
+            method="byoc", model_id=model,
+            byoc={"artifact_kind": "code_zip", "upload_id": "u1"},
+        )
+        assert _statement(spec, "BedrockModels")["Resource"] == [model]
+
     def test_republish_updates_the_role_policy_with_the_new_union(self):
         """`ensure_role` put_role_policy's the capability policy on every provision
         run — a changed allowed_models list lands on re-publish, not only create."""

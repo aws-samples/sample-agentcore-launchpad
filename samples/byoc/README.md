@@ -22,6 +22,9 @@ primary (first) model as env `MODEL_ID` and the full list as env
 `ALLOWED_MODEL_IDS` (comma-separated) unless you set them yourself — so these
 samples always call a permitted model with no extra configuration. An agent
 that switches models at runtime should pick from `ALLOWED_MODEL_IDS`.
+Selections accept literal IDs, foundation-model ARNs and system inference-profile
+ARNs. Wildcards, IAM variables and application inference-profile ARNs are refused;
+an unknown ID never grants access to all foundation models.
 
 ## hello-http — artifact kind `code_zip`
 

@@ -295,7 +295,9 @@ by its first conventional text key (`response`, `answer`, `output`, `text`,
 one of them also counts), and a body with none of those is rendered as compact
 JSON rather than a blank turn (measured 2026-09-18: a CrewAI agent answering
 `{"answer", "session_id", "turns"}` produced an empty reply with no error).
-`{"error": …}` is surfaced as a failed turn. Three
+Auxiliary `metadata` or `error: null` fields do not suppress a reply; actual
+Converse bookkeeping events remain silent and non-empty `error` values surface
+as failed turns. Three
 artifact kinds, one `spec.byoc` block (`backend/app/schemas/agent.py::ByocConfig`):
 
 | `artifact_kind` | Input | Path to Runtime |
@@ -311,13 +313,24 @@ BYOC container kinds additionally get `ecr:BatchGetImage`/`GetDownloadUrlForLaye
 scoped to the image's repository. The role's `bedrock:InvokeModel` statement
 covers exactly `spec.byoc.allowed_models` (1–20 ids; absent ⇒ `[spec.model_id]`)
 — the union of each entry's foundation-model + inference-profile ARNs, deduped,
-never a wildcard. Entry `[0]` is the primary (= `spec.model_id`); the deployer
+never a model wildcard. Literal IDs, foundation-model ARNs and system
+inference-profile ARNs are supported. Wildcards, IAM variables and unsupported
+ARN kinds (including application inference profiles) are rejected before
+deployment; an unknown custom ID stays an exact resource rather than granting
+all foundation models. Entry `[0]` is the primary (= `spec.model_id`); the deployer
 injects it as env `MODEL_ID` and the full list as `ALLOWED_MODEL_IDS`
 (comma-separated) so the code knows what it may call — `spec.env` values win.
 Re-publish rewrites the role policy, so an edited list lands with the deploy. Uploads are workspace-scoped under
 `byoc/{workspace_id}/{upload_id}/` in the artifacts bucket, and the server stamps
 provenance (sha256, size, filename, uploader, time) onto the spec — the console
 renders it on the agent detail view.
+
+Each source packaging attempt owns a private temporary directory, removed after
+the upload/build finishes, so same-named agents in different workspaces cannot
+overwrite one another's sources. If deployment resumes after provision, it
+reconciles the per-agent role again before calling Runtime; losing process-local
+scratch state never selects the shared role. The shared role is used only when
+the operator explicitly disables `per_agent_execution_roles`.
 
 **What is validated / what is not.** The upload gate enforces archive safety
 (zip-slip, absolute paths, symlinks, ≤250 MiB zip / ≤750 MiB uncompressed /

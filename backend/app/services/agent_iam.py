@@ -27,13 +27,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.models.ledger import Agent
-from app.schemas.agent import AgentSpec
+from app.schemas.agent import INFERENCE_PROFILE_PREFIXES, AgentSpec, byoc_model_target
 from app.services.workspace import WorkspaceContext
 
 # Inference-profile prefixes: an id like `global.anthropic.claude-sonnet-5` is a
 # profile, and invoking it authorizes against the profile ARN *and* the underlying
 # foundation-model ARNs. Scoping to only one of the two fails at first invoke.
-_PROFILE_PREFIXES = ("global.", "us.", "eu.", "apac.")
+_PROFILE_PREFIXES = INFERENCE_PROFILE_PREFIXES
 
 _ROLE_PREFIX = "launchpad-agent-"
 _ROLE_NAME_MAX = 64  # IAM hard limit
@@ -198,11 +198,25 @@ def allowed_model_resources(spec: AgentSpec, ctx: RoleContext) -> list[str]:
     """Union of `model_resources` over every model the spec permits, deduped in
     order. One entry for every method except byoc, whose ``allowed_models`` list
     may authorize several — each still scoped to its exact id, never widened."""
-    return list(dict.fromkeys(
-        arn
-        for model_id in spec.allowed_model_ids
-        for arn in model_resources(model_id, ctx)
-    ))
+    if spec.method != "byoc":
+        return model_resources(spec.model_id, ctx)
+    resources: list[str] = []
+    for selection in spec.allowed_model_ids:
+        kind, model_id = byoc_model_target(selection)
+        if selection.startswith("arn:"):
+            partition = selection.split(":", 2)[1]
+            resource = selection
+        else:
+            partition = "aws"
+            scope = f"{ctx.region}:{ctx.account_id}" if kind == "inference-profile" else "*:"
+            resource = f"arn:{partition}:bedrock:{scope}:{kind}/{model_id}"
+        if kind == "inference-profile":
+            prefix = next(p for p in _PROFILE_PREFIXES if model_id.startswith(p))
+            resources.append(
+                f"arn:{partition}:bedrock:*::foundation-model/{model_id[len(prefix):]}"
+            )
+        resources.append(resource)
+    return list(dict.fromkeys(resources))
 
 
 def _uses_gateway(spec: AgentSpec) -> bool:

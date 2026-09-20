@@ -20,6 +20,7 @@ from app.schemas.agent import DEFAULT_MODEL_ID, AgentSpec
 from app.services import byoc_uploads
 from app.services.agentcore import runtime as rt
 from tests.conftest import ws_ctx
+from tests.test_agent_iam_lifecycle import StubIam
 
 ECR_IMAGE = "111122223333.dkr.ecr.us-west-2.amazonaws.com/my-agents:v1"
 
@@ -270,6 +271,22 @@ def test_byoc_allowed_models_shape():
     with pytest.raises(ValidationError, match="at most 20"):
         AgentSpec(**_byoc_spec(byoc={**base,
                                      "allowed_models": [f"us.model.m{i}" for i in range(21)]}))
+
+
+@pytest.mark.parametrize("model_id", [
+    "*", "us.*", "amazon.nova?", "${aws:username}", "model name", "global.",
+    "arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0",
+    "arn:aws:bedrock:us-west-2::foundation-model/*",
+    "arn:aws:bedrock:us-west-2:111122223333:application-inference-profile/custom",
+    "arn:aws:bedrock:us-west-2:111122223333:inference-profile/custom",
+])
+@pytest.mark.parametrize("explicit_list", [False, True])
+def test_byoc_rejects_models_that_cannot_be_scoped(model_id, explicit_list):
+    body = _byoc_spec(model_id=model_id)
+    if explicit_list:
+        body["byoc"]["allowed_models"] = [model_id]
+    with pytest.raises(ValidationError, match="BYOC"):
+        AgentSpec(**body)
 
 
 def test_non_byoc_refuses_allowed_models():
@@ -614,6 +631,60 @@ def test_package_stage_code_zip_no_requirements(monkeypatch, tmp_path):
     packaged = s3.objects[("bkt", "agents/byoc-agent/byoc_package.zip")]
     with zipfile.ZipFile(io.BytesIO(packaged)) as zf:
         assert set(zf.namelist()) == {"main.py", "helper.py"}
+
+
+@pytest.mark.parametrize("kind", ["code_zip", "container_source"])
+def test_same_named_builds_in_different_workspaces_keep_their_sources(monkeypatch, kind):
+    """Interleave B while A is resolving/building; inspect both shipped archives."""
+    s3 = StubS3()
+    _client_router(monkeypatch, {"s3": s3})
+    contexts = {}
+    agents = {}
+    for workspace_id in ("workspace-a", "workspace-b"):
+        workspace = ws_ctx({"artifacts_bucket": workspace_id}, id=workspace_id)
+        contexts[workspace_id] = _stage_ctx(workspace_id, f"dep-{workspace_id}", workspace)
+        spec = AgentSpec(**_byoc_spec(
+            byoc={"artifact_kind": kind, "upload_id": "upload"},
+        ))
+        agents[workspace_id] = Agent(
+            id=workspace_id, workspace_id=workspace_id, name=spec.name,
+            method="byoc", spec=spec.model_dump(), version="1",
+        )
+        key = byoc_uploads.source_key(workspace_id, "upload")
+        s3.objects[(workspace_id, key)] = zip_bytes({
+            "main.py": f'print("{workspace_id}")\n'.encode(),
+            "Dockerfile": b"FROM python:3.13-slim\n",
+        })
+
+    workdirs = []
+
+    def run_b():
+        byoc_dep._stage_package(contexts["workspace-b"], agents["workspace-b"])
+
+    def resolve(src_root, build_dir, *_args):
+        workdirs.append(build_dir)
+        if b"workspace-a" in (src_root / "main.py").read_bytes():
+            run_b()
+        return 0
+
+    def build(ctx, agent, archive):
+        workdirs.append(Path(archive).parent)
+        if agent.workspace_id == "workspace-a":
+            run_b()
+        s3.upload_file(archive, agent.workspace_id, "context.zip")
+        ctx.scratch["image_digest"] = "sha256:" + "0" * 64
+        return "v1", 0.1
+
+    monkeypatch.setattr(byoc_dep, "resolve_requirements_into", resolve)
+    monkeypatch.setattr(byoc_dep, "build_and_push_image", build)
+    byoc_dep._stage_package(contexts["workspace-a"], agents["workspace-a"])
+
+    key = "agents/byoc-agent/byoc_package.zip" if kind == "code_zip" else "context.zip"
+    for workspace_id in ("workspace-a", "workspace-b"):
+        with zipfile.ZipFile(io.BytesIO(s3.objects[(workspace_id, key)])) as archive:
+            assert archive.read("main.py") == f'print("{workspace_id}")\n'.encode()
+    assert len(set(workdirs)) == 2
+    assert all(not path.exists() for path in workdirs)
 
 
 def test_package_stage_missing_entrypoint_fails(monkeypatch):
@@ -991,6 +1062,71 @@ def test_deploy_stage_update_mode_publishes_new_version(monkeypatch):
     assert stub.updated_with["agentRuntimeId"] == "rt-1"
     cfg = stub.updated_with["agentRuntimeArtifact"]["codeConfiguration"]
     assert cfg["entryPoint"] == ["main.py"]
+
+
+@pytest.mark.parametrize("mode", ["create", "update"])
+@pytest.mark.parametrize("kind", ["code_zip", "container_source", "container_image"])
+def test_resumed_deploy_reconciles_the_per_agent_role(monkeypatch, mode, kind):
+    iam = StubIam()
+    stub = StubRuntimeControl()
+    _client_router(monkeypatch, {"iam": iam})
+    monkeypatch.setattr(byoc_dep, "control_client", lambda _ws: stub)
+    monkeypatch.setattr(
+        byoc_dep, "get_settings", lambda: SimpleNamespace(per_agent_execution_roles=True),
+    )
+    cfg = {"artifact_kind": kind}
+    cfg.update({"image_uri": ECR_IMAGE} if kind == "container_image" else {"upload_id": "u1"})
+    spec = AgentSpec(**_byoc_spec(byoc=cfg))
+    agent_id, dep_id = _mk_agent(spec)
+    workspace = ws_ctx(RESOURCES, account_id="123456789012")
+    first = _stage_ctx(agent_id, dep_id, workspace)
+    byoc_dep._stage_provision(first, _get_agent(agent_id))
+    role_arn = first.scratch["execution_role_arn"]
+    if mode == "update":
+        with SessionLocal() as db:
+            db.get(Agent, agent_id).resource_id = "rt-1"
+            db.commit()
+
+    # Restart recreates StageContext while the successful provision is skipped.
+    resumed = _stage_ctx(agent_id, dep_id, workspace)
+    resumed.scratch["mode"] = mode
+    byoc_dep._stage_deploy(resumed, _get_agent(agent_id))
+
+    payload = stub.updated_with if mode == "update" else stub.created_with
+    assert payload["roleArn"] == role_arn
+    assert role_arn != RESOURCES["execution_role_arn"]
+    assert len(iam.roles) == 1
+    assert any(call.startswith("get_role:") for call in iam.calls)
+
+
+def test_resumed_deploy_respects_explicit_shared_role_setting(monkeypatch):
+    stub = StubRuntimeControl()
+    monkeypatch.setattr(byoc_dep, "control_client", lambda _ws: stub)
+    monkeypatch.setattr(
+        byoc_dep, "get_settings", lambda: SimpleNamespace(per_agent_execution_roles=False),
+    )
+    agent_id, dep_id = _mk_agent(AgentSpec(**_byoc_spec()))
+    ctx = _stage_ctx(agent_id, dep_id, ws_ctx(RESOURCES))
+    byoc_dep._stage_deploy(ctx, _get_agent(agent_id))
+    assert stub.created_with["roleArn"] == RESOURCES["execution_role_arn"]
+
+
+def test_resumed_deploy_does_not_fall_back_after_iam_failure(monkeypatch):
+    class DeniedIam(StubIam):
+        def create_role(self, **_kwargs):
+            raise RuntimeError("IAM access denied")
+
+    _client_router(monkeypatch, {"iam": DeniedIam()})
+    monkeypatch.setattr(
+        byoc_dep, "get_settings", lambda: SimpleNamespace(per_agent_execution_roles=True),
+    )
+    monkeypatch.setattr(
+        byoc_dep, "control_client", lambda _ws: pytest.fail("must not deploy after IAM failure"),
+    )
+    agent_id, dep_id = _mk_agent(AgentSpec(**_byoc_spec()))
+    ctx = _stage_ctx(agent_id, dep_id, ws_ctx(RESOURCES))
+    with pytest.raises(RuntimeError, match="IAM access denied"):
+        byoc_dep._stage_deploy(ctx, _get_agent(agent_id))
 
 
 # ── delete path ──────────────────────────────────────────────────────────────

@@ -197,6 +197,44 @@ ByocPythonVersion = Literal["PYTHON_3_10", "PYTHON_3_11", "PYTHON_3_12", "PYTHON
 # in the execution role's bedrock:InvokeModel statement, so the bound is an IAM
 # policy-size sanity cap, not a model catalogue.
 BYOC_ALLOWED_MODELS_MAX = 20
+INFERENCE_PROFILE_PREFIXES = ("global.", "us.", "eu.", "apac.")
+_BYOC_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.:-]*$")
+_BYOC_MODEL_ARN_RE = re.compile(
+    r"^arn:aws(?:-cn|-us-gov)?:bedrock:[a-z0-9-]+:(?P<account>\d{12})?:"
+    r"(?P<kind>foundation-model|inference-profile)/(?P<id>[A-Za-z0-9][A-Za-z0-9.:-]*)$"
+)
+
+
+def byoc_model_target(model_id: str) -> tuple[str, str]:
+    """Validate a literal BYOC model selection and return (resource type, id).
+
+    Custom identifiers remain usable without catalog lookup, but can never
+    insert IAM wildcards. Profile targets must be derivable from a system
+    inference-profile id; application profiles require a separate live lookup.
+    """
+    if model_id.startswith("arn:"):
+        match = _BYOC_MODEL_ARN_RE.fullmatch(model_id)
+        if match is None or (
+            match["kind"] == "foundation-model" and match["account"] is not None
+        ):
+            raise ValueError(
+                "BYOC models must be literal model IDs, foundation-model ARNs, "
+                "or system inference-profile ARNs"
+            )
+        kind, target = match["kind"], match["id"]
+    else:
+        if _BYOC_MODEL_ID_RE.fullmatch(model_id) is None:
+            raise ValueError("BYOC model IDs cannot contain wildcards, spaces, or IAM variables")
+        target = model_id
+        kind = (
+            "inference-profile" if target.startswith(INFERENCE_PROFILE_PREFIXES)
+            else "foundation-model"
+        )
+    if kind == "inference-profile":
+        prefix = next((p for p in INFERENCE_PROFILE_PREFIXES if target.startswith(p)), "")
+        if not prefix or len(target) == len(prefix):
+            raise ValueError("BYOC inference profiles must use a global, us, eu, or apac model ID")
+    return kind, target
 
 # Private ECR in *some* account/region — the workspace match (this account, this
 # region) is a resource check, done against the WorkspaceContext at request time,
@@ -243,9 +281,9 @@ class ByocConfig(BaseModel):
     # merely acknowledges the contract warning in the console. No payload mapper.
     invoke_contract: Literal["launchpad_prompt", "raw"] = "launchpad_prompt"
     # Every Bedrock model this agent's code may invoke (foundation-model or
-    # inference-profile ids — deliberately unvalidated beyond shape, same as
-    # spec.model_id: custom ids are first-class and the valid id space cannot be
-    # enumerated). The execution role's bedrock:InvokeModel statement covers the
+    # inference-profile ids, or their supported ARNs). Custom ids are checked
+    # for literal IAM-safe shape, without requiring a catalog match. The
+    # execution role's bedrock:InvokeModel statement covers the
     # union; entry [0] is the PRIMARY model (= spec.model_id, injected as env
     # MODEL_ID). None ⇒ [spec.model_id] — every spec written before this field
     # existed reads back unchanged.
@@ -262,6 +300,8 @@ class ByocConfig(BaseModel):
             raise ValueError("allowed_models entries cannot be empty")
         if len(cleaned) != len(set(cleaned)):
             raise ValueError("allowed_models entries must be unique")
+        for model_id in cleaned:
+            byoc_model_target(model_id)
         self.allowed_models = cleaned
         return self
 
@@ -432,6 +472,9 @@ class AgentSpec(BaseModel):
             elif models[0] != self.model_id:
                 models.remove(self.model_id)
                 models.insert(0, self.model_id)
+        # Omitting the list still authorizes model_id, so it needs the same
+        # literal-resource validation as explicit allowlist entries.
+        byoc_model_target(self.model_id)
         return self
 
     @property

@@ -20,6 +20,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 from pathlib import Path
@@ -233,10 +234,15 @@ def _zip_tree(src_root: Path, zip_path: Path) -> None:
 def _package_code_zip(
     ctx: StageContext, agent: Agent, cfg: ByocConfig, bucket: str
 ) -> StageResult:
-    build_dir = Path(f"/tmp/launchpad_byoc_{agent.name}")
-    if build_dir.exists():
-        shutil.rmtree(build_dir)
-    build_dir.mkdir(parents=True)
+    # Agent names are only unique within a workspace. Each attempt owns its
+    # directory, including while another job is resolving dependencies.
+    with tempfile.TemporaryDirectory(prefix="launchpad_byoc_") as tmp:
+        return _build_code_zip(ctx, agent, cfg, bucket, Path(tmp))
+
+
+def _build_code_zip(
+    ctx: StageContext, agent: Agent, cfg: ByocConfig, bucket: str, build_dir: Path
+) -> StageResult:
     zip_path = build_dir / "upload.zip"
     byoc_uploads.download_upload(ctx.workspace, agent.workspace_id, cfg.upload_id or "",
                                  zip_path)
@@ -278,10 +284,13 @@ def _package_code_zip(
 def _package_container_source(
     ctx: StageContext, agent: Agent, cfg: ByocConfig
 ) -> StageResult:
-    build_dir = Path(f"/tmp/launchpad_byoc_{agent.name}")
-    if build_dir.exists():
-        shutil.rmtree(build_dir)
-    build_dir.mkdir(parents=True)
+    with tempfile.TemporaryDirectory(prefix="launchpad_byoc_") as tmp:
+        return _build_container_source(ctx, agent, cfg, Path(tmp))
+
+
+def _build_container_source(
+    ctx: StageContext, agent: Agent, cfg: ByocConfig, build_dir: Path
+) -> StageResult:
     zip_path = build_dir / "upload.zip"
     byoc_uploads.download_upload(ctx.workspace, agent.workspace_id, cfg.upload_id or "",
                                  zip_path)
@@ -345,6 +354,11 @@ def _container_uri(ctx: StageContext, agent: Agent, cfg: ByocConfig) -> str:
 
 
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
+    # A resumed job skips its successful provision stage, but scratch is
+    # process-local. Reconcile the role idempotently instead of silently
+    # switching the workload to the workspace's broader shared role.
+    if not ctx.scratch.get("execution_role_arn"):
+        _stage_provision(ctx, agent)
     client = control_client(ctx.workspace)
     mode = ctx.scratch.get("mode", "create")
     db = ctx.session()
@@ -352,9 +366,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         row = db.get(Agent, agent.id)
         spec = AgentSpec(**row.spec)
         cfg = _config(spec)
-        role_arn = ctx.scratch.get("execution_role_arn") or ctx.workspace.resources.get(
-            "execution_role_arn", ""
-        )
+        role_arn = ctx.scratch["execution_role_arn"]
         environment = runtime_environment(spec, ctx.workspace.resources)
         # The per-agent execution role scopes bedrock:InvokeModel to exactly
         # spec.allowed_model_ids (agent_iam.allowed_model_resources) — hand the

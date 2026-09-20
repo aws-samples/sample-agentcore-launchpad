@@ -414,7 +414,7 @@ def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
         raise RuntimeError(f"runtime returned error: {payload['error']}")
 
     kind = payload.get("event")
-    if isinstance(kind, str):
+    if isinstance(kind, str) and kind in {"delta", "heartbeat", "tool", "complete", "error"}:
         if kind == "delta":
             text = payload.get("text")
             if text:
@@ -436,45 +436,52 @@ def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
     if "runtimeClientError" in inner or "internalServerException" in inner:
         detail = inner.get("runtimeClientError") or inner.get("internalServerException")
         raise RuntimeError(f"runtime returned error: {detail}")
-    tool_use = inner.get("contentBlockStart", {}).get("start", {}).get("toolUse")
-    if isinstance(tool_use, dict):
-        yield {
-            "event": "tool",
-            "data": {"name": tool_use.get("name", ""), "id": tool_use.get("toolUseId")},
-        }
-    delta = inner.get("contentBlockDelta", {}).get("delta", {})
-    if isinstance(delta, dict):
+    converse_event = _is_converse_stream_event(inner)
+    if converse_event:
+        tool_use = inner.get("contentBlockStart", {}).get("start", {}).get("toolUse")
+        if isinstance(tool_use, dict):
+            yield {
+                "event": "tool",
+                "data": {"name": tool_use.get("name", ""), "id": tool_use.get("toolUseId")},
+            }
+        delta = inner.get("contentBlockDelta", {}).get("delta", {})
         text = delta.get("text")
         if text:
             yield {"event": "delta", "data": {"text": str(text)}}
     if "result" in payload:
         yield {"event": "complete", "data": {"text": str(payload.get("result", ""))}}
-    elif not (payload.keys() & _KNOWN_PAYLOAD_KEYS):
+    elif not converse_event:
         text = _free_form_payload_text(payload)
         if text:
             yield {"event": "complete", "data": {"text": text}}
 
 
-# Keys that mark a payload as one of the shapes handled above (Launchpad's own
-# delta/tool/complete envelope, BedrockAgentCoreApp's {"result"} body, Converse
-# stream events, runtime error wrappers). Anything else is user code answering
-# its own JSON — the Runtime HTTP contract only requires JSON or SSE and never
-# names a key (the devguide's own example is {"response", "status"}).
-_KNOWN_PAYLOAD_KEYS = frozenset(
-    {
-        "result",
-        "event",
-        "error",
-        "contentBlockStart",
-        "contentBlockDelta",
-        "contentBlockStop",
-        "messageStart",
-        "messageStop",
-        "metadata",
-        "runtimeClientError",
-        "internalServerException",
+def _is_converse_stream_event(payload: dict[str, Any]) -> bool:
+    """Converse's event union has one member with a structured value.
+
+    A free-form reply may use the same keys for auxiliary fields, especially
+    ``metadata``. Only suppress bookkeeping when the whole body is an event.
+    """
+    if len(payload) != 1:
+        return False
+    name, detail = next(iter(payload.items()))
+    if not isinstance(detail, dict):
+        return False
+    if name == "metadata":
+        return any(isinstance(detail.get(key), dict) for key in ("usage", "metrics", "trace"))
+    fields = {
+        "contentBlockStart": ("start", dict),
+        "contentBlockDelta": ("delta", dict),
+        "contentBlockStop": ("contentBlockIndex", int),
+        "messageStart": ("role", str),
+        "messageStop": ("stopReason", str),
     }
-)
+    if name not in fields:
+        return False
+    field, field_type = fields[name]
+    return isinstance(detail.get(field), field_type)
+
+
 # Conventional text keys, in preference order: the devguide example, then the
 # names BYOC code in the wild actually uses (measured 2026-09-18: a CrewAI
 # agent answering {"answer", "session_id", "turns", "latency_ms"} rendered as
