@@ -77,7 +77,7 @@ export function CreationProgress({
       </ol>
       <div className={`assist-progress-next${failed ? " failed" : ""}`} role="status">
         {t(`assistantProgress.hints.${hint}`)}
-        {approved && <Link to="/create">{t("assistantProgress.manage")}</Link>}
+        {approved && <Link to="/agents">{t("assistantProgress.manage")}</Link>}
       </div>
       <div className="assist-progress-later">
         <span>{t("assistantProgress.later")}</span>

@@ -88,13 +88,20 @@ def test_wait_endpoint_ready_times_out():
 
 # ─── invoke qualifier ────────────────────────────────────────────────────────
 class StubDataPlane:
-    def __init__(self, body: bytes):
+    def __init__(self, body: bytes, *, content_type: str = "application/json"):
         self.body = body
+        self.content_type = content_type
         self.invoked_with: dict | None = None
 
     def invoke_agent_runtime(self, **kwargs):
         self.invoked_with = kwargs
-        return {"response": SimpleNamespace(read=lambda: self.body)}
+        return {
+            "response": SimpleNamespace(
+                read=lambda: self.body,
+                iter_lines=lambda **_kwargs: iter(self.body.splitlines()),
+            ),
+            "contentType": self.content_type,
+        }
 
 
 def test_invoke_runtime_text_omits_qualifier_by_default():
@@ -226,3 +233,157 @@ def test_sigv4_post_omits_session_header_when_absent(monkeypatch):
         poster=poster, signer=lambda *a: None,
     )
     assert gw.SESSION_HEADER not in captured["headers"]
+
+
+# ─── free-form JSON bodies (Runtime contract names no key) ───────────────────
+def test_invoke_runtime_text_reads_conventional_text_keys():
+    # The devguide's own example body and a measured BYOC body (CrewAI agent,
+    # 2026-09-18) both rendered as an empty turn before this fallback existed.
+    for body, expected in [
+        (b'{"response": "devguide example", "status": "success"}', "devguide example"),
+        (
+            b'{"answer": "\xe6\x82\xa8\xe5\xa5\xbd", "session_id": "s", "turns": 1, '
+            b'"latency_ms": 8630}',
+            "您好",
+        ),
+        (b'{"output": {"text": "nested block"}}', "nested block"),
+    ]:
+        out = rt.invoke_runtime_text(StubDataPlane(body), "arn:rt-1", "hi")
+        assert out["text"] == expected, body
+
+
+def test_invoke_runtime_text_prefers_result_over_other_keys():
+    stub = StubDataPlane(
+        b'{"result": "primary", "answer": "ignored", "metadata": {"tokens": 2}, "error": null}'
+    )
+    assert rt.invoke_runtime_text(stub, "arn:rt-1", "hi")["text"] == "primary"
+
+
+@pytest.mark.parametrize("content_type", ["application/json", "text/event-stream"])
+@pytest.mark.parametrize(
+    "auxiliary",
+    [
+        {"metadata": {"tokens": 2}},
+        {"metadata": {"usage": {"inputTokens": 2}}},
+        {"metadata": None},
+        {"error": None},
+        {"metadata": {"tokens": 2}, "error": None},
+        {"event": "report"},
+        {"event": {"type": "report"}},
+        {"event": None},
+        {"contentBlockStart": "auxiliary"},
+        {"contentBlockDelta": None},
+        {"messageStart": {"role": "assistant"}},
+    ],
+)
+def test_invoke_runtime_text_preserves_answer_with_auxiliary_fields(auxiliary, content_type):
+    body = json.dumps({"answer": "hello", **auxiliary})
+    if content_type == "text/event-stream":
+        body = f"data: {body}\n\n"
+    stub = StubDataPlane(body.encode(), content_type=content_type)
+
+    assert rt.invoke_runtime_text(stub, "arn:rt-1", "hi")["text"] == "hello"
+
+
+def test_invoke_runtime_text_shows_unknown_json_instead_of_blank():
+    stub = StubDataPlane(b'{"summary": "abc", "rows": [1, 2]}')
+    out = rt.invoke_runtime_text(stub, "arn:rt-1", "hi")
+    assert out["text"] == '{"summary": "abc", "rows": [1, 2]}'
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"metadata": {"tokens": 2}},
+        {"summary": "abc", "metadata": {"usage": {"inputTokens": 2}}, "error": None},
+    ],
+)
+def test_invoke_runtime_text_shows_unknown_json_with_metadata(payload):
+    body = json.dumps(payload)
+    out = rt.invoke_runtime_text(StubDataPlane(body.encode()), "arn:rt-1", "hi")
+    assert out["text"] == body
+
+
+def test_invoke_runtime_text_free_form_error_key_still_raises():
+    with pytest.raises(RuntimeError, match="缺少 prompt"):
+        rt.invoke_runtime_text(
+            StubDataPlane(b'{"error": "\xe7\xbc\xba\xe5\xb0\x91 prompt", "session_id": "s"}'),
+            "arn:rt-1",
+            "hi",
+        )
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"messageStart": {"role": "assistant"}},
+        {"contentBlockStart": {"start": {}, "contentBlockIndex": 0}},
+        {"contentBlockDelta": {"delta": {"toolUse": {"input": "{}"}}}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        {"messageStop": {"stopReason": "end_turn"}},
+        {"metadata": {"usage": {"inputTokens": 1}}},
+        {"metadata": {"metrics": {"latencyMs": 10}}},
+        {"metadata": {"trace": {}}},
+    ],
+)
+def test_stream_runtime_events_ignores_converse_bookkeeping_events(payload, wrapped):
+    # Converse stream events without text must not be dumped as JSON.
+    body = json.dumps({"event": payload} if wrapped else payload)
+    stub = StubDataPlane(f"data: {body}\n\n".encode(), content_type="text/event-stream")
+
+    assert list(rt.stream_runtime_events(stub, "arn:rt-1", "hi")) == []
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_stream_runtime_events_preserves_converse_text_and_tools(wrapped):
+    payloads = [
+        {"messageStart": {"role": "assistant"}},
+        {"contentBlockStart": {"start": {"toolUse": {"name": "search", "toolUseId": "t1"}}}},
+        {"contentBlockDelta": {"delta": {"text": "hello"}}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        {"messageStop": {"stopReason": "end_turn"}},
+        {"metadata": {"usage": {"inputTokens": 1}}},
+    ]
+    body = "".join(
+        f"data: {json.dumps({'event': payload} if wrapped else payload)}\n\n"
+        for payload in payloads
+    )
+    stub = StubDataPlane(body.encode(), content_type="text/event-stream")
+
+    assert list(rt.stream_runtime_events(stub, "arn:rt-1", "hi")) == [
+        {"event": "tool", "data": {"name": "search", "id": "t1"}},
+        {"event": "delta", "data": {"text": "hello"}},
+    ]
+    assert rt.invoke_runtime_text(stub, "arn:rt-1", "hi")["text"] == "hello"
+
+
+def test_invoke_runtime_text_uses_native_complete_without_deltas():
+    stub = StubDataPlane(
+        b'data: {"event":"heartbeat"}\n\n'
+        b'data: {"event":"complete","result":"hello","answer":"ignored"}\n\n',
+        content_type="text/event-stream",
+    )
+    assert rt.invoke_runtime_text(stub, "arn:rt-1", "hi")["text"] == "hello"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        {"error": "boom", "answer": "ignored"},
+        {"event": "error", "message": "boom"},
+        {"runtimeClientError": {"message": "boom"}},
+        {"internalServerException": {"message": "boom"}},
+        {"event": {"runtimeClientError": {"message": "boom"}}},
+        {"event": {"internalServerException": {"message": "boom"}}},
+    ],
+)
+def test_stream_runtime_events_raises_real_error_after_partial_text(error):
+    body = 'data: {"event":"delta","text":"partial"}\n\n'
+    body += f"data: {json.dumps(error)}\n\n"
+    stub = StubDataPlane(body.encode(), content_type="text/event-stream")
+    stream = rt.stream_runtime_events(stub, "arn:rt-1", "hi")
+
+    assert next(stream) == {"event": "delta", "data": {"text": "partial"}}
+    with pytest.raises(RuntimeError, match="boom"):
+        next(stream)

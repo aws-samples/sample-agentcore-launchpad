@@ -87,7 +87,7 @@ class Agent(Base):
     # uniqueness among non-deleted rows is enforced in the API layer, so a
     # deleted agent's name can be reused
     name: Mapped[str] = mapped_column(String(64), index=True)
-    method: Mapped[str] = mapped_column(String(24))  # harness|zip_runtime|container|studio
+    method: Mapped[str] = mapped_column(String(24))  # harness|zip_runtime|container|studio|byoc
     status: Mapped[str] = mapped_column(String(24), default="draft")
     # draft | deploying | active | failed | deleted
     spec: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)

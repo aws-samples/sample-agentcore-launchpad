@@ -123,6 +123,16 @@ class Settings(BaseSettings):
     image_scan_block_severities: list[str] = ["CRITICAL"]
     image_scan_timeout_s: int = Field(default=300, gt=0)
 
+    # The manylinux level the zip deploy paths resolve/install Python wheels for
+    # (consumed via app/core/runtime_target.py — see its module docstring for the
+    # measured evidence: AgentCore Runtime = AL2023, glibc 2.34, aarch64,
+    # 2026-09-18). manylinux_2_28 matches what current wheel builders publish;
+    # "manylinux2014" is the documented safe fallback (the official docs'
+    # conservative recommendation) if a runtime image ever reports older glibc.
+    runtime_python_platform: str = Field(
+        default="manylinux_2_28", pattern=r"^manylinux(2014|_2_\d+)$"
+    )
+
     # AgentCore synchronous runtime requests may run for up to 15 minutes.
     # Keep the SDK read timeout above that service limit so buffered agents can
     # return their final response.

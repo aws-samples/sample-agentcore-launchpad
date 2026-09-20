@@ -420,6 +420,51 @@ period_not_allowed | description_too_long | dimension_keys_immutable`：1–10 �
 重新发布之后应当按「结束会话」——AgentCore 会把存活的会话钉在首次服务它的版本上，
 验证新版本需要一个全新的会话。
 
+## 控制台 Agent API——BYOC 上传 / Console Agents API: BYOC uploads
+
+`byoc` 创建方式部署成员自己编写的代码。两种 zip 构件类型（`code_zip`、
+`container_source`）先在此暂存归档；返回的 `upload_id` 填入创建请求体的
+`spec.byoc`。
+
+| Method | Path | Result |
+|---|---|---|
+| `POST` | `/api/agents/uploads?python_version=PYTHON_3_13` | `perm:agents.deploy`——`multipart/form-data`，单个名为 `file` 的部件，仅限 `.zip`，≤250 MiB（解压后 ≤750 MiB、条目 ≤2 万；zip-slip/绝对路径/符号链接会被拒绝）。存入制品桶 `byoc/{workspace_id}/{upload_id}/source.zip` + `manifest.json` → `201` `{upload_id, sha256, size_bytes, original_filename, uploaded_by, uploaded_at, entries_count, uncompressed_bytes, detected: {entrypoint_candidates[], has_requirements, has_dockerfile, agentcore_sdk_detected, requirements: {status: ok\|failed\|skipped, package_count, error}}}`——`requirements` 是对 zip 内 requirements.txt 针对部署目标（linux/aarch64 + 可选 `python_version`，默认 PYTHON_3_13）的上传期干跑解析；`failed` 表示部署的 package 阶段会以同样方式失败，`skipped`（无 requirements.txt、解析超时约 90 秒、`uv` 不可用）不代表任何结论 |
+| `GET` | `/api/agents/uploads/{upload_id}` | member——已存储的清单（同一形状）；其他工作区的 upload_id 返回 404 |
+
+错误码：`byoc.invalid_upload`（400，缺少部件/非 zip/空文件）、
+`byoc.invalid_python_version`（422）、
+`byoc.upload_too_large` / `byoc.upload_request_too_large`（413）、
+`byoc.zip_invalid`、`byoc.zip_empty`、`byoc.zip_entry_unsafe`、
+`byoc.zip_too_many_entries`、`byoc.zip_uncompressed_too_large`（422）、
+`byoc.upload_not_found`（404）。
+
+zip 内的 `requirements.txt` 按 pip 文件格式解析（反斜杠续行、行内注释、环境标记
+均被支持）；`--hash=` 选项会被丢弃——平台会针对自己的部署目标重新锁定并生成新的
+hash。以下内容会被明确报错拒绝：`-r`/`-c` 引用、`-e`/可编辑安装、本地路径、直接
+URL/VCS 条目、索引选项（`--index-url`/`--extra-index-url`/`--find-links`——平台
+只从自己的索引安装），以及超过 500 条的清单。
+
+`POST /api/agents` 使用 `method: "byoc"` 时携带 `spec.byoc`：
+`{artifact_kind: code_zip|container_source|container_image, upload_id?,
+image_uri?, entrypoint?（code_zip，默认 main.py）, python_version?
+（PYTHON_3_10…PYTHON_3_13，默认 PYTHON_3_13）, install_requirements?（默认
+true）, invoke_contract?（launchpad_prompt|raw）, allowed_models?（1–20 个不重复的
+Bedrock 基础模型或推理配置文件 ID）}`——zip 类型必须提供
+`upload_id`，`container_image` 必须提供本工作区账户+区域内的私有 ECR
+`image_uri`。该方式的 `system_prompt` 可选（作为描述使用）；v1 拒绝
+tools/toolkits/skills/knowledge_bases 与 `a2a` 协议。部署时服务端会把
+`spec.byoc.provenance` 写入 spec（来自上传清单）。
+
+**允许的模型。** 按 Agent 的执行角色把 `bedrock:InvokeModel` 精确限定到
+`byoc.allowed_models` 这些模型，用户代码调用其他模型会在运行时收到
+`AccessDeniedException`。第 `[0]` 个条目是**主模型**，必须等于 `spec.model_id`：
+只发送 `allowed_models` 时服务端把 `model_id` 设为第一个条目；两者都发送时
+`model_id` 必须在列表中（会被移到最前）。没有 `allowed_models` 的 spec——包括该
+字段出现之前写入的所有行——按 `[spec.model_id]` 处理。重新发布会重写角色策略，
+因此编辑后的列表在下次部署生效。部署器把主模型 ID 以环境变量 `MODEL_ID`、完整
+列表以环境变量 `ALLOWED_MODEL_IDS`（逗号分隔，主模型在前）传入运行时——两个变量
+只要 `spec.env` 已自行设置就以用户值优先。
+
 ## 控制台 Agent API——版本与端点 / Console Agents API
 
 `GET /api/agents/{agent_id}/versions` 是 Agent 详情「版本与端点」面板背后的只读 AWS 视图。它对该 Agent

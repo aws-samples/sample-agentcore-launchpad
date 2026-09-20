@@ -13,14 +13,16 @@ deploy it to AgentCore Runtime, and consume it** over chat or HTTP.
 Launchpad is one console (React) over one FastAPI backend, plus shared AWS
 infrastructure (CDK) and a vendored Strands Studio sub-app. It delivers:
 
-- **Three creation methods, one deploy pipeline.** Users create agents via
+- **Four creation methods, one deploy pipeline.** Users create agents via
   **方式B — Managed Harness** (declarative `CreateHarness` — model, prompt,
   tools, skills, memory; no code, no build), **方式C — Strands Studio**
-  (visual drag-and-drop canvas that generates Strands code), or
+  (visual drag-and-drop canvas that generates Strands code),
   **方式A — Other Agent SDK** (bring your own agent SDK — the Claude Agent SDK
-  today — packaged into an ARM64 container image). All three
-  converge into the same five-stage pipeline and land on AgentCore Runtime
-  (方式A/C) or the managed Harness service (方式B).
+  today — packaged into an ARM64 container image), or **BYOC — Bring Your Own
+  Code** (upload a zip of your own agent code, or a Dockerfile build context,
+  or reference an existing private-ECR image; developers need no AWS access).
+  All of them converge into the same five-stage pipeline and land on AgentCore
+  Runtime (方式A/C/BYOC) or the managed Harness service (方式B).
 - **Registry console.** A visual front end over AgentCore Registry for
   cataloguing and discovering the three asset types — agents (A2A), MCP tools,
   and skills — with submit → approve lifecycle actions.
@@ -243,7 +245,7 @@ For terminal-attached development, use `make dev` and stop it with `Ctrl+C`.
 |---|---|
 | `backend/` | FastAPI backend — deploy pipeline, invoke chain, evaluation & optimization, SQLite ledger |
 | `backend/app/routers/` | Console `/api` + public `/v1` endpoints |
-| `backend/app/deployer/` | Unified pipeline + per-method stages (harness, zip_runtime, container, studio) |
+| `backend/app/deployer/` | Unified pipeline + per-method stages (harness, zip_runtime, container, studio, byoc) |
 | `frontend/` | React console (Vite) — Overview, Create Agent, Registry, Chat, Observability, Evaluation, Skill Lab, Governance |
 | `infra/` | AWS CDK app — the `launchpad-base` shared stack |
 | `apps/studio/` | Vendored Strands Studio sub-app (方式C), rewired to the platform pipeline |

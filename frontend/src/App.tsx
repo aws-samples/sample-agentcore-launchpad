@@ -1,5 +1,5 @@
 import { lazy } from "react";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { ToastProvider } from "./components";
 import { Shell } from "./layout/Shell";
@@ -22,6 +22,21 @@ const Chat = lazy(() => import("./pages/Chat").then((m) => ({ default: m.Chat })
 const CreateAgent = lazy(() =>
   import("./pages/CreateAgent").then((m) => ({ default: m.CreateAgent })),
 );
+
+/**
+ * The pre-2026-09-18 management page lived at `/create` (wizard + list on one
+ * route, discovery under `?view=discover`). Old links in docs, bookmarks and
+ * assistant texts keep working: the query string rides along so Registry's
+ * `?gateway=` / `?skill=` prefill still lands on the wizard.
+ */
+function LegacyCreateRedirect() {
+  const { search } = useLocation();
+  const params = new URLSearchParams(search);
+  if (params.get("view") === "discover") return <Navigate to="/agents/import" replace />;
+  params.delete("view");
+  const rest = params.toString();
+  return <Navigate to={`/agents/new${rest ? `?${rest}` : ""}`} replace />;
+}
 const CreateAgentStudio = lazy(() =>
   import("./pages/CreateAgentStudio").then((m) => ({ default: m.CreateAgentStudio })),
 );
@@ -59,9 +74,14 @@ export default function App() {
         <WorkspaceProvider>
           <Routes>
             <Route element={<Shell />}>
-              <Route index element={<Overview />} />
-              <Route path="create" element={<CreateAgent />} />
-              <Route path="create/studio" element={<CreateAgentStudio />} />
+            <Route index element={<Overview />} />
+            <Route path="agents" element={<CreateAgent mode="list" />} />
+            <Route path="agents/new" element={<CreateAgent mode="new" />} />
+            <Route path="agents/import" element={<CreateAgent mode="import" />} />
+            <Route path="agents/:agentId" element={<CreateAgent mode="detail" />} />
+            <Route path="agents/:agentId/edit" element={<CreateAgent mode="edit" />} />
+            <Route path="create" element={<LegacyCreateRedirect />} />
+            <Route path="create/studio" element={<CreateAgentStudio />} />
               <Route path="create/assistant" element={<CreateAgentAssistant />} />
               <Route path="registry" element={<Registry />} />
               <Route path="knowledge-bases" element={<KnowledgeBases />} />

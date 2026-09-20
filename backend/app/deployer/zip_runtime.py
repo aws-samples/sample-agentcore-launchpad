@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.runtime_target import TARGET_PYTHON, pip_platform_args, uv_platform
 from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
@@ -31,6 +32,7 @@ from app.schemas.agent import AgentSpec
 from app.services import agent_iam
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
+from app.services.requirements_txt import RESOLVE_FIX_HINTS, summarize_resolver_failure
 from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES, SKILL_NAME_RE
 from app.services.workspace import WorkspaceContext
 from app.templates.strands_agent import base_requirements, render_main_py
@@ -42,12 +44,11 @@ def sanitize_runtime_name(name: str) -> str:
     return f"{base}_{uuid.uuid4().hex[:6]}"
 
 
-# The deploy target: AgentCore Runtime zips run ARM64 on Python 3.13. Named once
-# because the resolve and the install must agree — resolving for this host and
-# installing for aarch64 would produce a lock that does not match the artifact.
-TARGET_PYTHON = "3.13"
-TARGET_PIP_PLATFORM = "manylinux2014_aarch64"
-TARGET_UV_PLATFORM = "aarch64-manylinux2014"
+# The deploy target: AgentCore Runtime zips run ARM64 on Python 3.13. The
+# manylinux level (default manylinux_2_28 — AL2023/glibc 2.34, measured
+# 2026-09-18) is defined once in app/core/runtime_target.py because the resolve
+# and the install must agree — resolving for this host and installing for
+# aarch64 would produce a lock that does not match the artifact.
 
 LOCK_FILENAME = "requirements.lock"
 
@@ -56,6 +57,7 @@ def _compile_lock(
     requirements: list[str],
     build_dir: Path,
     compile_runner: Callable[..., Any],
+    python_version: str | None = None,
 ) -> Path:
     """Resolve the declared requirements into a fully hashed lockfile.
 
@@ -73,11 +75,11 @@ def _compile_lock(
         [
             "uv", "pip", "compile", str(declared),
             "--generate-hashes", "--quiet",
-            "--python-version", TARGET_PYTHON,
-            "--python-platform", TARGET_UV_PLATFORM,
+            "--python-version", python_version or TARGET_PYTHON,
+            "--python-platform", uv_platform(),
             # The install below is binary-only. Resolve from that same artifact
             # set, or uv can lock an sdist-only release that pip then cannot
-            # install for the Runtime's ARM64 manylinux2014 target.
+            # install for the Runtime's ARM64 binary-only target.
             "--only-binary=:all:",
             "-o", str(lock),
         ],
@@ -85,10 +87,13 @@ def _compile_lock(
         text=True,
     )
     if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "").strip()[-2000:]
         raise RuntimeError(
-            f"could not resolve {requirements} into a hashed lockfile: {detail} "
-            "(the backend needs the `uv` CLI on PATH and access to the package index)"
+            "could not resolve the requirements into a hashed lockfile: "
+            + summarize_resolver_failure(
+                proc.stderr or proc.stdout or "",
+                python_version=python_version or TARGET_PYTHON,
+                hints=RESOLVE_FIX_HINTS,
+            )
         )
     return lock
 
@@ -130,7 +135,7 @@ def build_zip(
             # shipping.
             "--require-hashes", "-r", str(lock),
             "-t", str(pkg_dir),
-            "--platform", TARGET_PIP_PLATFORM,
+            *pip_platform_args(),
             "--only-binary=:all:",
             "--python-version", TARGET_PYTHON,
             "--quiet",
@@ -139,8 +144,10 @@ def build_zip(
         text=True,
     )
     if proc.returncode != 0:
-        stderr = (proc.stderr or "").strip()[-2000:]
-        raise RuntimeError(f"pip install failed for {requirements}: {stderr}")
+        raise RuntimeError(
+            "pip install of the locked requirements failed: "
+            + summarize_resolver_failure(proc.stderr or "", hints=RESOLVE_FIX_HINTS)
+        )
 
     (pkg_dir / "main.py").write_text(code, encoding="utf-8")
     (pkg_dir / "requirements.txt").write_text("\n".join(requirements) + "\n", encoding="utf-8")

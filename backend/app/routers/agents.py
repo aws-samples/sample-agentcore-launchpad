@@ -1,25 +1,38 @@
-"""Agents API — create/deploy, list, invoke, delete; jobs polling."""
+"""Agents API — create/deploy, list, invoke, delete; jobs polling; BYOC uploads."""
 
+import hashlib
 import json
 import logging
+import tempfile
 import time
 from datetime import UTC, datetime
-from typing import Any
+from pathlib import Path
+from typing import Any, get_args
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
+from starlette.datastructures import UploadFile
 
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
+from app.deployer import byoc as byoc_method
 from app.deployer import container as container_method
 from app.deployer import harness as harness_method
 from app.deployer import zip_runtime as zip_method
 from app.deployer.pipeline import create_deployment, start_deploy_async
 from app.models.ledger import Agent, Deployment, Job
+from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.schemas.agent import AgentSpec, InvokeRequest, InvokeResponse, RuntimeImportRequest
-from app.services import agent_iam, agent_names
+from app.schemas.agent import (
+    AgentSpec,
+    ByocPythonVersion,
+    InvokeRequest,
+    InvokeResponse,
+    RuntimeImportRequest,
+)
+from app.services import agent_iam, agent_names, byoc_uploads
 from app.services.agent_versions import list_agent_versions
 from app.services.agentcore.client import control_client
 from app.services.invoke import invoke_agent_text
@@ -41,7 +54,8 @@ logger = logging.getLogger("launchpad.agents")
 
 router = APIRouter(prefix="/api", tags=["agents"])
 
-SUPPORTED_METHODS = {"harness", "zip_runtime", "container", "studio"}
+SUPPORTED_METHODS = {"harness", "zip_runtime", "container", "studio", "byoc"}
+BYOC_PYTHON_VERSIONS = set(get_args(ByocPythonVersion))
 
 
 def _agent_out(agent: Agent, deployment: Deployment | None = None) -> dict[str, Any]:
@@ -114,6 +128,8 @@ def _delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> bool:
         zip_method.delete_agent_resources(agent, workspace)
     elif agent.method == "container":
         container_method.delete_agent_resources(agent, workspace)
+    elif agent.method == "byoc":
+        byoc_method.delete_agent_resources(agent, workspace)
     # After the resource, never before: deleting the execution role while the
     # runtime still references it can wedge the runtime's own deletion. A failed
     # role delete must not block deleting the agent, so this returns rather than
@@ -224,6 +240,85 @@ def import_discovered_runtimes(
         result[bucket].extend(rows)
     db.commit()
     return result
+
+
+@router.post("/agents/uploads", status_code=201)
+async def upload_byoc_artifact(
+    request: Request,
+    python_version: str = "PYTHON_3_13",
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Stage a BYOC source zip (multipart, single part ``file``, .zip only).
+
+    Streams to a temp file (250 MiB cap enforced mid-stream — the Content-Length
+    guard in ``byoc_uploads.upload_body_limit_middleware`` already refused
+    known-oversize bodies before the parser ran), validates the archive without
+    executing anything in it, stores zip + manifest to the artifacts bucket under
+    ``byoc/{workspace_id}/{upload_id}/`` and returns the detection summary —
+    including a dry resolve of the zip's requirements.txt against the deploy
+    target for ``python_version``, so the wizard can flag an unresolvable file
+    before deploy. Staging runs in the threadpool: the resolve may take tens of
+    seconds and must not stall the event loop.
+    """
+    identity = require_identity(request)
+    if python_version not in BYOC_PYTHON_VERSIONS:
+        raise AppError(
+            "byoc.invalid_python_version",
+            f"python_version must be one of {sorted(BYOC_PYTHON_VERSIONS)}",
+            status_code=422,
+        )
+    form = await request.form()
+    upload = form.get("file")
+    if not isinstance(upload, UploadFile):
+        raise AppError("byoc.invalid_upload", "expected a .zip part named 'file'",
+                       status_code=400)
+    filename = Path(upload.filename or "").name
+    if not filename.lower().endswith(".zip"):
+        raise AppError("byoc.invalid_upload", "expected a .zip file", status_code=400)
+
+    digest = hashlib.sha256()
+    size = 0
+    with tempfile.TemporaryDirectory(prefix="byoc-upload-") as tmp:
+        tmp_zip = Path(tmp) / "source.zip"
+        with tmp_zip.open("wb") as target:
+            while chunk := await upload.read(1024 * 1024):
+                size += len(chunk)
+                if size > byoc_uploads.MAX_ZIP_BYTES:
+                    raise AppError(
+                        "byoc.upload_too_large",
+                        "BYOC upload exceeds the 250 MiB zip limit",
+                        status_code=413,
+                    )
+                digest.update(chunk)
+                target.write(chunk)
+        if size == 0:
+            raise AppError("byoc.invalid_upload", "the uploaded file is empty",
+                           status_code=400)
+        manifest = await run_in_threadpool(
+            byoc_uploads.stage_upload,
+            ws.context,
+            filename=filename,
+            tmp_zip=tmp_zip,
+            sha256=digest.hexdigest(),
+            size_bytes=size,
+            uploaded_by=identity.username,
+            uploaded_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            python_version=python_version,
+        )
+    logger.info(
+        "byoc upload %s staged by %s (%s, %d bytes, sha256 %s)",
+        manifest["upload_id"], identity.username, filename, size, manifest["sha256"][:12],
+    )
+    return manifest
+
+
+@router.get("/agents/uploads/{upload_id}")
+def get_byoc_upload(
+    upload_id: str,
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """The stored detection summary + provenance for one staged BYOC upload."""
+    return byoc_uploads.get_manifest(ws.context, upload_id)
 
 
 @router.get("/agents/{agent_id}")

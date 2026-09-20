@@ -54,7 +54,7 @@ studio canvas ──generate code──▶ Deploy via Launchpad
       ▼
 platform pipeline (zip fast path)
       generate  – adapt_studio_code(): verbatim module + entrypoint wrapper
-      package   – pip (manylinux2014_aarch64) → zip → S3
+      package   – pip (aarch64 manylinux wheels) → zip → S3
       provision – shared execution role
       deploy    – CreateAgentRuntime → poll READY
       register  – A2A registry record, auto-submitted
@@ -233,7 +233,7 @@ disabled until a flow exists.
 | full code > 200000 chars | toast error, no POST |
 | invalid canvas connection | `onInvalidConnection` callback → toast (never `alert()`) |
 | redeploy with changed name/method | backend 400 (client locks name field instead) |
-| `?agent=` id missing/non-studio | toast + redirect `/create` |
+| `?agent=` id missing/non-studio | toast + redirect `/agents` |
 
 ### 5. Good/Base/Bad Cases
 

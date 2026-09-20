@@ -5,6 +5,7 @@ import logging
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import app.deployer.byoc  # noqa: F401 — registers the byoc (bring your own code) method
 import app.deployer.container  # noqa: F401 — registers the container (Claude SDK) method
 import app.deployer.harness  # noqa: F401 — registers the harness deploy method
 import app.deployer.zip_runtime  # noqa: F401 — registers zip_runtime + studio methods
@@ -49,7 +50,7 @@ from app.routers.system_agents import router as system_agents_router
 from app.routers.tools import router as tools_router
 from app.routers.users import router as users_router
 from app.routers.workspaces import router as workspaces_router
-from app.services import local_exec
+from app.services import byoc_uploads, local_exec
 from app.services.governance import reconcile_policy_changes
 from app.services.model_prices import start_auto_refresh
 from app.skill_lab import task_assets
@@ -120,8 +121,9 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         app.middleware("http")(hsts)
 
     # Register before auth so Starlette's reverse middleware stack keeps auth
-    # outermost while this exact-route gate still runs before multipart parsing.
+    # outermost while these exact-route gates still run before multipart parsing.
     app.middleware("http")(task_assets.task_asset_body_limit_middleware)
+    app.middleware("http")(byoc_uploads.upload_body_limit_middleware)
     app.middleware("http")(auth_middleware)
     app.add_middleware(AssistantBodyCap)  # ingress byte cap for assistant writes
     app.add_middleware(

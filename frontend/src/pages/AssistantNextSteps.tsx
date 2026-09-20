@@ -335,7 +335,7 @@ export function AssistantNextSteps({
                 {t("assistantNext.chat.open")}
               </Link>
             ) : (
-              <Link className="assist-link" to="/create" data-testid="next-open-agents">
+              <Link className="assist-link" to="/agents" data-testid="next-open-agents">
                 {t("assistantNext.agents")}
               </Link>
             )
@@ -500,7 +500,7 @@ export function AssistantNextSteps({
               <Link className="assist-link" to="/observability" data-testid="next-open-obs">
                 {t("assistantNext.iterate.openObs")}
               </Link>
-              <Link className="assist-link" to="/create" data-testid="next-open-agents-iterate">
+              <Link className="assist-link" to="/agents" data-testid="next-open-agents-iterate">
                 {t("assistantNext.agents")}
               </Link>
             </>

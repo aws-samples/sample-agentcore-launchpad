@@ -1,7 +1,9 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Download, RefreshCw, Search } from "lucide-react";
 
 import { useAuth } from "../auth/auth-context";
@@ -15,6 +17,7 @@ import {
   methodLabel,
   Pager,
   Panel,
+  StatTile,
   useToast,
   VersionsPanel,
   ViewHead,
@@ -22,6 +25,11 @@ import {
 import type {
   AgentInfo,
   AgentSdk,
+  AgentSpecInput,
+  ByocArtifactKind,
+  ByocConfigInput,
+  ByocPythonVersion,
+  ByocUploadInfo,
   DeploymentInfo,
   HarnessDiscoveryCandidate,
   HarnessNativeTool,
@@ -119,7 +127,7 @@ interface LaunchState {
   workspaceId?: string | null;
 }
 
-type Method = "harness" | "zip_runtime" | "container";
+type Method = "harness" | "zip_runtime" | "container" | "byoc";
 
 /**
  * A system-managed preset opened in the shared editor (Create → SYSTEM PRESETS →
@@ -161,11 +169,18 @@ const MODEL_SOURCE_BY_METHOD: Record<Method, ModelSource> = {
   harness: DEFAULT_MODEL_SOURCE,
   container: CLAUDE_SDK_MODEL_SOURCE,
   zip_runtime: DEFAULT_MODEL_SOURCE,
+  // BYOC deploys the member's own code, but spec.model_id still scopes the
+  // execution role's bedrock:InvokeModel and reaches the runtime as env MODEL_ID.
+  byoc: DEFAULT_MODEL_SOURCE,
 };
 
 // A2A zip agents render from a different template that has no Mantle branch, so
 // they stay on the Converse path regardless of the method default.
 const A2A_MODEL_SOURCE: ModelSource = "bedrock";
+
+// byoc allowed-models cap — mirrors `BYOC_ALLOWED_MODELS_MAX` (backend
+// `app/schemas/agent.py`); the bound is IAM policy size, not the catalog.
+const BYOC_MODELS_MAX = 20;
 
 // The single member of the "Other Agent SDK" category (the container method).
 // Selected by default and, for now, the only selectable value.
@@ -205,6 +220,7 @@ interface StoredSpec {
     efs?: { access_point_arn?: string; mount_path?: string }[];
   };
   network?: { subnets?: string[]; security_groups?: string[] };
+  byoc?: ByocConfigInput;
 }
 
 interface MountRow {
@@ -283,13 +299,27 @@ const mergeDiscoveryRows = (
   return rows.sort((a, b) => rowName(a).localeCompare(rowName(b)));
 };
 
-export function CreateAgent() {
-  const [params] = useSearchParams();
+/**
+ * Agent management is one module on five routes (since 2026-09-18; `/create`
+ * redirects here):
+ *   list   `/agents`            — the landing page: stats, presets, the table
+ *   new    `/agents/new`        — the 3-step wizard as a page of its own
+ *   import `/agents/import`     — discovery of existing Runtime/Harness resources
+ *   detail `/agents/:agentId`   — the step-3 view of one agent (live while deploying)
+ *   edit   `/agents/:agentId/edit` — the wizard preloaded for a re-publish
+ * The wizard keeps its state machine; the mode only decides what step 1 shows
+ * and where "back"/"done" go.
+ */
+export type AgentsMode = "list" | "new" | "import" | "detail" | "edit";
+
+export function CreateAgent({ mode }: { mode: AgentsMode }) {
+  const { agentId } = useParams();
   // Members reach the whole module: the list, details and the discovery scan
   // are reads. Each mutating action gates itself on the caller's granted
   // agent-management permissions (default granted, revocable per user in the
   // Users console — mirrors route_policy's perm:agents.*).
-  return params.get("view") === "discover" ? <RuntimeDiscovery /> : <CreateAgentWizard />;
+  if (mode === "import") return <RuntimeDiscovery />;
+  return <CreateAgentWizard key={`${mode}:${agentId ?? ""}`} mode={mode} agentId={agentId} />;
 }
 
 function RuntimeDiscovery() {
@@ -470,7 +500,7 @@ function RuntimeDiscovery() {
         meta={region ? t("create.discovery.region", { region }) : undefined}
       />
       <div className="discovery-toolbar">
-        <Btn onClick={() => navigate("/create")}>
+        <Btn onClick={() => navigate("/agents")}>
           <ArrowLeft size={14} aria-hidden="true" />
           {t("create.discovery.back")}
         </Btn>
@@ -717,7 +747,7 @@ function HarnessRow({
             <span>{t("create.discovery.reimportHint")}</span>
           </>
         ) : harness.managed_agent_id ? (
-          <button type="button" className="rowact" onClick={() => navigate("/create")}>
+          <button type="button" className="rowact" onClick={() => navigate(`/agents/${harness.managed_agent_id}`)}>
             {t("create.discovery.alreadyManaged", {
               name: harness.managed_agent_name ?? harness.name,
             })}
@@ -793,7 +823,7 @@ function RuntimeRow({
             <span>{t("create.discovery.reimportHint")}</span>
           </>
         ) : runtime.managed_agent_id ? (
-          <button type="button" className="rowact" onClick={() => navigate("/create")}>
+          <button type="button" className="rowact" onClick={() => navigate(`/agents/${runtime.managed_agent_id}`)}>
             {t("create.discovery.alreadyManaged", {
               name: runtime.managed_agent_name ?? runtime.name,
             })}
@@ -877,10 +907,11 @@ interface KbRef {
   description: string;
 }
 
-function CreateAgentWizard() {
+function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: string }) {
   const { t } = useTranslation();
   const toast = useToast();
   const navigate = useNavigate();
+  const isList = mode === "list";
   const { can, isAdmin } = useAuth();
   const canDeploy = can("agents.deploy");
   const { current: currentWorkspace } = useWorkspace();
@@ -961,6 +992,34 @@ function CreateAgentWizard() {
   // JSON-RPC server (serverProtocol=A2A) with configurable agent-card skills
   const [protocol, setProtocol] = useState<"http" | "a2a">("http");
   const [a2aSkills, setA2aSkills] = useState<A2aSkillRow[]>([]);
+  // BYOC (bring your own code): staged upload + artifact settings
+  const [byocKind, setByocKind] = useState<ByocArtifactKind>("code_zip");
+  const [byocUpload, setByocUpload] = useState<ByocUploadInfo | null>(null);
+  const [byocUploading, setByocUploading] = useState(false);
+  const [byocImageUri, setByocImageUri] = useState("");
+  const [byocEntrypoint, setByocEntrypoint] = useState("main.py");
+  const [byocPython, setByocPython] = useState<ByocPythonVersion>("PYTHON_3_13");
+  const [byocInstallReqs, setByocInstallReqs] = useState(true);
+  const [byocRawContract, setByocRawContract] = useState(false);
+  // every model the execution role will permit; [0] is the PRIMARY (= spec.model_id,
+  // injected as env MODEL_ID) — the whole list reaches the runtime as ALLOWED_MODEL_IDS
+  const [byocModels, setByocModels] = useState<string[]>([
+    defaultModelFor(DEFAULT_MODEL_SOURCE),
+  ]);
+  // free-text "Custom model ID…" branch of the byoc model picker
+  const [byocModelCustomOpen, setByocModelCustomOpen] = useState(false);
+  const [byocModelDraft, setByocModelDraft] = useState("");
+  const [byocEnvRows, setByocEnvRows] = useState<{ key: string; value: string }[]>([]);
+  const [byocContractOpen, setByocContractOpen] = useState(false);
+  const [byocDescription, setByocDescription] = useState("");
+  const byocFileRef = useRef<HTMLInputElement>(null);
+  // the staged zip, kept so a Python-version change can re-run the
+  // requirements pre-resolve (re-staging the same bytes under the new target)
+  const byocLastFile = useRef<File | null>(null);
+  // BYOC provenance shown on the step-3 details view of an existing agent
+  const [detailByoc, setDetailByoc] = useState<ByocConfigInput | null>(null);
+  // the models that agent's execution role permits; [0] is the primary (MODEL_ID)
+  const [detailByocModels, setDetailByocModels] = useState<string[]>([]);
   // when set, the wizard edits an existing agent and the launch button re-publishes it
   const [editing, setEditing] = useState<EditingTarget | null>(null);
   const [detailsMode, setDetailsMode] = useState(false);
@@ -1097,6 +1156,10 @@ function CreateAgentWizard() {
     setModelSource(source);
     setModelId(defaultModelFor(source));
     setCustomModel(false);
+    // the byoc allowed-models list is seeded from the same catalog
+    setByocModels([defaultModelFor(source)]);
+    setByocModelCustomOpen(false);
+    setByocModelDraft("");
   };
 
 const deployLock = !canDeploy
@@ -1154,6 +1217,22 @@ const deployLock = !canDeploy
     setVpcSgs("");
     setProtocol("http");
     setA2aSkills([]);
+    setByocKind("code_zip");
+    setByocUpload(null);
+    setByocUploading(false);
+    setByocImageUri("");
+    setByocEntrypoint("main.py");
+    setByocPython("PYTHON_3_13");
+    setByocInstallReqs(true);
+    setByocRawContract(false);
+    setByocModels([defaultModelFor(sourceForMethod(method))]);
+    setByocModelCustomOpen(false);
+    setByocModelDraft("");
+    setByocEnvRows([]);
+    setByocContractOpen(false);
+    setByocDescription("");
+    setDetailByoc(null);
+    setDetailByocModels([]);
     setSubmitError(null);
   };
 
@@ -1237,7 +1316,45 @@ const deployLock = !canDeploy
     reasoning_effort: reasoningEffort,
   });
 
-  const buildSpec = () => ({
+  const byocEnv = () =>
+    Object.fromEntries(
+      byocEnvRows
+        .map((row) => [row.key.trim(), row.value] as const)
+        .filter(([k]) => k.length > 0),
+    );
+
+  const byocModelList = () => byocModels.map((m) => m.trim()).filter(Boolean);
+
+  const buildByocSpec = (): AgentSpecInput => ({
+    name,
+    method: "byoc",
+    // the execution role scopes bedrock:InvokeModel to exactly the allowed-models
+    // list; entry [0] is the primary the backend injects as env MODEL_ID (the whole
+    // list goes in as ALLOWED_MODEL_IDS; user env rows win for both)
+    model_id: byocModelList()[0],
+    model_source: modelSource,
+    // spec.system_prompt is optional for byoc; the field doubles as a description
+    system_prompt: byocDescription,
+    memory: { short_term: true, long_term: false },
+    ...(Object.keys(byocEnv()).length ? { env: byocEnv() } : {}),
+    byoc: {
+      artifact_kind: byocKind,
+      ...(byocKind === "container_image"
+        ? { image_uri: byocImageUri.trim() }
+        : { upload_id: byocUpload?.upload_id ?? "" }),
+      ...(byocKind === "code_zip"
+        ? {
+            entrypoint: byocEntrypoint.trim() || "main.py",
+            python_version: byocPython,
+            install_requirements: byocInstallReqs,
+          }
+        : {}),
+      invoke_contract: byocRawContract ? "raw" : "launchpad_prompt",
+      allowed_models: byocModelList(),
+    },
+  });
+
+  const buildOrdinarySpec = () => ({
     name,
     method,
     model_id: modelId.trim(), // a pasted custom id may carry stray whitespace
@@ -1325,6 +1442,9 @@ const deployLock = !canDeploy
         }
       : {}),
   });
+
+  const buildSpec = (): AgentSpecInput =>
+    method === "byoc" ? buildByocSpec() : (buildOrdinarySpec() as AgentSpecInput);
 
   /* ── system-preset edit: the same page, a different save ─────────────── */
 
@@ -1616,6 +1736,31 @@ const deployLock = !canDeploy
         tags: (s.tags ?? []).join(", "),
       })),
     );
+    if (agent.method === "byoc" && spec.byoc) {
+      setByocKind(spec.byoc.artifact_kind);
+      setByocImageUri(spec.byoc.image_uri ?? "");
+      setByocEntrypoint(spec.byoc.entrypoint ?? "main.py");
+      setByocPython(spec.byoc.python_version ?? "PYTHON_3_13");
+      setByocInstallReqs(spec.byoc.install_requirements ?? true);
+      setByocRawContract(spec.byoc.invoke_contract === "raw");
+      // a spec stored before allowed_models existed reads back as its one model
+      setByocModels(
+        spec.byoc.allowed_models?.length ? spec.byoc.allowed_models : [storedModel],
+      );
+      setByocModelCustomOpen(false);
+      setByocModelDraft("");
+      setByocDescription(spec.system_prompt ?? "");
+      setByocEnvRows(Object.entries(spec.env ?? {}).map(([key, value]) => ({ key, value })));
+      // a re-publish reuses the stored upload unless a new zip is staged
+      if (spec.byoc.upload_id) {
+        void api
+          .getByocUpload(spec.byoc.upload_id)
+          .then((info) => setByocUpload(info))
+          .catch(() => {
+            /* manifest gone — the member must upload a fresh zip to change code */
+          });
+      }
+    }
     setSubmitError(null);
     setStep(2);
   };
@@ -1629,6 +1774,18 @@ const deployLock = !canDeploy
     setDetailSystem(agent.system ?? null);
     setDetailKbs(((agent.spec ?? {}) as StoredSpec).knowledge_bases ?? []);
     const spec = (agent.spec ?? {}) as Record<string, unknown>;
+    const detailCfg =
+      agent.method === "byoc" ? ((spec.byoc as ByocConfigInput | undefined) ?? null) : null;
+    setDetailByoc(detailCfg);
+    setDetailByocModels(
+      detailCfg
+        ? detailCfg.allowed_models?.length
+          ? detailCfg.allowed_models
+          : spec.model_id
+            ? [spec.model_id as string]
+            : []
+        : [],
+    );
     const src = spec.source_harness as { agent_name?: string } | undefined;
     setDetailConversion(
       src?.agent_name
@@ -1643,6 +1800,53 @@ const deployLock = !canDeploy
     setAgentStatus(agent.status);
     setStep(3);
   };
+
+  // `/agents/:agentId` and `/agents/:agentId/edit` open one agent straight from
+  // the URL. Read the row directly rather than waiting for the list (a fresh
+  // deploy may not be in it yet); an unknown id falls back to the list.
+  const routeOpened = useRef<string | null>(null);
+  useEffect(() => {
+    if (!agentId || (mode !== "detail" && mode !== "edit")) return;
+    const key = `${mode}:${agentId}`;
+    if (routeOpened.current === key) return;
+    routeOpened.current = key;
+    void api
+      .getAgent(agentId)
+      .then((fresh) => {
+        if (!alive.current) return;
+        const info: AgentInfo = { ...fresh, deployment: fresh.deployments?.[0] };
+        if (mode === "edit") {
+          if (info.system) void openSystemEdit(info);
+          else if (info.method === "studio")
+            navigate(`/create/studio?agent=${info.id}`, { replace: true });
+          else startEdit(info);
+          return;
+        }
+        if (!info.deployment?.job_id) {
+          // nothing to show for a row that never deployed (e.g. an imported
+          // runtime) — the list carries what is known about it
+          toast(t("agents.noDetails", { name: info.name }));
+          navigate("/agents", { replace: true });
+          return;
+        }
+        openDetails(info);
+      })
+      .catch((err) => {
+        if (!alive.current) return;
+        toast(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
+        navigate("/agents", { replace: true });
+      });
+    // openDetails/startEdit/openSystemEdit are stable per mount for this purpose
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, agentId]);
+
+  // A deploy started from `/agents/new` hands over to the agent's own page once
+  // it succeeds (a failed one stays on the wizard with its error and RESTART).
+  // System-preset saves are pinned to another workspace and stay put.
+  useEffect(() => {
+    if (mode !== "new" || detailsMode || !launch || launch.workspaceId) return;
+    if (agentStatus === "active") navigate(`/agents/${launch.agentId}`, { replace: true });
+  }, [mode, detailsMode, launch, agentStatus, navigate]);
 
   const doDelete = async (id: string) => {
     try {
@@ -1695,6 +1899,32 @@ const deployLock = !canDeploy
     },
     [toast],
   );
+
+  const uploadByocZip = async (file: File, pythonVersion?: ByocPythonVersion) => {
+    setByocUploading(true);
+    try {
+      const info = await api.uploadByocArtifact(file, pythonVersion ?? byocPython);
+      if (!alive.current) return;
+      byocLastFile.current = file;
+      setByocUpload(info);
+      const candidates = info.detected.entrypoint_candidates;
+      if (candidates.length && !candidates.includes(byocEntrypoint)) {
+        setByocEntrypoint(candidates[0]);
+      }
+    } catch (err) {
+      if (alive.current) toast(apiMsg(err));
+    } finally {
+      if (alive.current) setByocUploading(false);
+    }
+  };
+
+  const changeByocPython = (version: ByocPythonVersion) => {
+    setByocPython(version);
+    // the pre-resolve result is per-Python-version — re-check the staged zip
+    if (byocLastFile.current && byocUpload?.detected.has_requirements) {
+      void uploadByocZip(byocLastFile.current, version);
+    }
+  };
 
   const inspectSource = async (input: File | { url: string }) => {
     setSrcBusy(true);
@@ -1756,29 +1986,87 @@ const deployLock = !canDeploy
     if (live) return live.attachable;
     return storedGatewayConfig[name] == null;
   });
+  const byocValid =
+    method !== "byoc" ||
+    (byocModels.some((m) => m.trim().length > 0) &&
+      (byocKind === "container_image"
+        ? /\.dkr\.ecr\./.test(byocImageUri.trim())
+        : byocUpload != null &&
+          (byocKind !== "code_zip" || byocEntrypoint.trim().endsWith(".py"))));
   const configValid =
-    /^[a-z][a-z0-9-]{2,47}$/.test(name) &&
-    systemPrompt.trim().length > 0 &&
-    // catalog picks are always non-empty; guards a cleared "Custom model ID…" input
-    modelId.trim().length > 0 &&
-    knobIssues.length === 0 &&
-    fsValid &&
-    gatewaySelectionsValid;
+    method === "byoc"
+      ? /^[a-z][a-z0-9-]{2,47}$/.test(name) && byocValid && !byocUploading
+      : /^[a-z][a-z0-9-]{2,47}$/.test(name) &&
+        systemPrompt.trim().length > 0 &&
+        // catalog picks are always non-empty; guards a cleared "Custom model ID…" input
+        modelId.trim().length > 0 &&
+        knobIssues.length === 0 &&
+        fsValid &&
+        gatewaySelectionsValid;
 
   return (
     <section>
-      <ViewHead kicker={t("create.kicker")} title={t("create.title")} meta={t("create.meta")} />
-
-      <div className="steps">
-        {([1, 2, 3] as const).map((n) => (
-          <div key={n} className={`step${step === n ? " now" : step > n ? " done" : ""}`}>
-            <span className="n">{step > n ? "✓" : `0${n}`}</span>
-            <b>{t(`create.steps.${n}`)}</b>
+      {isList && step === 1 ? (
+        <>
+          <div className="agents-head">
+            <ViewHead kicker={t("create.kicker")} title={t("create.title")} meta={t("agents.meta")} />
+            <div className="agents-head-actions">
+              <Btn onClick={() => navigate("/agents/import")} data-testid="agents-import">
+                <Search size={14} aria-hidden="true" />
+                {t("agents.importRuntime")}
+              </Btn>
+              <span title={canDeploy ? undefined : t("create.permissionRequired")}>
+                <Btn
+                  primary
+                  disabled={!canDeploy}
+                  onClick={() => navigate("/agents/new")}
+                  data-testid="agents-new"
+                >
+                  + {t("agents.newAgent")}
+                </Btn>
+              </span>
+            </div>
           </div>
-        ))}
-      </div>
+          <div className="tiles" data-testid="agents-stats">
+            {(["total", "active", "deploying", "failed"] as const).map((k) => (
+              <StatTile
+                key={k}
+                label={t(`agents.stats.${k}`)}
+                value={k === "total" ? agents.length : agents.filter((a) => a.status === k).length}
+              />
+            ))}
+          </div>
+        </>
+      ) : (
+        <>
+          {!isList && (
+            <nav className="agents-crumb" aria-label={t("agents.breadcrumb")}>
+              <Link to="/agents">{t("create.title")}</Link>
+              <span aria-hidden="true"> / </span>
+              <span>
+                {mode === "new"
+                  ? t("agents.crumbNew")
+                  : mode === "edit"
+                    ? t("agents.crumbEdit", { name: editing?.name ?? "" })
+                    : (launch && agents.find((a) => a.id === launch.agentId)?.name) ||
+                      t("agents.crumbDetail")}
+              </span>
+            </nav>
+          )}
+          <ViewHead kicker={t("create.kicker")} title={t("create.title")} meta={t("create.meta")} />
 
-      {step === 1 && (
+          <div className="steps">
+            {([1, 2, 3] as const).map((n) => (
+              <div key={n} className={`step${step === n ? " now" : step > n ? " done" : ""}`}>
+                <span className="n">{step > n ? "✓" : `0${n}`}</span>
+                <b>{t(`create.steps.${n}`)}</b>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {step === 1 && !isList && (
         <>
           {!canDeploy && (
             <div className="note" style={{ marginBottom: 14 }}>
@@ -1850,27 +2138,28 @@ const deployLock = !canDeploy
                 <span>{t("create.methods.otherSdk.spec3")}</span>
               </div>
             </div>
-            <button
-              type="button"
-              className="method discovery-method"
-              style={{ "--i": 3 } as CSSProperties}
-              onClick={() => navigate("/create?view=discover")}
-              data-method="discovery"
+            <div
+              className={`method${method === "byoc" ? " sel" : ""}`}
+              style={{ "--i": 3, ...deployLock } as CSSProperties}
+              onClick={() => pickMethod("byoc")}
+              data-method="byoc"
             >
-              <div className="m-badge plain">{t("create.methods.discovery.badge")}</div>
-              <div className="m-icon">
-                <Search size={20} aria-hidden="true" />
-              </div>
-              <h3>{t("create.methods.discovery.title")}</h3>
-              <p>{t("create.methods.discovery.desc")}</p>
+              <div className="m-badge">{t("create.methods.byoc.badge")}</div>
+              <div className="m-icon">⬆</div>
+              <h3>{t("create.methods.byoc.title")}</h3>
+              <p>{t("create.methods.byoc.desc")}</p>
               <div className="m-specs">
-                <span>ListAgentRuntimes · GetAgentRuntime</span>
-                <span>{t("create.methods.discovery.spec2")}</span>
-                <span>{t("create.methods.discovery.spec3")}</span>
+                <span>ZIP → Runtime · Dockerfile → CodeBuild → ECR → Runtime</span>
+                <span>{t("create.methods.byoc.spec2")}</span>
+                <span>{t("create.methods.byoc.spec3")}</span>
               </div>
-            </button>
+            </div>
           </div>
-          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+            <Btn onClick={() => navigate("/agents/import")}>
+              <Search size={14} aria-hidden="true" />
+              {t("create.methods.discovery.title")}
+            </Btn>
             <span title={canDeploy ? undefined : t("create.permissionRequired")}>
               <Btn
                 primary
@@ -1885,28 +2174,20 @@ const deployLock = !canDeploy
             </span>
           </div>
 
+          {/* System presets install from the create page (below the method cards),
+              as they did before the list split — configure opens the shared editor
+              on step 2 right here; details go to the agent's page. */}
           <div style={{ height: 18 }} />
           <SystemPresetsPanel
             onChanged={reloadAgents}
             onConfigure={startSystemEdit}
-            onDetails={(agentId) => {
-              const target = agents.find((a) => a.id === agentId);
-              if (target) {
-                openDetails(target);
-                return;
-              }
-              // the list may lag the panel's own poll — read the row directly
-              void api
-                .getAgent(agentId)
-                .then((fresh) => {
-                  openDetails({ ...fresh, deployment: fresh.deployments?.[0] });
-                  reloadAgents();
-                })
-                .catch((err) => {
-                  toast(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
-                });
-            }}
+            onDetails={(id) => navigate(`/agents/${id}`)}
           />
+        </>
+      )}
+
+      {step === 1 && isList && (
+        <>
           <div style={{ height: 18 }} />
           <AgentList
             agents={agents}
@@ -1916,9 +2197,9 @@ const deployLock = !canDeploy
                 return;
               }
               if (a.method === "studio") navigate(`/create/studio?agent=${a.id}`);
-              else startEdit(a);
+              else navigate(`/agents/${a.id}/edit`);
             }}
-            onDetails={openDetails}
+            onDetails={(a) => navigate(`/agents/${a.id}`)}
             onDelete={(a) =>
               setConfirm({
                 kind: "delete",
@@ -1928,6 +2209,7 @@ const deployLock = !canDeploy
               })
             }
             onConvert={(id, name) => setConfirm({ kind: "convert", id, name })}
+            onCreate={canDeploy ? () => navigate("/agents/new") : undefined}
           />
         </>
       )}
@@ -1946,7 +2228,9 @@ const deployLock = !canDeploy
                       ? "create.configure.title"
                       : method === "container"
                         ? "create.configure.titleContainer"
-                        : "create.configure.titleZip",
+                        : method === "byoc"
+                          ? "create.configure.titleByoc"
+                          : "create.configure.titleZip",
                   )
             }
             sub={
@@ -1993,6 +2277,293 @@ const deployLock = !canDeploy
                 placeholder="hr-assistant-v3"
               />
             </div>
+            {method === "byoc" && !systemEdit && (
+              <>
+                <div className="field">
+                  <label>{t("create.configure.byocKind")}</label>
+                  <div className="selchips">
+                    {(["code_zip", "container_source", "container_image"] as const).map(
+                      (kind) => (
+                        <button
+                          key={kind}
+                          type="button"
+                          data-testid={`byoc-kind-${kind}`}
+                          className={`selchip${byocKind === kind ? " on" : ""}`}
+                          style={{ cursor: "pointer" }}
+                          title={t(`create.configure.byocKindDesc.${kind}`)}
+                          onClick={() => setByocKind(kind)}
+                        >
+                          {t(`create.configure.byocKindName.${kind}`)}{" "}
+                          {byocKind === kind ? "✓" : ""}
+                        </button>
+                      ),
+                    )}
+                  </div>
+                </div>
+                {byocKind !== "container_image" && (
+                  <div className="field">
+                    <label>{t("create.configure.byocUpload")}</label>
+                    <input
+                      ref={byocFileRef}
+                      type="file"
+                      accept=".zip"
+                      style={{ display: "none" }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = "";
+                        if (file) void uploadByocZip(file);
+                      }}
+                    />
+                    <div
+                      className="field"
+                      data-testid="byoc-dropzone"
+                      style={{
+                        border: "1px dashed var(--line)",
+                        padding: 14,
+                        textAlign: "center",
+                        cursor: "pointer",
+                      }}
+                      onClick={() => byocFileRef.current?.click()}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const file = Array.from(e.dataTransfer.files).find((f) =>
+                          f.name.toLowerCase().endsWith(".zip"),
+                        );
+                        if (file) void uploadByocZip(file);
+                      }}
+                    >
+                      {byocUploading ? (
+                        <span className="dim">{t("create.configure.byocUploading")}</span>
+                      ) : byocUpload ? (
+                        <span className="mono" style={{ fontSize: 12 }}>
+                          {byocUpload.original_filename} ·{" "}
+                          {(byocUpload.size_bytes / 1e6).toFixed(1)}MB · sha256{" "}
+                          {byocUpload.sha256.slice(0, 12)}… ({byocUpload.entries_count}{" "}
+                          {t("create.configure.byocEntries")})
+                        </span>
+                      ) : (
+                        <span className="dim">{t("create.configure.byocDrop")}</span>
+                      )}
+                    </div>
+                    {byocUpload && byocKind === "code_zip" &&
+                      !byocUpload.detected.agentcore_sdk_detected && (
+                        <div className="note" style={{ borderColor: "var(--amber)" }}>
+                          <span className="i" style={{ color: "var(--amber)" }}>[!]</span>
+                          <span>{t("create.configure.byocNoSdkWarn")}</span>
+                        </div>
+                      )}
+                    {byocUpload && byocKind === "container_source" &&
+                      !byocUpload.detected.has_dockerfile && (
+                        <div className="note" style={{ borderColor: "var(--amber)" }}>
+                          <span className="i" style={{ color: "var(--amber)" }}>[!]</span>
+                          <span>{t("create.configure.byocNoDockerfileWarn")}</span>
+                        </div>
+                      )}
+                    {byocUpload && byocKind === "code_zip" && byocInstallReqs &&
+                      byocUpload.detected.requirements &&
+                      byocUpload.detected.requirements.status !== "skipped" && (
+                        byocUpload.detected.requirements.status === "ok" ? (
+                          <div
+                            className="note"
+                            style={{ borderColor: "var(--good)" }}
+                            data-testid="byoc-reqs-ok"
+                          >
+                            <span className="i" style={{ color: "var(--good)" }}>✓</span>
+                            <span>
+                              {t("create.configure.byocReqsOk", {
+                                count: byocUpload.detected.requirements.package_count ?? 0,
+                              })}
+                            </span>
+                          </div>
+                        ) : (
+                          <div
+                            className="note"
+                            style={{ borderColor: "var(--crit-text)" }}
+                            data-testid="byoc-reqs-failed"
+                          >
+                            <span className="i" style={{ color: "var(--crit-text)" }}>[✗]</span>
+                            <span>
+                              {t("create.configure.byocReqsFailed")}{" "}
+                              <span className="mono" style={{ fontSize: 11 }}>
+                                {byocUpload.detected.requirements.error}
+                              </span>
+                            </span>
+                          </div>
+                        )
+                      )}
+                  </div>
+                )}
+                {byocKind === "container_image" && (
+                  <div className="field">
+                    <label htmlFor="byoc-image">{t("create.configure.byocImageUri")}</label>
+                    <input
+                      id="byoc-image"
+                      className="input mono"
+                      data-testid="byoc-image-uri"
+                      value={byocImageUri}
+                      onChange={(e) => setByocImageUri(e.target.value)}
+                      placeholder="123456789012.dkr.ecr.us-west-2.amazonaws.com/my-agents:v1"
+                    />
+                    <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+                      {t("create.configure.byocImageHint")}
+                    </div>
+                  </div>
+                )}
+                {byocKind === "code_zip" && (
+                  <div className="preset-settings-grid">
+                    <div className="field">
+                      <label htmlFor="byoc-entrypoint">
+                        {t("create.configure.byocEntrypoint")}
+                      </label>
+                      {byocUpload && byocUpload.detected.entrypoint_candidates.length > 0 ? (
+                        <select
+                          id="byoc-entrypoint"
+                          className="input mono"
+                          data-testid="byoc-entrypoint"
+                          value={byocEntrypoint}
+                          onChange={(e) => setByocEntrypoint(e.target.value)}
+                        >
+                          {[
+                            ...byocUpload.detected.entrypoint_candidates,
+                            ...(byocUpload.detected.entrypoint_candidates.includes(
+                              byocEntrypoint,
+                            )
+                              ? []
+                              : [byocEntrypoint]),
+                          ].map((candidate) => (
+                            <option key={candidate} value={candidate}>
+                              {candidate}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          id="byoc-entrypoint"
+                          className="input mono"
+                          data-testid="byoc-entrypoint"
+                          value={byocEntrypoint}
+                          onChange={(e) => setByocEntrypoint(e.target.value)}
+                          placeholder="main.py"
+                        />
+                      )}
+                    </div>
+                    <div className="field">
+                      <label htmlFor="byoc-python">{t("create.configure.byocPython")}</label>
+                      <select
+                        id="byoc-python"
+                        className="input mono"
+                        data-testid="byoc-python"
+                        value={byocPython}
+                        onChange={(e) => changeByocPython(e.target.value as ByocPythonVersion)}
+                      >
+                        {(["PYTHON_3_13", "PYTHON_3_12", "PYTHON_3_11", "PYTHON_3_10"] as const)
+                          .map((v) => (
+                            <option key={v} value={v}>
+                              {v.replace("PYTHON_", "Python ").replace("_", ".")}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+                {byocKind === "code_zip" && (
+                  <div className="field">
+                    <div className="selchips">
+                      <button
+                        type="button"
+                        className={`selchip${byocInstallReqs ? " on" : ""}`}
+                        style={{ cursor: "pointer" }}
+                        onClick={() => setByocInstallReqs((v) => !v)}
+                      >
+                        {t("create.configure.byocInstallReqs")} {byocInstallReqs ? "✓" : "+"}
+                      </button>
+                      <button
+                        type="button"
+                        className={`selchip${byocRawContract ? " on" : ""}`}
+                        style={{ cursor: "pointer" }}
+                        title={t("create.configure.byocRawHint")}
+                        onClick={() => setByocRawContract((v) => !v)}
+                      >
+                        {t("create.configure.byocRaw")} {byocRawContract ? "✓" : "+"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div className="field">
+                  <label htmlFor="byoc-desc">{t("create.configure.byocDescription")}</label>
+                  <input
+                    id="byoc-desc"
+                    className="input"
+                    value={byocDescription}
+                    onChange={(e) => setByocDescription(e.target.value)}
+                    placeholder={t("create.configure.byocDescriptionPlaceholder")}
+                  />
+                </div>
+                <div className="field">
+                  <label>{t("create.configure.byocEnv")}</label>
+                  {byocEnvRows.map((row, i) => (
+                    <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                      <input
+                        className="input mono"
+                        style={{ flex: 1 }}
+                        value={row.key}
+                        aria-label={t("create.configure.byocEnvKey")}
+                        placeholder="MODEL_ID"
+                        onChange={(e) =>
+                          setByocEnvRows((prev) =>
+                            prev.map((r, j) => (j === i ? { ...r, key: e.target.value } : r)),
+                          )
+                        }
+                      />
+                      <input
+                        className="input mono"
+                        style={{ flex: 2 }}
+                        value={row.value}
+                        aria-label={t("create.configure.byocEnvValue")}
+                        onChange={(e) =>
+                          setByocEnvRows((prev) =>
+                            prev.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)),
+                          )
+                        }
+                      />
+                      <Btn
+                        onClick={() =>
+                          setByocEnvRows((prev) => prev.filter((_, j) => j !== i))
+                        }
+                      >
+                        ✕
+                      </Btn>
+                    </div>
+                  ))}
+                  <Btn
+                    className="small"
+                    onClick={() => setByocEnvRows((prev) => [...prev, { key: "", value: "" }])}
+                  >
+                    + {t("create.configure.byocEnvAdd")}
+                  </Btn>
+                </div>
+                <div className="field">
+                  <button
+                    type="button"
+                    className="selchip"
+                    style={{ cursor: "pointer" }}
+                    data-testid="byoc-contract-toggle"
+                    onClick={() => setByocContractOpen((v) => !v)}
+                  >
+                    {byocContractOpen ? "▾" : "▸"} {t("create.configure.byocContract")}
+                  </button>
+                  {byocContractOpen && (
+                    <div className="note" style={{ marginTop: 8 }} data-testid="byoc-contract">
+                      <span className="i">[i]</span>
+                      <span style={{ whiteSpace: "pre-line" }}>
+                        {t("create.configure.byocContractBody")}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
             {/* The container method is the "Other Agent SDK" entrance: it picks an
                 SDK here instead of a model source. The two blocks are one choice
                 seen from either side — the Claude Agent SDK can only drive Claude
@@ -2055,53 +2626,160 @@ const deployLock = !canDeploy
                 </div>
               </div>
             )}
-            <div className="field">
-              <label htmlFor="agent-model-select">
-                {t("create.configure.model")}
-                {defaultHint("model_id")}
-              </label>
-              <select
-                id="agent-model-select"
-                className="input"
-                data-testid="model-select"
-                disabled={locked}
-                value={customModel ? CUSTOM_MODEL_OPTION : modelId}
-                onChange={(e) => {
-                  const picked = e.target.value;
-                  if (picked === CUSTOM_MODEL_OPTION) {
-                    setCustomModel(true);
-                    return;
-                  }
-                  setCustomModel(false);
-                  setModelId(picked);
-                }}
-              >
-                {modelOptionsFor(modelSource, method === "container").map((option) => (
-                  <option
-                    key={option.model_id}
-                    value={option.model_id}
-                    style={{ background: "#141816" }}
-                  >
-                    {option.label} · {option.model_id}
-                  </option>
-                ))}
-                <option value={CUSTOM_MODEL_OPTION} style={{ background: "#141816" }}>
-                  {t("create.configure.modelCustom")}
-                </option>
-              </select>
-              {customModel && (
-                <input
-                  id="agent-model"
-                  className="input mono"
-                  style={{ marginTop: 8 }}
-                  data-testid="model-custom"
+            {method !== "byoc" && (
+              <div className="field">
+                <label htmlFor="agent-model-select">
+                  {t("create.configure.model")}
+                  {defaultHint("model_id")}
+                </label>
+                <select
+                  id="agent-model-select"
+                  className="input"
+                  data-testid="model-select"
                   disabled={locked}
-                  value={modelId}
-                  onChange={(e) => setModelId(e.target.value)}
-                  placeholder={t("create.configure.modelCustomPlaceholder")}
-                />
-              )}
-            </div>
+                  value={customModel ? CUSTOM_MODEL_OPTION : modelId}
+                  onChange={(e) => {
+                    const picked = e.target.value;
+                    if (picked === CUSTOM_MODEL_OPTION) {
+                      setCustomModel(true);
+                      return;
+                    }
+                    setCustomModel(false);
+                    setModelId(picked);
+                  }}
+                >
+                  {modelOptionsFor(modelSource, method === "container").map((option) => (
+                    <option
+                      key={option.model_id}
+                      value={option.model_id}
+                      style={{ background: "#141816" }}
+                    >
+                      {option.label} · {option.model_id}
+                    </option>
+                  ))}
+                  <option value={CUSTOM_MODEL_OPTION} style={{ background: "#141816" }}>
+                    {t("create.configure.modelCustom")}
+                  </option>
+                </select>
+                {customModel && (
+                  <input
+                    id="agent-model"
+                    className="input mono"
+                    style={{ marginTop: 8 }}
+                    data-testid="model-custom"
+                    disabled={locked}
+                    value={modelId}
+                    onChange={(e) => setModelId(e.target.value)}
+                    placeholder={t("create.configure.modelCustomPlaceholder")}
+                  />
+                )}
+              </div>
+            )}
+            {method === "byoc" && (
+              <div className="field">
+                <label htmlFor="byoc-model-add">{t("create.configure.byocModels")}</label>
+                {byocModels.map((model, i) => (
+                  <div
+                    key={`${model}-${i}`}
+                    data-testid="byoc-model-row"
+                    style={{ display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }}
+                  >
+                    <span className="mono" style={{ flex: 1, fontSize: 12 }}>
+                      {model}
+                      {i === 0 && (
+                        <span className="dim"> · {t("create.configure.byocModelPrimary")}</span>
+                      )}
+                    </span>
+                    {i > 0 && (
+                      <Btn
+                        className="small"
+                        data-testid={`byoc-model-primary-${i}`}
+                        onClick={() =>
+                          setByocModels((prev) => [
+                            prev[i],
+                            ...prev.filter((_, j) => j !== i),
+                          ])
+                        }
+                      >
+                        {t("create.configure.byocModelMakePrimary")}
+                      </Btn>
+                    )}
+                    {byocModels.length > 1 && (
+                      <Btn
+                        className="small"
+                        onClick={() => setByocModels((prev) => prev.filter((_, j) => j !== i))}
+                      >
+                        ✕
+                      </Btn>
+                    )}
+                  </div>
+                ))}
+                <select
+                  id="byoc-model-add"
+                  className="input"
+                  data-testid="byoc-model-add"
+                  disabled={byocModels.length >= BYOC_MODELS_MAX}
+                  value=""
+                  onChange={(e) => {
+                    const picked = e.target.value;
+                    if (!picked) return;
+                    if (picked === CUSTOM_MODEL_OPTION) {
+                      setByocModelCustomOpen(true);
+                      return;
+                    }
+                    setByocModelCustomOpen(false);
+                    setByocModels((prev) => (prev.includes(picked) ? prev : [...prev, picked]));
+                  }}
+                >
+                  <option value="" style={{ background: "#141816" }}>
+                    {t("create.configure.byocModelAdd")}
+                  </option>
+                  {modelOptionsFor(modelSource)
+                    .filter((option) => !byocModels.includes(option.model_id))
+                    .map((option) => (
+                      <option
+                        key={option.model_id}
+                        value={option.model_id}
+                        style={{ background: "#141816" }}
+                      >
+                        {option.label} · {option.model_id}
+                      </option>
+                    ))}
+                  <option value={CUSTOM_MODEL_OPTION} style={{ background: "#141816" }}>
+                    {t("create.configure.modelCustom")}
+                  </option>
+                </select>
+                {byocModelCustomOpen && (
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <input
+                      className="input mono"
+                      style={{ flex: 1 }}
+                      data-testid="byoc-model-custom"
+                      value={byocModelDraft}
+                      onChange={(e) => setByocModelDraft(e.target.value)}
+                      placeholder={t("create.configure.modelCustomPlaceholder")}
+                    />
+                    <Btn
+                      className="small"
+                      data-testid="byoc-model-custom-add"
+                      onClick={() => {
+                        const id = byocModelDraft.trim();
+                        if (!id || byocModels.length >= BYOC_MODELS_MAX) return;
+                        setByocModels((prev) => (prev.includes(id) ? prev : [...prev, id]));
+                        setByocModelDraft("");
+                        setByocModelCustomOpen(false);
+                      }}
+                    >
+                      + {t("create.configure.byocModelAddCustom")}
+                    </Btn>
+                  </div>
+                )}
+                <div className="note" style={{ margin: "8px 0 0" }} data-testid="byoc-model-note">
+                  <span className="i">[i]</span>
+                  <span>{t("create.configure.byocModelsHint")}</span>
+                </div>
+              </div>
+            )}
             {/* Harness inference / loop knobs. Per-call output ceiling and reasoning
                 effort map onto bedrockModelConfig; the loop bounds onto
                 maxIterations / timeoutSeconds. Stored values round-trip untouched. */}
@@ -2195,6 +2873,7 @@ const deployLock = !canDeploy
                 {t("create.system.settings.loopNote")}
               </div>
             )}
+            {method !== "byoc" && (
             <div className="field">
               <label htmlFor="agent-prompt">
                 {t("create.configure.systemPrompt")}
@@ -2221,6 +2900,7 @@ const deployLock = !canDeploy
                 </Btn>
               )}
             </div>
+            )}
             {/* A preset's capabilities are catalogue-owned: shown, never edited, and
                 no skill upload/import or tool attachment is offered for it. */}
             {systemEdit && (
@@ -2252,7 +2932,7 @@ const deployLock = !canDeploy
                 </div>
               </div>
             )}
-            {!systemEdit && (
+            {!systemEdit && method !== "byoc" && (
             <div className="field">
               <label>
                 {method === "harness"
@@ -2534,7 +3214,7 @@ const deployLock = !canDeploy
                 />
               </div>
             )}
-            {!systemEdit && (
+            {!systemEdit && method !== "byoc" && (
               <div className="field">
                 <label>{t("create.configure.skills")}</label>
                 <div className="selchips">
@@ -2663,6 +3343,7 @@ const deployLock = !canDeploy
                 )}
               </div>
             )}
+            {method !== "byoc" && (
             <div className="field" data-testid="kb-picker">
               <label>
                 {t("create.configure.kbLabel")}
@@ -2743,6 +3424,7 @@ const deployLock = !canDeploy
                 </span>
               </div>
             </div>
+            )}
             {method === "container" && (
               <div className="field" data-testid="fs-config">
                 <label>{t("create.configure.filesystem")}</label>
@@ -2856,6 +3538,8 @@ const deployLock = !canDeploy
             )}
             {!systemEdit && (
             <>
+            {method !== "byoc" && (
+            <>
             <div className="field">
               <label>{t("create.configure.memory")}</label>
               <div className="selchips">
@@ -2908,6 +3592,8 @@ const deployLock = !canDeploy
               <span className="i">[i]</span>
               <span>{t("create.configure.note")}</span>
             </div>
+            </>
+            )}
             </>
             )}
           </Panel>
@@ -2987,6 +3673,10 @@ const deployLock = !canDeploy
                   disabled={submitting}
                   disabledReason={submitting ? t("create.system.settings.saving") : undefined}
                   onClick={() => {
+                    if (mode === "edit") {
+                      navigate("/agents");
+                      return;
+                    }
                     setStep(1);
                     resetForm();
                   }}
@@ -3038,6 +3728,10 @@ const deployLock = !canDeploy
             agentStatus={agentStatus}
             detailsMode={detailsMode}
             onRestart={() => {
+              if (!isList) {
+                navigate("/agents");
+                return;
+              }
               setStep(1);
               setLaunch(null);
               setDeployment(null);
@@ -3062,8 +3756,108 @@ const deployLock = !canDeploy
           )}
           {detailsMode && launch && (
             <>
+              {mode === "detail" && (
+                <div className="agents-detail-actions" data-testid="detail-actions">
+                  {(() => {
+                    const row = agents.find((a) => a.id === launch.agentId);
+                    return (
+                      <>
+                        {row?.invoke_capability.eligible && (
+                          <Link className="btn" to={`/chat?agent=${launch.agentId}`}>
+                            {t("agents.detail.chat")}
+                          </Link>
+                        )}
+                        <Link className="btn" to="/observability">
+                          {t("agents.detail.observability")}
+                        </Link>
+                        {row && row.method !== "discovered_runtime" && !row.system && (
+                          <Link className="btn" to={`/agents/${launch.agentId}/edit`}>
+                            {t("create.list.edit")}
+                          </Link>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
               <div style={{ height: 14 }} />
               <VersionsPanel agentId={launch.agentId} />
+            </>
+          )}
+          {detailsMode && detailByoc && (
+            <>
+              <div style={{ height: 14 }} />
+              <Panel title={t("create.list.byocTitle")} data-testid="byoc-panel">
+                <div className="kv">
+                  <span className="k mono">{t("create.list.byocKind")}</span>
+                  <span className="v mono">{detailByoc.artifact_kind}</span>
+                </div>
+                {detailByocModels.length > 0 && (
+                  <div className="kv">
+                    <span className="k mono">{t("create.list.byocModels")}</span>
+                    <span className="v mono" style={{ fontSize: 10.5 }}>
+                      {detailByocModels.map((model, i) => (
+                        <span key={model} style={{ display: "block" }}>
+                          {model}
+                          {i === 0 && (
+                            <span className="dim">
+                              {" "}
+                              · {t("create.list.byocModelPrimary")}
+                            </span>
+                          )}
+                        </span>
+                      ))}
+                    </span>
+                  </div>
+                )}
+                {detailByoc.image_uri && (
+                  <div className="kv">
+                    <span className="k mono">{t("create.list.byocImage")}</span>
+                    <span className="v mono" style={{ fontSize: 10.5 }}>
+                      {detailByoc.image_uri}
+                    </span>
+                  </div>
+                )}
+                {detailByoc.artifact_kind === "code_zip" && (
+                  <div className="kv">
+                    <span className="k mono">{t("create.list.byocEntrypoint")}</span>
+                    <span className="v mono">
+                      {detailByoc.entrypoint ?? "main.py"} ·{" "}
+                      {(detailByoc.python_version ?? "PYTHON_3_13")
+                        .replace("PYTHON_", "Python ")
+                        .replace("_", ".")}
+                    </span>
+                  </div>
+                )}
+                {detailByoc.provenance?.sha256 && (
+                  <div className="kv">
+                    <span className="k mono">sha256</span>
+                    <span className="v mono">{detailByoc.provenance.sha256.slice(0, 16)}…</span>
+                  </div>
+                )}
+                {(detailByoc.provenance?.size_bytes ?? 0) > 0 && (
+                  <div className="kv">
+                    <span className="k mono">{t("create.list.byocSize")}</span>
+                    <span className="v mono">
+                      {((detailByoc.provenance?.size_bytes ?? 0) / 1e6).toFixed(1)}MB
+                      {detailByoc.provenance?.original_filename
+                        ? ` · ${detailByoc.provenance.original_filename}`
+                        : ""}
+                    </span>
+                  </div>
+                )}
+                {detailByoc.provenance?.uploaded_by && (
+                  <div className="kv">
+                    <span className="k mono">{t("create.list.byocUploadedBy")}</span>
+                    <span className="v mono">
+                      {detailByoc.provenance.uploaded_by}
+                      {detailByoc.provenance.uploaded_at
+                        ? ` · ${detailByoc.provenance.uploaded_at}`
+                        : ""}
+                    </span>
+                  </div>
+                )}
+              </Panel>
             </>
           )}
           {detailsMode && detailConversion && (
@@ -3170,18 +3964,114 @@ const STATUS_TONE: Record<string, "good" | "warn" | "crit" | "muted"> = {
   failed: "crit",
 };
 
+/** "3 min ago"-style label for the UPDATED column; the absolute stamp rides on `title`. */
+function relativeTime(iso: string | null | undefined, t: TFunction) {
+  if (!iso) return "—";
+  const then = Date.parse(iso.endsWith("Z") || /[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`);
+  if (Number.isNaN(then)) return iso.replace("T", " ").slice(0, 16);
+  const s = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (s < 45) return t("agents.time.justNow");
+  const m = Math.round(s / 60);
+  if (m < 60) return t("agents.time.minutes", { count: m });
+  const h = Math.round(m / 60);
+  if (h < 24) return t("agents.time.hours", { count: h });
+  const d = Math.round(h / 24);
+  if (d < 30) return t("agents.time.days", { count: d });
+  return iso.replace("T", " ").slice(0, 10);
+}
+
+/** The "···" per-row menu: Edit / Convert / Delete live here so a row shows two
+ * buttons. The pop-over is portalled to <body> with fixed coordinates: the
+ * table sits in `.table-scroll` (overflow-x:auto ⇒ overflow-y clips too), so an
+ * in-flow absolute menu on the last row was cut off (reported 2026-09-18). It
+ * opens upward when there is no room below. */
+function RowMenu({ name, children }: { name: string; children: ReactNode }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const MENU_H = 140; // generous upper bound: 3 items + padding
+  const place = () => {
+    const r = btn.current?.getBoundingClientRect();
+    if (!r) return;
+    const below = window.innerHeight - r.bottom;
+    setPos({
+      top: below >= MENU_H ? r.bottom + 4 : Math.max(8, r.top - 4 - MENU_H),
+      right: Math.max(8, window.innerWidth - r.right),
+    });
+  };
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (btn.current?.contains(target) || pop.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    const onMove = () => place();
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onMove);
+    };
+  }, [open]);
+  return (
+    <div className="rowmenu">
+      <button
+        ref={btn}
+        type="button"
+        className="rowact"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={t("agents.moreActions", { name })}
+        data-testid={`menu-${name}`}
+        onClick={() => {
+          if (!open) place();
+          setOpen((v) => !v);
+        }}
+      >
+        ···
+      </button>
+      {open &&
+        pos &&
+        createPortal(
+          <div
+            ref={pop}
+            className="rowmenu-pop"
+            role="menu"
+            style={{ position: "fixed", top: pos.top, right: pos.right }}
+            onClick={() => setOpen(false)}
+          >
+            {children}
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+}
+
 function AgentList({
   agents,
   onEdit,
   onDetails,
   onDelete,
   onConvert,
+  onCreate,
 }: {
   agents: AgentInfo[];
   onEdit: (a: AgentInfo) => void;
   onDetails: (a: AgentInfo) => void;
   onDelete: (a: AgentInfo) => void;
   onConvert: (id: string, name: string) => void;
+  onCreate?: () => void;
 }) {
   const { t } = useTranslation();
   const { can, isAdmin } = useAuth();
@@ -3268,7 +4158,13 @@ function AgentList({
               <tr key={a.id} data-system={a.system ? "true" : undefined}>
                 <td className="pri">
                   <div className="agent-method-cell">
-                    {a.name}
+                    {a.deployment ? (
+                      <Link className="agent-name-link" to={`/agents/${a.id}`}>
+                        {a.name}
+                      </Link>
+                    ) : (
+                      a.name
+                    )}
                     {a.system && (
                       <Chip
                         tone="blue"
@@ -3292,76 +4188,94 @@ function AgentList({
                   </div>
                 </td>
                 <td>
-                  <Chip
-                    tone={STATUS_TONE[a.status] ?? "muted"}
-                    icon={a.status === "active" ? "●" : a.status === "failed" ? "✕" : "◐"}
-                  >
-                    {t(`status.${a.status}`, a.status.toUpperCase())}
-                  </Chip>
+                  <div className="agent-method-cell">
+                    <Chip
+                      tone={STATUS_TONE[a.status] ?? "muted"}
+                      icon={a.status === "active" ? "●" : a.status === "failed" ? "✕" : "◐"}
+                      title={a.status === "failed" && a.error ? a.error : undefined}
+                    >
+                      {t(`status.${a.status}`, a.status.toUpperCase())}
+                    </Chip>
+                    {a.status === "failed" && a.deployment && (
+                      <button
+                        type="button"
+                        className="rowact"
+                        data-testid={`reason-${a.name}`}
+                        title={a.error ?? undefined}
+                        onClick={() => onDetails(a)}
+                      >
+                        {t("agents.viewReason")}
+                      </button>
+                    )}
+                  </div>
                 </td>
                 <td className="mono">
                   {a.method === "discovered_runtime" ? `v${a.version ?? "—"}` : (a.revision ?? "—")}
                 </td>
-                <td className="mono dim">{(a.updated_at ?? "").replace("T", " ").slice(0, 16)}</td>
+                <td className="mono dim" title={(a.updated_at ?? "").replace("T", " ").slice(0, 19)}>
+                  {relativeTime(a.updated_at, t)}
+                </td>
                 <td>
                   <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                    {a.method !== "discovered_runtime" && (
-                      <button
-                        type="button"
-                        className="rowact"
-                        data-testid={`edit-${a.name}`}
-                        disabled={!canEditRow(a)}
-                        style={!canEditRow(a) ? { opacity: 0.35 } : undefined}
-                        title={
-                          a.system
-                            ? isAdmin
-                              ? t("create.system.settings.configureHint")
-                              : t("create.system.protected")
-                            : permHint(canEdit)
-                        }
-                        onClick={() => onEdit(a)}
-                      >
-                        {t("create.list.edit")}
-                      </button>
-                    )}
                     {a.invoke_capability.eligible && (
                       <Link className="rowact" to={`/chat?agent=${a.id}`}>
                         {t("create.list.chat")}
                       </Link>
-                    )}
-                    {a.method === "harness" && a.status === "active" && (
-                      <button
-                        type="button"
-                        className="rowact"
-                        data-testid={`convert-${a.name}`}
-                        disabled={!canConvert || !!a.system}
-                        style={!canConvert || a.system ? { opacity: 0.35 } : undefined}
-                        title={a.system ? t("create.system.protected") : permHint(canConvert)}
-                        onClick={() => onConvert(a.id, a.name)}
-                      >
-                        {t("create.list.convert")}
-                      </button>
                     )}
                     {a.deployment && (
                       <button type="button" className="rowact" onClick={() => onDetails(a)}>
                         {t("create.list.details")}
                       </button>
                     )}
-                    <button
-                      type="button"
-                      className="rowact"
-                      data-testid={`delete-${a.name}`}
-                      disabled={!canDelete || !!a.system}
-                      style={!canDelete || a.system ? { opacity: 0.35 } : undefined}
-                      title={a.system ? t("create.system.protected") : permHint(canDelete)}
-                      onClick={() => onDelete(a)}
-                    >
-                      {t(
-                        a.method === "discovered_runtime"
-                          ? "create.list.remove"
-                          : "create.list.delete",
+                    <RowMenu name={a.name}>
+                      {a.method !== "discovered_runtime" && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="rowmenu-item"
+                          data-testid={`edit-${a.name}`}
+                          disabled={!canEditRow(a)}
+                          title={
+                            a.system
+                              ? isAdmin
+                                ? t("create.system.settings.configureHint")
+                                : t("create.system.protected")
+                              : permHint(canEdit)
+                          }
+                          onClick={() => onEdit(a)}
+                        >
+                          {t("create.list.edit")}
+                        </button>
                       )}
-                    </button>
+                      {a.method === "harness" && a.status === "active" && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="rowmenu-item"
+                          data-testid={`convert-${a.name}`}
+                          disabled={!canConvert || !!a.system}
+                          title={a.system ? t("create.system.protected") : permHint(canConvert)}
+                          onClick={() => onConvert(a.id, a.name)}
+                        >
+                          {t("create.list.convert")}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="rowmenu-item danger"
+                        data-testid={`delete-${a.name}`}
+                        disabled={!canDelete || !!a.system}
+                        title={a.system ? t("create.system.protected") : permHint(canDelete)}
+                        onClick={() => onDelete(a)}
+                      >
+                        {t(
+                          a.method === "discovered_runtime"
+                            ? "create.list.remove"
+                            : "create.list.delete",
+                        )}
+                      </button>
+                    </RowMenu>
                   </div>
                 </td>
               </tr>
@@ -3369,7 +4283,19 @@ function AgentList({
             {rows.length === 0 && (
               <tr>
                 <td colSpan={6} className="dim mono" style={{ textAlign: "center" }}>
-                  {t(agents.length ? "create.list.noMatch" : "create.list.empty")}
+                  {agents.length ? (
+                    t("create.list.noMatch")
+                  ) : (
+                    <div className="agents-empty" data-testid="agents-empty">
+                      <b>{t("agents.empty.title")}</b>
+                      <span>{t("create.list.empty")}</span>
+                      {onCreate && (
+                        <Btn primary onClick={onCreate}>
+                          + {t("agents.empty.cta")}
+                        </Btn>
+                      )}
+                    </div>
+                  )}
                 </td>
               </tr>
             )}

@@ -961,7 +961,7 @@ export function CreateAgentAssistant() {
         description={t("assistantPage.description")}
       />
       <div style={{ marginBottom: 12 }}>
-        <Link className="assist-link" to="/create" data-testid="assistant-back">
+        <Link className="assist-link" to="/agents" data-testid="assistant-back">
           {t("assistantPage.backToCreate")}
         </Link>
       </div>
@@ -1020,7 +1020,7 @@ export function CreateAgentAssistant() {
             <div className="assist-actions">
               <Btn
                 primary={isAdmin}
-                onClick={() => navigate("/create")}
+                onClick={() => navigate("/agents")}
                 data-testid="assistant-go-presets"
               >
                 {t("assistantPage.goToPresets")}
@@ -2251,7 +2251,7 @@ function Outcome({
       </div>
       <div className="assist-actions">
         {approval.agent_id && (
-          <Link className="assist-link" to="/create" data-testid="open-agent">
+          <Link className="assist-link" to="/agents" data-testid="open-agent">
             {t("assistantPage.openAgent")}
           </Link>
         )}

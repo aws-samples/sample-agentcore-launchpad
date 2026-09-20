@@ -12,7 +12,7 @@ from app.schemas.requirements import assert_all_pinned
 # bedrock list-inference-profiles; there is no "sonnet-5" profile).
 DEFAULT_MODEL_ID = "global.anthropic.claude-sonnet-5"
 
-Method = Literal["harness", "zip_runtime", "container", "studio"]
+Method = Literal["harness", "zip_runtime", "container", "studio", "byoc"]
 
 # Which agent SDK the "container" method packages. The console presents that
 # method as the "Other Agent SDK" entrance with this as a second-level choice,
@@ -181,6 +181,157 @@ class FilesystemConfig(BaseModel):
 _ALLOWED_TOOL_RE = re.compile(r"^(\*|@?[^/]+(/[^/]+)?)$")
 ALLOWED_TOOL_MAX_LEN = 64
 
+# ── BYOC (bring your own code) ──────────────────────────────────────────────
+
+# What the uploaded/BYO artifact is. code_zip → direct-code Runtime
+# (codeConfiguration); container_source → CodeBuild → ECR → Runtime;
+# container_image → an existing private-ECR image, no build.
+ByocArtifactKind = Literal["code_zip", "container_source", "container_image"]
+
+# AgentManagedRuntimeType members the console offers (the service model also
+# carries PYTHON_3_14/NODE_22; Python-only here because requirements resolution
+# targets CPython wheels).
+ByocPythonVersion = Literal["PYTHON_3_10", "PYTHON_3_11", "PYTHON_3_12", "PYTHON_3_13"]
+
+# Ceiling for ``ByocConfig.allowed_models`` — each entry becomes one or two ARNs
+# in the execution role's bedrock:InvokeModel statement, so the bound is an IAM
+# policy-size sanity cap, not a model catalogue.
+BYOC_ALLOWED_MODELS_MAX = 20
+INFERENCE_PROFILE_PREFIXES = ("global.", "us.", "eu.", "apac.")
+_BYOC_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.:-]*$")
+_BYOC_MODEL_ARN_RE = re.compile(
+    r"^arn:aws(?:-cn|-us-gov)?:bedrock:[a-z0-9-]+:(?P<account>\d{12})?:"
+    r"(?P<kind>foundation-model|inference-profile)/(?P<id>[A-Za-z0-9][A-Za-z0-9.:-]*)$"
+)
+
+
+def byoc_model_target(model_id: str) -> tuple[str, str]:
+    """Validate a literal BYOC model selection and return (resource type, id).
+
+    Custom identifiers remain usable without catalog lookup, but can never
+    insert IAM wildcards. Profile targets must be derivable from a system
+    inference-profile id; application profiles require a separate live lookup.
+    """
+    if model_id.startswith("arn:"):
+        match = _BYOC_MODEL_ARN_RE.fullmatch(model_id)
+        if match is None or (
+            match["kind"] == "foundation-model" and match["account"] is not None
+        ):
+            raise ValueError(
+                "BYOC models must be literal model IDs, foundation-model ARNs, "
+                "or system inference-profile ARNs"
+            )
+        kind, target = match["kind"], match["id"]
+    else:
+        if _BYOC_MODEL_ID_RE.fullmatch(model_id) is None:
+            raise ValueError("BYOC model IDs cannot contain wildcards, spaces, or IAM variables")
+        target = model_id
+        kind = (
+            "inference-profile" if target.startswith(INFERENCE_PROFILE_PREFIXES)
+            else "foundation-model"
+        )
+    if kind == "inference-profile":
+        prefix = next((p for p in INFERENCE_PROFILE_PREFIXES if target.startswith(p)), "")
+        if not prefix or len(target) == len(prefix):
+            raise ValueError("BYOC inference profiles must use a global, us, eu, or apac model ID")
+    return kind, target
+
+# Private ECR in *some* account/region — the workspace match (this account, this
+# region) is a resource check, done against the WorkspaceContext at request time,
+# not here. Public registries (public.ecr.aws, docker.io) never match.
+_PRIVATE_ECR_IMAGE_RE = re.compile(
+    r"^(\d{12})\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com/"
+    r"[a-z0-9._/-]+(:[A-Za-z0-9._-]+|@sha256:[0-9a-f]{64})$"
+)
+
+
+def parse_ecr_image_uri(uri: str) -> tuple[str, str] | None:
+    """(account_id, region) of a private-ECR image URI, or None if not one."""
+    match = _PRIVATE_ECR_IMAGE_RE.match(uri)
+    return (match.group(1), match.group(2)) if match else None
+
+
+class ByocProvenance(BaseModel):
+    """Who uploaded what — stamped by the SERVER from the stored upload manifest
+    (or, for container_image, from the describe_images check), never taken from
+    the client. Rendered on the agent detail page."""
+
+    sha256: str = ""
+    size_bytes: int = 0
+    original_filename: str = Field(default="", max_length=255)
+    uploaded_by: str = Field(default="", max_length=128)
+    uploaded_at: str = Field(default="", max_length=64)
+
+
+class ByocConfig(BaseModel):
+    """User-code deployment settings for method="byoc"."""
+
+    artifact_kind: ByocArtifactKind
+    # the staged zip (POST /api/agents/uploads) — code_zip / container_source
+    upload_id: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    # an existing image — container_image only
+    image_uri: str | None = Field(default=None, max_length=512)
+    # code_zip only: must exist at the zip root (or the single top-level dir)
+    entrypoint: str = Field(default="main.py", max_length=255)
+    python_version: ByocPythonVersion = "PYTHON_3_13"
+    # code_zip: resolve requirements.txt in the zip for linux/aarch64 at package
+    # time (skipped when the zip has none). Never executes user code.
+    install_requirements: bool = True
+    # Documentation-only in v1: both values send {"prompt", "actor_id"}; "raw"
+    # merely acknowledges the contract warning in the console. No payload mapper.
+    invoke_contract: Literal["launchpad_prompt", "raw"] = "launchpad_prompt"
+    # Every Bedrock model this agent's code may invoke (foundation-model or
+    # inference-profile ids, or their supported ARNs). Custom ids are checked
+    # for literal IAM-safe shape, without requiring a catalog match. The
+    # execution role's bedrock:InvokeModel statement covers the
+    # union; entry [0] is the PRIMARY model (= spec.model_id, injected as env
+    # MODEL_ID). None ⇒ [spec.model_id] — every spec written before this field
+    # existed reads back unchanged.
+    allowed_models: list[str] | None = Field(default=None, min_length=1,
+                                             max_length=BYOC_ALLOWED_MODELS_MAX)
+    provenance: ByocProvenance | None = None
+
+    @model_validator(mode="after")
+    def _allowed_models_shape(self) -> "ByocConfig":
+        if self.allowed_models is None:
+            return self
+        cleaned = [model_id.strip() for model_id in self.allowed_models]
+        if any(not model_id for model_id in cleaned):
+            raise ValueError("allowed_models entries cannot be empty")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("allowed_models entries must be unique")
+        for model_id in cleaned:
+            byoc_model_target(model_id)
+        self.allowed_models = cleaned
+        return self
+
+    @model_validator(mode="after")
+    def _artifact_inputs(self) -> "ByocConfig":
+        if self.artifact_kind in ("code_zip", "container_source"):
+            if not self.upload_id:
+                raise ValueError(
+                    f"byoc artifact_kind={self.artifact_kind} requires upload_id "
+                    "(upload the zip via POST /api/agents/uploads first)"
+                )
+            if self.image_uri:
+                raise ValueError("image_uri applies to artifact_kind=container_image only")
+        else:  # container_image
+            if not self.image_uri:
+                raise ValueError("byoc artifact_kind=container_image requires image_uri")
+            if self.upload_id:
+                raise ValueError("upload_id applies to the zip artifact kinds only")
+            if parse_ecr_image_uri(self.image_uri) is None:
+                raise ValueError(
+                    "image_uri must be a private ECR image in this account "
+                    "(<account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>); "
+                    "public registries are refused"
+                )
+        if self.artifact_kind == "code_zip":
+            entry = self.entrypoint
+            if not entry.endswith(".py") or entry.startswith("/") or ".." in entry:
+                raise ValueError("entrypoint must be a relative .py path inside the zip")
+        return self
+
 
 class AgentSpec(BaseModel):
     name: str = Field(pattern=r"^[a-z][a-z0-9-]{2,47}$")
@@ -208,7 +359,9 @@ class AgentSpec(BaseModel):
     # including those written before this field existed — reads back as the
     # Claude Agent SDK instead of being ambiguous.
     agent_sdk: AgentSdk = "claude_agent_sdk"
-    system_prompt: str = Field(min_length=1, max_length=20000)
+    # Non-empty for every method except byoc (enforced in _byoc_constraints):
+    # BYOC code carries its own prompt — the platform has no template to put one in.
+    system_prompt: str = Field(default="", max_length=20000)
     # Durable production defaults applied by experiment promotion. Config
     # bundles may override these per request while an A/B test is active.
     tool_description_overrides: dict[str, str] = Field(
@@ -264,6 +417,74 @@ class AgentSpec(BaseModel):
     protocol: Literal["http", "a2a"] = "http"
     # AgentCard skills served by the A2A server and published to the Registry
     a2a_skills: list[A2ASkill] = Field(default_factory=list, max_length=20)
+    # Bring-your-own-code settings — required iff method="byoc"
+    byoc: ByocConfig | None = None
+
+    @model_validator(mode="after")
+    def _byoc_constraints(self) -> "AgentSpec":
+        """BYOC scope for v1 — and the non-byoc system_prompt floor.
+
+        The platform does not generate BYOC code, so it cannot wire toolkits,
+        skills, tools or knowledge bases into it — those are refused rather than
+        silently ignored. ``system_prompt`` stays mandatory for every other
+        method (it used to be ``min_length=1`` on the field; the floor moved here
+        so BYOC — whose code owns its own prompt — can omit it).
+        """
+        if self.method != "byoc":
+            if not self.system_prompt:
+                raise ValueError("system_prompt must not be empty")
+            if self.byoc is not None:
+                raise ValueError("byoc settings apply to method='byoc' only")
+            return self
+        if self.byoc is None:
+            raise ValueError("method='byoc' requires the byoc settings block")
+        if self.protocol != "http":
+            raise ValueError("byoc agents speak the HTTP runtime contract only in v1")
+        for field_name in ("tools", "toolkits", "skills", "knowledge_bases"):
+            if getattr(self, field_name):
+                raise ValueError(
+                    f"{field_name} are not supported by the byoc method in v1 — "
+                    "the platform does not generate this agent's code, so it "
+                    "cannot wire them in; configure them inside your own code"
+                )
+        if self.code or self.code_bundle:
+            raise ValueError(
+                "byoc deploys the uploaded artifact — code/code_bundle are not used"
+            )
+        if self.requirements:
+            raise ValueError(
+                "byoc resolves requirements.txt from inside the uploaded zip — "
+                "spec.requirements is not used"
+            )
+        models = self.byoc.allowed_models
+        if models is not None:
+            # model_id is the PRIMARY model and must equal allowed_models[0]:
+            # a client that sends only the list gets the first entry as primary;
+            # a client that sends both gets its model_id moved to the front so
+            # the two fields can never disagree about which model is primary.
+            if "model_id" not in self.model_fields_set:
+                self.model_id = models[0]
+            elif self.model_id not in models:
+                raise ValueError(
+                    f"model_id {self.model_id!r} must be one of byoc.allowed_models "
+                    "— it is the primary model (env MODEL_ID)"
+                )
+            elif models[0] != self.model_id:
+                models.remove(self.model_id)
+                models.insert(0, self.model_id)
+        # Omitting the list still authorizes model_id, so it needs the same
+        # literal-resource validation as explicit allowlist entries.
+        byoc_model_target(self.model_id)
+        return self
+
+    @property
+    def allowed_model_ids(self) -> list[str]:
+        """Every model this agent's execution role may invoke; entry [0] is the
+        primary (= ``model_id``). Only byoc can carry more than one — every other
+        method (and every byoc spec without the list) reads back as [model_id]."""
+        if self.byoc and self.byoc.allowed_models:
+            return list(self.byoc.allowed_models)
+        return [self.model_id]
 
     @model_validator(mode="after")
     def _a2a_constraints(self) -> "AgentSpec":
