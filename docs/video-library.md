@@ -1,8 +1,11 @@
 # Shared video library
 
 The console's **Learn → Videos** entry (`/videos`) opens a module library.
-Architecture Assistant and Evaluation are ordered series; standalone modules have
-one recording each. Selecting a card opens a native player backed by CloudFront.
+Architecture Assistant, Agent Management, Evaluation, and Skill Lab are ordered
+series; standalone modules have one recording each. Selecting a card opens a
+native player backed by CloudFront. Agent Management includes a production BYOC
+walkthrough covering code ZIP and Dockerfile uploads, existing deployment records,
+and fresh Chat calls (`/videos?video=agent-management-byoc`).
 
 ## Shared configuration
 

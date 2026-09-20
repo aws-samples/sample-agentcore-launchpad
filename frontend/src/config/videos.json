@@ -48,11 +48,12 @@
         "zh-CN": "Agent 管理"
       },
       "description": {
-        "en": "Create, maintain, and verify running agents.",
-        "zh-CN": "创建、维护 Agent，并验证运行结果。"
+        "en": "Create and maintain agents, including BYOC code ZIP and Dockerfile deployments.",
+        "zh-CN": "创建和维护 Agent，学习代码 ZIP 与 Dockerfile 自带代码部署。"
       },
       "videoIds": [
-        "agent-management"
+        "agent-management",
+        "agent-management-byoc"
       ]
     },
     {
@@ -1940,6 +1941,131 @@
           "title": {
             "en": "Continue to baseline evaluation",
             "zh-CN": "进入基线评估"
+          }
+        }
+      ]
+    },
+    {
+      "id": "agent-management-byoc",
+      "title": {
+        "en": "BYOC: code ZIP and Dockerfile walkthrough",
+        "zh-CN": "BYOC：代码 ZIP 与 Dockerfile 实战"
+      },
+      "description": {
+        "en": "Record the production BYOC upload and configuration flow, inspect the two previously deployed examples, and make fresh model calls through Chat. Covers code ZIP, Dockerfile builds, dependency checks, model permissions, deployment stages and versions, with Mandarin narration, subtitles and chapters.",
+        "zh-CN": "在 prod 环境演示 BYOC 上传与配置，查看两个已部署实例的流水线和版本，再分别进行真实模型调用。覆盖代码 ZIP、Dockerfile 构建、依赖检查和允许的模型；包含云扬旁白、中文字幕与章节。"
+      },
+      "publishedAt": "2026-09-20",
+      "durationSeconds": 265.8,
+      "language": "zh-CN",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/agent-management-byoc/20260920/poster.jpg",
+      "sources": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/agent-management-byoc/20260920/agent-management-byoc.zh-CN.mp4",
+          "type": "video/mp4"
+        },
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/agent-management-byoc/20260920/agent-management-byoc.zh-CN.webm",
+          "type": "video/webm"
+        }
+      ],
+      "captions": [
+        {
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/agent-management-byoc/20260920/agent-management-byoc.zh-CN.vtt",
+          "language": "zh-CN",
+          "label": "简体中文"
+        }
+      ],
+      "chapters": [
+        {
+          "startSeconds": 0,
+          "title": {
+            "en": "BYOC: code ZIP and Dockerfile walkthrough",
+            "zh-CN": "BYOC：代码 ZIP 与 Dockerfile 实战"
+          }
+        },
+        {
+          "startSeconds": 16.4,
+          "title": {
+            "en": "Open BYOC from Agent Management",
+            "zh-CN": "从 Agent 管理进入自带代码"
+          }
+        },
+        {
+          "startSeconds": 34,
+          "title": {
+            "en": "Prepare Python source and the invocation contract",
+            "zh-CN": "准备代码 ZIP 与调用契约"
+          }
+        },
+        {
+          "startSeconds": 54.4,
+          "title": {
+            "en": "Upload the code ZIP and check dependencies",
+            "zh-CN": "上传代码 ZIP，检查依赖"
+          }
+        },
+        {
+          "startSeconds": 77.6,
+          "title": {
+            "en": "Choose Python, the entrypoint and permitted models",
+            "zh-CN": "确认 Python、入口和允许的模型"
+          }
+        },
+        {
+          "startSeconds": 102.8,
+          "title": {
+            "en": "Inspect the previously deployed ZIP example",
+            "zh-CN": "查看已部署的 ZIP 示例"
+          }
+        },
+        {
+          "startSeconds": 121.9,
+          "title": {
+            "en": "Make a fresh call to the ZIP agent",
+            "zh-CN": "现场调用代码 ZIP Agent"
+          }
+        },
+        {
+          "startSeconds": 140.6,
+          "title": {
+            "en": "Prepare the Dockerfile build context",
+            "zh-CN": "准备 Dockerfile 构建目录"
+          }
+        },
+        {
+          "startSeconds": 162,
+          "title": {
+            "en": "Upload the Dockerfile source archive",
+            "zh-CN": "上传 Dockerfile 源码包"
+          }
+        },
+        {
+          "startSeconds": 189.4,
+          "title": {
+            "en": "Inspect CodeBuild and Runtime deployment results",
+            "zh-CN": "查看 CodeBuild 与 Runtime 结果"
+          }
+        },
+        {
+          "startSeconds": 215.5,
+          "title": {
+            "en": "Check the version and upload provenance",
+            "zh-CN": "核对版本与上传来源"
+          }
+        },
+        {
+          "startSeconds": 232.1,
+          "title": {
+            "en": "Make a fresh call to the Dockerfile agent",
+            "zh-CN": "现场调用 Dockerfile Agent"
+          }
+        },
+        {
+          "startSeconds": 249,
+          "title": {
+            "en": "Choose the path that matches your code",
+            "zh-CN": "按代码的交付方式选择路径"
           }
         }
       ]
