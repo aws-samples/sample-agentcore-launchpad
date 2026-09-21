@@ -15,14 +15,30 @@ import {
   useToast,
   ViewHead,
 } from "../components";
-import type { AgentInfo, ChatSessionInfo } from "../lib/api";
-import { api, errorMessage } from "../lib/api";
+import { AttachmentHint, MessageAttachments, PendingAttachments } from "../components/chat/Attachments";
+import type { PendingAttachment } from "../components/chat/attachments";
+import {
+  attachmentMediaType,
+  attachmentMetadata,
+  encodeAttachment,
+  validateAttachments,
+} from "../components/chat/attachments";
+import type {
+  AgentInfo,
+  ChatAttachmentMetadata,
+  ChatHistoryMessage,
+  ChatRequest,
+  ChatSessionInfo,
+  ChatStreamPayload,
+} from "../lib/api";
+import { api, errorMessage, localizedMessage, responseMessage } from "../lib/api";
 
 interface Message {
   kind: "user" | "agent" | "tool" | "memory" | "error";
   text: string;
   name?: string;
   streaming?: boolean;
+  attachments?: ChatAttachmentMetadata[];
 }
 
 interface MemorySummary {
@@ -31,12 +47,6 @@ interface MemorySummary {
   /** Compound `<agent_id>__<human>` partition the summary was read from — the
    *  id the Memory console keys on, so the deep link needs it verbatim. */
   actor_id?: string;
-}
-
-interface HistoryRow {
-  role: string;
-  text: string;
-  name: string | null;
 }
 
 interface TraceSpan {
@@ -69,7 +79,7 @@ interface KeyInfo {
   key?: string;
 }
 
-async function* sseEvents(res: Response): AsyncGenerator<{ event: string; data: never }> {
+async function* sseEvents(res: Response): AsyncGenerator<{ event: string; data: ChatStreamPayload }> {
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -86,7 +96,7 @@ async function* sseEvents(res: Response): AsyncGenerator<{ event: string; data: 
         if (line.startsWith("event:")) event = line.slice(6).trim();
         if (line.startsWith("data:")) data += line.slice(5).trim();
       }
-      if (data) yield { event, data: JSON.parse(data) as never };
+      if (data) yield { event, data: JSON.parse(data) as ChatStreamPayload };
     }
   }
 }
@@ -116,6 +126,19 @@ export function Chat() {
   const [agentId, setAgentId] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [attachmentDraft, setAttachmentDraft] = useState<{
+    files: PendingAttachment[];
+    error: string | null;
+  }>({ files: [], error: null });
+  const { files: pendingFiles, error: attachmentError } = attachmentDraft;
+  const setAttachmentError = (error: string | null) =>
+    setAttachmentDraft((draft) => ({ ...draft, error }));
+  const resetAttachments = () => setAttachmentDraft({ files: [], error: null });
+  const [draggingFiles, setDraggingFiles] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const sendInFlight = useRef(false);
+  const historyRequest = useRef(0);
+  const [restoring, setRestoring] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(linkedSession);
   const [busy, setBusy] = useState(false);
   const [memory, setMemory] = useState<MemorySummary | null>(null);
@@ -202,16 +225,19 @@ export function Chat() {
 
   const restoreSession = async (sid: string) => {
     if (!agentId || busy) return;
+    const requestId = ++historyRequest.current;
+    setRestoring(true);
     try {
       const res = await fetch(
         `/api/chat/${agentId}/history?session_id=${encodeURIComponent(sid)}`,
       );
       if (!res.ok) return;
-      const rows = ((await res.json()) as { messages: HistoryRow[] }).messages;
+      const rows = ((await res.json()) as { messages: ChatHistoryMessage[] }).messages;
+      if (requestId !== historyRequest.current) return;
       setMessages(
         rows.map((r): Message =>
           r.role === "user"
-            ? { kind: "user", text: r.text }
+            ? { kind: "user", text: r.text, attachments: r.attachments }
             : r.role === "agent"
               ? { kind: "agent", text: r.text }
               : r.role === "tool"
@@ -220,10 +246,16 @@ export function Chat() {
         ),
       );
       setSessionId(sid);
+      setInput("");
+      // A successful history selection discards the previous conversation's draft.
+      resetAttachments();
+      setDraggingFiles(false);
       setTrace(null);
       setSearchParams({ agent: agentId, session: sid }, { replace: true });
     } catch {
       /* history rail is best-effort */
+    } finally {
+      if (requestId === historyRequest.current) setRestoring(false);
     }
   };
 
@@ -239,32 +271,62 @@ export function Chat() {
 
   const send = async () => {
     const prompt = input.trim();
-    if (!prompt || !agentId || busy) return;
+    if ((!prompt && !pendingFiles.length) || !agentId || busy || restoring || sendInFlight.current) return;
+    const capability = agents.find((a) => a.id === agentId)?.attachment_capability;
+    if (pendingFiles.length) {
+      const invalid = validateAttachments(pendingFiles.map((f) => f.file), capability);
+      if (invalid) {
+        setAttachmentError(t(`chatPage.attachments.${invalid.key}`, { ...invalid }));
+        return;
+      }
+    }
+    sendInFlight.current = true;
     setInput("");
+    setAttachmentError(null);
+    setDraggingFiles(false);
     setBusy(true);
-    setMessages((m) => [...m, { kind: "user", text: prompt }]);
+    const userMessage: Message = {
+      kind: "user",
+      text: prompt,
+      attachments: capability ? pendingFiles.map((f) => attachmentMetadata(f, capability)) : undefined,
+    };
+    setMessages((m) => [...m, userMessage]);
+    let failed = false;
+    let completed = false;
+    let activeSessionId = sessionId;
     try {
+      const request: ChatRequest = { prompt, session_id: sessionId };
+      if (pendingFiles.length) {
+        request.attachments = await Promise.all(pendingFiles.map(encodeAttachment)).catch(() => {
+          throw new Error(t("chatPage.attachments.readFailed"));
+        });
+      }
       const res = await fetch(`/api/chat/${agentId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, session_id: sessionId }),
+        body: JSON.stringify(request),
       });
-      if (!res.ok || !res.body) throw new Error(`http ${res.status}`);
+      // Encoded bytes are request-only; release them while the response streams.
+      delete request.attachments;
+      if (!res.ok) throw new Error(await responseMessage(res));
+      if (!res.body) throw new Error(t("chatPage.streamInterrupted"));
       let agentIdxSet = false;
-      for await (const { event, data } of sseEvents(res)) {
-        const payload = data as {
-          session_id?: string;
-          text?: string;
-          name?: string;
-          message?: string;
-        };
-        if (event === "meta" && payload.session_id) {
-          setSessionId(payload.session_id);
-          // keep the session in the URL so a reload restores this conversation
-          setSearchParams(
-            { agent: agentId, session: payload.session_id },
-            { replace: true },
-          );
+      for await (const { event, data: payload } of sseEvents(res)) {
+        if (event === "meta") {
+          if (payload.session_id) {
+            activeSessionId = payload.session_id;
+            setSessionId(payload.session_id);
+            // keep the session in the URL so a reload restores this conversation
+            setSearchParams(
+              { agent: agentId, session: payload.session_id },
+              { replace: true },
+            );
+          }
+          if (payload.attachments) {
+            setMessages((m) => m.map((msg) => msg === userMessage
+              ? { ...msg, attachments: payload.attachments }
+              : msg));
+          }
         } else if (event === "tool") {
           setMessages((m) => [
             ...m,
@@ -284,22 +346,30 @@ export function Chat() {
           });
           agentIdxSet = true;
         } else if (event === "error") {
-          setMessages((m) => [...m, { kind: "error", text: payload.message ?? "error" }]);
+          failed = true;
+          const message = localizedMessage(payload.code ?? "", payload.message ?? t("chatPage.sendFailed"));
+          setMessages((m) => [...m, { kind: "error", text: message }]);
+          if (pendingFiles.length) setAttachmentError(message);
         } else if (event === "done") {
-          setMessages((m) =>
-            m.map((msg, i) => (i === m.length - 1 ? { ...msg, streaming: false } : msg)),
-          );
-          setMessages((m) => [
-            ...m,
-            { kind: "memory", text: t("chatPage.memorySaved") },
-          ]);
+          completed = true;
+          if (!failed) {
+            setMessages((m) => [...m, { kind: "memory", text: t("chatPage.memorySaved") }]);
+          }
         }
       }
+      if (!completed && !failed) throw new Error(t("chatPage.streamInterrupted"));
+      if (completed && !failed) resetAttachments();
     } catch (err) {
-      setMessages((m) => [...m, { kind: "error", text: String(err) }]);
+      failed = true;
+      const message = errorMessage(err);
+      setMessages((m) => [...m, { kind: "error", text: message }]);
+      if (pendingFiles.length) setAttachmentError(message);
     } finally {
+      if (failed) setInput(prompt);
+      setMessages((m) => m.map((msg) => msg.streaming ? { ...msg, streaming: false } : msg));
+      sendInFlight.current = false;
       setBusy(false);
-      if (sessionId) void refreshMemory(sessionId);
+      if (activeSessionId) void refreshMemory(activeSessionId);
       if (agentId) void loadSessions(agentId);
     }
   };
@@ -312,6 +382,12 @@ export function Chat() {
   }, [sessionId, busy, agentId]);
 
   const newSession = (aid: string = agentId) => {
+    if (sendInFlight.current) return;
+    historyRequest.current += 1;
+    setRestoring(false);
+    setInput("");
+    resetAttachments();
+    setDraggingFiles(false);
     setSessionId(null);
     setMessages([]);
     setMemory(null);
@@ -375,6 +451,33 @@ export function Chat() {
   };
 
   const agent = agents.find((a) => a.id === agentId);
+  const capability = agent?.attachment_capability;
+  const attachmentsEnabled = Boolean(
+    capability && (capability.images || capability.text || capability.pdf !== "unsupported"),
+  );
+  const composerDisabled = busy || restoring || !agentId;
+  const sendDisabledReason = busy || restoring
+    ? undefined
+    : !agentId
+      ? t("chatPage.sendDisabledNoAgent")
+      : !input.trim() && !pendingFiles.length
+        ? t(attachmentsEnabled ? "chatPage.sendDisabledEmpty" : "chatPage.sendDisabledEmptyText")
+        : undefined;
+  const addFiles = (files: File[]) => {
+    if (composerDisabled || !files.length) return;
+    const additions = files.map((file) => ({
+      id: crypto.randomUUID(),
+      file,
+      mediaType: attachmentMediaType(file),
+    }));
+    // Validate and append atomically so batched drop/paste events see prior additions.
+    setAttachmentDraft((draft) => {
+      const invalid = validateAttachments([...draft.files.map((f) => f.file), ...files], capability);
+      return invalid
+        ? { ...draft, error: t(`chatPage.attachments.${invalid.key}`, { ...invalid }) }
+        : { files: [...draft.files, ...additions], error: null };
+    });
+  };
   const harness = isHarnessAgent(agent);
   const currentEnded = Boolean(
     sessionId && sessions.find((s) => s.session_id === sessionId)?.ended_at,
@@ -389,7 +492,9 @@ export function Chat() {
           ? t("chatPage.endDisabledEnded")
           : ending
             ? t("chatPage.endDisabledBusy")
-            : undefined;
+            : busy
+              ? t("chatPage.waitForReply")
+              : undefined;
   const currentEndReason = endReason(sessionId, currentEnded);
 
   return (
@@ -412,6 +517,7 @@ export function Chat() {
             (
               <select
                 value={agentId}
+                disabled={busy}
                 onChange={(e) => {
                   autoPickBlocked.current = false;
                   setAgentId(e.target.value);
@@ -456,7 +562,7 @@ export function Chat() {
               <Chip tone="aqua" icon="◈">
                 {t("chatPage.memoryOn")}
               </Chip>
-              <Btn onClick={() => newSession()}>{t("chatPage.newSession")}</Btn>
+              <Btn disabled={busy} onClick={() => newSession()}>{t("chatPage.newSession")}</Btn>
               <Btn
                 disabled={currentEndReason !== undefined}
                 disabledReason={currentEndReason}
@@ -469,6 +575,7 @@ export function Chat() {
           }
           style={{ "--i": 0 } as CSSProperties}
         >
+          {agent && <AttachmentHint capability={capability} />}
           <div className="thread" ref={threadRef} data-testid="thread">
             {agentsError && agents.length === 0 && (
               <LoadError
@@ -484,7 +591,10 @@ export function Chat() {
               msg.kind === "user" ? (
                 <div key={i} className="msg user">
                   <div className="who">{userLabel}</div>
-                  <div className="bub">{msg.text}</div>
+                  <div className="bub">
+                    {msg.text}
+                    <MessageAttachments files={msg.attachments} />
+                  </div>
                 </div>
               ) : msg.kind === "agent" ? (
                 <div key={i} className="msg agent">
@@ -519,19 +629,92 @@ export function Chat() {
               ),
             )}
           </div>
-          <div className="chatbar">
-            <input
-              className="input"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && void send()}
-              placeholder={agent ? t("chatPage.placeholder", { name: agent.name }) : "…"}
-              disabled={busy || !agentId}
-              data-testid="chat-input"
+          <div
+            className={`chat-composer${draggingFiles ? " dragging" : ""}`}
+            data-testid="attachment-composer"
+            onDragOver={(e) => {
+              if (!e.dataTransfer.types.includes("Files")) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = composerDisabled ? "none" : "copy";
+              if (!composerDisabled) setDraggingFiles(true);
+            }}
+            onDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDraggingFiles(false);
+            }}
+            onDrop={(e) => {
+              if (!e.dataTransfer.types.includes("Files")) return;
+              e.preventDefault();
+              setDraggingFiles(false);
+              addFiles(Array.from(e.dataTransfer.files));
+            }}
+            onPaste={(e) => {
+              const images = Array.from(e.clipboardData.files).filter((file) => file.type.startsWith("image/"));
+              if (!images.length) return;
+              e.preventDefault();
+              addFiles(images);
+            }}
+          >
+            <PendingAttachments
+              files={pendingFiles}
+              disabled={composerDisabled}
+              onRemove={(id) => {
+                setAttachmentDraft((draft) => ({
+                  files: draft.files.filter((file) => file.id !== id),
+                  error: null,
+                }));
+              }}
             />
-            <Btn primary disabled={busy || !agentId} onClick={() => void send()}>
-              {t("chatPage.send")} ▸
-            </Btn>
+            {attachmentError && (
+              <div className="chat-attachment-error" role="alert" data-testid="attachment-error">
+                {attachmentError}
+              </div>
+            )}
+            <div className="chatbar">
+              <input
+                ref={fileInputRef}
+                type="file"
+                hidden
+                multiple
+                accept={capability?.accept.join(",")}
+                disabled={composerDisabled || !attachmentsEnabled}
+                onChange={(e) => {
+                  addFiles(Array.from(e.target.files ?? []));
+                  e.target.value = "";
+                }}
+                aria-label={t("chatPage.attachments.add")}
+                data-testid="attachment-input"
+              />
+              <Btn
+                disabled={composerDisabled || !attachmentsEnabled}
+                title={t(attachmentsEnabled ? "chatPage.attachments.add" : "chatPage.attachments.unavailable")}
+                aria-describedby="chat-attachment-hint"
+                onClick={() => fileInputRef.current?.click()}
+                data-testid="attachment-picker"
+              >
+                + {t("chatPage.attachments.add")}
+              </Btn>
+              <input
+                className="input"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && void send()}
+                placeholder={agent ? t("chatPage.placeholder", { name: agent.name }) : "…"}
+                disabled={composerDisabled}
+                aria-label={t("chatPage.messageLabel")}
+                data-testid="chat-input"
+              />
+              <Btn
+                primary
+                disabled={busy || restoring || sendDisabledReason !== undefined}
+                disabledReason={sendDisabledReason}
+                onClick={() => void send()}
+              >
+                {t("chatPage.send")} ▸
+              </Btn>
+            </div>
+            {attachmentsEnabled && (
+              <div className="chat-attachment-help">{t("chatPage.attachments.dropHint")}</div>
+            )}
           </div>
         </Panel>
 
@@ -557,6 +740,7 @@ export function Chat() {
                     <button
                       type="button"
                       className={`histrow${s.session_id === sessionId ? " on" : ""}`}
+                      disabled={busy}
                       onClick={() => void restoreSession(s.session_id)}
                     >
                       <span className="hp">

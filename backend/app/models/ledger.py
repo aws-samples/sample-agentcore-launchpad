@@ -95,6 +95,9 @@ class Agent(Base):
     arn: Mapped[str | None] = mapped_column(String(256), default=None)
     registry_record_id: Mapped[str | None] = mapped_column(String(64), default=None)
     version: Mapped[str | None] = mapped_column(String(16), default=None)
+    # Server-owned: the runtime version whose packaged entrypoint acknowledges
+    # native attachments. Never copied from AgentSpec or an import descriptor.
+    attachment_version: Mapped[str | None] = mapped_column(String(16), default=None)
     owner: Mapped[str] = mapped_column(String(64), default="river")
     error: Mapped[str | None] = mapped_column(Text, default=None)
     # Server-owned system identity. NULL for every ordinary agent; a preset key
@@ -262,6 +265,7 @@ class ChatSession(Base):
     session_id: Mapped[str] = mapped_column(String(80), index=True)
     actor_id: Mapped[str] = mapped_column(String(64), default="river")
     turns: Mapped[int] = mapped_column(default=0)
+    runtime_version: Mapped[str | None] = mapped_column(String(16), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     last_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -290,6 +294,7 @@ class ChatMessage(Base):
     role: Mapped[str] = mapped_column(String(16))  # user | agent | tool | error
     text: Mapped[str] = mapped_column(Text, default="")
     name: Mapped[str | None] = mapped_column(String(80), default=None)  # tool name
+    attachments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

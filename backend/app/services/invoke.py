@@ -20,6 +20,7 @@ from app.services.agentcore import gateway
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
+from app.services.attachments import PreparedAttachments
 from app.services.runtime_discovery import (
     DISCOVERED_METHOD,
     is_discovered_harness,
@@ -220,10 +221,13 @@ def invoke_agent_text(
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
     workspace: WorkspaceContext | None = None,
+    attachments: PreparedAttachments | None = None,
 ) -> dict[str, Any]:
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
     workspace = _agent_workspace(agent, workspace)
+    if attachments:
+        prompt = attachments.prompt(prompt)
     # An imported harness carries the harness ARN, so it invokes exactly like a
     # launchpad-deployed one — InvokeHarness, never InvokeAgentRuntime.
     if agent.method == "harness" or is_discovered_harness(agent):
@@ -246,13 +250,21 @@ def invoke_agent_text(
         # A2A-protocol runtimes speak JSON-RPC; the A2A server owns
         # conversation state (no actor_id/memory envelope) and can't be canaried
         if (agent.spec or {}).get("protocol") == "a2a":
+            files = (
+                {"attachments": attachments.native} if attachments and attachments.native else {}
+            )
             return rt.invoke_a2a_text(
-                data_client(workspace), agent.arn, prompt, session_id=session_id
+                data_client(workspace), agent.arn, prompt, session_id=session_id, **files,
             )
         # During an active canary, real production traffic for this agent flows
         # through the canary's gateway; otherwise the path below is unchanged.
         route = canary_service.active_canary_route(agent.id)
         if route is not None:
+            if attachments and attachments.native:
+                raise AppError(
+                    "chat.attachment_canary_unsupported",
+                    "Native attachments are unavailable during a canary.", status_code=409,
+                )
             return _invoke_via_canary(
                 route,
                 prompt,
@@ -269,6 +281,8 @@ def invoke_agent_text(
         }
         if gateway_access_token:
             kwargs["gateway_access_token"] = gateway_access_token
+        if attachments and attachments.native:
+            kwargs["attachments"] = attachments.native
         return rt.invoke_runtime_text(
             data_client(workspace), agent.arn, prompt, **kwargs
         )
@@ -328,6 +342,7 @@ def invoke_agent_events(
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
     workspace: WorkspaceContext | None = None,
+    attachments: PreparedAttachments | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield native runtime events, with a buffered compatibility fallback.
 
@@ -352,11 +367,16 @@ def invoke_agent_events(
         }
         if gateway_access_token:
             kwargs["gateway_access_token"] = gateway_access_token
+        if attachments:
+            prompt = attachments.prompt(prompt)
+            if attachments.native:
+                kwargs["attachments"] = attachments.native
         yield from rt.stream_runtime_events(
             data_client(workspace), agent.arn, prompt, **kwargs
         )
         return
 
+    extra = {"attachments": attachments} if attachments else {}
     result = invoke_agent_text(
         agent,
         prompt,
@@ -365,6 +385,7 @@ def invoke_agent_events(
         runtime_user_id=runtime_user_id,
         gateway_access_token=gateway_access_token,
         workspace=workspace,
+        **extra,
     )
     text = result["text"]
     for index in range(0, len(text), BUFFERED_CHUNK_CHARS):

@@ -14,7 +14,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.assistant.sessions import refuse_assistant_session
@@ -22,6 +21,8 @@ from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, ApiKey
 from app.routers.apikeys import hash_key
+from app.schemas.attachments import AttachmentRequest
+from app.services.attachments import attachment_capability, prepare_attachments
 from app.services.chat import chat_stream, sse_encode
 from app.services.invoke import invoke_agent_text
 from app.services.memory import scoped_actor
@@ -53,8 +54,7 @@ def require_api_key(
     return key
 
 
-class InvokeV1Request(BaseModel):
-    prompt: str = Field(min_length=1, max_length=100000)
+class InvokeV1Request(AttachmentRequest):
     session_id: str | None = None
     actor_id: str = "api"
 
@@ -82,7 +82,8 @@ def v1_list_agents(
     ]
     return {
         "agents": [
-            {"id": a.id, "name": a.name, "method": a.method, "version": a.version}
+            {"id": a.id, "name": a.name, "method": a.method, "version": a.version,
+             "attachment_capability": attachment_capability(a)}
             for a in agents
         ]
     }
@@ -96,10 +97,15 @@ def v1_invoke(
     key: ApiKey = Depends(require_api_key),
 ) -> dict[str, Any]:
     agent = _active_agent(db, key, agent_id)
+    prepared = prepare_attachments(
+        agent, req.attachments, prompt=req.prompt, session_id=req.session_id,
+    )
+    extra = {"attachments": prepared} if prepared else {}
     started = time.monotonic()
     result = invoke_agent_text(
         agent, req.prompt, session_id=req.session_id,
         actor_id=scoped_actor(agent.id, req.actor_id),
+        **extra,
     )
     return {
         "agent": agent.name,
@@ -118,11 +124,15 @@ def v1_invoke_stream(
 ) -> StreamingResponse:
     agent = _active_agent(db, key, agent_id)
     refuse_assistant_session(agent, req.session_id)  # 404 before the stream opens
+    prepared = prepare_attachments(
+        agent, req.attachments, prompt=req.prompt, session_id=req.session_id,
+    )
+    extra = {"attachments": prepared} if prepared else {}
     mem_actor = scoped_actor(agent.id, req.actor_id)
 
     def generate():
         for event in chat_stream(
-            agent, req.prompt, session_id=req.session_id, actor_id=mem_actor
+            agent, req.prompt, session_id=req.session_id, actor_id=mem_actor, **extra,
         ):
             yield sse_encode(event)
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.schemas.agent import AgentSpec
+from app.templates.attachment_support import render_attachment_source
 from app.templates.kb_support import (
     KB_DEEP_ITERATIONS_MULTI,
     KB_DEEP_ITERATIONS_SINGLE,
@@ -62,7 +63,8 @@ def render_main_py(spec: AgentSpec) -> str:
         allowed.append(f"mcp__{KB_MCP_SERVER}")
     source = (TEMPLATE_DIR / "main.py.tmpl").read_text(encoding="utf-8")
     return (
-        source.replace("__LAUNCHPAD_AGENT_NAME__", spec.name)
+        source.replace("__LAUNCHPAD_ATTACHMENT_SOURCE__", render_attachment_source())
+        .replace("__LAUNCHPAD_AGENT_NAME__", spec.name)
         .replace("__LAUNCHPAD_MODEL_ID__", spec.model_id)
         .replace(
             "__LAUNCHPAD_SYSTEM_PROMPT__",

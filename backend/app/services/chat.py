@@ -17,6 +17,7 @@ from app.models.ledger import Agent
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import data_client
 from app.services.agentcore.harness import new_session_id
+from app.services.attachments import PreparedAttachments
 from app.services.invoke import (
     NATIVE_STREAM_METHODS,
     harness_user_overrides,
@@ -34,6 +35,7 @@ def chat_stream(
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
     workspace: WorkspaceContext | None = None,
+    attachments: PreparedAttachments | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield SSE-ready events: meta → (heartbeat|tool|delta)* → done.
 
@@ -47,9 +49,12 @@ def chat_stream(
     # Imported harnesses stream through the same InvokeHarness path as 方式B.
     harness = agent.method == "harness" or is_discovered_harness(agent)
     mode = "stream" if harness or agent.method in NATIVE_STREAM_METHODS else "buffered"
+    meta = {"session_id": session_id, "agent": agent.name, "mode": mode}
+    if attachments:
+        meta["attachments"] = attachments.metadata
     yield {
         "event": "meta",
-        "data": {"session_id": session_id, "agent": agent.name, "mode": mode},
+        "data": meta,
     }
     started = time.monotonic()
     try:
@@ -57,7 +62,7 @@ def chat_stream(
         if harness:
             yield from _harness_events(
                 agent,
-                prompt,
+                attachments.prompt(prompt) if attachments else prompt,
                 session_id,
                 actor_id,
                 workspace,
@@ -70,6 +75,8 @@ def chat_stream(
                 invoke_kwargs["runtime_user_id"] = runtime_user_id
             if gateway_access_token:
                 invoke_kwargs["gateway_access_token"] = gateway_access_token
+            if attachments:
+                invoke_kwargs["attachments"] = attachments
             yield from invoke_agent_events(
                 agent,
                 prompt,

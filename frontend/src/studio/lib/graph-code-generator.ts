@@ -2,6 +2,24 @@ import { type Node, type Edge } from '@xyflow/react';
 import { validateGraphStructure } from './graph-validator';
 import { DEFAULT_MODEL_ID, MANTLE_PROVIDER, mantleModelArgs } from './models';
 
+// Shared by both canvas generators. Keep the SDK override limited to inline files.
+export const MANTLE_ATTACHMENT_ADAPTER = `
+class LaunchpadOpenAIResponsesModel(OpenAIResponsesModel):
+    @classmethod
+    def _format_request_message_content(cls, content, *, role="user"):
+        value = super()._format_request_message_content(content, role=role)
+        file_url = value.get("file_url")
+        if "document" in content and isinstance(file_url, str) and file_url.startswith("data:"):
+            value = dict(value)
+            value["file_data"] = value.pop("file_url")
+            document = content["document"]
+            name = document.get("name") or "attachment"
+            extension = "." + document["format"]
+            value["filename"] = name if name.endswith(extension) else name + extension
+        return value
+
+`;
+
 interface CodeGenerationResult {
   code: string;
   imports: string[];
@@ -62,7 +80,7 @@ function generateModelConfig(
     if (thinkingEnabled && reasoningEffort) {
       params.push(`"reasoning": {"effort": "${reasoningEffort}"}`);
     }
-    return `${varName}_model = OpenAIResponsesModel(${clientArgsStr}
+    return `${varName}_model = LaunchpadOpenAIResponsesModel(${clientArgsStr}
     model_id="${modelIdentifier}",
     params={
         ${params.join(',\n        ')},
@@ -342,7 +360,7 @@ export function generateGraphCode(
   ]);
 
   const errors: string[] = [];
-  let code = '';
+  let code = "LAUNCHPAD_ATTACHMENT_CONTRACT = 'v1'\n\n";
 
   try {
     // Validate graph structure
@@ -376,6 +394,7 @@ export function generateGraphCode(
     const hasMantleProvider = agentNodes.some(node => node.data?.modelProvider === MANTLE_PROVIDER);
     if (hasMantleProvider) {
       imports.add('from strands.models.openai_responses import OpenAIResponsesModel');
+      code += MANTLE_ATTACHMENT_ADAPTER;
     }
 
     // Check if MCP tools are used
@@ -530,7 +549,7 @@ export function generateGraphCode(
 
     // Generate main execution code
     code += '# Main execution\n';
-    code += 'async def main(user_input_arg: str = None, messages_arg: str = None):\n';
+    code += 'async def main(user_input_arg: str | list = None, messages_arg: str = None):\n';
     code += '    # User input from command-line arguments with priority: --messages > --user-input > default\n';
     code += '    if messages_arg is not None and messages_arg.strip():\n';
     code += '        try:\n';
@@ -538,6 +557,8 @@ export function generateGraphCode(
     code += '            user_input = messages_list\n';
     code += '        except (json.JSONDecodeError, KeyError, TypeError):\n';
     code += '            user_input = "Hello, how can you help me?"\n';
+    code += '    elif isinstance(user_input_arg, list):\n';
+    code += '        user_input = user_input_arg\n';
     code += '    elif user_input_arg is not None and user_input_arg.strip():\n';
     code += '        user_input = user_input_arg.strip()\n';
     code += '    else:\n';

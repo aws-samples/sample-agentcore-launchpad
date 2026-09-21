@@ -2239,7 +2239,19 @@
     "announcements.conflict": "此公告在加载后已发生变化，你的修改尚未应用。",
     "announcements.not_found": "此公告已不存在，可能已被其他管理员删除。",
     "run.evaluator_package_ambiguous": "该评估器使用包含多套规则的旧版 Lambda 包。请先创建使用独立单规则包的替代评估器，再运行评估。",
-    "assistant.resources_locked": "批准创建后，资源选择已锁定。请到 Agent 管理页修改现有 Agent 的配置并重新部署。"
+    "assistant.resources_locked": "批准创建后，资源选择已锁定。请到 Agent 管理页修改现有 Agent 的配置并重新部署。",
+    "chat.attachment_too_many": "附件数量过多，请按上方显示的限制移除部分文件。",
+    "chat.attachment_too_large": "附件超过单个文件或合计大小限制，请选择更小的文件。",
+    "chat.attachment_invalid": "附件为空、已损坏或与声明的格式不符，请选择有效文件。",
+    "chat.attachment_unsupported": "此智能体不支持该附件格式，请选择上方列出的格式。",
+    "chat.attachment_image_unsupported": "此智能体无法接收图片，请使用支持原生图片的智能体。",
+    "chat.attachment_pdf_unreadable": "无法读取此 PDF，请选择未加密且未损坏的 PDF。",
+    "chat.attachment_pdf_text_unavailable": "此 PDF 包含无法提取文本的页面。扫描件或纯图片页面请使用支持原生 PDF 的智能体。",
+    "chat.attachment_pdf_too_long": "此 PDF 超过文本提取限制，请拆分为较小的 PDF。",
+    "chat.attachment_text_too_large": "附件提取出的文本过长，请缩短内容或拆分为较小的文件。",
+    "chat.attachment_republish_required": "当前部署尚不支持原生附件。请重新发布并新建会话，或使用文本文件及可提取文本的 PDF。",
+    "chat.attachment_new_session_required": "此会话仍在运行旧版智能体。请选择“新会话”，然后重新添加附件。",
+    "chat.attachment_canary_unsupported": "启用金丝雀路由时暂不支持附件，请使用未启用金丝雀路由的智能体。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",
@@ -2283,7 +2295,47 @@
     "endDisabledBusy": "正在结束会话……",
     "ended": "Runtime 会话已结束——下一条提示词将开启新会话",
     "endedAlready": "该 Runtime 会话早已结束——下一条提示词将开启新会话",
-    "pickAgent": "选择智能体…"
+    "pickAgent": "选择智能体…",
+    "messageLabel": "消息",
+    "sendDisabledNoAgent": "请先选择一个活动智能体。",
+    "sendDisabledEmpty": "请输入消息或添加附件。",
+    "sendDisabledEmptyText": "请输入要发送的消息。",
+    "waitForReply": "请等待回复结束",
+    "streamInterrupted": "响应流意外中断，草稿已保留。重试前请先检查对话内容。",
+    "sendFailed": "消息发送失败，请重试。",
+    "attachments": {
+      "add": "附件",
+      "pending": "待发送附件",
+      "sent": "附件",
+      "remove": "移除 {{name}}",
+      "images": "图片",
+      "text": "UTF-8 文本文件",
+      "pdfNative": "PDF",
+      "pdfText": "PDF 文本提取",
+      "extractionHint": "仅发送 PDF 中可提取的文本。图片和扫描件需要使用支持原生附件的智能体。",
+      "limits": "最多 {{count}} 个文件 · 每个 {{fileSize}} · 合计 {{totalSize}}",
+      "dropHint": "选择文件、拖放到此处，或粘贴图片。",
+      "unavailable": "此智能体暂不支持附件，请选择支持附件的智能体。",
+      "empty": "“{{name}}”为空，请选择有内容的文件。",
+      "count": "每条消息最多附带 {{count}} 个文件，请移除部分文件后再添加。",
+      "fileSize": "“{{name}}”超过 {{size}}，请选择更小的文件。",
+      "totalSize": "附件总大小超过 {{size}}，请移除部分文件或选择更小的文件。",
+      "format": "不支持“{{name}}”的格式，请选择上方列出的此智能体支持的格式。",
+      "imageUnsupported": "“{{name}}”是图片。此智能体支持文本文件及可提取文本的 PDF；发送图片请切换到支持图片的智能体。",
+      "readFailed": "无法读取文件，请移除后重新选择。",
+      "delivery": {
+        "native": "原生附件",
+        "text": "文本",
+        "pdf_text": "PDF 提取文本"
+      },
+      "reasons": {
+        "harness": "此托管 Harness 支持文本文件和 PDF 文本提取。图片及扫描件需要使用支持原生附件的智能体。",
+        "republish": "当前部署需要重新发布才能支持原生附件。请重新发布智能体，再选择“新会话”。在此之前，可使用文本文件或能提取文本的 PDF。",
+        "custom": "此自定义或导入智能体的原生附件契约尚不明确。目前可使用文本文件和 PDF 文本提取；图片及扫描件需要已确认支持原生附件的智能体。",
+        "model": "此智能体的当前模型尚未启用原生文件支持，可使用文本文件和 PDF 文本提取。如需原生文件，请选择支持的模型、重新发布，再新建会话。",
+        "not_active": "此智能体尚未处于活动状态，请完成部署后再发送附件。"
+      }
+    }
   },
   "evalPage": {
     "metaLive": "批量 + 洞察 · LLM 评审 · 并发限额 — 队列托管",

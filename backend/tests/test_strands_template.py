@@ -110,7 +110,8 @@ def _mantle_module(tmp_path: Path, monkeypatch, spec=MANTLE_SPEC):
 def test_mantle_build_model_mints_from_iam_in_the_model_region(tmp_path: Path, monkeypatch):
     module, captured = _mantle_module(tmp_path, monkeypatch)
     model = module.build_model()
-    assert type(model).__name__ == "FakeOpenAIResponsesModel"
+    assert type(model).__name__ == "LaunchpadOpenAIResponsesModel"
+    assert type(model).__bases__[0].__name__ == "FakeOpenAIResponsesModel"
     # us-east-1, NOT AWS_REGION: the runtime lives in us-west-2, where these
     # models are not offered.
     assert captured == {
@@ -118,7 +119,7 @@ def test_mantle_build_model_mints_from_iam_in_the_model_region(tmp_path: Path, m
         "model_id": MANTLE_MODEL_ID,
     }
     # the Agent gets a model OBJECT, not the bare id a Converse agent gets
-    assert type(module.build_agent("a", "s").model).__name__ == "FakeOpenAIResponsesModel"
+    assert type(module.build_agent("a", "s").model).__name__ == "LaunchpadOpenAIResponsesModel"
 
 
 def test_mantle_region_is_overridable(tmp_path: Path, monkeypatch):

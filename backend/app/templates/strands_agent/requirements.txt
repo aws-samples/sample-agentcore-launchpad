@@ -1,4 +1,5 @@
-strands-agents[otel]>=1.0,<2
+# AgentCore 1.17 imports experimental Bidi hooks removed by Strands 1.56.
+strands-agents[otel]==1.47.0
 bedrock-agentcore==1.17.*
 boto3>=1.43.66,<2
 aws-opentelemetry-distro>=0.10,<1

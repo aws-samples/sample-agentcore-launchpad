@@ -474,6 +474,8 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
 
 
 def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
+    from app.deployer.input_contract import record_input_contract
+
     bucket = ctx.workspace.resources.get("artifacts_bucket")
     if not bucket:
         raise RuntimeError(
@@ -508,6 +510,7 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     s3_key = f"agents/{agent.name}/deployment_package.zip"
     ctx.workspace.client("s3").upload_file(str(zip_path), bucket, s3_key)
     ctx.scratch["s3_bucket"], ctx.scratch["s3_key"] = bucket, s3_key
+    record_input_contract(ctx, code)
     ctx.log(f"pip+zip {pip_secs:.1f}s · {size_mb:.1f}MB → s3://{bucket}/{s3_key}")
     detail = f"pip+zip {pip_secs:.1f}s · {size_mb:.1f}MB · s3 ✓"
     if bundled.get("bundled"):
@@ -582,6 +585,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         )
         row.arn = ready["agentRuntimeArn"]
         row.version = str(ready.get("agentRuntimeVersion", row.version or "1"))
+        from app.deployer.input_contract import stamp_input_contract
+
+        stamp_input_contract(ctx, db, row)
         db.commit()
         return StageResult(detail=f"READY · {ready['agentRuntimeArn']}")
     finally:

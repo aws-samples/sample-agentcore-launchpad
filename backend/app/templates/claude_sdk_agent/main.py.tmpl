@@ -195,13 +195,13 @@ def _create_memory(actor_id: str, session_id: str) -> AgentCoreMemory | None:
         return None
 
 
-def _memory_hook(memory: AgentCoreMemory):
+def _memory_hook(memory: AgentCoreMemory, text_prompt: str | None = None):
     async def user_prompt_submit(
         input_data: dict[str, Any],
         _tool_use_id: str | None,
         _context: dict[str, Any],
     ) -> dict[str, Any]:
-        prompt = str(input_data.get("prompt", "")).strip()
+        prompt = text_prompt if text_prompt is not None else str(input_data.get("prompt", "")).strip()
         if not prompt:
             return {}
         context_text = await asyncio.to_thread(memory.context_for, prompt)
@@ -414,7 +414,9 @@ def _kb_mcp_servers() -> dict[str, Any]:
     }
 
 
-def build_options(memory: AgentCoreMemory | None = None) -> ClaudeAgentOptions:
+def build_options(
+    memory: AgentCoreMemory | None = None, text_prompt: str | None = None
+) -> ClaudeAgentOptions:
     kwargs: dict[str, Any] = {
         "system_prompt": SYSTEM_PROMPT,
         "model": MODEL_ID,
@@ -432,7 +434,7 @@ def build_options(memory: AgentCoreMemory | None = None) -> ClaudeAgentOptions:
     if memory:
         kwargs["hooks"] = {
             "UserPromptSubmit": [
-                HookMatcher(matcher=None, hooks=[_memory_hook(memory)]),
+                HookMatcher(matcher=None, hooks=[_memory_hook(memory, text_prompt)]),
             ]
         }
     return ClaudeAgentOptions(**kwargs)
@@ -494,22 +496,29 @@ async def _events_with_heartbeat(
             await close()
 
 
+LAUNCHPAD_ATTACHMENT_CONTRACT = 'v1'
+
+__LAUNCHPAD_ATTACHMENT_SOURCE__
+
+
 async def _query_messages(
-    prompt: str,
+    prompt: str | AsyncIterator[dict[str, Any]],
     memory: AgentCoreMemory | None,
     session_id: str,
+    text_prompt: str | None = None,
 ) -> AsyncIterator[Any]:
     """Keep the AgentCore Runtime session active for the native query span."""
     with using_session(session_id):
-        async for message in query(prompt=prompt, options=build_options(memory)):
+        async for message in query(prompt=prompt, options=build_options(memory, text_prompt)):
             yield message
 
 
 async def _query_events(
-    prompt: str,
+    prompt: str | AsyncIterator[dict[str, Any]],
     memory: AgentCoreMemory | None,
     outcome: QueryOutcome,
     session_id: str,
+    text_prompt: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream one SDK query while collecting its authoritative final outcome.
 
@@ -521,7 +530,7 @@ async def _query_events(
     partial_chunks: list[str] = []
     fallback_result = ""
     partial_since_assistant = False
-    async for message in _query_messages(prompt, memory, session_id):
+    async for message in _query_messages(prompt, memory, session_id, text_prompt):
         if isinstance(message, StreamEvent):
             event = message.event
             delta = event.get("delta") if event.get("type") == "content_block_delta" else None
@@ -580,10 +589,15 @@ async def _invocation_events(
     prompt: str,
     session_id: str,
     actor_id: str,
+    attachments: list | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
+    model_input = _launchpad_claude_input(prompt, attachments)
     memory = _create_memory(actor_id, session_id)
     outcome = QueryOutcome()
-    async for event in _query_events(prompt, memory, outcome, session_id):
+    if attachments:
+        yield {"event": "attachments", "contract": "v1"}
+    query_kwargs = {"text_prompt": prompt} if attachments else {}
+    async for event in _query_events(model_input, memory, outcome, session_id, **query_kwargs):
         yield event
     if memory:
         await asyncio.to_thread(memory.save_turn, prompt, outcome.result)
@@ -597,14 +611,14 @@ async def invoke(
     if isinstance(payload, (str, bytes)):
         payload = json.loads(payload)
     prompt = str(payload.get("prompt", "")).strip()
-    if not prompt:
+    if not prompt and not payload.get("attachments"):
         yield {"event": "error", "message": "payload must include a non-empty 'prompt'"}
         return
     session_id = str(
         getattr(context, "session_id", "") or payload.get("session_id", "") or "adhoc"
     )
     actor_id = str(payload.get("actor_id", "")).strip()
-    events = _invocation_events(prompt, session_id, actor_id)
+    events = _invocation_events(prompt, session_id, actor_id, payload.get("attachments"))
     async for event in _events_with_heartbeat(events):
         yield event
 

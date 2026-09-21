@@ -14,6 +14,8 @@ NOT attempted (rewriting user code is unsafe); the shim exposes
 docs/studio-integration.md.
 """
 
+from app.templates.attachment_support import has_attachment_contract, render_attachment_source
+
 BUNDLE_SHIM = '''
 # ─── Launchpad platform contract: config bundles (A/B experiments) ───────────
 from bedrock_agentcore.runtime.context import BedrockAgentCoreContext as _LPContext
@@ -42,7 +44,10 @@ app = BedrockAgentCoreApp()
 @app.entrypoint
 async def invoke(payload, context=None):
     prompt = str((payload or {}).get("prompt", "")).strip()
-    if not prompt:
+    attachments = (payload or {}).get("attachments")
+    if attachments and not __LAUNCHPAD_STUDIO_NATIVE_INPUT__:
+        return {"error": "studio code lacks native attachments; regenerate and republish"}
+    if not prompt and not attachments:
         return {"error": "payload must include a non-empty 'prompt'"}
     if "main" not in globals():
         return {"error": "studio module does not define main()"}
@@ -50,7 +55,10 @@ async def invoke(payload, context=None):
         arity = len(_lp_inspect.signature(main).parameters)
     except (TypeError, ValueError):
         arity = 2
-    call_args = [prompt, None][: min(2, arity)]
+    if attachments and arity < 1:
+        return {"error": "studio main() cannot receive native attachments"}
+    model_input = _launchpad_strands_input(prompt, attachments) if attachments else prompt
+    call_args = [model_input, None][: min(2, arity)]
     buffer = _lp_io.StringIO()
     with _lp_contextlib.redirect_stdout(buffer):
         outcome = main(*call_args)
@@ -59,6 +67,8 @@ async def invoke(payload, context=None):
     text = buffer.getvalue().strip()
     if not text and outcome is not None:
         text = str(outcome)
+    if attachments:
+        return {"attachment_contract": "v1", "result": text}
     return {"result": text}
 
 
@@ -74,7 +84,11 @@ def _wrap_studio_module(code: str) -> str:
         if line.startswith("if __name__"):
             lines = lines[:index]
             break
-    return "\n".join(lines).rstrip() + "\n" + ENTRYPOINT_WRAPPER
+    module = "\n".join(lines).rstrip()
+    native_input = has_attachment_contract(module)
+    helper = "\n" + render_attachment_source() if native_input else ""
+    wrapper = ENTRYPOINT_WRAPPER.replace("__LAUNCHPAD_STUDIO_NATIVE_INPUT__", repr(native_input))
+    return module + "\n" + helper + wrapper
 
 
 def adapt_studio_code(code: str) -> str:
