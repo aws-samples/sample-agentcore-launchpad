@@ -7,6 +7,7 @@ template stays brace-safe Python. Rendered output must always compile.
 from pathlib import Path
 
 from app.schemas.agent import AgentSpec
+from app.templates.attachment_support import render_attachment_source
 from app.templates.gateway_support import render_gateway_source, uses_gateway
 from app.templates.kb_support import (
     KB_DEEP_TOOL_NAME,
@@ -44,7 +45,8 @@ def render_main_py(spec: AgentSpec) -> str:
     # the assignment), so this renders as a Python list literal, not a repr.
     toolkit_tools = "[" + ", ".join(toolkit_tool_names(list(spec.toolkits))) + "]"
     return (
-        source.replace("__LAUNCHPAD_SKILLS_ENABLED__", repr(bool(spec.skills)))
+        source.replace("__LAUNCHPAD_ATTACHMENT_SOURCE__", render_attachment_source())
+        .replace("__LAUNCHPAD_SKILLS_ENABLED__", repr(bool(spec.skills)))
         .replace("__LAUNCHPAD_AGENT_NAME__", spec.name)
         .replace("__LAUNCHPAD_MODEL_ID__", spec.model_id)
         .replace("__LAUNCHPAD_MODEL_SOURCE__", spec.model_source)

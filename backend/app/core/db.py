@@ -162,6 +162,9 @@ def _migrate(bind) -> None:
                 conn.execute(
                     text("CREATE INDEX IF NOT EXISTS ix_agents_system_key ON agents (system_key)")
                 )
+        if "attachment_version" not in existing:
+            with bind.begin() as conn:
+                conn.execute(text("ALTER TABLE agents ADD COLUMN attachment_version VARCHAR(16)"))
     if "deployments" in inspector.get_table_names():
         existing = {c["name"] for c in inspector.get_columns("deployments")}
         if "image_digest" not in existing:
@@ -226,6 +229,16 @@ def _migrate(bind) -> None:
                         "ADD COLUMN sample BOOLEAN DEFAULT 0 NOT NULL"
                     )
                 )
+    for table, column, ddl in (
+        ("chat_messages", "attachments", "ALTER TABLE chat_messages ADD COLUMN attachments JSON"),
+        ("chat_sessions", "runtime_version",
+         "ALTER TABLE chat_sessions ADD COLUMN runtime_version VARCHAR(16)"),
+    ):
+        if table in inspector.get_table_names():
+            existing = {c["name"] for c in inspector.get_columns(table)}
+            if column not in existing:
+                with bind.begin() as conn:
+                    conn.execute(text(ddl))
     _migrate_assistant_columns(bind)
     _migrate_workspace_columns(bind)
     _migrate_system_key_index(bind)

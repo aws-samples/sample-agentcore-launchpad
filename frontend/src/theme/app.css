@@ -411,6 +411,26 @@ td.chipcell{min-width:170px}
 .histrow-act .btn-hint{max-width:18ch;font-size:9px;margin-inline-end:6px}
 .chatbar{display:flex;gap:10px;padding:13px 16px;border-top:1px solid var(--line)}
 .chatbar .input{flex:1;background:#0E1210;border:1px solid var(--line-2);padding:11px 14px;color:var(--ink);font-size:13px}
+.chat-composer{border-top:1px solid var(--line);min-width:0}
+.chat-composer.dragging{outline:2px dashed var(--amber);outline-offset:-3px;background:rgba(255,176,0,.06)}
+.chat-composer .chatbar{border-top:0;flex-wrap:wrap;align-items:center}
+.chat-composer .chatbar .input{min-width:140px;width:0}
+.chat-composer>.chat-attachments{padding:12px 16px 0}
+.chat-attachment-hint{display:flex;flex-wrap:wrap;gap:4px 16px;padding:10px 16px;border-bottom:1px solid var(--line);font-size:11px;color:var(--ink-2);line-height:1.5}
+.chat-attachment-hint>span:first-child{color:var(--ink)}
+.chat-attachment-help{padding:0 16px 12px;color:var(--ink-3);font-size:11px}
+.chat-attachments{display:flex;flex-wrap:wrap;gap:8px;list-style:none;padding:0;margin:0;min-width:0}
+.bub .chat-attachments{margin-top:8px}
+.chat-attachment{display:flex;align-items:center;gap:8px;min-width:0;max-width:100%;padding:8px 10px;border:1px solid var(--line-2);background:var(--panel-2);font-size:12px;text-align:left}
+.chat-attachment-info{display:flex;flex-direction:column;min-width:0;gap:2px}
+.chat-attachment-info .dim{font-size:10px;overflow-wrap:anywhere}
+.chat-attachment-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:240px}
+.chat-attachment-preview{width:42px;height:42px;object-fit:cover;flex:none;border-radius:3px}
+.chat-attachment-remove{border:0;background:transparent;color:var(--ink-2);font-size:20px;cursor:pointer;padding:4px 8px;flex:none}
+.chat-attachment-remove:hover{color:var(--crit)}
+.chat-attachment-remove:disabled{opacity:.4;cursor:default}
+.chat-attachment-error{padding:10px 16px 0;color:var(--crit);font-size:12px;overflow-wrap:anywhere}
+.histrow:disabled{cursor:wait;opacity:.65}
 .chatbar .input::placeholder{color:var(--ink-3)}
 
 /* ============ markdown (chat bubbles) ============ */

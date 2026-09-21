@@ -468,7 +468,7 @@ def test_build_conversion_spec_without_kbs_keeps_existing_bundle_shape(monkeypat
         default_system_prompt=_source_agent().spec["system_prompt"],
         tool_description_overrides=None,
     )
-    assert spec.code_bundle == {"main.py": expected}
+    assert spec.code_bundle == {"main.py": hc.graft_runtime_attachments(expected)}
     assert spec.knowledge_bases == []
     assert hc.KB_GRAFT_START not in spec.code_bundle["main.py"]
 

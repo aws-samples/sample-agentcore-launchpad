@@ -124,6 +124,8 @@ def build_and_push_image(ctx: StageContext, agent: Agent, archive: str) -> tuple
 
 
 def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
+    from app.deployer.input_contract import record_input_contract
+
     spec = AgentSpec(**agent.spec)
     context_dir = Path(
         ctx.scratch.get("context_dir")
@@ -132,6 +134,7 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     archive = shutil.make_archive(str(context_dir) + "_src", "zip", context_dir)
     tag, mins = build_and_push_image(ctx, agent, archive)
     digest = ctx.scratch["image_digest"]
+    record_input_contract(ctx, (context_dir / "main.py").read_text(encoding="utf-8"))
     return StageResult(detail=f"codebuild · arm64 · {mins:.1f}m → :{tag} @ {digest[:19]}…")
 
 
@@ -300,6 +303,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             client, runtime_id, on_status=lambda s: ctx.log(f"runtime status: {s}")
         )
         row.arn = ready["agentRuntimeArn"]
+        from app.deployer.input_contract import stamp_input_contract
+
+        stamp_input_contract(ctx, db, row)
         db.commit()
         return StageResult(detail=f"READY · {ready['agentRuntimeArn']}")
     finally:

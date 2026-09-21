@@ -2239,7 +2239,19 @@
     "announcements.conflict": "This announcement has changed since you loaded it. Your changes were not applied.",
     "announcements.not_found": "This announcement no longer exists. It may have been deleted by another administrator.",
     "run.evaluator_package_ambiguous": "This evaluator uses a legacy Lambda package with multiple rule sets. Create a replacement code evaluator with its own single-rule package before running it.",
-    "assistant.resources_locked": "Resource selection is locked after approval. Edit and redeploy the existing Agent from Agent management."
+    "assistant.resources_locked": "Resource selection is locked after approval. Edit and redeploy the existing Agent from Agent management.",
+    "chat.attachment_too_many": "Too many attachments. Remove files to stay within the limits shown above.",
+    "chat.attachment_too_large": "Attachments exceed the file or total size limit. Choose smaller files.",
+    "chat.attachment_invalid": "An attachment is empty, damaged, or does not match its declared format. Choose a valid file.",
+    "chat.attachment_unsupported": "This attachment format is not supported by the agent. Choose one of the formats shown above.",
+    "chat.attachment_image_unsupported": "This agent cannot receive images. Use an agent with native image support.",
+    "chat.attachment_pdf_unreadable": "This PDF cannot be read. Choose an unencrypted, undamaged PDF.",
+    "chat.attachment_pdf_text_unavailable": "This PDF includes pages without extractable text. Use an agent with native PDF support for scanned or image-only pages.",
+    "chat.attachment_pdf_too_long": "This PDF exceeds the extraction limit. Split it into smaller PDFs.",
+    "chat.attachment_text_too_large": "The extracted attachment text is too long. Shorten the file or split it into smaller files.",
+    "chat.attachment_republish_required": "This deployed agent cannot receive native attachments yet. Republish it, then start a new session, or use text files and PDFs with extractable text.",
+    "chat.attachment_new_session_required": "This session runs an older agent version. Choose NEW SESSION, then attach the files again.",
+    "chat.attachment_canary_unsupported": "Attachments are unavailable while canary routing is active. Use an agent without canary routing."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",
@@ -2283,7 +2295,47 @@
     "endDisabledBusy": "Ending a session…",
     "ended": "Runtime session ended — the next prompt starts a fresh session",
     "endedAlready": "The runtime session had already ended — the next prompt starts a fresh session",
-    "pickAgent": "Pick an agent…"
+    "pickAgent": "Pick an agent…",
+    "messageLabel": "Message",
+    "sendDisabledNoAgent": "Select an active agent to send a message.",
+    "sendDisabledEmpty": "Enter a message or attach a file.",
+    "sendDisabledEmptyText": "Enter a message to send.",
+    "waitForReply": "Wait for the reply to finish",
+    "streamInterrupted": "The response stream ended unexpectedly. Your draft is retained; check the conversation before retrying.",
+    "sendFailed": "The message could not be sent. Try again.",
+    "attachments": {
+      "add": "Attach",
+      "pending": "Pending attachments",
+      "sent": "Attachments",
+      "remove": "Remove {{name}}",
+      "images": "Images",
+      "text": "UTF-8 text files",
+      "pdfNative": "PDFs",
+      "pdfText": "PDF text extraction",
+      "extractionHint": "Only extractable PDF text is sent. Images and scanned PDFs require a compatible agent.",
+      "limits": "Up to {{count}} files · {{fileSize}} each · {{totalSize}} total",
+      "dropHint": "Choose files, drop them here, or paste an image.",
+      "unavailable": "Attachments are unavailable for this agent. Select an agent with attachment support.",
+      "empty": "“{{name}}” is empty. Choose a file with content.",
+      "count": "Attach up to {{count}} files per message. Remove a file before adding more.",
+      "fileSize": "“{{name}}” exceeds {{size}}. Choose a smaller file.",
+      "totalSize": "Attachments exceed {{size}} in total. Remove a file or choose smaller files.",
+      "format": "“{{name}}” has an unsupported format. Choose a format listed above for this agent.",
+      "imageUnsupported": "“{{name}}” is an image. This agent accepts text files and PDFs with extractable text; use a compatible agent for images.",
+      "readFailed": "A file could not be read. Remove it and select it again.",
+      "delivery": {
+        "native": "Native attachment",
+        "text": "Text",
+        "pdf_text": "Extracted PDF text"
+      },
+      "reasons": {
+        "harness": "This managed Harness accepts text files and extracts PDF text. Images and scanned PDFs require an agent with native attachment support.",
+        "republish": "This deployment needs to be republished for native attachments. Republish the agent, then choose NEW SESSION. Until then, use text files or PDFs with extractable text.",
+        "custom": "The native attachment contract of this custom or imported agent is unknown. Text files and PDF text extraction are available; images and scanned PDFs require a verified native contract.",
+        "model": "Native files are not enabled for this agent’s current model. Text files and PDF text extraction remain available. For native files, select a supported model, republish, then start a new session.",
+        "not_active": "This agent is not active. Complete deployment before sending attachments."
+      }
+    }
   },
   "evalPage": {
     "metaLive": "BATCH + INSIGHTS · LLM-AS-A-JUDGE · CONCURRENCY-CAPPED — QUEUE MANAGED",

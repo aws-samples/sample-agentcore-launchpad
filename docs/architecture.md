@@ -1963,6 +1963,39 @@ public  /v1  ──┘        │
                         └─ Observability (spans → CloudWatch Transaction Search)
 ```
 
+### Playground file attachments
+
+Chat and all sync/SSE invoke entrances accept the same optional
+`attachments: [{name, media_type, data}]` contract, with base64 wire data and
+server-side content validation. `services/attachments.py` prepares files once:
+UTF-8 text and explicitly labeled PDF text extraction enter the user prompt;
+native images/PDFs remain separate until the runtime adapter. The composer
+offers selection, drop and image paste with previews, removal and limits read
+from the agent's server-derived `attachment_capability`.
+
+Managed Harness accepts text blocks, so its PDF support extracts text only.
+Images and nonblank pages without extractable text require a native-capable
+agent. PDF parsing is isolated in a resource-bounded process. Generated
+Strands/Claude/Studio/converted HTTP artifacts hydrate native file bytes and
+acknowledge them before model output; Strands A2A uses standard file parts.
+Mantle documents use `file_data` plus `filename`, because its `file_url` accepts
+only S3 references.
+
+Native support is bound to a packaged artifact and its successful AWS runtime
+version (`Agent.attachment_version`, server-owned). Old HTTP deployments retain
+text/text-PDF input and need republishing for native files. Existing sessions
+remain pinned to their old version; `ChatSession.runtime_version` catches stale
+console sessions before invocation, and the runtime acknowledgement also guards
+public sessions that have no console history. Native attachments are refused
+during active canary routing until both artifacts can be proven compatible.
+
+`ChatMessage.attachments` stores only filenames, media types, sizes and delivery
+mode; raw bytes/base64 never enter the chat ledger. Reloaded history shows that
+metadata, while original bytes remain transient in the invocation path. Existing
+framework-owned AgentCore Memory behavior is unchanged. See
+[attachment research and design](playground-attachments-research.md) and the
+[Chat API contract](api.md#console-chat-api).
+
 ### Gateway (MCP) tools reach both a Harness and a zip runtime
 
 A gateway `ToolRef` used to be a harness-only capability, which split the lab

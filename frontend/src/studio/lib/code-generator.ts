@@ -1,5 +1,5 @@
 import { type Node, type Edge } from '@xyflow/react';
-import { generateGraphCode } from './graph-code-generator';
+import { generateGraphCode, MANTLE_ATTACHMENT_ADAPTER } from './graph-code-generator';
 import { DEFAULT_MODEL_ID, MANTLE_PROVIDER, mantleModelArgs } from './models';
 
 interface CodeGenerationResult {
@@ -54,7 +54,7 @@ export function generateStrandsAgentCode(
   }
 
   const errors: string[] = [];
-  let code = '';
+  let code = "LAUNCHPAD_ATTACHMENT_CONTRACT = 'v1'\n\n";
 
   try {
     // Find all node types
@@ -74,6 +74,7 @@ export function generateStrandsAgentCode(
     const hasMantleProvider = allAgentNodes.some(node => node.data?.modelProvider === MANTLE_PROVIDER);
     if (hasMantleProvider) {
       imports.add('from strands.models.openai_responses import OpenAIResponsesModel');
+      code += MANTLE_ATTACHMENT_ADAPTER;
     }
 
     // Validate mandatory nodes
@@ -604,7 +605,7 @@ function generateMainExecutionCode(
   const mcpNodes = allNodes.filter(node => node.type === 'mcp-tool');
   
   let mainCode = `# Main execution
-async def main(user_input_arg: str = None, messages_arg: str = None):`;
+async def main(user_input_arg: str | list = None, messages_arg: str = None):`;
 
   // Find the agent that should be executed (connected to input)
   const executionAgent = findConnectedAgent(allNodes, edges);
@@ -833,6 +834,8 @@ ${baseIndent}        # Pass the full messages list to the agent
 ${baseIndent}        user_input = messages_list[-1]['content']
 ${baseIndent}    except (json.JSONDecodeError, KeyError, TypeError):
 ${baseIndent}        user_input = "Hello, how can you help me?"
+${baseIndent}elif isinstance(user_input_arg, list):
+${baseIndent}    user_input = user_input_arg
 ${baseIndent}elif user_input_arg is not None and user_input_arg.strip():
 ${baseIndent}    user_input = user_input_arg.strip()
 ${baseIndent}else:
@@ -849,6 +852,8 @@ ${baseIndent}        # Pass the full messages list to the agent
 ${baseIndent}        user_input = messages_list
 ${baseIndent}    except (json.JSONDecodeError, KeyError, TypeError):
 ${baseIndent}        user_input = "Hello, how can you help me?"
+${baseIndent}elif isinstance(user_input_arg, list):
+${baseIndent}    user_input = user_input_arg
 ${baseIndent}elif user_input_arg is not None and user_input_arg.strip():
 ${baseIndent}    user_input = user_input_arg.strip()
 ${baseIndent}else:
@@ -1462,7 +1467,7 @@ function generateModelConfigForCode(
     if (thinkingEnabled && reasoningEffort) {
       params.push(`"reasoning": {"effort": "${reasoningEffort}"}`);
     }
-    return `${varName}_model = OpenAIResponsesModel(${clientArgsStr}
+    return `${varName}_model = LaunchpadOpenAIResponsesModel(${clientArgsStr}
     model_id="${modelIdentifier}",
     params={
         ${params.join(',\n        ')},
@@ -1570,7 +1575,7 @@ function generateModelConfigForTool(
     if (thinkingEnabled && reasoningEffort) {
       params.push(`"reasoning": {"effort": "${reasoningEffort}"}`);
     }
-    return `${varName}_model = OpenAIResponsesModel(${clientArgsStr}
+    return `${varName}_model = LaunchpadOpenAIResponsesModel(${clientArgsStr}
             model_id="${modelIdentifier}",
             params={
                 ${params.join(',\n                ')},

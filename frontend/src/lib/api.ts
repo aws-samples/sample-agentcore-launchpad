@@ -91,11 +91,59 @@ export interface AgentInfo {
     reason: string | null;
     reason_code: string | null;
   };
+  /** Absent on older servers; native support is always a server-owned verdict. */
+  attachment_capability?: AttachmentCapability;
   created_at: string | null;
   updated_at: string | null;
   deployment?: DeploymentInfo;
   deployments?: DeploymentInfo[];
   revision?: number;
+}
+
+export interface AttachmentCapability {
+  images: boolean;
+  text: boolean;
+  pdf: "native" | "text" | "unsupported";
+  reason_code: string | null;
+  accept: string[];
+  max_files: number;
+  max_file_bytes: number;
+  max_total_bytes: number;
+}
+
+export interface ChatAttachment {
+  name: string;
+  media_type: string;
+  data: string;
+}
+
+export interface ChatAttachmentMetadata {
+  name: string;
+  media_type: string;
+  size: number;
+  delivery: "native" | "text" | "pdf_text";
+}
+
+export interface ChatRequest {
+  prompt: string;
+  session_id: string | null;
+  attachments?: ChatAttachment[];
+}
+
+export interface ChatStreamPayload {
+  session_id?: string;
+  text?: string;
+  name?: string;
+  code?: string;
+  message?: string;
+  attachments?: ChatAttachmentMetadata[];
+}
+
+export interface ChatHistoryMessage {
+  role: string;
+  text: string;
+  name: string | null;
+  attachments?: ChatAttachmentMetadata[];
 }
 
 export interface SystemAgentIdentity {
