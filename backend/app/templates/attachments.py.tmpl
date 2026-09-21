@@ -1,0 +1,103 @@
+def _launchpad_decode_attachments(attachments):
+    """Decode the platform's validated native image/PDF envelope without byte loss."""
+    import base64
+    import binascii
+
+    decoded = []
+    for attachment in attachments or []:
+        media_type = attachment["media_type"]
+        if media_type not in (
+            "image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"
+        ):
+            raise ValueError("unsupported native attachment media type")
+        try:
+            data = base64.b64decode(attachment["data"], validate=True)
+        except (binascii.Error, ValueError, TypeError) as exc:
+            raise ValueError("invalid attachment base64") from exc
+        if not data:
+            raise ValueError("empty attachment data")
+        decoded.append((attachment["name"], media_type, data))
+    return decoded
+
+
+def _launchpad_strands_input(prompt, attachments):
+    """Plain text stays text; native files become Strands ContentBlocks."""
+    if not attachments:
+        return prompt
+    content = [{"text": prompt}] if prompt else []
+    for name, media_type, data in _launchpad_decode_attachments(attachments):
+        if media_type == "application/pdf":
+            content.append({"document": {
+                "format": "pdf",
+                "name": name.rsplit(".", 1)[0],
+                "source": {"bytes": data},
+            }})
+        else:
+            content.append({"image": {
+                "format": media_type.split("/", 1)[1],
+                "source": {"bytes": data},
+            }})
+    # Converse requires text alongside a document, including attachment-only sends.
+    if not prompt:
+        content.insert(0, {"text": "Please review the attached files."})
+    return content
+
+
+def _launchpad_claude_input(prompt, attachments):
+    """Claude query's native input is an async iterable of user messages."""
+    import base64
+
+    if not attachments:
+        return prompt
+    content = [{"type": "text", "text": prompt}] if prompt else []
+    for _name, media_type, data in _launchpad_decode_attachments(attachments):
+        content.append({
+            "type": "document" if media_type == "application/pdf" else "image",
+            "source": {
+                "type": "base64", "media_type": media_type,
+                "data": base64.b64encode(data).decode("ascii"),
+            },
+        })
+
+    async def messages():
+        yield {"type": "user", "message": {"role": "user", "content": content}}
+
+    return messages()
+
+
+def _launchpad_attachment_messages(prompt, attachments):
+    """Preserve exported Harness message history while hydrating the current turn."""
+    if isinstance(prompt, str):
+        return [{"role": "user", "content": _launchpad_strands_input(prompt, attachments)}]
+    if not isinstance(prompt, list):
+        raise ValueError("attachment input must be text or messages")
+    messages = list(prompt)
+    content = _launchpad_strands_input("", attachments)
+    if messages and messages[-1].get("role") == "user":
+        previous = list(messages[-1]["content"])
+        files = content[1:]
+        if not any(block.get("text") for block in previous):
+            files = content
+        messages[-1] = {**messages[-1], "content": previous + files}
+    else:
+        messages.append({"role": "user", "content": content})
+    return messages
+
+
+def _launchpad_mantle_model_class(base):
+    """Strands 1.47 uses file_url for inline files; Mantle requires file_data."""
+    class LaunchpadOpenAIResponsesModel(base):
+        @classmethod
+        def _format_request_message_content(cls, content, *, role="user"):
+            value = super()._format_request_message_content(content, role=role)
+            file_url = value.get("file_url")
+            if "document" in content and isinstance(file_url, str) and file_url.startswith("data:"):
+                value = dict(value)
+                value["file_data"] = value.pop("file_url")
+                document = content["document"]
+                name = document.get("name") or "attachment"
+                extension = "." + document["format"]
+                value["filename"] = name if name.endswith(extension) else name + extension
+            return value
+
+    return LaunchpadOpenAIResponsesModel

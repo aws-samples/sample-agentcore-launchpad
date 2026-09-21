@@ -36,6 +36,10 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from bedrock_agentcore.runtime.context import BedrockAgentCoreContext
 from strands import Agent, tool
 
+LAUNCHPAD_ATTACHMENT_CONTRACT = 'v1'
+
+__LAUNCHPAD_ATTACHMENT_SOURCE__
+
 # Shared AgentCore Memory (short-term events + long-term strategies), injected
 # by the platform at deploy time.
 MEMORY_ID = os.environ.get("LAUNCHPAD_MEMORY_ID", "")
@@ -202,7 +206,7 @@ def build_model() -> Any:
     if MODEL_SOURCE == "mantle":
         from strands.models.openai_responses import OpenAIResponsesModel
 
-        return OpenAIResponsesModel(
+        return _launchpad_mantle_model_class(OpenAIResponsesModel)(
             bedrock_mantle_config={"region": MANTLE_REGION},
             model_id=MODEL_ID,
         )
@@ -321,7 +325,7 @@ async def _events_with_heartbeat(
             await close()
 
 
-async def agent_events(agent: Agent, prompt: str) -> AsyncIterator[dict[str, Any]]:
+async def agent_events(agent: Agent, prompt: str | list) -> AsyncIterator[dict[str, Any]]:
     """Map Strands ``stream_async`` events onto the platform's runtime envelope.
 
     ``data`` text chunks become ``delta``; the first sight of each tool use
@@ -378,7 +382,10 @@ async def _turn_events(
         known = recall_context(actor_id, prompt)
         if known:
             agent.system_prompt = f"{resolve_system_prompt()}\n\nKnown user context:\n{known}"
-        async for event in agent_events(agent, prompt):
+        model_input = _launchpad_strands_input(prompt, payload.get("attachments"))
+        if payload.get("attachments"):
+            yield {"event": "attachments", "contract": "v1"}
+        async for event in agent_events(agent, model_input):
             yield event
 
 
@@ -387,7 +394,7 @@ async def invoke(
     payload: dict[str, Any], context: Any = None
 ) -> AsyncIterator[dict[str, Any]]:
     prompt = str(payload.get("prompt", "")).strip()
-    if not prompt:
+    if not prompt and not payload.get("attachments"):
         yield {"event": "error", "message": "payload must include a non-empty 'prompt'"}
         return
     session_id = str(getattr(context, "session_id", "") or payload.get("session_id", "") or "adhoc")

@@ -33,6 +33,7 @@ from app.core.errors import AppError
 from app.schemas.agent import AgentSpec, KnowledgeBaseRef, MemoryConfig, ToolRef
 from app.schemas.requirements import resolve_pins
 from app.services.workspace import WorkspaceContext
+from app.templates.attachment_support import render_attachment_source
 from app.templates.kb_support import (
     KB_DEEP_TOOL_NAME,
     KB_TOOL_NAME,
@@ -67,6 +68,12 @@ KB_GRAFT_END = "# </launchpad-direct-kb:v1>"
 GW_SOFTFAIL_START = "# <launchpad-gateway-softfail:v1>"
 GW_SOFTFAIL_END = "# </launchpad-gateway-softfail:v1>"
 GW_LAZY_TOKEN_MARK = "_launchpad_lazy_gateway_transport"
+ATTACHMENT_GRAFT_START = "# <launchpad-attachments:v1>"
+ATTACHMENT_GRAFT_END = "# </launchpad-attachments:v1>"
+_ATTACHMENT_INVOKE = '''    if payload.get("attachments"):
+        prompt = _launchpad_attachment_messages(prompt, payload["attachments"])
+        yield {"event": "attachments", "contract": "v1"}
+'''
 
 # The export's eager token fetch, one occurrence per attached gateway. It bakes the
 # Authorization header at MODULE scope, which is the reason a converted runtime
@@ -462,6 +469,123 @@ def graft_config_bundle(
     return grafted
 
 
+def graft_runtime_attachments(main_py: str) -> str:
+    """Hydrate files and acknowledge before streaming on the checked CLI entrypoint."""
+    helper = (
+        ATTACHMENT_GRAFT_START + "\nLAUNCHPAD_ATTACHMENT_CONTRACT = 'v1'\n\n"
+        + render_attachment_source() + ATTACHMENT_GRAFT_END + "\n\n"
+    )
+    # Only our complete, unmodified graft is idempotent. A partial or displaced
+    # graft must not declare a contract that the entrypoint no longer implements.
+    previous = main_py
+    has_graft = ATTACHMENT_GRAFT_START in main_py or ATTACHMENT_GRAFT_END in main_py
+    if has_graft:
+        if main_py.count(helper) != 1 or main_py.count(_ATTACHMENT_INVOKE) != 1:
+            raise ConversionError("attachment graft invalid: partial or modified owned graft")
+        main_py = main_py.replace(helper, "", 1).replace(_ATTACHMENT_INVOKE, "", 1)
+    if "LAUNCHPAD_ATTACHMENT_CONTRACT" in main_py or "_launchpad_attachment_messages" in main_py:
+        raise ConversionError("attachment graft invalid: unrecognized existing contract")
+    try:
+        tree = ast.parse(main_py)
+    except SyntaxError as exc:
+        raise ConversionError("attachment graft anchor invalid Python") from exc
+    invocations = [
+        node for node in tree.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "invoke"
+    ]
+    if len(invocations) != 1:
+        raise ConversionError("attachment graft anchor missing: one async invoke required")
+    invoke = invocations[0]
+    if (
+        len(invoke.decorator_list) != 1
+        or ast.unparse(invoke.decorator_list[0]) != "app.entrypoint"
+    ):
+        raise ConversionError("attachment graft anchor missing: @app.entrypoint")
+    assignments = [
+        node for node in invoke.body
+        if isinstance(node, ast.Assign)
+        and ast.unparse(node) == "prompt = _extract_prompt(payload)"
+    ]
+    prompt_writes = [
+        node for node in ast.walk(invoke)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id == "prompt"
+    ]
+    streams = [
+        node for node in ast.walk(invoke)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "stream_async"
+    ]
+    if (
+        len(assignments) != 1 or len(prompt_writes) != 1 or len(streams) != 1
+        or ast.unparse(streams[0]) != "agent.stream_async(prompt)"
+        or not any(
+            isinstance(node, ast.AsyncFor) and node.iter is streams[0]
+            for node in ast.walk(invoke)
+        )
+    ):
+        raise ConversionError("attachment graft anchor missing: prompt extraction / stream_async")
+    assignment = assignments[0]
+    if streams[0].lineno <= assignment.lineno or any(
+        isinstance(node, (ast.Yield, ast.YieldFrom)) and node.lineno < assignment.lineno
+        for node in ast.walk(invoke)
+    ):
+        raise ConversionError("attachment graft invalid: model events precede input adaptation")
+    lines = main_py.splitlines(keepends=True)
+    if lines[assignment.lineno - 1].strip() != "prompt = _extract_prompt(payload)":
+        raise ConversionError("attachment graft invalid: extraction must occupy its own line")
+    lines.insert(assignment.end_lineno, _ATTACHMENT_INVOKE)
+    lines.insert(invoke.decorator_list[0].lineno - 1, helper)
+    grafted = "".join(lines)
+    if has_graft and grafted != previous:
+        raise ConversionError("attachment graft invalid: misplaced owned graft")
+    return grafted
+
+
+def graft_mantle_attachment_model(model_py: str) -> str:
+    """Subclass the exported Responses model, retaining auth and other SDK overrides."""
+    marker = "# <launchpad-mantle-attachments:v1>"
+    helper = marker + "\n" + render_attachment_source() + "\n"
+    if marker in model_py:
+        if model_py.count(helper) != 1:
+            raise ConversionError("Mantle attachment graft invalid: modified helper")
+        model_py = model_py.replace(helper, "", 1)
+    try:
+        tree = ast.parse(model_py)
+    except SyntaxError as exc:
+        raise ConversionError("Mantle attachment graft anchor invalid Python") from exc
+    loads = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "load_model"]
+    if len(loads) != 1:
+        raise ConversionError("Mantle attachment graft anchor missing: load_model")
+    calls = [
+        node for node in ast.walk(loads[0])
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id in ("OpenAIResponsesModel", "MantleCompatResponsesModel")
+    ]
+    # On a second pass the class name is already inside the factory call.
+    adapted = [
+        node for node in ast.walk(loads[0])
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == "_launchpad_mantle_model_class"
+        and len(node.args) == 1 and isinstance(node.args[0], ast.Name)
+        and node.args[0].id in ("OpenAIResponsesModel", "MantleCompatResponsesModel")
+    ]
+    if len(calls) + len(adapted) != 1:
+        raise ConversionError("Mantle attachment graft anchor missing: Responses model constructor")
+    if calls:
+        func = calls[0].func
+        lines = model_py.splitlines(keepends=True)
+        line = lines[func.lineno - 1]
+        lines[func.lineno - 1] = (
+            line[:func.col_offset] + f"_launchpad_mantle_model_class({func.id})"
+            + line[func.end_col_offset:]
+        )
+        model_py = "".join(lines)
+    lines = model_py.splitlines(keepends=True)
+    lines.insert(loads[0].lineno - 1, helper)
+    return "".join(lines)
+
+
 def _gateway_url_for(key: str, resources: Any) -> str | None:
     """The shared-Gateway URL a `GATEWAY_<id>_URL` env key is asking for.
 
@@ -748,6 +872,16 @@ def build_conversion_spec(
         default_system_prompt=prompt_default,
         tool_description_overrides=tool_defaults,
     )
+    native_input = True
+    if conversion_platform_inputs(source_agent)[1] == "mantle":
+        # Old/incomplete bundles cannot prove their model's native file format.
+        # Leave these unmarked; a fresh CLI export supplies model/load.py.
+        if "model/load.py" not in grafted:
+            native_input = False
+        else:
+            grafted["model/load.py"] = graft_mantle_attachment_model(grafted["model/load.py"])
+    if native_input:
+        grafted["main.py"] = graft_runtime_attachments(grafted["main.py"])
     client_py = grafted.get("mcp_client/client.py")
     if client_py is not None and (
         gateway_tools
@@ -765,6 +899,10 @@ def build_conversion_spec(
     wired = {k: v for k, v in env_contract.items() if v is not None}
     notes = {"system_prompt": "wired (config-bundle override grafted)",
              "inline_tools": "carried verbatim"}
+    notes["attachments"] = (
+        "wired (native image/PDF bytes and v1 acknowledgement)"
+        if native_input else "unsupported (export lacks the Mantle model adapter)"
+    )
     if kbs:
         notes["knowledge_bases"] = (
             "wired (direct kb_search + kb_deep_search; Harness KB Gateway replaced)"

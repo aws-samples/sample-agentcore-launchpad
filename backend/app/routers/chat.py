@@ -5,7 +5,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
 from sqlalchemy import exists
 from sqlalchemy.orm import Session
 
@@ -16,8 +15,10 @@ from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.routers.auth import enabled as auth_enabled
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.schemas.attachments import AttachmentRequest
 from app.services import memory as memory_service
 from app.services import policy_identity
+from app.services.attachments import prepare_attachments
 from app.services.chat import chat_stream, sse_encode
 from app.services.invoke import stop_agent_session
 from app.services.runtime_discovery import require_invoke_capability
@@ -26,8 +27,7 @@ from app.templates import gateway_support
 router = APIRouter(prefix="/api", tags=["chat"])
 
 
-class ChatRequest(BaseModel):
-    prompt: str = Field(min_length=1, max_length=100000)
+class ChatRequest(AttachmentRequest):
     session_id: str | None = None
 
 
@@ -74,19 +74,21 @@ def _save_message(
     role: str,
     text: str,
     name: str | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> None:
     db = SessionLocal()
     try:
         db.add(ChatMessage(workspace_id=workspace_id, agent_id=agent_id,
                            session_id=session_id,
-                           role=role, text=text[:100000], name=name))
+                           role=role, text=text[:100000], name=name, attachments=attachments))
         db.commit()
     finally:
         db.close()
 
 
 def _track_session(
-    workspace_id: str, agent_id: str, session_id: str, actor_id: str
+    workspace_id: str, agent_id: str, session_id: str, actor_id: str,
+    runtime_version: str | None = None,
 ) -> None:
     db = SessionLocal()
     try:
@@ -101,8 +103,11 @@ def _track_session(
         )
         if row is None:
             row = ChatSession(workspace_id=workspace_id, agent_id=agent_id,
-                              session_id=session_id, actor_id=actor_id)
+                              session_id=session_id, actor_id=actor_id,
+                              runtime_version=runtime_version)
             db.add(row)
+        elif row.ended_at:
+            row.runtime_version = runtime_version
         row.turns = (row.turns or 0) + 1
         row.last_at = datetime.now(UTC)
         # A new turn under an ended id starts a fresh AgentCore session with the
@@ -124,6 +129,9 @@ def chat(
     agent = _get_active_agent(db, ws, agent_id)
     # An assistant-owned session of the preset is private to the assistant page.
     refuse_assistant_session(agent, req.session_id)
+    prepared = prepare_attachments(
+        agent, req.attachments, prompt=req.prompt, session_id=req.session_id,
+    )
     identity = require_identity(request)
     human_actor = identity.username if auth_enabled() else "river"
 
@@ -159,6 +167,8 @@ def chat(
         session_id = req.session_id
         answer_parts: list[str] = []
         stream_kwargs: dict[str, Any] = {}
+        if prepared:
+            stream_kwargs["attachments"] = prepared
         if needs_gateway_identity:
             stream_kwargs["runtime_user_id"] = identity.username
         if gateway_access_token:
@@ -174,8 +184,13 @@ def chat(
             kind, data = event["event"], event["data"]
             if kind == "meta":
                 session_id = data["session_id"]
-                _track_session(workspace_id, agent.id, session_id, actor_id)
-                _save_message(workspace_id, agent.id, session_id, "user", req.prompt)
+                _track_session(
+                    workspace_id, agent.id, session_id, actor_id, runtime_version=agent.version,
+                )
+                _save_message(
+                    workspace_id, agent.id, session_id, "user", req.prompt,
+                    attachments=prepared.metadata if prepared else None,
+                )
             elif kind == "tool" and session_id:
                 if answer_parts:  # a tool call splits the answer bubble live — mirror it
                     _save_message(workspace_id, agent.id, session_id, "agent",
@@ -326,6 +341,7 @@ def session_history(
                 "role": r.role,
                 "text": r.text,
                 "name": r.name,
+                "attachments": r.attachments or [],
                 "at": r.created_at.isoformat() if r.created_at else None,
             }
             for r in rows

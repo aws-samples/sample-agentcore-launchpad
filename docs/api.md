@@ -593,7 +593,7 @@ console sends as `runtimeSessionId` is the one the ledger tracks.
 
 | Method | Path | Result |
 |---|---|---|
-| `POST` | `/api/chat/{agent_id}` | One turn as SSE (`meta` → `delta`/`tool`/`error` → `done`); `{prompt, session_id?}`, a missing id starts a new session |
+| `POST` | `/api/chat/{agent_id}` | One turn as SSE (`meta` → `delta`/`tool`/`error` → `done`); `{prompt?, attachments?, session_id?}`, a missing id starts a new session; message text or at least one attachment is required |
 | `GET` | `/api/chat/{agent_id}/sessions` | Replayable sessions for the agent: `{session_id, actor_id, turns, last_at, ended_at, preview}` — `ended_at` is set once the console explicitly ended the runtime session, `null` while it is live or merely idle |
 | `GET` | `/api/chat/{agent_id}/history?session_id=` | The rendered thread items of one session, in replay order |
 | `POST` | `/api/chat/{agent_id}/sessions/{session_id}/stop` | **END SESSION** — data-plane `StopRuntimeSession(agentRuntimeArn, runtimeSessionId)` → `{session_id, ended: true, already_ended, ended_at}`. `already_ended: true` when AWS answered `ResourceNotFoundException` (the session had already ended or idle-expired) — a success, not an error. The ledger row is kept (history stays replayable) and stamped `ended_at`; a later turn posted under the same id starts a fresh runtime session and clears it. Only runtime-backed agents qualify (`zip_runtime`, `studio`, `container`, discovered runtimes); a managed Harness — deployed or imported — has no session-stop operation and answers 409 `chat.session_stop_unsupported` with `detail.reason_code` (`harness`). A session of another agent or workspace is 404 `chat.session_not_found`. A `RetryableConflictException` that outlives botocore's retries is 409 `aws.conflict` |
@@ -602,6 +602,29 @@ Ending is explicit: NEW SESSION in the console only forgets the id locally, so t
 runtime session it leaves behind idles out on its own. END SESSION is what to press
 after a re-publish — AgentCore pins a live session to the version that first
 served it, so validation of the new version needs a fresh session.
+
+All invoke entrances accept optional
+`attachments: [{name, media_type, data}]`, where `data` is standard base64.
+`GET /api/agents` and `/v1/agents` expose each agent's `attachment_capability`,
+including `images`, `text`, `pdf` (`native`/`text`/`unsupported`), accepted
+extensions, limits and a reason code when native inputs are unavailable.
+
+Limits are five files, 3 MiB per file and 10 MiB total decoded bytes; the request
+body is capped at 15 MiB. PNG/JPEG/WebP/GIF, PDF and UTF-8 text/code formats are
+validated by content before invocation. PDFs are limited to 50 pages. Combined
+prompt and extracted text may not exceed 100,000 characters.
+
+Harness accepts text files and explicitly labeled PDF text extraction. Images
+and nonblank scanned/graphic-only PDF pages require a native-capable agent.
+Generated Strands/Claude/Studio/converted HTTP runtimes need a compatible
+published artifact and a fresh session; old entrypoints cannot silently discard
+files. Native attachments are unavailable during an active canary.
+
+The SSE `meta.attachments` and each history message's `attachments` contain
+`{name, media_type, size, delivery}` metadata (`native`, `text`, or `pdf_text`).
+Original file bytes are transient and are not stored in chat history. File
+validation returns localized `chat.attachment_*` errors before SSE starts;
+runtime acknowledgement/model failures use the existing stream error envelope.
 
 ## Console Evaluation Datasets API
 

@@ -22,6 +22,7 @@ from app.schemas.agent import AgentSpec, InvokeRequest, InvokeResponse, RuntimeI
 from app.services import agent_iam, agent_names
 from app.services.agent_versions import list_agent_versions
 from app.services.agentcore.client import control_client
+from app.services.attachments import attachment_capability, prepare_attachments
 from app.services.invoke import invoke_agent_text
 from app.services.memory import scoped_actor
 from app.services.runtime_discovery import (
@@ -65,6 +66,7 @@ def _agent_out(agent: Agent, deployment: Deployment | None = None) -> dict[str, 
         "experiment_capability": experiment_capability(agent),
         "canary_capability": canary_capability(agent),
         "invoke_capability": invoke_capability(agent),
+        "attachment_capability": attachment_capability(agent),
         "created_at": agent.created_at.isoformat() if agent.created_at else None,
         "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
     }
@@ -442,11 +444,16 @@ def invoke_agent(
     if agent is None:
         raise NotFoundError("agent.not_found", "agent not found")
     require_invoke_capability(agent)
+    prepared = prepare_attachments(
+        agent, req.attachments, prompt=req.prompt, session_id=req.session_id,
+    )
     started = time.monotonic()
+    extra = {"attachments": prepared} if prepared else {}
     result = invoke_agent_text(
         agent, req.prompt, session_id=req.session_id,
         actor_id=scoped_actor(agent.id, req.actor_id),
         workspace=ws.context,
+        **extra,
     )
     return InvokeResponse(
         text=result["text"],

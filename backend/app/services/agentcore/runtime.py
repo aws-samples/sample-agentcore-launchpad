@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Iterable, Iterator
 from typing import Any
 
+from app.core.errors import AppError
 from app.services.agentcore.harness import new_session_id
 
 logger = logging.getLogger("launchpad.agentcore.runtime")
@@ -393,9 +394,13 @@ def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
     if payload.get("error"):
         raise RuntimeError(f"runtime returned error: {payload['error']}")
 
+    if payload.get("attachment_contract") == "v1":
+        yield {"event": "attachments", "data": {"contract": "v1"}}
     kind = payload.get("event")
     if isinstance(kind, str):
-        if kind == "delta":
+        if kind == "attachments":
+            yield {"event": "attachments", "data": {"contract": payload.get("contract")}}
+        elif kind == "delta":
             text = payload.get("text")
             if text:
                 yield {"event": "delta", "data": {"text": str(text)}}
@@ -431,11 +436,19 @@ def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
         yield {"event": "complete", "data": {"text": str(payload.get("result", ""))}}
 
 
-def _normalized_runtime_events(payloads: Iterable[Any]) -> Iterator[dict[str, Any]]:
+def _normalized_runtime_events(
+    payloads: Iterable[Any], *, require_attachments: bool = False,
+) -> Iterator[dict[str, Any]]:
     """Suppress a final full result when real deltas were already emitted."""
     saw_delta = False
+    acknowledged = False
     for payload in payloads:
         for event in _runtime_payload_events(payload):
+            if event["event"] == "attachments":
+                acknowledged = event["data"].get("contract") == "v1"
+                continue
+            if require_attachments and not acknowledged and event["event"] != "heartbeat":
+                raise _attachment_ack_error()
             if event["event"] == "delta":
                 saw_delta = True
                 yield event
@@ -445,6 +458,17 @@ def _normalized_runtime_events(payloads: Iterable[Any]) -> Iterator[dict[str, An
                     yield {"event": "delta", "data": event["data"]}
             else:
                 yield event
+    if require_attachments and not acknowledged:
+        raise _attachment_ack_error()
+
+
+def _attachment_ack_error() -> AppError:
+    return AppError(
+        "chat.attachment_new_session_required",
+        "The runtime did not acknowledge attachments. Start a new session; "
+        "republish the agent if its entrypoint has not been upgraded.",
+        status_code=409,
+    )
 
 
 def _runtime_invoke_params(
@@ -455,8 +479,11 @@ def _runtime_invoke_params(
     qualifier: str | None,
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
+    attachments: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     payload = {"prompt": prompt, "actor_id": actor_id}
+    if attachments:
+        payload["attachments"] = attachments
     if gateway_access_token:
         # The InvokeAgentRuntime payload is marked sensitive in the service
         # model. Generated Launchpad runtimes consume this value in memory only
@@ -488,6 +515,7 @@ def stream_runtime_events(
     qualifier: str | None = None,
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
+    attachments: list[dict[str, str]] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Invoke a runtime and yield normalized tool/text events as bytes arrive."""
     session_id = session_id or new_session_id()
@@ -500,17 +528,31 @@ def stream_runtime_events(
             qualifier,
             runtime_user_id,
             gateway_access_token,
+            attachments,
         )
     )
     body = response["response"]
-    content_type = str(response.get("contentType", "")).lower()
+    try:
+        yield from _runtime_body_events(
+            body, str(response.get("contentType", "")).lower(), bool(attachments),
+        )
+    finally:
+        if hasattr(body, "close"):
+            body.close()
+
+
+def _runtime_body_events(
+    body: Any, content_type: str, require_attachments: bool,
+) -> Iterator[dict[str, Any]]:
     if "text/event-stream" in content_type:
         lines = (
             body.iter_lines(chunk_size=SSE_READ_CHUNK_BYTES)
             if hasattr(body, "iter_lines")
             else body.read().splitlines()
         )
-        yield from _normalized_runtime_events(_sse_payloads(lines))
+        yield from _normalized_runtime_events(
+            _sse_payloads(lines), require_attachments=require_attachments,
+        )
         return
 
     raw = body.read()
@@ -519,11 +561,15 @@ def stream_runtime_events(
     except (ValueError, TypeError):
         decoded = raw.decode("utf-8", errors="replace") if raw else ""
         if decoded.lstrip().startswith("data:"):
-            yield from _normalized_runtime_events(_sse_payloads(decoded.splitlines()))
-        elif decoded:
-            yield from _normalized_runtime_events([decoded])
+            yield from _normalized_runtime_events(
+                _sse_payloads(decoded.splitlines()), require_attachments=require_attachments,
+            )
+        else:
+            yield from _normalized_runtime_events(
+                [decoded] if decoded else [], require_attachments=require_attachments,
+            )
     else:
-        yield from _normalized_runtime_events([payload])
+        yield from _normalized_runtime_events([payload], require_attachments=require_attachments)
 
 
 def invoke_runtime_text(
@@ -535,9 +581,11 @@ def invoke_runtime_text(
     qualifier: str | None = None,
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
+    attachments: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Synchronous InvokeAgentRuntime, joining native streaming responses."""
     session_id = session_id or new_session_id()
+    extra = {"attachments": attachments} if attachments else {}
     parts = [
         event["data"]["text"]
         for event in stream_runtime_events(
@@ -549,6 +597,7 @@ def invoke_runtime_text(
             qualifier=qualifier,
             runtime_user_id=runtime_user_id,
             gateway_access_token=gateway_access_token,
+            **extra,
         )
         if event["event"] == "delta"
     ]
@@ -646,6 +695,7 @@ def invoke_a2a_text(
     runtime_arn: str,
     prompt: str,
     session_id: str | None = None,
+    attachments: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """JSON-RPC message/send against an A2A-protocol runtime.
 
@@ -654,6 +704,12 @@ def invoke_a2a_text(
     there is no actor_id/memory envelope here.
     """
     session_id = session_id or new_session_id()
+    parts = [{"kind": "text", "text": prompt}]
+    for item in attachments or []:
+        parts.append({
+            "kind": "file",
+            "file": {"name": item["name"], "mimeType": item["media_type"], "bytes": item["data"]},
+        })
     payload = {
         "jsonrpc": "2.0",
         "id": uuid.uuid4().hex,
@@ -663,7 +719,7 @@ def invoke_a2a_text(
                 "role": "user",
                 "messageId": uuid.uuid4().hex,
                 "contextId": session_id,
-                "parts": [{"kind": "text", "text": prompt}],
+                "parts": parts,
             }
         },
     }

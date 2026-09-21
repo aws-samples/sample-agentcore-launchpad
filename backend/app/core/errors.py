@@ -60,14 +60,27 @@ async def http_error_handler(_: Request, exc: StarletteHTTPException) -> JSONRes
     )
 
 
-async def validation_error_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    errors = []
+    for error in exc.errors():
+        # Pydantic normally echoes the rejected input. A malformed attachment
+        # must not echo megabytes of user file data into the response/transcript.
+        value = error.get("input")
+        if (
+            request.scope.get("launchpad.attachment_request")
+            and error.get("loc", ())[0:1] == ("body",)
+        ) or "attachments" in error.get("loc", ()) or (
+            isinstance(value, dict) and "attachments" in value
+        ):
+            error = {k: v for k, v in error.items() if k not in {"input", "ctx"}}
+        errors.append(error)
     return JSONResponse(
         status_code=422,
         content=envelope(
             "validation.invalid_request",
             "Request validation failed",
             # ctx of custom validators may carry exception objects
-            jsonable_encoder(exc.errors(), custom_encoder={Exception: str}),
+            jsonable_encoder(errors, custom_encoder={Exception: str}),
         ),
     )
 

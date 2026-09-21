@@ -57,6 +57,8 @@ def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
 
 
 def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
+    from app.deployer.input_contract import record_input_contract
+
     settings = get_settings()
     workspace = ctx.workspace
     bucket = workspace.resources.get("artifacts_bucket")
@@ -105,6 +107,7 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     ctx.log(f"image pushed · {registry}/{repo}:{tag} · {digest}")
 
     _run_scan_gate(ctx, ecr_client, repo, digest, settings)
+    record_input_contract(ctx, (context_dir / "main.py").read_text(encoding="utf-8"))
     return StageResult(detail=f"codebuild · arm64 · {mins:.1f}m → :{tag} @ {digest[:19]}…")
 
 
@@ -273,6 +276,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             client, runtime_id, on_status=lambda s: ctx.log(f"runtime status: {s}")
         )
         row.arn = ready["agentRuntimeArn"]
+        from app.deployer.input_contract import stamp_input_contract
+
+        stamp_input_contract(ctx, db, row)
         db.commit()
         return StageResult(detail=f"READY · {ready['agentRuntimeArn']}")
     finally:

@@ -50,6 +50,7 @@ from app.routers.tools import router as tools_router
 from app.routers.users import router as users_router
 from app.routers.workspaces import router as workspaces_router
 from app.services import local_exec
+from app.services.attachment_body import AttachmentBodyCap
 from app.services.governance import reconcile_policy_changes
 from app.services.model_prices import start_auto_refresh
 from app.skill_lab import task_assets
@@ -124,6 +125,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.middleware("http")(task_assets.task_asset_body_limit_middleware)
     app.middleware("http")(auth_middleware)
     app.add_middleware(AssistantBodyCap)  # ingress byte cap for assistant writes
+    app.add_middleware(AttachmentBodyCap)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

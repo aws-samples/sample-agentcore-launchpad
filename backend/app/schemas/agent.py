@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.attachments import AttachmentRequest
 from app.schemas.requirements import assert_all_pinned
 
 # Latest Sonnet inference profile available in the target account (verified via
@@ -431,8 +432,7 @@ class AgentSpec(BaseModel):
         return self
 
 
-class InvokeRequest(BaseModel):
-    prompt: str = Field(min_length=1, max_length=100000)
+class InvokeRequest(AttachmentRequest):
     session_id: str | None = None
     actor_id: str = "default"
 
