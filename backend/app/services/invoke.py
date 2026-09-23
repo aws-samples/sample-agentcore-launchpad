@@ -222,6 +222,7 @@ def invoke_agent_text(
     gateway_access_token: str | None = None,
     workspace: WorkspaceContext | None = None,
     attachments: PreparedAttachments | None = None,
+    extra_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
@@ -231,6 +232,15 @@ def invoke_agent_text(
     # An imported harness carries the harness ARN, so it invokes exactly like a
     # launchpad-deployed one — InvokeHarness, never InvokeAgentRuntime.
     if agent.method == "harness" or is_discovered_harness(agent):
+        if extra_payload:
+            # Entrances refuse this earlier (`payloads.check_payload`); a direct
+            # caller must not have its keys silently dropped either.
+            raise AppError(
+                "invoke.payload_unsupported",
+                "The managed Harness accepts messages only; structured payload "
+                "fields cannot be forwarded.",
+                {"reason_code": "harness"}, status_code=422,
+            )
         harness_kwargs: dict[str, Any] = {}
         if runtime_user_id:
             harness_kwargs["runtime_user_id"] = runtime_user_id
@@ -250,9 +260,11 @@ def invoke_agent_text(
         # A2A-protocol runtimes speak JSON-RPC; the A2A server owns
         # conversation state (no actor_id/memory envelope) and can't be canaried
         if (agent.spec or {}).get("protocol") == "a2a":
-            files = (
+            files: dict[str, Any] = (
                 {"attachments": attachments.native} if attachments and attachments.native else {}
             )
+            if extra_payload:
+                files["extra_payload"] = extra_payload
             return rt.invoke_a2a_text(
                 data_client(workspace), agent.arn, prompt, session_id=session_id, **files,
             )
@@ -264,6 +276,13 @@ def invoke_agent_text(
                 raise AppError(
                     "chat.attachment_canary_unsupported",
                     "Native attachments are unavailable during a canary.", status_code=409,
+                )
+            if extra_payload:
+                # The canary gateway forwards only {prompt, sessionId}; caller
+                # keys would vanish mid-experiment. Entrances refuse earlier.
+                raise AppError(
+                    "invoke.payload_canary_unsupported",
+                    "Structured payload is unavailable during a canary.", status_code=409,
                 )
             return _invoke_via_canary(
                 route,
@@ -283,6 +302,8 @@ def invoke_agent_text(
             kwargs["gateway_access_token"] = gateway_access_token
         if attachments and attachments.native:
             kwargs["attachments"] = attachments.native
+        if extra_payload:
+            kwargs["extra_payload"] = extra_payload
         return rt.invoke_runtime_text(
             data_client(workspace), agent.arn, prompt, **kwargs
         )
@@ -343,6 +364,7 @@ def invoke_agent_events(
     gateway_access_token: str | None = None,
     workspace: WorkspaceContext | None = None,
     attachments: PreparedAttachments | None = None,
+    extra_payload: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield native runtime events, with a buffered compatibility fallback.
 
@@ -371,12 +393,16 @@ def invoke_agent_events(
             prompt = attachments.prompt(prompt)
             if attachments.native:
                 kwargs["attachments"] = attachments.native
+        if extra_payload:
+            kwargs["extra_payload"] = extra_payload
         yield from rt.stream_runtime_events(
             data_client(workspace), agent.arn, prompt, **kwargs
         )
         return
 
-    extra = {"attachments": attachments} if attachments else {}
+    extra: dict[str, Any] = {"attachments": attachments} if attachments else {}
+    if extra_payload:
+        extra["extra_payload"] = extra_payload
     result = invoke_agent_text(
         agent,
         prompt,

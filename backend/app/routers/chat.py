@@ -21,6 +21,7 @@ from app.services import policy_identity
 from app.services.attachments import prepare_attachments
 from app.services.chat import chat_stream, sse_encode
 from app.services.invoke import stop_agent_session
+from app.services.payloads import check_payload, payload_summary
 from app.services.runtime_discovery import require_invoke_capability
 from app.templates import gateway_support
 
@@ -75,12 +76,14 @@ def _save_message(
     text: str,
     name: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> None:
     db = SessionLocal()
     try:
         db.add(ChatMessage(workspace_id=workspace_id, agent_id=agent_id,
                            session_id=session_id,
-                           role=role, text=text[:100000], name=name, attachments=attachments))
+                           role=role, text=text[:100000], name=name, attachments=attachments,
+                           payload=payload))
         db.commit()
     finally:
         db.close()
@@ -132,6 +135,7 @@ def chat(
     prepared = prepare_attachments(
         agent, req.attachments, prompt=req.prompt, session_id=req.session_id,
     )
+    check_payload(agent, req.payload)  # 422/409 before the stream opens
     identity = require_identity(request)
     human_actor = identity.username if auth_enabled() else "river"
 
@@ -169,6 +173,8 @@ def chat(
         stream_kwargs: dict[str, Any] = {}
         if prepared:
             stream_kwargs["attachments"] = prepared
+        if req.payload:
+            stream_kwargs["extra_payload"] = req.payload
         if needs_gateway_identity:
             stream_kwargs["runtime_user_id"] = identity.username
         if gateway_access_token:
@@ -190,6 +196,7 @@ def chat(
                 _save_message(
                     workspace_id, agent.id, session_id, "user", req.prompt,
                     attachments=prepared.metadata if prepared else None,
+                    payload=payload_summary(req.payload),
                 )
             elif kind == "tool" and session_id:
                 if answer_parts:  # a tool call splits the answer bubble live — mirror it
@@ -342,6 +349,7 @@ def session_history(
                 "text": r.text,
                 "name": r.name,
                 "attachments": r.attachments or [],
+                "payload": r.payload,
                 "at": r.created_at.isoformat() if r.created_at else None,
             }
             for r in rows

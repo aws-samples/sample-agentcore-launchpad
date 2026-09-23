@@ -23,6 +23,7 @@ from app.services.invoke import (
     harness_user_overrides,
     invoke_agent_events,
 )
+from app.services.payloads import payload_summary
 from app.services.runtime_discovery import is_discovered_harness
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
@@ -36,6 +37,7 @@ def chat_stream(
     gateway_access_token: str | None = None,
     workspace: WorkspaceContext | None = None,
     attachments: PreparedAttachments | None = None,
+    extra_payload: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield SSE-ready events: meta → (heartbeat|tool|delta)* → done.
 
@@ -52,6 +54,9 @@ def chat_stream(
     meta = {"session_id": session_id, "agent": agent.name, "mode": mode}
     if attachments:
         meta["attachments"] = attachments.metadata
+    if extra_payload:
+        # Summary only — the raw payload never enters the SSE meta or ledger.
+        meta["payload"] = payload_summary(extra_payload)
     yield {
         "event": "meta",
         "data": meta,
@@ -60,6 +65,15 @@ def chat_stream(
     try:
         refuse_assistant_session(agent, session_id)
         if harness:
+            if extra_payload:
+                # Entrances refuse this before the stream opens; a direct caller
+                # must not have its keys silently dropped either.
+                raise AppError(
+                    "invoke.payload_unsupported",
+                    "The managed Harness accepts messages only; structured payload "
+                    "fields cannot be forwarded.",
+                    {"reason_code": "harness"}, status_code=422,
+                )
             yield from _harness_events(
                 agent,
                 attachments.prompt(prompt) if attachments else prompt,
@@ -77,6 +91,8 @@ def chat_stream(
                 invoke_kwargs["gateway_access_token"] = gateway_access_token
             if attachments:
                 invoke_kwargs["attachments"] = attachments
+            if extra_payload:
+                invoke_kwargs["extra_payload"] = extra_payload
             yield from invoke_agent_events(
                 agent,
                 prompt,

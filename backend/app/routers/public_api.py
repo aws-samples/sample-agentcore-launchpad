@@ -26,6 +26,7 @@ from app.services.attachments import attachment_capability, prepare_attachments
 from app.services.chat import chat_stream, sse_encode
 from app.services.invoke import invoke_agent_text
 from app.services.memory import scoped_actor
+from app.services.payloads import check_payload, payload_capability
 from app.services.runtime_discovery import invoke_capability, require_invoke_capability
 from app.services.workspace import get_workspace_row
 
@@ -83,7 +84,8 @@ def v1_list_agents(
     return {
         "agents": [
             {"id": a.id, "name": a.name, "method": a.method, "version": a.version,
-             "attachment_capability": attachment_capability(a)}
+             "attachment_capability": attachment_capability(a),
+             "payload_capability": payload_capability(a)}
             for a in agents
         ]
     }
@@ -100,7 +102,9 @@ def v1_invoke(
     prepared = prepare_attachments(
         agent, req.attachments, prompt=req.prompt, session_id=req.session_id,
     )
-    extra = {"attachments": prepared} if prepared else {}
+    extra: dict[str, Any] = {"attachments": prepared} if prepared else {}
+    if check_payload(agent, req.payload):
+        extra["extra_payload"] = req.payload
     started = time.monotonic()
     result = invoke_agent_text(
         agent, req.prompt, session_id=req.session_id,
@@ -127,7 +131,9 @@ def v1_invoke_stream(
     prepared = prepare_attachments(
         agent, req.attachments, prompt=req.prompt, session_id=req.session_id,
     )
-    extra = {"attachments": prepared} if prepared else {}
+    extra: dict[str, Any] = {"attachments": prepared} if prepared else {}
+    if check_payload(agent, req.payload):  # 422/409 before the stream opens
+        extra["extra_payload"] = req.payload
     mem_actor = scoped_actor(agent.id, req.actor_id)
 
     def generate():
