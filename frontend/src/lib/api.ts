@@ -93,6 +93,8 @@ export interface AgentInfo {
   };
   /** Absent on older servers; native support is always a server-owned verdict. */
   attachment_capability?: AttachmentCapability;
+  /** Absent on older servers; structured-payload passthrough is server-owned. */
+  payload_capability?: PayloadCapability;
   created_at: string | null;
   updated_at: string | null;
   deployment?: DeploymentInfo;
@@ -109,6 +111,21 @@ export interface AttachmentCapability {
   max_files: number;
   max_file_bytes: number;
   max_total_bytes: number;
+}
+
+export interface PayloadCapability {
+  supported: boolean;
+  reason_code: string | null;
+  max_bytes: number;
+  reserved_keys: string[];
+}
+
+/** Compact server-derived projection of a structured payload — the ledger and
+ *  the SSE meta carry this summary, never the raw payload. */
+export interface PayloadSummary {
+  keys: string[];
+  json: string;
+  truncated: boolean;
 }
 
 export interface ChatAttachment {
@@ -128,6 +145,7 @@ export interface ChatRequest {
   prompt: string;
   session_id: string | null;
   attachments?: ChatAttachment[];
+  payload?: Record<string, unknown>;
 }
 
 export interface ChatStreamPayload {
@@ -137,6 +155,7 @@ export interface ChatStreamPayload {
   code?: string;
   message?: string;
   attachments?: ChatAttachmentMetadata[];
+  payload?: PayloadSummary;
 }
 
 export interface ChatHistoryMessage {
@@ -144,6 +163,7 @@ export interface ChatHistoryMessage {
   text: string;
   name: string | null;
   attachments?: ChatAttachmentMetadata[];
+  payload?: PayloadSummary | null;
 }
 
 export interface SystemAgentIdentity {

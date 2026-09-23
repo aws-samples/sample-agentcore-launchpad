@@ -430,6 +430,12 @@ td.chipcell{min-width:170px}
 .chat-attachment-remove:hover{color:var(--crit)}
 .chat-attachment-remove:disabled{opacity:.4;cursor:default}
 .chat-attachment-error{padding:10px 16px 0;color:var(--crit);font-size:12px;overflow-wrap:anywhere}
+.chat-payload-editor{padding:0 16px 12px}
+.chat-payload-editor textarea.input{background:#0E1210;border:1px solid var(--line-2);color:var(--ink);font-size:12px;padding:10px 12px}
+.chat-payload-editor .chat-attachment-help{padding:6px 0 0}
+.chat-payload-editor .chat-attachment-error{padding:6px 0 0}
+.chat-payload-summary{margin-top:8px;border:1px solid var(--line-2);background:var(--panel-2);padding:8px 10px;font-size:11px;color:var(--ink-2)}
+.chat-payload-summary pre{margin:6px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:120px;overflow-y:auto;font-size:11px}
 .histrow:disabled{cursor:wait;opacity:.65}
 .chatbar .input::placeholder{color:var(--ink-3)}
 

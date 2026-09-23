@@ -30,6 +30,7 @@ import type {
   ChatRequest,
   ChatSessionInfo,
   ChatStreamPayload,
+  PayloadSummary,
 } from "../lib/api";
 import { api, errorMessage, localizedMessage, responseMessage } from "../lib/api";
 
@@ -39,6 +40,8 @@ interface Message {
   name?: string;
   streaming?: boolean;
   attachments?: ChatAttachmentMetadata[];
+  /** Server-derived summary of the structured payload sent with a user turn. */
+  payload?: PayloadSummary | null;
 }
 
 interface MemorySummary {
@@ -101,6 +104,35 @@ async function* sseEvents(res: Response): AsyncGenerator<{ event: string; data: 
   }
 }
 
+/** Client-side mirror of the server's payload validation: a JSON object with
+ *  no reserved envelope keys, within the serialized bound. Returns the parsed
+ *  object or an i18n error key + params; the server verdict stays authoritative. */
+function parsePayloadDraft(
+  text: string,
+  capability: AgentInfo["payload_capability"],
+): { payload?: Record<string, unknown>; error?: { key: string; params?: Record<string, unknown> } } {
+  if (!text.trim()) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { error: { key: "invalidJson" } };
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { error: { key: "notObject" } };
+  }
+  const payload = parsed as Record<string, unknown>;
+  const reserved = (capability?.reserved_keys ?? []).filter((key) => key in payload);
+  if (reserved.length) {
+    return { error: { key: "reservedKey", params: { keys: reserved.join(", ") } } };
+  }
+  const maxBytes = capability?.max_bytes ?? 1024 * 1024;
+  if (new TextEncoder().encode(JSON.stringify(payload)).length > maxBytes) {
+    return { error: { key: "tooLarge", params: { maxKb: Math.floor(maxBytes / 1024) } } };
+  }
+  return { payload };
+}
+
 /** A managed Harness (deployed or imported) has no session-stop operation. */
 function isHarnessAgent(agent: AgentInfo | undefined): boolean {
   if (!agent) return false;
@@ -134,6 +166,17 @@ export function Chat() {
   const setAttachmentError = (error: string | null) =>
     setAttachmentDraft((draft) => ({ ...draft, error }));
   const resetAttachments = () => setAttachmentDraft({ files: [], error: null });
+  // Structured input (JSON object merged into the invoke payload). The draft
+  // text survives across turns — repeated calls with the same parameters are
+  // the expected use — and clears with the composer on session switches.
+  const [payloadOpen, setPayloadOpen] = useState(false);
+  const [payloadText, setPayloadText] = useState("");
+  const [payloadError, setPayloadError] = useState<string | null>(null);
+  const resetPayload = () => {
+    setPayloadOpen(false);
+    setPayloadText("");
+    setPayloadError(null);
+  };
   const [draggingFiles, setDraggingFiles] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sendInFlight = useRef(false);
@@ -237,7 +280,7 @@ export function Chat() {
       setMessages(
         rows.map((r): Message =>
           r.role === "user"
-            ? { kind: "user", text: r.text, attachments: r.attachments }
+            ? { kind: "user", text: r.text, attachments: r.attachments, payload: r.payload }
             : r.role === "agent"
               ? { kind: "agent", text: r.text }
               : r.role === "tool"
@@ -249,6 +292,7 @@ export function Chat() {
       setInput("");
       // A successful history selection discards the previous conversation's draft.
       resetAttachments();
+      resetPayload();
       setDraggingFiles(false);
       setTrace(null);
       setSearchParams({ agent: agentId, session: sid }, { replace: true });
@@ -271,8 +315,18 @@ export function Chat() {
 
   const send = async () => {
     const prompt = input.trim();
-    if ((!prompt && !pendingFiles.length) || !agentId || busy || restoring || sendInFlight.current) return;
-    const capability = agents.find((a) => a.id === agentId)?.attachment_capability;
+    const activeAgent = agents.find((a) => a.id === agentId);
+    const draft = parsePayloadDraft(payloadText, activeAgent?.payload_capability);
+    if (draft.error) {
+      setPayloadError(t(`chatPage.payload.${draft.error.key}`, draft.error.params));
+      return;
+    }
+    if ((!prompt && !pendingFiles.length && !draft.payload) || !agentId || busy || restoring || sendInFlight.current) return;
+    if (draft.payload && activeAgent?.payload_capability?.supported === false) {
+      setPayloadError(t("chatPage.payload.unsupported"));
+      return;
+    }
+    const capability = activeAgent?.attachment_capability;
     if (pendingFiles.length) {
       const invalid = validateAttachments(pendingFiles.map((f) => f.file), capability);
       if (invalid) {
@@ -280,6 +334,7 @@ export function Chat() {
         return;
       }
     }
+    setPayloadError(null);
     sendInFlight.current = true;
     setInput("");
     setAttachmentError(null);
@@ -296,6 +351,7 @@ export function Chat() {
     let activeSessionId = sessionId;
     try {
       const request: ChatRequest = { prompt, session_id: sessionId };
+      if (draft.payload) request.payload = draft.payload;
       if (pendingFiles.length) {
         request.attachments = await Promise.all(pendingFiles.map(encodeAttachment)).catch(() => {
           throw new Error(t("chatPage.attachments.readFailed"));
@@ -322,9 +378,13 @@ export function Chat() {
               { replace: true },
             );
           }
-          if (payload.attachments) {
+          if (payload.attachments || payload.payload) {
             setMessages((m) => m.map((msg) => msg === userMessage
-              ? { ...msg, attachments: payload.attachments }
+              ? {
+                  ...msg,
+                  ...(payload.attachments ? { attachments: payload.attachments } : {}),
+                  ...(payload.payload ? { payload: payload.payload } : {}),
+                }
               : msg));
           }
         } else if (event === "tool") {
@@ -387,6 +447,7 @@ export function Chat() {
     setRestoring(false);
     setInput("");
     resetAttachments();
+    resetPayload();
     setDraggingFiles(false);
     setSessionId(null);
     setMessages([]);
@@ -455,12 +516,14 @@ export function Chat() {
   const attachmentsEnabled = Boolean(
     capability && (capability.images || capability.text || capability.pdf !== "unsupported"),
   );
+  const payloadEnabled = agent?.payload_capability?.supported === true;
+  const payloadDraftPresent = Boolean(payloadText.trim());
   const composerDisabled = busy || restoring || !agentId;
   const sendDisabledReason = busy || restoring
     ? undefined
     : !agentId
       ? t("chatPage.sendDisabledNoAgent")
-      : !input.trim() && !pendingFiles.length
+      : !input.trim() && !pendingFiles.length && !payloadDraftPresent
         ? t(attachmentsEnabled ? "chatPage.sendDisabledEmpty" : "chatPage.sendDisabledEmptyText")
         : undefined;
   const addFiles = (files: File[]) => {
@@ -594,6 +657,14 @@ export function Chat() {
                   <div className="bub">
                     {msg.text}
                     <MessageAttachments files={msg.attachments} />
+                    {msg.payload && (
+                      <div className="chat-payload-summary" data-testid="payload-summary">
+                        <span className="mono">
+                          {t("chatPage.payload.sentKeys", { keys: msg.payload.keys.join(", ") })}
+                        </span>
+                        <pre className="mono">{msg.payload.json}</pre>
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : msg.kind === "agent" ? (
@@ -693,6 +764,15 @@ export function Chat() {
               >
                 + {t("chatPage.attachments.add")}
               </Btn>
+              <Btn
+                disabled={composerDisabled || !payloadEnabled}
+                title={t(payloadEnabled ? "chatPage.payload.toggle" : "chatPage.payload.unavailable")}
+                onClick={() => setPayloadOpen((open) => !open)}
+                data-testid="payload-toggle"
+              >
+                {"{}"} {t("chatPage.payload.toggle")}
+                {payloadDraftPresent ? " ●" : ""}
+              </Btn>
               <input
                 className="input"
                 value={input}
@@ -712,6 +792,30 @@ export function Chat() {
                 {t("chatPage.send")} ▸
               </Btn>
             </div>
+            {payloadOpen && payloadEnabled && (
+              <div className="chat-payload-editor" data-testid="payload-editor">
+                <textarea
+                  className="input mono"
+                  rows={4}
+                  value={payloadText}
+                  disabled={composerDisabled}
+                  onChange={(e) => {
+                    setPayloadText(e.target.value);
+                    setPayloadError(null);
+                  }}
+                  placeholder={'{"customer_id": "C-42"}'}
+                  aria-label={t("chatPage.payload.toggle")}
+                  data-testid="payload-input"
+                  style={{ width: "100%", resize: "vertical" }}
+                />
+                <div className="chat-attachment-help">{t("chatPage.payload.hint")}</div>
+                {payloadError && (
+                  <div className="chat-attachment-error" role="alert" data-testid="payload-error">
+                    {payloadError}
+                  </div>
+                )}
+              </div>
+            )}
             {attachmentsEnabled && (
               <div className="chat-attachment-help">{t("chatPage.attachments.dropHint")}</div>
             )}
