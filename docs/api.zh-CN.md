@@ -38,6 +38,53 @@ curl -N -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke-stream \
 在下一次调用时传回返回的 `session_id` 即可延续对话(session 上下文与
 AgentCore Memory 随之而来)。
 
+## 结构化载荷透传 / Structured payload passthrough
+
+`/v1` 是 `InvokeAgentRuntime` 的托管等价物:Launchpad 只做加法(会话、actor
+隔离、API 密钥),不削减 Runtime 契约——后者接受任意 JSON 载荷。因此每个调用
+入口(`/v1 …/invoke[-stream]`、`POST /api/chat/{id}`、
+`POST /api/agents/{id}/invoke`)都接受可选的 `payload` 对象,其键会**平铺合并**
+到 `InvokeAgentRuntime` JSON 顶层,与 `prompt`/`actor_id` 并列——Agent 的
+`@app.entrypoint` 看到的形状与直接调用 `InvokeAgentRuntime` 完全一致:
+
+```bash
+curl -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke \
+  -H "X-Api-Key: $LP_KEY" -H 'Content-Type: application/json' \
+  -d '{"prompt": "Summarize this account.",
+       "payload": {"customer_id": "C-42", "options": {"temperature": 0.1}}}'
+```
+
+Agent 侧契约——额外的键出现在 `payload["<key>"]`,与直接调用相同:
+
+```python
+@app.entrypoint
+def invoke(payload, context=None):
+    prompt = payload.get("prompt", "")
+    customer_id = payload.get("customer_id")   # ← 调用方的 payload 键
+    options = payload.get("options", {})
+    ...
+```
+
+规则与限制:
+
+- `payload` 必须是 JSON **对象**(不能是列表或标量);存在 payload 时
+  `prompt` 可以为空。
+- 保留的信封键会被拒绝,绝不覆盖:`prompt`、`attachments`、`actor_id`、
+  `session_id`、`gateway_access_token`、`force_reauth_providers` →
+  `422 invoke.payload_reserved_key`(`detail.keys` 列出冲突键)。
+- 序列化后大小上限 1 MiB → `422 invoke.payload_too_large`。
+- A2A 协议 Runtime 以标准 A2A `DataPart`(`{"kind": "data", "data": {...}}`)
+  接收 payload,与文本 part 并列。
+- 托管 Harness 只接受 messages,没有开放的 JSON 体 →
+  `422 invoke.payload_unsupported`;活跃金丝雀只转发
+  `{prompt, sessionId}` → `409 invoke.payload_canary_unsupported`。
+- `GET /api/agents` 与 `GET /v1/agents` 在 `attachment_capability` 旁暴露
+  `payload_capability`(`{supported, reason_code, max_bytes, reserved_keys}`)。
+- 平台生成的模板(Strands/Claude/Studio)目前忽略未知键;透传主要服务于会读取
+  这些键的 BYOC/自定义入口。
+- Chat 历史保留 prompt 加一份紧凑的 payload 摘要
+  (`{keys, json (≤2 KB), truncated}`)——原始 payload 与附件字节一样只是瞬态。
+
 ## Python
 
 ```python

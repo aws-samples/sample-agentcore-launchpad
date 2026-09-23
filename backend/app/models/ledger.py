@@ -295,6 +295,9 @@ class ChatMessage(Base):
     text: Mapped[str] = mapped_column(Text, default="")
     name: Mapped[str | None] = mapped_column(String(80), default=None)  # tool name
     attachments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
+    # Compact structured-payload summary ({keys, json, truncated}) on the user
+    # turn — like attachments metadata, never the raw payload itself.
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

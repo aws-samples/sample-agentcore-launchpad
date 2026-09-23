@@ -38,6 +38,7 @@ from app.services.agentcore.client import control_client
 from app.services.attachments import attachment_capability, prepare_attachments
 from app.services.invoke import invoke_agent_text
 from app.services.memory import scoped_actor
+from app.services.payloads import check_payload, payload_capability
 from app.services.runtime_discovery import (
     DISCOVERED_METHOD,
     import_harnesses,
@@ -81,6 +82,7 @@ def _agent_out(agent: Agent, deployment: Deployment | None = None) -> dict[str, 
         "canary_capability": canary_capability(agent),
         "invoke_capability": invoke_capability(agent),
         "attachment_capability": attachment_capability(agent),
+        "payload_capability": payload_capability(agent),
         "created_at": agent.created_at.isoformat() if agent.created_at else None,
         "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
     }
@@ -543,7 +545,9 @@ def invoke_agent(
         agent, req.attachments, prompt=req.prompt, session_id=req.session_id,
     )
     started = time.monotonic()
-    extra = {"attachments": prepared} if prepared else {}
+    extra: dict[str, Any] = {"attachments": prepared} if prepared else {}
+    if check_payload(agent, req.payload):
+        extra["extra_payload"] = req.payload
     result = invoke_agent_text(
         agent, req.prompt, session_id=req.session_id,
         actor_id=scoped_actor(agent.id, req.actor_id),

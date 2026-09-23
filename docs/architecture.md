@@ -1996,6 +1996,27 @@ framework-owned AgentCore Memory behavior is unchanged. See
 [attachment research and design](playground-attachments-research.md) and the
 [Chat API contract](api.md#console-chat-api).
 
+### Structured payload passthrough
+
+The invoke envelope Launchpad sends to `InvokeAgentRuntime` is
+`{prompt, actor_id, attachments?, gateway_access_token?}` — but the Runtime
+contract itself accepts an arbitrary JSON body, and `/v1` is that contract's
+managed equivalent (Launchpad adds sessions/actors/keys, it must not remove
+capability). Every invoke entrance therefore accepts an optional bounded
+`payload` object (`schemas/attachments.py`, ≤1 MiB serialized) whose keys merge
+flat at the top level of the invoke body, next to `prompt`/`actor_id`, so a
+custom or BYOC entrypoint sees exactly what a direct `InvokeAgentRuntime` call
+would deliver; A2A runtimes receive it as a standard `DataPart`. Envelope keys
+are reserved and rejected at validation (`invoke.payload_reserved_key`) — never
+overridden, since `gateway_access_token` would otherwise be a sensitive
+injection. `services/payloads.py` owns the capability rule
+(`payload_capability`, surfaced next to `attachment_capability`): the managed
+Harness has no open JSON body (`invoke.payload_unsupported`) and the canary
+gateway forwards only `{prompt, sessionId}`
+(`invoke.payload_canary_unsupported`). The chat ledger persists a compact
+summary (`ChatMessage.payload`: sorted keys + JSON truncated to 2 KB), never
+the raw payload — parity with how attachment bytes are handled.
+
 ### Gateway (MCP) tools reach both a Harness and a zip runtime
 
 A gateway `ToolRef` used to be a harness-only capability, which split the lab

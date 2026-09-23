@@ -578,8 +578,14 @@ def _runtime_invoke_params(
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
     attachments: list[dict[str, str]] | None = None,
+    extra_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    payload = {"prompt": prompt, "actor_id": actor_id}
+    # Caller payload merges flat at the top level, so the agent's entrypoint
+    # sees the same shape as a direct InvokeAgentRuntime call. Envelope fields
+    # are written after it and always win (reserved-key rejection at the schema
+    # already guarantees no collision; the ordering is defense in depth).
+    payload = dict(extra_payload or {})
+    payload.update({"prompt": prompt, "actor_id": actor_id})
     if attachments:
         payload["attachments"] = attachments
     if gateway_access_token:
@@ -614,6 +620,7 @@ def stream_runtime_events(
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
     attachments: list[dict[str, str]] | None = None,
+    extra_payload: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Invoke a runtime and yield normalized tool/text events as bytes arrive."""
     session_id = session_id or new_session_id()
@@ -627,6 +634,7 @@ def stream_runtime_events(
             runtime_user_id,
             gateway_access_token,
             attachments,
+            extra_payload,
         )
     )
     body = response["response"]
@@ -680,10 +688,13 @@ def invoke_runtime_text(
     runtime_user_id: str | None = None,
     gateway_access_token: str | None = None,
     attachments: list[dict[str, str]] | None = None,
+    extra_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Synchronous InvokeAgentRuntime, joining native streaming responses."""
     session_id = session_id or new_session_id()
-    extra = {"attachments": attachments} if attachments else {}
+    extra: dict[str, Any] = {"attachments": attachments} if attachments else {}
+    if extra_payload:
+        extra["extra_payload"] = extra_payload
     parts = [
         event["data"]["text"]
         for event in stream_runtime_events(
@@ -794,6 +805,7 @@ def invoke_a2a_text(
     prompt: str,
     session_id: str | None = None,
     attachments: list[dict[str, str]] | None = None,
+    extra_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """JSON-RPC message/send against an A2A-protocol runtime.
 
@@ -802,12 +814,15 @@ def invoke_a2a_text(
     there is no actor_id/memory envelope here.
     """
     session_id = session_id or new_session_id()
-    parts = [{"kind": "text", "text": prompt}]
+    parts: list[dict[str, Any]] = [{"kind": "text", "text": prompt}]
     for item in attachments or []:
         parts.append({
             "kind": "file",
             "file": {"name": item["name"], "mimeType": item["media_type"], "bytes": item["data"]},
         })
+    if extra_payload:
+        # Caller payload rides as a standard A2A DataPart next to the text part.
+        parts.append({"kind": "data", "data": extra_payload})
     payload = {
         "jsonrpc": "2.0",
         "id": uuid.uuid4().hex,

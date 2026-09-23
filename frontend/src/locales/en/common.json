@@ -2335,6 +2335,17 @@
         "model": "Native files are not enabled for this agent’s current model. Text files and PDF text extraction remain available. For native files, select a supported model, republish, then start a new session.",
         "not_active": "This agent is not active. Complete deployment before sending attachments."
       }
+    },
+    "payload": {
+      "toggle": "Structured input (JSON)",
+      "hint": "A JSON object sent alongside the message. Its keys reach the agent entrypoint at the top level of the invoke payload, exactly like a direct InvokeAgentRuntime call.",
+      "unavailable": "Structured input is unavailable for this agent. The managed Harness accepts messages only.",
+      "unsupported": "This agent cannot receive structured input. Remove the JSON or select a Runtime-backed agent.",
+      "invalidJson": "Structured input is not valid JSON.",
+      "notObject": "Structured input must be a JSON object, not a list or a single value.",
+      "reservedKey": "Structured input uses reserved keys: {{keys}}. Rename them; the platform owns these envelope fields.",
+      "tooLarge": "Structured input exceeds {{maxKb}} KB serialized. Reduce the JSON.",
+      "sentKeys": "payload: {{keys}}"
     }
   },
   "evalPage": {

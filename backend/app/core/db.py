@@ -231,6 +231,7 @@ def _migrate(bind) -> None:
                 )
     for table, column, ddl in (
         ("chat_messages", "attachments", "ALTER TABLE chat_messages ADD COLUMN attachments JSON"),
+        ("chat_messages", "payload", "ALTER TABLE chat_messages ADD COLUMN payload JSON"),
         ("chat_sessions", "runtime_version",
          "ALTER TABLE chat_sessions ADD COLUMN runtime_version VARCHAR(16)"),
     ):

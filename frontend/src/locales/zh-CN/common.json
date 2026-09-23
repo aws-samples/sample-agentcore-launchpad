@@ -2335,6 +2335,17 @@
         "model": "此智能体的当前模型尚未启用原生文件支持，可使用文本文件和 PDF 文本提取。如需原生文件，请选择支持的模型、重新发布，再新建会话。",
         "not_active": "此智能体尚未处于活动状态，请完成部署后再发送附件。"
       }
+    },
+    "payload": {
+      "toggle": "结构化输入（JSON）",
+      "hint": "随消息一同发送的 JSON 对象。其中的键会出现在调用载荷顶层并直达智能体入口，与直接调用 InvokeAgentRuntime 完全一致。",
+      "unavailable": "此智能体不支持结构化输入。托管 Harness 只接受消息。",
+      "unsupported": "此智能体无法接收结构化输入。请移除 JSON，或选择基于 Runtime 的智能体。",
+      "invalidJson": "结构化输入不是有效的 JSON。",
+      "notObject": "结构化输入必须是 JSON 对象，不能是列表或单个值。",
+      "reservedKey": "结构化输入使用了保留键：{{keys}}。请重命名，这些信封字段由平台管理。",
+      "tooLarge": "结构化输入序列化后超过 {{maxKb}} KB，请精简 JSON。",
+      "sentKeys": "payload：{{keys}}"
     }
   },
   "evalPage": {

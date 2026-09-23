@@ -37,6 +37,69 @@ curl -N -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke-stream \
 Pass the returned `session_id` on the next call to continue the conversation
 (session context + AgentCore Memory ride on it).
 
+## Structured payload passthrough / 结构化载荷透传
+
+`/v1` is the managed equivalent of `InvokeAgentRuntime`: Launchpad adds
+sessions, actor isolation and API keys, but does not remove the Runtime
+contract — which accepts an arbitrary JSON payload. Every invoke entrance
+(`/v1 …/invoke[-stream]`, `POST /api/chat/{id}`, `POST /api/agents/{id}/invoke`)
+therefore accepts an optional `payload` object whose keys are merged **flat at
+the top level** of the `InvokeAgentRuntime` JSON body, next to
+`prompt`/`actor_id` — the agent's `@app.entrypoint` sees the same shape as a
+direct `InvokeAgentRuntime` call:
+
+```bash
+curl -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke \
+  -H "X-Api-Key: $LP_KEY" -H 'Content-Type: application/json' \
+  -d '{"prompt": "Summarize this account.",
+       "payload": {"customer_id": "C-42", "options": {"temperature": 0.1}}}'
+```
+
+Agent-side contract — extra keys appear at `payload["<key>"]`, identical to
+direct invocation:
+
+```python
+@app.entrypoint
+def invoke(payload, context=None):
+    prompt = payload.get("prompt", "")
+    customer_id = payload.get("customer_id")   # ← caller's payload key
+    options = payload.get("options", {})
+    ...
+```
+
+Rules and limits:
+
+- `payload` must be a JSON **object** (not a list or scalar); `prompt` may be
+  empty when a payload is present.
+- Reserved envelope keys are refused, never overridden:
+  `prompt`, `attachments`, `actor_id`, `session_id`, `gateway_access_token`,
+  `force_reauth_providers` → `422 invoke.payload_reserved_key`
+  (`detail.keys` lists the offenders).
+- Serialized size is capped at 1 MiB → `422 invoke.payload_too_large`.
+- A2A-protocol runtimes receive the payload as a standard A2A `DataPart`
+  (`{"kind": "data", "data": {...}}`) next to the text part.
+- The managed Harness takes messages, not an open JSON body →
+  `422 invoke.payload_unsupported`. An active canary forwards only
+  `{prompt, sessionId}` → `409 invoke.payload_canary_unsupported`.
+- `GET /api/agents` and `GET /v1/agents` expose `payload_capability`
+  (`{supported, reason_code, max_bytes, reserved_keys}`) next to
+  `attachment_capability`.
+- Generated Launchpad templates (Strands/Claude/Studio) ignore unknown keys
+  today; the passthrough matters for BYOC/custom entrypoints that read them.
+- Chat history keeps the prompt plus a compact payload summary
+  (`{keys, json (≤2 KB), truncated}`) — the raw payload is transient, exactly
+  like attachment bytes.
+
+**Verified against a real Runtime** (2026-09-23, us-east-1): an echo agent
+(`BedrockAgentCoreApp` code zip, PYTHON_3_13) returning its received payload
+verbatim was invoked once via boto3 `invoke_agent_runtime` and once via
+`POST /v1/agents/{id}/invoke` with `prompt` + `payload`. The agent-side
+top-level JSON was byte-identical for every caller key (`model_options`,
+`customer_id`, `flags`) plus `prompt`; the only difference was Launchpad's
+envelope key `actor_id`. The reserved-key and >1 MiB rejections (both
+`422`) and the managed-Harness `422 invoke.payload_unsupported` were
+confirmed on the same live route.
+
 Ordinary Agent/proposal `timeout_seconds` defaults to **180 seconds**; explicit
 values are retained. Harness executes the corresponding native `timeoutSeconds`
 budget. A timeout returns `504 harness.execution_timeout`; cancellation returns
@@ -643,7 +706,7 @@ console sends as `runtimeSessionId` is the one the ledger tracks.
 
 | Method | Path | Result |
 |---|---|---|
-| `POST` | `/api/chat/{agent_id}` | One turn as SSE (`meta` → `delta`/`tool`/`error` → `done`); `{prompt?, attachments?, session_id?}`, a missing id starts a new session; message text or at least one attachment is required |
+| `POST` | `/api/chat/{agent_id}` | One turn as SSE (`meta` → `delta`/`tool`/`error` → `done`); `{prompt?, attachments?, payload?, session_id?}`, a missing id starts a new session; message text, an attachment or a payload is required |
 | `GET` | `/api/chat/{agent_id}/sessions` | Replayable sessions for the agent: `{session_id, actor_id, turns, last_at, ended_at, preview}` — `ended_at` is set once the console explicitly ended the runtime session, `null` while it is live or merely idle |
 | `GET` | `/api/chat/{agent_id}/history?session_id=` | The rendered thread items of one session, in replay order |
 | `POST` | `/api/chat/{agent_id}/sessions/{session_id}/stop` | **END SESSION** — data-plane `StopRuntimeSession(agentRuntimeArn, runtimeSessionId)` → `{session_id, ended: true, already_ended, ended_at}`. `already_ended: true` when AWS answered `ResourceNotFoundException` (the session had already ended or idle-expired) — a success, not an error. The ledger row is kept (history stays replayable) and stamped `ended_at`; a later turn posted under the same id starts a fresh runtime session and clears it. Only runtime-backed agents qualify (`zip_runtime`, `studio`, `container`, discovered runtimes); a managed Harness — deployed or imported — has no session-stop operation and answers 409 `chat.session_stop_unsupported` with `detail.reason_code` (`harness`). A session of another agent or workspace is 404 `chat.session_not_found`. A `RetryableConflictException` that outlives botocore's retries is 409 `aws.conflict` |
