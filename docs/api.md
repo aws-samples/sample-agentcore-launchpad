@@ -90,6 +90,16 @@ Rules and limits:
   (`{keys, json (≤2 KB), truncated}`) — the raw payload is transient, exactly
   like attachment bytes.
 
+**Verified against a real Runtime** (2026-09-23, us-east-1): an echo agent
+(`BedrockAgentCoreApp` code zip, PYTHON_3_13) returning its received payload
+verbatim was invoked once via boto3 `invoke_agent_runtime` and once via
+`POST /v1/agents/{id}/invoke` with `prompt` + `payload`. The agent-side
+top-level JSON was byte-identical for every caller key (`model_options`,
+`customer_id`, `flags`) plus `prompt`; the only difference was Launchpad's
+envelope key `actor_id`. The reserved-key and >1 MiB rejections (both
+`422`) and the managed-Harness `422 invoke.payload_unsupported` were
+confirmed on the same live route.
+
 Ordinary Agent/proposal `timeout_seconds` defaults to **180 seconds**; explicit
 values are retained. Harness executes the corresponding native `timeoutSeconds`
 budget. A timeout returns `504 harness.execution_timeout`; cancellation returns
