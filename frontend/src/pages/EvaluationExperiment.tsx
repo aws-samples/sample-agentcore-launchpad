@@ -1,4 +1,3 @@
-import type { TFunction } from "i18next";
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -36,199 +35,24 @@ import {
 import { evaluatorLabel, evaluatorPolarity } from "../lib/evaluators";
 import { fmtScore } from "../lib/format";
 import { RuntimeCanaryView } from "./EvaluationRuntimeCanary";
+import {
+  DEFAULT_TRACE_LOOKBACK_HOURS,
+  LOOP_STAGES,
+  ONLINE_EVAL_DEFAULT,
+  ONLINE_EVAL_MAX,
+  TRACE_LOOKBACK_OPTIONS,
+  fmtP,
+  loadRecPrefs,
+  loadRecTypes,
+  saveRecPrefs,
+  saveRecTypes,
+  traceLookbackFromParam,
+  verdictLabel,
+  type ExperimentInfo,
+  type RecPrefs,
+} from "../lib/experiments";
 
-const DEFAULT_TRACE_LOOKBACK_HOURS = 24;
-const TRACE_LOOKBACK_OPTIONS = [24, 72, 168, 720] as const;
-
-// The RECOMMEND generator checkboxes exist only before the stage runs, so the
-// backend has nothing to restore them from — persist per experiment locally.
-const REC_TYPES_KEY_PREFIX = "launchpad.exp-rec-types.";
-
-function loadRecTypes(expId: string): { sp: boolean; td: boolean } {
-  try {
-    const raw = localStorage.getItem(REC_TYPES_KEY_PREFIX + expId);
-    if (raw) {
-      const parsed = JSON.parse(raw) as { sp?: boolean; td?: boolean };
-      return { sp: !!parsed.sp, td: !!parsed.td };
-    }
-  } catch {
-    /* corrupt or unavailable storage falls back to defaults */
-  }
-  return { sp: false, td: false };
-}
-
-function saveRecTypes(expId: string, sp: boolean, td: boolean) {
-  try {
-    localStorage.setItem(REC_TYPES_KEY_PREFIX + expId, JSON.stringify({ sp, td }));
-  } catch {
-    /* storage unavailable — selection simply won't survive a reload */
-  }
-}
-
-// The RECOMMEND pickers (trace source, optimizer, reflection model) are page
-// state too — nothing server-side holds them before the stage runs, and after a
-// run the artifact only records what WAS used. Persist them per experiment so
-// re-opening an in-progress experiment shows the operator's own selection.
-const REC_PREFS_KEY_PREFIX = "launchpad.exp-rec-prefs.";
-
-interface RecPrefs {
-  source?: string;
-  provider?: string;
-  model?: string;
-  customModel?: string;
-}
-
-function loadRecPrefs(expId: string): RecPrefs {
-  try {
-    const raw = localStorage.getItem(REC_PREFS_KEY_PREFIX + expId);
-    if (raw) {
-      const parsed = JSON.parse(raw) as RecPrefs;
-      return {
-        source: typeof parsed.source === "string" ? parsed.source : undefined,
-        provider: typeof parsed.provider === "string" ? parsed.provider : undefined,
-        model: typeof parsed.model === "string" ? parsed.model : undefined,
-        customModel: typeof parsed.customModel === "string" ? parsed.customModel : undefined,
-      };
-    }
-  } catch {
-    /* corrupt or unavailable storage falls back to defaults */
-  }
-  return {};
-}
-
-function saveRecPrefs(expId: string, prefs: RecPrefs) {
-  try {
-    localStorage.setItem(REC_PREFS_KEY_PREFIX + expId, JSON.stringify(prefs));
-  } catch {
-    /* storage unavailable — selection simply won't survive a reload */
-  }
-}
-
-function traceLookbackFromParam(value: string | null): number {
-  const hours = Number(value);
-  return TRACE_LOOKBACK_OPTIONS.includes(
-    hours as (typeof TRACE_LOOKBACK_OPTIONS)[number],
-  )
-    ? hours
-    : DEFAULT_TRACE_LOOKBACK_HOURS;
-}
-
-export interface ABMetric {
-  label: string;
-  // +1 = higher mean wins, -1 = lower mean wins. Absent on verdicts stored
-  // before the backend started annotating it — evaluatorPolarity() covers those.
-  polarity?: number;
-  control: { mean: number | null; sampleSize: number | null };
-  variants: { name: string; mean: number | null; sampleSize: number | null;
-    pValue?: number | null; percentChange?: number | null; isSignificant?: boolean }[];
-}
-
-export interface ExperimentInfo {
-  id: string;
-  name: string;
-  agent_id: string;
-  agent_name: string;
-  status: string;
-  stage: string;
-  stages: string[];
-  running_action: string | null;
-  progress: string | null;
-  error: string | null;
-  created_at: string | null;
-  artifacts: {
-    agent_meta?: { system_prompt?: string; name?: string;
-      tools?: Record<string, string>;
-      experiment_capability?: {
-        eligible: boolean;
-        system_prompt: boolean;
-        tool_descriptions: boolean;
-        reason: string | null;
-      } };
-    recommend?: {
-      // each generator writes only its own keys — either side may be absent
-      recommended_prompt?: string;
-      explanation?: string;
-      system_prompt_status?: string;
-      system_prompt_error?: string;
-      tool_status?: string;
-      tool_error?: string;
-      analyzed_tools?: Record<string, string>;
-      tool_descriptions?: Record<string, string>;
-      /** 3rd-party tool-description component: attribution + the provider's
-       *  change notes (absent on the AgentCore path). */
-      tool_provider?: string;
-      tool_provider_model_id?: string;
-      tool_provider_meta?: { evidence_sessions?: number; tool_calls_seen?: number;
-        sessions_with_tool_calls?: number; tool_descriptions_proposed?: number;
-        tool_changes?: string[] };
-      tool_explanation?: string;
-      accepted_prompt?: string;
-      accepted_tool_descriptions?: Record<string, string>;
-      /** Set by accept: the accepted text differs from the provider's seed. */
-      accepted_edited?: boolean;
-      /** Who generated the system prompt. Absent ⇒ the AgentCore recommendation
-       *  job (its artifact is unchanged); a 3rd-party provider attributes itself. */
-      provider?: string;
-      provider_model_id?: string;
-      provider_meta?: { evidence_sessions?: number; evidence_records?: number;
-        sessions_without_transcript?: number; latency_ms?: number;
-        input_tokens?: number; output_tokens?: number; calls?: number;
-        changes?: string[] };
-      /** Which traces this recommendation read — recorded for both paths so a run
-       *  stays explainable after the fact. Absent on pre-feature rows. */
-      trace_source?: {
-        kind: "cloudwatch" | "batch_evaluation";
-        lookback_days?: number;
-        run_id?: string;
-        batch_eval_id?: string;
-        batch_evaluation_arn?: string;
-        run_mode?: string;
-        session_count?: number;
-      };
-    };
-    bundles?: {
-      control: { bundle_id?: string; arn: string; version?: string };
-      treatment: { bundle_id?: string; arn: string; version?: string };
-    };
-    gateway?: { gateway_id: string; gateway_url?: string; target_v1?: string;
-      online_evaluators?: string[] };
-    abtest?: { ab_test_id: string };
-    // status_counts is diagnostic only (throttling shows up as a "429" bucket);
-    // absent on artifacts written before the concurrent send landed
-    traffic?: { sent: number; failed: number; dataset_id?: string;
-      dataset_name?: string; status_counts?: Record<string, number> };
-    verdict?: { verdict: string; avg_delta?: number; n?: number;
-      significant?: boolean; metrics: ABMetric[] };
-    promotion_attempt?: {
-      ab_test_id: string;
-      ab_test_status: string;
-      stopped_at: string;
-      deployment_id?: string;
-      job_id?: string;
-    };
-    promote?: {
-      after_weights?: Record<string, number>;
-      prior_shift?: Record<string, number>;
-      ab_test_id?: string;
-      ab_test_status?: string;
-      agent_id?: string;
-      deployment_id?: string;
-      job_id?: string;
-      agent_version?: string | null;
-      applied_system_prompt?: boolean;
-      applied_tool_descriptions?: string[];
-      completed_at?: string;
-    };
-    canary?: {
-      canary_ab_test_id: string;
-      weights?: Record<string, number>;
-      after_weights?: Record<string, number>;
-      ramp_stage: number;
-      challenger_agent?: string;
-    };
-    cleanup?: { category: string; status: string }[];
-  };
-}
+export type { ABMetric, ExperimentInfo } from "../lib/experiments";
 
 interface EvaluatorInfo {
   id: string;
@@ -238,34 +62,6 @@ interface EvaluatorInfo {
   requires_ground_truth?: boolean;
   evaluator_type?: string | null;
   provider?: string | null;
-}
-
-// What the online evaluation config scores both arms with when the operator
-// doesn't touch the chips — mirrors service.ONLINE_EVAL_DEFAULT.
-const ONLINE_EVAL_DEFAULT = ["Builtin.GoalSuccessRate", "Builtin.Helpfulness"];
-const ONLINE_EVAL_MAX = 10;  // CreateOnlineEvaluationConfig caps the list at 10
-
-// Mirrors backend STAGES (app/optimization/models.py) — the sidebar renders
-// the loop even before any experiment exists, so the list is static here.
-const LOOP_STAGES = [
-  "recommend", "bundles", "gateway", "abtest", "traffic", "verdict",
-  "promote", "cleanup",
-];
-
-// "0.0310" reads worse than "0.031"; tiny values collapse to a bound.
-function fmtP(p: number): string {
-  return p < 0.001 ? "<0.001" : p.toFixed(3);
-}
-
-// A non-significant "winner" is noise — the label stays neutral wherever a
-// verdict is displayed (detail headline, list rows, terminal summary).
-function verdictLabel(
-  t: TFunction,
-  v: ExperimentInfo["artifacts"]["verdict"] | undefined,
-): string {
-  if (!v) return "—";
-  if (v.significant === false) return t("evalPage.experiment.nonsig.title");
-  return v.verdict.toUpperCase();
 }
 
 // status → chip tone, shared by the sub-page header and the dashboard row.
@@ -911,12 +707,12 @@ function ConfigurationExperimentView() {
             <option value="">{t("evalPage.newRun.noAgents")}</option>
           )}
           {agents.map((ag) => (
-            <option key={ag.id} value={ag.id} style={{ background: "#141816" }}>
+            <option key={ag.id} value={ag.id} style={{ background: "var(--panel)" }}>
               {ag.name} · {ag.method}
             </option>
           ))}
           {unsupportedAgents.map((ag) => (
-            <option key={ag.id} value="" disabled style={{ background: "#141816" }}>
+            <option key={ag.id} value="" disabled style={{ background: "var(--panel)" }}>
               {ag.name} · {ag.method} —{" "}
               {ag.experiment_capability.reason_code
                 ? t(`expPage.reason.${ag.experiment_capability.reason_code}`)
@@ -971,7 +767,7 @@ function ConfigurationExperimentView() {
                 style={{ width: "auto", minWidth: 92, height: 30, padding: "3px 26px 3px 8px" }}
               >
                 {TRACE_LOOKBACK_OPTIONS.map((hours) => (
-                  <option key={hours} value={hours} style={{ background: "#141816" }}>
+                  <option key={hours} value={hours} style={{ background: "var(--panel)" }}>
                     {t(`expPage.readiness.windowOption.h${hours}`)}
                   </option>
                 ))}
@@ -1148,7 +944,7 @@ function ConfigurationExperimentView() {
               )}
               {datasets.map((dataset) => (
                 <option key={dataset.id} value={dataset.id}
-                        style={{ background: "#141816" }}>
+                        style={{ background: "var(--panel)" }}>
                   {dataset.name} · {dataset.item_count}
                 </option>
               ))}
@@ -1342,11 +1138,11 @@ function ConfigurationExperimentView() {
             persistRecPrefs({ source: e.target.value });
           }}
         >
-          <option value="" style={{ background: "#141816" }}>
+          <option value="" style={{ background: "var(--panel)" }}>
             {t("expPage.recSourceWindow")}
           </option>
           {recSourceRuns.map((run) => (
-            <option key={run.id} value={run.id} style={{ background: "#141816" }}>
+            <option key={run.id} value={run.id} style={{ background: "var(--panel)" }}>
               {run.mode === "insights"
                 ? t("expPage.recSourceInsights")
                 : t("expPage.recSourceEval")}
@@ -1409,7 +1205,7 @@ function ConfigurationExperimentView() {
             }}
           >
             {recProviders.map((p) => (
-              <option key={p.id} value={p.id} style={{ background: "#141816" }}>
+              <option key={p.id} value={p.id} style={{ background: "var(--panel)" }}>
                 {p.label}
               </option>
             ))}
@@ -1433,14 +1229,14 @@ function ConfigurationExperimentView() {
                   <option
                     key={m.model_id}
                     value={m.model_id === recProvider.default_model_id ? "" : m.model_id}
-                    style={{ background: "#141816" }}
+                    style={{ background: "var(--panel)" }}
                   >
                     {m.label}
                     {m.model_id === recProvider.default_model_id
                       ? ` · ${t("expPage.providerDefaultModel")}` : ""}
                   </option>
                 ))}
-                <option value={CUSTOM_MODEL_OPTION} style={{ background: "#141816" }}>
+                <option value={CUSTOM_MODEL_OPTION} style={{ background: "var(--panel)" }}>
                   {t("expPage.providerCustomModel")}
                 </option>
               </select>
@@ -1998,7 +1794,7 @@ function ConfigurationExperimentView() {
               <option value="">{t("expPage.noTrafficDataset")}</option>
             )}
             {datasets.map((d) => (
-              <option key={d.id} value={d.id} style={{ background: "#141816" }}>
+              <option key={d.id} value={d.id} style={{ background: "var(--panel)" }}>
                 {d.name} ({d.item_count})
               </option>
             ))}
@@ -2435,7 +2231,7 @@ function ConfigurationExperimentView() {
                   style={{
                     cursor: "pointer",
                     background:
-                      exp?.id === e.id ? "rgba(255,176,0,.045)" : undefined,
+                      exp?.id === e.id ? "rgba(var(--amber-rgb),.045)" : undefined,
                   }}
                 >
                   <td className="pri">{e.name}</td>

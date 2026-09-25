@@ -2359,22 +2359,69 @@ through the same backend routes and permission checks as the classic pages.
 
 - **Switching.** The classic topbar has a "Try V2" chip; V2's top bar has
   "Classic console". The choice is a per-browser convenience in `localStorage`
-  (`lib/ui-version.ts`, key `launchpad_ui_version`); when it is `v2` the index
-  route `/` redirects to `/v2`. Storage that is blocked simply means classic.
+  (`lib/ui-version.ts`, key `launchpad_ui_version`, exposed reactively through
+  `useUiVersion()`); when it is `v2` the index route `/` redirects to `/v2`.
+  Opening any `/v2` page also selects V2. Storage that is blocked simply means
+  classic (the switch still applies to the open tab).
+- **Classic modules inside V2.** The classic route group renders through
+  `ConsoleShell` in `App.tsx`: the classic `<Shell />`, or — once V2 is chosen —
+  `<V2Shell classic />`. So `/chat`, `/agents/…`, `/registry` keep their URLs in both
+  consoles, cross-module links work unchanged, and switching keeps the current page
+  (only a native `/v2` page, which has no classic twin, falls back to `/`). The
+  classic pages are styled entirely through the tokens in `theme/tokens.css`
+  (the surfaces and tints they used to hard-code are tokens too: `--field`,
+  `--code-bg`, `--on-amber`, `--amber-rgb`, `--tint-rgb`, `--bg-rgb`, …);
+  `v2/v2-classic.css` re-points those tokens to the V2 palette on `body.v2-body`
+  (so portaled toasts and dialogs follow) and adds shape tweaks under
+  `.v2-classic`, the content wrapper of a classic page.
 - **Styling isolation.** Everything in `v2/v2.css` is scoped under `.v2` (the shell
   root) or `body.v2-body`, a class the shell adds to `<body>` only while mounted to
   neutralize the classic dark background and film grain. The classic theme is
   untouched; V2 ships its own component kit (`v2/ui.tsx`: button, tag, filter
   select, search, table + pager, card, wizard steps, modal, drawer, descriptions,
   KPI, toast) instead of reusing the classic components.
-- **What is native V2.** The workbench (`/v2`) and the Agent evaluation module:
+- **Agent management (native).** `/v2/agents` (`v2/pages/Agents.tsx`) lists the
+  workspace's agents with the classic permission rules per row; `?view=detail&id=`
+  shows basic information, the five-stage deploy pipeline with the job log (polled
+  while deploying), AWS versions/endpoints, BYOC artifact, conversion provenance and
+  knowledge bases; `?view=new` is the creation wizard (`v2/pages/agents/AgentWizard.tsx`).
+  The wizard configures the **managed Harness** end to end and posts the same
+  `AgentSpecInput` the classic wizard builds for it (catalogs: `registryAttachables()`,
+  the managed-KB list, memory resources); Strands, other Agent SDK and BYOC hand off to
+  the classic wizard at `/agents/new?method=…`, which opens its configure step with
+  that method preselected. Editing, importing, system presets and the Studio canvas
+  stay classic. In V2 the classic `/agents` and `/agents/:id` URLs redirect to the
+  native pages (`AgentsRoute` in `App.tsx`), so cross-module links and the classic
+  wizard's post-deploy hand-over land there.
+- **Online evaluation and experiments (native).** `/v2/eval/online` (`v2/pages/Online.tsx`,
+  shared rules in `v2/online.ts`) manages every online evaluation config — agent-owned,
+  experiment arms (read-only) and external ones, scores and insights modes: list with
+  mode/owner/execution filters (polled while CREATING/UPDATING/DELETING), detail with
+  the server's per-evaluator aggregates and trend plus the judged records (scores) or
+  the scheduled / on-demand insight reports with a report drawer (insights), and a
+  create/edit form with filters whose save sends only the changed fields
+  (`api.v2UpdateOnlineConfig`, PATCH). `/v2/eval/experiments` (`v2/pages/Experiments.tsx`)
+  rebuilds the configuration-bundle experiment — list, `?view=new` (agent, trace
+  readiness, baseline run) and `?view=detail&id=` with one stage card per step
+  (recommend → bundles → gateway/A-B → traffic → verdict/promote → cleanup) posting the
+  same actions as the classic page; the per-experiment RECOMMEND picker state lives in
+  `lib/experiments.ts`, shared with the classic page. Runtime canaries are its second tab
+  (`mode=canary`, `v2/pages/canary/`): list, `canary=new` (champion + candidate prompt /
+  Studio code, accepting the experiment's promote hand-off `champion=` / `sourceExp=`)
+  and `canary=<id>` with setup plus one card per ramp stage (90/10 → 50/50 → 1/99:
+  traffic, verdict, advance/complete with the non-significant override confirm),
+  rollback and cleanup. In V2 the classic
+  `/evaluation?view=online|experiment` URLs are mapped onto these pages (`EvaluationRoute`
+  in `App.tsx`, `oe=`/`exp=` become `view=detail&id=`); the classic evaluation page and
+  its section nav are no longer reached from the V2 sidebar.
+- **What is native V2.** The workbench (`/v2`), Agent management (above) and the Agent evaluation module:
   数据中心 `/v2/eval/data` (tabs: Agent trajectories = observability traces with a
   trace/session detail, datasets with a record editor, data-processing pipelines),
   评估任务 `/v2/eval/tasks`, 分析洞察 `/v2/eval/insights` and 评估器
   `/v2/eval/evaluators`. Sub-pages follow the console convention: `?view=` states
   of one route (`view=new|detail|edit|trace|dataset|pipeline…`). Every other
-  sidebar entry (agent development, runtime, experiments, administration) opens the
-  classic page and is tagged 经典版 until it is migrated.
+  sidebar entry (agent development, runtime, experiments, administration) is a
+  classic module rendered inside the V2 shell until it is rebuilt natively.
 - **Evaluation tasks unify two resources** (`v2/tasks.ts`): a batch evaluation run
   is a *history* task (time window, hand-picked sessions or a dataset replay,
   evaluated once; `name`/`description` stored on the run row), an agent-owned

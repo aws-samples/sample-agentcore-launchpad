@@ -2,7 +2,13 @@
 
 import i18n from "../i18n";
 import type { KBSourceBody, KnowledgeBaseDetail } from "../pages/KnowledgeBases";
-import type { EvaluationRunInfo, EvaluationRunResults, InsightTrees } from "./evaluation";
+import type {
+  EvaluationRunInfo,
+  EvaluationRunResults,
+  ExperimentReadiness,
+  InsightTrees,
+} from "./evaluation";
+import type { ExperimentInfo } from "./experiments";
 import type { ModelSource, ReasoningEffort } from "./models";
 import { WORKSPACE_HEADER } from "./workspace-header";
 
@@ -306,6 +312,32 @@ export interface AttachableKnowledgeBase {
   description?: string;
   status?: string;
   type?: string;
+}
+
+/** `GET /api/registry/attachables` — APPROVED registry records an agent can mount. */
+export interface AttachableMcpServer {
+  name: string;
+  description: string;
+  url: string;
+  /** a Gateway target (token exchange by the platform) vs a remote MCP URL */
+  gateway: boolean;
+  record_id: string;
+  gateway_id: string | null;
+  gateway_arn: string | null;
+  attachable: boolean;
+  attachability_reason: string | null;
+  auth_type: "aws_iam" | "none" | "oauth" | null;
+}
+
+export interface AttachableSkillRow {
+  name: string;
+  description: string;
+  path: string;
+}
+
+export interface RegistryAttachables {
+  mcp_servers: AttachableMcpServer[];
+  skills: AttachableSkillRow[];
 }
 
 export type SystemPresetEditableField =
@@ -737,7 +769,8 @@ export interface AgentSpecInput {
   native_tools?: HarnessNativeTool[];
   // Managed KB references mounted onto the agent (harness method only).
   knowledge_bases?: { kb_id: string; name: string; description: string }[];
-  memory?: { short_term: boolean; long_term: boolean };
+  /** `memory_id` pins one AgentCore Memory; omitted ⇒ the workspace's shared default */
+  memory?: { short_term: boolean; long_term: boolean; memory_id?: string };
   code?: string;
   requirements?: string[];
   env?: Record<string, string>;
@@ -3768,6 +3801,7 @@ export const api = {
   /** The managed KB catalog of ONE workspace (`GET /api/knowledge-bases`), typed and
    * pinned like the preset calls: a failure is an `ApiError` (401 raises the global
    * unauthorized event), never an empty list. */
+  registryAttachables: () => request<RegistryAttachables>("/api/registry/attachables"),
   listAttachableKnowledgeBases: (workspaceId?: string | null) =>
     request<{ items: AttachableKnowledgeBase[] }>("/api/knowledge-bases", {
       headers: pinnedWorkspace(workspaceId),
@@ -4501,6 +4535,35 @@ export const api = {
   v2DeleteOnlineConfig: (id: string) =>
     request<{ deleted: boolean }>(`/api/eval/online/${encodeURIComponent(id)}`, {
       method: "DELETE",
+    }),
+  /** Only changed fields travel; the backend merges them into the stored rule. */
+  v2UpdateOnlineConfig: (id: string, body: OnlineEvalConfigPatch) =>
+    request<OnlineEvalConfigRow>(`/api/eval/online/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  /** Full experiment rows (artifacts included) — `listExperiments` is the summary. */
+  v2Experiments: () => request<{ experiments: ExperimentInfo[] }>("/api/experiments"),
+  v2Experiment: (id: string) => request<ExperimentInfo>(`/api/experiments/${encodeURIComponent(id)}`),
+  v2ExperimentReadiness: (agentId: string, lookbackHours: number, force = false) =>
+    request<ExperimentReadiness>(
+      `/api/experiments/readiness?${new URLSearchParams({
+        agent_id: agentId,
+        lookback_hours: String(lookbackHours),
+        ...(force ? { force: "true" } : {}),
+      }).toString()}`,
+    ),
+  v2CreateExperiment: (agentId: string, lookbackHours: number) =>
+    request<ExperimentInfo>("/api/experiments", {
+      method: "POST",
+      body: JSON.stringify({ agent_id: agentId, lookback_hours: lookbackHours }),
+    }),
+  /** One stage action (`recommend`, `accept`, `bundles`, `gateway`, `abtest`,
+   *  `traffic`, `verdict`, `promote`, `cleanup`) with its stage-specific fields. */
+  v2ExperimentAction: (id: string, action: string, extra: Record<string, unknown> = {}) =>
+    request<{ experiment: ExperimentInfo }>(`/api/experiments/${encodeURIComponent(id)}/action`, {
+      method: "POST",
+      body: JSON.stringify({ action, ...extra }),
     }),
   v2OnlineResults: (id: string, range: V2Range) =>
     request<OnlineEvalResults>(

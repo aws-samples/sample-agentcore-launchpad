@@ -1,6 +1,5 @@
 import { LogOut, ShieldOff, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/auth-context";
 import { setUiVersion } from "../lib/ui-version";
@@ -19,7 +18,6 @@ export function Topbar({ crumbKey, health, healthStatus }: TopbarProps) {
   const { t } = useTranslation();
   const { authRequired, username, role, accountExpiresAt, logout } = useAuth();
   const { current } = useWorkspace();
-  const navigate = useNavigate();
   const displayName = authRequired ? (username ?? "—") : "river";
   const initials = displayName.slice(0, 2).toUpperCase();
   const roleLabel = authRequired
@@ -56,14 +54,12 @@ export function Topbar({ crumbKey, health, healthStatus }: TopbarProps) {
           </div>
         )}
         {/* Console V2 ships alongside this console; the choice is remembered
-            per browser (lib/ui-version) and V2 offers the way back. */}
+            per browser (lib/ui-version) and V2 offers the way back. The page
+            stays put: V2 renders the same route inside its own shell. */}
         <button
           type="button"
           className="syschip link v2-entry"
-          onClick={() => {
-            setUiVersion("v2");
-            navigate("/v2");
-          }}
+          onClick={() => setUiVersion("v2")}
           title={t("v2.tryHint")}
           data-testid="topbar-try-v2"
         >

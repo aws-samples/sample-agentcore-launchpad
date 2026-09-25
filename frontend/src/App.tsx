@@ -1,8 +1,8 @@
 import { lazy } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 
 import { ToastProvider } from "./components";
-import { getUiVersion } from "./lib/ui-version";
+import { useUiVersion } from "./lib/ui-version";
 import { RouteChunk } from "./layout/RouteChunk";
 import { Shell } from "./layout/Shell";
 import { NotFound } from "./pages/NotFound";
@@ -69,8 +69,9 @@ const Workspaces = lazy(() =>
   import("./pages/Workspaces").then((m) => ({ default: m.Workspaces })),
 );
 
-// Console V2 (light enterprise-SaaS experience) lives under /v2 with its own
-// shell; the classic console keeps every existing route. Both ship side by side.
+// Console V2 (light enterprise-SaaS experience): native V2 pages live under /v2;
+// every classic route keeps its URL and, once the operator chose V2, renders
+// inside the V2 shell instead of the classic one (see ConsoleShell).
 const V2Shell = lazy(() => import("./v2/V2Shell").then((m) => ({ default: m.V2Shell })));
 const V2Home = lazy(() => import("./v2/pages/Home").then((m) => ({ default: m.V2Home })));
 const V2DataCenter = lazy(() =>
@@ -83,13 +84,98 @@ const V2Insights = lazy(() =>
 const V2Evaluators = lazy(() =>
   import("./v2/pages/Evaluators").then((m) => ({ default: m.V2Evaluators })),
 );
+const V2Agents = lazy(() => import("./v2/pages/Agents").then((m) => ({ default: m.V2Agents })));
+const V2Online = lazy(() => import("./v2/pages/Online").then((m) => ({ default: m.V2Online })));
+const V2Experiments = lazy(() =>
+  import("./v2/pages/Experiments").then((m) => ({ default: m.V2Experiments })),
+);
 const V2NotFound = lazy(() =>
   import("./v2/pages/Home").then((m) => ({ default: m.V2NotFound })),
 );
 
 /** The index route honours the operator's remembered console choice. */
 function IndexRoute() {
-  return getUiVersion() === "v2" ? <Navigate to="/v2" replace /> : <Overview />;
+  return useUiVersion() === "v2" ? <Navigate to="/v2" replace /> : <Overview />;
+}
+
+/**
+ * Agent list and detail have a native V2 page: in V2 the classic URLs (links from
+ * other modules, the wizard's hand-over after a deploy) land there. Creating,
+ * editing and importing stay on the classic flows, inside the V2 shell.
+ */
+function AgentsRoute({ mode }: { mode: "list" | "detail" }) {
+  const { agentId } = useParams();
+  if (useUiVersion() === "v2") {
+    const to = mode === "detail" && agentId ? `/v2/agents?view=detail&id=${agentId}` : "/v2/agents";
+    return <Navigate to={to} replace />;
+  }
+  return <CreateAgent mode={mode} />;
+}
+
+/**
+ * In V2 the classic evaluation page's experiment and online sub-pages have native
+ * twins: their URLs (hand-offs from runs, agents, bookmarks) are mapped onto them.
+ * Every other `/evaluation` view stays classic inside the V2 shell.
+ */
+function v2EvaluationTarget(search: string): string | null {
+  const params = new URLSearchParams(search);
+  const view = params.get("view");
+  const next = new URLSearchParams();
+  if (view === "online") {
+    const oe = params.get("oe");
+    if (oe === "new") next.set("view", "new");
+    else if (oe) {
+      next.set("view", "detail");
+      next.set("id", oe);
+    }
+    const q = next.toString();
+    return `/v2/eval/online${q ? `?${q}` : ""}`;
+  }
+  if (view === "experiment") {
+    if (params.get("mode") === "canary") {
+      next.set("mode", "canary");
+      for (const key of ["canary", "champion", "sourceExp"]) {
+        const value = params.get(key);
+        if (value) next.set(key, value);
+      }
+    } else {
+      const exp = params.get("exp");
+      if (exp === "new") {
+        next.set("view", "new");
+        for (const key of ["agent", "lookback", "baselineRun", "sourceRun"]) {
+          const value = params.get(key);
+          if (value) next.set(key, value);
+        }
+      } else if (exp) {
+        next.set("view", "detail");
+        next.set("id", exp);
+      }
+    }
+    const q = next.toString();
+    return `/v2/eval/experiments${q ? `?${q}` : ""}`;
+  }
+  return null;
+}
+
+function EvaluationRoute() {
+  const { search } = useLocation();
+  const target = useUiVersion() === "v2" ? v2EvaluationTarget(search) : null;
+  return target ? <Navigate to={target} replace /> : <Evaluation />;
+}
+
+/**
+ * Chrome for the classic routes: the classic shell, or the V2 shell when the
+ * operator chose V2 — so links between modules (`/agents/…`, `/chat?agent=…`)
+ * work unchanged in both consoles and switching keeps the current page.
+ */
+function ConsoleShell() {
+  return useUiVersion() === "v2" ? (
+    <RouteChunk>
+      <V2Shell classic />
+    </RouteChunk>
+  ) : (
+    <Shell />
+  );
 }
 
 export default function App() {
@@ -107,18 +193,21 @@ export default function App() {
               }
             >
               <Route index element={<V2Home />} />
+              <Route path="agents" element={<V2Agents />} />
               <Route path="eval/data" element={<V2DataCenter />} />
               <Route path="eval/tasks" element={<V2Tasks />} />
               <Route path="eval/insights" element={<V2Insights />} />
               <Route path="eval/evaluators" element={<V2Evaluators />} />
+              <Route path="eval/online" element={<V2Online />} />
+              <Route path="eval/experiments" element={<V2Experiments />} />
               <Route path="*" element={<V2NotFound />} />
             </Route>
-            <Route element={<Shell />}>
+            <Route element={<ConsoleShell />}>
             <Route index element={<IndexRoute />} />
-            <Route path="agents" element={<CreateAgent mode="list" />} />
+            <Route path="agents" element={<AgentsRoute mode="list" />} />
             <Route path="agents/new" element={<CreateAgent mode="new" />} />
             <Route path="agents/import" element={<CreateAgent mode="import" />} />
-            <Route path="agents/:agentId" element={<CreateAgent mode="detail" />} />
+            <Route path="agents/:agentId" element={<AgentsRoute mode="detail" />} />
             <Route path="agents/:agentId/edit" element={<CreateAgent mode="edit" />} />
             <Route path="create" element={<LegacyCreateRedirect />} />
             <Route path="create/studio" element={<CreateAgentStudio />} />
@@ -128,7 +217,7 @@ export default function App() {
               <Route path="memory" element={<Memory />} />
               <Route path="chat" element={<Chat />} />
               <Route path="observability" element={<Observability />} />
-              <Route path="evaluation" element={<Evaluation />} />
+              <Route path="evaluation" element={<EvaluationRoute />} />
               <Route path="skill-lab" element={<SkillLab />} />
               <Route path="governance" element={<Governance />} />
               <Route path="users" element={<Users />} />

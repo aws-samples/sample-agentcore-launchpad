@@ -718,7 +718,7 @@ export function SkillLabTrain({ status }: { status: SkillLabStatus | null }) {
                   onClick={() => select(row.id)}
                   style={{
                     cursor: "pointer",
-                    background: jobParam === row.id ? "rgba(255,176,0,.045)" : undefined,
+                    background: jobParam === row.id ? "rgba(var(--amber-rgb),.045)" : undefined,
                   }}
                 >
                   <td>{statusChip(row)}</td>

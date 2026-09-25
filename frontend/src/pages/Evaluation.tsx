@@ -573,7 +573,7 @@ export function Evaluation() {
                   <option value="">{t("evalPage.newRun.noAgents")}</option>
                 )}
                 {agents.map((a) => (
-                  <option key={a.id} value={a.id} style={{ background: "#141816" }}>
+                  <option key={a.id} value={a.id} style={{ background: "var(--panel)" }}>
                     {a.name} · {a.method}
                   </option>
                 ))}
@@ -611,7 +611,7 @@ export function Evaluation() {
                 >
                   <optgroup label={t("evalPage.newRun.localGroup")}>
                     {datasets.map((d) => (
-                      <option key={d.id} value={d.id} style={{ background: "#141816" }}>
+                      <option key={d.id} value={d.id} style={{ background: "var(--panel)" }}>
                         {d.name} · {d.item_count} ({d.locale})
                         {d.has_ground_truth ? " ◆" : ""}
                       </option>
@@ -624,7 +624,7 @@ export function Evaluation() {
                           key={d.datasetId}
                           value={CLOUD_VALUE_PREFIX + d.datasetId}
                           disabled={!cloudRunnable(d)}
-                          style={{ background: "#141816" }}
+                          style={{ background: "var(--panel)" }}
                         >
                           ☁ {d.name} · {d.exampleCount ?? "?"}
                           {d.schemaType === SIMULATED_SCHEMA
@@ -651,11 +651,11 @@ export function Evaluation() {
                       data-testid="dataset-version"
                       onChange={(e) => setDatasetVersion(e.target.value)}
                     >
-                      <option value="" style={{ background: "#141816" }}>
+                      <option value="" style={{ background: "var(--panel)" }}>
                         {t("evalPage.newRun.versionDraft")}
                       </option>
                       {cloudVersions.map((v) => (
-                        <option key={v.version} value={v.version} style={{ background: "#141816" }}>
+                        <option key={v.version} value={v.version} style={{ background: "var(--panel)" }}>
                           {t("evalPage.newRun.versionOption", {
                             version: v.version,
                             examples: v.example_count ?? "?",
@@ -679,7 +679,7 @@ export function Evaluation() {
                       onChange={(e) => setActorModelId(e.target.value)}
                     >
                       {ACTOR_MODELS.map((m) => (
-                        <option key={m} value={m} style={{ background: "#141816" }}>
+                        <option key={m} value={m} style={{ background: "var(--panel)" }}>
                           {m}
                         </option>
                       ))}
@@ -1005,7 +1005,7 @@ export function Evaluation() {
                 style={{
                   cursor: "pointer",
                   background:
-                    selectedRun?.id === run.id ? "rgba(255,176,0,.045)" : undefined,
+                    selectedRun?.id === run.id ? "rgba(var(--amber-rgb),.045)" : undefined,
                 }}
               >
                 <td className="mono">run-{run.id.slice(0, 6)}</td>

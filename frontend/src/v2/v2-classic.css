@@ -1,0 +1,69 @@
+/* ============ console V2 — classic module pages on the V2 light theme ============
+   The classic pages are styled entirely through the design tokens in
+   theme/tokens.css. While the V2 shell is mounted (body.v2-body) those tokens are
+   re-pointed to the V2 palette; on <body> rather than the shell root so portaled
+   UI (toasts, confirm dialogs, row menus) follows. The shape tweaks below are
+   scoped to `.v2-classic`, the content area wrapping a classic page. */
+
+body.v2-body {
+  --bg: #f4f6fa;
+  --panel: #ffffff;
+  --panel-2: #f7f8fa;
+  --line: #e5e6eb;
+  --line-2: #dcdfe6;
+  --grid: #f2f3f5;
+  --ink: #1d2129;
+  --ink-2: #4e5969;
+  --ink-3: #86909c;
+  /* the classic brand signal becomes the V2 primary */
+  --amber: #1664ff;
+  --amber-soft: #e8f3ff;
+  --amber-rgb: 22, 100, 255;
+  --amber-hover: #4080ff;
+  --amber-active: #0e42d2;
+  --on-amber: #ffffff;
+  --good: #00b42a;
+  --warn: #ff7d00;
+  --serious: #f77234;
+  --crit: #f53f3f;
+  --crit-text: #cb2634;
+  --field: #ffffff;
+  --code-bg: #f7f8fa;
+  --tint-rgb: 0, 0, 0;
+  --bg-rgb: 255, 255, 255;
+  --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* ---------- page head ---------- */
+.v2-classic .vhead { margin-bottom: 16px; }
+.v2-classic .vhead h1 { font-stretch: normal; font-weight: 600; font-size: 20px; letter-spacing: 0; }
+.v2-classic .kicker { letter-spacing: 0.08em; }
+
+/* ---------- surfaces ---------- */
+.v2-classic .panel,
+.v2-classic .tile { border-radius: var(--v2-radius); box-shadow: var(--v2-shadow); border-color: var(--v2-line); }
+.v2-classic .panel.brk::before,
+.v2-classic .panel.brk::after { display: none; }
+.v2-classic .phead h2 { font-stretch: normal; font-size: 14px; font-weight: 600; letter-spacing: 0; }
+
+/* ---------- controls ---------- */
+.v2-classic .btn {
+  font-family: var(--v2-font); font-size: 13px; letter-spacing: 0; border-radius: var(--v2-radius-sm);
+  padding: 6px 14px; background: #fff; border-color: var(--v2-line);
+}
+.v2-classic .btn:hover:not(:disabled) { border-color: var(--v2-primary); color: var(--v2-primary); }
+.v2-classic .btn.primary { background: var(--v2-primary); border-color: var(--v2-primary); color: #fff; font-weight: 500; }
+.v2-classic .btn.primary:hover:not(:disabled) { background: var(--v2-primary-hover); color: #fff; }
+.v2-classic .input,
+.v2-classic .search,
+.v2-classic select,
+.v2-classic textarea { border-radius: var(--v2-radius-sm); }
+.v2-classic .input:focus,
+.v2-classic textarea:focus { border-color: var(--v2-primary); outline: none; }
+.v2-classic .chip { border-radius: var(--v2-radius-sm); }
+
+/* ---------- tables ---------- */
+.v2-classic th { font-family: var(--v2-font); font-size: 13px; letter-spacing: 0; color: var(--v2-ink-2); background: var(--v2-fill); }
+.v2-classic tr:hover td { background: var(--v2-fill); }
+.v2-classic td.pri { font-weight: 500; }

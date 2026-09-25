@@ -115,7 +115,7 @@ export function TrainTimeline({
             </tr>,
             isOpen && (
               <tr key={`s-${index}-detail`} data-testid={`train-step-detail-${step.step ?? index}`}>
-                <td colSpan={6} style={{ background: "rgba(255,255,255,.015)" }}>
+                <td colSpan={6} style={{ background: "rgba(var(--tint-rgb),.015)" }}>
                   {([
                     ["gateReasons", reasons],
                     ["excludedFailures", excluded],

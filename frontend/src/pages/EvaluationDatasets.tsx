@@ -898,7 +898,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
           key={si}
           data-testid="scenario-card"
           style={{
-            border: "1px solid rgba(255,255,255,.08)",
+            border: "1px solid rgba(var(--tint-rgb),.08)",
             borderRadius: 4,
             padding: "10px 12px",
             marginBottom: 10,
@@ -1086,7 +1086,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
         <div
           key={si}
           style={{
-            border: "1px solid rgba(255,255,255,.08)",
+            border: "1px solid rgba(var(--tint-rgb),.08)",
             borderRadius: 4,
             padding: "10px 12px",
             marginBottom: 10,
@@ -1311,7 +1311,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
                   style={{
                     cursor: "pointer",
                     background:
-                      local?.id === row.id ? "rgba(255,176,0,.045)" : undefined,
+                      local?.id === row.id ? "rgba(var(--amber-rgb),.045)" : undefined,
                   }}
                 >
                   <td className="pri">{row.name}</td>
@@ -1340,7 +1340,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
                   style={{
                     cursor: "pointer",
                     background:
-                      cloud?.datasetId === row.datasetId ? "rgba(255,176,0,.045)" : undefined,
+                      cloud?.datasetId === row.datasetId ? "rgba(var(--amber-rgb),.045)" : undefined,
                   }}
                 >
                   <td className="mono">☁ {row.name ?? row.datasetId}</td>
@@ -1635,7 +1635,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
                 <div
                   data-testid="cloud-copy"
                   style={{
-                    border: "1px solid rgba(255,255,255,.08)",
+                    border: "1px solid rgba(var(--tint-rgb),.08)",
                     borderRadius: 4,
                     padding: "10px 12px",
                     marginTop: 10,

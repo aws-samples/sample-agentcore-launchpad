@@ -504,7 +504,7 @@ export function TaskgenPanel({
                   style={{
                     cursor: "pointer",
                     background: recordIds.includes(record.record_id)
-                      ? "rgba(255,176,0,.045)"
+                      ? "rgba(var(--amber-rgb),.045)"
                       : undefined,
                   }}
                   onClick={() => toggleRecord(record.record_id)}
@@ -553,7 +553,7 @@ export function TaskgenPanel({
               ? status.target_backends
               : (Object.keys(BACKEND_LABELS) as SkillLabTargetBackend[])
             ).map((option) => (
-              <option key={option} value={option} style={{ background: "#141816" }}>
+              <option key={option} value={option} style={{ background: "var(--panel)" }}>
                 {BACKEND_LABELS[option] ?? option}
               </option>
             ))}
@@ -663,10 +663,10 @@ export function TaskgenPanel({
             data-testid="taskgen-expand-select"
             onChange={(e) => setExpandId(e.target.value)}
           >
-            <option value="" style={{ background: "#141816" }}>{t("skillLab.taskgen.expand.none")}</option>
+            <option value="" style={{ background: "var(--panel)" }}>{t("skillLab.taskgen.expand.none")}</option>
             {/* samples are read-only — expanding one would 409 at submit */}
             {tasksets.filter((row) => !row.sample).map((row) => (
-              <option key={row.id} value={row.id} style={{ background: "#141816" }}>
+              <option key={row.id} value={row.id} style={{ background: "var(--panel)" }}>
                 {row.name} ({row.mode})
               </option>
             ))}
@@ -685,7 +685,7 @@ export function TaskgenPanel({
               onChange={(e) => setTargetSplit(e.target.value)}
             >
               {splitOptions.map((option) => (
-                <option key={option} value={option} style={{ background: "#141816" }}>
+                <option key={option} value={option} style={{ background: "var(--panel)" }}>
                   {option}
                 </option>
               ))}
@@ -970,7 +970,7 @@ export function TaskgenPanel({
                   onClick={() => onSelectJob(job.id)}
                   style={{
                     cursor: "pointer",
-                    background: jobId === job.id ? "rgba(255,176,0,.045)" : undefined,
+                    background: jobId === job.id ? "rgba(var(--amber-rgb),.045)" : undefined,
                   }}
                 >
                   <td className="mono">{job.id}</td>

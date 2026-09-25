@@ -296,7 +296,7 @@ export function EvalResults({ results }: { results: SkillLabJobResults }) {
               </tr>,
               isOpen && (
                 <tr key={`${row.id}-detail`} data-testid={`eval-result-detail-${row.id}`}>
-                  <td colSpan={5} style={{ background: "rgba(255,255,255,.015)" }}>
+                  <td colSpan={5} style={{ background: "rgba(var(--tint-rgb),.015)" }}>
                     {details.length === 0 && (
                       <span className="dim mono" style={{ fontSize: 10.5 }}>
                         {t("skillLab.eval.noDetail")}

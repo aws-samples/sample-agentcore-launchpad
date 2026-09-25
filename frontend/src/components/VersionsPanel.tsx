@@ -175,7 +175,7 @@ export function VersionsPanel({ agentId }: { agentId: string }) {
                         data-testid="version-row"
                         data-version={v.version ?? ""}
                         data-ledger={isLedger ? "true" : undefined}
-                        style={isLedger ? { background: "rgba(255,176,0,.045)" } : undefined}
+                        style={isLedger ? { background: "rgba(var(--amber-rgb),.045)" } : undefined}
                       >
                         <td className="pri mono" style={{ whiteSpace: "nowrap" }}>
                           v{v.version ?? "?"}

@@ -11,6 +11,7 @@ import {
   ListChecks,
   MessagesSquare,
   PlayCircle,
+  Radar,
   ScrollText,
   ShieldCheck,
   Sparkles,
@@ -23,8 +24,8 @@ import {
 
 /**
  * One sidebar entry. `v2: true` entries are native V2 pages under /v2; the
- * others open the existing (V1) console page for that module until it is
- * migrated, and the sidebar marks them as such.
+ * others are classic module routes, which render inside the V2 shell on its
+ * light theme until the module is rebuilt natively.
  */
 export interface V2NavItem {
   to: string;
@@ -35,6 +36,9 @@ export interface V2NavItem {
   admin?: boolean;
   /** exact-match active state (the /v2 index) */
   end?: boolean;
+  /** other path prefixes that belong to this entry (e.g. the classic create
+   *  and edit flows of a module whose list is native) */
+  also?: string[];
 }
 
 export interface V2NavGroup {
@@ -54,7 +58,13 @@ export const V2_NAV: V2NavGroup[] = [
     labelKey: "v2.nav.groupBuild",
     items: [
       { to: "/create/assistant", labelKey: "nav.assistant", icon: Sparkles },
-      { to: "/agents", labelKey: "nav.createAgent", icon: Bot },
+      {
+        to: "/v2/agents",
+        labelKey: "nav.createAgent",
+        icon: Bot,
+        v2: true,
+        also: ["/agents", "/create/studio"],
+      },
       { to: "/registry", labelKey: "nav.registry", icon: SquareStack },
       { to: "/knowledge-bases", labelKey: "nav.knowledgeBases", icon: LibraryBig },
       { to: "/skill-lab", labelKey: "nav.skillLab", icon: BrainCircuit },
@@ -77,8 +87,9 @@ export const V2_NAV: V2NavGroup[] = [
       { to: "/v2/eval/data", labelKey: "v2.nav.dataCenter", icon: Database, v2: true },
       { to: "/v2/eval/tasks", labelKey: "v2.nav.tasks", icon: ListChecks, v2: true },
       { to: "/v2/eval/insights", labelKey: "v2.nav.insights", icon: ChartColumn, v2: true },
+      { to: "/v2/eval/online", labelKey: "v2.nav.online", icon: Radar, v2: true },
       { to: "/v2/eval/evaluators", labelKey: "v2.nav.evaluators", icon: Target, v2: true },
-      { to: "/evaluation?view=experiment", labelKey: "v2.nav.experiments", icon: FlaskConical },
+      { to: "/v2/eval/experiments", labelKey: "v2.nav.experiments", icon: FlaskConical, v2: true },
     ],
   },
   {

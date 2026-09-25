@@ -124,7 +124,7 @@ export function A2ADemoView({ onBack }: { onBack: () => void }) {
               onChange={(e) => setAgentId(e.target.value)}
             >
               {agents.map((a) => (
-                <option key={a.id} value={a.id} style={{ background: "#141816" }}>
+                <option key={a.id} value={a.id} style={{ background: "var(--panel)" }}>
                   {a.name} · {a.method}
                 </option>
               ))}

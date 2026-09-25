@@ -1176,6 +1176,20 @@ const deployLock = !canDeploy
     );
   };
 
+  // `/agents/new?method=zip_runtime|container|byoc` (the V2 console's hand-off for
+  // the methods it has no native form for) opens the configure step directly.
+  const prefillMethod = params.get("method");
+  useEffect(() => {
+    if (mode !== "new") return;
+    if (prefillMethod !== "zip_runtime" && prefillMethod !== "container" && prefillMethod !== "byoc") {
+      return;
+    }
+    pickMethod(prefillMethod);
+    setStep(2);
+    // once per landing: pickMethod is recreated every render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, prefillMethod]);
+
   const resetForm = () => {
     // back / restart / a new edit: any pending editor open or catalog read is stale
     nextEditorIntent();
@@ -2652,12 +2666,12 @@ const deployLock = !canDeploy
                     <option
                       key={option.model_id}
                       value={option.model_id}
-                      style={{ background: "#141816" }}
+                      style={{ background: "var(--panel)" }}
                     >
                       {option.label} · {option.model_id}
                     </option>
                   ))}
-                  <option value={CUSTOM_MODEL_OPTION} style={{ background: "#141816" }}>
+                  <option value={CUSTOM_MODEL_OPTION} style={{ background: "var(--panel)" }}>
                     {t("create.configure.modelCustom")}
                   </option>
                 </select>
@@ -2731,7 +2745,7 @@ const deployLock = !canDeploy
                     setByocModels((prev) => (prev.includes(picked) ? prev : [...prev, picked]));
                   }}
                 >
-                  <option value="" style={{ background: "#141816" }}>
+                  <option value="" style={{ background: "var(--panel)" }}>
                     {t("create.configure.byocModelAdd")}
                   </option>
                   {modelOptionsFor(modelSource)
@@ -2740,12 +2754,12 @@ const deployLock = !canDeploy
                       <option
                         key={option.model_id}
                         value={option.model_id}
-                        style={{ background: "#141816" }}
+                        style={{ background: "var(--panel)" }}
                       >
                         {option.label} · {option.model_id}
                       </option>
                     ))}
-                  <option value={CUSTOM_MODEL_OPTION} style={{ background: "#141816" }}>
+                  <option value={CUSTOM_MODEL_OPTION} style={{ background: "var(--panel)" }}>
                     {t("create.configure.modelCustom")}
                   </option>
                 </select>
@@ -2817,11 +2831,11 @@ const deployLock = !canDeploy
                     value={effortAllowed ? reasoningEffort : EFFORT_NONE}
                     onChange={(e) => setReasoningEffort(e.target.value as EffortChoice)}
                   >
-                    <option value={EFFORT_NONE} style={{ background: "#141816" }}>
+                    <option value={EFFORT_NONE} style={{ background: "var(--panel)" }}>
                       {t("create.system.settings.effortNone")}
                     </option>
                     {REASONING_EFFORTS.map((effort) => (
-                      <option key={effort} value={effort} style={{ background: "#141816" }}>
+                      <option key={effort} value={effort} style={{ background: "var(--panel)" }}>
                         {t(`create.system.settings.effortLevels.${effort}`)}
                       </option>
                     ))}
