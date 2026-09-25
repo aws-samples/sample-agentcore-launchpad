@@ -9,7 +9,6 @@ import { downloadCsv, fmtScore, fmtTime, scoreTone } from "./format";
 import { useLoad, usePaged } from "./hooks";
 import { AddToDatasetModal } from "./pages/data/AddToDataset";
 import type { ResultRow, ResultSummary } from "./results";
-import { sourceLabel } from "./tasks";
 import {
   Button,
   Card,
@@ -165,8 +164,8 @@ function ResultDrawer({ row, range, onClose }: { row: ResultRow; range: V2Range;
             <p className="v2-muted">{t("v2.traces.noTranscript")}</p>
           ) : (
             turns.map((turn, i) => (
-              <div key={i} className={turn.role === "user" ? "v2-turn user" : "v2-turn"}>
-                <span className="who">{turn.role === "user" ? t("v2.traces.user") : "Agent"}</span>
+              <div key={i} className={turn.role.toLowerCase() === "user" ? "v2-turn user" : "v2-turn"}>
+                <span className="who">{turn.role.toLowerCase() === "user" ? t("v2.traces.user") : "Agent"}</span>
                 <div className="msg">{turn.text}</div>
               </div>
             ))
@@ -252,7 +251,7 @@ export function ResultsTable({
       ? [
           { key: "task", title: t("v2.insights.colTask"), render: (r: ResultRow) => r.taskName },
           { key: "agent", title: "Agent", render: (r: ResultRow) => r.agent },
-          { key: "source", title: t("v2.tasks.colSource"), render: (r: ResultRow) => sourceLabel(t, { source: r.source, sourceDetail: "" }) },
+          { key: "source", title: t("v2.tasks.colSource"), render: (r: ResultRow) => t(`v2.taskSource.${r.source}Short`) },
         ]
       : []),
     {

@@ -27,7 +27,8 @@ SESSIONS = {
     SID_B: {
         "summary": {"agent": "hr-bot"},
         "transcript": {"available": True, "turns": [
-            {"role": "user", "text": "Reset my password", "at": "t1"},
+            # the ledger transcript really carries upper-case roles (USER / ASSISTANT)
+            {"role": "USER", "text": "Reset my password", "at": "t1"},
         ]},
     },
     SID_EMPTY: {"summary": {"agent": "hr-bot"},

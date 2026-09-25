@@ -304,8 +304,8 @@ export function TraceDetail({ traceId }: { traceId: string }) {
               </p>
             ) : (
               turns.map((turn, i) => (
-                <div key={i} className={turn.role === "user" ? "v2-turn user" : "v2-turn"}>
-                  <span className="who">{turn.role === "user" ? t("v2.traces.user") : "Agent"}</span>
+                <div key={i} className={turn.role.toLowerCase() === "user" ? "v2-turn user" : "v2-turn"}>
+                  <span className="who">{turn.role.toLowerCase() === "user" ? t("v2.traces.user") : "Agent"}</span>
                   <div className="msg">{turn.text}</div>
                 </div>
               ))
