@@ -26,6 +26,7 @@ import {
   type GovernanceOperation,
   type GovernancePolicyListResponse,
 } from "../../lib/api";
+import { buildAllowlistStatement, buildPreserveTrafficStatement } from "../../lib/governance";
 import {
   governanceError,
   isGatewayReady,
@@ -41,43 +42,6 @@ interface Props {
 }
 
 type ConfirmAction = "save" | "promote" | "rollback";
-
-function cedarString(value: string): string {
-  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
-}
-
-function buildAllowlistStatement(
-  gateway: GovernanceGatewayDetail,
-  actions: string[],
-): string {
-  const principal =
-    gateway.authorizer_type === "AWS_IAM"
-      ? "AgentCore::IamEntity"
-      : "AgentCore::OAuthUser";
-  const actionClause =
-    actions.length === 1
-      ? `action == AgentCore::Action::"${cedarString(actions[0])}"`
-      : `action in [${actions
-          .map((action) => `AgentCore::Action::"${cedarString(action)}"`)
-          .join(", ")}]`;
-  return `permit(
-  principal is ${principal},
-  ${actionClause},
-  resource == AgentCore::Gateway::"${cedarString(gateway.arn)}"
-);`;
-}
-
-function buildPreserveTrafficStatement(gateway: GovernanceGatewayDetail): string {
-  const principal =
-    gateway.authorizer_type === "AWS_IAM"
-      ? "AgentCore::IamEntity"
-      : "AgentCore::OAuthUser";
-  return `permit(
-  principal is ${principal},
-  action,
-  resource == AgentCore::Gateway::"${cedarString(gateway.arn)}"
-);`;
-}
 
 export function PolicyEditorView({ gatewayId, policyId, onNavigate }: Props) {
   const { t } = useTranslation();

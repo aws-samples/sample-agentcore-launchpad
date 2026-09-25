@@ -3410,6 +3410,100 @@ export interface DiscoverableRegistryRecord {
   updated_at: string | null;
 }
 
+// ---- V2 registry ----
+/** One skill `POST /api/registry/skills/inspect` found (zip upload, url or git source). */
+export interface RegistryInspectedSkill {
+  index?: number;
+  name: string;
+  description: string;
+  version: string;
+  files: string[];
+  skill_md_excerpt?: string;
+  valid: boolean;
+  errors: string[];
+}
+
+export interface RegistryInspectResponse {
+  skills: RegistryInspectedSkill[];
+  staging_id: string;
+}
+
+/** Acquisition source for a url / git inspect (`token` is used in memory only). */
+export type RegistrySkillSource =
+  | { kind: "url"; url: string }
+  | { kind: "git"; url: string; ref?: string; subdir?: string; token?: string };
+
+export interface RegistryImportSelection {
+  index?: number;
+  name: string;
+  name_override?: string;
+  description_override?: string;
+}
+
+/** `POST /api/registry/skills/import` — one row per selection, in selection order. */
+export interface RegistryImportResponse {
+  records: { name: string; ok: boolean; record?: RegistryRecordOut; error?: string }[];
+}
+
+/** `GET /api/registry/skills/capabilities` — members may be absent on older servers. */
+export interface RegistrySkillCapabilities {
+  git?: {
+    available?: boolean;
+    version?: string | null;
+    fallback_hosts?: string[];
+    install?: { auto_installable?: boolean; package_manager?: string | null; hint?: string };
+  };
+}
+
+export interface RegistryGitInstallResult {
+  ok: boolean;
+  git_version?: string;
+  error?: string;
+  hint?: string;
+}
+
+/** `POST /api/registry/records` — MCP carries `url`, an inline skill `skill_md`. */
+export interface RegistryCreateBody {
+  type: "MCP" | "AGENT_SKILLS";
+  name: string;
+  description: string;
+  url?: string;
+  skill_md?: string;
+}
+
+/** `PUT /api/registry/records/{id}` — only the changed members; a zip replace sends
+ *  `staging_id` + `index` from a prior inspect. */
+export interface RegistryUpdateBody {
+  description?: string;
+  url?: string;
+  skill_md?: string;
+  staging_id?: string;
+  index?: number;
+}
+
+/** One DISCOVER or INVOKE step the front-desk agent's tools appended (`a2a_trace`). */
+export interface RegistryA2ATraceEntry {
+  stage: "discover" | "invoke";
+  query?: string;
+  hits?: {
+    name?: string;
+    description?: string;
+    transport?: string;
+    skills?: { name?: string; description?: string; tags?: string[] }[];
+  }[];
+  target?: string;
+  transport?: string;
+  reason?: string;
+  request_excerpt?: string;
+  response_excerpt?: string;
+}
+
+export interface RegistryA2ADemoResult {
+  answer: string;
+  trace: RegistryA2ATraceEntry[];
+  latency_ms: number;
+}
+
 
 /* ── console V2 evaluation module ─────────────────────────────────────────
  * Wrappers for the evaluation endpoints the V2 pages bind to. The V1 pages
@@ -3553,6 +3647,67 @@ export const api = {
     request<LiveAgentCard>(
       `/api/registry/records/${encodeURIComponent(recordId)}/live-agent-card`,
     ),
+  // ---- V2 registry ----
+  registryRecords: () => request<{ records: RegistryRecordOut[] }>("/api/registry/records"),
+  /** Semantic search (SearchDiscoverableRegistryRecords) across every type. */
+  registrySearch: (q: string) =>
+    request<{ records: RegistryRecordOut[] }>(
+      `/api/registry/records/search?q=${encodeURIComponent(q)}`,
+    ),
+  registryRecord: (recordId: string) =>
+    request<RegistryRecordOut>(`/api/registry/records/${encodeURIComponent(recordId)}`),
+  /** Lifecycle action: `submit` | `approve` | `reject` | `disable`. */
+  registryAction: (recordId: string, action: string) =>
+    request<RegistryRecordOut>(`/api/registry/records/${encodeURIComponent(recordId)}/action`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    }),
+  registryCreate: (body: RegistryCreateBody) =>
+    request<RegistryRecordOut>("/api/registry/records", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  registryUpdate: (recordId: string, body: RegistryUpdateBody) =>
+    request<RegistryRecordOut>(`/api/registry/records/${encodeURIComponent(recordId)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  registryDelete: (recordId: string) =>
+    request<unknown>(`/api/registry/records/${encodeURIComponent(recordId)}`, {
+      method: "DELETE",
+    }),
+  /** Re-acquire a git/url skill from its stored source; bumps the record version. */
+  registryReimport: (recordId: string) =>
+    request<RegistryRecordOut>(
+      `/api/registry/records/${encodeURIComponent(recordId)}/reimport`,
+      { method: "POST" },
+    ),
+  registryInspectZip: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return requestForm<RegistryInspectResponse>("/api/registry/skills/inspect", form);
+  },
+  registryInspectSource: (source: RegistrySkillSource) =>
+    request<RegistryInspectResponse>("/api/registry/skills/inspect", {
+      method: "POST",
+      body: JSON.stringify({ source }),
+    }),
+  registryImport: (stagingId: string, selections: RegistryImportSelection[]) =>
+    request<RegistryImportResponse>("/api/registry/skills/import", {
+      method: "POST",
+      body: JSON.stringify({ staging_id: stagingId, selections }),
+    }),
+  registrySkillCapabilities: () =>
+    request<RegistrySkillCapabilities>("/api/registry/skills/capabilities"),
+  registryGitInstall: () =>
+    request<RegistryGitInstallResult>("/api/registry/skills/capabilities/git-install", {
+      method: "POST",
+    }),
+  registryA2ADemo: (agentId: string, question: string) =>
+    request<RegistryA2ADemoResult>("/api/registry/a2a-demo", {
+      method: "POST",
+      body: JSON.stringify({ agent_id: agentId, question }),
+    }),
   authStatus: () => request<AuthStatus>("/api/auth/status"),
   /** `POST /api/eval/runs/{id}/stop` (202). With a batch on AWS: StopBatchEvaluation,
    *  the row follows STOPPING → STOPPED and comes back `stop_requested`; a queued run
@@ -4462,6 +4617,14 @@ export const api = {
     if (!res.ok) return parseResponse<never>(url, res);
     return res.blob();
   },
+  // ---- V2 skill-lab ----
+  /** Every AGENT_SKILLS record of the workspace, any status (a DRAFT skill is
+   *  exactly what someone wants to evaluate or optimize). */
+  v2SkillLabSkillRecords: () =>
+    request<{ records: RegistryRecordOut[] }>("/api/registry/records?type=AGENT_SKILLS"),
+  v2SkillLabRecord: (recordId: string) =>
+    request<RegistryRecordOut>(`/api/registry/records/${encodeURIComponent(recordId)}`),
+  // ---- end V2 skill-lab ----
   /* ── console V2 evaluation module ── */
   v2Datasets: () => request<{ datasets: V2Dataset[] }>("/api/eval/datasets"),
   v2CreateDataset: (body: V2DatasetCreate) =>
@@ -4569,4 +4732,129 @@ export const api = {
     request<OnlineEvalResults>(
       `/api/eval/online/${encodeURIComponent(id)}/results?range=${encodeURIComponent(range)}`,
     ),
+};
+
+// ---- V2 chat ----
+
+/** `GET /api/chat/{agent_id}/memory?session_id=` — the session's memory rail. */
+export interface ChatMemorySummary {
+  event_count: number;
+  records: { namespace: string; text: string }[];
+  /** Compound `<agent_id>__<human>` partition the summary was read from — the
+   *  id the Memory console keys on, so a deep link needs it verbatim. */
+  actor_id?: string;
+}
+
+export interface ChatTraceSpan {
+  name: string;
+  category: "model" | "tool" | "memory" | "policy" | "runtime" | "other";
+  start_ms: number;
+  duration_ms: number | null;
+}
+
+/** `GET /api/traces/{session_id}` — aws/spans for one session. */
+export interface ChatTraceInfo {
+  span_count: number;
+  spans: ChatTraceSpan[];
+  cloudwatch_url: string;
+}
+
+/** One row of `GET /api/apikeys`; `key` is present only on the create response. */
+export interface ApiKeyInfo {
+  id: string;
+  name: string;
+  prefix: string;
+  enabled: boolean;
+  created_at?: string | null;
+  key?: string;
+}
+
+export const chatApi = {
+  history: (agentId: string, sessionId: string) =>
+    request<{ messages: ChatHistoryMessage[] }>(
+      `/api/chat/${encodeURIComponent(agentId)}/history?session_id=${encodeURIComponent(sessionId)}`,
+    ),
+  memory: (agentId: string, sessionId: string) =>
+    request<ChatMemorySummary>(
+      `/api/chat/${encodeURIComponent(agentId)}/memory?session_id=${encodeURIComponent(sessionId)}`,
+    ),
+  trace: (sessionId: string) =>
+    request<ChatTraceInfo>(`/api/traces/${encodeURIComponent(sessionId)}`),
+  apiKeys: () => request<{ keys: ApiKeyInfo[] }>("/api/apikeys"),
+  createApiKey: (name: string) =>
+    request<ApiKeyInfo>("/api/apikeys", { method: "POST", body: JSON.stringify({ name }) }),
+  setApiKeyEnabled: (id: string, enabled: boolean) =>
+    request<ApiKeyInfo>(`/api/apikeys/${encodeURIComponent(id)}/${enabled ? "enable" : "disable"}`, {
+      method: "POST",
+    }),
+  /** `POST /api/chat/{agent_id}` — returns the raw SSE response (read it with
+   *  `sseEvents`); a non-2xx answer throws with the localized envelope message. */
+  stream: async (agentId: string, body: ChatRequest): Promise<Response> => {
+    const res = await fetch(`/api/chat/${encodeURIComponent(agentId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(await responseMessage(res));
+    return res;
+  },
+};
+
+// ---- V2 knowledge bases ----
+/* Typed wrappers for the managed-KB endpoints the V2 page binds to (the classic
+ * page still fetches by path). A failure is an `ApiError`; a DELETE blocked by
+ * mounted agents is `code === "kb.has_attached_agents"` with `detail.agents`. */
+function kbPath(id: string, rest = ""): string {
+  return `/api/knowledge-bases/${encodeURIComponent(id)}${rest}`;
+}
+
+export const v2KnowledgeApi = {
+  list: () =>
+    request<{ items: import("./knowledgeBases").KnowledgeBaseSummary[] }>("/api/knowledge-bases"),
+  get: (id: string) => request<import("./knowledgeBases").KnowledgeBaseDetail>(kbPath(id)),
+  /** 202 — the KB comes back while still CREATING; the backend finishes the data source. */
+  create: (body: { name: string; description: string; source: import("./knowledgeBases").KBSourceBody }) =>
+    request<import("./knowledgeBases").KnowledgeBaseDetail>("/api/knowledge-bases", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateDescription: (id: string, description: string) =>
+    request<Record<string, unknown>>(kbPath(id), {
+      method: "PATCH",
+      body: JSON.stringify({ description }),
+    }),
+  remove: (id: string, force: boolean) =>
+    request<Record<string, unknown>>(`${kbPath(id)}?force=${force}`, { method: "DELETE" }),
+  uploadFiles: (id: string, files: File[]) => {
+    const form = new FormData();
+    for (const f of files) form.append("files", f);
+    return requestForm<{ keys: string[] }>(kbPath(id, "/files"), form);
+  },
+  /** Idempotent server-side for `upload` mode (repairs a KB left without its source). */
+  addSource: (id: string, source: import("./knowledgeBases").KBSourceBody) =>
+    request<Record<string, unknown>>(kbPath(id, "/data-sources"), {
+      method: "POST",
+      body: JSON.stringify(source),
+    }),
+  removeSource: (id: string, dsId: string) =>
+    request<Record<string, unknown>>(kbPath(id, `/data-sources/${encodeURIComponent(dsId)}`), {
+      method: "DELETE",
+    }),
+  sync: (id: string, dsId: string) =>
+    request<Record<string, unknown>>(kbPath(id, `/data-sources/${encodeURIComponent(dsId)}/sync`), {
+      method: "POST",
+    }),
+  /** One token page of `ListKnowledgeBaseDocuments` (page_size 1–100). */
+  documents: (id: string, dsId: string, pageSize: number, token: string | null) => {
+    const qs = new URLSearchParams({ page_size: String(pageSize) });
+    if (token) qs.set("token", token);
+    return request<import("./knowledgeBases").KBDocumentPage>(
+      kbPath(id, `/data-sources/${encodeURIComponent(dsId)}/documents?${qs.toString()}`),
+    );
+  },
+  query: (id: string, text: string, numberOfResults: number) =>
+    request<{ results: import("./knowledgeBases").QueryResultItem[] }>(kbPath(id, "/query"), {
+      method: "POST",
+      body: JSON.stringify({ text, number_of_results: numberOfResults }),
+    }),
 };

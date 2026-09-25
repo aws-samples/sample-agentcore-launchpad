@@ -1,28 +1,12 @@
 import type { ChipTone } from "../../components";
 import { localizedMessage } from "../../lib/api";
+import { resourceState } from "../../lib/knowledgeBases";
+
+export { extractConflictAgents, formatBytes } from "../../lib/knowledgeBases";
 
 /** Tone for data-source / ingestion-job / document statuses (raw AWS enums). */
 export function resourceTone(status: string): ChipTone {
-  const s = status.toUpperCase();
-  if (["AVAILABLE", "COMPLETE", "COMPLETED", "READY", "ACTIVE", "INDEXED"].includes(s)) {
-    return "good";
-  }
-  if (["FAILED", "DELETE_FAILED", "NOT_FOUND"].includes(s)) return "crit";
-  if (
-    ["CREATING", "IN_PROGRESS", "STARTING", "SYNCING", "STOPPING", "PENDING",
-     "INDEXING", "PARTIALLY_INDEXED", "DELETING", "DELETE_IN_PROGRESS"].includes(s)
-  ) {
-    return "warn";
-  }
-  return "muted";
-}
-
-/** 361727 → "353.2 KB" — document sizes in the data-source panel. */
-export function formatBytes(size: number | null | undefined): string {
-  if (size == null) return "—";
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  return resourceState(status);
 }
 
 /** Pull a human message out of an error body ({code,message,detail} envelope or
@@ -42,16 +26,4 @@ export function kbErrorMessage(body: unknown, status: number): string {
     if (typeof d.message === "string") return d.message;
   }
   return `HTTP ${status}`;
-}
-
-/** Agent names carried by a DELETE 409 (attached & not forced). Tolerant of
- *  either a top-level `agents` or a nested `detail.agents`. */
-export function extractConflictAgents(body: unknown): string[] {
-  const b = (body ?? {}) as { agents?: unknown; detail?: { agents?: unknown } };
-  const raw = Array.isArray(b.agents)
-    ? b.agents
-    : Array.isArray(b.detail?.agents)
-      ? b.detail?.agents
-      : [];
-  return (raw as unknown[]).filter((x): x is string => typeof x === "string");
 }

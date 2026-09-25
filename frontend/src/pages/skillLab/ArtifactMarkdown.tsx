@@ -4,8 +4,8 @@ import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 
-import type { BlockedReason } from "./artifactLinks";
-import { classifyArtifactHref } from "./artifactLinks";
+import type { BlockedReason } from "../../lib/skillLabArtifacts";
+import { classifyArtifactHref } from "../../lib/skillLabArtifacts";
 
 const linkButtonStyle = {
   background: "none",

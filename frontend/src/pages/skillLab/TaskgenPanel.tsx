@@ -1,6 +1,5 @@
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 
 import { Btn, Chip, Panel } from "../../components";
@@ -16,8 +15,13 @@ import type {
 import { api, ApiError } from "../../lib/api";
 import type { RegistryRecord } from "../Registry";
 import { JobLogPane } from "./JobLogPane";
-import type { TaskgenReviewDraft } from "./taskgenReview";
-import { reviewBlocker, reviewSelection, toReviewDrafts } from "./taskgenReview";
+import type { TaskgenReviewDraft } from "../../lib/skillLabTaskgen";
+import {
+  describeSaveError,
+  reviewBlocker,
+  reviewSelection,
+  toReviewDrafts,
+} from "../../lib/skillLabTaskgen";
 import { TaskgenReviewEditor } from "./TaskgenReviewEditor";
 
 const JOB_POLL_MS = 2500;
@@ -45,131 +49,6 @@ const excerpt = (text: unknown, max = 110) => {
 /** Mirrors runner.TASKGEN_ATTACHMENT_DIR: where the agent (and later the
  *  evaluated agent) sees an attached document. */
 const runtimeAttachmentDir = "data";
-
-/**
- * Localize a refused save. The server's stable code selects the sentence and
- * its `detail` supplies the ids/row numbers, so the Chinese UI never falls back
- * to the English server message while keeping every identifier the message named.
- * Validator and request-validation refusals list their per-row / per-field
- * diagnostics (split, row, id, field, limit) as plain text lines. The draft and
- * selection are untouched by any of this — the caller only stores the error.
- */
-function describeSaveError(err: unknown, t: TFunction): string {
-  if (!(err instanceof ApiError)) return String(err);
-  // Helpers are nested on purpose: the function is self-contained so an external
-  // probe can evaluate it alone (see self-evolution host probes).
-  // Bounds for the diagnostics rendered from a refused save. Server detail is
-  // untrusted text: it is coerced to plain strings, control characters stripped,
-  // capped, and rendered as React text (never HTML). Anything left out is
-  // disclosed as a count, never dropped silently.
-  const MAX_ISSUE_LINES = 6;
-  const MAX_ISSUE_CHARS = 240;
-
-  function plainText(value: unknown, t: TFunction): string {
-    const raw =
-      typeof value === "string"
-        ? value
-        : typeof value === "number" || typeof value === "boolean"
-          ? String(value)
-          : "";
-    // eslint-disable-next-line no-control-regex -- strip C0/C1 controls incl. newlines
-    const clean = raw.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").trim();
-    return clean.length > MAX_ISSUE_CHARS
-      ? `${clean.slice(0, MAX_ISSUE_CHARS)}… ${t("skillLab.taskgen.err.truncated")}`
-      : clean;
-  }
-
-  /** `{split, message}` rows from the task validator (skill_lab.taskset_invalid). */
-  function validatorIssueLine(item: unknown, t: TFunction): string | null {
-    if (item === null || typeof item !== "object" || Array.isArray(item)) return null;
-    const { split, message } = item as { split?: unknown; message?: unknown };
-    const text = plainText(message, t);
-    if (!text) return null;
-    const where = plainText(split, t);
-    return where ? `${where}: ${text}` : text;
-  }
-
-  /** Pydantic rows `{loc, msg, ctx}` from FastAPI (validation.invalid_request):
-   *  `["body","tasks",0,"id"]` → "tasks #1 · id", plus any numeric limits in ctx. */
-  function requestIssueLine(item: unknown, t: TFunction): string | null {
-    if (item === null || typeof item !== "object" || Array.isArray(item)) return null;
-    const { loc, msg, ctx } = item as { loc?: unknown; msg?: unknown; ctx?: unknown };
-    const text = plainText(msg, t);
-    if (!text) return null;
-    const parts = (Array.isArray(loc) ? loc : []).filter((part) => part !== "body");
-    const where = parts
-      .map((part, i) =>
-        typeof part === "number" && parts[i - 1] === "tasks" ? `#${part + 1}` : plainText(part, t),
-      )
-      .filter(Boolean)
-      .join(" · ");
-    const limits =
-      ctx !== null && typeof ctx === "object" && !Array.isArray(ctx)
-        ? Object.entries(ctx as Record<string, unknown>)
-            .filter(([, v]) => typeof v === "number" || typeof v === "string")
-            .map(([k, v]) => `${plainText(k, t)} ${plainText(v, t)}`)
-            .join(", ")
-        : "";
-    return `${where ? `${where}: ` : ""}${text}${limits ? ` (${limits})` : ""}`;
-  }
-
-  /** Bounded, disclosed list: at most MAX_ISSUE_LINES lines; unreadable entries and
-   *  the overflow are each reported as a count. */
-  function issueLines(
-    detail: unknown,
-    toLine: (item: unknown, t: TFunction) => string | null,
-    t: TFunction,
-  ): string[] {
-    const items = Array.isArray(detail) ? detail : detail === null || detail === undefined ? [] : [detail];
-    const lines: string[] = [];
-    let unreadable = 0;
-    for (const item of items) {
-      const line = toLine(item, t);
-      if (line === null) unreadable += 1;
-      else lines.push(`• ${line}`);
-    }
-    const shown = lines.slice(0, MAX_ISSUE_LINES);
-    if (lines.length > shown.length)
-      shown.push(t("skillLab.taskgen.err.moreIssues", { n: lines.length - shown.length }));
-    if (unreadable > 0) shown.push(t("skillLab.taskgen.err.unreadableIssues", { n: unreadable }));
-    return shown;
-  }
-
-  const detail = (err.detail ?? {}) as {
-    ids?: unknown;
-    reason?: string;
-    index?: unknown;
-    count?: unknown;
-  };
-  const ids = Array.isArray(detail.ids) ? detail.ids.map(String).join(", ") : "";
-  switch (err.code) {
-    case "skill_lab.taskgen_empty_selection":
-      return t("skillLab.taskgen.review.noneKept");
-    case "skill_lab.taskgen_duplicate_id":
-      return t("skillLab.taskgen.review.duplicateIds", { ids: ids || err.message });
-    case "skill_lab.expansion_conflict":
-      return t("skillLab.taskgen.err.expansionConflict", { ids: ids || err.message });
-    case "skill_lab.already_imported":
-      return t("skillLab.taskgen.err.alreadySaved");
-    case "skill_lab.taskgen_bad_selection":
-      if (detail.reason === "out_of_range" || detail.reason === "repeated")
-        return t(`skillLab.taskgen.err.badSelection.${detail.reason}`, {
-          row: Number(detail.index) + 1,
-          total: Number(detail.count),
-        });
-      return err.message;
-    case "skill_lab.taskset_invalid": {
-      const lines = issueLines(err.detail, validatorIssueLine, t);
-      return [t("skillLab.taskgen.err.validatorRefused"), ...lines].join("\n");
-    }
-    case "validation.invalid_request": {
-      const lines = issueLines(err.detail, requestIssueLine, t);
-      return [t("skillLab.taskgen.err.requestRefused"), ...lines].join("\n");
-    }
-    default:
-      return err.message;
-  }
-}
 
 function modelDefault(status: SkillLabStatus | null, backend: SkillLabTargetBackend): string {
   if (status === null) return "";

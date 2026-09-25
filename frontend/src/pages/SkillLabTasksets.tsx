@@ -14,7 +14,6 @@ import {
   useToast,
 } from "../components";
 import type {
-  SkillLabAssetDescriptor,
   SkillLabTask,
   SkillLabTasksetDetail,
   SkillLabTasksetInfo,
@@ -22,165 +21,26 @@ import type {
   SkillLabTasksetMode,
 } from "../lib/api";
 import { api, ApiError } from "../lib/api";
+import type { Drafts, TaskDraft } from "../lib/skillLabTasksets";
+import {
+  countsLabel,
+  draftKey,
+  emptyDraft,
+  EXAMPLE_TASKS,
+  excerpt,
+  fileCount,
+  interpretTasksetUpload,
+  mirrorTaskErrors,
+  seedDrafts,
+  SINGLE_SPLIT,
+  SPLIT_ORDER,
+  splitsFor,
+  suggestId,
+  taskId,
+  toDraft,
+  toTask,
+} from "../lib/skillLabTasksets";
 import { TaskgenPanel } from "./skillLab/TaskgenPanel";
-
-const SINGLE_SPLIT = "tasks";
-const SPLIT_ORDER = ["train", "val", "test"] as const;
-
-/** Splits a mode carries, in the order the backend expects them. */
-const splitsFor = (mode: SkillLabTasksetMode): string[] =>
-  mode === "single" ? [SINGLE_SPLIT] : [...SPLIT_ORDER];
-
-/**
- * One editable task row. `original` carries the stored object so unknown keys
- * (`files`, `judge_mode`, `artifact_checks`, anything the CLI grows later)
- * survive an edit untouched — only the four edited fields are overwritten.
- */
-interface TaskAssetDraft {
-  key: string;
-  path: string;
-  value: SkillLabAssetDescriptor;
-}
-
-interface TaskDraft {
-  key: string;
-  original: SkillLabTask | null;
-  id: string;
-  question: string;
-  rubric: string;
-  taskType: string;
-  files: Record<string, string>;
-  assets: TaskAssetDraft[];
-  assetBusy: boolean;
-  assetError: string | null;
-}
-
-type Drafts = Record<string, TaskDraft[]>;
-
-let draftSeq = 0;
-const draftKey = () => `d${++draftSeq}`;
-
-const taskId = (n: number) => `task_${String(n).padStart(3, "0")}`;
-
-const emptyDraft = (n: number): TaskDraft => ({
-  key: draftKey(),
-  original: null,
-  id: taskId(n),
-  question: "",
-  rubric: "",
-  taskType: "",
-  files: {},
-  assets: [],
-  assetBusy: false,
-  assetError: null,
-});
-
-/**
- * Starting rows for a layout. `test` starts empty on purpose: it is optional,
- * and a seeded blank row there would fail the required-field checks and block a
- * train/val-only save.
- */
-const seedDrafts = (mode: SkillLabTasksetMode): Drafts =>
-  mode === "single"
-    ? { [SINGLE_SPLIT]: [emptyDraft(1)] }
-    : { train: [emptyDraft(1)], val: [emptyDraft(1)], test: [] };
-
-const rawTaskFiles = (
-  task: SkillLabTask,
-): Record<string, string | SkillLabAssetDescriptor> => {
-  if (
-    task.files === null ||
-    typeof task.files !== "object" ||
-    Array.isArray(task.files)
-  )
-    return {};
-  return task.files as Record<string, string | SkillLabAssetDescriptor>;
-};
-
-const taskTextFiles = (task: SkillLabTask): Record<string, string> =>
-  Object.fromEntries(
-    Object.entries(rawTaskFiles(task)).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
-
-const taskAssetDrafts = (task: SkillLabTask): TaskAssetDraft[] =>
-  Object.entries(rawTaskFiles(task)).flatMap(([path, value]) =>
-    typeof value === "string"
-      ? []
-      : [{ key: draftKey(), path, value: { ...value } }],
-  );
-
-const toDraft = (task: SkillLabTask): TaskDraft => ({
-  key: draftKey(),
-  original: task,
-  id: typeof task.id === "string" ? task.id : "",
-  question: typeof task.question === "string" ? task.question : "",
-  rubric: typeof task.rubric === "string" ? task.rubric : "",
-  taskType: typeof task.task_type === "string" ? task.task_type : "",
-  files: taskTextFiles(task),
-  assets: taskAssetDrafts(task),
-  assetBusy: false,
-  assetError: null,
-});
-
-function toTask(draft: TaskDraft): SkillLabTask {
-  const task: SkillLabTask = {
-    ...(draft.original ?? {}),
-    id: draft.id.trim(),
-    question: draft.question,
-    rubric: draft.rubric,
-  };
-  const taskType = draft.taskType.trim();
-  if (taskType) task.task_type = taskType;
-  else delete task.task_type;
-  const files: Record<string, string | SkillLabAssetDescriptor> = {
-    ...draft.files,
-  };
-  for (const asset of draft.assets) files[asset.path.trim()] = asset.value;
-  if (Object.keys(files).length) task.files = files;
-  else delete task.files;
-  return task;
-}
-
-/** Next free `task_NNN` for the add-row button. */
-function suggestId(list: TaskDraft[]): string {
-  let max = 0;
-  for (const draft of list) {
-    const m = /^task_(\d+)$/.exec(draft.id.trim());
-    if (m) max = Math.max(max, Number(m[1]));
-  }
-  return taskId(Math.max(max + 1, list.length + 1));
-}
-
-const isTaskArray = (value: unknown): value is SkillLabTask[] =>
-  Array.isArray(value) &&
-  value.every((item) => item !== null && typeof item === "object");
-
-const countsLabel = (counts: Record<string, number>) =>
-  Object.entries(counts)
-    .map(([split, n]) => `${split} ${n}`)
-    .join(" · ");
-
-const excerpt = (text: string, max = 90) =>
-  text.length > max ? `${text.slice(0, max)}…` : text;
-
-const fileCount = (task: SkillLabTask): number => {
-  const files = task.files;
-  return files !== null && typeof files === "object"
-    ? Object.keys(files).length
-    : 0;
-};
-
-const EXAMPLE_TASKS = `[
-  {
-    "id": "task_001",
-    "question": "Summarize the attached earnings note in 5 bullets.",
-    "rubric": "Passes when the summary has exactly 5 bullets and names revenue growth.",
-    "task_type": "summarize",
-    "files": { "input/note.md": "Q2 revenue grew 14% ..." }
-  }
-]`;
 
 export function SkillLabTasksets() {
   const { t } = useTranslation();
@@ -307,68 +167,7 @@ export function SkillLabTasksets() {
   );
 
   /** Client-side mirror of the vendored validator, per row, before submit. */
-  const mirrorErrors = useMemo(() => {
-    const out: Record<string, Record<string, string>> = {};
-    for (const [split, list] of Object.entries(drafts)) {
-      const seen = new Set<string>();
-      const errors: Record<string, string> = {};
-      for (const draft of list) {
-        const id = draft.id.trim();
-        if (!id) errors[draft.key] = t("skillLab.tasksets.err.idRequired");
-        else if (id.includes("/") || id.includes("\\") || id.includes(".."))
-          errors[draft.key] = t("skillLab.tasksets.err.idUnsafe");
-        else if (seen.has(id))
-          errors[draft.key] = t("skillLab.tasksets.err.idDuplicate", { id });
-        else if (!draft.question.trim())
-          errors[draft.key] = t("skillLab.tasksets.err.questionRequired");
-        else if (!draft.rubric.trim())
-          errors[draft.key] = t("skillLab.tasksets.err.rubricRequired");
-        const paths = [
-          ...Object.keys(draft.files),
-          ...draft.assets.map((asset) => asset.path.trim()),
-        ];
-        for (const path of paths) {
-          const unsafe =
-            !path ||
-            path.startsWith("/") ||
-            path.startsWith("\\") ||
-            path.startsWith("~") ||
-            path.includes("\\") ||
-            path
-              .split("/")
-              .some((part) => !part || part === "." || part === "..") ||
-            [".agents", ".claude", ".codex", ".git", "task.md"].includes(
-              path.split("/")[0]?.toLowerCase(),
-            );
-          if (unsafe) {
-            errors[draft.key] = t("skillLab.tasksets.err.assetPathUnsafe", {
-              path,
-            });
-            break;
-          }
-        }
-        // Case-fold collision protection is a binary descriptor constraint.
-        // Legacy inline text maps may contain case-distinct paths and must keep
-        // round-tripping exactly as the historical loader allowed.
-        const foldedAssetPaths = new Set<string>();
-        for (const asset of draft.assets) {
-          const path = asset.path.trim();
-          const folded = path.toLowerCase();
-          if (foldedAssetPaths.has(folded)) {
-            errors[draft.key] = t("skillLab.tasksets.err.assetPathDuplicate", {
-              path,
-            });
-            break;
-          }
-          foldedAssetPaths.add(folded);
-        }
-
-        if (id) seen.add(id);
-      }
-      out[split] = errors;
-    }
-    return out;
-  }, [drafts, t]);
+  const mirrorErrors = useMemo(() => mirrorTaskErrors(drafts, t), [drafts, t]);
 
   const hasMirrorErrors = Object.values(mirrorErrors).some(
     (errs) => Object.keys(errs).length > 0,
@@ -611,78 +410,23 @@ export function SkillLabTasksets() {
       );
       return;
     }
-    if (isTaskArray(parsed)) {
-      const split = mode === "single" ? SINGLE_SPLIT : uploadSplit;
-      setDrafts((prev) => ({ ...prev, [split]: parsed.map(toDraft) }));
-      setUploadNote(
-        t("skillLab.tasksets.upload.loadedSplit", {
-          split,
-          count: parsed.length,
-        }),
-      );
-      setTab("rows");
+    const upload = interpretTasksetUpload(parsed, { mode, uploadSplit, editing }, t);
+    if (upload.kind === "error") {
+      setUploadError(upload.message);
       return;
     }
-    if (
-      parsed === null ||
-      typeof parsed !== "object" ||
-      Array.isArray(parsed)
-    ) {
-      setUploadError(t("skillLab.tasksets.upload.badShape"));
-      return;
+    if (upload.kind === "split") {
+      setDrafts((prev) => ({ ...prev, [upload.split]: upload.drafts }));
+    } else {
+      setMode(upload.mode);
+      setDrafts((prev) => {
+        const base = Object.fromEntries(
+          splitsFor(upload.mode).map((split) => [split, prev[split] ?? []]),
+        ) as Drafts;
+        return { ...base, ...upload.loaded };
+      });
     }
-    const entries = Object.entries(parsed as Record<string, unknown>);
-    const known = [SINGLE_SPLIT, ...SPLIT_ORDER] as string[];
-    const unknown = entries
-      .filter(([key]) => !known.includes(key))
-      .map(([key]) => key);
-    if (unknown.length > 0) {
-      setUploadError(
-        t("skillLab.tasksets.upload.unknownSplits", {
-          splits: unknown.join(", "),
-        }),
-      );
-      return;
-    }
-    const bad = entries.find(([, value]) => !isTaskArray(value));
-    if (bad) {
-      setUploadError(t("skillLab.tasksets.upload.badSplit", { split: bad[0] }));
-      return;
-    }
-    const nextMode: SkillLabTasksetMode = entries.some(
-      ([key]) => key === SINGLE_SPLIT,
-    )
-      ? "single"
-      : "split";
-    if (nextMode === "single" && entries.length > 1) {
-      setUploadError(t("skillLab.tasksets.upload.mixedSplits"));
-      return;
-    }
-    const loaded = Object.fromEntries(
-      entries.map(([split, value]) => [
-        split,
-        (value as SkillLabTask[]).map(toDraft),
-      ]),
-    ) as Drafts;
-    // editing cannot change the mode — the backend refuses mismatched keys
-    if (editing && nextMode !== mode) {
-      setUploadError(t("skillLab.tasksets.upload.modeLocked", { mode }));
-      return;
-    }
-    setMode(nextMode);
-    setDrafts((prev) => {
-      const base = Object.fromEntries(
-        splitsFor(nextMode).map((split) => [split, prev[split] ?? []]),
-      ) as Drafts;
-      return { ...base, ...loaded };
-    });
-    setUploadNote(
-      t("skillLab.tasksets.upload.loaded", {
-        summary: entries
-          .map(([split, value]) => `${split} ${(value as unknown[]).length}`)
-          .join(" · "),
-      }),
-    );
+    setUploadNote(upload.note);
     setTab("rows");
   };
 

@@ -1,9 +1,8 @@
 import type { ChipTone } from "../../components";
-import {
-  ApiError,
-  type GovernanceGatewaySummary,
-  type GovernanceOperation,
-} from "../../lib/api";
+import { governanceStatusLevel } from "../../lib/governance";
+
+// The pure helpers live in `lib/governance.ts` so the V2 console shares them.
+export { governanceError, isGatewayReady, isOperationPending } from "../../lib/governance";
 
 export type GovernanceView =
   | "gateways"
@@ -29,55 +28,8 @@ export function governanceViewFromParam(value: string | null): GovernanceView {
   return "gateways";
 }
 
-export function governanceError(error: unknown): string {
-  if (error instanceof ApiError) return `${error.code}: ${error.message}`;
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
-
 export function statusTone(status: string | null | undefined): ChipTone {
-  const normalized = status?.toUpperCase() ?? "";
-  if (["READY", "ACTIVE", "SUCCEEDED", "APPROVED", "ALLOW", "PASS"].includes(normalized)) {
-    return "good";
-  }
-  if (
-    [
-      "FAILED",
-      "ERROR",
-      "DENY",
-      "REJECTED",
-      "PARTIAL",
-      "SYNCHRONIZE_UNSUCCESSFUL",
-      "UPDATE_UNSUCCESSFUL",
-    ].includes(normalized)
-  ) {
-    return "crit";
-  }
-  if (
-    [
-      "CREATING",
-      "UPDATING",
-      "PENDING",
-      "RUNNING",
-      "SUBMITTED",
-      "LOG_ONLY",
-      "SYNCHRONIZING",
-      "CREATE_PENDING_AUTH",
-      "UPDATE_PENDING_AUTH",
-      "SYNCHRONIZE_PENDING_AUTH",
-    ].includes(normalized)
-  ) {
-    return "warn";
-  }
-  return "muted";
-}
-
-export function isGatewayReady(gateway: GovernanceGatewaySummary): boolean {
-  return gateway.status.toUpperCase() === "READY";
-}
-
-export function isOperationPending(operation: GovernanceOperation | null): boolean {
-  return operation?.status === "pending" || operation?.status === "running";
+  return governanceStatusLevel(status);
 }
 
 export function formatTimestamp(value: string | null | undefined, locale: string): string {

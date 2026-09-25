@@ -23,28 +23,36 @@ import type {
   AssistantConversationDetail,
   AssistantConversationFootprint,
   AssistantConversationSummary,
-  AssistantFishbone,
   AssistantMemoryMode,
-  AssistantMessage,
   AssistantProposal,
   AssistantProposalContent,
   AssistantProposalStatus,
   AssistantStatus,
   AssistantTurnRequest,
-  HarnessNativeTool,
   JobInfo,
   StageInfo,
 } from "../lib/api";
 import {
   api,
   ApiError,
-  AUTH_UNAUTHORIZED_EVENT,
   errorMessage,
   HARNESS_NATIVE_TOOLS,
 } from "../lib/api";
+import {
+  ASSISTANT_JOB_POLL_MS,
+  type AssistantLiveMessage,
+  isAssistantUnauthorized,
+  isFishbone,
+  openAssistantTurn,
+  proposalContentFromDraft,
+  proposalDraftFrom,
+  proposalEditErrors,
+  type ProposalEditDraft,
+  sseEvents,
+  stripProposalBlock,
+  toLiveMessages,
+} from "../lib/assistant";
 import { MODEL_CATALOG, type ModelSource } from "../lib/models";
-import { DEFAULT_TIMEOUT_SECONDS } from "../lib/agent-defaults";
-import { WORKSPACE_HEADER } from "../lib/workspace-header";
 import { useWorkspace } from "../workspace/workspace-context";
 import { EvaluationAssetsPanel } from "./EvaluationAssetsPanel";
 import { PreparationPanel } from "./assistant/PreparationPanel";
@@ -76,18 +84,12 @@ const STATUS_TONE: Record<AssistantProposalStatus, ChipTone> = {
   rejected: "muted",
   superseded: "muted",
 };
-const JOB_POLL_MS = 3000;
-const NAME_RE = /^[a-z][a-z0-9-]{2,47}$/;
-const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{2,120}$/;
-const PROPOSAL_FENCE_RE =
-  /```launchpad-proposal[ \t]*\r?\n[\s\S]*?\r?\n[ \t]*```/g;
-
-interface LiveMessage {
-  role: "user" | "assistant" | "tool" | "error";
-  text: string;
-  name?: string | null;
-  streaming?: boolean;
-}
+const JOB_POLL_MS = ASSISTANT_JOB_POLL_MS;
+const toLive = toLiveMessages;
+const draftFrom = proposalDraftFrom;
+const isUnauthorized = isAssistantUnauthorized;
+type LiveMessage = AssistantLiveMessage;
+type EditDraft = ProposalEditDraft;
 
 /** What the approve dialog was opened on — submitted verbatim, never "the latest". */
 interface PinnedApproval {
@@ -96,96 +98,6 @@ interface PinnedApproval {
   hash: string;
   name: string;
 }
-
-async function* sseEvents(
-  res: Response,
-): AsyncGenerator<{ event: string; data: never }> {
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split("\n\n");
-    buffer = frames.pop() ?? "";
-    for (const frame of frames) {
-      let event = "message";
-      let data = "";
-      for (const line of frame.split("\n")) {
-        if (line.startsWith("event:")) event = line.slice(6).trim();
-        if (line.startsWith("data:")) data += line.slice(5).trim();
-      }
-      if (data) yield { event, data: JSON.parse(data) as never };
-    }
-  }
-}
-
-function toLive(rows: AssistantMessage[]): LiveMessage[] {
-  return rows.map((m) => ({ role: m.role, text: m.text, name: m.name }));
-}
-
-/** The typed proposal pane shows the block; the transcript shows a pointer instead. */
-function stripProposalBlock(text: string, marker: string): string {
-  return text.replace(PROPOSAL_FENCE_RE, `> ${marker}`)
-    .replace(/```launchpad-preparation[ \t]*\r?\n[\s\S]*?\r?\n[ \t]*```/g, "");
-}
-
-type EditDraft = Pick<
-  AssistantProposalContent,
-  | "name"
-  | "model_id"
-  | "model_source"
-  | "system_prompt"
-  | "tools"
-  | "skills"
-  | "knowledge_bases"
-  | "memory"
-  | "max_iterations"
-  | "timeout_seconds"
-> & { native_tools: HarnessNativeTool[] };
-
-function draftFrom(content: AssistantProposal["content"]): EditDraft {
-  return {
-    name: String(content.name ?? ""),
-    model_id: String(content.model_id ?? MODEL_CATALOG.bedrock[0].model_id),
-    model_source: (content.model_source as ModelSource) ?? "bedrock",
-    system_prompt: String(content.system_prompt ?? ""),
-    tools: Array.isArray(content.tools) ? content.tools.map(String) : [],
-    native_tools: Array.isArray(content.native_tools)
-      ? content.native_tools.filter((tool): tool is HarnessNativeTool =>
-        HARNESS_NATIVE_TOOLS.some((name) => name === tool))
-      : [],
-    skills: Array.isArray(content.skills) ? content.skills.map(String) : [],
-    knowledge_bases: Array.isArray(content.knowledge_bases)
-      ? content.knowledge_bases.map(String)
-      : [],
-    memory: content.memory === "workspace" ? "workspace" : "disabled",
-    max_iterations: Number(content.max_iterations ?? 10),
-    timeout_seconds: Number(content.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS),
-  };
-}
-
-/** Shape guard for the optional fishbone member (the content type is a loose record;
- *  an invalid revision may carry anything). */
-function isFishbone(v: unknown): v is AssistantFishbone {
-  if (!v || typeof v !== "object") return false;
-  const f = v as Record<string, unknown>;
-  return (
-    typeof f.use_case === "string" &&
-    typeof f.customer === "string" &&
-    !!f.coverage && typeof f.coverage === "object" &&
-    !!f.barriers && typeof f.barriers === "object"
-  );
-}
-
-const isUnauthorized = (err: unknown) =>
-  err instanceof ApiError &&
-  (err.code === "http.401" ||
-    err.code === "http.403" ||
-    err.code === "auth.required" ||
-    err.code === "workspace.forbidden" ||
-    err.code === "auth.permission_required");
 
 export function CreateAgentAssistant() {
   const { t, i18n } = useTranslation();
@@ -673,32 +585,7 @@ export function CreateAgentAssistant() {
         return copy;
       });
     try {
-      const res = await fetch(
-        `/api/assistant/architect/conversations/${encodeURIComponent(conversationId)}/turns`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(startedIn ? { [WORKSPACE_HEADER]: startedIn } : {}),
-          },
-          body: JSON.stringify(request),
-          signal: controller.signal,
-        },
-      );
-      if (!res.ok) {
-        // same session semantics as the typed client: a 401 signs the console out
-        if (res.status === 401)
-          window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
-        const body = (await res.json().catch(() => ({}))) as {
-          code?: string;
-          message?: string;
-        };
-        throw new ApiError(
-          body.code ?? `http.${res.status}`,
-          body.message ?? res.statusText,
-          null,
-        );
-      }
+      const res = await openAssistantTurn(conversationId, request, startedIn, controller.signal);
       let proposal: AssistantProposal | null = null;
       let completed = false;
       let turnError: ApiError | null = null;
@@ -878,17 +765,7 @@ export function CreateAgentAssistant() {
     }
   };
 
-  const editErrors = (draft: EditDraft): Record<string, boolean> => ({
-    name: !NAME_RE.test(draft.name),
-    model_id: !MODEL_RE.test(draft.model_id),
-    system_prompt:
-      draft.system_prompt.trim().length === 0 ||
-      draft.system_prompt.length > 20000,
-    max_iterations: !(draft.max_iterations >= 1 && draft.max_iterations <= 100),
-    timeout_seconds: !(
-      draft.timeout_seconds >= 10 && draft.timeout_seconds <= 3600
-    ),
-  });
+  const editErrors = proposalEditErrors;
 
   const saveEdit = async () => {
     if (!conversation || !latest || !editing) return;
@@ -900,23 +777,7 @@ export function CreateAgentAssistant() {
     const startedIn = scope.current;
     const gen = generation.current;
     const conversationId = conversation.id;
-    const base = latest.content;
-    const content: AssistantProposalContent = {
-      version: 1,
-      ...editing,
-      summary: typeof base.summary === "string" ? base.summary : "",
-      requirements_baseline: Array.isArray(base.requirements_baseline)
-        ? base.requirements_baseline
-        : [],
-      assumptions: Array.isArray(base.assumptions) ? base.assumptions : [],
-      manual_tasks: Array.isArray(base.manual_tasks) ? base.manual_tasks : [],
-      golden_tests: Array.isArray(base.golden_tests) ? base.golden_tests : [],
-      evaluator_recommendations: Array.isArray(base.evaluator_recommendations)
-        ? base.evaluator_recommendations
-        : [],
-      // solution content the form does not edit travels with the revision unchanged
-      ...(isFishbone(base.fishbone) ? { fishbone: base.fishbone } : {}),
-    };
+    const content: AssistantProposalContent = proposalContentFromDraft(editing, latest.content);
     try {
       const res = await api.assistantEditProposal(conversationId, content);
       if (!stillCurrent(startedIn, gen)) return;

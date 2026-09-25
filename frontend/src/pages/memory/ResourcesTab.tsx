@@ -10,24 +10,15 @@ import type {
   MemoryResourceUpdateInput,
 } from "../../lib/api";
 import { api } from "../../lib/api";
+import {
+  DEFAULT_MEMORY_STRATEGIES as DEFAULT_STRATEGIES,
+  EDIT_EXPIRY_MIN,
+  EXPIRY_MAX,
+  MEMORY_NAME_RE as NAME_RE,
+  MEMORY_STRATEGY_KEYS as STRATEGY_KEYS,
+  MEMORY_STRATEGY_NAMESPACES as STRATEGY_NAMESPACES,
+} from "../../lib/memory";
 import { shortId, stamp, statusTone } from "./format";
-
-/** CreateMemory's own name constraint — checked here so the button can gate. */
-const NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,47}$/;
-
-/** Order matters: it is the order sent to CreateMemory and shown as chips. */
-const STRATEGY_KEYS = ["semantic", "user_preference", "summarization", "episodic"] as const;
-const DEFAULT_STRATEGIES = ["semantic", "user_preference"];
-
-/** The namespace each strategy pick actually gets — mirrors the backend's
- *  canned layout (`services/memory_admin.py` STRATEGIES), used for the
- *  namespace path preview. */
-const STRATEGY_NAMESPACES: Record<(typeof STRATEGY_KEYS)[number], string> = {
-  semantic: "/facts/{actorId}",
-  user_preference: "/preferences/{actorId}",
-  summarization: "/summaries/{actorId}/{sessionId}",
-  episodic: "/episodes/{actorId}/{sessionId}",
-};
 
 /** Flexible namespace variables — CreateMemory `namespaceKeys` constraints,
  *  mirrored here so bad input gates the button instead of failing server-side. */
@@ -54,10 +45,6 @@ interface NsKeyDraft {
 }
 
 const EMPTY_NS_ROW: NsKeyDraft = { key: "", allowedValues: "", regexPattern: "" };
-
-/** UpdateMemory's event-expiry range — the edit form gates on it client-side. */
-const EDIT_EXPIRY_MIN = 7;
-const EXPIRY_MAX = 365;
 
 /** Description textarea shared by the create form and the inline edit form. */
 function DescriptionField({

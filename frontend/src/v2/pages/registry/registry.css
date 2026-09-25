@@ -1,0 +1,42 @@
+/* Console V2 · 注册中心 — module-local layout (scoped under .v2). */
+.v2 .v2-registry-layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); align-items: start; }
+.v2 .v2-registry-layout.reverse { grid-template-columns: minmax(320px, 1fr) minmax(0, 1.4fr); }
+.v2 .v2-registry-layout .v2-form + .v2-alert { margin: 16px 0 0; }
+
+.v2 .v2-stages.v2-registry-flow { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 12px; }
+.v2 .v2-registry-stage-body { margin-top: 6px; font-size: 13px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+
+.v2 .v2-registry-how { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.v2 .v2-registry-how li { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; color: var(--v2-ink-2); }
+.v2 .v2-registry-how .n {
+  flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 600;
+  background: var(--v2-primary-soft); color: var(--v2-primary);
+}
+
+.v2 .v2-registry-drop {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 28px 16px;
+  border: 1px dashed var(--v2-line); border-radius: var(--v2-radius); background: var(--v2-fill); cursor: pointer;
+  color: var(--v2-ink-2); font-size: 14px; text-align: center; transition: border-color 0.15s;
+}
+.v2 .v2-registry-drop:hover { border-color: var(--v2-primary); color: var(--v2-primary); }
+.v2 .v2-registry-drop svg { color: var(--v2-ink-3); }
+.v2 .v2-registry-drop .v2-muted { font-size: 12.5px; }
+.v2 .v2-registry-drop input { display: none; }
+
+.v2 .v2-registry-checkbox { accent-color: var(--v2-primary); width: 14px; height: 14px; cursor: pointer; }
+.v2 .v2-registry-checkbox:disabled { cursor: not-allowed; }
+.v2 .v2-registry-hint {
+  display: block; margin-top: 4px; padding: 6px 10px; border-radius: 4px; background: #fff; border: 1px solid var(--v2-line);
+  cursor: pointer; word-break: break-all;
+}
+
+.v2 .v2-options.v2-registry-sources { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.v2 .v2-tags.v2-registry-status { flex-wrap: nowrap; }
+@media (max-width: 1200px) {
+  .v2 .v2-options.v2-registry-sources { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 960px) {
+  .v2 .v2-registry-layout, .v2 .v2-registry-layout.reverse, .v2 .v2-stages.v2-registry-flow { grid-template-columns: 1fr; }
+  .v2 .v2-options.v2-registry-sources { grid-template-columns: 1fr; }
+}

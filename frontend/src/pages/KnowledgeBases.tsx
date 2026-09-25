@@ -6,63 +6,19 @@ import { useSearchParams } from "react-router-dom";
 import { Btn, Chip, LoadError, Panel, StaleLink, useStaleParam, ViewHead } from "../components";
 import type { ChipTone } from "../components";
 import { errorMessage, getJson } from "../lib/api";
+import type { KnowledgeBaseSummary } from "../lib/knowledgeBases";
 import { CreateView } from "./knowledge/CreateView";
 import { DetailView } from "./knowledge/DetailView";
 
-export type KBStatus = "CREATING" | "ACTIVE" | "FAILED" | "DELETING";
-
-export interface KnowledgeBaseSummary {
-  kb_id: string;
-  name: string;
-  description: string;
-  status: KBStatus | string;
-  updated_at: string | null;
-  data_source_count: number;
-  attached_agents: string[];
-}
-
-export interface IngestionJob {
-  job_id: string;
-  status: string;
-  started_at?: string | null;
-  updated_at?: string | null;
-  statistics?: Record<string, number>;
-  failure_reasons?: string[];
-}
-
-export interface DataSource {
-  ds_id: string;
-  name: string;
-  status: string;
-  bucket: string | null;
-  prefix?: string | null;
-  failure_reasons?: string[];
-  ingestion_jobs?: IngestionJob[];
-}
-
-export interface KnowledgeBaseDetail {
-  kb_id: string;
-  name: string;
-  description: string;
-  status: KBStatus | string;
-  arn?: string | null;
-  created_at?: string | null;
-  updated_at: string | null;
-  failure_reasons?: string[];
-  data_sources: DataSource[];
-  attached_agents: string[];
-}
-
-export interface QueryResultItem {
-  text: string;
-  score: number | null;
-  location_uri: string | null;
-  metadata: Record<string, unknown>;
-}
-
-/** Source of a KB / data source: files uploaded to the artifacts bucket, or an
- *  existing S3 location the KB service role is granted read access to. */
-export type KBSourceBody = { mode: "upload" } | { mode: "existing"; bucket: string; prefix?: string };
+export type {
+  DataSource,
+  IngestionJob,
+  KBSourceBody,
+  KBStatus,
+  KnowledgeBaseDetail,
+  KnowledgeBaseSummary,
+  QueryResultItem,
+} from "../lib/knowledgeBases";
 
 /** KB lifecycle status → chip styling. Data-source and ingestion-job statuses
  *  (which are AWS enum values) use {@link resourceTone} and render raw. */
