@@ -184,7 +184,11 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
           : !verdict
             ? "verdict"
             : "post";
-  const cardState = (key: string, done: boolean): CardState => (done ? "done" : activeCard === key ? "active" : "pending");
+  const cardState = (key: string, done: boolean): CardState =>
+    done ? "done" : !terminal && activeCard === key ? "active" : "pending";
+  // a cleaned / failed experiment keeps every stage result — they are ledger
+  // artifacts, not AWS reads — and shows them read-only
+  const notReached = <span className="v2-muted">{t("v2.experiments.notReached")}</span>;
 
   const insufficient = !!verdict?.verdict.includes("insufficient");
   const nonSignificant = verdict?.significant === false;
@@ -196,6 +200,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
 
   /** Button while pending → progress line; a stored `<action>: …` error turns it into a retry. */
   const actionButton = (action: string, label: string, opts: { primary?: boolean; disabled?: boolean; extra?: Record<string, unknown> } = {}) => {
+    if (terminal) return null;
     const isRunning = exp.running_action === action;
     const failed = !isRunning && !!exp.error?.startsWith(`${action}: `);
     return (
@@ -385,7 +390,9 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
 
   const recommendCard = (
     <StageCard id="recommend" index={1} title={t("expPage.card.recommend")} state={cardState("recommend", recommendDone)}>
-      {!rec ? (
+      {!rec && terminal ? (
+        notReached
+      ) : !rec ? (
         <div className="v2-form">
           <Alert>{t("expPage.recommendHint")}</Alert>
           <Field label={t("v2.experiments.recTypes")}>
@@ -488,7 +495,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
                     : t("expPage.toolRecEmpty")}
             </Alert>
           )}
-          {!recommendDone && (!spDone || !tdRan || !hasRecTools) && (
+          {!terminal && !recommendDone && (!spDone || !tdRan || !hasRecTools) && (
             <Card title={t("v2.experiments.regenerate")}>
               <div className="v2-form">
                 <div className="v2-form cols-2">
@@ -517,7 +524,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
               </div>
             </Card>
           )}
-          {!acceptedPrompt && !a.bundles && (
+          {!terminal && !acceptedPrompt && !a.bundles && (
             <>
               <Field label={t("v2.experiments.treatmentPrompt")} hint={t("expPage.editHint")} error={acceptBlocked ? t("expPage.acceptBlockedRecFailed") : null}>
                 <textarea
@@ -564,7 +571,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
       <div className="v2-form">
         <DiffPanes before={currentPrompt} after={treatmentPrompt} beforeLabel={t("expPage.controlLabel")} afterLabel={t("expPage.treatmentLabel")} />
         {!a.bundles ? (
-          actionButton("bundles", t("expPage.createBundles"), { primary: true })
+          terminal ? notReached : actionButton("bundles", t("expPage.createBundles"), { primary: true })
         ) : (
           <Descriptions
             items={[
@@ -580,7 +587,8 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
   const gwabCard = !!a.bundles && (
     <StageCard id="gwab" index={3} title={t("expPage.card.gwab")} state={cardState("gwab", !!a.abtest)}>
       <div className="v2-form">
-        {!a.gateway && (
+        {!a.gateway && terminal && notReached}
+        {!a.gateway && !terminal && (
           <>
             <Alert>{t("expPage.onlineEvaluatorsHint", { max: ONLINE_EVAL_MAX })}</Alert>
             <EvaluatorPicker
@@ -620,7 +628,9 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
 
   const trafficCard = !!a.abtest && (
     <StageCard id="traffic" index={4} title={t("expPage.card.traffic")} state={cardState("traffic", !!a.traffic)}>
-      {!a.traffic ? (
+      {!a.traffic && terminal ? (
+        notReached
+      ) : !a.traffic ? (
         <div className="v2-form cols-2">
           <Field label={t("expPage.datasetTag")}>
             <select className="v2-select" value={trafficDataset} onChange={(e) => setTrafficDataset(e.target.value)} data-testid="v2-exp-traffic-dataset">
@@ -650,6 +660,11 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
 
   // ── VERDICT · PROMOTE ────────────────────────────────────────────────────
   const promoteControls = (() => {
+    if (terminal) {
+      if (promotionComplete) return <Tag tone="green">{`${t("expPage.promoted")} · v${promotion?.agent_version ?? "—"}`}</Tag>;
+      if (legacyPromotion) return <Tag tone="orange">{`${t("expPage.legacyShift")} · T1 ${promotion?.after_weights?.T1 ?? 99}%`}</Tag>;
+      return <span className="v2-muted">{t("v2.experiments.notPromoted")}</span>;
+    }
     if (promotionComplete) {
       return (
         <>
@@ -705,7 +720,9 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
 
   const verdictCard = !!a.traffic && (
     <StageCard id="verdict" index={5} title={t("expPage.card.verdict")} state={cardState("verdict", !!verdict)}>
-      {!verdict ? (
+      {!verdict && terminal ? (
+        notReached
+      ) : !verdict ? (
         <div className="v2-form">
           <Alert>{t("expPage.aggregationHint")}</Alert>
           {actionButton("verdict", t("expPage.monitorResults"), { primary: true })}
@@ -798,7 +815,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
               {insufficient ? t("evalPage.experiment.insufficient.promotedContext") : t("evalPage.experiment.nonsig.promotedContext")}
             </Alert>
           )}
-          {weak && !promotionComplete && (
+          {weak && !promotionComplete && !terminal && (
             <Alert tone="warn">
               {t(insufficient ? "evalPage.experiment.insufficient.reason" : "evalPage.experiment.nonsig.reason")}
               <ul className="v2-list">
@@ -849,10 +866,10 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
   const cleanupCard = (
     <StageCard id="cleanup" index={6} title={t("expPage.card.cleanup")} state={a.cleanup ? "done" : "pending"}>
       <div className="v2-form">
-        <Alert>{t("v2.experiments.cleanupHint")}</Alert>
-        {!a.cleanup && (
+        {!a.cleanup && <Alert>{t("v2.experiments.cleanupHint")}</Alert>}
+        {!a.cleanup && (!terminal || exp.status === "failed") && (
           <div>
-            <Button kind="danger" disabled={locked} onClick={() => setConfirm("cleanup")} testId="v2-exp-cleanup">
+            <Button kind="danger" disabled={terminal ? busy : locked} onClick={() => setConfirm("cleanup")} testId="v2-exp-cleanup">
               {exp.running_action === "cleanup" ? t("expPage.running") : t("expPage.cleanup")}
             </Button>
           </div>
@@ -943,27 +960,16 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
                 {insufficient ? t("evalPage.experiment.insufficient.promotedContext") : t("evalPage.experiment.nonsig.promotedContext")}
               </Alert>
             )}
-            {exp.status === "failed" && !a.cleanup && (
-              <div>
-                <Button kind="danger" disabled={busy} onClick={() => setConfirm("cleanup")} testId="v2-exp-cleanup">
-                  {t("expPage.cleanup")}
-                </Button>
-              </div>
-            )}
-            {cleanupRows}
           </div>
         </Card>
-      ) : (
-        <>
-          {recommendCard}
-          {bundlesCard}
-          {gwabCard}
-          {trafficCard}
-          {verdictCard}
-          {legacyCanary}
-          {cleanupCard}
-        </>
-      )}
+      ) : null}
+      {recommendCard}
+      {bundlesCard}
+      {gwabCard}
+      {trafficCard}
+      {verdictCard}
+      {legacyCanary}
+      {cleanupCard}
 
       <Confirm
         open={confirm === "cleanup"}

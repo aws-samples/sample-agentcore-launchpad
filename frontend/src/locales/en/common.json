@@ -5869,7 +5869,9 @@
       "failed": "Failed",
       "resource": "Resource",
       "cleanupHint": "Deletes the experiment's bundles, temporary target, A/B test and online evaluators; the shared gateway stays.",
-      "legacyCanaryWeights": "Champion {{c}}% · challenger {{t1}}% · stage {{stage}}/3"
+      "legacyCanaryWeights": "Champion {{c}}% · challenger {{t1}}% · stage {{stage}}/3",
+      "notReached": "Not reached before the experiment ended.",
+      "notPromoted": "Not promoted"
     },
     "picker": {
       "picked": "{{count}} / {{max}} selected",
