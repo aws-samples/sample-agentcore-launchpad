@@ -5869,7 +5869,9 @@
       "failed": "失败",
       "resource": "资源",
       "cleanupHint": "删除实验创建的 Bundle、临时 Target、A/B 测试和在线评估器；共享的实验网关会保留。",
-      "legacyCanaryWeights": "基准版 {{c}}% · 挑战者 {{t1}}% · 第 {{stage}}/3 阶段"
+      "legacyCanaryWeights": "基准版 {{c}}% · 挑战者 {{t1}}% · 第 {{stage}}/3 阶段",
+      "notReached": "实验结束前未进行到这一步。",
+      "notPromoted": "未发布"
     },
     "picker": {
       "picked": "已选 {{count}} / {{max}}",

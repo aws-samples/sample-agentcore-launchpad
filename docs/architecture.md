@@ -2404,7 +2404,10 @@ through the same backend routes and permission checks as the classic pages.
   rebuilds the configuration-bundle experiment — list, `?view=new` (agent, trace
   readiness, baseline run) and `?view=detail&id=` with one stage card per step
   (recommend → bundles → gateway/A-B → traffic → verdict/promote → cleanup) posting the
-  same actions as the classic page; the per-experiment RECOMMEND picker state lives in
+  same actions as the classic page. A cleaned or failed experiment keeps showing every
+  stage's result read-only (recommendation diff, bundles, gateway/A-B, traffic, verdict
+  metrics, cleanup rows): they are ledger artifacts (`Experiment.artifacts`, merged per
+  stage and never removed by cleanup), not AWS reads. The per-experiment RECOMMEND picker state lives in
   `lib/experiments.ts`, shared with the classic page. Runtime canaries are its second tab
   (`mode=canary`, `v2/pages/canary/`): list, `canary=new` (champion + candidate prompt /
   Studio code, accepting the experiment's promote hand-off `champion=` / `sourceExp=`)
