@@ -499,6 +499,19 @@ AWS 资源——部署仍在进行、首次部署失败、已删除,或既非 Ru
 
 本地行上的 `cloud` blob:`{dataset_id, arn, status, synced_at, failure_reason, draft_status (MODIFIED|UNMODIFIED), example_count, versions[{version, example_count, created_at}]}`。它只缓存展示状态——AWS 是事实来源,每次变更都会重新读取 `GetDataset` / `ListDatasetVersions`。
 
+## 控制台数据处理 API（V2）/ Console Data Processing API (V2)
+
+控制台 V2 的数据中心把已观测的会话（Agent 轨迹）转换为本地评估数据集。下面两类路由共用同一个提取器（`app/evaluation/pipelines.py`）：通过可观测服务读取会话对话（与 `/api/observability/sessions` 相同的私有会话可见性规则），把每条用户输入与其后的 Agent 回复配对，每个会话写入一个 **predefined** 场景（`scenario_id = trace-<session>`、`turns[{input, expected_response}]`、`metadata.source = "trace"`）；目标为 **legacy** 数据集时写入首轮的 `{prompt, expected}`。模拟用户数据集会被拒绝（400 `dataset.kind_unsupported`）。合并时跳过已存在的 scenario id、可选跳过相同的首轮输入（`dedupe`），并遵守 200 条上限；这里不调用任何模型。
+
+| 方法 | 路径 | 行为 |
+|---|---|---|
+| `POST` | `/api/eval/datasets/from-sessions` | `{session_ids[1..50], range, dataset_id 与 name 二选一, description?, first_turn_only?, dedupe?}` → 201 `{dataset, added, skipped[{session_id, reason}]}`。原因：`not_found`、`no_transcript`、`no_exchange`，以及（`session_id` 为空时）`duplicate` / `dataset_full`。新建数据集却没有可用内容 → 422 `dataset.nothing_extracted`，`detail.skipped` 给出原因 |
+| `GET` · `POST` | `/api/eval/pipelines` | 列出 / 创建保存的处理任务：`{name, description, source{agent, range, status: all\|ok\|error, max_sessions ≤ 50}, processing{first_turn_only, dedupe, min_input_chars}, output{dataset_id 与 dataset_name 二选一}}`（输出数据集不存在或为模拟用户 → 404 / 400） |
+| `GET` · `PUT` · `DELETE` | `/api/eval/pipelines/{pipeline_id}` | 读取 / 整体替换（运行中 → 409 `pipeline.running`）/ 删除——输出数据集保留 |
+| `POST` | `/api/eval/pipelines/{pipeline_id}/run` | 同步、有界的运行：列出时间窗口内的会话，按 Agent / 状态过滤，读取最新的至多 `max_sessions` 个，提取并合并。结果写入该行的 `last_run{at, scanned, matched, added, skipped, dataset_id, error}`，`status` 为 `succeeded` / `failed`；`dataset_name` 输出在首次运行时创建，之后该 Pipeline 指向其 id |
+
+所有路由均为 `MEMBER` 且按工作区隔离（`eval_pipelines.workspace_id`）。
+
 ## 控制台评估器 API / Console Evaluators API
 
 `/api/eval/evaluators` 是 `?view=evaluators` 子页背后的自定义评估器 CRUD。AWS 是唯一事实来源（没有 ledger 行）；内置与第三方评估器只读。一个自定义评估器恰好有三种**定义**之一，由载荷里出现的字段决定——`instructions`（LLM 评审，`llmAsAJudge`）、`base_evaluator_id`（派生，`derived`）或 `lambda_arn`（代码评估器，`codeBased.lambdaConfig`）；同时给出两个或一个都没有 → 400 `evaluator.definition_ambiguous`。
@@ -516,6 +529,8 @@ AWS 资源——部署仍在进行、首次部署失败、已删除,或既非 Ru
 ## 控制台评估运行 API / Console Evaluation Runs API
 
 `/api/eval/runs` 通过有界运行队列(`eval_max_concurrent_runs`,上限为账户 5 个活跃批量评估的配额)驱动批量评估 / insights 分析。运行状态:`queued → invoking → waiting → evaluating → completed | failed | stopped`。每一行都带 `stop_requested`(操作员已请求停止,批次仍在 STOPPING)。
+
+`POST /api/eval/runs` 还接受可选的 `name`（1–64）与 `description`（≤ 1000）——控制台 V2 以命名的评估任务列出运行——每一行都带这两个字段（未命名时为 null）以及 `updated_at`。
 
 | Method | Path | 用途 |
 |---|---|---|

@@ -24,9 +24,14 @@ import type {
   EvaluatorUpdateBody,
   ScalePoint,
 } from "../lib/api";
-import { evaluatorLabel } from "../lib/evaluators";
+import {
+  evaluatorLabel,
+  type EvaluatorLevel,
+  JUDGE_MODEL_OPTIONS as MODEL_OPTIONS,
+  LEVEL_PLACEHOLDERS,
+} from "../lib/evaluators";
 
-type Level = "TOOL_CALL" | "TRACE" | "SESSION";
+type Level = EvaluatorLevel;
 
 const NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,47}$/;
 const PLACEHOLDER_RE = /\{[a-zA-Z_][a-zA-Z0-9_]*\}/;
@@ -44,16 +49,6 @@ const TP_TOGGLE_ROW: EvaluatorRow = { id: TP_TOGGLE_ID, level: "", source: "thir
 // 2026-07-11) — the service validates modelId per region and rejects the
 // rest with ValidationException. An evaluator loaded for editing with a
 // model outside this list still renders (its id is prepended dynamically).
-const MODEL_OPTIONS = [
-  "global.anthropic.claude-sonnet-5",
-  "global.anthropic.claude-sonnet-4-6",
-  "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-  "global.anthropic.claude-opus-4-8",
-  "global.anthropic.claude-opus-4-6-v1",
-  "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-  "global.amazon.nova-2-lite-v1:0",
-  "us.amazon.nova-pro-v1:0",
-];
 
 const LEVELS: Level[] = ["TRACE", "SESSION", "TOOL_CALL"];
 
@@ -62,24 +57,6 @@ const LEVELS: Level[] = ["TRACE", "SESSION", "TOOL_CALL"];
 // Skill tokens (TOOL_CALL only) restrict the evaluator to skill-invocation
 // tool calls; {skill_content} additionally switches {context} to the full
 // session context.
-const LEVEL_PLACEHOLDERS: Record<
-  Level,
-  { core: string[]; groundTruth: string[]; skill?: string[] }
-> = {
-  TRACE: {
-    core: ["{context}", "{assistant_turn}"],
-    groundTruth: ["{expected_response}"],
-  },
-  SESSION: {
-    core: ["{context}", "{available_tools}"],
-    groundTruth: ["{assertions}", "{expected_tool_trajectory}", "{actual_tool_trajectory}"],
-  },
-  TOOL_CALL: {
-    core: ["{context}", "{available_tools}", "{tool_turn}"],
-    groundTruth: [],
-    skill: ["{invoked_skill}", "{skill_content}", "{available_skills}", "{user_message}"],
-  },
-};
 
 const LEVEL_COLOR: Record<string, string> = {
   SESSION: "var(--warn)",

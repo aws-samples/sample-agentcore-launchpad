@@ -2346,6 +2346,50 @@ live-view chunk (already lazy, `pages/governance/ToolsView.tsx`) is above Vite's
 raised just far enough to cover that one chunk (2900 kB), so the warning still
 fires if the entry or a page chunk regresses.
 
+## Console V2
+
+A second console experience ships **alongside** the classic one: a light,
+enterprise-SaaS style UI modelled on the evaluation workflow customers expect
+(top product bar, grouped collapsible sidebar, filter-bar list pages with a
+"共 N 项" count, step wizards, `|`-titled section cards, status tags). It lives
+under its own route group `/v2/*` in `frontend/src/App.tsx`, **outside** the
+classic `<Shell />`, with its own shell (`v2/V2Shell.tsx`) — both share the auth
+gate, the workspace provider and `lib/api.ts`, so every V2 read and write goes
+through the same backend routes and permission checks as the classic pages.
+
+- **Switching.** The classic topbar has a "Try V2" chip; V2's top bar has
+  "Classic console". The choice is a per-browser convenience in `localStorage`
+  (`lib/ui-version.ts`, key `launchpad_ui_version`); when it is `v2` the index
+  route `/` redirects to `/v2`. Storage that is blocked simply means classic.
+- **Styling isolation.** Everything in `v2/v2.css` is scoped under `.v2` (the shell
+  root) or `body.v2-body`, a class the shell adds to `<body>` only while mounted to
+  neutralize the classic dark background and film grain. The classic theme is
+  untouched; V2 ships its own component kit (`v2/ui.tsx`: button, tag, filter
+  select, search, table + pager, card, wizard steps, modal, drawer, descriptions,
+  KPI, toast) instead of reusing the classic components.
+- **What is native V2.** The workbench (`/v2`) and the Agent evaluation module:
+  数据中心 `/v2/eval/data` (tabs: Agent trajectories = observability traces with a
+  trace/session detail, datasets with a record editor, data-processing pipelines),
+  评估任务 `/v2/eval/tasks`, 分析洞察 `/v2/eval/insights` and 评估器
+  `/v2/eval/evaluators`. Sub-pages follow the console convention: `?view=` states
+  of one route (`view=new|detail|edit|trace|dataset|pipeline…`). Every other
+  sidebar entry (agent development, runtime, experiments, administration) opens the
+  classic page and is tagged 经典版 until it is migrated.
+- **Evaluation tasks unify two resources** (`v2/tasks.ts`): a batch evaluation run
+  is a *history* task (time window, hand-picked sessions or a dataset replay,
+  evaluated once; `name`/`description` stored on the run row), an agent-owned
+  scores-mode online evaluation config is a *continuous* task (sampling rate,
+  session timeout; its description is the task name). Status maps both onto
+  queued / running / completed / failed / stopped / paused.
+- **Results are shown, not exported.** Task detail and 分析洞察 read the judged
+  records (`GET /api/eval/runs/{id}/results`, `GET /api/eval/online/{id}/results`)
+  into one row model (`v2/results.ts`): outcome, raw and **normalized** score
+  (0–1, penalty evaluators inverted via `evaluatorPolarity`), label, explanation.
+  A normalized score below 0.7 is a Bad Case. Insights aggregates the latest 12
+  completed runs of the window plus every continuous task, with KPIs, a
+  per-evaluator breakdown, filters, CSV export and "bad cases → dataset", which
+  feeds `POST /api/eval/datasets/from-sessions` (see the Data Processing API).
+
 ## Console authentication and accounts
 
 The platform console has an optional local account gate, independent from both

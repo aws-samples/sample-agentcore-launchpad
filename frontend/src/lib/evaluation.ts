@@ -98,6 +98,10 @@ export interface EvaluationRunInfo {
   batch_eval_id?: string | null;
   error: string | null;
   created_at?: string | null;
+  /** operator-facing task name/description (console V2); null on unnamed runs */
+  name?: string | null;
+  description?: string | null;
+  updated_at?: string | null;
 }
 
 type EvaluationRunDisplayStatus = EvaluationRunStatus | "completed_with_errors";

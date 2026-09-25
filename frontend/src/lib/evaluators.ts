@@ -50,3 +50,40 @@ export function scoreColor(score: number, evaluatorId: string): string {
       ? "var(--warn)"
       : "var(--crit-text)";
 }
+
+/** Bedrock models offered as the judge of a custom LLM evaluator (the backend
+ *  default, `global.anthropic.claude-sonnet-5`, first). */
+export const JUDGE_MODEL_OPTIONS = [
+  "global.anthropic.claude-sonnet-5",
+  "global.anthropic.claude-sonnet-4-6",
+  "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "global.anthropic.claude-opus-4-8",
+  "global.anthropic.claude-opus-4-6-v1",
+  "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "global.amazon.nova-2-lite-v1:0",
+  "us.amazon.nova-pro-v1:0",
+];
+
+export type EvaluatorLevel = "TOOL_CALL" | "TRACE" | "SESSION";
+
+/** Prompt placeholders AgentCore fills per evaluation level: `core` are always
+ *  available, `groundTruth` need a dataset with expected values, `skill` apply
+ *  to skill-invocation tool calls. A judge prompt needs at least one. */
+export const LEVEL_PLACEHOLDERS: Record<
+  EvaluatorLevel,
+  { core: string[]; groundTruth: string[]; skill?: string[] }
+> = {
+  TRACE: {
+    core: ["{context}", "{assistant_turn}"],
+    groundTruth: ["{expected_response}"],
+  },
+  SESSION: {
+    core: ["{context}", "{available_tools}"],
+    groundTruth: ["{assertions}", "{expected_tool_trajectory}", "{actual_tool_trajectory}"],
+  },
+  TOOL_CALL: {
+    core: ["{context}", "{available_tools}", "{tool_turn}"],
+    groundTruth: [],
+    skill: ["{invoked_skill}", "{skill_content}", "{available_skills}", "{user_message}"],
+  },
+};

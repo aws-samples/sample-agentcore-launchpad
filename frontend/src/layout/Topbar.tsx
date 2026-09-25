@@ -1,7 +1,9 @@
-import { LogOut, ShieldOff } from "lucide-react";
+import { LogOut, ShieldOff, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/auth-context";
+import { setUiVersion } from "../lib/ui-version";
 import { useWorkspace } from "../workspace/workspace-context";
 import type { HealthInfo, HealthStatus } from "./useHealth";
 import { LangSwitcher } from "./LangSwitcher";
@@ -17,6 +19,7 @@ export function Topbar({ crumbKey, health, healthStatus }: TopbarProps) {
   const { t } = useTranslation();
   const { authRequired, username, role, accountExpiresAt, logout } = useAuth();
   const { current } = useWorkspace();
+  const navigate = useNavigate();
   const displayName = authRequired ? (username ?? "—") : "river";
   const initials = displayName.slice(0, 2).toUpperCase();
   const roleLabel = authRequired
@@ -52,6 +55,21 @@ export function Topbar({ crumbKey, health, healthStatus }: TopbarProps) {
             {t("topbar.backendDown")}
           </div>
         )}
+        {/* Console V2 ships alongside this console; the choice is remembered
+            per browser (lib/ui-version) and V2 offers the way back. */}
+        <button
+          type="button"
+          className="syschip link v2-entry"
+          onClick={() => {
+            setUiVersion("v2");
+            navigate("/v2");
+          }}
+          title={t("v2.tryHint")}
+          data-testid="topbar-try-v2"
+        >
+          <Sparkles size={12} aria-hidden="true" />
+          {t("v2.try")}
+        </button>
         <WorkspaceSwitcher />
         {/* The workspace owns the environment; health only backs the chips up
             while the workspace list is unavailable. */}

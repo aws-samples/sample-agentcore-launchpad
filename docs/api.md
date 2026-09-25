@@ -701,6 +701,29 @@ draft_status (MODIFIED|UNMODIFIED), example_count, versions[{version, example_co
 created_at}]}`. It caches display state only — AWS is the source of truth and every
 mutation re-reads `GetDataset` / `ListDatasetVersions`.
 
+## Console Data Processing API (V2)
+
+Console V2's 数据中心 turns observed sessions (Agent trajectories) into local
+evaluation datasets. One extractor (`app/evaluation/pipelines.py`) serves both
+routes below: it reads the session transcript through the observability service
+(same private-session visibility rule as `/api/observability/sessions`), pairs each
+user input with the following agent reply, and writes a **predefined** scenario per
+session (`scenario_id = trace-<session>`, `turns[{input, expected_response}]`,
+`metadata.source = "trace"`) — or a `{prompt, expected}` pair from the first
+exchange when the target is a **legacy** dataset. Simulated-persona datasets are
+refused (400 `dataset.kind_unsupported`). Merging skips a scenario id already
+present, optionally an identical first input (`dedupe`), and anything past the
+200-item cap; nothing here calls a model.
+
+| Method | Path | Behavior |
+|---|---|---|
+| `POST` | `/api/eval/datasets/from-sessions` | `{session_ids[1..50], range, dataset_id XOR name, description?, first_turn_only?, dedupe?}` → 201 `{dataset, added, skipped[{session_id, reason}]}`. Reasons: `not_found`, `no_transcript`, `no_exchange`, and (with an empty `session_id`) `duplicate` / `dataset_full`. A new dataset with nothing usable → 422 `dataset.nothing_extracted` with `detail.skipped` |
+| `GET` · `POST` | `/api/eval/pipelines` | List / create a saved processing task: `{name, description, source{agent, range, status: all\|ok\|error, max_sessions ≤ 50}, processing{first_turn_only, dedupe, min_input_chars}, output{dataset_id XOR dataset_name}}` (an unknown or simulated output dataset → 404 / 400) |
+| `GET` · `PUT` · `DELETE` | `/api/eval/pipelines/{pipeline_id}` | Read / replace (409 `pipeline.running` while running) / delete — the output dataset is kept |
+| `POST` | `/api/eval/pipelines/{pipeline_id}/run` | Synchronous, bounded run: list the window's sessions, filter by agent/status, read at most `max_sessions` newest, extract, merge. The outcome lands on the row as `last_run{at, scanned, matched, added, skipped, dataset_id, error}` with `status` `succeeded` / `failed`; a `dataset_name` output is created on the first run and the pipeline then targets its id |
+
+All routes are `MEMBER` and workspace-scoped (`eval_pipelines.workspace_id`).
+
 ## Console Evaluators API
 
 `/api/eval/evaluators` is the custom-evaluator CRUD behind the `?view=evaluators`
@@ -745,6 +768,10 @@ run queue (`eval_max_concurrent_runs`, capped at the 5 active-batch-evaluations
 account quota). Run status: `queued → invoking → waiting → evaluating → completed |
 failed | stopped`. Every row carries `stop_requested` (an operator stop is pending
 on a run whose batch is still STOPPING).
+
+`POST /api/eval/runs` also takes an optional operator-facing `name` (1–64) and
+`description` (≤ 1000) — console V2 lists runs as named evaluation tasks — and every
+run row carries them (null on unnamed runs) plus `updated_at`.
 
 Before creating a run or invoking an agent, known managed code rules are compared
 with the target Agent's actual `tools`, `knowledge_bases` and `skills`. An

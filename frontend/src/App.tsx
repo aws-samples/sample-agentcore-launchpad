@@ -2,6 +2,8 @@ import { lazy } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { ToastProvider } from "./components";
+import { getUiVersion } from "./lib/ui-version";
+import { RouteChunk } from "./layout/RouteChunk";
 import { Shell } from "./layout/Shell";
 import { NotFound } from "./pages/NotFound";
 import { Overview } from "./pages/Overview";
@@ -67,14 +69,52 @@ const Workspaces = lazy(() =>
   import("./pages/Workspaces").then((m) => ({ default: m.Workspaces })),
 );
 
+// Console V2 (light enterprise-SaaS experience) lives under /v2 with its own
+// shell; the classic console keeps every existing route. Both ship side by side.
+const V2Shell = lazy(() => import("./v2/V2Shell").then((m) => ({ default: m.V2Shell })));
+const V2Home = lazy(() => import("./v2/pages/Home").then((m) => ({ default: m.V2Home })));
+const V2DataCenter = lazy(() =>
+  import("./v2/pages/DataCenter").then((m) => ({ default: m.V2DataCenter })),
+);
+const V2Tasks = lazy(() => import("./v2/pages/Tasks").then((m) => ({ default: m.V2Tasks })));
+const V2Insights = lazy(() =>
+  import("./v2/pages/Insights").then((m) => ({ default: m.V2Insights })),
+);
+const V2Evaluators = lazy(() =>
+  import("./v2/pages/Evaluators").then((m) => ({ default: m.V2Evaluators })),
+);
+const V2NotFound = lazy(() =>
+  import("./v2/pages/Home").then((m) => ({ default: m.V2NotFound })),
+);
+
+/** The index route honours the operator's remembered console choice. */
+function IndexRoute() {
+  return getUiVersion() === "v2" ? <Navigate to="/v2" replace /> : <Overview />;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
       <ToastProvider>
         <WorkspaceProvider>
           <Routes>
+            <Route
+              path="v2"
+              element={
+                <RouteChunk>
+                  <V2Shell />
+                </RouteChunk>
+              }
+            >
+              <Route index element={<V2Home />} />
+              <Route path="eval/data" element={<V2DataCenter />} />
+              <Route path="eval/tasks" element={<V2Tasks />} />
+              <Route path="eval/insights" element={<V2Insights />} />
+              <Route path="eval/evaluators" element={<V2Evaluators />} />
+              <Route path="*" element={<V2NotFound />} />
+            </Route>
             <Route element={<Shell />}>
-            <Route index element={<Overview />} />
+            <Route index element={<IndexRoute />} />
             <Route path="agents" element={<CreateAgent mode="list" />} />
             <Route path="agents/new" element={<CreateAgent mode="new" />} />
             <Route path="agents/import" element={<CreateAgent mode="import" />} />

@@ -40,6 +40,9 @@ button:disabled{cursor:not-allowed}
 .syschip .led.crit{background:var(--crit);box-shadow:0 0 6px var(--crit);animation:pulse 1.2s infinite}
 a.syschip.link{text-decoration:none;white-space:nowrap;transition:border-color .15s ease,color .15s ease}
 a.syschip.link:hover{border-color:var(--amber);color:var(--amber)}
+/* entry into console V2 (a button, so it borrows the link-chip look explicitly) */
+button.syschip.v2-entry{cursor:pointer;white-space:nowrap;color:var(--amber);border-color:rgba(255,176,0,.45)}
+button.syschip.v2-entry:hover{background:var(--amber-soft)}
 .avatar{display:flex;align-items:center;gap:8px;border:1px solid var(--line);padding:4px 10px 4px 4px;background:var(--panel)}
 .avatar .pic{width:24px;height:24px;background:linear-gradient(135deg,var(--amber),#8a5c00);display:grid;place-items:center;font-weight:800;font-size:10px;color:#131008}
 .avatar span{font-family:var(--mono);font-size:10.5px;color:var(--ink-2)}
