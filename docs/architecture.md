@@ -2393,6 +2393,23 @@ through the same backend routes and permission checks as the classic pages.
   stay classic. In V2 the classic `/agents` and `/agents/:id` URLs redirect to the
   native pages (`AgentsRoute` in `App.tsx`), so cross-module links and the classic
   wizard's post-deploy hand-over land there.
+- **Online evaluation and experiments (native).** `/v2/eval/online` (`v2/pages/Online.tsx`,
+  shared rules in `v2/online.ts`) manages every online evaluation config — agent-owned,
+  experiment arms (read-only) and external ones, scores and insights modes: list with
+  mode/owner/execution filters (polled while CREATING/UPDATING/DELETING), detail with
+  the server's per-evaluator aggregates and trend plus the judged records (scores) or
+  the scheduled / on-demand insight reports with a report drawer (insights), and a
+  create/edit form with filters whose save sends only the changed fields
+  (`api.v2UpdateOnlineConfig`, PATCH). `/v2/eval/experiments` (`v2/pages/Experiments.tsx`)
+  rebuilds the configuration-bundle experiment — list, `?view=new` (agent, trace
+  readiness, baseline run) and `?view=detail&id=` with one stage card per step
+  (recommend → bundles → gateway/A-B → traffic → verdict/promote → cleanup) posting the
+  same actions as the classic page; the per-experiment RECOMMEND picker state lives in
+  `lib/experiments.ts`, shared with the classic page. Runtime canaries are its second tab
+  (`mode=canary`) and still render the classic view. In V2 the classic
+  `/evaluation?view=online|experiment` URLs are mapped onto these pages (`EvaluationRoute`
+  in `App.tsx`, `oe=`/`exp=` become `view=detail&id=`); the classic evaluation page and
+  its section nav are no longer reached from the V2 sidebar.
 - **What is native V2.** The workbench (`/v2`), Agent management (above) and the Agent evaluation module:
   数据中心 `/v2/eval/data` (tabs: Agent trajectories = observability traces with a
   trace/session detail, datasets with a record editor, data-processing pipelines),

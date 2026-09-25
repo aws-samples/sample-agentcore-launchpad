@@ -2,7 +2,13 @@
 
 import i18n from "../i18n";
 import type { KBSourceBody, KnowledgeBaseDetail } from "../pages/KnowledgeBases";
-import type { EvaluationRunInfo, EvaluationRunResults, InsightTrees } from "./evaluation";
+import type {
+  EvaluationRunInfo,
+  EvaluationRunResults,
+  ExperimentReadiness,
+  InsightTrees,
+} from "./evaluation";
+import type { ExperimentInfo } from "./experiments";
 import type { ModelSource, ReasoningEffort } from "./models";
 import { WORKSPACE_HEADER } from "./workspace-header";
 
@@ -4529,6 +4535,35 @@ export const api = {
   v2DeleteOnlineConfig: (id: string) =>
     request<{ deleted: boolean }>(`/api/eval/online/${encodeURIComponent(id)}`, {
       method: "DELETE",
+    }),
+  /** Only changed fields travel; the backend merges them into the stored rule. */
+  v2UpdateOnlineConfig: (id: string, body: OnlineEvalConfigPatch) =>
+    request<OnlineEvalConfigRow>(`/api/eval/online/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  /** Full experiment rows (artifacts included) — `listExperiments` is the summary. */
+  v2Experiments: () => request<{ experiments: ExperimentInfo[] }>("/api/experiments"),
+  v2Experiment: (id: string) => request<ExperimentInfo>(`/api/experiments/${encodeURIComponent(id)}`),
+  v2ExperimentReadiness: (agentId: string, lookbackHours: number, force = false) =>
+    request<ExperimentReadiness>(
+      `/api/experiments/readiness?${new URLSearchParams({
+        agent_id: agentId,
+        lookback_hours: String(lookbackHours),
+        ...(force ? { force: "true" } : {}),
+      }).toString()}`,
+    ),
+  v2CreateExperiment: (agentId: string, lookbackHours: number) =>
+    request<ExperimentInfo>("/api/experiments", {
+      method: "POST",
+      body: JSON.stringify({ agent_id: agentId, lookback_hours: lookbackHours }),
+    }),
+  /** One stage action (`recommend`, `accept`, `bundles`, `gateway`, `abtest`,
+   *  `traffic`, `verdict`, `promote`, `cleanup`) with its stage-specific fields. */
+  v2ExperimentAction: (id: string, action: string, extra: Record<string, unknown> = {}) =>
+    request<{ experiment: ExperimentInfo }>(`/api/experiments/${encodeURIComponent(id)}/action`, {
+      method: "POST",
+      body: JSON.stringify({ action, ...extra }),
     }),
   v2OnlineResults: (id: string, range: V2Range) =>
     request<OnlineEvalResults>(

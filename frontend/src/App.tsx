@@ -85,6 +85,10 @@ const V2Evaluators = lazy(() =>
   import("./v2/pages/Evaluators").then((m) => ({ default: m.V2Evaluators })),
 );
 const V2Agents = lazy(() => import("./v2/pages/Agents").then((m) => ({ default: m.V2Agents })));
+const V2Online = lazy(() => import("./v2/pages/Online").then((m) => ({ default: m.V2Online })));
+const V2Experiments = lazy(() =>
+  import("./v2/pages/Experiments").then((m) => ({ default: m.V2Experiments })),
+);
 const V2NotFound = lazy(() =>
   import("./v2/pages/Home").then((m) => ({ default: m.V2NotFound })),
 );
@@ -106,6 +110,57 @@ function AgentsRoute({ mode }: { mode: "list" | "detail" }) {
     return <Navigate to={to} replace />;
   }
   return <CreateAgent mode={mode} />;
+}
+
+/**
+ * In V2 the classic evaluation page's experiment and online sub-pages have native
+ * twins: their URLs (hand-offs from runs, agents, bookmarks) are mapped onto them.
+ * Every other `/evaluation` view stays classic inside the V2 shell.
+ */
+function v2EvaluationTarget(search: string): string | null {
+  const params = new URLSearchParams(search);
+  const view = params.get("view");
+  const next = new URLSearchParams();
+  if (view === "online") {
+    const oe = params.get("oe");
+    if (oe === "new") next.set("view", "new");
+    else if (oe) {
+      next.set("view", "detail");
+      next.set("id", oe);
+    }
+    const q = next.toString();
+    return `/v2/eval/online${q ? `?${q}` : ""}`;
+  }
+  if (view === "experiment") {
+    if (params.get("mode") === "canary") {
+      next.set("mode", "canary");
+      for (const key of ["canary", "champion", "sourceExp"]) {
+        const value = params.get(key);
+        if (value) next.set(key, value);
+      }
+    } else {
+      const exp = params.get("exp");
+      if (exp === "new") {
+        next.set("view", "new");
+        for (const key of ["agent", "lookback", "baselineRun", "sourceRun"]) {
+          const value = params.get(key);
+          if (value) next.set(key, value);
+        }
+      } else if (exp) {
+        next.set("view", "detail");
+        next.set("id", exp);
+      }
+    }
+    const q = next.toString();
+    return `/v2/eval/experiments${q ? `?${q}` : ""}`;
+  }
+  return null;
+}
+
+function EvaluationRoute() {
+  const { search } = useLocation();
+  const target = useUiVersion() === "v2" ? v2EvaluationTarget(search) : null;
+  return target ? <Navigate to={target} replace /> : <Evaluation />;
 }
 
 /**
@@ -143,6 +198,8 @@ export default function App() {
               <Route path="eval/tasks" element={<V2Tasks />} />
               <Route path="eval/insights" element={<V2Insights />} />
               <Route path="eval/evaluators" element={<V2Evaluators />} />
+              <Route path="eval/online" element={<V2Online />} />
+              <Route path="eval/experiments" element={<V2Experiments />} />
               <Route path="*" element={<V2NotFound />} />
             </Route>
             <Route element={<ConsoleShell />}>
@@ -160,7 +217,7 @@ export default function App() {
               <Route path="memory" element={<Memory />} />
               <Route path="chat" element={<Chat />} />
               <Route path="observability" element={<Observability />} />
-              <Route path="evaluation" element={<Evaluation />} />
+              <Route path="evaluation" element={<EvaluationRoute />} />
               <Route path="skill-lab" element={<SkillLab />} />
               <Route path="governance" element={<Governance />} />
               <Route path="users" element={<Users />} />
