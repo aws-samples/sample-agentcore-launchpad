@@ -15,6 +15,7 @@ import {
   type StageInfo,
 } from "../../lib/api";
 import { fmtTime } from "../format";
+import { AgentWizard } from "./agents/AgentWizard";
 import { useLoad, usePaged, useV2Toast } from "../hooks";
 import {
   Alert,
@@ -276,7 +277,7 @@ function AgentList() {
           <Button onClick={reload}>{t("v2.common.refresh")}</Button>
           <Button
             kind="primary"
-            onClick={() => navigate("/agents/new")}
+            onClick={() => setParams({ view: "new" })}
             disabled={!can("agents.deploy")}
             title={can("agents.deploy") ? undefined : t("v2.agents.noPermission")}
             testId="v2-agent-new"
@@ -595,11 +596,14 @@ function AgentDetail({ id }: { id: string }) {
   );
 }
 
-/** Agent management (native V2): list + `?view=detail&id=`; creating, editing
- *  and importing open the classic flows inside the V2 shell. */
+/** Agent management (native V2): list, `?view=detail&id=` and `?view=new` (the
+ *  Harness wizard); editing, importing and the other creation methods open the
+ *  classic flows inside the V2 shell. */
 export function V2Agents() {
   const [params] = useSearchParams();
   const id = params.get("id");
-  if (params.get("view") === "detail" && id) return <AgentDetail key={id} id={id} />;
+  const view = params.get("view");
+  if (view === "detail" && id) return <AgentDetail key={id} id={id} />;
+  if (view === "new") return <AgentWizard />;
   return <AgentList />;
 }

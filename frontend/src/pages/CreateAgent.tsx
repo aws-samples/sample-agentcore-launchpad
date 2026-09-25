@@ -1176,6 +1176,20 @@ const deployLock = !canDeploy
     );
   };
 
+  // `/agents/new?method=zip_runtime|container|byoc` (the V2 console's hand-off for
+  // the methods it has no native form for) opens the configure step directly.
+  const prefillMethod = params.get("method");
+  useEffect(() => {
+    if (mode !== "new") return;
+    if (prefillMethod !== "zip_runtime" && prefillMethod !== "container" && prefillMethod !== "byoc") {
+      return;
+    }
+    pickMethod(prefillMethod);
+    setStep(2);
+    // once per landing: pickMethod is recreated every render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, prefillMethod]);
+
   const resetForm = () => {
     // back / restart / a new edit: any pending editor open or catalog read is stale
     nextEditorIntent();

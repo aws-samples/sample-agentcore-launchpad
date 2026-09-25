@@ -212,6 +212,8 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-field .err { font-size: 12px; color: var(--v2-danger); }
 .v2-check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 14px; color: var(--v2-ink); }
 .v2-check input { accent-color: var(--v2-primary); width: 14px; height: 14px; }
+.v2-check.disabled { cursor: not-allowed; color: var(--v2-ink-4); }
+.v2-checks { display: flex; flex-wrap: wrap; gap: 10px 20px; }
 
 /* option cards (data source / strategy pickers) */
 .v2-options { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }

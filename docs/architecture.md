@@ -2380,7 +2380,20 @@ through the same backend routes and permission checks as the classic pages.
   untouched; V2 ships its own component kit (`v2/ui.tsx`: button, tag, filter
   select, search, table + pager, card, wizard steps, modal, drawer, descriptions,
   KPI, toast) instead of reusing the classic components.
-- **What is native V2.** The workbench (`/v2`) and the Agent evaluation module:
+- **Agent management (native).** `/v2/agents` (`v2/pages/Agents.tsx`) lists the
+  workspace's agents with the classic permission rules per row; `?view=detail&id=`
+  shows basic information, the five-stage deploy pipeline with the job log (polled
+  while deploying), AWS versions/endpoints, BYOC artifact, conversion provenance and
+  knowledge bases; `?view=new` is the creation wizard (`v2/pages/agents/AgentWizard.tsx`).
+  The wizard configures the **managed Harness** end to end and posts the same
+  `AgentSpecInput` the classic wizard builds for it (catalogs: `registryAttachables()`,
+  the managed-KB list, memory resources); Strands, other Agent SDK and BYOC hand off to
+  the classic wizard at `/agents/new?method=…`, which opens its configure step with
+  that method preselected. Editing, importing, system presets and the Studio canvas
+  stay classic. In V2 the classic `/agents` and `/agents/:id` URLs redirect to the
+  native pages (`AgentsRoute` in `App.tsx`), so cross-module links and the classic
+  wizard's post-deploy hand-over land there.
+- **What is native V2.** The workbench (`/v2`), Agent management (above) and the Agent evaluation module:
   数据中心 `/v2/eval/data` (tabs: Agent trajectories = observability traces with a
   trace/session detail, datasets with a record editor, data-processing pipelines),
   评估任务 `/v2/eval/tasks`, 分析洞察 `/v2/eval/insights` and 评估器

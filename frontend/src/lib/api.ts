@@ -308,6 +308,32 @@ export interface AttachableKnowledgeBase {
   type?: string;
 }
 
+/** `GET /api/registry/attachables` — APPROVED registry records an agent can mount. */
+export interface AttachableMcpServer {
+  name: string;
+  description: string;
+  url: string;
+  /** a Gateway target (token exchange by the platform) vs a remote MCP URL */
+  gateway: boolean;
+  record_id: string;
+  gateway_id: string | null;
+  gateway_arn: string | null;
+  attachable: boolean;
+  attachability_reason: string | null;
+  auth_type: "aws_iam" | "none" | "oauth" | null;
+}
+
+export interface AttachableSkillRow {
+  name: string;
+  description: string;
+  path: string;
+}
+
+export interface RegistryAttachables {
+  mcp_servers: AttachableMcpServer[];
+  skills: AttachableSkillRow[];
+}
+
 export type SystemPresetEditableField =
   | "model_id"
   | "model_source"
@@ -737,7 +763,8 @@ export interface AgentSpecInput {
   native_tools?: HarnessNativeTool[];
   // Managed KB references mounted onto the agent (harness method only).
   knowledge_bases?: { kb_id: string; name: string; description: string }[];
-  memory?: { short_term: boolean; long_term: boolean };
+  /** `memory_id` pins one AgentCore Memory; omitted ⇒ the workspace's shared default */
+  memory?: { short_term: boolean; long_term: boolean; memory_id?: string };
   code?: string;
   requirements?: string[];
   env?: Record<string, string>;
@@ -3768,6 +3795,7 @@ export const api = {
   /** The managed KB catalog of ONE workspace (`GET /api/knowledge-bases`), typed and
    * pinned like the preset calls: a failure is an `ApiError` (401 raises the global
    * unauthorized event), never an empty list. */
+  registryAttachables: () => request<RegistryAttachables>("/api/registry/attachables"),
   listAttachableKnowledgeBases: (workspaceId?: string | null) =>
     request<{ items: AttachableKnowledgeBase[] }>("/api/knowledge-bases", {
       headers: pinnedWorkspace(workspaceId),
