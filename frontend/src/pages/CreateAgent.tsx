@@ -2652,12 +2652,12 @@ const deployLock = !canDeploy
                     <option
                       key={option.model_id}
                       value={option.model_id}
-                      style={{ background: "#141816" }}
+                      style={{ background: "var(--panel)" }}
                     >
                       {option.label} · {option.model_id}
                     </option>
                   ))}
-                  <option value={CUSTOM_MODEL_OPTION} style={{ background: "#141816" }}>
+                  <option value={CUSTOM_MODEL_OPTION} style={{ background: "var(--panel)" }}>
                     {t("create.configure.modelCustom")}
                   </option>
                 </select>
@@ -2731,7 +2731,7 @@ const deployLock = !canDeploy
                     setByocModels((prev) => (prev.includes(picked) ? prev : [...prev, picked]));
                   }}
                 >
-                  <option value="" style={{ background: "#141816" }}>
+                  <option value="" style={{ background: "var(--panel)" }}>
                     {t("create.configure.byocModelAdd")}
                   </option>
                   {modelOptionsFor(modelSource)
@@ -2740,12 +2740,12 @@ const deployLock = !canDeploy
                       <option
                         key={option.model_id}
                         value={option.model_id}
-                        style={{ background: "#141816" }}
+                        style={{ background: "var(--panel)" }}
                       >
                         {option.label} · {option.model_id}
                       </option>
                     ))}
-                  <option value={CUSTOM_MODEL_OPTION} style={{ background: "#141816" }}>
+                  <option value={CUSTOM_MODEL_OPTION} style={{ background: "var(--panel)" }}>
                     {t("create.configure.modelCustom")}
                   </option>
                 </select>
@@ -2817,11 +2817,11 @@ const deployLock = !canDeploy
                     value={effortAllowed ? reasoningEffort : EFFORT_NONE}
                     onChange={(e) => setReasoningEffort(e.target.value as EffortChoice)}
                   >
-                    <option value={EFFORT_NONE} style={{ background: "#141816" }}>
+                    <option value={EFFORT_NONE} style={{ background: "var(--panel)" }}>
                       {t("create.system.settings.effortNone")}
                     </option>
                     {REASONING_EFFORTS.map((effort) => (
-                      <option key={effort} value={effort} style={{ background: "#141816" }}>
+                      <option key={effort} value={effort} style={{ background: "var(--panel)" }}>
                         {t(`create.system.settings.effortLevels.${effort}`)}
                       </option>
                     ))}

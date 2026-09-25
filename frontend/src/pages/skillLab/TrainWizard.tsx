@@ -340,7 +340,7 @@ export function TrainWizard({
                     style={{
                       cursor: "pointer",
                       background:
-                        recordId === record.record_id ? "rgba(255,176,0,.045)" : undefined,
+                        recordId === record.record_id ? "rgba(var(--amber-rgb),.045)" : undefined,
                     }}
                     onClick={() => setRecordId(record.record_id)}
                   >
@@ -428,7 +428,7 @@ export function TrainWizard({
                     padding: "8px 10px",
                     marginBottom: 6,
                     cursor: skill.valid ? "pointer" : "not-allowed",
-                    background: stagedIndex === skill.index ? "rgba(255,176,0,.045)" : undefined,
+                    background: stagedIndex === skill.index ? "rgba(var(--amber-rgb),.045)" : undefined,
                   }}
                   data-testid={`train-staged-skill-${skill.index}`}
                   onClick={() => skill.valid && setStagedIndex(skill.index)}
@@ -505,9 +505,9 @@ export function TrainWizard({
           data-testid="train-taskset-select"
           onChange={(e) => setTasksetId(e.target.value)}
         >
-          <option value="" style={{ background: "#141816" }}>—</option>
+          <option value="" style={{ background: "var(--panel)" }}>—</option>
           {tasksets.map((row) => (
-            <option key={row.id} value={row.id} style={{ background: "#141816" }}>
+            <option key={row.id} value={row.id} style={{ background: "var(--panel)" }}>
               {row.name} ({row.mode})
             </option>
           ))}
@@ -545,7 +545,7 @@ export function TrainWizard({
             onChange={(e) => setGateMetric(e.target.value as SkillLabGateMetric)}
           >
             {GATE_METRICS.map((option) => (
-              <option key={option} value={option} style={{ background: "#141816" }}>
+              <option key={option} value={option} style={{ background: "var(--panel)" }}>
                 {option}
               </option>
             ))}

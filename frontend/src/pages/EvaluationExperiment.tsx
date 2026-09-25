@@ -911,12 +911,12 @@ function ConfigurationExperimentView() {
             <option value="">{t("evalPage.newRun.noAgents")}</option>
           )}
           {agents.map((ag) => (
-            <option key={ag.id} value={ag.id} style={{ background: "#141816" }}>
+            <option key={ag.id} value={ag.id} style={{ background: "var(--panel)" }}>
               {ag.name} · {ag.method}
             </option>
           ))}
           {unsupportedAgents.map((ag) => (
-            <option key={ag.id} value="" disabled style={{ background: "#141816" }}>
+            <option key={ag.id} value="" disabled style={{ background: "var(--panel)" }}>
               {ag.name} · {ag.method} —{" "}
               {ag.experiment_capability.reason_code
                 ? t(`expPage.reason.${ag.experiment_capability.reason_code}`)
@@ -971,7 +971,7 @@ function ConfigurationExperimentView() {
                 style={{ width: "auto", minWidth: 92, height: 30, padding: "3px 26px 3px 8px" }}
               >
                 {TRACE_LOOKBACK_OPTIONS.map((hours) => (
-                  <option key={hours} value={hours} style={{ background: "#141816" }}>
+                  <option key={hours} value={hours} style={{ background: "var(--panel)" }}>
                     {t(`expPage.readiness.windowOption.h${hours}`)}
                   </option>
                 ))}
@@ -1148,7 +1148,7 @@ function ConfigurationExperimentView() {
               )}
               {datasets.map((dataset) => (
                 <option key={dataset.id} value={dataset.id}
-                        style={{ background: "#141816" }}>
+                        style={{ background: "var(--panel)" }}>
                   {dataset.name} · {dataset.item_count}
                 </option>
               ))}
@@ -1342,11 +1342,11 @@ function ConfigurationExperimentView() {
             persistRecPrefs({ source: e.target.value });
           }}
         >
-          <option value="" style={{ background: "#141816" }}>
+          <option value="" style={{ background: "var(--panel)" }}>
             {t("expPage.recSourceWindow")}
           </option>
           {recSourceRuns.map((run) => (
-            <option key={run.id} value={run.id} style={{ background: "#141816" }}>
+            <option key={run.id} value={run.id} style={{ background: "var(--panel)" }}>
               {run.mode === "insights"
                 ? t("expPage.recSourceInsights")
                 : t("expPage.recSourceEval")}
@@ -1409,7 +1409,7 @@ function ConfigurationExperimentView() {
             }}
           >
             {recProviders.map((p) => (
-              <option key={p.id} value={p.id} style={{ background: "#141816" }}>
+              <option key={p.id} value={p.id} style={{ background: "var(--panel)" }}>
                 {p.label}
               </option>
             ))}
@@ -1433,14 +1433,14 @@ function ConfigurationExperimentView() {
                   <option
                     key={m.model_id}
                     value={m.model_id === recProvider.default_model_id ? "" : m.model_id}
-                    style={{ background: "#141816" }}
+                    style={{ background: "var(--panel)" }}
                   >
                     {m.label}
                     {m.model_id === recProvider.default_model_id
                       ? ` · ${t("expPage.providerDefaultModel")}` : ""}
                   </option>
                 ))}
-                <option value={CUSTOM_MODEL_OPTION} style={{ background: "#141816" }}>
+                <option value={CUSTOM_MODEL_OPTION} style={{ background: "var(--panel)" }}>
                   {t("expPage.providerCustomModel")}
                 </option>
               </select>
@@ -1998,7 +1998,7 @@ function ConfigurationExperimentView() {
               <option value="">{t("expPage.noTrafficDataset")}</option>
             )}
             {datasets.map((d) => (
-              <option key={d.id} value={d.id} style={{ background: "#141816" }}>
+              <option key={d.id} value={d.id} style={{ background: "var(--panel)" }}>
                 {d.name} ({d.item_count})
               </option>
             ))}
@@ -2435,7 +2435,7 @@ function ConfigurationExperimentView() {
                   style={{
                     cursor: "pointer",
                     background:
-                      exp?.id === e.id ? "rgba(255,176,0,.045)" : undefined,
+                      exp?.id === e.id ? "rgba(var(--amber-rgb),.045)" : undefined,
                   }}
                 >
                   <td className="pri">{e.name}</td>

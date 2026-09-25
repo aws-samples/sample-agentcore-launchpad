@@ -23,8 +23,8 @@ import {
 
 /**
  * One sidebar entry. `v2: true` entries are native V2 pages under /v2; the
- * others open the existing (V1) console page for that module until it is
- * migrated, and the sidebar marks them as such.
+ * others are classic module routes, which render inside the V2 shell on its
+ * light theme until the module is rebuilt natively.
  */
 export interface V2NavItem {
   to: string;

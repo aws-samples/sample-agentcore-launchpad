@@ -17,6 +17,15 @@
   --good:#0CA30C; --warn:#FAB219; --serious:#EC835A; --crit:#D03B3B;
   --crit-text:#DD5252;     /* crit as TEXT on --panel: 4.61:1 (AA); #D03B3B = 3.73:1 is fills/borders only */
   --grid:#212823;
+  /* surfaces and tints the chrome used to hard-code; console V2 re-points them
+     (v2/v2-classic.css) to render the same pages on its light theme */
+  --field:#0E1210;         /* inputs, wells, inline notes */
+  --code-bg:#0A0D0C;       /* code blocks, switch tracks */
+  --on-amber:#141210;      /* text on an amber fill */
+  --amber-hover:#ffc23d; --amber-active:#d99600;
+  --amber-rgb:255,176,0;   /* for rgba() tints of the brand signal */
+  --tint-rgb:255,255,255;  /* hover/track tints over the page plane */
+  --bg-rgb:11,14,13;       /* translucent page plane (sticky bars) */
   --mono:"IBM Plex Mono",ui-monospace,monospace;
   --sans:"Archivo Variable","Archivo",system-ui,sans-serif;
 }

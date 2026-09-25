@@ -5015,8 +5015,6 @@
       "label": "Console navigation",
       "products": "Products",
       "productAgents": "Agent platform",
-      "classic": "Classic",
-      "classicHint": "Opens this module in the classic console",
       "groupHome": "Overview",
       "home": "Workbench",
       "groupBuild": "Agent development",

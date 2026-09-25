@@ -96,7 +96,7 @@ export function BackendModelFields({
           onChange={(e) => applyBackend(e.target.value as SkillLabTargetBackend)}
         >
           {backends.map((option) => (
-            <option key={option} value={option} style={{ background: "#141816" }}>
+            <option key={option} value={option} style={{ background: "var(--panel)" }}>
               {BACKEND_LABELS[option] ?? option}
             </option>
           ))}
@@ -150,7 +150,7 @@ export function BackendModelFields({
             onChange={(e) => setJudgeMode(e.target.value as SkillLabJudgeMode)}
           >
             {judgeModes.map((option) => (
-              <option key={option} value={option} style={{ background: "#141816" }}>
+              <option key={option} value={option} style={{ background: "var(--panel)" }}>
                 {t(`skillLab.backend.judgeModeOption.${option}`)}
                 {option !== "chat" && !agenticReady ? " ⚠" : ""}
               </option>

@@ -462,11 +462,11 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
               value={baseEvaluatorId}
               onChange={(e) => setBaseEvaluatorId(e.target.value)}
             >
-              <option value="" style={{ background: "#141816" }}>
+              <option value="" style={{ background: "var(--panel)" }}>
                 {t("evalPage.evaluators.basePick")}
               </option>
               {baseOptions.map((r) => (
-                <option key={r.id} value={r.id} style={{ background: "#141816" }}>
+                <option key={r.id} value={r.id} style={{ background: "var(--panel)" }}>
                   {evaluatorLabel(t, r.id)}
                   {r.source === "third_party" && r.provider ? ` · ${r.provider}` : ""}
                 </option>
@@ -552,7 +552,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
             ? MODEL_OPTIONS
             : [draft.model_id, ...MODEL_OPTIONS]
           ).map((m) => (
-            <option key={m} value={m} style={{ background: "#141816" }}>
+            <option key={m} value={m} style={{ background: "var(--panel)" }}>
               {m}
             </option>
           ))}
@@ -884,7 +884,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
                   style={{
                     cursor: "pointer",
                     background:
-                      selected?.id === row.id ? "rgba(255,176,0,.045)" : undefined,
+                      selected?.id === row.id ? "rgba(var(--amber-rgb),.045)" : undefined,
                   }}
                 >
                   {row.source === "custom" ? (

@@ -5015,8 +5015,6 @@
       "label": "控制台导航",
       "products": "产品",
       "productAgents": "智能体平台",
-      "classic": "经典版",
-      "classicHint": "该模块在经典版控制台中打开",
       "groupHome": "概览",
       "home": "工作台",
       "groupBuild": "Agent 开发",

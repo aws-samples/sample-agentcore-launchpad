@@ -652,7 +652,7 @@ export function Registry() {
                         cursor: "pointer",
                         background:
                           selected?.record_id === record.record_id
-                            ? "rgba(255,176,0,.045)"
+                            ? "rgba(var(--amber-rgb),.045)"
                             : undefined,
                       }}
                     >
@@ -738,7 +738,7 @@ export function Registry() {
                         cursor: "pointer",
                         background:
                           selected?.record_id === record.record_id
-                            ? "rgba(255,176,0,.045)"
+                            ? "rgba(var(--amber-rgb),.045)"
                             : undefined,
                       }}
                     >

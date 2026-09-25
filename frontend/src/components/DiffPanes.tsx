@@ -55,7 +55,7 @@ function buildRows(before: string[], after: string[]): DiffRow[] {
 
 const REMOVED_BG = "rgba(208,59,59,.14)";
 const ADDED_BG = "rgba(12,163,12,.14)";
-const VOID_BG = "rgba(255,255,255,.03)";
+const VOID_BG = "rgba(var(--tint-rgb),.03)";
 
 // Side-by-side line diff (LCS-aligned rows, one shared scroll container so the
 // panes cannot drift apart). Line-level on purpose — not token-level.

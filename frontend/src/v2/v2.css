@@ -105,7 +105,6 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-side-item.active { background: var(--v2-primary-soft); color: var(--v2-primary) !important; font-weight: 500; }
 .v2-side-item.active svg { color: var(--v2-primary); }
 .v2-side-item.active::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--v2-primary); }
-.v2-side-item .legacy { margin-left: auto; font-size: 11px; color: var(--v2-ink-3); border: 1px solid var(--v2-line); border-radius: 4px; padding: 0 4px; line-height: 16px; }
 .v2-side-foot { border-top: 1px solid var(--v2-line-2); margin-top: 12px; padding-top: 12px; }
 
 .v2-main { flex: 1; min-width: 0; padding: 20px 24px 40px; }

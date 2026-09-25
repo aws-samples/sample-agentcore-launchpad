@@ -544,7 +544,7 @@ export function Chat() {
                   </option>
                 )}
                 {agents.map((a) => (
-                  <option key={a.id} value={a.id} style={{ background: "#141816" }}>
+                  <option key={a.id} value={a.id} style={{ background: "var(--panel)" }}>
                     {a.name}
                   </option>
                 ))}

@@ -708,7 +708,7 @@ export function SkillLabTasksets() {
           alignItems: "center",
           gap: 8,
           marginBottom: 8,
-          borderBottom: "1px solid rgba(255,255,255,.08)",
+          borderBottom: "1px solid rgba(var(--tint-rgb),.08)",
           paddingBottom: 6,
         }}
       >
@@ -742,7 +742,7 @@ export function SkillLabTasksets() {
             key={draft.key}
             data-testid={`task-row-${split}-${index}`}
             style={{
-              border: `1px solid ${error ? "var(--crit)" : "rgba(255,255,255,.08)"}`,
+              border: `1px solid ${error ? "var(--crit)" : "rgba(var(--tint-rgb),.08)"}`,
               borderRadius: 4,
               padding: "10px 12px",
               marginBottom: 8,
@@ -1101,7 +1101,7 @@ export function SkillLabTasksets() {
                 <option
                   key={split}
                   value={split}
-                  style={{ background: "#141816" }}
+                  style={{ background: "var(--panel)" }}
                 >
                   {split}
                 </option>
@@ -1406,7 +1406,7 @@ export function SkillLabTasksets() {
                   style={{
                     cursor: "pointer",
                     background:
-                      tsParam === row.id ? "rgba(255,176,0,.045)" : undefined,
+                      tsParam === row.id ? "rgba(var(--amber-rgb),.045)" : undefined,
                   }}
                 >
                   <td className="pri">

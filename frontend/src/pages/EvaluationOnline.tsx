@@ -1115,7 +1115,7 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
               }
             >
               {OPERATORS.map((op) => (
-                <option key={op} value={op} style={{ background: "#141816" }}>
+                <option key={op} value={op} style={{ background: "var(--panel)" }}>
                   {op}
                 </option>
               ))}
@@ -1130,7 +1130,7 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
               }}
             >
               {(["string", "number", "boolean"] as const).map((k) => (
-                <option key={k} value={k} style={{ background: "#141816" }}>
+                <option key={k} value={k} style={{ background: "var(--panel)" }}>
                   {t(`evalPage.online.form.kind.${k}`)}
                 </option>
               ))}
@@ -1142,10 +1142,10 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
                 style={{ flex: "1 1 120px" }}
                 onChange={(e) => setFilter(i, { value: e.target.value })}
               >
-                <option value="true" style={{ background: "#141816" }}>
+                <option value="true" style={{ background: "var(--panel)" }}>
                   true
                 </option>
-                <option value="false" style={{ background: "#141816" }}>
+                <option value="false" style={{ background: "var(--panel)" }}>
                   false
                 </option>
               </select>
@@ -1222,11 +1222,11 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
           value={agentId}
           onChange={(e) => setAgentId(e.target.value)}
         >
-          <option value="" style={{ background: "#141816" }}>
+          <option value="" style={{ background: "var(--panel)" }}>
             {t("evalPage.online.form.agentPick")}
           </option>
           {eligibleAgents.map((a) => (
-            <option key={a.id} value={a.id} style={{ background: "#141816" }}>
+            <option key={a.id} value={a.id} style={{ background: "var(--panel)" }}>
               {a.name} · {a.method}
             </option>
           ))}
@@ -1767,7 +1767,7 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
           style={{
             cursor: "pointer",
             verticalAlign: "top",
-            background: open ? "rgba(255,176,0,.045)" : undefined,
+            background: open ? "rgba(var(--amber-rgb),.045)" : undefined,
           }}
         >
           <td
@@ -2145,7 +2145,7 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
                     cursor: "pointer",
                     background:
                       selected?.config_id === row.config_id
-                        ? "rgba(255,176,0,.045)"
+                        ? "rgba(var(--amber-rgb),.045)"
                         : undefined,
                   }}
                 >

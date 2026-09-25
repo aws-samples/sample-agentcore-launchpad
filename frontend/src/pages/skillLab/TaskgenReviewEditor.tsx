@@ -41,7 +41,7 @@ export function TaskgenReviewEditor({
             data-testid={`taskgen-review-row-${draft.index}`}
             data-excluded={draft.excluded ? "true" : "false"}
             style={{
-              border: "1px solid rgba(255,255,255,.08)",
+              border: "1px solid rgba(var(--tint-rgb),.08)",
               borderRadius: 4,
               padding: "8px 10px",
               marginBottom: 6,

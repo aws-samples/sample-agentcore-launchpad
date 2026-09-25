@@ -1,9 +1,10 @@
 import "./v2.css";
+import "./v2-classic.css";
 
 import { ChevronDown, LogOut, Repeat } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/auth-context";
 import { RouteChunk } from "../layout/RouteChunk";
@@ -22,10 +23,17 @@ function readCollapsed(): Record<string, boolean> {
   }
 }
 
-function isActive(item: V2NavItem, pathname: string): boolean {
-  if (!item.v2) return false;
-  if (item.end) return pathname === item.to || pathname === `${item.to}/`;
-  return pathname === item.to || pathname.startsWith(`${item.to}/`);
+function isActive(item: V2NavItem, pathname: string, search: string): boolean {
+  const [path, query] = item.to.split("?");
+  if (query) {
+    // an entry for a `?view=` sub-page is active only on that sub-page
+    const want = new URLSearchParams(query);
+    const have = new URLSearchParams(search);
+    if (pathname !== path) return false;
+    return [...want].every(([k, v]) => have.get(k) === v);
+  }
+  if (item.end) return pathname === path || pathname === `${path}/`;
+  return pathname === path || pathname.startsWith(`${path}/`);
 }
 
 function WorkspaceSelect() {
@@ -70,17 +78,24 @@ function Lang() {
 
 /**
  * Chrome of the V2 console: top bar (brand, workspace, language, user, switch
- * back to the classic console) and a grouped, collapsible sidebar. V2 pages
- * render in the content area; entries for modules not yet migrated navigate
- * to their classic page.
+ * back to the classic console) and a grouped, collapsible sidebar. It wraps
+ * both the native V2 pages under /v2 and — with `classic` — the classic
+ * modules' pages, which render on the V2 light theme (v2-classic.css) until
+ * they are rebuilt natively.
  */
-export function V2Shell() {
+export function V2Shell({ classic = false }: { classic?: boolean }) {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
   const { isAdmin, authRequired, username, logout } = useAuth();
   const { current } = useWorkspace();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(readCollapsed);
+
+  // Opening a /v2 page (a bookmark, a shared link) is choosing V2: the classic
+  // modules reached from its sidebar then stay inside this shell too.
+  useEffect(() => {
+    if (!classic) setUiVersion("v2");
+  }, [classic]);
 
   // The classic console styles <body> for its dark theme; V2 overrides it
   // only while mounted.
@@ -101,9 +116,11 @@ export function V2Shell() {
     });
   };
 
+  // A classic module stays on its page (the classic shell takes over the same
+  // route); a native V2 page has no classic twin, so it lands on the overview.
   const switchToClassic = () => {
     setUiVersion("v1");
-    navigate("/");
+    if (!classic) navigate("/");
   };
 
   const displayName = authRequired ? (username ?? "—") : "operator";
@@ -164,20 +181,18 @@ export function V2Shell() {
                   {!closed &&
                     items.map((item) => {
                       const Icon = item.icon;
-                      const active = isActive(item, location.pathname);
+                      const active = isActive(item, location.pathname, location.search);
                       return (
-                        <NavLink
+                        <Link
                           key={item.to}
                           to={item.to}
-                          end={item.end}
                           className={active ? "v2-side-item active" : "v2-side-item"}
+                          aria-current={active ? "page" : undefined}
                           data-testid={`v2-nav-${item.to}`}
-                          title={item.v2 ? undefined : t("v2.nav.classicHint")}
                         >
                           <Icon size={16} aria-hidden="true" />
                           {t(item.labelKey)}
-                          {!item.v2 && <span className="legacy">{t("v2.nav.classic")}</span>}
-                        </NavLink>
+                        </Link>
                       );
                     })}
                 </div>
@@ -185,7 +200,15 @@ export function V2Shell() {
             })}
           </aside>
           <div className="v2-main">
-            <div className="v2-main-inner" key={current?.id ?? "none"}>
+            {/* Workspace-bound pages refetch on selection; announcement drafts
+                belong to the installation and survive a switch (as in the
+                classic shell). */}
+            <div
+              className={classic ? "v2-main-inner view v2-classic" : "v2-main-inner"}
+              key={
+                location.pathname === "/announcements" ? "announcements" : current?.id ?? "none"
+              }
+            >
               <RouteChunk key={location.pathname}>
                 <Outlet />
               </RouteChunk>

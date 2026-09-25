@@ -426,7 +426,7 @@ export function RuntimeCanaryView() {
                   style={{
                     cursor: "pointer",
                     background: !creatingNew && canary?.id === row.id
-                      ? "rgba(255,176,0,.045)"
+                      ? "rgba(var(--amber-rgb),.045)"
                       : undefined,
                   }}
                 >
