@@ -1,4 +1,4 @@
-import { lazy } from "react";
+import { lazy, type ReactNode } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 
 import { ToastProvider } from "./components";
@@ -8,6 +8,14 @@ import { Shell } from "./layout/Shell";
 import { NotFound } from "./pages/NotFound";
 import { Overview } from "./pages/Overview";
 import { WorkspaceProvider } from "./workspace/WorkspaceProvider";
+import { classicAssistantToV2 } from "./v2/pages/assistant/classicUrl";
+import { classicRegistryToV2 } from "./v2/pages/registry/classicUrl";
+import { classicKnowledgeBasesToV2 } from "./v2/pages/knowledge/classicUrl";
+import { classicSkillLabToV2 } from "./v2/pages/skilllab/classicUrl";
+import { classicChatToV2 } from "./v2/pages/chat/classicUrl";
+import { classicObservabilityToV2 } from "./v2/pages/observability/classicUrl";
+import { classicMemoryToV2 } from "./v2/pages/memory/classicUrl";
+import { classicGovernanceToV2 } from "./v2/pages/governance/classicUrl";
 
 // Every module but the index route and the catch-all is fetched on navigation.
 // The pages carry the console's weight (the Studio canvas alone pulls
@@ -89,9 +97,28 @@ const V2Online = lazy(() => import("./v2/pages/Online").then((m) => ({ default: 
 const V2Experiments = lazy(() =>
   import("./v2/pages/Experiments").then((m) => ({ default: m.V2Experiments })),
 );
+const V2Assistant = lazy(() => import("./v2/pages/Assistant").then((m) => ({ default: m.V2Assistant })));
+const V2Registry = lazy(() => import("./v2/pages/Registry").then((m) => ({ default: m.V2Registry })));
+const V2KnowledgeBases = lazy(() => import("./v2/pages/KnowledgeBases").then((m) => ({ default: m.V2KnowledgeBases })));
+const V2SkillLab = lazy(() => import("./v2/pages/SkillLab").then((m) => ({ default: m.V2SkillLab })));
+const V2Chat = lazy(() => import("./v2/pages/Chat").then((m) => ({ default: m.V2Chat })));
+const V2Observability = lazy(() => import("./v2/pages/Observability").then((m) => ({ default: m.V2Observability })));
+const V2Memory = lazy(() => import("./v2/pages/Memory").then((m) => ({ default: m.V2Memory })));
+const V2Governance = lazy(() => import("./v2/pages/Governance").then((m) => ({ default: m.V2Governance })));
 const V2NotFound = lazy(() =>
   import("./v2/pages/Home").then((m) => ({ default: m.V2NotFound })),
 );
+
+/**
+ * Classic module routes whose page has a native V2 twin: once the operator chose
+ * V2, the classic URL (links from other modules, bookmarks, hand-overs) is mapped
+ * onto the native page; the classic console keeps rendering the classic page.
+ */
+function V2OrClassic({ classic, toV2 }: { classic: ReactNode; toV2: (search: string) => string }) {
+  const { search } = useLocation();
+  if (useUiVersion() === "v2") return <Navigate to={toV2(search)} replace />;
+  return <>{classic}</>;
+}
 
 /** The index route honours the operator's remembered console choice. */
 function IndexRoute() {
@@ -200,6 +227,14 @@ export default function App() {
               <Route path="eval/evaluators" element={<V2Evaluators />} />
               <Route path="eval/online" element={<V2Online />} />
               <Route path="eval/experiments" element={<V2Experiments />} />
+              <Route path="assistant" element={<V2Assistant />} />
+              <Route path="registry" element={<V2Registry />} />
+              <Route path="knowledge-bases" element={<V2KnowledgeBases />} />
+              <Route path="skill-lab" element={<V2SkillLab />} />
+              <Route path="chat" element={<V2Chat />} />
+              <Route path="observability" element={<V2Observability />} />
+              <Route path="memory" element={<V2Memory />} />
+              <Route path="governance" element={<V2Governance />} />
               <Route path="*" element={<V2NotFound />} />
             </Route>
             <Route element={<ConsoleShell />}>
@@ -211,15 +246,39 @@ export default function App() {
             <Route path="agents/:agentId/edit" element={<CreateAgent mode="edit" />} />
             <Route path="create" element={<LegacyCreateRedirect />} />
             <Route path="create/studio" element={<CreateAgentStudio />} />
-              <Route path="create/assistant" element={<CreateAgentAssistant />} />
-              <Route path="registry" element={<Registry />} />
-              <Route path="knowledge-bases" element={<KnowledgeBases />} />
-              <Route path="memory" element={<Memory />} />
-              <Route path="chat" element={<Chat />} />
-              <Route path="observability" element={<Observability />} />
+              <Route
+                path="create/assistant"
+                element={<V2OrClassic classic={<CreateAgentAssistant />} toV2={classicAssistantToV2} />}
+              />
+              <Route
+                path="registry"
+                element={<V2OrClassic classic={<Registry />} toV2={classicRegistryToV2} />}
+              />
+              <Route
+                path="knowledge-bases"
+                element={<V2OrClassic classic={<KnowledgeBases />} toV2={classicKnowledgeBasesToV2} />}
+              />
+              <Route
+                path="memory"
+                element={<V2OrClassic classic={<Memory />} toV2={classicMemoryToV2} />}
+              />
+              <Route
+                path="chat"
+                element={<V2OrClassic classic={<Chat />} toV2={classicChatToV2} />}
+              />
+              <Route
+                path="observability"
+                element={<V2OrClassic classic={<Observability />} toV2={classicObservabilityToV2} />}
+              />
               <Route path="evaluation" element={<EvaluationRoute />} />
-              <Route path="skill-lab" element={<SkillLab />} />
-              <Route path="governance" element={<Governance />} />
+              <Route
+                path="skill-lab"
+                element={<V2OrClassic classic={<SkillLab />} toV2={classicSkillLabToV2} />}
+              />
+              <Route
+                path="governance"
+                element={<V2OrClassic classic={<Governance />} toV2={classicGovernanceToV2} />}
+              />
               <Route path="users" element={<Users />} />
               <Route path="announcements" element={<Announcements />} />
               <Route path="videos" element={<Videos />} />
