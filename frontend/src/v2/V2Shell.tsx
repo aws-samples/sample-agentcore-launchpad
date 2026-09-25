@@ -33,7 +33,9 @@ function isActive(item: V2NavItem, pathname: string, search: string): boolean {
     return [...want].every(([k, v]) => have.get(k) === v);
   }
   if (item.end) return pathname === path || pathname === `${path}/`;
-  return pathname === path || pathname.startsWith(`${path}/`);
+  return [path, ...(item.also ?? [])].some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
 }
 
 function WorkspaceSelect() {

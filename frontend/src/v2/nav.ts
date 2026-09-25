@@ -35,6 +35,9 @@ export interface V2NavItem {
   admin?: boolean;
   /** exact-match active state (the /v2 index) */
   end?: boolean;
+  /** other path prefixes that belong to this entry (e.g. the classic create
+   *  and edit flows of a module whose list is native) */
+  also?: string[];
 }
 
 export interface V2NavGroup {
@@ -54,7 +57,13 @@ export const V2_NAV: V2NavGroup[] = [
     labelKey: "v2.nav.groupBuild",
     items: [
       { to: "/create/assistant", labelKey: "nav.assistant", icon: Sparkles },
-      { to: "/agents", labelKey: "nav.createAgent", icon: Bot },
+      {
+        to: "/v2/agents",
+        labelKey: "nav.createAgent",
+        icon: Bot,
+        v2: true,
+        also: ["/agents", "/create/studio"],
+      },
       { to: "/registry", labelKey: "nav.registry", icon: SquareStack },
       { to: "/knowledge-bases", labelKey: "nav.knowledgeBases", icon: LibraryBig },
       { to: "/skill-lab", labelKey: "nav.skillLab", icon: BrainCircuit },

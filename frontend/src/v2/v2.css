@@ -320,6 +320,23 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-stack { display: flex; flex-direction: column; gap: 8px; }
 .v2-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
+/* deploy pipeline (agent detail): generate → package → provision → deploy → register */
+.v2-stages { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.v2-stage { display: flex; gap: 10px; border: 1px solid var(--v2-line); border-radius: var(--v2-radius); padding: 12px; min-width: 0; }
+.v2-stage .n {
+  flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 600;
+  background: var(--v2-fill-2); color: var(--v2-ink-3);
+}
+.v2-stage.succeeded .n, .v2-stage.skipped .n { background: var(--v2-success-soft); color: var(--v2-success); }
+.v2-stage.running { border-color: var(--v2-primary-line); }
+.v2-stage.running .n { background: var(--v2-primary-soft); color: var(--v2-primary); }
+.v2-stage.failed { border-color: #fbaca3; }
+.v2-stage.failed .n { background: var(--v2-danger-soft); color: var(--v2-danger); }
+.v2-stage .b { min-width: 0; }
+.v2-stage .t { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 500; }
+.v2-stage .d { margin-top: 4px; color: var(--v2-ink-3); font-size: 12.5px; overflow-wrap: anywhere; }
+.v2-sub-title { font-size: 14px; font-weight: 600; margin: 16px 0 8px; }
+
 /* chat-like transcript */
 .v2-turn { display: flex; gap: 10px; margin-bottom: 12px; }
 .v2-turn .who { flex: none; width: 56px; font-size: 12px; color: var(--v2-ink-3); padding-top: 8px; }
@@ -362,7 +379,7 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
   .v2-side { display: none; }
   .v2-main { padding: 16px; }
   .v2-top-tabs { display: none; }
-  .v2-form.cols-2, .v2-grid-2, .v2-grid-3, .v2-flow, .v2-desc { grid-template-columns: 1fr; }
+  .v2-form.cols-2, .v2-grid-2, .v2-grid-3, .v2-flow, .v2-stages, .v2-desc { grid-template-columns: 1fr; }
   .v2-desc > div:nth-last-child(2) { border-bottom: 1px solid var(--v2-line); }
   .v2-search { width: 100%; }
   .v2-span .track { width: 100px; }

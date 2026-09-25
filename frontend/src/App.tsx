@@ -1,5 +1,5 @@
 import { lazy } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 
 import { ToastProvider } from "./components";
 import { useUiVersion } from "./lib/ui-version";
@@ -84,6 +84,7 @@ const V2Insights = lazy(() =>
 const V2Evaluators = lazy(() =>
   import("./v2/pages/Evaluators").then((m) => ({ default: m.V2Evaluators })),
 );
+const V2Agents = lazy(() => import("./v2/pages/Agents").then((m) => ({ default: m.V2Agents })));
 const V2NotFound = lazy(() =>
   import("./v2/pages/Home").then((m) => ({ default: m.V2NotFound })),
 );
@@ -91,6 +92,20 @@ const V2NotFound = lazy(() =>
 /** The index route honours the operator's remembered console choice. */
 function IndexRoute() {
   return useUiVersion() === "v2" ? <Navigate to="/v2" replace /> : <Overview />;
+}
+
+/**
+ * Agent list and detail have a native V2 page: in V2 the classic URLs (links from
+ * other modules, the wizard's hand-over after a deploy) land there. Creating,
+ * editing and importing stay on the classic flows, inside the V2 shell.
+ */
+function AgentsRoute({ mode }: { mode: "list" | "detail" }) {
+  const { agentId } = useParams();
+  if (useUiVersion() === "v2") {
+    const to = mode === "detail" && agentId ? `/v2/agents?view=detail&id=${agentId}` : "/v2/agents";
+    return <Navigate to={to} replace />;
+  }
+  return <CreateAgent mode={mode} />;
 }
 
 /**
@@ -123,6 +138,7 @@ export default function App() {
               }
             >
               <Route index element={<V2Home />} />
+              <Route path="agents" element={<V2Agents />} />
               <Route path="eval/data" element={<V2DataCenter />} />
               <Route path="eval/tasks" element={<V2Tasks />} />
               <Route path="eval/insights" element={<V2Insights />} />
@@ -131,10 +147,10 @@ export default function App() {
             </Route>
             <Route element={<ConsoleShell />}>
             <Route index element={<IndexRoute />} />
-            <Route path="agents" element={<CreateAgent mode="list" />} />
+            <Route path="agents" element={<AgentsRoute mode="list" />} />
             <Route path="agents/new" element={<CreateAgent mode="new" />} />
             <Route path="agents/import" element={<CreateAgent mode="import" />} />
-            <Route path="agents/:agentId" element={<CreateAgent mode="detail" />} />
+            <Route path="agents/:agentId" element={<AgentsRoute mode="detail" />} />
             <Route path="agents/:agentId/edit" element={<CreateAgent mode="edit" />} />
             <Route path="create" element={<LegacyCreateRedirect />} />
             <Route path="create/studio" element={<CreateAgentStudio />} />
