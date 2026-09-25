@@ -359,6 +359,11 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-insight { border: 1px solid var(--v2-line); border-radius: var(--v2-radius); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
 .v2-insight .h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 
+/* canary traffic split: champion | candidate */
+.v2-split { display: flex; gap: 2px; height: 10px; border-radius: 5px; overflow: hidden; }
+.v2-split .c { background: var(--v2-ink-3); }
+.v2-split .t { background: var(--v2-primary); }
+
 /* chat-like transcript */
 .v2-turn { display: flex; gap: 10px; margin-bottom: 12px; }
 .v2-turn .who { flex: none; width: 56px; font-size: 12px; color: var(--v2-ink-3); padding-top: 8px; }

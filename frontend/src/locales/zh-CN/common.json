@@ -5874,6 +5874,45 @@
     "picker": {
       "picked": "已选 {{count}} / {{max}}",
       "colNote": "说明"
+    },
+    "canary": {
+      "status": {
+        "running": "进行中",
+        "completed": "已完成",
+        "rolled_back": "已回滚",
+        "cleaned": "已清理"
+      },
+      "stage": {
+        "created": "已创建",
+        "setup": "设置",
+        "traffic": "发送流量",
+        "verdict": "判定",
+        "ramp": "放量",
+        "complete": "已完成",
+        "rollback": "已回滚",
+        "cleanup": "资源清理"
+      },
+      "action": {
+        "setup": "设置",
+        "traffic": "发送流量",
+        "verdict": "判定",
+        "advance": "放量",
+        "complete": "全量发布",
+        "rollback": "回滚",
+        "cleanup": "清理"
+      },
+      "actionRunning": "{{action}}进行中",
+      "championTitle": "当前版本 Agent",
+      "candidateTitle": "候选版本",
+      "created": "金丝雀 {{name}} 已创建",
+      "champion": "当前版本",
+      "candidate": "候选版本",
+      "attempts": "流量轮次",
+      "baseline": "基线样本数",
+      "finish": "完成",
+      "pipeline": "放量流程",
+      "sourceExp": "来源实验",
+      "targets": "Target"
     }
   }
 }

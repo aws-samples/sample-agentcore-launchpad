@@ -2406,7 +2406,11 @@ through the same backend routes and permission checks as the classic pages.
   (recommend → bundles → gateway/A-B → traffic → verdict/promote → cleanup) posting the
   same actions as the classic page; the per-experiment RECOMMEND picker state lives in
   `lib/experiments.ts`, shared with the classic page. Runtime canaries are its second tab
-  (`mode=canary`) and still render the classic view. In V2 the classic
+  (`mode=canary`, `v2/pages/canary/`): list, `canary=new` (champion + candidate prompt /
+  Studio code, accepting the experiment's promote hand-off `champion=` / `sourceExp=`)
+  and `canary=<id>` with setup plus one card per ramp stage (90/10 → 50/50 → 1/99:
+  traffic, verdict, advance/complete with the non-significant override confirm),
+  rollback and cleanup. In V2 the classic
   `/evaluation?view=online|experiment` URLs are mapped onto these pages (`EvaluationRoute`
   in `App.tsx`, `oe=`/`exp=` become `view=detail&id=`); the classic evaluation page and
   its section nav are no longer reached from the V2 sidebar.

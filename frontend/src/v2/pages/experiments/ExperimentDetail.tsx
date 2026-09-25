@@ -1,5 +1,5 @@
 import { Gauge } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
@@ -25,38 +25,7 @@ import { fmtScore, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, Spin, Table, Tag } from "../../ui";
 import { EXPERIMENT_TONE, stageLabel } from "./common";
-
-type CardState = "active" | "done" | "pending";
-
-function StageCard({
-  id,
-  index,
-  title,
-  state,
-  children,
-}: {
-  id: string;
-  index: number;
-  title: string;
-  state: CardState;
-  children: ReactNode;
-}) {
-  const { t } = useTranslation();
-  return (
-    <section className={`v2-card v2-exp-stage ${state}`} data-testid={`v2-exp-card-${id}`}>
-      <div className="v2-card-body">
-        <h2 className="v2-sec-title">
-          <span className="v2-exp-num">{String(index).padStart(2, "0")}</span>
-          {title}
-          <span className="end">
-            <Tag tone={state === "done" ? "green" : state === "active" ? "blue" : "gray"}>{t(`v2.experiments.cardState.${state}`)}</Tag>
-          </span>
-        </h2>
-        {children}
-      </div>
-    </section>
-  );
-}
+import { type CardState, StageCard } from "./StageCard";
 
 const POLL_MS = 8000;
 const FAST_POLL_MS = 2500;

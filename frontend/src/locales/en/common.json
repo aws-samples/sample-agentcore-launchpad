@@ -5874,6 +5874,45 @@
     "picker": {
       "picked": "{{count}} / {{max}} selected",
       "colNote": "Note"
+    },
+    "canary": {
+      "status": {
+        "running": "Running",
+        "completed": "Completed",
+        "rolled_back": "Rolled back",
+        "cleaned": "Cleaned up"
+      },
+      "stage": {
+        "created": "Created",
+        "setup": "Setup",
+        "traffic": "Traffic",
+        "verdict": "Verdict",
+        "ramp": "Ramp",
+        "complete": "Completed",
+        "rollback": "Rolled back",
+        "cleanup": "Cleanup"
+      },
+      "action": {
+        "setup": "Setup",
+        "traffic": "Traffic",
+        "verdict": "Verdict",
+        "advance": "Advance",
+        "complete": "Complete",
+        "rollback": "Rollback",
+        "cleanup": "Cleanup"
+      },
+      "actionRunning": "{{action}} in progress",
+      "championTitle": "Champion agent",
+      "candidateTitle": "Candidate version",
+      "created": "Canary {{name}} created",
+      "champion": "Current version",
+      "candidate": "Candidate",
+      "attempts": "Traffic rounds",
+      "baseline": "Baseline n",
+      "finish": "Finish",
+      "pipeline": "Ramp flow",
+      "sourceExp": "Source experiment",
+      "targets": "Targets"
     }
   }
 }
