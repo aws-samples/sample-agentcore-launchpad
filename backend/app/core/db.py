@@ -194,6 +194,13 @@ def _migrate(bind) -> None:
                 conn.execute(
                     text("ALTER TABLE eval_runs ADD COLUMN dataset_version VARCHAR(16)")
                 )
+        for column, ddl in (
+            ("name", "ALTER TABLE eval_runs ADD COLUMN name VARCHAR(64)"),
+            ("description", "ALTER TABLE eval_runs ADD COLUMN description TEXT"),
+        ):
+            if column not in existing:
+                with bind.begin() as conn:
+                    conn.execute(text(ddl))
         # The former multi-actor/multi-session procedure ledger column (`execution`,
         # SE-046) is no longer mapped; an existing column is simply left in place and
         # ignored — SQLite needs no drop for the model to load.

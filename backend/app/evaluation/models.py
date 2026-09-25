@@ -47,6 +47,10 @@ class EvalRun(Base):
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     agent_id: Mapped[str] = mapped_column(String(32), index=True)
     agent_name: Mapped[str] = mapped_column(String(64))
+    # Operator-facing task name/description (console V2 evaluation tasks); NULL on
+    # runs started before they existed or from a surface that does not name them.
+    name: Mapped[str | None] = mapped_column(String(64), default=None)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
     dataset_id: Mapped[str | None] = mapped_column(String(16), default=None)
     dataset_name: Mapped[str | None] = mapped_column(String(64), default=None)
     # Published cloud-dataset version the run replayed ("2"); NULL = the DRAFT
@@ -89,3 +93,27 @@ class OnlineEvalConfig(Base):
     service_name: Mapped[str] = mapped_column(String(128))
     log_group: Mapped[str] = mapped_column(String(256))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class EvalPipeline(Base):
+    """A saved data-processing task (console V2 数据处理): which observed sessions
+    to read, how to turn their transcripts into dataset items, and which local
+    dataset receives them. Runs are on demand; the last outcome is kept on the row."""
+
+    __tablename__ = "eval_pipelines"
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    name: Mapped[str] = mapped_column(String(64))
+    description: Mapped[str] = mapped_column(Text, default="")
+    # {source: {agent, range, status, max_sessions},
+    #  processing: {first_turn_only, dedupe, min_input_chars},
+    #  output: {dataset_id} | {dataset_name}}
+    config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="idle")  # idle|running|succeeded|failed
+    # {at, scanned, matched, added, skipped: [{session_id, reason}], dataset_id, error}
+    last_run: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
