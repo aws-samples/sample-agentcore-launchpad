@@ -3377,6 +3377,108 @@ export interface DiscoverableRegistryRecord {
   updated_at: string | null;
 }
 
+
+/* ── console V2 evaluation module ─────────────────────────────────────────
+ * Wrappers for the evaluation endpoints the V2 pages bind to. The V1 pages
+ * still call several of these with page-local fetches; V2 goes through here. */
+
+/** A local dataset as `GET /api/eval/datasets` returns it (items included). */
+export interface V2Dataset {
+  id: string;
+  name: string;
+  kind: "legacy" | "predefined" | "simulated" | string;
+  locale: string;
+  description: string;
+  item_count: number;
+  items: Record<string, unknown>[];
+  cloud: { dataset_id?: string; status?: string; draft_status?: string } | null;
+  has_ground_truth: boolean;
+  created_at: string | null;
+}
+
+export interface V2DatasetCreate {
+  name: string;
+  description?: string;
+  locale?: string;
+  items: Record<string, unknown>[];
+}
+
+export interface V2DatasetUpdate {
+  name?: string;
+  description?: string;
+  items?: Record<string, unknown>[];
+}
+
+export type V2Range = "1h" | "6h" | "24h" | "7d";
+
+/** `POST /api/eval/datasets/from-sessions` — exactly one of `dataset_id` / `name`. */
+export interface V2FromSessionsBody {
+  session_ids: string[];
+  range?: V2Range;
+  dataset_id?: string;
+  name?: string;
+  description?: string;
+  first_turn_only?: boolean;
+  dedupe?: boolean;
+}
+
+export interface V2SkippedSession {
+  session_id: string;
+  reason: "not_found" | "no_transcript" | "no_exchange" | "duplicate" | "dataset_full" | string;
+}
+
+export interface V2FromSessionsResult {
+  dataset: V2Dataset;
+  added: number;
+  skipped: V2SkippedSession[];
+}
+
+export interface V2PipelineConfig {
+  source: { agent: string | null; range: V2Range; status: "all" | "ok" | "error"; max_sessions: number };
+  processing: { first_turn_only: boolean; dedupe: boolean; min_input_chars: number };
+  output: { dataset_id?: string | null; dataset_name?: string | null };
+}
+
+export interface V2PipelineRun {
+  at: string;
+  scanned: number;
+  matched: number;
+  added: number;
+  skipped: V2SkippedSession[];
+  dataset_id: string | null;
+  error: string | null;
+}
+
+export interface V2Pipeline {
+  id: string;
+  name: string;
+  description: string;
+  config: V2PipelineConfig;
+  status: "idle" | "running" | "succeeded" | "failed";
+  last_run: V2PipelineRun | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface V2PipelineBody extends V2PipelineConfig {
+  name: string;
+  description?: string;
+}
+
+/** `POST /api/eval/runs` with every scope the backend accepts (exactly one of
+ *  dataset_id / cloud_dataset_id / session_ids / lookback_hours). */
+export interface V2RunCreate {
+  agent_id: string;
+  name?: string;
+  description?: string;
+  evaluators: string[];
+  dataset_id?: string;
+  cloud_dataset_id?: string;
+  session_ids?: string[];
+  lookback_hours?: number;
+  wait_seconds?: number;
+}
+
 export const api = {
   listAnnouncements: (limit = 3, offset = 0, signal?: AbortSignal) =>
     request<AnnouncementPage<PublicAnnouncement>>(
@@ -4326,4 +4428,82 @@ export const api = {
     if (!res.ok) return parseResponse<never>(url, res);
     return res.blob();
   },
+  /* ── console V2 evaluation module ── */
+  v2Datasets: () => request<{ datasets: V2Dataset[] }>("/api/eval/datasets"),
+  v2CreateDataset: (body: V2DatasetCreate) =>
+    request<V2Dataset>("/api/eval/datasets", { method: "POST", body: JSON.stringify(body) }),
+  v2UpdateDataset: (id: string, body: V2DatasetUpdate) =>
+    request<V2Dataset>(`/api/eval/datasets/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  v2DeleteDataset: (id: string) =>
+    request<{ deleted: boolean }>(`/api/eval/datasets/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  v2DatasetFromSessions: (body: V2FromSessionsBody) =>
+    request<V2FromSessionsResult>("/api/eval/datasets/from-sessions", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  v2Pipelines: () => request<{ pipelines: V2Pipeline[] }>("/api/eval/pipelines"),
+  v2Pipeline: (id: string) =>
+    request<V2Pipeline>(`/api/eval/pipelines/${encodeURIComponent(id)}`),
+  v2CreatePipeline: (body: V2PipelineBody) =>
+    request<V2Pipeline>("/api/eval/pipelines", { method: "POST", body: JSON.stringify(body) }),
+  v2UpdatePipeline: (id: string, body: V2PipelineBody) =>
+    request<V2Pipeline>(`/api/eval/pipelines/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  v2DeletePipeline: (id: string) =>
+    request<{ deleted: boolean }>(`/api/eval/pipelines/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  v2RunPipeline: (id: string) =>
+    request<V2Pipeline>(`/api/eval/pipelines/${encodeURIComponent(id)}/run`, { method: "POST" }),
+  v2Evaluators: () =>
+    request<{ evaluators: EvaluatorRow[]; builtin_count: number }>("/api/eval/evaluators"),
+  v2Evaluator: (id: string) =>
+    request<EvaluatorDetail>(`/api/eval/evaluators/${encodeURIComponent(id)}`),
+  v2CreateEvaluator: (body: EvaluatorCreateBody) =>
+    request<{ evaluator_id: string; arn: string }>("/api/eval/evaluators", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  v2UpdateEvaluator: (id: string, body: EvaluatorUpdateBody) =>
+    request<EvaluatorDetail>(`/api/eval/evaluators/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  v2DeleteEvaluator: (id: string) =>
+    request<{ deleted: boolean }>(`/api/eval/evaluators/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  v2CreateRun: (body: V2RunCreate) =>
+    request<EvaluationRunInfo>("/api/eval/runs", {
+      method: "POST",
+      body: JSON.stringify({ mode: "evaluators", wait_seconds: 180, ...body }),
+    }),
+  v2OnlineConfigs: () =>
+    request<{ configs: OnlineEvalConfigRow[]; total: number }>("/api/eval/online"),
+  v2OnlineConfig: (id: string) =>
+    request<OnlineEvalConfigRow>(`/api/eval/online/${encodeURIComponent(id)}`),
+  v2CreateOnlineConfig: (body: OnlineEvalConfigCreate) =>
+    request<OnlineEvalConfigRow>("/api/eval/online", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  v2OnlineAction: (id: string, action: "pause" | "resume") =>
+    request<OnlineEvalConfigRow>(`/api/eval/online/${encodeURIComponent(id)}/${action}`, {
+      method: "POST",
+    }),
+  v2DeleteOnlineConfig: (id: string) =>
+    request<{ deleted: boolean }>(`/api/eval/online/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  v2OnlineResults: (id: string, range: V2Range) =>
+    request<OnlineEvalResults>(
+      `/api/eval/online/${encodeURIComponent(id)}/results?range=${encodeURIComponent(range)}`,
+    ),
 };

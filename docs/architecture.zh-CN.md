@@ -1377,6 +1377,16 @@ DCV live-view chunk（它本来就是懒加载的，见 `pages/governance/ToolsV
 500 kB chunk 警告线，`vite.config.ts` 中的 `build.chunkSizeWarningLimit` 只被抬高到刚好覆盖
 这一个 chunk（2900 kB），因此入口 chunk 或任何页面 chunk 一旦劣化，这条警告仍会触发。
 
+## 控制台 V2
+
+第二套控制台体验与经典版**并存**：浅色、企业级 SaaS 风格的界面，按客户熟悉的评估工作流设计（顶部产品栏、分组可折叠侧边栏、带「共 N 项」计数的筛选列表页、分步向导、`|` 标题的分区卡片、状态标签）。它位于 `frontend/src/App.tsx` 中独立的 `/v2/*` 路由组，处在经典 `<Shell />` **之外**，有自己的外壳（`v2/V2Shell.tsx`）；两者共享认证、工作区 Provider 与 `lib/api.ts`，因此 V2 的每次读写都走与经典页面相同的后端路由与权限检查。
+
+- **切换。** 经典版顶栏有「体验新版 V2」入口，V2 顶栏有「返回经典版」。选择以浏览器本地偏好保存（`lib/ui-version.ts`，键 `launchpad_ui_version`）；值为 `v2` 时首页 `/` 重定向到 `/v2`。存储不可用时即视为经典版。
+- **样式隔离。** `v2/v2.css` 的所有规则都限定在 `.v2`（外壳根节点）或 `body.v2-body` 下；后者仅在 V2 外壳挂载期间加到 `<body>` 上，用于屏蔽经典版的深色背景与噪点。经典主题不受影响；V2 使用自己的组件库（`v2/ui.tsx`：按钮、标签、筛选下拉、搜索、表格与分页、卡片、向导步骤、弹窗、抽屉、描述列表、KPI、提示），不复用经典组件。
+- **原生 V2 页面。** 工作台（`/v2`）与 Agent 评估模块：数据中心 `/v2/eval/data`（Agent 轨迹 = 可观测轨迹及轨迹 / 会话详情、数据集及记录编辑、数据处理 Pipeline）、评估任务 `/v2/eval/tasks`、分析洞察 `/v2/eval/insights`、评估器 `/v2/eval/evaluators`。子页面遵循控制台约定，用同一路由的 `?view=` 状态表示（`view=new|detail|edit|trace|dataset|pipeline…`）。侧边栏其余入口（Agent 开发、运行、实验、系统管理）打开经典页面，并标注「经典版」，直到完成迁移。
+- **评估任务统一两类资源**（`v2/tasks.ts`）：批量评估运行是*历史*任务（时间窗口、手选会话或数据集回放，一次性评估；`name` / `description` 存在运行行上）；Agent 所属、scores 模式的在线评估配置是*持续*任务（采样比例、会话超时；其 description 作为任务名）。状态统一映射为排队中 / 运行中 / 已完成 / 失败 / 已停止 / 已暂停。
+- **结果在界面中展示，而非导出。** 任务详情与分析洞察把评估记录（`GET /api/eval/runs/{id}/results`、`GET /api/eval/online/{id}/results`）读成统一的行模型（`v2/results.ts`）：状态、原始分数与**归一化**分数（0–1，惩罚型评估器经 `evaluatorPolarity` 取反）、标签、说明。归一化分数低于 0.7 即为 Bad Case。分析洞察汇总时间窗口内最近 12 个已完成的运行与全部持续任务，提供 KPI、按评估器拆分、筛选、CSV 导出，以及「Bad Case 回流数据集」（调用 `POST /api/eval/datasets/from-sessions`，见数据处理 API）。
+
 ## 控制台认证与账户
 
 控制台有一个可选的本地账户网关,与 Gateway/Cedar 演示使用的 Cognito 用户以及

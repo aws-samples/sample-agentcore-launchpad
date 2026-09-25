@@ -1152,6 +1152,9 @@ def delete_evaluator(
 # ─── runs ────────────────────────────────────────────────────────────────────
 class RunCreate(BaseModel):
     agent_id: str
+    # optional operator-facing task name/description (console V2 evaluation tasks)
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    description: str | None = Field(default=None, max_length=1000)
     dataset_id: str | None = None
     cloud_dataset_id: str | None = None  # AWS cloud dataset
     # Published version of the cloud dataset to replay ("2"); omitted = DRAFT.
@@ -1175,6 +1178,8 @@ def _run_out(run: EvalRun) -> dict[str, Any]:
         "id": run.id,
         "agent_id": run.agent_id,
         "agent_name": run.agent_name,
+        "name": run.name,
+        "description": run.description,
         "dataset_id": run.dataset_id,
         "dataset_name": run.dataset_name,
         # pinned published cloud-dataset version; null = draft / not a cloud run
@@ -1192,6 +1197,7 @@ def _run_out(run: EvalRun) -> dict[str, Any]:
         # the row turns `stopped` once the poller/worker observes it)
         "stop_requested": service.stop_requested(run.id),
         "created_at": run.created_at.isoformat() if run.created_at else None,
+        "updated_at": run.updated_at.isoformat() if run.updated_at else None,
     }
 
 
@@ -1371,6 +1377,8 @@ def create_run(
         lookback_hours=req.lookback_hours,
         actor_model_id=req.actor_model_id,
         dataset_version=req.dataset_version if req.cloud_dataset_id else None,
+        name=req.name,
+        description=req.description,
     )
     return _run_out(run)
 

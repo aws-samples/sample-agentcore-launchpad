@@ -43,6 +43,7 @@ WORKSPACE_SCOPED_TABLES = (
     "system_skill_records",
     "assistant_evaluation_plans",
     "evaluation_asset_operations",
+    "eval_pipelines",
 )
 
 
@@ -194,6 +195,13 @@ def _migrate(bind) -> None:
                 conn.execute(
                     text("ALTER TABLE eval_runs ADD COLUMN dataset_version VARCHAR(16)")
                 )
+        for column, ddl in (
+            ("name", "ALTER TABLE eval_runs ADD COLUMN name VARCHAR(64)"),
+            ("description", "ALTER TABLE eval_runs ADD COLUMN description TEXT"),
+        ):
+            if column not in existing:
+                with bind.begin() as conn:
+                    conn.execute(text(ddl))
         # The former multi-actor/multi-session procedure ledger column (`execution`,
         # SE-046) is no longer mapped; an existing column is simply left in place and
         # ignored — SQLite needs no drop for the model to load.
@@ -407,6 +415,7 @@ def _migrate_workspace_columns(bind) -> None:
         "evaluation_asset_operations": (
             "ALTER TABLE evaluation_asset_operations ADD COLUMN workspace_id VARCHAR(32)"
         ),
+        "eval_pipelines": "ALTER TABLE eval_pipelines ADD COLUMN workspace_id VARCHAR(32)",
     }
     inspector = inspect(bind)
     live_tables = set(inspector.get_table_names())

@@ -601,6 +601,8 @@ def submit_run(
     actor_model_id: str | None = None,
     online_config_arn: str | None = None,
     dataset_version: str | None = None,
+    name: str | None = None,
+    description: str | None = None,
 ) -> EvalRun:
     service_name, log_group = resolve_telemetry(agent, workspace)
     # Window runs have no dataset; encode the scope in dataset_name so the
@@ -613,6 +615,8 @@ def submit_run(
             workspace_id=agent.workspace_id,
             agent_id=agent.id,
             agent_name=agent.name,
+            name=name,
+            description=description,
             dataset_id=dataset_id,
             dataset_name=dataset_name,
             dataset_version=dataset_version,

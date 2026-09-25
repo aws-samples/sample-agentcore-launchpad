@@ -128,3 +128,22 @@ def test_session_metadata_passthrough(client, monkeypatch):
     )
     kwargs = data.start_batch_evaluation.call_args.kwargs
     assert kwargs["evaluationMetadata"]["sessionMetadata"] == metadata
+
+
+def test_run_carries_task_name_and_description(client, monkeypatch):
+    db = SessionLocal()
+    agent = make_agent(db, name="named-agent")
+    db.close()
+    stub_environment(monkeypatch)
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "lookback_hours": 6, "name": "daily sample",
+        "description": "V2 task", "evaluators": ["Builtin.Correctness"], "wait_seconds": 0,
+    })
+    assert res.status_code == 201
+    body = res.json()
+    assert (body["name"], body["description"]) == ("daily sample", "V2 task")
+    assert body["updated_at"]
+    listed = client.get("/api/eval/runs").json()
+    rows = listed["runs"] if isinstance(listed, dict) else listed
+    assert any(r["id"] == body["id"] and r["name"] == "daily sample" for r in rows)
+    wait_terminal(client, body["id"])
