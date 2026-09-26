@@ -44,8 +44,12 @@ def test_existing_directory_imports_once_with_all_media_metadata(client):
     assert result.status_code == 200
     catalog = result.json()
     assert len(catalog["videos"]) == 16
+    assert catalog["schemaVersion"] == 3
     assert all(catalog["collections"])
     first = next(video for video in catalog["videos"] if video["id"] == "architect-assistant")
+    assert first["consoleVersion"] == "v2"
+    old = next(video for video in catalog["videos"] if video["id"] == "evaluation-datasets")
+    assert old["consoleVersion"] == "classic"
     assert len(first["chapters"]) == 11
     assert [source["type"] for source in first["sources"]] == ["video/mp4", "video/webm"]
     assert first["posterUrl"].endswith("/poster.jpg")
@@ -62,25 +66,32 @@ def test_draft_publish_edit_withdraw_and_delete(client):
     original_count = len(client.get("/api/videos").json()["videos"])
     row = create(client)
     assert row["status"] == "draft" and row["published_content"] is None
+    assert row["content"]["console_version"] == "classic"
     assert row["content"]["title"] == {"en": "新视频", "zh-CN": "新视频"}
     assert len(client.get("/api/videos").json()["videos"]) == original_count
     row = action(client, row, "publish")
     public = next(v for v in client.get("/api/videos").json()["videos"] if v["id"] == row["id"])
     assert public["sources"] == [{"url": CONTENT["cdn_url"], "type": "video/mp4"}]
     assert public["title"]["zh-CN"] == "新视频"
+    assert public["consoleVersion"] == "classic"
 
     response = client.put(
         f"/api/videos/manage/{row['id']}",
-        json={**row["content"], "title": {"zh-CN": "修改后"}, "expected_revision": row["revision"]},
+        json={
+            **row["content"], "title": {"zh-CN": "修改后"},
+            "console_version": "v2", "expected_revision": row["revision"],
+        },
     )
     assert response.status_code == 200, response.text
     row = response.json()
     assert row["has_unpublished_changes"]
     public = next(v for v in client.get("/api/videos").json()["videos"] if v["id"] == row["id"])
     assert public["title"]["zh-CN"] == "新视频"
+    assert public["consoleVersion"] == "classic"
     row = action(client, row, "publish")
     public = next(v for v in client.get("/api/videos").json()["videos"] if v["id"] == row["id"])
     assert public["title"]["zh-CN"] == "修改后"
+    assert public["consoleVersion"] == "v2"
     row = action(client, row, "unpublish")
     assert row["status"] == "draft" and row["content"]["title"]["zh-CN"] == "修改后"
     assert all(v["id"] != row["id"] for v in client.get("/api/videos").json()["videos"])
@@ -89,6 +100,30 @@ def test_draft_publish_edit_withdraw_and_delete(client):
     )
     assert response.json() == {"deleted": True}
     assert client.get(f"/api/videos/manage/{row['id']}").status_code == 404
+
+
+def test_old_ledger_snapshots_are_classified_on_read_without_rewriting(client):
+    row = create(client, cdn_url="https://cdn.example.com/media/demo/20260926-v2/demo.mp4")
+    row = action(client, row, "publish")
+    with SessionLocal() as db:
+        stored = db.get(Video, row["id"])
+        stored.content = {key: value for key, value in stored.content.items()
+                          if key != "console_version"}
+        stored.published_content = {key: value for key, value in stored.published_content.items()
+                                    if key != "console_version"}
+        db.commit()
+        revision = stored.revision
+    managed = client.get(f"/api/videos/manage/{row['id']}").json()
+    public = next(v for v in client.get("/api/videos").json()["videos"] if v["id"] == row["id"])
+    assert managed["content"]["console_version"] == "v2"
+    assert managed["published_content"]["console_version"] == "v2"
+    assert not managed["has_unpublished_changes"]
+    assert public["consoleVersion"] == "v2"
+    with SessionLocal() as db:
+        stored = db.get(Video, row["id"])
+        assert stored.revision == revision
+        assert "console_version" not in stored.content
+        assert "console_version" not in stored.published_content
 
 
 def test_stale_revisions_cannot_change_a_published_snapshot(client):
@@ -124,6 +159,7 @@ def test_competing_db_sessions_use_a_revision_predicate(client):
     {"cdn_url": "https://cdn.example.com/a.mp4?token=temporary"},
     {"cdn_url": "https://cdn.example.com/a.txt"},
     {"cdn_url": "https://localhost/a.mp4"},
+    {"console_version": "v3"},
     {"webm_url": "https://cdn.example.com/other.mp4"},
     {"duration_seconds": 0, "chapters": [{"startSeconds": 0, "title": {"zh-CN": "开始"}}]},
     {"published_content": CONTENT},

@@ -1,6 +1,8 @@
 /* V2 视频 (videos) — module styles, scoped under the V2 shell root. */
 
 /* library grid */
+.v2 .v2-videos-version { margin-bottom: 14px; }
+.v2 .v2-videos-card .tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .v2 .v2-videos-section-filter {
   display: inline-flex; align-items: center; gap: 8px; color: var(--v2-ink-3);
   font-size: 12.5px; white-space: nowrap;

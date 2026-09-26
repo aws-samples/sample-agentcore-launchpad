@@ -7,7 +7,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
@@ -20,6 +20,9 @@ from app.models.video import Video, VideoCatalogSeed
 _DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 _TAXONOMY_PATH = _DATA_DIR / "video_sections.json"
 _LEGACY_PATH = _DATA_DIR / "videos.initial.json"
+_V2_MEDIA_REVISION = re.compile(r"/media/[^/]+/[0-9]{8}-v2(?:-[^/]*)?/")
+
+ConsoleVersion = Literal["v2", "classic"]
 
 # One-time migration of the bundled directory into its matching V2 navigation section.
 _LEGACY_SECTIONS = {
@@ -91,6 +94,23 @@ def _url(value: str | None, extension: str, *, optional: bool = False) -> str | 
     return value
 
 
+def _console_version(content: dict[str, Any]) -> ConsoleVersion:
+    """Classify pre-field ledger snapshots once at the API boundary.
+
+    The revision segment identifies the already-published V2 recordings. New
+    writes persist an explicit value; reads never rewrite old snapshots.
+    """
+    explicit = content.get("console_version")
+    if explicit in ("v2", "classic"):
+        return explicit
+    media_path = urlsplit(str(content.get("cdn_url") or "")).path
+    return "v2" if _V2_MEDIA_REVISION.search(media_path) else "classic"
+
+
+def _present_content(content: dict[str, Any] | None) -> dict[str, Any] | None:
+    return {**content, "console_version": _console_version(content)} if content else None
+
+
 class LocalizedText(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, populate_by_name=True)
 
@@ -116,6 +136,7 @@ class VideoContent(BaseModel):
 
     category_id: str
     section_id: str
+    console_version: ConsoleVersion
     title: LocalizedText
     description: LocalizedText
     cdn_url: str = Field(min_length=1, max_length=2048)
@@ -125,6 +146,13 @@ class VideoContent(BaseModel):
     duration_seconds: float = Field(default=0, ge=0, le=86400)
     chapters: list[Chapter] = Field(default_factory=list, max_length=100)
     sort_order: int = Field(default=1000, ge=0, le=1_000_000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def classify_existing_content(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "console_version" not in value:
+            return {**value, "console_version": _console_version(value)}
+        return value
 
     @model_validator(mode="after")
     def valid_directory_and_media(self) -> "VideoContent":
@@ -217,8 +245,8 @@ def seed_legacy_catalog(bind) -> None:
 def serialize_managed(row: Video) -> dict[str, Any]:
     return {
         "id": row.id,
-        "content": row.content,
-        "published_content": row.published_content,
+        "content": _present_content(row.content),
+        "published_content": _present_content(row.published_content),
         "status": "published" if row.published_content is not None else "draft",
         "has_unpublished_changes": row.content != row.published_content,
         "revision": row.revision,
@@ -241,6 +269,7 @@ def _public(row: Video) -> dict[str, Any]:
         if content.get("caption_url") else []
     return {
         "id": row.id,
+        "consoleVersion": _console_version(content),
         "title": content["title"],
         "description": content["description"],
         "publishedAt": _iso(row.published_at),
@@ -274,7 +303,7 @@ def published_catalog(db: Session) -> dict[str, Any]:
     sections = [item for item in taxonomy()["sections"] if item["id"] in by_section]
     category_ids = {item["categoryId"] for item in sections}
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "categories": [item for item in taxonomy()["categories"] if item["id"] in category_ids],
         "collections": [{
             "id": item["id"],
@@ -338,7 +367,7 @@ def change(
             raise ValueError("Saving a video requires content")
         row.content = _dump(content)
     elif action == "publish":
-        VideoContent.model_validate(row.content)
+        row.content = _dump(VideoContent.model_validate(row.content))
         row.published_content = deepcopy(row.content)
         row.published_at = now
     elif action == "unpublish":

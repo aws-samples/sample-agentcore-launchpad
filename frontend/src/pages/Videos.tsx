@@ -7,17 +7,18 @@ import { Panel } from "../components/Panel";
 import { ViewHead } from "../components/ViewHead";
 import { useVideoCatalog } from "../lib/useVideoCatalog";
 import {
-  videoCollections as buildCollections, videoTimestamp,
-  type LibraryVideo, type VideoCatalog, type VideoCollection, type VideoLocale,
+  videoCollections as buildCollections, videoCollectionsByVersion, videoTimestamp,
+  type ConsoleVersion, type LibraryVideo, type VideoCatalog, type VideoCollection, type VideoLocale, type VideoVersionFilter,
 } from "../lib/videos";
 import "./videos.css";
 
-const EMPTY_CATALOG: VideoCatalog = { schemaVersion: 2, categories: [], collections: [], videos: [] };
+const EMPTY_CATALOG: VideoCatalog = { schemaVersion: 3, categories: [], collections: [], videos: [] };
 
-function videoLink(params: URLSearchParams, id?: string) {
+function videoLink(params: URLSearchParams, id?: string, version?: ConsoleVersion) {
   const next = new URLSearchParams(params);
   if (id) next.set("video", id);
   else next.delete("video");
+  if (version && next.get("version") !== "all") next.set("version", version);
   return { pathname: "/videos", search: next.toString() ? `?${next}` : "" };
 }
 
@@ -92,16 +93,17 @@ function VideoPlayer({ video, collection, locale, params }: {
 
   return (
     <section aria-label={t("videos.player")} data-testid="video-watch">
-      <Link className="videos-back" to={videoLink(params)} data-testid="video-back">
+      <Link className="videos-back" to={videoLink(params, undefined, video.consoleVersion)} data-testid="video-back">
         ← {t("videos.backToLibrary")}
       </Link>
       <div className="videos-watch-head">
         <h2 ref={headingRef} tabIndex={-1}>{collection.title[locale]}</h2>
-        {hasSeries ? (
-          <span>{t("videos.episodePosition", {
+        <div className="videos-watch-attrs">
+          <span className="videos-version-pill">{t(`videos.version.${video.consoleVersion}`)}</span>
+          {hasSeries && <span>{t("videos.episodePosition", {
             index: episodeIndex + 1, count: collection.videos.length,
-          })}</span>
-        ) : null}
+          })}</span>}
+        </div>
       </div>
       <div className="videos-layout">
         <Panel title={t("videos.player")} pad={false} brk data-testid="video-player-panel">
@@ -177,13 +179,13 @@ function VideoPlayer({ video, collection, locale, params }: {
             {hasSeries ? (
               <nav className="videos-pagination" aria-label={t("videos.series")}>
                 {previous ? (
-                  <Link to={videoLink(params, previous.id)} data-testid="video-previous">
+                  <Link to={videoLink(params, previous.id, previous.consoleVersion)} data-testid="video-previous">
                     <span>← {t("videos.previous")}</span>
                     <strong>{previous.title[locale]}</strong>
                   </Link>
                 ) : <span />}
                 {next ? (
-                  <Link to={videoLink(params, next.id)} data-testid="video-next">
+                  <Link to={videoLink(params, next.id, next.consoleVersion)} data-testid="video-next">
                     <span>{t("videos.next")} →</span>
                     <strong>{next.title[locale]}</strong>
                   </Link>
@@ -240,7 +242,7 @@ function VideoPlayer({ video, collection, locale, params }: {
                   <li key={item.id}>
                     <Link
                       className={`videos-episode${item.id === video.id ? " selected" : ""}`}
-                      to={videoLink(params, item.id)}
+                      to={videoLink(params, item.id, item.consoleVersion)}
                       aria-current={item.id === video.id ? "true" : undefined}
                       data-testid={`video-entry-${item.id}`}
                     >
@@ -298,19 +300,25 @@ export function Videos() {
   const [params, setParams] = useSearchParams();
   const loaded = useVideoCatalog();
   const videoCatalog = loaded.data ?? EMPTY_CATALOG;
-  const videoCollections = useMemo(() => buildCollections(videoCatalog), [videoCatalog]);
+  const allCollections = useMemo(() => buildCollections(videoCatalog), [videoCatalog]);
   const locale: VideoLocale = i18n.resolvedLanguage?.startsWith("zh") ? "zh-CN" : "en";
   const videos = videoCatalog.videos;
+  const rawVersion = params.get("version");
+  const version: VideoVersionFilter = rawVersion === "v2" || rawVersion === "all" ? rawVersion : "classic";
+  const collectionsByVersion = useMemo(
+    () => videoCollectionsByVersion(allCollections, version), [allCollections, version],
+  );
   const requestedId = params.get("video");
   const selected = videos.find((video) => video.id === requestedId);
-  const collection = videoCollections.find((item) => item.videos.some((v) => v.id === selected?.id));
+  const collection = selected && videoCollectionsByVersion(allCollections, selected.consoleVersion)
+    .find((item) => item.videos.some((video) => video.id === selected.id));
   const query = params.get("q") ?? "";
   const search = query.trim().toLocaleLowerCase(locale);
   const category = videoCatalog.categories.some((item) => item.id === params.get("category"))
     ? params.get("category") : null;
-  const section = videoCollections.some((item) => item.id === params.get("section") &&
+  const section = allCollections.some((item) => item.id === params.get("section") &&
     (!category || item.categoryId === category)) ? params.get("section") : null;
-  const collections = videoCollections.filter((item) =>
+  const collections = collectionsByVersion.filter((item) =>
     (!category || item.categoryId === category) && (!section || item.id === section));
   const results = collections.flatMap((item) => (
     search
@@ -325,11 +333,11 @@ export function Videos() {
       }]
   ));
 
-  function filter(name: "q" | "category" | "section", value: string) {
+  function filter(name: "q" | "category" | "section" | "version", value: string) {
     setParams((current) => {
       const next = new URLSearchParams(current);
       next.delete("video");
-      if (name === "category") next.delete("section");
+      if (name === "category" || name === "version") next.delete("section");
       if (value) next.set(name, value);
       else next.delete(name);
       return next;
@@ -339,7 +347,7 @@ export function Videos() {
   function clearFilters() {
     setParams((current) => {
       const next = new URLSearchParams(current);
-      for (const name of ["q", "category", "section", "video"]) next.delete(name);
+      for (const name of ["q", "category", "section", "version", "video"]) next.delete(name);
       return next;
     }, { replace: true });
   }
@@ -362,7 +370,8 @@ export function Videos() {
         kicker={t("videos.kicker")}
         title={t("videos.title")}
         description={t("videos.description")}
-        meta={t("videos.count", { count: videos.length })}
+        meta={t("videos.count", { count: version === "all" ? videos.length
+          : videos.filter((video) => video.consoleVersion === version).length })}
       />
       {loaded.error && (
         <p className="videos-notice" role="alert">
@@ -406,9 +415,20 @@ export function Videos() {
               data-testid="video-search"
             />
           </div>
+          <div className="videos-versions" role="group" aria-label={t("videos.versionLabel")} data-testid="video-version-filter">
+            {(["classic", "v2", "all"] as const).map((item) => (
+              <button key={item} type="button" aria-pressed={version === item}
+                onClick={() => filter("version", item)}>
+                {t(item === "all" ? "videos.versionAll" : `videos.version.${item}`)}
+                <span>{item === "all" ? videos.length
+                  : videos.filter((video) => video.consoleVersion === item).length}</span>
+              </button>
+            ))}
+          </div>
           <div className="videos-filters" role="group" aria-label={t("videos.categories")}>
             <button type="button" aria-pressed={!category} onClick={() => filter("category", "")}>
-              {t("videos.all")} <span>{videos.length}</span>
+              {t("videos.all")} <span>{version === "all" ? videos.length
+                : videos.filter((video) => video.consoleVersion === version).length}</span>
             </button>
             {videoCatalog.categories.map((item) => (
               <button
@@ -419,7 +439,7 @@ export function Videos() {
                 data-testid={`video-category-${item.id}`}
               >
                 {item.title[locale]}
-                <span>{videoCollections.filter((c) => c.categoryId === item.id)
+                <span>{collectionsByVersion.filter((c) => c.categoryId === item.id)
                   .reduce((count, c) => count + c.videos.length, 0)}</span>
               </button>
             ))}
@@ -433,7 +453,8 @@ export function Videos() {
               data-testid="video-section-filter"
             >
               <option value="">{t("videos.all")}</option>
-              {videoCollections.filter((item) => item.categoryId === category).map((item) => (
+              {collectionsByVersion.filter((item, index, list) =>
+                item.categoryId === category && list.findIndex((candidate) => candidate.id === item.id) === index).map((item) => (
                 <option key={item.id} value={item.id}>{item.title[locale]}</option>
               ))}
             </select>
@@ -449,11 +470,11 @@ export function Videos() {
                 const first = item.videos[0];
                 const duration = item.videos.reduce((total, video) => total + video.durationSeconds, 0);
                 return (
-                  <li key={item.id}>
+                  <li key={`${item.id}-${first.consoleVersion}`}>
                     <Link
                       className="videos-card"
-                      to={videoLink(params, first.id)}
-                      data-testid={`video-card-${item.id}`}
+                      to={videoLink(params, first.id, first.consoleVersion)}
+                      data-testid={`video-card-${item.id}${version === "all" ? `-${first.consoleVersion}` : ""}`}
                     >
                       <div className="videos-thumbnail">
                         {first.posterUrl && <img src={first.posterUrl} alt="" loading="lazy" />}
@@ -464,6 +485,7 @@ export function Videos() {
                         </span>
                       </div>
                       <div className="videos-card-text">
+                        <span className="videos-version-pill">{t(`videos.version.${first.consoleVersion}`)}</span>
                         <h3>{item.title}</h3>
                         <p>{item.description}</p>
                       </div>

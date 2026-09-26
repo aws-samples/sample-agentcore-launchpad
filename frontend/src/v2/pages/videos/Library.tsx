@@ -1,7 +1,7 @@
 import { Inbox, PlayCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { type LibraryVideo, type VideoCatalog, type VideoCollection, type VideoLocale, videoTimestamp } from "../../../lib/videos";
+import { type LibraryVideo, type VideoCatalog, type VideoCollection, type VideoLocale, type VideoVersionFilter, videoTimestamp } from "../../../lib/videos";
 import { Alert, Button, Card, SearchInput, Segmented, Tag } from "../../ui";
 
 interface Result {
@@ -19,6 +19,7 @@ export function VideoLibrary({
   locale,
   catalog,
   collections: allCollections,
+  version,
   query,
   category,
   section,
@@ -30,16 +31,19 @@ export function VideoLibrary({
   catalog: VideoCatalog;
   collections: VideoCollection[];
   locale: VideoLocale;
+  version: VideoVersionFilter;
   query: string;
   category: string | null;
   section: string | null;
   invalidLink: boolean;
-  onFilter: (name: "q" | "category" | "section", value: string) => void;
+  onFilter: (name: "q" | "category" | "section" | "version", value: string) => void;
   onClear: () => void;
   onWatch: (id: string) => void;
 }) {
   const { t } = useTranslation();
   const videos = catalog.videos;
+  const versionCount = (value: VideoVersionFilter) =>
+    value === "all" ? videos.length : videos.filter((video) => video.consoleVersion === value).length;
   const search = query.trim().toLocaleLowerCase(locale);
   const collections = allCollections.filter((item) =>
     (!category || item.categoryId === category) && (!section || item.id === section));
@@ -65,6 +69,8 @@ export function VideoLibrary({
 
   const countFor = (id: string) =>
     allCollections.filter((c) => c.categoryId === id).reduce((n, c) => n + c.videos.length, 0);
+  const sectionOptions = allCollections.filter((item, index) =>
+    item.categoryId === category && allCollections.findIndex((candidate) => candidate.id === item.id) === index);
 
   return (
     <section aria-label={t("videos.libraryTitle")} data-testid="video-library">
@@ -74,12 +80,25 @@ export function VideoLibrary({
         </Alert>
       )}
       <Card>
+        <div className="v2-videos-version" data-testid="video-version-filter">
+          <Segmented
+            value={version}
+            onChange={(value) => onFilter("version", value)}
+            ariaLabel={t("videos.versionLabel")}
+            options={[
+              { value: "v2", label: `${t("videos.version.v2")} · ${versionCount("v2")}` },
+              { value: "classic", label: `${t("videos.version.classic")} · ${versionCount("classic")}` },
+              { value: "all", label: `${t("videos.versionAll")} · ${versionCount("all")}` },
+            ]}
+          />
+        </div>
         <div className="v2-toolbar">
           <Segmented
             value={category ?? ""}
             onChange={(value) => onFilter("category", value)}
+            ariaLabel={t("videos.categories")}
             options={[
-              { value: "", label: `${t("videos.all")} · ${videos.length}` },
+              { value: "", label: `${t("videos.all")} · ${versionCount(version)}` },
               ...catalog.categories.map((item) => ({
                 value: item.id,
                 label: `${item.title[locale]} · ${countFor(item.id)}`,
@@ -96,7 +115,7 @@ export function VideoLibrary({
               data-testid="video-section-filter"
             >
               <option value="">{t("videos.all")}</option>
-              {allCollections.filter((item) => item.categoryId === category).map((item) => (
+              {sectionOptions.map((item) => (
                 <option key={item.id} value={item.id}>{item.title[locale]}</option>
               ))}
             </select>
@@ -116,8 +135,9 @@ export function VideoLibrary({
               const first = item.videos[0];
               const duration = item.videos.reduce((total, video) => total + video.durationSeconds, 0);
               return (
-                <li key={item.id}>
-                  <button type="button" className="v2-videos-card" onClick={() => onWatch(first.id)} data-testid={`video-card-${item.id}`}>
+                <li key={`${item.id}-${first.consoleVersion}`}>
+                  <button type="button" className="v2-videos-card" onClick={() => onWatch(first.id)}
+                    data-testid={`video-card-${item.id}${version === "all" ? `-${first.consoleVersion}` : ""}`}>
                     <span className="thumb">
                       {first.posterUrl && <img src={first.posterUrl} alt="" loading="lazy" />}
                       <PlayCircle className="play" size={40} aria-hidden="true" />
@@ -126,11 +146,14 @@ export function VideoLibrary({
                     <span className="text">
                       <strong>{item.title}</strong>
                       <span className="desc">{item.description}</span>
-                      {item.videos.length > 1 && (
-                        <span className="tags">
+                      <span className="tags">
+                        <Tag tone={first.consoleVersion === "v2" ? "blue" : "gray"}>
+                          {t(`videos.version.${first.consoleVersion}`)}
+                        </Tag>
+                        {item.videos.length > 1 && (
                           <Tag tone="blue">{t("videos.episodeCount", { count: item.videos.length })}</Tag>
-                        </span>
-                      )}
+                        )}
+                      </span>
                     </span>
                   </button>
                 </li>

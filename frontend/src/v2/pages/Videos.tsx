@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { useVideoCatalog } from "../../lib/useVideoCatalog";
-import { videoCollections, type VideoLocale } from "../../lib/videos";
+import { videoCollections, videoCollectionsByVersion, type VideoLocale, type VideoVersionFilter } from "../../lib/videos";
 import { Alert, Button, PageHeader, Spin } from "../ui";
 import { VideoLibrary } from "./videos/Library";
 import { VideoPlayer } from "./videos/Player";
@@ -22,7 +22,11 @@ export function V2Videos() {
   const requestedId = params.get("video");
   const collections = catalog ? videoCollections(catalog) : [];
   const selected = catalog?.videos.find((video) => video.id === requestedId);
-  const collection = collections.find((item) => item.videos.some((v) => v.id === selected?.id));
+  const rawVersion = params.get("version");
+  const version: VideoVersionFilter = rawVersion === "classic" || rawVersion === "all" ? rawVersion : "v2";
+  const visibleCollections = videoCollectionsByVersion(collections, version);
+  const collection = selected && videoCollectionsByVersion(collections, selected.consoleVersion)
+    .find((item) => item.videos.some((video) => video.id === selected.id));
   const rawCategory = params.get("category");
   const category = catalog?.categories.some((item) => item.id === rawCategory) ? rawCategory : null;
   const rawSection = params.get("section");
@@ -42,11 +46,16 @@ export function V2Videos() {
     withParams((next) => {
       next.set("view", "watch");
       next.set("video", id);
+      if (next.get("version") !== "all") {
+        const video = catalog?.videos.find((item) => item.id === id);
+        if (video) next.set("version", video.consoleVersion);
+      }
     });
   const back = () =>
     withParams((next) => {
       next.delete("view");
       next.delete("video");
+      if (next.get("version") !== "all" && selected) next.set("version", selected.consoleVersion);
     });
 
   if (!catalog) {
@@ -79,7 +88,10 @@ export function V2Videos() {
       <PageHeader
         title={t("videos.title")}
         desc={t("videos.description")}
-        end={<span className="v2-count">{t("videos.count", { count: catalog.videos.length })}</span>}
+        end={<span className="v2-count">{t("videos.count", {
+          count: version === "all" ? catalog.videos.length
+            : catalog.videos.filter((video) => video.consoleVersion === version).length,
+        })}</span>}
       />
       {loaded.error && (
         <Alert tone="error" action={<Button onClick={loaded.reload}>{t("v2.common.retry")}</Button>}>
@@ -88,8 +100,9 @@ export function V2Videos() {
       )}
       <VideoLibrary
         catalog={catalog}
-        collections={collections}
+        collections={visibleCollections}
         locale={locale}
+        version={version}
         query={params.get("q") ?? ""}
         category={category}
         section={section}
@@ -98,12 +111,12 @@ export function V2Videos() {
           withParams((next) => {
             next.delete("view");
             next.delete("video");
-            if (name === "category") next.delete("section");
+            if (name === "category" || name === "version") next.delete("section");
             if (value) next.set(name, value);
             else next.delete(name);
           }, true)
         }
-        onClear={() => withParams((next) => ["q", "category", "section", "view", "video"].forEach((n) => next.delete(n)), true)}
+        onClear={() => withParams((next) => ["q", "category", "section", "version", "view", "video"].forEach((n) => next.delete(n)), true)}
         onWatch={watch}
       />
     </>
