@@ -169,7 +169,7 @@ members and nothing else:
 - `name`: lowercase slug, 3–48 chars, `^[a-z][a-z0-9-]+$`, not starting with
   `launchpad-`, `harness-` or `system-`
 - `model_id` (string) and `model_source` (`"bedrock"` or `"mantle"`); default
-  `{proposal_contract.DEFAULT_MODEL_ID}` / `"bedrock"`
+  `{proposal_contract.PROPOSAL_DEFAULT_MODEL_ID}` / `"bedrock"`
 - `system_prompt`: the agent's FIRST-VERSION system prompt — deliberately lean
   (hard cap 20000 chars): identity and audience, the goal, the
   hard boundaries the golden tests enforce (what it must never do, when to escalate),

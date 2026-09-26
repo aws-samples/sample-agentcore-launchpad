@@ -30,3 +30,21 @@ def test_explicit_budgets_survive_proposal_mapping(budget):
 
 def test_architect_preset_keeps_its_900_second_budget():
     assert ARCHITECT.timeout_seconds == 900
+
+
+def test_a_proposal_without_a_model_gets_the_wizard_default_not_the_spec_fallback():
+    """The architect proposes the Create Agent default (GPT-6 Sol on native Bedrock);
+    AgentSpec's own default stays what a stored spec without a model_id means."""
+    from app.assistant import service
+    from app.assistant.proposal import PROPOSAL_DEFAULT_MODEL_ID
+    from app.deployer.harness import model_config
+    from app.schemas.agent import DEFAULT_MODEL_ID
+
+    proposal = ProposalContent(name="ordinary-agent", system_prompt="Be helpful.")
+    mapped = to_agent_spec(proposal, {"tools": [], "skills": [], "knowledge_bases": []})
+    assert proposal.model_id == mapped.model_id == PROPOSAL_DEFAULT_MODEL_ID
+    assert mapped.method == "harness" and mapped.model_source == "bedrock"
+    assert model_config(mapped)["apiFormat"] == "converse_stream"
+    assert DEFAULT_MODEL_ID != PROPOSAL_DEFAULT_MODEL_ID
+    # the model-facing protocol announces the same default
+    assert f"`{PROPOSAL_DEFAULT_MODEL_ID}` / `\"bedrock\"`" in service.PROTOCOL_PREAMBLE
