@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 
 import { api } from "../../lib/api";
 import { useLoad } from "../hooks";
@@ -21,8 +21,9 @@ import { TrainWizard } from "./skilllab/TrainWizard";
 
 /**
  * 技能实验室 — evaluate and optimize Agent Skills against owned task sets.
- * Tabs: task sets, AI task generation, evaluation, optimization. Sub-pages are
- * `?tab=<tab>&view=new|edit|detail[&id=]` states of this route; the new-job
+ * Tabs: task sets (with the AI generation jobs below them), evaluation,
+ * optimization. Sub-pages are `?tab=<tab>&view=new|edit|detail[&id=]` states
+ * (plus `tab=tasksets&view=gen-new|gen&id=` for AI generation); the new-job
  * wizards also take `record=` (Registry deep link) and `taskset=` presets.
  */
 export function V2SkillLab() {
@@ -36,14 +37,22 @@ export function V2SkillLab() {
   const statusLoad = useLoad(() => api.skillLabStatus().catch(() => null), "skill-lab-status");
   const status = statusLoad.data;
 
+  // the former AI-generation tab now lives inside the task-set tab
+  if (params.get("tab") === "taskgen") {
+    const next = new URLSearchParams({ tab: "tasksets" });
+    if (view === "new") next.set("view", "gen-new");
+    else if (view === "detail" && id) {
+      next.set("view", "gen");
+      next.set("id", id);
+    }
+    return <Navigate to={`/v2/skill-lab?${next.toString()}`} replace />;
+  }
   if (tab === "tasksets") {
+    if (view === "gen-new") return <TaskgenWizard status={status} />;
+    if (view === "gen" && id) return <TaskgenDetail key={id} id={id} />;
     if (view === "new") return <TasksetEditor key="new" id={null} />;
     if (view === "edit" && id) return <TasksetEditor key={`edit:${id}`} id={id} />;
     if (view === "detail" && id) return <TasksetDetail key={id} id={id} />;
-  }
-  if (tab === "taskgen") {
-    if (view === "new") return <TaskgenWizard status={status} />;
-    if (view === "detail" && id) return <TaskgenDetail key={id} id={id} />;
   }
   if (tab === "eval") {
     if (view === "new") return <EvalWizard key={`${params.get("record")}:${params.get("taskset")}`} status={status} />;
@@ -68,8 +77,12 @@ export function V2SkillLab() {
         }
       />
       <ProvisionAlert status={status} />
-      {tab === "tasksets" && <TasksetList />}
-      {tab === "taskgen" && <TaskgenList />}
+      {tab === "tasksets" && (
+        <>
+          <TasksetList />
+          <TaskgenList />
+        </>
+      )}
       {tab === "eval" && <JobList key="eval" type="eval" />}
       {tab === "train" && <JobList key="train" type="train" />}
     </>

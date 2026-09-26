@@ -115,7 +115,7 @@ export function TasksetList() {
           <Plus size={14} aria-hidden="true" />
           {t("skillLab.tasksets.new")}
         </Button>
-        <Button kind="soft" onClick={() => setParams({ tab: "taskgen", view: "new" })} testId="v2-taskset-ai">
+        <Button kind="soft" onClick={() => setParams({ tab: "tasksets", view: "gen-new" })} testId="v2-taskset-ai">
           <Sparkles size={14} aria-hidden="true" />
           {t("skillLab.taskgen.open")}
         </Button>

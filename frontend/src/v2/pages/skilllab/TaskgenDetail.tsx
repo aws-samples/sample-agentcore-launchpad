@@ -131,7 +131,7 @@ export function TaskgenDetail({ id }: { id: string }) {
   const savingRef = useRef(false);
   const alive = useRef(true);
   const [confirmCancel, setConfirmCancel] = useState(false);
-  const back = () => setParams({ tab: "taskgen" });
+  const back = () => setParams({ tab: "tasksets" });
 
   useEffect(() => {
     alive.current = true;

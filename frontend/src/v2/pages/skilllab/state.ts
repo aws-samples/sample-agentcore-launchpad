@@ -14,8 +14,8 @@ import { useLoad } from "../../hooks";
 
 /* Skill Lab V2 view state and data hooks (the non-component exports). */
 
-export type Tab = "tasksets" | "taskgen" | "eval" | "train";
-export const TABS: Tab[] = ["tasksets", "taskgen", "eval", "train"];
+export type Tab = "tasksets" | "eval" | "train";
+export const TABS: Tab[] = ["tasksets", "eval", "train"];
 
 export const JOB_STATUSES = ["queued", "running", "succeeded", "failed", "cancelled", "interrupted"] as const;
 

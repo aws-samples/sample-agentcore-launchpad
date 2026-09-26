@@ -59,7 +59,7 @@ export function TaskgenWizard({ status }: { status: SkillLabStatus | null }) {
   }, [expandTarget?.id, expandTarget?.mode]);
 
   const ready = Boolean(status?.provisioned && status.venv_ready);
-  const back = () => setParams({ tab: "taskgen" });
+  const back = () => setParams({ tab: "tasksets" });
 
   const uploadAttachments = async (files: File[]) => {
     if (!files.length) return;
@@ -95,7 +95,7 @@ export function TaskgenWizard({ status }: { status: SkillLabStatus | null }) {
           : {}),
         params: { target_backend: backend, model: model.trim(), count, guidance: guidance.trim(), timeout },
       });
-      setParams({ tab: "taskgen", view: "detail", id: job.id });
+      setParams({ tab: "tasksets", view: "gen", id: job.id });
     } catch (err) {
       setError(errorMessage(err));
     } finally {

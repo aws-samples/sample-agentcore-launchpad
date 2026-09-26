@@ -6696,7 +6696,6 @@
     "skillLab": {
       "tab": {
         "tasksets": "Task sets",
-        "taskgen": "AI generation",
         "eval": "Evaluation",
         "train": "Optimization"
       },
@@ -6726,7 +6725,8 @@
       "timeline": "Step timeline",
       "trainLoop": "Training loop",
       "trainProgress": "Training progress",
-      "uploaded": "Uploaded"
+      "uploaded": "Uploaded",
+      "genRecords": "AI generation jobs"
     }
   }
 }

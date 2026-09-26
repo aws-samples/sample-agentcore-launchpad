@@ -103,7 +103,7 @@ export function JobList({ type }: { type: "eval" | "train" }) {
               </Tag>
             )}
           </span>
-          <span className="sub mono">ID: {job.id}</span>
+          <span className="sub mono" style={{ whiteSpace: "nowrap" }}>ID: {job.id}</span>
         </>
       ),
     },

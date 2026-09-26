@@ -6696,7 +6696,6 @@
     "skillLab": {
       "tab": {
         "tasksets": "任务集",
-        "taskgen": "AI 生成",
         "eval": "评估",
         "train": "优化"
       },
@@ -6726,7 +6725,8 @@
       "timeline": "步骤时间线",
       "trainLoop": "训练循环",
       "trainProgress": "训练进度",
-      "uploaded": "上传"
+      "uploaded": "上传",
+      "genRecords": "AI 生成记录"
     }
   }
 }

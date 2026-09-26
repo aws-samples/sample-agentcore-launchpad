@@ -1,4 +1,3 @@
-import { Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -21,6 +20,7 @@ import {
 import { JobStatusTag } from "./common";
 import { JOB_STATUSES, taskgenTarget, useJobList } from "./state";
 
+/** AI generation jobs, embedded as the second card of the task-set tab. */
 export function TaskgenList() {
   const { t } = useTranslation();
   const [, setParams] = useSearchParams();
@@ -38,8 +38,9 @@ export function TaskgenList() {
       return !needle || `${job.id} ${jobSkillName(job)} ${job.taskset_name}`.toLowerCase().includes(needle);
     });
   }, [all, status, q]);
-  const paged = usePaged(rows, 12);
-  const open = (job: SkillLabJobInfo) => setParams({ tab: "taskgen", view: "detail", id: job.id });
+  // embedded under the task-set list: a short page keeps the tab compact
+  const paged = usePaged(rows, 5);
+  const open = (job: SkillLabJobInfo) => setParams({ tab: "tasksets", view: "gen", id: job.id });
 
   const cancel = async () => {
     if (!pending) return;
@@ -67,7 +68,7 @@ export function TaskgenList() {
               {jobSkillName(job) || "—"}
             </span>
           </LinkButton>
-          <span className="sub mono">ID: {job.id}</span>
+          <span className="sub mono" style={{ whiteSpace: "nowrap" }}>ID: {job.id}</span>
         </>
       ),
     },
@@ -109,13 +110,9 @@ export function TaskgenList() {
   ];
 
   return (
-    <Card>
+    <Card title={t("v2.skillLab.genRecords")} sub={t("skillLab.taskgen.listSub")} testId="v2-taskgen-card">
       <div className="v2-toolbar">
         <Button onClick={() => void reload()}>{t("v2.common.refresh")}</Button>
-        <Button kind="primary" onClick={() => setParams({ tab: "taskgen", view: "new" })} testId="v2-taskgen-new">
-          <Plus size={14} aria-hidden="true" />
-          {t("skillLab.taskgen.wizard.title")}
-        </Button>
         <FilterSelect
           label={t("skillLab.eval.col.status")}
           value={status}

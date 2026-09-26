@@ -25,10 +25,10 @@ export function classicSkillLabToV2(search: string): string {
       out.set("id", job);
     }
   } else if (gen) {
-    out.set("tab", "taskgen");
-    if (gen === "new") out.set("view", "new");
+    out.set("tab", "tasksets");
+    if (gen === "new") out.set("view", "gen-new");
     else {
-      out.set("view", "detail");
+      out.set("view", "gen");
       out.set("id", gen);
     }
   } else {
