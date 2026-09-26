@@ -1,0 +1,61 @@
+/* 工作台 — layout + the announcement board and service-health rail. Scoped under .v2. */
+.v2 .v2-home-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr); gap: 16px; align-items: start; }
+/* explicit track: an implicit `auto` one grows to the tables' max-content and slides under the rail */
+.v2 .v2-home-main, .v2 .v2-home-rail { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
+.v2 .v2-home-main > *, .v2 .v2-home-rail > * { margin-bottom: 0; }
+.v2 .v2-home-flow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.v2 .v2-home-running { margin: -4px 24px 16px; font-size: 12.5px; }
+
+/* announcement board */
+.v2 .v2-home-board-featured {
+  border: 1px solid var(--v2-primary-line); border-left: 3px solid var(--v2-primary);
+  border-radius: var(--v2-radius-sm); background: var(--v2-primary-soft); padding: 12px 14px 4px;
+}
+.v2 .v2-home-board-featured .meta, .v2 .v2-home-board-all .meta {
+  display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--v2-ink-3); margin-bottom: 8px;
+}
+.v2 .v2-home-board-featured .v2-announcements-preview { border: 0; background: transparent; padding: 0 0 10px; }
+.v2 .v2-home-board-featured .v2-announcements-preview p {
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+}
+.v2 .v2-home-board-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.v2 .v2-home-board-list li + li { border-top: 1px solid var(--v2-line-2); }
+.v2 .v2-home-board-list button {
+  width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 2px;
+  border: 0; background: none; cursor: pointer; text-align: left; color: var(--v2-ink); font: inherit;
+}
+.v2 .v2-home-board-list button:hover .title { color: var(--v2-primary); }
+.v2 .v2-home-board-list time { flex: none; font-size: 12px; color: var(--v2-ink-3); font-variant-numeric: tabular-nums; }
+.v2 .v2-home-board-list .title { flex: 1; min-width: 0; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2 .v2-home-board-list svg { flex: none; color: var(--v2-ink-4); }
+.v2 .v2-home-board-more { margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--v2-line-2); text-align: center; }
+.v2 .v2-home-board-empty { display: grid; justify-items: center; gap: 8px; padding: 18px 0 8px; color: var(--v2-ink-3); }
+.v2 .v2-home-board-empty p { margin: 0; font-size: 13px; }
+.v2 .v2-home-board-all { display: grid; gap: 16px; }
+.v2 .v2-home-board-detail .v2-announcements-preview h3 { display: none; }
+
+/* service health */
+.v2 .v2-home-health { list-style: none; margin: 0; padding: 0; }
+.v2 .v2-home-health li + li { border-top: 1px solid var(--v2-line-2); }
+.v2 .v2-home-health a { display: flex; align-items: center; gap: 10px; padding: 9px 2px; color: var(--v2-ink) !important; }
+.v2 .v2-home-health a:hover .name { color: var(--v2-primary); }
+.v2 .v2-home-health .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.v2 .v2-home-health .dot.ok { background: var(--v2-success); box-shadow: 0 0 0 3px var(--v2-success-soft); }
+.v2 .v2-home-health .dot.warn { background: var(--v2-warning); box-shadow: 0 0 0 3px var(--v2-warning-soft); }
+.v2 .v2-home-health .dot.idle { background: var(--v2-ink-4); }
+.v2 .v2-home-health .name { flex: none; width: 108px; font-size: 13.5px; }
+.v2 .v2-home-health .state { flex: 1; min-width: 0; font-size: 12.5px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2 .v2-home-health .state.ok { color: var(--v2-success); }
+.v2 .v2-home-health .state.warn { color: var(--v2-warning); }
+.v2 .v2-home-health .state.idle { color: var(--v2-ink-3); }
+.v2 .v2-home-health svg { flex: none; color: var(--v2-ink-4); }
+
+@media (max-width: 1180px) {
+  .v2 .v2-home-grid { grid-template-columns: minmax(0, 1fr); }
+  /* one column: flatten both stacks so the notices lead instead of trailing both tables */
+  .v2 .v2-home-main, .v2 .v2-home-rail { display: contents; }
+  .v2 .v2-home-rail > :first-child { order: -1; }
+}
+@media (max-width: 760px) {
+  .v2 .v2-home-flow { grid-template-columns: minmax(0, 1fr); }
+}
