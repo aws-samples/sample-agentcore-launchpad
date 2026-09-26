@@ -10,6 +10,10 @@ import {
   type GovernancePolicyTestOutcome,
   type GovernancePolicyTestResult,
 } from "../../lib/api";
+import {
+  POLICY_TEST_IDENTITIES as IDENTITIES,
+  preferredTestAction as preferredAction,
+} from "../../lib/governance";
 import { governanceError } from "./types";
 
 // ERROR is a non-decision (never recorded), so it must not share DENY's tone.
@@ -18,20 +22,6 @@ const OUTCOME_TONE: Record<GovernancePolicyTestOutcome, "good" | "crit" | "warn"
   DENY: "crit",
   ERROR: "warn",
 };
-
-const IDENTITIES: { value: GovernancePolicyTestIdentity; label: string }[] = [
-  { value: "demo", label: "demo@hr-analyst" },
-  { value: "admin", label: "admin@platform-admin" },
-];
-
-function preferredAction(actions: GovernanceGatewayAction[]): string {
-  return (
-    actions.find((action) => action.name === "hr-database___create_payout")?.name ??
-    actions.find((action) => action.verified)?.name ??
-    actions[0]?.name ??
-    ""
-  );
-}
 
 interface Props {
   actions: GovernanceGatewayAction[];

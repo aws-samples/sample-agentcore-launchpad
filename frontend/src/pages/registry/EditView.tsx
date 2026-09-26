@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Btn, Chip, Panel, useToast, ViewHead } from "../../components";
 import type { ChipTone } from "../../components";
 import { responseMessage } from "../../lib/api";
+import { parseMcpUrl, parseSkillDefinition, parseSkillMd } from "../../lib/registry";
 import type { RegistryRecord } from "../Registry";
 
 interface EditViewProps {
@@ -12,14 +13,6 @@ interface EditViewProps {
   /** success tail: parent returns to the list, reloads, and selects the record */
   onDone: (record: RegistryRecord) => void;
   onBack: () => void;
-}
-
-interface SkillSourceMeta {
-  kind: string;
-  url?: string;
-  ref?: string;
-  subdir?: string;
-  imported_at?: string;
 }
 
 interface InspectedSkill {
@@ -52,54 +45,6 @@ const STATUS_CHIP: Record<string, { tone: ChipTone; icon: string; labelKey: stri
   REJECTED: { tone: "crit", icon: "✕", labelKey: "registry.states.rejected" },
   DEPRECATED: { tone: "muted", icon: "✕", labelKey: "registry.states.disabled" },
 };
-
-/** Parse the AGENT_SKILLS skillDefinition JSON; returns file list + source when present.
- *  Twin copy in ../Registry.tsx — keep both in sync if the shape changes. */
-function parseSkillDefinition(
-  record: RegistryRecord,
-): { files: string[]; source: SkillSourceMeta | null } | null {
-  if (record.type !== "AGENT_SKILLS") return null;
-  const skills = record.descriptors?.agentSkills as
-    | { skillDefinition?: { inlineContent?: string } }
-    | undefined;
-  const raw = skills?.skillDefinition?.inlineContent;
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as { files?: unknown; source?: unknown };
-    const files = Array.isArray(parsed.files)
-      ? parsed.files.filter((f): f is string => typeof f === "string")
-      : [];
-    const source =
-      parsed.source && typeof parsed.source === "object"
-        ? (parsed.source as SkillSourceMeta)
-        : null;
-    if (files.length === 0 && !source) return null;
-    return { files, source };
-  } catch {
-    return null;
-  }
-}
-
-/** MCP server url lives in descriptors.mcp.server.inlineContent → remotes[0].url. */
-function parseMcpUrl(record: RegistryRecord): string {
-  const mcp = record.descriptors?.mcp as { server?: { inlineContent?: string } } | undefined;
-  const raw = mcp?.server?.inlineContent;
-  if (!raw) return "";
-  try {
-    const parsed = JSON.parse(raw) as { remotes?: { url?: string }[]; url?: string };
-    const remoteUrl = Array.isArray(parsed.remotes) ? parsed.remotes[0]?.url : undefined;
-    return remoteUrl ?? parsed.url ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function parseSkillMd(record: RegistryRecord): string {
-  const skills = record.descriptors?.agentSkills as
-    | { skillMd?: { inlineContent?: string } }
-    | undefined;
-  return skills?.skillMd?.inlineContent ?? "";
-}
 
 /**
  * Standalone `?view=edit&record=<id>` sub-page (mirrors RegisterView's layout):

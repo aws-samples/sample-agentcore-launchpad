@@ -45,6 +45,37 @@ import type {
 } from "../lib/api";
 import { api, ApiError, HARNESS_NATIVE_TOOLS } from "../lib/api";
 import { DEFAULT_TIMEOUT_SECONDS } from "../lib/agent-defaults";
+import {
+  A2A_MODEL_SOURCE,
+  A2A_SKILL_SEEDS,
+  agentFormValid,
+  BUILTIN_TOOLS,
+  buildAgentSpec,
+  BYOC_MODELS_MAX,
+  DEFAULT_AGENT_SDK,
+  DEFAULT_SESSION_MOUNT,
+  entrypointAfterUpload,
+  hasByoMounts,
+  promptWithToolkit,
+  resolveKb,
+  selectableKbs,
+  skillNameFromPath,
+  sourceForMethod,
+  sourceOnMethodSwitch,
+  TOOLKITS,
+  toolkitToolNames as toolkitTools,
+} from "../lib/agent-spec";
+import type {
+  AgentForm,
+  AgentFormCatalogs,
+  AgentMethod,
+  A2aSkillRow,
+  AttachableKb,
+  AttachableMcp,
+  AttachableSkill,
+  KbRef,
+  MountRow,
+} from "../lib/agent-spec";
 import type { ModelSource, ReasoningEffort } from "../lib/models";
 import { useWorkspace } from "../workspace/workspace-context";
 import { SystemPresetsPanel } from "./create/SystemPresetsPanel";
@@ -53,16 +84,13 @@ import {
   DEFAULT_MAX_ITERATIONS,
   diffPresetSettings,
   EFFORT_NONE,
-  effectiveEffort,
   formFromSettings,
-  intOrNull,
   isPresetDefault,
   knobProblems,
   presetConfigureRequest,
 } from "./create/presetSettings";
 import type { EffortChoice, PresetConfigureRequest, PresetForm } from "./create/presetSettings";
 import {
-  CLAUDE_SDK_MODEL_SOURCE,
   CUSTOM_MODEL_OPTION,
   DEFAULT_MODEL_SOURCE,
   defaultModelFor,
@@ -72,50 +100,6 @@ import {
   supportsReasoningEffort,
 } from "../lib/models";
 
-const BUILTIN_TOOLS = ["code-interpreter", "browser"] as const;
-
-// Platform toolkits selectable for the Strands ZIP method. `tools` lists the tool
-// names the backend will emit — kept here only so the chips can show the resulting
-// tool surface without a round-trip; the backend registry
-// (backend/app/templates/toolkits/) stays the source of truth for what is emitted.
-// `prompt` is the wizard-offered default system prompt: deliberately generic, so an
-// agent built from it has prompt-fixable defects a config-bundle A/B can repair.
-const TOOLKITS: {
-  name: Toolkit;
-  tools: string[];
-  prompt: string;
-}[] = [
-  {
-    name: "hr_assistant",
-    tools: [
-      "get_pto_balance",
-      "submit_pto_request",
-      "lookup_hr_policy",
-      "get_benefits_summary",
-      "get_pay_stub",
-    ],
-    prompt: `You are a helpful HR Assistant for Acme Corp.
-
-You help employees with:
-- Checking PTO (paid time off) balances
-- Submitting PTO requests
-- Looking up HR policies (PTO, remote work, parental leave, code of conduct)
-- Understanding employee benefits (health, dental, vision, 401k, life insurance)
-- Retrieving pay stub information
-
-Always use the available tools to answer questions accurately. Do not make up
-policy details, benefit amounts, or pay information — look them up.
-Be concise, professional, and friendly.`,
-  },
-];
-
-const TOOLKIT_PROMPTS = TOOLKITS.map((kit) => kit.prompt);
-// AgentCore mount-path contract: exactly one level under /mnt
-const MOUNT_RE = /^\/mnt\/[a-zA-Z0-9._-]+$/;
-const DEFAULT_SESSION_MOUNT = "/mnt/workspace";
-
-const splitIds = (s: string) => s.split(/[\s,]+/).filter(Boolean);
-const skillNameFromPath = (path: string) => path.replace(/\/+$/, "").split("/").pop() ?? path;
 
 type Step = 1 | 2 | 3;
 
@@ -127,7 +111,7 @@ interface LaunchState {
   workspaceId?: string | null;
 }
 
-type Method = "harness" | "zip_runtime" | "container" | "byoc";
+type Method = AgentMethod;
 
 /**
  * A system-managed preset opened in the shared editor (Create → SYSTEM PRESETS →
@@ -159,34 +143,6 @@ interface EditingTarget {
   system?: SystemEditContext;
 }
 
-// Which source a method starts on. The invariant: a method only defaults to
-// mantle once its execution path can actually execute a Mantle model. The
-// harness needs only bedrockModelConfig.apiFormat; the zip/Strands template now
-// renders an OpenAIResponsesModel with bedrock_mantle_config (IAM auth, no API
-// key) when the source is mantle, so it joined it. The container method stays on
-// Claude — the Claude Agent SDK cannot drive anything else.
-const MODEL_SOURCE_BY_METHOD: Record<Method, ModelSource> = {
-  harness: DEFAULT_MODEL_SOURCE,
-  container: CLAUDE_SDK_MODEL_SOURCE,
-  zip_runtime: DEFAULT_MODEL_SOURCE,
-  // BYOC deploys the member's own code, but spec.model_id still scopes the
-  // execution role's bedrock:InvokeModel and reaches the runtime as env MODEL_ID.
-  byoc: DEFAULT_MODEL_SOURCE,
-};
-
-// A2A zip agents render from a different template that has no Mantle branch, so
-// they stay on the Converse path regardless of the method default.
-const A2A_MODEL_SOURCE: ModelSource = "bedrock";
-
-// byoc allowed-models cap — mirrors `BYOC_ALLOWED_MODELS_MAX` (backend
-// `app/schemas/agent.py`); the bound is IAM policy size, not the catalog.
-const BYOC_MODELS_MAX = 20;
-
-// The single member of the "Other Agent SDK" category (the container method).
-// Selected by default and, for now, the only selectable value.
-const DEFAULT_AGENT_SDK: AgentSdk = "claude_agent_sdk";
-
-const sourceForMethod = (m: Method): ModelSource => MODEL_SOURCE_BY_METHOD[m];
 
 // Spec fields we read back when loading an existing agent into the wizard.
 interface StoredSpec {
@@ -223,17 +179,6 @@ interface StoredSpec {
   byoc?: ByocConfigInput;
 }
 
-interface MountRow {
-  arn: string;
-  path: string;
-}
-
-// agent-card skill editor row; tags edit as a comma-separated string
-interface A2aSkillRow {
-  name: string;
-  description: string;
-  tags: string;
-}
 
 const DISCOVERY_STATUS_TONE: Record<string, "good" | "warn" | "crit" | "muted"> = {
   READY: "good",
@@ -846,66 +791,6 @@ function RuntimeRow({
   );
 }
 
-// the two demo tools every zip template ships — seed the skills editor
-const A2A_SKILL_SEEDS: A2aSkillRow[] = [
-  { name: "calculator", description: "Evaluate a basic arithmetic expression", tags: "math" },
-  { name: "current time", description: "Report the current UTC date and time", tags: "time" },
-];
-
-// backend A2ASkill.id pattern is ^[a-z][a-z0-9_-]{0,63}$ — leading letter required
-const skillSlug = (name: string) =>
-  name
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^[^a-z]+/, "")
-    .replace(/-+$/, "")
-    .slice(0, 64) || "skill";
-
-// rows edit by name; ids must be unique in the spec → suffix repeats (faq, faq-2, …)
-const skillIds = (rows: A2aSkillRow[]): string[] => {
-  const used = new Set<string>();
-  return rows.map((row) => {
-    const base = skillSlug(row.name);
-    let id = base;
-    for (let n = 2; used.has(id); n += 1) id = `${base.slice(0, 60)}-${n}`;
-    used.add(id);
-    return id;
-  });
-};
-
-// APPROVED registry records the wizard offers for mounting.
-interface AttachableMcp {
-  name: string;
-  description: string;
-  url: string;
-  gateway: boolean;
-  record_id: string;
-  gateway_id: string | null;
-  gateway_arn: string | null;
-  attachable: boolean;
-  attachability_reason: string | null;
-  auth_type: "aws_iam" | "none" | "oauth" | null;
-}
-interface AttachableSkill {
-  name: string;
-  description: string;
-  path: string;
-}
-// A managed KB offered by the catalog (only ACTIVE + MANAGED are selectable).
-interface AttachableKb {
-  kb_id: string;
-  name: string;
-  description?: string;
-  status?: string;
-  type?: string;
-}
-// The redundant KB reference stored in the agent spec (name/description carried
-// so the wizard can still render a chip if the KB later leaves the catalog).
-interface KbRef {
-  kb_id: string;
-  name: string;
-  description: string;
-}
 
 function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: string }) {
   const { t } = useTranslation();
@@ -1171,9 +1056,7 @@ const deployLock = !canDeploy
     setMethod(next);
     // protocol survives a method switch, so re-entering zip_runtime with A2A
     // still selected must land back on the pinned source, not the default.
-    applyModelSource(
-      next === "zip_runtime" && protocol === "a2a" ? A2A_MODEL_SOURCE : sourceForMethod(next),
-    );
+    applyModelSource(sourceOnMethodSwitch(next, protocol));
   };
 
   // `/agents/new?method=zip_runtime|container|byoc` (the V2 console's hand-off for
@@ -1250,13 +1133,11 @@ const deployLock = !canDeploy
     setSubmitError(null);
   };
 
-  const byoMounts = s3Mounts.length > 0 || efsMounts.length > 0;
+  const byoMounts = hasByoMounts({ s3Mounts, efsMounts });
 
   // Tool names the selected toolkits contribute. Non-empty ⇒ they replace the
   // template's own calculator/current_utc_time, matching what the backend emits.
-  const toolkitToolNames = TOOLKITS.filter((kit) => toolkits.includes(kit.name)).flatMap(
-    (kit) => kit.tools,
-  );
+  const toolkitToolNames = toolkitTools(toolkits);
 
   // Shared by the harness and zip_runtime tool blocks — a gateway attachment is
   // the same selection for both; only who performs the token exchange differs.
@@ -1290,175 +1171,62 @@ const deployLock = !canDeploy
     if (on) return;
     // Offer the toolkit's default prompt, but never clobber the user's own text —
     // only an empty box or another toolkit's untouched default is replaced.
-    setSystemPrompt((prev) =>
-      !prev.trim() || TOOLKIT_PROMPTS.includes(prev) ? kit.prompt : prev,
-    );
+    setSystemPrompt((prev) => promptWithToolkit(prev, kit.prompt));
   };
 
   // Resolve a KB id to its name/description, preferring the live catalog and
   // falling back to the loaded spec so out-of-catalog KBs keep their label.
-  const kbInfo = (id: string): KbRef => {
-    const cat = kbCatalog.find((k) => k.kb_id === id);
-    if (cat) return { kb_id: id, name: cat.name, description: cat.description ?? "" };
-    const stored = specKbs.find((k) => k.kb_id === id);
-    return { kb_id: id, name: stored?.name ?? id, description: stored?.description ?? "" };
-  };
+  const kbInfo = (id: string): KbRef => resolveKb(id, kbCatalog, specKbs);
 
   // Only ACTIVE managed KBs are selectable; the catalog may already exclude
   // non-managed KBs, so the type guard is defensive.
-  const activeKbs = kbCatalog.filter(
-    (k) => k.status === "ACTIVE" && (k.type == null || k.type === "MANAGED"),
-  );
+  const activeKbs = selectableKbs(kbCatalog);
 
-  // Gateway attachments as ToolRefs. Shared by the harness and zip_runtime
-  // branches below: the harness service performs the token exchange declaratively,
-  // a generated runtime does it in code, but the spec shape is the same one.
-  const gatewayToolRefs = () =>
-    selectedGateway.map((n) => {
-      const server = gatewayTargets.find((item) => item.name === n);
-      const config =
-        server?.record_id && server.gateway_id
-          ? { record_id: server.record_id, gateway_id: server.gateway_id }
-          : storedGatewayConfig[n];
-      return { type: "gateway", name: n, ...(config ? { config } : {}) };
-    });
-
-  // the reasoning effort the ordinary harness form would send (null ⇒ omitted)
-  const ordinaryEffort = effectiveEffort({
-    model_id: modelId,
-    model_source: modelSource,
-    reasoning_effort: reasoningEffort,
-  });
-
-  const byocEnv = () =>
-    Object.fromEntries(
-      byocEnvRows
-        .map((row) => [row.key.trim(), row.value] as const)
-        .filter(([k]) => k.length > 0),
-    );
-
-  const byocModelList = () => byocModels.map((m) => m.trim()).filter(Boolean);
-
-  const buildByocSpec = (): AgentSpecInput => ({
-    name,
-    method: "byoc",
-    // the execution role scopes bedrock:InvokeModel to exactly the allowed-models
-    // list; entry [0] is the primary the backend injects as env MODEL_ID (the whole
-    // list goes in as ALLOWED_MODEL_IDS; user env rows win for both)
-    model_id: byocModelList()[0],
-    model_source: modelSource,
-    // spec.system_prompt is optional for byoc; the field doubles as a description
-    system_prompt: byocDescription,
-    memory: { short_term: true, long_term: false },
-    ...(Object.keys(byocEnv()).length ? { env: byocEnv() } : {}),
-    byoc: {
-      artifact_kind: byocKind,
-      ...(byocKind === "container_image"
-        ? { image_uri: byocImageUri.trim() }
-        : { upload_id: byocUpload?.upload_id ?? "" }),
-      ...(byocKind === "code_zip"
-        ? {
-            entrypoint: byocEntrypoint.trim() || "main.py",
-            python_version: byocPython,
-            install_requirements: byocInstallReqs,
-          }
-        : {}),
-      invoke_contract: byocRawContract ? "raw" : "launchpad_prompt",
-      allowed_models: byocModelList(),
-    },
-  });
-
-  const buildOrdinarySpec = () => ({
-    name,
+  // The shared form model (lib/agent-spec.ts) builds the spec the V2 wizard posts too.
+  const agentForm = (): AgentForm => ({
     method,
-    model_id: modelId.trim(), // a pasted custom id may carry stray whitespace
-    model_source: modelSource,
-    // container only — the other methods have no SDK choice to express
-    ...(method === "container" ? { agent_sdk: agentSdk } : {}),
-    // harness-only inference knobs: sent only when set (and, for the effort, only
-    // for a model/source pairing the backend accepts) — never for the other methods,
-    // whose schema refuses them
-    ...(method === "harness" && intOrNull(maxTokens)
-      ? { max_tokens: intOrNull(maxTokens) as number }
-      : {}),
-    ...(method === "harness" && ordinaryEffort ? { reasoning_effort: ordinaryEffort } : {}),
-    // loop bounds round-trip as stored (the form starts on the backend defaults)
-    ...(intOrNull(maxIterations) ? { max_iterations: intOrNull(maxIterations) as number } : {}),
-    ...(intOrNull(timeoutSeconds) ? { timeout_seconds: intOrNull(timeoutSeconds) as number } : {}),
-    system_prompt: systemPrompt,
-    tools:
-      method === "harness"
-        ? [
-            ...tools.map((n) => ({ type: "builtin", name: n })),
-            ...gatewayToolRefs(),
-            ...selectedMcp.flatMap((n) => {
-              const server = remoteMcp.find((m) => m.name === n);
-              return server ? [{ type: "mcp", name: n, config: { url: server.url } }] : [];
-            }),
-          ]
-        : method === "container"
-          ? selectedMcp.flatMap((n) => {
-              const server = remoteMcp.find((m) => m.name === n);
-              return server ? [{ type: "mcp", name: n, config: { url: server.url } }] : [];
-            })
-          : // An HTTP zip runtime calls the shared Gateway from generated client
-            // code; the A2A template carries no MCP client.
-            method === "zip_runtime" && protocol === "http"
-            ? gatewayToolRefs()
-            : [],
-    memory: {
-      short_term: true,
-      long_term: longTerm,
-      ...(memoryId ? { memory_id: memoryId } : {}),
-    },
-    ...(method === "zip_runtime"
-      ? {
-          protocol,
-          ...(protocol === "a2a"
-            ? {
-                a2a_skills: (() => {
-                  const rows = a2aSkills.filter((s) => s.name.trim());
-                  const ids = skillIds(rows);
-                  return rows.map((s, i) => ({
-                    id: ids[i],
-                    name: s.name.trim(),
-                    description: s.description.trim(),
-                    tags: s.tags.split(",").map((x) => x.trim()).filter(Boolean),
-                  }));
-                })(),
-              }
-            : {}),
-        }
-      : {}),
-    // zip_runtime only, and never together with A2A — the backend rejects both.
-    ...(method === "zip_runtime" && protocol === "http" && toolkits.length
-      ? { toolkits }
-      : {}),
-    ...(selectedKbs.length ? { knowledge_bases: selectedKbs.map(kbInfo) } : {}),
-    ...((method === "harness" || method === "container" || method === "zip_runtime") &&
-    skills.length
-      ? { skills }
-      : {}),
-    ...(method === "harness" ? { allowed_tools: allowedTools, native_tools: nativeTools } : {}),
-    ...(method === "container" && mcpServers.trim()
-      ? { env: { LAUNCHPAD_MCP_SERVERS: mcpServers.trim() } }
-      : {}),
-    ...(method === "container"
-      ? {
-          filesystem: {
-            session_storage: sessionFs ? { mount_path: sessionMount } : null,
-            s3_files: s3Mounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
-            efs: efsMounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
-          },
-          ...(byoMounts
-            ? { network: { subnets: splitIds(vpcSubnets), security_groups: splitIds(vpcSgs) } }
-            : {}),
-        }
-      : {}),
+    name,
+    modelId,
+    modelSource,
+    agentSdk,
+    systemPrompt,
+    maxTokens,
+    reasoningEffort,
+    maxIterations,
+    timeoutSeconds,
+    tools,
+    toolkits,
+    selectedGateway,
+    selectedMcp,
+    selectedKbs,
+    skills,
+    allowedTools,
+    nativeTools,
+    longTerm,
+    memoryId,
+    mcpServers,
+    sessionFs,
+    sessionMount,
+    s3Mounts,
+    efsMounts,
+    vpcSubnets,
+    vpcSgs,
+    protocol,
+    a2aSkills,
+    byocKind,
+    byocUploadId: byocUpload?.upload_id ?? null,
+    byocImageUri,
+    byocEntrypoint,
+    byocPython,
+    byocInstallReqs,
+    byocRawContract,
+    byocModels,
+    byocEnvRows,
+    byocDescription,
   });
+  const specCatalogs: AgentFormCatalogs = { gatewayTargets, remoteMcp, storedGatewayConfig, kbInfo };
 
-  const buildSpec = (): AgentSpecInput =>
-    method === "byoc" ? buildByocSpec() : (buildOrdinarySpec() as AgentSpecInput);
+  const buildSpec = (): AgentSpecInput => buildAgentSpec(agentForm(), specCatalogs);
 
   /* ── system-preset edit: the same page, a different save ─────────────── */
 
@@ -1921,10 +1689,7 @@ const deployLock = !canDeploy
       if (!alive.current) return;
       byocLastFile.current = file;
       setByocUpload(info);
-      const candidates = info.detected.entrypoint_candidates;
-      if (candidates.length && !candidates.includes(byocEntrypoint)) {
-        setByocEntrypoint(candidates[0]);
-      }
+      setByocEntrypoint(entrypointAfterUpload(info.detected.entrypoint_candidates, byocEntrypoint));
     } catch (err) {
       if (alive.current) toast(apiMsg(err));
     } finally {
@@ -1981,42 +1746,9 @@ const deployLock = !canDeploy
     }
   };
 
-  /* ── filesystem validation (container) ────────────────────────────────── */
+  /* ── configure-step gate (per-method rules in lib/agent-spec.ts) ─────── */
 
-  const fsPaths = [
-    ...(sessionFs ? [sessionMount] : []),
-    ...s3Mounts.map((m) => m.path),
-    ...efsMounts.map((m) => m.path),
-  ];
-  const fsValid =
-    method !== "container" ||
-    ((!sessionFs || MOUNT_RE.test(sessionMount)) &&
-      [...s3Mounts, ...efsMounts].every((m) => m.arn.trim().length > 0 && MOUNT_RE.test(m.path)) &&
-      new Set(fsPaths).size === fsPaths.length &&
-      (!byoMounts || (splitIds(vpcSubnets).length > 0 && splitIds(vpcSgs).length > 0)));
-
-  const gatewaySelectionsValid = selectedGateway.every((name) => {
-    const live = gatewayTargets.find((gateway) => gateway.name === name);
-    if (live) return live.attachable;
-    return storedGatewayConfig[name] == null;
-  });
-  const byocValid =
-    method !== "byoc" ||
-    (byocModels.some((m) => m.trim().length > 0) &&
-      (byocKind === "container_image"
-        ? /\.dkr\.ecr\./.test(byocImageUri.trim())
-        : byocUpload != null &&
-          (byocKind !== "code_zip" || byocEntrypoint.trim().endsWith(".py"))));
-  const configValid =
-    method === "byoc"
-      ? /^[a-z][a-z0-9-]{2,47}$/.test(name) && byocValid && !byocUploading
-      : /^[a-z][a-z0-9-]{2,47}$/.test(name) &&
-        systemPrompt.trim().length > 0 &&
-        // catalog picks are always non-empty; guards a cleared "Custom model ID…" input
-        modelId.trim().length > 0 &&
-        knobIssues.length === 0 &&
-        fsValid &&
-        gatewaySelectionsValid;
+  const configValid = agentFormValid(agentForm(), specCatalogs, { knobIssues, byocUploading });
 
   return (
     <section>

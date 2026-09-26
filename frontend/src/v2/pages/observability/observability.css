@@ -1,0 +1,117 @@
+/* 可观测 (Observability) — module styles, scoped under .v2 */
+
+.v2 .v2-observability-charts .v2-card { margin-bottom: 0; }
+.v2 .v2-observability-charts { margin-bottom: 16px; }
+.v2 .v2-observability-empty { padding: 36px 0; text-align: center; color: var(--v2-ink-3); font-size: 13px; }
+.v2 .v2-observability-note { margin-top: 8px; color: var(--v2-ink-3); font-size: 12px; }
+.v2 .v2-observability-unit { font-size: 16px; font-weight: 500; color: var(--v2-ink-3); }
+
+/* traffic bars */
+.v2 .v2-observability-bars { display: flex; align-items: flex-end; gap: 3px; height: 150px; border-bottom: 1px solid var(--v2-line); }
+.v2 .v2-observability-bars .b {
+  flex: 1; min-width: 2px; background: var(--v2-primary); opacity: 0.85; border-radius: 3px 3px 0 0;
+  position: relative; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden;
+}
+.v2 .v2-observability-bars .b:hover { opacity: 1; }
+.v2 .v2-observability-bars .e { background: var(--v2-danger); width: 100%; }
+.v2 .v2-observability-axis { display: flex; justify-content: space-between; color: var(--v2-ink-3); font-size: 12px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+
+/* latency line */
+.v2 .v2-observability-line { width: 100%; height: 150px; display: block; }
+.v2 .v2-observability-line .axis { stroke: var(--v2-line); }
+.v2 .v2-observability-line .grid { stroke: var(--v2-line-2); stroke-dasharray: 4 4; }
+
+.v2 .v2-observability-legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; font-size: 12.5px; color: var(--v2-ink-2); }
+.v2 .v2-observability-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.v2 .v2-observability-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+/* horizontal bars (tokens by model, top tools) */
+.v2 .v2-observability-hbar { margin-bottom: 12px; }
+.v2 .v2-observability-hbar .l { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; margin-bottom: 4px; }
+.v2 .v2-observability-hbar .l span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--v2-mono); font-size: 12.5px; }
+.v2 .v2-observability-hbar .l b { font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.v2 .v2-observability-hbar .track { display: flex; height: 8px; background: var(--v2-fill-2); border-radius: 4px; overflow: hidden; }
+.v2 .v2-observability-hbar .seg { height: 100%; }
+
+/* ids with a copy affordance */
+.v2 .v2-observability-idcell { display: inline-flex; align-items: center; gap: 6px; min-width: 0; word-break: break-all; }
+.v2 .v2-observability-copy {
+  border: 0; background: none; padding: 2px; cursor: pointer; color: var(--v2-ink-3); display: inline-grid; border-radius: 4px; flex: none;
+}
+.v2 .v2-observability-copy:hover { color: var(--v2-primary); background: var(--v2-primary-soft); }
+
+/* detail: main column + sticky side column */
+.v2 .v2-observability-trace { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+.v2 .v2-observability-side { position: sticky; top: 72px; min-width: 0; }
+.v2 .v2-observability-side .v2-card { max-height: calc(100vh - 96px); overflow-y: auto; }
+
+/* span categories */
+.v2 .v2-observability-dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex: none; background: #c9cdd4; }
+.v2 .v2-observability-dot.llm, .v2 .v2-observability-wf .bar.llm { background: #1664ff; }
+.v2 .v2-observability-dot.tool, .v2 .v2-observability-wf .bar.tool { background: #ff7d00; }
+.v2 .v2-observability-dot.memory, .v2 .v2-observability-wf .bar.memory { background: #00b42a; }
+.v2 .v2-observability-dot.gateway, .v2 .v2-observability-wf .bar.gateway { background: #722ed1; }
+.v2 .v2-observability-dot.http, .v2 .v2-observability-wf .bar.http { background: #86909c; }
+.v2 .v2-observability-dot.agent, .v2 .v2-observability-wf .bar.agent { background: #14c9c9; }
+.v2 .v2-observability-cat { font-size: 12px; border-radius: 4px; padding: 1px 8px; background: var(--v2-fill-2); color: var(--v2-ink-2); }
+.v2 .v2-observability-cat.llm { background: var(--v2-primary-soft); color: var(--v2-primary); }
+.v2 .v2-observability-cat.tool { background: var(--v2-warning-soft); color: #d25f00; }
+.v2 .v2-observability-cat.memory { background: var(--v2-success-soft); color: #009a29; }
+.v2 .v2-observability-cat.gateway { background: #f5e8ff; color: #722ed1; }
+
+/* waterfall */
+.v2 .v2-observability-wf { display: grid; grid-template-columns: minmax(180px, 2fr) minmax(160px, 3fr) 72px; font-size: 13px; }
+.v2 .v2-observability-wf .h { background: var(--v2-fill); color: var(--v2-ink-2); font-weight: 500; padding: 8px 12px; border-bottom: 1px solid var(--v2-line); }
+.v2 .v2-observability-wf .h.right { text-align: right; }
+.v2 .v2-observability-wf .r { display: contents; cursor: pointer; }
+.v2 .v2-observability-wf .r > span { padding: 7px 12px; border-bottom: 1px solid var(--v2-line-2); min-width: 0; }
+.v2 .v2-observability-wf .r:hover > span { background: #fafbfc; }
+.v2 .v2-observability-wf .r.on > span { background: var(--v2-primary-soft); }
+.v2 .v2-observability-wf .nm { display: flex; align-items: center; gap: 6px; }
+.v2 .v2-observability-wf .nm .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.v2 .v2-observability-wf .lane { display: flex; align-items: center; }
+.v2 .v2-observability-wf .track { position: relative; display: block; width: 100%; height: 10px; background: var(--v2-fill); border-radius: 3px; }
+.v2 .v2-observability-wf .bar { position: absolute; top: 0; bottom: 0; border-radius: 3px; min-width: 2px; background: #c9cdd4; }
+.v2 .v2-observability-wf .dur { text-align: right; color: var(--v2-ink-3); font-variant-numeric: tabular-nums; }
+
+/* span messages */
+.v2 .v2-observability-msgs { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }
+.v2 .v2-observability-msg { border: 1px solid var(--v2-line); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+.v2 .v2-observability-msg .role { font-size: 12px; font-weight: 600; color: var(--v2-ink-2); margin-bottom: 4px; text-transform: lowercase; }
+.v2 .v2-observability-msg .text { white-space: pre-wrap; word-break: break-word; }
+.v2 .v2-observability-msg .tool { font-family: var(--v2-mono); font-size: 12px; color: #d25f00; white-space: pre-wrap; word-break: break-all; margin: 2px 0; }
+
+/* session: trace cards, transcript, online configs */
+.v2 .v2-observability-tracecard {
+  text-align: left; border: 1px solid var(--v2-line); border-radius: var(--v2-radius); background: #fff; padding: 10px 12px; cursor: pointer;
+  display: flex; flex-direction: column; gap: 4px; font-family: inherit; color: var(--v2-ink); transition: all 0.15s;
+}
+.v2 .v2-observability-tracecard:hover { border-color: var(--v2-primary-line); box-shadow: var(--v2-shadow); }
+.v2 .v2-observability-tracecard .h { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.v2 .v2-observability-tracecard .h .op { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.v2 .v2-observability-tracecard .m { font-size: 12px; color: var(--v2-ink-3); font-variant-numeric: tabular-nums; }
+.v2 .v2-turn .who { width: 88px; overflow: hidden; text-overflow: ellipsis; }
+.v2 .v2-observability-clock { display: block; font-size: 11px; color: var(--v2-ink-4); font-variant-numeric: tabular-nums; }
+.v2 .v2-observability-md { white-space: normal; }
+/* the shared markdown renderer reads the classic theme tokens — re-point them at the V2 palette */
+.v2 .v2-observability-md .md {
+  --ink: var(--v2-ink); --ink-2: var(--v2-ink-2); --ink-3: var(--v2-ink-3); --amber: var(--v2-ink); --s1: var(--v2-primary);
+  --line: var(--v2-line); --grid: var(--v2-line); --code-bg: var(--v2-fill-2); --panel-2: var(--v2-fill);
+  font-size: 13.5px;
+}
+.v2 .v2-observability-md .md > :first-child { margin-top: 0; }
+.v2 .v2-observability-md .md > :last-child { margin-bottom: 0; }
+.v2 .v2-observability-md .md th { text-transform: none; letter-spacing: 0; font-family: inherit; font-size: 12.5px; }
+.v2 .v2-observability-config { margin-bottom: 16px; }
+.v2 .v2-observability-config > .v2-row { margin-bottom: 8px; }
+.v2 .v2-observability-expl {
+  border: 0; background: none; padding: 0; text-align: left; font: inherit; font-size: 13px; color: var(--v2-ink); cursor: pointer;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 460px; word-break: break-word;
+}
+.v2 .v2-observability-expl.open { display: block; white-space: pre-wrap; max-width: none; }
+
+@media (max-width: 1100px) {
+  .v2 .v2-observability-trace { grid-template-columns: 1fr; }
+  .v2 .v2-observability-side { position: static; }
+  .v2 .v2-observability-side .v2-card { max-height: none; }
+}

@@ -14,6 +14,7 @@ import type {
   LiveAgentCard,
   RegistryRecordSystem,
 } from "../lib/api";
+import { descriptorExcerpt, parseAgentCard, parseSkillDefinition } from "../lib/registry";
 import { A2ADemoView } from "./registry/A2ADemoView";
 import { EditView } from "./registry/EditView";
 import { RegisterView } from "./registry/RegisterView";
@@ -33,43 +34,6 @@ export interface RegistryRecord {
    *  a system preset's Skill. Content edits are refused server-side for everyone,
    *  lifecycle actions for members — the UI mirrors that, the backend enforces it. */
   system?: RegistryRecordSystem | null;
-}
-
-interface SkillSourceMeta {
-  kind: string;
-  url?: string;
-  ref?: string;
-  /** Full commit SHA the files came from; absent on pre-pinning records. */
-  commit?: string;
-  subdir?: string;
-  imported_at?: string;
-}
-
-/** Parse the AGENT_SKILLS skillDefinition JSON; returns file list + source when present.
- *  Twin copy in registry/EditView.tsx — keep both in sync if the shape changes. */
-function parseSkillDefinition(
-  record: RegistryRecord,
-): { files: string[]; source: SkillSourceMeta | null } | null {
-  if (record.type !== "AGENT_SKILLS") return null;
-  const skills = record.descriptors?.agentSkills as
-    | { skillDefinition?: { inlineContent?: string } }
-    | undefined;
-  const raw = skills?.skillDefinition?.inlineContent;
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as { files?: unknown; source?: unknown };
-    const files = Array.isArray(parsed.files)
-      ? parsed.files.filter((f): f is string => typeof f === "string")
-      : [];
-    const source =
-      parsed.source && typeof parsed.source === "object"
-        ? (parsed.source as SkillSourceMeta)
-        : null;
-    if (files.length === 0 && !source) return null;
-    return { files, source };
-  } catch {
-    return null;
-  }
 }
 
 const SOURCE_CHIP_TONE: Record<string, ChipTone> = {
@@ -92,51 +56,6 @@ const STATUS_CHIP: Record<string, { tone: ChipTone; icon: string; labelKey: stri
   REJECTED: { tone: "crit", icon: "✕", labelKey: "registry.states.rejected" },
   DEPRECATED: { tone: "muted", icon: "✕", labelKey: "registry.states.disabled" },
 };
-
-// Parsed A2A AgentCard from the record descriptor — the drawer renders it as
-// a first-class panel (transport, endpoint, skills) instead of raw JSON only.
-interface AgentCardData {
-  url?: string;
-  description?: string;
-  version?: string;
-  skills?: { id?: string; name?: string; description?: string; tags?: string[] }[];
-  capabilities?: { streaming?: boolean };
-  metadata?: Record<string, string>;
-}
-
-function parseAgentCard(record: RegistryRecord): AgentCardData | null {
-  if (record.type !== "A2A") return null;
-  const a2a = record.descriptors?.a2a as
-    | { agentCard?: { inlineContent?: string } }
-    | undefined;
-  const raw = a2a?.agentCard?.inlineContent;
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as AgentCardData;
-  } catch {
-    return null;
-  }
-}
-
-function descriptorExcerpt(record: RegistryRecord): string {
-  const d = record.descriptors ?? {};
-  try {
-    const raw = JSON.stringify(d);
-    const parsed = JSON.parse(raw, (key, value) => {
-      if (key === "inlineContent" && typeof value === "string") {
-        try {
-          return JSON.parse(value);
-        } catch {
-          return value.length > 400 ? value.slice(0, 400) + "…" : value;
-        }
-      }
-      return value;
-    });
-    return JSON.stringify(parsed, null, 2).slice(0, 1800);
-  } catch {
-    return JSON.stringify(d, null, 2).slice(0, 1800);
-  }
-}
 
 export function Registry() {
   const { t } = useTranslation();

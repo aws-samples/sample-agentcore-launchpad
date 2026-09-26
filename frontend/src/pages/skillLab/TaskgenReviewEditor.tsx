@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 
 import { Btn, Chip } from "../../components";
-import type { TaskgenReviewDraft } from "./taskgenReview";
+import type { TaskgenReviewDraft } from "../../lib/skillLabTaskgen";
 
 const str = (value: unknown): string => (typeof value === "string" ? value : "");
 

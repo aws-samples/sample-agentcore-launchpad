@@ -14,6 +14,7 @@ import type {
   ExperimentSummary,
 } from "../lib/api";
 import { api, errorMessage } from "../lib/api";
+import type { DeployedAgent } from "../lib/assistant";
 import type { EvaluationRunInfo } from "../lib/evaluation";
 import { evaluationRunPresentation, RUN_TERMINAL_STATUSES } from "../lib/evaluation";
 
@@ -38,12 +39,7 @@ const AGENT_TONE: Record<string, ChipTone> = {
   failed: "crit",
 };
 
-export interface DeployedAgent {
-  agentId: string | null;
-  agentName: string | null;
-  agentStatus: string | null;
-  jobStatus: string | null;
-}
+export type { DeployedAgent } from "../lib/assistant";
 
 function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};

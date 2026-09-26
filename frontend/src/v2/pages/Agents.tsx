@@ -597,8 +597,9 @@ function AgentDetail({ id }: { id: string }) {
 }
 
 /** Agent management (native V2): list, `?view=detail&id=` and `?view=new` (the
- *  Harness wizard); editing, importing and the other creation methods open the
- *  classic flows inside the V2 shell. */
+ *  creation wizard for Harness / Strands / other SDK / bring-your-own-code, with
+ *  the classic `method=` / `gateway=` / `skill=` prefills); editing, importing and
+ *  the system presets open the classic flows inside the V2 shell. */
 export function V2Agents() {
   const [params] = useSearchParams();
   const id = params.get("id");

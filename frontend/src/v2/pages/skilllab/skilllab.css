@@ -1,0 +1,79 @@
+/* ============ console V2 — Skill Lab module ============ */
+
+/* scroll box around a picker table (skill records) */
+.v2 .v2-skilllab-pick { max-height: 340px; overflow-y: auto; border: 1px solid var(--v2-line); border-radius: var(--v2-radius-sm); }
+.v2 .v2-skilllab-pick .v2-check { align-items: flex-start; }
+.v2 .v2-skilllab-pick .v2-check input { margin-top: 4px; flex: none; }
+.v2 .v2-skilllab-hint { margin: 8px 0 0; font-size: 12.5px; }
+.v2 .v2-skilllab-err { color: var(--v2-danger); font-size: 12.5px; margin-top: 6px; }
+.v2 .v2-skilllab-warn { color: var(--v2-warning); }
+
+/* job log tail */
+.v2 .v2-skilllab-log { max-height: 360px; font-size: 12px; line-height: 1.55; }
+
+/* task rows (task-set editor, taskgen review) */
+.v2 .v2-skilllab-split + .v2-skilllab-split { margin-top: 20px; }
+.v2 .v2-skilllab-split-head {
+  display: flex; align-items: center; gap: 10px; padding-bottom: 8px; margin-bottom: 12px;
+  border-bottom: 1px solid var(--v2-line-2);
+}
+.v2 .v2-skilllab-task {
+  border: 1px solid var(--v2-line); border-radius: var(--v2-radius); padding: 12px 14px; margin-bottom: 12px;
+  background: #fff;
+}
+.v2 .v2-skilllab-task.invalid { border-color: var(--v2-danger); }
+.v2 .v2-skilllab-task.excluded { opacity: 0.55; background: var(--v2-fill); }
+.v2 .v2-skilllab-task-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.v2 .v2-skilllab-task .v2-form { gap: 12px 20px; }
+.v2 .v2-skilllab-asset { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.v2 .v2-skilllab-asset .v2-input { max-width: 320px; }
+
+/* taskgen review save bar */
+.v2 .v2-skilllab-savebar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.v2 .v2-skilllab-savebar .end { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.v2 .v2-skilllab-clamp {
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap;
+}
+
+/* artifact breadcrumb */
+.v2 .v2-skilllab-crumbs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
+.v2 .v2-skilllab-crumbs span { display: inline-flex; align-items: center; gap: 4px; }
+.v2 .v2-skilllab-crumbs .v2-link:disabled { color: var(--v2-ink); cursor: default; }
+
+/* training curve */
+.v2 .v2-skilllab-curve { width: 100%; height: auto; max-height: 240px; display: block; }
+.v2 .v2-skilllab-curve text { font-size: 11px; fill: var(--v2-ink-3); font-family: var(--v2-font); }
+.v2 .v2-skilllab-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 12.5px; color: var(--v2-ink-2); margin-top: 8px; }
+.v2 .v2-skilllab-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.v2 .v2-skilllab-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+/* SEED → BEST diff (shared DiffPanes, tuned for the V2 type scale) */
+.v2 .v2-skilllab-diff .code { background: var(--v2-fill); border-radius: var(--v2-radius-sm); border-color: var(--v2-line) !important; }
+.v2 .v2-skilllab-diff .code,
+.v2 .v2-skilllab-diff .mono { font-size: 12px !important; }
+.v2 .v2-skilllab-diff .code { max-height: 460px !important; }
+
+/* artifact markdown preview */
+.v2 .v2-skilllab-md { font-size: 14px; line-height: 1.7; color: var(--v2-ink); min-width: 0; max-height: 60vh; overflow: auto; }
+.v2 .v2-skilllab-md > :first-child { margin-top: 0; }
+.v2 .v2-skilllab-md h1, .v2 .v2-skilllab-md h2, .v2 .v2-skilllab-md h3, .v2 .v2-skilllab-md h4 { margin: 16px 0 8px; font-weight: 600; line-height: 1.35; }
+.v2 .v2-skilllab-md h1 { font-size: 18px; }
+.v2 .v2-skilllab-md h2 { font-size: 16px; padding-bottom: 4px; border-bottom: 1px solid var(--v2-line-2); }
+.v2 .v2-skilllab-md h3 { font-size: 15px; }
+.v2 .v2-skilllab-md p { margin: 8px 0; }
+.v2 .v2-skilllab-md ul, .v2 .v2-skilllab-md ol { margin: 8px 0; padding-left: 22px; }
+.v2 .v2-skilllab-md code { font-family: var(--v2-mono); font-size: 12.5px; background: var(--v2-fill-2); padding: 1px 5px; border-radius: 3px; }
+.v2 .v2-skilllab-md pre { background: var(--v2-fill); border: 1px solid var(--v2-line); border-radius: 6px; padding: 12px 14px; overflow-x: auto; }
+.v2 .v2-skilllab-md pre code { background: transparent; padding: 0; }
+.v2 .v2-skilllab-md blockquote { margin: 8px 0; padding: 2px 12px; border-left: 3px solid var(--v2-primary-line); color: var(--v2-ink-2); }
+.v2 .v2-skilllab-md table { border-collapse: collapse; margin: 10px 0; font-size: 13px; display: block; overflow-x: auto; max-width: 100%; }
+.v2 .v2-skilllab-md th, .v2 .v2-skilllab-md td { border: 1px solid var(--v2-line); padding: 6px 10px; text-align: left; }
+.v2 .v2-skilllab-md th { background: var(--v2-fill); font-weight: 600; font-family: var(--v2-font); font-size: 13px; letter-spacing: 0; text-transform: none; color: var(--v2-ink); }
+.v2 .v2-skilllab-md .blocked { text-decoration: line-through dotted; }
+.v2 .v2-skilllab-md .v2-link { padding: 0; text-decoration: underline; text-underline-offset: 2px; }
+.v2 .v2-skilllab-md .hljs-comment, .v2 .v2-skilllab-md .hljs-quote { color: var(--v2-ink-3); font-style: italic; }
+.v2 .v2-skilllab-md .hljs-keyword, .v2 .v2-skilllab-md .hljs-literal { color: #722ed1; }
+.v2 .v2-skilllab-md .hljs-string { color: #00a870; }
+.v2 .v2-skilllab-md .hljs-number, .v2 .v2-skilllab-md .hljs-attr { color: #d25f00; }
+.v2 .v2-skilllab-md .hljs-title, .v2 .v2-skilllab-md .hljs-built_in { color: var(--v2-primary); }
+.v2 .v2-skilllab-review { max-height: 640px; overflow-y: auto; padding-right: 4px; }

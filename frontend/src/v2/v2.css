@@ -175,6 +175,7 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-link:hover:not(:disabled) { color: var(--v2-primary-hover); }
 .v2-link:disabled { color: var(--v2-ink-4); cursor: not-allowed; }
 .v2-link.danger { color: var(--v2-danger); }
+.v2-link.danger:disabled { color: var(--v2-ink-4); }
 .v2-actions { display: flex; gap: 16px; justify-content: flex-end; }
 
 /* ---------- form controls ---------- */

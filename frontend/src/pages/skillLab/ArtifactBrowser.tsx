@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Btn, Chip } from "../../components";
 import type { SkillLabArtifactListing } from "../../lib/api";
 import { api, ApiError } from "../../lib/api";
-import { parentDir } from "./artifactLinks";
+import { parentDir } from "../../lib/skillLabArtifacts";
 import { ArtifactMarkdown } from "./ArtifactMarkdown";
 
 type DirListing = Extract<SkillLabArtifactListing, { kind: "dir" }>;

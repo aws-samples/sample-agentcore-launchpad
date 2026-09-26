@@ -49,8 +49,8 @@ marker. `tools`/`tool_choice`/`return_message` raise `NotImplementedError`
 
 Upstream copied host `claude`/`codex` binaries into the image. This variant
 installs pinned CLIs inside the image (reproducible, host-independent): claude
-via the official installer (`ARG CLAUDE_CLI_VERSION=2.1.234`) and codex via the
-official standalone GitHub release binary (`ARG CODEX_CLI_VERSION=0.147.0`,
+via the official installer (`ARG CLAUDE_CLI_VERSION=2.1.283`) and codex via the
+official standalone GitHub release binary (`ARG CODEX_CLI_VERSION=0.155.1`,
 asset `codex-aarch64-unknown-linux-musl.tar.gz`). The image is built by
 Launchpad's CodeBuild ARM64 pipeline from a context assembled in
 `backend/app/skill_lab/worker_build.py` (upstream's `build_and_push.sh` and
@@ -58,7 +58,7 @@ Launchpad's CodeBuild ARM64 pipeline from a context assembled in
 
 `codex-home/` is staged by the assembler, not committed wholesale:
 `deploy/agentcore/codex-config.toml` (this tree, Launchpad variant — same
-amazon-bedrock provider + `openai.gpt-5.6-sol` default as upstream's) plus
+`amazon-bedrock-runtime` provider with a `global.openai.gpt-6-sol` default — upstream uses the Mantle `amazon-bedrock` provider with `openai.gpt-5.6-sol`; the runtime provider needs codex >= 0.155) plus
 `model-catalogs/bedrock-models.json` read from the backend host's
 `~/.codex/model-catalogs/` at context-assembly time, with upstream's `{}`
 fallback when absent. The catalog is deliberately never committed: it embeds
@@ -95,7 +95,7 @@ interpreter instead of requiring the provisioned venv.
 also pins the judge client to codex's default `openai` provider (needs
 `OPENAI_API_KEY`). The patch copies top-level files from the directory named
 by `SKILLOPT_JUDGE_CODEX_HOME` (when set) into the fresh home before launch,
-so a Bedrock-only deployment can seed `config.toml` (amazon-bedrock provider,
+so a Bedrock-only deployment can seed `config.toml` (amazon-bedrock-runtime provider,
 us-east-1, web_search disabled, multi_agent_v2 off) plus the model catalog.
 Isolation is otherwise unchanged; the env var unset = upstream behavior. The
 seed is materialized per job submit by the launchpad runner

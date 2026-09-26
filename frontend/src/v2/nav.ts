@@ -57,7 +57,7 @@ export const V2_NAV: V2NavGroup[] = [
     key: "build",
     labelKey: "v2.nav.groupBuild",
     items: [
-      { to: "/create/assistant", labelKey: "nav.assistant", icon: Sparkles },
+      { to: "/v2/assistant", labelKey: "nav.assistant", icon: Sparkles, v2: true, also: ["/create/assistant"] },
       {
         to: "/v2/agents",
         labelKey: "nav.createAgent",
@@ -65,19 +65,19 @@ export const V2_NAV: V2NavGroup[] = [
         v2: true,
         also: ["/agents", "/create/studio"],
       },
-      { to: "/registry", labelKey: "nav.registry", icon: SquareStack },
-      { to: "/knowledge-bases", labelKey: "nav.knowledgeBases", icon: LibraryBig },
-      { to: "/skill-lab", labelKey: "nav.skillLab", icon: BrainCircuit },
+      { to: "/v2/registry", labelKey: "nav.registry", icon: SquareStack, v2: true },
+      { to: "/v2/knowledge-bases", labelKey: "nav.knowledgeBases", icon: LibraryBig, v2: true },
+      { to: "/v2/skill-lab", labelKey: "nav.skillLab", icon: BrainCircuit, v2: true },
     ],
   },
   {
     key: "run",
     labelKey: "v2.nav.groupRun",
     items: [
-      { to: "/chat", labelKey: "nav.chat", icon: MessagesSquare },
-      { to: "/observability", labelKey: "nav.observability", icon: Gauge },
-      { to: "/memory", labelKey: "nav.memory", icon: Layers },
-      { to: "/governance", labelKey: "nav.governance", icon: ShieldCheck },
+      { to: "/v2/chat", labelKey: "nav.chat", icon: MessagesSquare, v2: true },
+      { to: "/v2/observability", labelKey: "nav.observability", icon: Gauge, v2: true },
+      { to: "/v2/memory", labelKey: "nav.memory", icon: Layers, v2: true },
+      { to: "/v2/governance", labelKey: "nav.governance", icon: ShieldCheck, v2: true },
     ],
   },
   {

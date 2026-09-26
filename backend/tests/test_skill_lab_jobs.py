@@ -281,7 +281,8 @@ def test_judge_codex_home_seed(lab, tmp_path, monkeypatch):
     )
     seed = runner.ensure_judge_codex_home()
     config_text = (seed / "config.toml").read_text()
-    assert 'model_provider = "amazon-bedrock"' in config_text
+    assert 'model_provider = "amazon-bedrock-runtime"' in config_text
+    assert "[model_providers.amazon-bedrock-runtime.aws]" in config_text
     assert 'web_search = "disabled"' in config_text
     assert 'region = "us-east-1"' in config_text
     assert "[features.multi_agent_v2]" in config_text
@@ -294,30 +295,30 @@ def test_judge_codex_home_seed(lab, tmp_path, monkeypatch):
 
 
 def test_judge_exec_route_by_family(lab, tmp_path):
-    """An openai-family judge model (the default: us.openai.gpt-5.6-sol) runs
-    the agentic judge on the host codex CLI with the Converse profile prefix
-    stripped — codex resolves bare catalog slugs; the chat judge keeps the
-    profile id as-is. Anthropic judges keep the claude CLI unchanged."""
-    assert runner.judge_exec_route("us.openai.gpt-5.6-sol") == (
-        "codex_exec", "openai.gpt-5.6-sol",
+    """An openai-family judge model (the default: us.openai.gpt-6-sol) runs
+    the agentic judge on the host codex CLI with the SAME profile id — codex's
+    amazon-bedrock-runtime provider rejects bare ids for on-demand throughput.
+    Anthropic judges keep the claude CLI unchanged."""
+    assert runner.judge_exec_route("us.openai.gpt-6-sol") == (
+        "codex_exec", "us.openai.gpt-6-sol",
     )
-    assert runner.judge_exec_route("openai.gpt-5.6-sol") == (
-        "codex_exec", "openai.gpt-5.6-sol",
+    assert runner.judge_exec_route("global.openai.gpt-6-sol") == (
+        "codex_exec", "global.openai.gpt-6-sol",
     )
     assert runner.judge_exec_route("global.anthropic.claude-opus-5") == (
         "claude_code_exec", "global.anthropic.claude-opus-5",
     )
 
-    params = runner.clamp_params({"judge_model": "us.openai.gpt-5.6-sol"})
+    params = runner.clamp_params({"judge_model": "us.openai.gpt-6-sol"})
     text = " ".join(
         runner.build_eval_command(
             skill_dir=tmp_path / "s", tasks_file=tmp_path / "t.json",
             out_dir=tmp_path / "o", params=params,
         )
     )
-    assert "--optimizer_model us.openai.gpt-5.6-sol" in text
+    assert "--optimizer_model us.openai.gpt-6-sol" in text
     assert "--judge_exec_backend codex_exec" in text
-    assert "--judge_exec_model openai.gpt-5.6-sol" in text
+    assert "--judge_exec_model us.openai.gpt-6-sol" in text
 
     import yaml
 
@@ -326,13 +327,13 @@ def test_judge_exec_route_by_family(lab, tmp_path):
         split_env={"split_mode": "ratio", "data_path": "x", "split_ratio": "4:3:3"},
         eval_test=True,
         out_config=tmp_path / "cfg-gpt.yaml",
-        params=runner.clamp_train_params({"judge_model": "us.openai.gpt-5.6-sol"}),
+        params=runner.clamp_train_params({"judge_model": "us.openai.gpt-6-sol"}),
     )
     env = yaml.safe_load(cfg.read_text())["env"]
     assert env["judge_backend"] == "codex_exec"
-    assert env["judge_model"] == "openai.gpt-5.6-sol"
+    assert env["judge_model"] == "us.openai.gpt-6-sol"
     config = yaml.safe_load(cfg.read_text())
-    assert config["model"]["optimizer"] == "us.openai.gpt-5.6-sol"
+    assert config["model"]["optimizer"] == "us.openai.gpt-6-sol"
 
 
 def test_env_is_allowlisted(lab, monkeypatch):

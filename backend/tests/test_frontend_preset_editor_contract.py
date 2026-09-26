@@ -21,6 +21,7 @@ FRONTEND = ROOT / "frontend" / "src"
 PANEL = FRONTEND / "pages" / "create" / "SystemPresetsPanel.tsx"
 WIZARD = FRONTEND / "pages" / "CreateAgent.tsx"
 HELPERS = FRONTEND / "pages" / "create" / "presetSettings.ts"
+SPEC = FRONTEND / "lib" / "agent-spec.ts"
 DIALOG = FRONTEND / "pages" / "create" / "PresetSettingsDialog.tsx"
 MOCK = ROOT / "backend" / "scripts" / "ui_system_preset_settings_mock.py"
 
@@ -112,8 +113,11 @@ def test_partial_edit_helper_matches_backend_contract() -> None:
     assert "DEFAULT_MAX_ITERATIONS = 10" in helpers
     defaults = _src(FRONTEND / "lib" / "agent-defaults.ts")
     assert "DEFAULT_TIMEOUT_SECONDS = 180" in defaults
-    for page in (WIZARD, FRONTEND / "pages" / "CreateAgentAssistant.tsx"):
-        assert 'import { DEFAULT_TIMEOUT_SECONDS } from "../lib/agent-defaults";' in _src(page)
+    assert 'import { DEFAULT_TIMEOUT_SECONDS } from "../lib/agent-defaults";' in _src(WIZARD)
+    # the assistant's proposal → spec mapping (shared by both consoles) lives in lib/
+    assert 'import { DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";' in _src(
+        FRONTEND / "lib" / "assistant.ts"
+    )
     from app.schemas.agent import MAX_TOKENS_CEILING, AgentSpec
 
     assert MAX_TOKENS_CEILING == 131072
@@ -129,9 +133,13 @@ def test_shared_form_carries_the_harness_knobs_for_ordinary_edits() -> None:
     # loaded exactly as stored (startEdit) …
     assert 'setMaxTokens(spec.max_tokens == null ? "" : String(spec.max_tokens))' in wizard
     assert "setReasoningEffort(spec.reasoning_effort ?? EFFORT_NONE)" in wizard
-    # … and sent back for the harness only (the other methods' schema refuses them)
-    assert 'method === "harness" && intOrNull(maxTokens)' in wizard
-    assert 'method === "harness" && ordinaryEffort' in wizard
+    # … and sent back for the harness only (the other methods' schema refuses them):
+    # the spec builder is the form model both consoles share, and the wizard uses it
+    spec = _src(SPEC)
+    assert 'method === "harness" && intOrNull(maxTokens)' in spec
+    assert 'method === "harness" && ordinaryEffort' in spec
+    assert "buildAgentSpec(agentForm(), specCatalogs)" in wizard
+    assert "maxTokens," in wizard[wizard.index("const agentForm = (): AgentForm => ({") :]
 
 
 def test_i18n_has_no_orphaned_card_strings() -> None:
