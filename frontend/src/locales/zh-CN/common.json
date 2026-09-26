@@ -123,7 +123,10 @@
     "all": "全部",
     "versionLabel": "录制界面版本",
     "versionAll": "全部版本",
-    "version": {"v2": "V2 版", "classic": "经典版"},
+    "version": {
+      "v2": "V2 版",
+      "classic": "经典版"
+    },
     "categories": "视频分类",
     "series": "本系列",
     "episodeChapters": "本集章节",
@@ -202,9 +205,18 @@
     "deleteDone": "视频已删除。",
     "reload": "重新加载已保存版本",
     "confirm": {
-      "publish": {"title": "发布视频", "body": "将“{{title}}”已保存的版本发布到所有用户的视频库？"},
-      "unpublish": {"title": "撤回视频", "body": "从公开的视频库撤回“{{title}}”？草稿仍会保留。"},
-      "delete": {"title": "删除视频", "body": "删除“{{title}}”及其草稿？CDN 媒体文件不会删除。"}
+      "publish": {
+        "title": "发布视频",
+        "body": "将“{{title}}”已保存的版本发布到所有用户的视频库？"
+      },
+      "unpublish": {
+        "title": "撤回视频",
+        "body": "从公开的视频库撤回“{{title}}”？草稿仍会保留。"
+      },
+      "delete": {
+        "title": "删除视频",
+        "body": "删除“{{title}}”及其草稿？CDN 媒体文件不会删除。"
+      }
     }
   },
   "notFound": {
@@ -2324,7 +2336,8 @@
     "dataset.nothing_extracted": "所选会话都没有可转换为用例的对话记录。",
     "dataset.kind_unsupported": "模拟用户数据集不能接收观测到的轨迹。",
     "pipeline.running": "该 Pipeline 正在运行中。",
-    "pipeline.not_found": "Pipeline 不存在。"
+    "pipeline.not_found": "Pipeline 不存在。",
+    "agent.converted_locked": "转换来的 Agent 的系统提示词和模型已写入导出的代码，重新部署时不能修改。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",
@@ -5395,9 +5408,13 @@
         "redeploy": "保存并重新部署",
         "redeployStarted": "正在重新部署 {{name}}",
         "editNote": "保存后会以新版本重新部署到同一个 AgentCore 资源。名称和创建方式不可修改。",
-        "convertedNote": "该 Agent 由 Harness 转换而来，运行的是导出的代码。重新部署时会原样保留导出的代码包。",
+        "convertedNote": "该 Agent 由 Harness 转换而来，运行的是导出的代码。系统提示词和模型已写入这份代码，因此这里只读；如需调整提示词，请通过实验的配置包进行。重新部署时会原样保留导出的代码包。",
         "nameLocked": "名称创建后不可修改。",
-        "editUnsupported": "该 Agent 不支持在此编辑。"
+        "editUnsupported": "该 Agent 不支持在此编辑。",
+        "convertedPromptLocked": "已写入导出的代码，转换来的 Agent 在此只读。",
+        "convertedModelLocked": "导出的代码直接调用该模型，转换来的 Agent 在此只读。",
+        "memoryOff": "关闭",
+        "memoryLongOnly": "仅长期"
       }
     },
     "data": {

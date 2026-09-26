@@ -191,6 +191,29 @@ def test_redeploy_rejects_name_or_method_change(client):
         assert res.json()["code"] == "agent.redeploy_immutable"
 
 
+CONVERTED_SPEC = {
+    **SPEC,
+    "method": "zip_runtime",
+    "code_bundle": {"main.py": "print('exported')\n"},
+    "source_harness": {"agent_id": "src", "harness_arn": "arn:aws:bedrock-agentcore:x:1:harness/h"},
+}
+
+
+def test_redeploy_of_a_converted_agent_keeps_its_baked_prompt_and_model(client, no_real_deploy):
+    agent_id = client.post("/api/agents", json=CONVERTED_SPEC).json()["agent"]["id"]
+    _activate(agent_id)
+    for bad, field in (({"model_id": "global.openai.gpt-6-sol"}, "model_id"),
+                       ({"system_prompt": "Now answer in French."}, "system_prompt")):
+        res = client.post(f"/api/agents/{agent_id}/redeploy", json={**CONVERTED_SPEC, **bad})
+        assert res.status_code == 400
+        assert res.json()["code"] == "agent.converted_locked"
+        assert res.json()["detail"]["fields"] == [field]
+    # any other edit still re-publishes
+    ok = client.post(f"/api/agents/{agent_id}/redeploy",
+                     json={**CONVERTED_SPEC, "memory": {"short_term": False, "long_term": False}})
+    assert ok.status_code == 202
+
+
 def test_redeploy_conflicts_while_deploying(client):
     # a freshly created agent is still "deploying" (pipeline stubbed) → no re-publish
     agent_id = client.post("/api/agents", json=SPEC).json()["agent"]["id"]

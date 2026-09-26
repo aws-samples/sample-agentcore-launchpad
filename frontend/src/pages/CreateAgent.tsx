@@ -1240,6 +1240,10 @@ const deployLock = !canDeploy
   // the page is read-only for a member's review (and for an administrator while
   // the preset is not settled / the workspace lost a prerequisite)
   const locked = systemEdit ? !systemEdit.editable : false;
+  // a converted agent's exported code bakes its prompt and model; the backend refuses
+  // changing either on re-publish, so both are read-only while editing one
+  const bakedLocked =
+    locked || Boolean((editing?.spec as { code_bundle?: unknown } | undefined)?.code_bundle);
   const presetForm = (): PresetForm => ({
     model_source: modelSource,
     model_id: modelId,
@@ -2012,6 +2016,12 @@ const deployLock = !canDeploy
                 <span>{t("create.system.settings.editingNote", { label: systemEdit.label })}</span>
               </div>
             )}
+            {bakedLocked && !locked && (
+              <div className="note" style={{ marginBottom: 12 }} data-testid="converted-edit-note">
+                <span className="i">[i]</span>
+                <span>{t("v2.agents.wizard.convertedNote")}</span>
+              </div>
+            )}
             {systemEdit && locked && (
               <div className="note" style={{ marginBottom: 12 }} data-testid="preset-settings-readonly">
                 <span className="i">[i]</span>
@@ -2352,8 +2362,8 @@ const deployLock = !canDeploy
                       type="button"
                       data-testid={`model-source-${source}`}
                       className={`selchip${modelSource === source ? " on" : ""}`}
-                      style={{ cursor: locked ? "default" : "pointer" }}
-                      disabled={locked}
+                      style={{ cursor: bakedLocked ? "default" : "pointer" }}
+                      disabled={bakedLocked}
                       // a benign re-click keeps a custom id; a real switch re-seeds
                       onClick={() => source !== modelSource && applyModelSource(source)}
                     >
@@ -2388,7 +2398,7 @@ const deployLock = !canDeploy
                   id="agent-model-select"
                   className="input"
                   data-testid="model-select"
-                  disabled={locked}
+                  disabled={bakedLocked}
                   value={customModel ? CUSTOM_MODEL_OPTION : modelId}
                   onChange={(e) => {
                     const picked = e.target.value;
@@ -2419,7 +2429,7 @@ const deployLock = !canDeploy
                     className="input mono"
                     style={{ marginTop: 8 }}
                     data-testid="model-custom"
-                    disabled={locked}
+                    disabled={bakedLocked}
                     value={modelId}
                     onChange={(e) => setModelId(e.target.value)}
                     placeholder={t("create.configure.modelCustomPlaceholder")}
@@ -2636,7 +2646,7 @@ const deployLock = !canDeploy
                 className="input mono"
                 style={{ minHeight: 88, resize: "vertical" }}
                 data-testid="agent-prompt"
-                disabled={locked}
+                disabled={bakedLocked}
                 value={systemPrompt}
                 onChange={(e) => setSystemPrompt(e.target.value)}
                 placeholder={t("create.configure.systemPromptPlaceholder")}

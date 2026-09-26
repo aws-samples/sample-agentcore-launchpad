@@ -52,6 +52,8 @@ export interface SectionProps {
   err: (key: string) => string | undefined;
   /** re-publish: the name is immutable on the backend */
   nameLocked?: boolean;
+  /** re-publish of a converted agent: its exported code bakes the prompt */
+  promptLocked?: boolean;
 }
 
 /** Checkbox list of a catalog; an empty catalog shows `empty`. `extra` are selected
@@ -115,6 +117,7 @@ export function ModelCard({
   sourceNote,
   claudeOnly = false,
   knobs = false,
+  locked = false,
 }: Omit<SectionProps, "cat"> & {
   custom: boolean;
   setCustom: (on: boolean) => void;
@@ -124,6 +127,8 @@ export function ModelCard({
   sourceNote?: string;
   claudeOnly?: boolean;
   knobs?: boolean;
+  /** read-only (a converted agent's exported code bakes its model) */
+  locked?: boolean;
 }) {
   const { t } = useTranslation();
   const options = modelOptionsFor(form.modelSource, claudeOnly);
@@ -157,6 +162,7 @@ export function ModelCard({
           <select
             className="v2-select"
             value={custom ? CUSTOM_MODEL_OPTION : form.modelId}
+            disabled={locked}
             onChange={(e) => {
               if (e.target.value === CUSTOM_MODEL_OPTION) setCustom(true);
               else {
@@ -179,6 +185,7 @@ export function ModelCard({
             <input
               className="v2-input mono"
               value={form.modelId}
+              readOnly={locked}
               onChange={(e) => set({ modelId: e.target.value })}
               placeholder={t("create.configure.modelCustomPlaceholder")}
               data-testid="v2-agent-model-custom"

@@ -440,6 +440,23 @@ def redeploy_agent(
             {"name": agent.name, "method": agent.method},
             status_code=400,
         )
+    # A converted agent's exported code bakes its system prompt and model: an edit of
+    # either would be silently ignored, and a model change would re-scope the execution
+    # role away from the model the code actually calls.
+    stored = agent.spec or {}
+    if stored.get("code_bundle") and spec.code_bundle:
+        changed = [
+            field for field in ("model_id", "system_prompt")
+            if getattr(spec, field) != stored.get(field)
+        ]
+        if changed:
+            raise AppError(
+                "agent.converted_locked",
+                "a converted agent's system prompt and model are baked into its exported "
+                "code and cannot change on re-publish",
+                {"fields": changed},
+                status_code=400,
+            )
 
     agent.spec = spec.model_dump()
     agent.status = "deploying"
