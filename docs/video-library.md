@@ -24,14 +24,20 @@ directory to the V2 navigation: first-level functional areas (Agent development,
 Agent runtime, Agent evaluation, Learn, Configuration, and Overview) and their
 second-level modules. Admins assign a video to one module; they cannot introduce
 a category that drifts from the V2 console. The library groups recordings by
-module, retaining a playlist and previous/next navigation within that module.
-The `category` and `section` filters plus title search `q` survive watch/back
-navigation. A missing `video` opens the library; an invalid one shows a notice
-without selecting a substitute. Stable video IDs preserve old deep links.
+module and recorded console version (`v2` or `classic`), retaining separate
+playlists and previous/next navigation within each version. The V2 library
+defaults to V2 recordings, while the classic library defaults to classic
+recordings; both offer V2, Classic, and All controls. The `version`, `category`,
+and `section` filters plus title search `q` survive watch/back navigation. All
+shows separate cards for both versions of a module, and every card and watch
+page identifies its version. A missing `video` opens the library; an invalid
+one shows a notice without selecting a substitute. Stable video IDs preserve
+old deep links, including a direct link outside the page's default version.
 
-The required new-video fields are first-level area, second-level module, Chinese
-title, Chinese introduction, and a permanent HTTPS CDN URL ending in `.mp4` or
-`.webm`. English title/introduction default to Chinese when left blank. A JPEG
+The required new-video fields are recorded console version, first-level area,
+second-level module, Chinese title, Chinese introduction, and a permanent HTTPS
+CDN URL ending in `.mp4` or `.webm`. Administrators choose the version when
+saving a draft. English title/introduction default to Chinese when left blank. A JPEG
 poster, WebM fallback, WebVTT captions, duration, chapter metadata, and module
 order are optional. Admins can preview the CDN video before publication. The
 backend does not upload, proxy, or probe the media; the browser reads it directly
@@ -46,6 +52,15 @@ one-time migration fixture and legacy media-publisher manifest, no longer the
 runtime directory. Restarts never overwrite administrator changes, even after
 all videos have been removed. `scripts/validate_video_catalog.mjs` still
 validates that initial manifest before a frontend build.
+
+Pre-version ledger snapshots remain unchanged. The API derives their version
+only when the field is absent: a media path with an immutable
+`YYYYMMDD-v2` or `YYYYMMDD-v2-*` revision is V2, while earlier revisions are
+classic. New saves and explicit publication store the version in the draft and
+published snapshot. The five original evaluation recordings remain on the CDN;
+after their V2 replacements were published under the original directory IDs,
+administrators restored the old recordings as separate classic entries through
+video management. Existing V2 IDs and media stay intact.
 
 The library mounts no player. The watch view loads only the selected video's
 metadata and does not autoplay. Native

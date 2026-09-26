@@ -1,8 +1,11 @@
 export type VideoLocale = "en" | "zh-CN";
 export type VideoText = Record<VideoLocale, string>;
+export type ConsoleVersion = "v2" | "classic";
+export type VideoVersionFilter = ConsoleVersion | "all";
 
 export interface LibraryVideo {
   id: string;
+  consoleVersion: ConsoleVersion;
   title: VideoText;
   description: VideoText;
   publishedAt: string;
@@ -43,6 +46,7 @@ export interface VideoTaxonomy {
 export interface VideoContent {
   category_id: string;
   section_id: string;
+  console_version: ConsoleVersion;
   title: VideoText;
   description: VideoText;
   cdn_url: string;
@@ -90,6 +94,20 @@ export function videoCollections(catalog: VideoCatalog): VideoCollection[] {
       const video = byId.get(id);
       return video ? [video] : [];
     }),
+  }));
+}
+
+/** Keep recordings from different console UIs in separate module playlists. */
+export function videoCollectionsByVersion(
+  collections: VideoCollection[],
+  version: VideoVersionFilter,
+): VideoCollection[] {
+  const versions: ConsoleVersion[] = version === "all" ? ["v2", "classic"] : [version];
+  return collections.flatMap((collection) => versions.flatMap((edition) => {
+    const videos = collection.videos.filter((video) => video.consoleVersion === edition);
+    return videos.length
+      ? [{ ...collection, description: videos[0].description, videos }]
+      : [];
   }));
 }
 

@@ -85,7 +85,14 @@ export function VideoPlayer({
       <FlowHeader
         onBack={onBack}
         title={collection.title[locale]}
-        end={hasSeries ? <Tag tone="blue">{t("videos.episodePosition", { index: index + 1, count: collection.videos.length })}</Tag> : undefined}
+        end={
+          <div className="v2-row">
+            <Tag tone={video.consoleVersion === "v2" ? "blue" : "gray"}>
+              {t(`videos.version.${video.consoleVersion}`)}
+            </Tag>
+            {hasSeries && <Tag tone="blue">{t("videos.episodePosition", { index: index + 1, count: collection.videos.length })}</Tag>}
+          </div>
+        }
       />
       <div className="v2-videos-layout">
         <Card flush testId="video-player-panel">

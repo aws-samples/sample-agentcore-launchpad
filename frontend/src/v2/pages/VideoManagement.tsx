@@ -5,7 +5,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
 import { api, ApiError, errorMessage } from "../../lib/api";
-import type { ManagedVideo, ManagedVideoCatalog, VideoContent, VideoLocale, VideoTaxonomy } from "../../lib/videos";
+import type { ConsoleVersion, ManagedVideo, ManagedVideoCatalog, VideoContent, VideoLocale, VideoTaxonomy } from "../../lib/videos";
 import { fmtTime } from "../format";
 import { useLoad, useV2Toast } from "../hooks";
 import { Alert, Button, Card, type Column, Confirm, Field, FlowHeader, LinkButton, PageHeader, Spin, Table, Tag } from "../ui";
@@ -15,6 +15,7 @@ const NEW = "new";
 const emptyVideo = (): VideoContent => ({
   category_id: "",
   section_id: "",
+  console_version: "v2",
   title: { en: "", "zh-CN": "" },
   description: { en: "", "zh-CN": "" },
   cdn_url: "",
@@ -67,6 +68,13 @@ function VideoList({
     {
       key: "directory", title: t("videoManage.directory"),
       render: (row) => catalog ? directoryLabel(catalog.taxonomy, row.content, locale) : "—",
+    },
+    {
+      key: "version", title: t("videoManage.consoleVersion"),
+      render: (row) => {
+        const version = row.published_content?.console_version ?? row.content.console_version;
+        return <Tag tone={version === "v2" ? "blue" : "gray"}>{t(`videos.version.${version}`)}</Tag>;
+      },
     },
     {
       key: "status", title: t("videoManage.status"),
@@ -292,6 +300,14 @@ function VideoEditor({
       <div className="v2-video-manage-layout">
         <Card title={t("videoManage.edit")}>
           <fieldset className="v2-video-manage-form v2-form" disabled={busy}>
+            <Field label={t("videoManage.consoleVersion")} required>
+              <select className="v2-select" value={draft.console_version}
+                onChange={(event) => update("console_version", event.target.value as ConsoleVersion)}
+                data-testid="video-manage-version">
+                <option value="v2">{t("videos.version.v2")}</option>
+                <option value="classic">{t("videos.version.classic")}</option>
+              </select>
+            </Field>
             <div className="v2-form cols-2">
               <Field label={t("videoManage.category")} required>
                 <select className="v2-select" value={draft.category_id}

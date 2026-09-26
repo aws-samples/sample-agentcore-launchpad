@@ -56,7 +56,11 @@ publication workflow.
 The console's **Learn → Videos** page (`/videos`, `/v2/videos`) reads the
 published, hub-global directory from `GET /api/videos`. First-level areas and
 second-level modules are fixed to the V2 navigation in
-`backend/app/data/video_sections.json`; filters use `category`, `section`, and `q`.
+`backend/app/data/video_sections.json`. Every recording declares the console
+version it shows (`v2` or `classic`). The V2 and classic libraries default to
+their matching version, offer both versions and an All view, and separate
+mixed-version module playlists; filters use `version`, `category`, `section`,
+and `q`.
 `/videos?video=<id>` and the V2 equivalent keep stable video IDs and chapter
 navigation. The admin-only **Configuration → Video management**
 (`/v2/video-management`) saves drafts and explicitly publishes or withdraws

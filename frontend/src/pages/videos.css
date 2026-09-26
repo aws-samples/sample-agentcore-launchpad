@@ -8,20 +8,25 @@
 .videos-library-head h2,.videos-watch-head h2{font-size:22px;line-height:1.4}
 .videos-watch-head h2{scroll-margin-top:110px}
 .videos-library-head p{color:var(--ink-2);font-size:13px;margin-top:5px}
-.videos-watch-head>span{font-family:var(--mono);font-size:11px;color:var(--ink-2);flex:none}
+.videos-watch-attrs{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
+.videos-watch-attrs>span:not(.videos-version-pill){font-family:var(--mono);font-size:11px;color:var(--ink-2)}
+.videos-version-pill{
+  display:inline-block;align-self:flex-start;padding:3px 8px;border:1px solid var(--amber);
+  background:var(--amber-soft);color:var(--amber);font-size:11px;line-height:1.4;
+}
 .videos-search{
   width:320px;max-width:100%;padding:11px 13px;background:var(--panel);
   border:1px solid var(--line-2);color:var(--ink);font:inherit;font-size:13px;
 }
 .videos-search::placeholder{color:var(--ink-2)}
-.videos-filters{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
-.videos-filters button{
+.videos-filters,.videos-versions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+.videos-filters button,.videos-versions button{
   display:flex;gap:10px;align-items:center;background:var(--panel);border:1px solid var(--line-2);
   color:var(--ink-2);font:inherit;font-size:12px;padding:8px 13px;cursor:pointer;
 }
-.videos-filters button[aria-pressed=true]{border-color:var(--amber);color:var(--amber);background:var(--amber-soft)}
-.videos-filters button:hover{border-color:var(--amber);color:var(--ink)}
-.videos-filters button span{font-family:var(--mono);font-size:10px}
+.videos-filters button[aria-pressed=true],.videos-versions button[aria-pressed=true]{border-color:var(--amber);color:var(--amber);background:var(--amber-soft)}
+.videos-filters button:hover,.videos-versions button:hover{border-color:var(--amber);color:var(--ink)}
+.videos-filters button span,.videos-versions button span{font-family:var(--mono);font-size:10px}
 .videos-section-filter{display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:12px;color:var(--ink-2)}
 .videos-section-filter select{max-width:250px;min-width:170px}
 .videos-result-count{font-size:12px;color:var(--ink-2);margin-bottom:12px}
@@ -33,6 +38,7 @@
 }
 .videos-card:hover{border-color:var(--amber);background:var(--panel-2)}
 .videos-card-text{padding:14px 16px}
+.videos-card-text .videos-version-pill{margin-bottom:8px}
 .videos-card-text h3{font-size:17px;line-height:1.5;overflow-wrap:anywhere}
 .videos-card-text p{color:var(--ink-2);font-size:12px;line-height:1.65;margin-top:6px}
 .videos-thumbnail{position:relative;aspect-ratio:16/9;background:var(--bg);overflow:hidden;border-bottom:1px solid var(--line)}
@@ -45,7 +51,7 @@
 .videos-back:hover{text-decoration:underline}
 .videos-player{display:block;width:100%;aspect-ratio:16/9;background:#000;scroll-margin-top:68px}
 .videos-player:focus-visible,.videos-card:focus-visible,.videos-episode:focus-visible,
-.videos-back:focus-visible,.videos-search:focus-visible,.videos-filters button:focus-visible,
+.videos-back:focus-visible,.videos-search:focus-visible,.videos-filters button:focus-visible,.videos-versions button:focus-visible,
 .videos-directory-tabs button:focus-visible,.videos-chapter:focus-visible,
 .videos-directory-scroll:focus-visible,.videos-summary summary:focus-visible,
 .videos-pagination a:focus-visible,.videos-directory-back:focus-visible{
