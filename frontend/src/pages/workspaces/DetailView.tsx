@@ -23,59 +23,15 @@ import {
   type WorkspaceGrants,
   type WorkspacePurgeResult,
 } from "../../lib/api";
+import {
+  PENDING_BOOTSTRAP_STAGES as PENDING_STAGES,
+  readBootstrapJobIds as readJobIds,
+  rememberBootstrapJobId as rememberJobId,
+} from "../../lib/workspaces";
 import { STATUS_TONE } from "./status";
 
 /** Grant-state filters, in the order the toolbar renders them. */
 const GRANT_FILTERS: WorkspaceGrantFilter[] = ["all", "granted", "ungranted"];
-
-/** The bootstrap job's stages, in order (`services/workspace_bootstrap.py`). */
-const STAGE_ORDER = [
-  "validate-access",
-  "iam",
-  "storage",
-  "codebuild",
-  "cognito",
-  "gateway",
-  "memory",
-  "registry",
-  "observability",
-  "finalize",
-] as const;
-
-const PENDING_STAGES: StageInfo[] = STAGE_ORDER.map((name) => ({
-  name,
-  status: "pending",
-  detail: "",
-}));
-
-/**
- * The job id of a running bootstrap, per workspace.
- *
- * A bootstrap outlives the page: the backend resumes an interrupted run, and
- * without this the console could no longer say which job to watch after a
- * reload (there is no "latest job of this workspace" endpoint).
- */
-const JOB_STORE = "launchpad_ws_bootstrap_jobs";
-
-function readJobIds(): Record<string, string> {
-  try {
-    const raw = window.localStorage.getItem(JOB_STORE);
-    return raw ? (JSON.parse(raw) as Record<string, string>) : {};
-  } catch {
-    return {};
-  }
-}
-
-function rememberJobId(workspaceId: string, jobId: string): void {
-  try {
-    window.localStorage.setItem(
-      JOB_STORE,
-      JSON.stringify({ ...readJobIds(), [workspaceId]: jobId }),
-    );
-  } catch {
-    /* storage unavailable — progress is still visible in this session */
-  }
-}
 
 function stageClass(stage: StageInfo): string {
   if (stage.status === "succeeded" || stage.status === "skipped") return " done";

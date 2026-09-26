@@ -1,0 +1,26 @@
+/* Console V2 · 工作区 (workspaces) — module styles, scoped under the V2 shell root. */
+.v2 .v2-workspaces-layout {
+  display: grid; gap: 16px; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); align-items: start; margin-bottom: 16px;
+}
+.v2 .v2-workspaces-layout > .v2-card, .v2 .v2-workspaces-layout > .v2-stack > .v2-card { margin-bottom: 0; }
+.v2 .v2-workspaces-how { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.v2 .v2-workspaces-how li { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; color: var(--v2-ink-2); line-height: 1.55; }
+.v2 .v2-workspaces-how .n {
+  flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 600;
+  background: var(--v2-primary-soft); color: var(--v2-primary);
+}
+.v2 .v2-workspaces-note { margin: 0; font-size: 12.5px; color: var(--v2-ink-3); line-height: 1.55; }
+.v2 .v2-workspaces-break { overflow-wrap: anywhere; word-break: break-word; }
+.v2 .v2-workspaces-ext {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--v2-primary);
+  border: 1px solid var(--v2-primary-line); border-radius: 4px; padding: 3px 10px; background: var(--v2-primary-soft);
+}
+.v2 .v2-workspaces-log { max-height: 280px; }
+.v2 .v2-workspaces-err { color: var(--v2-danger); font-weight: 600; }
+.v2 .v2-workspaces-stage { color: var(--v2-primary); }
+.v2 .v2-workspaces-spin { animation: v2spin 0.9s linear infinite; }
+.v2 .v2-stages .v2-stage.pending .t { color: var(--v2-ink-3); }
+
+@media (max-width: 960px) {
+  .v2 .v2-workspaces-layout { grid-template-columns: 1fr; }
+}

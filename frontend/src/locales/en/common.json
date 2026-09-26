@@ -6804,6 +6804,235 @@
       "trainProgress": "Training progress",
       "uploaded": "Uploaded",
       "genRecords": "AI generation jobs"
+    },
+    "users": {
+      "trendTitle": "Registrations",
+      "topDomains": "Top email domains",
+      "search": "Search username or email",
+      "allByRole": "All (administrator)",
+      "logins": "{{count}} sign-in(s)",
+      "roleUpdated": "Role updated for {{username}}.",
+      "notFound": "Account {{username}} was not found. It may have been deleted.",
+      "overview": "Account overview",
+      "pendingAlert": "This registration awaits approval. Approving it grants the selected workspaces and starts the validity window.",
+      "expiredAlert": "This account has expired and can no longer sign in. Extend its validity to restore access.",
+      "disabledAlert": "This account is disabled and can no longer sign in.",
+      "validityTitle": "Validity",
+      "validitySub": "extensions stack on the remaining time",
+      "extendBy": "Extend {{count}} days",
+      "extendCustom": "Custom extension",
+      "extendDays": "Days to add",
+      "extendHint": "1–{{max}} days",
+      "roleTitle": "Role",
+      "roleSub": "administrators manage accounts, workspaces and every console module",
+      "permTitle": "Agent permissions",
+      "permSub": "click to grant or revoke; members hold every capability by default",
+      "wsTitle": "Workspace access",
+      "wsSub": "click to grant or revoke; administrators reach every workspace by role",
+      "approveHint": "The account can only use the workspaces granted here; you can change them later.",
+      "approveNoGrant": "No workspace selected: the account will be approved but cannot open any environment until one is granted.",
+      "copy": "Copy",
+      "field": {
+        "username": "Username",
+        "email": "Email",
+        "logins": "Sign-ins",
+        "createdBy": "Created by"
+      },
+      "role": {
+        "admin": "Administrator",
+        "member": "Member"
+      },
+      "state": {
+        "pending": "Pending approval",
+        "active": "Active",
+        "expired": "Expired",
+        "disabled": "Disabled"
+      },
+      "col": {
+        "user": "User",
+        "role": "Role",
+        "state": "Status",
+        "workspaces": "Workspaces",
+        "validity": "Valid until",
+        "lastLogin": "Last sign-in",
+        "created": "Registered"
+      },
+      "stat": {
+        "pending": "Awaiting approval",
+        "pendingSub": "new registrations to review",
+        "total": "Total accounts",
+        "active": "Active",
+        "expiringSoon": "Expiring soon",
+        "expiredDisabled": "Expired / disabled"
+      },
+      "action": {
+        "approve": "Approve",
+        "reject": "Reject",
+        "extend": "Extend",
+        "disable": "Disable",
+        "enable": "Enable",
+        "resetPassword": "Reset password",
+        "delete": "Delete",
+        "makeAdmin": "Make administrator",
+        "makeMember": "Make member"
+      },
+      "confirm": {
+        "disableTitle": "Disable account",
+        "disableBody": "Disable {{username}}? The account loses console access immediately; you can enable it again later.",
+        "rejectTitle": "Reject registration",
+        "rejectBody": "Reject {{username}}'s registration? The account is disabled and cannot sign in.",
+        "resetTitle": "Reset password",
+        "resetBody": "Generate a new password for {{username}}? The current password stops working immediately.",
+        "promoteTitle": "Make administrator",
+        "promoteBody": "Grant {{username}} administrator rights? Administrators manage accounts, workspaces and every console module, in every workspace.",
+        "demoteTitle": "Make member",
+        "demoteBody": "Revoke {{username}}'s administrator rights? As a member the account keeps only its agent permissions and granted workspaces."
+      },
+      "perm": {
+        "deploy": "Deploy",
+        "import": "Import",
+        "delete": "Delete",
+        "convert": "Convert",
+        "run": "Eval run"
+      }
+    },
+    "workspaces": {
+      "desc": "One AWS account × region per workspace; every console request targets exactly one",
+      "new": "New workspace",
+      "hub": "Hub",
+      "external": "Cross-account",
+      "search": "Search ID, name, account or region",
+      "empty": "No workspace is registered.",
+      "status": {
+        "registered": "Registered",
+        "bootstrapping": "Bootstrapping",
+        "ready": "Ready",
+        "failed": "Failed"
+      },
+      "col": {
+        "name": "Workspace",
+        "account": "AWS account",
+        "region": "Region",
+        "status": "Bootstrap status",
+        "created": "Registered"
+      },
+      "kind": {
+        "label": "Account",
+        "local": "This account",
+        "external": "Cross-account"
+      },
+      "kpi": {
+        "total": "Workspaces",
+        "ready": "Ready",
+        "bootstrapping": "Bootstrapping",
+        "attention": "Not ready yet",
+        "attentionSub": "{{failed}} failed"
+      },
+      "createTitle": "Register a workspace",
+      "basic": "Basic information",
+      "target": "Target environment",
+      "field": {
+        "id": "Workspace ID",
+        "name": "Display name",
+        "account": "AWS account",
+        "region": "Region",
+        "roleArn": "Spoke role ARN",
+        "externalId": "External ID"
+      },
+      "mode": {
+        "local": "This account",
+        "localDesc": "Another region of this deployment's own account, reached with the backend's own credentials.",
+        "external": "External AWS account",
+        "externalDesc": "Another account, reached by assuming the spoke role deployed there (AssumeRole + ExternalId)."
+      },
+      "regionOther": "Other region…",
+      "suggest": "Suggest",
+      "probeTitle": "Test access",
+      "testAccess": "Test access",
+      "testing": "Testing…",
+      "submit": "Register",
+      "submitting": "Registering…",
+      "howTitle": "How it works",
+      "xaTitle": "Cross-account setup",
+      "guideLink": "Full guide",
+      "templateLink": "CloudFormation template",
+      "summary": "Overview",
+      "updated": "Updated",
+      "grantedMembers": "Granted members",
+      "detach": "Detach",
+      "detachTitle": "Detach workspace",
+      "purge": "Purge",
+      "purgeTitle": "Purge workspace",
+      "bootstrapRun": "Run bootstrap",
+      "bootstrapResume": "Resume bootstrap",
+      "bootstrapRunning": "Bootstrapping…",
+      "bootstrapConfirm": "Bootstrap provisions real AWS resources (IAM roles, S3, CodeBuild, Cognito, Gateway, Memory, Registry, observability) for {{name}} in account {{account}}, region {{region}}. The job is resumable and each stage is idempotent. Continue?",
+      "needsBootstrap": "This workspace is registered but not provisioned yet. Run its bootstrap to make it usable.",
+      "stagesTitle": "Bootstrap job",
+      "log": "Job log",
+      "stages": {
+        "validate-access": "Validate access",
+        "iam": "IAM roles",
+        "storage": "Storage",
+        "codebuild": "CodeBuild",
+        "cognito": "Cognito",
+        "gateway": "Gateway",
+        "memory": "Memory",
+        "registry": "Registry",
+        "observability": "Observability",
+        "finalize": "Finalize"
+      },
+      "grantsTitle": "Member access",
+      "grantFilter": "Access",
+      "selected": "{{count}} selected",
+      "grant": "Grant",
+      "revoke": "Revoke",
+      "grantYes": "Granted",
+      "grantNo": "Not granted",
+      "grantCol": {
+        "account": "Account",
+        "email": "Email",
+        "role": "Role",
+        "status": "State",
+        "granted": "Access"
+      },
+      "jobStatus": {
+        "queued": "Queued",
+        "running": "Running",
+        "succeeded": "Succeeded",
+        "failed": "Failed"
+      },
+      "accountHint": "Fixed to this deployment's account. Choose 'External AWS account' to register an environment elsewhere."
+    },
+    "announcements": {
+      "untitled": "(no title yet)",
+      "noBody": "(no body yet)",
+      "deleted": "Announcement deleted.",
+      "col": {
+        "title": "Title",
+        "status": "Status",
+        "revision": "Revision",
+        "updated": "Last saved",
+        "published": "Published at"
+      },
+      "publish": "Publish",
+      "unpublish": "Withdraw",
+      "draft": "Draft content",
+      "field": {
+        "title": "Title",
+        "body": "Body",
+        "linkUrl": "Link URL",
+        "linkLabel": "Link text"
+      },
+      "hint": {
+        "title": "{{count}} / 160 characters",
+        "linkLabel": "Required together with the link URL, up to 80 characters."
+      },
+      "draftPreview": "Draft preview",
+      "draftPreviewSub": "How users will see it after publishing",
+      "info": "Details",
+      "createdBy": "Created by",
+      "updatedBy": "Last saved by"
     }
   }
 }

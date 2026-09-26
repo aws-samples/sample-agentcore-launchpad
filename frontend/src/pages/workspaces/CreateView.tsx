@@ -4,34 +4,9 @@ import { useTranslation } from "react-i18next";
 import { Btn, Panel, ViewHead } from "../../components";
 import { api, type Workspace, type WorkspacePreflightResult } from "../../lib/api";
 import { CROSS_ACCOUNT_GUIDE_URL, SPOKE_TEMPLATE_URL } from "../../lib/links";
-
-/**
- * Regions AgentCore serves. The list is a convenience, not the authority: the
- * bootstrap job's `validate-access` stage probes the target for real, so an
- * operator can type a region this build has not heard of.
- */
-const REGIONS = [
-  "us-west-2",
-  "us-east-1",
-  "us-east-2",
-  "eu-central-1",
-  "eu-west-1",
-  "ap-southeast-2",
-  "ap-northeast-1",
-] as const;
+import { ROLE_ARN, suggestExternalId, WORKSPACE_REGIONS as REGIONS } from "../../lib/workspaces";
 
 const OTHER = "__other__";
-
-const ROLE_ARN = /^arn:aws[a-z-]*:iam::(\d{12}):role\/.+$/;
-
-/**
- * A suggestion for the ExternalId, not a secret the backend knows: the operator
- * has to deploy the spoke stack with the same value, so it is theirs to keep.
- * `crypto.randomUUID` is available in every browser this console supports.
- */
-function suggestExternalId(): string {
-  return `launchpad-${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
-}
 
 export function CreateWorkspaceView({
   hubAccountId,
