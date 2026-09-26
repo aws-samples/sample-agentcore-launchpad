@@ -258,7 +258,7 @@ class Settings(BaseSettings):
     # Dockerfile's `ARG CLAUDE_CLI_VERSION` is what the build actually uses (and
     # what the image's content hash covers); this mirrors it for display, with
     # parity asserted in tests/test_skill_lab_foundation.py — bump both together.
-    skill_lab_worker_cli_version: str = "2.1.234"
+    skill_lab_worker_cli_version: str = "2.1.283"
     # Same mirror/parity contract for the codex CLI (`ARG CODEX_CLI_VERSION`).
     skill_lab_worker_codex_version: str = "0.155.1"
 

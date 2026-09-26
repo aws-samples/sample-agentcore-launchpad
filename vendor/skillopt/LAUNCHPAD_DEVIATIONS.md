@@ -49,7 +49,7 @@ marker. `tools`/`tool_choice`/`return_message` raise `NotImplementedError`
 
 Upstream copied host `claude`/`codex` binaries into the image. This variant
 installs pinned CLIs inside the image (reproducible, host-independent): claude
-via the official installer (`ARG CLAUDE_CLI_VERSION=2.1.234`) and codex via the
+via the official installer (`ARG CLAUDE_CLI_VERSION=2.1.283`) and codex via the
 official standalone GitHub release binary (`ARG CODEX_CLI_VERSION=0.155.1`,
 asset `codex-aarch64-unknown-linux-musl.tar.gz`). The image is built by
 Launchpad's CodeBuild ARM64 pipeline from a context assembled in

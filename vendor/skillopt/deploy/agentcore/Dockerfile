@@ -9,7 +9,7 @@
 # this directory + the bedrock model catalog read from the backend host).
 FROM public.ecr.aws/docker/library/python:3.12-slim-bookworm
 
-ARG CLAUDE_CLI_VERSION=2.1.234
+ARG CLAUDE_CLI_VERSION=2.1.283
 ARG CODEX_CLI_VERSION=0.155.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

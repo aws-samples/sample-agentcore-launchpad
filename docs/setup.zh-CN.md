@@ -414,7 +414,7 @@ Skill Lab 负责评估与训练 Registry 里的技能记录：vendored 的 Skill
 | `skill_lab_codex_target_model_id` | `global.openai.gpt-6-sol` | `codex_exec` 目标后端下的同一个默认值。codex 自行解析模型：配置里内置的 `amazon-bedrock-runtime` provider 直接调用这个 **inference-profile id**（裸 `openai.*` id 会因不支持按需吞吐而被拒绝），并从宿主的模型目录（`skill_lab_codex_catalog_path`）读取它的元数据，因此目录里必须有与该 id 完全一致的条目。单独设一个 key，是为了让每个后端都拿到自己 CLI 能接受的 id。 |
 | `skill_lab_codex_catalog_path` | `~/.codex/model-catalogs/bedrock-models.json` | 构建时从后端主机读取、并塞进 worker 镜像 codex-home 的 Bedrock 模型目录。该文件内嵌了专有的模型指令，因此从不入库；缺失时构建会塞一个空的 `{}` 目录并在日志里写明——那个镜像上的 codex 目标也就没有目录可供解析。 |
 | `skill_lab_judge_sandbox` | `bwrap` | agentic 判分器的产物解析器所用的沙箱启动 argv（按 shlex 切分），它跑在后端**主机**上——worker microVM 无法运行 bubblewrap。若主机上非特权 `bwrap` 被 AppArmor 拦住，改成 `sudo -n bwrap`。`GET /api/skill-lab/status` 会探测该 argv 的第一个词来给出 `agentic_judge_ready`，vendored 那层 fail-closed 的边界校验仍然叠加生效。 |
-| `skill_lab_worker_cli_version` | `2.1.234` | 报告 worker 镜像里内置的 `claude` CLI 版本。 |
+| `skill_lab_worker_cli_version` | `2.1.283` | 报告 worker 镜像里内置的 `claude` CLI 版本。 |
 | `skill_lab_worker_codex_version` | `0.155.1` | 报告 worker 镜像里内置的 `codex` CLI 版本。 |
 
 最后两个 `*_version` 是**镜像值，不是输入值**。真正生效的是
