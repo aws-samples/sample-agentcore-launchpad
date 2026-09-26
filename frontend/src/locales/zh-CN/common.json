@@ -6804,6 +6804,235 @@
       "trainProgress": "训练进度",
       "uploaded": "上传",
       "genRecords": "AI 生成记录"
+    },
+    "users": {
+      "trendTitle": "注册趋势",
+      "topDomains": "邮箱域名 TOP",
+      "search": "搜索用户名或邮箱",
+      "allByRole": "全部（管理员）",
+      "logins": "登录 {{count}} 次",
+      "roleUpdated": "已更新 {{username}} 的角色。",
+      "notFound": "未找到账户 {{username}}，可能已被删除。",
+      "overview": "账户概要",
+      "pendingAlert": "该注册申请等待审批。通过后将授予所选工作区，并开始计算有效期。",
+      "expiredAlert": "该账户已过期，无法登录。延长有效期即可恢复访问。",
+      "disabledAlert": "该账户已禁用，无法登录。",
+      "validityTitle": "有效期",
+      "validitySub": "延期在剩余时间上累加",
+      "extendBy": "延期 {{count}} 天",
+      "extendCustom": "自定义延期",
+      "extendDays": "延长天数",
+      "extendHint": "1–{{max}} 天",
+      "roleTitle": "角色",
+      "roleSub": "管理员可管理账户、工作区及所有控制台模块",
+      "permTitle": "Agent 权限",
+      "permSub": "点击授予或撤销；成员默认拥有全部能力",
+      "wsTitle": "工作区访问",
+      "wsSub": "点击授予或撤销；管理员按角色可访问所有工作区",
+      "approveHint": "账户只能使用此处授予的工作区，之后可随时调整。",
+      "approveNoGrant": "未选择工作区：账户会被通过，但在授予工作区之前无法进入任何环境。",
+      "copy": "复制",
+      "field": {
+        "username": "用户名",
+        "email": "邮箱",
+        "logins": "登录次数",
+        "createdBy": "创建来源"
+      },
+      "role": {
+        "admin": "管理员",
+        "member": "成员"
+      },
+      "state": {
+        "pending": "待审批",
+        "active": "有效",
+        "expired": "已过期",
+        "disabled": "已禁用"
+      },
+      "col": {
+        "user": "用户",
+        "role": "角色",
+        "state": "状态",
+        "workspaces": "工作区",
+        "validity": "有效期至",
+        "lastLogin": "最近登录",
+        "created": "注册时间"
+      },
+      "stat": {
+        "pending": "待审批",
+        "pendingSub": "个注册申请待处理",
+        "total": "账户总数",
+        "active": "有效",
+        "expiringSoon": "即将到期",
+        "expiredDisabled": "已过期 / 已禁用"
+      },
+      "action": {
+        "approve": "通过",
+        "reject": "拒绝",
+        "extend": "延期",
+        "disable": "禁用",
+        "enable": "启用",
+        "resetPassword": "重置密码",
+        "delete": "删除",
+        "makeAdmin": "设为管理员",
+        "makeMember": "设为成员"
+      },
+      "confirm": {
+        "disableTitle": "禁用账户",
+        "disableBody": "确定禁用 {{username}}？该账户将立即失去控制台访问权限，之后可重新启用。",
+        "rejectTitle": "拒绝注册",
+        "rejectBody": "确定拒绝 {{username}} 的注册申请？该账户将被禁用，无法登录。",
+        "resetTitle": "重置密码",
+        "resetBody": "确定为 {{username}} 生成新密码？当前密码将立即失效。",
+        "promoteTitle": "设为管理员",
+        "promoteBody": "确定授予 {{username}} 管理员权限？管理员可在所有工作区管理账户、工作区及所有控制台模块。",
+        "demoteTitle": "设为成员",
+        "demoteBody": "确定撤销 {{username}} 的管理员权限？成为成员后，账户仅保留其 Agent 权限和已授予的工作区。"
+      },
+      "perm": {
+        "deploy": "部署",
+        "import": "导入",
+        "delete": "删除",
+        "convert": "转换",
+        "run": "评估运行"
+      }
+    },
+    "workspaces": {
+      "desc": "每个工作区对应一个 AWS 账户 × 区域，控制台的每个请求都只指向其中一个",
+      "new": "新建工作区",
+      "hub": "Hub",
+      "external": "跨账户",
+      "search": "搜索 ID、名称、账户或区域",
+      "empty": "尚未注册任何工作区。",
+      "status": {
+        "registered": "已注册",
+        "bootstrapping": "初始化中",
+        "ready": "就绪",
+        "failed": "失败"
+      },
+      "col": {
+        "name": "工作区",
+        "account": "AWS 账户",
+        "region": "区域",
+        "status": "初始化状态",
+        "created": "注册时间"
+      },
+      "kind": {
+        "label": "账户",
+        "local": "本账户",
+        "external": "跨账户"
+      },
+      "kpi": {
+        "total": "工作区",
+        "ready": "就绪",
+        "bootstrapping": "初始化中",
+        "attention": "尚未就绪",
+        "attentionSub": "其中 {{failed}} 个失败"
+      },
+      "createTitle": "注册工作区",
+      "basic": "基本信息",
+      "target": "目标环境",
+      "field": {
+        "id": "工作区 ID",
+        "name": "显示名称",
+        "account": "AWS 账户",
+        "region": "区域",
+        "roleArn": "Spoke 角色 ARN",
+        "externalId": "External ID"
+      },
+      "mode": {
+        "local": "本账户",
+        "localDesc": "本部署所在账户的另一个区域，直接使用后端自身凭证访问。",
+        "external": "跨 AWS 账户",
+        "externalDesc": "另一个账户，通过 assume 部署在该账户中的 spoke 角色访问（AssumeRole + ExternalId）。"
+      },
+      "regionOther": "其他区域…",
+      "suggest": "生成建议值",
+      "probeTitle": "测试访问",
+      "testAccess": "测试访问",
+      "testing": "测试中…",
+      "submit": "注册",
+      "submitting": "注册中…",
+      "howTitle": "工作方式",
+      "xaTitle": "跨账户配置",
+      "guideLink": "完整指南",
+      "templateLink": "CloudFormation 模板",
+      "summary": "概要",
+      "updated": "更新时间",
+      "grantedMembers": "已授权成员",
+      "detach": "解除关联",
+      "detachTitle": "解除关联工作区",
+      "purge": "彻底清除",
+      "purgeTitle": "彻底清除工作区",
+      "bootstrapRun": "运行初始化",
+      "bootstrapResume": "继续初始化",
+      "bootstrapRunning": "初始化中…",
+      "bootstrapConfirm": "初始化会在账户 {{account}} 的 {{region}} 区域为 {{name}} 预置真实的 AWS 资源（IAM 角色、S3、CodeBuild、Cognito、Gateway、Memory、Registry、可观测性）。任务可续跑，每个阶段都是幂等的。确定继续？",
+      "needsBootstrap": "该工作区已注册但尚未预置资源，运行初始化后才能使用。",
+      "stagesTitle": "初始化任务",
+      "log": "任务日志",
+      "stages": {
+        "validate-access": "校验访问",
+        "iam": "IAM 角色",
+        "storage": "存储",
+        "codebuild": "CodeBuild",
+        "cognito": "Cognito",
+        "gateway": "Gateway",
+        "memory": "Memory",
+        "registry": "Registry",
+        "observability": "可观测性",
+        "finalize": "收尾"
+      },
+      "grantsTitle": "成员访问权限",
+      "grantFilter": "访问权限",
+      "selected": "已选 {{count}} 个",
+      "grant": "授权",
+      "revoke": "撤销授权",
+      "grantYes": "已授权",
+      "grantNo": "未授权",
+      "grantCol": {
+        "account": "账户",
+        "email": "邮箱",
+        "role": "角色",
+        "status": "状态",
+        "granted": "访问权限"
+      },
+      "jobStatus": {
+        "queued": "排队中",
+        "running": "运行中",
+        "succeeded": "成功",
+        "failed": "失败"
+      },
+      "accountHint": "固定为本部署所在账户。若要注册其他账户的环境，请选择「跨 AWS 账户」。"
+    },
+    "announcements": {
+      "untitled": "（尚未填写标题）",
+      "noBody": "（尚未填写正文）",
+      "deleted": "公告已删除。",
+      "col": {
+        "title": "标题",
+        "status": "状态",
+        "revision": "修订版本",
+        "updated": "最近保存",
+        "published": "发布时间"
+      },
+      "publish": "发布",
+      "unpublish": "撤回",
+      "draft": "草稿内容",
+      "field": {
+        "title": "标题",
+        "body": "正文",
+        "linkUrl": "链接地址",
+        "linkLabel": "链接文字"
+      },
+      "hint": {
+        "title": "{{count}} / 160 个字符",
+        "linkLabel": "与链接地址同时填写，最多 80 个字符。"
+      },
+      "draftPreview": "草稿预览",
+      "draftPreviewSub": "发布后用户看到的样子",
+      "info": "基本信息",
+      "createdBy": "创建人",
+      "updatedBy": "最近保存人"
     }
   }
 }

@@ -208,7 +208,9 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
             <div
               className={classic ? "v2-main-inner view v2-classic" : "v2-main-inner"}
               key={
-                location.pathname === "/announcements" ? "announcements" : current?.id ?? "none"
+                location.pathname === "/announcements" || location.pathname === "/v2/announcements"
+                  ? "announcements"
+                  : current?.id ?? "none"
               }
             >
               <RouteChunk key={location.pathname}>

@@ -1,0 +1,45 @@
+/* V2 用户管理 (users) — module styles, scoped under the V2 shell root. */
+.v2 .v2-users-forbidden {
+  display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 48px 16px;
+  color: var(--v2-ink-3); text-align: center;
+}
+.v2 .v2-users-forbidden b { color: var(--v2-ink); font-size: 15px; }
+.v2 .v2-users-forbidden svg { color: var(--v2-warning, #d46b08); }
+
+/* registration trend */
+.v2 .v2-users-trend { display: flex; align-items: flex-end; gap: 6px; height: 132px; }
+.v2 .v2-users-trend .col { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; }
+.v2 .v2-users-trend .bar-wrap { flex: 1; width: 100%; max-width: 36px; display: flex; align-items: flex-end; }
+.v2 .v2-users-trend .bar { width: 100%; min-height: 2px; background: var(--v2-primary); border-radius: 3px 3px 0 0; opacity: .85; }
+.v2 .v2-users-trend .col:hover .bar { opacity: 1; }
+.v2 .v2-users-trend .n { font-size: 11.5px; color: var(--v2-ink-2); height: 14px; font-variant-numeric: tabular-nums; }
+.v2 .v2-users-trend .d { font-size: 11.5px; color: var(--v2-ink-3); font-variant-numeric: tabular-nums; }
+.v2 .v2-users-domains { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--v2-line-2); font-size: 13px; }
+
+/* table cells */
+.v2 .v2-users-ws { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.v2 .v2-users-soon { color: #d46b08 !important; }
+
+/* detail */
+.v2 .v2-users-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.v2 .v2-users-grid > .v2-card { margin-bottom: 16px; }
+@media (max-width: 900px) { .v2 .v2-users-grid { grid-template-columns: 1fr; } }
+.v2 .v2-users-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.v2 .v2-users-chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 6px;
+  border: 1px solid var(--v2-line); background: #fff; cursor: pointer; font-size: 13px; color: var(--v2-ink-2);
+}
+.v2 .v2-users-chip small { color: var(--v2-ink-4, #999); font-size: 11.5px; }
+.v2 .v2-users-chip:hover:not(:disabled) { border-color: var(--v2-primary-hover); }
+.v2 .v2-users-chip.on { border-color: var(--v2-primary); background: var(--v2-primary-soft); color: var(--v2-primary); }
+.v2 .v2-users-chip.on small { color: var(--v2-primary); opacity: .75; }
+.v2 .v2-users-chip:disabled { cursor: not-allowed; opacity: .6; }
+
+/* dialogs */
+.v2 .v2-users-dialog-body { margin: 0 0 14px; color: var(--v2-ink-2); line-height: 1.6; }
+.v2 .v2-users-password {
+  display: block; margin-top: 12px; padding: 12px 14px; border-radius: 6px; background: var(--v2-fill);
+  border: 1px dashed var(--v2-line); font-size: 15px; letter-spacing: .5px; user-select: all; word-break: break-all;
+}
+.v2 .v2-desc .sub { margin-left: 8px; color: var(--v2-ink-3); font-size: 12.5px; }
+.v2 .v2-users-nowrap { white-space: nowrap; }

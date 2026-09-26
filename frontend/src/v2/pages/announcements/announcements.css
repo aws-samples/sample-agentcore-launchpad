@@ -1,0 +1,29 @@
+/* V2 公告 (announcements) — module styles, scoped under the V2 shell root. */
+.v2 .v2-announcements-layout {
+  display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start;
+}
+.v2 .v2-announcements-layout > * { min-width: 0; }
+.v2 .v2-announcements-side { display: grid; gap: 16px; }
+.v2 .v2-announcements-side .v2-card { margin-bottom: 0; }
+.v2 .v2-announcements-fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.v2 .v2-announcements-fieldset textarea { min-height: 220px; resize: vertical; }
+.v2 .v2-announcements-buffers { display: inline-flex; flex-wrap: wrap; gap: 4px 16px; margin-left: 12px; }
+.v2 .v2-announcements-note { font-size: 12.5px; color: var(--v2-ink-3); margin-bottom: 10px; }
+.v2 .v2-announcements-preview {
+  border: 1px solid var(--v2-line); border-radius: var(--v2-radius-sm); background: var(--v2-fill);
+  padding: 12px 14px;
+}
+.v2 .v2-announcements-preview h3 { margin: 0 0 6px; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.v2 .v2-announcements-preview p {
+  margin: 0; font-size: 13px; line-height: 1.7; color: var(--v2-ink-2);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.v2 .v2-announcements-preview a {
+  display: inline-flex; align-items: center; gap: 4px; margin-top: 10px; font-size: 13px;
+}
+.v2 .v2-announcements-sr {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+@media (max-width: 1180px) {
+  .v2 .v2-announcements-layout { grid-template-columns: 1fr; }
+}

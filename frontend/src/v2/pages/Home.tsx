@@ -8,6 +8,7 @@ import { fmtTime } from "../format";
 import { useLoad } from "../hooks";
 import { sortTasks, STATUS_TONE, statusLabel, taskFromOnline, taskFromRun, type V2Task } from "../tasks";
 import { Button, Card, type Column, Kpi, LinkButton, PageHeader, Table, Tag } from "../ui";
+import { AnnouncementFeed } from "./home/AnnouncementFeed";
 
 async function loadHome() {
   // Each tile degrades on its own: one unreachable service must not blank the page.
@@ -101,6 +102,7 @@ export function V2Home() {
           ))}
         </div>
       </Card>
+      <AnnouncementFeed />
       <Card
         title={t("v2.home.recentTasks")}
         flush
