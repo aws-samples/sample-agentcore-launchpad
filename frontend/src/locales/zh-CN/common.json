@@ -539,7 +539,9 @@
       "byocEnvValue": "值",
       "byocEnvAdd": "添加变量",
       "byocContract": "运行时契约",
-      "byocContractBody": "ARM64（aarch64）·监听 8080 端口·POST /invocations + GET /ping\n调用负载：{\"prompt\": \"...\", \"actor_id\": \"...\"}\nzip ≤ 250 MiB（解压后 ≤ 750 MiB）·代码 zip 运行在托管 Python 运行时上\n使用 bedrock-agentcore SDK（BedrockAgentCoreApp + @app.entrypoint）即可满足以上全部要求。"
+      "byocContractBody": "ARM64（aarch64）·监听 8080 端口·POST /invocations + GET /ping\n调用负载：{\"prompt\": \"...\", \"actor_id\": \"...\"}\nzip ≤ 250 MiB（解压后 ≤ 750 MiB）·代码 zip 运行在托管 Python 运行时上\n使用 bedrock-agentcore SDK（BedrockAgentCoreApp + @app.entrypoint）即可满足以上全部要求。",
+      "memoryOff": "关闭",
+      "memoryShortOffHint": "该 Agent 部署时未开启短期记忆，重新部署后保持关闭。"
     },
     "launchPanel": {
       "title": "部署计划",
@@ -3236,7 +3238,8 @@
     "legacyCanary": {
       "title": "历史运行时金丝雀产物",
       "body": "该只读结果来自旧版合并流程。仍可清理其资源；新的运行时金丝雀使用独立记录。"
-    }
+    },
+    "readOnlyResults": "各阶段结果（只读）：实验已结束，相关操作已停用。"
   },
   "canaryPage": {
     "reason": {

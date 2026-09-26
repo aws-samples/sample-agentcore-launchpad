@@ -521,8 +521,10 @@ function ConfigurationExperimentView() {
   // headline turns neutral and PROMOTE demands an explicit override.
   const nonSignificant = verdict?.significant === false;
   const verdictHeadline = verdictLabel(t, verdict);
-  // cleaned/failed experiments are over — controls that would fire actions
-  // against torn-down resources collapse into a read-only summary.
+  // cleaned/failed experiments are over: a summary leads, and every stage the
+  // experiment reached stays visible read-only below it. The results are ledger
+  // artifacts (merged per stage, never removed by cleanup), so they outlive the
+  // torn-down resources; only the actions are switched off.
   const terminal = exp?.status === "cleaned" || exp?.status === "failed";
   // one active A/B test per shared gateway — the backend rejects a second
   // concurrent loop (409 experiment.already_running), so gate START up front.
@@ -543,7 +545,8 @@ function ConfigurationExperimentView() {
   // marks the recommend card done
   const acceptedPrompt = a.recommend?.accepted_prompt;
   const recommendDone = !!(acceptedPrompt || a.bundles);
-  const activeCard = !recommendDone ? "recommend"
+  const activeCard = terminal ? "none"
+    : !recommendDone ? "recommend"
     : !a.bundles ? "bundles"
       : !a.gateway || !a.abtest ? "gwab"
         : !a.traffic ? "traffic"
@@ -2374,6 +2377,26 @@ function ConfigurationExperimentView() {
                   </div>
                 )}
               </div>
+              {(a.recommend || a.bundles || canary) && (
+                // a disabled fieldset switches off every button, input and select
+                // inside the stage cards at once
+                <fieldset
+                  disabled
+                  data-testid="exp-results-readonly"
+                  style={{ border: 0, padding: 0, margin: "14px 0 0", minWidth: 0 }}
+                >
+                  <div className="note" style={{ marginBottom: 10 }}>
+                    <span className="i">[i]</span>
+                    <span>{t("expPage.readOnlyResults")}</span>
+                  </div>
+                  {a.recommend && recommendCard}
+                  {a.bundles && bundlesCard}
+                  {(a.gateway || a.abtest) && gwabCard}
+                  {a.traffic && trafficCard}
+                  {a.verdict && verdictCard}
+                  {legacyCanaryArtifact}
+                </fieldset>
+              )}
               <div
                 data-testid="start-new"
                 style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 12 }}

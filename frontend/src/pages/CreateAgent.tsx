@@ -1242,6 +1242,9 @@ const deployLock = !canDeploy
   const locked = systemEdit ? !systemEdit.editable : false;
   // a converted agent's exported code bakes its prompt and model; the backend refuses
   // changing either on re-publish, so both are read-only while editing one
+  // re-publish of an agent deployed without short-term memory (kept off on save)
+  const storedShortOff =
+    (editing?.spec as { memory?: { short_term?: boolean } } | undefined)?.memory?.short_term === false;
   const bakedLocked =
     locked || Boolean((editing?.spec as { code_bundle?: unknown } | undefined)?.code_bundle);
   const presetForm = (): PresetForm => ({
@@ -3305,7 +3308,15 @@ const deployLock = !canDeploy
             <div className="field">
               <label>{t("create.configure.memory")}</label>
               <div className="selchips">
-                <span className="selchip on">{t("create.configure.memoryShort")} ✓</span>
+                {/* short-term memory has no toggle; an agent deployed without it keeps
+                    it off on re-publish (republishSpec), and the chip says so */}
+                {storedShortOff ? (
+                  <span className="selchip" title={t("create.configure.memoryShortOffHint")} data-testid="memory-short-off">
+                    {t("create.configure.memoryShort")} · {t("create.configure.memoryOff")}
+                  </span>
+                ) : (
+                  <span className="selchip on">{t("create.configure.memoryShort")} ✓</span>
+                )}
                 <button
                   type="button"
                   className={`selchip${longTerm ? " on" : ""}`}
