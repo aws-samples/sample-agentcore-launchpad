@@ -140,8 +140,8 @@ function AgentsRoute({ mode }: { mode: "list" | "detail" }) {
 }
 
 /**
- * In V2 the classic evaluation page's experiment and online sub-pages have native
- * twins: their URLs (hand-offs from runs, agents, bookmarks) are mapped onto them.
+ * In V2 the classic evaluation page's new-run, experiment and online sub-pages have
+ * native twins: their URLs (hand-offs from runs, agents, bookmarks) are mapped onto them.
  * Every other `/evaluation` view stays classic inside the V2 shell.
  */
 function v2EvaluationTarget(search: string): string | null {
@@ -157,6 +157,17 @@ function v2EvaluationTarget(search: string): string | null {
     }
     const q = next.toString();
     return `/v2/eval/online${q ? `?${q}` : ""}`;
+  }
+  // the new-run form: hand-offs prefill agent / dataset / evaluators. A run
+  // started for an experiment baseline (`return=experiment`) stays classic,
+  // since only the classic form returns to the experiment afterwards.
+  if (view === "new" && !params.get("return")) {
+    next.set("view", "new");
+    for (const key of ["agent", "dataset", "evaluators"]) {
+      const value = params.get(key);
+      if (value) next.set(key, value);
+    }
+    return `/v2/eval/tasks?${next.toString()}`;
   }
   if (view === "experiment") {
     if (params.get("mode") === "canary") {

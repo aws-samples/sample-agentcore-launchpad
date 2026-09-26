@@ -155,7 +155,7 @@ export function NextStepsCard({
   if (targetId) runParams.set("agent", targetId);
   if (datasetId) runParams.set("dataset", datasetId);
   if (evaluators.length) runParams.set("evaluators", evaluators.map((e) => e.id).join(","));
-  const runLink = `/evaluation?${runParams.toString()}`;
+  const runLink = `/v2/eval/tasks?${runParams.toString()}`;
 
   const canRun = can("eval.run");
   // StartBatchEvaluation applies at most this many evaluators per run (service limit).

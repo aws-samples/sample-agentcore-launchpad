@@ -58,8 +58,12 @@ const EMPTY: Draft = {
   evaluators: ["Builtin.Correctness", "Builtin.Helpfulness"],
 };
 
-/** Prefill from `?from=run:<id>` / `?from=online:<id>` (copy) or `?dataset=<id>`. */
-async function seedDraft(from: string | null, dataset: string | null, copySuffix: string): Promise<Draft> {
+/**
+ * Prefill from `?from=run:<id>` / `?from=online:<id>` (copy), or from hand-off
+ * params (`?agent=<id>&dataset=<id>&evaluators=<id,id,…>`, e.g. the architect
+ * assistant's next steps).
+ */
+async function seedDraft(from: string | null, handoff: Handoff, copySuffix: string): Promise<Draft> {
   if (from?.startsWith("run:")) {
     const run = await api.getEvaluationRun(from.slice(4));
     const name = run.dataset_name ?? "";
@@ -81,8 +85,16 @@ async function seedDraft(from: string | null, dataset: string | null, copySuffix
       evaluators: cfg.evaluators,
     };
   }
-  if (dataset) return { ...EMPTY, source: "dataset", dataset };
-  return EMPTY;
+  const seeded: Draft = { ...EMPTY, agentId: handoff.agent ?? "" };
+  if (handoff.evaluators.length) seeded.evaluators = handoff.evaluators;
+  if (handoff.dataset) return { ...seeded, source: "dataset", dataset: handoff.dataset };
+  return seeded;
+}
+
+interface Handoff {
+  agent: string | null;
+  dataset: string | null;
+  evaluators: string[];
 }
 
 export function TaskWizard() {
@@ -90,8 +102,15 @@ export function TaskWizard() {
   const [params, setParams] = useSearchParams();
   const toast = useV2Toast();
   const from = params.get("from");
-  const datasetParam = params.get("dataset");
-  const seed = useLoad(() => seedDraft(from, datasetParam, t("v2.tasks.copySuffix")), `seed:${from}:${datasetParam}`);
+  const handoff: Handoff = {
+    agent: params.get("agent"),
+    dataset: params.get("dataset"),
+    evaluators: (params.get("evaluators") ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+  };
+  const seed = useLoad(
+    () => seedDraft(from, handoff, t("v2.tasks.copySuffix")),
+    `seed:${from}:${handoff.agent}:${handoff.dataset}:${handoff.evaluators.join(",")}`,
+  );
   const agents = useLoad(() => api.listAgents(), "agents");
   const datasets = useLoad(() => api.v2Datasets(), "datasets");
   const evaluators = useLoad(() => api.v2Evaluators(), "evaluators");
