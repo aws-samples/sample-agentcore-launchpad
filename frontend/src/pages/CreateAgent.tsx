@@ -58,6 +58,7 @@ import {
   entrypointAfterUpload,
   hasByoMounts,
   promptWithToolkit,
+  republishSpec,
   resolveKb,
   selectableKbs,
   skillNameFromPath,
@@ -143,6 +144,8 @@ interface EditingTarget {
   name: string;
   method: Method;
   system?: SystemEditContext;
+  /** the stored spec, so a re-publish carries the fields the form does not own */
+  spec?: unknown;
 }
 
 
@@ -1354,7 +1357,7 @@ const deployLock = !canDeploy
       }
       const spec = buildSpec();
       const res = editing
-        ? await api.redeployAgent(editing.id, spec)
+        ? await api.redeployAgent(editing.id, republishSpec(spec, editing.spec))
         : await api.createAgent(spec);
       if (!alive.current) return;
       setDetailKbs((spec as { knowledge_bases?: KbRef[] }).knowledge_bases ?? []);
@@ -1442,7 +1445,7 @@ const deployLock = !canDeploy
   const startEdit = (agent: AgentInfo) => {
     nextEditorIntent();
     const spec = (agent.spec ?? {}) as StoredSpec;
-    setEditing({ id: agent.id, name: agent.name, method: agent.method as Method });
+    setEditing({ id: agent.id, name: agent.name, method: agent.method as Method, spec: agent.spec });
     setDetailsMode(false);
     setMethod(agent.method as Method);
     setName(agent.name);

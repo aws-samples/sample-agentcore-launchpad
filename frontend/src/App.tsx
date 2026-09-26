@@ -1,4 +1,4 @@
-import { lazy, type ReactNode } from "react";
+import { lazy, type ReactNode, useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 
 import { ToastProvider } from "./components";
@@ -8,7 +8,8 @@ import { Shell } from "./layout/Shell";
 import { NotFound } from "./pages/NotFound";
 import { Overview } from "./pages/Overview";
 import { WorkspaceProvider } from "./workspace/WorkspaceProvider";
-import { classicAgentNewToV2 } from "./v2/pages/agents/classicUrl";
+import { api } from "./lib/api";
+import { classicAgentNewToV2, v2EditPath } from "./v2/pages/agents/classicUrl";
 import { classicAssistantToV2 } from "./v2/pages/assistant/classicUrl";
 import { classicUsersToV2 } from "./v2/pages/users/classicUrl";
 import { classicWorkspacesToV2 } from "./v2/pages/workspaces/classicUrl";
@@ -149,6 +150,31 @@ function AgentsRoute({ mode }: { mode: "list" | "detail" }) {
 }
 
 /**
+ * `/agents/:id/edit` in V2 opens the native re-publish wizard. A system preset keeps
+ * its preset configure flow (the classic page, inside the V2 shell) and a canvas
+ * agent its Studio editor, so the row is read first to pick the target.
+ */
+function AgentsEditRoute() {
+  const { agentId } = useParams();
+  const v2 = useUiVersion() === "v2";
+  const [target, setTarget] = useState<string | "classic" | null>(null);
+  useEffect(() => {
+    if (!v2 || !agentId) return;
+    let live = true;
+    api
+      .getAgent(agentId)
+      .then((agent) => live && setTarget(agent.system ? "classic" : v2EditPath(agent)))
+      // unreadable here: the classic page owns the not-found / error handling
+      .catch(() => live && setTarget("classic"));
+    return () => {
+      live = false;
+    };
+  }, [v2, agentId]);
+  if (!v2 || target === "classic") return <CreateAgent mode="edit" />;
+  return target ? <Navigate to={target} replace /> : null;
+}
+
+/**
  * `/agents/new` with a creation intent (method / gateway / skill prefill) opens
  * the native V2 wizard in V2; the bare URL keeps the classic system-presets page.
  */
@@ -277,7 +303,7 @@ export default function App() {
             <Route path="agents/new" element={<AgentsNewRoute />} />
             <Route path="agents/import" element={<CreateAgent mode="import" />} />
             <Route path="agents/:agentId" element={<AgentsRoute mode="detail" />} />
-            <Route path="agents/:agentId/edit" element={<CreateAgent mode="edit" />} />
+            <Route path="agents/:agentId/edit" element={<AgentsEditRoute />} />
             <Route path="create" element={<LegacyCreateRedirect />} />
             <Route path="create/studio" element={<CreateAgentStudio />} />
               <Route

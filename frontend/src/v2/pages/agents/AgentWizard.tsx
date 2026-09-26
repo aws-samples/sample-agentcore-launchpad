@@ -18,13 +18,16 @@ import {
   emptyAgentForm,
   entrypointAfterUpload,
   filesystemIssues,
+  formFromStoredSpec,
   gatewaySelectionsValid,
+  republishSpec,
   resolveKb,
+  type StoredAgentExtras,
   sourceForMethod,
   sourceOnMethodSwitch,
 } from "../../../lib/agent-spec";
-import { api, ApiError, type ByocPythonVersion, errorMessage } from "../../../lib/api";
-import { defaultModelFor, type ModelSource } from "../../../lib/models";
+import { type AgentInfo, api, ApiError, type ByocPythonVersion, errorMessage } from "../../../lib/api";
+import { defaultModelFor, isCustomModelId, type ModelSource } from "../../../lib/models";
 import { apiErrorRows, intOrNull, knobProblems, MAX_TOKENS_CEILING } from "../../../pages/create/presetSettings";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, FlowHeader, OptionCard, Steps, Tag } from "../../ui";
@@ -48,16 +51,29 @@ import { WizardReview } from "./WizardReview";
 const METHODS: AgentMethod[] = ["harness", "zip_runtime", "container", "byoc"];
 const isMethod = (m: string | null): m is AgentMethod => !!m && (METHODS as string[]).includes(m);
 
+interface Draft {
+  form: AgentForm;
+  step: number;
+  /** what a loaded agent carries besides the form (edit mode only) */
+  extras: StoredAgentExtras | null;
+}
+
 /** The draft a landing starts on, honouring the classic prefills:
  *  `method=` preselects a method, `gateway=` / `skill=` a Registry record. */
-function initialDraft(params: URLSearchParams): { form: AgentForm; step: number } {
+function initialDraft(params: URLSearchParams): Draft {
   const method = params.get("method");
   const gateway = params.get("gateway");
   const skill = params.get("skill");
   const form = emptyAgentForm(isMethod(method) ? method : "harness");
   if (gateway) form.selectedGateway = [gateway];
   if (skill) form.skills = [skill];
-  return { form, step: isMethod(method) || gateway || skill ? 1 : 0 };
+  return { form, step: isMethod(method) || gateway || skill ? 1 : 0, extras: null };
+}
+
+/** An existing agent loaded for a re-publish: straight to the configure step. */
+function editDraft(agent: AgentInfo): Draft {
+  const { form, extras } = formFromStoredSpec(agent.method as AgentMethod, agent.name, agent.spec);
+  return { form, step: 1, extras };
 }
 
 /**
@@ -66,22 +82,30 @@ function initialDraft(params: URLSearchParams): { form: AgentForm; step: number 
  * own code (byoc). The form model, spec builder and per-method validation are the
  * classic wizard's (`lib/agent-spec.ts`), so both consoles post the same
  * `AgentSpecInput` for the same inputs.
+ *
+ * With `edit` it is the re-publish editor: the form starts from the stored spec,
+ * the method step is skipped (name and method are immutable on the backend), and
+ * the save redeploys a new version onto the same AgentCore resource, carrying the
+ * stored fields no form input owns (`republishSpec`).
  */
-export function AgentWizard() {
+export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
   const toast = useV2Toast();
   const { can } = useAuth();
   const canDeploy = can("agents.deploy");
-  const [initial] = useState(() => initialDraft(params));
+  const [initial] = useState(() => (edit ? editDraft(edit) : initialDraft(params)));
   const [step, setStep] = useState(initial.step);
   const [form, setForm] = useState<AgentForm>(initial.form);
   const [ui, setUi] = useState<Omit<WizardUi, "customSkills">>({
-    customModel: false,
+    // a stored id the dropdown does not offer rides the "Custom model ID…" branch
+    customModel: edit
+      ? isCustomModelId(initial.form.modelId, initial.form.modelSource, initial.form.method === "container")
+      : false,
     byocUpload: null,
     byocUploading: false,
   });
-  const [customSkills, setCustomSkills] = useState<WizardUi["customSkills"]>([]);
+  const [customSkills, setCustomSkills] = useState<WizardUi["customSkills"]>(initial.extras?.customSkills ?? []);
   const [touched, setTouched] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<{ text: string; rows: string[] } | null>(null);
@@ -95,6 +119,17 @@ export function AgentWizard() {
       alive.current = false;
     };
   }, []);
+  // a re-publish reuses the stored byoc upload unless a new zip is staged
+  const storedUploadId = initial.extras?.byocUploadId ?? null;
+  useEffect(() => {
+    if (!storedUploadId) return;
+    void api
+      .getByocUpload(storedUploadId)
+      .then((info) => alive.current && setUi((prev) => ({ ...prev, byocUpload: prev.byocUpload ?? info })))
+      .catch(() => {
+        /* manifest gone — the member must upload a fresh zip to change code */
+      });
+  }, [storedUploadId]);
 
   const set: SectionProps["set"] = (patch) =>
     setForm((prev) => ({ ...prev, ...(typeof patch === "function" ? patch(prev) : patch) }));
@@ -118,8 +153,8 @@ export function AgentWizard() {
   const specCatalogs: AgentFormCatalogs = {
     gatewayTargets: cat.gatewayTargets,
     remoteMcp: cat.remoteMcp,
-    storedGatewayConfig: {},
-    kbInfo: (id) => resolveKb(id, cat.kbCatalog, []),
+    storedGatewayConfig: initial.extras?.storedGatewayConfig ?? {},
+    kbInfo: (id) => resolveKb(id, cat.kbCatalog, initial.extras?.specKbs ?? []),
   };
 
   // Switching source re-seeds the model (and the byoc allowed-models list) to that
@@ -217,14 +252,19 @@ export function AgentWizard() {
   };
   const next = () => (step === 0 ? setStep(1) : toReview());
   const select = (index: number) => (index < 2 ? setStep(index) : toReview());
+  // edit has no method step: its Steps show configure + review only
+  const firstStep = edit ? 1 : 0;
 
   const submit = async () => {
     if (submitting || !valid) return;
     setSubmitting(true);
     setError(null);
     try {
-      const res = await api.createAgent(buildAgentSpec(form, specCatalogs));
-      toast("success", t("v2.agents.wizard.started", { name: res.agent.name }));
+      const built = buildAgentSpec(form, specCatalogs);
+      const res = edit
+        ? await api.redeployAgent(edit.id, republishSpec(built, edit.spec))
+        : await api.createAgent(built);
+      toast("success", t(edit ? "v2.agents.wizard.redeployStarted" : "v2.agents.wizard.started", { name: res.agent.name }));
       setParams({ view: "detail", id: res.agent.id });
     } catch (e) {
       if (!alive.current) return;
@@ -234,8 +274,9 @@ export function AgentWizard() {
     }
   };
 
-  const stepLabels = [t("v2.agents.wizard.stepMethod"), t("v2.agents.wizard.stepConfig"), t("v2.agents.wizard.stepReview")];
-  const section = { form, set, cat, err };
+  const stepLabels = [t("v2.agents.wizard.stepMethod"), t("v2.agents.wizard.stepConfig"), t("v2.agents.wizard.stepReview")].slice(firstStep);
+  const section = { form, set, cat, err, nameLocked: Boolean(edit) };
+  const converted = Boolean((edit?.spec as { code_bundle?: unknown } | undefined)?.code_bundle);
   const skillsKb = (kbNote: string) => (
     <SkillsKbCard {...section} customSkills={customSkills} setCustomSkills={setCustomSkills} kbNote={kbNote} />
   );
@@ -255,12 +296,12 @@ export function AgentWizard() {
   return (
     <>
       <FlowHeader
-        title={t("v2.agents.new")}
-        onBack={() => setParams({})}
-        steps={<Steps steps={stepLabels} current={step} onSelect={select} />}
+        title={edit ? t("v2.agents.wizard.editTitle", { name: edit.name }) : t("v2.agents.new")}
+        onBack={() => setParams(edit ? { view: "detail", id: edit.id } : {})}
+        steps={<Steps steps={stepLabels} current={step - firstStep} onSelect={(i) => select(i + firstStep)} />}
         end={
           <>
-            <Button disabled={step === 0 || submitting} onClick={() => setStep(step - 1)}>
+            <Button disabled={step === firstStep || submitting} onClick={() => setStep(step - 1)}>
               {t("v2.common.prev")}
             </Button>
             {step < 2 ? (
@@ -269,13 +310,15 @@ export function AgentWizard() {
               </Button>
             ) : (
               <Button kind="primary" disabled={submitting || !canDeploy || !valid} onClick={() => void submit()} testId="v2-agent-wizard-submit">
-                {t("v2.agents.wizard.submit")}
+                {t(edit ? "v2.agents.wizard.redeploy" : "v2.agents.wizard.submit")}
               </Button>
             )}
           </>
         }
       />
       {!canDeploy && <Alert tone="warn">{t("v2.agents.noPermission")}</Alert>}
+      {edit && <Alert>{t("v2.agents.wizard.editNote")}</Alert>}
+      {converted && <Alert>{t("v2.agents.wizard.convertedNote")}</Alert>}
       {error && (
         <Alert tone="error">
           {error.text}
@@ -362,7 +405,7 @@ export function AgentWizard() {
 
       {step === 1 && method === "byoc" && (
         <>
-          <ByocBasicCard form={form} set={set} err={err} />
+          <ByocBasicCard form={form} set={set} err={err} nameLocked={Boolean(edit)} />
           <ByocArtifactCard
             form={form}
             set={set}
