@@ -14,7 +14,18 @@ import { Alert, Card, Descriptions } from "../../ui";
 import type { WizardCatalogs, WizardUi } from "./wizardKit";
 
 /** The review step: what will be deployed, per method (read-only). */
-export function WizardReview({ form, cat, ui }: { form: AgentForm; cat: WizardCatalogs; ui: WizardUi }) {
+export function WizardReview({
+  form,
+  cat,
+  ui,
+  shortTermOff = false,
+}: {
+  form: AgentForm;
+  cat: WizardCatalogs;
+  ui: WizardUi;
+  /** re-publish of an agent deployed without short-term memory (kept off on save) */
+  shortTermOff?: boolean;
+}) {
   const { t } = useTranslation();
   const none = t("v2.agents.wizard.none");
   const list = (items: string[]) => (items.length ? items.join(", ") : none);
@@ -27,9 +38,12 @@ export function WizardReview({ form, cat, ui }: { form: AgentForm; cat: WizardCa
   const kbNames = form.selectedKbs.map((id) => resolveKb(id, cat.kbCatalog, []).name);
   const memory = {
     label: t("v2.agents.wizard.memoryOnly"),
-    value:
-      (form.longTerm ? t("v2.agents.wizard.memoryLong") : t("v2.agents.wizard.memoryShort")) +
-      ` · ${form.memoryId || t("v2.agents.wizard.memoryDefault")}`,
+    value: shortTermOff
+      ? form.longTerm
+        ? `${t("v2.agents.wizard.memoryLongOnly")} · ${form.memoryId || t("v2.agents.wizard.memoryDefault")}`
+        : t("v2.agents.wizard.memoryOff")
+      : (form.longTerm ? t("v2.agents.wizard.memoryLong") : t("v2.agents.wizard.memoryShort")) +
+        ` · ${form.memoryId || t("v2.agents.wizard.memoryDefault")}`,
   };
   const head = [
     { label: t("v2.agents.colName"), value: form.name },

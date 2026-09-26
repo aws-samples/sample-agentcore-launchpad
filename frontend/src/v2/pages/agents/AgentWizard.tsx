@@ -275,8 +275,10 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
   };
 
   const stepLabels = [t("v2.agents.wizard.stepMethod"), t("v2.agents.wizard.stepConfig"), t("v2.agents.wizard.stepReview")].slice(firstStep);
-  const section = { form, set, cat, err, nameLocked: Boolean(edit) };
+  // a converted agent's exported code bakes its prompt and model (the backend refuses
+  // changing either on re-publish), so both are shown read-only
   const converted = Boolean((edit?.spec as { code_bundle?: unknown } | undefined)?.code_bundle);
+  const section = { form, set, cat, err, nameLocked: Boolean(edit), promptLocked: converted };
   const skillsKb = (kbNote: string) => (
     <SkillsKbCard {...section} customSkills={customSkills} setCustomSkills={setCustomSkills} kbNote={kbNote} />
   );
@@ -384,7 +386,13 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
         <>
           <BasicCard {...section} />
           <ProtocolCard form={form} set={set} onProtocol={changeProtocol} />
-          {modelCard(form.protocol === "a2a" ? { showSource: false, sourceNote: t("v2.agents.wizard.a2aSourcePinned") } : {})}
+          {modelCard(
+            converted
+              ? { showSource: false, sourceNote: t("v2.agents.wizard.convertedModelLocked"), locked: true }
+              : form.protocol === "a2a"
+                ? { showSource: false, sourceNote: t("v2.agents.wizard.a2aSourcePinned") }
+                : {},
+          )}
           <StrandsToolsCard {...section} />
           {skillsKb(t("create.configure.kbNoteDirect"))}
           <MemoryCard {...section} loop={false} note={t("create.configure.note")} />
@@ -419,7 +427,14 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
         </>
       )}
 
-      {step === 2 && <WizardReview form={form} cat={cat} ui={{ ...ui, customSkills }} />}
+      {step === 2 && (
+        <WizardReview
+          form={form}
+          cat={cat}
+          ui={{ ...ui, customSkills }}
+          shortTermOff={(edit?.spec as { memory?: { short_term?: boolean } } | undefined)?.memory?.short_term === false}
+        />
+      )}
     </>
   );
 }

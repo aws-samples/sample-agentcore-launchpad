@@ -49,16 +49,22 @@ export function NameField({ form, set, err, nameLocked }: Omit<SectionProps, "ca
 /** Name + system prompt (harness / Strands / other SDK). */
 export function BasicCard(props: Omit<SectionProps, "cat">) {
   const { t } = useTranslation();
-  const { form, set, err } = props;
+  const { form, set, err, promptLocked } = props;
   return (
     <Card title={t("v2.agents.basic")}>
       <div className="v2-form">
         <NameField {...props} />
-        <Field label={t("v2.agents.wizard.systemPrompt")} required error={err("prompt")}>
+        <Field
+          label={t("v2.agents.wizard.systemPrompt")}
+          required
+          error={err("prompt")}
+          hint={promptLocked ? t("v2.agents.wizard.convertedPromptLocked") : undefined}
+        >
           <textarea
             className="v2-textarea"
             rows={6}
             maxLength={20000}
+            readOnly={promptLocked}
             value={form.systemPrompt}
             placeholder={t("v2.agents.wizard.promptPlaceholder")}
             onChange={(e) => set({ systemPrompt: e.target.value })}
