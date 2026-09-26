@@ -25,6 +25,21 @@
   ],
   "collections": [
     {
+      "id": "agent-development",
+      "categoryId": "platform",
+      "title": {
+        "en": "Agent Development (V2)",
+        "zh-CN": "Agent 开发（V2）"
+      },
+      "description": {
+        "en": "Create and test a managed Harness Agent with the DJI-drones knowledge base in the V2 console.",
+        "zh-CN": "在 V2 控制台创建托管 Harness Agent，挂载 DJI-drones 知识库并验证手册问答。"
+      },
+      "videoIds": [
+        "agent-development-harness"
+      ]
+    },
+    {
       "id": "architect-assistant",
       "categoryId": "architect",
       "title": {
@@ -32,8 +47,8 @@
         "zh-CN": "架构助手"
       },
       "description": {
-        "en": "Prepare resources, deploy a drone assistant, and continue with Runtime and A/B evaluation.",
-        "zh-CN": "准备资源、部署无人机助手，继续学习 Runtime 转换与 A/B 实验。"
+        "en": "Explore ADLC and review a completed DJI drone assistant, its Runtime twin, and A/B evidence in the V2 console.",
+        "zh-CN": "在 V2 控制台了解 ADLC，并回顾已完成的 DJI 无人机助手、Runtime 孪生和 A/B 实验结果。"
       },
       "videoIds": [
         "architect-assistant",
@@ -140,32 +155,66 @@
   ],
   "videos": [
     {
+      "id": "agent-development-harness",
+      "title": {
+        "en": "Agent Development: Create a Harness Agent with DJI-drones",
+        "zh-CN": "Agent 开发：新建 Harness Agent 并挂载 DJI-drones 知识库"
+      },
+      "description": {
+        "en": "Create a managed Harness Agent in the V2 console, attach the DJI-drones knowledge base, inspect its real deployment, and verify an answer grounded in the DJI Mavic 4 Pro manual.",
+        "zh-CN": "从 V2 控制台创建托管 Harness Agent，挂载 DJI-drones 知识库，检查真实部署，并依据 DJI Mavic 4 Pro 用户手册验证回答。"
+      },
+      "publishedAt": "2026-09-26",
+      "durationSeconds": 189.6,
+      "language": "zh-CN",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/agent-development-harness/20260926-v2-dji/poster.jpg",
+      "sources": [
+        {"url": "https://d3fbtvyrf8heia.cloudfront.net/media/agent-development-harness/20260926-v2-dji/agent-development-harness.zh-CN.mp4", "type": "video/mp4"},
+        {"url": "https://d3fbtvyrf8heia.cloudfront.net/media/agent-development-harness/20260926-v2-dji/agent-development-harness.zh-CN.webm", "type": "video/webm"}
+      ],
+      "captions": [
+        {"url": "https://d3fbtvyrf8heia.cloudfront.net/media/agent-development-harness/20260926-v2-dji/agent-development-harness.zh-CN.vtt", "language": "zh-CN", "label": "简体中文"}
+      ],
+      "chapters": [
+        {"startSeconds": 0, "title": {"en": "Create a Harness Agent with DJI-drones", "zh-CN": "新建 Harness Agent · DJI-drones 知识库"}},
+        {"startSeconds": 12, "title": {"en": "Open Agent Development", "zh-CN": "进入 Agent 开发"}},
+        {"startSeconds": 26, "title": {"en": "Choose managed Harness", "zh-CN": "选择托管 Harness"}},
+        {"startSeconds": 40, "title": {"en": "Name the manual assistant", "zh-CN": "填写名称和手册助手提示词"}},
+        {"startSeconds": 64, "title": {"en": "Attach the DJI-drones knowledge base", "zh-CN": "挂载 DJI-drones 知识库"}},
+        {"startSeconds": 85, "title": {"en": "Review and create", "zh-CN": "核对配置并创建"}},
+        {"startSeconds": 104, "title": {"en": "Inspect the deployment", "zh-CN": "检查真实部署"}},
+        {"startSeconds": 126, "title": {"en": "Ask a manual question", "zh-CN": "在对话演练场提问"}},
+        {"startSeconds": 148, "title": {"en": "Verify the grounded answer", "zh-CN": "核对知识库回答"}},
+        {"startSeconds": 177, "title": {"en": "Creation and verification complete", "zh-CN": "完成创建和验证"}}
+      ]
+    },
+    {
       "id": "architect-assistant",
       "title": {
         "en": "Architect Assistant (1): ADLC and creating a drone assistant",
         "zh-CN": "架构助手（一）：ADLC 导览与无人机助手创建"
       },
       "description": {
-        "en": "Introduce the six-stage Agent Development Lifecycle, its production-feedback loop, and the pinned four-step creation progress bar. Then select DJI-drones, register and attach a manual-answering Skill, review and deploy the proposal, verify two drone models, and start the first evaluation. Continue with Runtime conversion, a baseline, and A/B experiments in part two.",
-        "zh-CN": "先了解 ADLC 六阶段、评估与生产反馈闭环，以及置顶的四步创建进度。随后选择 DJI-drones 知识库，创建并挂载手册问答 Skill，审阅并部署方案，验证两款机型的问答，并启动首次评估。Runtime 转换、基线与 A/B 实验继续观看第二集。"
+        "en": "Explore the six ADLC stages and creation workflow in the V2 console, then review the previously completed DJI drone assistant: its knowledge base, Skill, approved proposal, Harness deployment, chat, and evaluation assets.",
+        "zh-CN": "在 V2 控制台了解 ADLC 六阶段和创建流程，再回顾此前完成的 DJI 无人机助手：知识库、Skill、方案批准、Harness 部署、问答和评估准备。"
       },
-      "publishedAt": "2026-09-17",
-      "durationSeconds": 618.1,
+      "publishedAt": "2026-09-26",
+      "durationSeconds": 222,
       "language": "zh-CN",
-      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-adlc/poster.jpg",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260926-v2/poster.jpg",
       "sources": [
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-adlc/architect-assistant.zh-CN.mp4",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260926-v2/architect-assistant.zh-CN.mp4",
           "type": "video/mp4"
         },
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-adlc/architect-assistant.zh-CN.webm",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260926-v2/architect-assistant.zh-CN.webm",
           "type": "video/webm"
         }
       ],
       "captions": [
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260917-adlc/architect-assistant.zh-CN.vtt",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant/20260926-v2/architect-assistant.zh-CN.vtt",
           "language": "zh-CN",
           "label": "简体中文"
         }
@@ -174,211 +223,78 @@
         {
           "startSeconds": 0,
           "title": {
-            "en": "ADLC and the drone assistant walkthrough",
-            "zh-CN": "架构助手：ADLC 方法与无人机助手实操"
+            "en": "ADLC and the DJI drone assistant",
+            "zh-CN": "架构助手（一）：ADLC 导览与无人机助手创建"
           }
         },
         {
-          "startSeconds": 16.1,
+          "startSeconds": 12,
           "title": {
-            "en": "An evaluation-driven development lifecycle",
-            "zh-CN": "ADLC：评估驱动的开发方法"
+            "en": "Open ADLC in the V2 Architect Assistant",
+            "zh-CN": "从 V2 架构助手进入 ADLC"
           }
         },
         {
-          "startSeconds": 34.1,
+          "startSeconds": 33,
           "title": {
-            "en": "Define success, build, and evaluate",
-            "zh-CN": "定义标准、构建与评估"
+            "en": "Show the new conversation entry",
+            "zh-CN": "演示新建会话入口"
           }
         },
         {
-          "startSeconds": 56.1,
+          "startSeconds": 56,
           "title": {
-            "en": "Release gates, production observation, and failure analysis",
-            "zh-CN": "质量门禁、生产观测与失败分析"
+            "en": "Open the completed drone case",
+            "zh-CN": "打开已完成的无人机案例"
           }
         },
         {
-          "startSeconds": 79.1,
+          "startSeconds": 77,
           "title": {
-            "en": "Feed production evidence into the next development cycle",
-            "zh-CN": "让生产证据回流下一轮开发"
+            "en": "Review the requirement and knowledge base",
+            "zh-CN": "核对需求与知识库"
           }
         },
         {
-          "startSeconds": 100.1,
+          "startSeconds": 99,
           "title": {
-            "en": "Four required creation steps in the pinned progress bar",
-            "zh-CN": "置顶进度条：四个必做步骤"
+            "en": "Review the Skill and prepared resources",
+            "zh-CN": "查看 Skill 与资源准备"
           }
         },
         {
-          "startSeconds": 123.1,
+          "startSeconds": 120,
           "title": {
-            "en": "Navigate creation steps and begin the drone walkthrough",
-            "zh-CN": "定位当前步骤，进入无人机实操"
+            "en": "Review the proposal and golden tests",
+            "zh-CN": "审阅方案与黄金测试"
           }
         },
         {
-          "startSeconds": 146.1,
+          "startSeconds": 144,
           "title": {
-            "en": "Start a new conversation",
-            "zh-CN": "新建会话，打开创建准备"
+            "en": "Inspect the existing Harness deployment",
+            "zh-CN": "核对 Harness 部署结果"
           }
         },
         {
-          "startSeconds": 165.1,
+          "startSeconds": 166,
           "title": {
-            "en": "Describe users, products and scope",
-            "zh-CN": "说明产品、用户和回答边界"
+            "en": "Review the original manual conversations",
+            "zh-CN": "查看真实手册问答"
           }
         },
         {
-          "startSeconds": 186.1,
+          "startSeconds": 190,
           "title": {
-            "en": "Review preparation requirements",
-            "zh-CN": "把缺少的准备项放到右侧"
+            "en": "Connect evaluation to the next step",
+            "zh-CN": "连接评估与下一步"
           }
         },
         {
-          "startSeconds": 204.1,
+          "startSeconds": 210,
           "title": {
-            "en": "Select DJI-drones and inspect indexing",
-            "zh-CN": "选择 DJI-drones 并核对索引"
-          }
-        },
-        {
-          "startSeconds": 225.1,
-          "title": {
-            "en": "Open Skill registration from preparation",
-            "zh-CN": "从准备面板进入 Skill 注册"
-          }
-        },
-        {
-          "startSeconds": 240.1,
-          "title": {
-            "en": "Upload the prepared manual-answering Skill",
-            "zh-CN": "上传预先编写的手册问答 Skill"
-          }
-        },
-        {
-          "startSeconds": 261.1,
-          "title": {
-            "en": "Submit and approve the Skill",
-            "zh-CN": "提交并审批 Skill"
-          }
-        },
-        {
-          "startSeconds": 282.1,
-          "title": {
-            "en": "Refresh and select the new Skill",
-            "zh-CN": "返回并选择新的 Skill"
-          }
-        },
-        {
-          "startSeconds": 302.1,
-          "title": {
-            "en": "Review optional MCP resources",
-            "zh-CN": "查看 MCP 资源与当前选择"
-          }
-        },
-        {
-          "startSeconds": 320.1,
-          "title": {
-            "en": "Confirm requirements, resources and the initial scope",
-            "zh-CN": "确认需求、资源和首版范围"
-          }
-        },
-        {
-          "startSeconds": 344.1,
-          "title": {
-            "en": "Review requirements and launch barriers",
-            "zh-CN": "从需求基线看上线障碍"
-          }
-        },
-        {
-          "startSeconds": 363.1,
-          "title": {
-            "en": "Turn requirements into six golden tests",
-            "zh-CN": "把要求转成六个黄金测试"
-          }
-        },
-        {
-          "startSeconds": 383.1,
-          "title": {
-            "en": "Review exact bindings and the system prompt",
-            "zh-CN": "核对将要部署的资源和提示词"
-          }
-        },
-        {
-          "startSeconds": 404.1,
-          "title": {
-            "en": "Approve the reviewed revision and deploy",
-            "zh-CN": "批准当前修订并开始部署"
-          }
-        },
-        {
-          "startSeconds": 427.1,
-          "title": {
-            "en": "Inspect the deployment and open Chat",
-            "zh-CN": "查看部署结果并进入对话"
-          }
-        },
-        {
-          "startSeconds": 445.1,
-          "title": {
-            "en": "Ask about Mavic 4 Pro setup",
-            "zh-CN": "向 Mavic 4 Pro 助手提问"
-          }
-        },
-        {
-          "startSeconds": 464.1,
-          "title": {
-            "en": "Inspect Skill calls, retrieval and citations",
-            "zh-CN": "核对 Skill、检索和手册引用"
-          }
-        },
-        {
-          "startSeconds": 485.1,
-          "title": {
-            "en": "Ask about a different drone model",
-            "zh-CN": "切换到另一款机型"
-          }
-        },
-        {
-          "startSeconds": 504.1,
-          "title": {
-            "en": "Inspect the Lito X1 answer and references",
-            "zh-CN": "核对 Lito X1 的资料与回答"
-          }
-        },
-        {
-          "startSeconds": 523.1,
-          "title": {
-            "en": "Prepare an evaluation plan from the proposal",
-            "zh-CN": "从当前方案准备评估计划"
-          }
-        },
-        {
-          "startSeconds": 544.1,
-          "title": {
-            "en": "Review and remove overlapping checks",
-            "zh-CN": "审阅并去掉重复检查"
-          }
-        },
-        {
-          "startSeconds": 567.1,
-          "title": {
-            "en": "Approve evaluation asset creation",
-            "zh-CN": "明确批准评估资产创建"
-          }
-        },
-        {
-          "startSeconds": 592.1,
-          "title": {
-            "en": "Start the first six-scenario evaluation",
-            "zh-CN": "启动六场景首次评估"
+            "en": "End of part one",
+            "zh-CN": "第一集结束"
           }
         }
       ]
@@ -386,30 +302,30 @@
     {
       "id": "architect-assistant-runtime-ab",
       "title": {
-        "en": "Architect assistant II: Runtime conversion, baseline and A/B experiment",
+        "en": "Architect Assistant (2): Runtime conversion, baseline, and A/B experiment",
         "zh-CN": "架构助手（二）：Runtime 转换、基线与 A/B 实验"
       },
       "description": {
-        "en": "Freshly recorded continuation after the Runtime conversion fix. Verify the inherited knowledge base and Skill, establish a Runtime-specific baseline, review a candidate prompt, run a real configuration-bundle A/B comparison, repair the experiment sampling sources, interpret 48 judgments from 12 sessions, and clean up temporary resources without promotion.",
-        "zh-CN": "转换修复后重新实录：验证知识库与 Skill 继承，为 Runtime 建立基线，审阅候选提示词，执行配置包 A/B 对照，补齐本实验采样日志来源，解读 12 个会话的 48 条评审记录，并清理临时资源；未推广候选配置。"
+        "en": "Review the existing DJI Harness Runtime twin, knowledge base and Skill verification, six-scenario baseline, and completed configuration-bundle A/B experiment in the V2 console. Temporary resources were cleaned up and the candidate was not promoted.",
+        "zh-CN": "在 V2 控制台回顾已有 DJI Harness 的 Runtime 孪生、知识库与 Skill 验证、六场景基线，以及已完成并清理的配置包 A/B 实验；候选未推广。"
       },
-      "publishedAt": "2026-09-17",
-      "durationSeconds": 431.021333,
+      "publishedAt": "2026-09-26",
+      "durationSeconds": 229,
       "language": "zh-CN",
-      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-runtime-ab/20260917-part2/poster.jpg",
+      "posterUrl": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-runtime-ab/20260926-v2/poster.jpg",
       "sources": [
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-runtime-ab/20260917-part2/architect-assistant-runtime-ab.zh-CN.mp4",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-runtime-ab/20260926-v2/architect-assistant-runtime-ab.zh-CN.mp4",
           "type": "video/mp4"
         },
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-runtime-ab/20260917-part2/architect-assistant-runtime-ab.zh-CN.webm",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-runtime-ab/20260926-v2/architect-assistant-runtime-ab.zh-CN.webm",
           "type": "video/webm"
         }
       ],
       "captions": [
         {
-          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-runtime-ab/20260917-part2/architect-assistant-runtime-ab.zh-CN.vtt",
+          "url": "https://d3fbtvyrf8heia.cloudfront.net/media/architect-assistant-runtime-ab/20260926-v2/architect-assistant-runtime-ab.zh-CN.vtt",
           "language": "zh-CN",
           "label": "简体中文"
         }
@@ -418,141 +334,78 @@
         {
           "startSeconds": 0,
           "title": {
-            "en": "Part two: Runtime and A/B validation",
-            "zh-CN": "架构助手第二集：Runtime 与 A/B 实验"
+            "en": "Runtime conversion, baseline, and A/B experiment",
+            "zh-CN": "架构助手（二）：Runtime、基线与 A/B 实验"
           }
         },
         {
-          "startSeconds": 20,
+          "startSeconds": 12,
           "title": {
-            "en": "Run the repaired Runtime conversion",
-            "zh-CN": "重新执行 Runtime 转换"
+            "en": "Find the Runtime twin from the Architect Assistant",
+            "zh-CN": "从架构助手查看 Runtime 孪生"
           }
         },
         {
-          "startSeconds": 47,
+          "startSeconds": 34,
           "title": {
-            "en": "Verify the twin and retained resources",
-            "zh-CN": "核对孪生及其资源"
+            "en": "Inspect resources on the Runtime twin",
+            "zh-CN": "核对孪生的资源继承"
           }
         },
         {
-          "startSeconds": 67,
+          "startSeconds": 55,
           "title": {
-            "en": "Ask the new Runtime a real question",
-            "zh-CN": "在新 Runtime 上提问"
+            "en": "Review the Runtime's real response",
+            "zh-CN": "查看 Runtime 的真实回答"
           }
         },
         {
-          "startSeconds": 87,
+          "startSeconds": 78,
           "title": {
-            "en": "Inspect Skill and direct retrieval results",
-            "zh-CN": "确认 Skill 和直接检索结果"
+            "en": "Read the six-scenario baseline",
+            "zh-CN": "读取六场景基线"
           }
         },
         {
-          "startSeconds": 106,
+          "startSeconds": 101,
           "title": {
-            "en": "Choose evaluators appropriate for the Runtime",
-            "zh-CN": "为 Runtime 选择适用的评估器"
+            "en": "Inspect a lower scoring judgment",
+            "zh-CN": "检查较低评分的理由"
           }
         },
         {
-          "startSeconds": 127,
+          "startSeconds": 123,
           "title": {
-            "en": "Submit the twin baseline evaluation",
-            "zh-CN": "提交孪生基线评估"
+            "en": "Review the experiment candidate and bundles",
+            "zh-CN": "查看实验建议与配置包"
           }
         },
         {
-          "startSeconds": 146,
+          "startSeconds": 147,
           "title": {
-            "en": "Read the Runtime baseline and explanations",
-            "zh-CN": "读取 Runtime 基线与评审理由"
+            "en": "Inspect traffic split and online evaluation",
+            "zh-CN": "查看分流与在线评分"
           }
         },
         {
-          "startSeconds": 167,
+          "startSeconds": 170,
           "title": {
-            "en": "Start a configuration-bundle experiment from the baseline",
-            "zh-CN": "带着基线启动配置包实验"
+            "en": "Interpret the A/B verdict",
+            "zh-CN": "解读 A/B 判定"
           }
         },
         {
-          "startSeconds": 189,
+          "startSeconds": 195,
           "title": {
-            "en": "Generate a candidate prompt from the fixed baseline",
-            "zh-CN": "固定基线，生成候选提示词"
+            "en": "Verify cleanup and retained agents",
+            "zh-CN": "核对资源清理和保留项"
           }
         },
         {
-          "startSeconds": 212,
+          "startSeconds": 217,
           "title": {
-            "en": "Review and tighten the candidate prompt",
-            "zh-CN": "审阅并收紧候选提示词"
-          }
-        },
-        {
-          "startSeconds": 237,
-          "title": {
-            "en": "Create control and treatment bundles",
-            "zh-CN": "固化对照组与实验组配置"
-          }
-        },
-        {
-          "startSeconds": 256,
-          "title": {
-            "en": "Set the shared online evaluators",
-            "zh-CN": "设置两组共用的在线评估器"
-          }
-        },
-        {
-          "startSeconds": 279,
-          "title": {
-            "en": "Start the 50/50 configuration comparison",
-            "zh-CN": "启动 50/50 配置包对照"
-          }
-        },
-        {
-          "startSeconds": 299,
-          "title": {
-            "en": "Replay the dataset and collect online evaluations",
-            "zh-CN": "回放数据集并等待评分"
-          }
-        },
-        {
-          "startSeconds": 321,
-          "title": {
-            "en": "Aggregate the real online evaluation results",
-            "zh-CN": "请求聚合真实在线评分"
-          }
-        },
-        {
-          "startSeconds": 340,
-          "title": {
-            "en": "Include both telemetry sources and replay the tests",
-            "zh-CN": "补齐采样日志来源后重新回放"
-          }
-        },
-        {
-          "startSeconds": 365,
-          "title": {
-            "en": "Read all results and keep the current version",
-            "zh-CN": "读取完整结果，保留当前版本"
-          }
-        },
-        {
-          "startSeconds": 389,
-          "title": {
-            "en": "Clean up this experiment’s temporary resources",
-            "zh-CN": "清理本次实验的临时资源"
-          }
-        },
-        {
-          "startSeconds": 411,
-          "title": {
-            "en": "Keep the reusable twin and reviewable evidence",
-            "zh-CN": "留下可复用的孪生与验证证据"
+            "en": "End of part two",
+            "zh-CN": "第二集结束"
           }
         }
       ]
