@@ -96,10 +96,10 @@ export const V2_NAV: V2NavGroup[] = [
     key: "admin",
     labelKey: "v2.nav.groupAdmin",
     items: [
-      { to: "/users", labelKey: "nav.users", icon: Users, admin: true },
-      { to: "/workspaces", labelKey: "nav.workspaces", icon: Workflow, admin: true },
-      { to: "/announcements", labelKey: "nav.announcements", icon: ScrollText, admin: true },
-      { to: "/videos", labelKey: "nav.videos", icon: PlayCircle },
+      { to: "/v2/users", labelKey: "nav.users", icon: Users, v2: true, admin: true },
+      { to: "/v2/workspaces", labelKey: "nav.workspaces", icon: Workflow, v2: true, admin: true },
+      { to: "/v2/announcements", labelKey: "nav.announcements", icon: ScrollText, v2: true, admin: true },
+      { to: "/v2/videos", labelKey: "nav.videos", icon: PlayCircle, v2: true },
     ],
   },
 ];

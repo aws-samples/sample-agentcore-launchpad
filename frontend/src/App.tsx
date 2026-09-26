@@ -10,6 +10,10 @@ import { Overview } from "./pages/Overview";
 import { WorkspaceProvider } from "./workspace/WorkspaceProvider";
 import { classicAgentNewToV2 } from "./v2/pages/agents/classicUrl";
 import { classicAssistantToV2 } from "./v2/pages/assistant/classicUrl";
+import { classicUsersToV2 } from "./v2/pages/users/classicUrl";
+import { classicWorkspacesToV2 } from "./v2/pages/workspaces/classicUrl";
+import { classicAnnouncementsToV2 } from "./v2/pages/announcements/classicUrl";
+import { classicVideosToV2 } from "./v2/pages/videos/classicUrl";
 import { classicRegistryToV2 } from "./v2/pages/registry/classicUrl";
 import { classicKnowledgeBasesToV2 } from "./v2/pages/knowledge/classicUrl";
 import { classicSkillLabToV2 } from "./v2/pages/skilllab/classicUrl";
@@ -106,6 +110,10 @@ const V2Chat = lazy(() => import("./v2/pages/Chat").then((m) => ({ default: m.V2
 const V2Observability = lazy(() => import("./v2/pages/Observability").then((m) => ({ default: m.V2Observability })));
 const V2Memory = lazy(() => import("./v2/pages/Memory").then((m) => ({ default: m.V2Memory })));
 const V2Governance = lazy(() => import("./v2/pages/Governance").then((m) => ({ default: m.V2Governance })));
+const V2Users = lazy(() => import("./v2/pages/Users").then((m) => ({ default: m.V2Users })));
+const V2Workspaces = lazy(() => import("./v2/pages/Workspaces").then((m) => ({ default: m.V2Workspaces })));
+const V2Announcements = lazy(() => import("./v2/pages/Announcements").then((m) => ({ default: m.V2Announcements })));
+const V2Videos = lazy(() => import("./v2/pages/Videos").then((m) => ({ default: m.V2Videos })));
 const V2NotFound = lazy(() =>
   import("./v2/pages/Home").then((m) => ({ default: m.V2NotFound })),
 );
@@ -257,6 +265,10 @@ export default function App() {
               <Route path="observability" element={<V2Observability />} />
               <Route path="memory" element={<V2Memory />} />
               <Route path="governance" element={<V2Governance />} />
+              <Route path="users" element={<V2Users />} />
+              <Route path="workspaces" element={<V2Workspaces />} />
+              <Route path="announcements" element={<V2Announcements />} />
+              <Route path="videos" element={<V2Videos />} />
               <Route path="*" element={<V2NotFound />} />
             </Route>
             <Route element={<ConsoleShell />}>
@@ -301,10 +313,22 @@ export default function App() {
                 path="governance"
                 element={<V2OrClassic classic={<Governance />} toV2={classicGovernanceToV2} />}
               />
-              <Route path="users" element={<Users />} />
-              <Route path="announcements" element={<Announcements />} />
-              <Route path="videos" element={<Videos />} />
-              <Route path="workspaces" element={<Workspaces />} />
+              <Route
+                path="users"
+                element={<V2OrClassic classic={<Users />} toV2={classicUsersToV2} />}
+              />
+              <Route
+                path="announcements"
+                element={<V2OrClassic classic={<Announcements />} toV2={classicAnnouncementsToV2} />}
+              />
+              <Route
+                path="videos"
+                element={<V2OrClassic classic={<Videos />} toV2={classicVideosToV2} />}
+              />
+              <Route
+                path="workspaces"
+                element={<V2OrClassic classic={<Workspaces />} toV2={classicWorkspacesToV2} />}
+              />
               {/* Catch-all stays INSIDE the Shell group so an unknown URL keeps
                   the sidebar/topbar/footer instead of a bare background grid. */}
               <Route path="*" element={<NotFound />} />
