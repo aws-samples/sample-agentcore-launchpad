@@ -2984,7 +2984,7 @@ export interface SkillLabStatus {
   /** platform defaults a job runs with when its params omit the models */
   default_target_model: string;
   default_judge_model: string;
-  /** blank-model default for the codex_exec backend (a codex catalog slug) */
+  /** blank-model default for the codex_exec backend (an inference-profile id codex invokes) */
   default_codex_target_model: string;
   /** exec backends baked into the worker image */
   target_backends: SkillLabTargetBackend[];

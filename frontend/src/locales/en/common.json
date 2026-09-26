@@ -1547,7 +1547,7 @@
       "field": "Execution backend",
       "hint": "Which CLI runs the tasks inside the exec worker — both talk to Bedrock with the execution role, no API key.",
       "targetHintClaude": "Bedrock inference-profile id the claude CLI runs (us./global. prefix).",
-      "targetHintCodex": "Codex catalog slug resolved by its amazon-bedrock provider (e.g. openai.gpt-6-sol).",
+      "targetHintCodex": "Inference-profile id invoked by codex's amazon-bedrock-runtime provider (e.g. global.openai.gpt-6-sol); the host model catalog needs an entry for it.",
       "judgeHint": "Converse inference-profile id for the LLM judge (us./global. prefix; free text).",
       "judgeMode": "Judge mode",
       "judgeModeOption": {

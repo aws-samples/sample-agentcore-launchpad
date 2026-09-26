@@ -409,13 +409,13 @@ Skill Lab 负责评估与训练 Registry 里的技能记录：vendored 的 Skill
 |---|---|---|
 | `skill_lab_python` | `<repo>/data/skill-lab-venv/bin/python` | 运行 vendored 的 `evaluate_skill.py` / `train.py` / 任务集校验器的解释器。bootstrap 依据 `vendor/skillopt/requirements-launchpad.txt` 构建它，并在该文件变化时重建；后端进程自身永不 import vendored 目录树。该路径缺失时 `GET /api/skill-lab/status` 会返回 `venv_ready: false`——这就是未开通的 workspace 的样子。 |
 | `skill_lab_max_concurrent_jobs` | `1`（1–4） | 同时运行的评估/训练任务数。每个任务是一个 CLI 子进程外加它自己的 worker 会话，因此这是在墙上时间与主机 CPU/内存、worker runtime 压力之间取舍；超出的任务排队而不是失败。 |
-| `skill_lab_judge_model_id` | `us.openai.gpt-6-sol` | 给 rollout 打分的模型。必须是 Bedrock 的 **Converse inference-profile id**——`bedrock_chat` 判分器会拒绝裸 model id。它同时按模型家族决定 agentic 判分器使用的宿主 CLI：`openai.*` 的 id 会去掉 profile 前缀后路由到宿主的 `codex`，其余路由到宿主的 `claude`（`runner.judge_exec_route`）。因此改这一项也就改变了宿主必须安装哪个 CLI。 |
+| `skill_lab_judge_model_id` | `us.openai.gpt-6-sol` | 给 rollout 打分的模型。必须是 Bedrock 的 **Converse inference-profile id**——`bedrock_chat` 判分器会拒绝裸 model id。它同时按模型家族决定 agentic 判分器使用的宿主 CLI：`openai.*` 的 id 会原样路由到宿主的 `codex`（需 codex >= 0.155，且其模型目录要有该 id 的条目），其余路由到宿主的 `claude`（`runner.judge_exec_route`）。因此改这一项也就改变了宿主必须安装哪个 CLI。 |
 | `skill_lab_target_model_id` | `global.anthropic.claude-opus-5-5` | `claude_code_exec` 目标后端下被测技能默认运行的模型，同样是 Converse inference-profile id。逐任务参数可以覆盖它；空值永远不会被下发，因为空的 `--model` 会让 vendored CLI 换上它自己的非 Bedrock 默认值。 |
-| `skill_lab_codex_target_model_id` | `openai.gpt-6-sol` | `codex_exec` 目标后端下的同一个默认值，但它是 Bedrock 的**目录 slug**而不是 Converse profile id：codex 通过自己配置里内置的 `amazon-bedrock` provider 自行解析模型。单独设一个 key，是为了让两个后端永远不会拿到对方的 id 家族。 |
+| `skill_lab_codex_target_model_id` | `global.openai.gpt-6-sol` | `codex_exec` 目标后端下的同一个默认值。codex 自行解析模型：配置里内置的 `amazon-bedrock-runtime` provider 直接调用这个 **inference-profile id**（裸 `openai.*` id 会因不支持按需吞吐而被拒绝），并从宿主的模型目录（`skill_lab_codex_catalog_path`）读取它的元数据，因此目录里必须有与该 id 完全一致的条目。单独设一个 key，是为了让每个后端都拿到自己 CLI 能接受的 id。 |
 | `skill_lab_codex_catalog_path` | `~/.codex/model-catalogs/bedrock-models.json` | 构建时从后端主机读取、并塞进 worker 镜像 codex-home 的 Bedrock 模型目录。该文件内嵌了专有的模型指令，因此从不入库；缺失时构建会塞一个空的 `{}` 目录并在日志里写明——那个镜像上的 codex 目标也就没有目录可供解析。 |
 | `skill_lab_judge_sandbox` | `bwrap` | agentic 判分器的产物解析器所用的沙箱启动 argv（按 shlex 切分），它跑在后端**主机**上——worker microVM 无法运行 bubblewrap。若主机上非特权 `bwrap` 被 AppArmor 拦住，改成 `sudo -n bwrap`。`GET /api/skill-lab/status` 会探测该 argv 的第一个词来给出 `agentic_judge_ready`，vendored 那层 fail-closed 的边界校验仍然叠加生效。 |
 | `skill_lab_worker_cli_version` | `2.1.234` | 报告 worker 镜像里内置的 `claude` CLI 版本。 |
-| `skill_lab_worker_codex_version` | `0.147.0` | 报告 worker 镜像里内置的 `codex` CLI 版本。 |
+| `skill_lab_worker_codex_version` | `0.155.1` | 报告 worker 镜像里内置的 `codex` CLI 版本。 |
 
 最后两个 `*_version` 是**镜像值，不是输入值**。真正生效的是
 `vendor/skillopt/deploy/agentcore/Dockerfile` 里 `ARG CLAUDE_CLI_VERSION` /

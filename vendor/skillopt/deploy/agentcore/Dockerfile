@@ -10,7 +10,7 @@
 FROM public.ecr.aws/docker/library/python:3.12-slim-bookworm
 
 ARG CLAUDE_CLI_VERSION=2.1.234
-ARG CODEX_CLI_VERSION=0.147.0
+ARG CODEX_CLI_VERSION=0.155.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git ripgrep procps unzip jq \

@@ -131,12 +131,13 @@ def test_routing_flags_are_passed_for_every_judge_mode(mode):
 
 @pytest.mark.parametrize("mode", ("chat", "auto", "agentic"))
 def test_an_openai_family_judge_never_resolves_to_the_claude_cli(mode):
-    argv = _judge_argv(mode, judge_model="us.openai.gpt-5.6-sol")
+    argv = _judge_argv(mode, judge_model="us.openai.gpt-6-sol")
     backend = argv[argv.index("--judge_exec_backend") + 1]
     model = argv[argv.index("--judge_exec_model") + 1]
     assert backend == "codex_exec"
-    # the inference-profile prefix is stripped: codex resolves via ~/.codex
-    assert model == "openai.gpt-5.6-sol"
+    # the inference-profile id is kept: codex's amazon-bedrock-runtime provider
+    # invokes it directly (a bare openai.* id is rejected)
+    assert model == "us.openai.gpt-6-sol"
 
 
 @pytest.mark.parametrize("mode", ("chat", "auto", "agentic"))

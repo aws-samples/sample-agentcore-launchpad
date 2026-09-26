@@ -38,7 +38,7 @@ TASKGEN_SCRIPT = VENDOR_ROOT / "scripts" / "generate_tasks.py"
 PARAM_BOUNDS = {"workers": (1, 8), "timeout": (60, 3600), "limit": (0, 10000)}
 # Studio's exec-backend pair; both CLIs are baked into the worker image and talk
 # to Bedrock with the execution role (claude via CLAUDE_CODE_USE_BEDROCK, codex
-# via its baked amazon-bedrock provider config).
+# via its baked amazon-bedrock-runtime provider config).
 TARGET_BACKENDS = ("claude_code_exec", "codex_exec")
 # Upstream JUDGE_MODES: auto picks per task (chat for text-only, agentic when
 # artifacts need inspection). The agentic judge runs on the HOST — its claude
@@ -80,8 +80,8 @@ def clamp_params(params: dict[str, Any] | None) -> dict[str, Any]:
     merged = {
         "target_backend": backend,
         # A blank target model resolves per backend: the CLIs consume different
-        # id families (claude: Converse profile ids; codex: the catalog slugs
-        # its baked amazon-bedrock provider resolves). Always explicit — an
+        # defaults (claude: a Converse profile id; codex: the inference-profile
+        # id its baked amazon-bedrock-runtime provider invokes). Always explicit — an
         # empty --model would let train.py substitute upstream's non-Bedrock
         # per-backend default (gpt-4o for codex_exec).
         "target_model": (
@@ -257,13 +257,13 @@ def judge_exec_route(judge_model: str) -> tuple[str, str]:
 
     One judge model still drives both judge modes, but the judge *agent* is a
     host CLI and only claude can run anthropic models: an openai-family judge
-    (e.g. us.openai.gpt-6-sol) routes to the host codex CLI with the profile
-    prefix stripped — codex does its own resolution via ~/.codex, the same
-    coupling the worker image build already relies on for its model catalog.
-    Anything non-openai keeps the claude CLI with the model id unchanged."""
-    bare = _PROFILE_PREFIX.sub("", judge_model)
-    if bare.startswith("openai."):
-        return "codex_exec", bare
+    (e.g. us.openai.gpt-6-sol) routes to the host codex CLI. The id is passed
+    unchanged: codex's amazon-bedrock-runtime provider invokes inference-profile
+    ids (a bare `openai.*` id is rejected for on-demand throughput) and looks
+    their metadata up in the ~/.codex model catalog, the same coupling the
+    worker image build relies on. Anything non-openai keeps the claude CLI."""
+    if _PROFILE_PREFIX.sub("", judge_model).startswith("openai."):
+        return "codex_exec", judge_model
     return "claude_code_exec", judge_model
 
 
@@ -305,14 +305,15 @@ def _judge_exec_flags(params: dict[str, Any]) -> list[str]:
 # codex with an isolated, initially-empty CODEX_HOME (fail-closed: no user
 # config, rules or sessions leak in), which would pin it to codex's default
 # `openai` provider — this seed keeps the isolation but swaps the provider to
-# Bedrock (Mantle). Region pinned to us-east-1 like the worker image's baked
-# config: us-west-2's Mantle catalog lacks openai.gpt-5.6-sol (live-verified).
+# Bedrock runtime (inference-profile ids such as global.openai.gpt-6-sol; needs
+# codex >= 0.155 — 0.147 only accepts aws auth on the Mantle `amazon-bedrock`
+# provider). Region pinned to us-east-1 like the worker image's baked config.
 _JUDGE_CODEX_CONFIG = """\
-model_provider = "amazon-bedrock"
+model_provider = "amazon-bedrock-runtime"
 web_search = "disabled"
 model_catalog_json = "{catalog}"
 
-[model_providers.amazon-bedrock.aws]
+[model_providers.amazon-bedrock-runtime.aws]
 region = "us-east-1"
 
 [features.multi_agent_v2]

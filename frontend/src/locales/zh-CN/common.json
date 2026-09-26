@@ -1547,7 +1547,7 @@
       "field": "执行后端",
       "hint": "在 exec worker 里执行任务的 CLI——两者都以执行角色直连 Bedrock，无需 API key。",
       "targetHintClaude": "claude CLI 运行的 Bedrock inference profile ID（us./global. 前缀）。",
-      "targetHintCodex": "codex 的 amazon-bedrock provider 解析的模型目录 slug（如 openai.gpt-6-sol）。",
+      "targetHintCodex": "codex 的 amazon-bedrock-runtime provider 调用的 inference-profile id（如 global.openai.gpt-6-sol），宿主模型目录中需有对应条目。",
       "judgeHint": "LLM 判分模型的 Converse inference profile ID（us./global. 前缀，可自由输入）。",
       "judgeMode": "判分模式",
       "judgeModeOption": {
