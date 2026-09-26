@@ -271,6 +271,62 @@ class TestMantle:
         )
 
 
+def _studio(*nodes: dict) -> AgentSpec:
+    """A studio spec as the canvas publishes it — no model_id, the models on the nodes."""
+    flow = {"nodes": list(nodes), "edges": [], "graphMode": False}
+    return _spec(method="studio", code="print(1)", studio_flow=flow)
+
+
+def _node(node_type: str = "agent", **data) -> dict:
+    return {"id": node_type, "type": node_type, "data": data}
+
+
+class TestStudioFlowModels:
+    """The canvas publish sends no model_id, so the role must follow the nodes."""
+
+    def test_authorizes_every_bedrock_model_its_nodes_use(self):
+        resources = _statement(
+            _studio(
+                _node(modelProvider="AWS Bedrock", modelId="global.openai.gpt-6-sol"),
+                _node("orchestrator-agent", modelProvider="AWS Bedrock",
+                      modelId="global.anthropic.claude-opus-5"),
+            ),
+            "BedrockModels",
+        )["Resource"]
+        assert resources == [
+            "arn:aws:bedrock:*::foundation-model/openai.gpt-6-sol",
+            "arn:aws:bedrock:us-west-2:123456789012:inference-profile/global.openai.gpt-6-sol",
+            "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-5",
+            "arn:aws:bedrock:us-west-2:123456789012:inference-profile/global.anthropic.claude-opus-5",
+        ]
+
+    def test_a_node_without_a_model_id_gets_the_codegen_fallback(self):
+        resources = _statement(_studio(_node()), "BedrockModels")["Resource"]
+        assert resources == agent_iam.model_resources("global.anthropic.claude-sonnet-5", CTX)
+
+    def test_a_mantle_node_adds_the_mantle_statements(self):
+        spec = _studio(_node(modelProvider="Amazon Bedrock (Mantle)",
+                             modelId="openai.gpt-5.6-terra", modelName="openai.gpt-5.6-terra"))
+        assert "BedrockMantleInference" in _sids(spec)
+        # no Bedrock node: the statement stays well-formed on the spec's own id
+        assert _statement(spec, "BedrockModels")["Resource"] == agent_iam.model_resources(
+            spec.model_id, CTX
+        )
+
+    def test_bedrock_only_flows_get_no_mantle_grant(self):
+        spec = _studio(_node(modelProvider="AWS Bedrock", modelId="global.openai.gpt-6-sol"))
+        assert "BedrockMantleInference" not in _sids(spec)
+
+    def test_non_model_nodes_and_other_methods_are_ignored(self):
+        spec = _studio(_node("tool", modelId="global.openai.gpt-6-luna"),
+                       _node(modelProvider="AWS Bedrock", modelId="global.openai.gpt-6-sol"))
+        assert all("gpt-6-luna" not in r for r in _statement(spec, "BedrockModels")["Resource"])
+        zip_spec = _spec(studio_flow={"nodes": [_node(modelId="global.openai.gpt-6-sol")]})
+        assert _statement(zip_spec, "BedrockModels")["Resource"] == agent_iam.model_resources(
+            zip_spec.model_id, CTX
+        )
+
+
 class TestMemory:
     def test_scoped_to_the_configured_memory(self):
         statement = _statement(_spec(), "AgentCoreMemory")

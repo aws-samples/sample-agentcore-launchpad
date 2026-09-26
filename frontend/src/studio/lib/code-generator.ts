@@ -1,6 +1,12 @@
 import { type Node, type Edge } from '@xyflow/react';
 import { generateGraphCode, MANTLE_ATTACHMENT_ADAPTER } from './graph-code-generator';
-import { DEFAULT_MODEL_ID, MANTLE_PROVIDER, mantleModelArgs } from './models';
+import {
+  DEFAULT_MODEL_ID,
+  gptBedrockModelConfig,
+  isBedrockOpenAiGpt,
+  MANTLE_PROVIDER,
+  mantleModelArgs,
+} from './models';
 
 interface CodeGenerationResult {
   code: string;
@@ -1502,6 +1508,9 @@ function generateModelConfigForCode(
     let effectiveMaxTokens = maxTokens;
     if (modelIdentifier.includes('nova-premier')) effectiveMaxTokens = Math.min(maxTokens, 32000);
     else if (modelIdentifier.includes('nova-pro')) effectiveMaxTokens = Math.min(maxTokens, 10000);
+    if (isBedrockOpenAiGpt(modelIdentifier)) {
+      return gptBedrockModelConfig(varName, modelIdentifier, effectiveMaxTokens, thinkingEnabled, reasoningEffort, '');
+    }
 
     let bedrockCode = `${varName}_model = BedrockModel(
     model_id="${modelIdentifier}",
@@ -1608,6 +1617,9 @@ function generateModelConfigForTool(
     let effectiveMaxTokens = maxTokens;
     if (modelIdentifier.includes('nova-premier')) effectiveMaxTokens = Math.min(maxTokens, 32000);
     else if (modelIdentifier.includes('nova-pro')) effectiveMaxTokens = Math.min(maxTokens, 10000);
+    if (isBedrockOpenAiGpt(modelIdentifier)) {
+      return gptBedrockModelConfig(varName, modelIdentifier, effectiveMaxTokens, thinkingEnabled, reasoningEffort, '        ');
+    }
 
     let bedrockCode = `${varName}_model = BedrockModel(
             model_id="${modelIdentifier}",

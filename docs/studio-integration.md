@@ -324,7 +324,7 @@ from upstream PR #31's conversation/fix subsystems; task
   deliberately unified), `execute_timeout_s` (300). The control-plane backend
   venv stays lean (no strands, no openai) — debugging a flow locally requires
   this script, not `uv sync`. The `[openai]` extra is what carries
-  `aws-bedrock-token-generator`, so the **default** Bedrock Mantle node debugs
+  `aws-bedrock-token-generator`, so a Bedrock Mantle node debugs
   against your ambient AWS profile with no `BEDROCK_API_KEY`. The ≥1.47 floor
   tracks the verified SDK; the true minimum is **1.46**, where the
   `openai.gpt-5.*` → `/openai/v1` base-path split the default model needs landed

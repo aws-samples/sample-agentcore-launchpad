@@ -1859,6 +1859,24 @@ key keep generating byte-identical code. The SDK rejects combining the two, and
 one shared emitter (`mantleModelArgs` in `frontend/src/studio/lib/models.ts`)
 serves all three canvas code generators.
 
+A newly dropped canvas agent node starts on native Bedrock with GPT-6 Sol
+(`DEFAULT_NEW_AGENT_MODEL`, the first `BEDROCK_MODELS` entry), matching the
+Create Agent wizard; Mantle stays one provider switch away. On the Bedrock
+provider an OpenAI GPT id (`isBedrockOpenAiGpt`) is emitted by
+`gptBedrockModelConfig`. Its effort rides `additional_request_fields` as
+`{"reasoning": {"effort": low|medium|high}}` (Claude-only tiers clamp to high),
+the same Converse shape the harness sends. Claude's adaptive-thinking block and
+cache kwargs are never emitted for GPT. Claude and Mantle output is unchanged.
+
+**Studio execution roles follow the flow.** A canvas publish sends no
+`model_id`, so `spec.model_id` is always `AgentSpec`'s default. For
+`method == "studio"`, `allowed_model_resources` in `app/services/agent_iam.py`
+therefore authorizes every native-Bedrock model on the flow's agent,
+orchestrator and swarm nodes. A node without an id gets the codegen fallback
+(`DEFAULT_MODEL_ID`). Any Mantle-provider node adds the Mantle statements
+(`uses_mantle`). Before this, a flow on any model other than the default
+deployed cleanly and was refused at invoke.
+
 A2A zip agents render from a different template with no Mantle branch, so the
 wizard pins them to `bedrock` and hides the selector. The Other Agent SDK
 (container) entrance is likewise pinned to `bedrock` and offered only Claude ids,

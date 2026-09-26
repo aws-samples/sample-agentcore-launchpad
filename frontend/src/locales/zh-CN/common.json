@@ -3735,7 +3735,9 @@
       "skillTrustWarning": "仅挂载你信任的技能 —— 技能说明可能指示 Agent 运行随附的脚本。",
       "skillEmptyHint": "技能来源于已批准的注册表记录。请在注册表中注册并批准技能。",
       "manageInRegistry": "在注册表中管理",
-      "noProps": "该节点类型没有可配置的属性。"
+      "noProps": "该节点类型没有可配置的属性。",
+      "gptReasoningNote": "Bedrock 上的 GPT 模型使用推理强度（低 / 中 / 高），不使用自适应思考。",
+      "gptNoCaching": "提示词缓存设置仅适用于 Claude 模型；Bedrock 上的 GPT 模型不使用。"
     },
     "debug": {
       "tabCode": "代码",

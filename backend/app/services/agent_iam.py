@@ -27,7 +27,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.models.ledger import Agent
-from app.schemas.agent import INFERENCE_PROFILE_PREFIXES, AgentSpec, byoc_model_target
+from app.schemas.agent import (
+    DEFAULT_MODEL_ID,
+    INFERENCE_PROFILE_PREFIXES,
+    AgentSpec,
+    byoc_model_target,
+)
 from app.services.workspace import WorkspaceContext
 
 # Inference-profile prefixes: an id like `global.anthropic.claude-sonnet-5` is a
@@ -194,10 +199,57 @@ def model_resources(model_id: str, ctx: RoleContext) -> list[str]:
     return ["arn:aws:bedrock:*::foundation-model/*"]
 
 
+# Strands Studio canvas flows carry their models on the nodes, not in
+# ``spec.model_id``: the publish sends none, so that field is always AgentSpec's
+# default and scoping the role to it silently refused every other model at
+# invoke. Provider strings and the node types that carry a model mirror
+# ``frontend/src/studio`` (``MANTLE_PROVIDER`` in lib/models.ts, the agent-node
+# filter in lib/graph-code-generator.ts); a node without a model id generates
+# the canvas fallback, which equals ``DEFAULT_MODEL_ID``.
+STUDIO_MODEL_NODE_TYPES = frozenset({"agent", "orchestrator-agent", "swarm"})
+STUDIO_BEDROCK_PROVIDER = "AWS Bedrock"
+STUDIO_MANTLE_PROVIDER = "Amazon Bedrock (Mantle)"
+
+
+def studio_node_models(spec: AgentSpec) -> list[tuple[str, str]]:
+    """``(provider, model id)`` for every model-bearing node of a studio flow."""
+    if spec.method != "studio" or not isinstance(spec.studio_flow, dict):
+        return []
+    models: list[tuple[str, str]] = []
+    for node in spec.studio_flow.get("nodes") or []:
+        if not isinstance(node, dict) or node.get("type") not in STUDIO_MODEL_NODE_TYPES:
+            continue
+        data = node.get("data") if isinstance(node.get("data"), dict) else {}
+        provider = data.get("modelProvider") or STUDIO_BEDROCK_PROVIDER
+        model = data.get("modelId") or (
+            DEFAULT_MODEL_ID if provider == STUDIO_BEDROCK_PROVIDER else ""
+        )
+        models.append((str(provider), str(model)))
+    return models
+
+
+def uses_mantle(spec: AgentSpec) -> bool:
+    """Whether the agent calls Bedrock Mantle (its own IAM service)."""
+    return spec.model_source == "mantle" or any(
+        provider == STUDIO_MANTLE_PROVIDER for provider, _ in studio_node_models(spec)
+    )
+
+
 def allowed_model_resources(spec: AgentSpec, ctx: RoleContext) -> list[str]:
     """Union of `model_resources` over every model the spec permits, deduped in
     order. One entry for every method except byoc, whose ``allowed_models`` list
-    may authorize several — each still scoped to its exact id, never widened."""
+    may authorize several — each still scoped to its exact id, never widened —
+    and studio, which authorizes each native-Bedrock model its flow's nodes use."""
+    if spec.method == "studio":
+        ids = [m for provider, m in studio_node_models(spec) if provider == STUDIO_BEDROCK_PROVIDER]
+        resources: list[str] = []
+        # a flow with no Bedrock node (Mantle / OpenAI only) keeps the spec's id so
+        # the statement stays well-formed
+        for model_id in ids or [spec.model_id]:
+            for resource in model_resources(model_id, ctx):
+                if resource not in resources:
+                    resources.append(resource)
+        return resources
     if spec.method != "byoc":
         return model_resources(spec.model_id, ctx)
     resources: list[str] = []
@@ -308,7 +360,7 @@ def policy_document(spec: AgentSpec, ctx: RoleContext, *, system_preset: bool = 
         "Resource": allowed_model_resources(spec, ctx),
     })
 
-    if spec.model_source == "mantle":
+    if uses_mantle(spec):
         # Bedrock Mantle is a SEPARATE IAM service from bedrock — bedrock:InvokeModel
         # does not cover it. Without these a Mantle agent reaches ACTIVE and then
         # fails its first invoke with 401 bedrock-mantle:CreateInference.

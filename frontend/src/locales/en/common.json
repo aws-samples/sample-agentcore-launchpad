@@ -3735,7 +3735,9 @@
       "skillTrustWarning": "Only attach skills you trust — skill instructions can direct the agent to run bundled scripts.",
       "skillEmptyHint": "Skills are sourced from APPROVED registry records. Register and approve skills in the Registry.",
       "manageInRegistry": "Manage in Registry",
-      "noProps": "No properties available for this node type."
+      "noProps": "No properties available for this node type.",
+      "gptReasoningNote": "GPT models on Bedrock take a reasoning effort (low / medium / high) instead of adaptive thinking.",
+      "gptNoCaching": "Prompt caching settings apply to Claude models; GPT models on Bedrock don't use them."
     },
     "debug": {
       "tabCode": "Code",

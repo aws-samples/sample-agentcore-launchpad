@@ -1033,6 +1033,21 @@ Flow 生成的代码与之前逐字节一致。SDK 禁止两者同时出现,而�
 共用同一个输出函数(`frontend/src/studio/lib/models.ts` 中的
 `mantleModelArgs`)。
 
+画布上新拖入的 Agent 节点默认使用原生 Bedrock 上的 GPT-6 Sol(`DEFAULT_NEW_AGENT_MODEL`,
+即 `BEDROCK_MODELS` 的第一项),与新建 Agent 向导一致;切换 provider 即可改用 Mantle。
+在 Bedrock provider 下,OpenAI GPT id(`isBedrockOpenAiGpt`)由 `gptBedrockModelConfig`
+生成代码。推理强度放在 `additional_request_fields` 的
+`{"reasoning": {"effort": low|medium|high}}` 中(Claude 专有的档位会降为 high),与
+harness 发送的 Converse 结构相同。GPT 节点不会生成 Claude 的自适应思考块和缓存参数。
+Claude 与 Mantle 节点生成的代码保持不变。
+
+**Studio 执行角色按 Flow 授权。** 画布发布时不传 `model_id`,因此 `spec.model_id`
+始终是 `AgentSpec` 的默认值。对 `method == "studio"`,`app/services/agent_iam.py`
+中的 `allowed_model_resources` 会授权 Flow 中 agent、orchestrator、swarm 节点用到的
+每个原生 Bedrock 模型。未填 id 的节点按代码生成的回退值(`DEFAULT_MODEL_ID`)授权。
+只要有节点使用 Mantle provider,就会加上 Mantle 相关语句(`uses_mantle`)。在此之前,
+使用非默认模型的 Flow 能正常部署,但会在首次调用时被拒绝。
+
 A2A zip Agent 使用另一个没有 Mantle 分支的模板,因此向导会将其固定为
 `bedrock` 并隐藏该选择器。其他 Agent SDK(container)入口同样固定为
 `bedrock` 且只提供 Claude 模型 —— 该类别目前唯一的成员 Claude Agent SDK 只能

@@ -14,6 +14,8 @@ import {
   DEFAULT_MANTLE_MODEL_ID,
   mantleBaseUrl,
   isCustomMantleModel,
+  isBedrockOpenAiGpt,
+  GPT_REASONING_EFFORTS,
 } from './lib/models';
 
 // Union of every field the node data objects can carry across all node types.
@@ -502,6 +504,10 @@ export function PropertyPanel({
     // launchpad extension: xhigh effort is only accepted by Sonnet 5 / Opus 4.8 on Bedrock
     const modelId = data.modelId || '';
     const xhighCapable = modelId.includes('claude-sonnet-5') || modelId.includes('claude-opus-4-8');
+    // OpenAI GPT on native Bedrock: reasoning effort (low/medium/high) instead of
+    // adaptive thinking, and no Claude cache points — mirrors gptBedrockModelConfig
+    const isGpt = isBedrock && isBedrockOpenAiGpt(modelId);
+    const gptEffortClamped = !(GPT_REASONING_EFFORTS as readonly string[]).includes(effortValue);
     return (
       <div className="studio-prop-sect">
         <div className="kicker" style={{ marginBottom: 10 }}>
@@ -519,7 +525,27 @@ export function PropertyPanel({
           <div className="studio-prop-hint">{t('studio.prop.thinkingHint')}</div>
         </div>
 
-        {data.thinkingEnabled &&
+        {data.thinkingEnabled && isGpt && (
+          <>
+            <div className="studio-note">{t('studio.prop.gptReasoningNote')}</div>
+            <div className="field" style={{ marginTop: 10 }}>
+              <label>{t('studio.prop.reasoningEffort')}</label>
+              <select
+                className="input"
+                value={effortValue}
+                onChange={(e) => handleInputChange('reasoningEffort', e.target.value)}
+                data-testid="studio-gpt-effort"
+              >
+                <option value="low">{t('studio.prop.effortLow')}</option>
+                <option value="medium">{t('studio.prop.effortMedium')}</option>
+                <option value="high">{t('studio.prop.effortHigh')}</option>
+              </select>
+              {gptEffortClamped && <div className="studio-prop-hint">{t('studio.prop.effortXHighClamped')}</div>}
+            </div>
+          </>
+        )}
+
+        {data.thinkingEnabled && !isGpt &&
           (isBedrock ? (
             // Bedrock/Claude uses adaptive thinking — no budget knob.
             // launchpad extension: expose the reasoning-effort tier for Bedrock (output_config.effort).
@@ -565,7 +591,9 @@ export function PropertyPanel({
             </div>
           ))}
 
-        {isBedrock && (
+        {isGpt && <div className="studio-prop-hint" style={{ marginTop: 14 }}>{t('studio.prop.gptNoCaching')}</div>}
+
+        {isBedrock && !isGpt && (
           <div className="field" style={{ marginTop: 14 }}>
             <label>{t('studio.prop.promptCaching')}</label>
             <label className="studio-check" style={{ marginTop: 6 }}>
