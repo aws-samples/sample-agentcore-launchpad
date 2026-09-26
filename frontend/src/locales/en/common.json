@@ -621,7 +621,7 @@
           "high": "high"
         },
         "effortHint": "Sent as the OpenAI reasoning effort for this model call (Converse pass-through).",
-        "effortUnsupported": "Only OpenAI GPT-5.x models on native Bedrock accept a reasoning effort; for this model nothing is sent.",
+        "effortUnsupported": "Only OpenAI GPT-5.x / GPT-6 models on native Bedrock accept a reasoning effort; for this model nothing is sent.",
         "maxIterations": "MAX ITERATIONS",
         "timeout": "TIMEOUT (S)",
         "systemPrompt": "SYSTEM PROMPT",
