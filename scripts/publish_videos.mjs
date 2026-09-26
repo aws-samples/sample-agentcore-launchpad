@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Publish one catalog entry through AWS CLI, using the caller's normal credentials.
+// Upload media named by the legacy import manifest using the caller's AWS credentials.
 // Run with --dry-run first. Existing immutable keys may never change content.
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
@@ -23,7 +23,7 @@ if (!values.video || !values["source-dir"]) {
   throw new Error("Usage: node scripts/publish_videos.mjs --video <id> --source-dir <dir> [--dry-run]");
 }
 await import("./validate_video_catalog.mjs");
-const catalog = JSON.parse(await readFile(resolve(root, "frontend/src/config/videos.json"), "utf8"));
+const catalog = JSON.parse(await readFile(resolve(root, "backend/app/data/videos.initial.json"), "utf8"));
 const video = catalog.videos.find((item) => item.id === values.video);
 if (!video) throw new Error(`Video not in catalog: ${values.video}`);
 const aws = (...args) => execFileSync("aws", [...args, "--region", values.region, "--output", "json"], {

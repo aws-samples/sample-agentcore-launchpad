@@ -53,18 +53,20 @@ publication workflow.
 
 ## Shared tutorial videos
 
-The console's **Learn → Videos** page (`/videos`) is a lazy-loaded, read-only
-module library with category filters and title search. `/videos?video=<id>` opens
-a recording with its collection playlist and chapter directory; navigation retains
-the library's `category` and `q` filters. Its bilingual catalog,
-`frontend/src/config/videos.json`, holds categories, ordered collections, permanent
-CloudFront URLs, and chapter offsets shared by every environment.
-Video playback goes directly from browser to CDN; it does not use workspace APIs,
-the ledger, or AgentCore. The separately deployed `launchpad-videos` CDK stack
-owns a private, versioned S3 origin and an OAC-restricted CloudFront distribution
-with anonymous cross-origin media headers. It is independent of `launchpad-base`
-and ordinary bootstrap. See [Video library](video-library.md) for resource ownership,
-catalog updates, and the immutable media publication workflow.
+The console's **Learn → Videos** page (`/videos`, `/v2/videos`) reads the
+published, hub-global directory from `GET /api/videos`. First-level areas and
+second-level modules are fixed to the V2 navigation in
+`backend/app/data/video_sections.json`; filters use `category`, `section`, and `q`.
+`/videos?video=<id>` and the V2 equivalent keep stable video IDs and chapter
+navigation. The admin-only **Configuration → Video management**
+(`/v2/video-management`) saves drafts and explicitly publishes or withdraws
+each video. A one-time database import preserves the previously bundled
+`backend/app/data/videos.initial.json` entries; later changes come from the ledger,
+so publishing metadata does not rebuild the frontend. Video bytes still play
+directly from the browser's CDN URL, independent of workspace and AgentCore.
+The separate `launchpad-videos` CDK stack retains its private S3 origin and
+OAC-restricted CloudFront distribution. See [Video library](video-library.md)
+for management and immutable media publication.
 
 ## The four-layer mapping (from prompt.md)
 

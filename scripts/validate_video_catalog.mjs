@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Build-time validation: catalog edits must not ship broken playback/navigation.
+// Validate the one-time import and legacy media-publisher manifest.
 import { readFile } from "node:fs/promises";
 
 const catalog = JSON.parse(await readFile(
-  new URL("../frontend/src/config/videos.json", import.meta.url), "utf8",
+  new URL("../backend/app/data/videos.initial.json", import.meta.url), "utf8",
 ));
 function requireValue(condition, message) {
   if (!condition) throw new Error(`Video catalog: ${message}`);

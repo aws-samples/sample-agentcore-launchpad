@@ -4,12 +4,12 @@
  *
  * classic                 → V2
  *   ?video=<id>           → ?view=watch&video=<id>
- *   ?q= / ?category=      → kept as is (library filters)
+ *   ?q= / ?category= / ?section= → kept as is (library filters)
  */
 export function classicVideosToV2(search: string): string {
   const params = new URLSearchParams(search);
   const out = new URLSearchParams();
-  for (const name of ["q", "category"]) {
+  for (const name of ["q", "category", "section"]) {
     const value = params.get(name);
     if (value) out.set(name, value);
   }

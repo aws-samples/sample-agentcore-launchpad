@@ -13,6 +13,7 @@ import {
   PlayCircle,
   Radar,
   ScrollText,
+  Settings,
   ShieldCheck,
   Sparkles,
   SquareStack,
@@ -93,13 +94,20 @@ export const V2_NAV: V2NavGroup[] = [
     ],
   },
   {
+    key: "learn",
+    labelKey: "v2.nav.groupLearn",
+    items: [
+      { to: "/v2/videos", labelKey: "nav.videos", icon: PlayCircle, v2: true },
+    ],
+  },
+  {
     key: "admin",
     labelKey: "v2.nav.groupAdmin",
     items: [
       { to: "/v2/users", labelKey: "nav.users", icon: Users, v2: true, admin: true },
       { to: "/v2/workspaces", labelKey: "nav.workspaces", icon: Workflow, v2: true, admin: true },
       { to: "/v2/announcements", labelKey: "nav.announcements", icon: ScrollText, v2: true, admin: true },
-      { to: "/v2/videos", labelKey: "nav.videos", icon: PlayCircle, v2: true },
+      { to: "/v2/video-management", labelKey: "videoManage.title", icon: Settings, v2: true, admin: true },
     ],
   },
 ];

@@ -115,6 +115,8 @@ const V2Users = lazy(() => import("./v2/pages/Users").then((m) => ({ default: m.
 const V2Workspaces = lazy(() => import("./v2/pages/Workspaces").then((m) => ({ default: m.V2Workspaces })));
 const V2Announcements = lazy(() => import("./v2/pages/Announcements").then((m) => ({ default: m.V2Announcements })));
 const V2Videos = lazy(() => import("./v2/pages/Videos").then((m) => ({ default: m.V2Videos })));
+const V2VideoManagement = lazy(() =>
+  import("./v2/pages/VideoManagement").then((m) => ({ default: m.V2VideoManagement })));
 const V2NotFound = lazy(() =>
   import("./v2/pages/Home").then((m) => ({ default: m.V2NotFound })),
 );
@@ -295,6 +297,7 @@ export default function App() {
               <Route path="workspaces" element={<V2Workspaces />} />
               <Route path="announcements" element={<V2Announcements />} />
               <Route path="videos" element={<V2Videos />} />
+              <Route path="video-management" element={<V2VideoManagement />} />
               <Route path="*" element={<V2NotFound />} />
             </Route>
             <Route element={<ConsoleShell />}>

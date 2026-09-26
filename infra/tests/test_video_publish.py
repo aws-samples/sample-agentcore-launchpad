@@ -63,7 +63,7 @@ def publication(tmp_path):
     scripts.mkdir()
     for name in ("publish_videos.mjs", "validate_video_catalog.mjs"):
         shutil.copyfile(ROOT / "scripts" / name, scripts / name)
-    catalog_path = tmp_path / "frontend/src/config/videos.json"
+    catalog_path = tmp_path / "backend/app/data/videos.initial.json"
     catalog_path.parent.mkdir(parents=True)
     base = "https://test.cloudfront.net/media/tutorial/r1/"
     text = {"en": "Tutorial", "zh-CN": "教程"}

@@ -10,6 +10,7 @@ import type {
 } from "./evaluation";
 import type { ExperimentInfo } from "./experiments";
 import type { ModelSource, ReasoningEffort } from "./models";
+import type { ManagedVideo, ManagedVideoCatalog, VideoCatalog, VideoContent } from "./videos";
 import { WORKSPACE_HEADER } from "./workspace-header";
 
 export interface AnnouncementContent {
@@ -3607,6 +3608,31 @@ export interface V2RunCreate {
 }
 
 export const api = {
+  videoCatalog: () => request<VideoCatalog>("/api/videos"),
+  manageVideos: () => request<ManagedVideoCatalog>("/api/videos/manage"),
+  getManagedVideo: (id: string) =>
+    request<ManagedVideo>(`/api/videos/manage/${encodeURIComponent(id)}`),
+  createVideo: (content: VideoContent) =>
+    request<ManagedVideo>("/api/videos/manage", {
+      method: "POST", body: JSON.stringify(content),
+    }),
+  saveVideo: (id: string, content: VideoContent, expectedRevision: number) =>
+    request<ManagedVideo>(`/api/videos/manage/${encodeURIComponent(id)}`, {
+      method: "PUT", body: JSON.stringify({ ...content, expected_revision: expectedRevision }),
+    }),
+  publishVideo: (id: string, expectedRevision: number) =>
+    request<ManagedVideo>(`/api/videos/manage/${encodeURIComponent(id)}/publish`, {
+      method: "POST", body: JSON.stringify({ expected_revision: expectedRevision }),
+    }),
+  unpublishVideo: (id: string, expectedRevision: number) =>
+    request<ManagedVideo>(`/api/videos/manage/${encodeURIComponent(id)}/unpublish`, {
+      method: "POST", body: JSON.stringify({ expected_revision: expectedRevision }),
+    }),
+  deleteVideo: (id: string, expectedRevision: number) =>
+    request<{ deleted: true }>(
+      `/api/videos/manage/${encodeURIComponent(id)}?expected_revision=${expectedRevision}`,
+      { method: "DELETE" },
+    ),
   listAnnouncements: (limit = 3, offset = 0, signal?: AbortSignal) =>
     request<AnnouncementPage<PublicAnnouncement>>(
       `/api/announcements?limit=${limit}&offset=${offset}`, { signal },

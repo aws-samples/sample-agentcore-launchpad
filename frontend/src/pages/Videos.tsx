@@ -1,15 +1,18 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { Btn } from "../components/Btn";
 import { Panel } from "../components/Panel";
 import { ViewHead } from "../components/ViewHead";
+import { useVideoCatalog } from "../lib/useVideoCatalog";
 import {
-  videoCatalog, videoCollections, videoTimestamp,
-  type LibraryVideo, type VideoCollection, type VideoLocale,
+  videoCollections as buildCollections, videoTimestamp,
+  type LibraryVideo, type VideoCatalog, type VideoCollection, type VideoLocale,
 } from "../lib/videos";
 import "./videos.css";
+
+const EMPTY_CATALOG: VideoCatalog = { schemaVersion: 2, categories: [], collections: [], videos: [] };
 
 function videoLink(params: URLSearchParams, id?: string) {
   const next = new URLSearchParams(params);
@@ -241,7 +244,7 @@ function VideoPlayer({ video, collection, locale, params }: {
                       aria-current={item.id === video.id ? "true" : undefined}
                       data-testid={`video-entry-${item.id}`}
                     >
-                      <img src={item.posterUrl} alt="" loading="lazy" />
+                      {item.posterUrl && <img src={item.posterUrl} alt="" loading="lazy" />}
                       <span>
                         <strong>{item.title[locale]}</strong>
                         <small>
@@ -293,6 +296,9 @@ function VideoPlayer({ video, collection, locale, params }: {
 export function Videos() {
   const { t, i18n } = useTranslation();
   const [params, setParams] = useSearchParams();
+  const loaded = useVideoCatalog();
+  const videoCatalog = loaded.data ?? EMPTY_CATALOG;
+  const videoCollections = useMemo(() => buildCollections(videoCatalog), [videoCatalog]);
   const locale: VideoLocale = i18n.resolvedLanguage?.startsWith("zh") ? "zh-CN" : "en";
   const videos = videoCatalog.videos;
   const requestedId = params.get("video");
@@ -302,13 +308,16 @@ export function Videos() {
   const search = query.trim().toLocaleLowerCase(locale);
   const category = videoCatalog.categories.some((item) => item.id === params.get("category"))
     ? params.get("category") : null;
-  const collections = videoCollections.filter((item) => !category || item.categoryId === category);
+  const section = videoCollections.some((item) => item.id === params.get("section") &&
+    (!category || item.categoryId === category)) ? params.get("section") : null;
+  const collections = videoCollections.filter((item) =>
+    (!category || item.categoryId === category) && (!section || item.id === section));
   const results = collections.flatMap((item) => (
     search
       ? item.videos
         .filter((video) => `${item.title[locale]} ${video.title[locale]}`.toLocaleLowerCase(locale).includes(search))
         .map((video) => ({
-          id: video.id, title: video.title[locale], description: item.title[locale], videos: [video],
+          id: video.id, title: video.title[locale], description: video.description[locale], videos: [video],
         }))
       : [{
         id: item.id, title: item.title[locale],
@@ -316,10 +325,11 @@ export function Videos() {
       }]
   ));
 
-  function filter(name: "q" | "category", value: string) {
+  function filter(name: "q" | "category" | "section", value: string) {
     setParams((current) => {
       const next = new URLSearchParams(current);
       next.delete("video");
+      if (name === "category") next.delete("section");
       if (value) next.set(name, value);
       else next.delete(name);
       return next;
@@ -329,9 +339,21 @@ export function Videos() {
   function clearFilters() {
     setParams((current) => {
       const next = new URLSearchParams(current);
-      for (const name of ["q", "category", "video"]) next.delete(name);
+      for (const name of ["q", "category", "section", "video"]) next.delete(name);
       return next;
     }, { replace: true });
+  }
+
+  if (!loaded.data) {
+    return (
+      <>
+        <ViewHead kicker={t("videos.kicker")} title={t("videos.title")} description={t("videos.description")} />
+        <Panel title={t("videos.library")}>
+          <p>{loaded.loading ? t("common.loading") : loaded.error ?? t("videos.loadFailed")}</p>
+          {!loaded.loading && <Btn onClick={loaded.reload}>{t("videos.retry")}</Btn>}
+        </Panel>
+      </>
+    );
   }
 
   return (
@@ -342,6 +364,11 @@ export function Videos() {
         description={t("videos.description")}
         meta={t("videos.count", { count: videos.length })}
       />
+      {loaded.error && (
+        <p className="videos-notice" role="alert">
+          {loaded.error} <Btn onClick={loaded.reload}>{t("videos.retry")}</Btn>
+        </p>
+      )}
       {videos.length === 0 ? (
         <Panel title={t("videos.library")}>
           <div className="empty" data-testid="videos-empty">
@@ -397,6 +424,20 @@ export function Videos() {
               </button>
             ))}
           </div>
+          <label className="videos-section-filter">
+            <span>{t("videoManage.section")}</span>
+            <select
+              value={section ?? ""}
+              disabled={!category}
+              onChange={(event) => filter("section", event.target.value)}
+              data-testid="video-section-filter"
+            >
+              <option value="">{t("videos.all")}</option>
+              {videoCollections.filter((item) => item.categoryId === category).map((item) => (
+                <option key={item.id} value={item.id}>{item.title[locale]}</option>
+              ))}
+            </select>
+          </label>
           <p className="videos-result-count" role="status">
             {search
               ? `${t("videos.searchResults")} · ${t("videos.count", { count: results.length })}`
@@ -415,7 +456,7 @@ export function Videos() {
                       data-testid={`video-card-${item.id}`}
                     >
                       <div className="videos-thumbnail">
-                        <img src={first.posterUrl} alt="" loading="lazy" />
+                        {first.posterUrl && <img src={first.posterUrl} alt="" loading="lazy" />}
                         <span>
                           {item.videos.length > 1
                             ? `${t("videos.episodeCount", { count: item.videos.length })} · ` : ""}

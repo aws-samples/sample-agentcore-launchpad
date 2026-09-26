@@ -202,14 +202,15 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
             })}
           </aside>
           <div className="v2-main">
-            {/* Workspace-bound pages refetch on selection; announcement drafts
-                belong to the installation and survive a switch (as in the
-                classic shell). */}
+            {/* Workspace-bound pages refetch on selection; hub-global content
+                and admin drafts survive a workspace switch. */}
             <div
               className={classic ? "v2-main-inner view v2-classic" : "v2-main-inner"}
               key={
-                location.pathname === "/announcements" || location.pathname === "/v2/announcements"
-                  ? "announcements"
+                location.pathname === "/announcements" || location.pathname === "/v2/announcements" ||
+                location.pathname === "/videos" || location.pathname === "/v2/videos" ||
+                location.pathname === "/v2/video-management"
+                  ? "hub-global-content"
                   : current?.id ?? "none"
               }
             >

@@ -1,5 +1,3 @@
-import catalog from "../config/videos.json";
-
 export type VideoLocale = "en" | "zh-CN";
 export type VideoText = Record<VideoLocale, string>;
 
@@ -16,7 +14,7 @@ export interface LibraryVideo {
   chapters: { startSeconds: number; title: VideoText }[];
 }
 
-interface VideoCatalog {
+export interface VideoCatalog {
   schemaVersion: number;
   categories: { id: string; title: VideoText }[];
   collections: {
@@ -29,6 +27,52 @@ interface VideoCatalog {
   videos: LibraryVideo[];
 }
 
+export interface VideoSection {
+  id: string;
+  categoryId: string;
+  title: VideoText;
+  path: string;
+}
+
+export interface VideoTaxonomy {
+  schemaVersion: number;
+  categories: VideoCatalog["categories"];
+  sections: VideoSection[];
+}
+
+export interface VideoContent {
+  category_id: string;
+  section_id: string;
+  title: VideoText;
+  description: VideoText;
+  cdn_url: string;
+  webm_url: string | null;
+  poster_url: string | null;
+  caption_url: string | null;
+  duration_seconds: number;
+  chapters: LibraryVideo["chapters"];
+  sort_order: number;
+}
+
+export interface ManagedVideo {
+  id: string;
+  content: VideoContent;
+  published_content: VideoContent | null;
+  status: "draft" | "published";
+  has_unpublished_changes: boolean;
+  revision: number;
+  created_by: string;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+  published_at: string | null;
+}
+
+export interface ManagedVideoCatalog {
+  taxonomy: VideoTaxonomy;
+  videos: ManagedVideo[];
+}
+
 export interface VideoCollection {
   id: string;
   categoryId: string;
@@ -37,18 +81,20 @@ export interface VideoCollection {
   videos: LibraryVideo[];
 }
 
-// Imported only by the lazy Videos route; no environment or workspace lookup.
-export const videoCatalog: VideoCatalog = catalog;
-
-// Membership and ordering are validated before every frontend build.
-export const videoCollections: VideoCollection[] = videoCatalog.collections.map(
-  ({ videoIds, ...collection }) => ({
+/** Backend publication already validates membership and ordering. */
+export function videoCollections(catalog: VideoCatalog): VideoCollection[] {
+  const byId = new Map(catalog.videos.map((video) => [video.id, video]));
+  return catalog.collections.map(({ videoIds, ...collection }) => ({
     ...collection,
-    videos: videoIds.flatMap((id) => videoCatalog.videos.filter((video) => video.id === id)),
-  }),
-);
+    videos: videoIds.flatMap((id) => {
+      const video = byId.get(id);
+      return video ? [video] : [];
+    }),
+  }));
+}
 
 export function videoTimestamp(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "—";
   const total = Math.max(0, Math.floor(seconds));
   const minutes = Math.floor(total / 60);
   const remainder = String(total % 60).padStart(2, "0");

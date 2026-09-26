@@ -50,6 +50,7 @@ from app.routers.registry import router as registry_router
 from app.routers.system_agents import router as system_agents_router
 from app.routers.tools import router as tools_router
 from app.routers.users import router as users_router
+from app.routers.videos import router as videos_router
 from app.routers.workspaces import router as workspaces_router
 from app.services import byoc_uploads, local_exec
 from app.services.attachment_body import AttachmentBodyCap
@@ -141,6 +142,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(overview_router)
     app.include_router(announcements_router)
+    app.include_router(videos_router)
     app.include_router(agents_router)
     app.include_router(agent_skills_router)  # attach-without-registering skill sources
     app.include_router(tools_router)
