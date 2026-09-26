@@ -10,6 +10,7 @@ import { useAuth } from "../auth/auth-context";
 import { RouteChunk } from "../layout/RouteChunk";
 import { setUiVersion } from "../lib/ui-version";
 import { useWorkspace } from "../workspace/workspace-context";
+import { V2Logo } from "./Logo";
 import { V2_NAV, type V2NavItem } from "./nav";
 import { V2ToastProvider } from "./ui";
 
@@ -132,7 +133,7 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
       <V2ToastProvider>
         <header className="v2-top">
           <Link to="/v2" className="v2-brand">
-            <span className="v2-brand-logo">A</span>
+            <V2Logo className="v2-brand-logo" />
             {t("v2.brand")}
             <small>V2</small>
           </Link>

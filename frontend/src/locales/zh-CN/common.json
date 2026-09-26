@@ -5098,7 +5098,7 @@
     "nav": {
       "label": "控制台导航",
       "products": "产品",
-      "productAgents": "智能体平台",
+      "productAgents": "智能体Ops平台",
       "groupHome": "概览",
       "home": "工作台",
       "groupBuild": "Agent 开发",

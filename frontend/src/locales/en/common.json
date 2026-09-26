@@ -5098,7 +5098,7 @@
     "nav": {
       "label": "Console navigation",
       "products": "Products",
-      "productAgents": "Agent platform",
+      "productAgents": "AgentOps platform",
       "groupHome": "Overview",
       "home": "Workbench",
       "groupBuild": "Agent development",
