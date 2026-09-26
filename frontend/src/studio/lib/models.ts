@@ -4,7 +4,7 @@
  * DEFAULT_MODEL_ID is the single source of truth for the fallback model used by
  * every code-generation fallback path — nodes that carry no explicit model id
  * (orchestrator/swarm drops, legacy flows). It is deliberately NOT what a newly
- * dropped agent node gets: that is DEFAULT_MANTLE_MODEL_ID (see FlowEditor).
+ * dropped agent node gets: that is DEFAULT_NEW_AGENT_MODEL_ID (see FlowEditor).
  * Changing these fallbacks would retroactively change existing flows.
  *
  * Claude Sonnet 5 / 4.6 / Opus 4.8 ids verified against
@@ -26,7 +26,20 @@ export interface BedrockModelOption {
   model_name: string;
 }
 
+// Entry [0] is what a new agent node and a switch to the Bedrock provider get.
 export const BEDROCK_MODELS: BedrockModelOption[] = [
+  {
+    model_id: 'global.openai.gpt-6-sol',
+    model_name: 'GPT-6 Sol (global)',
+  },
+  {
+    model_id: 'global.openai.gpt-6-astra',
+    model_name: 'GPT-6 Astra (global)',
+  },
+  {
+    model_id: 'global.openai.gpt-6-luna',
+    model_name: 'GPT-6 Luna (global)',
+  },
   {
     model_id: 'global.anthropic.claude-sonnet-5',
     model_name: 'Claude Sonnet 5 (global)',
@@ -88,6 +101,60 @@ export const BEDROCK_MODELS: BedrockModelOption[] = [
     model_name: 'Amazon Nova Pro v1',
   },
 ];
+
+/** The model a newly dropped agent node starts on (native Bedrock, Converse). */
+export const DEFAULT_NEW_AGENT_MODEL = BEDROCK_MODELS[0];
+
+/**
+ * OpenAI GPT-5.x / GPT-6 on native Bedrock (any profile prefix). These take a
+ * reasoning effort instead of Claude's adaptive thinking, and no Claude cache
+ * points. gpt-oss is deliberately excluded — its request shape is not verified.
+ */
+export function isBedrockOpenAiGpt(modelId: string | null | undefined): boolean {
+  return /(^|\.)openai\.gpt-\d/.test(modelId || '');
+}
+
+/** GPT reasoning effort scale on Bedrock; Claude-only tiers clamp to high. */
+export const GPT_REASONING_EFFORTS = ['low', 'medium', 'high'] as const;
+
+function gptEffort(effort: string | null | undefined): string | null {
+  if (!effort) return null;
+  if (effort === 'minimal') return 'low';
+  return (GPT_REASONING_EFFORTS as readonly string[]).includes(effort) ? effort : 'high';
+}
+
+/**
+ * `BedrockModel(...)` for an OpenAI GPT model. The effort rides Converse's
+ * `additionalModelRequestFields` as `{"reasoning": {"effort": …}}` — the shape the
+ * managed harness sends for the same models (backend `app/deployer/harness.py`).
+ * Claude's adaptive-thinking block and cache kwargs are never emitted here.
+ * `indent` is the leading indentation of the call's closing paren; argument
+ * lines get four more (the two emitter scopes differ only in that).
+ */
+export function gptBedrockModelConfig(
+  varName: string,
+  modelId: string,
+  maxTokens: number,
+  thinkingEnabled: boolean | undefined,
+  reasoningEffort: string | undefined,
+  indent: string,
+): string {
+  const inner = `${indent}    `;
+  let code = `${varName}_model = BedrockModel(
+${inner}model_id="${modelId}",
+${inner}max_tokens=${maxTokens}`;
+  // the panel shows Medium until a tier is picked, so an unset effort means medium
+  const effort = thinkingEnabled ? gptEffort(reasoningEffort || 'medium') : null;
+  if (effort) {
+    code += `,
+${inner}additional_request_fields={
+${inner}    "reasoning": {
+${inner}        "effort": "${effort}"
+${inner}    }
+${inner}}`;
+  }
+  return `${code}\n${indent})`;
+}
 
 /**
  * Amazon Bedrock Mantle provider — OpenAI-compatible endpoint served via

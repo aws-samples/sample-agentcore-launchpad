@@ -1,6 +1,12 @@
 import { type Node, type Edge } from '@xyflow/react';
 import { validateGraphStructure } from './graph-validator';
-import { DEFAULT_MODEL_ID, MANTLE_PROVIDER, mantleModelArgs } from './models';
+import {
+  DEFAULT_MODEL_ID,
+  gptBedrockModelConfig,
+  isBedrockOpenAiGpt,
+  MANTLE_PROVIDER,
+  mantleModelArgs,
+} from './models';
 
 // Shared by both canvas generators. Keep the SDK override limited to inline files.
 export const MANTLE_ATTACHMENT_ADAPTER = `
@@ -111,6 +117,9 @@ function generateModelConfig(
     let effectiveMaxTokens = maxTokens;
     if (modelIdentifier.includes('nova-premier')) effectiveMaxTokens = Math.min(maxTokens, 32000);
     else if (modelIdentifier.includes('nova-pro')) effectiveMaxTokens = Math.min(maxTokens, 10000);
+    if (isBedrockOpenAiGpt(modelIdentifier)) {
+      return gptBedrockModelConfig(varName, modelIdentifier, effectiveMaxTokens, thinkingEnabled, reasoningEffort, '');
+    }
 
     let bedrockCode = `${varName}_model = BedrockModel(
     model_id="${modelIdentifier}",

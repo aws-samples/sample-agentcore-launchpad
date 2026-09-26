@@ -327,7 +327,7 @@ sudo scripts/setup_exec_env.sh --hardened   # 仅 Linux
 到一半才报错;你要么让后端以 root 运行,要么把 `studio_exec_user` 留空(即 tier 1:
 只有资源上限与环境清洗)。
 
-注意脚本同时说明的权衡:默认的 Bedrock Mantle 路径依赖 ambient 凭证来签发 bearer
+注意脚本同时说明的权衡:Bedrock Mantle 路径依赖 ambient 凭证来签发 bearer
 token,因此一个无凭证的子进程要求每次本地调试请求显式带上
 `bedrock_api_key` / `openai_api_key`。
 
@@ -368,7 +368,7 @@ export LAUNCHPAD_STUDIO_EXEC_BACKEND=docker   # 或在 launchpad.yaml 里写 stu
 前提:后端用户能访问 docker daemon(`docker` 组),且已用上面的脚本构建镜像。
 
 有一道边界**不是**白来的:EC2 上 IMDS hop limit ≥ 2 时(这些机器的默认值),默认
-bridge 网络里的容器仍能访问实例元数据服务 —— 这也正是默认 Mantle 路径无需 API key
+bridge 网络里的容器仍能访问实例元数据服务 —— 这也正是依赖 ambient 凭证的 Bedrock 路径无需 API key
 就能工作的原因。要得到真正无凭证的沙箱:
 
 ```bash

@@ -402,7 +402,7 @@ execution endpoints therefore refuse with `studio.exec.user_unavailable` (503)
 rather than failing mid-run, and you must either run the backend as root or leave
 `studio_exec_user` empty (tier 1: limits and environment scrubbing only).
 
-Note the trade-off the script describes: the default Bedrock Mantle path mints
+Note the trade-off the script describes: the Bedrock Mantle path mints
 its bearer token from the ambient credentials, so a credential-less subprocess
 requires an explicit `bedrock_api_key` / `openai_api_key` with each local-debug
 request.
@@ -451,7 +451,7 @@ group), and the image built by the script above.
 
 One boundary does **not** come free: on EC2 with an IMDS hop limit ≥ 2 (the
 default on these boxes), a container on the default bridge can still reach the
-instance metadata service — which is exactly what keeps the default Mantle path
+instance metadata service — which is exactly what keeps the ambient-credential Bedrock paths
 working with no API keys. For a genuinely credential-less sandbox:
 
 ```bash
