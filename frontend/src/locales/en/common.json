@@ -539,7 +539,9 @@
       "byocEnvValue": "Value",
       "byocEnvAdd": "Add variable",
       "byocContract": "Runtime contract",
-      "byocContractBody": "ARM64 (aarch64) · listens on port 8080 · POST /invocations + GET /ping\nInvoke payload: {\"prompt\": \"...\", \"actor_id\": \"...\"}\nZip ≤ 250 MiB (≤ 750 MiB uncompressed) · code zip runs on the managed Python runtime\nThe bedrock-agentcore SDK (BedrockAgentCoreApp + @app.entrypoint) satisfies all of this."
+      "byocContractBody": "ARM64 (aarch64) · listens on port 8080 · POST /invocations + GET /ping\nInvoke payload: {\"prompt\": \"...\", \"actor_id\": \"...\"}\nZip ≤ 250 MiB (≤ 750 MiB uncompressed) · code zip runs on the managed Python runtime\nThe bedrock-agentcore SDK (BedrockAgentCoreApp + @app.entrypoint) satisfies all of this.",
+      "memoryOff": "off",
+      "memoryShortOffHint": "This agent was deployed without short-term memory; it stays off on redeploy."
     },
     "launchPanel": {
       "title": "LAUNCH PLAN",
@@ -3236,7 +3238,8 @@
     "legacyCanary": {
       "title": "LEGACY RUNTIME CANARY ARTIFACT",
       "body": "This read-only result was created by the former combined workflow. Cleanup remains available; new Runtime Canaries use their own records."
-    }
+    },
+    "readOnlyResults": "Each stage's results, read-only: the experiment is finished, so its actions are off."
   },
   "canaryPage": {
     "reason": {
