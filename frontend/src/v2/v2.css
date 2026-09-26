@@ -63,10 +63,7 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
   position: sticky; top: 0; z-index: 20;
 }
 .v2-brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 16px; color: var(--v2-ink); white-space: nowrap; }
-.v2-brand-logo {
-  width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center;
-  background: linear-gradient(135deg, #1664ff, #4c8dff); color: #fff; font-weight: 700; font-size: 15px;
-}
+.v2-brand-logo { width: 28px; height: 28px; flex: none; display: block; }
 .v2-brand small { font-weight: 500; font-size: 11px; color: var(--v2-primary); background: var(--v2-primary-soft); border-radius: 4px; padding: 1px 6px; }
 .v2-top-tabs { display: flex; gap: 4px; background: var(--v2-fill); border-radius: 8px; padding: 3px; }
 .v2-top-tabs a, .v2-top-tabs span {
