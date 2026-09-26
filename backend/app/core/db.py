@@ -19,7 +19,7 @@ class Base(DeclarativeBase):
 DEFAULT_WORKSPACE_ID = "default"
 
 # Every table whose rows belong to one (account, region) environment. `users`,
-# `workspaces`, `user_workspaces`, and `announcements` are hub-global and stay off this list.
+# `workspaces`, `user_workspaces`, `announcements`, and video tables are hub-global.
 WORKSPACE_SCOPED_TABLES = (
     "agents",
     "deployments",
@@ -92,12 +92,17 @@ def init_db(bind=None) -> None:
     they exercise this exact sequence rather than a copy of it.
     """
     bind = bind if bind is not None else engine
+    from app.models import video as _video_models  # noqa: F401 — register tables before create_all
+
     Base.metadata.create_all(bind=bind)
     _migrate(bind)
     # Seeding after the drift check so a database that is behind the models is
     # never left half-migrated *and* half-seeded.
     assert_no_schema_drift(bind)
     _seed_default_workspace(bind)
+    from app.services.videos import seed_legacy_catalog
+
+    seed_legacy_catalog(bind)
     assert_every_row_has_a_workspace(bind)
 
 

@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "categories": [
+    {"id": "home", "title": {"en": "Overview", "zh-CN": "概览"}},
+    {"id": "build", "title": {"en": "Agent development", "zh-CN": "Agent 开发"}},
+    {"id": "run", "title": {"en": "Agent runtime", "zh-CN": "Agent 运行"}},
+    {"id": "eval", "title": {"en": "Agent evaluation", "zh-CN": "Agent 评估"}},
+    {"id": "learn", "title": {"en": "Learn", "zh-CN": "学习"}},
+    {"id": "admin", "title": {"en": "Configuration", "zh-CN": "配置"}}
+  ],
+  "sections": [
+    {"id": "home", "categoryId": "home", "title": {"en": "Workbench", "zh-CN": "工作台"}, "path": "/v2"},
+    {"id": "assistant", "categoryId": "build", "title": {"en": "Architect assistant", "zh-CN": "架构助手"}, "path": "/v2/assistant"},
+    {"id": "agents", "categoryId": "build", "title": {"en": "Agent Management", "zh-CN": "Agent 管理"}, "path": "/v2/agents"},
+    {"id": "registry", "categoryId": "build", "title": {"en": "Registry", "zh-CN": "注册中心"}, "path": "/v2/registry"},
+    {"id": "knowledge-bases", "categoryId": "build", "title": {"en": "Knowledge Bases", "zh-CN": "知识库"}, "path": "/v2/knowledge-bases"},
+    {"id": "skill-lab", "categoryId": "build", "title": {"en": "Skill Lab", "zh-CN": "技能实验室"}, "path": "/v2/skill-lab"},
+    {"id": "chat", "categoryId": "run", "title": {"en": "Chat Playground", "zh-CN": "对话演练场"}, "path": "/v2/chat"},
+    {"id": "observability", "categoryId": "run", "title": {"en": "Observability", "zh-CN": "可观测"}, "path": "/v2/observability"},
+    {"id": "memory", "categoryId": "run", "title": {"en": "Memory", "zh-CN": "记忆"}, "path": "/v2/memory"},
+    {"id": "governance", "categoryId": "run", "title": {"en": "Governance", "zh-CN": "治理"}, "path": "/v2/governance"},
+    {"id": "eval-data", "categoryId": "eval", "title": {"en": "Data Center", "zh-CN": "数据中心"}, "path": "/v2/eval/data"},
+    {"id": "eval-tasks", "categoryId": "eval", "title": {"en": "Evaluation Tasks", "zh-CN": "评估任务"}, "path": "/v2/eval/tasks"},
+    {"id": "eval-insights", "categoryId": "eval", "title": {"en": "Insights", "zh-CN": "分析洞察"}, "path": "/v2/eval/insights"},
+    {"id": "eval-online", "categoryId": "eval", "title": {"en": "Online Evaluation", "zh-CN": "在线评估"}, "path": "/v2/eval/online"},
+    {"id": "eval-evaluators", "categoryId": "eval", "title": {"en": "Evaluators", "zh-CN": "评估器"}, "path": "/v2/eval/evaluators"},
+    {"id": "eval-experiments", "categoryId": "eval", "title": {"en": "Experiments", "zh-CN": "实验"}, "path": "/v2/eval/experiments"},
+    {"id": "users", "categoryId": "admin", "title": {"en": "User Management", "zh-CN": "用户管理"}, "path": "/v2/users"},
+    {"id": "workspaces", "categoryId": "admin", "title": {"en": "Workspaces", "zh-CN": "工作区"}, "path": "/v2/workspaces"},
+    {"id": "announcements", "categoryId": "admin", "title": {"en": "Announcements", "zh-CN": "公告管理"}, "path": "/v2/announcements"},
+    {"id": "videos", "categoryId": "learn", "title": {"en": "Video introductions", "zh-CN": "视频介绍"}, "path": "/v2/videos"},
+    {"id": "video-management", "categoryId": "admin", "title": {"en": "Video management", "zh-CN": "视频管理"}, "path": "/v2/video-management"}
+  ]
+}

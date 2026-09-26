@@ -56,10 +56,12 @@
   changed chapters, joins, and ending in a real browser, including seeking and
   subtitle timing. Deliver the video with poster, narration text, SRT/WebVTT,
   chapter metadata, and a working preview/player link. Keep generated media out of Git.
-- **Publish through the shared video library.** Follow
-  [Video library](video-library.md) and `scripts/publish_videos.mjs`.
-  Use the existing private S3 / CloudFront deployment and a new immutable revision
-  path; all environments share URLs in `frontend/src/config/videos.json`. Do not use
-  expiring URLs or create a media stack per environment. Update duration, chapters,
-  bilingual metadata, captions, and poster together; verify CDN Range/CORS and
-  playback in `/videos`. Media upload and application/catalog deployment are separate.
+- **Publish through the shared video library.** Follow [Video library](video-library.md).
+  Upload the media to the existing private S3 / CloudFront deployment under a new
+  immutable revision path; `scripts/publish_videos.mjs` remains available for entries
+  in the one-time legacy manifest. An administrator adds the permanent CDN URL and
+  metadata in `/v2/video-management`, saves the draft, previews it, then publishes.
+  Do not use expiring URLs or create a media stack per environment. Include duration,
+  chapters, bilingual metadata, captions, and poster when available; verify CDN
+  Range/CORS and playback in `/videos`. Media upload and directory publication are
+  separate actions.

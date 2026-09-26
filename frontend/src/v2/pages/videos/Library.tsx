@@ -1,7 +1,7 @@
 import { Inbox, PlayCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { type LibraryVideo, videoCatalog, videoCollections, type VideoLocale, videoTimestamp } from "../../../lib/videos";
+import { type LibraryVideo, type VideoCatalog, type VideoCollection, type VideoLocale, videoTimestamp } from "../../../lib/videos";
 import { Alert, Button, Card, SearchInput, Segmented, Tag } from "../../ui";
 
 interface Result {
@@ -17,30 +17,37 @@ interface Result {
  */
 export function VideoLibrary({
   locale,
+  catalog,
+  collections: allCollections,
   query,
   category,
+  section,
   invalidLink,
   onFilter,
   onClear,
   onWatch,
 }: {
+  catalog: VideoCatalog;
+  collections: VideoCollection[];
   locale: VideoLocale;
   query: string;
   category: string | null;
+  section: string | null;
   invalidLink: boolean;
-  onFilter: (name: "q" | "category", value: string) => void;
+  onFilter: (name: "q" | "category" | "section", value: string) => void;
   onClear: () => void;
   onWatch: (id: string) => void;
 }) {
   const { t } = useTranslation();
-  const videos = videoCatalog.videos;
+  const videos = catalog.videos;
   const search = query.trim().toLocaleLowerCase(locale);
-  const collections = videoCollections.filter((item) => !category || item.categoryId === category);
+  const collections = allCollections.filter((item) =>
+    (!category || item.categoryId === category) && (!section || item.id === section));
   const results: Result[] = collections.flatMap((item) =>
     search
       ? item.videos
           .filter((video) => `${item.title[locale]} ${video.title[locale]}`.toLocaleLowerCase(locale).includes(search))
-          .map((video) => ({ id: video.id, title: video.title[locale], description: item.title[locale], videos: [video] }))
+          .map((video) => ({ id: video.id, title: video.title[locale], description: video.description[locale], videos: [video] }))
       : [{ id: item.id, title: item.title[locale], description: item.description[locale], videos: item.videos }],
   );
 
@@ -57,7 +64,7 @@ export function VideoLibrary({
   }
 
   const countFor = (id: string) =>
-    videoCollections.filter((c) => c.categoryId === id).reduce((n, c) => n + c.videos.length, 0);
+    allCollections.filter((c) => c.categoryId === id).reduce((n, c) => n + c.videos.length, 0);
 
   return (
     <section aria-label={t("videos.libraryTitle")} data-testid="video-library">
@@ -73,12 +80,27 @@ export function VideoLibrary({
             onChange={(value) => onFilter("category", value)}
             options={[
               { value: "", label: `${t("videos.all")} · ${videos.length}` },
-              ...videoCatalog.categories.map((item) => ({
+              ...catalog.categories.map((item) => ({
                 value: item.id,
                 label: `${item.title[locale]} · ${countFor(item.id)}`,
               })),
             ]}
           />
+          <label className="v2-videos-section-filter">
+            <span>{t("videoManage.section")}</span>
+            <select
+              className="v2-select"
+              value={section ?? ""}
+              disabled={!category}
+              onChange={(event) => onFilter("section", event.target.value)}
+              data-testid="video-section-filter"
+            >
+              <option value="">{t("videos.all")}</option>
+              {allCollections.filter((item) => item.categoryId === category).map((item) => (
+                <option key={item.id} value={item.id}>{item.title[locale]}</option>
+              ))}
+            </select>
+          </label>
           <div className="end">
             <SearchInput value={query} onChange={(value) => onFilter("q", value)} placeholder={t("videos.search")} testId="video-search" />
             <span className="v2-count" role="status">
@@ -97,7 +119,7 @@ export function VideoLibrary({
                 <li key={item.id}>
                   <button type="button" className="v2-videos-card" onClick={() => onWatch(first.id)} data-testid={`video-card-${item.id}`}>
                     <span className="thumb">
-                      <img src={first.posterUrl} alt="" loading="lazy" />
+                      {first.posterUrl && <img src={first.posterUrl} alt="" loading="lazy" />}
                       <PlayCircle className="play" size={40} aria-hidden="true" />
                       <span className="len">{videoTimestamp(duration)}</span>
                     </span>

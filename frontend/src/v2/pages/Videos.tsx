@@ -1,26 +1,33 @@
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { videoCatalog, videoCollections, type VideoLocale } from "../../lib/videos";
-import { PageHeader } from "../ui";
+import { useVideoCatalog } from "../../lib/useVideoCatalog";
+import { videoCollections, type VideoLocale } from "../../lib/videos";
+import { Alert, Button, PageHeader, Spin } from "../ui";
 import { VideoLibrary } from "./videos/Library";
 import { VideoPlayer } from "./videos/Player";
 import "./videos/videos.css";
 
 /**
- * 视频 — the bundled product-demo catalog (`config/videos.json`), visible to every user.
+ * 视频 — published hub-global directory, visible to every signed-in user.
  * `?view=watch&video=<id>` opens the player; `?q=` / `?category=` filter the library and
  * are kept while watching so going back restores them.
  */
 export function V2Videos() {
   const { t, i18n } = useTranslation();
   const [params, setParams] = useSearchParams();
+  const loaded = useVideoCatalog();
+  const catalog = loaded.data;
   const locale: VideoLocale = i18n.resolvedLanguage?.startsWith("zh") ? "zh-CN" : "en";
   const requestedId = params.get("video");
-  const selected = videoCatalog.videos.find((video) => video.id === requestedId);
-  const collection = videoCollections.find((item) => item.videos.some((v) => v.id === selected?.id));
+  const collections = catalog ? videoCollections(catalog) : [];
+  const selected = catalog?.videos.find((video) => video.id === requestedId);
+  const collection = collections.find((item) => item.videos.some((v) => v.id === selected?.id));
   const rawCategory = params.get("category");
-  const category = videoCatalog.categories.some((item) => item.id === rawCategory) ? rawCategory : null;
+  const category = catalog?.categories.some((item) => item.id === rawCategory) ? rawCategory : null;
+  const rawSection = params.get("section");
+  const section = collections.some((item) => item.id === rawSection && (!category || item.categoryId === category))
+    ? rawSection : null;
 
   const withParams = (edit: (next: URLSearchParams) => void, replace = false) =>
     setParams(
@@ -42,6 +49,19 @@ export function V2Videos() {
       next.delete("video");
     });
 
+  if (!catalog) {
+    return (
+      <>
+        <PageHeader title={t("videos.title")} desc={t("videos.description")} />
+        {loaded.loading ? <Spin /> : (
+          <Alert tone="error" action={<Button onClick={loaded.reload}>{t("v2.common.retry")}</Button>}>
+            {loaded.error ?? t("videos.loadFailed")}
+          </Alert>
+        )}
+      </>
+    );
+  }
+
   if (selected && collection) {
     return (
       <VideoPlayer
@@ -59,22 +79,31 @@ export function V2Videos() {
       <PageHeader
         title={t("videos.title")}
         desc={t("videos.description")}
-        end={<span className="v2-count">{t("videos.count", { count: videoCatalog.videos.length })}</span>}
+        end={<span className="v2-count">{t("videos.count", { count: catalog.videos.length })}</span>}
       />
+      {loaded.error && (
+        <Alert tone="error" action={<Button onClick={loaded.reload}>{t("v2.common.retry")}</Button>}>
+          {loaded.error}
+        </Alert>
+      )}
       <VideoLibrary
+        catalog={catalog}
+        collections={collections}
         locale={locale}
         query={params.get("q") ?? ""}
         category={category}
+        section={section}
         invalidLink={params.get("video") !== null}
         onFilter={(name, value) =>
           withParams((next) => {
             next.delete("view");
             next.delete("video");
+            if (name === "category") next.delete("section");
             if (value) next.set(name, value);
             else next.delete(name);
           }, true)
         }
-        onClear={() => withParams((next) => ["q", "category", "view", "video"].forEach((n) => next.delete(n)), true)}
+        onClear={() => withParams((next) => ["q", "category", "section", "view", "video"].forEach((n) => next.delete(n)), true)}
         onWatch={watch}
       />
     </>

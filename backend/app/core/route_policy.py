@@ -361,6 +361,15 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/announcements/{announcement_id}/publish"): ADMIN,
     ("POST", "/api/announcements/{announcement_id}/unpublish"): ADMIN,
     ("DELETE", "/api/announcements/{announcement_id}"): ADMIN,
+    # ---- hub-global videos: only published snapshots reach members ----
+    ("GET", "/api/videos"): MEMBER,
+    ("GET", "/api/videos/manage"): ADMIN,
+    ("GET", "/api/videos/manage/{video_id}"): ADMIN,
+    ("POST", "/api/videos/manage"): ADMIN,
+    ("PUT", "/api/videos/manage/{video_id}"): ADMIN,
+    ("POST", "/api/videos/manage/{video_id}/publish"): ADMIN,
+    ("POST", "/api/videos/manage/{video_id}/unpublish"): ADMIN,
+    ("DELETE", "/api/videos/manage/{video_id}"): ADMIN,
     ("GET", "/api/memory/overview"): MEMBER,
     ("GET", "/api/memory/actors"): MEMBER,
     ("GET", "/api/memory/events"): MEMBER,
@@ -407,7 +416,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
 }
 
 # Hub-global route prefixes: nothing under them operates inside a workspace.
-HUB_GLOBAL_PREFIXES = ("/api/auth", "/api/users", "/api/workspaces", "/api/announcements")
+HUB_GLOBAL_PREFIXES = (
+    "/api/auth", "/api/users", "/api/workspaces", "/api/announcements", "/api/videos",
+)
 
 
 def is_hub_global(path_format: str) -> bool:
@@ -443,6 +454,14 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/announcements/{announcement_id}/publish"),
         ("POST", "/api/announcements/{announcement_id}/unpublish"),
         ("DELETE", "/api/announcements/{announcement_id}"),
+        ("GET", "/api/videos"),
+        ("GET", "/api/videos/manage"),
+        ("GET", "/api/videos/manage/{video_id}"),
+        ("POST", "/api/videos/manage"),
+        ("PUT", "/api/videos/manage/{video_id}"),
+        ("POST", "/api/videos/manage/{video_id}/publish"),
+        ("POST", "/api/videos/manage/{video_id}/unpublish"),
+        ("DELETE", "/api/videos/manage/{video_id}"),
         ("GET", "/api/users"),
         ("GET", "/api/users/stats"),
         ("PATCH", "/api/users/{user_id}"),

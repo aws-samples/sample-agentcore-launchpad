@@ -1,6 +1,11 @@
 /* V2 视频 (videos) — module styles, scoped under the V2 shell root. */
 
 /* library grid */
+.v2 .v2-videos-section-filter {
+  display: inline-flex; align-items: center; gap: 8px; color: var(--v2-ink-3);
+  font-size: 12.5px; white-space: nowrap;
+}
+.v2 .v2-videos-section-filter select { min-width: 170px; max-width: 240px; }
 .v2 .v2-videos-grid {
   list-style: none; margin: 0; padding: 0; display: grid; gap: 16px;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));

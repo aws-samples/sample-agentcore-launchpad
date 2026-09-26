@@ -213,7 +213,7 @@ export function VideoPlayer({
                       data-testid={`video-entry-${item.id}`}
                     >
                       <span className="thumb">
-                        <img src={item.posterUrl} alt="" loading="lazy" />
+                        {item.posterUrl && <img src={item.posterUrl} alt="" loading="lazy" />}
                         {on && <Play size={16} aria-hidden="true" />}
                       </span>
                       <span className="text">
