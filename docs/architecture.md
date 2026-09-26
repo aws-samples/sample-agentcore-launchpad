@@ -1145,7 +1145,10 @@ stored and hashed (defaults filled in), so no over-cap blob is ever kept
 block is an `invalid` revision that keeps only a marker); `ProposalContent` is a
 Pydantic allowlist with `extra="forbid"` and per-field/per-item bounds — no `env`,
 `code`, `requirements`, `allowed_tools`, `protocol`, `filesystem`, `network`, URLs,
-ARNs, S3 prefixes or roles can pass. `memory` is `"disabled"` or `"workspace"` — the
+ARNs, S3 prefixes or roles can pass. A proposal that names no model gets
+`PROPOSAL_DEFAULT_MODEL_ID` (`global.openai.gpt-6-sol`, the Create Agent wizard's
+default; an approval is always a managed Harness, so a non-Claude default is safe),
+not `AgentSpec`'s stored-spec fallback. `memory` is `"disabled"` or `"workspace"` — the
 only two states the Harness API can enforce (`{"disabled": {}}`, or the workspace's
 existing shared AgentCore Memory with every strategy it carries); a "short-term
 only" opt-out is not representable and is not offered. References are validated

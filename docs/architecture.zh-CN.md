@@ -705,7 +705,10 @@ chat.session_not_found`；普通 Agent 不产生台账读取。对话会话/历�
 超限的数据块（超限的成员编辑为 `413 assistant.proposal_too_large`；
 超限的模型块成为仅保留标记的 `invalid` 修订）；`ProposalContent` 是带 `extra="forbid"` 与逐字段/
 逐项上限的 Pydantic 白名单——`env`、`code`、`requirements`、`allowed_tools`、`protocol`、
-`filesystem`、`network`、URL、ARN、S3 前缀或角色都无法通过。`memory` 为 `"disabled"` 或
+`filesystem`、`network`、URL、ARN、S3 前缀或角色都无法通过。未指定模型的提案使用
+`PROPOSAL_DEFAULT_MODEL_ID`（`global.openai.gpt-6-sol`，与新建 Agent 向导的默认值一致；审批后
+创建的总是托管 Harness，因此默认非 Claude 模型是安全的），而不是 `AgentSpec` 为存量 spec 提供的回退值。
+`memory` 为 `"disabled"` 或
 `"workspace"`——Harness API 唯一能强制执行的两种状态（`{"disabled": {}}`，或 Workspace 既有的共享
 AgentCore Memory 及其全部策略）；“仅短期”的退出无法表达，也不提供。引用按会话的目录快照校验
 **并包含前置条件**：Gateway 工具需要已解析的 Gateway ARN + 出站认证身份，技能需要可读的包内容，
