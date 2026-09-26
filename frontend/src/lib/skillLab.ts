@@ -16,10 +16,12 @@ export const BACKEND_LABELS: Record<SkillLabTargetBackend, string> = {
 /**
  * Judge suggestions are Converse inference-profile ids (`us.`/`global.`
  * prefixed) — the bedrock_chat judge calls Converse directly, and bare model
- * ids like `openai.gpt-5.6-sol` are rejected with "use an inference profile".
+ * ids like `openai.gpt-6-sol` are rejected with "use an inference profile".
  * The agentic judge routes by family: openai.* → host codex CLI, else claude.
  */
 export const JUDGE_MODEL_SUGGESTIONS = [
+  "us.openai.gpt-6-sol",
+  "global.anthropic.claude-opus-5-5",
   "us.openai.gpt-5.6-sol",
   "global.anthropic.claude-opus-5",
   "us.anthropic.claude-sonnet-5",

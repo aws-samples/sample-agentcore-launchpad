@@ -257,7 +257,7 @@ def judge_exec_route(judge_model: str) -> tuple[str, str]:
 
     One judge model still drives both judge modes, but the judge *agent* is a
     host CLI and only claude can run anthropic models: an openai-family judge
-    (e.g. us.openai.gpt-5.6-sol) routes to the host codex CLI with the profile
+    (e.g. us.openai.gpt-6-sol) routes to the host codex CLI with the profile
     prefix stripped — codex does its own resolution via ~/.codex, the same
     coupling the worker image build already relies on for its model catalog.
     Anything non-openai keeps the claude CLI with the model id unchanged."""
