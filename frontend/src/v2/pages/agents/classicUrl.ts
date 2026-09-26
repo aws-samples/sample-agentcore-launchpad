@@ -19,3 +19,12 @@ export function classicAgentNewToV2(search: string): string | null {
   }
   return intent ? `/v2/agents?${next.toString()}` : null;
 }
+
+/** Where editing an agent happens in V2: the Studio canvas for a canvas-built agent,
+ *  the preset configure flow (classic page, in the V2 shell) for a system preset,
+ *  else the native `?view=edit` re-publish wizard. */
+export function v2EditPath(agent: { id: string; method: string; system?: unknown }): string {
+  if (agent.method === "studio") return `/create/studio?agent=${agent.id}`;
+  if (agent.system) return `/agents/${agent.id}/edit`;
+  return `/v2/agents?view=edit&id=${encodeURIComponent(agent.id)}`;
+}

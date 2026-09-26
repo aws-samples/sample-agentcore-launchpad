@@ -5320,7 +5320,14 @@
           "container": "Deploying builds an ARM64 container image in CodeBuild, pushes it to ECR and creates an AgentCore Runtime.",
           "byoc": "Deploying creates an AgentCore Runtime with its own execution role from the uploaded code or the given image."
         },
-        "sdkClaudeDesc": "Anthropic's agent loop with subagents, hooks and MCP; Claude models on Bedrock."
+        "sdkClaudeDesc": "Anthropic's agent loop with subagents, hooks and MCP; Claude models on Bedrock.",
+        "editTitle": "Edit {{name}}",
+        "redeploy": "Save and redeploy",
+        "redeployStarted": "Redeploying {{name}}",
+        "editNote": "Saving redeploys a new version onto the same AgentCore resource. The name and creation method can't change.",
+        "convertedNote": "This agent was converted from a Harness and runs its exported code. The exported code bundle is kept unchanged on redeploy.",
+        "nameLocked": "The name can't change after creation.",
+        "editUnsupported": "This agent can't be edited here."
       }
     },
     "data": {

@@ -24,13 +24,19 @@ import { Alert, Button, Card, Field, LinkButton, OptionCard, Segmented, Spin, Ta
 import { CheckList, type SectionProps, type WizardUi } from "./wizardKit";
 
 /** The name field every method starts with. */
-export function NameField({ form, set, err }: Omit<SectionProps, "cat">) {
+export function NameField({ form, set, err, nameLocked }: Omit<SectionProps, "cat">) {
   const { t } = useTranslation();
   return (
-    <Field label={t("v2.agents.colName")} required hint={t("v2.agents.wizard.nameHint")} error={err("name")}>
+    <Field
+      label={t("v2.agents.colName")}
+      required
+      hint={t(nameLocked ? "v2.agents.wizard.nameLocked" : "v2.agents.wizard.nameHint")}
+      error={err("name")}
+    >
       <input
         className="v2-input"
         value={form.name}
+        disabled={nameLocked}
         maxLength={48}
         placeholder="hr-assistant-v3"
         onChange={(e) => set({ name: e.target.value.toLowerCase() })}

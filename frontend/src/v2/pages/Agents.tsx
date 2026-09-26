@@ -16,6 +16,7 @@ import {
 } from "../../lib/api";
 import { fmtTime } from "../format";
 import { AgentWizard } from "./agents/AgentWizard";
+import { v2EditPath } from "./agents/classicUrl";
 import { useLoad, usePaged, useV2Toast } from "../hooks";
 import {
   Alert,
@@ -63,10 +64,48 @@ const STAGE_TONE: Record<StageInfo["status"], TagTone> = {
   pending: "outline",
 };
 
-/** Where editing an agent happens: the classic wizard (rendered in the V2
- *  shell), or the Studio canvas for a canvas-built agent. */
-function editPath(agent: AgentInfo): string {
-  return agent.method === "studio" ? `/create/studio?agent=${agent.id}` : `/agents/${agent.id}/edit`;
+const editPath = v2EditPath;
+
+const EDITABLE_METHODS: Method[] = ["harness", "zip_runtime", "container", "byoc"];
+
+/** `?view=edit&id=` — reads the agent fresh, then opens the wizard on its stored spec. */
+function AgentEdit({ id }: { id: string }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const [, setParams] = useSearchParams();
+  const { data, error, reload } = useLoad(() => api.getAgent(id), `agent-edit:${id}`);
+  // canvas agents and system presets have their own editors
+  const elsewhere = data && (data.method === "studio" || data.system) ? editPath(data) : null;
+  useEffect(() => {
+    if (elsewhere) navigate(elsewhere, { replace: true });
+  }, [elsewhere, navigate]);
+  const back = () => setParams({ view: "detail", id });
+  if (error && !data)
+    return (
+      <>
+        <FlowHeader title={t("v2.common.edit")} onBack={back} />
+        <Alert tone="error">
+          {error}{" "}
+          <button type="button" className="v2-link" onClick={reload}>
+            {t("v2.common.retry")}
+          </button>
+        </Alert>
+      </>
+    );
+  if (!data || elsewhere) return <Spin />;
+  const blocked = !EDITABLE_METHODS.includes(data.method)
+    ? t("v2.agents.wizard.editUnsupported")
+    : data.status === "deploying"
+      ? t("apiErrors.agent.deploy_in_progress", "a deployment is already in progress for this agent")
+      : null;
+  if (blocked)
+    return (
+      <>
+        <FlowHeader title={t("v2.agents.wizard.editTitle", { name: data.name })} onBack={back} />
+        <Alert tone="warn">{blocked}</Alert>
+      </>
+    );
+  return <AgentWizard key={id} edit={data} />;
 }
 
 /** The platform revision (one per (re)publish): the list carries it as
@@ -596,15 +635,17 @@ function AgentDetail({ id }: { id: string }) {
   );
 }
 
-/** Agent management (native V2): list, `?view=detail&id=` and `?view=new` (the
+/** Agent management (native V2): list, `?view=detail&id=`, `?view=new` (the
  *  creation wizard for Harness / Strands / other SDK / bring-your-own-code, with
- *  the classic `method=` / `gateway=` / `skill=` prefills); editing, importing and
- *  the system presets open the classic flows inside the V2 shell. */
+ *  the classic `method=` / `gateway=` / `skill=` prefills) and `?view=edit&id=` (the
+ *  same wizard as a re-publish editor); importing and the system presets open the
+ *  classic flows inside the V2 shell. */
 export function V2Agents() {
   const [params] = useSearchParams();
   const id = params.get("id");
   const view = params.get("view");
   if (view === "detail" && id) return <AgentDetail key={id} id={id} />;
   if (view === "new") return <AgentWizard />;
+  if (view === "edit" && id) return <AgentEdit key={id} id={id} />;
   return <AgentList />;
 }

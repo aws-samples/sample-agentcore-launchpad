@@ -8,12 +8,18 @@ import type {
   AgentSdk,
   AgentSpecInput,
   ByocArtifactKind,
+  ByocConfigInput,
   ByocPythonVersion,
   HarnessNativeTool,
   Toolkit,
 } from "./api";
-import type { ModelSource } from "./models";
-import { CLAUDE_SDK_MODEL_SOURCE, DEFAULT_MODEL_SOURCE, defaultModelFor } from "./models";
+import type { ModelSource, ReasoningEffort } from "./models";
+import {
+  CLAUDE_SDK_MODEL_SOURCE,
+  DEFAULT_MODEL_SOURCE,
+  defaultModelFor,
+  SPEC_DEFAULT_MODEL_ID,
+} from "./models";
 import { DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";
 import {
   DEFAULT_MAX_ITERATIONS,
@@ -338,6 +344,135 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   byocDescription: "",
 });
 
+/** Spec fields read back when an existing agent is loaded into the form. */
+export interface StoredAgentSpec {
+  model_id?: string;
+  model_source?: ModelSource;
+  agent_sdk?: AgentSdk;
+  // harness-only inference knobs (absent on every spec written before they existed)
+  max_tokens?: number | null;
+  reasoning_effort?: ReasoningEffort | null;
+  // agent-loop bounds (backend defaults 10 / 180 when absent)
+  max_iterations?: number;
+  timeout_seconds?: number;
+  system_prompt?: string;
+  tools?: { type: string; name: string; config?: { url?: string; record_id?: string; gateway_id?: string } }[];
+  toolkits?: Toolkit[];
+  skills?: string[];
+  allowed_tools?: string[] | null;
+  native_tools?: HarnessNativeTool[];
+  knowledge_bases?: KbRef[];
+  memory?: { long_term?: boolean; memory_id?: string | null };
+  protocol?: "http" | "a2a";
+  a2a_skills?: { id?: string; name?: string; description?: string; tags?: string[] }[];
+  env?: Record<string, string>;
+  filesystem?: {
+    session_storage?: { mount_path?: string } | null;
+    s3_files?: { access_point_arn?: string; mount_path?: string }[];
+    efs?: { access_point_arn?: string; mount_path?: string }[];
+  };
+  network?: { subnets?: string[]; security_groups?: string[] };
+  byoc?: ByocConfigInput;
+}
+
+/** What a loaded agent contributes besides the form itself: the gateway configs and
+ *  knowledge-base descriptors a re-publish must carry even if the live catalogs no
+ *  longer list them, the custom (non-registry) Skill chips, and the stored upload. */
+export interface StoredAgentExtras {
+  storedGatewayConfig: StoredGatewayConfig;
+  specKbs: KbRef[];
+  customSkills: { name: string; path: string }[];
+  byocUploadId: string | null;
+}
+
+/**
+ * An existing agent's stored spec as the form a re-publish starts from — the classic
+ * wizard's `startEdit` mapping, so both consoles re-publish the same spec. Knobs come
+ * back exactly as stored; a spec written before `model_source` existed is a Converse
+ * agent (never Mantle), and one without `model_id` means the backend default.
+ */
+export function formFromStoredSpec(
+  method: AgentMethod,
+  name: string,
+  raw: unknown,
+): { form: AgentForm; extras: StoredAgentExtras } {
+  const spec = (raw ?? {}) as StoredAgentSpec;
+  const base = emptyAgentForm(method);
+  const storedModel = spec.model_id ?? SPEC_DEFAULT_MODEL_ID;
+  const tools = spec.tools ?? [];
+  const gatewayTools = tools.filter((x) => x.type === "gateway");
+  const fs = spec.filesystem;
+  const form: AgentForm = {
+    ...base,
+    name,
+    modelId: storedModel,
+    modelSource: spec.model_source ?? "bedrock",
+    agentSdk: spec.agent_sdk ?? base.agentSdk,
+    systemPrompt: spec.system_prompt ?? "",
+    maxTokens: spec.max_tokens == null ? "" : String(spec.max_tokens),
+    reasoningEffort: spec.reasoning_effort ?? EFFORT_NONE,
+    maxIterations: String(spec.max_iterations ?? DEFAULT_MAX_ITERATIONS),
+    timeoutSeconds: String(spec.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS),
+    tools: tools.filter((x) => x.type === "builtin").map((x) => x.name),
+    toolkits: (spec.toolkits ?? []).filter((k) => TOOLKITS.some((x) => x.name === k)),
+    selectedGateway: gatewayTools.map((x) => x.name),
+    selectedMcp: tools.filter((x) => x.type === "mcp").map((x) => x.name),
+    selectedKbs: (spec.knowledge_bases ?? []).map((k) => k.kb_id),
+    skills: spec.skills ?? [],
+    allowedTools: spec.allowed_tools ?? null,
+    nativeTools: method === "harness" ? spec.native_tools ?? [] : [],
+    longTerm: spec.memory?.long_term ?? true,
+    memoryId: spec.memory?.memory_id ?? "",
+    mcpServers: spec.env?.LAUNCHPAD_MCP_SERVERS ?? "",
+    sessionFs: fs ? fs.session_storage != null : true,
+    sessionMount: fs?.session_storage?.mount_path ?? DEFAULT_SESSION_MOUNT,
+    s3Mounts: (fs?.s3_files ?? []).map((m) => ({ arn: m.access_point_arn ?? "", path: m.mount_path ?? "" })),
+    efsMounts: (fs?.efs ?? []).map((m) => ({ arn: m.access_point_arn ?? "", path: m.mount_path ?? "" })),
+    vpcSubnets: (spec.network?.subnets ?? []).join(", "),
+    vpcSgs: (spec.network?.security_groups ?? []).join(", "),
+    protocol: spec.protocol ?? "http",
+    a2aSkills: (spec.a2a_skills ?? []).map((s) => ({
+      name: s.name ?? "",
+      description: s.description ?? "",
+      tags: (s.tags ?? []).join(", "),
+    })),
+  };
+  if (method === "byoc" && spec.byoc) {
+    Object.assign(form, {
+      byocKind: spec.byoc.artifact_kind,
+      byocUploadId: spec.byoc.upload_id ?? null,
+      byocImageUri: spec.byoc.image_uri ?? "",
+      byocEntrypoint: spec.byoc.entrypoint ?? "main.py",
+      byocPython: spec.byoc.python_version ?? "PYTHON_3_13",
+      byocInstallReqs: spec.byoc.install_requirements ?? true,
+      byocRawContract: spec.byoc.invoke_contract === "raw",
+      // a spec stored before allowed_models existed reads back as its one model
+      byocModels: spec.byoc.allowed_models?.length ? spec.byoc.allowed_models : [storedModel],
+      byocDescription: spec.system_prompt ?? "",
+      byocEnvRows: Object.entries(spec.env ?? {}).map(([key, value]) => ({ key, value })),
+    });
+  }
+  const storedGatewayConfig: StoredGatewayConfig = Object.fromEntries(
+    gatewayTools.flatMap((tool) =>
+      tool.config?.record_id && tool.config.gateway_id
+        ? [[tool.name, { record_id: tool.config.record_id, gateway_id: tool.config.gateway_id }]]
+        : [],
+    ),
+  );
+  return {
+    form,
+    extras: {
+      storedGatewayConfig,
+      specKbs: spec.knowledge_bases ?? [],
+      // custom (non-registry) skill paths get their chip name from the path tail
+      customSkills: (spec.skills ?? [])
+        .filter((p) => p.includes("/agent-skills/"))
+        .map((p) => ({ name: skillNameFromPath(p), path: p })),
+      byocUploadId: method === "byoc" ? spec.byoc?.upload_id ?? null : null,
+    },
+  };
+}
+
 /** What the builders need from the live catalogs. */
 export interface AgentFormCatalogs {
   gatewayTargets: AttachableMcp[];
@@ -512,6 +647,37 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
 /** The spec a create / re-publish posts for the form. */
 export const buildAgentSpec = (form: AgentForm, cat: AgentFormCatalogs): AgentSpecInput =>
   form.method === "byoc" ? buildByocSpec(form) : buildOrdinarySpec(form, cat);
+
+/**
+ * Spec fields no form input owns: a converted agent's exported code and its
+ * provenance, extra requirements, tool-description overrides, a canvas artifact.
+ * A re-publish replaces the stored spec wholesale (`POST /api/agents/{id}/redeploy`),
+ * so without these a converted agent silently lost its exported code bundle and was
+ * rebuilt from the template.
+ */
+export const REPUBLISH_CARRIED_FIELDS = [
+  "code",
+  "code_bundle",
+  "conversion_notes",
+  "requirements",
+  "source_harness",
+  "studio_flow",
+  "tool_description_overrides",
+] as const;
+
+/** A re-publish of `stored`: the form's spec plus the stored fields it does not own. */
+export function republishSpec(built: AgentSpecInput, stored: unknown): AgentSpecInput {
+  const source = (stored ?? {}) as Record<string, unknown>;
+  const carried = Object.fromEntries(
+    REPUBLISH_CARRIED_FIELDS.flatMap((key) => (source[key] != null ? [[key, source[key]]] : [])),
+  );
+  // short-term memory has no form input (a new agent always gets it); an agent
+  // deployed without it must not have memory switched on by an unrelated edit
+  const storedShort = (source.memory as { short_term?: unknown } | undefined)?.short_term;
+  const memory =
+    built.memory && typeof storedShort === "boolean" ? { ...built.memory, short_term: storedShort } : built.memory;
+  return { ...carried, ...built, ...(memory ? { memory } : {}) } as AgentSpecInput;
+}
 
 /* ── validation ─────────────────────────────────────────────────────────── */
 

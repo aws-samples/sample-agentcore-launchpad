@@ -5320,7 +5320,14 @@
           "container": "部署会通过 CodeBuild 构建 ARM64 容器镜像并推送到 ECR，再创建 AgentCore Runtime。",
           "byoc": "部署会使用上传的代码或指定的镜像创建 AgentCore Runtime 及其独立执行角色。"
         },
-        "sdkClaudeDesc": "Anthropic 的 Agent 循环，支持子 Agent、Hooks 与 MCP；使用 Bedrock 上的 Claude 模型。"
+        "sdkClaudeDesc": "Anthropic 的 Agent 循环，支持子 Agent、Hooks 与 MCP；使用 Bedrock 上的 Claude 模型。",
+        "editTitle": "编辑 {{name}}",
+        "redeploy": "保存并重新部署",
+        "redeployStarted": "正在重新部署 {{name}}",
+        "editNote": "保存后会以新版本重新部署到同一个 AgentCore 资源。名称和创建方式不可修改。",
+        "convertedNote": "该 Agent 由 Harness 转换而来，运行的是导出的代码。重新部署时会原样保留导出的代码包。",
+        "nameLocked": "名称创建后不可修改。",
+        "editUnsupported": "该 Agent 不支持在此编辑。"
       }
     },
     "data": {

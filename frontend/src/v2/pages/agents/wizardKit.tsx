@@ -50,6 +50,8 @@ export interface SectionProps {
   cat: WizardCatalogs;
   /** a validation message for `key`, shown once the member tried to continue */
   err: (key: string) => string | undefined;
+  /** re-publish: the name is immutable on the backend */
+  nameLocked?: boolean;
 }
 
 /** Checkbox list of a catalog; an empty catalog shows `empty`. `extra` are selected
