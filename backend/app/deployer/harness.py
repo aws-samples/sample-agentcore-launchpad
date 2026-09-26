@@ -58,7 +58,7 @@ def model_config(spec: AgentSpec) -> dict[str, Any]:
     block, so the snake_case ``additional_request_fields`` key is rejected by botocore
     as an unknown parameter — observed live on a real InvokeHarness). The key must
     therefore be the AWS wire name ``additionalModelRequestFields``, under which
-    OpenAI GPT-5.x on Bedrock accepts ``{"reasoning": {"effort": …}}`` (a flat
+    OpenAI GPT-5.x / GPT-6 on Bedrock accepts ``{"reasoning": {"effort": …}}`` (a flat
     ``reasoning_effort`` is likewise rejected). ``AgentSpec`` already refuses the knob
     for any other model/source pairing, so this function never has to guess a second
     shape.

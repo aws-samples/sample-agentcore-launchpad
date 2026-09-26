@@ -54,6 +54,7 @@ import {
   BYOC_MODELS_MAX,
   DEFAULT_AGENT_SDK,
   DEFAULT_SESSION_MOUNT,
+  defaultModelForMethod,
   entrypointAfterUpload,
   hasByoMounts,
   promptWithToolkit,
@@ -97,6 +98,7 @@ import {
   isCustomModelId,
   modelOptionsFor,
   REASONING_EFFORTS,
+  SPEC_DEFAULT_MODEL_ID,
   supportsReasoningEffort,
 } from "../lib/models";
 
@@ -1036,10 +1038,11 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   // the Model source control is hidden and pinned to A2A_MODEL_SOURCE for them.
   const isA2a = method === "zip_runtime" && protocol === "a2a";
 
-  // Switching source re-seeds the model to that source's catalog default.
-  const applyModelSource = (source: ModelSource) => {
+  // Switching source re-seeds the model to that source's catalog default. `forMethod`
+  // is the method the form is landing on — during a switch, state still holds the old one.
+  const applyModelSource = (source: ModelSource, forMethod: Method = method) => {
     setModelSource(source);
-    setModelId(defaultModelFor(source));
+    setModelId(defaultModelForMethod(forMethod, source));
     setCustomModel(false);
     // the byoc allowed-models list is seeded from the same catalog
     setByocModels([defaultModelFor(source)]);
@@ -1056,7 +1059,7 @@ const deployLock = !canDeploy
     setMethod(next);
     // protocol survives a method switch, so re-entering zip_runtime with A2A
     // still selected must land back on the pinned source, not the default.
-    applyModelSource(sourceOnMethodSwitch(next, protocol));
+    applyModelSource(sourceOnMethodSwitch(next, protocol), next);
   };
 
   // `/agents/new?method=zip_runtime|container|byoc` (the V2 console's hand-off for
@@ -1445,7 +1448,7 @@ const deployLock = !canDeploy
     setName(agent.name);
     // A spec stored before model_source existed is a Converse-API agent, never
     // Mantle; an id in neither catalog rides the "Custom model ID…" branch.
-    const storedModel = spec.model_id ?? defaultModelFor("bedrock");
+    const storedModel = spec.model_id ?? SPEC_DEFAULT_MODEL_ID;
     const storedSource = spec.model_source ?? "bedrock";
     setModelId(storedModel);
     setModelSource(storedSource);
@@ -2340,7 +2343,7 @@ const deployLock = !canDeploy
               <div className="field">
                 <label>{t("create.configure.modelSource")}</label>
                 <div className="selchips">
-                  {(["mantle", "bedrock"] as const).map((source) => (
+                  {(["bedrock", "mantle"] as const).map((source) => (
                     <button
                       key={source}
                       type="button"

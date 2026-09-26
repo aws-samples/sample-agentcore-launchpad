@@ -1807,14 +1807,23 @@ policy `AmazonBedrockMantleInferenceAccess`). Without them a Mantle agent reache
 ACTIVE and then fails its first invoke with `401 access_denied`; the grant is
 shared by harness and zip, and adding it needs a CDK deploy.
 The field defaults to `bedrock` for backward compatibility with specs
-stored before it existed; Mantle is a *form* default, chosen per method in the
-console (`MODEL_SOURCE_BY_METHOD` in `frontend/src/pages/CreateAgent.tsx`). The
-console's model catalog lives in `frontend/src/lib/models.ts`.
+stored before it existed. The console form also starts every method on `bedrock`,
+with GPT-6 Sol (`global.openai.gpt-6-sol`) as the default model; Mantle stays
+selectable for harness and zip (`MODEL_SOURCE_BY_METHOD` in
+`frontend/src/lib/agent-spec.ts`). The Claude Agent SDK method defaults to the
+first Claude entry instead. The console's model catalog lives in
+`frontend/src/lib/models.ts`, where the catalog's first entry is the default.
 
 **Harness (方式B)** — both sources ride the **same** `bedrockModelConfig` branch
 of the `HarnessModelConfiguration` union and differ only in `apiFormat`:
 `responses` for Mantle, `converse_stream` for Bedrock
-(`app/deployer/harness.py`). The keyed union branches (`openAiModelConfig` /
+(`app/deployer/harness.py`). The harness resolves `responses` **and**
+`chat_completions` against Bedrock Mantle, not the bedrock-runtime
+`/openai/v1` Responses API. A live probe (2026-09-26, us-west-2) showed this:
+`global.openai.gpt-6-astra` returned Mantle's `404 The model … does not exist`
+under both formats and answered only under `converse_stream`. The bare
+`openai.gpt-6-astra` answered under `responses`. So GPT-6 on native Bedrock
+means a `global.`/`us.` profile id on `converse_stream`. The keyed union branches (`openAiModelConfig` /
 `geminiModelConfig` / `liteLlmModelConfig`) are deliberately unused — each
 requires an AgentCore Identity API-key credential provider ARN that Launchpad
 never provisions.

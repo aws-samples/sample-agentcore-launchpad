@@ -138,7 +138,7 @@ export function ModelCard({
             <div className="v2-row">
 <Segmented
               value={form.modelSource}
-              options={(["mantle", "bedrock"] as ModelSource[]).map((s) => ({ value: s, label: t(`v2.agents.wizard.source.${s}`) }))}
+              options={(["bedrock", "mantle"] as ModelSource[]).map((s) => ({ value: s, label: t(`v2.agents.wizard.source.${s}`) }))}
               // a benign re-click keeps a custom id; a real switch re-seeds
               onChange={(s) => s !== form.modelSource && applySource(s)}
             />

@@ -93,12 +93,11 @@ export const splitIds = (s: string) => s.split(/[\s,]+/).filter(Boolean);
 export const skillNameFromPath = (path: string) =>
   path.replace(/\/+$/, "").split("/").pop() ?? path;
 
-// Which source a method starts on. The invariant: a method only defaults to
-// mantle once its execution path can actually execute a Mantle model. The
-// harness needs only bedrockModelConfig.apiFormat; the zip/Strands template now
-// renders an OpenAIResponsesModel with bedrock_mantle_config (IAM auth, no API
-// key) when the source is mantle, so it joined it. The container method stays on
-// Claude — the Claude Agent SDK cannot drive anything else.
+// Which source a method starts on. Every method now starts on native Bedrock
+// (global inference profiles, Converse); harness and zip/Strands can still be
+// switched to Mantle. The container method is pinned — the Claude Agent SDK
+// cannot drive anything but Claude, so its model default is Claude-only too
+// (`defaultModelForMethod`).
 export const MODEL_SOURCE_BY_METHOD: Record<AgentMethod, ModelSource> = {
   harness: DEFAULT_MODEL_SOURCE,
   container: CLAUDE_SDK_MODEL_SOURCE,
@@ -113,6 +112,10 @@ export const MODEL_SOURCE_BY_METHOD: Record<AgentMethod, ModelSource> = {
 export const A2A_MODEL_SOURCE: ModelSource = "bedrock";
 
 export const sourceForMethod = (m: AgentMethod): ModelSource => MODEL_SOURCE_BY_METHOD[m];
+
+/** The model a form seeds for `method` on `source` — Claude-only for the Claude Agent SDK. */
+export const defaultModelForMethod = (method: AgentMethod, source: ModelSource = sourceForMethod(method)) =>
+  defaultModelFor(source, method === "container");
 
 /** The source a method switch lands on: protocol survives a method switch, so
  *  re-entering zip_runtime with A2A still selected lands back on the pinned source. */
@@ -296,7 +299,7 @@ export interface AgentForm {
 export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   method,
   name: "",
-  modelId: defaultModelFor(sourceForMethod(method)),
+  modelId: defaultModelForMethod(method),
   modelSource: sourceForMethod(method),
   agentSdk: DEFAULT_AGENT_SDK,
   systemPrompt: "",

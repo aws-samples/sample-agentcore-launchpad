@@ -621,7 +621,7 @@
           "high": "高"
         },
         "effortHint": "作为 OpenAI reasoning effort 随本次模型调用发送（Converse 透传）。",
-        "effortUnsupported": "只有原生 Bedrock 上的 OpenAI GPT-5.x 模型接受推理强度；当前模型不会发送该参数。",
+        "effortUnsupported": "只有原生 Bedrock 上的 OpenAI GPT-5.x / GPT-6 模型接受推理强度；当前模型不会发送该参数。",
         "maxIterations": "最大迭代次数",
         "timeout": "超时（秒）",
         "systemPrompt": "系统提示词",

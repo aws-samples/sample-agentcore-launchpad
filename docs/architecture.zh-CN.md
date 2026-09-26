@@ -987,13 +987,20 @@ Agent 自身的执行角色完成。但 Mantle 需要自己的 IAM 授权:`bedro
 (对齐 AWS 托管策略 `AmazonBedrockMantleInferenceAccess`)。缺了这些,Mantle
 Agent 会部署成功并进入 ACTIVE,但首次调用报 `401 access_denied`;该授权由 harness
 与 zip 共用,新增它需要执行一次 CDK 部署。该字段默认为 `bedrock`,以兼容
-此字段出现之前写入的 spec;Mantle 是**表单**默认值,按方式在控制台中分别设定
-(`frontend/src/pages/CreateAgent.tsx` 中的 `MODEL_SOURCE_BY_METHOD`)。控制台
-提供的模型清单位于 `frontend/src/lib/models.ts`。
+此字段出现之前写入的 spec。控制台表单的各方式同样默认 `bedrock`,默认模型为
+GPT-6 Sol(`global.openai.gpt-6-sol`);harness 与 zip 仍可切换到 Mantle
+(`frontend/src/lib/agent-spec.ts` 中的 `MODEL_SOURCE_BY_METHOD`)。Claude Agent SDK
+方式则默认取清单中第一个 Claude 模型。控制台提供的模型清单位于
+`frontend/src/lib/models.ts`,清单第一项即默认模型。
 
 **Harness(方式B)** —— 两种来源使用 `HarnessModelConfiguration` 联合类型中
 **同一个** `bedrockModelConfig` 分支,只有 `apiFormat` 不同:Mantle 用
-`responses`,Bedrock 用 `converse_stream`(`app/deployer/harness.py`)。带 Key
+`responses`,Bedrock 用 `converse_stream`(`app/deployer/harness.py`)。harness 的
+`responses` **和** `chat_completions` 都会解析到 Bedrock Mantle,而不是 bedrock-runtime
+的 `/openai/v1` Responses API。2026-09-26 在 us-west-2 的实测表明:`global.openai.gpt-6-astra`
+在这两种格式下都返回 Mantle 的 `404 The model … does not exist`,只有 `converse_stream`
+能正常响应;不带前缀的 `openai.gpt-6-astra` 在 `responses` 下可以正常响应。因此在原生
+Bedrock 上使用 GPT-6,要用 `global.`/`us.` 前缀的 profile id 配合 `converse_stream`。带 Key
 的联合分支(`openAiModelConfig` / `geminiModelConfig` / `liteLlmModelConfig`)
 有意不使用 —— 它们都需要一个 Launchpad 从未创建的 AgentCore Identity API Key
 凭证提供方 ARN。

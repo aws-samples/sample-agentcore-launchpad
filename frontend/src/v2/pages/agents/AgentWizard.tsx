@@ -14,6 +14,7 @@ import {
   type AgentMethod,
   buildAgentSpec,
   byocIssues,
+  defaultModelForMethod,
   emptyAgentForm,
   entrypointAfterUpload,
   filesystemIssues,
@@ -123,14 +124,15 @@ export function AgentWizard() {
 
   // Switching source re-seeds the model (and the byoc allowed-models list) to that
   // source's catalog default.
-  const applySource = (source: ModelSource) => {
-    set({ modelSource: source, modelId: defaultModelFor(source), byocModels: [defaultModelFor(source)] });
+  // `forMethod` is the method being switched to — `method` still holds the old one.
+  const applySource = (source: ModelSource, forMethod: AgentMethod = method) => {
+    set({ modelSource: source, modelId: defaultModelForMethod(forMethod, source), byocModels: [defaultModelFor(source)] });
     setUi((prev) => ({ ...prev, customModel: false }));
   };
   const pickMethod = (next: AgentMethod) => {
     if (next === method) return;
     set({ method: next });
-    applySource(sourceOnMethodSwitch(next, form.protocol));
+    applySource(sourceOnMethodSwitch(next, form.protocol), next);
   };
   const changeProtocol = (next: "http" | "a2a") => {
     if (next === "http") {

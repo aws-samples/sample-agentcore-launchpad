@@ -22,7 +22,8 @@ export interface ModelOption {
  * adding a `chat_completions` model later is a data change and nothing else.
  */
 export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
-  // `defaultModelFor` takes entry [0], so ORDER PICKS THE DEFAULT. Terra leads
+  // `defaultModelFor` takes the first OFFERED entry, so ORDER PICKS THE DEFAULT
+  // (for the Claude Agent SDK, the first Claude entry). Terra leads
   // because Mantle's catalogue differs per region and Terra/Luna are in both
   // us-east-1 and us-west-2 while Sol is us-east-1 only. A Sol default made the
   // Harness entrance fail on a us-west-2 deployment with `404 … The model
@@ -39,7 +40,15 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
       api_format: "responses",
     },
   ],
+  // Every id here is a cross-region inference profile on bedrock-runtime and rides
+  // `converse_stream` on the harness. GPT-6 Sol leads as the platform default: the
+  // harness's `responses`/`chat_completions` formats resolve Mantle, where GPT-6 is
+  // bare-id and us-west-2 only, while these global profiles answer Converse in
+  // every region (probed us-west-2 + us-east-1, 2026-09-26).
   bedrock: [
+    { model_id: "global.openai.gpt-6-sol", label: "GPT-6 Sol (global)", api_format: "converse_stream" },
+    { model_id: "global.openai.gpt-6-astra", label: "GPT-6 Astra (global)", api_format: "converse_stream" },
+    { model_id: "global.openai.gpt-6-luna", label: "GPT-6 Luna (global)", api_format: "converse_stream" },
     {
       model_id: "global.anthropic.claude-sonnet-5",
       label: "Claude Sonnet 5 (global)",
@@ -55,16 +64,15 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
       label: "Claude Opus 5 (global)",
       api_format: "converse_stream",
     },
+    { model_id: "global.moonshotai.kimi-k3", label: "Kimi K3 (global)", api_format: "converse_stream" },
     {
       model_id: "global.amazon.nova-2-lite-v1:0",
       label: "Nova 2 Lite (global)",
       api_format: "converse_stream",
     },
     // OpenAI GPT-5.6 Sol through the native Bedrock US cross-region inference
-    // profile (Converse). Listed LAST on purpose: `defaultModelFor` takes entry
-    // [0], so this must not move the ordinary default. It is the system
-    // architect preset's default (backend `system_agents/presets.py`) and the
-    // only catalogue model that accepts a `reasoning_effort`.
+    // profile (Converse) — the system architect preset's default (backend
+    // `system_agents/presets.py`), kept so its configure page stays on a listed id.
     {
       model_id: "us.openai.gpt-5.6-sol",
       label: "GPT-5.6 Sol (US cross-region · Converse)",
@@ -73,8 +81,8 @@ export const MODEL_CATALOG: Record<ModelSource, ModelOption[]> = {
   ],
 };
 
-/** Reasoning effort a harness may pass to the model (OpenAI GPT-5.x on native
- *  Bedrock only — the backend refuses every other pairing). */
+/** Reasoning effort a harness may pass to the model (OpenAI GPT-5.x / GPT-6 on
+ *  native Bedrock only — the backend refuses every other pairing). */
 export type ReasoningEffort = "low" | "medium" | "high";
 export const REASONING_EFFORTS: ReasoningEffort[] = ["low", "medium", "high"];
 
@@ -84,8 +92,13 @@ export function supportsReasoningEffort(modelId: string, source: ModelSource): b
   return source === "bedrock" && modelId.includes("openai.");
 }
 
-/** Form default for the methods that can express an arbitrary model. */
-export const DEFAULT_MODEL_SOURCE: ModelSource = "mantle";
+/** Form default for the methods that can express an arbitrary model. Mantle stays
+ *  selectable; Bedrock leads because its global profiles work in every region. */
+export const DEFAULT_MODEL_SOURCE: ModelSource = "bedrock";
+
+/** Mirrors backend `AgentSpec.model_id`'s default (`DEFAULT_MODEL_ID`) — what a
+ *  stored spec without a `model_id` means. Not the form default above. */
+export const SPEC_DEFAULT_MODEL_ID = "global.anthropic.claude-sonnet-5";
 
 /** The Claude Agent SDK can only drive Claude models, so it is pinned here. */
 export const CLAUDE_SDK_MODEL_SOURCE: ModelSource = "bedrock";
@@ -93,8 +106,10 @@ export const CLAUDE_SDK_MODEL_SOURCE: ModelSource = "bedrock";
 /** Sentinel `<option>` value revealing the free-text model-id input. */
 export const CUSTOM_MODEL_OPTION = "__custom__";
 
-export function defaultModelFor(source: ModelSource): string {
-  return MODEL_CATALOG[source][0].model_id;
+/** The first model a dropdown offers for `source`; `claudeOnly` for the Claude
+ *  Agent SDK, whose first offered entry is a Claude model rather than GPT-6 Sol. */
+export function defaultModelFor(source: ModelSource, claudeOnly = false): string {
+  return modelOptionsFor(source, claudeOnly)[0].model_id;
 }
 
 /**

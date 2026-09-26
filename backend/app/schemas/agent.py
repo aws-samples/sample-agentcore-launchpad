@@ -28,9 +28,9 @@ AgentSdk = Literal["claude_agent_sdk"]
 # both stay on the bedrockModelConfig union branch, so no API key is involved.
 ModelSource = Literal["bedrock", "mantle"]
 
-# Per-model-call reasoning effort for OpenAI GPT-5.x models. Consumed by the harness
-# method only and only for an OpenAI model reached through native Bedrock
-# (``model_source="bedrock"``), where the platform knows the exact Converse
+# Per-model-call reasoning effort for OpenAI GPT-5.x / GPT-6 models (same effort
+# scale). Consumed by the harness method only and only for an OpenAI model reached
+# through native Bedrock (``model_source="bedrock"``), where the platform knows the exact Converse
 # pass-through shape (``additionalModelRequestFields.reasoning.effort``). Absent ⇒
 # nothing is sent and the model's own default applies.
 ReasoningEffort = Literal["low", "medium", "high"]
@@ -525,7 +525,7 @@ class AgentSpec(BaseModel):
             raise ValueError("reasoning_effort is supported by the harness method only")
         if not is_openai_model_id(self.model_id):
             raise ValueError(
-                f"reasoning_effort applies to OpenAI GPT-5.x models only; "
+                f"reasoning_effort applies to OpenAI GPT-5.x / GPT-6 models only; "
                 f"{self.model_id!r} is not an OpenAI model id"
             )
         if self.model_source != "bedrock":
