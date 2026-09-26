@@ -21,6 +21,7 @@ FRONTEND = ROOT / "frontend" / "src"
 PANEL = FRONTEND / "pages" / "create" / "SystemPresetsPanel.tsx"
 WIZARD = FRONTEND / "pages" / "CreateAgent.tsx"
 HELPERS = FRONTEND / "pages" / "create" / "presetSettings.ts"
+SPEC = FRONTEND / "lib" / "agent-spec.ts"
 DIALOG = FRONTEND / "pages" / "create" / "PresetSettingsDialog.tsx"
 MOCK = ROOT / "backend" / "scripts" / "ui_system_preset_settings_mock.py"
 
@@ -132,9 +133,13 @@ def test_shared_form_carries_the_harness_knobs_for_ordinary_edits() -> None:
     # loaded exactly as stored (startEdit) …
     assert 'setMaxTokens(spec.max_tokens == null ? "" : String(spec.max_tokens))' in wizard
     assert "setReasoningEffort(spec.reasoning_effort ?? EFFORT_NONE)" in wizard
-    # … and sent back for the harness only (the other methods' schema refuses them)
-    assert 'method === "harness" && intOrNull(maxTokens)' in wizard
-    assert 'method === "harness" && ordinaryEffort' in wizard
+    # … and sent back for the harness only (the other methods' schema refuses them):
+    # the spec builder is the form model both consoles share, and the wizard uses it
+    spec = _src(SPEC)
+    assert 'method === "harness" && intOrNull(maxTokens)' in spec
+    assert 'method === "harness" && ordinaryEffort' in spec
+    assert "buildAgentSpec(agentForm(), specCatalogs)" in wizard
+    assert "maxTokens," in wizard[wizard.index("const agentForm = (): AgentForm => ({") :]
 
 
 def test_i18n_has_no_orphaned_card_strings() -> None:

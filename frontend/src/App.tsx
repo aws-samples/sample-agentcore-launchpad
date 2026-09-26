@@ -8,6 +8,7 @@ import { Shell } from "./layout/Shell";
 import { NotFound } from "./pages/NotFound";
 import { Overview } from "./pages/Overview";
 import { WorkspaceProvider } from "./workspace/WorkspaceProvider";
+import { classicAgentNewToV2 } from "./v2/pages/agents/classicUrl";
 import { classicAssistantToV2 } from "./v2/pages/assistant/classicUrl";
 import { classicRegistryToV2 } from "./v2/pages/registry/classicUrl";
 import { classicKnowledgeBasesToV2 } from "./v2/pages/knowledge/classicUrl";
@@ -140,6 +141,16 @@ function AgentsRoute({ mode }: { mode: "list" | "detail" }) {
 }
 
 /**
+ * `/agents/new` with a creation intent (method / gateway / skill prefill) opens
+ * the native V2 wizard in V2; the bare URL keeps the classic system-presets page.
+ */
+function AgentsNewRoute() {
+  const { search } = useLocation();
+  const target = useUiVersion() === "v2" ? classicAgentNewToV2(search) : null;
+  return target ? <Navigate to={target} replace /> : <CreateAgent mode="new" />;
+}
+
+/**
  * In V2 the classic evaluation page's new-run, experiment and online sub-pages have
  * native twins: their URLs (hand-offs from runs, agents, bookmarks) are mapped onto them.
  * Every other `/evaluation` view stays classic inside the V2 shell.
@@ -251,7 +262,7 @@ export default function App() {
             <Route element={<ConsoleShell />}>
             <Route index element={<IndexRoute />} />
             <Route path="agents" element={<AgentsRoute mode="list" />} />
-            <Route path="agents/new" element={<CreateAgent mode="new" />} />
+            <Route path="agents/new" element={<AgentsNewRoute />} />
             <Route path="agents/import" element={<CreateAgent mode="import" />} />
             <Route path="agents/:agentId" element={<AgentsRoute mode="detail" />} />
             <Route path="agents/:agentId/edit" element={<CreateAgent mode="edit" />} />

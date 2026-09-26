@@ -1,0 +1,48 @@
+/* Console V2 · Agent 管理 — creation-wizard layout (scoped under .v2). */
+.v2 .v2-agents-block { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.v2 .v2-agents-block > * { max-width: 100%; }
+.v2 .v2-agents-block.v2-form { display: grid; align-items: stretch; }
+.v2 .v2-agents-block .v2-alert { margin: 0; width: 100%; }
+.v2 .v2-agents-foot { margin-top: 16px; }
+.v2 .v2-agents-foot .v2-alert { margin: 0; }
+.v2 .v2-agents-nowrap { flex-wrap: nowrap; }
+.v2 .v2-agents-nowrap .v2-input { flex: 1; min-width: 0; }
+
+.v2 .v2-agents-rows { display: flex; flex-direction: column; gap: 8px; width: 100%; margin-bottom: 8px; }
+.v2 .v2-agents-row { display: grid; gap: 8px; align-items: center; }
+.v2 .v2-agents-row.a2a { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr) auto; }
+.v2 .v2-agents-row.mount { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto; }
+.v2 .v2-agents-row.env { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; }
+.v2 .v2-agents-err { display: block; margin-top: 4px; font-size: 12px; color: var(--v2-danger); }
+.v2 .v2-agents-errrows { margin: 6px 0 0; padding-left: 16px; font-size: 12px; }
+
+.v2 .v2-agents-pending {
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 12px;
+  border: 1px solid var(--v2-line); border-radius: var(--v2-radius-sm); background: var(--v2-fill);
+}
+
+.v2 .v2-agents-drop {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 22px 16px;
+  border: 1px dashed var(--v2-line); border-radius: var(--v2-radius); background: var(--v2-fill); cursor: pointer;
+  color: var(--v2-ink-2); font-size: 14px; text-align: center; transition: border-color 0.15s;
+}
+.v2 .v2-agents-drop:hover { border-color: var(--v2-primary); color: var(--v2-primary); }
+.v2 .v2-agents-drop svg { color: var(--v2-ink-3); }
+.v2 .v2-agents-drop .v2-muted { font-size: 12.5px; }
+.v2 .v2-agents-drop input { display: none; }
+.v2 .v2-field .v2-agents-drop + .v2-alert { margin: 4px 0 0; }
+.v2 .v2-field .v2-alert { margin: 4px 0 0; }
+
+.v2 .v2-agents-models { display: flex; flex-direction: column; border: 1px solid var(--v2-line); border-radius: var(--v2-radius-sm); }
+.v2 .v2-agents-model { display: flex; gap: 10px; align-items: center; padding: 8px 12px; min-width: 0; }
+.v2 .v2-agents-model + .v2-agents-model { border-top: 1px solid var(--v2-line-2); }
+.v2 .v2-agents-model .mono { overflow-wrap: anywhere; }
+.v2 .v2-agents-model .end { margin-left: auto; }
+
+.v2 .v2-agents-contract { margin-bottom: 12px; }
+.v2 .v2-agents-contract .v2-sub-title { margin-top: 0; }
+.v2 .v2-agents-contract .v2-pre { white-space: pre-wrap; }
+
+@media (max-width: 720px) {
+  .v2 .v2-agents-row.a2a, .v2 .v2-agents-row.mount, .v2 .v2-agents-row.env { grid-template-columns: 1fr; }
+}
