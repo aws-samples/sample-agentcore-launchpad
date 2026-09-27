@@ -5,6 +5,8 @@ import { useId } from "react";
  * build half (create, generate, package), the bright right lobe the run half
  * (deploy, invoke, observe, evaluate), and the cyan node is the agent riding it —
  * the console's create → deploy → invoke → observe cycle, never finished.
+ * The browser-tab icon (frontend/public/favicon.svg + PNG fallbacks) is the same
+ * artwork — change both together.
  */
 export function V2Logo({ size = 28, className }: { size?: number; className?: string }) {
   const gradient = `v2-logo-${useId().replace(/:/g, "")}`;
