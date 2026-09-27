@@ -126,6 +126,31 @@ def test_old_ledger_snapshots_are_classified_on_read_without_rewriting(client):
         assert "console_version" not in stored.published_content
 
 
+def test_skill_lab_is_an_evaluation_module_and_old_area_snapshots_follow_it(client):
+    skill_lab = next(c for c in client.get("/api/videos").json()["collections"]
+                     if c["id"] == "skill-lab")
+    assert skill_lab["categoryId"] == "eval"
+    row = create(client, category_id="eval", section_id="skill-lab")
+    row = action(client, row, "publish")
+    with SessionLocal() as db:
+        stored = db.get(Video, row["id"])
+        # Saved while Skill Lab still sat under Agent development.
+        stored.content = {**stored.content, "category_id": "build"}
+        stored.published_content = {**stored.published_content, "category_id": "build"}
+        db.commit()
+    managed = client.get(f"/api/videos/manage/{row['id']}").json()
+    assert managed["content"]["category_id"] == "eval"
+    assert managed["published_content"]["category_id"] == "eval"
+    order = [video["id"] for video in client.get("/api/videos/manage").json()["videos"]]
+    assert order.index(row["id"]) > order.index("evaluation-ab")
+    row = action(client, managed, "publish")
+    assert row["content"]["category_id"] == "eval"
+    with SessionLocal() as db:
+        assert db.get(Video, row["id"]).published_content["category_id"] == "eval"
+    rejected = client.post("/api/videos/manage", json={**CONTENT, "section_id": "skill-lab"})
+    assert rejected.status_code == 422
+
+
 def test_stale_revisions_cannot_change_a_published_snapshot(client):
     row = create(client)
     latest = action(client, row, "publish")

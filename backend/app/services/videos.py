@@ -107,8 +107,21 @@ def _console_version(content: dict[str, Any]) -> ConsoleVersion:
     return "v2" if _V2_MEDIA_REVISION.search(media_path) else "classic"
 
 
+def _aligned(content: dict[str, Any]) -> dict[str, Any]:
+    """Place a stored snapshot under its section's current area.
+
+    A section can move between areas when the V2 navigation changes; snapshots
+    keep the area they were saved with. Like the console version, the area is
+    corrected at the API boundary and on publish, never rewritten on read.
+    """
+    section = _section(str(content.get("section_id") or ""))
+    if section is None or content.get("category_id") == section["categoryId"]:
+        return content
+    return {**content, "category_id": section["categoryId"]}
+
+
 def _present_content(content: dict[str, Any] | None) -> dict[str, Any] | None:
-    return {**content, "console_version": _console_version(content)} if content else None
+    return {**_aligned(content), "console_version": _console_version(content)} if content else None
 
 
 class LocalizedText(BaseModel):
@@ -286,12 +299,15 @@ def _ordered(rows: list[Video], *, published: bool) -> list[Video]:
     taxonomy_data = taxonomy()
     group_order = {item["id"]: i for i, item in enumerate(taxonomy_data["categories"])}
     section_order = {item["id"]: i for i, item in enumerate(taxonomy_data["sections"])}
-    return sorted(rows, key=lambda row: (
-        group_order.get((row.published_content if published else row.content)["category_id"], 999),
-        section_order.get((row.published_content if published else row.content)["section_id"], 999),
-        (row.published_content if published else row.content)["sort_order"],
-        row.created_at, row.id,
-    ))
+    def key(row: Video) -> tuple:
+        content = _aligned(row.published_content if published else row.content)
+        return (
+            group_order.get(content["category_id"], 999),
+            section_order.get(content["section_id"], 999),
+            content["sort_order"], row.created_at, row.id,
+        )
+
+    return sorted(rows, key=key)
 
 
 def published_catalog(db: Session) -> dict[str, Any]:
@@ -367,7 +383,7 @@ def change(
             raise ValueError("Saving a video requires content")
         row.content = _dump(content)
     elif action == "publish":
-        row.content = _dump(VideoContent.model_validate(row.content))
+        row.content = _dump(VideoContent.model_validate(_aligned(row.content)))
         row.published_content = deepcopy(row.content)
         row.published_at = now
     elif action == "unpublish":

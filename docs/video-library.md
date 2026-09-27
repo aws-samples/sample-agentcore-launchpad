@@ -23,7 +23,10 @@ calls; the admin UI is an additional navigation gate.
 directory to the V2 navigation: first-level functional areas (Agent development,
 Agent runtime, Agent evaluation, Learn, Configuration, and Overview) and their
 second-level modules. Admins assign a video to one module; they cannot introduce
-a category that drifts from the V2 console. The library groups recordings by
+a category that drifts from the V2 console. When the navigation moves a module to
+another area (Skill Lab now sits under Agent evaluation), edit only this file:
+stored drafts and published snapshots keep their old area, and the API places them
+under the section's current area on read and on the next publish. The library groups recordings by
 module and recorded console version (`v2` or `classic`), retaining separate
 playlists and previous/next navigation within each version. The V2 library
 defaults to V2 recordings, while the classic library defaults to classic
