@@ -5113,7 +5113,7 @@
       "tasks": "评估任务",
       "insights": "分析洞察",
       "evaluators": "评估器",
-      "experiments": "实验",
+      "experiments": "A/B实验",
       "online": "在线评估"
     },
     "notFound": {
@@ -6030,7 +6030,7 @@
       }
     },
     "experiments": {
-      "title": "实验",
+      "title": "A/B实验",
       "desc": "用 A/B 测试在贴近线上的流量上优化 Agent 的提示词和工具描述，再把胜出的版本发布上线。",
       "mode": {
         "configuration": "配置实验",

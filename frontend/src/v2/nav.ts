@@ -68,7 +68,6 @@ export const V2_NAV: V2NavGroup[] = [
       },
       { to: "/v2/registry", labelKey: "nav.registry", icon: SquareStack, v2: true },
       { to: "/v2/knowledge-bases", labelKey: "nav.knowledgeBases", icon: LibraryBig, v2: true },
-      { to: "/v2/skill-lab", labelKey: "nav.skillLab", icon: BrainCircuit, v2: true },
     ],
   },
   {
@@ -91,6 +90,8 @@ export const V2_NAV: V2NavGroup[] = [
       { to: "/v2/eval/online", labelKey: "v2.nav.online", icon: Radar, v2: true },
       { to: "/v2/eval/evaluators", labelKey: "v2.nav.evaluators", icon: Target, v2: true },
       { to: "/v2/eval/experiments", labelKey: "v2.nav.experiments", icon: FlaskConical, v2: true },
+      // Skill Lab evaluates and trains Skills against task sets — an evaluation surface
+      { to: "/v2/skill-lab", labelKey: "nav.skillLab", icon: BrainCircuit, v2: true },
     ],
   },
   {

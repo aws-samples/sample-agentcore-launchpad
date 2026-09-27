@@ -5113,7 +5113,7 @@
       "tasks": "Evaluation tasks",
       "insights": "Insights",
       "evaluators": "Evaluators",
-      "experiments": "Experiments",
+      "experiments": "A/B experiments",
       "online": "Online evaluation"
     },
     "notFound": {
@@ -6030,7 +6030,7 @@
       }
     },
     "experiments": {
-      "title": "Experiments",
+      "title": "A/B experiments",
       "desc": "Optimize an agent's prompt and tool descriptions with an A/B test on live-shaped traffic, then promote the winner.",
       "mode": {
         "configuration": "Configuration experiments",
