@@ -26,6 +26,9 @@ def test_polarity_map_matches_builtin_score_direction():
     assert ac.evaluator_polarity("Builtin.Stereotyping") == -1
     assert ac.evaluator_polarity("Builtin.Helpfulness") == 1
     assert ac.evaluator_polarity("Builtin.GoalSuccessRate") == 1
+    assert ac.evaluator_polarity("ThirdParty.DeepEval.Toxicity") == -1
+    # DeepEval PIILeakage = non-PII statements / all statements: 1.0 is no leakage
+    assert ac.evaluator_polarity("ThirdParty.DeepEval.PIILeakage") == 1
     # a custom judge has no direction on AWS's side — assume higher-is-better
     assert ac.evaluator_polarity("my_domain_judge") == 1
     assert ac.evaluator_polarity("") == 1
