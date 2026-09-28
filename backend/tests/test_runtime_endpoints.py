@@ -387,3 +387,54 @@ def test_stream_runtime_events_raises_real_error_after_partial_text(error):
     assert next(stream) == {"event": "delta", "data": {"text": "partial"}}
     with pytest.raises(RuntimeError, match="boom"):
         next(stream)
+
+
+def _sdk_fallback_line(event: dict) -> str:
+    """What bedrock_agentcore emits when json.dumps(event) fails: json.dumps(str(event))."""
+    with pytest.raises(TypeError):
+        json.dumps(event)
+    return f"data: {json.dumps(str(event))}\n\n"
+
+
+def test_stream_runtime_events_recovers_sdk_repr_fallback_events():
+    # Live 2026-09-27 (converted Runtime twin, GPT-6): the reasoning block carries
+    # bytes, so the SDK streamed its Python repr and the reply began with it.
+    reasoning = {"event": {"contentBlockDelta": {"delta": {"reasoningContent": {
+        "redactedContent": b"\x00\x01opaque"}}, "contentBlockIndex": 0}}}
+    text = {"event": {"contentBlockDelta": {"delta": {"text": "合计 1650 元"},
+                                            "contentBlockIndex": 1}}, "raw": b"x"}
+    body = (
+        _sdk_fallback_line(reasoning)
+        + _sdk_fallback_line(text)
+        + f"data: {json.dumps({'event': {'contentBlockDelta': {'delta': {'text': '。'}}}})}\n\n"
+    )
+    stub = StubDataPlane(body.encode(), content_type="text/event-stream")
+
+    assert list(rt.stream_runtime_events(stub, "arn:rt-1", "hi")) == [
+        {"event": "delta", "data": {"text": "合计 1650 元"}},
+        {"event": "delta", "data": {"text": "。"}},
+    ]
+    assert rt.invoke_runtime_text(stub, "arn:rt-1", "hi")["text"] == "合计 1650 元。"
+
+
+def test_stream_runtime_events_drops_unparseable_event_repr():
+    # A repr holding a non-literal object cannot be recovered; it is still not reply text.
+    body = (
+        "data: " + json.dumps("{'event': {'contentBlockDelta': {'delta': "
+                              "{'reasoningContent': <object at 0x1>}}}}") + "\n\n"
+        + "data: " + json.dumps({"event": {"contentBlockDelta": {"delta": {"text": "ok"}}}})
+        + "\n\n"
+    )
+    stub = StubDataPlane(body.encode(), content_type="text/event-stream")
+
+    assert list(rt.stream_runtime_events(stub, "arn:rt-1", "hi")) == [
+        {"event": "delta", "data": {"text": "ok"}},
+    ]
+
+
+def test_plain_text_reply_that_is_not_an_event_repr_is_kept():
+    body = "data: " + json.dumps("{'event': 'not a converse event'}") + "\n\n"
+    stub = StubDataPlane(body.encode(), content_type="text/event-stream")
+
+    text = rt.invoke_runtime_text(stub, "arn:rt-1", "hi")["text"]
+    assert text == "{'event': 'not a converse event'}"
