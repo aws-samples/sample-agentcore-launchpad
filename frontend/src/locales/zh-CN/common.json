@@ -5649,7 +5649,8 @@
         "stop": "已请求停止",
         "pause": "任务已暂停",
         "resume": "任务已启动",
-        "delete": "任务已删除"
+        "delete": "任务已删除",
+        "recheck": "已重新检查——运行状态将跟随 AWS 上的批次。"
       },
       "confirm": {
         "stopTitle": "停止任务",
@@ -5719,7 +5720,10 @@
       "previewNoSessions": "近 7 天内未观测到该 Agent 的会话",
       "pickEvaluators": "选择评估器",
       "pickedCount": "已选 {{count}} / {{max}}",
-      "gtWarning": "部分所选评估器依赖标准答案，仅能对带预期输出的数据（含预期输出的数据集）打分。"
+      "gtWarning": "部分所选评估器依赖标准答案，仅能对带预期输出的数据（含预期输出的数据集）打分。",
+      "recheck": "重新检查 AWS 结果",
+      "recheckHint": "重新从 AWS 读取该运行的批量评估：已完成的批次会补齐结果，仍在运行的会继续轮询。不会重新运行，也不产生费用。",
+      "recheckStillFailed": "已重新检查：该批量评估在 AWS 上本身就失败了。"
     },
     "taskStatus": {
       "queued": "排队中",

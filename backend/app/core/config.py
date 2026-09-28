@@ -155,6 +155,13 @@ class Settings(BaseSettings):
     # could never fit the quota anyway.
     eval_max_concurrent_runs: int = Field(default=3, ge=1, le=5)
 
+    # How long one evaluation run waits for its AWS batch evaluation (evaluator,
+    # insights and online-report runs alike). Measured 2026-09-27: a 16-session x
+    # 10-evaluator batch finished after 45 min; the old poll budgets gave up at
+    # 10-30 min and failed a run AWS then completed. A run that still outlives this
+    # can be re-checked (POST /api/eval/runs/{id}/recheck).
+    eval_batch_wait_s: int = Field(default=7200, ge=60, le=86400)
+
     # 3rd-party recommendation providers for the experiment RECOMMEND stage
     # (app/optimization/providers). Model ids are Bedrock Converse
     # inference-profile ids invoked through the workspace client funnel; the list
