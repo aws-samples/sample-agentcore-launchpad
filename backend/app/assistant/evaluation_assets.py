@@ -86,7 +86,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.assistant import evaluation_plan as plan_contract
-from app.assistant.principal import principal_of
+from app.assistant.principal import collaborator_clause, may_collaborate, principal_of
 from app.core.config import DATA_DIR
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
@@ -678,9 +678,8 @@ def approve_plan(
     db.expire_all()
     if recheck is not None:
         identity = recheck(db)
-        owner = db.execute(select(AssistantConversation.owner_principal)
-                           .where(AssistantConversation.id == conversation.id)).scalar()
-        if not identity.is_admin or owner is None or owner != principal_of(identity):
+        current = db.get(AssistantConversation, conversation.id)
+        if not identity.is_admin or not may_collaborate(current, principal_of(identity)):
             db.rollback()
             raise NotFoundError("assistant.conversation_not_found", "conversation not found")
         op.approved_by = identity.username
@@ -2750,8 +2749,9 @@ def _bind_operation(db: Session, op: EvaluationAssetOperation, plan_hash: str,
                     principal: str | None) -> AssistantEvaluationPlan:
     """Fresh, exact binding of the operation to what the reviewer names: the approved plan
     row (this id, this revision, this hash column AND the canonical hash of its current
-    content), the conversation's current owner == the operation's recorded owner == the
-    caller, the approver still authorized and the workspace still the pinned identity.
+    content), the conversation's current owner == the operation's recorded owner, the
+    caller still collaborating on it (its owner, or anyone while it is shared), the
+    approver still authorized and the workspace still the pinned identity.
     Every read here is fresh (the caller expires the session first)."""
     if op.plan_hash != plan_hash:
         raise _ReviewRefused("assistant.evaluation_plan_stale",
@@ -2765,11 +2765,11 @@ def _bind_operation(db: Session, op: EvaluationAssetOperation, plan_hash: str,
         raise _ReviewRefused("assistant.evaluation_plan_stale",
                              "the approved plan revision no longer matches the operation "
                              "(row, revision, hash or content changed)")
-    owner = db.execute(select(AssistantConversation.owner_principal)
-                       .where(AssistantConversation.id == op.conversation_id,
-                              AssistantConversation.workspace_id == op.workspace_id)).scalar()
-    if owner is None or owner != op.owner_principal \
-            or (principal is not None and owner != principal):
+    current = db.execute(select(AssistantConversation)
+                         .where(AssistantConversation.id == op.conversation_id,
+                                AssistantConversation.workspace_id == op.workspace_id)).scalar()
+    if current is None or current.owner_principal != op.owner_principal \
+            or (principal is not None and not may_collaborate(current, principal)):
         raise NotFoundError("assistant.operation_not_found", "operation not found")
     stop = approver_authorized(db, op)
     if stop:
@@ -3015,7 +3015,7 @@ def review_lambda_initial_revision(
             AssistantConversation.id == op.conversation_id,
             AssistantConversation.workspace_id == op.workspace_id,
             AssistantConversation.owner_principal == op.owner_principal,
-            *([AssistantConversation.owner_principal == principal] if principal else []),
+            *([collaborator_clause(principal)] if principal else []),
         ).exists()
         # every value the review relied on is a predicate of this one statement — the
         # exact JSON of the validated plan content, the operation's pinned identity and

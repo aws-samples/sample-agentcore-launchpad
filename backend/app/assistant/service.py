@@ -2,12 +2,14 @@
 
 Invariants (``tests/test_assistant.py`` pins each one with request/fault probes):
 
-* **Principal + workspace bound.** Every write (and every read but two) filters on
+* **Principal + workspace bound.** Every read and write filters on
   ``(workspace_id, owner_principal)``; another principal's, another workspace's or
   an unowned (NULL principal) conversation is a 404 — a recycled username inherits
-  nothing. The one exception is an admin-published **share**: the list and the
-  detail read also return a ``shared`` conversation of the same workspace to every
-  member, read-only (``mine: false``); nothing else ever widens.
+  nothing. The one exception is an admin **share**: a ``shared`` conversation of
+  the same workspace is open to every member for every action (``may_collaborate``
+  — discussion, preparation, proposal review and approval, evaluation assets) under
+  that action's usual permission, re-checked at each write; deleting it (and its
+  footprint preview) stays with the owner. Unsharing closes it again at once.
 * **Discussion never writes AWS.** A turn makes exactly one data-plane call
   (``InvokeHarness`` on the preset) and ledger writes. No proposal, valid or not,
   creates anything until a separate approval.
@@ -58,13 +60,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from botocore.exceptions import ClientError
-from sqlalchemy import or_, select, update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.assistant import preparation
 from app.assistant import proposal as proposal_contract
-from app.assistant.principal import principal_of
+from app.assistant.principal import collaborator_clause, may_collaborate, principal_of
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
 from app.deployer.pipeline import create_deployment
@@ -806,19 +808,13 @@ def owned_conversation(
     return row
 
 
-def readable_conversation(
+def accessible_conversation(
     db: Session, workspace_id: str, principal: str, conversation_id: str
 ) -> AssistantConversation:
-    """The owner's conversation, or — read-only — one an admin shared with the
-    workspace. Only the list and the detail read use this; every write stays on
-    ``owned_conversation``."""
+    """The owner's conversation, or one an admin shared with the workspace — every
+    route but delete (and its footprint) resolves through this."""
     row = db.get(AssistantConversation, conversation_id)
-    if (
-        row is None
-        or row.workspace_id != workspace_id
-        or row.owner_principal is None
-        or (row.owner_principal != principal and not row.shared)
-    ):
+    if row is None or row.workspace_id != workspace_id or not may_collaborate(row, principal):
         raise NotFoundError("assistant.conversation_not_found", "conversation not found")
     return row
 
@@ -829,11 +825,7 @@ def list_conversations(db: Session, workspace_id: str, principal: str) -> list[d
         db.query(AssistantConversation)
         .filter(
             AssistantConversation.workspace_id == workspace_id,
-            AssistantConversation.owner_principal.is_not(None),
-            or_(
-                AssistantConversation.owner_principal == principal,
-                AssistantConversation.shared.is_(True),
-            ),
+            collaborator_clause(principal),
         )
         .order_by(AssistantConversation.updated_at.desc())
         .limit(50)
@@ -845,14 +837,14 @@ def list_conversations(db: Session, workspace_id: str, principal: str) -> list[d
 def set_shared(
     db: Session, workspace_id: str, identity: Identity, conversation_id: str, shared: bool
 ) -> AssistantConversation:
-    """Admin-only publish/unpublish of read access. An admin may share only what it
-    can already read (its own, or one already shared), so sharing never becomes a
-    way to discover another member's private conversation."""
+    """Admin-only publish/unpublish of a conversation to every workspace member. An
+    admin may share only what it can already reach (its own, or one already shared),
+    so sharing never becomes a way to discover another member's private one."""
     if not identity.is_admin:
         raise AppError(
             "auth.forbidden", "This action requires an administrator account", status_code=403
         )
-    row = readable_conversation(db, workspace_id, principal_of(identity), conversation_id)
+    row = accessible_conversation(db, workspace_id, principal_of(identity), conversation_id)
     if row.shared != shared:
         # Direct UPDATE: a share is not conversation activity, so it must not bump
         # ``updated_at`` (the history order) the way an ORM flush would.
@@ -953,8 +945,8 @@ def proposal_by_revision(
 def conversation_summary(
     db: Session, row: AssistantConversation, viewer: str | None = None
 ) -> dict[str, Any]:
-    """``viewer`` is the reading principal; omitted, the caller is the owner (every
-    route but the shared-read ones resolves the row through ``owned_conversation``)."""
+    """``viewer`` is the reading principal; omitted, ``mine`` reports true — the
+    routes that omit it answer the caller about its own action's result."""
     proposal = latest_proposal(db, row.id)
     return {
         "id": row.id,
@@ -988,6 +980,8 @@ def conversation_detail(
                 "role": m.role,
                 "text": m.text,
                 "name": m.name,
+                # rows from before authors were recorded were always the owner's
+                "author": (m.author or row.owner) if m.role == "user" else None,
                 "at": m.created_at.isoformat() if m.created_at else None,
             }
             for m in _messages(db, row.id)
@@ -1594,6 +1588,7 @@ def run_turn(
         db.add(AssistantMessage(
             workspace_id=conversation.workspace_id, conversation_id=conversation_id,
             turn=turn, role="user", text=prompt, runtime_session_id=session_id,
+            author=identity.username,
         ))
         if not conversation.title:
             conversation.title = prompt.strip().splitlines()[0][:120] if prompt.strip() else ""
@@ -1889,7 +1884,8 @@ def _revalidate_caller(
     recheck: "Recheck | None",
 ) -> None:
     """Current auth + permission + grant + readiness (via ``recheck``) and the immutable
-    principal equality against the conversation owner. Raises the auth error itself."""
+    principal still collaborating on the conversation (its owner, or anyone while it is
+    shared). Raises the auth error itself."""
     if recheck is not None:
         approver, fresh_row = recheck(db)
     else:
@@ -1899,7 +1895,7 @@ def _revalidate_caller(
         conversation is None
         or fresh_row is None
         or principal_of(approver) != principal_of(identity)
-        or conversation.owner_principal != principal_of(approver)
+        or not may_collaborate(conversation, principal_of(approver))
     ):
         raise NotFoundError("assistant.conversation_not_found", "conversation not found")
 
@@ -2015,14 +2011,15 @@ def approve_proposal(
             approver, fresh_row = recheck(db)
         else:
             approver, fresh_row = identity, db.get(Workspace, row.id)
-        # The principal that started the request, the principal resolved NOW and
-        # the conversation's owner must be one and the same: an account replaced
-        # under the same username during the catalog read is not the approver.
+        # The principal that started the request and the principal resolved NOW must
+        # be one and the same, and still collaborating (owner, or the conversation
+        # is still shared): an account replaced under the same username during the
+        # catalog read is not the approver.
         fresh_conversation = db.get(AssistantConversation, conversation_id)
         if (
             fresh_conversation is None
             or principal_of(approver) != principal_of(identity)
-            or fresh_conversation.owner_principal != principal_of(approver)
+            or not may_collaborate(fresh_conversation, principal_of(approver))
         ):
             raise NotFoundError("assistant.conversation_not_found", "conversation not found")
         preparation.require_idle(fresh_conversation)

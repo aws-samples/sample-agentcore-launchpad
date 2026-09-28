@@ -6916,6 +6916,7 @@
       "colTitle": "会话",
       "colTurns": "轮次",
       "colUpdated": "最近活动",
+      "collaborating": "该会话由管理员共享，创建人 {{owner}}。你可以继续讨论、准备资源、审阅提案，并运行评估和实验；只有创建人可以清除此会话。",
       "continue": "继续",
       "discussion": "需求讨论",
       "evalAfterProposal": "评估资产基于提案修订生成，助手给出提案后即可在此准备。",
@@ -6930,7 +6931,6 @@
       "noMatch": "没有符合筛选条件的会话",
       "noProposal": "暂无提案",
       "ownerLabel": "创建人：{{owner}}",
-      "readOnly": "该会话由管理员共享，创建人 {{owner}}，仅可查看。资源准备与评估资产仅创建人可见。",
       "scope": "范围",
       "scopeMine": "我的",
       "scopeShared": "共享给我的",
@@ -6938,10 +6938,9 @@
       "share": "共享",
       "shared": "已共享",
       "sharedTip": "由 {{by}} 共享给所有用户 · {{at}}",
-      "sharedToast": "已共享给所有用户（只读）",
+      "sharedToast": "已共享给所有用户",
       "unshare": "取消共享",
-      "unsharedToast": "已取消共享",
-      "view": "查看"
+      "unsharedToast": "已取消共享"
     },
     "skillLab": {
       "tab": {

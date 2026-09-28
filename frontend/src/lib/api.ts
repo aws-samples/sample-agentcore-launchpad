@@ -1141,6 +1141,8 @@ export interface AssistantMessage {
   role: "user" | "assistant" | "tool" | "error";
   text: string;
   name: string | null;
+  /** who sent a user row (a shared conversation has several); null otherwise */
+  author: string | null;
   at: string | null;
 }
 
@@ -1149,9 +1151,10 @@ export interface AssistantConversationSummary {
   title: string;
   /** display username of the member who opened it */
   owner: string;
-  /** the caller owns it; false = an admin-shared conversation, read-only */
+  /** the caller owns it; false = another member's conversation an admin shared —
+   *  every action but CLEAR is open */
   mine: boolean;
-  /** an admin published read access to every member of the workspace */
+  /** an admin opened it to every member of the workspace */
   shared: boolean;
   shared_by: string | null;
   shared_at: string | null;
@@ -4048,7 +4051,7 @@ export const api = {
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}`,
       { headers: pinnedWorkspace(workspaceId) },
     ),
-  /** Admin-only: publish (or withdraw) read access for every workspace member. */
+  /** Admin-only: open (or close) the conversation to every workspace member. */
   assistantSetSharing: (id: string, shared: boolean) =>
     request<AssistantConversationSummary>(
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}/sharing`,

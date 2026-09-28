@@ -149,7 +149,7 @@ export function AssistantList({
       className: "right",
       render: (c) => (
         <div className="v2-actions">
-          <LinkButton onClick={() => open(c.id)}>{t(c.mine ? "v2.assistant.continue" : "v2.assistant.view")}</LinkButton>
+          <LinkButton onClick={() => open(c.id)}>{t("v2.assistant.continue")}</LinkButton>
           {isAdmin && (
             <LinkButton
               disabled={sharing !== null}
