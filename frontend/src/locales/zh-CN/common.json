@@ -4711,7 +4711,7 @@
   "fishbone": {
     "title": "Agent-DLC 五维鱼骨图 · 上线障碍",
     "head": "Agent 场景",
-    "footer": "便签是客户确认过的障碍（每个维度最多 3 条）——只记事实，不记方案。已探测且确认为空的维度会标注；未确认的维度不入图。",
+    "footer": "便签是客户确认过的障碍（每个维度最多 3 条）——只记事实，不记方案。虚线便签是架构师建议、尚待客户确认的障碍；已探测且确认为空的维度会标注。",
     "dim": {
       "cognition": "认知 Cognition",
       "quality": "质量 Quality",
@@ -4742,7 +4742,7 @@
       "status": "状态"
     },
     "confirmed": "已确认",
-    "unconfirmed": "未确认",
+    "suggested": "待确认",
     "selected": "已入图"
   },
   "announcements": {

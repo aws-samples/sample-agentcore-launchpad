@@ -119,7 +119,9 @@ FishboneCoverage = Literal["confirmed", "explored_empty", "unresolved"]
 
 
 class FishboneBarrier(BaseModel):
-    """One sticky note: a barrier the customer stated, in the customer's terms."""
+    """One sticky note: a barrier the customer stated, in the customer's terms — or,
+    with ``confirmed: false``, a barrier the architect suggested for a dimension the
+    customer has not confirmed yet."""
 
     model_config = ConfigDict(extra="forbid")
     sticky_text: Annotated[str, Field(min_length=1, max_length=120)]
@@ -165,7 +167,9 @@ def fishbone_errors(fb: Fishbone) -> list[str]:
     """Cross-field rules of the methodology: exactly the six dimensions, at most three
     selected notes per dimension, a selected note is confirmed, and coverage
     ``confirmed`` needs a confirmed barrier while an empty/unresolved dimension carries
-    none. Pure — every problem is a message."""
+    none, an ``unresolved`` dimension is never blank (it carries the suggestion still
+    awaiting the customer's yes) and the whole fishbone holds at least one confirmed
+    barrier. Pure — every problem is a message."""
     errors: list[str] = []
     dims = set(FISHBONE_DIMENSIONS)
     unknown = sorted((set(fb.coverage) | set(fb.barriers)) - dims)
@@ -192,6 +196,13 @@ def fishbone_errors(fb: Fishbone) -> list[str]:
             errors.append(f"fishbone.coverage.{dim}: 'confirmed' without a confirmed barrier")
         if state in ("explored_empty", "unresolved") and confirmed:
             errors.append(f"fishbone.coverage.{dim}: '{state}' but a barrier is confirmed")
+        if state == "unresolved" and not notes:
+            errors.append(f"fishbone.barriers.{dim}: 'unresolved' dimension is blank — ask "
+                          "the customer about it, or carry the barrier you suggested for "
+                          "this scenario as a note with confirmed: false")
+    if not any(b.confirmed for notes in fb.barriers.values() for b in notes):
+        errors.append("fishbone: no confirmed barrier — omit the member until the customer "
+                      "confirmed at least one")
     return errors
 
 
@@ -287,6 +298,10 @@ def _check_lists(content: ProposalContent) -> list[str]:
                 if gt not in gt_ids:
                     errors.append(f"evaluation_plan.evaluators.{e.get('key')}: golden test "
                                   f"'{gt}' does not exist")
+    if not errors:
+        from app.assistant.evaluation_plan import draft_size_errors
+
+        errors += draft_size_errors(content_dump(content))
     return errors
 
 

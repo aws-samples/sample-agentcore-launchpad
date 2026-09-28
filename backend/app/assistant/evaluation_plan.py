@@ -59,6 +59,9 @@ def _run_size_error(count: int) -> str:
             f"evaluation accepts at most {MAX_RUN_EVALUATORS} — drop the ones that overlap "
             "(one quality judge, one safety judge, the assertions judge and the exact "
             "invariants usually suffice) or block golden tests the rest would cover")
+# CreateEvaluator / CreateDataset reject a longer ``description`` (EvaluatorDescription
+# and CreateDatasetRequestDescriptionString are both max 200 in the service model).
+MAX_DESCRIPTION = 200
 MAX_SCENARIOS = 40
 MAX_CODE_CHECKS = 20
 DEFAULT_JUDGE_MODEL = "global.anthropic.claude-sonnet-5"  # the platform's judge default
@@ -125,7 +128,7 @@ class DatasetSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=64)
     locale: str = Field(default="en", max_length=8)
-    description: str = Field(default="", max_length=1000)
+    description: str = Field(default="", max_length=MAX_DESCRIPTION)
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +258,7 @@ class JudgeEvaluator(_Entry):
                                                 min_length=2, max_length=10)
     model_id: str = Field(default=DEFAULT_JUDGE_MODEL, pattern=_MODEL_ID_RE)
     level: Literal["TRACE", "SESSION", "TOOL_CALL"] = "TRACE"
-    description: str = Field(default="", max_length=1000)
+    description: str = Field(default="", max_length=MAX_DESCRIPTION)
     # a member-visible flag: the rubric was drafted by the platform from golden-test
     # text and needs calibration before anyone relies on it
     draft: bool = False
@@ -266,7 +269,7 @@ class DerivedEvaluator(_Entry):
     name: str = Field(pattern=_EVALUATOR_NAME_RE)
     base_evaluator_id: str = Field(pattern=r"^(Builtin|ThirdParty)\.[A-Za-z0-9_.]+$")
     model_id: str = Field(default=DEFAULT_JUDGE_MODEL, pattern=_MODEL_ID_RE)
-    description: str = Field(default="", max_length=1000)
+    description: str = Field(default="", max_length=MAX_DESCRIPTION)
 
 
 class CodeEvaluator(_Entry):
@@ -275,7 +278,7 @@ class CodeEvaluator(_Entry):
     level: Literal["TRACE", "SESSION"] = "TRACE"  # TOOL_CALL targets are not supported
     rules: CodeRules
     lambda_timeout_s: int = Field(default=DEFAULT_LAMBDA_TIMEOUT_S, ge=1, le=300)
-    description: str = Field(default="", max_length=1000)
+    description: str = Field(default="", max_length=MAX_DESCRIPTION)
 
 
 Evaluator = Annotated[
@@ -800,7 +803,11 @@ def draft_plan(
     seeded_keys: set[str] = set()
     for e in seed.get("evaluators") or []:
         if isinstance(e, dict) and isinstance(e.get("key"), str) and e["key"] not in used_keys:
-            evaluators.append(dict(e))
+            e = dict(e)
+            # a revision stored before the 200-char contract still drafts a creatable plan
+            if isinstance(e.get("description"), str):
+                e["description"] = e["description"][:MAX_DESCRIPTION]
+            evaluators.append(e)
             used_keys.add(e["key"])
             seeded_keys.add(e["key"])
     existing_keys: dict[str, str] = {
@@ -833,8 +840,20 @@ def draft_plan(
             "status": "mapped" if mapped else "unresolved",
             "note": "" if mapped else "no exact evaluator identified — classify or decline",
         })
+    # The platform's assertions judge / expected-tools rule are added only when no seeded
+    # entry already scores the same reference input — a duplicate costs one of the ten
+    # slots of the batch evaluation for nothing.
+    seeded_entries = [e for e in evaluators if e.get("key") in seeded_keys]
+    seeded_assertions = any(
+        e.get("kind") == "judge" and "{assertions}" in str(e.get("instructions") or "")
+        for e in seeded_entries)
+    seeded_trajectory = any(
+        e.get("kind") == "code" and any(
+            isinstance(c, dict) and c.get("type") == "reference_trajectory"
+            for c in (e.get("rules") or {}).get("checks") or [])
+        for e in seeded_entries)
     all_assertions = bool(scenarios) and all(sc.get("assertions") for sc in scenarios)
-    if all_assertions and "draft_rubric" not in used_keys:
+    if all_assertions and not seeded_assertions and "draft_rubric" not in used_keys:
         used_keys.add("draft_rubric")
         evaluators.append({
             "kind": "judge", "key": "draft_rubric",
@@ -851,7 +870,7 @@ def draft_plan(
                     "model and scale with domain experts before relying on it",
         })
     all_trajectory = bool(scenarios) and all(sc.get("expected_trajectory") for sc in scenarios)
-    if all_trajectory and "expected_tools" not in used_keys:
+    if all_trajectory and not seeded_trajectory and "expected_tools" not in used_keys:
         used_keys.add("expected_tools")
         evaluators.append({
             "kind": "code", "key": "expected_tools",
@@ -902,6 +921,30 @@ DRAFT_ASSERTION_RUBRIC = (
     "assertion starting with 'Must not:' fails when the behaviour occurs anywhere in the "
     "session. If the session evidence is incomplete, fail."
 )
+
+
+def draft_size_errors(content: dict[str, Any]) -> list[str]:
+    """The draft a proposal becomes must fit one batch evaluation. The seed alone is
+    not the whole list: ``draft_plan`` also adds every ``Builtin.*`` / ``ThirdParty.*`` id
+    a recommendation names, the assertions judge and the expected-tools rule — a seed
+    of ten used to pass here and fail only when the assets were created."""
+    draft = draft_plan(content, revision=1, content_hash="0" * 64,
+                       agent_name=str(content.get("name") or "agent"))
+    evaluators = draft["evaluators"]
+    if len(evaluators) <= MAX_RUN_EVALUATORS:
+        return []
+    seed = content.get("evaluation_plan") if isinstance(content.get("evaluation_plan"), dict) \
+        else {}
+    seeded = {e.get("key") for e in seed.get("evaluators") or [] if isinstance(e, dict)}
+    added = [str(e.get("evaluator_id") or e["key"]) for e in evaluators
+             if e["key"] not in seeded]
+    if len(evaluators) - len(added) > MAX_RUN_EVALUATORS:
+        return []  # the seed alone is over — seed_errors already says so
+    return ["evaluation_plan: " + _run_size_error(len(evaluators))
+            + f"; {len(added)} of them the platform adds to the seed ({', '.join(added)}: "
+            "ids named in evaluator_recommendations, the assertions judge when every "
+            "scenario has assertions, the expected-tools rule when every scenario has an "
+            "expected_trajectory) — count them against the ten"]
 
 
 def seed_errors(

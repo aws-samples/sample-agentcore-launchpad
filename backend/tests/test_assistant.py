@@ -389,7 +389,10 @@ FISHBONE = {
                        "selected": True},
                       {"sticky_text": "regional variants not documented", "confirmed": True,
                        "selected": False}],
-        "quality": [], "cost": [], "performance": [], "other": [],
+        "quality": [], "performance": [], "other": [],
+        "cost": [{"sticky_text": "HR agents re-answer the same leave questions",
+                  "evidence": "suggested for this helpdesk; customer has not confirmed yet",
+                  "confirmed": False, "selected": False}],
         "responsibility": [{"sticky_text": "must never reveal another employee's salary",
                             "customer_quote": "salary data is [REDACTED]", "confirmed": True,
                             "selected": True}],
@@ -429,6 +432,15 @@ def test_fishbone_is_optional_validated_and_hash_neutral_when_absent():
                                      if k != "other"}},
         "empty dimension marked explored_empty but a note is confirmed": {
             **FISHBONE, "coverage": {**FISHBONE["coverage"], "cognition": "explored_empty"}},
+        "unresolved dimension left blank": {
+            **FISHBONE, "barriers": {**FISHBONE["barriers"], "cost": []}},
+        "no confirmed barrier anywhere": {
+            **FISHBONE,
+            "coverage": {**FISHBONE["coverage"], "cognition": "unresolved",
+                         "responsibility": "unresolved"},
+            "barriers": {**FISHBONE["barriers"],
+                         "cognition": [{"sticky_text": "x", "confirmed": False}],
+                         "responsibility": [{"sticky_text": "y", "confirmed": False}]}},
         "smuggled member": {**FISHBONE, "aws_services": ["Bedrock"]},
         "bad date": {**FISHBONE, "date": "15/09/2026"},
         "bad service target": {**FISHBONE, "service_target": "public"},
@@ -747,10 +759,33 @@ def test_partial_fishbone_is_emitted_not_dropped():
                      "responsibility": "unresolved", "cost": "unresolved",
                      "performance": "unresolved", "other": "unresolved"},
         "barriers": {"cognition": [{"sticky_text": "推荐错误的医疗建议", "confirmed": True,
-                                    "selected": True}]},
+                                    "selected": True}],
+                     **{d: [{"sticky_text": f"suggested {d} barrier", "confirmed": False}]
+                        for d in ("quality", "responsibility", "cost", "performance",
+                                  "other")}},
         "parking_lot": [],
     }
     content, errors = contract.parse_content({**VALID_PROPOSAL, "fishbone": partial})
+    assert content is not None, errors
+
+
+def test_fishbone_dimensions_are_never_left_blank():
+    """Live proposals left two or three bones blank (``unresolved`` with no notes) —
+    the dimension was simply never asked about. The methodology now owes every
+    dimension a question and a scenario-derived suggestion; the contract refuses a
+    blank ``unresolved`` bone and names the fix, while ``explored_empty`` (the
+    customer's explicit "nothing there") stays legal without notes."""
+    method = (ARCHITECT.skill_path() / "references" / "fishbone-methodology.md").read_text(
+        encoding="utf-8")
+    assert "Every dimension ends with content" in method and "Coverage duty" in method
+    assert "no dimension is left blank" in service.PROTOCOL_PREAMBLE
+    blank = {**FISHBONE, "barriers": {**FISHBONE["barriers"], "cost": []}}
+    content, errors = contract.parse_content({**VALID_PROPOSAL, "fishbone": blank})
+    assert content is None
+    assert any("fishbone.barriers.cost" in e and "confirmed: false" in e for e in errors), errors
+    empty = {**FISHBONE, "coverage": {**FISHBONE["coverage"], "cost": "explored_empty"},
+             "barriers": {**FISHBONE["barriers"], "cost": []}}
+    content, errors = contract.parse_content({**VALID_PROPOSAL, "fishbone": empty})
     assert content is not None, errors
 
 
