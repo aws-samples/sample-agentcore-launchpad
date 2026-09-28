@@ -5649,7 +5649,8 @@
         "stop": "Stop requested",
         "pause": "Task paused",
         "resume": "Task started",
-        "delete": "Task deleted"
+        "delete": "Task deleted",
+        "recheck": "Re-checked — the run follows the batch on AWS."
       },
       "confirm": {
         "stopTitle": "Stop task",
@@ -5719,7 +5720,10 @@
       "previewNoSessions": "No sessions of this agent observed in the last 7 days",
       "pickEvaluators": "Select evaluators",
       "pickedCount": "{{count}} / {{max}} selected",
-      "gtWarning": "Some selected evaluators need ground truth; they score only sessions that carry expected outputs (a dataset with expected outputs)."
+      "gtWarning": "Some selected evaluators need ground truth; they score only sessions that carry expected outputs (a dataset with expected outputs).",
+      "recheck": "Re-check AWS result",
+      "recheckHint": "Read this run's batch evaluation from AWS again: a finished batch fills in the results, one still running resumes polling. Nothing is re-run or billed.",
+      "recheckStillFailed": "Re-checked: the batch evaluation itself failed on AWS."
     },
     "taskStatus": {
       "queued": "Queued",

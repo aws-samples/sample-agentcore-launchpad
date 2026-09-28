@@ -82,11 +82,29 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   if (!data) return null;
 
   const mayRun = can("eval.run");
+  const recheck = async () => {
+    if (data.kind !== "run") return;
+    setBusy(true);
+    try {
+      const run = await api.recheckEvaluationRun(data.id);
+      toast("success", t(run.status === "failed" ? "v2.tasks.recheckStillFailed" : "v2.tasks.done.recheck"));
+      task.reload();
+    } catch (err) {
+      toast("error", errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
   const actions = (
     <>
       {data.kind === "run" && (data.status === "running" || data.status === "queued") && (
         <Button kind="danger" disabled={!mayRun} onClick={() => setConfirm("stop")}>
           {t("v2.tasks.stop")}
+        </Button>
+      )}
+      {data.kind === "run" && data.status === "failed" && data.run?.batch_eval_id && (
+        <Button disabled={!mayRun || busy} title={t("v2.tasks.recheckHint")} onClick={() => void recheck()} testId="v2-task-recheck">
+          {t("v2.tasks.recheck")}
         </Button>
       )}
       {data.kind === "online" && data.status === "running" && <Button onClick={() => setConfirm("pause")}>{t("v2.tasks.pause")}</Button>}

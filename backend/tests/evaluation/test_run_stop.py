@@ -268,7 +268,7 @@ def test_eval_stop_reconcile_after_restart_lands_stopped(monkeypatch):
     run_id = make_run(status="evaluating", batch_eval_id="be-4")
     monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
     monkeypatch.setattr(
-        svc.ac, "poll_batch_evaluation", lambda client, batch_id, max_polls=60: PARTIAL_RESULT
+        svc.ac, "poll_batch_evaluation", lambda client, batch_id, **_: PARTIAL_RESULT
     )
     assert run_id in svc.resume_interrupted_runs()
     run = wait_status(run_id, "stopped")

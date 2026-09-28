@@ -1400,6 +1400,21 @@ def stop_run(
     return _run_out(service.request_stop(run.id, workspace=ws.context))
 
 
+@router.post("/runs/{run_id}/recheck", status_code=202)
+def recheck_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Re-read a failed run's batch from AWS: a terminal batch settles the row
+    (e.g. `completed` with scores); one still running resumes polling
+    (`evaluating`). Only failed runs with a batch → else 409 `run.not_recheckable`."""
+    run = db.get(EvalRun, run_id)
+    if run is None or run.workspace_id != ws.id:
+        raise NotFoundError("run.not_found", "run not found")
+    return _run_out(service.recheck_run(run.id, workspace=ws.context))
+
+
 DELETABLE_RUN_STATUSES = ("failed", "stopped")
 
 

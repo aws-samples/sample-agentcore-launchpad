@@ -53,7 +53,7 @@ def test_evaluating_run_with_batch_is_reconciled(monkeypatch):
     monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
     monkeypatch.setattr(
         svc.ac, "poll_batch_evaluation",
-        lambda client, batch_id, max_polls=60: {
+        lambda client, batch_id, **_: {
             "status": "COMPLETED_WITH_ERRORS",
             "errorDetails": ["EXECUTION_SUMMARY clustering failed: got 2, need 3"],
             "failureAnalysisResult": {"failures": [{"category": "none"}]},
@@ -89,7 +89,7 @@ def test_reconcile_failure_marks_run_failed(monkeypatch):
     run_id = make_run(status="evaluating", batch_eval_id="run_gone-1")
     monkeypatch.setattr(svc, "data_client", lambda _ws=None: MagicMock())
 
-    def boom(client, batch_id, max_polls=60):
+    def boom(client, batch_id, **_):
         raise RuntimeError("ResourceNotFound")
 
     monkeypatch.setattr(svc.ac, "poll_batch_evaluation", boom)

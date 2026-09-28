@@ -19,6 +19,7 @@ content-log group is discovered by log-group prefix instead of derived.
 """
 
 import copy
+import math
 import threading
 import time
 from collections.abc import Callable
@@ -26,6 +27,7 @@ from typing import Any
 
 from botocore.exceptions import ClientError
 
+from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.evaluation import agentcore_eval as ac
@@ -248,9 +250,7 @@ def execute_run(
             batch_id = response["batchEvaluationId"]
             _update(run_id, batch_eval_id=batch_id)
             _stop_batch_if_requested(run_id, data, batch_id)
-            result = ac.poll_batch_evaluation(
-                data, batch_id=batch_id, max_polls=60, interval=30.0
-            )
+            result = _poll_batch(data, batch_id)
             _finish_from_result(run_id, mode, result, workspace=workspace)
             return
         if not session_ids and not time_range:
@@ -347,14 +347,7 @@ def execute_run(
         batch_id = response["batchEvaluationId"]
         _update(run_id, batch_eval_id=batch_id)
         _stop_batch_if_requested(run_id, data, batch_id)
-        # Insights cluster across sessions and routinely run 15-25 minutes;
-        # give them a 30-minute budget instead of the evaluator default.
-        if mode == "insights":
-            result = ac.poll_batch_evaluation(
-                data, batch_id=batch_id, max_polls=60, interval=30.0
-            )
-        else:
-            result = ac.poll_batch_evaluation(data, batch_id=batch_id, max_polls=60)
+        result = _poll_batch(data, batch_id)
         _finish_from_result(run_id, mode, result, workspace=workspace)
     except RunStopped:
         _update(run_id, status="stopped", error=STOP_REASON)
@@ -376,6 +369,23 @@ def _stop_batch_if_requested(run_id: str, data: Any, batch_id: str) -> None:
     to AWS now so the poller observes STOPPING → STOPPED."""
     if stop_flags.requested(run_id):
         ac.stop_batch_evaluation(data, batch_id=batch_id)
+
+
+BATCH_POLL_INTERVAL_S = 30.0
+STILL_RUNNING_PREFIX = "batch evaluation still"
+
+
+def _batch_wait_s() -> int:
+    return get_settings().eval_batch_wait_s
+
+
+def _poll_batch(data: Any, batch_id: str) -> dict[str, Any]:
+    """Poll one batch evaluation until it is terminal or the configured wait
+    (``eval_batch_wait_s``) runs out — the same budget for every run mode."""
+    polls = max(1, math.ceil(_batch_wait_s() / BATCH_POLL_INTERVAL_S))
+    return ac.poll_batch_evaluation(
+        data, batch_id=batch_id, max_polls=polls, interval=BATCH_POLL_INTERVAL_S
+    )
 
 
 def _finish_from_result(
@@ -414,6 +424,14 @@ def _finish_from_result(
         )
         _update(run_id, status="stopped", error=reason[:500], **parsed)
         return
+    if status not in ac.EVAL_TERMINAL:
+        # Not a failure on AWS: the batch outlived the wait. Say so, and point at
+        # re-check instead of implying the evaluation itself failed.
+        minutes = round(_batch_wait_s() / 60)
+        raise RuntimeError(
+            f"{STILL_RUNNING_PREFIX} {status} after the {minutes}-minute wait — AWS may "
+            "still finish it; re-check the run to read the final result"
+        )
     if status not in ("COMPLETED", "COMPLETED_WITH_ERRORS"):
         message = f"batch evaluation ended {status}"
         if details:
@@ -441,9 +459,7 @@ def reconcile_run(
     """Finish a run whose in-process poller died (restart / dev reload) while
     the batch evaluation kept running server-side."""
     try:
-        result = ac.poll_batch_evaluation(
-            data_client(workspace), batch_id=batch_id, max_polls=60
-        )
+        result = _poll_batch(data_client(workspace), batch_id)
         _finish_from_result(run_id, mode, result, workspace=workspace)
     except Exception as exc:
         _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
@@ -485,6 +501,49 @@ def request_stop(run_id: str, *, workspace: WorkspaceContext) -> EvalRun:
         # the flag is not needed (no callable will ever read it).
         stop_flags.clear(run_id)
         _update(run_id, status="stopped", error=STOP_REASON)
+    db = SessionLocal()
+    try:
+        return db.get(EvalRun, run_id)
+    finally:
+        db.close()
+
+
+def recheck_run(run_id: str, *, workspace: WorkspaceContext) -> EvalRun:
+    """Re-read a failed run's batch evaluation from AWS, the source of truth.
+
+    A run fails locally when its poller gives up or dies, while the batch may
+    keep running (and finish) on AWS. A terminal batch settles the row exactly
+    as the poller would have; one still running puts the row back to
+    ``evaluating`` with a fresh poller. Only ``failed`` runs that started a batch
+    qualify (409 ``run.not_recheckable`` otherwise). Reads only — no new
+    evaluation is started, nothing is billed."""
+    db = SessionLocal()
+    try:
+        run = db.get(EvalRun, run_id)
+        if run is None:
+            raise AppError("run.not_found", "run not found", status_code=404)
+        if run.status != "failed" or not run.batch_eval_id:
+            raise AppError(
+                "run.not_recheckable",
+                "only a failed run that started a batch evaluation can be re-checked",
+                status_code=409,
+            )
+        mode, batch_id = run.mode, run.batch_eval_id
+    finally:
+        db.close()
+    data = data_client(workspace)
+    result = data.get_batch_evaluation(batchEvaluationId=batch_id)
+    if result.get("status") in ac.EVAL_TERMINAL:
+        try:
+            _finish_from_result(run_id, mode, result, workspace=workspace)
+        except RuntimeError as exc:
+            _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
+    else:
+        _update(run_id, status="evaluating", error=None)
+        run_queue.submit(
+            run_id,
+            lambda: reconcile_run(run_id, mode=mode, batch_id=batch_id, workspace=workspace),
+        )
     db = SessionLocal()
     try:
         return db.get(EvalRun, run_id)

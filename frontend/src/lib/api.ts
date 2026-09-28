@@ -3743,6 +3743,13 @@ export const api = {
     request<EvaluationRunInfo>(`/api/eval/runs/${encodeURIComponent(runId)}/stop`, {
       method: "POST",
     }),
+  /** `POST /api/eval/runs/{id}/recheck` (202) — re-reads a `failed` run's batch from AWS:
+   *  a terminal batch settles the row (e.g. `completed` with scores), one still running
+   *  resumes polling (`evaluating`). Reads only; other runs → 409 `run.not_recheckable`. */
+  recheckEvaluationRun: (runId: string) =>
+    request<EvaluationRunInfo>(`/api/eval/runs/${encodeURIComponent(runId)}/recheck`, {
+      method: "POST",
+    }),
   /** `DELETE /api/eval/runs/{id}` — removes the ledger row of a `failed` or `stopped`
    *  run (no result to keep). Completed runs are history and answer 409
    *  `run.not_deletable`, as do active runs (stop first). An AWS batch that existed is
