@@ -27,6 +27,7 @@ import {
   sseEvents,
   toLiveMessages,
 } from "../../../lib/assistant";
+import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, FlowHeader, Spin, Tag } from "../../ui";
 import { PROPOSAL_TONE, SECTION_IDS, shortId, useApiMessage } from "./common";
@@ -64,7 +65,7 @@ export function AssistantDetail({
   const toast = useV2Toast();
   const apiMessage = useApiMessage();
   const [, setParams] = useSearchParams();
-  const { can } = useAuth();
+  const { can, isAdmin } = useAuth();
 
   const [conversation, setConversation] = useState<AssistantConversationDetail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -74,6 +75,7 @@ export function AssistantDetail({
   const [approving, setApproving] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [resourcesDirty, setResourcesDirty] = useState(false);
   const [editing, setEditing] = useState<ProposalEditDraft | null>(null);
   const [confirm, setConfirm] = useState<
@@ -333,6 +335,22 @@ export function AssistantDetail({
     }
   };
 
+  const toggleShare = async () => {
+    if (!conversation) return;
+    const conversationId = conversation.id;
+    setSharing(true);
+    try {
+      const res = await api.assistantSetSharing(conversationId, !conversation.shared);
+      if (!alive.current) return;
+      setConversation((c) => (c && c.id === conversationId ? { ...c, ...res } : c));
+      toast("success", t(res.shared ? "v2.assistant.sharedToast" : "v2.assistant.unsharedToast"));
+    } catch (err) {
+      if (alive.current) toast("error", apiMessage(err));
+    } finally {
+      if (alive.current) setSharing(false);
+    }
+  };
+
   const refreshCatalog = async () => {
     if (!conversation) return;
     const conversationId = conversation.id;
@@ -426,6 +444,9 @@ export function AssistantDetail({
   }
 
   const title = conversation.title || conversation.id.slice(0, 8);
+  // An admin-shared conversation of another member: transcript + proposal only.
+  // Every write route is owner-bound on the server; the page offers none of them.
+  const readOnly = !conversation.mine;
   const approveDisabled = !canDeploy || approving || busy || preparing || resourcesDirty;
   const approveReason = resourcesDirty ? t("assistantProgress.hints.unsaved") : deployReason;
 
@@ -442,15 +463,32 @@ export function AssistantDetail({
               </>
             )}
             {conversation.turn_in_progress !== null && <Tag tone="blue">{t("assistantPage.streaming")}</Tag>}
+            {conversation.shared && (
+              <Tag tone="blue" title={t("v2.assistant.sharedTip", {
+                by: conversation.shared_by ?? "", at: fmtTime(conversation.shared_at),
+              })}>
+                {t("v2.assistant.shared")}
+              </Tag>
+            )}
+            <span className="v2-muted" style={{ fontSize: 12.5 }} data-testid="v2-assistant-owner">
+              {t("v2.assistant.ownerLabel", { owner: conversation.owner })}
+            </span>
           </span>
         }
         onBack={back}
         end={
           <>
-            <Button kind="danger" disabled={busy || clear.busy} title={t("assistantPage.clear.action")}
-              onClick={() => void clear.ask(conversation)} testId="v2-assistant-clear">
-              {t("v2.assistant.clear")}
-            </Button>
+            {isAdmin && (
+              <Button disabled={sharing} onClick={() => void toggleShare()} testId="v2-assistant-share">
+                {t(conversation.shared ? "v2.assistant.unshare" : "v2.assistant.share")}
+              </Button>
+            )}
+            {!readOnly && (
+              <Button kind="danger" disabled={busy || clear.busy} title={t("assistantPage.clear.action")}
+                onClick={() => void clear.ask(conversation)} testId="v2-assistant-clear">
+                {t("v2.assistant.clear")}
+              </Button>
+            )}
             <Button kind="primary" disabled={busy || creating} onClick={() => void newConversation()} testId="v2-assistant-new">
               <Plus size={14} aria-hidden="true" />
               {t("assistantPage.newConversation")}
@@ -458,6 +496,11 @@ export function AssistantDetail({
           </>
         }
       />
+      {readOnly && (
+        <div style={{ marginBottom: 12 }} data-testid="v2-assistant-readonly">
+          <Alert>{t("v2.assistant.readOnly", { owner: conversation.owner })}</Alert>
+        </div>
+      )}
       <CreationProgressCard latest={latest} deployed={deployed} resourcesDirty={resourcesDirty} editing={editing !== null} />
 
       <div className="v2-assistant-grid">
@@ -471,6 +514,7 @@ export function AssistantDetail({
           onSend={() => void send({ prompt: input })}
           onRefreshCatalog={() => void refreshCatalog()}
           threadRef={threadRef}
+          readOnly={readOnly}
         />
 
         <section id={SECTION_IDS.proposal} className="v2-card" data-testid="v2-assistant-proposal">
@@ -499,7 +543,7 @@ export function AssistantDetail({
                 resourcesLocked={resourcesLocked}
               />
             )}
-            {latest && (
+            {latest && !readOnly && (
               <>
                 <div style={{ marginTop: 16 }}>
                   <Alert>{t(resourcesLocked ? "assistantPreparation.reviewOnly" : "assistantPage.supportedHere")}</Alert>
@@ -585,7 +629,7 @@ export function AssistantDetail({
         </section>
       </div>
 
-      <PreparationCard
+      {!readOnly && <PreparationCard
         key={`prep:${workspaceId}:${conversation.id}`}
         conversation={conversation}
         workspaceId={workspaceId}
@@ -609,9 +653,9 @@ export function AssistantDetail({
           el?.scrollIntoView({ behavior: "smooth", block: "center" });
           el?.focus();
         }}
-      />
+      />}
 
-      {latest ? (
+      {readOnly ? null : latest ? (
         <EvalAssetsCard
           key={`eval:${workspaceId}:${conversation.id}`}
           conversationId={conversation.id}

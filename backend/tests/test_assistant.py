@@ -1918,6 +1918,84 @@ def test_conversations_are_private_to_their_principal_even_from_an_admin(gated, 
         db.close()
 
 
+def test_admin_share_publishes_a_read_only_conversation_to_every_member(gated, harness):
+    admin, member, other, _ids, _preset = gated
+    admin_cid = _open(admin)
+    r1 = _propose(admin, harness, admin_cid)
+    private_cid = _open(admin)
+    listed = admin.get(f"{BASE}/conversations").json()["conversations"]
+    assert {c["id"]: (c["owner"], c["mine"], c["shared"]) for c in listed} == {
+        admin_cid: (ADMIN_CREDS["username"], True, False),
+        private_cid: (ADMIN_CREDS["username"], True, False)}
+    before = _latest(admin, admin_cid)["updated_at"]
+
+    # only an administrator may share — a member is refused by the route policy
+    res = member.put(f"{BASE}/conversations/{admin_cid}/sharing", json={"shared": True})
+    assert res.status_code == 403
+    res = admin.put(f"{BASE}/conversations/{admin_cid}/sharing", json={"shared": True})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["shared"] is True and body["shared_by"] == ADMIN_CREDS["username"]
+    assert body["shared_at"] and body["mine"] is True
+    # sharing is not conversation activity: the history order is untouched
+    assert _latest(admin, admin_cid)["updated_at"] == before
+
+    for session in (member, other):
+        listed = session.get(f"{BASE}/conversations").json()["conversations"]
+        assert [(c["id"], c["owner"], c["mine"], c["shared"]) for c in listed] == [
+            (admin_cid, ADMIN_CREDS["username"], False, True)]
+        detail = session.get(f"{BASE}/conversations/{admin_cid}")
+        assert detail.status_code == 200 and detail.json()["mine"] is False
+        assert detail.json()["proposals"][0]["revision"] == r1["revision"]
+        # every write stays with the owner: indistinguishable from missing
+        assert session.post(f"{BASE}/conversations/{admin_cid}/turns",
+                            json={"prompt": "x"}).status_code == 404
+        assert _approve(session, admin_cid, r1).status_code == 404
+        assert session.put(f"{BASE}/conversations/{admin_cid}/proposal",
+                           json={"content": VALID_PROPOSAL}).status_code == 404
+        assert session.post(f"{BASE}/conversations/{admin_cid}/proposal/reject",
+                            json={"revision": r1["revision"]}).status_code == 404
+        assert session.post(f"{BASE}/conversations/{admin_cid}/catalog").status_code == 404
+        assert session.get(f"{BASE}/conversations/{admin_cid}/footprint").status_code == 404
+        assert session.delete(f"{BASE}/conversations/{admin_cid}").status_code == 404
+        assert session.get(f"{BASE}/conversations/{private_cid}").status_code == 404
+    assert _count(Job) == 0
+
+    # withdrawing the share closes it again
+    res = admin.put(f"{BASE}/conversations/{admin_cid}/sharing", json={"shared": False})
+    assert res.status_code == 200
+    assert res.json()["shared"] is False and res.json()["shared_by"] is None
+    assert member.get(f"{BASE}/conversations").json()["conversations"] == []
+    assert member.get(f"{BASE}/conversations/{admin_cid}").status_code == 404
+
+
+def test_admin_cannot_share_a_conversation_it_cannot_read(gated, harness):
+    """Sharing never becomes a way to reach another member's private conversation."""
+    admin, member, other, _ids, _preset = gated
+    cid = _open(member)
+    res = admin.put(f"{BASE}/conversations/{cid}/sharing", json={"shared": True})
+    assert res.status_code == 404 and res.json()["code"] == "assistant.conversation_not_found"
+    assert other.get(f"{BASE}/conversations").json()["conversations"] == []
+    assert admin.put(f"{BASE}/conversations/{cid}/sharing",
+                     json={"shared": True, "extra": 1}).status_code == 422
+
+
+def test_shared_conversation_stays_bound_to_its_workspace(client, ready):
+    cid = _open(client)
+    assert client.put(f"{BASE}/conversations/{cid}/sharing",
+                      json={"shared": True}).status_code == 200
+    db = SessionLocal()
+    try:
+        db.add(Workspace(id="lab", name="lab", account_id="222233334444", region="us-east-2",
+                         bootstrap_status="ready", resources={}))
+        db.commit()
+    finally:
+        db.close()
+    lab = {"X-Workspace": "lab"}
+    assert client.get(f"{BASE}/conversations/{cid}", headers=lab).status_code == 404
+    assert client.get(f"{BASE}/conversations", headers=lab).json() == {"conversations": []}
+
+
 def test_recycled_username_does_not_inherit_the_old_conversation(gated, harness):
     """Finding 7: delete account A, register the same username as a new account."""
     admin, member, _other, ids, _preset = gated

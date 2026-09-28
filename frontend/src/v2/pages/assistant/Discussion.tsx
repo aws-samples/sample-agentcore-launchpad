@@ -11,7 +11,7 @@ export const COMPOSER_ID = "v2-assistant-input";
 
 /** The streaming transcript, the composer and the workspace catalog summary. */
 export function DiscussionCard({
-  conversation, messages, input, onInput, busy, preparing, onSend, onRefreshCatalog, threadRef,
+  conversation, messages, input, onInput, busy, preparing, onSend, onRefreshCatalog, threadRef, readOnly = false,
 }: {
   conversation: AssistantConversationDetail;
   messages: AssistantLiveMessage[];
@@ -22,6 +22,8 @@ export function DiscussionCard({
   onSend: () => void;
   onRefreshCatalog: () => void;
   threadRef: RefObject<HTMLDivElement>;
+  /** a shared conversation viewed by a non-owner: transcript only, no composer */
+  readOnly?: boolean;
 }) {
   const { t } = useTranslation();
   const marker = t("assistantPage.proposalInText");
@@ -43,7 +45,7 @@ export function DiscussionCard({
           {messages.map((msg, i) =>
             msg.role === "user" ? (
               <div key={i} className="v2-turn user">
-                <div className="who">{t("assistantPage.you")}</div>
+                <div className="who">{readOnly ? conversation.owner : t("assistantPage.you")}</div>
                 <div className="msg">{msg.text}</div>
               </div>
             ) : msg.role === "assistant" ? (
@@ -85,7 +87,7 @@ export function DiscussionCard({
             ),
           )}
         </div>
-        <div className="v2-assistant-composer">
+        {!readOnly && <div className="v2-assistant-composer">
           <label className="v2-muted" style={{ fontSize: 12.5 }} htmlFor={COMPOSER_ID}>
             {t("assistantPage.composerLabel")}
           </label>
@@ -111,14 +113,14 @@ export function DiscussionCard({
               {busy ? t("assistantPage.sending") : t("assistantPage.send")}
             </Button>
           </div>
-        </div>
-        <CatalogSummary catalog={conversation.catalog} onRefresh={onRefreshCatalog} />
+        </div>}
+        <CatalogSummary catalog={conversation.catalog} onRefresh={readOnly ? undefined : onRefreshCatalog} />
       </div>
     </section>
   );
 }
 
-function CatalogSummary({ catalog, onRefresh }: { catalog: AssistantCatalog; onRefresh: () => void }) {
+function CatalogSummary({ catalog, onRefresh }: { catalog: AssistantCatalog; onRefresh?: () => void }) {
   const { t } = useTranslation();
   const names = (items: { key?: string; kb_id?: string; name?: string }[]) =>
     items.length ? items.map((i) => i.name || i.key || i.kb_id).join(", ") : t("assistantPage.catalogNone");
@@ -127,7 +129,9 @@ function CatalogSummary({ catalog, onRefresh }: { catalog: AssistantCatalog; onR
     <div className="v2-assistant-section" data-testid="v2-assistant-catalog">
       <h3 className="v2-row">
         {t("assistantPage.catalogTitle")}
-        <LinkButton onClick={onRefresh} testId="v2-assistant-catalog-refresh">{t("assistantPage.catalogRefresh")}</LinkButton>
+        {onRefresh && (
+          <LinkButton onClick={onRefresh} testId="v2-assistant-catalog-refresh">{t("assistantPage.catalogRefresh")}</LinkButton>
+        )}
       </h3>
       <Descriptions
         one

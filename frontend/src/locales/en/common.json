@@ -6910,6 +6910,7 @@
     "assistant": {
       "clear": "Clear",
       "colApprovedBy": "Approved by",
+      "colOwner": "Created by",
       "colPlan": "Plan revision",
       "colProposal": "Proposal",
       "colTitle": "Conversation",
@@ -6928,7 +6929,19 @@
       "kpiTotal": "Conversations",
       "noMatch": "No conversation matches the filters",
       "noProposal": "No proposal yet",
-      "search": "Search conversation title / ID"
+      "ownerLabel": "Created by {{owner}}",
+      "readOnly": "Shared by an administrator and created by {{owner}} — read-only. Resource preparation and evaluation assets are visible to the creator only.",
+      "scope": "Scope",
+      "scopeMine": "Mine",
+      "scopeShared": "Shared with me",
+      "search": "Search conversation title / ID",
+      "share": "Share",
+      "shared": "Shared",
+      "sharedTip": "Shared with all members by {{by}} · {{at}}",
+      "sharedToast": "Shared with all members (read-only)",
+      "unshare": "Unshare",
+      "unsharedToast": "No longer shared",
+      "view": "View"
     },
     "skillLab": {
       "tab": {

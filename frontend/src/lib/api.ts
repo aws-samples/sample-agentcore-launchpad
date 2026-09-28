@@ -1147,6 +1147,14 @@ export interface AssistantMessage {
 export interface AssistantConversationSummary {
   id: string;
   title: string;
+  /** display username of the member who opened it */
+  owner: string;
+  /** the caller owns it; false = an admin-shared conversation, read-only */
+  mine: boolean;
+  /** an admin published read access to every member of the workspace */
+  shared: boolean;
+  shared_by: string | null;
+  shared_at: string | null;
   turns: number;
   /** the turn number currently streaming, when one is */
   turn_in_progress: number | null;
@@ -4039,6 +4047,12 @@ export const api = {
     request<AssistantConversationDetail>(
       `/api/assistant/architect/conversations/${encodeURIComponent(id)}`,
       { headers: pinnedWorkspace(workspaceId) },
+    ),
+  /** Admin-only: publish (or withdraw) read access for every workspace member. */
+  assistantSetSharing: (id: string, shared: boolean) =>
+    request<AssistantConversationSummary>(
+      `/api/assistant/architect/conversations/${encodeURIComponent(id)}/sharing`,
+      { method: "PUT", body: JSON.stringify({ shared }) },
     ),
   /** What CLEAR would remove for a conversation (deployed Agents, evaluation-assets
    *  operations with their cloud resources, local Datasets) and what blocks it. */
