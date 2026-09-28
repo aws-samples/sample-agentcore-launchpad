@@ -4,8 +4,10 @@ Explicit-client style (tests inject stubs). Shapes per bedrock-agentcore-control
 1.43.x: runtime status enum is CREATING → READY (or CREATE_FAILED).
 """
 
+import ast
 import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import Iterable, Iterator
@@ -401,10 +403,43 @@ def _sse_payloads(lines: Iterable[bytes | str]) -> Iterator[Any]:
             yield data
 
 
+# The AgentCore SDK serializes each yielded event with ``json.dumps`` and, when
+# that fails (a reasoning block's ``redactedContent`` is bytes), falls back to
+# ``json.dumps(str(event))``: the SSE line then carries the Python repr of a
+# Converse stream event as a JSON *string*. Measured 2026-09-27 on a converted
+# Runtime twin (Strands + GPT-6): every reply began with that repr as text.
+_REPR_EVENT = re.compile(
+    r"^\{(?:'event': \{)?'(?:messageStart|messageStop|contentBlockStart|contentBlockDelta"
+    r"|contentBlockStop|metadata)': \{"
+)
+_REPR_EVENT_LIMIT = 1_000_000
+
+
+def _repr_event(text: str) -> dict[str, Any] | None:
+    """The event dict behind a Python-repr fallback string, else None.
+
+    ``ast.literal_eval`` only builds literals (bytes included), never code."""
+    if len(text) > _REPR_EVENT_LIMIT or not _REPR_EVENT.match(text):
+        return None
+    try:
+        value = ast.literal_eval(text)
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
     """Normalize one runtime payload to Chat's tool/delta/complete contract
     (lenient ``str()`` coercion of text fields, shared by Chat, the public API
     and evaluation replays)."""
+    if isinstance(payload, str) and _REPR_EVENT.match(payload):
+        recovered = _repr_event(payload)
+        if recovered is None:
+            # A stream event is never reply text, even when it cannot be recovered.
+            logger.warning("dropped an unparseable runtime stream event repr (%d chars)",
+                           len(payload))
+            return
+        payload = recovered
     if not isinstance(payload, dict):
         text = str(payload)
         if text:
