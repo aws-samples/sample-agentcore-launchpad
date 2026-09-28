@@ -1,9 +1,12 @@
 import {
+  Activity,
   CircleCheck,
   Hourglass,
-  KeyRound,
   LoaderCircle,
   LogIn,
+  MessagesSquare,
+  Rocket,
+  Sparkles,
   UserPlus,
 } from "lucide-react";
 import {
@@ -16,8 +19,6 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Btn } from "../components";
-import { LangSwitcher } from "../layout/LangSwitcher";
 import {
   type AgentPermission,
   api,
@@ -27,6 +28,7 @@ import {
   type AuthStatus,
   type RegisterResult,
 } from "../lib/api";
+import { V2AuthFrame, V2AuthLoading } from "../v2/AuthFrame";
 import { AuthContext } from "./auth-context";
 
 const AUTH_DISABLED: AuthStatus = {
@@ -158,13 +160,16 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
 function AuthLoading() {
   const { t } = useTranslation();
-  return (
-    <div className="auth-loading" role="status">
-      <LoaderCircle size={22} strokeWidth={1.8} aria-hidden="true" />
-      <span className="sr-only">{t("auth.checking")}</span>
-    </div>
-  );
+  return <V2AuthLoading label={t("auth.checking")} />;
 }
+
+/** The console's create → deploy → invoke → observe loop, beside the form. */
+const HERO_STEPS = [
+  { key: "create", icon: Sparkles },
+  { key: "deploy", icon: Rocket },
+  { key: "invoke", icon: MessagesSquare },
+  { key: "observe", icon: Activity },
+] as const;
 
 function LoginPage({
   onLogin,
@@ -185,46 +190,87 @@ function LoginPage({
   };
 
   return (
-    <div className="auth-page">
-      <header className="auth-topbar">
-        <div className="brand">
-          <span className="glyph" aria-hidden="true" />
-          AGENTCORE<em>//</em>LAUNCHPAD
-        </div>
-        <LangSwitcher />
-      </header>
-      <main className="auth-main">
-        {registrationEnabled ? (
-          <div className="auth-tabs" role="tablist" data-testid="auth-tabs">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === "signin"}
-              className={mode === "signin" ? "active" : ""}
-              onClick={() => setMode("signin")}
-              data-testid="auth-tab-signin"
-            >
-              {t("auth.signIn")}
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === "register"}
-              className={mode === "register" ? "active" : ""}
-              onClick={() => setMode("register")}
-              data-testid="auth-tab-register"
-            >
-              {t("auth.register")}
-            </button>
+    <V2AuthFrame testId="auth-page">
+      <div className="v2-auth-split">
+        <section className="v2-auth-hero">
+          <h1>{t("auth.v2.heroTitle")}</h1>
+          <p>{t("auth.v2.heroBody")}</p>
+          <ol className="v2-auth-steps">
+            {HERO_STEPS.map(({ key, icon: Icon }) => (
+              <li key={key}>
+                <span className="ico"><Icon size={18} aria-hidden="true" /></span>
+                <div>
+                  <b>{t(`auth.v2.steps.${key}.title`)}</b>
+                  <span>{t(`auth.v2.steps.${key}.body`)}</span>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+        <div className="v2-card v2-auth-card">
+          <div className="v2-card-body">
+            {registrationEnabled ? (
+              <div className="v2-auth-tabs" role="tablist" data-testid="auth-tabs">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === "signin"}
+                  className={mode === "signin" ? "on" : ""}
+                  onClick={() => setMode("signin")}
+                  data-testid="auth-tab-signin"
+                >
+                  {t("auth.v2.signIn")}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === "register"}
+                  className={mode === "register" ? "on" : ""}
+                  onClick={() => setMode("register")}
+                  data-testid="auth-tab-register"
+                >
+                  {t("auth.v2.register")}
+                </button>
+              </div>
+            ) : null}
+            {mode === "signin" ? (
+              <SignInForm onLogin={onLogin} prefill={prefill} />
+            ) : (
+              <RegisterForm onRegistered={onRegistered} requiresApproval={requiresApproval} />
+            )}
           </div>
-        ) : null}
-        {mode === "signin" ? (
-          <SignInForm onLogin={onLogin} prefill={prefill} />
-        ) : (
-          <RegisterForm onRegistered={onRegistered} requiresApproval={requiresApproval} />
-        )}
-      </main>
+        </div>
+      </div>
+    </V2AuthFrame>
+  );
+}
+
+function Field({ id, label, hint, children }: {
+  id: string;
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="v2-field">
+      <label htmlFor={id}>{label}</label>
+      {children}
+      {hint ? <span className="hint">{hint}</span> : null}
     </div>
+  );
+}
+
+function Submit({ busy, icon, label, busyLabel }: {
+  busy: boolean;
+  icon: ReactNode;
+  label: string;
+  busyLabel: string;
+}) {
+  return (
+    <button className="v2-btn primary v2-auth-submit" type="submit" disabled={busy}>
+      {busy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : icon}
+      {busy ? busyLabel : label}
+    </button>
   );
 }
 
@@ -263,52 +309,44 @@ function SignInForm({
   };
 
   return (
-    <form className="auth-panel" onSubmit={submit} noValidate>
-      <div className="auth-icon" aria-hidden="true">
-        <KeyRound size={24} strokeWidth={1.7} />
-      </div>
-      <div className="kicker">{t("auth.kicker")}</div>
-      <h1>{t("auth.title")}</h1>
-      <p className="auth-subtitle">{t("auth.subtitle")}</p>
+    <form onSubmit={submit} noValidate>
+      <h2>{t("auth.title")}</h2>
+      <p className="sub">{t("auth.v2.subtitle")}</p>
 
-      <div className="auth-fields">
-        <div className="auth-field">
-          <label htmlFor="auth-username">{t("auth.username")}</label>
+      <div className="v2-auth-fields">
+        <Field id="auth-username" label={t("auth.v2.username")}>
           <input
             id="auth-username"
-            className="input"
+            className="v2-input"
             autoComplete="username"
             value={username}
             onChange={(event) => setUsername(event.target.value)}
             disabled={submitting}
             autoFocus
           />
-        </div>
-        <div className="auth-field">
-          <label htmlFor="auth-password">{t("auth.password")}</label>
+        </Field>
+        <Field id="auth-password" label={t("auth.v2.password")}>
           <input
             id="auth-password"
-            className="input"
+            className="v2-input"
             type="password"
             autoComplete="current-password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             disabled={submitting}
           />
-        </div>
+        </Field>
       </div>
 
-      <div className="auth-error" role="alert" aria-live="polite">
+      <div className="v2-auth-error" role="alert" aria-live="polite">
         {error}
       </div>
-      <Btn className="auth-submit" type="submit" primary disabled={submitting}>
-        {submitting ? (
-          <LoaderCircle className="spin" size={16} aria-hidden="true" />
-        ) : (
-          <LogIn size={16} aria-hidden="true" />
-        )}
-        {submitting ? t("auth.signingIn") : t("auth.signIn")}
-      </Btn>
+      <Submit
+        busy={submitting}
+        icon={<LogIn size={16} aria-hidden="true" />}
+        label={t("auth.v2.signIn")}
+        busyLabel={t("auth.v2.signingIn")}
+      />
     </form>
   );
 }
@@ -357,17 +395,16 @@ function RegisterForm({
   if (done) {
     const pending = done.requires_approval;
     return (
-      <div className="auth-panel" data-testid="register-success">
-        <div className={`auth-icon${pending ? " wait" : " ok"}`} aria-hidden="true">
+      <div data-testid="register-success">
+        <div className={`v2-auth-icon${pending ? " wait" : " ok"}`} aria-hidden="true">
           {pending ? (
-            <Hourglass size={24} strokeWidth={1.7} />
+            <Hourglass size={22} strokeWidth={1.8} />
           ) : (
-            <CircleCheck size={24} strokeWidth={1.7} />
+            <CircleCheck size={22} strokeWidth={1.8} />
           )}
         </div>
-        <div className="kicker">{t("auth.registerKicker")}</div>
-        <h1>{t(pending ? "auth.registerPendingTitle" : "auth.registerDoneTitle")}</h1>
-        <p className="auth-subtitle">
+        <h2>{t(pending ? "auth.registerPendingTitle" : "auth.registerDoneTitle")}</h2>
+        <p className="sub">
           {pending
             ? t("auth.registerPendingBody", {
                 username: done.username,
@@ -378,106 +415,93 @@ function RegisterForm({
                 days: done.valid_days,
               })}
         </p>
-        <div className="auth-success">
+        <div className="v2-auth-facts">
           <div>
-            <span>{t("auth.email")}</span>
+            <span>{t("auth.v2.email")}</span>
             <b>{done.email}</b>
           </div>
           <div>
-            <span>{t(pending ? "auth.accountStatus" : "auth.validUntil")}</span>
+            <span>{t(pending ? "auth.v2.accountStatus" : "auth.v2.validUntil")}</span>
             <b data-testid="register-status">
               {pending
-                ? t("auth.statusPending")
+                ? t("auth.v2.statusPending")
                 : done.expires_at
                   ? new Date(done.expires_at).toLocaleString()
                   : "—"}
             </b>
           </div>
         </div>
-        <Btn className="auth-submit" primary onClick={() => onRegistered(done)}>
+        <button className="v2-btn primary v2-auth-submit" type="button" onClick={() => onRegistered(done)}>
           <LogIn size={16} aria-hidden="true" />
-          {t("auth.goToSignIn")}
-        </Btn>
+          {t("auth.v2.goToSignIn")}
+        </button>
       </div>
     );
   }
 
   return (
-    <form className="auth-panel" onSubmit={submit} noValidate>
-      <div className="auth-icon" aria-hidden="true">
-        <UserPlus size={24} strokeWidth={1.7} />
-      </div>
-      <div className="kicker">{t("auth.registerKicker")}</div>
-      <h1>{t("auth.registerTitle")}</h1>
-      <p className="auth-subtitle">
+    <form onSubmit={submit} noValidate>
+      <h2>{t("auth.registerTitle")}</h2>
+      <p className="sub">
         {t(requiresApproval ? "auth.registerSubtitleApproval" : "auth.registerSubtitle")}
       </p>
 
-      <div className="auth-fields">
-        <div className="auth-field">
-          <label htmlFor="reg-username">{t("auth.username")}</label>
+      <div className="v2-auth-fields">
+        <Field id="reg-username" label={t("auth.v2.username")} hint={t("auth.usernameHint")}>
           <input
             id="reg-username"
-            className="input"
+            className="v2-input"
             autoComplete="username"
             value={username}
             onChange={(event) => setUsername(event.target.value)}
             disabled={submitting}
             autoFocus
           />
-          <span className="auth-hint">{t("auth.usernameHint")}</span>
-        </div>
-        <div className="auth-field">
-          <label htmlFor="reg-email">{t("auth.companyEmail")}</label>
+        </Field>
+        <Field id="reg-email" label={t("auth.v2.companyEmail")} hint={t("auth.companyEmailHint")}>
           <input
             id="reg-email"
-            className="input"
+            className="v2-input"
             type="email"
             autoComplete="email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
             disabled={submitting}
           />
-          <span className="auth-hint">{t("auth.companyEmailHint")}</span>
-        </div>
-        <div className="auth-field">
-          <label htmlFor="reg-password">{t("auth.password")}</label>
+        </Field>
+        <Field id="reg-password" label={t("auth.v2.password")} hint={t("auth.passwordHint")}>
           <input
             id="reg-password"
-            className="input"
+            className="v2-input"
             type="password"
             autoComplete="new-password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             disabled={submitting}
           />
-          <span className="auth-hint">{t("auth.passwordHint")}</span>
-        </div>
-        <div className="auth-field">
-          <label htmlFor="reg-confirm">{t("auth.confirmPassword")}</label>
+        </Field>
+        <Field id="reg-confirm" label={t("auth.v2.confirmPassword")}>
           <input
             id="reg-confirm"
-            className="input"
+            className="v2-input"
             type="password"
             autoComplete="new-password"
             value={confirm}
             onChange={(event) => setConfirm(event.target.value)}
             disabled={submitting}
           />
-        </div>
+        </Field>
       </div>
 
-      <div className="auth-error" role="alert" aria-live="polite">
+      <div className="v2-auth-error" role="alert" aria-live="polite">
         {error}
       </div>
-      <Btn className="auth-submit" type="submit" primary disabled={submitting}>
-        {submitting ? (
-          <LoaderCircle className="spin" size={16} aria-hidden="true" />
-        ) : (
-          <UserPlus size={16} aria-hidden="true" />
-        )}
-        {submitting ? t("auth.registering") : t("auth.createAccount")}
-      </Btn>
+      <Submit
+        busy={submitting}
+        icon={<UserPlus size={16} aria-hidden="true" />}
+        label={t("auth.v2.createAccount")}
+        busyLabel={t("auth.v2.registering")}
+      />
     </form>
   );
 }

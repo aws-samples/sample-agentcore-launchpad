@@ -2404,9 +2404,15 @@ through the same backend routes and permission checks as the classic pages.
 - **Switching.** The classic topbar has a "Try V2" chip; V2's top bar has
   "Classic console". The choice is a per-browser convenience in `localStorage`
   (`lib/ui-version.ts`, key `launchpad_ui_version`, exposed reactively through
-  `useUiVersion()`); when it is `v2` the index route `/` redirects to `/v2`.
-  Opening any `/v2` page also selects V2. Storage that is blocked simply means
-  classic (the switch still applies to the open tab).
+  `useUiVersion()`). **V2 is the default**: only a stored `v1` (an explicit
+  "Classic console" click) keeps a browser on the classic console; otherwise the
+  index route `/` redirects to `/v2`. Opening any `/v2` page also selects V2.
+  Storage that is blocked or empty means V2 (the switch still applies to the open
+  tab).
+- **Pre-shell pages.** Sign-in / register (`auth/AuthGate.tsx`), the
+  session/workspace spinners and the "no workspace granted" notice
+  (`workspace/WorkspaceProvider.tsx`) always wear the V2 chrome
+  (`v2/AuthFrame.tsx` + `v2/auth.css`), whichever console is chosen.
 - **Classic modules inside V2.** The classic route group renders through
   `ConsoleShell` in `App.tsx`: the classic `<Shell />`, or — once V2 is chosen —
   `<V2Shell classic />`. So `/chat`, `/agents/…`, `/registry` keep their URLs in both

@@ -11,13 +11,9 @@
     "backendDown": "后端不可达"
   },
   "auth": {
-    "kicker": "// 操作员访问",
     "title": "登录",
-    "subtitle": "请输入此控制台的本地操作员账号和密码。",
     "username": "用户名",
     "password": "密码",
-    "signIn": "登录",
-    "signingIn": "正在登录",
     "checking": "正在检查会话",
     "missingCredentials": "请输入用户名和密码。",
     "invalidCredentials": "用户名或密码错误。",
@@ -25,21 +21,13 @@
     "operator": "操作员",
     "logout": "退出登录",
     "register": "注册",
-    "registerKicker": "// 申请访问",
     "registerTitle": "创建账户",
     "registerSubtitle": "使用公司邮箱注册，新账户有效期为 7 天。",
-    "companyEmail": "公司邮箱",
     "companyEmailHint": "不接受公共邮箱（Gmail、QQ、163、Outlook 等）。",
     "usernameHint": "3-32 个字符：字母、数字、点、下划线或连字符。",
     "passwordHint": "至少 8 个字符。",
-    "confirmPassword": "确认密码",
-    "createAccount": "创建账户",
-    "registering": "创建中",
     "registerDoneTitle": "账户已创建",
     "registerDoneBody": "{{username}} 已可使用，有效期 {{days}} 天。到期前请联系管理员延期。",
-    "goToSignIn": "去登录",
-    "validUntil": "有效期至",
-    "email": "邮箱",
     "missingRegistrationFields": "请填写用户名、公司邮箱和密码。",
     "passwordMismatch": "两次输入的密码不一致。",
     "registerFailed": "无法创建账户，请检查网络后重试。",
@@ -60,14 +48,49 @@
     "registerSubtitleApproval": "使用公司邮箱注册。新账户需管理员审批通过后才能登录。",
     "registerPendingTitle": "等待审批",
     "registerPendingBody": "{{username}} 已提交审核。需管理员审批通过后才能登录，{{days}} 天有效期从审批时开始计算。",
-    "accountStatus": "状态",
-    "statusPending": "待审批",
     "accountPending": "该账户正在等待管理员审批。",
     "adminRequired": {
       "meta": "仅管理员",
       "title": "需要管理员权限",
       "body": "该操作会改变已部署状态、凭证或治理策略，因此仅限管理员使用。",
       "toast": "该操作需要管理员权限。"
+    },
+    "v2": {
+      "heroTitle": "在 Amazon Bedrock AgentCore 上构建、运行和评估 Agent",
+      "heroBody": "一个控制台覆盖 Agent 全生命周期：从需求到部署、观测和持续评估，全部运行在你自己的 AWS 账号中。",
+      "steps": {
+        "create": {
+          "title": "创建",
+          "body": "Claude Agent SDK、托管 Harness、Strands Studio 画布或自带代码。"
+        },
+        "deploy": {
+          "title": "部署",
+          "body": "统一流水线构建并部署到 AgentCore Runtime 或 Harness。"
+        },
+        "invoke": {
+          "title": "调用",
+          "body": "在控制台对话，或通过 API Key 调用 /v1 接口。"
+        },
+        "observe": {
+          "title": "观测与评估",
+          "body": "链路追踪、Token 成本、评估任务和 A/B 实验。"
+        }
+      },
+      "subtitle": "使用你的 Launchpad 账号登录。",
+      "signIn": "登录",
+      "signingIn": "正在登录…",
+      "register": "注册",
+      "username": "用户名",
+      "password": "密码",
+      "companyEmail": "公司邮箱",
+      "confirmPassword": "确认密码",
+      "createAccount": "创建账户",
+      "registering": "创建中…",
+      "goToSignIn": "去登录",
+      "email": "邮箱",
+      "validUntil": "有效期至",
+      "accountStatus": "状态",
+      "statusPending": "待审批"
     }
   },
   "nav": {
