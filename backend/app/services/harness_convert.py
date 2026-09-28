@@ -30,6 +30,7 @@ from uuid import uuid4
 
 from app.core.config import DATA_DIR
 from app.core.errors import AppError
+from app.harness_tool_access import NATIVE_HARNESS_TOOLS, selected_native_tools
 from app.schemas.agent import AgentSpec, KnowledgeBaseRef, MemoryConfig, ToolRef
 from app.schemas.requirements import resolve_pins
 from app.services.workspace import WorkspaceContext
@@ -65,6 +66,16 @@ GRAFT_START = "# <launchpad-config-bundle:v2>"
 GRAFT_END = "# </launchpad-config-bundle:v2>"
 KB_GRAFT_START = "# <launchpad-direct-kb:v1>"
 KB_GRAFT_END = "# </launchpad-direct-kb:v1>"
+NATIVE_GRAFT_START = "# <launchpad-native-tools:v1>"
+NATIVE_GRAFT_END = "# </launchpad-native-tools:v1>"
+# The installed CLI's own codegen template: grafted native tools are the exact
+# implementation the export would have emitted.
+NATIVE_TOOL_TEMPLATE = (
+    DATA_DIR / "agentcore-cli" / "node_modules" / "@aws" / "agentcore" / "dist" / "assets"
+    / "python" / "http" / "strands" / "base" / "main.py"
+)
+_NATIVE_TEMPLATE_FLAGS = {"shell": "hasShell", "file_operations": "hasFileOperations"}
+_NATIVE_TEMPLATE_IMPORTS = {"shell": "import subprocess", "file_operations": "import os"}
 GW_SOFTFAIL_START = "# <launchpad-gateway-softfail:v1>"
 GW_SOFTFAIL_END = "# </launchpad-gateway-softfail:v1>"
 GW_LAZY_TOKEN_MARK = "_launchpad_lazy_gateway_transport"
@@ -324,6 +335,52 @@ from launchpad_kb_tools import kb_deep_search, kb_search
 {match.group(0)}
 tools.extend([kb_search, kb_deep_search])"""
     return main_py[:match.start()] + graft + main_py[match.end():]
+
+
+def native_tool_block(template: str, name: str) -> str:
+    """The ``@tool def <name>`` block of the CLI template, ending with its append.
+
+    The template gates it as ``{{#if <flag>}} ... {{/if}}`` without nested
+    Handlebars; anything else means the CLI codegen changed."""
+    flag = _NATIVE_TEMPLATE_FLAGS[name]
+    for body in re.findall(r"\{\{#if " + flag + r"\}\}\n(.*?)\n\{\{/if\}\}", template, re.S):
+        if f"def {name}(" in body:
+            if "{{" in body or not body.rstrip().endswith(f"tools.append({name})"):
+                break
+            return body.rstrip()
+    raise ConversionError(
+        f"native tool graft: no self-contained {name} block in the agentcore CLI template "
+        "(agentcore CLI codegen changed?)"
+    )
+
+
+def graft_native_tools(main_py: str, names: list[str], template: str) -> str:
+    """Add the native Harness tools the export dropped.
+
+    The Harness accepts a bare builtin name (``file_operations``) in
+    allowedTools, but the CLI export only enables a builtin when an entry
+    matches ``builtin/<name>`` — a bare entry is silently dropped, and the
+    Runtime twin can no longer read its Skills' ``references/`` files."""
+    if NATIVE_GRAFT_START in main_py and NATIVE_GRAFT_END in main_py:
+        return main_py
+    missing = [n for n in names if not re.search(rf"^def {n}\(", main_py, re.M)]
+    if not missing:
+        return main_py
+    match = _TOOLS_COLLECTION_RE.search(main_py)
+    if match is None:
+        raise ConversionError(
+            "native tool graft anchor missing: tools = [] collection not found "
+            "(agentcore CLI codegen changed?)"
+        )
+    imports = "\n".join(
+        _NATIVE_TEMPLATE_IMPORTS[n] for n in missing
+        if not re.search(rf"^{_NATIVE_TEMPLATE_IMPORTS[n]}$", main_py, re.M)
+    )
+    blocks = "\n\n".join(native_tool_block(template, n) for n in missing)
+    parts = (NATIVE_GRAFT_START, imports, blocks, NATIVE_GRAFT_END)
+    graft = "\n\n".join(part for part in parts if part)
+    head = main_py[:match.start()] + match.group(0).rstrip()
+    return head + "\n\n" + graft + "\n\n" + main_py[match.end():].lstrip("\n")
 
 
 def _is_agent_apply(node: ast.AST) -> bool:
@@ -867,6 +924,17 @@ def build_conversion_spec(
         }
         grafted["launchpad_kb_tools.py"] = render_direct_kb_source(kbs)
         grafted["main.py"] = graft_direct_kb_tools(files["main.py"])
+    natives = [n for n in NATIVE_HARNESS_TOOLS if n in selected_native_tools(source_spec)]
+    if natives:
+        dropped = [n for n in natives if not re.search(rf"^def {n}\(", grafted["main.py"], re.M)]
+        if dropped:
+            if not NATIVE_TOOL_TEMPLATE.is_file():
+                raise ConversionError(
+                    f"native tool graft needs the agentcore CLI template ({NATIVE_TOOL_TEMPLATE})"
+                )
+            grafted["main.py"] = graft_native_tools(
+                grafted["main.py"], dropped, NATIVE_TOOL_TEMPLATE.read_text(encoding="utf-8")
+            )
     grafted["main.py"] = graft_config_bundle(
         grafted["main.py"],
         default_system_prompt=prompt_default,
@@ -903,6 +971,8 @@ def build_conversion_spec(
         "wired (native image/PDF bytes and v1 acknowledgement)"
         if native_input else "unsupported (export lacks the Mantle model adapter)"
     )
+    if natives:
+        notes["native_tools"] = f"wired ({', '.join(natives)} from the agentcore CLI template)"
     if kbs:
         notes["knowledge_bases"] = (
             "wired (direct kb_search + kb_deep_search; Harness KB Gateway replaced)"
