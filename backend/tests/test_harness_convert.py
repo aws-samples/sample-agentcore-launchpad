@@ -1190,3 +1190,80 @@ def test_conversion_applies_both_gateway_grafts(monkeypatch):
     assert hc.GW_LAZY_TOKEN_MARK in spec.code_bundle["mcp_client/client.py"]
     compile(spec.code_bundle["mcp_client/client.py"], "client.py", "exec")
     compile(spec.code_bundle["main.py"], "main.py", "exec")
+
+
+# ─── native Harness tools the export drops ──────────────────────────────────
+# Live 2026-09-27: a Harness with allowedTools ['@launchpad_kb_gw', 'skills',
+# 'file_operations'] exported without file_operations — the CLI only enables a
+# builtin whose allowedTools entry matches `builtin/<name>` — so the Runtime twin
+# could not read its Skill's references/output-template.md.
+CLI_TEMPLATE = (FIXTURES / "agentcore_cli_strands_main_template.py").read_text()
+# the real export of that Harness (account id redacted): no shell, no file_operations
+DROPPED_MAIN_PY = (FIXTURES / "harness_export_kb_skills_fileops_dropped_main.py").read_text()
+
+
+def test_native_graft_adds_the_cli_file_operations_tool_idempotently():
+    assert "def file_operations(" not in DROPPED_MAIN_PY
+    grafted = hc.graft_native_tools(DROPPED_MAIN_PY, ["file_operations"], CLI_TEMPLATE)
+
+    compile(grafted, "main.py", "exec")
+    assert grafted.count("def file_operations(") == 1
+    assert grafted.count("tools.append(file_operations)") == 1
+    assert "\nimport os\n" in grafted and "def shell(" not in grafted
+    assert grafted.index("tools = []") < grafted.index(hc.NATIVE_GRAFT_START)
+    assert grafted.index(hc.NATIVE_GRAFT_END) < grafted.index("Agent(")
+    assert hc.graft_native_tools(grafted, ["file_operations"], CLI_TEMPLATE) == grafted
+
+
+def test_native_graft_is_a_noop_when_the_export_kept_the_tool():
+    exported = hc.graft_native_tools(DROPPED_MAIN_PY, ["shell"], CLI_TEMPLATE)
+    marked = exported.replace(hc.NATIVE_GRAFT_START, "").replace(hc.NATIVE_GRAFT_END, "")
+    assert hc.graft_native_tools(marked, ["shell"], CLI_TEMPLATE) == marked
+
+
+def test_native_graft_fails_loudly_on_codegen_drift():
+    with pytest.raises(hc.ConversionError, match="tools = \\[\\] collection"):
+        drifted = DROPPED_MAIN_PY.replace("tools = []", "tools = [x]")
+        hc.graft_native_tools(drifted, ["shell"], CLI_TEMPLATE)
+    with pytest.raises(hc.ConversionError, match="no self-contained file_operations"):
+        hc.graft_native_tools(DROPPED_MAIN_PY, ["file_operations"], "{{#if hasShell}}\n{{/if}}")
+
+
+def test_grafted_file_operations_reads_a_skill_reference(tmp_path):
+    block = hc.native_tool_block(CLI_TEMPLATE, "file_operations")
+    scope: dict = {"tool": lambda fn: fn, "tools": []}
+    exec("import os\n" + block, scope)  # noqa: S102 — the CLI's own template code
+    ref = tmp_path / "references" / "output-template.md"
+    ref.parent.mkdir()
+    ref.write_text("| 项目 | 上限 |\n")
+
+    assert "项目" in scope["file_operations"]("view", str(ref))
+    assert scope["tools"] == [scope["file_operations"]]
+
+
+def test_build_conversion_spec_restores_selected_native_tools(monkeypatch):
+    template = FIXTURES / "agentcore_cli_strands_main_template.py"
+    monkeypatch.setattr(hc, "NATIVE_TOOL_TEMPLATE", template)
+    source = _source_agent()
+    source.spec = {**source.spec, "native_tools": ["file_operations"]}
+    files = {"main.py": DROPPED_MAIN_PY, "pyproject.toml": PYPROJECT}
+
+    spec = hc.build_conversion_spec(
+        source, files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", ws_ctx({})
+    )
+
+    assert "def file_operations(" in spec.code_bundle["main.py"]
+    assert "def shell(" not in spec.code_bundle["main.py"]
+    assert spec.conversion_notes["native_tools"].startswith("wired (file_operations")
+
+
+def test_build_conversion_spec_needs_no_template_without_native_tools(monkeypatch):
+    monkeypatch.setattr(hc, "NATIVE_TOOL_TEMPLATE", Path("/nonexistent/main.py"))
+    files = {"main.py": DROPPED_MAIN_PY, "pyproject.toml": PYPROJECT}
+
+    spec = hc.build_conversion_spec(
+        _source_agent(), files, ["bedrock-agentcore==1.17.*"], "aurora-support-rt", ws_ctx({})
+    )
+
+    assert "def file_operations(" not in spec.code_bundle["main.py"]
+    assert "native_tools" not in spec.conversion_notes

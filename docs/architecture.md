@@ -2083,7 +2083,11 @@ Memory and Skills are disabled, the Skills-only form when Memory is disabled,
 the session/user form, and the session/user/Skills
 form. Tool-free exports can carry an unused gateway-client scaffold; only that
 inert case skips the gateway grafts, while configured or constructed clients must
-still pass their anchors. The emitted `zip_runtime` spec carries the harness's gateway
+still pass their anchors. Native Harness tools (`shell`, `file_operations`) that the source
+Harness selects are re-grafted when the export drops them — the CLI only enables a
+builtin whose `allowedTools` entry matches `builtin/<name>`, while Launchpad and the
+Harness service use the bare name — from the installed CLI's own template, so the twin
+can still read its Skills' `references/` files. The emitted `zip_runtime` spec carries the harness's gateway
 `ToolRef`s, skill prefixes, memory and KB configuration forward, records what was
 wired in `conversion_notes`, and stamps `source_harness` so `experiment_capability`
 reports the new agent eligible. The v1 "gateway MCP not wired" caveat is gone, not

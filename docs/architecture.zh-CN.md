@@ -1174,7 +1174,7 @@ Harness→runtime 转换出于同样这三条理由保留它的 gateway 工具�
 spec 的 `code_bundle`。`build_conversion_spec` 把 Launchpad 的配置捆绑契约嫁接到导出的
 `main.py` 上，这一步是必需的而不是修饰:导出代码把 `DEFAULT_SYSTEM_PROMPT` 写成常量，
 因此未经嫁接的转换做 A/B 实验时会像 harness 一样空转，所以嫁接锚点缺失会让整次转换失败，
-而不是发布一个静默无法 A/B 的 Agent。产出的 `zip_runtime` spec 把源 harness 的 gateway
+而不是发布一个静默无法 A/B 的 Agent。源 harness 选用的原生工具（`shell`、`file_operations`）若被导出丢掉，会从已安装 CLI 自带的模板重新嫁接回去——CLI 只在 `allowedTools` 条目匹配 `builtin/<name>` 时才启用内置工具，而 Launchpad 与 Harness 服务使用的是裸名称——这样孪生仍能读取技能的 `references/` 文件。产出的 `zip_runtime` spec 把源 harness 的 gateway
 `ToolRef`、技能前缀、memory 与知识库配置一并带过来，在 `conversion_notes` 里记下哪些被
 接通，并写上 `source_harness`，使 `experiment_capability` 判定新 Agent 具备实验资格。
 v1 那条「gateway MCP 未接线」的说明是被删掉了，不是被改了措辞。
