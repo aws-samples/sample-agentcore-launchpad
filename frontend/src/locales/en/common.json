@@ -11,13 +11,9 @@
     "backendDown": "BACKEND UNREACHABLE"
   },
   "auth": {
-    "kicker": "// OPERATOR ACCESS",
     "title": "Sign in",
-    "subtitle": "Enter the local operator credentials for this console.",
     "username": "USERNAME",
     "password": "PASSWORD",
-    "signIn": "SIGN IN",
-    "signingIn": "SIGNING IN",
     "checking": "Checking session",
     "missingCredentials": "Enter both username and password.",
     "invalidCredentials": "Username or password is incorrect.",
@@ -25,21 +21,13 @@
     "operator": "OPERATOR",
     "logout": "Sign out",
     "register": "REGISTER",
-    "registerKicker": "// REQUEST ACCESS",
     "registerTitle": "Create an account",
     "registerSubtitle": "Register with your company email. New accounts are valid for 7 days.",
-    "companyEmail": "COMPANY EMAIL",
     "companyEmailHint": "Public mailbox providers (Gmail, QQ, 163, Outlook…) are not accepted.",
     "usernameHint": "3-32 characters: letters, digits, dot, underscore or hyphen.",
     "passwordHint": "At least 8 characters.",
-    "confirmPassword": "CONFIRM PASSWORD",
-    "createAccount": "CREATE ACCOUNT",
-    "registering": "CREATING",
     "registerDoneTitle": "Account created",
     "registerDoneBody": "{{username}} is ready to use and valid for {{days}} days. Ask an administrator to extend it before it lapses.",
-    "goToSignIn": "GO TO SIGN IN",
-    "validUntil": "VALID UNTIL",
-    "email": "EMAIL",
     "missingRegistrationFields": "Fill in username, company email and password.",
     "passwordMismatch": "The two passwords do not match.",
     "registerFailed": "Unable to create the account. Check the connection and try again.",
@@ -60,14 +48,49 @@
     "registerSubtitleApproval": "Register with your company email. An administrator reviews new accounts before they can sign in.",
     "registerPendingTitle": "Waiting for approval",
     "registerPendingBody": "{{username}} was submitted for review. An administrator has to approve it before you can sign in; the {{days}}-day validity starts then.",
-    "accountStatus": "STATUS",
-    "statusPending": "PENDING APPROVAL",
     "accountPending": "This account is waiting for administrator approval.",
     "adminRequired": {
       "meta": "administrator only",
       "title": "Administrator access required",
       "body": "This action changes deployed state, credentials, or governance posture, so it is limited to administrators.",
       "toast": "Administrator access is required for this action."
+    },
+    "v2": {
+      "heroTitle": "Build, run and evaluate agents on Amazon Bedrock AgentCore",
+      "heroBody": "One console for the whole agent lifecycle — from a requirement to a deployed, observed and continuously evaluated agent in your own AWS account.",
+      "steps": {
+        "create": {
+          "title": "Create",
+          "body": "Claude Agent SDK, managed Harness, the Strands Studio canvas or your own code."
+        },
+        "deploy": {
+          "title": "Deploy",
+          "body": "One pipeline builds and deploys to AgentCore Runtime or Harness."
+        },
+        "invoke": {
+          "title": "Invoke",
+          "body": "Chat in the console, or call the /v1 API with an API key."
+        },
+        "observe": {
+          "title": "Observe & evaluate",
+          "body": "Traces, token cost, evaluation runs and A/B experiments."
+        }
+      },
+      "subtitle": "Sign in with your Launchpad account.",
+      "signIn": "Sign in",
+      "signingIn": "Signing in…",
+      "register": "Register",
+      "username": "Username",
+      "password": "Password",
+      "companyEmail": "Company email",
+      "confirmPassword": "Confirm password",
+      "createAccount": "Create account",
+      "registering": "Creating…",
+      "goToSignIn": "Go to sign in",
+      "email": "Email",
+      "validUntil": "Valid until",
+      "accountStatus": "Status",
+      "statusPending": "Pending approval"
     }
   },
   "nav": {

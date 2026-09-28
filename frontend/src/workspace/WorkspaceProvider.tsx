@@ -1,4 +1,4 @@
-import { LoaderCircle, LogOut } from "lucide-react";
+import { LogOut } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -6,9 +6,9 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/auth-context";
 import { Panel, ViewHead } from "../components";
 import { AnnouncementFeed } from "../components/AnnouncementFeed";
-import { LangSwitcher } from "../layout/LangSwitcher";
 import { api, AUTH_UNAUTHORIZED_EVENT, type Workspace } from "../lib/api";
 import { storedWorkspaceId, storeWorkspaceId } from "../lib/workspace-header";
+import { V2AuthFrame, V2AuthLoading } from "../v2/AuthFrame";
 import { WorkspaceContext } from "./workspace-context";
 
 interface ListState {
@@ -138,18 +138,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
 function WorkspaceLoading() {
   const { t } = useTranslation();
-  return (
-    <div className="auth-loading" role="status">
-      <LoaderCircle size={22} strokeWidth={1.8} aria-hidden="true" />
-      <span className="sr-only">{t("workspacesPage.resolving")}</span>
-    </div>
-  );
+  return <V2AuthLoading label={t("workspacesPage.resolving")} />;
 }
 
 /**
  * A member whose account has no grant yet. Every workspace-scoped route would
  * answer 403, so the console says who can fix it instead of rendering pages that
- * all fail. Wearing the login page's chrome, because it is the same kind of
+ * all fail. Wearing the sign-in page's V2 chrome, because it is the same kind of
  * dead end for workspace operations: signing out stays reachable, while
  * installation-wide announcements can still be read below the access message.
  */
@@ -157,45 +152,36 @@ function NoWorkspaceGranted() {
   const { t } = useTranslation();
   const { authRequired, username, logout } = useAuth();
   return (
-    <div className="auth-page no-workspace-page">
-      <header className="auth-topbar">
-        <div className="brand">
-          <span className="glyph" aria-hidden="true" />
-          AGENTCORE<em>//</em>LAUNCHPAD
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <LangSwitcher />
-          {authRequired ? (
-            <button
-              type="button"
-              className="logout-btn"
-              onClick={() => void logout()}
-              aria-label={t("auth.logout")}
-              data-testid="no-workspace-logout"
-            >
-              <LogOut size={14} aria-hidden="true" />
-              <span className="logout-label">{t("auth.logout")}</span>
-            </button>
-          ) : null}
-        </div>
-      </header>
-      <main className="auth-main">
-        <div className="no-workspace">
-          <ViewHead
-            kicker={t("workspacesPage.kicker")}
-            title={t("workspacesPage.noneTitle")}
-            meta={t("workspacesPage.noneMeta", { username: username ?? "—" })}
-          />
-          <Panel brk>
-            <div className="empty" data-testid="no-workspace-body">
-              {t("workspacesPage.noneBody")}
-            </div>
-          </Panel>
-          {/* Notices are hub-global, so they remain useful before a member has
-              any workspace grant. No workspace APIs are mounted by this feed. */}
-          <AnnouncementFeed />
-        </div>
-      </main>
-    </div>
+    <V2AuthFrame
+      testId="no-workspace-page"
+      narrow
+      end={authRequired ? (
+        <button
+          type="button"
+          className="v2-btn sm"
+          onClick={() => void logout()}
+          data-testid="no-workspace-logout"
+        >
+          <LogOut size={13} aria-hidden="true" />
+          {t("auth.logout")}
+        </button>
+      ) : null}
+    >
+      <div className="v2-auth-narrow v2-classic">
+        <ViewHead
+          kicker={t("workspacesPage.kicker")}
+          title={t("workspacesPage.noneTitle")}
+          meta={t("workspacesPage.noneMeta", { username: username ?? "—" })}
+        />
+        <Panel brk>
+          <div className="empty" data-testid="no-workspace-body">
+            {t("workspacesPage.noneBody")}
+          </div>
+        </Panel>
+        {/* Notices are hub-global, so they remain useful before a member has
+            any workspace grant. No workspace APIs are mounted by this feed. */}
+        <AnnouncementFeed />
+      </div>
+    </V2AuthFrame>
   );
 }

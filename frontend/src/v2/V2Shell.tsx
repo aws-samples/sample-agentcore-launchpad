@@ -10,6 +10,7 @@ import { useAuth } from "../auth/auth-context";
 import { RouteChunk } from "../layout/RouteChunk";
 import { setUiVersion } from "../lib/ui-version";
 import { useWorkspace } from "../workspace/workspace-context";
+import { V2Lang } from "./Lang";
 import { V2Logo } from "./Logo";
 import { V2_NAV, type V2NavItem } from "./nav";
 import { V2ToastProvider } from "./ui";
@@ -61,21 +62,6 @@ function WorkspaceSelect() {
         ))}
       </select>
     </label>
-  );
-}
-
-function Lang() {
-  const { i18n } = useTranslation();
-  const lang = i18n.resolvedLanguage ?? "en";
-  return (
-    <div className="v2-lang">
-      <button type="button" className={lang.startsWith("zh") ? "on" : ""} onClick={() => void i18n.changeLanguage("zh-CN")}>
-        中文
-      </button>
-      <button type="button" className={lang === "en" ? "on" : ""} onClick={() => void i18n.changeLanguage("en")}>
-        EN
-      </button>
-    </div>
   );
 }
 
@@ -142,7 +128,7 @@ export function V2Shell({ classic = false }: { classic?: boolean }) {
           </nav>
           <div className="v2-top-right">
             <WorkspaceSelect />
-            <Lang />
+            <V2Lang />
             <button type="button" className="v2-btn sm" onClick={switchToClassic} data-testid="v2-switch-classic">
               <Repeat size={13} aria-hidden="true" />
               {t("v2.switchClassic")}

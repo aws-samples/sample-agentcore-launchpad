@@ -72,7 +72,7 @@ body.v2-body ::selection { background: #bedaff; color: #1d2129; }
 .v2-top-tabs .on { background: #fff; color: var(--v2-primary); box-shadow: var(--v2-shadow); }
 .v2-top-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .v2-lang { display: flex; border: 1px solid var(--v2-line); border-radius: 6px; overflow: hidden; }
-.v2-lang button { border: 0; background: #fff; padding: 3px 10px; font-size: 12px; color: var(--v2-ink-2); cursor: pointer; }
+.v2-lang button { border: 0; background: #fff; padding: 3px 10px; font-size: 12px; color: var(--v2-ink-2); cursor: pointer; white-space: nowrap; }
 .v2-lang button.on { background: var(--v2-primary-soft); color: var(--v2-primary); }
 .v2-user { display: flex; align-items: center; gap: 8px; color: var(--v2-ink-2); font-size: 13px; }
 .v2-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--v2-primary-soft); color: var(--v2-primary); display: grid; place-items: center; font-weight: 600; font-size: 12px; }
