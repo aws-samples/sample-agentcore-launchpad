@@ -68,10 +68,17 @@ function wrap(text: string, maxUnits: number, maxLines: number): string[] {
   return lines;
 }
 
-function selectedNotes(fb: AssistantFishbone, dim: FishboneDimension): FishboneBarrier[] {
+/**
+ * The notes one bone carries: the selected barriers; else the confirmed ones (a model
+ * that confirmed but did not select must not leave the bone blank); else the
+ * architect's suggestions still awaiting the customer's yes (drawn dashed).
+ */
+function boneNotes(fb: AssistantFishbone, dim: FishboneDimension): FishboneBarrier[] {
   const all = fb.barriers[dim] ?? [];
   const picked = all.filter((b) => b.selected && b.confirmed);
-  return picked.slice(0, 3);
+  if (picked.length) return picked.slice(0, 3);
+  const confirmed = all.filter((b) => b.confirmed);
+  return (confirmed.length ? confirmed : all).slice(0, 3);
 }
 
 const COVERAGE_TONE: Record<string, ChipTone> = {
@@ -119,7 +126,7 @@ export function FishboneDiagram({ fishbone }: { fishbone: AssistantFishbone }) {
     const dir = up ? -1 : 1;
     const tipX = bx - BONE_DX;
     const tipY = SPINE_Y + dir * BONE_DY;
-    const notes = selectedNotes(fishbone, dim);
+    const notes = boneNotes(fishbone, dim);
     const cov = fishbone.coverage[dim];
     const labelY = up ? tipY - 14 : tipY + 24;
     return (
@@ -141,15 +148,20 @@ export function FishboneDiagram({ fishbone }: { fishbone: AssistantFishbone }) {
           const py = SPINE_Y + dir * BONE_DY * tt;
           const x = px - 8 - NOTE_W;
           const y = py - NOTE_H / 2;
-          const lines = wrap(n.sticky_text, 16, 3);
+          const suggested = !n.confirmed;
+          const lines = suggested
+            ? [t("fishbone.suggested"), ...wrap(n.sticky_text, 16, 2)]
+            : wrap(n.sticky_text, 16, 3);
           return (
-            <g key={i}>
+            <g key={i} data-suggested={suggested || undefined}>
               <line x1={px} y1={py} x2={x + NOTE_W} y2={py} stroke={C.line} strokeWidth={1.5} />
-              <rect x={x} y={y} width={NOTE_W} height={NOTE_H} fill={C.note} stroke={C.noteLine} />
-              <rect x={x} y={y} width={3} height={NOTE_H} fill={C.amber} />
+              <rect x={x} y={y} width={NOTE_W} height={NOTE_H} fill={C.note}
+                    stroke={suggested ? C.ink3 : C.noteLine} strokeDasharray={suggested ? "5 4" : undefined} />
+              {!suggested && <rect x={x} y={y} width={3} height={NOTE_H} fill={C.amber} />}
               {lines.map((ln, k) => (
-                <text key={k} x={x + 10} y={y + 17 + k * 14} fill={C.ink} fontSize={11}
-                      fontFamily="ui-sans-serif, system-ui, sans-serif">
+                <text key={k} x={x + 10} y={y + 17 + k * 14} fill={suggested && k === 0 ? C.ink3 : suggested ? C.ink2 : C.ink}
+                      fontSize={suggested && k === 0 ? 10 : 11}
+                      fontFamily={suggested && k === 0 ? "ui-monospace, monospace" : "ui-sans-serif, system-ui, sans-serif"}>
                   {ln}
                 </text>
               ))}
@@ -241,7 +253,7 @@ export function FishboneDiagram({ fishbone }: { fishbone: AssistantFishbone }) {
                   </td>
                   <td>
                     <Chip tone={n.confirmed ? "good" : "warn"}>
-                      {n.confirmed ? t("fishbone.confirmed") : t("fishbone.unconfirmed")}
+                      {n.confirmed ? t("fishbone.confirmed") : t("fishbone.suggested")}
                     </Chip>{" "}
                     {n.selected && <Chip tone="muted">{t("fishbone.selected")}</Chip>}
                   </td>

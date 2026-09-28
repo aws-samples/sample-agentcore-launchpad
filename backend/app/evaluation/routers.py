@@ -873,7 +873,7 @@ class JudgeCreate(BaseModel):
     lambda_timeout_s: int | None = Field(default=None, ge=1, le=300)
     model_id: str = "global.anthropic.claude-sonnet-5"
     level: str = Field(default="TRACE", pattern="^(TOOL_CALL|TRACE|SESSION)$")
-    description: str = Field(default="", max_length=1000)
+    description: str = Field(default="", max_length=200)  # AWS EvaluatorDescription max
     rating_scale: list[RatingScaleItem] | None = Field(default=None, min_length=2)
 
 
@@ -1054,7 +1054,7 @@ class JudgeUpdate(BaseModel):
     lambda_timeout_s: int | None = Field(default=None, ge=1, le=300)
     model_id: str = "global.anthropic.claude-sonnet-5"
     level: str = Field(default="TRACE", pattern="^(TOOL_CALL|TRACE|SESSION)$")
-    description: str = Field(default="", max_length=1000)
+    description: str = Field(default="", max_length=200)  # AWS EvaluatorDescription max
     rating_scale: list[RatingScaleItem] | None = Field(default=None, min_length=2)
 
 

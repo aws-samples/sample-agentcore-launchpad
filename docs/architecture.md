@@ -1185,14 +1185,18 @@ tables and nothing else.
 **Launch-barrier fishbone (Agent-DLC DEFINE).** The preset's skill bundle carries the
 Agent-DLC five-dimension fishbone methodology (`references/fishbone-methodology.md`:
 认知 / 质量 / 责任 / 成本 / 性能 + 其他, one question at a time, business language,
-every note read back and confirmed, every dimension probed before it may be called
-empty, solutions parked, nothing invented). Its product is an optional, bounded
+every note read back and confirmed, every dimension asked about and — when the
+customer raises nothing — offered a scenario-derived suggested barrier to confirm,
+reword or strike, solutions parked, nothing recorded as confirmed without the
+customer's yes). Its product is an optional, bounded
 `fishbone` member of the proposal block — metadata (customer, date, scenario,
 `internal|b2b|b2c`), per-dimension coverage (`confirmed|explored_empty|unresolved`),
 barriers (`sticky_text`, evidence, redacted quote, `confirmed`, `selected`) and a
 parking lot — validated cross-field like the rest of the contract (exactly the six
 dimensions, ≤ 3 selected per dimension, selected ⇒ confirmed, coverage consistent with
-the notes; a violation is an *invalid* revision) and omitted from the stored content
+the notes, an `unresolved` dimension never blank — it carries the unconfirmed
+suggestion, drawn as a dashed "awaiting confirmation" note — and ≥ 1 confirmed barrier;
+a violation is an *invalid* revision) and omitted from the stored content
 when absent, so older revisions hash unchanged. It is inert: the console renders it as
 an SVG fishbone in the Proposal panel (`FishboneDiagram`, self-contained markup with
 DOWNLOAD SVG / JSON; the JSON has the shape of the skill's `fishbone-data.json`), a

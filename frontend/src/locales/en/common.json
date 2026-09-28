@@ -4711,7 +4711,7 @@
   "fishbone": {
     "title": "Agent-DLC five-dimension fishbone · launch barriers",
     "head": "Agent scenario",
-    "footer": "Sticky notes are the customer's confirmed barriers (max 3 per dimension) — facts, not solutions. Dimensions probed and confirmed empty are labelled; unresolved ones are not drawn.",
+    "footer": "Sticky notes are the customer's confirmed barriers (max 3 per dimension) — facts, not solutions. Dashed notes are suggested barriers still awaiting the customer's confirmation; dimensions probed and confirmed empty are labelled.",
     "dim": {
       "cognition": "认知 Cognition",
       "quality": "质量 Quality",
@@ -4742,7 +4742,7 @@
       "status": "Status"
     },
     "confirmed": "confirmed",
-    "unconfirmed": "not confirmed",
+    "suggested": "awaiting confirmation",
     "selected": "on diagram"
   },
   "announcements": {

@@ -825,7 +825,7 @@ def test_more_than_ten_evaluators_are_refused_at_seed_and_plan_time():
     assert content is None and any("at most 10" in e and "applies 11 evaluators" in e
                                    for e in errors), errors
     content, errors = contract.parse_content(
-        {**old, "evaluation_plan": {"evaluators": evaluators[:10]}})
+        {**old, "evaluation_plan": {"evaluators": evaluators[:9]}})
     assert content is not None, errors
     cid, h = _conversation("local-operator")
     raw = _valid_plan(cid, h, with_code=False)
@@ -838,6 +838,63 @@ def test_more_than_ten_evaluators_are_refused_at_seed_and_plan_time():
     raw["evaluators"].pop()
     plan, errors = plan_contract.validate_plan(raw, PROPOSAL, revision=1, content_hash=h)
     assert plan is not None, errors
+
+
+def test_platform_additions_count_against_the_ten_at_proposal_time():
+    """Live failure: a seed of ten passed the proposal contract, then the draft added the
+    assertions judge (every scenario has assertions) and asset creation refused 11
+    evaluators. The proposal now counts the draft, and names what the platform added;
+    a seeded judge that already scores ``{assertions}`` replaces the platform's."""
+    from app.evaluation.agentcore_eval import ALL_BUILTIN_EVALUATORS
+
+    ids = list(ALL_BUILTIN_EVALUATORS)[:10]
+    evaluators = [{"kind": "existing", "key": f"e{i}", "title": eid, "evaluator_id": eid,
+                   "golden_test_ids": []} for i, eid in enumerate(ids)]
+    old = json.loads(json.dumps(PROPOSAL))
+    content, errors = contract.parse_content({**old, "evaluation_plan": {"evaluators": evaluators}})
+    assert content is None
+    assert any("applies 11 evaluators" in e and "the platform adds" in e and "draft_rubric" in e
+               for e in errors), errors
+    # a recommendation naming a builtin the seed does not list is counted as well
+    named = {**old, "evaluator_recommendations": [*old["evaluator_recommendations"],
+                                                  "Builtin.Stereotyping on replies"]}
+    content, errors = contract.parse_content(
+        {**named, "evaluation_plan": {"evaluators": evaluators[:9]}})
+    assert content is None
+    assert any("applies 11 evaluators" in e and "Builtin.Stereotyping" in e for e in errors)
+    own_judge = {"kind": "judge", "key": "asserts", "title": "Assertions", "name": "asserts",
+                 "level": "SESSION", "golden_test_ids": [],
+                 "instructions": "Session:\n{context}\nAssertions:\n{assertions}\nPass or fail."}
+    seed = {"evaluators": [*evaluators[:9], own_judge]}
+    content, errors = contract.parse_content({**old, "evaluation_plan": seed})
+    assert content is not None, errors
+    draft = plan_contract.draft_plan(contract.content_dump(content), revision=1,
+                                     content_hash="0" * 64, agent_name="kid")
+    assert len(draft["evaluators"]) == 10
+    assert "draft_rubric" not in {e["key"] for e in draft["evaluators"]}
+
+
+def test_evaluator_and_dataset_descriptions_fit_the_aws_limit():
+    """Live failure: CreateEvaluator rejected a 201+ char ``description`` (AWS max 200)
+    after the operation had already started. The seed, the plan and the dataset refuse
+    a longer one up front, and a legacy stored seed drafts a clipped, creatable plan."""
+    old = json.loads(json.dumps(PROPOSAL))
+    judge = {"kind": "judge", "key": "tone", "title": "Tone", "name": "tone",
+             "level": "TRACE", "golden_test_ids": [],
+             "instructions": "Judge the tone of {assistant_turn}.", "description": "d" * 201}
+    content, errors = contract.parse_content({**old, "evaluation_plan": {"evaluators": [judge]}})
+    assert content is None and any("200" in e for e in errors), errors
+    content, errors = contract.parse_content(
+        {**old, "evaluation_plan": {"evaluators": [{**judge, "description": "d" * 200}]}})
+    assert content is not None, errors
+    legacy = {**old, "evaluation_plan": {"evaluators": [judge]}}  # stored before the limit
+    draft = plan_contract.draft_plan(legacy, revision=1, content_hash="0" * 64, agent_name="kid")
+    assert {len(e.get("description") or "") for e in draft["evaluators"]} <= set(range(201))
+    cid, h = _conversation("local-operator")
+    raw = _valid_plan(cid, h, with_code=False)
+    raw["dataset"]["description"] = "x" * 201
+    _, errors = plan_contract.validate_plan(raw, PROPOSAL, revision=1, content_hash=h)
+    assert any(e.startswith("dataset.description") for e in errors), errors
 
 
 def test_seed_routing_is_refused_at_proposal_time_not_at_asset_creation():

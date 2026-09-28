@@ -732,11 +732,13 @@ ARN/名称/记录与出站认证身份（提供方 ARN、授权类型、scope—
 
 **上线障碍鱼骨图（Agent-DLC DEFINE）。** 预置的技能包携带 Agent-DLC 五维鱼骨图方法论
 （`references/fishbone-methodology.md`：认知 / 质量 / 责任 / 成本 / 性能 + 其他，一次一问、业务语言、
-每条便签读回确认、每个维度探测后才可称为空、方案进 parking lot、绝不编造）。其产物是提案块中一个可选、有界的
+每条便签读回确认、每个维度都要问到——客户未提及时给出基于本场景的建议障碍供其确认、改写或删除、方案进 parking lot、
+未经客户确认绝不记为已确认）。其产物是提案块中一个可选、有界的
 `fishbone` 成员——元数据（客户、日期、场景、`internal|b2b|b2c`）、各维度覆盖状态
 （`confirmed|explored_empty|unresolved`）、障碍（`sticky_text`、证据、脱敏原话、`confirmed`、`selected`）
 与 parking lot——与契约其余部分一样做跨字段校验（恰好六个维度、每维度最多 3 条 selected、selected ⇒ confirmed、
-覆盖状态与便签一致；违反即为 *invalid* 修订），缺省时不写入存储内容，旧修订的哈希不变。它是惰性的：
+覆盖状态与便签一致、`unresolved` 维度不得为空——须携带未确认的建议障碍，图上以虚线「待确认」便签呈现——且至少一条已确认障碍；
+违反即为 *invalid* 修订），缺省时不写入存储内容，旧修订的哈希不变。它是惰性的：
 控制台在「提案」面板中把它渲染为 SVG 鱼骨图（`FishboneDiagram`，自包含标记，提供下载 SVG / JSON；JSON 与该
 skill 的 `fishbone-data.json` 同构），成员编辑原样携带它，AWS 侧不读取它。不依赖 draw.io 模板。
 

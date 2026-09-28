@@ -104,18 +104,25 @@ as a whole — after the member has already read and approved the design.
 - [ ] **≤ 10 evaluators in total** (existing + judge + derived + code — one batch
       evaluation applies all of them and AWS accepts no more); ≤ 10 of kind
       `judge`/`derived`/`code`; ≤ 40 scenarios; ≤ 40 blocked golden tests. Fewer, chosen
-      for this agent, beats the whole built-in list. Evaluator `key`s unique (`^[A-Za-z][A-Za-z0-9_-]{0,31}$`);
-      cloud evaluator `name`s unique (`^[a-zA-Z][a-zA-Z0-9_]{0,47}$`).
+      for this agent, beats the whole built-in list. The ten include what the platform
+      adds to the seed: each `Builtin.*` / `ThirdParty.*` id named in
+      `evaluator_recommendations` but not seeded, the assertions judge when every
+      scenario has `assertions` (unless a seeded judge uses `{assertions}`) and the
+      expected-tools rule when every scenario has `expected_trajectory` (unless a seeded
+      code rule uses `reference_trajectory`). Seed at most eight when both apply.
+      Evaluator `key`s unique (`^[A-Za-z][A-Za-z0-9_-]{0,31}$`); cloud evaluator
+      `name`s unique (`^[a-zA-Z][a-zA-Z0-9_]{0,47}$`).
 - [ ] Every entry has ONLY the members of its kind:
   - `existing`: `kind, key, title, evaluator_id ("Builtin.<Name>" / "ThirdParty.<Name>"),
     golden_test_ids` (+ optional `blocking, threshold, note`).
   - `judge`: `+ name, instructions (10–4,000 chars), level (TRACE|SESSION|TOOL_CALL)`,
-    optional `rating_scale, model_id, description`. Instructions contain ≥ 1
+    optional `rating_scale, model_id, description` (≤ 200 chars — AWS rejects longer, as
+    for every evaluator `description`). Instructions contain ≥ 1
     placeholder and only the level's: SESSION → `{context} {available_tools}
     {actual_tool_trajectory} {expected_tool_trajectory} {assertions}`; TRACE/TOOL_CALL →
     `{context} {assistant_turn} {expected_response}`.
   - `code`: `+ name, level (TRACE|SESSION), rules: {version: 1, checks: [...]}`,
-    optional `lambda_timeout_s, description`. 1–20 checks, unique `id`s.
+    optional `lambda_timeout_s, description` (≤ 200). 1–20 checks, unique `id`s.
 - [ ] Every code check has `id`, `type` and EXACTLY its type's members — never `count`,
       `values`, `match`, `pattern`, `regex`, `any`, `all`:
   - `tool_count` → `min` and/or `max` (0–1000, min ≤ max); optional `tool` (omit = all
@@ -165,7 +172,11 @@ barrier was confirmed (never `{}` or assumed).
       (1–120), evidence? (≤ 1,000), customer_quote? (≤ 1,000, redacted), confirmed, selected}`.
 - [ ] `selected` ⇒ `confirmed`; ≤ 3 selected per dimension.
 - [ ] coverage `confirmed` ⇔ that dimension has ≥ 1 confirmed note; `explored_empty` /
-      `unresolved` dimensions have none.
+      `unresolved` dimensions have none confirmed.
+- [ ] No blank dimension: every dimension was asked about; `unresolved` carries ≥ 1
+      suggested note with `confirmed: false, selected: false`; `explored_empty` only on
+      the customer's explicit "nothing there" after the suggestions; ≥ 1 confirmed
+      note in the whole fishbone.
 - [ ] `parking_lot` ≤ 40 of `{original (1–1,000), converted_to? (≤ 200)}`.
 
 ## 7. Last look

@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.4.8
+version: 1.4.9
 ---
 
 # AWS Agent Solution Architect
@@ -131,16 +131,21 @@ sensitive data, scale, integrations and constraints the customer already named a
 barriers in disguise, not new questions); the one question rounds one and two never
 answer — "which single mistake would stop the launch?" — is asked once and shared with
 the pain-point round; then one question at a time only for dimensions still empty,
-business language, every note read back and confirmed, every dimension probed before it
-may be called empty, no solutions and no invented barriers. The customer may
+business language, every note read back and confirmed, no solutions and no invented
+barriers. **Every dimension ends with content**: a dimension the customer did not raise
+is probed, then offered one or two suggested barriers derived from this scenario for
+the customer to confirm, reword or strike — it is `explored_empty` only on the
+customer's explicit "nothing there", and an `unresolved` dimension keeps its suggestion
+as an unconfirmed note, never a blank bone. The customer may
 also ask for it directly ("生成鱼骨图", "fishbone", "上线障碍分析") or explicitly decline
 it — the only way it is skipped. When the customer delegates or loses patience
 ("你自己看着办", "you decide"), offer one express close (all remaining dimensions in a
-single message), then stop asking. The confirmed result travels as the `fishbone` member
+single message, each remaining dimension with its question and one suggested barrier),
+then stop asking. The confirmed result travels as the `fishbone` member
 of the proposal block, where the console renders the diagram; the pain-point table, the
 golden tests and the design that follow must trace back to those barriers. **One
-confirmed barrier is enough to emit it** — unprobed dimensions are `unresolved`, and the
-diagram shows them as open. Omit the member only when no barrier was confirmed; never
+confirmed barrier is enough to emit it** — dimensions the customer did not confirm are
+`unresolved` with their suggestions, and the diagram shows them as open. Omit the member only when no barrier was confirmed; never
 emit an empty or assumed fishbone.
 
 ## 3. AWS fact verification and selection

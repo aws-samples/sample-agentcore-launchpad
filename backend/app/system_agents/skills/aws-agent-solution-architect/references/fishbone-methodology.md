@@ -37,11 +37,17 @@ primary dimension; cross-dimension impact goes into its `evidence`, never a dupl
 3. **Confirm every note.** Rewrite each barrier as one sticky note, read it back, and
    record it only after the customer confirms the wording. The diagram is the customer's
    artefact, not your inference.
-4. **Probe, but never invent.** A dimension the customer did not mention is not skipped:
-   pick at least two probing directions from the tables below (one in `express` mode),
-   phrase them in the customer's own context and ask. If the customer then confirms
-   "nothing there", accept the dimension as empty — never fill it from industry
-   assumptions. Asking is a duty; inventing is forbidden.
+4. **Every dimension ends with content — probe, then suggest, never invent.** A
+   dimension the customer did not mention is not skipped: pick at least two probing
+   directions from the tables below (one in `express` mode), phrase them in the
+   customer's own context and ask. When the answers still yield no barrier, offer one
+   or two **suggested barriers** derived from THIS scenario (its scale, data, actions,
+   users, integrations — never a generic industry list), phrased as a question ("类似
+   场景里常见的是……，你们会遇到吗？"), and let the customer confirm, reword or strike
+   them. A suggestion the customer confirms is a confirmed barrier (its `evidence`
+   says it was suggested and confirmed). Only when the customer strikes the suggestions
+   too is the dimension `explored_empty`. Asking and suggesting are duties; recording a
+   suggestion as confirmed without the customer's yes is forbidden.
 5. **No solutions in discovery.** No AWS services, models, RAG, databases. Solutions bias
    the problem statement.
 6. **Solution → barrier reversal.** When the customer offers a solution, ask "without
@@ -102,8 +108,9 @@ first golden test — the pain-point round must not ask it again.
 Then, for each dimension that still has no confirmed note, use the rhythm **opening
 question → listen → probe** (pick a direction from the table, phrase it in the
 customer's language) **→ distil** (one sticky note, ≤ 50 characters, one barrier per
-note, facts not solutions, numbers and system names kept) **→ confirm → move on** when
-the dimension is exhausted or has three strong barriers. A dimension that already holds
+note, facts not solutions, numbers and system names kept) **→ confirm → suggest** (rule 4)
+when the probes found nothing **→ move on** when the dimension is exhausted, has three
+strong barriers, or the customer struck the suggestions. A dimension that already holds
 a confirmed candidate from the baseline gets at most one probe, not its opening
 question. Skip any opener the baseline already answered — e.g. do not ask "how many use
 it at the same time?" after the customer chose a scale in round one; ask instead what
@@ -188,9 +195,17 @@ barriers may end early. When the customer says a direction does not apply, accep
 and do not press.
 
 Coverage per dimension: `confirmed` (≥ 1 confirmed barrier), `explored_empty` (probed as
-required and the customer explicitly confirmed there is nothing) or `unresolved`
-(never probed, or answers stayed vague — no barrier enters the diagram for it, but the
-dimension itself is drawn as unresolved so the gap stays visible).
+required, suggestions offered, and the customer explicitly confirmed there is nothing)
+or `unresolved` (the customer stopped before confirming anything for it). An
+`unresolved` dimension is never blank: it carries the suggested barrier(s) you offered
+as notes with `confirmed: false` and `selected: false`, and the console draws them as
+dashed "awaiting confirmation" notes so the gap and the next question stay visible.
+
+**Coverage duty.** Before you close the discovery, walk the six dimensions once: each
+must hold a confirmed note, or be `explored_empty` on the customer's explicit word, or
+carry at least one unconfirmed suggestion. A dimension you never asked about is a
+dimension you still owe a question — ask it (or put it in the express close) before
+emitting the fishbone.
 
 ### When the customer delegates or runs out of patience
 
@@ -199,13 +214,17 @@ vague answer in a row — is neither permission to invent barriers nor a reason 
 what was already confirmed. Do this, once:
 
 1. Say you will not invent barriers and will not keep asking one by one.
-2. Offer an **express close** in ONE message: the remaining dimensions as a short list,
-   each with its opening question in the customer's context, so the customer can answer
-   any of them in a single reply or write "none" / "nothing else".
-3. If the customer answers, record and confirm the notes as usual. If the customer
+2. Offer an **express close** in ONE message: the remaining dimensions as a short
+   numbered list, each with its opening question in the customer's context AND one
+   suggested barrier derived from this scenario, so the customer can confirm ("1、3 对"),
+   reword or strike any of them in a single reply, or write "none" / "nothing else".
+3. If the customer answers, record and confirm the notes as usual — a confirmed
+   suggestion is a confirmed barrier; a struck one leaves the dimension
+   `explored_empty` only when the customer said nothing else applies. If the customer
    declines again or does not engage, close the discovery: what was confirmed stays
-   `confirmed`, every dimension not probed stays `unresolved`, and you say in the reply
-   which dimensions remain open and that they should be revisited before a real launch.
+   `confirmed`; every other dimension is `unresolved` and keeps the suggestion from the
+   express close as an unconfirmed note; you say in the reply which dimensions remain
+   open and that they should be revisited before a real launch.
 
 A partial fishbone is a **result**, not a failure — emit it (see Output).
 
@@ -244,12 +263,14 @@ platform protocol), never as a separate file:
 }
 ```
 
-Only barriers the customer stated **and confirmed in this conversation** may carry
-`confirmed: true`; only confirmed barriers may be `selected`; at most three selected per
-dimension. Coverage `confirmed` requires at least one confirmed barrier in that
-dimension. **One confirmed barrier is enough to emit the member**: the other dimensions
-carry `unresolved` (or `explored_empty` when the customer said so) and the console draws
-them as open. Omit the member only when NO barrier was confirmed — the intake never
+Only barriers the customer stated, or accepted from your suggestion, **and confirmed in
+this conversation** may carry `confirmed: true`; only confirmed barriers may be
+`selected`; at most three selected per dimension. Coverage `confirmed` requires at least
+one confirmed barrier in that dimension; coverage `unresolved` requires at least one
+unconfirmed suggested note (`confirmed: false`) — never an empty `unresolved` dimension.
+**One confirmed barrier is enough to emit the member**: the other dimensions carry
+`unresolved` with their suggestions (or `explored_empty` when the customer said so) and
+the console draws them as open. Omit the member only when NO barrier was confirmed — the intake never
 reached the fishbone, or the customer declined it before the first note — and never
 emit an empty or invented one. The fishbone describes barriers; the design and the
 golden tests that follow must trace back to them, but the fishbone itself contains no
