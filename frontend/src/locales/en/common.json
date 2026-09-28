@@ -5111,7 +5111,7 @@
       "groupAdmin": "Configuration",
       "dataCenter": "Data center",
       "tasks": "Evaluation tasks",
-      "insights": "Insights",
+      "insights": "Evaluation overview",
       "evaluators": "Evaluators",
       "experiments": "A/B experiments",
       "online": "Online evaluation"
@@ -5723,7 +5723,19 @@
       "gtWarning": "Some selected evaluators need ground truth; they score only sessions that carry expected outputs (a dataset with expected outputs).",
       "recheck": "Re-check AWS result",
       "recheckHint": "Read this run's batch evaluation from AWS again: a finished batch fills in the results, one still running resumes polling. Nothing is re-run or billed.",
-      "recheckStillFailed": "Re-checked: the batch evaluation itself failed on AWS."
+      "recheckStillFailed": "Re-checked: the batch evaluation itself failed on AWS.",
+      "mode": "Evaluation type",
+      "modeEvaluators": "Evaluator scoring",
+      "modeEvaluatorsDesc": "Evaluators score every session",
+      "modeInsights": "Insights · failure analysis",
+      "modeInsightsDesc": "Cluster sessions into failure categories and user intents",
+      "modeInsightsShort": "Insights",
+      "stepInsights": "Select analysis types",
+      "pickInsights": "Select analysis types",
+      "errInsights": "Select at least one analysis type",
+      "errInsightSessions": "Insight clustering needs at least {{min}} sessions",
+      "insightsNoContinuous": "Continuous insights are created on the Online evaluation page.",
+      "insightsFewSessions": "Fewer than {{min}} sessions in the selected data — clustering may return no results."
     },
     "taskStatus": {
       "queued": "Queued",
@@ -5762,7 +5774,10 @@
         "run_active": "The task is still running.",
         "stream_missing": "The results log is not available yet.",
         "unreadable": "The results could not be read."
-      }
+      },
+      "insightsTitle": "Insight results",
+      "insightsWait": "Insight clusters appear once the task completes.",
+      "insightsEmpty": "This task produced no insight clusters."
     },
     "outcome": {
       "passed": "Passed",
@@ -5770,7 +5785,7 @@
       "error": "Error"
     },
     "insights": {
-      "title": "Insights",
+      "title": "Evaluation overview",
       "desc": "Every judged result of recent evaluation tasks in one place.",
       "kpiCount": "Evaluated results",
       "kpiCountSub": "{{passed}} passed · {{failed}} bad cases · {{errors}} errors",

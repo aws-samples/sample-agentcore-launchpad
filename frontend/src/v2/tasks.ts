@@ -2,6 +2,8 @@ import type { TFunction } from "i18next";
 
 import { api, type OnlineEvalConfigRow } from "../lib/api";
 import type { EvaluationRunInfo } from "../lib/evaluation";
+import { evaluatorLabel } from "../lib/evaluators";
+import { insightLabel, modeOf } from "./online";
 import type { TagTone } from "./ui";
 
 /**
@@ -13,6 +15,8 @@ import type { TagTone } from "./ui";
 export type TaskKind = "run" | "online";
 export type TaskSource = "dataset" | "cloud" | "window" | "sessions" | "live";
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "stopped" | "paused" | "pending";
+/** `evaluators` scores each session; `insights` clusters the sessions (failure analysis). */
+export type TaskMode = "evaluators" | "insights";
 
 export interface V2Task {
   kind: TaskKind;
@@ -21,6 +25,8 @@ export interface V2Task {
   description: string;
   agentId: string | null;
   agentName: string;
+  mode: TaskMode;
+  /** evaluator ids — or, in insights mode, the insight types applied */
   evaluators: string[];
   source: TaskSource;
   /** dataset name / window length / sampling percentage */
@@ -64,6 +70,7 @@ export function taskFromRun(run: EvaluationRunInfo): V2Task {
     description: run.description ?? "",
     agentId: run.agent_id,
     agentName: run.agent_name,
+    mode: run.mode === "insights" ? "insights" : "evaluators",
     evaluators: run.evaluators,
     source,
     sourceDetail: detail,
@@ -89,7 +96,8 @@ export function taskFromOnline(row: OnlineEvalConfigRow): V2Task {
     description: row.description ?? "",
     agentId: row.agent_id,
     agentName: row.agent_name ?? row.matched_agent?.name ?? "—",
-    evaluators: row.evaluators,
+    mode: modeOf(row) === "insights" ? "insights" : "evaluators",
+    evaluators: modeOf(row) === "insights" ? row.insights : row.evaluators,
     source: "live",
     sourceDetail: row.sampling_percentage == null ? "" : `${row.sampling_percentage}%`,
     status: onlineStatus(row),
@@ -117,6 +125,11 @@ export function sourceLabel(t: TFunction, task: Pick<V2Task, "source" | "sourceD
   return t(`v2.taskSource.${task.source}`, { detail: task.sourceDetail });
 }
 
+/** Display name of one of a task's `evaluators` entries (an insight type in insights mode). */
+export function taskItemLabel(t: TFunction, task: Pick<V2Task, "mode">, id: string): string {
+  return task.mode === "insights" ? insightLabel(t, id) : evaluatorLabel(t, id);
+}
+
 /** "Agent 任务完成度 等 3 个" — first evaluator plus a count. */
 export function evaluatorSummary(
   t: TFunction,
@@ -132,11 +145,12 @@ export function sortTasks(tasks: V2Task[]): V2Task[] {
   return [...tasks].sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
 }
 
-/** Every operator task of the workspace: scored batch runs + agent-owned
- *  scores-mode online configs (experiment arms and external configs are not tasks). */
+/** Every operator task of the workspace: batch runs (scored and insights) +
+ *  agent-owned scores-mode online configs (experiment arms and external configs
+ *  are not tasks; continuous insights live on the online-evaluation page). */
 export async function loadTasks(): Promise<V2Task[]> {
   const [runs, online] = await Promise.all([
-    api.listEvaluationRuns({ mode: "evaluators", limit: 200 }),
+    api.listEvaluationRuns({ limit: 200 }),
     // experiment arms and externally created configs are not operator tasks
     api.v2OnlineConfigs().catch(() => ({ configs: [], total: 0 })),
   ]);

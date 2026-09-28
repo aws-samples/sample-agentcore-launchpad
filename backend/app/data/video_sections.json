@@ -20,7 +20,7 @@
     {"id": "governance", "categoryId": "run", "title": {"en": "Governance", "zh-CN": "治理"}, "path": "/v2/governance"},
     {"id": "eval-data", "categoryId": "eval", "title": {"en": "Data Center", "zh-CN": "数据中心"}, "path": "/v2/eval/data"},
     {"id": "eval-tasks", "categoryId": "eval", "title": {"en": "Evaluation Tasks", "zh-CN": "评估任务"}, "path": "/v2/eval/tasks"},
-    {"id": "eval-insights", "categoryId": "eval", "title": {"en": "Insights", "zh-CN": "分析洞察"}, "path": "/v2/eval/insights"},
+    {"id": "eval-insights", "categoryId": "eval", "title": {"en": "Evaluation overview", "zh-CN": "评估总览"}, "path": "/v2/eval/insights"},
     {"id": "eval-online", "categoryId": "eval", "title": {"en": "Online Evaluation", "zh-CN": "在线评估"}, "path": "/v2/eval/online"},
     {"id": "eval-evaluators", "categoryId": "eval", "title": {"en": "Evaluators", "zh-CN": "评估器"}, "path": "/v2/eval/evaluators"},
     {"id": "eval-experiments", "categoryId": "eval", "title": {"en": "Experiments", "zh-CN": "实验"}, "path": "/v2/eval/experiments"},

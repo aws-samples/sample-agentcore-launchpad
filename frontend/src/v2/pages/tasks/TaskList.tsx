@@ -5,7 +5,6 @@ import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage } from "../../../lib/api";
-import { evaluatorLabel } from "../../../lib/evaluators";
 import { fmtTime } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import {
@@ -14,6 +13,7 @@ import {
   sourceLabel,
   STATUS_TONE,
   statusLabel,
+  taskItemLabel,
   type TaskStatus,
   type V2Task,
 } from "../../tasks";
@@ -58,7 +58,6 @@ export function TaskList() {
     });
   }, [tasks, status, source, agent, q]);
   const paged = usePaged(rows, 12);
-  const label = (id: string) => evaluatorLabel(t, id);
   const mayRun = can("eval.run");
 
   const open = (task: V2Task) => setParams({ view: "detail", kind: task.kind, id: task.id });
@@ -103,11 +102,14 @@ export function TaskList() {
     {
       key: "desc",
       title: t("v2.tasks.colEvaluators"),
-      render: (task) => (
-        <span className="ellipsis" style={{ maxWidth: 180 }} title={task.evaluators.map(label).join("、")}>
-          {evaluatorSummary(t, task.evaluators, label)}
-        </span>
-      ),
+      render: (task) => {
+        const label = (id: string) => taskItemLabel(t, task, id);
+        return (
+          <span className="ellipsis" style={{ maxWidth: 180 }} title={task.evaluators.map(label).join("、")}>
+            {task.mode === "insights" && <Tag tone="blue">{t("v2.tasks.modeInsightsShort")}</Tag>} {evaluatorSummary(t, task.evaluators, label)}
+          </span>
+        );
+      },
     },
     {
       key: "agent",

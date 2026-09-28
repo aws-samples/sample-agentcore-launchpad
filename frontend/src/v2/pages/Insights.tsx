@@ -37,8 +37,14 @@ interface InsightData {
 async function loadInsights(range: V2Range): Promise<InsightData> {
   const tasks = await loadTasks();
   const since = Date.now() - RANGE_HOURS[range] * 3_600_000;
+  // insights runs cluster sessions instead of scoring them — nothing to aggregate here
   const runs = tasks.filter(
-    (task) => task.kind === "run" && task.status === "completed" && task.createdAt && new Date(task.createdAt).getTime() >= since,
+    (task) =>
+      task.kind === "run" &&
+      task.mode === "evaluators" &&
+      task.status === "completed" &&
+      task.createdAt &&
+      new Date(task.createdAt).getTime() >= since,
   );
   const online = tasks.filter((task) => task.kind === "online");
   let failedReads = 0;
@@ -69,7 +75,7 @@ const SCORE_BANDS = {
 } as const;
 
 /**
- * 分析洞察 — every judged result of the recent evaluation tasks in one place:
+ * 评估总览 — every judged result of the recent evaluation tasks in one place:
  * KPIs (count, normalized mean, Bad Case, pass rate), per-evaluator means and
  * a filterable result table with export and "bad case → dataset".
  */
