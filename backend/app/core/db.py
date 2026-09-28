@@ -329,7 +329,8 @@ def _migrate_system_key_index(bind) -> None:
 def _migrate_assistant_columns(bind) -> None:
     """Additive columns of the assistant tables (SE-039 correction): the immutable
     owner principal (NULL = visible to nobody, never adopted by username), the
-    turn claim and the revision allocator, and the proposal bindings."""
+    turn claim and the revision allocator, the proposal bindings, and the
+    admin-published read share."""
     from sqlalchemy import inspect, text
 
     additions = {
@@ -357,6 +358,11 @@ def _migrate_assistant_columns(bind) -> None:
             "preparation_token": (
                 "ALTER TABLE assistant_conversations ADD COLUMN preparation_token VARCHAR(32)"
             ),
+            "shared": (
+                "ALTER TABLE assistant_conversations ADD COLUMN shared BOOLEAN NOT NULL DEFAULT 0"
+            ),
+            "shared_by": "ALTER TABLE assistant_conversations ADD COLUMN shared_by VARCHAR(64)",
+            "shared_at": "ALTER TABLE assistant_conversations ADD COLUMN shared_at DATETIME",
         },
         "assistant_proposals": {
             "bindings": "ALTER TABLE assistant_proposals ADD COLUMN bindings JSON",

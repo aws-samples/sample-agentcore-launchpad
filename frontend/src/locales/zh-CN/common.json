@@ -6910,6 +6910,7 @@
     "assistant": {
       "clear": "清除",
       "colApprovedBy": "批准人",
+      "colOwner": "创建人",
       "colPlan": "方案修订",
       "colProposal": "提案",
       "colTitle": "会话",
@@ -6928,7 +6929,19 @@
       "kpiTotal": "会话总数",
       "noMatch": "没有符合筛选条件的会话",
       "noProposal": "暂无提案",
-      "search": "搜索会话标题／ID"
+      "ownerLabel": "创建人：{{owner}}",
+      "readOnly": "该会话由管理员共享，创建人 {{owner}}，仅可查看。资源准备与评估资产仅创建人可见。",
+      "scope": "范围",
+      "scopeMine": "我的",
+      "scopeShared": "共享给我的",
+      "search": "搜索会话标题／ID",
+      "share": "共享",
+      "shared": "已共享",
+      "sharedTip": "由 {{by}} 共享给所有用户 · {{at}}",
+      "sharedToast": "已共享给所有用户（只读）",
+      "unshare": "取消共享",
+      "unsharedToast": "已取消共享",
+      "view": "查看"
     },
     "skillLab": {
       "tab": {

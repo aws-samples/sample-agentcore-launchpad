@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
+import { useAuth } from "../../../auth/auth-context";
 import { api, ApiError, type AssistantConversationSummary, type AssistantStatus } from "../../../lib/api";
 import { fmtTime } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
@@ -39,21 +40,38 @@ export function AssistantList({
   const [, setParams] = useSearchParams();
   const { data, loading, error, reload } = useLoad(() => api.assistantConversations(), `conversations:${workspaceId}`);
   const clear = useClearConversation(() => reload());
+  const { isAdmin } = useAuth();
   const [creating, setCreating] = useState(false);
+  const [sharing, setSharing] = useState<string | null>(null);
   const [proposal, setProposal] = useState("");
+  const [scope, setScope] = useState("");
   const [q, setQ] = useState("");
 
   const conversations = useMemo(() => data?.conversations ?? [], [data]);
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return conversations.filter((c) => {
+      if (scope === "mine" ? !c.mine : scope === "shared" && c.mine) return false;
       if (proposal === "none" ? c.proposal_status !== null : proposal && c.proposal_status !== proposal) return false;
-      return !needle || `${c.title} ${c.id}`.toLowerCase().includes(needle);
+      return !needle || `${c.title} ${c.id} ${c.owner}`.toLowerCase().includes(needle);
     });
-  }, [conversations, proposal, q]);
+  }, [conversations, proposal, scope, q]);
   const paged = usePaged(rows, 12);
   const count = (s: string) => conversations.filter((c) => c.proposal_status === s).length;
   const open = (id: string) => setParams({ view: "detail", id });
+
+  const toggleShare = async (c: AssistantConversationSummary) => {
+    setSharing(c.id);
+    try {
+      const res = await api.assistantSetSharing(c.id, !c.shared);
+      toast("success", t(res.shared ? "v2.assistant.sharedToast" : "v2.assistant.unsharedToast"));
+      reload();
+    } catch (err) {
+      toast("error", apiMessage(err));
+    } finally {
+      setSharing(null);
+    }
+  };
 
   const create = async () => {
     setCreating(true);
@@ -77,12 +95,27 @@ export function AssistantList({
       title: t("v2.assistant.colTitle"),
       render: (c) => (
         <>
-          <LinkButton onClick={() => open(c.id)} title={c.title || undefined} testId={`v2-assistant-open-${c.id}`}>
-            <span className="v2-assistant-title">{c.title || c.id.slice(0, 8)}</span>
-          </LinkButton>
+          <span className="v2-row" style={{ flexWrap: "nowrap" }}>
+            <LinkButton onClick={() => open(c.id)} title={c.title || undefined} testId={`v2-assistant-open-${c.id}`}>
+              <span className="v2-assistant-title">{c.title || c.id.slice(0, 8)}</span>
+            </LinkButton>
+            {c.shared && (
+              <span data-testid={`v2-assistant-shared-${c.id}`}>
+                <Tag tone="blue" title={t("v2.assistant.sharedTip", { by: c.shared_by ?? "", at: fmtTime(c.shared_at) })}>
+                  {t("v2.assistant.shared")}
+                </Tag>
+              </span>
+            )}
+          </span>
           <span className="sub mono">ID: {c.id} · {t("v2.common.createdAt")} {fmtTime(c.created_at)}</span>
         </>
       ),
+    },
+    {
+      key: "owner",
+      title: t("v2.assistant.colOwner"),
+      className: "nowrap",
+      render: (c) => <span data-testid={`v2-assistant-owner-${c.id}`}>{c.owner}</span>,
     },
     {
       key: "proposal",
@@ -116,16 +149,27 @@ export function AssistantList({
       className: "right",
       render: (c) => (
         <div className="v2-actions">
-          <LinkButton onClick={() => open(c.id)}>{t("v2.assistant.continue")}</LinkButton>
-          <LinkButton
-            danger
-            disabled={clear.busy}
-            title={t("assistantPage.clear.action")}
-            onClick={() => void clear.ask(c)}
-            testId={`v2-assistant-clear-${c.id}`}
-          >
-            {t("v2.assistant.clear")}
-          </LinkButton>
+          <LinkButton onClick={() => open(c.id)}>{t(c.mine ? "v2.assistant.continue" : "v2.assistant.view")}</LinkButton>
+          {isAdmin && (
+            <LinkButton
+              disabled={sharing !== null}
+              onClick={() => void toggleShare(c)}
+              testId={`v2-assistant-share-${c.id}`}
+            >
+              {t(c.shared ? "v2.assistant.unshare" : "v2.assistant.share")}
+            </LinkButton>
+          )}
+          {c.mine && (
+            <LinkButton
+              danger
+              disabled={clear.busy}
+              title={t("assistantPage.clear.action")}
+              onClick={() => void clear.ask(c)}
+              testId={`v2-assistant-clear-${c.id}`}
+            >
+              {t("v2.assistant.clear")}
+            </LinkButton>
+          )}
         </div>
       ),
     },
@@ -160,6 +204,18 @@ export function AssistantList({
             <Plus size={14} aria-hidden="true" />
             {t("assistantPage.newConversation")}
           </Button>
+          {conversations.some((c) => !c.mine) && (
+            <FilterSelect
+              label={t("v2.assistant.scope")}
+              value={scope}
+              allLabel={t("v2.common.all")}
+              onChange={setScope}
+              options={[
+                { value: "mine", label: t("v2.assistant.scopeMine") },
+                { value: "shared", label: t("v2.assistant.scopeShared") },
+              ]}
+            />
+          )}
           <FilterSelect
             label={t("v2.assistant.colProposal")}
             value={proposal}

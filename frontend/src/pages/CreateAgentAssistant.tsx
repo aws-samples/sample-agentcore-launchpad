@@ -204,8 +204,10 @@ export function CreateAgentAssistant() {
     void api
       .assistantConversations()
       .then((res) => {
+        // Admin-shared read-only conversations are a V2 surface; the classic
+        // page is write-oriented, so it keeps listing the caller's own only.
         if (alive.current && scope.current === startedIn)
-          setConversations(res.conversations);
+          setConversations(res.conversations.filter((c) => c.mine));
       })
       .catch(() => {
         /* the list is secondary; the status panel reports the real failure */

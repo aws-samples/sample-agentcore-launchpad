@@ -7,7 +7,8 @@ Authorization comes from ``ROUTE_POLICY`` (member for discussion — parity with
 re-asserted inside the approval, where the caller's account, permission and
 workspace grant are ALSO re-resolved from the database inside the write
 transaction. Every route is workspace-scoped; conversations are additionally bound
-to the caller's immutable principal (``app.assistant.principal``).
+to the caller's immutable principal (``app.assistant.principal``), except that an
+admin may share one read-only with the whole workspace (list + detail read only).
 """
 
 import json as _json
@@ -237,8 +238,29 @@ def get_conversation(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    row = service.owned_conversation(db, ws.id, principal_of(_caller(request)), conversation_id)
-    return service.conversation_detail(db, row)
+    principal = principal_of(_caller(request))
+    row = service.readable_conversation(db, ws.id, principal, conversation_id)
+    return service.conversation_detail(db, row, viewer=principal)
+
+
+class ShareRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    shared: bool
+
+
+@router.put("/conversations/{conversation_id}/sharing")
+def set_sharing(
+    conversation_id: str,
+    req: ShareRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Admin-only: publish (or withdraw) read access to one conversation for every
+    member of the workspace. Writes stay with the owner."""
+    identity = _caller(request)
+    row = service.set_shared(db, ws.id, identity, conversation_id, req.shared)
+    return service.conversation_summary(db, row, viewer=principal_of(identity))
 
 
 @router.post("/conversations/{conversation_id}/catalog")

@@ -2,10 +2,12 @@
 
 Invariants (``tests/test_assistant.py`` pins each one with request/fault probes):
 
-* **Principal + workspace bound.** Every read and write filters on
+* **Principal + workspace bound.** Every write (and every read but two) filters on
   ``(workspace_id, owner_principal)``; another principal's, another workspace's or
   an unowned (NULL principal) conversation is a 404 — a recycled username inherits
-  nothing.
+  nothing. The one exception is an admin-published **share**: the list and the
+  detail read also return a ``shared`` conversation of the same workspace to every
+  member, read-only (``mine: false``); nothing else ever widens.
 * **Discussion never writes AWS.** A turn makes exactly one data-plane call
   (``InvokeHarness`` on the preset) and ledger writes. No proposal, valid or not,
   creates anything until a separate approval.
@@ -56,7 +58,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from botocore.exceptions import ClientError
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -804,18 +806,69 @@ def owned_conversation(
     return row
 
 
+def readable_conversation(
+    db: Session, workspace_id: str, principal: str, conversation_id: str
+) -> AssistantConversation:
+    """The owner's conversation, or — read-only — one an admin shared with the
+    workspace. Only the list and the detail read use this; every write stays on
+    ``owned_conversation``."""
+    row = db.get(AssistantConversation, conversation_id)
+    if (
+        row is None
+        or row.workspace_id != workspace_id
+        or row.owner_principal is None
+        or (row.owner_principal != principal and not row.shared)
+    ):
+        raise NotFoundError("assistant.conversation_not_found", "conversation not found")
+    return row
+
+
 def list_conversations(db: Session, workspace_id: str, principal: str) -> list[dict[str, Any]]:
+    """The caller's own conversations plus the ones shared with the workspace."""
     rows = (
         db.query(AssistantConversation)
         .filter(
             AssistantConversation.workspace_id == workspace_id,
-            AssistantConversation.owner_principal == principal,
+            AssistantConversation.owner_principal.is_not(None),
+            or_(
+                AssistantConversation.owner_principal == principal,
+                AssistantConversation.shared.is_(True),
+            ),
         )
         .order_by(AssistantConversation.updated_at.desc())
         .limit(50)
         .all()
     )
-    return [conversation_summary(db, r) for r in rows]
+    return [conversation_summary(db, r, viewer=principal) for r in rows]
+
+
+def set_shared(
+    db: Session, workspace_id: str, identity: Identity, conversation_id: str, shared: bool
+) -> AssistantConversation:
+    """Admin-only publish/unpublish of read access. An admin may share only what it
+    can already read (its own, or one already shared), so sharing never becomes a
+    way to discover another member's private conversation."""
+    if not identity.is_admin:
+        raise AppError(
+            "auth.forbidden", "This action requires an administrator account", status_code=403
+        )
+    row = readable_conversation(db, workspace_id, principal_of(identity), conversation_id)
+    if row.shared != shared:
+        # Direct UPDATE: a share is not conversation activity, so it must not bump
+        # ``updated_at`` (the history order) the way an ORM flush would.
+        db.execute(
+            update(AssistantConversation)
+            .where(AssistantConversation.id == row.id)
+            .values(
+                shared=shared,
+                shared_by=identity.username if shared else None,
+                shared_at=datetime.now(UTC) if shared else None,
+                updated_at=row.updated_at,
+            )
+        )
+        db.commit()
+        db.refresh(row)
+    return row
 
 
 def create_conversation(
@@ -897,11 +950,20 @@ def proposal_by_revision(
     )
 
 
-def conversation_summary(db: Session, row: AssistantConversation) -> dict[str, Any]:
+def conversation_summary(
+    db: Session, row: AssistantConversation, viewer: str | None = None
+) -> dict[str, Any]:
+    """``viewer`` is the reading principal; omitted, the caller is the owner (every
+    route but the shared-read ones resolves the row through ``owned_conversation``)."""
     proposal = latest_proposal(db, row.id)
     return {
         "id": row.id,
         "title": row.title,
+        "owner": row.owner,
+        "mine": viewer is None or row.owner_principal == viewer,
+        "shared": bool(row.shared),
+        "shared_by": row.shared_by,
+        "shared_at": row.shared_at.isoformat() if row.shared_at else None,
         "turns": row.turns,
         "turn_in_progress": row.active_turn,
         "status": row.status,
@@ -912,9 +974,11 @@ def conversation_summary(db: Session, row: AssistantConversation) -> dict[str, A
     }
 
 
-def conversation_detail(db: Session, row: AssistantConversation) -> dict[str, Any]:
+def conversation_detail(
+    db: Session, row: AssistantConversation, viewer: str | None = None
+) -> dict[str, Any]:
     return {
-        **conversation_summary(db, row),
+        **conversation_summary(db, row, viewer),
         "catalog": row.catalog or {},
         "preparation": preparation.view(db, row),
         "messages": [

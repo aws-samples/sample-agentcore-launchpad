@@ -70,6 +70,12 @@ class AssistantConversation(Base):
     # a revision row (unique index below), so two concurrent writers never share one.
     revision_seq: Mapped[int] = mapped_column(default=0)
     status: Mapped[str] = mapped_column(String(16), default="open")  # open | archived
+    # Admin-published read access: every member of the workspace may READ a shared
+    # conversation; every write stays bound to ``owner_principal``. Stamped with the
+    # admin who toggled it (display username) and when.
+    shared: Mapped[bool] = mapped_column(default=False)
+    shared_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    shared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
