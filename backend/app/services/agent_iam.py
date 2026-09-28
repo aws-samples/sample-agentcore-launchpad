@@ -293,6 +293,21 @@ def _builtin_names(spec: AgentSpec) -> set[str]:
     return {tool.name for tool in spec.tools if tool.type == "builtin"}
 
 
+# AgentCore gateway ids: `<name>-<10 lowercase alphanumerics>`. Anything else in a
+# member-supplied ToolRef (a `*`, an ARN fragment) must never reach a Resource.
+_GATEWAY_ID_RE = re.compile(r"[0-9a-z](?:[0-9a-z-]{0,98})-[0-9a-z]{10}")
+
+
+def _gateway_ids(spec: AgentSpec) -> list[str]:
+    """Gateway ids named by the spec's Registry-resolved gateway ToolRefs."""
+    ids = {
+        str((tool.config or {}).get("gateway_id"))
+        for tool in spec.tools
+        if tool.type == "gateway" and (tool.config or {}).get("gateway_id")
+    }
+    return sorted(gateway_id for gateway_id in ids if _GATEWAY_ID_RE.fullmatch(gateway_id))
+
+
 def _preset_kb_oauth_statements(spec: AgentSpec, ctx: RoleContext) -> list[dict[str, Any]]:
     """The exact OAuth2-credential-provider grants the harness devguide lists for an
     OAuth-protected gateway ("Execution role policy → OAuth2 credential provider",
@@ -448,6 +463,25 @@ def policy_document(spec: AgentSpec, ctx: RoleContext, *, system_preset: bool = 
             "Resource": [
                 f"arn:aws:secretsmanager:{ctx.region}:{ctx.account_id}"
                 ":secret:bedrock-agentcore-identity!*"
+            ],
+        })
+
+    # ---- SigV4 (AWS_IAM) gateways: scoped to the referenced gateway ids ----
+    # A Harness reaches an AWS_IAM Gateway by signing with this role, which the
+    # Gateway authorizes as bedrock-agentcore:InvokeGateway (harness devguide,
+    # "Execution role policy → AgentCore Gateway"). The spec carries only the id;
+    # the region segment stays wildcarded because a Registry record may name a
+    # Gateway in another region of the account. Granting it for an OAuth Gateway
+    # too is inert: that Gateway authorizes the bearer token, not the caller's IAM.
+    gateway_ids = _gateway_ids(spec)
+    if gateway_ids:
+        statements.append({
+            "Sid": "AgentCoreGatewayInvoke",
+            "Effect": "Allow",
+            "Action": ["bedrock-agentcore:InvokeGateway"],
+            "Resource": [
+                f"arn:aws:bedrock-agentcore:*:{ctx.account_id}:gateway/{gateway_id}"
+                for gateway_id in gateway_ids
             ],
         })
 

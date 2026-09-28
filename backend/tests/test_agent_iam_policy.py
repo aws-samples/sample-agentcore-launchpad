@@ -415,6 +415,32 @@ class TestBuiltinTools:
         assert "IdentityVaultSecrets" in sids
         assert "AgentCoreCodeInterpreter" not in sids
 
+    def test_a_registry_gateway_ref_grants_invoke_on_exactly_that_gateway(self):
+        """Measured live: a Harness mounting an AWS_IAM Gateway signs with this
+        role, and without InvokeGateway the Gateway answers 401. The region stays
+        wildcarded — the Registry record may name a Gateway in another region."""
+        spec = _spec(method="harness", tools=[
+            {"type": "gateway", "name": "web-search",
+             "config": {"record_id": "rec", "gateway_id": "web-search-smlhlkheht"}},
+            {"type": "gateway", "name": "copy",
+             "config": {"record_id": "rec2", "gateway_id": "web-search-smlhlkheht"}},
+        ])
+        statement = _statement(spec, "AgentCoreGatewayInvoke")
+        assert statement["Action"] == ["bedrock-agentcore:InvokeGateway"]
+        assert statement["Resource"] == [
+            "arn:aws:bedrock-agentcore:*:123456789012:gateway/web-search-smlhlkheht"
+        ]
+
+    def test_gateway_invoke_is_absent_without_a_resolvable_gateway_id(self):
+        """Legacy config-less refs ride launchpad-gw's OAuth, and a member-supplied
+        id that is not a gateway id (a wildcard, an ARN fragment, a trailing
+        newline) must never widen the Resource."""
+        for gateway_id in (None, "*", "gw/*", "a-*", "web-search-smlhlkheht\n"):
+            config = {"record_id": "rec", "gateway_id": gateway_id} if gateway_id else {}
+            spec = _spec(tools=[{"type": "gateway", "name": "g", "config": config}])
+            assert "AgentCoreGatewayInvoke" not in _sids(spec), gateway_id
+        assert "AgentCoreGatewayInvoke" not in _sids(_spec())
+
 
 class TestContainerMethod:
     def test_gets_ecr_pull_scoped_to_the_repo(self):

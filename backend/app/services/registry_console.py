@@ -6,11 +6,13 @@ registryRecordId.
 """
 
 import json
+import re
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import REPO_ROOT
 from app.core.errors import AppError
@@ -670,6 +672,50 @@ def _list_live_mcp_gateways(client: Any) -> list[dict[str, Any]]:
     ]
 
 
+# An AgentCore Gateway MCP endpoint names its own id and region:
+# https://<gatewayId>.gateway.bedrock-agentcore.<region>.amazonaws.com/mcp
+_GATEWAY_ENDPOINT_RE = re.compile(
+    r"^https://(?P<gateway_id>[0-9a-z-]+)\.gateway\.bedrock-agentcore\."
+    r"(?P<region>[a-z]{2}(?:-[a-z]+)+-\d)\.amazonaws\.com(?:/|$)"
+)
+
+
+def _gateway_endpoint(url: str) -> tuple[str, str] | None:
+    """``(gateway_id, region)`` when ``url`` is an AgentCore Gateway endpoint."""
+    match = _GATEWAY_ENDPOINT_RE.match(url or "")
+    return (match["gateway_id"], match["region"]) if match else None
+
+
+def _gateway_control_client(workspace: WorkspaceContext, url: str, default: Any) -> Any:
+    """The control client that can read the Gateway behind ``url``.
+
+    A Registry MCP record may point at a Gateway in another region of the workspace
+    account (a Harness reaches it over SigV4 all the same); the workspace-region
+    client cannot see it, so its region comes from the endpoint itself.
+    """
+    endpoint = _gateway_endpoint(url)
+    if endpoint is None or endpoint[1] == workspace.region:
+        return default
+    return control_client(replace(workspace, region=endpoint[1]))
+
+
+def _cross_region_gateway(workspace: WorkspaceContext, url: str) -> dict[str, Any] | None:
+    """The live MCP Gateway serving ``url`` from a region other than the workspace's,
+    or None when ``url`` is not such an endpoint or it does not resolve."""
+    endpoint = _gateway_endpoint(url)
+    if endpoint is None or endpoint[1] == workspace.region:
+        return None
+    try:
+        gateway = policy_api.get_gateway(
+            _gateway_control_client(workspace, url, None), endpoint[0]
+        )
+    except (BotoCoreError, ClientError):
+        return None
+    if gateway.get("protocolType") != "MCP" or gateway.get("gatewayUrl") != url:
+        return None
+    return gateway
+
+
 def _managed_launchpad_gateway(gateway: dict[str, Any], resources: dict[str, Any]) -> bool:
     configured_id = resources.get("gateway_id")
     if configured_id:
@@ -799,7 +845,9 @@ def resolve_gateway_attachments(
                 status_code=409,
             )
         record_url = _mcp_record_url(record)
-        gateway = policy_api.get_gateway(agentcore_client, gateway_id)
+        gateway = policy_api.get_gateway(
+            _gateway_control_client(workspace, record_url, agentcore_client), gateway_id
+        )
         if (
             gateway.get("protocolType") != "MCP"
             or not record_url
@@ -836,8 +884,11 @@ def attachable_records(
 ) -> dict[str, Any]:
     """Catalog entries an agent can mount, sourced ONLY from APPROVED records —
     the registry lifecycle is the availability gate. MCP records whose URL
-    matches a live AgentCore Gateway expose server-derived attachability;
-    other MCP records remain unauthenticated remote_mcp entries."""
+    matches a live AgentCore Gateway — in the workspace region, or in the region
+    its endpoint names — expose server-derived attachability; a Gateway endpoint
+    that resolves to no live Gateway is listed as an unattachable Gateway, never
+    as an unauthenticated server. Other MCP records remain unauthenticated
+    remote_mcp entries."""
     registry_client = registry_client or registry_control_client(workspace)
     registry_id = registry_id or _registry_id(workspace)
     resources = workspace.resources
@@ -856,6 +907,8 @@ def attachable_records(
     # confirmed by live discovery, once per catalog read; never rewrite records.
     shared_names: set[str] | None = None
     shared_names_read = False
+    # Cross-region Gateway lookups, once per endpoint per catalog read.
+    foreign_gateways: dict[str, dict[str, Any] | None] = {}
     for summary in reg.list_records(registry_client, registry_id, None, "APPROVED"):
         kind = summary.get("descriptorType")
         if kind not in ("MCP", "AGENT_SKILLS"):
@@ -870,6 +923,14 @@ def attachable_records(
                 if not url:
                     continue
                 matches = gateways_by_url.get(url, [])
+                if not matches:
+                    if url not in foreign_gateways:
+                        foreign_gateways[url] = _cross_region_gateway(workspace, url)
+                    if foreign_gateways[url]:
+                        matches = [foreign_gateways[url]]
+                # An AgentCore Gateway always authenticates its callers; one that
+                # cannot be resolved must not be mounted as an unauthenticated server.
+                unresolved_endpoint = not matches and _gateway_endpoint(url) is not None
                 gateway = matches[0] if len(matches) == 1 else None
                 capability = (
                     _gateway_attachment(gateway, resources)
@@ -877,13 +938,18 @@ def attachable_records(
                     else {
                         "gateway_id": None,
                         "gateway_arn": None,
-                        "attachable": len(matches) == 0,
+                        "attachable": len(matches) == 0 and not unresolved_endpoint,
                         "attachability_reason": (
-                            None
+                            "the AgentCore Gateway behind this endpoint could not be "
+                            "resolved in this account"
+                            if unresolved_endpoint
+                            else None
                             if not matches
                             else "multiple live Gateways expose the same endpoint"
                         ),
-                        "auth_type": "none" if not matches else None,
+                        "auth_type": (
+                            "none" if not matches and not unresolved_endpoint else None
+                        ),
                     }
                 )
                 declared_tools = None
@@ -935,7 +1001,7 @@ def attachable_records(
                         "name": record["name"],
                         "description": record.get("description", ""),
                         "url": url,
-                        "gateway": gateway is not None or bool(matches),
+                        "gateway": gateway is not None or bool(matches) or unresolved_endpoint,
                         "record_id": record["recordId"],
                         **({"runtime_tools": declared_tools} if gateway else {}),
                         **{

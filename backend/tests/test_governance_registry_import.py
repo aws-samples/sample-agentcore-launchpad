@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
+from botocore.exceptions import ClientError
 
 from app.core.errors import AppError
 from app.schemas.agent import ToolRef
@@ -508,3 +509,106 @@ def test_resolve_configless_gateway_ref_keeps_legacy_fallback(monkeypatch):
     assert attachments[0]["outbound_auth"]["oauth"]["providerArn"] == (
         "arn:provider:launchpad"
     )
+
+
+XREGION_URL = (
+    "https://web-search-smlhlkheht.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+)
+XREGION_GATEWAY = {
+    "gatewayId": "web-search-smlhlkheht",
+    "gatewayArn": "arn:aws:bedrock-agentcore:us-east-1:111122223333:gateway/web-search-smlhlkheht",
+    "gatewayUrl": XREGION_URL,
+    "name": "web-search",
+    "protocolType": "MCP",
+    "authorizerType": "AWS_IAM",
+}
+
+
+def _regional_get_gateway(monkeypatch, gateways_by_region: dict[str, dict]):
+    """Stub the per-region control client + GetGateway; record the regions read."""
+    regions: list[str] = []
+
+    def fake_control_client(workspace):
+        return {"region": workspace.region}
+
+    def fake_get_gateway(client, gateway_id):
+        regions.append(client["region"])
+        gateway = gateways_by_region.get(client["region"])
+        if gateway is None or gateway["gatewayId"] != gateway_id:
+            raise ClientError(
+                {"Error": {"Code": "ResourceNotFoundException", "Message": "nope"}},
+                "GetGateway",
+            )
+        return gateway
+
+    monkeypatch.setattr(console, "control_client", fake_control_client)
+    monkeypatch.setattr(console.policy_api, "get_gateway", fake_get_gateway)
+    return regions
+
+
+def test_attachables_resolve_a_gateway_in_another_region(monkeypatch):
+    """The reported 401: a us-east-1 AWS_IAM Gateway registered in a us-west-2
+    workspace was invisible to the workspace-region Gateway list, so the catalog
+    offered it as an unauthenticated remote MCP server."""
+    records = {
+        "web": _mcp_record("web", "web-search", XREGION_URL),
+        "gone": _mcp_record(
+            "gone", "gone-gw",
+            "https://gone-abcdefghij.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
+        ),
+        "remote": _mcp_record("remote", "remote", "https://remote.example/mcp"),
+    }
+    monkeypatch.setattr(
+        console.reg, "list_records",
+        lambda *_args: [{"recordId": key, "descriptorType": "MCP"} for key in records],
+    )
+    monkeypatch.setattr(
+        console.reg, "get_record", lambda _client, _registry_id, record_id: records[record_id]
+    )
+    regions = _regional_get_gateway(monkeypatch, {"us-east-1": XREGION_GATEWAY})
+
+    result = console.attachable_records(
+        ws_ctx(), registry_client=object(), registry_id="registry", gateways=[]
+    )
+    by_name = {item["name"]: item for item in result["mcp_servers"]}
+    web = by_name["web-search"]
+    assert web["gateway"] is True
+    assert (web["attachable"], web["auth_type"]) == (True, "aws_iam")
+    assert web["gateway_id"] == "web-search-smlhlkheht"
+    assert web["gateway_arn"] == XREGION_GATEWAY["gatewayArn"]
+    # an AgentCore endpoint that resolves to nothing is a disabled Gateway entry,
+    # never an unauthenticated remote MCP server
+    gone = by_name["gone-gw"]
+    assert gone["gateway"] is True
+    assert gone["attachable"] is False
+    assert gone["auth_type"] is None
+    assert gone["attachability_reason"]
+    # a non-AgentCore URL is untouched and costs no lookup
+    assert (by_name["remote"]["gateway"], by_name["remote"]["auth_type"]) == (False, "none")
+    assert regions == ["us-east-1", "us-east-1"]
+
+
+def test_resolve_gateway_attachments_reads_the_gateway_in_its_own_region(monkeypatch):
+    record = _mcp_record("web", "web-search", XREGION_URL)
+    monkeypatch.setattr(console.reg, "get_record", lambda *_args: record)
+    regions = _regional_get_gateway(monkeypatch, {"us-east-1": XREGION_GATEWAY})
+    tools = [ToolRef(type="gateway", name="web-search",
+                     config={"record_id": "web", "gateway_id": "web-search-smlhlkheht"})]
+    attachments = console.resolve_gateway_attachments(
+        tools,
+        ws_ctx(),
+        registry_client=MagicMock(),
+        agentcore_client={"region": "us-west-2"},
+        registry_id="registry",
+    )
+    assert regions == ["us-east-1"]
+    assert attachments == [{
+        "gateway_id": "web-search-smlhlkheht",
+        "gateway_arn": XREGION_GATEWAY["gatewayArn"],
+        "gateway_name": "web-search",
+        "attachable": True,
+        "attachability_reason": None,
+        "auth_type": "aws_iam",
+        "outbound_auth": {"awsIam": {}},
+    }]
+
