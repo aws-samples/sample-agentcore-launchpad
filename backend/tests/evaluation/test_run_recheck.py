@@ -47,7 +47,8 @@ def test_default_wait_outlasts_the_measured_45_minute_batch():
 def test_batch_still_running_after_the_wait_says_so():
     run_id = make_run(status="evaluating", batch_eval_id="run_slow-1")
 
-    with pytest.raises(RuntimeError, match=r"still IN_PROGRESS after the \d+-minute wait.*re-check"):
+    message = r"still IN_PROGRESS after the \d+-minute wait.*re-check"
+    with pytest.raises(RuntimeError, match=message):
         svc._finish_from_result(run_id, "evaluators", {"status": "IN_PROGRESS"})
 
 
