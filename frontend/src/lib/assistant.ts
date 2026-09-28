@@ -98,11 +98,13 @@ export interface AssistantLiveMessage {
   role: "user" | "assistant" | "tool" | "error";
   text: string;
   name?: string | null;
+  /** sender of a user row; absent for a row typed in this tab (the caller) */
+  author?: string | null;
   streaming?: boolean;
 }
 
 export function toLiveMessages(rows: AssistantMessage[]): AssistantLiveMessage[] {
-  return rows.map((m) => ({ role: m.role, text: m.text, name: m.name }));
+  return rows.map((m) => ({ role: m.role, text: m.text, name: m.name, author: m.author }));
 }
 
 /** The typed proposal pane shows the block; the transcript shows a pointer instead. */

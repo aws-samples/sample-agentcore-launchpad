@@ -204,8 +204,8 @@ export function CreateAgentAssistant() {
     void api
       .assistantConversations()
       .then((res) => {
-        // Admin-shared read-only conversations are a V2 surface; the classic
-        // page is write-oriented, so it keeps listing the caller's own only.
+        // Admin-shared conversations are a V2 surface (it knows CLEAR stays with the
+        // creator); the classic page keeps listing the caller's own only.
         if (alive.current && scope.current === startedIn)
           setConversations(res.conversations.filter((c) => c.mine));
       })

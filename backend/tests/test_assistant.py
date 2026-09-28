@@ -1918,7 +1918,7 @@ def test_conversations_are_private_to_their_principal_even_from_an_admin(gated, 
         db.close()
 
 
-def test_admin_share_publishes_a_read_only_conversation_to_every_member(gated, harness):
+def test_admin_share_opens_a_conversation_to_every_member_except_delete(gated, harness):
     admin, member, other, _ids, _preset = gated
     admin_cid = _open(admin)
     r1 = _propose(admin, harness, admin_cid)
@@ -1944,29 +1944,70 @@ def test_admin_share_publishes_a_read_only_conversation_to_every_member(gated, h
         listed = session.get(f"{BASE}/conversations").json()["conversations"]
         assert [(c["id"], c["owner"], c["mine"], c["shared"]) for c in listed] == [
             (admin_cid, ADMIN_CREDS["username"], False, True)]
-        detail = session.get(f"{BASE}/conversations/{admin_cid}")
-        assert detail.status_code == 200 and detail.json()["mine"] is False
-        assert detail.json()["proposals"][0]["revision"] == r1["revision"]
-        # every write stays with the owner: indistinguishable from missing
-        assert session.post(f"{BASE}/conversations/{admin_cid}/turns",
-                            json={"prompt": "x"}).status_code == 404
-        assert _approve(session, admin_cid, r1).status_code == 404
-        assert session.put(f"{BASE}/conversations/{admin_cid}/proposal",
-                           json={"content": VALID_PROPOSAL}).status_code == 404
-        assert session.post(f"{BASE}/conversations/{admin_cid}/proposal/reject",
-                            json={"revision": r1["revision"]}).status_code == 404
-        assert session.post(f"{BASE}/conversations/{admin_cid}/catalog").status_code == 404
+        assert _latest(session, admin_cid)["mine"] is False
+        assert session.get(f"{BASE}/conversations/{private_cid}").status_code == 404
+        # deleting it (and the CLEAR preview) stays with the owner
         assert session.get(f"{BASE}/conversations/{admin_cid}/footprint").status_code == 404
         assert session.delete(f"{BASE}/conversations/{admin_cid}").status_code == 404
-        assert session.get(f"{BASE}/conversations/{private_cid}").status_code == 404
-    assert _count(Job) == 0
 
-    # withdrawing the share closes it again
+    # a collaborator works on it: discussion (authored), catalog, evaluation plan, review
+    harness.reply("noted")
+    assert _turn(member, admin_cid, "add a travel tool")[-1][0] == "done"
+    detail = _latest(member, admin_cid)
+    authors = [(m["role"], m["author"]) for m in detail["messages"] if m["role"] == "user"]
+    assert authors == [("user", ADMIN_CREDS["username"]), ("user", MEMBER_CREDS["username"])]
+    res = member.post(f"{BASE}/conversations/{admin_cid}/catalog")
+    assert res.status_code == 200 and res.json()["conversation"]["mine"] is False
+    assert member.get(f"{BASE}/conversations/{admin_cid}/evaluation-plan").status_code == 200
+    r2 = _propose(other, harness, admin_cid)
+    assert r2["revision"] > r1["revision"]
+    res = member.put(f"{BASE}/conversations/{admin_cid}/proposal",
+                     json={"content": VALID_PROPOSAL})
+    assert res.status_code == 200, res.text
+    r3 = res.json()["proposal"]
+    assert r3["created_by"] == MEMBER_CREDS["username"]
+    res = _approve(member, admin_cid, r3)
+    assert res.status_code == 202, res.text
+    assert res.json()["proposal"]["approval"]["approved_by"] == MEMBER_CREDS["username"]
+    assert _count(Job) == 1
+
+    # withdrawing the share closes every action again at once
     res = admin.put(f"{BASE}/conversations/{admin_cid}/sharing", json={"shared": False})
     assert res.status_code == 200
     assert res.json()["shared"] is False and res.json()["shared_by"] is None
     assert member.get(f"{BASE}/conversations").json()["conversations"] == []
     assert member.get(f"{BASE}/conversations/{admin_cid}").status_code == 404
+    assert member.post(f"{BASE}/conversations/{admin_cid}/turns",
+                       json={"prompt": "x"}).status_code == 404
+    assert _approve(member, admin_cid, r3).status_code == 404
+    # the owner still sees every contribution, authored
+    assert [m["author"] for m in _latest(admin, admin_cid)["messages"]
+            if m["role"] == "user"][:2] == [ADMIN_CREDS["username"], MEMBER_CREDS["username"]]
+
+
+def test_unshare_during_approval_is_honoured_at_the_claim(gated, harness, monkeypatch):
+    """The collaboration right is re-checked inside the approval, after the live catalog
+    read — withdrawing the share meanwhile leaves nothing deployed."""
+    admin, member, _other, _ids, _preset = gated
+    cid = _open(admin)
+    r1 = _propose(admin, harness, cid)
+    assert admin.put(f"{BASE}/conversations/{cid}/sharing",
+                     json={"shared": True}).status_code == 200
+    original = service.fetch_catalog
+
+    def unshare_then_fetch(workspace):
+        db = SessionLocal()
+        try:
+            db.get(AssistantConversation, cid).shared = False
+            db.commit()
+        finally:
+            db.close()
+        return original(workspace)
+
+    monkeypatch.setattr(service, "fetch_catalog", unshare_then_fetch)
+    res = _approve(member, cid, r1)
+    assert res.status_code == 404 and res.json()["code"] == "assistant.conversation_not_found"
+    assert _count(Job) == 0
 
 
 def test_admin_cannot_share_a_conversation_it_cannot_read(gated, harness):

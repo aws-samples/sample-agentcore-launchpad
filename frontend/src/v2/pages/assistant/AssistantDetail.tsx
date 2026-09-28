@@ -444,9 +444,9 @@ export function AssistantDetail({
   }
 
   const title = conversation.title || conversation.id.slice(0, 8);
-  // An admin-shared conversation of another member: transcript + proposal only.
-  // Every write route is owner-bound on the server; the page offers none of them.
-  const readOnly = !conversation.mine;
+  // Another member's conversation an admin shared: every panel works as for the
+  // owner; only CLEAR (deleting the conversation) stays with the owner.
+  const collaborating = !conversation.mine;
   const approveDisabled = !canDeploy || approving || busy || preparing || resourcesDirty;
   const approveReason = resourcesDirty ? t("assistantProgress.hints.unsaved") : deployReason;
 
@@ -483,7 +483,7 @@ export function AssistantDetail({
                 {t(conversation.shared ? "v2.assistant.unshare" : "v2.assistant.share")}
               </Button>
             )}
-            {!readOnly && (
+            {!collaborating && (
               <Button kind="danger" disabled={busy || clear.busy} title={t("assistantPage.clear.action")}
                 onClick={() => void clear.ask(conversation)} testId="v2-assistant-clear">
                 {t("v2.assistant.clear")}
@@ -496,9 +496,9 @@ export function AssistantDetail({
           </>
         }
       />
-      {readOnly && (
-        <div style={{ marginBottom: 12 }} data-testid="v2-assistant-readonly">
-          <Alert>{t("v2.assistant.readOnly", { owner: conversation.owner })}</Alert>
+      {collaborating && (
+        <div style={{ marginBottom: 12 }} data-testid="v2-assistant-collaborating">
+          <Alert>{t("v2.assistant.collaborating", { owner: conversation.owner })}</Alert>
         </div>
       )}
       <CreationProgressCard latest={latest} deployed={deployed} resourcesDirty={resourcesDirty} editing={editing !== null} />
@@ -514,7 +514,33 @@ export function AssistantDetail({
           onSend={() => void send({ prompt: input })}
           onRefreshCatalog={() => void refreshCatalog()}
           threadRef={threadRef}
-          readOnly={readOnly}
+        />
+
+        {/* resource preparation precedes the proposal it feeds: discuss → prepare → review */}
+        <PreparationCard
+          key={`prep:${workspaceId}:${conversation.id}`}
+          conversation={conversation}
+          workspaceId={workspaceId}
+          disabled={busy || approving || editing !== null || conversation.turn_in_progress !== null}
+          onWorking={setPreparing}
+          locked={resourcesLocked}
+          onDirty={setResourcesDirty}
+          onUpdated={(detail) => {
+            if (!alive.current) return;
+            setConversation((c) => (c?.id === detail.id ? detail : c));
+            setEditing(null);
+            setConfirm(null);
+          }}
+          onCatalog={(catalog) => {
+            if (!alive.current) return;
+            setConversation((c) => (c?.id === conversation.id ? { ...c, catalog } : c));
+          }}
+          onDiscuss={(text) => {
+            setInput(text);
+            const el = document.getElementById(COMPOSER_ID);
+            el?.scrollIntoView({ behavior: "smooth", block: "center" });
+            el?.focus();
+          }}
         />
 
         <section id={SECTION_IDS.proposal} className="v2-card" data-testid="v2-assistant-proposal">
@@ -543,7 +569,7 @@ export function AssistantDetail({
                 resourcesLocked={resourcesLocked}
               />
             )}
-            {latest && !readOnly && (
+            {latest && (
               <>
                 <div style={{ marginTop: 16 }}>
                   <Alert>{t(resourcesLocked ? "assistantPreparation.reviewOnly" : "assistantPage.supportedHere")}</Alert>
@@ -629,33 +655,9 @@ export function AssistantDetail({
         </section>
       </div>
 
-      {!readOnly && <PreparationCard
-        key={`prep:${workspaceId}:${conversation.id}`}
-        conversation={conversation}
-        workspaceId={workspaceId}
-        disabled={busy || approving || editing !== null || conversation.turn_in_progress !== null}
-        onWorking={setPreparing}
-        locked={resourcesLocked}
-        onDirty={setResourcesDirty}
-        onUpdated={(detail) => {
-          if (!alive.current) return;
-          setConversation((c) => (c?.id === detail.id ? detail : c));
-          setEditing(null);
-          setConfirm(null);
-        }}
-        onCatalog={(catalog) => {
-          if (!alive.current) return;
-          setConversation((c) => (c?.id === conversation.id ? { ...c, catalog } : c));
-        }}
-        onDiscuss={(text) => {
-          setInput(text);
-          const el = document.getElementById(COMPOSER_ID);
-          el?.scrollIntoView({ behavior: "smooth", block: "center" });
-          el?.focus();
-        }}
-      />}
 
-      {readOnly ? null : latest ? (
+
+      {latest ? (
         <EvalAssetsCard
           key={`eval:${workspaceId}:${conversation.id}`}
           conversationId={conversation.id}

@@ -6916,6 +6916,7 @@
       "colTitle": "Conversation",
       "colTurns": "Turns",
       "colUpdated": "Last active",
+      "collaborating": "Shared by an administrator; created by {{owner}}. You can keep discussing, prepare resources, review the proposal and run evaluations and experiments — only the creator can clear this conversation.",
       "continue": "Continue",
       "discussion": "Requirements discussion",
       "evalAfterProposal": "Evaluation assets are prepared from a proposal revision — they become available once the assistant has proposed one.",
@@ -6930,7 +6931,6 @@
       "noMatch": "No conversation matches the filters",
       "noProposal": "No proposal yet",
       "ownerLabel": "Created by {{owner}}",
-      "readOnly": "Shared by an administrator and created by {{owner}} — read-only. Resource preparation and evaluation assets are visible to the creator only.",
       "scope": "Scope",
       "scopeMine": "Mine",
       "scopeShared": "Shared with me",
@@ -6938,10 +6938,9 @@
       "share": "Share",
       "shared": "Shared",
       "sharedTip": "Shared with all members by {{by}} · {{at}}",
-      "sharedToast": "Shared with all members (read-only)",
+      "sharedToast": "Shared with all members",
       "unshare": "Unshare",
-      "unsharedToast": "No longer shared",
-      "view": "View"
+      "unsharedToast": "No longer shared"
     },
     "skillLab": {
       "tab": {

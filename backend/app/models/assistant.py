@@ -70,9 +70,9 @@ class AssistantConversation(Base):
     # a revision row (unique index below), so two concurrent writers never share one.
     revision_seq: Mapped[int] = mapped_column(default=0)
     status: Mapped[str] = mapped_column(String(16), default="open")  # open | archived
-    # Admin-published read access: every member of the workspace may READ a shared
-    # conversation; every write stays bound to ``owner_principal``. Stamped with the
-    # admin who toggled it (display username) and when.
+    # Admin-published collaboration: every member of the workspace may read AND work
+    # on a shared conversation (``may_collaborate``); only deleting it stays bound to
+    # ``owner_principal``. Stamped with the admin who toggled it (display username).
     shared: Mapped[bool] = mapped_column(default=False)
     shared_by: Mapped[str | None] = mapped_column(String(64), default=None)
     shared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
@@ -94,6 +94,10 @@ class AssistantMessage(Base):
     role: Mapped[str] = mapped_column(String(16))  # user | assistant | tool | error
     text: Mapped[str] = mapped_column(Text, default="")
     name: Mapped[str | None] = mapped_column(String(80), default=None)  # tool name
+    # Display username of the member who sent a ``user`` row — a shared conversation
+    # has several. NULL on assistant/tool/error rows and on rows written before it
+    # existed (those were always the owner).
+    author: Mapped[str | None] = mapped_column(String(64), default=None)
     # The per-turn AgentCore runtime session id (assistant turns only).
     runtime_session_id: Mapped[str | None] = mapped_column(String(80), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

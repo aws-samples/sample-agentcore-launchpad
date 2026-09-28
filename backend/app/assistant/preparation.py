@@ -268,7 +268,7 @@ def save_selection(
     errors = proposal.reference_errors(candidate, catalog)
     service._lock_conversation(db, cid)
     try:
-        row = service.owned_conversation(db, workspace.id, principal, cid)
+        row = service.accessible_conversation(db, workspace.id, principal, cid)
         require_unlocked(db, cid)
         require_idle(row)
         check_revision(row, request.expected_revision)
@@ -310,7 +310,7 @@ def import_skills(
     cid, principal, token = row.id, principal_of(identity), uuid.uuid4().hex
     service._lock_conversation(db, cid)
     try:
-        row = service.owned_conversation(db, workspace.id, principal, cid)
+        row = service.accessible_conversation(db, workspace.id, principal, cid)
         require_unlocked(db, cid)
         require_idle(row)
         check_revision(row, request.expected_revision)
@@ -363,7 +363,7 @@ def import_skills(
                 sources.append(source)
                 # Keep successful uploads attributable even if a later catalog read fails.
                 service._lock_conversation(db, cid)
-                row = service.owned_conversation(db, workspace.id, principal, cid)
+                row = service.accessible_conversation(db, workspace.id, principal, cid)
                 if row.preparation_token != token:
                     raise AppError("assistant.preparation_stale", "import claim lost",
                                    status_code=409)
@@ -372,7 +372,7 @@ def import_skills(
             results.append({"name": source["name"], "ok": True, "key": source["key"]})
         catalog = live_catalog(workspace, sources)
         service._lock_conversation(db, cid)
-        row = service.owned_conversation(db, workspace.id, principal, cid)
+        row = service.accessible_conversation(db, workspace.id, principal, cid)
         require_unlocked(db, cid)
         require_idle(row, token=token)
         check_revision(row, request.expected_revision)

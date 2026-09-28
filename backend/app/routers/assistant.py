@@ -8,7 +8,8 @@ re-asserted inside the approval, where the caller's account, permission and
 workspace grant are ALSO re-resolved from the database inside the write
 transaction. Every route is workspace-scoped; conversations are additionally bound
 to the caller's immutable principal (``app.assistant.principal``), except that an
-admin may share one read-only with the whole workspace (list + detail read only).
+admin may share one with the whole workspace: every member may then work on it
+(each action under its usual permission), and only its owner may delete it.
 """
 
 import json as _json
@@ -239,7 +240,7 @@ def get_conversation(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     principal = principal_of(_caller(request))
-    row = service.readable_conversation(db, ws.id, principal, conversation_id)
+    row = service.accessible_conversation(db, ws.id, principal, conversation_id)
     return service.conversation_detail(db, row, viewer=principal)
 
 
@@ -256,8 +257,8 @@ def set_sharing(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    """Admin-only: publish (or withdraw) read access to one conversation for every
-    member of the workspace. Writes stay with the owner."""
+    """Admin-only: open (or close) one conversation to every member of the
+    workspace. Deleting it stays with the owner."""
     identity = _caller(request)
     row = service.set_shared(db, ws.id, identity, conversation_id, req.shared)
     return service.conversation_summary(db, row, viewer=principal_of(identity))
@@ -270,9 +271,11 @@ def refresh_catalog(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    row = service.owned_conversation(db, ws.id, principal_of(_caller(request)), conversation_id)
+    principal = principal_of(_caller(request))
+    row = service.accessible_conversation(db, ws.id, principal, conversation_id)
     catalog = service.refresh_catalog(db, row, ws.context)
-    return {"catalog": catalog, "conversation": service.conversation_detail(db, row)}
+    return {"catalog": catalog,
+            "conversation": service.conversation_detail(db, row, viewer=principal)}
 
 
 @router.post("/conversations/{conversation_id}/turns")
@@ -288,7 +291,7 @@ def turn(
     becomes an inert revision. Refusals (404/409/413) happen before the stream opens."""
     identity = _caller(request)
     principal = principal_of(identity)
-    conversation = service.owned_conversation(db, ws.id, principal, conversation_id)
+    conversation = service.accessible_conversation(db, ws.id, principal, conversation_id)
     service._require_available(db, ws.row)
     service.require_turn_capacity(conversation)
     service.check_prompt(conversation, req.prompt)
@@ -306,7 +309,9 @@ def turn(
         # The stream outlives the request scope → its own session.
         session = SessionLocal()
         try:
-            conversation = service.owned_conversation(session, ws.id, principal, conversation_id)
+            conversation = service.accessible_conversation(
+                session, ws.id, principal, conversation_id
+            )
             run.inner = service.run_turn(
                 session, conversation, workspace_row, workspace, identity, prompt, run=run
             )
@@ -333,9 +338,9 @@ def update_preparation(
     db: Session = Depends(get_db), ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     identity = _caller(request)
-    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     row = preparation.save_selection(db, row, ws.context, identity, req)
-    return service.conversation_detail(db, row)
+    return service.conversation_detail(db, row, viewer=principal_of(identity))
 
 
 @router.post("/conversations/{conversation_id}/preparation/skills")
@@ -344,11 +349,12 @@ def import_preparation_skills(
     db: Session = Depends(get_db), ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     identity = _caller(request)
-    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     row, results = preparation.import_skills(
         db, row, ws.context, identity, req, recheck=_recheck_factory(request, ws),
     )
-    return {"conversation": service.conversation_detail(db, row), "results": results}
+    return {"conversation": service.conversation_detail(db, row, viewer=principal_of(identity)),
+            "results": results}
 
 
 @router.put("/conversations/{conversation_id}/proposal")
@@ -368,7 +374,7 @@ def edit_proposal(
             f"the proposal exceeds {proposal_contract.PROPOSAL_MAX_BYTES} bytes",
             {"max_bytes": proposal_contract.PROPOSAL_MAX_BYTES}, status_code=413,
         )
-    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     revision = service.edit_proposal(db, row, req.content, identity)
     return {"proposal": service.proposal_out(db, revision)}
 
@@ -382,7 +388,7 @@ def reject_proposal(
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     identity = _caller(request)
-    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     revision = service.reject_proposal(db, row, req.revision, identity)
     return {"proposal": service.proposal_out(db, revision)}
 
@@ -403,7 +409,7 @@ def approve_proposal(
 
     require_permission(request, service.PERMISSION_DEPLOY)  # belt and braces
     identity = _caller(request)
-    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     outcome = service.approve_proposal(
         db, row, ws.row, ws.context, identity,
         revision=req.revision, content_hash=req.content_hash,
@@ -494,7 +500,7 @@ def get_evaluation_plan(
     """Ledger-only: every plan revision of the caller's conversation and the recorded
     materialization operations (no AWS read, no AWS write)."""
     identity = _caller(request)
-    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     return _plan_state(db, row)
 
 
@@ -509,7 +515,7 @@ def prepare_evaluation_plan(
     """Draft a plan revision from one proposal revision (any shape-valid revision,
     including an already-approved one). No resource side effects."""
     identity = _caller(request)
-    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     plan = assets.prepare_plan(db, row, revision=req.revision, created_by=identity.username)
     return {"plan": assets.plan_out(plan, None), **_plan_state(db, row)}
 
@@ -524,7 +530,7 @@ def edit_evaluation_plan(
 ) -> dict[str, Any]:
     """A member edit is a NEW plan revision (draft or invalid with its errors)."""
     identity = _caller(request)
-    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     plan = assets.edit_plan(db, row, req.content, created_by=identity.username)
     return {"plan": assets.plan_out(plan, None), **_plan_state(db, row)}
 
@@ -537,7 +543,7 @@ def materialize_evaluation_plan(
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> Any:
-    """Administrator + conversation owner: claim exactly one plan revision/hash for
+    """Administrator collaborating on the conversation: claim exactly one plan revision/hash for
     materialization. 202 when this call created the operation (worker launched), 200
     with the recorded operation for a repeated / concurrent request. Creates a local
     Dataset, AgentCore evaluators and one Lambda + role per code evaluator; never
@@ -550,7 +556,7 @@ def materialize_evaluation_plan(
         raise AppError("assistant.disclosure_required",
                        "acknowledge that selected test content becomes visible in the "
                        "workspace Evaluation console", status_code=422)
-    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     # fresh re-resolution of the caller and the workspace grant at the claim boundary
     if auth_enabled():
         fresh = resolve_identity(request, db=db)
@@ -600,7 +606,7 @@ def get_evaluation_operation(
 ) -> dict[str, Any]:
     """Ledger-only status (no AWS call, no mutation)."""
     identity = _caller(request)
-    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     return {"operation": assets.operation_out(assets.owned_operation(db, row, operation_id))}
 
 
@@ -616,7 +622,7 @@ def retry_evaluation_operation(
     intents (same tokens/requests); never a fresh create."""
     require_admin(request)
     identity = _caller(request)
-    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     op = assets.owned_operation(db, row, operation_id)
     started = assets.retry_operation(db, op)
     db.expire_all()
@@ -642,7 +648,7 @@ def review_lambda_revision(
     identity = _caller(request)
     if not identity.is_admin:
         raise AppError("auth.admin_required", "administrator role required", status_code=403)
-    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     op = assets.owned_operation(db, row, operation_id)
     ws_row = db.get(Workspace, ws.id)
     if ws_row is None:
@@ -659,7 +665,7 @@ def review_lambda_revision(
         if fresh_ws is None:
             raise AppError("workspace.not_found", "workspace not found", status_code=404)
         _authorize(session, fresh, fresh_ws)
-        service.owned_conversation(session, ws.id, principal_of(fresh), conversation_id)
+        service.accessible_conversation(session, ws.id, principal_of(fresh), conversation_id)
         return fresh if auth_enabled() else replace(fresh, username="river")
 
     outcome = assets.review_lambda_initial_revision(
@@ -685,7 +691,7 @@ def cleanup_evaluation_operation(
     its role/log group, the additive role policy). The local Dataset stays."""
     require_admin(request)
     identity = _caller(request)
-    row = service.owned_conversation(db, ws.id, principal_of(identity), conversation_id)
+    row = service.accessible_conversation(db, ws.id, principal_of(identity), conversation_id)
     op = assets.owned_operation(db, row, operation_id)
     op = assets.cleanup_operation(db, op, ws.context)
     return {"operation": assets.operation_out(op)}
