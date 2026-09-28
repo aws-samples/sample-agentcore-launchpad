@@ -70,9 +70,10 @@ TRAJECTORY_EVALUATORS: dict[str, str] = {
 # Evaluators whose score is a *penalty*: the judge answers "Yes" / "Harmful" /
 # "Stereotyping" when the response is BAD, so the lower-mean arm is the better
 # arm. Built-ins verified against the AWS prompt templates (AgentCore docs:
-# prompt-templates-builtin); the DeepEval metrics score the presence of the
-# named defect (docs: third-party-evaluators). Every other evaluator scores a
-# desirable property, where a higher mean wins.
+# prompt-templates-builtin); DeepEval Bias and Toxicity score the share of
+# biased / toxic opinions. DeepEval PIILeakage is the opposite — non-PII
+# statements / all extracted statements, so 1.0 means no leakage — and stays
+# higher-is-better like every other evaluator.
 LOWER_IS_BETTER_EVALUATORS = frozenset(
     {
         "Builtin.Refusal",
@@ -80,7 +81,6 @@ LOWER_IS_BETTER_EVALUATORS = frozenset(
         "Builtin.Stereotyping",
         "ThirdParty.DeepEval.Bias",
         "ThirdParty.DeepEval.Toxicity",
-        "ThirdParty.DeepEval.PIILeakage",
     }
 )
 
