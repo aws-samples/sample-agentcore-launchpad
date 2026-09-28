@@ -4,12 +4,13 @@ import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../../auth/auth-context";
 import { api, errorMessage, type V2Range } from "../../../lib/api";
-import { evaluatorLabel } from "../../../lib/evaluators";
+import { hasInsightTrees } from "../../../lib/evaluation";
 import { fmtTime, RANGES, rangeLabel } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
+import { InsightClusters } from "../../InsightClusters";
 import { EvaluatorBreakdown, ResultsTable, SummaryKpis } from "../../ResultsView";
 import { rowsFromOnline, rowsFromRun, summarize } from "../../results";
-import { sourceLabel, STATUS_TONE, statusLabel, taskFromOnline, taskFromRun, type TaskKind, type V2Task } from "../../tasks";
+import { sourceLabel, STATUS_TONE, statusLabel, taskFromOnline, taskFromRun, taskItemLabel, type TaskKind, type V2Task } from "../../tasks";
 import { Alert, Button, Card, Confirm, Descriptions, FilterSelect, FlowHeader, Spin, Tag } from "../../ui";
 
 const POLL_MS = 8000;
@@ -41,10 +42,12 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
   const [busy, setBusy] = useState(false);
   const data = task.data;
   const terminal = data?.kind === "run" && ["completed", "failed", "stopped"].includes(data.status);
+  const insightsRun = data?.kind === "run" && data.mode === "insights";
 
   const results = useLoad(
     async () => {
-      if (!data) return { rows: [], note: null as string | null };
+      // an insights run carries its clusters on the run row — no judged records to read
+      if (!data || insightsRun) return { rows: [], note: null as string | null };
       if (data.kind === "run") {
         if (!terminal) return { rows: [], note: t("v2.taskDetail.waitResults") };
         const res = await api.evaluationRunResults(data.id);
@@ -147,13 +150,14 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
               label: t("v2.tasks.colStrategy"),
               value: data.kind === "online" ? t("v2.tasks.strategyContinuous") : t("v2.tasks.strategyHistory"),
             },
+            ...(insightsRun ? [{ label: t("v2.tasks.mode"), value: t("v2.tasks.modeInsights") }] : []),
             {
-              label: t("v2.tasks.colEvaluators"),
+              label: insightsRun ? t("evalPage.newRun.insightTypes") : t("v2.tasks.colEvaluators"),
               value: (
                 <div className="v2-tags">
                   {data.evaluators.map((e) => (
                     <Tag key={e} tone="outline">
-                      {evaluatorLabel(t, e)}
+                      {taskItemLabel(t, data, e)}
                     </Tag>
                   ))}
                 </div>
@@ -178,33 +182,45 @@ export function TaskDetail({ kind, id }: { kind: TaskKind; id: string }) {
         />
       </Card>
 
-      <SummaryKpis summary={summary} />
-      <EvaluatorBreakdown summary={summary} />
+      {insightsRun ? (
+        <Card title={t("v2.taskDetail.insightsTitle")}>
+          {hasInsightTrees(data.run?.insights) ? (
+            <InsightClusters insights={data.run?.insights ?? {}} />
+          ) : (
+            <Alert>{terminal ? t("v2.taskDetail.insightsEmpty") : t("v2.taskDetail.insightsWait")}</Alert>
+          )}
+        </Card>
+      ) : (
+        <>
+          <SummaryKpis summary={summary} />
+          <EvaluatorBreakdown summary={summary} />
 
-      <Card
-        title={t("v2.taskDetail.results")}
-        end={
-          data.kind === "online" ? (
-            <FilterSelect
-              label={t("v2.common.timeRange")}
-              value={range}
-              onChange={(v) => setRange(v as V2Range)}
-              options={RANGES.map((r) => ({ value: r, label: rangeLabel(t, r) }))}
+          <Card
+            title={t("v2.taskDetail.results")}
+            end={
+              data.kind === "online" ? (
+                <FilterSelect
+                  label={t("v2.common.timeRange")}
+                  value={range}
+                  onChange={(v) => setRange(v as V2Range)}
+                  options={RANGES.map((r) => ({ value: r, label: rangeLabel(t, r) }))}
+                />
+              ) : undefined
+            }
+          >
+            {results.data?.note && <Alert tone="warn">{results.data.note}</Alert>}
+            <ResultsTable
+              rows={rows}
+              loading={results.loading}
+              error={results.error}
+              onRetry={results.reload}
+              range={data.kind === "online" ? range : "7d"}
+              showTask={false}
+              exportName={`task-${data.id}`}
             />
-          ) : undefined
-        }
-      >
-        {results.data?.note && <Alert tone="warn">{results.data.note}</Alert>}
-        <ResultsTable
-          rows={rows}
-          loading={results.loading}
-          error={results.error}
-          onRetry={results.reload}
-          range={data.kind === "online" ? range : "7d"}
-          showTask={false}
-          exportName={`task-${data.id}`}
-        />
-      </Card>
+          </Card>
+        </>
+      )}
 
       <Confirm
         open={confirm !== null}

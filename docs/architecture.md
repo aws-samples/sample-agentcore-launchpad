@@ -2460,7 +2460,7 @@ through the same backend routes and permission checks as the classic pages.
 - **What is native V2.** The workbench (`/v2`), Agent management (above) and the Agent evaluation module:
   数据中心 `/v2/eval/data` (tabs: Agent trajectories = observability traces with a
   trace/session detail, datasets with a record editor, data-processing pipelines),
-  评估任务 `/v2/eval/tasks`, 分析洞察 `/v2/eval/insights` and 评估器
+  评估任务 `/v2/eval/tasks`, 评估总览 `/v2/eval/insights` and 评估器
   `/v2/eval/evaluators`. Sub-pages follow the console convention: `?view=` states
   of one route (`view=new|detail|edit|trace|dataset|pipeline…`). Every other
   sidebar entry (agent development, runtime, experiments, administration) is a
@@ -2470,13 +2470,19 @@ through the same backend routes and permission checks as the classic pages.
   evaluated once; `name`/`description` stored on the run row), an agent-owned
   scores-mode online evaluation config is a *continuous* task (sampling rate,
   session timeout; its description is the task name). Status maps both onto
-  queued / running / completed / failed / stopped / paused.
-- **Results are shown, not exported.** Task detail and 分析洞察 read the judged
+  queued / running / completed / failed / stopped / paused. A history task picks
+  an evaluation type: evaluator scoring, or insights (failure analysis / user
+  intent / execution summary — the classic run form's insights mode,
+  `mode: "insights"` on `POST /api/eval/runs`). An insights task's detail shows
+  the run's clusters instead of scores; clustering needs at least 3 sessions, so
+  hand-picked sessions require 3 and a smaller window/dataset warns. Continuous
+  insights stay on the online-evaluation page (they carry a report schedule).
+- **Results are shown, not exported.** Task detail and 评估总览 read the judged
   records (`GET /api/eval/runs/{id}/results`, `GET /api/eval/online/{id}/results`)
   into one row model (`v2/results.ts`): outcome, raw and **normalized** score
   (0–1, penalty evaluators inverted via `evaluatorPolarity`), label, explanation.
-  A normalized score below 0.7 is a Bad Case. Insights aggregates the latest 12
-  completed runs of the window plus every continuous task, with KPIs, a
+  A normalized score below 0.7 is a Bad Case. 评估总览 aggregates the latest 12
+  completed scored runs of the window (insights runs carry no scores) plus every continuous task, with KPIs, a
   per-evaluator breakdown, filters, CSV export and "bad cases → dataset", which
   feeds `POST /api/eval/datasets/from-sessions` (see the Data Processing API).
 

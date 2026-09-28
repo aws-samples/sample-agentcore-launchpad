@@ -3599,7 +3599,11 @@ export interface V2RunCreate {
   agent_id: string;
   name?: string;
   description?: string;
+  /** `insights` clusters the sessions (failure analysis / intent) instead of scoring them */
+  mode?: "evaluators" | "insights";
   evaluators: string[];
+  /** insight-type subset, insights mode only */
+  insights?: string[];
   dataset_id?: string;
   cloud_dataset_id?: string;
   session_ids?: string[];

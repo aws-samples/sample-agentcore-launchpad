@@ -5111,7 +5111,7 @@
       "groupAdmin": "配置",
       "dataCenter": "数据中心",
       "tasks": "评估任务",
-      "insights": "分析洞察",
+      "insights": "评估总览",
       "evaluators": "评估器",
       "experiments": "A/B实验",
       "online": "在线评估"
@@ -5723,7 +5723,19 @@
       "gtWarning": "部分所选评估器依赖标准答案，仅能对带预期输出的数据（含预期输出的数据集）打分。",
       "recheck": "重新检查 AWS 结果",
       "recheckHint": "重新从 AWS 读取该运行的批量评估：已完成的批次会补齐结果，仍在运行的会继续轮询。不会重新运行，也不产生费用。",
-      "recheckStillFailed": "已重新检查：该批量评估在 AWS 上本身就失败了。"
+      "recheckStillFailed": "已重新检查：该批量评估在 AWS 上本身就失败了。",
+      "mode": "评估类型",
+      "modeEvaluators": "评估器打分",
+      "modeEvaluatorsDesc": "由评估器对每个会话打分",
+      "modeInsights": "洞察 · 失败归因",
+      "modeInsightsDesc": "把会话聚类为失败类别与用户意图",
+      "modeInsightsShort": "洞察",
+      "stepInsights": "选择分析类型",
+      "pickInsights": "选择分析类型",
+      "errInsights": "请至少选择一种分析类型",
+      "errInsightSessions": "洞察聚类至少需要 {{min}} 个会话",
+      "insightsNoContinuous": "持续洞察请在「在线评估」页面创建。",
+      "insightsFewSessions": "所选数据不足 {{min}} 个会话，聚类可能没有结果。"
     },
     "taskStatus": {
       "queued": "排队中",
@@ -5762,7 +5774,10 @@
         "run_active": "任务仍在运行中。",
         "stream_missing": "结果日志尚不可用。",
         "unreadable": "无法读取评估结果。"
-      }
+      },
+      "insightsTitle": "洞察结果",
+      "insightsWait": "任务完成后展示洞察聚类。",
+      "insightsEmpty": "该任务未产出洞察聚类。"
     },
     "outcome": {
       "passed": "通过",
@@ -5770,7 +5785,7 @@
       "error": "评估异常"
     },
     "insights": {
-      "title": "分析洞察",
+      "title": "评估总览",
       "desc": "汇总近期评估任务的全部评估结果。",
       "kpiCount": "评估数量",
       "kpiCountSub": "{{passed}} 通过 · {{failed}} Bad Case · {{errors}} 异常",

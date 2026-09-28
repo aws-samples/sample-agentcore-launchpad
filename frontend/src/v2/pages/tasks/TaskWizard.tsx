@@ -7,6 +7,8 @@ import { CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
 import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
+import { INSIGHT_TYPES, insightLabel } from "../../online";
+import type { TaskMode } from "../../tasks";
 import {
   Alert,
   Button,
@@ -28,11 +30,14 @@ type Strategy = "history" | "continuous";
 const LOOKBACKS = [1, 6, 24, 72, 168, 336];
 const SESSION_RANGE: V2Range = "7d";
 const MAX_EVALUATORS = 10;
+/** Insight clustering needs at least this many sessions. */
+const MIN_INSIGHT_SESSIONS = 3;
 
 interface Draft {
   name: string;
   description: string;
   agentId: string;
+  mode: TaskMode;
   source: Source;
   strategy: Strategy;
   lookbackHours: number;
@@ -42,12 +47,15 @@ interface Draft {
   sampling: number;
   sessionTimeout: number;
   evaluators: string[];
+  /** insight types, insights mode only */
+  insights: string[];
 }
 
 const EMPTY: Draft = {
   name: "",
   description: "",
   agentId: "",
+  mode: "evaluators",
   source: "window",
   strategy: "history",
   lookbackHours: 24,
@@ -56,6 +64,7 @@ const EMPTY: Draft = {
   sampling: 10,
   sessionTimeout: 15,
   evaluators: ["Builtin.Correctness", "Builtin.Helpfulness"],
+  insights: [...INSIGHT_TYPES],
 };
 
 /**
@@ -67,7 +76,8 @@ async function seedDraft(from: string | null, handoff: Handoff, copySuffix: stri
   if (from?.startsWith("run:")) {
     const run = await api.getEvaluationRun(from.slice(4));
     const name = run.dataset_name ?? "";
-    const base = { ...EMPTY, name: `${run.name || run.agent_name}${copySuffix}`.slice(0, 64), description: run.description ?? "", agentId: run.agent_id, evaluators: run.evaluators };
+    const copied = run.mode === "insights" ? { mode: "insights" as const, insights: run.evaluators } : { evaluators: run.evaluators };
+    const base: Draft = { ...EMPTY, name: `${run.name || run.agent_name}${copySuffix}`.slice(0, 64), description: run.description ?? "", agentId: run.agent_id, ...copied };
     if (name.startsWith("window:")) return { ...base, source: "window", lookbackHours: parseInt(name.slice(7), 10) || 24 };
     if (name.startsWith("cloud:") && run.dataset_id) return { ...base, source: "dataset", dataset: `${CLOUD_VALUE_PREFIX}${run.dataset_id}` };
     if (run.dataset_id) return { ...base, source: "dataset", dataset: run.dataset_id };
@@ -158,6 +168,9 @@ export function TaskWizard() {
     if (!draft.agentId) return t("v2.tasks.errAgent");
     if (draft.source === "sessions" && draft.sessionIds.length === 0) return t("v2.tasks.errSessions");
     if (draft.source === "dataset" && !draft.dataset) return t("v2.tasks.errDataset");
+    if (draft.mode === "insights" && draft.source === "sessions" && draft.sessionIds.length < MIN_INSIGHT_SESSIONS) {
+      return t("v2.tasks.errInsightSessions", { min: MIN_INSIGHT_SESSIONS });
+    }
     return null;
   };
 
@@ -168,12 +181,14 @@ export function TaskWizard() {
   };
 
   const submit = async () => {
-    if (draft.evaluators.length === 0) return setError(t("v2.tasks.errEvaluators"));
-    if (draft.evaluators.length > MAX_EVALUATORS) return setError(t("v2.tasks.errTooMany", { max: MAX_EVALUATORS }));
+    const insights = draft.mode === "insights";
+    if (insights && draft.insights.length === 0) return setError(t("v2.tasks.errInsights"));
+    if (!insights && draft.evaluators.length === 0) return setError(t("v2.tasks.errEvaluators"));
+    if (!insights && draft.evaluators.length > MAX_EVALUATORS) return setError(t("v2.tasks.errTooMany", { max: MAX_EVALUATORS }));
     setSubmitting(true);
     setError(null);
     try {
-      if (draft.strategy === "continuous") {
+      if (draft.strategy === "continuous" && !insights) {
         const cfg = await api.v2CreateOnlineConfig({
           agent_id: draft.agentId,
           mode: "scores",
@@ -199,7 +214,7 @@ export function TaskWizard() {
           agent_id: draft.agentId,
           name: draft.name.trim(),
           description: draft.description || undefined,
-          evaluators: draft.evaluators,
+          ...(insights ? { mode: "insights" as const, evaluators: [], insights: draft.insights } : { evaluators: draft.evaluators }),
           ...scope,
         });
         toast("success", t("v2.tasks.createdRun"));
@@ -222,13 +237,28 @@ export function TaskWizard() {
     { key: "dataset" },
   ];
   const chooseSource = (source: Source) => set({ source, strategy: source === "window" ? draft.strategy : "history" });
+  // continuous insights are an online-evaluation config with a report schedule — not a task
+  const chooseMode = (mode: TaskMode) => set({ mode, strategy: mode === "insights" ? "history" : draft.strategy });
+  const toggleInsight = (id: string) =>
+    set({ insights: INSIGHT_TYPES.filter((x) => (x === id ? !draft.insights.includes(id) : draft.insights.includes(x))) });
+  // too few sessions to cluster — the batch would come back with no trees
+  const fewSessions =
+    draft.mode === "insights" &&
+    ((draft.source === "window" && !sessions.loading && windowSessions.length < MIN_INSIGHT_SESSIONS) ||
+      (draft.source === "dataset" && !!selectedDataset && selectedDataset.item_count < MIN_INSIGHT_SESSIONS));
 
   return (
     <>
       <FlowHeader
         title={t("v2.tasks.newTitle")}
         onBack={() => setParams({})}
-        steps={<Steps steps={[t("v2.tasks.stepData"), t("v2.tasks.stepEvaluators")]} current={step} onSelect={setStep} />}
+        steps={
+          <Steps
+            steps={[t("v2.tasks.stepData"), draft.mode === "insights" ? t("v2.tasks.stepInsights") : t("v2.tasks.stepEvaluators")]}
+            current={step}
+            onSelect={setStep}
+          />
+        }
         end={
           <>
             <Button disabled={step === 0} onClick={() => setStep(0)}>
@@ -268,6 +298,24 @@ export function TaskWizard() {
               <Field label={t("v2.tasks.description")} full>
                 <textarea className="v2-textarea" rows={2} value={draft.description} maxLength={1000} placeholder={t("v2.tasks.descPlaceholder")} onChange={(e) => set({ description: e.target.value })} />
               </Field>
+              <Field label={t("v2.tasks.mode")} full>
+                <div className="v2-options" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+                  <OptionCard
+                    title={t("v2.tasks.modeEvaluators")}
+                    desc={t("v2.tasks.modeEvaluatorsDesc")}
+                    on={draft.mode === "evaluators"}
+                    onClick={() => chooseMode("evaluators")}
+                    testId="v2-task-mode-evaluators"
+                  />
+                  <OptionCard
+                    title={t("v2.tasks.modeInsights")}
+                    desc={t("v2.tasks.modeInsightsDesc")}
+                    on={draft.mode === "insights"}
+                    onClick={() => chooseMode("insights")}
+                    testId="v2-task-mode-insights"
+                  />
+                </div>
+              </Field>
             </div>
           </Card>
 
@@ -304,11 +352,16 @@ export function TaskWizard() {
                     title={t("v2.tasks.strategyContinuous")}
                     desc={t("v2.tasks.strategyContinuousDesc")}
                     on={draft.strategy === "continuous"}
-                    disabled={draft.source !== "window"}
+                    disabled={draft.source !== "window" || draft.mode === "insights"}
                     onClick={() => set({ strategy: "continuous" })}
                     testId="v2-task-strategy-continuous"
                   />
                 </div>
+                {draft.mode === "insights" && draft.source === "window" && (
+                  <p className="v2-muted" style={{ marginTop: 8 }}>
+                    {t("v2.tasks.insightsNoContinuous")}
+                  </p>
+                )}
               </div>
               <div>
                 <h3 className="v2-sec-title" style={{ fontSize: 14 }}>
@@ -429,7 +482,28 @@ export function TaskWizard() {
         </>
       )}
 
-      {step === 1 && (
+      {step === 1 && draft.mode === "insights" && (
+        <Card title={t("v2.tasks.pickInsights")} sub={t("v2.tasks.pickedCount", { count: draft.insights.length, max: INSIGHT_TYPES.length })}>
+          <div className="v2-form">
+            <Field label={t("evalPage.newRun.insightTypes")}>
+              <div className="v2-checks">
+                {INSIGHT_TYPES.map((id) => (
+                  <label key={id} className="v2-check">
+                    <input type="checkbox" checked={draft.insights.includes(id)} onChange={() => toggleInsight(id)} data-testid={`v2-task-insight-${id}`} />
+                    {insightLabel(t, id)}
+                  </label>
+                ))}
+              </div>
+            </Field>
+          </div>
+          <div className="v2-stack" style={{ marginTop: 12 }}>
+            <Alert>{draft.source === "dataset" ? t("evalPage.newRun.insightsHint") : t("evalPage.newRun.insightsWindowHint")}</Alert>
+            {fewSessions && <Alert tone="warn">{t("v2.tasks.insightsFewSessions", { min: MIN_INSIGHT_SESSIONS })}</Alert>}
+          </div>
+        </Card>
+      )}
+
+      {step === 1 && draft.mode === "evaluators" && (
         <Card title={t("v2.tasks.pickEvaluators")} sub={t("v2.tasks.pickedCount", { count: draft.evaluators.length, max: MAX_EVALUATORS })}>
           <div className="v2-toolbar">
             <FilterSelect
