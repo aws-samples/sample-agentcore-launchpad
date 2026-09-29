@@ -109,6 +109,31 @@ def gateway_target_selectors(
     return list(dict.fromkeys(selectors))
 
 
+def qualify_remote_selectors(patterns: Iterable[str], servers: Iterable[str]) -> list[str]:
+    """Rewrite ``@<server>/<tool>`` selectors for ``remote_mcp`` servers.
+
+    Live 2026-09-29: a Harness names a ``remote_mcp`` server's tools
+    ``<server>_<tool>`` and its allowedTools tool part must use that qualified name
+    (``@dw/read_x`` matches nothing, ``@dw/dw_read_x`` matches), whereas an
+    ``agentcore_gateway`` tool keeps its bare name. The user-token path swaps the
+    shared Gateway for a ``remote_mcp`` server, so its selectors are re-qualified. A
+    qualified selector past the 64-character limit keeps the longest prefix that fits
+    plus ``*`` — never the whole server.
+    """
+    remote = set(servers)
+    result = []
+    for pattern in patterns:
+        group, slash, tool = pattern.partition("/")
+        server = group.removeprefix("@")
+        if slash and group.startswith("@") and server in remote and tool and tool != "*" \
+                and not tool.startswith(f"{server}_"):
+            pattern = f"{group}/{server}_{tool}"
+            if len(pattern) > ALLOWED_TOOL_MAX_LEN:
+                pattern = pattern[:ALLOWED_TOOL_MAX_LEN - 1].rstrip("*") + "*"
+        result.append(pattern)
+    return list(dict.fromkeys(result))
+
+
 def remap_tool_patterns(patterns: Iterable[str], names: Mapping[str, str]) -> list[str]:
     """Remap configured-group selectors without enlarging their tool suffix.
 
