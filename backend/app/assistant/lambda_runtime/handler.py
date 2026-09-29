@@ -81,6 +81,16 @@ STRUCTURAL_NAMES = ("execute_event_loop_cycle",)
 TOOL_OPERATION = "execute_tool"
 TOOL_NAME_KEYS = ("gen_ai.tool.name", "tool.name")
 TOOL_SPAN_PREFIXES = ("execute_tool ", "execute_tool:")
+# An MCP client instrumentation records the transport of a tool call as a CLIENT span
+# ("mcp tools/call <tool>", mcp.method.name) nested under the agent's execute_tool span:
+# the same call, never a second one (measured on Harness spans 2026-09-29).
+MCP_METHOD_KEY = "mcp.method.name"
+# The console's logged-in chat swaps launchpad-gw for the remote_mcp server
+# ``launchpad_gw_user`` (app.services.agentcore.harness.user_authenticated_tools), and a
+# Harness names remote_mcp tools ``<server>_<tool>``: the same Gateway tool is then
+# ``launchpad_gw_user_hr-database___get_employee`` instead of the catalog name
+# ``hr-database___get_employee``. Rules use catalog names, so the alias is removed.
+USER_GATEWAY_TOOL_PREFIX = "launchpad_gw_user_"
 COMPLETE_FINISH = ("end_turn", "stop", "stop_sequence", "completed", "end", "eos")
 INTERRUPTED_FINISH = ("cancelled", "canceled", "timeout_exceeded", "max_iterations",
                       "max_iterations_exceeded")
@@ -301,7 +311,23 @@ class _Group:
             return True
         return self.span is None and any(_is_tool_log(_body(log)) for log in self.logs)
 
+    def parent_span_id(self):
+        if not self.span or all(self.span.get(k) in (None, "")
+                                for k in ("parentSpanId", "parent_span_id")):
+            return None
+        return _identity(self.span, "parentSpanId", "parent_span_id")
+
+    def is_mcp_transport(self):
+        return MCP_METHOD_KEY in self.attrs
+
     def tool_name(self):
+        name = self._raw_tool_name()
+        if name and name.startswith(USER_GATEWAY_TOOL_PREFIX) \
+                and name[len(USER_GATEWAY_TOOL_PREFIX):]:
+            return name[len(USER_GATEWAY_TOOL_PREFIX):]
+        return name
+
+    def _raw_tool_name(self):
         names = []
         for key in TOOL_NAME_KEYS:
             if key in self.attrs:
@@ -670,9 +696,12 @@ def extract_evidence(docs, level, target):
     groups = _group(selected)
     session_id = _session_id(groups)
     tools = []
+    tool_ids = {(g.trace_id, g.span_id) for g in groups if g.is_tool()}
     for g in groups:
         if not g.is_tool():
             continue
+        if g.is_mcp_transport() and (g.trace_id, g.parent_span_id()) in tool_ids:
+            continue  # the transport span of its parent's call, not another call
         name = g.tool_name()
         if not name:
             raise Unusable("UNKNOWN_TOOL", f"tool call {g.span_id or '?'} has no tool name")

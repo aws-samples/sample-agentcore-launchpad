@@ -125,6 +125,12 @@ def new_session_id() -> str:
     return uuid.uuid4().hex + uuid.uuid4().hex
 
 
+# The remote_mcp server the logged-in chat path mounts in place of launchpad-gw. A
+# Harness names its tools ``<alias>_<tool>`` — the evaluator Lambda strips exactly
+# this prefix (app/assistant/lambda_runtime/handler.py USER_GATEWAY_TOOL_PREFIX).
+USER_GATEWAY_ALIAS = "launchpad_gw_user"
+
+
 def user_authenticated_tools(
     spec: Mapping[str, Any],
     resources: Mapping[str, Any],
@@ -156,7 +162,7 @@ def user_authenticated_tools(
                     raise ValueError("authenticated user Gateway URL is missing")
                 result.append({
                     "type": "remote_mcp",
-                    "name": "launchpad_gw_user",
+                    "name": USER_GATEWAY_ALIAS,
                     "config": {"remoteMcp": {
                         "url": str(resources["gateway_url"]),
                         "headers": {"Authorization": f"Bearer {access_token}"},
@@ -195,7 +201,7 @@ def user_authenticated_tools(
                 result.append(
                     {
                         "type": "remote_mcp",
-                        "name": "launchpad_gw_user",
+                        "name": USER_GATEWAY_ALIAS,
                         "config": {
                             "remoteMcp": {
                                 "url": str(resources["gateway_url"]),

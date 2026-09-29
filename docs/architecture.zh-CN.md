@@ -912,7 +912,7 @@ Agent 从不被触碰；批准 Agent 不等于授权创建云端评估资源。
 - **代码评估器 = 一个经审阅的静态 stdlib Lambda + 数据**（`app/assistant/lambda_runtime/handler.py`）。证据按
   已安装 SDK 的 ADOT / Strands 线上表示解析：`body.output` / `gen_ai.choice` 是当前轮输出，`body.input` /
   `gen_ai.assistant.message` 是历史，从不当作输出；取最终模型轮的全部文本片段拼接；`tool_use` 结束 = 不完整，
-  长度 / 内容过滤结束 = 截断，无输出 = 无证据；工具调用按 span id 去重、无名即未知、顺序不明即报错；参考输入
+  长度 / 内容过滤结束 = 截断，无输出 = 无证据；工具调用按 span id 去重、无名即未知、顺序不明即报错；嵌套在工具 span 之下的 MCP 客户端 `tools/call` span（`mcp.method.name`）是该调用的传输记录而非第二次调用；登录态对话的 remote_mcp 前缀 `launchpad_gw_user_` 会被去除，使规则在两条调用路径上都匹配目录中的 Gateway 名称；参考输入
   必须属于本 session 且不冲突。任何违反都返回错误信封，绝不 PASS。
 - **持久化、带围栏的创建**：批准是一次原子声明（计划行仍为 draft、同哈希、最新版本的条件更新，与插入操作及
   **钉住的 Workspace 身份**（账号、Region、AssumeRole、执行角色 ARN/RoleId——仅接受带 `launchpad:managed` 标签
