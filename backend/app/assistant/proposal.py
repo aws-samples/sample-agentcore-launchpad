@@ -37,6 +37,10 @@ from app.schemas.agent import (
 from app.system_agents.presets import is_reserved_name
 
 PROPOSAL_FENCE = "launchpad-proposal"
+# A revision of the latest stored proposal as RFC 6902 operations: a correction costs
+# the model the changed members only, never a second copy of the whole proposal.
+PATCH_FENCE = "launchpad-proposal-patch"
+PATCH_MAX_OPERATIONS = 200
 
 # The model a proposed agent gets unless the architect names another — the Create
 # Agent wizard's default (``MODEL_CATALOG.bedrock[0]`` in frontend/src/lib/models.ts,
@@ -48,6 +52,9 @@ PROPOSAL_DEFAULT_MODEL_ID = "global.openai.gpt-6-sol"
 PROPOSAL_MAX_BYTES = 64_000
 _FENCE_RE = re.compile(
     r"```" + PROPOSAL_FENCE + r"[ \t]*\r?\n(.*?)\r?\n[ \t]*```", re.DOTALL
+)
+_PATCH_FENCE_RE = re.compile(
+    r"```" + PATCH_FENCE + r"[ \t]*\r?\n(.*?)\r?\n[ \t]*```", re.DOTALL
 )
 _NAME_RE = r"^[a-z][a-z0-9-]{2,47}$"
 _MODEL_ID_RE = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{2,120}$"
@@ -334,6 +341,124 @@ def extract_block(text: str) -> tuple[str | None, list[str]]:
     return block, []
 
 
+def extract_patch(text: str) -> tuple[str | None, list[str]]:
+    """The single fenced revision block of a reply — ``extract_block``'s contract for
+    ``launchpad-proposal-patch``. A reply carries a full block OR a patch, never both
+    (the caller refuses the pair)."""
+    matches = _PATCH_FENCE_RE.findall(text or "")
+    if not matches:
+        return None, []
+    if len(matches) > 1:
+        return None, [f"reply carries {len(matches)} proposal revision blocks; exactly one "
+                      "is allowed"]
+    block = matches[0]
+    if len(block.encode("utf-8")) > PROPOSAL_MAX_BYTES:
+        return None, [f"proposal revision block exceeds {PROPOSAL_MAX_BYTES} bytes"]
+    return block, []
+
+
+def is_patch_base(content: Any) -> bool:
+    """A stored revision a patch can apply to: a real proposal object, not the marker
+    of a block that was too large or unparseable to keep."""
+    return isinstance(content, dict) and bool(content) and "_rejected" not in content
+
+
+def _pointer(path: Any) -> list[str] | None:
+    if not isinstance(path, str) or not path.startswith("/"):
+        return None
+    return [t.replace("~1", "/").replace("~0", "~") for t in path[1:].split("/")]
+
+
+def _index(container: list[Any], token: str, *, insert: bool) -> int | None:
+    if insert and token == "-":
+        return len(container)
+    if not token.isdigit() or (len(token) > 1 and token.startswith("0")):
+        return None
+    i = int(token)
+    return i if i < len(container) + (1 if insert else 0) else None
+
+
+def apply_patch(base: dict[str, Any], raw: Any, *, base_revision: int) -> tuple[
+    dict[str, Any] | None, list[str]
+]:
+    """Apply ``{"base_revision": N, "operations": [...]}`` to a deep copy of ``base``.
+
+    RFC 6902 ``add`` / ``remove`` / ``replace`` / ``test`` with JSON Pointer paths
+    (``-`` appends to an array). All or nothing: the first failing operation rejects the
+    whole revision, and the result still goes through the ordinary ``validate``.
+    ``base_revision`` must name the revision the platform offered as the base, so a
+    patch written against an older view can never land on newer content. The messages
+    speak of "the change", not of patches: the member sees them.
+    """
+    data = raw
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+        except ValueError as exc:
+            return None, [f"the proposal change is not valid JSON: {exc}"]
+    if not isinstance(data, dict) or set(data) - {"base_revision", "operations"}:
+        return None, ["the proposal change must be an object with base_revision and "
+                      "operations only"]
+    if data.get("base_revision") != base_revision:
+        return None, [f"the proposal change targets revision {data.get('base_revision')!r}, "
+                      f"but the current stored proposal is revision {base_revision}"]
+    ops = data.get("operations")
+    if not isinstance(ops, list) or not ops:
+        return None, ["the proposal change lists no operations"]
+    if len(ops) > PATCH_MAX_OPERATIONS:
+        return None, [f"the proposal change has {len(ops)} operations "
+                      f"(max {PATCH_MAX_OPERATIONS})"]
+    doc: Any = json.loads(json.dumps(base))
+    for n, op in enumerate(ops, start=1):
+        where = f"change {n}"
+        if not isinstance(op, dict) or op.get("op") not in ("add", "remove", "replace", "test"):
+            return None, [f"{where}: op must be add, remove, replace or test"]
+        kind = op["op"]
+        allowed = {"op", "path"} | ({"value"} if kind != "remove" else set())
+        if set(op) - allowed or (kind != "remove" and "value" not in op):
+            return None, [f"{where} ({kind}): takes exactly {sorted(allowed)}"]
+        tokens = _pointer(op.get("path"))
+        if not tokens or tokens == [""]:
+            return None, [f"{where}: path must point inside the proposal, e.g. /system_prompt"]
+        where = f"{where} ({kind} {op['path']})"
+        parent: Any = doc
+        for token in tokens[:-1]:
+            if isinstance(parent, dict) and token in parent:
+                parent = parent[token]
+            elif isinstance(parent, list) and _index(parent, token, insert=False) is not None:
+                parent = parent[int(token)]
+            else:
+                return None, [f"{where}: path does not exist"]
+        last = tokens[-1]
+        if isinstance(parent, dict):
+            exists = last in parent
+            if kind in ("remove", "replace", "test") and not exists:
+                return None, [f"{where}: path does not exist"]
+            if kind == "test":
+                if parent[last] != op["value"]:
+                    return None, [f"{where}: current value differs from the tested value"]
+            elif kind == "remove":
+                del parent[last]
+            else:
+                parent[last] = op["value"]
+        elif isinstance(parent, list):
+            i = _index(parent, last, insert=kind == "add")
+            if i is None:
+                return None, [f"{where}: array index out of range"]
+            if kind == "test":
+                if parent[i] != op["value"]:
+                    return None, [f"{where}: current value differs from the tested value"]
+            elif kind == "remove":
+                parent.pop(i)
+            elif kind == "replace":
+                parent[i] = op["value"]
+            else:
+                parent.insert(i, op["value"])
+        else:
+            return None, [f"{where}: path does not exist"]
+    return doc, []
+
+
 def parse_content(raw: Any) -> tuple[ProposalContent | None, list[str]]:
     """Shape validation only (no catalog). ``raw`` may be a JSON string or a dict.
     The byte cap is checked first, so an oversized object is never validated or
@@ -567,7 +692,7 @@ def bindings_view(bindings: dict[str, Any] | None) -> dict[str, Any] | None:
 def validate(
     raw: Any, catalog: dict[str, Any]
 ) -> tuple[ProposalContent | None, dict[str, Any], list[str]]:
-    """Byte cap → shape → references → bindings, in one call.
+    """Byte cap → shape → references → evaluation draft → bindings, in one call.
 
     Returns ``(content | None, display_dict, errors)``. ``display_dict`` is the
     normalized content when the shape parsed (so an invalid-reference revision can
@@ -581,6 +706,10 @@ def validate(
         return None, {"_rejected": "oversized or unparseable proposal was not stored"}, errors
     errors = reference_errors(content, catalog)
     display = content_dump(content)
+    if not errors:
+        from app.assistant.evaluation_plan import draft_plan_errors
+
+        errors = draft_plan_errors(display, catalog)
     if not errors:
         try:
             resource_bindings(content, catalog)

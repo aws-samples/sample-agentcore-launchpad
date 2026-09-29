@@ -611,6 +611,11 @@ def reference_dependent(entry: Any) -> bool:
     return False
 
 
+# A drafted scenario the member still has to confirm: expected on every fresh draft of
+# a proposal whose golden tests carry no typed seed scenario, never a proposal defect.
+REVIEW_PENDING = "scenarios need review before assets can be created"
+
+
 def validate_plan(
     raw: Any, proposal_content: dict[str, Any], *, revision: int, content_hash: str
 ) -> tuple[EvaluationPlan | None, list[str]]:
@@ -689,7 +694,7 @@ def validate_plan(
             errors.append(f"recommendations[{r.index}]: carries keys but is not 'mapped'")
     pending = [s.golden_test_id for s in plan.scenarios if s.review_required]
     if pending:
-        errors.append("scenarios need review before assets can be created: "
+        errors.append(REVIEW_PENDING + ": "
                       + ", ".join(pending) + " (confirm each as typed turns — "
                       "review_required: false — or block the golden test)")
     errors += _routing_errors(plan)
@@ -945,6 +950,32 @@ def draft_size_errors(content: dict[str, Any]) -> list[str]:
             "ids named in evaluator_recommendations, the assertions judge when every "
             "scenario has assertions, the expected-tools rule when every scenario has an "
             "expected_trajectory) — count them against the ten"]
+
+
+def draft_plan_errors(content: dict[str, Any], catalog: dict[str, Any]) -> list[str]:
+    """What preparing the evaluation plan of this proposal would report, at the moment
+    the proposal is recorded. ``draft_plan`` adds entries the seed does not carry (ids
+    named in recommendations, the assertions judge, the expected-tools rule, drafted
+    scenarios for unseeded golden tests); the seed checks never saw those, so a proposal
+    could pass here and fail only when the member reached the evaluation step. The
+    same ``validate_plan`` + ``rule_catalog_errors`` pair ``prepare_plan`` runs is
+    applied to the draft, minus the review the member owes a drafted scenario."""
+    if draft_size_errors(content):
+        return []  # the size check of the proposal contract already reported it
+    draft = draft_plan(content, revision=1, content_hash="0" * 64,
+                       agent_name=str(content.get("name") or "agent"))
+    _plan, errors = validate_plan(draft, content, revision=1, content_hash="0" * 64)
+    errors = [e for e in errors if not e.startswith(REVIEW_PENDING)]
+    try:
+        plan = EvaluationPlan.model_validate(draft)
+    except ValidationError:
+        plan = None  # validate_plan reported the shape errors
+    if plan is not None:
+        from app.assistant.tool_catalog import rule_catalog_errors
+
+        errors += rule_catalog_errors(plan.evaluators, content, catalog,
+                                      scenarios=plan.scenarios)
+    return [f"evaluation_plan (as drafted for review): {e}" for e in dict.fromkeys(errors)]
 
 
 def seed_errors(

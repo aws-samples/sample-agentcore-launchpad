@@ -1,18 +1,26 @@
-# Proposal self-check (run before every `launchpad-proposal` block)
+# Proposal self-check (run before every proposal submission)
 
-Launchpad validates the block with a strict contract (`extra="forbid"`, exact member
-names, limits, cross-field rules). A block that fails is stored as an **invalid**
-revision: the member sees the errors, nothing can be approved, and the rejection is
-replayed to you on the next turn. You have no shell in this Harness, so this file IS the
-script: walk every check below, in order, against the JSON you are about to emit, and
-fix the block before emitting it. The platform validates shapes and routing; you must
-also review whether each scorer can judge the intended requirement. A valid schema
-does not prove that a code rule can evaluate natural-language acceptance criteria.
+Launchpad validates a proposal with a strict contract (`extra="forbid"`, exact member
+names, limits, cross-field rules) and, in the same step, the evaluation plan it will
+draft from it. When the conversation offers the `submit_proposal` tool, that tool runs
+exactly these checks on what you submit and answers `accepted` or `rejected` with the
+errors: fix a rejection with a `change` against the candidate and submit again in the
+same reply. Without the tool, a failing block is stored as an **invalid** revision and
+the rejection is replayed to you on the next turn. Either way, walk every check below,
+in order, before the first submission — each rejection costs the member time. The
+platform validates shapes and routing; you must also review whether each scorer can
+judge the intended requirement. A valid schema does not prove that a code rule can
+evaluate natural-language acceptance criteria.
 
-## 1. Block
+## 1. Submission
 
-- [ ] Exactly ONE fenced block tagged `launchpad-proposal` in the reply; one JSON object;
-      nothing else inside the fence. Two blocks → the reply carries no proposal.
+- [ ] With `submit_proposal`: `{"proposal": {…}}` for a first proposal, a `change`
+      (`{"base_revision": N, "operations": […]}`, RFC 6902 against the stored JSON in
+      the preamble) for every later revision. No proposal JSON in the reply text.
+- [ ] Without it: exactly ONE fenced block tagged `launchpad-proposal` (or ONE
+      `launchpad-proposal-patch` against the stored proposal) in the reply; one JSON
+      object; nothing else inside the fence. Two blocks → the reply carries no proposal.
+- [ ] Never mention the tool, patches or operations to the member; describe what changed.
 - [ ] Whole block ≤ 64,000 bytes. Trim `system_prompt`, notes and scenario text first.
 - [ ] Only the members the protocol lists. No `env`, `code`, `requirements`,
       `allowed_tools`, `protocol`, `filesystem`, `network`, comments or trailing commas.
@@ -88,12 +96,19 @@ as a whole — after the member has already read and approved the design.
     and named `tool_set forbidden` checks still need scenario and capability review.
     Global zero-call checks require a genuinely tool-free design and verified
     runtime behavior; even refusal scenarios may need retrieval or Skill loading.
-- [ ] A reference-driven evaluator (a judge using `{expected_response}`,
-      `{expected_tool_trajectory}` or `{assertions}`; a `reference_*` rule;
-      `Builtin.ToolSelectionAccuracy`-style trajectory evaluators) is applied to every
-      scenario, so EVERY scenario carries that reference — every turn's
-      `expected_response` for a TRACE judge/rule, `expected_trajectory` for a
-      trajectory evaluator, `assertions` for an assertions judge.
+- [ ] **A reference-driven evaluator needs its reference in EVERY scenario** — the
+      most frequent rejection in production. A judge using `{expected_response}`,
+      `{expected_tool_trajectory}` or `{assertions}`, a `reference_*` rule and the
+      `Builtin.Trajectory*` evaluators are applied to every scenario, so every scenario
+      carries that reference: every turn's `expected_response` for a TRACE judge/rule,
+      a non-empty `expected_trajectory` for a trajectory evaluator or
+      `reference_trajectory` rule, `assertions` for an assertions judge. A scenario that
+      legitimately calls no tool cannot carry a trajectory: then the trajectory check is
+      not a global evaluator — score the tool expectation in the `assertions` of the
+      scenarios it belongs to, or block the tests it cannot cover. Golden tests without
+      a typed seed scenario count too: the platform drafts each as a one-turn scenario
+      from its `expected_response`, `expected_tools` and `pass_criteria`, and the same
+      evaluators apply to that drafted scenario.
 - [ ] A golden test no single-session AgentCore evaluator can score (multi-actor memory
       isolation, cross-session freshness, expert sign-off, metric baselines) is in
       `blocked_golden_tests` with its reason — not a scenario, not an evaluator — and
@@ -185,6 +200,6 @@ barrier was confirmed (never `{}` or assumed).
       evaluator is a global invariant, every `golden_test_ids` is `[]`.
 - [ ] Every catalog reference (tool key, skill name, KB id, evaluator id) is copied from
       the preamble, not remembered or invented.
-- [ ] The prose above the block already shows the architecture, trade-offs, assumptions,
-      manual tasks and the golden-test table — the block adds structure, not new facts.
+- [ ] The reply prose already shows the architecture, trade-offs, assumptions, manual
+      tasks and the golden-test table — the proposal adds structure, not new facts.
 - [ ] The JSON parses. Count the braces of the last evaluator and the last scenario.

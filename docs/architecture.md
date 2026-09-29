@@ -1054,9 +1054,48 @@ disclosed in the preamble and in the `meta` event, and the current message is ne
 truncated — one that cannot fit (or exceeds 100k chars / 300k bytes) is refused with
 `413 assistant.prompt_too_large` before any claim. The server-composed protocol
 preamble (rules + the catalog keys + which memory modes exist here) rides on the
-first user message; the harness request carries no `systemPrompt`, `tools` or
-`model` override. Nothing private is written to shared long-term memory. Whether the model
-follows the replay/protocol faithfully is part of the **pending live smoke**.
+first user message; the harness request carries no `systemPrompt` or `model` override
+(its `tools` / `allowedTools` override is described below). Nothing private is written to
+shared long-term memory. Whether the model follows the replay/protocol faithfully is
+part of the **pending live smoke**.
+
+**Proposal submission, validation and revisions.** A proposal is checked when it is
+recorded against everything the member will later meet: shape, catalog references,
+and — `evaluation_plan.draft_plan_errors` — the evaluation plan `prepare_plan` will
+draft from it (`validate_plan` + `rule_catalog_errors` on the draft, including the
+evaluators the platform adds to the seed and the one-turn scenarios it drafts for
+unseeded golden tests; only the review a member owes a drafted scenario is exempt). So
+"valid proposal, invalid plan" cannot surface after approval any more. Each turn's
+preamble carries the **current stored proposal** — the exact stored JSON of the newest
+revision with real content (`patch_base`; any status, so an invalid revision is
+corrected in place and an approved one is iterated after deployment), plus its errors
+when invalid — and replayed replies have their proposal blocks replaced by a marker, so
+the proposal is in the request once instead of once per earlier reply. A later revision
+is a **change**: `{base_revision, operations}` with RFC 6902 `add` / `remove` / `replace`
+/ `test` operations (`proposal.apply_patch`, all or none, `base_revision` must be the
+offered base), validated like a full proposal afterwards. Delivery: the turn reads the
+preset's deployed tools back (`GetHarness`; `InvokeHarness.tools` *replaces* the
+configured list) and offers them plus the **`submit_proposal` inline function**
+(`app/assistant/submission.py`) with `allowedTools` + `@submit_proposal` — live-verified
+2026-09-29: a plain name matches builtins only and `@inline_function/<name>` matches
+nothing. The Harness pauses at the call (`stopReason: tool_use`), `invoke_harness_events`
+yields a `handoff` with the complete input, and the producer answers with Launchpad's
+own verdict (`accepted`, or `rejected` + errors + the candidate's provisional revision)
+as a `toolResult` on the **same session**; the model fixes a rejection with a change
+against that candidate before the reply ends (≤ 8 submissions per reply). The candidate
+validator applies the same preparation merge as `record_proposal`
+(`service.effective_raw`), and nothing is stored mid-reply: the last submission of a
+completed reply becomes the turn's revision (a fenced block in the same text is
+ignored), an interrupted reply stores nothing. The transcript's tool row shows a summary
+(`proposal <name>` / `proposal revision (N edits)`), never the JSON. If the read-back
+fails the turn runs without the tool and the fenced protocol — `launchpad-proposal`, or
+`launchpad-proposal-patch` for a change — applies unchanged; a change that does not
+apply becomes an invalid marker revision, which leaves the previous base in place. The
+model is told never to mention the tool, patches or operations to the member; the
+member-facing copy (the evaluation plan's "let the assistant repair" prompt included) is
+unchanged. Live (dev, 2026-09-29): a submission with an invalid name was rejected,
+corrected with a one-edit change and stored as a valid draft in one 19 s reply; a
+follow-up prompt change landed as a one-edit revision in 8 s.
 
 **One in-flight turn, private runtime sessions.** A turn is an atomic conditional
 claim on the conversation row (`active_turn` + a random `active_turn_token`, taken by
@@ -1513,7 +1552,8 @@ assets. A rejected model block also leaves an `error` transcript row named
 `proposal_rejected`, which `compose_messages` replays to the model as the member's side
 of the next turn — the member says "fix it" instead of relaying the errors — and the
 skill bundle carries `references/proposal-self-check.md`, a checklist mirroring every
-contract rule that the model walks before emitting a block. Seeded evaluator keys are
+contract rule that the model walks before its first submission (see "Proposal
+submission, validation and revisions" for the in-reply check). Seeded evaluator keys are
 reserved first; prose recommendations map only to ids identified exactly
 (`Builtin.*` / `ThirdParty.*`, collision-safe keys, never removed by a seed mapping of
 another kind) or to the seed's explicit `recommendation_keys`; everything else stays

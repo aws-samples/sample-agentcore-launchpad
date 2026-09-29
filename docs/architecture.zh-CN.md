@@ -674,8 +674,31 @@ principal 与会话所有者 principal 三者完全一致；principal 为 NULL �
 覆盖前言 + 目录 + 重放轮次 + 当前消息：保留能放下的最新轮次，省略的更早轮次数在前言与 `meta`
 事件中披露，当前消息绝不截断——放不下的（或超过 100k 字符 / 300k 字节的）在任何声明之前以
 `413 assistant.prompt_too_large` 拒绝。服务端撰写的协议前言（规则 + 目录 key + 此处存在哪些记忆
-模式）附在第一条用户消息上；Harness 请求不携带 `systemPrompt`、`tools` 或 `model` 覆盖。任何私有
-内容都不会写入共享的长期记忆。模型是否忠实遵循重放/协议属于**待完成的实机冒烟**。
+模式）附在第一条用户消息上；Harness 请求不携带 `systemPrompt` 或 `model` 覆盖（`tools` /
+`allowedTools` 覆盖见下文）。任何私有内容都不会写入共享的长期记忆。模型是否忠实遵循重放/协议属于
+**待完成的实机冒烟**。
+
+**提案的提交、校验与修订。** 提案在入库时就按成员之后会遇到的全部检查校验：形状、目录引用，以及
+`evaluation_plan.draft_plan_errors`——`prepare_plan` 将据此起草的评估计划（对草稿运行 `validate_plan` +
+`rule_catalog_errors`，包括平台在种子之外追加的评估器，以及为没有种子场景的黄金测试起草的单轮场景；只豁免成员
+对草拟场景应做的审阅）。因此“提案有效、计划无效”不会再在批准之后才暴露。每轮前言都携带**当前存储的提案**——
+最新一个带真实内容的修订的原样存储 JSON（`patch_base`；任何状态都可以，无效修订就地修正，已批准的修订在部署后
+继续迭代），无效时附带其错误；重放的回复中的提案块替换为一个标记，所以请求里只有一份提案，而不是每条旧回复各一份。
+后续修订是一次**修改**：`{base_revision, operations}`，使用 RFC 6902 的 `add` / `remove` / `replace` / `test`
+操作（`proposal.apply_patch`，全部成功或全部不生效，`base_revision` 必须是平台给出的基准），应用后按完整提案校验。
+提交方式：本轮读回预置已部署的工具（`GetHarness`；`InvokeHarness.tools` 会*替换*已配置的列表），连同
+**`submit_proposal` 内联函数**（`app/assistant/submission.py`）一起提供，`allowedTools` 追加 `@submit_proposal`——
+2026-09-29 实测：普通名称只匹配内置工具，`@inline_function/<name>` 什么也匹配不到。Harness 在调用处暂停
+（`stopReason: tool_use`），`invoke_harness_events` 产出带完整输入的 `handoff`，生产者线程在**同一会话**上以
+`toolResult` 回传 Launchpad 自己的结论（`accepted`，或 `rejected` + 错误 + 候选的临时修订号）；模型在回复结束前用
+针对该候选的修改纠正被拒的提交（每条回复最多 8 次提交）。候选校验使用与 `record_proposal` 相同的准备资源合并
+（`service.effective_raw`），回复进行中不写入任何内容：完整回复的最后一次提交成为本轮的修订（同一文本中的围栏块被
+忽略），被中断的回复不存储任何内容。对话记录中的工具行只显示摘要（`proposal <name>` /
+`proposal revision (N edits)`），从不显示 JSON。读回失败时本轮不提供该工具，围栏协议——`launchpad-proposal`，
+修改则用 `launchpad-proposal-patch`——照常适用；无法应用的修改会成为一个无效的标记修订，原基准保持不变。模型被
+要求不向成员提及该工具、补丁或操作；面向成员的文案（包括评估计划的“让助手修复”提示词）保持不变。实测（dev，
+2026-09-29）：一次名称无效的提交被拒，经一处修改纠正后，在一条 19 秒的回复中存为有效草稿；随后的提示词修改以
+一处修改的修订在 8 秒内完成。
 
 **单轮在途、私有 runtime 会话。** 一轮对话是对会话行的原子条件声明（`active_turn` + 随机
 `active_turn_token`，由一个短写事务的第一条语句取得）：并发的第二轮在打开流之前被拒绝为
@@ -882,8 +905,8 @@ Agent 从不被触碰；批准 Agent 不等于授权创建云端评估资源。
   `golden_test_ids` 必须全局、参考驱动的评估器要求每个场景都带参考），因此只针对部分黄金测试的评估器会在提案阶段
   就让修订*无效*，而不是等到批准、部署之后管理员创建资产时才暴露。被拒的模型提案块还会在对话记录里留下一条
   `proposal_rejected` 的 `error` 行，`compose_messages` 在下一轮把它作为成员一侧的内容回放给模型——成员只需说
-  “请修正”，无需转述错误；技能包同时携带 `references/proposal-self-check.md`，逐条镜像契约规则，模型在输出提案块
-  前逐项核对。唯一草拟的评审器
+  “请修正”，无需转述错误；技能包同时携带 `references/proposal-self-check.md`，逐条镜像契约规则，模型在首次提交
+  前逐项核对（回复内校验见“提案的提交、校验与修订”）。唯一草拟的评审器
   是 SESSION 级别，通过 `{assertions}` 参考对**各自场景**的断言评分，没有混合黄金测试的全局评分标准，并标记
   `draft: true`。
 - **代码评估器 = 一个经审阅的静态 stdlib Lambda + 数据**（`app/assistant/lambda_runtime/handler.py`）。证据按
