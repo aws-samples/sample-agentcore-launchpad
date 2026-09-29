@@ -139,8 +139,8 @@ HTTP 回传,所以若 TLS 在某处终止后再以 HTTP 转发,登录会静默�
 Workspace 中通过面板的“安装”按钮（或 `POST /api/system-agents/<key>/install`）显式安装，这是
 一次走标准管道的计费部署（约 30 秒）。Workspace 必须处于 `ready`（引导完成，具备
 `artifacts_bucket` 与 `execution_role_arn`，且启用按 Agent 的执行角色）。首次安装使用预置默认值——架构师
-预置为原生 Bedrock 上的 `us.openai.gpt-5.6-sol`（美国跨区域推理配置；所在 Region 须提供该配置）、单次模型
-调用 `max_tokens: 65536` 与 `reasoning_effort: high`。之后管理员可通过面板的**“配置”**按钮——它打开与既有 Agent 的“编辑”相同的配置页（管理员在表格中对预置行点击
+预置为原生 Bedrock 上的 `global.openai.gpt-6-astra`（GPT-6 Astra 全球跨区域推理配置）、单次模型
+调用 `max_tokens: 65536`、`reasoning_effort: high` 与最大迭代次数 100。之后管理员可通过面板的**“配置”**按钮——它打开与既有 Agent 的“编辑”相同的配置页（管理员在表格中对预置行点击
 “编辑”亦然）——或同一安装 API 请求体修改已存设置：模型来源/ID、单次模型调用最大输出 token（即 Harness 的
 `bedrockModelConfig.maxTokens`——单次响应的上限，不是会话或花费上限）、推理强度（仅原生 Bedrock 上的
 OpenAI GPT-5.x）、系统提示词、最大迭代次数、超时，以及要挂载的既有知识库（在 provision 阶段于 Workspace 中

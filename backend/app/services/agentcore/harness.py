@@ -267,12 +267,16 @@ def _stop_error(reason: Any) -> AppError | None:
     return AppError(code, message, {"stop_reason": reason}, status_code=status)
 
 
-def iter_harness_stream(stream: Any, *, on_stream: Any = None) -> Iterator[dict[str, Any]]:
+def iter_harness_stream(
+    stream: Any, *, on_stream: Any = None, allow_handoff: bool = False,
+) -> Iterator[dict[str, Any]]:
     """Drain and validate raw Harness events, always releasing the transport.
 
     A model's end_turn can precede a watchdog timeout. Cancellation can likewise
     precede the outer timeout_exceeded stop. Keep reading to preserve that final
     diagnosis; once a failure is seen, later text cannot make the call successful.
+    ``allow_handoff``: a final ``tool_use`` stop is the inline-function handoff (the
+    caller owes a ``toolResult``), not an unfinished response.
     """
     failure: AppError | None = None
     last_stop: Any = None
@@ -301,6 +305,8 @@ def iter_harness_stream(stream: Any, *, on_stream: Any = None) -> Iterator[dict[
             raise failure
         # Preserve the existing text-only stream form when there is no stop event;
         # an empty stream or an explicitly unfinished tool cycle is never success.
+        if allow_handoff and last_stop == "tool_use":
+            return
         if not has_text or last_stop in {"tool_use", "tool_result"}:
             raise AppError(
                 "harness.incomplete_response",
@@ -332,11 +338,18 @@ def invoke_harness_events(
     runtime_user_id: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     allowed_tools: list[str] | None = None,
+    inline_tools: frozenset[str] = frozenset(),
 ) -> Iterator[dict[str, Any]]:
     """Stream one ``InvokeHarness`` call whose ``messages`` carries a bounded
     replayed conversation (``[{role: user|assistant, content: [{text}]}]``, the
     2023-06-05 model's ``ConversationMessage`` list). Yields the same ``tool`` /
-    ``delta`` events the chat chain uses; runtime errors raise."""
+    ``delta`` events the chat chain uses; runtime errors raise.
+
+    ``inline_tools`` names client-executed ``inline_function`` tools: when the stream
+    stops at ``tool_use`` on one of them, the last event is ``handoff`` with every
+    pending call's complete input. The caller answers each with a ``toolResult`` in a
+    follow-up call on the SAME session and the same tool overrides (harness-tools
+    devguide, "Inline function calls")."""
     overrides: dict[str, Any] = {}
     if runtime_user_id:
         overrides["runtimeUserId"] = runtime_user_id
@@ -351,12 +364,18 @@ def invoke_harness_events(
         messages=messages,
         **overrides,
     )
-    with closing(iter_harness_stream(response["stream"], on_stream=on_stream)) as events:
+    stream = iter_harness_stream(response["stream"], on_stream=on_stream,
+                                 allow_handoff=bool(inline_tools))
+    with closing(stream) as events:
         # toolUse input arrives as partial-JSON deltas per content block; the joined,
         # bounded text is emitted once at the block's stop so the ledger can record
         # *what* a tool was asked (which file was read, what was searched)
         pending: dict[int, dict[str, Any]] = {}
+        handoff: list[dict[str, Any]] = []
+        last_stop: Any = None
         for event in events:
+            if "messageStop" in event:
+                last_stop = event["messageStop"].get("stopReason")
             if "contentBlockStart" in event:
                 tool_use = event["contentBlockStart"].get("start", {}).get("toolUse")
                 if tool_use:
@@ -380,11 +399,22 @@ def invoke_harness_events(
             elif "contentBlockStop" in event:
                 done = pending.pop(event["contentBlockStop"].get("contentBlockIndex"), None)
                 if done is not None:
+                    full = "".join(done["chunks"])
+                    if done["name"] in inline_tools:
+                        handoff.append({"id": done["id"], "name": done["name"], "input": full})
                     yield {
                         "event": "tool_input",
                         "data": {"name": done["name"], "id": done["id"],
-                                 "input": bounded_tool_input("".join(done["chunks"]))},
+                                 "input": bounded_tool_input(full)},
                     }
+        if inline_tools and last_stop == "tool_use":
+            if not handoff:
+                raise AppError(
+                    "harness.incomplete_response",
+                    "Harness execution ended without a complete text response",
+                    {"stop_reason": last_stop}, status_code=502,
+                )
+            yield {"event": "handoff", "data": {"calls": handoff}}
 
 
 def invoke_harness_text(

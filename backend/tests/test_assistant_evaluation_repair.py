@@ -177,8 +177,12 @@ def test_repair_stream_gets_saved_context_and_persists_new_validatable_revision(
     assert snapshot["latest_proposal"] == {
         "revision": baseline["revision"],
         "content_hash": baseline["content_hash"],
-        "content": baseline["content"],
     }
+    # the baseline's JSON rides once, as the preamble's current stored proposal
+    stored = json.dumps(baseline["content"], ensure_ascii=False, separators=(",", ":"))
+    assert f"revision {baseline['revision']} (draft)" in text and stored in text
+    assert text.count(stored) == 1
+    assert "launchpad-proposal-patch\nblock against latest_proposal" in text
     expected_source = {
         "revision": source["revision"], "content_hash": source["content_hash"]
     }

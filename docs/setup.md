@@ -152,9 +152,9 @@ workspace with the panel's INSTALL button (or `POST
 /api/system-agents/<key>/install`), which is a billable deploy through the normal
 pipeline (~30 s). The workspace must be `ready` (bootstrap done, `artifacts_bucket`
 and `execution_role_arn` present, per-agent execution roles enabled). A first install
-uses the preset's defaults — for the architect: `us.openai.gpt-5.6-sol` on native
-Bedrock (the US cross-region inference profile; the region must serve it),
-`max_tokens: 65536` per model call and `reasoning_effort: high`. Afterwards an
+uses the preset's defaults — for the architect: `global.openai.gpt-6-astra` on native
+Bedrock (GPT-6 Astra on the global cross-region inference profile),
+`max_tokens: 65536` per model call, `reasoning_effort: high` and `max_iterations: 100`. Afterwards an
 administrator changes the stored settings with the panel's **CONFIGURE** button —
 which opens the same configure page an existing agent's EDIT uses (the table's EDIT
 on the preset's row does the same for an administrator) — or the same install API

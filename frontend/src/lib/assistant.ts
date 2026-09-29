@@ -25,7 +25,8 @@ import { WORKSPACE_HEADER } from "./workspace-header";
 export const ASSISTANT_JOB_POLL_MS = 3000;
 export const PROPOSAL_NAME_RE = /^[a-z][a-z0-9-]{2,47}$/;
 export const PROPOSAL_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{2,120}$/;
-const PROPOSAL_FENCE_RE = /```launchpad-proposal[ \t]*\r?\n[\s\S]*?\r?\n[ \t]*```/g;
+// the full proposal and a revision of the stored one (`launchpad-proposal-patch`)
+const PROPOSAL_FENCE_RE = /```launchpad-proposal(?:-patch)?[ \t]*\r?\n[\s\S]*?\r?\n[ \t]*```/g;
 const PREPARATION_FENCE_RE = /```launchpad-preparation[ \t]*\r?\n[\s\S]*?\r?\n[ \t]*```/g;
 
 // ─── SSE turn stream ──────────────────────────────────────────────────────

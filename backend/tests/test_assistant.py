@@ -166,6 +166,7 @@ class FakeHarness:
         self.script: list[dict] = []
         self.fail_after: int | None = None
         self.on_invoke = None
+        self.queued: list[list[dict]] = []  # per-call scripts (inline handoffs), else script
 
     def reply(self, text: str, tools: tuple[str, ...] = ()):
         events = [
@@ -180,7 +181,7 @@ class FakeHarness:
         self.calls.append(kwargs)
         if self.on_invoke is not None:
             self.on_invoke(kwargs)
-        events = list(self.script)
+        events = list(self.queued.pop(0)) if self.queued else list(self.script)
         if self.fail_after is not None:
             events = events[: self.fail_after] + [{"runtimeClientError": {"message": "boom"}}]
         stream = FakeStream(events)
@@ -193,6 +194,8 @@ def harness(monkeypatch):
     fake = FakeHarness()
     monkeypatch.setattr(service, "data_client", lambda workspace: fake)
     monkeypatch.setattr(service, "fetch_catalog", lambda workspace: _catalog())
+    # the fenced-block protocol by default; submission tests offer the inline tool
+    monkeypatch.setattr(service, "harness_tool_overrides", lambda workspace, agent: None)
     return fake
 
 
@@ -706,7 +709,8 @@ def test_rejected_block_is_recorded_in_the_transcript_and_replayed_to_the_model(
     assert rows == [("user", None), ("assistant", None),
                     ("error", service.PROPOSAL_REJECTED_NAME)]
     note = detail["messages"][-1]["text"]
-    assert note.startswith("Launchpad rejected the `launchpad-proposal` block")
+    assert note.startswith("Launchpad rejected the proposal block")
+    assert f"`{contract.PATCH_FENCE}`" in note
     assert proposal["validation_errors"][0] in note
 
     harness.reply("Fixed.")

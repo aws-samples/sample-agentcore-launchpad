@@ -51,6 +51,7 @@ import hashlib
 import json
 import logging
 import queue
+import re
 import threading
 import time
 import uuid
@@ -62,9 +63,9 @@ from typing import Any
 from botocore.exceptions import ClientError
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
-from app.assistant import preparation
+from app.assistant import preparation, submission
 from app.assistant import proposal as proposal_contract
 from app.assistant.principal import collaborator_clause, may_collaborate, principal_of
 from app.core.db import SessionLocal
@@ -112,16 +113,24 @@ PROPOSAL_REJECTED_NAME = "proposal_rejected"
 REJECTION_NOTE_MAX_CHARS = 2400
 
 
-def rejection_note(errors: list[str]) -> str:
-    """The transcript/replay text for a rejected block: every validation error the
-    contract reported, bounded, followed by what the model must do about it."""
+def _error_lines(errors: list[str]) -> str:
     body = "\n".join(f"- {e}" for e in errors) or "- (no detail)"
     if len(body) > REJECTION_NOTE_MAX_CHARS:
         body = body[:REJECTION_NOTE_MAX_CHARS] + "\n- … (more errors omitted)"
+    return body
+
+
+def rejection_note(errors: list[str]) -> str:
+    """The transcript/replay text for a rejected block: every validation error the
+    contract reported, bounded, followed by what the model must do about it. The
+    console shows only the ``- `` lines; the rest is for the model."""
     return (
-        "Launchpad rejected the `launchpad-proposal` block in your previous reply — it was "
-        "NOT stored as a reviewable proposal. Validation errors:\n" + body +
-        "\nEmit exactly one corrected block in your next reply; change only what the "
+        "Launchpad rejected the proposal block in your previous reply — it cannot be "
+        "approved. Validation errors:\n" + _error_lines(errors) +
+        "\nCorrect it in your next reply with ONE change against the current stored "
+        f"proposal shown in the protocol preamble — through `{submission.TOOL_NAME}` when "
+        f"that tool is offered, otherwise a `{proposal_contract.PATCH_FENCE}` block (a "
+        "complete proposal only if no stored proposal is shown); change only what the "
         "errors name and keep every confirmed decision."
     )
 
@@ -167,7 +176,8 @@ For unavailable MCPs and unsupported work, explain the reason and required manua
 When — and only when — the baseline is confirmed and you are ready to propose the
 agent configuration, append to your reply exactly ONE fenced block tagged
 `{proposal_contract.PROPOSAL_FENCE}` containing a single JSON object with these
-members and nothing else:
+members and nothing else (once a proposal is stored, later revisions are changes to
+it — see "Current stored proposal" at the end of this preamble when it is present):
 
 - `version`: 1
 - `name`: lowercase slug, 3–48 chars, `^[a-z][a-z0-9-]+$`, not starting with
@@ -1207,9 +1217,106 @@ def require_turn_capacity(conversation: AssistantConversation) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _preamble(conversation: AssistantConversation) -> str:
+def patch_base(db: Session, conversation_id: str) -> AssistantProposal | None:
+    """The revision a ``launchpad-proposal-patch`` applies to: the newest one whose
+    stored content is a real proposal object (an oversized / unparseable block leaves
+    only a marker, so the revision before it stays the base). Any status: an invalid
+    revision is corrected in place, an approved one is iterated after deployment."""
+    for row in reversed(_proposals(db, conversation_id)):
+        if proposal_contract.is_patch_base(row.content):
+            return row
+    return None
+
+
+def current_proposal_section(base: AssistantProposal | None, *, inline: bool = False) -> str:
+    """The exact stored JSON the next revision is written against. Replayed replies
+    carry no proposal blocks (``compose_messages``), so this is the model's single view
+    of the proposal, and the operations it writes address exactly these members."""
+    if base is None:
+        return ""
+    payload = json.dumps(base.content, ensure_ascii=False, separators=(",", ":"))
+    errors = ""
+    if base.status == "invalid" and base.validation_errors:
+        errors = ("\nIt does not validate yet — the errors to fix:\n"
+                  + _error_lines(list(base.validation_errors)) + "\n")
+    example = (f'{{"base_revision": {base.revision}, "operations": [{{"op": "replace", '
+               '"path": "/system_prompt", "value": "…"}]}')
+    if inline:
+        how = (f'call `{submission.TOOL_NAME}` with `{{"change": {example}}}` instead of '
+               "submitting the whole proposal again")
+        full = "Submit a complete `proposal` only when the change rewrites most of it."
+    else:
+        how = (f"append ONE fenced `{proposal_contract.PATCH_FENCE}` block instead of a full "
+               f"proposal: `{example}`")
+        full = (f"Emit a full `{proposal_contract.PROPOSAL_FENCE}` block only when the change "
+                "rewrites most of the proposal.")
+    return f"""
+
+## Current stored proposal — revision {base.revision} ({base.status})
+
+This is the exact JSON Launchpad stored for the latest proposal (defaults filled in,
+member edits and resource selections applied).{errors}
+To change it — a correction, a member's request, an optimization round — {how}.
+Operations are RFC 6902 `add` / `remove` / `replace` / `test` with JSON Pointer paths
+into THIS JSON (array indexes as stored; `-` appends to an array; `~1` escapes `/`).
+They apply in order, all or none, and the result is validated like a full proposal.
+{full} The member does not see the JSON: in the conversation describe what changed in
+plain words, and never mention patches, operations, JSON Pointer or revision mechanics.
+
+```json
+{payload}
+```
+"""
+
+
+def submit_tool_section() -> str:
+    return f"""
+
+## Submitting the proposal: the `{submission.TOOL_NAME}` tool
+
+This conversation offers the `{submission.TOOL_NAME}` tool. It REPLACES the fenced
+`{proposal_contract.PROPOSAL_FENCE}` / `{proposal_contract.PATCH_FENCE}` blocks described
+above: the members and every rule stay the same, only the delivery changes. Never print
+proposal JSON in the reply.
+- A first proposal: call it with `{{"proposal": {{…the complete object…}}}}`.
+- A later revision: call it with `{{"change": {{"base_revision": N, "operations": […]}}}}`
+  against the current stored proposal below.
+- It answers with Launchpad's own validation: `accepted`, or `rejected` with the
+  errors. On `rejected`, fix exactly those errors with a `change` whose `base_revision`
+  is the `candidate_revision` the result names, and call it again BEFORE ending the
+  reply — the member should receive a proposal that validates. Walk the skill's
+  self-check before the first call; each rejected call costs the member time.
+- When the reply ends, the last submission becomes the member's reviewable proposal.
+  Keep the design explanation in the reply text as usual. Do not mention the tool, its
+  results, patches or operations to the member.
+"""
+
+
+def _base_of(conversation: AssistantConversation) -> AssistantProposal | None:
+    db = object_session(conversation)
+    return patch_base(db, conversation.id) if db is not None else None
+
+
+def _preamble(conversation: AssistantConversation, *, inline: bool = False) -> str:
     return (PROTOCOL_PREAMBLE + "\n" + catalog_section(conversation.catalog or {})
-            + preparation.context(conversation))
+            + preparation.context(conversation)
+            + (submit_tool_section() if inline else "")
+            + current_proposal_section(_base_of(conversation), inline=inline))
+
+
+_REPLAY_PROPOSAL_RE = re.compile(
+    r"```(?:" + re.escape(proposal_contract.PROPOSAL_FENCE) + r"|"
+    + re.escape(proposal_contract.PATCH_FENCE) + r")[ \t]*\r?\n.*?\r?\n[ \t]*```",
+    re.DOTALL,
+)
+REPLAY_PROPOSAL_MARKER = (
+    "[proposal block of this reply omitted from the replay — its stored result is part "
+    "of the current stored proposal in the protocol preamble]"
+)
+
+
+def _strip_proposal_blocks(text: str) -> str:
+    return _REPLAY_PROPOSAL_RE.sub(REPLAY_PROPOSAL_MARKER, text)
 
 
 def check_prompt(conversation: AssistantConversation, prompt: str) -> None:
@@ -1220,7 +1327,7 @@ def check_prompt(conversation: AssistantConversation, prompt: str) -> None:
             f"the message exceeds {MAX_PROMPT_CHARS} characters / {MAX_PROMPT_BYTES} bytes",
             {"max_chars": MAX_PROMPT_CHARS, "max_bytes": MAX_PROMPT_BYTES}, status_code=413,
         )
-    if len(_preamble(conversation)) + len(prompt) + 200 > MAX_REPLAY_CHARS:
+    if len(_preamble(conversation, inline=True)) + len(prompt) + 200 > MAX_REPLAY_CHARS:
         raise AppError(
             "assistant.prompt_too_large",
             "the message plus the protocol preamble exceeds the request budget; shorten "
@@ -1230,7 +1337,8 @@ def check_prompt(conversation: AssistantConversation, prompt: str) -> None:
 
 
 def compose_messages(
-    conversation: AssistantConversation, history: list[AssistantMessage], prompt: str
+    conversation: AssistantConversation, history: list[AssistantMessage], prompt: str,
+    *, inline: bool = False,
 ) -> tuple[list[dict[str, Any]], int]:
     """The bounded ``InvokeHarness.messages`` replay and how many older turns were
     omitted from it.
@@ -1244,6 +1352,8 @@ def compose_messages(
     always sent whole (``check_prompt`` refuses one that cannot fit).
     """
     by_turn: dict[int, dict[str, list[str]]] = {}
+    preamble = _preamble(conversation, inline=inline)
+    strip = _base_of(conversation) is not None
     for m in history:
         if not m.text:
             continue
@@ -1256,7 +1366,9 @@ def compose_messages(
         if m.role not in ("user", "assistant"):
             continue
         slot = by_turn.setdefault(m.turn, {"user": [], "assistant": [], "verdict": []})
-        slot[m.role].append(m.text)
+        # a stored proposal is shown once, as stored, in the preamble; replaying every
+        # earlier 20–60k-char block too would crowd the turns themselves out of budget
+        slot[m.role].append(_strip_proposal_blocks(m.text) if strip else m.text)
     turns: list[tuple[str, str | None]] = []
     carried: list[str] = []
     for _, slot in sorted(by_turn.items()):
@@ -1267,7 +1379,6 @@ def compose_messages(
         carried += slot["verdict"]
     if carried:
         prompt = "\n\n".join(carried + [prompt])
-    preamble = _preamble(conversation)
     budget = MAX_REPLAY_CHARS - len(preamble) - len(prompt) - 200
     kept: list[tuple[str, str | None]] = []
     used = 0
@@ -1338,22 +1449,13 @@ def _supersede_drafts(db: Session, conversation_id: str) -> None:
     )
 
 
-def record_proposal(
-    db: Session,
-    conversation_id: str,
-    catalog: dict[str, Any],
-    workspace_id: str | None,
-    raw: Any,
-    *,
-    source: str,
-    created_by: str,
-    extra_errors: list[str] | None = None,
-) -> AssistantProposal:
-    """Store one new revision inside the caller's locked transaction (no commit):
-    valid → ``draft`` with bindings; otherwise ``invalid`` with the errors and the
-    bounded raw object. Explicit member preparation overrides resource lists in a
-    well-shaped model proposal before reference validation."""
-    approved = preparation.approved_resources(db, conversation_id)
+def effective_raw(
+    db: Session, conversation_id: str, raw: Any, *, source: str,
+    approved: dict[str, Any] | None,
+) -> Any:
+    """``raw`` with the member's explicit preparation applied — what validation and
+    storage actually see. Shared by ``record_proposal`` and the in-turn submission
+    check, so a submission accepted mid-reply is recorded with the same verdict."""
     if approved is not None:
         if isinstance(raw, str):
             try:
@@ -1377,6 +1479,26 @@ def record_proposal(
                        "knowledge_bases": state.get("knowledge_bases", [])}
                 if state.get("tools_selection_set"):
                     raw["tools"] = state.get("tools", [])
+    return raw
+
+
+def record_proposal(
+    db: Session,
+    conversation_id: str,
+    catalog: dict[str, Any],
+    workspace_id: str | None,
+    raw: Any,
+    *,
+    source: str,
+    created_by: str,
+    extra_errors: list[str] | None = None,
+) -> AssistantProposal:
+    """Store one new revision inside the caller's locked transaction (no commit):
+    valid → ``draft`` with bindings; otherwise ``invalid`` with the errors and the
+    bounded raw object. Explicit member preparation overrides resource lists in a
+    well-shaped model proposal before reference validation."""
+    approved = preparation.approved_resources(db, conversation_id)
+    raw = effective_raw(db, conversation_id, raw, source=source, approved=approved)
     content, display, errors = proposal_contract.validate(raw, catalog)
     errors = list(extra_errors or []) + errors
     if proposal_contract.serialized_bytes(display) > proposal_contract.PROPOSAL_MAX_BYTES:
@@ -1428,6 +1550,54 @@ def record_proposal(
 # ---------------------------------------------------------------------------
 # turns
 # ---------------------------------------------------------------------------
+
+
+def _model_proposal_input(
+    db: Session, conversation_id: str,
+    block: str | None, block_errors: list[str],
+    patch: str | None, patch_errors: list[str],
+) -> tuple[Any, list[str]]:
+    """What a reply hands ``record_proposal``: ``(raw, extra_errors)``, or ``(None,
+    errors)`` when there is nothing to validate. A change block is applied to the
+    stored patch base here, so the result is validated exactly like a full block."""
+    if (block is not None or block_errors) and (patch is not None or patch_errors):
+        return None, ["reply carries both a complete proposal and a proposal change; "
+                      "send exactly one"]
+    if block is not None or block_errors:
+        raw: Any = block if block is not None else {}
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except ValueError:
+                pass  # kept as the string; parse_content reports the JSON error
+        return raw, block_errors
+    if patch_errors:
+        return None, patch_errors
+    base = patch_base(db, conversation_id)
+    if base is None:
+        return None, ["there is no stored proposal to change yet; send the complete proposal"]
+    return proposal_contract.apply_patch(base.content, patch, base_revision=base.revision)
+
+
+def record_unusable(
+    db: Session, conversation_id: str, workspace_id: str | None, errors: list[str], *,
+    created_by: str,
+) -> AssistantProposal:
+    """An ``invalid`` revision for a reply whose proposal could not even be assembled
+    (a change that does not apply, two kinds of block). It stores only a marker, so the
+    revision before it stays the base the next change is written against."""
+    display = {"_rejected": "the proposal in this reply could not be assembled"}
+    revision = _allocate_revision(db, conversation_id)
+    _supersede_drafts(db, conversation_id)
+    row = AssistantProposal(
+        workspace_id=workspace_id, conversation_id=conversation_id, revision=revision,
+        source="model", content=display,
+        content_hash=proposal_contract.revision_hash(display, None), bindings=None,
+        validation_errors=errors, status="invalid", created_by=created_by,
+    )
+    db.add(row)
+    db.flush()
+    return row
 
 
 def _persist_partial(
@@ -1539,6 +1709,62 @@ class TurnRun:
                     break
 
 
+def harness_tool_overrides(
+    workspace: WorkspaceContext, agent: Agent,
+) -> tuple[list[dict[str, Any]], list[str] | None] | None:
+    """``(tools, allowedTools)`` for a turn that offers ``submit_proposal``.
+
+    ``InvokeHarness.tools`` REPLACES the configured list for the request, so the
+    preset's deployed tools (read back, with their resolved aliases and auth) are sent
+    with the inline function, and its ``allowedTools`` gains the inline pattern.
+    Fail-soft: without the read-back the turn runs without the tool and the model
+    falls back to fenced blocks."""
+    try:
+        detail = hc.get_harness(control_client(workspace), agent.resource_id)
+    except Exception as exc:  # noqa: BLE001 — the fenced protocol still works
+        logger.warning("assistant: preset tool read-back failed (%s); no inline submission",
+                       _short(exc))
+        return None
+    tools = [t for t in detail.get("tools") or [] if isinstance(t, dict)]
+    if any(t.get("name") == submission.TOOL_NAME for t in tools):
+        return None
+    allowed = detail.get("allowedTools")
+    return ([*tools, submission.TOOL],
+            None if allowed is None else [*allowed, submission.ALLOWED_PATTERN])
+
+
+def _submissions(
+    db: Session, conversation: AssistantConversation,
+) -> submission.Submissions:
+    """The turn's submission state: the stored base, the catalog snapshot, and a
+    validator that sees exactly what ``record_proposal`` will (same preparation merge,
+    same normalized-size cap), run on the producer thread with its own session."""
+    conversation_id = conversation.id
+    catalog = dict(conversation.catalog or {})
+    base = patch_base(db, conversation_id)
+
+    def validate(raw: Any) -> tuple[Any, list[str]]:
+        with SessionLocal() as own:
+            approved = preparation.approved_resources(own, conversation_id)
+            try:
+                raw = effective_raw(own, conversation_id, raw, source="model",
+                                    approved=approved)
+            except AppError as exc:
+                return None, [exc.message]
+        _content, display, errors = proposal_contract.validate(raw, catalog)
+        if proposal_contract.serialized_bytes(display) > proposal_contract.PROPOSAL_MAX_BYTES:
+            errors = [*errors, "normalized proposal exceeds "
+                      f"{proposal_contract.PROPOSAL_MAX_BYTES} bytes"]
+        return display, errors
+
+    return submission.Submissions(
+        validate,
+        base_revision=base.revision if base is not None else None,
+        base_content=dict(base.content) if base is not None else None,
+        candidate_revision=(conversation.revision_seq or 0) + 1,
+    )
+
+
 def run_turn(
     db: Session,
     conversation: AssistantConversation,
@@ -1576,8 +1802,11 @@ def run_turn(
         return live and _holds_claim(db, conversation_id, turn, token)
 
     try:
+        overrides = harness_tool_overrides(workspace, agent)
+        submissions = _submissions(db, conversation) if overrides is not None else None
         history = [m for m in _messages(db, conversation_id) if m.turn != turn]
-        messages, omitted = compose_messages(conversation, history, prompt)
+        messages, omitted = compose_messages(conversation, history, prompt,
+                                             inline=overrides is not None)
         # the FIRST write is fenced like every other one: composing the replay took
         # time, and ownership may have been replaced meanwhile
         _lock_conversation(db, conversation_id)
@@ -1607,15 +1836,53 @@ def run_turn(
             events: queue.Queue = queue.Queue()
             tool_rows: dict[str, int] = {}  # toolUseId -> ledger row awaiting its input
 
+            invoke_extra: dict[str, Any] = {}
+            if overrides is not None:
+                invoke_extra = {"tools": overrides[0], "allowed_tools": overrides[1],
+                                "inline_tools": frozenset({submission.TOOL_NAME})}
+
+            # plain values: the producer thread must never lazy-load through ``db``
+            # (the consumer's session), which a rollback below has already expired
+            harness_arn = agent.arn
+
             def produce() -> None:
                 try:
-                    for produced in hc.invoke_harness_events(
-                        data_client(workspace), agent.arn, messages,
-                        session_id=session_id, actor_id=actor, on_stream=run.attach_upstream,
-                    ):
-                        events.put(("event", produced))
-                        if run.cancelled:
+                    request = messages
+                    client = data_client(workspace)
+                    while True:
+                        handoff: list[dict[str, Any]] | None = None
+                        for produced in hc.invoke_harness_events(
+                            client, harness_arn, request,
+                            session_id=session_id, actor_id=actor,
+                            on_stream=run.attach_upstream, **invoke_extra,
+                        ):
+                            if produced["event"] == "handoff":
+                                handoff = produced["data"]["calls"]
+                                continue
+                            if (produced["event"] == "tool_input"
+                                    and produced["data"].get("name") == submission.TOOL_NAME):
+                                continue  # summarized from the complete input below
+                            events.put(("event", produced))
+                            if run.cancelled:
+                                break
+                        if handoff is None or run.cancelled or submissions is None:
                             break
+                        # the inline handoff: Launchpad's own verdict, answered on the
+                        # SAME session so the Harness resumes the paused execution
+                        results = []
+                        for call in handoff:
+                            events.put(("event", {"event": "tool_input", "data": {
+                                "name": call["name"], "id": call["id"],
+                                "input": submission.input_summary(call["input"])}}))
+                            verdict = (submissions.handle(call["input"])
+                                       if call["name"] == submission.TOOL_NAME
+                                       else {"status": "rejected",
+                                             "errors": [f"unknown tool {call['name']}"]})
+                            results.append({"toolResult": {
+                                "toolUseId": call["id"], "status": "success",
+                                "content": [{"text": json.dumps(verdict, ensure_ascii=False)}],
+                            }})
+                        request = [{"role": "user", "content": results}]
                     events.put(("end", None))
                 except BaseException as exc:  # surfaced to the consumer below
                     events.put(("error", exc))
@@ -1697,6 +1964,7 @@ def run_turn(
             return
         text = "".join(parts)
         block, block_errors = proposal_contract.extract_block(text)
+        patch, patch_errors = proposal_contract.extract_patch(text)
         requirements, preparation_errors = preparation.extract(text)
         _lock_conversation(db, conversation_id)
         if not _holds_claim(db, conversation_id, turn, token):
@@ -1727,18 +1995,24 @@ def run_turn(
                 runtime_session_id=session_id,
             ))
         proposal_event: dict[str, Any] | None = None
-        if block is not None or block_errors:
-            raw: Any = block if block is not None else {}
-            if isinstance(raw, str):
-                try:
-                    raw = json.loads(raw)
-                except ValueError:
-                    pass  # kept as the string; parse_content reports the JSON error
+        submitted = submissions.candidate if submissions is not None else None
+        if submitted is not None or block is not None or block_errors or patch is not None \
+                or patch_errors:
             fresh = db.get(AssistantConversation, conversation_id)
-            revision = record_proposal(
-                db, conversation_id, fresh.catalog or {}, fresh.workspace_id, raw,
-                source="model", created_by=identity.username, extra_errors=block_errors,
-            )
+            if submitted is not None:
+                # the tool submission is the proposal; a block in the text is ignored
+                raw, input_errors = submitted, []
+            else:
+                raw, input_errors = _model_proposal_input(
+                    db, conversation_id, block, block_errors, patch, patch_errors)
+            if raw is None:
+                revision = record_unusable(db, conversation_id, fresh.workspace_id,
+                                           input_errors, created_by=identity.username)
+            else:
+                revision = record_proposal(
+                    db, conversation_id, fresh.catalog or {}, fresh.workspace_id, raw,
+                    source="model", created_by=identity.username, extra_errors=input_errors,
+                )
             if revision.status == "invalid":
                 # the rejection becomes part of the transcript: the member sees it in
                 # line and the next turn replays it to the model (``compose_messages``),

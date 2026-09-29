@@ -1,7 +1,7 @@
 ---
 name: aws-agent-solution-architect
 description: Turns an AI-agent business requirement from any industry into a production-grade AWS technical design — requirement clarification, ADLC, architecture, evaluation, reliability, security, cost and roadmap. Use for "design an agent solution", "AgentCore architecture", "evaluation plan" or "production readiness" requests.
-version: 1.4.9
+version: 1.5.0
 ---
 
 # AWS Agent Solution Architect
@@ -15,7 +15,8 @@ Read `references/methodology-index.md` when you need the methodology behind a
 recommendation, `references/intake-options.md` before the clarification rounds,
 `references/painpoint-workflow.md` before the pain-point round,
 `references/fishbone-methodology.md` before the launch-barrier (fishbone) discovery,
-`references/proposal-self-check.md` before emitting any `launchpad-proposal` block, and
+`references/proposal-self-check.md` before submitting any proposal (the
+`submit_proposal` tool, or a `launchpad-proposal` block when the tool is not offered), and
 `references/deliverable-template.md` before writing the formal design document.
 
 ## Evidence discipline

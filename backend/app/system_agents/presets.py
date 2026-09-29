@@ -50,19 +50,19 @@ class SystemPreset:
     skill_version: str
     system_prompt: str
     # Harness ``allowedTools`` patterns. The harness exposes ``shell`` and
-    # ``file_operations`` to every session unless restricted; an advisory agent gets the
-    # file tools its skills need, its MCP server, and no shell.
+    # ``file_operations`` to every session unless restricted; the architect gets the
+    # sandbox shell, the file tools its skills need, and its MCP server.
     allowed_tools: tuple[str, ...]
     # Inference defaults for a NEW install. An administrator may change every member
     # of ``InstallOptions`` afterwards; these are the values ``InstallOptions()`` and
     # ``default_options`` resolve to, never a constraint on what is stored.
-    model_id: str = "us.openai.gpt-5.6-sol"
+    model_id: str = "global.openai.gpt-6-astra"
     model_source: ModelSource = "bedrock"
     # Per model call (``bedrockModelConfig.maxTokens``): 64k output so a full design
     # proposal is never cut at the provider's 4096-token default. Not a spend cap.
     max_tokens: int | None = 65536
     reasoning_effort: ReasoningEffort | None = "high"
-    max_iterations: int = 30
+    max_iterations: int = 100
     timeout_seconds: int = 900
     skill_dir: str = ""  # directory name under SKILLS_ROOT
 
@@ -151,9 +151,9 @@ ARCHITECT = SystemPreset(
         "the public AWS Knowledge MCP server; loads its methodology from a versioned S3 "
         "skill bundle."
     ),
-    skill_version="1.4.9",
+    skill_version="1.5.0",
     system_prompt=ARCHITECT_SYSTEM_PROMPT,
-    allowed_tools=("file_*", f"@{AWS_KNOWLEDGE_TOOL_NAME}"),
+    allowed_tools=("shell", "file_*", f"@{AWS_KNOWLEDGE_TOOL_NAME}"),
 )
 
 PRESETS: dict[str, SystemPreset] = {ARCHITECT.key: ARCHITECT}
