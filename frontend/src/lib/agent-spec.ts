@@ -244,7 +244,13 @@ export const resolveKb = (id: string, catalog: AttachableKb[], specKbs: KbRef[])
   return { kb_id: id, name: stored?.name ?? id, description: stored?.description ?? "" };
 };
 
-export type StoredGatewayConfig = Record<string, { record_id: string; gateway_id: string }>;
+/** Gateway configs of a loaded spec. ``tools`` is the attachment's exact callable
+ *  list (a reviewed narrowing or the record's declared tools) — it must survive an
+ *  edit, or a redeploy would widen the attachment to the record's whole target. */
+export type StoredGatewayConfig = Record<
+  string,
+  { record_id: string; gateway_id: string; tools?: string[] }
+>;
 
 /** Everything the member can set in the configure step, for every method. Fields a
  *  method does not use are carried (a method switch keeps them) but never sent. */
@@ -356,7 +362,11 @@ export interface StoredAgentSpec {
   max_iterations?: number;
   timeout_seconds?: number;
   system_prompt?: string;
-  tools?: { type: string; name: string; config?: { url?: string; record_id?: string; gateway_id?: string } }[];
+  tools?: {
+    type: string;
+    name: string;
+    config?: { url?: string; record_id?: string; gateway_id?: string; tools?: string[] };
+  }[];
   toolkits?: Toolkit[];
   skills?: string[];
   allowed_tools?: string[] | null;
@@ -455,7 +465,13 @@ export function formFromStoredSpec(
   const storedGatewayConfig: StoredGatewayConfig = Object.fromEntries(
     gatewayTools.flatMap((tool) =>
       tool.config?.record_id && tool.config.gateway_id
-        ? [[tool.name, { record_id: tool.config.record_id, gateway_id: tool.config.gateway_id }]]
+        ? [[tool.name, {
+            record_id: tool.config.record_id,
+            gateway_id: tool.config.gateway_id,
+            ...(Array.isArray(tool.config.tools) && tool.config.tools.length
+              ? { tools: tool.config.tools.map(String) }
+              : {}),
+          }]]
         : [],
     ),
   );
@@ -488,10 +504,14 @@ export interface AgentFormCatalogs {
 export const gatewayToolRefs = (form: AgentForm, cat: AgentFormCatalogs) =>
   form.selectedGateway.map((n) => {
     const server = cat.gatewayTargets.find((item) => item.name === n);
+    const stored = cat.storedGatewayConfig[n];
+    // the stored callable list stays with the SAME record; a different record starts
+    // from its own target scope (the deployer's ``<name>___*``)
+    const kept = stored?.tools && stored.record_id === server?.record_id ? { tools: stored.tools } : {};
     const config =
       server?.record_id && server.gateway_id
-        ? { record_id: server.record_id, gateway_id: server.gateway_id }
-        : cat.storedGatewayConfig[n];
+        ? { record_id: server.record_id, gateway_id: server.gateway_id, ...kept }
+        : stored;
     return { type: "gateway", name: n, ...(config ? { config } : {}) };
   });
 

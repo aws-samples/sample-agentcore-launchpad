@@ -31,6 +31,11 @@ GATEWAY_SCOPES = [
     scope for scope in os.environ.get("LAUNCHPAD_GATEWAY_SCOPE", "").split(",") if scope
 ]
 WORKLOAD_NAME = os.environ.get("LAUNCHPAD_WORKLOAD_NAME", "")
+# fnmatch patterns of the Gateway tools this agent may load — the selected Registry
+# records' targets only; unset (older deploys) keeps every tool
+GATEWAY_TOOL_PATTERNS = [
+    pattern for pattern in os.environ.get("LAUNCHPAD_GATEWAY_TOOLS", "").split(",") if pattern
+]
 
 
 def _gw_log(message: str) -> None:
@@ -169,6 +174,13 @@ def gateway_tools(stack, user_token: str | None = None) -> list:
     except Exception as exc:
         _gw_log(f"tools/list against {GATEWAY_URL} failed: {type(exc).__name__}: {exc}")
         return []
+    if GATEWAY_TOOL_PATTERNS:
+        from fnmatch import fnmatchcase
+
+        tools = [
+            t for t in tools
+            if any(fnmatchcase(str(getattr(t, "tool_name", "")), p) for p in GATEWAY_TOOL_PATTERNS)
+        ]
     _gw_log(f"gateway tools loaded: {[getattr(t, 'tool_name', '?') for t in tools]}")
     return tools
 

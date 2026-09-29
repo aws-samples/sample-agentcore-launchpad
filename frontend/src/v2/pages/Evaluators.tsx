@@ -411,15 +411,17 @@ function EvaluatorEditor({ id }: { id: string | null }) {
     if (problem) return;
     setSaving(true);
     try {
-      if (id) {
-        await api.v2UpdateEvaluator(id, bodyFrom(draft));
-        toast("success", t("v2.evaluators.saved"));
-        setParams({ view: "detail", id });
-      } else {
-        const created = await api.v2CreateEvaluator({ ...bodyFrom(draft), name: draft.name } as EvaluatorCreateBody);
-        toast("success", t("v2.evaluators.created"));
-        setParams({ view: "detail", id: created.evaluator_id });
-      }
+      const reply = id
+        ? await api.v2UpdateEvaluator(id, bodyFrom(draft))
+        : await api.v2CreateEvaluator({ ...bodyFrom(draft), name: draft.name } as EvaluatorCreateBody);
+      // a judge saved on the fallback model is still a success, but it must say so
+      toast(
+        "success",
+        reply.model_fallback
+          ? t("v2.evaluators.modelFallback", { requested: reply.model_fallback.requested, used: reply.model_fallback.used })
+          : t(id ? "v2.evaluators.saved" : "v2.evaluators.created"),
+      );
+      setParams({ view: "detail", id: id ?? (reply as { evaluator_id: string }).evaluator_id });
     } catch (err) {
       setError(errorMessage(err));
     } finally {

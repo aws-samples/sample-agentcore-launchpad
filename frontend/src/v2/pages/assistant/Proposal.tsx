@@ -61,6 +61,14 @@ export function ProposalView({
   const b = proposal.bindings;
   const nativeChoices = list(c.native_tools);
   const toolsOverride = b?.allowed_tools;
+  // what the deploy will actually expose per Gateway: the reviewed bindings' config.tools
+  // (a narrowing or the record's declared callables), else the record's own target scope
+  const gatewayFunctions = (b?.tools ?? [])
+    .filter((tool) => tool.type === "gateway")
+    .map((tool) => ({
+      name: tool.name,
+      tools: Array.isArray(tool.config?.tools) ? (tool.config.tools as unknown[]).map(String) : null,
+    }));
   const selectedToolPolicy = b?.resources?.tool_access_policy === "selected-v1";
   const authLabel = (auth: Record<string, unknown> | null) => {
     const oauth = (auth?.oauth ?? null) as { providerArn?: string; grantType?: string } | null;
@@ -90,6 +98,20 @@ export function ProposalView({
           { label: t("assistantPage.field.name"), value: <span className="mono" data-testid="v2-assistant-proposal-name">{String(c.name ?? "")}</span> },
           { label: t("assistantPage.field.model"), value: <span className="mono">{String(c.model_id ?? "")} · {String(c.model_source ?? "")}</span> },
           { label: t("assistantPage.field.tools"), value: tags(list(c.tools), "v2-assistant-proposal-tools") },
+          ...(gatewayFunctions.length
+            ? [{
+                label: t("assistantPage.field.toolFunctions"),
+                value: (
+                  <div className="v2-stack" data-testid="v2-assistant-proposal-tool-functions">
+                    {gatewayFunctions.map((g) => (
+                      <div key={g.name} className="mono" style={{ fontSize: 12 }}>
+                        {g.name} → {g.tools ? g.tools.join(", ") : t("assistantPage.toolFunctionsTarget", { name: g.name })}
+                      </div>
+                    ))}
+                  </div>
+                ),
+              }]
+            : []),
           {
             label: t("create.nativeTools.title"),
             value: nativeChoices.length

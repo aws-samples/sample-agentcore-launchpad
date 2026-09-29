@@ -39,6 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.evaluation.agentcore_eval import (
     ALL_BUILTIN_EVALUATORS,
+    JUDGE_DEFAULT_MODEL_ID,
     MAX_BATCH_EVALUATORS,
     TRAJECTORY_EVALUATORS,
 )
@@ -64,7 +65,7 @@ def _run_size_error(count: int) -> str:
 MAX_DESCRIPTION = 200
 MAX_SCENARIOS = 40
 MAX_CODE_CHECKS = 20
-DEFAULT_JUDGE_MODEL = "global.anthropic.claude-sonnet-5"  # the platform's judge default
+DEFAULT_JUDGE_MODEL = JUDGE_DEFAULT_MODEL_ID  # the platform's judge default
 DEFAULT_LAMBDA_TIMEOUT_S = 60
 
 _KEY_RE = r"^[A-Za-z][A-Za-z0-9_-]{0,31}$"

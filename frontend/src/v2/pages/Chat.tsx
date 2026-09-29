@@ -23,7 +23,7 @@ import {
   errorMessage,
   localizedMessage,
 } from "../../lib/api";
-import { chatEligible, isHarnessAgent, sseEvents } from "../../lib/chat";
+import { agentMemoryState, chatEligible, isHarnessAgent, sseEvents } from "../../lib/chat";
 import { useLoad, useV2Toast } from "../hooks";
 import { Alert, Button, Card, Confirm, LinkButton, PageHeader, Spin, Tag } from "../ui";
 import "./chat/chat.css";
@@ -31,6 +31,12 @@ import { Composer } from "./chat/Composer";
 import { Inspector, type InspectorTab } from "./chat/Inspector";
 import { SessionRail } from "./chat/SessionRail";
 import { type ChatMessage, Thread } from "./chat/Thread";
+
+const MEMORY_TAG = {
+  on: "v2.chat.memoryOn",
+  off: "v2.chat.memoryOff",
+  "agent-defined": "v2.chat.memoryAgentDefined",
+} as const;
 
 /**
  * 对话调试 — live SSE chat with any active agent, over the same invoke chain as
@@ -173,6 +179,7 @@ export function V2Chat() {
   }, [agentId, sessionId]);
 
   const agent = agents.find((a) => a.id === agentId);
+  const memoryState = agentMemoryState(agent);
   const capability = agent?.attachment_capability;
   const attachmentsEnabled = Boolean(
     capability && (capability.images || capability.text || capability.pdf !== "unsupported"),
@@ -249,7 +256,9 @@ export function V2Chat() {
           if (pendingFiles.length) setAttachmentError(message);
         } else if (event === "done") {
           completed = true;
-          if (!failed) setMessages((m) => [...m, { kind: "memory", text: "" }]);
+          // Only an agent whose spec turns memory on persists the turn; the
+          // console itself never writes memory.
+          if (!failed && memoryState === "on") setMessages((m) => [...m, { kind: "memory", text: "" }]);
         }
       }
       if (!completed && !failed) throw new Error(t("chatPage.streamInterrupted"));
@@ -411,9 +420,11 @@ export function V2Chat() {
               {agent && (
                 <div className="v2-chat-agent-meta">
                   <Tag tone="blue">{methodLabel(agent.method)}</Tag>
-                  <Tag tone="green" dot>
-                    {t("v2.chat.memoryOn")}
-                  </Tag>
+                  <span data-testid="chat-memory-state" data-state={memoryState}>
+                    <Tag tone={memoryState === "on" ? "green" : "gray"} dot={memoryState === "on"}>
+                      {t(MEMORY_TAG[memoryState])}
+                    </Tag>
+                  </span>
                   <Link className="v2-chat-extlink" to={`/v2/agents?view=detail&id=${encodeURIComponent(agent.id)}`}>
                     {t("v2.chat.agentDetail")}
                   </Link>
@@ -535,6 +546,7 @@ export function V2Chat() {
               traceBusy={traceBusy}
               onLoadTrace={() => void loadTrace()}
               memory={memory}
+              memoryState={memoryState}
             />
           </Card>
         </div>

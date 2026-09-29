@@ -90,6 +90,7 @@ def harness_user_overrides(
     spec = agent.spec or {}
     explicit = spec.get("allowed_tools")
     configured: list[dict[str, Any]] | None = None
+    detail: dict[str, Any] = {}
     has_gateways = any(tool.get("type") == "gateway" for tool in spec.get("tools") or [])
     if has_gateways or (
         explicit is not None and any(p.startswith("@") or "/" in p for p in explicit)
@@ -105,15 +106,22 @@ def harness_user_overrides(
         tools = hc.user_authenticated_tools(spec, workspace.resources, access_token)
     if len({tool["name"] for tool in tools}) != len(tools):
         raise ValueError("authenticated Gateway alias conflicts with another configured tool")
-    if explicit is None:
+    names = {
+        before["name"]: after["name"]
+        for before, after in zip(configured or [], tools, strict=configured is not None)
+    }
+    deployed = detail.get("allowedTools")
+    if explicit is None and isinstance(deployed, list) and deployed:
+        # InvokeHarness.allowedTools REPLACES the configured list, so replay the one
+        # the deploy derived — target-scoped per Registry record — under the request's
+        # aliases. Re-deriving from the swapped tools would select the WHOLE user
+        # Gateway (every target), and a stale alias would select nothing at all.
+        allowed = remap_tool_patterns(deployed, names)
+    elif explicit is None:
         allowed = selected_tool_patterns(
             tools, bool(spec.get("skills")), spec.get("native_tools") or [],
         )
     else:
-        names = {
-            before["name"]: after["name"]
-            for before, after in zip(configured or [], tools, strict=configured is not None)
-        }
         allowed = remap_tool_patterns(explicit, names)
         # Retain deployment's mounted-KB support even under an explicit override.
         if spec.get("knowledge_bases"):

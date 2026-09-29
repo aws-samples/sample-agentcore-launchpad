@@ -37,6 +37,9 @@ ENV_URL = "LAUNCHPAD_GATEWAY_URL"
 ENV_PROVIDER = "LAUNCHPAD_GATEWAY_PROVIDER"
 ENV_SCOPE = "LAUNCHPAD_GATEWAY_SCOPE"
 ENV_WORKLOAD = "LAUNCHPAD_WORKLOAD_NAME"
+# Comma-separated fnmatch patterns of the Gateway MCP tool names the agent may load
+# (see ``gateway_tool_patterns``); absent = every tool (runtimes rendered before it).
+ENV_TOOLS = "LAUNCHPAD_GATEWAY_TOOLS"
 
 
 def uses_gateway(spec: AgentSpec) -> bool:
@@ -48,6 +51,24 @@ def uses_gateway(spec: AgentSpec) -> bool:
     This is only the shared-Gateway client.
     """
     return any(tool.type == "gateway" for tool in spec.tools)
+
+
+def gateway_tool_patterns(spec: AgentSpec) -> list[str]:
+    """The Gateway tool names a generated runtime may load, as fnmatch patterns.
+
+    The rendered client reaches the shared launchpad-gw, where each selected Registry
+    record is one target named ``<record>___<tool>``: a ref's declared ``config.tools``
+    are allowed exactly, a ref without them its ``<record>___*`` target — never the
+    Gateway's other targets. Same rule as the Harness ``allowedTools`` derivation
+    (``harness_tool_access.gateway_target_selectors``).
+    """
+    patterns: list[str] = []
+    for tool in spec.tools:
+        if tool.type != "gateway":
+            continue
+        declared = tool.config.get("tools")
+        patterns.extend(declared if isinstance(declared, list) else [f"{tool.name}___*"])
+    return list(dict.fromkeys(patterns))
 
 
 def runtime_user_id(spec: Mapping[str, Any] | None, actor_id: str = "default") -> str | None:

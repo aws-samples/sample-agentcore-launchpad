@@ -375,12 +375,25 @@ class FakeControl:
         self.lose_response_once = False
         self.delete_polls = 1  # GetEvaluator reads answering DELETING before NotFound
         self.deleting: dict[str, int] = {}
+        # judge models the service's validation probe refuses (GPT-6 as of 2026-09-29)
+        self.refuse_models: set[str] = set()
 
     def list_evaluators(self, **kw):
         return {"evaluators": [dict(e) for e in self.evaluators.values()]}
 
     def create_evaluator(self, **kw):
         self.create_calls += 1
+        config = kw["evaluatorConfig"]
+        member = config.get("llmAsAJudge") or config.get("derived") or {}
+        model = ((member.get("modelConfig") or {}).get("bedrockEvaluatorModelConfig")
+                 or {}).get("modelId")
+        if model in self.refuse_models:
+            raise ClientError({"Error": {"Code": "ValidationException", "Message": (
+                f"Bedrock inference configuration validation failed for model '{model}': "
+                '{"error":{"code":"integer_below_min_value","message":"Invalid '
+                "'max_output_tokens': integer below minimum value. Expected a value >= 16, "
+                'but got 10 instead.","param":"max_output_tokens"}}')},
+                "ResponseMetadata": {"HTTPStatusCode": 400}}, "CreateEvaluator")
         token = kw["clientToken"]
         if token in self.by_token:
             eid = self.by_token[token]
@@ -1217,6 +1230,52 @@ def _approve(cid: str, content_hash: str, *, plan=None, approver_user_id=None,
 
 def _run(op_id, fakes):
     return assets.run_operation(op_id, clients=fakes, sleeper=lambda s: None)
+
+
+def test_judge_refused_by_the_validation_probe_is_created_on_the_fallback_model(app_ready):
+    """AgentCore's CreateEvaluator validation refuses GPT-6 (the judge default): the
+    definite 400 is recorded, the fallback request is persisted with its own token
+    BEFORE the retry, and a resumed run rebuilds exactly that request."""
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    fakes.control.refuse_models = {"global.openai.gpt-6-sol"}
+    op_id, _, _, _ = _approve(cid, h, fakes=fakes)
+    assert _run(op_id, fakes)
+    op = _op(op_id)
+    assert op.status == "succeeded", op.error
+    res = _res(op, "evaluator:pii")
+    assert [h_["outcome"] for h_ in res["create_history"]] == ["rejected", "created"]
+    fallback = res["model_fallback"]
+    assert fallback["requested"] == "global.openai.gpt-6-sol"
+    assert fallback["used"] == "global.anthropic.claude-sonnet-5-5"
+    assert fallback["client_token"] != res["client_token"]
+    assert res["request"]["clientToken"] == fallback["client_token"]
+    created = fakes.control.evaluators[res["result"]["evaluator_id"]]
+    model = created["evaluatorConfig"]["llmAsAJudge"]["modelConfig"]
+    assert model["bedrockEvaluatorModelConfig"]["modelId"] == "global.anthropic.claude-sonnet-5-5"
+    assert res["result"]["model_fallback"]["used"] == "global.anthropic.claude-sonnet-5-5"
+    assert "client_token" not in res["result"]["model_fallback"]
+
+
+def test_lost_fallback_create_resumes_on_the_persisted_fallback_request(app_ready):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    fakes.control.refuse_models = {"global.openai.gpt-6-sol"}
+    fakes.control.lose_response_once = True  # the FALLBACK create succeeds, response lost
+    op_id, _, _, _ = _approve(cid, h, fakes=fakes)
+    _run(op_id, fakes)
+    res = _res(_op(op_id), "evaluator:pii")
+    assert res["status"] == "failed" and res["model_fallback"]["used"]
+    while _op(op_id).status != "succeeded" and _op(op_id).attempts < assets.MAX_ATTEMPTS:
+        _run(op_id, fakes)
+    op = _op(op_id)
+    assert op.status == "succeeded", op.error
+    res = _res(op, "evaluator:pii")
+    # recovered through the fallback token's replay — one evaluator, no second model
+    assert len([e for e in fakes.control.evaluators.values()
+                if e["evaluatorName"] == "kid_pii_judge"]) == 1
+    assert res["request"]["clientToken"] == res["model_fallback"]["client_token"]
+    assert [h_["outcome"] for h_ in res["create_history"]][:2] == ["rejected", "lost"]
 
 
 def test_materialization_creates_every_owned_resource_exactly_once(app_ready):

@@ -1009,6 +1009,9 @@ export interface AssistantProposalContent {
   model_source: ModelSource;
   system_prompt: string;
   tools: string[];
+  /** Gateway tool key → the only runtime callable names it may use (absent = all of
+   *  the record's declared callables). */
+  tool_functions?: Record<string, string[]>;
   native_tools?: HarnessNativeTool[];
   skills: string[];
   knowledge_bases: string[];
@@ -2623,8 +2626,15 @@ export interface EvaluatorCodeBody {
 /** `PUT /api/eval/evaluators/{id}` full-replaces the config and must carry
  *  the evaluator's current kind (else 400 `evaluator.definition_mismatch`). */
 export type EvaluatorUpdateBody = EvaluatorJudgeBody | EvaluatorDerivedBody | EvaluatorCodeBody;
-/** `POST /api/eval/evaluators` → 201 `{evaluator_id, arn}`. */
+/** `POST /api/eval/evaluators` → 201 `{evaluator_id, arn, model_fallback}`. */
 export type EvaluatorCreateBody = EvaluatorUpdateBody & { name: string };
+/** Set on create/update replies when AgentCore refused the requested judge model
+ *  and the evaluator was saved on the fallback model instead; null otherwise. */
+export interface JudgeModelFallback {
+  requested: string;
+  used: string;
+  reason: string;
+}
 
 /* ── online evaluation (continuous, sampled scoring of live sessions) ───── */
 
@@ -4718,12 +4728,15 @@ export const api = {
   v2Evaluator: (id: string) =>
     request<EvaluatorDetail>(`/api/eval/evaluators/${encodeURIComponent(id)}`),
   v2CreateEvaluator: (body: EvaluatorCreateBody) =>
-    request<{ evaluator_id: string; arn: string }>("/api/eval/evaluators", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+    request<{ evaluator_id: string; arn: string; model_fallback?: JudgeModelFallback | null }>(
+      "/api/eval/evaluators",
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    ),
   v2UpdateEvaluator: (id: string, body: EvaluatorUpdateBody) =>
-    request<EvaluatorDetail>(`/api/eval/evaluators/${encodeURIComponent(id)}`, {
+    request<EvaluatorDetail & { model_fallback?: JudgeModelFallback | null }>(`/api/eval/evaluators/${encodeURIComponent(id)}`, {
       method: "PUT",
       body: JSON.stringify(body),
     }),

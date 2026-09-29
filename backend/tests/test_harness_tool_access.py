@@ -364,3 +364,130 @@ def test_m2m_entrances_inherit_deployed_allowed_tools_without_recreating_configs
         assert list(chat.chat_stream(agent, "hello", workspace=ws_ctx()))[-1]["event"] == "done"
     request = data.invoke_harness.call_args.kwargs
     assert "tools" not in request and "allowedTools" not in request
+
+
+# ─── Gateway target scoping (a Registry record is ONE target of launchpad-gw) ─────
+
+HR = {"type": "gateway", "name": "hr-database",
+      "config": {"record_id": "rec-hr", "gateway_id": "shared-123",
+                 "tools": ["hr-database___get_employee"]}}
+OFFICE = {"type": "gateway", "name": "office-facts",
+          "config": {"record_id": "rec-office", "gateway_id": "shared-123"}}
+SHARED_ATTACHMENT = {"gateway_id": "shared-123", "gateway_arn": GW,
+                     "gateway_name": "launchpad-gw", "outbound_auth": {"none": {}}}
+
+
+def test_shared_gateway_is_scoped_to_the_selected_records_tools():
+    params = build_create_params(
+        spec(tools=[HR, OFFICE]), ROLE, None,
+        gateway_attachments=[SHARED_ATTACHMENT], shared_gateway_arn=GW,
+    )
+    # declared tools exactly; an undeclared record its own target — never the whole gateway
+    assert params["allowedTools"] == [
+        "@launchpad_gw/hr-database___get_employee", "@launchpad_gw/office-facts___*",
+    ]
+    assert len(params["tools"]) == 1
+
+
+def test_selecting_one_record_never_exposes_the_gateways_other_targets():
+    params = build_create_params(
+        spec(tools=[HR]), ROLE, None,
+        gateway_attachments=[SHARED_ATTACHMENT], shared_gateway_arn=GW,
+    )
+    assert params["allowedTools"] == ["@launchpad_gw/hr-database___get_employee"]
+    assert "@launchpad_gw" not in params["allowedTools"]
+
+
+def test_legacy_config_less_refs_on_the_shared_gateway_get_their_target_scope():
+    params = build_create_params(
+        spec(tools=[{"type": "gateway", "name": "hr-database"}]), ROLE, None,
+        gateway={"arn": GW, "oauth_provider_arn": "arn:oauth"},
+    )
+    assert params["allowedTools"] == ["@launchpad_gw/hr-database___*"]
+
+
+def test_foreign_gateway_record_keeps_the_whole_alias_unless_it_declares_tools():
+    foreign = {"gateway_id": "other-9", "gateway_arn": "arn:other", "gateway_name": "partner",
+               "outbound_auth": {"none": {}}}
+    whole = {"type": "gateway", "name": "partner-api",
+             "config": {"record_id": "rec-p", "gateway_id": "other-9"}}
+    params = build_create_params(spec(tools=[whole]), ROLE, None,
+                                 gateway_attachments=[foreign], shared_gateway_arn=GW)
+    assert params["allowedTools"] == ["@partner"]
+    declared = {**whole, "config": {**whole["config"], "tools": ["search", "fetch"]}}
+    params = build_create_params(spec(tools=[declared]), ROLE, None,
+                                 gateway_attachments=[foreign], shared_gateway_arn=GW)
+    assert params["allowedTools"] == ["@partner/search", "@partner/fetch"]
+
+
+def test_scoped_selectors_pass_the_service_model_and_keep_kb_support():
+    params = build_create_params(
+        spec(tools=[HR], knowledge_bases=[{"kb_id": "KB123", "name": "manual"}]), ROLE, None,
+        gateway_attachments=[SHARED_ATTACHMENT], shared_gateway_arn=GW,
+        kb_gateway={"arn": KB, "oauth_provider_arn": "arn:oauth"},
+    )
+    assert params["allowedTools"] == [
+        "@launchpad_gw/hr-database___get_employee", "@launchpad_kb_gw",
+    ]
+    model = botocore.session.get_session().get_service_model("bedrock-agentcore-control")
+    report = ParamValidator().validate(params, model.operation_model("CreateHarness").input_shape)
+    assert not report.has_errors(), report.generate_report()
+
+
+def test_an_overlong_scoped_selector_is_refused_not_widened():
+    long_ref = {**HR, "config": {**HR["config"], "tools": ["hr-database___" + "x" * 60]}}
+    with pytest.raises(ValueError, match="allowedTools limit"):
+        build_create_params(spec(tools=[long_ref]), ROLE, None,
+                            gateway_attachments=[SHARED_ATTACHMENT], shared_gateway_arn=GW)
+
+
+def test_explicit_allowed_tools_are_not_rewritten_by_target_scoping():
+    explicit = ["@launchpad_gw/hr-database___*"]
+    params = build_create_params(
+        spec(tools=[HR], allowed_tools=explicit), ROLE, None,
+        gateway_attachments=[SHARED_ATTACHMENT], shared_gateway_arn=GW,
+    )
+    assert params["allowedTools"] == explicit
+
+
+@pytest.mark.parametrize("tools", [[], "hr___x", ["a b"], ["x", "x"], [""]])
+def test_gateway_tool_lists_are_validated(tools):
+    with pytest.raises(ValueError, match="config.tools"):
+        spec(tools=[{**HR, "config": {**HR["config"], "tools": tools}}])
+
+
+@pytest.mark.parametrize("entrance", ["sync", "sse"])
+def test_user_request_replays_the_deployed_scoped_allowlist_under_the_user_alias(
+    monkeypatch, entrance,
+):
+    """Live 2026-09-29: InvokeHarness.allowedTools replaces the deployed list, and a
+    selector naming the deploy-time alias after the swap selects NOTHING — so the
+    request must carry the deployed scope remapped to launchpad_gw_user."""
+    selected = spec(tools=[HR], knowledge_bases=[{"kb_id": "KB123", "name": "manual"}])
+    agent = Agent(method="harness", status="active", name=selected.name, arn=ARN,
+                  resource_id="agent-123", spec=selected.model_dump())
+    configured = [
+        {"name": "launchpad_gw", "type": "agentcore_gateway",
+         "config": {"agentCoreGateway": {"gatewayArn": GW, "outboundAuth": {"none": {}}}}},
+        {"name": "launchpad_kb_gw", "type": "agentcore_gateway",
+         "config": {"agentCoreGateway": {"gatewayArn": KB, "outboundAuth": {"none": {}}}}},
+    ]
+    control = MagicMock()
+    control.get_harness.return_value = {"harness": {
+        "tools": configured,
+        "allowedTools": ["@launchpad_gw/hr-database___get_employee", "@launchpad_kb_gw"],
+    }}
+    monkeypatch.setattr(invoke, "control_client", lambda _: control)
+    data = data_client()
+    monkeypatch.setattr(chat, "data_client", lambda _: data)
+    monkeypatch.setattr(invoke, "data_client", lambda _: data)
+    kwargs = {"workspace": ws_ctx(RESOURCES), "gateway_access_token": "trusted-token"}
+    if entrance == "sync":
+        invoke.invoke_agent_text(agent, "hello", **kwargs)
+    else:
+        assert list(chat.chat_stream(agent, "hello", **kwargs))[-1]["event"] == "done"
+    request = data.invoke_harness.call_args.kwargs
+    assert request["tools"][0]["name"] == "launchpad_gw_user"
+    assert request["allowedTools"] == [
+        "@launchpad_gw_user/hr-database___get_employee", "@launchpad_kb_gw",
+    ]

@@ -988,3 +988,33 @@ def test_gateway_tools_are_appended_and_description_tunable(gateway_module, monk
     # An MCP tool's tool_spec is a property rebuilt on every access, so the
     # override has to land on mcp_tool.description or it is silently discarded.
     assert tool_a.mcp_tool.description == "TREATMENT"
+
+
+def test_gateway_tools_are_filtered_to_the_selected_records_targets(gateway_module, monkeypatch):
+    """launchpad-gw carries every Registry record's target; the client loads only the
+    patterns the deployer injected (LAUNCHPAD_GATEWAY_TOOLS), never the other targets."""
+    class Tool:
+        def __init__(self, name):
+            self.tool_name = name
+
+    class OkClient:
+        def start(self):
+            return self
+
+        def list_tools_sync(self):
+            return [Tool("hr-database___get_employee"), Tool("hr-database___create_payout"),
+                    Tool("office-facts___get_office_fact")]
+
+        def stop(self, *_exc):
+            pass
+
+    monkeypatch.setattr(gateway_module, "gateway_client", lambda: OkClient())
+    monkeypatch.setattr(gateway_module, "GATEWAY_TOOL_PATTERNS",
+                        ["hr-database___get_employee"])
+    with ExitStack() as stack:
+        names = [t.tool_name for t in gateway_module.gateway_tools(stack)]
+    assert names == ["hr-database___get_employee"]
+    monkeypatch.setattr(gateway_module, "GATEWAY_TOOL_PATTERNS", ["hr-database___*"])
+    with ExitStack() as stack:
+        names = [t.tool_name for t in gateway_module.gateway_tools(stack)]
+    assert names == ["hr-database___get_employee", "hr-database___create_payout"]

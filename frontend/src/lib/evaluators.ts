@@ -52,8 +52,12 @@ export function scoreColor(score: number, evaluatorId: string): string {
 }
 
 /** Bedrock models offered as the judge of a custom LLM evaluator (the backend
- *  default, `global.anthropic.claude-sonnet-5`, first). */
+ *  default, `global.openai.gpt-6-sol`, first; while AgentCore's evaluator
+ *  validation still refuses GPT-6 the backend falls back to
+ *  `global.anthropic.claude-sonnet-5-5` and says so in `model_fallback`). */
 export const JUDGE_MODEL_OPTIONS = [
+  "global.openai.gpt-6-sol",
+  "global.anthropic.claude-sonnet-5-5",
   "global.anthropic.claude-sonnet-5",
   "global.anthropic.claude-sonnet-4-6",
   "global.anthropic.claude-haiku-4-5-20251001-v1:0",

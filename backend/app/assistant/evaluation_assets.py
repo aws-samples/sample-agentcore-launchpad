@@ -90,6 +90,7 @@ from app.assistant.principal import collaborator_clause, may_collaborate, princi
 from app.core.config import DATA_DIR
 from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
+from app.evaluation import agentcore_eval as ac
 from app.evaluation.agentcore_eval import ALL_BUILTIN_EVALUATORS
 from app.evaluation.models import EvalDataset
 from app.models.assistant import (
@@ -2072,6 +2073,23 @@ class _Runner:
                                     ) from exc
                 if isinstance(http, int) and 400 <= http < 500:
                     history[-1]["outcome"] = "rejected"  # this dispatch: not created
+                    fallback = (ac.judge_fallback_model(getattr(entry, "model_id", ""))
+                                if entry.kind in ("judge", "derived")
+                                and not res.get("model_fallback")
+                                and ac.judge_model_probe_rejected(exc) else None)
+                    if fallback:
+                        # AgentCore refused the judge model itself (its validation
+                        # probe) — nothing was created; retry once on the fallback
+                        # model under a fresh token, recorded BEFORE the dispatch
+                        res["model_fallback"] = {
+                            "requested": entry.model_id, "used": fallback,
+                            "client_token": _token(op.id, f"{entry.key}-fallback"),
+                            "reason": "AgentCore rejected the requested judge model at "
+                                      "evaluator validation (max_output_tokens probe)",
+                        }
+                        res["request"] = self._evaluator_request(entry, res, resources)
+                        self.fence.save(db, op, resources, f"{res['key']}:model-fallback")
+                        return self._step_evaluator(db, op, resources, res)
                 else:
                     history[-1]["outcome"] = "lost"  # 5xx / unknown: may have been created
                 raise
@@ -2101,6 +2119,9 @@ class _Runner:
         if mismatch:
             raise _Conflict(f"evaluator readback differs from the request on {mismatch}")
         self._check_evaluator_identity(op, detail, stored["evaluator_id"])
+        if res.get("model_fallback"):
+            stored["model_fallback"] = {k: res["model_fallback"][k]
+                                        for k in ("requested", "used", "reason")}
         stored.update({"status": detail.get("status"), "level": detail.get("level"),
                        "name": detail.get("evaluatorName"),
                        "evaluator_arn": detail.get("evaluatorArn") or stored.get("evaluator_arn")})
@@ -2135,13 +2156,18 @@ class _Runner:
             raise _Conflict(f"evaluator configuration is not bindable: {problem}")
 
     def _evaluator_request(self, entry, res, resources) -> dict[str, Any]:
+        # A recorded judge-model fallback (see _step_evaluator) is part of the durable
+        # request: the fallback model with its own token, so a resumed attempt rebuilds
+        # exactly the request that was dispatched.
+        fallback = res.get("model_fallback") or {}
+        model_id = fallback.get("used") or getattr(entry, "model_id", None)
         base = {"evaluatorName": entry.name, "description": entry.description or entry.title,
-                "clientToken": res["client_token"]}
+                "clientToken": fallback.get("client_token") or res["client_token"]}
         if isinstance(entry, plan_contract.JudgeEvaluator):
             return {**base, "level": entry.level, "evaluatorConfig": {"llmAsAJudge": {
                 "instructions": entry.instructions,
                 "ratingScale": {"numerical": [r.model_dump() for r in entry.rating_scale]},
-                "modelConfig": {"bedrockEvaluatorModelConfig": {"modelId": entry.model_id}},
+                "modelConfig": {"bedrockEvaluatorModelConfig": {"modelId": model_id}},
             }}}
         if isinstance(entry, plan_contract.DerivedEvaluator):
             level = ALL_BUILTIN_EVALUATORS.get(entry.base_evaluator_id)
@@ -2150,7 +2176,7 @@ class _Runner:
                             .get_evaluator(evaluatorId=entry.base_evaluator_id)["level"])
             return {**base, "level": level, "evaluatorConfig": {"derived": {
                 "baseEvaluatorId": entry.base_evaluator_id,
-                "modelConfig": {"bedrockEvaluatorModelConfig": {"modelId": entry.model_id}},
+                "modelConfig": {"bedrockEvaluatorModelConfig": {"modelId": model_id}},
             }}}
         fn = _resource(resources, "lambda_function", code_group=res.get("code_group"))
         version_arn = (fn.get("result") or {}).get("version_arn")

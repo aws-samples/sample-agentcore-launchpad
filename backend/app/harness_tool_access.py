@@ -61,6 +61,54 @@ def selected_tool_patterns(
     return list(dict.fromkeys(patterns))
 
 
+ALLOWED_TOOL_MAX_LEN = 64  # HarnessAllowedTool max length (service model)
+
+
+def gateway_tool_names(ref: Mapping[str, Any]) -> list[str] | None:
+    """The MCP tool names one gateway ToolRef may call, or None for "undeclared".
+
+    ``config.tools`` is set when the attachment was selected from a catalog that knew
+    the record's callable names (optionally narrowed to some functions). Older specs
+    have no list; callers then fall back to the record's own target prefix.
+    """
+    config = ref.get("config") if isinstance(ref.get("config"), Mapping) else {}
+    tools = config.get("tools")
+    if tools is None:
+        return None
+    return [str(t) for t in tools]
+
+
+def gateway_target_selectors(
+    alias: str, refs: Iterable[Mapping[str, Any]], *, shared: bool,
+) -> list[str]:
+    """``allowedTools`` selectors for one configured Gateway alias.
+
+    A Registry record on the shared Launchpad Gateway is ONE target of it, and the
+    Gateway names that target's tools ``<target>___<tool>`` — so mounting the Gateway
+    must never expose its other targets. Each ref contributes its declared tools
+    exactly, or ``<record name>___*`` when it predates declared tools. A record that
+    fronts a whole foreign Gateway (not shared) without a declared list keeps the
+    whole-alias selector it always had.
+    """
+    selectors: list[str] = []
+    for ref in refs:
+        names = gateway_tool_names(ref)
+        if names is not None:
+            wanted = [f"@{alias}/{name}" for name in names]
+        elif shared:
+            wanted = [f"@{alias}/{ref.get('name')}___*"]
+        else:
+            wanted = [f"@{alias}"]
+        for selector in wanted:
+            if len(selector) > ALLOWED_TOOL_MAX_LEN:
+                raise ValueError(
+                    f"tool selector {selector!r} exceeds the {ALLOWED_TOOL_MAX_LEN}-character "
+                    "allowedTools limit; shorten the Gateway or tool name"
+                )
+        selectors.extend(wanted)
+    return list(dict.fromkeys(selectors))
+
+
 def remap_tool_patterns(patterns: Iterable[str], names: Mapping[str, str]) -> list[str]:
     """Remap configured-group selectors without enlarging their tool suffix.
 

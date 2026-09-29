@@ -14,7 +14,7 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.deployer.pipeline import StageContext, StageResult, register_method
-from app.harness_tool_access import selected_tool_patterns
+from app.harness_tool_access import gateway_target_selectors, selected_tool_patterns
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
 from app.services import agent_iam, registry_console
@@ -107,6 +107,7 @@ def build_create_params(
     gateway: dict[str, str] | None = None,
     kb_gateway: dict[str, str] | None = None,
     gateway_attachments: list[dict[str, Any]] | None = None,
+    shared_gateway_arn: str | None = None,
 ) -> dict:
     """AgentSpec → CreateHarness kwargs. Harness names disallow hyphens.
 
@@ -115,7 +116,9 @@ def build_create_params(
     (legacy config-less ToolRefs). ``gateway_attachments`` is the server-side
     live Registry/Gateway resolution for new ToolRefs and takes precedence.
     ``kb_gateway`` carries the same shape for launchpad-kb-gw; it attaches when
-    the spec mounts knowledge bases.
+    the spec mounts knowledge bases. ``shared_gateway_arn`` names the workspace's
+    shared launchpad-gw: a Registry record on it is one Gateway *target*, so the
+    derived ``allowedTools`` selects only that record's tools, never the others'.
     """
     system_prompt = spec.system_prompt
     if spec.knowledge_bases:
@@ -133,6 +136,10 @@ def build_create_params(
     # allowedTools, the mounted retrieval tools must be allowed too or the KB
     # section in the prompt names tools the model can never call.
     kb_tool_names: list[str] = []
+    # configured Gateway alias → (the spec's gateway refs it serves, is it the shared
+    # launchpad-gw) — the input of the target-scoped allowedTools below
+    gateway_scopes: dict[str, tuple[list[dict[str, Any]], bool]] = {}
+    gateway_refs = [t.model_dump() for t in spec.tools if t.type == "gateway"]
     for tool in spec.tools:
         if tool.type == "builtin" and tool.name in BUILTIN_TOOL_TYPES:
             tools.append({"type": BUILTIN_TOOL_TYPES[tool.name], "name": tool.name})
@@ -173,7 +180,16 @@ def build_create_params(
             )
             if kb_gateway and gateway_arn == kb_gateway["arn"]:
                 kb_tool_names.append(name)
+            shared = bool(shared_gateway_arn) and gateway_arn == shared_gateway_arn
+            served = [
+                ref for ref in gateway_refs
+                if (ref["config"].get("gateway_id") == attachment.get("gateway_id")
+                    if ref["config"].get("gateway_id") else shared)
+            ]
+            if served:
+                gateway_scopes[name] = (served, shared)
     elif gateway and any(t.type == "gateway" for t in spec.tools):
+        gateway_scopes["launchpad_gw"] = (gateway_refs, True)
         tools.append(
             {
                 "type": "agentcore_gateway",
@@ -225,7 +241,14 @@ def build_create_params(
     if spec.skills:
         params["skills"] = [_skill_source(path) for path in spec.skills]
     if spec.allowed_tools is None:
-        allowed = selected_tool_patterns(tools, bool(spec.skills), spec.native_tools)
+        allowed = []
+        for pattern in selected_tool_patterns(tools, bool(spec.skills), spec.native_tools):
+            scope = gateway_scopes.get(pattern.removeprefix("@"))
+            allowed.extend(
+                gateway_target_selectors(pattern.removeprefix("@"), scope[0], shared=scope[1])
+                if scope else [pattern]
+            )
+        allowed = list(dict.fromkeys(allowed))
     else:
         # Restricts LLM tool selection only (InvokeHarness); IAM is unaffected, which is
         # why the per-agent role stays the real boundary (services/agent_iam.py). A
@@ -295,6 +318,7 @@ def _pinned_params(
     res = (pin.get("bindings") or {}).get("resources") or {}
     attachments = [
         {
+            "gateway_id": gateway_id,
             "gateway_arn": g.get("gateway_arn"),
             "gateway_name": g.get("gateway_name") or gateway_id,
             "outbound_auth": g.get("outbound_auth"),
@@ -324,6 +348,7 @@ def _pinned_params(
         memory.get("arn") if memory.get("mode") == "workspace" else None,
         kb_gateway=kb_gateway,
         gateway_attachments=attachments,
+        shared_gateway_arn=workspace.resources.get("gateway_arn"),
     )
 
 
@@ -389,6 +414,7 @@ def _build_live_params(
         gateway_attachments=registry_console.resolve_gateway_attachments(
             spec.tools, workspace
         ),
+        shared_gateway_arn=resources.get("gateway_arn"),
     )
 
 

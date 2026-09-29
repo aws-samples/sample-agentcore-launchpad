@@ -134,9 +134,13 @@ def rule_catalog_errors(
         known.update(selected_native_tools(content))
     missing: list[str] = []
     by_key = {tool["key"]: tool for tool in catalog.get("tools") or []}
+    narrowed = content.get("tool_functions") or {}
     for key in content.get("tools") or []:
         entry = by_key.get(key) if isinstance(key, str) else None
         tool_names = (entry or {}).get("runtime_tools")
+        if isinstance(tool_names, list) and isinstance(narrowed.get(key), list):
+            # a narrowed Gateway exposes only the reviewed functions at runtime
+            tool_names = [name for name in tool_names if name in narrowed[key]]
         if not isinstance(tool_names, list):
             missing.append(str(key))
         else:
