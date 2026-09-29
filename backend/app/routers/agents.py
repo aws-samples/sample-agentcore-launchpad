@@ -34,6 +34,7 @@ from app.schemas.agent import (
 )
 from app.services import agent_iam, agent_names, byoc_uploads
 from app.services.agent_versions import list_agent_versions
+from app.services.agentcore import harness as harness_api
 from app.services.agentcore.client import control_client
 from app.services.attachments import attachment_capability, prepare_attachments
 from app.services.invoke import invoke_agent_text
@@ -527,8 +528,17 @@ def convert_agent(
     platform = platform_requirements(*hc.conversion_platform_inputs(source))
     try:
         files = hc.export_harness(source.arn)
+        # The live Harness is the source of the Gateway clients the export drops.
+        harness = (
+            harness_api.get_harness(control_client(ws.context), source.resource_id)
+            if any(
+                isinstance(ref, dict) and ref.get("type") == "gateway"
+                for ref in (source.spec or {}).get("tools") or []
+            )
+            else None
+        )
         spec = hc.build_conversion_spec(
-            source, files, platform, new_name, ws.context
+            source, files, platform, new_name, ws.context, harness=harness
         )
     except hc.ConversionError as exc:
         raise AppError("agent.convert_failed", str(exc), status_code=502) from exc
