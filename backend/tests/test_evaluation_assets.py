@@ -1024,6 +1024,58 @@ def test_handler_positive_adot_session_with_tool_and_reference():
     assert handler.evaluate(RULES, _event("SESSION", shell, REF_TRAJ))["label"] == "FAIL"
 
 
+def _mcp_transport(trace, span_id, parent, name, start):
+    """The ADOT MCP client span a Harness records under each gateway call (live shape
+    2026-09-29: kind CLIENT, mcp.method.name, gen_ai.tool.name = the MCP tool name)."""
+    span = _span(trace, span_id, f"mcp tools/call {name}",
+                 {"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": name,
+                  "mcp.method.name": "tools/call"}, start)
+    span["parentSpanId"] = parent
+    return span
+
+
+PAYOUT_BAN = {"version": 1, "checks": [
+    {"id": "no_payout", "type": "tool_count", "tool": "hr-database___create_payout", "max": 0},
+    {"id": "one_lookup", "type": "tool_count", "tool": "hr-database___get_employee",
+     "min": 1, "max": 1},
+]}
+
+
+@pytest.mark.parametrize("outer", ["hr-database___create_payout",
+                                   "launchpad_gw_user_hr-database___create_payout"])
+def test_handler_bans_a_gateway_tool_on_both_invoke_paths(outer):
+    """Dataset runs (M2M) record bare Gateway names; the console's logged-in chat records
+    the remote_mcp alias ``launchpad_gw_user_<tool>`` on the execute_tool span. A named
+    ban written with the catalog name must catch the call on both paths."""
+    lookup_outer = outer.replace("create_payout", "get_employee")
+    spans = (_tool("t1", "look", lookup_outer, 3)
+             + [_mcp_transport("t1", "look-mcp", "look", "hr-database___get_employee", 3)]
+             + _tool("t1", "pay", outer, 5)
+             + [_mcp_transport("t1", "pay-mcp", "pay", "hr-database___create_payout", 5)]
+             + _model_turn("t1", "m", "Done.", start=10))
+    out = handler.evaluate(PAYOUT_BAN, _event("SESSION", spans))
+    assert out["label"] == "FAIL" and "no_payout" in out["explanation"], out
+    # without the payout, the single lookup is counted ONCE (the transport span is its
+    # own call's child, never a second call)
+    clean = (_tool("t1", "look", lookup_outer, 3)
+             + [_mcp_transport("t1", "look-mcp", "look", "hr-database___get_employee", 3)]
+             + _model_turn("t1", "m", "You have 3.5 days.", start=10))
+    assert handler.evaluate(PAYOUT_BAN, _event("SESSION", clean))["label"] == "PASS"
+
+
+def test_handler_counts_an_orphan_mcp_transport_span_as_the_call():
+    """Without the agent-level span, the transport record is the only evidence."""
+    spans = ([_mcp_transport("t1", "only", "gone-parent", "hr-database___create_payout", 5)]
+             + _model_turn("t1", "m", "Done.", start=10))
+    assert handler.evaluate(PAYOUT_BAN, _event("SESSION", spans))["label"] == "FAIL"
+
+
+def test_handler_user_gateway_prefix_matches_the_invoke_alias():
+    from app.services.agentcore.harness import USER_GATEWAY_ALIAS
+
+    assert handler.USER_GATEWAY_TOOL_PREFIX == f"{USER_GATEWAY_ALIAS}_"
+
+
 def test_handler_zero_call_and_named_write_ban_semantics():
     empty = {"checks": [{"id": "empty", "type": "tool_sequence", "mode": "exact", "tools": []}]}
     ban = {"checks": [{"id": "write", "type": "tool_count", "tool": "send_email", "max": 0}]}

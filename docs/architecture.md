@@ -1592,7 +1592,7 @@ fail-closed: the handler inspects only the target (`evaluationTarget.traceIds` a
 all spans at SESSION, TOOL_CALL refused), reads the **last assistant output** of a
 model/agent span (`gen_ai.completion`, `gen_ai.output.messages`, `gen_ai.choice` /
 `gen_ai.assistant.message` events; dict or OTLP list attributes) and tool names
-(`gen_ai.tool.name`, `tool.name`, `execute_tool <name>` spans); user prompts, tool
+(`gen_ai.tool.name`, `tool.name`, `execute_tool <name>` spans; an MCP client `tools/call` span (`mcp.method.name`) nested under a tool span is that call's transport, not a second call, and the logged-in chat's `launchpad_gw_user_` remote_mcp prefix is removed so rules match the catalog's Gateway names on both invoke paths); user prompts, tool
 inputs and reference inputs are never read as output. A model's input history may
 contain tool messages without making its current output a tool result. A Strands
 chat wrapper and its single direct provider child are one logical model call when
