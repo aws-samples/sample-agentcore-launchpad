@@ -292,7 +292,9 @@ def test_explicit_user_gateway_selector_uses_deployed_alias_and_preserves_other_
     control.get_harness.assert_called_once_with(harnessId="agent-123")
     request = data.invoke_harness.call_args.kwargs
     assert request["allowedTools"] == [
-        "@launchpad_gw_user/hr___lookup", "@other_gateway/read_*", "file_*", "@real_kb_alias",
+        # remote_mcp tools are named <server>_<tool> (live 2026-09-29)
+        "@launchpad_gw_user/launchpad_gw_user_hr___lookup", "@other_gateway/read_*", "file_*",
+        "@real_kb_alias",
     ]
     assert request["tools"][1:] == configured[1:]
     assert configured == before
@@ -488,6 +490,20 @@ def test_user_request_replays_the_deployed_scoped_allowlist_under_the_user_alias
         assert list(chat.chat_stream(agent, "hello", **kwargs))[-1]["event"] == "done"
     request = data.invoke_harness.call_args.kwargs
     assert request["tools"][0]["name"] == "launchpad_gw_user"
+    # the user Gateway is a remote_mcp server: its tool names are <server>_<tool>, and a
+    # bare "@launchpad_gw_user/hr-database___get_employee" matched NOTHING on prod
     assert request["allowedTools"] == [
-        "@launchpad_gw_user/hr-database___get_employee", "@launchpad_kb_gw",
+        "@launchpad_gw_user/launchpad_gw_user_hr-database___get_employee", "@launchpad_kb_gw",
     ]
+
+
+def test_remote_selectors_are_qualified_and_trimmed_within_the_limit():
+    from app.harness_tool_access import qualify_remote_selectors
+
+    got = qualify_remote_selectors(
+        ["@u/hr___get", "@u/hr___*", "@u", "@u/*", "@u/u_already", "@kb/x",
+         "@u/hr___" + "y" * 80],
+        ["u"],
+    )
+    assert got[:6] == ["@u/u_hr___get", "@u/u_hr___*", "@u", "@u/*", "@u/u_already", "@kb/x"]
+    assert len(got[6]) == 64 and got[6].endswith("*") and got[6].startswith("@u/u_hr___y")

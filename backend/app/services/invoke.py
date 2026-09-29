@@ -13,7 +13,11 @@ from botocore.exceptions import ClientError
 
 from app.assistant.sessions import refuse_assistant_session
 from app.core.errors import AppError, aws_error_code
-from app.harness_tool_access import remap_tool_patterns, selected_tool_patterns
+from app.harness_tool_access import (
+    qualify_remote_selectors,
+    remap_tool_patterns,
+    selected_tool_patterns,
+)
 from app.models.ledger import Agent
 from app.optimization import canary_service
 from app.services.agentcore import gateway
@@ -132,6 +136,12 @@ def harness_user_overrides(
                     pattern = f"@{tool['name']}"
                     if pattern not in allowed:
                         allowed.append(pattern)
+    # the swapped user Gateway is a remote_mcp server: its tool part is qualified
+    swapped = {
+        after["name"] for before, after in zip(configured or [], tools, strict=False)
+        if before.get("type") == "agentcore_gateway" and after.get("type") == "remote_mcp"
+    }
+    allowed = qualify_remote_selectors(allowed, swapped)
     return {"tools": tools, "allowedTools": allowed}
 
 
