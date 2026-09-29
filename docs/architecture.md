@@ -606,9 +606,10 @@ InvokeHarness), and Bedrock accepts `reasoning.effort` for GPT-5.6 under that wi
 pairing (a Claude/Nova model, Bedrock Mantle's Responses API, a non-harness method)
 is refused by the schema rather than guessed at or silently dropped; a spec without
 the knobs sends exactly the request it always did. The architect preset's **new-install
-defaults** are `us.openai.gpt-5.6-sol` (the US cross-region inference profile, native
-Bedrock/Converse — the per-agent role authorizes the profile plus the underlying
-foundation model), `max_tokens: 65536` and `reasoning_effort: "high"`; the platform
+defaults** are `global.openai.gpt-6-astra` (GPT-6 Astra on the global cross-region
+inference profile, native Bedrock/Converse — the per-agent role authorizes the profile
+plus the underlying foundation model), `max_tokens: 65536`, `reasoning_effort: "high"`
+and `max_iterations: 100`; the platform
 `DEFAULT_MODEL_ID` and the ordinary wizard defaults are unchanged. Stored rows are
 **not migrated**: a preset installed by an earlier build keeps its model, prompt and
 absent knobs through reads, repairs and bundle updates until an administrator saves
@@ -855,10 +856,9 @@ the final resolved tool configurations, Skill loading and explicit `native_tools
 choices. Native choices default to empty; a completely empty selection sends `[]`.
 An explicit `allowed_tools` list remains an expert override (entries are 1–64 chars
 matching `*|@?name(/tool)?`). The preset retains its explicit
-`["file_*", "@aws_knowledge"]` override: the file tools
-its skill needs, the public AWS Knowledge MCP server
-(`https://knowledge-mcp.global.api.aws`, a `remote_mcp` tool, no credential), and no
-shell. When knowledge bases are mounted, the deployer appends `@<kb gateway tool
+`["shell", "file_*", "@aws_knowledge"]` override: the Harness sandbox shell, the file
+tools its skill needs, and the public AWS Knowledge MCP server
+(`https://knowledge-mcp.global.api.aws`, a `remote_mcp` tool, no credential). When knowledge bases are mounted, the deployer appends `@<kb gateway tool
 name>` (`@launchpad_kb_gw`) — only then, and never `*` — so the retrieval tools
 the prompt names are callable. `allowedTools` scopes LLM tool selection only; the
 real boundary is the per-agent execution role: model invoke, `s3:GetObject` on
@@ -1513,8 +1513,7 @@ assets. A rejected model block also leaves an `error` transcript row named
 `proposal_rejected`, which `compose_messages` replays to the model as the member's side
 of the next turn — the member says "fix it" instead of relaying the errors — and the
 skill bundle carries `references/proposal-self-check.md`, a checklist mirroring every
-contract rule that the model walks before emitting a block (the Harness has no shell, so
-the checklist is the executable form). Seeded evaluator keys are
+contract rule that the model walks before emitting a block. Seeded evaluator keys are
 reserved first; prose recommendations map only to ids identified exactly
 (`Builtin.*` / `ThirdParty.*`, collision-safe keys, never removed by a seed mapping of
 another kind) or to the seed's explicit `recommendation_keys`; everything else stays

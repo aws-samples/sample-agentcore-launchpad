@@ -192,15 +192,15 @@ def test_build_spec_is_server_owned_and_constrained():
     assert addressed.skills == [f"s3://{BUCKET}/system-skills/{ARCHITECT.name}/{VER}-abababababab/"]
     assert presets.skill_release_from_spec(addressed.model_dump()) == (VER, "abababababab")
     assert presets.skill_version_from_spec(spec.model_dump()) == VER
-    assert spec.allowed_tools == ["file_*", "@aws_knowledge"]
-    assert "shell" not in spec.allowed_tools and "*" not in spec.allowed_tools
+    assert spec.allowed_tools == ["shell", "file_*", "@aws_knowledge"]
+    assert "*" not in spec.allowed_tools
     assert [t.type for t in spec.tools] == ["mcp"]
     assert spec.tools[0].config["url"] == "https://knowledge-mcp.global.api.aws"
     assert not [t for t in spec.tools if t.type == "builtin"]
     # no secrets / account ids in the prompt
     assert "arn:aws" not in spec.system_prompt and "111122223333" not in spec.system_prompt
     params = build_create_params(spec, "arn:aws:iam::111:role/x", None)
-    assert params["allowedTools"] == ["file_*", "@aws_knowledge"]
+    assert params["allowedTools"] == ["shell", "file_*", "@aws_knowledge"]
     assert params["skills"] == [{"s3": {"uri": spec.skills[0]}}]
     assert params["tools"][0]["type"] == "remote_mcp"
     assert spec.tools[0].config["auth"] == "none"  # public server → no identity grant
@@ -319,7 +319,7 @@ def test_install_is_explicit_and_idempotent_while_deploying(client, no_real_depl
         "managed": True, "key": KEY, "label": ARCHITECT.label, "skill_version": VER,
         "protected_actions": ["redeploy", "delete", "convert", "experiment", "canary"],
     }
-    assert agent["spec"]["allowed_tools"] == ["file_*", "@aws_knowledge"]
+    assert agent["spec"]["allowed_tools"] == ["shell", "file_*", "@aws_knowledge"]
     assert no_real_deploy == [body["job_id"]]
     assert _status(client)["status"] == "deploying"
 
@@ -779,7 +779,7 @@ def test_create_request_carries_the_provisioned_dedicated_role_and_client_token(
     assert control.creates[0]["clientToken"] == f"lp-{dep_id}"
     assert len(control.creates[0]["clientToken"]) >= 33
     assert control.creates[0]["memory"] == {"disabled": {}}
-    assert control.creates[0]["allowedTools"] == ["file_*", "@aws_knowledge"]
+    assert control.creates[0]["allowedTools"] == ["shell", "file_*", "@aws_knowledge"]
 
 
 def test_resume_without_scratch_rederives_the_dedicated_role(monkeypatch):
@@ -793,7 +793,7 @@ def test_resume_without_scratch_rederives_the_dedicated_role(monkeypatch):
                 f"{agent_iam.role_name_for(ARCHITECT.name, agent_id)}")
     assert control.updates[0]["executionRoleArn"] == expected
     assert control.updates[0]["clientToken"] == f"lp-{dep_id}"
-    assert control.updates[0]["allowedTools"] == ["file_*", "@aws_knowledge"]
+    assert control.updates[0]["allowedTools"] == ["shell", "file_*", "@aws_knowledge"]
 
 
 def test_ordinary_harness_also_gets_its_provisioned_role_on_create(monkeypatch):
@@ -899,11 +899,11 @@ def test_mounted_kb_adds_only_its_gateway_tool_to_allowed_tools():
         knowledge_bases=(presets.KnowledgeBaseRef(**KB_REF),)))
     params = build_create_params(spec, DEDICATED, None, kb_gateway=KB_GW)
     assert [t["name"] for t in params["tools"]] == ["aws_knowledge", "launchpad_kb_gw"]
-    assert params["allowedTools"] == ["file_*", "@aws_knowledge", "@launchpad_kb_gw"]
+    assert params["allowedTools"] == ["shell", "file_*", "@aws_knowledge", "@launchpad_kb_gw"]
     # Without a mount nothing is added to the preset's explicit override.
     plain = build_create_params(presets.build_spec(ARCHITECT, BUCKET, InstallOptions()),
                                 DEDICATED, None, kb_gateway=KB_GW)
-    assert plain["allowedTools"] == ["file_*", "@aws_knowledge"]
+    assert plain["allowedTools"] == ["shell", "file_*", "@aws_knowledge"]
     generic = AgentSpec(name="plain", method="harness", system_prompt="x",
                         knowledge_bases=[KB_REF])
     assert build_create_params(generic, DEDICATED, None, kb_gateway=KB_GW)["allowedTools"] == [
@@ -2654,7 +2654,7 @@ def test_concurrent_callers_coalesce_on_one_worker(client, monkeypatch):
 # SE-040: inference defaults + administrator-editable settings
 # ---------------------------------------------------------------------------
 
-SOL = "us.openai.gpt-5.6-sol"
+ASTRA = "global.openai.gpt-6-astra"
 OPUS = "global.anthropic.claude-opus-5"
 
 
@@ -2679,27 +2679,27 @@ def _rewrite_spec(agent_id: str, **changes) -> None:
         db.close()
 
 
-def test_architect_defaults_are_gpt_sol_64k_output_high_effort():
+def test_architect_defaults_are_gpt6_astra_64k_output_high_effort():
     spec = presets.build_spec(ARCHITECT, BUCKET, ARCHITECT.default_options())
-    assert (spec.model_id, spec.model_source) == (SOL, "bedrock")
+    assert (spec.model_id, spec.model_source) == (ASTRA, "bedrock")
     assert spec.max_tokens == 65536 and spec.reasoning_effort == "high"
-    # the loop limits are separate knobs and unchanged
-    assert (spec.max_iterations, spec.timeout_seconds) == (30, 900)
+    # the loop limits are separate knobs
+    assert (spec.max_iterations, spec.timeout_seconds) == (100, 900)
     params = build_create_params(spec, "arn:aws:iam::111:role/x", None)
     model = params["model"]["bedrockModelConfig"]
     assert model == {
-        "modelId": SOL,
+        "modelId": ASTRA,
         "apiFormat": "converse_stream",
         "maxTokens": 65536,  # per model call — not InvokeHarness.maxTokens
         "additionalParams": {"additionalModelRequestFields": {"reasoning": {"effort": "high"}}},
     }
-    assert "maxTokens" not in params and params["maxIterations"] == 30
+    assert "maxTokens" not in params and params["maxIterations"] == 100
     # UpdateHarness carries the identical model block (the live preset is updated in place)
     update = hc.wrap_params_for_update(params)
     assert update["model"] == params["model"]
     # a bare InstallOptions() is the catalogue default too (model/prompt/limits)
     bare = presets.build_spec(ARCHITECT, BUCKET, InstallOptions())
-    assert (bare.model_id, bare.system_prompt) == (SOL, ARCHITECT.system_prompt)
+    assert (bare.model_id, bare.system_prompt) == (ASTRA, ARCHITECT.system_prompt)
     # retention clarification: memory-disabled ≠ nothing retained
     assert "never tell a customer that nothing is retained" in spec.system_prompt
     assert "CloudWatch" in spec.system_prompt
@@ -2718,12 +2718,12 @@ def test_ordinary_specs_send_exactly_the_request_they_always_did():
 @pytest.mark.parametrize("over", [
     {"reasoning_effort": "high"},  # Claude on Converse: the knob would leak
     {"model_id": "openai.gpt-5.6-sol", "model_source": "mantle", "reasoning_effort": "high"},
-    {"model_id": SOL, "method": "zip_runtime", "reasoning_effort": "high"},
+    {"model_id": ASTRA, "method": "zip_runtime", "reasoning_effort": "high"},
     {"method": "zip_runtime", "max_tokens": 4096},
     {"max_tokens": 0},
     {"max_tokens": presets.AgentSpec.model_fields["max_tokens"].metadata[1].le + 1},
-    {"model_id": SOL, "reasoning_effort": "extreme"},
-    {"model_id": SOL, "reasoning_effort": "none"},
+    {"model_id": ASTRA, "reasoning_effort": "extreme"},
+    {"model_id": ASTRA, "reasoning_effort": "none"},
 ])
 def test_inference_knobs_reject_unsupported_pairings(over):
     base = {"name": "knobs", "method": "harness", "system_prompt": "hi"}
@@ -2732,7 +2732,7 @@ def test_inference_knobs_reject_unsupported_pairings(over):
 
 
 def test_inference_knobs_accept_openai_on_native_bedrock():
-    spec = AgentSpec(name="knobs", method="harness", system_prompt="hi", model_id=SOL,
+    spec = AgentSpec(name="knobs", method="harness", system_prompt="hi", model_id=ASTRA,
                      max_tokens=65536, reasoning_effort="high")
     assert spec.reasoning_effort == "high"
     # max_tokens alone is fine for any harness model
@@ -2740,15 +2740,15 @@ def test_inference_knobs_accept_openai_on_native_bedrock():
                      max_tokens=8192).max_tokens == 8192
 
 
-def test_execution_role_authorizes_the_us_openai_profile_on_the_dedicated_role():
+def test_execution_role_authorizes_the_global_openai_profile_on_the_dedicated_role():
     spec = presets.build_spec(ARCHITECT, BUCKET, ARCHITECT.default_options())
     ctx = agent_iam.role_context(ws_ctx(READY_RESOURCES))
     doc = agent_iam.policy_document(spec, ctx)
     models = next(s for s in doc["Statement"] if s["Sid"] == "BedrockModels")
-    assert f"arn:aws:bedrock:{ctx.region}:{ctx.account_id}:inference-profile/{SOL}" in (
+    assert f"arn:aws:bedrock:{ctx.region}:{ctx.account_id}:inference-profile/{ASTRA}" in (
         models["Resource"]
     )
-    assert "arn:aws:bedrock:*::foundation-model/openai.gpt-5.6-sol" in models["Resource"]
+    assert "arn:aws:bedrock:*::foundation-model/openai.gpt-6-astra" in models["Resource"]
     assert "arn:aws:bedrock:*::foundation-model/*" not in models["Resource"]
     # the preset still deploys on its own role, never the shared one
     settings = get_settings()
@@ -2762,7 +2762,7 @@ def test_execution_role_authorizes_the_us_openai_profile_on_the_dedicated_role()
 def test_status_exposes_stored_settings_and_build_defaults(client):
     _mark_ready()
     before = _status(client)
-    assert before["settings"] == {} and before["defaults"]["model_id"] == SOL
+    assert before["settings"] == {} and before["defaults"]["model_id"] == ASTRA
     assert before["defaults"]["max_tokens"] == 65536
     assert before["defaults"]["reasoning_effort"] == "high"
     assert before["editable_fields"] == list(presets.EDITABLE_FIELDS)
@@ -2773,7 +2773,7 @@ def test_status_exposes_stored_settings_and_build_defaults(client):
     assert status["settings"] == {**status["defaults"], "knowledge_bases": []}
     assert status["settings"]["system_prompt"] == ARCHITECT.system_prompt
     assert status["can_configure"] is True
-    assert status["model_id"] == SOL  # legacy top-level members still agree
+    assert status["model_id"] == ASTRA  # legacy top-level members still agree
 
 
 def test_new_install_sends_64k_and_high_effort_and_a_resume_regenerates_them(client):
@@ -2783,7 +2783,7 @@ def test_new_install_sends_64k_and_high_effort_and_a_resume_regenerates_them(cli
     spec = AgentSpec(**res.json()["agent"]["spec"])
     params = build_create_params(spec, "arn:aws:iam::111:role/x", None)
     model = params["model"]["bedrockModelConfig"]
-    assert model["maxTokens"] == 65536 and model["modelId"] == SOL
+    assert model["maxTokens"] == 65536 and model["modelId"] == ASTRA
     assert model["additionalParams"]["additionalModelRequestFields"]["reasoning"] == {
         "effort": "high"
     }
@@ -2839,7 +2839,7 @@ def test_old_spec_is_untouched_until_an_explicit_edit_and_partial_edits_preserve
     })
     assert reset.status_code == 202, reset.text
     restored = _spec_of(agent_id)
-    assert restored["model_id"] == SOL and restored["reasoning_effort"] == "high"
+    assert restored["model_id"] == ASTRA and restored["reasoning_effort"] == "high"
     assert restored["system_prompt"] == ARCHITECT.system_prompt
     assert restored["max_tokens"] == 65536 and restored["max_iterations"] == 12
     # the protected part of the spec never moved
@@ -2864,7 +2864,7 @@ def test_stored_prompt_override_survives_repair_kb_edit_and_bundle_pin(client):
         assert res.status_code == 202, (body, res.text)
         spec = _spec_of(agent_id)
         assert spec["system_prompt"] == custom and spec["timeout_seconds"] == 1200, body
-        assert spec["model_id"] == SOL and spec["max_tokens"] == 65536, body
+        assert spec["model_id"] == ASTRA and spec["max_tokens"] == 65536, body
         # every repair still pins the content-addressed release and passes the job-entry guard
         job = _job(res.json()["job_id"])
         agent = _agent(agent_id)
@@ -2999,7 +2999,7 @@ def test_member_sees_settings_but_cannot_edit_them_even_with_deploy_permission(g
     perms = member.get("/api/auth/status").json()["permissions"]
     assert "agents.deploy" in perms  # the member holds the ordinary deploy right
     seen = _status(member)
-    assert seen["settings"]["model_id"] == SOL and seen["settings"]["max_tokens"] == 65536
+    assert seen["settings"]["model_id"] == ASTRA and seen["settings"]["max_tokens"] == 65536
     assert seen["can_configure"] is False and seen["can_repair"] is False
     for body in ({"max_tokens": 1000}, {"system_prompt": "mine"}, {"reset": ["model_id"]}):
         res = member.post(INSTALL, json=body)

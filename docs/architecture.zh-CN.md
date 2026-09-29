@@ -448,9 +448,9 @@ evaluator 映射、AgentCore 优先的取舍、证据分级、不自主执行）
 Bedrock 在该线上键下对 GPT-5.6 接受 `reasoning.effort`（扁平的 `reasoning_effort` 同样会被当作未知参数拒绝）。
 其他任何组合（Claude/Nova 模型、
 Bedrock Mantle 的 Responses API、非 Harness 方法）由 schema 拒绝，而不是猜测或悄悄丢弃；不带这两个参数的
-spec 发送与以往完全相同的请求。架构师预置的**新安装默认值**为 `us.openai.gpt-5.6-sol`（美国跨区域推理
-配置，原生 Bedrock/Converse——按 Agent 的角色同时授权该配置与底层基础模型）、`max_tokens: 65536` 与
-`reasoning_effort: "high"`；平台 `DEFAULT_MODEL_ID` 与普通向导默认值不变。已存行**不做迁移**：由早期构建
+spec 发送与以往完全相同的请求。架构师预置的**新安装默认值**为 `global.openai.gpt-6-astra`（GPT-6 Astra
+的全球跨区域推理配置，原生 Bedrock/Converse——按 Agent 的角色同时授权该配置与底层基础模型）、
+`max_tokens: 65536`、`reasoning_effort: "high"` 与 `max_iterations: 100`；平台 `DEFAULT_MODEL_ID` 与普通向导默认值不变。已存行**不做迁移**：由早期构建
 安装的预置在读取、修复与技能包更新中保留其模型、提示词与缺省的参数，直到管理员显式保存更改（或 `reset`）——
 `options_from_spec` 原样恢复每个可编辑成员，包括与本构建常量不同的系统提示词，因此目录中的提示词变更只有通过
 显式 `reset: ["system_prompt"]` 才会到达已安装预置（控制台提供“使用本构建的提示词”）。控制台的**“配置”**
@@ -597,9 +597,8 @@ release_digest, path, protected_actions, admin_actions} | null`），控制台�
 **受约束的工具面。** Harness 默认向每个会话暴露 `shell` 与 `file_operations`，除非
 `allowedTools` 加以限制，因此新增 harness 专用的 `AgentSpec.allowed_tools`（`None` = 既有
 Agent 保持 API 默认；每项 1–64 字符，匹配服务模型的 `*|@?name(/tool)?`），映射到请求的
-`allowedTools`；预置发送 `["file_*", "@aws_knowledge"]`：技能所需的文件工具、公共 AWS
-Knowledge MCP 服务器（`https://knowledge-mcp.global.api.aws`，`remote_mcp` 工具，无凭证），
-没有 shell。挂载知识库时，部署器追加 `@<知识库网关工具名>`（`@launchpad_kb_gw`）——仅在此时，
+`allowedTools`；预置发送 `["shell", "file_*", "@aws_knowledge"]`：Harness 沙箱 shell、技能所需的文件工具、
+公共 AWS Knowledge MCP 服务器（`https://knowledge-mcp.global.api.aws`，`remote_mcp` 工具，无凭证）。挂载知识库时，部署器追加 `@<知识库网关工具名>`（`@launchpad_kb_gw`）——仅在此时，
 且绝不使用 `*`——使提示词点名的检索工具可被调用。`allowedTools` 只约束 LLM 的工具选择；真正的
 边界是按 Agent 的执行角色：模型调用、仅限该版本技能前缀的 `s3:GetObject`、遥测——仅文档型预置
 别无其他。MCP ToolRef 携带 `auth: "none"`，告知角色推导跳过带认证 MCP 引用才有的工作负载身份与
@@ -884,7 +883,7 @@ Agent 从不被触碰；批准 Agent 不等于授权创建云端评估资源。
   就让修订*无效*，而不是等到批准、部署之后管理员创建资产时才暴露。被拒的模型提案块还会在对话记录里留下一条
   `proposal_rejected` 的 `error` 行，`compose_messages` 在下一轮把它作为成员一侧的内容回放给模型——成员只需说
   “请修正”，无需转述错误；技能包同时携带 `references/proposal-self-check.md`，逐条镜像契约规则，模型在输出提案块
-  前逐项核对（Harness 没有 shell，这份清单就是可执行形式）。唯一草拟的评审器
+  前逐项核对。唯一草拟的评审器
   是 SESSION 级别，通过 `{assertions}` 参考对**各自场景**的断言评分，没有混合黄金测试的全局评分标准，并标记
   `draft: true`。
 - **代码评估器 = 一个经审阅的静态 stdlib Lambda + 数据**（`app/assistant/lambda_runtime/handler.py`）。证据按
