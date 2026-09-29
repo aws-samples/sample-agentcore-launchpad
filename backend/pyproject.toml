@@ -42,6 +42,9 @@ extend-immutable-calls = ["fastapi.Depends"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "name_reservation: keeps the workspace-ledger half of evaluator name reservation active",
+]
 
 [build-system]
 requires = ["hatchling"]

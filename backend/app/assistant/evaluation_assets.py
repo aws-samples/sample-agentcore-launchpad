@@ -488,14 +488,92 @@ def _store_plan(
                    "could not allocate a plan revision; retry", status_code=409)
 
 
+# evaluator resources of an operation that may still exist (``deleted`` / ``skipped``
+# are the only states in which the name is known to be free again)
+_NAME_FREE_STATES = ("deleted", "skipped")
+
+
+def ledger_evaluator_names(db: Session, workspace_id: str) -> set[str]:
+    """Names of evaluators the workspace's asset operations created or may have created
+    (an uncertain create); never-dispatched and definitely rejected creates hold none."""
+    taken: set[str] = set()
+    ops = db.query(EvaluationAssetOperation).filter(
+        EvaluationAssetOperation.workspace_id == workspace_id).all()
+    for op in ops:
+        for res in op.resources or []:
+            if res.get("kind") != "evaluator" or not res.get("name") \
+                    or res.get("status") in _NAME_FREE_STATES:
+                continue
+            if (res.get("result") or {}).get("evaluator_id") or _uncertain_create(res):
+                taken.add(str(res["name"]))
+    return taken
+
+
+def taken_evaluator_names(
+    db: Session, workspace: Workspace | None, clients: ClientFactory = _default_clients,
+) -> set[str]:
+    """Evaluator names a new plan must not reuse: every name an asset operation of the
+    workspace recorded and has not deleted, plus the live account's evaluators.
+
+    AgentCore evaluator names are unique per account and Region, and a second plan of
+    the same conversation carries the proposal's names again — creating those ends
+    ``partial`` ("an evaluator named … exists that this operation cannot prove it
+    created"). The live listing is best-effort: when it fails, the ledger still covers
+    this platform's own evaluators and the operation keeps refusing any other clash.
+    """
+    if workspace is None:
+        return set()
+    taken = ledger_evaluator_names(db, workspace.id)
+    try:
+        control = clients(workspace_context(workspace), "bedrock-agentcore-control")
+        for summary in ac.list_evaluators(control):
+            if summary.get("evaluatorName"):
+                taken.add(str(summary["evaluatorName"]))
+    except Exception as exc:  # the ledger half still applies; the operation refuses the rest
+        logger.info("evaluator listing for name reservation failed: %s", _safe_error(exc))
+    return taken
+
+
+def rename_taken_evaluators(
+    draft: dict[str, Any], taken: set[str], revision: int,
+) -> dict[str, Any]:
+    """A deterministic fresh name for every cloud evaluator whose name is taken:
+    ``<name>_r<proposal revision>`` (then ``_2``, ``_3`` …), within AgentCore's
+    48-character name limit. The reviewer sees the note; nothing else changes."""
+    used = set(taken)
+    for entry in draft.get("evaluators") or []:
+        if entry.get("kind") not in plan_contract.CLOUD_KINDS or not entry.get("name"):
+            continue
+        name = str(entry["name"])
+        if name not in used:
+            used.add(name)
+            continue
+        n, candidate = 1, name
+        while candidate in used:
+            suffix = f"_r{revision}" + (f"_{n}" if n > 1 else "")
+            candidate = name[:48 - len(suffix)] + suffix
+            n += 1
+        used.add(candidate)
+        entry["name"] = candidate
+        note = f"renamed from '{name}': that evaluator name is already taken in this workspace"
+        entry["note"] = f"{entry['note']} · {note}" if entry.get("note") else note
+    return draft
+
+
 def prepare_plan(
-    db: Session, conversation: AssistantConversation, *, revision: int, created_by: str
+    db: Session, conversation: AssistantConversation, *, revision: int, created_by: str,
+    clients: ClientFactory = _default_clients,
 ) -> AssistantEvaluationPlan:
-    """The platform draft for one proposal revision (no side effects beyond the row)."""
+    """The platform draft for one proposal revision (no side effects beyond the row;
+    one read-only ListEvaluators to keep evaluator names unique)."""
     proposal = _proposal(db, conversation.id, revision)
     draft = plan_contract.draft_plan(
         proposal.content, revision=proposal.revision, content_hash=proposal.content_hash,
         agent_name=str(proposal.content.get("name") or "agent"),
+    )
+    draft = rename_taken_evaluators(
+        draft, taken_evaluator_names(db, db.get(Workspace, conversation.workspace_id), clients),
+        proposal.revision,
     )
     return _store_plan(db, conversation, proposal, draft, source="platform",
                        created_by=created_by)
@@ -649,6 +727,16 @@ def approve_plan(
         raise AppError("assistant.workspace_not_ready",
                        "this workspace is not bootstrapped (no execution role)",
                        status_code=409)
+    # a clash would only surface mid-operation as a partial "cannot prove it created";
+    # refuse it here, before any write (a member edit may reintroduce a taken name)
+    taken = taken_evaluator_names(db, fresh_row, clients)
+    clashes = sorted(e.name for e in plan.evaluators
+                     if e.kind in plan_contract.CLOUD_KINDS and e.name in taken)
+    if clashes:
+        raise AppError("assistant.evaluation_plan_name_taken",
+                       f"evaluator name(s) already taken in this workspace: {', '.join(clashes)}"
+                       " — prepare a new plan revision (the platform renames them) or rename "
+                       "them in the plan", {"names": clashes}, status_code=409)
     pinned = pin_workspace(fresh_row)
     has_code = any(isinstance(e, plan_contract.CodeEvaluator) for e in plan.evaluators)
     if has_code and plan.grant_workspace_execution_role:

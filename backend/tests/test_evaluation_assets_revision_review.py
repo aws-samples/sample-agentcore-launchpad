@@ -44,6 +44,16 @@ from tests.test_evaluation_assets import (  # noqa: F401 — fixtures by import
     no_network,
 )
 
+
+@pytest.fixture(autouse=True)
+def _per_op_accounts(monkeypatch, request):
+    """These scenarios give every operation a fresh fake AWS account, so a name another
+    operation of the same test recorded is not taken there. The workspace-ledger half of
+    the name reservation is exercised by the tests marked ``name_reservation``."""
+    if request.node.get_closest_marker("name_reservation") is None:
+        monkeypatch.setattr(assets, "ledger_evaluator_names", lambda db, workspace_id: set())
+
+
 EVENT_ID = "11111111-2222-4333-8444-555555555555"
 REASON = "verified: CreateFunction event matches; only the Pending→Active RevisionId moved"
 

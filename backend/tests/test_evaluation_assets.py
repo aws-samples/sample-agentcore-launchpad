@@ -39,6 +39,16 @@ from app.services import users as users_service
 from app.system_agents.presets import ARCHITECT
 from tests.conftest import ws_ctx
 
+
+@pytest.fixture(autouse=True)
+def _per_op_accounts(monkeypatch, request):
+    """These scenarios give every operation a fresh fake AWS account, so a name another
+    operation of the same test recorded is not taken there. The workspace-ledger half of
+    the name reservation is exercised by the tests marked ``name_reservation``."""
+    if request.node.get_closest_marker("name_reservation") is None:
+        monkeypatch.setattr(assets, "ledger_evaluator_names", lambda db, workspace_id: set())
+
+
 BASE = "/api/assistant/architect"
 _ORIG_START_BATCH = _ac_eval.start_batch_evaluation  # before the autouse guard replaces it
 ACCOUNT = "111122223333"
@@ -1691,7 +1701,10 @@ def test_permission_conflict_requires_exact_scope(app_ready):
     assert _res(op, "evaluator:tools")["status"] == "blocked"
 
 
-def test_readback_drift_is_refused_not_repaired(app_ready):
+def test_readback_drift_is_refused_not_repaired(app_ready, monkeypatch):
+    # the name is taken on purpose, between approval and create — bypass the approval
+    # preflight to reach the materializer's own conflict handling
+    monkeypatch.setattr(assets, "taken_evaluator_names", lambda *a, **k: set())
     cid, h = _conversation("local-operator")
     fakes = Fakes()
     op_id, *_ = _approve(cid, h, fakes=fakes)
@@ -2407,7 +2420,12 @@ def test_delete_evaluator_must_be_confirmed_gone_and_fence_guards_delete_role(ap
     assert _op(op2).status != "cleaned"
 
 
-def test_retry_keeps_persisted_conflicts_as_prerequisites_and_identity_is_exact(app_ready):
+def test_retry_keeps_persisted_conflicts_as_prerequisites_and_identity_is_exact(
+    app_ready, monkeypatch,
+):
+    # the name is taken on purpose, between approval and create — bypass the approval
+    # preflight to reach the materializer's own conflict handling
+    monkeypatch.setattr(assets, "taken_evaluator_names", lambda *a, **k: set())
     cid, h = _conversation("local-operator")
     fakes = Fakes()
     op_id, *_ = _approve(cid, h, fakes=fakes)
@@ -2919,11 +2937,14 @@ def _second_plan_reusing(cid2, h2, eid, *, referenced: bool) -> dict:
     return raw
 
 
-def test_known_managed_code_reference_is_resolved_from_its_plan_rules(app_ready):
+def test_known_managed_code_reference_is_resolved_from_its_plan_rules(app_ready, monkeypatch):
     """A SESSION reference_trajectory code evaluator this platform created is reused as
     an 'existing' reference by a second plan: its needs come from the owning plan's rules
     (same workspace), never 'external unknown'. Missing trajectories → conflict; a fully
     referenced second plan binds as 'managed'."""
+    # the name is taken on purpose, between approval and create — bypass the approval
+    # preflight to reach the materializer's own conflict handling
+    monkeypatch.setattr(assets, "taken_evaluator_names", lambda *a, **k: set())
     cid, h = _conversation("local-operator")
     fakes = Fakes()
     op_id, *_ = _approve(cid, h, plan=_valid_plan(cid, h, reference=True), fakes=fakes)
@@ -3415,5 +3436,90 @@ def test_conversation_purge_routes_are_owner_bound_and_a_bare_transcript_is_a_me
     db = SessionLocal()
     try:
         assert db.get(AssistantConversation, other) is not None  # untouched
+    finally:
+        db.close()
+
+
+
+# ─── evaluator name reservation (a second plan of one conversation) ──────────────
+
+
+def _prepare(cid, revision=1, fakes=None):
+    db = SessionLocal()
+    try:
+        conv = db.get(AssistantConversation, cid)
+        return assets.prepare_plan(db, conv, revision=revision, created_by="river",
+                                   clients=fakes or Fakes())
+    finally:
+        db.close()
+
+
+@pytest.mark.name_reservation
+def test_a_second_plan_renames_evaluators_the_first_operation_created(app_ready):
+    """Live 2026-09-29: the second plan of one conversation carried the proposal's
+    evaluator names again and its operation ended partial ("an evaluator named …
+    exists that this operation cannot prove it created")."""
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    assert _run(op_id, fakes) and _op(op_id).status == "succeeded"
+    db = SessionLocal()
+    try:
+        ws = db.get(Workspace, DEFAULT_WORKSPACE_ID)
+        # the ledger alone reserves them (a fresh account listing knows nothing)
+        taken = assets.taken_evaluator_names(db, ws, Fakes())
+    finally:
+        db.close()
+    assert {"kid_pii_judge", "kid_tools"} <= taken
+    second = _valid_plan(cid, h)  # the same proposal names, as a second plan carries them
+    renamed = assets.rename_taken_evaluators(second, taken, 7)
+    names = {e["key"]: e.get("name") for e in renamed["evaluators"]}
+    assert names["pii"] == "kid_pii_judge_r7" and names["tools"] == "kid_tools_r7"
+    assert "renamed from 'kid_pii_judge'" in next(
+        e for e in renamed["evaluators"] if e["key"] == "pii")["note"]
+    # repeatable and collision-safe: an _r7 already taken yields _r7_2
+    again = assets.rename_taken_evaluators(_valid_plan(cid, h), taken | {"kid_pii_judge_r7"}, 7)
+    assert next(e for e in again["evaluators"] if e["key"] == "pii")["name"] == "kid_pii_judge_r7_2"
+    long = {"evaluators": [{"kind": "judge", "key": "x", "name": "j" * 48}]}
+    assert len(assets.rename_taken_evaluators(long, {"j" * 48}, 12)["evaluators"][0]["name"]) == 48
+
+
+@pytest.mark.name_reservation
+def test_live_account_names_are_reserved_even_without_a_ledger_record(app_ready):
+    cid, _h = _conversation("local-operator")
+    fakes = Fakes()
+    fakes.control.evaluators["foreign-1"] = {"evaluatorName": "kid_companion_poc_gt_assertions",
+                                            "evaluatorId": "foreign-1", "status": "ACTIVE"}
+    plan = _prepare(cid, fakes=fakes)
+    judge = next(e for e in plan.content["evaluators"] if e.get("key") == "draft_rubric")
+    assert judge["name"] == "kid_companion_poc_gt_assertions_r1"
+
+
+@pytest.mark.name_reservation
+def test_approval_refuses_a_taken_name_before_any_write(app_ready):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    assert _run(op_id, fakes)
+    # a member edit reintroduces the first operation's names
+    cid2, h2 = _conversation("local-operator")
+    before = fakes.control.create_calls
+    with pytest.raises(AppError) as err:
+        _approve(cid2, h2, fakes=fakes)
+    assert err.value.code == "assistant.evaluation_plan_name_taken"
+    assert set(err.value.detail["names"]) == {"kid_pii_judge", "kid_tools"}
+    assert fakes.control.create_calls == before
+
+
+@pytest.mark.name_reservation
+def test_deleted_and_rejected_evaluators_free_their_names(app_ready):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    fakes.control.refuse_models = {"global.openai.gpt-6-sol", "global.anthropic.claude-sonnet-5-5"}
+    op_id, *_ = _approve(cid, h, fakes=fakes)
+    _run(op_id, fakes)  # the judge is definitely rejected on both models: nothing created
+    db = SessionLocal()
+    try:
+        assert "kid_pii_judge" not in assets.ledger_evaluator_names(db, DEFAULT_WORKSPACE_ID)
     finally:
         db.close()

@@ -1681,7 +1681,7 @@ after each of its own writes (publish, reserved concurrency) with every other ap
 still equal, and refuses a replacement before any publish / concurrency / permission write.
 Evaluators
 replay the service's own `clientToken`; a name conflict with a different token is
-foreign. Readback drift is `conflict` too — the record stays owned (`owned: true`)
+foreign. Because AgentCore evaluator names are unique per account and Region, and a second plan of the same conversation carries the proposal's names again, **preparing** a platform draft renames every judge / derived / code evaluator whose name is taken — recorded by an asset operation of the workspace that created (or may have created) it, or listed by `ListEvaluators` — to `<name>_r<proposal revision>` (then `_2`, …; ≤ 48 chars) with a note, and **approval** refuses a plan that still names a taken evaluator (`409 assistant.evaluation_plan_name_taken`) before any write. Readback drift is `conflict` too — the record stays owned (`owned: true`)
 but is never repaired. Retries are explicit and bounded (5 attempts); a partial
 outcome stays `partial` with each resource's error.
 
