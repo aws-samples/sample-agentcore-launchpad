@@ -1267,3 +1267,135 @@ def test_build_conversion_spec_needs_no_template_without_native_tools(monkeypatc
 
     assert "def file_operations(" not in spec.code_bundle["main.py"]
     assert "native_tools" not in spec.conversion_notes
+
+
+# ─── Gateway clients the CLI export drops for a narrowed Harness ─────────────
+NARROWED_MAIN = (FIXTURES / "harness_export_narrowed_gateway_dropped_main.py").read_text()
+NARROWED_CLIENT = (FIXTURES / "harness_export_narrowed_gateway_dropped_client.py").read_text()
+GW_ARN = "arn:aws:bedrock-agentcore:us-east-1:1:gateway/launchpad-gw-a1b2c3d4e5"
+KB_GW_ARN = "arn:aws:bedrock-agentcore:us-east-1:1:gateway/launchpad-kb-gw-f6g7h8i9j0"
+
+
+def _gw_tool(name, arn):
+    return {"type": "agentcore_gateway", "name": name, "config": {"agentCoreGateway": {
+        "gatewayArn": arn,
+        "outboundAuth": {"oauth": {
+            "providerArn": "arn:aws:bedrock-agentcore:us-east-1:1:token-vault/default/"
+                           "oauth2credentialprovider/launchpad-gw-m2m",
+            "scopes": ["launchpad-gw/invoke"], "grantType": "CLIENT_CREDENTIALS"}},
+    }}}
+
+
+NARROWED_HARNESS = {
+    "tools": [_gw_tool("launchpad_gw", GW_ARN), _gw_tool("launchpad_kb_gw", KB_GW_ARN)],
+    "allowedTools": ["@launchpad_gw/anyhr-leave___get_leave_balance",
+                     "@launchpad_gw/anyhr-leave___list_leave_requests", "@launchpad_kb_gw"],
+}
+
+
+def _narrowed_files():
+    return {"main.py": NARROWED_MAIN, "mcp_client/client.py": NARROWED_CLIENT,
+            "pyproject.toml": PYPROJECT}
+
+
+def test_real_narrowed_export_carries_no_gateway_client():
+    """The recorded CLI 0.21.1 export of a Harness whose allowedTools are target-scoped
+    selectors: the client module is an empty scaffold and main never calls it."""
+    assert "MCPClient(" not in NARROWED_CLIENT
+    assert "get_all_gateway_mcp_clients" not in NARROWED_MAIN
+    assert "mcp_clients = []" in NARROWED_MAIN
+
+
+def test_missing_gateway_clients_are_rebuilt_with_the_harness_narrowing():
+    grafted = hc.graft_missing_gateway_clients(
+        _narrowed_files(), NARROWED_HARNESS["tools"], NARROWED_HARNESS["allowedTools"],
+        skip_gateway_arns=frozenset([KB_GW_ARN]),
+    )
+    client = grafted["mcp_client/client.py"]
+    compile(client, "client.py", "exec")
+    compile(grafted["main.py"], "main.py", "exec")
+    assert hc.GW_CLIENTS_MARK in client
+    assert 'os.environ.get("GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL")' in client
+    assert "provider_name='launchpad-gw-m2m'" in client
+    assert ("tool_filters={'allowed': ['anyhr-leave___get_leave_balance', "
+            "'anyhr-leave___list_leave_requests']}") in client
+    assert "launchpad_kb_gw" not in client  # replaced by direct KB retrieval
+    assert "from bedrock_agentcore.identity import requires_access_token" in client
+    assert client.count("from strands.tools.mcp.mcp_client import MCPClient") == 1
+    assert grafted["main.py"].count("mcp_clients += get_all_gateway_mcp_clients()") == 1
+    # idempotent
+    assert hc.graft_missing_gateway_clients(
+        grafted, NARROWED_HARNESS["tools"], NARROWED_HARNESS["allowedTools"],
+    ) == grafted
+
+
+@pytest.mark.parametrize("allowed, expect_filter", [
+    (["*"], False), (["@launchpad_gw"], False), (None, False),
+    (["@launchpad_gw/anyhr-leave___*"], True),
+])
+def test_rebuilt_gateway_client_filter_follows_allowed_tools(allowed, expect_filter):
+    grafted = hc.graft_missing_gateway_clients(
+        _narrowed_files(), [_gw_tool("launchpad_gw", GW_ARN)], allowed,
+    )
+    client = grafted["mcp_client/client.py"]
+    compile(client, "client.py", "exec")
+    assert ("tool_filters" in client) is expect_filter
+    if allowed == ["@launchpad_gw/anyhr-leave___*"]:
+        assert "import re" in client and "re.compile(" in client
+
+
+def test_unselected_or_already_exported_gateways_are_left_alone():
+    files = _narrowed_files()
+    assert hc.graft_missing_gateway_clients(
+        files, [_gw_tool("launchpad_gw", GW_ARN)], ["@other_gw"],
+    ) == files
+    exported = {**files, "mcp_client/client.py": (FIXTURES / "harness_export_mcp_client.py")
+                .read_text()}
+    assert hc.graft_missing_gateway_clients(
+        exported, [_gw_tool("launchpad_gw", GW_ARN)], None,
+    ) == exported
+
+
+def test_conversion_of_a_narrowed_harness_restores_its_gateway_tools():
+    """End to end through build_conversion_spec: without the live Harness the export
+    fails the soft-fail anchor (the prod regression); with it the clients are rebuilt
+    and both the lazy-token and soft-fail grafts apply."""
+    workspace = ws_ctx({
+        "gateway_id": "launchpad-gw-a1b2c3d4e5",
+        "gateway_url": "https://launchpad-gw-a1b2c3d4e5.gateway.example/mcp",
+        "kb_gateway_arn": KB_GW_ARN,
+    })
+    source = _source_agent()
+    source.spec = {**source.spec, "memory": {"short_term": False, "long_term": False},
+                   "tools": [{"type": "gateway", "name": "anyhr-leave",
+                              "config": {"gateway_id": "launchpad-gw-a1b2c3d4e5"}}]}
+    with pytest.raises(hc.ConversionError, match="module-scope"):
+        hc.build_conversion_spec(
+            source, _narrowed_files(), ["bedrock-agentcore==1.17.*"], "hr-rt", workspace,
+        )
+    spec = hc.build_conversion_spec(
+        source, _narrowed_files(), ["bedrock-agentcore==1.17.*"], "hr-rt", workspace,
+        harness=NARROWED_HARNESS,
+    )
+    main, client = spec.code_bundle["main.py"], spec.code_bundle["mcp_client/client.py"]
+    assert hc.GW_SOFTFAIL_START in main
+    assert hc.GW_LAZY_TOKEN_MARK in client
+    assert "tool_filters={'allowed': [" in client
+    assert spec.env["GATEWAY_GATEWAY_LAUNCHPAD_GW_A1B2C3D4E5_URL"].startswith("https://")
+
+
+def test_convert_route_reads_the_live_harness_only_for_gateway_sources(client, monkeypatch):
+    seen: list[str] = []
+    monkeypatch.setattr(agents_router.harness_api, "get_harness",
+                        lambda control, harness_id: seen.append(harness_id) or {})
+    monkeypatch.setattr(
+        hc, "export_harness", lambda arn: {"main.py": MAIN_PY, "pyproject.toml": PYPROJECT},
+    )
+    monkeypatch.setattr(agents_router, "start_deploy_async", lambda job_id: None)
+    plain = _mk_agent(name="plain-src")
+    assert client.post(f"/api/agents/{plain.id}/convert").status_code == 202
+    assert seen == []
+    gw = _mk_agent(name="gw-src", resource_id="gw_src-H1", spec={
+        "system_prompt": "sp", "tools": [{"type": "gateway", "name": "hr-database"}]})
+    client.post(f"/api/agents/{gw.id}/convert")
+    assert seen == ["gw_src-H1"]

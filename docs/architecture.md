@@ -2130,7 +2130,7 @@ still pass their anchors. Native Harness tools (`shell`, `file_operations`) that
 Harness selects are re-grafted when the export drops them — the CLI only enables a
 builtin whose `allowedTools` entry matches `builtin/<name>`, while Launchpad and the
 Harness service use the bare name — from the installed CLI's own template, so the twin
-can still read its Skills' `references/` files. The emitted `zip_runtime` spec carries the harness's gateway
+can still read its Skills' `references/` files. Gateway clients are rebuilt the same way: the CLI (0.21.x) only emits `mcp_client/client.py` Gateway clients when the Harness `allowedTools` is `*`, and Launchpad deploys target-scoped selectors (`@launchpad_gw/<target>___<tool>`), so for a Harness with Gateway `ToolRef`s the convert route reads the live Harness and `graft_missing_gateway_clients` regenerates the clients in the CLI's shape, carrying the narrowing over as Strands `tool_filters` and leaving out the KB gateway (replaced by direct retrieval). The emitted `zip_runtime` spec carries the harness's gateway
 `ToolRef`s, skill prefixes, memory and KB configuration forward, records what was
 wired in `conversion_notes`, and stamps `source_harness` so `experiment_capability`
 reports the new agent eligible. The v1 "gateway MCP not wired" caveat is gone, not
