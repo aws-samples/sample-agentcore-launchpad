@@ -22,6 +22,7 @@ import type {
   EvaluatorDetail,
   EvaluatorRow,
   EvaluatorUpdateBody,
+  JudgeModelFallback,
   ScalePoint,
 } from "../lib/api";
 import {
@@ -357,16 +358,25 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
         setFormError(env.message ?? `HTTP ${res.status}`);
         return;
       }
+      const saved = (await res.json().catch(() => ({}))) as {
+        evaluator_id?: string;
+        model_fallback?: JudgeModelFallback | null;
+      };
       toast(
         editingId ? t("evalPage.evaluators.updated") : t("evalPage.evaluators.created"),
         "good",
       );
+      if (saved.model_fallback) {
+        toast(t("v2.evaluators.modelFallback", {
+            requested: saved.model_fallback.requested,
+            used: saved.model_fallback.used,
+          }), "warn");
+      }
       if (editingId) {
         await load(); // selection stays on the row we just saved
       } else {
-        const createdBody = (await res.json()) as { evaluator_id?: string };
         await load();
-        if (createdBody.evaluator_id) selectEv(createdBody.evaluator_id);
+        if (saved.evaluator_id) selectEv(saved.evaluator_id);
       }
     } finally {
       setBusy(false);

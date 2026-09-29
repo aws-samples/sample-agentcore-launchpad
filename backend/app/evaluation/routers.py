@@ -871,7 +871,7 @@ class JudgeCreate(BaseModel):
     # — neither is managed by the console).
     lambda_arn: str | None = Field(default=None, pattern=_LAMBDA_ARN_PATTERN)
     lambda_timeout_s: int | None = Field(default=None, ge=1, le=300)
-    model_id: str = "global.anthropic.claude-sonnet-5"
+    model_id: str = ac.JUDGE_DEFAULT_MODEL_ID
     level: str = Field(default="TRACE", pattern="^(TOOL_CALL|TRACE|SESSION)$")
     description: str = Field(default="", max_length=200)  # AWS EvaluatorDescription max
     rating_scale: list[RatingScaleItem] | None = Field(default=None, min_length=2)
@@ -1033,7 +1033,13 @@ def create_judge(
             level=req.level,
             description=req.description,
         )
-    return {"evaluator_id": created.get("evaluatorId"), "arn": created.get("evaluatorArn")}
+    return {
+        "evaluator_id": created.get("evaluatorId"),
+        "arn": created.get("evaluatorArn"),
+        # set only when AgentCore refused the requested judge model and the
+        # evaluator was created on ac.JUDGE_FALLBACK_MODEL_ID instead
+        "model_fallback": created.get("launchpadModelFallback"),
+    }
 
 
 @router.get("/evaluators/{evaluator_id}")
@@ -1052,7 +1058,7 @@ class JudgeUpdate(BaseModel):
     )
     lambda_arn: str | None = Field(default=None, pattern=_LAMBDA_ARN_PATTERN)
     lambda_timeout_s: int | None = Field(default=None, ge=1, le=300)
-    model_id: str = "global.anthropic.claude-sonnet-5"
+    model_id: str = ac.JUDGE_DEFAULT_MODEL_ID
     level: str = Field(default="TRACE", pattern="^(TOOL_CALL|TRACE|SESSION)$")
     description: str = Field(default="", max_length=200)  # AWS EvaluatorDescription max
     rating_scale: list[RatingScaleItem] | None = Field(default=None, min_length=2)
@@ -1093,6 +1099,7 @@ def update_evaluator(
             {"current": current_kind, "payload": payload_kind},
             status_code=400,
         )
+    updated: dict[str, Any] = {}
     if req.lambda_arn:
         _require_lambda_region(req.lambda_arn, ws.context.region)
         ac.update_code_evaluator(
@@ -1104,7 +1111,7 @@ def update_evaluator(
             description=req.description,
         )
     elif req.base_evaluator_id:
-        ac.update_derived_evaluator(
+        updated = ac.update_derived_evaluator(
             client,
             evaluator_id=evaluator_id,
             description=req.description,
@@ -1113,7 +1120,7 @@ def update_evaluator(
             level=_resolve_base_level(client, req.base_evaluator_id),
         )
     else:
-        ac.update_evaluator(
+        updated = ac.update_evaluator(
             client,
             evaluator_id=evaluator_id,
             instructions=req.instructions,
@@ -1122,7 +1129,10 @@ def update_evaluator(
             level=req.level,
             description=req.description,
         )
-    return _evaluator_out(ac.get_evaluator(client, evaluator_id=evaluator_id))
+    return {
+        **_evaluator_out(ac.get_evaluator(client, evaluator_id=evaluator_id)),
+        "model_fallback": updated.get("launchpadModelFallback"),
+    }
 
 
 @router.delete("/evaluators/{evaluator_id}")

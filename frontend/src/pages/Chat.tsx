@@ -31,7 +31,7 @@ import type {
   ChatSessionInfo,
 } from "../lib/api";
 import { api, errorMessage, localizedMessage, responseMessage } from "../lib/api";
-import { chatEligible, isHarnessAgent, sseEvents } from "../lib/chat";
+import { agentMemoryState, chatEligible, isHarnessAgent, sseEvents } from "../lib/chat";
 
 interface Message {
   kind: "user" | "agent" | "tool" | "memory" | "error";
@@ -79,6 +79,12 @@ interface KeyInfo {
   key?: string;
 }
 
+const CLASSIC_MEMORY_TAG = {
+  on: "chatPage.memoryOn",
+  off: "chatPage.memoryOff",
+  "agent-defined": "chatPage.memoryAgentDefined",
+} as const;
+
 export function Chat() {
   const { t } = useTranslation();
   const toast = useToast();
@@ -94,6 +100,7 @@ export function Chat() {
   // only claimed after a 200 answered with none
   const [agentsError, setAgentsError] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string>("");
+  const memoryState = agentMemoryState(agents.find((a) => a.id === agentId));
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [attachmentDraft, setAttachmentDraft] = useState<{
@@ -320,7 +327,8 @@ export function Chat() {
           if (pendingFiles.length) setAttachmentError(message);
         } else if (event === "done") {
           completed = true;
-          if (!failed) {
+          // the console never writes memory — only an agent whose spec turns it on does
+          if (!failed && memoryState === "on") {
             setMessages((m) => [...m, { kind: "memory", text: t("chatPage.memorySaved") }]);
           }
         }
@@ -527,9 +535,11 @@ export function Chat() {
                   session {sessionId.slice(0, 8)}…
                 </Chip>
               )}
-              <Chip tone="aqua" icon="◈">
-                {t("chatPage.memoryOn")}
-              </Chip>
+              <span data-testid="chat-memory-state" data-state={memoryState}>
+                <Chip tone={memoryState === "on" ? "aqua" : "muted"} icon="◈">
+                  {t(CLASSIC_MEMORY_TAG[memoryState])}
+                </Chip>
+              </span>
               <Btn disabled={busy} onClick={() => newSession()}>{t("chatPage.newSession")}</Btn>
               <Btn
                 disabled={currentEndReason !== undefined}

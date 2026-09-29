@@ -34,6 +34,24 @@ export function isHarnessAgent(agent: AgentInfo | undefined): boolean {
   return agent.method === "discovered_runtime" && discovery?.resource_type === "harness";
 }
 
+/**
+ * What the console can truthfully say about an agent's AgentCore Memory.
+ *
+ * The console never writes memory itself — the deployed agent does, driven by
+ * `spec.memory` for the methods Launchpad renders or configures. BYOC code and
+ * discovered agents decide on their own, so their spec says nothing reliable.
+ */
+export type AgentMemoryState = "on" | "off" | "agent-defined";
+
+export function agentMemoryState(agent: AgentInfo | undefined): AgentMemoryState {
+  if (!agent || agent.method === "byoc" || agent.method === "discovered_runtime") {
+    return "agent-defined";
+  }
+  const memory = agent.spec.memory as { short_term?: boolean; long_term?: boolean } | undefined;
+  if (!memory) return "agent-defined";
+  return memory.short_term || memory.long_term ? "on" : "off";
+}
+
 /** Agents the chat console can talk to: active and invoke-eligible. */
 export function chatEligible(agents: AgentInfo[]): AgentInfo[] {
   return agents.filter((a) => a.status === "active" && a.invoke_capability.eligible);

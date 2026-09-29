@@ -72,6 +72,26 @@ class ToolRef(BaseModel):
     name: str
     config: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def _gateway_tool_list(self) -> "ToolRef":
+        # type=gateway may carry ``config.tools``: the exact MCP tool names this
+        # attachment may call (the record's declared tools, optionally narrowed).
+        # Absent = legacy spec → the record's own ``<name>___*`` target scope.
+        if self.type != "gateway" or "tools" not in self.config:
+            return self
+        tools = self.config["tools"]
+        if (
+            not isinstance(tools, list)
+            or not 1 <= len(tools) <= MAX_GATEWAY_TOOLS
+            or not all(isinstance(t, str) and _GATEWAY_TOOL_RE.match(t) for t in tools)
+            or len(set(tools)) != len(tools)
+        ):
+            raise ValueError(
+                f"gateway tool {self.name!r}: config.tools must be 1–{MAX_GATEWAY_TOOLS} "
+                "distinct MCP tool names ([A-Za-z0-9_.-], ≤ 128 characters)"
+            )
+        return self
+
 
 class KnowledgeBaseRef(BaseModel):
     """Managed Knowledge Base mounted on the agent via the shared KB gateway.
@@ -180,6 +200,8 @@ class FilesystemConfig(BaseModel):
 # HarnessAllowedTool from the bedrock-agentcore-control service model (2023-06-05):
 # pattern ``\*|@?[^/]+(/[^/]+)?``, length 1–64.
 _ALLOWED_TOOL_RE = re.compile(r"^(\*|@?[^/]+(/[^/]+)?)$")
+_GATEWAY_TOOL_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+MAX_GATEWAY_TOOLS = 250
 ALLOWED_TOOL_MAX_LEN = 64
 
 # ── BYOC (bring your own code) ──────────────────────────────────────────────

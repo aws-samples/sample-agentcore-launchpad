@@ -21,6 +21,58 @@ from typing import Any
 # invokes the agent for every scenario only to be refused at the batch call.
 MAX_BATCH_EVALUATORS = 10
 
+# LLM-judge model defaults (custom judges and derived evaluators). CreateEvaluator /
+# UpdateEvaluator test-call the judge model with a fixed max_output_tokens=10, which
+# GPT-6 rejects (it needs >= 16) — an explicit inferenceConfig.maxTokens does not change
+# that probe (measured 2026-09-29, us-east-1 + us-west-2). Until AWS lifts it, a judge
+# whose model fails exactly that probe is created on the fallback model instead and the
+# caller is told, so the default switches over by itself once the service accepts GPT-6.
+JUDGE_DEFAULT_MODEL_ID = "global.openai.gpt-6-sol"
+JUDGE_FALLBACK_MODEL_ID = "global.anthropic.claude-sonnet-5-5"
+
+
+def judge_model_probe_rejected(exc: BaseException) -> bool:
+    """True for the service's create/update validation refusing the judge model's
+    fixed 10-token test call — and for nothing else (other 400s must surface)."""
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return False
+    error = response.get("Error") or {}
+    message = str(error.get("Message") or "")
+    return (
+        error.get("Code") == "ValidationException"
+        and "max_output_tokens" in message
+        and "integer_below_min_value" in message
+    )
+
+
+def judge_fallback_model(model_id: str) -> str | None:
+    """The model to retry on after ``judge_model_probe_rejected``, or None."""
+    return None if model_id == JUDGE_FALLBACK_MODEL_ID else JUDGE_FALLBACK_MODEL_ID
+
+
+def _with_judge_fallback(
+    call: Any, model_id: str, build: Any
+) -> dict[str, Any]:
+    """``call(**build(model))`` on ``model_id``; on the judge-model probe refusal, once
+    more on the fallback model. The response gains ``launchpadModelFallback``
+    ({requested, used, reason}) when the fallback was used."""
+    try:
+        return call(**build(model_id))
+    except Exception as exc:
+        fallback = judge_fallback_model(model_id)
+        if fallback is None or not judge_model_probe_rejected(exc):
+            raise
+    response = dict(call(**build(fallback)))
+    response["launchpadModelFallback"] = {
+        "requested": model_id,
+        "used": fallback,
+        "reason": "AgentCore rejected the requested judge model at evaluator validation "
+                  "(max_output_tokens probe)",
+    }
+    return response
+
+
 # Default built-in evaluators used across batch + online evaluation.
 BUILTIN_EVALUATORS = [
     "Builtin.GoalSuccessRate",
@@ -516,7 +568,7 @@ def create_llm_judge_evaluator(
     e.g. ``{context}`` / ``{assistant_turn}`` for TRACE. ``rating_scale`` is a
     numerical scale: [{"value": 1.0, "label": ..., "definition": ...}, ...].
     """
-    return client.create_evaluator(
+    return _with_judge_fallback(client.create_evaluator, model_id, lambda model: dict(
         evaluatorName=name,
         description=description or name,
         level=level,
@@ -525,12 +577,12 @@ def create_llm_judge_evaluator(
                 "instructions": instructions,
                 "ratingScale": {"numerical": rating_scale},
                 "modelConfig": {
-                    "bedrockEvaluatorModelConfig": {"modelId": model_id}
+                    "bedrockEvaluatorModelConfig": {"modelId": model}
                 },
             }
         },
         clientToken=str(uuid.uuid4()),
-    )
+    ))
 
 
 def get_evaluator(client: Any, *, evaluator_id: str) -> dict[str, Any]:
@@ -552,7 +604,7 @@ def update_evaluator(
     UpdateEvaluator takes the complete llmAsAJudge config (same shape as
     create) — partial patches are not supported, so callers must send every
     field back."""
-    return client.update_evaluator(
+    return _with_judge_fallback(client.update_evaluator, model_id, lambda model: dict(
         evaluatorId=evaluator_id,
         description=description,
         level=level,
@@ -561,12 +613,12 @@ def update_evaluator(
                 "instructions": instructions,
                 "ratingScale": {"numerical": rating_scale},
                 "modelConfig": {
-                    "bedrockEvaluatorModelConfig": {"modelId": model_id}
+                    "bedrockEvaluatorModelConfig": {"modelId": model}
                 },
             }
         },
         clientToken=str(uuid.uuid4()),
-    )
+    ))
 
 
 def create_derived_evaluator(
@@ -585,7 +637,7 @@ def create_derived_evaluator(
     evaluator. CreateEvaluator marks ``level`` required even for derived
     configs, so callers pass the base evaluator's level.
     """
-    return client.create_evaluator(
+    return _with_judge_fallback(client.create_evaluator, model_id, lambda model: dict(
         evaluatorName=name,
         description=description or name,
         level=level,
@@ -593,12 +645,12 @@ def create_derived_evaluator(
             "derived": {
                 "baseEvaluatorId": base_evaluator_id,
                 "modelConfig": {
-                    "bedrockEvaluatorModelConfig": {"modelId": model_id}
+                    "bedrockEvaluatorModelConfig": {"modelId": model}
                 },
             }
         },
         clientToken=str(uuid.uuid4()),
-    )
+    ))
 
 
 def update_derived_evaluator(
@@ -612,7 +664,7 @@ def update_derived_evaluator(
 ) -> dict[str, Any]:
     """Full-replace update of a derived evaluator config (same idiom as
     :func:`update_evaluator` — UpdateEvaluator takes the complete config)."""
-    return client.update_evaluator(
+    return _with_judge_fallback(client.update_evaluator, model_id, lambda model: dict(
         evaluatorId=evaluator_id,
         description=description,
         level=level,
@@ -620,12 +672,12 @@ def update_derived_evaluator(
             "derived": {
                 "baseEvaluatorId": base_evaluator_id,
                 "modelConfig": {
-                    "bedrockEvaluatorModelConfig": {"modelId": model_id}
+                    "bedrockEvaluatorModelConfig": {"modelId": model}
                 },
             }
         },
         clientToken=str(uuid.uuid4()),
-    )
+    ))
 
 
 def _code_based_config(lambda_arn: str, lambda_timeout_s: int) -> dict[str, Any]:

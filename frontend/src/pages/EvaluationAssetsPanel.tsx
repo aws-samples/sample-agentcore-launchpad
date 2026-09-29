@@ -1250,6 +1250,14 @@ function ResourceDetails({ res }: { res: AssistantEvalResource }) {
           {String(r.evaluator_id)}
           {r.level ? ` · ${String(r.level)}` : ""}
           {res.reference_dependent ? ` · ${t("assistantEval.referenceDependent")}` : ""}
+          {r.model_fallback ? (
+            <div style={{ color: "var(--warn)" }} data-testid={`eval-model-fallback-${res.key}`}>
+              {t("assistantEval.modelFallback", {
+                requested: String(asRecord(r.model_fallback).requested ?? ""),
+                used: String(asRecord(r.model_fallback).used ?? ""),
+              })}
+            </div>
+          ) : null}
         </div>
       ) : null}
       {res.kind === "lambda_function" && (

@@ -2147,3 +2147,50 @@ def test_anonymous_and_expired_callers_are_refused(gated, harness):
     finally:
         db.close()
     assert member.post(f"{BASE}/conversations/{cid}/turns", json={"prompt": "x"}).status_code == 401
+
+
+# ─── tool_functions: least-privilege narrowing of a Gateway attachment ────────────
+
+def _hr_catalog(runtime_tools):
+    cat = _catalog()
+    cat["tools"][0]["runtime_tools"] = runtime_tools
+    return cat
+
+
+HR_TOOLS = ["hr-tools___get_employee", "hr-tools___create_payout"]
+
+
+def test_declared_gateway_tools_become_the_specs_exact_callables():
+    content, _d, errors = contract.validate(VALID_PROPOSAL, _hr_catalog(HR_TOOLS))
+    assert errors == []
+    spec = contract.to_agent_spec(content, _hr_catalog(HR_TOOLS))
+    assert spec.tools[0].config["tools"] == HR_TOOLS
+
+
+def test_tool_functions_narrow_a_gateway_to_the_reviewed_callables():
+    proposal = {**VALID_PROPOSAL,
+                "tool_functions": {"gateway:hr-tools": ["hr-tools___get_employee"]}}
+    content, _d, errors = contract.validate(proposal, _hr_catalog(HR_TOOLS))
+    assert errors == []
+    spec = contract.to_agent_spec(content, _hr_catalog(HR_TOOLS))
+    assert spec.tools[0].config["tools"] == ["hr-tools___get_employee"]
+    bindings = contract.resource_bindings(content, _hr_catalog(HR_TOOLS))
+    assert bindings["tools"][0]["config"]["tools"] == ["hr-tools___get_employee"]
+
+
+@pytest.mark.parametrize(("functions", "catalog_tools", "needle"), [
+    ({"gateway:hr-tools": ["hr-tools___delete_all"]}, HR_TOOLS, "not runtime callable"),
+    ({"gateway:hr-tools": ["hr-tools___get_employee"]}, None, "catalog of 'gateway:hr-tools'"),
+    ({"mcp:deepwiki": ["deepwiki_read"]}, HR_TOOLS, "not a Gateway attachment"),
+    ({"gateway:other": ["x"]}, HR_TOOLS, "not one of the selected tools"),
+    ({"gateway:hr-tools": ["hr-tools___get_employee"] * 2}, HR_TOOLS, "must not repeat"),
+])
+def test_tool_functions_are_checked_against_the_catalog(functions, catalog_tools, needle):
+    proposal = {**VALID_PROPOSAL, "tool_functions": functions}
+    _c, _d, errors = contract.validate(proposal, _hr_catalog(catalog_tools))
+    assert any(needle in e for e in errors), errors
+
+
+def test_absent_tool_functions_are_not_stored_so_old_revision_hashes_hold():
+    content, _d, errors = contract.validate(VALID_PROPOSAL, _catalog())
+    assert errors == [] and "tool_functions" not in contract.content_dump(content)

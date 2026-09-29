@@ -148,3 +148,14 @@ def test_invoke_payload_carries_gateway_user_token_only_when_given():
         "actor_id": "agent__demo",
         "gateway_access_token": "user-jwt",
     }
+
+
+def test_gateway_tool_filter_is_target_scoped_per_record():
+    spec = PLAIN.model_copy(update={"tools": [
+        ToolRef(type="gateway", name="hr-database",
+                config={"record_id": "r1", "gateway_id": "g",
+                        "tools": ["hr-database___get_employee"]}),
+        ToolRef(type="gateway", name="office-facts", config={"record_id": "r2", "gateway_id": "g"}),
+    ]})
+    env = runtime_environment(spec, RESOURCES)
+    assert env["LAUNCHPAD_GATEWAY_TOOLS"] == "hr-database___get_employee,office-facts___*"

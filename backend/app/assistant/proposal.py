@@ -65,6 +65,7 @@ _RESERVED_PREFIXES = ("launchpad-", "harness-", "system-")
 
 Key = Annotated[str, Field(min_length=1, max_length=200, pattern=_KEY_RE)]
 Line = Annotated[str, Field(min_length=1, max_length=1000)]
+ToolName = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")]
 ShortText = Annotated[str, Field(max_length=2000)]
 
 # The only memory choices the Harness API can actually enforce: no memory at all
@@ -227,6 +228,12 @@ class ProposalContent(BaseModel):
     system_prompt: str = Field(min_length=1, max_length=20000)
     # Catalog keys (``gateway:<name>`` / ``mcp:<name>``), never URLs or ARNs.
     tools: list[Key] = Field(default_factory=list, max_length=20)
+    # Optional narrowing of selected Gateway attachments to some of their runtime
+    # callable names (``{"gateway:hr-database": ["hr-database___get_employee"]}``). A
+    # selected Gateway without an entry exposes exactly its declared tools. Omitted
+    # from the stored content when absent (hash stability, like ``evaluation_plan``).
+    tool_functions: dict[Key, Annotated[list[ToolName], Field(min_length=1, max_length=50)]] \
+        | None = Field(default=None, max_length=20)
     # Explicit opt-in to native command/filesystem tools; these are not attachments.
     native_tools: list[Literal["shell", "file_operations"]] = Field(
         default_factory=list, max_length=2,
@@ -260,7 +267,7 @@ def content_dump(content: ProposalContent) -> dict[str, Any]:
     """New revisions include explicit selection defaults. Optional seed/fishbone
     members are omitted when absent; historical rows are returned as stored."""
     data = content.model_dump()
-    for optional in ("evaluation_plan", "fishbone"):
+    for optional in ("evaluation_plan", "fishbone", "tool_functions"):
         if data.get(optional) is None:
             data.pop(optional, None)
     return data
@@ -280,6 +287,9 @@ def _check_lists(content: ProposalContent) -> list[str]:
         values = getattr(content, field)
         if len(values) != len(set(values)):
             errors.append(f"{field} must not repeat an entry")
+    for key, names in (content.tool_functions or {}).items():
+        if len(names) != len(set(names)):
+            errors.append(f"tool_functions.{key} must not repeat a tool name")
     if len({g.id for g in content.golden_tests}) != len(content.golden_tests):
         errors.append("golden_tests ids must be unique")
     seed = content.evaluation_plan
@@ -517,6 +527,22 @@ def reference_errors(content: ProposalContent, catalog: dict[str, Any]) -> list[
             entry.get("gateway_arn") and entry.get("outbound_auth")
         ):
             errors.append(f"tools: '{key}' has no resolvable gateway ARN / outbound auth")
+    for key, names in (content.tool_functions or {}).items():
+        entry = index["tools"].get(key)
+        declared = (entry or {}).get("runtime_tools")
+        if key not in content.tools:
+            errors.append(f"tool_functions: '{key}' is not one of the selected tools")
+        elif (entry or {}).get("kind") != "gateway":
+            errors.append(f"tool_functions: '{key}' is not a Gateway attachment; only "
+                          "Gateway tools can be narrowed to some of their functions")
+        elif not isinstance(declared, list):
+            errors.append(f"tool_functions: the runtime tool catalog of '{key}' is "
+                          "unavailable; refresh the catalog, never guess tool names")
+        else:
+            unknown = sorted(set(names) - set(declared))
+            if unknown:
+                errors.append(f"tool_functions.{key}: {unknown} are not runtime callable "
+                              f"names of '{key}' (declared: {sorted(declared)})")
     for key in content.skills:
         entry = index["skills"].get(key)
         if entry is None:
@@ -564,13 +590,16 @@ def to_agent_spec(content: ProposalContent, catalog: dict[str, Any]) -> AgentSpe
     for key in content.tools:
         entry = index["tools"][key]
         if entry["kind"] == "gateway":
-            tools.append(
-                ToolRef(
-                    type="gateway",
-                    name=entry["name"],
-                    config={"record_id": entry["record_id"], "gateway_id": entry["gateway_id"]},
-                )
-            )
+            config = {"record_id": entry["record_id"], "gateway_id": entry["gateway_id"]}
+            # the exact callables the Harness may use: the reviewed narrowing, else the
+            # record's declared tools; unknown → the deployer's ``<name>___*`` target scope
+            narrowed = (content.tool_functions or {}).get(key)
+            declared = entry.get("runtime_tools")
+            if narrowed:
+                config["tools"] = list(narrowed)
+            elif isinstance(declared, list) and declared:
+                config["tools"] = list(declared)
+            tools.append(ToolRef(type="gateway", name=entry["name"], config=config))
         else:
             tools.append(ToolRef(type="mcp", name=entry["name"], config={"url": entry["url"]}))
     skills = [index["skills"][key]["path"] for key in content.skills]

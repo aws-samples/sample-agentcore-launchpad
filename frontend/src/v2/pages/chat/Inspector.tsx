@@ -9,6 +9,7 @@ import {
   type ChatTraceInfo,
   errorMessage,
 } from "../../../lib/api";
+import type { AgentMemoryState } from "../../../lib/chat";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Confirm, Kpi, LinkButton, SubTabs, Tag } from "../../ui";
 import { classicMemoryToV2 } from "../memory/classicUrl";
@@ -44,6 +45,7 @@ export function Inspector({
   traceBusy,
   onLoadTrace,
   memory,
+  memoryState,
 }: {
   tab: InspectorTab;
   onTab: (tab: InspectorTab) => void;
@@ -53,6 +55,7 @@ export function Inspector({
   traceBusy: boolean;
   onLoadTrace: () => void;
   memory: ChatMemorySummary | null;
+  memoryState: AgentMemoryState;
 }) {
   const { t } = useTranslation();
   return (
@@ -72,7 +75,7 @@ export function Inspector({
         {tab === "trace" && (
           <TracePanel sessionId={sessionId} trace={trace} busy={traceBusy} onLoad={onLoadTrace} />
         )}
-        {tab === "memory" && <MemoryPanel sessionId={sessionId} memory={memory} />}
+        {tab === "memory" && <MemoryPanel sessionId={sessionId} memory={memory} memoryState={memoryState} />}
         {tab === "api" && <ApiPanel agentId={agentId} sessionId={sessionId} />}
       </div>
     </>
@@ -162,10 +165,23 @@ function TracePanel({
   );
 }
 
-function MemoryPanel({ sessionId, memory }: { sessionId: string | null; memory: ChatMemorySummary | null }) {
+function MemoryPanel({
+  sessionId,
+  memory,
+  memoryState,
+}: {
+  sessionId: string | null;
+  memory: ChatMemorySummary | null;
+  memoryState: AgentMemoryState;
+}) {
   const { t } = useTranslation();
   return (
     <div className="v2-stack" data-testid="memory-panel">
+      {memoryState === "off" && (
+        <div className="v2-chat-rail-empty" data-testid="memory-disabled-note">
+          {t("v2.chat.memoryDisabledNote")}
+        </div>
+      )}
       <div className="v2-chat-kpis">
         <Kpi label={t("chatPage.shortTermEvents")} value={memory?.event_count ?? 0} />
         <Kpi label={t("chatPage.longTermRecords")} value={memory?.records.length ?? 0} />

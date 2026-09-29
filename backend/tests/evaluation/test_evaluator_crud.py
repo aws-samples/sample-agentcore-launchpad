@@ -63,9 +63,101 @@ def test_create_full_params_payload_shape(client, monkeypatch):
     assert judge["instructions"] == "Rate the tone of {session}"
     assert judge["ratingScale"]["numerical"] == FIVE_POINT_SCALE
     assert judge["modelConfig"]["bedrockEvaluatorModelConfig"]["modelId"] == (
-        "global.anthropic.claude-sonnet-5"
+        "global.openai.gpt-6-sol"
     )
     assert kwargs["clientToken"]
+    assert res.json()["model_fallback"] is None
+
+
+def _probe_refusal(model="global.openai.gpt-6-sol"):
+    """The ValidationException CreateEvaluator/UpdateEvaluator return when the judge
+    model rejects the service's fixed 10-token validation call (measured 2026-09-29)."""
+    from botocore.exceptions import ClientError
+
+    message = (
+        f"Bedrock inference configuration validation failed for model '{model}': The "
+        'model returned the following errors: {"error":{"code":"integer_below_min_value",'
+        '"message":"Invalid \'max_output_tokens\': integer below minimum value. Expected a '
+        'value >= 16, but got 10 instead.","param":"max_output_tokens"}}'
+    )
+    return ClientError({"Error": {"Code": "ValidationException", "Message": message}},
+                       "CreateEvaluator")
+
+
+def _model_of(call):
+    config = call.kwargs["evaluatorConfig"]
+    member = config.get("llmAsAJudge") or config.get("derived")
+    return member["modelConfig"]["bedrockEvaluatorModelConfig"]["modelId"]
+
+
+def test_create_falls_back_when_agentcore_refuses_the_judge_model(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    ok = stub.create_evaluator.return_value
+    stub.create_evaluator.side_effect = [_probe_refusal(), ok]
+    res = client.post("/api/eval/evaluators", json={
+        "name": "my_judge", "instructions": "Rate the tone of {session}", "level": "SESSION",
+    })
+    assert res.status_code == 201
+    calls = stub.create_evaluator.call_args_list
+    assert [_model_of(c) for c in calls] == [
+        "global.openai.gpt-6-sol", "global.anthropic.claude-sonnet-5-5",
+    ]
+    # each attempt is its own request — the refused token is never replayed
+    assert calls[0].kwargs["clientToken"] != calls[1].kwargs["clientToken"]
+    fallback = res.json()["model_fallback"]
+    assert fallback["requested"] == "global.openai.gpt-6-sol"
+    assert fallback["used"] == "global.anthropic.claude-sonnet-5-5"
+
+
+def test_derived_create_falls_back_too(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    ok = stub.create_evaluator.return_value
+    stub.create_evaluator.side_effect = [_probe_refusal(), ok]
+    res = client.post("/api/eval/evaluators", json={
+        "name": "my_derived", "base_evaluator_id": "Builtin.Helpfulness",
+    })
+    assert res.status_code == 201
+    assert _model_of(stub.create_evaluator.call_args) == "global.anthropic.claude-sonnet-5-5"
+    assert res.json()["model_fallback"]["used"] == "global.anthropic.claude-sonnet-5-5"
+
+
+def test_update_falls_back_and_reports_it(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    stub.update_evaluator.side_effect = [_probe_refusal(), {}]
+    res = client.put("/api/eval/evaluators/my_judge-abc123", json={
+        "instructions": "Rate the tone of {session}", "level": "SESSION",
+    })
+    assert res.status_code == 200
+    assert [_model_of(c) for c in stub.update_evaluator.call_args_list] == [
+        "global.openai.gpt-6-sol", "global.anthropic.claude-sonnet-5-5",
+    ]
+    assert res.json()["model_fallback"]["requested"] == "global.openai.gpt-6-sol"
+
+
+def test_other_validation_errors_are_not_retried(client, monkeypatch):
+    from botocore.exceptions import ClientError
+
+    stub = stub_control(monkeypatch)
+    stub.create_evaluator.side_effect = ClientError(
+        {"Error": {"Code": "ValidationException", "Message": "maxTokens must be greater than 400"}},
+        "CreateEvaluator",
+    )
+    res = client.post("/api/eval/evaluators", json={
+        "name": "my_judge", "instructions": "Rate the tone of {session}",
+    })
+    assert res.status_code >= 400
+    assert stub.create_evaluator.call_count == 1
+
+
+def test_fallback_model_refusal_is_not_retried(client, monkeypatch):
+    stub = stub_control(monkeypatch)
+    stub.create_evaluator.side_effect = _probe_refusal("global.anthropic.claude-sonnet-5-5")
+    res = client.post("/api/eval/evaluators", json={
+        "name": "my_judge", "instructions": "Rate the tone of {session}",
+        "model_id": "global.anthropic.claude-sonnet-5-5",
+    })
+    assert res.status_code >= 400
+    assert stub.create_evaluator.call_count == 1
 
 
 def test_create_defaults_pass_fail_scale(client, monkeypatch):

@@ -194,6 +194,14 @@ it — see "Current stored proposal" at the end of this preamble when it is pres
   is worth more than a long one nobody can attribute regressions to. Say this in the
   reply when you hand over the proposal.
 - `tools`: list of catalog **tool keys** from the list below (may be empty)
+- `tool_functions`: optional object narrowing selected **Gateway** tools to some of
+  their functions: `{{"gateway:<name>": ["<runtime callable name>", ...]}}`, names
+  copied exactly from that key's "Runtime callable names" line. A selected Gateway
+  without an entry exposes exactly its listed callables — never another target of the
+  same Gateway. Use it whenever the design needs only some functions (e.g. read-only
+  lookups of a server that also writes): this is enforced as the Harness's runtime
+  tool filter, so it is the least-privilege control, not an evaluation rule. When a
+  key's callable names are unavailable, do not guess — ask for a catalog refresh.
 - `native_tools`: optional list containing only `"shell"` and/or `"file_operations"`.
   Default is empty: Launchpad does not expose these native tools unless explicitly
   selected and reviewed. Do not add shell just to calculate a number or read a date.

@@ -202,7 +202,24 @@ export function proposalContentFromDraft(
       ? base.evaluator_recommendations
       : [],
     ...(isFishbone(base.fishbone) ? { fishbone: base.fishbone } : {}),
+    // a reviewed function narrowing travels with its still-selected Gateway; dropping
+    // it silently would widen that Gateway to every declared function
+    ...carriedToolFunctions(base.tool_functions, draft.tools),
   };
+}
+
+function carriedToolFunctions(
+  raw: unknown,
+  tools: string[],
+): { tool_functions?: Record<string, string[]> } {
+  if (!raw || typeof raw !== "object") return {};
+  const kept = Object.fromEntries(
+    Object.entries(raw as Record<string, unknown>).filter(
+      (entry): entry is [string, string[]] =>
+        tools.includes(entry[0]) && Array.isArray(entry[1]) && entry[1].length > 0,
+    ),
+  );
+  return Object.keys(kept).length ? { tool_functions: kept } : {};
 }
 
 // ─── deployment outcome / creation progress ───────────────────────────────

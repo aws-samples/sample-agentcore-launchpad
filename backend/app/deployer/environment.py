@@ -8,8 +8,10 @@ from app.services.gateway_bootstrap import GATEWAY_SCOPE
 from app.templates.gateway_support import (
     ENV_PROVIDER,
     ENV_SCOPE,
+    ENV_TOOLS,
     ENV_URL,
     ENV_WORKLOAD,
+    gateway_tool_patterns,
     provider_name,
     uses_gateway,
 )
@@ -40,6 +42,8 @@ def runtime_environment(
             environment[ENV_URL] = gateway_url
             environment[ENV_PROVIDER] = provider
             environment[ENV_SCOPE] = GATEWAY_SCOPE
+            # the client loads only the selected records' tools (target-scoped)
+            environment[ENV_TOOLS] = ",".join(gateway_tool_patterns(spec))
         if workload_name:
             environment[ENV_WORKLOAD] = workload_name
     return environment
