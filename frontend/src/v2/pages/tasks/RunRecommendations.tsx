@@ -19,6 +19,44 @@ const STATUS_TONE: Record<string, TagTone> = {
   DELETING: "gray",
 };
 
+const EVALUATOR_GROUPS = ["run", "builtin", "third_party", "custom"] as const;
+const EVALUATOR_DOC =
+  "https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/recommendations-system-prompt.html#start-sysprompt-rec-evaluator";
+
+/** How to pick the optimization target — the devguide's "Choosing an evaluator". */
+function EvaluatorGuide({ excluded }: { excluded: { id: string; reason: string }[] }) {
+  const { t } = useTranslation();
+  return (
+    <div className="v2-alert info" role="note" data-testid="v2-rec-evaluator-guide">
+      <div style={{ display: "grid", gap: 6 }}>
+        <strong>{t("v2.rec.guide.title")}</strong>
+        <span>{t("v2.rec.guide.direction")}</span>
+        <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 2 }}>
+          <li>{t("v2.rec.guide.task")}</li>
+          <li>{t("v2.rec.guide.openEnded")}</li>
+          <li>{t("v2.rec.guide.domain")}</li>
+        </ul>
+        <span>{t("v2.rec.guide.numeric")}</span>
+        {excluded.length > 0 && (
+          <details>
+            <summary>{t("v2.rec.guide.excluded", { count: excluded.length })}</summary>
+            <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+              {excluded.map((e) => (
+                <li key={e.id}>
+                  <span className="mono">{e.id}</span> — {t(`v2.rec.excludedReason.${e.reason}`)}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        <a href={EVALUATOR_DOC} target="_blank" rel="noreferrer">
+          {t("v2.rec.guide.doc")}
+        </a>
+      </div>
+    </div>
+  );
+}
+
 interface ToolRow {
   key: number;
   name: string;
@@ -172,15 +210,25 @@ export function RunRecommendations({ run }: { run: EvaluationRunInfo }) {
               data-testid="v2-rec-prompt"
             />
           </Field>
-          <Field label={t("v2.rec.evaluator")} hint={t("v2.rec.evaluatorHint")}>
+          <Field label={t("v2.rec.evaluator")}>
             <select className="v2-select" value={evaluator} onChange={(e) => setEvaluator(e.target.value)} data-testid="v2-rec-evaluator">
-              {seed.evaluators.map((id) => (
-                <option key={id} value={id}>
-                  {id}
-                </option>
-              ))}
+              {EVALUATOR_GROUPS.map((group) => {
+                const items = seed.evaluators.filter((ev) => ev.group === group);
+                if (!items.length) return null;
+                return (
+                  <optgroup key={group} label={t(`v2.rec.evalGroup.${group}`)}>
+                    {items.map((ev) => (
+                      <option key={ev.id} value={ev.id}>
+                        {[ev.name, ev.level].filter(Boolean).join(" · ")}
+                        {ev.recommended ? t("v2.rec.recommendedSuffix") : ""}
+                      </option>
+                    ))}
+                  </optgroup>
+                );
+              })}
             </select>
           </Field>
+          <EvaluatorGuide excluded={seed.excluded_evaluators} />
         </>
       )}
       {wantTools && (

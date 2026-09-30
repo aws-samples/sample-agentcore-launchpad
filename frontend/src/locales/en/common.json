@@ -7356,7 +7356,6 @@
       "promptHintManual": "Required: the exact system prompt the agent runs with.",
       "promptRequired": "Enter the current system prompt",
       "evaluator": "Optimize toward",
-      "evaluatorHint": "The recommendation pushes the prompt toward what this evaluator scores highly. It must use a numerical scale.",
       "currentTools": "Current tool descriptions",
       "toolsHintPrefilled": "Only tools the agent called in this run's sessions can be analyzed; others are dropped automatically. Pre-filled tools without a description start unchecked.",
       "toolsHintManual": "Required: the tool names exactly as the agent calls them, with their current descriptions.",
@@ -7383,7 +7382,30 @@
       "copied": "Copied",
       "copyFailed": "Copy failed",
       "includeTool": "Include this tool",
-      "toolsIneligible": "Tool descriptions need the run's session list. This run evaluated a time window, so only the system prompt can be optimized."
+      "toolsIneligible": "Tool descriptions need the run's session list. This run evaluated a time window, so only the system prompt can be optimized.",
+      "evalGroup": {
+        "run": "Used by this run",
+        "builtin": "AWS built-in",
+        "third_party": "Third-party (managed)",
+        "custom": "Custom (this account)"
+      },
+      "recommendedSuffix": " (Recommended)",
+      "guide": {
+        "title": "Choosing an evaluator",
+        "direction": "The evaluator you pick decides what the recommendation optimizes toward: whatever it scores highly is what the prompt is pushed toward. Pick the one aligned with the direction you want to improve.",
+        "task": "Agent with a clear task to complete (booking, retrieval, a multi-step workflow): Builtin.GoalSuccessRate is the right signal.",
+        "openEnded": "More open-ended agent, where the quality of the interaction itself matters: Builtin.Helpfulness is a better fit.",
+        "domain": "Domain-specific quality that no built-in captures: use a custom evaluator that best represents the measurement.",
+        "numeric": "The evaluator must return a numerical score: a custom LLM-as-judge needs a numerical rating scale (not categorical), and a code-based evaluator must return the value field. One evaluator per recommendation.",
+        "excluded": "{{count}} evaluators are hidden because they cannot be an optimization target",
+        "doc": "AWS docs: Choosing an evaluator ↗"
+      },
+      "excludedReason": {
+        "lower_is_better": "scores a penalty (lower is better); optimizing toward a high score would make the agent worse",
+        "ground_truth": "needs dataset ground truth, which a recommendation's traces do not carry",
+        "categorical": "categorical rating scale; no numerical signal to optimize",
+        "unavailable": "used by this run but no longer in this account/region"
+      }
     }
   }
 }

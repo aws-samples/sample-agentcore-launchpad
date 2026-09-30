@@ -7356,7 +7356,6 @@
       "promptHintManual": "必填：Agent 实际运行时使用的系统提示词原文。",
       "promptRequired": "请输入当前系统提示词",
       "evaluator": "优化目标评估器",
-      "evaluatorHint": "建议会让提示词朝该评估器打高分的方向改进，评估器必须使用数值评分。",
       "currentTools": "当前工具描述",
       "toolsHintPrefilled": "只能分析本任务会话中实际调用过的工具，其余会自动剔除。没有描述的预填工具默认不勾选。",
       "toolsHintManual": "必填：与 Agent 调用时完全一致的工具名称，以及其当前描述。",
@@ -7383,7 +7382,30 @@
       "copied": "已复制",
       "copyFailed": "复制失败",
       "includeTool": "包含此工具",
-      "toolsIneligible": "工具描述优化需要任务的会话列表。该任务评估的是时间窗口，只能优化系统提示词。"
+      "toolsIneligible": "工具描述优化需要任务的会话列表。该任务评估的是时间窗口，只能优化系统提示词。",
+      "evalGroup": {
+        "run": "本任务使用的评估器",
+        "builtin": "AWS 内置",
+        "third_party": "第三方（托管）",
+        "custom": "自定义（本账号）"
+      },
+      "recommendedSuffix": "（推荐）",
+      "guide": {
+        "title": "如何选择评估器",
+        "direction": "所选评估器决定优化建议的方向：评估器打高分的方向，就是提示词被推向的方向。请选择与你想改进的方向一致的评估器。",
+        "task": "Agent 有明确要完成的任务（预订、检索、多步骤流程）：Builtin.GoalSuccessRate 是合适的信号。",
+        "openEnded": "Agent 更偏开放式，关注交互本身的质量：Builtin.Helpfulness 更合适。",
+        "domain": "关注的质量是领域特定的、内置评估器无法衡量：使用最能代表该指标的自定义评估器。",
+        "numeric": "评估器必须返回数值分数：自定义 LLM-as-judge 需使用数值评分（不能是分类评分），代码评估器必须返回 value 字段。每次优化建议只能选一个评估器。",
+        "excluded": "已隐藏 {{count}} 个无法作为优化目标的评估器",
+        "doc": "AWS 文档：Choosing an evaluator ↗"
+      },
+      "excludedReason": {
+        "lower_is_better": "分数越低越好（惩罚型），朝高分优化会让 Agent 变差",
+        "ground_truth": "需要数据集参考答案，而优化建议读取的 trace 不带参考答案",
+        "categorical": "分类评分，没有可优化的数值信号",
+        "unavailable": "本任务使用过，但当前账号/区域中已不存在"
+      }
     }
   }
 }

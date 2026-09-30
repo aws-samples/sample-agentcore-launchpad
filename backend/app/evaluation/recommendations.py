@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import math
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from fnmatch import fnmatchcase
 from typing import Any
@@ -46,9 +47,10 @@ from app.services.workspace import WorkspaceContext
 
 KINDS = ("system_prompt", "tool_descriptions")
 DEFAULT_EVALUATOR = "Builtin.GoalSuccessRate"
-# Always offered as optimization targets: the two the devguide recommends for
-# task-completion and open-ended agents respectively.
-BASELINE_EVALUATORS = (DEFAULT_EVALUATOR, "Builtin.Helpfulness")
+# The devguide's two recommended optimization targets ("Choosing an evaluator"):
+# GoalSuccessRate for an agent with a clear task, Helpfulness for an open-ended one.
+RECOMMENDED_EVALUATORS = (DEFAULT_EVALUATOR, "Builtin.Helpfulness")
+EVALUATOR_READ_WORKERS = 8  # GetEvaluator fan-out when screening the account's judges
 SYSTEM_PROMPT_MAX = 20000  # SystemPromptText max (service model)
 TOOL_DESCRIPTION_MAX = 20000  # ToolDescriptionText max
 TOOL_NAME_MAX = 256  # RecommendationToolName max
@@ -150,19 +152,113 @@ def _spec_inputs(agent: Agent) -> dict[str, Any]:
     return {"source": source, "system_prompt": prompt or "", "tools": tools, "notes": []}
 
 
-def evaluator_options(run: EvalRun) -> list[str]:
-    """Evaluators a system-prompt recommendation may optimize toward.
+def _evaluator_problem(
+    evaluator: str, detail: dict[str, Any] | None, gap: dict[str, list[str]],
+) -> str | None:
+    """Why an evaluator cannot be a recommendation's optimization signal, or None.
 
-    The run's own evaluators first (what the operator just read scores for), then
-    the devguide's two defaults. Lower-is-better evaluators are dropped: the job
-    pushes the prompt toward whatever scores HIGH, which for Harmfulness /
-    Refusal is the opposite of an improvement.
+    The job pushes the prompt toward whatever the evaluator scores HIGH and needs a
+    numeric score from traces alone (no dataset ground truth reaches it):
+
+    - ``lower_is_better`` — Harmfulness / Refusal / Bias …: optimizing toward a high
+      score would make the agent worse;
+    - ``ground_truth`` — trajectory matchers, judges whose instructions read
+      ``{expected_response}`` & friends, managed code evaluators reading references;
+    - ``categorical`` — a judge with a categorical rating scale gives no numeric
+      signal (the devguide requires ``ratingScale.numerical``).
     """
+    if ac.evaluator_polarity(evaluator) < 0:
+        return "lower_is_better"
+    if evaluator in ac.TRAJECTORY_EVALUATORS or evaluator in gap:
+        return "ground_truth"
+    if detail:
+        if ac.ground_truth_placeholders(ac.judge_instructions(detail)):
+            return "ground_truth"
+        scale = ((detail.get("evaluatorConfig") or {}).get("llmAsAJudge") or {}).get(
+            "ratingScale") or {}
+        if scale.get("categorical"):
+            return "categorical"
+    return None
+
+
+def _account_evaluators(workspace: WorkspaceContext) -> list[dict[str, Any]]:
+    """ACTIVE non-built-in evaluators, each custom one read back with GetEvaluator
+    (ListEvaluators carries no config). Unreadable → listed without detail: the
+    start-time check still has the last word."""
+    control = control_client(workspace)
+    try:
+        listed = [
+            e for e in ac.list_evaluators(control)
+            if not str(e.get("evaluatorId", "")).startswith(_BUILTIN_PREFIX)
+            and e.get("status", "ACTIVE") == "ACTIVE"
+        ]
+    except Exception:
+        return []  # listing unavailable — built-ins still render
+
+    def read(entry: dict[str, Any]) -> dict[str, Any]:
+        evaluator_id = str(entry["evaluatorId"])
+        detail = None
+        if entry.get("evaluatorType") != "ThirdParty":  # managed: no config to screen
+            try:
+                detail = ac.get_evaluator(control, evaluator_id=evaluator_id)
+            except Exception:
+                detail = None
+        return {**entry, "detail": detail}
+
+    with ThreadPoolExecutor(max_workers=EVALUATOR_READ_WORKERS) as pool:
+        return list(pool.map(read, listed))
+
+
+def evaluator_options(
+    db: Session, run: EvalRun, workspace: WorkspaceContext
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """``(options, excluded)`` for a system-prompt recommendation's target evaluator.
+
+    Every evaluator the job can actually optimize toward, grouped: the run's own
+    first (what the operator just read scores for), then AWS built-ins, then
+    third-party managed evaluators, then this account's custom ones. The devguide's
+    two recommended targets are flagged. ``excluded`` names what was left out and
+    why, so the console can say so instead of silently shortening the list.
+    """
+    from app.assistant.evaluation_assets import managed_reference_gap
+
+    account = _account_evaluators(workspace)
+    custom_ids = [str(e["evaluatorId"]) for e in account if e.get("evaluatorType") != "ThirdParty"]
+    gap = managed_reference_gap(db, run.workspace_id, custom_ids, set()) if custom_ids else {}
+    candidates: dict[str, dict[str, Any]] = {}
+    for evaluator, level in {**ac.ALL_BUILTIN_EVALUATORS, **ac.TRAJECTORY_EVALUATORS}.items():
+        candidates[evaluator] = {"id": evaluator, "name": evaluator, "level": level,
+                                 "group": "builtin", "detail": None}
+    for entry in account:
+        evaluator = str(entry["evaluatorId"])
+        candidates[evaluator] = {
+            "id": evaluator, "name": entry.get("evaluatorName") or evaluator,
+            "level": entry.get("level"), "detail": entry.get("detail"),
+            "group": "third_party" if entry.get("evaluatorType") == "ThirdParty" else "custom",
+        }
     own = run.evaluators if run.mode == "evaluators" else []
-    return [
-        e for e in dict.fromkeys([*own, *BASELINE_EVALUATORS])
-        if ac.evaluator_polarity(e) > 0
+    options: list[dict[str, Any]] = []
+    excluded: list[dict[str, str]] = []
+    for evaluator in own:
+        if evaluator not in candidates:  # deleted since the run, or another region's
+            excluded.append({"id": evaluator, "reason": "unavailable"})
+    ordered = [
+        *[e for e in own if e in candidates],
+        *[e for e in RECOMMENDED_EVALUATORS if e not in own],
+        *[e for e in candidates if e not in own and e not in RECOMMENDED_EVALUATORS],
     ]
+    for evaluator in dict.fromkeys(ordered):
+        item = candidates[evaluator]
+        problem = _evaluator_problem(evaluator, item["detail"], gap)
+        if problem:
+            excluded.append({"id": evaluator, "reason": problem})
+            continue
+        options.append({
+            "id": evaluator, "name": item["name"], "level": item["level"],
+            "group": "run" if evaluator in own else item["group"],
+            "recommended": evaluator in RECOMMENDED_EVALUATORS,
+        })
+    return options, excluded
 
 
 def resolve_inputs(
@@ -177,10 +273,12 @@ def resolve_inputs(
     else:
         # a CloudWatch-sourced run, or its agent is gone: nothing to read from
         inputs = {"source": "manual", "system_prompt": "", "tools": [], "notes": []}
+    options, excluded = evaluator_options(db, run, workspace)
     return {
         **inputs,
         "agent_method": agent.method if agent is not None else None,
-        "evaluators": evaluator_options(run),
+        "evaluators": options,
+        "excluded_evaluators": excluded,
         "default_evaluator": DEFAULT_EVALUATOR,
         **eligibility(run),
     }
@@ -198,38 +296,52 @@ def eligibility(run: EvalRun) -> dict[str, Any]:
 
 
 # ─── start ──────────────────────────────────────────────────────────────────
-def _evaluator_arn(evaluator: str, workspace: WorkspaceContext) -> str:
-    """An evaluator id → the ARN the job takes, refusing a non-numeric scale.
+_PROBLEM_TEXT = {
+    "lower_is_better": "scores a penalty (lower is better), so optimizing toward a high "
+                       "score would make the agent worse",
+    "ground_truth": "needs dataset ground truth, which a recommendation's traces do not "
+                    "carry",
+    "categorical": "uses a categorical rating scale; a recommendation needs a numerical "
+                   "score as its optimization signal",
+}
+
+
+def _evaluator_arn(db: Session, evaluator: str, workspace: WorkspaceContext) -> str:
+    """An evaluator id → the ARN the job takes, refusing any the options would hide.
 
     Built-ins have a region-less ARN. Anything else is read back: GetEvaluator both
-    proves it exists here and exposes its rating scale — a categorical judge gives
-    the optimizer no numeric signal and fails server-side far less legibly.
+    proves it exists here and exposes its config for the same screening the option
+    list applies, so the API cannot start a job the console would not offer.
     """
+    from app.assistant.evaluation_assets import managed_reference_gap
+
     if evaluator.startswith("arn:"):
         return evaluator
-    if evaluator.startswith(_BUILTIN_PREFIX):
-        return f"arn:aws:bedrock-agentcore:::evaluator/{evaluator}"
-    try:
-        detail = ac.get_evaluator(control_client(workspace), evaluator_id=evaluator)
-    except Exception as exc:
+    detail = None
+    gap: dict[str, list[str]] = {}
+    if not evaluator.startswith(_BUILTIN_PREFIX):
+        try:
+            detail = ac.get_evaluator(control_client(workspace), evaluator_id=evaluator)
+        except Exception as exc:
+            raise AppError(
+                "recommendation.evaluator_unreadable",
+                f"evaluator {evaluator} could not be read from AWS",
+                {"aws_error": f"{type(exc).__name__}: {exc}"},
+                status_code=400,
+            ) from exc
+        gap = managed_reference_gap(db, None, [evaluator], set())
+    problem = _evaluator_problem(evaluator, detail, gap)
+    if problem:
         raise AppError(
-            "recommendation.evaluator_unreadable",
-            f"evaluator {evaluator} could not be read from AWS",
-            {"aws_error": f"{type(exc).__name__}: {exc}"},
-            status_code=400,
-        ) from exc
-    scale = ((detail.get("evaluatorConfig") or {}).get("llmAsAJudge") or {}).get(
-        "ratingScale"
-    ) or {}
-    if scale.get("categorical"):
-        raise AppError(
-            "recommendation.evaluator_categorical",
-            "a system-prompt recommendation needs an evaluator with a numerical rating "
-            "scale; this judge uses a categorical one",
-            {"evaluator": evaluator},
+            f"recommendation.evaluator_{problem}",
+            f"{evaluator} cannot be a recommendation's optimization target: it "
+            f"{_PROBLEM_TEXT[problem]}",
+            {"evaluator": evaluator, "reason": problem},
             status_code=422,
         )
-    arn = detail.get("evaluatorArn")
+    if evaluator.startswith(_BUILTIN_PREFIX):
+        return f"arn:aws:bedrock-agentcore:::evaluator/{evaluator}"
+    arn = detail.get("evaluatorArn") if detail else None
     if not arn:
         raise AppError("recommendation.evaluator_unreadable",
                        f"evaluator {evaluator} reported no ARN", status_code=400)
@@ -370,7 +482,7 @@ def start(
     evaluator_id = evaluator or DEFAULT_EVALUATOR
     evaluator_arn = batch_arn = ""
     if "system_prompt" in kinds:
-        evaluator_arn = _evaluator_arn(evaluator_id, workspace)
+        evaluator_arn = _evaluator_arn(db, evaluator_id, workspace)
         batch_arn = _batch_arn(run, workspace)
     spans: list[dict[str, Any]] = []
     skipped: list[str] = []
