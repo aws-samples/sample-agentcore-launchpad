@@ -7,11 +7,13 @@
 /.supergoal/
 /.mcp.json
 /.run/
+/.krio/
 /.cursor/
 /.codex/
 /.darwin/
 /data/
 /design/
+/samples/
 /docs/issues/
 .playwright-cli/
 # --- python ---
