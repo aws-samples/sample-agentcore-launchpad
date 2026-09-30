@@ -2,7 +2,7 @@ import { Paperclip, SendHorizontal } from "lucide-react";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { PendingAttachments } from "../../../components/chat/Attachments";
+import { PendingAttachments } from "../../../components/chat/AttachmentViews";
 import type { PendingAttachment } from "../../../components/chat/attachments";
 import type { AttachmentCapability } from "../../../lib/api";
 import { Button } from "../../ui";
