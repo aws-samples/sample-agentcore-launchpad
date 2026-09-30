@@ -364,7 +364,9 @@ Resources:
               # Logs Insights queries over aws/spans and
               # /aws/bedrock-agentcore/runtimes/*, the CloudWatch token-usage
               # metrics, the account-level X-Ray span destination, and the log
-              # delivery pipeline the policy engine's decision log needs. None of
+              # delivery pipeline the policy engine's decision log needs, and the
+              # runtime log-stream listing behind the evaluation wizard's 日志
+              # source (DescribeLogStreams + FilterLogEvents). None of
               # StartQuery's siblings (GetQueryResults, StopQuery,
               # DescribeLogGroups) accept a resource, and the account-level X-Ray
               # setting has no ARN at all.
@@ -376,6 +378,7 @@ Resources:
                   - logs:CreateDelivery
                   - logs:DescribeDeliveries
                   - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
                   - logs:DescribeResourcePolicies
                   - logs:FilterLogEvents
                   - logs:GetDeliveryDestination

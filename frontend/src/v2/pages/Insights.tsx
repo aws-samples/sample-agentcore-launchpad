@@ -5,9 +5,10 @@ import { api, type V2Range } from "../../lib/api";
 import { evaluatorLabel } from "../../lib/evaluators";
 import { RANGE_HOURS, RANGES, rangeLabel } from "../format";
 import { useLoad } from "../hooks";
+import { InsightsPanel } from "../InsightsPanel";
 import { EvaluatorBreakdown, ResultsTable, SummaryKpis } from "../ResultsView";
 import { type ResultRow, rowsFromOnline, rowsFromRun, summarize } from "../results";
-import { loadTasks, type V2Task } from "../tasks";
+import { loadTasks, TASK_SOURCES, type V2Task } from "../tasks";
 import { Alert, Card, FilterSelect, PageHeader, SearchInput } from "../ui";
 
 /** At most this many completed runs are read per refresh (one results call each). */
@@ -30,6 +31,8 @@ async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Prom
 interface InsightData {
   rows: ResultRow[];
   tasks: V2Task[];
+  /** completed insights runs in range — their clusters feed the 评估洞察 panel */
+  insightTasks: V2Task[];
   skippedRuns: number;
   failedReads: number;
 }
@@ -37,15 +40,13 @@ interface InsightData {
 async function loadInsights(range: V2Range): Promise<InsightData> {
   const tasks = await loadTasks();
   const since = Date.now() - RANGE_HOURS[range] * 3_600_000;
-  // insights runs cluster sessions instead of scoring them — nothing to aggregate here
-  const runs = tasks.filter(
-    (task) =>
-      task.kind === "run" &&
-      task.mode === "evaluators" &&
-      task.status === "completed" &&
-      task.createdAt &&
-      new Date(task.createdAt).getTime() >= since,
+  const completed = tasks.filter(
+    (task) => task.kind === "run" && task.status === "completed" && task.createdAt && new Date(task.createdAt).getTime() >= since,
   );
+  // insights runs cluster sessions instead of scoring them: their trees ride on the
+  // run row (no results read) and go to the insights panel, not the score tables
+  const runs = completed.filter((task) => task.mode === "evaluators");
+  const insightTasks = completed.filter((task) => task.mode === "insights");
   const online = tasks.filter((task) => task.kind === "online");
   let failedReads = 0;
   const runRows = await mapLimited(runs.slice(0, MAX_RUNS), CONCURRENCY, async (task) => {
@@ -65,7 +66,7 @@ async function loadInsights(range: V2Range): Promise<InsightData> {
     }
   });
   const rows = [...runRows.flat(), ...onlineRows.flat()].sort((a, b) => String(b.time ?? "").localeCompare(String(a.time ?? "")));
-  return { rows, tasks: [...runs, ...online], skippedRuns: Math.max(0, runs.length - MAX_RUNS), failedReads };
+  return { rows, tasks: [...runs, ...online], insightTasks, skippedRuns: Math.max(0, runs.length - MAX_RUNS), failedReads };
 }
 
 const SCORE_BANDS = {
@@ -77,7 +78,8 @@ const SCORE_BANDS = {
 /**
  * 评估总览 — every judged result of the recent evaluation tasks in one place:
  * KPIs (count, normalized mean, Bad Case, pass rate), per-evaluator means and
- * a filterable result table with export and "bad case → dataset".
+ * a filterable result table with export and "bad case → dataset"; plus the
+ * 评估洞察 panel over the insights tasks' failure / intent / summary clusters.
  */
 export function V2Insights() {
   const { t } = useTranslation();
@@ -92,13 +94,27 @@ export function V2Insights() {
   const [q, setQ] = useState("");
 
   const all = useMemo(() => data?.rows ?? [], [data]);
+  const insightTasks = useMemo(() => data?.insightTasks ?? [], [data]);
   const options = useMemo(
     () => ({
-      tasks: [...new Map(all.map((r) => [r.taskKey, r.taskName])).entries()],
+      tasks: [
+        ...new Map([
+          ...all.map((r) => [r.taskKey, r.taskName] as const),
+          ...insightTasks.map((task) => [`${task.kind}:${task.id}`, task.name] as const),
+        ]).entries(),
+      ],
       evaluators: [...new Set(all.map((r) => r.evaluatorId))],
-      agents: [...new Set(all.map((r) => r.agent))].sort(),
+      agents: [...new Set([...all.map((r) => r.agent), ...insightTasks.map((task) => task.agentName)])].sort(),
     }),
-    [all],
+    [all, insightTasks],
+  );
+  // evaluator / outcome / score-band filters are score-only; the rest narrow the insights too
+  const insightScope = useMemo(
+    () =>
+      insightTasks.filter(
+        (x) => (!task || `${x.kind}:${x.id}` === task) && (!agent || x.agentName === agent) && (!source || x.source === source),
+      ),
+    [insightTasks, task, agent, source],
   );
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -156,7 +172,7 @@ export function V2Insights() {
             value={source}
             allLabel={t("v2.common.all")}
             onChange={setSource}
-            options={(["window", "sessions", "dataset", "cloud", "live"] as const).map((s) => ({ value: s, label: t(`v2.taskSource.${s}Short`) }))}
+            options={TASK_SOURCES.map((s) => ({ value: s, label: t(`v2.taskSource.${s}Short`) }))}
           />
           <div className="end">
             <SearchInput value={q} onChange={setQ} placeholder={t("v2.insights.search")} />
@@ -165,11 +181,16 @@ export function V2Insights() {
         {data && data.skippedRuns > 0 && <Alert tone="warn">{t("v2.insights.skippedRuns", { count: data.skippedRuns, max: MAX_RUNS })}</Alert>}
         {data && data.failedReads > 0 && <Alert tone="warn">{t("v2.insights.failedReads", { count: data.failedReads })}</Alert>}
         <p className="v2-muted" style={{ fontSize: 13 }}>
-          {t("v2.insights.scope", { runs: data?.tasks.filter((x) => x.kind === "run").length ?? 0, online: data?.tasks.filter((x) => x.kind === "online").length ?? 0 })}
+          {t("v2.insights.scope", {
+            runs: data?.tasks.filter((x) => x.kind === "run").length ?? 0,
+            online: data?.tasks.filter((x) => x.kind === "online").length ?? 0,
+            insights: insightTasks.length,
+          })}
         </p>
       </Card>
       <SummaryKpis summary={summary} />
       <EvaluatorBreakdown summary={summary} />
+      <InsightsPanel tasks={insightScope} loading={loading} needle={q} />
       <Card title={t("v2.insights.details")}>
         <ResultsTable rows={rows} loading={loading} error={error} onRetry={reload} range={range} exportName={`insights-${range}`} />
       </Card>

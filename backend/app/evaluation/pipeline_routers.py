@@ -4,6 +4,11 @@
   an existing dataset or a new one (the trajectory list/detail "加入数据集").
 * `/api/eval/pipelines` — saved processing tasks (source filter → extraction →
   output dataset) that run on demand.
+* `GET /api/eval/agents/{agent_id}/log-streams` — the log streams of an agent's
+  runtime log group, keyword-filtered (the task wizard's 日志 data source).
+* `GET /api/eval/log-services` · `/log-groups` · `/log-sessions` — service-name,
+  log-group and session discovery behind a task that evaluates CloudWatch
+  telemetry with no platform agent.
 
 Sessions are read through the observability service with the same visibility
 rule as `/api/observability/sessions`: another principal's private assistant
@@ -15,7 +20,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -24,9 +29,18 @@ from app.assistant.principal import principal_of
 from app.assistant.sessions import PrivateSessions
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
-from app.evaluation import pipelines
+from app.evaluation import log_streams, pipelines
 from app.evaluation.models import EvalDataset, EvalPipeline
-from app.evaluation.routers import _dataset_in, _dataset_out, _infer_kind, _validate_items
+from app.evaluation.online_routers import _agent_in
+from app.evaluation.routers import (
+    LOG_GROUP_NAME_RE,
+    SERVICE_NAME_RE,
+    _dataset_in,
+    _dataset_out,
+    _infer_kind,
+    _validate_items,
+)
+from app.evaluation.service import resolve_telemetry
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import observability
@@ -373,3 +387,101 @@ def run_pipeline(
     row.last_run = outcome
     db.commit()
     return _pipeline_out(row)
+
+
+# ─── runtime log streams (task wizard · 日志) ────────────────────────────────
+@router.get("/agents/{agent_id}/log-streams")
+def agent_log_streams(
+    agent_id: str,
+    request: Request,
+    hours: int = Query(24, ge=1, le=336),
+    q: str | None = Query(None, max_length=128),
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Recent streams of the agent's runtime log group, newest first; with `q`
+    only those whose name or content contains the keyword. A session stream
+    carries its `session_id` — the unit a batch evaluation scores."""
+    agent = _agent_in(db, ws, agent_id)
+    logs = ws.context.client("logs")
+    _service, log_group = resolve_telemetry(agent, ws.context, logs)
+    since_ms = int((_now().timestamp() - hours * 3600) * 1000)
+    out = log_streams.list_streams(
+        logs, log_group, since_ms=since_ms, keyword=q,
+        visible=_private(request, ws, db).visible,
+    )
+    return {**out, "hours": hours, "q": (q or "").strip() or None}
+
+
+# ─── CloudWatch-only sources (task wizard · no platform agent) ───────────────
+LogGroupName = Annotated[str, Field(pattern=LOG_GROUP_NAME_RE)]
+
+
+@router.get("/log-sessions")
+def log_sessions(
+    request: Request,
+    log_group: Annotated[list[LogGroupName], Query(min_length=1, max_length=10)],
+    service_name: str = Query(pattern=SERVICE_NAME_RE),
+    hours: int = Query(168, ge=1, le=336),
+    q: str | None = Query(None, max_length=128),
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Sessions of `service_name` in the input `log_group`s — the 日志 source of
+    a task with no platform agent, in the stream-row shape of
+    `/agents/{id}/log-streams` (the log group · stream each session's latest
+    record came from). With `q`, only sessions with a record containing it
+    (case-insensitive, spans or content logs)."""
+    needle = (q or "").strip()
+    queries = {"sessions": log_streams.sessions_query(service_name)}
+    if needle:
+        queries["hits"] = log_streams.keyword_query(needle)
+    groups = list(dict.fromkeys(log_group))
+    results = observability.run_insights_queries(
+        queries, hours, logs=ws.context.client("logs"), log_groups=groups,
+    )
+    out = log_streams.sessions_from_rows(
+        results["sessions"], results.get("hits"), keyword=needle or None,
+        visible=_private(request, ws, db).visible,
+    )
+    return {**out, "log_group": ", ".join(groups), "hours": hours, "q": needle or None}
+
+
+@router.get("/log-groups")
+def log_groups(
+    q: str | None = Query(None, max_length=128, pattern=r"^[.\-_/#A-Za-z0-9]*$"),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Log groups whose name contains `q` (case-insensitive), to pick a task's
+    input log groups."""
+    return log_streams.list_log_groups(ws.context.client("logs"), q or None)
+
+
+@router.get("/log-services")
+def log_services(
+    hours: int = Query(168, ge=1, le=336),
+    q: str | None = Query(None, max_length=128),
+    log_group: Annotated[list[LogGroupName] | None, Query(max_length=10)] = None,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Service names seen in the spans of `aws/spans` (plus any `log_group`
+    given — spans sent to an agent's own group), newest first, each with its
+    span / session counts, last activity, the input log groups a batch
+    evaluation needs (`aws/spans` + the content group ADOT names on the
+    resource), the platform agent that owns it, if any, and its instrumentation
+    `scopes` with `evaluable` — whether AgentCore Evaluation can read any of them
+    as agent spans. `q` narrows by a case-insensitive substring of the name."""
+    groups = list(dict.fromkeys([log_streams.SPANS_LOG_GROUP, *(log_group or [])]))
+    results = observability.run_insights_queries(
+        {"services": log_streams.SERVICES_QUERY, "scopes": log_streams.SCOPES_QUERY}, hours,
+        logs=ws.context.client("logs"), log_groups=groups,
+    )
+    resolve = observability.build_agent_resolver(db, ws.id)
+    services = log_streams.services_from_rows(
+        results["services"], resolve, results.get("scopes")
+    )
+    needle = (q or "").strip().lower()
+    if needle:
+        services = [row for row in services if needle in row["service_name"].lower()]
+    return {"services": services, "log_groups": groups, "hours": hours}

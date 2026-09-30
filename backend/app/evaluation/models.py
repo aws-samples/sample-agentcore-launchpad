@@ -45,8 +45,13 @@ class EvalRun(Base):
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    # "" for a CloudWatch-sourced run (no platform agent): see ``log_source``
     agent_id: Mapped[str] = mapped_column(String(32), index=True)
+    # the agent's name — or, without an agent, the telemetry service name
     agent_name: Mapped[str] = mapped_column(String(64))
+    # {service_name, log_group_names}: the run reads an agent's telemetry straight
+    # from CloudWatch Logs instead of a platform agent (NULL for agent runs)
+    log_source: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     # Operator-facing task name/description (console V2 evaluation tasks); NULL on
     # runs started before they existed or from a surface that does not name them.
     name: Mapped[str | None] = mapped_column(String(64), default=None)

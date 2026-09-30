@@ -7,6 +7,7 @@ import type {
   EvaluationRunResults,
   ExperimentReadiness,
   InsightTrees,
+  LogSource,
 } from "./evaluation";
 import type { ExperimentInfo } from "./experiments";
 import type { ModelSource, ReasoningEffort } from "./models";
@@ -3617,7 +3618,9 @@ export interface V2PipelineBody extends V2PipelineConfig {
 /** `POST /api/eval/runs` with every scope the backend accepts (exactly one of
  *  dataset_id / cloud_dataset_id / session_ids / lookback_hours). */
 export interface V2RunCreate {
-  agent_id: string;
+  /** exactly one target: a platform agent or a CloudWatch `log_source` */
+  agent_id?: string;
+  log_source?: LogSource;
   name?: string;
   description?: string;
   /** `insights` clusters the sessions (failure analysis / intent) instead of scoring them */
@@ -3628,8 +3631,60 @@ export interface V2RunCreate {
   dataset_id?: string;
   cloud_dataset_id?: string;
   session_ids?: string[];
+  /** where `session_ids` came from — `logs` = picked runtime log streams (display only) */
+  session_source?: "logs";
   lookback_hours?: number;
   wait_seconds?: number;
+}
+
+/** One stream of an agent's runtime log group (`GET /api/eval/agents/{id}/log-streams`). */
+export interface V2LogStream {
+  stream: string;
+  /** the runtime session the row belongs to; null for a shared / per-microVM stream */
+  session_id: string | null;
+  /** `session` = a per-session stream; `otel_session` = one session's slice of the shared
+   *  `otel-rt-logs` (Harness runtimes name no stream after a session); `shared` = not selectable */
+  kind: "session" | "otel_session" | "shared";
+  first_event: string | null;
+  last_event: string | null;
+  /** how a keyword matched: the stream name or its log content; null without a keyword */
+  match: "name" | "content" | null;
+  matches: number | null;
+  snippet: string | null;
+  /** traces of the session (CloudWatch-source session listing only) */
+  traces?: number;
+}
+
+export interface V2LogStreams {
+  log_group: string;
+  streams: V2LogStream[];
+  /** a scan cap was hit — narrow the time window or the keyword */
+  truncated: boolean;
+  hours: number;
+  q: string | null;
+}
+
+/** A service name seen in spans (`GET /api/eval/log-services`). */
+export interface V2LogService {
+  service_name: string;
+  spans: number;
+  sessions: number;
+  last_seen: string | null;
+  /** the input log groups a batch evaluation needs: aws/spans + the content log group */
+  log_group_names: string[];
+  /** the platform agent that owns this service, when one does */
+  agent: { id: string; name: string } | null;
+  /** instrumentation scopes of its spans */
+  scopes: string[];
+  /** whether AgentCore Evaluation reads any of those scopes as agent spans; null = unknown */
+  evaluable: boolean | null;
+}
+
+export interface V2LogGroup {
+  name: string;
+  created_at: string | null;
+  retention_days: number | null;
+  stored_bytes: number | null;
 }
 
 export const api = {
@@ -4744,6 +4799,25 @@ export const api = {
     request<{ deleted: boolean }>(`/api/eval/evaluators/${encodeURIComponent(id)}`, {
       method: "DELETE",
     }),
+  v2AgentLogStreams: (agentId: string, hours: number, q?: string) =>
+    request<V2LogStreams>(
+      `/api/eval/agents/${encodeURIComponent(agentId)}/log-streams?${new URLSearchParams({ hours: String(hours), ...(q ? { q } : {}) })}`,
+    ),
+  v2LogServices: (hours: number, logGroups: string[] = []) =>
+    request<{ services: V2LogService[]; log_groups: string[]; hours: number }>(
+      `/api/eval/log-services?${new URLSearchParams([["hours", String(hours)], ...logGroups.map((g) => ["log_group", g])])}`,
+    ),
+  v2LogGroups: (q?: string) =>
+    request<{ log_groups: V2LogGroup[]; truncated: boolean }>(`/api/eval/log-groups${q ? `?${new URLSearchParams({ q })}` : ""}`),
+  v2LogSessions: (serviceName: string, logGroups: string[], hours: number, q?: string) =>
+    request<V2LogStreams>(
+      `/api/eval/log-sessions?${new URLSearchParams([
+        ["service_name", serviceName],
+        ["hours", String(hours)],
+        ...logGroups.map((g) => ["log_group", g]),
+        ...(q ? [["q", q]] : []),
+      ])}`,
+    ),
   v2CreateRun: (body: V2RunCreate) =>
     request<EvaluationRunInfo>("/api/eval/runs", {
       method: "POST",
