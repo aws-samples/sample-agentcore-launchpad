@@ -1,4 +1,4 @@
-"""`agentTraces` selection for recommendation jobs (default window vs pinned batch)."""
+"""`agentTraces` selection for recommendation jobs (default window / pinned batch / spans)."""
 
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
@@ -67,18 +67,31 @@ def test_system_prompt_job_honours_a_pinned_batch():
     )
 
 
-def test_tool_description_job_honours_a_pinned_batch():
-    """Both generators, or one RECOMMEND would read two different trace sets and
-    "only that job's sessions" would be false."""
+def test_tool_description_job_pins_sessions_with_inline_spans():
+    """The tool job refuses a batchEvaluation source (live ValidationException
+    2026-09-30), so a pinned run reaches it as that run's session spans — and the
+    wrapper no longer accepts a batch ARN at all."""
     client = MagicMock()
+    spans = [{"name": "execute_tool get_pay_stub"}]
     ac.start_tool_description_recommendation(
         client,
         name="n",
         tools=[{"toolName": "get_pay_stub", "description": "d"}],
-        batch_evaluation_arn=BATCH_ARN,
+        session_spans=spans,
     )
     cfg = _sent(client)["recommendationConfig"]["toolDescriptionRecommendationConfig"]
-    assert cfg["agentTraces"] == {"batchEvaluation": {"batchEvaluationArn": BATCH_ARN}}
+    assert cfg["agentTraces"] == {"sessionSpans": spans}
+    with pytest.raises(TypeError):
+        ac.start_tool_description_recommendation(  # type: ignore[call-arg]
+            client, name="n", tools=[], batch_evaluation_arn=BATCH_ARN)
+
+
+def test_inline_spans_win_over_the_other_sources():
+    spans = [{"name": "s"}]
+    assert ac.recommendation_traces(
+        session_spans=spans, batch_evaluation_arn=BATCH_ARN,
+        log_group_arns=LOG_GROUPS, service_names=SERVICES,
+    ) == {"sessionSpans": spans}
 
 
 @pytest.mark.parametrize(

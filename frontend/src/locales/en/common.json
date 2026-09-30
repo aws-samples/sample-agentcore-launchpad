@@ -7336,6 +7336,53 @@
       "info": "Details",
       "createdBy": "Created by",
       "updatedBy": "Last saved by"
+    },
+    "rec": {
+      "title": "Recommendations",
+      "sub": "AgentCore Recommendations read this run's traces",
+      "new": "New recommendation",
+      "kinds": "Optimize",
+      "sourceHarness": "Managed Harness agent: the system prompt and tool descriptions below were read from the deployed Harness (GetHarness, including its Gateway tool schemas).",
+      "sourceSpec": "Pre-filled from the Launchpad agent spec. Check that it matches what is actually deployed before generating.",
+      "sourceManual": "The current system prompt and tool descriptions of this agent cannot be read automatically. Enter them below. They are required.",
+      "note": {
+        "remote_mcp_runtime_only": "The remote MCP server {{tool}} lists its tools only at runtime. Add any you want optimized by hand, named {{tool}}_<tool>.",
+        "gateway_unreadable": "The tools of Gateway {{tool}} could not be read ({{detail}}). Add them by hand if needed."
+      },
+      "currentPrompt": "Current system prompt",
+      "promptPlaceholder": "Paste the agent's current system prompt",
+      "promptHintPrefilled": "Edit only if the deployed prompt differs.",
+      "promptHintManual": "Required: the exact system prompt the agent runs with.",
+      "promptRequired": "Enter the current system prompt",
+      "evaluator": "Optimize toward",
+      "evaluatorHint": "The recommendation pushes the prompt toward what this evaluator scores highly. It must use a numerical scale.",
+      "currentTools": "Current tool descriptions",
+      "toolsHintPrefilled": "Only tools the agent called in this run's sessions can be analyzed; others are dropped automatically. Pre-filled tools without a description start unchecked.",
+      "toolsHintManual": "Required: the tool names exactly as the agent calls them, with their current descriptions.",
+      "toolsRequired": "Enter at least one tool",
+      "toolDescRequired": "Every tool needs its current description",
+      "addTool": "Add tool",
+      "removeTool": "Remove",
+      "starting": "Starting…",
+      "started": "Recommendation started",
+      "traceNote": "Traces: this run's {{count}} sessions (batch evaluation {{id}})",
+      "reason": {
+        "run_not_completed": "Recommendations become available once this run completes.",
+        "run_no_batch": "This run has no batch evaluation, so there are no traces to analyze."
+      },
+      "source": {
+        "harness": "From Harness",
+        "spec": "From spec",
+        "manual": "Entered by hand"
+      },
+      "running": "Running on AWS ({{id}}), refreshing automatically…",
+      "skippedTools": "Dropped because they never appear in the traces: {{tools}}",
+      "explanation": "Explanation",
+      "copy": "Copy prompt",
+      "copied": "Copied",
+      "copyFailed": "Copy failed",
+      "includeTool": "Include this tool",
+      "toolsIneligible": "Tool descriptions need the run's session list. This run evaluated a time window, so only the system prompt can be optimized."
     }
   }
 }

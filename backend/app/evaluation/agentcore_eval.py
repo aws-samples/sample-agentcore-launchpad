@@ -10,6 +10,7 @@ clients so tests inject stubs; payloads mirror Lab4_AgentCore_Optimization.
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from collections.abc import Sequence
@@ -776,20 +777,28 @@ def recommendation_traces(
     log_group_arns: list[str] | None = None,
     service_names: list[str] | None = None,
     batch_evaluation_arn: str | None = None,
+    session_spans: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The `agentTraces` union for a recommendation job.
 
-    Two of the API's three branches (`sessionSpans` is unused):
+    Three of the API's branches:
 
     - ``batchEvaluation`` — pins the input to one completed batch evaluation, so the
       recommendation reads exactly the sessions that job analysed. Reproducible, and
       the only way to give a recommendation data lineage to an Insights job.
     - ``cloudwatchLogs`` — the rolling ``RECOMMEND_LOOKBACK_DAYS`` window. Default,
       and time-dependent: the same experiment re-run tomorrow reads different traces.
+    - ``sessionSpans`` — the raw span documents of chosen sessions, inline (the
+      CLI's ``--session-id`` path). The only exact scope a TOOL_DESCRIPTION job
+      accepts: it refuses ``batchEvaluation`` (live ValidationException
+      2026-09-30, "Batch evaluation is not supported as an agent trace source
+      for tool description recommendations").
 
-    Mutually exclusive; the ARN wins. Raises when neither is usable — a job with an
-    empty window fails server-side with a far less obvious message.
+    Mutually exclusive; spans win, then the ARN. Raises when none is usable — a job
+    with an empty window fails server-side with a far less obvious message.
     """
+    if session_spans:
+        return {"sessionSpans": session_spans}
     if batch_evaluation_arn:
         return {"batchEvaluation": {"batchEvaluationArn": batch_evaluation_arn}}
     if not (log_group_arns and service_names):
@@ -816,6 +825,7 @@ def start_system_prompt_recommendation(
     log_group_arns: list[str] | None = None,
     service_names: list[str] | None = None,
     batch_evaluation_arn: str | None = None,
+    evaluator_arn: str = _GSR_EVALUATOR_ARN,
 ) -> dict[str, Any]:
     return client.start_recommendation(
         name=name,
@@ -829,7 +839,7 @@ def start_system_prompt_recommendation(
                     batch_evaluation_arn=batch_evaluation_arn,
                 ),
                 "evaluationConfig": {
-                    "evaluators": [{"evaluatorArn": _GSR_EVALUATOR_ARN}]
+                    "evaluators": [{"evaluatorArn": evaluator_arn}]
                 },
             }
         },
@@ -844,8 +854,10 @@ def start_tool_description_recommendation(
     tools: list[dict[str, str]],
     log_group_arns: list[str] | None = None,
     service_names: list[str] | None = None,
-    batch_evaluation_arn: str | None = None,
+    session_spans: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """No ``batch_evaluation_arn``: the job refuses that trace source (live
+    ValidationException 2026-09-30). Pin a run's sessions with ``session_spans``."""
     tools_payload = [
         {"toolName": t["toolName"], "toolDescription": {"text": t["description"]}}
         for t in tools
@@ -859,7 +871,7 @@ def start_tool_description_recommendation(
                 "agentTraces": recommendation_traces(
                     log_group_arns=log_group_arns,
                     service_names=service_names,
-                    batch_evaluation_arn=batch_evaluation_arn,
+                    session_spans=session_spans,
                 ),
             }
         },
@@ -889,6 +901,30 @@ def poll_recommendation(
         # Deliberate polling interval; the surrounding loop owns the attempt bound.
         time.sleep(interval)  # nosemgrep: arbitrary-sleep
     return client.get_recommendation(recommendationId=recommendation_id)
+
+
+_NOT_TRACED_RE = re.compile(r"not found in the sampled agent traces: \[([^\]]*)\]")
+
+
+def tools_not_in_traces(err: str) -> set[str]:
+    """Tool names a tool-description job rejected as absent from its traces.
+
+    The job refuses the WHOLE tool list when any listed tool never appears in the
+    sampled traces (live-verified ValidationException), naming the offenders.
+    """
+    m = _NOT_TRACED_RE.search(err or "")
+    if not m:
+        return set()
+    return {p.strip().strip("'\"") for p in m.group(1).split(",") if p.strip()}
+
+
+def recommendation_error(payload: dict[str, Any], status: str) -> str:
+    """Operator-facing failure text for a recommendation AWS did not complete."""
+    code = payload.get("errorCode") or ""
+    msg = payload.get("errorMessage") or ""
+    if code and msg:
+        return f"{code}: {msg}"
+    return code or msg or f"recommendation job ended {status or 'unknown'}"
 
 
 # ─── A/B test variant builders (pure) ───────────────────────────────────────

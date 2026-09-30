@@ -31,6 +31,7 @@ WORKSPACE_SCOPED_TABLES = (
     "jobs",
     "eval_datasets",
     "eval_runs",
+    "eval_recommendations",
     "online_eval_configs",
     "experiments",
     "runtime_canaries",
@@ -404,6 +405,9 @@ def _migrate_workspace_columns(bind) -> None:
         "jobs": "ALTER TABLE jobs ADD COLUMN workspace_id VARCHAR(32)",
         "eval_datasets": "ALTER TABLE eval_datasets ADD COLUMN workspace_id VARCHAR(32)",
         "eval_runs": "ALTER TABLE eval_runs ADD COLUMN workspace_id VARCHAR(32)",
+        "eval_recommendations": (
+            "ALTER TABLE eval_recommendations ADD COLUMN workspace_id VARCHAR(32)"
+        ),
         "online_eval_configs": (
             "ALTER TABLE online_eval_configs ADD COLUMN workspace_id VARCHAR(32)"
         ),

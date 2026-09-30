@@ -8,6 +8,10 @@ import type {
   ExperimentReadiness,
   InsightTrees,
   LogSource,
+  RunRecommendation,
+  RunRecommendationInputs,
+  RunRecommendationKind,
+  RunRecommendationSource,
 } from "./evaluation";
 import type { ExperimentInfo } from "./experiments";
 import type { ModelSource, ReasoningEffort } from "./models";
@@ -3876,6 +3880,37 @@ export const api = {
    *  nothing to read yet. */
   evaluationRunResults: (runId: string) =>
     request<EvaluationRunResults>(`/api/eval/runs/${encodeURIComponent(runId)}/results`),
+  /** `GET /api/eval/runs/{id}/recommendation-inputs` — the current system prompt +
+   *  tool descriptions a recommendation from this run would revise, and where they
+   *  came from (a Managed Harness is read live; other agents fall back to the spec,
+   *  then to operator input). */
+  runRecommendationInputs: (runId: string) =>
+    request<RunRecommendationInputs>(
+      `/api/eval/runs/${encodeURIComponent(runId)}/recommendation-inputs`,
+    ),
+  /** `GET /api/eval/runs/{id}/recommendations` — newest first; a non-terminal job is
+   *  refreshed from GetRecommendation on every read. */
+  runRecommendations: (runId: string) =>
+    request<{ recommendations: RunRecommendation[] }>(
+      `/api/eval/runs/${encodeURIComponent(runId)}/recommendations`,
+    ),
+  /** `POST /api/eval/runs/{id}/recommendations` (201) — one StartRecommendation per
+   *  kind, traces pinned to the run's batch evaluation. Needs `eval.run`; 409 for a
+   *  run that is not completed, 422 for missing inputs or a categorical judge. */
+  createRunRecommendations: (
+    runId: string,
+    input: {
+      kinds: RunRecommendationKind[];
+      input_source: RunRecommendationSource;
+      system_prompt?: string;
+      evaluator?: string;
+      tools?: { name: string; description: string }[];
+    },
+  ) =>
+    request<{ recommendations: RunRecommendation[] }>(
+      `/api/eval/runs/${encodeURIComponent(runId)}/recommendations`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
   experimentProviders: () =>
     request<{ providers: RecommendProviderInfo[] }>("/api/experiments/providers"),
   login: (username: string, password: string) =>

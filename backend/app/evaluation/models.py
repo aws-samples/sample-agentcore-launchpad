@@ -77,6 +77,38 @@ class EvalRun(Base):
     )
 
 
+class EvalRecommendation(Base):
+    """One AgentCore StartRecommendation job pinned to an evaluation run's batch.
+
+    The job itself (status, recommended text) lives on AWS; the row keeps the job id,
+    the inputs the operator confirmed (they cannot be read back once a Harness is
+    edited) and the last result read from GetRecommendation.
+    """
+
+    __tablename__ = "eval_recommendations"
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
+    run_id: Mapped[str] = mapped_column(String(16), index=True)
+    kind: Mapped[str] = mapped_column(String(24))  # system_prompt | tool_descriptions
+    recommendation_id: Mapped[str] = mapped_column(String(128))
+    name: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="PENDING")
+    # where the inputs came from: harness (live GetHarness) | spec | manual
+    input_source: Mapped[str] = mapped_column(String(16), default="manual")
+    system_prompt: Mapped[str | None] = mapped_column(Text, default=None)
+    evaluator: Mapped[str | None] = mapped_column(String(256), default=None)
+    tools: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    # tools the job rejected as absent from the traces (dropped on the one retry)
+    skipped_tools: Mapped[list[str]] = mapped_column(JSON, default=list)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
 class OnlineEvalConfig(Base):
     """Ledger row linking an AWS online evaluation config to the agent it scores.
 
