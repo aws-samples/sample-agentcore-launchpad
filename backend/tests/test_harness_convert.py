@@ -1436,3 +1436,114 @@ def test_twin_gateway_client_drops_config_bundle_baggage():
         context.detach(token)
     assert seen == [{"keep": "me"}, {"keep": "me"}]
     assert after["aws.agentcore.configbundle_arn"] == "arn:bundle"  # caller untouched
+
+
+# ─── AWS_IAM Gateways (e.g. a Registry-attached remote MCP behind its own Gateway) ─
+IAM_GW_ARN = "arn:aws:bedrock-agentcore:us-east-1:1:gateway/web-search-gw-k1l2m3n4o5"
+
+
+def _iam_gw_tool(name, arn=IAM_GW_ARN):
+    return {"type": "agentcore_gateway", "name": name, "config": {"agentCoreGateway": {
+        "gatewayArn": arn, "outboundAuth": {"awsIam": {}}}}}
+
+
+IAM_ALLOWED = ["@web_search/web-search-tool___WebSearch"]
+
+
+def test_iam_gateway_client_is_rebuilt_with_a_sigv4_transport():
+    """Live 2026-09-30: converting a Harness whose only Gateway is AWS_IAM failed with
+    'has no OAuth outbound auth'. The rebuilt client signs instead of minting a token."""
+    grafted = hc.graft_missing_gateway_clients(
+        _narrowed_files(), [_iam_gw_tool("web_search")], IAM_ALLOWED,
+    )
+    client = grafted["mcp_client/client.py"]
+    compile(client, "client.py", "exec")
+    assert ("url = 'https://web-search-gw-k1l2m3n4o5.gateway.bedrock-agentcore."
+            "us-east-1.amazonaws.com/mcp'") in client
+    assert f"{hc.GW_SIGV4_TRANSPORT}(url, 'us-east-1'), prefix='web_search'" in client
+    assert "tool_filters={'allowed': ['web-search-tool___WebSearch']}" in client
+    assert "requires_access_token" not in client
+    assert "GATEWAY_GATEWAY_" not in client  # no env contract for a non-shared Gateway
+    assert grafted["main.py"].count("mcp_clients += get_all_gateway_mcp_clients()") == 1
+
+    lazy = hc.graft_lazy_gateway_token(client)
+    compile(lazy, "client.py", "exec")
+    assert f"return {hc.GW_NO_BUNDLE_CLIENT}(lambda: {hc.GW_SIGV4_TRANSPORT}(" in lazy
+    assert f"class {hc.GW_NO_BUNDLE_CLIENT}(MCPClient)" in lazy
+    assert hc.graft_lazy_gateway_token(lazy) == lazy  # idempotent
+
+
+def test_sigv4_transport_signs_each_request_for_the_gateway_region():
+    import httpx
+
+    grafted = hc.graft_missing_gateway_clients(
+        _narrowed_files(), [_iam_gw_tool("web_search")], IAM_ALLOWED,
+    )
+    source = hc._SIGV4_TRANSPORT_SOURCE
+    assert source in grafted["mcp_client/client.py"]
+
+    class Frozen:
+        access_key, secret_key, token = "AKIDEXAMPLE", "secret", "session-token"
+
+    class Session:
+        def get_credentials(self):
+            return type("C", (), {"get_frozen_credentials": lambda self: Frozen()})()
+
+    from botocore.auth import SigV4Auth
+    from botocore.awsrequest import AWSRequest
+
+    seen = {}
+    scope = {"httpx": httpx, "boto3": type("B", (), {"Session": Session}),
+             "SigV4Auth": SigV4Auth, "AWSRequest": AWSRequest,
+             "streamablehttp_client": lambda url, auth: seen.update(url=url, auth=auth)}
+    exec(source, scope)
+    scope[hc.GW_SIGV4_TRANSPORT]("https://gw.example/mcp", "us-east-1")
+    request = httpx.Request("POST", "https://gw.example/mcp",
+                            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                            headers={"Connection": "keep-alive"})
+    flow = seen["auth"].auth_flow(request)
+    signed = next(flow)
+    auth = signed.headers["authorization"]
+    assert auth.startswith("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/")
+    assert "/us-east-1/bedrock-agentcore/aws4_request" in auth
+    assert "connection" not in auth.split("SignedHeaders=")[1].split(",")[0]
+    assert signed.headers["x-amz-security-token"] == "session-token"
+    assert "x-amz-date" in signed.headers
+
+
+def test_mixed_oauth_and_iam_gateways_are_both_rebuilt():
+    grafted = hc.graft_missing_gateway_clients(
+        _narrowed_files(), [_gw_tool("launchpad_gw", GW_ARN), _iam_gw_tool("web_search")],
+        ["@launchpad_gw/anyhr-leave___get_leave_balance", *IAM_ALLOWED],
+    )
+    client = grafted["mcp_client/client.py"]
+    assert "from bedrock_agentcore.identity import requires_access_token" in client
+    assert hc.GW_SIGV4_TRANSPORT + "(url, 'us-east-1')" in client
+    lazy = hc.graft_lazy_gateway_token(client)
+    compile(lazy, "client.py", "exec")
+    assert hc.GW_LAZY_TOKEN_MARK in lazy
+    assert lazy.count(f"return {hc.GW_NO_BUNDLE_CLIENT}(") == 2
+
+
+def test_gateway_without_any_outbound_auth_still_fails_the_conversion():
+    tool = {"type": "agentcore_gateway", "name": "bare", "config": {"agentCoreGateway": {
+        "gatewayArn": IAM_GW_ARN, "outboundAuth": {}}}}
+    with pytest.raises(hc.ConversionError, match="neither OAuth nor AWS_IAM"):
+        hc.graft_missing_gateway_clients(_narrowed_files(), [tool], None)
+
+
+def test_conversion_of_a_harness_with_an_iam_gateway_restores_its_tools():
+    source = _source_agent()
+    source.spec = {**source.spec, "memory": {"short_term": False, "long_term": False},
+                   "tools": [{"type": "gateway", "name": "web-search",
+                              "config": {"gateway_id": "web-search-gw-k1l2m3n4o5"}}]}
+    spec = hc.build_conversion_spec(
+        source, _narrowed_files(), ["bedrock-agentcore==1.17.*"], "research-rt", ws_ctx({}),
+        harness={"tools": [_iam_gw_tool("web_search")], "allowedTools": IAM_ALLOWED},
+    )
+    main, client = spec.code_bundle["main.py"], spec.code_bundle["mcp_client/client.py"]
+    compile(client, "client.py", "exec")
+    assert hc.GW_SOFTFAIL_START in main
+    assert f"{hc.GW_NO_BUNDLE_CLIENT}(lambda: {hc.GW_SIGV4_TRANSPORT}(" in client
+    assert [t.config["gateway_id"] for t in spec.tools if t.type == "gateway"] == [
+        "web-search-gw-k1l2m3n4o5"]
