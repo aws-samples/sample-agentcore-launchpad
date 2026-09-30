@@ -127,6 +127,18 @@ class _LaunchpadMCPClient(MCPClient):
         finally:
             context.detach(token)
 '''
+GW_SIGV4_TRANSPORT = "_launchpad_sigv4_streamablehttp"
+# An AWS_IAM Gateway (e.g. a Registry-attached remote MCP behind its own Gateway)
+# authorizes the caller's SigV4 signature as bedrock-agentcore:InvokeGateway — the
+# grant agent_iam already scopes to the spec's gateway ids. There is no token to mint,
+# so the rebuilt client signs every MCP request with the runtime role instead.
+_SIGV4_TRANSPORT_SOURCE = "\n\n" + (
+    Path(__file__).resolve().parents[1] / "templates" / "sigv4_gateway_transport.py.tmpl"
+).read_text(encoding="utf-8")
+_GW_SIGV4_CLIENT_RE = re.compile(
+    r"^(?P<indent>[ \t]*)return MCPClient\(lambda: " + GW_SIGV4_TRANSPORT + r"\(",
+    re.MULTILINE,
+)
 ATTACHMENT_GRAFT_START = "# <launchpad-attachments:v1>"
 ATTACHMENT_GRAFT_END = "# </launchpad-attachments:v1>"
 _ATTACHMENT_INVOKE = '''    if payload.get("attachments"):
@@ -775,7 +787,7 @@ def graft_lazy_gateway_token(client_py: str) -> str:
     same posture as the other grafts: better a failed conversion than a runtime that
     reports active and reaches no tools.
     """
-    if GW_LAZY_TOKEN_MARK in client_py:
+    if GW_LAZY_TOKEN_MARK in client_py or f"class {GW_NO_BUNDLE_CLIENT}(" in client_py:
         return client_py
     if "MCPClient(" not in client_py:
         # Nothing is constructed, so there is no eager fetch to defer. Checked
@@ -801,7 +813,12 @@ def graft_lazy_gateway_token(client_py: str) -> str:
         )
 
     grafted, count = _GW_EAGER_TOKEN_RE.subn(_replace, client_py)
-    if count == 0:
+    # AWS_IAM clients fetch nothing, but they need the same baggage-free wrapper.
+    grafted, signed = _GW_SIGV4_CLIENT_RE.subn(
+        lambda m: f"{m.group('indent')}return {GW_NO_BUNDLE_CLIENT}(lambda: "
+        f"{GW_SIGV4_TRANSPORT}(", grafted,
+    )
+    if count + signed == 0:
         raise ConversionError(
             "graft anchor missing: eager 'token = _get_bearer_token_*()' + "
             "MCPClient(lambda: streamablehttp_client(url, headers=headers)) shape not "
@@ -849,7 +866,10 @@ def graft_missing_gateway_clients(
 
     The clients are rebuilt from the live Harness tool definitions in the CLI's own
     shape (so the lazy-token and soft-fail grafts apply unchanged), with the
-    Harness narrowing carried over as Strands ``tool_filters``. Gateways in
+    Harness narrowing carried over as Strands ``tool_filters``. An OAuth Gateway
+    mints its M2M bearer token; an AWS_IAM Gateway (``outboundAuth.awsIam``) gets a
+    SigV4-signing transport with its URL built from the ARN, because the platform
+    wires only the shared Gateway's URL into the env. Gateways in
     ``skip_gateway_arns`` (the KB gateway, replaced by direct retrieval) and aliases
     the allowlist does not select are left out. Idempotent; a no-op when the export
     already constructs clients.
@@ -866,13 +886,14 @@ def graft_missing_gateway_clients(
         allow = _gateway_allowlist(str(tool.get("name") or ""), allowed_tools)
         if allow == []:
             continue
-        oauth = (config.get("outboundAuth") or {}).get("oauth") or {}
-        if not oauth.get("providerArn"):
+        outbound = config.get("outboundAuth") or {}
+        oauth = outbound.get("oauth") or {}
+        if not oauth.get("providerArn") and "awsIam" not in outbound:
             raise ConversionError(
-                f"gateway {tool.get('name')!r} has no OAuth outbound auth; the converted "
-                "runtime cannot mint its Gateway token"
+                f"gateway {tool.get('name')!r} has neither OAuth nor AWS_IAM outbound "
+                "auth; the converted runtime cannot authenticate to it"
             )
-        gateways.append((str(tool["name"]), arn, oauth, allow))
+        gateways.append((str(tool["name"]), arn, oauth or None, allow))
     if not gateways:
         return files
     if "main.py" not in files or not _MCP_CLIENTS_INIT_RE.search(files["main.py"]):
@@ -886,15 +907,17 @@ def graft_missing_gateway_clients(
     head = ["import os", "import logging"]
     if any(allow and any(set(name) & _GLOB_CHARS for name in allow) for *_, allow in gateways):
         head.append("import re")
+    signed = any(oauth is None for _, _, oauth, _ in gateways)
+    if signed:
+        head += ["import boto3", "import httpx", "from botocore.auth import SigV4Auth",
+                 "from botocore.awsrequest import AWSRequest"]
     head += ["from mcp.client.streamable_http import streamablehttp_client",
-             "from strands.tools.mcp.mcp_client import MCPClient",
-             "from bedrock_agentcore.identity import requires_access_token"]
+             "from strands.tools.mcp.mcp_client import MCPClient"]
+    if not all(oauth is None for _, _, oauth, _ in gateways):
+        head.append("from bedrock_agentcore.identity import requires_access_token")
     getters = []
     for alias, arn, oauth, allow in gateways:
         ident = re.sub(r"\W", "_", alias)
-        env_key = "GATEWAY_GATEWAY_" + arn.rsplit("/", 1)[-1].upper().replace("-", "_") + "_URL"
-        provider = oauth["providerArn"].rsplit("/", 1)[-1]
-        scopes = list(oauth.get("scopes") or [])
         rest = f", prefix={alias!r}"
         if allow is not None:
             matchers = ", ".join(
@@ -903,6 +926,20 @@ def graft_missing_gateway_clients(
                 for name in allow
             )
             rest += f", tool_filters={{'allowed': [{matchers}]}}"
+        if oauth is None:
+            region, gateway_id = arn.split(":")[3], arn.rsplit("/", 1)[-1]
+            url = f"https://{gateway_id}.gateway.bedrock-agentcore.{region}.amazonaws.com/mcp"
+            lines += [
+                "",
+                f"def get_{ident}_mcp_client() -> MCPClient | None:",
+                f"    url = {url!r}  # AWS_IAM Gateway: SigV4 with the runtime role",
+                f"    return MCPClient(lambda: {GW_SIGV4_TRANSPORT}(url, {region!r}){rest})",
+            ]
+            getters.append(ident)
+            continue
+        env_key = "GATEWAY_GATEWAY_" + arn.rsplit("/", 1)[-1].upper().replace("-", "_") + "_URL"
+        provider = oauth["providerArn"].rsplit("/", 1)[-1]
+        scopes = list(oauth.get("scopes") or [])
         lines += [
             "",
             "@requires_access_token(",
@@ -936,7 +973,9 @@ def graft_missing_gateway_clients(
     grafted = dict(files)
     grafted["mcp_client/client.py"] = (
         (client_py.rstrip() + "\n\n" if client_py.strip() else "")
-        + "\n".join(missing) + "\n\n" + "\n".join(lines) + "\n"
+        + "\n".join(missing) + "\n"
+        + (_SIGV4_TRANSPORT_SOURCE if signed else "")
+        + "\n" + "\n".join(lines) + "\n"
     )
     grafted.setdefault("mcp_client/__init__.py", "")
     grafted["main.py"] = _MCP_CLIENTS_INIT_RE.sub(
