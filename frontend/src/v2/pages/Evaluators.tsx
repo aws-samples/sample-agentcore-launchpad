@@ -35,6 +35,7 @@ import {
   PageHeader,
   Pager,
   SearchInput,
+  Select,
   Spin,
   Table,
   Tag,
@@ -499,13 +500,11 @@ function EvaluatorEditor({ id }: { id: string | null }) {
           </Field>
           {draft.definition !== "derived" && (
             <Field label={t("v2.evaluators.colLevel")} required hint={t("v2.evaluators.levelHint")}>
-              <select className="v2-select" value={draft.level} onChange={(e) => set({ level: e.target.value as EvaluatorLevel })}>
-                {LEVELS.map((l) => (
-                  <option key={l} value={l}>
-                    {t(`v2.level.${l}`)}
-                  </option>
-                ))}
-              </select>
+              <Select
+                value={draft.level}
+                options={LEVELS.map((l) => ({ value: l, label: t(`v2.level.${l}`) }))}
+                onChange={(v) => set({ level: v as EvaluatorLevel })}
+              />
             </Field>
           )}
           <Field label={t("v2.evaluators.description")} full>
@@ -513,25 +512,22 @@ function EvaluatorEditor({ id }: { id: string | null }) {
           </Field>
           {draft.definition !== "code" && (
             <Field label={t("v2.evaluators.model")} required hint={t("v2.evaluators.modelHint")}>
-              <select className="v2-select" value={draft.model_id} onChange={(e) => set({ model_id: e.target.value })}>
-                {(JUDGE_MODEL_OPTIONS.includes(draft.model_id) ? JUDGE_MODEL_OPTIONS : [draft.model_id, ...JUDGE_MODEL_OPTIONS]).map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
+              <Select
+                value={draft.model_id}
+                options={(JUDGE_MODEL_OPTIONS.includes(draft.model_id) ? JUDGE_MODEL_OPTIONS : [draft.model_id, ...JUDGE_MODEL_OPTIONS]).map((m) => ({ value: m, label: m }))}
+                onChange={(v) => set({ model_id: v })}
+              />
             </Field>
           )}
           {draft.definition === "derived" && (
             <Field label={t("v2.evaluators.base")} required>
-              <select className="v2-select" value={draft.base_evaluator_id} disabled={editing} onChange={(e) => set({ base_evaluator_id: e.target.value })}>
-                <option value="">{t("v2.common.choose")}</option>
-                {bases.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {evaluatorLabel(t, b.id)} · {b.id}
-                  </option>
-                ))}
-              </select>
+              <Select
+                value={draft.base_evaluator_id}
+                disabled={editing}
+                placeholder={t("v2.common.choose")}
+                options={bases.map((b) => ({ value: b.id, label: `${evaluatorLabel(t, b.id)} · ${b.id}` }))}
+                onChange={(v) => set({ base_evaluator_id: v })}
+              />
             </Field>
           )}
           {draft.definition === "code" && (

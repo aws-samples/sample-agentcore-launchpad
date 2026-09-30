@@ -16,7 +16,7 @@ import {
 import { isFishbone, type ProposalEditDraft } from "../../../lib/assistant";
 import { MODEL_CATALOG, type ModelSource } from "../../../lib/models";
 import { fmtTime } from "../../format";
-import { Alert, Descriptions, Field, Table, Tag } from "../../ui";
+import { Alert, Descriptions, Field, Select, Table, Tag } from "../../ui";
 import { AGENT_TONE, JOB_TONE, shortId, STAGE_TONE } from "./common";
 
 const list = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
@@ -279,17 +279,17 @@ export function ProposalEditor({
           <input className="v2-input mono" value={draft.name} onChange={(e) => set("name", e.target.value)} data-testid="v2-assistant-edit-name" />
         </Field>
         <Field label={t("assistantPage.field.modelSource")}>
-          <select
-            className="v2-select"
+          <Select
             value={draft.model_source}
-            onChange={(e) => {
-              const source = e.target.value as ModelSource;
+            options={[
+              { value: "bedrock", label: "bedrock" },
+              { value: "mantle", label: "mantle" },
+            ]}
+            onChange={(v) => {
+              const source = v as ModelSource;
               onChange({ ...draft, model_source: source, model_id: MODEL_CATALOG[source][0].model_id });
             }}
-          >
-            <option value="bedrock">bedrock</option>
-            <option value="mantle">mantle</option>
-          </select>
+          />
         </Field>
         <Field label={t("assistantPage.field.model")} required error={bad("model_id")}>
           <input

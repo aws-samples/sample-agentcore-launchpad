@@ -33,6 +33,7 @@ import {
   FlowHeader,
   LinkButton,
   Segmented,
+  Select,
   Spin,
   SubTabs,
   Table,
@@ -546,15 +547,15 @@ export function GatewayDetail({ gatewayId, section }: { gatewayId: string; secti
                 </div>
               </Field>
               <Field label={t("v2.governance.authorizationModel")} hint={t(`governance.policyEditor.modelHelp.${authorizationModel}`)}>
-                <select
-                  className="v2-select"
+                <Select
                   value={authorizationModel}
-                  onChange={(e) => setAuthorizationModel(e.target.value as GovernanceAuthorizationModel)}
-                >
-                  <option value="allowlist">{t("v2.governance.model.allowlist")}</option>
-                  <option value="preserve_traffic">{t("v2.governance.model.preserve_traffic")}</option>
-                  <option value="custom">{t("v2.governance.model.custom")}</option>
-                </select>
+                  options={[
+                    { value: "allowlist", label: t("v2.governance.model.allowlist") },
+                    { value: "preserve_traffic", label: t("v2.governance.model.preserve_traffic") },
+                    { value: "custom", label: t("v2.governance.model.custom") },
+                  ]}
+                  onChange={(v) => setAuthorizationModel(v as GovernanceAuthorizationModel)}
+                />
               </Field>
             </div>
             {initialEngineMode === "ENFORCE" && (

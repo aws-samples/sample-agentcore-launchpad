@@ -20,7 +20,7 @@ import {
 } from "../../../lib/agent-spec";
 import { type ByocPythonVersion, HARNESS_NATIVE_TOOLS, type HarnessNativeTool } from "../../../lib/api";
 import { CUSTOM_MODEL_OPTION, type ModelSource, modelOptionsFor } from "../../../lib/models";
-import { Alert, Button, Card, Field, LinkButton, OptionCard, Segmented, Spin, Tag } from "../../ui";
+import { Alert, Button, Card, Field, LinkButton, OptionCard, Segmented, Select, Spin, Tag } from "../../ui";
 import { CheckList, type SectionProps, type WizardUi } from "./wizardKit";
 
 /** The name field every method starts with. */
@@ -586,18 +586,16 @@ export function ByocArtifactCard({
           <div className="v2-form cols-2">
             <Field label={t("create.configure.byocEntrypoint")} required error={err("byocEntrypoint")}>
               {candidates.length > 0 ? (
-                <select
-                  className="v2-select mono"
+                <Select
+                  mono
                   value={form.byocEntrypoint}
-                  onChange={(e) => set({ byocEntrypoint: e.target.value })}
-                  data-testid="v2-agent-byoc-entrypoint"
-                >
-                  {[...candidates, ...(candidates.includes(form.byocEntrypoint) ? [] : [form.byocEntrypoint])].map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => set({ byocEntrypoint: v })}
+                  testId="v2-agent-byoc-entrypoint"
+                  options={[...candidates, ...(candidates.includes(form.byocEntrypoint) ? [] : [form.byocEntrypoint])].map((c) => ({
+                    value: c,
+                    label: c,
+                  }))}
+                />
               ) : (
                 <input
                   className="v2-input mono"
@@ -609,18 +607,12 @@ export function ByocArtifactCard({
               )}
             </Field>
             <Field label={t("create.configure.byocPython")}>
-              <select
-                className="v2-select"
+              <Select
                 value={form.byocPython}
-                onChange={(e) => onPython(e.target.value as ByocPythonVersion)}
-                data-testid="v2-agent-byoc-python"
-              >
-                {BYOC_PYTHON_VERSIONS.map((v) => (
-                  <option key={v} value={v}>
-                    {pythonLabel(v)}
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => onPython(v as ByocPythonVersion)}
+                testId="v2-agent-byoc-python"
+                options={BYOC_PYTHON_VERSIONS.map((v) => ({ value: v, label: pythonLabel(v) }))}
+              />
             </Field>
             <Field label={t("v2.agents.wizard.byocBuild")}>
               <label className="v2-check">
@@ -709,12 +701,11 @@ export function ByocModelsCard({
               </div>
             ))}
           </div>
-          <select
-            className="v2-select"
+          <Select
             disabled={full}
             value=""
-            onChange={(e) => {
-              const picked = e.target.value;
+            onChange={(v) => {
+              const picked = v;
               if (!picked) return;
               if (picked === CUSTOM_MODEL_OPTION) {
                 setCustomOpen(true);
@@ -723,18 +714,15 @@ export function ByocModelsCard({
               setCustomOpen(false);
               add(picked);
             }}
-            data-testid="v2-agent-byoc-model-add"
-          >
-            <option value="">{t("create.configure.byocModelAdd")}</option>
-            {modelOptionsFor(form.modelSource)
-              .filter((o) => !models.includes(o.model_id))
-              .map((o) => (
-                <option key={o.model_id} value={o.model_id}>
-                  {o.label} · {o.model_id}
-                </option>
-              ))}
-            <option value={CUSTOM_MODEL_OPTION}>{t("v2.agents.wizard.customModel")}</option>
-          </select>
+            testId="v2-agent-byoc-model-add"
+            placeholder={t("create.configure.byocModelAdd")}
+            options={[
+              ...modelOptionsFor(form.modelSource)
+                .filter((o) => !models.includes(o.model_id))
+                .map((o) => ({ value: o.model_id, label: `${o.label} · ${o.model_id}` })),
+              { value: CUSTOM_MODEL_OPTION, label: t("v2.agents.wizard.customModel") },
+            ]}
+          />
           {customOpen && (
             <div className="v2-row v2-agents-nowrap">
               <input

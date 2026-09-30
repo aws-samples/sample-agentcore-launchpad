@@ -18,6 +18,7 @@ import {
   FlowHeader,
   OptionCard,
   SearchInput,
+  Select,
   Spin,
   Steps,
   Table,
@@ -351,14 +352,13 @@ export function TaskWizard() {
               </Field>
               {!cloudwatch && (
                 <Field label={t("v2.tasks.colAgent")} required hint={agents.loading ? undefined : activeAgents.length === 0 ? t("v2.tasks.noAgents") : undefined}>
-                  <select className="v2-select" value={draft.agentId} onChange={(e) => set({ agentId: e.target.value, sessionIds: [], logSessionIds: [] })} data-testid="v2-task-agent">
-                    <option value="">{t("v2.common.choose")}</option>
-                    {activeAgents.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </select>
+                  <Select
+                    value={draft.agentId}
+                    onChange={(v) => set({ agentId: v, sessionIds: [], logSessionIds: [] })}
+                    testId="v2-task-agent"
+                    placeholder={t("v2.common.choose")}
+                    options={activeAgents.map((a) => ({ value: a.id, label: a.name }))}
+                  />
                 </Field>
               )}
               <Field label={t("v2.tasks.description")} full>
@@ -458,30 +458,25 @@ export function TaskWizard() {
                     label={draft.source === "logs" ? t("v2.tasks.logs.window") : t("v2.tasks.lookback")}
                     hint={draft.source === "logs" ? t("v2.tasks.logs.picked", { count: draft.logSessionIds.length }) : t("v2.tasks.lookbackHint")}
                   >
-                    <select
-                      className="v2-select"
-                      value={draft.source === "logs" ? draft.logHours : draft.lookbackHours}
-                      onChange={(e) => set(draft.source === "logs" ? { logHours: Number(e.target.value) } : { lookbackHours: Number(e.target.value) })}
-                      data-testid="v2-task-lookback"
-                    >
-                      {LOOKBACKS.map((h) => (
-                        <option key={h} value={h}>
-                          {t("v2.tasks.hours", { count: h })}
-                        </option>
-                      ))}
-                    </select>
+                    <Select
+                      value={String(draft.source === "logs" ? draft.logHours : draft.lookbackHours)}
+                      onChange={(v) => set(draft.source === "logs" ? { logHours: Number(v) } : { lookbackHours: Number(v) })}
+                      testId="v2-task-lookback"
+                      options={LOOKBACKS.map((h) => ({ value: String(h), label: t("v2.tasks.hours", { count: h }) }))}
+                    />
                   </Field>
                 ) : draft.source === "dataset" ? (
                   <Field label={t("v2.tasks.dataset")} required hint={selectedDataset && !selectedDataset.has_ground_truth ? t("v2.tasks.noGroundTruth") : undefined}>
-                    <select className="v2-select" value={draft.dataset} onChange={(e) => set({ dataset: e.target.value })} data-testid="v2-task-dataset">
-                      <option value="">{t("v2.common.choose")}</option>
-                      {draft.dataset && !selectedDataset && <option value={draft.dataset}>{draft.dataset}</option>}
-                      {localDatasets.map((d) => (
-                        <option key={d.id} value={d.id}>
-                          {d.name} · {t("v2.datasets.items", { count: d.item_count })}
-                        </option>
-                      ))}
-                    </select>
+                    <Select
+                      value={draft.dataset}
+                      onChange={(v) => set({ dataset: v })}
+                      testId="v2-task-dataset"
+                      placeholder={t("v2.common.choose")}
+                      options={[
+                        ...(draft.dataset && !selectedDataset ? [{ value: draft.dataset, label: draft.dataset }] : []),
+                        ...localDatasets.map((d) => ({ value: d.id, label: `${d.name} · ${t("v2.datasets.items", { count: d.item_count })}` })),
+                      ]}
+                    />
                   </Field>
                 ) : (
                   <p className="v2-muted">{t("v2.tasks.sessionsPicked", { count: draft.sessionIds.length })}</p>

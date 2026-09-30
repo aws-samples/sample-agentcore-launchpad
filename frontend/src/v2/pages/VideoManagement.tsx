@@ -8,7 +8,7 @@ import { api, ApiError, errorMessage } from "../../lib/api";
 import type { ConsoleVersion, ManagedVideo, ManagedVideoCatalog, VideoContent, VideoLocale, VideoTaxonomy } from "../../lib/videos";
 import { fmtTime } from "../format";
 import { useLoad, useV2Toast } from "../hooks";
-import { Alert, Button, Card, type Column, Confirm, Field, FlowHeader, LinkButton, PageHeader, Spin, Table, Tag } from "../ui";
+import { Alert, Button, Card, type Column, Confirm, Field, FlowHeader, LinkButton, PageHeader, Select, Spin, Table, Tag } from "../ui";
 import "./video-management/video-management.css";
 
 const NEW = "new";
@@ -301,33 +301,28 @@ function VideoEditor({
         <Card title={t("videoManage.edit")}>
           <fieldset className="v2-video-manage-form v2-form" disabled={busy}>
             <Field label={t("videoManage.consoleVersion")} required>
-              <select className="v2-select" value={draft.console_version}
-                onChange={(event) => update("console_version", event.target.value as ConsoleVersion)}
-                data-testid="video-manage-version">
-                <option value="v2">{t("videos.version.v2")}</option>
-                <option value="classic">{t("videos.version.classic")}</option>
-              </select>
+              <Select value={draft.console_version}
+                options={[
+                  { value: "v2", label: t("videos.version.v2") },
+                  { value: "classic", label: t("videos.version.classic") },
+                ]}
+                onChange={(v) => update("console_version", v as ConsoleVersion)}
+                testId="video-manage-version" />
             </Field>
             <div className="v2-form cols-2">
               <Field label={t("videoManage.category")} required>
-                <select className="v2-select" value={draft.category_id}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, category_id: event.target.value, section_id: "" }))}
-                  data-testid="video-manage-category">
-                  <option value="">{t("videoManage.chooseCategory")}</option>
-                  {taxonomy.categories.map((category) => (
-                    <option key={category.id} value={category.id}>{category.title[locale]}</option>
-                  ))}
-                </select>
+                <Select value={draft.category_id}
+                  placeholder={t("videoManage.chooseCategory")}
+                  options={taxonomy.categories.map((category) => ({ value: category.id, label: category.title[locale] }))}
+                  onChange={(v) => setDraft((prev) => ({ ...prev, category_id: v, section_id: "" }))}
+                  testId="video-manage-category" />
               </Field>
               <Field label={t("videoManage.section")} required>
-                <select className="v2-select" value={draft.section_id} disabled={!draft.category_id}
-                  onChange={(event) => update("section_id", event.target.value)}
-                  data-testid="video-manage-section">
-                  <option value="">{t("videoManage.chooseSection")}</option>
-                  {sections.map((section) => (
-                    <option key={section.id} value={section.id}>{section.title[locale]}</option>
-                  ))}
-                </select>
+                <Select value={draft.section_id} disabled={!draft.category_id}
+                  placeholder={t("videoManage.chooseSection")}
+                  options={sections.map((section) => ({ value: section.id, label: section.title[locale] }))}
+                  onChange={(v) => update("section_id", v)}
+                  testId="video-manage-section" />
               </Field>
             </div>
             <div className="v2-form cols-2">

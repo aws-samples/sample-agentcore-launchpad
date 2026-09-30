@@ -23,7 +23,7 @@ import { CUSTOM_MODEL_OPTION } from "../../../lib/models";
 import { EvaluatorPicker } from "../../EvaluatorPicker";
 import { fmtScore, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, Spin, Table, Tag } from "../../ui";
+import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, Select, Spin, Table, Tag } from "../../ui";
 import { EXPERIMENT_TONE, stageLabel } from "./common";
 import { type CardState, StageCard } from "./StageCard";
 
@@ -239,22 +239,16 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
       label={t("expPage.recSource")}
       hint={sourceRunId ? t("expPage.recSourcePinnedNote") : t("expPage.recSourceWindowNote")}
     >
-      <select
-        className="v2-select"
+      <Select
         value={sourceRunId}
-        onChange={(e) => {
-          setSourceRunId(e.target.value);
-          persistPrefs({ source: e.target.value });
+        onChange={(v) => {
+          setSourceRunId(v);
+          persistPrefs({ source: v });
         }}
-        data-testid="v2-exp-rec-source"
-      >
-        <option value="">{t("expPage.recSourceWindow")}</option>
-        {sourceRuns.map((run) => (
-          <option key={run.id} value={run.id}>
-            {runLabel(run)}
-          </option>
-        ))}
-      </select>
+        testId="v2-exp-rec-source"
+        placeholder={t("expPage.recSourceWindow")}
+        options={sourceRuns.map((run) => ({ value: run.id, label: runLabel(run) }))}
+      />
       {sourceRun && evaluationRunPresentation(sourceRun).status === "completed_with_errors" && (
         <Alert tone="warn">
           {t("evalPage.runs.partialResults")} {sourceRun.error}
@@ -267,43 +261,35 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
     recProviders.length > 1 ? (
       <>
         <Field label={t("expPage.providerLabel")}>
-          <select
-            className="v2-select"
+          <Select
             value={provider?.id ?? "agentcore"}
-            onChange={(e) => {
-              setProviderId(e.target.value);
+            onChange={(v) => {
+              setProviderId(v);
               setModelChoice("");
               setModelCustom("");
-              persistPrefs({ provider: e.target.value, model: "", customModel: "" });
+              persistPrefs({ provider: v, model: "", customModel: "" });
             }}
-            data-testid="v2-exp-rec-provider"
-          >
-            {recProviders.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
+            testId="v2-exp-rec-provider"
+            options={recProviders.map((p) => ({ value: p.id, label: p.label }))}
+          />
         </Field>
         {thirdParty && thirdParty.models.length > 0 && (
           <Field label={t("expPage.providerModel")}>
-            <select
-              className="v2-select"
+            <Select
               value={modelChoice}
-              onChange={(e) => {
-                setModelChoice(e.target.value);
-                persistPrefs({ model: e.target.value });
+              onChange={(v) => {
+                setModelChoice(v);
+                persistPrefs({ model: v });
               }}
-              data-testid="v2-exp-rec-model"
-            >
-              {thirdParty.models.map((m) => (
-                <option key={m.model_id} value={m.model_id === thirdParty.default_model_id ? "" : m.model_id}>
-                  {m.label}
-                  {m.model_id === thirdParty.default_model_id ? ` · ${t("expPage.providerDefaultModel")}` : ""}
-                </option>
-              ))}
-              <option value={CUSTOM_MODEL_OPTION}>{t("expPage.providerCustomModel")}</option>
-            </select>
+              testId="v2-exp-rec-model"
+              options={[
+                ...thirdParty.models.map((m) => ({
+                  value: m.model_id === thirdParty.default_model_id ? "" : m.model_id,
+                  label: `${m.label}${m.model_id === thirdParty.default_model_id ? ` · ${t("expPage.providerDefaultModel")}` : ""}`,
+                })),
+                { value: CUSTOM_MODEL_OPTION, label: t("expPage.providerCustomModel") },
+              ]}
+            />
             {modelChoice === CUSTOM_MODEL_OPTION && (
               <input
                 className="v2-input mono"
@@ -633,14 +619,13 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
       ) : !a.traffic ? (
         <div className="v2-form cols-2">
           <Field label={t("expPage.datasetTag")}>
-            <select className="v2-select" value={trafficDataset} onChange={(e) => setTrafficDataset(e.target.value)} data-testid="v2-exp-traffic-dataset">
-              {datasets.length === 0 && <option value="">{t("expPage.noTrafficDataset")}</option>}
-              {datasets.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name} ({d.item_count})
-                </option>
-              ))}
-            </select>
+            <Select
+              value={trafficDataset}
+              onChange={setTrafficDataset}
+              testId="v2-exp-traffic-dataset"
+              placeholder={datasets.length === 0 ? t("expPage.noTrafficDataset") : undefined}
+              options={datasets.map((d) => ({ value: d.id, label: `${d.name} (${d.item_count})` }))}
+            />
           </Field>
           <Field label={t("v2.common.actions")}>
             {actionButton("traffic", t("expPage.sendTraffic"), { primary: true, disabled: !trafficDataset, extra: { dataset_id: trafficDataset } })}

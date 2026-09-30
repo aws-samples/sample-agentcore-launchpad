@@ -14,7 +14,7 @@ import {
 import { DEFAULT_TRACE_LOOKBACK_HOURS, TRACE_LOOKBACK_OPTIONS, traceLookbackFromParam } from "../../../lib/experiments";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Descriptions, Field, FlowHeader, Tag, type TagTone } from "../../ui";
+import { Alert, Button, Card, Descriptions, Field, FlowHeader, Select, Tag, type TagTone } from "../../ui";
 
 const READINESS_TONE: Record<ExperimentReadiness["state"], TagTone> = {
   ready: "green",
@@ -216,42 +216,33 @@ export function ExperimentStart({ hasRunning }: { hasRunning: boolean }) {
       <Card title={t("v2.experiments.pickAgent")}>
         <div className="v2-form cols-2">
           <Field label={t("evalPage.newRun.agent")} required hint={unsupported.length ? t("expPage.unsupportedHint") : undefined}>
-            <select
-              className="v2-select"
+            <Select
               value={agentId}
-              onChange={(e) => setUrl({ agent: e.target.value, baselineRun: null, sourceRun: null })}
-              data-testid="v2-exp-agent"
-            >
-              {eligible.length === 0 && <option value="">{t("evalPage.newRun.noAgents")}</option>}
-              {eligible.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name} · {a.method}
-                </option>
-              ))}
-              {unsupported.map((a) => (
-                <option key={a.id} value="" disabled>
-                  {a.name} · {a.method} —{" "}
-                  {a.experiment_capability.reason_code ? t(`expPage.reason.${a.experiment_capability.reason_code}`) : a.experiment_capability.reason}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setUrl({ agent: v, baselineRun: null, sourceRun: null })}
+              testId="v2-exp-agent"
+              placeholder={eligible.length === 0 ? t("evalPage.newRun.noAgents") : undefined}
+              options={[
+                ...eligible.map((a) => ({ value: a.id, label: `${a.name} · ${a.method}` })),
+                ...unsupported.map((a) => ({
+                  value: "",
+                  label: `${a.name} · ${a.method} — ${
+                    a.experiment_capability.reason_code ? t(`expPage.reason.${a.experiment_capability.reason_code}`) : a.experiment_capability.reason
+                  }`,
+                  disabled: true,
+                })),
+              ]}
+            />
           </Field>
           <Field label={t("expPage.readiness.window")}>
-            <select
-              className="v2-select"
-              value={lookback}
-              onChange={(e) => {
-                const hours = Number(e.target.value);
+            <Select
+              value={String(lookback)}
+              onChange={(v) => {
+                const hours = Number(v);
                 setUrl({ lookback: hours === DEFAULT_TRACE_LOOKBACK_HOURS ? null : String(hours) });
               }}
-              data-testid="v2-exp-lookback"
-            >
-              {TRACE_LOOKBACK_OPTIONS.map((h) => (
-                <option key={h} value={h}>
-                  {t(`expPage.readiness.windowOption.h${h}`)}
-                </option>
-              ))}
-            </select>
+              testId="v2-exp-lookback"
+              options={TRACE_LOOKBACK_OPTIONS.map((h) => ({ value: String(h), label: t(`expPage.readiness.windowOption.h${h}`) }))}
+            />
           </Field>
         </div>
       </Card>
@@ -340,14 +331,13 @@ export function ExperimentStart({ hasRunning }: { hasRunning: boolean }) {
         <Card title={t("v2.experiments.baselineTitle")} sub={t("v2.experiments.baselineSub")}>
           <div className="v2-form cols-2">
             <Field label={t("expPage.readiness.baselineDataset")}>
-              <select className="v2-select" value={baselineDataset} onChange={(e) => setBaselineDataset(e.target.value)} data-testid="v2-exp-baseline-dataset">
-                {datasets.length === 0 && <option value="">{t("expPage.readiness.noBaselineDataset")}</option>}
-                {datasets.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name} · {d.item_count}
-                  </option>
-                ))}
-              </select>
+              <Select
+                value={baselineDataset}
+                onChange={setBaselineDataset}
+                testId="v2-exp-baseline-dataset"
+                placeholder={datasets.length === 0 ? t("expPage.readiness.noBaselineDataset") : undefined}
+                options={datasets.map((d) => ({ value: d.id, label: `${d.name} · ${d.item_count}` }))}
+              />
             </Field>
             <Field label={t("v2.common.actions")}>
               <div className="v2-row">

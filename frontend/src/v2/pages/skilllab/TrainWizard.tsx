@@ -11,7 +11,7 @@ import {
   type SkillLabTargetBackend,
 } from "../../../lib/api";
 import { canSubmitJobs, trainRunEstimate, trainSplitCounts } from "../../../lib/skillLab";
-import { Alert, Button, Card, Field, FlowHeader } from "../../ui";
+import { Alert, Button, Card, Field, FlowHeader, Select } from "../../ui";
 import { NumberField } from "./EvalWizard";
 import { ModelFields } from "./ModelFields";
 import { SkillSourcePicker } from "./SkillPicker";
@@ -195,28 +195,21 @@ export function TrainWizard({ status }: { status: SkillLabStatus | null }) {
                   : t("skillLab.train.wizard.splitCounts", { train: counts.train, val: counts.val, test: selected.counts.test ?? 0 })
             }
           >
-            <select className="v2-select" value={tasksetId} onChange={(e) => setTasksetId(e.target.value)} data-testid="v2-train-taskset">
-              <option value="">{t("v2.common.choose")}</option>
-              {rows.map((row) => (
-                <option key={row.id} value={row.id}>
-                  {row.name} ({t(`skillLab.tasksets.mode.${row.mode}`)})
-                </option>
-              ))}
-            </select>
+            <Select
+              value={tasksetId}
+              placeholder={t("v2.common.choose")}
+              options={rows.map((row) => ({ value: row.id, label: `${row.name} (${t(`skillLab.tasksets.mode.${row.mode}`)})` }))}
+              onChange={setTasksetId}
+              testId="v2-train-taskset"
+            />
           </Field>
           <Field label={t("skillLab.train.wizard.field.gateMetric")} hint={t("skillLab.train.wizard.hint.gateMetric")}>
-            <select
-              className="v2-select"
+            <Select
               value={gateMetric}
-              onChange={(e) => setGateMetric(e.target.value as SkillLabGateMetric)}
-              data-testid="v2-train-gate"
-            >
-              {GATE_METRICS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
+              options={GATE_METRICS.map((option) => ({ value: option, label: option }))}
+              onChange={(v) => setGateMetric(v as SkillLabGateMetric)}
+              testId="v2-train-gate"
+            />
           </Field>
           <NumberField label={t("skillLab.train.wizard.field.epochs")} hint={t("skillLab.train.wizard.hint.epochs", { min: 1, max: 10 })} value={epochs} onChange={setEpochs} min={1} max={10} testId="v2-train-epochs" />
           <NumberField label={t("skillLab.train.wizard.field.learningRate")} hint={t("skillLab.train.wizard.hint.learningRate", { min: 1, max: 16 })} value={learningRate} onChange={setLearningRate} min={1} max={16} />

@@ -7,7 +7,7 @@ import { api, errorMessage } from "../../../lib/api";
 import type { EvaluationRunInfo, RunRecommendation, RunRecommendationKind } from "../../../lib/evaluation";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Field, Spin, Table, Tag, type TagTone } from "../../ui";
+import { Alert, Button, Card, Field, Select, Spin, Table, Tag, type TagTone } from "../../ui";
 
 const POLL_MS = 10000;
 const ACTIVE = new Set(["PENDING", "IN_PROGRESS"]);
@@ -211,22 +211,20 @@ export function RunRecommendations({ run }: { run: EvaluationRunInfo }) {
             />
           </Field>
           <Field label={t("v2.rec.evaluator")}>
-            <select className="v2-select" value={evaluator} onChange={(e) => setEvaluator(e.target.value)} data-testid="v2-rec-evaluator">
-              {EVALUATOR_GROUPS.map((group) => {
-                const items = seed.evaluators.filter((ev) => ev.group === group);
-                if (!items.length) return null;
-                return (
-                  <optgroup key={group} label={t(`v2.rec.evalGroup.${group}`)}>
-                    {items.map((ev) => (
-                      <option key={ev.id} value={ev.id}>
-                        {[ev.name, ev.level].filter(Boolean).join(" · ")}
-                        {ev.recommended ? t("v2.rec.recommendedSuffix") : ""}
-                      </option>
-                    ))}
-                  </optgroup>
-                );
-              })}
-            </select>
+            <Select
+              value={evaluator}
+              onChange={setEvaluator}
+              testId="v2-rec-evaluator"
+              options={EVALUATOR_GROUPS.flatMap((group) =>
+                seed.evaluators
+                  .filter((ev) => ev.group === group)
+                  .map((ev) => ({
+                    value: ev.id,
+                    label: `${[ev.name, ev.level].filter(Boolean).join(" · ")}${ev.recommended ? t("v2.rec.recommendedSuffix") : ""}`,
+                    group: t(`v2.rec.evalGroup.${group}`),
+                  })),
+              )}
+            />
           </Field>
           <EvaluatorGuide excluded={seed.excluded_evaluators} />
         </>

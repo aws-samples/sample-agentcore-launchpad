@@ -22,7 +22,7 @@ import {
 } from "../../../lib/models";
 import { EFFORT_NONE, type EffortChoice } from "../../../pages/create/presetSettings";
 import { useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Field, Segmented, Spin } from "../../ui";
+import { Alert, Button, Card, Field, Segmented, Select, Spin } from "../../ui";
 
 /** The live catalogs the configure step offers (a failed read leaves one empty). */
 export interface WizardCatalogs {
@@ -159,26 +159,22 @@ export function ModelCard({
           )
         )}
         <Field label={t("v2.agents.model")} required error={err("model")}>
-          <select
-            className="v2-select"
+          <Select
             value={custom ? CUSTOM_MODEL_OPTION : form.modelId}
             disabled={locked}
-            onChange={(e) => {
-              if (e.target.value === CUSTOM_MODEL_OPTION) setCustom(true);
+            onChange={(v) => {
+              if (v === CUSTOM_MODEL_OPTION) setCustom(true);
               else {
                 setCustom(false);
-                set({ modelId: e.target.value });
+                set({ modelId: v });
               }
             }}
-            data-testid="v2-agent-model"
-          >
-            {options.map((o) => (
-              <option key={o.model_id} value={o.model_id}>
-                {o.label}
-              </option>
-            ))}
-            <option value={CUSTOM_MODEL_OPTION}>{t("v2.agents.wizard.customModel")}</option>
-          </select>
+            testId="v2-agent-model"
+            options={[
+              ...options.map((o) => ({ value: o.model_id, label: o.label })),
+              { value: CUSTOM_MODEL_OPTION, label: t("v2.agents.wizard.customModel") },
+            ]}
+          />
         </Field>
         {custom ? (
           <Field label={t("v2.agents.wizard.customModelId")} required>
@@ -211,19 +207,15 @@ export function ModelCard({
               label={t("v2.agents.wizard.effort")}
               hint={effortAllowed ? t("create.system.settings.effortHint") : t("v2.agents.wizard.effortUnsupported")}
             >
-              <select
-                className="v2-select"
+              <Select
                 value={effortAllowed ? form.reasoningEffort : EFFORT_NONE}
                 disabled={!effortAllowed}
-                onChange={(e) => set({ reasoningEffort: e.target.value as EffortChoice })}
-              >
-                <option value={EFFORT_NONE}>{t("create.system.settings.effortNone")}</option>
-                {REASONING_EFFORTS.map((e) => (
-                  <option key={e} value={e}>
-                    {t(`create.system.settings.effortLevels.${e}`)}
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => set({ reasoningEffort: v as EffortChoice })}
+                options={[
+                  { value: EFFORT_NONE, label: t("create.system.settings.effortNone") },
+                  ...REASONING_EFFORTS.map((e) => ({ value: e, label: t(`create.system.settings.effortLevels.${e}`) })),
+                ]}
+              />
             </Field>
           </>
         )}
@@ -449,19 +441,23 @@ export function MemoryCard({ form, set, cat, err, loop, note }: SectionProps & {
           </label>
         </Field>
         <Field label={t("v2.agents.wizard.memoryResource")} hint={t("create.configure.memoryResourceHint")}>
-          <select className="v2-select" value={form.memoryId} onChange={(e) => set({ memoryId: e.target.value })} data-testid="v2-agent-memory">
-            <option value="">{t("v2.agents.wizard.memoryDefault")}</option>
-            {options.map((m) => (
-              <option key={m.id ?? ""} value={m.id ?? ""} disabled={m.status !== "ACTIVE"}>
-                {m.name ?? m.id}
-                {m.status !== "ACTIVE" ? ` (${m.status ?? "?"})` : ""}
-              </option>
-            ))}
-            {/* a pin the list no longer carries stays selectable */}
-            {form.memoryId && !cat.memories.some((m) => m.id === form.memoryId) && (
-              <option value={form.memoryId}>{form.memoryId}</option>
-            )}
-          </select>
+          <Select
+            value={form.memoryId}
+            onChange={(v) => set({ memoryId: v })}
+            testId="v2-agent-memory"
+            placeholder={t("v2.agents.wizard.memoryDefault")}
+            options={[
+              ...options.map((m) => ({
+                value: m.id ?? "",
+                label: `${m.name ?? m.id ?? ""}${m.status !== "ACTIVE" ? ` (${m.status ?? "?"})` : ""}`,
+                disabled: m.status !== "ACTIVE",
+              })),
+              /* a pin the list no longer carries stays selectable */
+              ...(form.memoryId && !cat.memories.some((m) => m.id === form.memoryId)
+                ? [{ value: form.memoryId, label: form.memoryId }]
+                : []),
+            ]}
+          />
         </Field>
         {loop && (
           <>
