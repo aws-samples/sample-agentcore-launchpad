@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
-import { AttachmentHint } from "../../components/chat/Attachments";
+import { AttachmentHint } from "../../components/chat/AttachmentViews";
 import type { PendingAttachment } from "../../components/chat/attachments";
 import {
   attachmentMediaType,
